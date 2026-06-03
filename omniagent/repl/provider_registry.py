@@ -103,9 +103,9 @@ PROVIDERS: dict[str, ProviderInfo] = {
     "xiaomi": ProviderInfo(
         name="小米 MiMo",
         key="xiaomi",
-        base_url="https://api.siliconflow.cn/v1",
+        base_url="https://token-plan-cn.xiaomimimo.com/v1",
         env_key="XIAOMI_API_KEY",
-        models=["MiMo-7B-RL", "MiMo-7B"],
+        models=["mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-pro"],
     ),
 }
 

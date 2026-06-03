@@ -77,7 +77,7 @@ _PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
         "env_key": "OLLAMA_API_KEY",
     },
     "xiaomi": {
-        "base_url": "https://api.siliconflow.cn/v1",
+        "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
         "env_key": "XIAOMI_API_KEY",
     },
 }
