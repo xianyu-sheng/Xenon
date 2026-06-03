@@ -43,27 +43,35 @@ class PlanReactEngine:
         self.reactor = ReActEngine(model_priority, max_iterations=react_iterations)
 
     def run(self, user_input: str, context: AgentContext | None = None) -> str:
+        from rich.console import Console
+        console = Console()
+
         ctx = context or AgentContext()
 
         # Phase 1: 全局规划
-        logger.info("PlanReact Phase 1: 全局规划")
+        console.print("[dim]📋 Phase 1: 生成执行计划...[/dim]")
         plan = self.planner._plan(user_input)
         steps = plan.get("steps", [])
+        analysis = plan.get("analysis", "")
 
         if not steps:
-            return plan.get("analysis", "未能生成有效的执行计划。")
+            return analysis or "未能生成有效的执行计划。"
 
-        logger.info(f"PlanReact: 生成 {len(steps)} 个步骤")
+        console.print(f"[dim]📋 计划生成 {len(steps)} 个步骤[/dim]")
+
+        # 显示计划
+        for s in steps:
+            console.print(f"  [dim]步骤 {s.get('id', '?')}: {s.get('task', '')}[/dim]")
 
         # Phase 2: 每步用 ReAct 执行
-        logger.info("PlanReact Phase 2: ReAct 逐步执行")
+        console.print(f"\n[dim]🔄 Phase 2: ReAct 逐步执行[/dim]")
         results = []
 
         for i, step in enumerate(steps[:self.max_steps]):
             step_task = step.get("task", "")
             step_id = step.get("id", i + 1)
 
-            logger.info(f"PlanReact 步骤 {step_id}: {step_task}")
+            console.print(f"\n[cyan]🔄 步骤 {step_id}/{len(steps)}: {step_task}[/cyan]")
 
             # 构建包含全局上下文的 ReAct 输入
             prev_context = ""
@@ -82,8 +90,12 @@ class PlanReactEngine:
             # 用 ReAct 执行当前步骤
             try:
                 step_result = self.reactor.run(react_input, context=ctx)
+                if not step_result or not step_result.strip():
+                    step_result = f"(步骤 {step_id} 执行完成，无文本输出)"
+                console.print(f"[green]  ✓ 步骤 {step_id} 完成 ({len(step_result)} 字符)[/green]")
             except Exception as e:
                 step_result = f"步骤执行失败: {e}"
+                console.print(f"[red]  ✗ 步骤 {step_id} 失败: {e}[/red]")
 
             results.append({
                 "step_id": step_id,
@@ -95,31 +107,39 @@ class PlanReactEngine:
             ctx.set(f"step_{step_id}_result", step_result)
 
         # Phase 3: 汇总
-        logger.info("PlanReact Phase 3: 汇总结果")
-        summary = self._summarize(user_input, results)
+        console.print(f"\n[dim]📝 Phase 3: 汇总结果...[/dim]")
+        summary = self._summarize(user_input, results, analysis)
         return summary
 
-    def _summarize(self, user_input: str, results: list[dict]) -> str:
+    def _summarize(self, user_input: str, results: list[dict], analysis: str = "") -> str:
         """汇总所有步骤的结果。"""
         results_text = "\n\n".join(
             f"## 步骤 {r['step_id']}: {r['task']}\n{r['result']}"
             for r in results
         )
 
+        # 如果所有步骤结果都很短，直接返回
+        all_short = all(len(r['result']) < 100 for r in results)
+        if all_short and len(results) <= 2:
+            return f"## 执行计划\n{analysis}\n\n## 执行结果\n{results_text}"
+
         messages = [
-            {"role": "system", "content": "你是一个任务汇总专家。请根据各步骤的执行结果，给出最终的完整回答。整合所有步骤的输出，形成连贯的结论。"},
-            {"role": "user", "content": f"原始任务: {user_input}\n\n各步骤执行结果:\n{results_text}"},
+            {"role": "system", "content": "你是一个任务汇总专家。请根据各步骤的执行结果，给出最终的完整回答。整合所有步骤的输出，形成连贯的结论。用中文回答。"},
+            {"role": "user", "content": f"原始任务: {user_input}\n\n任务分析: {analysis}\n\n各步骤执行结果:\n{results_text}"},
         ]
 
         try:
             for model_id in self.model_priority:
                 try:
-                    return chat_completion(model_id, messages, max_tokens=4096, temperature=0.5)
+                    result = chat_completion(model_id, messages, max_tokens=4096, temperature=0.5)
+                    if result and result.strip():
+                        return result
                 except Exception:
                     continue
-            return results_text
+            # LLM 全部失败，返回原始结果
+            return f"## 执行计划\n{analysis}\n\n## 执行结果\n{results_text}"
         except Exception:
-            return results_text
+            return f"## 执行计划\n{analysis}\n\n## 执行结果\n{results_text}"
 
 
 class PlanReflectionEngine:
