@@ -1,147 +1,220 @@
-# OmniAgent-CLI
+# 🚀 OmniAgent-CLI
 
-> 可配置的多模型 AI 编程 Agent 调度引擎
+**本地多模型 AI 编程助手 — 像 Claude Code 一样编程，但完全可控**
 
-一个纯 Python 本地命令行工具，白盒化、解耦且配置驱动。通过 YAML 配置文件定义 Agent 的思考范式流转图（ReAct, Plan-and-Execute 等），支持多模型优先级轮询与自动降级。
+OmniAgent-CLI 是一个纯 Python 命令行工具，让你在终端里拥有一个 AI 编程助手。它支持多个 AI 模型（DeepSeek、OpenAI、Claude 等），能理解你的项目结构，直接读写代码文件，并且所有配置和数据都保存在本地。
 
-## 核心特性
+---
 
-- **全局凭证解耦** — API Key 统一存储在 `~/.omniagent/credentials.yaml`，各工作区只配流转逻辑
-- **多模型 Fallback** — 按优先级尝试多个模型，限流或报错自动切换
-- **图驱动范式** — YAML 定义节点拓扑，引擎动态调度执行
-- **原子化节点** — LLM 调用、文件读写、命令执行、条件路由，各司其职
-- **交互式 REPL** — 多轮对话、流式输出、斜杠命令
-- **代码执行闭环** — 生成代码 → 写入文件 → 运行测试 → 自动修复
-- **白盒透明** — 每一步执行过程、模型选择、Context 变化完全可见
+## ✨ 核心能力
 
-## 快速开始
-
-### 1. 安装
-
-```bash
-git clone <repo-url>
-cd omniagent-cli
-pip install -e ".[dev]"
-```
-
-### 2. 配置全局凭证
-
-创建 `~/.omniagent/credentials.yaml`：
-
-```yaml
-openai: "sk-your-openai-key"
-anthropic: "sk-ant-your-anthropic-key"
-deepseek: "sk-your-deepseek-key"
-```
-
-### 3. 启动交互模式
-
-```bash
-# 启动交互式 REPL
-omniagent chat -m anthropic/claude-3-5-sonnet openai/gpt-4o
-
-# 指定思考范式
-omniagent chat -m deepseek/deepseek-coder --mode react
-```
-
-### 4. 在 REPL 中使用
-
-```
-You> /set_model claude anthropic/claude-3-5-sonnet
-You> /set_model gpt openai/gpt-4o
-You> /set_role planner claude gpt
-You> 帮我写一个快速排序算法
-You> /code 写一个 HTTP 服务器 --file server.py --run
-You> /compact
-You> /save my-session
-```
-
-### 5. 批量执行工作流
-
-```bash
-# Plan-and-Execute 工作流
-omniagent run config/default_flow.yaml --init-context task="写一个计算器"
-
-# 代码执行工作流（生成→写入→运行→修复）
-omniagent run config/simple_code_flow.yaml \
-  --init-context task="写快速排序" \
-  --init-context work_dir="./my_project"
-```
-
-## 项目结构
-
-```
-omniagent-cli/
-├── pyproject.toml                      # 项目元数据与依赖
-├── README.md
-├── docs/
-│   └── OPERATION_GUIDE.md              # 详细操作手册
-├── config/
-│   ├── default_flow.yaml               # Plan-and-Execute 工作流
-│   ├── simple_code_flow.yaml           # 简化代码执行工作流
-│   ├── code_execution_flow.yaml        # 完整代码执行工作流
-│   └── credentials.example.yaml        # 凭证模板
-├── omniagent/
-│   ├── __init__.py
-│   ├── main.py                         # CLI 入口
-│   ├── engine/
-│   │   ├── context.py                  # 全局上下文总线
-│   │   └── scheduler.py               # DAG 图调度器
-│   ├── nodes/
-│   │   ├── base.py                     # BaseNode 抽象基类
-│   │   ├── llm_node.py                # LLM 调用节点（多模型 Fallback）
-│   │   ├── tool_node.py               # 工具节点（命令/文件读写）
-│   │   └── router_node.py             # 条件路由节点
-│   ├── repl/
-│   │   ├── repl.py                     # 交互式主循环（流式输出）
-│   │   ├── commands.py                 # 斜杠命令处理器
-│   │   ├── context_manager.py          # 对话历史与 Token 管理
-│   │   ├── model_registry.py           # 运行时模型管理
-│   │   └── session.py                  # 会话持久化
-│   └── utils/
-│       ├── llm_client.py              # 多厂商 LLM 适配器（支持流式）
-│       └── config_parser.py           # YAML 配置解析器
-└── tests/
-    ├── test_core.py                    # 核心模块测试
-    ├── test_repl.py                    # REPL 模块测试
-    └── test_tools.py                   # 工具节点测试
-```
-
-## 斜杠命令
-
-| 命令 | 功能 |
+| 能力 | 说明 |
 |------|------|
-| `/set_model <alias> <provider/model>` | 添加/修改模型 |
-| `/models` | 查看所有模型 |
-| `/set_role <role> <alias1> [alias2]` | 设置角色优先级 |
-| `/mode [name]` | 切换思考范式 |
-| `/code <任务> [--file path] [--run]` | 生成代码并写入文件 |
-| `/stream [on\|off]` | 切换流式输出 |
-| `/compact` | 压缩对话历史 |
-| `/undo` | 回退对话 |
-| `/save <name>` / `/load <name>` | 保存/加载会话 |
-| `/context` | 查看上下文状态 |
-| `/ask <alias> <question>` | 向指定模型提问 |
-| `/help` | 查看帮助 |
+| 🤖 **多模型支持** | DeepSeek、OpenAI、Claude、小米 MiMo 等 11 个厂商，自动切换 |
+| 🧠 **4 种思考模式** | 直接对话、ReAct 推理、计划执行、反思修正 |
+| 📁 **项目感知** | 自动识别项目类型（Python/Node/Rust...），加载项目规则 |
+| ✏️ **代码编辑** | 直接修改代码文件，支持 LLM 辅助编辑 + 差异预览 |
+| 💾 **跨会话记忆** | 记住你的偏好和项目信息，下次对话自动加载 |
+| ⚡ **快捷指令** | 自定义命令和技能，一键执行复杂任务 |
+| 🔧 **工具执行** | 运行命令、读写文件、搜索代码、Git 操作、网页抓取 |
 
-## 节点类型
+---
 
-| 节点 | 职责 | 关键配置 |
-|------|------|----------|
-| **LLMNode** | 调用大语言模型，支持多模型 Fallback | `model`, `prompt`, `output_slot` |
-| **ToolNode** | 命令执行 / 文件读写 | `action_type`, `action`, `file_path`, `content` |
-| **RouterNode** | 条件路由，决定下一跳 | `rules`, `default_next` |
-
-## 运行测试
+## 📦 安装
 
 ```bash
-pytest tests/ -v
+# 克隆项目
+git clone https://github.com/xianyu-sheng/omniagent.git
+cd omniagent
+
+# 安装（开发模式）
+pip install -e .
 ```
 
-## 详细文档
+**要求：** Python 3.10+
 
-- [操作手册](docs/OPERATION_GUIDE.md) — 完整的使用指南
+---
 
-## License
+## ⚡ 快速开始
 
-MIT
+### 1. 配置 API Key
+
+```bash
+# 启动配置向导
+omniagent
+```
+
+进入后输入 `/setup`，按菜单操作即可。支持的厂商：
+
+| 厂商 | 模型示例 |
+|------|----------|
+| DeepSeek | deepseek-chat, deepseek-coder |
+| OpenAI | gpt-4o, gpt-4o-mini |
+| Anthropic | claude-sonnet-4-20250514 |
+| 小米 MiMo | MiMo-7B-RL |
+| 智谱 GLM | glm-4-plus |
+| 阿里千问 | qwen-max |
+| 更多... | Google, Kimi, 百川, MiniMax, Ollama |
+
+### 2. 开始对话
+
+```bash
+# 直接启动
+omniagent
+
+# 输入问题即可
+You: 帮我写一个 Python 快速排序
+```
+
+### 3. 切换模型
+
+```
+You: /model
+```
+
+选择已配置的模型即可切换。
+
+---
+
+## 🎯 常用命令
+
+| 命令 | 说明 |
+|------|------|
+| `/setup` | 配置向导（API Key、模型、范式） |
+| `/model` | 切换当前模型 |
+| `/mode` | 切换思考范式（direct/react/plan-execute/reflection） |
+| `/project` | 查看项目上下文（类型、文件树、规则） |
+| `/edit <文件> <指令>` | LLM 辅助编辑代码 |
+| `/memory` | 管理跨会话记忆 |
+| `/shortcut` | 创建/管理快捷指令 |
+| `/skill` | 创建/管理技能（LLM + 工具组合） |
+| `/compact` | 压缩对话历史（节省 Token） |
+| `/save` / `/load` | 保存/加载会话 |
+| `/help` | 查看所有命令 |
+
+---
+
+## 🧠 思考范式
+
+OmniAgent 支持 4 种 AI 思考方式，适用于不同场景：
+
+| 范式 | 说明 | 适用场景 |
+|------|------|----------|
+| **direct** | 直接对话，快速回答 | 日常问答、简单任务 |
+| **react** | 思考→行动→观察循环 | 探索性任务、调试 |
+| **plan-execute** | 先规划再执行 | 复杂编程、多步骤任务 |
+| **reflection** | 执行→审查→修正 | 代码审查、高质量输出 |
+
+```
+You: /mode react
+```
+
+---
+
+## 📁 项目感知
+
+OmniAgent 会自动检测你的项目：
+
+- **项目类型** — 根据 `pyproject.toml`、`package.json`、`Cargo.toml` 等自动识别
+- **文件树** — 构建精简的项目结构视图
+- **项目规则** — 加载 `.omniagent/rules.md` 中的自定义规则
+
+创建 `.omniagent/rules.md` 来定制 AI 行为：
+
+```markdown
+# 项目规则
+- 使用 Python 3.12
+- 遵循 PEP 8
+- 使用 pytest 测试
+- 所有函数必须有类型注解
+```
+
+---
+
+## ✏️ 代码编辑
+
+直接在对话中修改代码：
+
+```
+You: /edit src/main.py 把所有 print 改为 logging.info
+```
+
+AI 会：
+1. 读取文件内容
+2. 生成修改方案
+3. 展示差异对比
+4. 等你确认后应用修改
+
+---
+
+## ⚡ 快捷指令
+
+创建常用命令的快捷方式：
+
+```
+You: /shortcut create
+名称: test
+描述: 运行测试
+命令: python -m pytest tests/ -v
+```
+
+之后只需 `/test` 即可执行。
+
+---
+
+## 🛠 技能系统
+
+创建复杂的多步骤技能：
+
+```
+You: /skill create
+名称: code_review
+描述: 审查代码质量并给出改进建议
+模式: 1. 🤖 智能生成
+```
+
+AI 会自动生成完整的技能步骤，你可以直接使用或修改。
+
+---
+
+## 📝 自定义规则
+
+在项目根目录创建 `.omniagent/rules.md`：
+
+```markdown
+# 代码风格
+- 使用 4 空格缩进
+- 函数名使用 snake_case
+- 类名使用 PascalCase
+
+# 测试要求
+- 每个函数都要有单元测试
+- 测试覆盖率 > 80%
+
+# Git 规范
+- commit message 使用中文
+- 格式: <类型>: <描述>
+```
+
+---
+
+## 🔒 安全说明
+
+- **API Key 存储在本地** — `~/.omniagent/credentials.yaml`，不会上传到任何地方
+- **代码在本地执行** — 所有操作都在你的电脑上完成
+- **开源透明** — 所有代码可审查
+
+---
+
+## 📄 许可证
+
+MIT License
+
+---
+
+## 🙏 致谢
+
+感谢以下开源项目：
+- [Rich](https://github.com/Textualize/rich) — 终端美化
+- [httpx](https://github.com/encode/httpx) — HTTP 客户端
+- [PyYAML](https://github.com/yaml/pyyaml) — YAML 解析
