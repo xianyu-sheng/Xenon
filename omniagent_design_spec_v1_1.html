@@ -1,0 +1,236 @@
+
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>OmniAgent-CLI 项目设计方案 (v1.1)</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 20mm 15mm;
+            background-color: #f8fafc;
+            @bottom-right {
+                content: counter(page);
+                font-size: 9pt;
+                font-family: 'Helvetica Neue', Arial, sans-serif;
+                color: #94a3b8;
+            }
+        }
+        
+        *, *::before, *::after {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            color: #1e293b;
+            line-height: 1.5;
+            font-size: 10.5pt;
+        }
+
+        h1 {
+            font-size: 22pt;
+            color: #0f172a;
+            margin-top: 0;
+            margin-bottom: 5px;
+            font-weight: 700;
+            border-bottom: 2px solid #3b82f6;
+            padding-bottom: 10px;
+        }
+
+        .subtitle {
+            font-size: 12pt;
+            color: #64748b;
+            margin-bottom: 30px;
+            font-style: italic;
+        }
+
+        h2 {
+            font-size: 15pt;
+            color: #1e3a8a;
+            margin-top: 25px;
+            margin-bottom: 12px;
+            border-left: 4px solid #3b82f6;
+            padding-left: 10px;
+            page-break-after: avoid;
+        }
+
+        h3 {
+            font-size: 12pt;
+            color: #0f172a;
+            margin-top: 15px;
+            margin-bottom: 8px;
+            page-break-after: avoid;
+        }
+
+        p {
+            margin-top: 0;
+            margin-bottom: 12px;
+            text-align: justify;
+        }
+
+        ul, ol {
+            margin-top: 0;
+            margin-bottom: 12px;
+            padding-left: 20px;
+        }
+
+        li {
+            margin-bottom: 4px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            margin-bottom: 15px;
+            font-size: 10pt;
+            background-color: #ffffff;
+        }
+
+        th {
+            background-color: #1e3a8a;
+            color: #ffffff;
+            font-weight: 600;
+            text-align: left;
+            padding: 8px 10px;
+            border: 1px solid #e2e8f0;
+        }
+
+        td {
+            padding: 8px 10px;
+            border: 1px solid #e2e8f0;
+            color: #334155;
+        }
+
+        tr:nth-child(even) td {
+            background-color: #f1f5f9;
+        }
+
+        pre {
+            background-color: #0f172a;
+            color: #e2e8f0;
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 9.5pt;
+            overflow: hidden;
+            margin-top: 10px;
+            margin-bottom: 15px;
+            white-space: pre-wrap;
+        }
+
+        .callout {
+            background-color: #eff6ff;
+            border-left: 4px solid #2563eb;
+            padding: 12px;
+            margin-bottom: 15px;
+            border-radius: 0 6px 6px 0;
+        }
+
+        .callout p:last-child {
+            margin-bottom: 0;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>OmniAgent-CLI 项目架构与系统设计白皮书</h1>
+    <div class="subtitle">解耦化、配置驱动的多模型 AI 编程 Agent 调度引擎 (v1.1)</div>
+
+    <h2>1. 项目概述与愿景</h2>
+    <p>目前市场上的主流 AI 编程平台（如 Cursor、GitHub Copilot）普遍采用了“黑盒化”的系统设计。开发者无法感知底层的思考路径，更无法根据任务复杂度、API 成本和本地编译环境灵活调度不同的模型。本项目旨在开发一款纯 Python 编写的、白盒化、配置驱动的本地 CLI 编程 Agent 工具——<strong>OmniAgent-CLI</strong>。</p>
+
+    <h2>2. 系统核心架构</h2>
+    
+    <h3>2.1 原子节点抽象 (Atomic Nodes)</h3>
+    <p>将复杂的 Agent 行为拆解为单一职责的原子节点。每个节点继承自统一的基类 <code>BaseNode</code>，实现标准的输入输出契约：</p>
+    <ul>
+        <li><strong>LLMNode：</strong> 负责大模型交互。支持动态绑定不同的 API、支持多模型降级/优先级列表（Fallback Mechanism）。</li>
+        <li><strong>ToolNode：</strong> 负责本地系统的副作用执行。包括文件读取、代码写入、运行终端编译命令。</li>
+        <li><strong>RouterNode：</strong> 流程控制节点。根据上下文中的状态动态决定拓扑图的下一跳。</li>
+    </ul>
+
+    <h3>2.2 全局凭证中心 (Global Credential Store)</h3>
+    <p>为了支持多工作区无缝切换，系统采用<strong>全局配置与局部配置解耦</strong>的设计：</p>
+    <ul>
+        <li><strong>全局 API 凭证管理：</strong> 在用户主目录统一管理 API Key (如 <code>~/.omniagent/credentials.yaml</code> 或全局 <code>.env</code> 文件)。这使得各个独立的项目工作区无需重复配置密钥即可全局调用各家大模型。</li>
+        <li><strong>项目级工作流配置：</strong> 在当前项目目录下的 <code>omniagent.yaml</code> 仅配置流程拓扑和模型策略，不包含敏感的鉴权信息。</li>
+    </ul>
+
+    <h3>2.3 模型优先级与 Fallback 机制</h3>
+    <p>为确保执行的稳健性和优化成本，在模型分配上支持<strong>数组形式的优先级列表</strong>。例如在规划阶段，优先尝试高智商但易受并发限制的模型（如 Claude 3.5），若触发 Rate Limit 或服务端错误，系统自动降级（Fallback）至列表中的次优模型（如 GPT-4o），实现平滑容灾。</p>
+
+    <h2>3. 配置文件规范 (YAML 驱动)</h2>
+    <p>以下为 OmniAgent-CLI 支持的最新工作流配置示例（包含全局凭证引用与多模型优先级调度）：</p>
+
+<pre>yaml
+version: "1.1"
+workflow: "Plan_Execute_Review_Pipeline"
+
+# 定义模型策略，支持优先级列表 (Fallback 机制)
+models:
+  planner: 
+    - "anthropic/claude-3-5-sonnet" # 优先级 1
+    - "openai/gpt-4o"               # 优先级 2 (降级)
+  coder: 
+    - "deepseek/deepseek-coder"     # 主力执行
+    - "openai/gpt-4o-mini"          # 备用执行
+  reviewer: "openai/gpt-4o"
+
+nodes:
+  - id: "arch_planner"
+    type: "LLMNode"
+    model: "planner" # 将按 planner 定义的数组顺序进行调度
+    prompt: "你是一个资深架构师。请针对用户的需求，拆解出详细的开发步骤：{user_query}"
+    output_slot: "task_list"
+
+  - id: "task_iterator"
+    type: "RouterNode"
+    rule: "loop_tasks"
+    condition: "if has_next_task"
+    then: "code_generator"
+    else: "final_reporter"
+
+  - id: "code_generator"
+    type: "LLMNode"
+    model: "coder"
+    prompt: "请根据当前子任务编写具体的 Python 代码：{current_task}。"
+    output_slot: "generated_code"
+
+  - id: "code_writer"
+    type: "ToolNode"
+    action: "write_file"
+    file_path: "{target_file_path}"
+    content: "{generated_code}"
+</pre>
+
+    <h2>4. 项目文件目录规划</h2>
+<pre>
+omniagent-cli/
+├── pyproject.toml         
+├── config/
+│   └── default_flow.yaml  # 默认范式流转配置文件
+├── omniagent/
+│   ├── main.py            
+│   ├── engine/
+│   │   ├── scheduler.py   
+│   │   └── context.py     
+│   ├── nodes/
+│   │   ├── base.py        
+│   │   ├── llm_node.py    # 包含多模型优先级轮询与 Fallback 逻辑
+│   │   ├── tool_node.py   
+│   │   └── router_node.py 
+│   └── utils/
+│       ├── llm_client.py  # 适配器，读取 ~/.omniagent 全局凭证
+│       └── config_parser.py 
+└── tests/                 
+</pre>
+
+    <div class="callout">
+        <p><strong>开发者实施备忘：</strong> LLMNode 的实现必须引入 try-except 块以捕获 HTTP 错误（如 429 频率限制），并自动基于配置数组中的下一个模型发起重试。全局凭证管理建议使用 Python 的 <code>os.path.expanduser('~')</code> 来定位全局秘钥文件。</p>
+    </div>
+
+</body>
+</html>

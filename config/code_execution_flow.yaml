@@ -1,0 +1,230 @@
+# OmniAgent-CLI 代码执行工作流
+# 完整闭环: 生成代码 → 写入文件 → 运行测试 → 根据结果修复
+
+version: "1.1"
+workflow: "code-execution"
+
+# ── 模型配置 ──────────────────────────────────────────────
+models:
+  planner:
+    - "anthropic/claude-3-5-sonnet"
+    - "openai/gpt-4o"
+  coder:
+    - "deepseek/deepseek-coder"
+    - "openai/gpt-4o-mini"
+    - "openai/gpt-4o"
+  reviewer:
+    - "openai/gpt-4o"
+    - "anthropic/claude-3-5-sonnet"
+
+start_node: "analyze_task"
+
+nodes:
+  # ── 阶段 1: 分析任务 ──────────────────────────────────
+  - id: "analyze_task"
+    type: "llm"
+    model: "planner"
+    system_prompt: |
+      你是一个编程任务分析助手。分析用户的任务需求，输出:
+      1. 需要创建的文件列表（含路径）
+      2. 每个文件的功能说明
+      3. 需要执行的测试命令
+      格式要求：输出 JSON 格式，包含 files 数组和 test_command 字段。
+    prompt: |
+      用户任务: {task}
+      工作目录: {work_dir}
+
+      请分析任务并输出执行计划（JSON 格式）:
+    output_slot: "task_plan"
+    temperature: 0.2
+    next: "parse_plan"
+
+  # ── 阶段 2: 解析计划 ──────────────────────────────────
+  - id: "parse_plan"
+    type: "llm"
+    model: "coder"
+    system_prompt: |
+      你是一个代码生成助手。根据任务计划，为每个文件生成完整的代码。
+      要求：
+      1. 代码必须完整可运行
+      2. 包含必要的 import
+      3. 包含 docstring 和注释
+      输出格式：每个文件用 ===FILE: path=== 分隔，代码紧跟其后。
+    prompt: |
+      任务计划:
+      {task_plan}
+
+      请为每个文件生成完整代码:
+    output_slot: "generated_code"
+    temperature: 0.3
+    next: "write_files"
+
+  # ── 阶段 3: 写入文件 ──────────────────────────────────
+  - id: "write_files"
+    type: "llm"
+    model: "coder"
+    system_prompt: |
+      你是一个文件写入助手。解析代码块，输出需要写入的文件列表。
+      输出格式：每行一个文件，格式为 FILE_PATH|||FILE_CONTENT
+      用 ||| 分隔路径和内容。
+    prompt: |
+      生成的代码:
+      {generated_code}
+
+      工作目录: {work_dir}
+
+      请解析并输出文件列表（每行 FILE_PATH|||FILE_CONTENT）:
+    output_slot: "file_list"
+    temperature: 0.1
+    next: "execute_write"
+
+  # ── 阶段 4: 执行写入 ──────────────────────────────────
+  - id: "execute_write"
+    type: "tool"
+    action_type: "write_file"
+    file_path: "{work_dir}/.omniagent_temp_write.py"
+    content: |
+      import os
+      import sys
+
+      # 从环境变量读取文件列表
+      file_list = '''{file_list}'''
+      work_dir = '''{work_dir}'''
+
+      written_files = []
+      for line in file_list.strip().split('\n'):
+          if '|||' not in line:
+              continue
+          path, content = line.split('|||', 1)
+          path = path.strip()
+          if not path.startswith('/') and not path.startswith('\\') and ':' not in path[:2]:
+              path = os.path.join(work_dir, path)
+          os.makedirs(os.path.dirname(path), exist_ok=True)
+          with open(path, 'w', encoding='utf-8') as f:
+              f.write(content)
+          written_files.append(path)
+          print(f"写入: {path}")
+
+      print(f"共写入 {len(written_files)} 个文件")
+    output_slot: "write_result"
+    next: "run_tests"
+
+  # ── 阶段 5: 运行测试 ──────────────────────────────────
+  - id: "run_tests"
+    type: "tool"
+    action: "cd {work_dir} && python -m pytest tests/ -v --tb=short 2>&1 || echo 'TESTS_FAILED'"
+    output_slot: "test_result"
+    timeout: 120
+    next: "check_tests"
+
+  # ── 阶段 6: 检查测试结果 ──────────────────────────────
+  - id: "check_tests"
+    type: "router"
+    rules:
+      - condition:
+          key: "test_result"
+          op: "contains"
+          value: "passed"
+        next: "review_code"
+      - condition:
+          key: "retry_count"
+          op: ">="
+          value: 3
+        next: "final_report"
+    default_next: "fix_code"
+
+  # ── 阶段 7: 修复代码 ──────────────────────────────────
+  - id: "fix_code"
+    type: "llm"
+    model: "coder"
+    system_prompt: |
+      你是一个代码修复助手。根据测试失败信息，修复代码中的问题。
+      要求：
+      1. 只输出需要修改的文件和修改后的内容
+      2. 格式: ===FIX_FILE: path=== 后跟完整修复后的代码
+      3. 确保修复后的代码完整可运行
+    prompt: |
+      原始任务: {task}
+      生成的代码: {generated_code}
+      测试结果: {test_result}
+      当前重试次数: {retry_count}
+
+      请修复代码中的问题:
+    output_slot: "fixed_code"
+    temperature: 0.3
+    next: "apply_fix"
+
+  # ── 阶段 8: 应用修复 ──────────────────────────────────
+  - id: "apply_fix"
+    type: "llm"
+    model: "coder"
+    system_prompt: |
+      解析修复后的代码，输出文件列表。
+      格式: 每行 FILE_PATH|||FILE_CONTENT
+    prompt: |
+      修复后的代码:
+      {fixed_code}
+
+      工作目录: {work_dir}
+
+      请输出文件列表:
+    output_slot: "file_list"
+    temperature: 0.1
+    next: "increment_retry"
+
+  # ── 阶段 9: 重试计数 ──────────────────────────────────
+  - id: "increment_retry"
+    type: "llm"
+    model: "coder"
+    system_prompt: |
+      输出当前重试次数加 1 的数字。只输出数字。
+    prompt: |
+      当前重试次数: {retry_count}
+      请输出新的重试次数（当前 + 1）:
+    output_slot: "retry_count"
+    temperature: 0.0
+    next: "execute_write"
+
+  # ── 阶段 10: 代码审查 ──────────────────────────────────
+  - id: "review_code"
+    type: "llm"
+    model: "reviewer"
+    system_prompt: |
+      你是一个代码审查助手。审查生成的代码，给出改进建议。
+      输出格式：
+      1. 代码质量评分 (1-10)
+      2. 主要优点
+      3. 改进建议
+      4. 最终结论 (PASS/NEEDS_WORK)
+    prompt: |
+      原始任务: {task}
+      生成的代码: {generated_code}
+      测试结果: {test_result}
+
+      请审查代码:
+    output_slot: "review_comment"
+    temperature: 0.3
+    next: "final_report"
+
+  # ── 阶段 11: 最终报告 ──────────────────────────────────
+  - id: "final_report"
+    type: "llm"
+    model: "planner"
+    system_prompt: |
+      生成最终执行报告，包含：
+      1. 任务完成情况
+      2. 创建的文件列表
+      3. 测试结果摘要
+      4. 代码审查意见
+      5. 后续建议
+    prompt: |
+      原始任务: {task}
+      任务计划: {task_plan}
+      生成的代码: {generated_code}
+      测试结果: {test_result}
+      代码审查: {review_comment}
+      重试次数: {retry_count}
+
+      请生成最终报告:
+    output_slot: "final_report"
+    temperature: 0.3

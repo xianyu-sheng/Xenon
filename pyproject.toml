@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omniagent-cli"
+version = "0.1.0"
+description = "A decoupled, config-driven multi-model AI programming Agent scheduling engine"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27.0",
+    "pyyaml>=6.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+omniagent = "omniagent.main:cli"
+
+[tool.setuptools.packages.find]
+include = ["omniagent*"]

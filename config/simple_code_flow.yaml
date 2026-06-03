@@ -1,0 +1,113 @@
+# OmniAgent-CLI 简化代码执行工作流
+# 实用版本: 生成代码 → 直接写文件 → 运行 → 修复
+
+version: "1.1"
+workflow: "simple-code-execution"
+
+models:
+  planner:
+    - "anthropic/claude-3-5-sonnet"
+    - "openai/gpt-4o"
+  coder:
+    - "deepseek/deepseek-coder"
+    - "openai/gpt-4o-mini"
+    - "openai/gpt-4o"
+
+start_node: "generate_code"
+
+nodes:
+  # ── 1. 生成代码 ────────────────────────────────────────
+  - id: "generate_code"
+    type: "llm"
+    model: "coder"
+    system_prompt: |
+      你是一个 Python 编程助手。根据用户的任务需求生成完整的、可运行的代码。
+
+      输出要求：
+      1. 只输出代码，不要解释
+      2. 代码必须完整，包含所有必要的 import
+      3. 如果需要测试，同时生成 test 文件
+      4. 使用标准的项目结构
+    prompt: |
+      任务: {task}
+      工作目录: {work_dir}
+
+      请生成完整的代码。如果需要多个文件，用 ===FILE: path=== 分隔。
+      例如：
+      ===FILE: main.py===
+      print("hello")
+      ===FILE: tests/test_main.py===
+      def test_hello(): ...
+    output_slot: "generated_code"
+    temperature: 0.3
+    next: "write_main_file"
+
+  # ── 2. 写入主文件 ──────────────────────────────────────
+  - id: "write_main_file"
+    type: "tool"
+    action_type: "write_file"
+    file_path: "{work_dir}/main.py"
+    content: "{generated_code}"
+    output_slot: "main_file_path"
+    next: "run_code"
+
+  # ── 3. 运行代码 ────────────────────────────────────────
+  - id: "run_code"
+    type: "tool"
+    action: "cd {work_dir} && python main.py 2>&1"
+    output_slot: "run_result"
+    timeout: 60
+    next: "check_run"
+
+  # ── 4. 检查运行结果 ────────────────────────────────────
+  - id: "check_run"
+    type: "router"
+    rules:
+      - condition:
+          key: "run_result"
+          op: "contains"
+          value: "Error"
+        next: "fix_error"
+      - condition:
+          key: "retry_count"
+          op: ">="
+          value: 3
+        next: "success"
+    default_next: "success"
+
+  # ── 5. 修复错误 ────────────────────────────────────────
+  - id: "fix_error"
+    type: "llm"
+    model: "coder"
+    system_prompt: |
+      代码运行出错，请修复。只输出修复后的完整代码。
+    prompt: |
+      原始任务: {task}
+      原始代码:
+      {generated_code}
+
+      错误信息:
+      {run_result}
+
+      请修复代码并输出完整的修复后代码:
+    output_slot: "generated_code"
+    temperature: 0.3
+    next: "write_main_file"
+
+  # ── 6. 成功 ────────────────────────────────────────────
+  - id: "success"
+    type: "llm"
+    model: "planner"
+    system_prompt: |
+      总结代码执行结果，给出简短的完成报告。
+    prompt: |
+      任务: {task}
+      生成的代码:
+      {generated_code}
+
+      执行结果:
+      {run_result}
+
+      请总结完成情况:
+    output_slot: "final_report"
+    temperature: 0.3

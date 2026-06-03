@@ -1,0 +1,88 @@
+# OmniAgent-CLI 默认工作流配置 — Plan-and-Execute 范式
+# 先用昂贵模型做规划，再用便宜模型逐步执行
+
+version: "1.1"
+workflow: "plan-and-execute"
+
+# ── 全局模型优先级配置 ──────────────────────────────────
+# 每个角色可配置多个模型，按优先级排列，第一个失败则自动切换到下一个
+models:
+  planner:
+    - "anthropic/claude-3-5-sonnet"    # 优先：用强模型做规划
+    - "openai/gpt-4o"                  # 备选
+  executor:
+    - "deepseek/deepseek-coder"        # 优先：用性价比高的模型做执行
+    - "openai/gpt-4o-mini"             # 备选
+  reviewer:
+    - "openai/gpt-4o"                  # 审查用中等模型
+    - "anthropic/claude-3-5-sonnet"    # 备选
+
+# ── 工作流拓扑 ──────────────────────────────────────────
+start_node: "generate_plan"
+
+nodes:
+  # 1. 规划阶段：使用 planner 模型生成执行计划
+  - id: "generate_plan"
+    type: "llm"
+    model: "planner"
+    system_prompt: |
+      你是一个高级编程规划助手。请根据用户的任务描述，生成一个清晰的分步执行计划。
+      每一步应该是一个具体的、可执行的操作。
+      输出格式：每行一个步骤，以 "1." "2." 等编号。
+    prompt: "用户任务: {task}\n\n请生成执行计划："
+    output_slot: "plan"
+    temperature: 0.3
+    next: "check_plan"
+
+  # 2. 路由：判断计划是否已生成
+  - id: "check_plan"
+    type: "router"
+    rules:
+      - condition:
+          key: "plan"
+          op: "is_truthy"
+          value: true
+        next: "execute_step"
+    default_next: "generate_plan"
+
+  # 3. 执行阶段：使用 executor 模型逐步执行
+  - id: "execute_step"
+    type: "llm"
+    model: "executor"
+    system_prompt: |
+      你是一个编程执行助手。根据给定的计划，执行当前步骤并输出代码或操作结果。
+      如果所有步骤已完成，输出 "DONE"。
+    prompt: |
+      执行计划:
+      {plan}
+
+      请执行下一个步骤，输出具体代码或操作：
+    output_slot: "execution_result"
+    temperature: 0.5
+    next: "check_execution"
+
+  # 4. 路由：判断是否执行完毕
+  - id: "check_execution"
+    type: "router"
+    rules:
+      - condition:
+          key: "execution_result"
+          op: "contains"
+          value: "DONE"
+        next: "review"
+    default_next: "execute_step"
+
+  # 5. 审查阶段：使用 reviewer 模型审查结果
+  - id: "review"
+    type: "llm"
+    model: "reviewer"
+    system_prompt: |
+      你是一个代码审查助手。请审查以下执行结果，给出简短的评审意见。
+    prompt: |
+      原始任务: {task}
+      执行计划: {plan}
+      执行结果: {execution_result}
+
+      请审查并给出意见：
+    output_slot: "review_comment"
+    temperature: 0.3
