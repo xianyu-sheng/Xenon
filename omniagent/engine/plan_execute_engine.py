@@ -7,39 +7,25 @@ Phase 2: Execution — 逐步执行，每步结果写入 context
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from omniagent.engine.context import AgentContext
 from omniagent.nodes.tool_node import ToolNode
 from omniagent.utils.llm_client import chat_completion
+from omniagent.utils.response_adapter import parse_plan
 
 logger = logging.getLogger(__name__)
 
-PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。用户会给你一个任务，你需要将其分解为可执行的步骤列表。
+PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解为可执行步骤。
 
-请严格按照以下 JSON 格式输出（不要输出其他内容）：
+直接输出以下JSON，不要输出任何其他内容、解释或思考过程：
 ```json
-{
-  "analysis": "对任务的简要分析",
-  "steps": [
-    {"id": 1, "task": "步骤描述", "tool": "工具名称或 null", "params": {}},
-    {"id": 2, "task": "步骤描述", "tool": "工具名称或 null", "params": {}}
-  ]
-}
+{"analysis":"简要分析","steps":[{"id":1,"task":"步骤描述","tool":null,"params":{}}]}
 ```
 
-可用工具:
-- command: 执行终端命令 (action: 命令)
-- read_file: 读取文件 (file_path: 路径)
-- write_file: 写入文件 (file_path: 路径, content: 内容)
-- list_files: 列出文件 (file_path: 目录, pattern: glob)
-- search_files: 搜索内容 (file_path: 目录, search_pattern: 关键词)
-- git: Git 操作 (git_command: status|diff|log|add|commit)
-- web_fetch: 抓取网页 (url: 网址)
-
-如果某步骤不需要工具（如纯思考），tool 设为 null。
+可用工具: command, read_file, write_file, list_files, search_files, git, web_fetch
+不需要工具的步骤 tool 设为 null。
 """
 
 EXECUTE_PROMPT = """你正在执行一个任务计划。当前步骤信息如下:
@@ -81,7 +67,7 @@ class PlanExecuteEngine:
 
         # Phase 1: Planning
         logger.info("Plan-Execute Phase 1: 规划中...")
-        plan = self._plan(user_input)
+        plan = self._plan(user_input, ctx)
         steps = plan.get("steps", [])
 
         if not steps:
@@ -129,15 +115,29 @@ class PlanExecuteEngine:
         summary = self._summarize(user_input, plan.get("analysis", ""), results)
         return summary
 
-    def _plan(self, user_input: str) -> dict[str, Any]:
+    def _plan(self, user_input: str, context: AgentContext | None = None) -> dict[str, Any]:
         """Phase 1: 生成执行计划。"""
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": user_input},
-        ]
+        messages = [{"role": "system", "content": self.system_prompt}]
+        # 注入对话历史（最近 6 条，排除 system 消息）
+        if context:
+            history = context.get_conversation_messages()
+            if history:
+                recent = [m for m in history if m.get("role") != "system"][-6:]
+                messages.extend(recent)
+                logger.info(f"Plan 注入 {len(recent)} 条对话历史")
+            else:
+                logger.warning("Plan: 无对话历史可注入！")
+        else:
+            logger.warning("Plan: context 为 None！")
 
         response = self._call_llm(messages)
-        return self._parse_json(response)
+        if not response or not response.strip():
+            logger.warning("LLM 返回了空响应！请检查 API 配置和模型是否支持。")
+        else:
+            logger.info(f"LLM 原始响应 (前500字): {response[:500]}")
+        result = self._parse_json(response)
+        logger.info(f"解析后: steps={len(result.get('steps', []))}, analysis={result.get('analysis', '')[:100]}")
+        return result
 
     def _execute_step_with_tool(self, tool: str, params: dict, context: AgentContext) -> str:
         """使用工具执行步骤。"""
@@ -186,60 +186,17 @@ class PlanExecuteEngine:
         ]
         return self._call_llm(messages)
 
-    def _call_llm(self, messages: list[dict[str, str]]) -> str:
+    def _call_llm(self, messages: list[dict[str, str]], max_tokens: int = 131072) -> str:
         """调用 LLM，支持多模型 fallback。"""
         last_error = None
         for model_id in self.model_priority:
             try:
-                return chat_completion(model_id, messages, max_tokens=2048, temperature=0.3)
+                return chat_completion(model_id, messages, max_tokens=max_tokens, temperature=0.3)
             except Exception as e:
                 last_error = e
                 logger.warning(f"模型 {model_id} 失败: {e}")
         raise RuntimeError(f"所有模型均调用失败: {last_error}")
 
     def _parse_json(self, text: str) -> dict[str, Any]:
-        """从 LLM 输出中提取 JSON，兼容多种格式。"""
-        text = text.strip()
-        if "```json" in text:
-            start = text.find("```json") + 7
-            end = text.find("```", start)
-            if end != -1:
-                text = text[start:end].strip()
-        elif "```" in text:
-            start = text.find("```") + 3
-            end = text.find("```", start)
-            if end != -1:
-                text = text[start:end].strip()
-
-        data = None
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            brace_start = text.find("{")
-            brace_end = text.rfind("}")
-            if brace_start != -1 and brace_end != -1:
-                try:
-                    data = json.loads(text[brace_start:brace_end + 1])
-                except json.JSONDecodeError:
-                    pass
-
-        if data is None:
-            return {"analysis": text, "steps": []}
-
-        # 标准化字段名（兼容不同 LLM 的输出格式）
-        analysis = data.get("analysis", data.get("task", data.get("summary", "")))
-
-        raw_steps = data.get("steps", [])
-        normalized_steps = []
-        for i, step in enumerate(raw_steps):
-            if isinstance(step, dict):
-                normalized_steps.append({
-                    "id": step.get("id", step.get("step_number", step.get("num", i + 1))),
-                    "task": step.get("task", step.get("description", step.get("step", str(step)))),
-                    "tool": step.get("tool", step.get("action", None)),
-                    "params": step.get("params", step.get("parameters", {})),
-                })
-            elif isinstance(step, str):
-                normalized_steps.append({"id": i + 1, "task": step, "tool": None, "params": {}})
-
-        return {"analysis": analysis, "steps": normalized_steps}
+        """从 LLM 输出中提取 JSON（委托给 response_adapter 中间件）。"""
+        return parse_plan(text)

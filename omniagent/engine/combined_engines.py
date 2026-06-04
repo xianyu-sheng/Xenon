@@ -50,11 +50,17 @@ class PlanReactEngine:
 
         # Phase 1: 全局规划
         console.print("[dim]📋 Phase 1: 生成执行计划...[/dim]")
-        plan = self.planner._plan(user_input)
+        try:
+            plan = self.planner._plan(user_input, ctx)
+        except Exception as e:
+            console.print(f"[red]  ✗ 规划阶段异常: {e}[/red]")
+            return f"规划阶段失败: {e}"
         steps = plan.get("steps", [])
         analysis = plan.get("analysis", "")
+        logger.info(f"Plan 结果: steps={len(steps)}, analysis={analysis[:200] if analysis else '(空)'}")
 
         if not steps:
+            console.print(f"[yellow]  ⚠ 未生成步骤，analysis={analysis[:200] if analysis else '(空)'}[/yellow]")
             return analysis or "未能生成有效的执行计划。"
 
         console.print(f"[dim]📋 计划生成 {len(steps)} 个步骤[/dim]")
@@ -180,7 +186,7 @@ class PlanReflectionEngine:
         logger.info("PlanReflection Phase 2: 反思审查")
         try:
             final_output = self.reflector.run(
-                f"原始任务: {user_input}\n\n执行结果:\n{initial_output}"
+                f"原始任务: {user_input}\n\n执行结果:\n{initial_output}", context=ctx
             )
         except Exception as e:
             logger.warning(f"Reflection 阶段失败: {e}")
@@ -227,7 +233,7 @@ class ReactReflectionEngine:
         logger.info("ReactReflection Phase 2: 反思审查")
         try:
             final_output = self.reflector.run(
-                f"原始任务: {user_input}\n\n执行结果:\n{initial_output}"
+                f"原始任务: {user_input}\n\n执行结果:\n{initial_output}", context=ctx
             )
         except Exception as e:
             logger.warning(f"Reflection 阶段失败: {e}")

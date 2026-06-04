@@ -16,8 +16,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import logging
 import httpx
 import yaml
+
+logger = logging.getLogger(__name__)
 
 # ── 全局凭证路径 ──────────────────────────────────────────
 _CREDENTIALS_PATH = Path.home() / ".omniagent" / "credentials.yaml"
@@ -226,7 +229,27 @@ def _call_openai_compat(
         resp = client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        msg = data["choices"][0]["message"]
+        finish = data["choices"][0].get("finish_reason", "")
+        content = msg.get("content") or ""
+        reasoning = msg.get("reasoning_content") or msg.get("thinking") or ""
+
+        if content:
+            logger.info(f"API 响应: content={content[:300]}")
+        elif reasoning:
+            logger.info(f"API 响应: content=空, reasoning_content={reasoning[:300]}")
+        else:
+            logger.warning(f"API 响应: content 和 reasoning_content 均为空! finish_reason={finish}")
+
+        # 推理模型：content 可能为空，真正的答案在 reasoning_content 末尾
+        if not content and reasoning:
+            content = reasoning
+
+        # 如果被截断，提示
+        if finish == "length":
+            logger.warning(f"API 响应被截断 (finish_reason=length)，考虑增大 max_tokens")
+
+        return content
 
 
 def _call_anthropic(

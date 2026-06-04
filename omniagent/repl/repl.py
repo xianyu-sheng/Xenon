@@ -12,6 +12,7 @@ REPL — 交互式命令行主循环。
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from typing import Any
 
@@ -89,8 +90,24 @@ class REPL:
             "请用中文回答，代码部分用英文。"
         )
 
+    @staticmethod
+    def _set_console_title() -> None:
+        """设置控制台窗口标题。"""
+        import sys
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetConsoleTitleW("🚀 OmniAgent-CLI")
+            except Exception:
+                pass
+        else:
+            # Linux/macOS 用 ANSI 转义
+            sys.stdout.write("\033]0;🚀 OmniAgent-CLI\007")
+            sys.stdout.flush()
+
     def run(self) -> None:
         """启动 REPL 主循环。"""
+        self._set_console_title()
         self._print_welcome()
 
         # 检查是否需要初始配置
@@ -246,14 +263,20 @@ class REPL:
         def move_cursor(pos: COORD) -> None:
             SetConsoleCursorPosition(h_stdout, pos)
 
-        def erase_char() -> None:
-            """用 Console API 可靠地删除一个字符。"""
-            pos = get_cursor_pos()
-            if pos.X > 0:
-                new_pos = COORD(pos.X - 1, pos.Y)
-                move_cursor(new_pos)
-                written = wt.DWORD(0)
-                FillConsoleOutputCharacterW(h_stdout, ' ', 1, new_pos, ctypes.byref(written))
+        def erase_char(ch: str) -> None:
+            """删除一个字符。ASCII 用 ANSI（快），CJK 用 Console API（正确覆盖 2 列宽）。"""
+            if ord(ch) > 0x7F:
+                # CJK 等宽字符：占 2 列，用 Console API 覆盖
+                pos = get_cursor_pos()
+                if pos.X >= 2:
+                    new_pos = COORD(pos.X - 2, pos.Y)
+                    move_cursor(new_pos)
+                    written = wt.DWORD(0)
+                    FillConsoleOutputCharacterW(h_stdout, ' ', 2, new_pos, ctypes.byref(written))
+            else:
+                # ASCII：ANSI 一次搞定
+                sys.stdout.write("\b \b")
+                sys.stdout.flush()
 
         sys.stdout.write("\n\033[1;36mYou\033[0m: ")
         sys.stdout.flush()
@@ -278,8 +301,8 @@ class REPL:
 
             elif ch in ('\x08', '\x7f'):
                 if current_line:
-                    current_line.pop()
-                    erase_char()
+                    deleted = current_line.pop()
+                    erase_char(deleted)
 
             elif ch in ('\x00', '\xe0'):
                 msvcrt.getwch()  # 消耗第二字节
@@ -362,6 +385,9 @@ class REPL:
             console.print("[error]❌ 未配置任何模型。请先使用 /set_model 添加模型。[/error]")
             return
 
+        # 注入对话历史到 AgentContext，供引擎使用
+        self.agent_context.set_conversation_messages(self.ctx_mgr.get_messages())
+
         # 根据当前思考范式选择执行方式
         mode = self.registry.current_mode
 
@@ -382,7 +408,13 @@ class REPL:
             self._run_direct(optimized, model_ids)
 
     def _run_direct(self, user_input: str, model_ids: list[str]) -> None:
-        """直接对话模式。"""
+        """直接对话模式。自动检测工具需求并委派给 ReAct 引擎。"""
+        # 检测是否需要工具执行
+        if self._detect_tool_need(user_input):
+            console.print("[cyan]🔧 检测到需要工具执行，自动切换到 ReAct 模式...[/cyan]")
+            self._run_react_engine(user_input, model_ids)
+            return
+
         messages = self.ctx_mgr.get_messages()
 
         last_error = None
@@ -410,7 +442,7 @@ class REPL:
         try:
             result = engine.run(user_input, self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
-            console.print(Panel(result, title="[command]ReAct 结果[/command]", border_style="green"))
+            console.print(Panel(Markdown(result), title="[command]ReAct 结果[/command]", border_style="green"))
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ ReAct 引擎执行失败: {e}[/error]")
@@ -425,7 +457,7 @@ class REPL:
         try:
             result = engine.run(user_input, self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
-            console.print(Panel(result, title="[command]Plan-Execute 结果[/command]", border_style="green"))
+            console.print(Panel(Markdown(result), title="[command]Plan-Execute 结果[/command]", border_style="green"))
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ Plan-Execute 引擎执行失败: {e}[/error]")
@@ -440,7 +472,7 @@ class REPL:
         try:
             result = engine.run(user_input)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
-            console.print(Panel(result, title="[command]Reflection 结果[/command]", border_style="green"))
+            console.print(Panel(Markdown(result), title="[command]Reflection 结果[/command]", border_style="green"))
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ Reflection 引擎执行失败: {e}[/error]")
@@ -455,7 +487,7 @@ class REPL:
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
-            console.print(Panel(result, title="[command]Plan+React 结果[/command]", border_style="green"))
+            console.print(Panel(Markdown(result), title="[command]Plan+React 结果[/command]", border_style="green"))
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ Plan+React 引擎执行失败: {e}[/error]")
@@ -470,7 +502,7 @@ class REPL:
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
-            console.print(Panel(result, title="[command]Plan+Reflection 结果[/command]", border_style="green"))
+            console.print(Panel(Markdown(result), title="[command]Plan+Reflection 结果[/command]", border_style="green"))
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ Plan+Reflection 引擎执行失败: {e}[/error]")
@@ -485,7 +517,7 @@ class REPL:
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
-            console.print(Panel(result, title="[command]React+Reflection 结果[/command]", border_style="green"))
+            console.print(Panel(Markdown(result), title="[command]React+Reflection 结果[/command]", border_style="green"))
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ React+Reflection 引擎执行失败: {e}[/error]")
@@ -529,6 +561,50 @@ class REPL:
         """检测用户意图。"""
         from omniagent.repl.prompt_optimizer import detect_intent
         return detect_intent(text)
+
+    # ── 工具需求检测 ──────────────────────────────────────────
+    _TOOL_PATTERNS: list[re.Pattern[str]] = [
+        # 文件写入/创建/保存
+        re.compile(r"(?:写入|创建|保存|新建|生成|输出).{0,20}(?:文件|到|至|为)", re.I),
+        re.compile(r"(?:write|create|save|generate|output).{0,20}(?:file|to)", re.I),
+        re.compile(r"(?:文件|file).{0,10}(?:写入|创建|保存|新建)", re.I),
+        # 文件读取/查看
+        re.compile(r"(?:读取|查看|打开|读|看).{0,20}(?:文件|内容|代码|配置)", re.I),
+        re.compile(r"(?:read|open|show|cat|view).{0,20}(?:file|content)", re.I),
+        # 文件修改/编辑
+        re.compile(r"(?:修改|编辑|替换|改|更新).{0,20}(?:文件|代码)", re.I),
+        re.compile(r"(?:edit|modify|update|replace|patch).{0,20}(?:file|code)", re.I),
+        # 文件删除
+        re.compile(r"(?:删除|移除|清除).{0,20}(?:文件|目录)", re.I),
+        re.compile(r"(?:delete|remove).{0,20}(?:file|dir)", re.I),
+        # 命令执行
+        re.compile(r"(?:执行|运行|跑).{0,15}(?:命令|脚本|程序|命令行|测试|pytest|npm|pip|python|node)", re.I),
+        re.compile(r"(?:run|execute|exec).{0,15}(?:command|script|cmd|test|pytest|npm|pip|python|node)", re.I),
+        # Git 操作
+        re.compile(r"\bgit\b.{0,20}(?:commit|push|pull|add|clone|checkout|branch|merge|stash)", re.I),
+        re.compile(r"(?:提交|推送|拉取|克隆|分支|合并)", re.I),
+        # 搜索
+        re.compile(r"(?:搜索|查找|grep|find).{0,20}(?:文件|内容|代码|文本|字符)", re.I),
+        re.compile(r"(?:search|find|grep).{0,30}", re.I),
+        # 网页抓取
+        re.compile(r"(?:抓取|下载|获取|访问).{0,20}(?:网页|页面|url|网址)", re.I),
+        re.compile(r"(?:fetch|download|scrape|crawl).{0,20}(?:web|page|url)", re.I),
+        # 文件路径模式（./xxx, src/xxx, C:\xxx, .py, .js 等）
+        re.compile(r"(?:^|\s)(?:\./|\.\./|src/|tests?/|lib/|app/|dist/|build/)\S+", re.I),
+        re.compile(r"(?:^|\s)[A-Z]:\\[\w\\/.]+", re.I),
+        re.compile(r"\b\w+\.(?:py|js|ts|jsx|tsx|java|c|cpp|h|go|rs|rb|php|html|css|json|yaml|yml|toml|xml|md|txt|sh|bat|ps1)\b", re.I),
+        # 列出文件
+        re.compile(r"(?:列出|显示|查看).{0,15}(?:文件|目录|文件夹|文件列表)", re.I),
+        re.compile(r"(?:list|ls|dir|tree).{0,15}(?:file|dir|folder)", re.I),
+    ]
+
+    @classmethod
+    def _detect_tool_need(cls, text: str) -> bool:
+        """检测用户输入是否需要工具执行。"""
+        for pattern in cls._TOOL_PATTERNS:
+            if pattern.search(text):
+                return True
+        return False
 
     def _inject_project_context(self) -> None:
         """首次对话时注入项目上下文（类型、文件树、规则）。"""

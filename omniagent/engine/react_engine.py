@@ -9,13 +9,13 @@ ReAct 模式: Think → Act → Observe → 循环直到完成
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from omniagent.engine.context import AgentContext
 from omniagent.nodes.tool_node import ToolNode
 from omniagent.utils.llm_client import chat_completion
+from omniagent.utils.response_adapter import parse_react
 
 logger = logging.getLogger(__name__)
 
@@ -122,10 +122,16 @@ class ReActEngine:
             最终答案文本
         """
         ctx = context or AgentContext()
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": user_input},
-        ]
+        messages = [{"role": "system", "content": self.system_prompt}]
+        # 注入对话历史（最近 10 条，排除 system 消息）
+        history = ctx.get_conversation_messages()
+        if history:
+            recent = [m for m in history if m.get("role") != "system"][-10:]
+            messages.extend(recent)
+            logger.info(f"ReAct 注入 {len(recent)} 条对话历史")
+        else:
+            logger.warning("ReAct: 无对话历史可注入！")
+        messages.append({"role": "user", "content": user_input})
 
         for i in range(self.max_iterations):
             logger.info(f"ReAct 迭代 {i + 1}/{self.max_iterations}")
@@ -162,48 +168,20 @@ class ReActEngine:
 
         return f"达到最大迭代次数 ({self.max_iterations})，未能得出最终答案。"
 
-    def _call_llm(self, messages: list[dict[str, str]]) -> str:
+    def _call_llm(self, messages: list[dict[str, str]], max_tokens: int = 131072) -> str:
         """调用 LLM，支持多模型 fallback。"""
         last_error = None
         for model_id in self.model_priority:
             try:
-                return chat_completion(model_id, messages, max_tokens=2048, temperature=0.3)
+                return chat_completion(model_id, messages, max_tokens=max_tokens, temperature=0.3)
             except Exception as e:
                 last_error = e
                 logger.warning(f"模型 {model_id} 失败: {e}，尝试下一个...")
         raise RuntimeError(f"所有模型均调用失败: {last_error}")
 
     def _parse_response(self, response: str) -> dict[str, Any]:
-        """解析 LLM 的 JSON 输出。"""
-        # 尝试提取 JSON 块
-        text = response.strip()
-
-        # 处理 markdown 代码块
-        if "```json" in text:
-            start = text.find("```json") + 7
-            end = text.find("```", start)
-            if end != -1:
-                text = text[start:end].strip()
-        elif "```" in text:
-            start = text.find("```") + 3
-            end = text.find("```", start)
-            if end != -1:
-                text = text[start:end].strip()
-
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # 尝试找到第一个 { 和最后一个 }
-            brace_start = text.find("{")
-            brace_end = text.rfind("}")
-            if brace_start != -1 and brace_end != -1:
-                try:
-                    return json.loads(text[brace_start:brace_end + 1])
-                except json.JSONDecodeError:
-                    pass
-
-            # 解析失败，当作最终答案
-            return {"thought": response, "final_answer": response}
+        """解析 LLM 的 JSON 输出（委托给 response_adapter 中间件）。"""
+        return parse_react(response)
 
     def _execute_tool(self, action: str, action_input: dict, context: AgentContext) -> str:
         """执行工具并返回结果。"""
@@ -212,12 +190,14 @@ class ReActEngine:
             return f"错误: 未知工具 '{action}'，可用工具: {list(self.tools.keys())}"
 
         try:
+            logger.info(f"执行工具: {action}, 参数: {action_input}")
             node = ToolNode(
                 f"react_{action}",
                 action_type=action,
                 **action_input,
             )
             result = node.execute(context)
+            logger.info(f"工具结果: {str(result)[:200]}")
 
             if result.get("success"):
                 # 提取主要内容
@@ -232,4 +212,5 @@ class ReActEngine:
                 return f"工具执行失败: {result.get('error', result)}"
 
         except Exception as e:
+            logger.error(f"工具执行异常: {action}({action_input}) -> {e}")
             return f"工具执行异常: {e}"

@@ -82,7 +82,7 @@ def cli() -> None:
     args = parser.parse_args()
 
     # 配置日志
-    log_level = logging.DEBUG if args.verbose else logging.WARNING
+    log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",

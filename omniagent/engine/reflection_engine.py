@@ -6,11 +6,12 @@ Reflection Engine — 执行-审查-修正循环引擎。
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
+from omniagent.engine.context import AgentContext
 from omniagent.utils.llm_client import chat_completion
+from omniagent.utils.response_adapter import parse_review
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +57,13 @@ class ReflectionEngine:
         self.executor_prompt = executor_prompt or EXECUTOR_PROMPT
         self.reviewer_prompt = reviewer_prompt or REVIEWER_PROMPT
 
-    def run(self, user_input: str) -> str:
+    def run(self, user_input: str, context: AgentContext | None = None) -> str:
         """
         执行 Reflection 流程。
 
         Args:
             user_input: 用户输入
+            context: 可选的共享上下文（含对话历史）
 
         Returns:
             修正后的最终输出
@@ -72,7 +74,7 @@ class ReflectionEngine:
             logger.info(f"Reflection 第 {round_num} 轮")
 
             # Execute
-            output = self._execute(user_input, feedback)
+            output = self._execute(user_input, feedback, context)
 
             # Review
             review = self._review(user_input, output)
@@ -91,11 +93,15 @@ class ReflectionEngine:
         logger.info(f"达到最大修正轮次 ({self.max_rounds})，返回最后一轮输出")
         return output
 
-    def _execute(self, user_input: str, feedback: str = "") -> str:
+    def _execute(self, user_input: str, feedback: str = "", context: AgentContext | None = None) -> str:
         """执行阶段: LLM 生成输出。"""
-        messages = [
-            {"role": "system", "content": self.executor_prompt},
-        ]
+        messages = [{"role": "system", "content": self.executor_prompt}]
+        # 注入对话历史（最近 6 条，排除 system 消息）
+        if context:
+            history = context.get_conversation_messages()
+            if history:
+                recent = [m for m in history if m.get("role") != "system"][-6:]
+                messages.extend(recent)
 
         if feedback:
             messages.append({
@@ -117,42 +123,17 @@ class ReflectionEngine:
         response = self._call_llm(messages)
         return self._parse_review(response)
 
-    def _call_llm(self, messages: list[dict[str, str]]) -> str:
+    def _call_llm(self, messages: list[dict[str, str]], max_tokens: int = 131072) -> str:
         """调用 LLM，支持多模型 fallback。"""
         last_error = None
         for model_id in self.model_priority:
             try:
-                return chat_completion(model_id, messages, max_tokens=4096, temperature=0.3)
+                return chat_completion(model_id, messages, max_tokens=max_tokens, temperature=0.3)
             except Exception as e:
                 last_error = e
                 logger.warning(f"模型 {model_id} 失败: {e}")
         raise RuntimeError(f"所有模型均调用失败: {last_error}")
 
     def _parse_review(self, response: str) -> dict[str, Any]:
-        """解析审查结果 JSON。"""
-        text = response.strip()
-
-        if "```json" in text:
-            start = text.find("```json") + 7
-            end = text.find("```", start)
-            if end != -1:
-                text = text[start:end].strip()
-        elif "```" in text:
-            start = text.find("```") + 3
-            end = text.find("```", start)
-            if end != -1:
-                text = text[start:end].strip()
-
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            brace_start = text.find("{")
-            brace_end = text.rfind("}")
-            if brace_start != -1 and brace_end != -1:
-                try:
-                    return json.loads(text[brace_start:brace_end + 1])
-                except json.JSONDecodeError:
-                    pass
-
-            # 解析失败，假设通过
-            return {"pass": True, "score": 8, "feedback": "审查解析失败，默认通过"}
+        """解析审查结果 JSON（委托给 response_adapter 中间件）。"""
+        return parse_review(response)

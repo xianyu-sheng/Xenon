@@ -378,3 +378,90 @@ class TestCommands:
             registry=reg, ctx_mgr=ctx_mgr, session_state={},
         )
         assert "✅" in result
+
+
+# ── Tool Detection 测试 ──────────────────────────────────
+
+class TestToolDetection:
+    """测试 direct 模式自动工具委派检测。"""
+
+    def test_file_write_chinese(self):
+        from omniagent.repl.repl import REPL
+        assert REPL._detect_tool_need("帮我创建一个 hello.py 文件") is True
+        assert REPL._detect_tool_need("写入文件到 config.yaml") is True
+        assert REPL._detect_tool_need("保存这个文件") is True
+        assert REPL._detect_tool_need("生成一个 README.md 文件") is True
+
+    def test_file_write_english(self):
+        from omniagent.repl.repl import REPL
+        assert REPL._detect_tool_need("write a file to hello.py") is True
+        assert REPL._detect_tool_need("create a new config file") is True
+        assert REPL._detect_tool_need("save this to disk") is True
+
+    def test_file_read_chinese(self):
+        from omniagent.repl.repl import REPL
+        assert REPL._detect_tool_need("读取 config.yaml 文件") is True
+        assert REPL._detect_tool_need("查看 main.py 的内容") is True
+        assert REPL._detect_tool_need("打开这个文件看看") is True
+
+    def test_file_read_english(self):
+        from omniagent.repl.repl import REPL
+        assert REPL._detect_tool_need("read the config file") is True
+        assert REPL._detect_tool_need("show me the content of main.py") is True
+
+    def test_file_edit_chinese(self):
+        from omniagent.repl.repl import REPL
+        assert REPL._detect_tool_need("修改 main.py 文件中的函数") is True
+        assert REPL._detect_tool_need("编辑 config.yaml 的配置") is True
+        assert REPL._detect_tool_need("替换文件中的 TODO") is True
+
+    def test_file_edit_english(self):
+        from omniagent.repl.repl import REPL
+        assert REPL._detect_tool_need("edit the main.py file") is True
+        assert REPL._detect_tool_need("modify the config.yaml") is True
+
+    def test_command_execution(self):
+        from omniagent.repl.repl import REPL
+        assert REPL._detect_tool_need("执行命令 python main.py") is True
+        assert REPL._detect_tool_need("运行 pytest 测试") is True
+        assert REPL._detect_tool_need("run the test suite") is True
+
+    def test_git_operations(self):
+        from omniagent.repl.repl import REPL
+        assert REPL._detect_tool_need("git commit -m 'fix'") is True
+        assert REPL._detect_tool_need("git push origin main") is True
+        assert REPL._detect_tool_need("提交代码到 git") is True
+        assert REPL._detect_tool_need("推送代码到远程仓库") is True
+
+    def test_search(self):
+        from omniagent.repl.repl import REPL
+        assert REPL._detect_tool_need("搜索文件中的 TODO") is True
+        assert REPL._detect_tool_need("find all Python files") is True
+        assert REPL._detect_tool_need("grep for error messages") is True
+
+    def test_web_fetch(self):
+        from omniagent.repl.repl import REPL
+        assert REPL._detect_tool_need("抓取这个网页的内容") is True
+        assert REPL._detect_tool_need("fetch the page at https://example.com") is True
+
+    def test_file_path_pattern(self):
+        from omniagent.repl.repl import REPL
+        assert REPL._detect_tool_need("看看 src/main.py 怎么写的") is True
+        assert REPL._detect_tool_need("打开 ./config.yaml") is True
+        assert REPL._detect_tool_need("检查 tests/test_tools.py") is True
+        assert REPL._detect_tool_need("看 C:\\Users\\test\\main.py") is True
+
+    def test_list_files(self):
+        from omniagent.repl.repl import REPL
+        assert REPL._detect_tool_need("列出当前目录的文件") is True
+        assert REPL._detect_tool_need("查看文件夹内容") is True
+        assert REPL._detect_tool_need("list all files") is True
+
+    def test_no_tool_needed(self):
+        from omniagent.repl.repl import REPL
+        assert REPL._detect_tool_need("什么是快速排序？") is False
+        assert REPL._detect_tool_need("解释一下 Python 的装饰器") is False
+        assert REPL._detect_tool_need("帮我分析这段代码的逻辑") is False
+        assert REPL._detect_tool_need("今天天气怎么样") is False
+        assert REPL._detect_tool_need("how does machine learning work") is False
+        assert REPL._detect_tool_need("你好") is False

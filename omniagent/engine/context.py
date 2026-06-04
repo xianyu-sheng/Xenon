@@ -17,6 +17,7 @@ class AgentContext:
     def __init__(self, initial: dict[str, Any] | None = None) -> None:
         self._store: dict[str, Any] = initial.copy() if initial else {}
         self._history: list[dict[str, Any]] = []  # 每步快照，用于调试回溯
+        self._conversation_messages: list[dict[str, str]] = []  # 多轮对话历史
 
     # ── 读写 ──────────────────────────────────────────────
     def get(self, key: str, default: Any = None) -> Any:
@@ -34,6 +35,14 @@ class AgentContext:
     def snapshot(self) -> None:
         """保存当前状态快照（浅拷贝）。"""
         self._history.append(copy.copy(self._store))
+
+    def set_conversation_messages(self, messages: list[dict[str, str]]) -> None:
+        """设置多轮对话历史（由 REPL 层注入）。"""
+        self._conversation_messages = messages
+
+    def get_conversation_messages(self) -> list[dict[str, str]]:
+        """获取多轮对话历史。"""
+        return self._conversation_messages
 
     def to_dict(self) -> dict[str, Any]:
         """返回内部状态的浅拷贝（公开接口，替代直接访问 _store）。"""
