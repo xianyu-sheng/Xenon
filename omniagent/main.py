@@ -266,3 +266,7 @@ def _display_result(result: dict) -> None:
         for key, value in ctx._store.items():
             preview = str(value)[:200]
             console.print(f"  [cyan]{key}[/cyan]: {preview}")
+
+
+if __name__ == "__main__":
+    cli()

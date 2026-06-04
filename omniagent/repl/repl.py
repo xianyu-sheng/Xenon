@@ -178,27 +178,62 @@ class REPL:
         self._load_custom_commands()
 
     def _print_welcome(self) -> None:
-        """打印欢迎信息。"""
+        """打印 Claude Code 风格的欢迎界面。"""
+        import random
+
         mode = self.registry.get_current_mode()
         models = self.registry.list_models()
-        model_str = ", ".join(m.alias for m in models) if models else "[red]未配置[/red]"
 
-        welcome = f"""[bold cyan]OmniAgent-CLI[/bold cyan] 交互模式
+        # ── ASCII Art Logo ──
+        logo = [
+            "[bold cyan]   ____                 _                _                    _[/bold cyan]",
+            "[bold cyan]  / __ \\  _ __    ___  (_)  ___   _ __  | |  __ _   ___   __| |[/bold cyan]",
+            "[bold cyan] | |  | || '_ \\  / _ \\ | | / _ \\ | '__| | | / _` | / _ \\ / _` |[/bold cyan]",
+            "[bold cyan] | |__| || | | || (_) || || (_) || |    | || (_| ||  __/| (_| |[/bold cyan]",
+            "[bold cyan]  \\____/ |_| |_| \\___/ |_| \\___/ |_|    |_| \\__,_| \\___| \\__,_|[/bold cyan]",
+        ]
 
-当前范式: [bold]{mode.name}[/bold] — {mode.description}
-已注册模型: {model_str}
+        # ── 版本信息 ──
+        version = "v0.1.0"
 
-常用命令:
-  [bold magenta]/setup[/bold magenta]   — 首次配置向导（配置 Key、选模型、选范式）
-  [bold magenta]/model[/bold magenta]   — 切换模型
-  [bold magenta]/mode[/bold magenta]    — 切换思考范式
-  [bold magenta]/help[/bold magenta]    — 查看所有命令
+        # ── 模型状态 ──
+        if models:
+            model_names = ", ".join(m.alias for m in models[:3])
+            if len(models) > 3:
+                model_names += f" +{len(models) - 3}"
+            model_line = f"[bold green]{model_names}[/bold green]"
+        else:
+            model_line = "[dim]未配置 — 输入 [bold cyan]/setup[/bold cyan] 开始配置[/dim]"
 
-输入优化: [bold green]按需优化[/bold green]（仅在输入不够结构化时优化，并展示优化结果供学习）
-多行输入: [bold cyan]Shift+Enter[/bold cyan] 换行，[bold cyan]Enter[/bold cyan] 发送
-[bold red]Ctrl+C[/bold red] 或 [bold red]Ctrl+D[/bold red] 退出。
-"""
-        console.print(Panel(welcome, title="OmniAgent", border_style="cyan"))
+        # ── 随机提示 ──
+        tips = [
+            "输入 [bold cyan]/help[/bold cyan] 查看所有可用命令",
+            "输入 [bold cyan]/model[/bold cyan] 切换 AI 模型",
+            "输入 [bold cyan]/mode[/bold cyan] 切换思考范式（direct/react/plan-execute）",
+            "输入 [bold cyan]/setup[/bold cyan] 运行首次配置向导",
+            "按 [bold cyan]Shift+Enter[/bold cyan] 可以输入多行内容",
+            "输入 [bold cyan]/verbose[/bold cyan] 开启详细日志模式",
+            "输入 [bold cyan]/tools[/bold cyan] 查看所有可用工具",
+            "输入 [bold cyan]/mcp[/bold cyan] 管理 MCP 扩展服务器",
+        ]
+        tip = random.choice(tips)
+
+        # ── 构建欢迎面板 ──
+        logo_art = "\n".join(logo)
+        content = f"""{logo_art}
+
+  [dim]{version}[/dim]  ·  [bold white]Multi-Model AI Coding Assistant[/bold white]
+
+  [bold]范式[/bold]    {mode.name} — {mode.description}
+  [bold]模型[/bold]    {model_line}
+
+  [bold yellow]提示[/bold yellow]    {tip}
+
+  [dim]Ctrl+C 退出  ·  Shift+Enter 换行  ·  Enter 发送[/dim]"""
+
+        console.print()
+        console.print(Panel(content, border_style="cyan", padding=(0, 2)))
+        console.print()
 
     def _read_input(self) -> str:
         """读取用户输入。Shift+Enter 换行，Enter 发送。
