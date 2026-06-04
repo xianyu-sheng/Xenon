@@ -154,7 +154,7 @@ class ReActEngine:
             # 解析 LLM 输出
             parsed = self._parse_response(response)
 
-            if "final_answer" in parsed:
+            if parsed.get("final_answer"):
                 # ── 关键验证：如果需要工具但未执行，拒绝接受 final_answer ──
                 if requires_tools and not tracker.has_executions():
                     no_tool_streak += 1
@@ -240,6 +240,7 @@ class ReActEngine:
             return error_msg
 
         try:
+            action_input = ToolNode.normalize_params(action_input)
             logger.info(f"执行工具: {action}, 参数: {action_input}")
             node = ToolNode(
                 f"react_{action}",

@@ -178,29 +178,32 @@ def chat_completion(
             if status == 429:
                 # 限流 — 指数退避
                 wait = 2 ** attempt
-                logger.warning(f"[{model_id}] 429 限流，等待 {wait}s 后重试 (第 {attempt + 1} 次)")
+                logger.warning(f"[{model_id}] 429 限流，等待 {wait}s 后重试 (第 {attempt + 1}/{max_retries} 次)")
                 time.sleep(wait)
                 last_error = e
             elif 500 <= status < 600:
-                # 服务端错误 — 重试 1 次
-                if attempt < 1:
-                    logger.warning(f"[{model_id}] {status} 服务端错误，重试...")
-                    time.sleep(1)
-                    last_error = e
-                else:
-                    raise
+                # 服务端错误 — 指数退避重试
+                wait = 2 ** attempt
+                logger.warning(f"[{model_id}] {status} 服务端错误，等待 {wait}s 后重试 (第 {attempt + 1}/{max_retries} 次)")
+                time.sleep(wait)
+                last_error = e
             else:
                 # 其他 HTTP 错误 — 不重试
                 raise
 
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
-            # 网络错误 — 重试 1 次
-            if attempt < 1:
-                logger.warning(f"[{model_id}] 网络错误，重试...")
-                time.sleep(1)
-                last_error = e
-            else:
-                raise
+        except (
+            httpx.ConnectError,
+            httpx.ReadTimeout,
+            httpx.ConnectTimeout,
+            httpx.RemoteProtocolError,   # "Server disconnected without sending a response"
+            httpx.WriteError,            # 写入连接失败
+            httpx.PoolTimeout,           # 连接池耗尽
+        ) as e:
+            # 网络/协议错误 — 指数退避重试
+            wait = min(2 ** attempt, 8)
+            logger.warning(f"[{model_id}] 网络错误 ({type(e).__name__}): {e}，等待 {wait}s 后重试 (第 {attempt + 1}/{max_retries} 次)")
+            time.sleep(wait)
+            last_error = e
 
     # 所有重试都失败
     raise last_error

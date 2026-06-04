@@ -132,6 +132,9 @@ class PlanExecuteEngine:
         else:
             logger.warning("Plan: context 为 None！")
 
+        # 关键：将当前用户输入加入消息列表
+        messages.append({"role": "user", "content": user_input})
+
         response = self._call_llm(messages)
         if not response or not response.strip():
             logger.warning("LLM 返回了空响应！请检查 API 配置和模型是否支持。")
@@ -147,6 +150,7 @@ class PlanExecuteEngine:
     ) -> str:
         """使用工具执行步骤。"""
         try:
+            params = ToolNode.normalize_params(params)
             node = ToolNode(f"plan_{tool}", action_type=tool, **params)
             result = node.execute(context)
 

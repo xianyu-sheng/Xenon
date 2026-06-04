@@ -135,6 +135,42 @@ class ToolNode(BaseNode):
         self.new_text = new_text
         self.security_enabled = security_enabled
 
+    # ── 参数规范化 ──────────────────────────────────────────
+
+    # LLM 经常使用与 ToolNode 不同的参数名，这里统一映射。
+    # 注意: pattern 是 list_files 的合法参数，不能作为 search_pattern 的别名。
+    _PARAM_ALIASES: dict[str, list[str]] = {
+        "file_path":      ["path", "dir", "directory", "folder", "filepath", "file", "target"],
+        "action":         ["command", "cmd", "shell", "exec", "run", "execute"],
+        "content":        ["text", "data", "body", "value"],
+        "search_pattern": ["query", "keyword", "term", "search"],
+        "file_filter":    ["filter", "glob", "filetype", "ext", "extension"],
+        "old_text":       ["old", "find", "search_text", "before", "original"],
+        "new_text":       ["new", "replace", "replace_text", "after", "replacement"],
+        "git_command":    ["subcommand", "git_cmd", "git_subcmd"],
+        "url":            ["uri", "link", "href"],
+    }
+
+    @classmethod
+    def normalize_params(cls, params: dict, *, action_type: str = "") -> dict:
+        """将 LLM 常用的参数别名映射为 ToolNode 接受的标准参数名。
+
+        Args:
+            params: LLM 返回的原始参数字典
+            action_type: 工具类型（如 "list_files"），用于跳过冲突的别名
+
+        例: {"path": ".", "query": "foo"} → {"file_path": ".", "search_pattern": "foo"}
+        """
+        result = dict(params)
+        for std_name, aliases in cls._PARAM_ALIASES.items():
+            if std_name in result:
+                continue  # 标准名已存在，不覆盖
+            for alias in aliases:
+                if alias in result:
+                    result[std_name] = result.pop(alias)
+                    break
+        return result
+
     # ── 安全验证 ──────────────────────────────────────────
 
     def _get_allowed_root(self) -> Path:
@@ -227,7 +263,7 @@ class ToolNode(BaseNode):
             return
         cmd_lower = git_cmd.lower().strip()
         for dangerous in _DANGEROUS_GIT_PATTERNS:
-            if dangerous in cmd_lower:
+            if dangerous.lower() in cmd_lower:
                 raise SecurityError(
                     f"危险 Git 命令被拦截: '{dangerous}'。"
                     f"完整命令: git {git_cmd[:80]}"

@@ -239,16 +239,13 @@ def parse_react(raw: str) -> dict[str, Any]:
 
     result = _pick(data, _REACT_FIELD_ALIASES)
 
-    # 确保模板字段存在
-    for key, default in _react_template().items():
-        result.setdefault(key, default)
-
-    # action_input 必须是 dict
-    if not isinstance(result.get("action_input"), dict):
+    # 只为已存在但类型错误的字段提供类型修正，不添加 LLM 未返回的默认值。
+    # 之前这里用 setdefault 填充了所有模板字段（包括 final_answer=""），
+    # 导致引擎的 "final_answer" in parsed 检查永远为 True，
+    # 即使 LLM 实际返回的是 action 也会被误判为最终回答。
+    if "action_input" in result and not isinstance(result["action_input"], dict):
         result["action_input"] = {}
-
-    # options 必须是 list
-    if not isinstance(result.get("options"), list):
+    if "options" in result and not isinstance(result["options"], list):
         result["options"] = []
 
     return result
