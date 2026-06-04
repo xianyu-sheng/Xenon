@@ -65,12 +65,36 @@ class ContextManager:
 
     def estimate_tokens(self, text: str) -> int:
         """
-        粗略估算 token 数。
-        规则：英文约 1 token/word，中文约 1.5 token/字，取较大值。
+        估算 token 数。
+        规则：
+        - 中文字符约 2 token/字
+        - 英文约 1 token/4 字符（即 0.25 token/char）
+        - 代码/JSON 密度更高
+        - 始终不低于 len(text)/4（防止无空格长串被低估）
         """
+        if not text:
+            return 0
+
+        # 统计中文字符数
+        cjk_count = sum(1 for c in text if '一' <= c <= '鿿')
+        # 英文单词数
         words = len(text.split())
+        # 总字符数
         chars = len(text)
-        return max(words, int(chars * 1.5))
+
+        # 检测是否包含大量代码/JSON
+        code_chars = text.count('{') + text.count('}') + text.count(';') + text.count('=')
+        is_code_heavy = code_chars > chars * 0.02
+
+        # 基础估算：至少 len/2（防止无空格长串被低估）
+        char_based = max(chars // 2, 1)
+
+        if is_code_heavy:
+            return max(words * 2, int(chars * 0.4))
+        elif cjk_count > chars * 0.3:
+            return max(words, int(cjk_count * 2), char_based)
+        else:
+            return max(words, int(words * 1.3), char_based)
 
     def current_token_usage(self) -> int:
         """估算当前历史的总 token 数。"""

@@ -113,6 +113,9 @@ class ToolNode(BaseNode):
         # edit_file 参数
         old_text: str = "",
         new_text: str = "",
+        # 批量操作参数
+        files: list[dict] | None = None,
+        edits: list[dict] | None = None,
         # 安全参数
         security_enabled: bool = True,
     ) -> None:
@@ -133,6 +136,8 @@ class ToolNode(BaseNode):
         self.url = url
         self.old_text = old_text
         self.new_text = new_text
+        self.files = files or []
+        self.edits = edits or []
         self.security_enabled = security_enabled
 
     # ── 参数规范化 ──────────────────────────────────────────
@@ -281,6 +286,8 @@ class ToolNode(BaseNode):
             "web_fetch": self._web_fetch,
             "edit_file": self._edit_file,
             "create_directory": self._create_directory,
+            "batch_write": self._batch_write,
+            "batch_edit": self._batch_edit,
         }
         handler = handlers.get(self.action_type)
         if not handler:
@@ -523,6 +530,146 @@ class ToolNode(BaseNode):
                 "success": False,
                 "error": f"目录创建失败: {e}",
             }
+
+    # ── 批量操作 ──────────────────────────────────────────
+
+    def _batch_write(self, context: AgentContext) -> dict[str, Any]:
+        """批量写入多个文件。原子性：全部成功才返回成功。"""
+        if not self.files:
+            return {
+                "action_type": "batch_write",
+                "success": False,
+                "error": "batch_write 需要 files 参数，格式: [{\"path\": \"...\", \"content\": \"...\"}]",
+            }
+
+        results = []
+        written_paths = []
+
+        try:
+            for i, file_spec in enumerate(self.files):
+                path_str = file_spec.get("path") or file_spec.get("file_path", "")
+                file_content = file_spec.get("content", "")
+
+                if not path_str:
+                    results.append({"index": i, "success": False, "error": "缺少 path"})
+                    continue
+
+                # 安全验证
+                path = self._validate_path(path_str, for_write=True)
+                content_bytes = len(file_content.encode(self.encoding))
+                if content_bytes > MAX_WRITE_SIZE:
+                    results.append({
+                        "index": i, "path": str(path), "success": False,
+                        "error": f"内容过大: {content_bytes} 字节",
+                    })
+                    continue
+
+                # 创建父目录并写入
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(file_content, encoding=self.encoding)
+                written_paths.append(path)
+
+                # 验证
+                verify_error = self._verify_write(path, file_content, False)
+                if verify_error:
+                    results.append({
+                        "index": i, "path": str(path), "success": False,
+                        "error": verify_error,
+                    })
+                else:
+                    results.append({
+                        "index": i, "path": str(path), "success": True,
+                        "bytes": content_bytes,
+                    })
+
+            all_ok = all(r.get("success") for r in results)
+            success_count = sum(1 for r in results if r.get("success"))
+
+            return {
+                "action_type": "batch_write",
+                "total": len(self.files),
+                "success_count": success_count,
+                "success": all_ok,
+                "results": results,
+            }
+
+        except Exception as e:
+            return {
+                "action_type": "batch_write",
+                "success": False,
+                "error": f"批量写入异常: {e}",
+                "results": results,
+            }
+
+    def _batch_edit(self, context: AgentContext) -> dict[str, Any]:
+        """批量编辑多个文件。每个 edit 独立验证。"""
+        if not self.edits:
+            return {
+                "action_type": "batch_edit",
+                "success": False,
+                "error": "batch_edit 需要 edits 参数，格式: [{\"file_path\": \"...\", \"old_text\": \"...\", \"new_text\": \"...\"}]",
+            }
+
+        results = []
+
+        for i, edit_spec in enumerate(self.edits):
+            file_path = edit_spec.get("file_path", "")
+            old_text = edit_spec.get("old_text", "")
+            new_text = edit_spec.get("new_text", "")
+
+            if not file_path or not old_text:
+                results.append({
+                    "index": i, "success": False,
+                    "error": "缺少 file_path 或 old_text",
+                })
+                continue
+
+            try:
+                path = self._validate_path(file_path, for_write=True)
+                if not path.exists():
+                    results.append({
+                        "index": i, "file": str(path), "success": False,
+                        "error": f"文件不存在: {path}",
+                    })
+                    continue
+
+                content = path.read_text(encoding=self.encoding)
+                count = content.count(old_text)
+
+                if count == 0:
+                    results.append({
+                        "index": i, "file": str(path), "success": False,
+                        "error": "未找到匹配文本",
+                    })
+                elif count > 1:
+                    results.append({
+                        "index": i, "file": str(path), "success": False,
+                        "error": f"找到 {count} 处匹配，请提供更多上下文",
+                    })
+                else:
+                    new_content = content.replace(old_text, new_text, 1)
+                    path.write_text(new_content, encoding=self.encoding)
+                    results.append({
+                        "index": i, "file": str(path), "success": True,
+                        "replacements": 1,
+                    })
+
+            except Exception as e:
+                results.append({
+                    "index": i, "success": False,
+                    "error": f"编辑异常: {e}",
+                })
+
+        all_ok = all(r.get("success") for r in results)
+        success_count = sum(1 for r in results if r.get("success"))
+
+        return {
+            "action_type": "batch_edit",
+            "total": len(self.edits),
+            "success_count": success_count,
+            "success": all_ok,
+            "results": results,
+        }
 
     def _read_file(self, context: AgentContext) -> dict[str, Any]:
         """读取文件内容。"""

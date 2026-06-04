@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from omniagent.engine.callbacks import ConsoleCallback, EngineCallback, SilentCallback
 from omniagent.engine.context import AgentContext
 from omniagent.utils.llm_client import chat_completion
 from omniagent.utils.response_adapter import parse_review
@@ -16,26 +17,47 @@ from omniagent.utils.response_adapter import parse_review
 logger = logging.getLogger(__name__)
 
 EXECUTOR_PROMPT = """你是一个专业的代码和技术执行者。请根据用户的需求生成高质量的输出。
-如果这是修正轮次，请根据审查反馈改进你的输出。
+
+要求：
+- 代码必须语法正确、可直接运行
+- 如果用户要求创建文件，直接输出完整文件内容
+- 如果这是修正轮次，根据审查反馈逐条改进，不要遗漏任何问题
+- 用中文解释，代码用英文
 """
 
 REVIEWER_PROMPT = """你是一个严格的质量审查员。请审查执行者的输出，判断是否满足用户需求。
 
-请严格按照以下 JSON 格式输出（不要输出其他内容）：
+## 输出格式
+
+只输出一个 JSON，不要输出其他内容：
 ```json
-{
-  "pass": true 或 false,
-  "score": 1-10 的评分,
-  "feedback": "具体的改进建议（如果 pass=false）或简要评价（如果 pass=true）",
-  "issues": ["问题1", "问题2"]
-}
+{{"pass": true 或 false, "score": 1-10 的评分, "feedback": "具体评价", "issues": ["问题1", "问题2"]}}
 ```
 
-审查标准：
-1. 是否完整回答了用户的问题
-2. 代码是否正确、可运行
-3. 是否有遗漏或错误
-4. 格式是否规范
+## 评分标准
+
+- **9-10 分（通过）**: 完美满足需求，代码可运行，无任何问题
+- **7-8 分（通过）**: 基本满足需求，有小瑕疵但不影响使用
+- **5-6 分（不通过）**: 部分满足需求，有明显问题需要修正
+- **1-4 分（不通过）**: 严重偏离需求，需要大幅重做
+
+## 审查要点
+
+1. **完整性**: 是否完整回答了用户的所有需求？
+2. **正确性**: 代码是否语法正确、逻辑正确、可运行？
+3. **安全性**: 是否有安全隐患（如硬编码密码、SQL注入等）？
+4. **规范性**: 命名是否清晰、格式是否规范、有无注释？
+5. **遗漏**: 是否遗漏了用户提到的任何要求？
+
+## 常见扣分项
+
+- 语法错误 → score ≤ 5
+- 遗漏用户明确要求的功能 → score ≤ 6
+- 代码可运行但逻辑有误 → score ≤ 6
+- 格式混乱、命名不清 → score ≤ 7
+- 缺少必要的注释或文档 → score ≤ 8
+
+pass=true 当且仅当 score >= 7。
 """
 
 
@@ -50,12 +72,14 @@ class ReflectionEngine:
         pass_threshold: int = 7,
         executor_prompt: str | None = None,
         reviewer_prompt: str | None = None,
+        callback: EngineCallback | None = None,
     ) -> None:
         self.model_priority = model_priority
         self.max_rounds = max_rounds
         self.pass_threshold = pass_threshold
         self.executor_prompt = executor_prompt or EXECUTOR_PROMPT
         self.reviewer_prompt = reviewer_prompt or REVIEWER_PROMPT
+        self.callback = callback or EngineCallback()
 
     def run(self, user_input: str, context: AgentContext | None = None) -> str:
         """
@@ -78,9 +102,14 @@ class ReflectionEngine:
 
             # Review
             review = self._review(user_input, output)
+            score = review.get("score", 0)
+            passed = review.get("pass") and score >= self.pass_threshold
 
-            if review.get("pass") and review.get("score", 0) >= self.pass_threshold:
-                logger.info(f"审查通过 (分数: {review.get('score')})")
+            self.callback.on_review(score, passed, review.get("feedback", "")[:200])
+
+            if passed:
+                logger.info(f"审查通过 (分数: {score})")
+                self.callback.on_finish(output)
                 return output
 
             feedback = review.get("feedback", "请改进输出质量")
@@ -91,6 +120,8 @@ class ReflectionEngine:
                 feedback += "\n具体问题:\n" + "\n".join(f"- {i}" for i in issues)
 
         logger.info(f"达到最大修正轮次 ({self.max_rounds})，返回最后一轮输出")
+        self.callback.on_warning(f"达到最大修正轮次 ({self.max_rounds})")
+        self.callback.on_finish(output)
         return output
 
     def _execute(self, user_input: str, feedback: str = "", context: AgentContext | None = None) -> str:

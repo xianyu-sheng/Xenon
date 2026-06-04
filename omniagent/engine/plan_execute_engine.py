@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from omniagent.engine.callbacks import ConsoleCallback, EngineCallback, SilentCallback
 from omniagent.engine.context import AgentContext
 from omniagent.engine.tool_tracker import ToolExecutionTracker
 from omniagent.nodes.tool_node import ToolNode
@@ -18,24 +19,56 @@ from omniagent.utils.response_adapter import parse_plan
 
 logger = logging.getLogger(__name__)
 
-PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解为可执行步骤。
+PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解为可执行的原子步骤。
 
-直接输出以下JSON，不要输出任何其他内容、解释或思考过程：
+## 输出格式
+
+只输出一个 JSON，不要输出其他任何内容：
 ```json
-{"analysis":"简要分析","steps":[{"id":1,"task":"步骤描述","tool":null,"params":{}}]}
+{{"analysis":"简要分析任务目标","steps":[{{"id":1,"task":"步骤描述","tool":"工具名或null","params":{{"参数名":"值"}}}}]}}
 ```
 
-可用工具: command, read_file, write_file, list_files, search_files, git, web_fetch
-不需要工具的步骤 tool 设为 null。
+## 规划原则
+
+1. **每步只做一个原子操作**：不要在一个步骤中"创建5个文件"，而是分成5个步骤
+2. **参数名必须使用标准名称**：file_path（不是 path）、action（不是 command）、content（不是 text）等
+3. **tool 字段必须是精确的工具名**，不要用近似词
+4. **不需要工具的步骤**：tool 设为 null，如"分析需求"、"设计方案"
+5. **先读后写**：修改文件前先 read_file 查看内容
+6. **步骤顺序合理**：依赖关系靠前的步骤排在前面
+
+## 可用工具及标准参数
+
+- command: {{"action": "终端命令"}}
+- read_file: {{"file_path": "文件路径"}}
+- write_file: {{"file_path": "文件路径", "content": "文件内容"}}
+- list_files: {{"file_path": "目录路径", "pattern": "*.py"}}
+- search_files: {{"file_path": "搜索目录", "search_pattern": "关键词"}}
+- git: {{"git_command": "status|diff|log|add|commit"}}
+- web_fetch: {{"url": "网址"}}
+- edit_file: {{"file_path": "路径", "old_text": "原文", "new_text": "新文"}}
+- create_directory: {{"file_path": "目录路径"}}
+- batch_write: {{"files": [{{"path": "a.py", "content": "..."}}, ...]}}
+
+## 示例
+
+用户: 创建一个 Flask hello world 项目
+```json
+{{"analysis":"创建一个最小的 Flask 应用","steps":[{{"id":1,"task":"创建 app.py 文件，包含 Flask hello world 代码","tool":"write_file","params":{{"file_path":"app.py","content":"from flask import Flask\\napp = Flask(__name__)\\n\\n@app.route('/')\\ndef hello():\\n    return 'Hello World!'\\n\\nif __name__ == '__main__':\\n    app.run(debug=True)"}}}},{{"id":2,"task":"创建 requirements.txt","tool":"write_file","params":{{"file_path":"requirements.txt","content":"flask>=3.0"}}}},{{"id":3,"task":"验证文件是否创建成功","tool":"list_files","params":{{"file_path":"."}}}}]}}
+```
 """
 
-EXECUTE_PROMPT = """你正在执行一个任务计划。当前步骤信息如下:
+EXECUTE_PROMPT = """你正在执行一个任务计划的第 {step_id} 步（共 {total_steps} 步）。
 
-步骤 {step_id}/{total_steps}: {step_task}
+当前步骤: {step_task}
+
 之前步骤的结果:
 {previous_results}
 
-请完成这个步骤。如果需要使用工具，请用简洁的文字说明你要做什么。如果不需要工具，直接给出结果。
+请完成这个步骤。
+- 如果需要使用工具，说明你要做什么以及使用什么工具和参数
+- 如果不需要工具，直接给出结果
+- 如果之前步骤失败了，分析原因并尝试修复
 """
 
 
@@ -48,10 +81,12 @@ class PlanExecuteEngine:
         *,
         max_steps: int = 20,
         system_prompt: str | None = None,
+        callback: EngineCallback | None = None,
     ) -> None:
         self.model_priority = model_priority
         self.max_steps = max_steps
         self.system_prompt = system_prompt or PLAN_SYSTEM_PROMPT
+        self.callback = callback or EngineCallback()
 
     def run(self, user_input: str, context: AgentContext | None = None) -> str:
         """
@@ -73,9 +108,11 @@ class PlanExecuteEngine:
         steps = plan.get("steps", [])
 
         if not steps:
+            self.callback.on_warning("未能生成有效的执行计划")
             return plan.get("analysis", "未能生成有效的执行计划。")
 
         logger.info(f"计划生成 {len(steps)} 个步骤")
+        total = min(len(steps), self.max_steps)
 
         # Phase 2: Execution
         logger.info("Plan-Execute Phase 2: 执行中...")
@@ -88,6 +125,7 @@ class PlanExecuteEngine:
             params = step.get("params", {})
 
             logger.info(f"执行步骤 {step_id}: {step_task}")
+            self.callback.on_step(step_id, total, step_task)
 
             # 构建上下文提示
             prev_results = "\n".join(
@@ -111,6 +149,8 @@ class PlanExecuteEngine:
             })
 
             ctx.set(f"step_{step_id}_result", result)
+            success = not result.startswith(("执行失败", "执行异常"))
+            self.callback.on_step_done(step_id, success, result[:200])
             logger.info(f"步骤 {step_id} 完成: {result[:100]}")
 
         # 汇总结果 — 附加工具执行摘要

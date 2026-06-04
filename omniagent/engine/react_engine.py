@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from omniagent.engine.callbacks import ConsoleCallback, EngineCallback, SilentCallback
 from omniagent.engine.context import AgentContext
 from omniagent.engine.tool_tracker import ToolExecutionTracker
 from omniagent.nodes.tool_node import ToolNode
@@ -21,21 +22,44 @@ from omniagent.utils.response_adapter import parse_react
 logger = logging.getLogger(__name__)
 
 # ReAct 系统提示
-REACT_SYSTEM_PROMPT = """你是一个 ReAct 模式的 AI 助手。你通过思考-行动-观察的循环来解决问题。
+REACT_SYSTEM_PROMPT = """你是一个 ReAct 模式的 AI 编程助手。你通过 **思考-行动-观察** 的循环来解决问题。
+你必须实际执行操作，不能仅在文字中描述。
 
-每次回复，请严格按照以下 JSON 格式输出（不要输出其他内容）：
+## 输出格式
 
-如果需要使用工具：
+每次回复 **只输出一个 JSON 对象**（不要输出其他任何内容）：
+
+调用工具时：
 ```json
-{{"thought": "你的思考过程", "action": "工具名称", "action_input": {{"参数名": "参数值"}}}}
+{{"thought": "分析当前状态，决定下一步", "action": "工具名", "action_input": {{"参数名": "值"}}}}
 ```
 
-如果任务已完成：
+任务完成时：
 ```json
-{{"thought": "你的思考过程", "final_answer": "最终答案"}}
+{{"thought": "总结执行结果", "final_answer": "给用户的最终回答"}}
 ```
 
-可用工具:
+## 示例
+
+用户: 创建一个 hello.py 文件，打印 Hello World
+助手: {{"thought": "用户需要创建一个 Python 文件", "action": "write_file", "action_input": {{"file_path": "hello.py", "content": "print('Hello World')"}}}}
+
+用户: 查看当前目录有哪些文件
+助手: {{"thought": "需要列出当前目录的文件", "action": "list_files", "action_input": {{"file_path": "."}}}}
+
+用户: 帮我写一个 hello.py（假设上一步已成功创建）
+助手: {{"thought": "文件已在上一步创建成功，任务完成", "final_answer": "已创建 hello.py，内容为 print('Hello World')"}}
+
+## 工具调用规则
+
+1. **参数名必须使用标准名称**（见下方工具列表），不要用别名
+2. **一个 JSON 只调用一个工具**，不要同时调用多个
+3. **工具失败时**：分析错误原因，调整参数后重试，或换一种方法
+4. **不要编造结果**：如果不确定文件是否创建成功，用 read_file 验证
+5. **何时使用 final_answer**：只有当所有操作都通过工具实际执行完毕后，才能使用 final_answer
+
+## 可用工具
+
 {tools_desc}
 """
 
@@ -90,6 +114,16 @@ BUILTIN_TOOLS = {
         "description": "创建目录（含父目录）",
         "params": {"file_path": "目录路径"},
     },
+    "batch_write": {
+        "name": "batch_write",
+        "description": "批量写入多个文件（原子性，适合创建多文件项目）",
+        "params": {"files": "[{\"path\": \"a.py\", \"content\": \"...\"}, ...]"},
+    },
+    "batch_edit": {
+        "name": "batch_edit",
+        "description": "批量编辑多个文件（每个编辑独立验证）",
+        "params": {"edits": "[{\"file_path\": \"a.py\", \"old_text\": \"...\", \"new_text\": \"...\"}, ...]"},
+    },
 }
 
 
@@ -103,11 +137,13 @@ class ReActEngine:
         max_iterations: int = 10,
         system_prompt: str | None = None,
         tools: dict[str, dict] | None = None,
+        callback: EngineCallback | None = None,
     ) -> None:
         self.model_priority = model_priority
         self.max_iterations = max_iterations
         self.tools = tools or BUILTIN_TOOLS
         self.system_prompt = system_prompt or self._build_system_prompt()
+        self.callback = callback or EngineCallback()
 
     def _build_system_prompt(self) -> str:
         tools_desc = "\n".join(
@@ -154,6 +190,10 @@ class ReActEngine:
             # 解析 LLM 输出
             parsed = self._parse_response(response)
 
+            thought = parsed.get("thought", "")
+            if thought:
+                self.callback.on_think(thought)
+
             if parsed.get("final_answer"):
                 # ── 关键验证：如果需要工具但未执行，拒绝接受 final_answer ──
                 if requires_tools and not tracker.has_executions():
@@ -166,6 +206,7 @@ class ReActEngine:
                             "如果你确实不需要工具，请在 final_answer 中明确说明原因。"
                         )
                         messages.append({"role": "user", "content": force_msg})
+                        self.callback.on_warning("LLM 未执行工具就声称完成，要求重试")
                         logger.warning(f"ReAct: LLM 未执行工具就声称完成，强制要求工具调用 (第 {no_tool_streak} 次)")
                         continue
                     else:
@@ -176,27 +217,30 @@ class ReActEngine:
                             "LLM 声称完成了任务但未实际调用任何工具，"
                             "文件操作可能未真正执行。"
                         )
+                        self.callback.on_warning("LLM 连续拒绝工具调用，附带警告返回")
                         logger.warning("ReAct: LLM 连续拒绝工具调用，附带警告返回")
+                        self.callback.on_finish(answer + warning)
                         return answer + warning
 
                 logger.info(f"ReAct 完成，共 {i + 1} 次迭代，工具调用 {len(tracker.calls)} 次")
-                # 在最终答案末尾附加工具执行摘要
                 answer = parsed["final_answer"]
                 if tracker.has_executions():
                     summary = tracker.execution_summary()
                     logger.info(f"ReAct 工具执行摘要: {summary}")
+                self.callback.on_finish(answer)
                 return answer
 
             if "action" in parsed:
                 # 执行工具
                 action = parsed["action"]
                 action_input = parsed.get("action_input", {})
-                thought = parsed.get("thought", "")
 
                 logger.info(f"ReAct 思考: {thought}")
                 logger.info(f"ReAct 行动: {action}({action_input})")
+                self.callback.on_act(action, action_input)
 
                 observation = self._execute_tool(action, action_input, ctx, tracker)
+                self.callback.on_observe(observation)
 
                 # 将观察结果加入对话
                 obs_msg = f"Observation: {observation}"
@@ -205,9 +249,14 @@ class ReActEngine:
                 no_tool_streak = 0
             else:
                 # LLM 没有给出有效输出，直接返回
-                return parsed.get("thought", response)
+                result = parsed.get("thought", response)
+                self.callback.on_finish(result)
+                return result
 
-        return f"达到最大迭代次数 ({self.max_iterations})，未能得出最终答案。"
+        msg = f"达到最大迭代次数 ({self.max_iterations})，未能得出最终答案。"
+        self.callback.on_warning(msg)
+        self.callback.on_finish(msg)
+        return msg
 
     def _call_llm(self, messages: list[dict[str, str]], max_tokens: int = 131072) -> str:
         """调用 LLM，支持多模型 fallback。"""

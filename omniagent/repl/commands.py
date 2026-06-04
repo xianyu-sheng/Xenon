@@ -696,6 +696,26 @@ def _cmd_optimize(*, args: str, session_state: dict, **kwargs: Any) -> str:
     return "❌ 无法获取 REPL 状态"
 
 
+# /verbose ──────────────────────────────────────────────────
+
+register_command("/verbose", "切换详细输出模式（显示思考过程和工具调用）", "/verbose [on|off]")
+
+@_handler("/verbose")
+def _cmd_verbose(*, args: str, session_state: dict, **kwargs: Any) -> str:
+    repl = session_state.get("_repl")
+    if repl:
+        if args.strip().lower() == "on":
+            repl.verbose = True
+            return "✅ 详细模式已开启\n引擎执行时将显示思考过程、工具调用和观察结果"
+        elif args.strip().lower() == "off":
+            repl.verbose = False
+            return "✅ 详细模式已关闭"
+        else:
+            status = "开启" if repl.verbose else "关闭"
+            return f"当前详细模式: {status}\n用法: /verbose on 或 /verbose off"
+    return "❌ 无法获取 REPL 状态"
+
+
 # /status ──────────────────────────────────────────────────
 
 register_command("/status", "显示详细状态信息", "/status")
@@ -713,6 +733,7 @@ def _cmd_status(*, ctx_mgr: ContextManager, registry: ModelRegistry, session_sta
         f"  范式: {mode.name} — {mode.description}",
         f"  流式输出: {'开启' if repl and repl.streaming else '关闭'}",
         f"  输入优化: {'开启' if repl and repl.optimize_prompts else '关闭'}",
+        f"  详细模式: {'开启' if repl and repl.verbose else '关闭'}",
         "",
         "═══ 上下文 ═══\n",
         f"  消息总数: {stats['total_messages']}",

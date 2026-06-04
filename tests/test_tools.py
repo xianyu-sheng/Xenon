@@ -432,4 +432,88 @@ class TestToolNodeNewActions:
         node = nodes["edit"]
         assert node.action_type == "edit_file"
         assert node.old_text == "old"
-        assert node.new_text == "new"
+
+
+class TestBatchOperations:
+    """batch_write 和 batch_edit 测试。"""
+
+    def test_batch_write_success(self, tmp_path):
+        """批量写入多个文件。"""
+        files = [
+            {"path": str(tmp_path / "a.py"), "content": "print('a')"},
+            {"path": str(tmp_path / "b.py"), "content": "print('b')"},
+            {"path": str(tmp_path / "c.txt"), "content": "hello"},
+        ]
+        node = ToolNode("bw", action_type="batch_write", files=files)
+        result = node.execute(AgentContext())
+        assert result["success"] is True
+        assert result["success_count"] == 3
+        assert result["total"] == 3
+        # 验证文件确实写入
+        assert (tmp_path / "a.py").read_text() == "print('a')"
+        assert (tmp_path / "b.py").read_text() == "print('b')"
+        assert (tmp_path / "c.txt").read_text() == "hello"
+
+    def test_batch_write_nested_dirs(self, tmp_path):
+        """批量写入包含嵌套目录。"""
+        files = [
+            {"path": str(tmp_path / "src" / "main.py"), "content": "x=1"},
+            {"path": str(tmp_path / "tests" / "test_main.py"), "content": "assert True"},
+        ]
+        node = ToolNode("bw", action_type="batch_write", files=files)
+        result = node.execute(AgentContext())
+        assert result["success"] is True
+        assert (tmp_path / "src" / "main.py").exists()
+        assert (tmp_path / "tests" / "test_main.py").exists()
+
+    def test_batch_write_empty_files(self):
+        """批量写入空文件列表应失败。"""
+        node = ToolNode("bw", action_type="batch_write", files=[])
+        result = node.execute(AgentContext())
+        assert result["success"] is False
+        assert "files" in result["error"]
+
+    def test_batch_write_no_files_param(self):
+        """批量写入缺少 files 参数应失败。"""
+        node = ToolNode("bw", action_type="batch_write")
+        result = node.execute(AgentContext())
+        assert result["success"] is False
+
+    def test_batch_edit_success(self, tmp_path):
+        """批量编辑多个文件。"""
+        # 先创建文件
+        (tmp_path / "a.py").write_text("old content")
+        (tmp_path / "b.py").write_text("old content too")
+
+        edits = [
+            {"file_path": str(tmp_path / "a.py"), "old_text": "old", "new_text": "new"},
+            {"file_path": str(tmp_path / "b.py"), "old_text": "old", "new_text": "fresh"},
+        ]
+        node = ToolNode("be", action_type="batch_edit", edits=edits)
+        result = node.execute(AgentContext())
+        assert result["success"] is True
+        assert result["success_count"] == 2
+        assert (tmp_path / "a.py").read_text() == "new content"
+        assert (tmp_path / "b.py").read_text() == "fresh content too"
+
+    def test_batch_edit_partial_failure(self, tmp_path):
+        """批量编辑部分失败。"""
+        (tmp_path / "a.py").write_text("hello")
+        # b.py 不存在
+
+        edits = [
+            {"file_path": str(tmp_path / "a.py"), "old_text": "hello", "new_text": "world"},
+            {"file_path": str(tmp_path / "b.py"), "old_text": "x", "new_text": "y"},
+        ]
+        node = ToolNode("be", action_type="batch_edit", edits=edits)
+        result = node.execute(AgentContext())
+        assert result["success"] is False  # 有一个失败
+        assert result["success_count"] == 1
+        assert (tmp_path / "a.py").read_text() == "world"  # 第一个成功了
+
+    def test_batch_edit_empty_edits(self):
+        """批量编辑空列表应失败。"""
+        node = ToolNode("be", action_type="batch_edit", edits=[])
+        result = node.execute(AgentContext())
+        assert result["success"] is False
+        assert "edits" in result["error"]

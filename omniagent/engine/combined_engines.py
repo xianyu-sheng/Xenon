@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from omniagent.engine.callbacks import ConsoleCallback, EngineCallback, SilentCallback
 from omniagent.engine.context import AgentContext
 from omniagent.engine.plan_execute_engine import PlanExecuteEngine
 from omniagent.engine.react_engine import ReActEngine, BUILTIN_TOOLS
@@ -35,12 +36,14 @@ class PlanReactEngine:
         *,
         max_steps: int = 15,
         react_iterations: int = 5,
+        callback: EngineCallback | None = None,
     ) -> None:
         self.model_priority = model_priority
         self.max_steps = max_steps
         self.react_iterations = react_iterations
-        self.planner = PlanExecuteEngine(model_priority, max_steps=max_steps)
-        self.reactor = ReActEngine(model_priority, max_iterations=react_iterations)
+        self.callback = callback or EngineCallback()
+        self.planner = PlanExecuteEngine(model_priority, max_steps=max_steps, callback=self.callback)
+        self.reactor = ReActEngine(model_priority, max_iterations=react_iterations, callback=self.callback)
 
     def run(self, user_input: str, context: AgentContext | None = None) -> str:
         from rich.console import Console
@@ -163,16 +166,19 @@ class PlanReflectionEngine:
         max_steps: int = 15,
         review_rounds: int = 2,
         pass_threshold: int = 7,
+        callback: EngineCallback | None = None,
     ) -> None:
         self.model_priority = model_priority
         self.max_steps = max_steps
         self.review_rounds = review_rounds
         self.pass_threshold = pass_threshold
-        self.planner = PlanExecuteEngine(model_priority, max_steps=max_steps)
+        self.callback = callback or EngineCallback()
+        self.planner = PlanExecuteEngine(model_priority, max_steps=max_steps, callback=self.callback)
         self.reflector = ReflectionEngine(
             model_priority,
             max_rounds=review_rounds,
             pass_threshold=pass_threshold,
+            callback=self.callback,
         )
 
     def run(self, user_input: str, context: AgentContext | None = None) -> str:
@@ -190,6 +196,7 @@ class PlanReflectionEngine:
             )
         except Exception as e:
             logger.warning(f"Reflection 阶段失败: {e}")
+            self.callback.on_error(f"Reflection 阶段失败: {e}")
             final_output = initial_output
 
         return final_output
@@ -210,16 +217,19 @@ class ReactReflectionEngine:
         react_iterations: int = 8,
         review_rounds: int = 2,
         pass_threshold: int = 7,
+        callback: EngineCallback | None = None,
     ) -> None:
         self.model_priority = model_priority
         self.react_iterations = react_iterations
         self.review_rounds = review_rounds
         self.pass_threshold = pass_threshold
-        self.reactor = ReActEngine(model_priority, max_iterations=react_iterations)
+        self.callback = callback or EngineCallback()
+        self.reactor = ReActEngine(model_priority, max_iterations=react_iterations, callback=self.callback)
         self.reflector = ReflectionEngine(
             model_priority,
             max_rounds=review_rounds,
             pass_threshold=pass_threshold,
+            callback=self.callback,
         )
 
     def run(self, user_input: str, context: AgentContext | None = None) -> str:
@@ -237,6 +247,7 @@ class ReactReflectionEngine:
             )
         except Exception as e:
             logger.warning(f"Reflection 阶段失败: {e}")
+            self.callback.on_error(f"Reflection 阶段失败: {e}")
             final_output = initial_output
 
         return final_output
