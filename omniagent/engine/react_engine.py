@@ -171,11 +171,35 @@ class ReActEngine:
         self.callback = callback or EngineCallback()
 
     def _build_system_prompt(self) -> str:
+        import sys
         tools_desc = "\n".join(
             f"- {t['name']}: {t['description']} (参数: {t['params']})"
             for t in self.tools.values()
         )
-        return REACT_SYSTEM_PROMPT.format(tools_desc=tools_desc)
+
+        # 检测操作系统
+        if sys.platform == "win32":
+            os_info = "Windows（使用 PowerShell 命令，不要使用 bash/Linux 命令如 ls, cat, mkdir -p, uname, which 等）"
+            shell_info = "PowerShell（命令用 ; 分隔，不要用 &&）"
+        elif sys.platform == "darwin":
+            os_info = "macOS（使用 bash 命令）"
+            shell_info = "bash/zsh"
+        else:
+            os_info = "Linux（使用 bash 命令）"
+            shell_info = "bash"
+
+        env_info = f"""
+
+## 运行环境
+
+- 操作系统: {os_info}
+- Shell: {shell_info}
+- Python: {sys.version.split()[0]}
+- 工作目录: 通过命令 `pwd`（Linux/macOS）或 `Get-Location`（Windows）获取
+
+重要：根据操作系统使用正确的命令。Windows 下不要使用 ls, cat, mkdir -p, uname, which, grep 等 Linux 命令。
+"""
+        return REACT_SYSTEM_PROMPT.format(tools_desc=tools_desc) + env_info
 
     def run(self, user_input: str, context: AgentContext | None = None) -> str:
         """

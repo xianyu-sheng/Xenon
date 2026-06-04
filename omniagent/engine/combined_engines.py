@@ -35,7 +35,7 @@ class PlanReactEngine:
         model_priority: list[str],
         *,
         max_steps: int = 15,
-        react_iterations: int = 5,
+        react_iterations: int = 8,
         callback: EngineCallback | None = None,
     ) -> None:
         self.model_priority = model_priority
@@ -76,6 +76,9 @@ class PlanReactEngine:
         console.print(f"\n[dim]🔄 Phase 2: ReAct 逐步执行[/dim]")
         results = []
 
+        # 收集所有已发现的信息（文件列表、命令输出等）
+        discovered_info: list[str] = []
+
         for i, step in enumerate(steps[:self.max_steps]):
             step_task = step.get("task", "")
             step_id = step.get("id", i + 1)
@@ -85,15 +88,23 @@ class PlanReactEngine:
             # 构建包含全局上下文的 ReAct 输入
             prev_context = ""
             if results:
-                prev_context = "\n之前步骤的结果:\n" + "\n".join(
-                    f"- 步骤 {r['step_id']}: {r['result'][:150]}"
-                    for r in results[-3:]
+                prev_context = "\n\n## 之前步骤已发现的信息:\n" + "\n".join(
+                    f"- 步骤 {r['step_id']} ({r['task']}): {r['result'][:300]}"
+                    for r in results
+                )
+
+            # 注入已发现的关键信息
+            info_context = ""
+            if discovered_info:
+                info_context = "\n\n## 已知信息（不要重复查询）:\n" + "\n".join(
+                    f"- {info}" for info in discovered_info[-20:]
                 )
 
             react_input = (
                 f"全局任务: {user_input}\n"
                 f"当前步骤 ({step_id}/{len(steps)}): {step_task}"
-                f"{prev_context}"
+                f"{prev_context}{info_context}\n\n"
+                f"重要：利用上面已有的信息，不要重复执行已经完成的操作。"
             )
 
             # 用 ReAct 执行当前步骤
@@ -102,6 +113,19 @@ class PlanReactEngine:
                 if not step_result or not step_result.strip():
                     step_result = f"(步骤 {step_id} 执行完成，无文本输出)"
                 console.print(f"[green]  ✓ 步骤 {step_id} 完成 ({len(step_result)} 字符)[/green]")
+
+                # 从结果中提取关键信息（文件路径、命令输出等）
+                import re
+                # 提取文件路径
+                paths = re.findall(r'[\w/\\.-]+\.(?:py|js|ts|json|yaml|yml|toml|md|txt|bat|ps1|png|ico)', step_result)
+                for p in paths[:5]:
+                    discovered_info.append(f"文件: {p}")
+                # 提取关键发现
+                if "Windows" in step_result:
+                    discovered_info.append("操作系统: Windows")
+                if "Linux" in step_result:
+                    discovered_info.append("操作系统: Linux")
+
             except Exception as e:
                 step_result = f"步骤执行失败: {e}"
                 console.print(f"[red]  ✗ 步骤 {step_id} 失败: {e}[/red]")

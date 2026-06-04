@@ -1114,16 +1114,29 @@ class ToolNode(BaseNode):
         return result
 
     def _walk_with_depth(self, base: Path, pattern: str, max_depth: int):
-        """递归遍历，受深度限制。"""
+        """递归遍历，受深度限制。支持 **/*.ext 递归 glob 模式。"""
         import os
+
+        # 处理 **/*.ext 模式：拆分为前缀目录模式和文件名模式
+        recursive_mode = "**" in pattern
+        if recursive_mode:
+            # "**/*.py" → file_pattern = "*.py"
+            # "**/test_*.py" → file_pattern = "test_*.py"
+            file_pattern = pattern.split("**/")[-1] if "**/" in pattern else pattern.replace("**", "*")
+        else:
+            file_pattern = pattern
+
         base_depth = len(base.parts)
         for root, dirs, files in os.walk(base):
             current_depth = len(Path(root).parts) - base_depth
-            if current_depth > max_depth:
+            if not recursive_mode and current_depth > max_depth:
+                dirs.clear()
+                continue
+            if current_depth > max_depth * 2:  # 递归模式给更多深度
                 dirs.clear()
                 continue
             for f in files:
-                if fnmatch.fnmatch(f, pattern):
+                if fnmatch.fnmatch(f, file_pattern):
                     yield Path(root) / f
 
     # ── 文件内容搜索 ──────────────────────────────────────

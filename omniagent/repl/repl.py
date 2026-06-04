@@ -512,7 +512,7 @@ class REPL:
 
         console.print("[cyan]📋🔄 Plan+React 模式: 全局规划 → 每步 ReAct 执行[/cyan]")
 
-        engine = PlanReactEngine(model_priority=model_ids, max_steps=10, react_iterations=5, callback=self._make_callback())
+        engine = PlanReactEngine(model_priority=model_ids, max_steps=10, react_iterations=8, callback=self._make_callback())
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
