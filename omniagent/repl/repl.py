@@ -541,15 +541,12 @@ class REPL:
                 # ── 响应后验证：检测 LLM 是否声称执行了文件操作 ──
                 if response_text and self._detect_file_claim(response_text):
                     console.print()
-                    console.print(Panel(
-                        "[yellow]⚠️  检测到回复中声称执行了文件操作，"
-                        "但当前为 Direct 模式，未实际调用任何工具。\n"
-                        "文件可能并未真正创建。[/yellow]\n\n"
-                        "[dim]提示: 使用 /mode react 切换到 ReAct 模式，"
-                        "或在输入中包含具体文件名以自动启用工具执行。[/dim]",
-                        title="[warning]工具执行警告[/warning]",
-                        border_style="yellow",
-                    ))
+                    console.print("[cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，自动切换到 ReAct 模式重新执行...[/cyan]")
+                    # 移除 LLM 的幻觉回复，避免污染上下文
+                    self.ctx_mgr.trim_last_assistant()
+                    # 用 ReAct 重新执行
+                    self._run_react_engine(user_input, model_ids)
+                    return
 
                 return
             except Exception as e:
@@ -705,9 +702,12 @@ class REPL:
         # 文件删除
         re.compile(r"(?:删除|移除|清除).{0,20}(?:文件|目录)", re.I),
         re.compile(r"(?:delete|remove).{0,20}(?:file|dir)", re.I),
-        # 命令执行
+        # 命令执行（含代词：执行它/运行这个/跑一下）
         re.compile(r"(?:执行|运行|跑).{0,15}(?:命令|脚本|程序|命令行|测试|pytest|npm|pip|python|node)", re.I),
-        re.compile(r"(?:run|execute|exec).{0,15}(?:command|script|cmd|test|pytest|npm|pip|python|node)", re.I),
+        re.compile(r"(?:执行|运行|跑|试试).{0,5}(?:它|他|她|这个|一下|看看|试试)", re.I),
+        re.compile(r"(?:试试|试下).{0,3}(?:执行|运行|跑)", re.I),
+        re.compile(r"(?:run|execute|exec).{0,15}(?:command|script|cmd|test|pytest|npm|pip|python|node|it|this)", re.I),
+        re.compile(r"(?:run|execute|exec)\s+it", re.I),
         # Git 操作
         re.compile(r"\bgit\b.{0,20}(?:commit|push|pull|add|clone|checkout|branch|merge|stash)", re.I),
         re.compile(r"(?:提交|推送|拉取|克隆|分支|合并)", re.I),

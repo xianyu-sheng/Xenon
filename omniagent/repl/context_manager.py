@@ -61,6 +61,13 @@ class ContextManager:
         """将历史转换为 LLM API 所需的 messages 格式。"""
         return [{"role": turn.role, "content": turn.content} for turn in self.history]
 
+    def trim_last_assistant(self) -> str | None:
+        """移除并返回最后一条 assistant 消息（用于撤回 LLM 幻觉回复）。"""
+        for i in range(len(self.history) - 1, -1, -1):
+            if self.history[i].role == "assistant":
+                return self.history.pop(i).content
+        return None
+
     # ── Token 估算 ────────────────────────────────────────
 
     def estimate_tokens(self, text: str) -> int:
