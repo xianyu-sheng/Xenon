@@ -704,19 +704,28 @@ class REPL:
     def _stream_response(self, model_id: str, messages: list[dict[str, str]]) -> str:
         """流式输出模型回复，完成后 Markdown 渲染。返回完整响应文本。"""
         from omniagent.utils.llm_client import chat_completion_stream
+        from rich.live import Live
+        from rich.spinner import Spinner
 
         full_response = []
 
-        # 流式输出：实时显示文本，同时收集完整内容
-        for chunk in chat_completion_stream(model_id, messages):
-            full_response.append(chunk)
-            console.print(chunk, end="")
-
-        console.print()  # 流式输出换行
+        # 流式阶段：显示 spinner + 实时 token 计数
+        with Live(
+            Spinner("dots", text="[cyan] 思考中...[/cyan]"),
+            console=console,
+            refresh_per_second=10,
+            transient=True,  # 结束后自动清除 spinner
+        ) as live:
+            for chunk in chat_completion_stream(model_id, messages):
+                full_response.append(chunk)
+                token_count = len("".join(full_response))
+                live.update(
+                    Spinner("dots", text=f"[cyan] 生成中... {token_count} tokens[/cyan]")
+                )
 
         response_text = "".join(full_response)
 
-        # 流式完成后，用 Markdown Panel 重新渲染（替换原始文本）
+        # 流式完成后，用 Markdown Panel 渲染最终结果
         if response_text.strip():
             console.print(Panel(
                 Markdown(response_text),

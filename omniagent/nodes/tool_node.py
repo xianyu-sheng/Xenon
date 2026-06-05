@@ -29,6 +29,35 @@ from omniagent.nodes.base import BaseNode
 
 logger = logging.getLogger(__name__)
 
+# ── 动态工具注册表 ──────────────────────────────────────────
+# 存储通过 register_tool 注册的自定义工具
+# key: 工具名, value: {"handler": callable, "description": str, "params": dict}
+_DYNAMIC_TOOLS: dict[str, dict] = {}
+
+
+def register_dynamic_tool(name: str, handler, description: str, params: dict) -> None:
+    """注册一个动态工具，之后可通过 ToolNode(action_type=name) 调用。"""
+    _DYNAMIC_TOOLS[name] = {
+        "handler": handler,
+        "description": description,
+        "params": params,
+    }
+    logger.info(f"[DynamicTool] 注册工具: {name}")
+
+
+def get_dynamic_tool_schema(name: str) -> dict | None:
+    """获取动态工具的描述（用于注入到 LLM 工具列表）。"""
+    info = _DYNAMIC_TOOLS.get(name)
+    if not info:
+        return None
+    return {"name": name, "description": info["description"], "params": info["params"]}
+
+
+def list_dynamic_tools() -> list[str]:
+    """列出所有已注册的动态工具名。"""
+    return list(_DYNAMIC_TOOLS.keys())
+
+
 # ── 安全常量 ──────────────────────────────────────────────
 
 # 文件大小限制
@@ -137,6 +166,11 @@ class ToolNode(BaseNode):
         # weather 参数
         city: str = "",
         lang: str = "zh",
+        # register_tool 参数
+        description: str = "",
+        python_function: str = "",
+        command_template: str = "",
+        params: dict | None = None,
         # 安全参数
         security_enabled: bool = True,
         # read_file 分段读取参数
@@ -176,6 +210,10 @@ class ToolNode(BaseNode):
         self.branch = branch
         self.city = city
         self.lang = lang
+        self.description = description
+        self.python_function = python_function
+        self.command_template = command_template
+        self.params = params or {}
         self.security_enabled = security_enabled
         self._extra_start_line = start_line
         self._extra_max_lines = max_lines
@@ -364,9 +402,14 @@ class ToolNode(BaseNode):
             "mcp_call": self._mcp_call,
             "github_fetch": self._github_fetch,
             "weather": self._weather,
+            "register_tool": self._register_tool,
         }
         handler = handlers.get(self.action_type)
         if not handler:
+            # 尝试从动态工具注册表中查找
+            dynamic = _DYNAMIC_TOOLS.get(self.action_type)
+            if dynamic:
+                return self._exec_dynamic_tool(dynamic, context)
             raise ValueError(f"[{self.id}] 不支持的 action_type: {self.action_type}")
         return handler(context)
 
@@ -1575,6 +1618,109 @@ class ToolNode(BaseNode):
         text = re.sub(r'&amp;', '&', text)
         text = re.sub(r'\n{3,}', '\n\n', text)
         return text.strip()
+
+    # ── 动态工具注册 ──────────────────────────────────────
+
+    def _register_tool(self, context: AgentContext) -> dict[str, Any]:
+        """注册一个自定义工具。支持两种模式：
+        1. python_function: 指定 module_path.function_name，系统自动导入
+        2. command_template: 指定命令模板，工具调用时执行 shell 命令
+        """
+        tool_name = self._resolve_template(getattr(self, "tool_name", ""), context)
+        description = self._resolve_template(getattr(self, "description", ""), context)
+        params_raw = getattr(self, "params", {})
+        if isinstance(params_raw, str):
+            import json
+            try:
+                params_raw = json.loads(params_raw)
+            except json.JSONDecodeError:
+                params_raw = {}
+
+        if not tool_name:
+            return {"action_type": "register_tool", "success": False, "error": "缺少 tool_name 参数"}
+
+        # 模式 1: Python 函数
+        python_function = self._resolve_template(getattr(self, "python_function", ""), context)
+        if python_function:
+            try:
+                parts = python_function.rsplit(".", 1)
+                if len(parts) != 2:
+                    return {"action_type": "register_tool", "success": False,
+                            "error": f"python_function 格式错误，应为 module.function，收到: {python_function}"}
+                module_path, func_name = parts
+                import importlib
+                mod = importlib.import_module(module_path)
+                func = getattr(mod, func_name)
+                if not callable(func):
+                    return {"action_type": "register_tool", "success": False,
+                            "error": f"{python_function} 不是可调用对象"}
+
+                def make_handler(fn):
+                    def handler(ctx):
+                        # 从上下文中提取参数
+                        kwargs = {}
+                        for key in (params_raw.get("properties") or {}):
+                            val = ctx.get(key)
+                            if val is not None:
+                                kwargs[key] = val
+                        try:
+                            result = fn(**kwargs) if kwargs else fn()
+                            return {"action_type": tool_name, "success": True, "content": str(result)}
+                        except Exception as e:
+                            return {"action_type": tool_name, "success": False, "error": str(e)}
+                    return handler
+
+                register_dynamic_tool(tool_name, make_handler(func), description or f"自定义工具: {tool_name}", params_raw)
+                msg = f"✅ 工具 '{tool_name}' 注册成功（Python 函数: {python_function}）"
+                logger.info(f"[register_tool] {msg}")
+                return {"action_type": "register_tool", "success": True, "content": msg}
+
+            except Exception as e:
+                return {"action_type": "register_tool", "success": False, "error": f"注册失败: {e}"}
+
+        # 模式 2: Shell 命令模板
+        command_template = self._resolve_template(getattr(self, "command_template", ""), context)
+        if command_template:
+            def cmd_handler(ctx):
+                import shlex
+                cmd = command_template
+                # 替换模板变量
+                for key in (params_raw.get("properties") or {}):
+                    val = ctx.get(key)
+                    if val is not None:
+                        cmd = cmd.replace(f"{{{key}}}", str(val))
+                try:
+                    result = subprocess.run(
+                        cmd, shell=True, capture_output=True, text=True, timeout=30
+                    )
+                    output = result.stdout.strip()
+                    if result.returncode != 0:
+                        output += f"\nSTDERR: {result.stderr.strip()}"
+                    return {"action_type": tool_name, "success": result.returncode == 0,
+                            "content": output, "command": cmd}
+                except subprocess.TimeoutExpired:
+                    return {"action_type": tool_name, "success": False, "error": "命令超时 (30s)"}
+                except Exception as e:
+                    return {"action_type": tool_name, "success": False, "error": str(e)}
+
+            register_dynamic_tool(tool_name, cmd_handler, description or f"自定义命令: {tool_name}", params_raw)
+            msg = f"✅ 工具 '{tool_name}' 注册成功（命令模板: {command_template}）"
+            logger.info(f"[register_tool] {msg}")
+            return {"action_type": "register_tool", "success": True, "content": msg}
+
+        return {"action_type": "register_tool", "success": False,
+                "error": "必须提供 python_function 或 command_template 参数"}
+
+    def _exec_dynamic_tool(self, tool_info: dict, context: AgentContext) -> dict[str, Any]:
+        """执行已注册的动态工具。"""
+        handler = tool_info["handler"]
+        try:
+            # 将 ToolNode 的属性作为参数传给 handler
+            result = handler(context)
+            return result if isinstance(result, dict) else {"action_type": self.action_type, "success": True, "content": str(result)}
+        except Exception as e:
+            logger.error(f"[动态工具] {self.action_type} 执行失败: {e}")
+            return {"action_type": self.action_type, "success": False, "error": str(e)}
 
     # ── 模板替换 ──────────────────────────────────────────
 

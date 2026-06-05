@@ -147,68 +147,67 @@ class ThinkingPanel:
         return len(self.steps) == 0 and len(self.errors) == 0 and len(self.warnings) == 0
 
     def __rich_console__(self, console, options):
-        """Rich 协议：渲染为可折叠的思考面板。"""
+        """Rich 协议：渲染思考面板 — 摘要行 + 折叠详情。"""
         from rich.text import Text
         from rich.panel import Panel
         from rich.console import Group
+        from rich.table import Table
 
         if self.is_empty:
             return
 
-        # 构建摘要标题
         tool_count = self.tool_call_count
         step_count = len(self.steps)
+
+        # ── 摘要行（始终显示，一目了然）──
+        action_names = [s.action for s in self.steps if s.action]
+        action_summary = " → ".join(action_names) if action_names else "纯思考"
         if tool_count > 0:
-            title = f"🧠 深度思考 · {step_count} 轮推理 · {tool_count} 次工具调用"
+            summary = f"[bold cyan]🧠 {step_count} 轮推理[/bold cyan] [dim]·[/dim] [cyan]{tool_count} 次工具调用[/cyan] [dim]· {action_summary}[/dim]"
         else:
-            title = f"🧠 深度思考 · {step_count} 轮推理"
+            summary = f"[bold cyan]🧠 {step_count} 轮推理[/bold cyan] [dim]· 纯思考[/dim]"
 
-        # 构建内部内容
-        lines = []
+        yield Text.from_markup(summary)
+
+        # ── 折叠详情（dim 风格，紧凑排列）──
+        detail_lines = []
         for i, step in enumerate(self.steps, 1):
-            # 步骤分隔
-            if i > 1:
-                lines.append(Text("─" * 40, style="dim"))
-
-            # 思考内容
+            parts = []
             if step.thought:
-                thought_preview = step.thought[:300]
-                if len(step.thought) > 300:
-                    thought_preview += "..."
-                lines.append(Text(f"  🤔 {thought_preview}", style="dim"))
-
-            # 工具调用
+                thought_short = step.thought[:120].replace("\n", " ")
+                if len(step.thought) > 120:
+                    thought_short += "..."
+                parts.append(f"🤔 {thought_short}")
             if step.action:
                 params_parts = []
                 for k, v in step.action_input.items():
                     v_str = repr(v)
-                    if len(v_str) > 60:
-                        v_str = v_str[:57] + "..."
+                    if len(v_str) > 50:
+                        v_str = v_str[:47] + "..."
                     params_parts.append(f"{k}={v_str}")
                 params_str = ", ".join(params_parts)
-                lines.append(Text(f"  🔧 {step.action}({params_str})", style="cyan"))
-
-            # 观察结果
+                parts.append(f"🔧 {step.action}({params_str})")
             if step.observation:
-                obs_preview = step.observation[:200].replace("\n", " ")
-                if len(step.observation) > 200:
-                    obs_preview += "..."
-                lines.append(Text(f"  👀 {obs_preview}", style="dim"))
+                obs_short = step.observation[:100].replace("\n", " ")
+                if len(step.observation) > 100:
+                    obs_short += "..."
+                parts.append(f"👀 {obs_short}")
 
-        # 错误和警告
+            step_text = " | ".join(parts)
+            detail_lines.append(Text(f"  {i:>2}. {step_text}", style="dim"))
+
         for err in self.errors:
-            lines.append(Text(f"  ❌ {err}", style="red"))
+            detail_lines.append(Text(f"  ❌ {err}", style="red"))
         for warn in self.warnings:
-            lines.append(Text(f"  ⚠️  {warn}", style="yellow"))
+            detail_lines.append(Text(f"  ⚠️  {warn}", style="yellow"))
 
-        # 渲染为 Panel
-        content = Group(*lines)
-        yield Panel(
-            content,
-            title=f"[dim]{title}[/dim]",
-            border_style="dim",
-            padding=(0, 1),
-        )
+        if detail_lines:
+            yield Panel(
+                Group(*detail_lines),
+                title="[dim]推理详情[/dim]",
+                border_style="dim",
+                padding=(0, 1),
+            )
 
 
 class ConsoleCallback(EngineCallback):

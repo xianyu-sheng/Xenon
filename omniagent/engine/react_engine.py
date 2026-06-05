@@ -15,7 +15,7 @@ from typing import Any
 from omniagent.engine.callbacks import EngineCallback
 from omniagent.engine.context import AgentContext
 from omniagent.engine.tool_tracker import ToolExecutionTracker
-from omniagent.nodes.tool_node import ToolNode
+from omniagent.nodes.tool_node import ToolNode, _DYNAMIC_TOOLS
 from omniagent.utils.llm_client import chat_completion
 from omniagent.utils.response_adapter import parse_react
 
@@ -179,6 +179,17 @@ BUILTIN_TOOLS = {
         "name": "weather",
         "description": "查询指定城市的实时天气信息，包括温度、湿度、风速、穿衣建议等。支持中文城市名（如 '北京'、'重庆'）和英文城市名（如 'Beijing'、'Chongqing'）。",
         "params": {"city": "城市名称，如 '北京'、'重庆'、'Shanghai'", "lang": "语言，zh 中文（默认）或 en 英文"},
+    },
+    "register_tool": {
+        "name": "register_tool",
+        "description": "注册一个新的自定义工具，注册后可在后续对话中使用。支持两种模式：1) python_function: 传入 module.function 格式的 Python 函数路径，系统自动导入；2) command_template: 传入 shell 命令模板（用 {param} 表示参数占位符）。注册成功后工具立即可用。",
+        "params": {
+            "tool_name": "新工具的名称（英文，如 query_gold_price）",
+            "description": "工具功能描述，LLM 会根据此描述决定何时调用",
+            "python_function": "Python 函数路径，格式为 module.submodule.function（如 omniagent.utils.weather.get_weather）",
+            "command_template": "Shell 命令模板，用 {param} 表示参数（如 curl -s https://api.example.com/{symbol}）",
+            "params": "参数定义字典，格式: {type: object, properties: {param1: {type: string, description: ...}}}",
+        },
     },
 }
 
@@ -383,8 +394,11 @@ class ReActEngine:
     ) -> str:
         """执行工具并返回结果。"""
         tool_info = self.tools.get(action)
+        # 如果内置工具中没有，检查动态注册的工具
+        if not tool_info and action in _DYNAMIC_TOOLS:
+            tool_info = _DYNAMIC_TOOLS[action]
         if not tool_info:
-            error_msg = f"错误: 未知工具 '{action}'，可用工具: {list(self.tools.keys())}"
+            error_msg = f"错误: 未知工具 '{action}'，可用工具: {list(self.tools.keys()) + list(_DYNAMIC_TOOLS.keys())}"
             if tracker:
                 tracker.record(action, action_input, False, error_msg, error=error_msg)
             return error_msg
