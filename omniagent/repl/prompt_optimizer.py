@@ -159,6 +159,33 @@ TEMPLATES: list[PromptTemplate] = [
         system_hint="你是一个系统架构师。请给出清晰、可落地的架构设计方案。",
     ),
 
+    # 小说创作
+    PromptTemplate(
+        intent="novel",
+        trigger_patterns=[
+            r"(?:写|创作|编写|生成).*(?:小说|故事|章节|短篇|长篇|网文)",
+            r"(?:续写|接着写|往下写|继续写)",
+            r"(?:润色|修改|改写|重写).*(?:文章|段落|文字|描写|对话|文笔)",
+            r"(?:扩写|扩展|丰富).*(?:细节|描写|段落)",
+            r"(?:创建|设计|构建).*(?:角色|人物|主角|反派|配角)",
+            r"(?:构建|设定|创建).*(?:世界观|设定|背景|魔法体系)",
+            r"(?:写|列|规划).*(?:大纲|提纲|故事线|情节)",
+            r"(?:分析|评价|点评).*(?:故事|情节|角色|文笔|节奏)",
+            r"(?:write|create|continue|revise|expand).*(?:novel|story|chapter|fiction)",
+            r"(?:write|build|develop).*(?:character|world|outline|plot)",
+        ],
+        template=(
+            "## 创作任务\n{task}\n\n"
+            "## 创作要求\n"
+            "1. 明确操作类型（大纲/写作/续写/润色/扩写/角色/世界观/分析）\n"
+            "2. 如有已有内容，先阅读再创作\n"
+            "3. 保持风格和人物一致性\n"
+            "4. 注重细节和感官描写\n"
+            "5. 创作内容保存到文件"
+        ),
+        system_hint="你是一位资深小说创作助手。请运用专业的叙事技巧进行创作，注重展示而非叙述、角色驱动、感官沉浸。所有创作内容请保存到文件。",
+    ),
+
     # 解释代码（放最后，因为"代码"这个词太泛）
     PromptTemplate(
         intent="explain",
@@ -300,6 +327,7 @@ def get_intent_display(intent: str | None) -> str:
         "write_test": "🧪 编写测试",
         "design": "🏗️ 架构设计",
         "convert": "🔄 转换迁移",
+        "novel": "Novel 小说创作",
     }
     if intent is None:
         return "💬 通用对话"

@@ -515,6 +515,8 @@ class REPL:
             self._run_plan_reflection_engine(optimized, model_ids)
         elif mode == "react-reflection":
             self._run_react_reflection_engine(optimized, model_ids)
+        elif mode == "novel":
+            self._run_novel_engine(optimized, model_ids)
         else:
             # direct 模式 — 直接调 LLM
             self._run_direct(optimized, model_ids)
@@ -644,6 +646,21 @@ class REPL:
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ React+Reflection 引擎执行失败: {e}[/error]")
+
+    def _run_novel_engine(self, user_input: str, model_ids: list[str]) -> None:
+        """小说创作引擎模式。"""
+        from omniagent.engine.novel_engine import NovelEngine
+
+        console.print("[magenta]Novel 模式: 小说创作助手[/magenta]")
+
+        engine = NovelEngine(model_priority=model_ids, max_iterations=15, callback=self._make_callback())
+        try:
+            result = engine.run(user_input, context=self.agent_context)
+            self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
+            console.print(Panel(Markdown(result), title="[command]Novel 创作结果[/command]", border_style="magenta"))
+            self.status_bar.set_last_model(model_ids[0])
+        except Exception as e:
+            console.print(f"[error]❌ 小说创作引擎执行失败: {e}[/error]")
 
     def _stream_response(self, model_id: str, messages: list[dict[str, str]]) -> str:
         """流式输出模型回复。返回完整响应文本。"""

@@ -68,6 +68,10 @@ BUILTIN_MODES: dict[str, ThinkingMode] = {
         name="react-reflection",
         description="ReAct 探索 + 反思审查，适合需要工具且要求高质量的任务",
     ),
+    "novel": ThinkingMode(
+        name="novel",
+        description="小说创作模式：大纲规划、章节写作、续写、润色、角色构建、世界观设定",
+    ),
 }
 
 
