@@ -175,6 +175,11 @@ BUILTIN_TOOLS = {
         "description": "GitHub 仓库专用操作工具。list_files: 列出仓库中所有文件路径（通过 GitHub API）；fetch_file: 获取指定文件的源码内容；fetch_readme: 自动查找并获取 README 文件。仅支持公开仓库。",
         "params": {"repo": "仓库标识，格式为 owner/repo（如 facebook/react）", "github_action": "list_files（列出文件）| fetch_file（获取文件）| fetch_readme（获取README）", "github_path": "文件路径（仅 fetch_file 时需要，如 src/index.js）", "branch": "分支名（可选，默认 main，失败时自动尝试 master）"},
     },
+    "weather": {
+        "name": "weather",
+        "description": "查询指定城市的实时天气信息，包括温度、湿度、风速、穿衣建议等。支持中文城市名（如 '北京'、'重庆'）和英文城市名（如 'Beijing'、'Chongqing'）。",
+        "params": {"city": "城市名称，如 '北京'、'重庆'、'Shanghai'", "lang": "语言，zh 中文（默认）或 en 英文"},
+    },
 }
 
 
@@ -269,7 +274,8 @@ class ReActEngine:
             if thought:
                 self.callback.on_think(thought)
 
-            if parsed.get("final_answer"):
+            final_answer = parsed.get("final_answer", "")
+            if final_answer and final_answer.strip():
                 # ── 关键验证：如果需要工具但未执行，拒绝接受 final_answer ──
                 if requires_tools and not tracker.has_executions():
                     no_tool_streak += 1
@@ -286,7 +292,7 @@ class ReActEngine:
                         continue
                     else:
                         # 连续 3 次拒绝工具，附带警告返回
-                        answer = parsed["final_answer"]
+                        answer = final_answer
                         warning = (
                             "\n\n⚠️ **警告**: 本次回答未经工具执行验证。"
                             "LLM 声称完成了任务但未实际调用任何工具，"
@@ -298,7 +304,7 @@ class ReActEngine:
                         return answer + warning
 
                 logger.info(f"ReAct 完成，共 {i + 1} 次迭代，工具调用 {len(tracker.calls)} 次")
-                answer = parsed["final_answer"]
+                answer = final_answer
                 if tracker.has_executions():
                     summary = tracker.execution_summary()
                     logger.info(f"ReAct 工具执行摘要: {summary}")
@@ -323,12 +329,32 @@ class ReActEngine:
                 logger.info(f"ReAct 观察: {observation[:200]}")
                 no_tool_streak = 0
             else:
-                # LLM 没有给出有效输出，直接返回
-                result = parsed.get("thought", response)
+                # LLM 没有给出有效输出，尝试从最后一条观察中提取
+                last_obs = ""
+                for m in reversed(messages):
+                    if m.get("role") == "user" and m.get("content", "").startswith("Observation:"):
+                        last_obs = m["content"][len("Observation:"):].strip()
+                        break
+                if last_obs:
+                    result = last_obs[:1000]
+                else:
+                    result = parsed.get("thought", "").strip() or response.strip()
+                if not result:
+                    result = "任务已执行，但未生成明确的回复内容。请尝试重新提问或使用更具体的指令。"
                 self.callback.on_finish(result)
                 return result
 
-        msg = f"达到最大迭代次数 ({self.max_iterations})，未能得出最终答案。"
+        # 达到最大迭代次数，尝试从最后的观察结果中提取有用信息
+        last_obs = ""
+        for m in reversed(messages):
+            if m.get("role") == "user" and m.get("content", "").startswith("Observation:"):
+                last_obs = m["content"][len("Observation:"):].strip()
+                break
+        if last_obs and len(last_obs) > 50:
+            # 最后一条观察有实质内容，返回它
+            msg = f"达到最大迭代次数 ({self.max_iterations})，以下是最后的执行结果：\n\n{last_obs[:2000]}"
+        else:
+            msg = f"达到最大迭代次数 ({self.max_iterations})，未能得出最终答案。请尝试简化问题或使用更具体的指令。"
         self.callback.on_warning(msg)
         self.callback.on_finish(msg)
         return msg

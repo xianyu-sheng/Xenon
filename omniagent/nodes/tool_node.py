@@ -134,6 +134,9 @@ class ToolNode(BaseNode):
         github_action: str = "list_files",  # list_files | fetch_file | fetch_readme
         github_path: str = "",
         branch: str = "main",
+        # weather 参数
+        city: str = "",
+        lang: str = "zh",
         # 安全参数
         security_enabled: bool = True,
         # read_file 分段读取参数
@@ -171,6 +174,8 @@ class ToolNode(BaseNode):
         self.github_action = github_action
         self.github_path = github_path
         self.branch = branch
+        self.city = city
+        self.lang = lang
         self.security_enabled = security_enabled
         self._extra_start_line = start_line
         self._extra_max_lines = max_lines
@@ -358,6 +363,7 @@ class ToolNode(BaseNode):
             "diff_preview": self._diff_preview,
             "mcp_call": self._mcp_call,
             "github_fetch": self._github_fetch,
+            "weather": self._weather,
         }
         handler = handlers.get(self.action_type)
         if not handler:
@@ -1380,6 +1386,42 @@ class ToolNode(BaseNode):
                 "content": "", "success": False, "error": str(e),
             }
             self._write_output(context, f"抓取失败: {e}")
+            return result
+
+    def _weather(self, context: AgentContext) -> dict[str, Any]:
+        """查询指定城市的天气信息。"""
+        city = self._resolve_template(getattr(self, "city", ""), context) or "Beijing"
+        lang = self._resolve_template(getattr(self, "lang", ""), context) or "zh"
+
+        logger.info(f"[{self.id}] 查询天气: {city}")
+
+        try:
+            from omniagent.utils.weather import get_weather, format_weather_report
+            info = get_weather(city, lang)
+            report = format_weather_report(info)
+
+            result = {
+                "action_type": "weather",
+                "city": city,
+                "success": "error" not in info,
+                "weather_info": info,
+                "content": report,
+            }
+            self._write_output(context, report[:5000])
+            return result
+
+        except ImportError:
+            raise RuntimeError(f"[{self.id}] weather 工具需要 httpx 库")
+        except Exception as e:
+            logger.error(f"[{self.id}] 天气查询失败: {e}")
+            result = {
+                "action_type": "weather",
+                "city": city,
+                "success": False,
+                "content": "",
+                "error": str(e),
+            }
+            self._write_output(context, f"天气查询失败: {e}")
             return result
 
     def _github_fetch(self, context: AgentContext) -> dict[str, Any]:

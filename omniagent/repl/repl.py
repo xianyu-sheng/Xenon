@@ -23,6 +23,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.theme import Theme
+from rich.rule import Rule
 
 from omniagent.engine.context import AgentContext
 from omniagent.repl.commands import COMMANDS, dispatch_command
@@ -93,6 +94,20 @@ class REPL:
         """根据 verbose 状态创建引擎回调。"""
         from omniagent.engine.callbacks import ConsoleCallback
         return ConsoleCallback(verbose=self.verbose)
+
+    def _render_engine_result(self, callback, result: str, title: str, border_style: str = "green") -> None:
+        """渲染引擎结果：先思考面板，再最终答案。"""
+        # 1. 渲染思考过程面板（如果有）
+        panel = callback.get_thinking_panel()
+        if panel is not None:
+            console.print(panel)
+
+        # 2. 渲染最终答案
+        console.print(Panel(
+            Markdown(result),
+            title=f"[command]{title}[/command]",
+            border_style=border_style,
+        ))
 
     @staticmethod
     def _default_system_prompt() -> str:
@@ -568,11 +583,12 @@ class REPL:
 
         console.print("[cyan]🔄 ReAct 模式: 思考 → 行动 → 观察 → 循环[/cyan]")
 
-        engine = ReActEngine(model_priority=model_ids, max_iterations=10, callback=self._make_callback())
+        callback = self._make_callback()
+        engine = ReActEngine(model_priority=model_ids, max_iterations=10, callback=callback)
         try:
             result = engine.run(user_input, self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
-            console.print(Panel(Markdown(result), title="[command]ReAct 结果[/command]", border_style="green"))
+            self._render_engine_result(callback, result, "ReAct 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ ReAct 引擎执行失败: {e}[/error]")
@@ -583,11 +599,12 @@ class REPL:
 
         console.print("[cyan]📋 Plan-Execute 模式: 规划 → 逐步执行[/cyan]")
 
-        engine = PlanExecuteEngine(model_priority=model_ids, max_steps=20, callback=self._make_callback())
+        callback = self._make_callback()
+        engine = PlanExecuteEngine(model_priority=model_ids, max_steps=20, callback=callback)
         try:
             result = engine.run(user_input, self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
-            console.print(Panel(Markdown(result), title="[command]Plan-Execute 结果[/command]", border_style="green"))
+            self._render_engine_result(callback, result, "Plan-Execute 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ Plan-Execute 引擎执行失败: {e}[/error]")
@@ -598,11 +615,12 @@ class REPL:
 
         console.print("[cyan]🔍 Reflection 模式: 执行 → 审查 → 修正[/cyan]")
 
-        engine = ReflectionEngine(model_priority=model_ids, max_rounds=3, callback=self._make_callback())
+        callback = self._make_callback()
+        engine = ReflectionEngine(model_priority=model_ids, max_rounds=3, callback=callback)
         try:
             result = engine.run(user_input)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
-            console.print(Panel(Markdown(result), title="[command]Reflection 结果[/command]", border_style="green"))
+            self._render_engine_result(callback, result, "Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ Reflection 引擎执行失败: {e}[/error]")
@@ -613,11 +631,12 @@ class REPL:
 
         console.print("[cyan]📋🔄 Plan+React 模式: 全局规划 → 每步 ReAct 执行[/cyan]")
 
-        engine = PlanReactEngine(model_priority=model_ids, max_steps=10, react_iterations=8, callback=self._make_callback())
+        callback = self._make_callback()
+        engine = PlanReactEngine(model_priority=model_ids, max_steps=10, react_iterations=8, callback=callback)
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
-            console.print(Panel(Markdown(result), title="[command]Plan+React 结果[/command]", border_style="green"))
+            self._render_engine_result(callback, result, "Plan+React 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ Plan+React 引擎执行失败: {e}[/error]")
@@ -628,11 +647,12 @@ class REPL:
 
         console.print("[cyan]📋🔍 Plan+Reflection 模式: 规划执行 → 反思修正[/cyan]")
 
-        engine = PlanReflectionEngine(model_priority=model_ids, max_steps=10, review_rounds=2, callback=self._make_callback())
+        callback = self._make_callback()
+        engine = PlanReflectionEngine(model_priority=model_ids, max_steps=10, review_rounds=2, callback=callback)
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
-            console.print(Panel(Markdown(result), title="[command]Plan+Reflection 结果[/command]", border_style="green"))
+            self._render_engine_result(callback, result, "Plan+Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ Plan+Reflection 引擎执行失败: {e}[/error]")
@@ -643,11 +663,12 @@ class REPL:
 
         console.print("[cyan]🔄🔍 React+Reflection 模式: ReAct 探索 → 反思审查[/cyan]")
 
-        engine = ReactReflectionEngine(model_priority=model_ids, react_iterations=8, review_rounds=2, callback=self._make_callback())
+        callback = self._make_callback()
+        engine = ReactReflectionEngine(model_priority=model_ids, react_iterations=8, review_rounds=2, callback=callback)
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
-            console.print(Panel(Markdown(result), title="[command]React+Reflection 结果[/command]", border_style="green"))
+            self._render_engine_result(callback, result, "React+Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ React+Reflection 引擎执行失败: {e}[/error]")
@@ -658,37 +679,45 @@ class REPL:
 
         console.print("[magenta]Novel 模式: 小说创作助手[/magenta]")
 
+        callback = self._make_callback()
         engine = NovelEngine(
             model_priority=model_ids,
             max_iterations=15,
-            callback=self._make_callback(),
+            callback=callback,
             novel_manager=self._novel_manager,
         )
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
-            console.print(Panel(Markdown(result), title="[command]Novel 创作结果[/command]", border_style="magenta"))
+            self._render_engine_result(callback, result, "Novel 创作结果", border_style="magenta")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             console.print(f"[error]❌ 小说创作引擎执行失败: {e}[/error]")
 
     def _stream_response(self, model_id: str, messages: list[dict[str, str]]) -> str:
-        """流式输出模型回复。返回完整响应文本。"""
+        """流式输出模型回复，完成后 Markdown 渲染。返回完整响应文本。"""
         from omniagent.utils.llm_client import chat_completion_stream
 
-        console.print()
         full_response = []
 
+        # 流式输出：实时显示文本，同时收集完整内容
         for chunk in chat_completion_stream(model_id, messages):
             full_response.append(chunk)
             console.print(chunk, end="")
 
-        console.print()
+        console.print()  # 流式输出换行
 
         response_text = "".join(full_response)
-        self.ctx_mgr.add_assistant_message(response_text, model_used=model_id)
 
-        console.print(f"[dim]└─ {model_id}[/dim]")
+        # 流式完成后，用 Markdown Panel 重新渲染（替换原始文本）
+        if response_text.strip():
+            console.print(Panel(
+                Markdown(response_text),
+                title=f"[assistant]Assistant[/assistant] [dim]({model_id})[/dim]",
+                border_style="green",
+            ))
+
+        self.ctx_mgr.add_assistant_message(response_text, model_used=model_id)
         return response_text
 
     def _blocking_response(self, model_id: str, messages: list[dict[str, str]]) -> str:
