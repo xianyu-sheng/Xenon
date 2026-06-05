@@ -117,6 +117,19 @@ class ToolExecutionTracker:
 
         return "\n".join(lines)
 
+    def get_history(self) -> list[dict[str, Any]]:
+        """返回执行历史的字典列表。"""
+        return [
+            {
+                "tool": c.tool_name,
+                "params": c.params,
+                "success": c.success,
+                "result": c.result_summary,
+                "error": c.error,
+            }
+            for c in self.calls
+        ]
+
     def reset(self) -> None:
         """清空追踪记录（每轮对话开始时调用）。"""
         self.calls.clear()

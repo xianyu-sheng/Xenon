@@ -1617,7 +1617,7 @@ def _cmd_edit(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
 
 # /novel ─────────────────────────────────────────────────────
 
-register_command("/novel", "小说项目管理", "/novel [init <名称>|status|character|outline]")
+register_command("/novel", "多小说项目管理", "/novel [init <名称> [类型]|list|switch <名称>|status|delete <名称>]")
 
 
 @_handler("/novel")
@@ -1625,89 +1625,123 @@ def _cmd_novel(
     *, args: str, registry: ModelRegistry, ctx_mgr: ContextManager,
     session_state: dict[str, Any], **kwargs: Any,
 ) -> str:
-    """小说项目管理命令。"""
-    from pathlib import Path
-    import json
+    """多小说项目管理命令。"""
+    from omniagent.engine.novel_manager import NovelManager
 
-    parts = args.strip().split(maxsplit=1)
+    parts = args.strip().split(maxsplit=2)
     subcmd = parts[0].lower() if parts else "status"
     subargs = parts[1] if len(parts) > 1 else ""
+    subargs2 = parts[2] if len(parts) > 2 else ""
 
-    novel_dir = Path(".novel")
+    # 确保 NovelManager 存在
+    if not hasattr(session_state.get("_repl", None) or object(), '_novel_manager'):
+        pass  # Manager 在 repl 中初始化
+    manager = session_state.get("_novel_manager")
+    if not manager:
+        manager = NovelManager()
+        session_state["_novel_manager"] = manager
 
     if subcmd == "init":
-        # 初始化小说项目
-        project_name = subargs or "My Novel"
-        novel_dir.mkdir(exist_ok=True)
-        (novel_dir / "characters.json").write_text(
-            json.dumps({"project": project_name, "characters": []}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        # /novel init <名称> [类型]
+        if not subargs:
+            return "用法: /novel init <名称> [类型]\n示例: /novel init 星际迷途 科幻"
+        title = subargs
+        genre = subargs2
+        project = manager.create_novel(title, genre)
+        return (
+            f"✅ 小说「{title}」已创建\n\n"
+            f"  📁 项目目录: .novel/projects/{project.slug}/\n"
+            f"  📂 类型: {genre or '未分类'}\n\n"
+            f"现在可以在 Novel 模式下直接说「帮我写第一章」来开始创作。\n"
+            f"使用 /novel list 查看所有小说。"
         )
-        (novel_dir / "world.json").write_text(
-            json.dumps({"project": project_name, "settings": {}}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        (novel_dir / "outline.md").write_text(
-            f"# {project_name} - 故事大纲\n\n（待规划）\n",
-            encoding="utf-8",
-        )
-        (novel_dir / "style.md").write_text(
-            f"# {project_name} - 风格指南\n\n- 视角：\n- 时态：\n- 基调：\n- 参考作品：\n",
-            encoding="utf-8",
-        )
-        (novel_dir / "summary.md").write_text(
-            f"# {project_name} - 内容摘要\n\n（尚未开始创作）\n",
-            encoding="utf-8",
-        )
-        Path("chapters").mkdir(exist_ok=True)
-        return f"Novel 项目 '{project_name}' 已初始化。\n目录结构：\n  .novel/ (角色卡、世界观、大纲、风格、摘要)\n  chapters/ (章节文件)"
 
-    elif subcmd == "status":
-        # 显示项目状态
-        if not novel_dir.exists():
-            return "当前目录没有 Novel 项目。使用 /novel init <名称> 初始化。"
-
-        lines = [f"[bold]Novel 项目状态[/bold]"]
-
-        # 角色
-        chars_file = novel_dir / "characters.json"
-        if chars_file.exists():
-            data = json.loads(chars_file.read_text(encoding="utf-8"))
-            chars = data.get("characters", [])
-            lines.append(f"  角色: {len(chars)} 个")
-            for c in chars[:5]:
-                lines.append(f"    - {c.get('name', '?')}")
-
-        # 章节
-        chapters_dir = Path("chapters")
-        if chapters_dir.exists():
-            chapter_files = sorted(chapters_dir.glob("*.md")) + sorted(chapters_dir.glob("*.txt"))
-            total_words = 0
-            for f in chapter_files:
-                try:
-                    total_words += len(f.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
-            lines.append(f"  章节: {len(chapter_files)} 个, 约 {total_words} 字")
-
-        # 大纲
-        outline = novel_dir / "outline.md"
-        if outline.exists():
-            content = outline.read_text(encoding="utf-8")
-            line_count = len(content.strip().splitlines())
-            lines.append(f"  大纲: {line_count} 行")
-
+    elif subcmd == "list":
+        # 列出所有小说
+        novels = manager.list_novels()
+        if not novels:
+            return "还没有创建任何小说。使用 /novel init <名称> 创建。"
+        lines = ["📚 小说列表:\n"]
+        for n in novels:
+            marker = " ← 当前" if n["is_active"] else ""
+            lines.append(
+                f"  {'▸' if n['is_active'] else '•'} **{n['title']}** "
+                f"({n['genre'] or '未分类'}) — "
+                f"{n['chapters']} 章, 约 {n['words']} 字{marker}"
+            )
+        lines.append(f"\n使用 /novel switch <名称> 切换小说")
         return "\n".join(lines)
 
-    elif subcmd == "character":
-        # 切换到 novel 模式进行角色操作
-        registry.current_mode = "novel"
-        return f"已切换到 Novel 模式。角色操作请求将自动处理。"
+    elif subcmd == "switch":
+        # 切换当前小说
+        if not subargs:
+            return "用法: /novel switch <名称>"
+        # 按标题或 slug 查找
+        novels = manager.list_novels()
+        target = None
+        for n in novels:
+            if subargs in n["title"] or subargs == n["slug"]:
+                target = n["slug"]
+                break
+        if not target:
+            return f"找不到小说「{subargs}」。使用 /novel list 查看所有小说。"
+        project = manager.switch_novel(target)
+        if project:
+            return f"✅ 已切换到「{project.title}」\n现在可以继续创作这本小说了。"
+        return f"切换失败: {subargs}"
 
-    elif subcmd == "outline":
-        # 切换到 novel 模式进行大纲操作
-        registry.current_mode = "novel"
-        return "已切换到 Novel 模式。大纲操作请求将自动处理。"
+    elif subcmd == "status":
+        # 显示当前小说状态
+        current = manager.get_current()
+        if not current:
+            novels = manager.list_novels()
+            if not novels:
+                return "还没有创建任何小说。使用 /novel init <名称> 创建。"
+            return "没有活跃的小说。使用 /novel switch <名称> 切换。"
+
+        lines = [f"📖 当前小说: **{current.title}**\n"]
+        lines.append(f"  类型: {current.genre or '未分类'}")
+        lines.append(f"  创建: {current.created_at}")
+        lines.append(f"  更新: {current.updated_at}")
+        lines.append(f"  章节: {current.chapter_count()} 个")
+        lines.append(f"  字数: 约 {current.total_words()} 字")
+
+        # 角色统计
+        if current.characters_path().exists():
+            try:
+                import json
+                chars = json.loads(current.characters_path().read_text(encoding="utf-8"))
+                if isinstance(chars, list):
+                    lines.append(f"  角色: {len(chars)} 个")
+            except Exception:
+                pass
+
+        lines.append(f"\n  📁 {current.base_dir}")
+        return "\n".join(lines)
+
+    elif subcmd == "delete":
+        # 删除小说
+        if not subargs:
+            return "用法: /novel delete <名称>"
+        novels = manager.list_novels()
+        target = None
+        for n in novels:
+            if subargs in n["title"] or subargs == n["slug"]:
+                target = n["slug"]
+                break
+        if not target:
+            return f"找不到小说「{subargs}」。"
+        title = next((n["title"] for n in novels if n["slug"] == target), target)
+        manager.delete_novel(target)
+        return f"🗑️ 已删除「{title}」"
 
     else:
-        return "用法: /novel [init <名称>|status|character|outline]"
+        return (
+            "用法: /novel <子命令>\n\n"
+            "子命令:\n"
+            "  init <名称> [类型] — 创建新小说\n"
+            "  list               — 列出所有小说\n"
+            "  switch <名称>      — 切换当前小说\n"
+            "  status             — 查看当前小说状态\n"
+            "  delete <名称>      — 删除小说"
+        )

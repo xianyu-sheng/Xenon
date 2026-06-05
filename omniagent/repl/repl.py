@@ -75,6 +75,10 @@ class REPL:
         self.project_ctx = ProjectContext()
         self._project_injected = False
 
+        # 多小说管理器
+        from omniagent.engine.novel_manager import NovelManager
+        self._novel_manager = NovelManager()
+
         # 状态栏
         self.status_bar = StatusBar(console, self.ctx_mgr, self.registry)
 
@@ -82,6 +86,7 @@ class REPL:
         self._session_state: dict[str, Any] = {
             "agent_context": self.agent_context,
             "_repl": self,
+            "_novel_manager": self._novel_manager,
         }
 
     def _make_callback(self):
@@ -648,12 +653,17 @@ class REPL:
             console.print(f"[error]❌ React+Reflection 引擎执行失败: {e}[/error]")
 
     def _run_novel_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """小说创作引擎模式。"""
+        """小说创作引擎模式（支持多小说隔离）。"""
         from omniagent.engine.novel_engine import NovelEngine
 
         console.print("[magenta]Novel 模式: 小说创作助手[/magenta]")
 
-        engine = NovelEngine(model_priority=model_ids, max_iterations=15, callback=self._make_callback())
+        engine = NovelEngine(
+            model_priority=model_ids,
+            max_iterations=15,
+            callback=self._make_callback(),
+            novel_manager=self._novel_manager,
+        )
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])

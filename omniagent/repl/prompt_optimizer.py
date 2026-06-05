@@ -173,6 +173,10 @@ TEMPLATES: list[PromptTemplate] = [
             r"(?:分析|评价|点评).*(?:故事|情节|角色|文笔|节奏)",
             r"(?:write|create|continue|revise|expand).*(?:novel|story|chapter|fiction)",
             r"(?:write|build|develop).*(?:character|world|outline|plot)",
+            # 多小说管理
+            r"(?:切换|打开|继续写|继续创作).{0,5}(?:小说|故事)",
+            r"(?:新建|创建).*(?:小说|故事|作品)",
+            r"(?:列出|显示|查看).*(?:小说|作品)",
         ],
         template=(
             "## 创作任务\n{task}\n\n"
