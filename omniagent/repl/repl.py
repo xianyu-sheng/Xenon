@@ -773,6 +773,13 @@ class REPL:
         # 网页抓取
         re.compile(r"(?:抓取|下载|获取|访问).{0,20}(?:网页|页面|url|网址)", re.I),
         re.compile(r"(?:fetch|download|scrape|crawl).{0,20}(?:web|page|url)", re.I),
+        # 天气查询
+        re.compile(r"(?:查询|查|看).{0,10}(?:天气|气温|温度|forecast)", re.I),
+        re.compile(r"(?:天气|气温|温度).{0,10}(?:怎么样|如何|查询|预报)", re.I),
+        re.compile(r"(?:weather|forecast|temperature).{0,15}", re.I),
+        re.compile(r"(?:穿什么|穿衣|穿衣服).{0,10}(?:合适|建议|好)", re.I),
+        re.compile(r"该穿什么", re.I),
+        re.compile(r"(?:多少度|几度|热不热|冷不冷)", re.I),
         # 文件路径模式（./xxx, src/xxx, C:\xxx, .py, .js 等）
         re.compile(r"(?:^|\s)(?:\./|\.\./|src/|tests?/|lib/|app/|dist/|build/)\S+", re.I),
         re.compile(r"(?:^|\s)[A-Z]:\\[\w\\/.]+", re.I),

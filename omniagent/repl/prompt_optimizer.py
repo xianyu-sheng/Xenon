@@ -190,6 +190,27 @@ TEMPLATES: list[PromptTemplate] = [
         system_hint="你是一位资深小说创作助手。请运用专业的叙事技巧进行创作，注重展示而非叙述、角色驱动、感官沉浸。所有创作内容请保存到文件。",
     ),
 
+    # 信息查询（天气、时间等需要工具的查询）
+    PromptTemplate(
+        intent="query",
+        trigger_patterns=[
+            r"(?:查询|查|看).{0,10}(?:天气|气温|温度|时间|日期|汇率|股价|新闻)",
+            r"(?:天气|气温|温度).{0,10}(?:怎么样|如何|多少|预报)",
+            r"(?:多少度|几度|热不热|冷不冷)",
+            r"该穿什么",
+            r"(?:穿什么|穿衣).{0,10}(?:合适|建议|好)",
+            r"(?:weather|forecast|temperature|time|date).{0,15}",
+        ],
+        template=(
+            "## 查询需求\n{task}\n\n"
+            "## 要求\n"
+            "1. 使用工具获取实时数据\n"
+            "2. 给出准确的结果\n"
+            "3. 如有需要，给出实用建议"
+        ),
+        system_hint="你是一个信息查询助手。请使用工具获取实时数据，给出准确的回答。",
+    ),
+
     # 解释代码（放最后，因为"代码"这个词太泛）
     PromptTemplate(
         intent="explain",
@@ -331,7 +352,8 @@ def get_intent_display(intent: str | None) -> str:
         "write_test": "🧪 编写测试",
         "design": "🏗️ 架构设计",
         "convert": "🔄 转换迁移",
-        "novel": "Novel 小说创作",
+        "novel": "📖 小说创作",
+        "query": "🔍 信息查询",
     }
     if intent is None:
         return "💬 通用对话"
