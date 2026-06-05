@@ -129,6 +129,11 @@ class ToolNode(BaseNode):
         tool_name: str = "",
         tool_args: dict | None = None,
         mcp_server: str = "",
+        # github_fetch 参数
+        repo: str = "",
+        github_action: str = "list_files",  # list_files | fetch_file | fetch_readme
+        github_path: str = "",
+        branch: str = "main",
         # 安全参数
         security_enabled: bool = True,
     ) -> None:
@@ -159,6 +164,10 @@ class ToolNode(BaseNode):
         self.tool_name = tool_name
         self.tool_args = tool_args or {}
         self.mcp_server = mcp_server
+        self.repo = repo
+        self.github_action = github_action
+        self.github_path = github_path
+        self.branch = branch
         self.security_enabled = security_enabled
 
     # ── 参数规范化 ──────────────────────────────────────────
@@ -178,6 +187,10 @@ class ToolNode(BaseNode):
         "symbol":         ["name", "func", "function_name", "class_name", "identifier"],
         "old_name":       ["from", "before_name"],
         "new_name":       ["to", "after_name"],
+        "repo":           ["repository", "repo_url", "github_url", "github_repo"],
+        "github_action":  ["gh_action", "git_action"],
+        "github_path":    ["gh_path", "file", "filepath"],
+        "branch":         ["ref", "git_branch"],
     }
 
     @classmethod
@@ -317,6 +330,7 @@ class ToolNode(BaseNode):
             "refactor": self._refactor,
             "diff_preview": self._diff_preview,
             "mcp_call": self._mcp_call,
+            "github_fetch": self._github_fetch,
         }
         handler = handlers.get(self.action_type)
         if not handler:
@@ -1313,6 +1327,142 @@ class ToolNode(BaseNode):
             }
             self._write_output(context, f"抓取失败: {e}")
             return result
+
+    def _github_fetch(self, context: AgentContext) -> dict[str, Any]:
+        """GitHub 仓库操作：列出文件、获取文件内容、获取 README。
+
+        支持的 github_action:
+        - list_files: 列出仓库中所有文件路径
+        - fetch_file: 获取指定文件的内容
+        - fetch_readme: 获取 README 内容
+        """
+        repo = self._resolve_template(self.repo, context)
+        if not repo:
+            raise ValueError(f"[{self.id}] github_fetch 需要 repo 参数（格式: owner/repo）")
+
+        # 规范化 repo 格式：支持完整 URL 或 owner/repo
+        repo = repo.strip().rstrip("/")
+        if "github.com" in repo:
+            # 从 URL 提取 owner/repo
+            import re
+            m = re.search(r"github\.com/([^/]+/[^/]+)", repo)
+            if m:
+                repo = m.group(1)
+        repo = repo.rstrip("/")
+
+        action = self._resolve_template(self.github_action, context) or "list_files"
+        branch = self._resolve_template(self.branch, context) or "main"
+        github_path = self._resolve_template(self.github_path, context) or ""
+
+        logger.info(f"[{self.id}] GitHub {action}: {repo} (branch={branch}, path={github_path})")
+
+        try:
+            import httpx
+        except ImportError:
+            raise RuntimeError(f"[{self.id}] github_fetch 需要 httpx 库")
+
+        headers = {"User-Agent": "OmniAgent-CLI/0.2"}
+
+        try:
+            if action == "list_files":
+                # 使用 GitHub API 获取文件树
+                api_url = f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1"
+                with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+                    resp = client.get(api_url, headers=headers)
+                    if resp.status_code == 404:
+                        # 尝试 master 分支
+                        api_url = f"https://api.github.com/repos/{repo}/git/trees/master?recursive=1"
+                        resp = client.get(api_url, headers=headers)
+                    resp.raise_for_status()
+                    data = resp.json()
+
+                tree = data.get("tree", [])
+                # 只返回文件（不包括 tree 类型），过滤掉 .git 相关
+                files = [
+                    item["path"] for item in tree
+                    if item.get("type") == "blob" and not item["path"].startswith(".git/")
+                ]
+
+                result_text = f"仓库 {repo} 共 {len(files)} 个文件:\n" + "\n".join(files)
+                if len(result_text) > 10000:
+                    result_text = result_text[:10000] + f"\n\n... (共 {len(files)} 个文件，已截断)"
+
+                self._write_output(context, result_text[:5000])
+                return {
+                    "action_type": "github_fetch", "repo": repo,
+                    "action": action, "files": files, "file_count": len(files),
+                    "content": result_text, "success": True,
+                }
+
+            elif action == "fetch_file":
+                if not github_path:
+                    return {
+                        "action_type": "github_fetch", "repo": repo,
+                        "action": action, "content": "", "success": False,
+                        "error": "fetch_file 需要 github_path 参数",
+                    }
+
+                raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{github_path}"
+                with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+                    resp = client.get(raw_url, headers=headers)
+                    if resp.status_code == 404:
+                        # 尝试 master 分支
+                        raw_url = f"https://raw.githubusercontent.com/{repo}/master/{github_path}"
+                        resp = client.get(raw_url, headers=headers)
+                    resp.raise_for_status()
+                    text = resp.text
+
+                if len(text) > 50000:
+                    text = text[:50000] + "\n\n... (内容已截断，超过 50000 字符)"
+
+                self._write_output(context, text[:5000])
+                return {
+                    "action_type": "github_fetch", "repo": repo,
+                    "action": action, "path": github_path,
+                    "content": text, "content_length": len(text), "success": True,
+                }
+
+            elif action == "fetch_readme":
+                for readme_name in ["README.md", "readme.md", "README.rst", "README"]:
+                    raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{readme_name}"
+                    with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+                        resp = client.get(raw_url, headers=headers)
+                        if resp.status_code == 200:
+                            text = resp.text
+                            if len(text) > 20000:
+                                text = text[:20000] + "\n\n... (已截断)"
+                            self._write_output(context, text[:5000])
+                            return {
+                                "action_type": "github_fetch", "repo": repo,
+                                "action": action, "path": readme_name,
+                                "content": text, "success": True,
+                            }
+
+                return {
+                    "action_type": "github_fetch", "repo": repo,
+                    "action": action, "content": "", "success": False,
+                    "error": "未找到 README 文件",
+                }
+
+            else:
+                return {
+                    "action_type": "github_fetch", "repo": repo,
+                    "action": action, "content": "", "success": False,
+                    "error": f"不支持的 github_action: {action}（可选: list_files, fetch_file, fetch_readme）",
+                }
+
+        except httpx.HTTPStatusError as e:
+            return {
+                "action_type": "github_fetch", "repo": repo,
+                "action": action, "content": "", "success": False,
+                "error": f"GitHub API 错误: {e.response.status_code} {e.response.reason_phrase}",
+            }
+        except Exception as e:
+            return {
+                "action_type": "github_fetch", "repo": repo,
+                "action": action, "content": "", "success": False,
+                "error": f"GitHub 操作失败: {e}",
+            }
 
     @staticmethod
     def _html_to_text(html: str) -> str:

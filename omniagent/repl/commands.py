@@ -955,6 +955,7 @@ def _cmd_tools(**kwargs: Any) -> str:
         ("refactor", "重构：重命名/清理导入/分析", "refactor_action, old_name, new_name"),
         ("diff_preview", "预览文件修改 diff", "file_path, old_text, new_text"),
         ("mcp_call", "调用 MCP 外部工具", "tool_name, tool_args"),
+        ("github_fetch", "GitHub 仓库操作（列出文件/获取内容/README）", "repo, github_action, github_path, branch"),
     ]
 
     lines = ["可用工具类型:\n"]
