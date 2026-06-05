@@ -78,8 +78,11 @@ class TestDetectIntent:
 
     def test_unknown_intent(self):
         assert detect_intent("你好") is None
-        assert detect_intent("今天天气怎么样") is None
         assert detect_intent("12345") is None
+
+    def test_query_intent(self):
+        assert detect_intent("今天天气怎么样") == "query"
+        assert detect_intent("查询今天黄金的价格") == "query"
 
 
 class TestAssessQuality:

@@ -543,7 +543,7 @@ class REPL:
 
     def _run_direct(self, user_input: str, model_ids: list[str]) -> None:
         """直接对话模式。自动检测工具需求并委派给 ReAct 引擎。"""
-        # 检测是否需要工具执行
+        # 检测是否需要工具执行（仅匹配明确的编程/文件/命令任务）
         if self._detect_tool_need(user_input):
             console.print("[cyan]🔧 检测到需要工具执行，自动切换到 ReAct 模式...[/cyan]")
             self._run_react_engine(user_input, model_ids)
@@ -560,15 +560,22 @@ class REPL:
                     response_text = self._blocking_response(model_id, messages)
                 self.status_bar.set_last_model(model_id)
 
-                # ── 响应后验证：检测 LLM 是否声称执行了文件操作 ──
-                if response_text and self._detect_file_claim(response_text):
-                    console.print()
-                    console.print("[cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，自动切换到 ReAct 模式重新执行...[/cyan]")
-                    # 移除 LLM 的幻觉回复，避免污染上下文
-                    self.ctx_mgr.trim_last_assistant()
-                    # 用 ReAct 重新执行
-                    self._run_react_engine(user_input, model_ids)
-                    return
+                if response_text:
+                    # ── 响应后验证 1：检测 LLM 是否声称执行了文件操作 ──
+                    if self._detect_file_claim(response_text):
+                        console.print()
+                        console.print("[cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，自动切换到 ReAct 模式重新执行...[/cyan]")
+                        self.ctx_mgr.trim_last_assistant()
+                        self._run_react_engine(user_input, model_ids)
+                        return
+
+                    # ── 响应后验证 2：检测 LLM 是否回复了拒绝性内容 ──
+                    if self._detect_denial(response_text):
+                        console.print()
+                        console.print("[cyan]🔧 LLM 表示无法完成任务，自动切换到 ReAct 模式重试...[/cyan]")
+                        self.ctx_mgr.trim_last_assistant()
+                        self._run_react_engine(user_input, model_ids)
+                        return
 
                 return
             except Exception as e:
@@ -744,6 +751,7 @@ class REPL:
         return detect_intent(text)
 
     # ── 工具需求检测 ──────────────────────────────────────────
+    # 只匹配明确的编程/文件/命令任务，不再枚举各种查询类型
     _TOOL_PATTERNS: list[re.Pattern[str]] = [
         # 文件写入/创建/保存
         re.compile(r"(?:写入|创建|保存|新建|生成|输出).{0,20}(?:文件|到|至|为)", re.I),
@@ -773,13 +781,6 @@ class REPL:
         # 网页抓取
         re.compile(r"(?:抓取|下载|获取|访问).{0,20}(?:网页|页面|url|网址)", re.I),
         re.compile(r"(?:fetch|download|scrape|crawl).{0,20}(?:web|page|url)", re.I),
-        # 天气查询
-        re.compile(r"(?:查询|查|看).{0,10}(?:天气|气温|温度|forecast)", re.I),
-        re.compile(r"(?:天气|气温|温度).{0,10}(?:怎么样|如何|查询|预报)", re.I),
-        re.compile(r"(?:weather|forecast|temperature).{0,15}", re.I),
-        re.compile(r"(?:穿什么|穿衣|穿衣服).{0,10}(?:合适|建议|好)", re.I),
-        re.compile(r"该穿什么", re.I),
-        re.compile(r"(?:多少度|几度|热不热|冷不冷)", re.I),
         # 文件路径模式（./xxx, src/xxx, C:\xxx, .py, .js 等）
         re.compile(r"(?:^|\s)(?:\./|\.\./|src/|tests?/|lib/|app/|dist/|build/)\S+", re.I),
         re.compile(r"(?:^|\s)[A-Z]:\\[\w\\/.]+", re.I),
@@ -799,7 +800,7 @@ class REPL:
 
     @classmethod
     def _detect_tool_need(cls, text: str) -> bool:
-        """检测用户输入是否需要工具执行。"""
+        """检测用户输入是否明确需要工具执行（仅匹配编程/文件/命令任务）。"""
         for pattern in cls._TOOL_PATTERNS:
             if pattern.search(text):
                 return True
@@ -813,11 +814,27 @@ class REPL:
         "文件已", "目录已", "文件夹已",
     ]
 
+    # LLM 拒绝性回复的关键词 — 表示它不知道怎么做，应该切换到 ReAct
+    _DENIAL_KEYWORDS: list[str] = [
+        "无法直接", "无法获取", "无法查询", "无法访问", "无法提供",
+        "不能直接", "不能获取", "不能查询", "不能访问",
+        "没有连接", "没有接入", "没有访问",
+        "不具备", "不支持直接",
+        "无法实时", "无法获取实时",
+        "I cannot", "I can't", "I'm unable",
+        "I don't have access", "I'm not able",
+    ]
+
     @classmethod
     def _detect_file_claim(cls, text: str) -> bool:
         """检测 LLM 回复中是否声称执行了文件操作。"""
         text_lower = text.lower()
         return any(kw in text_lower for kw in cls._FILE_CLAIM_KEYWORDS)
+
+    @classmethod
+    def _detect_denial(cls, text: str) -> bool:
+        """检测 LLM 是否回复了拒绝性内容（表示它无法完成任务）。"""
+        return any(kw in text for kw in cls._DENIAL_KEYWORDS)
 
     def _inject_project_context(self) -> None:
         """首次对话时注入项目上下文（类型、文件树、规则）。"""

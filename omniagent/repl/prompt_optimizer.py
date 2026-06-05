@@ -194,12 +194,14 @@ TEMPLATES: list[PromptTemplate] = [
     PromptTemplate(
         intent="query",
         trigger_patterns=[
-            r"(?:查询|查|看).{0,10}(?:天气|气温|温度|时间|日期|汇率|股价|新闻)",
+            r"(?:查询|查|看).{0,10}(?:天气|气温|温度|时间|日期|汇率|股价|新闻|黄金|金价|价格|行情)",
             r"(?:天气|气温|温度).{0,10}(?:怎么样|如何|多少|预报)",
+            r"(?:黄金|金价|价格|股价|汇率|行情).{0,10}(?:多少|查询|怎么样|如何|今日|今天)",
             r"(?:多少度|几度|热不热|冷不冷)",
             r"该穿什么",
             r"(?:穿什么|穿衣).{0,10}(?:合适|建议|好)",
-            r"(?:weather|forecast|temperature|time|date).{0,15}",
+            r"(?:weather|forecast|temperature|time|date|gold|price).{0,15}",
+            r"(?:今天|今日|现在).{0,6}(?:黄金|金价|价格)",
         ],
         template=(
             "## 查询需求\n{task}\n\n"
