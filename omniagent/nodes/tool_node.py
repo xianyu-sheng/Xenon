@@ -136,6 +136,9 @@ class ToolNode(BaseNode):
         branch: str = "main",
         # 安全参数
         security_enabled: bool = True,
+        # read_file 分段读取参数
+        start_line: int | None = None,
+        max_lines: int | None = None,
     ) -> None:
         super().__init__(node_id, output_slot=output_slot, default_next=default_next)
         self.action_type = action_type
@@ -169,6 +172,8 @@ class ToolNode(BaseNode):
         self.github_path = github_path
         self.branch = branch
         self.security_enabled = security_enabled
+        self._extra_start_line = start_line
+        self._extra_max_lines = max_lines
 
     # ── 参数规范化 ──────────────────────────────────────────
 
@@ -193,17 +198,33 @@ class ToolNode(BaseNode):
         "branch":         ["ref", "git_branch"],
     }
 
+    # ToolNode.__init__ 接受的所有合法参数名（不含 node_id，它是位置参数）
+    _VALID_PARAMS: set[str] = {
+        "action_type", "action", "file_path", "content", "output_slot",
+        "cwd", "timeout", "default_next", "encoding", "append",
+        "pattern", "max_depth", "search_pattern", "file_filter",
+        "git_command", "url", "old_text", "new_text",
+        "files", "edits", "symbol", "query",
+        "old_name", "new_name", "refactor_action",
+        "tool_name", "tool_args", "mcp_server",
+        "repo", "github_action", "github_path", "branch",
+        "security_enabled", "start_line", "max_lines",
+    }
+
     @classmethod
     def normalize_params(cls, params: dict, *, action_type: str = "") -> dict:
-        """将 LLM 常用的参数别名映射为 ToolNode 接受的标准参数名。
+        """将 LLM 常用的参数别名映射为 ToolNode 接受的标准参数名，
+        并过滤掉 ToolNode 不支持的未知参数（如 LLM 凭空发明的 start_line）。
 
         Args:
             params: LLM 返回的原始参数字典
             action_type: 工具类型（如 "list_files"），用于跳过冲突的别名
 
-        例: {"path": ".", "query": "foo"} → {"file_path": ".", "search_pattern": "foo"}
+        例: {"path": ".", "query": "foo", "start_line": 100} → {"file_path": ".", "search_pattern": "foo"}
         """
         result = dict(params)
+
+        # 1. 别名映射
         for std_name, aliases in cls._PARAM_ALIASES.items():
             if std_name in result:
                 continue  # 标准名已存在，不覆盖
@@ -211,7 +232,13 @@ class ToolNode(BaseNode):
                 if alias in result:
                     result[std_name] = result.pop(alias)
                     break
-        return result
+
+        # 2. 过滤未知参数（防止 ToolNode.__init__ 因未知 kwargs 崩溃）
+        filtered = {k: v for k, v in result.items() if k in cls._VALID_PARAMS}
+        dropped = set(result.keys()) - set(filtered.keys())
+        if dropped:
+            logger.warning(f"过滤未知参数: {dropped}")
+        return filtered
 
     # ── 安全验证 ──────────────────────────────────────────
 
@@ -358,6 +385,8 @@ class ToolNode(BaseNode):
                 shell_exec,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=self.timeout,
                 cwd=self.cwd,
             )
@@ -1041,7 +1070,7 @@ class ToolNode(BaseNode):
             }
 
     def _read_file(self, context: AgentContext) -> dict[str, Any]:
-        """读取文件内容。"""
+        """读取文件内容。支持通过 start_line/max_lines 分段读取。"""
         file_path = self._resolve_template(self.file_path or "", context)
 
         if not file_path:
@@ -1079,16 +1108,41 @@ class ToolNode(BaseNode):
             pass
 
         logger.info(f"[{self.id}] 读取文件: {path}")
-        content = path.read_text(encoding=self.encoding)
 
-        result = {
-            "action_type": "read_file",
-            "file_path": str(path),
-            "content": content,
-            "size": len(content),
-            "exists": True,
-            "success": True,
-        }
+        # 分段读取：start_line（从 1 开始）和 max_lines
+        start_line = getattr(self, '_extra_start_line', None)
+        max_lines = getattr(self, '_extra_max_lines', None)
+
+        if start_line is not None or max_lines is not None:
+            # 按行分段读取
+            all_lines = path.read_text(encoding=self.encoding).splitlines(keepends=True)
+            total_lines = len(all_lines)
+            s = max(1, int(start_line)) - 1 if start_line else 0  # 转为 0-based
+            e = s + int(max_lines) if max_lines else total_lines
+            e = min(e, total_lines)
+            content = "".join(all_lines[s:e])
+            result = {
+                "action_type": "read_file",
+                "file_path": str(path),
+                "content": content,
+                "total_lines": total_lines,
+                "from_line": s + 1,
+                "to_line": e,
+                "size": len(content),
+                "exists": True,
+                "success": True,
+            }
+        else:
+            content = path.read_text(encoding=self.encoding)
+            result = {
+                "action_type": "read_file",
+                "file_path": str(path),
+                "content": content,
+                "size": len(content),
+                "exists": True,
+                "success": True,
+            }
+
         self._write_output(context, content)
         return result
 
