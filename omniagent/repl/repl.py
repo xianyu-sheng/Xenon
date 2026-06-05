@@ -111,9 +111,15 @@ class REPL:
 
     @staticmethod
     def _default_system_prompt() -> str:
+        from datetime import datetime
+        now = datetime.now()
+        weekdays_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+        current_date = f"{now.year}年{now.month}月{now.day}日 {weekdays_cn[now.weekday()]}"
         return (
             "你是 OmniAgent-CLI 的 AI 编程助手。"
             "你可以帮助用户编写代码、调试问题、解释概念。"
+            f"当前日期: {current_date}。"
+            "当用户询问日期、时间等问题时，直接使用此信息回答，不要编造。"
             "请用中文回答，代码部分用英文。"
         )
 

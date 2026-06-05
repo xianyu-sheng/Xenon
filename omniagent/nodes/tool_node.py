@@ -402,6 +402,7 @@ class ToolNode(BaseNode):
             "mcp_call": self._mcp_call,
             "github_fetch": self._github_fetch,
             "weather": self._weather,
+            "datetime": self._datetime,
             "register_tool": self._register_tool,
         }
         handler = handlers.get(self.action_type)
@@ -1466,6 +1467,43 @@ class ToolNode(BaseNode):
             }
             self._write_output(context, f"天气查询失败: {e}")
             return result
+
+    def _datetime(self, context: AgentContext) -> dict[str, Any]:
+        """获取当前日期和时间信息。"""
+        from datetime import datetime
+        now = datetime.now()
+        weekdays_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+
+        date_str = f"{now.year}年{now.month}月{now.day}日"
+        time_str = now.strftime("%H:%M:%S")
+        weekday = weekdays_cn[now.weekday()]
+
+        content = (
+            f"📅 当前日期: {date_str} {weekday}\n"
+            f"🕐 当前时间: {time_str}\n"
+            f"📊 详细信息:\n"
+            f"  - 年: {now.year}\n"
+            f"  - 月: {now.month}\n"
+            f"  - 日: {now.day}\n"
+            f"  - 星期: {weekday}\n"
+            f"  - 时: {now.hour}\n"
+            f"  - 分: {now.minute}\n"
+            f"  - 秒: {now.second}"
+        )
+
+        result = {
+            "action_type": "datetime",
+            "success": True,
+            "content": content,
+            "date": date_str,
+            "time": time_str,
+            "weekday": weekday,
+            "year": now.year,
+            "month": now.month,
+            "day": now.day,
+        }
+        self._write_output(context, content)
+        return result
 
     def _github_fetch(self, context: AgentContext) -> dict[str, Any]:
         """GitHub 仓库操作：列出文件、获取文件内容、获取 README。

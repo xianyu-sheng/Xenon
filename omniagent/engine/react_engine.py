@@ -180,6 +180,11 @@ BUILTIN_TOOLS = {
         "description": "查询指定城市的实时天气信息，包括温度、湿度、风速、穿衣建议等。支持中文城市名（如 '北京'、'重庆'）和英文城市名（如 'Beijing'、'Chongqing'）。",
         "params": {"city": "城市名称，如 '北京'、'重庆'、'Shanghai'", "lang": "语言，zh 中文（默认）或 en 英文"},
     },
+    "datetime": {
+        "name": "datetime",
+        "description": "获取当前日期和时间信息，包括年月日、星期几、时分秒。当用户询问时间相关问题时使用此工具。",
+        "params": {},
+    },
     "register_tool": {
         "name": "register_tool",
         "description": "注册一个新的自定义工具，注册后可在后续对话中使用。支持两种模式：1) python_function: 传入 module.function 格式的 Python 函数路径，系统自动导入；2) command_template: 传入 shell 命令模板（用 {param} 表示参数占位符）。注册成功后工具立即可用。",
@@ -230,6 +235,11 @@ class ReActEngine:
             os_info = "Linux（使用 bash 命令）"
             shell_info = "bash"
 
+        from datetime import datetime
+        now = datetime.now()
+        weekdays_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+        current_datetime = f"{now.year}年{now.month}月{now.day}日 {weekdays_cn[now.weekday()]} {now.strftime('%H:%M:%S')}"
+
         env_info = f"""
 
 ## 运行环境
@@ -238,8 +248,11 @@ class ReActEngine:
 - Shell: {shell_info}
 - Python: {sys.version.split()[0]}
 - 工作目录: 通过命令 `pwd`（Linux/macOS）或 `Get-Location`（Windows）获取
+- 当前日期时间: {current_datetime}
 
-重要：根据操作系统使用正确的命令。Windows 下不要使用 ls, cat, mkdir -p, uname, which, grep 等 Linux 命令。
+重要：
+- 根据操作系统使用正确的命令。Windows 下不要使用 ls, cat, mkdir -p, uname, which, grep 等 Linux 命令。
+- 当用户询问日期、时间、星期几时，直接回答上面提供的当前日期时间，不要编造或猜测。
 """
         return REACT_SYSTEM_PROMPT.format(tools_desc=tools_desc) + env_info
 
