@@ -30,6 +30,8 @@ ENV/
 .coverage
 htmlcov/
 .mypy_cache/
+evals/reports/mock_report.md
+evals/reports/real_report*.md
 
 # OmniAgent 敏感文件（凭证存储在 ~/.omniagent/，不进仓库）
 .omniagent/

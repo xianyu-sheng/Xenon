@@ -1,0 +1,101 @@
+tasks:
+  - id: edit-python-function
+    category: file_edit
+    prompt: "Modify src/main.py so the greet function accepts a name argument and update tests."
+    expected_tools: ["read_file", "edit_file"]
+    success_criteria: "The function signature is updated and relevant tests pass."
+  - id: add-unit-test
+    category: file_edit
+    prompt: "Add pytest coverage for a utility function that handles empty input."
+    expected_tools: ["read_file", "write_file"]
+    success_criteria: "A focused test is added without changing unrelated code."
+  - id: refactor-duplicate-code
+    category: file_edit
+    prompt: "Find duplicated parsing logic and extract a small helper."
+    expected_tools: ["search_files", "read_file", "edit_file"]
+    success_criteria: "Duplication is reduced and behavior stays the same."
+  - id: update-readme-command
+    category: file_edit
+    prompt: "Update README usage instructions for a changed CLI flag."
+    expected_tools: ["read_file", "edit_file"]
+    success_criteria: "Documentation matches the CLI interface."
+  - id: code-search-entrypoint
+    category: code_search
+    prompt: "Find the CLI entrypoint and summarize how chat mode starts."
+    expected_tools: ["search_files", "read_file"]
+    success_criteria: "The correct entrypoint and start function are identified."
+  - id: code-search-tool-node
+    category: code_search
+    prompt: "Locate where shell commands are validated before execution."
+    expected_tools: ["search_files", "read_file"]
+    success_criteria: "The safety validation path is correctly explained."
+  - id: code-search-model-router
+    category: code_search
+    prompt: "Find where provider/model IDs are parsed and routed."
+    expected_tools: ["search_files", "read_file"]
+    success_criteria: "The model parsing and endpoint construction flow is described."
+  - id: code-search-context-injection
+    category: code_search
+    prompt: "Explain how project context is injected before the first chat."
+    expected_tools: ["search_files", "read_file"]
+    success_criteria: "ProjectContext detection and injection are identified."
+  - id: run-focused-tests
+    category: tool_call
+    prompt: "Run the callback tests and summarize any failures."
+    expected_tools: ["command"]
+    success_criteria: "The relevant pytest command is run and the failure summary is accurate."
+  - id: inspect-git-status
+    category: tool_call
+    prompt: "Check the current git status and list only files relevant to this task."
+    expected_tools: ["git"]
+    success_criteria: "The answer distinguishes tracked changes from unrelated untracked files."
+  - id: generate-diff-preview
+    category: tool_call
+    prompt: "Show a diff preview before applying a proposed file edit."
+    expected_tools: ["diff_preview"]
+    success_criteria: "The diff is shown and no edit is applied without confirmation."
+  - id: call-weather-tool
+    category: tool_call
+    prompt: "Use the weather tool to answer the current weather for Beijing."
+    expected_tools: ["weather"]
+    success_criteria: "The weather tool is called and the response is summarized."
+  - id: remember-user-preference
+    category: context_memory
+    prompt: "Remember that the user prefers concise Chinese summaries for final answers."
+    expected_tools: ["read_file", "write_file"]
+    success_criteria: "The preference is persisted or acknowledged for future context."
+  - id: use-project-rules
+    category: context_memory
+    prompt: "Apply .omniagent/rules.md instructions while editing a Python file."
+    expected_tools: ["read_file", "edit_file"]
+    success_criteria: "The edit follows the project rules."
+  - id: load-saved-session
+    category: context_memory
+    prompt: "Load a saved session and continue with the stored AgentContext."
+    expected_tools: ["read_file"]
+    success_criteria: "Session history and context variables are restored."
+  - id: compact-long-context
+    category: context_memory
+    prompt: "Compact a long conversation while preserving recent turns."
+    expected_tools: ["read_file", "write_file"]
+    success_criteria: "A concise summary is produced and recent messages remain available."
+  - id: revise-after-test-failure
+    category: multi_turn_revision
+    prompt: "After tests fail, inspect the error, revise the patch, and rerun the focused test."
+    expected_tools: ["command", "read_file", "edit_file"]
+    success_criteria: "The second attempt addresses the observed failure."
+  - id: revise-after-review
+    category: multi_turn_revision
+    prompt: "Use reviewer feedback to simplify a too-large abstraction."
+    expected_tools: ["read_file", "edit_file"]
+    success_criteria: "The revision reduces complexity while keeping behavior intact."
+  - id: handle-missing-api-key
+    category: multi_turn_revision
+    prompt: "Explain a model call failure caused by a missing API key and guide setup."
+    expected_tools: ["read_file"]
+    success_criteria: "The answer points to local credentials and setup commands."
+  - id: mcp-tool-flow
+    category: multi_turn_revision
+    prompt: "Add an MCP server, list tools, and explain how the agent can call one."
+    expected_tools: ["mcp_call", "read_file"]
+    success_criteria: "The MCP registry flow and tool invocation path are correctly described."

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="520" viewBox="0 0 980 520" role="img" aria-label="OmniAgent terminal demo">
+  <rect width="980" height="520" rx="18" fill="#111827"/>
+  <rect x="24" y="24" width="932" height="472" rx="14" fill="#0b1020" stroke="#334155"/>
+  <circle cx="54" cy="50" r="7" fill="#ef4444"/>
+  <circle cx="78" cy="50" r="7" fill="#f59e0b"/>
+  <circle cx="102" cy="50" r="7" fill="#22c55e"/>
+  <text x="128" y="56" fill="#94a3b8" font-family="Consolas, Menlo, monospace" font-size="16">omniagent -- local multi-model coding agent</text>
+  <text x="54" y="104" fill="#38bdf8" font-family="Consolas, Menlo, monospace" font-size="18">你好，欢迎来到闲余生的个人AI编程工具</text>
+  <text x="54" y="144" fill="#e5e7eb" font-family="Consolas, Menlo, monospace" font-size="17">OmniAgent v0.1.0  |  mode: react  |  model: deepseek-v4-pro</text>
+  <text x="54" y="190" fill="#67e8f9" font-family="Consolas, Menlo, monospace" font-size="17">You: 帮我检查 tests 失败原因并给出修复方案</text>
+  <text x="54" y="234" fill="#a7f3d0" font-family="Consolas, Menlo, monospace" font-size="16">Agent: injecting project context... detected Python package</text>
+  <text x="54" y="270" fill="#a7f3d0" font-family="Consolas, Menlo, monospace" font-size="16">Planner: inspect callbacks, run focused pytest, propose minimal patch</text>
+  <text x="54" y="306" fill="#fde68a" font-family="Consolas, Menlo, monospace" font-size="16">Tool: search_files(pattern="ConsoleCallback") -> 2 matches</text>
+  <text x="54" y="342" fill="#fde68a" font-family="Consolas, Menlo, monospace" font-size="16">Tool: read_file("tests/test_callbacks.py") -> captured expectations</text>
+  <text x="54" y="378" fill="#86efac" font-family="Consolas, Menlo, monospace" font-size="16">Reviewer: tests pass, diff is limited to callback behavior</text>
+  <text x="54" y="430" fill="#e5e7eb" font-family="Consolas, Menlo, monospace" font-size="17">Result: diagnosis, patch summary, and verification command ready.</text>
+</svg>

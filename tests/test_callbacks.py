@@ -97,12 +97,14 @@ class TestConsoleCallback:
         captured = capsys.readouterr()
         assert captured.out == ""  # 非 verbose 不输出 think
 
-    def test_act_always_shown(self, capsys):
+    def test_act_collected_non_verbose(self, capsys):
         cb = ConsoleCallback(verbose=False)
         cb.on_act("write_file", {"file_path": "a.py"})
         captured = capsys.readouterr()
-        assert "🔧" in captured.out
-        assert "write_file" in captured.out
+        assert captured.out == ""
+        panel = cb._panel
+        assert panel._current_step is not None
+        assert panel._current_step.action == "write_file"
 
     def test_observe_verbose(self, capsys):
         cb = ConsoleCallback(verbose=True)
@@ -116,22 +118,23 @@ class TestConsoleCallback:
         captured = capsys.readouterr()
         assert captured.out == ""
 
-    def test_step_shown(self, capsys):
+    def test_step_hidden_non_verbose(self, capsys):
         cb = ConsoleCallback()
         cb.on_step(1, 3, "创建文件")
         captured = capsys.readouterr()
-        assert "📋" in captured.out
-        assert "1/3" in captured.out
+        assert captured.out == ""
 
-    def test_review_shown(self, capsys):
+    def test_review_hidden_non_verbose(self, capsys):
         cb = ConsoleCallback()
         cb.on_review(8, True, "质量好")
         captured = capsys.readouterr()
-        assert "🔍" in captured.out
-        assert "8/10" in captured.out
+        assert captured.out == ""
 
-    def test_error_shown(self, capsys):
+    def test_error_collected_non_verbose(self, capsys):
         cb = ConsoleCallback()
         cb.on_error("出错了")
         captured = capsys.readouterr()
-        assert "❌" in captured.out
+        assert captured.out == ""
+        panel = cb.get_thinking_panel()
+        assert panel is not None
+        assert "出错了" in panel.errors
