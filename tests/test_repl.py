@@ -238,6 +238,37 @@ class TestModelRegistry:
             Path(path).unlink(missing_ok=True)
 
 
+# ── ProviderRegistry 测试 ────────────────────────────────
+
+class TestProviderRegistry:
+    def test_get_configured_providers_refreshes_deepseek_models(self, monkeypatch):
+        import omniagent.repl.provider_registry as provider_registry
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": [{"id": "deepseek-v4-pro"}, {"id": "deepseek-v4-flash"}]}
+
+        calls = []
+
+        def fake_get(url, headers, timeout):
+            calls.append((url, headers, timeout))
+            return FakeResponse()
+
+        monkeypatch.setattr(provider_registry, "load_credentials", lambda: {"deepseek": "sk-test"})
+        monkeypatch.setattr(provider_registry.httpx, "get", fake_get)
+
+        configured = provider_registry.get_configured_providers()
+        deepseek = next(p for p in configured if p.key == "deepseek")
+
+        assert deepseek.models == ["deepseek-v4-pro", "deepseek-v4-flash"]
+        assert calls[0][0] == "https://api.deepseek.com/models"
+        assert calls[0][1]["Accept"] == "application/json"
+        assert calls[0][1]["Authorization"] == "Bearer sk-test"
+
+
 # ── Command Dispatch 测试 ────────────────────────────────
 
 class TestCommands:

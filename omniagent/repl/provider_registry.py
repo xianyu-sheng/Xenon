@@ -7,13 +7,18 @@ Provider Registry — 预设厂商信息库。
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import httpx
 import yaml
 
 CREDENTIALS_PATH = Path.home() / ".omniagent" / "credentials.yaml"
+MODEL_LIST_TIMEOUT = 8.0
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -25,6 +30,7 @@ class ProviderInfo:
     env_key: str            # 环境变量名
     models: list[str]       # 该厂商下的模型列表（短名）
     api_key: str = ""       # 用户填入的 key
+    model_list_path: str = ""  # 支持 OpenAI 兼容 /models 时填入
 
 
 # ── 预设厂商 ──────────────────────────────────────────────
@@ -49,7 +55,8 @@ PROVIDERS: dict[str, ProviderInfo] = {
         key="deepseek",
         base_url="https://api.deepseek.com/v1",
         env_key="DEEPSEEK_API_KEY",
-        models=["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
+        models=["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
+        model_list_path="https://api.deepseek.com/models",
     ),
     "google": ProviderInfo(
         name="Google Gemini",
@@ -140,6 +147,37 @@ def find_model_id(short_name: str) -> str | None:
     return None
 
 
+def fetch_provider_models(provider: ProviderInfo, api_key: str) -> list[str]:
+    """从厂商模型列表接口实时获取模型短名；失败时返回空列表。"""
+    if not provider.model_list_path or not api_key:
+        return []
+
+    url = provider.model_list_path
+    if not url.startswith(("http://", "https://")):
+        url = f"{provider.base_url.rstrip('/')}/{url.lstrip('/')}"
+
+    try:
+        response = httpx.get(
+            url,
+            headers={"Accept": "application/json", "Authorization": f"Bearer {api_key}"},
+            timeout=MODEL_LIST_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as e:
+        logger.debug("获取 %s 模型列表失败，使用内置列表: %s", provider.key, e)
+        return []
+
+    models: list[str] = []
+    seen: set[str] = set()
+    for item in payload.get("data", []):
+        model = item.get("id") if isinstance(item, dict) else item
+        if isinstance(model, str) and model and model not in seen:
+            models.append(model)
+            seen.add(model)
+    return models
+
+
 # ── 凭证管理 ──────────────────────────────────────────────
 
 def load_credentials() -> dict[str, str]:
@@ -174,15 +212,21 @@ def remove_provider_key(provider_key: str) -> None:
     save_credentials(creds)
 
 
-def get_configured_providers() -> list[ProviderInfo]:
+def get_configured_providers(*, refresh_models: bool = True) -> list[ProviderInfo]:
     """获取已配置 API Key 的厂商列表。"""
     creds = load_credentials()
     configured = []
     for key, info in PROVIDERS.items():
         if key in creds and creds[key]:
+            models = info.models
+            if refresh_models:
+                live_models = fetch_provider_models(info, creds[key])
+                if live_models:
+                    models = live_models
             info_copy = ProviderInfo(
                 name=info.name, key=info.key, base_url=info.base_url,
-                env_key=info.env_key, models=info.models, api_key=creds[key],
+                env_key=info.env_key, models=models, api_key=creds[key],
+                model_list_path=info.model_list_path,
             )
             configured.append(info_copy)
     return configured

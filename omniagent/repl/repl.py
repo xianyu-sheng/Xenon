@@ -258,6 +258,7 @@ class REPL:
   [dim]Ctrl+C 退出  ·  Shift+Enter 换行  ·  Enter 发送[/dim]"""
 
         console.print()
+        console.print("[bold green]你好，欢迎来到闲余生的个人AI编程工具[/bold green]")
         console.print(Panel(content, border_style="cyan", padding=(0, 2)))
         console.print()
 
