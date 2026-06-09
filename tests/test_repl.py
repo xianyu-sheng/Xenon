@@ -241,6 +241,39 @@ class TestModelRegistry:
 # ── ProviderRegistry 测试 ────────────────────────────────
 
 class TestProviderRegistry:
+    def test_get_configured_providers_refreshes_openai_models(self, monkeypatch):
+        import omniagent.repl.provider_registry as provider_registry
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "data": [
+                        {"id": "gpt-4o", "created": 1715367049},
+                        {"id": "gpt-5", "created": 1750000000},
+                        {"id": "gpt-5.5", "created": 1780000000},
+                    ]
+                }
+
+        calls = []
+
+        def fake_get(url, headers, timeout):
+            calls.append((url, headers, timeout))
+            return FakeResponse()
+
+        monkeypatch.setattr(provider_registry, "load_credentials", lambda: {"openai": "sk-test"})
+        monkeypatch.setattr(provider_registry.httpx, "get", fake_get)
+
+        configured = provider_registry.get_configured_providers()
+        openai = next(p for p in configured if p.key == "openai")
+
+        assert openai.models == ["gpt-5.5", "gpt-5", "gpt-4o"]
+        assert calls[0][0] == "https://api.openai.com/v1/models"
+        assert calls[0][1]["Accept"] == "application/json"
+        assert calls[0][1]["Authorization"] == "Bearer sk-test"
+
     def test_get_configured_providers_refreshes_deepseek_models(self, monkeypatch):
         import omniagent.repl.provider_registry as provider_registry
 
@@ -267,6 +300,72 @@ class TestProviderRegistry:
         assert calls[0][0] == "https://api.deepseek.com/models"
         assert calls[0][1]["Accept"] == "application/json"
         assert calls[0][1]["Authorization"] == "Bearer sk-test"
+
+    def test_refresh_failure_does_not_show_stale_builtin_models(self, monkeypatch):
+        import omniagent.repl.provider_registry as provider_registry
+
+        def fake_get(url, headers, timeout):
+            raise provider_registry.httpx.ConnectError("network down")
+
+        monkeypatch.setattr(provider_registry, "load_credentials", lambda: {"openai": "sk-test"})
+        monkeypatch.setattr(provider_registry.httpx, "get", fake_get)
+
+        configured = provider_registry.get_configured_providers()
+        openai = next(p for p in configured if p.key == "openai")
+
+        assert openai.models == []
+
+    def test_fetch_provider_models_uses_anthropic_headers_and_pagination(self, monkeypatch):
+        import omniagent.repl.provider_registry as provider_registry
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self.payload
+
+        payloads = [
+            {
+                "data": [
+                    {"id": "claude-4.5-sonnet-20260601", "created_at": "2026-06-01T00:00:00Z"},
+                    {"id": "claude-sonnet-4-20250514", "created_at": "2025-05-14T00:00:00Z"},
+                ],
+                "has_more": True,
+                "last_id": "claude-sonnet-4-20250514",
+            },
+            {
+                "data": [
+                    {"id": "claude-3-5-sonnet-20241022", "created_at": "2024-10-22T00:00:00Z"},
+                ],
+                "has_more": False,
+            },
+        ]
+        calls = []
+
+        def fake_get(url, headers, timeout):
+            calls.append((url, headers, timeout))
+            return FakeResponse(payloads[len(calls) - 1])
+
+        monkeypatch.setattr(provider_registry.httpx, "get", fake_get)
+
+        models = provider_registry.fetch_provider_models(
+            provider_registry.PROVIDERS["anthropic"],
+            "sk-ant-test",
+        )
+
+        assert models == [
+            "claude-4.5-sonnet-20260601",
+            "claude-sonnet-4-20250514",
+            "claude-3-5-sonnet-20241022",
+        ]
+        assert calls[0][0] == "https://api.anthropic.com/v1/models"
+        assert calls[1][0] == "https://api.anthropic.com/v1/models?after_id=claude-sonnet-4-20250514"
+        assert calls[0][1]["x-api-key"] == "sk-ant-test"
+        assert calls[0][1]["anthropic-version"] == "2023-06-01"
 
 
 # ── Command Dispatch 测试 ────────────────────────────────
@@ -305,6 +404,27 @@ class TestCommands:
         )
         # 结果可能是提示配置，也可能是交互菜单的输出
         assert isinstance(result, str)
+
+    def test_set_model_no_live_models_returns_clear_error(self, monkeypatch):
+        from omniagent.repl.commands import dispatch_command
+        import omniagent.repl.provider_registry as provider_registry
+        from omniagent.repl.provider_registry import ProviderInfo
+
+        reg = ModelRegistry()
+        ctx_mgr = ContextManager()
+        provider = ProviderInfo(
+            name="OpenAI",
+            key="openai",
+            base_url="https://api.openai.com/v1",
+            env_key="OPENAI_API_KEY",
+            models=[],
+            api_key="sk-test",
+        )
+        monkeypatch.setattr(provider_registry, "get_configured_providers", lambda: [provider])
+
+        result = dispatch_command("/set_model", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+
+        assert "未能实时获取任何模型" in result
 
     def test_models_command_empty(self):
         from omniagent.repl.commands import dispatch_command

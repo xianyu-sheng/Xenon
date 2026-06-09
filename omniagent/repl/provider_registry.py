@@ -1,16 +1,18 @@
 """
 Provider Registry — 预设厂商信息库。
 
-所有主流大模型厂商的 base_url、模型列表、定价信息均已预设，
-用户只需填入 API Key 即可使用。
+所有主流大模型厂商的 base_url 已预设。配置 API Key 后，模型列表会优先
+从厂商接口实时拉取；内置列表只作为离线兜底。
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 import yaml
@@ -28,9 +30,9 @@ class ProviderInfo:
     key: str                # 内部标识
     base_url: str           # API 地址
     env_key: str            # 环境变量名
-    models: list[str]       # 该厂商下的模型列表（短名）
+    models: list[str]       # 离线兜底模型列表（短名）
     api_key: str = ""       # 用户填入的 key
-    model_list_path: str = ""  # 支持 OpenAI 兼容 /models 时填入
+    model_list_path: str = "models"  # 支持 OpenAI 兼容 /models 时填入
 
 
 # ── 预设厂商 ──────────────────────────────────────────────
@@ -49,6 +51,7 @@ PROVIDERS: dict[str, ProviderInfo] = {
         base_url="https://api.anthropic.com",
         env_key="ANTHROPIC_API_KEY",
         models=["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
+        model_list_path="https://api.anthropic.com/v1/models",
     ),
     "deepseek": ProviderInfo(
         name="DeepSeek",
@@ -147,34 +150,119 @@ def find_model_id(short_name: str) -> str | None:
     return None
 
 
+def _model_list_url(provider: ProviderInfo, *, after_id: str | None = None) -> str:
+    """构造厂商模型列表接口 URL。"""
+    path = provider.model_list_path or "models"
+    if path.startswith(("http://", "https://")):
+        url = path
+    else:
+        url = f"{provider.base_url.rstrip('/')}/{path.lstrip('/')}"
+
+    if after_id:
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}{urlencode({'after_id': after_id})}"
+    return url
+
+
+def _model_list_headers(provider: ProviderInfo, api_key: str) -> dict[str, str]:
+    """返回模型列表接口所需认证头。"""
+    headers = {"Accept": "application/json"}
+    if provider.key == "anthropic":
+        headers["x-api-key"] = api_key
+        headers["anthropic-version"] = "2023-06-01"
+    else:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def _created_score(item: Any) -> float:
+    """返回模型创建时间分数，用于把厂商最新模型排在前面。"""
+    if not isinstance(item, dict):
+        return 0.0
+
+    created = item.get("created")
+    if isinstance(created, int | float):
+        return float(created)
+
+    created_at = item.get("created_at")
+    if isinstance(created_at, str):
+        try:
+            normalized = created_at.replace("Z", "+00:00")
+            return datetime.fromisoformat(normalized).timestamp()
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _extract_model_items(payload: Any) -> list[Any]:
+    """兼容 OpenAI/Anthropic/OpenAI-compatible 的模型列表响应。"""
+    if isinstance(payload, dict):
+        for key in ("data", "models"):
+            items = payload.get(key)
+            if isinstance(items, list):
+                return items
+    if isinstance(payload, list):
+        return payload
+    return []
+
+
+def _model_id_from_item(item: Any) -> str | None:
+    if isinstance(item, str):
+        return item
+    if not isinstance(item, dict):
+        return None
+    for key in ("id", "name", "model"):
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _parse_model_payload(payload: Any) -> list[str]:
+    """从接口响应中解析并去重模型名。"""
+    model_rows: list[tuple[str, float, int]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(_extract_model_items(payload)):
+        model = _model_id_from_item(item)
+        if model and model not in seen:
+            model_rows.append((model, _created_score(item), index))
+            seen.add(model)
+
+    if any(created for _, created, _ in model_rows):
+        model_rows.sort(key=lambda row: (-row[1], row[2], row[0]))
+
+    return [model for model, _, _ in model_rows]
+
+
 def fetch_provider_models(provider: ProviderInfo, api_key: str) -> list[str]:
     """从厂商模型列表接口实时获取模型短名；失败时返回空列表。"""
-    if not provider.model_list_path or not api_key:
-        return []
-
-    url = provider.model_list_path
-    if not url.startswith(("http://", "https://")):
-        url = f"{provider.base_url.rstrip('/')}/{url.lstrip('/')}"
-
-    try:
-        response = httpx.get(
-            url,
-            headers={"Accept": "application/json", "Authorization": f"Bearer {api_key}"},
-            timeout=MODEL_LIST_TIMEOUT,
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except Exception as e:
-        logger.debug("获取 %s 模型列表失败，使用内置列表: %s", provider.key, e)
+    if not api_key:
         return []
 
     models: list[str] = []
     seen: set[str] = set()
-    for item in payload.get("data", []):
-        model = item.get("id") if isinstance(item, dict) else item
-        if isinstance(model, str) and model and model not in seen:
-            models.append(model)
-            seen.add(model)
+    after_id: str | None = None
+    try:
+        while True:
+            response = httpx.get(
+                _model_list_url(provider, after_id=after_id),
+                headers=_model_list_headers(provider, api_key),
+                timeout=MODEL_LIST_TIMEOUT,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            for model in _parse_model_payload(payload):
+                if model not in seen:
+                    models.append(model)
+                    seen.add(model)
+
+            if not (isinstance(payload, dict) and payload.get("has_more") and payload.get("last_id")):
+                break
+            after_id = str(payload["last_id"])
+    except Exception as e:
+        logger.debug("获取 %s 实时模型列表失败: %s", provider.key, e)
+        return []
+
     return models
 
 
@@ -213,16 +301,19 @@ def remove_provider_key(provider_key: str) -> None:
 
 
 def get_configured_providers(*, refresh_models: bool = True) -> list[ProviderInfo]:
-    """获取已配置 API Key 的厂商列表。"""
+    """获取已配置 API Key 的厂商列表。
+
+    refresh_models=True 时只使用厂商实时接口返回的模型，避免把内置兜底列表
+    误展示为最新模型；refresh_models=False 时才返回内置示例列表。
+    """
     creds = load_credentials()
     configured = []
     for key, info in PROVIDERS.items():
         if key in creds and creds[key]:
-            models = info.models
             if refresh_models:
-                live_models = fetch_provider_models(info, creds[key])
-                if live_models:
-                    models = live_models
+                models = fetch_provider_models(info, creds[key])
+            else:
+                models = info.models
             info_copy = ProviderInfo(
                 name=info.name, key=info.key, base_url=info.base_url,
                 env_key=info.env_key, models=models, api_key=creds[key],

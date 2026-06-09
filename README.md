@@ -63,7 +63,7 @@ flowchart LR
 | Command | Purpose |
 | --- | --- |
 | `/setup` | Configure provider API keys, default models, and modes. |
-| `/set_model` | Register or interactively select a model. DeepSeek model options can refresh from the provider API. |
+| `/set_model` | Register or interactively select a model. Configured providers load model options from their live API; built-in examples are used only when refresh is disabled. |
 | `/mode` | Switch between direct, react, plan-execute, reflection, and combined modes. |
 | `/project` | Inspect detected project type, file tree, and project rules. |
 | `/edit <file> <instruction>` | Ask the LLM to edit a file and review the diff before applying. |

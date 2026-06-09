@@ -147,6 +147,9 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
     all_models: list[tuple[str, str, str]] = []  # (model_id, short_name, provider_key)
     idx = 1
     for p in configured:
+        if not p.models:
+            table.add_row("-", p.name, "实时获取失败", "请检查 API Key / 网络 / base_url")
+            continue
         for m in p.models:
             model_id = f"{p.key}/{m}"
             hint = _model_hint_local(m)
@@ -158,6 +161,9 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
     console = kwargs.get("console") or _Console()
     console.print(table)
     console.print()
+
+    if not all_models:
+        return "❌ 未能实时获取任何模型，请检查 API Key、网络或厂商 base_url"
 
     try:
         choice = _IntPrompt.ask(

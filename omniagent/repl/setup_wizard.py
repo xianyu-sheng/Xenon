@@ -182,6 +182,9 @@ def _select_model(registry: ModelRegistry) -> None:
 
     idx = 1
     for p in configured:
+        if not p.models:
+            table.add_row("-", p.name, "实时获取失败", "请检查 API Key / 网络 / base_url")
+            continue
         for m in p.models:
             model_id = f"{p.key}/{m}"
             hint = _model_hint(m)
@@ -191,6 +194,10 @@ def _select_model(registry: ModelRegistry) -> None:
 
     console.print(table)
     console.print()
+
+    if not all_models:
+        console.print("[yellow]未能实时获取任何模型，请检查 API Key、网络或厂商 base_url[/yellow]\n")
+        return
 
     choice = IntPrompt.ask(
         "输入模型编号（可选择多个，用空格分隔，如 1 3 5）",
