@@ -30,6 +30,8 @@ Inside the CLI:
 You: /setup
 You: /set_model
 You: /mode react
+You: !python -m pytest tests -q
+You: /new_terminal
 You: 帮我检查 tests 失败原因并给出修复方案
 ```
 
@@ -70,6 +72,14 @@ flowchart LR
 | `/mcp` | Add/list/remove MCP servers and inspect external tools. |
 | `/memory` | Manage cross-session memory. |
 | `/compact` | Summarize long context to control token usage. |
+| `!<command>` | Run a shell command directly from the OmniAgent input line with the existing safety checks. |
+| `/shell <command>` | Slash-command form of direct shell execution. |
+| `/new_terminal [cwd]` | Open an observable child terminal. On Windows Terminal it uses a split pane; otherwise it opens a new shell window. |
+| `/terminal_status [lines]` | Read the latest child-terminal transcript output. |
+| `/terminal_quote [lines]` | Quote recent child-terminal output into the current OmniAgent context for follow-up questions. |
+| `/open <file[:line]>` | Open a local file in the configured editor, VS Code, or the OS default app. |
+
+The REPL input uses `prompt_toolkit` when available, so Left/Right/Home/End can move inside the current command and edit text in the middle. `Shift+Enter` inserts a new line; `Enter` sends.
 
 ## Eval
 

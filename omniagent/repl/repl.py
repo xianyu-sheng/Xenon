@@ -28,9 +28,11 @@ from rich.rule import Rule
 from omniagent.engine.context import AgentContext
 from omniagent.repl.commands import COMMANDS, dispatch_command
 from omniagent.repl.context_manager import ContextManager
+from omniagent.repl.file_links import linkify_file_paths
 from omniagent.repl.model_registry import ModelRegistry
 from omniagent.repl.project_context import ProjectContext
 from omniagent.repl.prompt_optimizer import get_intent_display, optimize_prompt
+from omniagent.repl.shell_runner import format_shell_result, run_shell_command
 from omniagent.repl.status_bar import StatusBar
 
 # ── 自定义主题 ────────────────────────────────────────────
@@ -82,6 +84,7 @@ class REPL:
 
         # 状态栏
         self.status_bar = StatusBar(console, self.ctx_mgr, self.registry)
+        self._prompt_session = None
 
         # 会话状态，供命令处理器共享
         self._session_state: dict[str, Any] = {
@@ -170,6 +173,11 @@ class REPL:
                     break
                 continue
 
+            # 直接运行终端命令：!python -V / !pytest tests -q
+            if self._is_shell_input(user_input):
+                self._handle_shell_input(self._extract_shell_command(user_input))
+                continue
+
             # 多轮对话（带 prompt 优化）
             self._handle_chat(user_input)
 
@@ -238,6 +246,8 @@ class REPL:
             "输入 [bold cyan]/mode[/bold cyan] 切换思考范式（direct/react/plan-execute）",
             "输入 [bold cyan]/setup[/bold cyan] 运行首次配置向导",
             "按 [bold cyan]Shift+Enter[/bold cyan] 可以输入多行内容",
+            "输入 [bold cyan]!pytest tests -q[/bold cyan] 可直接运行终端命令",
+            "输入 [bold cyan]/new_terminal[/bold cyan] 打开可观测子终端",
             "输入 [bold cyan]/verbose[/bold cyan] 开启详细日志模式",
             "输入 [bold cyan]/tools[/bold cyan] 查看所有可用工具",
             "输入 [bold cyan]/mcp[/bold cyan] 管理 MCP 扩展服务器",
@@ -262,6 +272,78 @@ class REPL:
         console.print(Panel(content, border_style="cyan", padding=(0, 2)))
         console.print()
 
+    @staticmethod
+    def _is_shell_input(text: str) -> bool:
+        """Return True when the input should be treated as a shell command."""
+
+        stripped = text.strip()
+        return len(stripped) > 1 and stripped.startswith("!") and not stripped.startswith("!=")
+
+    @staticmethod
+    def _extract_shell_command(text: str) -> str:
+        return text.strip()[1:].strip()
+
+    def _handle_shell_input(self, command: str) -> None:
+        """Run a shell command from the main OmniAgent input line."""
+
+        result = run_shell_command(command, context=self.agent_context)
+        rendered = linkify_file_paths(format_shell_result(result))
+        self._session_state["_last_shell_result"] = result
+        self.agent_context.set("_last_shell_command", result.command)
+        self.agent_context.set("_last_shell_output", result.combined_output)
+        self.ctx_mgr.add_user_message(f"[shell]\n$ {result.command}")
+        self.ctx_mgr.add_assistant_message(
+            f"Shell command {'succeeded' if result.success else 'failed'}.\n"
+            f"Exit code: {result.returncode if result.returncode is not None else '-'}\n"
+            f"{result.combined_output}"
+        )
+        border = "green" if result.success else "red"
+        console.print(Panel(rendered, title="[command]shell[/command]", border_style=border))
+
+    def _read_input_prompt_toolkit(self) -> str:
+        """Read input with prompt_toolkit for robust cursor movement and editing."""
+
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.history import InMemoryHistory
+        from prompt_toolkit.styles import Style
+
+        if self._prompt_session is None:
+            self._prompt_session = PromptSession(
+                history=InMemoryHistory(),
+                key_bindings=self._prompt_key_bindings(),
+                multiline=True,
+                mouse_support=True,
+                style=Style.from_dict({"prompt": "bold cyan"}),
+            )
+
+        return self._prompt_session.prompt([("class:prompt", "You"), ("", ": ")]).strip()
+
+    @staticmethod
+    def _prompt_key_bindings():
+        """Prompt key bindings: Enter submits, Shift+Enter inserts a new line."""
+
+        from prompt_toolkit.key_binding import KeyBindings
+
+        kb = KeyBindings()
+
+        @kb.add("enter")
+        def _(event):
+            event.current_buffer.validate_and_handle()
+
+        def insert_newline(event):
+            event.current_buffer.insert_text("\n")
+
+        try:
+            kb.add("s-enter")(insert_newline)
+        except ValueError:
+            pass
+
+        @kb.add("escape", "enter")
+        def _(event):
+            event.current_buffer.insert_text("\n")
+
+        return kb
+
     def _read_input(self) -> str:
         """读取用户输入。Shift+Enter 换行，Enter 发送。
 
@@ -270,6 +352,11 @@ class REPL:
         POSIX:   input() 回退（不支持 Shift+Enter）。
         """
         import sys
+
+        try:
+            return self._read_input_prompt_toolkit()
+        except ImportError:
+            pass
 
         if sys.platform != "win32":
             try:

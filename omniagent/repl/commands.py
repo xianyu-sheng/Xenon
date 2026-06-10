@@ -508,6 +508,132 @@ def _cmd_run(*, args: str, session_state: dict, registry: ModelRegistry, **kwarg
         return f"❌ 工作流执行失败: {e}"
 
 
+# /shell /open /new_terminal ───────────────────────────────
+
+register_command(
+    "/shell",
+    "运行终端命令（也可直接输入 !<command>）",
+    "/shell <command>\n示例: /shell python -m pytest tests -q",
+)
+
+@_handler("/shell")
+def _cmd_shell(*, args: str, ctx_mgr: ContextManager, session_state: dict[str, Any], **kwargs: Any) -> str:
+    from omniagent.repl.file_links import linkify_file_paths
+    from omniagent.repl.shell_runner import format_shell_result, run_shell_command
+
+    command = args.strip()
+    if not command:
+        return "用法: /shell <command>\n也可以直接输入 !<command>"
+
+    agent_ctx = session_state.get("agent_context")
+    result = run_shell_command(command, context=agent_ctx)
+    session_state["_last_shell_result"] = result
+    if agent_ctx:
+        agent_ctx.set("_last_shell_command", result.command)
+        agent_ctx.set("_last_shell_output", result.combined_output)
+    ctx_mgr.add_user_message(f"[shell]\n$ {result.command}")
+    ctx_mgr.add_assistant_message(
+        f"Shell command {'succeeded' if result.success else 'failed'}.\n"
+        f"Exit code: {result.returncode if result.returncode is not None else '-'}\n"
+        f"{result.combined_output}"
+    )
+    return linkify_file_paths(format_shell_result(result))
+
+
+register_command(
+    "/open",
+    "打开文件路径（支持 path:line，点击链接不可用时的兜底）",
+    "/open <file_path[:line[:column]]>",
+)
+
+@_handler("/open")
+def _cmd_open(*, args: str, **kwargs: Any) -> str:
+    from omniagent.repl.file_links import format_file_link, open_file_target
+
+    target = args.strip()
+    if not target:
+        return "用法: /open <file_path[:line[:column]]>"
+    try:
+        result = open_file_target(target)
+    except Exception as e:
+        return f"❌ 打开失败: {e}"
+    link = format_file_link(result.target)
+    cmd = f"\n命令: {' '.join(result.command)}" if result.command else ""
+    return f"✅ {result.message}: {link}{cmd}"
+
+
+register_command(
+    "/new_terminal",
+    "打开可观测子终端（Windows Terminal 优先分屏）",
+    "/new_terminal [cwd]",
+)
+
+@_handler("/new_terminal")
+def _cmd_new_terminal(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> str:
+    bridge = _get_terminal_bridge(session_state)
+    cwd = args.strip() or None
+    result = bridge.open_terminal(cwd=cwd)
+    if result.session:
+        session_state["_terminal_session"] = result.session
+    return ("✅ " if result.success else "❌ ") + result.message
+
+
+register_command(
+    "/terminal_status",
+    "查看子终端最近输出",
+    "/terminal_status [lines]",
+)
+
+@_handler("/terminal_status")
+def _cmd_terminal_status(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> str:
+    bridge = _get_terminal_bridge(session_state)
+    return bridge.status(lines=_parse_line_count(args, default=40))
+
+
+register_command(
+    "/terminal_quote",
+    "把子终端最近输出引用到当前对话上下文",
+    "/terminal_quote [lines]",
+)
+
+@_handler("/terminal_quote")
+def _cmd_terminal_quote(
+    *, args: str, ctx_mgr: ContextManager, session_state: dict[str, Any], **kwargs: Any,
+) -> str:
+    bridge = _get_terminal_bridge(session_state)
+    lines = _parse_line_count(args, default=80)
+    tail = bridge.read_tail(lines=lines)
+    if tail.startswith("暂无子终端") or tail.startswith("子终端日志不存在"):
+        return tail
+
+    quoted = f"[子终端引用 - 最近 {lines} 行]\n{tail}"
+    ctx_mgr.add_user_message(quoted)
+    agent_ctx = session_state.get("agent_context")
+    if agent_ctx:
+        agent_ctx.set("_last_terminal_quote", tail)
+    return f"✅ 已引用子终端最近 {lines} 行到上下文。\n\n{tail}"
+
+
+def _get_terminal_bridge(session_state: dict[str, Any]):
+    from omniagent.repl.terminal_bridge import TerminalBridge
+
+    bridge = session_state.get("_terminal_bridge")
+    if bridge is None:
+        bridge = TerminalBridge()
+        session_state["_terminal_bridge"] = bridge
+    return bridge
+
+
+def _parse_line_count(args: str, *, default: int) -> int:
+    text = args.strip()
+    if not text:
+        return default
+    try:
+        return max(1, min(500, int(text)))
+    except ValueError:
+        return default
+
+
 # /ask ─────────────────────────────────────────────────────
 
 register_command(
@@ -1562,6 +1688,8 @@ register_command("/project", "查看/刷新项目上下文", "/project [refresh]
 
 @_handler("/project")
 def _cmd_project(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> str:
+    from omniagent.repl.file_links import linkify_file_paths
+
     repl = session_state.get("_repl")
     if not repl:
         return "❌ 无法访问 REPL 实例。"
@@ -1585,7 +1713,7 @@ def _cmd_project(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> 
         if len(pc.file_tree.splitlines()) > 30:
             tree_preview += f"\n... (共 {len(pc.file_tree.splitlines())} 项)"
 
-    return f"{summary}{tree_preview}"
+    return linkify_file_paths(f"{summary}{tree_preview}")
 
 
 # /edit ─────────────────────────────────────────────────────
@@ -1595,6 +1723,7 @@ register_command("/edit", "编辑代码文件（支持 LLM 辅助）", "/edit <f
 @_handler("/edit")
 def _cmd_edit(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
     from omniagent.repl.code_editor import CodeEditor
+    from omniagent.repl.file_links import format_file_link
 
     parts = args.strip().split(maxsplit=1)
     if not parts:
@@ -1608,7 +1737,7 @@ def _cmd_edit(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
             content, line_count = CodeEditor.read_file(file_path)
             from rich.syntax import Syntax
             ext = Path(file_path).suffix.lstrip(".")
-            console.print(f"\n[bold]{file_path}[/bold] ({line_count} 行)\n")
+            console.print(f"\n[bold]{format_file_link(file_path)}[/bold] ({line_count} 行)\n")
             console.print(Syntax(content, ext or "text", theme="monokai", line_numbers=False))
             return ""
         except FileNotFoundError as e:
