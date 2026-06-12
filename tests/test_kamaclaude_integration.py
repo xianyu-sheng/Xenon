@@ -818,7 +818,7 @@ else:
     print("\n  🎉 ALL TESTS PASSED — KamaClaude fusion verified!")
 
 
-def test_kamaclaude_integration_report() -> None:
+def test_kamaclaude_integration_passes() -> None:
     assert FAIL == 0
 
 
