@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import re
 import sys
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -198,7 +199,7 @@ class REPL:
                 if p.models:
                     model_id = f"{p.key}/{p.models[0]}"
                     alias = p.models[0].replace(".", "-")
-                    self.registry.add_model(model_id, alias)
+                    self.registry.add_model(model_id, alias, base_url=p.base_url)
                     if "planner" not in self.registry.role_priority:
                         self.registry.role_priority["planner"] = []
                     self.registry.role_priority["planner"].append(alias)
@@ -313,20 +314,27 @@ class REPL:
                 key_bindings=self._prompt_key_bindings(),
                 multiline=True,
                 mouse_support=True,
+                prompt_continuation=[("class:prompt", "..."), ("", " ")],
+                wrap_lines=True,
                 style=Style.from_dict({"prompt": "bold cyan"}),
             )
 
-        return self._prompt_session.prompt([("class:prompt", "You"), ("", ": ")]).strip()
+        return self._prompt_session.prompt([("class:prompt", "You"), ("", ": ")]).strip("\r\n")
 
     @staticmethod
     def _prompt_key_bindings():
         """Prompt key bindings: Enter submits, Shift+Enter inserts a new line."""
 
+        from prompt_toolkit.filters import in_paste_mode
         from prompt_toolkit.key_binding import KeyBindings
 
         kb = KeyBindings()
 
-        @kb.add("enter")
+        @kb.add("enter", filter=in_paste_mode)
+        def _(event):
+            event.current_buffer.insert_text("\n")
+
+        @kb.add("enter", filter=~in_paste_mode)
         def _(event):
             event.current_buffer.validate_and_handle()
 
@@ -343,6 +351,26 @@ class REPL:
             event.current_buffer.insert_text("\n")
 
         return kb
+
+    @staticmethod
+    def _char_display_width(ch: str) -> int:
+        """Return the terminal column width for one character."""
+
+        import unicodedata
+
+        if not ch:
+            return 0
+        if ch == "\t":
+            return 4
+        if unicodedata.combining(ch):
+            return 0
+        return 2 if unicodedata.east_asian_width(ch) in {"F", "W"} else 1
+
+    @classmethod
+    def _text_display_width(cls, text: str) -> int:
+        """Return terminal column width, counting CJK full-width chars as two."""
+
+        return sum(cls._char_display_width(ch) for ch in text)
 
     def _read_input(self) -> str:
         """读取用户输入。Shift+Enter 换行，Enter 发送。
@@ -366,73 +394,33 @@ class REPL:
 
         # ── Windows: 逐字符读取 ──
         import ctypes
-        import ctypes.wintypes as wt
         import msvcrt
 
         VK_SHIFT = 0x10
         user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
 
         GetAsyncKeyState = user32.GetAsyncKeyState
         GetAsyncKeyState.argtypes = [ctypes.c_int]
         GetAsyncKeyState.restype = ctypes.c_short
 
-        # Console API 用于可靠地删除字符
-        STD_OUTPUT_HANDLE = -11
-        h_stdout = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
-
-        class COORD(ctypes.Structure):
-            _fields_ = [("X", wt.SHORT), ("Y", wt.SHORT)]
-
-        class SMALL_RECT(ctypes.Structure):
-            _fields_ = [("Left", wt.SHORT), ("Top", wt.SHORT), ("Right", wt.SHORT), ("Bottom", wt.SHORT)]
-
-        class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
-            _fields_ = [
-                ("dwSize", COORD),
-                ("dwCursorPosition", COORD),
-                ("wAttributes", wt.WORD),
-                ("srWindow", SMALL_RECT),
-                ("dwMaximumWindowSize", COORD),
-            ]
-
-        SetConsoleCursorPosition = kernel32.SetConsoleCursorPosition
-        SetConsoleCursorPosition.argtypes = [wt.HANDLE, COORD]
-        SetConsoleCursorPosition.restype = wt.BOOL
-
-        FillConsoleOutputCharacterW = kernel32.FillConsoleOutputCharacterW
-        FillConsoleOutputCharacterW.argtypes = [wt.HANDLE, wt.WCHAR, wt.DWORD, COORD, ctypes.POINTER(wt.DWORD)]
-        FillConsoleOutputCharacterW.restype = wt.BOOL
-
-        GetConsoleScreenBufferInfo = kernel32.GetConsoleScreenBufferInfo
-        GetConsoleScreenBufferInfo.argtypes = [wt.HANDLE, ctypes.POINTER(CONSOLE_SCREEN_BUFFER_INFO)]
-        GetConsoleScreenBufferInfo.restype = wt.BOOL
-
         def shift_held() -> bool:
             return bool(GetAsyncKeyState(VK_SHIFT) & 0x8000)
 
-        def get_cursor_pos() -> COORD:
-            info = CONSOLE_SCREEN_BUFFER_INFO()
-            GetConsoleScreenBufferInfo(h_stdout, ctypes.byref(info))
-            return info.dwCursorPosition
+        def move_left(cols: int) -> None:
+            if cols > 0:
+                sys.stdout.write(f"\033[{cols}D")
 
-        def move_cursor(pos: COORD) -> None:
-            SetConsoleCursorPosition(h_stdout, pos)
+        def move_right(cols: int) -> None:
+            if cols > 0:
+                sys.stdout.write(f"\033[{cols}C")
 
-        def erase_char(ch: str) -> None:
-            """删除一个字符。ASCII 用 ANSI（快），CJK 用 Console API（正确覆盖 2 列宽）。"""
-            if ord(ch) > 0x7F:
-                # CJK 等宽字符：占 2 列，用 Console API 覆盖
-                pos = get_cursor_pos()
-                if pos.X >= 2:
-                    new_pos = COORD(pos.X - 2, pos.Y)
-                    move_cursor(new_pos)
-                    written = wt.DWORD(0)
-                    FillConsoleOutputCharacterW(h_stdout, ' ', 2, new_pos, ctypes.byref(written))
-            else:
-                # ASCII：ANSI 一次搞定
-                sys.stdout.write("\b \b")
-                sys.stdout.flush()
+        def paste_input_pending() -> bool:
+            """Best-effort fallback for terminals without bracketed paste."""
+
+            if msvcrt.kbhit():
+                return True
+            time.sleep(0.02)
+            return msvcrt.kbhit()
 
         sys.stdout.write("\n\033[1;36mYou\033[0m: ")
         sys.stdout.flush()
@@ -441,28 +429,25 @@ class REPL:
         current_line: list[str] = []
         cursor_pos: int = 0  # 光标在 current_line 中的位置索引
 
-        def _redraw_from_cursor() -> None:
-            """从光标位置重绘到行尾。"""
-            # 打印光标右侧的所有字符
-            tail = "".join(current_line[cursor_pos:])
-            if tail:
-                sys.stdout.write(tail)
-            # 清除行尾残留字符（多出一个空格用于覆盖）
-            sys.stdout.write(" ")
-            # 把光标移回到正确位置
-            back = len(tail) + 1
-            if back > 0:
-                sys.stdout.write(f"\033[{back}D")
+        def _redraw_from(index: int, desired_cursor: int, *, clear_cols: int = 4) -> None:
+            """从指定位置重绘到行尾，并把光标放到 desired_cursor。"""
+
+            segment = "".join(current_line[index:])
+            sys.stdout.write(segment)
+            sys.stdout.write(" " * clear_cols)
+            total_width = self._text_display_width(segment) + clear_cols
+            desired_width = self._text_display_width("".join(current_line[index:desired_cursor]))
+            move_left(total_width - desired_width)
             sys.stdout.flush()
 
         while True:
             ch = msvcrt.getwch()
 
             if ch in ('\r', '\n'):
-                if shift_held():
+                if shift_held() or paste_input_pending():
                     # 多行模式：跳到行尾再换行
                     if cursor_pos < len(current_line):
-                        sys.stdout.write(f"\033[{len(current_line) - cursor_pos}C")
+                        move_right(self._text_display_width("".join(current_line[cursor_pos:])))
                         cursor_pos = len(current_line)
                     lines.append("".join(current_line))
                     current_line = []
@@ -472,7 +457,7 @@ class REPL:
                 else:
                     # 跳到行尾再回车（避免残留）
                     if cursor_pos < len(current_line):
-                        sys.stdout.write(f"\033[{len(current_line) - cursor_pos}C")
+                        move_right(self._text_display_width("".join(current_line[cursor_pos:])))
                     break
 
             elif ch == '\x03':
@@ -483,10 +468,8 @@ class REPL:
                 if cursor_pos > 0:
                     deleted = current_line.pop(cursor_pos - 1)
                     cursor_pos -= 1
-                    # 光标左移一格
-                    sys.stdout.write('\033[1D')
-                    # 重绘后面的字符并清除行尾
-                    _redraw_from_cursor()
+                    move_left(self._char_display_width(deleted))
+                    _redraw_from(cursor_pos, cursor_pos)
 
             elif ch in ('\x00', '\xe0'):
                 # 扩展键序列（方向键、Home/End 等）
@@ -494,48 +477,49 @@ class REPL:
                 if second == 'K':        # ← 左箭头
                     if cursor_pos > 0:
                         cursor_pos -= 1
-                        sys.stdout.write('\033[1D')
+                        move_left(self._char_display_width(current_line[cursor_pos]))
                         sys.stdout.flush()
                 elif second == 'M':      # → 右箭头
                     if cursor_pos < len(current_line):
+                        move_right(self._char_display_width(current_line[cursor_pos]))
                         cursor_pos += 1
-                        sys.stdout.write('\033[1C')
                         sys.stdout.flush()
                 elif second == 'H':      # Home
                     if cursor_pos > 0:
-                        sys.stdout.write(f"\033[{cursor_pos}D")
+                        move_left(self._text_display_width("".join(current_line[:cursor_pos])))
                         cursor_pos = 0
                         sys.stdout.flush()
                 elif second == 'O':      # End
                     if cursor_pos < len(current_line):
-                        sys.stdout.write(f"\033[{len(current_line) - cursor_pos}C")
+                        move_right(self._text_display_width("".join(current_line[cursor_pos:])))
                         cursor_pos = len(current_line)
                         sys.stdout.flush()
                 elif second == 'S':      # Delete
                     if cursor_pos < len(current_line):
                         current_line.pop(cursor_pos)
-                        _redraw_from_cursor()
+                        _redraw_from(cursor_pos, cursor_pos)
 
             elif ch and ord(ch) >= 0x20:
                 # 可见字符：在光标位置插入
                 if cursor_pos >= len(current_line):
                     # 追加到末尾（常见情况，快速路径）
                     current_line.append(ch)
+                    cursor_pos += 1
                     sys.stdout.write(ch)
                     sys.stdout.flush()
                 else:
                     # 插入到中间位置
+                    old_cursor = cursor_pos
                     current_line.insert(cursor_pos, ch)
-                    # 重绘插入点之后的内容
-                    _redraw_from_cursor()
-                cursor_pos += 1
+                    cursor_pos += 1
+                    _redraw_from(old_cursor, cursor_pos)
 
         if current_line:
             lines.append("".join(current_line))
 
         result = "\n".join(lines)
         sys.stdout.write("\n")
-        return result.strip()
+        return result.strip("\r\n")
 
     def _handle_command(self, raw: str) -> bool:
         """处理斜杠命令。返回 True 表示需要退出。"""

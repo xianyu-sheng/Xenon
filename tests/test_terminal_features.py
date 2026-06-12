@@ -121,6 +121,53 @@ def test_prompt_toolkit_key_bindings_can_be_created():
     assert bindings is not None
 
 
+def test_prompt_toolkit_enter_binding_distinguishes_paste_mode():
+    from prompt_toolkit.filters import in_paste_mode
+    from prompt_toolkit.keys import Keys
+    from omniagent.repl.repl import REPL
+
+    bindings = REPL._prompt_key_bindings()
+    handlers = [binding for binding in bindings.bindings if Keys.ControlM in binding.keys]
+
+    assert len(handlers) >= 2
+    assert any(binding.filter == in_paste_mode for binding in handlers)
+    assert any(binding.filter != in_paste_mode for binding in handlers)
+
+
+def test_prompt_toolkit_bracketed_paste_keeps_multiline_input_together():
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import InMemoryHistory
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    from prompt_toolkit.styles import Style
+    from omniagent.repl.repl import REPL
+
+    pasted = "\n".join(f"第{i}行中文内容 abc {i}" for i in range(80))
+
+    with create_pipe_input() as pipe_input:
+        session = PromptSession(
+            history=InMemoryHistory(),
+            key_bindings=REPL._prompt_key_bindings(),
+            multiline=True,
+            input=pipe_input,
+            output=DummyOutput(),
+            style=Style.from_dict({"prompt": "bold cyan"}),
+        )
+        pipe_input.send_text(f"\x1b[200~{pasted}\x1b[201~\r")
+
+        result = session.prompt([("class:prompt", "You"), ("", ": ")])
+
+    assert result == pasted
+
+
+def test_display_width_counts_cjk_as_two_columns():
+    from omniagent.repl.repl import REPL
+
+    assert REPL._char_display_width("a") == 1
+    assert REPL._char_display_width("中") == 2
+    assert REPL._text_display_width("a中b") == 4
+
+
 def test_shell_command_dispatch_updates_context(tmp_path: Path):
     from omniagent.repl.commands import dispatch_command
 

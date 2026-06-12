@@ -40,6 +40,7 @@ class ContextManager:
         self._undo_stack: list[list[ConversationTurn]] = []
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
+        self._token_usage_cache: int | None = 0
 
     # ── 对话管理 ──────────────────────────────────────────
 
@@ -47,6 +48,8 @@ class ContextManager:
         """添加一条消息到历史。"""
         turn = ConversationTurn(role=role, content=content, **kwargs)
         self.history.append(turn)
+        if self._token_usage_cache is not None:
+            self._token_usage_cache += self.estimate_tokens(content)
 
     def add_user_message(self, content: str) -> None:
         self.add_message("user", content)
@@ -65,7 +68,10 @@ class ContextManager:
         """移除并返回最后一条 assistant 消息（用于撤回 LLM 幻觉回复）。"""
         for i in range(len(self.history) - 1, -1, -1):
             if self.history[i].role == "assistant":
-                return self.history.pop(i).content
+                content = self.history.pop(i).content
+                if self._token_usage_cache is not None:
+                    self._token_usage_cache = max(0, self._token_usage_cache - self.estimate_tokens(content))
+                return content
         return None
 
     # ── Token 估算 ────────────────────────────────────────
@@ -105,7 +111,9 @@ class ContextManager:
 
     def current_token_usage(self) -> int:
         """估算当前历史的总 token 数。"""
-        return sum(self.estimate_tokens(turn.content) for turn in self.history)
+        if self._token_usage_cache is None:
+            self._token_usage_cache = sum(self.estimate_tokens(turn.content) for turn in self.history)
+        return self._token_usage_cache
 
     def usage_ratio(self) -> float:
         """当前 token 使用率 (0.0 ~ 1.0+)。"""
@@ -131,6 +139,7 @@ class ContextManager:
         if not self._undo_stack:
             return False
         self.history = self._undo_stack.pop()
+        self._token_usage_cache = None
         return True
 
     @property
@@ -186,6 +195,7 @@ class ContextManager:
                 content=f"[对话历史已压缩] 以下是之前 {old_count} 条消息的摘要：\n\n{summary}",
             )
         ] + recent
+        self._token_usage_cache = None
 
         return summary
 
@@ -302,3 +312,4 @@ class ContextManager:
         """清空所有历史。"""
         self.save_snapshot()
         self.history.clear()
+        self._token_usage_cache = 0

@@ -1,0 +1,136 @@
+张俊
+
+求职意向：AI Agent 开发实习生 / LLM 应用工程实习生 年龄：21
+(cid:215) 17313800558 (cid:263) 2107644732@qq.com
+(cid:97) github.com/xianyu-sheng (cid:978) xianyu-sheng.hashnode.dev
+
+教育背景
+
+重庆邮电大学
+计算机技术 硕士
+研究方向：量子计算（Grover 搜索算法优化）
+
+北华大学
+工业设计 本科
+跨专业自学计算机核心课程，考研上岸重邮计算机
+
+专业技能
+
+2024.09 – 2027.06
+重庆
+
+2020.09 – 2024.06
+吉林
+
+• 编程语言：扎实掌握 C++(11/14/17)、Python，日常熟练使用 Shell 脚本与 Linux 终端工具。
+• Agent 开发：理解大语言模型底层机制（Transformer/Embedding），掌握 Prompt 构造、Function Calling
+/ Tool Use、Memory / Context Management；具备 ReAct、Plan-Execute、Reflection 与多 Agent 协作
+实践经验。
+
+• RAG 与向量检索：熟悉 RAG 基本链路、语义检索与知识注入思路；掌握 hnswlib 向量检索工程应用，
+
+理解 Top-K 召回、向量索引增量更新与软删除过滤。
+
+• 系统工程底座：理解 Raft 共识算法、RPC 框架与 Protobuf 通信机制，掌握 Linux 多线程并发与 Reactor
+
+高并发网络模型（基于 Muduo）；熟悉 GDB、Valgrind、perf 等调试与调优工具。
+
+项目经历
+
+OmniAgent：本地多模型 Agent Runtime / Coding Agent CLI
+Python | LLM Agent | MCP | ReAct | Plan-Execute | Reflection | Eval
+• 项目描述：从零实现面向开发者的本地多模型 Agent Runtime，支持 DeepSeek、OpenAI、Claude、Gemini、
+Qwen、Ollama 等模型接入，提供 CLI 交互、项目上下文注入、会话记忆、代码编辑与本地工具执行能力。
+
+2026.05 – 至今
+[OmniAgent]
+
+• Agent 工作流：实现 Direct、ReAct、Plan-Execute、Reflection 等多种推理与执行模式，抽象 Planner /
+
+Model Router / Tool Registry / Memory / Executor / Reviewer 分层，使复杂编程任务可拆解为可观察、
+可回滚的执行链路。
+
+• 工具与 MCP 扩展：封装文件读写、代码搜索、Git 操作、命令执行、网页/GitHub 内容抓取等工具，并
+实现 MCP Client / Registry / Transport 模块，为外部工具与 MCP Server 接入提供统一扩展接口。
+• 评测与工程质量：新增 20 项 Agent Eval 任务集，覆盖文件修改、代码搜索、工具调用、上下文记忆与
+
+多轮修正；Mock Eval 纳入 CI，真实模型 Eval 支持手动输出成功率、Token 估算、工具调用与失败统计；
+测试覆盖 REPL、工具执行、Memory、Project Context、Eval Runner 等核心模块。
+
+• 安全边界： API Key 本地存储于用户目录，文件修改支持 diff 预览，危险 Shell / Git 命令与敏感路径操
+
+作进行拦截或要求显式确认，降低本地 Coding Agent 的误操作风险。
+
+基于多智能体协作的通用代码自动化诊断系统（SmartBench）
+2026.03 – 至今
+[SmartBench]
+Python | Multi-Agent | RAG | GDB/perf | Benchmark
+• 项目描述：针对复杂工程中长链路级联调用导致的性能难题，自主研发基于 Multi-Agent 协作的通用型代
+
+码诊断工具；端到端验证中自动覆盖约 13,120 行 C++ 核心代码。
+
+• 协作管线构建：构建 Proposer-Critique-Judge 三角色状态机协作架构，将性能指标、日志、源码片段与诊
+
+断工具结果作为证据输入，生成可落地优化建议并进行交叉审查与仲裁。
+
+• 架构感知与深度诊断：设计“配置驱动 + 自动推断”机制自动识别多类技术栈，集成 GDB、perf、Valgrind
+
+与系统日志工具链，支持崩溃、死锁、内存泄漏、缺页中断、性能瓶颈等问题类型诊断。
+
+• 精准工程映射：设计基于文件指纹的缓存机制，将重复分析场景下 API Token 消耗降低 60% 以上；结合
+
+源码结构与诊断报告将优化建议映射至 MyKV 关键路径，建议落地后使集群吞吐提升 18%。
+
+高性能分布式特征存储与召回引擎（MyKV）
+2025.11 – 至今
+C++ | Raft | hnswlib | Protobuf | Muduo
+[MyKV]
+• 项目描述：针对大模型 Agent 长上下文记忆与私有知识库检索需求，从零构建基于 RPC 与 Raft 共识的
+
+分布式 KV / 向量召回系统，可作为 RAG Agent 的高性能检索底座。
+
+• 架构设计：采用 CQRS 读写分离架构，将 Raft 状态机作为唯一真理源，通过 Apply 阶段回调异步驱动
+
+hnswlib 图索引构建，将 Search 请求与共识层物理隔离，保障强一致性写与低延迟向量召回。
+
+• 高可用与容灾：落地 ReadIndex 线性安全读，读延迟从 25ms 降至约 0.1ms；引入 Pipeline 滑动窗口与
+Batch Append 批量追加机制，保障 3 节点集群容灾与同步，KV 写入 QPS 达 363ops/s，写入 3700 条
+数据无丢失，检索一致性达 100%。
+
+• 向量召回引擎：集成 HNSW 算法支持 百万级 128 维特征向量 Top-K 检索，召回 QPS 达 987ops/s，平
+
+均检索延迟约 225us，支持特征动态增量更新与软删除过滤。
+
+研究成果
+
+量子搜索算法——搜索空间剪枝与检索引擎优化研究
+
+2024.09 – 2027.06
+
+• 针对大规模搜索场景下数据非均匀分布导致的召回完备性不足问题，提出动态调度与资源分配策略。
+• 在 百万级 (106) 数据规模下，仅需遍历约 7.5% 的搜索空间即可完成目标搜索，较现有方案效率提升 31
+
+倍以上。
+
+• 基于 Qiskit 框架完成算法仿真验证，相关学术论文已撰写完成。
+
+所获荣誉
+
+• 重庆邮电大学研究生学业奖学金三等奖
+• 大学英语六级证书（CET-6）
+• 2021-2022 年北华大学学业奖学金二等奖
+• 2020-2021 年北华大学学业奖学金一等奖
+
+个人评价
+
+2025 年
+2024 年
+2022 年
+2021 年
+
+具备较强的规划能力与高效执行力，能够系统性拆解复杂任务并持续推进落地。性格沉稳踏实，抗压能力较
+强，在面对高强度挑战或突发状况时能保持冷静与专注。拥有良好的自主学习能力与自驱力，能够快速吸收
+新知识并适应新环境。为人乐观和善，具备良好的同理心与沟通协作意识，能够与不同背景的团队成员融洽
+共事，共同推进目标达成。
+
+

@@ -19,9 +19,11 @@ from omniagent.repl.provider_registry import (
     PROVIDERS,
     list_providers,
     load_credentials,
+    load_provider_configs,
     set_provider_key,
     remove_provider_key,
     get_configured_providers,
+    normalize_provider_base_url,
 )
 
 if TYPE_CHECKING:
@@ -111,8 +113,12 @@ def _setup_api_key() -> None:
     table.add_column("状态")
 
     creds = load_credentials()
+    provider_configs = load_provider_configs()
     for i, p in enumerate(providers, 1):
         status = "[green]已配置[/green]" if p.key in creds and creds[p.key] else "[dim]未配置[/dim]"
+        saved_base_url = provider_configs.get(p.key).base_url if p.key in provider_configs else ""
+        if saved_base_url:
+            status += f"\n[dim]{saved_base_url}[/dim]"
         models_str = ", ".join(p.models[:3]) + ("..." if len(p.models) > 3 else "")
         table.add_row(str(i), p.name, models_str, status)
 
@@ -133,10 +139,29 @@ def _setup_api_key() -> None:
     api_key = _masked_input(f"请输入 {provider.name} 的 API Key（输入可见，回车确认）")
 
     if api_key.strip():
-        set_provider_key(provider.key, api_key.strip())
+        base_url = _ask_provider_base_url(provider)
+        set_provider_key(provider.key, api_key.strip(), base_url=base_url)
         console.print(f"\n[green]已保存 {provider.name} 的 API Key[/green]\n")
     else:
         console.print("\n[yellow]已取消[/yellow]\n")
+
+
+def _ask_provider_base_url(provider) -> str:
+    """Ask for an optional custom endpoint for relay/OpenAI-compatible APIs."""
+
+    console.print()
+    use_default = Confirm.ask(
+        f"使用默认 API 地址 {provider.base_url}?",
+        default=True,
+    )
+    if use_default:
+        return ""
+
+    base_url = Prompt.ask(
+        "请输入自定义 API 地址",
+        default=provider.base_url,
+    ).strip()
+    return normalize_provider_base_url(provider.key, base_url)
 
 
 def _show_configured() -> None:
@@ -156,7 +181,10 @@ def _show_configured() -> None:
 
     for p in configured:
         key_display = p.api_key[:8] + "****" + p.api_key[-4:] if len(p.api_key) > 12 else "****"
-        table.add_row(p.name, key_display, ", ".join(p.models[:4]))
+        provider_name = p.name
+        if p.base_url:
+            provider_name += f"\n[dim]{p.base_url}[/dim]"
+        table.add_row(provider_name, key_display, ", ".join(p.models[:4]))
 
     console.print(table)
     console.print()
@@ -189,7 +217,7 @@ def _select_model(registry: ModelRegistry) -> None:
             model_id = f"{p.key}/{m}"
             hint = _model_hint(m)
             table.add_row(str(idx), p.name, m, hint)
-            all_models.append((model_id, m, p.key))
+            all_models.append((model_id, m, p.key, p.base_url))
             idx += 1
 
     console.print(table)
@@ -209,9 +237,9 @@ def _select_model(registry: ModelRegistry) -> None:
     selected_models = []
     for s in selections:
         if 1 <= s <= len(all_models):
-            model_id, short_name, provider = all_models[s - 1]
+            model_id, short_name, provider, base_url = all_models[s - 1]
             alias = short_name.replace(".", "-")
-            registry.add_model(model_id, alias)
+            registry.add_model(model_id, alias, base_url=base_url)
             selected_models.append(f"{alias} ({model_id})")
 
     if selected_models:
@@ -261,7 +289,7 @@ def _select_mode(registry: ModelRegistry) -> None:
 
 def _remove_api_key() -> None:
     """删除 API Key。"""
-    configured = get_configured_providers()
+    configured = get_configured_providers(refresh_models=False)
 
     if not configured:
         console.print("\n[yellow]没有可删除的配置[/yellow]\n")

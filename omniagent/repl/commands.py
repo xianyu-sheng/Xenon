@@ -144,7 +144,7 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
     table.add_column("模型")
     table.add_column("特点")
 
-    all_models: list[tuple[str, str, str]] = []  # (model_id, short_name, provider_key)
+    all_models: list[tuple[str, str, str, str]] = []  # (model_id, short_name, provider_key, base_url)
     idx = 1
     for p in configured:
         if not p.models:
@@ -154,7 +154,7 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
             model_id = f"{p.key}/{m}"
             hint = _model_hint_local(m)
             table.add_row(str(idx), p.name, m, hint)
-            all_models.append((model_id, m, p.key))
+            all_models.append((model_id, m, p.key, p.base_url))
             idx += 1
 
     from rich.console import Console as _Console
@@ -174,11 +174,11 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
     except (KeyboardInterrupt, EOFError, OSError):
         return "已取消"
 
-    model_id, short_name, provider = all_models[choice - 1]
+    model_id, short_name, provider, base_url = all_models[choice - 1]
     alias = short_name.replace(".", "-")
 
     try:
-        config = registry.add_model(model_id, alias)
+        config = registry.add_model(model_id, alias, base_url=base_url)
         return f"✅ 模型已设置: {alias} -> {config.model_id}"
     except Exception as e:
         return f"❌ 设置失败: {e}"
@@ -974,16 +974,18 @@ def _cmd_status(*, ctx_mgr: ContextManager, registry: ModelRegistry, session_sta
     return "\n".join(lines)
 
 
-# /setup ───────────────────────────────────────────────────
+# /setup /set_up ───────────────────────────────────────────
 
 register_command("/setup", "首次配置向导（配置 Key、选模型、选范式）", "/setup")
+register_command("/set_up", "系统设置（/setup 别名）", "/set_up")
 
+@_handler("/set_up")
 @_handler("/setup")
 def _cmd_setup(*, session_state: dict, **kwargs: Any) -> str:
-    from omniagent.repl.setup_wizard import interactive_setup
-
     repl = session_state.get("_repl")
     if repl:
+        from omniagent.repl.setup_wizard import interactive_setup
+
         interactive_setup(repl.registry)
         return ""
     return "❌ 无法获取 REPL 状态"

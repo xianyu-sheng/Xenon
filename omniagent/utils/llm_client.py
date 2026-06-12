@@ -15,6 +15,7 @@ from collections.abc import Generator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import logging
 import httpx
@@ -86,9 +87,41 @@ _PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
 }
 
 
-def _load_credentials() -> dict[str, str]:
-    """从 ~/.omniagent/credentials.yaml 或环境变量加载 API Key。"""
-    creds: dict[str, str] = {}
+def _normalize_base_url(base_url: str) -> str:
+    return base_url.strip().rstrip("/") if isinstance(base_url, str) else ""
+
+
+def _openai_compat_url(endpoint: ModelEndpoint, path: str) -> str:
+    """Build an OpenAI-compatible URL, adding /v1 for root OpenAI relays."""
+
+    base_url = endpoint.base_url.rstrip("/")
+    parsed = urlparse(base_url)
+    if endpoint.provider == "openai" and parsed.scheme and parsed.netloc and parsed.path.rstrip("/") in ("", "/"):
+        base_url = f"{base_url}/v1"
+    return f"{base_url}/{path.lstrip('/')}"
+
+
+def _credential_api_key(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("api_key", "key", "token"):
+            item = value.get(key)
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+        return ""
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _credential_base_url(value: Any) -> str:
+    if isinstance(value, dict):
+        item = value.get("base_url")
+        if isinstance(item, str):
+            return _normalize_base_url(item)
+    return ""
+
+
+def _load_credentials() -> dict[str, Any]:
+    """从 ~/.omniagent/credentials.yaml 或环境变量加载 API Key 和端点配置。"""
+    creds: dict[str, Any] = {}
     if _CREDENTIALS_PATH.exists():
         with open(_CREDENTIALS_PATH, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
@@ -98,7 +131,13 @@ def _load_credentials() -> dict[str, str]:
     for provider, cfg in _PROVIDER_DEFAULTS.items():
         env_val = os.getenv(cfg["env_key"])
         if env_val:
-            creds[provider] = env_val
+            existing = creds.get(provider)
+            if isinstance(existing, dict):
+                updated = dict(existing)
+                updated["api_key"] = env_val
+                creds[provider] = updated
+            else:
+                creds[provider] = env_val
     return creds
 
 
@@ -115,7 +154,7 @@ def parse_model_id(model_id: str) -> tuple[str, str]:
     return provider.lower(), name
 
 
-def build_endpoint(model_id: str, credentials: dict[str, str] | None = None) -> ModelEndpoint:
+def build_endpoint(model_id: str, credentials: dict[str, Any] | None = None) -> ModelEndpoint:
     """根据 model_id 构建完整的调用端点信息。"""
     provider, model_name = parse_model_id(model_id)
     if provider not in _PROVIDER_DEFAULTS:
@@ -123,16 +162,18 @@ def build_endpoint(model_id: str, credentials: dict[str, str] | None = None) -> 
 
     defaults = _PROVIDER_DEFAULTS[provider]
     creds = credentials or _load_credentials()
-    api_key = creds.get(provider, "")
+    credential = creds.get(provider, "")
+    api_key = _credential_api_key(credential)
     if not api_key:
         raise ValueError(
             f"未找到 {provider} 的 API Key。"
             f"请在 {_CREDENTIALS_PATH} 或环境变量 {defaults['env_key']} 中配置。"
         )
+    base_url = _credential_base_url(credential) or defaults["base_url"]
     return ModelEndpoint(
         provider=provider,
         model_name=model_name,
-        base_url=defaults["base_url"],
+        base_url=base_url,
         api_key=api_key,
     )
 
@@ -144,7 +185,7 @@ def chat_completion(
     model_id: str,
     messages: list[dict[str, str]],
     *,
-    credentials: dict[str, str] | None = None,
+    credentials: dict[str, Any] | None = None,
     max_tokens: int = 4096,
     temperature: float = 0.7,
     timeout: float = 120.0,
@@ -217,7 +258,7 @@ def _call_openai_compat(
     timeout: float,
 ) -> str:
     """OpenAI 兼容格式调用。"""
-    url = f"{endpoint.base_url}/chat/completions"
+    url = _openai_compat_url(endpoint, "chat/completions")
     headers = {
         "Authorization": f"Bearer {endpoint.api_key}",
         "Content-Type": "application/json",
@@ -301,7 +342,7 @@ def chat_completion_stream(
     model_id: str,
     messages: list[dict[str, str]],
     *,
-    credentials: dict[str, str] | None = None,
+    credentials: dict[str, Any] | None = None,
     max_tokens: int = 4096,
     temperature: float = 0.7,
     timeout: float = 300.0,
@@ -328,7 +369,7 @@ def _stream_openai_compat(
     timeout: float,
 ) -> Generator[str, None, None]:
     """OpenAI 兼容格式流式调用。"""
-    url = f"{endpoint.base_url}/chat/completions"
+    url = _openai_compat_url(endpoint, "chat/completions")
     headers = {
         "Authorization": f"Bearer {endpoint.api_key}",
         "Content-Type": "application/json",

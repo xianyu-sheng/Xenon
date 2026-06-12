@@ -135,6 +135,25 @@ class TestContextManager:
         assert stats["user_messages"] == 1
         assert stats["assistant_messages"] == 1
 
+    def test_stats_reuses_token_usage_cache(self, monkeypatch):
+        mgr = ContextManager()
+        calls = []
+
+        def fake_estimate(text):
+            calls.append(text)
+            return len(text)
+
+        monkeypatch.setattr(mgr, "estimate_tokens", fake_estimate)
+
+        mgr.add_user_message("hello")
+        assert mgr.stats()["estimated_tokens"] == 5
+        assert mgr.stats()["estimated_tokens"] == 5
+        assert calls == ["hello"]
+
+        mgr.add_assistant_message("world")
+        assert mgr.stats()["estimated_tokens"] == 10
+        assert calls == ["hello", "world"]
+
 
 # ── ModelRegistry 测试 ───────────────────────────────────
 
@@ -243,6 +262,7 @@ class TestModelRegistry:
 class TestProviderRegistry:
     def test_get_configured_providers_refreshes_openai_models(self, monkeypatch):
         import omniagent.repl.provider_registry as provider_registry
+        provider_registry.clear_model_list_cache()
 
         class FakeResponse:
             def raise_for_status(self):
@@ -274,8 +294,85 @@ class TestProviderRegistry:
         assert calls[0][1]["Accept"] == "application/json"
         assert calls[0][1]["Authorization"] == "Bearer sk-test"
 
+    def test_get_configured_providers_uses_custom_openai_base_url(self, monkeypatch):
+        import omniagent.repl.provider_registry as provider_registry
+        provider_registry.clear_model_list_cache()
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": [{"id": "gpt-5.5"}, {"id": "gpt-5"}]}
+
+        calls = []
+
+        def fake_get(url, headers, timeout):
+            calls.append((url, headers, timeout))
+            return FakeResponse()
+
+        monkeypatch.setattr(
+            provider_registry,
+            "load_provider_configs",
+            lambda: {
+                "openai": provider_registry.ProviderCredential(
+                    api_key="sk-relay",
+                    base_url="https://codex.gogogpt.net",
+                )
+            },
+        )
+        monkeypatch.setattr(provider_registry.httpx, "get", fake_get)
+
+        configured = provider_registry.get_configured_providers()
+        openai = next(p for p in configured if p.key == "openai")
+
+        assert openai.base_url == "https://codex.gogogpt.net"
+        assert openai.models == ["gpt-5.5", "gpt-5"]
+        assert calls[0][0] == "https://codex.gogogpt.net/models"
+
+    def test_openai_relay_model_list_tries_v1_fallback(self, monkeypatch):
+        import omniagent.repl.provider_registry as provider_registry
+        provider_registry.clear_model_list_cache()
+
+        class FakeResponse:
+            def __init__(self, ok):
+                self.ok = ok
+
+            def raise_for_status(self):
+                if not self.ok:
+                    raise provider_registry.httpx.HTTPStatusError(
+                        "not found",
+                        request=provider_registry.httpx.Request("GET", "https://relay.test/models"),
+                        response=provider_registry.httpx.Response(404),
+                    )
+
+            def json(self):
+                return {"data": [{"id": "gpt-5.5"}]}
+
+        calls = []
+
+        def fake_get(url, headers, timeout):
+            calls.append(url)
+            return FakeResponse(url.endswith("/v1/models"))
+
+        provider = provider_registry.ProviderInfo(
+            name="OpenAI Relay",
+            key="openai",
+            base_url="https://relay.test",
+            env_key="OPENAI_API_KEY",
+            models=[],
+            api_key="sk-test",
+        )
+        monkeypatch.setattr(provider_registry.httpx, "get", fake_get)
+
+        models = provider_registry.fetch_provider_models(provider, "sk-test")
+
+        assert models == ["gpt-5.5"]
+        assert calls == ["https://relay.test/models", "https://relay.test/v1/models"]
+
     def test_get_configured_providers_refreshes_deepseek_models(self, monkeypatch):
         import omniagent.repl.provider_registry as provider_registry
+        provider_registry.clear_model_list_cache()
 
         class FakeResponse:
             def raise_for_status(self):
@@ -303,6 +400,7 @@ class TestProviderRegistry:
 
     def test_refresh_failure_does_not_show_stale_builtin_models(self, monkeypatch):
         import omniagent.repl.provider_registry as provider_registry
+        provider_registry.clear_model_list_cache()
 
         def fake_get(url, headers, timeout):
             raise provider_registry.httpx.ConnectError("network down")
@@ -317,6 +415,7 @@ class TestProviderRegistry:
 
     def test_fetch_provider_models_uses_anthropic_headers_and_pagination(self, monkeypatch):
         import omniagent.repl.provider_registry as provider_registry
+        provider_registry.clear_model_list_cache()
 
         class FakeResponse:
             def __init__(self, payload):
@@ -367,6 +466,54 @@ class TestProviderRegistry:
         assert calls[0][1]["x-api-key"] == "sk-ant-test"
         assert calls[0][1]["anthropic-version"] == "2023-06-01"
 
+    def test_fetch_provider_models_uses_short_lived_success_cache(self, monkeypatch):
+        import omniagent.repl.provider_registry as provider_registry
+
+        provider_registry.clear_model_list_cache()
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": [{"id": "gpt-5.5"}]}
+
+        calls = []
+
+        def fake_get(url, headers, timeout):
+            calls.append(url)
+            return FakeResponse()
+
+        monkeypatch.setattr(provider_registry.httpx, "get", fake_get)
+
+        provider = provider_registry.PROVIDERS["openai"]
+        first = provider_registry.fetch_provider_models(provider, "sk-cache")
+        second = provider_registry.fetch_provider_models(provider, "sk-cache")
+
+        assert first == ["gpt-5.5"]
+        assert second == ["gpt-5.5"]
+        assert calls == ["https://api.openai.com/v1/models"]
+
+    def test_fetch_provider_models_uses_failure_cooldown(self, monkeypatch):
+        import omniagent.repl.provider_registry as provider_registry
+
+        provider_registry.clear_model_list_cache()
+        calls = []
+
+        def fake_get(url, headers, timeout):
+            calls.append(url)
+            raise provider_registry.httpx.ConnectError("network down")
+
+        monkeypatch.setattr(provider_registry.httpx, "get", fake_get)
+
+        provider = provider_registry.PROVIDERS["openai"]
+        first = provider_registry.fetch_provider_models(provider, "sk-fail")
+        second = provider_registry.fetch_provider_models(provider, "sk-fail")
+
+        assert first == []
+        assert second == []
+        assert calls == ["https://api.openai.com/v1/models"]
+
 
 # ── Command Dispatch 测试 ────────────────────────────────
 
@@ -379,6 +526,24 @@ class TestCommands:
         result = dispatch_command("/help", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
         assert "可用命令" in result
         assert "/set_model" in result
+        assert "/set_up" in result
+
+    def test_set_up_alias_is_registered(self):
+        from omniagent.repl.commands import dispatch_command
+
+        reg = ModelRegistry()
+        ctx_mgr = ContextManager()
+
+        result = dispatch_command(
+            "/set_up",
+            "",
+            registry=reg,
+            ctx_mgr=ctx_mgr,
+            session_state={},
+        )
+
+        assert "未知命令" not in result
+        assert "无法获取 REPL 状态" in result
 
     def test_set_model_command(self):
         from omniagent.repl.commands import dispatch_command

@@ -8,6 +8,7 @@ Provider Registry — 预设厂商信息库。
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,8 +20,12 @@ import yaml
 
 CREDENTIALS_PATH = Path.home() / ".omniagent" / "credentials.yaml"
 MODEL_LIST_TIMEOUT = 8.0
+MODEL_LIST_CACHE_TTL = 120.0
+MODEL_LIST_FAILURE_TTL = 30.0
 
 logger = logging.getLogger(__name__)
+_MODEL_LIST_CACHE: dict[tuple[str, str, str, str], tuple[float, list[str]]] = {}
+_MODEL_LIST_FAILURE_CACHE: dict[tuple[str, str, str, str], float] = {}
 
 
 @dataclass
@@ -33,6 +38,15 @@ class ProviderInfo:
     models: list[str]       # 离线兜底模型列表（短名）
     api_key: str = ""       # 用户填入的 key
     model_list_path: str = "models"  # 支持 OpenAI 兼容 /models 时填入
+
+
+@dataclass
+class ProviderCredential:
+    """用户保存的厂商凭证与端点覆盖。"""
+
+    api_key: str = ""
+    base_url: str = ""
+    model_list_path: str = ""
 
 
 # ── 预设厂商 ──────────────────────────────────────────────
@@ -164,6 +178,55 @@ def _model_list_url(provider: ProviderInfo, *, after_id: str | None = None) -> s
     return url
 
 
+def _model_list_url_candidates(provider: ProviderInfo, *, after_id: str | None = None) -> list[str]:
+    """Return model-list URLs to try, including common relay variants."""
+
+    urls = [_model_list_url(provider, after_id=after_id)]
+    if (
+        provider.key == "openai"
+        and provider.model_list_path == "models"
+        and not provider.base_url.rstrip("/").endswith("/v1")
+    ):
+        relay_provider = ProviderInfo(
+            name=provider.name,
+            key=provider.key,
+            base_url=f"{provider.base_url.rstrip('/')}/v1",
+            env_key=provider.env_key,
+            models=provider.models,
+            api_key=provider.api_key,
+            model_list_path=provider.model_list_path,
+        )
+        urls.append(_model_list_url(relay_provider, after_id=after_id))
+    return list(dict.fromkeys(urls))
+
+
+def _clean_str(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def normalize_provider_base_url(provider_key: str, base_url: str) -> str:
+    """Normalize custom API base URLs without changing the documented path."""
+
+    return base_url.strip().rstrip("/")
+
+
+def _parse_credential(provider_key: str, value: Any) -> ProviderCredential:
+    """Parse both legacy `provider: key` and structured credential entries."""
+
+    if isinstance(value, dict):
+        api_key = (
+            _clean_str(value.get("api_key"))
+            or _clean_str(value.get("key"))
+            or _clean_str(value.get("token"))
+        )
+        return ProviderCredential(
+            api_key=api_key,
+            base_url=normalize_provider_base_url(provider_key, _clean_str(value.get("base_url"))),
+            model_list_path=_clean_str(value.get("model_list_path")),
+        )
+    return ProviderCredential(api_key=_clean_str(value))
+
+
 def _model_list_headers(provider: ProviderInfo, api_key: str) -> dict[str, str]:
     """返回模型列表接口所需认证头。"""
     headers = {"Accept": "application/json"}
@@ -234,9 +297,37 @@ def _parse_model_payload(payload: Any) -> list[str]:
     return [model for model, _, _ in model_rows]
 
 
+def _provider_cache_key(provider: ProviderInfo, api_key: str) -> tuple[str, str, str, str]:
+    """Return a stable cache key without storing the full API key."""
+
+    return (
+        provider.key,
+        provider.base_url.rstrip("/"),
+        provider.model_list_path,
+        api_key[-12:] if api_key else "",
+    )
+
+
+def clear_model_list_cache() -> None:
+    """Clear in-memory model list caches after credential changes."""
+
+    _MODEL_LIST_CACHE.clear()
+    _MODEL_LIST_FAILURE_CACHE.clear()
+
+
 def fetch_provider_models(provider: ProviderInfo, api_key: str) -> list[str]:
     """从厂商模型列表接口实时获取模型短名；失败时返回空列表。"""
     if not api_key:
+        return []
+
+    now = time.monotonic()
+    cache_key = _provider_cache_key(provider, api_key)
+    cached = _MODEL_LIST_CACHE.get(cache_key)
+    if cached and now - cached[0] <= MODEL_LIST_CACHE_TTL:
+        return list(cached[1])
+
+    failed_at = _MODEL_LIST_FAILURE_CACHE.get(cache_key)
+    if failed_at and now - failed_at <= MODEL_LIST_FAILURE_TTL:
         return []
 
     models: list[str] = []
@@ -244,13 +335,24 @@ def fetch_provider_models(provider: ProviderInfo, api_key: str) -> list[str]:
     after_id: str | None = None
     try:
         while True:
-            response = httpx.get(
-                _model_list_url(provider, after_id=after_id),
-                headers=_model_list_headers(provider, api_key),
-                timeout=MODEL_LIST_TIMEOUT,
-            )
-            response.raise_for_status()
-            payload = response.json()
+            payload = None
+            last_error: Exception | None = None
+            for url in _model_list_url_candidates(provider, after_id=after_id):
+                try:
+                    response = httpx.get(
+                        url,
+                        headers=_model_list_headers(provider, api_key),
+                        timeout=MODEL_LIST_TIMEOUT,
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    break
+                except Exception as e:
+                    last_error = e
+
+            if payload is None:
+                raise last_error or RuntimeError("empty model-list response")
+
             for model in _parse_model_payload(payload):
                 if model not in seen:
                     models.append(model)
@@ -261,43 +363,92 @@ def fetch_provider_models(provider: ProviderInfo, api_key: str) -> list[str]:
             after_id = str(payload["last_id"])
     except Exception as e:
         logger.debug("获取 %s 实时模型列表失败: %s", provider.key, e)
+        _MODEL_LIST_FAILURE_CACHE[cache_key] = time.monotonic()
         return []
 
+    _MODEL_LIST_CACHE[cache_key] = (time.monotonic(), list(models))
+    _MODEL_LIST_FAILURE_CACHE.pop(cache_key, None)
     return models
 
 
 # ── 凭证管理 ──────────────────────────────────────────────
 
-def load_credentials() -> dict[str, str]:
-    """从文件加载凭证。"""
-    creds: dict[str, str] = {}
+def load_provider_configs() -> dict[str, ProviderCredential]:
+    """从文件加载完整厂商配置，兼容旧版字符串凭证格式。"""
+    configs: dict[str, ProviderCredential] = {}
     if CREDENTIALS_PATH.exists():
         with open(CREDENTIALS_PATH, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-            creds = {k.lower(): v for k, v in data.items()}
-    return creds
+            for key, value in data.items():
+                provider_key = str(key).lower()
+                configs[provider_key] = _parse_credential(provider_key, value)
+    return configs
 
 
-def save_credentials(creds: dict[str, str]) -> Path:
-    """保存凭证到文件。"""
+def load_credentials() -> dict[str, str]:
+    """从文件加载 API Key，保留旧调用方需要的简单字典接口。"""
+    return {
+        key: config.api_key
+        for key, config in load_provider_configs().items()
+        if config.api_key
+    }
+
+
+def save_provider_configs(configs: dict[str, ProviderCredential]) -> Path:
+    """保存完整厂商配置到文件。"""
     CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    data: dict[str, Any] = {}
+    for key, config in configs.items():
+        if config.base_url or config.model_list_path:
+            entry: dict[str, str] = {"api_key": config.api_key}
+            if config.base_url:
+                entry["base_url"] = normalize_provider_base_url(key, config.base_url)
+            if config.model_list_path:
+                entry["model_list_path"] = config.model_list_path
+            data[key] = entry
+        else:
+            data[key] = config.api_key
     with open(CREDENTIALS_PATH, "w", encoding="utf-8") as f:
-        yaml.dump(creds, f, allow_unicode=True, default_flow_style=False)
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
     return CREDENTIALS_PATH
 
 
-def set_provider_key(provider_key: str, api_key: str) -> None:
+def save_credentials(creds: dict[str, str]) -> Path:
+    """保存简单 API Key 凭证到文件。"""
+    configs = {
+        key.lower(): ProviderCredential(api_key=value)
+        for key, value in creds.items()
+    }
+    return save_provider_configs(configs)
+
+
+def set_provider_key(
+    provider_key: str,
+    api_key: str,
+    *,
+    base_url: str | None = None,
+    model_list_path: str | None = None,
+) -> None:
     """设置某个厂商的 API Key 并保存。"""
-    creds = load_credentials()
-    creds[provider_key] = api_key
-    save_credentials(creds)
+    key = provider_key.lower()
+    configs = load_provider_configs()
+    config = configs.get(key, ProviderCredential())
+    config.api_key = api_key
+    if base_url is not None:
+        config.base_url = normalize_provider_base_url(key, base_url)
+    if model_list_path is not None:
+        config.model_list_path = model_list_path.strip()
+    configs[key] = config
+    clear_model_list_cache()
+    save_provider_configs(configs)
 
 
 def remove_provider_key(provider_key: str) -> None:
     """移除某个厂商的 API Key。"""
-    creds = load_credentials()
-    creds.pop(provider_key, None)
-    save_credentials(creds)
+    configs = load_provider_configs()
+    configs.pop(provider_key.lower(), None)
+    clear_model_list_cache()
+    save_provider_configs(configs)
 
 
 def get_configured_providers(*, refresh_models: bool = True) -> list[ProviderInfo]:
@@ -307,17 +458,28 @@ def get_configured_providers(*, refresh_models: bool = True) -> list[ProviderInf
     误展示为最新模型；refresh_models=False 时才返回内置示例列表。
     """
     creds = load_credentials()
+    provider_configs = load_provider_configs()
     configured = []
     for key, info in PROVIDERS.items():
         if key in creds and creds[key]:
+            provider_config = provider_configs.get(key)
+            if provider_config is None or provider_config.api_key != creds[key]:
+                provider_config = ProviderCredential(api_key=creds[key])
+            base_url = normalize_provider_base_url(key, provider_config.base_url) or info.base_url
+            model_list_path = provider_config.model_list_path or info.model_list_path
+            fetch_info = ProviderInfo(
+                name=info.name, key=info.key, base_url=base_url,
+                env_key=info.env_key, models=info.models, api_key=creds[key],
+                model_list_path=model_list_path,
+            )
             if refresh_models:
-                models = fetch_provider_models(info, creds[key])
+                models = fetch_provider_models(fetch_info, creds[key])
             else:
                 models = info.models
             info_copy = ProviderInfo(
-                name=info.name, key=info.key, base_url=info.base_url,
+                name=info.name, key=info.key, base_url=base_url,
                 env_key=info.env_key, models=models, api_key=creds[key],
-                model_list_path=info.model_list_path,
+                model_list_path=model_list_path,
             )
             configured.append(info_copy)
     return configured
