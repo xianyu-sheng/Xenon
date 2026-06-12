@@ -96,7 +96,9 @@ def truncate_content(content: str, max_len: int = 50_000) -> str:
 
 
 def safe_read_file(path: Path, max_size: int = MAX_READ_SIZE) -> str | None:
-    """安全读取文件内容。超过大小限制返回 None。"""
+    """安全读取文件内容。超过大小限制或文件不存在返回 None。"""
+    if not path.exists() or not path.is_file():
+        return None
     if path.stat().st_size > max_size:
         return None
     try:
