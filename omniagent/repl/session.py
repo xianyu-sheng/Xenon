@@ -1,18 +1,24 @@
-"""
-Session Manager — 会话持久化。
+"""Session persistence.
 
-支持 /save 和 /load 命令，将会话状态保存到磁盘并恢复。
+Two layers intentionally coexist:
+1. Legacy named snapshots under ``~/.omniagent/sessions/*.json`` for /save and
+   /load compatibility.
+2. Runtime sessions under ``.omniagent/sessions/<session_id>/`` with
+   ``thread.jsonl`` and ``notes.md`` for durable agent context.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 SESSIONS_DIR = Path.home() / ".omniagent" / "sessions"
+PROJECT_SESSIONS_DIR = Path(".omniagent") / "sessions"
 
 
 def _ensure_sessions_dir() -> Path:
@@ -122,3 +128,166 @@ def delete_session(name: str) -> bool:
         filepath.unlink()
         return True
     return False
+
+
+# ── Runtime session store ──────────────────────────────────
+
+def new_session_id() -> str:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"sess-{stamp}-{uuid.uuid4().hex[:8]}"
+
+
+@dataclass(frozen=True)
+class RuntimeSession:
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+    root: Path
+
+    @property
+    def thread_path(self) -> Path:
+        return self.root / self.id / "thread.jsonl"
+
+    @property
+    def notes_path(self) -> Path:
+        return self.root / self.id / "notes.md"
+
+    @property
+    def meta_path(self) -> Path:
+        return self.root / self.id / "meta.json"
+
+    @property
+    def runs_dir(self) -> Path:
+        return self.root / self.id / "runs"
+
+
+class RuntimeSessionStore:
+    """Project-local session/thread/notes persistence."""
+
+    def __init__(self, root: Path | str | None = None) -> None:
+        self.root = Path(root) if root is not None else PROJECT_SESSIONS_DIR
+
+    def create(self, *, title: str = "", session_id: str | None = None) -> RuntimeSession:
+        sid = session_id or new_session_id()
+        now = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        session_dir = self.root / sid
+        session_dir.mkdir(parents=True, exist_ok=True)
+        (session_dir / "runs").mkdir(exist_ok=True)
+        meta = {
+            "version": "1.0",
+            "id": sid,
+            "title": title or "OmniAgent session",
+            "created_at": now,
+            "updated_at": now,
+        }
+        (session_dir / "meta.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        notes = session_dir / "notes.md"
+        if not notes.exists():
+            notes.write_text("# Session Notes\n\n", encoding="utf-8")
+        thread = session_dir / "thread.jsonl"
+        thread.touch(exist_ok=True)
+        return self._from_meta(meta)
+
+    def get(self, session_id: str) -> RuntimeSession:
+        meta_path = self.root / session_id / "meta.json"
+        if not meta_path.exists():
+            raise FileNotFoundError(f"runtime session not found: {session_id}")
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        return self._from_meta(meta)
+
+    def list(self, limit: int = 20) -> list[RuntimeSession]:
+        if not self.root.exists():
+            return []
+        sessions: list[RuntimeSession] = []
+        for meta_path in self.root.glob("*/meta.json"):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                sessions.append(self._from_meta(meta))
+            except Exception:
+                continue
+        sessions.sort(key=lambda s: s.updated_at, reverse=True)
+        return sessions[:limit]
+
+    def append_message(
+        self,
+        session_id: str,
+        *,
+        role: str,
+        content: str,
+        run_id: str | None = None,
+        model_used: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        session = self.get(session_id)
+        event = {
+            "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+            "role": role,
+            "content": content,
+            "run_id": run_id,
+            "model_used": model_used,
+            "metadata": metadata or {},
+        }
+        with session.thread_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(_safe(event), ensure_ascii=False, sort_keys=True) + "\n")
+        self._touch(session_id)
+        return event
+
+    def read_thread(self, session_id: str, *, limit: int | None = None) -> list[dict[str, Any]]:
+        session = self.get(session_id)
+        if not session.thread_path.exists():
+            return []
+        entries: list[dict[str, Any]] = []
+        for line in session.thread_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return entries[-limit:] if limit else entries
+
+    def read_notes(self, session_id: str) -> str:
+        session = self.get(session_id)
+        if not session.notes_path.exists():
+            return ""
+        return session.notes_path.read_text(encoding="utf-8", errors="replace")
+
+    def append_note(self, session_id: str, note: str) -> Path:
+        session = self.get(session_id)
+        stamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        with session.notes_path.open("a", encoding="utf-8") as f:
+            f.write(f"\n## {stamp}\n\n{note.strip()}\n")
+        self._touch(session_id)
+        return session.notes_path
+
+    def _touch(self, session_id: str) -> None:
+        meta_path = self.root / session_id / "meta.json"
+        if not meta_path.exists():
+            return
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["updated_at"] = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _from_meta(self, meta: dict[str, Any]) -> RuntimeSession:
+        return RuntimeSession(
+            id=str(meta["id"]),
+            title=str(meta.get("title") or "OmniAgent session"),
+            created_at=str(meta.get("created_at") or ""),
+            updated_at=str(meta.get("updated_at") or ""),
+            root=self.root,
+        )
+
+
+def _safe(obj: Any) -> Any:
+    """Return a JSON-safe representation."""
+    if isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    if isinstance(obj, dict):
+        return {str(k): _safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_safe(v) for v in obj]
+    return str(obj)

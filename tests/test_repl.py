@@ -695,11 +695,101 @@ class TestCommands:
         )
         assert "✅" in result
 
+    def test_runs_command_lists_and_shows_run(self, monkeypatch, tmp_path):
+        from omniagent.engine.run_recorder import RunRecorder
+        from omniagent.repl.commands import dispatch_command
+        from omniagent.repl.session import RuntimeSessionStore
+
+        monkeypatch.chdir(tmp_path)
+        store = RuntimeSessionStore(root=tmp_path / ".omniagent" / "sessions")
+        session = store.create(title="Test Session", session_id="sess-runs")
+        recorder = RunRecorder(
+            goal="测试 run 命令",
+            mode="react",
+            model_ids=["test/model"],
+            root=session.runs_dir,
+            run_id="run-command-test",
+            session_id=session.id,
+        )
+        recorder.start()
+        recorder.emit("tool.call_started", tool_name="read_file", params={"file_path": "README.md"})
+        recorder.finish(status="success", result="done")
+
+        reg = ModelRegistry()
+        ctx_mgr = ContextManager()
+        state = {"_session_store": store, "_runtime_session": session}
+
+        listing = dispatch_command("/runs", "", registry=reg, ctx_mgr=ctx_mgr, session_state=state)
+        detail = dispatch_command("/runs", "run-command-test", registry=reg, ctx_mgr=ctx_mgr, session_state=state)
+
+        assert listing is not None
+        assert "run-command-test" in listing
+        assert "测试 run 命令" in listing
+        assert detail is not None
+        assert "sess-runs" in detail
+        assert "tool.call_started" in detail
+        assert "events.jsonl" in detail
+
+    def test_session_and_notes_commands(self, tmp_path):
+        from omniagent.repl.commands import dispatch_command
+        from omniagent.repl.session import RuntimeSessionStore
+
+        store = RuntimeSessionStore(root=tmp_path)
+        session = store.create(title="Test Session", session_id="sess-command")
+        store.append_message(session.id, role="user", content="hello", run_id="run-1")
+        state = {"_session_store": store, "_runtime_session": session}
+
+        reg = ModelRegistry()
+        ctx_mgr = ContextManager()
+
+        summary = dispatch_command("/session", "", registry=reg, ctx_mgr=ctx_mgr, session_state=state)
+        thread = dispatch_command("/session", "thread", registry=reg, ctx_mgr=ctx_mgr, session_state=state)
+        added = dispatch_command("/notes", "add remember this", registry=reg, ctx_mgr=ctx_mgr, session_state=state)
+        notes = dispatch_command("/notes", "", registry=reg, ctx_mgr=ctx_mgr, session_state=state)
+
+        assert summary is not None and "sess-command" in summary
+        assert thread is not None and "hello" in thread
+        assert added is not None and "已追加" in added
+        assert notes is not None and "remember this" in notes
+
 
 # ── Tool Detection 测试 ──────────────────────────────────
 
 class TestToolDetection:
     """测试 direct 模式自动工具委派检测。"""
+
+    def test_repl_append_thread_message_records_current_session(self, monkeypatch, tmp_path):
+        from omniagent.repl import repl as repl_module
+        from omniagent.repl.repl import REPL
+        from omniagent.repl.session import RuntimeSessionStore
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(repl_module, "RuntimeSessionStore", lambda: RuntimeSessionStore(root=tmp_path / "sessions"))
+
+        repl = REPL()
+        repl._append_thread_message("user", "hello", run_id="run-1", metadata={"mode": "direct"})
+
+        entries = repl.session_store.read_thread(repl.runtime_session.id)
+
+        assert len(entries) == 1
+        assert entries[0]["role"] == "user"
+        assert entries[0]["run_id"] == "run-1"
+        assert entries[0]["metadata"]["mode"] == "direct"
+
+    def test_repl_start_run_uses_session_runs_dir(self, monkeypatch, tmp_path):
+        from omniagent.repl import repl as repl_module
+        from omniagent.repl.repl import REPL
+        from omniagent.repl.session import RuntimeSessionStore
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(repl_module, "RuntimeSessionStore", lambda: RuntimeSessionStore(root=tmp_path / "sessions"))
+
+        repl = REPL()
+        recorder = repl._start_run("hello", "direct", ["test/model"])
+
+        assert recorder.session_id == repl.runtime_session.id
+        assert recorder.events_path.exists()
+        assert recorder.events_path.parent.parent == repl.runtime_session.runs_dir
 
     def test_file_write_chinese(self):
         from omniagent.repl.repl import REPL

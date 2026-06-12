@@ -27,6 +27,7 @@ from rich.theme import Theme
 from rich.rule import Rule
 
 from omniagent.engine.context import AgentContext
+from omniagent.engine.run_recorder import RecordingCallback, RunRecorder
 from omniagent.repl.commands import COMMANDS, dispatch_command
 from omniagent.repl.context_manager import ContextManager
 from omniagent.repl.file_links import linkify_file_paths
@@ -35,6 +36,7 @@ from omniagent.repl.project_context import ProjectContext
 from omniagent.repl.prompt_optimizer import get_intent_display, optimize_prompt
 from omniagent.repl.shell_runner import format_shell_result, run_shell_command
 from omniagent.repl.status_bar import StatusBar
+from omniagent.repl.session import RuntimeSession, RuntimeSessionStore
 
 # ── 自定义主题 ────────────────────────────────────────────
 _theme = Theme({
@@ -86,18 +88,81 @@ class REPL:
         # 状态栏
         self.status_bar = StatusBar(console, self.ctx_mgr, self.registry)
         self._prompt_session = None
+        self._current_run_recorder: RunRecorder | None = None
+        self.session_store = RuntimeSessionStore()
+        self.runtime_session: RuntimeSession = self.session_store.create(title="OmniAgent interactive session")
 
         # 会话状态，供命令处理器共享
         self._session_state: dict[str, Any] = {
             "agent_context": self.agent_context,
             "_repl": self,
             "_novel_manager": self._novel_manager,
+            "_runtime_session": self.runtime_session,
+            "_session_store": self.session_store,
         }
 
     def _make_callback(self):
         """根据 verbose 状态创建引擎回调。"""
         from omniagent.engine.callbacks import ConsoleCallback
-        return ConsoleCallback(verbose=self.verbose)
+        callback = ConsoleCallback(verbose=self.verbose)
+        recorder = self._current_run_recorder
+        if recorder is None:
+            return callback
+        return RecordingCallback(callback, recorder)
+
+    def _start_run(self, user_input: str, mode_name: str, model_ids: list[str], *, optimized: str | None = None, system_hint: str | None = None, was_optimized: bool | None = None, intent: str | None = None) -> RunRecorder:
+        """为一次用户输入创建 run 记录器。"""
+        recorder = RunRecorder(
+            goal=user_input,
+            mode=mode_name,
+            model_ids=model_ids,
+            root=self.runtime_session.runs_dir,
+            session_id=self.runtime_session.id,
+        )
+        self._current_run_recorder = recorder
+        self._session_state["_run_recorder"] = recorder
+        recorder.start()
+        recorder.emit(
+            "chat.received",
+            raw_input=user_input,
+            optimized_input=optimized or user_input,
+            optimized=bool(was_optimized),
+            intent=intent,
+            system_hint=system_hint,
+        )
+        return recorder
+
+    def _finish_run(self, *, status: str, result: str = "", reason: str | None = None) -> None:
+        """结束当前 run。"""
+        recorder = self._current_run_recorder
+        if recorder is not None and not recorder.is_finished:
+            recorder.finish(status=status, result=result, reason=reason)
+        self._current_run_recorder = None
+        self._session_state.pop("_run_recorder", None)
+
+    def _append_thread_message(
+        self,
+        role: str,
+        content: str,
+        *,
+        run_id: str | None = None,
+        model_used: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist a chat message to the current runtime session thread."""
+        try:
+            self.session_store.append_message(
+                self.runtime_session.id,
+                role=role,
+                content=content,
+                run_id=run_id,
+                model_used=model_used,
+                metadata=metadata,
+            )
+            self.runtime_session = self.session_store.get(self.runtime_session.id)
+            self._session_state["_runtime_session"] = self.runtime_session
+        except Exception as e:
+            logger.debug("failed to append runtime session thread: %s", e)
 
     def _render_engine_result(self, callback, result: str, title: str, border_style: str = "green") -> None:
         """渲染引擎结果：先思考面板，再最终答案。"""
@@ -559,6 +624,9 @@ class REPL:
         # ── 记忆注入 ──────────────────────────────────
         self._inject_memories(user_input)
 
+        # ── 当前 runtime session notes 注入 ───────────────
+        self._inject_session_notes()
+
         # ── Prompt 优化（按需） ──────────────────────────
         if self.optimize_prompts:
             optimized, system_hint, was_optimized = optimize_prompt(user_input)
@@ -600,24 +668,55 @@ class REPL:
 
         # 根据当前思考范式选择执行方式
         mode = self.registry.current_mode
+        recorder = self._start_run(
+            user_input,
+            mode,
+            model_ids,
+            optimized=optimized,
+            system_hint=system_hint if self.optimize_prompts else None,
+            was_optimized=was_optimized if self.optimize_prompts else False,
+            intent=intent if self.optimize_prompts else None,
+        )
+        self._append_thread_message(
+            "user",
+            optimized,
+            run_id=recorder.run_id,
+            metadata={
+                "raw_input": user_input,
+                "optimized": bool(was_optimized) if self.optimize_prompts else False,
+                "mode": mode,
+            },
+        )
 
-        if mode == "react":
-            self._run_react_engine(optimized, model_ids)
-        elif mode == "plan-execute":
-            self._run_plan_execute_engine(optimized, model_ids)
-        elif mode == "reflection":
-            self._run_reflection_engine(optimized, model_ids)
-        elif mode == "plan-react":
-            self._run_plan_react_engine(optimized, model_ids)
-        elif mode == "plan-reflection":
-            self._run_plan_reflection_engine(optimized, model_ids)
-        elif mode == "react-reflection":
-            self._run_react_reflection_engine(optimized, model_ids)
-        elif mode == "novel":
-            self._run_novel_engine(optimized, model_ids)
-        else:
-            # direct 模式 — 直接调 LLM
-            self._run_direct(optimized, model_ids)
+        try:
+            if mode == "react":
+                self._run_react_engine(optimized, model_ids)
+            elif mode == "plan-execute":
+                self._run_plan_execute_engine(optimized, model_ids)
+            elif mode == "reflection":
+                self._run_reflection_engine(optimized, model_ids)
+            elif mode == "plan-react":
+                self._run_plan_react_engine(optimized, model_ids)
+            elif mode == "plan-reflection":
+                self._run_plan_reflection_engine(optimized, model_ids)
+            elif mode == "react-reflection":
+                self._run_react_reflection_engine(optimized, model_ids)
+            elif mode == "novel":
+                self._run_novel_engine(optimized, model_ids)
+            else:
+                # direct 模式 — 直接调 LLM
+                self._run_direct(optimized, model_ids)
+
+            if not recorder.is_finished:
+                recorder.finish(status="success")
+        except Exception as e:
+            if not recorder.is_finished:
+                recorder.finish(status="error", reason=str(e))
+            raise
+        finally:
+            if self._current_run_recorder is recorder:
+                self._current_run_recorder = None
+                self._session_state.pop("_run_recorder", None)
 
     def _run_direct(self, user_input: str, model_ids: list[str]) -> None:
         """直接对话模式。自动检测工具需求并委派给 ReAct 引擎。"""
@@ -643,6 +742,8 @@ class REPL:
                     if self._detect_file_claim(response_text):
                         console.print()
                         console.print("[cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，自动切换到 ReAct 模式重新执行...[/cyan]")
+                        if self._current_run_recorder is not None:
+                            self._current_run_recorder.emit("run.warning", warning="direct response claimed file operations; retrying with ReAct")
                         self.ctx_mgr.trim_last_assistant()
                         self._run_react_engine(user_input, model_ids)
                         return
@@ -651,16 +752,28 @@ class REPL:
                     if self._detect_denial(response_text):
                         console.print()
                         console.print("[cyan]🔧 LLM 表示无法完成任务，自动切换到 ReAct 模式重试...[/cyan]")
+                        if self._current_run_recorder is not None:
+                            self._current_run_recorder.emit("run.warning", warning="direct response denied capability; retrying with ReAct")
                         self.ctx_mgr.trim_last_assistant()
                         self._run_react_engine(user_input, model_ids)
                         return
 
+                self._append_thread_message(
+                    "assistant",
+                    response_text or "",
+                    run_id=self._current_run_recorder.run_id if self._current_run_recorder else None,
+                    model_used=model_id,
+                )
+                self._finish_run(status="success", result=response_text or "")
                 return
             except Exception as e:
                 last_error = e
+                if self._current_run_recorder is not None:
+                    self._current_run_recorder.emit("llm.call_failed", model=model_id, error=str(e))
                 console.print(f"[yellow]模型 {model_id} 失败: {e}，尝试下一个...[/yellow]")
 
         console.print(f"[error]❌ 所有模型均调用失败: {last_error}[/error]")
+        self._finish_run(status="error", reason=str(last_error))
 
     def _run_react_engine(self, user_input: str, model_ids: list[str]) -> None:
         """ReAct 引擎模式。"""
@@ -673,10 +786,13 @@ class REPL:
         try:
             result = engine.run(user_input, self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
+            self._append_thread_message("assistant", result, run_id=self._current_run_recorder.run_id if self._current_run_recorder else None, model_used=model_ids[0])
             self._render_engine_result(callback, result, "ReAct 结果")
             self.status_bar.set_last_model(model_ids[0])
+            self._finish_run(status="success", result=result)
         except Exception as e:
             console.print(f"[error]❌ ReAct 引擎执行失败: {e}[/error]")
+            self._finish_run(status="error", reason=str(e))
 
     def _run_plan_execute_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Plan-Execute 引擎模式。"""
@@ -689,10 +805,13 @@ class REPL:
         try:
             result = engine.run(user_input, self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
+            self._append_thread_message("assistant", result, run_id=self._current_run_recorder.run_id if self._current_run_recorder else None, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Plan-Execute 结果")
             self.status_bar.set_last_model(model_ids[0])
+            self._finish_run(status="success", result=result)
         except Exception as e:
             console.print(f"[error]❌ Plan-Execute 引擎执行失败: {e}[/error]")
+            self._finish_run(status="error", reason=str(e))
 
     def _run_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Reflection 引擎模式。"""
@@ -705,10 +824,13 @@ class REPL:
         try:
             result = engine.run(user_input)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
+            self._append_thread_message("assistant", result, run_id=self._current_run_recorder.run_id if self._current_run_recorder else None, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
+            self._finish_run(status="success", result=result)
         except Exception as e:
             console.print(f"[error]❌ Reflection 引擎执行失败: {e}[/error]")
+            self._finish_run(status="error", reason=str(e))
 
     def _run_plan_react_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Plan + React 组合引擎模式。"""
@@ -721,10 +843,13 @@ class REPL:
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
+            self._append_thread_message("assistant", result, run_id=self._current_run_recorder.run_id if self._current_run_recorder else None, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Plan+React 结果")
             self.status_bar.set_last_model(model_ids[0])
+            self._finish_run(status="success", result=result)
         except Exception as e:
             console.print(f"[error]❌ Plan+React 引擎执行失败: {e}[/error]")
+            self._finish_run(status="error", reason=str(e))
 
     def _run_plan_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Plan + Reflection 组合引擎模式。"""
@@ -737,10 +862,13 @@ class REPL:
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
+            self._append_thread_message("assistant", result, run_id=self._current_run_recorder.run_id if self._current_run_recorder else None, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Plan+Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
+            self._finish_run(status="success", result=result)
         except Exception as e:
             console.print(f"[error]❌ Plan+Reflection 引擎执行失败: {e}[/error]")
+            self._finish_run(status="error", reason=str(e))
 
     def _run_react_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
         """ReAct + Reflection 组合引擎模式。"""
@@ -753,10 +881,13 @@ class REPL:
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
+            self._append_thread_message("assistant", result, run_id=self._current_run_recorder.run_id if self._current_run_recorder else None, model_used=model_ids[0])
             self._render_engine_result(callback, result, "React+Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
+            self._finish_run(status="success", result=result)
         except Exception as e:
             console.print(f"[error]❌ React+Reflection 引擎执行失败: {e}[/error]")
+            self._finish_run(status="error", reason=str(e))
 
     def _run_novel_engine(self, user_input: str, model_ids: list[str]) -> None:
         """小说创作引擎模式（支持多小说隔离）。"""
@@ -774,10 +905,13 @@ class REPL:
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
+            self._append_thread_message("assistant", result, run_id=self._current_run_recorder.run_id if self._current_run_recorder else None, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Novel 创作结果", border_style="magenta")
             self.status_bar.set_last_model(model_ids[0])
+            self._finish_run(status="success", result=result)
         except Exception as e:
             console.print(f"[error]❌ 小说创作引擎执行失败: {e}[/error]")
+            self._finish_run(status="error", reason=str(e))
 
     def _stream_response(self, model_id: str, messages: list[dict[str, str]]) -> str:
         """流式输出模型回复，完成后 Markdown 渲染。返回完整响应文本。"""
@@ -786,6 +920,8 @@ class REPL:
         from rich.spinner import Spinner
 
         full_response = []
+        if self._current_run_recorder is not None:
+            self._current_run_recorder.emit("llm.model_selected", model=model_id, strategy="planner_priority")
 
         # 流式阶段：显示 spinner + 实时 token 计数
         with Live(
@@ -796,12 +932,21 @@ class REPL:
         ) as live:
             for chunk in chat_completion_stream(model_id, messages):
                 full_response.append(chunk)
+                if self._current_run_recorder is not None:
+                    self._current_run_recorder.emit("llm.token", model=model_id, token=chunk)
                 token_count = len("".join(full_response))
                 live.update(
                     Spinner("dots", text=f"[cyan] 生成中... {token_count} tokens[/cyan]")
                 )
 
         response_text = "".join(full_response)
+        if self._current_run_recorder is not None:
+            self._current_run_recorder.emit(
+                "llm.usage",
+                model=model_id,
+                input_tokens=self.ctx_mgr.estimate_tokens("\n".join(m.get("content", "") for m in messages)),
+                output_tokens=self.ctx_mgr.estimate_tokens(response_text),
+            )
 
         # 流式完成后，用 Markdown Panel 渲染最终结果
         if response_text.strip():
@@ -819,7 +964,17 @@ class REPL:
         from omniagent.utils.llm_client import chat_completion
 
         console.print(f"[dim]调用 {model_id}...[/dim]")
+        if self._current_run_recorder is not None:
+            self._current_run_recorder.emit("llm.model_selected", model=model_id, strategy="planner_priority")
         response = chat_completion(model_id, messages)
+        if self._current_run_recorder is not None:
+            self._current_run_recorder.emit("llm.message", model=model_id, content=response)
+            self._current_run_recorder.emit(
+                "llm.usage",
+                model=model_id,
+                input_tokens=self.ctx_mgr.estimate_tokens("\n".join(m.get("content", "") for m in messages)),
+                output_tokens=self.ctx_mgr.estimate_tokens(response),
+            )
 
         self.ctx_mgr.add_assistant_message(response, model_used=model_id)
 
@@ -950,6 +1105,18 @@ class REPL:
                 logger.debug(f"注入 {len(relevant)} 条相关记忆")
         except Exception:
             pass  # 记忆注入失败不影响对话
+
+    def _inject_session_notes(self) -> None:
+        """Inject current runtime session notes into the chat context."""
+        try:
+            notes = self.session_store.read_notes(self.runtime_session.id).strip()
+            body = notes.replace("# Session Notes", "").strip()
+            if body:
+                if len(body) > 4000:
+                    body = body[-4000:]
+                self.ctx_mgr.add_system_message(f"[Session Notes]\n{body}")
+        except Exception as e:
+            logger.debug("session notes injection failed: %s", e)
 
     def _load_custom_commands(self) -> None:
         """加载自定义快捷指令和技能，动态注册为命令。"""

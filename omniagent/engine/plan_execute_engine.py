@@ -218,6 +218,7 @@ class PlanExecuteEngine:
         """使用工具执行步骤。"""
         try:
             params = ToolNode.normalize_params(params)
+            self.callback.on_act(tool, params)
             node = ToolNode(f"plan_{tool}", action_type=tool, **params)
             result = node.execute(context)
 
@@ -239,17 +240,20 @@ class PlanExecuteEngine:
 
                 if tracker:
                     tracker.record(tool, params, True, summary[:200])
+                self.callback.on_observe(summary)
                 return summary
             else:
                 error_detail = f"执行失败: {error or result}"
                 if tracker:
                     tracker.record(tool, params, False, error_detail, error=str(error))
+                self.callback.on_observe(error_detail)
                 return error_detail
 
         except Exception as e:
             error_msg = f"执行异常: {e}"
             if tracker:
                 tracker.record(tool, params, False, error_msg, error=str(e))
+            self.callback.on_observe(error_msg)
             return error_msg
 
     def _execute_step_with_llm(

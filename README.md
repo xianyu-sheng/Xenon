@@ -72,6 +72,10 @@ flowchart LR
 | `/mcp` | Add/list/remove MCP servers and inspect external tools. |
 | `/memory` | Manage cross-session memory. |
 | `/compact` | Summarize long context to control token usage. |
+| `/session [thread]` | Inspect the current runtime session and recent thread messages. |
+| `/notes [add <text>]` | View or append durable notes for the current runtime session. |
+| `/runs [run_id]` | List recent agent runs or inspect a run's event log path and event summary. |
+| `/policy` | Inspect static tool permission policy and local policy file guidance. |
 | `!<command>` | Run a shell command directly from the OmniAgent input line with the existing safety checks. |
 | `/shell <command>` | Slash-command form of direct shell execution. |
 | `/new_terminal [cwd]` | Open an observable child terminal. On Windows Terminal it uses a split pane; otherwise it opens a new shell window. |
@@ -117,12 +121,15 @@ Supported today:
 - File edits can be reviewed as diffs before confirmation.
 - Dangerous shell and git commands are blocked or require explicit confirmation paths.
 - Sensitive paths and common credential filenames are guarded in tool operations.
+- Each interactive agent run writes an append-only event log to `.omniagent/sessions/<session_id>/runs/<run_id>/events.jsonl`, covering run start/finish, thoughts, tool calls, steps, reviews, model selection, and usage estimates.
+- Each interactive REPL session also has a project-local `.omniagent/sessions/<session_id>/thread.jsonl` and `notes.md`; notes are reinjected into later turns as durable session context.
+- Static tool permission policy can be customized in `.omniagent/policy.yaml`, for example denying `npm publish*` commands or writes to `*.secret`.
 
 Planned:
 
 - Fine-grained workspace sandbox policy.
-- Per-tool allowlist/denylist configuration.
-- Richer audit logs for long agent runs.
+- Interactive per-tool approval with allow-once / always-allow / always-deny decisions.
+- Richer trace replay and UI views built on top of run event logs.
 
 ## Project Rules
 

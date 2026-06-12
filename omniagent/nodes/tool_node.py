@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from omniagent.engine.context import AgentContext
+from omniagent.engine.permissions import PermissionResult, get_permission_manager
 from omniagent.nodes.base import BaseNode
 
 logger = logging.getLogger(__name__)
@@ -285,6 +286,21 @@ class ToolNode(BaseNode):
 
     # ── 安全验证 ──────────────────────────────────────────
 
+    def _check_permission(self, tool_name: str, params: dict[str, Any]) -> PermissionResult:
+        """Evaluate the static permission policy for a tool call."""
+        if not self.security_enabled:
+            return PermissionResult("allow", "security disabled")
+        result = get_permission_manager().evaluate(tool_name, params)
+        if result.decision == "ask":
+            raise SecurityError(
+                f"工具 '{tool_name}' 需要权限审批，但当前 CLI 暂未启用交互审批。"
+                f"请在 .omniagent/policy.yaml 中显式 allow/deny，或稍后使用审批模式。"
+            )
+        if not result.allowed:
+            detail = f"，匹配: {result.matched}" if result.matched else ""
+            raise SecurityError(f"工具 '{tool_name}' 被权限策略拒绝: {result.reason}{detail}")
+        return result
+
     def _get_allowed_root(self) -> Path:
         """获取允许操作的根目录。"""
         if self.cwd:
@@ -364,6 +380,7 @@ class ToolNode(BaseNode):
                     f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。"
                     f"命令: {cmd[:100]}"
                 )
+        self._check_permission("command", {"command": cmd})
 
     def _validate_git_command(self, git_cmd: str) -> None:
         """验证 Git 子命令是否安全。
@@ -380,6 +397,7 @@ class ToolNode(BaseNode):
                     f"危险 Git 命令被拦截: '{dangerous}'。"
                     f"完整命令: git {git_cmd[:80]}"
                 )
+        self._check_permission("git", {"git_command": git_cmd})
 
     def execute(self, context: AgentContext) -> dict[str, Any]:
         """根据 action_type 分发到不同的处理方法。"""
@@ -470,6 +488,8 @@ class ToolNode(BaseNode):
         # 如果 content 为空，尝试从 context 中读取
         if not content and self.output_slot:
             content = context.get(self.output_slot, "")
+
+        self._check_permission("write_file", {"file_path": file_path, "append": self.append})
 
         # 安全验证：路径 + 大小
         path = self._validate_path(file_path, for_write=True)
@@ -566,6 +586,8 @@ class ToolNode(BaseNode):
         if not old_text:
             raise ValueError(f"[{self.id}] edit_file 需要 old_text")
 
+        self._check_permission("edit_file", {"file_path": file_path})
+
         # 安全验证
         path = self._validate_path(file_path, for_write=True)
         if not path.exists():
@@ -620,6 +642,8 @@ class ToolNode(BaseNode):
         if not dir_path:
             raise ValueError(f"[{self.id}] create_directory 需要 file_path")
 
+        self._check_permission("create_directory", {"file_path": dir_path})
+
         # 安全验证
         path = self._validate_path(dir_path, for_write=True)
 
@@ -668,6 +692,7 @@ class ToolNode(BaseNode):
         written_paths = []
 
         try:
+            self._check_permission("batch_write", {"files": self.files})
             for i, file_spec in enumerate(self.files):
                 path_str = file_spec.get("path") or file_spec.get("file_path", "")
                 file_content = file_spec.get("content", "")
@@ -733,6 +758,7 @@ class ToolNode(BaseNode):
             }
 
         results = []
+        self._check_permission("batch_edit", {"edits": self.edits})
 
         for i, edit_spec in enumerate(self.edits):
             file_path = edit_spec.get("file_path", "")
@@ -1090,6 +1116,8 @@ class ToolNode(BaseNode):
                     args[k] = self._resolve_template(v, context)
                 else:
                     args[k] = v
+
+            self._check_permission("mcp_call", {"tool_name": tool_name, "tool_args": args})
 
             result = registry.call_tool(tool_name, args)
 

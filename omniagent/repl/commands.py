@@ -424,6 +424,198 @@ def _cmd_sessions(**kwargs: Any) -> str:
     return "\n".join(lines)
 
 
+# /runs ────────────────────────────────────────────────────
+
+register_command("/runs", "列出或查看 Agent run 事件记录", "/runs [run_id]")
+
+@_handler("/runs")
+def _cmd_runs(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> str:
+    from omniagent.engine.run_recorder import list_runs, load_run_events, summarize_run
+
+    session = session_state.get("_runtime_session")
+    session_root = getattr(session, "runs_dir", None)
+
+    run_id = args.strip()
+    if run_id:
+        roots = [session_root, None] if session_root is not None else [None]
+        summary = None
+        events = []
+        for root in roots:
+            summary = summarize_run(run_id, root=root)
+            if summary is not None:
+                events = load_run_events(run_id, root=root)
+                break
+        if summary is None:
+            return f"未找到 run: {run_id}"
+
+        lines = [
+            f"Run: {summary.run_id}",
+            f"会话: {summary.session_id or '-'}",
+            f"状态: {summary.status}",
+            f"范式: {summary.mode or '-'}",
+            f"开始: {summary.started_at or '-'}",
+            f"结束: {summary.finished_at or '-'}",
+            f"事件: {summary.event_count}",
+            f"日志: {summary.events_path}",
+            "",
+            "最近事件:",
+        ]
+        for event in events[-8:]:
+            event_type = event.get("type", "?")
+            detail = ""
+            if event_type == "tool.call_started":
+                detail = f" {event.get('tool_name', '')}"
+            elif event_type == "step.started":
+                detail = f" step={event.get('step')} {event.get('task', '')}"
+            elif event_type == "run.finished":
+                detail = f" status={event.get('status')}"
+            elif event_type == "review.finished":
+                detail = f" score={event.get('score')} passed={event.get('passed')}"
+            lines.append(f"  {event.get('seq', '-')}. {event_type}{detail}")
+        return "\n".join(lines)
+
+    roots = [session_root, None] if session_root is not None else [None]
+    seen: set[str] = set()
+    runs = []
+    for root in roots:
+        for item in list_runs(limit=10, root=root):
+            if item.run_id in seen:
+                continue
+            seen.add(item.run_id)
+            runs.append(item)
+    runs.sort(key=lambda item: item.started_at, reverse=True)
+    runs = runs[:10]
+
+    if not runs:
+        return (
+            "暂无 run 事件记录。完成一次对话后会写入 "
+            ".omniagent/sessions/<session_id>/runs/<run_id>/events.jsonl。"
+        )
+
+    lines = ["最近 run 记录:\n"]
+    for item in runs:
+        goal = item.goal.replace("\n", " ")
+        if len(goal) > 54:
+            goal = goal[:51] + "..."
+        lines.append(
+            f"  {item.run_id}  {item.status:<7} {item.mode or '-':<16} "
+            f"{item.event_count:>3} events  {goal}"
+        )
+    lines.append("\n输入 /runs <run_id> 查看事件摘要和日志路径")
+    return "\n".join(lines)
+
+
+# /policy ──────────────────────────────────────────────────
+
+register_command("/policy", "查看工具权限策略", "/policy")
+
+@_handler("/policy")
+def _cmd_policy(**kwargs: Any) -> str:
+    from omniagent.engine.permissions import DEFAULT_POLICY_PATH, get_permission_manager
+
+    manager = get_permission_manager()
+    lines = [
+        "工具权限策略:",
+        f"  策略文件: {DEFAULT_POLICY_PATH.resolve()}",
+        f"  文件存在: {'是' if DEFAULT_POLICY_PATH.exists() else '否'}",
+        "",
+        "当前工具默认策略:",
+    ]
+    for name in sorted(manager.policies):
+        policy = manager.policies[name]
+        label = policy.default
+        if policy.deny_patterns:
+            label += f", deny={len(policy.deny_patterns)}"
+        if policy.allow_patterns:
+            label += f", allow={len(policy.allow_patterns)}"
+        lines.append(f"  {name:<16} {label}")
+
+    lines.extend([
+        "",
+        "示例 .omniagent/policy.yaml:",
+        "tools:",
+        "  command:",
+        "    deny_patterns:",
+        "      - \"npm publish*\"",
+        "  write_file:",
+        "    deny_patterns:",
+        "      - \"*.secret\"",
+    ])
+    return "\n".join(lines)
+
+
+# /session ─────────────────────────────────────────────────
+
+register_command("/session", "查看当前 runtime session 与最近 thread", "/session [thread [n]]")
+
+@_handler("/session")
+def _cmd_session(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> str:
+    store = session_state.get("_session_store")
+    session = session_state.get("_runtime_session")
+    if not store or not session:
+        return "当前没有 runtime session。"
+
+    parts = args.split()
+    if parts and parts[0].lower() == "thread":
+        limit = 8
+        if len(parts) > 1 and parts[1].isdigit():
+            limit = max(1, min(int(parts[1]), 50))
+        entries = store.read_thread(session.id, limit=limit)
+        if not entries:
+            return f"Session {session.id} 暂无 thread 消息。"
+        lines = [f"Session thread: {session.id}\n"]
+        for entry in entries:
+            content = str(entry.get("content", "")).replace("\n", " ")
+            if len(content) > 120:
+                content = content[:117] + "..."
+            run_id = entry.get("run_id") or "-"
+            lines.append(f"  {entry.get('role', '?'):<9} {run_id}  {content}")
+        return "\n".join(lines)
+
+    entries = store.read_thread(session.id)
+    notes = store.read_notes(session.id)
+    lines = [
+        f"当前 session: {session.id}",
+        f"标题: {session.title}",
+        f"创建: {session.created_at}",
+        f"更新: {session.updated_at}",
+        f"Thread: {session.thread_path.resolve()}",
+        f"Notes: {session.notes_path.resolve()}",
+        f"消息数: {len(entries)}",
+        f"Notes 字符数: {len(notes)}",
+        "",
+        "输入 /session thread 查看最近消息；输入 /notes add <内容> 追加长期 notes。",
+    ]
+    return "\n".join(lines)
+
+
+# /notes ───────────────────────────────────────────────────
+
+register_command("/notes", "查看或追加当前 session notes", "/notes [add <content>]")
+
+@_handler("/notes")
+def _cmd_notes(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> str:
+    store = session_state.get("_session_store")
+    session = session_state.get("_runtime_session")
+    if not store or not session:
+        return "当前没有 runtime session。"
+
+    if args.strip().lower().startswith("add "):
+        note = args.strip()[4:].strip()
+        if not note:
+            return "用法: /notes add <内容>"
+        path = store.append_note(session.id, note)
+        session_state["_runtime_session"] = store.get(session.id)
+        return f"✅ 已追加 notes: {path.resolve()}"
+
+    notes = store.read_notes(session.id).strip()
+    if not notes:
+        return "当前 notes 为空。输入 /notes add <内容> 追加。"
+    if len(notes) > 4000:
+        notes = notes[-4000:]
+    return notes
+
+
 # /config ──────────────────────────────────────────────────
 
 register_command("/config", "查看或保存当前配置", "/config [save <path>]")
