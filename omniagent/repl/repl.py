@@ -32,6 +32,7 @@ from omniagent.repl.commands import COMMANDS, dispatch_command
 from omniagent.repl.context_manager import ContextManager
 from omniagent.repl.file_links import linkify_file_paths
 from omniagent.repl.model_registry import ModelRegistry
+from omniagent.repl.output_renderer import OutputRenderer
 from omniagent.repl.project_context import ProjectContext
 from omniagent.repl.prompt_optimizer import get_intent_display, optimize_prompt
 from omniagent.repl.shell_runner import format_shell_result, run_shell_command
@@ -165,18 +166,10 @@ class REPL:
             logger.debug("failed to append runtime session thread: %s", e)
 
     def _render_engine_result(self, callback, result: str, title: str, border_style: str = "green") -> None:
-        """渲染引擎结果：先思考面板，再最终答案。"""
-        # 1. 渲染思考过程面板（如果有）
-        panel = callback.get_thinking_panel()
-        if panel is not None:
-            console.print(panel)
-
-        # 2. 渲染最终答案
-        console.print(Panel(
-            Markdown(result),
-            title=f"[command]{title}[/command]",
-            border_style=border_style,
-        ))
+        """渲染引擎结果 — Claude Code 风格：答案优先 + 思考折叠。"""
+        renderer = OutputRenderer(verbose=self.verbose)
+        panel = callback.get_thinking_panel() if hasattr(callback, 'get_thinking_panel') else None
+        renderer.render_answer(result, panel, title=title, border_style=border_style)
 
     @staticmethod
     def _default_system_prompt() -> str:
@@ -948,10 +941,11 @@ class REPL:
                 output_tokens=self.ctx_mgr.estimate_tokens(response_text),
             )
 
-        # 流式完成后，用 Markdown Panel 渲染最终结果
+        # 流式完成后，用增强 Markdown Panel 渲染最终结果
         if response_text.strip():
+            renderer = OutputRenderer(verbose=self.verbose)
             console.print(Panel(
-                Markdown(response_text),
+                renderer._render_markdown_enhanced(response_text),
                 title=f"[assistant]Assistant[/assistant] [dim]({model_id})[/dim]",
                 border_style="green",
             ))
@@ -979,8 +973,9 @@ class REPL:
         self.ctx_mgr.add_assistant_message(response, model_used=model_id)
 
         console.print()
+        renderer = OutputRenderer(verbose=self.verbose)
         console.print(Panel(
-            Markdown(response),
+            renderer._render_markdown_enhanced(response),
             title=f"[assistant]Assistant[/assistant] [dim]({model_id})[/dim]",
             border_style="green",
         ))
