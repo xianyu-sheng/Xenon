@@ -286,20 +286,48 @@ class ToolNode(BaseNode):
 
     # ── 安全验证 ──────────────────────────────────────────
 
+    # 类级别的审批处理器（由 REPL 注入）
+    _approval_handler: classmethod | None = None
+
+    @classmethod
+    def set_approval_handler(cls, handler: callable | None) -> None:
+        """设置交互式审批处理器。handler(tool_name, params_preview) -> bool"""
+        cls._approval_handler = handler
+
     def _check_permission(self, tool_name: str, params: dict[str, Any]) -> PermissionResult:
         """Evaluate the static permission policy for a tool call."""
         if not self.security_enabled:
             return PermissionResult("allow", "security disabled")
         result = get_permission_manager().evaluate(tool_name, params)
         if result.decision == "ask":
-            raise SecurityError(
-                f"工具 '{tool_name}' 需要权限审批，但当前 CLI 暂未启用交互审批。"
-                f"请在 .omniagent/policy.yaml 中显式 allow/deny，或稍后使用审批模式。"
-            )
+            # 尝试交互式审批
+            if ToolNode._approval_handler:
+                params_preview = self._format_params_for_approval(tool_name, params)
+                allowed = ToolNode._approval_handler(tool_name, params_preview)
+                if allowed:
+                    return PermissionResult("allow", "用户批准")
+                else:
+                    raise SecurityError(f"工具 '{tool_name}' 被用户拒绝")
+            # 没有审批处理器 → 降级为 allow（非严格模式下）
+            logger.debug(f"工具 '{tool_name}' 需要审批但无审批处理器，降级为 allow")
+            return PermissionResult("allow", "no approval handler, downgraded")
         if not result.allowed:
             detail = f"，匹配: {result.matched}" if result.matched else ""
             raise SecurityError(f"工具 '{tool_name}' 被权限策略拒绝: {result.reason}{detail}")
         return result
+
+    @staticmethod
+    def _format_params_for_approval(tool_name: str, params: dict[str, Any]) -> str:
+        """格式化参数用于审批展示。"""
+        if tool_name == "command":
+            return params.get("action", params.get("command", ""))
+        if tool_name in ("write_file", "read_file", "edit_file", "create_directory"):
+            return params.get("file_path", "")
+        if tool_name in ("file_move", "file_copy"):
+            return f"{params.get('source', '')} → {params.get('destination', '')}"
+        if tool_name == "git":
+            return params.get("git_command", "")
+        return str(list(params.values())[:2])
 
     def _get_allowed_root(self) -> Path:
         """获取允许操作的根目录。"""
@@ -411,6 +439,8 @@ class ToolNode(BaseNode):
             "web_fetch": self._web_fetch,
             "edit_file": self._edit_file,
             "create_directory": self._create_directory,
+            "file_move": self._file_move,
+            "file_copy": self._file_copy,
             "batch_write": self._batch_write,
             "batch_edit": self._batch_edit,
             "code_index": self._code_index,
@@ -675,6 +705,120 @@ class ToolNode(BaseNode):
                 "path": str(path),
                 "success": False,
                 "error": f"目录创建失败: {e}",
+            }
+
+    # ── 文件移动 / 复制 ──────────────────────────────────
+
+    def _file_move(self, context: AgentContext) -> dict[str, Any]:
+        """移动文件或文件夹到新位置。"""
+        source = self._resolve_template(self.action_input.get("source", ""), context)
+        destination = self._resolve_template(self.action_input.get("destination", ""), context)
+
+        if not source:
+            raise ValueError(f"[{self.id}] file_move 需要 source 参数")
+        if not destination:
+            raise ValueError(f"[{self.id}] file_move 需要 destination 参数")
+
+        self._check_permission("command", {"command": f"Move-Item {source} {destination}"})
+
+        src_path = self._validate_path(source, for_write=True)
+        dst_path = Path(self._resolve_template(destination, context))
+
+        if not src_path.exists():
+            return {
+                "action_type": "file_move",
+                "source": str(src_path),
+                "destination": str(dst_path),
+                "success": False,
+                "error": f"源文件不存在: {src_path}",
+            }
+
+        logger.debug(f"[{self.id}] 移动: {src_path} → {dst_path}")
+
+        try:
+            import shutil
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src_path), str(dst_path))
+
+            if not dst_path.exists():
+                return {
+                    "action_type": "file_move",
+                    "source": str(src_path),
+                    "destination": str(dst_path),
+                    "success": False,
+                    "error": f"移动后验证失败: {dst_path} 不存在",
+                }
+
+            result = {
+                "action_type": "file_move",
+                "source": str(src_path),
+                "destination": str(dst_path),
+                "success": True,
+            }
+            self._write_output(context, f"已移动: {src_path} → {dst_path}")
+            return result
+
+        except Exception as e:
+            return {
+                "action_type": "file_move",
+                "source": str(src_path),
+                "destination": str(dst_path),
+                "success": False,
+                "error": f"文件移动失败: {e}",
+            }
+
+    def _file_copy(self, context: AgentContext) -> dict[str, Any]:
+        """复制文件到新位置。"""
+        source = self._resolve_template(self.action_input.get("source", ""), context)
+        destination = self._resolve_template(self.action_input.get("destination", ""), context)
+
+        if not source:
+            raise ValueError(f"[{self.id}] file_copy 需要 source 参数")
+        if not destination:
+            raise ValueError(f"[{self.id}] file_copy 需要 destination 参数")
+
+        self._check_permission("command", {"command": f"Copy-Item {source} {destination}"})
+
+        src_path = self._validate_path(source, for_write=False)
+        dst_path = Path(self._resolve_template(destination, context))
+
+        if not src_path.exists():
+            return {
+                "action_type": "file_copy",
+                "source": str(src_path),
+                "destination": str(dst_path),
+                "success": False,
+                "error": f"源文件不存在: {src_path}",
+            }
+
+        logger.debug(f"[{self.id}] 复制: {src_path} → {dst_path}")
+
+        try:
+            import shutil
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            if src_path.is_file():
+                shutil.copy2(str(src_path), str(dst_path))
+            else:
+                if dst_path.exists():
+                    dst_path = dst_path / src_path.name
+                shutil.copytree(str(src_path), str(dst_path))
+
+            result = {
+                "action_type": "file_copy",
+                "source": str(src_path),
+                "destination": str(dst_path),
+                "success": True,
+            }
+            self._write_output(context, f"已复制: {src_path} → {dst_path}")
+            return result
+
+        except Exception as e:
+            return {
+                "action_type": "file_copy",
+                "source": str(src_path),
+                "destination": str(dst_path),
+                "success": False,
+                "error": f"文件复制失败: {e}",
             }
 
     # ── 批量操作 ──────────────────────────────────────────

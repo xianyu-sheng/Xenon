@@ -263,3 +263,109 @@ class ListFilesTool(BaseTool):
 
         display = "\n".join(files) if files else "(空目录)"
         return ToolResult.ok(display, count=len(files), files=files, path=str(path))
+
+
+class FileMoveTool(BaseTool):
+    name = "file_move"
+    description = "将文件或文件夹从一个位置移动到另一个位置。可用于重命名、整理文件。注意：移动操作不可撤销。"
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "source": {"type": "string", "description": "源文件/文件夹的路径"},
+            "destination": {"type": "string", "description": "目标路径（如果目标是目录且已存在，文件会被移入该目录；否则文件会被移动并重命名）"},
+        },
+        "required": ["source", "destination"],
+    }
+
+    async def invoke(self, params: dict[str, object]) -> ToolResult:
+        source = str(params.get("source", ""))
+        destination = str(params.get("destination", ""))
+
+        if not source:
+            return ToolResult.schema_error("file_move 需要 source 参数")
+        if not destination:
+            return ToolResult.schema_error("file_move 需要 destination 参数")
+
+        try:
+            src_path = _validate_path(source, for_write=True)
+        except ValueError as e:
+            return ToolResult.permission_denied(str(e))
+
+        if not src_path.exists():
+            return ToolResult.error(f"源文件不存在: {src_path}", error_type="runtime_error")
+
+        try:
+            dst_path = Path(destination).resolve()
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            return ToolResult.error(f"目标路径无效: {e}", error_type="runtime_error")
+
+        try:
+            import shutil
+            shutil.move(str(src_path), str(dst_path))
+
+            if not dst_path.exists():
+                return ToolResult.error(f"移动后验证失败: 目标路径不存在", error_type="runtime_error")
+
+            logger.info(f"移动文件: {src_path} → {dst_path}")
+            return ToolResult.ok(
+                f"已移动: {src_path} → {dst_path}",
+                source=str(src_path),
+                destination=str(dst_path),
+            )
+        except Exception as e:
+            return ToolResult.error(f"移动失败: {e}", error_type="runtime_error")
+
+
+class FileCopyTool(BaseTool):
+    name = "file_copy"
+    description = "将文件复制到新位置。源文件保持不变。如果要备份文件或复制模板，请使用此工具。"
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "source": {"type": "string", "description": "源文件的路径"},
+            "destination": {"type": "string", "description": "目标路径（如果目标是目录且已存在，文件会被复制到该目录下；否则文件会被复制并重命名）"},
+        },
+        "required": ["source", "destination"],
+    }
+
+    async def invoke(self, params: dict[str, object]) -> ToolResult:
+        source = str(params.get("source", ""))
+        destination = str(params.get("destination", ""))
+
+        if not source:
+            return ToolResult.schema_error("file_copy 需要 source 参数")
+        if not destination:
+            return ToolResult.schema_error("file_copy 需要 destination 参数")
+
+        try:
+            src_path = _validate_path(source, for_write=False)
+        except ValueError as e:
+            return ToolResult.permission_denied(str(e))
+
+        if not src_path.exists():
+            return ToolResult.error(f"源文件不存在: {src_path}", error_type="runtime_error")
+
+        try:
+            dst_path = Path(destination).resolve()
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            return ToolResult.error(f"目标路径无效: {e}", error_type="runtime_error")
+
+        try:
+            import shutil
+            if src_path.is_file():
+                shutil.copy2(str(src_path), str(dst_path))
+            else:
+                if dst_path.exists():
+                    dst_path = dst_path / src_path.name
+                shutil.copytree(str(src_path), str(dst_path))
+
+            logger.info(f"复制文件: {src_path} → {dst_path}")
+            return ToolResult.ok(
+                f"已复制: {src_path} → {dst_path}",
+                source=str(src_path),
+                destination=str(dst_path),
+            )
+        except Exception as e:
+            return ToolResult.error(f"复制失败: {e}", error_type="runtime_error")

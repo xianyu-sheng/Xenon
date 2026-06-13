@@ -93,6 +93,13 @@ class REPL:
         self.session_store = RuntimeSessionStore()
         self.runtime_session: RuntimeSession = self.session_store.create(title="OmniAgent interactive session")
 
+        # 权限审批缓存 (session 级)
+        self._approval_cache: dict[str, bool] = {}
+
+        # 设置交互式审批处理器
+        from omniagent.nodes.tool_node import ToolNode
+        ToolNode.set_approval_handler(self._approval_handler)
+
         # 会话状态，供命令处理器共享
         self._session_state: dict[str, Any] = {
             "agent_context": self.agent_context,
@@ -1003,6 +1010,11 @@ class REPL:
         # 文件删除
         re.compile(r"(?:删除|移除|清除).{0,20}(?:文件|目录)", re.I),
         re.compile(r"(?:delete|remove).{0,20}(?:file|dir)", re.I),
+        # 文件移动/复制/重命名 ← 新增
+        re.compile(r"(?:移动|搬|转移|挪).{0,20}(?:文件|到|至|桌面|下载|文档)", re.I),
+        re.compile(r"(?:复制|拷贝|备份).{0,20}(?:文件|到|至)", re.I),
+        re.compile(r"(?:重命名|改名).{0,10}(?:文件|为)", re.I),
+        re.compile(r"(?:move|copy|cp|mv|rename).{0,20}(?:file|to)", re.I),
         # 命令执行（含代词：执行它/运行这个/跑一下）
         re.compile(r"(?:执行|运行|跑).{0,15}(?:命令|脚本|程序|命令行|测试|pytest|npm|pip|python|node)", re.I),
         re.compile(r"(?:执行|运行|跑|试试).{0,5}(?:它|他|她|这个|一下|看看|试试)", re.I),
@@ -1061,6 +1073,36 @@ class REPL:
         "I cannot", "I can't", "I'm unable",
         "I don't have access", "I'm not able",
     ]
+
+    # ── 交互式权限审批 ──────────────────────────────────────
+
+    def _approval_handler(self, tool_name: str, params_preview: str) -> bool:
+        """交互式审批处理器 — 当工具需要 ask 权限时调用。"""
+        # 检查缓存
+        cache_key = f"{tool_name}:{params_preview}"
+        if cache_key in self._approval_cache:
+            return self._approval_cache[cache_key]
+
+        # 显示审批提示
+        console.print()
+        console.print(Panel(
+            f"[bold yellow]⚠ 工具调用需要审批[/bold yellow]\n\n"
+            f"[cyan]工具:[/cyan] {tool_name}\n"
+            f"[cyan]参数:[/cyan] {params_preview[:200]}\n\n"
+            f"[dim]选择: (y)批准一次 / (a)本次会话始终批准 / (n)拒绝[/dim]",
+            border_style="yellow",
+            title="权限审批",
+        ))
+
+        choice = Prompt.ask("批准?", choices=["y", "a", "n"], default="n")
+        if choice == "a":
+            self._approval_cache[cache_key] = True
+            return True
+        elif choice == "y":
+            return True
+        else:
+            console.print("[red]✗ 已拒绝[/red]")
+            return False
 
     @classmethod
     def _detect_file_claim(cls, text: str) -> bool:
