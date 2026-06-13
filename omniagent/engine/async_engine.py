@@ -22,6 +22,7 @@ import uuid
 from typing import Any
 
 from omniagent.engine.callbacks import EngineCallback
+from omniagent.engine.compactor import Compactor
 from omniagent.engine.context import AgentContext
 from omniagent.engine.tool_tracker import ToolExecutionTracker
 from omniagent.nodes.tool_node import _DYNAMIC_TOOLS, ToolNode
@@ -143,6 +144,12 @@ class AsyncReActEngine:
             logger.debug(f"AsyncReAct 注入 {len(recent)} 条对话历史")
         messages.append({"role": "user", "content": user_input})
 
+        # ── 初始化上下文压缩器 ──
+        from pathlib import Path as _Path
+        session_dir = _Path.cwd() / ".omniagent" / "sessions" / (self.session_id or run_id)
+        compactor = Compactor(session_dir)
+        compact_count = 0
+
         # ── 发布 RunStartedEvent ──
         await self._publish_event("run.started", run_id=run_id, goal=user_input, mode="react",
                                    model_ids=self.model_priority, session_id=self.session_id,
@@ -159,6 +166,21 @@ class AsyncReActEngine:
 
         try:
             for i in range(self.max_iterations):
+                # ── 上下文压缩检查（每 3 轮）──
+                if i > 0 and i % 3 == 0:
+                    estimated = Compactor._estimate_tokens(messages)
+                    if compactor.needs_compact(estimated):
+                        logger.info(f"AsyncReAct: 第 {i} 轮触发压缩 (≈{estimated} tokens)")
+                        result = compactor.compact(messages[1:], self.model_priority)
+                        if result:
+                            compacted = compactor.apply_compact(messages[1:], result)
+                            messages = [messages[0]] + compacted
+                            compact_count += 1
+                            logger.info(
+                                f"AsyncReAct: 压缩完成 (第 {compact_count} 次), "
+                                f"{result.original_token_estimate} → {result.summary_tokens} tokens"
+                            )
+
                 logger.debug(f"AsyncReAct 迭代 {i + 1}/{self.max_iterations}")
 
                 # ── 发布 StepStartedEvent ──

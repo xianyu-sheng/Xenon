@@ -94,14 +94,22 @@ class Compactor:
         """检查是否需要压缩。"""
         return estimated_tokens > self._context_window * self._compact_threshold
 
-    async def compact(
+    def compact(
         self,
         messages: list[dict[str, Any]],
-        provider: Any,  # LLMProvider
+        model_priority: list[str],
         *,
         focus: str = "",
+        max_tokens: int = 4096,
     ) -> CompactionResult | None:
-        """压缩消息列表，返回 CompactionResult 或 None（失败时）。"""
+        """压缩消息列表，返回 CompactionResult 或 None（失败时）。
+
+        Args:
+            messages: 待压缩的消息列表
+            model_priority: LLM 模型优先级列表
+            focus: 可选的压缩焦点
+            max_tokens: 压缩摘要的最大 token 数
+        """
 
         # 估算 token 数
         original_estimate = self._estimate_tokens(messages)
@@ -109,39 +117,43 @@ class Compactor:
             return None  # 上下文还不大，不需要压缩
 
         # 构建压缩请求
-        compact_request = _COMPACT_PROMPT
+        compact_prompt = _COMPACT_PROMPT
         if focus:
-            compact_request += f"\nFocus on: {focus}"
+            compact_prompt += f"\nFocus on: {focus}"
 
         # 将消息列表格式化为文本
         conversation_text = self._format_messages(messages)
         compact_messages = [
-            {"role": "system", "content": compact_request},
+            {"role": "system", "content": compact_prompt},
             {"role": "user", "content": f"Compress this conversation:\n\n{conversation_text}"},
         ]
 
         try:
-            if hasattr(provider, 'chat'):
-                response = await provider.chat(
-                    messages=compact_messages,
-                    tool_schemas=[],
-                    bus=None,  # type: ignore
-                    run_id="compact",
-                    system=compact_request,
-                )
-                summary = response.text if hasattr(response, 'text') else str(response)
-            else:
-                # 回退：调用同步 API
-                from omniagent.utils.llm_client import chat_completion
-                summary = chat_completion(
-                    "deepseek/deepseek-v4-pro",
-                    compact_messages,
-                    max_tokens=4096,
-                    temperature=0.3,
-                )
+            from omniagent.utils.llm_client import chat_completion
+
+            summary = chat_completion(
+                model_priority[0],
+                compact_messages,
+                max_tokens=max_tokens,
+                temperature=0.3,
+            )
         except Exception as e:
-            logger.warning(f"压缩失败: {e}")
-            return None
+            # 尝试 fallback 模型
+            fallback_error = e
+            for model in model_priority[1:]:
+                try:
+                    summary = chat_completion(
+                        model,
+                        compact_messages,
+                        max_tokens=max_tokens,
+                        temperature=0.3,
+                    )
+                    break
+                except Exception:
+                    continue
+            else:
+                logger.warning(f"压缩失败（所有模型均失败）: {fallback_error}")
+                return None
 
         summary_tokens = self._estimate_tokens_from_text(summary)
 
@@ -152,7 +164,7 @@ class Compactor:
 
         logger.info(
             f"上下文压缩: original≈{original_estimate} summary={summary_tokens} tokens "
-            f"(saved {original_estimate - summary_tokens})"
+            f"(节省 {original_estimate - summary_tokens})"
         )
 
         return CompactionResult(

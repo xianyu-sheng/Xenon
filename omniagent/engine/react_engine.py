@@ -10,9 +10,11 @@ ReAct 模式: Think → Act → Observe → 循环直到完成
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from omniagent.engine.callbacks import EngineCallback
+from omniagent.engine.compactor import Compactor
 from omniagent.engine.context import AgentContext
 from omniagent.engine.tool_tracker import ToolExecutionTracker
 from omniagent.nodes.tool_node import ToolNode, _DYNAMIC_TOOLS
@@ -310,11 +312,32 @@ class ReActEngine:
             logger.warning("ReAct: 无对话历史可注入！")
         messages.append({"role": "user", "content": user_input})
 
+        # ── 初始化上下文压缩器 ──
+        session_dir = Path.cwd() / ".omniagent" / "sessions" / getattr(ctx, "run_id", "default")
+        compactor = Compactor(session_dir)
+        compact_count = 0
+
         # 判断输入是否需要工具操作
         requires_tools = self._input_requires_tools(user_input)
         no_tool_streak = 0  # 连续未执行工具的轮次
 
         for i in range(self.max_iterations):
+            # ── 上下文压缩检查（每 3 轮 + 初始检查）──
+            if i == 0 or (i > 0 and i % 3 == 0):
+                estimated = Compactor._estimate_tokens(messages)
+                if compactor.needs_compact(estimated):
+                    logger.info(f"ReAct: 第 {i} 轮触发压缩 (≈{estimated} tokens)")
+                    # compact 对话部分（保留 system prompt）
+                    to_compact = messages[1:]  # 跳过 system prompt
+                    result = compactor.compact(to_compact, self.model_priority)
+                    if result:
+                        compacted = compactor.apply_compact(to_compact, result)
+                        messages = [messages[0]] + compacted
+                        compact_count += 1
+                        logger.info(
+                            f"ReAct: 压缩完成 (第 {compact_count} 次), "
+                            f"{result.original_token_estimate} → {result.summary_tokens} tokens"
+                        )
             logger.debug(f"ReAct 迭代 {i + 1}/{self.max_iterations}")
 
             # 调用 LLM

@@ -127,27 +127,36 @@ class SpawnAgentTool(BaseTool):
     """派生子 Agent 处理独立子任务。
 
     主 Agent 可以调用此工具将子任务委派给独立的子 Agent。
-    子 Agent 在后台运行，结果可通过 AgentResultTool 查询。
+    子 Agent 在后台运行，拥有完整的 ReAct 引擎和所有工具能力。
+    结果可通过 AgentResultTool 查询。
+
+    适用场景: 多文件重构、独立模块编写、并行探索等。
     """
 
     name = "spawn_agent"
     description = (
         "派生子 Agent 独立处理一个子任务。子 Agent 在后台运行，"
-        "可使用所有工具。返回 task_id，后续用 agent_result 查询结果。"
+        "拥有完整的 ReAct 引擎和所有工具（读写文件、执行命令、搜索等）。"
+        "返回 task_id，后续用 agent_result 查询结果。"
         "适用场景: 多文件重构、独立模块编写、并行探索等。"
     )
     input_schema = {
         "type": "object",
         "properties": {
-            "goal": {"type": "string", "description": "子 Agent 的任务目标"},
-            "run_id": {"type": "string", "description": "父 run_id"},
+            "goal": {"type": "string", "description": "子 Agent 的任务目标（详细的自然语言描述）"},
+            "run_id": {"type": "string", "description": "父 run_id（可选）"},
+            "model": {"type": "string", "description": "指定模型（可选，默认 deepseek/deepseek-v4-pro）"},
         },
         "required": ["goal"],
     }
 
+    # 默认模型优先级（可通过实例属性覆盖）
+    model_priority: list[str] = ["deepseek/deepseek-v4-pro"]
+
     async def invoke(self, params: dict[str, object]) -> ToolResult:
         goal = str(params.get("goal", ""))
         parent_run_id = str(params.get("run_id", ""))
+        model = str(params.get("model", "") or self.model_priority[0])
 
         if not goal:
             return ToolResult.schema_error("spawn_agent 需要 goal 参数")
@@ -158,30 +167,51 @@ class SpawnAgentTool(BaseTool):
 
         task = registry.create_task(goal, parent_run_id=parent_run_id)
 
-        # 创建后台任务
+        # 创建后台任务 — 传入 model 用于子 Agent
         future = registry.create_future(task.task_id)
-        asyncio.create_task(self._run_subagent(task, registry))
+        asyncio.create_task(self._run_subagent(task, registry, model))
 
         return ToolResult.ok(
             f"子 Agent 已启动 (task_id: {task.task_id})\n目标: {goal}\n使用 agent_result 工具查询结果。",
             task_id=task.task_id,
         )
 
-    async def _run_subagent(self, task: SubagentTask, registry: BackgroundTaskRegistry) -> None:
-        """后台执行子 Agent 任务。"""
+    async def _run_subagent(
+        self, task: SubagentTask, registry: BackgroundTaskRegistry, model: str = "",
+    ) -> None:
+        """后台执行子 Agent 任务 — 使用完整 ReAct 引擎 + 工具。
+
+        与主 Agent 共享同一套工具（BUILTIN_TOOLS），
+        拥有完整的 Think-Act-Observe 循环能力。
+        """
         registry.mark_running(task.task_id)
-        try:
-            # 简化实现: 直接调用 LLM
-            from omniagent.utils.llm_client import chat_completion
-            result = chat_completion(
-                "deepseek/deepseek-v4-pro",
-                [{"role": "user", "content": task.goal}],
-                max_tokens=4096,
-                temperature=0.3,
-            )
-            registry.mark_done(task.task_id, result, success=True)
-        except Exception as e:
-            registry.mark_done(task.task_id, str(e), success=False)
+
+        async with registry._semaphore:
+            try:
+                from omniagent.engine.react_engine import BUILTIN_TOOLS, ReActEngine
+                from omniagent.engine.callbacks import SilentCallback
+
+                model_priority = [model] if model else self.model_priority
+
+                # 构建子 Agent 的 ReAct 引擎
+                engine = ReActEngine(
+                    model_priority=model_priority,
+                    max_iterations=8,  # 子 Agent 迭代上限略低于主 Agent
+                    tools=BUILTIN_TOOLS,
+                    callback=SilentCallback(),
+                )
+
+                # 在线程池中运行同步 ReAct 引擎
+                result = await asyncio.to_thread(engine.run, task.goal)
+                registry.mark_done(task.task_id, result, success=True)
+                logger.info(f"子 Agent {task.task_id} 完成: {result[:200]}")
+
+            except asyncio.CancelledError:
+                registry.mark_done(task.task_id, "子 Agent 被取消", success=False)
+                logger.warning(f"子 Agent {task.task_id} 被取消")
+            except Exception as e:
+                logger.error(f"子 Agent {task.task_id} 异常: {e}", exc_info=True)
+                registry.mark_done(task.task_id, f"执行异常: {e}", success=False)
 
 
 class AgentResultTool(BaseTool):
