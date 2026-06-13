@@ -18,7 +18,7 @@ from omniagent.engine.circuit_breaker import CircuitBreaker
 from omniagent.engine.compactor import Compactor
 from omniagent.engine.context import AgentContext
 from omniagent.engine.tool_tracker import ToolExecutionTracker
-from omniagent.nodes.tool_node import ToolNode, _DYNAMIC_TOOLS
+from omniagent.nodes.tool_node import _DYNAMIC_TOOLS, ToolNode
 from omniagent.utils.llm_client import chat_completion
 from omniagent.utils.response_adapter import parse_react
 
@@ -351,7 +351,7 @@ class ReActEngine:
                     result = compactor.compact(to_compact, self.model_priority)
                     if result:
                         compacted = compactor.apply_compact(to_compact, result)
-                        messages = [messages[0]] + compacted
+                        messages = [messages[0], *compacted]
                         compact_count += 1
                         logger.info(
                             f"ReAct: 压缩完成 (第 {compact_count} 次), "
@@ -365,6 +365,31 @@ class ReActEngine:
 
             # 解析 LLM 输出
             parsed = self._parse_response(response)
+
+            # ── P0 修复: 处理 JSON 解析失败 ──
+            if parsed.get("parse_error"):
+                logger.warning(
+                    f"ReAct: 第 {i + 1} 轮 JSON 解析失败，"
+                    f"要求 LLM 以正确格式重试"
+                )
+                self.callback.on_warning(
+                    f"LLM 输出格式错误，要求重试（第 {i + 1} 轮）"
+                )
+                fmt_correction = (
+                    "❌ 你的上一条回复无法被解析为有效的 JSON 格式。\n\n"
+                    "请严格遵守以下格式重新输出：\n\n"
+                    "调用工具时：\n"
+                    '```json\n{"thought": "分析当前状态", "action": "工具名", "action_input": {"参数": "值"}}\n```\n\n'
+                    "任务完成时：\n"
+                    '```json\n{"thought": "总结结果", "final_answer": "给用户的最终回答"}\n```\n\n'
+                    "⚠️ 注意：\n"
+                    "- 只输出一个 JSON 对象，不要加任何前言或后记\n"
+                    "- action 必须是可用工具列表中的工具名\n"
+                    "- 如果你需要执行操作（如 git clone），请使用 command 工具\n"
+                    "- 不要在 JSON 外添加 DSML 标记或其他文本"
+                )
+                messages.append({"role": "user", "content": fmt_correction})
+                continue
 
             thought = parsed.get("thought", "")
             if thought:
@@ -386,18 +411,17 @@ class ReActEngine:
                         self.callback.on_warning("LLM 未执行工具就声称完成，要求重试")
                         logger.warning(f"ReAct: LLM 未执行工具就声称完成，强制要求工具调用 (第 {no_tool_streak} 次)")
                         continue
-                    else:
-                        # 连续 3 次拒绝工具，附带警告返回
-                        answer = final_answer
-                        warning = (
-                            "\n\n⚠️ **警告**: 本次回答未经工具执行验证。"
-                            "LLM 声称完成了任务但未实际调用任何工具，"
-                            "文件操作可能未真正执行。"
-                        )
-                        self.callback.on_warning("LLM 连续拒绝工具调用，附带警告返回")
-                        logger.warning("ReAct: LLM 连续拒绝工具调用，附带警告返回")
-                        self.callback.on_finish(answer + warning)
-                        return answer + warning
+                    # 连续 3 次拒绝工具，附带警告返回
+                    answer = final_answer
+                    warning = (
+                        "\n\n⚠️ **警告**: 本次回答未经工具执行验证。"
+                        "LLM 声称完成了任务但未实际调用任何工具，"
+                        "文件操作可能未真正执行。"
+                    )
+                    self.callback.on_warning("LLM 连续拒绝工具调用，附带警告返回")
+                    logger.warning("ReAct: LLM 连续拒绝工具调用，附带警告返回")
+                    self.callback.on_finish(answer + warning)
+                    return answer + warning
 
                 logger.debug(f"ReAct 完成，共 {i + 1} 次迭代，工具调用 {len(tracker.calls)} 次")
                 answer = final_answer
@@ -419,8 +443,16 @@ class ReActEngine:
                 observation = self._execute_tool(action, action_input, ctx, tracker)
                 self.callback.on_observe(observation)
 
-                # 将观察结果加入对话
-                obs_msg = f"Observation: {observation}"
+                # 将观察结果结构化地加入对话
+                is_error = observation.startswith("错误") or observation.startswith("⚠️") or "失败" in observation[:100]
+                obs_status = "❌ 执行失败" if is_error else "✅ 执行完成"
+                obs_msg = (
+                    f"📋 工具 '{action}' 执行结果 ({obs_status}):\n"
+                    f"{observation}\n\n"
+                    f"请根据此结果决定下一步: "
+                    f"如果成功→继续下一个操作或输出 final_answer; "
+                    f"如果失败→分析原因并尝试替代方案。"
+                )
                 messages.append({"role": "user", "content": obs_msg})
                 logger.debug(f"ReAct 观察: {observation[:200]}")
                 no_tool_streak = 0
@@ -464,7 +496,8 @@ class ReActEngine:
             except Exception as e:
                 last_error = e
                 logger.warning(f"模型 {model_id} 失败: {e}，尝试下一个...")
-        raise RuntimeError(f"所有模型均调用失败: {last_error}")
+        msg = f"所有模型均调用失败: {last_error}"
+        raise RuntimeError(msg)
 
     def _parse_response(self, response: str) -> dict[str, Any]:
         """解析 LLM 的 JSON 输出（委托给 response_adapter 中间件）。"""
@@ -529,7 +562,7 @@ class ReActEngine:
                     # 提取主要内容
                     summary = ""
                     for key in ("content", "stdout", "output", "files"):
-                        if key in result and result[key]:
+                        if result.get(key):
                             val = result[key]
                             if isinstance(val, list):
                                 summary = "\n".join(str(v) for v in val[:50])
@@ -544,14 +577,13 @@ class ReActEngine:
                     if tracker:
                         tracker.record(action, action_input, True, summary[:200])
                     return summary
-                else:
-                    last_error_msg = f"工具执行失败: {error or result}"
-                    error_str = str(error) if error else str(result)
-                    # 记录失败（断路器内部会处理冷却逻辑）
-                    self.breaker.on_failure(action, error_str)
-                    if attempt < max_attempts - 1:
-                        logger.warning(f"工具 {action} 失败，准备重试 (1/1): {error_str[:100]}")
-                        continue  # 重试
+                last_error_msg = f"工具执行失败: {error or result}"
+                error_str = str(error) if error else str(result)
+                # 记录失败（断路器内部会处理冷却逻辑）
+                self.breaker.on_failure(action, error_str)
+                if attempt < max_attempts - 1:
+                    logger.warning(f"工具 {action} 失败，准备重试 (1/1): {error_str[:100]}")
+                    continue  # 重试
 
             except Exception as e:
                 last_error_msg = f"工具执行异常: {e}"
@@ -575,9 +607,27 @@ class ReActEngine:
     def _input_requires_tools(text: str) -> bool:
         """判断用户输入是否大概率需要工具执行。
 
-        与 repl.py 的 _detect_tool_need 类似，但更宽松 —
-        宁可误判需要工具（多一次确认），也不漏判。
+        正向关键词匹配 + 负向排除（纯分析/咨询类不需要工具）。
         """
+        # ── 负向排除: 纯分析/诊断/顾问类任务不需要工具 ──
+        analysis_only = [
+            "分析", "诊断", "评估", "审查", "评审", "review",
+            "差距", "建议", "方案", "推荐", "意见",
+            "是什么", "什么是", "为什么", "如何理解",
+            "总结", "概括", "解释", "说明一下",
+            "有什么", "有哪些", "还有哪些",
+        ]
+        text_lower = text.lower()
+        # 如果任务明确是 pure analysis，不需要工具
+        is_pure_analysis = any(kw in text_lower for kw in analysis_only)
+        has_action_marker = any(kw in text_lower for kw in [
+            "做", "执行", "跑", "创建", "写入", "修改", "删除", "克隆",
+            "do ", "make", "run", "build", "fix", "write", "clone",
+        ])
+        if is_pure_analysis and not has_action_marker:
+            return False
+
+        # ── 正向关键词 ──
         tool_keywords = [
             # 文件操作
             "文件", "文件夹", "目录", "创建", "写入", "保存", "新建", "生成",
@@ -597,5 +647,4 @@ class ReActEngine:
             ".md", ".txt", ".sh", ".bat",
             "src/", "test", "lib/", "app/",
         ]
-        text_lower = text.lower()
         return any(kw in text_lower for kw in tool_keywords)

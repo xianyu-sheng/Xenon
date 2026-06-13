@@ -220,9 +220,8 @@ def _repair_json(text: str) -> str | None:
         elif c == '}':
             if bracket_stack and bracket_stack[-1] == '{':
                 bracket_stack.pop()
-        elif c == ']':
-            if bracket_stack and bracket_stack[-1] == '[':
-                bracket_stack.pop()
+        elif c == ']' and bracket_stack and bracket_stack[-1] == '[':
+            bracket_stack.pop()
 
     # 5. 按正确的逆序关闭未闭合的括号
     close_map = {'{': '}', '[': ']'}
@@ -232,61 +231,117 @@ def _repair_json(text: str) -> str | None:
     return text
 
 
-def _extract_json(text: str) -> dict | None:
-    """从 LLM 输出中提取 JSON 对象，处理 markdown 代码块和多余文字。"""
-    text = text.strip()
+def _strip_model_markers(text: str) -> str:
+    """剥离模型特有的非 JSON 标记（DSML、思考标签等）。"""
+    # DeepSeek DSML 标记: DSML｜｜invoke>, DSML｜｜thought>, 等等
+    text = re.sub(r"DSML[｜|]\s*[｜|]\s*\w+\s*>?", "", text)
+    # DeepSeek 思考标记
+    text = re.sub(r"<\|DSML\|>", "", text)
+    # 常见的模型前缀/后缀噪声
+    text = re.sub(r"^(Assistant|助手|AI)[：:]\s*", "", text, flags=re.MULTILINE)
+    # XML 风格的思考块
+    text = re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<thought>.*?</thought>", "", text, flags=re.DOTALL)
+    return text.strip()
 
-    # 尝试 ```json ... ``` 代码块
-    m = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(1), strict=False)
-        except json.JSONDecodeError:
-            # 尝试修复截断的 JSON
-            repaired = _repair_json(m.group(1))
-            if repaired:
-                try:
-                    return json.loads(repaired, strict=False)
-                except json.JSONDecodeError:
-                    pass
 
-    # 尝试 ``` ... ``` 代码块（无 json 标记）
-    m = re.search(r"```\s*(.*?)\s*```", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(1), strict=False)
-        except json.JSONDecodeError:
-            repaired = _repair_json(m.group(1))
-            if repaired:
-                try:
-                    return json.loads(repaired, strict=False)
-                except json.JSONDecodeError:
-                    pass
-
-    # 直接尝试解析
+def _try_parse_json(text: str) -> dict | None:
+    """尝试多种方式解析 JSON 文本，返回 dict 或 None。"""
+    # 直接解析
     try:
-        return json.loads(text, strict=False)
-    except json.JSONDecodeError:
+        result = json.loads(text, strict=False)
+        if isinstance(result, dict):
+            return result
+    except (json.JSONDecodeError, ValueError):
         pass
 
-    # 找到第一个 { 和最后一个 }
-    brace_start = text.find("{")
-    brace_end = text.rfind("}")
-    if brace_start != -1 and brace_end != -1:
+    # 尝试修复截断的 JSON
+    repaired = _repair_json(text)
+    if repaired:
         try:
-            return json.loads(text[brace_start:brace_end + 1], strict=False)
-        except json.JSONDecodeError:
+            result = json.loads(repaired, strict=False)
+            if isinstance(result, dict):
+                return result
+        except (json.JSONDecodeError, ValueError):
             pass
 
-    # 最后手段：从第一个 { 开始，尝试修复截断的 JSON
-    if brace_start != -1:
-        candidate = text[brace_start:]
-        repaired = _repair_json(candidate)
-        if repaired:
-            try:
-                return json.loads(repaired, strict=False)
-            except json.JSONDecodeError:
-                pass
+    return None
+
+
+def _extract_json(text: str) -> dict | None:
+    """从 LLM 输出中提取 JSON 对象 — 多策略回退提取。
+
+    策略顺序（每个策略内部先尝试直接解析，再尝试修复）：
+    1. 剥离 DSML/模型标记 → 提取 ```json 代码块
+    2. 提取 ``` 代码块（无 json 标记）
+    3. 剥离 DSML → 直接解析全文
+    4. 全文 bbrace 提取（第一个 { 到最后一个 }）
+    5. 从第一个 { 开始 — 截断修复
+    6. 逐行查找含 "action" 或 "final_answer" 的 JSON 片段
+    """
+    text = text.strip()
+    clean = _strip_model_markers(text)
+
+    # ── 策略 1: ```json ... ``` 代码块 ──
+    for source in (text, clean):
+        m = re.search(r"```json\s*(.*?)\s*```", source, re.DOTALL)
+        if m:
+            result = _try_parse_json(m.group(1))
+            if result:
+                return result
+
+    # ── 策略 2: ``` ... ``` 代码块 ──
+    for source in (text, clean):
+        for m in re.finditer(r"```\s*(\{.*?\})\s*```", source, re.DOTALL):
+            result = _try_parse_json(m.group(1))
+            if result:
+                return result
+
+    # ── 策略 3: 全文直接解析 ──
+    result = _try_parse_json(clean)
+    if result:
+        return result
+
+    # ── 策略 4: 第一个 { 到最后一个 } ──
+    for source in (clean, text):
+        brace_start = source.find("{")
+        brace_end = source.rfind("}")
+        if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
+            candidate = source[brace_start:brace_end + 1]
+            result = _try_parse_json(candidate)
+            if result:
+                return result
+
+    # ── 策略 5: 从第一个 { 开始，修复截断 ──
+    for source in (clean, text):
+        brace_start = source.find("{")
+        if brace_start != -1:
+            candidate = source[brace_start:]
+            repaired = _repair_json(candidate)
+            if repaired:
+                result = _try_parse_json(repaired)
+                if result:
+                    return result
+
+    # ── 策略 6: 逐行查找 JSON 片段 ──
+    for source in (clean, text):
+        for line in source.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            # 寻找独立的花括号 JSON（小片段）
+            if line.startswith("{") and line.endswith("}"):
+                result = _try_parse_json(line)
+                if result and any(k in result for k in ("action", "final_answer", "thought")):
+                    return result
+            # 寻找花括号 JSON 在行中间
+            if "{" in line and "}" in line:
+                s = line.find("{")
+                e = line.rfind("}") + 1
+                fragment = line[s:e]
+                result = _try_parse_json(fragment)
+                if result and any(k in result for k in ("action", "final_answer", "thought")):
+                    return result
 
     return None
 
@@ -333,6 +388,11 @@ def parse_plan(raw: str) -> dict[str, Any]:
 def parse_react(raw: str) -> dict[str, Any]:
     """解析 LLM 输出为标准 ReAct 结构。
 
+    增强策略:
+    - JSON 提取失败时，返回 parse_error 标记（而非静默作为 final_answer）
+    - 检测 DSML 格式的工具调用意图
+    - 对模糊输出进行启发式判断
+
     Returns:
         {
             "thought": str,        # 思考过程
@@ -341,24 +401,145 @@ def parse_react(raw: str) -> dict[str, Any]:
             "final_answer": str,   # 最终回答
             "question": str,
             "options": list,
+            "parse_error": bool,   # True 表示无法解析 JSON（引擎应要求重试）
         }
     """
     data = _extract_json(raw)
     if data is None:
-        return {**_react_template(), "thought": raw, "final_answer": raw}
+        # ── JSON 提取完全失败 ──
+        # 尝试检测 DSML 风格的工具调用意图
+        dsml_action = _detect_dsml_action(raw)
+        if dsml_action:
+            return {
+                **_react_template(),
+                "thought": raw[:500],
+                "action": dsml_action["action"],
+                "action_input": dsml_action.get("action_input", {}),
+            }
+
+        # 尝试从非 JSON 文本中检测工具调用关键词
+        tool_hint = _detect_tool_intent(raw)
+        if tool_hint:
+            return {
+                **_react_template(),
+                "thought": raw[:500],
+                "action": tool_hint["action"],
+                "action_input": tool_hint.get("action_input", {}),
+            }
+
+        # 完全无法解析 → 标记 parse_error，让引擎要求重试
+        return {
+            **_react_template(),
+            "thought": raw[:1000],
+            "parse_error": True,
+            "raw": raw[:2000],
+        }
 
     result = _pick(data, _REACT_FIELD_ALIASES)
 
-    # 只为已存在但类型错误的字段提供类型修正，不添加 LLM 未返回的默认值。
-    # 之前这里用 setdefault 填充了所有模板字段（包括 final_answer=""），
-    # 导致引擎的 "final_answer" in parsed 检查永远为 True，
-    # 即使 LLM 实际返回的是 action 也会被误判为最终回答。
+    # 只为已存在但类型错误的字段提供类型修正
     if "action_input" in result and not isinstance(result["action_input"], dict):
         result["action_input"] = {}
     if "options" in result and not isinstance(result["options"], list):
         result["options"] = []
 
+    # 兼容: 某些模型用 "tool" 或 "command" 字段代替 action
+    if "action" not in result or not result.get("action"):
+        for alt in ("tool", "command", "function"):
+            if data.get(alt):
+                result["action"] = str(data[alt])
+                if "action_input" not in result:
+                    result["action_input"] = data.get("args", data.get("params", data.get("input", {})))
+                    if not isinstance(result["action_input"], dict):
+                        result["action_input"] = {}
+                break
+
     return result
+
+
+def _detect_dsml_action(raw: str) -> dict | None:
+    """从 DSML 格式输出中检测工具调用意图。
+
+    DeepSeek 有时输出:
+      DSML｜｜invoke> {"action": "command", "action_input": {...}}
+      或
+      我需要执行命令
+      DSML｜｜invoke> command: git clone ...
+    """
+    # 尝试从 DSML 标记后提取 JSON
+    m = re.search(r"DSML[｜|]\s*[｜|]\s*\w+\s*>?\s*(\{.+\})", raw, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group(1), strict=False)
+            if isinstance(data, dict) and "action" in data:
+                return data
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # DSML 后跟纯文本工具调用: tool_name: args
+    m = re.search(r"DSML[｜|]\s*[｜|]\s*\w+\s*>?\s*(\w+)\s*[:：]\s*(.+)", raw)
+    if m:
+        tool_name = m.group(1).strip()
+        tool_args = m.group(2).strip()
+        if tool_name in _KNOWN_TOOL_NAMES:
+            return {"action": tool_name, "action_input": {"command": tool_args}}
+
+    return None
+
+
+def _detect_tool_intent(raw: str) -> dict | None:
+    """从非 JSON 文本中检测工具调用意图。
+
+    当 LLM 输出类似 "我需要用 command 工具执行 git clone" 时，
+    尝试提取工具名和参数。
+    """
+    raw_lower = raw.lower()
+    for tool_name in _KNOWN_TOOL_NAMES:
+        if tool_name in raw_lower:
+            # 查找该工具的已知参数名
+            tool_params = _TOOL_PARAM_HINTS.get(tool_name, {})
+            extracted = {}
+            for param_name in tool_params:
+                # 尝试匹配 "param_name: value" 或 "param_name=value" 模式
+                m = re.search(
+                    rf'{param_name}\s*[:=]\s*["\']?([^"\'\,\n]+)["\']?',
+                    raw, re.IGNORECASE,
+                )
+                if m:
+                    extracted[param_name] = m.group(1).strip()
+            if extracted:
+                return {"action": tool_name, "action_input": extracted}
+            # 即使没有提取到参数，也返回工具名让引擎尝试
+            return {"action": tool_name, "action_input": {}}
+    return None
+
+
+# 已知工具名集合（用于 DSML 检测和意图检测）
+_KNOWN_TOOL_NAMES: set[str] = {
+    "command", "read_file", "write_file", "list_files", "search_files",
+    "git", "web_fetch", "edit_file", "create_directory", "file_move",
+    "file_copy", "batch_write", "batch_edit", "code_index", "ast_analyze",
+    "refactor", "diff_preview", "mcp_call", "github_fetch",
+    "weather", "datetime", "register_tool", "pytest", "run_test",
+}
+
+# 工具参数名提示（用于从非结构化文本中提取参数）
+_TOOL_PARAM_HINTS: dict[str, set[str]] = {
+    "command": {"command", "action"},
+    "read_file": {"file_path", "path", "start_line", "max_lines"},
+    "write_file": {"file_path", "path", "content"},
+    "list_files": {"file_path", "path", "pattern"},
+    "search_files": {"file_path", "path", "search_pattern", "pattern", "query"},
+    "git": {"git_command", "command"},
+    "web_fetch": {"url"},
+    "edit_file": {"file_path", "path", "old_text", "new_text"},
+    "create_directory": {"file_path", "path"},
+    "file_move": {"source", "destination"},
+    "file_copy": {"source", "destination"},
+    "github_fetch": {"repo", "github_action", "github_path", "branch"},
+    "pytest": {"test_path", "filter_expr"},
+    "run_test": {"command", "timeout_seconds"},
+}
 
 
 def parse_review(raw: str) -> dict[str, Any]:
