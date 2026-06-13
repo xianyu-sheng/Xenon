@@ -3,12 +3,10 @@
 
 from __future__ import annotations
 
-import difflib
 import fnmatch
 import logging
 import os
 from pathlib import Path
-from typing import Any
 
 from omniagent.tools.base import BaseTool, ToolResult
 
@@ -29,24 +27,43 @@ _USER_SENSITIVE = [
 
 
 def _validate_path(file_path: str, for_write: bool = False) -> Path:
-    """验证文件路径安全性。"""
+    """验证文件路径安全性。
+
+    - 读操作 (for_write=False): 允许任意本地路径，仅拦截系统敏感目录
+    - 写操作 (for_write=True): 限制在项目目录内 + 拦截敏感路径
+    """
     path = Path(file_path).resolve()
     cwd = Path.cwd().resolve()
 
-    try:
-        path.relative_to(cwd)
-    except ValueError:
-        raise ValueError(f"路径越界: {path} 不在项目目录 {cwd} 下")
+    if for_write:
+        # 写操作：严格限制在项目目录内
+        try:
+            path.relative_to(cwd)
+        except ValueError:
+            msg = (
+                f"写入路径越界: {path} 不在项目目录 {cwd} 下。"
+                f"分析外部项目请使用只读工具（list_files/read_file/search_files）。"
+            )
+            raise ValueError(msg)
+    else:
+        # 读操作：允许任意路径，但拦截系统敏感目录
+        path_str = str(path).lower().replace("\\", "/")
+        for sensitive in _SENSITIVE_PATHS:
+            if sensitive in path_str:
+                msg = f"禁止读取系统敏感路径: {path}"
+                raise ValueError(msg)
 
     if for_write:
         path_lower = str(path).lower().replace("\\", "/")
         for sensitive in _SENSITIVE_PATHS:
             if sensitive in path_lower:
-                raise ValueError(f"禁止写入系统敏感路径: {path}")
+                msg = f"禁止写入系统敏感路径: {path}"
+                raise ValueError(msg)
         name_lower = path.name.lower()
         for sensitive in _USER_SENSITIVE:
             if sensitive in name_lower or sensitive in path_lower:
-                raise ValueError(f"禁止写入敏感文件: {path}")
+                msg = f"禁止写入敏感文件: {path}"
+                raise ValueError(msg)
 
     return path
 
@@ -279,9 +296,7 @@ class ListFilesTool(BaseTool):
             if depth > max_depth:
                 dirs.clear()
                 continue
-            for f in filenames:
-                if fnmatch.fnmatch(f, pattern):
-                    files.append(str(Path(root) / f))
+            files.extend(str(Path(root) / f) for f in filenames if fnmatch.fnmatch(f, pattern))
 
         display = "\n".join(files) if files else "(空目录)"
         return ToolResult.ok(display, count=len(files), files=files, path=str(path))
@@ -336,7 +351,7 @@ class FileMoveTool(BaseTool):
             if not dst_path.exists():
                 ckpt.restore(src_path)
                 ckpt.restore(dst_path)
-                return ToolResult.error(f"移动后验证失败: 目标路径不存在", error_type="runtime_error")
+                return ToolResult.error("移动后验证失败: 目标路径不存在", error_type="runtime_error")
 
             ckpt.keep(src_path)
             if str(src_path) != str(dst_path):

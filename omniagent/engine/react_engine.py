@@ -359,6 +359,26 @@ class ReActEngine:
                         )
             logger.debug(f"ReAct 迭代 {i + 1}/{self.max_iterations}")
 
+            # ── P0 修复: 接近上限时注入合成提示 ──
+            remaining = self.max_iterations - i
+            if remaining <= 3 and i > 0 and not tracker.has_executions():
+                # 还没用过工具 → 强制要求快行动
+                hurry_msg = (
+                    f"⚠️ 注意：仅剩 {remaining} 轮迭代机会。"
+                    f"请立即使用工具开始执行任务，不要再只做探索。"
+                    f"用 command 执行操作，用 read_file 读取关键文件。"
+                )
+                messages.append({"role": "user", "content": hurry_msg})
+                logger.info(f"ReAct: 注入加速提示 (剩余 {remaining} 轮，无工具执行)")
+            elif remaining <= 2 and tracker.has_executions():
+                # 用过工具但还在探索 → 要求合成
+                hurry_msg = (
+                    f"⚠️ 仅剩 {remaining} 轮！立即停止探索，基于已获取的数据生成 final_answer。"
+                    f"不要继续读取更多文件或执行更多命令——现在就开始总结分析结果。"
+                )
+                messages.append({"role": "user", "content": hurry_msg})
+                logger.info(f"ReAct: 注入合成提示 (剩余 {remaining} 轮)")
+
             # 调用 LLM
             response = self._call_llm(messages)
             messages.append({"role": "assistant", "content": response})
