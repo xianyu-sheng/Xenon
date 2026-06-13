@@ -307,7 +307,7 @@ class FileMoveTool(BaseTool):
             if not dst_path.exists():
                 return ToolResult.error(f"移动后验证失败: 目标路径不存在", error_type="runtime_error")
 
-            logger.info(f"移动文件: {src_path} → {dst_path}")
+            logger.debug(f"移动文件: {src_path} → {dst_path}")
             return ToolResult.ok(
                 f"已移动: {src_path} → {dst_path}",
                 source=str(src_path),
@@ -361,7 +361,7 @@ class FileCopyTool(BaseTool):
                     dst_path = dst_path / src_path.name
                 shutil.copytree(str(src_path), str(dst_path))
 
-            logger.info(f"复制文件: {src_path} → {dst_path}")
+            logger.debug(f"复制文件: {src_path} → {dst_path}")
             return ToolResult.ok(
                 f"已复制: {src_path} → {dst_path}",
                 source=str(src_path),

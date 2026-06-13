@@ -22,7 +22,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from omniagent.engine.context import AgentContext
 from omniagent.engine.permissions import PermissionResult, get_permission_manager
@@ -167,6 +167,9 @@ class ToolNode(BaseNode):
         # weather 参数
         city: str = "",
         lang: str = "zh",
+        # file_move / file_copy 参数
+        source: str = "",
+        destination: str = "",
         # register_tool 参数
         description: str = "",
         python_function: str = "",
@@ -202,6 +205,8 @@ class ToolNode(BaseNode):
         self.old_name = old_name
         self.new_name = new_name
         self.refactor_action = refactor_action
+        self.source = source
+        self.destination = destination
         self.tool_name = tool_name
         self.tool_args = tool_args or {}
         self.mcp_server = mcp_server
@@ -253,6 +258,7 @@ class ToolNode(BaseNode):
         "tool_name", "tool_args", "mcp_server",
         "repo", "github_action", "github_path", "branch",
         "security_enabled", "start_line", "max_lines",
+        "source", "destination",  # file_move / file_copy
     }
 
     @classmethod
@@ -287,10 +293,10 @@ class ToolNode(BaseNode):
     # ── 安全验证 ──────────────────────────────────────────
 
     # 类级别的审批处理器（由 REPL 注入）
-    _approval_handler: classmethod | None = None
+    _approval_handler: "Callable | None" = None
 
     @classmethod
-    def set_approval_handler(cls, handler: callable | None) -> None:
+    def set_approval_handler(cls, handler: "Callable | None") -> None:
         """设置交互式审批处理器。handler(tool_name, params_preview) -> bool"""
         cls._approval_handler = handler
 
@@ -711,8 +717,8 @@ class ToolNode(BaseNode):
 
     def _file_move(self, context: AgentContext) -> dict[str, Any]:
         """移动文件或文件夹到新位置。"""
-        source = self._resolve_template(self.action_input.get("source", ""), context)
-        destination = self._resolve_template(self.action_input.get("destination", ""), context)
+        source = self._resolve_template(self.source, context)
+        destination = self._resolve_template(self.destination, context)
 
         if not source:
             raise ValueError(f"[{self.id}] file_move 需要 source 参数")
@@ -722,7 +728,11 @@ class ToolNode(BaseNode):
         self._check_permission("command", {"command": f"Move-Item {source} {destination}"})
 
         src_path = self._validate_path(source, for_write=True)
-        dst_path = Path(self._resolve_template(destination, context))
+        dst_path = Path(destination) if destination else Path(".")
+        try:
+            dst_path = dst_path.resolve()
+        except Exception:
+            pass
 
         if not src_path.exists():
             return {
@@ -769,8 +779,8 @@ class ToolNode(BaseNode):
 
     def _file_copy(self, context: AgentContext) -> dict[str, Any]:
         """复制文件到新位置。"""
-        source = self._resolve_template(self.action_input.get("source", ""), context)
-        destination = self._resolve_template(self.action_input.get("destination", ""), context)
+        source = self._resolve_template(self.source, context)
+        destination = self._resolve_template(self.destination, context)
 
         if not source:
             raise ValueError(f"[{self.id}] file_copy 需要 source 参数")
@@ -780,7 +790,11 @@ class ToolNode(BaseNode):
         self._check_permission("command", {"command": f"Copy-Item {source} {destination}"})
 
         src_path = self._validate_path(source, for_write=False)
-        dst_path = Path(self._resolve_template(destination, context))
+        dst_path = Path(destination) if destination else Path(".")
+        try:
+            dst_path = dst_path.resolve()
+        except Exception:
+            pass
 
         if not src_path.exists():
             return {
