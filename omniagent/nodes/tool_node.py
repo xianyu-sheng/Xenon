@@ -1167,7 +1167,7 @@ class ToolNode(BaseNode):
                 "error": f"文件不存在: {path}",
             }
             self._write_output(context, "")
-            logger.warning(f"[{self.id}] 文件不存在: {path}")
+            logger.debug(f"[{self.id}] 文件不存在: {path}")
             return result
 
         # 文件大小检查

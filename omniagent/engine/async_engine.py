@@ -140,7 +140,7 @@ class AsyncReActEngine:
         if history:
             recent = [m for m in history if m.get("role") != "system"][-10:]
             messages.extend(recent)
-            logger.info(f"AsyncReAct 注入 {len(recent)} 条对话历史")
+            logger.debug(f"AsyncReAct 注入 {len(recent)} 条对话历史")
         messages.append({"role": "user", "content": user_input})
 
         # ── 发布 RunStartedEvent ──
@@ -159,7 +159,7 @@ class AsyncReActEngine:
 
         try:
             for i in range(self.max_iterations):
-                logger.info(f"AsyncReAct 迭代 {i + 1}/{self.max_iterations}")
+                logger.debug(f"AsyncReAct 迭代 {i + 1}/{self.max_iterations}")
 
                 # ── 发布 StepStartedEvent ──
                 await self._publish_event("step.started", run_id=run_id, step=i + 1)
@@ -219,7 +219,7 @@ class AsyncReActEngine:
                                                        status="warning", result=answer)
                             return answer + warning
 
-                    logger.info(f"AsyncReAct 完成，共 {i + 1} 次迭代")
+                    logger.debug(f"AsyncReAct 完成，共 {i + 1} 次迭代")
                     answer = final_answer
                     self.callback.on_finish(answer)
                     await self._publish_event("agent.final_answer", run_id=run_id, result=answer)
@@ -231,7 +231,7 @@ class AsyncReActEngine:
                     action = parsed["action"]
                     action_input = parsed.get("action_input", {})
 
-                    logger.info(f"AsyncReAct 行动: {action}({action_input})")
+                    logger.debug(f"AsyncReAct 行动: {action}({action_input})")
                     self.callback.on_act(action, action_input)
 
                     tool_use_id = f"tool-{uuid.uuid4().hex[:8]}"
@@ -294,7 +294,7 @@ class AsyncReActEngine:
             return msg
 
         except asyncio.CancelledError:
-            logger.info(f"AsyncReAct run {run_id} 被取消")
+            logger.debug(f"AsyncReAct run {run_id} 被取消")
             await self._publish_event("run.finished", run_id=run_id,
                                        status="cancelled", result="Run cancelled")
             raise
@@ -557,7 +557,7 @@ class AsyncPlanExecuteEngine:
 
         try:
             # Phase 1: Planning
-            logger.info("AsyncPlanExecute Phase 1: 规划中...")
+            logger.debug("AsyncPlanExecute Phase 1: 规划中...")
             plan = await self._plan_async(user_input, ctx)
             steps = plan.get("steps", [])
 
@@ -567,11 +567,11 @@ class AsyncPlanExecuteEngine:
                                      status="warning", result="未能生成有效的执行计划")
                 return plan.get("analysis", "未能生成有效的执行计划。")
 
-            logger.info(f"计划生成 {len(steps)} 个步骤")
+            logger.debug(f"计划生成 {len(steps)} 个步骤")
             total = min(len(steps), self.max_steps)
 
             # Phase 2: Execution
-            logger.info("AsyncPlanExecute Phase 2: 执行中...")
+            logger.debug("AsyncPlanExecute Phase 2: 执行中...")
             results: list[dict[str, Any]] = []
 
             for i, step in enumerate(steps[:self.max_steps]):
@@ -580,7 +580,7 @@ class AsyncPlanExecuteEngine:
                 tool = step.get("tool")
                 params = step.get("params", {})
 
-                logger.info(f"执行步骤 {step_id}: {step_task}")
+                logger.debug(f"执行步骤 {step_id}: {step_task}")
                 self.callback.on_step(step_id, total, step_task)
                 await self._publish("step.started", run_id=run_id, step=step_id)
 
@@ -817,7 +817,7 @@ class AsyncReflectionEngine:
 
         try:
             for round_num in range(1, self.max_rounds + 1):
-                logger.info(f"AsyncReflection 第 {round_num} 轮")
+                logger.debug(f"AsyncReflection 第 {round_num} 轮")
 
                 # Execute
                 output = await self._execute_async(user_input, feedback, context)
@@ -832,7 +832,7 @@ class AsyncReflectionEngine:
                                      passed=passed, feedback=review.get("feedback", ""))
 
                 if passed:
-                    logger.info(f"审查通过 (分数: {score})")
+                    logger.debug(f"审查通过 (分数: {score})")
                     self.callback.on_finish(output)
                     await self._publish("run.finished", run_id=run_id,
                                          status="success", result=output)
@@ -843,7 +843,7 @@ class AsyncReflectionEngine:
                 if issues:
                     feedback += "\n具体问题:\n" + "\n".join(f"- {i}" for i in issues)
 
-            logger.info(f"达到最大修正轮次 ({self.max_rounds})，返回最后一轮输出")
+            logger.debug(f"达到最大修正轮次 ({self.max_rounds})，返回最后一轮输出")
             self.callback.on_warning(f"达到最大修正轮次 ({self.max_rounds})")
             self.callback.on_finish(output)
             await self._publish("run.finished", run_id=run_id,
