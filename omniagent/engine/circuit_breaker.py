@@ -31,8 +31,8 @@ class CircuitBreaker:
     """工具执行断路器。
 
     规则:
-    - 同一工具连续失败 3 次 → 进入冷却期（默认 30 秒）
-    - 冷却期内跳过该工具，返回有意义错误
+    - 终端错误（文件不存在/权限拒绝/路径越界）→ 立即断路，告知 Agent 换方案
+    - 可重试错误（网络超时/临时故障）→ 连续失败 3 次后进入冷却期（默认 30 秒）
     - 冷却期结束后允许 1 次重试：
       - 成功 → 重置计数
       - 失败 → 延长冷却期（翻倍，最大 5 分钟）
@@ -51,6 +51,19 @@ class CircuitBreaker:
             # 可选: 重试 1 次
     """
 
+    # ── 终端错误模式：匹配这些模式的错误不会通过重试解决 ──
+    _TERMINAL_ERROR_PATTERNS: list[tuple[str, str]] = [
+        # (工具名模式, 错误消息正则)
+        ("read_file", r"(?:文件不存在|file\s+not\s+found|no\s+such\s+file|无法找到|找不到)"),
+        ("list_files", r"(?:目录不存在|not\s+a\s+directory|no\s+such\s+directory|无法找到|找不到)"),
+        ("write_file", r"(?:路径越界|permission\s+denied|权限|access\s+is\s+denied|不在项目目录)"),
+        ("edit_file", r"(?:路径越界|permission\s+denied|权限|access\s+is\s+denied|不在项目目录|精确匹配.*失败|原文.*找不到)"),
+        ("file_move", r"(?:路径越界|permission\s+denied|权限|源文件不存在|source.*not\s+found)"),
+        ("file_copy", r"(?:路径越界|permission\s+denied|权限|源文件不存在|source.*not\s+found)"),
+        ("create_directory", r"(?:路径越界|permission\s+denied|权限|已存在.*文件|already\s+exists.*file)"),
+        (".*", r"(?:permission\s+denied|access\s+denied|权限不足|路径越界)"),
+    ]
+
     def __init__(
         self,
         failure_threshold: int = 3,
@@ -61,6 +74,23 @@ class CircuitBreaker:
         self.failure_threshold = failure_threshold
         self.base_cooldown = base_cooldown
         self.max_cooldown = max_cooldown
+
+    @classmethod
+    def is_terminal_error(cls, tool_name: str, error_msg: str) -> bool:
+        """判断错误是否是终端错误（重试无意义）。
+
+        终端错误特征：
+        - 文件不存在 → 无论重试多少次都不会出现
+        - 权限拒绝 → 重试不会改变权限
+        - 路径越界 → 安全限制，不会改变
+        """
+        import re
+        error_lower = error_msg.lower()
+        for tool_pattern, error_pattern in cls._TERMINAL_ERROR_PATTERNS:
+            if re.match(tool_pattern, tool_name):
+                if re.search(error_pattern, error_lower):
+                    return True
+        return False
 
     def allow(self, tool_name: str) -> bool:
         """检查工具是否允许执行。

@@ -1196,6 +1196,19 @@ class ReActEngine:
                     return summary
                 last_error_msg = f"工具执行失败: {error or result}"
                 error_str = str(error) if error else str(result)
+
+                # ── 终端错误检测：如果是"文件不存在"这类错误，重试无意义 ──
+                if CircuitBreaker.is_terminal_error(action, error_str):
+                    breaker_msg = (
+                        f"❌ {action} 失败（不可重试错误）: {error_str[:300]}\n"
+                        f"💡 请换一种方式：尝试其他文件路径、使用 list_files 确认实际文件名、或者跳过此文件继续其他操作。"
+                    )
+                    self.breaker.on_failure(action, error_str)
+                    if tracker:
+                        tracker.record(action, action_input, False, breaker_msg, error=error_str)
+                    logger.info(f"终端错误: {action} — {error_str[:100]}")
+                    return breaker_msg
+
                 # 记录失败（断路器内部会处理冷却逻辑）
                 self.breaker.on_failure(action, error_str)
                 if attempt < max_attempts - 1:
@@ -1205,6 +1218,18 @@ class ReActEngine:
             except Exception as e:
                 last_error_msg = f"工具执行异常: {e}"
                 logger.error(f"工具执行异常: {action}({action_input}) -> {e}")
+
+                # ── 终端错误检测：异常也一样区分 ──
+                if CircuitBreaker.is_terminal_error(action, str(e)):
+                    breaker_msg = (
+                        f"❌ {action} 异常（不可重试错误）: {str(e)[:300]}\n"
+                        f"💡 请换一种方式：尝试其他文件路径或使用其他工具。"
+                    )
+                    self.breaker.on_failure(action, str(e))
+                    if tracker:
+                        tracker.record(action, action_input, False, breaker_msg, error=str(e))
+                    return breaker_msg
+
                 self.breaker.on_failure(action, str(e))
                 if attempt < max_attempts - 1:
                     logger.warning(f"工具 {action} 异常，准备重试 (1/1): {e}")
