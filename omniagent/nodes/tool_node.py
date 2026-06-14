@@ -260,6 +260,8 @@ class ToolNode(BaseNode):
         "repo", "github_action", "github_path", "branch",
         "security_enabled", "start_line", "max_lines",
         "source", "destination",  # file_move / file_copy
+        "city", "lang",  # weather
+        "description", "python_function", "command_template", "params",  # register_tool
     }
 
     @classmethod
@@ -1626,7 +1628,14 @@ class ToolNode(BaseNode):
 
     def _weather(self, context: AgentContext) -> dict[str, Any]:
         """查询指定城市的天气信息。"""
-        city = self._resolve_template(getattr(self, "city", ""), context) or "Beijing"
+        city = self._resolve_template(getattr(self, "city", ""), context)
+        if not city:
+            return {
+                "action_type": "weather",
+                "success": False,
+                "content": "",
+                "error": "缺少城市参数。请提供 city 参数，如 '北京'、'重庆'、'Shanghai'。",
+            }
         lang = self._resolve_template(getattr(self, "lang", ""), context) or "zh"
 
         logger.debug(f"[{self.id}] 查询天气: {city}")

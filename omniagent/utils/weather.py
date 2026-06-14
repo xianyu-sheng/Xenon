@@ -138,7 +138,7 @@ def _get_clothing_items(temp_c: int) -> list[str]:
     return items
 
 
-def get_weather(city: str = "Beijing", lang: str = "zh") -> dict[str, Any]:
+def get_weather(city: str = "", lang: str = "zh") -> dict[str, Any]:
     """
     获取指定城市的天气信息。
 
@@ -149,6 +149,8 @@ def get_weather(city: str = "Beijing", lang: str = "zh") -> dict[str, Any]:
     Returns:
         包含天气信息的字典
     """
+    if not city or not city.strip():
+        return {"error": "未指定城市名称，请提供 city 参数。", "city": city}
     resolved = _resolve_city(city)
     logger.info(f"天气查询: {city} -> {resolved}")
 
