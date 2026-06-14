@@ -264,8 +264,13 @@ def format_weather_report(info: dict[str, Any]) -> str:
 class WeatherTool:
     """天气查询工具类（供 ToolNode 集成使用）。"""
 
-    def execute(self, city: str = "Beijing", lang: str = "zh") -> dict[str, Any]:
-        """执行天气查询，返回格式化的结果。"""
+    def execute(self, city: str = "", lang: str = "zh") -> dict[str, Any]:
+        """执行天气查询，返回格式化的结果。city 为空时返回错误提示。"""
+        if not city or not city.strip():
+            return {
+                "weather_info": {"error": "未指定城市名称，请提供 city 参数。", "city": city},
+                "report": "❌ 查询失败: 未指定城市名称，请提供 city 参数。",
+            }
         info = get_weather(city, lang)
         report = format_weather_report(info)
         return {

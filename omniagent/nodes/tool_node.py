@@ -181,6 +181,8 @@ class ToolNode(BaseNode):
         # read_file 分段读取参数
         start_line: int | None = None,
         max_lines: int | None = None,
+        # ── 兜底：捕获 LLM 传递的任意未知参数，防止 TypeError ──
+        **kwargs,
     ) -> None:
         super().__init__(node_id, output_slot=output_slot, default_next=default_next)
         self.action_type = action_type
@@ -224,6 +226,8 @@ class ToolNode(BaseNode):
         self.security_enabled = security_enabled
         self._extra_start_line = start_line
         self._extra_max_lines = max_lines
+        # 存储 LLM 可能传递的额外参数（避免 silent drop）
+        self._extra_params: dict = kwargs
 
     # ── 参数规范化 ──────────────────────────────────────────
 
@@ -246,9 +250,15 @@ class ToolNode(BaseNode):
         "github_action":  ["gh_action", "git_action"],
         "github_path":    ["gh_path", "file", "filepath"],
         "branch":         ["ref", "git_branch"],
+        "city":           ["location", "place", "town", "municipality", "region"],
+        "lang":           ["language", "locale"],
+        "test_path":      ["path", "directory", "dir", "folder"],
+        "filter_expr":    ["filter", "expr", "expression", "test_filter"],
+        "command":        ["cmd", "shell", "exec", "run", "execute"],
     }
 
-    # ToolNode.__init__ 接受的所有合法参数名（不含 node_id，它是位置参数）
+    # ToolNode.__init__ 接受的已知参数名（仅作文档参考，不再用于过滤）。
+    # normalize_params() 已改为透传模式 — 未知参数由 __init__ 的 **kwargs 安全捕获。
     _VALID_PARAMS: set[str] = {
         "action_type", "action", "file_path", "content", "output_slot",
         "cwd", "timeout", "default_next", "encoding", "append",
@@ -266,14 +276,17 @@ class ToolNode(BaseNode):
 
     @classmethod
     def normalize_params(cls, params: dict, *, action_type: str = "") -> dict:
-        """将 LLM 常用的参数别名映射为 ToolNode 接受的标准参数名，
-        并过滤掉 ToolNode 不支持的未知参数（如 LLM 凭空发明的 start_line）。
+        """将 LLM 常用的参数别名映射为 ToolNode 接受的标准参数名。
+
+        **不再过滤未知参数** — 之前基于 _VALID_PARAMS 白名单的过滤导致
+        LLM 传递的有效参数（如 city）被静默丢弃。现在所有参数都透传，
+        ToolNode.__init__() 的 **kwargs 会安全捕获未知参数。
 
         Args:
             params: LLM 返回的原始参数字典
             action_type: 工具类型（如 "list_files"），用于跳过冲突的别名
 
-        例: {"path": ".", "query": "foo", "start_line": 100} → {"file_path": ".", "search_pattern": "foo"}
+        例: {"path": ".", "query": "foo", "new_unknown": "val"} → {"file_path": ".", "search_pattern": "foo", "new_unknown": "val"}
         """
         result = dict(params)
 
@@ -286,12 +299,9 @@ class ToolNode(BaseNode):
                     result[std_name] = result.pop(alias)
                     break
 
-        # 2. 过滤未知参数（防止 ToolNode.__init__ 因未知 kwargs 崩溃）
-        filtered = {k: v for k, v in result.items() if k in cls._VALID_PARAMS}
-        dropped = set(result.keys()) - set(filtered.keys())
-        if dropped:
-            logger.warning(f"过滤未知参数: {dropped}")
-        return filtered
+        # 2. 不再过滤未知参数 — ToolNode.__init__() 的 **kwargs 会安全捕获
+        #    之前基于 _VALID_PARAMS 白名单的过滤是 weather/city 丢失的根因
+        return result
 
     # ── 安全验证 ──────────────────────────────────────────
 
