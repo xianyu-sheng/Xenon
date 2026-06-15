@@ -6,7 +6,7 @@ OmniAgent 是一个本地优先的 AI 编程助手命令行工具，为开发者
 
 ## 📹 项目使用演示
 
-[![▶ 点击观看完整使用演示视频](docs/assets/terminal-demo.svg)](./项目使用视频.mp4)
+[![▶ 点击观看完整使用演示视频](docs/assets/terminal-demo.svg)](./demo.mp4)
 
 > 👆 **点击上方预览图**即可在 GitHub 上观看完整使用演示（含安装配置、多模式切换、工具调用、Agent 工作流等全流程）
 
