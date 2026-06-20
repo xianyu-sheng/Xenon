@@ -636,6 +636,8 @@ class ReActEngine:
         callback: EngineCallback | None = None,
         # ── Trace 记录（可选，用于调试/审计）──
         trace_dir: str | None = None,
+        # ── 中断机制（可选）──
+        interrupt_event: object | None = None,  # threading.Event
         # ── 可配置阈值（None 表示根据 max_iterations 动态缩放）──
         min_final_answer_length: int = _DEFAULT_MIN_FINAL_ANSWER_LENGTH,
         min_structured_sections: int = _DEFAULT_MIN_STRUCTURED_SECTIONS,
@@ -654,6 +656,7 @@ class ReActEngine:
         self.tools = tools or BUILTIN_TOOLS
         self.callback = callback or EngineCallback()
         self.breaker = CircuitBreaker()  # 工具断路器
+        self._interrupt_event = interrupt_event  # 中断事件（Esc/Ctrl+C）
 
         # ── 静态阈值 ──
         self.min_final_answer_length = min_final_answer_length
@@ -786,6 +789,19 @@ class ReActEngine:
         thought_only_streak = 0  # 连续 thought-only 轮次
 
         for i in range(self.max_iterations):
+            # ── 中断检查（Esc / Ctrl+C）──
+            if self._interrupt_event is not None and self._interrupt_event.is_set():
+                logger.info(f"ReAct: 第 {i} 轮检测到中断信号，停止执行")
+                interrupted_msg = (
+                    f"## ⚠️ 任务被用户中断\n\n"
+                    f"任务在第 {i + 1}/{self.max_iterations} 轮被中断。\n"
+                    f"已执行的工具调用: {len(tracker.calls)} 次。\n\n"
+                    f"{tracker.execution_summary() if tracker.has_executions() else '(未执行任何工具)'}"
+                )
+                self.callback.on_warning("用户中断")
+                self.callback.on_finish(interrupted_msg)
+                return interrupted_msg
+
             # ── 上下文压缩检查（按可配置间隔 + 初始检查）──
             if i == 0 or (i > 0 and i % self.compact_interval == 0):
                 estimated = Compactor._estimate_tokens(messages)

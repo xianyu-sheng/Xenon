@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import logging
 import re
+import signal
 import sys
+import threading
 import time
 from typing import Any
 
@@ -95,6 +97,11 @@ class REPL:
 
         # 权限审批缓存 (session 级)
         self._approval_cache: dict[str, bool] = {}
+
+        # ── 中断机制（Esc / Ctrl+C 中断任务执行）──
+        self._interrupt_event = threading.Event()
+        self._task_running = False
+        self._setup_interrupt_handler()
 
         # 设置交互式审批处理器
         from omniagent.nodes.tool_node import ToolNode
@@ -207,6 +214,55 @@ class REPL:
             sys.stdout.write("\033]0;🚀 OmniAgent-CLI\007")
             sys.stdout.flush()
 
+    def _setup_interrupt_handler(self) -> None:
+        """设置中断信号处理器和 SIGINT handler。
+
+        - Ctrl+C (SIGINT) 设置中断事件，允许正在运行的任务优雅退出
+        - 连续两次 Ctrl+C 强制终止
+        """
+        self._sigint_count = 0
+
+        def _sigint_handler(signum, frame):
+            self._sigint_count += 1
+            if self._sigint_count >= 2:
+                # 连续两次 Ctrl+C → 强制退出
+                console.print("\n[red]⚠ 强制退出[/red]")
+                sys.exit(1)
+            if self._task_running:
+                self._interrupt_event.set()
+                console.print("\n[yellow]⏸  正在中断当前任务... (再按一次 Ctrl+C 强制退出)[/yellow]")
+            else:
+                # 没有任务运行 → 正常退出
+                raise KeyboardInterrupt
+
+        # 在 Windows 上，signal 只能在主线程工作
+        try:
+            signal.signal(signal.SIGINT, _sigint_handler)
+        except (ValueError, OSError):
+            # 非主线程或受限环境 → 回退到默认 KeyboardInterrupt
+            pass
+
+    def _shutdown(self) -> None:
+        """安全关闭 REPL — 防止终端闪退。
+
+        在退出前暂停，让用户看到告别信息，而不是终端立即关闭。
+        """
+        console.print()
+        console.print("[yellow]再见！[/yellow]")
+        console.print("[dim]按 Enter 退出...[/dim]", end="")
+
+        try:
+            # Windows: 用 msvcrt 读取一个按键（不用回车）
+            if sys.platform == "win32":
+                import msvcrt
+                msvcrt.getch()
+            else:
+                input()
+        except (KeyboardInterrupt, EOFError):
+            pass
+
+        console.print()
+
     def run(self) -> None:
         """启动 REPL 主循环。"""
         self._set_console_title()
@@ -226,16 +282,26 @@ class REPL:
             try:
                 user_input = self._read_input()
             except (KeyboardInterrupt, EOFError):
-                console.print("\n[yellow]再见！[/yellow]")
+                self._shutdown()
                 break
 
             if not user_input:
                 continue
 
+            # ── Esc 键中断正在运行的任务 ──
+            if user_input == "\x1b":
+                if self._task_running:
+                    self._interrupt_event.set()
+                    console.print("\n[yellow]⏸  中断信号已发送，正在停止当前任务...[/yellow]")
+                    continue
+                else:
+                    # 没有任务运行，Esc 无操作
+                    continue
+
             # 斜杠命令
             if user_input.startswith("/"):
                 if self._handle_command(user_input):
-                    console.print("[yellow]再见！[/yellow]")
+                    self._shutdown()
                     break
                 continue
 
@@ -532,6 +598,13 @@ class REPL:
             elif ch == '\x03':
                 raise KeyboardInterrupt
 
+            elif ch == '\x1b':
+                # Esc 键 — 返回 Esc 字符，由主循环处理（中断任务或忽略）
+                if current_line:
+                    lines.append("".join(current_line))
+                sys.stdout.write("\n")
+                return "\x1b"
+
             elif ch in ('\x08', '\x7f'):
                 # Backspace: 删除光标左侧字符
                 if cursor_pos > 0:
@@ -795,14 +868,27 @@ class REPL:
         from omniagent.engine.react_engine import ReActEngine
 
         console.print("[cyan]🔄 ReAct 模式: 思考 → 行动 → 观察 → 循环[/cyan]")
+        console.print("[dim]  按 Esc 或 Ctrl+C 中断任务执行[/dim]")
 
         iterations = self._estimate_react_iterations(user_input)
         console.print(f"[dim]  自适应迭代预算: {iterations} 轮[/dim]")
 
+        # 重置中断信号
+        self._interrupt_event.clear()
+        self._task_running = True
+        self._sigint_count = 0
+
         callback = self._make_callback()
-        engine = ReActEngine(model_priority=model_ids, max_iterations=iterations, callback=callback)
+        engine = ReActEngine(
+            model_priority=model_ids,
+            max_iterations=iterations,
+            callback=callback,
+            interrupt_event=self._interrupt_event,
+        )
         try:
             result = engine.run(user_input, self.agent_context)
+            if self._interrupt_event.is_set():
+                result = result + "\n\n⚠️ **任务被用户中断**" if result else "⚠️ 任务被用户中断"
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._append_thread_message("assistant", result, run_id=self._current_run_recorder.run_id if self._current_run_recorder else None, model_used=model_ids[0])
             self._render_engine_result(callback, result, "ReAct 结果")
@@ -811,6 +897,9 @@ class REPL:
         except Exception as e:
             console.print(f"[error]❌ ReAct 引擎执行失败: {e}[/error]")
             self._finish_run(status="error", reason=str(e))
+        finally:
+            self._task_running = False
+            self._interrupt_event.clear()
 
     def _run_plan_execute_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Plan-Execute 引擎模式。"""
