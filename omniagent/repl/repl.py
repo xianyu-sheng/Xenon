@@ -1277,6 +1277,16 @@ class REPL:
         "I don't have access", "I'm not able",
     ]
 
+    # 在这些词前面的文本中，否认关键词属于解释性语境而非真正的拒绝
+    # 例如: "为什么不能直接用 X？因为…" — 这是在解释，不是拒绝
+    _DENIAL_RHETORICAL_PREFIXES: list[str] = [
+        "为什么", "为何", "如果", "假如", "假设", "若",
+        "why ", "if ", "whether ",
+    ]
+
+    # 否认检测的最小响应长度阈值 — 超过此长度的回复几乎肯定是实质性回答
+    _DENIAL_MIN_SUBSTANTIVE_LENGTH: int = 400
+
     # ── 交互式权限审批 ──────────────────────────────────────
 
     def _approval_handler(self, tool_name: str, params_preview: str) -> bool:
@@ -1309,14 +1319,64 @@ class REPL:
 
     @classmethod
     def _detect_file_claim(cls, text: str) -> bool:
-        """检测 LLM 回复中是否声称执行了文件操作。"""
+        """检测 LLM 回复中是否声称执行了文件操作。
+
+        与 _detect_denial 一样，排除解释性/教学性语境中的误判。
+        """
+        # 快速排除：长回复 + 包含代码块 → 几乎肯定是实质性回答
+        if len(text) > cls._DENIAL_MIN_SUBSTANTIVE_LENGTH and "```" in text:
+            return False
         text_lower = text.lower()
         return any(kw in text_lower for kw in cls._FILE_CLAIM_KEYWORDS)
 
     @classmethod
     def _detect_denial(cls, text: str) -> bool:
-        """检测 LLM 是否回复了拒绝性内容（表示它无法完成任务）。"""
-        return any(kw in text for kw in cls._DENIAL_KEYWORDS)
+        """检测 LLM 是否回复了拒绝性内容（表示它无法完成任务）。
+
+        核心改进（修复误判 bug）：
+        1. 长回复且包含代码块/结构化内容 → 视为实质性回答，不触发
+        2. 否认关键词在反问/解释/条件句中 → 不触发
+           （例如 "为什么不能直接用 X？" 是在教学，不是拒绝）
+        3. 中文否认关键词需要第一人称语境（"我无法…"），
+           避免 "这段代码不能直接运行" 这类客观描述被误判
+        """
+        # ── 快速排除：长回复 + 有代码块/结构化标题 = 实质性回答 ──
+        if len(text) > cls._DENIAL_MIN_SUBSTANTIVE_LENGTH:
+            if "```" in text or text.count("##") >= 1:
+                return False
+
+        for kw in cls._DENIAL_KEYWORDS:
+            idx = text.find(kw)
+            if idx == -1:
+                continue
+
+            # ── 检查关键词前面的文本是否为解释性语境 ──
+            # 取关键词前最多 15 个字符作为前置上下文
+            prefix_start = max(0, idx - 15)
+            prefix = text[prefix_start:idx].lower()
+
+            # 排除反问/条件/假设模式
+            is_rhetorical = any(rp in prefix for rp in cls._DENIAL_RHETORICAL_PREFIXES)
+            if is_rhetorical:
+                continue
+
+            # ── 中文关键词：要求第一人称语境 ──
+            # 真正的拒绝是 LLM 说自己不能做某事（"我无法直接…"），
+            # 而非客观描述（"这段代码不能直接运行"）
+            if any(ord(c) > 127 for c in kw):  # 关键词包含中文字符
+                # 检查关键词上下文（前后各 30 字符）是否包含第一人称
+                context_start = max(0, idx - 30)
+                context_end = min(len(text), idx + len(kw) + 30)
+                context = text[context_start:context_end]
+                has_first_person = any(
+                    fp in context for fp in ("我", "我们", "本人", "本助手")
+                )
+                if not has_first_person:
+                    continue
+
+            return True
+
+        return False
 
     def _inject_project_context(self) -> None:
         """首次对话时注入项目上下文（类型、文件树、规则）。"""

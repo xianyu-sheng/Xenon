@@ -1025,6 +1025,19 @@ class ReActEngine:
                     logger.warning(f"ReAct: thought-only 输出，注入选择提示 (剩余 {remaining} 轮)")
                     continue
                 if remaining >= 1:
+                    # ── P2 修复: 不需要工具的任务，LLM 的 thought 可能已包含实质性回答 ──
+                    # 如果任务明确不需要工具（纯分析/解释/顾问类），且 LLM 输出了
+                    # 足够长的 thought 文本，直接当作 final_answer 返回，避免死循环。
+                    raw_response = native_response.get("raw_text", "")
+                    if not requires_tools and (
+                        (thought and len(thought.strip()) > 150)
+                        or (raw_response and len(raw_response.strip()) > 150)
+                    ):
+                        answer = thought.strip() or raw_response.strip()
+                        logger.info("ReAct: 非工具任务，接受 thought 作为 final_answer")
+                        self.callback.on_finish(answer)
+                        return answer
+
                     # 还没用过工具 → 要求开始行动
                     correction = (
                         "❌ 你的上一条回复只有 thought 字段，没有 action 也没有 final_answer。\n\n"
@@ -1041,7 +1054,7 @@ class ReActEngine:
                 if last_obs and len(last_obs) > 50:
                     result = f"达到最大迭代次数，以下是最后执行结果：\n\n{last_obs[:2000]}"
                 else:
-                    result = thought or response.strip() or "任务已执行，但未生成明确的回复内容。"
+                    result = thought or response_text.strip() or "任务已执行，但未生成明确的回复内容。"
                 self.callback.on_finish(result)
                 return result
 
