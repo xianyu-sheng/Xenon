@@ -873,125 +873,102 @@ class TestToolDetection:
         assert REPL._detect_tool_need("你好") is False
 
 
-# ── _detect_denial 拒识检测测试 ──────────────────────────────
+# ── [REQUIRES_TOOLS] 结构化信号协议测试 ────────────────────────
 
-class TestDetectDenial:
-    """测试 LLM 拒识检测的正确性，特别是防止误判。"""
+class TestRequiresToolsProtocol:
+    """测试 [REQUIRES_TOOLS] 结构化信号协议。
 
-    # ── 真拒绝（应返回 True）──
+    架构决策：不再用 regex 从 LLM 自然语言输出中"猜测"它是否需要工具，
+    而是依赖 LLM 主动输出 [REQUIRES_TOOLS] 结构化信号。
+    """
 
-    def test_genuine_denial_chinese(self):
-        """真正的拒绝：LLM 说自己不能做某事。"""
-        from omniagent.repl.repl import REPL
-        assert REPL._detect_denial("抱歉，我无法直接访问您的文件系统。") is True
-        assert REPL._detect_denial("我无法获取实时天气数据，请使用搜索工具。") is True
-        assert REPL._detect_denial("我无法查询到该网页的内容。") is True
+    # ── 信号检测逻辑 ──
 
-    def test_genuine_denial_english(self):
-        """真正的拒绝：英文第一人称。"""
-        from omniagent.repl.repl import REPL
-        assert REPL._detect_denial("I cannot access your local files directly.") is True
-        assert REPL._detect_denial("I'm unable to browse the web without a tool.") is True
-        assert REPL._detect_denial("I don't have access to that database.") is True
+    def test_signal_detected_at_start(self):
+        """响应以 [REQUIRES_TOOLS] 开头 → 应触发信号。"""
+        assert "   [REQUIRES_TOOLS] 我需要读取文件".lstrip().startswith("[REQUIRES_TOOLS]")
+        assert "[REQUIRES_TOOLS] 用户询问了天气，我需要联网搜索".lstrip().startswith("[REQUIRES_TOOLS]")
+        assert "[REQUIRES_TOOLS]\n\n我需要访问文件系统来完成这个任务。".lstrip().startswith("[REQUIRES_TOOLS]")
 
-    def test_genuine_denial_short(self):
-        """短回复 + 否认关键词 → 真拒绝。"""
-        from omniagent.repl.repl import REPL
-        assert REPL._detect_denial("我无法直接运行这段代码。") is True
+    def test_signal_not_detected_in_middle(self):
+        """[REQUIRES_TOOLS] 出现在中间或末尾 → 不触发（不是协议格式）。"""
+        assert not "这是一段解释 [REQUIRES_TOOLS] 的内容".lstrip().startswith("[REQUIRES_TOOLS]")
+        assert not "代码分析完成。\n[REQUIRES_TOOLS]".lstrip().startswith("[REQUIRES_TOOLS]")
 
-    # ── 误判（应返回 False）──
+    def test_explanatory_text_with_tool_keywords_not_triggered(self):
+        """【回归测试】教学文本中的否认关键词不再触发任何检测。
 
-    def test_pedagogical_explanation_with_denial_keyword(self):
-        """【回归测试】教学解释中的否认关键词不应触发。
-
-        这是本次修复的核心场景：LLM 在解释代码时写
-        "为什么不能直接用 ans += cnt[x]..."，
-        其中包含了 "不能直接" 但这是在教学，不是拒绝。
+        以前的 _detect_denial 会用 regex 扫描 "不能直接" 等关键词，
+        导致教学解释被误判为需要 ReAct 重试。现在这些方法已被移除，
+        只有 LLM 主动输出 [REQUIRES_TOOLS] 才会切换模式。
         """
-        from omniagent.repl.repl import REPL
-        # 从实际 bug 中提取的文本
         text = """为什么不能直接用 ans += cnt[x] 后再 cnt[x] += 1 的颠倒顺序？
-如果先加 1 再累加，那么每当遇到一个新元素时，就会错误地把它自己也当成"之前的出现"来计算。
-整个过程不需要事先检查 if x not in cnt，代码简洁且安全。"""
-        assert REPL._detect_denial(text) is False
+如果先加 1 再累加，那么每当遇到一个新元素时，就会错误地把它自己也当成"之前的出现"来计算。"""
+        # 不包含协议信号 → 不会触发
+        assert not text.lstrip().startswith("[REQUIRES_TOOLS]")
 
-    def test_objective_description_not_denial(self):
-        """客观描述代码行为（不含第一人称）不应触发。"""
-        from omniagent.repl.repl import REPL
-        assert REPL._detect_denial("这段代码不能直接在生产环境中使用，需要先配置环境变量。") is False
-        assert REPL._detect_denial("该方案不具备跨平台兼容性。") is False
-        assert REPL._detect_denial("如果不加 try-except，程序无法直接处理异常。") is False
-
-    def test_rhetorical_question_not_denial(self):
-        """反问句中的否认关键词不应触发。"""
-        from omniagent.repl.repl import REPL
-        assert REPL._detect_denial("为什么这个函数不能直接返回结果？因为需要异步处理。") is False
-        assert REPL._detect_denial("为何无法直接使用内置函数？下面是详细解释。") is False
-
-    def test_conditional_explanation_not_denial(self):
-        """条件/假设句中的否认关键词不应触发。"""
-        from omniagent.repl.repl import REPL
-        assert REPL._detect_denial("如果你无法访问数据库，可以检查连接字符串。") is False
-        assert REPL._detect_denial("假如没有连接互联网，离线模式会生效。") is False
-
-    def test_long_substantive_response_not_denial(self):
-        """长回复（>400 字符）且包含代码块 → 实质性回答，不应触发。"""
-        from omniagent.repl.repl import REPL
-        text = """## 代码实现方案
-
-以下是完整的实现代码：
+    def test_code_explanation_not_triggered(self):
+        """代码解释（长文本+代码块）不含协议信号 → 不会触发。"""
+        text = """## 代码分析
 
 ```python
-def solution():
-    # 这段代码不能直接运行，需要先导入依赖
-    return True
+def numIdenticalPairs(nums):
+    cnt = {}
+    ans = 0
+    for x in nums:
+        ans += cnt.get(x, 0)
+        cnt[x] = cnt.get(x, 0) + 1
+    return ans
 ```
 
-关于为什么选择这个方案：
-1. 性能更好
-2. 代码更简洁
-3. 容易维护
+时间复杂度 O(n)，空间复杂度 O(n)。这段代码不能直接在 C++ 中编译。"""
+        assert not text.lstrip().startswith("[REQUIRES_TOOLS]")
 
-以上是完整的技术方案说明。""" + "详细说明补充内容填充文本确保超过阈值。" * 15  # 确保超过 400 字符
-        assert len(text) > 400
-        assert REPL._detect_denial(text) is False
+    def test_genuine_tool_request_triggers(self):
+        """LLM 明确请求工具时 → 应触发。模拟 Direct 模式下 LLM 无法访问文件。"""
+        text = "[REQUIRES_TOOLS] 您的问题需要读取项目文件才能完整回答。"
+        assert text.lstrip().startswith("[REQUIRES_TOOLS]")
 
-    def test_long_response_with_denial_buried(self):
-        """长回复中的否认关键词（非第一人称）不应触发。"""
+    # ── 废弃方法验证 ──
+
+    def test_detect_denial_no_longer_exists(self):
+        """_detect_denial 已被移除。"""
         from omniagent.repl.repl import REPL
-        # 模拟 LLM 在长解释中偶尔使用 "不能直接"
-        text = (
-            "## defaultdict 的作用\n\n"
-            "在 Python 中，defaultdict 是 collections 模块提供的一个字典子类。\n"
-            "它最核心的特点是：当你访问一个不存在的键时，不会抛出 KeyError。\n\n"
-            "### 为什么不能直接用普通 dict？\n\n"
-            "如果你用普通字典，就得写成：\n\n"
-            "```python\n"
-            "cnt = {}\n"
-            'if x not in cnt:\n'
-            '    cnt[x] = 0\n'
-            "cnt[x] += 1\n"
-            "```\n\n"
-            "但这样代码冗长且容易出错。defaultdict 一行就解决了默认值问题。\n\n"
-            "### 完整代码解释\n\n"
-            "时间复杂度 O(n)，空间复杂度 O(n)。"
-            + "详细说明补充内容填充文本确保超过阈值。" * 12  # padding to exceed 400 chars
-        )
-        assert len(text) > 400
-        # "不能直接" 出现在反问句中 → 不应触发
-        assert REPL._detect_denial(text) is False
+        assert not hasattr(REPL, "_detect_denial")
 
-    def test_english_rhetorical_not_denial(self):
-        """英文反问/解释不应触发。"""
+    def test_detect_file_claim_no_longer_exists(self):
+        """_detect_file_claim 已被移除。"""
         from omniagent.repl.repl import REPL
-        assert REPL._detect_denial("Why can't you directly use a dict? Let me explain...") is False
-        assert REPL._detect_denial("If you cannot access the file, check permissions first.") is False
+        assert not hasattr(REPL, "_detect_file_claim")
 
-    # ── 边界情况 ──
-
-    def test_empty_and_short_benign(self):
-        """空文本和无害短文本不应触发。"""
+    def test_denial_keywords_class_var_removed(self):
+        """废弃的类变量已被移除。"""
         from omniagent.repl.repl import REPL
-        assert REPL._detect_denial("") is False
-        assert REPL._detect_denial("你好") is False
-        assert REPL._detect_denial("Here is the answer.") is False
+        assert not hasattr(REPL, "_DENIAL_KEYWORDS")
+        assert not hasattr(REPL, "_DENIAL_RHETORICAL_PREFIXES")
+        assert not hasattr(REPL, "_DENIAL_MIN_SUBSTANTIVE_LENGTH")
+        assert not hasattr(REPL, "_FILE_CLAIM_KEYWORDS")
+
+    # ── ReAct 引擎：非工具任务处理 ──
+
+    def test_input_requires_tools_pure_analysis(self):
+        """纯分析/解释类任务 → 不需要工具。"""
+        from omniagent.engine.react_engine import ReActEngine
+        assert ReActEngine._input_requires_tools("分析这段代码的逻辑") is False
+        assert ReActEngine._input_requires_tools("解释一下为什么用 defaultdict") is False
+        assert ReActEngine._input_requires_tools("评估这个项目的架构质量") is False
+        assert ReActEngine._input_requires_tools("这段代码有什么问题") is False
+
+    def test_input_requires_tools_with_file_op(self):
+        """包含文件操作 → 需要工具。"""
+        from omniagent.engine.react_engine import ReActEngine
+        assert ReActEngine._input_requires_tools("读取 config.yaml 文件的内容") is True
+        assert ReActEngine._input_requires_tools("创建 hello.py 文件") is True
+        assert ReActEngine._input_requires_tools("运行 pytest 测试") is True
+
+    def test_input_requires_tools_analysis_with_action_verb(self):
+        """分析但包含动作动词 → 需要工具。"""
+        from omniagent.engine.react_engine import ReActEngine
+        # "分析" + "修改" → 可能需要工具（"修改" 在 action_marker 列表中）
+        assert ReActEngine._input_requires_tools("分析代码并修改 bug") is True
+        assert ReActEngine._input_requires_tools("分析性能并执行优化") is True

@@ -971,12 +971,28 @@ class ReActEngine:
                 no_tool_streak = 0
                 thought_only_streak = 0
             else:
-                # ── P1 修复: LLM 只输出了 thought，既没有 action 也没有 final_answer ──
+                # ── LLM 只输出了 thought，既没有 action 也没有 final_answer ──
                 thought_only_streak += 1
                 remaining = self.max_iterations - i
 
-                # ── 关键修复: 连续 3 次 thought-only 后，不再发送纠正消息（它们无效）
-                # 而是直接进入 "mercy compilation" — 用已收集数据直接合成报告
+                # ── 核心修复: 非工具任务不需要 action ──
+                # 当 _input_requires_tools 判定任务为纯分析/解释/顾问类时，
+                # 注入 action prompt 是无意义的——LLM 没有工具可调用。
+                # 直接接受 thought 文本作为最终回答，避免无效的纠正循环。
+                if not requires_tools:
+                    raw_response = native_response.get("raw_text", "")
+                    answer = (thought or raw_response or "").strip()
+                    if answer:
+                        logger.info("ReAct: 非工具任务，接受 thought 作为 final_answer")
+                        self.callback.on_finish(answer)
+                        return answer
+                    # thought 为空，进入下一轮让 LLM 再试一次
+                    logger.warning("ReAct: 非工具任务 thought 为空，进入下一轮")
+                    continue
+
+                # ── 以下逻辑仅对需要工具的任务生效 ──
+
+                # 连续 3 次 thought-only + 有工具执行记录 → 怜悯编译
                 if thought_only_streak >= 3 and tracker.has_executions():
                     logger.warning(
                         f"ReAct: 连续 {thought_only_streak} 次 thought-only，"
@@ -985,7 +1001,6 @@ class ReActEngine:
                     self.callback.on_warning(
                         f"连续 {thought_only_streak} 次 thought-only 纠正无效，直接编译分析报告"
                     )
-                    # 用 LLM 基于已收集数据直接生成报告（不在 ReAct 循环中）
                     compiled = self._mercy_compile(messages, tracker, user_input)
                     self.callback.on_finish(compiled)
                     return compiled
@@ -1025,19 +1040,6 @@ class ReActEngine:
                     logger.warning(f"ReAct: thought-only 输出，注入选择提示 (剩余 {remaining} 轮)")
                     continue
                 if remaining >= 1:
-                    # ── P2 修复: 不需要工具的任务，LLM 的 thought 可能已包含实质性回答 ──
-                    # 如果任务明确不需要工具（纯分析/解释/顾问类），且 LLM 输出了
-                    # 足够长的 thought 文本，直接当作 final_answer 返回，避免死循环。
-                    raw_response = native_response.get("raw_text", "")
-                    if not requires_tools and (
-                        (thought and len(thought.strip()) > 150)
-                        or (raw_response and len(raw_response.strip()) > 150)
-                    ):
-                        answer = thought.strip() or raw_response.strip()
-                        logger.info("ReAct: 非工具任务，接受 thought 作为 final_answer")
-                        self.callback.on_finish(answer)
-                        return answer
-
                     # 还没用过工具 → 要求开始行动
                     correction = (
                         "❌ 你的上一条回复只有 thought 字段，没有 action 也没有 final_answer。\n\n"
