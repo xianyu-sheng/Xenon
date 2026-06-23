@@ -128,12 +128,16 @@ Mock 评测（确定性，CI 使用）：
 python evals/runner.py --mode mock --output evals/reports/mock_report.md
 ```
 
+最新 mock 评测结果（2026-06-23）：**20/20 (100%)** — 3 次独立运行全部通过，36 次工具调用，0 次工具失败。
+
 真实评测（使用已配置的模型，手动运行）：
 
 ```bash
 python evals/runner.py --mode real --model deepseek/deepseek-v4-pro --output evals/reports/real_report.md
 python evals/runner.py --mode real --model openai/gpt-4o --output evals/reports/real_report.md
 ```
+
+最新真实评测结果（deepseek-v4-pro，2026-06-23）：**20/20 (100%)**，平均 82.2 tokens，37 次工具调用，0 次工具失败。
 
 ## TUI 模式
 
@@ -181,8 +185,9 @@ python evals/runner.py --mode mock --output evals/reports/mock_report.md
 - 每个 REPL 会话有独立的 `thread.jsonl` 和 `notes.md`，笔记在后续对话中自动注入
 - 可通过 `.omniagent/policy.yaml` 自定义工具权限策略
 - **交互式权限审批**：写入文件、执行命令、Git 操作等敏感工具执行前弹出审批提示（类似 Claude Code），支持 `批准一次(y)` / `始终批准(a)` / `拒绝(n)`
-- **执行后通知**：工具执行完成后显示操作结果摘要（文件路径、命令输出、字节数等）
+- **执行后通知**：工具执行完成后显示操作结果摘要（文件路径、字节数等），Markdown 标记检测自动着色
 - **会话级权限缓存**：选择「始终批准」后同一操作在同一会话中不再重复询问
+- **通知分级显示**：✅ 写入/命令（醒目） / 📖 读取/搜索（低调 dim） / ❌ 失败（红色） / ⛔ 拒绝（红色）
 - **会话自动清理**：启动时移除过期会话（7 天）、运行记录（30 天）、检查点（14 天）
 - **MCP 自动重启**：崩溃的 MCP 子进程自动重启（最多 3 次，延迟退避）
 

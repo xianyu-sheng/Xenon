@@ -101,10 +101,22 @@ class TestConsoleCallback:
         cb = ConsoleCallback(verbose=False)
         cb.on_act("write_file", {"file_path": "a.py"})
         captured = capsys.readouterr()
-        assert captured.out == ""
+        # write_file 属于 _NOTIFY_TOOLS → 即使在非 verbose 模式也会显示
+        assert "write_file" in captured.out
+        assert "a.py" in captured.out
         panel = cb._panel
         assert panel._current_step is not None
         assert panel._current_step.action == "write_file"
+
+    def test_act_read_not_shown_non_verbose(self, capsys):
+        """读取类工具不在 _NOTIFY_TOOLS 中 → 非 verbose 不输出"""
+        cb = ConsoleCallback(verbose=False)
+        cb.on_act("read_file", {"file_path": "a.py"})
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        panel = cb._panel
+        assert panel._current_step is not None
+        assert panel._current_step.action == "read_file"
 
     def test_observe_verbose(self, capsys):
         cb = ConsoleCallback(verbose=True)
@@ -118,11 +130,43 @@ class TestConsoleCallback:
         captured = capsys.readouterr()
         assert captured.out == ""
 
-    def test_step_hidden_non_verbose(self, capsys):
+    def test_observe_success_notification_non_verbose(self, capsys):
+        """✅ 前缀的成功通知在非 verbose 模式下也应显示"""
+        cb = ConsoleCallback(verbose=False)
+        cb.on_observe("✅ 📄 已写入: a.py (100 bytes)")
+        captured = capsys.readouterr()
+        assert "✅" in captured.out
+        assert "a.py" in captured.out
+
+    def test_observe_failure_notification_non_verbose(self, capsys):
+        """❌ 前缀的失败通知在非 verbose 模式下也应显示"""
+        cb = ConsoleCallback(verbose=False)
+        cb.on_observe("❌ write_file 失败: 权限不足")
+        captured = capsys.readouterr()
+        assert "❌" in captured.out
+        assert "write_file" in captured.out
+
+    def test_observe_permission_denied_non_verbose(self, capsys):
+        """⛔ 权限拒绝通知在非 verbose 模式下也应显示"""
+        cb = ConsoleCallback(verbose=False)
+        cb.on_observe("⛔ 已拒绝: write_file")
+        captured = capsys.readouterr()
+        assert "write_file" in captured.out
+
+    def test_observe_info_tool_shown_non_verbose(self, capsys):
+        """📖 开头的信息类通知在非 verbose 模式下也应显示（dim 风格）"""
+        cb = ConsoleCallback(verbose=False)
+        cb.on_observe("📖 已读取: readme.md")
+        captured = capsys.readouterr()
+        assert "readme.md" in captured.out
+
+    def test_step_always_visible(self, capsys):
+        """on_step 始终显示（不受 verbose 控制）"""
         cb = ConsoleCallback()
         cb.on_step(1, 3, "创建文件")
         captured = capsys.readouterr()
-        assert captured.out == ""
+        assert "步骤 1/3" in captured.out
+        assert "创建文件" in captured.out
 
     def test_review_hidden_non_verbose(self, capsys):
         cb = ConsoleCallback()
@@ -130,11 +174,12 @@ class TestConsoleCallback:
         captured = capsys.readouterr()
         assert captured.out == ""
 
-    def test_error_collected_non_verbose(self, capsys):
+    def test_error_always_visible(self, capsys):
+        """on_error 始终显示（不受 verbose 控制）"""
         cb = ConsoleCallback()
         cb.on_error("出错了")
         captured = capsys.readouterr()
-        assert captured.out == ""
+        assert "出错了" in captured.out
         panel = cb.get_thinking_panel()
         assert panel is not None
         assert "出错了" in panel.errors

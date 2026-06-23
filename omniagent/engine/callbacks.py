@@ -257,12 +257,19 @@ class ConsoleCallback(EngineCallback):
     def on_observe(self, observation: str) -> None:
         self._panel.add_observation(observation)
         obs_preview = observation[:150].replace("\n", " ")
+
+        # 成功标记: ✅ 开头, 或包含 "执行完成"
         if observation.startswith("✅") or "执行完成" in observation[:50]:
-            # 成功 → 绿色简要
             print(f"  ✅ {obs_preview}")
-        elif observation.startswith("❌") or "失败" in observation[:50] or "错误" in observation[:50]:
-            # 失败 → 红色
+        # 失败标记: ❌/🛑/⛔ 开头, 或包含 "失败"/"错误"/"拒绝"
+        elif (
+            observation.startswith(("❌", "🛑", "⛔"))
+            or any(kw in observation[:50] for kw in ("失败", "错误", "拒绝"))
+        ):
             print(f"  ❌ {obs_preview}")
+        # 信息类工具 — dim 显示（始终显示，不仅 verbose）
+        elif observation.startswith(("📖", "📋", "🔍", "🌐", "🐙")):
+            print(f"  {obs_preview}")
         elif self.verbose:
             print(f"  👀 {obs_preview}")
 

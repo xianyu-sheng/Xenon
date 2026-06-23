@@ -126,46 +126,59 @@ class ToolExecuteResult:
         )
 
     def format_notification(self) -> str:
-        """格式化为面向用户的执行通知（简洁，一行摘要）。"""
+        """格式化为面向用户的执行通知（纯文本，简洁，一行摘要）。
+
+        注意：返回纯文本（无 Rich markup），由 ConsoleCallback 负责着色。
+        文本格式约定：
+        - 成功以 ✅ 开头
+        - 失败以 ❌ 或 🛑 开头
+        - 信息类操作以 📖/📋/🔍/🌐 开头
+        """
         if self.permission_denied:
-            return f"[red]⛔ 已拒绝: {self.tool_name}[/red]"
+            return f"⛔ 已拒绝: {self.tool_name}"
         if not self.success:
             icon = "🛑" if self.circuit_breaker_tripped else "❌"
             err_preview = (self.error or "未知错误")[:80]
-            return f"[red]{icon} {self.tool_name} 失败: {err_preview}[/red]"
+            return f"{icon} {self.tool_name} 失败: {err_preview}"
 
         # 成功 — 根据工具类型生成通知
         if self.tool_name == "write_file":
             path = self.params.get("file_path", "?")
             size = len(self.params.get("content", ""))
-            return f"[green]📄 已写入: {path} ({size:,} bytes)[/green]"
+            return f"✅ 📄 已写入: {path} ({size:,} bytes)"
         elif self.tool_name == "edit_file":
             path = self.params.get("file_path", "?")
-            return f"[green]✏️ 已编辑: {path}[/green]"
+            return f"✅ ✏️ 已编辑: {path}"
+        elif self.tool_name in ("batch_write", "batch_edit"):
+            count = len(self.params.get("files", [])) or len(self.params.get("edits", [])) or "?"
+            return f"✅ 📝 批量操作完成 ({count} 项)"
         elif self.tool_name == "create_directory":
             path = self.params.get("path") or self.params.get("file_path", "?")
-            return f"[green]📁 已创建目录: {path}[/green]"
+            return f"✅ 📁 已创建目录: {path}"
+        elif self.tool_name in ("move_file", "copy_file", "delete_file"):
+            path = self.params.get("file_path") or self.params.get("path", "?")
+            return f"✅ 🗂️ {self.tool_name}: {path}"
         elif self.tool_name == "command":
             cmd = self.params.get("command", "?")
             cmd_short = cmd[:60] + ("..." if len(cmd) > 60 else "")
-            return f"[green]⚡ 命令完成: {cmd_short}[/green]"
+            return f"✅ ⚡ 命令完成: {cmd_short}"
         elif self.tool_name == "git":
             git_cmd = self.params.get("git_command", "?")
-            return f"[green]🔀 Git 完成: {git_cmd}[/green]"
+            return f"✅ 🔀 Git 完成: {git_cmd}"
         elif self.tool_name == "read_file":
             path = self.params.get("file_path", "?")
-            return f"[dim]📖 已读取: {path}[/dim]"
+            return f"📖 已读取: {path}"
         elif self.tool_name == "list_files":
             path = self.params.get("file_path") or self.params.get("path", "?")
-            return f"[dim]📋 已列出: {path}[/dim]"
+            return f"📋 已列出: {path}"
         elif self.tool_name == "search_files":
             pattern = self.params.get("search_pattern") or self.params.get("pattern", "?")
-            return f"[dim]🔍 已搜索: {pattern}[/dim]"
+            return f"🔍 已搜索: {pattern}"
         elif self.tool_name in ("web_fetch", "github_fetch"):
             url = self.params.get("url", "?")
-            return f"[dim]🌐 已获取: {url[:60]}[/dim]"
+            return f"🌐 已获取: {url[:60]}"
         else:
-            return f"[green]✅ {self.tool_name} 完成[/green]"
+            return f"✅ {self.tool_name} 完成"
 
 
 class ToolExecutor:
