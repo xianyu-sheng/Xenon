@@ -636,6 +636,8 @@ class ReActEngine:
         callback: EngineCallback | None = None,
         # ── Trace 记录（可选，用于调试/审计）──
         trace_dir: str | None = None,
+        # ── 中断机制（可选）──
+        interrupt_event: object | None = None,  # threading.Event
         # ── 可配置阈值（None 表示根据 max_iterations 动态缩放）──
         min_final_answer_length: int = _DEFAULT_MIN_FINAL_ANSWER_LENGTH,
         min_structured_sections: int = _DEFAULT_MIN_STRUCTURED_SECTIONS,
@@ -654,6 +656,7 @@ class ReActEngine:
         self.tools = tools or BUILTIN_TOOLS
         self.callback = callback or EngineCallback()
         self.breaker = CircuitBreaker()  # 工具断路器
+        self._interrupt_event = interrupt_event  # 中断事件（Esc/Ctrl+C）
 
         # ── 静态阈值 ──
         self.min_final_answer_length = min_final_answer_length
@@ -786,6 +789,19 @@ class ReActEngine:
         thought_only_streak = 0  # 连续 thought-only 轮次
 
         for i in range(self.max_iterations):
+            # ── 中断检查（Esc / Ctrl+C）──
+            if self._interrupt_event is not None and self._interrupt_event.is_set():
+                logger.info(f"ReAct: 第 {i} 轮检测到中断信号，停止执行")
+                interrupted_msg = (
+                    f"## ⚠️ 任务被用户中断\n\n"
+                    f"任务在第 {i + 1}/{self.max_iterations} 轮被中断。\n"
+                    f"已执行的工具调用: {len(tracker.calls)} 次。\n\n"
+                    f"{tracker.execution_summary() if tracker.has_executions() else '(未执行任何工具)'}"
+                )
+                self.callback.on_warning("用户中断")
+                self.callback.on_finish(interrupted_msg)
+                return interrupted_msg
+
             # ── 上下文压缩检查（按可配置间隔 + 初始检查）──
             if i == 0 or (i > 0 and i % self.compact_interval == 0):
                 estimated = Compactor._estimate_tokens(messages)
@@ -955,12 +971,28 @@ class ReActEngine:
                 no_tool_streak = 0
                 thought_only_streak = 0
             else:
-                # ── P1 修复: LLM 只输出了 thought，既没有 action 也没有 final_answer ──
+                # ── LLM 只输出了 thought，既没有 action 也没有 final_answer ──
                 thought_only_streak += 1
                 remaining = self.max_iterations - i
 
-                # ── 关键修复: 连续 3 次 thought-only 后，不再发送纠正消息（它们无效）
-                # 而是直接进入 "mercy compilation" — 用已收集数据直接合成报告
+                # ── 核心修复: 非工具任务不需要 action ──
+                # 当 _input_requires_tools 判定任务为纯分析/解释/顾问类时，
+                # 注入 action prompt 是无意义的——LLM 没有工具可调用。
+                # 直接接受 thought 文本作为最终回答，避免无效的纠正循环。
+                if not requires_tools:
+                    raw_response = native_response.get("raw_text", "")
+                    answer = (thought or raw_response or "").strip()
+                    if answer:
+                        logger.info("ReAct: 非工具任务，接受 thought 作为 final_answer")
+                        self.callback.on_finish(answer)
+                        return answer
+                    # thought 为空，进入下一轮让 LLM 再试一次
+                    logger.warning("ReAct: 非工具任务 thought 为空，进入下一轮")
+                    continue
+
+                # ── 以下逻辑仅对需要工具的任务生效 ──
+
+                # 连续 3 次 thought-only + 有工具执行记录 → 怜悯编译
                 if thought_only_streak >= 3 and tracker.has_executions():
                     logger.warning(
                         f"ReAct: 连续 {thought_only_streak} 次 thought-only，"
@@ -969,7 +1001,6 @@ class ReActEngine:
                     self.callback.on_warning(
                         f"连续 {thought_only_streak} 次 thought-only 纠正无效，直接编译分析报告"
                     )
-                    # 用 LLM 基于已收集数据直接生成报告（不在 ReAct 循环中）
                     compiled = self._mercy_compile(messages, tracker, user_input)
                     self.callback.on_finish(compiled)
                     return compiled
@@ -1025,7 +1056,7 @@ class ReActEngine:
                 if last_obs and len(last_obs) > 50:
                     result = f"达到最大迭代次数，以下是最后执行结果：\n\n{last_obs[:2000]}"
                 else:
-                    result = thought or response.strip() or "任务已执行，但未生成明确的回复内容。"
+                    result = thought or response_text.strip() or "任务已执行，但未生成明确的回复内容。"
                 self.callback.on_finish(result)
                 return result
 

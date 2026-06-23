@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import logging
 import re
+import signal
 import sys
+import threading
 import time
 from typing import Any
 
@@ -95,6 +97,11 @@ class REPL:
 
         # 权限审批缓存 (session 级)
         self._approval_cache: dict[str, bool] = {}
+
+        # ── 中断机制（Esc / Ctrl+C 中断任务执行）──
+        self._interrupt_event = threading.Event()
+        self._task_running = False
+        self._setup_interrupt_handler()
 
         # 设置交互式审批处理器
         from omniagent.nodes.tool_node import ToolNode
@@ -190,6 +197,17 @@ class REPL:
             f"当前日期: {current_date}。"
             "当用户询问日期、时间等问题时，直接使用此信息回答，不要编造。"
             "请用中文回答，代码部分用英文。"
+            "\n\n"
+            "## 工具需求协议\n"
+            "你当前处于 Direct 模式（无工具访问权限）。"
+            "如果你需要以下能力才能回答用户问题，"
+            "请在回复开头添加 **[REQUIRES_TOOLS]** 标记"
+            "（后面可以附上简短说明），系统将自动切换模式为你提供工具：\n"
+            "- 读取/写入/搜索本地文件\n"
+            "- 执行命令或脚本\n"
+            "- 访问实时数据\n"
+            "- Git 操作\n"
+            "如果你的知识足以直接回答，给出答案即可，无需任何标记。"
         )
 
     @staticmethod
@@ -206,6 +224,55 @@ class REPL:
             # Linux/macOS 用 ANSI 转义
             sys.stdout.write("\033]0;🚀 OmniAgent-CLI\007")
             sys.stdout.flush()
+
+    def _setup_interrupt_handler(self) -> None:
+        """设置中断信号处理器和 SIGINT handler。
+
+        - Ctrl+C (SIGINT) 设置中断事件，允许正在运行的任务优雅退出
+        - 连续两次 Ctrl+C 强制终止
+        """
+        self._sigint_count = 0
+
+        def _sigint_handler(signum, frame):
+            self._sigint_count += 1
+            if self._sigint_count >= 2:
+                # 连续两次 Ctrl+C → 强制退出
+                console.print("\n[red]⚠ 强制退出[/red]")
+                sys.exit(1)
+            if self._task_running:
+                self._interrupt_event.set()
+                console.print("\n[yellow]⏸  正在中断当前任务... (再按一次 Ctrl+C 强制退出)[/yellow]")
+            else:
+                # 没有任务运行 → 正常退出
+                raise KeyboardInterrupt
+
+        # 在 Windows 上，signal 只能在主线程工作
+        try:
+            signal.signal(signal.SIGINT, _sigint_handler)
+        except (ValueError, OSError):
+            # 非主线程或受限环境 → 回退到默认 KeyboardInterrupt
+            pass
+
+    def _shutdown(self) -> None:
+        """安全关闭 REPL — 防止终端闪退。
+
+        在退出前暂停，让用户看到告别信息，而不是终端立即关闭。
+        """
+        console.print()
+        console.print("[yellow]再见！[/yellow]")
+        console.print("[dim]按 Enter 退出...[/dim]", end="")
+
+        try:
+            # Windows: 用 msvcrt 读取一个按键（不用回车）
+            if sys.platform == "win32":
+                import msvcrt
+                msvcrt.getch()
+            else:
+                input()
+        except (KeyboardInterrupt, EOFError):
+            pass
+
+        console.print()
 
     def run(self) -> None:
         """启动 REPL 主循环。"""
@@ -226,16 +293,26 @@ class REPL:
             try:
                 user_input = self._read_input()
             except (KeyboardInterrupt, EOFError):
-                console.print("\n[yellow]再见！[/yellow]")
+                self._shutdown()
                 break
 
             if not user_input:
                 continue
 
+            # ── Esc 键中断正在运行的任务 ──
+            if user_input == "\x1b":
+                if self._task_running:
+                    self._interrupt_event.set()
+                    console.print("\n[yellow]⏸  中断信号已发送，正在停止当前任务...[/yellow]")
+                    continue
+                else:
+                    # 没有任务运行，Esc 无操作
+                    continue
+
             # 斜杠命令
             if user_input.startswith("/"):
                 if self._handle_command(user_input):
-                    console.print("[yellow]再见！[/yellow]")
+                    self._shutdown()
                     break
                 continue
 
@@ -532,6 +609,13 @@ class REPL:
             elif ch == '\x03':
                 raise KeyboardInterrupt
 
+            elif ch == '\x1b':
+                # Esc 键 — 返回 Esc 字符，由主循环处理（中断任务或忽略）
+                if current_line:
+                    lines.append("".join(current_line))
+                sys.stdout.write("\n")
+                return "\x1b"
+
             elif ch in ('\x08', '\x7f'):
                 # Backspace: 删除光标左侧字符
                 if cursor_pos > 0:
@@ -734,8 +818,14 @@ class REPL:
                 self._session_state.pop("_run_recorder", None)
 
     def _run_direct(self, user_input: str, model_ids: list[str]) -> None:
-        """直接对话模式。自动检测工具需求并委派给 ReAct 引擎。"""
-        # 检测是否需要工具执行（仅匹配明确的编程/文件/命令任务）
+        """直接对话模式。通过结构化信号协议委派工具任务给 ReAct 引擎。
+
+        架构决策：
+        - 输入侧用 regex 预筛选明确的工具操作（如"创建文件"）
+        - 输出侧不再用 regex 猜测 LLM 意图（这是不可靠的），
+          而是依赖 LLM 主动输出 [REQUIRES_TOOLS] 结构化信号来请求工具支持
+        """
+        # 预检测：明确的工具操作任务直接走 ReAct
         if self._detect_tool_need(user_input):
             console.print("[cyan]🔧 检测到需要工具执行，自动切换到 ReAct 模式...[/cyan]")
             self._run_react_engine(user_input, model_ids)
@@ -753,22 +843,18 @@ class REPL:
                 self.status_bar.set_last_model(model_id)
 
                 if response_text:
-                    # ── 响应后验证 1：检测 LLM 是否声称执行了文件操作 ──
-                    if self._detect_file_claim(response_text):
+                    # ── 结构化信号：LLM 显式请求工具支持 ──
+                    # [REQUIRES_TOOLS] 是 LLM 和系统之间的约定协议，
+                    # 只有当 LLM 主动输出此标记时才会切换到 ReAct 模式。
+                    # 这样避免了用 regex 从自然语言中"猜测"LLM 意图的不可靠性。
+                    if response_text.lstrip().startswith("[REQUIRES_TOOLS]"):
                         console.print()
-                        console.print("[cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，自动切换到 ReAct 模式重新执行...[/cyan]")
+                        console.print("[cyan]🔧 LLM 请求工具支持，自动切换到 ReAct 模式...[/cyan]")
                         if self._current_run_recorder is not None:
-                            self._current_run_recorder.emit("run.warning", warning="direct response claimed file operations; retrying with ReAct")
-                        self.ctx_mgr.trim_last_assistant()
-                        self._run_react_engine(user_input, model_ids)
-                        return
-
-                    # ── 响应后验证 2：检测 LLM 是否回复了拒绝性内容 ──
-                    if self._detect_denial(response_text):
-                        console.print()
-                        console.print("[cyan]🔧 LLM 表示无法完成任务，自动切换到 ReAct 模式重试...[/cyan]")
-                        if self._current_run_recorder is not None:
-                            self._current_run_recorder.emit("run.warning", warning="direct response denied capability; retrying with ReAct")
+                            self._current_run_recorder.emit(
+                                "run.warning",
+                                warning="LLM requested tools via [REQUIRES_TOOLS] signal",
+                            )
                         self.ctx_mgr.trim_last_assistant()
                         self._run_react_engine(user_input, model_ids)
                         return
@@ -795,14 +881,27 @@ class REPL:
         from omniagent.engine.react_engine import ReActEngine
 
         console.print("[cyan]🔄 ReAct 模式: 思考 → 行动 → 观察 → 循环[/cyan]")
+        console.print("[dim]  按 Esc 或 Ctrl+C 中断任务执行[/dim]")
 
         iterations = self._estimate_react_iterations(user_input)
         console.print(f"[dim]  自适应迭代预算: {iterations} 轮[/dim]")
 
+        # 重置中断信号
+        self._interrupt_event.clear()
+        self._task_running = True
+        self._sigint_count = 0
+
         callback = self._make_callback()
-        engine = ReActEngine(model_priority=model_ids, max_iterations=iterations, callback=callback)
+        engine = ReActEngine(
+            model_priority=model_ids,
+            max_iterations=iterations,
+            callback=callback,
+            interrupt_event=self._interrupt_event,
+        )
         try:
             result = engine.run(user_input, self.agent_context)
+            if self._interrupt_event.is_set():
+                result = result + "\n\n⚠️ **任务被用户中断**" if result else "⚠️ 任务被用户中断"
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._append_thread_message("assistant", result, run_id=self._current_run_recorder.run_id if self._current_run_recorder else None, model_used=model_ids[0])
             self._render_engine_result(callback, result, "ReAct 结果")
@@ -811,6 +910,9 @@ class REPL:
         except Exception as e:
             console.print(f"[error]❌ ReAct 引擎执行失败: {e}[/error]")
             self._finish_run(status="error", reason=str(e))
+        finally:
+            self._task_running = False
+            self._interrupt_event.clear()
 
     def _run_plan_execute_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Plan-Execute 引擎模式。"""
@@ -1169,25 +1271,6 @@ class REPL:
         else:
             return 20  # 复杂项目分析、多步骤重构
 
-    _FILE_CLAIM_KEYWORDS: list[str] = [
-        "已创建", "已经创建", "已生成", "已经生成", "已写入", "已经写入",
-        "已保存", "已经保存", "已新建", "已经新建", "已建立", "已经建立",
-        "创建了", "生成了", "写入了", "保存了", "新建了",
-        "created", "written", "saved", "generated",
-        "文件已", "目录已", "文件夹已",
-    ]
-
-    # LLM 拒绝性回复的关键词 — 表示它不知道怎么做，应该切换到 ReAct
-    _DENIAL_KEYWORDS: list[str] = [
-        "无法直接", "无法获取", "无法查询", "无法访问", "无法提供",
-        "不能直接", "不能获取", "不能查询", "不能访问",
-        "没有连接", "没有接入", "没有访问",
-        "不具备", "不支持直接",
-        "无法实时", "无法获取实时",
-        "I cannot", "I can't", "I'm unable",
-        "I don't have access", "I'm not able",
-    ]
-
     # ── 交互式权限审批 ──────────────────────────────────────
 
     def _approval_handler(self, tool_name: str, params_preview: str) -> bool:
@@ -1217,17 +1300,6 @@ class REPL:
         else:
             console.print("[red]✗ 已拒绝[/red]")
             return False
-
-    @classmethod
-    def _detect_file_claim(cls, text: str) -> bool:
-        """检测 LLM 回复中是否声称执行了文件操作。"""
-        text_lower = text.lower()
-        return any(kw in text_lower for kw in cls._FILE_CLAIM_KEYWORDS)
-
-    @classmethod
-    def _detect_denial(cls, text: str) -> bool:
-        """检测 LLM 是否回复了拒绝性内容（表示它无法完成任务）。"""
-        return any(kw in text for kw in cls._DENIAL_KEYWORDS)
 
     def _inject_project_context(self) -> None:
         """首次对话时注入项目上下文（类型、文件树、规则）。"""

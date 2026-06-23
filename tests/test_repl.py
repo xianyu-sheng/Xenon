@@ -871,3 +871,104 @@ class TestToolDetection:
         assert REPL._detect_tool_need("今天天气怎么样") is False
         assert REPL._detect_tool_need("how does machine learning work") is False
         assert REPL._detect_tool_need("你好") is False
+
+
+# ── [REQUIRES_TOOLS] 结构化信号协议测试 ────────────────────────
+
+class TestRequiresToolsProtocol:
+    """测试 [REQUIRES_TOOLS] 结构化信号协议。
+
+    架构决策：不再用 regex 从 LLM 自然语言输出中"猜测"它是否需要工具，
+    而是依赖 LLM 主动输出 [REQUIRES_TOOLS] 结构化信号。
+    """
+
+    # ── 信号检测逻辑 ──
+
+    def test_signal_detected_at_start(self):
+        """响应以 [REQUIRES_TOOLS] 开头 → 应触发信号。"""
+        assert "   [REQUIRES_TOOLS] 我需要读取文件".lstrip().startswith("[REQUIRES_TOOLS]")
+        assert "[REQUIRES_TOOLS] 用户询问了天气，我需要联网搜索".lstrip().startswith("[REQUIRES_TOOLS]")
+        assert "[REQUIRES_TOOLS]\n\n我需要访问文件系统来完成这个任务。".lstrip().startswith("[REQUIRES_TOOLS]")
+
+    def test_signal_not_detected_in_middle(self):
+        """[REQUIRES_TOOLS] 出现在中间或末尾 → 不触发（不是协议格式）。"""
+        assert not "这是一段解释 [REQUIRES_TOOLS] 的内容".lstrip().startswith("[REQUIRES_TOOLS]")
+        assert not "代码分析完成。\n[REQUIRES_TOOLS]".lstrip().startswith("[REQUIRES_TOOLS]")
+
+    def test_explanatory_text_with_tool_keywords_not_triggered(self):
+        """【回归测试】教学文本中的否认关键词不再触发任何检测。
+
+        以前的 _detect_denial 会用 regex 扫描 "不能直接" 等关键词，
+        导致教学解释被误判为需要 ReAct 重试。现在这些方法已被移除，
+        只有 LLM 主动输出 [REQUIRES_TOOLS] 才会切换模式。
+        """
+        text = """为什么不能直接用 ans += cnt[x] 后再 cnt[x] += 1 的颠倒顺序？
+如果先加 1 再累加，那么每当遇到一个新元素时，就会错误地把它自己也当成"之前的出现"来计算。"""
+        # 不包含协议信号 → 不会触发
+        assert not text.lstrip().startswith("[REQUIRES_TOOLS]")
+
+    def test_code_explanation_not_triggered(self):
+        """代码解释（长文本+代码块）不含协议信号 → 不会触发。"""
+        text = """## 代码分析
+
+```python
+def numIdenticalPairs(nums):
+    cnt = {}
+    ans = 0
+    for x in nums:
+        ans += cnt.get(x, 0)
+        cnt[x] = cnt.get(x, 0) + 1
+    return ans
+```
+
+时间复杂度 O(n)，空间复杂度 O(n)。这段代码不能直接在 C++ 中编译。"""
+        assert not text.lstrip().startswith("[REQUIRES_TOOLS]")
+
+    def test_genuine_tool_request_triggers(self):
+        """LLM 明确请求工具时 → 应触发。模拟 Direct 模式下 LLM 无法访问文件。"""
+        text = "[REQUIRES_TOOLS] 您的问题需要读取项目文件才能完整回答。"
+        assert text.lstrip().startswith("[REQUIRES_TOOLS]")
+
+    # ── 废弃方法验证 ──
+
+    def test_detect_denial_no_longer_exists(self):
+        """_detect_denial 已被移除。"""
+        from omniagent.repl.repl import REPL
+        assert not hasattr(REPL, "_detect_denial")
+
+    def test_detect_file_claim_no_longer_exists(self):
+        """_detect_file_claim 已被移除。"""
+        from omniagent.repl.repl import REPL
+        assert not hasattr(REPL, "_detect_file_claim")
+
+    def test_denial_keywords_class_var_removed(self):
+        """废弃的类变量已被移除。"""
+        from omniagent.repl.repl import REPL
+        assert not hasattr(REPL, "_DENIAL_KEYWORDS")
+        assert not hasattr(REPL, "_DENIAL_RHETORICAL_PREFIXES")
+        assert not hasattr(REPL, "_DENIAL_MIN_SUBSTANTIVE_LENGTH")
+        assert not hasattr(REPL, "_FILE_CLAIM_KEYWORDS")
+
+    # ── ReAct 引擎：非工具任务处理 ──
+
+    def test_input_requires_tools_pure_analysis(self):
+        """纯分析/解释类任务 → 不需要工具。"""
+        from omniagent.engine.react_engine import ReActEngine
+        assert ReActEngine._input_requires_tools("分析这段代码的逻辑") is False
+        assert ReActEngine._input_requires_tools("解释一下为什么用 defaultdict") is False
+        assert ReActEngine._input_requires_tools("评估这个项目的架构质量") is False
+        assert ReActEngine._input_requires_tools("这段代码有什么问题") is False
+
+    def test_input_requires_tools_with_file_op(self):
+        """包含文件操作 → 需要工具。"""
+        from omniagent.engine.react_engine import ReActEngine
+        assert ReActEngine._input_requires_tools("读取 config.yaml 文件的内容") is True
+        assert ReActEngine._input_requires_tools("创建 hello.py 文件") is True
+        assert ReActEngine._input_requires_tools("运行 pytest 测试") is True
+
+    def test_input_requires_tools_analysis_with_action_verb(self):
+        """分析但包含动作动词 → 需要工具。"""
+        from omniagent.engine.react_engine import ReActEngine
+        # "分析" + "修改" → 可能需要工具（"修改" 在 action_marker 列表中）
+        assert ReActEngine._input_requires_tools("分析代码并修改 bug") is True
+        assert ReActEngine._input_requires_tools("分析性能并执行优化") is True
