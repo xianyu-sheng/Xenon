@@ -43,7 +43,7 @@ omniagent
 
 ```text
 You: /setup              # 首次配置 API Key
-You: /set_model          # 注册或切换模型
+You: /model              # 管理模型（浏览、注册、切换一步完成）
 You: /mode react         # 选择思考范式
 You: !pytest tests -q    # 直接运行测试
 You: /new_terminal       # 打开可观测子终端
@@ -93,7 +93,7 @@ flowchart LR
 | 命令 | 用途 |
 | --- | --- |
 | `/setup` | 配置 API Key、默认模型和模式 |
-| `/set_model` | 注册或交互式切换模型 |
+| `/model [别名] [厂商/模型]` | **统一模型管理**：无参交互式浏览/切换/添加；有参快速注册+切换（合并原 `/set_model`） |
 | `/mode` | 切换思考范式：direct / react / plan-execute / reflection |
 | `/project` | 查看检测到的项目类型、文件树和项目规则 |
 | `/edit <文件> <指令>` | 让 LLM 编辑文件，确认前可预览 diff |
@@ -104,14 +104,17 @@ flowchart LR
 | `/notes [add <文本>]` | 查看或追加当前会话的持久笔记 |
 | `/runs [run_id]` | 列出最近的 Agent 运行记录或查看详情 |
 | `/policy` | 查看静态工具权限策略 |
+| `/provider` | 查看已配置的厂商和可用模型 |
+| `/tools` | 查看所有可用工具类型 |
+| `/status` | 显示详细状态信息（Token、模型、内存等） |
+| `/stream [on\|off]` | 切换流式输出模式 |
+| `/verbose [on\|off]` | 切换详细日志模式 |
 | `!<命令>` | 直接在终端执行命令（带安全校验） |
-| `/shell <命令>` | 斜杠命令形式的终端执行 |
 | `/new_terminal [目录]` | 打开可观测子终端（Windows Terminal 下分屏打开） |
-| `/terminal_status [行数]` | 读取子终端最近的输出 |
-| `/terminal_quote [行数]` | 引用子终端输出到当前对话上下文 |
 | `/open <文件[:行号]>` | 在编辑器中打开文件 |
-| `/checkpoint [list\|restore <路径>\|rollback]` | 管理文件检查点 |
 | `/cleanup [run\|stats\|dry-run]` | 清理过期数据，查看存储统计 |
+
+> 💡 使用 `Shift+Enter` 换行输入多行内容，`Enter` 发送。`/model` 已合并 `/set_model` 功能——注册+切换一步完成。
 
 > 💡 使用 `Shift+Enter` 换行输入多行内容，`Enter` 发送。支持 `prompt_toolkit` 的行内编辑。
 
@@ -131,6 +134,27 @@ python evals/runner.py --mode mock --output evals/reports/mock_report.md
 python evals/runner.py --mode real --model deepseek/deepseek-v4-pro --output evals/reports/real_report.md
 python evals/runner.py --mode real --model openai/gpt-4o --output evals/reports/real_report.md
 ```
+
+## TUI 模式
+
+除了 REPL 命令行界面，OmniAgent 还提供基于 [Textual](https://github.com/Textualize/textual) 的现代化 TUI：
+
+```bash
+omniagent-tui                          # 启动 TUI
+omniagent-tui -m deepseek/deepseek-v4-pro  # 指定模型
+```
+
+**极氪风格设计**：深色主题 (#0a0e14 / #0d1117)、青色强调色、分栏布局（对话+思考面板+状态面板）、模态化权限审批。
+
+快捷键：
+| 快捷键 | 功能 |
+| --- | --- |
+| `Ctrl+Q` | 退出 |
+| `Ctrl+P` | 切换范式 |
+| `Ctrl+M` | 切换模型 |
+| `Ctrl+S` | 保存会话 |
+| `Ctrl+H` | 帮助 |
+| `Esc` | 聚焦输入框 |
 
 ## 测试
 
@@ -162,8 +186,8 @@ python evals/runner.py --mode mock --output evals/reports/mock_report.md
 计划中：
 
 - 细粒度工作区沙箱策略
-- 交互式工具审批（单次允许 / 始终允许 / 始终拒绝）
 - 基于运行事件日志的追踪回放和 UI 视图
+- 插件系统扩展
 
 ## 项目规则
 

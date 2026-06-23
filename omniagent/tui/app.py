@@ -382,14 +382,6 @@ class OmniAgentTUI(App):
         background: #0d1117;
     }
 
-    ConversationLog > .user-message {
-        margin: 1 0;
-    }
-
-    ConversationLog > .assistant-message {
-        margin: 1 0;
-    }
-
     /* ── Header / Footer ── */
     Header {
         background: #0a0e14;

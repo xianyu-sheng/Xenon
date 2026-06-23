@@ -182,7 +182,9 @@ def _cmd_model(*, args: str, registry: ModelRegistry, session_state: dict, **kwa
             selected = registered[choice - 1]
             registry.role_priority["planner"] = [selected.alias]
             return f"✅ 已切换到: {selected.alias} ({selected.model_id})"
-        # else: choice == len(registered)+1 → 添加新模型，走下面的厂商浏览器
+        # else: choice == len(registered)+1 → 添加新模型，走厂商浏览器
+        console.print("[dim]── 浏览可用模型 ──[/dim]")
+        console.print()
 
     # ── 无参数 + 无已注册模型（或用户选择"添加新模型"）→ 厂商浏览器 ──
     from omniagent.repl.provider_registry import get_configured_providers

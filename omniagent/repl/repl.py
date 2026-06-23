@@ -360,16 +360,16 @@ class REPL:
     def _print_welcome(self) -> None:
         """极氪风格欢迎界面 — 现代、简洁、高辨识度。"""
         import random
-        from rich.text import Text
 
         mode = self.registry.get_current_mode()
         models = self.registry.list_models()
 
-        # ── 渐变标题 ──
-        title = Text()
-        title.append("▲ ", style="bold bright_cyan")
-        title.append("O M N I A G E N T", style="bold cyan")
-        title.append(" C L I", style="bold bright_cyan")
+        # ── 渐变标题（纯 Rich markup，避免 Text 对象在 f-string 中丢失样式）──
+        title_text = (
+            "[bold bright_cyan]▲[/bold bright_cyan] "
+            "[bold cyan]O M N I A G E N T[/bold cyan] "
+            "[bold bright_cyan]C L I[/bold bright_cyan]"
+        )
 
         # ── 版本标签 ──
         version = "v0.1.0"
@@ -402,7 +402,7 @@ class REPL:
         tip = random.choice(tips)
 
         # ── 构建欢迎面板 ──
-        content = f"""{title}
+        content = f"""{title_text}
 
   [dim]{version}[/dim]  [bold white]Multi-Model AI Coding Assistant[/bold white]
 
