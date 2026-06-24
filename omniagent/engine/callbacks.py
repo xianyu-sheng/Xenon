@@ -147,11 +147,10 @@ class ThinkingPanel:
         return len(self.steps) == 0 and len(self.errors) == 0 and len(self.warnings) == 0
 
     def __rich_console__(self, console, options):
-        """Rich 协议：渲染思考面板 — 摘要行 + 折叠详情。"""
+        """Rich 协议：渲染思考面板 — 摘要行 + 折叠详情（卡片式）。"""
         from rich.text import Text
         from rich.panel import Panel
         from rich.console import Group
-        from rich.table import Table
 
         if self.is_empty:
             return
@@ -159,7 +158,7 @@ class ThinkingPanel:
         tool_count = self.tool_call_count
         step_count = len(self.steps)
 
-        # ── 摘要行（始终显示，一目了然）──
+        # ── 摘要行（始终显示）──
         action_names = [s.action for s in self.steps if s.action]
         action_summary = " → ".join(action_names) if action_names else "纯思考"
         if tool_count > 0:
@@ -169,15 +168,19 @@ class ThinkingPanel:
 
         yield Text.from_markup(summary)
 
-        # ── 折叠详情（dim 风格，紧凑排列）──
-        detail_lines = []
+        # ── 折叠详情（使用卡片组件）──
+        detail_items = []
+        from omniagent.repl.cards import ThinkingCard, ToolCallCard
+
         for i, step in enumerate(self.steps, 1):
-            parts = []
+            step_group: list = []
             if step.thought:
                 thought_short = step.thought[:120].replace("\n", " ")
                 if len(step.thought) > 120:
                     thought_short += "..."
-                parts.append(f"🤔 {thought_short}")
+                step_group.append(
+                    Text.from_markup(f"[dim]#{i} 🤔 {thought_short}[/dim]")
+                )
             if step.action:
                 params_parts = []
                 for k, v in step.action_input.items():
@@ -186,24 +189,30 @@ class ThinkingPanel:
                         v_str = v_str[:47] + "..."
                     params_parts.append(f"{k}={v_str}")
                 params_str = ", ".join(params_parts)
-                parts.append(f"🔧 {step.action}({params_str})")
+                from omniagent.repl.cards import TOOL_ICONS
+                icon = TOOL_ICONS.get(step.action, "🔧")
+                step_group.append(
+                    Text.from_markup(f"[dim]{icon} {step.action}({params_str})[/dim]")
+                )
             if step.observation:
                 obs_short = step.observation[:100].replace("\n", " ")
                 if len(step.observation) > 100:
                     obs_short += "..."
-                parts.append(f"👀 {obs_short}")
+                step_group.append(
+                    Text.from_markup(f"[dim]👀 {obs_short}[/dim]")
+                )
 
-            step_text = " | ".join(parts)
-            detail_lines.append(Text(f"  {i:>2}. {step_text}", style="dim"))
+            if step_group:
+                detail_items.append(Text("  ").join(step_group))
 
         for err in self.errors:
-            detail_lines.append(Text(f"  ❌ {err}", style="red"))
+            detail_items.append(Text.from_markup(f"  [red]❌ {err}[/red]"))
         for warn in self.warnings:
-            detail_lines.append(Text(f"  ⚠️  {warn}", style="yellow"))
+            detail_items.append(Text.from_markup(f"  [yellow]⚠️  {warn}[/yellow]"))
 
-        if detail_lines:
+        if detail_items:
             yield Panel(
-                Group(*detail_lines),
+                Group(*detail_items),
                 title="[dim]推理详情[/dim]",
                 border_style="dim",
                 padding=(0, 1),
@@ -212,18 +221,19 @@ class ThinkingPanel:
 
 class ConsoleCallback(EngineCallback):
     """
-    控制台回调，REPL 使用。
+    控制台回调，REPL 使用 — 卡片式 UI 渲染。
 
-    - 默认模式：收集思考步骤到 ThinkingPanel，工具调用实时显示简要通知
-    - verbose 模式：实时打印 + 收集详细信息（用于调试）
+    - 默认模式：收集思考步骤到 ThinkingPanel，工具调用以卡片实时显示
+    - verbose 模式：额外显示思考详细内容
 
-    工具调用显示策略（类似 Claude Code 的权限通知）:
-    - 写入/命令/Git 操作 → 醒目显示（绿色/黄色边框）
-    - 读取/搜索 → 低调显示（dim 灰色）
-    - 失败 → 红色醒目显示
+    工具调用显示策略（卡片化）:
+    - 写入/命令/Git 操作 → 完整 ToolCallCard（带边框 + 图标 + 参数列表）
+    - 读取/搜索 → 紧凑 ToolCallCard（单行 dim 风格）
+    - 成功/失败 → ToolResultCard（绿色/红色边框卡片）
+    - 错误 → ErrorCard（红色醒目卡片）
     """
 
-    # 写入/危险类工具（始终显示）
+    # 写入/危险类工具（完整卡片）
     _NOTIFY_TOOLS = {
         "write_file", "edit_file", "batch_write", "batch_edit",
         "create_directory", "move_file", "copy_file", "delete_file",
@@ -233,45 +243,63 @@ class ConsoleCallback(EngineCallback):
     def __init__(self, *, verbose: bool = False) -> None:
         self.verbose = verbose
         self._panel = ThinkingPanel()
+        # 懒加载 Rich Console（模块级重用）
+        self._console = None
+
+    @property
+    def _rich_console(self):
+        """懒加载 Rich Console 实例。"""
+        if self._console is None:
+            from rich.console import Console
+            self._console = Console(highlight=False)
+        return self._console
 
     def on_think(self, thought: str) -> None:
         self._panel.add_thought(thought)
         if self.verbose:
-            print(f"  🤔 {thought[:200]}")
+            from omniagent.repl.cards import ThinkingCard
+            self._rich_console.print(ThinkingCard(thought, compact=True))
 
     def on_act(self, action: str, action_input: dict) -> None:
         self._panel.add_action(action, action_input)
-        # 简要参数预览
-        params_brief = self._brief_params(action, action_input)
+        from omniagent.repl.cards import ToolCallCard
+        card = ToolCallCard(action, action_input, status="running")
+        # 写入/敏感工具 → 始终显示完整卡片；读取工具 → 仅在 verbose 显示
         if action in self._NOTIFY_TOOLS:
-            # 写入/命令类工具 → 醒目显示
-            icon = "📄" if action in ("write_file", "batch_write") else \
-                  "✏️" if action in ("edit_file", "batch_edit") else \
-                  "📁" if action == "create_directory" else \
-                  "⚡" if action == "command" else \
-                  "🔀" if action == "git" else "🔧"
-            print(f"\n  {icon} {action} {params_brief}")
+            self._rich_console.print(card)
         elif self.verbose:
-            print(f"  🔧 {action}({params_brief})")
+            self._rich_console.print(card)
 
     def on_observe(self, observation: str) -> None:
         self._panel.add_observation(observation)
-        obs_preview = observation[:150].replace("\n", " ")
 
-        # 成功标记: ✅ 开头, 或包含 "执行完成"
-        if observation.startswith("✅") or "执行完成" in observation[:50]:
-            print(f"  ✅ {obs_preview}")
-        # 失败标记: ❌/🛑/⛔ 开头, 或包含 "失败"/"错误"/"拒绝"
-        elif (
+        from omniagent.repl.cards import ToolResultCard
+
+        # 检测通知类型
+        is_success = observation.startswith("✅") or "执行完成" in observation[:50]
+        is_failure = (
             observation.startswith(("❌", "🛑", "⛔"))
             or any(kw in observation[:50] for kw in ("失败", "错误", "拒绝"))
-        ):
-            print(f"  ❌ {obs_preview}")
-        # 信息类工具 — dim 显示（始终显示，不仅 verbose）
+        )
+
+        if is_success or is_failure:
+            card = ToolResultCard(
+                tool_name="",
+                success=is_success,
+                summary=observation,
+                permission_denied=observation.startswith("⛔"),
+                circuit_breaker_tripped=observation.startswith("🛑"),
+            )
+            self._rich_console.print(card)
         elif observation.startswith(("📖", "📋", "🔍", "🌐", "🐙")):
-            print(f"  {obs_preview}")
+            # 信息类工具 — dim 显示
+            obs_preview = observation[:150].replace("\n", " ")
+            from rich.text import Text
+            self._rich_console.print(Text.from_markup(f"  [dim]{obs_preview}[/dim]"))
         elif self.verbose:
-            print(f"  👀 {obs_preview}")
+            obs_preview = observation[:150].replace("\n", " ")
+            from rich.text import Text
+            self._rich_console.print(Text.from_markup(f"  [dim]👀 {obs_preview}[/dim]"))
 
     @staticmethod
     def _brief_params(action: str, params: dict) -> str:
@@ -301,30 +329,38 @@ class ConsoleCallback(EngineCallback):
         return ""
 
     def on_step(self, step_id: int, total: int, task: str) -> None:
-        print(f"  📋 步骤 {step_id}/{total}: {task[:100]}")
+        from omniagent.repl.cards import StepCard
+        self._rich_console.print(StepCard(step_id, total, task, status="running"))
 
     def on_step_done(self, step_id: int, success: bool, summary: str) -> None:
-        icon = "✅" if success else "❌"
-        preview = summary[:100].replace("\n", " ")
-        print(f"  {icon} 步骤 {step_id}: {preview}")
+        from omniagent.repl.cards import StepCard
+        status = "done" if success else "failed"
+        self._rich_console.print(StepCard(step_id, 0, summary, status=status))
 
     def on_review(self, score: int, passed: bool, feedback: str) -> None:
         if self.verbose:
             icon = "✓" if passed else "✗"
-            print(f"  🔍 审查 {icon} 评分: {score}/10 — {feedback[:100]}")
+            from rich.text import Text
+            self._rich_console.print(
+                Text.from_markup(f"  [dim]🔍 审查 {icon} 评分: {score}/10 — {feedback[:100]}[/dim]")
+            )
 
     def on_error(self, error: str) -> None:
         self._panel.add_error(error)
-        print(f"  ❌ {error[:200]}")
+        from omniagent.repl.cards import ErrorCard
+        self._rich_console.print(ErrorCard(error))
 
     def on_warning(self, warning: str) -> None:
         self._panel.add_warning(warning)
-        if self.verbose:
-            print(f"  ⚠️  {warning}")
+        from omniagent.repl.cards import ErrorCard
+        self._rich_console.print(ErrorCard(warning, title="警告", is_warning=True))
 
     def on_finish(self, result: str) -> None:
         if self.verbose:
-            print(f"  ✅ 完成 ({len(result)} 字符)")
+            from rich.text import Text
+            self._rich_console.print(
+                Text.from_markup(f"  [dim]✅ 完成 ({len(result)} 字符)[/dim]")
+            )
 
     def get_thinking_panel(self) -> ThinkingPanel | None:
         """获取思考面板，如果没有内容返回 None。"""

@@ -106,6 +106,24 @@ class ToolExecuteResult:
             return "信息已获取。如果你已收集足够数据，请直接输出 final_answer 交付结果。如还需要其他信息，继续调用工具。"
         return "操作完成。继续下一个操作或输出 final_answer。"
 
+    def to_card_data(self) -> dict:
+        """返回供卡片组件使用的结构化数据。
+
+        供 ConsoleCallback / OutputRenderer 直接构造 ToolResultCard，
+        避免重复解析 format_notification() 的字符串输出。
+        """
+        return {
+            "tool_name": self.tool_name,
+            "success": self.success,
+            "summary": self.summary,
+            "error": self.error,
+            "permission_denied": self.permission_denied,
+            "circuit_breaker_tripped": self.circuit_breaker_tripped,
+            "is_info_tool": self.is_info_tool,
+            "is_write_tool": self.is_write_tool,
+            "attempts": self.attempts,
+        }
+
     def format_observation(self) -> str:
         """格式化为引擎观察消息。"""
         if self.permission_denied:

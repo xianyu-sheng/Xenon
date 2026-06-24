@@ -30,6 +30,13 @@ from rich.rule import Rule
 
 from omniagent.engine.context import AgentContext
 from omniagent.engine.run_recorder import RecordingCallback, RunRecorder
+from omniagent.repl.cards import (
+    TOOL_ICONS,
+    ApprovalCard,
+    ModeHeader,
+    ToolCallCard,
+    render_shortcut_bar,
+)
 from omniagent.repl.commands import COMMANDS, dispatch_command
 from omniagent.repl.context_manager import ContextManager
 from omniagent.repl.file_links import linkify_file_paths
@@ -79,6 +86,10 @@ class REPL:
         self.streaming = streaming
         self.optimize_prompts = optimize_prompts
         self.verbose = verbose
+
+        # 初始化工具图标（从统一来源）
+        if not REPL._TOOL_ICONS:
+            REPL._TOOL_ICONS = dict(TOOL_ICONS)
 
         # 项目上下文
         self.project_ctx = ProjectContext()
@@ -900,11 +911,12 @@ class REPL:
         """ReAct 引擎模式。"""
         from omniagent.engine.react_engine import ReActEngine
 
-        console.print("[cyan]🔄 ReAct 模式: 思考 → 行动 → 观察 → 循环[/cyan]")
-        console.print("[dim]  按 Esc 或 Ctrl+C 中断任务执行[/dim]")
-
         iterations = self._estimate_react_iterations(user_input)
-        console.print(f"[dim]  自适应迭代预算: {iterations} 轮[/dim]")
+        console.print(ModeHeader("ReAct", iterations=iterations))
+
+        # 追踪引擎状态
+        self.status_bar.set_engine_status("running")
+        self.status_bar.set_iteration(0, iterations)
 
         # 重置中断信号
         self._interrupt_event.clear()
@@ -928,17 +940,21 @@ class REPL:
             self.status_bar.set_last_model(model_ids[0])
             self._finish_run(status="success", result=result)
         except Exception as e:
-            console.print(f"[error]❌ ReAct 引擎执行失败: {e}[/error]")
+            from omniagent.repl.cards import ErrorCard
+            console.print(ErrorCard(str(e), title="ReAct 引擎执行失败"))
             self._finish_run(status="error", reason=str(e))
         finally:
             self._task_running = False
             self._interrupt_event.clear()
+            self.status_bar.set_engine_status("done")
+            console.print(render_shortcut_bar())
 
     def _run_plan_execute_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Plan-Execute 引擎模式。"""
         from omniagent.engine.plan_execute_engine import PlanExecuteEngine
 
-        console.print("[cyan]📋 Plan-Execute 模式: 规划 → 逐步执行[/cyan]")
+        console.print(ModeHeader("Plan-Execute"))
+        self.status_bar.set_engine_status("running")
 
         callback = self._make_callback()
         engine = PlanExecuteEngine(model_priority=model_ids, max_steps=20, callback=callback)
@@ -950,14 +966,19 @@ class REPL:
             self.status_bar.set_last_model(model_ids[0])
             self._finish_run(status="success", result=result)
         except Exception as e:
-            console.print(f"[error]❌ Plan-Execute 引擎执行失败: {e}[/error]")
+            from omniagent.repl.cards import ErrorCard
+            console.print(ErrorCard(str(e), title="Plan-Execute 引擎执行失败"))
             self._finish_run(status="error", reason=str(e))
+        finally:
+            self.status_bar.set_engine_status("done")
+            console.print(render_shortcut_bar())
 
     def _run_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Reflection 引擎模式。"""
         from omniagent.engine.reflection_engine import ReflectionEngine
 
-        console.print("[cyan]🔍 Reflection 模式: 执行 → 审查 → 修正[/cyan]")
+        console.print(ModeHeader("Reflection"))
+        self.status_bar.set_engine_status("running")
 
         callback = self._make_callback()
         engine = ReflectionEngine(model_priority=model_ids, max_rounds=3, callback=callback)
@@ -969,8 +990,12 @@ class REPL:
             self.status_bar.set_last_model(model_ids[0])
             self._finish_run(status="success", result=result)
         except Exception as e:
-            console.print(f"[error]❌ Reflection 引擎执行失败: {e}[/error]")
+            from omniagent.repl.cards import ErrorCard
+            console.print(ErrorCard(str(e), title="Reflection 引擎执行失败"))
             self._finish_run(status="error", reason=str(e))
+        finally:
+            self.status_bar.set_engine_status("done")
+            console.print(render_shortcut_bar())
 
     def _run_plan_react_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Plan + React 组合引擎模式。"""
@@ -1295,20 +1320,11 @@ class REPL:
 
     # ── 交互式权限审批 ──────────────────────────────────────
 
-    # 工具图标映射
-    _TOOL_ICONS: dict[str, str] = {
-        "read_file": "📖", "write_file": "📄", "edit_file": "✏️",
-        "list_files": "📋", "search_files": "🔍", "create_directory": "📁",
-        "move_file": "📦", "copy_file": "📋", "delete_file": "🗑️",
-        "command": "⚡", "git": "🔀", "web_fetch": "🌐",
-        "github_fetch": "🐙", "batch_write": "📝", "batch_edit": "📝",
-        "mcp_call": "🔌", "spawn_agent": "🤖", "agent_result": "📬",
-        "weather": "🌤️", "datetime": "🕐", "code_index": "📊",
-        "ast_analyze": "🔬", "refactor": "🔧", "diff_preview": "📊",
-    }
+    # 工具图标映射（统一来源：omniagent.repl.cards.TOOL_ICONS）
+    _TOOL_ICONS: dict[str, str] = {}  # 由 __init__ 从 TOOL_ICONS 填充
 
     def _approval_handler(self, tool_name: str, params_preview: str) -> bool:
-        """交互式审批处理器 — 当工具需要 ask 权限时调用。
+        """交互式审批处理器 — 使用 ApprovalCard 卡片式 UI。
 
         类似 Claude Code 的权限提示：在工具执行前展示操作内容并询问用户。
         支持三种选择:
@@ -1321,33 +1337,14 @@ class REPL:
         if cache_key in self._approval_cache:
             return self._approval_cache[cache_key]
 
-        icon = self._TOOL_ICONS.get(tool_name, "🔧")
-
-        # 根据工具类型选择提示文案
-        if tool_name in ("write_file", "edit_file", "batch_write", "batch_edit"):
-            action_desc = "OmniAgent 需要写入文件"
-        elif tool_name in ("command",):
-            action_desc = "OmniAgent 需要执行命令"
-        elif tool_name in ("git",):
-            action_desc = "OmniAgent 需要执行 Git 操作"
-        elif tool_name in ("create_directory", "move_file", "copy_file", "delete_file"):
-            action_desc = "OmniAgent 需要操作文件系统"
-        else:
-            action_desc = f"OmniAgent 需要调用工具 {icon} {tool_name}"
-
-        # 显示审批提示 — 极氪风格
+        # 使用卡片式审批 UI
         console.print()
-        console.print(Panel(
-            f"[bold bright_cyan]{icon} {action_desc}[/bold bright_cyan]\n\n"
-            f"[dim]{params_preview[:300]}[/dim]\n\n"
-            f"[dim]▸ 选择: [/dim]"
-            f"[green]批准(y)[/green]  "
-            f"[cyan]始终批准(a)[/cyan]  "
-            f"[red]拒绝(n)[/red]",
-            border_style="bright_cyan",
-            title="[bold bright_cyan]◆ 权限审批[/bold bright_cyan]",
-            padding=(1, 2),
-        ))
+        card = ApprovalCard(
+            tool_name,
+            params_preview,
+            always_approved_count=len(self._approval_cache),
+        )
+        console.print(card)
 
         try:
             choice = Prompt.ask(
@@ -1361,7 +1358,9 @@ class REPL:
 
         if choice == "a":
             self._approval_cache[cache_key] = True
-            console.print("[green]✓ 已批准（本次会话始终有效）[/green]")
+            console.print(f"[green]✓ 已批准（本次会话 · 已缓存 {len(self._approval_cache)} 项）[/green]")
+            # 同步到状态栏
+            self.status_bar.set_always_approved_count(len(self._approval_cache))
             return True
         elif choice == "y":
             console.print("[green]✓ 已批准（仅本次）[/green]")

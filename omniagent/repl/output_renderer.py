@@ -38,6 +38,34 @@ class OutputRenderer:
         self._console = Console()
 
     # ═══════════════════════════════════════════════════════════
+    # 卡片渲染便捷方法
+    # ═══════════════════════════════════════════════════════════
+
+    def render_tool_call(self, tool_name: str, params: dict, *, status: str = "running") -> None:
+        """使用 ToolCallCard 渲染工具调用。"""
+        from omniagent.repl.cards import ToolCallCard
+        self._console.print(ToolCallCard(tool_name, params, status=status))
+
+    def render_tool_result(
+        self, tool_name: str, success: bool, summary: str,
+        *, error: str | None = None, permission_denied: bool = False,
+        circuit_breaker_tripped: bool = False,
+    ) -> None:
+        """使用 ToolResultCard 渲染工具结果。"""
+        from omniagent.repl.cards import ToolResultCard
+        self._console.print(ToolResultCard(
+            tool_name, success, summary,
+            error=error,
+            permission_denied=permission_denied,
+            circuit_breaker_tripped=circuit_breaker_tripped,
+        ))
+
+    def render_error(self, message: str, *, title: str = "错误", details: str | None = None) -> None:
+        """使用 ErrorCard 渲染错误。"""
+        from omniagent.repl.cards import ErrorCard
+        self._console.print(ErrorCard(message, title=title, details=details))
+
+    # ═══════════════════════════════════════════════════════════
     # 主渲染入口
     # ═══════════════════════════════════════════════════════════
 

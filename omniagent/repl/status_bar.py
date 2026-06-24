@@ -29,6 +29,7 @@ class StatusBar:
     底部状态栏管理器。
 
     使用 Rich Live 实现实时刷新，在终端底部显示上下文状态。
+    增强版：显示迭代计数、引擎状态、always-approved 徽章。
     """
 
     def __init__(
@@ -42,6 +43,12 @@ class StatusBar:
         self.registry = registry
         self._streaming = True
         self._last_model: str | None = None
+        # 引擎状态追踪
+        self._iteration: int = 0
+        self._max_iterations: int = 0
+        self._engine_status: str = "idle"  # idle | running | thinking | done
+        # 权限缓存引用（由 REPL 注入）
+        self._always_approved_count: int = 0
 
     def set_last_model(self, model_id: str) -> None:
         """记录最近一次使用的模型。"""
@@ -49,6 +56,29 @@ class StatusBar:
 
     def set_streaming(self, enabled: bool) -> None:
         self._streaming = enabled
+
+    def set_iteration(self, iteration: int, total: int) -> None:
+        """设置当前引擎迭代进度。"""
+        self._iteration = iteration
+        self._max_iterations = total
+
+    def set_engine_status(self, status: str) -> None:
+        """设置引擎状态: idle | running | thinking | acting | done。"""
+        self._engine_status = status
+
+    def set_always_approved_count(self, count: int) -> None:
+        """设置当前会话的 always-approved 计数。"""
+        self._always_approved_count = count
+
+    def _engine_status_icon(self) -> str:
+        """获取引擎状态图标。"""
+        return {
+            "idle": "",
+            "running": "[cyan]◌[/cyan]",
+            "thinking": "[dim]💭[/dim]",
+            "acting": "[yellow]🔧[/yellow]",
+            "done": "[green]✅[/green]",
+        }.get(self._engine_status, "")
 
     def render(self) -> Panel:
         """渲染状态栏内容。"""
@@ -113,7 +143,7 @@ class StatusBar:
         )
 
     def print_status(self) -> None:
-        """打印极氪风格紧凑状态行。"""
+        """打印极氪风格紧凑状态行（增强版：含迭代/引擎状态/授权徽章）。"""
         stats = self.ctx_mgr.stats()
         mode = self.registry.get_current_mode()
 
@@ -151,6 +181,17 @@ class StatusBar:
             f"✉ {stats['total_messages']}"
             f"  {stream_icon}"
         )
+
+        # 引擎迭代状态
+        if self._max_iterations > 0:
+            line += f" [dim]· 🔄 {self._iteration}/{self._max_iterations}[/dim]"
+        elif self._engine_status not in ("idle", "done"):
+            line += f"  {self._engine_status_icon()}"
+
+        # always-approved 徽章
+        if self._always_approved_count > 0:
+            line += f" [dim cyan]· A{self._always_approved_count}[/dim cyan]"
+
         if stats["needs_compact"]:
             line += " [bold red]⚠ 需 /compact[/bold red]"
 
