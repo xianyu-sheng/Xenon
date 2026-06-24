@@ -29,6 +29,9 @@ OmniAgent 是一个本地优先的 AI 编程助手命令行工具，为开发者
 | 会话生命周期 | 启动时自动清理过期会话（7 天）、运行记录（30 天）和检查点（14 天） |
 | MCP 守护进程 | MCP 子进程崩溃后自动重启（最多 3 次，延迟退避） |
 | 代码质量 | 新模块 `mypy strict`，完善的 `ruff` 规则集（E/F/I/UP/B/C4/SIM/RUF/PERF） |
+| 卡片式终端 UI | 参考 Aider/gptme 设计：ToolCallCard/ToolResultCard/ThinkingCard/ApprovalCard 等 7 种卡片组件，信息视觉分层，状态驱动颜色编码 |
+| 增强状态栏 | 顶部模型/模式/Token/迭代进度/授权徽章一目了然，引擎状态实时同步 |
+| 快捷键提示栏 | 每次引擎响应后显示常用快捷操作（/mode /model /compact 等） |
 
 ## 快速开始
 
@@ -184,7 +187,7 @@ python evals/runner.py --mode mock --output evals/reports/mock_report.md
 - 每次交互运行写入追加式事件日志（`.omniagent/sessions/<id>/runs/<id>/events.jsonl`）
 - 每个 REPL 会话有独立的 `thread.jsonl` 和 `notes.md`，笔记在后续对话中自动注入
 - 可通过 `.omniagent/policy.yaml` 自定义工具权限策略
-- **交互式权限审批**：写入文件、执行命令、Git 操作等敏感工具执行前弹出审批提示（类似 Claude Code），支持 `批准一次(y)` / `始终批准(a)` / `拒绝(n)`
+- **卡片式权限审批**：写入文件、执行命令、Git 操作等敏感工具执行前弹出卡片式审批 UI（`ApprovalCard`），颜色编码选项：绿色批准 / 青色始终批准 / 红色拒绝，全局授权计数显示
 - **执行后通知**：工具执行完成后显示操作结果摘要（文件路径、字节数等），Markdown 标记检测自动着色
 - **会话级权限缓存**：选择「始终批准」后同一操作在同一会话中不再重复询问
 - **通知分级显示**：✅ 写入/命令（醒目） / 📖 读取/搜索（低调 dim） / ❌ 失败（红色） / ⛔ 拒绝（红色）
