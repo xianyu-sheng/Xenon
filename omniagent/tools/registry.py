@@ -50,6 +50,7 @@ class ToolRegistry:
         from omniagent.tools.builtin.meta_tools import DateTimeTool, MCPCallTool, RegisterToolTool
         from omniagent.tools.builtin.subagent_tools import AgentResultTool, SpawnAgentTool
         from omniagent.tools.builtin.remember_tool import RememberTool
+        from omniagent.tools.builtin.discover_agents_tool import DiscoverAgentsTool
 
         _builtins: list[type] = [
             ReadFileTool, WriteFileTool, EditFileTool, ListFilesTool,
@@ -60,7 +61,7 @@ class ToolRegistry:
             BatchWriteTool, BatchEditTool,
             MCPCallTool, RegisterToolTool, DateTimeTool,
             SpawnAgentTool, AgentResultTool,
-            RememberTool,
+            RememberTool, DiscoverAgentsTool,
         ]
         for tool_cls in _builtins:
             if tool_cls.name:

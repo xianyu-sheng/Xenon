@@ -99,6 +99,13 @@ class REPL:
         self._last_result: str = ""  # 用于自主持久化评估
         self.agent_context.prompt_store = self.prompt_store  # 供工具访问
 
+        # ── 初始化 AgentCard 注册中心（子 Agent 能力名片）──
+        from omniagent.engine.agent_card import get_card_registry
+        card_registry = get_card_registry()
+        card_registry.ensure_seeded()
+        card_registry.load()
+        self.agent_context.set("_agent_card_registry", card_registry)
+
         self.streaming = streaming
         self.optimize_prompts = optimize_prompts
         self.verbose = verbose
