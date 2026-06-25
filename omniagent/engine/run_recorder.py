@@ -24,6 +24,21 @@ RUNS_ROOT = Path(".omniagent") / "runs"
 MAX_EVENT_TEXT = 6000
 
 
+def _sanitize_str(s: str) -> str:
+    """移除 surrogate 字符（U+D800-U+DFFF），防止 UTF-8 写入崩溃。
+
+    Windows 终端输出、Rich 渲染文本中可能混入 surrogate 字符，
+    这些在 UTF-8 编码中不合法，json.dumps(ensure_ascii=False)
+    遇到它们会引发 UnicodeEncodeError。
+    """
+    if not s:
+        return s
+    # 直接过滤 surrogate 范围的字符（最快路径）
+    if any('\uD800' <= c <= '\uDFFF' for c in s):
+        s = ''.join(c for c in s if not ('\uD800' <= c <= '\uDFFF'))
+    return s
+
+
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
@@ -41,11 +56,12 @@ def _json_safe(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
+        value = _sanitize_str(value)
         if len(value) > MAX_EVENT_TEXT:
             return value[:MAX_EVENT_TEXT] + "... (truncated)"
         return value
     if isinstance(value, Path):
-        return str(value)
+        return _sanitize_str(str(value))
     if isinstance(value, dict):
         return {str(k): _json_safe(v) for k, v in value.items()}
     if isinstance(value, (list, tuple, set)):
@@ -119,7 +135,12 @@ class RunRecorder:
             **_json_safe(payload),
         }
         with self.events_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+            try:
+                json_str = json.dumps(event, ensure_ascii=False, sort_keys=True)
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                # 清理后仍有异常 → 回退到 ASCII 安全模式
+                json_str = json.dumps(event, ensure_ascii=True, sort_keys=True)
+            f.write(json_str + "\n")
         return event
 
     def finish(self, *, status: str, result: str = "", reason: str | None = None) -> None:
