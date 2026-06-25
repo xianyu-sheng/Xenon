@@ -49,6 +49,7 @@ class ToolRegistry:
         from omniagent.tools.builtin.batch_tools import BatchEditTool, BatchWriteTool
         from omniagent.tools.builtin.meta_tools import DateTimeTool, MCPCallTool, RegisterToolTool
         from omniagent.tools.builtin.subagent_tools import AgentResultTool, SpawnAgentTool
+        from omniagent.tools.builtin.remember_tool import RememberTool
 
         _builtins: list[type] = [
             ReadFileTool, WriteFileTool, EditFileTool, ListFilesTool,
@@ -59,6 +60,7 @@ class ToolRegistry:
             BatchWriteTool, BatchEditTool,
             MCPCallTool, RegisterToolTool, DateTimeTool,
             SpawnAgentTool, AgentResultTool,
+            RememberTool,
         ]
         for tool_cls in _builtins:
             if tool_cls.name:
@@ -126,8 +128,10 @@ class ToolRegistry:
     def tool_descriptions(self) -> dict[str, dict]:
         """返回所有工具的 {name: {description, params}} 供引擎使用。"""
         result = {}
-        for name in self._sync_tools:
-            result[name] = {"name": name, "description": f"内置工具: {name}", "params": {}}
+        for name, tool_cls in self._sync_tools.items():
+            desc = getattr(tool_cls, "description", None) or f"内置工具: {name}"
+            params = getattr(tool_cls, "params", None) or {}
+            result[name] = {"name": name, "description": desc, "params": params}
         for name, tool in self._tools.items():
             result[name] = {"name": name, "description": tool.description, "params": tool.input_schema.get("properties", {})}
         for name, info in self._dynamic_tools.items():

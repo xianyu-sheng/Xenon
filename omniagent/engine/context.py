@@ -18,6 +18,7 @@ class AgentContext:
         self._store: dict[str, Any] = initial.copy() if initial else {}
         self._history: list[dict[str, Any]] = []  # 每步快照，用于调试回溯
         self._conversation_messages: list[dict[str, str]] = []  # 多轮对话历史
+        self.prompt_store: Any = None  # PromptStore 引用（由 REPL 注入）
 
     # ── 读写 ──────────────────────────────────────────────
     def get(self, key: str, default: Any = None) -> Any:

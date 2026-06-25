@@ -21,6 +21,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+from omniagent.repl.prompt_store import PromptStore
+from omniagent.repl.prompt_memory import PromptMemoryManager
+
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -82,7 +85,20 @@ class REPL:
         self.registry = registry or ModelRegistry()
         self.ctx_mgr = ctx_mgr or ContextManager()
         self.agent_context = AgentContext()
-        self.system_prompt = system_prompt or self._default_system_prompt()
+
+        # ── 系统提示词：PromptStore 优先，CLI flag 其次，兜底迁移 ──
+        self.prompt_store = PromptStore()
+        self.prompt_memory = PromptMemoryManager(self.prompt_store)
+        if system_prompt:
+            self.system_prompt = system_prompt
+        else:
+            self.prompt_store.ensure_initialized()
+            # get_master() 始终有值（内部回退到 _DEFAULT_MASTER）
+            self.system_prompt = self.prompt_store.get_master()
+
+        self._last_result: str = ""  # 用于自主持久化评估
+        self.agent_context.prompt_store = self.prompt_store  # 供工具访问
+
         self.streaming = streaming
         self.optimize_prompts = optimize_prompts
         self.verbose = verbose
@@ -192,13 +208,19 @@ class REPL:
 
     def _render_engine_result(self, callback, result: str, title: str, border_style: str = "green") -> None:
         """渲染引擎结果 — 分隔线 + 答案 + 思考折叠。"""
+        self._last_result = result  # 供自主持久化评估使用
         renderer = OutputRenderer(verbose=self.verbose)
         panel = callback.get_thinking_panel() if hasattr(callback, 'get_thinking_panel') else None
         console.print(Rule(f"[bold {border_style}]{title}[/bold {border_style}]", style=border_style, align="left"))
         renderer.render_answer(result, panel, title=title, border_style=border_style)
 
     @staticmethod
-    def _default_system_prompt() -> str:
+    def _get_default_system_prompt() -> str:
+        """返回默认系统提示词（含动态日期）。
+
+        当 PromptStore 不可用时作为兜底。注意：PromptStore 的
+        _DEFAULT_MASTER 使用静态文本，此方法生成动态日期版本。
+        """
         from datetime import datetime
         now = datetime.now()
         weekdays_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
@@ -725,6 +747,9 @@ class REPL:
         # 保存 undo 快照
         self.ctx_mgr.save_snapshot()
 
+        # 重置 _last_result（每轮开始时清空，异常路径不再保留旧值）
+        self._last_result = ""
+
         # ── 项目上下文注入（首次对话时） ──────────────────
         self._inject_project_context()
 
@@ -733,6 +758,9 @@ class REPL:
 
         # ── 当前 runtime session notes 注入 ───────────────
         self._inject_session_notes()
+
+        # ── 系统提示词注入（domain + memory 渐进式加载）──
+        self._inject_prompt_store_context(user_input)
 
         # ── 意图检测（始终执行，用于路由决策）──
         intent = self._detect_intent(user_input)
@@ -836,6 +864,9 @@ class REPL:
                 self._current_run_recorder = None
                 self._session_state.pop("_run_recorder", None)
 
+            # ── 自主持久化评估（无额外 LLM 调用）──
+            self._evaluate_and_persist(user_input)
+
     def _run_direct(self, user_input: str, model_ids: list[str]) -> None:
         """直接对话模式。通过结构化信号协议委派工具任务给 ReAct 引擎。
 
@@ -864,6 +895,7 @@ class REPL:
                     response_text = self._stream_response(model_id, call_messages)
                 else:
                     response_text = self._blocking_response(model_id, call_messages)
+                self._last_result = response_text or ""
                 self.status_bar.set_last_model(model_id)
 
                 if response_text:
@@ -1398,8 +1430,8 @@ class REPL:
                 memory_text = store.format_for_context(relevant)
                 self.ctx_mgr.add_system_message(memory_text)
                 logger.debug(f"注入 {len(relevant)} 条相关记忆")
-        except Exception:
-            pass  # 记忆注入失败不影响对话
+        except Exception as e:
+            logger.debug("记忆注入失败: %s", e)
 
     def _inject_session_notes(self) -> None:
         """Inject current runtime session notes into the chat context."""
@@ -1412,6 +1444,50 @@ class REPL:
                 self.ctx_mgr.add_system_message(f"[Session Notes]\n{body}")
         except Exception as e:
             logger.debug("session notes injection failed: %s", e)
+
+    def _inject_prompt_store_context(self, user_input: str) -> None:
+        """注入渐进式加载的 domain + memory 系统提示词。
+
+        基于用户输入的相关性评分，从 PromptStore 按需加载领域知识和长期记忆，
+        在 token 预算内贪心选择相关性最高的条目。
+        """
+        try:
+            relevant = self.prompt_store.load_relevant_prompts(user_input)
+            # 过滤掉 master（已经在 REPL 启动时注入），只保留 domain 和 memory
+            supplementary = [e for e in relevant if e.category != "master"]
+            if supplementary:
+                context_text = self.prompt_store.format_for_context(supplementary)
+                if context_text:
+                    self.ctx_mgr.add_system_message(context_text)
+                    domains = [e.metadata.domain for e in supplementary if e.category == "domain"]
+                    if domains:
+                        logger.debug("注入领域提示: %s", ", ".join(domains))
+        except Exception as e:
+            logger.debug("PromptStore 注入失败: %s", e)
+
+    def _evaluate_and_persist(self, user_input: str) -> None:
+        """执行后自主评估：检测值得持久化的学习，写入 PromptStore。
+
+        无额外 LLM 调用，仅基于正则模式匹配和启发式规则。
+        """
+        try:
+            candidates = self.prompt_memory.evaluate(
+                history=self.ctx_mgr.history[-6:],
+                user_input=user_input,
+                assistant_output=self._last_result,
+            )
+            for c in candidates:
+                entry = self.prompt_memory.persist(
+                    category=c["category"],
+                    content=c["content"],
+                    tags=c.get("tags", []),
+                )
+                if entry:
+                    console.print(
+                        f"[dim]🧠 已记忆: {c['category']} — {c['content'][:60]}...[/dim]"
+                    )
+        except Exception as e:
+            logger.debug("自主持久化评估失败: %s", e)
 
     def _load_custom_commands(self) -> None:
         """加载自定义快捷指令和技能，动态注册为命令。"""

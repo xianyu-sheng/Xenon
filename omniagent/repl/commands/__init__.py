@@ -1663,3 +1663,100 @@ def _cmd_cleanup(*, args: str, **kwargs: Any) -> str:
             f"  释放空间: {SessionCleaner._format_bytes(stats.bytes_freed)}"
         )
     return "✅ 无需清理，所有数据都在保留期内。"
+
+
+# /prompt ────────────────────────────────────────────────────
+
+register_command(
+    "/prompt",
+    "管理系统提示词（主版本、领域提示词、长期记忆）",
+    "/prompt status|domains|memories|versions|reload",
+)
+
+
+@_handler("/prompt")
+def _cmd_prompt(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> str:
+    """管理系统提示词存储。"""
+    repl = session_state.get("_repl")
+    if not repl or not hasattr(repl, "prompt_store"):
+        return "❌ PromptStore 未初始化"
+
+    store = repl.prompt_store
+    sub = args.strip().lower()
+
+    if sub == "status":
+        store._ensure_loaded()
+        master_ver = store._master.metadata.version if store._master else 0
+        domain_count = sum(1 for e in store._entries.values() if e.category == "domain")
+        memory_count = sum(1 for e in store._entries.values() if e.category == "memory")
+        memory_tokens = sum(e.token_estimate for e in store._entries.values() if e.category == "memory")
+
+        return (
+            f"═══ 系统提示词状态 ═══\n\n"
+            f"  主版本: v{master_ver}\n"
+            f"  领域提示词: {domain_count} 个\n"
+            f"  长期记忆: {memory_count} 个 ({memory_tokens} tokens)\n"
+            f"  项目目录: {store._project_dir}\n"
+            f"  用户目录: {store._user_dir}\n\n"
+            f"使用 /prompt domains|memories|versions 查看详情"
+        )
+
+    elif sub == "domains":
+        store._ensure_loaded()
+        domains = [e for e in store._entries.values() if e.category == "domain"]
+        if not domains:
+            return "暂无领域提示词。"
+        lines = [f"领域提示词 ({len(domains)} 个):\n"]
+        for e in sorted(domains, key=lambda x: x.metadata.domain):
+            lines.append(
+                f"  [{e.metadata.priority}] {e.metadata.domain} "
+                f"({e.token_estimate} tokens) "
+                f"tags: {', '.join(e.metadata.tags)}"
+            )
+        return "\n".join(lines)
+
+    elif sub == "memories":
+        memories = store.list_memories()
+        if not memories:
+            return "暂无长期记忆。Agent 会在发现值得持久化的模式时自动写入。"
+        lines = [f"长期记忆 ({len(memories)} 个):\n"]
+        for e in memories:
+            preview = e.content[:80].replace("\n", " ")
+            lines.append(
+                f"  [{e.metadata.priority}] {e.metadata.domain} "
+                f"(v{e.metadata.version}, {e.token_estimate} tokens)\n"
+                f"    {preview}..."
+            )
+            if e.metadata.tags:
+                lines.append(f"    tags: {', '.join(e.metadata.tags)}")
+        return "\n".join(lines)
+
+    elif sub == "versions":
+        versions = store.list_versions()
+        if not versions:
+            return "暂无归档版本。使用 /prompt 相关功能修改主提示词后会自动归档。"
+        lines = [f"主提示词历史版本 ({len(versions)} 个):\n"]
+        for v in versions:
+            lines.append(f"  {Path(v['path']).name}: {v['size']} bytes, {v['modified'][:19]}")
+        return "\n".join(lines)
+
+    elif sub == "reload":
+        store._loaded = False
+        store._load_all()
+        return (
+            f"✅ 已重新加载提示词。\n"
+            f"  Master: {'已加载' if store._master else '未找到'}\n"
+            f"  Domains: {sum(1 for e in store._entries.values() if e.category == 'domain')} 个\n"
+            f"  Memories: {sum(1 for e in store._entries.values() if e.category == 'memory')} 个"
+        )
+
+    else:
+        return (
+            "用法: /prompt <子命令>\n\n"
+            "子命令:\n"
+            "  status   — 查看 PromptStore 状态（主版本、数量、token 使用）\n"
+            "  domains  — 列出所有领域提示词\n"
+            "  memories — 列出所有 Agent 长期记忆\n"
+            "  versions — 查看主提示词历史版本\n"
+            "  reload   — 重新加载提示词文件夹（手动编辑后使用）"
+        )
