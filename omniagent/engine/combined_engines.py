@@ -34,16 +34,21 @@ class PlanReactEngine:
         self,
         model_priority: list[str],
         *,
+        executor_model_priority: list[str] | None = None,
         max_steps: int = 15,
         react_iterations: int = 8,
         callback: EngineCallback | None = None,
     ) -> None:
         self.model_priority = model_priority
+        executor = executor_model_priority or model_priority
         self.max_steps = max_steps
         self.react_iterations = react_iterations
         self.callback = callback or EngineCallback()
-        self.planner = PlanExecuteEngine(model_priority, max_steps=max_steps, callback=self.callback)
-        self.reactor = ReActEngine(model_priority, max_iterations=react_iterations, callback=self.callback)
+        self.planner = PlanExecuteEngine(
+            model_priority, executor_model_priority=executor,
+            max_steps=max_steps, callback=self.callback,
+        )
+        self.reactor = ReActEngine(executor, max_iterations=react_iterations, callback=self.callback)
 
     def run(self, user_input: str, context: AgentContext | None = None) -> str:
         from rich.console import Console
@@ -205,19 +210,28 @@ class PlanReflectionEngine:
         self,
         model_priority: list[str],
         *,
+        executor_model_priority: list[str] | None = None,
+        reviewer_model_priority: list[str] | None = None,
         max_steps: int = 15,
         review_rounds: int = 2,
         pass_threshold: int = 7,
         callback: EngineCallback | None = None,
     ) -> None:
         self.model_priority = model_priority
+        executor = executor_model_priority or model_priority
+        reviewer = reviewer_model_priority or model_priority
         self.max_steps = max_steps
         self.review_rounds = review_rounds
         self.pass_threshold = pass_threshold
         self.callback = callback or EngineCallback()
-        self.planner = PlanExecuteEngine(model_priority, max_steps=max_steps, callback=self.callback)
+        self.planner = PlanExecuteEngine(
+            model_priority, executor_model_priority=executor,
+            max_steps=max_steps, callback=self.callback,
+        )
         self.reflector = ReflectionEngine(
             model_priority,
+            executor_model_priority=executor,
+            reviewer_model_priority=reviewer,
             max_rounds=review_rounds,
             pass_threshold=pass_threshold,
             callback=self.callback,
@@ -256,19 +270,25 @@ class ReactReflectionEngine:
         self,
         model_priority: list[str],
         *,
+        executor_model_priority: list[str] | None = None,
+        reviewer_model_priority: list[str] | None = None,
         react_iterations: int = 8,
         review_rounds: int = 2,
         pass_threshold: int = 7,
         callback: EngineCallback | None = None,
     ) -> None:
         self.model_priority = model_priority
+        executor = executor_model_priority or model_priority
+        reviewer = reviewer_model_priority or model_priority
         self.react_iterations = react_iterations
         self.review_rounds = review_rounds
         self.pass_threshold = pass_threshold
         self.callback = callback or EngineCallback()
-        self.reactor = ReActEngine(model_priority, max_iterations=react_iterations, callback=self.callback)
+        self.reactor = ReActEngine(executor, max_iterations=react_iterations, callback=self.callback)
         self.reflector = ReflectionEngine(
             model_priority,
+            executor_model_priority=executor,
+            reviewer_model_priority=reviewer,
             max_rounds=review_rounds,
             pass_threshold=pass_threshold,
             callback=self.callback,

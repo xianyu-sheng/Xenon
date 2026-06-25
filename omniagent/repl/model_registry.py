@@ -149,6 +149,24 @@ class ModelRegistry:
         # 默认返回所有模型
         return [m.model_id for m in self.models.values()]
 
+    def resolve_roles(self, *roles: str) -> dict[str, list[str]]:
+        """
+        解析多个角色的模型列表，未分配的角色回退到 "planner"。
+
+        用法:
+            models = registry.resolve_roles("planner", "executor", "reviewer")
+            planner_models = models["planner"]
+            executor_models = models["executor"]  # 未分配时 = planner_models
+        """
+        planner = self.get_role_priority("planner")
+        result: dict[str, list[str]] = {}
+        for role in roles:
+            if role in self.role_priority:
+                result[role] = [self.models[a].model_id for a in self.role_priority[role]]
+            else:
+                result[role] = list(planner)  # 回退到 planner
+        return result
+
     # ── 思考范式 ──────────────────────────────────────────
 
     def set_mode(self, mode_name: str) -> ThinkingMode:

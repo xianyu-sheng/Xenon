@@ -132,11 +132,13 @@ class PlanExecuteEngine:
         self,
         model_priority: list[str],
         *,
+        executor_model_priority: list[str] | None = None,
         max_steps: int = 20,
         system_prompt: str | None = None,
         callback: EngineCallback | None = None,
     ) -> None:
-        self.model_priority = model_priority
+        self.model_priority = model_priority  # planner 角色
+        self.executor_model_priority = executor_model_priority or model_priority  # executor 角色，默认回退到 planner
         self.max_steps = max_steps
         self.system_prompt = system_prompt or PLAN_SYSTEM_PROMPT
         self.callback = callback or EngineCallback()
@@ -312,9 +314,9 @@ class PlanExecuteEngine:
             {"role": "user", "content": prompt},
         ]
 
-        # ── mini ReAct 循环（最多 3 次工具调用）──
+        # ── mini ReAct 循环（最多 3 次工具调用），使用 executor 模型 ──
         for _ in range(3):
-            response = self._call_llm(messages)
+            response = self._call_llm(messages, model_priority=self.executor_model_priority)
             parsed = parse_react(response)  # 用 ReAct 解析器提取 action/result
 
             # 检查是否有 action（工具调用）
@@ -458,10 +460,23 @@ class PlanExecuteEngine:
 
         return summary
 
-    def _call_llm(self, messages: list[dict[str, str]], max_tokens: int = 131072) -> str:
-        """调用 LLM，支持多模型 fallback。"""
+    def _call_llm(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int = 131072,
+        *,
+        model_priority: list[str] | None = None,
+    ) -> str:
+        """调用 LLM，支持多模型 fallback 和按阶段切换模型。
+
+        Args:
+            messages: LLM 消息列表
+            max_tokens: 最大输出 token
+            model_priority: 覆盖默认模型列表（用于按阶段分派不同模型角色）
+        """
+        models = model_priority or self.model_priority
         last_error = None
-        for model_id in self.model_priority:
+        for model_id in models:
             try:
                 return chat_completion(model_id, messages, max_tokens=max_tokens, temperature=0.3)
             except Exception as e:

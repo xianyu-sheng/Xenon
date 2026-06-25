@@ -794,8 +794,9 @@ class REPL:
         console.print(Rule("[bold bright_cyan]▸ You[/bold bright_cyan]", style="bright_cyan", align="left"))
         console.print(optimized)
 
-        # 获取模型列表
+        # 获取模型列表 + 解析多角色
         model_ids = self.registry.get_role_priority("planner")
+        role_models = self.registry.resolve_roles("planner", "executor", "reviewer")
         if not model_ids:
             console.print("[error]❌ 未配置任何模型。请先使用 /set_model 添加模型。[/error]")
             return
@@ -838,15 +839,15 @@ class REPL:
             elif mode == "react":
                 self._run_react_engine(optimized, model_ids)
             elif mode == "plan-execute":
-                self._run_plan_execute_engine(optimized, model_ids)
+                self._run_plan_execute_engine(optimized, model_ids, role_models=role_models)
             elif mode == "reflection":
-                self._run_reflection_engine(optimized, model_ids)
+                self._run_reflection_engine(optimized, model_ids, role_models=role_models)
             elif mode == "plan-react":
-                self._run_plan_react_engine(optimized, model_ids)
+                self._run_plan_react_engine(optimized, model_ids, role_models=role_models)
             elif mode == "plan-reflection":
-                self._run_plan_reflection_engine(optimized, model_ids)
+                self._run_plan_reflection_engine(optimized, model_ids, role_models=role_models)
             elif mode == "react-reflection":
-                self._run_react_reflection_engine(optimized, model_ids)
+                self._run_react_reflection_engine(optimized, model_ids, role_models=role_models)
             elif mode == "novel":
                 self._run_novel_engine(optimized, model_ids)
             else:
@@ -974,15 +975,24 @@ class REPL:
             self.status_bar.set_engine_status("done")
             console.print(render_shortcut_bar())
 
-    def _run_plan_execute_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """Plan-Execute 引擎模式。"""
+    def _run_plan_execute_engine(
+        self, user_input: str, model_ids: list[str],
+        *, role_models: dict[str, list[str]] | None = None,
+    ) -> None:
+        """Plan-Execute 引擎模式 — 规划用 planner 模型，执行步骤用 executor 模型。"""
         from omniagent.engine.plan_execute_engine import PlanExecuteEngine
 
         console.print(ModeHeader("Plan-Execute"))
         self.status_bar.set_engine_status("running")
 
+        rm = role_models or {}
         callback = self._make_callback()
-        engine = PlanExecuteEngine(model_priority=model_ids, max_steps=20, callback=callback)
+        engine = PlanExecuteEngine(
+            model_priority=model_ids,
+            executor_model_priority=rm.get("executor"),
+            max_steps=20,
+            callback=callback,
+        )
         try:
             result = engine.run(user_input, self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -998,15 +1008,25 @@ class REPL:
             self.status_bar.set_engine_status("done")
             console.print(render_shortcut_bar())
 
-    def _run_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """Reflection 引擎模式。"""
+    def _run_reflection_engine(
+        self, user_input: str, model_ids: list[str],
+        *, role_models: dict[str, list[str]] | None = None,
+    ) -> None:
+        """Reflection 引擎模式 — 执行用 executor 模型，审查用 reviewer 模型。"""
         from omniagent.engine.reflection_engine import ReflectionEngine
 
         console.print(ModeHeader("Reflection"))
         self.status_bar.set_engine_status("running")
 
+        rm = role_models or {}
         callback = self._make_callback()
-        engine = ReflectionEngine(model_priority=model_ids, max_rounds=3, callback=callback)
+        engine = ReflectionEngine(
+            model_priority=model_ids,
+            executor_model_priority=rm.get("executor"),
+            reviewer_model_priority=rm.get("reviewer"),
+            max_rounds=3,
+            callback=callback,
+        )
         try:
             result = engine.run(user_input)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1022,8 +1042,11 @@ class REPL:
             self.status_bar.set_engine_status("done")
             console.print(render_shortcut_bar())
 
-    def _run_plan_react_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """Plan + React 组合引擎模式。"""
+    def _run_plan_react_engine(
+        self, user_input: str, model_ids: list[str],
+        *, role_models: dict[str, list[str]] | None = None,
+    ) -> None:
+        """Plan + React 组合 — 规划用 planner，执行/ReAct 用 executor 模型。"""
         from omniagent.engine.combined_engines import PlanReactEngine
 
         iterations = self._estimate_react_iterations(user_input)
@@ -1031,8 +1054,15 @@ class REPL:
         console.print(ModeHeader("Plan+React", description="全局规划 → 每步 ReAct 执行", iterations=iterations))
         self.status_bar.set_engine_status("running")
 
+        rm = role_models or {}
         callback = self._make_callback()
-        engine = PlanReactEngine(model_priority=model_ids, max_steps=plan_steps, react_iterations=iterations, callback=callback)
+        engine = PlanReactEngine(
+            model_priority=model_ids,
+            executor_model_priority=rm.get("executor"),
+            max_steps=plan_steps,
+            react_iterations=iterations,
+            callback=callback,
+        )
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1047,15 +1077,26 @@ class REPL:
             self.status_bar.set_engine_status("done")
             console.print(render_shortcut_bar())
 
-    def _run_plan_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """Plan + Reflection 组合引擎模式。"""
+    def _run_plan_reflection_engine(
+        self, user_input: str, model_ids: list[str],
+        *, role_models: dict[str, list[str]] | None = None,
+    ) -> None:
+        """Plan + Reflection 组合 — 规划用 planner，执行用 executor，审查用 reviewer。"""
         from omniagent.engine.combined_engines import PlanReflectionEngine
 
         console.print(ModeHeader("Plan+Reflection", description="规划执行 → 反思修正"))
         self.status_bar.set_engine_status("running")
 
+        rm = role_models or {}
         callback = self._make_callback()
-        engine = PlanReflectionEngine(model_priority=model_ids, max_steps=10, review_rounds=2, callback=callback)
+        engine = PlanReflectionEngine(
+            model_priority=model_ids,
+            executor_model_priority=rm.get("executor"),
+            reviewer_model_priority=rm.get("reviewer"),
+            max_steps=10,
+            review_rounds=2,
+            callback=callback,
+        )
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1070,15 +1111,26 @@ class REPL:
             self.status_bar.set_engine_status("done")
             console.print(render_shortcut_bar())
 
-    def _run_react_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """ReAct + Reflection 组合引擎模式。"""
+    def _run_react_reflection_engine(
+        self, user_input: str, model_ids: list[str],
+        *, role_models: dict[str, list[str]] | None = None,
+    ) -> None:
+        """ReAct + Reflection 组合 — ReAct 用 executor，审查用 reviewer 模型。"""
         from omniagent.engine.combined_engines import ReactReflectionEngine
 
         console.print(ModeHeader("React+Reflection", description="ReAct 探索 → 反思审查"))
         self.status_bar.set_engine_status("running")
 
+        rm = role_models or {}
         callback = self._make_callback()
-        engine = ReactReflectionEngine(model_priority=model_ids, react_iterations=8, review_rounds=2, callback=callback)
+        engine = ReactReflectionEngine(
+            model_priority=model_ids,
+            executor_model_priority=rm.get("executor"),
+            reviewer_model_priority=rm.get("reviewer"),
+            react_iterations=8,
+            review_rounds=2,
+            callback=callback,
+        )
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])

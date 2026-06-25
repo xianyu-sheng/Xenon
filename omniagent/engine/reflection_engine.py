@@ -68,13 +68,17 @@ class ReflectionEngine:
         self,
         model_priority: list[str],
         *,
+        executor_model_priority: list[str] | None = None,
+        reviewer_model_priority: list[str] | None = None,
         max_rounds: int = 3,
         pass_threshold: int = 7,
         executor_prompt: str | None = None,
         reviewer_prompt: str | None = None,
         callback: EngineCallback | None = None,
     ) -> None:
-        self.model_priority = model_priority
+        self.model_priority = model_priority  # 默认模型（回退用）
+        self.executor_model_priority = executor_model_priority or model_priority
+        self.reviewer_model_priority = reviewer_model_priority or model_priority
         self.max_rounds = max_rounds
         self.pass_threshold = pass_threshold
         self.executor_prompt = executor_prompt or EXECUTOR_PROMPT
@@ -144,22 +148,29 @@ class ReflectionEngine:
         else:
             messages.append({"role": "user", "content": user_input})
 
-        return self._call_llm(messages)
+        return self._call_llm(messages, model_priority=self.executor_model_priority)
 
     def _review(self, user_input: str, output: str) -> dict[str, Any]:
-        """审查阶段: LLM 审查输出。"""
+        """审查阶段: LLM 审查输出（使用 reviewer 模型）。"""
         messages = [
             {"role": "system", "content": self.reviewer_prompt},
             {"role": "user", "content": f"用户需求:\n{user_input}\n\n执行者输出:\n{output}"},
         ]
 
-        response = self._call_llm(messages)
+        response = self._call_llm(messages, model_priority=self.reviewer_model_priority)
         return self._parse_review(response)
 
-    def _call_llm(self, messages: list[dict[str, str]], max_tokens: int = 131072) -> str:
-        """调用 LLM，支持多模型 fallback。"""
+    def _call_llm(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int = 131072,
+        *,
+        model_priority: list[str] | None = None,
+    ) -> str:
+        """调用 LLM，支持多模型 fallback 和按阶段切换模型。"""
+        models = model_priority or self.model_priority
         last_error = None
-        for model_id in self.model_priority:
+        for model_id in models:
             try:
                 return chat_completion(model_id, messages, max_tokens=max_tokens, temperature=0.3)
             except Exception as e:
