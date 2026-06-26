@@ -1,0 +1,63 @@
+# Agent Manifest — omniagent 的自描述清单
+# 此文件供 Agent-hub 只读，配置变更请手动编辑。
+
+name: omniagent
+display_name: 通用 AI 编程 Agent
+description: |
+  基于 ReAct 多思考范式的 AI 编程助手，提供 25+ 工具覆盖软件工程全流程。
+  支持 Plan-Execute、ReAct、Reflection 等多种模式，可并行调度子 Agent。
+  核心能力：代码分析与搜索、代码编写与重构、命令执行与测试、外部工具集成(MCP)、
+  GitHub 仓库分析、长期记忆持久化。
+protocol: cli
+version: "1.0"
+
+capabilities:
+  tasks:
+    - name: analyze_code
+      description: 只读分析：审查代码结构、质量、架构，搜索符号，分析依赖关系
+      input:
+        goal: "string — 分析目标（如：分析 D:/project 的架构和代码质量）"
+      output:
+        report: "string — 结构化 Markdown 分析报告"
+        findings: "list — 发现的问题/亮点"
+        files_analyzed: "list — 分析的文件列表"
+
+    - name: write_or_edit_code
+      description: 创建/修改代码：新建文件、精确编辑、批量写入、跨文件重构
+      input:
+        goal: "string — 写代码目标（如：在 D:/project 中创建一个 Flask API）"
+      output:
+        files_created: "list — 新创建的文件"
+        files_modified: "list — 修改的文件"
+        summary: "string — 变更摘要"
+
+    - name: execute_tasks
+      description: 执行操作：运行 shell 命令、Git 操作、运行测试、安装依赖
+      input:
+        goal: "string — 执行目标（如：运行 tests/ 下的所有测试并修复失败）"
+      output:
+        exit_code: "int — 退出码"
+        stdout: "string — 命令输出"
+        summary: "string — 执行摘要"
+
+    - name: search_and_explore
+      description: 搜索代码库：grep 内容搜索、AST 符号搜索、文件发现
+      input:
+        goal: "string — 搜索目标（如：找到所有调用 authenticate() 的地方）"
+      output:
+        matches: "list — 匹配结果"
+        files_found: "list — 涉及的文件"
+
+  tools: [read_file, write_file, edit_file, list_files, search_files, command, git,
+    code_index, ast_analyze, refactor, batch_write, batch_edit, create_directory,
+    file_move, file_copy, diff_preview, pytest, run_test, web_fetch, github_fetch,
+    mcp_call, register_tool, spawn_agent, discover_agents, agent_result,
+    weather, datetime, remember]
+  models: [deepseek-v4-pro, claude-opus-4-8, claude-sonnet-4-6]
+  modes: [react, plan-execute, plan-react, reflection]
+  constraints:
+    max_concurrency: 3
+    timeout: 600
+
+interface:
+  command: omniagent --mode {mode} --json-output "{goal}"
