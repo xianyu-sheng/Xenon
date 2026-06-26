@@ -95,7 +95,66 @@ class PlanReactEngine:
         for s in steps:
             console.print(f"  [dim]步骤 {s.get('id', '?')}: {s.get('task', '')}[/dim]")
 
-        # Phase 2: 每步用 ReAct 执行
+        # Phase 2: 每步用 ReAct 执行（支持 DAG 并行）
+        has_deps = any(
+            isinstance(s, dict) and s.get("depends_on") and len(s.get("depends_on", [])) > 0
+            for s in steps
+        )
+
+        if has_deps:
+            # ── DAG 并行路径 ──
+            console.print(f"\n[dim]🔄 Phase 2: DAG 并行执行[/dim]")
+            try:
+                from omniagent.engine.plan_dag import PlanDAG, DAGExecutor
+                from omniagent.repl.cards import PlanProgressCard
+
+                dag = PlanDAG.from_plan(plan)
+                errors = dag.validate()
+                if errors:
+                    logger.warning("Plan DAG 验证失败: %s，回退串行", errors)
+                    console.print(f"[yellow]  ⚠ DAG 验证警告: {'; '.join(errors)}[/yellow]")
+                    # 继续使用 DAG — 验证错误通常是信息性的
+                    # （如 LLM 引用了不存在的步骤 ID），不影响串行回退行为
+
+                logger.info(
+                    "DAG: %d steps, %d waves, has_parallelism=%s",
+                    dag.total_steps, dag.wave_count, dag.has_parallelism,
+                )
+                if dag.has_parallelism:
+                    console.print(
+                        f"[dim]  🎯 {dag.total_steps} 步, {dag.wave_count} 波 "
+                        f"(可并行)[/dim]"
+                    )
+                else:
+                    console.print(
+                        f"[dim]  🎯 {dag.total_steps} 步, 串行执行[/dim]"
+                    )
+
+                progress_card = PlanProgressCard(
+                    [s for s in dag.steps.values()], title="执行计划"
+                )
+
+                executor = DAGExecutor(
+                    model_priority=self.model_priority,
+                    callback=self.callback,
+                    react_iterations=self.react_iterations,
+                )
+
+                from rich.live import Live
+                with Live(progress_card, console=console, refresh_per_second=8, transient=False):
+                    summary = executor.run(
+                        dag, user_input, ctx,
+                        analysis=analysis, progress_card=progress_card,
+                    )
+
+                console.print("[dim]📝 汇总结果...[/dim]")
+                return summary
+            except Exception as e:
+                logger.warning("DAG 执行失败: %s，回退串行", e)
+                console.print(f"[yellow]  ⚠ DAG 并行失败: {e}，回退串行执行[/yellow]")
+                # 回退到下面的串行路径
+
+        # ── 串行路径（回退或默认）──
         console.print(f"\n[dim]🔄 Phase 2: ReAct 逐步执行[/dim]")
         results = []
 
@@ -106,6 +165,7 @@ class PlanReactEngine:
             step_task = step.get("task", "")
             step_id = step.get("id", i + 1)
 
+            self.callback.on_step(step_id, len(steps), step_task)
             console.print(f"\n[cyan]🔄 步骤 {step_id}/{len(steps)}: {step_task}[/cyan]")
 
             # 构建包含全局上下文的 ReAct 输入
@@ -149,9 +209,12 @@ class PlanReactEngine:
                 if "Linux" in step_result:
                     discovered_info.append("操作系统: Linux")
 
+                self.callback.on_step_done(step_id, True, step_result[:200])
+
             except Exception as e:
                 step_result = f"步骤执行失败: {e}"
                 console.print(f"[red]  ✗ 步骤 {step_id} 失败: {e}[/red]")
+                self.callback.on_step_done(step_id, False, step_result[:200])
 
             results.append({
                 "step_id": step_id,

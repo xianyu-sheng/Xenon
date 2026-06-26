@@ -19,6 +19,7 @@ def _step_template() -> dict:
         "tool": None,
         "params": {},
         "description": "",
+        "depends_on": [],  # 步骤依赖（整数 ID 列表，空 = 无依赖）
     }
 
 
@@ -78,6 +79,7 @@ _STEP_FIELD_ALIASES = {
     "tool":        ["tool", "action", "tool_name", "command", "function", "method"],
     "params":      ["params", "parameters", "args", "arguments", "input", "kwargs"],
     "description": ["description", "detail", "details", "explain", "note"],
+    "depends_on":  ["depends_on", "dependencies", "depends", "after", "requires", "prerequisites"],
 }
 
 _REACT_FIELD_ALIASES = {
@@ -139,6 +141,13 @@ def _normalize_step(step: Any, index: int) -> dict:
     result["tool"] = normalized.get("tool")
     result["params"] = normalized.get("params", {})
     result["description"] = normalized.get("description", result["task"])
+
+    # ── 规范化 depends_on：字符串→整数，非列表→空列表 ──
+    raw_deps = normalized.get("depends_on", [])
+    if not isinstance(raw_deps, list):
+        raw_deps = [raw_deps] if raw_deps else []
+    result["depends_on"] = [int(d) for d in raw_deps]
+
     return result
 
 

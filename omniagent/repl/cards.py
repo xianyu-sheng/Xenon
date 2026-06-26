@@ -11,9 +11,15 @@ Rich 卡片组件库 — OmniAgent CLI 的统一终端 UI 组件。
 
 from __future__ import annotations
 
+import logging
+import time
+from typing import Any
+
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.text import Text
+
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════
 # 统一工具图标映射
@@ -418,6 +424,166 @@ class ModeHeader:
             "  ".join(parts),
             style="dim",
             align="left",
+        )
+
+
+class PlanProgressCard:
+    """Plan 步骤实时进度面板 — 用于 DAG 并行执行时的 Live 渲染。
+
+    显示所有计划步骤及其状态，实时更新：
+    - ✅ 已完成（绿色 + 耗时）
+    - 🔄 执行中（青色 spinner）
+    - ⏳ 等待依赖（dim yellow + 显示等待哪些步骤）
+    - ❌ 失败（红色 + 错误信息）
+
+    Usage::
+
+        card = PlanProgressCard(steps)
+        with Live(card, refresh_per_second=10) as live:
+            for wave in dag.waves():
+                # ... execute wave ...
+                card.update(step_id, "done", result, duration_ms)
+                live.refresh()
+    """
+
+    def __init__(self, steps: list, *, title: str = "执行计划") -> None:
+        self.title = title
+        # steps 可以是 PlanStep 对象列表或 dict 列表
+        self._step_records: list[dict[str, Any]] = []
+        for s in steps:
+            if hasattr(s, "id"):
+                # PlanStep dataclass
+                self._step_records.append({
+                    "id": s.id,
+                    "task": s.task,
+                    "depends_on": list(s.depends_on) if s.depends_on else [],
+                    "status": "pending",
+                    "result": "",
+                    "duration_ms": 0.0,
+                })
+            elif isinstance(s, dict):
+                # dict 格式
+                deps = s.get("depends_on", [])
+                if not isinstance(deps, list):
+                    deps = [deps] if deps else []
+                self._step_records.append({
+                    "id": s.get("id", 0),
+                    "task": s.get("task", ""),
+                    "depends_on": [int(d) for d in deps],
+                    "status": "pending",
+                    "result": "",
+                    "duration_ms": 0.0,
+                })
+            else:
+                self._step_records.append({
+                    "id": getattr(s, "id", 0),
+                    "task": str(s),
+                    "depends_on": [],
+                    "status": "pending",
+                    "result": "",
+                    "duration_ms": 0.0,
+                })
+
+        self._start_time = time.monotonic()
+
+    def update(
+        self,
+        step_id: int,
+        status: str,
+        result: str = "",
+        duration_ms: float = 0.0,
+    ) -> None:
+        """更新指定步骤的状态。
+
+        Args:
+            step_id: 步骤 ID
+            status: "running" | "done" | "failed"
+            result: 步骤结果文本
+            duration_ms: 执行耗时（毫秒）
+        """
+        for rec in self._step_records:
+            if rec["id"] == step_id:
+                rec["status"] = status
+                if result:
+                    rec["result"] = result
+                if duration_ms:
+                    rec["duration_ms"] = duration_ms
+                return
+
+    def mark_running(self, step_ids: list[int]) -> None:
+        """批量标记步骤为运行中。"""
+        for sid in step_ids:
+            self.update(sid, "running")
+
+    @property
+    def completed_count(self) -> int:
+        return sum(1 for r in self._step_records if r["status"] == "done")
+
+    @property
+    def total_count(self) -> int:
+        return len(self._step_records)
+
+    @property
+    def is_finished(self) -> bool:
+        return all(
+            r["status"] in ("done", "failed")
+            for r in self._step_records
+        )
+
+    def __rich_console__(self, console, options):
+        """Rich 协议：渲染进度面板。"""
+        yield Text.from_markup(
+            f"\n[bold bright_cyan]📋 {self.title}[/bold bright_cyan] "
+            f"[dim]({self.completed_count}/{self.total_count} 步完成)[/dim]\n"
+        )
+
+        for rec in self._step_records:
+            status = rec["status"]
+            sid = rec["id"]
+            task = _truncate(rec["task"], 100)
+            duration_str = ""
+
+            if status == "done":
+                icon = "[green]✅[/green]"
+                style = "green"
+                if rec["duration_ms"] > 0:
+                    duration_str = f" [dim]({rec['duration_ms'] / 1000:.1f}s)[/dim]"
+            elif status == "running":
+                icon = "[bright_cyan]🔄[/bright_cyan]"
+                style = "bright_cyan"
+            elif status == "failed":
+                icon = "[red]❌[/red]"
+                style = "red"
+                if rec["result"]:
+                    err_preview = _truncate(rec["result"].replace("\n", " "), 60)
+                    duration_str = f" [dim red]{err_preview}[/dim red]"
+            else:
+                # pending — 显示等待原因
+                icon = "[dim yellow]⏳[/dim yellow]"
+                style = "dim yellow"
+                deps = rec.get("depends_on", [])
+                if deps:
+                    # 只显示尚未完成的依赖
+                    pending_deps = [
+                        str(d) for d in deps
+                        if not any(
+                            r["id"] == d and r["status"] == "done"
+                            for r in self._step_records
+                        )
+                    ]
+                    if pending_deps:
+                        duration_str = (
+                            f" [dim]等待步骤 {', '.join(pending_deps)}[/dim]"
+                        )
+
+            yield Text.from_markup(
+                f"  {icon} [bold]{sid}.[/bold] [{style}]{task}[/{style}]{duration_str}"
+            )
+
+        # 底部状态
+        elapsed = time.monotonic() - self._start_time
+        yield Text.from_markup(
+            f"\n[dim]⏱ 已耗时 {elapsed:.1f}s[/dim]"
         )
 
 
