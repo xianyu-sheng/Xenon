@@ -133,11 +133,11 @@ version: '1.0'
 
     def test_resolve_tools_for_card(self, tmp_registry):
         """通过 registry 裁剪工具集。"""
-        all_tools = {"read_file": {}, "write_file": {}, "grep": {}, "command": {}}
+        all_tools = {"read_file": {}, "write_file": {}, "search_files": {}, "command": {}}
         resolved = tmp_registry.resolve_tools("code-explorer", all_tools)
         # code-explorer 应该只有只读工具
         assert "read_file" in resolved
-        assert "grep" in resolved
+        assert "search_files" in resolved
         assert "write_file" not in resolved
         assert "command" not in resolved
 

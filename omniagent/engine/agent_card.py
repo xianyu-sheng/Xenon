@@ -30,7 +30,7 @@ _SEED_CARDS: list[dict[str, Any]] = [
         "display_name": "代码探索器",
         "description": "只读代码搜索与探索 — 搜索文件、grep 内容、分析代码结构。适合「帮我在项目中找到所有用到 X 的地方」这类任务。",
         "capabilities": {
-            "tools": ["read_file", "list_files", "search_files", "grep", "glob", "code_index", "ast_analyze"],
+            "tools": ["read_file", "list_files", "search_files", "code_index", "ast_analyze"],
             "models": ["inherit"],
             "read_only": True,
         },
@@ -60,7 +60,7 @@ _SEED_CARDS: list[dict[str, Any]] = [
         "display_name": "测试执行器",
         "description": "运行测试/命令并报告结果 — 可以执行 shell 命令但不能修改文件。适合「帮我跑一下测试看看有没有问题」这类任务。",
         "capabilities": {
-            "tools": ["command", "read_file", "search_files", "grep", "list_files"],
+            "tools": ["command", "read_file", "search_files", "list_files"],
             "models": ["inherit"],
             "read_only": False,
         },

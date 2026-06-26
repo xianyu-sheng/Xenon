@@ -137,3 +137,11 @@ ignore_errors = true
 
 [tool.setuptools.packages.find]
 include = ["omniagent*"]
+
+# ── pytest: Python 3.14 兼容性配置 ──
+# pytest 9.x 的 capture 插件在 Python 3.14 上存在 tempfile 清理
+# 时序问题，导致 pytest 退出时崩溃 (ValueError: I/O operation on closed file)。
+# 禁用 capture 插件作为临时修复，待 pytest 上游修复后移除。
+[tool.pytest.ini_options]
+addopts = "-p no:capture"
+asyncio_mode = "auto"
