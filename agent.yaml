@@ -60,4 +60,4 @@ capabilities:
     timeout: 600
 
 interface:
-  command: omniagent --mode {mode} --json-output "{goal}"
+  command: omniagent --mode {mode} "{goal}"
