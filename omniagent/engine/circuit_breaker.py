@@ -61,6 +61,8 @@ class CircuitBreaker:
         ("file_move", r"(?:路径越界|permission\s+denied|权限|源文件不存在|source.*not\s+found)"),
         ("file_copy", r"(?:路径越界|permission\s+denied|权限|源文件不存在|source.*not\s+found)"),
         ("create_directory", r"(?:路径越界|permission\s+denied|权限|已存在.*文件|already\s+exists.*file)"),
+        # git/command 工具终端错误
+        ("git", r"(?:not\s+a\s+git\s+repository|不是\s*git\s*仓库|Git\s+未安装)"),
         (".*", r"(?:permission\s+denied|access\s+denied|权限不足|路径越界)"),
     ]
 

@@ -272,6 +272,13 @@ class ToolExecutor:
             )
 
         # 5. 执行工具（含重试）
+        # ── 确保 cwd 已设置 ──
+        # 文件/git/command 工具需要工作目录。如果 LLM 未在参数中指定 cwd，
+        # 从 AgentContext 的 project_root 获取，或回退到当前进程工作目录。
+        if "cwd" not in params:
+            project_root = context.get("project_root", None) if context else None
+            if project_root:
+                params["cwd"] = str(project_root)
         for attempt in range(self.retry_attempts):
             try:
                 node = ToolNode(

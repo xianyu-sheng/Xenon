@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 from omniagent.engine.context import AgentContext
@@ -55,6 +56,11 @@ class CommandTool(BaseTool):
 
         self._validate_command(cmd)
 
+        # ── 确定工作目录 ──
+        work_dir = self.cwd
+        if not work_dir:
+            work_dir = context.get("project_root", None) or str(Path.cwd())
+
         if sys.platform == "win32":
             shell_exec = ["powershell", "-Command", cmd]
         else:
@@ -64,7 +70,7 @@ class CommandTool(BaseTool):
             proc = subprocess.run(
                 shell_exec, capture_output=True, text=True,
                 encoding="utf-8", errors="replace",
-                timeout=effective_timeout, cwd=self.cwd,
+                timeout=effective_timeout, cwd=work_dir,
             )
             result = {
                 "action_type": "command", "command": cmd,
@@ -88,6 +94,31 @@ class GitTool(BaseTool):
         extra_args = self.resolve(self._extra.get("action", ""), context).strip()
 
         self._validate_git_command(git_cmd)
+
+        # ── 确定工作目录 ──
+        # 优先使用显式传入的 cwd，其次从 context 获取 project_root，
+        # 最后回退到当前进程工作目录
+        work_dir = self.cwd
+        if not work_dir:
+            work_dir = context.get("project_root", None) or str(Path.cwd())
+        work_path = Path(work_dir)
+
+        # ── 防御检查：确保目标目录是 Git 仓库 ──
+        # 如果 cwd 不是 git 仓库，向上查找 .git 目录
+        git_dir = self._find_git_dir(work_path)
+        if git_dir is None:
+            return {
+                "action_type": "git",
+                "command": f"git {git_cmd}",
+                "returncode": -1,
+                "output": (
+                    f"当前工作目录 '{work_dir}' 及其父目录均不是 Git 仓库。\n"
+                    f"请改用 list_files + read_file 来探索目录结构，"
+                    f"或使用 search_files 来搜索文件内容。"
+                ),
+                "success": False,
+                "error": f"not a git repository (cwd={work_dir})",
+            }
 
         git_commands = {
             "status": ["git", "status", "--short"],
@@ -119,7 +150,7 @@ class GitTool(BaseTool):
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True,
-                timeout=effective_timeout, cwd=self.cwd or ".",
+                timeout=effective_timeout, cwd=str(git_dir),
             )
             output = proc.stdout.strip() or proc.stderr.strip()
             result = {
@@ -133,3 +164,19 @@ class GitTool(BaseTool):
             return {"action_type": "git", "success": False, "error": "Git 命令超时"}
         except FileNotFoundError:
             return {"action_type": "git", "success": False, "error": "Git 未安装"}
+
+    @staticmethod
+    def _find_git_dir(start_path: Path) -> Path | None:
+        """向上查找包含 .git 目录的根目录。
+
+        从 start_path 开始，逐级向上查找，直到找到 .git 目录或到达文件系统根。
+        返回包含 .git 的目录路径，若未找到则返回 None。
+        """
+        current = start_path.resolve()
+        while True:
+            if (current / ".git").is_dir():
+                return current
+            parent = current.parent
+            if parent == current:  # 到达文件系统根
+                return None
+            current = parent

@@ -1476,6 +1476,9 @@ class REPL:
             if ctx_text:
                 self.ctx_mgr.add_system_message(ctx_text)
                 logger.debug(f"注入项目上下文: {self.project_ctx.project_type}")
+            # ── 将项目根目录写入 AgentContext，供工具（git/command/file）使用 ──
+            if self.project_ctx.root and self.project_ctx.root.is_dir():
+                self.agent_context.set("project_root", str(self.project_ctx.root))
         except Exception as e:
             logger.debug(f"项目上下文检测失败: {e}")
 
@@ -1706,9 +1709,38 @@ def run_headless(
     if not registry.list_models():
         # 尝试自动加载凭据
         try:
-            from omniagent.repl.provider_registry import get_configured_providers, load_credentials
+            import os as _os
+            from omniagent.repl.provider_registry import (
+                get_configured_providers, load_credentials,
+                PROVIDERS, ProviderInfo, fetch_provider_models,
+            )
             creds = load_credentials()
             configured = get_configured_providers()
+
+            # ── 补充：从环境变量检测未在 credentials.yaml 中配置的 API Key ──
+            # 这确保即使未运行 setup wizard，只要设置了 DEEPSEEK_API_KEY 等
+            # 环境变量，headless 模式也能正常找到模型。
+            configured_keys = {p.key for p in configured}
+            for key, info in PROVIDERS.items():
+                if key not in configured_keys and key not in creds:
+                    env_val = _os.environ.get(info.env_key, "")
+                    if env_val and env_val.strip():
+                        creds[key] = env_val.strip()
+                        provider_config = ProviderInfo(
+                            name=info.name, key=info.key, base_url=info.base_url,
+                            env_key=info.env_key, models=info.models, api_key=env_val.strip(),
+                            model_list_path=info.model_list_path,
+                        )
+                        # 尝试从厂商实时获取模型列表，失败则用内置兜底
+                        try:
+                            live_models = fetch_provider_models(provider_config, env_val.strip())
+                            if live_models:
+                                provider_config.models = live_models
+                        except Exception:
+                            pass
+                        configured.append(provider_config)
+                        logger.info("headless: 从环境变量 %s 加载模型 %s", info.env_key, key)
+
             for p in configured:
                 if p.models:
                     model_id = f"{p.key}/{p.models[0]}"
