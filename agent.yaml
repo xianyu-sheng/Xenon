@@ -60,4 +60,4 @@ capabilities:
     timeout: 600
 
 interface:
-  command: omniagent --mode {mode} "{goal}"
+  command: omniagent --mode {mode} --goal "{goal}"

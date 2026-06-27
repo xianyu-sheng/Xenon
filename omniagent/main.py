@@ -93,6 +93,11 @@ def cli() -> None:
         help="仅展示工作流结构，不执行（run 模式）",
     )
     parser.add_argument(
+        "--goal",
+        default=None,
+        help="任务描述（非交互模式，执行后退出）",
+    )
+    parser.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="显示详细日志",
@@ -112,6 +117,11 @@ def cli() -> None:
         logging.getLogger(noisy).setLevel(logging.ERROR)
 
     cmd = args.command_or_workflow
+
+    # ── 非交互模式：--goal 触发 headless 执行 ──
+    if args.goal:
+        _cmd_headless(args)
+        return
 
     # 路由
     if cmd == "run":
@@ -147,6 +157,34 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         system_prompt=getattr(args, "system_prompt", None),
         config_path=getattr(args, "config", None),
     )
+
+
+def _cmd_headless(args: argparse.Namespace) -> None:
+    """非交互模式：执行单个任务后退出。
+
+    供 Agent-hub 等调度系统通过 CLI Bridge 调用。
+    - 自动批准所有工具调用（无需人工交互）
+    - 结果输出到 stdout，日志输出到 stderr
+    - 成功时 exit 0，失败时 exit 1
+    """
+    from omniagent.repl.repl import run_headless
+
+    goal = args.goal
+    mode = getattr(args, "mode", None) or "react"
+    models = getattr(args, "model", None)
+    system_prompt = getattr(args, "system_prompt", None)
+    config_path = getattr(args, "config", None)
+
+    success = run_headless(
+        goal=goal,
+        mode=mode,
+        models=models,
+        system_prompt=system_prompt,
+        config_path=config_path,
+        verbose=args.verbose,
+    )
+
+    sys.exit(0 if success else 1)
 
 
 def _cmd_run(args: argparse.Namespace) -> None:

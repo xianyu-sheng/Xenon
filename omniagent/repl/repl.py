@@ -1644,3 +1644,126 @@ def start_repl(
 
     repl = REPL(registry=registry, system_prompt=system_prompt, optimize_prompts=optimize)
     repl.run()
+
+
+def run_headless(
+    *,
+    goal: str,
+    mode: str = "react",
+    models: list[str] | None = None,
+    system_prompt: str | None = None,
+    config_path: str | None = None,
+    verbose: bool = False,
+) -> bool:
+    """非交互式单任务执行 — 供 Agent-hub 等调度系统通过 CLI Bridge 调用。
+
+    与 start_repl() 不同，此函数：
+    - 不进入交互式 REPL 循环
+    - 自动批准所有工具调用（无需人工交互）
+    - 将最终结果输出到 stdout
+    - 返回 bool 表示成功/失败
+
+    Args:
+        goal: 任务描述（如"编写快速排序算法"）
+        mode: 思考范式（react / plan-execute / reflection / direct）
+        models: 初始模型列表
+        system_prompt: 自定义系统提示词
+        config_path: 模型配置文件路径
+        verbose: 详细日志模式
+
+    Returns:
+        True 表示任务执行成功，False 表示失败
+    """
+    import logging
+    from omniagent.nodes.tool_node import ToolNode
+    from omniagent.repl.model_registry import ModelRegistry
+
+    logger = logging.getLogger(__name__)
+
+    # ── 安静模式：抑制非关键日志 ──
+    if not verbose:
+        for noisy in ("httpx", "httpcore", "urllib3", "asyncio", "openai", "requests"):
+            logging.getLogger(noisy).setLevel(logging.ERROR)
+
+    # ── 初始化模型注册表 ──
+    registry = ModelRegistry()
+    if config_path:
+        registry.load_from_file(config_path)
+    if models:
+        for i, model_id in enumerate(models):
+            alias = model_id.split("/")[-1] if "/" in model_id else f"model_{i}"
+            registry.add_model(model_id, alias)
+            if "planner" not in registry.role_priority:
+                registry.role_priority["planner"] = []
+            registry.role_priority["planner"].append(alias)
+    if mode:
+        try:
+            registry.set_mode(mode)
+        except ValueError as e:
+            console.print(f"[yellow]⚠️  {e}[/yellow]")
+
+    # ── 检查模型是否就绪 ──
+    if not registry.list_models():
+        # 尝试自动加载凭据
+        try:
+            from omniagent.repl.provider_registry import get_configured_providers, load_credentials
+            creds = load_credentials()
+            configured = get_configured_providers()
+            for p in configured:
+                if p.models:
+                    model_id = f"{p.key}/{p.models[0]}"
+                    alias = p.models[0].replace(".", "-")
+                    registry.add_model(model_id, alias, base_url=p.base_url)
+                    if "planner" not in registry.role_priority:
+                        registry.role_priority["planner"] = []
+                    registry.role_priority["planner"].append(alias)
+        except Exception:
+            pass
+
+    if not registry.list_models():
+        console.print("[red]❌ 非交互模式需要至少配置一个模型[/red]")
+        console.print("[dim]请先设置 API Key 或通过 --model 指定模型[/dim]")
+        return False
+
+    # ── 创建 REPL 实例 ──
+    repl = REPL(
+        registry=registry,
+        system_prompt=system_prompt,
+        optimize_prompts=True,
+        streaming=True,
+    )
+
+    # ── 自动批准所有工具调用（headless 模式核心）──
+    # 必须在 REPL 创建之后设置，因为 REPL.__init__ 会注册自己的 _approval_handler
+    ToolNode.set_approval_handler(lambda tool_name, params_preview: True)
+
+    # ── 执行任务 ──
+    logger.info("Headless 执行: mode=%s goal=%s", mode, goal[:100])
+    try:
+        repl._handle_chat(goal)
+    except Exception as e:
+        logger.error("Headless 执行异常: %s", e, exc_info=True)
+        console.print(f"[red]❌ 任务执行失败: {e}[/red]")
+        return False
+    finally:
+        # 恢复审批处理器，避免影响后续可能的交互式使用
+        ToolNode.set_approval_handler(None)
+
+    # ── 提取最终结果 ──
+    messages = repl.ctx_mgr.get_messages()
+    assistant_msgs = [m for m in messages if m.get("role") == "assistant"]
+    if assistant_msgs:
+        final_result = assistant_msgs[-1].get("content", "")
+        # 结果已通过 _handle_chat → _run_*_engine → console.print 输出
+        # 这里只做最终确认
+        if final_result:
+            console.print(f"\n[dim]✅ Headless 执行完成，输出 {len(final_result)} 字符[/dim]")
+            return True
+
+    # 检查是否有 _last_result
+    if repl._last_result:
+        console.print(f"\n[dim]✅ Headless 执行完成[/dim]")
+        return True
+
+    console.print("[yellow]⚠️  执行完成但未产生输出[/yellow]")
+    return False
