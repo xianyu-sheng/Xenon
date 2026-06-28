@@ -520,6 +520,59 @@ def _check_hollow_answer(
     return {"is_hollow": False, "reason": ""}
 
 
+def _is_substantive_answer(text: str) -> bool:
+    """检查文本是否为实质性回答，而非计划描述/元语言。
+
+    实质性回答的特征:
+    1. 包含具体内容（代码、分析、数据等）
+    2. 不以"我将...""让我..."等计划描述开头
+
+    计划描述示例（应返回 False）:
+    - "好的，让我先读取文件结构，然后分析代码质量"
+    - "我先检查一下项目目录..."
+    - "我将分析这个项目的代码..."
+
+    实质性回答示例（应返回 True）:
+    - "## 分析报告\\n\\n项目采用Flask架构..."
+    - "这个问题可以通过以下方式解决：..."
+    """
+    text_stripped = text.strip()
+    if len(text_stripped) < 20:
+        return False
+
+    # ── 计划描述语言检测 ──
+    plan_patterns = [
+        r"^(好的|好[的，]|嗯[，,]|OK[，,])\s*(让我|我先|我将|我会|接下来|现在)",
+        r"^(让我|我先|我将|我会|接下来|现在)[，，]?\s*(查看|读取|检查|分析|搜索|找|确认|看看|研究|理解|探索|扫描)",
+        r"^(正在|准备|开始|尝试|需要)\s*(读取|分析|检查|搜索)",
+        r"^首先[，,]?\s*(让?我)",
+        r"^(基于|根据).*(分析|结果|信息).*(，|,).*(我将|我会|可以|给出|提供|总结)",
+        r"好的，让我先",
+        r"让我先.*(，|。|\n)",
+        r"请稍等.*让我",
+        r"我先.*一下",
+    ]
+    for pattern in plan_patterns:
+        if re.search(pattern, text_stripped):
+            return False
+
+    # ── 检查实质性内容标记 ──
+    content_markers = [
+        "##", "###", "```", "def ", "class ", "import ",
+        "项目", "架构", "技术栈", "代码", "建议", "改进",
+        "Flask", "React", "Python", "SQLite", "API",
+        "分析报告", "总结", "解决方案", "修复",
+    ]
+    has_content = any(marker in text_stripped for marker in content_markers)
+
+    # ── 检查是否空洞 ──
+    hollow_check = _check_hollow_answer(text_stripped)
+    if hollow_check.get("is_hollow"):
+        return False
+
+    return has_content or len(text_stripped) >= 200
+
+
 def _is_action_task_input(text: str) -> bool:
     """检测用户输入是否为纯操作类任务（允许简短回答）。"""
     action_verbs = ("创建", "写入", "删除", "移动", "复制", "安装", "执行", "运行")
@@ -903,6 +956,7 @@ class ReActEngine:
         requires_tools = self._input_requires_tools(user_input)
         no_tool_streak = 0  # 连续未执行工具的轮次
         thought_only_streak = 0  # 连续 thought-only 轮次
+        correction_count = 0  # P3-Fix11: 纠正消息计数器
 
         for i in range(self.max_iterations):
             # ── 中断检查（Esc / Ctrl+C）──
@@ -939,44 +993,64 @@ class ReActEngine:
                         )
             logger.debug(f"ReAct 迭代 {i + 1}/{self.max_iterations}")
 
-            # ── P0 修复: 接近上限时注入合成提示 ──
+            # ── P2-Fix6: 自适应合成时机（基于实际工具使用进度）──
             remaining = self.max_iterations - i
-            if remaining <= self.hurry_warning_threshold and i > 0 and not tracker.has_executions():
-                # 还没用过工具 → 强制要求快行动
+            tool_count = len(tracker.calls)
+            successful_tools = sum(1 for c in tracker.calls if c.success)
+            # 检测是否在进行文件探索（read_file/list_files）
+            exploring = any(
+                c.tool_name in ("read_file", "list_files", "search_files", "github_fetch")
+                for c in tracker.calls[-3:]
+            ) if tracker.calls else False
+
+            # 场景 A: 预算消耗30%+但无任何工具使用 → 强制要求
+            if i >= max(2, int(self.max_iterations * 0.3)) and tool_count == 0:
                 hurry_msg = (
-                    f"⚠️ 注意：仅剩 {remaining} 轮迭代机会。"
-                    f"请立即使用工具开始执行任务，不要再只做探索。"
+                    f"你已经用了 {i + 1} 轮但没有使用任何工具。"
+                    f"请立即使用工具开始执行任务。"
                     f"用 list_files 了解结构，用 read_file 读取关键文件。"
                 )
                 messages.append({"role": "user", "content": hurry_msg})
-                logger.info(f"ReAct: 注入加速提示 (剩余 {remaining} 轮，无工具执行)")
-            elif remaining <= self.force_synthesis_threshold and tracker.has_executions():
-                # 用过工具但还在探索 → 强制要求合成，附带已收集数据的摘要
+                logger.info(f"ReAct: 30%预算无工具使用，注入加速提示 (第 {i + 1} 轮)")
+            # 场景 B: 已用工具且接近上限 → 强制合成（附带数据摘要）
+            elif remaining <= self.force_synthesis_threshold and tool_count > 0:
                 obs_summary = _build_observation_summary(messages, tracker)
                 hurry_msg = (
-                    f"🛑 仅剩 {remaining} 轮！这是你的最后机会。\n\n"
-                    f"## 你已收集的数据摘要\n{obs_summary}\n\n"
-                    f"## 你现在必须做的事\n"
-                    f"立即输出 final_answer，基于上述已收集的数据直接交付完整的分析报告。\n"
-                    f"❌ 不要再调用 read_file/list_files —— 你没有时间了\n"
-                    f"❌ 不要输出 \"我将...\" \"继续...\" —— 直接写报告内容\n"
-                    f"✅ 输出格式：{{\"thought\": \"基于已收集数据总结...\", \"final_answer\": \"## 分析报告\\n\\n### 1. 项目概述\\n...\"}}\n"
-                    f"final_answer 必须是可直接交付的完整报告。"
+                    f"仅剩 {remaining} 轮！直接基于已收集数据输出 final_answer。\n\n"
+                    f"## 已收集的数据\n{obs_summary}\n\n"
+                    f"输出 {{\"final_answer\": \"完整的分析报告\"}}，不要再调用工具。"
                 )
                 messages.append({"role": "user", "content": hurry_msg})
-                logger.info(f"ReAct: 注入强制合成提示 (剩余 {remaining} 轮，含观察摘要)")
-            elif remaining <= self.hurry_warning_threshold and tracker.has_executions() and len(tracker.calls) >= self.midpoint_check_calls:
-                # 中点检查：已执行 6+ 次工具但还在读文件 → 提醒预算
+                logger.info(f"ReAct: 强制合成 (剩余 {remaining} 轮，已执行 {tool_count} 次工具)")
+            # 场景 C: 提醒预算但给更多空间（仅当未在探索新文件时）
+            elif remaining <= self.hurry_warning_threshold and tool_count > 0 and not exploring:
                 midpoint_msg = (
-                    f"⚠️ 探索预算提醒：你已执行 {len(tracker.calls)} 次工具调用，剩余 {remaining} 轮。\n"
-                    f"根据探索预算规则，你应该已经读了核心源文件，现在准备合成 final_answer。\n"
-                    f"如果还在读 build 脚本/配置文件/README，立即停止——直接基于已有数据输出 final_answer。"
+                    f"已执行 {tool_count} 次工具调用，剩余 {remaining} 轮。"
+                    f"如果已读取核心文件，现在开始合成 final_answer。"
                 )
                 messages.append({"role": "user", "content": midpoint_msg})
-                logger.info(f"ReAct: 中点预算提醒 (已 {len(tracker.calls)} 次调用，剩余 {remaining} 轮)")
+                logger.info(f"ReAct: 合成提醒 (已 {tool_count} 次调用，剩余 {remaining} 轮)")
+            # 场景 D: 还在探索文件但接近预算 → 温和提醒
+            elif remaining <= self.hurry_warning_threshold + 1 and exploring and tool_count >= 3:
+                gentle_msg = (
+                    f"已读取 {successful_tools} 个文件，剩余 {remaining} 轮。"
+                    f"再读最关键的 1-2 个文件就可以开始合成了。"
+                )
+                messages.append({"role": "user", "content": gentle_msg})
 
             # ── 调用 LLM（优先原生工具调用，回退 JSON 解析）──
-            native_response = self._call_llm_native(messages)
+            try:
+                native_response = self._call_llm_native(messages)
+            except Exception as e:
+                logger.error(f"ReAct: LLM 调用异常 (第 {i + 1} 轮): {e}", exc_info=True)
+                if tracker.has_executions():
+                    compiled = _compile_exhaustion_report(tracker, messages, self.max_iterations)
+                    self.callback.on_warning(f"LLM 调用异常，已自动编译结果: {e}")
+                    self.callback.on_finish(compiled)
+                    return compiled
+                error_msg = f"## 引擎异常\n\nLLM 调用失败 (第 {i + 1} 轮): {e}\n请检查模型配置后重试。"
+                self.callback.on_error(error_msg)
+                return error_msg
             response_text = native_response.get("raw_text", "")
             messages.append({"role": "assistant", "content": response_text})
 
@@ -985,9 +1059,33 @@ class ReActEngine:
 
             # ── 处理 JSON 解析失败（仅回退路径）──
             if parsed.get("parse_error"):
+                correction_count += 1
+                # P3-Fix11: 最多2次格式纠正后强制退出
+                if correction_count >= 3:
+                    logger.warning(
+                        f"ReAct: 连续 {correction_count} 次格式错误，停止纠正并退出"
+                    )
+                    self.callback.on_warning(
+                        f"LLM 格式错误过多（{correction_count}次），停止执行"
+                    )
+                    last_obs = _extract_last_observation(messages)
+                    if last_obs and len(last_obs) > 50:
+                        result = (
+                            f"## 任务执行中断\n\n"
+                            f"原因: LLM 连续 {correction_count} 次输出格式错误。\n\n"
+                            f"### 最后收集到的数据\n{last_obs[:2000]}"
+                        )
+                    else:
+                        result = (
+                            f"## 任务执行中断\n\n"
+                            f"原因: LLM 连续 {correction_count} 次输出格式错误。\n"
+                            f"请检查 LLM 配置后重试。"
+                        )
+                    self.callback.on_finish(result)
+                    return result
                 logger.warning(
                     f"ReAct: 第 {i + 1} 轮 JSON 解析失败（原生工具调用也失败），"
-                    f"要求 LLM 以正确格式重试"
+                    f"要求 LLM 以正确格式重试 (纠正 #{correction_count})"
                 )
                 self.callback.on_warning(
                     f"LLM 输出格式错误，要求重试（第 {i + 1} 轮）"
@@ -1113,6 +1211,35 @@ class ReActEngine:
                     raw_response = native_response.get("raw_text", "")
                     answer = (thought or raw_response or "").strip()
                     if answer:
+                        # P2-Fix5: 非工具任务也要检查空洞回答质量
+                        hollow_check = _check_hollow_answer(
+                            answer, user_input, tracker,
+                            min_length=self.min_final_answer_length,
+                            min_sections=self.min_structured_sections,
+                        )
+                        if hollow_check["is_hollow"]:
+                            remaining = self.max_iterations - i
+                            if remaining >= 1:
+                                logger.warning(
+                                    "ReAct: 非工具任务回答空洞 (%s)，要求重新回答",
+                                    hollow_check['reason'],
+                                )
+                                correction = (
+                                    "你的回答存在问题：{reason}\n\n"
+                                    "请直接回答用户的问题，给出完整、有实质内容的回答。\n"
+                                    "不要用'我将...'、'基于...'这类元语言开头。"
+                                ).format(reason=hollow_check['reason'])
+                                messages.append({"role": "user", "content": correction})
+                                self.callback.on_warning(
+                                    f"非工具任务回答空洞: {hollow_check['reason']}"
+                                )
+                                continue
+                            logger.warning(
+                                "ReAct: 非工具任务回答空洞但无剩余轮次，附带警告返回"
+                            )
+                            warning = "\n\n[注意] 回答可能不够完整。"
+                            self.callback.on_finish(answer + warning)
+                            return answer + warning
                         logger.info("ReAct: 非工具任务，接受 thought 作为 final_answer")
                         self.callback.on_finish(answer)
                         return answer
@@ -1272,21 +1399,38 @@ class ReActEngine:
             },
         ]
 
-        try:
-            result = chat_completion(
-                self.model_priority[0],
-                compile_messages,
-                max_tokens=8192,
-                temperature=0.3,
-            )
-            if result and len(result.strip()) > 100:
-                return result
-        except Exception as e:
-            logger.warning(f"怜悯编译 LLM 调用失败: {e}")
+        # P3-Fix9: 主模型 + 降级模型 + 丰富耗尽报告
+        for model_idx, model_id in enumerate(self.model_priority[:2]):  # 最多尝试2个模型
+            try:
+                result = chat_completion(
+                    model_id,
+                    compile_messages,
+                    max_tokens=8192,
+                    temperature=0.3,
+                )
+                if result and len(result.strip()) > 100 and _is_substantive_answer(result):
+                    return result
+                logger.warning(
+                    f"怜悯编译: 模型 #{model_idx} 输出无效 (len=%d)", len(result.strip()) if result else 0,
+                )
+            except Exception as e:
+                logger.warning(f"怜悯编译: 模型 #{model_idx} ({model_id}) 失败: {e}")
 
-        # LLM 失败，回退到编译报告
+        # 所有 LLM 失败 — 回退到丰富的耗尽报告
         compiled = _compile_exhaustion_report(tracker, messages, self.max_iterations)
-        return compiled
+        # 在报告前添加结构化摘要
+        summary_prefix = f"## 任务执行摘要\n\n共执行 {len(tracker.calls)} 次工具调用"
+        if tracker.has_executions():
+            success_count = sum(1 for c in tracker.calls if c.success)
+            summary_prefix += f"（{success_count} 成功, {len(tracker.calls) - success_count} 失败）"
+            summary_prefix += "\n\n### 执行记录\n"
+            for c in tracker.calls[:10]:
+                icon = "OK" if c.success else "FAIL"
+                params_str = ", ".join(f"{k}={str(v)[:60]}" for k, v in c.params.items())
+                summary_prefix += f"\n- [{icon}] **{c.tool_name}**({params_str})"
+                if c.result_summary:
+                    summary_prefix += f"\n  -> {c.result_summary[:200]}"
+        return summary_prefix + "\n\n---\n\n" + compiled
 
     def _call_llm(self, messages: list[dict[str, str]], max_tokens: int = _REACT_LOOP_MAX_TOKENS) -> str:
         """调用 LLM，支持多模型 fallback。"""
@@ -1352,13 +1496,18 @@ class ReActEngine:
                         # 成功解析 → 返回
                         parsed["raw_text"] = native.text
                         return parsed
-                    # 解析失败但文本有意义 → 当作 final_answer
-                    if len(native.text.strip()) > 50:
+                    # 解析失败但文本有意义 → 检查是否为实质性回答
+                    if _is_substantive_answer(native.text):
                         return {
                             "thought": "任务完成",
                             "final_answer": native.text,
                             "raw_text": native.text,
                         }
+                    # 计划描述/空洞文本 → 当作解析错误，让引擎纠正
+                    logger.warning(
+                        "_call_llm_native: 文本不是实质性回答 (len=%d): %.100s",
+                        len(native.text), native.text.strip(),
+                    )
 
                 break  # 模型成功但不含有效响应，跳出尝试下一个
 
@@ -1423,6 +1572,8 @@ class ReActEngine:
             "是什么", "什么是", "为什么", "如何理解",
             "总结", "概括", "解释", "说明一下",
             "有什么", "有哪些", "还有哪些",
+            "检查", "核对", "验证", "核查", "校验", "审视", "审阅",
+            "是否符合", "是否一致", "是否合理", "是否匹配",
         ]
         text_lower = text.lower()
         # 如果任务明确是 pure analysis，不需要工具
@@ -1431,7 +1582,14 @@ class ReActEngine:
             "做", "执行", "跑", "创建", "写入", "修改", "删除", "克隆",
             "do ", "make", "run", "build", "fix", "write", "clone",
         ])
-        if is_pure_analysis and not has_action_marker:
+        # ── 检查是否需要读取文件内容（章节/文件/大纲/剧情等实体）──
+        # 即使任务是"检查/分析"，如果需要读取实际文件内容，仍然需要工具
+        needs_file_read = any(kw in text_lower for kw in [
+            "章", "章节", "文件", "大纲", "剧情", "代码", "第", "内容",
+            "chapter", "file", "code", "content",
+            ".py", ".js", ".ts", ".md", ".txt", ".json", ".yaml",
+        ])
+        if is_pure_analysis and not has_action_marker and not needs_file_read:
             return False
 
         # ── 正向关键词 ──

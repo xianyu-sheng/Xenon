@@ -195,19 +195,20 @@ class AsyncReActEngine(ReActEngine):
                                          run_id=run_id, kind="react_iteration",
                                          data={"iteration": i + 1, "message_count": len(messages)})
 
-                # 异步调用 LLM
-                response = await self._call_llm_async(messages)
+                # 异步调用 LLM（P2-Fix7: 优先原生工具调用）
+                native_response = await self._call_llm_native_async(messages)
 
                 # ── Trace: LLM response ──
                 if self._trace:
                     self._trace.emit_llm("LLM→CORE", model=self.model_priority[0],
                                          run_id=run_id, kind="react_response",
-                                         data={"response_len": len(response)})
+                                         data={"response_len": len(native_response.get("raw_text", ""))})
 
-                messages.append({"role": "assistant", "content": response})
+                response_text = native_response.get("raw_text", "")
+                messages.append({"role": "assistant", "content": response_text})
 
-                # 解析 LLM 输出
-                parsed = self._parse_response(response)
+                # 解析 LLM 输出（优先使用原生 tool_calls）
+                parsed = native_response
 
                 # ── 处理 JSON 解析失败 ──
                 if parsed.get("parse_error"):
@@ -459,9 +460,86 @@ class AsyncReActEngine(ReActEngine):
 
     # ── LLM 调用 ──────────────────────────────────────────────
 
+    async def _call_llm_native_async(
+        self, messages: list[dict[str, str]],
+        max_tokens: int = 131072,
+    ) -> dict[str, Any]:
+        """异步调用 LLM — 优先原生工具调用，回退 JSON 解析。
+
+        P2-Fix7: 对齐 sync 引擎的 _call_llm_native() 逻辑。
+        通过 API 的 function calling 机制获取结构化 tool_calls。
+        """
+        from omniagent.utils.llm_client import chat_completion_with_tools_async, NativeToolResponse
+        from omniagent.utils.response_adapter import parse_react
+        from omniagent.engine.react_engine import _is_substantive_answer
+
+        last_text = ""
+        for model_id in self.model_priority:
+            try:
+                await self._publish_event("llm.model_selected", run_id="", model=model_id)
+                native: NativeToolResponse = await chat_completion_with_tools_async(
+                    model_id, messages,
+                    tools=self.tools,
+                    max_tokens=max_tokens,
+                    temperature=0.3,
+                )
+
+                # 优先: 原生 tool_calls
+                if native.has_tool_calls:
+                    tc = native.first_tool_call()
+                    logger.debug(
+                        "AsyncReAct 原生工具调用: %s(%s)",
+                        tc["name"], str(tc["arguments"])[:200],
+                    )
+                    return {
+                        "thought": f"调用工具 {tc['name']}",
+                        "action": tc["name"],
+                        "action_input": tc["arguments"],
+                        "raw_text": native.text or f"tool_call: {tc['name']}",
+                    }
+
+                # 次优: 文本中包含 final_answer 或 JSON
+                if native.text and native.text.strip():
+                    last_text = native.text
+                    parsed = parse_react(native.text)
+                    if not parsed.get("parse_error"):
+                        parsed["raw_text"] = native.text
+                        return parsed
+                    # 文本有意义但非 JSON → 检查是否实质性回答
+                    if _is_substantive_answer(native.text):
+                        return {
+                            "thought": "任务完成",
+                            "final_answer": native.text,
+                            "raw_text": native.text,
+                        }
+                    logger.warning(
+                        "AsyncReAct: 文本不是实质性回答 (len=%d): %.100s",
+                        len(native.text), native.text.strip(),
+                    )
+
+                break
+
+            except Exception as e:
+                logger.warning(f"模型 {model_id} 原生工具调用失败: {e}，尝试下一个...")
+                continue
+
+        # 最终回退: 传统文本调用
+        if not last_text:
+            try:
+                last_text = await chat_completion_async(
+                    self.model_priority[0], messages,
+                    max_tokens=max_tokens, temperature=0.3,
+                )
+            except Exception:
+                pass
+
+        parsed = parse_react(last_text) if last_text else {"parse_error": True, "raw_text": ""}
+        parsed["raw_text"] = last_text
+        return parsed
+
     async def _call_llm_async(self, messages: list[dict[str, str]],
                                max_tokens: int = 131072) -> str:
-        """异步调用 LLM，支持多模型 fallback。"""
+        """异步调用 LLM，支持多模型 fallback。（保留用于兼容）"""
         last_error = None
         for model_id in self.model_priority:
             try:

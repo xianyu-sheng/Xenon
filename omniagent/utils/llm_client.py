@@ -849,6 +849,151 @@ def chat_completion_with_tools(
     raise last_error if last_error else RuntimeError("All retries failed (native tools)")
 
 
+async def chat_completion_with_tools_async(
+    model_id: str,
+    messages: list[dict[str, str]],
+    tools: dict[str, dict],
+    *,
+    credentials: dict[str, Any] | None = None,
+    max_tokens: int = 131072,
+    temperature: float = 0.3,
+    timeout: float = 120.0,
+    max_retries: int = 3,
+) -> NativeToolResponse:
+    """异步版本: 带原生工具调用的 chat completion。"""
+    import asyncio
+
+    endpoint = build_endpoint(model_id, credentials)
+    tool_schemas = build_tool_schemas(tools)
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            if endpoint.provider == "anthropic":
+                return await _native_call_anthropic_async(
+                    endpoint, messages, tool_schemas,
+                    max_tokens, temperature, timeout,
+                )
+            else:
+                return await _native_call_openai_compat_async(
+                    endpoint, messages, tool_schemas,
+                    max_tokens, temperature, timeout,
+                )
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status == 429:
+                await asyncio.sleep(2 ** attempt)
+                last_error = e
+            elif 500 <= status < 600:
+                await asyncio.sleep(2 ** attempt)
+                last_error = e
+            else:
+                raise
+        except (
+            httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout,
+            httpx.RemoteProtocolError, httpx.WriteError, httpx.PoolTimeout,
+        ) as e:
+            await asyncio.sleep(min(2 ** attempt, 8))
+            last_error = e
+
+    raise last_error if last_error else RuntimeError("All retries failed (native tools async)")
+
+
+async def _native_call_openai_compat_async(
+    endpoint, messages, tool_schemas, max_tokens, temperature, timeout,
+) -> NativeToolResponse:
+    """OpenAI 兼容格式的异步原生工具调用。"""
+    url = _openai_compat_url(endpoint, "chat/completions")
+    headers = {
+        "Authorization": f"Bearer {endpoint.api_key}",
+        "Content-Type": "application/json",
+    }
+    payload: dict[str, Any] = {
+        "model": endpoint.model_name,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if tool_schemas:
+        payload["tools"] = tool_schemas
+        payload["tool_choice"] = "auto"
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+
+    choice = data["choices"][0]
+    msg = choice.get("message", {})
+    text = msg.get("content") or ""
+    reasoning = msg.get("reasoning_content") or msg.get("thinking") or ""
+    if not text and reasoning:
+        text = reasoning
+
+    raw_tool_calls = msg.get("tool_calls") or []
+    tool_calls = []
+    for tc in raw_tool_calls:
+        func = tc.get("function", {})
+        name = func.get("name", "")
+        args_str = func.get("arguments", "{}")
+        try:
+            args = json.loads(args_str)
+        except (json.JSONDecodeError, TypeError):
+            args = {}
+        tool_calls.append({"id": tc.get("id", ""), "name": name, "arguments": args})
+
+    return NativeToolResponse(text=text, tool_calls=tool_calls, finish_reason=choice.get("finish_reason", "stop"))
+
+
+async def _native_call_anthropic_async(
+    endpoint, messages, tool_schemas, max_tokens, temperature, timeout,
+) -> NativeToolResponse:
+    """Anthropic 格式的异步原生工具调用。"""
+    url = f"{endpoint.base_url.rstrip('/')}/v1/messages"
+    headers = {
+        "x-api-key": endpoint.api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    system_msgs = [m["content"] for m in messages if m["role"] == "system"]
+    chat_msgs = [{"role": m["role"], "content": m["content"]} for m in messages if m["role"] != "system"]
+
+    payload: dict[str, Any] = {
+        "model": endpoint.model_name,
+        "messages": chat_msgs,
+        "max_tokens": max_tokens,
+    }
+    if system_msgs:
+        payload["system"] = "\n\n".join(system_msgs)
+    if tool_schemas:
+        payload["tools"] = tool_schemas
+    if temperature > 0:
+        payload["temperature"] = temperature
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+
+    text = ""
+    tool_calls = []
+    for block in data.get("content", []):
+        if block.get("type") == "text":
+            text += block.get("text", "")
+        elif block.get("type") == "tool_use":
+            tool_calls.append({
+                "id": block.get("id", ""),
+                "name": block.get("name", ""),
+                "arguments": block.get("input", {}),
+            })
+
+    return NativeToolResponse(
+        text=text.strip() if text else "",
+        tool_calls=tool_calls,
+        finish_reason=data.get("stop_reason", "end_turn"),
+    )
+
+
 def _native_call_openai_compat(
     endpoint: ModelEndpoint,
     messages: list[dict[str, str]],

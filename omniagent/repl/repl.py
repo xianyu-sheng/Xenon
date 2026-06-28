@@ -246,12 +246,19 @@ class REPL:
             "- 如果被问「你是什么模型」或类似身份问题：根据系统注入的模型信息如实回答，"
             "例如「当前由 DeepSeek V4 Pro 驱动」。不要编造模型名——使用系统提供的信息。\n"
             "\n"
+            "## 🔴 关键规则：不要「描述计划」，要「执行」或「请求工具」\n"
+            "当用户要求你检查/分析/修改文件、章节、代码等需要读取实际内容的任务时：\n"
+            "1. 如果你可以直接回答 → 直接给出完整分析/回答\n"
+            "2. 如果你需要读取文件才能回答 → 在回复最开头单独一行写 [REQUIRES_TOOLS]\n"
+            "❌ 绝对禁止：输出「好的，让我读取文件...」「先检查...」等描述计划的话，"
+            "然后不执行任何操作。你说这种话意味着你需要工具——请直接写 [REQUIRES_TOOLS]。\n"
+            "\n"
             "## 工具能力\n"
             "你具备文件读写、命令执行、网页搜索等工具能力。"
             "当前为默认模式——你可以直接用自身知识回答绝大多数问题。"
-            "如果某个任务确实需要上述工具才能完成，"
+            "如果某个任务确实需要上述工具才能完成（读取文件、写文件、执行命令等），"
             "在回复最开头单独一行写 [REQUIRES_TOOLS] 即可自动获得工具支持。"
-            "不要滥用此标记——仅在确实需要时使用。"
+            "当你无法仅凭训练知识完成任务时，请果断使用此标记。"
         )
 
     @staticmethod
@@ -838,10 +845,23 @@ class REPL:
         )
 
         try:
-            # ── 通用对话自动使用 direct 模式（忽略全局 mode 设置）──
-            # PlanExecute/ReAct 等重型引擎对纯对话无益，且会错误地
-            # 从对话历史中提取目录进行不必要的侦察分析。
-            if intent is None:
+            # ── 统一分类路由（P0修复: 使用 classify_input 替代 intent-is-None）──
+            # 核心原则: 需要工具 → 强制 ReAct；纯对话 → direct
+            from omniagent.repl.prompt_optimizer import classify_input as _classify
+            classification = _classify(optimized)
+
+            if classification["requires_tools"]:
+                # 需要工具 → 始终用 ReAct（覆盖用户 mode 设置，确保任务执行）
+                console.print(
+                    f"[dim]🔧 路由: {classification['reason']}"
+                    f"（置信度: {classification['confidence']}）[/dim]"
+                )
+                if classification["suggested_mode"] == "novel" and mode == "novel":
+                    self._run_novel_engine(optimized, model_ids)
+                else:
+                    self._run_react_engine(optimized, model_ids)
+            elif classification["confidence"] == "low":
+                # 纯对话/咨询 → direct 模式
                 self._run_direct(optimized, model_ids)
             elif mode == "react":
                 self._run_react_engine(optimized, model_ids)
@@ -919,6 +939,31 @@ class REPL:
                                 "run.warning",
                                 warning="LLM requested tools via [REQUIRES_TOOLS] signal",
                             )
+                        self.ctx_mgr.trim_last_assistant()
+                        self._run_react_engine(user_input, model_ids)
+                        return
+
+                    # ── 后响应验证: 检测计划描述/空洞回答 ──
+                    if _looks_like_plan_not_answer(response_text):
+                        console.print(
+                            "[yellow]⚠️  LLM 输出为计划描述而非实际内容，"
+                            "自动切换到 ReAct 模式...[/yellow]"
+                        )
+                        if self._current_run_recorder is not None:
+                            self._current_run_recorder.emit(
+                                "run.warning",
+                                warning="Direct mode output was plan-like, switching to ReAct",
+                            )
+                        self.ctx_mgr.trim_last_assistant()
+                        self._run_react_engine(user_input, model_ids)
+                        return
+
+                    # 短回复 + 疑似需要工具 → 也切 ReAct
+                    if len(response_text.strip()) < 50 and self._detect_tool_need(user_input):
+                        console.print(
+                            "[yellow]⚠️  LLM 输出过短但任务可能需要工具，"
+                            "切换到 ReAct 模式...[/yellow]"
+                        )
                         self.ctx_mgr.trim_last_assistant()
                         self._run_react_engine(user_input, model_ids)
                         return
@@ -1317,6 +1362,13 @@ class REPL:
         re.compile(r"(?:help\s+me|please).{0,10}(?:write|create|build|implement|develop|make).{0,20}(?:a|an|the|project|script|app|code)", re.I),
         # 安装/包管理
         re.compile(r"(?:安装|install).{0,15}(?:包|库|依赖|package|pip|npm|yarn|cargo)", re.I),
+        # 内容检查/审查（需要读取文件）
+        re.compile(r"(?:检查|核对|验证|审查|审阅).{0,30}(?:章节|大纲|剧情|内容|第\d+章|关联|衔接|连贯|符合|是否)", re.I),
+        re.compile(r"(?:check|verify|review|examine).{0,30}(?:chapter|outline|content|plot)", re.I),
+        # 调整/修改章节内容（需要读写文件）
+        re.compile(r"(?:调整|修改|修正|改进).{0,30}(?:章节|章|内容|段落|描写|文字墙|词组|句子)", re.I),
+        # 小说/章节管理（需要读写文件）
+        re.compile(r"(?:第\d+章|章节|大纲|剧情|小说).{0,10}(?:检查|审核|审查|分析|调整|修改|编辑|更新)", re.I),
     ]
 
     @classmethod
@@ -1346,6 +1398,8 @@ class REPL:
             r"分析.{0,30}(?:项目|代码|仓库|工程|架构|质量|性能|不足|问题|改进)",
             r"(?:评估|审查|检查|诊断).{0,20}(?:项目|代码|质量|安全)",
             r"(?:分析|评估).{0,10}(?:代码|结构|设计|模式)",
+            r"(?:检查|核对|验证|审查|审阅).{0,30}(?:章节|大纲|剧情|内容|第\d+章|关联|衔接|是否符合|章)",
+            r"第\d+章.{0,20}(?:检查|分析|审查|审核|评估|调整)",
         ]
         for p in analysis_patterns:
             if re.search(p, text, re.I):
@@ -1649,6 +1703,83 @@ def start_repl(
     repl.run()
 
 
+def _looks_like_plan_not_answer(text: str) -> bool:
+    """检测 LLM 文本是否为"计划描述"而非实际回答。
+
+    匹配模式:
+    - "好的，让我先读取文件..."
+    - "我先检查一下..."
+    - "我将分析这个项目..."
+    - "接下来我要..."
+
+    Returns:
+        True 如果文本读起来像计划描述（不应被接受为最终答案）
+    """
+    text_stripped = text.strip()
+    if len(text_stripped) < 6:
+        return False
+
+    import re
+
+    # 短文本快速检测: 以"让我/我先/我将"开头且<30字符 → 计划描述
+    if len(text_stripped) < 30 and re.search(r"^(让我|我先|我将|我会)", text_stripped):
+        return True
+
+    # 计划描述开头模式
+    plan_openers = [
+        # "好的让我/我先/我将" — 允许开头词和动词之间有逗号/空格
+        r"^(好的|好|嗯|OK)[，,、\s]*(让我|我先|我将|我会|接下来|现在)",
+        # "让我/我先/我将" + 动作动词
+        r"^(让我|我先|我将|我会|接下来|现在)[，,、\s]*(查看|读取|检查|分析|搜索|找|确认|看看|研究|理解|探索|扫描|读|看|查)",
+        # "正在/准备/开始/尝试" + 动作
+        r"^(正在|准备|开始|尝试|需要)[，,、\s]*(读取|分析|检查|搜索|查看|做|进行)",
+        # "首先" 开头
+        r"^首先[，,、\s]*(让?我)",
+        # 直接匹配常见计划短语
+        r"好的[，,]?让我[先再]",
+        r"让我[先再].*[，。\n]",
+        r"我先.*一下",
+        r"请稍等.*让我",
+    ]
+    for pattern in plan_openers:
+        m = re.search(pattern, text_stripped)
+        if m:
+            after_opener = text_stripped[m.end():].strip()
+            # 如果计划描述之后的内容很短（无实质内容），确认是空洞
+            if len(after_opener) < 100:
+                return True
+            # 检查后续内容是否也是元语言
+            meta_after = [
+                r"^(让我|我先|我将|我会|接下来|现在)",
+                r"^分析一下|检查一下|看看[。，]",
+                r"^进行.*分析|进行.*检查",
+            ]
+            for meta_pat in meta_after:
+                if re.search(meta_pat, after_opener):
+                    return True
+            # 关键检查: 全文是否包含实际结果标记？
+            # 如果没有报告/代码/具体内容，仅有文件列表 → 仍是计划描述
+            result_markers = [
+                "##", "###", "```", "报告", "总结", "分析结果",
+                "项目采用", "技术栈", "架构", "改进建议",
+                "问题是", "原因是", "解决方案",
+            ]
+            has_result = any(marker in text_stripped for marker in result_markers)
+            if not has_result:
+                return True
+
+    # 借用 react_engine 的空洞检测
+    try:
+        from omniagent.engine.react_engine import _check_hollow_answer
+        hollow = _check_hollow_answer(text_stripped)
+        if hollow.get("is_hollow"):
+            return True
+    except ImportError:
+        pass
+
+    return False
+
+
 def run_headless(
     *,
     goal: str,
@@ -1781,21 +1912,36 @@ def run_headless(
         # 恢复审批处理器，避免影响后续可能的交互式使用
         ToolNode.set_approval_handler(None)
 
-    # ── 提取最终结果 ──
+    # ── 提取最终结果（P3-Fix8: 加入内容验证）──
     messages = repl.ctx_mgr.get_messages()
     assistant_msgs = [m for m in messages if m.get("role") == "assistant"]
     if assistant_msgs:
         final_result = assistant_msgs[-1].get("content", "")
-        # 结果已通过 _handle_chat → _run_*_engine → console.print 输出
-        # 这里只做最终确认
         if final_result:
-            console.print(f"\n[dim]✅ Headless 执行完成，输出 {len(final_result)} 字符[/dim]")
+            # 验证结果不是计划描述
+            if _looks_like_plan_not_answer(final_result):
+                console.print(
+                    f"[yellow]⚠️  Headless 执行完成但输出为计划描述而非实际结果"
+                    f"（{len(final_result)} 字符）[/yellow]"
+                )
+                return False
+            # 验证结果不是空洞回答
+            try:
+                from omniagent.engine.react_engine import _check_hollow_answer
+                hollow = _check_hollow_answer(final_result)
+                if hollow.get("is_hollow"):
+                    console.print(
+                        f"[yellow]⚠️  Headless 输出可能为空洞回答: {hollow['reason']}[/yellow]"
+                    )
+                    return False
+            except ImportError:
+                pass
+            console.print(f"\n[dim]Headless 执行完成，输出 {len(final_result)} 字符[/dim]")
             return True
 
-    # 检查是否有 _last_result
     if repl._last_result:
-        console.print(f"\n[dim]✅ Headless 执行完成[/dim]")
+        console.print(f"\n[dim]Headless 执行完成[/dim]")
         return True
 
-    console.print("[yellow]⚠️  执行完成但未产生输出[/yellow]")
+    console.print("[yellow]Headless 执行完成但未产生输出[/yellow]")
     return False

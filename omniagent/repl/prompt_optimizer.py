@@ -192,6 +192,11 @@ TEMPLATES: list[PromptTemplate] = [
             r"(?:分析|评价|点评).*(?:故事|情节|角色|文笔|节奏)",
             r"(?:write|create|continue|revise|expand).*(?:novel|story|chapter|fiction)",
             r"(?:write|build|develop).*(?:character|world|outline|plot)",
+            # 检查/核对/验证 章节/大纲/内容
+            r"(?:检查|核对|验证|审查|审阅).*(?:章节|大纲|剧情|内容|第\d+章|关联|是否符合|衔接|连贯)",
+            r"(?:check|verify|review|examine).{0,20}(?:chapter|outline|plot|content)",
+            # 调整/修改 章节/内容
+            r"(?:调整|修改|修正|改进).{0,20}(?:章节|章|内容|段落|描写|文字墙|词组)",
             # 多小说管理
             r"(?:切换|打开|继续写|继续创作).{0,5}(?:小说|故事)",
             r"(?:新建|创建).*(?:小说|故事|作品)",
@@ -380,3 +385,171 @@ def get_intent_display(intent: str | None) -> str:
     if intent is None:
         return "💬 通用对话"
     return display_map.get(intent, "💬 通用对话")
+
+
+# ── 统一输入分类器 ────────────────────────────────────────
+
+
+def classify_input(text: str) -> dict:
+    """统一输入分类器 — 合并意图检测 + 工具需求检测为单一权威信号。
+
+    解决三层分类器（detect_intent / _detect_tool_need / _input_requires_tools）
+    发散导致的"Direct Mode Trap"问题。
+
+    Returns:
+        {
+            "intent": str | None,       # 意图分类
+            "requires_tools": bool,     # 是否需要工具（保守策略: 任一系统说需要→True）
+            "confidence": str,          # "high" | "medium" | "low"
+            "suggested_mode": str,      # "react" | "direct" | "novel"
+            "reason": str,              # 分类理由
+        }
+    """
+    intent = detect_intent(text)
+    text_lower = text.lower()
+
+    # ── 工具需求检测（合并 _detect_tool_need + _input_requires_tools 逻辑）──
+    needs_tools_by_action = _has_action_keywords(text_lower)
+    needs_tools_by_entity = _has_file_entities(text_lower)
+    requires_tools = needs_tools_by_action or needs_tools_by_entity
+
+    # ── 置信度评估 ──
+    if requires_tools and intent is not None:
+        confidence = "high"
+        reason = f"检测到意图 '{intent}' 且需要工具操作"
+        suggested_mode = "react"
+        if intent == "novel":
+            suggested_mode = "novel"
+    elif requires_tools:
+        confidence = "medium"
+        reason = "检测到工具需求（但无明确意图分类）"
+        suggested_mode = "react"
+    elif intent is not None:
+        confidence = "high"
+        reason = f"检测到明确意图 '{intent}'（无需工具）"
+        suggested_mode = "direct"
+        if intent == "novel":
+            suggested_mode = "novel"
+    else:
+        confidence = "low"
+        reason = "纯对话/咨询，无需工具"
+        suggested_mode = "direct"
+
+    return {
+        "intent": intent,
+        "requires_tools": requires_tools,
+        "confidence": confidence,
+        "suggested_mode": suggested_mode,
+        "reason": reason,
+    }
+
+
+def _has_action_keywords(text: str) -> bool:
+    """检测文本是否包含需要工具执行的操作关键词。
+
+    合并了 _detect_tool_need() 和 _input_requires_tools() 的正向关键词。
+    """
+    # 文件操作关键词
+    file_ops = [
+        "创建", "写入", "保存", "新建", "生成", "输出",
+        "读取", "查看", "打开", "读", "看",
+        "修改", "编辑", "替换", "改", "更新",
+        "删除", "移除", "清除",
+        "移动", "搬", "转移", "复制", "拷贝", "备份", "重命名",
+        "write", "create", "save", "generate",
+        "read", "open", "show", "cat", "view",
+        "edit", "modify", "update", "replace", "patch",
+        "delete", "remove",
+        "move", "copy", "cp", "mv", "rename",
+    ]
+    if any(kw in text for kw in file_ops):
+        return True
+
+    # 编程任务关键词（暗含需要文件操作）
+    coding_ops = [
+        "写", "做", "实现", "开发", "搭", "建",
+        "编写", "重构", "重写", "改写",
+        "implement", "build", "make",
+    ]
+    # 仅在搭配明确产出物时触发
+    coding_targets = [
+        "代码", "函数", "类", "模块", "程序", "脚本", "接口",
+        "API", "算法", "爬虫", "服务器", "项目", "工程",
+        "code", "function", "class", "module", "script",
+        "app", "application", "project",
+        "小说", "故事", "章节", "文章",
+    ]
+    if any(kw in text for kw in coding_ops) and any(kw in text for kw in coding_targets):
+        return True
+
+    # 命令执行关键词
+    cmd_ops = [
+        "执行", "运行", "跑", "命令", "脚本", "程序",
+        "run", "execute", "exec", "command", "script",
+        "安装", "install", "pip", "npm", "yarn", "cargo",
+        "pytest", "测试",
+        "git ", "commit", "push", "pull", "clone", "branch",
+    ]
+    if any(kw in text for kw in cmd_ops):
+        return True
+
+    # 搜索关键词
+    search_ops = ["搜索", "查找", "grep", "find", "search"]
+    if any(kw in text for kw in search_ops):
+        return True
+
+    # 网页抓取
+    web_ops = ["抓取", "下载", "获取", "访问", "fetch", "download", "scrape"]
+    if any(kw in text for kw in web_ops):
+        return True
+
+    # 目录操作
+    dir_ops = ["列出", "显示", "list", "ls", "dir", "tree", "mkdir", "创建.*(?:目录|文件夹)"]
+    import re
+    if any(re.search(p, text) for p in dir_ops):
+        return True
+
+    # 内容检查/审查（需要读取文件）
+    content_check = [
+        "检查", "核对", "验证", "审查", "审阅",
+        "是否符合", "是否一致", "是否合理",
+        "check", "verify", "review", "examine",
+    ]
+    # 内容检查 + 文件实体 = 需要工具
+    entity_keywords = [
+        "章", "章节", "文件", "大纲", "剧情", "代码", "内容",
+        "chapter", "file", "code", "content",
+        ".py", ".js", ".ts", ".md", ".txt", ".json", ".yaml",
+        "第",  # 第X章
+    ]
+    if any(kw in text for kw in content_check) and any(kw in text for kw in entity_keywords):
+        return True
+
+    # 调整/修改章节（需要读写）
+    adjust_ops = ["调整", "修正", "改进"]
+    if any(kw in text for kw in adjust_ops) and any(kw in text for kw in entity_keywords):
+        return True
+
+    return False
+
+
+def _has_file_entities(text: str) -> bool:
+    """检测文本是否涉及文件实体（暗示需要文件操作）。"""
+    import re
+
+    # 文件扩展名
+    if re.search(r'\b\w+\.(?:py|js|ts|jsx|tsx|java|c|cpp|h|go|rs|rb|php|html|css|json|yaml|yml|toml|xml|md|txt|sh|bat|ps1)\b', text):
+        return True
+
+    # 路径模式
+    if re.search(r'(?:^|\s)(?:\./|\.\./|src/|tests?/|lib/|app/|dist/|build/)\S+', text):
+        return True
+    if re.search(r'(?:^|\s)[A-Z]:\\[\w\\/.]+', text):
+        return True
+
+    # 章/大纲/文件等实体
+    entity_words = [
+        "章", "章节", "大纲", "文件", "目录", "文件夹",
+        "代码", "源码", "脚本", "配置", "文档",
+    ]
+    return any(kw in text for kw in entity_words)
