@@ -1449,15 +1449,23 @@ class ReActEngine(BaseEngine):
         return summary_prefix + "\n\n---\n\n" + compiled
 
     def _call_llm_native(self, messages: list[dict[str, str]]) -> dict[str, Any]:
-        """调用 LLM — 优先使用原生工具调用，回退 JSON 解析。
+        """调用 LLM — 优先使用原生工具调用 + JSON Schema 约束输出。
 
-        这是 P0 根因修复的核心：通过 API 的 function calling 机制获取
-        结构化的 tool_calls，消除对 LLM 文本输出的 JSON 解析依赖。
+        通过 API 的 function calling 机制获取结构化的 tool_calls，
+        并通过 response_format JSON Schema 约束 final_answer 格式。
+        不支持的模型自动回退到传统 JSON 解析。
 
         Returns:
             兼容 parse_react 返回格式的 dict，额外包含 "raw_text" 字段
         """
         from omniagent.utils.llm_client import chat_completion_with_tools, NativeToolResponse
+        from omniagent.engine.output_schemas import get_react_schema
+
+        # JSON Schema 约束输出（支持的模型直接返回结构化 JSON）
+        try:
+            response_format = get_react_schema()
+        except Exception:
+            response_format = None
 
         last_text = ""
         for model_id in self.model_priority:
@@ -1467,6 +1475,7 @@ class ReActEngine(BaseEngine):
                     tools=self.tools,
                     max_tokens=_REACT_LOOP_MAX_TOKENS,
                     temperature=0.3,
+                    response_format=response_format,
                 )
 
                 # ── Trace: LLM 调用 ──

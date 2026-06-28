@@ -810,10 +810,15 @@ def chat_completion_with_tools(
     temperature: float = 0.3,
     timeout: float = 120.0,
     max_retries: int = 3,
+    response_format: dict[str, Any] | None = None,
 ) -> NativeToolResponse:
     """
     带原生工具调用的 chat completion — 消除 JSON 解析根源问题。
     LLM 原生返回结构化 tool_calls, 无需字符串 JSON 解析。
+
+    Args:
+        response_format: OpenAI JSON Schema 格式约束（仅 OpenAI 兼容接口支持）。
+                         传入 get_react_schema() 等返回值。
     """
     import time
 
@@ -832,6 +837,7 @@ def chat_completion_with_tools(
                 return _native_call_openai_compat(
                     endpoint, messages, tool_schemas,
                     max_tokens, temperature, timeout,
+                    response_format=response_format,
                 )
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
@@ -1011,8 +1017,13 @@ def _native_call_openai_compat(
     max_tokens: int,
     temperature: float,
     timeout: float,
+    response_format: dict[str, Any] | None = None,
 ) -> NativeToolResponse:
-    """OpenAI 兼容格式的原生工具调用 — 返回结构化 tool_calls。"""
+    """OpenAI 兼容格式的原生工具调用 — 返回结构化 tool_calls。
+
+    Args:
+        response_format: 可选的 JSON Schema 输出约束。
+    """
     url = _openai_compat_url(endpoint, "chat/completions")
     headers = {
         "Authorization": f"Bearer {endpoint.api_key}",
@@ -1024,6 +1035,8 @@ def _native_call_openai_compat(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
+    if response_format is not None:
+        payload["response_format"] = response_format
     if tool_schemas:
         payload["tools"] = tool_schemas
         payload["tool_choice"] = "auto"
