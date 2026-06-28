@@ -368,7 +368,18 @@ class ApprovalCard:
 
 
 class ModeHeader:
-    """引擎模式头部 — 简洁分隔线 + 关键信息，无面板边框。"""
+    """极简引擎模式标识 — 单行 dim 文本。"""
+
+    _MODE_LABELS = {
+        "ReAct": "ReAct",
+        "Plan-Execute": "Plan-Execute",
+        "Reflection": "Reflection",
+        "Direct": "Direct",
+        "Plan+React": "Plan+React",
+        "Plan+Reflection": "Plan+Reflection",
+        "React+Reflection": "React+Reflection",
+        "Novel": "Novel",
+    }
 
     def __init__(
         self,
@@ -379,44 +390,15 @@ class ModeHeader:
         extra_info: str = "",
     ) -> None:
         self.mode = mode
-        self.description = description
         self.iterations = iterations
-        self.extra_info = extra_info
 
     def __rich_console__(self, console, options):
-        parts: list[str] = []
-
-        if self.mode == "ReAct":
-            parts.append("[bold bright_cyan]🔄 ReAct[/bold bright_cyan]")
-            parts.append("[dim]思考 → 行动 → 观察[/dim]")
-        elif self.mode == "Plan-Execute":
-            parts.append("[bold bright_cyan]📋 Plan-Execute[/bold bright_cyan]")
-            parts.append("[dim]规划 → 逐步执行[/dim]")
-        elif self.mode == "Reflection":
-            parts.append("[bold bright_cyan]🔍 Reflection[/bold bright_cyan]")
-            parts.append("[dim]执行 → 审查 → 修正[/dim]")
-        elif self.mode == "Direct":
-            parts.append("[bold bright_cyan]💬 Direct[/bold bright_cyan]")
-            parts.append("[dim]直接对话[/dim]")
-        elif self.mode == "Plan+React":
-            parts.append("[bold bright_cyan]📋🔄 Plan+React[/bold bright_cyan]")
-            parts.append("[dim]全局规划 → ReAct 执行[/dim]")
-        elif self.mode == "Plan+Reflection":
-            parts.append("[bold bright_cyan]📋🔍 Plan+Reflection[/bold bright_cyan]")
-            parts.append("[dim]规划执行 → 反思修正[/dim]")
-        elif self.mode == "React+Reflection":
-            parts.append("[bold bright_cyan]🔄🔍 React+Reflection[/bold bright_cyan]")
-            parts.append("[dim]ReAct 探索 → 反思审查[/dim]")
-        elif self.mode == "Novel":
-            parts.append("[bold magenta]📖 Novel[/bold magenta]")
-            parts.append("[dim]小说创作助手[/dim]")
-        else:
-            parts.append(f"[bold bright_cyan]📐 {self.mode}[/bold bright_cyan]")
-            if self.description:
-                parts.append(f"[dim]{self.description}[/dim]")
-
+        from rich.text import Text
+        label = self._MODE_LABELS.get(self.mode, self.mode)
+        text = f"{label}"
         if self.iterations is not None:
-            parts.append(f"[dim]· {self.iterations} 轮[/dim]")
+            text += f" · {self.iterations} rounds"
+        return [Text(text, style="dim")]
         if self.extra_info:
             parts.append(f"[dim]· {self.extra_info}[/dim]")
 

@@ -38,7 +38,6 @@ from omniagent.repl.cards import (
     ApprovalCard,
     ModeHeader,
     ToolCallCard,
-    render_shortcut_bar,
 )
 from omniagent.repl.commands import COMMANDS, dispatch_command
 from omniagent.repl.context_manager import ContextManager
@@ -217,12 +216,11 @@ class REPL:
         except Exception as e:
             logger.debug("failed to append runtime session thread: %s", e)
 
-    def _render_engine_result(self, callback, result: str, title: str, border_style: str = "green") -> None:
-        """渲染引擎结果 — 分隔线 + 答案 + 思考折叠。"""
-        self._last_result = result  # 供自主持久化评估使用
+    def _render_engine_result(self, callback, result: str, title: str = "", border_style: str = "green") -> None:
+        """渲染引擎结果 — 极简：无分隔线，直接呈现答案。"""
+        self._last_result = result
         renderer = OutputRenderer(verbose=self.verbose)
         panel = callback.get_thinking_panel() if hasattr(callback, 'get_thinking_panel') else None
-        console.print(Rule(f"[bold {border_style}]{title}[/bold {border_style}]", style=border_style, align="left"))
         renderer.render_answer(result, panel, title=title, border_style=border_style)
 
     @staticmethod
@@ -342,8 +340,9 @@ class REPL:
             self.ctx_mgr.add_system_message(self.system_prompt)
 
         while True:
-            # 显示状态栏
-            self.status_bar.print_status()
+            # 仅在上下文接近上限时显示告警
+            if self.ctx_mgr.needs_compact():
+                console.print("[dim]Context usage high — consider /compact[/dim]")
 
             try:
                 user_input = self._read_input()
@@ -413,69 +412,10 @@ class REPL:
         self._auto_cleanup()
 
     def _print_welcome(self) -> None:
-        """极氪风格欢迎界面 — 现代、简洁、高辨识度。"""
-        import random
-
-        mode = self.registry.get_current_mode()
-        models = self.registry.list_models()
-
-        # ── 渐变标题（纯 Rich markup，避免 Text 对象在 f-string 中丢失样式）──
-        title_text = (
-            "[bold bright_cyan]▲[/bold bright_cyan] "
-            "[bold cyan]O M N I A G E N T[/bold cyan] "
-            "[bold bright_cyan]C L I[/bold bright_cyan]"
-        )
-
-        # ── 版本标签 ──
-        version = "v0.1.0"
-
-        # ── 模型状态指示灯 ──
-        if models:
-            model_chips = []
-            for m in models[:3]:
-                chip = f"[on cyan] {m.alias} [/on cyan]"
-                model_chips.append(chip)
-            if len(models) > 3:
-                model_chips.append(f"[dim]+{len(models)-3}[/dim]")
-            model_line = "  ".join(model_chips)
-        else:
-            model_line = "[dim]未配置 — 输入 [bold cyan]/model[/bold cyan] 浏览添加模型[/dim]"
-
-        # ── 随机提示 ──
-        tips = [
-            "输入 [bold cyan]/help[/bold cyan] 查看所有可用命令",
-            "输入 [bold cyan]/model[/bold cyan] 管理 AI 模型（注册+切换一步完成）",
-            "输入 [bold cyan]/mode[/bold cyan] 切换思考范式",
-            "输入 [bold cyan]/setup[/bold cyan] 运行首次配置向导",
-            "按 [bold cyan]Shift+Enter[/bold cyan] 可以输入多行内容",
-            "输入 [bold cyan]!pytest tests -q[/bold cyan] 可直接运行终端命令",
-            "输入 [bold cyan]/new_terminal[/bold cyan] 打开可观测子终端",
-            "输入 [bold cyan]/verbose[/bold cyan] 开启详细日志模式",
-            "输入 [bold cyan]/tools[/bold cyan] 查看所有可用工具",
-            "输入 [bold cyan]/mcp[/bold cyan] 管理 MCP 扩展服务器",
-        ]
-        tip = random.choice(tips)
-
-        # ── 构建欢迎面板 ──
-        content = f"""{title_text}
-
-  [dim]{version}[/dim]  [bold white]Multi-Model AI Coding Assistant[/bold white]
-
-  [bold cyan]◆[/bold cyan] [bold]范式[/bold]  {mode.name}  [dim]— {mode.description}[/dim]
-  [bold cyan]◆[/bold cyan] [bold]模型[/bold]  {model_line}
-
-  [bold bright_cyan]▶[/bold bright_cyan]  [dim]{tip}[/dim]
-
-  [dim]Ctrl+C 退出 · Shift+Enter 换行 · Enter 发送[/dim]"""
-
+        """极简欢迎 — Claude Code 风格。"""
         console.print()
-        console.print(Panel(
-            content,
-            border_style="bright_cyan",
-            padding=(1, 2),
-            subtitle="[dim]Powered by Rich[/dim]",
-            subtitle_align="right",
-        ))
+        console.print("[bold]OmniAgent[/bold] [dim]v0.1.0[/dim] [dim]— multi-model AI coding assistant[/dim]")
+        console.print("[dim]Type /help for commands, Ctrl+C to exit[/dim]")
         console.print()
 
     @staticmethod
@@ -504,7 +444,7 @@ class REPL:
             f"{result.combined_output}"
         )
         border = "green" if result.success else "red"
-        console.print(Panel(rendered, title="[command]shell[/command]", border_style=border))
+        console.print(rendered)
 
     def _read_input_prompt_toolkit(self) -> str:
         """Read input with prompt_toolkit for robust cursor movement and editing."""
@@ -524,7 +464,7 @@ class REPL:
                 style=Style.from_dict({"prompt": "bold cyan"}),
             )
 
-        return self._prompt_session.prompt([("class:prompt", "You"), ("", ": ")]).strip("\r\n")
+        return self._prompt_session.prompt([("class:prompt", ">"), ("", " ")]).strip("\r\n")
 
     @staticmethod
     def _prompt_key_bindings():
@@ -627,7 +567,7 @@ class REPL:
             time.sleep(0.02)
             return msvcrt.kbhit()
 
-        sys.stdout.write("\n\033[1;36mYou\033[0m: ")
+        sys.stdout.write("\n\033[2m> \033[0m")
         sys.stdout.flush()
 
         lines: list[str] = []
@@ -753,7 +693,7 @@ class REPL:
             return True
 
         if output:
-            console.print(Panel(output, title=f"[command]{cmd_name}[/command]", border_style="magenta"))
+            console.print(output)
         return False
 
     def _handle_chat(self, user_input: str) -> None:
@@ -780,37 +720,21 @@ class REPL:
         # ── 系统提示词注入（domain + memory 渐进式加载）──
         self._inject_prompt_store_context(user_input)
 
-        # ── 意图检测（始终执行，用于路由决策）──
+        # ── 意图检测 + Prompt 优化 ──────────────────────
         intent = self._detect_intent(user_input)
 
-        # ── Prompt 优化（按需） ──────────────────────────
         if self.optimize_prompts:
             optimized, system_hint, was_optimized = optimize_prompt(user_input)
-            console.print(f"[dim]🎯 意图: {get_intent_display(intent)}[/dim]")
-
-            if was_optimized:
-                # 展示优化后的 prompt，帮助用户学习
-                console.print(Rule("[dim]📝 优化后的 Prompt[/dim]", style="dim", align="left"))
-                console.print(f"[dim italic]{optimized}[/dim italic]")
-                if system_hint:
-                    self.ctx_mgr.add_system_message(f"[指令上下文] {system_hint}")
-            elif intent is not None:
-                # 有明确任务意图，但提示词质量已足够好
-                console.print("[dim]✅ 提示词质量良好，无需优化[/dim]")
-                if system_hint:
-                    self.ctx_mgr.add_system_message(f"[指令上下文] {system_hint}")
-            else:
-                # 通用对话，无明确任务意图
-                console.print("[dim]💬 通用对话[/dim]")
+            logger.debug("意图: %s, 优化: %s", get_intent_display(intent), was_optimized)
+            if was_optimized and system_hint:
+                self.ctx_mgr.add_system_message(f"[指令上下文] {system_hint}")
+            elif intent is not None and system_hint:
+                self.ctx_mgr.add_system_message(f"[指令上下文] {system_hint}")
         else:
             optimized = user_input
 
         # 添加用户消息
         self.ctx_mgr.add_user_message(optimized)
-
-        # ── 用户消息回显 ──
-        console.print(Rule("[bold bright_cyan]▸ You[/bold bright_cyan]", style="bright_cyan", align="left"))
-        console.print(optimized)
 
         # 获取模型列表 + 解析多角色
         model_ids = self.registry.get_role_priority("planner")
@@ -856,9 +780,9 @@ class REPL:
 
             if classification["requires_tools"]:
                 # 需要工具 → 始终用 ReAct（覆盖用户 mode 设置，确保任务执行）
-                console.print(
-                    f"[dim]🔧 路由: {classification['reason']}"
-                    f"（置信度: {classification['confidence']}）[/dim]"
+                logger.debug(
+                    "路由: %s (置信度: %s)",
+                    classification['reason'], classification['confidence'],
                 )
                 if classification["suggested_mode"] == "novel" and mode == "novel":
                     self._run_novel_engine(optimized, model_ids)
@@ -1048,7 +972,6 @@ class REPL:
             self._task_running = False
             self._interrupt_event.clear()
             self.status_bar.set_engine_status("done")
-            console.print(render_shortcut_bar())
 
     def _run_plan_execute_engine(
         self, user_input: str, model_ids: list[str],
@@ -1081,7 +1004,6 @@ class REPL:
             self._finish_run(status="error", reason=str(e))
         finally:
             self.status_bar.set_engine_status("done")
-            console.print(render_shortcut_bar())
 
     def _run_reflection_engine(
         self, user_input: str, model_ids: list[str],
@@ -1115,7 +1037,6 @@ class REPL:
             self._finish_run(status="error", reason=str(e))
         finally:
             self.status_bar.set_engine_status("done")
-            console.print(render_shortcut_bar())
 
     def _run_plan_react_engine(
         self, user_input: str, model_ids: list[str],
@@ -1150,7 +1071,6 @@ class REPL:
             self._finish_run(status="error", reason=str(e))
         finally:
             self.status_bar.set_engine_status("done")
-            console.print(render_shortcut_bar())
 
     def _run_plan_reflection_engine(
         self, user_input: str, model_ids: list[str],
@@ -1184,7 +1104,6 @@ class REPL:
             self._finish_run(status="error", reason=str(e))
         finally:
             self.status_bar.set_engine_status("done")
-            console.print(render_shortcut_bar())
 
     def _run_react_reflection_engine(
         self, user_input: str, model_ids: list[str],
@@ -1218,7 +1137,6 @@ class REPL:
             self._finish_run(status="error", reason=str(e))
         finally:
             self.status_bar.set_engine_status("done")
-            console.print(render_shortcut_bar())
 
     def _run_novel_engine(self, user_input: str, model_ids: list[str]) -> None:
         """小说创作引擎模式（支持多小说隔离）。"""
@@ -1246,7 +1164,6 @@ class REPL:
             self._finish_run(status="error", reason=str(e))
         finally:
             self.status_bar.set_engine_status("done")
-            console.print(render_shortcut_bar())
 
     def _stream_response(self, model_id: str, messages: list[dict[str, str]]) -> str:
         """流式输出模型回复，完成后 Markdown 渲染。返回完整响应文本。"""
@@ -1284,10 +1201,6 @@ class REPL:
         # 流式完成后渲染增强 Markdown
         if response_text.strip():
             renderer = OutputRenderer(verbose=self.verbose)
-            console.print(Rule(
-                f"[bold bright_green]◆ Assistant[/bold bright_green] [dim]· {model_id} · {len(response_text):,} chars[/dim]",
-                style="bright_green", align="left",
-            ))
             console.print(renderer._render_markdown_enhanced(response_text))
 
         self.ctx_mgr.add_assistant_message(response_text, model_used=model_id)
@@ -1312,12 +1225,7 @@ class REPL:
 
         self.ctx_mgr.add_assistant_message(response, model_used=model_id)
 
-        console.print()
         renderer = OutputRenderer(verbose=self.verbose)
-        console.print(Rule(
-            f"[bold bright_green]◆ Assistant[/bold bright_green] [dim]· {model_id} · {len(response):,} chars[/dim]",
-            style="bright_green", align="left",
-        ))
         console.print(renderer._render_markdown_enhanced(response))
         return response
 

@@ -158,11 +158,11 @@ class ThinkingPanel:
 
         # ── 摘要行（始终显示）──
         action_names = [s.action for s in self.steps if s.action]
-        action_summary = " → ".join(action_names) if action_names else "纯思考"
+        action_summary = " → ".join(action_names) if action_names else "think"
         if tool_count > 0:
-            summary = f"[bold cyan]🧠 {step_count} 轮推理[/bold cyan] [dim]·[/dim] [cyan]{tool_count} 次工具调用[/cyan] [dim]· {action_summary}[/dim]"
+            summary = f"[dim]{step_count} rounds[/dim] [dim]·[/dim] [dim]{tool_count} tool calls[/dim] [dim]· {action_summary}[/dim]"
         else:
-            summary = f"[bold cyan]🧠 {step_count} 轮推理[/bold cyan] [dim]· 纯思考[/dim]"
+            summary = f"[dim]{step_count} rounds[/dim] [dim]· think[/dim]"
 
         yield Text.from_markup(summary)
 
@@ -175,7 +175,7 @@ class ThinkingPanel:
                 thought_short = step.thought[:120].replace("\n", " ")
                 if len(step.thought) > 120:
                     thought_short += "..."
-                parts.append(f"[dim]#{i} 🤔 {thought_short}[/dim]")
+                parts.append(f"[dim]#{i} {thought_short}[/dim]")
             if step.action:
                 icon = TOOL_ICONS.get(step.action, "🔧")
                 params_parts = []
@@ -190,7 +190,7 @@ class ThinkingPanel:
                 obs_short = step.observation[:100].replace("\n", " ")
                 if len(step.observation) > 100:
                     obs_short += "..."
-                parts.append(f"[dim]👀 {obs_short}[/dim]")
+                parts.append(f"[dim]  {obs_short}[/dim]")
 
             if parts:
                 yield Text.from_markup("  " + "  ".join(parts))
