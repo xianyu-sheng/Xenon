@@ -11,6 +11,7 @@ import logging
 import re
 from typing import Any
 
+from omniagent.engine.base_engine import BaseEngine
 from omniagent.engine.callbacks import EngineCallback
 from omniagent.engine.context import AgentContext
 from omniagent.engine.react_engine import _check_hollow_answer
@@ -140,7 +141,7 @@ EXECUTE_PROMPT = """你正在执行一个任务计划的第 {step_id} 步（共 
 """
 
 
-class PlanExecuteEngine:
+class PlanExecuteEngine(BaseEngine):
     """规划-执行两阶段引擎。"""
 
     def __init__(
@@ -152,11 +153,10 @@ class PlanExecuteEngine:
         system_prompt: str | None = None,
         callback: EngineCallback | None = None,
     ) -> None:
-        self.model_priority = model_priority  # planner 角色
+        super().__init__(model_priority=model_priority, callback=callback)
         self.executor_model_priority = executor_model_priority or model_priority  # executor 角色，默认回退到 planner
         self.max_steps = max_steps
         self.system_prompt = system_prompt or PLAN_SYSTEM_PROMPT
-        self.callback = callback or EngineCallback()
 
     def run(self, user_input: str, context: AgentContext | None = None) -> str:
         """
@@ -312,19 +312,11 @@ class PlanExecuteEngine:
     def _plan(self, user_input: str, context: AgentContext | None = None) -> dict[str, Any]:
         """Phase 1: 生成执行计划。"""
         messages = [{"role": "system", "content": self.system_prompt}]
-        # 注入对话历史（最近 10 条，包括 system 消息以保留 prompt_optimizer 的 system_hint）
-        if context:
-            history = context.get_conversation_messages()
-            if history:
-                # 取最近的非 system 消息 + 最近的 system 消息（含 system_hint）
-                non_system = [m for m in history if m.get("role") != "system"][-6:]
-                system_msgs = [m for m in history if m.get("role") == "system"][-2:]
-                recent = system_msgs + non_system
-                messages.extend(recent)
-                logger.debug(f"Plan 注入 {len(recent)} 条对话历史 (含 {len(system_msgs)} 条 system)")
-            else:
-                logger.warning("Plan: 无对话历史可注入！")
-        else:
+        # 注入对话历史
+        self._inject_history(messages, context, max_non_system=6)
+        if not context or not context.get_conversation_messages():
+            logger.warning("Plan: 无对话历史可注入！")
+        if context is None:
             logger.warning("Plan: context 为 None！")
 
         # 关键：将当前用户输入加入消息列表
@@ -591,31 +583,6 @@ class PlanExecuteEngine:
             return summary + warning
 
         return summary
-
-    def _call_llm(
-        self,
-        messages: list[dict[str, str]],
-        max_tokens: int = 131072,
-        *,
-        model_priority: list[str] | None = None,
-    ) -> str:
-        """调用 LLM，支持多模型 fallback 和按阶段切换模型。
-
-        Args:
-            messages: LLM 消息列表
-            max_tokens: 最大输出 token
-            model_priority: 覆盖默认模型列表（用于按阶段分派不同模型角色）
-        """
-        models = model_priority or self.model_priority
-        last_error = None
-        for model_id in models:
-            try:
-                return chat_completion(model_id, messages, max_tokens=max_tokens, temperature=0.3)
-            except Exception as e:
-                last_error = e
-                logger.warning(f"模型 {model_id} 失败: {e}")
-        msg = f"所有模型均调用失败: {last_error}"
-        raise RuntimeError(msg)
 
     def _parse_json(self, text: str) -> dict[str, Any]:
         """从 LLM 输出中提取 JSON（委托给 response_adapter 中间件）。"""

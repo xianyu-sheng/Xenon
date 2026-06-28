@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from omniagent.engine.base_engine import BaseEngine
 from omniagent.engine.callbacks import EngineCallback
 from omniagent.engine.context import AgentContext
 from omniagent.engine.novel_manager import NovelManager
@@ -216,7 +217,7 @@ NOVEL_TOOLS = {
 }
 
 
-class NovelEngine:
+class NovelEngine(BaseEngine):
     """小说创作专用引擎，支持多小说隔离和创作记忆累积。"""
 
     def __init__(
@@ -234,10 +235,9 @@ class NovelEngine:
         force_synthesis_threshold: int = _DEFAULT_FORCE_SYNTHESIS,
         exploration_budget_synthesize: int = _DEFAULT_EXPLORATION_SYNTHESIZE,
     ) -> None:
-        self.model_priority = model_priority
+        super().__init__(model_priority=model_priority, callback=callback)
         self.max_iterations = max_iterations
         self.tools = NOVEL_TOOLS
-        self.callback = callback or EngineCallback()
         self.manager = novel_manager or NovelManager()
 
         # ── 可配置阈值（必须在 _build_system_prompt 之前设置）──
@@ -311,14 +311,8 @@ class NovelEngine:
                 "content": f"## 当前小说: {project.title}\n\n{project_ctx}",
             })
 
-        # 注入对话历史（包括最近的 system 消息以保留 system_hint）
-        history = ctx.get_conversation_messages()
-        if history:
-            non_system = [m for m in history if m.get("role") != "system"][-10:]
-            system_msgs = [m for m in history if m.get("role") == "system"][-2:]
-            recent = system_msgs + non_system
-            messages.extend(recent)
-            logger.debug(f"Novel 注入 {len(recent)} 条对话历史 (含 {len(system_msgs)} 条 system)")
+        # 注入对话历史
+        self._inject_history(messages, ctx)
 
         messages.append({"role": "user", "content": user_input})
 
@@ -342,7 +336,7 @@ class NovelEngine:
                 messages.append({"role": "user", "content": hurry_msg})
                 logger.info(f"Novel: 注入加速提示 (剩余 {remaining} 轮)")
 
-            response = self._call_llm(messages)
+            response = self._call_llm(messages, max_tokens=8192, temperature=0.8)
             messages.append({"role": "assistant", "content": response})
 
             parsed = self._parse_response(response)
@@ -515,21 +509,6 @@ class NovelEngine:
         detail_parts.append(f"**结果摘要**: {answer_summary}")
 
         self.manager.update_context(slug, operation, "\n".join(detail_parts))
-
-    def _call_llm(self, messages: list[dict[str, str]], max_tokens: int = 8192) -> str:
-        """调用 LLM，支持多模型 fallback。创意写作用较高 temperature。"""
-        last_error = None
-        for model_id in self.model_priority:
-            try:
-                return chat_completion(
-                    model_id, messages,
-                    max_tokens=max_tokens,
-                    temperature=0.8,
-                )
-            except Exception as e:
-                last_error = e
-                logger.warning(f"模型 {model_id} 失败: {e}，尝试下一个...")
-        raise RuntimeError(f"所有模型均调用失败: {last_error}")
 
     def _parse_response(self, response: str) -> dict[str, Any]:
         return parse_react(response)

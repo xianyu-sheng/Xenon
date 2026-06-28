@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from omniagent.engine.base_engine import BaseEngine
 from omniagent.engine.callbacks import ConsoleCallback, EngineCallback, SilentCallback
 from omniagent.engine.context import AgentContext
 from omniagent.utils.llm_client import chat_completion
@@ -61,7 +62,7 @@ pass=true 当且仅当 score >= 7。
 """
 
 
-class ReflectionEngine:
+class ReflectionEngine(BaseEngine):
     """执行-审查-修正循环引擎。"""
 
     def __init__(
@@ -76,14 +77,13 @@ class ReflectionEngine:
         reviewer_prompt: str | None = None,
         callback: EngineCallback | None = None,
     ) -> None:
-        self.model_priority = model_priority  # 默认模型（回退用）
+        super().__init__(model_priority=model_priority, callback=callback)
         self.executor_model_priority = executor_model_priority or model_priority
         self.reviewer_model_priority = reviewer_model_priority or model_priority
         self.max_rounds = max_rounds
         self.pass_threshold = pass_threshold
         self.executor_prompt = executor_prompt or EXECUTOR_PROMPT
         self.reviewer_prompt = reviewer_prompt or REVIEWER_PROMPT
-        self.callback = callback or EngineCallback()
 
     def run(self, user_input: str, context: AgentContext | None = None) -> str:
         """
@@ -175,13 +175,7 @@ class ReflectionEngine:
 
         # 纯文本模式（不需要工具时使用）
         messages = [{"role": "system", "content": self.executor_prompt}]
-        if context:
-            history = context.get_conversation_messages()
-            if history:
-                non_system = [m for m in history if m.get("role") != "system"][-6:]
-                system_msgs = [m for m in history if m.get("role") == "system"][-2:]
-                recent = system_msgs + non_system
-                messages.extend(recent)
+        self._inject_history(messages, context, max_non_system=6)
 
         if feedback:
             messages.append({
@@ -219,24 +213,6 @@ class ReflectionEngine:
 
         response = self._call_llm(messages, model_priority=self.reviewer_model_priority)
         return self._parse_review(response)
-
-    def _call_llm(
-        self,
-        messages: list[dict[str, str]],
-        max_tokens: int = 131072,
-        *,
-        model_priority: list[str] | None = None,
-    ) -> str:
-        """调用 LLM，支持多模型 fallback 和按阶段切换模型。"""
-        models = model_priority or self.model_priority
-        last_error = None
-        for model_id in models:
-            try:
-                return chat_completion(model_id, messages, max_tokens=max_tokens, temperature=0.3)
-            except Exception as e:
-                last_error = e
-                logger.warning(f"模型 {model_id} 失败: {e}")
-        raise RuntimeError(f"所有模型均调用失败: {last_error}")
 
     def _parse_review(self, response: str) -> dict[str, Any]:
         """解析审查结果 JSON（委托给 response_adapter 中间件）。"""

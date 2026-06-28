@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from omniagent.engine.base_engine import AsyncBaseEngine
 from omniagent.engine.callbacks import EngineCallback
 from omniagent.engine.compactor import Compactor
 from omniagent.engine.context import AgentContext
@@ -104,14 +105,8 @@ class AsyncReActEngine(ReActEngine):
         tracker = ToolExecutionTracker()
         messages: list[dict[str, str]] = [{"role": "system", "content": self.system_prompt}]
 
-        # 注入对话历史（包括最近的 system 消息以保留 system_hint）
-        history = ctx.get_conversation_messages()
-        if history:
-            non_system = [m for m in history if m.get("role") != "system"][-10:]
-            system_msgs = [m for m in history if m.get("role") == "system"][-2:]
-            recent = system_msgs + non_system
-            messages.extend(recent)
-            logger.debug(f"AsyncReAct 注入 {len(recent)} 条对话历史 (含 {len(system_msgs)} 条 system)")
+        # 注入对话历史
+        self._inject_history(messages, ctx)
         messages.append({"role": "user", "content": user_input})
 
         # ── 初始化上下文压缩器 ──
@@ -756,7 +751,7 @@ class AsyncReActEngine(ReActEngine):
 # ═══════════════════════════════════════════════════════════════
 
 
-class AsyncPlanExecuteEngine:
+class AsyncPlanExecuteEngine(AsyncBaseEngine):
     """异步 Plan-Execute 两阶段引擎。
 
     与同步版 PlanExecuteEngine 功能相同，但:
@@ -777,10 +772,9 @@ class AsyncPlanExecuteEngine:
         tool_registry: Any = None,
         session_id: str = "",
     ) -> None:
-        self.model_priority = model_priority
+        super().__init__(model_priority=model_priority, callback=callback)
         self.max_steps = max_steps
         self.system_prompt = system_prompt or PLAN_SYSTEM_PROMPT
-        self.callback = callback or EngineCallback()
         self._event_bus = event_bus
         self._trace = trace_writer
         self._tool_registry = tool_registry
@@ -869,13 +863,7 @@ class AsyncPlanExecuteEngine:
     async def _plan_async(self, user_input: str, context: AgentContext | None = None) -> dict[str, Any]:
         """异步生成执行计划。"""
         messages: list[dict[str, str]] = [{"role": "system", "content": self.system_prompt}]
-        if context:
-            history = context.get_conversation_messages()
-            if history:
-                non_system = [m for m in history if m.get("role") != "system"][-6:]
-                system_msgs = [m for m in history if m.get("role") == "system"][-2:]
-                recent = system_msgs + non_system
-                messages.extend(recent)
+        self._inject_history(messages, context, max_non_system=6)
         messages.append({"role": "user", "content": user_input})
 
         response = await self._call_llm_async(messages)
@@ -979,20 +967,6 @@ class AsyncPlanExecuteEngine:
         ]
         return await self._call_llm_async(messages)
 
-    async def _call_llm_async(self, messages: list[dict[str, str]],
-                               max_tokens: int = 131072) -> str:
-        """异步调用 LLM，支持多模型 fallback。"""
-        last_error = None
-        for model_id in self.model_priority:
-            try:
-                return await chat_completion_async(
-                    model_id, messages, max_tokens=max_tokens, temperature=0.3,
-                )
-            except Exception as e:
-                last_error = e
-                logger.warning(f"模型 {model_id} 失败: {e}")
-        raise RuntimeError(f"所有模型均调用失败: {last_error}")
-
     async def _publish(self, event_type: str, **kwargs: Any) -> None:
         """发布事件到 EventBus。"""
         if not self._event_bus:
@@ -1027,7 +1001,7 @@ class AsyncPlanExecuteEngine:
 # ═══════════════════════════════════════════════════════════════
 
 
-class AsyncReflectionEngine:
+class AsyncReflectionEngine(AsyncBaseEngine):
     """异步 Reflection 执行-审查-修正循环引擎。
 
     与同步版 ReflectionEngine 功能相同，但 LLM 调用全部异步。
@@ -1046,12 +1020,11 @@ class AsyncReflectionEngine:
         trace_writer: Any = None,
         session_id: str = "",
     ) -> None:
-        self.model_priority = model_priority
+        super().__init__(model_priority=model_priority, callback=callback)
         self.max_rounds = max_rounds
         self.pass_threshold = pass_threshold
         self.executor_prompt = executor_prompt or EXECUTOR_PROMPT
         self.reviewer_prompt = reviewer_prompt or REVIEWER_PROMPT
-        self.callback = callback or EngineCallback()
         self._event_bus = event_bus
         self._trace = trace_writer
         self.session_id = session_id
@@ -1120,13 +1093,7 @@ class AsyncReflectionEngine:
                               context: AgentContext | None = None) -> str:
         """异步执行阶段。"""
         messages: list[dict[str, str]] = [{"role": "system", "content": self.executor_prompt}]
-        if context:
-            history = context.get_conversation_messages()
-            if history:
-                non_system = [m for m in history if m.get("role") != "system"][-6:]
-                system_msgs = [m for m in history if m.get("role") == "system"][-2:]
-                recent = system_msgs + non_system
-                messages.extend(recent)
+        self._inject_history(messages, context, max_non_system=6)
         if feedback:
             messages.append({
                 "role": "user",
@@ -1145,20 +1112,6 @@ class AsyncReflectionEngine:
         ]
         response = await self._call_llm_async(messages)
         return parse_review(response)
-
-    async def _call_llm_async(self, messages: list[dict[str, str]],
-                               max_tokens: int = 131072) -> str:
-        """异步调用 LLM。"""
-        last_error = None
-        for model_id in self.model_priority:
-            try:
-                return await chat_completion_async(
-                    model_id, messages, max_tokens=max_tokens, temperature=0.3,
-                )
-            except Exception as e:
-                last_error = e
-                logger.warning(f"模型 {model_id} 失败: {e}")
-        raise RuntimeError(f"所有模型均调用失败: {last_error}")
 
     async def _publish(self, event_type: str, **kwargs: Any) -> None:
         """发布事件到 EventBus。"""

@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from omniagent.engine.base_engine import BaseEngine
 from omniagent.engine.callbacks import EngineCallback
 from omniagent.engine.context import AgentContext
 from omniagent.engine.plan_execute_engine import PlanExecuteEngine
@@ -22,7 +23,7 @@ from omniagent.utils.llm_client import chat_completion
 logger = logging.getLogger(__name__)
 
 
-class PlanReactEngine:
+class PlanReactEngine(BaseEngine):
     """
     Plan + React 组合引擎。
 
@@ -39,11 +40,10 @@ class PlanReactEngine:
         react_iterations: int = 8,
         callback: EngineCallback | None = None,
     ) -> None:
-        self.model_priority = model_priority
+        super().__init__(model_priority=model_priority, callback=callback)
         executor = executor_model_priority or model_priority
         self.max_steps = max_steps
         self.react_iterations = react_iterations
-        self.callback = callback or EngineCallback()
         self.planner = PlanExecuteEngine(
             model_priority, executor_model_priority=executor,
             max_steps=max_steps, callback=self.callback,
@@ -248,20 +248,16 @@ class PlanReactEngine:
         ]
 
         try:
-            for model_id in self.model_priority:
-                try:
-                    result = chat_completion(model_id, messages, max_tokens=4096, temperature=0.5)
-                    if result and result.strip():
-                        return result
-                except Exception:
-                    continue
+            result = self._call_llm(messages, max_tokens=4096, temperature=0.5)
+            if result and result.strip():
+                return result
             # LLM 全部失败，返回原始结果
             return f"## 执行计划\n{analysis}\n\n## 执行结果\n{results_text}"
         except Exception:
             return f"## 执行计划\n{analysis}\n\n## 执行结果\n{results_text}"
 
 
-class PlanReflectionEngine:
+class PlanReflectionEngine(BaseEngine):
     """
     Plan + Reflection 组合引擎。
 
@@ -280,13 +276,12 @@ class PlanReflectionEngine:
         pass_threshold: int = 7,
         callback: EngineCallback | None = None,
     ) -> None:
-        self.model_priority = model_priority
+        super().__init__(model_priority=model_priority, callback=callback)
         executor = executor_model_priority or model_priority
         reviewer = reviewer_model_priority or model_priority
         self.max_steps = max_steps
         self.review_rounds = review_rounds
         self.pass_threshold = pass_threshold
-        self.callback = callback or EngineCallback()
         self.planner = PlanExecuteEngine(
             model_priority, executor_model_priority=executor,
             max_steps=max_steps, callback=self.callback,
@@ -327,7 +322,7 @@ class PlanReflectionEngine:
         return final_output
 
 
-class ReactReflectionEngine:
+class ReactReflectionEngine(BaseEngine):
     """
     ReAct + Reflection 组合引擎。
 
@@ -346,13 +341,12 @@ class ReactReflectionEngine:
         pass_threshold: int = 7,
         callback: EngineCallback | None = None,
     ) -> None:
-        self.model_priority = model_priority
+        super().__init__(model_priority=model_priority, callback=callback)
         executor = executor_model_priority or model_priority
         reviewer = reviewer_model_priority or model_priority
         self.react_iterations = react_iterations
         self.review_rounds = review_rounds
         self.pass_threshold = pass_threshold
-        self.callback = callback or EngineCallback()
         self.reactor = ReActEngine(executor, max_iterations=react_iterations, callback=self.callback)
         self.reflector = ReflectionEngine(
             model_priority,

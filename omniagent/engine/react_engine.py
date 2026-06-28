@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from omniagent.engine.base_engine import BaseEngine
 from omniagent.engine.callbacks import EngineCallback
 from omniagent.engine.circuit_breaker import CircuitBreaker
 from omniagent.engine.compactor import Compactor
@@ -726,7 +727,7 @@ def _extract_last_observation(messages: list[dict]) -> str:
     return ""
 
 
-class ReActEngine:
+class ReActEngine(BaseEngine):
     """ReAct 思考-行动-观察循环引擎。"""
 
     # 用于标记"未提供"的哨兵值
@@ -757,10 +758,9 @@ class ReActEngine:
         force_synthesis_threshold: int | None = None,
         midpoint_check_calls: int | None = None,
     ) -> None:
-        self.model_priority = model_priority
+        super().__init__(model_priority=model_priority, callback=callback)
         self.max_iterations = max_iterations
         self.tools = tools or BUILTIN_TOOLS
-        self.callback = callback or EngineCallback()
         self.breaker = CircuitBreaker()  # 工具断路器
         self._interrupt_event = interrupt_event  # 中断事件（Esc/Ctrl+C）
 
@@ -936,15 +936,7 @@ class ReActEngine:
         tracker = ToolExecutionTracker()
         messages = [{"role": "system", "content": self.system_prompt}]
         # 注入对话历史（最近 10 条，包括最近的 system 消息以保留 system_hint）
-        history = ctx.get_conversation_messages()
-        if history:
-            non_system = [m for m in history if m.get("role") != "system"][-10:]
-            system_msgs = [m for m in history if m.get("role") == "system"][-2:]
-            recent = system_msgs + non_system
-            messages.extend(recent)
-            logger.debug(f"ReAct 注入 {len(recent)} 条对话历史 (含 {len(system_msgs)} 条 system)")
-        else:
-            logger.warning("ReAct: 无对话历史可注入！")
+        self._inject_history(messages, ctx)
         messages.append({"role": "user", "content": user_input})
 
         # ── 初始化上下文压缩器 ──
@@ -1455,18 +1447,6 @@ class ReActEngine:
                 if c.result_summary:
                     summary_prefix += f"\n  -> {c.result_summary[:200]}"
         return summary_prefix + "\n\n---\n\n" + compiled
-
-    def _call_llm(self, messages: list[dict[str, str]], max_tokens: int = _REACT_LOOP_MAX_TOKENS) -> str:
-        """调用 LLM，支持多模型 fallback。"""
-        last_error = None
-        for model_id in self.model_priority:
-            try:
-                return chat_completion(model_id, messages, max_tokens=max_tokens, temperature=0.3)
-            except Exception as e:
-                last_error = e
-                logger.warning(f"模型 {model_id} 失败: {e}，尝试下一个...")
-        msg = f"所有模型均调用失败: {last_error}"
-        raise RuntimeError(msg)
 
     def _call_llm_native(self, messages: list[dict[str, str]]) -> dict[str, Any]:
         """调用 LLM — 优先使用原生工具调用，回退 JSON 解析。
