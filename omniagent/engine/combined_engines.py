@@ -314,9 +314,15 @@ class PlanReflectionEngine:
                 f"原始任务: {user_input}\n\n执行结果:\n{initial_output}", context=ctx
             )
         except Exception as e:
-            logger.warning(f"Reflection 阶段失败: {e}")
+            logger.warning(f"Reflection 阶段失败: {e}", exc_info=True)
             self.callback.on_error(f"Reflection 阶段失败: {e}")
-            final_output = initial_output
+            final_output = (
+                f"{initial_output}\n\n"
+                f"---\n"
+                f"## ⚠️ Reflection 审查阶段失败\n\n"
+                f"原因: {e}\n"
+                f"以上为前一阶段的原始输出，未经审查修正。"
+            )
 
         return final_output
 
@@ -371,8 +377,14 @@ class ReactReflectionEngine:
                 f"原始任务: {user_input}\n\n执行结果:\n{initial_output}", context=ctx
             )
         except Exception as e:
-            logger.warning(f"Reflection 阶段失败: {e}")
+            logger.warning(f"Reflection 阶段失败: {e}", exc_info=True)
             self.callback.on_error(f"Reflection 阶段失败: {e}")
-            final_output = initial_output
+            final_output = (
+                f"{initial_output}\n\n"
+                f"---\n"
+                f"## ⚠️ Reflection 审查阶段失败\n\n"
+                f"原因: {e}\n"
+                f"以上为前一阶段的原始输出，未经审查修正。"
+            )
 
         return final_output

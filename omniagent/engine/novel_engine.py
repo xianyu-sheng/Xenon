@@ -411,13 +411,24 @@ class NovelEngine:
                 remaining = self.max_iterations - i
                 if remaining >= 1 and tracker.has_executions():
                     correction = (
-                        "❌ 你的上一条回复只有 thought 字段，没有 action 也没有 final_answer。\n\n"
+                        "你的上一条回复只有 thought 字段，没有 action 也没有 final_answer。\n\n"
                         f"还剩 {remaining} 轮。如果你已经完成任务，请立即输出 final_answer。"
                     )
                     messages.append({"role": "user", "content": correction})
                     self.callback.on_warning("LLM 仅输出 thought 无 action/final_answer，要求明确表态")
                     continue
+                # 接受 thought 前验证: 不是计划描述
                 result = parsed.get("thought", response)
+                try:
+                    from omniagent.engine.react_engine import _is_substantive_answer
+                    if not _is_substantive_answer(result) and tracker.has_executions():
+                        # 有工具执行但输出仍是计划 → 尝试一次纠正
+                        correction = "你的回答读起来像计划而非实际结果。请直接输出创作内容或总结。"
+                        messages.append({"role": "user", "content": correction})
+                        self.callback.on_warning("Novel output appears plan-like, injecting correction")
+                        continue
+                except ImportError:
+                    pass
                 self._auto_update_context(slug, user_input, result, tracker)
                 self.callback.on_finish(result)
                 return result
@@ -429,7 +440,28 @@ class NovelEngine:
             self.callback.on_finish(compiled)
             return compiled
 
-        msg = f"达到最大迭代次数 ({self.max_iterations})，创作暂停。"
+        # 尝试从最后一条消息中提取有用内容
+        last_content = ""
+        for m in reversed(messages):
+            content = m.get("content", "") if isinstance(m, dict) else ""
+            if len(content) > 50 and "Observation" not in content:
+                last_content = content[:500]
+                break
+        if last_content:
+            msg = (
+                f"## 创作进度\n\n"
+                f"达到最大迭代次数 ({self.max_iterations})，以下是最新内容：\n\n"
+                f"{last_content}\n\n"
+                f"---\n"
+                f"请重新运行以继续创作。"
+            )
+        else:
+            msg = (
+                f"## 创作暂停\n\n"
+                f"达到最大迭代次数 ({self.max_iterations})，创作暂停。\n"
+                f"已执行 {len(tracker.calls)} 次工具操作。\n"
+                f"请重新运行并给出更具体的创作指令。"
+            )
         self.callback.on_warning(msg)
         self.callback.on_finish(msg)
         return msg

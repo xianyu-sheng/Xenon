@@ -399,9 +399,25 @@ class PlanExecuteEngine:
             # 检查是否有 result/final_answer
             result_text = parsed.get("result", "") or parsed.get("final_answer", "")
             if result_text and result_text.strip():
+                # 验证输出: 不是计划描述 + 不是空洞回答
+                from omniagent.engine.react_engine import _is_substantive_answer, _check_hollow_answer
+                if not _is_substantive_answer(result_text):
+                    messages.append({"role": "assistant", "content": response[:500]})
+                    messages.append({"role": "user", "content": "你的输出看起来是计划描述而非实际结果。请基于已收集数据直接输出具体内容。"})
+                    continue
+                hollow = _check_hollow_answer(result_text)
+                if hollow.get("is_hollow"):
+                    messages.append({"role": "assistant", "content": response[:500]})
+                    messages.append({"role": "user", "content": f"你的输出不够完整: {hollow['reason']}。请给出更详细的结果。"})
+                    continue
                 return self._verify_llm_file_claims(result_text, tracker)
 
-            # 纯文本响应 → 直接返回
+            # 纯文本响应 → 检查是否实质性
+            from omniagent.engine.react_engine import _is_substantive_answer
+            if not _is_substantive_answer(response):
+                messages.append({"role": "assistant", "content": response[:500]})
+                messages.append({"role": "user", "content": "请直接输出步骤的执行结果，不要只描述计划。"})
+                continue
             return self._verify_llm_file_claims(response, tracker)
 
         # 耗尽 mini ReAct 循环 → 返回最后的响应
@@ -461,10 +477,14 @@ class PlanExecuteEngine:
 
         if unverified:
             warning = (
-                f"\n\n⚠️ **注意**: 以上内容中提到了创建文件 "
-                f"`{'`, `'.join(unverified)}`，"
-                f"但这些文件未经工具验证，可能并未实际创建。"
-                f"如需真正创建文件，请使用 write_file 工具。"
+                f"\n\n## ⚠️ 未验证的文件声明\n\n"
+                f"上述内容声称创建/写入了以下文件，但这些文件**未通过工具实际创建**:\n"
+                + "\n".join(f"- `{f}`" for f in unverified) +
+                f"\n\n**重要**: 任务可能未实际完成。如需创建文件，请使用 write_file 工具。"
+            )
+            logger.warning(
+                "PlanExecute: LLM 声称创建了 %d 个文件但未验证: %s",
+                len(unverified), ", ".join(unverified[:5]),
             )
             return llm_output + warning
 

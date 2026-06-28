@@ -101,37 +101,80 @@ class ReflectionEngine:
         for round_num in range(1, self.max_rounds + 1):
             logger.debug(f"Reflection 第 {round_num} 轮")
 
-            # Execute
-            output = self._execute(user_input, feedback, context)
+            try:
+                # Execute
+                output = self._execute(user_input, feedback, context)
 
-            # Review
-            review = self._review(user_input, output)
-            score = review.get("score", 0)
-            passed = review.get("pass") and score >= self.pass_threshold
+                # Review
+                review = self._review(user_input, output)
+                score = review.get("score", 0)
+                passed = review.get("pass") and score >= self.pass_threshold
 
-            self.callback.on_review(score, passed, review.get("feedback", "")[:200])
+                self.callback.on_review(score, passed, review.get("feedback", "")[:200])
 
-            if passed:
-                logger.debug(f"审查通过 (分数: {score})")
-                self.callback.on_finish(output)
-                return output
+                if passed:
+                    logger.debug(f"审查通过 (分数: {score})")
+                    self.callback.on_finish(output)
+                    return output
 
-            feedback = review.get("feedback", "请改进输出质量")
-            issues = review.get("issues", [])
-            logger.debug(f"审查未通过: {feedback}")
+                feedback = review.get("feedback", "请改进输出质量")
+                issues = review.get("issues", [])
+                logger.debug(f"审查未通过: {feedback}")
 
-            if issues:
-                feedback += "\n具体问题:\n" + "\n".join(f"- {i}" for i in issues)
+                if issues:
+                    feedback += "\n具体问题:\n" + "\n".join(f"- {i}" for i in issues)
+
+            except Exception as round_error:
+                logger.error(f"Reflection 第 {round_num} 轮异常: {round_error}", exc_info=True)
+                if round_num < self.max_rounds:
+                    feedback = f"执行过程中出现异常: {round_error}。请尝试不同的方式完成任务。"
+                    continue
+                self.callback.on_error(f"Reflection 引擎异常: {round_error}")
+                # 返回已有输出（如果有的话），否则返回错误消息
+                return locals().get("output", f"## 引擎异常\n\n{round_error}")
 
         logger.debug(f"达到最大修正轮次 ({self.max_rounds})，返回最后一轮输出")
         self.callback.on_warning(f"达到最大修正轮次 ({self.max_rounds})")
+        # 验证最终输出质量
+        try:
+            from omniagent.engine.react_engine import _is_substantive_answer
+            if not _is_substantive_answer(output):
+                warning = "\n\n[注意] 输出可能为计划描述而非实际结果，建议重新运行。"
+                output = output + warning
+        except ImportError:
+            pass
         self.callback.on_finish(output)
         return output
 
     def _execute(self, user_input: str, feedback: str = "", context: AgentContext | None = None) -> str:
-        """执行阶段: LLM 生成输出。"""
+        """执行阶段: 检测工具需求，必要时委托 ReAct 引擎执行。"""
+        # 检测是否需要工具执行
+        requires_tools = self._input_needs_tools(user_input)
+
+        if requires_tools:
+            # 委托给 ReActEngine 执行（有工具能力）
+            logger.info("Reflection: 检测到工具需求，委托 ReAct 引擎执行")
+            try:
+                from omniagent.engine.react_engine import ReActEngine
+                react_engine = ReActEngine(
+                    model_priority=self.executor_model_priority,
+                    max_iterations=12,
+                    callback=SilentCallback(),
+                )
+                react_result = react_engine.run(user_input, context)
+                if feedback:
+                    # 如果有反馈，追加到结果中让下一轮考虑
+                    react_result = (
+                        f"{react_result}\n\n"
+                        f"[审查反馈]\n{feedback}\n\n"
+                        f"请根据反馈改进上述输出。"
+                    )
+                return react_result
+            except Exception as e:
+                logger.error(f"Reflection ReAct 委托失败: {e}，回退到纯文本模式")
+
+        # 纯文本模式（不需要工具时使用）
         messages = [{"role": "system", "content": self.executor_prompt}]
-        # 注入对话历史（最近 6 条，包括最近的 system 消息以保留 system_hint）
         if context:
             history = context.get_conversation_messages()
             if history:
@@ -149,6 +192,23 @@ class ReflectionEngine:
             messages.append({"role": "user", "content": user_input})
 
         return self._call_llm(messages, model_priority=self.executor_model_priority)
+
+    @staticmethod
+    def _input_needs_tools(text: str) -> bool:
+        """检测用户输入是否需要工具执行。"""
+        try:
+            from omniagent.repl.prompt_optimizer import classify_input
+            result = classify_input(text)
+            return result.get("requires_tools", False)
+        except ImportError:
+            # 回退: 简单关键词检测
+            tool_keywords = [
+                "文件", "创建", "写入", "读取", "修改", "删除", "编辑",
+                "执行", "运行", "命令", "git", "安装", "搜索",
+                ".py", ".js", ".ts", ".md", ".txt", ".json",
+                "章", "章节", "大纲", "代码", "脚本",
+            ]
+            return any(kw in text.lower() for kw in tool_keywords)
 
     def _review(self, user_input: str, output: str) -> dict[str, Any]:
         """审查阶段: LLM 审查输出（使用 reviewer 模型）。"""
