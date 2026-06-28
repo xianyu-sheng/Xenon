@@ -1,10 +1,15 @@
-"""Core 配置模块。"""
+"""Core 配置模块 — 统一配置入口。
+
+OmniAgentConfig 是所有子系统的单一配置来源。
+凭证由 provider_registry 统一加载，路径在此集中管理。
+"""
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 @dataclass
@@ -38,6 +43,37 @@ class CoreConfig:
         self.data_dir = Path(self.data_dir)
 
 
+@dataclass
+class OmniAgentConfig:
+    """统一配置 — 所有子系统的单一配置来源。
+
+    启动时一次加载，通过调用链传递，替代各模块独立加载配置。
+    """
+
+    # 凭证（由 provider_registry 统一加载）
+    credentials: dict[str, str] = field(default_factory=dict)
+
+    # 核心路径
+    memory_path: Path = field(default_factory=lambda: Path.home() / ".omniagent" / "memory.json")
+    prompts_dir: Path = field(default_factory=lambda: Path.home() / ".omniagent" / "prompts")
+    credentials_path: Path = field(default_factory=lambda: Path.home() / ".omniagent" / "credentials.yaml")
+
+    @classmethod
+    def load(cls) -> OmniAgentConfig:
+        """从所有来源加载统一配置。"""
+        config = cls()
+
+        # 加载凭证
+        try:
+            from omniagent.repl.provider_registry import load_credentials
+            config.credentials = load_credentials()
+        except Exception:
+            pass
+
+        return config
+
+
 def get_core_config() -> CoreConfig:
-    """获取默认配置。"""
+    """获取默认 CoreConfig。"""
     return CoreConfig()
+

@@ -120,12 +120,22 @@ def _credential_base_url(value: Any) -> str:
 
 
 def _load_credentials() -> dict[str, Any]:
-    """从 ~/.omniagent/credentials.yaml 或环境变量加载 API Key 和端点配置。"""
+    """从 ~/.omniagent/credentials.yaml 加载 API Key，环境变量可覆盖。
+
+    委托 provider_registry.load_credentials() 读取文件（单一解析路径），
+    在此之上附加环境变量覆盖。消除旧版双重解析。
+    """
+    # 从 provider_registry 统一加载文件凭证（避免重复解析）
     creds: dict[str, Any] = {}
-    if _CREDENTIALS_PATH.exists():
-        with open(_CREDENTIALS_PATH, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-            creds = {k.lower(): v for k, v in data.items()}
+    try:
+        from omniagent.repl.provider_registry import load_credentials as _load_from_file
+        creds = {k.lower(): v for k, v in _load_from_file().items()}
+    except Exception:
+        # 回退：直接读取文件
+        if _CREDENTIALS_PATH.exists():
+            with open(_CREDENTIALS_PATH, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+                creds = {k.lower(): v for k, v in data.items()}
 
     # 环境变量作为补充 / 覆盖
     for provider, cfg in _PROVIDER_DEFAULTS.items():
