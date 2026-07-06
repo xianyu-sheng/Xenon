@@ -10,7 +10,7 @@ Combined Engines — 思考范式组合引擎。
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from omniagent.engine.callbacks import EngineCallback
 from omniagent.engine.context import AgentContext
@@ -18,6 +18,9 @@ from omniagent.engine.plan_execute_engine import PlanExecuteEngine
 from omniagent.engine.react_engine import ReActEngine, BUILTIN_TOOLS
 from omniagent.engine.reflection_engine import ReflectionEngine
 from omniagent.utils.llm_client import chat_completion
+
+if TYPE_CHECKING:
+    from omniagent.repl.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +49,18 @@ class PlanReactEngine:
         self.planner = PlanExecuteEngine(model_priority, max_steps=max_steps, callback=self.callback, model_configs=model_configs)
         self.reactor = ReActEngine(model_priority, max_iterations=react_iterations, callback=self.callback, model_configs=model_configs)
 
-    def run(self, user_input: str, context: AgentContext | None = None) -> str:
+    def run(
+        self,
+        user_input: str,
+        context: AgentContext | None = None,
+        ctx_mgr: ContextManager | None = None,
+    ) -> str:
         from rich.console import Console
         console = Console()
 
         ctx = context or AgentContext()
+        # F4: 把 ctx_mgr 透传给子引擎（_plan 经 _ctx_mgr 消费，reactor 经 run ctx_mgr）
+        self.planner._ctx_mgr = ctx_mgr
 
         # Phase 1: 全局规划
         console.print("[dim]📋 Phase 1: 生成执行计划...[/dim]")
@@ -110,7 +120,7 @@ class PlanReactEngine:
 
             # 用 ReAct 执行当前步骤
             try:
-                step_result = self.reactor.run(react_input, context=ctx)
+                step_result = self.reactor.run(react_input, context=ctx, ctx_mgr=ctx_mgr)
                 if not step_result or not step_result.strip():
                     step_result = f"(步骤 {step_id} 执行完成，无文本输出)"
                 console.print(f"[green]  ✓ 步骤 {step_id} 完成 ({len(step_result)} 字符)[/green]")
@@ -208,18 +218,24 @@ class PlanReflectionEngine:
             model_configs=model_configs,
         )
 
-    def run(self, user_input: str, context: AgentContext | None = None) -> str:
+    def run(
+        self,
+        user_input: str,
+        context: AgentContext | None = None,
+        ctx_mgr: ContextManager | None = None,
+    ) -> str:
         ctx = context or AgentContext()
 
         # Phase 1: Plan-Execute 执行
         logger.info("PlanReflection Phase 1: 规划并执行")
-        initial_output = self.planner.run(user_input, context=ctx)
+        initial_output = self.planner.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
 
         # Phase 2: Reflection 审查和修正
         logger.info("PlanReflection Phase 2: 反思审查")
         try:
             final_output = self.reflector.run(
-                f"原始任务: {user_input}\n\n执行结果:\n{initial_output}", context=ctx
+                f"原始任务: {user_input}\n\n执行结果:\n{initial_output}",
+                context=ctx, ctx_mgr=ctx_mgr,
             )
         except Exception as e:
             logger.warning(f"Reflection 阶段失败: {e}")
@@ -261,18 +277,24 @@ class ReactReflectionEngine:
             model_configs=model_configs,
         )
 
-    def run(self, user_input: str, context: AgentContext | None = None) -> str:
+    def run(
+        self,
+        user_input: str,
+        context: AgentContext | None = None,
+        ctx_mgr: ContextManager | None = None,
+    ) -> str:
         ctx = context or AgentContext()
 
         # Phase 1: ReAct 探索和执行
         logger.info("ReactReflection Phase 1: ReAct 探索执行")
-        initial_output = self.reactor.run(user_input, context=ctx)
+        initial_output = self.reactor.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
 
         # Phase 2: Reflection 审查和修正
         logger.info("ReactReflection Phase 2: 反思审查")
         try:
             final_output = self.reflector.run(
-                f"原始任务: {user_input}\n\n执行结果:\n{initial_output}", context=ctx
+                f"原始任务: {user_input}\n\n执行结果:\n{initial_output}",
+                context=ctx, ctx_mgr=ctx_mgr,
             )
         except Exception as e:
             logger.warning(f"Reflection 阶段失败: {e}")

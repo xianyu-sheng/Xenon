@@ -16,7 +16,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from omniagent.engine.base import BaseEngine
 from omniagent.engine.callbacks import EngineCallback, mask_sensitive_params
@@ -25,6 +25,9 @@ from omniagent.engine.novel_manager import NovelManager, NovelProject
 from omniagent.engine.tool_tracker import ToolExecutionTracker
 from omniagent.nodes.tool_node import ToolNode
 from omniagent.utils.response_adapter import parse_react
+
+if TYPE_CHECKING:
+    from omniagent.repl.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +251,12 @@ class NovelEngine(BaseEngine):
             os_info = "Linux（bash）"
         return NOVEL_SYSTEM_PROMPT.format(tools_desc=tools_desc, os_info=os_info)
 
-    def run(self, user_input: str, context: AgentContext | None = None) -> str:
+    def run(
+        self,
+        user_input: str,
+        context: AgentContext | None = None,
+        ctx_mgr: ContextManager | None = None,
+    ) -> str:
         """
         执行小说创作循环。
 
@@ -257,6 +265,9 @@ class NovelEngine(BaseEngine):
         2. 加载该小说的完整上下文
         3. 执行创作任务
         4. 更新创作记忆
+
+        F4: ctx_mgr 注入时消费其（已压缩）消息而非自行 [-10:] 截断，且循环内
+        每 5 轮触发 in-run 压缩。
         """
         ctx = context or AgentContext()
         tracker = ToolExecutionTracker()
@@ -299,11 +310,16 @@ class NovelEngine(BaseEngine):
             })
 
         # 注入对话历史
-        history = ctx.get_conversation_messages()
-        if history:
-            recent = [m for m in history if m.get("role") != "system"][-10:]
-            messages.extend(recent)
-            logger.debug(f"Novel 注入 {len(recent)} 条对话历史")
+        if ctx_mgr is not None:
+            history = [m for m in ctx_mgr.get_messages() if m.get("role") != "system"]
+            messages.extend(history)
+            logger.debug(f"Novel 注入 ContextManager {len(history)} 条历史（已压缩）")
+        else:
+            history = ctx.get_conversation_messages()
+            if history:
+                recent = [m for m in history if m.get("role") != "system"][-10:]
+                messages.extend(recent)
+                logger.debug(f"Novel 注入 {len(recent)} 条对话历史")
 
         messages.append({"role": "user", "content": user_input})
 
@@ -373,6 +389,8 @@ class NovelEngine(BaseEngine):
                 obs_msg = f"Observation: {observation}"
                 messages.append({"role": "user", "content": obs_msg})
                 logger.debug(f"Novel 观察: {observation[:200]}")
+                # F4: 每 5 轮压缩 in-run messages，抑制 O(n²) 增长
+                messages = self._maybe_compact_messages(messages, i + 1)
             else:
                 result = parsed.get("thought", response)
                 self._auto_update_context(slug, user_input, result, tracker)

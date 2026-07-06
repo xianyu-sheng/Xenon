@@ -10,7 +10,7 @@ ReAct 模式: Think → Act → Observe → 循环直到完成
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from omniagent.engine.base import BaseEngine
 from omniagent.engine.callbacks import EngineCallback, mask_sensitive_params
@@ -18,6 +18,9 @@ from omniagent.engine.context import AgentContext
 from omniagent.engine.tool_tracker import ToolExecutionTracker
 from omniagent.nodes.tool_node import ToolNode, _DYNAMIC_TOOLS
 from omniagent.utils.response_adapter import parse_react
+
+if TYPE_CHECKING:
+    from omniagent.repl.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
 
@@ -262,13 +265,20 @@ class ReActEngine(BaseEngine):
 """
         return REACT_SYSTEM_PROMPT.format(tools_desc=tools_desc, large_file_hint=large_file_hint) + env_info
 
-    def run(self, user_input: str, context: AgentContext | None = None) -> str:
+    def run(
+        self,
+        user_input: str,
+        context: AgentContext | None = None,
+        ctx_mgr: ContextManager | None = None,
+    ) -> str:
         """
         执行 ReAct 循环。
 
         Args:
             user_input: 用户输入
             context: 可选的共享上下文
+            ctx_mgr: F4 注入的 ContextManager——提供时消费其（已压缩）消息而非
+                自行 ``[-10:]`` 截断，且循环内每 5 轮触发 in-run 压缩。
 
         Returns:
             最终答案文本
@@ -277,14 +287,20 @@ class ReActEngine(BaseEngine):
         tracker = ToolExecutionTracker()
         self._reset_interrupt()  # F6: 每轮 run 重置中断标志
         messages = [{"role": "system", "content": self.system_prompt}]
-        # 注入对话历史（最近 10 条，排除 system 消息）
-        history = ctx.get_conversation_messages()
-        if history:
-            recent = [m for m in history if m.get("role") != "system"][-10:]
-            messages.extend(recent)
-            logger.debug(f"ReAct 注入 {len(recent)} 条对话历史")
+        # F4: ctx_mgr 注入时消费其（已压缩）消息，不再自行 [-10:] 截断；
+        # 否则回退 AgentContext 的对话历史（保留 [-10:] 兜底）。
+        if ctx_mgr is not None:
+            history = [m for m in ctx_mgr.get_messages() if m.get("role") != "system"]
+            messages.extend(history)
+            logger.debug(f"ReAct 注入 ContextManager {len(history)} 条历史（已压缩）")
         else:
-            logger.warning("ReAct: 无对话历史可注入！")
+            history = ctx.get_conversation_messages()
+            if history:
+                recent = [m for m in history if m.get("role") != "system"][-10:]
+                messages.extend(recent)
+                logger.debug(f"ReAct 注入 {len(recent)} 条对话历史")
+            else:
+                logger.warning("ReAct: 无对话历史可注入！")
         messages.append({"role": "user", "content": user_input})
 
         # 判断输入是否需要工具操作
@@ -373,6 +389,8 @@ class ReActEngine(BaseEngine):
                 messages.append({"role": "user", "content": obs_msg})
                 logger.debug(f"ReAct 观察: {observation[:200]}")
                 no_tool_streak = 0
+                # F4: 每 5 轮压缩 in-run messages，抑制 O(n²) 增长
+                messages = self._maybe_compact_messages(messages, i + 1)
             else:
                 # LLM 没有给出有效输出，尝试从最后一条观察中提取
                 last_obs = ""

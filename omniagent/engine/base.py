@@ -47,6 +47,8 @@ class BaseEngine(ABC):
         self.temperature = temperature
         # F6: 协作式中断标志，外部调 interrupt() 后 run() 在下一轮退出
         self._interrupted: bool = False
+        # F4: 本次 run 注入的 ContextManager（run 起点设置，供 _history_messages 消费）
+        self._ctx_mgr: Any = None
 
     def interrupt(self) -> None:
         """F6: 协作式中断——外部调用后，run() 在下一轮迭代顶部退出。"""
@@ -75,6 +77,45 @@ class BaseEngine(ABC):
             return False
         est = sum(len(m.get("content", "")) for m in messages) // 2
         return est > ratio * window
+
+    def _history_messages(self, context: Any) -> list[dict[str, str]]:
+        """F4: 优先消费注入的 ctx_mgr（已压缩）消息，否则回退 AgentContext 历史。
+
+        返回非 system 消息（system 由各引擎自行注入自己的 system_prompt）。
+        """
+        if self._ctx_mgr is not None:
+            return [m for m in self._ctx_mgr.get_messages() if m.get("role") != "system"]
+        if context:
+            return context.get_conversation_messages()
+        return []
+
+    def _maybe_compact_messages(
+        self,
+        messages: list[dict[str, str]],
+        turn: int,
+        every: int = 5,
+    ) -> list[dict[str, str]]:
+        """F4: 每 ``every`` 轮压缩 in-run messages，复用 ContextManager 的 F3 压缩逻辑。
+
+        引擎局部 ``messages`` 在迭代中 O(n) 增长，每轮重发给 LLM 造成 O(n²) token
+        成本（§8.9.6）。每 5 轮用临时 ContextManager 跑一次 F3 compact（6 段/安全
+        截断），把早期轨迹摘要化、保留近期上下文。无 model_priority 或 LLM 失败时
+        自动回退正则摘要（F3 已实现）。
+        """
+        if turn <= 0 or turn % every != 0:
+            return messages
+        try:
+            from omniagent.repl.context_manager import ContextManager
+
+            tmp = ContextManager(max_tokens=self._context_window())
+            for m in messages:
+                tmp.add_message(m.get("role", "user"), m.get("content", ""))
+            tmp.compact(model_priority=self.model_priority or None)
+            compacted = tmp.get_messages()
+            return compacted if compacted else messages
+        except Exception as e:  # noqa: BLE001 — 压缩绝不能中断主循环
+            logger.warning(f"in-run 压缩失败（已忽略，沿用原 messages）: {e}")
+            return messages
 
     def _call_llm(self, messages: list[dict[str, str]], max_tokens: int | None = None) -> str:
         """调用 LLM，支持多模型 fallback。

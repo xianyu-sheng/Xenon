@@ -8,7 +8,7 @@ Phase 2: Execution — 逐步执行，每步结果写入 context
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from omniagent.engine.base import BaseEngine
 from omniagent.engine.callbacks import EngineCallback
@@ -16,6 +16,9 @@ from omniagent.engine.context import AgentContext
 from omniagent.engine.tool_tracker import ToolExecutionTracker
 from omniagent.nodes.tool_node import ToolNode
 from omniagent.utils.response_adapter import parse_plan
+
+if TYPE_CHECKING:
+    from omniagent.repl.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
 
@@ -141,18 +144,26 @@ class PlanExecuteEngine(BaseEngine):
             shell_avoid=shell_avoid,
         )
 
-    def run(self, user_input: str, context: AgentContext | None = None) -> str:
+    def run(
+        self,
+        user_input: str,
+        context: AgentContext | None = None,
+        ctx_mgr: ContextManager | None = None,
+    ) -> str:
         """
         执行 Plan-Execute 流程。
 
         Args:
             user_input: 用户输入
             context: 可选的共享上下文
+            ctx_mgr: F4 注入的 ContextManager——提供时 _plan 消费其（已压缩）消息
+                而非自行 ``[-6:]`` 截断。
 
         Returns:
             最终执行结果
         """
         ctx = context or AgentContext()
+        self._ctx_mgr = ctx_mgr  # F4
         tracker = ToolExecutionTracker()
         self._reset_interrupt()
 
@@ -218,17 +229,18 @@ class PlanExecuteEngine(BaseEngine):
     def _plan(self, user_input: str, context: AgentContext | None = None) -> dict[str, Any]:
         """Phase 1: 生成执行计划。"""
         messages = [{"role": "system", "content": self.system_prompt}]
-        # 注入对话历史（最近 6 条，排除 system 消息）
-        if context:
-            history = context.get_conversation_messages()
-            if history:
-                recent = [m for m in history if m.get("role") != "system"][-6:]
+        # F4: 优先消费 ctx_mgr（已压缩）消息；否则回退 AgentContext 历史 [-6:]
+        history = self._history_messages(context)
+        if history:
+            if self._ctx_mgr is not None:
+                messages.extend(history)  # 已由 ContextManager 压缩管理
+                logger.debug(f"Plan 注入 ContextManager {len(history)} 条历史")
+            else:
+                recent = history[-6:]
                 messages.extend(recent)
                 logger.debug(f"Plan 注入 {len(recent)} 条对话历史")
-            else:
-                logger.warning("Plan: 无对话历史可注入！")
         else:
-            logger.warning("Plan: context 为 None！")
+            logger.warning("Plan: 无对话历史可注入！")
 
         # 关键：将当前用户输入加入消息列表
         messages.append({"role": "user", "content": user_input})

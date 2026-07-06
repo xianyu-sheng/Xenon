@@ -825,7 +825,7 @@ class REPL:
         callback = self._make_callback()
         engine = ReActEngine(model_priority=model_ids, max_iterations=10, callback=callback, model_configs=dict(self.registry.models))
         try:
-            result = engine.run(user_input, self.agent_context)
+            result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "ReAct 结果")
             self.status_bar.set_last_model(model_ids[0])
@@ -841,7 +841,7 @@ class REPL:
         callback = self._make_callback()
         engine = PlanExecuteEngine(model_priority=model_ids, max_steps=20, callback=callback, model_configs=dict(self.registry.models))
         try:
-            result = engine.run(user_input, self.agent_context)
+            result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Plan-Execute 结果")
             self.status_bar.set_last_model(model_ids[0])
@@ -857,7 +857,7 @@ class REPL:
         callback = self._make_callback()
         engine = ReflectionEngine(model_priority=model_ids, max_rounds=3, callback=callback, model_configs=dict(self.registry.models))
         try:
-            result = engine.run(user_input, context=self.agent_context)
+            result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
@@ -873,7 +873,7 @@ class REPL:
         callback = self._make_callback()
         engine = PlanReactEngine(model_priority=model_ids, max_steps=10, react_iterations=8, callback=callback, model_configs=dict(self.registry.models))
         try:
-            result = engine.run(user_input, context=self.agent_context)
+            result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Plan+React 结果")
             self.status_bar.set_last_model(model_ids[0])
@@ -889,7 +889,7 @@ class REPL:
         callback = self._make_callback()
         engine = PlanReflectionEngine(model_priority=model_ids, max_steps=10, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
         try:
-            result = engine.run(user_input, context=self.agent_context)
+            result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Plan+Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
@@ -905,7 +905,7 @@ class REPL:
         callback = self._make_callback()
         engine = ReactReflectionEngine(model_priority=model_ids, react_iterations=8, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
         try:
-            result = engine.run(user_input, context=self.agent_context)
+            result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "React+Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
@@ -927,7 +927,7 @@ class REPL:
             model_configs=dict(self.registry.models),
         )
         try:
-            result = engine.run(user_input, context=self.agent_context)
+            result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Novel 创作结果", border_style="magenta")
             self.status_bar.set_last_model(model_ids[0])

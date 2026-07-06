@@ -7,12 +7,15 @@ Reflection Engine — 执行-审查-修正循环引擎。
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from omniagent.engine.base import BaseEngine
 from omniagent.engine.callbacks import ConsoleCallback, EngineCallback, SilentCallback
 from omniagent.engine.context import AgentContext
 from omniagent.utils.response_adapter import parse_review
+
+if TYPE_CHECKING:
+    from omniagent.repl.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
 
@@ -85,19 +88,27 @@ class ReflectionEngine(BaseEngine):
         self.executor_prompt = executor_prompt or EXECUTOR_PROMPT
         self.reviewer_prompt = reviewer_prompt or REVIEWER_PROMPT
 
-    def run(self, user_input: str, context: AgentContext | None = None) -> str:
+    def run(
+        self,
+        user_input: str,
+        context: AgentContext | None = None,
+        ctx_mgr: ContextManager | None = None,
+    ) -> str:
         """
         执行 Reflection 流程。
 
         Args:
             user_input: 用户输入
             context: 可选的共享上下文（含对话历史）
+            ctx_mgr: F4 注入的 ContextManager——提供时 _execute 消费其（已压缩）消息
+                而非自行 ``[-6:]`` 截断。
 
         Returns:
             修正后的最终输出
         """
         feedback = ""
         self._reset_interrupt()
+        self._ctx_mgr = ctx_mgr  # F4
 
         for round_num in range(1, self.max_rounds + 1):
             if self._interrupted:
@@ -136,12 +147,13 @@ class ReflectionEngine(BaseEngine):
     def _execute(self, user_input: str, feedback: str = "", context: AgentContext | None = None) -> str:
         """执行阶段: LLM 生成输出。"""
         messages = [{"role": "system", "content": self.executor_prompt}]
-        # 注入对话历史（最近 6 条，排除 system 消息）
-        if context:
-            history = context.get_conversation_messages()
-            if history:
-                recent = [m for m in history if m.get("role") != "system"][-6:]
-                messages.extend(recent)
+        # F4: 优先消费 ctx_mgr（已压缩）消息；否则回退 AgentContext 历史 [-6:]
+        history = self._history_messages(context)
+        if history:
+            if self._ctx_mgr is not None:
+                messages.extend(history)
+            else:
+                messages.extend(history[-6:])
 
         if feedback:
             messages.append({
