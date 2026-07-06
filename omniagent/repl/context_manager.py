@@ -11,8 +11,14 @@ Context Manager — 对话历史与 Token 管理。
 from __future__ import annotations
 
 import copy
+import logging
+import re
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -33,13 +39,25 @@ class ContextManager:
     管理 message history、token 估算、压缩和回退。
     """
 
-    def __init__(self, *, max_tokens: int = 128000, compact_threshold: float = 0.8) -> None:
+    def __init__(
+        self,
+        *,
+        max_tokens: int = 128000,
+        compact_threshold: float = 0.6,
+        compact_force: float = 0.85,
+    ) -> None:
         self.max_tokens = max_tokens
-        self.compact_threshold = compact_threshold  # 达到 max_tokens 的 80% 时提醒
+        # F3 双阈值：compact_threshold=warn（60%，触发 LLM 压缩），
+        # compact_force=force（85%，跳过 LLM 改用安全截断，避免超限输入）
+        self.compact_threshold = compact_threshold
+        self.compact_force = compact_force
         self.history: list[ConversationTurn] = []
         self._undo_stack: list[list[ConversationTurn]] = []
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
+        # F3 压缩持久化（可选）：设置后每次压缩写一份 markdown 快照
+        self.session_id: str | None = None
+        self.persist_dir: Path | None = None
 
     # ── 对话管理 ──────────────────────────────────────────
 
@@ -139,22 +157,67 @@ class ContextManager:
 
     # ── /compact 压缩 ────────────────────────────────────
 
-    def compact(self, summary: str | None = None, model_priority: list[str] | None = None) -> str:
+    # F3：6 段结构化摘要的段名（顺序即输出顺序）
+    _SIX_SEGMENTS = (
+        "原始目标", "已完成步骤", "关键约束",
+        "当前文件状态", "剩余待办", "关键数据",
+    )
+
+    def compact(
+        self,
+        summary: str | None = None,
+        model_priority: list[str] | None = None,
+        *,
+        session_id: str | None = None,
+    ) -> str:
+        """压缩对话历史（F3 三层策略 + 6 段结构化摘要）。
+
+        分流 by usage_ratio():
+        - Tier 1 (<compact_threshold=60% 且无手动摘要): 跳过，不改写历史；
+        - Tier 2 (60-85%): LLM 6 段压缩 older，保留 recent 3 轮；
+        - Tier 3 (>compact_force=85%): _safe_truncation 安全截断（不调 LLM，
+          避免超限输入触发 400），保留 system + 最近 30% 非系统消息。
+
+        B5 兼容：older 为空时直接返回（不反向增加消息）。
         """
-        压缩对话历史。
+        ratio = self.usage_ratio()
+        older, recent = self._split_recent(keep_rounds=3)
 
-        策略：保留最近 3 轮对话完整，压缩更早的消息为摘要。
-        这样既节省 Token，又保留近期上下文的连贯性。
+        # B5：无可压缩的早期消息 → 不改写历史
+        if not older:
+            return summary or "（无可压缩的早期对话，无需压缩）"
 
-        Args:
-            summary: 手动提供的摘要
-            model_priority: 用于 LLM 摘要的模型列表
+        # Tier 1：<60% 且无手动摘要 → 跳过
+        if ratio < self.compact_threshold and not summary:
+            return f"（当前上下文使用率 {ratio:.0%}，低于 {self.compact_threshold:.0%} 阈值，无需压缩）"
 
-        Returns:
-            压缩后的摘要文本。
-        """
-        # 找到最近 3 轮对话的分界点（按 user 消息计数）
-        keep_rounds = 3
+        self.save_snapshot()
+
+        if ratio > self.compact_force and not summary:
+            # Tier 3：>85% 安全截断（不调 LLM）
+            new_history = self._safe_truncation()
+            summary = (
+                f"（上下文使用率 {ratio:.0%} 超过 {self.compact_force:.0%}，"
+                f"已安全截断，保留 system + 最近 {len(new_history)} 条消息）"
+            )
+        else:
+            # Tier 2：60-85% LLM 6 段压缩（或手动摘要）
+            summary = summary or self._llm_summary_6seg(model_priority, older)
+            new_history = [
+                ConversationTurn(
+                    role="system",
+                    content=(
+                        f"[对话历史已压缩] 以下是之前 {len(older)} 条消息的 6 段摘要：\n\n{summary}"
+                    ),
+                )
+            ] + recent
+
+        self.history = new_history
+        self._persist_compact_md(summary, session_id)
+        return summary
+
+    def _split_recent(self, keep_rounds: int = 3) -> tuple[list[ConversationTurn], list[ConversationTurn]]:
+        """按 user 轮数切分 older / recent（recent 保留最近 keep_rounds 轮完整对话）。"""
         user_count = 0
         cut_idx = 0
         for i in range(len(self.history) - 1, -1, -1):
@@ -163,78 +226,136 @@ class ContextManager:
                 if user_count >= keep_rounds:
                     cut_idx = i
                     break
+        return self.history[:cut_idx], self.history[cut_idx:]
 
-        older = self.history[:cut_idx]
-        recent = self.history[cut_idx:]
+    def _safe_truncation(self) -> list[ConversationTurn]:
+        """F3 Tier 3 安全截断：保留所有 system 消息 + 最近 30% 非系统消息（min5 max20）。"""
+        system_msgs = [t for t in self.history if t.role == "system"]
+        non_system = [t for t in self.history if t.role != "system"]
+        if not non_system:
+            return list(self.history)
+        keep = max(5, min(20, int(len(non_system) * 0.3)))
+        keep = min(keep, len(non_system))
+        # 仅保留第一条 system（主提示词），丢弃旧的压缩摘要 system，避免累积
+        head_system = system_msgs[:1]
+        return head_system + non_system[-keep:]
 
-        # B5: 无可压缩的早期消息时直接 short-circuit，避免反向增加消息
-        # （cut_idx==0 或 older 为空都意味着没有可摘要的内容，
-        #  此时若继续执行会把"摘要 + 全部 recent"写回，凭空多出一条摘要消息）
-        if not older:
-            return summary or "（无可压缩的早期对话，无需压缩）"
+    def _head_tail_truncate(self, text: str, head_ratio: float = 0.4, tail_ratio: float = 0.5) -> str:
+        """F3 输入头尾截断：取前 40% + 后 50%，丢弃中间 10%，控制 LLM 摘要输入体量。
 
-        # 对更早的消息生成摘要
-        if not summary:
-            summary = self._llm_summary(model_priority, messages=older) if model_priority else self._auto_summary(messages=older)
+        仅对长文本（≥200 字符）生效——短文本截断反而损失信息。
+        """
+        if not text:
+            return text
+        n = len(text)
+        if n < 200:
+            return text
+        head_end = int(n * head_ratio)
+        tail_start = n - int(n * tail_ratio)
+        if head_end >= tail_start:
+            return text  # 文本不长，无需截断
+        return text[:head_end] + f"\n…（省略中间 {tail_start - head_end} 字符）…\n" + text[tail_start:]
 
-        # 保存快照以便 undo
-        self.save_snapshot()
+    def _llm_summary_6seg(
+        self,
+        model_priority: list[str] | None,
+        messages: list[ConversationTurn],
+    ) -> str:
+        """F3 6 段结构化 LLM 摘要（含头尾截断 + 备选模型重试 + 解析校验）。
 
-        # 替换历史：摘要 + 最近 3 轮完整对话
-        self.history = [
-            ConversationTurn(
-                role="system",
-                content=f"[对话历史已压缩] 以下是之前 {len(older)} 条消息的摘要：\n\n{summary}",
-            )
-        ] + recent
-
-        return summary
-
-    def _llm_summary(self, model_priority: list[str], messages: list | None = None) -> str:
-        """使用 LLM 生成智能对话摘要。"""
+        失败链路：LLM 6 段 → 解析失败 → _auto_summary 正则兜底。
+        """
         try:
             from omniagent.utils.llm_client import chat_completion
 
-            target = messages or self.history
-            recent = target[-20:]  # 最多取 20 条
+            # 构建对话文本并头尾截断
+            parts = []
+            for t in messages[-20:]:  # 最多取 20 条喂给 LLM
+                tag = {"user": "用户", "assistant": "助手", "system": "系统", "tool": "工具"}.get(t.role, t.role)
+                parts.append(f"[{tag}] {t.content[:300]}")
+            conversation = self._head_tail_truncate("\n".join(parts))
 
-            # 分层压缩：工具结果摘要优先，用户指令其次，LLM 思考最后
-            priority_parts = []
-            normal_parts = []
-            for t in recent:
-                text = t.content[:300]
-                if t.role == "user":
-                    normal_parts.append(f"[用户] {text}")
-                elif "tool" in t.role.lower() or "observation" in text.lower():
-                    priority_parts.append(f"[工具结果] {text}")
-                else:
-                    normal_parts.append(f"[助手] {text}")
-
-            conversation = "\n".join(priority_parts + normal_parts)
-
+            system_prompt = (
+                "请将以下对话压缩为严格的 6 段结构化摘要，每段以【段名】开头，"
+                "该段无内容时写\"无\"。总长不超过 600 字。段名与顺序固定：\n"
+                "【原始目标】用户的核心需求与最终目标。\n"
+                "【已完成步骤】已执行的操作及其结果（含工具调用）。\n"
+                "【关键约束】用户强调的约束、偏好、技术栈、命名规范。\n"
+                "【当前文件状态】已创建/修改/读取的文件路径及其状态。\n"
+                "【剩余待办】尚未完成的任务与下一步。\n"
+                "【关键数据】必须记住的代码片段、配置值、ID、错误信息。"
+            )
             msgs = [
-                {"role": "system", "content": (
-                    "请用中文简洁总结以下对话。"
-                    "重点保留：1) 用户的核心需求 2) 执行的操作和结果 "
-                    "3) 创建/修改的文件路径 4) 遇到的错误和解决方案 "
-                    "5) 关键代码片段。不超过 500 字。"
-                )},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": conversation},
             ]
 
-            for model_id in model_priority:
+            # 备选模型重试：依次尝试 model_priority，首个成功且解析通过即返回
+            for model_id in (model_priority or []):
                 try:
-                    return chat_completion(model_id, msgs, max_tokens=800, temperature=0.3)
-                except Exception:
+                    raw = chat_completion(model_id, msgs, max_tokens=800, temperature=0.3)
+                    parsed = self._parse_six_segments(raw)
+                    if parsed:
+                        return parsed
+                    logger.debug(f"6 段摘要解析失败，尝试下一个模型: {model_id}")
+                except Exception as e:  # noqa: BLE001 — 备选模型逐一兜底
+                    logger.warning(f"6 段摘要模型 {model_id} 失败: {e}，尝试下一个")
                     continue
 
+            # 所有模型都失败或解析不通过 → 正则兜底
+            return self._auto_summary(messages=messages)
+        except Exception as e:  # noqa: BLE001 — 压缩绝不能上抛
+            logger.warning(f"6 段摘要整体失败，回退自动摘要: {e}")
             return self._auto_summary(messages=messages)
 
-        except Exception:
-            return self._auto_summary(messages=messages)
+    def _parse_six_segments(self, raw: str) -> str | None:
+        """解析 LLM 输出为 6 段；至少含【原始目标】或【已完成步骤】才算有效。"""
+        if not raw or not raw.strip():
+            return None
+        # 按【段名】切分
+        pattern = re.compile(r"【([^】]+)】")
+        matches = list(pattern.finditer(raw))
+        if not matches:
+            return None
+        segments: dict[str, str] = {}
+        for i, m in enumerate(matches):
+            name = m.group(1).strip()
+            start = m.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(raw)
+            segments[name] = raw[start:end].strip()
+
+        # 校验：至少包含核心段之一
+        if not any(name in segments for name in ("原始目标", "已完成步骤")):
+            return None
+
+        # 按规范顺序重组
+        lines = []
+        for seg in self._SIX_SEGMENTS:
+            content = segments.get(seg, "无")
+            lines.append(f"【{seg}】{content}")
+        return "\n".join(lines)
+
+    def _persist_compact_md(self, summary: str, session_id: str | None) -> None:
+        """F3 持久化：压缩成功后写一份带时间戳的 markdown 快照。"""
+        try:
+            sid = session_id or self.session_id or "default"
+            base = self.persist_dir or (Path.home() / ".omniagent" / "sessions" / sid)
+            base.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            path = base / f"compact-{ts}.md"
+            path.write_text(
+                f"# 对话压缩快照 ({ts})\n\n"
+                f"- session: {sid}\n"
+                f"- 使用率: {self.usage_ratio():.1%}\n\n"
+                f"## 摘要\n\n{summary}\n",
+                encoding="utf-8",
+            )
+            logger.debug(f"压缩快照已持久化: {path}")
+        except Exception as e:  # noqa: BLE001 — 持久化失败不影响压缩主流程
+            logger.warning(f"压缩快照持久化失败（已忽略）: {e}")
 
     def _auto_summary(self, messages: list | None = None) -> str:
-        """智能自动摘要（保留关键信息）。"""
+        """智能自动摘要（保留关键信息）——6 段 LLM 失败时的正则兜底。"""
         target = messages or self.history
 
         # 提取关键信息

@@ -125,7 +125,9 @@ class TestContextManager:
         assert "无需压缩" in summary
 
     def test_compact_auto_summary(self):
-        mgr = ContextManager()
+        # F3 三层策略：需 usage_ratio 落在 60-85%（Tier 2）才会触发压缩。
+        # 无 model_priority 时 Tier 2 的 6 段 LLM 路径无可用模型 → 回退 _auto_summary。
+        mgr = ContextManager(max_tokens=250)
         # 需要超过 3 轮才能触发自动压缩
         for i in range(4):
             mgr.add_user_message(f"如何写快速排序？步骤 {i+1}")
