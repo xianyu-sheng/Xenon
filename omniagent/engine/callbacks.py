@@ -9,6 +9,33 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+# R7: 敏感参数名（小写匹配）——日志/显示时脱敏，避免把 api_key/token/file content
+# 等写进日志或控制台。
+_SENSITIVE_PARAM_NAMES = frozenset({
+    "api_key", "apikey", "token", "secret", "password", "passwd",
+    "authorization", "credential", "credentials",
+    "python_function", "command_template", "content",
+})
+
+
+def mask_sensitive_params(params: Any) -> Any:
+    """返回脱敏后的参数副本：敏感键的值替换为 ``<masked len=N>``。
+
+    供日志与 ``on_act`` 显示路径使用；非 dict 输入返回其截断 repr 字符串。
+    测试用的 RecordingCallback 等仍保留原始值，不经过此处。
+    """
+    if not isinstance(params, dict):
+        s = repr(params)
+        return s if len(s) <= 200 else s[:200] + "...(截断)"
+    out: dict[Any, Any] = {}
+    for k, v in params.items():
+        if isinstance(k, str) and k.lower() in _SENSITIVE_PARAM_NAMES:
+            out[k] = f"<masked len={len(v)}>" if isinstance(v, str) else "<masked>"
+        else:
+            out[k] = v
+    return out
+
+
 class EngineCallback:
     """引擎回调基类。所有方法默认空实现，子类按需覆写。"""
 
@@ -180,7 +207,7 @@ class ThinkingPanel:
                 parts.append(f"🤔 {thought_short}")
             if step.action:
                 params_parts = []
-                for k, v in step.action_input.items():
+                for k, v in mask_sensitive_params(step.action_input).items():
                     v_str = repr(v)
                     if len(v_str) > 50:
                         v_str = v_str[:47] + "..."
@@ -230,7 +257,9 @@ class ConsoleCallback(EngineCallback):
     def on_act(self, action: str, action_input: dict) -> None:
         self._panel.add_action(action, action_input)
         if self.verbose:
-            params_str = ", ".join(f"{k}={repr(v)[:80]}" for k, v in action_input.items())
+            # R7: 脱敏后再展示，避免 api_key/content 等泄露到控制台
+            masked = mask_sensitive_params(action_input)
+            params_str = ", ".join(f"{k}={repr(v)[:80]}" for k, v in masked.items())
             print(f"  🔧 {action}({params_str})")
 
     def on_observe(self, observation: str) -> None:

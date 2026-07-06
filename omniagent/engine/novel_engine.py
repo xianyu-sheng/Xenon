@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from omniagent.engine.base import BaseEngine
-from omniagent.engine.callbacks import EngineCallback
+from omniagent.engine.callbacks import EngineCallback, mask_sensitive_params
 from omniagent.engine.context import AgentContext
 from omniagent.engine.novel_manager import NovelManager, NovelProject
 from omniagent.engine.tool_tracker import ToolExecutionTracker
@@ -302,13 +302,13 @@ class NovelEngine(BaseEngine):
         if history:
             recent = [m for m in history if m.get("role") != "system"][-10:]
             messages.extend(recent)
-            logger.info(f"Novel 注入 {len(recent)} 条对话历史")
+            logger.debug(f"Novel 注入 {len(recent)} 条对话历史")
 
         messages.append({"role": "user", "content": user_input})
 
         # ── 3. 执行创作循环 ──
         for i in range(self.max_iterations):
-            logger.info(f"Novel 迭代 {i + 1}/{self.max_iterations}")
+            logger.debug(f"Novel 迭代 {i + 1}/{self.max_iterations}")
 
             response = self._call_llm(messages)
             messages.append({"role": "assistant", "content": response})
@@ -341,7 +341,7 @@ class NovelEngine(BaseEngine):
                     continue
                 if tracker.has_executions():
                     summary = tracker.execution_summary()
-                    logger.info(f"Novel 工具执行摘要: {summary}")
+                    logger.debug(f"Novel 工具执行摘要: {summary}")
 
                 # ── 4. 自动更新创作记忆 ──
                 self._auto_update_context(slug, user_input, answer, tracker)
@@ -353,8 +353,8 @@ class NovelEngine(BaseEngine):
                 action = parsed["action"]
                 action_input = parsed.get("action_input", {})
 
-                logger.info(f"Novel 思考: {thought}")
-                logger.info(f"Novel 行动: {action}({action_input})")
+                logger.debug(f"Novel 思考: {thought}")
+                logger.debug(f"Novel 行动: {action}({mask_sensitive_params(action_input)})")
                 self.callback.on_act(action, action_input)
 
                 observation = self._execute_tool(action, action_input, ctx, tracker)
@@ -362,7 +362,7 @@ class NovelEngine(BaseEngine):
 
                 obs_msg = f"Observation: {observation}"
                 messages.append({"role": "user", "content": obs_msg})
-                logger.info(f"Novel 观察: {observation[:200]}")
+                logger.debug(f"Novel 观察: {observation[:200]}")
             else:
                 result = parsed.get("thought", response)
                 self._auto_update_context(slug, user_input, result, tracker)
@@ -445,14 +445,14 @@ class NovelEngine(BaseEngine):
 
         try:
             action_input = ToolNode.normalize_params(action_input)
-            logger.info(f"执行工具: {action}, 参数: {action_input}")
+            logger.debug(f"执行工具: {action}, 参数: {mask_sensitive_params(action_input)}")
             node = ToolNode(
                 f"novel_{action}",
                 action_type=action,
                 **action_input,
             )
             result = node.execute(context)
-            logger.info(f"工具结果: {str(result)[:200]}")
+            logger.debug(f"工具结果: {str(result)[:200]}")
 
             success = result.get("success", False)
             error = result.get("error")

@@ -99,7 +99,7 @@ class ReflectionEngine(BaseEngine):
         feedback = ""
 
         for round_num in range(1, self.max_rounds + 1):
-            logger.info(f"Reflection 第 {round_num} 轮")
+            logger.debug(f"Reflection 第 {round_num} 轮")
 
             # Execute
             output = self._execute(user_input, feedback, context)
@@ -118,7 +118,7 @@ class ReflectionEngine(BaseEngine):
 
             feedback = review.get("feedback", "请改进输出质量")
             issues = review.get("issues", [])
-            logger.info(f"审查未通过: {feedback}")
+            logger.debug(f"审查未通过: {feedback}")
 
             if issues:
                 feedback += "\n具体问题:\n" + "\n".join(f"- {i}" for i in issues)

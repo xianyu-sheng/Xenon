@@ -177,7 +177,7 @@ class PlanExecuteEngine(BaseEngine):
             tool = step.get("tool")
             params = step.get("params", {})
 
-            logger.info(f"执行步骤 {step_id}: {step_task}")
+            logger.debug(f"执行步骤 {step_id}: {step_task}")
             self.callback.on_step(step_id, total, step_task)
 
             # 构建上下文提示
@@ -204,7 +204,7 @@ class PlanExecuteEngine(BaseEngine):
             ctx.set(f"step_{step_id}_result", result)
             success = not result.startswith(("执行失败", "执行异常"))
             self.callback.on_step_done(step_id, success, result[:200])
-            logger.info(f"步骤 {step_id} 完成: {result[:100]}")
+            logger.debug(f"步骤 {step_id} 完成: {result[:100]}")
 
         # 汇总结果 — 附加工具执行摘要
         summary = self._summarize(user_input, plan.get("analysis", ""), results, tracker)
@@ -219,7 +219,7 @@ class PlanExecuteEngine(BaseEngine):
             if history:
                 recent = [m for m in history if m.get("role") != "system"][-6:]
                 messages.extend(recent)
-                logger.info(f"Plan 注入 {len(recent)} 条对话历史")
+                logger.debug(f"Plan 注入 {len(recent)} 条对话历史")
             else:
                 logger.warning("Plan: 无对话历史可注入！")
         else:
@@ -232,9 +232,9 @@ class PlanExecuteEngine(BaseEngine):
         if not response or not response.strip():
             logger.warning("LLM 返回了空响应！请检查 API 配置和模型是否支持。")
         else:
-            logger.info(f"LLM 原始响应 (前500字): {response[:500]}")
+            logger.debug(f"LLM 原始响应 (前500字): {response[:500]}")
         result = self._parse_json(response)
-        logger.info(f"解析后: steps={len(result.get('steps', []))}, analysis={result.get('analysis', '')[:100]}")
+        logger.debug(f"解析后: steps={len(result.get('steps', []))}, analysis={result.get('analysis', '')[:100]}")
         return result
 
     def _execute_step_with_tool(

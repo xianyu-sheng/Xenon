@@ -338,9 +338,9 @@ def _call_openai_compat_once(
         reasoning = msg.get("reasoning_content") or msg.get("thinking") or ""
 
         if content:
-            logger.info(f"API 响应: content={content[:300]}")
+            logger.debug(f"API 响应: content={content[:300]}")
         elif reasoning:
-            logger.info(f"API 响应: content=空, reasoning_content={reasoning[:300]}")
+            logger.debug(f"API 响应: content=空, reasoning_content={reasoning[:300]}")
         else:
             logger.warning(f"API 响应: content 和 reasoning_content 均为空! finish_reason={finish}")
 
