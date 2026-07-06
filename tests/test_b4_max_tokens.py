@@ -50,7 +50,7 @@ class TestChatCompletionClampsMaxTokens:
 
 class TestEngineReadsModelConfigMaxTokens:
     def test_react_reads_model_config(self, monkeypatch):
-        import omniagent.engine.react_engine as re_mod
+        import omniagent.engine.base as re_mod
         from omniagent.engine.react_engine import ReActEngine
 
         mc = SimpleNamespace(max_tokens=2048)
@@ -66,7 +66,7 @@ class TestEngineReadsModelConfigMaxTokens:
         assert captured["mt"] == 2048  # 来自 ModelConfig，而非 131072
 
     def test_react_falls_back_to_8192_without_config(self, monkeypatch):
-        import omniagent.engine.react_engine as re_mod
+        import omniagent.engine.base as re_mod
         from omniagent.engine.react_engine import ReActEngine
 
         engine = ReActEngine(["openai/gpt-4o"])  # 无 model_configs
@@ -81,7 +81,7 @@ class TestEngineReadsModelConfigMaxTokens:
         assert captured["mt"] == 8192  # 安全默认，而非 131072
 
     def test_explicit_max_tokens_takes_priority(self, monkeypatch):
-        import omniagent.engine.react_engine as re_mod
+        import omniagent.engine.base as re_mod
         from omniagent.engine.react_engine import ReActEngine
 
         mc = SimpleNamespace(max_tokens=2048)

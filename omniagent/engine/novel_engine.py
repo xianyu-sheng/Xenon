@@ -18,12 +18,12 @@ import os
 from pathlib import Path
 from typing import Any
 
+from omniagent.engine.base import BaseEngine
 from omniagent.engine.callbacks import EngineCallback
 from omniagent.engine.context import AgentContext
 from omniagent.engine.novel_manager import NovelManager, NovelProject
 from omniagent.engine.tool_tracker import ToolExecutionTracker
 from omniagent.nodes.tool_node import ToolNode
-from omniagent.utils.llm_client import chat_completion
 from omniagent.utils.response_adapter import parse_react
 
 logger = logging.getLogger(__name__)
@@ -209,7 +209,8 @@ NOVEL_TOOLS = {
 }
 
 
-class NovelEngine:
+class NovelEngine(BaseEngine):
+    """小说创作引擎（ReAct 变体，创意写作用较高 temperature）。"""
     """小说创作专用引擎，支持多小说隔离和创作记忆累积。"""
 
     def __init__(
@@ -220,11 +221,16 @@ class NovelEngine:
         system_prompt: str | None = None,
         callback: EngineCallback | None = None,
         novel_manager: NovelManager | None = None,
+        model_configs: dict[str, Any] | None = None,
     ) -> None:
-        self.model_priority = model_priority
+        # R2: 继承 BaseEngine；创意写作用较高 temperature（0.8）。
+        # 此前 novel 的 _call_llm 未读 ModelConfig（B7 漂移），现统一由基类接入。
+        super().__init__(
+            model_priority, callback=callback,
+            model_configs=model_configs, temperature=0.8,
+        )
         self.max_iterations = max_iterations
         self.tools = NOVEL_TOOLS
-        self.callback = callback or EngineCallback()
         self.manager = novel_manager or NovelManager()
         self.system_prompt = system_prompt or self._build_system_prompt()
 
@@ -419,21 +425,6 @@ class NovelEngine:
         detail_parts.append(f"**结果摘要**: {answer_summary}")
 
         self.manager.update_context(slug, operation, "\n".join(detail_parts))
-
-    def _call_llm(self, messages: list[dict[str, str]], max_tokens: int = 8192) -> str:
-        """调用 LLM，支持多模型 fallback。创意写作用较高 temperature。"""
-        last_error = None
-        for model_id in self.model_priority:
-            try:
-                return chat_completion(
-                    model_id, messages,
-                    max_tokens=max_tokens,
-                    temperature=0.8,
-                )
-            except Exception as e:
-                last_error = e
-                logger.warning(f"模型 {model_id} 失败: {e}，尝试下一个...")
-        raise RuntimeError(f"所有模型均调用失败: {last_error}")
 
     def _parse_response(self, response: str) -> dict[str, Any]:
         return parse_react(response)

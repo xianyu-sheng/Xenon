@@ -10,11 +10,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from omniagent.engine.base import BaseEngine
 from omniagent.engine.callbacks import EngineCallback
 from omniagent.engine.context import AgentContext
 from omniagent.engine.tool_tracker import ToolExecutionTracker
 from omniagent.nodes.tool_node import ToolNode
-from omniagent.utils.llm_client import chat_completion
 from omniagent.utils.response_adapter import parse_plan
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ EXECUTE_PROMPT = """你正在执行一个任务计划的第 {step_id} 步（共 
 """
 
 
-class PlanExecuteEngine:
+class PlanExecuteEngine(BaseEngine):
     """规划-执行两阶段引擎。"""
 
     def __init__(
@@ -111,15 +111,16 @@ class PlanExecuteEngine:
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
     ) -> None:
-        self.model_priority = model_priority
+        # R2: 公共属性与 _call_llm 由 BaseEngine 提供。
+        super().__init__(
+            model_priority, callback=callback,
+            model_configs=model_configs, temperature=0.3,
+        )
         self.max_steps = max_steps
         if system_prompt:
             self.system_prompt = system_prompt
         else:
             self.system_prompt = self._build_plan_prompt()
-        self.callback = callback or EngineCallback()
-        # B4: alias -> ModelConfig，供 _call_llm 读取每模型 max_tokens（替代 131072 硬编码）
-        self.model_configs = model_configs or {}
 
     @staticmethod
     def _build_plan_prompt() -> str:
@@ -400,32 +401,6 @@ class PlanExecuteEngine:
             )},
         ]
         return self._call_llm(messages)
-
-    def _call_llm(self, messages: list[dict[str, str]], max_tokens: int | None = None) -> str:
-        """调用 LLM，支持多模型 fallback。
-
-        max_tokens 优先级：显式入参 > ModelConfig.max_tokens > 8192 默认；
-        chat_completion 再按厂商上限钳制，避免超限 400 级联失败（B4）。
-        """
-        last_error = None
-        for model_id in self.model_priority:
-            try:
-                mc = self.model_configs.get(model_id)
-                mt = max_tokens or getattr(mc, "max_tokens", None) or 8192
-                # B7: 激活 ModelConfig.api_key / base_url（每模型覆盖全局凭证与端点）
-                creds = None
-                base = None
-                if mc:
-                    base = getattr(mc, "base_url", "") or None
-                    mk = getattr(mc, "api_key", "") or ""
-                    if mk and "/" in model_id:
-                        creds = {model_id.split("/", 1)[0].lower(): mk}
-                return chat_completion(model_id, messages, max_tokens=mt, temperature=0.3,
-                                       credentials=creds, base_url=base)
-            except Exception as e:
-                last_error = e
-                logger.warning(f"模型 {model_id} 失败: {e}")
-        raise RuntimeError(f"所有模型均调用失败: {last_error}")
 
     def _parse_json(self, text: str) -> dict[str, Any]:
         """从 LLM 输出中提取 JSON（委托给 response_adapter 中间件）。"""

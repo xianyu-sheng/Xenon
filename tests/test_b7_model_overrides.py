@@ -37,7 +37,7 @@ class TestChatCompletionBaseUrlOverride:
 
 class TestEngineModelOverrides:
     def test_passes_model_api_key_and_base_url(self, monkeypatch):
-        import omniagent.engine.react_engine as re_mod
+        import omniagent.engine.base as re_mod
         from omniagent.engine.react_engine import ReActEngine
 
         mc = SimpleNamespace(max_tokens=2048, api_key="sk-per-model",
@@ -56,7 +56,7 @@ class TestEngineModelOverrides:
         assert captured["max_tokens"] == 2048
 
     def test_no_overrides_when_model_config_empty(self, monkeypatch):
-        import omniagent.engine.react_engine as re_mod
+        import omniagent.engine.base as re_mod
         from omniagent.engine.react_engine import ReActEngine
 
         engine = ReActEngine(["openai/gpt-4o"])  # 无 model_configs
@@ -73,7 +73,7 @@ class TestEngineModelOverrides:
 
     def test_no_api_key_means_no_credentials_override(self, monkeypatch):
         """ModelConfig.api_key 为空时不覆盖全局凭证（交由 build_endpoint 自行加载）。"""
-        import omniagent.engine.react_engine as re_mod
+        import omniagent.engine.base as re_mod
         from omniagent.engine.react_engine import ReActEngine
 
         mc = SimpleNamespace(max_tokens=2048, api_key="", base_url="https://mcp.example.com/v1")

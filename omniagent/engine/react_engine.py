@@ -12,11 +12,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from omniagent.engine.base import BaseEngine
 from omniagent.engine.callbacks import EngineCallback
 from omniagent.engine.context import AgentContext
 from omniagent.engine.tool_tracker import ToolExecutionTracker
 from omniagent.nodes.tool_node import ToolNode, _DYNAMIC_TOOLS
-from omniagent.utils.llm_client import chat_completion
 from omniagent.utils.response_adapter import parse_react
 
 logger = logging.getLogger(__name__)
@@ -197,7 +197,7 @@ BUILTIN_TOOLS = {
 }
 
 
-class ReActEngine:
+class ReActEngine(BaseEngine):
     """ReAct 思考-行动-观察循环引擎。"""
 
     def __init__(
@@ -210,13 +210,15 @@ class ReActEngine:
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
     ) -> None:
-        self.model_priority = model_priority
+        # R2: 公共属性（model_priority/callback/model_configs/temperature）与
+        # _call_llm 由 BaseEngine 提供，消除四份复制与参数漂移。
+        super().__init__(
+            model_priority, callback=callback,
+            model_configs=model_configs, temperature=0.3,
+        )
         self.max_iterations = max_iterations
         self.tools = tools or BUILTIN_TOOLS
         self.system_prompt = system_prompt or self._build_system_prompt()
-        self.callback = callback or EngineCallback()
-        # B4: alias -> ModelConfig，供 _call_llm 读取每模型 max_tokens（替代 131072 硬编码）
-        self.model_configs = model_configs or {}
 
     def _build_system_prompt(self) -> str:
         import sys
@@ -384,38 +386,12 @@ class ReActEngine:
                 break
         if last_obs and len(last_obs) > 50:
             # 最后一条观察有实质内容，返回它
-            msg = f"达到最大迭代次数 ({self.max_iterations})，以下是最后的执行结果：\n\n{last_obs[:2000]}"
+            msg = f"达到最大迭代次数 ({self.max_iterations})，以下是最后的执行结果：\n\n{last_obs[:self.observation_truncate]}"
         else:
             msg = f"达到最大迭代次数 ({self.max_iterations})，未能得出最终答案。请尝试简化问题或使用更具体的指令。"
         self.callback.on_warning(msg)
         self.callback.on_finish(msg)
         return msg
-
-    def _call_llm(self, messages: list[dict[str, str]], max_tokens: int | None = None) -> str:
-        """调用 LLM，支持多模型 fallback。
-
-        max_tokens 优先级：显式入参 > ModelConfig.max_tokens > 8192 默认；
-        chat_completion 再按厂商上限钳制，避免超限 400 级联失败（B4）。
-        """
-        last_error = None
-        for model_id in self.model_priority:
-            try:
-                mc = self.model_configs.get(model_id)
-                mt = max_tokens or getattr(mc, "max_tokens", None) or 8192
-                # B7: 激活 ModelConfig.api_key / base_url（每模型覆盖全局凭证与端点）
-                creds = None
-                base = None
-                if mc:
-                    base = getattr(mc, "base_url", "") or None
-                    mk = getattr(mc, "api_key", "") or ""
-                    if mk and "/" in model_id:
-                        creds = {model_id.split("/", 1)[0].lower(): mk}
-                return chat_completion(model_id, messages, max_tokens=mt, temperature=0.3,
-                                       credentials=creds, base_url=base)
-            except Exception as e:
-                last_error = e
-                logger.warning(f"模型 {model_id} 失败: {e}，尝试下一个...")
-        raise RuntimeError(f"所有模型均调用失败: {last_error}")
 
     def _parse_response(self, response: str) -> dict[str, Any]:
         """解析 LLM 的 JSON 输出（委托给 response_adapter 中间件）。"""

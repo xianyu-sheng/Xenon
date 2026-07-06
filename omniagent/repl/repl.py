@@ -911,6 +911,7 @@ class REPL:
             max_iterations=15,
             callback=callback,
             novel_manager=self._novel_manager,
+            model_configs=dict(self.registry.models),
         )
         try:
             result = engine.run(user_input, context=self.agent_context)
