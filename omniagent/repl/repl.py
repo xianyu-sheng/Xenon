@@ -810,7 +810,7 @@ class REPL:
         console.print("[cyan]🔄 ReAct 模式: 思考 → 行动 → 观察 → 循环[/cyan]")
 
         callback = self._make_callback()
-        engine = ReActEngine(model_priority=model_ids, max_iterations=10, callback=callback)
+        engine = ReActEngine(model_priority=model_ids, max_iterations=10, callback=callback, model_configs=dict(self.registry.models))
         try:
             result = engine.run(user_input, self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -826,7 +826,7 @@ class REPL:
         console.print("[cyan]📋 Plan-Execute 模式: 规划 → 逐步执行[/cyan]")
 
         callback = self._make_callback()
-        engine = PlanExecuteEngine(model_priority=model_ids, max_steps=20, callback=callback)
+        engine = PlanExecuteEngine(model_priority=model_ids, max_steps=20, callback=callback, model_configs=dict(self.registry.models))
         try:
             result = engine.run(user_input, self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -842,7 +842,7 @@ class REPL:
         console.print("[cyan]🔍 Reflection 模式: 执行 → 审查 → 修正[/cyan]")
 
         callback = self._make_callback()
-        engine = ReflectionEngine(model_priority=model_ids, max_rounds=3, callback=callback)
+        engine = ReflectionEngine(model_priority=model_ids, max_rounds=3, callback=callback, model_configs=dict(self.registry.models))
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -858,7 +858,7 @@ class REPL:
         console.print("[cyan]📋🔄 Plan+React 模式: 全局规划 → 每步 ReAct 执行[/cyan]")
 
         callback = self._make_callback()
-        engine = PlanReactEngine(model_priority=model_ids, max_steps=10, react_iterations=8, callback=callback)
+        engine = PlanReactEngine(model_priority=model_ids, max_steps=10, react_iterations=8, callback=callback, model_configs=dict(self.registry.models))
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -874,7 +874,7 @@ class REPL:
         console.print("[cyan]📋🔍 Plan+Reflection 模式: 规划执行 → 反思修正[/cyan]")
 
         callback = self._make_callback()
-        engine = PlanReflectionEngine(model_priority=model_ids, max_steps=10, review_rounds=2, callback=callback)
+        engine = PlanReflectionEngine(model_priority=model_ids, max_steps=10, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -890,7 +890,7 @@ class REPL:
         console.print("[cyan]🔄🔍 React+Reflection 模式: ReAct 探索 → 反思审查[/cyan]")
 
         callback = self._make_callback()
-        engine = ReactReflectionEngine(model_priority=model_ids, react_iterations=8, review_rounds=2, callback=callback)
+        engine = ReactReflectionEngine(model_priority=model_ids, react_iterations=8, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
         try:
             result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])

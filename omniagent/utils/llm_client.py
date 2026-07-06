@@ -86,46 +86,57 @@ _PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "env_key": "OPENAI_API_KEY",
+        "max_output_tokens": 16384,
     },
     "anthropic": {
         "base_url": "https://api.anthropic.com",
         "env_key": "ANTHROPIC_API_KEY",
+        "max_output_tokens": 8192,
     },
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1",
         "env_key": "DEEPSEEK_API_KEY",
+        "max_output_tokens": 8192,
     },
     "google": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "env_key": "GOOGLE_API_KEY",
+        "max_output_tokens": 8192,
     },
     "zhipu": {
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "env_key": "ZHIPU_API_KEY",
+        "max_output_tokens": 8192,
     },
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "env_key": "QWEN_API_KEY",
+        "max_output_tokens": 8192,
     },
     "moonshot": {
         "base_url": "https://api.moonshot.cn/v1",
         "env_key": "MOONSHOT_API_KEY",
+        "max_output_tokens": 8192,
     },
     "baichuan": {
         "base_url": "https://api.baichuan-ai.com/v1",
         "env_key": "BAICHUAN_API_KEY",
+        "max_output_tokens": 4096,
     },
     "minimax": {
         "base_url": "https://api.minimax.chat/v1",
         "env_key": "MINIMAX_API_KEY",
+        "max_output_tokens": 4096,
     },
     "ollama": {
         "base_url": "http://localhost:11434/v1",
         "env_key": "OLLAMA_API_KEY",
+        "max_output_tokens": 32768,
     },
     "xiaomi": {
         "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
         "env_key": "XIAOMI_API_KEY",
+        "max_output_tokens": 8192,
     },
 }
 
@@ -208,6 +219,10 @@ def chat_completion(
     import time
 
     endpoint = build_endpoint(model_id, credentials)
+    # B4: 按厂商输出上限钳制 max_tokens，防止 131072 等超限值引发 400 级联失败
+    provider_cap = _PROVIDER_DEFAULTS.get(endpoint.provider, {}).get("max_output_tokens")
+    if provider_cap and max_tokens > provider_cap:
+        max_tokens = provider_cap
     last_error = None
 
     for attempt in range(max_retries):

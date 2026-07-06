@@ -109,6 +109,7 @@ class PlanExecuteEngine:
         max_steps: int = 20,
         system_prompt: str | None = None,
         callback: EngineCallback | None = None,
+        model_configs: dict[str, Any] | None = None,
     ) -> None:
         self.model_priority = model_priority
         self.max_steps = max_steps
@@ -117,6 +118,8 @@ class PlanExecuteEngine:
         else:
             self.system_prompt = self._build_plan_prompt()
         self.callback = callback or EngineCallback()
+        # B4: alias -> ModelConfig，供 _call_llm 读取每模型 max_tokens（替代 131072 硬编码）
+        self.model_configs = model_configs or {}
 
     @staticmethod
     def _build_plan_prompt() -> str:
@@ -383,12 +386,17 @@ class PlanExecuteEngine:
         ]
         return self._call_llm(messages)
 
-    def _call_llm(self, messages: list[dict[str, str]], max_tokens: int = 131072) -> str:
-        """调用 LLM，支持多模型 fallback。"""
+    def _call_llm(self, messages: list[dict[str, str]], max_tokens: int | None = None) -> str:
+        """调用 LLM，支持多模型 fallback。
+
+        max_tokens 优先级：显式入参 > ModelConfig.max_tokens > 8192 默认；
+        chat_completion 再按厂商上限钳制，避免超限 400 级联失败（B4）。
+        """
         last_error = None
         for model_id in self.model_priority:
             try:
-                return chat_completion(model_id, messages, max_tokens=max_tokens, temperature=0.3)
+                mt = max_tokens or getattr(self.model_configs.get(model_id), "max_tokens", None) or 8192
+                return chat_completion(model_id, messages, max_tokens=mt, temperature=0.3)
             except Exception as e:
                 last_error = e
                 logger.warning(f"模型 {model_id} 失败: {e}")
