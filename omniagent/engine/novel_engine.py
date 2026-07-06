@@ -23,6 +23,7 @@ from omniagent.engine.callbacks import EngineCallback, mask_sensitive_params
 from omniagent.engine.context import AgentContext
 from omniagent.engine.novel_manager import NovelManager, NovelProject
 from omniagent.engine.tool_tracker import ToolExecutionTracker
+from omniagent.nodes.tool_executor import ToolExecutor
 from omniagent.nodes.tool_node import ToolNode
 from omniagent.utils.response_adapter import parse_react
 
@@ -236,6 +237,8 @@ class NovelEngine(BaseEngine):
         self.tools = NOVEL_TOOLS
         self.manager = novel_manager or NovelManager()
         self.system_prompt = system_prompt or self._build_system_prompt()
+        # F1: 工具执行门面（7 阶段流水线）
+        self._tool_executor = ToolExecutor()
 
     def _build_system_prompt(self) -> str:
         import sys
@@ -464,51 +467,8 @@ class NovelEngine(BaseEngine):
         context: AgentContext,
         tracker: ToolExecutionTracker | None = None,
     ) -> str:
-        tool_info = self.tools.get(action)
-        if not tool_info:
-            error_msg = f"错误: 未知工具 '{action}'，可用工具: {list(self.tools.keys())}"
-            if tracker:
-                tracker.record(action, action_input, False, error_msg, error=error_msg)
-            return error_msg
-
-        try:
-            action_input = ToolNode.normalize_params(action_input)
-            logger.debug(f"执行工具: {action}, 参数: {mask_sensitive_params(action_input)}")
-            node = ToolNode(
-                f"novel_{action}",
-                action_type=action,
-                **action_input,
-            )
-            result = node.execute(context)
-            logger.debug(f"工具结果: {str(result)[:200]}")
-
-            success = result.get("success", False)
-            error = result.get("error")
-
-            if success:
-                summary = ""
-                for key in ("content", "stdout", "output", "files"):
-                    if key in result and result[key]:
-                        val = result[key]
-                        if isinstance(val, list):
-                            summary = "\n".join(str(v) for v in val[:50])
-                        else:
-                            summary = str(val)[:5000]
-                        break
-                if not summary:
-                    summary = str(result)[:5000]
-                if tracker:
-                    tracker.record(action, action_input, True, summary[:200])
-                return summary
-            else:
-                error_detail = f"工具执行失败: {error or result}"
-                if tracker:
-                    tracker.record(action, action_input, False, error_detail, error=str(error))
-                return error_detail
-
-        except Exception as e:
-            error_msg = f"工具执行异常: {e}"
-            logger.error(f"工具执行异常: {action}({action_input}) -> {e}")
-            if tracker:
-                tracker.record(action, action_input, False, error_msg, error=str(e))
-            return error_msg
+        """执行工具并返回观察字符串（F1: 委托 ToolExecutor 7 阶段流水线）。"""
+        result = self._tool_executor.execute(
+            action, action_input, context, tracker=tracker, tools=self.tools,
+        )
+        return result.format_observation()

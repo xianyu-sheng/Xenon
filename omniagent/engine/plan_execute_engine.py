@@ -14,6 +14,7 @@ from omniagent.engine.base import BaseEngine
 from omniagent.engine.callbacks import EngineCallback
 from omniagent.engine.context import AgentContext
 from omniagent.engine.tool_tracker import ToolExecutionTracker
+from omniagent.nodes.tool_executor import ToolExecutor
 from omniagent.nodes.tool_node import ToolNode
 from omniagent.utils.response_adapter import parse_plan
 
@@ -124,6 +125,8 @@ class PlanExecuteEngine(BaseEngine):
             self.system_prompt = system_prompt
         else:
             self.system_prompt = self._build_plan_prompt()
+        # F1: 工具执行门面（7 阶段流水线）
+        self._tool_executor = ToolExecutor()
 
     @staticmethod
     def _build_plan_prompt() -> str:
@@ -258,42 +261,9 @@ class PlanExecuteEngine(BaseEngine):
         self, tool: str, params: dict, context: AgentContext,
         tracker: ToolExecutionTracker | None = None,
     ) -> str:
-        """使用工具执行步骤。"""
-        try:
-            params = ToolNode.normalize_params(params)
-            node = ToolNode(f"plan_{tool}", action_type=tool, **params)
-            result = node.execute(context)
-
-            success = result.get("success", False)
-            error = result.get("error")
-
-            if success:
-                summary = ""
-                for key in ("content", "stdout", "output", "files"):
-                    if key in result and result[key]:
-                        val = result[key]
-                        if isinstance(val, list):
-                            summary = "\n".join(str(v) for v in val[:30])
-                        else:
-                            summary = str(val)[:2000]
-                        break
-                if not summary:
-                    summary = "执行成功"
-
-                if tracker:
-                    tracker.record(tool, params, True, summary[:200])
-                return summary
-            else:
-                error_detail = f"执行失败: {error or result}"
-                if tracker:
-                    tracker.record(tool, params, False, error_detail, error=str(error))
-                return error_detail
-
-        except Exception as e:
-            error_msg = f"执行异常: {e}"
-            if tracker:
-                tracker.record(tool, params, False, error_msg, error=str(e))
-            return error_msg
+        """使用工具执行步骤（F1: 委托 ToolExecutor 7 阶段流水线）。"""
+        result = self._tool_executor.execute(tool, params, context, tracker=tracker)
+        return result.format_observation()
 
     def _execute_step_with_llm(
         self, step_id: int, total: int, task: str, prev_results: str, original: str,
