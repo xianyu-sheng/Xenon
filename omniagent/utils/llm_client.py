@@ -23,6 +23,16 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+# B12: finish_reason=length（OpenAI 兼容）/ stop_reason=max_tokens（Anthropic）
+# 时自动续写的最大次数；耗尽后抛 ResponseTruncatedError，而不是仅 logger.warning
+# 后静默返回被截断的内容。
+MAX_CONTINUATIONS = 3
+
+
+class ResponseTruncatedError(RuntimeError):
+    """LLM 响应因 max_tokens 上限被截断，且续写次数耗尽仍不完整。"""
+
+
 # ── 安全代理处理 ────────────────────────────────────────────
 
 def _build_proxy_config() -> httpx.Proxy | None:
@@ -276,7 +286,37 @@ def _call_openai_compat(
     temperature: float,
     timeout: float,
 ) -> str:
-    """OpenAI 兼容格式调用。"""
+    """OpenAI 兼容格式调用（B12: finish_reason=length 自动续写）。"""
+    msgs = list(messages)  # 不修改调用方列表
+    parts: list[str] = []
+    attempts = 0
+    while True:
+        content, finish = _call_openai_compat_once(
+            endpoint, msgs, max_tokens, temperature, timeout)
+        if content:
+            parts.append(content)
+        if finish != "length":
+            return "".join(parts)
+        # 被截断 → 追加部分内容为 assistant，再请求"继续"
+        if attempts >= MAX_CONTINUATIONS:
+            raise ResponseTruncatedError(
+                f"API 响应在 {MAX_CONTINUATIONS} 次续写后仍被截断 "
+                f"(finish_reason=length)，内容可能不完整；请增大 max_tokens 或精简输入。"
+            )
+        attempts += 1
+        logger.info("API 响应被截断 (finish_reason=length)，自动续写…")
+        msgs.append({"role": "assistant", "content": content or ""})
+        msgs.append({"role": "user", "content": "继续"})
+
+
+def _call_openai_compat_once(
+    endpoint: ModelEndpoint,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    temperature: float,
+    timeout: float,
+) -> tuple[str, str]:
+    """单次 OpenAI 兼容调用，返回 (content, finish_reason)。"""
     url = f"{endpoint.base_url}/chat/completions"
     headers = {
         "Authorization": f"Bearer {endpoint.api_key}",
@@ -308,11 +348,7 @@ def _call_openai_compat(
         if not content and reasoning:
             content = reasoning
 
-        # 如果被截断，提示
-        if finish == "length":
-            logger.warning(f"API 响应被截断 (finish_reason=length)，考虑增大 max_tokens")
-
-        return content
+        return content, finish
 
 
 def _call_anthropic(
@@ -322,7 +358,36 @@ def _call_anthropic(
     temperature: float,
     timeout: float,
 ) -> str:
-    """Anthropic 原生 API 格式调用。"""
+    """Anthropic 原生 API 格式调用（B12: stop_reason=max_tokens 自动续写）。"""
+    msgs = list(messages)  # 不修改调用方列表
+    parts: list[str] = []
+    attempts = 0
+    while True:
+        content, stop_reason = _call_anthropic_once(
+            endpoint, msgs, max_tokens, temperature, timeout)
+        if content:
+            parts.append(content)
+        if stop_reason != "max_tokens":
+            return "".join(parts)
+        if attempts >= MAX_CONTINUATIONS:
+            raise ResponseTruncatedError(
+                f"Anthropic 响应在 {MAX_CONTINUATIONS} 次续写后仍被截断 "
+                f"(stop_reason=max_tokens)，内容可能不完整；请增大 max_tokens 或精简输入。"
+            )
+        attempts += 1
+        logger.info("Anthropic 响应被截断 (stop_reason=max_tokens)，自动续写…")
+        msgs.append({"role": "assistant", "content": content or ""})
+        msgs.append({"role": "user", "content": "继续"})
+
+
+def _call_anthropic_once(
+    endpoint: ModelEndpoint,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    temperature: float,
+    timeout: float,
+) -> tuple[str, str]:
+    """单次 Anthropic 调用，返回 (text, stop_reason)。"""
     url = f"{endpoint.base_url}/v1/messages"
     headers = {
         "x-api-key": endpoint.api_key,
@@ -351,7 +416,13 @@ def _call_anthropic(
         resp = client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         data = resp.json()
-        return data["content"][0]["text"]
+        # content 是文本块列表；拼接所有 text 块（比仅取 [0] 更鲁棒）
+        blocks = data.get("content", []) or []
+        text = "".join(
+            b.get("text", "") for b in blocks if isinstance(b, dict)
+        )
+        stop_reason = data.get("stop_reason", "")
+        return text, stop_reason
 
 
 # ── 流式调用接口 ──────────────────────────────────────────
