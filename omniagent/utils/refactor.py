@@ -15,8 +15,9 @@ import re
 from pathlib import Path
 from typing import Any
 
-from omniagent.utils.code_index import CodeIndex, Symbol
+from omniagent.utils.code_index import CodeIndex, Reference, Symbol
 from omniagent.utils.ast_analyzer import ASTAnalyzer
+from omniagent.utils.atomic_write import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -39,14 +40,16 @@ class RefactorEngine:
         new_name: str,
         *,
         file_filter: str | None = None,
+        definition_file: str | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """跨文件重命名符号。
+        """跨文件/单文件重命名符号。
 
         Args:
             old_name: 旧符号名
             new_name: 新符号名
-            file_filter: 可选的文件过滤 glob
+            file_filter: 可选的文件过滤 glob（跨文件重命名时使用）
+            definition_file: 指定时只在该单文件内重命名（A8 作用域限定，防误改其他模块同名符号）
             dry_run: 只预览不实际修改
 
         Returns:
@@ -55,8 +58,22 @@ class RefactorEngine:
         changes = []
         errors = []
 
-        # 查找所有引用
-        refs = self.index.find_references(old_name, limit=1000)
+        # A8: 作用域限定 — definition_file 指定时只搜该文件，避免跨语义边界误改其他模块同名符号
+        if definition_file:
+            dpath = str(Path(definition_file).resolve())
+            if not Path(dpath).exists():
+                return {"changes": [], "errors": [f"definition_file 不存在: {definition_file}"], "success": False}
+            refs: list[Reference] = []
+            pattern = re.compile(r'\b' + re.escape(old_name) + r'\b')
+            try:
+                dcontent = Path(dpath).read_text(encoding="utf-8", errors="replace")
+            except Exception as e:
+                return {"changes": [], "errors": [f"读取 {dpath} 失败: {e}"], "success": False}
+            for i, line in enumerate(dcontent.splitlines(), 1):
+                for m in pattern.finditer(line):
+                    refs.append(Reference(name=old_name, file_path=dpath, line=i, col=m.start()))
+        else:
+            refs = self.index.find_references(old_name, limit=1000)
         if not refs:
             return {"changes": [], "errors": [f"未找到 '{old_name}' 的引用"], "success": False}
 
@@ -112,7 +129,7 @@ class RefactorEngine:
                         if syntax_errors:
                             errors.append(f"{file_path}: 重命名后语法错误 — {syntax_errors[0]}")
                             continue
-                    Path(file_path).write_text(new_content, encoding="utf-8")
+                    atomic_write_text(file_path, new_content)
 
             except Exception as e:
                 errors.append(f"{file_path}: {e}")
@@ -134,6 +151,10 @@ class RefactorEngine:
         path = Path(file_path)
         if not path.exists():
             return {"success": False, "error": f"文件不存在: {path}"}
+        # A7: __init__.py 的导入多为包公开 API 的重导出，不能当未使用删除（§8.13.1）
+        if path.name == "__init__.py":
+            return {"success": False,
+                    "error": "跳过 __init__.py：其导入通常为包公开 API 的重导出，自动清理会破坏对外接口"}
 
         analysis = self.analyzer.analyze_file(path)
         if not analysis.syntax_valid:
@@ -196,7 +217,7 @@ class RefactorEngine:
                     "error": f"清理后语法错误: {syntax_errors[0]}",
                     "removed": removed,
                 }
-            path.write_text(new_content, encoding="utf-8")
+            atomic_write_text(path, new_content)
 
         return {"success": True, "removed": removed, "dry_run": dry_run}
 

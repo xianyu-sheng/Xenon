@@ -315,6 +315,24 @@ class NovelEngine:
 
             if parsed.get("final_answer"):
                 answer = parsed["final_answer"]
+                # B10: final_answer 前检查创作内容是否已落盘（write_file/edit_file 成功过），
+                # 否则强制要求落盘后再回答（参考 react 纠偏机制），避免正文只存在于对话中。
+                persisted = any(
+                    ex.get("success") and ex.get("tool") in ("write_file", "edit_file")
+                    for ex in tracker.get_history()
+                )
+                if not persisted:
+                    logger.warning("Novel final_answer 前未检测到 write_file/edit_file 落盘，要求先保存")
+                    self.callback.on_warning("创作内容尚未保存到文件，请先用 write_file/edit_file 落盘再给出最终回答")
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "⚠️ 你给出了 final_answer，但本次尚未调用 write_file 或 edit_file 将创作内容保存到文件。"
+                            "请立即用 write_file 把上述创作正文保存到对应小说目录文件，然后再给出 final_answer；"
+                            "不要在 final_answer 中重复未保存的完整正文。"
+                        ),
+                    })
+                    continue
                 if tracker.has_executions():
                     summary = tracker.execution_summary()
                     logger.info(f"Novel 工具执行摘要: {summary}")
@@ -363,18 +381,20 @@ class NovelEngine:
         根据操作类型和执行结果，将关键信息追加到 context.md。
         """
         # 提取操作类型
+        # B9: 按特异性排序——多字关键词（续写/润色/扩写）必须优先于单字"写"，
+        # 否则"续写/扩写"会先命中单字"写"被误判为"章节写作"。单字"写"已移除。
         operation = "创作操作"
         input_lower = user_input.lower()
         if any(k in input_lower for k in ["大纲", "outline", "规划"]):
             operation = "大纲规划"
-        elif any(k in input_lower for k in ["写", "write", "新章", "第一章"]):
-            operation = "章节写作"
         elif any(k in input_lower for k in ["续写", "continue", "继续"]):
             operation = "续写"
         elif any(k in input_lower for k in ["润色", "revise", "修改"]):
             operation = "润色修改"
         elif any(k in input_lower for k in ["扩写", "expand"]):
             operation = "扩写"
+        elif any(k in input_lower for k in ["write", "新章", "第一章"]):
+            operation = "章节写作"
         elif any(k in input_lower for k in ["角色", "character"]):
             operation = "角色管理"
         elif any(k in input_lower for k in ["世界", "world"]):

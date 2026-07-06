@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from omniagent.utils.atomic_write import atomic_write_text
+
 SESSIONS_DIR = Path.home() / ".omniagent" / "sessions"
 
 
@@ -60,8 +62,9 @@ def save_session(
             return [_safe(v) for v in obj]
         return str(obj)
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(_safe(data), f, ensure_ascii=False, indent=2)
+    # A9 原子写入 + A10 chmod 0600（会话可能含对话历史等敏感内容）
+    content = json.dumps(_safe(data), ensure_ascii=False, indent=2)
+    atomic_write_text(filepath, content, mode=0o600)
 
     return filepath
 

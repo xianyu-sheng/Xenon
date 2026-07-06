@@ -4,7 +4,6 @@ from omniagent.utils.response_adapter import (
     parse_plan,
     parse_react,
     parse_review,
-    parse_reflection_plan,
 )
 
 
@@ -133,39 +132,8 @@ class TestParseReview:
         assert result["score"] == 7
 
     def test_no_json_returns_raw(self):
+        # B6: 解析失败默认不通过（防静默放行），score=0
         result = parse_review("looks good")
         assert result["feedback"] == "looks good"
-        assert result["pass"] is True  # default
-
-
-# ── parse_reflection_plan ──────────────────────────────────────
-class TestParseReflectionPlan:
-    def test_standard_format(self):
-        raw = '{"is_sufficient": true, "completeness_score": 8, "missing": [], "filled_plan": {"analysis": "X", "steps": []}}'
-        result = parse_reflection_plan(raw)
-        assert result["is_sufficient"] is True
-        assert result["completeness_score"] == 8
-        assert result["filled_plan"]["analysis"] == "X"
-
-    def test_sufficient_variant(self):
-        raw = '{"sufficient": false, "completeness": 5, "gaps": ["缺A"]}'
-        result = parse_reflection_plan(raw)
-        assert result["is_sufficient"] is False
-        assert result["completeness_score"] == 5
-        assert result["missing"] == ["缺A"]
-
-    def test_string_is_sufficient(self):
-        raw = '{"is_sufficient": "yes", "completeness_score": "9"}'
-        result = parse_reflection_plan(raw)
-        assert result["is_sufficient"] is True
-        assert result["completeness_score"] == 9
-
-    def test_missing_as_string(self):
-        raw = '{"missing": "缺少步骤"}'
-        result = parse_reflection_plan(raw)
-        assert result["missing"] == ["缺少步骤"]
-
-    def test_filled_plan_as_string(self):
-        raw = '{"filled_plan": "执行A然后B"}'
-        result = parse_reflection_plan(raw)
-        assert result["filled_plan"]["analysis"] == "执行A然后B"
+        assert result["pass"] is False
+        assert result["score"] == 0

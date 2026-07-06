@@ -36,6 +36,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
 
+from omniagent.repl.model_registry import BUILTIN_MODES
+
 console = Console()
 
 
@@ -67,7 +69,7 @@ def cli() -> None:
     )
     parser.add_argument(
         "--mode",
-        choices=["direct", "plan-execute", "react", "reflection"],
+        choices=list(BUILTIN_MODES.keys()),
         default=None,
         help="初始思考范式",
     )
@@ -263,7 +265,7 @@ def _display_result(result: dict) -> None:
     ctx = result.get("context")
     if ctx:
         console.print("\n[bold]📤 Context 输出:[/bold]")
-        for key, value in ctx._store.items():
+        for key, value in ctx.items():
             preview = str(value)[:200]
             console.print(f"  [cyan]{key}[/cyan]: {preview}")
 

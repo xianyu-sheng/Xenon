@@ -16,13 +16,16 @@ ToolNode — 本地工具执行节点。
 from __future__ import annotations
 
 import fnmatch
+import ipaddress
 import logging
 import os
 import re
+import socket
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, quote
 
 from omniagent.engine.context import AgentContext
 from omniagent.utils.llm_client import _create_http_client
@@ -57,6 +60,147 @@ def get_dynamic_tool_schema(name: str) -> dict | None:
 def list_dynamic_tools() -> list[str]:
     """列出所有已注册的动态工具名。"""
     return list(_DYNAMIC_TOOLS.keys())
+
+
+# ── register_tool 安全策略 ──────────────────────────────
+# 模式1（python_function）允许导入的模块前缀白名单。
+# 默认仅允许项目自身模块；可通过环境变量 OMNIAGENT_REGISTER_MODULE_ALLOW
+# （逗号分隔）显式追加额外的安全模块前缀，供高级用户扩展。
+_EXTRA_ALLOWED_MODULES = os.environ.get("OMNIAGENT_REGISTER_MODULE_ALLOW", "")
+_ALLOWED_MODULE_PREFIXES: tuple[str, ...] = ("omniagent.",) + tuple(
+    p.strip() + "." for p in _EXTRA_ALLOWED_MODULES.split(",") if p.strip()
+)
+
+# 危险模块顶层名：即便落在允许前缀内也一律拒绝导入（防 os.system / subprocess 等 RCE）。
+_DANGEROUS_MODULE_TOPS: frozenset[str] = frozenset({
+    "os", "subprocess", "builtins", "importlib", "sys", "shutil",
+    "ctypes", "pickle", "socket", "ssl", "multiprocessing", "pty",
+})
+
+# 内置 action_type 集合：动态工具注册时禁止重名（防内置工具名劫持）。
+# 注意：若新增内置 action_type，需同步本集合（与 ToolNode.execute 的 handlers 字典保持一致）。
+_BUILTIN_ACTION_TYPES: frozenset[str] = frozenset({
+    "command", "write_file", "read_file", "list_files", "search_files",
+    "git", "web_fetch", "edit_file", "create_directory", "batch_write",
+    "batch_edit", "code_index", "ast_analyze", "refactor", "diff_preview",
+    "mcp_call", "github_fetch", "weather", "datetime", "register_tool",
+})
+
+
+def _validate_register_module(module_path: str) -> tuple[bool, str]:
+    """校验 register_tool 模式1 的 module_path 是否在安全白名单内。
+
+    返回 (ok, reason)；ok=False 时 reason 为人类可读的拒绝原因。
+    拒绝顺序：先危险模块（os/subprocess/builtins/importlib 等），再白名单前缀。
+    """
+    mp = (module_path or "").strip()
+    if not mp:
+        return False, "module_path 为空"
+    top = mp.split(".", 1)[0]
+    if top in _DANGEROUS_MODULE_TOPS:
+        logger.warning(f"[register_tool] 拒绝导入危险模块: {mp}")
+        return False, (f"安全策略禁止导入危险模块: {top}"
+                       f"（os/subprocess/builtins/importlib 等不可注册）")
+    if not any(mp.startswith(p) for p in _ALLOWED_MODULE_PREFIXES):
+        logger.warning(f"[register_tool] 模块不在白名单: {mp}")
+        return False, (f"模块 {top} 不在注册白名单内（仅允许 omniagent.*，"
+                       f"或通过环境变量 OMNIAGENT_REGISTER_MODULE_ALLOW 显式声明）")
+    return True, ""
+
+
+# ── SSRF 防护（A5，§8.3.3 / §8.24.1）──────────────────────
+# web_fetch 等工具抓取 URL 前必须校验目标 IP，禁止访问内网/保留/环回/链路本地地址。
+_MAX_REDIRECTS = 5
+
+
+class _SSRFRedirectError(Exception):
+    """重定向目标未通过 SSRF 校验时抛出。"""
+
+
+def _is_internal_ip(ip: ipaddress._BaseAddress) -> bool:
+    """判断 IP 是否为内网/保留/环回/链路本地/组播/未指定等不可达外部地址。"""
+    return bool(
+        ip.is_loopback or ip.is_link_local or ip.is_reserved
+        or ip.is_multicast or ip.is_unspecified or ip.is_private
+    )
+
+
+def _resolve_host_ips(host: str) -> list[str]:
+    """将 host 解析为 IP 字符串列表（含 IPv6）。
+
+    host 可以是域名或字面量 IP；ipaddress.ip_address 接受十进制整数编码（如 2130706433），
+    getaddrinfo 兜底处理十六进制/八进制编码与域名 DNS 解析。
+    """
+    # 先尝试直接当字面量 IP 解析
+    try:
+        return [str(ipaddress.ip_address(host))]
+    except ValueError:
+        pass
+    # 域名/编码 IP：DNS 解析全部地址（去重保序）
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return []
+    seen: list[str] = []
+    for info in infos:
+        ip_str = info[4][0]
+        # getaddrinfo 对 IPv6 可能带 %scope，去掉
+        ip_str = ip_str.split("%", 1)[0]
+        if ip_str not in seen:
+            seen.append(ip_str)
+    return seen
+
+
+def _ssrf_check_url(url: str) -> tuple[bool, str]:
+    """SSRF 校验：解析 URL 的 host，拒绝内网/保留/环回/链路本地地址。
+
+    返回 (ok, reason)；ok=False 时 reason 为拒绝原因。覆盖 IPv4/IPv6、十进制/十六进制
+    IP 编码、localhost、元数据地址 169.254.169.254、[::1] 等。
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception as e:
+        return False, f"URL 解析失败: {e}"
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return False, f"仅允许 http/https 协议，拒绝: {scheme or '(空)'}"
+    host = parsed.hostname
+    if not host:
+        return False, "URL 缺少 host"
+    ips = _resolve_host_ips(host)
+    if not ips:
+        return False, f"无法解析 host: {host}"
+    for ip_str in ips:
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if _is_internal_ip(ip):
+            return False, f"禁止访问内网/保留地址: {host} -> {ip_str}"
+    return True, ""
+
+
+def _fetch_with_redirect_check(client, url: str, headers: dict | None = None):
+    """逐跳跟随重定向，每个 Location 都经过 SSRF 校验。最多 _MAX_REDIRECTS 跳。
+
+    用于替代 httpx 的 follow_redirects=True，防止"重定向到内网"绕过起始 URL 校验。
+    """
+    import httpx
+    current = url
+    hdrs = headers or {"User-Agent": "OmniAgent-CLI/0.2"}
+    for _ in range(_MAX_REDIRECTS + 1):
+        resp = client.get(current, headers=hdrs)
+        if not resp.is_redirect:
+            return resp
+        location = resp.headers.get("location", "")
+        if not location:
+            return resp
+        next_url = str(httpx.URL(current).join(location))
+        ok, reason = _ssrf_check_url(next_url)
+        if not ok:
+            raise _SSRFRedirectError(f"{next_url}: {reason}")
+        current = next_url
+    raise _SSRFRedirectError(f"重定向次数超过上限 ({_MAX_REDIRECTS})")
 
 
 # ── 安全常量 ──────────────────────────────────────────────
@@ -342,6 +486,15 @@ class ToolNode(BaseNode):
                 if sensitive in name_lower or sensitive in resolved_lower:
                     raise SecurityError(
                         f"禁止写入敏感文件: {resolved}"
+                    )
+        else:
+            # A13: 读取操作也禁止凭证等高敏感文件，防 prompt 注入诱导泄露凭证
+            name_lower = resolved.name.lower()
+            resolved_lower = str(resolved).lower().replace("\\", "/")
+            for sensitive in _USER_SENSITIVE:
+                if sensitive in name_lower or sensitive in resolved_lower:
+                    raise SecurityError(
+                        f"禁止读取敏感凭证文件: {resolved}"
                     )
 
         # 返回原始路径格式（不调用 resolve，保留 Windows 短路径等）
@@ -948,7 +1101,14 @@ class ToolNode(BaseNode):
                     "success": False,
                     "error": "rename 需要 old_name 和 new_name 参数",
                 }
-            result = engine.rename_symbol(old_name, new_name)
+            # A8: rename 默认单文件作用域，防 LLM 跨全部文件盲目文本重命名误改同名符号
+            if not file_path or not Path(file_path).is_file():
+                return {
+                    "action_type": "refactor",
+                    "success": False,
+                    "error": "rename 需指定 file_path（单文件作用域重命名）；跨文件批量重命名易误改其他模块同名符号，已禁用",
+                }
+            result = engine.rename_symbol(old_name, new_name, definition_file=file_path)
             display = f"重命名 '{old_name}' → '{new_name}'\n"
             display += f"修改 {len(result['changes'])} 处\n"
             if result["errors"]:
@@ -1382,27 +1542,22 @@ class ToolNode(BaseNode):
         if not url:
             raise ValueError(f"[{self.id}] web_fetch 需要 url")
 
-        # URL 安全验证
-        url_lower = url.lower().strip()
-        if url_lower.startswith("file://"):
+        # A5: SSRF 防护 — 校验起始 URL 的目标 IP（覆盖 IPv6/编码 IP/元数据地址/file://）
+        ok, reason = _ssrf_check_url(url)
+        if not ok:
             return {
                 "action_type": "web_fetch", "url": url,
                 "content": "", "success": False,
-                "error": "禁止访问 file:// 协议",
-            }
-        if any(url_lower.startswith(p) for p in ["http://169.254", "http://10.", "http://172.1", "http://192.168", "http://localhost", "http://127."]):
-            return {
-                "action_type": "web_fetch", "url": url,
-                "content": "", "success": False,
-                "error": "禁止访问内网/元数据地址",
+                "error": f"SSRF 拦截: {reason}",
             }
 
         logger.info(f"[{self.id}] 抓取网页: {url}")
 
         try:
             import httpx
-            with _create_http_client(timeout=self.timeout, follow_redirects=True) as client:
-                resp = client.get(url, headers={"User-Agent": "OmniAgent-CLI/0.2"})
+            # A5: 禁用自动重定向，逐跳校验 Location 防"重定向到内网"
+            with _create_http_client(timeout=self.timeout, follow_redirects=False) as client:
+                resp = _fetch_with_redirect_check(client, url)
                 resp.raise_for_status()
 
                 content_type = resp.headers.get("content-type", "")
@@ -1416,7 +1571,7 @@ class ToolNode(BaseNode):
                     text = text[:50000] + "\n\n... (内容已截断，超过 50000 字符)"
 
                 result = {
-                    "action_type": "web_fetch", "url": url,
+                    "action_type": "web_fetch", "url": str(resp.url),
                     "status_code": resp.status_code, "content": text,
                     "content_length": len(text), "success": True,
                 }
@@ -1425,6 +1580,12 @@ class ToolNode(BaseNode):
 
         except ImportError:
             raise RuntimeError(f"[{self.id}] web_fetch 需要 httpx 库")
+        except _SSRFRedirectError as e:
+            return {
+                "action_type": "web_fetch", "url": url,
+                "content": "", "success": False,
+                "error": f"SSRF 拦截(重定向): {e}",
+            }
         except Exception as e:
             result = {
                 "action_type": "web_fetch", "url": url,
@@ -1527,10 +1688,18 @@ class ToolNode(BaseNode):
             if m:
                 repo = m.group(1)
         repo = repo.rstrip("/")
+        # A12: 校验 repo 格式（owner/repo，仅允许字母数字._-），防 URL 注入
+        if not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo):
+            return {
+                "action_type": "github_fetch", "repo": repo,
+                "content": "", "success": False,
+                "error": f"repo 格式非法（应为 owner/repo，仅允许字母数字._-）: {repo}",
+            }
 
         action = self._resolve_template(self.github_action, context) or "list_files"
-        branch = self._resolve_template(self.branch, context) or "main"
-        github_path = self._resolve_template(self.github_path, context) or ""
+        # A12: branch/github_path 做 URL 编码（保留 / 作为路径分隔），防注入
+        branch = quote(self._resolve_template(self.branch, context) or "main", safe="/")
+        github_path = quote(self._resolve_template(self.github_path, context) or "", safe="/")
 
         logger.info(f"[{self.id}] GitHub {action}: {repo} (branch={branch}, path={github_path})")
 
@@ -1678,6 +1847,17 @@ class ToolNode(BaseNode):
         if not tool_name:
             return {"action_type": "register_tool", "success": False, "error": "缺少 tool_name 参数"}
 
+        # A3: 重名检查 — 禁止劫持内置 action_type，禁止覆盖已注册动态工具（除非 overwrite=True）
+        overwrite = str(self._resolve_template(getattr(self, "overwrite", ""), context)).strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        if tool_name in _BUILTIN_ACTION_TYPES:
+            return {"action_type": "register_tool", "success": False,
+                    "error": f"工具名 '{tool_name}' 与内置 action_type 冲突，禁止注册（防内置工具名劫持）"}
+        if tool_name in _DYNAMIC_TOOLS and not overwrite:
+            return {"action_type": "register_tool", "success": False,
+                    "error": f"工具名 '{tool_name}' 已被注册为动态工具；如需覆盖请显式设置 overwrite=true"}
+
         # 模式 1: Python 函数
         python_function = self._resolve_template(getattr(self, "python_function", ""), context)
         if python_function:
@@ -1687,6 +1867,10 @@ class ToolNode(BaseNode):
                     return {"action_type": "register_tool", "success": False,
                             "error": f"python_function 格式错误，应为 module.function，收到: {python_function}"}
                 module_path, func_name = parts
+                # A1: 模块白名单校验 — 拒绝导入 os/subprocess/builtins/importlib 等危险模块
+                ok, reason = _validate_register_module(module_path)
+                if not ok:
+                    return {"action_type": "register_tool", "success": False, "error": reason}
                 import importlib
                 mod = importlib.import_module(module_path)
                 func = getattr(mod, func_name)
@@ -1723,11 +1907,11 @@ class ToolNode(BaseNode):
             def cmd_handler(ctx):
                 import shlex
                 cmd = command_template
-                # 替换模板变量
+                # 替换模板变量（A4: 对替换值 shlex.quote 防 shell 注入）
                 for key in (params_raw.get("properties") or {}):
                     val = ctx.get(key)
                     if val is not None:
-                        cmd = cmd.replace(f"{{{key}}}", str(val))
+                        cmd = cmd.replace(f"{{{key}}}", shlex.quote(str(val)))
                 try:
                     result = subprocess.run(
                         cmd, shell=True, capture_output=True, text=True, timeout=30

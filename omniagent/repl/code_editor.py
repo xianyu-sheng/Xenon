@@ -11,6 +11,8 @@ import difflib
 from pathlib import Path
 from typing import Any
 
+from omniagent.utils.atomic_write import atomic_write_text as _atomic_write_text
+
 
 class CodeEditor:
     """代码文件编辑器。"""
@@ -105,8 +107,8 @@ class CodeEditor:
             if not RichConfirm.ask("应用修改？", default=True):
                 return "❌ 已取消修改。"
 
-        # 应用修改
-        p.write_text(new_content, encoding="utf-8")
+        # 应用修改（A9: 原子写入，防写入中途崩溃损坏文件）
+        _atomic_write_text(p, new_content)
         return f"✅ 已修改 {p.name}（替换 1 处）"
 
     @staticmethod
@@ -196,6 +198,16 @@ class CodeEditor:
             if not new_content:
                 return "❌ 无法从 LLM 输出中提取代码。"
 
+            # A6: 截断防护 — LLM 返回内容显著短于原文则拒绝写入（防 max_tokens 截断覆盖原文件）
+            orig_lines = len(content.splitlines())
+            new_lines = len(new_content.splitlines())
+            if not new_content.strip():
+                return "❌ LLM 返回空内容，已拒绝写入。"
+            if orig_lines >= 20 and new_lines < orig_lines * 0.5:
+                return (f"❌ LLM 返回内容（{new_lines} 行）显著短于原文（{orig_lines} 行），"
+                        f"疑似被 max_tokens 截断，已拒绝写入以防数据丢失。"
+                        f"请改用 apply_edit（old_text/new_text）只传变更部分。")
+
             # 生成 diff
             diff = CodeEditor.generate_diff(content, new_content, p.name)
 
@@ -213,8 +225,8 @@ class CodeEditor:
                 if not action:
                     return "❌ 已取消修改。"
 
-            # 应用
-            p.write_text(new_content, encoding="utf-8")
+            # 应用（A6+A9: .bak 备份 + 原子写入）
+            _atomic_write_text(p, new_content, backup=True)
             return f"✅ 已修改 {p.name}"
 
         except Exception as e:

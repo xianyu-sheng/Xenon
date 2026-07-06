@@ -164,12 +164,14 @@ class ContextManager:
                     cut_idx = i
                     break
 
-        # 如果历史很短且没有手动摘要，提示无需压缩
-        if cut_idx == 0 and len(self.history) <= 6 and not summary:
-            return "（对话历史较短，无需压缩）"
-
         older = self.history[:cut_idx]
         recent = self.history[cut_idx:]
+
+        # B5: 无可压缩的早期消息时直接 short-circuit，避免反向增加消息
+        # （cut_idx==0 或 older 为空都意味着没有可摘要的内容，
+        #  此时若继续执行会把"摘要 + 全部 recent"写回，凭空多出一条摘要消息）
+        if not older:
+            return summary or "（无可压缩的早期对话，无需压缩）"
 
         # 对更早的消息生成摘要
         if not summary:
@@ -179,11 +181,10 @@ class ContextManager:
         self.save_snapshot()
 
         # 替换历史：摘要 + 最近 3 轮完整对话
-        old_count = len(older) if older else len(self.history)
         self.history = [
             ConversationTurn(
                 role="system",
-                content=f"[对话历史已压缩] 以下是之前 {old_count} 条消息的摘要：\n\n{summary}",
+                content=f"[对话历史已压缩] 以下是之前 {len(older)} 条消息的摘要：\n\n{summary}",
             )
         ] + recent
 

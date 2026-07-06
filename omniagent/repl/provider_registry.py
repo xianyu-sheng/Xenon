@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 import httpx
 import yaml
 
+from omniagent.utils.atomic_write import atomic_write_text
 from omniagent.utils.llm_client import _create_http_client
 
 CREDENTIALS_PATH = Path.home() / ".omniagent" / "credentials.yaml"
@@ -295,8 +296,8 @@ def load_credentials() -> dict[str, str]:
 def save_credentials(creds: dict[str, str]) -> Path:
     """保存凭证到文件。"""
     CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(CREDENTIALS_PATH, "w", encoding="utf-8") as f:
-        yaml.dump(creds, f, allow_unicode=True, default_flow_style=False)
+    content = yaml.dump(creds, allow_unicode=True, default_flow_style=False)
+    atomic_write_text(CREDENTIALS_PATH, content, mode=0o600)  # A9 原子写 + A10 chmod 0600
     return CREDENTIALS_PATH
 
 

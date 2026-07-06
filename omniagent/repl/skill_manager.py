@@ -8,6 +8,8 @@ Skill 是更复杂的能力，支持 LLM 调用 + 工具执行的多步骤组合
 from __future__ import annotations
 
 import logging
+import shlex
+import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,18 @@ from typing import Any
 import yaml
 
 logger = logging.getLogger(__name__)
+
+
+def _shell_quote(value) -> str:
+    """对模板替换值做 shell 转义，防止参数注入（A4，§8.10.3）。
+
+    POSIX 用 shlex.quote；Windows PowerShell 用单引号 doubling。
+    """
+    text = str(value)
+    if sys.platform == "win32":
+        return "'" + text.replace("'", "''") + "'"
+    return shlex.quote(text)
+
 
 _SKILLS_DIR = Path.home() / ".omniagent" / "skills"
 
@@ -203,9 +217,9 @@ class SkillManager:
     def _execute_command_step(self, step: SkillStep, context: dict) -> str:
         """执行命令步骤。"""
         import subprocess
-        import sys
 
-        cmd = self._resolve_template(step.action, context)
+        # A4: 命令模板的替换值做 shell 转义，防止参数注入
+        cmd = self._resolve_template(step.action, context, quote=True)
 
         try:
             if sys.platform == "win32":
@@ -267,11 +281,16 @@ class SkillManager:
         return result
 
     @staticmethod
-    def _resolve_template(template: str, context: dict) -> str:
-        """模板变量替换（安全版，只替换 {word} 不支持属性访问）。"""
+    def _resolve_template(template: str, context: dict, *, quote: bool = False) -> str:
+        """模板变量替换（安全版，只替换 {word} 不支持属性访问）。
+
+        quote=True 时对替换值做 shell 转义（用于命令模板，防注入，A4 §8.10.3）。
+        """
         import re
         def _replace(m: re.Match) -> str:
             key = m.group(1)
             val = context.get(key)
-            return str(val) if val is not None else m.group(0)
+            if val is None:
+                return m.group(0)
+            return _shell_quote(val) if quote else str(val)
         return re.sub(r"\{(\w+)\}", _replace, template)

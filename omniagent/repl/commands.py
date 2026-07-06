@@ -14,6 +14,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from omniagent.repl.model_registry import BUILTIN_MODES
+
 if TYPE_CHECKING:
     from omniagent.repl.model_registry import ModelRegistry
     from omniagent.repl.context_manager import ContextManager
@@ -126,6 +128,16 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
             if "=" in p:
                 k, v = p.split("=", 1)
                 extra[k] = v
+        # A11: api_key 不进 argv — 命令行明文 key 已忽略，改走掩码输入（防 ps/历史泄露）
+        if "api_key" in extra:
+            from rich.prompt import Prompt as _Prompt
+            from rich.console import Console as _Console
+            console = kwargs.get("console") or _Console()
+            if extra.get("api_key"):
+                console.print("[dim]检测到命令行明文 api_key，已忽略并改用掩码输入（建议今后用 api_key= 空值触发掩码输入）[/dim]")
+            extra["api_key"] = _Prompt.ask("API Key", password=True)
+            if not extra["api_key"]:
+                return "❌ 未输入 API Key"
         try:
             config = registry.add_model(model_id, alias, **extra)
             return f"✅ 模型已注册: {alias} -> {config.model_id}"
@@ -269,7 +281,7 @@ def _cmd_set_role(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
 register_command(
     "/mode",
     "切换或查看当前思考范式",
-    "/mode [mode_name]\n可用: direct, plan-execute, react, reflection,\n      plan-react, plan-reflection, react-reflection",
+    "/mode [mode_name]\n可用: " + ", ".join(BUILTIN_MODES.keys()),
 )
 
 @_handler("/mode")
@@ -309,9 +321,9 @@ def _cmd_context(*, ctx_mgr: ContextManager, session_state: dict, **kwargs: Any)
 
     # 显示 AgentContext 中的变量
     agent_ctx = session_state.get("agent_context")
-    if agent_ctx and hasattr(agent_ctx, "_store") and agent_ctx._store:
+    if agent_ctx and agent_ctx.to_dict():
         lines.append("\nAgentContext 变量:")
-        for k, v in agent_ctx._store.items():
+        for k, v in agent_ctx.items():
             preview = str(v)[:100]
             lines.append(f"  {k}: {preview}")
 
@@ -367,7 +379,7 @@ def _cmd_save(*, args: str, ctx_mgr: ContextManager, session_state: dict, regist
 
     history = [{"role": t.role, "content": t.content, "model_used": t.model_used} for t in ctx_mgr.history]
     agent_ctx = session_state.get("agent_context")
-    ctx_store = agent_ctx._store.copy() if agent_ctx and hasattr(agent_ctx, "_store") else {}
+    ctx_store = agent_ctx.to_dict() if agent_ctx else {}
 
     path = save_session(name, history, ctx_store, registry.export_config())
     return f"✅ 会话已保存: {path}"
@@ -630,6 +642,16 @@ def _cmd_code(*, args: str, registry: ModelRegistry, ctx_mgr: ContextManager, se
 
     # 可选运行
     if run_code and lang == "python":
+        # A11: 执行 LLM 生成代码前人机确认，显示完整代码
+        from rich.console import Console as _Console
+        from rich.syntax import Syntax as _Syntax
+        from rich.prompt import Confirm as _Confirm
+        console = kwargs.get("console") or _Console()
+        console.print("\n[bold]⚠️ 即将执行 LLM 生成的代码:[/bold]")
+        console.print(_Syntax(code, "python", theme="monokai", line_numbers=True))
+        if not _Confirm.ask("确认执行以上代码？", default=False):
+            result_lines.append("⏭️ 已取消执行")
+            return "\n".join(result_lines)
         result_lines.append("\n▶️  运行代码...")
         try:
             proc = subprocess.run(

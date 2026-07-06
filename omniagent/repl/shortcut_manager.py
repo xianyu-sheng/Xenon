@@ -8,6 +8,7 @@ Shortcut Manager — 自定义快捷指令管理器。
 from __future__ import annotations
 
 import logging
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
@@ -17,6 +18,18 @@ from typing import Any
 import yaml
 
 logger = logging.getLogger(__name__)
+
+
+def _shell_quote(value) -> str:
+    """对模板替换值做 shell 转义，防止参数注入（A4，§8.3.1）。
+
+    POSIX 用 shlex.quote；Windows PowerShell 用单引号 doubling。
+    """
+    text = str(value)
+    if sys.platform == "win32":
+        return "'" + text.replace("'", "''") + "'"
+    return shlex.quote(text)
+
 
 _SHORTCUTS_PATH = Path.home() / ".omniagent" / "shortcuts.yaml"
 
@@ -122,7 +135,8 @@ class ShortcutManager:
             # 替换参数占位符 {param_name}
             cmd = step
             for key, value in param_values.items():
-                cmd = cmd.replace(f"{{{key}}}", value)
+                # A4: 替换值做 shell 转义，防止参数注入（value 含 ;/`/$ 等会被引号包裹）
+                cmd = cmd.replace(f"{{{key}}}", _shell_quote(value))
 
             results.append(f"$ {cmd}")
 

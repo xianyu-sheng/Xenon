@@ -16,6 +16,8 @@ from typing import Any
 
 import yaml
 
+from omniagent.utils.atomic_write import atomic_write_text
+
 
 @dataclass
 class ModelConfig:
@@ -185,8 +187,8 @@ class ModelRegistry:
         """保存配置到 YAML 文件。"""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            yaml.dump(self.export_config(), f, allow_unicode=True, default_flow_style=False)
+        content = yaml.dump(self.export_config(), allow_unicode=True, default_flow_style=False)
+        atomic_write_text(path, content, mode=0o600)  # A9 原子写 + A10 chmod 0600
 
     def load_from_file(self, path: str | Path) -> None:
         """从 YAML 文件加载配置。"""

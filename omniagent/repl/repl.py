@@ -458,10 +458,32 @@ class REPL:
         import sys
         import termios
         import tty
+        import unicodedata
         from select import select
 
         PROMPT = "\033[1;36mYou\033[0m: "
         CONTINUATION = "\033[90m...\033[0m "
+
+        # ── 显示宽度计算（CJK 字符占 2 列）────────────────
+        def _char_width(ch: str) -> int:
+            """返回单个字符的终端显示宽度。"""
+            ea = unicodedata.east_asian_width(ch)
+            if ea in ('W', 'F'):
+                return 2
+            return 1
+
+        def _display_width(s: str) -> int:
+            """计算字符串的终端显示宽度。"""
+            return sum(_char_width(ch) for ch in s)
+
+        def _prompt_printable(prompt_str: str) -> str:
+            """剥离 ANSI 转义序列，得到 prompt 的可打印文本。"""
+            import re
+            return re.sub(r'\033\[[0-9;]*[a-zA-Z]', '', prompt_str)
+
+        def _line_width_upto(chars: list[str], upto: int) -> int:
+            """计算 current_line 中前 upto 个字符的终端显示宽度。"""
+            return _display_width("".join(chars[:upto]))
 
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
@@ -474,39 +496,32 @@ class REPL:
             prompt_active = True
 
             def _redraw_line() -> None:
-                """清除当前行并重绘。"""
+                """清除当前行并重绘（正确处理 CJK 宽字符）。"""
                 nonlocal prompt_active
-                # 光标移到行首
-                sys.stdout.write("\r")
-                # 清除到行尾
-                sys.stdout.write("\033[K")
-                # 打印提示符
-                if prompt_active and not lines:
-                    sys.stdout.write(PROMPT)
-                else:
-                    sys.stdout.write(CONTINUATION)
-                # 打印当前行内容
+                prompt_str = PROMPT if (prompt_active and not lines) else CONTINUATION
+                # 光标移到行首并清除到行尾
+                sys.stdout.write("\r\033[K")
+                # 打印提示符和当前行内容
+                sys.stdout.write(prompt_str)
                 sys.stdout.write("".join(current_line))
-                # 光标定位
-                sys.stdout.write(f"\r\033[{len(_to_print(PROMPT if prompt_active and not lines else CONTINUATION)) + cursor_pos}C")
+                # 光标定位：回到行首 + 提示符宽度 + 光标前内容的显示宽度
+                pw = _display_width(_prompt_printable(prompt_str))
+                prefix_w = _display_width("".join(current_line[:cursor_pos]))
+                sys.stdout.write(f"\r\033[{pw + prefix_w}C")
                 sys.stdout.flush()
 
-            def _to_print(s: str) -> str:
-                """剥离 ANSI 序列，计算可打印宽度（简化版）。"""
-                import re
-                return re.sub(r'\033\[[0-9;]*[a-zA-Z]', '', s)
-
             def _prompt_width() -> int:
-                if prompt_active and not lines:
-                    return len(_to_print(PROMPT))
-                return len(_to_print(CONTINUATION))
+                """当前提示符的可打印宽度。"""
+                prompt_str = PROMPT if (prompt_active and not lines) else CONTINUATION
+                return _display_width(_prompt_printable(prompt_str))
 
             def _move_cursor_to(target: int) -> None:
-                """移动光标到目标列（相对当前提示符后）。"""
+                """移动光标到目标字符位置（正确处理 CJK 宽字符列偏移）。"""
                 nonlocal cursor_pos
-                pw = _prompt_width()
                 cursor_pos = max(0, min(target, len(current_line)))
-                sys.stdout.write(f"\r\033[{pw + cursor_pos}C")
+                pw = _prompt_width()
+                prefix_w = _display_width("".join(current_line[:cursor_pos]))
+                sys.stdout.write(f"\r\033[{pw + prefix_w}C")
                 sys.stdout.flush()
 
             # 显示初始提示符
@@ -723,23 +738,27 @@ class REPL:
         # 根据当前思考范式选择执行方式
         mode = self.registry.current_mode
 
-        if mode == "react":
-            self._run_react_engine(optimized, model_ids)
-        elif mode == "plan-execute":
-            self._run_plan_execute_engine(optimized, model_ids)
-        elif mode == "reflection":
-            self._run_reflection_engine(optimized, model_ids)
-        elif mode == "plan-react":
-            self._run_plan_react_engine(optimized, model_ids)
-        elif mode == "plan-reflection":
-            self._run_plan_reflection_engine(optimized, model_ids)
-        elif mode == "react-reflection":
-            self._run_react_reflection_engine(optimized, model_ids)
-        elif mode == "novel":
-            self._run_novel_engine(optimized, model_ids)
-        else:
-            # direct 模式 — 直接调 LLM
-            self._run_direct(optimized, model_ids)
+        try:
+            if mode == "react":
+                self._run_react_engine(optimized, model_ids)
+            elif mode == "plan-execute":
+                self._run_plan_execute_engine(optimized, model_ids)
+            elif mode == "reflection":
+                self._run_reflection_engine(optimized, model_ids)
+            elif mode == "plan-react":
+                self._run_plan_react_engine(optimized, model_ids)
+            elif mode == "plan-reflection":
+                self._run_plan_reflection_engine(optimized, model_ids)
+            elif mode == "react-reflection":
+                self._run_react_reflection_engine(optimized, model_ids)
+            elif mode == "novel":
+                self._run_novel_engine(optimized, model_ids)
+            else:
+                # direct 模式 — 直接调 LLM
+                self._run_direct(optimized, model_ids)
+        except KeyboardInterrupt:
+            # B2: Ctrl+C 取消当前运行，返回提示符而非退出整个 REPL
+            console.print("\n[yellow]⚠️ 已中断当前运行（Ctrl+C），返回提示符。[/yellow]")
 
     def _run_direct(self, user_input: str, model_ids: list[str]) -> None:
         """直接对话模式。自动检测工具需求并委派给 ReAct 引擎。"""
@@ -825,7 +844,7 @@ class REPL:
         callback = self._make_callback()
         engine = ReflectionEngine(model_priority=model_ids, max_rounds=3, callback=callback)
         try:
-            result = engine.run(user_input)
+            result = engine.run(user_input, context=self.agent_context)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])

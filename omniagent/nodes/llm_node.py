@@ -105,6 +105,6 @@ class LLMNode(BaseNode):
         import re
         def _replace(m: re.Match) -> str:
             key = m.group(1)
-            val = context._store.get(key)
+            val = context.get(key)
             return str(val) if val is not None else m.group(0)
         return re.sub(r"\{(\w+)\}", _replace, template)

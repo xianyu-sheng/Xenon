@@ -7,8 +7,11 @@ LLM 响应适配器中间件
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 # ── 标准结构定义 ──────────────────────────────────────────────
@@ -51,15 +54,6 @@ def _reflection_template() -> dict:
         "feedback": "",
         "issues": [],
         "suggestions": [],
-    }
-
-
-def _reflection_plan_template() -> dict:
-    return {
-        "is_sufficient": False,
-        "completeness_score": 0,
-        "missing": [],
-        "filled_plan": _analysis_template(),
     }
 
 
@@ -375,7 +369,9 @@ def parse_review(raw: str) -> dict[str, Any]:
     """
     data = _extract_json(raw)
     if data is None:
-        return {**_reflection_template(), "feedback": raw}
+        # B6: 解析失败默认不通过（防静默放行），score=0 并记录
+        logger.warning("parse_review: 无法从 LLM 输出解析 JSON，默认不通过")
+        return {**_reflection_template(), "pass": False, "score": 0, "feedback": raw}
 
     result = _pick(data, _REVIEW_FIELD_ALIASES)
 
@@ -392,59 +388,5 @@ def parse_review(raw: str) -> dict[str, Any]:
             result["score"] = int(result["score"])
         except (ValueError, TypeError):
             result["score"] = 5
-
-    return result
-
-
-def parse_reflection_plan(raw: str) -> dict[str, Any]:
-    """解析 LLM 输出为标准反思计划结构。
-
-    Returns:
-        {
-            "is_sufficient": bool,
-            "completeness_score": int,
-            "missing": list,
-            "filled_plan": {标准计划结构},
-        }
-    """
-    data = _extract_json(raw)
-    if data is None:
-        return {
-            **_reflection_plan_template(),
-            "is_sufficient": False,
-            "missing": ["无法解析 LLM 输出"],
-        }
-
-    result = _pick(data, _REVIEW_FIELD_ALIASES, strict=True)
-
-    # 确保模板字段存在
-    for key, default in _reflection_plan_template().items():
-        result.setdefault(key, default)
-
-    # is_sufficient 兼容
-    if isinstance(result["is_sufficient"], str):
-        result["is_sufficient"] = result["is_sufficient"].lower() in ("true", "yes", "1")
-
-    # completeness_score 确保是数字
-    if not isinstance(result["completeness_score"], (int, float)):
-        try:
-            result["completeness_score"] = int(result["completeness_score"])
-        except (ValueError, TypeError):
-            result["completeness_score"] = 0
-
-    # missing 必须是 list
-    if isinstance(result["missing"], str):
-        result["missing"] = [result["missing"]]
-    if not isinstance(result["missing"], list):
-        result["missing"] = []
-
-    # filled_plan 递归标准化
-    fp = result.get("filled_plan")
-    if isinstance(fp, dict):
-        result["filled_plan"] = parse_plan(json.dumps(fp, ensure_ascii=False))
-    elif isinstance(fp, str):
-        result["filled_plan"] = parse_plan(fp)
-    else:
-        result["filled_plan"] = _analysis_template()
 
     return result

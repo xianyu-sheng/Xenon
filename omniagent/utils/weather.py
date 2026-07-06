@@ -15,6 +15,7 @@ import logging
 import re
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -151,12 +152,14 @@ def get_weather(city: str = "Beijing", lang: str = "zh") -> dict[str, Any]:
     Returns:
         包含天气信息的字典
     """
-    resolved = _resolve_city(city)
+    # A12: lang 白名单 + city URL 编码 + 禁 follow_redirects（防注入/重定向）
+    lang = lang if lang in ("zh", "en") else "zh"
+    resolved = quote(_resolve_city(city), safe="")
     logger.info(f"天气查询: {city} -> {resolved}")
 
     try:
         url = f"https://wttr.in/{resolved}?format=j1&lang={lang}"
-        with _create_http_client(timeout=15.0, follow_redirects=True) as client:
+        with _create_http_client(timeout=15.0, follow_redirects=False) as client:
             resp = client.get(url, headers={
                 "Accept-Language": "zh-CN,zh;q=0.9",
                 "User-Agent": "Mozilla/5.0",

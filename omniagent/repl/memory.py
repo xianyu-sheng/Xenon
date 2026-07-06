@@ -17,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from omniagent.utils.atomic_write import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 _MEMORY_PATH = Path.home() / ".omniagent" / "memory.json"
@@ -65,7 +67,7 @@ class MemoryStore:
             "count": len(self.memories),
             "memories": [asdict(m) for m in self.memories],
         }
-        self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(self.path, json.dumps(data, ensure_ascii=False, indent=2))  # A9 原子写
         logger.info(f"保存了 {len(self.memories)} 条记忆")
 
     def add(
