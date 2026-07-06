@@ -329,14 +329,29 @@ class PlanExecuteEngine:
         if not mentioned_files:
             return llm_output
 
-        # 检查哪些文件真的通过工具创建了
+        # 检查哪些文件真的通过工具创建了（B8: 扩展工具集，含 batch_write/batch_edit/edit_file）
         verified_files = set()
         if tracker:
             for call in tracker.calls:
-                if call.success and call.tool_name in ("write_file", "create_directory"):
+                if not call.success:
+                    continue
+                tool = call.tool_name
+                if tool in ("write_file", "create_directory", "edit_file"):
                     fp = call.params.get("file_path", "")
                     if fp:
                         verified_files.add(fp)
+                elif tool == "batch_write":
+                    # files: [{"path": "...", "content": "..."}, ...]
+                    for spec in call.params.get("files", []) or []:
+                        fp = (spec.get("path") or spec.get("file_path", "")) if isinstance(spec, dict) else ""
+                        if fp:
+                            verified_files.add(fp)
+                elif tool == "batch_edit":
+                    # edits: [{"file_path": "...", "old_text": ..., "new_text": ...}, ...]
+                    for spec in call.params.get("edits", []) or []:
+                        fp = spec.get("file_path", "") if isinstance(spec, dict) else ""
+                        if fp:
+                            verified_files.add(fp)
 
         # 对每个提到的文件，验证是否真的存在或被工具创建
         unverified = []
