@@ -75,6 +75,7 @@ class ReflectionEngine(BaseEngine):
         pass_threshold: int = 7,
         executor_prompt: str | None = None,
         reviewer_prompt: str | None = None,
+        reviewer_model_priority: list[str] | None = None,
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
     ) -> None:
@@ -87,6 +88,12 @@ class ReflectionEngine(BaseEngine):
         self.pass_threshold = pass_threshold
         self.executor_prompt = executor_prompt or EXECUTOR_PROMPT
         self.reviewer_prompt = reviewer_prompt or REVIEWER_PROMPT
+        # §8.23.11 / E4：独立 reviewer 模型优先级——执行者与审查者用不同模型，
+        # 避免同模型的自我审查盲区（executor 的系统性盲区 reviewer 也会有）。
+        # 默认与执行者同（向后兼容）。
+        self.reviewer_model_priority: list[str] = (
+            list(reviewer_model_priority) if reviewer_model_priority else list(model_priority)
+        )
 
     def run(
         self,
@@ -111,6 +118,13 @@ class ReflectionEngine(BaseEngine):
         self._ctx_mgr = ctx_mgr  # F4
         self._begin_run()  # P3-Q2: 链路追踪
 
+        # §8.23.4/10 / E4：版本回退——跟踪历史最佳（按 score）输出。
+        # 若后续修正轮把输出改得更差（reviewer 误判越改越差，§8.23.10），
+        # 最终返回最佳版本而非最后一轮。max_rounds 耗尽且最佳未通过时标注。
+        best_output: str | None = None
+        best_score: int = -1
+        output: str = ""
+
         for round_num in range(1, self.max_rounds + 1):
             if self._interrupted:
                 self.callback.on_warning("引擎被用户中断，停止修正")
@@ -118,13 +132,29 @@ class ReflectionEngine(BaseEngine):
                 break
             logger.debug(f"Reflection 第 {round_num} 轮")
 
-            # Execute
-            output = self._execute(user_input, feedback, context)
+            # Execute（§8.23.8：执行失败兜底，返回已生成的部分输出而非冒泡）
+            try:
+                output = self._execute(user_input, feedback, context)
+            except Exception as e:  # noqa: BLE001 — 生成失败不应炸掉整个 reflection
+                logger.warning(f"Reflection 执行阶段失败: {e}")
+                self.callback.on_warning(f"执行阶段失败: {e}")
+                if best_output is not None:
+                    self.callback.on_finish(best_output)
+                    return best_output
+                self.callback.on_finish(output)
+                return output
 
-            # Review
+            # Review（§8.23.11：reviewer 用独立模型）
             review = self._review(user_input, output)
             score = review.get("score", 0)
-            passed = review.get("pass") and score >= self.pass_threshold
+            # §8.23.3：以 score 为准——pass 与 score 双条件叠加时，LLM 不一致会
+            # 误杀高分输出（{pass:false,score:9} 被否决）。改为仅看 score。
+            passed = score >= self.pass_threshold
+
+            # 更新最佳版本
+            if score > best_score:
+                best_score = score
+                best_output = output
 
             self.callback.on_review(score, passed, review.get("feedback", "")[:200])
 
@@ -133,17 +163,26 @@ class ReflectionEngine(BaseEngine):
                 self.callback.on_finish(output)
                 return output
 
-            feedback = review.get("feedback", "请改进输出质量")
+            # §8.23.5：feedback 为空时强制默认，避免无反馈指导的空转循环到 max_rounds
+            feedback = review.get("feedback") or "请改进输出质量"
             issues = review.get("issues", [])
             logger.debug(f"审查未通过: {feedback}")
 
             if issues:
                 feedback += "\n具体问题:\n" + "\n".join(f"- {i}" for i in issues)
 
-        logger.info(f"达到最大修正轮次 ({self.max_rounds})，返回最后一轮输出")
-        self.callback.on_warning(f"达到最大修正轮次 ({self.max_rounds})")
-        self.callback.on_finish(output)
-        return output
+        # §8.23.4：max_rounds 耗尽——返回最佳版本（非最后一轮），并标注未通过
+        final_output = best_output if best_output is not None else output
+        logger.info(
+            f"达到最大修正轮次 ({self.max_rounds})，返回最佳版本 (最高评分 {best_score})"
+        )
+        self.callback.on_warning(f"达到最大修正轮次 ({self.max_rounds})，最高评分 {best_score}")
+        marked = (
+            f"⚠️ 达到最大修正轮次 ({self.max_rounds}) 仍未通过审查"
+            f"（最高评分 {best_score}/{self.pass_threshold} 通过线）\n\n{final_output}"
+        )
+        self.callback.on_finish(final_output)
+        return marked
 
     def _execute(self, user_input: str, feedback: str = "", context: AgentContext | None = None) -> str:
         """执行阶段: LLM 生成输出。"""
@@ -167,13 +206,17 @@ class ReflectionEngine(BaseEngine):
         return self._call_llm(messages)
 
     def _review(self, user_input: str, output: str) -> dict[str, Any]:
-        """审查阶段: LLM 审查输出。"""
+        """审查阶段: LLM 审查输出。
+
+        §8.23.11 / E4：用 ``reviewer_model_priority``（独立于执行者模型），
+        避免同模型自我审查盲区。
+        """
         messages = [
             {"role": "system", "content": self.reviewer_prompt},
             {"role": "user", "content": f"用户需求:\n{user_input}\n\n执行者输出:\n{output}"},
         ]
 
-        response = self._call_llm(messages)
+        response = self._call_llm(messages, model_priority=self.reviewer_model_priority)
         return self._parse_review(response)
 
     def _parse_review(self, response: str) -> dict[str, Any]:

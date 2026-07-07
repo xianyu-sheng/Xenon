@@ -140,12 +140,22 @@ class BaseEngine(ABC):
             logger.warning(f"in-run 压缩失败（已忽略，沿用原 messages）: {e}")
             return messages
 
-    def _call_llm(self, messages: list[dict[str, str]], max_tokens: int | None = None) -> str:
+    def _call_llm(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int | None = None,
+        *,
+        model_priority: list[str] | None = None,
+    ) -> str:
         """调用 LLM，支持多模型 fallback。
 
         ``max_tokens`` 优先级：显式入参 > ``ModelConfig.max_tokens`` > 8192 默认；
         ``chat_completion`` 再按厂商上限钳制（B4）。``api_key``/``base_url`` 按
         模型覆盖（B7）。温度取 ``self.temperature``（novel=0.8，其余=0.3）。
+
+        ``model_priority``：可选的模型优先级覆盖（§8.23.11 / E4——Reflection 的
+        reviewer 用独立模型列表，避免执行者与审查者同模型的自我审查盲区）；
+        默认 None 用 ``self.model_priority``。
 
         错误分流（R1 / Q9）：
         - 401/403（认证失败）、400（请求被拒）= **终端错误**，切模型无意义，
@@ -157,7 +167,7 @@ class BaseEngine(ABC):
         call_id = new_call_id()
         tp = lambda msg: f"{prefix(self.run_id, call_id)} {msg}"
         last_error: Exception | None = None
-        for model_id in self.model_priority:
+        for model_id in (model_priority or self.model_priority):
             try:
                 mc = self.model_configs.get(model_id)
                 mt = max_tokens or getattr(mc, "max_tokens", None) or 8192
