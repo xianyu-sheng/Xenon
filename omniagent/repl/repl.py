@@ -1058,7 +1058,10 @@ class REPL:
           故 query 意图直接判 True，路由到 ReAct。
         - 其余意图：仅匹配编程/文件/命令类正则（``_TOOL_PATTERNS``）。
         """
-        if intent == "query":
+        # P2-修复1: write_code 意图同样必然需要工具（写代码到文件 / 落盘执行），
+        # 与 query 同根：_TOOL_PATTERNS 中编程类正则要求"帮我/请/给"前缀，
+        # 无法覆盖"写一个 X"/"用 Y 写一个 Z"等自然语序。
+        if intent in ("query", "write_code"):
             return True
         for pattern in cls._TOOL_PATTERNS:
             if pattern.search(text):

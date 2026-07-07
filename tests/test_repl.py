@@ -686,3 +686,27 @@ class TestToolDetection:
         # 无 intent 时，天气等实时查询不触发（无天气正则，避免误判）
         assert REPL._detect_tool_need("今天天气怎么样", intent=None) is False
 
+    @pytest.mark.parametrize("text", [
+        "写一个 Python 爬虫",                          # 缺"帮我/请/给"前缀
+        "用 JS 写一个待办事项应用",                    # 缺前缀 + 应用不在触发词
+        "我想写一个 Python 脚本查询天气",              # "我想"不在"帮我/请/给"内
+        "写一段 Go 代码实现 HTTP 服务",                # 缺前缀
+        "用 Rust 写一个命令行工具",                    # 缺前缀
+    ])
+    def test_write_code_intent_routes_to_react(self, text):
+        """P2-修复1（B-1）：write_code 意图同样兜底路由到 ReAct，与 query 同根。
+
+        _TOOL_PATTERNS 中编程类正则要求"帮我/请/给"前缀，无法覆盖"写一个 X"/
+        "用 Y 写一个 Z" 等自然语序，导致 detect_intent 已识别为 write_code，
+        但 _detect_tool_need 返回 False 走 direct LLM，LLM 凭空"写"代码。
+        """
+        from omniagent.repl.repl import REPL
+        from omniagent.repl.prompt_optimizer import detect_intent
+
+        # 确认意图识别是 write_code
+        assert detect_intent(text) == "write_code", f"意图识别失败: {text}"
+        # write_code 意图必须路由 ReAct
+        assert REPL._detect_tool_need(text, intent="write_code") is True, (
+            f"write_code 意图应触发工具路由: {text}"
+        )
+
