@@ -20,6 +20,47 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# P3-Q7 / §8.26.2：CJK 范围扩展——基本区 + 扩展 A + 兼容区 + 假名 + 韩文音节。
+# 原仅 '一' <= c <= '鿿'（U+4E00–U+9FFF）遗漏扩展 A/日文假名/韩文，致估算偏低。
+_CJK_RE = re.compile(
+    r'[㐀-䶿'   # CJK 扩展 A
+    r'一-鿿'    # CJK 基本区
+    r'豈-﫿'    # CJK 兼容表意
+    r'぀-ヿ'    # 平假名 + 片假名
+    r'가-힯]'   # 韩文音节
+)
+
+
+def _estimate_tokens(text: str) -> int:
+    """估算 token 数（模块级，供 ``ConversationTurn`` 缓存与 ``ContextManager`` 共用）。
+
+    规则（注释与代码统一，§8.26.2 修正原注释 len/3 与代码 len//2 不一致）：
+    - CJK 字符（含扩展 A/兼容/假名/韩文）约 2 token/字；
+    - 英文约 1.3 token/word；
+    - 代码/JSON 密集按 0.4×chars；
+    - 始终不低于 ``len(text)//2``（防止无空格长串被低估）。
+    """
+    if not text:
+        return 0
+
+    cjk_count = len(_CJK_RE.findall(text))
+    words = len(text.split())
+    chars = len(text)
+
+    # 检测是否包含大量代码/JSON
+    code_chars = text.count('{') + text.count('}') + text.count(';') + text.count('=')
+    is_code_heavy = code_chars > chars * 0.02
+
+    # 基础估算：至少 len//2（防止无空格长串被低估）
+    char_based = max(chars // 2, 1)
+
+    if is_code_heavy:
+        return max(words * 2, int(chars * 0.4))
+    elif cjk_count > chars * 0.3:
+        return max(words, int(cjk_count * 2), char_based)
+    else:
+        return max(words, int(words * 1.3), char_based)
+
 
 @dataclass
 class ConversationTurn:
@@ -30,6 +71,15 @@ class ConversationTurn:
     model_used: str | None = None
     node_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # P3-Q7 / §8.9.2：token 估算懒缓存——content 添加后不变，避免状态栏/每轮全量重算。
+    _token_count: int | None = field(default=None, init=False, repr=False, compare=False)
+
+    @property
+    def token_count(self) -> int:
+        """该 turn 的 token 估算（首次访问计算并缓存）。"""
+        if self._token_count is None:
+            self._token_count = _estimate_tokens(self.content)
+        return self._token_count
 
 
 class ContextManager:
@@ -91,41 +141,19 @@ class ContextManager:
     # ── Token 估算 ────────────────────────────────────────
 
     def estimate_tokens(self, text: str) -> int:
+        """估算 token 数（委托模块函数，保留向后兼容）。
+
+        规则见模块级 ``_estimate_tokens``；CJK 范围已扩展（§8.26.2）。
         """
-        估算 token 数。
-        规则：
-        - 中文字符约 2 token/字
-        - 英文约 1.3 token/word
-        - 代码/JSON 按更高密度
-        - 始终不低于 len(text)/3（防止无空格长串被低估）
-        """
-        if not text:
-            return 0
-
-        # 统计中文字符数
-        cjk_count = sum(1 for c in text if '一' <= c <= '鿿')
-        # 英文单词数
-        words = len(text.split())
-        # 总字符数
-        chars = len(text)
-
-        # 检测是否包含大量代码/JSON
-        code_chars = text.count('{') + text.count('}') + text.count(';') + text.count('=')
-        is_code_heavy = code_chars > chars * 0.02
-
-        # 基础估算：至少 len/2（防止无空格长串被低估）
-        char_based = max(chars // 2, 1)
-
-        if is_code_heavy:
-            return max(words * 2, int(chars * 0.4))
-        elif cjk_count > chars * 0.3:
-            return max(words, int(cjk_count * 2), char_based)
-        else:
-            return max(words, int(words * 1.3), char_based)
+        return _estimate_tokens(text)
 
     def current_token_usage(self) -> int:
-        """估算当前历史的总 token 数。"""
-        return sum(self.estimate_tokens(turn.content) for turn in self.history)
+        """估算当前历史的总 token 数。
+
+        P3-Q7 / §8.9.2：用各 turn 缓存的 ``token_count`` 求和，O(n) 免重算
+        （原每轮/每次渲染都全量 estimate_tokens，长会话 O(n²) 累积）。
+        """
+        return sum(turn.token_count for turn in self.history)
 
     def usage_ratio(self) -> float:
         """当前 token 使用率 (0.0 ~ 1.0+)。"""
