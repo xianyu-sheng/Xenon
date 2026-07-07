@@ -7,6 +7,7 @@ Setup Wizard — 交互式配置引导。
 
 from __future__ import annotations
 
+import re
 import sys
 from typing import TYPE_CHECKING
 
@@ -21,6 +22,8 @@ from omniagent.repl.provider_registry import (
     set_provider_key,
     remove_provider_key,
     get_configured_providers,
+    fetch_provider_models,
+    MODEL_FETCH_ERRORS,
 )
 
 if TYPE_CHECKING:
@@ -71,9 +74,49 @@ def _masked_input(prompt_text: str) -> str:
 
 
 def _clean_api_key(raw: str) -> str:
-    """清理粘贴 API Key 时常见的空白、引号和多行内容。"""
-    first_line = raw.strip().splitlines()[0].strip() if raw.strip() else ""
+    """清理粘贴 API Key 时常见的空白、引号和多行内容。
+
+    P3-Q6 / §8.16.3：识别并剥离 ``export VAR=value`` / ``VAR=value`` 前缀——
+    用户常从 ``export OPENAI_API_KEY="sk-xxx"`` 粘贴，原实现会把整行当 key 存入。
+    """
+    if not raw or not raw.strip():
+        return ""
+    first_line = raw.strip().splitlines()[0].strip()
+    # 剥离 (export )?VAR= 前缀
+    first_line = re.sub(r"^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*", "", first_line)
     return first_line.strip().strip("'\"").strip()
+
+
+def _test_key_connectivity(provider, api_key: str) -> tuple[bool, str]:
+    """保存前连通性测试（P3-Q6 / §8.16.1）。
+
+    用该 key 调一次厂商 ``/models`` 端点：成功返回 ``(True, 模型数描述)``，
+    失败返回 ``(False, 错误详情)``。失败原因来自 ``MODEL_FETCH_ERRORS``。
+    """
+    models = fetch_provider_models(provider, api_key)
+    if models:
+        return True, f"获取到 {len(models)} 个模型"
+    err = MODEL_FETCH_ERRORS.get(provider.key, "未知错误")
+    return False, err
+
+
+def _purge_provider_models(registry: "ModelRegistry", provider_key: str) -> int:
+    """删 key 时联动清理 registry 中该 provider 的模型（P3-Q6 / §8.16.4）。
+
+    移除 model_id 形如 ``provider_key/...`` 的全部模型（``remove_model`` 已联动
+    清 role_priority 中的该别名），并删除清空后的空角色条目，返回移除模型数。
+    """
+    removed = 0
+    for alias, mc in list(registry.models.items()):
+        prefix = mc.model_id.split("/", 1)[0]
+        if prefix == provider_key:
+            registry.remove_model(alias)
+            removed += 1
+    # 清理空角色列表（重置优先级）
+    for role in list(registry.role_priority):
+        if not registry.role_priority[role]:
+            del registry.role_priority[role]
+    return removed
 
 
 def interactive_setup(registry: ModelRegistry) -> None:
@@ -107,7 +150,7 @@ def interactive_setup(registry: ModelRegistry) -> None:
         elif choice == "4":
             _select_mode(registry)
         elif choice == "5":
-            _remove_api_key()
+            _remove_api_key(registry)
 
 
 def _setup_api_key() -> None:
@@ -144,8 +187,19 @@ def _setup_api_key() -> None:
     api_key = _clean_api_key(_masked_input(f"请输入 {provider.name} 的 API Key（可粘贴，输入会显示，回车确认）"))
 
     if api_key:
-        set_provider_key(provider.key, api_key)
-        console.print(f"\n[green]已保存 {provider.name} 的 API Key[/green]\n")
+        # P3-Q6 / §8.16.1：保存前连通性测试，失败时询问是否仍保存。
+        ok, detail = _test_key_connectivity(provider, api_key)
+        if ok:
+            console.print(f"[green]✓ 连通性正常（{detail}）[/green]")
+            set_provider_key(provider.key, api_key)
+            console.print(f"[green]已保存 {provider.name} 的 API Key[/green]\n")
+        else:
+            console.print(f"[yellow]⚠ 连通性测试失败: {detail}[/yellow]")
+            if Confirm.ask("仍要保存该 Key？", default=False):
+                set_provider_key(provider.key, api_key)
+                console.print(f"[green]已保存 {provider.name} 的 API Key[/green]\n")
+            else:
+                console.print("[yellow]已取消保存[/yellow]\n")
     else:
         console.print("\n[yellow]已取消[/yellow]\n")
 
@@ -271,8 +325,12 @@ def _select_mode(registry: ModelRegistry) -> None:
     console.print(f"\n[green]已切换到: {selected.name}[/green] — {selected.description}\n")
 
 
-def _remove_api_key() -> None:
-    """删除 API Key。"""
+def _remove_api_key(registry: "ModelRegistry") -> None:
+    """删除 API Key。
+
+    P3-Q6 / §8.16.4：删 key 时联动清理 registry 中该 provider 的模型并重置
+    角色优先级，避免删 key 后 registry 仍指向该模型 → 运行时 401。
+    """
     configured = get_configured_providers()
 
     if not configured:
@@ -295,7 +353,11 @@ def _remove_api_key() -> None:
     provider = configured[int(choice) - 1]
     if Confirm.ask(f"确认删除 {provider.name} 的 API Key?"):
         remove_provider_key(provider.key)
-        console.print(f"[green]已删除 {provider.name} 的 API Key[/green]\n")
+        removed = _purge_provider_models(registry, provider.key)
+        console.print(f"[green]已删除 {provider.name} 的 API Key[/green]")
+        if removed:
+            console.print(f"[dim]已联动移除 {removed} 个 {provider.name} 模型并重置角色优先级[/dim]")
+        console.print()
 
 
 def _model_hint(model_name: str) -> str:
