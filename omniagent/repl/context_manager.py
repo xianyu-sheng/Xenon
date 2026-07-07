@@ -95,6 +95,7 @@ class ContextManager:
         max_tokens: int = 128000,
         compact_threshold: float = 0.6,
         compact_force: float = 0.85,
+        track_real_usage: bool = False,
     ) -> None:
         self.max_tokens = max_tokens
         # F3 双阈值：compact_threshold=warn（60%，触发 LLM 压缩），
@@ -110,6 +111,16 @@ class ContextManager:
         # F3 压缩持久化（可选）：设置后每次压缩写一份 markdown 快照
         self.session_id: str | None = None
         self.persist_dir: Path | None = None
+        # P3-Q1 续 / §8.8.1：真实 usage 优先于启发式估算。
+        # track_real_usage=True 时订阅 llm_client 的 usage 回调，记录最近一次
+        # chat_completion 调用的真实 token 用量；current_token_usage() 优先返回
+        # 真实 total_tokens（= 该次 prompt+completion ≈ 当前历史占用），无真实
+        # 数据时回退 _estimate_tokens 启发式（首调前 / 离线 / mock 场景）。
+        self._real_usage: dict[str, int] | None = None
+        self._suppress_usage: bool = False  # compact 自身摘要调用期间抑制记录
+        self._usage_unsub: Any = None
+        if track_real_usage:
+            self._subscribe_usage()
 
     # ── 对话管理 ──────────────────────────────────────────
 
@@ -140,6 +151,48 @@ class ContextManager:
 
     # ── Token 估算 ────────────────────────────────────────
 
+    def _subscribe_usage(self) -> None:
+        """订阅 llm_client 的 usage 回调（P3-Q1 续 / §8.8.1）。
+
+        懒导入避免 repl ↔ utils 循环；回调异常已被 llm_client 隔离，这里只做记录。
+        """
+        try:
+            from omniagent.utils.llm_client import register_usage_callback
+
+            self._usage_unsub = register_usage_callback(self._on_usage)
+        except Exception:  # noqa: BLE001 — 订阅失败不应阻断 ContextManager 构造
+            logger.warning("真实 usage 订阅失败，回退启发式估算", exc_info=True)
+            self._usage_unsub = None
+
+    def _on_usage(self, model_id: str, usage: Any, latency: float) -> None:
+        """usage 回调适配：把 LLMUsage 转成 dict 记录（compact 期间抑制）。"""
+        if self._suppress_usage:
+            return
+        self.record_real_usage(
+            getattr(usage, "prompt_tokens", 0),
+            getattr(usage, "completion_tokens", 0),
+            getattr(usage, "total_tokens", 0),
+        )
+
+    def record_real_usage(
+        self,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int | None = None,
+    ) -> None:
+        """记录最近一次 chat_completion 的真实 token 用量（P3-Q1 续 / §8.8.1）。
+
+        total_tokens 缺省时取 prompt+completion。该值反映模型实际看到的输入+
+        输出大小 ≈ 当前历史占用（直连模式下与 history 一一对应；引擎模式下含
+        ReAct/Plan 草稿，略偏高，偏向更早触发 compact，安全侧）。
+        """
+        total = int(total_tokens) if total_tokens else int(prompt_tokens) + int(completion_tokens)
+        self._real_usage = {
+            "prompt": int(prompt_tokens),
+            "completion": int(completion_tokens),
+            "total": total,
+        }
+
     def estimate_tokens(self, text: str) -> int:
         """估算 token 数（委托模块函数，保留向后兼容）。
 
@@ -148,12 +201,19 @@ class ContextManager:
         return _estimate_tokens(text)
 
     def current_token_usage(self) -> int:
-        """估算当前历史的总 token 数。
+        """当前历史的 token 占用（P3-Q1 续 / §8.9.2）。
 
-        P3-Q7 / §8.9.2：用各 turn 缓存的 ``token_count`` 求和，O(n) 免重算
-        （原每轮/每次渲染都全量 estimate_tokens，长会话 O(n²) 累积）。
+        优先返回真实 usage 的 total_tokens（最近一次 chat_completion 的
+        prompt+completion ≈ 当前历史占用）；无真实数据时回退各 turn 缓存的
+        ``token_count`` 求和（O(n) 免重算，§8.9.2 memoization）。
         """
+        if self._real_usage is not None:
+            return self._real_usage["total"]
         return sum(turn.token_count for turn in self.history)
+
+    def real_usage(self) -> dict[str, int] | None:
+        """最近一次真实 usage（prompt/completion/total），无则 None。"""
+        return None if self._real_usage is None else dict(self._real_usage)
 
     def usage_ratio(self) -> float:
         """当前 token 使用率 (0.0 ~ 1.0+)。"""
@@ -186,6 +246,8 @@ class ContextManager:
         if not self._undo_stack:
             return False
         self.history = self._undo_stack.pop()
+        # P3-Q1 续：回退到旧快照后，记录的真实 usage 已不对应当前 history → 失效
+        self._real_usage = None
         return True
 
     @property
@@ -230,26 +292,35 @@ class ContextManager:
 
         self.save_snapshot()
 
-        if ratio > self.compact_force and not summary:
-            # Tier 3：>85% 安全截断（不调 LLM）
-            new_history = self._safe_truncation()
-            summary = (
-                f"（上下文使用率 {ratio:.0%} 超过 {self.compact_force:.0%}，"
-                f"已安全截断，保留 system + 最近 {len(new_history)} 条消息）"
-            )
-        else:
-            # Tier 2：60-85% LLM 6 段压缩（或手动摘要）
-            summary = summary or self._llm_summary_6seg(model_priority, older)
-            new_history = [
-                ConversationTurn(
-                    role="system",
-                    content=(
-                        f"[对话历史已压缩] 以下是之前 {len(older)} 条消息的 6 段摘要：\n\n{summary}"
-                    ),
+        # P3-Q1 续：压缩自身的 LLM 摘要调用会经 usage 回调，但其 prompt 是被
+        # 压缩的 older 片段、非当前 history → 抑制记录，避免污染 current_token_usage
+        prev_suppress = self._suppress_usage
+        self._suppress_usage = True
+        try:
+            if ratio > self.compact_force and not summary:
+                # Tier 3：>85% 安全截断（不调 LLM）
+                new_history = self._safe_truncation()
+                summary = (
+                    f"（上下文使用率 {ratio:.0%} 超过 {self.compact_force:.0%}，"
+                    f"已安全截断，保留 system + 最近 {len(new_history)} 条消息）"
                 )
-            ] + recent
+            else:
+                # Tier 2：60-85% LLM 6 段压缩（或手动摘要）
+                summary = summary or self._llm_summary_6seg(model_priority, older)
+                new_history = [
+                    ConversationTurn(
+                        role="system",
+                        content=(
+                            f"[对话历史已压缩] 以下是之前 {len(older)} 条消息的 6 段摘要：\n\n{summary}"
+                        ),
+                    )
+                ] + recent
+        finally:
+            self._suppress_usage = prev_suppress
 
         self.history = new_history
+        # 压缩后 history 结构性变更，旧真实 usage 不再对应 → 失效，下次调用重新填充
+        self._real_usage = None
         self._persist_compact_md(summary, session_id)
         return summary
 
@@ -445,12 +516,15 @@ class ContextManager:
 
     def stats(self) -> dict[str, Any]:
         """返回当前上下文统计信息。"""
+        real = self._real_usage
         return {
             "total_messages": len(self.history),
             "user_messages": sum(1 for t in self.history if t.role == "user"),
             "assistant_messages": sum(1 for t in self.history if t.role == "assistant"),
             "system_messages": sum(1 for t in self.history if t.role == "system"),
             "estimated_tokens": self.current_token_usage(),
+            "token_source": "real" if real is not None else "heuristic",
+            "real_usage": dict(real) if real is not None else None,
             "max_tokens": self.max_tokens,
             "usage_ratio": f"{self.usage_ratio():.1%}",
             "undo_available": self.undo_depth,
@@ -461,3 +535,14 @@ class ContextManager:
         """清空所有历史。"""
         self.save_snapshot()
         self.history.clear()
+        # P3-Q1 续：清空后真实 usage 不再对应 → 失效
+        self._real_usage = None
+
+    def close(self) -> None:
+        """退订 usage 回调（P3-Q1 续）：长生命周期对象销毁前调用，避免回调泄漏。"""
+        if self._usage_unsub is not None:
+            try:
+                self._usage_unsub()
+            except Exception:  # noqa: BLE001
+                logger.debug("usage 回调退订异常（已忽略）", exc_info=True)
+            self._usage_unsub = None

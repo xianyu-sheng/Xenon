@@ -65,7 +65,9 @@ class REPL:
         verbose: bool = False,
     ) -> None:
         self.registry = registry or ModelRegistry()
-        self.ctx_mgr = ctx_mgr or ContextManager()
+        # P3-Q1 续 / §8.8.1：开启真实 usage 跟踪——ContextManager 订阅
+        # llm_client 的 usage 回调，current_token_usage() 优先用真实 total_tokens。
+        self.ctx_mgr = ctx_mgr or ContextManager(track_real_usage=True)
         self.agent_context = AgentContext()
         self.system_prompt = system_prompt or self._default_system_prompt()
         self.streaming = streaming

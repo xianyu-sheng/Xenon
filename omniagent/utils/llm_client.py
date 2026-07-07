@@ -905,9 +905,9 @@ def chat_completion_stream(
     endpoint = build_endpoint(model_id, credentials, base_url)
 
     if endpoint.provider == "anthropic":
-        yield from _stream_anthropic(endpoint, messages, max_tokens, temperature, timeout)
+        yield from _stream_anthropic(endpoint, messages, max_tokens, temperature, timeout, model_id)
     else:
-        yield from _stream_openai_compat(endpoint, messages, max_tokens, temperature, timeout)
+        yield from _stream_openai_compat(endpoint, messages, max_tokens, temperature, timeout, model_id)
 
 
 def _stream_openai_compat(
@@ -916,8 +916,16 @@ def _stream_openai_compat(
     max_tokens: int,
     temperature: float,
     timeout: float,
+    model_id: str,
 ) -> Generator[str, None, None]:
-    """OpenAI 兼容格式流式调用。"""
+    """OpenAI 兼容格式流式调用。
+
+    P3-Q1 续 / §8.8.1：机会性提取末尾 chunk 的 ``usage``（部分兼容厂商默认随
+    末帧返回；OpenAI 官方需 ``stream_options.include_usage``，此处不强加以避免
+    对不支持的厂商触发 400）。提取到则经 usage 回调发出真实 token 用量。
+    """
+    import time
+
     url = f"{endpoint.base_url}/chat/completions"
     headers = {
         "Authorization": f"Bearer {endpoint.api_key}",
@@ -930,6 +938,8 @@ def _stream_openai_compat(
         "temperature": temperature,
         "stream": True,
     }
+    t0 = time.time()
+    usage_data: dict[str, Any] | None = None
     with _create_http_client(timeout=timeout) as client:
         with client.stream("POST", url, json=payload, headers=headers) as resp:
             resp.raise_for_status()
@@ -941,12 +951,19 @@ def _stream_openai_compat(
                     break
                 try:
                     chunk = json.loads(data_str)
-                    delta = chunk["choices"][0].get("delta", {})
-                    content = delta.get("content")
-                    if content:
-                        yield content
-                except (json.JSONDecodeError, KeyError, IndexError):
+                except json.JSONDecodeError:
                     continue
+                if isinstance(chunk.get("usage"), dict):
+                    usage_data = chunk
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta", {})
+                content = delta.get("content")
+                if content:
+                    yield content
+    if usage_data is not None:
+        _emit_usage(model_id, _extract_usage(usage_data, endpoint.provider), time.time() - t0)
 
 
 def _stream_anthropic(
@@ -955,8 +972,15 @@ def _stream_anthropic(
     max_tokens: int,
     temperature: float,
     timeout: float,
+    model_id: str,
 ) -> Generator[str, None, None]:
-    """Anthropic 原生格式流式调用。"""
+    """Anthropic 原生格式流式调用。
+
+    P3-Q1 续 / §8.8.1：从 ``message_start`` 取 input_tokens、``message_delta``
+    取 output_tokens（末值为最终输出），结束后经 usage 回调发出真实用量。
+    """
+    import time
+
     url = f"{endpoint.base_url}/v1/messages"
     headers = {
         "x-api-key": endpoint.api_key,
@@ -981,6 +1005,9 @@ def _stream_anthropic(
     if system_text:
         payload["system"] = system_text
 
+    t0 = time.time()
+    input_tokens = 0
+    output_tokens = 0
     with _create_http_client(timeout=timeout) as client:
         with client.stream("POST", url, json=payload, headers=headers) as resp:
             resp.raise_for_status()
@@ -990,10 +1017,25 @@ def _stream_anthropic(
                 data_str = line[6:]
                 try:
                     event = json.loads(data_str)
-                    if event.get("type") == "content_block_delta":
-                        delta = event.get("delta", {})
-                        text = delta.get("text")
-                        if text:
-                            yield text
-                except (json.JSONDecodeError, KeyError):
+                except json.JSONDecodeError:
                     continue
+                etype = event.get("type")
+                if etype == "message_start":
+                    u = (event.get("message") or {}).get("usage") or {}
+                    input_tokens = int(u.get("input_tokens", 0) or 0)
+                    output_tokens = int(u.get("output_tokens", 0) or 0)
+                elif etype == "message_delta":
+                    u = event.get("usage") or {}
+                    if "output_tokens" in u:
+                        output_tokens = int(u.get("output_tokens", 0) or 0)
+                elif etype == "content_block_delta":
+                    delta = event.get("delta", {})
+                    text = delta.get("text")
+                    if text:
+                        yield text
+    if input_tokens or output_tokens:
+        _emit_usage(
+            model_id,
+            LLMUsage(input_tokens, output_tokens, input_tokens + output_tokens),
+            time.time() - t0,
+        )
