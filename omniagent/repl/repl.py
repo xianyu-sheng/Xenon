@@ -185,8 +185,7 @@ class REPL:
 
         if not creds:
             # 完全没有配置 — 引导用户
-            console.print("[yellow]检测到尚未配置任何 API Key[/yellow]")
-            console.print("  输入 [bold cyan]/setup[/bold cyan] 进入配置向导\n")
+            console.print("[dim]· 尚未配置 API Key，输入 [bold cyan]/setup[/bold cyan] 进入配置向导[/dim]\n")
         elif not self.registry.list_models():
             # 有 Key 但没选模型 — 自动注册已配置厂商的模型
             for p in configured:
@@ -200,8 +199,7 @@ class REPL:
 
             if self.registry.list_models():
                 models = self.registry.list_models()
-                console.print(f"[green]已自动加载 {len(models)} 个模型[/green]")
-                console.print("  输入 [bold cyan]/model[/bold cyan] 可切换模型\n")
+                console.print(f"[dim]· 已自动加载 {len(models)} 个模型，输入 [bold cyan]/model[/bold cyan] 切换[/dim]\n")
 
         # 加载自定义快捷指令和技能
         self._load_custom_commands()
@@ -813,7 +811,19 @@ class REPL:
                         console.print()
                         console.print("[cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，自动切换到 ReAct 模式重新执行...[/cyan]")
                         self.ctx_mgr.trim_last_assistant()
-                        self._run_react_engine(user_input, model_ids)
+                        # P2-修复6 (观察项-1)：防御性 catch ——
+                        # _run_react_engine 内部已加占位（修复5），但万一占位也失败
+                        # （如 ctx_mgr 内部异常），这里再兜底一次防 user-only 序列。
+                        try:
+                            self._run_react_engine(user_input, model_ids)
+                        except Exception as e:
+                            console.print(f"[error]❌ ReAct 重试失败: {e}[/error]")
+                            try:
+                                self.ctx_mgr.add_assistant_message(
+                                    f"[错误] ReAct 重试失败: {e}", model_used=model_ids[0],
+                                )
+                            except Exception:
+                                pass
                         return
 
                     # ── 响应后验证 2：检测 LLM 是否回复了拒绝性内容 ──
@@ -821,7 +831,17 @@ class REPL:
                         console.print()
                         console.print("[dim]· LLM 无法完成任务 → ReAct 模式重试[/dim]")
                         self.ctx_mgr.trim_last_assistant()
-                        self._run_react_engine(user_input, model_ids)
+                        # P2-修复6 (观察项-1)：与 file_claim 同根问题，同样防御性 catch
+                        try:
+                            self._run_react_engine(user_input, model_ids)
+                        except Exception as e:
+                            console.print(f"[error]❌ ReAct 重试失败: {e}[/error]")
+                            try:
+                                self.ctx_mgr.add_assistant_message(
+                                    f"[错误] ReAct 重试失败: {e}", model_used=model_ids[0],
+                                )
+                            except Exception:
+                                pass
                         return
 
                 return

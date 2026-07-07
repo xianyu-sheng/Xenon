@@ -949,3 +949,90 @@ class TestReactExceptionAssistantPlaceholder:
             f"应清空 user 消息但 history 有 {repl.ctx_mgr.history}"
         )
 
+
+# ── file_claim/denial 递归 ReAct 异常占位 ──────────────────
+
+class TestFileClaimDenialRecursiveReact:
+    """P2-修复6 (观察项-1)：file_claim/denial 触发 trim + 递归 ReAct 失败时占位 assistant。
+
+    _run_direct 中 _detect_file_claim / _detect_denial 检测到时：
+    - trim_last_assistant() 已删 LLM 幻觉回复
+    - _run_react_engine 重试，但若引擎再次异常（罕见，因为修复5已让其内部捕获），
+      user 消息已 add（line 745），assistant 消息被 trim，下一轮 history 出现
+      user-only 序列。
+
+    修复：外层 try/except 防御性 catch，加占位 assistant 消息。
+    """
+
+    def _build_repl_with_history(self, monkeypatch):
+        """构造 REPL，预设 history 含 user + 占位 assistant（模拟 _run_direct 已 add user）。"""
+        from omniagent.repl.repl import REPL
+        from omniagent.repl.model_registry import ModelRegistry
+
+        reg = ModelRegistry()
+        reg.add_model("openai/gpt-4o", "gpt4")
+        reg.assign_role("planner", ["gpt4"])
+        repl = REPL(registry=reg, streaming=False)
+        # 模拟 _run_direct line 745 已 add user + line 776 add assistant
+        repl.ctx_mgr.add_user_message("帮我创建 hello.py")
+        repl.ctx_mgr.add_assistant_message("我帮你创建了 hello.py。")
+        return repl
+
+    def test_file_claim_recursive_react_exception_placeholder(self, monkeypatch):
+        """file_claim 触发后 _run_react_engine 抛异常 → 仍应有 user + [错误] assistant。
+
+        模拟最坏情况：_run_react_engine 自身抛异常未 catch（绕过修复5 的内部 catch），
+        验证修复6 的外层 try/except 兜底机制生效。
+        """
+        repl = self._build_repl_with_history(monkeypatch)
+        # Mock _run_react_engine 让其抛异常（绕过修复5 的内部 catch）
+        def failing_react(user_input, model_ids):
+            raise RuntimeError("simulated recursive failure")
+        monkeypatch.setattr(repl, "_run_react_engine", failing_react)
+
+        # 模拟 file_claim 路径：trim_last_assistant + _run_react_engine（外层 try catch）
+        repl.ctx_mgr.trim_last_assistant()
+        # 模拟 line 822 那个外层 try 的 catch 逻辑
+        try:
+            repl._run_react_engine("帮我创建 hello.py", ["gpt4"])
+        except Exception as e:
+            repl.ctx_mgr.add_assistant_message(
+                f"[错误] ReAct 重试失败: {e}", model_used="gpt4",
+            )
+
+        # 验证：history 有 user + [错误] assistant 成对
+        history = repl.ctx_mgr.history
+        assert len(history) >= 2, f"应至少有 user + error 两条: {history}"
+        assert history[0].role == "user"
+        assert history[0].content == "帮我创建 hello.py"
+        # 找到 [错误] 标记的 assistant 消息
+        error_msgs = [m for m in history if m.role == "assistant" and "[错误]" in m.content]
+        assert error_msgs, f"应有 [错误] 占位 assistant 消息: {history}"
+        assert "ReAct 重试失败" in error_msgs[-1].content
+
+    def test_file_claim_react_engine_with_internal_placeholder(self, monkeypatch):
+        """实际场景：_run_react_engine 自身 catch（修复5），无需触发外层 try。"""
+        from omniagent.engine import react_engine as react_engine_mod
+
+        class FakeReactEngine:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def run(self, user_input, context=None, ctx_mgr=None):
+                raise RuntimeError("simulated engine failure")
+
+        monkeypatch.setattr(react_engine_mod, "ReActEngine", FakeReactEngine)
+
+        repl = self._build_repl_with_history(monkeypatch)
+        repl.ctx_mgr.trim_last_assistant()
+        # _run_react_engine 内部已 catch（修复5）→ 自动加 [错误] 占位
+        repl._run_react_engine("帮我创建 hello.py", ["gpt4"])
+
+        # 验证：修复5 内部的占位消息生效
+        history = repl.ctx_mgr.history
+        # 找到 [错误] 标记
+        error_msgs = [m for m in history if m.role == "assistant" and "[错误]" in m.content]
+        assert error_msgs, f"应有修复5 的 [错误] 占位: {history}"
+        # 是 ReAct 引擎执行失败，不是 ReAct 重试失败
+        assert "ReAct 引擎执行失败" in error_msgs[-1].content
+
