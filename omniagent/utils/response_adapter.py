@@ -22,6 +22,7 @@ def _step_template() -> dict:
         "tool": None,
         "params": {},
         "description": "",
+        "depends_on": [],  # P2-E2: 依赖的步骤 id 列表（DAG 拓扑排序用）
     }
 
 
@@ -72,6 +73,7 @@ _STEP_FIELD_ALIASES = {
     "tool":        ["tool", "action", "tool_name", "command", "function", "method"],
     "params":      ["params", "parameters", "args", "arguments", "input", "kwargs"],
     "description": ["description", "detail", "details", "explain", "note"],
+    "depends_on":  ["depends_on", "deps", "dependencies", "after", "requires", "prerequisite", "prerequisites"],
 }
 
 _REACT_FIELD_ALIASES = {
@@ -133,6 +135,15 @@ def _normalize_step(step: Any, index: int) -> dict:
     result["tool"] = normalized.get("tool")
     result["params"] = normalized.get("params", {})
     result["description"] = normalized.get("description", result["task"])
+    # P2-E2: 归一化 depends_on 为列表（标量→单元素列表；缺失→空列表）。
+    # int 化与未知依赖过滤交由 PlanDAG 处理。
+    deps = normalized.get("depends_on")
+    if deps is None:
+        result["depends_on"] = []
+    elif isinstance(deps, (list, tuple)):
+        result["depends_on"] = list(deps)
+    else:
+        result["depends_on"] = [deps]
     return result
 
 

@@ -8,11 +8,13 @@ Phase 2: Execution — 逐步执行，每步结果写入 context
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 from omniagent.engine.base import BaseEngine
 from omniagent.engine.callbacks import EngineCallback
 from omniagent.engine.context import AgentContext
+from omniagent.engine.plan_dag import PlanDAG, PlanDAGCycleError
 from omniagent.engine.tool_tracker import ToolExecutionTracker
 from omniagent.nodes.tool_executor import ToolExecutor
 from omniagent.nodes.tool_node import ToolNode
@@ -29,7 +31,7 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
 
 只输出一个 JSON，不要输出其他任何内容：
 ```json
-{{"analysis":"简要分析任务目标","steps":[{{"id":1,"task":"步骤描述","tool":"工具名或null","params":{{"参数名":"值"}}}}]}}
+{{"analysis":"简要分析任务目标","steps":[{{"id":1,"task":"步骤描述","tool":"工具名或null","params":{{"参数名":"值"}},"depends_on":[]}}]}}
 ```
 
 ## 规划原则
@@ -40,6 +42,10 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
 4. **不需要工具的步骤**：tool 设为 null，如"分析需求"、"设计方案"
 5. **先读后写**：修改文件前先 read_file 查看内容
 6. **步骤顺序合理**：依赖关系靠前的步骤排在前面
+7. **声明依赖以解锁并行**：`depends_on` 填写本步依赖的前置步骤 id 列表（如 `[1, 2]`）。
+   - 互不依赖的步骤留空 `[]`，它们会被**并发执行**以加速
+   - 必须等某步产物才能进行的步骤，务必填 `depends_on`，否则可能读到空结果
+   - 仅填写已存在的步骤 id；禁止自环（`depends_on` 含自身）或循环
 
 ## ⚠️ 重要：可用工具列表（完整且唯一）
 
@@ -114,6 +120,9 @@ class PlanExecuteEngine(BaseEngine):
         system_prompt: str | None = None,
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
+        executor_model_priority: list[str] | None = None,
+        enable_parallel: bool = False,
+        max_parallel_workers: int = 4,
     ) -> None:
         # R2: 公共属性与 _call_llm 由 BaseEngine 提供。
         super().__init__(
@@ -121,6 +130,14 @@ class PlanExecuteEngine(BaseEngine):
             model_configs=model_configs, temperature=0.3,
         )
         self.max_steps = max_steps
+        # P2-E2 双模型：规划用 model_priority（默认），执行/总结用 executor_model_priority
+        # （默认回退到规划模型列表，向后兼容）。
+        self.executor_model_priority = (
+            list(executor_model_priority) if executor_model_priority else list(model_priority)
+        )
+        # P2-E2 DAG 波次并行（默认关：保串行行为向后兼容；开启后同 wave 步骤并发）。
+        self.enable_parallel = enable_parallel
+        self.max_parallel_workers = max(1, max_parallel_workers)
         if system_prompt:
             self.system_prompt = system_prompt
         else:
@@ -182,12 +199,41 @@ class PlanExecuteEngine(BaseEngine):
 
         logger.info(f"计划生成 {len(steps)} 个步骤")
         total = min(len(steps), self.max_steps)
+        capped = steps[:self.max_steps]
 
         # Phase 2: Execution
         logger.info("Plan-Execute Phase 2: 执行中...")
-        results = []
 
-        for i, step in enumerate(steps[:self.max_steps]):
+        # P2-E2: 当计划声明了 depends_on 或显式开启并行时，走 DAG 波次执行；
+        # 否则保持原串行行为（向后兼容，零行为变化）。DAG 构建失败（循环依赖/
+        # 重复 id）或并发意外异常时，回退串行。
+        use_dag = self.enable_parallel or any(s.get("depends_on") for s in capped)
+        if use_dag:
+            try:
+                results = self._run_dag(capped, user_input, ctx, tracker, total)
+            except (PlanDAGCycleError, ValueError) as e:
+                logger.warning("DAG 构建失败 (%s)，回退串行执行", e)
+                self.callback.on_warning(f"计划依赖图无效，改用串行执行：{e}")
+                results = self._run_serial(capped, user_input, ctx, tracker, total)
+            except Exception as e:  # 并发意外异常的最终兜底
+                logger.exception("DAG 执行异常，回退串行执行: %s", e)
+                self.callback.on_warning(f"并发执行异常，改用串行执行：{e}")
+                results = self._run_serial(capped, user_input, ctx, tracker, total)
+        else:
+            results = self._run_serial(capped, user_input, ctx, tracker, total)
+
+        # 汇总结果 — 附加工具执行摘要
+        summary = self._summarize(user_input, plan.get("analysis", ""), results, tracker)
+        return summary
+
+    # ── Phase 2: 串行执行（原行为，向后兼容） ─────────────────
+    def _run_serial(
+        self, steps: list[dict[str, Any]], user_input: str,
+        ctx: AgentContext, tracker: ToolExecutionTracker, total: int,
+    ) -> list[dict[str, Any]]:
+        """逐串行执行步骤（原 Plan-Execute Phase 2 行为）。"""
+        results: list[dict[str, Any]] = []
+        for i, step in enumerate(steps):
             if self._interrupted:
                 self.callback.on_warning("引擎被用户中断，停止执行")
                 logger.info("Plan-Execute 被中断，退出步骤循环")
@@ -200,11 +246,7 @@ class PlanExecuteEngine(BaseEngine):
             logger.debug(f"执行步骤 {step_id}: {step_task}")
             self.callback.on_step(step_id, total, step_task)
 
-            # 构建上下文提示
-            prev_results = "\n".join(
-                f"步骤 {r['step_id']}: {r['result'][:200]}"
-                for r in results[-3:]  # 只保留最近 3 步
-            ) if results else "(无)"
+            prev_results = self._build_prev_results(results)
 
             if tool and tool != "null":
                 # 使用工具执行
@@ -225,10 +267,165 @@ class PlanExecuteEngine(BaseEngine):
             success = not result.startswith(("执行失败", "执行异常"))
             self.callback.on_step_done(step_id, success, result[:200])
             logger.debug(f"步骤 {step_id} 完成: {result[:100]}")
+        return results
 
-        # 汇总结果 — 附加工具执行摘要
-        summary = self._summarize(user_input, plan.get("analysis", ""), results, tracker)
-        return summary
+    # ── Phase 2: DAG 波次执行（P2-E2） ────────────────────────
+    def _run_dag(
+        self, steps: list[dict[str, Any]], user_input: str,
+        ctx: AgentContext, tracker: ToolExecutionTracker, total: int,
+    ) -> list[dict[str, Any]]:
+        """拓扑波次执行：同 wave 并发（若 enable_parallel），波次间串行。
+
+        依赖失败/跳过的步骤级联跳过（修复审核 §8.27.1：失败步骤的依赖项不再
+        盲目继续）。所有 callback 调用都在主线程发出，避免并发渲染竞争。
+        """
+        dag = PlanDAG(steps)  # 重复 id → ValueError；waves() → PlanDAGCycleError
+        waves = dag.waves()
+        logger.info(
+            "DAG 执行：%d 个步骤分为 %d 个波次（并行=%s）",
+            len(steps), len(waves), self.enable_parallel,
+        )
+
+        results: list[dict[str, Any]] = []
+        failed_ids: set[Any] = set()
+        skipped_ids: set[Any] = set()
+
+        for wave in waves:
+            if self._interrupted:
+                self.callback.on_warning("引擎被用户中断，停止执行")
+                logger.info("Plan-Execute DAG 被中断，退出波次循环")
+                break
+
+            # 划分：依赖失败/跳过的步骤级联跳过，其余可执行
+            dep_map = dag.dependency_map()
+            to_skip: list[Any] = []
+            to_run: list[Any] = []
+            for sid in wave:
+                deps = dep_map.get(sid, [])
+                if any(d in failed_ids or d in skipped_ids for d in deps):
+                    to_skip.append(sid)
+                else:
+                    to_run.append(sid)
+
+            # 跳过的步骤：记录 + 回调（主线程）
+            for sid in to_skip:
+                step = dag.step(sid)
+                step_task = step.get("task", "")
+                result = "⏭️ 步骤已跳过：前置依赖失败或被跳过"
+                self.callback.on_step(sid, total, step_task)
+                results.append({"step_id": sid, "task": step_task, "result": result})
+                ctx.set(f"step_{sid}_result", result)
+                skipped_ids.add(sid)
+                self.callback.on_step_done(sid, False, result[:200])
+
+            if not to_run:
+                continue
+
+            # 可执行步骤：先发 on_step（主线程，按波内顺序），再执行
+            for sid in to_run:
+                self.callback.on_step(sid, total, dag.step(sid).get("task", ""))
+
+            if self.enable_parallel and len(to_run) > 1:
+                wave_results = self._exec_wave_parallel(
+                    to_run, dag, user_input, results, ctx, total,
+                )
+            else:
+                wave_results = self._exec_wave_serial(
+                    to_run, dag, user_input, results, ctx, tracker, total,
+                )
+
+            # 合并（主线程，单线程，无竞争）：追加结果 + 合并隔离 tracker
+            for sid, step_task, result, sub_tracker in wave_results:
+                results.append({"step_id": sid, "task": step_task, "result": result})
+                ctx.set(f"step_{sid}_result", result)
+                if sub_tracker is not None:
+                    tracker.calls.extend(sub_tracker.calls)
+                success = not result.startswith(("执行失败", "执行异常", "⏭️"))
+                if not success:
+                    failed_ids.add(sid)
+                self.callback.on_step_done(sid, success, result[:200])
+                logger.debug(f"步骤 {sid} 完成: {result[:100]}")
+
+        return results
+
+    def _exec_wave_serial(
+        self, to_run: list[Any], dag: PlanDAG, user_input: str,
+        results: list[dict[str, Any]], ctx: AgentContext,
+        tracker: ToolExecutionTracker, total: int,
+    ) -> list[tuple[Any, str, str, None]]:
+        """波内串行执行（共享主 ctx/tracker，无并发无竞争）。
+
+        返回 [(sid, task, result, None)]，sub_tracker=None 表示已直接写入主 tracker。
+        """
+        out: list[tuple[Any, str, str, None]] = []
+        for sid in to_run:
+            step = dag.step(sid)
+            step_task = step.get("task", "")
+            tool = step.get("tool")
+            params = step.get("params", {})
+            prev_results = self._build_prev_results(results)
+            if tool and tool != "null":
+                result = self._execute_step_with_tool(tool, params, ctx, tracker)
+            else:
+                result = self._execute_step_with_llm(
+                    sid, total, step_task, prev_results, user_input, tracker
+                )
+            out.append((sid, step_task, result, None))
+        return out
+
+    def _exec_wave_parallel(
+        self, to_run: list[Any], dag: PlanDAG, user_input: str,
+        results: list[dict[str, Any]], ctx: AgentContext, total: int,
+    ) -> list[tuple[Any, str, str, ToolExecutionTracker]]:
+        """波内并发执行（ThreadPoolExecutor 包同步调用）。
+
+        每个步骤持有**独立的隔离 ctx + tracker**（镜像 combined_engines._isolated_ctx），
+        规避 ToolExecutionTracker / AgentContext.messages 无锁的数据竞争（审核
+        §8.1.6）。prev_results 在主线程预先快照，worker 不读共享 list。单步异常
+        被捕获转为失败结果，不连坐整波。返回结果按 to_run 原顺序排列。
+        """
+        # 主线程预先算好每步 prev_results 快照
+        prev_map = {sid: self._build_prev_results(results) for sid in to_run}
+
+        def work(sid: Any) -> tuple[Any, str, str, ToolExecutionTracker]:
+            step = dag.step(sid)
+            step_task = step.get("task", "")
+            tool = step.get("tool")
+            params = step.get("params", {})
+            # 隔离 ctx/tracker：仅复制对话消息作历史兜底，store/tracker 独立
+            iso_ctx = AgentContext()
+            iso_ctx.set_conversation_messages(list(ctx.get_conversation_messages()))
+            iso_tracker = ToolExecutionTracker()
+            try:
+                if tool and tool != "null":
+                    result = self._execute_step_with_tool(tool, params, iso_ctx, iso_tracker)
+                else:
+                    result = self._execute_step_with_llm(
+                        sid, total, step_task, prev_map[sid], user_input, iso_tracker
+                    )
+            except Exception as e:  # 单步异常不连坐整波
+                logger.exception("DAG 并发步骤 %r 执行异常", sid)
+                result = f"执行异常: {e}"
+            return (sid, step_task, result, iso_tracker)
+
+        workers = min(len(to_run), self.max_parallel_workers)
+        collected: dict[Any, tuple[Any, str, str, ToolExecutionTracker]] = {}
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(work, sid) for sid in to_run]
+            for fut in futures:
+                sid, task, result, iso_tracker = fut.result()
+                collected[sid] = (sid, task, result, iso_tracker)
+        return [collected[sid] for sid in to_run]
+
+    @staticmethod
+    def _build_prev_results(results: list[dict[str, Any]]) -> str:
+        """从已完成步骤构建前序结果上下文（最近 3 步）。"""
+        if not results:
+            return "(无)"
+        return "\n".join(
+            f"步骤 {r['step_id']}: {r['result'][:200]}"
+            for r in results[-3:]
+        )
 
     def _plan(self, user_input: str, context: AgentContext | None = None) -> dict[str, Any]:
         """Phase 1: 生成执行计划。"""
@@ -279,7 +476,8 @@ class PlanExecuteEngine(BaseEngine):
             {"role": "system", "content": f"原始任务: {original}"},
             {"role": "user", "content": prompt},
         ]
-        result = self._call_llm(messages)
+        # P2-E2 双模型：执行阶段用 executor_model_priority（默认回退到规划模型）
+        result = self._call_llm(messages, model_priority=self.executor_model_priority)
 
         # ── 验证 LLM 是否声明了文件操作但实际未执行 ──
         result = self._verify_llm_file_claims(result, tracker)
@@ -388,7 +586,8 @@ class PlanExecuteEngine(BaseEngine):
                 f"执行结果:\n{results_text}{tool_summary}"
             )},
         ]
-        return self._call_llm(messages)
+        # P2-E2 双模型：总结阶段用 executor_model_priority
+        return self._call_llm(messages, model_priority=self.executor_model_priority)
 
     def _parse_json(self, text: str) -> dict[str, Any]:
         """从 LLM 输出中提取 JSON（委托给 response_adapter 中间件）。"""
