@@ -12,6 +12,8 @@ Code Index — 轻量级代码索引引擎。
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 import logging
 import os
 import re
@@ -90,6 +92,26 @@ class Symbol:
         sig = f"({self.signature})" if self.signature else ""
         return f"{self.kind} {parent}{self.name}{sig} @ {loc}"
 
+    def to_dict(self) -> dict[str, Any]:
+        """序列化为可 JSON 持久化的字典。"""
+        return {
+            "name": self.name,
+            "kind": self.kind,
+            "file_path": self.file_path,
+            "line": self.line,
+            "col": self.col,
+            "end_line": self.end_line,
+            "parent": self.parent,
+            "signature": self.signature,
+            "docstring": self.docstring,
+            "decorators": list(self.decorators),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Symbol":
+        """从字典反序列化。"""
+        return cls(**d)
+
 
 @dataclass
 class Reference:
@@ -103,7 +125,7 @@ class Reference:
 class CodeIndex:
     """项目级代码索引。"""
 
-    def __init__(self, root_dir: str | Path = ".") -> None:
+    def __init__(self, root_dir: str | Path = ".", *, cache_dir: str | Path | None = None) -> None:
         self.root = Path(root_dir).resolve()
         # symbol_name -> list[Symbol]
         self.symbols: dict[str, list[Symbol]] = {}
@@ -119,17 +141,63 @@ class CodeIndex:
             "env", ".env", "dist", "build", ".idea", ".vscode",
             "target", "vendor", ".tox", ".mypy_cache", ".pytest_cache",
         }
+        # §8.9.1：可选磁盘缓存目录。设置后 build() 会把符号索引持久化到磁盘，
+        # 下次 build 对 mtime/size 未变的文件复用缓存、跳过 AST 重解析。
+        self._cache_dir: Path | None = Path(cache_dir).resolve() if cache_dir else None
 
     def build(self, max_files: int = 500) -> int:
-        """构建整个项目的索引。返回索引的文件数。"""
+        """构建整个项目的索引。返回索引的文件数。
+
+        §8.9.1：若设置了 ``cache_dir``，按文件 mtime+size 增量索引——未变文件
+        复用磁盘缓存、跳过 AST 重解析；已删除文件从缓存清理。
+        """
+        cache = self._load_cache()
+        cached_files: dict[str, dict] = cache.get("files", {})
         count = 0
+        hit = 0
+        walked: set[str] = set()
+
         for file_path in self._walk_code_files():
             if count >= max_files:
                 logger.warning(f"索引文件数达到上限 {max_files}")
                 break
-            self.index_file(file_path)
+            path = Path(file_path).resolve()
+            str_path = str(path)
+            walked.add(str_path)
+            try:
+                st = path.stat()
+                mtime, size = st.st_mtime, st.st_size
+            except OSError:
+                continue
+
+            cached = cached_files.get(str_path)
+            if cached and cached.get("mtime") == mtime and cached.get("size") == size:
+                # 命中缓存：复用符号，不重新 AST 解析
+                self._restore_from_cache(str_path, cached)
+                hit += 1
+            else:
+                self.index_file(path)
+
+            # 更新缓存条目（含本次解析结果，供下次复用）
+            cached_files[str_path] = {
+                "mtime": mtime,
+                "size": size,
+                "symbols": [s.to_dict() for s in self.file_symbols.get(str_path, [])],
+                "imports": list(self.imports.get(str_path, [])),
+            }
             count += 1
-        logger.info(f"索引完成: {count} 个文件, {sum(len(v) for v in self.symbols.values())} 个符号")
+
+        # 清理缓存中已删除的文件（本次未走到但缓存里残留）
+        for stale in [p for p in cached_files if p not in walked]:
+            del cached_files[stale]
+
+        if self._cache_dir is not None:
+            self._save_cache({"version": 1, "root": str(self.root), "files": cached_files})
+
+        logger.info(
+            f"索引完成: {count} 个文件, {sum(len(v) for v in self.symbols.values())} 个符号"
+            f" (缓存命中 {hit})"
+        )
         return count
 
     def index_file(self, file_path: str | Path) -> list[Symbol]:
@@ -231,6 +299,51 @@ class CodeIndex:
             "unique_names": len(self.symbols),
             "by_kind": kind_counts,
         }
+
+    # ── 缓存持久化（§8.9.1）──────────────────────────────────
+
+    def _cache_path(self) -> Path | None:
+        """缓存文件路径：``<cache_dir>/codeindex-<root_hash>.json``。"""
+        if self._cache_dir is None:
+            return None
+        key = hashlib.sha1(str(self.root).encode("utf-8")).hexdigest()[:16]
+        return self._cache_dir / f"codeindex-{key}.json"
+
+    def _load_cache(self) -> dict[str, Any]:
+        """从磁盘加载缓存；不存在或损坏时返回空 dict。"""
+        p = self._cache_path()
+        if p is None or not p.exists():
+            return {}
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or data.get("version") != 1:
+                return {}
+            return data
+        except (OSError, ValueError, json.JSONDecodeError):
+            logger.warning("code_index 缓存读取失败，将全量重建", exc_info=True)
+            return {}
+
+    def _save_cache(self, data: dict[str, Any]) -> None:
+        """原子写入缓存（写临时文件 + replace）；失败仅告警不影响索引。"""
+        p = self._cache_path()
+        if p is None:
+            return
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(p.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(p)
+        except OSError:
+            logger.warning("code_index 缓存写入失败", exc_info=True)
+
+    def _restore_from_cache(self, str_path: str, cached: dict[str, Any]) -> None:
+        """从缓存条目恢复某文件的符号/导入，跳过 AST 解析。"""
+        self.indexed_files.add(str_path)
+        symbols = [Symbol.from_dict(d) for d in cached.get("symbols", [])]
+        self.file_symbols[str_path] = symbols
+        for sym in symbols:
+            self.symbols.setdefault(sym.name, []).append(sym)
+        self.imports[str_path] = list(cached.get("imports", []))
 
     # ── 内部方法 ──────────────────────────────────────────
 

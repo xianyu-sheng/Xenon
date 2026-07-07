@@ -7,6 +7,7 @@ Project Context — 项目上下文感知器。
 
 from __future__ import annotations
 
+import fnmatch
 import os
 from pathlib import Path
 from typing import Any
@@ -46,13 +47,24 @@ _TYPE_DISPLAY = {
     "unknown": "未知",
 }
 
-# 排除的目录（不进入文件树）
-_EXCLUDE_DIRS = {
+# 排除的目录（不进入文件树）。
+# §8.21.3：原 `_EXCLUDE_DIRS` 是含 `*.egg-info` 的 set，但用 `name in set` 精确匹配，
+# glob 模式永远不命中 → `*.egg-info` 目录实际未被排除。拆成 literal（精确名）+ glob
+#（fnmatch 模式），glob 走 fnmatch.fnmatchcase。
+_EXCLUDE_DIRS_LITERAL = frozenset({
     "node_modules", ".git", "__pycache__", ".venv", "venv", "env",
     ".tox", ".mypy_cache", ".pytest_cache", "dist", "build",
-    ".eggs", "*.egg-info", ".idea", ".vscode", ".claude",
+    ".eggs", ".idea", ".vscode", ".claude",
     "target", "bin", "obj", ".next", ".nuxt", "coverage",
-}
+})
+_EXCLUDE_DIRS_GLOB = ("*.egg-info",)
+
+
+def _is_excluded_dir(name: str) -> bool:
+    """目录是否应被排除：literal 精确匹配 + glob fnmatch。"""
+    if name in _EXCLUDE_DIRS_LITERAL:
+        return True
+    return any(fnmatch.fnmatchcase(name, pat) for pat in _EXCLUDE_DIRS_GLOB)
 
 # 排除的文件模式
 _EXCLUDE_FILES = {
@@ -71,6 +83,9 @@ class ProjectContext:
         self.file_tree: str = ""
         self.key_files: dict[str, str] = {}
         self._initialized: bool = False
+        # §8.9.5：关键文件 mtime 缓存——refresh 时 mtime 未变的文件复用已读内容，
+        # 避免每次 refresh 重读整批关键文件。
+        self._key_file_mtimes: dict[str, float] = {}
 
     def detect(self, start_dir: Path | None = None) -> bool:
         """
@@ -78,11 +93,19 @@ class ProjectContext:
 
         从 start_dir（默认 cwd）向上查找项目标记文件。
         Returns: 是否找到项目。
+
+        §8.21.1：向上查找有边界——最多 5 层，且遇 ``$HOME`` 停止。家目录常用
+        git 管理 dotfiles（``~/.git`` 存在），无界上爬会把家目录当项目根 →
+        扫描整个家目录（隐私泄露 + 性能）。``$HOME`` 下的 ``.git`` 视作
+        dotfiles 仓库，不当项目根。
         """
         search = start_dir or Path.cwd()
+        home = Path(os.path.expanduser("~")).resolve()
+        max_levels = 5
 
         # 向上查找包含项目标记的目录
         current = search.resolve()
+        levels_up = 0
         while True:
             for marker, ptype in _PROJECT_MARKERS.items():
                 if (current / marker).exists():
@@ -92,18 +115,26 @@ class ProjectContext:
                     self._initialized = True
                     return True
 
-            # 有 .git 目录也视为项目根
-            if (current / ".git").is_dir():
+            # 有 .git 目录也视为项目根；但 $HOME 下的 .git 是 dotfiles，跳过
+            if (current / ".git").is_dir() and current != home:
                 self.root = current
                 self.project_type = self._detect_type_from_content()
                 self._load_all()
                 self._initialized = True
                 return True
 
+            # 遇 $HOME 停止（不再向上，避免扫整个家目录）
+            if current == home:
+                break
+            # 限制向上层数
+            if levels_up >= max_levels:
+                break
+
             parent = current.parent
             if parent == current:
                 break
             current = parent
+            levels_up += 1
 
         # 没找到项目标记，用 cwd 作为根
         self.root = search.resolve()
@@ -164,7 +195,10 @@ class ProjectContext:
             filtered = []
             for e in entries:
                 name = e.name
-                if e.is_dir() and name in _EXCLUDE_DIRS:
+                # §8.21.2：不跟随符号链接——避免循环链接递归或扫到链接目标整盘
+                if e.is_symlink():
+                    continue
+                if e.is_dir() and _is_excluded_dir(name):
                     continue
                 if e.is_file():
                     skip = False
@@ -206,7 +240,11 @@ class ProjectContext:
         self.file_tree = "\n".join(lines)
 
     def _load_key_files(self) -> None:
-        """加载关键配置文件。"""
+        """加载关键配置文件。
+
+        §8.9.5：基于 mtime 增量——mtime 未变的文件复用已缓存内容，避免每次
+        refresh 重读整批关键文件。已删除的文件从缓存中清理。
+        """
         if not self.root:
             return
 
@@ -216,16 +254,34 @@ class ProjectContext:
             ".env.example", "docker-compose.yml", "Dockerfile",
         ]
 
+        new_files: dict[str, str] = {}
+        new_mtimes: dict[str, float] = {}
         for name in key_patterns:
             path = self.root / name
-            if path.exists():
-                try:
-                    content = path.read_text(encoding="utf-8")
-                    # 截取前 50 行
-                    lines = content.splitlines()[:50]
-                    self.key_files[name] = "\n".join(lines)
-                except Exception:
-                    pass
+            if not path.exists():
+                continue
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+
+            # mtime 未变 → 复用已缓存内容，跳过读盘
+            if mtime and name in self.key_files and self._key_file_mtimes.get(name) == mtime:
+                new_files[name] = self.key_files[name]
+                new_mtimes[name] = mtime
+                continue
+
+            try:
+                content = path.read_text(encoding="utf-8")
+                # 截取前 50 行
+                lines = content.splitlines()[:50]
+                new_files[name] = "\n".join(lines)
+                new_mtimes[name] = mtime
+            except Exception:
+                pass
+
+        self.key_files = new_files
+        self._key_file_mtimes = new_mtimes
 
     def refresh(self) -> None:
         """刷新项目上下文。"""
