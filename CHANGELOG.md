@@ -1,0 +1,104 @@
+# 更新日志
+
+本文件记录 OmniAgent-CLI 各版本变更。版本号遵循语义化版本（预 1.0 阶段：
+`0.MINOR.PATCH`，每个修复批次递增 MINOR）。
+
+## [0.2.0] — 2026-07-07
+
+本版本对照《差距分析与改进建议》审核文档（`docs/差距分析与改进建议.md`，31 轮审查
+收敛于 v4）的 §9 修复执行清单，完成 P0→P3 全部优先级修复，共 34 次提交、747 项测试
+全绿（基线 430 → 747）。每个修复独立提交并推送至 `origin/ubutnu`。
+
+### P0-A 安全与数据完整性（§9.7 第 1-2 步）
+
+- `register_tool` 模式 1 任意 Python 导入 = RCE 收敛；重名工具校验，防劫持内置工具名。
+- `command`/shell 工具命令注入收口；`web_fetch` SSRF 黑名单加固（`https://`、IPv6、
+  数字编码 IP、重定向）。
+- `edit_with_llm` 截断保护；非原子写收敛；凭据文件 `chmod 0600`。
+- `model_registry.export_config` 明文导出 `api_key` 收敛；`/set_model api_key=` 凭据
+  不再进 argv；`/code --run` 任意脚本执行加 `Confirm.ask`。
+- `react_engine` 不再把 `register_tool` 暴露在系统提示中（消除 LLM 循环内自主注册
+  `os.system` 工具的 RCE 链路）。
+
+### P0-B 已确认 Bug（§9.7 第 1-2 步）
+
+- B4：去除三引擎共享的 `max_tokens=131072` 硬编码；`chat_completion` 按厂商上限钳制。
+- B7：激活 `ModelConfig` 死字段——`base_url` / `api_key` 覆盖真正生效。
+- B8：`_verify_llm_file_claims` 扩展工具集（含 `batch_write`/`batch_edit`/`edit_file`）。
+- B11：`StdioTransport` 用 `select` + 墙钟超时替代阻塞 `readline`，子进程卡死不再
+  永久挂起整个引擎。
+- B12：`finish_reason=length` 自动续写，token 耗尽抛 `ResponseTruncatedError`。
+- B6：`response_adapter.parse_review` 解析失败默认 `pass=True/score=8` 收敛为
+  `pass=False/score=0`，质量门不再静默放行。
+
+### P1-A 横切根因（§9.7 第 3-4 步）
+
+- R1：`_call_llm` 区分终端错误（401/403/400，立即上抛）与瞬时错误（429/5xx/网络，
+  切模型），全部失败 `on_error` + 抛 `RuntimeError`。
+- R2：抽出 `BaseEngine`，消除四引擎 `_call_llm` 复制与参数漂移（max_tokens/温度/截断
+  统一）。
+- R3：`llm_client` 原生 function-calling 能力 + per-provider `httpx.Client` 连接池复用。
+- R4：`ContextManager.max_tokens` 从激活模型 `context_window` 注入。
+- R7：敏感参数脱敏 + 日志级别归位。
+
+### P1-B 核心规范功能（§9.7 第 4-5 步）
+
+- F1：`ToolExecutor` 7 阶段门面 + 断路器 + 参数幻觉校验 + 重试。
+- F2：`BudgetManager` 三阶段软预算 + 奖励机制；空洞检测器（15 正则 + 组合判定）；
+  mercy compile + 合成注入 + ReAct 集成（面试 Q2/Q3 门面成型）。
+- F3：Compactor 6 段结构化压缩 + 三层策略 + 安全截断 + 持久化。
+- F4：`ContextManager` 注入引擎 + 引擎内每 5 轮自动压缩（抑制 O(n²) 增长）。
+- F5：三层 LLM 降级 `_call_llm_native`（function-calling → 文本 JSON → 兜底）。
+- F6：中断检查 + 引擎内预算检查。
+
+### P2 增强（§9.7 第 6 步）
+
+- E1 `DirectoryScout`：项目目录扫描防路径幻觉（Q4 第一道防线）。
+- E2 `PlanDAG`：`depends_on` 依赖图 + 拓扑波次并行（ThreadPoolExecutor，规避无锁
+  竞争用隔离 ctx/tracker）+ 循环检测 + DAG→串行回退 + 失败级联跳过（修复 §8.27.1）+
+  双模型（规划/执行分离）。
+- E3 `EventBus`：多订阅者 pub/sub 事件总线（callback 保留为默认订阅者）。
+- E4 `ReflectionEngine`：独立 `reviewer_model_priority`（执行者/审查者不同模型）+
+  版本回退（达到 max_rounds 返回最高分版本）+ pass/score 一致性 + 空反馈兜底 +
+  执行异常回退。
+- E5 `spawn_agent` 子 Agent 系统：**暂缓**。审核 §4/§9.5 明确为「最大工程量、最高
+  风险，建议放最后，且仅在 BudgetManager + ToolExecutor 稳定后再做」；§8.1.1 指出
+  全仓库零 async 基础设施，`asyncio.create_task` 属绿地新建。待集成验证 F1/F2 稳定
+  后于后续版本交付。
+
+### P3 工程质量与可观测性（§9.7 第 6 步）
+
+- Q1：`chat_completion` 捕获真实 `usage`（prompt/completion/total tokens + latency）+
+  `UsageTracker` + 回调侧信道（不破坏既有返回契约）。
+- Q2：每次 run 生成 `run_id`，每次调用 `call_id`，日志带前缀链路追踪。
+- Q3：eval 框架修复——prompt 不暴露 `expected_tools`；real 模式跑真实引擎多轮按
+  **实际执行**工具评分；mock 标注 smoke test；`success_criteria` 不自动评分改人工复核。
+- Q4：`code_index`/`project_context` 持久化 + mtime 增量；`detect` 限制向上层数 +
+  遇 `$HOME` 停 + 不跟随符号链接；`_EXCLUDE_DIRS` glob 改 fnmatch。
+- Q5：`prompt_optimizer` 意图收紧——`debug` 强信号、novel 续写要求创作语境词、
+  补 `write_doc`/`chat`、模板抽配置。
+- Q6：`setup_wizard` 保存 key 前连通性测试；识别 `export VAR=` 前缀；删 key 联动
+  清理 registry。
+- Q7：token 估算 memoization（`ConversationTurn` 缓存）+ CJK 范围扩展 + 注释代码统一。
+- Q8：破坏性操作加 `Confirm.ask`（`/clear`/`/load`/`/code --run`/`/shortcut run`/
+  `/mcp remove`）；`dispatch_command` 包 try/except 兜底。
+- Q9：`combined_engines` 失败步骤中止 + 错误不污染共享 ctx；reactor/reflector 上下文隔离。
+- Q10：`_undo_stack` 加上限；`status_bar` render 整体 try/except 兜底。
+
+### 集成验证（2026-07-07）
+
+- 全量单测：**747 passed**。
+- CLI：`omniagent --help` / `omniagent run <workflow.yaml> --dry-run`（配置解析 →
+  DAGScheduler 构造 → 拓扑展示）正常。
+- Mock eval：20/20 任务通过，0 工具失败，报告生成（Q3 框架）。
+- 引擎冒烟：8 种引擎配置（含 E2 DAG 并行路径、E4 Reflection、3 个组合引擎）mock LLM
+  端到端 `run()` 全部 `ALL_OK`，无接线崩溃。
+- REPL：无凭据时优雅引导 `/setup`（不崩溃）。
+- **未覆盖**：真实 LLM 调用（需用户 API Key）与 real 模式 eval。
+
+### 已知后续项
+
+- E5 `spawn_agent`（见上，审核建议延后）。
+- Q1 续：`ContextManager` 用真实 usage 替代启发式估算（需把 completion_tokens 随
+  assistant turn 回填，触及各引擎 `add_message`）。
+- E2 范围内「迷你 ReAct」（无工具步 3 轮）暂缓（独立 M 项，语义待定）。
