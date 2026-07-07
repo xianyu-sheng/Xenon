@@ -198,6 +198,16 @@ BUILTIN_TOOLS = {
         "description": "获取当前日期和时间信息，包括年月日、星期几、时分秒。当用户询问时间相关问题时使用此工具。",
         "params": {},
     },
+    "spawn_agent": {
+        "name": "spawn_agent",
+        "description": (
+            "委派一个子 Agent 独立完成一个相对独立的子任务（适合需要多步工具调用、"
+            "可隔离的子问题，如『分析某模块并总结』『给某文件补单测』）。子 Agent 有"
+            "独立的上下文与工具预算，完成后返回摘要+工具调用统计+最终回答。"
+            "不要用于单步操作（直接用对应工具即可）。"
+        ),
+        "params": {"task": "委派给子 Agent 的子任务描述，需清晰自包含"},
+    },
     # register_tool 不对 LLM 默认暴露（A2，§8.25.2）：切断 prompt 注入→自主 RCE 链路。
     # handler 仍在 ToolNode.execute 保留，可由用户显式调用；模块导入受 _validate_register_module
     # 白名单约束（A1），重名受 _BUILTIN_ACTION_TYPES 约束（A3）。
@@ -218,6 +228,8 @@ class ReActEngine(BaseEngine):
         model_configs: dict[str, Any] | None = None,
         native_fc: bool = False,
         project_root: str | None = None,
+        max_subagent_iterations: int = 6,
+        max_subagent_depth: int = 1,
     ) -> None:
         # R2: 公共属性（model_priority/callback/model_configs/temperature）与
         # _call_llm 由 BaseEngine 提供，消除四份复制与参数漂移。
@@ -238,6 +250,14 @@ class ReActEngine(BaseEngine):
         # P2-E1: DirectoryScout 项目结构扫描（防路径幻觉）。仅当显式传入 project_root
         # 时启用：run() 启动时把真实文件树注入 user_input，让 LLM 基于真实文件规划。
         self._scout = DirectoryScout(project_root) if project_root else None
+        # P2-E5: spawn_agent 子 Agent 系统（§Q7）。同步委派——子 Agent 持独立
+        # messages/tracker/budget；async 后台轮询因零 async 基础设施（§8.1.1）暂缓。
+        self.max_subagent_iterations = max_subagent_iterations
+        self.max_subagent_depth = max_subagent_depth
+        self._subagent_depth = 0  # 嵌套深度（父=0，子=1）；防递归失控
+        self._subagent_history: list[str] = []
+        self._last_tracker: ToolExecutionTracker | None = None  # run() 末态供父引擎读取
+        self._last_subagent: ReActEngine | None = None  # 最近一次 spawn 的子引擎（调试/测试）
 
     def _build_system_prompt(self) -> str:
         import sys
@@ -301,6 +321,7 @@ class ReActEngine(BaseEngine):
         """
         ctx = context or AgentContext()
         tracker = ToolExecutionTracker()
+        self._last_tracker = tracker  # P2-E5：供父引擎 spawn_agent 读取子 Agent 工具统计
         self._reset_interrupt()  # F6: 每轮 run 重置中断标志
         self._begin_run()  # P3-Q2: 生成本次 run 的链路 ID（贯穿所有 LLM 调用）
         messages = [{"role": "system", "content": self.system_prompt}]
@@ -559,11 +580,96 @@ class ReActEngine(BaseEngine):
         context: AgentContext,
         tracker: ToolExecutionTracker | None = None,
     ) -> str:
-        """执行工具并返回观察字符串（F1: 委托 ToolExecutor 7 阶段流水线）。"""
+        """执行工具并返回观察字符串。
+
+        F1: 常规工具委托 ToolExecutor 7 阶段流水线。
+        P2-E5: ``spawn_agent`` 是元工具——需创建子 ReActEngine 委派子任务（带隔离
+        上下文与引擎实例），不走无状态 ToolNode，在此拦截走专用路径。
+        """
+        if action == "spawn_agent":
+            return self._spawn_subagent(action_input, context, tracker)
         result = self._tool_executor.execute(
             action, action_input, context, tracker=tracker, tools=self.tools,
         )
         return result.format_observation()
+
+    def _spawn_subagent(
+        self,
+        action_input: dict,
+        context: AgentContext,
+        tracker: ToolExecutionTracker | None = None,
+    ) -> str:
+        """P2-E5 / §Q7：委派子 Agent 同步执行子任务，返回格式化结果。
+
+        上下文隔离：子 ReActEngine 持独立 messages/tracker/budget，仅复制父对话
+        消息作历史兜底（镜像 ``combined_engines._isolated_ctx``）。递归深度受限
+        （``max_subagent_depth``）防失控。
+
+        同步委派 vs async 轮询：审核 §Q7 规范为 ``asyncio.create_task`` 后台 +
+        ``_poll_subagents`` 轮询；但全仓库零 async 基础设施（§8.1.1），子 Agent
+        复用同步 LLM 客户端——现实路径是同步阻塞委派（子 Agent 能力交付），
+        后台并发轮询留作后续 perf 优化（需 async LLM 客户端或线程池 + 共享状态加锁）。
+        """
+        task = (action_input.get("task") or action_input.get("prompt") or "").strip()
+        if not task:
+            return "执行失败: spawn_agent 需要非空 task 参数"
+
+        if self._subagent_depth >= self.max_subagent_depth:
+            return (
+                f"⚠️ 子 Agent 嵌套深度超限（{self._subagent_depth} ≥ "
+                f"{self.max_subagent_depth}），拒绝继续 spawn。请直接给出结果。"
+            )
+
+        task_id = f"sub-d{self._subagent_depth + 1}-{len(self._subagent_history) + 1}"
+        logger.info(
+            "spawn_agent [%s] 委派子任务（深度 %d）: %s",
+            task_id, self._subagent_depth + 1, task[:80],
+        )
+
+        # 构建子引擎：复用父模型配置与 callback，独立预算/上下文/深度
+        sub = ReActEngine(
+            self.model_priority,
+            max_iterations=self.max_subagent_iterations,
+            callback=self.callback,
+            model_configs=self.model_configs,
+            native_fc=self.native_fc,
+        )
+        sub._subagent_depth = self._subagent_depth + 1
+        self._last_subagent = sub
+
+        # 隔离 ctx：仅复制对话消息作历史兜底，不继承父 ReAct 的工具观察
+        sub_ctx = AgentContext()
+        sub_ctx.set_conversation_messages(list(context.get_conversation_messages()))
+
+        try:
+            answer = sub.run(task, sub_ctx)
+        except Exception as e:
+            logger.exception("子 Agent %s 执行异常", task_id)
+            answer = f"执行异常: {e}"
+
+        # 子引擎工具调用统计（run() 末态存于 _last_tracker）
+        sub_tracker = getattr(sub, "_last_tracker", None)
+        tool_count = len(sub_tracker.calls) if sub_tracker else 0
+        tool_summary = sub_tracker.execution_summary() if sub_tracker else "无工具调用"
+
+        success = not answer.startswith(("执行失败", "执行异常"))
+        formatted = (
+            f"{'✅' if success else '❌'} 子任务 {task_id} {'完成' if success else '失败'}\n"
+            f"- 任务: {task[:200]}\n"
+            f"- 工具调用: {tool_count} 次（{tool_summary}）\n"
+            f"- 最终回答:\n{answer}"
+        )
+
+        # 记入父 tracker（供父引擎验证/汇总）
+        if tracker is not None:
+            tracker.record(
+                "spawn_agent",
+                {"task": task, "task_id": task_id},
+                success=success,
+                result_summary=formatted[:200],
+            )
+        self._subagent_history.append(task_id)
+        return formatted
 
     @staticmethod
     def _input_requires_tools(text: str) -> bool:
