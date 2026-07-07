@@ -205,62 +205,55 @@ class REPL:
         self._load_custom_commands()
 
     def _print_welcome(self) -> None:
-        """打印 Claude Code 风格的欢迎界面。"""
+        """打印简洁的欢迎界面。
+
+        设计原则：信息密度高、视觉噪音低。只展示关键状态——
+        版本、范式、模型、一个实用提示。用 Unicode 细线框替代 ASCII 艺术。
+        """
         import random
 
         mode = self.registry.get_current_mode()
         models = self.registry.list_models()
 
-        # ── ASCII Art Logo（清晰大字版）──
-        logo = [
-            "[bold cyan]   ___  __  __  __  __  _  _    __   __  __  ______[/bold cyan]",
-            "[bold cyan]  / _ \\|  \\/  |/ _||  \\| |  / _\\ |  \\/  ||  ____|[/bold cyan]",
-            "[bold cyan] | |_| || |\\/| | |_ | |  | | / |_ | |\\/| || |___[/bold cyan]",
-            "[bold cyan] |  _  || |  | |  _|| |/\\| ||  _ || |  | ||  ___|[/bold cyan]",
-            "[bold cyan] |_| |_||_|  |_||_|  |_| \\__||_|_\\|_|  |_||______|[/bold cyan]",
-        ]
-
-        # ── 版本信息 ──
-        version = "v0.1.0"
-
         # ── 模型状态 ──
         if models:
-            model_names = ", ".join(m.alias for m in models[:3])
-            if len(models) > 3:
-                model_names += f" +{len(models) - 3}"
-            model_line = f"[bold green]{model_names}[/bold green]"
+            model_display = f"[bold green]{models[0].alias}[/bold green]"
+            if len(models) > 1:
+                model_display += f" [dim]+{len(models) - 1}[/dim]"
         else:
-            model_line = "[dim]未配置 — 输入 [bold cyan]/setup[/bold cyan] 开始配置[/dim]"
+            model_display = "[dim]未配置 — 输入 [bold cyan]/setup[/bold cyan] 开始[/dim]"
 
         # ── 随机提示 ──
         tips = [
-            "输入 [bold cyan]/help[/bold cyan] 查看所有可用命令",
-            "输入 [bold cyan]/model[/bold cyan] 切换 AI 模型",
-            "输入 [bold cyan]/mode[/bold cyan] 切换思考范式（direct/react/plan-execute）",
-            "输入 [bold cyan]/setup[/bold cyan] 运行首次配置向导",
-            "按 [bold cyan]Shift+Enter[/bold cyan] 可以输入多行内容",
-            "输入 [bold cyan]/verbose[/bold cyan] 开启详细日志模式",
-            "输入 [bold cyan]/tools[/bold cyan] 查看所有可用工具",
-            "输入 [bold cyan]/mcp[/bold cyan] 管理 MCP 扩展服务器",
+            "[bold cyan]/help[/bold cyan] 查看命令  [dim]·[/dim]  [bold cyan]/model[/bold cyan] 切换模型  [dim]·[/dim]  [bold cyan]/mode[/bold cyan] 切换范式",
+            "Shift+Enter 多行输入  [dim]·[/dim]  Enter 发送  [dim]·[/dim]  Ctrl+C 退出",
+            "[bold cyan]/setup[/bold cyan] 配置向导  [dim]·[/dim]  [bold cyan]/tools[/bold cyan] 查看工具  [dim]·[/dim]  [bold cyan]/mcp[/bold cyan] 扩展",
         ]
         tip = random.choice(tips)
 
-        # ── 构建欢迎面板 ──
-        logo_art = "\n".join(logo)
-        content = f"""{logo_art}
+        # ── 构建面板 ──
+        width = 62
+        top = f"[dim]╭{'─' * (width - 2)}╮[/dim]"
+        bottom = f"[dim]╰{'─' * (width - 2)}╯[/dim]"
 
-  [dim]{version}[/dim]  ·  [bold white]Multi-Model AI Coding Assistant[/bold white]
+        lines = [
+            "",
+            f"  [bold white]OmniAgent-CLI[/bold white]  [dim]v0.2.0[/dim]",
+            f"  [dim]Multi-Model AI Coding Assistant[/dim]",
+            "",
+            f"  [dim]范式[/dim]  [bold]{mode.name}[/bold]  [dim]— {mode.description}[/dim]",
+            f"  [dim]模型[/dim]  {model_display}",
+            "",
+            f"  {tip}",
+            "",
+        ]
 
-  [bold]范式[/bold]    {mode.name} — {mode.description}
-  [bold]模型[/bold]    {model_line}
-
-  [bold yellow]提示[/bold yellow]    {tip}
-
-  [dim]Ctrl+C 退出  ·  Shift+Enter 换行  ·  Enter 发送[/dim]"""
+        content = "\n".join(lines)
 
         console.print()
-        
-        console.print(Panel(content, border_style="cyan", padding=(0, 2)))
+        console.print(top)
+        console.print(content, end="")
+        console.print(bottom)
         console.print()
 
     def _read_input(self) -> str:
