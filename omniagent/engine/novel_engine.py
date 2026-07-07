@@ -275,6 +275,7 @@ class NovelEngine(BaseEngine):
         ctx = context or AgentContext()
         tracker = ToolExecutionTracker()
         self._reset_interrupt()
+        self._begin_run()  # P3-Q2: 链路追踪
 
         # ── 1. 识别小说 ──
         project = self.manager.detect_novel(user_input)

@@ -57,6 +57,21 @@ class BaseEngine(ABC):
         self._interrupted: bool = False
         # F4: 本次 run 注入的 ContextManager（run 起点设置，供 _history_messages 消费）
         self._ctx_mgr: Any = None
+        # P3-Q2: 链路追踪 ID——每次 run() 起点生成，贯穿该 run 内所有 _call_llm
+        # 调用与 fallback；调试多模型失败时可把散落日志串成一条链（§8.8.4）。
+        self.run_id: str | None = None
+
+    def _begin_run(self) -> str:
+        """P3-Q2: run() 起点调用——生成 run_id 并记日志，返回 run_id。
+
+        各引擎 ``run()`` 开头调用一次，使本次运行内的所有 LLM 调用日志带同一
+        ``[run_id]`` 前缀；``_call_llm`` 内每次调用再生成 ``call_id`` 细分。
+        """
+        from omniagent.engine.trace import new_run_id, prefix
+        self.run_id = new_run_id()
+        logging.getLogger("omniagent.engine").info(
+            f"{prefix(self.run_id)} run 开始 ({type(self).__name__})")
+        return self.run_id
 
     def interrupt(self) -> None:
         """F6: 协作式中断——外部调用后，run() 在下一轮迭代顶部退出。"""
@@ -138,6 +153,9 @@ class BaseEngine(ABC):
         - 429/5xx/网络错误/响应截断 = **瞬时错误**，切下一个模型；
         - 全部模型失败 → ``callback.on_error`` + 抛 RuntimeError。
         """
+        from omniagent.engine.trace import new_call_id, prefix
+        call_id = new_call_id()
+        tp = lambda msg: f"{prefix(self.run_id, call_id)} {msg}"
         last_error: Exception | None = None
         for model_id in self.model_priority:
             try:
@@ -150,6 +168,7 @@ class BaseEngine(ABC):
                     mk = getattr(mc, "api_key", "") or ""
                     if mk and "/" in model_id:
                         creds = {model_id.split("/", 1)[0].lower(): mk}
+                logger.debug(tp(f"调用模型 {model_id}"))
                 return chat_completion(
                     model_id, messages, max_tokens=mt,
                     temperature=self.temperature, credentials=creds, base_url=base,
@@ -167,19 +186,19 @@ class BaseEngine(ABC):
                         f"模型 {model_id} 请求被拒 (400)，请检查参数/模型名") from e
                 # 429/5xx/其他 HTTP：瞬时，切下一个模型
                 last_error = e
-                logger.warning(f"模型 {model_id} HTTP {status} 失败: {e}，尝试下一个...")
+                logger.warning(tp(f"模型 {model_id} HTTP {status} 失败: {e}，尝试下一个..."))
             except (
                 httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout,
                 httpx.RemoteProtocolError, httpx.WriteError, httpx.PoolTimeout,
             ) as e:
                 last_error = e
-                logger.warning(f"模型 {model_id} 网络错误 ({type(e).__name__}): {e}，尝试下一个...")
+                logger.warning(tp(f"模型 {model_id} 网络错误 ({type(e).__name__}): {e}，尝试下一个..."))
             except ResponseTruncatedError as e:
                 last_error = e
-                logger.warning(f"模型 {model_id} 响应截断: {e}，尝试下一个...")
+                logger.warning(tp(f"模型 {model_id} 响应截断: {e}，尝试下一个..."))
             except Exception as e:
                 last_error = e
-                logger.warning(f"模型 {model_id} 失败: {e}，尝试下一个...")
+                logger.warning(tp(f"模型 {model_id} 失败: {e}，尝试下一个..."))
         self.callback.on_error(f"所有模型均调用失败: {last_error}")
         raise RuntimeError(f"所有模型均调用失败: {last_error}")
 

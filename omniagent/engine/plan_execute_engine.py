@@ -169,6 +169,7 @@ class PlanExecuteEngine(BaseEngine):
         self._ctx_mgr = ctx_mgr  # F4
         tracker = ToolExecutionTracker()
         self._reset_interrupt()
+        self._begin_run()  # P3-Q2: 链路追踪
 
         # Phase 1: Planning
         logger.info("Plan-Execute Phase 1: 规划中...")

@@ -302,6 +302,7 @@ class ReActEngine(BaseEngine):
         ctx = context or AgentContext()
         tracker = ToolExecutionTracker()
         self._reset_interrupt()  # F6: 每轮 run 重置中断标志
+        self._begin_run()  # P3-Q2: 生成本次 run 的链路 ID（贯穿所有 LLM 调用）
         messages = [{"role": "system", "content": self.system_prompt}]
         # F4: ctx_mgr 注入时消费其（已压缩）消息，不再自行 [-10:] 截断；
         # 否则回退 AgentContext 的对话历史（保留 [-10:] 兜底）。

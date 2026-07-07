@@ -109,6 +109,7 @@ class ReflectionEngine(BaseEngine):
         feedback = ""
         self._reset_interrupt()
         self._ctx_mgr = ctx_mgr  # F4
+        self._begin_run()  # P3-Q2: 链路追踪
 
         for round_num in range(1, self.max_rounds + 1):
             if self._interrupted:
