@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean
@@ -35,7 +33,9 @@ def load_tasks(path: str | Path = DEFAULT_TASKS_PATH) -> list[dict[str, Any]]:
 
 
 def validate_task(task: dict[str, Any]) -> None:
-    required = {"id", "category", "prompt", "expected_tools", "success_criteria"}
+    # success_criteria 不再必填（§8.14.4：原实现只做工具名包含检查，criteria 形同虚设；
+    # 改为可选的人类复核提示，不参与自动评分）。保留字段供报告展示与人工 review。
+    required = {"id", "category", "prompt", "expected_tools"}
     missing = required - set(task)
     if missing:
         raise ValueError(f"Task is missing required fields: {sorted(missing)}")
@@ -44,91 +44,128 @@ def validate_task(task: dict[str, Any]) -> None:
 
 
 class RealAgent:
-    """Real-model eval agent that scores a model's tool plan without mutating files."""
+    """真实引擎 eval agent（§8.14.2 修复）：跑 ReAct 多轮闭环，按**实际执行**
+    的工具评分，而非单轮裸 LLM 列工具名。
 
-    def __init__(self, model: str) -> None:
-        self.model_name = model
+    - 在可选 ``workdir`` 下运行（``contextlib.chdir``），避免工具执行污染真实文件系统；
+    - 通过包装 ``_execute_tool`` 记录**实际执行**的工具（收束阶段被门控的工具不计）；
+    - 评分：``expected_tools ⊆ executed`` 且 final_answer 非空。``success_criteria``
+      不自动评分（语义化标准无法通用机器判定），仅作人类复核提示写入报告；
+    - ``engine_factory`` 可注入便于单测（默认构建 ``ReActEngine``）。
+    """
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        max_iterations: int = 8,
+        workdir: str | None = None,
+        engine_factory: Any = None,
+    ) -> None:
+        self.model = model
+        self.max_iterations = max_iterations
+        self.workdir = workdir
+        self._engine_factory = engine_factory
+
+    def _default_engine_factory(self, callback: Any) -> Any:
+        from omniagent.engine.react_engine import ReActEngine
+
+        return ReActEngine(
+            [self.model], max_iterations=self.max_iterations, callback=callback,
+        )
+
+    def _build_context(self) -> Any:
+        from omniagent.engine.context import AgentContext
+
+        return AgentContext()
 
     def run_task(self, task: dict[str, Any]) -> dict[str, Any]:
-        from omniagent.utils.llm_client import chat_completion
+        from omniagent.engine.callbacks import EngineCallback
+        import contextlib
 
-        expected_tools = list(task.get("expected_tools", []))
-        prompt = self._build_prompt(task)
+        factory = self._engine_factory or self._default_engine_factory
+        executed: list[str] = []
+        answer = ""
         try:
-            response = chat_completion(
-                self.model_name,
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are planning a coding agent task. Return only JSON with keys: "
-                            "tools_used and notes. tools_used must be a list of tool names. "
-                            "Do not execute tools or claim files were changed."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=900,
-                temperature=0.0,
-            )
-            parsed = self._parse_response(response)
-            tools_used = [str(tool) for tool in parsed.get("tools_used", [])]
-            missing_tools = [tool for tool in expected_tools if tool not in tools_used]
-            success = not missing_tools
-            notes = str(parsed.get("notes", "")) or response[:200]
-            tool_failures = len(missing_tools)
-            token_count = estimate_tokens(prompt) + estimate_tokens(response)
-        except Exception as exc:
-            tools_used = []
-            success = False
-            notes = f"Real model call failed: {exc}"
-            tool_failures = len(expected_tools) or 1
-            token_count = estimate_tokens(prompt)
+            with contextlib.chdir(self.workdir) if self.workdir else contextlib.nullcontext():
+                eng = factory(EngineCallback())
+                # 包装 _execute_tool 记录实际执行的工具（门控/拦截的不计）
+                orig_execute = eng._execute_tool
 
+                def _recording_execute(action, action_input, ctx, tracker=None):
+                    executed.append(action)
+                    return orig_execute(action, action_input, ctx, tracker)
+
+                eng._execute_tool = _recording_execute
+                answer = eng.run(task["prompt"], self._build_context()) or ""
+            success, reason = self._score(task, executed, answer)
+            notes = answer.strip()[:200] or reason
+        except Exception as exc:  # noqa: BLE001 — eval 不应因单任务崩溃中断
+            success, reason = False, f"engine run failed: {exc}"
+            notes = reason[:200]
+
+        expected = list(task.get("expected_tools", []))
+        missing = [t for t in expected if t not in executed]
         return {
             "task_id": task["id"],
             "category": task["category"],
             "success": success,
-            "model": self.model_name,
-            "token_count": token_count,
-            "tool_calls": len(tools_used),
-            "tool_failures": tool_failures,
-            "tools_used": tools_used,
+            "model": self.model,
+            "token_count": estimate_tokens(task["prompt"]) + estimate_tokens(answer),
+            "tool_calls": len(executed),
+            "tool_failures": len(missing),
+            "tools_used": executed,
             "notes": notes,
+            "scoring": reason,
         }
 
     @staticmethod
-    def _build_prompt(task: dict[str, Any]) -> str:
-        return (
-            f"Task: {task['prompt']}\n"
-            f"Category: {task['category']}\n"
-            f"Expected tools: {', '.join(task['expected_tools'])}\n"
-            f"Success criteria: {task['success_criteria']}\n"
-            "Return the tool sequence a coding agent should use. The runner will score your JSON "
-            "against the expected tools; do not self-grade."
-        )
+    def _score(task: dict[str, Any], executed: list[str], answer: str) -> tuple[bool, str]:
+        """评分：实际执行了全部 expected_tools 且 final_answer 非空。"""
+        expected = set(task.get("expected_tools", []))
+        missing = expected - set(executed)
+        if missing:
+            return False, f"missing expected tools: {sorted(missing)}"
+        if not (answer or "").strip():
+            return False, "empty final answer"
+        return True, f"executed all {len(expected)} expected tools"
 
     @staticmethod
-    def _parse_response(response: str) -> dict[str, Any]:
-        text = response.strip()
-        match = re.search(r"\{.*\}", text, re.S)
-        if match:
-            text = match.group(0)
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return {"success": False, "tools_used": [], "failed_tools": [], "notes": response[:300]}
-        return parsed if isinstance(parsed, dict) else {}
+    def _build_prompt(task: dict[str, Any]) -> str:
+        """§8.14.1 修复：prompt **绝不暴露** expected_tools（仅评分用）。
+
+        只给任务描述 + 类别 + success_criteria（作为背景，助模型理解验收标准）。
+        expected_tools 仅由 runner 用于评分，不出现在 prompt 中——这样才能测出
+        "模型从任务描述自主推断工具"的真实能力，而非复述喂给它的工具名。
+        """
+        criteria = task.get("success_criteria", "")
+        lines = [
+            f"Task: {task['prompt']}",
+            f"Category: {task['category']}",
+        ]
+        if criteria:
+            lines.append(f"Success criteria (for your understanding): {criteria}")
+        lines.append(
+            "Decide which tools to use and execute the task. The runner scores whether you "
+            "actually executed the right tools—do not self-grade."
+        )
+        return "\n".join(lines)
 
 
-def run_eval(tasks: list[dict[str, Any]], *, mode: str, model: str | None = None) -> list[dict[str, Any]]:
+def run_eval(
+    tasks: list[dict[str, Any]],
+    *,
+    mode: str,
+    model: str | None = None,
+    workdir: str | None = None,
+) -> list[dict[str, Any]]:
     """Run tasks through mock or real agent."""
     if mode == "mock":
         agent = MockAgent()
     elif mode == "real":
         if not model:
             raise ValueError("--model is required when --mode real")
-        agent = RealAgent(model)
+        agent = RealAgent(model, workdir=workdir)
     else:
         raise ValueError(f"Unsupported eval mode: {mode}")
     return [agent.run_task(task) for task in tasks]
@@ -164,6 +201,22 @@ def write_report(
     lines = [
         "# OmniAgent Eval Report",
         "",
+    ]
+    # §8.14.3 修复：mock 模式显式标注为框架自检，不代表 agent 能力
+    if mode == "mock":
+        lines.extend([
+            "> ⚠️ **Framework smoke test — NOT an agent capability measurement.**",
+            "> mock 模式仅验证 eval 框架自身能跑通 + YAML 可解析，success_rate 恒 100%，",
+            "> 与模型/引擎能力无关。判断 agent 能力请用 `--mode real`。",
+            "",
+        ])
+    elif mode == "real":
+        lines.extend([
+            "> Scoring: real 模式跑 ReAct 多轮闭环，按**实际执行**的工具评分",
+            f">（`expected_tools ⊆ executed` 且 final_answer 非空）。`success_criteria` 为人工复核提示，不自动评分。",
+            "",
+        ])
+    lines.extend([
         f"- Mode: `{mode}`",
         f"- Model: `{model}`",
         f"- Run date: `{date}`",
@@ -175,7 +228,7 @@ def write_report(
         "",
         "| Task | Category | Success | Tokens | Tool Calls | Tool Failures | Notes |",
         "| --- | --- | --- | ---: | ---: | ---: | --- |",
-    ]
+    ])
     for result in results:
         notes = str(result.get("notes", "")).replace("\n", " ")[:140]
         success = "yes" if result["success"] else "no"
@@ -200,10 +253,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default=None, help="Required for --mode real, e.g. deepseek/deepseek-v4-pro")
     parser.add_argument("--tasks", default=str(DEFAULT_TASKS_PATH))
     parser.add_argument("--output", default=str(DEFAULT_REPORT_PATH))
+    parser.add_argument(
+        "--workdir", default=None,
+        help="Optional working directory for --mode real (tool execution sandbox).",
+    )
     args = parser.parse_args(argv)
 
     tasks = load_tasks(args.tasks)
-    results = run_eval(tasks, mode=args.mode, model=args.model)
+    results = run_eval(tasks, mode=args.mode, model=args.model, workdir=args.workdir)
     model = args.model or "mock-agent"
     report = write_report(results, args.output, mode=args.mode, model=model)
     print(f"Wrote eval report: {report}")
