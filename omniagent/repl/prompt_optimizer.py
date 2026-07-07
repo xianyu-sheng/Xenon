@@ -31,11 +31,13 @@ class PromptTemplate:
 
 TEMPLATES: list[PromptTemplate] = [
     # 调试/修复（最高优先级，因为有明显的错误关键词）
+    # P3-Q5 / §8.15.1：收紧 trigger——移除过宽的「问题/issue」（"我有个设计问题"
+    # 等会被误判 debug），改为报错/异常/traceback 等强信号。
     PromptTemplate(
         intent="debug",
         trigger_patterns=[
-            r"(?:报错|出错|错误|异常|bug|问题|不工作|运行不了|失败|崩溃)",
-            r"(?:fix|debug|error|exception|bug|issue|broken|fail|crash)",
+            r"(?:报错|出错|错误|异常|bug|不工作|运行不了|失败|崩溃|traceback|堆栈)",
+            r"(?:fix|debug|error|exception|bug|broken|fail|crash|traceback|stack\s*trace)",
             r"怎么解决",
             r"为什么.*(?:不行|不能|失败|报错)",
         ],
@@ -114,12 +116,35 @@ TEMPLATES: list[PromptTemplate] = [
         system_hint="你是一个代码质量专家。请从可读性、性能、可维护性角度优化代码。",
     ),
 
+    # 编写文档（P3-Q5 / §8.15.4：补 write_doc 意图。须排在 write_code 之前，
+    # 否则「帮我写一份文档」「write a doc」会被 write_code 的宽泛 trigger 抢走。）
+    PromptTemplate(
+        intent="write_doc",
+        trigger_patterns=[
+            r"(?:写|编写|整理|生成).*(?:文档|说明书|README|说明|readme|wiki)",
+            r"帮我写.*(?:文档|README|说明书)",
+            r"(?:writ(?:e|ing|es|ten)|draft|generate)\s+(?:a|an|the)?\s*(?:doc|docs|documentation|readme|wiki)",
+            r"(?:生成|更新).*(?:API\s*文档|接口文档)",
+        ],
+        template=(
+            "## 文档目标\n{task}\n\n"
+            "## 文档结构\n"
+            "- 概述：用途与适用读者\n"
+            "- 安装/前置条件\n"
+            "- 用法：参数、示例、返回值\n"
+            "- 注意事项与常见问题\n\n"
+            "## 输出格式\n"
+            "输出 Markdown 文档，标题层级清晰，代码示例用代码块包裹。"
+        ),
+        system_hint="你是一个技术写作专家。输出的文档结构清晰、示例可复现、面向目标读者。",
+    ),
+
     # 写代码
     PromptTemplate(
         intent="write_code",
         trigger_patterns=[
             r"(?:写|编写|实现|创建|开发|生成).*(?:代码|函数|类|模块|程序|脚本|接口|API|算法|爬虫|服务器)",
-            r"(?:write|implement|create|build|generate)\s+(?:a|an|the)?\s*\w+",
+            r"(?:writ(?:e|ing|es|ten)|implement|create|build|generate)\s+(?:a|an|the)?\s*\w+",
             r"帮我写(?!测试|单测|文档)",
             r"帮我实现",
             r"用.*写一个",
@@ -164,7 +189,9 @@ TEMPLATES: list[PromptTemplate] = [
         intent="novel",
         trigger_patterns=[
             r"(?:写|创作|编写|生成).*(?:小说|故事|章节|短篇|长篇|网文)",
-            r"(?:续写|接着写|往下写|继续写)",
+            # P3-Q5 / §8.15.2：「续写」单独出现会误抢其它意图，要求附近有创作语境词。
+            r"(?:续写|接着写|往下写|继续写).{0,10}(?:小说|故事|章节|大纲|正文|下文|创作|章|篇|卷)",
+            r"(?:小说|故事|章节|大纲).{0,10}(?:续写|接着写|往下写|继续写)",
             r"(?:润色|修改|改写|重写).*(?:文章|段落|文字|描写|对话|文笔)",
             r"(?:扩写|扩展|丰富).*(?:细节|描写|段落)",
             r"(?:创建|设计|构建).*(?:角色|人物|主角|反派|配角)",
@@ -233,6 +260,21 @@ TEMPLATES: list[PromptTemplate] = [
             "4. 列出可能的注意事项"
         ),
         system_hint="你是一个技术文档专家。请用清晰、结构化的方式解释代码和技术概念。",
+    ),
+
+    # 闲聊/问候（P3-Q5 / §8.15.4：最低优先级，仅匹配纯问候/致谢，避免抢真实意图）
+    PromptTemplate(
+        intent="chat",
+        trigger_patterns=[
+            r"^(?:你好|您好|hi|hello|hey|嗨|早上好|晚上好|下午好|哈喽)[\s!！。.~]*$",
+            r"^(?:谢谢|感谢|thanks|thank\s+you|多谢|辛苦了)[\s!！。.~]*$",
+            r"^(?:再见|拜拜|bye|goodbye|88)[\s!！。.~]*$",
+        ],
+        template=(
+            "{task}\n\n"
+            "（这是一句问候/闲聊，简洁友好地回应即可，不要展开成长篇技术回答。）"
+        ),
+        system_hint="你是一个友好的助手。对问候和致谢给出简短、自然的回应。",
     ),
 
 ]
@@ -356,6 +398,8 @@ def get_intent_display(intent: str | None) -> str:
         "convert": "🔄 转换迁移",
         "novel": "📖 小说创作",
         "query": "🔍 信息查询",
+        "write_doc": "📄 编写文档",
+        "chat": "💬 闲聊对话",
     }
     if intent is None:
         return "💬 通用对话"

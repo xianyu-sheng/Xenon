@@ -77,7 +77,7 @@ class TestDetectIntent:
         assert detect_intent("迁移这个项目到 FastAPI") == "convert"
 
     def test_unknown_intent(self):
-        assert detect_intent("你好") is None
+        assert detect_intent("你好") == "chat"
         assert detect_intent("12345") is None
 
     def test_query_intent(self):
@@ -132,8 +132,8 @@ class TestOptimizePrompt:
         assert hint is not None
 
     def test_unknown_intent_passthrough(self):
-        optimized, hint, was_opt = optimize_prompt("你好")
-        assert optimized == "你好"
+        optimized, hint, was_opt = optimize_prompt("12345")
+        assert optimized == "12345"
         assert hint is None
         assert was_opt is False
 
@@ -170,6 +170,8 @@ class TestGetIntentDisplay:
         assert "测试" in get_intent_display("write_test")
         assert "架构" in get_intent_display("design")
         assert "转换" in get_intent_display("convert")
+        assert "文档" in get_intent_display("write_doc")
+        assert "闲聊" in get_intent_display("chat")
 
     def test_unknown_intent(self):
         assert "通用对话" in get_intent_display(None)
