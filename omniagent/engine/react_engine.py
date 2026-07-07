@@ -17,6 +17,7 @@ from omniagent.engine.budget import BudgetManager
 from omniagent.engine.callbacks import EngineCallback, mask_sensitive_params
 from omniagent.engine.context import AgentContext
 from omniagent.engine.hollow_detector import HollowDetector
+from omniagent.engine.scout import DirectoryScout
 from omniagent.engine.tool_tracker import ToolExecutionTracker
 from omniagent.nodes.tool_executor import ToolExecutor
 from omniagent.nodes.tool_node import ToolNode, _DYNAMIC_TOOLS
@@ -216,6 +217,7 @@ class ReActEngine(BaseEngine):
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
         native_fc: bool = False,
+        project_root: str | None = None,
     ) -> None:
         # R2: 公共属性（model_priority/callback/model_configs/temperature）与
         # _call_llm 由 BaseEngine 提供，消除四份复制与参数漂移。
@@ -233,6 +235,9 @@ class ReActEngine(BaseEngine):
         # F5: 原生 function-calling 三层降级开关（默认关——需逐模型验证 FC 兼容性，
         # 见审计 §9 line 84 风险注）。开启后 run() 用 _call_llm_native 替代 _call_llm。
         self.native_fc = native_fc
+        # P2-E1: DirectoryScout 项目结构扫描（防路径幻觉）。仅当显式传入 project_root
+        # 时启用：run() 启动时把真实文件树注入 user_input，让 LLM 基于真实文件规划。
+        self._scout = DirectoryScout(project_root) if project_root else None
 
     def _build_system_prompt(self) -> str:
         import sys
@@ -313,6 +318,10 @@ class ReActEngine(BaseEngine):
             else:
                 logger.warning("ReAct: 无对话历史可注入！")
         messages.append({"role": "user", "content": user_input})
+        # P2-E1: 若启用 DirectoryScout，把项目文件树注入 user_input（防路径幻觉）。
+        # 注意：注入发生在历史之后、首轮 LLM 调用之前，注入内容并入本轮 user 消息。
+        if self._scout is not None:
+            messages[-1]["content"] = self._scout.inject(user_input, messages=messages[:-1])
 
         # 判断输入是否需要工具操作
         requires_tools = self._input_requires_tools(user_input)
