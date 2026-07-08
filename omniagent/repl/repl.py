@@ -497,6 +497,15 @@ class REPL:
 
             # ── 粘贴模式状态 ─────────────────────────────
             paste_mode = False
+            # v0.3.0 修复（Bug：粘贴结束信号丢失时 paste_mode 死锁）：
+            # 某些终端/网络/SSH 会把 \x1b[201~ 结束信号切碎或丢失，导致 paste_mode 永远 True，
+            # 后续用户按键（空格/字母）进入 paste_mode 分支被插入 current_line 但不重绘，
+            # 表现为"按空格不显示 + 字符累积成重复粘贴"。超时退出机制：paste_mode 期间
+            # select 0.3s 无新字节 → 自动退出 paste_mode + 强制 _redraw_line()。
+            # 通用机制改进，不针对特定任务/终端加白名单。
+            import time as _time
+            paste_last_byte_at: float | None = None
+            PASTE_TIMEOUT_S = 0.3
 
             def _redraw_line() -> None:
                 """清除当前行并重绘（正确处理 CJK 宽字符）。"""
@@ -535,10 +544,20 @@ class REPL:
             seq_buffer = ""
 
             while True:
-                # 用 select 检查是否有输入（超时处理粘贴检测）
+                # 用 select 检查是否有输入（超时处理粘贴检测 + paste_mode 超时退出）
                 if select([sys.stdin], [], [], 0.01)[0]:
                     ch = sys.stdin.read(1)
                 else:
+                    # v0.3.0 修复：paste_mode 期间 select 0.3s 无新字节 → 自动退出
+                    # 解决"结束信号 \x1b[201~ 丢失导致 paste_mode 死锁"问题。
+                    if (
+                        paste_mode
+                        and paste_last_byte_at is not None
+                        and _time.monotonic() - paste_last_byte_at > PASTE_TIMEOUT_S
+                    ):
+                        paste_mode = False
+                        paste_last_byte_at = None
+                        _redraw_line()
                     continue
 
                 # 处理转义序列
@@ -551,11 +570,13 @@ class REPL:
                     if seq_buffer == '\x1b[200~':
                         # 开始粘贴 — 暂停逐字符重绘
                         paste_mode = True
+                        paste_last_byte_at = _time.monotonic()
                         seq_buffer = ""
                         continue
                     if seq_buffer == '\x1b[201~':
                         # 粘贴结束 — 一次性重绘
                         paste_mode = False
+                        paste_last_byte_at = None
                         _redraw_line()
                         seq_buffer = ""
                         continue
@@ -650,6 +671,9 @@ class REPL:
                     elif ord(ch) >= 0x20:
                         current_line.insert(cursor_pos, ch)
                         cursor_pos += 1
+                    # v0.3.0 修复：每次粘贴期间字节都要刷新 last_byte_at，
+                    # 否则 select 0.3s 超时检查会误判 paste_mode 空闲
+                    paste_last_byte_at = _time.monotonic()
                     continue
 
                 # ── 普通字符处理 ──
