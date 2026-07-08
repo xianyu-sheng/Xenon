@@ -42,9 +42,34 @@
 - **状态栏简化**：精简分隔符，Token 进度条用 `━`/`─` Unicode 字符，低用量时颜色收敛为 dim。
 - **思考面板紧凑化**：摘要行去掉 emoji 前缀，折叠详情统一 dim 字体。
 
+### Bug 修复（REPL 真实任务测试发现）
+
+端到端真实任务测试（`tests/test_repl_real_tasks.py` 84 用例 + `tests/test_repl_real_usage.py`
+25 个真实使用场景）发现并修复 6 个 bug，全部为 P2/P3 优先级。
+
+- **query 意图路由到 ReAct**（`repl.py:1052-1066`）— query 意图（天气/价格/汇率/新闻等
+  实时数据）必然需要工具，direct 模式不向 API 传工具而 prompt_optimizer 注入"使用工具获取
+  实时数据"指令会让 LLM 给出前言式回复。`_detect_tool_need` 在 `intent == "query"` 时
+  直接判 True，路由 ReAct。
+- **B-1 (P2) write_code 意图路由缺失**（`repl.py:1063`）— `_TOOL_PATTERNS` 唯一编程类正则
+  要求 `^(?:帮我|请|给).{0,5}` 前缀，无法覆盖"写一个 X"/"用 Y 写一个 Z"等自然语序。
+  `_detect_tool_need` 兜底扩展为 `intent in ("query", "write_code")`，共用同一根因路径。
+- **B-3 (P2) `_handle_chat` 入口空输入防护**（`repl.py:697`）— 空字符串/纯空格
+  直接进完整流程会污染 history（`add_user_message("")`）并浪费 LLM token。
+  入口加 `if not user_input.strip(): return` 防护。
+- **B-2 (P3) 条件句 query 漏判**（`prompt_optimizer.py:222-241`）— `query` trigger 缺
+  "如果…就…"条件句模式与实时天气关键词。补全 2 条正则覆盖"如果今天下雨就告诉我"/
+  "今天会不会下雨"。
+- **B-4 (P3) chat 模板污染 user content**（`prompt_optimizer.py:265-278`）— chat 模板把
+  "（这是一句问候/闲聊…）"指令内联到 user content。改为 `template="{task}"`，
+  仅依赖 `system_hint` 注入，避免 user 消息被污染。
+- **观察项-1/2 (P2) ReAct 异常状态污染**（`repl.py:836-841`/`repl.py:805-818`）— ReAct
+  引擎抛异常或 `_run_direct` 递归 ReAct 失败时，user 消息已 add（`repl.py:745`）但无
+  assistant 响应，history 留下孤立 user 序列。改为在异常分支用 `add_assistant_message(
+  "[错误] ...")` 占位让 history 仍成对；add 失败兜底 `trim_last_user()`。
+
 ### Bug 修复
 
-- 观察项-1：ReAct 引擎异常时，防御性 catch 确保 user/assistant 消息成对，防止 history 孤立序列。
 - `_check_first_run` 提示信息统一 dim 风格。
 
 ### 终端输入体验修复

@@ -76,11 +76,15 @@ class TestCtxMgrInjection:
             captured["n"] = len(history)
             return {"steps": [], "analysis": "ok"}
 
+        # 保存原方法引用（class body 定义的 def _plan）→ finally 恢复，
+        # 而不是 ``del PlanExecuteEngine._plan``——后者会真删方法，
+        # 让后续测试 ``eng.run`` 调 ``self._plan`` 报 AttributeError。
+        original_plan = PlanExecuteEngine._plan
         PlanExecuteEngine._plan = fake_plan
         try:
             eng.run("做点事", AgentContext(), ctx_mgr=cm)
         finally:
-            del PlanExecuteEngine._plan  # 还原，避免污染其它测试
+            PlanExecuteEngine._plan = original_plan
         assert captured["n"] == 10  # 全量 ctx_mgr 历史
 
 
