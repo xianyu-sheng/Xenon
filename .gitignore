@@ -58,3 +58,6 @@ desktop.ini
 *.orig
 图标.png
 omniagent.ico
+
+# Claude Code local config（用户级 sub-agent 定义不应进公共仓库）
+.claude/
