@@ -3,7 +3,37 @@
 本文件记录 OmniAgent-CLI 各版本变更。版本号遵循语义化版本（预 1.0 阶段：
 `0.MINOR.PATCH`，每个修复批次递增 MINOR）。
 
-## [0.2.1] — 2026-07-07
+## [0.2.1] — 2026-07-08
+
+### 工具可用性全面修复
+
+全量审查 20 个工具，发现并修复 4 个缺陷，新增 48 项工具冒烟测试（974 全量通过）。
+
+- **天气工具 `city` 参数丢失**：`_VALID_PARAMS` 缺少 `city`/`lang`/`description`/
+  `python_function`/`command_template`/`params`，`normalize_params` 将其过滤，导致
+  天气工具始终查询北京。已补全 6 个缺失参数 + `_PARAM_ALIASES` 别名（`location`→
+  `city`、`language`→`lang`）。
+- **SSRF 误拦 `198.18.0.0/15`**：Python `ipaddress.is_private` 将 IANA 基准测试段
+  归入 private，导致 `wttr.in` 等合法服务被拦截。替换为显式 RFC 1918 + RFC 6598
+  私有网络检查（`_is_rfc1918_private`），仅拦截 10.0.0.0/8、172.16.0.0/12、
+  192.168.0.0/16、100.64.0.0/10、fc00::/7。
+- **`github_fetch` 格式校验崩溃**：`import re` 在条件块内，`github.com` 不在 URL
+  中时 `re` 未绑定导致 `UnboundLocalError`。将 `import re` 移至函数顶部。
+- **新增 `test_tool_audit.py`**：56 项测试覆盖 normalize_params、SSRF、weather、
+  文件操作、command、git、datetime、web_fetch、github_fetch、code_index、
+  ast_analyze、diff_preview、register_tool、动态工具、ToolExecutor、安全边界、
+  降级方案。
+
+### 工具降级方案
+
+- **天气工具 curl 降级**：`get_weather` 主路径使用 Python httpx 客户端，失败时自动
+  回退到系统 `curl` 命令，确保在代理/SSRF/证书等异常场景下天气查询仍可用。
+  降级路径返回 `via_fallback=True` 标记。
+- **SSRF 已知安全域名白名单**：`_SSRF_DOMAIN_ALLOWLIST` 包含 `wttr.in`、
+  `weather.com.cn`、`api.github.com`、`raw.githubusercontent.com`、`httpbin.org`
+  等公认公共 API，白名单域名跳过 IP 级 SSRF 校验，作为防御纵深最后一道防线。
+- **SSRF 拦截错误提示降级**：`web_fetch` 被 SSRF 拦截时，错误消息包含
+  "可尝试用 command 工具执行 curl 获取数据作为降级方案" 提示，引导 LLM 自动切换。
 
 ### 终端 UI 全面优化
 

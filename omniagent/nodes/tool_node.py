@@ -117,11 +117,31 @@ class _SSRFRedirectError(Exception):
     """重定向目标未通过 SSRF 校验时抛出。"""
 
 
+# ── RFC 1918 / RFC 6598 私有网络范围（显式定义，避免 ipaddress.is_private
+# 误伤 198.18.0.0/15 等 IANA 基准测试保留段） ──────────────────
+_RFC1918_NETWORKS: list[ipaddress._BaseNetwork] = [
+    ipaddress.ip_network("10.0.0.0/8"),        # RFC 1918
+    ipaddress.ip_network("172.16.0.0/12"),     # RFC 1918
+    ipaddress.ip_network("192.168.0.0/16"),    # RFC 1918
+    ipaddress.ip_network("100.64.0.0/10"),     # RFC 6598 CGNAT
+    ipaddress.ip_network("fc00::/7"),          # IPv6 ULA
+]
+
+
+def _is_rfc1918_private(ip: ipaddress._BaseAddress) -> bool:
+    """检查 IP 是否在 RFC 1918 / RFC 6598 私有地址段内。
+
+    不使用 ipaddress.is_private，因为它把 198.18.0.0/15（IANA 基准测试）
+    也归入 private，导致 wttr.in 等合法公网服务被 SSRF 误拦。
+    """
+    return any(ip in net for net in _RFC1918_NETWORKS)
+
+
 def _is_internal_ip(ip: ipaddress._BaseAddress) -> bool:
     """判断 IP 是否为内网/保留/环回/链路本地/组播/未指定等不可达外部地址。"""
     return bool(
         ip.is_loopback or ip.is_link_local or ip.is_reserved
-        or ip.is_multicast or ip.is_unspecified or ip.is_private
+        or ip.is_multicast or ip.is_unspecified or _is_rfc1918_private(ip)
     )
 
 
@@ -151,6 +171,20 @@ def _resolve_host_ips(host: str) -> list[str]:
     return seen
 
 
+# ── SSRF 已知安全域名白名单 ─────────────────────────────────
+# 这些是公认的公共 API 服务，即使 DNS 解析到非标准 IP（如 CDN 使用的
+# 198.18.0.0/15 基准测试段），也允许访问。白名单在 SSRF 校验前检查，
+# 匹配则跳过 IP 级校验，作为防御纵深（defense-in-depth）的最后一道防线。
+_SSRF_DOMAIN_ALLOWLIST: frozenset[str] = frozenset({
+    "wttr.in",                     # 天气 API
+    "weather.com.cn",              # 中国天气网
+    "api.github.com",              # GitHub API
+    "raw.githubusercontent.com",   # GitHub raw 内容
+    "httpbin.org",                 # HTTP 测试
+    "postman-echo.com",            # HTTP 测试
+})
+
+
 def _ssrf_check_url(url: str) -> tuple[bool, str]:
     """SSRF 校验：解析 URL 的 host，拒绝内网/保留/环回/链路本地地址。
 
@@ -167,6 +201,14 @@ def _ssrf_check_url(url: str) -> tuple[bool, str]:
     host = parsed.hostname
     if not host:
         return False, "URL 缺少 host"
+
+    # ── 域名白名单：已知公共 API 跳过 IP 校验（防御纵深） ──
+    host_lower = host.lower()
+    if host_lower in _SSRF_DOMAIN_ALLOWLIST or any(
+        host_lower.endswith("." + allowed) for allowed in _SSRF_DOMAIN_ALLOWLIST
+    ):
+        return True, ""
+
     ips = _resolve_host_ips(host)
     if not ips:
         return False, f"无法解析 host: {host}"
@@ -384,6 +426,8 @@ class ToolNode(BaseNode):
         "github_action":  ["gh_action", "git_action"],
         "github_path":    ["gh_path", "file", "filepath"],
         "branch":         ["ref", "git_branch"],
+        "city":           ["location", "place", "address"],
+        "lang":           ["language", "locale"],
     }
 
     # ToolNode.__init__ 接受的所有合法参数名（不含 node_id，它是位置参数）
@@ -396,6 +440,7 @@ class ToolNode(BaseNode):
         "old_name", "new_name", "refactor_action",
         "tool_name", "tool_args", "mcp_server",
         "repo", "github_action", "github_path", "branch",
+        "city", "lang", "description", "python_function", "command_template", "params",
         "security_enabled", "start_line", "max_lines",
     }
 
@@ -1548,7 +1593,10 @@ class ToolNode(BaseNode):
             return {
                 "action_type": "web_fetch", "url": url,
                 "content": "", "success": False,
-                "error": f"SSRF 拦截: {reason}",
+                "error": (
+                    f"SSRF 拦截: {reason}"
+                    f"。可尝试用 command 工具执行 curl 获取数据作为降级方案"
+                ),
             }
 
         logger.info(f"[{self.id}] 抓取网页: {url}")
@@ -1675,6 +1723,8 @@ class ToolNode(BaseNode):
         - fetch_file: 获取指定文件的内容
         - fetch_readme: 获取 README 内容
         """
+        import re
+
         repo = self._resolve_template(self.repo, context)
         if not repo:
             raise ValueError(f"[{self.id}] github_fetch 需要 repo 参数（格式: owner/repo）")
@@ -1683,7 +1733,6 @@ class ToolNode(BaseNode):
         repo = repo.strip().rstrip("/")
         if "github.com" in repo:
             # 从 URL 提取 owner/repo
-            import re
             m = re.search(r"github\.com/([^/]+/[^/]+)", repo)
             if m:
                 repo = m.group(1)
