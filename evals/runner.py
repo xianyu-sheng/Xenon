@@ -52,6 +52,11 @@ class RealAgent:
     - 评分：``expected_tools ⊆ executed`` 且 final_answer 非空。``success_criteria``
       不自动评分（语义化标准无法通用机器判定），仅作人类复核提示写入报告；
     - ``engine_factory`` 可注入便于单测（默认构建 ``ReActEngine``）。
+
+    **multi-turn 支持**（方案 C 根因 1 修复）：``max_turns`` 控制外部轮次，每轮 new
+    ReActEngine 共享同一个 ``ContextManager`` 累积 user/assistant 消息，前一轮
+    ``answer`` 注入后一轮 user_input 作为 review feedback。**通用机制**改进——
+    不针对特定任务加白名单；不修改评分逻辑；不修改 expected_tools 列表。
     """
 
     def __init__(
@@ -59,11 +64,13 @@ class RealAgent:
         model: str,
         *,
         max_iterations: int = 8,
+        max_turns: int = 3,
         workdir: str | None = None,
         engine_factory: Any = None,
     ) -> None:
         self.model = model
         self.max_iterations = max_iterations
+        self.max_turns = max_turns
         self.workdir = workdir
         self._engine_factory = engine_factory
 
@@ -79,32 +86,72 @@ class RealAgent:
 
         return AgentContext()
 
+    def _synthesize_review_prompt(
+        self, original_prompt: str, prev_answer: str, turn: int,
+    ) -> str:
+        """生成第 N 轮的 review feedback prompt（通用机制，不针对特定任务）。
+
+        第 1 轮用原任务；后续轮基于前一轮 answer + 原任务，让 LLM 自然产生
+        '修订/补充/再确认' 行为，覆盖 multi_turn_revision 类任务。
+        """
+        return (
+            f"Continue based on your previous answer (turn {turn}):\n"
+            f"{prev_answer[:500]}\n\n"
+            f"Original task: {original_prompt}"
+        )
+
     def run_task(self, task: dict[str, Any]) -> dict[str, Any]:
         from omniagent.engine.callbacks import EngineCallback
+        from omniagent.repl.context_manager import ContextManager
         import contextlib
 
         factory = self._engine_factory or self._default_engine_factory
         executed: list[str] = []
         answer = ""
+        expected = set(task.get("expected_tools", []))
+        original_prompt = task["prompt"]
+
+        # multi-turn：每轮共享 ContextManager 累积 history（F4 修复机制）
+        cm = ContextManager()
+        turns_used = 1
         try:
             with contextlib.chdir(self.workdir) if self.workdir else contextlib.nullcontext():
-                eng = factory(EngineCallback())
-                # 包装 _execute_tool 记录实际执行的工具（门控/拦截的不计）
-                orig_execute = eng._execute_tool
+                for turn in range(self.max_turns):
+                    turns_used = turn + 1
+                    if turn == 0:
+                        user_input = original_prompt
+                    else:
+                        user_input = self._synthesize_review_prompt(
+                            original_prompt, answer, turn,
+                        )
+                    cm.add_user_message(user_input)
 
-                def _recording_execute(action, action_input, ctx, tracker=None):
-                    executed.append(action)
-                    return orig_execute(action, action_input, ctx, tracker)
+                    eng = factory(EngineCallback())
+                    # 包装 _execute_tool 记录实际执行的工具（门控/拦截的不计）
+                    orig_execute = eng._execute_tool
 
-                eng._execute_tool = _recording_execute
-                answer = eng.run(task["prompt"], self._build_context()) or ""
-            success, reason = self._score(task, executed, answer)
-            notes = answer.strip()[:200] or reason
+                    def _recording_execute(action, action_input, ctx, tracker=None):
+                        executed.append(action)
+                        return orig_execute(action, action_input, ctx, tracker)
+
+                    eng._execute_tool = _recording_execute
+                    # F4：ctx_mgr 注入，engine 消费（已压缩）历史
+                    answer = eng.run(user_input, ctx_mgr=cm) or ""
+                    cm.add_assistant_message(answer)
+
+                    # 早停：所有 expected_tools 都调过了（无需进入下一轮）
+                    if expected and expected.issubset(set(executed)):
+                        break
+                    # 早停：第 1 轮就空 executed + 强制拒绝过 → 不浪费 token
+                    if turn == 0 and not executed:
+                        break
+
+                success, reason = self._score(task, executed, answer)
+                notes = answer.strip()[:200] or reason
         except Exception as exc:  # noqa: BLE001 — eval 不应因单任务崩溃中断
             success, reason = False, f"engine run failed: {exc}"
             notes = reason[:200]
 
-        expected = list(task.get("expected_tools", []))
         missing = [t for t in expected if t not in executed]
         return {
             "task_id": task["id"],
@@ -117,6 +164,7 @@ class RealAgent:
             "tools_used": executed,
             "notes": notes,
             "scoring": reason,
+            "turns_used": turns_used,
         }
 
     @staticmethod

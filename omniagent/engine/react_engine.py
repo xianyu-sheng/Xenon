@@ -358,6 +358,11 @@ class ReActEngine(BaseEngine):
         # F2: 空洞回答补救上限（最多拒绝 1 次，第二次强制接受避免死循环）
         MAX_HOLLOW_REJECTIONS = 1
         hollow_rejections = 0
+        # 方案 C 根因 3 修复：no_tool_streak 重试上限自适应 max_iterations。
+        # 旧逻辑固定 2 次后放弃，导致 LLM 容易"硬扛"过 2 次后文字声称完成。
+        # 新逻辑：至少 2 次重试，最多是 max_iterations 的一半（保留一半预算给正常迭代）。
+        # 通用机制改进，不针对特定任务加白名单。
+        max_no_tool_retries = max(2, self.max_iterations // 2)
 
         while budget.can_continue():
             budget.spend()
@@ -418,7 +423,7 @@ class ReActEngine(BaseEngine):
                 # ── 关键验证：如果需要工具但未执行，拒绝接受 final_answer ──
                 if requires_tools and not tracker.has_executions():
                     no_tool_streak += 1
-                    if no_tool_streak <= 2:
+                    if no_tool_streak < max_no_tool_retries:
                         force_msg = (
                             "⚠️ 你还没有使用任何工具就声称完成了任务。"
                             "请使用工具（如 write_file、command、create_directory 等）"
@@ -427,18 +432,26 @@ class ReActEngine(BaseEngine):
                         )
                         messages.append({"role": "user", "content": force_msg})
                         self.callback.on_warning("LLM 未执行工具就声称完成，要求重试")
-                        logger.warning(f"ReAct: LLM 未执行工具就声称完成，强制要求工具调用 (第 {no_tool_streak} 次)")
+                        logger.warning(
+                            f"ReAct: LLM 未执行工具就声称完成，强制要求工具调用 "
+                            f"(第 {no_tool_streak}/{max_no_tool_retries} 次)"
+                        )
                         continue
                     else:
-                        # 连续 3 次拒绝工具，附带警告返回
+                        # 超过重试上限，附带警告返回（不静默放过，warning 必输出）
                         answer = final_answer
                         warning = (
-                            "\n\n⚠️ **警告**: 本次回答未经工具执行验证。"
-                            "LLM 声称完成了任务但未实际调用任何工具，"
-                            "文件操作可能未真正执行。"
+                            f"\n\n⚠️ **警告**: 本次回答连续 {no_tool_streak} 次未经工具"
+                            f"执行验证。LLM 声称完成了任务但未实际调用任何工具，"
+                            f"文件操作可能未真正执行（重试上限 {max_no_tool_retries}）。"
                         )
-                        self.callback.on_warning("LLM 连续拒绝工具调用，附带警告返回")
-                        logger.warning("ReAct: LLM 连续拒绝工具调用，附带警告返回")
+                        self.callback.on_warning(
+                            f"LLM 连续 {no_tool_streak} 次拒绝工具调用，附带警告返回"
+                        )
+                        logger.warning(
+                            f"ReAct: LLM 连续拒绝工具调用，附带警告返回 "
+                            f"(streak={no_tool_streak}, limit={max_no_tool_retries})"
+                        )
                         self.callback.on_finish(answer + warning)
                         return answer + warning
 
