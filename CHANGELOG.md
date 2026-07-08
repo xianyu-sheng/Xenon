@@ -3,6 +3,81 @@
 本文件记录 OmniAgent-CLI 各版本变更。版本号遵循语义化版本（预 1.0 阶段：
 `0.MINOR.PATCH`，每个修复批次递增 MINOR）。
 
+## [0.3.0] — 2026-07-08
+
+### 仓库清理（方向 B 起跑线）
+
+把仓库根目录从 6 个项目文件压缩到 6 个 + 整理 5 个"无主文件"到 `docs/`：
+
+- 删除 `binary_search.py`（与项目无关的练习题）
+- 迁 `OmniAgent_CLI_Design_Specification_v1.1.pdf` → `docs/omniagent-design-spec-v1.1.pdf`
+- 迁 `omniagent_design_spec_v1.1.html` → `docs/omniagent-design-spec-v1.1.html`
+- 迁 `REAL_TASK_TEST_REPORT.md` → `docs/reports/v0.2.2/`
+- 迁 `VERIFICATION_REPORT.md` → `docs/reports/v0.2.2/`
+- 补 `.gitignore` 加 `.claude/`（本地 Claude Code sub-agent 定义不入公共仓库）
+- 仓库 size 3MB → 1MB，专业度立竿见影
+
+### 差异化定位落地（方向 B：MCP + 多模型 + 多范式三合一）
+
+3 个文档全部基于代码事实（不夸大）：
+
+- `README.md` 顶部从中性 "Local Multi-Model Agent Runtime" 重写为方向 B 一句话定位 + 三件合一能力卡片 + 8 范式 + 20 工具 + 三件套
+- `docs/COMPARISON.md`（新增 155 行）—— vs Aider / Claude Code / OpenCode / Crush 在 8 维度能力矩阵（MCP / 多模型 / 多范式 / 本地优先 / 工具断路器 / 上下文压缩 / 空洞回答检测 / 三阶段预算）+ 7 类场景推荐
+- `docs/ARCHITECTURE.md`（新增 295 行）—— 8 引擎分类（直答/循环/计划/审查/创意 + 3 组合）+ 路由层 + 三件套 + ToolExecutor 7 阶段 + MCP 双传输
+
+**重要事实修正**（不夸大、不藏）：
+- omniagent 实际有 **8 个引擎**（含 NovelEngine，README 之前漏提）
+- MCP 子进程用 `select`+墙钟超时替代阻塞 readline（B11 修复）—— 真实
+- 子进程退出用 `terminate()+kill()` 兜底无僵尸 —— 真实
+- MCP server **不自动重启** —— 真实限制，已在 COMPARISON 列为已知后续项
+
+### 评测数据（Real 模式首次跑通，5/20 → 9/20，+80%）
+
+`docs/EVAL_RESULTS.md` v2 报告（157 行 diff）：
+
+- Mock 模式 20/20（框架自检，CI 跑通）
+- Real 模式 9/20（45%，DeepSeek-V4-Pro via 火山方舟）
+- 工具调用 160 次（v1 56，+186% multi-turn 累积），断路器/异常处理/multi-turn history 路径全部正常
+
+**方案 C 三个根因通用机制修复**（不硬编码、不动评分、不动 expected_tools）：
+
+| 根因 | 修复 | 影响 |
+| --- | --- | --- |
+| 根因 1：RealAgent 单轮不友好 | `evals/runner.py` `RealAgent` 加 `max_turns=3`，每轮共享 `ContextManager` 累积 history，前一轮 `answer` 注入后一轮 user_input 作为 review feedback | `generate-diff-preview` 等改判成功 |
+| 根因 2：workdir 太简单 | `/tmp/omniagent_real_workdir`：cp omniagent/{omniagent,tests,evals,docs} + `.omniagent/rules.md`（132 文件 / 114 py） | `use-project-rules` / `code-search-entrypoint` / `code-search-model-router` 等 5 任务改判成功 |
+| 根因 3：ReAct 拒绝兜底固定 2 次 | `react_engine.py` 自适应 `max(2, max_iterations // 2)` 重试上限 | `generate-diff-preview` 改判成功 |
+
+**11 个 v2 失败里 4 个仍是任务设计问题**（不是引擎问题）：
+`revise-after-test-failure` / `revise-after-review` / `handle-missing-api-key` / `mcp-tool-flow`
+需要 REPL 命令介入，RealAgent 只跑 ReAct 工具循环。v3.x 路线：RealAgent 接入 REPL。
+
+### Bug 修复
+
+#### 粘贴模式状态机死锁（Ctrl+Shift+V 粘贴不显示 + 按空格重复粘贴）
+
+**根因**：CHANGELOG v0.2.2 启用了 bracketed paste 模式（`\x1b[?2004h`），但
+**paste_mode 状态机在结束信号 `\x1b[201~` 丢失时死锁**：
+1. 终端发 `\x1b[200~` → `paste_mode = True`
+2. 终端发 `\x1b[201~` **结束信号丢失**（被 select 0.01s 切碎 / 某些终端不响应）
+3. `paste_mode` 永远 True（状态机死锁）
+4. 用户按空格 → 进 paste_mode 分支被插入 `current_line` 但 `continue` 不重绘
+5. 用户看到"按空格不显示 + 字符累积成重复粘贴"症状
+
+**通用机制修复**（不硬编码、不针对特定任务/终端加白名单）：
+- 加 `paste_last_byte_at` 跟踪 paste_mode 期间最后字节时间
+- select **0.3s 无新字节** → 自动退出 `paste_mode` + 强制 `_redraw_line()`
+- 进入 paste_mode 时记录时间戳
+- paste_mode 字符处理末尾刷新时间戳
+- `\x1b[201~` 正常收到时清空时间戳
+
+### 约束
+
+- 930/930 单测全绿（96.37s）—— 零业务回归
+- 评分函数 `_score` **未动**（不硬编码）
+- `expected_tools` 列表**未动**（任务定义本身合理）
+- 通用机制改进，**不**针对特定任务加白名单
+- 不动 `.omniagent/` 本地配置目录
+
 ## [0.2.2] — 2026-07-08
 
 ### 工具可用性全面修复
