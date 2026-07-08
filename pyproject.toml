@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omniagent-cli"
-version = "0.2.1"
+version = "0.2.2"
 description = "A decoupled, config-driven multi-model AI programming Agent scheduling engine"
 readme = "README.md"
 license = {text = "MIT"}
