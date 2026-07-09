@@ -350,7 +350,13 @@ _PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
 
 
 def _load_credentials() -> dict[str, str]:
-    """从 ~/.omniagent/credentials.yaml 或环境变量加载 API Key。"""
+    """从 ~/.omniagent/credentials.yaml 或环境变量加载 API Key。
+
+    v0.3.0+ 修复（C-2 延伸）：anthropic 厂商额外 fallback ANTHROPIC_AUTH_TOKEN
+    （Claude Code / Anthropic SDK 标准环境变量）。原来只认 ANTHROPIC_API_KEY，
+    导致 Claude Code 内跑 omniagent 走代理（如火山方舟）时即便 ANTHROPIC_AUTH_TOKEN
+    已设也会报"未找到 API Key"。
+    """
     creds: dict[str, str] = {}
     if _CREDENTIALS_PATH.exists():
         with open(_CREDENTIALS_PATH, encoding="utf-8") as f:
@@ -362,6 +368,12 @@ def _load_credentials() -> dict[str, str]:
         env_val = os.getenv(cfg["env_key"])
         if env_val:
             creds[provider] = env_val
+
+    # v0.3.0+ 修复（C-2）：anthropic 额外 fallback ANTHROPIC_AUTH_TOKEN
+    if not creds.get("anthropic"):
+        auth_token = os.getenv("ANTHROPIC_AUTH_TOKEN")
+        if auth_token:
+            creds["anthropic"] = auth_token
     return creds
 
 
@@ -395,7 +407,13 @@ def build_endpoint(model_id: str, credentials: dict[str, str] | None = None, bas
     return ModelEndpoint(
         provider=provider,
         model_name=model_name,
-        base_url=base_url or defaults["base_url"],
+        # v0.3.0+ 修复（C-2 延伸）：base_url 优先级：函数参数 > <PROVIDER>_BASE_URL env > defaults
+        # 兼容 Claude Code / Anthropic SDK 用户通过 ANTHROPIC_BASE_URL 走代理的场景
+        base_url=(
+            base_url
+            or os.getenv(f"{provider.upper()}_BASE_URL")
+            or defaults["base_url"]
+        ),
         api_key=api_key,
     )
 
