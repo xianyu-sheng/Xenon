@@ -281,6 +281,16 @@ class TestProviderRegistry:
     def test_get_configured_providers_refreshes_openai_models(self, monkeypatch):
         import omniagent.repl.provider_registry as provider_registry
 
+        # C-2: 清掉所有可能的 env 干扰，确保只测 yaml 路径
+        for env_name in (
+            "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+            "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "GOOGLE_API_KEY",
+            "ZHIPU_API_KEY", "QWEN_API_KEY", "MOONSHOT_API_KEY",
+            "BAICHUAN_API_KEY", "MINIMAX_API_KEY", "OLLAMA_API_KEY",
+            "XIAOMI_API_KEY",
+        ):
+            monkeypatch.delenv(env_name, raising=False)
+
         class FakeResponse:
             def raise_for_status(self):
                 pass
@@ -318,6 +328,16 @@ class TestProviderRegistry:
     def test_get_configured_providers_refreshes_deepseek_models(self, monkeypatch):
         import omniagent.repl.provider_registry as provider_registry
 
+        # C-2: 清掉所有可能的 env 干扰
+        for env_name in (
+            "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+            "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "GOOGLE_API_KEY",
+            "ZHIPU_API_KEY", "QWEN_API_KEY", "MOONSHOT_API_KEY",
+            "BAICHUAN_API_KEY", "MINIMAX_API_KEY", "OLLAMA_API_KEY",
+            "XIAOMI_API_KEY",
+        ):
+            monkeypatch.delenv(env_name, raising=False)
+
         class FakeResponse:
             def raise_for_status(self):
                 pass
@@ -344,6 +364,16 @@ class TestProviderRegistry:
 
     def test_refresh_failure_does_not_show_stale_builtin_models(self, monkeypatch):
         import omniagent.repl.provider_registry as provider_registry
+
+        # C-2: 清掉所有可能的 env 干扰
+        for env_name in (
+            "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+            "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "GOOGLE_API_KEY",
+            "ZHIPU_API_KEY", "QWEN_API_KEY", "MOONSHOT_API_KEY",
+            "BAICHUAN_API_KEY", "MINIMAX_API_KEY", "OLLAMA_API_KEY",
+            "XIAOMI_API_KEY",
+        ):
+            monkeypatch.delenv(env_name, raising=False)
 
         def fake_get(url, headers):
             raise provider_registry.httpx.ConnectError("network down")

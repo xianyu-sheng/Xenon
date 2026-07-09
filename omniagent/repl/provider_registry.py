@@ -8,6 +8,7 @@ Provider Registry — 预设厂商信息库。
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -320,29 +321,60 @@ def get_configured_providers(*, refresh_models: bool = True) -> list[ProviderInf
 
     refresh_models=True 时只使用厂商实时接口返回的模型，避免把内置兜底列表
     误展示为最新模型；refresh_models=False 时才返回内置示例列表。
+
+    v0.3.0+ 修复（C-2）：API Key 解析顺序为
+    1) ~/.omniagent/credentials.yaml（最高优先级）
+    2) 环境变量 info.env_key
+    3) anthropic 厂商额外 fallback ANTHROPIC_AUTH_TOKEN（Claude Code / Anthropic SDK 标准）
     """
     creds = load_credentials()
     configured = []
     for key, info in PROVIDERS.items():
-        if key in creds and creds[key]:
-            if refresh_models:
-                models = fetch_provider_models(info, creds[key])
-                if models:
-                    # v0.3.0+ 修复（B-3）：拉取的列表按内置 info.models 顺序重排
-                    # 通用机制：内置"已知能力排序"（如 deepseek-v4-pro > v4-flash）
-                    # 优先于外部 API 返回顺序——外部 API 顺序由服务器决定
-                    # 不可控。保持拉取列表里**内置未列出**的模型原顺序追加。
-                    models = _sort_models_by_priority(models, info.models)
-            else:
-                models = info.models
-            info_copy = ProviderInfo(
-                name=info.name, key=info.key, base_url=info.base_url,
-                env_key=info.env_key, models=models, api_key=creds[key],
-                model_list_path=info.model_list_path,
-                model_error=MODEL_FETCH_ERRORS.get(key, ""),
-            )
-            configured.append(info_copy)
+        api_key = _resolve_api_key(key, info, creds)
+        if not api_key:
+            continue
+        if refresh_models:
+            models = fetch_provider_models(info, api_key)
+            if models:
+                # v0.3.0+ 修复（B-3）：拉取的列表按内置 info.models 顺序重排
+                # 通用机制：内置"已知能力排序"（如 deepseek-v4-pro > v4-flash）
+                # 优先于外部 API 返回顺序——外部 API 顺序由服务器决定
+                # 不可控。保持拉取列表里**内置未列出**的模型原顺序追加。
+                models = _sort_models_by_priority(models, info.models)
+        else:
+            models = info.models
+        info_copy = ProviderInfo(
+            name=info.name, key=info.key, base_url=info.base_url,
+            env_key=info.env_key, models=models, api_key=api_key,
+            model_list_path=info.model_list_path,
+            model_error=MODEL_FETCH_ERRORS.get(key, ""),
+        )
+        configured.append(info_copy)
     return configured
+
+
+def _resolve_api_key(
+    provider_key: str, info: ProviderInfo, creds: dict[str, str]
+) -> str:
+    """解析厂商 API Key。
+
+    v0.3.0+ 修复（C-2）：之前只从 ~/.omniagent/credentials.yaml 读 env_key 字段
+    形同虚设——Claude Code / Anthropic SDK 内设 ANTHROPIC_AUTH_TOKEN 的用户完全
+    无法使用 omniagent。现在支持 yaml → env_key → anthropic 特殊 fallback。
+    """
+    # 1) yaml 配置优先（用户明确指定的最优先）
+    if creds.get(provider_key):
+        return creds[provider_key]
+    # 2) 标准环境变量
+    val = os.getenv(info.env_key)
+    if val:
+        return val
+    # 3) anthropic 厂商额外 fallback：Claude Code / SDK 用 ANTHROPIC_AUTH_TOKEN
+    if provider_key == "anthropic":
+        val = os.getenv("ANTHROPIC_AUTH_TOKEN")
+        if val:
+            return val
+    return ""
 
 
 def _sort_models_by_priority(

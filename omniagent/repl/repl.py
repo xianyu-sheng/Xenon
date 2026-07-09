@@ -177,14 +177,18 @@ class REPL:
             self._handle_chat(user_input)
 
     def _check_first_run(self) -> None:
-        """首次启动时检测配置状态，自动引导。"""
+        """首次启动时检测配置状态，自动引导。
+
+        v0.3.0+ 修复（C-2）：从纯 yaml 检查改为 get_configured_providers 检查，
+        兼容 env 变量（Claude Code 内 ANTHROPIC_AUTH_TOKEN 也能触发自动加载）。
+        """
         from omniagent.repl.provider_registry import get_configured_providers, load_credentials
 
         creds = load_credentials()
         configured = get_configured_providers()
 
-        if not creds:
-            # 完全没有配置 — 引导用户
+        if not creds and not configured:
+            # 完全没有配置（既没 yaml 也没 env）— 引导用户
             console.print("[dim]· 尚未配置 API Key，输入 [bold cyan]/setup[/bold cyan] 进入配置向导[/dim]\n")
         elif not self.registry.list_models():
             # 有 Key 但没选模型 — 自动注册已配置厂商的模型
