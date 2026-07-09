@@ -236,9 +236,17 @@ class REPL:
         top = f"[dim]╭{'─' * (width - 2)}╮[/dim]"
         bottom = f"[dim]╰{'─' * (width - 2)}╯[/dim]"
 
+        # v0.3.0+ 修复（B-4）：版本号从 pyproject.toml 动态读，不再硬编码。
+        # 用 importlib.metadata 优先；失败兜底读本文件邻近的版本常量
+        try:
+            from importlib.metadata import version as _pkg_version
+            _ver = _pkg_version("omniagent-cli")
+        except Exception:
+            _ver = "0.3.0"  # 兜底
+
         lines = [
             "",
-            f"  [bold white]OmniAgent-CLI[/bold white]  [dim]v0.2.0[/dim]",
+            f"  [bold white]OmniAgent-CLI[/bold white]  [dim]v{_ver}[/dim]",
             f"  [dim]Multi-Model AI Coding Assistant[/dim]",
             "",
             f"  [dim]范式[/dim]  [bold]{mode.name}[/bold]  [dim]— {mode.description}[/dim]",

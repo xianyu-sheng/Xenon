@@ -327,6 +327,12 @@ def get_configured_providers(*, refresh_models: bool = True) -> list[ProviderInf
         if key in creds and creds[key]:
             if refresh_models:
                 models = fetch_provider_models(info, creds[key])
+                if models:
+                    # v0.3.0+ 修复（B-3）：拉取的列表按内置 info.models 顺序重排
+                    # 通用机制：内置"已知能力排序"（如 deepseek-v4-pro > v4-flash）
+                    # 优先于外部 API 返回顺序——外部 API 顺序由服务器决定
+                    # 不可控。保持拉取列表里**内置未列出**的模型原顺序追加。
+                    models = _sort_models_by_priority(models, info.models)
             else:
                 models = info.models
             info_copy = ProviderInfo(
@@ -337,3 +343,22 @@ def get_configured_providers(*, refresh_models: bool = True) -> list[ProviderInf
             )
             configured.append(info_copy)
     return configured
+
+
+def _sort_models_by_priority(
+    fetched: list[str], priority: list[str]
+) -> list[str]:
+    """按内置 priority 列表顺序重排 fetched 列表。
+
+    v0.3.0+ 修复（B-3）：deepseek API 返回的模型列表里
+    `deepseek-v4-flash` 在 `deepseek-v4-pro` 之前，但内置 info.models
+    里 v4-pro 在前——这导致 REPL 自动加载 `p.models[0]` 时选了 v4-flash
+    而非配置的 v4-pro。
+    通用机制：内置 priority 决定默认模型选择顺序，拉取列表中未在
+    priority 的项保持原顺序追加在末尾。
+    """
+    p_idx = {m: i for i, m in enumerate(priority)}
+    in_priority = [m for m in fetched if m in p_idx]
+    not_in_priority = [m for m in fetched if m not in p_idx]
+    in_priority.sort(key=lambda m: p_idx[m])
+    return in_priority + not_in_priority

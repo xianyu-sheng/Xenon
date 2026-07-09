@@ -557,12 +557,22 @@ class ToolNode(BaseNode):
             return
 
         cmd_lower = cmd.lower().strip()
+        # v0.3.0+ 修复（B-1）：匹配前先剥取引号内容（防止 echo "rm -rf /" 等
+        # 字符串字面量触发误报）。通用机制，不针对特定任务加白名单。
+        cmd_stripped = self._strip_quoted(cmd_lower)
         for pattern in _DANGEROUS_CMD_PATTERNS:
-            if re.search(pattern, cmd_lower):
+            if re.search(pattern, cmd_stripped):
                 raise SecurityError(
                     f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。"
                     f"命令: {cmd[:100]}"
                 )
+
+    @staticmethod
+    def _strip_quoted(cmd_lower: str) -> str:
+        """去掉双/单引号内的内容（v0.3.0+ B-1 修复：字符串字面量不触发误报）。"""
+        s = re.sub(r'"[^"]*"', '""', cmd_lower)
+        s = re.sub(r"'[^']*'", "''", s)
+        return s
 
     def _validate_git_command(self, git_cmd: str) -> None:
         """验证 Git 子命令是否安全。

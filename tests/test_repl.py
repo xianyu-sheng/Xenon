@@ -306,7 +306,11 @@ class TestProviderRegistry:
         configured = provider_registry.get_configured_providers()
         openai = next(p for p in configured if p.key == "openai")
 
-        assert openai.models == ["gpt-5.5", "gpt-5", "gpt-4o"]
+        # v0.3.0+ 修复（B-3）后：fetch 阶段按 created 倒序
+        # （["gpt-5.5", "gpt-5", "gpt-4o"]）再按内置 info.models priority
+        # `["gpt-4o", "gpt-4o-mini", ...]` 重排 → gpt-4o 排第一，
+        # 未在 priority 的 gpt-5.5 / gpt-5 保持 fetch 原顺序追加。
+        assert openai.models == ["gpt-4o", "gpt-5.5", "gpt-5"]
         assert calls[0][0] == "https://api.openai.com/v1/models"
         assert calls[0][1]["Accept"] == "application/json"
         assert calls[0][1]["Authorization"] == "Bearer sk-test"
