@@ -276,6 +276,33 @@ def _cmd_models(*, registry: ModelRegistry, **kwargs: Any) -> str:
     return "\n".join(lines)
 
 
+# /pool ────────────────────────────────────────────────────
+
+register_command("/pool", "查看模型调用池（v0.4.0）", "/pool")
+
+@_handler("/pool")
+def _cmd_pool(*, session_state: dict, **kwargs: Any) -> str:
+    """v0.4.0: 显示 ModelPool 状态."""
+    pool = session_state.get("model_pool")
+    if not pool or pool.is_empty():
+        return "调用池为空。请先通过 /setup 配置模型。"
+
+    lines = ["[bold]模型调用池:[/bold]\n"]
+    for e in pool.list_all():
+        h = e.health
+        status = "[green]●[/green]" if h.consecutive_failures == 0 else (
+            "[red]✕[/red]" if h.circuit_open_until > 0 else "[yellow]◐[/yellow]"
+        )
+        weight_str = f"权重={e.weight:.1f}"
+        health_str = f"调用{h.total_calls}次"
+        if h.avg_latency > 0:
+            health_str += f" 延迟{h.avg_latency:.1f}s"
+        lines.append(f"  {status} {e.alias} → {e.model_id}")
+        lines.append(f"         {weight_str}  {health_str}")
+
+    return "\n".join(lines)
+
+
 # /set_role ────────────────────────────────────────────────
 
 register_command(

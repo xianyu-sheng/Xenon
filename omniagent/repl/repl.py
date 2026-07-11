@@ -215,27 +215,35 @@ class REPL:
         if not creds and not configured:
             # 完全没有配置（既没 yaml 也没 env）— 引导用户
             console.print("[dim]· 尚未配置 API Key，输入 [bold cyan]/setup[/bold cyan] 进入配置向导[/dim]\n")
-        elif not self.registry.list_models():
-            # 有 Key 但没选模型 — 自动注册已配置厂商的模型
+        else:
+            # v0.4.0: always populate model pool from ALL configured providers
+            pool_count = 0
             for p in configured:
-                if p.models:
-                    model_id = f"{p.key}/{p.models[0]}"
-                    alias = p.models[0].replace(".", "-")
-                    self.registry.add_model(model_id, alias)
-                    if "planner" not in self.registry.role_priority:
-                        self.registry.role_priority["planner"] = []
-                    self.registry.role_priority["planner"].append(alias)
+                if not p.models or "(auto-fetch" in str(p.models[0]):
+                    continue
+                for model_name in p.models[:3]:  # top 3 per provider
+                    model_id = f"{p.key}/{model_name}"
+                    alias = model_name.replace(".", "-")
+                    # Register to pool (if not already there)
+                    if not self.model_pool.get(alias):
+                        self.model_pool.register(
+                            model_id, alias=alias, weight=3.0,
+                            api_key=p.api_key, base_url=p.base_url,
+                        )
+                        pool_count += 1
+                    # Also ensure registry has it (backward compat)
+                    if not self.registry.list_models() or alias not in {m.alias for m in self.registry.list_models()}:
+                        self.registry.add_model(model_id, alias)
+                        if "planner" not in self.registry.role_priority:
+                            self.registry.role_priority["planner"] = []
+                        if alias not in self.registry.role_priority["planner"]:
+                            self.registry.role_priority["planner"].append(alias)
 
-            if self.registry.list_models():
-                models = self.registry.list_models()
-                # v0.4.0: auto-populate model pool from registry
-                for m in models:
-                    self.model_pool.register(
-                        m.model_id, alias=m.alias,
-                        weight=getattr(m, 'weight', 1.0),
-                        api_key=m.api_key, base_url=m.base_url,
-                    )
-                console.print(f"[dim]· 已自动加载 {len(models)} 个模型到调用池，输入 [bold cyan]/setup[/bold cyan] 配置模型池[/dim]\n")
+            if pool_count > 0:
+                console.print(f"[dim]· 已加载 {pool_count} 个模型到调用池[/dim]")
+                if len(configured) > 1:
+                    console.print(f"[dim]· auto 模式: 根据任务难度自动选择模型[/dim]")
+            console.print()
 
         # 加载自定义快捷指令和技能
         self._load_custom_commands()
