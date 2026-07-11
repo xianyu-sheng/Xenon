@@ -557,15 +557,21 @@ def _register_custom(registry=None, model_pool=None) -> None:
 
         # Auto-register models to pool (v0.4.0)
         if info.models and "(auto-fetch" not in str(info.models[0]):
-            for model_name in info.models[:5]:  # register top 5
-                model_id = f"{info.key}/{model_name}"
-                alias = model_name.replace(".", "-")
-                if model_pool:
+            if model_pool:
+                for model_name in info.models[:5]:
+                    model_id = f"{info.key}/{model_name}"
+                    alias = model_name.replace(".", "-")
                     model_pool.register(model_id, alias=alias, weight=3.0,
                                         api_key=api_key, base_url=info.base_url)
-                else:
+                console.print(f"[green]✓ 已自动注册 5 个模型到调用池[/green]")
+            elif registry is not None:
+                for model_name in info.models[:5]:
+                    model_id = f"{info.key}/{model_name}"
+                    alias = model_name.replace(".", "-")
                     registry.add_model(model_id, alias)
-            console.print(f"[green]✓ 已自动注册模型到调用池[/green]")
+                console.print(f"[green]✓ 已注册模型[/green]")
+            else:
+                console.print(f"[dim]模型已保存，请用菜单3选择模型[/dim]")
 
     except Exception as e:
         console.print(f"[red]✗ 注册失败: {e}[/red]")
