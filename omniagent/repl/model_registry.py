@@ -29,7 +29,8 @@ class ModelConfig:
     base_url: str = ""      # 可选，自定义端点
     max_tokens: int = 4096  # 生成输出上限（B4 钳制用）
     temperature: float = 0.7
-    context_window: int = 128000  # 上下文窗口（input+output 预算），供 ContextManager 注入（R4）
+    context_window: int = 128000  # 上下文窗口（R4）
+    weight: float = 1.0            # v0.4.0: 模型池权重
 
 
 @dataclass
@@ -103,7 +104,7 @@ class ModelRegistry:
         Args:
             model_id: "provider/model_name" 格式
             alias: 简短别名
-            **kwargs: api_key, base_url, max_tokens, temperature, context_window
+            **kwargs: api_key, base_url, max_tokens, temperature, context_window, weight
         """
         config = ModelConfig(model_id=model_id, alias=alias, **kwargs)
         self.models[alias] = config
@@ -191,6 +192,7 @@ class ModelRegistry:
                     "max_tokens": m.max_tokens,
                     "temperature": m.temperature,
                     "context_window": m.context_window,
+                    "weight": m.weight,
                 }
                 for alias, m in self.models.items()
             },
