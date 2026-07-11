@@ -260,14 +260,20 @@ def _setup_api_key() -> None:
         status = "[green]已配置[/green]" if p.key in creds and creds[p.key] else "[dim]未配置[/dim]"
         models_str = ", ".join(p.models[:3]) + ("..." if len(p.models) > 3 else "")
         table.add_row(str(i), p.name, models_str, status)
+    # v0.4.0: add custom provider entry
+    custom_idx = len(providers) + 1
+    table.add_row(str(custom_idx), "[bold cyan]自定义模型商[/bold cyan]", "任意 OpenAI 兼容 API", "[dim]手动添加[/dim]")
 
     console.print(table)
     console.print()
 
     idx = IntPrompt.ask(
         "输入厂商编号",
-        choices=[str(i) for i in range(1, len(providers) + 1)],
+        choices=[str(i) for i in range(1, len(providers) + 2)],
     )
+    if idx == custom_idx:
+        _register_custom(registry=None, model_pool=None)
+        return
     provider = providers[idx - 1]
 
     console.print(f"\n[bold]{provider.name}[/bold]")
@@ -508,8 +514,14 @@ def _mode_scene(mode_name: str) -> str:
 
 # ── v0.4.0: 自定义模型商注册 ──────────────────────────────
 
-def _register_custom(registry, model_pool=None) -> None:
-    """注册自定义模型商——用户输入名称、base_url、API key。"""
+def _register_custom(registry=None, model_pool=None) -> None:
+    """注册自定义模型商——用户输入名称、base_url、API key。
+
+    v0.4.0: 可从菜单选项 1（内置列表末尾）或选项 6 调用。
+    """
+    # Try to get model_pool from registry if not provided
+    if model_pool is None and registry is not None:
+        model_pool = getattr(registry, 'model_pool', None)
     console.print("\n[bold cyan]═══ 注册自定义模型商 ═══[/bold cyan]")
     console.print("[dim]适用于任意 OpenAI 兼容 API（豆包、零一万物、本地模型等）[/dim]\n")
 
