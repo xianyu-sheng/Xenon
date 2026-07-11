@@ -473,3 +473,7 @@ def _save_custom_provider(info: ProviderInfo) -> None:
     creds = load_credentials()
     creds[_CUSTOM_PROVIDERS_KEY] = all_custom
     save_credentials(creds)
+
+
+# Public alias
+list_custom_providers = _load_custom_providers

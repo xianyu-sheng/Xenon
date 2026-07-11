@@ -24,6 +24,8 @@ from omniagent.repl.provider_registry import (
     get_configured_providers,
     fetch_provider_models,
     MODEL_FETCH_ERRORS,
+    register_custom_provider,
+    remove_custom_provider,
 )
 
 if TYPE_CHECKING:
@@ -220,9 +222,10 @@ def interactive_setup(registry: ModelRegistry) -> None:
         console.print("  [cyan]3[/cyan]. 选择/切换模型")
         console.print("  [cyan]4[/cyan]. 选择思考范式")
         console.print("  [cyan]5[/cyan]. 删除 API Key")
+        console.print("  [cyan]6[/cyan]. 注册自定义模型商 [dim](v0.4.0)[/dim]")
         console.print("  [cyan]0[/cyan]. 退出配置\n")
 
-        choice = Prompt.ask("请输入数字", choices=["0", "1", "2", "3", "4", "5"], default="0")
+        choice = Prompt.ask("请输入数字", choices=["0", "1", "2", "3", "4", "5", "6"], default="0")
 
         if choice == "0":
             console.print("[dim]配置完成[/dim]\n")
@@ -237,6 +240,8 @@ def interactive_setup(registry: ModelRegistry) -> None:
             _select_mode(registry)
         elif choice == "5":
             _remove_api_key(registry)
+        elif choice == "6":
+            _register_custom(registry)
 
 
 def _setup_api_key() -> None:
@@ -485,3 +490,63 @@ def _mode_scene(mode_name: str) -> str:
         "react-reflection": "探索执行+审查修正",
     }
     return scenes.get(mode_name, "")
+
+
+# ── v0.4.0: 自定义模型商注册 ──────────────────────────────
+
+def _register_custom(registry) -> None:
+    """注册自定义模型商——用户输入名称、base_url、API key。"""
+    console.print("\n[bold cyan]═══ 注册自定义模型商 ═══[/bold cyan]")
+    console.print("[dim]适用于任意 OpenAI 兼容 API（豆包、零一万物、本地模型等）[/dim]\n")
+
+    name = Prompt.ask("模型商名称", default="")
+    if not name.strip():
+        console.print("[yellow]已取消[/yellow]\n")
+        return
+
+    base_url = Prompt.ask(
+        "API 地址 (base_url)",
+        default="https://api.example.com/v1",
+    )
+
+    console.print("[dim]（输入 API Key，会显示输入，回车确认）[/dim]")
+    api_key = _clean_api_key(_masked_input(f"请输入 {name} 的 API Key"))
+
+    if not api_key:
+        console.print("[yellow]已取消[/yellow]\n")
+        return
+
+    console.print(f"\n[dim]正在从 {base_url}/models 拉取模型列表...[/dim]")
+    try:
+        info = register_custom_provider(name, base_url, api_key)
+        if "(auto-fetch failed" in str(info.models[0]) if info.models else "":
+            console.print(f"[yellow]⚠ 模型列表拉取失败，但已保存配置[/yellow]")
+            console.print(f"[dim]可稍后重试，或检查 base_url 是否正确[/dim]")
+        else:
+            console.print(f"[green]✓ 发现 {len(info.models)} 个模型[/green]")
+            for m in info.models[:5]:
+                console.print(f"  - {m}")
+            if len(info.models) > 5:
+                console.print(f"  ... 等 {len(info.models)} 个模型")
+
+        # Auto-register models to pool
+        model_pool = getattr(registry, '_pool', None) or getattr(
+            getattr(registry, '_repl', None), 'model_pool', None
+        )
+        if info.models and "(auto-fetch" not in str(info.models[0]):
+            for model_name in info.models[:5]:  # register top 5
+                model_id = f"{info.key}/{model_name}"
+                alias = model_name.replace(".", "-")
+                if model_pool:
+                    model_pool.register(model_id, alias=alias, weight=3.0,
+                                        api_key=api_key, base_url=info.base_url)
+                else:
+                    registry.add_model(model_id, alias)
+            console.print(f"[green]✓ 已自动注册模型到调用池[/green]")
+
+    except Exception as e:
+        console.print(f"[red]✗ 注册失败: {e}[/red]")
+
+    console.print()
+
+    # Also show custom providers in _show_configured
