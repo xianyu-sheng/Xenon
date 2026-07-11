@@ -231,7 +231,7 @@ def interactive_setup(registry: ModelRegistry, model_pool=None) -> None:
             console.print("[dim]配置完成[/dim]\n")
             break
         elif choice == "1":
-            _setup_api_key()
+            _setup_api_key(model_pool)
         elif choice == "2":
             _show_configured()
         elif choice == "3":
@@ -244,7 +244,7 @@ def interactive_setup(registry: ModelRegistry, model_pool=None) -> None:
             _register_custom(registry, model_pool)
 
 
-def _setup_api_key() -> None:
+def _setup_api_key(model_pool=None) -> None:
     """配置 API Key — 展示厂商列表，用户选择并输入 Key。"""
     providers = list_providers()
 
@@ -272,7 +272,7 @@ def _setup_api_key() -> None:
         choices=[str(i) for i in range(1, len(providers) + 2)],
     )
     if idx == custom_idx:
-        _register_custom(registry=None, model_pool=None)
+        _register_custom(registry=None, model_pool=model_pool)
         return
     provider = providers[idx - 1]
 
