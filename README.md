@@ -6,6 +6,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)]()
 [![Tests](https://img.shields.io/badge/tests-1000%2B-brightgreen.svg)]()
+[![HumanEval](https://img.shields.io/badge/HumanEval-87.8%25_(144%2F164)-success.svg)](https://github.com/xianyu-sheng/omniagent/blob/ubutnu/evals/humaneval_runner.py)
 
 ![OmniAgent terminal demo](docs/assets/terminal-demo.svg)
 
@@ -183,7 +184,17 @@ pytest tests/chaos/
 # Eval 框架（mock 模式 100%，real 模式需 API key）
 python evals/runner.py --mode mock
 python evals/runner.py --mode real --model deepseek/deepseek-v4-pro
+
+# HumanEval 基准（164 题 Python 函数补全）
+python evals/humaneval_runner.py --model deepseek/deepseek-v4-pro --num-tasks 164
 ```
+
+| 评测 | 结果 |
+|------|------|
+| HumanEval pass@1 (deepseek-v4-pro) | **144/164 (87.8%)** |
+| 单元测试 | 1000+ 通过 |
+| 混沌测试 | 31/31 通过 |
+
 
 ---
 
