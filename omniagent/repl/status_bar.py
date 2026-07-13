@@ -11,6 +11,7 @@ Status Bar — 底部状态栏。
 
 from __future__ import annotations
 
+import time as _time
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -43,6 +44,8 @@ class StatusBar:
         self._streaming = True
         self._last_model: str | None = None
         self._auto_router = None  # v0.4.0: set by REPL
+        self._notification: str | None = None  # v0.4.0: 一次性通知
+        self._notification_expires: float = 0.0
 
     def set_last_model(self, model_id: str) -> None:
         """记录最近一次使用的模型。"""
@@ -50,6 +53,15 @@ class StatusBar:
 
     def set_streaming(self, enabled: bool) -> None:
         self._streaming = enabled
+
+    def set_mode_notification(self, mode_name: str) -> None:
+        """设置一次性模式切换通知（3 秒后自动清除）。"""
+        self._notification = f"🔄 切换至: {mode_name}"
+        self._notification_expires = _time.monotonic() + 3.0
+
+    def _clear_expired_notification(self) -> None:
+        if self._notification and _time.monotonic() > self._notification_expires:
+            self._notification = None
 
     @staticmethod
     def _parse_pct(ratio) -> float:
@@ -129,7 +141,13 @@ class StatusBar:
         if stats["undo_available"] > 0:
             status_parts.append(f"[dim]↩×{stats['undo_available']}[/dim]")
 
-        content = "  │  ".join(status_parts)
+        # v0.4.0: 通知横幅
+        self._clear_expired_notification()
+        notification_line = ""
+        if self._notification:
+            notification_line = f"[bold yellow]{self._notification}[/bold yellow]  "
+
+        content = notification_line + "  │  ".join(status_parts)
 
         return Panel(
             content,
@@ -178,10 +196,16 @@ class StatusBar:
         else:
             token_color = "green"
 
+        # v0.4.0: 通知横幅
+        self._clear_expired_notification()
+        notify = ""
+        if self._notification:
+            notify = f"[bold yellow]{self._notification}[/bold yellow] │ "
+
         # ⚠建议 /compact 置首，保证可见（§8.18.2）
         warn = "[bold red]⚠ 建议 /compact[/bold red] │ " if stats["needs_compact"] else ""
 
-        line = (
+        line = (notify +
             f"[dim]┌─ {warn}{model_display} │ {mode.name} │ "
             f"[{token_color}]Token {used:,}/{max_tok:,} ({ratio})[/{token_color}] │ "
             f"消息 {stats['total_messages']} │ {stream}"

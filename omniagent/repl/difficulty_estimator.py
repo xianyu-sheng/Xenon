@@ -80,6 +80,37 @@ class DifficultyEstimator:
         return min(score, 1.0)
 
     @staticmethod
+    def estimate_tier(profile: TaskProfile) -> int:
+        """从 TaskProfile 估计任务层级 (1-5)，用于多优先级队列调度。
+
+        - complexity ≤ 0.2 → tier 1 (琐碎：问候、简单查询)
+        - complexity ≤ 0.4 → tier 2 (轻量：解释、翻译)
+        - complexity ≤ 0.6 → tier 3 (标准：代码生成、调试)
+        - complexity ≤ 0.8 → tier 4 (复杂：重构、多文件)
+        - complexity > 0.8 → tier 5 (旗舰：架构设计)
+        """
+        c = profile.complexity
+        if c <= 0.2:
+            tier = 1
+        elif c <= 0.4:
+            tier = 2
+        elif c <= 0.6:
+            tier = 3
+        elif c <= 0.8:
+            tier = 4
+        else:
+            tier = 5
+
+        # 需要推理的任务至少升至 tier 3
+        if profile.requires_reasoning and tier < 3:
+            tier = 3
+        # 需要代码生成且复杂度高，升至 tier 4
+        if profile.requires_code_generation and c > 0.5 and tier < 4:
+            tier = 4
+
+        return tier
+
+    @staticmethod
     def _needs_tools(text: str, intent: str | None) -> bool:
         if intent in ("query", "write_code"):
             return True

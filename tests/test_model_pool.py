@@ -83,9 +83,10 @@ class TestHealthTracking:
 
 
 class TestModelSelection:
-    """模型选择."""
+    """模型选择（v0.4.0 Step 10: 层级队列调度）."""
 
-    def test_select_returns_higher_weight_first(self):
+    def test_simple_task_prefers_budget_model(self):
+        """简单任务（complexity=0.1）应优先选择低成本模型。"""
         pool = ModelPool()
         pool.register("a/pro", alias="pro", weight=5.0)
         pool.register("b/mini", alias="mini", weight=1.0)
@@ -96,9 +97,53 @@ class TestModelSelection:
             requires_code_generation = False
             requires_tools = False
             estimated_tokens = 100
+            _tier = 1
 
         best = pool.select_best(Simple(), count=2)
-        assert best[0].alias == "pro"
+        assert best[0].alias == "mini"  # tier 2, closest to task tier 1
+
+    def test_complex_task_prefers_flagship_model(self):
+        """复杂任务（complexity=0.9）应优先选择旗舰模型。"""
+        pool = ModelPool()
+        pool.register("a/pro", alias="pro", weight=5.0)
+        pool.register("b/mini", alias="mini", weight=1.0)
+
+        class Complex:
+            complexity = 0.9
+            requires_reasoning = True
+            requires_code_generation = True
+            requires_tools = True
+            estimated_tokens = 8000
+            _tier = 5
+
+        best = pool.select_best(Complex(), count=2)
+        assert best[0].alias == "pro"  # tier 5, matches task tier 5
+
+    def test_work_stealing_to_higher_tier(self):
+        """当 target tier 无模型时，向更高 tier 窃取。"""
+        pool = ModelPool()
+        pool.register("a/pro", alias="pro", weight=1.0)  # tier 5
+
+        class Medium:
+            complexity = 0.5
+            _tier = 3
+
+        best = pool.select_best(Medium(), count=2)
+        assert len(best) == 1
+        assert best[0].alias == "pro"  # stolen from tier 5
+
+    def test_work_stealing_to_lower_tier(self):
+        """当 target tier 和更高 tier 都无模型时，向更低 tier 窃取。"""
+        pool = ModelPool()
+        pool.register("b/mini", alias="mini", weight=1.0)  # tier 2
+
+        class Hard:
+            complexity = 0.9
+            _tier = 5
+
+        best = pool.select_best(Hard(), count=2)
+        assert len(best) == 1
+        assert best[0].alias == "mini"  # stolen from tier 2
 
     def test_empty_pool(self):
         assert ModelPool().select_best(None) == []

@@ -48,6 +48,7 @@ class BaseEngine(ABC):
         model_configs: dict[str, Any] | None = None,
         temperature: float = 0.3,
         model_pool: Any = None,  # v0.4.0: ModelPool for health tracking
+        auto_router: Any = None,  # v0.4.0 Step 13: AutoRouter for per-step routing
     ) -> None:
         self.model_priority = list(model_priority)
         self.callback = callback or EngineCallback()
@@ -55,6 +56,7 @@ class BaseEngine(ABC):
         self.model_configs = model_configs or {}
         self.temperature = temperature
         self.model_pool = model_pool  # v0.4.0
+        self.auto_router = auto_router  # v0.4.0 Step 13
         # F6: 协作式中断标志，外部调 interrupt() 后 run() 在下一轮退出
         self._interrupted: bool = False
         # F4: 本次 run 注入的 ContextManager（run 起点设置，供 _history_messages 消费）
@@ -82,6 +84,16 @@ class BaseEngine(ABC):
     def _reset_interrupt(self) -> None:
         """每轮 run() 开头重置中断标志。"""
         self._interrupted = False
+
+    def _resolve_model(self, step_description: str = "", count: int = 3) -> list[str]:
+        """v0.4.0 Step 13: 为当前子步骤解析模型列表。
+
+        如果 auto_router 可用且提供了步骤描述，对子任务重新路由；
+        否则回退到静态 model_priority。
+        """
+        if self.auto_router and step_description:
+            return self.auto_router.route(step_description, count=count)
+        return self.model_priority
 
     def _context_window(self) -> int:
         """当前激活模型的上下文窗口（取最小=瓶颈模型）；未知则 128000。"""

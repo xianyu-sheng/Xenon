@@ -7,6 +7,7 @@ Slash Commands — 斜杠命令处理器。
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -282,24 +283,138 @@ register_command("/pool", "查看模型调用池（v0.4.0）", "/pool")
 
 @_handler("/pool")
 def _cmd_pool(*, session_state: dict, **kwargs: Any) -> str:
-    """v0.4.0: 显示 ModelPool 状态."""
+    """v0.4.0: 显示 ModelPool 状态（含 tier 队列分布）."""
     pool = session_state.get("model_pool")
     if not pool or pool.is_empty():
         return "调用池为空。请先通过 /setup 配置模型。"
 
     lines = ["[bold]模型调用池:[/bold]\n"]
-    for e in pool.list_all():
-        h = e.health
-        status = "[green]●[/green]" if h.consecutive_failures == 0 else (
-            "[red]✕[/red]" if h.circuit_open_until > 0 else "[yellow]◐[/yellow]"
-        )
-        weight_str = f"权重={e.weight:.1f}"
-        health_str = f"调用{h.total_calls}次"
-        if h.avg_latency > 0:
-            health_str += f" 延迟{h.avg_latency:.1f}s"
-        lines.append(f"  {status} {e.alias} → {e.model_id}")
-        lines.append(f"         {weight_str}  {health_str}")
 
+    # Step 10: 按 tier 分组展示
+    tier_queues = pool.get_tier_queues() if hasattr(pool, "get_tier_queues") else {}
+    tier_names = {5: "旗舰 Q5", 4: "高级 Q4", 3: "标准 Q3", 2: "轻量 Q2", 1: "基础 Q1"}
+
+    for tier in range(5, 0, -1):
+        aliases = tier_queues.get(tier, [])
+        if not aliases:
+            lines.append(f"[dim]  {tier_names[tier]}: (空)[/dim]")
+            continue
+        lines.append(f"[bold cyan]  {tier_names[tier]}:[/bold cyan]")
+        for alias in aliases:
+            e = pool.get(alias)
+            if not e:
+                continue
+            h = e.health
+            status = "[green]●[/green]" if h.consecutive_failures == 0 else (
+                "[red]✕[/red]" if h.circuit_open_until > 0 else "[yellow]◐[/yellow]"
+            )
+            health_str = f"调用{h.total_calls}次"
+            if h.avg_latency > 0:
+                health_str += f" 延迟{h.avg_latency:.1f}s"
+            lines.append(
+                f"    {status} {e.alias} → {e.model_id}  "
+                f"(权重={e.weight:.1f} {health_str})"
+            )
+
+    return "\n".join(lines)
+
+
+# /resume ──────────────────────────────────────────────────
+
+register_command("/resume", "恢复上次自动保存的会话（v0.4.0）", "/resume [name]")
+
+@_handler("/resume")
+def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
+    """v0.4.0 Step 14: 恢复自动保存的会话."""
+    from omniagent.repl.session import get_auto_session, load_session, get_session_age
+
+    repl = session_state.get("_repl")
+    if not repl:
+        return "❌ REPL 实例不可用。"
+
+    name = args.strip()
+    try:
+        if name:
+            data = load_session(name)
+        else:
+            data = get_auto_session()
+            if not data:
+                return "没有可恢复的会话。会话可能已过期（7 天）。"
+
+        # 恢复对话历史
+        history = data.get("history", [])
+        if history:
+            # 清空当前上下文并加载历史
+            repl.ctx_mgr.clear_history()
+            for msg in history:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role == "system":
+                    repl.ctx_mgr.add_system_message(content)
+                elif role == "assistant":
+                    repl.ctx_mgr.add_assistant_message(content)
+                else:
+                    repl.ctx_mgr.add_user_message(content)
+
+        # 恢复范式
+        paradigm = data.get("extra", {}).get("paradigm")
+        if paradigm:
+            try:
+                repl.registry.set_mode(paradigm)
+            except ValueError:
+                pass
+
+        # 恢复模型池配置
+        mc = data.get("model_config", {})
+        if mc and repl.model_pool.is_empty():
+            repl.model_pool.from_config(mc)
+
+        age = get_session_age(data) or "未知时间"
+        msgs = len(history)
+        return f"✅ 已恢复会话 ({age}) · {msgs} 条消息 · 范式: {paradigm or 'direct'}"
+
+    except FileNotFoundError:
+        return f"❌ 会话 '{name}' 不存在。"
+    except Exception as e:
+        return f"❌ 恢复失败: {e}"
+
+
+# /history ──────────────────────────────────────────────────
+
+register_command("/history", "查看路由调度历史（v0.4.0）", "/history [N]")
+
+@_handler("/history")
+def _cmd_history(*, args: str, session_state: dict, **kwargs: Any) -> str:
+    """v0.4.0: 显示最近的路由决策历史."""
+    router = session_state.get("auto_router")
+    if not router or not hasattr(router, "history"):
+        return "路由历史不可用（自动路由尚未初始化）。"
+
+    n_str = args.strip()
+    try:
+        n = int(n_str) if n_str else 10
+    except ValueError:
+        return "用法: /history [N]\nN 是要显示的记录条数（默认 10）。"
+
+    records = router.history.recent(n)
+    if not records:
+        return "路由历史为空。发送一些任务后再查看。"
+
+    lines = [f"[bold]最近 {len(records)} 条路由记录:[/bold]\n"]
+    for i, r in enumerate(records, 1):
+        dt = datetime.fromtimestamp(r.timestamp).strftime("%H:%M:%S")
+        tier_info = f" 层级={r.task_tier}" if r.task_tier is not None else ""
+        lines.append(
+            f"  {i}. [{dt}] 意图={r.intent or '?'} "
+            f"复杂度={r.complexity:.2f}{tier_info}"
+        )
+        lines.append(f"     输入: {r.user_input_preview}")
+        if r.selected_models:
+            model_strs = []
+            for m, s in zip(r.selected_models, r.scores or [0.0] * len(r.selected_models)):
+                model_strs.append(f"{m}({s:.1f})")
+            lines.append(f"     模型: {', '.join(model_strs)}")
+        lines.append("")
     return "\n".join(lines)
 
 

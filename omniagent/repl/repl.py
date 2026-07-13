@@ -45,6 +45,10 @@ _theme = Theme({
 console = Console(theme=_theme)
 
 
+class _ShiftTabSignal(Exception):
+    """由 _read_input_unix 抛出，指示 Shift+Tab 按下，切换思考范式。"""
+
+
 class REPL:
     """
     交互式 REPL 主循环。
@@ -112,6 +116,61 @@ class REPL:
         from omniagent.engine.callbacks import ConsoleCallback
         return ConsoleCallback(verbose=self.verbose)
 
+    def _auto_save_session(self) -> None:
+        """v0.4.0 Step 14: 退出时自动保存会话状态。"""
+        try:
+            from omniagent.repl.session import auto_save, cleanup_expired_sessions
+            history = [{"role": m["role"], "content": m.get("content", "")}
+                       for m in self.ctx_mgr.get_messages() if m.get("role") != "system"]
+            context_store = {"mode": self.registry.current_mode}
+            model_config = self.model_pool.to_config()
+
+            auto_save(
+                history=history,
+                context_store=context_store,
+                model_config=model_config,
+                extra={"paradigm": self.registry.current_mode},
+            )
+            cleanup_expired_sessions()
+        except Exception:
+            pass  # 保存失败不影响退出
+
+    def _check_auto_resume(self) -> None:
+        """v0.4.0 Step 14: 启动时检查可恢复的会话。"""
+        try:
+            from omniagent.repl.session import get_auto_session, get_session_age
+            data = get_auto_session()
+            if data:
+                age = get_session_age(data) or "未知时间"
+                msgs = len(data.get("history", []))
+                mode = data.get("extra", {}).get("paradigm", "direct")
+                console.print(
+                    f"\n[dim]┌─ 上次会话 ({age}) · {msgs} 条消息 · 范式: {mode}[/dim]"
+                )
+                console.print("[dim]│  输入 [bold]/resume[/bold] 恢复，或直接开始新对话[/dim]")
+        except Exception:
+            pass
+
+    def _handle_shift_tab(self) -> None:
+        """Shift+Tab 按下：循环切换到下一个可用思维范式。"""
+        mode_names = list(self.registry.modes.keys())
+        current = self.registry.current_mode
+        try:
+            idx = mode_names.index(current)
+        except ValueError:
+            idx = 0
+        next_idx = (idx + 1) % len(mode_names)
+        next_mode_name = mode_names[next_idx]
+        try:
+            mode = self.registry.set_mode(next_mode_name)
+            self.status_bar.set_mode_notification(mode.name)
+            console.print(
+                f"\n[dim]┌─ Shift+Tab 切换范式 → [bold]{mode.name}[/bold]"
+                f" — {mode.description}[/dim]"
+            )
+        except ValueError:
+            pass
+
     def _render_engine_result(self, callback, result: str, title: str, border_style: str = "green") -> None:
         """渲染引擎结果：先思考面板，再最终答案。"""
         # 1. 渲染思考过程面板（如果有）
@@ -164,6 +223,9 @@ class REPL:
         # 检查是否需要初始配置
         self._check_first_run()
 
+        # v0.4.0 Step 14: 检查可恢复的会话
+        self._check_auto_resume()
+
         # 初始化系统消息
         if self.system_prompt:
             self.ctx_mgr.add_system_message(self.system_prompt)
@@ -179,6 +241,7 @@ class REPL:
                 # 连续两次才退出。修复前空行 Ctrl+C 在 5/9 终端类型（xterm256color/
                 # alacritty/gnome-256color/screen-256color/vt100）直接退出 REPL。
                 if self._pending_exit:
+                    self._auto_save_session()
                     console.print("\n[dim]再见！[/dim]")
                     break
                 self._pending_exit = True
@@ -194,6 +257,7 @@ class REPL:
             # 斜杠命令
             if user_input.startswith("/"):
                 if self._handle_command(user_input):
+                    self._auto_save_session()
                     console.print("[dim]再见！[/dim]")
                     break
                 continue
@@ -319,7 +383,11 @@ class REPL:
         import sys
 
         if sys.platform != "win32":
-            return self._read_input_unix()
+            try:
+                return self._read_input_unix()
+            except _ShiftTabSignal:
+                self._handle_shift_tab()
+                return ""
 
         # ── Windows: 逐字符读取 ──
         import ctypes
@@ -472,6 +540,9 @@ class REPL:
                     if cursor_pos < len(current_line):
                         current_line.pop(cursor_pos)
                         _redraw_from_cursor()
+                elif second == '\x0f':  # Shift+Tab
+                    self._handle_shift_tab()
+                    # 不向 current_line 插入任何字符
 
             elif ch and ord(ch) >= 0x20:
                 # 可见字符：在光标位置插入
@@ -730,6 +801,11 @@ class REPL:
                             _redraw_line()
                         seq_buffer = ""
                         continue
+
+                    # Shift+Tab: \x1b[Z → 切换思考范式
+                    if seq_buffer == '\x1b[Z':
+                        seq_buffer = ""
+                        raise _ShiftTabSignal()
 
                     # 未知转义序列 — 静默丢弃或超时后当作普通字符
                     # 如果序列长度 >= 8 或超时，丢弃
@@ -1031,7 +1107,7 @@ class REPL:
         console.print("[dim]· ReAct 思考 → 行动 → 观察[/dim]")
 
         callback = self._make_callback()
-        engine = ReActEngine(model_priority=model_ids, model_pool=self.model_pool, max_iterations=10, callback=callback, model_configs=dict(self.registry.models))
+        engine = ReActEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_iterations=10, callback=callback, model_configs=dict(self.registry.models))
         try:
             result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1061,7 +1137,7 @@ class REPL:
         console.print("[dim]· Plan-Execute 规划 → 逐步执行[/dim]")
 
         callback = self._make_callback()
-        engine = PlanExecuteEngine(model_priority=model_ids, model_pool=self.model_pool, max_steps=20, callback=callback, model_configs=dict(self.registry.models))
+        engine = PlanExecuteEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_steps=20, callback=callback, model_configs=dict(self.registry.models))
         try:
             result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1077,7 +1153,7 @@ class REPL:
         console.print("[dim]· Reflection 执行 → 审查 → 修正[/dim]")
 
         callback = self._make_callback()
-        engine = ReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, max_rounds=3, callback=callback, model_configs=dict(self.registry.models))
+        engine = ReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_rounds=3, callback=callback, model_configs=dict(self.registry.models))
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1093,7 +1169,7 @@ class REPL:
         console.print("[dim]· Plan+React 全局规划 → 每步 ReAct 执行[/dim]")
 
         callback = self._make_callback()
-        engine = PlanReactEngine(model_priority=model_ids, model_pool=self.model_pool, max_steps=10, react_iterations=8, callback=callback, model_configs=dict(self.registry.models))
+        engine = PlanReactEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_steps=10, react_iterations=8, callback=callback, model_configs=dict(self.registry.models))
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1109,7 +1185,7 @@ class REPL:
         console.print("[dim]· Plan+Reflection 规划执行 → 反思修正[/dim]")
 
         callback = self._make_callback()
-        engine = PlanReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, max_steps=10, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
+        engine = PlanReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_steps=10, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1125,7 +1201,7 @@ class REPL:
         console.print("[dim]· React+Reflection 探索 → 反思审查[/dim]")
 
         callback = self._make_callback()
-        engine = ReactReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, react_iterations=8, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
+        engine = ReactReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, react_iterations=8, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])

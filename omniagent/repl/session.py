@@ -2,19 +2,25 @@
 Session Manager — 会话持久化。
 
 支持 /save 和 /load 命令，将会话状态保存到磁盘并恢复。
+
+v0.4.0 Step 14: 新增 auto_save / get_auto_session / cleanup_expired_sessions，
+支持 /resume 恢复上次会话，7 天自动过期。
 """
 
 from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+import time as _time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from omniagent.utils.atomic_write import atomic_write_text
 
 SESSIONS_DIR = Path.home() / ".omniagent" / "sessions"
+SESSION_TTL_DAYS = 7
+AUTO_SESSION_NAME = "_auto"
 
 
 def _ensure_sessions_dir() -> Path:
@@ -125,3 +131,117 @@ def delete_session(name: str) -> bool:
         filepath.unlink()
         return True
     return False
+
+
+# ── v0.4.0 Step 14: 自动保存/恢复 ──────────────────────
+
+def auto_save(
+    history: list[dict[str, Any]],
+    context_store: dict[str, Any],
+    model_config: dict[str, Any],
+    extra: dict[str, Any] | None = None,
+) -> Path | None:
+    """退出时自动保存当前会话状态。
+
+    Returns:
+        保存的文件路径，失败返回 None。
+    """
+    try:
+        data = {
+            "version": "2.0",
+            "name": AUTO_SESSION_NAME,
+            "saved_at": datetime.now().isoformat(),
+            "saved_at_ts": _time.time(),
+            "history": history,
+            "context": context_store,
+            "model_config": model_config,
+            "extra": extra or {},
+        }
+        sessions_dir = _ensure_sessions_dir()
+        filepath = sessions_dir / f"{AUTO_SESSION_NAME}.json"
+
+        def _safe(obj: Any) -> Any:
+            if isinstance(obj, (str, int, float, bool, type(None))):
+                return obj
+            if isinstance(obj, dict):
+                return {str(k): _safe(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [_safe(v) for v in obj]
+            return str(obj)
+
+        content = json.dumps(_safe(data), ensure_ascii=False, indent=2)
+        atomic_write_text(filepath, content, mode=0o600)
+        return filepath
+    except Exception:
+        return None
+
+
+def get_auto_session() -> dict[str, Any] | None:
+    """获取最近的自动保存会话。
+
+    检查 _auto.json 是否存在且未过期（7 天内）。
+    过期则自动删除并返回 None。
+    """
+    filepath = SESSIONS_DIR / f"{AUTO_SESSION_NAME}.json"
+    if not filepath.exists():
+        return None
+
+    try:
+        with open(filepath, encoding="utf-8") as f:
+            data = json.load(f)
+
+        ts = data.get("saved_at_ts", 0)
+        if ts > 0 and (_time.time() - ts) > SESSION_TTL_DAYS * 86400:
+            filepath.unlink()
+            return None
+
+        return data
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+def cleanup_expired_sessions() -> int:
+    """清理所有过期的自动保存会话。
+
+    Returns:
+        删除的文件数量。
+    """
+    threshold = _time.time() - SESSION_TTL_DAYS * 86400
+    deleted = 0
+
+    if not SESSIONS_DIR.exists():
+        return 0
+
+    for f in SESSIONS_DIR.glob("_auto*.json"):
+        try:
+            with open(f, encoding="utf-8") as fp:
+                data = json.load(fp)
+            ts = data.get("saved_at_ts", 0)
+            if ts > 0 and ts < threshold:
+                f.unlink()
+                deleted += 1
+        except (json.JSONDecodeError, KeyError, OSError):
+            # 损坏的文件也清理
+            try:
+                f.unlink()
+                deleted += 1
+            except OSError:
+                pass
+
+    return deleted
+
+
+def get_session_age(data: dict[str, Any]) -> str | None:
+    """返回会话的人类可读年龄描述。"""
+    ts = data.get("saved_at_ts", 0)
+    if ts <= 0:
+        return None
+
+    elapsed = _time.time() - ts
+    if elapsed < 3600:
+        mins = int(elapsed / 60)
+        return f"{mins} 分钟前" if mins > 0 else "刚刚"
+    elif elapsed < 86400:
+        return f"{int(elapsed / 3600)} 小时前"
+    else:
+        return f"{int(elapsed / 86400)} 天前"
