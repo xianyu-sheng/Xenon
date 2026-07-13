@@ -33,73 +33,118 @@ def load_tasks(path: Path | None = None) -> list[dict[str, Any]]:
 
 
 def build_prompt(task: dict[str, Any]) -> str:
-    """Build a prompt that asks for ONLY the indented function body."""
+    """Build a natural code-completion prompt.
+
+    Give the LLM the full function stub (imports + helpers + signature + docstring)
+    and ask it to complete the implementation. The extract_code function will
+    reliably pull out just the body.
+    """
     return (
-        "Write ONLY the indented body of the following Python function. "
-        "Do NOT repeat the def line, docstring, or imports. "
-        "Output raw Python code only, no markdown, no explanation.\n\n"
+        "Complete the following Python function. Output ONLY the full function "
+        "including the def line and body. No explanation, no markdown.\n\n"
         f"{task['prompt']}"
     )
 
 
 def extract_code(generated: str, entry_point: str) -> str:
-    """Extract ONLY the indented function body from LLM output.
+    """Extract the indented function body from LLM output.
 
-    The HumanEval prompt already contains imports + helper functions +
-    function signature + docstring. We need just the indented body
-    to append to the prompt.
+    Handles three common LLM output patterns:
+    1. Markdown code block wrapping
+    2. Full function including def line
+    3. Bare indented body
+
+    Returns only the indented body lines (suitable for appending to the prompt).
     """
+    code = generated
+
     # 1) Extract from markdown code block if present
-    blocks = list(re.finditer(r"```(?:python)?\s*\n(.*?)```", generated, re.DOTALL))
+    blocks = list(re.finditer(r"```(?:python)?\s*\n(.*?)```", code, re.DOTALL))
     for m in reversed(blocks):
         block = m.group(1)
-        if f"def {entry_point}" in block or "    " in block[:40]:
-            generated = block
+        # Prefer the block that contains our function
+        if f"def {entry_point}" in block:
+            code = block
             break
+    else:
+        # Fallback: use the largest block with indented content
+        if blocks:
+            code = max(blocks, key=lambda m: len(m.group(1))).group(1)
 
-    # 2) Find the function body: lines AFTER the def line and docstring
-    lines = generated.split("\n")
-    body_start = 0
-    in_docstring = False
+    lines = code.split("\n")
 
+    # 2) Locate the function definition
+    def_idx = -1
     for i, line in enumerate(lines):
-        s = line.strip()
-
-        # Skip the def line
-        if s.startswith(f"def {entry_point}"):
-            continue
-
-        # Handle docstrings
-        if s.startswith('"""') or s.startswith("'''"):
-            if not in_docstring:
-                in_docstring = True
-                dq = s[:3]
-                if s.count(dq) >= 2 and len(s) > 3:  # single-line docstring
-                    in_docstring = False
-                continue
-            else:
-                in_docstring = False
-                continue
-        if in_docstring:
-            continue
-
-        # This is the first body line
-        if s and not s.startswith("```") and not s.startswith("Here"):
-            body_start = i
+        if line.strip().startswith(f"def {entry_point}("):
+            def_idx = i
             break
-        body_start = i + 1
 
-    body_lines = lines[body_start:]
+    if def_idx >= 0:
+        # We found the def line — extract everything after the signature + docstring
+        body_start = def_idx + 1
+        # Determine base indentation from the def line
+        def_indent = len(lines[def_idx]) - len(lines[def_idx].lstrip())
+        body_indent = def_indent + 4  # standard 4-space body indent
 
-    # 3) Trim trailing noise
-    while body_lines and (
-        not body_lines[-1].strip()
-        or body_lines[-1].strip().startswith("```")
-        or body_lines[-1].strip().startswith("Here")
-    ):
-        body_lines.pop()
+        # Skip docstring if present
+        for i in range(def_idx + 1, len(lines)):
+            s = lines[i].strip()
+            if s.startswith('"""') or s.startswith("'''"):
+                dq = s[:3]
+                # Multi-line docstring: skip until closing
+                if s.count(dq) < 2 or len(s) == 3:
+                    for j in range(i + 1, len(lines)):
+                        if dq in lines[j]:
+                            body_start = j + 1
+                            break
+                else:
+                    body_start = i + 1
+                break
+            elif s:  # Non-empty, non-docstring line = body started
+                body_start = i
+                break
+            else:
+                body_start = i + 1
 
-    return "\n".join(body_lines)
+        # Collect body lines — stop at lines with less indentation (end of function)
+        body_lines: list[str] = []
+        for i in range(body_start, len(lines)):
+            line = lines[i]
+            stripped = line.strip()
+            # Empty lines are part of body
+            if not stripped:
+                body_lines.append("")
+                continue
+            # Line with less/equal indent than def = outside function, stop
+            line_indent = len(line) - len(line.lstrip())
+            if line_indent <= def_indent:
+                break
+            body_lines.append(line)
+        return "\n".join(body_lines)
+
+    else:
+        # No def line found — the output is already just body lines
+        # Filter out trailing noise (markdown fence, explanations)
+        body_lines: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped in ("```",) or stripped.startswith("Here"):
+                continue
+            body_lines.append(line)
+        # Trim trailing empty/noise lines
+        while body_lines and (not body_lines[-1].strip()
+                              or body_lines[-1].strip() in ("```",)
+                              or body_lines[-1].strip().startswith("Here")):
+            body_lines.pop()
+        # If all we have is comment lines with no indentation, something went wrong
+        if body_lines and all(not l.startswith((" ", "\t")) for l in body_lines if l.strip()):
+            # Try to find any indented section
+            for i, l in enumerate(body_lines):
+                if l.startswith("    ") or l.startswith("\t"):
+                    body_lines = body_lines[i:]
+                    break
+        return "\n".join(body_lines)
 
 
 def evaluate_task(task: dict[str, Any], completion: str) -> dict[str, Any]:

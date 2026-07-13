@@ -6,7 +6,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)]()
 [![Tests](https://img.shields.io/badge/tests-1000%2B-brightgreen.svg)]()
-[![HumanEval](https://img.shields.io/badge/HumanEval_Pass@1-73.8%25_(official)-blue.svg)](https://github.com/openai/human-eval)
+[![HumanEval](https://img.shields.io/badge/HumanEval_Pass@1-88.4%25_(official)-success.svg)](https://github.com/openai/human-eval)
 [![v0.4.0](https://img.shields.io/badge/version-0.4.0-orange.svg)](https://github.com/xianyu-sheng/omniagent/releases/tag/v0.4.0)
 
 ![OmniAgent terminal demo](docs/assets/terminal-demo.svg)
@@ -217,7 +217,7 @@ evaluate_functional_correctness samples.jsonl
 
 | 评测 | 结果 | 框架 |
 |------|------|------|
-| HumanEval pass@1 (deepseek-v4-pro) | **121/164 (73.8%)** | 官方 `openai/human-eval` |
+| HumanEval pass@1 (deepseek-v4-pro) | **145/164 (88.4%)** | 官方 `openai/human-eval` |
 | 单元测试 | 925+ 通过 | pytest |
 | 混沌测试 | 31/31 通过 | pytest |
 
