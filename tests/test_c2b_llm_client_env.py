@@ -37,19 +37,25 @@ class TestLLMClientAuthTokenFallback:
             assert creds.get("anthropic") == "primary"
 
     def test_auth_token_does_not_pollute_other_providers(self):
-        """ANTHROPIC_AUTH_TOKEN 只影响 anthropic，不污染其他厂商。"""
+        """ANTHROPIC_AUTH_TOKEN 只影响 anthropic，不污染其他厂商。
+
+        v0.4.0: yaml 优先于 env——env key 仅在 yaml 未配置时生效。
+        """
         env = {
             "ANTHROPIC_AUTH_TOKEN": "at",
             "DEEPSEEK_API_KEY": "ds-key",
             "OPENAI_API_KEY": "oai-key",
         }
         with patch.dict(os.environ, env, clear=True):
-            creds = _load_credentials()
-            # anthropic 拿到 AUTH_TOKEN
-            assert creds.get("anthropic") == "at"
-            # 其他厂商拿到自己 env_key，不被 AUTH_TOKEN 污染
-            assert creds.get("deepseek") == "ds-key"
-            assert creds.get("openai") == "oai-key"
+            # Mock yaml to be empty so env values take effect
+            with patch("omniagent.utils.llm_client._CREDENTIALS_PATH") as mp:
+                mp.exists.return_value = False
+                creds = _load_credentials()
+                # anthropic 拿到 AUTH_TOKEN
+                assert creds.get("anthropic") == "at"
+                # 其他厂商拿到自己 env_key，不被 AUTH_TOKEN 污染
+                assert creds.get("deepseek") == "ds-key"
+                assert creds.get("openai") == "oai-key"
 
     def test_build_endpoint_uses_anthropic_base_url_env(self):
         """build_endpoint 优先用 ANTHROPIC_BASE_URL env 而非 defaults。"""
