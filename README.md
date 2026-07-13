@@ -6,7 +6,8 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)]()
 [![Tests](https://img.shields.io/badge/tests-1000%2B-brightgreen.svg)]()
-[![HumanEval](https://img.shields.io/badge/HumanEval-87.8%25_(144%2F164)-success.svg)](https://github.com/xianyu-sheng/omniagent/blob/ubutnu/evals/humaneval_runner.py)
+[![HumanEval](https://img.shields.io/badge/HumanEval_Pass@1-73.8%25_(official)-blue.svg)](https://github.com/openai/human-eval)
+[![v0.4.0](https://img.shields.io/badge/version-0.4.0-orange.svg)](https://github.com/xianyu-sheng/omniagent/releases/tag/v0.4.0)
 
 ![OmniAgent terminal demo](docs/assets/terminal-demo.svg)
 
@@ -67,11 +68,15 @@
 └──────────────────────┬──────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────┐
-│                   模型路由层                              │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌──────────┐      │
-│  │DeepSeek │ │ OpenAI  │ │ Claude  │ │  Ollama  │ ...  │
-│  └─────────┘ └─────────┘ └─────────┘ └──────────┘      │
-│         12 家 provider · 断路器自动降级 · 长连接池复用     │
+│                   模型调度层 (v0.4.0)                      │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
+│  │ 5级优先级 │ │ 工作窃取 │ │Benchmark │ │ 断路器   │   │
+│  │ 队列 Q1-5│ │ 调度算法 │ │ Fetcher  │ │ 健康追踪 │   │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘   │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │  DeepSeek · OpenAI · Claude · Ollama · 豆包 ...  │   │
+│  │         12 家 provider · 动态注册 · 长连接池      │   │
+│  └──────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -89,9 +94,9 @@ omniagent
 进 REPL 后三步上手：
 
 ```text
-You: /setup                              # 配 API key
-You: /set_model deepseek/deepseek-v4-pro # 选模型
-You: 帮我检查 tests 失败原因并给出修复方案   # 开干
+You: /setup                              # 配 API key + 选模型（自动加入调用池）
+You: 你好                                 # 自动根据任务难度选模型
+You: 帮我写一个快速排序的核心算法              # 复杂任务自动切旗舰模型
 ```
 
 或一行命令直接跑：
@@ -99,6 +104,17 @@ You: 帮我检查 tests 失败原因并给出修复方案   # 开干
 ```bash
 omniagent chat -m deepseek/deepseek-v4-pro "review this diff"
 ```
+
+### v0.4.0 新特性
+
+| 特性 | 说明 |
+|------|------|
+| `/pool` | 五级优先级队列 Q1-Q5，模型按能力分层 |
+| `/history` | 每次路由决策的可追溯记录 |
+| `/resume` | 关闭终端后恢复上次会话（7 天过期） |
+| `Shift+Tab` | 终端快捷键切换思考范式 |
+| 工作窃取 | 高优先级任务可借用低优先级队列模型 |
+| BenchmarkFetcher | 新模型注册时自动查 HF Leaderboard 定级 |
 
 ---
 
@@ -175,25 +191,35 @@ reflection_engine.py     # 执行者 + 审查者双模型多轮
 ## 测试与评测
 
 ```bash
-# 全量单元测试（1000+ 用例）
-pytest tests/ --ignore=tests/test_repl_real_usage.py
+# 全量单元测试（925+ 用例）
+pytest tests/ -q
 
 # 混沌测试（31 用例：网络中断、格式错误、限流、工具异常等）
 pytest tests/chaos/
 
-# Eval 框架（mock 模式 100%，real 模式需 API key）
-python evals/runner.py --mode mock
-python evals/runner.py --mode real --model deepseek/deepseek-v4-pro
-
-# HumanEval 基准（164 题 Python 函数补全）
-python evals/humaneval_runner.py --model deepseek/deepseek-v4-pro --num-tasks 164
+# HumanEval 基准 — 官方 openai/human-eval 评测框架
+# Step 1: 用 omniagent 生成 completions
+python -c "
+from evals.humaneval_runner import load_tasks, build_prompt, extract_code
+from omniagent.utils.llm_client import chat_completion
+import json
+tasks = load_tasks()
+with open('samples.jsonl', 'w') as f:
+    for t in tasks:
+        resp = chat_completion('deepseek/deepseek-v4-pro',
+            [{'role':'user','content': build_prompt(t)}], temperature=0.0, max_tokens=1024)
+        f.write(json.dumps({'task_id': t['task_id'],
+            'completion': extract_code(resp, t['entry_point'])}) + '\n')
+"
+# Step 2: 官方评测
+evaluate_functional_correctness samples.jsonl
 ```
 
-| 评测 | 结果 |
-|------|------|
-| HumanEval pass@1 (deepseek-v4-pro) | **144/164 (87.8%)** |
-| 单元测试 | 1000+ 通过 |
-| 混沌测试 | 31/31 通过 |
+| 评测 | 结果 | 框架 |
+|------|------|------|
+| HumanEval pass@1 (deepseek-v4-pro) | **121/164 (73.8%)** | 官方 `openai/human-eval` |
+| 单元测试 | 925+ 通过 | pytest |
+| 混沌测试 | 31/31 通过 | pytest |
 
 
 ---
