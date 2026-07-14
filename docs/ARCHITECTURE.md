@@ -27,7 +27,7 @@ flowchart TB
     PlanF --> Tools
     ReacF --> Tools
     Tools --> Router[Model Router]
-    Router --> Providers[6 Provider<br/>openai / anthropic / deepseek / gemini / qwen / ollama]
+    Router --> Providers[12 Provider<br/>deepseek / openai / anthropic / google / zhipu / qwen / moonshot / baichuan / minimax / mimo / ollama / custom]
     Tools --> MCP[MCP Registry]
     MCP --> Servers[外部 MCP Server]
     ReAct --> Compact[Compactor]

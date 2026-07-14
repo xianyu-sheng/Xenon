@@ -99,6 +99,12 @@ def cli() -> None:
         action="store_true",
         help="显示详细日志",
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__import__('omniagent').__version__}",
+        help="显示版本号",
+    )
 
     args = parser.parse_args()
 

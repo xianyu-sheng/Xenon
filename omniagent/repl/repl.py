@@ -467,7 +467,7 @@ class REPL:
             from importlib.metadata import version as _pkg_version
             _ver = _pkg_version("omniagent-cli")
         except Exception:
-            _ver = "0.3.0"  # 兜底
+            _ver = "0.5.2"  # 兜底
 
         lines = [
             "",
