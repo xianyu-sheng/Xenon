@@ -40,8 +40,16 @@ class AutoRouter:
         user_input: str,
         context_messages: list[dict] | None = None,
         count: int = 3,
+        preferred_models: list[str] | None = None,
     ) -> list[str]:
         """Select best models for the given task.
+
+        Args:
+            user_input: The user's input text.
+            context_messages: Previous conversation messages.
+            count: Number of models to return for fallback.
+            preferred_models: v0.5.3: User-specified models (via -m) that
+                should always be tried first, before auto-selected models.
 
         Returns a list of model_ids for fallback (best first).
         """
@@ -68,6 +76,22 @@ class AutoRouter:
             else:
                 # Pool empty: try static registry
                 result_ids = self._registry_fallback(count)
+
+        # v0.5.3: 用户显式指定的模型（-m）总是排在最前面
+        if preferred_models:
+            preferred_set = set(preferred_models)
+            # 把 preferred_models 中在结果集里的放到最前面
+            prioritized = [m for m in preferred_models if m in result_ids]
+            # 追加其他模型（排除已添加的）
+            for m in result_ids:
+                if m not in prioritized and m not in preferred_set:
+                    prioritized.append(m)
+            # 如果 preferred_models 全不在结果里，也确保它们排在前面
+            for m in preferred_models:
+                if m not in prioritized:
+                    # 模型可能不在 pool 中（通过 alias 注册的），直接加
+                    prioritized.append(m)
+            result_ids = prioritized[:count]
 
         # Step 9: 记录路由决策
         scores = [self.pool.score_for_profile(e, profile) for e in entries] if entries else []

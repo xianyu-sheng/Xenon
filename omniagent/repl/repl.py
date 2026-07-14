@@ -131,6 +131,7 @@ class REPL:
 
         # v0.5.2: 会话内失败模型集合——一次失败后本会话不再重试
         self._failed_models: set[str] = set()
+        self._preferred_model_ids: list[str] = []  # v0.5.3: 用户 -m 指定的模型
 
         # v0.5.0: 工具权限门控
         from omniagent.repl.permissions import PermissionGate, PermissionMode
@@ -1201,7 +1202,8 @@ class REPL:
             model_ids = self.registry.get_role_priority("planner")
         else:
             model_ids = self.auto_router.route(
-                optimized, self.ctx_mgr.get_messages(), count=3
+                optimized, self.ctx_mgr.get_messages(), count=3,
+                preferred_models=self._preferred_model_ids or None,
             )
         if not model_ids:
             console.print("[red]· 未配置模型，请先 [bold cyan]/setup[/bold cyan] 配置[/red]")
@@ -1723,4 +1725,7 @@ def start_repl(
             console.print(f"[yellow]⚠️  {e}[/yellow]")
 
     repl = REPL(registry=registry, system_prompt=system_prompt, optimize_prompts=optimize)
+    # v0.5.3: 用户显式指定的模型优先于 auto-router 的选择
+    if models:
+        repl._preferred_model_ids = list(models)
     repl.run()
