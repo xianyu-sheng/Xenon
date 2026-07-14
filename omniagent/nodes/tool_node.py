@@ -508,10 +508,30 @@ class ToolNode(BaseNode):
         resolved = path.resolve()
         root = self._get_allowed_root()
 
+        # v0.5.3: 允许读写 /tmp 等临时目录
+        _ALLOWED_EXTRA_ROOTS = [
+            Path("/tmp").resolve(),
+            Path("/var/tmp").resolve(),
+        ]
+
         # 检查路径是否在允许的根目录下
+        in_allowed_root = False
         try:
             resolved.relative_to(root)
+            in_allowed_root = True
         except ValueError:
+            pass
+
+        if not in_allowed_root:
+            for extra in _ALLOWED_EXTRA_ROOTS:
+                try:
+                    resolved.relative_to(extra)
+                    in_allowed_root = True
+                    break
+                except ValueError:
+                    pass
+
+        if not in_allowed_root:
             raise SecurityError(
                 f"路径越界: {resolved} 不在允许的目录 {root} 下。"
                 f"文件操作限制在项目目录内。"
@@ -519,16 +539,21 @@ class ToolNode(BaseNode):
 
         # 写入操作额外检查敏感路径
         if for_write:
+            # v0.5.3: 使用路径组件匹配（加前后 /），避免 "binary" 匹配 "/bin"
             resolved_lower = str(resolved).lower().replace("\\", "/")
+            # 确保路径以 / 结尾，便于组件匹配
+            resolved_normalized = resolved_lower.rstrip("/") + "/"
             for sensitive in _SENSITIVE_PATHS:
-                if sensitive in resolved_lower:
+                sensitive_normalized = sensitive.lower().rstrip("/") + "/"
+                if resolved_normalized.startswith(sensitive_normalized) or \
+                   ("/" + sensitive_normalized.lstrip("/")) in resolved_normalized:
                     raise SecurityError(
                         f"禁止写入系统敏感路径: {resolved}"
                     )
-            # 检查用户敏感文件
+            # 检查用户敏感文件（文件名精确匹配）
             name_lower = resolved.name.lower()
             for sensitive in _USER_SENSITIVE:
-                if sensitive in name_lower or sensitive in resolved_lower:
+                if name_lower == sensitive or name_lower.endswith(sensitive):
                     raise SecurityError(
                         f"禁止写入敏感文件: {resolved}"
                     )
