@@ -1262,13 +1262,28 @@ class REPL:
             console.print("\n[dim]· 已中断，返回提示符[/dim]")
 
     def _run_direct(self, user_input: str, model_ids: list[str], intent: str | None = None) -> None:
-        """直接对话模式。自动检测工具需求并委派给 ReAct 引擎。"""
+        """直接对话模式。自动检测工具需求并委派给 ReAct 引擎。
+
+        路由决策优先级（通用设计，不枚举具体领域）：
+        1. 明确的编程/文件/命令任务 → ReAct（_TOOL_PATTERNS 正则）
+        2. 已识别的 query/write_code 意图 → ReAct
+        3. MCP 工具可用 + 输入具有"外部信息查询"特征 → ReAct
+           （通用语言结构判断，不枚举天气/高铁/酒店等具体领域）
+        4. 其他 → direct 模式（纯对话/解释/闲聊）
+        """
         # 检测是否需要工具执行（编程/文件/命令任务，或 query 意图实时数据查询）
         if self._detect_tool_need(user_input, intent=intent):
             if intent == "query":
                 console.print("[cyan]🔧 检测到信息查询（需实时数据），自动切换到 ReAct 模式...[/cyan]")
             else:
                 console.print("[cyan]🔧 检测到需要工具执行，自动切换到 ReAct 模式...[/cyan]")
+            self._run_react_engine(user_input, model_ids)
+            return
+
+        # v0.5.3: MCP 工具可用时，通用判断——任何具有"信息查询"特征的输入都走 ReAct，
+        # 让 LLM 自行决定是否调用 mcp_call。不枚举具体查询领域（天气/高铁/酒店等）。
+        if self._has_mcp_tools() and _looks_like_external_query(user_input):
+            console.print("[cyan]🔧 检测到可用 MCP 工具，自动切换到 ReAct 模式...[/cyan]")
             self._run_react_engine(user_input, model_ids)
             return
 
@@ -1601,6 +1616,16 @@ class REPL:
                 return True
         return False
 
+    def _has_mcp_tools(self) -> bool:
+        """检查是否有已连接的 MCP 服务器且提供了工具。"""
+        try:
+            registry = getattr(self, '_mcp_registry', None)
+            if registry is None:
+                return False
+            return bool(registry.clients)
+        except Exception:
+            return False
+
     _FILE_CLAIM_KEYWORDS: list[str] = [
         "已创建", "已经创建", "已生成", "已经生成", "已写入", "已经写入",
         "已保存", "已经保存", "已新建", "已经新建", "已建立", "已经建立",
@@ -1699,6 +1724,69 @@ class REPL:
                 console.print(f"[dim]· 已加载 {len(skm.list_all())} 个技能[/dim]")
         except Exception as e:
             logger.debug(f"加载技能失败: {e}")
+
+
+# ── v0.5.3: 通用外部查询检测 ──────────────────────────────
+# 不枚举具体领域（天气/高铁/酒店），基于语言结构判断输入是否
+# 具有"信息查询"特征——即需要外部/实时数据才能回答的问题。
+# 当 MCP 工具可用时，这类输入应路由到 ReAct 让 LLM 决定调用哪些工具。
+
+# 疑问结构（通用语言特征，不依赖领域关键词）
+_RE_QUESTION_STRUCTURE = re.compile(
+    r"[吗呢吧啊][？?]?$"           # 句末疑问语气词
+    r"|[？?]$"                      # 问号结尾
+    r"|有没有|会不会|能不能|可不可以"  # 正反问结构
+    r"|怎么(?:走|去|办|样|回事)"    # 疑问代词 + 动作
+    r"|在哪里|在哪|什么时候|几点|多少" # 疑问短语
+    r"|what|when|where|how|which|who", # 英文疑问词
+    re.IGNORECASE,
+)
+_RE_QUERY_VERB = re.compile(
+    r"(?:帮|请|给).{0,3}(?:我)?(?:查|搜|找|查询|搜索|查找|看看|了解)"  # 委托查询
+    r"|^(?:查|搜|找|查询|搜索|查找|看看)"                              # 句首查询动词
+    r"|(?:search|find|look\s*up|check|query)\s",                       # 英文查询
+    re.IGNORECASE,
+)
+_RE_TIME_SENSITIVE = re.compile(
+    r"(?:今天|今日|现在|目前|最近|这周末|本周|下周|本月|这个月"
+    r"|明天|后天|昨天|周日|周一|周二|周三|周四|周五|周六"
+    r"|today|now|recently|this\s+week|next\s+week|tomorrow)",
+    re.IGNORECASE,
+)
+# 排除：明确是关于代码/文件的查询（由 _TOOL_PATTERNS 处理）
+_RE_CODE_CONTEXT = re.compile(
+    r"(?:文件|代码|项目|脚本|程序|函数|类|目录|文件夹|bug|错误|报错"
+    r"|测试|配置|日志|commit|分支|仓库|git\b"
+    r"|\.(?:py|js|ts|java|go|rs|cpp|c|h|html|css|json|yaml|yml|toml|md|txt|sh)\b)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_external_query(text: str) -> bool:
+    """通用判断：输入是否具有"外部信息查询"特征。
+
+    基于语言结构而非领域关键词：
+    - 疑问结构（吗/呢/？/有没有/怎么走/在哪里/什么时候/几点/多少）
+    - 查询动词（查/搜/找/search/find）
+    - 时间敏感框架（今天/明天/最近...）
+
+    排除：明确关于代码/文件的查询（由 _TOOL_PATTERNS 处理）。
+    """
+    if not text or len(text) < 3:
+        return False
+    # 代码相关 → 不归这里管
+    if _RE_CODE_CONTEXT.search(text):
+        return False
+    # 疑问结构 → 需要外部信息
+    if _RE_QUESTION_STRUCTURE.search(text):
+        return True
+    # 查询动词 → 在搜索/查找信息
+    if _RE_QUERY_VERB.search(text):
+        return True
+    # 时间敏感短语 → 大概率需要实时/外部数据
+    if _RE_TIME_SENSITIVE.search(text):
+        return True
+    return False
 
 
 def start_repl(
