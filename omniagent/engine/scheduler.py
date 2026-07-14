@@ -31,7 +31,7 @@ class DAGScheduler:
         nodes: dict[str, BaseNode],
         start_node_id: str,
         *,
-        max_steps: int = 50,
+        max_steps: int = 20,
     ) -> None:
         if not nodes:
             raise ValueError("nodes 不能为空")
@@ -50,12 +50,16 @@ class DAGScheduler:
             context: 全局上下文，若不提供则创建空的。
 
         Returns:
-            {"status": "completed"|"max_steps_reached", "steps": int, "context": AgentContext}
+            {"status": "completed"|"max_steps_reached"|"cycle_detected", "steps": int, "context": AgentContext}
         """
         ctx = context or AgentContext()
         current_id = self.start_node_id
         steps = 0
         execution_log: list[dict[str, Any]] = []
+
+        # v0.5.3: 循环检测 — 记录每个节点被访问的次数
+        visit_counts: dict[str, int] = {}
+        MAX_VISITS_PER_NODE = 5  # 同一节点最多反复进入 5 次
 
         logger.info(f"=== 工作流启动，起始节点: {current_id} ===")
 
@@ -63,6 +67,21 @@ class DAGScheduler:
             node = self.nodes.get(current_id)
             if node is None:
                 raise RuntimeError(f"节点 '{current_id}' 不存在于工作流中")
+
+            # v0.5.3: 循环检测
+            visit_counts[current_id] = visit_counts.get(current_id, 0) + 1
+            if visit_counts[current_id] > MAX_VISITS_PER_NODE:
+                logger.warning(
+                    f"检测到循环: 节点 '{current_id}' 已访问 "
+                    f"{visit_counts[current_id]} 次，强制终止"
+                )
+                execution_log.append({
+                    "step": steps + 1,
+                    "node": current_id,
+                    "status": "cycle_detected",
+                    "error": f"节点 '{current_id}' 重复执行 {visit_counts[current_id]} 次，可能存在死循环",
+                })
+                break
 
             # 保存每步快照
             ctx.snapshot()
@@ -95,6 +114,8 @@ class DAGScheduler:
         if steps >= self.max_steps:
             status = "max_steps_reached"
             logger.warning(f"工作流达到最大步数 {self.max_steps}，强制终止")
+        elif visit_counts.get(current_id, 0) > MAX_VISITS_PER_NODE if current_id else False:
+            status = "cycle_detected"
         else:
             status = "completed"
             logger.info(f"=== 工作流完成，共 {steps} 步 ===")
