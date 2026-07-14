@@ -483,3 +483,54 @@ def _save_custom_provider(info: ProviderInfo) -> None:
 
 # Public alias
 list_custom_providers = _load_custom_providers
+
+
+# ── v0.5.3: MCP 服务器持久化 ─────────────────────────────────
+_MCP_SERVERS_KEY = "_mcp_servers"
+
+
+def load_mcp_servers() -> list[dict[str, object]]:
+    """从 credentials.yaml 加载已持久化的 MCP 服务器配置。
+
+    Returns:
+        [{"name": "12306", "command": "npx", "args": ["-y", "12306-mcp"]},
+         {"name": "web", "url": "http://localhost:3000/sse"}, ...]
+    """
+    if not CREDENTIALS_PATH.exists():
+        return []
+    with open(CREDENTIALS_PATH, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    servers = data.get(_MCP_SERVERS_KEY, [])
+    if not isinstance(servers, list):
+        return []
+    return servers
+
+
+def save_mcp_server(name: str, *, command: str = "", args: list[str] | None = None, url: str = "") -> None:
+    """持久化一个 MCP 服务器配置（新增或更新同名配置）。"""
+    servers = load_mcp_servers()
+    # 移除同名旧配置
+    servers = [s for s in servers if s.get("name") != name]
+    entry: dict[str, object] = {"name": name}
+    if url:
+        entry["url"] = url
+    else:
+        entry["command"] = command
+        entry["args"] = args or []
+    servers.append(entry)
+
+    creds = load_credentials()
+    creds[_MCP_SERVERS_KEY] = servers
+    save_credentials(creds)
+
+
+def remove_mcp_server(name: str) -> bool:
+    """从持久化配置中移除一个 MCP 服务器。返回是否成功移除。"""
+    servers = load_mcp_servers()
+    new_servers = [s for s in servers if s.get("name") != name]
+    if len(new_servers) == len(servers):
+        return False
+    creds = load_credentials()
+    creds[_MCP_SERVERS_KEY] = new_servers
+    save_credentials(creds)
+    return True

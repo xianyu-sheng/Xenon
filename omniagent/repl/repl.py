@@ -447,6 +447,9 @@ class REPL:
         # 加载自定义快捷指令和技能
         self._load_custom_commands()
 
+        # v0.5.3: 自动连接持久化的 MCP 服务器
+        self._auto_connect_mcp_servers()
+
     def _print_welcome(self) -> None:
         """打印简洁的欢迎界面。
 
@@ -1625,6 +1628,53 @@ class REPL:
             return bool(registry.clients)
         except Exception:
             return False
+
+    def _auto_connect_mcp_servers(self) -> None:
+        """v0.5.3: 启动时自动连接已持久化的 MCP 服务器。"""
+        from omniagent.mcp.registry import MCPRegistry
+        from omniagent.repl.provider_registry import load_mcp_servers
+
+        servers = load_mcp_servers()
+        if not servers:
+            return
+
+        if not hasattr(self, '_mcp_registry') or self._mcp_registry is None:
+            self._mcp_registry = MCPRegistry()
+            self.agent_context.set("_mcp_registry", self._mcp_registry)
+
+        connected = 0
+        for s in servers:
+            name = s.get("name", "")
+            if not name:
+                continue
+            try:
+                if s.get("url"):
+                    self._mcp_registry.add_server(name, url=str(s["url"]))
+                else:
+                    cmd = str(s.get("command", ""))
+                    args = [str(a) for a in s.get("args", [])]
+                    if cmd:
+                        self._mcp_registry.add_server(name, command=cmd, args=args)
+                    else:
+                        continue
+                connected += 1
+            except Exception as e:
+                logger.debug(f"自动连接 MCP '{name}' 失败: {e}")
+
+        if connected:
+            # 发现工具
+            try:
+                self._mcp_registry.discover_tools()
+                total_tools = sum(
+                    len(client.tools)
+                    for client in self._mcp_registry.clients.values()
+                )
+                console.print(
+                    f"[dim]· 自动连接 {connected} 个 MCP 服务器"
+                    f"（{total_tools} 个工具）[/dim]"
+                )
+            except Exception:
+                console.print(f"[dim]· 自动连接 {connected} 个 MCP 服务器[/dim]")
 
     _FILE_CLAIM_KEYWORDS: list[str] = [
         "已创建", "已经创建", "已生成", "已经生成", "已写入", "已经写入",

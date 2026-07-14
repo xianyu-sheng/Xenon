@@ -961,8 +961,14 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
         try:
             if target.startswith("http"):
                 registry.add_server(name, url=target)
+                # v0.5.3: 持久化
+                from omniagent.repl.provider_registry import save_mcp_server
+                save_mcp_server(name, url=target)
             else:
                 registry.add_server(name, command=target, args=extra_args)
+                # v0.5.3: 持久化
+                from omniagent.repl.provider_registry import save_mcp_server
+                save_mcp_server(name, command=target, args=extra_args)
 
             # 发现工具
             tools = registry.discover_tools()
@@ -1006,6 +1012,9 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
             # 重建工具映射
             registry.tool_map.clear()
             registry.discover_tools()
+            # v0.5.3: 从持久化配置中移除
+            from omniagent.repl.provider_registry import remove_mcp_server
+            remove_mcp_server(name)
             return f"✅ MCP 服务器 '{name}' 已移除"
         return f"❌ 未找到 MCP 服务器 '{name}'"
 
