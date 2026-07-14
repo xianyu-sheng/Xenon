@@ -1553,7 +1553,9 @@ class ToolNode(BaseNode):
         result = {
             "action_type": "search_files", "path": str(path), "pattern": search_pattern,
             "matches": matches, "match_count": len(matches),
-            "files_scanned": files_scanned, "success": True,
+            "files_scanned": files_scanned,
+            "stdout": display,  # v0.5.3: 文本表示，LLM 可直接读取
+            "success": True,
         }
         self._write_output(context, display)
         logger.info(f"[{self.id}] 搜索到 {len(matches)} 处匹配: {search_pattern}")
@@ -1602,7 +1604,9 @@ class ToolNode(BaseNode):
             output = proc.stdout.strip() or proc.stderr.strip()
             result = {
                 "action_type": "git", "command": " ".join(cmd),
-                "returncode": proc.returncode, "output": output,
+                "returncode": proc.returncode,
+                "stdout": output,    # v0.5.3: 统一字段名，与 command 工具一致
+                "output": output,    # 保留兼容
                 "success": proc.returncode == 0,
             }
             self._write_output(context, output)

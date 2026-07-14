@@ -149,6 +149,32 @@ _TRANSIENT_PATTERNS = re.compile(
 )
 
 
+# v0.5.3: 参数校验拦截时提示替代工具，帮助 LLM 恢复
+_TOOL_ALTERNATIVES: dict[str, list[str]] = {
+    "command": ["search_files（搜索文件内容）", "read_file（读取文件）", "list_files（列出文件）"],
+    "write_file": ["batch_write（批量写入）"],
+    "edit_file": ["batch_edit（批量编辑）"],
+}
+
+
+def _tool_alternative_hint(tool_name: str, params: dict[str, object]) -> str:
+    """参数校验拦截时，返回替代工具提示。"""
+    alternatives = _TOOL_ALTERNATIVES.get(tool_name, [])
+    if not alternatives:
+        return ""
+    # 根据参数内容推断更具体的建议
+    param_str = " ".join(str(v) for v in params.values() if isinstance(v, str))[:200]
+    suggestions: list[str] = []
+    for alt in alternatives:
+        alt_name = alt.split("（")[0]
+        if alt_name in param_str:
+            continue  # 已经在用类似的，不重复建议
+        suggestions.append(alt)
+    if not suggestions:
+        suggestions = alternatives
+    return f"\n💡 建议使用: {' | '.join(suggestions[:3])}"
+
+
 def is_terminal_error(error: str) -> bool:
     """终端错误（文件不存在/权限/参数非法）不重试；瞬时错误（超时/限流/网络）重试。"""
     if not error:
@@ -250,9 +276,14 @@ class ToolExecutor:
         ok, reason = validate_tool_params(params)
         if not ok:
             logger.warning(f"参数幻觉拦截: {tool_name} — {reason}")
+            # v0.5.3: 提示替代工具，帮助 LLM 恢复
+            hint = _tool_alternative_hint(tool_name, params)
+            err_msg = f"参数校验失败: {reason}"
+            if hint:
+                err_msg += hint
             if tracker:
-                tracker.record(tool_name, params, False, reason, error=reason)
-            return ToolExecuteResult(tool_name, False, f"参数校验失败: {reason}", error=reason, tool_class=tool_class)
+                tracker.record(tool_name, params, False, err_msg, error=reason)
+            return ToolExecuteResult(tool_name, False, err_msg, error=reason, tool_class=tool_class)
 
         # ── Stage 3: 权限闸门（v0.5.0: 接入 PermissionGate） ──
         if self.permission_gate is not None:
