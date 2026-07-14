@@ -1349,6 +1349,7 @@ class ToolNode(BaseNode):
                 "action_type": "mcp_call",
                 "tool": tool_name,
                 "result": result,
+                "content": display[:5000],  # v0.5.3: LLM 可读的文本输出
                 "success": True,
             }
 

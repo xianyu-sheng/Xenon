@@ -219,12 +219,32 @@ class ToolExecuteResult:
 
 # ── 观察摘要提取（与原引擎逻辑一致） ───────────────────────
 def _extract_summary(result: dict[str, Any], list_cap: int = 50, str_cap: int = 3000) -> str:
+    """从工具结果中提取 LLM 可读的文本摘要。
+
+    按优先级查找: content → stdout → output → files。
+    兼容 MCP 嵌套响应 (result.content[].text)。
+    """
     for key in ("content", "stdout", "output", "files"):
         val = result.get(key)
         if val:
             if isinstance(val, list):
                 return "\n".join(str(v) for v in val[:list_cap])
             return str(val)[:str_cap]
+
+    # v0.5.3: MCP 嵌套响应兜底 — result.result.content[].text
+    inner = result.get("result", {})
+    if isinstance(inner, dict):
+        mcp_content = inner.get("content", [])
+        if isinstance(mcp_content, list) and mcp_content:
+            parts = []
+            for item in mcp_content:
+                if isinstance(item, dict):
+                    parts.append(item.get("text", str(item)))
+                else:
+                    parts.append(str(item))
+            if parts:
+                return "\n".join(parts)[:str_cap]
+
     return "（执行成功，无文本输出）"
 
 
