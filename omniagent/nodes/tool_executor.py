@@ -86,11 +86,21 @@ def _balanced(s: str) -> bool:
 
 
 def _validate_param_value(name: str, value: Any) -> list[str]:
-    """对单个非 content 参数做 7 类检查，返回命中的条件描述列表。"""
+    """对单个非 content 参数做 7 类检查，返回命中的条件描述列表。
+
+    v0.5.3: 放宽 shell here-doc、Python -c 和长命令的检查。
+    """
     if not isinstance(value, str) or not value:
         return []
+
+    # v0.5.3: 检测 shell here-doc 和 Python -c 模式，这些是合法的命令形式
+    _looks_like_heredoc = bool(re.search(r"<<\s*['\"]?\w+['\"]?", value))
+    _looks_like_python_c = bool(re.search(r"python\d*\s+-c\s", value))
+    _is_shell_payload = _looks_like_heredoc or _looks_like_python_c
+
     hits: list[str] = []
-    if _RE_FUNC_SIG.search(value):
+    # v0.5.3: here-doc 和 python -c 中的代码不应被标记为函数签名
+    if _RE_FUNC_SIG.search(value) and not _is_shell_payload:
         hits.append("疑似函数签名")
     if not _balanced(value):
         hits.append("括号不配平")
@@ -98,8 +108,10 @@ def _validate_param_value(name: str, value: Any) -> list[str]:
         hits.append("Windows 非法字符")
     if _RE_TRAILING_ILLEGAL.search(value):
         hits.append("末尾非法字符")
-    if name in ("file_path", "path", "command", "action") and len(value) > 200:
-        hits.append("超长(>200)")
+    # v0.5.3: command/action 放宽到 2000 字符（shell 命令和 Python -c 可以很长）
+    cmd_max_len = 2000 if _is_shell_payload else 200
+    if name in ("file_path", "path", "command", "action") and len(value) > cmd_max_len:
+        hits.append(f"超长(>{cmd_max_len})")
     if name in ("file_path", "path", "command") and _chinese_ratio(value) > 0.5:
         hits.append("中文占比过高")
     if _code_structure_ratio(value) > 0.3 and len(value) > 50:
