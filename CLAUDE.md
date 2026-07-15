@@ -104,3 +104,13 @@ ReactReflection / Novel）在创建后都应调用 `_inject_mcp_tools_into_engin
 - CHANGELOG: 按版本倒序，每版本记录变更类别和测试结果
 - 测试: 1110 个单元测试，`python3 -m pytest tests/ -q`
 - 发布: `git tag -a vX.Y.Z` + `gh release create`
+
+### 每次修改后自动安装
+
+**每次 `git commit` Python 代码后，post-commit hook 自动执行
+`pip install -e . --break-system-packages`，确保 `omniagent` 命令
+始终指向最新代码。**
+
+- Hook 位置: `.git/hooks/post-commit`
+- 触发条件: 仅当 `omniagent/` 下有 `.py` 文件变更
+- 手动安装: `pip install -e . --break-system-packages`
