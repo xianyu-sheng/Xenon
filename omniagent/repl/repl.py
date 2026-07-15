@@ -1358,6 +1358,18 @@ class REPL:
 
         console.print(f"[error]❌ 所有模型均调用失败: {last_error}[/error]")
 
+    def _inject_mcp_tools_into_engine(self, engine: object) -> None:
+        """v0.5.3: 将可用 MCP 工具列表注入引擎的 system prompt。
+
+        所有引擎（ReAct/PlanExecute/Reflection 等）统一使用此方法，
+        让 LLM 在 mcp_call 工具描述中看到具体可用的 MCP 工具名和描述。
+        """
+        mcp_tools_list = self._build_mcp_tools_list()
+        if mcp_tools_list and hasattr(engine, '_mcp_tools_list'):
+            engine._mcp_tools_list = mcp_tools_list
+            if hasattr(engine, '_build_system_prompt'):
+                engine.system_prompt = engine._build_system_prompt()
+
     def _run_react_engine(self, user_input: str, model_ids: list[str]) -> None:
         """ReAct 引擎模式。"""
         from omniagent.engine.react_engine import ReActEngine
@@ -1366,6 +1378,7 @@ class REPL:
 
         callback = self._make_callback()
         engine = ReActEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_iterations=10, callback=callback, model_configs=dict(self.registry.models))
+        self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1396,6 +1409,7 @@ class REPL:
 
         callback = self._make_callback()
         engine = PlanExecuteEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_steps=20, callback=callback, model_configs=dict(self.registry.models))
+        self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1412,6 +1426,7 @@ class REPL:
 
         callback = self._make_callback()
         engine = ReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_rounds=3, callback=callback, model_configs=dict(self.registry.models))
+        self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1428,6 +1443,7 @@ class REPL:
 
         callback = self._make_callback()
         engine = PlanReactEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_steps=10, react_iterations=8, callback=callback, model_configs=dict(self.registry.models))
+        self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1444,6 +1460,7 @@ class REPL:
 
         callback = self._make_callback()
         engine = PlanReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_steps=10, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
+        self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1460,6 +1477,7 @@ class REPL:
 
         callback = self._make_callback()
         engine = ReactReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, react_iterations=8, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
+        self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
@@ -1628,6 +1646,35 @@ class REPL:
             return bool(registry.clients)
         except Exception:
             return False
+
+    def _build_mcp_tools_list(self) -> str:
+        """v0.5.3: 构建可用 MCP 工具列表，注入到引擎的 system prompt 中。
+
+        LLM 需要知道具体有哪些 MCP 工具可用，才能正确调用 mcp_call。
+        不提供的话 LLM 只能猜测工具名（如 query_train），必然失败。
+        """
+        registry = getattr(self, '_mcp_registry', None)
+        if not registry or not registry.tool_map:
+            return ""
+
+        # 确保工具已发现
+        if not registry.tool_map:
+            try:
+                registry.discover_tools()
+            except Exception:
+                return ""
+
+        tools_by_server: dict[str, list[tuple[str, str]]] = {}
+        for full_name, (server_name, tool) in registry.tool_map.items():
+            desc = tool.get("description", "")[:80] if isinstance(tool, dict) else str(tool)[:80]
+            tools_by_server.setdefault(server_name, []).append((full_name, desc))
+
+        parts = ["\n当前可用的 MCP 工具："]
+        for server, tools in sorted(tools_by_server.items()):
+            parts.append(f"  [{server}]")
+            for name, desc in tools:
+                parts.append(f"    - {name}: {desc}")
+        return "\n".join(parts)
 
     def _auto_connect_mcp_servers(self) -> None:
         """v0.5.3: 启动时自动连接已持久化的 MCP 服务器。"""

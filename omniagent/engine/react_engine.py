@@ -183,7 +183,11 @@ BUILTIN_TOOLS = {
     },
     "mcp_call": {
         "name": "mcp_call",
-        "description": "调用通过 MCP 协议连接的外部工具服务器。需要先用 /mcp add 命令添加服务器并发现可用工具。",
+        "description": (
+            "调用通过 MCP 协议连接的外部工具服务器。"
+            "需要先用 /mcp add 命令添加服务器并发现可用工具。"
+            "{mcp_tools_list}"
+        ),
         "params": {"tool_name": "MCP 工具名，格式为 server:tool 或 tool", "tool_args": "工具参数字典"},
     },
     "github_fetch": {
@@ -247,6 +251,8 @@ class ReActEngine(BaseEngine):
         )
         self.max_iterations = max_iterations
         self.tools = tools or BUILTIN_TOOLS
+        # v0.5.3: MCP 工具列表占位——_build_system_prompt 注入实际可用工具
+        self._mcp_tools_list = ""
         self.system_prompt = system_prompt or self._build_system_prompt()
         # F1: 工具执行门面（7 阶段流水线：校验/断路器/重试/封装）
         self._tool_executor = ToolExecutor(permission_gate=permission_gate)
@@ -269,10 +275,16 @@ class ReActEngine(BaseEngine):
 
     def _build_system_prompt(self) -> str:
         import sys
-        tools_desc = "\n".join(
-            f"- {t['name']}: {t['description']} (参数: {t['params']})"
-            for t in self.tools.values()
-        )
+        # v0.5.3: 注入可用的 MCP 工具列表到 mcp_call 描述中
+        tools_desc_parts = []
+        for t in self.tools.values():
+            desc = t['description']
+            if t['name'] == 'mcp_call' and self._mcp_tools_list:
+                desc = desc.replace('{mcp_tools_list}', self._mcp_tools_list)
+            else:
+                desc = desc.replace('{mcp_tools_list}', '')
+            tools_desc_parts.append(f"- {t['name']}: {desc} (参数: {t['params']})")
+        tools_desc = "\n".join(tools_desc_parts)
 
         # 检测操作系统
         if sys.platform == "win32":
