@@ -1530,6 +1530,13 @@ class REPL:
         try:
             result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
             self._captured_log = self._stop_log_capture()
+            # v0.5.3: 诊断日志 — 记录结果实际值，用于排查空白面板根因
+            logger.info(
+                f"_run_react_engine: result type={type(result).__name__}, "
+                f"len={len(result) if isinstance(result, str) else 'N/A'}, "
+                f"strip_len={len(result.strip()) if isinstance(result, str) and result else 0}, "
+                f"head={result[:80] if isinstance(result, str) and result else repr(result)[:80]}"
+            )
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "ReAct 结果")
             self.status_bar.set_last_model(model_ids[0])
