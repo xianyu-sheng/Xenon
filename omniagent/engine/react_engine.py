@@ -235,6 +235,26 @@ BUILTIN_TOOLS = {
     # register_tool 不对 LLM 默认暴露（A2，§8.25.2）：切断 prompt 注入→自主 RCE 链路。
     # handler 仍在 ToolNode.execute 保留，可由用户显式调用；模块导入受 _validate_register_module
     # 白名单约束（A1），重名受 _BUILTIN_ACTION_TYPES 约束（A3）。
+    "create_skill": {
+        "name": "create_skill",
+        "description": (
+            "创建一个自定义技能（skill）并持久化到磁盘。技能是可复用的多步骤工作流，"
+            "支持 LLM 调用、命令执行、文件读写等步骤类型。创建后可通过 /<name> 命令直接调用。"
+            "步骤类型: llm(提示词调用LLM), command(执行shell命令), echo(输出文本), "
+            "write_file(写文件), read_file(读文件)。步骤间可用 output_var 传递数据。"
+        ),
+        "params": {
+            "name": "技能名称（英文，如 frontend-design、code-review）",
+            "description": "技能描述（一句话说明用途）",
+            "steps": "步骤数组，每步含 type 字段。格式: [{type: llm, prompt: 提示词, output_var: result}, ...]",
+            "system_prompt": "系统提示词（可选，供 llm 步骤使用）",
+        },
+    },
+    "list_skills": {
+        "name": "list_skills",
+        "description": "列出所有已安装的自定义技能，包括名称、描述和步骤信息。",
+        "params": {},
+    },
 }
 
 
@@ -687,6 +707,11 @@ class ReActEngine(BaseEngine):
         """
         if action == "spawn_agent":
             return self._spawn_subagent(action_input, context, tracker)
+        # v0.5.4: skill 管理工具 — 直接在引擎内处理，不走 ToolNode
+        if action == "create_skill":
+            return self._create_skill_tool(action_input)
+        if action == "list_skills":
+            return self._list_skills_tool()
         result = self._tool_executor.execute(
             action, action_input, context, tracker=tracker, tools=self.tools,
         )
@@ -769,6 +794,61 @@ class ReActEngine(BaseEngine):
             )
         self._subagent_history.append(task_id)
         return formatted
+
+    # ── v0.5.4: skill 管理工具 ─────────────────────────────
+
+    @staticmethod
+    def _create_skill_tool(action_input: dict) -> str:
+        """创建自定义技能并持久化到磁盘。"""
+        name = (action_input.get("name") or "").strip()
+        if not name:
+            return "❌ 创建 skill 失败: 缺少 name 参数"
+
+        description = action_input.get("description", "").strip()
+        steps = action_input.get("steps", [])
+        system_prompt = action_input.get("system_prompt", "").strip()
+
+        if not isinstance(steps, list) or not steps:
+            return "❌ 创建 skill 失败: steps 必须是非空数组"
+
+        try:
+            from omniagent.repl.skill_manager import SkillManager
+            from omniagent.repl.commands import _register_skill_handler
+
+            manager = SkillManager()
+            skill = manager.create(
+                name=name,
+                description=description or f"自动创建的技能: {name}",
+                steps=steps,
+                system_prompt=system_prompt,
+            )
+            _register_skill_handler(skill, manager)
+            step_types = [s.get("type", "?") for s in steps[:5]]
+            return (
+                f"✅ 技能 /{skill.name} 已创建并持久化。\n"
+                f"- 描述: {skill.description}\n"
+                f"- 步骤: {len(steps)} 个 ({', '.join(step_types)})\n"
+                f"- 调用: /{skill.name} 或 /skill run {skill.name}"
+            )
+        except Exception as e:
+            logger.exception("create_skill 失败")
+            return f"❌ 创建 skill 失败: {e}"
+
+    @staticmethod
+    def _list_skills_tool() -> str:
+        """列出所有已安装的技能。"""
+        try:
+            from omniagent.repl.skill_manager import SkillManager
+            manager = SkillManager()
+            skills = manager.list_all()
+            if not skills:
+                return "暂无已安装的技能。使用 create_skill 工具或 /skill create 创建。"
+            lines = [f"共 {len(skills)} 个技能:\n"]
+            for s in skills:
+                lines.append(f"- /{s.name}: {s.description} ({len(s.steps)} 步)")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"❌ 列出技能失败: {e}"
 
     @staticmethod
     def _input_requires_tools(text: str) -> bool:

@@ -1528,8 +1528,35 @@ def _shortcut_manual_create(name: str, description: str, manager, pre_steps=None
 register_command(
     "/skill",
     "管理自定义技能（支持 LLM + 工具组合）",
-    "/skill create|list|run|delete [参数]",
+    "/skill create|list|run|delete|import [参数]",
 )
+
+# v0.5.4: 模糊子命令匹配 —— "creat"/"lst"/"del" 等 typo 自动纠正
+_SKILL_FUZZY: dict[str, str] = {}
+_FUZZY_ALIASES = {
+    "create": ["creat", "crate", "creaet", "add", "new", "mk"],
+    "list": ["ls", "lst", "show", "all"],
+    "delete": ["del", "rm", "remove", "delet"],
+    "run": ["exec", "execute", "start"],
+    "import": ["install", "get", "fetch", "clone", "load"],
+    "reload": ["refresh", "rescan"],
+}
+for _canonical, _aliases in _FUZZY_ALIASES.items():
+    for _a in _aliases:
+        _SKILL_FUZZY[_a] = _canonical
+
+
+def _fuzzy_match_subcommand(sub: str) -> str | None:
+    """模糊匹配子命令名，返回规范名或 None。"""
+    import difflib
+    canonical = list(_FUZZY_ALIASES.keys())
+    # 精确别名匹配
+    if sub in _SKILL_FUZZY:
+        return _SKILL_FUZZY[sub]
+    # difflib 模糊匹配（截断到 1 的阈值）
+    matches = difflib.get_close_matches(sub, canonical, n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
 
 @_handler("/skill")
 def _cmd_skill(*, args: str, registry: ModelRegistry, session_state: dict[str, Any], **kwargs: Any) -> str:
@@ -1540,21 +1567,38 @@ def _cmd_skill(*, args: str, registry: ModelRegistry, session_state: dict[str, A
     sub = parts[0].lower() if parts else "list"
     sub_args = parts[1] if len(parts) > 1 else ""
 
-    if sub == "list":
+    # v0.5.4: 模糊匹配纠正 typo
+    canonical = sub
+    if sub not in {"list", "create", "run", "delete", "import", "reload"}:
+        matched = _fuzzy_match_subcommand(sub)
+        if matched:
+            canonical = matched
+
+    if canonical == "list":
         skills = manager.list_all()
         if not skills:
-            return "暂无技能。使用 /skill create 创建。"
+            return (
+                "暂无技能。\n\n"
+                "创建技能的方式:\n"
+                "  /skill create <名称> <描述>  — 快速创建\n"
+                "  /skill <自然语言描述>         — AI 自动生成，如 /skill 帮我设计前端页面\n"
+                "  /skill import <url>           — 从 GitHub 导入"
+            )
 
         lines = [f"共 {len(skills)} 个技能:\n"]
         for s in skills:
             lines.append(f"  /{s.name} — {s.description}")
-            lines.append(f"    步骤: {len(s.steps)} 个")
+            type_counts: dict[str, int] = {}
+            for st in s.steps:
+                type_counts[st.type] = type_counts.get(st.type, 0) + 1
+            step_summary = ", ".join(f"{n}×{t}" for t, n in sorted(type_counts.items()))
+            lines.append(f"    步骤: {len(s.steps)} 个 ({step_summary})")
         return "\n".join(lines)
 
-    elif sub == "create":
+    elif canonical == "create":
         return _skill_create_interactive(manager, registry=registry)
 
-    elif sub == "run":
+    elif canonical == "run":
         if not sub_args:
             return "用法: /skill run <name> [参数]"
         parts2 = sub_args.split(maxsplit=1)
@@ -1563,15 +1607,28 @@ def _cmd_skill(*, args: str, registry: ModelRegistry, session_state: dict[str, A
         model_ids = registry.get_role_priority("planner")
         return manager.execute(name, run_args, model_priority=model_ids)
 
-    elif sub == "delete":
+    elif canonical == "delete":
         if not sub_args:
             return "用法: /skill delete <name>"
         if manager.remove(sub_args.strip()):
             return f"✅ 已删除技能: {sub_args.strip()}"
         return f"❌ 技能 /{sub_args.strip()} 不存在"
 
+    elif canonical == "import":
+        if not sub_args:
+            return "用法: /skill import <github-url>"
+        return _skill_import_from_url(manager, sub_args.strip())
+
+    elif canonical == "reload":
+        manager.load()
+        skills = manager.list_all()
+        return f"✅ 已从磁盘重新加载 {len(skills)} 个技能"
+
     else:
-        return "用法: /skill create|list|run|delete [参数]"
+        # v0.5.4: 自然语言技能创建 —— subcommand 不匹配时，
+        # 将整个 args 视为"描述"，自动生成 skill
+        name = _extract_skill_name(sub, sub_args)
+        return _skill_auto_generate(name, args, manager, registry, interactive=False)
 
 
 def _skill_create_interactive(manager, registry=None) -> str:
@@ -1597,8 +1654,17 @@ def _skill_create_interactive(manager, registry=None) -> str:
         return _skill_manual_create(name, description, manager)
 
 
-def _skill_auto_generate(name: str, description: str, manager, registry=None) -> str:
-    """智能生成技能步骤。"""
+def _skill_auto_generate(name: str, description: str, manager, registry=None, *, interactive: bool = True) -> str:
+    """智能生成技能步骤。
+
+    Args:
+        name: 技能名称
+        description: 技能描述
+        manager: SkillManager 实例
+        registry: ModelRegistry 实例
+        interactive: True 时展示生成结果并让用户确认/编辑/取消；
+                     False 时直接保存（自然语言快速创建）。
+    """
     from rich.panel import Panel
     from rich.prompt import Prompt as _Prompt
 
@@ -1608,8 +1674,13 @@ def _skill_auto_generate(name: str, description: str, manager, registry=None) ->
     steps, system_prompt = _generate_skill_steps(description, registry)
 
     if not steps:
-        console.print("[yellow]⚠️  自动生成失败，切换到手动模式。[/yellow]")
-        return _skill_manual_create(name, description, manager)
+        if interactive:
+            console.print("[yellow]⚠️  自动生成失败，切换到手动模式。[/yellow]")
+            return _skill_manual_create(name, description, manager)
+        else:
+            console.print("[yellow]⚠️  自动生成失败，使用默认步骤。[/yellow]")
+            steps = _fallback_skill_steps(description)
+            system_prompt = ""
 
     # 展示生成结果供用户学习
     console.print(Panel(
@@ -1619,24 +1690,26 @@ def _skill_auto_generate(name: str, description: str, manager, registry=None) ->
         padding=(1, 2),
     ))
 
-    console.print("\n[dim]👆 以上是 Agent 根据你的描述自动生成的步骤。[/dim]")
-    console.print("[dim]   你可以直接使用，也可以在此基础上修改。[/dim]\n")
+    if interactive:
+        console.print("\n[dim]👆 以上是 Agent 根据你的描述自动生成的步骤。[/dim]")
+        console.print("[dim]   你可以直接使用，也可以在此基础上修改。[/dim]\n")
 
-    action = _Prompt.ask(
-        "操作",
-        choices=["ok", "edit", "cancel"],
-        default="ok",
-    )
+        action = _Prompt.ask(
+            "操作",
+            choices=["ok", "edit", "cancel"],
+            default="ok",
+        )
 
-    if action == "cancel":
-        return "❌ 已取消创建。"
+        if action == "cancel":
+            return "❌ 已取消创建。"
 
-    if action == "edit":
-        return _skill_manual_create(name, description, manager, pre_steps=steps, pre_system_prompt=system_prompt)
+        if action == "edit":
+            return _skill_manual_create(name, description, manager, pre_steps=steps, pre_system_prompt=system_prompt)
 
     # 直接保存
     skill = manager.create(name, description, steps, system_prompt=system_prompt)
-    return f"✅ 技能 /{skill.name} 已创建！使用 /skill run {skill.name} 执行。"
+    _register_skill_handler(skill, manager)
+    return f"✅ 技能 /{skill.name} 已创建！使用 /{skill.name} 或 /skill run {skill.name} 执行。"
 
 
 def _generate_skill_steps(description: str, registry=None) -> tuple[list[dict], str]:
@@ -1815,7 +1888,228 @@ def _skill_manual_create(name: str, description: str, manager, pre_steps=None, p
         return "❌ 至少需要一个步骤"
 
     skill = manager.create(name, description, steps, system_prompt=system_prompt)
-    return f"✅ 技能 /{skill.name} 已创建！使用 /skill run {skill.name} 执行。"
+    _register_skill_handler(skill, manager)
+    return f"✅ 技能 /{skill.name} 已创建！使用 /{skill.name} 或 /skill run {skill.name} 执行。"
+
+
+# ── skill 辅助函数 ─────────────────────────────────────────
+
+
+def _register_skill_handler(skill, manager) -> None:
+    """v0.5.4: 动态注册 skill 为命令处理器，无需重启即可用 /<name> 调用。"""
+    cmd_name = f"/{skill.name}"
+    if cmd_name not in _HANDLERS:
+        def make_handler(sk_name):
+            def handler(*, args: str, registry, **kw: Any) -> str:
+                model_ids = registry.get_role_priority("planner")
+                return manager.execute(sk_name, args, model_priority=model_ids)
+            return handler
+        _HANDLERS[cmd_name] = make_handler(skill.name)
+        register_command(cmd_name, f"[技能] {skill.description}", cmd_name)
+        console.print(f"[dim]· 已注册命令: {cmd_name}[/dim]")
+
+
+def _extract_skill_name(sub: str, sub_args: str) -> str:
+    """v0.5.4: 从自然语言输入中提取 skill 名称。
+
+    优先级: 1) sub_args 中的英文标识符  2) "创建xxx skill" 模式
+    3) sub 本身（如果是有效英文名）  4) 自动生成
+    失败时返回 'my-skill'。
+    """
+    import re
+
+    combined = f"{sub} {sub_args}".strip() if sub_args else sub
+
+    # 1) 尝试从 sub_args 中提取英文标识符（优先 sub_args 因为 sub 可能是 typo）
+    if sub_args:
+        # "创建/设计 xxx skill" → xxx
+        m = re.search(r"(?:创建|设计|一个|叫|名为)\s*[\"']?([a-zA-Z][a-zA-Z0-9_-]*)", sub_args)
+        if m:
+            return m.group(1).strip("-").lower()
+
+    # 2) 从完整输入中提取英文标识符
+    # 优先匹配含连字符的完整标识符（如 frontend-design），但排除已知 typo
+    _KNOWN_TYPOS = {"creat", "crate", "creaet", "lst", "ls", "del", "rm", "exec"}
+    m = re.search(r"([a-zA-Z][a-zA-Z0-9]+(?:[_-][a-zA-Z][a-zA-Z0-9]+)+)", combined)
+    if m:
+        name = m.group(1).lower()
+        if name not in _KNOWN_TYPOS:
+            return name
+    # 再匹配单标识符（排除已知 typo 和太短的名字）
+    for m in re.finditer(r"([a-zA-Z][a-zA-Z0-9_-]{2,})", combined):
+        name = m.group(1).lower()
+        if name not in _KNOWN_TYPOS and len(name) >= 3:
+            return name
+
+    # 3) sub 本身可能是英文名（但不包括已知的 typo）
+    if sub not in _KNOWN_TYPOS and re.match(r"^[a-zA-Z][a-zA-Z0-9_-]{2,}$", sub):
+        return sub.lower()
+
+    # 4) 无法提取，生成唯一名称
+    import time
+    return f"skill-{int(time.time()) % 100000}"
+
+
+def _skill_import_from_url(manager, url: str) -> str:
+    """v0.5.4: 从 URL 导入 skill。
+
+    支持 GitHub URL 格式:
+    - https://github.com/owner/repo
+    - https://github.com/owner/repo/tree/main/skills/my-skill
+    - owner/repo
+    """
+    import re
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    # 解析 URL
+    url = url.strip()
+    if not url.startswith(("http://", "https://", "github.com/")) and "/" not in url:
+        return f"❌ 无法识别的 URL 格式: {url}\n   支持: https://github.com/owner/repo 或 owner/repo"
+
+    if not url.startswith("http"):
+        url = f"https://github.com/{url}"
+
+    # 提取 owner/repo
+    m = re.search(r"github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:/|$)", url)
+    if not m:
+        return f"❌ 无法解析 GitHub URL: {url}"
+
+    owner, repo = m.group(1), m.group(2)
+    console.print(f"[dim]· 正在从 GitHub 获取: {owner}/{repo}...[/dim]")
+
+    try:
+        # 使用 gh CLI 或 curl 获取仓库内容
+        # 方法 1: 尝试 gh CLI
+        gh_available = subprocess.run(
+            ["which", "gh"], capture_output=True, text=True
+        ).returncode == 0
+
+        if gh_available:
+            # 用 gh 获取仓库文件树
+            result = subprocess.run(
+                ["gh", "repo", "view", f"{owner}/{repo}", "--json", "name,description"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                import json
+                try:
+                    info = json.loads(result.stdout)
+                    repo_desc = info.get('description', '无描述')
+                    console.print(f"[dim]  仓库: {repo_desc}[/dim]")
+                except json.JSONDecodeError:
+                    pass
+
+            # 尝试获取 README 了解 skill 信息
+            readme_result = subprocess.run(
+                ["gh", "api", f"repos/{owner}/{repo}/readme"],
+                capture_output=True, text=True, timeout=30,
+            )
+
+        # 方法 2: 直接用 curl 获取文件列表
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents"
+        result = subprocess.run(
+            ["curl", "-sL", api_url],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        if result.returncode != 0 or not result.stdout.strip():
+            return f"❌ 无法获取仓库内容: {api_url}"
+
+        import json as _json
+        try:
+            contents = _json.loads(result.stdout)
+        except _json.JSONDecodeError:
+            return f"❌ 无法解析仓库内容 (可能触发了 GitHub API 限流)"
+
+        if not isinstance(contents, list):
+            return f"❌ 仓库内容格式异常"
+
+        # 查找 YAML 文件（优先 .omniagent/skills/ 目录下的）
+        yaml_files = []
+        for item in contents:
+            name = item.get("name", "")
+            if name.endswith((".yaml", ".yml")):
+                yaml_files.append(item)
+            if name == ".omniagent" and item.get("type") == "dir":
+                # 递归获取 .omniagent/skills/ 目录
+                sub_url = item.get("url", "")
+                sub_result = subprocess.run(
+                    ["curl", "-sL", sub_url],
+                    capture_output=True, text=True, timeout=30,
+                )
+                try:
+                    sub_contents = _json.loads(sub_result.stdout)
+                    if isinstance(sub_contents, list):
+                        for si in sub_contents:
+                            if si.get("name") == "skills" and si.get("type") == "dir":
+                                skills_url = si.get("url", "")
+                                skills_result = subprocess.run(
+                                    ["curl", "-sL", skills_url],
+                                    capture_output=True, text=True, timeout=30,
+                                )
+                                try:
+                                    skills_contents = _json.loads(skills_result.stdout)
+                                    if isinstance(skills_contents, list):
+                                        for ski in skills_contents:
+                                            if ski.get("name", "").endswith((".yaml", ".yml")):
+                                                yaml_files.append(ski)
+                                except _json.JSONDecodeError:
+                                    pass
+                except _json.JSONDecodeError:
+                    pass
+
+        if not yaml_files:
+            return (
+                f"❌ 未在仓库 {owner}/{repo} 中找到 skill YAML 文件。\n"
+                f"   请确保仓库包含有效的 skill 配置（.yaml 文件）。\n"
+                f"   Skill 文件应包含: name, description, steps 字段。"
+            )
+
+        # 下载并导入每个 YAML 文件
+        imported = []
+        for yf in yaml_files:
+            download_url = yf.get("download_url", "")
+            if not download_url:
+                continue
+
+            yaml_result = subprocess.run(
+                ["curl", "-sL", download_url],
+                capture_output=True, text=True, timeout=30,
+            )
+            if yaml_result.returncode != 0:
+                continue
+
+            try:
+                import yaml as _yaml
+                data = _yaml.safe_load(yaml_result.stdout)
+                if not data or "name" not in data:
+                    continue
+
+                # 导入 skill
+                skill = manager.create(
+                    name=data["name"],
+                    description=data.get("description", f"从 {owner}/{repo} 导入"),
+                    steps=data.get("steps", []),
+                    system_prompt=data.get("system_prompt", ""),
+                    params=data.get("params", []),
+                )
+                _register_skill_handler(skill, manager)
+                imported.append(skill.name)
+
+            except Exception as e:
+                console.print(f"[yellow]⚠️  导入 {yf.get('name', '?')} 失败: {e}[/yellow]")
+
+        if imported:
+            names = ", ".join(f"/{n}" for n in imported)
+            return f"✅ 已从 {owner}/{repo} 导入 {len(imported)} 个技能: {names}"
+        return f"❌ 未能成功导入任何技能，请检查仓库中的 YAML 文件格式。"
+
+    except subprocess.TimeoutExpired:
+        return "❌ GitHub API 请求超时，请稍后重试。"
+    except Exception as e:
+        return f"❌ 导入失败: {e}"
 
 
 # /project ──────────────────────────────────────────────────

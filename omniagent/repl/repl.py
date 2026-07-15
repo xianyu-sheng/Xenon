@@ -1285,23 +1285,27 @@ class REPL:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     def _classify_slash_input(self, raw: str) -> str:
-        """LLM + 规则校验：判断以 / 开头的输入是命令还是普通对话。
+        """规则 + LLM 校验：判断以 / 开头的输入是命令还是普通对话。
 
-        LLM 先行，规则兜底。返回 'command' 或 'chat'。
+        规则先行，LLM 兜底。返回 'command' 或 'chat'。
+
+        v0.5.4: 已知命令（含参数）直接走命令处理器，不再经 LLM 分类。
+        此前 /skill creat ... 等已知命令+参数会被 LLM 误判为 "chat"，
+        导致整个输入被路由到 _handle_chat 而非命令处理器。
         """
         parts = raw.split(maxsplit=1)
         cmd_name = parts[0].lower()
-        has_args = len(parts) > 1
 
         # ── 规则快速通道：无歧义场景直接判定 ──
         # 文件路径：含多个 /（如 /home/user/file）
         if cmd_name.count("/") > 1:
             return "chat"
-        # 已知命令且无参数：/exit, /help, /models 等
-        if cmd_name in COMMANDS and not has_args:
+        # v0.5.4: 已知命令（无论有无参数）→ 直接走命令处理器
+        # 子命令纠错/模糊匹配应在命令处理器内部完成，不应由 LLM 决定路由
+        if cmd_name in COMMANDS:
             return "command"
 
-        # ── LLM 分类：有歧义的场景（已知命令+参数 或 未知命令）──
+        # ── LLM 分类：仅对未知 / 开头的输入 ──
         try:
             from omniagent.utils.llm_client import chat_completion
 
@@ -1331,9 +1335,7 @@ class REPL:
         except Exception:
             pass  # LLM 不可用，走规则兜底
 
-        # ── 规则兜底 ──
-        if cmd_name in COMMANDS:
-            return "command"
+        # ── 规则兜底：未知命令视为 chat ──
         return "chat"
 
     def _handle_command(self, raw: str) -> bool:
