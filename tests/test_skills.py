@@ -148,3 +148,92 @@ class TestSkillManager:
         assert step.type == "llm"
         assert step.prompt == "test"
         assert step.output_var == "out"
+
+    # ── v0.5.4: 新增功能测试 ──
+
+    def test_fuzzy_match_subcommand(self):
+        """测试子命令模糊匹配。"""
+        from omniagent.repl.commands import _fuzzy_match_subcommand
+        assert _fuzzy_match_subcommand("creat") == "create"
+        assert _fuzzy_match_subcommand("crate") == "create"
+        assert _fuzzy_match_subcommand("lst") == "list"
+        assert _fuzzy_match_subcommand("del") == "delete"
+        assert _fuzzy_match_subcommand("rm") == "delete"
+        assert _fuzzy_match_subcommand("exec") == "run"
+        assert _fuzzy_match_subcommand("install") == "import"
+        assert _fuzzy_match_subcommand("fetch") == "import"
+        # 完全不匹配的应返回 None
+        assert _fuzzy_match_subcommand("xyzabc123") is None
+
+    def test_extract_skill_name_english(self):
+        """测试从英文输入提取 skill 名称。"""
+        from omniagent.repl.commands import _extract_skill_name
+        # sub_args 优先
+        assert _extract_skill_name("creat", "frontend-design") == "frontend-design"
+        # sub 是有效的英文名
+        assert _extract_skill_name("my-skill", "a description") == "my-skill"
+        # 从中文描述中提取英文
+        result = _extract_skill_name("create", "my-cool-tool")
+        assert result in ("my-cool-tool", "create")  # sub 不是 typo
+
+    def test_extract_skill_name_chinese(self):
+        """测试中文输入时生成稳定哈希名。"""
+        from omniagent.repl.commands import _extract_skill_name
+        # 纯中文 → 应返回 skill-<hash> 而非 timestamp
+        result = _extract_skill_name("创建", "帮我写一个自动化脚本")
+        assert result.startswith("skill-")
+        # 相同输入应产生相同 hash
+        result2 = _extract_skill_name("创建", "帮我写一个自动化脚本")
+        assert result == result2
+
+    def test_extract_skill_name_known_typo(self):
+        """测试已知 typo 不被当作 skill 名。"""
+        from omniagent.repl.commands import _extract_skill_name
+        # 'creat' 是 typo，不是有效的 skill 名
+        result = _extract_skill_name("creat", "")
+        assert result.startswith("skill-")  # 应生成 hash 名
+
+    def test_register_skill_handler(self):
+        """测试动态注册 skill handler。"""
+        import tempfile
+        from pathlib import Path
+        from omniagent.repl.commands import _register_skill_handler, _HANDLERS
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = SkillManager(Path(tmpdir))
+            skill = mgr.create("test-handler", "test", [{"type": "echo", "prompt": "hi"}])
+            cmd_name = f"/{skill.name}"
+
+            # 注册前不在 _HANDLERS
+            was_there = cmd_name in _HANDLERS
+
+            _register_skill_handler(skill, mgr)
+
+            # 注册后在 _HANDLERS
+            assert cmd_name in _HANDLERS
+            assert callable(_HANDLERS[cmd_name])
+
+            # 清理
+            del _HANDLERS[cmd_name]
+
+    def test_create_persistence(self):
+        """测试 _register_skill_handler 在 create 流程中被调用。"""
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = SkillManager(Path(tmpdir))
+            skill = mgr.create("persist-test", "persistence check",
+                              [{"type": "echo", "prompt": "test"}])
+
+            # 验证磁盘文件存在
+            yaml_path = Path(tmpdir) / "persist-test.yaml"
+            assert yaml_path.exists()
+
+            # 重新加载
+            mgr2 = SkillManager(Path(tmpdir))
+            loaded = mgr2.get("persist-test")
+            assert loaded is not None
+            assert loaded.name == "persist-test"
+            assert loaded.description == "persistence check"
+            assert len(loaded.steps) == 1

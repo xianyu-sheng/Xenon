@@ -1960,9 +1960,10 @@ def _extract_skill_name(sub: str, sub_args: str) -> str:
     if sub not in _KNOWN_TYPOS and re.match(r"^[a-zA-Z][a-zA-Z0-9_-]{2,}$", sub):
         return sub.lower()
 
-    # 4) 无法提取，生成唯一名称
-    import time
-    return f"skill-{int(time.time()) % 100000}"
+    # 4) 无法提取英文名——用描述内容的稳定哈希生成唯一名（比时间戳更稳定）
+    import hashlib
+    content_hash = hashlib.md5(combined.encode()).hexdigest()[:6]
+    return f"skill-{content_hash}"
 
 
 def _skill_import_from_url(manager, url: str) -> str:
@@ -1975,8 +1976,6 @@ def _skill_import_from_url(manager, url: str) -> str:
     """
     import re
     import subprocess
-    import tempfile
-    from pathlib import Path
 
     # 解析 URL
     url = url.strip()
