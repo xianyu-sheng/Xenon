@@ -136,6 +136,8 @@ class REPL:
         # v0.5.3: 折叠思考过程 — 默认隐藏，Ctrl+O 展开
         self._show_thinking: bool = False
         self._last_thinking_panel: Any = None
+        self._captured_log: str = ""       # 引擎执行期间捕获的日志文本
+        self._last_mode_line: str = ""     # 上次引擎的模式行
 
         # v0.5.0: 工具权限门控
         from omniagent.repl.permissions import PermissionGate, PermissionMode
@@ -164,16 +166,36 @@ class REPL:
 
         @kb.add("c-o")
         def _(event):
-            """v0.5.3: Ctrl+O 切换显示/隐藏上次工具调用的推理过程。"""
-            if self._last_thinking_panel is not None:
-                self._show_thinking = not self._show_thinking
-                console.print()
-                if self._show_thinking:
+            """v0.5.3: Ctrl+O 切换显示/隐藏上次引擎执行的完整过程。
+
+            折叠 → 展开：重新打印模式行、捕获的日志、推理面板。
+            展开 → 折叠：重新打印折叠摘要行。
+            """
+            self._show_thinking = not self._show_thinking
+            console.print()
+            if self._show_thinking:
+                # ── 展开：重现完整执行过程 ──
+                if self._last_mode_line:
+                    console.print(f"[dim]{self._last_mode_line}[/dim]")
+                if self._captured_log:
+                    console.print(self._captured_log, end="")
+                if self._last_thinking_panel is not None:
                     console.print(self._last_thinking_panel)
-                    console.print("[dim]· 推理过程已展开（再按 Ctrl+O 折叠）[/dim]")
+                console.print("[dim]· 推理过程已展开（再按 Ctrl+O 折叠）[/dim]")
+            else:
+                # ── 折叠：仅一条摘要行 ──
+                panel = self._last_thinking_panel
+                if panel is not None:
+                    parts = []
+                    if panel.steps:
+                        parts.append(f"{len(panel.steps)} 次迭代")
+                    if panel.tool_call_count:
+                        parts.append(f"{panel.tool_call_count} 次工具调用")
+                    summary = "，".join(parts) if parts else "无推理步骤"
                 else:
-                    console.print("[dim]· 推理过程已折叠[/dim]")
-                console.print()
+                    summary = "无推理步骤"
+                console.print(f"[dim]· ⚡ 推理过程已折叠 — {summary} (Ctrl+O 展开)[/dim]")
+            console.print()
             if hasattr(event, 'app'):
                 event.app.invalidate()
 
@@ -247,6 +269,42 @@ class REPL:
         else:
             return False, "用户拒绝"
 
+    def _start_log_capture(self) -> None:
+        """v0.5.3: 添加 StringIO handler 到相关 logger，拦截引擎执行期间的日志输出。
+
+        捕获的 logger：omniagent.engine、tool_tracker、react_engine、httpx。
+        日志不再输出到 stderr，而是写入内存缓冲区，供折叠/展开使用。
+        """
+        import io as _io
+        self._log_buffer = _io.StringIO()
+        self._log_handler = logging.StreamHandler(self._log_buffer)
+        self._log_handler.setFormatter(
+            logging.Formatter(
+                '%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+                datefmt='%H:%M:%S',
+            )
+        )
+        self._log_handler.setLevel(logging.INFO)
+        for _name in [
+            'omniagent.engine',
+            'omniagent.engine.tool_tracker',
+            'omniagent.engine.react_engine',
+            'httpx',
+        ]:
+            logging.getLogger(_name).addHandler(self._log_handler)
+
+    def _stop_log_capture(self) -> str:
+        """v0.5.3: 移除日志捕获 handler，返回捕获的日志文本。"""
+        for _name in [
+            'omniagent.engine',
+            'omniagent.engine.tool_tracker',
+            'omniagent.engine.react_engine',
+            'httpx',
+        ]:
+            logging.getLogger(_name).removeHandler(self._log_handler)
+        self._log_handler.close()
+        return self._log_buffer.getvalue()
+
     def _make_callback(self):
         """根据 verbose 状态创建引擎回调。"""
         from omniagent.engine.callbacks import ConsoleCallback
@@ -308,23 +366,41 @@ class REPL:
             pass
 
     def _render_engine_result(self, callback, result: str, title: str, border_style: str = "green") -> None:
-        """渲染引擎结果：默认隐藏思考过程，Ctrl+O 展开。
+        """渲染引擎结果：默认折叠执行过程，仅显示最终答案。
 
-        v0.5.3: 思考面板默认折叠，仅当 _show_thinking 为 True 时直接展示。
-        用户可通过 /thinking 切换或 Ctrl+O 临时展开。
+        v0.5.3: 执行日志（工具调用/HTTP 请求/引擎信息）默认全部隐藏。
+        仅显示一条折叠摘要行（含迭代次数和工具调用次数）。
+        用户通过 Ctrl+O 或 /thinking on 可展开查看完整执行过程。
         """
         panel = callback.get_thinking_panel()
         if panel is not None:
             self._last_thinking_panel = panel
-            if self._show_thinking:
-                console.print(panel)
-            else:
-                # 思考过程已折叠的简洁提示
-                steps = callback.tracker.execution_summary() if hasattr(callback, 'tracker') else ""
-                hint = "[dim]· 推理过程已折叠[/dim]"
-                console.print(hint)
+            step_count = len(panel.steps)
+            tool_count = panel.tool_call_count
+        else:
+            step_count = 0
+            tool_count = 0
 
-        # 渲染最终答案
+        if self._show_thinking:
+            # ── 展开模式：重现完整执行过程 ──
+            if self._last_mode_line:
+                console.print(f"[dim]{self._last_mode_line}[/dim]")
+            if self._captured_log:
+                console.print(self._captured_log, end="")
+            if panel is not None:
+                console.print(panel)
+            console.print("[dim]· 推理过程已展开（再按 Ctrl+O 折叠）[/dim]")
+        else:
+            # ── 折叠模式（默认）：仅一条摘要行 ──
+            parts = []
+            if step_count:
+                parts.append(f"{step_count} 次迭代")
+            if tool_count:
+                parts.append(f"{tool_count} 次工具调用")
+            summary = "，".join(parts) if parts else "无推理步骤"
+            console.print(f"[dim]· ⚡ 推理过程已折叠 — {summary} (Ctrl+O 展开)[/dim]")
+
+        # 最终答案始终显示
         console.print(Panel(
             Markdown(result),
             title=f"[bold]{title}[/bold]",
@@ -1410,30 +1486,34 @@ class REPL:
         """ReAct 引擎模式。"""
         from omniagent.engine.react_engine import ReActEngine
 
-        console.print("[dim]· ReAct 思考 → 行动 → 观察[/dim]")
+        # v0.5.3: 模式行不直接打印，存储供 Ctrl+O 展开时使用
+        self._last_mode_line = "· ReAct 思考 → 行动 → 观察"
 
+        self._start_log_capture()
         callback = self._make_callback()
         engine = ReActEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_iterations=10, callback=callback, model_configs=dict(self.registry.models))
         self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
+            self._captured_log = self._stop_log_capture()
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "ReAct 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
-            # P2-修复5: 引擎异常时清理 user 消息（repl.py:745 已 add 但无 assistant
-            # 响应会留孤立），优先 add_assistant_message 占位错误消息，让 history 仍成对；
-            # add_assistant_message 失败时回退 trim user 消息。
+            self._captured_log = self._stop_log_capture()
+            # 异常时展开日志便于调试
+            if self._last_mode_line:
+                console.print(f"[dim]{self._last_mode_line}[/dim]")
+            if self._captured_log:
+                console.print(self._captured_log, end="")
             import traceback
             logger.error(f"ReAct 引擎异常:\n{traceback.format_exc()}")
             console.print(f"[error]❌ ReAct 引擎执行失败: {e}[/error]")
             try:
-                # 用 "[错误] ..." 作为 assistant 回应占位，让 history 仍成对
                 self.ctx_mgr.add_assistant_message(
                     f"[错误] ReAct 引擎执行失败: {e}", model_used=model_ids[0],
                 )
             except Exception:
-                # 兜底：add_assistant_message 失败时回退 trim user
                 try:
                     self.ctx_mgr.trim_last_user()
                 except Exception:
@@ -1443,93 +1523,129 @@ class REPL:
         """Plan-Execute 引擎模式。"""
         from omniagent.engine.plan_execute_engine import PlanExecuteEngine
 
-        console.print("[dim]· Plan-Execute 规划 → 逐步执行[/dim]")
+        self._last_mode_line = "· Plan-Execute 规划 → 逐步执行"
 
+        self._start_log_capture()
         callback = self._make_callback()
         engine = PlanExecuteEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_steps=20, callback=callback, model_configs=dict(self.registry.models))
         self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
+            self._captured_log = self._stop_log_capture()
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Plan-Execute 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
+            self._captured_log = self._stop_log_capture()
+            if self._last_mode_line:
+                console.print(f"[dim]{self._last_mode_line}[/dim]")
+            if self._captured_log:
+                console.print(self._captured_log, end="")
             console.print(f"[error]❌ Plan-Execute 引擎执行失败: {e}[/error]")
 
     def _run_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Reflection 引擎模式。"""
         from omniagent.engine.reflection_engine import ReflectionEngine
 
-        console.print("[dim]· Reflection 执行 → 审查 → 修正[/dim]")
+        self._last_mode_line = "· Reflection 执行 → 审查 → 修正"
 
+        self._start_log_capture()
         callback = self._make_callback()
         engine = ReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_rounds=3, callback=callback, model_configs=dict(self.registry.models))
         self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
+            self._captured_log = self._stop_log_capture()
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
+            self._captured_log = self._stop_log_capture()
+            if self._last_mode_line:
+                console.print(f"[dim]{self._last_mode_line}[/dim]")
+            if self._captured_log:
+                console.print(self._captured_log, end="")
             console.print(f"[error]❌ Reflection 引擎执行失败: {e}[/error]")
 
     def _run_plan_react_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Plan + React 组合引擎模式。"""
         from omniagent.engine.combined_engines import PlanReactEngine
 
-        console.print("[dim]· Plan+React 全局规划 → 每步 ReAct 执行[/dim]")
+        self._last_mode_line = "· Plan+React 全局规划 → 每步 ReAct 执行"
 
+        self._start_log_capture()
         callback = self._make_callback()
         engine = PlanReactEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_steps=10, react_iterations=8, callback=callback, model_configs=dict(self.registry.models))
         self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
+            self._captured_log = self._stop_log_capture()
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Plan+React 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
+            self._captured_log = self._stop_log_capture()
+            if self._last_mode_line:
+                console.print(f"[dim]{self._last_mode_line}[/dim]")
+            if self._captured_log:
+                console.print(self._captured_log, end="")
             console.print(f"[error]❌ Plan+React 引擎执行失败: {e}[/error]")
 
     def _run_plan_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Plan + Reflection 组合引擎模式。"""
         from omniagent.engine.combined_engines import PlanReflectionEngine
 
-        console.print("[dim]· Plan+Reflection 规划执行 → 反思修正[/dim]")
+        self._last_mode_line = "· Plan+Reflection 规划执行 → 反思修正"
 
+        self._start_log_capture()
         callback = self._make_callback()
         engine = PlanReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_steps=10, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
         self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
+            self._captured_log = self._stop_log_capture()
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Plan+Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
+            self._captured_log = self._stop_log_capture()
+            if self._last_mode_line:
+                console.print(f"[dim]{self._last_mode_line}[/dim]")
+            if self._captured_log:
+                console.print(self._captured_log, end="")
             console.print(f"[error]❌ Plan+Reflection 引擎执行失败: {e}[/error]")
 
     def _run_react_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
         """ReAct + Reflection 组合引擎模式。"""
         from omniagent.engine.combined_engines import ReactReflectionEngine
 
-        console.print("[dim]· React+Reflection 探索 → 反思审查[/dim]")
+        self._last_mode_line = "· React+Reflection 探索 → 反思审查"
 
+        self._start_log_capture()
         callback = self._make_callback()
         engine = ReactReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, react_iterations=8, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
         self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
+            self._captured_log = self._stop_log_capture()
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "React+Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
+            self._captured_log = self._stop_log_capture()
+            if self._last_mode_line:
+                console.print(f"[dim]{self._last_mode_line}[/dim]")
+            if self._captured_log:
+                console.print(self._captured_log, end="")
             console.print(f"[error]❌ React+Reflection 引擎执行失败: {e}[/error]")
 
     def _run_novel_engine(self, user_input: str, model_ids: list[str]) -> None:
         """小说创作引擎模式（支持多小说隔离）。"""
         from omniagent.engine.novel_engine import NovelEngine
 
-        console.print("[dim]· Novel 小说创作模式[/dim]")
+        self._last_mode_line = "· Novel 小说创作模式"
 
+        self._start_log_capture()
         callback = self._make_callback()
         engine = NovelEngine(
             model_priority=model_ids,
@@ -1542,10 +1658,16 @@ class REPL:
         )
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
+            self._captured_log = self._stop_log_capture()
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Novel 创作结果", border_style="magenta")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
+            self._captured_log = self._stop_log_capture()
+            if self._last_mode_line:
+                console.print(f"[dim]{self._last_mode_line}[/dim]")
+            if self._captured_log:
+                console.print(self._captured_log, end="")
             console.print(f"[error]❌ 小说创作引擎执行失败: {e}[/error]")
 
     def _stream_response(self, model_id: str, messages: list[dict[str, str]]) -> str:
