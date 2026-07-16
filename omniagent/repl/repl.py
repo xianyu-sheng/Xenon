@@ -181,7 +181,7 @@ class REPL:
                     console.print(self._captured_log, end="")
                 if self._last_thinking_panel is not None:
                     console.print(self._last_thinking_panel)
-                console.print("[dim]· 推理过程已展开（再按 Ctrl+O 折叠）[/dim]")
+                console.print("[dim]  💭 思考过程已展开  [Ctrl+O 折叠][/dim]")
             else:
                 # ── 折叠：仅一条摘要行 ──
                 panel = self._last_thinking_panel
@@ -191,10 +191,10 @@ class REPL:
                         parts.append(f"{len(panel.steps)} 次迭代")
                     if panel.tool_call_count:
                         parts.append(f"{panel.tool_call_count} 次工具调用")
-                    summary = "，".join(parts) if parts else "无推理步骤"
+                    summary = " · ".join(parts) if parts else "无工具调用"
                 else:
                     summary = "无推理步骤"
-                console.print(f"[dim]· ⚡ 推理过程已折叠 — {summary} (Ctrl+O 展开)[/dim]")
+                console.print(f"[dim]  💭 思考过程 · {summary}  [Ctrl+O][/dim]")
             console.print()
             if hasattr(event, 'app'):
                 event.app.invalidate()
@@ -402,6 +402,8 @@ class REPL:
             self._last_thinking_panel = panel
             step_count = len(panel.steps)
             tool_count = panel.tool_call_count
+            for _ in range(tool_count):
+                self.status_bar.add_tool_call()
             # v0.5.4: 从成功的工具调用中提取文件路径，更新工作记忆
             self._track_session_files(panel)
         else:
@@ -425,7 +427,7 @@ class REPL:
                 console.print(self._captured_log, end="")
             if panel is not None:
                 console.print(panel)
-            console.print("[dim]· 推理过程已展开（再按 Ctrl+O 折叠）[/dim]")
+            console.print("[dim]  💭 思考过程已展开  [Ctrl+O 折叠][/dim]")
         else:
             # ── 折叠模式（默认）：仅一条摘要行 ──
             parts = []
@@ -433,8 +435,8 @@ class REPL:
                 parts.append(f"{step_count} 次迭代")
             if tool_count:
                 parts.append(f"{tool_count} 次工具调用")
-            summary = "，".join(parts) if parts else "无推理步骤"
-            console.print(f"[dim]· ⚡ 推理过程已折叠 — {summary} (Ctrl+O 展开)[/dim]")
+            summary = " · ".join(parts) if parts else "无工具调用"
+            console.print(f"[dim]  💭 思考过程 · {summary}  [Ctrl+O][/dim]")
 
         # 最终答案始终显示
         console.print(Panel(
@@ -757,11 +759,8 @@ class REPL:
                     [e.alias for e in self.model_pool.list_all()]
                 )
 
-        status_text = self._get_pt_toolbar().strip()
-        message: list[tuple[str, str]] = []
-        if status_text:
-            message.append(("class:status", f"  {status_text}\n"))
-        message.append(("class:prompt", "> "))
+        # 状态栏仅通过 bottom_toolbar 渲染（在输入框下方），不在 prompt 上方重复
+        message: list[tuple[str, str]] = [("class:prompt", "> ")]
 
         try:
             text = self._pt_session.prompt(message)

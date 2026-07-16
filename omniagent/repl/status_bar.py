@@ -1,24 +1,24 @@
 """
-Status Bar — 底部状态栏。
+Status Bar — 底部状态栏 (v0.5.5 · Reasonix 风格增强)。
 
 在终端底部实时显示：
-- 当前模型
+- 当前模型 / auto-routing
 - Token 使用量（进度条）
-- 思˄范式
-- 流式模式
-- 对话轮次
+- 思考范式
+- 工具调用计数
+- 会话时长
+- 缓存命中率 / 费用（需 UsageTracker）
 """
 
 from __future__ import annotations
 
+import shutil
 import time as _time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
-from rich.live import Live
+from rich.markup import escape
 from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
 
 if TYPE_CHECKING:
     from omniagent.repl.context_manager import ContextManager
@@ -26,38 +26,48 @@ if TYPE_CHECKING:
 
 
 class StatusBar:
-    """
-    底部状态栏管理器。
-
-    使用 Rich Live 实现实时刷新，在终端底部显示上下文状态。
-    """
+    """Reasonix 风格底部状态栏。"""
 
     def __init__(
         self,
         console: Console,
         ctx_mgr: ContextManager,
         registry: ModelRegistry,
+        *,
+        usage_tracker: Any = None,
     ) -> None:
         self.console = console
         self.ctx_mgr = ctx_mgr
         self.registry = registry
+        self.usage_tracker = usage_tracker
         self._streaming = True
         self._last_model: str | None = None
-        self._auto_router = None  # v0.4.0: set by REPL
-        self._notification: str | None = None  # v0.4.0: 一次性通知
+        self._auto_router = None
+        self._notification: str | None = None
         self._notification_expires: float = 0.0
+        self._session_start: float = _time.monotonic()
+        self._tool_call_count: int = 0
 
     def set_last_model(self, model_id: str) -> None:
-        """记录最近一次使用的模型。"""
         self._last_model = model_id
 
     def set_streaming(self, enabled: bool) -> None:
         self._streaming = enabled
 
     def set_mode_notification(self, mode_name: str) -> None:
-        """设置一次性模式切换通知（3 秒后自动清除）。"""
         self._notification = f"🔄{mode_name}"
         self._notification_expires = _time.monotonic() + 3.0
+
+    def add_tool_call(self) -> None:
+        self._tool_call_count += 1
+
+    @property
+    def tool_call_count(self) -> int:
+        return self._tool_call_count
+
+    @property
+    def session_elapsed(self) -> float:
+        return _time.monotonic() - self._session_start
 
     def _clear_expired_notification(self) -> None:
         if self._notification and _time.monotonic() > self._notification_expires:
@@ -65,7 +75,6 @@ class StatusBar:
 
     @staticmethod
     def _parse_pct(ratio) -> float:
-        """解析 '85.0%' / 0.85 / None → 百分比浮点。"""
         try:
             if isinstance(ratio, str):
                 return float(ratio.strip('%'))
@@ -73,48 +82,34 @@ class StatusBar:
         except (ValueError, TypeError, AttributeError):
             return 0.0
 
-    def _fallback_panel(self, hint: str = "状态不可用") -> Panel:
-        """render 异常时的降级面板（§8.18.1）。"""
-        return Panel(f"[dim]{hint}[/dim]", style="dim", height=1, padding=(0, 1))
+    @staticmethod
+    def _fmt_duration(seconds: float) -> str:
+        m, s = divmod(int(seconds), 60)
+        if m >= 60:
+            h, m = divmod(m, 60)
+            return f"{h}:{m:02d}:{s:02d}"
+        return f"{m:02d}:{s:02d}"
+
+    # ── 主渲染 ─────────────────────────────────────────────
 
     def render(self) -> Panel:
-        """渲染状态栏内容。
-
-        P3-Q10 / §8.18.1：整体 try/except 兜底——stats 下标/字段异常时不让 Live 崩，
-        返回固定"状态不可用"面板。
-        P3-Q10 / §8.18.2：``⚠需压缩`` 警告置于状态行**首位**，窄屏截断只丢次要信息，
-        提示 /compact 的核心信号不被吃掉。
-        """
         try:
             return self._render_impl()
         except Exception:
-            return self._fallback_panel()
+            return Panel("[dim]状态不可用[/dim]", style="dim", height=1, padding=(0, 1))
 
     def _render_impl(self) -> Panel:
         stats = self.ctx_mgr.stats()
         mode = self.registry.get_current_mode()
-
-        # Token 使用量
         used = stats["estimated_tokens"]
         max_tok = stats["max_tokens"]
-        ratio = stats["usage_ratio"]
+        pct_val = self._parse_pct(stats["usage_ratio"])
+
         bar_width = 20
-
-        pct_val = self._parse_pct(ratio)
         filled = min(int(pct_val / 100 * bar_width), bar_width)
-        empty = bar_width - filled
+        bar_color = "red" if pct_val > 80 else ("yellow" if pct_val > 50 else "green")
+        bar = f"[{bar_color}]{'█' * filled}[/{bar_color}][dim]{'░' * (bar_width - filled)}[/dim]"
 
-        if pct_val > 80:
-            bar_color = "red"
-        elif pct_val > 50:
-            bar_color = "yellow"
-        else:
-            bar_color = "green"
-
-        bar = f"[{bar_color}]{'█' * filled}[/{bar_color}][dim]{'░' * empty}[/dim]"
-
-        # 当前模型
-        # v0.4.0: auto-routing indicator
         if self._auto_router and not self._auto_router.is_empty():
             active = self._auto_router.get_active_model_id() or self._last_model
             model_display = f"[bold green]auto[/bold green] {active or '—'}"
@@ -123,44 +118,83 @@ class StatusBar:
         if len(model_display) > 25:
             model_display = "..." + model_display[-22:]
 
-        # 流式状态
         stream_icon = "⚡流式" if self._streaming else "⏸阻塞"
-
-        # 组装状态行——⚠需压缩 置首，窄屏截断只丢末尾次要项（§8.18.2）
         status_parts: list[str] = []
         if stats["needs_compact"]:
             status_parts.append("[bold red]⚠需压缩[/bold red]")
         status_parts.extend([
-            f"[bold cyan]模型:[/bold cyan] {model_display}",
+            f"[bold cyan]模型:[/bold cyan] {escape(model_display)}",
             f"[bold cyan]范式:[/bold cyan] {mode.name}",
-            f"[bold cyan]Token:[/bold cyan] {bar} {used:,}/{max_tok:,} ({ratio})",
+            f"[bold cyan]Token:[/bold cyan] {bar} {used:,}/{max_tok:,} ({stats['usage_ratio']})",
+        ])
+        if self._tool_call_count > 0:
+            status_parts.append(f"[bold cyan]🔧[/bold cyan] {self._tool_call_count}")
+        status_parts.extend([
             f"[bold cyan]消息:[/bold cyan] {stats['total_messages']}",
+            f"[bold cyan]时长:[/bold cyan] {self._fmt_duration(self.session_elapsed)}",
             f"[bold cyan]{stream_icon}[/bold cyan]",
         ])
-
         if stats["undo_available"] > 0:
             status_parts.append(f"[dim]↩×{stats['undo_available']}[/dim]")
 
-        # v0.4.0: 通知横幅
         self._clear_expired_notification()
-        notification_line = ""
-        if self._notification:
-            notification_line = f"[bold yellow]{self._notification}[/bold yellow]  "
+        notification_line = f"[bold yellow]{self._notification}[/bold yellow]  " if self._notification else ""
+        return Panel(notification_line + "  │  ".join(status_parts), style="dim", height=1, padding=(0, 1))
 
-        content = notification_line + "  │  ".join(status_parts)
+    # ── prompt_toolkit bottom_toolbar ───────────────────────
 
-        return Panel(
-            content,
-            style="dim",
-            height=1,
-            padding=(0, 1),
-        )
+    def get_toolbar_text(self) -> str:
+        try:
+            return self._toolbar_impl()
+        except Exception:
+            return "状态不可用"
+
+    def _toolbar_impl(self) -> str:
+        stats = self.ctx_mgr.stats()
+        mode = self.registry.get_current_mode()
+        pct_val = self._parse_pct(stats["usage_ratio"])
+
+        if self._auto_router and not self._auto_router.is_empty():
+            active = self._auto_router.get_active_model_id() or self._last_model
+            model_display = f"auto {active or '—'}"
+        else:
+            model_display = self._last_model or "—"
+        if len(model_display) > 22:
+            model_display = "…" + model_display[-21:]
+
+        bar_width = 8
+        filled = min(int(pct_val / 100 * bar_width), bar_width)
+        bar = "█" * filled + "░" * (bar_width - filled)
+
+        self._clear_expired_notification()
+        notify = f"{self._notification} · " if self._notification else ""
+        warn = "⚠ /compact · " if stats["needs_compact"] else ""
+        stream = "⚡" if self._streaming else "⏸"
+
+        parts = []
+        if warn or notify:
+            parts.append(f"{warn}{notify}")
+        parts.append(model_display)
+        parts.append(mode.name)
+        parts.append(f"Token [{bar}] {stats['usage_ratio']}")
+        if self._tool_call_count > 0:
+            parts.append(f"🔧{self._tool_call_count}")
+        parts.append(f"{stats['total_messages']} msg")
+        if self.usage_tracker and (self.usage_tracker.cache_hits + self.usage_tracker.cache_misses) > 0:
+            parts.append(f"💾{self.usage_tracker.cache_hit_rate:.0%}")
+        if self.usage_tracker and self.usage_tracker.estimated_cost > 0:
+            cost = self.usage_tracker.estimated_cost
+            parts.append(f"💰{'<$0.01' if cost < 0.01 else f'${cost:.2f}'}")
+        parts.append(self._fmt_duration(self.session_elapsed))
+        parts.append(stream)
+
+        line = " · ".join(str(p) for p in parts)
+        term_width = shutil.get_terminal_size().columns
+        return line[:term_width - 1] if len(line) > term_width else line
+
+    # ── 非 PT 模式 ─────────────────────────────────────────
 
     def print_status(self) -> None:
-        """打印一行紧凑的状态信息（非 Live 模式）。
-
-        P3-Q10 / §8.18.1：整体 try/except 兜底，异常时打印降级提示不崩。
-        """
         try:
             self._print_status_impl()
         except Exception:
@@ -169,65 +203,10 @@ class StatusBar:
             except Exception:
                 pass
 
-    def get_toolbar_text(self) -> str:
-        """返回 prompt_toolkit 底部状态栏文本（纯 ANSI，不含 Rich markup）。
-
-        用于 prompt_toolkit 的 bottom_toolbar 参数，
-        提供固定于终端底部的实时状态信息。
-        """
-        try:
-            return self._toolbar_impl()
-        except Exception:
-            return "状态不可用"
-
-    def _toolbar_impl(self) -> str:
-        import shutil
-        stats = self.ctx_mgr.stats()
-        mode = self.registry.get_current_mode()
-
-        used = stats["estimated_tokens"]
-        max_tok = stats["max_tokens"]
-        ratio = stats["usage_ratio"]
-
-        if self._auto_router and not self._auto_router.is_empty():
-            active = self._auto_router.get_active_model_id() or self._last_model
-            model_display = f"auto {active or '—'}"
-        else:
-            model_display = self._last_model or "—"
-        # v0.5.1: 更短的模型名显示（22 字符截断）
-        if len(model_display) > 22:
-            model_display = "…" + model_display[-21:]
-
-        stream = "⚡" if self._streaming else "⏸"
-
-        pct_val = self._parse_pct(ratio)
-
-        # 简单的文本进度条（8 格更紧凑）
-        bar_width = 8
-        filled = min(int(pct_val / 100 * bar_width), bar_width)
-        bar = "█" * filled + "░" * (bar_width - filled)
-
-        # 通知
-        self._clear_expired_notification()
-        notify = f"{self._notification} · " if self._notification else ""
-
-        # 压缩警告
-        warn = "⚠ /compact · " if stats["needs_compact"] else ""
-
-        # v0.5.1: · 分隔符避免与框线 │ 视觉冲突；消息 → msg 更紧凑
-        term_width = shutil.get_terminal_size().columns
-        line = f" {warn}{notify}{model_display} · {mode.name} · Token [{bar}] {ratio} · {stats['total_messages']} msg · {stream} "
-        if len(line) > term_width:
-            line = line[:term_width - 1]
-        return line
-
     def _print_status_impl(self) -> None:
         stats = self.ctx_mgr.stats()
         mode = self.registry.get_current_mode()
-
-        used = stats["estimated_tokens"]
-        max_tok = stats["max_tokens"]
-        ratio = stats["usage_ratio"]
+        pct_val = self._parse_pct(stats["usage_ratio"])
 
         if self._auto_router and not self._auto_router.is_empty():
             active = self._auto_router.get_active_model_id() or self._last_model
@@ -237,32 +216,18 @@ class StatusBar:
         if len(model_display) > 30:
             model_display = "..." + model_display[-27:]
 
+        token_color = "red" if pct_val > 80 else ("yellow" if pct_val > 50 else "green")
         stream = "⚡" if self._streaming else "⏸"
 
-        pct_val = self._parse_pct(ratio)
-
-        if pct_val > 80:
-            token_color = "red"
-        elif pct_val > 50:
-            token_color = "yellow"
-        else:
-            token_color = "green"
-
-        # v0.4.0: 通知横幅
         self._clear_expired_notification()
-        notify = ""
-        if self._notification:
-            notify = f"[bold yellow]{self._notification}[/bold yellow] · "
-
-        # ⚠建议 /compact 置首，保证可见（§8.18.2）
+        notify = f"[bold yellow]{self._notification}[/bold yellow] · " if self._notification else ""
         warn = "[bold red]⚠ 建议 /compact[/bold red] · " if stats["needs_compact"] else ""
+        tool_part = f"🔧 {self._tool_call_count} · " if self._tool_call_count > 0 else ""
+        dur = self._fmt_duration(self.session_elapsed)
 
-        # v0.5.2: 移除孤立的 ┌─ 前缀，改用简洁的 · 分隔符
-        line = (notify +
-            f"[dim]  {warn}{model_display} · {mode.name} · "
-            f"[{token_color}]Token {used:,}/{max_tok:,} ({ratio})[/{token_color}] · "
-            f"消息 {stats['total_messages']} · {stream}"
-        )
-        line += "[/dim]"
-
+        line = (
+            f"[dim]  {notify}{warn}{escape(model_display)} · {mode.name} · "
+            f"[{token_color}]Token {stats['estimated_tokens']:,}/{stats['max_tokens']:,} ({stats['usage_ratio']})[/{token_color}] · "
+            f"{tool_part}消息 {stats['total_messages']} · {dur} · {stream}"
+        ) + "[/dim]"
         self.console.print(line)
