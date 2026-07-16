@@ -6,6 +6,12 @@ OmniAgent is a local-first coding agent CLI for developers who want a transparen
 
 ![OmniAgent terminal demo](docs/assets/terminal-demo.svg)
 
+### 🎥 操作演示
+
+<video src="https://github.com/xianyu-sheng/Omniagent/blob/main/docs/assets/demo.webm?raw=true" controls width="100%"></video>
+
+> 👆 完整终端操作录屏
+
 ## Why It Matters
 
 | Capability | What it gives you |
