@@ -11,6 +11,12 @@
 
 ![OmniAgent terminal demo](docs/assets/terminal-demo.svg)
 
+### 🎥 操作演示
+
+<video src="https://github.com/xianyu-sheng/Omniagent/blob/main/docs/assets/demo.webm?raw=true" controls width="100%"></video>
+
+> 👆 完整终端操作录屏，含双线输入框、状态栏、斜杠命令、ReAct 工具调用等。
+
 > 12 家模型商、8 种推理范式、MCP 协议、断路器、上下文压缩——一个终端 Agent 该有的工程机制，这里都有。
 > 23K 行 Python，1110+ 测试，MIT 开源。**适合想深入理解 Agent 架构的开发者阅读、修改、二次开发。**
 
