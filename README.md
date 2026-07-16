@@ -250,3 +250,9 @@ MIT License
 - [Rich](https://github.com/Textualize/rich) — 终端 UI
 - [httpx](https://github.com/encode/httpx) — HTTP 请求
 - [PyYAML](https://github.com/yaml/pyyaml) — YAML 解析
+
+### 🎥 操作演示
+
+<video src="https://github.com/xianyu-sheng/Omniagent/blob/main/docs/assets/demo.webm?raw=true" controls width="100%"></video>
+
+> 👆 完整终端操作录屏，含双线输入框、状态栏、斜杠命令、ReAct 工具调用等。
