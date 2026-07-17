@@ -635,13 +635,15 @@ class REPL:
         else:
             # v0.4.0: always populate model pool from ALL configured providers
             pool_count = 0
+            import os as _os
+            _max_per_provider = int(_os.environ.get("OMNIAGENT_MAX_MODELS_PER_PROVIDER", "3"))
             for p in configured:
                 if not p.models or "(auto-fetch" in str(p.models[0]):
                     continue
                 if not p.key or not p.key.strip():
                     logger.warning(f"跳过空 key 的 provider（name={p.name!r}），model_id 会变成 /model_name 导致路由失败")
                     continue
-                for model_name in p.models[:3]:  # top 3 per provider
+                for model_name in p.models[:_max_per_provider]:  # top N per provider (P0: 可配置)
                     model_id = f"{p.key}/{model_name}"
                     alias = model_name.replace(".", "-")
                     # Register to pool (if not already there)
@@ -2206,6 +2208,10 @@ def start_repl(
             console.print(f"[yellow]⚠️  {e}[/yellow]")
 
     repl = REPL(registry=registry, system_prompt=system_prompt, optimize_prompts=optimize)
+    # P0: 打通 --config -> ModelPool。原仅喂 Registry,而 AutoRouter 只认 Pool,
+    # 导致 --config 加载的模型形同虚设(池仍空)。复用 ModelPool.from_config。
+    if config_path:
+        repl.model_pool.from_config(registry.export_config().get("models", {}))
     # v0.5.3: 用户显式指定的模型优先于 auto-router 的选择
     if models:
         repl._preferred_model_ids = list(models)

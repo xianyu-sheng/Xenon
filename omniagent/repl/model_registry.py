@@ -226,6 +226,7 @@ class ModelRegistry:
                 max_tokens=mcfg.get("max_tokens", 4096),
                 temperature=mcfg.get("temperature", 0.7),
                 context_window=mcfg.get("context_window", 128000),
+                weight=mcfg.get("weight", 1.0),  # P0: 修复有损往返(export 写了 weight,load 原未读回)
             )
 
         # 加载角色

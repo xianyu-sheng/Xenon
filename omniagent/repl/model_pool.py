@@ -53,6 +53,7 @@ class HealthRecord:
     circuit_open_until: float = 0.0          # timestamp, 0 = closed
     last_used_at: float = 0.0
     permanently_evicted: bool = False
+    in_flight: int = 0          # P2: 当前并发调用数(资源感知调度用)
 
 
 @dataclass
@@ -124,6 +125,7 @@ class ModelPool:
             t: [] for t in range(MIN_TIER, MAX_TIER + 1)
         }
         self._lock = threading.Lock()
+        self.perf_profile: str = "balanced"  # P2: fast|cost|balanced -> _score 权重向量
 
     # ── 注册/注销 ──────────────────────────────────────
 
@@ -241,6 +243,29 @@ class ModelPool:
             if e.model_id == alias_or_model_id:
                 return e
         return None
+
+    # ── P2: 资源感知(并发计数 + 性能偏好)──────────────
+
+    def acquire(self, model_id: str) -> None:
+        """调用前并发计数 +1(供 _score 负载因子)。线程安全。"""
+        with self._lock:
+            entry = self._find_entry(model_id)
+            if entry:
+                entry.health.in_flight += 1
+
+    def release(self, model_id: str) -> None:
+        """调用后并发计数 -1(无论成败)。线程安全,不低于 0。"""
+        with self._lock:
+            entry = self._find_entry(model_id)
+            if entry and entry.health.in_flight > 0:
+                entry.health.in_flight -= 1
+
+    def set_perf_profile(self, profile: str) -> bool:
+        """设置性能偏好(fast|cost|balanced),影响 _score 权重向量。"""
+        if profile in ("fast", "cost", "balanced"):
+            self.perf_profile = profile
+            return True
+        return False
 
     # ── 健康更新 ───────────────────────────────────────
 
@@ -424,24 +449,43 @@ class ModelPool:
         return [e for _, e in scored[:count]]
 
     def _score(self, entry: PoolEntry, profile: Any) -> float:
-        """为 (模型, 任务) 打分，越高越好."""
+        """为 (模型, 任务) 打分，越高越好.
+
+        P2: 权重向量受 perf_profile(fast|cost|balanced)动态调整;
+        新增 in_flight 负载因子(并发高的扣分)。
+        """
         cap = entry.capability
         h = entry.health
         score = entry.weight * 2.0
 
+        # P2: 性能偏好 -> 能力匹配权重向量
+        #   balanced: quality 主导(reasoning×4/coding×3/tools×2,与历史行为一致)
+        #   fast    : 降低 quality 权重,偏好低 tier(轻量极速)+ 延迟惩罚
+        #   cost    : quality 权重略降,成本权重显著提升
+        if self.perf_profile == "fast":
+            w_reason, w_coding, w_tools = 2.0, 1.5, 1.5
+            score -= float(cap.tier) * 0.5
+        elif self.perf_profile == "cost":
+            w_reason, w_coding, w_tools = 3.0, 2.0, 1.5
+        else:
+            w_reason, w_coding, w_tools = 4.0, 3.0, 2.0
+
         # Capability match
         if getattr(profile, "requires_reasoning", False):
-            score += cap.reasoning_score * 4.0
+            score += cap.reasoning_score * w_reason
         if getattr(profile, "requires_code_generation", False):
-            score += cap.coding_score * 3.0
+            score += cap.coding_score * w_coding
         if getattr(profile, "requires_tools", False):
-            score += cap.tool_use_score * 2.0
+            score += cap.tool_use_score * w_tools
             if not cap.supports_tools:
                 score -= 3.0
 
         # Cost optimization
         complexity = getattr(profile, "complexity", 0.5)
-        if complexity < 0.3:
+        if self.perf_profile == "cost":
+            # cost 偏好:任何复杂度都纳入成本权重
+            score += cap.cost_efficiency * 4.0
+        elif complexity < 0.3:
             score += cap.cost_efficiency * 3.0
         elif complexity > 0.7:
             score += cap.tier * 1.0
@@ -454,6 +498,15 @@ class ModelPool:
         # Health
         if h.consecutive_failures > 0:
             score -= float(h.consecutive_failures) * 2.0
+
+        # P2: 负载因子(并发高的模型扣分,避免过载;fast 偏好更敏感)
+        if h.in_flight > 0:
+            load_penalty = 1.5 if self.perf_profile == "fast" else 1.0
+            score -= float(h.in_flight) * load_penalty
+
+        # P2: fast 偏好纳入延迟惩罚(历史平均延迟高的扣分)
+        if self.perf_profile == "fast" and h.avg_latency > 0:
+            score -= min(h.avg_latency * 0.5, 3.0)
 
         return max(score, 0.0)
 

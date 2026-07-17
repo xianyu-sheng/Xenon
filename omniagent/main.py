@@ -84,6 +84,16 @@ def cli() -> None:
         help="模型配置文件路径",
     )
     parser.add_argument(
+        "-f", "--file",
+        default=None,
+        help="models import 子命令的配置文件路径",
+    )
+    parser.add_argument(
+        "--no-probe",
+        action="store_true",
+        help="models import 时跳过单 token 探针验活",
+    )
+    parser.add_argument(
         "--init-context",
         nargs="*",
         metavar="KEY=VALUE",
@@ -130,6 +140,14 @@ def cli() -> None:
     elif cmd == "chat":
         _cmd_chat(args)
 
+    elif cmd == "models":
+        sub = args.workflow_path
+        if sub == "import":
+            _cmd_models_import(args)
+        else:
+            console.print("[red]用法: omniagent models import -f <file>[/red]")
+            sys.exit(1)
+
     elif cmd and (cmd.endswith(".yaml") or cmd.endswith(".yml")):
         # omniagent workflow.yaml — 兼容旧用法
         args.workflow = cmd
@@ -152,6 +170,33 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         system_prompt=getattr(args, "system_prompt", None),
         config_path=getattr(args, "config", None),
     )
+
+
+def _cmd_models_import(args: argparse.Namespace) -> None:
+    """P1-A: 非交互批量注册模型(脚本/CI 友好)。"""
+    from omniagent.repl.batch_register import batch_register
+    from omniagent.repl.model_registry import ModelRegistry
+    from omniagent.repl.model_pool import ModelPool
+
+    file = getattr(args, "file", None)
+    if not file:
+        console.print("[red]用法: omniagent models import -f <file>[/red]")
+        sys.exit(1)
+
+    registry = ModelRegistry()
+    pool = ModelPool()
+    result = batch_register(file, registry, pool, probe=not args.no_probe, dry_run=args.dry_run)
+    console.print(result.summary())
+
+    if not args.dry_run and (result.registered or result.updated):
+        try:
+            persist = Path.home() / ".omniagent" / "models.yaml"
+            registry.save_to_file(persist)
+            console.print(f"[dim]💾 已持久化到 {persist}[/dim]")
+        except Exception as e:
+            console.print(f"[yellow]⚠️  持久化失败: {e}[/yellow]")
+    if result.failed:
+        sys.exit(1)
 
 
 def _cmd_run(args: argparse.Namespace) -> None:

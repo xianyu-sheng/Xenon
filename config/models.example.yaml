@@ -1,0 +1,50 @@
+# OmniAgent 统一模型配置示例
+# 用法:
+#   REPL:   /import_models /path/to/models.yaml
+#   CLI:    omniagent models import -f /path/to/models.yaml
+#   启动:   omniagent --config /path/to/models.yaml   (P0 已打通:直接进 ModelPool)
+#
+# 一个文件同时覆盖:模型列表 + 角色优先级 + 性能 profile。
+# 注册后 AutoRouter 的池立即生效,无需重启。
+# JSON 格式同样支持(yaml.safe_load 通吃 JSON)。
+
+version: 1
+
+# 性能偏好 -> 影响 ModelPool._score 权重向量(P2)
+#   fast     : 延迟权重↑,优先极速轻量端点
+#   cost     : 成本权重↑,优先高性价比
+#   balanced : 均衡(默认)
+profile: balanced
+
+models:
+  # ── 闭源厂商:模型固定,probe 验活即可 ──
+  - alias: gpt4o
+    model_id: openai/gpt-4o
+    api_key: ${OPENAI_API_KEY}        # 支持 ${ENV_VAR} 引用;空则走三级 fallback(yaml->env->ANTHROPIC_AUTH_TOKEN)
+    base_url: https://api.openai.com  # 可选,空用 provider 默认
+    weight: 1.0
+    context_window: 128000
+    tags: [reasoning, coding, flagship]
+    tier: 4                            # 可选,手动覆盖 _infer_capability 的关键字推断
+    probe: true                        # 可选,注册时单 token 探针验活(默认 true)
+
+  - alias: claude-sonnet
+    model_id: anthropic/claude-sonnet-4
+    api_key: ${ANTHROPIC_API_KEY}
+    weight: 1.2
+    tags: [reasoning, coding]
+
+  # ── 本地/兼容端点:discover 自动拉取子模型(默认关)──
+  - alias: ollama-local
+    model_id: ollama/qwen2.5:7b
+    api_key: ""                        # 本地端点通常无需 key
+    base_url: http://localhost:11434
+    discover: true                     # GET {base_url}/v1/models 自动展开所有本地模型
+    probe: true
+    weight: 0.8
+
+# 角色优先级(可选,复用 ModelRegistry.role_priority / default_flow.yaml)
+roles:
+  planner: [gpt4o, claude-sonnet]
+  coder: [claude-sonnet, gpt4o]
+  reviewer: [claude-sonnet]
