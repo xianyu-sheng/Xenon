@@ -229,6 +229,8 @@ class BaseEngine(ABC):
         last_error: Exception | None = None
         for model_id in (model_priority or self.model_priority):
             try:
+                if self.model_pool:
+                    self.model_pool.acquire(model_id)  # P2: 并发计数+1(资源感知)
                 mc = self.model_configs.get(model_id)
                 mt = max_tokens or getattr(mc, "max_tokens", None) or 8192
                 creds = None
@@ -302,8 +304,55 @@ class BaseEngine(ABC):
                     self.model_pool.record_failure(model_id, is_retry=was_open)
                 last_error = e
                 logger.warning(tp(f"模型 {model_id} 失败: {e}，尝试下一个..."))
+            finally:
+                # P2: 释放并发计数(无论成败)
+                if self.model_pool:
+                    self.model_pool.release(model_id)
+        # P2: 限流退避--全链瞬时失败时退避后重试链首,而非立即上抛
+        # (避免 ReAct 第 N 步 RPM 限流中断,浪费前 N-1 步 token)
+        if self._is_transient_error(last_error) and getattr(self, '_call_retry_depth', 0) < 2:
+            self._call_retry_depth = getattr(self, '_call_retry_depth', 0) + 1
+            try:
+                wait = self._extract_retry_after(last_error, default=2.0 * self._call_retry_depth)
+                logger.warning(tp(
+                    f"全链瞬时失败({type(last_error).__name__}),"
+                    f"退避 {wait:.1f}s 后重试(depth {self._call_retry_depth}/2)"))
+                import time as _t
+                _t.sleep(wait)
+                return self._call_llm(messages, max_tokens, model_priority=model_priority)
+            finally:
+                self._call_retry_depth -= 1
         self.callback.on_error(f"所有模型均调用失败: {last_error}")
         raise RuntimeError(f"所有模型均调用失败: {last_error}")
+
+    # ── P2: 限流退避辅助 ─────────────────────────────────
+
+    @staticmethod
+    def _is_transient_error(e: Exception | None) -> bool:
+        """判断错误是否值得退避重试(瞬时错误)。终端错误(401/403/400)不会到达此处。"""
+        if e is None:
+            return False
+        if isinstance(e, ResponseTruncatedError):
+            return True
+        if isinstance(e, (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout,
+                          httpx.RemoteProtocolError, httpx.WriteError, httpx.PoolTimeout)):
+            return True
+        if isinstance(e, httpx.HTTPStatusError):
+            status = e.response.status_code
+            return status == 429 or 500 <= status < 600
+        return False  # 未知异常保守不退避
+
+    @staticmethod
+    def _extract_retry_after(e: Exception | None, default: float = 2.0) -> float:
+        """从 429 响应头取 Retry-After,否则返回 default(上限 30s 防长阻塞)。"""
+        if isinstance(e, httpx.HTTPStatusError):
+            try:
+                ra = e.response.headers.get("retry-after")
+                if ra:
+                    return min(float(ra), 30.0)
+            except Exception:
+                pass
+        return default
 
     # ── F5: 三层 LLM 降级 _call_llm_native ───────────────────
 

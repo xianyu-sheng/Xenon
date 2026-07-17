@@ -549,23 +549,25 @@ def _register_custom(registry=None, model_pool=None) -> None:
             console.print(f"[yellow]⚠ 模型列表拉取失败，但已保存配置[/yellow]")
             console.print(f"[dim]可稍后重试，或检查 base_url 是否正确[/dim]")
         else:
+            import os as _os
+            _max_per_provider = int(_os.environ.get("OMNIAGENT_MAX_MODELS_PER_PROVIDER", "5"))
             console.print(f"[green]✓ 发现 {len(info.models)} 个模型[/green]")
-            for m in info.models[:5]:
+            for m in info.models[:_max_per_provider]:
                 console.print(f"  - {m}")
-            if len(info.models) > 5:
+            if len(info.models) > _max_per_provider:
                 console.print(f"  ... 等 {len(info.models)} 个模型")
 
         # Auto-register models to pool (v0.4.0)
         if info.models and "(auto-fetch" not in str(info.models[0]):
             if model_pool:
-                for model_name in info.models[:5]:
+                for model_name in info.models[:_max_per_provider]:
                     model_id = f"{info.key}/{model_name}"
                     alias = model_name.replace(".", "-")
                     model_pool.register(model_id, alias=alias, weight=3.0,
                                         api_key=api_key, base_url=info.base_url)
-                console.print(f"[green]✓ 已自动注册 5 个模型到调用池[/green]")
+                console.print(f"[green]✓ 已自动注册 {min(len(info.models), _max_per_provider)} 个模型到调用池[/green]")
             elif registry is not None:
-                for model_name in info.models[:5]:
+                for model_name in info.models[:_max_per_provider]:
                     model_id = f"{info.key}/{model_name}"
                     alias = model_name.replace(".", "-")
                     registry.add_model(model_id, alias)

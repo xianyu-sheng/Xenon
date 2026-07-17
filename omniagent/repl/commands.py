@@ -324,6 +324,94 @@ def _cmd_pool(*, session_state: dict, **kwargs: Any) -> str:
     return "\n".join(lines)
 
 
+# /import_models ───────────────────────────────────────────
+
+register_command(
+    "/import_models",
+    "批量导入模型配置文件(YAML/JSON)到注册表与调用池",
+    "/import_models <file> [--no-probe] [--dry-run]",
+)
+
+
+@_handler("/import_models")
+def _cmd_import_models(*, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any) -> str:
+    """P1-A: 批量注册模型(discover+probe+事务注册),注册后持久化到 ~/.omniagent/models.yaml。"""
+    from omniagent.repl.batch_register import batch_register
+
+    parts = args.split()
+    if not parts or not parts[0]:
+        return "用法: /import_models <file> [--no-probe] [--dry-run]"
+    path = parts[0]
+    no_probe = "--no-probe" in parts
+    dry_run = "--dry-run" in parts
+
+    pool = session_state.get("model_pool")
+    if pool is None:
+        return "❌ 调用池不可用"
+
+    result = batch_register(path, registry, pool, probe=not no_probe, dry_run=dry_run)
+
+    summary = result.summary()
+    if not dry_run and (result.registered or result.updated):
+        try:
+            persist = Path.home() / ".omniagent" / "models.yaml"
+            registry.save_to_file(persist)
+            summary += f"\n💾 已持久化到 {persist}"
+        except Exception as e:
+            summary += f"\n⚠️  持久化失败: {e}"
+    return summary
+
+
+# /reload_models ───────────────────────────────────────────
+
+register_command(
+    "/reload_models",
+    "从文件重载模型到调用池(默认 ~/.omniagent/models.yaml)",
+    "/reload_models [file]",
+)
+
+
+@_handler("/reload_models")
+def _cmd_reload_models(*, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any) -> str:
+    """P1-A: 显式热重载(替代文件 watcher,避免 REPL 内竞态)。"""
+    path = args.strip() or str(Path.home() / ".omniagent" / "models.yaml")
+    if not Path(path).exists():
+        return f"❌ 文件不存在: {path}"
+
+    pool = session_state.get("model_pool")
+    if pool is None:
+        return "❌ 调用池不可用"
+
+    registry.load_from_file(path)
+    models_cfg = registry.export_config().get("models", {})
+    pool.from_config(models_cfg)
+    return f"✅ 已从 {path} 重载 {len(models_cfg)} 个模型到调用池"
+
+
+# /set_profile ─────────────────────────────────────────────
+
+register_command(
+    "/set_profile",
+    "设置性能偏好(fast|cost|balanced),影响模型调度权重",
+    "/set_profile [fast|cost|balanced]",
+)
+
+
+@_handler("/set_profile")
+def _cmd_set_profile(*, args: str, session_state: dict, **kwargs: Any) -> str:
+    """P2: 切换 _score 权重向量(极速响应/成本优先/均衡)。"""
+    profile = args.strip().lower()
+    pool = session_state.get("model_pool")
+    if pool is None:
+        return "❌ 调用池不可用"
+    if not profile:
+        return (f"当前性能偏好: [bold]{pool.perf_profile}[/bold]\n"
+                f"可选: fast(极速) | cost(成本优先) | balanced(均衡)")
+    if pool.set_perf_profile(profile):
+        return f"✅ 性能偏好已设为: {profile}"
+    return f"❌ 无效的偏好 '{profile}',可选: fast | cost | balanced"
+
+
 # /resume ──────────────────────────────────────────────────
 
 register_command("/resume", "恢复上次自动保存的会话（v0.4.0）", "/resume [name]")
