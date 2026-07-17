@@ -161,29 +161,33 @@ def _parse_wttr_json(data: dict, city: str, resolved: str, lang: str) -> dict[st
     if desc_lower in _WEATHER_DESC_ZH:
         description = _WEATHER_DESC_ZH[desc_lower]
 
-    temp_c = int(current.get("temp_C", 0))
-    feels_like = int(current.get("FeelsLikeC", 0))
+    # temp_C/FeelsLikeC 若为 null（key 存在但值为 None），int(None) 会 TypeError；
+    # `or 0` 兜底（wttr 返回字符串如 "0"，truthy，不受影响）
+    temp_c = int(current.get("temp_C") or 0)
+    feels_like = int(current.get("FeelsLikeC") or 0)
 
-    astronomy = forecast.get("astronomy", [{}])[0] if forecast else {}
+    astronomy = (forecast.get("astronomy") or [{}])[0] if forecast else {}
 
     return {
         "city": city,
         "resolved_city": resolved,
-        "temperature": f"{current.get('temp_C', 'N/A')}°C",
+        # F13: wttr.in 偶尔返回 null（key 存在值为 None），`.get(k, 'N/A')` 会返回 None
+        # -> 报告显示 "None°C"；改 `or 'N/A'` 让 null 走默认值（wttr 字段为字符串，"0" truthy 不受影响）
+        "temperature": f"{current.get('temp_C') or 'N/A'}°C",
         "temperature_value": temp_c,
         "feels_like": f"{feels_like}°C",
         "description": description,
-        "humidity": f"{current.get('humidity', 'N/A')}%",
-        "wind_speed": f"{current.get('windspeedKmph', 'N/A')} km/h",
-        "wind_dir": current.get("winddir16Point", "N/A"),
-        "visibility": f"{current.get('visibility', 'N/A')} km",
-        "uv_index": current.get("uvIndex", "N/A"),
-        "precipitation": f"{current.get('precipMM', 'N/A')} mm",
-        "pressure": f"{current.get('pressure', 'N/A')} hPa",
-        "max_temp": f"{forecast.get('maxtempC', 'N/A')}°C" if forecast else "N/A",
-        "min_temp": f"{forecast.get('mintempC', 'N/A')}°C" if forecast else "N/A",
-        "sunrise": astronomy.get("sunrise", "N/A"),
-        "sunset": astronomy.get("sunset", "N/A"),
+        "humidity": f"{current.get('humidity') or 'N/A'}%",
+        "wind_speed": f"{current.get('windspeedKmph') or 'N/A'} km/h",
+        "wind_dir": current.get("winddir16Point") or "N/A",
+        "visibility": f"{current.get('visibility') or 'N/A'} km",
+        "uv_index": current.get("uvIndex") or "N/A",
+        "precipitation": f"{current.get('precipMM') or 'N/A'} mm",
+        "pressure": f"{current.get('pressure') or 'N/A'} hPa",
+        "max_temp": f"{forecast.get('maxtempC') or 'N/A'}°C" if forecast else "N/A",
+        "min_temp": f"{forecast.get('mintempC') or 'N/A'}°C" if forecast else "N/A",
+        "sunrise": astronomy.get("sunrise") or "N/A",
+        "sunset": astronomy.get("sunset") or "N/A",
         "query_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "clothing_advice": _get_clothing_advice(temp_c),
         "clothing_items": _get_clothing_items(temp_c),
