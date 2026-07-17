@@ -3,6 +3,37 @@
 本文件记录 OmniAgent-CLI 各版本变更。版本号遵循语义化版本（预 1.0 阶段：
 `0.MINOR.PATCH`，每个修复批次递增 MINOR）。
 
+## [0.5.5] - 2026-07-17
+
+### 智能调度路由层增强(P0-P3)
+
+整合两份外部 AI 路由报告 + 自研方案,落地批量注册、会话粘性、资源感知、限流退避、配置热加载:
+
+- **P0 配置链路打通**:修复 `--config` 只喂 `ModelRegistry` 不喂 `ModelPool` 的隐藏 bug(AutoRouter 用 Pool,故配置实际失效);`load_from_file` weight 丢失修复;首跑/向导每 provider 注册数可配(`OMNIAGENT_MAX_MODELS_PER_PROVIDER`)。
+- **P1-A 批量注册(`/import_models`)**:新模块 `batch_register.py`--YAML/JSON 解析 + 校验 + `${ENV}` 展开 + discover 探测子模型 + probe 健康探活 + 逐项容错注册;配套 `config/models.example.yaml`、`/reload_models`、`main.py models import -f/--file --no-probe`。
+- **P1-B SAAR 会话感知路由**:新模块 `session_lock.py`--工具流锁定首模型,防 ReAct 中途换模型导致上下文漂移 + prompt cache 失效;锁定短路/健康失败释放重锁/漂移降级。
+- **P2 资源感知调度 + 限流退避**:`ModelPool` 新增 `perf_profile`(fast|cost|balanced)权重向量 + `in_flight` 负载因子 + `acquire/release`;`engine/base._call_llm` 并发计数配对 + 全链瞬时失败退避重试(429/5xx/网络,Retry-After 上限 30s,depth≤2);`/set_profile` 命令。
+- **P3 配置热加载**:新模块 `config_watcher.py`--纯 stdlib ctypes 调 libc inotify(**零新依赖**),监听 `models.yaml` 变更自动热加载;监听目录+过滤文件名(正确处理 vim/emacs atomic rename)、debounce 0.5s 防抖、非 Linux 静默降级;`OMNIAGENT_CONFIG_WATCH=0` 可关。
+- **benchmark 自动 tier**:`model_pool` register 时接入 `benchmark_fetcher`(HuggingFace Leaderboard 数据,7 天缓存)校准 tier。
+
+### 工具执行体验修复
+
+- **文件列举爆炸**:`list_files`/`search_files` 剪枝垃圾目录(node_modules/.git/venv 等)+ 500/2000 上限;`scout` 300 上限。模拟 930->30 文件。
+- **"工具调用失败"噪音根治**:终端错误分类扩展 + 逐工具补 `error`/`success` 字段;`refactor analyze` 补 `success`(最高频误判);command/git/weather 补 error;各 `read_text` 捕 UnicodeDecodeError;git commit `replace` bug;weather IndexError/None°C。
+- **edit_file/batch_edit 模糊匹配**:精确未命中时空白容忍兜底;`batch_write` 校验阶段原子化 + 诚实契约描述。
+- **github_fetch**:支持 `GITHUB_TOKEN` 环境变量认证(60/h->5000/h)+ 检测 API 截断。
+- **mcp transport**:`StdioTransport` 后台 drain stderr 防管道死锁;`SSETransport` 加 `__del__` 释放连接池。
+- **日志级别**:默认 INFO->ERROR(第 4 级),静默例行噪声(verbose 仍 DEBUG)。
+
+### 文档
+
+- 添加终端操作演示视频 + README 嵌入展示。
+
+### 约束
+
+- 1241/1241 测试全绿(+56 路由层 + 13 watcher 新增)
+- 不破坏既有引擎/工具契约
+
 ## [0.5.4] — 2026-07-16
 
 ### TUI 优化
