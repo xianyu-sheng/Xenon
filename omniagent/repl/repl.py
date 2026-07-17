@@ -300,7 +300,9 @@ class REPL:
                 datefmt='%H:%M:%S',
             )
         )
-        self._log_handler.setLevel(logging.INFO)
+        # 第 4 级（ERROR）：只捕获错误级日志进折叠面板，不再刷屏例行 INFO
+        # （工具调用/迭代/响应摘要等）。与 main.py 默认 ERROR 一致。
+        self._log_handler.setLevel(logging.ERROR)
         # 保存原有 handler 并清空，确保日志只进缓冲区
         self._saved_handlers: dict[str, list[logging.Handler]] = {}
         for _name in [

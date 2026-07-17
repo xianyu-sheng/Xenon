@@ -108,8 +108,9 @@ def cli() -> None:
 
     args = parser.parse_args()
 
-    # 配置日志
-    log_level = logging.DEBUG if args.verbose else logging.INFO
+    # 配置日志：默认 ERROR（第 4 级，静默例行 INFO 噪声--工具调用/迭代日志）；
+    # --verbose 降至 DEBUG 供调试。不再用 INFO 作为默认级别。
+    log_level = logging.DEBUG if args.verbose else logging.ERROR
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
