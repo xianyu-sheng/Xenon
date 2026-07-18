@@ -1038,7 +1038,7 @@ def _cmd_verbose(*, args: str, session_state: dict, **kwargs: Any) -> str:
 register_command(
     "/sub-agent",
     "委派子 Agent 执行任务（支持多引擎和并行）",
-    "/sub-agent <task> [--engine react|plan_execute|reflection|direct] [--timeout N] [--parallel task1|task2|...]",
+    "/sub-agent <task> [--engine react|plan_execute|reflection|novel|plan_react|plan_reflection|react_reflection|direct] [--timeout N] [--parallel task1|task2|...]",
 )
 
 @_handler("/sub-agent")
@@ -1064,10 +1064,14 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
             "  /sub-agent <task> --timeout 30           设置超时（秒）\n"
             "  /sub-agent --parallel taskA|taskB|taskC  并行执行（最多 10 个）\n\n"
             "引擎类型:\n"
-            "  react          思考-行动循环（默认，适合复杂多步任务）\n"
-            "  plan_execute   规划-执行（适合多步骤结构化任务）\n"
-            "  reflection     反思-修正（适合需要自我审查的任务）\n"
-            "  direct         直答（适合简单问答类任务）\n\n"
+            "  react              思考-行动循环（默认，适合复杂多步任务）\n"
+            "  plan_execute       规划-执行（适合多步骤结构化任务）\n"
+            "  reflection         反思-修正（适合需要自我审查的任务）\n"
+            "  novel              小说创作（适合创意写作）\n"
+            "  plan_react         规划+ReAct 组合（先规划再逐步执行）\n"
+            "  plan_reflection    规划+反思组合（规划执行后自我审查）\n"
+            "  react_reflection   ReAct+反思组合（探索后自我审查）\n"
+            "  direct             直答（无工具，适合简单问答）\n\n"
             "示例:\n"
             "  /sub-agent 分析 omniagent/nodes/tool_node.py 的代码质量\n"
             "  /sub-agent 给 lsp_provider.py 写单元测试 --engine plan_execute\n"

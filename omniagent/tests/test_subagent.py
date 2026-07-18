@@ -44,11 +44,33 @@ class TestSubAgentSystem:
         result = eng._spawn_subagent({"task": "test"}, ctx, None)
         assert "深度超限" in result
 
-    def test_spawn_invalid_engine_type(self):
-        """不支持的引擎类型返回错误。"""
+    def test_all_eight_engine_types_buildable(self):
+        """所有 8 种引擎类型均可构建。"""
         eng = self._make_engine()
-        result = eng._build_sub_engine("nonexistent", "test-id")
-        assert "不支持" in result or "不支持" in str(result)
+        expected = {
+            "react": "ReActEngine",
+            "plan_execute": "PlanExecuteEngine",
+            "reflection": "ReflectionEngine",
+            "novel": "NovelEngine",
+            "plan_react": "PlanReactEngine",
+            "plan_reflection": "PlanReflectionEngine",
+            "react_reflection": "ReactReflectionEngine",
+            "direct": "ReActEngine",
+        }
+        for etype, cls_name in expected.items():
+            sub = eng._build_sub_engine(etype, f"t-{etype}")
+            assert not isinstance(sub, str), f"{etype} 构建失败: {sub}"
+            assert cls_name in type(sub).__name__, f"{etype} 期望 {cls_name}, 实际 {type(sub).__name__}"
+
+    def test_invalid_engine_rejected_with_all_options(self):
+        """不支持的引擎类型列举所有 8 种可用选项。"""
+        eng = self._make_engine()
+        result = eng._build_sub_engine("nonexistent", "id")
+        assert "plan_react" in result
+        assert "plan_reflection" in result
+        assert "react_reflection" in result
+        assert "novel" in result
+        assert "direct" in result
 
     def test_build_sub_engine_react(self):
         """构建 ReAct 子引擎。"""
@@ -188,21 +210,6 @@ class TestSubAgentSystem:
             # 验证 ThreadPoolExecutor 被调用
             mock_exec.assert_called()
 
-    # ── P1: 多引擎构建 ─────────────────────────────────
+    # ── P1: 多引擎构建（8 种引擎）───────────────────
 
-    def test_build_react_engine(self):
-        eng = self._make_engine()
-        sub = eng._build_sub_engine("react", "id")
-        assert isinstance(sub, ReActEngine)
-
-    def test_build_plan_execute_engine(self):
-        eng = self._make_engine()
-        sub = eng._build_sub_engine("plan_execute", "id")
-        from omniagent.engine.plan_execute_engine import PlanExecuteEngine
-        assert isinstance(sub, PlanExecuteEngine)
-
-    def test_build_reflection_engine(self):
-        eng = self._make_engine()
-        sub = eng._build_sub_engine("reflection", "id")
-        from omniagent.engine.reflection_engine import ReflectionEngine
-        assert isinstance(sub, ReflectionEngine)
+    # 已由 test_all_eight_engine_types_buildable 和 test_invalid_engine_rejected_with_all_options 覆盖
