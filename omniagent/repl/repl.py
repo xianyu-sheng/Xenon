@@ -202,11 +202,14 @@ class REPL:
                 event.app.invalidate()
 
         style = Style.from_dict({
-            "prompt": "bold #00e5a0",
-            "status": "#888888",
-            "bottom-toolbar": "bg:#1e1e1e #9e9e9e",
-            "bottom-toolbar.status": "#9e9e9e",
-            "bottom-toolbar.separator": "#555555",
+            # 输入区 — 深靛蓝底，与纯黑历史区形成清晰分界线
+            "": "#eeeeee bg:#1e1e4a",
+            # 提示符 `>` — 亮紫底白字，一眼定位输入位置
+            "prompt": "bold #ffffff bg:#5c5ce0",
+            # 底部工具栏 — 同色系，视觉上与输入区连成一体
+            "bottom-toolbar": "bg:#16163a #aaaaaa",
+            "bottom-toolbar.status": "#9999cc",
+            "bottom-toolbar.separator": "#5c5ce0",
         })
 
         history_path = _HISTORY_DIR / "input_history.txt"
