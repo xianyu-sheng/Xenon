@@ -1033,6 +1033,130 @@ def _cmd_verbose(*, args: str, session_state: dict, **kwargs: Any) -> str:
     return "❌ 无法获取 REPL 状态"
 
 
+# /sub-agent ──────────────────────────────────────────────
+
+register_command(
+    "/sub-agent",
+    "委派子 Agent 执行任务（支持多引擎和并行）",
+    "/sub-agent <task> [--engine react|plan_execute|reflection|direct] [--timeout N] [--parallel task1|task2|...]",
+)
+
+@_handler("/sub-agent")
+def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) -> str:
+    """v0.6.1: 显式委派子 Agent 执行任务。
+
+    用法:
+      /sub-agent <task>                         # 默认 ReAct 引擎
+      /sub-agent <task> --engine plan_execute   # 指定引擎
+      /sub-agent <task> --timeout 30            # 30 秒超时
+      /sub-agent --parallel taskA|taskB|taskC   # 并行 3 个子任务
+    """
+    from omniagent.engine.react_engine import ReActEngine
+    from omniagent.mcp.registry import get_registry
+    from omniagent.engine.context import AgentContext
+
+    if not args or not args.strip():
+        return (
+            "📋 /sub-agent — 委派子 Agent 执行任务\n\n"
+            "用法:\n"
+            "  /sub-agent <task>                        默认 ReAct 引擎\n"
+            "  /sub-agent <task> --engine plan_execute  指定引擎类型\n"
+            "  /sub-agent <task> --timeout 30           设置超时（秒）\n"
+            "  /sub-agent --parallel taskA|taskB|taskC  并行执行（最多 10 个）\n\n"
+            "引擎类型:\n"
+            "  react          思考-行动循环（默认，适合复杂多步任务）\n"
+            "  plan_execute   规划-执行（适合多步骤结构化任务）\n"
+            "  reflection     反思-修正（适合需要自我审查的任务）\n"
+            "  direct         直答（适合简单问答类任务）\n\n"
+            "示例:\n"
+            "  /sub-agent 分析 omniagent/nodes/tool_node.py 的代码质量\n"
+            "  /sub-agent 给 lsp_provider.py 写单元测试 --engine plan_execute\n"
+            '  /sub-agent --parallel "审查repl.py"|"审查commands.py"|"审查react_engine.py"\n'
+        )
+
+    # 解析参数
+    import shlex
+    parts = shlex.split(args)
+
+    engine_type = "react"
+    timeout = None
+    parallel_tasks = None
+
+    i = 0
+    task_parts = []
+    while i < len(parts):
+        if parts[i] == "--engine" and i + 1 < len(parts):
+            engine_type = parts[i + 1].lower()
+            i += 2
+        elif parts[i] == "--timeout" and i + 1 < len(parts):
+            try:
+                timeout = int(parts[i + 1])
+            except ValueError:
+                return f"❌ --timeout 必须为整数，收到: {parts[i + 1]}"
+            i += 2
+        elif parts[i] == "--parallel":
+            if i + 1 < len(parts):
+                parallel_tasks = [t.strip() for t in parts[i + 1].split("|") if t.strip()]
+            else:
+                return "❌ --parallel 需要任务列表（用 | 分隔）"
+            i += 2
+        else:
+            task_parts.append(parts[i])
+            i += 1
+
+    task = " ".join(task_parts).strip()
+
+    # 获取模型配置
+    if repl is None:
+        return "❌ 无法获取 REPL 实例"
+
+    model_ids = getattr(repl, '_model_priority', None) or repl.model_pool.get_priority_list()
+    model_configs = getattr(repl, '_model_configs', None) or {}
+
+    # 构建引擎
+    mcp_registry = get_registry()
+    engine = ReActEngine(
+        model_ids,
+        max_iterations=15,
+        callback=getattr(repl, '_engine_callback', None),
+        model_configs=model_configs,
+        subagent_timeout=timeout,
+    )
+
+    # 构建上下文
+    ctx = AgentContext()
+    # 复制当前对话历史
+    if hasattr(repl, '_session_history'):
+        ctx.set_conversation_messages(list(repl._session_history[-10:]))
+
+    # 构建 action_input
+    if parallel_tasks:
+        action_input: dict[str, Any] = {
+            "task_list": [
+                {"task": t, "engine": "react"} for t in parallel_tasks
+            ]
+        }
+        display_task = f"并行 {len(parallel_tasks)} 个子任务"
+    else:
+        if not task:
+            return "❌ 请提供任务描述"
+        action_input = {"task": task, "engine": engine_type}
+        if timeout:
+            action_input["timeout"] = timeout
+        display_task = task
+
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("用户 /sub-agent 委派: %s (引擎=%s)", display_task[:80], engine_type)
+
+    try:
+        result = engine._spawn_subagent(action_input, ctx, None)
+        return result
+    except Exception as e:
+        logger.exception("/sub-agent 执行失败")
+        return f"❌ 子 Agent 执行失败: {e}"
+
+
 # /mcp ──────────────────────────────────────────────────
 
 register_command("/mcp", "管理 MCP 服务器连接", "/mcp [add|list|tools|remove|discover|install] [args]")

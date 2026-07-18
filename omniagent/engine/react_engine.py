@@ -235,12 +235,20 @@ BUILTIN_TOOLS = {
     "spawn_agent": {
         "name": "spawn_agent",
         "description": (
-            "委派一个子 Agent 独立完成一个相对独立的子任务（适合需要多步工具调用、"
-            "可隔离的子问题，如『分析某模块并总结』『给某文件补单测』）。子 Agent 有"
-            "独立的上下文与工具预算，完成后返回摘要+工具调用统计+最终回答。"
-            "不要用于单步操作（直接用对应工具即可）。"
+            "委派一个子 Agent 独立完成子任务（适合需要多步工具调用、"
+            "可隔离的子问题，如『分析某模块并总结』『给某文件补单测』）。\n"
+            "- 单任务: 传 task 参数，选填 engine (默认 react) 和 timeout（秒）。\n"
+            "- 批量并行: 传 task_list=[{\"task\": \"...\", \"engine\": \"react\"}, ...]（最多10个）。\n"
+            "- 引擎类型: react（思考-行动循环）、plan_execute（规划-执行）、\n"
+            "  reflection（反思-修正）、direct（直答，适合简单任务）。\n"
+            "完成后返回摘要+工具调用统计+最终回答。不要用于单步操作。"
         ),
-        "params": {"task": "委派给子 Agent 的子任务描述，需清晰自包含"},
+        "params": {
+            "task": "委派给子 Agent 的子任务描述（单任务，与 task_list 二选一）",
+            "task_list": "批量子任务列表 [{\"task\": \"...\", \"engine\": \"react\", \"timeout\": 30}, ...]",
+            "engine": "引擎类型：react（默认）/ plan_execute / reflection / direct",
+            "timeout": "超时秒数（默认使用引擎配置，0=无超时）",
+        },
     },
     # register_tool 不对 LLM 默认暴露（A2，§8.25.2）：切断 prompt 注入→自主 RCE 链路。
     # handler 仍在 ToolNode.execute 保留，可由用户显式调用；模块导入受 _validate_register_module
@@ -338,6 +346,7 @@ class ReActEngine(BaseEngine):
         project_root: str | None = None,
         max_subagent_iterations: int = 6,
         max_subagent_depth: int = 1,
+        subagent_timeout: int | None = None,  # v0.6.1-P0: 子 Agent 超时秒数
         model_pool: Any = None,          # v0.4.0
         auto_router: Any = None,         # v0.4.0 Step 13
         permission_gate: Any = None,     # v0.5.0: PermissionGate
@@ -369,6 +378,7 @@ class ReActEngine(BaseEngine):
         # messages/tracker/budget；async 后台轮询因零 async 基础设施（§8.1.1）暂缓。
         self.max_subagent_iterations = max_subagent_iterations
         self.max_subagent_depth = max_subagent_depth
+        self.subagent_timeout = subagent_timeout  # v0.6.1-P0
         self._subagent_depth = 0  # 嵌套深度（父=0，子=1）；防递归失控
         self._subagent_history: list[str] = []
         self._last_tracker: ToolExecutionTracker | None = None  # run() 末态供父引擎读取
@@ -879,18 +889,23 @@ class ReActEngine(BaseEngine):
     ) -> str:
         """P2-E5 / §Q7：委派子 Agent 同步执行子任务，返回格式化结果。
 
-        上下文隔离：子 ReActEngine 持独立 messages/tracker/budget，仅复制父对话
-        消息作历史兜底（镜像 ``combined_engines._isolated_ctx``）。递归深度受限
-        （``max_subagent_depth``）防失控。
-
-        同步委派 vs async 轮询：审核 §Q7 规范为 ``asyncio.create_task`` 后台 +
-        ``_poll_subagents`` 轮询；但全仓库零 async 基础设施（§8.1.1），子 Agent
-        复用同步 LLM 客户端——现实路径是同步阻塞委派（子 Agent 能力交付），
-        后台并发轮询留作后续 perf 优化（需 async LLM 客户端或线程池 + 共享状态加锁）。
+        v0.6.1-P0: 超时控制 — 通过 ThreadPoolExecutor 包装 sub.run()，
+        超时后优雅终止返回部分结果。
+        v0.6.1-P1: 多引擎 — 支持 engine_type 参数选择引擎（react/plan_execute/
+        reflection/direct）。
+        v0.6.1-P2: 并行 — task_list 参数支持批量并行委派。
         """
+        import concurrent.futures
+
+        # P2: 批量并行委派
+        task_list = action_input.get("task_list")
+        if task_list and isinstance(task_list, list):
+            return self._spawn_all_subagents(task_list, context, tracker)
+
+        # 单任务委派
         task = (action_input.get("task") or action_input.get("prompt") or "").strip()
         if not task:
-            return "执行失败: spawn_agent 需要非空 task 参数"
+            return "执行失败: spawn_agent 需要非空 task 或 task_list 参数"
 
         if self._subagent_depth >= self.max_subagent_depth:
             return (
@@ -898,51 +913,273 @@ class ReActEngine(BaseEngine):
                 f"{self.max_subagent_depth}），拒绝继续 spawn。请直接给出结果。"
             )
 
-        task_id = f"sub-d{self._subagent_depth + 1}-{len(self._subagent_history) + 1}"
+        # P1: 引擎类型选择
+        engine_type = (action_input.get("engine") or action_input.get("engine_type") or "react").lower()
+
+        # 超时：优先用 action_input 中的值，其次用引擎默认值
+        timeout = action_input.get("timeout")
+        if timeout is None:
+            timeout = self.subagent_timeout
+
+        task_id = f"sub-{engine_type}-d{self._subagent_depth + 1}-{len(self._subagent_history) + 1}"
         logger.info(
-            "spawn_agent [%s] 委派子任务（深度 %d）: %s",
-            task_id, self._subagent_depth + 1, task[:80],
+            "spawn_agent [%s] 委派子任务（引擎=%s, 深度=%d, 超时=%s）: %s",
+            task_id, engine_type, self._subagent_depth + 1, timeout, task[:80],
         )
 
-        # 构建子引擎：复用父模型配置与 callback，独立预算/上下文/深度
-        sub = ReActEngine(
-            self.model_priority,
-            max_iterations=self.max_subagent_iterations,
-            callback=self.callback,
-            model_configs=self.model_configs,
-            native_fc=self.native_fc,
-        )
-        sub._subagent_depth = self._subagent_depth + 1
-        self._last_subagent = sub
+        # 构建子引擎
+        sub_engine = self._build_sub_engine(engine_type, task_id)
+        if isinstance(sub_engine, str):
+            return sub_engine  # 错误消息
 
-        # 隔离 ctx：仅复制对话消息作历史兜底，不继承父 ReAct 的工具观察
+        # 隔离 ctx：复制对话消息作历史兜底
         sub_ctx = AgentContext()
         sub_ctx.set_conversation_messages(list(context.get_conversation_messages()))
 
-        try:
-            answer = sub.run(task, sub_ctx)
-        except Exception as e:
-            logger.exception("子 Agent %s 执行异常", task_id)
-            answer = f"执行异常: {e}"
+        # 超时控制：在线程池中执行 sub.run()
+        if timeout and timeout > 0:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(sub_engine.run, task, sub_ctx)
+                try:
+                    answer = future.result(timeout=timeout)
+                except concurrent.futures.TimeoutError:
+                    logger.warning("子 Agent %s 超时（%ds），返回部分结果", task_id, timeout)
+                    # 尝试从子引擎获取部分结果
+                    partial = getattr(sub_engine, '_last_answer', None)
+                    if partial:
+                        answer = f"[超时截断] {partial}"
+                    else:
+                        answer = f"执行超时（{timeout}s），子任务未完成。建议缩小范围或增加超时。"
+                    # 尝试优雅关闭（如果子引擎有 cancel 方法）
+                    if hasattr(sub_engine, 'cancel'):
+                        try:
+                            sub_engine.cancel()
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.exception("子 Agent %s 执行异常", task_id)
+                    answer = f"执行异常: {e}"
+        else:
+            try:
+                answer = sub_engine.run(task, sub_ctx)
+            except Exception as e:
+                logger.exception("子 Agent %s 执行异常", task_id)
+                answer = f"执行异常: {e}"
 
-        # 子引擎工具调用统计（run() 末态存于 _last_tracker）
-        sub_tracker = getattr(sub, "_last_tracker", None)
+        # 格式化结果
+        return self._format_sub_result(task_id, task, engine_type, answer, sub_engine, tracker)
+
+    def _spawn_all_subagents(
+        self,
+        task_list: list[dict | str],
+        context: AgentContext,
+        tracker: ToolExecutionTracker | None = None,
+    ) -> str:
+        """v0.6.1-P2: 并行批量委派多个子 Agent。
+
+        每个任务可以是字符串（使用默认引擎）或字典（含 task/engine/timeout）。
+        所有子 Agent 在线程池中并行执行，收集全部结果后汇总。
+        """
+        import concurrent.futures
+
+        if len(task_list) > 10:
+            return f"⚠️ task_list 最多 10 个子任务，收到 {len(task_list)} 个"
+
+        # 规范化任务
+        tasks: list[dict] = []
+        for i, item in enumerate(task_list):
+            if isinstance(item, str):
+                tasks.append({"task": item, "engine": "react"})
+            elif isinstance(item, dict):
+                t = dict(item)
+                if not t.get("task"):
+                    return f"⚠️ task_list[{i}] 缺少 task 字段"
+                tasks.append(t)
+            else:
+                return f"⚠️ task_list[{i}] 格式无效（需为字符串或字典）"
+
+        logger.info("spawn_agent: 并行委派 %d 个子任务", len(tasks))
+
+        def _run_one(idx: int, task_dict: dict) -> tuple[int, str, str]:
+            """执行单个子任务，返回 (索引, task_id, 结果)。"""
+            t = task_dict["task"]
+            etype = (task_dict.get("engine") or task_dict.get("engine_type") or "react").lower()
+            timeout = task_dict.get("timeout") or self.subagent_timeout
+            tid = f"par-{idx}-{etype}"
+
+            sub_engine = self._build_sub_engine(etype, tid)
+            if isinstance(sub_engine, str):
+                return (idx, tid, f"❌ 引擎创建失败: {sub_engine}")
+
+            sub_ctx = AgentContext()
+            sub_ctx.set_conversation_messages(list(context.get_conversation_messages()))
+
+            try:
+                if timeout and timeout > 0:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as inner:
+                        fut = inner.submit(sub_engine.run, t, sub_ctx)
+                        answer = fut.result(timeout=timeout)
+                else:
+                    answer = sub_engine.run(t, sub_ctx)
+            except concurrent.futures.TimeoutError:
+                answer = f"[超时 {timeout}s]"
+            except Exception as e:
+                answer = f"执行异常: {e}"
+
+            return (idx, tid, self._format_sub_result(tid, t, etype, answer, sub_engine, None))
+
+        # 并行执行
+        results: list[tuple[int, str, str]] = []
+        max_workers = min(len(tasks), 5)  # 最多 5 线程并行
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_run_one, i, td): i
+                for i, td in enumerate(tasks)
+            }
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    i = futures[future]
+                    results.append((i, f"par-{i}-err", f"❌ 线程异常: {e}"))
+
+        # 按索引排序，然后汇总
+        results.sort(key=lambda r: r[0])
+        lines = [f"## 并行子任务执行结果（共 {len(tasks)} 个）\n"]
+        success_count = 0
+        for idx, tid, result in results:
+            ok = result.startswith("✅")
+            if ok:
+                success_count += 1
+            lines.append(f"### [{idx+1}/{len(tasks)}] {tid}")
+            lines.append(result)
+            lines.append("")
+
+        summary = f"并行完成: {success_count}/{len(tasks)} 成功"
+        if tracker:
+            tracker.record(
+                "spawn_agent",
+                {"task_list": [t["task"][:80] for t in tasks], "parallel": True},
+                success=success_count == len(tasks),
+                result_summary=summary,
+            )
+
+        return f"{summary}\n\n" + "\n".join(lines)
+
+    def _build_sub_engine(self, engine_type: str, task_id: str):
+        """v0.6.1-P1: 按类型构建子引擎实例。
+
+        Returns:
+            子引擎实例或错误消息字符串。
+        """
+        if engine_type == "react":
+            sub = ReActEngine(
+                self.model_priority,
+                max_iterations=self.max_subagent_iterations,
+                callback=self.callback,
+                model_configs=self.model_configs,
+                native_fc=self.native_fc,
+                subagent_timeout=self.subagent_timeout,
+            )
+            sub._subagent_depth = self._subagent_depth + 1
+            self._last_subagent = sub
+            return sub
+
+        elif engine_type == "plan_execute":
+            from omniagent.engine.plan_execute_engine import PlanExecuteEngine
+            sub = PlanExecuteEngine(
+                self.model_priority,
+                max_steps=self.max_subagent_iterations,
+                callback=self.callback,
+                model_configs=self.model_configs,
+            )
+            setattr(sub, '_subagent_depth', self._subagent_depth + 1)
+            self._last_subagent = sub
+            return sub
+
+        elif engine_type == "reflection":
+            from omniagent.engine.reflection_engine import ReflectionEngine
+            sub = ReflectionEngine(
+                self.model_priority,
+                max_rounds=min(self.max_subagent_iterations, 5),
+                pass_threshold=6,
+                callback=self.callback,
+                model_configs=self.model_configs,
+            )
+            setattr(sub, '_subagent_depth', self._subagent_depth + 1)
+            self._last_subagent = sub
+            return sub
+
+        elif engine_type in ("direct", "novel"):
+            # direct: 用 ReActEngine 单次迭代模拟（不需要工具）
+            if engine_type == "direct":
+                sub = ReActEngine(
+                    self.model_priority,
+                    max_iterations=1,
+                    callback=self.callback,
+                    model_configs=self.model_configs,
+                    native_fc=self.native_fc,
+                    subagent_timeout=self.subagent_timeout,
+                )
+                # 不暴露工具给 direct 引擎
+                sub.tools = {}
+                sub._subagent_depth = self._subagent_depth + 1
+                self._last_subagent = sub
+                return sub
+            # novel: 小说引擎
+            from omniagent.engine.novel_engine import NovelEngine
+            sub = NovelEngine(
+                self.model_priority,
+                max_iterations=self.max_subagent_iterations,
+                callback=self.callback,
+                model_configs=self.model_configs,
+            )
+            setattr(sub, '_subagent_depth', self._subagent_depth + 1)
+            self._last_subagent = sub
+            return sub
+
+        else:
+            available = "react, plan_execute, reflection, direct"
+            return f"⚠️ 不支持的引擎类型: '{engine_type}'。可用: {available}"
+
+    def _format_sub_result(
+        self,
+        task_id: str,
+        task: str,
+        engine_type: str,
+        answer: str,
+        sub_engine,
+        tracker: ToolExecutionTracker | None,
+    ) -> str:
+        """格式化子 Agent 执行结果为统一报告。"""
+        # 子引擎工具调用统计
+        sub_tracker = getattr(sub_engine, "_last_tracker", None)
         tool_count = len(sub_tracker.calls) if sub_tracker else 0
         tool_summary = sub_tracker.execution_summary() if sub_tracker else "无工具调用"
 
-        success = not answer.startswith(("执行失败", "执行异常"))
+        success = not answer.startswith(("执行失败", "执行异常", "⚠️")) and "超时" not in answer
+        icon = "✅" if success else ("⏱️" if "超时" in answer else "❌")
+        status = "完成" if success else ("超时" if "超时" in answer else "失败")
+
+        # 截断过长的回答
+        max_len = 2000
+        truncated = answer
+        if len(answer) > max_len:
+            truncated = answer[:max_len] + f"\n...（截断，共 {len(answer)} 字符）"
+
         formatted = (
-            f"{'✅' if success else '❌'} 子任务 {task_id} {'完成' if success else '失败'}\n"
+            f"{icon} 子任务 {task_id} {status}\n"
+            f"- 引擎: {engine_type}\n"
             f"- 任务: {task[:200]}\n"
             f"- 工具调用: {tool_count} 次（{tool_summary}）\n"
-            f"- 最终回答:\n{answer}"
+            f"- 最终回答:\n{truncated}"
         )
 
-        # 记入父 tracker（供父引擎验证/汇总）
+        # 记入父 tracker
         if tracker is not None:
             tracker.record(
                 "spawn_agent",
-                {"task": task, "task_id": task_id},
+                {"task": task, "task_id": task_id, "engine": engine_type},
                 success=success,
                 result_summary=formatted[:200],
             )
