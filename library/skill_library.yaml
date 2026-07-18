@@ -1,9 +1,10 @@
 # OmniAgent Skill 库
 # 可通过 /skill install <name> 安装，或手动放到 ~/.omniagent/skills/
-# 格式: name, description, category, file_url (YAML 文件直链)
+# 社区贡献: 欢迎 PR 添加你的 Skill → https://github.com/xianyu-sheng/Omniagent
 
-version: "1.0"
+version: "1.5"
 skills:
+  # ═══ 开发 ═══
   - name: git-commit
     description: AI 生成 commit message — 分析 staged changes 生成规范的提交信息
     category: 开发
@@ -12,26 +13,132 @@ skills:
         action: git diff --cached
         output_var: diff
       - type: llm
-        prompt: |
-          根据以下 git diff 生成一条规范的 commit message（中文，50 字以内）：
-          
-          {diff}
+        prompt: "根据以下 git diff 生成一条规范的 commit message（中文 50 字以内）：\n\n{diff}"
 
-  - name: todo-write
-    description: 将 TODO 项写入项目根目录的 TODO.md
-    category: 效率
-    params:
-      - name: task
-        description: 待办事项描述
+  - name: code-review
+    description: AI 代码审查 — 分析 staged changes 找出潜在 bug、安全问题和改进建议
+    category: 开发
     steps:
-      - type: write_file
-        file_path: TODO.md
-        content: "- [ ] {task}"
-      - type: echo
-        prompt: "✅ 已添加到 TODO.md: {task}"
+      - type: command
+        action: git diff --cached
+        output_var: diff
+      - type: llm
+        prompt: "请对以下代码变更进行审查。从以下几个维度分析：\n1. 潜在 bug 或逻辑错误\n2. 安全漏洞\n3. 性能问题\n4. 可读性和最佳实践\n5. 改进建议\n\n{diff}"
+
+  - name: refactor
+    description: AI 重构建议 — 分析当前文件，给出重构方案
+    category: 开发
+    params:
+      - name: file
+        description: 要重构的文件
+        default: ""
+    steps:
+      - type: read_file
+        file_path: "{file}"
+        output_var: code
+      - type: llm
+        prompt: "分析以下代码，给出重构建议：\n1. 可以提取的函数或类\n2. 命名改进\n3. 设计模式应用\n4. 简化复杂逻辑\n5. 减少重复代码\n\n{code}"
+
+  - name: docstring
+    description: 为 Python/JS/Go 函数自动生成文档注释
+    category: 开发
+    params:
+      - name: file
+        description: 源代码文件
+        default: ""
+    steps:
+      - type: read_file
+        file_path: "{file}"
+        output_var: code
+      - type: llm
+        prompt: "为以下代码中没有文档的函数生成文档注释（对应语言风格：Python用docstring, JS用JSDoc, Go用godoc）。只输出注释，不要改动代码：\n\n{code}"
+
+  - name: test-gen
+    description: 为给定函数生成单元测试
+    category: 开发
+    params:
+      - name: file
+        description: 源代码文件
+        default: ""
+    steps:
+      - type: read_file
+        file_path: "{file}"
+        output_var: code
+      - type: llm
+        prompt: "为以下代码生成完整的单元测试。覆盖正常路径、边界条件、错误处理。用 pytest（Python）/ jest（JS）/ go test（Go）风格：\n\n{code}"
+
+  - name: release-notes
+    description: 从 git log 自动生成 Release Notes
+    category: 开发
+    params:
+      - name: since
+        description: 起始 tag 或 commit
+        default: HEAD~10
+    steps:
+      - type: command
+        action: git log {since}..HEAD --oneline --no-merges
+        output_var: log
+      - type: llm
+        prompt: "根据以下 git log 生成中文 Release Notes。按 feat/fix/refactor/chore 分组，每条一句话：\n\n{log}"
+
+  - name: clean-imports
+    description: 检测并清理未使用的 import / 依赖
+    category: 开发
+    params:
+      - name: file
+        description: 源代码文件
+        default: ""
+    steps:
+      - type: read_file
+        file_path: "{file}"
+        output_var: code
+      - type: llm
+        prompt: "检查以下代码中未使用的 import 或依赖，列出可删除的行号和名称：\n\n{code}"
+
+  - name: pkg-size
+    description: 分析 npm/pip 包大小和依赖树
+    category: 开发
+    params:
+      - name: pkg
+        description: 包名
+        default: ""
+    steps:
+      - type: command
+        action: npm pack {pkg} --dry-run 2>&1 || pip install {pkg} --dry-run --report - 2>&1
+        output_var: report
+      - type: llm
+        prompt: "分析 {pkg} 的依赖情况：\n\n{report}"
+
+  # ═══ 运维 ═══
+  - name: check-ports
+    description: 检查端口占用情况，找出正在监听的服务
+    category: 运维
+    steps:
+      - type: command
+        action: ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null
+        output_var: ports
+      - type: llm
+        prompt: "分析以下端口监听情况，列出所有服务及其状态：\n\n{ports}"
+
+  - name: find-large
+    description: 查找目录下最大的文件和目录
+    category: 运维
+    params:
+      - name: dir
+        description: 目录路径
+        default: "."
+      - name: count
+        description: 显示前 N 个
+        default: "20"
+    steps:
+      - type: command
+        action: du -ah {dir} 2>/dev/null | sort -rh | head -n {count}
+        output_var: result
+      - type: llm
+        prompt: "以下是大文件/目录列表，给出清理建议：\n\n{result}"
 
   - name: summarize-log
-    description: 分析最近的日志文件，提取错误和警告摘要
+    description: 分析日志文件，提取错误和警告摘要
     category: 运维
     params:
       - name: file
@@ -42,16 +149,20 @@ skills:
         default: "200"
     steps:
       - type: command
-        action: tail -n {lines} {file}
-        output_var: log
+        action: tail -n {lines} {file} 2>/dev/null
+        output_var: logs
       - type: llm
-        prompt: |
-          分析以下日志片段，提取错误和警告摘要：
-          
-          {log}
-          
-          格式：
-          - [级别] 时间: 摘要
+        prompt: "分析以下日志片段，按级别和时间提取摘要：\n\n{logs}\n\n格式：\n- [级别] 时间: 摘要"
+
+  - name: docker-clean
+    description: Docker 垃圾清理 — 删除悬空镜像、停止容器、无用卷
+    category: 运维
+    steps:
+      - type: command
+        action: docker system df 2>/dev/null
+        output_var: disk
+      - type: llm
+        prompt: "分析 Docker 磁盘使用情况，建议清理项（可删除的镜像、容器、卷）。列出具体 docker 命令：\n\n{disk}"
 
   - name: bench
     description: 快速性能测试 — 用 ab/wrk 压测本地服务
@@ -68,49 +179,185 @@ skills:
         default: "10"
     steps:
       - type: command
-        action: ab -n {requests} -c {concurrency} {url}
+        action: ab -n {requests} -c {concurrency} {url} 2>&1 || echo "ab 未安装，请用 apt install apache2-utils"
         output_var: result
       - type: llm
-        prompt: |
-          分析 ab 压测结果，给出关键指标和优化建议：
-          
-          {result}
+        prompt: "分析压测结果，给出关键指标（QPS、延迟 P50/P99）和优化建议：\n\n{result}"
 
-  - name: pkg-size
-    description: 分析 npm/pip 包大小和依赖树
-    category: 开发
-    params:
-      - name: pkg
-        description: 包名
-        default: ""
+  - name: disk-usage
+    description: 分析磁盘使用情况并给出清理建议
+    category: 运维
     steps:
       - type: command
-        action: npm pack {pkg} --dry-run 2>&1 || pip install {pkg} --dry-run --report - 2>&1
+        action: df -h && echo "---" && du -sh /tmp /var/log ~/.cache 2>/dev/null
+        output_var: info
+      - type: llm
+        prompt: "分析磁盘使用情况，推荐清理方案：\n\n{info}"
+
+  # ═══ 安全 ═══
+  - name: check-secrets
+    description: 扫描代码中的硬编码密钥、Token、密码
+    category: 安全
+    params:
+      - name: dir
+        description: 扫描目录
+        default: "."
+    steps:
+      - type: command
+        action: grep -rn -E "(password|secret|token|api_key|apikey|private_key)\s*[:=]\s*['\"]?\w{8,}" {dir} --include="*.py" --include="*.js" --include="*.ts" --include="*.go" --include="*.yaml" --include="*.yml" --include="*.env" 2>/dev/null | head -30
+        output_var: findings
+      - type: llm
+        prompt: "以下代码中可能包含硬编码的敏感信息，评估风险并给出修复建议：\n\n{findings}"
+
+  - name: scan-deps
+    description: 检查项目依赖中的已知漏洞（需要 pip-audit / npm audit）
+    category: 安全
+    steps:
+      - type: command
+        action: (pip-audit 2>/dev/null || pip3 audit 2>/dev/null || npm audit 2>/dev/null || echo "请先安装 pip-audit 或运行 npm audit") | head -30
         output_var: report
       - type: llm
-        prompt: |
-          分析 {pkg} 的依赖情况：
-          
-          {report}
+        prompt: "分析依赖安全扫描结果，标记高危漏洞并给出修复建议：\n\n{report}"
 
+  # ═══ 效率 ═══
+  - name: todo-write
+    description: 将 TODO 项追加到项目根目录的 TODO.md
+    category: 效率
+    params:
+      - name: task
+        description: 待办事项描述
+    steps:
+      - type: write_file
+        file_path: TODO.md
+        content: "- [ ] {task}\n"
+      - type: echo
+        prompt: "✅ 已添加到 TODO.md: {task}"
+
+  - name: daily-note
+    description: 生成今日工作日志模板
+    category: 效率
+    steps:
+      - type: command
+        action: date "+%Y-%m-%d"
+        output_var: today
+      - type: write_file
+        file_path: notes/{today}.md
+        content: "# {today} 工作日志\n\n## 今日目标\n- \n\n## 完成事项\n- \n\n## 遇到的问题\n- \n\n## 明日计划\n- \n"
+      - type: echo
+        prompt: "✅ 已创建今日日志: notes/{today}.md"
+
+  - name: translate
+    description: 翻译文本（中英互译）
+    category: 效率
+    params:
+      - name: text
+        description: 要翻译的文本
+    steps:
+      - type: llm
+        prompt: "将以下文本翻译。如果源语言是中文则翻译成英文，如果源语言是英文则翻译成中文。只输出翻译结果：\n\n{text}"
+
+  - name: explain
+    description: 用通俗语言解释一段代码或概念
+    category: 效率
+    params:
+      - name: thing
+        description: 代码片段或概念
+    steps:
+      - type: llm
+        prompt: "用通俗易懂的语言解释以下内容，假设读者是初学者。先一句话总结，再展开说明：\n\n{thing}"
+
+  # ═══ 文档 ═══
+  - name: readme-gen
+    description: 分析项目结构，自动生成 README.md
+    category: 文档
+    steps:
+      - type: command
+        action: ls -la && echo "---TREE---" && find . -maxdepth 3 -not -path './.git/*' -not -path './node_modules/*' -not -path './__pycache__/*' | head -80
+        output_var: structure
+      - type: llm
+        prompt: "分析以下项目结构，生成一份 README.md。包含：项目简介、安装方法、使用示例、目录结构说明。用中文：\n\n{structure}"
+
+  - name: changelog
+    description: 从 git log 生成 CHANGELOG.md
+    category: 文档
+    steps:
+      - type: command
+        action: git log --oneline --no-merges -30
+        output_var: log
+      - type: llm
+        prompt: "根据 git log 生成 CHANGELOG.md（按版本分组，keep a changelog 格式）：\n\n{log}"
+
+  - name: project-init
+    description: 为新项目生成标准文件结构（.gitignore, LICENSE, CONTRIBUTING.md）
+    category: 文档
+    params:
+      - name: type
+        description: 项目类型（python/js/go）
+        default: python
+    steps:
+      - type: llm
+        prompt: "为 {type} 项目生成三个标准文件的内容：\n1. .gitignore（语言相关）\n2. LICENSE（MIT）\n3. CONTRIBUTING.md（中文简短版）\n\n格式:\n=== .gitignore ===\n...\n=== LICENSE ===\n...\n=== CONTRIBUTING.md ===\n..."
+
+  # ═══ 数据库 ═══
   - name: quick-sql
     description: 用自然语言查询 SQLite 数据库
     category: 数据库
     params:
       - name: question
-        description: 你想查询什么？用自然语言描述
+        description: 用自然语言描述你想查询什么
       - name: db
-        description: SQLite 数据库文件路径
+        description: SQLite 数据库路径
         default: data.db
     steps:
       - type: read_file
         file_path: "{db}"
         output_var: schema_info
       - type: llm
-        prompt: |
-          SQLite 数据库路径: {db}
-          用户问题: {question}
-          
-          请生成 SQL 查询语句。只输出 SQL，不要解释。
+        prompt: "数据库: {db}\n用户问题: {question}\n请生成一条 SQL 查询。只输出 SQL，不要解释。"
+        output_var: sql
       - type: command
-        action: sqlite3 {db} "{last_output}"
+        action: sqlite3 {db} "{sql}" 2>/dev/null || echo "SQLite 错误，请检查数据库路径和查询"
+
+  - name: table-schema
+    description: 导出数据库表结构和索引信息
+    category: 数据库
+    params:
+      - name: db
+        description: SQLite 数据库路径
+        default: data.db
+    steps:
+      - type: command
+        action: sqlite3 {db} ".schema" 2>/dev/null
+        output_var: schema
+      - type: llm
+        prompt: "分析以下 SQLite 数据库 schema，生成表关系图描述和索引建议：\n\n{schema}"
+
+  # ═══ 网络 ═══
+  - name: curl-test
+    description: 测试 API 端点并分析响应
+    category: 网络
+    params:
+      - name: url
+        description: API URL
+      - name: method
+        description: HTTP 方法
+        default: GET
+    steps:
+      - type: command
+        action: curl -s -w "\n\n---HTTP_STATUS:%{http_code}---TIME:%{time_total}s" -X {method} {url} 2>&1 | head -100
+        output_var: resp
+      - type: llm
+        prompt: "分析以下 API 响应：\n\n{resp}\n\n给出：状态码含义、响应格式、潜在问题"
+
+  - name: dns-check
+    description: DNS 解析检查 — 查域名 A/CNAME/MX/TXT 记录
+    category: 网络
+    params:
+      - name: domain
+        description: 域名
+    steps:
+      - type: command
+        action: echo "=== A ===" && dig +short {domain} A && echo "=== CNAME ===" && dig +short {domain} CNAME && echo "=== MX ===" && dig +short {domain} MX && echo "=== TXT ===" && dig +short {domain} TXT
+        output_var: dns
+      - type: llm
+        prompt: "分析以下 DNS 记录，总结该域名的服务配置：\n\n{dns}"
