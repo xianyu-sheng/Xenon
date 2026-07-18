@@ -1155,7 +1155,12 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
                 env_vars = ", ".join(s.env.keys())
                 env_hint = f"  [dim]需要环境变量: {env_vars}[/dim]"
             cat = f"[{s.category}]" if s.category else ""
-            lines.append(f"  {s.name} {cat}")
+            src = ""
+            if s.source == "smithery":
+                src = " [dim]🔗 远程[/dim]" if s.url else ""
+            elif s.source == "github":
+                src = " [dim]📦 本地[/dim]" if s.command else ""
+            lines.append(f"  {s.name} {cat}{src}")
             lines.append(f"    {s.description[:100]}")
             if s.note:
                 lines.append(f"    [dim]💡 {s.note}[/dim]")
@@ -1190,6 +1195,20 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
                     env_warnings.append(f"  ⚠️ {env_key} 未设置；设置环境变量后使用 /mcp remove {entry.name} 再重新安装")
 
         try:
+            # 如果条目来自 Smithery 且没有 command/url，查详情接口获取连接信息
+            if entry.source == "smithery" and not entry.command and not entry.url:
+                from omniagent.repl.library import fetch_smithery_detail
+                ok, detail = fetch_smithery_detail(entry.name)
+                if ok and isinstance(detail, dict):
+                    conns = detail.get("connections", [])
+                    if conns:
+                        first = conns[0]
+                        entry.url = first.get("deploymentUrl", "")
+                        schema = first.get("configSchema", {})
+                        for prop_name, prop in schema.get("properties", {}).items():
+                            if prop_name not in entry.env:
+                                entry.env[prop_name] = prop.get("description", "")
+
             # v0.5.4: 惰性连接 — 仅持久化配置，首次调用时再启动子进程
             if entry.command:
                 registry.add_server_pending(entry.name, command=entry.command, args=entry.args)
