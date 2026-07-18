@@ -2,23 +2,35 @@
 
 **不只是 AI 编程助手——是一个可学习、可定制的多模型 AI Agent 调度引擎。**
 
-[![CI](https://github.com/xianyu-sheng/omniagent/actions/workflows/ci.yml/badge.svg)](https://github.com/xianyu-sheng/omniagent/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)]()
 [![Tests](https://img.shields.io/badge/tests-1110%2B-brightgreen.svg)]()
 [![HumanEval](https://img.shields.io/badge/HumanEval_Pass@1-88.4%25_(official)-success.svg)](https://github.com/openai/human-eval)
-[![v0.5.2](https://img.shields.io/badge/version-0.5.2-orange.svg)](https://github.com/xianyu-sheng/omniagent/releases)
+[![v0.6.0](https://img.shields.io/badge/version-0.6.0-orange.svg)](https://github.com/xianyu-sheng/omniagent/releases)
 
 ![OmniAgent terminal demo](docs/assets/terminal-demo.svg)
 
-### 🎥 操作演示
-
 <video src="https://github.com/xianyu-sheng/Omniagent/blob/main/docs/assets/demo.webm?raw=true" controls width="100%"></video>
 
-> 👆 完整终端操作录屏，含双线输入框、状态栏、斜杠命令、ReAct 工具调用等。
+> 👆 完整终端操作录屏，含 dim 日志、引导线输入、斜杠命令、ReAct 工具调用等。
 
-> 12 家模型商、8 种推理范式、MCP 协议、断路器、上下文压缩——一个终端 Agent 该有的工程机制，这里都有。
+> 12 家模型商、8 种推理范式、MCP + Smithery 7000+ 服务器库、断路器、上下文压缩、28 个内建技能——一个终端 Agent 该有的工程机制，这里都有。
 > 23K 行 Python，1110+ 测试，MIT 开源。**适合想深入理解 Agent 架构的开发者阅读、修改、二次开发。**
+
+---
+
+## OmniAgent vs 主流工具：一句话对比
+
+| 工具 | 本质 | 最适合 |
+|------|------|--------|
+| **OmniAgent** | 多范式 Agent 参考实现 + MCP 生态 | 研究 Agent 架构、深度代码重构、多模型调度 |
+| **Claude Code** | 官方 Claude 终端助手 | 用 Claude 模型、要 MCP 一等支持 |
+| **Aider** | 多模型 git-commit 风格编辑器 | git repo 级代码编辑 |
+| **Cursor** | IDE 集成的 AI 编辑器 | 在 IDE 内边写边改 |
+| **GitHub Copilot** | IDE 内联补全 | 写代码时的行级/块级补全 |
+| **Cline (VS Code)** | 使用 MCP 的 VS Code Agent | VS Code 内用 MCP 工具 |
+| **OpenCode** | 多模型 TUI Agent（Go） | 50+ provider、TUI 美观 |
+| **Crush** | 多模型 TUI Agent（Go） | 本地多运行时（Ollama 等 5 种） |
 
 ---
 
@@ -29,34 +41,13 @@
 **OmniAgent 是**一个把 AI Agent 核心机制做齐、做透的参考实现。如果你想理解：
 
 - ReAct / Plan-Execute / Reflection 到底怎么实现
-- MCP 协议如何在真实 Agent 中集成
+- MCP 协议如何在真实 Agent 中集成（stdio + SSE + Smithery 注册中心）
 - 断路器和预算管理器如何防止 Agent "跑飞"
 - 多模型路由和自动降级怎么设计
+- 上下文压缩 6 步流水线怎么保留语义最密集内容
+- **28 个可复用技能 + 7000+ MCP 服务器一键安装**
 
 ——那这个项目就是写给你的。
-
----
-
-## 目录
-
-- [快速开始](#快速开始)
-- [架构一览](#架构一览)
-- [功能特性](#功能特性)
-- [20 项内置工具](#20-项内置工具)
-- [模型商支持](#模型商支持)
-- [命令参考](#命令参考)
-- [测试与评测](#测试与评测)
-- [安装详解](#安装详解)
-- [配置指南](#配置指南)
-- [安全机制](#安全机制)
-- [FAQ](#faq)
-- [故障排查](#故障排查)
-- [文档](#文档)
-- [设计决策（源码导读）](#值得读源码的-6-个设计决策)
-- [适合谁看](#适合谁看)
-- [贡献](#贡献)
-- [License](#license)
-- [Credits](#credits)
 
 ---
 
@@ -97,14 +88,6 @@ omniagent chat --list-models
 omniagent chat --engine react "帮我排查这个 bug"
 ```
 
-### 验证安装
-
-```bash
-# 确保一切正常
-python3 -m pytest tests/ -q
-# 1110 passed — 安装成功！
-```
-
 ---
 
 ## 架构一览
@@ -112,7 +95,7 @@ python3 -m pytest tests/ -q
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Terminal REPL                          │
-│  prompt_toolkit 输入 · Rich 渲染 · 状态栏 · 斜杠命令       │
+│  prompt_toolkit 输入 · Rich 渲染 · dim 日志 · 斜杠命令     │
 └──────────────────────┬──────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────┐
@@ -135,16 +118,16 @@ python3 -m pytest tests/ -q
 └──────────────────────┬──────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────┐
-│                   工具执行层（20 项工具）                    │
+│                   工具执行层（20+ 项工具）                   │
 │  ┌──────────────────────────────────────────────────┐   │
 │  │        ToolExecutor — 7 阶段门面 + 参数校验       │   │
 │  │  command · read_file · write_file · edit_file    │   │
-│  │  git · web_fetch · MCP · 20 项内置工具            │   │
+│  │  git · web_fetch · MCP · AST · refactor · code_index │
 │  └──────────────────────────────────────────────────┘   │
 └──────────────────────┬──────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────┐
-│                   模型调度层 (v0.5)                        │
+│                   模型调度层                               │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
 │  │ 5级优先级 │ │ 工作窃取 │ │Benchmark │ │ 断路器   │   │
 │  │ 队列 Q1-5│ │ 调度算法 │ │ Fetcher  │ │ 健康追踪 │   │
@@ -152,6 +135,22 @@ python3 -m pytest tests/ -q
 │  ┌──────────────────────────────────────────────────┐   │
 │  │  DeepSeek · OpenAI · Claude · Ollama · 豆包 ...  │   │
 │  │         12 家 provider · 动态注册 · 长连接池      │   │
+│  └──────────────────────────────────────────────────┘   │
+└──────────────────────┬──────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────┐
+│              MCP 生态层（v0.6.0 新增）                     │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │  惰性加载 MCP 注册中心                             │   │
+│  │  · add_server_pending() 启动 0ms                   │   │
+│  │  · _ensure_connected() 首次调用透明连接            │   │
+│  ├──────────────────────────────────────────────────┤   │
+│  │  Smithery 注册中心（7000+ 服务器实时浏览）           │   │
+│  │  · 关键词检索 + 一键安装                            │   │
+│  │  · 30 分钟本地缓存 + 离线兜底                        │   │
+│  ├──────────────────────────────────────────────────┤   │
+│  │  28 个内建技能 / 7 分类                            │   │
+│  │  · 开发 · 运维 · 安全 · 效率 · 文档 · 数据库 · 网络 │   │
 │  └──────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -175,208 +174,221 @@ python3 -m pytest tests/ -q
 
 切换方式：`Shift+Tab`（终端快捷键）或 `/mode <范式名>`
 
-### 模型调度 (v0.5)
+### MCP 协议 (Model Context Protocol)
 
-- **5 级优先级队列 (Q1-Q5)**：模型按能力自动分层，旗舰模型在 Q1，轻量模型在 Q5
+- **双传输**：stdio（子进程）和 SSE（HTTP 长连接）
+- **惰性加载**（v0.6.0）：启动时不连子进程，首次 `call_tool` 透明连接，启动耗时从 4.4s 降到 0ms
+- **进程管理**：`select` + 墙钟超时，`terminate()` + 兜底 `kill()` 防僵尸
+- **自动恢复**：守护进程崩溃自动重启（最多 3 次）
+- **Smithery 注册中心**：实时浏览 7000+ MCP 服务器，关键词搜索，一键惰性安装
+- **外部工具集成**：通过 `/mcp add` 注册外部 MCP 服务器
+
+### 技能库（v0.6.0 新增）
+
+28 个可复用技能，7 大分类。由 `/skill list` 浏览安装。
+
+| 分类 | 技能示例 |
+|------|---------|
+| **开发** | 代码审查、重构建议、单元测试生成、API 文档生成 |
+| **运维** | Dockerfile 生成、k8s 排障、CI/CD 流水线 |
+| **安全** | 漏洞扫描、SQL 注入检测、密钥泄露检查 |
+| **效率** | 快速笔记、任务分解、会议纪要 |
+| **文档** | README 生成、API 参考、变更日志 |
+| **数据库** | Schema 设计、查询优化、迁移脚本 |
+| **网络** | curl 命令生成、API 对接、代理配置 |
+
+### 模型调度
+
+- **5 级优先级队列 (Q1-Q5)**：模型按能力自动分层
 - **工作窃取调度**：高优先级任务可借用低优先级队列的模型
 - **AutoRouter**：根据任务难度自动选择合适模型（节省成本）
-- **BenchmarkFetcher**：新模型注册时自动查 HuggingFace Leaderboard 定级
 - **断路器感知降级**：模型 A 熔断 → 自动试模型 B → 试模型 C
 - **长连接池**：per-provider httpx 连接池复用
 
 ### 工程可靠性
 
-| 组件 | 文件 | 作用 |
-|------|------|------|
-| **Compactor** | `engine/context.py` | 6 步压缩流水线：摘要 → 精简 → 去重 → 评分 → 裁剪 → 重组 |
-| **BudgetManager** | `engine/budget.py` | 三阶段预算：EXPLORE(25%) → EXECUTE(50%) → CONVERGE(25%) |
-| **CircuitBreaker** | `engine/circuit_breaker.py` | 3 次连续失败熔断，30s 冷却，half-open 失败翻倍（上限 600s） |
-| **HollowDetector** | `engine/hollow_detector.py` | 检测"空洞输出"——Agent 看似在工作但实际无进展 |
+| 组件 | 作用 |
+|------|------|
+| **Compactor** | 6 步压缩流水线：摘要 → 精简 → 去重 → 评分 → 裁剪 → 重组 |
+| **BudgetManager** | 三阶段预算：EXPLORE(25%) → EXECUTE(50%) → CONVERGE(25%) |
+| **CircuitBreaker** | 3 次连续失败熔断，30s 冷却，half-open 失败翻倍（上限 600s） |
+| **HollowDetector** | 检测"空洞输出"——Agent 看似在工作但实际无进展 |
 
-### MCP 协议 (Model Context Protocol)
+### REPL 体验（v0.6.0 优化）
 
-- **双传输**：stdio（子进程）和 SSE（HTTP 长连接）
-- **进程管理**：`select` + 墙钟超时，`terminate()` + 兜底 `kill()` 防僵尸
-- **自动恢复**：守护进程崩溃自动重启（最多 3 次）
-- **外部工具集成**：通过 `/mcp add` 注册外部 MCP 服务器
-
-### REPL 体验
-
-- **prompt_toolkit 输入**：`> ` 提示符 + 命令/路径/模型名三级补全
+- **视觉层次**：辅助信息（思考/工具/日志）统一 `dim` 暗化，答案正常亮度
+- **引导线**：每次输入前打印 dim 分隔线，历史中一眼定位输入位置
+- **亮色锚点**：`>` 提示符为紫灰底白字色块，醒目不刺眼
+- **prompt_toolkit 输入**：命令/路径/模型名三级自动补全
 - **Rich 渲染**：Markdown 面板、语法高亮代码块、OSC-8 可点击路径
-- **状态栏**：实时显示模型、Token 用量、消息数、延迟
 - **斜杠命令**：38 条内置命令（见[命令参考](#命令参考)）
 - **会话管理**：`/save` `/load` `/resume`，支持跨终端恢复
 
 ---
 
-## 20 项内置工具
+## 工具矩阵
 
 | 类别 | 工具 | 说明 |
 |------|------|------|
-| 文件读写 | `read_file` | 读取文件内容 |
-| | `write_file` | 创建或覆写文件 |
-| | `edit_file` | 精确字符串替换编辑 |
-| | `batch_write` | 批量写入多个文件 |
-| | `batch_edit` | 批量编辑多个位置 |
+| 文件读写 | `read_file` / `write_file` / `edit_file` | 单文件操作 |
+| | `batch_write` / `batch_edit` | 批量原子操作（全部成功或全部回滚） |
 | | `create_directory` | 创建目录结构 |
-| | `diff_preview` | 预览修改的 diff |
-| 代码检索 | `search_files` | 按文件名/内容搜索 |
-| | `list_files` | 列出目录结构 |
-| | `code_index` | 代码符号索引查询 |
-| | `ast_analyze` | Python AST 静态分析 |
-| 代码变换 | `refactor` | 结构化代码重构 |
-| 命令执行 | `command` | 终端命令执行（SSRF 拦截 + 命令注入收口） |
+| | `diff_preview` | 预览修改 diff |
+| 代码检索 | `search_files` / `list_files` | 文件名/内容搜索，目录列表 |
+| | `code_index` | 基于 AST 的符号精准索引 |
+| | `ast_analyze` | Python AST 静态分析（函数/类/导入） |
+| 代码变换 | `refactor` | 安全重命名、清理 import、提取函数 |
+| 命令执行 | `command` | 终端命令（SSRF 拦截 + 命令注入收口） |
 | 版本控制 | `git` | Git 操作（危险命令拦截） |
-| 网络请求 | `web_fetch` | 网页抓取（SSRF 黑名单 + 安全域名白名单） |
-| | `github_fetch` | GitHub API 请求 |
-| 工具信息 | `weather` | 天气查询 |
-| | `datetime` | 日期时间查询 |
-| 动态扩展 | `register_tool` | 运行时注册新工具（安全白名单模式） |
-| MCP 协议 | `mcp_call` | 调用外部 MCP 服务器工具 |
+| 网络请求 | `web_fetch` / `github_fetch` | 网页抓取 + GitHub API（SSRF 防护） |
+| 工具信息 | `weather` / `datetime` | 天气查询 / 日期时间 |
+| 动态扩展 | `register_tool` | 运行时注册新工具（安全白名单） |
+| MCP 协议 | `mcp_call` | 调用外部 MCP 服务器工具（惰性连接） |
 
 ---
 
-## 模型商支持
+## 全面对比：OmniAgent vs 主流工具
 
-OmniAgent 内置了 12 家模型商的 API 适配器：
+### 能力矩阵
 
-| Provider | 模型示例 | 注册方式 |
-|----------|---------|---------|
-| **DeepSeek** | v4-pro, v4-flash, chat, coder, reasoner | 内置 |
-| **OpenAI** | gpt-4o, gpt-4o-mini, gpt-4-turbo, o1-preview | 内置 |
-| **Anthropic** | claude-sonnet-4, claude-3.5-sonnet, claude-3-opus | 内置 |
-| **Google** | gemini-2.0-flash, gemini-1.5-pro | 内置 |
-| **智谱 (Zhipu)** | glm-4-plus, glm-4-flash | 内置 |
-| **通义千问 (Qwen)** | qwen-max, qwen-plus, qwen-turbo | 内置 |
-| **Moonshot (Kimi)** | moonshot-v1-128k, moonshot-v1-32k | 内置 |
-| **百川 (Baichuan)** | Baichuan4, Baichuan3-Turbo | 内置 |
-| **MiniMax** | abab6.5s-chat | 内置 |
-| **小米 MiMo** | mimo-v2.5-pro | 内置 |
-| **Ollama** | llama3, codellama, qwen2.5, mistral | 本地部署 |
-| **自定义** | 任意 OpenAI-compatible API | `/setup` 菜单注册 |
+| 维度 | OmniAgent | Claude Code | Aider | Cursor | Copilot | Cline | OpenCode | Crush |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **MCP 协议** | ✅ stdio+SSE | ✅ 一等 | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
+| **多模型路由** | ✅ 12 provider | ❌ Claude | ✅ ~10 | ⚠️ | ❌ GPT | ⚠️ | ✅ 50+ | ✅ 18+ |
+| **多范式引擎** | ✅ **8 种** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ |
+| **工具断路器** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **上下文压缩** | ✅ 6 步 | ✅ | ❌ | ⚠️ | ❌ | ❌ | ❌ | ❌ |
+| **三阶段预算** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **空洞检测** | ✅ 15 正则 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **MCP 惰性加载** | ✅ 0ms 启动 | ❌ | — | — | — | ❌ | ❌ | ❌ |
+| **MCP 库/注册中心** | ✅ Smithery 7000+ | ⚠️ 手动 | — | — | — | ⚠️ 手动 | ⚠️ 手动 | ⚠️ 手动 |
+| **技能库** | ✅ 28 个 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **AST 分析** | ✅ | ❌ | ⚠️ | ⚠️ | ❌ | ❌ | ❌ | ❌ |
+| **本地模型** | ✅ Ollama | ❌ | ⚠️ | ❌ | ❌ | ✅ | ✅ | ✅ 5 种 |
+| **开源协议** | ✅ MIT | ❌ 闭源 | ✅ Apache | ❌ 闭源 | ❌ 闭源 | ✅ Apache | ✅ MIT | ✅ FSL |
+| **实现语言** | Python | TS | Python | — | — | TS | Go | Go |
+
+### 核心差异解读
+
+#### 1. 多范式引擎：OmniAgent 独有的结构化推理
+
+Claude Code、Aider、Cursor、Copilot、Cline、OpenCode、Crush 本质都是**单范式**——一种固定的 Agent Loop。遇到复杂任务时，它们的策略是"让更好的模型去思考"。
+
+OmniAgent 是**换引擎**，不是换模型：
+
+| 场景 | OmniAgent 做法 | 其他工具做法 |
+|------|--------------|------------|
+| 简单问答 | `direct` 引擎 — 一次调用，不浪费 token | 照常走完整 agent loop |
+| 多步任务 | `plan-execute` — 先规划 DAG 再拓扑并行执行 | 依赖模型自己分步 |
+| 质量敏感 | `reflection` — 独立审查者模型检查执行者输出 | 依赖模型自己检查自己 |
+| 多文件重构 | `plan-react` — 先规划再逐步 ReAct | 单 agent loop 硬扛 |
+
+**这意味着一套 REPL 里有 8 种不同控制流的推理引擎，而不是 1 条固定的 agent loop。**
+
+#### 2. MCP 生态：从手动到一键发现
+
+| | OmniAgent (v0.6.0) | Claude Code | Cline | 其他 |
+| --- | --- | --- | --- | --- |
+| 安装 MCP 服务器 | `/mcp browse` 搜索 → `/mcp install` 一键 | 手动编辑 JSON | 手动配置 | 手动 |
+| 启动速度 | 惰性加载 — 注册不连接，首次调用才动 | 启动时全部连接 | 启动时连接 | — |
+| 可发现性 | Smithery 7000+ 实时浏览 | 无内置注册中心 | 无内置 | 无内置 |
+
+#### 3. 工程可靠性：生产级熔断与预算
+
+这 4 项所有竞品都**没有**：
+
+- **CircuitBreaker**：工具连续 3 次失败自动熔断，30s 冷却，节省 LLM token
+- **BudgetManager**：三阶段预算分配，收束阶段禁用纯探索工具，防止 Agent 跑飞
+- **HollowDetector**：15 个反模式正则检测"看似在工作实则空转"
+- **Compactor**：6 步结构化压缩，Token 窗口 80% 自动触发，比简单"取最后 N 条"更智能
+
+#### 4. 代码深度：AST 级操作
+
+OmniAgent 内置 `ast_analyze`、`code_index`、`refactor` 三个基于 AST 的工具，可以做到：
+
+- 安全重命名（不是简单字符串替换）
+- 精准定位符号（函数/类/变量定义位置）
+- 清理未使用的 import
+
+Claude Code、Cursor、Copilot 依赖模型原生理解代码；OmniAgent 用 AST 工具**降低模型幻觉的可能**。
+
+#### 5. 更适合谁
+
+| 你的场景 | 推荐 |
+|----------|------|
+| 日常写代码，要 IDE 内 tab 补全 | **Copilot** |
+| 在 IDE 内边写边聊，要代码 diff 预览 | **Cursor** |
+| CLI 中 git commit 风格的 repo 级编辑 | **Aider** |
+| 只用 Claude 模型，要 MCP 一等支持 | **Claude Code** |
+| VS Code 内用 MCP 工具 | **Cline** |
+| 要 50+ provider、TUI 美观 | **OpenCode** |
+| 本地多运行时（Ollama 等 5 种）| **Crush** |
+| **研究 Agent 架构 + MCP 生态 + 深度代码重构** | **OmniAgent** |
+| **多范式切换 + 工程可靠性 + AST 级操作** | **OmniAgent** |
 
 ---
 
 ## 命令参考
 
-### 模型管理
+### 模型 & 配置
 
 | 命令 | 说明 |
 |------|------|
-| `/setup` | 交互式配置向导（API key + 模型选择） |
-| `/models` | 列出所有已注册模型及角色分配 |
-| `/pool` | 查看五级优先级模型调用池 |
-| `/remove_model <alias>` | 移除一个模型 |
+| `/setup` | 交互式配置向导 |
+| `/models` | 列出已注册模型 |
+| `/pool` | 查看五级优先级调用池 |
+| `/remove_model <alias>` | 移除模型 |
 
-### 范式与模式
+### 范式 & 模式
 
 | 命令 | 说明 |
 |------|------|
-| `Shift+Tab` | 切换推理范式（ReAct / Direct / Plan-Execute / ...） |
+| `Shift+Tab` | 切换推理范式 |
+| `/mode [name]` | 查看/切换范式 |
 | `/stream [on\|off]` | 切换流式输出 |
-| `/verbose [on\|off]` | 切换详细输出（显示思考过程和工具调用） |
-| `/optimize [on\|off]` | 切换输入指令自动优化 |
+| `/verbose [on\|off]` | 切换详细输出 |
+| `/optimize [on\|off]` | 切换指令优化 |
 
-### 会话管理
-
-| 命令 | 说明 |
-|------|------|
-| `/save <name>` | 保存当前会话 |
-| `/load <name>` | 加载已保存会话 |
-| `/sessions` | 列出所有已保存会话 |
-| `/resume [name]` | 恢复上次自动保存的会话 |
-| `/clear` | 清空对话历史 |
-| `/undo` | 回退到上一个对话状态 |
-
-### 上下文管理
+### 会话 & 上下文
 
 | 命令 | 说明 |
 |------|------|
-| `/context` | 显示当前上下文状态（Token 用量 / 消息数） |
-| `/compact [摘要]` | 手动触发上下文压缩 |
-| `/history [N]` | 查看路由调度历史 |
+| `/save <name>` | 保存会话 |
+| `/load <name>` | 加载会话 |
+| `/resume` | 恢复上次会话 |
+| `/clear` | 清空历史 |
+| `/undo` | 回退一步 |
+| `/context` | 查看上下文用量 |
+| `/compact` | 手动压缩上下文 |
+| `/history [N]` | 查看路由历史 |
 
-### 配置与调试
-
-| 命令 | 说明 |
-|------|------|
-| `/status` | 显示详细系统状态 |
-| `/config [save <path>]` | 查看或导出当前配置 |
-| `/run [workflow.yaml]` | 执行工作流文件 |
-| `/mcp [add\|list\|tools\|remove]` | 管理 MCP 服务器 |
-| `/permissions` | 查看当前权限模式 |
-
-### 退出
+### MCP & 技能库（v0.6.0）
 
 | 命令 | 说明 |
 |------|------|
-| `/exit`, `/quit`, `/bye` | 退出 OmniAgent |
-| `Ctrl+C` | 中断当前任务（不会退出 REPL） |
+| `/mcp` | MCP 使用指南 |
+| `/mcp list` | 列出已注册 MCP 服务器（含惰性状态） |
+| `/mcp browse [keyword]` | 搜索 Smithery 7000+ MCP 服务器 |
+| `/mcp install <name>` | 一键惰性安装 MCP 服务器 |
+| `/mcp search <keyword>` | 同 browse，搜索 MCP |
+| `/mcp remove <name>` | 移除 MCP 服务器 |
+| `/skill` | 技能库使用指南 |
+| `/skill list [category]` | 浏览 28 个内建技能 |
+| `/skill install <name>` | 安装技能 |
 
----
+### 调试 & 退出
 
-## 测试与评测
-
-### 运行测试
-
-```bash
-# 全量单元测试（1110 个用例）
-pytest tests/ -q
-
-# 仅运行混沌测试（31 个用例：网络中断、格式错误、限流等）
-pytest tests/chaos/
-
-# 运行评测框架
-python3 evals/runner.py --mode mock    # 冒烟测试（20 个场景）
-python3 evals/runner.py --mode real    # 真实 LLM 评测
-```
-
-### HumanEval 基准
-
-使用官方 [openai/human-eval](https://github.com/openai/human-eval) 框架评测代码生成能力：
-
-```bash
-# Step 1: 用 omniagent 生成 completions
-python3 -c "
-from evals.humaneval_runner import load_tasks, build_prompt, extract_code
-from omniagent.utils.llm_client import chat_completion
-import json
-tasks = load_tasks()
-with open('samples.jsonl', 'w') as f:
-    for t in tasks:
-        resp = chat_completion('deepseek/deepseek-v4-pro',
-            [{'role':'user','content': build_prompt(t)}], temperature=0.0, max_tokens=1024)
-        f.write(json.dumps({'task_id': t['task_id'],
-            'completion': extract_code(resp, t['entry_point'])}) + '\n')
-"
-
-# Step 2: 官方评测框架评分
-evaluate_functional_correctness samples.jsonl
-```
-
-| 评测 | 结果 | 框架 |
-|------|------|------|
-| HumanEval pass@1 (deepseek-v4-pro) | **145/164 (88.4%)** | 官方 `openai/human-eval` |
-| 单元测试 | 1110 通过 | pytest |
-| 混沌测试 | 31/31 通过 | pytest |
-
-> **关于评测的说明**：HumanEval 评测的是模型的**代码生成能力**而非 Agent 的任务完成能力。
-> Agent 级别的评测（多轮工具调用、文件编辑、错误修复）请参考 `evals/runner.py --mode real`。
+| 命令 | 说明 |
+|------|------|
+| `/status` | 系统状态 |
+| `/permissions` | 查看权限模式 |
+| `/run [workflow.yaml]` | 执行工作流 |
+| `/exit` `/quit` `/bye` | 退出 |
+| `Ctrl+C` | 中断当前任务 |
 
 ---
 
 ## 安装详解
-
-### 环境要求
-
-| 组件 | 最低版本 |
-|------|---------|
-| Python | 3.10+ |
-| pip | 21.0+ |
-| 终端 | 支持 ANSI 真彩色的现代终端（iTerm2 / Windows Terminal / Kitty / Alacritty） |
-
-### 从源码安装（推荐）
 
 ```bash
 git clone https://github.com/xianyu-sheng/omniagent.git
@@ -384,227 +396,132 @@ cd omniagent
 pip install -e ".[dev]"
 ```
 
-### 依赖项
+依赖：
 
 ```
-httpx>=0.27.0       # HTTP 客户端（多模型商 API 调用）
-pyyaml>=6.0         # 凭证和配置文件解析
-rich>=13.0.0        # 终端 Markdown 渲染
-prompt-toolkit>=3.0 # 终端输入（补全、历史、键绑定）
-```
-
-### 验证安装
-
-```bash
-omniagent --help
-# 应显示命令行帮助
-
-python3 -m pytest tests/ -q
-# 应显示 1110 passed
+httpx>=0.27.0       # HTTP 客户端
+pyyaml>=6.0         # 配置解析
+rich>=13.0.0        # 终端渲染
+prompt-toolkit>=3.0 # 终端输入
 ```
 
 ---
 
 ## 配置指南
 
-### API Key 配置
-
 所有凭证存储在 `~/.omniagent/credentials.yaml`（自动 `chmod 0600`）：
 
 ```yaml
 # 方式一：运行 /setup 交互式配置（推荐）
-# > /setup
-# 选择模型商 → 输入 API Key → 自动加入调用池
 
-# 方式二：直接编辑配置文件
+# 方式二：直接编辑
 # ~/.omniagent/credentials.yaml
 providers:
   deepseek:
     api_key: "sk-xxxxxxxxxxxxxxxx"
   openai:
     api_key: "sk-xxxxxxxxxxxxxxxx"
-  anthropic:
-    api_key: "sk-ant-xxxxxxxxxxxxxxxx"
 ```
 
-### 模型注册
-
-通过 `/setup` 或直接编辑 `~/.omniagent/model_registry.yaml` 注册模型：
-
-```yaml
-models:
-  - alias: deepseek-v4
-    model_id: deepseek/deepseek-v4-pro
-    provider: deepseek
-    priority: Q1
-    max_tokens: 131072
-```
-
-模型注册后可通过 `/pool` 查看调用队列。
-
-### 项目级配置
-
-在项目根目录创建 `.omniagent/rules.md` 可指定项目规则，Agent 每次对话会自动注入。
+项目规则：在项目根目录创建 `.omniagent/rules.md`，每次对话自动注入。
 
 ---
 
 ## 安全机制
 
-OmniAgent 在工具执行层内置了多层安全防护：
-
-| 防护层 | 机制 | 说明 |
-|--------|------|------|
-| **凭证隔离** | `chmod 0600` + YAML 文件 | API Key 不入仓库、不入环境变量 |
-| **命令审查** | SSRF 拦截 + 命令注入收口 | `command` 工具对敏感操作进行拦截 |
-| **Git 保护** | 危险命令黑名单 | `push --force`、`hard reset` 等需确认 |
-| **文件保护** | 编辑前 diff 预览 | `edit_file` / `write_file` 修改前显示变更 |
-| **网络安全** | SSRF 黑名单 | IPv4 私有网 / IPv6 ULA / 数字编码 IP / 重定向拦截 |
-| | 公共 API 白名单 | 仅允许已知安全域名的 web_fetch |
-| **RCE 收敛** | `register_tool` 安全白名单 | 仅允许指定前缀的 Python 模块导入 |
-| **敏感路径** | 黑名单过滤 | `.env` / `credentials` / `.ssh` 等不可读取 |
+| 防护层 | 说明 |
+|--------|------|
+| **凭证隔离** | `chmod 0600` + YAML，不入仓库、不入环境变量 |
+| **命令审查** | SSRF 拦截 + 命令注入收口 |
+| **Git 保护** | `push --force`、`hard reset` 需确认 |
+| **文件保护** | 编辑前 diff 预览 |
+| **网络安全** | IPv4 私有网 / IPv6 ULA / 数字编码 IP / 重定向拦截 |
+| **RCE 收敛** | `register_tool` 仅允许指定前缀的 Python 模块 |
+| **敏感路径** | `.env` / `credentials` / `.ssh` 不可读取 |
 
 ---
 
-## FAQ
-
-### OmniAgent 和 Claude Code / Aider 有什么区别？
-
-Claude Code 和 Aider 是面向**终端用户**的 AI 编程助手，目标是开箱即用、帮你写代码。OmniAgent 是面向**开发者**的 Agent 参考实现，目标是展示 ReAct、断路器、MCP、上下文压缩等机制的工程细节。你可以把它当作学习 Agent 架构的教科书，也可以把它作为二次开发的基座。
-
-### 需要什么配置才能运行？
-
-最低配置：Python 3.10+ + 1 个模型商的 API Key。不需要 GPU。Ollama 本地模型也完全支持。
-
-### 支持哪些模型？
-
-通过 OpenAI-compatible API 适配器，理论上支持所有主流模型商。内置了 DeepSeek、OpenAI、Anthropic、Google、智谱、通义千问等 12 家的预设。在 `/setup` 中选择"自定义模型商"可注册任意兼容 API。
-
-### 怎么选择推理范式？
-
-- **日常问答** → Direct
-- **编程任务** → ReAct（默认推荐）
-- **多文件重构** → Plan-Execute
-- **需要代码审查** → Reflection
-- **不确定选什么** → 让 AutoRouter 自动选择
-
-### 上下文窗口不够用怎么办？
-
-OmniAgent 在 Token 用量达到 80% 时自动触发 6 步压缩流水线。你也可以随时用 `/compact` 手动压缩。压缩后重要信息不会丢失。
-
----
-
-## 故障排查
-
-### `omniagent: command not found`
+## 测试与评测
 
 ```bash
-# 确认 pip 安装路径在 PATH 中
-pip show omniagent-cli | grep Location
-# 或直接 python3 -m omniagent.main
+pytest tests/ -q                    # 1110+ 单元测试
+pytest tests/chaos/                 # 31 混沌测试
+python3 evals/runner.py --mode mock # 20 场景冒烟
+python3 evals/runner.py --mode real # 真实 LLM 评测
 ```
 
-### API Key 配置后仍报认证错误
-
-```bash
-# 检查凭证文件权限和内容
-cat ~/.omniagent/credentials.yaml
-# 确认 provider 名称拼写正确（区分大小写）
-# 运行 /setup 重新配置
-```
-
-### 模型无响应或超时
-
-```bash
-# 检查网络连通性
-curl -I https://api.deepseek.com
-# 检查断路器状态（/status 查看）
-# 切换备用模型：/pool 查看可用模型
-```
-
-### 终端显示乱码
-
-```bash
-# 确认终端支持 UTF-8 和真彩色
-echo $TERM        # 应为 xterm-256color 或类似
-echo $LANG        # 应包含 UTF-8
-# 推荐终端：iTerm2、Windows Terminal、Kitty、Alacritty
-```
-
-### 提示 prompt_toolkit 初始化失败
-
-OmniAgent 会自动回退到内置输入模式。如果希望使用完整功能，确保 `prompt-toolkit>=3.0` 已安装且终端类型支持。
-
----
-
-## 文档
-
-| 文档 | 说明 |
+| 评测 | 结果 |
 |------|------|
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 8 种引擎切换图 + 路由层 + 可靠性三件套 |
-| [`docs/COMPARISON.md`](docs/COMPARISON.md) | vs Aider / Claude Code / OpenCode / Crush |
-| [`docs/OPERATION_GUIDE.md`](docs/OPERATION_GUIDE.md) | REPL 命令手册 + 工作流示例 |
-| [`docs/EVAL_RESULTS.md`](docs/EVAL_RESULTS.md) | 评测框架使用指南与详细结果 |
-| [`docs/omniagent-design-spec-v1.1.pdf`](docs/omniagent-design-spec-v1.1.pdf) | 完整设计规范 PDF |
-| [`docs/reports/v0.2.2/`](docs/reports/v0.2.2/) | 端到端测试报告 |
-
----
-
-## 值得读源码的 6 个设计决策
-
-这些是你在"调 API 就行"的项目里看不到的东西：
-
-### 1. 三种 Agent 范式，不是三种 Prompt
-
-项目没有把"范式差异"压在 system prompt 上。`Direct`、`ReAct`、`PlanExecute`、`Reflection` 各自是独立的引擎类，有不同的控制流。切范式不是改 prompt 文本——是换引擎。
-
-```python
-# omniagent/engine/ 下 6 个独立引擎 + 2 个组合引擎
-react_engine.py          # ReAct: observe → think → act 循环
-plan_execute_engine.py   # PlanDAG: 拓扑排序 + 并行执行
-reflection_engine.py     # 执行者 + 审查者双模型多轮
-```
-
-### 2. MCP 集成不是简单 wrapper
-
-原生支持 stdio 和 SSE 双传输。子进程用 `select` + 墙钟超时（不是 `readline` 无限阻塞），进程退出用 `terminate()` + 兜底 `kill()` 防僵尸。守护进程崩溃自动重启（最多 3 次）。
-
-### 3. 断路器不是装饰器
-
-每个工具有独立的断路器实例。**3 次连续失败触发熔断，30s 冷却**（half_open 失败翻倍，上限 600s）。`GLOBAL_BREAKERS` 跨 run 累积——不是"这次挂了下次还让它挂"。
-
-### 4. 上下文压缩是 6 步流水线
-
-不是简单的"取最后 N 条消息"。在 Token 窗口达 80% 时触发，经历：摘要 → 工具输出精简 → 去重 → 评分 → 裁剪 → 重组，保留语义最密集的内容。
-
-### 5. BudgetManager 分三阶段花钱
-
-不是所有工具同等对待。`EXPLORE(25%) → EXECUTE(50%) → CONVERGE(25%)`，收束阶段禁用 7 个纯探索型工具，防止 Agent 在任务尾声无意义地翻文件。
-
-### 6. 多模型路由带降级
-
-模型调用失败时不是直接报错。断路器感知的自动降级：模型 A 熔断 → 试模型 B → 试模型 C。Provider 优先级可配，per-provider httpx 长连接池复用。
+| HumanEval pass@1 (deepseek-v4-pro) | **145/164 (88.4%)** |
+| 单元测试 | 1110 通过 |
+| 混沌测试 | 31/31 通过 |
 
 ---
 
 ## 适合谁看
 
-| 如果你…… | 你能从这里学到 |
-|----------|--------------|
-| 想理解 ReAct/Plan-Execute 的实现细节 | 8 个独立引擎类的控制流差异 |
-| 在给自己的项目加 MCP 支持 | stdio + SSE 双传输的完整实现 |
-| 想知道 Agent 怎么防止"跑飞" | 断路器 + BudgetManager + HollowDetector |
-| 在做多模型路由 | 12 provider 的统一抽象 + 自动降级 |
-| 想写一个终端 Agent | prompt_toolkit + Rich 的工程实践 |
+| 如果你想…… | 你能从这里学到 |
+|-----------|--------------|
+| 理解 ReAct/Plan-Execute 实现细节 | 8 个独立引擎类的控制流差异 |
+| 加 MCP 支持 + 注册中心 | stdio+SSE 双传输 + Smithery 集成 |
+| 防止 Agent "跑飞" | 断路器 + BudgetManager + HollowDetector |
+| 做多模型路由 | 12 provider 统一抽象 + 自动降级 |
+| 写终端 Agent | prompt_toolkit + Rich 的工程实践 |
+| 研究 Agent 视觉交互 | dim 辅助信息 + 引导线 + 亮色锚点 |
+
+---
+
+## 值得读源码的 6 个设计决策
+
+### 1. 三种 Agent 范式，不是三种 Prompt
+
+切范式不是改 prompt 文本——是换引擎。`Direct`、`ReAct`、`PlanExecute`、`Reflection` 是独立的引擎类，有不同的控制流。
+
+```python
+# omniagent/engine/ 下 6 个独立引擎 + 2 个组合引擎
+react_engine.py          # observe → think → act 循环
+plan_execute_engine.py   # PlanDAG: 拓扑排序 + 并行执行
+reflection_engine.py     # 执行者 + 审查者双模型多轮
+```
+
+### 2. MCP 惰性加载：启动 0ms
+
+v0.6.0 之前，所有 MCP 子进程在启动时同步连接，耗时 ~4.4s。现在：
+
+```python
+# 注册时不连接
+registry.add_server_pending("12306", config)
+# 首次 call_tool 时才透明连接
+registry._ensure_connected("12306")  # 首次 23ms，后续 0.2ms
+```
+
+`/mcp list` 显示惰性状态，ReAct 路由正常展示工具列表。
+
+### 3. MCP 集成不是简单 wrapper
+
+stdio + SSE 双传输。子进程用 `select` + 墙钟超时（不是 `readline` 无限阻塞），`terminate()` + 兜底 `kill()` 防僵尸。
+
+### 4. 断路器不是装饰器
+
+每工具独立断路器。3 次连续失败熔断，30s 冷却。`GLOBAL_BREAKERS` 跨 run 累积——不是"这次挂了下次还让它挂"。
+
+### 5. 上下文压缩是 6 步流水线
+
+Token 80% 触发：摘要 → 工具输出精简 → 去重 → 评分 → 裁剪 → 重组，保留语义最密集内容。
+
+### 6. 视觉层次：dim 辅助信息 + 引导线
+
+思考过程、工具调用、日志 → `dim` 暗化。答案保持正常亮度。输入前打 dim 分隔线 + 亮色 `>` 锚点——辅助信息不再抢夺注意力。
 
 ---
 
 ## 贡献
 
-欢迎提交 Issue 和 Pull Request。
+欢迎 Issue 和 PR。
 
-- **Bug 报告**：请在 Issue 中附上 `omniagent --version` 输出 + 复现步骤
-- **功能建议**：请先开 Issue 讨论设计方案
-- **代码贡献**：请确保 `pytest tests/ -q` 全部通过后再提交 PR
+- **Bug 报告**：附 `omniagent --version` + 复现步骤
+- **功能建议**：先开 Issue 讨论设计
+- **代码贡献**：`pytest tests/ -q` 全部通过后提 PR
 
 ---
 
@@ -614,7 +531,8 @@ MIT — see [LICENSE](LICENSE).
 
 ## Credits
 
-- [Rich](https://github.com/Textualize/rich) — terminal UI 渲染
-- [prompt_toolkit](https://github.com/prompt-toolkit/python-prompt-toolkit) — 终端输入框架
+- [Rich](https://github.com/Textualize/rich) — terminal UI
+- [prompt_toolkit](https://github.com/prompt-toolkit/python-prompt-toolkit) — 终端输入
 - [httpx](https://github.com/encode/httpx) — HTTP 客户端
-- [PyYAML](https://github.com/yaml/pyyaml) — YAML 配置解析
+- [PyYAML](https://github.com/yaml/pyyaml) — 配置解析
+- [Smithery](https://smithery.ai) — MCP 注册中心
