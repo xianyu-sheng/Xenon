@@ -180,7 +180,7 @@ class REPL:
                 if self._last_mode_line:
                     console.print(f"[dim]{self._last_mode_line}[/dim]")
                 if self._captured_log:
-                    console.print(self._captured_log, end="")
+                    console.print(Text(self._captured_log.rstrip(), style="dim"))  # Ctrl+O 展开时
                 if self._last_thinking_panel is not None:
                     console.print(self._last_thinking_panel)
                 console.print("[dim]  💭 思考过程已展开  [Ctrl+O 折叠][/dim]")
@@ -288,13 +288,18 @@ class REPL:
         )
         self._log_handler.setLevel(logging.INFO)
         # 保存原有 handler 并清空，确保日志只进缓冲区
+        # 关键：同时捕获 root logger（日志传播终点）+ 所有已注册子 logger
         self._saved_handlers: dict[str, list[logging.Handler]] = {}
-        for _name in [
-            'omniagent.engine',
-            'omniagent.engine.tool_tracker',
-            'omniagent.engine.react_engine',
-            'httpx',
-        ]:
+        _capture_names: list[str] = []
+        # 遍历所有已注册的 logger，找到 omniagent.* / httpx / openai / httpcore 及 root
+        for _lg_name, _lg_obj in logging.root.manager.loggerDict.items():
+            if isinstance(_lg_obj, logging.Logger):
+                if (_lg_name.startswith('omniagent') or
+                    _lg_name in ('httpx', 'openai', 'httpcore')):
+                    _capture_names.append(_lg_name)
+        # root logger 也会接收传播来的日志
+        _capture_names.append('')
+        for _name in _capture_names:
             _lg = logging.getLogger(_name)
             self._saved_handlers[_name] = list(_lg.handlers)
             _lg.handlers.clear()
@@ -304,12 +309,7 @@ class REPL:
         """v0.5.3: 恢复原有 handler，返回捕获的日志文本。"""
         _captured = ""
         try:
-            for _name in [
-                'omniagent.engine',
-                'omniagent.engine.tool_tracker',
-                'omniagent.engine.react_engine',
-                'httpx',
-            ]:
+            for _name in self._saved_handlers:
                 _lg = logging.getLogger(_name)
                 try:
                     _lg.removeHandler(self._log_handler)
@@ -1501,16 +1501,16 @@ class REPL:
         # 检测是否需要工具执行（编程/文件/命令任务，或 query 意图实时数据查询）
         if self._detect_tool_need(user_input, intent=intent):
             if intent == "query":
-                console.print("[cyan]🔧 检测到信息查询（需实时数据），自动切换到 ReAct 模式...[/cyan]")
+                console.print("[dim cyan]🔧 检测到信息查询（需实时数据），自动切换到 ReAct 模式...[/dim cyan]")
             else:
-                console.print("[cyan]🔧 检测到需要工具执行，自动切换到 ReAct 模式...[/cyan]")
+                console.print("[dim cyan]🔧 检测到需要工具执行，自动切换到 ReAct 模式...[/dim cyan]")
             self._run_react_engine(user_input, model_ids)
             return
 
         # v0.5.3: MCP 工具可用时，通用判断——任何具有"信息查询"特征的输入都走 ReAct，
         # 让 LLM 自行决定是否调用 mcp_call。不枚举具体查询领域（天气/高铁/酒店等）。
         if self._has_mcp_tools() and _looks_like_external_query(user_input):
-            console.print("[cyan]🔧 检测到可用 MCP 工具，自动切换到 ReAct 模式...[/cyan]")
+            console.print("[dim cyan]🔧 检测到可用 MCP 工具，自动切换到 ReAct 模式...[/dim cyan]")
             self._run_react_engine(user_input, model_ids)
             return
 
@@ -1539,7 +1539,7 @@ class REPL:
                     # ── 响应后验证 1：检测 LLM 是否声称执行了文件操作 ──
                     if self._detect_file_claim(response_text):
                         console.print()
-                        console.print("[cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，自动切换到 ReAct 模式重新执行...[/cyan]")
+                        console.print("[dim cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，自动切换到 ReAct 模式重新执行...[/dim cyan]")
                         self.ctx_mgr.trim_last_assistant()
                         # P2-修复6 (观察项-1)：防御性 catch ——
                         # _run_react_engine 内部已加占位（修复5），但万一占位也失败
@@ -1617,7 +1617,6 @@ class REPL:
         self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
-            self._captured_log = self._stop_log_capture()
             # v0.5.3: 诊断日志 — 记录结果实际值，用于排查空白面板根因
             logger.info(
                 f"_run_react_engine: result type={type(result).__name__}, "
@@ -1625,6 +1624,7 @@ class REPL:
                 f"strip_len={len(result.strip()) if isinstance(result, str) and result else 0}, "
                 f"head={result[:80] if isinstance(result, str) and result else repr(result)[:80]}"
             )
+            self._captured_log = self._stop_log_capture()
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "ReAct 结果")
             self.status_bar.set_last_model(model_ids[0])
@@ -1669,7 +1669,7 @@ class REPL:
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
-                console.print(self._captured_log, end="")
+                console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ Plan-Execute 引擎执行失败: {e}[/error]")
 
     def _run_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
@@ -1693,7 +1693,7 @@ class REPL:
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
-                console.print(self._captured_log, end="")
+                console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ Reflection 引擎执行失败: {e}[/error]")
 
     def _run_plan_react_engine(self, user_input: str, model_ids: list[str]) -> None:
@@ -1717,7 +1717,7 @@ class REPL:
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
-                console.print(self._captured_log, end="")
+                console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ Plan+React 引擎执行失败: {e}[/error]")
 
     def _run_plan_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
@@ -1741,7 +1741,7 @@ class REPL:
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
-                console.print(self._captured_log, end="")
+                console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ Plan+Reflection 引擎执行失败: {e}[/error]")
 
     def _run_react_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
@@ -1765,7 +1765,7 @@ class REPL:
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
-                console.print(self._captured_log, end="")
+                console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ React+Reflection 引擎执行失败: {e}[/error]")
 
     def _run_novel_engine(self, user_input: str, model_ids: list[str]) -> None:
@@ -1796,7 +1796,7 @@ class REPL:
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
-                console.print(self._captured_log, end="")
+                console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ 小说创作引擎执行失败: {e}[/error]")
 
     def _stream_response(self, model_id: str, messages: list[dict[str, str]]) -> str:
