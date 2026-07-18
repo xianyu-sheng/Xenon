@@ -190,9 +190,9 @@ class ThinkingPanel:
         action_names = [s.action for s in self.steps if s.action]
         action_summary = " → ".join(action_names) if action_names else "纯思考"
         if tool_count > 0:
-            summary = f"[bold cyan]🧠 {step_count} 轮推理[/bold cyan] [dim]·[/dim] [cyan]{tool_count} 次工具调用[/cyan] [dim]· {action_summary}[/dim]"
+            summary = f"[dim]🧠 {step_count} 轮推理[/dim] [dim]·[/dim] [dim cyan]{tool_count} 次工具调用[/dim cyan] [dim]· {action_summary}[/dim]"
         else:
-            summary = f"[bold cyan]🧠 {step_count} 轮推理[/bold cyan] [dim]· 纯思考[/dim]"
+            summary = f"[dim]🧠 {step_count} 轮推理[/dim] [dim]· 纯思考[/dim]"
 
         yield Text.from_markup(summary)
 
@@ -252,7 +252,7 @@ class ConsoleCallback(EngineCallback):
     def on_think(self, thought: str) -> None:
         self._panel.add_thought(thought)
         if self.verbose:
-            print(f"  🤔 {thought[:200]}")
+            print(f"  [dim]🤔 {thought[:200]}[/dim]")
 
     def on_act(self, action: str, action_input: dict) -> None:
         self._panel.add_action(action, action_input)
@@ -260,13 +260,13 @@ class ConsoleCallback(EngineCallback):
             # R7: 脱敏后再展示，避免 api_key/content 等泄露到控制台
             masked = mask_sensitive_params(action_input)
             params_str = ", ".join(f"{k}={repr(v)[:80]}" for k, v in masked.items())
-            print(f"  🔧 {action}({params_str})")
+            print(f"  [dim]🔧 {action}({params_str})[/dim]")
 
     def on_observe(self, observation: str) -> None:
         self._panel.add_observation(observation)
         if self.verbose:
             obs_preview = observation[:300].replace("\n", " ")
-            print(f"  👀 {obs_preview}")
+            print(f"  [dim]👀 {obs_preview}[/dim]")
 
     def on_step(self, step_id: int, total: int, task: str) -> None:
         if self.verbose:

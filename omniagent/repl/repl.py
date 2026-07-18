@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.text import Text
 from rich.prompt import Prompt
 from rich.theme import Theme
 from rich.rule import Rule
@@ -421,11 +422,11 @@ class REPL:
             result = "任务已执行，但未生成明确的回复内容。请尝试重新提问或使用更具体的指令。"
 
         if self._show_thinking:
-            # ── 展开模式：重现完整执行过程 ──
+            # ── 展开模式：重现完整执行过程（辅助信息全部 dim，只有最终答案高亮）──
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
-                console.print(self._captured_log, end="")
+                console.print(Text(self._captured_log.rstrip(), style="dim"))
             if panel is not None:
                 console.print(panel)
             console.print("[dim]  💭 思考过程已展开  [Ctrl+O 折叠][/dim]")
@@ -1577,7 +1578,7 @@ class REPL:
             except Exception as e:
                 last_error = e
                 self._failed_models.add(model_id)
-                console.print(f"[yellow]模型 {model_id} 失败: {e}，已标记不可用，尝试下一个...[/yellow]")
+                console.print(f"[dim yellow]模型 {model_id} 失败: {e}，已标记不可用，尝试下一个...[/dim yellow]")
 
         console.print(f"[error]❌ 所有模型均调用失败: {last_error}[/error]")
 
@@ -1633,7 +1634,7 @@ class REPL:
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
-                console.print(self._captured_log, end="")
+                console.print(Text(self._captured_log.rstrip(), style="dim"))
             import traceback
             logger.error(f"ReAct 引擎异常:\n{traceback.format_exc()}")
             console.print(f"[error]❌ ReAct 引擎执行失败: {e}[/error]")
