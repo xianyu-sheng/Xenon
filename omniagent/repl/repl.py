@@ -58,13 +58,10 @@ except ImportError:
 
 if _HAS_PROMPT_TOOLKIT:
     def _inject_window_style(container, style: str) -> None:
-        """给输入窗口注入背景样式，并限制高度为内容高度（不填满屏幕）。"""
+        """给输入窗口注入背景样式。"""
         if isinstance(container, Window):
             if isinstance(container.content, BufferControl) and not container.style:
                 container.style = style
-                # 关键：不让输入窗口高度扩展填满屏幕
-                from prompt_toolkit.filters import to_filter
-                container.dont_extend_height = to_filter(True)
         elif hasattr(container, 'get_children'):
             for child in container.get_children():
                 _inject_window_style(child, style)
@@ -224,12 +221,8 @@ class REPL:
                 event.app.invalidate()
 
         style = Style.from_dict({
-            # 默认 — 透明底
-            "": "#e0e0e0",
-            # 输入行窗口背景 — Tokyo Night 暗蓝灰，好看不刺眼
-            "input-bg": "bg:#24283b",
-            # 提示符 `>`
-            "prompt": "bold #ffffff bg:#4a4a4a",
+            # 提示符 `>` — 灰底白字色块，醒目锚点
+            "prompt": "bold #ffffff bg:#5c5c8a",
         })
 
         history_path = _HISTORY_DIR / "input_history.txt"
@@ -241,8 +234,6 @@ class REPL:
                 key_bindings=kb,
                 style=style,
             )
-            # 给已创建的 layout 中输入窗口注入背景样式
-            _inject_window_style(self._pt_session.layout.container, "class:input-bg")
         except Exception:
             logger.debug("prompt_toolkit 初始化失败，回退自建输入", exc_info=True)
             self._pt_session = None
@@ -789,6 +780,14 @@ class REPL:
 
         # 状态栏仅通过 bottom_toolbar 渲染（在输入框下方），不在 prompt 上方重复
         message: list[tuple[str, str]] = [("class:prompt", "> ")]
+
+        # 输入前打一条彩色引导线，在历史中一眼定位输入位置
+        try:
+            import shutil
+            tw = shutil.get_terminal_size().columns
+            console.print(f"[dim]{"─" * tw}[/dim]")
+        except Exception:
+            pass
 
         try:
             text = self._pt_session.prompt(message)
