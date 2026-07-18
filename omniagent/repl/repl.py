@@ -202,10 +202,10 @@ class REPL:
                 event.app.invalidate()
 
         style = Style.from_dict({
-            # 输入文字 — 比 dim 历史更亮，自然浮现
-            "": "#f8f8f8",
-            # 提示符 `>` — 亮色块，输入位置的锚点
-            "prompt": "bold #ffffff bg:#5c5c8a",
+            # 输入区 — 极暗底色 (#121212)，与纯黑终端几乎一致但略有区分
+            "": "#e0e0e0 bg:#121212",
+            # 提示符 `>` — 灰底白字色块，输入行的锚点
+            "prompt": "bold #ffffff bg:#4a4a4a",
         })
 
         history_path = _HISTORY_DIR / "input_history.txt"
@@ -216,7 +216,6 @@ class REPL:
                 completer=self._completer,
                 key_bindings=kb,
                 style=style,
-                bottom_toolbar=None,
             )
         except Exception:
             logger.debug("prompt_toolkit 初始化失败，回退自建输入", exc_info=True)
