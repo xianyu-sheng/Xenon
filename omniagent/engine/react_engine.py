@@ -262,6 +262,63 @@ BUILTIN_TOOLS = {
             "branch": "分支名（可选，默认 main，失败时自动尝试 master）",
         },
     },
+    # v0.6.1: LSP 工具 — 基于 Jedi 的精确代码导航（Python）
+    "lsp_goto_def": {
+        "name": "lsp_goto_def",
+        "description": (
+            "跳转到指定位置符号的定义处。返回定义所在的文件和行号、"
+            "代码片段、文档字符串。支持跨文件跳转（跟踪 import）。"
+        ),
+        "params": {
+            "file_path": "源文件路径",
+            "line": "光标行号（1-based）",
+            "column": "光标列号（0-based）",
+        },
+    },
+    "lsp_find_refs": {
+        "name": "lsp_find_refs",
+        "description": (
+            "查找指定位置符号的所有引用（跨文件）。返回每个引用的"
+            "文件路径、行号、列号、代码行。用于分析符号的使用情况。"
+        ),
+        "params": {
+            "file_path": "源文件路径",
+            "line": "光标行号（1-based）",
+            "column": "光标列号（0-based）",
+        },
+    },
+    "lsp_hover": {
+        "name": "lsp_hover",
+        "description": (
+            "获取指定位置符号的类型信息、函数签名、文档字符串。"
+            "用于快速了解变量类型、函数参数、类方法等。"
+        ),
+        "params": {
+            "file_path": "源文件路径",
+            "line": "光标行号（1-based）",
+            "column": "光标列号（0-based）",
+        },
+    },
+    "lsp_diagnostics": {
+        "name": "lsp_diagnostics",
+        "description": (
+            "检查 Python 文件的语法错误和警告。返回错误列表（行号、错误消息）。"
+            "用于修改代码后验证是否有语法问题。"
+        ),
+        "params": {
+            "file_path": "Python 文件路径",
+        },
+    },
+    "lsp_symbols": {
+        "name": "lsp_symbols",
+        "description": (
+            "获取 Python 文件中所有符号（函数、类、变量）的列表，"
+            "按类型分组。用于快速了解文件结构。"
+        ),
+        "params": {
+            "file_path": "Python 文件路径",
+        },
+    },
 }
 
 

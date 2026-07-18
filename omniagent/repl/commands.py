@@ -1516,6 +1516,11 @@ def _cmd_tools(**kwargs: Any) -> str:
         ("mcp_call", "调用 MCP 外部工具", "tool_name, tool_args"),
         ("github_fetch", "GitHub 仓库操作（列出文件/获取内容/README）", "repo, github_action, github_path, branch"),
         ("clone_repo", "克隆 GitHub 仓库到本地并分析代码结构", "repo, branch"),
+        ("lsp_goto_def", "跳转到 Python 符号定义（跨文件）", "file_path, line, column"),
+        ("lsp_find_refs", "查找 Python 符号的所有引用", "file_path, line, column"),
+        ("lsp_hover", "获取 Python 符号的类型和文档", "file_path, line, column"),
+        ("lsp_diagnostics", "检查 Python 文件语法错误", "file_path"),
+        ("lsp_symbols", "列出 Python 文件所有符号", "file_path"),
     ]
 
     lines = ["可用工具类型:\n"]

@@ -84,7 +84,8 @@ _BUILTIN_ACTION_TYPES: frozenset[str] = frozenset({
     "git", "web_fetch", "edit_file", "create_directory", "batch_write",
     "batch_edit", "code_index", "ast_analyze", "refactor", "diff_preview",
     "mcp_call", "github_fetch", "weather", "datetime", "register_tool",
-    "clone_repo",
+    "clone_repo", "lsp_goto_def", "lsp_find_refs", "lsp_hover",
+    "lsp_diagnostics", "lsp_symbols",
 })
 
 
@@ -364,6 +365,9 @@ class ToolNode(BaseNode):
         # read_file 分段读取参数
         start_line: int | None = None,
         max_lines: int | None = None,
+        # v0.6.1: LSP 工具参数
+        line: int | None = None,
+        column: int | None = None,
     ) -> None:
         super().__init__(node_id, output_slot=output_slot, default_next=default_next)
         self.action_type = action_type
@@ -405,6 +409,9 @@ class ToolNode(BaseNode):
         self.security_enabled = security_enabled
         self._extra_start_line = start_line
         self._extra_max_lines = max_lines
+        # v0.6.1: LSP 工具参数
+        self._lsp_line = line
+        self._lsp_column = column
 
     # ── 参数规范化 ──────────────────────────────────────────
 
@@ -429,6 +436,9 @@ class ToolNode(BaseNode):
         "branch":         ["ref", "git_branch"],
         "city":           ["location", "place", "address"],
         "lang":           ["language", "locale"],
+        # v0.6.1: LSP 参数
+        "line":           ["row", "lineno", "line_number"],
+        "column":         ["col", "colno", "column_number", "cursor"],
     }
 
     # ToolNode.__init__ 接受的所有合法参数名（不含 node_id，它是位置参数）
@@ -443,6 +453,8 @@ class ToolNode(BaseNode):
         "repo", "github_action", "github_path", "branch",
         "city", "lang", "description", "python_function", "command_template", "params",
         "security_enabled", "start_line", "max_lines",
+        # v0.6.1: LSP 工具参数
+        "line", "column",
     }
 
     @classmethod
@@ -637,6 +649,11 @@ class ToolNode(BaseNode):
             "mcp_call": self._mcp_call,
             "github_fetch": self._github_fetch,
             "clone_repo": self._clone_repo,
+            "lsp_goto_def": self._lsp_goto_def,
+            "lsp_find_refs": self._lsp_find_refs,
+            "lsp_hover": self._lsp_hover,
+            "lsp_diagnostics": self._lsp_diagnostics,
+            "lsp_symbols": self._lsp_symbols,
             "weather": self._weather,
             "datetime": self._datetime,
             "register_tool": self._register_tool,
@@ -2113,6 +2130,80 @@ class ToolNode(BaseNode):
             "content": summary,
             "success": True,
         }
+
+    # ── LSP 工具（基于 Jedi）────────────────────────────────
+
+    def _lsp_goto_def(self, context: AgentContext) -> dict[str, Any]:
+        """LSP: 跳转到定义。"""
+        from omniagent.utils.lsp_provider import LSPProvider
+
+        file_path = self._resolve_template(self.file_path or "", context)
+        line = int(self._resolve_template(str(self.action), context) or "1")
+        # line 参数通过 action_input 传入；从 params 中提取
+        # normalize_params 已经把 action_input 映射到对应字段
+        # 对于 lsp_goto_def，line 和 column 需要从 tool 执行时的 raw params 取
+        # 实际上 params 通过 normalize_params → ToolNode 属性
+        # 但 line/column 没有专用的 ToolNode 属性，需要从原始 params 取
+        return self._lsp_call("goto_definition", context)
+
+    def _lsp_find_refs(self, context: AgentContext) -> dict[str, Any]:
+        """LSP: 查找引用。"""
+        return self._lsp_call("find_references", context)
+
+    def _lsp_hover(self, context: AgentContext) -> dict[str, Any]:
+        """LSP: 悬停信息。"""
+        return self._lsp_call("get_hover", context)
+
+    def _lsp_diagnostics(self, context: AgentContext) -> dict[str, Any]:
+        """LSP: 诊断信息。"""
+        from omniagent.utils.lsp_provider import LSPProvider
+        file_path = self._resolve_template(self.file_path or "", context)
+        if not file_path:
+            return {"success": False, "error": "缺少 file_path 参数"}
+        return LSPProvider.get_diagnostics(file_path)
+
+    def _lsp_symbols(self, context: AgentContext) -> dict[str, Any]:
+        """LSP: 文件符号列表。"""
+        from omniagent.utils.lsp_provider import LSPProvider
+        file_path = self._resolve_template(self.file_path or "", context)
+        if not file_path:
+            return {"success": False, "error": "缺少 file_path 参数"}
+        return LSPProvider.get_symbols(file_path)
+
+    def _lsp_call(self, method: str, context: AgentContext) -> dict[str, Any]:
+        """通用 LSP 调用分派。"""
+        from omniagent.utils.lsp_provider import LSPProvider
+
+        file_path = self._resolve_template(self.file_path or "", context)
+        if not file_path:
+            return {"success": False, "error": "缺少 file_path 参数"}
+
+        # line/column 从原始 action_input 获取（通过 normalize_params 后落在 action 字段中，
+        # 但实际 line/column 是独立的参数，需要特殊处理）
+        # 实际上 action_input = {"file_path": "...", "line": 10, "column": 5}
+        # normalize_params 把 file_path 映射到 self.file_path，line/column 没有标准映射
+        # 所以需要在 tool 执行时从原始 context 或 action_input 获取
+        # v0.6.1: 对于 LSP 工具，line/column 从 self 的附加属性获取
+        line = getattr(self, '_lsp_line', None)
+        column = getattr(self, '_lsp_column', None)
+
+        if line is None or column is None:
+            return {"success": False, "error": "缺少 line 或 column 参数"}
+
+        try:
+            line = int(line)
+            column = int(column)
+        except (ValueError, TypeError):
+            return {"success": False, "error": f"line/column 必须为整数: line={line}, column={column}"}
+
+        if method == "goto_definition":
+            return LSPProvider.goto_definition(file_path, line, column)
+        elif method == "find_references":
+            return LSPProvider.find_references(file_path, line, column)
+        elif method == "get_hover":
+            return LSPProvider.get_hover(file_path, line, column)
+        else:
+            return {"success": False, "error": f"未知 LSP 方法: {method}"}
 
     @staticmethod
     def _html_to_text(html: str) -> str:
