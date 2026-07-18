@@ -25,7 +25,6 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.prompt import Prompt
 from rich.theme import Theme
-from rich.rule import Rule
 
 from omniagent.engine.context import AgentContext
 from omniagent.repl.commands import COMMANDS, dispatch_command
@@ -42,8 +41,6 @@ try:
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.styles import Style
     from prompt_toolkit.formatted_text import HTML
-    from prompt_toolkit.layout.containers import Window, HSplit, FloatContainer, Float, ConditionalContainer
-    from prompt_toolkit.layout.controls import BufferControl
     from pathlib import Path as _Path
     _HISTORY_DIR = _Path.home() / ".omniagent"
     _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
@@ -55,18 +52,6 @@ except ImportError:
     KeyBindings = None  # type: ignore
     Style = None  # type: ignore
     HTML = None  # type: ignore
-
-if _HAS_PROMPT_TOOLKIT:
-    def _inject_window_style(container, style: str) -> None:
-        """给输入窗口注入背景样式。"""
-        if isinstance(container, Window):
-            if isinstance(container.content, BufferControl) and not container.style:
-                container.style = style
-        elif hasattr(container, 'get_children'):
-            for child in container.get_children():
-                _inject_window_style(child, style)
-        elif isinstance(container, Float):
-            _inject_window_style(container.content, style)
 
 # ── 自定义主题 ────────────────────────────────────────────
 _theme = Theme({
@@ -238,27 +223,9 @@ class REPL:
             logger.debug("prompt_toolkit 初始化失败，回退自建输入", exc_info=True)
             self._pt_session = None
 
-    def _get_pt_toolbar(self) -> str:
-        try:
-            if hasattr(self, 'status_bar') and self.status_bar:
-                return self.status_bar.get_toolbar_text()
-        except Exception:
-            pass
-        return ""
-
-    def _get_pt_bottom_toolbar(self):
-        import shutil
-        status = self._get_pt_toolbar().strip()
-        tw = shutil.get_terminal_size().columns
-        result = [("class:bottom-toolbar.separator", "─" * tw)]
-        if status:
-            result.append(("\n", ""))
-            result.append(("class:bottom-toolbar.status", "  " + status))
-        return result
-
     def _confirm_tool(self, tool_name: str, params: dict, risk: str) -> tuple[bool, str]:
         import os
-        from rich.prompt import Confirm, Prompt
+        from rich.prompt import Prompt
         from omniagent.repl.permissions import PermissionGate
 
         if not sys.stdin.isatty() or os.environ.get("OMNIAGENT_ASSUME_YES") == "1":
