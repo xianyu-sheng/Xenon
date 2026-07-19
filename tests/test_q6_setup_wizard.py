@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from omniagent.repl.setup_wizard import (
+from xenon.repl.setup_wizard import (
     _clean_api_key,
     _test_key_connectivity,
     _purge_provider_models,
 )
-from omniagent.repl.model_registry import ModelRegistry
+from xenon.repl.model_registry import ModelRegistry
 
 
 # --------------------------- _clean_api_key export 前缀 ---------------------------
@@ -64,7 +64,7 @@ def test_clean_does_not_strip_partial_prefix():
 
 def test_connectivity_ok(monkeypatch):
     provider = SimpleNamespace(key="openai")
-    import omniagent.repl.setup_wizard as sw
+    import xenon.repl.setup_wizard as sw
     monkeypatch.setattr(sw, "fetch_provider_models", lambda p, k: ["gpt-4", "gpt-3.5"])
     monkeypatch.setattr(sw, "MODEL_FETCH_ERRORS", {})
     ok, detail = _test_key_connectivity(provider, "sk-valid")
@@ -74,7 +74,7 @@ def test_connectivity_ok(monkeypatch):
 
 def test_connectivity_fail(monkeypatch):
     provider = SimpleNamespace(key="openai")
-    import omniagent.repl.setup_wizard as sw
+    import xenon.repl.setup_wizard as sw
     monkeypatch.setattr(sw, "fetch_provider_models", lambda p, k: [])
     monkeypatch.setattr(sw, "MODEL_FETCH_ERRORS", {"openai": "HTTP 401: Unauthorized"})
     ok, detail = _test_key_connectivity(provider, "sk-bad")
@@ -84,7 +84,7 @@ def test_connectivity_fail(monkeypatch):
 
 def test_connectivity_fail_unknown_error(monkeypatch):
     provider = SimpleNamespace(key="anthropic")
-    import omniagent.repl.setup_wizard as sw
+    import xenon.repl.setup_wizard as sw
     monkeypatch.setattr(sw, "fetch_provider_models", lambda p, k: [])
     monkeypatch.setattr(sw, "MODEL_FETCH_ERRORS", {})
     ok, detail = _test_key_connectivity(provider, "sk-x")

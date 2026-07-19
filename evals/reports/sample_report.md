@@ -1,4 +1,4 @@
-# OmniAgent Real Eval Sample Report
+# Xenon Real Eval Sample Report
 
 This is the checked-in shape of a manual real-model report. Real Eval is intentionally not run in CI because it requires an API key, network access, and may incur model cost. Generate fresh numbers locally before using this as portfolio evidence:
 

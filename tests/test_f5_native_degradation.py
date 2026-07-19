@@ -8,10 +8,10 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from omniagent.engine.base import BaseEngine
-from omniagent.engine.context import AgentContext
-from omniagent.engine.react_engine import ReActEngine
-from omniagent.utils.llm_client import LLMResponse
+from xenon.engine.base import BaseEngine
+from xenon.engine.context import AgentContext
+from xenon.engine.react_engine import ReActEngine
+from xenon.utils.llm_client import LLMResponse
 
 
 # ── 辅助 ────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ def _engine(models=("m1",), max_tokens=None):
 
 def _patch_fc(monkeypatch, eng, fn):
     """patch base 模块里的 chat_completion_with_tools。"""
-    monkeypatch.setattr("omniagent.engine.base.chat_completion_with_tools", fn)
+    monkeypatch.setattr("xenon.engine.base.chat_completion_with_tools", fn)
 
 
 # ════════════════════════════════════════════════════════════
@@ -232,7 +232,7 @@ class TestReActNativeFc:
             return LLMResponse(content='{"thought":"t","final_answer":"已写入 a.py"}')
 
         _patch_fc(monkeypatch, eng, fake_fc)
-        from omniagent.utils.response_adapter import parse_react
+        from xenon.utils.response_adapter import parse_react
         eng._parse_response = parse_react
         eng._input_requires_tools = lambda u: True
 

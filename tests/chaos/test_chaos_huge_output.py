@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from omniagent.utils.response_adapter import parse_react
+from xenon.utils.response_adapter import parse_react
 
 
 class TestParseReactOnHugeOutput:
@@ -61,11 +61,11 @@ class TestEngineWithHugeObservation:
 
     def test_huge_observation_truncated(self, monkeypatch):
         """tool 返回 50KB 输出 → 引擎 observation 截断（_near_context_window）防止 OOM。"""
-        import omniagent.engine.base as engine_base
-        import omniagent.utils.llm_client as llm_client
-        from omniagent.engine.react_engine import ReActEngine
-        from omniagent.engine.callbacks import SilentCallback
-        from omniagent.nodes import tool_executor as te_mod
+        import xenon.engine.base as engine_base
+        import xenon.utils.llm_client as llm_client
+        from xenon.engine.react_engine import ReActEngine
+        from xenon.engine.callbacks import SilentCallback
+        from xenon.nodes import tool_executor as te_mod
 
         # tool 返回 50KB 内容
         huge_output = "A" * 50_000

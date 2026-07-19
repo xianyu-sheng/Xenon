@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from omniagent.repl.config_watcher import (
+from xenon.repl.config_watcher import (
     ConfigWatcher,
     is_watch_enabled,
     is_watch_supported,
@@ -29,12 +29,12 @@ class TestPlatform:
         assert isinstance(is_watch_supported(), bool)
 
     def test_is_watch_enabled_default_true(self, monkeypatch):
-        monkeypatch.delenv("OMNIAGENT_CONFIG_WATCH", raising=False)
+        monkeypatch.delenv("XENON_CONFIG_WATCH", raising=False)
         assert is_watch_enabled() is True
 
     @pytest.mark.parametrize("val", ["0", "false", "False"])
     def test_is_watch_enabled_env_off(self, monkeypatch, val):
-        monkeypatch.setenv("OMNIAGENT_CONFIG_WATCH", val)
+        monkeypatch.setenv("XENON_CONFIG_WATCH", val)
         assert is_watch_enabled() is False
 
 

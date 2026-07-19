@@ -6,8 +6,8 @@ import io
 
 from rich.console import Console
 
-from omniagent.repl.context_manager import ContextManager, ConversationTurn
-from omniagent.repl.status_bar import StatusBar
+from xenon.repl.context_manager import ContextManager, ConversationTurn
+from xenon.repl.status_bar import StatusBar
 
 
 # --------------------------- _undo_stack 上限 ---------------------------
@@ -64,7 +64,7 @@ def test_undo_stack_large_limit_keeps_all():
 # --------------------------- status_bar try/except 兜底 ---------------------------
 
 def _make_bar(ctx_mgr=None, registry=None):
-    from omniagent.repl.model_registry import ModelRegistry
+    from xenon.repl.model_registry import ModelRegistry
     console = Console(file=io.StringIO(), width=120, force_terminal=False)
     cm = ctx_mgr or ContextManager()
     reg = registry or ModelRegistry()

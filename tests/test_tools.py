@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from omniagent.engine.context import AgentContext
-from omniagent.nodes.tool_node import ToolNode
-from omniagent.utils.config_parser import parse_workflow
+from xenon.engine.context import AgentContext
+from xenon.nodes.tool_node import ToolNode
+from xenon.utils.config_parser import parse_workflow
 
 
 class TestToolNodeFileOps:
@@ -154,7 +154,7 @@ class TestToolNodeConfig:
     """测试配置解析器对新 ToolNode 的支持。"""
 
     def test_parse_write_file_node(self):
-        from omniagent.utils.config_parser import parse_workflow
+        from xenon.utils.config_parser import parse_workflow
 
         config = {
             "models": {},
@@ -182,7 +182,7 @@ class TestToolNodeConfig:
         assert writer.content == "hello"
 
     def test_parse_read_file_node(self):
-        from omniagent.utils.config_parser import parse_workflow
+        from xenon.utils.config_parser import parse_workflow
 
         config = {
             "models": {},
@@ -209,7 +209,7 @@ class TestToolNodeConfig:
 
     def test_parse_command_node_backward_compat(self):
         """测试旧格式（只有 action 字段）仍然兼容。"""
-        from omniagent.utils.config_parser import parse_workflow
+        from xenon.utils.config_parser import parse_workflow
 
         config = {
             "models": {},
@@ -307,7 +307,7 @@ class TestToolNodeNewActions:
 
     def test_config_parse_list_files(self):
         """测试配置解析 list_files。"""
-        from omniagent.utils.config_parser import parse_workflow
+        from xenon.utils.config_parser import parse_workflow
 
         config = {
             "models": {},
@@ -324,7 +324,7 @@ class TestToolNodeNewActions:
 
     def test_config_parse_search_files(self):
         """测试配置解析 search_files。"""
-        from omniagent.utils.config_parser import parse_workflow
+        from xenon.utils.config_parser import parse_workflow
 
         config = {
             "models": {},
@@ -340,7 +340,7 @@ class TestToolNodeNewActions:
 
     def test_config_parse_git(self):
         """测试配置解析 git。"""
-        from omniagent.utils.config_parser import parse_workflow
+        from xenon.utils.config_parser import parse_workflow
 
         config = {
             "models": {},
@@ -356,7 +356,7 @@ class TestToolNodeNewActions:
 
     def test_config_parse_web_fetch(self):
         """测试配置解析 web_fetch。"""
-        from omniagent.utils.config_parser import parse_workflow
+        from xenon.utils.config_parser import parse_workflow
 
         config = {
             "models": {},

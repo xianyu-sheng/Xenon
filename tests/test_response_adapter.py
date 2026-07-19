@@ -1,5 +1,5 @@
 """Tests for response_adapter — LLM 输出中间件。"""
-from omniagent.utils.response_adapter import (
+from xenon.utils.response_adapter import (
     _extract_json,
     parse_plan,
     parse_react,

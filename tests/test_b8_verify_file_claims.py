@@ -6,7 +6,7 @@ write_file/create_directory，会对 edit/batch 类调用误报）。
 """
 from types import SimpleNamespace
 
-from omniagent.engine.plan_execute_engine import PlanExecuteEngine
+from xenon.engine.plan_execute_engine import PlanExecuteEngine
 
 
 def _call(tool: str, params: dict, success: bool = True) -> SimpleNamespace:

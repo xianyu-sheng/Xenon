@@ -22,7 +22,7 @@ def run_real(task, *, model, max_turns=3, workdir=None):
         dict with success, total_tokens (real LLM usage), tool_calls, etc.
     """
     # 注册 usage tracker 收集真实 token
-    from omniagent.utils.llm_client import UsageTracker
+    from xenon.utils.llm_client import UsageTracker
     tracker = UsageTracker()
     try:
         agent = RealAgent(model=model, max_turns=max_turns, workdir=workdir)

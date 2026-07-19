@@ -10,7 +10,7 @@ P3-Q5 prompt_optimizer 意图收紧测试（§8.15.1/2/4/9）。
 
 from __future__ import annotations
 
-from omniagent.repl.prompt_optimizer import (
+from xenon.repl.prompt_optimizer import (
     TEMPLATES,
     detect_intent,
     get_intent_display,

@@ -7,10 +7,10 @@
 import httpx
 import pytest
 
-import omniagent.engine.base as base_mod
-from omniagent.engine.callbacks import EngineCallback
-from omniagent.engine.react_engine import ReActEngine
-from omniagent.utils.llm_client import ResponseTruncatedError
+import xenon.engine.base as base_mod
+from xenon.engine.callbacks import EngineCallback
+from xenon.engine.react_engine import ReActEngine
+from xenon.utils.llm_client import ResponseTruncatedError
 
 
 class _RecordingCallback(EngineCallback):

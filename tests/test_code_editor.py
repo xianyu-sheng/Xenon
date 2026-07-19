@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from omniagent.repl.code_editor import CodeEditor
+from xenon.repl.code_editor import CodeEditor
 
 
 class TestCodeEditor:

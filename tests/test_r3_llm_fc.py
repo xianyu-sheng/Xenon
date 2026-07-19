@@ -7,8 +7,8 @@
 """
 import json
 
-import omniagent.utils.llm_client as llm
-from omniagent.utils.llm_client import (
+import xenon.utils.llm_client as llm
+from xenon.utils.llm_client import (
     LLMResponse,
     ModelEndpoint,
     _normalize_openai_tools,

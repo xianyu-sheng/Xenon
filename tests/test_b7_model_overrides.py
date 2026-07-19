@@ -1,7 +1,7 @@
 """B7 验收：激活 ModelConfig 死字段 — base_url / api_key 覆盖。"""
 from types import SimpleNamespace
 
-import omniagent.utils.llm_client as lc
+import xenon.utils.llm_client as lc
 
 
 class TestBuildEndpointBaseUrlOverride:
@@ -37,8 +37,8 @@ class TestChatCompletionBaseUrlOverride:
 
 class TestEngineModelOverrides:
     def test_passes_model_api_key_and_base_url(self, monkeypatch):
-        import omniagent.engine.base as re_mod
-        from omniagent.engine.react_engine import ReActEngine
+        import xenon.engine.base as re_mod
+        from xenon.engine.react_engine import ReActEngine
 
         mc = SimpleNamespace(max_tokens=2048, api_key="sk-per-model",
                              base_url="https://mcp.example.com/v1")
@@ -56,8 +56,8 @@ class TestEngineModelOverrides:
         assert captured["max_tokens"] == 2048
 
     def test_no_overrides_when_model_config_empty(self, monkeypatch):
-        import omniagent.engine.base as re_mod
-        from omniagent.engine.react_engine import ReActEngine
+        import xenon.engine.base as re_mod
+        from xenon.engine.react_engine import ReActEngine
 
         engine = ReActEngine(["openai/gpt-4o"])  # 无 model_configs
         captured = {}
@@ -73,8 +73,8 @@ class TestEngineModelOverrides:
 
     def test_no_api_key_means_no_credentials_override(self, monkeypatch):
         """ModelConfig.api_key 为空时不覆盖全局凭证（交由 build_endpoint 自行加载）。"""
-        import omniagent.engine.base as re_mod
-        from omniagent.engine.react_engine import ReActEngine
+        import xenon.engine.base as re_mod
+        from xenon.engine.react_engine import ReActEngine
 
         mc = SimpleNamespace(max_tokens=2048, api_key="", base_url="https://mcp.example.com/v1")
         engine = ReActEngine(["openai/gpt-4o"], model_configs={"openai/gpt-4o": mc})

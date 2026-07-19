@@ -6,8 +6,8 @@
 """
 import pytest
 
-import omniagent.utils.llm_client as lc
-from omniagent.utils.llm_client import ModelEndpoint, ResponseTruncatedError
+import xenon.utils.llm_client as lc
+from xenon.utils.llm_client import ModelEndpoint, ResponseTruncatedError
 
 
 def _ep(provider: str = "openai") -> ModelEndpoint:

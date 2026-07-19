@@ -17,9 +17,9 @@ from typing import Any
 
 import pytest
 
-import omniagent.utils.llm_client as lc
-from omniagent.repl.context_manager import ContextManager
-from omniagent.utils.llm_client import (
+import xenon.utils.llm_client as lc
+from xenon.repl.context_manager import ContextManager
+from xenon.utils.llm_client import (
     LLMUsage,
     ModelEndpoint,
     _extract_usage,

@@ -1,11 +1,11 @@
 """Chaos Test 6: 并发/重复 tool_call。
 
-目标：验证 omniagent 在两种"并发"场景下的鲁棒性：
+目标：验证 xenon 在两种"并发"场景下的鲁棒性：
 1. **同一次 LLM 返回中含 5 个 tool_call**（少见但合规）：验证解析层
    能正确识别（当前 ReAct 设计是"一轮一工具"，但响应解析不应崩溃）；
 2. **多个 LLM 调用并发**（多线程 stress）：验证 _call_llm 锁/池安全。
 
-**注意**：omniagent 官方 ReAct 引擎设计为串行单工具，本测试侧重于
+**注意**：xenon 官方 ReAct 引擎设计为串行单工具，本测试侧重于
 "不抛异常、有合理回退"。
 """
 from __future__ import annotations
@@ -17,8 +17,8 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-import omniagent.utils.llm_client as llm_client
-from omniagent.utils.response_adapter import parse_react
+import xenon.utils.llm_client as llm_client
+from xenon.utils.response_adapter import parse_react
 
 
 # ── 场景 1: LLM 返回 5 个 tool_call ──

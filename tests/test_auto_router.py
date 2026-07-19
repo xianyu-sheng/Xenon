@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import pytest
-from omniagent.repl.difficulty_estimator import (
+from xenon.repl.difficulty_estimator import (
     DifficultyEstimator, TaskProfile,
 )
-from omniagent.repl.auto_router import AutoRouter
-from omniagent.repl.model_pool import ModelPool
+from xenon.repl.auto_router import AutoRouter
+from xenon.repl.model_pool import ModelPool
 
 
 class TestDifficultyEstimator:

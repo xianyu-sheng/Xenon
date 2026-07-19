@@ -9,7 +9,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from omniagent.engine.scout import DirectoryScout, DEFAULT_EXCLUDE
+from xenon.engine.scout import DirectoryScout, DEFAULT_EXCLUDE
 
 
 # --------------------------- scan() ---------------------------
@@ -279,7 +279,7 @@ class _RecordingLLM:
 
 
 def _make_engine(project_root=None):
-    from omniagent.engine.react_engine import ReActEngine
+    from xenon.engine.react_engine import ReActEngine
     eng = ReActEngine(["m1"], project_root=project_root)
     return eng
 

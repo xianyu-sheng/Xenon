@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from omniagent.repl.skill_manager import SkillManager, Skill, SkillStep
+from xenon.repl.skill_manager import SkillManager, Skill, SkillStep
 
 
 class TestSkillManager:
@@ -153,7 +153,7 @@ class TestSkillManager:
 
     def test_fuzzy_match_subcommand(self):
         """测试子命令模糊匹配。"""
-        from omniagent.repl.commands import _fuzzy_match_subcommand
+        from xenon.repl.commands import _fuzzy_match_subcommand
         assert _fuzzy_match_subcommand("creat") == "create"
         assert _fuzzy_match_subcommand("crate") == "create"
         assert _fuzzy_match_subcommand("lst") == "list"
@@ -167,7 +167,7 @@ class TestSkillManager:
 
     def test_extract_skill_name_english(self):
         """测试从英文输入提取 skill 名称。"""
-        from omniagent.repl.commands import _extract_skill_name
+        from xenon.repl.commands import _extract_skill_name
         # sub_args 优先
         assert _extract_skill_name("creat", "frontend-design") == "frontend-design"
         # sub 是有效的英文名
@@ -178,7 +178,7 @@ class TestSkillManager:
 
     def test_extract_skill_name_chinese(self):
         """测试中文输入时生成稳定哈希名。"""
-        from omniagent.repl.commands import _extract_skill_name
+        from xenon.repl.commands import _extract_skill_name
         # 纯中文 → 应返回 skill-<hash> 而非 timestamp
         result = _extract_skill_name("创建", "帮我写一个自动化脚本")
         assert result.startswith("skill-")
@@ -188,7 +188,7 @@ class TestSkillManager:
 
     def test_extract_skill_name_known_typo(self):
         """测试已知 typo 不被当作 skill 名。"""
-        from omniagent.repl.commands import _extract_skill_name
+        from xenon.repl.commands import _extract_skill_name
         # 'creat' 是 typo，不是有效的 skill 名
         result = _extract_skill_name("creat", "")
         assert result.startswith("skill-")  # 应生成 hash 名
@@ -197,7 +197,7 @@ class TestSkillManager:
         """测试动态注册 skill handler。"""
         import tempfile
         from pathlib import Path
-        from omniagent.repl.commands import _register_skill_handler, _HANDLERS
+        from xenon.repl.commands import _register_skill_handler, _HANDLERS
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mgr = SkillManager(Path(tmpdir))

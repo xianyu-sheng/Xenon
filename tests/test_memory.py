@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from omniagent.repl.memory import MemoryStore, Memory
+from xenon.repl.memory import MemoryStore, Memory
 
 
 class TestMemoryStore:

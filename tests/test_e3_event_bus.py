@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from omniagent.engine.event_bus import EventBus, CallbackBusBridge, EVENT_TYPES
+from xenon.engine.event_bus import EventBus, CallbackBusBridge, EVENT_TYPES
 
 
 # --------------------------- subscribe / publish ---------------------------
@@ -155,7 +155,7 @@ def test_bridge_forwards_on_act_with_args():
 
 
 def test_bridge_is_engine_callback():
-    from omniagent.engine.callbacks import EngineCallback
+    from xenon.engine.callbacks import EngineCallback
     bus = EventBus()
     bridge = CallbackBusBridge(bus)
     assert isinstance(bridge, EngineCallback)
@@ -176,7 +176,7 @@ def test_bridge_multiple_subscribers_fanout():
 
 def test_react_engine_with_bridge_publishes_finish():
     """ReAct 引擎照常 self.callback（桥接），订阅者收到 finish 事件。"""
-    from omniagent.engine.react_engine import ReActEngine
+    from xenon.engine.react_engine import ReActEngine
 
     bus = EventBus()
     finishes = []

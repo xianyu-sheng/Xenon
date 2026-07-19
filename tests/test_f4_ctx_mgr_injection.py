@@ -7,11 +7,11 @@
 """
 from types import SimpleNamespace
 
-from omniagent.engine.combined_engines import ReactReflectionEngine
-from omniagent.engine.context import AgentContext
-from omniagent.engine.plan_execute_engine import PlanExecuteEngine
-from omniagent.engine.react_engine import ReActEngine
-from omniagent.repl.context_manager import ContextManager, ConversationTurn
+from xenon.engine.combined_engines import ReactReflectionEngine
+from xenon.engine.context import AgentContext
+from xenon.engine.plan_execute_engine import PlanExecuteEngine
+from xenon.engine.react_engine import ReActEngine
+from xenon.repl.context_manager import ContextManager, ConversationTurn
 
 
 def _ctx_mgr_with(n):
@@ -111,7 +111,7 @@ class TestMaybeCompactMessages:
             return "COMPACTED"
 
         monkeypatch.setattr(
-            "omniagent.repl.context_manager.ContextManager.compact", fake_compact
+            "xenon.repl.context_manager.ContextManager.compact", fake_compact
         )
         msgs = [{"role": "user", "content": f"msg{i}"} for i in range(8)]
         out = eng._maybe_compact_messages(msgs, 5)
@@ -126,7 +126,7 @@ class TestMaybeCompactMessages:
             raise RuntimeError("compact exploded")
 
         monkeypatch.setattr(
-            "omniagent.repl.context_manager.ContextManager.compact", boom
+            "xenon.repl.context_manager.ContextManager.compact", boom
         )
         msgs = [{"role": "user", "content": "msg"}]
         out = eng._maybe_compact_messages(msgs, 5)

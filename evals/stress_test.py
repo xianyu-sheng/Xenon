@@ -1,7 +1,7 @@
 """
 v0.5.0 真实场景压力测试。
 
-模拟真实 omniagent 会话：多轮工具调用、混合优先级、真实格式的工具输出。
+模拟真实 xenon 会话：多轮工具调用、混合优先级、真实格式的工具输出。
 目标：压缩后，后续任务能否正确使用早期上下文中的关键信息。
 """
 
@@ -9,9 +9,9 @@ import json, sys, time, re
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from omniagent.repl.context_manager import ContextManager, ConversationTurn
-from omniagent.repl.context_strategies import TieredStrategySelector, SpaceBudget
-from omniagent.utils.llm_client import chat_completion
+from xenon.repl.context_manager import ContextManager, ConversationTurn
+from xenon.repl.context_strategies import TieredStrategySelector, SpaceBudget
+from xenon.utils.llm_client import chat_completion
 
 
 def realistic_read_file(path: str) -> str:
@@ -127,7 +127,7 @@ def realistic_command_output(cmd: str) -> str:
 
 
 def build_realistic_session() -> ContextManager:
-    """构建真实 omniagent 会话。
+    """构建真实 xenon 会话。
 
     模式：多轮工具调用 → 分析 → 修改 → 测试，混合 Q1 闲聊。
     """
@@ -300,7 +300,7 @@ def build_realistic_session() -> ContextManager:
 def run_stress_test(model_id="deepseek/deepseek-v4-pro"):
     """运行真实场景压力测试。"""
     print("=" * 60)
-    print("OmniAgent v0.5.0 真实场景压力测试")
+    print("Xenon v0.5.0 真实场景压力测试")
     print("=" * 60)
 
     cm = build_realistic_session()
@@ -447,5 +447,5 @@ def run_stress_test(model_id="deepseek/deepseek-v4-pro"):
 if __name__ == "__main__":
     model = sys.argv[1] if len(sys.argv) > 1 else "deepseek/deepseek-v4-pro"
     report = run_stress_test(model)
-    Path("/tmp/omniagent_stress_test.json").write_text(
+    Path("/tmp/xenon_stress_test.json").write_text(
         json.dumps(report, indent=2, ensure_ascii=False, default=str))

@@ -31,12 +31,12 @@ from typing import Any, Callable
 
 import pytest
 
-import omniagent.engine.base as engine_base
-import omniagent.utils.llm_client as llm_client
-from omniagent.repl.context_manager import ContextManager
-from omniagent.repl.model_registry import ModelRegistry
-from omniagent.repl.provider_registry import load_credentials
-from omniagent.repl.repl import REPL
+import xenon.engine.base as engine_base
+import xenon.utils.llm_client as llm_client
+from xenon.repl.context_manager import ContextManager
+from xenon.repl.model_registry import ModelRegistry
+from xenon.repl.provider_registry import load_credentials
+from xenon.repl.repl import REPL
 
 
 # ── 通用工具 ──────────────────────────────────────────
@@ -66,7 +66,7 @@ REAL_LLM_REPLIES: list[dict[str, Any]] = []
 @contextmanager
 def _quiet_console():
     """重定向 REPL 的 console 到 StringIO，避免污染 pytest 输出。"""
-    import omniagent.repl.repl as repl_mod
+    import xenon.repl.repl as repl_mod
     orig = repl_mod.console
     buf = StringIO()
     repl_mod.console = type(orig)(file=buf, force_terminal=False, width=120)
@@ -106,8 +106,8 @@ def _make_repl_mock(
     optimize_prompts: bool = True,
 ) -> REPL:
     """构造一个用 mock chat_completion 的 REPL 实例。"""
-    import omniagent.engine.base as engine_base
-    import omniagent.utils.llm_client as llm_client
+    import xenon.engine.base as engine_base
+    import xenon.utils.llm_client as llm_client
 
     def fake_engine(model_id, messages, **kw):
         return responder(("engine", model_id, messages))
@@ -261,10 +261,10 @@ class TestWriteCodeReal:
         write_file_called: list[dict] = []
 
         # mock write_file 工具执行 — ToolNode.execute(self, context)
-        from omniagent.nodes.tool_node import ToolNode
+        from xenon.nodes.tool_node import ToolNode
 
         orig_execute = ToolNode.execute
-        from omniagent.repl.repl import REPL as _REPL
+        from xenon.repl.repl import REPL as _REPL
 
         def mock_execute(self, context):
             # 通过 self.action_type 区分
@@ -464,7 +464,7 @@ class TestCompactReal:
 
 
 class TestDebugRealistic:
-    """让 omniagent 调试一个有 bug 的 Python 文件（mock 端到端）。"""
+    """让 xenon 调试一个有 bug 的 Python 文件（mock 端到端）。"""
 
     def test_debug_buggy_file(self, tmp_path):
         """创建有 bug 的 Python 文件，mock LLM 给修复建议。"""
@@ -586,10 +586,10 @@ class TestMixedIntents:
 
 
 class TestDryRunWorkflow:
-    """omniagent run <yaml> --dry-run 展示工作流结构不执行。"""
+    """xenon run <yaml> --dry-run 展示工作流结构不执行。"""
 
     def test_dry_run_displays_workflow(self, tmp_path):
-        """omniagent run config/default_flow.yaml --dry-run。"""
+        """xenon run config/default_flow.yaml --dry-run。"""
         # 拷贝工作流到 tmp_path 避免破坏工作目录
         workflow_src = Path(__file__).parent.parent / "config" / "default_flow.yaml"
         if not workflow_src.exists():
@@ -597,7 +597,7 @@ class TestDryRunWorkflow:
 
         # 调用子进程
         result = subprocess.run(
-            [sys.executable, "-m", "omniagent.main", "run", str(workflow_src), "--dry-run"],
+            [sys.executable, "-m", "xenon.main", "run", str(workflow_src), "--dry-run"],
             capture_output=True, text=True, timeout=30,
             cwd=str(tmp_path),
         )
@@ -614,22 +614,22 @@ class TestDryRunWorkflow:
 
 
 class TestCLISubcommands:
-    """omniagent --help / --version 等子命令验证。"""
+    """xenon --help / --version 等子命令验证。"""
 
-    def test_omniagent_help(self):
-        """omniagent --help 应正常返回帮助信息。"""
+    def test_xenon_help(self):
+        """xenon --help 应正常返回帮助信息。"""
         result = subprocess.run(
-            [sys.executable, "-m", "omniagent.main", "--help"],
+            [sys.executable, "-m", "xenon.main", "--help"],
             capture_output=True, text=True, timeout=15,
         )
         output = result.stdout
-        assert "OmniAgent" in output or "omniagent" in output
+        assert "Xenon" in output or "xenon" in output
         # 应列出所有 mode 选项
         assert "--mode" in output
         assert "--model" in output or "-m" in output
-        print(f"\n[场景11] omniagent --help 输出前 200 字:\n{output[:200]}")
+        print(f"\n[场景11] xenon --help 输出前 200 字:\n{output[:200]}")
 
-    def test_omniagent_version_in_pyproject(self):
+    def test_xenon_version_in_pyproject(self):
         """pyproject.toml 的 version 应 >= 0.2.0。"""
         pyproject = Path(__file__).parent.parent / "pyproject.toml"
         content = pyproject.read_text(encoding="utf-8")
@@ -642,20 +642,20 @@ class TestCLISubcommands:
         assert int(major) >= 0 and int(minor) >= 2, f"版本过低: {version}"
         print(f"\n[场景11b] 当前版本: {version}")
 
-    def test_omniagent_actually_executable(self):
-        """omniagent 命令应在 PATH 中可执行。"""
+    def test_xenon_actually_executable(self):
+        """xenon 命令应在 PATH 中可执行。"""
         # 使用 sys.executable 验证
-        which = shutil.which("omniagent")
+        which = shutil.which("xenon")
         if which is None:
-            # 试 python -m omniagent.main
+            # 试 python -m xenon.main
             result = subprocess.run(
-                [sys.executable, "-c", "from omniagent.main import cli; print('OK')"],
+                [sys.executable, "-c", "from xenon.main import cli; print('OK')"],
                 capture_output=True, text=True, timeout=10,
             )
             assert result.returncode == 0
-            print("\n[场景11c] omniagent 作为 Python 模块可调用")
+            print("\n[场景11c] xenon 作为 Python 模块可调用")
         else:
-            print(f"\n[场景11c] omniagent 可执行: {which}")
+            print(f"\n[场景11c] xenon 可执行: {which}")
 
 
 # ── 场景 12：/help /setup /mode 命令 ─────────────────
@@ -685,7 +685,7 @@ class TestSlashCommands:
                 # 验证初始是 direct
                 assert repl.registry.current_mode == "direct"
                 # 切换到 react
-                from omniagent.repl.commands import dispatch_command
+                from xenon.repl.commands import dispatch_command
                 output = dispatch_command(
                     "/mode", "react",
                     registry=repl.registry,
@@ -706,7 +706,7 @@ class TestSlashCommands:
         with _quiet_console():
             repl = _make_repl_mock(lambda ctx: "ok")
             try:
-                from omniagent.repl.commands import dispatch_command
+                from xenon.repl.commands import dispatch_command
                 # 先添加 1 轮
                 repl._handle_chat("hello")
                 output = dispatch_command(
@@ -729,7 +729,7 @@ class TestSlashCommands:
                 repl._handle_chat("hello")
                 n_before = len(repl.ctx_mgr.history)
                 assert n_before > 0
-                from omniagent.repl.commands import dispatch_command
+                from xenon.repl.commands import dispatch_command
                 output = dispatch_command(
                     "/clear", "",
                     registry=repl.registry,
@@ -771,7 +771,7 @@ class TestE2EProjectTask:
         call_log: list[dict] = []
 
         # 模拟工具执行 — ToolNode.execute(self, context)
-        from omniagent.nodes.tool_node import ToolNode
+        from xenon.nodes.tool_node import ToolNode
         orig_execute = ToolNode.execute
 
         def mock_execute(self, context):
@@ -878,7 +878,7 @@ class TestRealLLMWriteFile:
 
     def test_real_llm_writes_hello_py(self, tmp_path):
         """真实 LLM 写 hello.py，验证文件真的被创建。"""
-        from omniagent.nodes.tool_node import ToolNode
+        from xenon.nodes.tool_node import ToolNode
         orig_execute = ToolNode.execute
 
         file_written: list[Path] = []

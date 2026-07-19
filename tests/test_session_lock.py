@@ -5,10 +5,10 @@ import time
 
 import pytest
 
-from omniagent.repl.auto_router import AutoRouter
-from omniagent.repl.difficulty_estimator import DifficultyEstimator, TaskProfile
-from omniagent.repl.model_pool import ModelPool, FAILURE_THRESHOLD
-from omniagent.repl.session_lock import SessionLock
+from xenon.repl.auto_router import AutoRouter
+from xenon.repl.difficulty_estimator import DifficultyEstimator, TaskProfile
+from xenon.repl.model_pool import ModelPool, FAILURE_THRESHOLD
+from xenon.repl.session_lock import SessionLock
 
 
 class _FakeEstimator:

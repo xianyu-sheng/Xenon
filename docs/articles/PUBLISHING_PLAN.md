@@ -1,4 +1,4 @@
-# OmniAgent 发布物料
+# Xenon 发布物料
 
 ## 掘金 / V2EX / Medium — 技术长文
 
@@ -37,7 +37,7 @@
 > 上下文太长怎么办？不是简单"取最后 N 条"。我做了 6 步流水线：摘要→精简→去重→评分→裁剪→重组，按语义密度保留最重要内容。
 
 图 5：项目地址
-> GitHub: xianyu-sheng/omniagent
+> GitHub: xianyu-sheng/Xenon
 > 19K 行 Python | MIT 开源 | 1000+ 测试
 > 如果你想深入理解 Agent 架构，欢迎⭐围观
 

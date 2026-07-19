@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import pytest
 
-import omniagent.engine.base as engine_base
-import omniagent.utils.llm_client as llm_client
-from omniagent.engine.react_engine import ReActEngine
-from omniagent.engine.callbacks import SilentCallback
+import xenon.engine.base as engine_base
+import xenon.utils.llm_client as llm_client
+from xenon.engine.react_engine import ReActEngine
+from xenon.engine.callbacks import SilentCallback
 
 
 def test_finish_without_tool_when_tools_required(monkeypatch):

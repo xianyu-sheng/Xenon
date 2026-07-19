@@ -22,10 +22,10 @@ from typing import Any
 
 import pytest
 
-import omniagent.engine.base as base
-from omniagent.engine.context import AgentContext
-from omniagent.engine.react_engine import BUILTIN_TOOLS, ReActEngine
-from omniagent.engine.tool_tracker import ToolExecutionTracker
+import xenon.engine.base as base
+from xenon.engine.context import AgentContext
+from xenon.engine.react_engine import BUILTIN_TOOLS, ReActEngine
+from xenon.engine.tool_tracker import ToolExecutionTracker
 
 
 def _patch_chat(monkeypatch, responder):

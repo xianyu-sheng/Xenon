@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from omniagent.nodes.tool_node import ToolNode, SecurityError
+from xenon.nodes.tool_node import ToolNode, SecurityError
 
 
 class TestCommandValidateQuoted:

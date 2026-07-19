@@ -7,12 +7,12 @@
 """
 from types import SimpleNamespace
 
-import omniagent.engine.base as base_mod
-from omniagent.engine.callbacks import EngineCallback
-from omniagent.engine.context import AgentContext
-from omniagent.engine.novel_engine import NovelEngine
-from omniagent.engine.plan_execute_engine import PlanExecuteEngine
-from omniagent.engine.react_engine import ReActEngine
+import xenon.engine.base as base_mod
+from xenon.engine.callbacks import EngineCallback
+from xenon.engine.context import AgentContext
+from xenon.engine.novel_engine import NovelEngine
+from xenon.engine.plan_execute_engine import PlanExecuteEngine
+from xenon.engine.react_engine import ReActEngine
 
 
 class _RecordingCallback(EngineCallback):

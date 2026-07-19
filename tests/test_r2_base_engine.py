@@ -8,12 +8,12 @@
 """
 from types import SimpleNamespace
 
-import omniagent.engine.base as base_mod
-from omniagent.engine.base import BaseEngine
-from omniagent.engine.novel_engine import NovelEngine
-from omniagent.engine.plan_execute_engine import PlanExecuteEngine
-from omniagent.engine.react_engine import ReActEngine
-from omniagent.engine.reflection_engine import ReflectionEngine
+import xenon.engine.base as base_mod
+from xenon.engine.base import BaseEngine
+from xenon.engine.novel_engine import NovelEngine
+from xenon.engine.plan_execute_engine import PlanExecuteEngine
+from xenon.engine.react_engine import ReActEngine
+from xenon.engine.reflection_engine import ReflectionEngine
 
 
 class TestBaseEngineInheritance:

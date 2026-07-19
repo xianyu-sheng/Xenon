@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "omniagent-cli"
+name = "xenon"
 version = "0.6.1"
-description = "A decoupled, config-driven multi-model AI programming Agent scheduling engine"
+description = "Xenon: AI coding assistant — where your wildest ideas come to life"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -23,7 +23,7 @@ dev = [
 ]
 
 [project.scripts]
-omniagent = "omniagent.main:cli"
+xenon = "xenon.main:cli"
 
 [tool.setuptools.packages.find]
-include = ["omniagent*"]
+include = ["xenon*"]

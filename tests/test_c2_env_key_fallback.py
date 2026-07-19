@@ -2,9 +2,9 @@
 C-2 修复测试：env_key 字段真的能读环境变量，anthropic 兼容 ANTHROPIC_AUTH_TOKEN。
 
 v0.3.0 修复前：provider_registry.py 的 env_key 字段只用于 setup_wizard 展示，
-_load_credentials() 只从 ~/.omniagent/credentials.yaml 读，env 变量完全被忽略。
+_load_credentials() 只从 ~/.xenon/credentials.yaml 读，env 变量完全被忽略。
 结果：Claude Code 内设 ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN 的用户
-根本无法用 omniagent（提示"未找到 anthropic 的 API Key"）。
+根本无法用 xenon（提示"未找到 anthropic 的 API Key"）。
 
 v0.3.0 修复后：
 - _resolve_api_key() 三级 fallback：yaml → env_key → anthropic 特殊 ANTHROPIC_AUTH_TOKEN
@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 import pytest
 
-from omniagent.repl.provider_registry import (
+from xenon.repl.provider_registry import (
     PROVIDERS,
     _resolve_api_key,
     get_configured_providers,
@@ -95,12 +95,12 @@ class TestGetConfiguredProvidersEnvFallback:
         with patch.dict(os.environ, env, clear=True):
             # 清 yaml：mock load_credentials 返回空
             with patch(
-                "omniagent.repl.provider_registry.load_credentials",
+                "xenon.repl.provider_registry.load_credentials",
                 return_value={},
             ):
                 # 避免实际 HTTP 调用 fetch_provider_models
                 with patch(
-                    "omniagent.repl.provider_registry.fetch_provider_models",
+                    "xenon.repl.provider_registry.fetch_provider_models",
                     return_value=["claude-sonnet-4-20250514"],
                 ):
                     configured = get_configured_providers()
@@ -117,11 +117,11 @@ class TestGetConfiguredProvidersEnvFallback:
         }
         with patch.dict(os.environ, env, clear=True):
             with patch(
-                "omniagent.repl.provider_registry.load_credentials",
+                "xenon.repl.provider_registry.load_credentials",
                 return_value={"deepseek": "yaml-key"},
             ):
                 with patch(
-                    "omniagent.repl.provider_registry.fetch_provider_models",
+                    "xenon.repl.provider_registry.fetch_provider_models",
                     return_value=["deepseek-v4-pro"],
                 ):
                     configured = get_configured_providers()
@@ -136,11 +136,11 @@ class TestGetConfiguredProvidersEnvFallback:
         }
         with patch.dict(os.environ, env, clear=True):
             with patch(
-                "omniagent.repl.provider_registry.load_credentials",
+                "xenon.repl.provider_registry.load_credentials",
                 return_value={},
             ):
                 with patch(
-                    "omniagent.repl.provider_registry.fetch_provider_models",
+                    "xenon.repl.provider_registry.fetch_provider_models",
                     return_value=["llama3"],
                 ):
                     configured = get_configured_providers()

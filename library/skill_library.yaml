@@ -1,6 +1,6 @@
-# OmniAgent Skill 库
-# 可通过 /skill install <name> 安装，或手动放到 ~/.omniagent/skills/
-# 社区贡献: 欢迎 PR 添加你的 Skill → https://github.com/xianyu-sheng/Omniagent
+# Xenon Skill 库
+# 可通过 /skill install <name> 安装，或手动放到 ~/.xenon/skills/
+# 社区贡献: 欢迎 PR 添加你的 Skill → https://github.com/xianyu-sheng/Xenon
 
 version: "1.5"
 skills:

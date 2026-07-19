@@ -1,8 +1,8 @@
 """R4 验收：ContextManager.max_tokens 从激活模型的 context_window 注入，
 替代 128000 硬编码——8k 模型时 needs_compact 不再永不触发，1M 模型不再过早压缩。
 """
-from omniagent.repl.context_manager import ContextManager
-from omniagent.repl.model_registry import ModelConfig, ModelRegistry
+from xenon.repl.context_manager import ContextManager
+from xenon.repl.model_registry import ModelConfig, ModelRegistry
 
 
 class TestModelConfigContextWindow:

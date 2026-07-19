@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import pytest
 
-from omniagent.repl.batch_register import (
+from xenon.repl.batch_register import (
     batch_register, parse_file, validate, ModelSpec,
 )
-from omniagent.repl.model_registry import ModelRegistry
-from omniagent.repl.model_pool import ModelPool
+from xenon.repl.model_registry import ModelRegistry
+from xenon.repl.model_pool import ModelPool
 
 
 class TestParse:
@@ -95,7 +95,7 @@ class TestValidate:
 @pytest.fixture
 def stub_probe(monkeypatch):
     """默认全部 probe 通过(避免真发网络请求)。"""
-    monkeypatch.setattr("omniagent.repl.batch_register.probe_model",
+    monkeypatch.setattr("xenon.repl.batch_register.probe_model",
                         lambda s, **kw: (True, ""))
 
 
@@ -120,7 +120,7 @@ class TestBatchRegister:
         assert r.get_model("gpt4o") is None
 
     def test_probe_fail_excluded(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("omniagent.repl.batch_register.probe_model",
+        monkeypatch.setattr("xenon.repl.batch_register.probe_model",
                             lambda s, **kw: (False, "401") if s.alias == "bad" else (True, ""))
         f = tmp_path / "m.yaml"
         f.write_text("models:\n  - alias: good\n    model_id: openai/gpt-4o\n    api_key: sk\n"
@@ -138,7 +138,7 @@ class TestBatchRegister:
             called.append(s.alias)
             return (True, "")
 
-        monkeypatch.setattr("omniagent.repl.batch_register.probe_model", spy)
+        monkeypatch.setattr("xenon.repl.batch_register.probe_model", spy)
         f = tmp_path / "m.yaml"
         f.write_text("models:\n  - alias: gpt4o\n    model_id: openai/gpt-4o\n    api_key: sk\n")
         r = ModelRegistry(); p = ModelPool()
@@ -169,9 +169,9 @@ class TestBatchRegister:
 
 class TestDiscover:
     def test_discover_expand(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("omniagent.repl.batch_register.probe_model",
+        monkeypatch.setattr("xenon.repl.batch_register.probe_model",
                             lambda s, **kw: (True, ""))
-        monkeypatch.setattr("omniagent.repl.batch_register.discover_models",
+        monkeypatch.setattr("xenon.repl.batch_register.discover_models",
                             lambda base_url, api_key, **kw: ["qwen2.5:7b", "llama3:8b"])
         f = tmp_path / "m.yaml"
         f.write_text("models:\n  - alias: ollama-local\n    model_id: ollama/qwen2.5:7b\n"
@@ -184,7 +184,7 @@ class TestDiscover:
         assert len(result.discovered) == 2
 
     def test_discover_missing_base_url(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("omniagent.repl.batch_register.probe_model",
+        monkeypatch.setattr("xenon.repl.batch_register.probe_model",
                             lambda s, **kw: (True, ""))
         f = tmp_path / "m.yaml"
         f.write_text("models:\n  - alias: bad\n    model_id: ollama/x\n    discover: true\n")

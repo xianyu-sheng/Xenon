@@ -7,10 +7,10 @@
 """
 from __future__ import annotations
 
-from omniagent.engine.context import AgentContext
-from omniagent.engine.tool_tracker import ToolExecutionTracker
-from omniagent.nodes import tool_executor as te_mod
-from omniagent.nodes.tool_executor import ToolExecutor
+from xenon.engine.context import AgentContext
+from xenon.engine.tool_tracker import ToolExecutionTracker
+from xenon.nodes import tool_executor as te_mod
+from xenon.nodes.tool_executor import ToolExecutor
 
 
 class _BoomNode:
@@ -87,10 +87,10 @@ def test_tool_exception_retry_capped(monkeypatch):
 
 def test_tool_failure_observes_through_react(monkeypatch):
     """端到端验证：tool 失败后，ReAct 引擎的 Observation 含可读错误。"""
-    import omniagent.engine.base as engine_base
-    import omniagent.utils.llm_client as llm_client
-    from omniagent.engine.react_engine import ReActEngine
-    from omniagent.engine.callbacks import SilentCallback
+    import xenon.engine.base as engine_base
+    import xenon.utils.llm_client as llm_client
+    from xenon.engine.react_engine import ReActEngine
+    from xenon.engine.callbacks import SilentCallback
 
     # LLM 第一次返回 tool_call，第二次看到失败 Observation 后返回 final_answer
     responses = [

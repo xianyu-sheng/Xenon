@@ -75,7 +75,7 @@ B-4 验证通过
 | `TestMixedIntent::test_write_code_with_query_ambiguous` | PASSED |
 | `TestModeSwitch::test_mode_plan_execute_then_query`（观察项-4 既有问题） | **PASSED（意外）** |
 
-**所有 4 个原失败用例 + 观察项-4 用例全部通过**。`test_mode_plan_execute_then_query` 原本被任务描述标注为"仍是 PlanExecuteEngine._plan 缺失（观察项-4 既有问题）"，但实际验证发现该测试**已通过**——可能是 `5e4821a`（ui 优化 commit）或修复 agent 的工作顺带修复了 PlanExecuteEngine 的 `_plan` 方法。`PlanExecuteEngine._plan` 在 `omniagent/engine/plan_execute_engine.py:452` 存在。
+**所有 4 个原失败用例 + 观察项-4 用例全部通过**。`test_mode_plan_execute_then_query` 原本被任务描述标注为"仍是 PlanExecuteEngine._plan 缺失（观察项-4 既有问题）"，但实际验证发现该测试**已通过**——可能是 `5e4821a`（ui 优化 commit）或修复 agent 的工作顺带修复了 PlanExecuteEngine 的 `_plan` 方法。`PlanExecuteEngine._plan` 在 `xenon/engine/plan_execute_engine.py:452` 存在。
 
 ### test_repl_real_usage.py（未跟踪，不在本次验证范围）
 
@@ -101,13 +101,13 @@ df16904 fix(prompt_optimizer): chat 模板不内联指令到 user content
 
 | commit | 改动文件 | 改动行数 | 主题纯净度 |
 |--------|---------|---------|-----------|
-| `83a8ab2` | `omniagent/repl/repl.py`, `tests/test_repl.py` | 56 (+56/-8) | 纯 query 路由 |
-| `907a2cd` | `omniagent/repl/repl.py`, `tests/test_repl.py` | 28 (+28/-1) | 纯 write_code 路由 |
-| `5cd5ccc` | `omniagent/repl/repl.py`, `tests/test_repl.py` | 90 (+90/-0) | 纯空输入防护 |
-| `38dc934` | `omniagent/repl/prompt_optimizer.py`, `tests/test_repl.py` | 36 (+36/-0) | 纯 query trigger 扩展 |
-| `df16904` | `omniagent/repl/prompt_optimizer.py`, `tests/test_repl.py` | 47 (+47/-4) | 纯 chat 模板简化 |
-| `caf22d5` | `omniagent/repl/context_manager.py`, `omniagent/repl/repl.py`, `tests/test_repl.py` | 132 (+132/-23) | **ReAct 异常占位为主** + 大量 UI 文案调整（`🔄`→`·`、`[yellow]`→`[dim]` 等）。功能主线外带 UI 杂项 |
-| `7e7bb7e` | `omniagent/repl/repl.py`, `tests/test_repl.py` | 113 (+113/-6) | **file_claim/denial 占位为主** + 两处无关 UI 文案调整（`[yellow]检测到尚未配置任何 API Key[/yellow]` 改写为 `[dim]· 尚未配置...`） |
+| `83a8ab2` | `xenon/repl/repl.py`, `tests/test_repl.py` | 56 (+56/-8) | 纯 query 路由 |
+| `907a2cd` | `xenon/repl/repl.py`, `tests/test_repl.py` | 28 (+28/-1) | 纯 write_code 路由 |
+| `5cd5ccc` | `xenon/repl/repl.py`, `tests/test_repl.py` | 90 (+90/-0) | 纯空输入防护 |
+| `38dc934` | `xenon/repl/prompt_optimizer.py`, `tests/test_repl.py` | 36 (+36/-0) | 纯 query trigger 扩展 |
+| `df16904` | `xenon/repl/prompt_optimizer.py`, `tests/test_repl.py` | 47 (+47/-4) | 纯 chat 模板简化 |
+| `caf22d5` | `xenon/repl/context_manager.py`, `xenon/repl/repl.py`, `tests/test_repl.py` | 132 (+132/-23) | **ReAct 异常占位为主** + 大量 UI 文案调整（`🔄`→`·`、`[yellow]`→`[dim]` 等）。功能主线外带 UI 杂项 |
+| `7e7bb7e` | `xenon/repl/repl.py`, `tests/test_repl.py` | 113 (+113/-6) | **file_claim/denial 占位为主** + 两处无关 UI 文案调整（`[yellow]检测到尚未配置任何 API Key[/yellow]` 改写为 `[dim]· 尚未配置...`） |
 
 **commit 主题质量评估**：
 - `83a8ab2`, `907a2cd`, `5cd5ccc`, `38dc934`, `df16904`：5 个 commit 主题纯净，每 commit 只改一个 bug，diff 与 commit message 完全对齐。
@@ -153,9 +153,9 @@ df16904 fix(prompt_optimizer): chat 模板不内联指令到 user content
 
 ## 5. 关键改动文件清单
 
-- `/home/xianyu-sheng/omniagent/omniagent/repl/repl.py` — 5 个 commit 涉及（83a8ab2, 907a2cd, 5cd5ccc, caf22d5, 7e7bb7e）
-- `/home/xianyu-sheng/omniagent/omniagent/repl/prompt_optimizer.py` — 2 个 commit 涉及（38dc934, df16904）
-- `/home/xianyu-sheng/omniagent/omniagent/repl/context_manager.py` — 1 个 commit 涉及（caf22d5，新增 `trim_last_user()` 方法）
-- `/home/xianyu-sheng/omniagent/tests/test_repl.py` — 7 个 commit 全部新增测试（共 88 个）
-- `/home/xianyu-sheng/omniagent/tests/test_repl_real_tasks.py` — **未跟踪**（git status 显示），含 84 个测试，其中 1 个（test_concern_5）需要更新断言
-- `/home/xianyu-sheng/omniagent/tests/test_repl_real_usage.py` — **未跟踪**，含真实 LLM 集成测试，1 个 mock 状态问题
+- `/home/xianyu-sheng/Xenon/xenon/repl/repl.py` — 5 个 commit 涉及（83a8ab2, 907a2cd, 5cd5ccc, caf22d5, 7e7bb7e）
+- `/home/xianyu-sheng/Xenon/xenon/repl/prompt_optimizer.py` — 2 个 commit 涉及（38dc934, df16904）
+- `/home/xianyu-sheng/Xenon/xenon/repl/context_manager.py` — 1 个 commit 涉及（caf22d5，新增 `trim_last_user()` 方法）
+- `/home/xianyu-sheng/Xenon/tests/test_repl.py` — 7 个 commit 全部新增测试（共 88 个）
+- `/home/xianyu-sheng/Xenon/tests/test_repl_real_tasks.py` — **未跟踪**（git status 显示），含 84 个测试，其中 1 个（test_concern_5）需要更新断言
+- `/home/xianyu-sheng/Xenon/tests/test_repl_real_usage.py` — **未跟踪**，含真实 LLM 集成测试，1 个 mock 状态问题

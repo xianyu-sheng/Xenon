@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from omniagent.engine.trace import new_run_id, new_call_id, prefix, trace_logger
+from xenon.engine.trace import new_run_id, new_call_id, prefix, trace_logger
 
 
 # --------------------------- ID 生成 ---------------------------
@@ -55,7 +55,7 @@ def test_prefix_none_call_omits_slash():
 # --------------------------- trace_logger ---------------------------
 
 def test_trace_logger_emits_prefix(caplog):
-    caplog.set_level(logging.INFO, logger="omniagent.trace")
+    caplog.set_level(logging.INFO, logger="xenon.trace")
     tl = trace_logger("abc12345", "deadbe")
     tl.info("hello")
     assert any("[abc12345/deadbe]" in r.message for r in caplog.records)
@@ -65,12 +65,12 @@ def test_trace_logger_emits_prefix(caplog):
 # --------------------------- BaseEngine._begin_run / _call_llm ---------------------------
 
 def _make_engine():
-    from omniagent.engine.react_engine import ReActEngine
+    from xenon.engine.react_engine import ReActEngine
     return ReActEngine(["test/model"])
 
 
 def test_begin_run_sets_run_id(caplog):
-    caplog.set_level(logging.INFO, logger="omniagent.engine")
+    caplog.set_level(logging.INFO, logger="xenon.engine")
     eng = _make_engine()
     assert eng.run_id is None
     rid = eng._begin_run()
@@ -91,7 +91,7 @@ def test_begin_run_generates_different_ids_per_run():
 
 def test_call_llm_logs_carry_run_call_prefix(caplog):
     """_call_llm 内每次调用生成 call_id，失败日志带 [run_id/call_id] 前缀。"""
-    import omniagent.engine.base as base_mod
+    import xenon.engine.base as base_mod
 
     eng = _make_engine()
     eng._begin_run()
@@ -103,7 +103,7 @@ def test_call_llm_logs_carry_run_call_prefix(caplog):
     orig = base_mod.chat_completion
     base_mod.chat_completion = boom
     try:
-        caplog.set_level(logging.DEBUG, logger="omniagent.engine.base")
+        caplog.set_level(logging.DEBUG, logger="xenon.engine.base")
         try:
             eng._call_llm([{"role": "user", "content": "hi"}])
             assert False, "应抛 RuntimeError"
@@ -114,7 +114,7 @@ def test_call_llm_logs_carry_run_call_prefix(caplog):
 
     # 所有 _call_llm 日志都带同一 [run_id/...] 前缀
     engine_logs = [r.message for r in caplog.records
-                   if r.name == "omniagent.engine.base"]
+                   if r.name == "xenon.engine.base"]
     prefixed = [m for m in engine_logs if f"[{rid}/" in m]
     assert prefixed, f"未找到带 [{rid}/call_id] 前缀的日志: {engine_logs}"
     # 失败日志内容存在
@@ -123,7 +123,7 @@ def test_call_llm_logs_carry_run_call_prefix(caplog):
 
 def test_react_run_sets_run_id():
     """ReAct run() 开头调 _begin_run，run_id 在 run 内非 None。"""
-    from omniagent.engine.react_engine import ReActEngine
+    from xenon.engine.react_engine import ReActEngine
     eng = ReActEngine(["m1"])
 
     seen_run_id = {}
@@ -141,7 +141,7 @@ def test_react_run_sets_run_id():
 
 def test_call_llm_call_id_differs_across_calls(caplog):
     """两次 _call_llm 调用生成不同 call_id（前缀中的 call_id 段不同）。"""
-    import omniagent.engine.base as base_mod
+    import xenon.engine.base as base_mod
 
     eng = _make_engine()
     eng._begin_run()
@@ -154,7 +154,7 @@ def test_call_llm_call_id_differs_across_calls(caplog):
     base_mod.chat_completion = boom
     call_ids = []
     try:
-        caplog.set_level(logging.DEBUG, logger="omniagent.engine.base")
+        caplog.set_level(logging.DEBUG, logger="xenon.engine.base")
         for _ in range(2):
             try:
                 eng._call_llm([{"role": "user", "content": "hi"}])
@@ -165,7 +165,7 @@ def test_call_llm_call_id_differs_across_calls(caplog):
 
     import re
     for r in caplog.records:
-        if r.name == "omniagent.engine.base" and f"[{rid}/" in r.message:
+        if r.name == "xenon.engine.base" and f"[{rid}/" in r.message:
             m = re.search(rf"\[{rid}/([0-9a-f]{{6}})\]", r.message)
             if m:
                 call_ids.append(m.group(1))

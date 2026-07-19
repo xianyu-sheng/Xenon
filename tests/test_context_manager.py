@@ -1,5 +1,5 @@
 """Tests for ContextManager — 对话历史与压缩。"""
-from omniagent.repl.context_manager import ContextManager
+from xenon.repl.context_manager import ContextManager
 
 
 # ── B5: compact 空压缩 short-circuit ──────────────────────

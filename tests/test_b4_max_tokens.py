@@ -1,7 +1,7 @@
 """B4 验收：去除 max_tokens=131072 硬编码 + chat_completion 按厂商上限钳制。"""
 from types import SimpleNamespace
 
-import omniagent.utils.llm_client as lc
+import xenon.utils.llm_client as lc
 
 
 class TestChatCompletionClampsMaxTokens:
@@ -50,8 +50,8 @@ class TestChatCompletionClampsMaxTokens:
 
 class TestEngineReadsModelConfigMaxTokens:
     def test_react_reads_model_config(self, monkeypatch):
-        import omniagent.engine.base as re_mod
-        from omniagent.engine.react_engine import ReActEngine
+        import xenon.engine.base as re_mod
+        from xenon.engine.react_engine import ReActEngine
 
         mc = SimpleNamespace(max_tokens=2048)
         engine = ReActEngine(["openai/gpt-4o"], model_configs={"openai/gpt-4o": mc})
@@ -66,8 +66,8 @@ class TestEngineReadsModelConfigMaxTokens:
         assert captured["mt"] == 2048  # 来自 ModelConfig，而非 131072
 
     def test_react_falls_back_to_8192_without_config(self, monkeypatch):
-        import omniagent.engine.base as re_mod
-        from omniagent.engine.react_engine import ReActEngine
+        import xenon.engine.base as re_mod
+        from xenon.engine.react_engine import ReActEngine
 
         engine = ReActEngine(["openai/gpt-4o"])  # 无 model_configs
         captured = {}
@@ -81,8 +81,8 @@ class TestEngineReadsModelConfigMaxTokens:
         assert captured["mt"] == 8192  # 安全默认，而非 131072
 
     def test_explicit_max_tokens_takes_priority(self, monkeypatch):
-        import omniagent.engine.base as re_mod
-        from omniagent.engine.react_engine import ReActEngine
+        import xenon.engine.base as re_mod
+        from xenon.engine.react_engine import ReActEngine
 
         mc = SimpleNamespace(max_tokens=2048)
         engine = ReActEngine(["openai/gpt-4o"], model_configs={"openai/gpt-4o": mc})

@@ -5,8 +5,8 @@ import pytest
 
 # 在 conftest 加载时（最早时刻，mock 还没发生）保存 chat_completion 的真实原始引用。
 # 后续无论哪个测试怎么 mock，autouse fixture 都能恢复到这个 orig。
-import omniagent.engine.base as _engine_base
-import omniagent.utils.llm_client as _llm_client
+import xenon.engine.base as _engine_base
+import xenon.utils.llm_client as _llm_client
 _ORIG_ENGINE_CHAT = _engine_base.chat_completion
 _ORIG_UTIL_CHAT = _llm_client.chat_completion
 _ORIG_UTIL_STREAM = _llm_client.chat_completion_stream
@@ -19,7 +19,7 @@ def _disable_security_for_tests():
     Tests use temp directories and non-existent paths that are outside
     the project directory, which would trigger path validation errors.
     """
-    from omniagent.nodes.tool_node import ToolNode
+    from xenon.nodes.tool_node import ToolNode
 
     original = ToolNode._validate_path
 
@@ -42,10 +42,10 @@ def _disable_security_for_tests():
 def _auto_confirm_destructive(monkeypatch):
     """P3-Q8：测试中破坏性操作的 Confirm.ask 自动确认，避免阻塞 stdin。
 
-    需要测试"取消"路径时，在用例内 ``monkeypatch.delenv("OMNIAGENT_ASSUME_YES")``
+    需要测试"取消"路径时，在用例内 ``monkeypatch.delenv("XENON_ASSUME_YES")``
     并 patch ``_confirm`` 即可。
     """
-    monkeypatch.setenv("OMNIAGENT_ASSUME_YES", "1")
+    monkeypatch.setenv("XENON_ASSUME_YES", "1")
     yield
 
 

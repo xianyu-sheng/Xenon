@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 from unittest.mock import patch, MagicMock
-from omniagent.repl.provider_registry import (
+from xenon.repl.provider_registry import (
     register_custom_provider,
     remove_custom_provider,
     _load_custom_providers,
@@ -20,10 +20,10 @@ class TestCustomProviderRegistration:
     def test_register_custom_provider_generates_key(self, tmp_path, monkeypatch):
         """注册自定义模型商自动生成 key."""
         monkeypatch.setattr(
-            "omniagent.repl.provider_registry.CREDENTIALS_PATH",
+            "xenon.repl.provider_registry.CREDENTIALS_PATH",
             tmp_path / "creds.yaml",
         )
-        with patch("omniagent.repl.provider_registry.fetch_provider_models",
+        with patch("xenon.repl.provider_registry.fetch_provider_models",
                    return_value=["model-a", "model-b"]):
             info = register_custom_provider(
                 "字节豆包", "https://ark.example.com/api/v3", "sk-test"
@@ -35,10 +35,10 @@ class TestCustomProviderRegistration:
     def test_custom_provider_persisted_to_yaml(self, tmp_path, monkeypatch):
         """自定义模型商持久化到 credentials.yaml."""
         monkeypatch.setattr(
-            "omniagent.repl.provider_registry.CREDENTIALS_PATH",
+            "xenon.repl.provider_registry.CREDENTIALS_PATH",
             tmp_path / "creds.yaml",
         )
-        with patch("omniagent.repl.provider_registry.fetch_provider_models",
+        with patch("xenon.repl.provider_registry.fetch_provider_models",
                    return_value=["m1"]):
             register_custom_provider("Test", "https://test.api/v1", "sk-abc")
 
@@ -51,10 +51,10 @@ class TestCustomProviderRegistration:
     def test_remove_custom_provider(self, tmp_path, monkeypatch):
         """删除自定义模型商."""
         monkeypatch.setattr(
-            "omniagent.repl.provider_registry.CREDENTIALS_PATH",
+            "xenon.repl.provider_registry.CREDENTIALS_PATH",
             tmp_path / "creds.yaml",
         )
-        with patch("omniagent.repl.provider_registry.fetch_provider_models",
+        with patch("xenon.repl.provider_registry.fetch_provider_models",
                    return_value=["m1"]):
             info = register_custom_provider("X", "https://x/v1", "sk")
 
@@ -64,7 +64,7 @@ class TestCustomProviderRegistration:
     def test_empty_custom_providers_returns_empty_dict(self, tmp_path, monkeypatch):
         """无自定义模型商时返回空 dict."""
         monkeypatch.setattr(
-            "omniagent.repl.provider_registry.CREDENTIALS_PATH",
+            "xenon.repl.provider_registry.CREDENTIALS_PATH",
             tmp_path / "nonexistent.yaml",
         )
         assert _load_custom_providers() == {}

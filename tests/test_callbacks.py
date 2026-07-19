@@ -4,7 +4,7 @@ Engine Callback 测试。
 
 from __future__ import annotations
 
-from omniagent.engine.callbacks import ConsoleCallback, EngineCallback, SilentCallback
+from xenon.engine.callbacks import ConsoleCallback, EngineCallback, SilentCallback
 
 
 class TestSilentCallback:

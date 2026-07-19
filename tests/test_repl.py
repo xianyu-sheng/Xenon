@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from omniagent.repl.context_manager import ContextManager
-from omniagent.repl.model_registry import ModelRegistry, BUILTIN_MODES
+from xenon.repl.context_manager import ContextManager
+from xenon.repl.model_registry import ModelRegistry, BUILTIN_MODES
 
 
 # ── Mock 辅助函数 ──────────────────────────────────────────
@@ -279,7 +279,7 @@ class TestModelRegistry:
 
 class TestProviderRegistry:
     def test_get_configured_providers_refreshes_openai_models(self, monkeypatch):
-        import omniagent.repl.provider_registry as provider_registry
+        import xenon.repl.provider_registry as provider_registry
 
         # C-2: 清掉所有可能的 env 干扰，确保只测 yaml 路径
         for env_name in (
@@ -326,7 +326,7 @@ class TestProviderRegistry:
         assert calls[0][1]["Authorization"] == "Bearer sk-test"
 
     def test_get_configured_providers_refreshes_deepseek_models(self, monkeypatch):
-        import omniagent.repl.provider_registry as provider_registry
+        import xenon.repl.provider_registry as provider_registry
 
         # C-2: 清掉所有可能的 env 干扰
         for env_name in (
@@ -363,7 +363,7 @@ class TestProviderRegistry:
         assert calls[0][1]["Authorization"] == "Bearer sk-test"
 
     def test_refresh_failure_does_not_show_stale_builtin_models(self, monkeypatch):
-        import omniagent.repl.provider_registry as provider_registry
+        import xenon.repl.provider_registry as provider_registry
 
         # C-2: 清掉所有可能的 env 干扰
         for env_name in (
@@ -387,7 +387,7 @@ class TestProviderRegistry:
         assert openai.models == []
 
     def test_fetch_provider_models_uses_anthropic_headers_and_pagination(self, monkeypatch):
-        import omniagent.repl.provider_registry as provider_registry
+        import xenon.repl.provider_registry as provider_registry
 
         class FakeResponse:
             def __init__(self, payload):
@@ -443,7 +443,7 @@ class TestProviderRegistry:
 
 class TestCommands:
     def test_help_command(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
@@ -452,7 +452,7 @@ class TestCommands:
         assert "/set_model" in result
 
     def test_set_model_command(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
@@ -464,7 +464,7 @@ class TestCommands:
         assert "gpt4" in reg.models
 
     def test_set_model_no_args_shows_providers(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
@@ -477,9 +477,9 @@ class TestCommands:
         assert isinstance(result, str)
 
     def test_set_model_no_live_models_returns_clear_error(self, monkeypatch):
-        from omniagent.repl.commands import dispatch_command
-        import omniagent.repl.provider_registry as provider_registry
-        from omniagent.repl.provider_registry import ProviderInfo
+        from xenon.repl.commands import dispatch_command
+        import xenon.repl.provider_registry as provider_registry
+        from xenon.repl.provider_registry import ProviderInfo
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
@@ -498,7 +498,7 @@ class TestCommands:
         assert "未能实时获取任何模型" in result
 
     def test_models_command_empty(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
@@ -506,7 +506,7 @@ class TestCommands:
         assert "暂无" in result
 
     def test_models_command_with_models(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         reg.add_model("openai/gpt-4o", "gpt4")
@@ -515,7 +515,7 @@ class TestCommands:
         assert "gpt4" in result
 
     def test_mode_command(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
@@ -523,7 +523,7 @@ class TestCommands:
         assert "plan-execute" in result
 
     def test_mode_switch(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
@@ -535,7 +535,7 @@ class TestCommands:
         assert reg.current_mode == "react"
 
     def test_context_command(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
@@ -544,7 +544,7 @@ class TestCommands:
         assert "消息总数" in result
 
     def test_compact_command(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
@@ -553,7 +553,7 @@ class TestCommands:
         assert "✅" in result
 
     def test_undo_command(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
@@ -563,7 +563,7 @@ class TestCommands:
         assert "✅" in result
 
     def test_undo_command_empty(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
@@ -571,7 +571,7 @@ class TestCommands:
         assert "没有" in result
 
     def test_clear_command(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
@@ -581,7 +581,7 @@ class TestCommands:
         assert len(ctx_mgr.history) == 0
 
     def test_unknown_command(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
@@ -589,7 +589,7 @@ class TestCommands:
         assert "未知命令" in result
 
     def test_set_role_command(self):
-        from omniagent.repl.commands import dispatch_command
+        from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         reg.add_model("openai/gpt-4o", "gpt4")
@@ -608,79 +608,79 @@ class TestToolDetection:
     """测试 direct 模式自动工具委派检测。"""
 
     def test_file_write_chinese(self):
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         assert REPL._detect_tool_need("帮我创建一个 hello.py 文件") is True
         assert REPL._detect_tool_need("写入文件到 config.yaml") is True
         assert REPL._detect_tool_need("保存这个文件") is True
         assert REPL._detect_tool_need("生成一个 README.md 文件") is True
 
     def test_file_write_english(self):
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         assert REPL._detect_tool_need("write a file to hello.py") is True
         assert REPL._detect_tool_need("create a new config file") is True
         assert REPL._detect_tool_need("save this to disk") is True
 
     def test_file_read_chinese(self):
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         assert REPL._detect_tool_need("读取 config.yaml 文件") is True
         assert REPL._detect_tool_need("查看 main.py 的内容") is True
         assert REPL._detect_tool_need("打开这个文件看看") is True
 
     def test_file_read_english(self):
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         assert REPL._detect_tool_need("read the config file") is True
         assert REPL._detect_tool_need("show me the content of main.py") is True
 
     def test_file_edit_chinese(self):
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         assert REPL._detect_tool_need("修改 main.py 文件中的函数") is True
         assert REPL._detect_tool_need("编辑 config.yaml 的配置") is True
         assert REPL._detect_tool_need("替换文件中的 TODO") is True
 
     def test_file_edit_english(self):
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         assert REPL._detect_tool_need("edit the main.py file") is True
         assert REPL._detect_tool_need("modify the config.yaml") is True
 
     def test_command_execution(self):
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         assert REPL._detect_tool_need("执行命令 python main.py") is True
         assert REPL._detect_tool_need("运行 pytest 测试") is True
         assert REPL._detect_tool_need("run the test suite") is True
 
     def test_git_operations(self):
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         assert REPL._detect_tool_need("git commit -m 'fix'") is True
         assert REPL._detect_tool_need("git push origin main") is True
         assert REPL._detect_tool_need("提交代码到 git") is True
         assert REPL._detect_tool_need("推送代码到远程仓库") is True
 
     def test_search(self):
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         assert REPL._detect_tool_need("搜索文件中的 TODO") is True
         assert REPL._detect_tool_need("find all Python files") is True
         assert REPL._detect_tool_need("grep for error messages") is True
 
     def test_web_fetch(self):
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         assert REPL._detect_tool_need("抓取这个网页的内容") is True
         assert REPL._detect_tool_need("fetch the page at https://example.com") is True
 
     def test_file_path_pattern(self):
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         assert REPL._detect_tool_need("看看 src/main.py 怎么写的") is True
         assert REPL._detect_tool_need("打开 ./config.yaml") is True
         assert REPL._detect_tool_need("检查 tests/test_tools.py") is True
         assert REPL._detect_tool_need("看 C:\\Users\\test\\main.py") is True
 
     def test_list_files(self):
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         assert REPL._detect_tool_need("列出当前目录的文件") is True
         assert REPL._detect_tool_need("查看文件夹内容") is True
         assert REPL._detect_tool_need("list all files") is True
 
     def test_no_tool_needed(self):
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         assert REPL._detect_tool_need("什么是快速排序？") is False
         assert REPL._detect_tool_need("解释一下 Python 的装饰器") is False
         assert REPL._detect_tool_need("帮我分析这段代码的逻辑") is False
@@ -695,8 +695,8 @@ class TestToolDetection:
         实时数据"指令，LLM 无工具可调时只给前言式回复（"我来帮你查询…"）。故 query
         意图直接判 True，绕过 direct 走 ReAct。
         """
-        from omniagent.repl.repl import REPL
-        from omniagent.repl.prompt_optimizer import detect_intent
+        from xenon.repl.repl import REPL
+        from xenon.repl.prompt_optimizer import detect_intent
 
         # 这些输入应被识别为 query 意图，且需要工具
         cases = [
@@ -711,7 +711,7 @@ class TestToolDetection:
 
     def test_non_query_intent_not_auto_triggered(self):
         """非 query 意图（chat/explain）且无编程/文件/命令关键词时不触发工具。"""
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         # chat 意图 + 无工具关键词 → False
         assert REPL._detect_tool_need("你好", intent="chat") is False
         assert REPL._detect_tool_need("谢谢", intent="chat") is False
@@ -734,8 +734,8 @@ class TestToolDetection:
         "用 Y 写一个 Z" 等自然语序，导致 detect_intent 已识别为 write_code，
         但 _detect_tool_need 返回 False 走 direct LLM，LLM 凭空"写"代码。
         """
-        from omniagent.repl.repl import REPL
-        from omniagent.repl.prompt_optimizer import detect_intent
+        from xenon.repl.repl import REPL
+        from xenon.repl.prompt_optimizer import detect_intent
 
         # 确认意图识别是 write_code
         assert detect_intent(text) == "write_code", f"意图识别失败: {text}"
@@ -756,8 +756,8 @@ class TestHandleChatEmptyInput:
     """
 
     def _build_repl(self):
-        from omniagent.repl.repl import REPL
-        from omniagent.repl.model_registry import ModelRegistry
+        from xenon.repl.repl import REPL
+        from xenon.repl.model_registry import ModelRegistry
 
         reg = ModelRegistry()
         reg.add_model("openai/gpt-4o", "gpt4")
@@ -766,8 +766,8 @@ class TestHandleChatEmptyInput:
 
     def test_empty_string_does_not_call_llm_or_pollute_history(self, monkeypatch):
         """_handle_chat("") → 立即 return，不调 LLM，history 不变。"""
-        import omniagent.engine.base as engine_base
-        import omniagent.utils.llm_client as llm_client
+        import xenon.engine.base as engine_base
+        import xenon.utils.llm_client as llm_client
 
         llm_called: list[bool] = []
 
@@ -799,8 +799,8 @@ class TestHandleChatEmptyInput:
 
     def test_pure_spaces_does_not_call_llm_or_pollute_history(self, monkeypatch):
         """_handle_chat("   ") → 立即 return（strip 后为空），同上行为。"""
-        import omniagent.engine.base as engine_base
-        import omniagent.utils.llm_client as llm_client
+        import xenon.engine.base as engine_base
+        import xenon.utils.llm_client as llm_client
 
         llm_called: list[bool] = []
 
@@ -853,7 +853,7 @@ class TestDetectIntentConditionalQuery:
     ])
     def test_conditional_or_realtime_weather_detected_as_query(self, text):
         """条件句 / 实时天气关键词输入应识别为 query 意图。"""
-        from omniagent.repl.prompt_optimizer import detect_intent
+        from xenon.repl.prompt_optimizer import detect_intent
 
         assert detect_intent(text) == "query", (
             f"条件句/实时天气应识别为 query，实际未识别: {text}"
@@ -879,7 +879,7 @@ class TestChatTemplateNoPollution:
     ])
     def test_chat_intent_optimize_returns_original_text(self, text):
         """optimize_prompt 对 chat 类输入应返回原文本，不追加指令。"""
-        from omniagent.repl.prompt_optimizer import optimize_prompt
+        from xenon.repl.prompt_optimizer import optimize_prompt
 
         optimized, system_hint, was_optimized = optimize_prompt(text)
         # 核心断言：优化后文本与原文本完全一致（不追加任何指令）
@@ -894,7 +894,7 @@ class TestChatTemplateNoPollution:
 
     def test_chat_template_does_not_inline_directive(self):
         """防御性测试：模板字符串本身不应包含内联指令文本。"""
-        from omniagent.repl.prompt_optimizer import TEMPLATES
+        from xenon.repl.prompt_optimizer import TEMPLATES
 
         chat_tmpl = next(t for t in TEMPLATES if t.intent == "chat")
         # 模板不应内联问候/闲聊指令
@@ -914,8 +914,8 @@ class TestReactExceptionAssistantPlaceholder:
     """
 
     def _build_repl(self):
-        from omniagent.repl.repl import REPL
-        from omniagent.repl.model_registry import ModelRegistry
+        from xenon.repl.repl import REPL
+        from xenon.repl.model_registry import ModelRegistry
 
         reg = ModelRegistry()
         reg.add_model("openai/gpt-4o", "gpt4")
@@ -925,7 +925,7 @@ class TestReactExceptionAssistantPlaceholder:
     def test_react_exception_adds_error_assistant(self, monkeypatch):
         """Mock ReActEngine.run 抛异常 → ctx_mgr 应有 user + [错误] assistant。"""
         # Mock ReActEngine 让其抛 RuntimeError
-        from omniagent.engine import react_engine as react_engine_mod
+        from xenon.engine import react_engine as react_engine_mod
 
         class FakeReactEngine:
             def __init__(self, *args, **kwargs):
@@ -957,7 +957,7 @@ class TestReactExceptionAssistantPlaceholder:
 
     def test_react_exception_falls_back_to_trim_user(self, monkeypatch):
         """add_assistant_message 失败时回退到 trim_last_user，history 仍清空。"""
-        from omniagent.engine import react_engine as react_engine_mod
+        from xenon.engine import react_engine as react_engine_mod
 
         class FakeReactEngine:
             def __init__(self, *args, **kwargs):
@@ -1000,8 +1000,8 @@ class TestFileClaimDenialRecursiveReact:
 
     def _build_repl_with_history(self, monkeypatch):
         """构造 REPL，预设 history 含 user + 占位 assistant（模拟 _run_direct 已 add user）。"""
-        from omniagent.repl.repl import REPL
-        from omniagent.repl.model_registry import ModelRegistry
+        from xenon.repl.repl import REPL
+        from xenon.repl.model_registry import ModelRegistry
 
         reg = ModelRegistry()
         reg.add_model("openai/gpt-4o", "gpt4")
@@ -1046,7 +1046,7 @@ class TestFileClaimDenialRecursiveReact:
 
     def test_file_claim_react_engine_with_internal_placeholder(self, monkeypatch):
         """实际场景：_run_react_engine 自身 catch（修复5），无需触发外层 try。"""
-        from omniagent.engine import react_engine as react_engine_mod
+        from xenon.engine import react_engine as react_engine_mod
 
         class FakeReactEngine:
             def __init__(self, *args, **kwargs):
@@ -1085,7 +1085,7 @@ class TestReadInputUnixPasteMode:
         流程：写入 bracketed paste start + content + paste end + \\r，
         然后从 _read_input_unix 的 select 循环中读输入。
         """
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
         import termios, sys
 
         # 模拟完整粘贴序列（含 \r 提交）

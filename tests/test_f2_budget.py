@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from omniagent.engine.budget import (
+from xenon.engine.budget import (
     CONVERGE_BLOCKED_TOOLS,
     BudgetManager,
     BudgetPhase,

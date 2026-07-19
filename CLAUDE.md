@@ -1,4 +1,4 @@
-# CLAUDE.md — OmniAgent 项目规范
+# CLAUDE.md — Xenon 项目规范
 
 ## Bug 修复原则
 
@@ -75,14 +75,14 @@ ReactReflection / Novel）在创建后都应调用 `_inject_mcp_tools_into_engin
 
 ## 项目结构
 
-- `omniagent/engine/` — 引擎层（ReAct/PlanExecute/Reflection 等）
-- `omniagent/nodes/` — 节点层（ToolNode, ToolExecutor）
-- `omniagent/repl/` — REPL 层（命令、模型池、路由、会话）
-- `omniagent/mcp/` — MCP 子系统（transport, client, registry）
+- `xenon/engine/` — 引擎层（ReAct/PlanExecute/Reflection 等）
+- `xenon/nodes/` — 节点层（ToolNode, ToolExecutor）
+- `xenon/repl/` — REPL 层（命令、模型池、路由、会话）
+- `xenon/mcp/` — MCP 子系统（transport, client, registry）
 
 ### 修复后必须真实验证
 
-**每次自认为修好 bug 后，必须真正启动 omniagent 复现原问题场景，
+**每次自认为修好 bug 后，必须真正启动 xenon 复现原问题场景，
 确认修复生效，并跑同类型的其他任务验证无回归。**
 
 **方法**：
@@ -95,7 +95,7 @@ ReactReflection / Novel）在创建后都应调用 `_inject_mcp_tools_into_engin
 - 单元测试 1110 全绿 ≠ 真实场景可用
 
 **正例**（期望）：
-- 改完 MCP 输出 bug → 启动 omniagent → `/mcp add 12306` →
+- 改完 MCP 输出 bug → 启动 xenon → `/mcp add 12306` →
   "查昆山到上海高铁" → 确认 LLM 收到完整车次数据
 
 ## 版本与发布
@@ -108,9 +108,9 @@ ReactReflection / Novel）在创建后都应调用 `_inject_mcp_tools_into_engin
 ### 每次修改后自动安装
 
 **每次 `git commit` Python 代码后，post-commit hook 自动执行
-`pip install -e . --break-system-packages`，确保 `omniagent` 命令
+`pip install -e . --break-system-packages`，确保 `xenon` 命令
 始终指向最新代码。**
 
 - Hook 位置: `.git/hooks/post-commit`
-- 触发条件: 仅当 `omniagent/` 下有 `.py` 文件变更
+- 触发条件: 仅当 `xenon/` 下有 `.py` 文件变更
 - 手动安装: `pip install -e . --break-system-packages`

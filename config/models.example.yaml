@@ -1,8 +1,8 @@
-# OmniAgent 统一模型配置示例
+# Xenon 统一模型配置示例
 # 用法:
 #   REPL:   /import_models /path/to/models.yaml
-#   CLI:    omniagent models import -f /path/to/models.yaml
-#   启动:   omniagent --config /path/to/models.yaml   (P0 已打通:直接进 ModelPool)
+#   CLI:    xenon models import -f /path/to/models.yaml
+#   启动:   xenon --config /path/to/models.yaml   (P0 已打通:直接进 ModelPool)
 #
 # 一个文件同时覆盖:模型列表 + 角色优先级 + 性能 profile。
 # 注册后 AutoRouter 的池立即生效,无需重启。

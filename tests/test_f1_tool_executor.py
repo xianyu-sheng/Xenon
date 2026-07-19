@@ -1,9 +1,9 @@
 """F1 验收：ToolExecutor 7 阶段门面 + 参数幻觉校验 + 断路器 + 重试 + 结果封装。"""
-from omniagent.engine.circuit_breaker import BreakerRegistry, CircuitBreaker
-from omniagent.engine.context import AgentContext
-from omniagent.engine.tool_tracker import ToolExecutionTracker
-from omniagent.nodes import tool_executor as te_mod
-from omniagent.nodes.tool_executor import (
+from xenon.engine.circuit_breaker import BreakerRegistry, CircuitBreaker
+from xenon.engine.context import AgentContext
+from xenon.engine.tool_tracker import ToolExecutionTracker
+from xenon.nodes import tool_executor as te_mod
+from xenon.nodes.tool_executor import (
     ToolExecuteResult,
     ToolExecutor,
     classify_tool,

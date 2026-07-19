@@ -1,4 +1,4 @@
-# OmniAgent-CLI 代码执行工作流
+# Xenon 代码执行工作流
 # 完整闭环: 生成代码 → 写入文件 → 运行测试 → 根据结果修复
 
 version: "1.1"
@@ -82,7 +82,7 @@ nodes:
   - id: "execute_write"
     type: "tool"
     action_type: "write_file"
-    file_path: "{work_dir}/.omniagent_temp_write.py"
+    file_path: "{work_dir}/.xenon_temp_write.py"
     content: |
       import os
       import sys

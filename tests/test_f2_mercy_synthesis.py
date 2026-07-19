@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from omniagent.engine.budget import BudgetManager
-from omniagent.engine.context import AgentContext
-from omniagent.engine.react_engine import ReActEngine
-from omniagent.engine.tool_tracker import ToolExecutionTracker
+from xenon.engine.budget import BudgetManager
+from xenon.engine.context import AgentContext
+from xenon.engine.react_engine import ReActEngine
+from xenon.engine.tool_tracker import ToolExecutionTracker
 
 
 # ── 测试辅助 ────────────────────────────────────────────────

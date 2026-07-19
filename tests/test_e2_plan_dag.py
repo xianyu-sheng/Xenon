@@ -19,11 +19,11 @@ from typing import Any
 
 import pytest
 
-from omniagent.engine.context import AgentContext
-from omniagent.engine.plan_dag import PlanDAG, PlanDAGCycleError
-from omniagent.engine.plan_execute_engine import PlanExecuteEngine
-from omniagent.engine.tool_tracker import ToolExecutionTracker
-from omniagent.utils.response_adapter import parse_plan
+from xenon.engine.context import AgentContext
+from xenon.engine.plan_dag import PlanDAG, PlanDAGCycleError
+from xenon.engine.plan_execute_engine import PlanExecuteEngine
+from xenon.engine.tool_tracker import ToolExecutionTracker
+from xenon.utils.response_adapter import parse_plan
 
 
 # ── PlanDAG 单元 ────────────────────────────────────────────

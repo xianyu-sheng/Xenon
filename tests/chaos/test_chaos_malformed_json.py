@@ -1,6 +1,6 @@
 """Chaos Test 2: LLM 返回 malformed JSON。
 
-目标：验证 ``omniagent.utils.response_adapter.parse_react`` 在 LLM 返回
+目标：验证 ``xenon.utils.response_adapter.parse_react`` 在 LLM 返回
 broken JSON 时的行为。ReAct 引擎依赖 ``parse_react`` 解析 LLM 输出；
 若解析失败，应回退到 thought / final_answer 字段而非抛异常。
 """
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from omniagent.utils.response_adapter import parse_react, _extract_json, _repair_json
+from xenon.utils.response_adapter import parse_react, _extract_json, _repair_json
 
 
 class TestRepairJson:

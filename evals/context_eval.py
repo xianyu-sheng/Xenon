@@ -9,9 +9,9 @@ import json, sys, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from omniagent.repl.context_manager import ContextManager, ConversationTurn
-from omniagent.repl.context_strategies import TieredStrategySelector, SpaceBudget
-from omniagent.utils.llm_client import chat_completion
+from xenon.repl.context_manager import ContextManager, ConversationTurn
+from xenon.repl.context_strategies import TieredStrategySelector, SpaceBudget
+from xenon.utils.llm_client import chat_completion
 
 
 def make_fill(char: str, tokens_target: int) -> str:
@@ -132,7 +132,7 @@ def verify(cm: ContextManager, queries: list[dict], model_id: str) -> list[dict]
 
 def main(model_id="deepseek/deepseek-v4-pro"):
     print("=" * 60)
-    print("OmniAgent v0.5.0 上下文压缩实效评测")
+    print("Xenon v0.5.0 上下文压缩实效评测")
     print("=" * 60)
     print(f"模型: {model_id}\n")
 
@@ -273,6 +273,6 @@ def main(model_id="deepseek/deepseek-v4-pro"):
 if __name__ == "__main__":
     model = sys.argv[1] if len(sys.argv) > 1 else "deepseek/deepseek-v4-pro"
     report = main(model)
-    Path("/tmp/omniagent_context_eval.json").write_text(
+    Path("/tmp/xenon_context_eval.json").write_text(
         json.dumps(report, indent=2, ensure_ascii=False, default=str))
-    print(f"\n报告: /tmp/omniagent_context_eval.json")
+    print(f"\n报告: /tmp/xenon_context_eval.json")

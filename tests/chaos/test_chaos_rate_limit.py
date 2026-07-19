@@ -1,6 +1,6 @@
 """Chaos Test 3: LLM 返回 429 限速。
 
-目标：验证 omniagent 的两层重试机制：
+目标：验证 xenon 的两层重试机制：
 1. ``chat_completion`` 内层对单次 429 指数退避重试（1s, 2s, 4s）；
 2. ``BaseEngine._call_llm`` 在多模型间 fallback 切换。
 
@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-import omniagent.utils.llm_client as llm_client
+import xenon.utils.llm_client as llm_client
 
 def _make_429_response() -> MagicMock:
     resp = MagicMock(spec=httpx.Response)

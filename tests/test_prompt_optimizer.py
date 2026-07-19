@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from omniagent.repl.prompt_optimizer import (
+from xenon.repl.prompt_optimizer import (
     detect_intent,
     optimize_prompt,
     assess_quality,
@@ -178,7 +178,7 @@ class TestGetIntentDisplay:
         assert "通用对话" in get_intent_display("unknown")
 
     def test_all_templates_have_display(self):
-        from omniagent.repl.prompt_optimizer import TEMPLATES
+        from xenon.repl.prompt_optimizer import TEMPLATES
         for tmpl in TEMPLATES:
             display = get_intent_display(tmpl.intent)
             assert display != tmpl.intent  # 不应该返回原始 intent

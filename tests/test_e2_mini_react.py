@@ -23,9 +23,9 @@ from typing import Any
 
 import pytest
 
-from omniagent.engine.context import AgentContext
-from omniagent.engine.plan_execute_engine import PlanExecuteEngine
-from omniagent.engine.tool_tracker import ToolExecutionTracker
+from xenon.engine.context import AgentContext
+from xenon.engine.plan_execute_engine import PlanExecuteEngine
+from xenon.engine.tool_tracker import ToolExecutionTracker
 
 
 def _eng(max_mini_react_rounds: int = 3) -> PlanExecuteEngine:
@@ -163,7 +163,7 @@ class TestFileClaimsStillVerified:
 class TestRunIntegration:
     def test_no_tool_step_uses_mini_react(self):
         """run() 中无工具步骤走迷你 ReAct，步骤结果为 final_answer。"""
-        from omniagent.engine.callbacks import EngineCallback
+        from xenon.engine.callbacks import EngineCallback
 
         plan = {"analysis": "单步分析", "steps": [
             {"id": 1, "task": "分析需求并总结", "tool": None, "params": {}, "depends_on": []},

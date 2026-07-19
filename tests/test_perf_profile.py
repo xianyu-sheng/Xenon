@@ -11,8 +11,8 @@
 import httpx
 import pytest
 
-from omniagent.repl.model_pool import ModelPool
-from omniagent.repl.difficulty_estimator import TaskProfile
+from xenon.repl.model_pool import ModelPool
+from xenon.repl.difficulty_estimator import TaskProfile
 
 
 def _http_error(status: int, headers=None) -> httpx.HTTPStatusError:
@@ -139,45 +139,45 @@ class TestAcquireRelease:
 
 class TestTransientError:
     def test_429_transient(self):
-        from omniagent.engine.plan_execute_engine import PlanExecuteEngine
+        from xenon.engine.plan_execute_engine import PlanExecuteEngine
         assert PlanExecuteEngine._is_transient_error(_http_error(429)) is True
 
     def test_503_transient(self):
-        from omniagent.engine.plan_execute_engine import PlanExecuteEngine
+        from xenon.engine.plan_execute_engine import PlanExecuteEngine
         assert PlanExecuteEngine._is_transient_error(_http_error(503)) is True
 
     def test_400_not_transient(self):
-        from omniagent.engine.plan_execute_engine import PlanExecuteEngine
+        from xenon.engine.plan_execute_engine import PlanExecuteEngine
         assert PlanExecuteEngine._is_transient_error(_http_error(400)) is False
 
     def test_network_error_transient(self):
-        from omniagent.engine.plan_execute_engine import PlanExecuteEngine
+        from xenon.engine.plan_execute_engine import PlanExecuteEngine
         req = httpx.Request("POST", "http://x")
         assert PlanExecuteEngine._is_transient_error(
             httpx.ConnectError("boom", request=req)) is True
 
     def test_none_not_transient(self):
-        from omniagent.engine.plan_execute_engine import PlanExecuteEngine
+        from xenon.engine.plan_execute_engine import PlanExecuteEngine
         assert PlanExecuteEngine._is_transient_error(None) is False
 
 
 class TestExtractRetryAfter:
     def test_header_value(self):
-        from omniagent.engine.plan_execute_engine import PlanExecuteEngine
+        from xenon.engine.plan_execute_engine import PlanExecuteEngine
         err = _http_error(429, headers={"retry-after": "5"})
         assert PlanExecuteEngine._extract_retry_after(err, default=2.0) == 5.0
 
     def test_default_when_absent(self):
-        from omniagent.engine.plan_execute_engine import PlanExecuteEngine
+        from xenon.engine.plan_execute_engine import PlanExecuteEngine
         assert PlanExecuteEngine._extract_retry_after(_http_error(429), default=2.0) == 2.0
 
     def test_capped_at_30(self):
-        from omniagent.engine.plan_execute_engine import PlanExecuteEngine
+        from xenon.engine.plan_execute_engine import PlanExecuteEngine
         err = _http_error(429, headers={"retry-after": "60"})
         assert PlanExecuteEngine._extract_retry_after(err, default=2.0) == 30.0
 
     def test_non_http_returns_default(self):
-        from omniagent.engine.plan_execute_engine import PlanExecuteEngine
+        from xenon.engine.plan_execute_engine import PlanExecuteEngine
         req = httpx.Request("POST", "http://x")
         err = httpx.ConnectError("boom", request=req)
         assert PlanExecuteEngine._extract_retry_after(err, default=3.0) == 3.0
@@ -187,9 +187,9 @@ class TestExtractRetryAfter:
 
 class TestCallLLMRetry:
     def test_retries_on_429_then_succeeds(self, monkeypatch):
-        import omniagent.engine.base as base
-        from omniagent.engine.plan_execute_engine import PlanExecuteEngine
-        from omniagent.engine.callbacks import EngineCallback
+        import xenon.engine.base as base
+        from xenon.engine.plan_execute_engine import PlanExecuteEngine
+        from xenon.engine.callbacks import EngineCallback
 
         calls = {"n": 0}
         req = httpx.Request("POST", "http://x")
@@ -209,9 +209,9 @@ class TestCallLLMRetry:
 
     def test_no_retry_on_400(self, monkeypatch):
         """400 是终端错误,立即上抛,不触发退避重试。"""
-        import omniagent.engine.base as base
-        from omniagent.engine.plan_execute_engine import PlanExecuteEngine
-        from omniagent.engine.callbacks import EngineCallback
+        import xenon.engine.base as base
+        from xenon.engine.plan_execute_engine import PlanExecuteEngine
+        from xenon.engine.callbacks import EngineCallback
 
         req = httpx.Request("POST", "http://x")
 

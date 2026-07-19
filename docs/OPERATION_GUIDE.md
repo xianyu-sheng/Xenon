@@ -1,4 +1,4 @@
-# OmniAgent-CLI 操作手册
+# Xenon 操作手册
 
 > 版本: 0.1.0 | 更新日期: 2026-06-01
 
@@ -25,7 +25,7 @@
 ```bash
 # 克隆项目
 git clone <repo-url>
-cd omniagent-cli
+cd xenon
 
 # 安装（开发模式）
 pip install -e ".[dev]"
@@ -37,11 +37,11 @@ API Key 统一存储在用户主目录下，所有工作区共享。
 
 **方式一：凭证文件（推荐）**
 
-创建 `~/.omniagent/credentials.yaml`：
+创建 `~/.xenon/credentials.yaml`：
 
 ```yaml
-# Windows: %USERPROFILE%\.omniagent\credentials.yaml
-# Linux/Mac: ~/.omniagent/credentials.yaml
+# Windows: %USERPROFILE%\.xenon\credentials.yaml
+# Linux/Mac: ~/.xenon/credentials.yaml
 openai: "sk-your-openai-key"
 anthropic: "sk-ant-your-anthropic-key"
 deepseek: "sk-your-deepseek-key"
@@ -60,7 +60,7 @@ export DEEPSEEK_API_KEY="sk-..."
 ### 1.3 验证安装
 
 ```bash
-omniagent --help
+xenon --help
 ```
 
 ---
@@ -71,16 +71,16 @@ omniagent --help
 
 ```bash
 # 直接启动（使用默认配置）
-omniagent chat
+xenon chat
 
 # 指定模型
-omniagent chat -m anthropic/claude-3-5-sonnet
+xenon chat -m anthropic/claude-3-5-sonnet
 
 # 指定多个模型（自动 Fallback）
-omniagent chat -m anthropic/claude-3-5-sonnet openai/gpt-4o deepseek/deepseek-coder
+xenon chat -m anthropic/claude-3-5-sonnet openai/gpt-4o deepseek/deepseek-coder
 
 # 指定思考范式
-omniagent chat -m anthropic/claude-3-5-sonnet --mode plan-execute
+xenon chat -m anthropic/claude-3-5-sonnet --mode plan-execute
 ```
 
 ### 2.2 第一次对话
@@ -95,10 +95,10 @@ You> 帮我写一个 Python 快速排序算法
 
 ```bash
 # 批量执行
-omniagent run config/default_flow.yaml --init-context task="写一个Hello World"
+xenon run config/default_flow.yaml --init-context task="写一个Hello World"
 
 # 预览工作流结构
-omniagent run config/default_flow.yaml --dry-run
+xenon run config/default_flow.yaml --dry-run
 ```
 
 ---
@@ -345,16 +345,16 @@ AgentContext 变量:
 
 ```bash
 # 基本用法
-omniagent run <workflow.yaml> [--init-context KEY=VALUE ...]
+xenon run <workflow.yaml> [--init-context KEY=VALUE ...]
 
 # 示例
-omniagent run config/default_flow.yaml --init-context task="写一个计算器程序"
+xenon run config/default_flow.yaml --init-context task="写一个计算器程序"
 
 # 预览模式（不实际执行）
-omniagent run config/default_flow.yaml --dry-run
+xenon run config/default_flow.yaml --dry-run
 
 # 详细日志
-omniagent run config/default_flow.yaml -v --init-context task="..."
+xenon run config/default_flow.yaml -v --init-context task="..."
 ```
 
 ### 5.1 代码执行工作流
@@ -364,7 +364,7 @@ omniagent run config/default_flow.yaml -v --init-context task="..."
 **简化版（推荐入门）：**
 
 ```bash
-omniagent run config/simple_code_flow.yaml \
+xenon run config/simple_code_flow.yaml \
   --init-context task="写一个 Python 快速排序" \
   --init-context work_dir="./my_project"
 ```
@@ -374,7 +374,7 @@ omniagent run config/simple_code_flow.yaml \
 **完整版（含测试和审查）：**
 
 ```bash
-omniagent run config/code_execution_flow.yaml \
+xenon run config/code_execution_flow.yaml \
   --init-context task="写一个 REST API" \
   --init-context work_dir="./api_project" \
   --init-context retry_count=0
@@ -385,7 +385,7 @@ omniagent run config/code_execution_flow.yaml \
 ### 5.2 交互模式中快速生成代码
 
 ```bash
-omniagent chat -m deepseek/deepseek-coder
+xenon chat -m deepseek/deepseek-coder
 ```
 
 ```
@@ -534,7 +534,7 @@ nodes:
 ### 8.1 快速提问
 
 ```bash
-omniagent chat -m anthropic/claude-3-5-sonnet
+xenon chat -m anthropic/claude-3-5-sonnet
 ```
 
 ```
@@ -544,7 +544,7 @@ You> 什么是快速排序？请用 Python 实现
 ### 8.2 多模型 Fallback
 
 ```bash
-omniagent chat -m anthropic/claude-3-5-sonnet openai/gpt-4o deepseek/deepseek-coder
+xenon chat -m anthropic/claude-3-5-sonnet openai/gpt-4o deepseek/deepseek-coder
 ```
 
 ```
@@ -572,7 +572,7 @@ You> /save db-design-session
 You> /exit
 
 # 下次
-omniagent chat
+xenon chat
 You> /load db-design-session
 You> 继续上次的设计
 ```
@@ -595,7 +595,7 @@ You> 继续刚才的工作
 **现象：** `❌ 所有模型均调用失败`
 
 **排查：**
-1. 检查凭证：`cat ~/.omniagent/credentials.yaml`
+1. 检查凭证：`cat ~/.xenon/credentials.yaml`
 2. 检查网络：能否访问 API 端点
 3. 检查 Key 是否有效/过期
 4. 用 `/models` 确认模型配置正确
@@ -607,10 +607,10 @@ You> 继续刚才的工作
 **解决：**
 ```bash
 # 创建目录
-mkdir -p ~/.omniagent
+mkdir -p ~/.xenon
 
 # 创建凭证文件
-cat > ~/.omniagent/credentials.yaml << 'EOF'
+cat > ~/.xenon/credentials.yaml << 'EOF'
 openai: "sk-your-key"
 anthropic: "sk-ant-your-key"
 EOF

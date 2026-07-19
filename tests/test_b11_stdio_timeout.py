@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from omniagent.mcp.transport import StdioTransport
+from xenon.mcp.transport import StdioTransport
 
 PY = sys.executable
 

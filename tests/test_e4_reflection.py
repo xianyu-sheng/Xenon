@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 
-from omniagent.engine.context import AgentContext
-from omniagent.engine.reflection_engine import ReflectionEngine
+from xenon.engine.context import AgentContext
+from xenon.engine.reflection_engine import ReflectionEngine
 
 
 class _RecordingCallback:
@@ -62,7 +62,7 @@ def _make_engine(monkeypatch, *, reviewer_model_priority=None, max_rounds=3, pas
 class TestReviewerModelPriority:
     def test_reviewer_uses_independent_model_list(self, monkeypatch):
         """_review 应以 reviewer_model_priority 调 _call_llm（走真实 _call_llm）。"""
-        import omniagent.engine.base as base_mod
+        import xenon.engine.base as base_mod
         eng, _ = _make_engine(monkeypatch, reviewer_model_priority=["reviewer/m", "fallback/m"])
         seen_models: list[str] = []
 

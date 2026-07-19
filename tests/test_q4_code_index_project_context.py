@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from omniagent.repl.project_context import ProjectContext, _is_excluded_dir
-from omniagent.utils.code_index import CodeIndex
+from xenon.repl.project_context import ProjectContext, _is_excluded_dir
+from xenon.utils.code_index import CodeIndex
 
 
 # ── §8.21.3：fnmatch glob 排除 ───────────────────────────────
@@ -203,7 +203,7 @@ class TestCodeIndexCache:
         idx = CodeIndex(tmp_path)  # 默认 cache_dir=None
         idx.build()
         # 不应创建任何缓存目录/文件
-        assert not (tmp_path / ".omniagent").exists()
+        assert not (tmp_path / ".xenon").exists()
 
     def test_build_writes_cache_file(self, tmp_path):
         (tmp_path / "a.py").write_text("def f(): pass")

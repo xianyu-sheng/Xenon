@@ -4,21 +4,21 @@ from __future__ import annotations
 
 import pytest
 
-from omniagent.repl.commands import _confirm, dispatch_command, ExitSignal, _HANDLERS
-from omniagent.repl.context_manager import ContextManager
-from omniagent.repl.model_registry import ModelRegistry
+from xenon.repl.commands import _confirm, dispatch_command, ExitSignal, _HANDLERS
+from xenon.repl.context_manager import ContextManager
+from xenon.repl.model_registry import ModelRegistry
 
 
 # --------------------------- _confirm() ---------------------------
 
 def test_confirm_auto_yes_when_env_set(monkeypatch):
-    monkeypatch.setenv("OMNIAGENT_ASSUME_YES", "1")
+    monkeypatch.setenv("XENON_ASSUME_YES", "1")
     assert _confirm("危险操作？", default=False) is True
 
 
 def test_confirm_eof_returns_default(monkeypatch):
     """非交互环境 Confirm.ask 抛 EOFError → 保守取 default。"""
-    monkeypatch.delenv("OMNIAGENT_ASSUME_YES", raising=False)
+    monkeypatch.delenv("XENON_ASSUME_YES", raising=False)
     import rich.prompt as rp
 
     def boom(*a, **kw):
@@ -29,7 +29,7 @@ def test_confirm_eof_returns_default(monkeypatch):
 
 
 def test_confirm_calls_ask_when_no_env(monkeypatch):
-    monkeypatch.delenv("OMNIAGENT_ASSUME_YES", raising=False)
+    monkeypatch.delenv("XENON_ASSUME_YES", raising=False)
     import rich.prompt as rp
 
     calls = []
@@ -87,7 +87,7 @@ def test_dispatch_unknown_command():
 # --------------------------- /clear 确认 ---------------------------
 
 def test_clear_confirmed_clears_history():
-    """autouse fixture 设了 OMNIAGENT_ASSUME_YES=1 → /clear 直接清空。"""
+    """autouse fixture 设了 XENON_ASSUME_YES=1 → /clear 直接清空。"""
     reg = ModelRegistry()
     ctx_mgr = ContextManager()
     ctx_mgr.add_user_message("test")
@@ -98,8 +98,8 @@ def test_clear_confirmed_clears_history():
 
 def test_clear_cancelled_keeps_history(monkeypatch):
     """用户选'否' → 取消，历史保留。"""
-    monkeypatch.delenv("OMNIAGENT_ASSUME_YES", raising=False)
-    import omniagent.repl.commands as cmds
+    monkeypatch.delenv("XENON_ASSUME_YES", raising=False)
+    import xenon.repl.commands as cmds
     monkeypatch.setattr(cmds, "_confirm", lambda *a, **kw: False)
 
     reg = ModelRegistry()

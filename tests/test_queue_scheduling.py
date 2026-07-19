@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import pytest
-from omniagent.repl.model_pool import ModelPool, MIN_TIER, MAX_TIER
-from omniagent.repl.difficulty_estimator import DifficultyEstimator, TaskProfile
+from xenon.repl.model_pool import ModelPool, MIN_TIER, MAX_TIER
+from xenon.repl.difficulty_estimator import DifficultyEstimator, TaskProfile
 
 
 class TestTierAssignment:

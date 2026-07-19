@@ -1,4 +1,4 @@
-"""Run OmniAgent mock or real-model evals and write a Markdown report."""
+"""Run Xenon mock or real-model evals and write a Markdown report."""
 
 from __future__ import annotations
 
@@ -75,14 +75,14 @@ class RealAgent:
         self._engine_factory = engine_factory
 
     def _default_engine_factory(self, callback: Any) -> Any:
-        from omniagent.engine.react_engine import ReActEngine
+        from xenon.engine.react_engine import ReActEngine
 
         return ReActEngine(
             [self.model], max_iterations=self.max_iterations, callback=callback,
         )
 
     def _build_context(self) -> Any:
-        from omniagent.engine.context import AgentContext
+        from xenon.engine.context import AgentContext
 
         return AgentContext()
 
@@ -101,8 +101,8 @@ class RealAgent:
         )
 
     def run_task(self, task: dict[str, Any]) -> dict[str, Any]:
-        from omniagent.engine.callbacks import EngineCallback
-        from omniagent.repl.context_manager import ContextManager
+        from xenon.engine.callbacks import EngineCallback
+        from xenon.repl.context_manager import ContextManager
         import contextlib
 
         factory = self._engine_factory or self._default_engine_factory
@@ -247,7 +247,7 @@ def write_report(
     date = run_date or datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     lines = [
-        "# OmniAgent Eval Report",
+        "# Xenon Eval Report",
         "",
     ]
     # §8.14.3 修复：mock 模式显式标注为框架自检，不代表 agent 能力
@@ -296,7 +296,7 @@ def write_report(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run OmniAgent evals.")
+    parser = argparse.ArgumentParser(description="Run Xenon evals.")
     parser.add_argument("--mode", choices=["mock", "real"], default="mock")
     parser.add_argument("--model", default=None, help="Required for --mode real, e.g. deepseek/deepseek-v4-pro")
     parser.add_argument("--tasks", default=str(DEFAULT_TASKS_PATH))

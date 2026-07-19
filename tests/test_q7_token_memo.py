@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 
-from omniagent.repl.context_manager import (
+from xenon.repl.context_manager import (
     ContextManager, ConversationTurn, _estimate_tokens, _CJK_RE,
 )
 
@@ -85,7 +85,7 @@ def test_turn_token_count_caches(monkeypatch):
         calls.append(text)
         return _estimate_tokens.__wrapped__(text) if hasattr(_estimate_tokens, "__wrapped__") else 42
 
-    import omniagent.repl.context_manager as cm_mod
+    import xenon.repl.context_manager as cm_mod
     monkeypatch.setattr(cm_mod, "_estimate_tokens", counting)
     t = ConversationTurn(role="user", content="some content here")
     v1 = t.token_count
@@ -125,7 +125,7 @@ def test_deepcopy_preserves_cache():
 
 def test_current_token_usage_sums_cached(monkeypatch):
     """current_token_usage 求和缓存值，多次调用不重算（O(n) 免重算）。"""
-    import omniagent.repl.context_manager as cm_mod
+    import xenon.repl.context_manager as cm_mod
 
     calls = [0]
     real = _estimate_tokens

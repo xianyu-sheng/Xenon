@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from omniagent.repl.shortcut_manager import ShortcutManager, Shortcut
+from xenon.repl.shortcut_manager import ShortcutManager, Shortcut
 
 
 class TestShortcutManager:

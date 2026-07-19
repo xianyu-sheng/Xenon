@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 import pytest
-from omniagent.repl.routing_history import (
+from xenon.repl.routing_history import (
     RoutingHistory, RoutingRecord, RingBuffer,
 )
 

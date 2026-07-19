@@ -1,6 +1,6 @@
 """Chaos Test 1: 网络中断模拟。
 
-目标：验证 ``omniagent.utils.llm_client.chat_completion`` 在 httpx 抛
+目标：验证 ``xenon.utils.llm_client.chat_completion`` 在 httpx 抛
 ``ConnectError`` 时能正确重试，且 2 次失败后第 3 次成功也能完成调用。
 本测试**不调真实 LLM**——只 unit-test 风格 mock httpx.Client.post。
 """
@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-import omniagent.utils.llm_client as llm_client
+import xenon.utils.llm_client as llm_client
 
 
 def _make_response(text: str = "hello") -> MagicMock:

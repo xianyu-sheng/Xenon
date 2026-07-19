@@ -1,7 +1,7 @@
 """Tests for NovelEngine — 小说创作引擎。"""
-from omniagent.engine.callbacks import EngineCallback
-from omniagent.engine.context import AgentContext
-from omniagent.engine.novel_engine import NovelEngine
+from xenon.engine.callbacks import EngineCallback
+from xenon.engine.context import AgentContext
+from xenon.engine.novel_engine import NovelEngine
 
 
 # ── B9: 续写误判 ──────────────────────────────────────────

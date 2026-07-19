@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from omniagent.repl.provider_registry import _sort_models_by_priority
+from xenon.repl.provider_registry import _sort_models_by_priority
 
 
 class TestSortModelsByPriority:

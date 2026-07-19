@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from omniagent.utils.llm_client import _load_credentials, build_endpoint
+from xenon.utils.llm_client import _load_credentials, build_endpoint
 
 
 class TestLLMClientAuthTokenFallback:
@@ -48,7 +48,7 @@ class TestLLMClientAuthTokenFallback:
         }
         with patch.dict(os.environ, env, clear=True):
             # Mock yaml to be empty so env values take effect
-            with patch("omniagent.utils.llm_client._CREDENTIALS_PATH") as mp:
+            with patch("xenon.utils.llm_client._CREDENTIALS_PATH") as mp:
                 mp.exists.return_value = False
                 creds = _load_credentials()
                 # anthropic 拿到 AUTH_TOKEN

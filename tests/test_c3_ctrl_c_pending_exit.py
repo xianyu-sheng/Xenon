@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import pytest
 
-from omniagent.repl.repl import REPL
-from omniagent.repl.model_registry import ModelRegistry
-from omniagent.repl.context_manager import ContextManager
+from xenon.repl.repl import REPL
+from xenon.repl.model_registry import ModelRegistry
+from xenon.repl.context_manager import ContextManager
 
 
 class TestCtrlCPendingExit:

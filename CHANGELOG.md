@@ -1,6 +1,6 @@
 # 更新日志
 
-本文件记录 OmniAgent-CLI 各版本变更。版本号遵循语义化版本（预 1.0 阶段：
+本文件记录 Xenon 各版本变更。版本号遵循语义化版本（预 1.0 阶段：
 `0.MINOR.PATCH`，每个修复批次递增 MINOR）。
 
 ## [0.5.3] — 2026-07-14
@@ -41,7 +41,7 @@
 ### 工程
 
 - `__version__` 从 0.1.0 → 0.5.2（三处统一：`__init__.py` / `pyproject.toml` / 代码兜底值）
-- 新增 `omniagent --version` 参数
+- 新增 `xenon --version` 参数
 - 创建 `LICENSE`（MIT）
 - SVG terminal demo 从 v0.1.0 重绘为 v0.5.2 风格
 - `ARCHITECTURE.md` 修正 provider 数量（6 → 12）
@@ -98,8 +98,8 @@
 把仓库根目录从 6 个项目文件压缩到 6 个 + 整理 5 个"无主文件"到 `docs/`：
 
 - 删除 `binary_search.py`（与项目无关的练习题）
-- 迁 `OmniAgent_CLI_Design_Specification_v1.1.pdf` → `docs/omniagent-design-spec-v1.1.pdf`
-- 迁 `omniagent_design_spec_v1.1.html` → `docs/omniagent-design-spec-v1.1.html`
+- 迁 `Xenon_CLI_Design_Specification_v1.1.pdf` → `docs/xenon-design-spec-v1.1.pdf`
+- 迁 `xenon_design_spec_v1.1.html` → `docs/xenon-design-spec-v1.1.html`
 - 迁 `REAL_TASK_TEST_REPORT.md` → `docs/reports/v0.2.2/`
 - 迁 `VERIFICATION_REPORT.md` → `docs/reports/v0.2.2/`
 - 补 `.gitignore` 加 `.claude/`（本地 Claude Code sub-agent 定义不入公共仓库）
@@ -114,7 +114,7 @@
 - `docs/ARCHITECTURE.md`（新增 295 行）—— 8 引擎分类（直答/循环/计划/审查/创意 + 3 组合）+ 路由层 + 三件套 + ToolExecutor 7 阶段 + MCP 双传输
 
 **重要事实修正**（不夸大、不藏）：
-- omniagent 实际有 **8 个引擎**（含 NovelEngine，README 之前漏提）
+- xenon 实际有 **8 个引擎**（含 NovelEngine，README 之前漏提）
 - MCP 子进程用 `select`+墙钟超时替代阻塞 readline（B11 修复）—— 真实
 - 子进程退出用 `terminate()+kill()` 兜底无僵尸 —— 真实
 - MCP server **不自动重启** —— 真实限制，已在 COMPARISON 列为已知后续项
@@ -132,7 +132,7 @@
 | 根因 | 修复 | 影响 |
 | --- | --- | --- |
 | 根因 1：RealAgent 单轮不友好 | `evals/runner.py` `RealAgent` 加 `max_turns=3`，每轮共享 `ContextManager` 累积 history，前一轮 `answer` 注入后一轮 user_input 作为 review feedback | `generate-diff-preview` 等改判成功 |
-| 根因 2：workdir 太简单 | `/tmp/omniagent_real_workdir`：cp omniagent/{omniagent,tests,evals,docs} + `.omniagent/rules.md`（132 文件 / 114 py） | `use-project-rules` / `code-search-entrypoint` / `code-search-model-router` 等 5 任务改判成功 |
+| 根因 2：workdir 太简单 | `/tmp/xenon_real_workdir`：cp xenon/{xenon,tests,evals,docs} + `.xenon/rules.md`（132 文件 / 114 py） | `use-project-rules` / `code-search-entrypoint` / `code-search-model-router` 等 5 任务改判成功 |
 | 根因 3：ReAct 拒绝兜底固定 2 次 | `react_engine.py` 自适应 `max(2, max_iterations // 2)` 重试上限 | `generate-diff-preview` 改判成功 |
 
 **11 个 v2 失败里 4 个仍是任务设计问题**（不是引擎问题）：
@@ -164,7 +164,7 @@
 - 评分函数 `_score` **未动**（不硬编码）
 - `expected_tools` 列表**未动**（任务定义本身合理）
 - 通用机制改进，**不**针对特定任务加白名单
-- 不动 `.omniagent/` 本地配置目录
+- 不动 `.xenon/` 本地配置目录
 
 ## [0.2.2] — 2026-07-08
 
@@ -332,7 +332,7 @@
 ### 集成验证（2026-07-07）
 
 - 全量单测：**747 passed**。
-- CLI：`omniagent --help` / `omniagent run <workflow.yaml> --dry-run`（配置解析 →
+- CLI：`xenon --help` / `xenon run <workflow.yaml> --dry-run`（配置解析 →
   DAGScheduler 构造 → 拓扑展示）正常。
 - Mock eval：20/20 任务通过，0 工具失败，报告生成（Q3 框架）。
 - 引擎冒烟：8 种引擎配置（含 E2 DAG 并行路径、E4 Reflection、3 个组合引擎）mock LLM

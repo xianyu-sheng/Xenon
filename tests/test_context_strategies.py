@@ -1,6 +1,6 @@
 """v0.5.0: 分层上下文策略测试。"""
 import pytest
-from omniagent.repl.context_strategies import (
+from xenon.repl.context_strategies import (
     CompressionStrategy,
     TieredStrategySelector,
     ToolOutputClassifier,
@@ -156,7 +156,7 @@ class TestImportanceCalculator:
 
     def test_filter_by_importance(self):
         """过滤低重要性轮次。"""
-        from omniagent.repl.context_manager import ConversationTurn
+        from xenon.repl.context_manager import ConversationTurn
         turns = [
             ConversationTurn(role="user", content="重要问题", task_tier=5, turn_index=5, turn_type="user_input"),
             ConversationTurn(role="assistant", content="知道了", task_tier=1, turn_index=6, turn_type="assistant_output"),
@@ -188,7 +188,7 @@ class TestSpaceBudget:
 
 class TestCrisisHandling:
     def _make_turn(self, content, tier=1, role="user", tt="user_input", idx=0):
-        from omniagent.repl.context_manager import ConversationTurn
+        from xenon.repl.context_manager import ConversationTurn
         return ConversationTurn(role=role, content=content, task_tier=tier, turn_type=tt, turn_index=idx)
 
     def test_q1_crisis_drop(self):

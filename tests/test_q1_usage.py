@@ -18,8 +18,8 @@ from typing import Any
 import httpx
 import pytest
 
-import omniagent.utils.llm_client as lc
-from omniagent.utils.llm_client import (
+import xenon.utils.llm_client as lc
+from xenon.utils.llm_client import (
     LLMResponse,
     LLMUsage,
     ModelEndpoint,

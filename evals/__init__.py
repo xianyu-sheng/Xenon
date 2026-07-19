@@ -1,1 +1,1 @@
-"""Evaluation utilities for OmniAgent."""
+"""Evaluation utilities for Xenon."""

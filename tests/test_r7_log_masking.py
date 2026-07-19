@@ -4,7 +4,7 @@
   command_template 等）值替换为 <masked len=N>，大小写不敏感；非敏感保留。
 - ConsoleCallback.on_act verbose 输出不泄露敏感值。
 """
-from omniagent.engine.callbacks import ConsoleCallback, mask_sensitive_params
+from xenon.engine.callbacks import ConsoleCallback, mask_sensitive_params
 
 
 class TestMaskSensitiveParams:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from omniagent.repl.project_context import ProjectContext
+from xenon.repl.project_context import ProjectContext
 
 
 class TestProjectContext:
@@ -49,8 +49,8 @@ class TestProjectContext:
         assert pc.project_type == "unknown"
 
     def test_load_rules(self, tmp_path):
-        """加载 .omniagent/rules.md。"""
-        rules_dir = tmp_path / ".omniagent"
+        """加载 .xenon/rules.md。"""
+        rules_dir = tmp_path / ".xenon"
         rules_dir.mkdir()
         (rules_dir / "rules.md").write_text("使用 Python 3.12\n遵循 PEP 8", encoding="utf-8")
         (tmp_path / "pyproject.toml").write_text("")
@@ -124,7 +124,7 @@ class TestProjectContext:
         assert pc.rules == ""
 
         # 添加规则文件后刷新
-        rules_dir = tmp_path / ".omniagent"
+        rules_dir = tmp_path / ".xenon"
         rules_dir.mkdir()
         (rules_dir / "rules.md").write_text("新规则", encoding="utf-8")
         pc.refresh()
@@ -132,7 +132,7 @@ class TestProjectContext:
 
     def test_rules_length_limit(self, tmp_path):
         """规则文件超过 3000 字符时截断。"""
-        rules_dir = tmp_path / ".omniagent"
+        rules_dir = tmp_path / ".xenon"
         rules_dir.mkdir()
         (rules_dir / "rules.md").write_text("x" * 5000)
         (tmp_path / "pyproject.toml").write_text("")

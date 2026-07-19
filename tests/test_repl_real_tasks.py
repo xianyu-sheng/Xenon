@@ -6,8 +6,8 @@ REPL 真实任务端到端测试（§9 验收 — 任务 A-N）。
 
 工作流：
 1. 直接构造 REPL 实例 + 调用 _handle_chat 模拟用户输入
-2. monkeypatch.setattr(omniagent.engine.base, "chat_completion", fake)
-3. OMNIAGENT_ASSUME_YES=1 由 conftest 自动设置
+2. monkeypatch.setattr(xenon.engine.base, "chat_completion", fake)
+3. XENON_ASSUME_YES=1 由 conftest 自动设置
 
 覆盖：
 - A: query 意图路由（基础路径 + 端到端 mock 工具）
@@ -43,12 +43,12 @@ from typing import Any
 
 import pytest
 
-import omniagent.engine.base as engine_base
-import omniagent.utils.llm_client as llm_client
-from omniagent.repl.context_manager import ContextManager
-from omniagent.repl.model_registry import ModelRegistry
-from omniagent.repl.prompt_optimizer import detect_intent
-from omniagent.repl.repl import REPL
+import xenon.engine.base as engine_base
+import xenon.utils.llm_client as llm_client
+from xenon.repl.context_manager import ContextManager
+from xenon.repl.model_registry import ModelRegistry
+from xenon.repl.prompt_optimizer import detect_intent
+from xenon.repl.repl import REPL
 
 
 # ── Mock 辅助函数 ──────────────────────────────────────────
@@ -455,7 +455,7 @@ class TestMixedIntent:
         _TOOL_PATTERNS 不含 https? URL regex，但 intent='query' 仍会触发。
         验证：传入正确 intent 时应路由。"""
         text = "读取 https://example.com/api/weather 的数据"
-        from omniagent.repl.prompt_optimizer import detect_intent as di
+        from xenon.repl.prompt_optimizer import detect_intent as di
         intent = di(text)
         # 实际：intent='query'（"读取"不在 query trigger 里；可能 None）
         # _TOOL_PATTERNS 不含 URL/URL 协议正则
@@ -605,7 +605,7 @@ class TestAdditionalConcerns:
         模拟：direct 模式 LLM 返回拒答 → trim + 递归调 ReAct → ReAct 抛异常。
         验证：第二轮 user 进来时，history 是否有无 assistant 回复的 user 消息。
         """
-        from omniagent.repl.repl import REPL
+        from xenon.repl.repl import REPL
 
         def responder(ctx):
             kind, model_id, messages = ctx
@@ -714,7 +714,7 @@ class TestAdditionalConcerns:
     def test_concern_6_chat_template_pollutes_optimized(self):
         """关注点 6："你好" 触发 chat 模板（line 266-278），优化后追加
         '（这是一句问候/闲聊…）'。这会让 LLM 收到奇怪的指令上下文。"""
-        from omniagent.repl.prompt_optimizer import optimize_prompt
+        from xenon.repl.prompt_optimizer import optimize_prompt
 
         optimized, system_hint, was_optimized = optimize_prompt("你好")
         # chat 模板 — assess_quality 返回 True（短输入），was_optimized=True

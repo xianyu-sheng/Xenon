@@ -17,7 +17,7 @@ import time
 
 import pytest
 
-from omniagent.repl.setup_wizard import _masked_input
+from xenon.repl.setup_wizard import _masked_input
 
 
 class _FakeStdin:

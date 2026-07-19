@@ -1,4 +1,4 @@
-# OmniAgent 评测结果
+# Xenon 评测结果
 
 > 真实模型跑 ReAct 多轮闭环（方案 C 修复后），按**实际执行**的工具评分（`expected_tools ⊆ executed` 且 `final_answer` 非空）。
 > 数据生成：2026-07-08 10:10 UTC，DeepSeek-V4-Pro via 火山方舟。
@@ -11,14 +11,14 @@
 | 版本 | 成功率 | Tool Calls | Tool Failures | 备注 |
 | --- | ---: | ---: | ---: | --- |
 | **v1**（3 文件 workdir / 单轮 / 旧拒绝兜底） | 25.0% (5/20) | 56 | 18 | 任务前提多不满足、LLM 易文字声称完成 |
-| **v2**（omniagent 自身 workdir / 3 轮 multi-turn / 自适应拒绝兜底） | **45.0% (9/20)** | 160 | 13 | **+80%**，3 个根因都修了 |
+| **v2**（xenon 自身 workdir / 3 轮 multi-turn / 自适应拒绝兜底） | **45.0% (9/20)** | 160 | 13 | **+80%**，3 个根因都修了 |
 
 **3 个根因修复的实际效果**：
 
 | 根因 | v1 受影响 | v2 修复效果 | 代表任务 |
 | --- | ---: | --- | --- |
 | **根因 1**：RealAgent 单轮不友好 | 5 任务失败 | 1 任务改判成功 | `generate-diff-preview`（旧拒绝兜底 + 新重试次数 → 强制 LLM 调工具） |
-| **根因 2**：workdir 太简单 | 6 任务失败 | 5 任务改判成功 | `use-project-rules`（workdir 加 `.omniagent/rules.md`）、`code-search-entrypoint`（workdir 是 omniagent 自身有 main.py） |
+| **根因 2**：workdir 太简单 | 6 任务失败 | 5 任务改判成功 | `use-project-rules`（workdir 加 `.xenon/rules.md`）、`code-search-entrypoint`（workdir 是 xenon 自身有 main.py） |
 | **根因 3**：ReAct 拒绝兜底固定 2 次 | 3 任务失败 | 2 任务改判成功 | `generate-diff-preview`（重试上限 2→4） |
 
 ---
@@ -30,7 +30,7 @@
 | **模型** | `deepseek/deepseek-v4-pro` |
 | **API 网关** | 火山方舟 (`https://ark.cn-beijing.volces.com/api/coding`) |
 | **引擎** | `ReActEngine`（`max_iterations=8` / `max_turns=3`） |
-| **工作目录** | `/tmp/omniagent_real_workdir`（**omniagent 自身 132 文件** + `.omniagent/rules.md`） |
+| **工作目录** | `/tmp/xenon_real_workdir`（**xenon 自身 132 文件** + `.xenon/rules.md`） |
 | **任务集** | `evals/tasks.yaml`（20 任务，6 类别） |
 | **框架** | `python evals/runner.py --mode real`（方案 C 修复后） |
 | **跑测时间** | 2026-07-08 10:10:13 UTC |
@@ -67,7 +67,7 @@
 | Task | Category | Tool Calls | Notes |
 | --- | --- | ---: | --- |
 | `update-readme-command` | file_edit | 10 | LLM 真读了 README + CHANGELOG 改了用法 |
-| `code-search-entrypoint` | code_search | 16 | 找到 `omniagent.main:cli` 入口 |
+| `code-search-entrypoint` | code_search | 16 | 找到 `xenon.main:cli` 入口 |
 | `code-search-model-router` | code_search | 6 | 找到 `llm_client.py` 路由逻辑 |
 | `run-focused-tests` | tool_call | 5 | pytest 19 测试全过 |
 | `inspect-git-status` | tool_call | 3 | 正确识别非 git 仓库 |
@@ -80,7 +80,7 @@
 
 | 失败类别 | 任务数 | 代表任务 | 根因 |
 | --- | ---: | --- | --- |
-| **任务路径与 workdir 不匹配** | 3 | `edit-python-function` / `add-unit-test` / `refactor-duplicate-code` | 任务 prompt 说"修改 `src/main.py`"，但 workdir 是 omniagent 包结构（`omniagent/main.py`），LLM 调了 read_file/edit_file 但路径不匹配 expected_tools 列表 |
+| **任务路径与 workdir 不匹配** | 3 | `edit-python-function` / `add-unit-test` / `refactor-duplicate-code` | 任务 prompt 说"修改 `src/main.py`"，但 workdir 是 xenon 包结构（`xenon/main.py`），LLM 调了 read_file/edit_file 但路径不匹配 expected_tools 列表 |
 | **任务前提仍不满足** | 2 | `code-search-tool-node` / `code-search-context-injection` | 任务描述模糊，LLM 调了 search/read 但没找到"tool_node" / "context-injection" 这种字面命名 |
 | **REPL 行为单轮 ReAct 不可测** | 4 | `revise-after-test-failure` / `revise-after-review` / `handle-missing-api-key` / `mcp-tool-flow` | multi_turn 类任务**真实业务场景**需要 REPL 命令（`/mcp add` / `/compact`），但 RealAgent 只跑 ReAct 工具循环，没 REPL 命令 |
 | **预期外：单轮已"答对"** | 2 | `remember-user-preference` / `compact-long-context` | LLM 文字答对了（"v0.2.2 已发布"/"无长对话可压缩"），但 expected_tools 包含 read_file/write_file，LLM 没调 |
@@ -94,7 +94,7 @@
 ### 4.4 9 个成功的关键特征
 
 - 工具调用**不**多（平均 7.1 次/任务）
-- workdir 有真实素材（omniagent 自身）
+- workdir 有真实素材（xenon 自身）
 - 任务描述**不**需要 REPL 命令
 
 ---
@@ -109,7 +109,7 @@
 
 ### 5.2 中期（不动核心代码）
 
-2. **改进任务 prompt**：把 `src/main.py` 路径改成 `omniagent/main.py`，让 file_edit 类任务路径匹配
+2. **改进任务 prompt**：把 `src/main.py` 路径改成 `xenon/main.py`，让 file_edit 类任务路径匹配
 3. **改进 expected_tools**：把 `multi_turn_revision` 类的 expected_tools 改成 `read_file OR edit_file`（任一即可），允许 LLM 自主选择
 
 ### 5.3 长期（评测体系）
@@ -147,8 +147,8 @@
 | 文件 | 改动 | 根因 |
 | --- | --- | --- |
 | `evals/runner.py` | `RealAgent` 加 `max_turns=3`，每轮共享 `ContextManager` 累积 history，前一轮 `answer` 注入后一轮 user_input 作为 review feedback | 根因 1：RealAgent 单轮对 multi_turn 类任务不友好 |
-| `omniagent/engine/react_engine.py` | `no_tool_streak` 重试上限从固定 2 改成 `max(2, max_iterations // 2)`，warning 文本包含 streak + limit 便于诊断 | 根因 3：ReAct 拒绝兜底固定 2 次易被 LLM 硬扛 |
-| `/tmp/omniagent_real_workdir/` | 隔离 workdir：cp `omniagent/` `tests/` `evals/` `docs/` + `.omniagent/rules.md`（132 文件，114 py） | 根因 2：workdir 太简单 |
+| `xenon/engine/react_engine.py` | `no_tool_streak` 重试上限从固定 2 改成 `max(2, max_iterations // 2)`，warning 文本包含 streak + limit 便于诊断 | 根因 3：ReAct 拒绝兜底固定 2 次易被 LLM 硬扛 |
+| `/tmp/xenon_real_workdir/` | 隔离 workdir：cp `xenon/` `tests/` `evals/` `docs/` + `.xenon/rules.md`（132 文件，114 py） | 根因 2：workdir 太简单 |
 
 **约束**：
 - 930/930 单测全绿（83.07s）—— ReAct 改动零破坏

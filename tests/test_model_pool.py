@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from omniagent.repl.model_pool import (
+from xenon.repl.model_pool import (
     ModelPool, _infer_capability, FAILURE_THRESHOLD,
 )
 

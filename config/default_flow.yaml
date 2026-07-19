@@ -1,4 +1,4 @@
-# OmniAgent-CLI 默认工作流配置 — Plan-and-Execute 范式
+# Xenon 默认工作流配置 — Plan-and-Execute 范式
 # 先用昂贵模型做规划，再用便宜模型逐步执行
 
 version: "1.1"

@@ -1,4 +1,4 @@
-# OmniAgent Architecture
+# Xenon Architecture
 
 > 8 种推理范式共享一套基础设施：`BaseEngine` 抽象 + 路由层 + 三件套 + 工具执行门面。
 > 本文按"引擎 → 路由 → 三件套 → 工具 → MCP"的层次组织。
@@ -46,7 +46,7 @@ flowchart TB
 
 ## 1. 8 种推理范式
 
-所有引擎继承自 [`BaseEngine`](omniagent/engine/base.py)，共享：
+所有引擎继承自 [`BaseEngine`](xenon/engine/base.py)，共享：
 - `_call_llm` 统一 LLM 调用 + 错误分类（401/403/400 立即上抛，429/5xx/网络切模型）
 - `_call_with_tools_once` 统一 function-calling 能力
 - `_maybe_compact_messages` 每 5 轮自动压缩抑制 O(n²) 增长（F4）
@@ -130,11 +130,11 @@ flowchart LR
 
 ### 2.1 三层抽象
 
-- **`ModelRegistry`**（`omniagent/repl/model_registry.py`）—— 角色级优先级
+- **`ModelRegistry`**（`xenon/repl/model_registry.py`）—— 角色级优先级
   - `role_priority: dict[str, list[str]]` — 同一角色下 `["deepseek/deepseek-v4-pro", "openai/gpt-4o"]` 自动降级
   - `model_id` 格式：`provider/model_name`（如 `anthropic/claude-3-5-sonnet`）
-- **`ProviderRegistry`**（`omniagent/repl/provider_registry.py`）—— provider 端点配置
-- **`llm_client.chat_completion`**（`omniagent/utils/llm_client.py`）—— 实际 HTTP 调用
+- **`ProviderRegistry`**（`xenon/repl/provider_registry.py`）—— provider 端点配置
+- **`llm_client.chat_completion`**（`xenon/utils/llm_client.py`）—— 实际 HTTP 调用
   - 原生 function-calling 能力
   - **per-provider `httpx.Client` 长连接池**（v0.2.0 R3 修复，10+ 次并发复用）
   - 捕获真实 `usage`（prompt/completion/total tokens + latency）→ `UsageTracker`（Q1）
@@ -158,7 +158,7 @@ flowchart LR
 3. 校验摘要长度（避免压缩后反而更长）
 4. 安全截断（避免在代码块中间切断）
 5. 替换历史
-6. 持久化到 `~/.omniagent/compact/<session_id>.md`
+6. 持久化到 `~/.xenon/compact/<session_id>.md`
 
 **in-run 自动压缩**（F4）：`BaseEngine._maybe_compact_messages` 在每 5 轮触发一次，**抑制 O(n²) 增长**。`ctx_mgr` 注入引擎后，引擎消费压缩后历史不再 `[-10:]` 截断。
 
@@ -208,7 +208,7 @@ stateDiagram-v2
 
 ## 4. 工具执行（F1 / Q3 Stage 4）
 
-`ToolExecutor`（`omniagent/nodes/tool_executor.py`）—— 7 阶段流水线门面，**所有引擎共用**：
+`ToolExecutor`（`xenon/nodes/tool_executor.py`）—— 7 阶段流水线门面，**所有引擎共用**：
 
 | 阶段 | 名称 | 说明 |
 | --- | --- | --- |
@@ -238,7 +238,7 @@ stateDiagram-v2
 - **SSRF 白名单**：`wttr.in` / `api.github.com` / `raw.githubusercontent.com` / `httpbin.org` 等公认公共 API
 - **命令注入收口**：`command` 工具 dangerous tokens 拦截
 - **路径黑名单**：`.ssh/` / `.aws/` / `credentials` / `*.key` / `*.pem`
-- **凭证存 `~/.omniagent/credentials.yaml`**，不进仓库
+- **凭证存 `~/.xenon/credentials.yaml`**，不进仓库
 
 ---
 
@@ -258,7 +258,7 @@ flowchart LR
 
 ### 5.1 双传输
 
-- **`StdioTransport`**（`omniagent/mcp/transport.py`）—— 通过子进程 stdio 通信
+- **`StdioTransport`**（`xenon/mcp/transport.py`）—— 通过子进程 stdio 通信
   - `select` + 墙钟 deadline 替代阻塞 `readline`（v0.2.0 **B11 修复**）
   - `max_lines` 上限防止被无关通知/日志无限消耗
   - 关闭用 `terminate()` + `wait(timeout=5)` + 兜底 `kill()`
@@ -278,18 +278,18 @@ flowchart LR
 
 ## 6. 运行时支持
 
-- **CLI 入口**：`omniagent.main:cli` → `omniagent` 命令
-- **REPL**：`omniagent/repl/repl.py` — TUI 7 卡片 + 状态栏 + 快捷键
-- **凭据存储**：`~/.omniagent/credentials.yaml`（chmod 0600）
-- **会话历史**：`~/.omniagent/sessions/`
-- **压缩归档**：`~/.omniagent/compact/`
+- **CLI 入口**：`xenon.main:cli` → `xenon` 命令
+- **REPL**：`xenon/repl/repl.py` — TUI 7 卡片 + 状态栏 + 快捷键
+- **凭据存储**：`~/.xenon/credentials.yaml`（chmod 0600）
+- **会话历史**：`~/.xenon/sessions/`
+- **压缩归档**：`~/.xenon/compact/`
 - **快捷键**：`/setup` / `/set_model` / `/mode` / `/mcp` / `/memory` / `/compact` / `/project` 等
 
 ---
 
 ## 7. 设计文档与历史
 
-- [`docs/omniagent-design-spec-v1.1.html`](omniagent-design-spec-v1.1.html) — 原始设计文档 v1.1
+- [`docs/xenon-design-spec-v1.1.html`](xenon-design-spec-v1.1.html) — 原始设计文档 v1.1
 - [`docs/OPERATION_GUIDE.md`](OPERATION_GUIDE.md) — REPL 命令手册
 - [`CHANGELOG.md`](../CHANGELOG.md) — 版本变更（v0.1.0 → v0.2.2）
 - [`docs/reports/v0.2.2/`](reports/v0.2.2/) — 端到端测试报告 + 独立验证报告

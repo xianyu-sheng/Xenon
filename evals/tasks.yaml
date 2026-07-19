@@ -66,7 +66,7 @@ tasks:
     success_criteria: "The preference is persisted or acknowledged for future context."
   - id: use-project-rules
     category: context_memory
-    prompt: "Apply .omniagent/rules.md instructions while editing a Python file."
+    prompt: "Apply .xenon/rules.md instructions while editing a Python file."
     expected_tools: ["read_file", "edit_file"]
     success_criteria: "The edit follows the project rules."
   - id: load-saved-session

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from omniagent.engine.hollow_detector import HollowDetector, _HOLLOW_PATTERNS
+from xenon.engine.hollow_detector import HollowDetector, _HOLLOW_PATTERNS
 
 
 class TestQuickFail:
@@ -92,9 +92,9 @@ class TestRegexCombo:
         hd = HollowDetector()
         text = (
             "综上所述，已修改如下文件：\n"
-            "- omniagent/engine/budget.py：新增 BudgetManager 三阶段软预算与奖励机制\n"
-            "- omniagent/engine/hollow_detector.py：新增 15 正则空洞检测器\n"
-            "- omniagent/engine/base.py：接入 mercy compile 与合成注入\n"
+            "- xenon/engine/budget.py：新增 BudgetManager 三阶段软预算与奖励机制\n"
+            "- xenon/engine/hollow_detector.py：新增 15 正则空洞检测器\n"
+            "- xenon/engine/base.py：接入 mercy compile 与合成注入\n"
             "测试在 tests/test_f2_budget.py 与 tests/test_f2_hollow.py，"
             "覆盖三阶段边界、奖励封顶、工具门控、15 正则、组合判定与 hint 生成。"
         )

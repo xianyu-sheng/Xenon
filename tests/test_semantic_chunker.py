@@ -1,7 +1,7 @@
 """v0.5.0: 语义分块器测试。"""
 import pytest
-from omniagent.repl.semantic_chunker import SemanticChunker, _extract_tool_name_from_turn
-from omniagent.repl.context_manager import ConversationTurn
+from xenon.repl.semantic_chunker import SemanticChunker, _extract_tool_name_from_turn
+from xenon.repl.context_manager import ConversationTurn
 
 
 def _make(role="user", content="", turn_type="general", tier=3, idx=0):

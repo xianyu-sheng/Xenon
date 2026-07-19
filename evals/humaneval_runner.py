@@ -1,5 +1,5 @@
 """
-HumanEval benchmark adapter for omniagent.
+HumanEval benchmark adapter for xenon.
 
 HumanEval (OpenAI, 2021): 164 Python function-completion tasks.
 Metric: pass@k (probability that at least 1 of k samples passes all tests).
@@ -180,7 +180,7 @@ def run_humaneval(
     num_samples: int = 1,
     dataset_path: Path | None = None,
 ) -> list[dict[str, Any]]:
-    from omniagent.utils.llm_client import chat_completion
+    from xenon.utils.llm_client import chat_completion
 
     tasks = load_tasks(dataset_path)[:num_tasks]
     results = []
@@ -245,14 +245,14 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
-    p = argparse.ArgumentParser(description="HumanEval benchmark for omniagent")
+    p = argparse.ArgumentParser(description="HumanEval benchmark for xenon")
     p.add_argument("--model", default="deepseek/deepseek-v4-pro")
     p.add_argument("--num-tasks", type=int, default=20)
     p.add_argument("--num-samples", type=int, default=1)
     p.add_argument("--output", default="/tmp/humaneval_report.json")
     args = p.parse_args(argv)
 
-    print(f"HumanEval via omniagent")
+    print(f"HumanEval via xenon")
     print(f"  Model:  {args.model}")
     print(f"  Tasks:  {args.num_tasks}")
     print(f"  Pass@k: k={args.num_samples}")

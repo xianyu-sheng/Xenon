@@ -1,4 +1,4 @@
-# OmniAgent MCP 库
+# Xenon MCP 库
 # 可通过 /library update 从 GitHub 更新，也可手动编辑
 # 格式: name, description, command, args, env (可选), category, homepage (可选), note (可选)
 

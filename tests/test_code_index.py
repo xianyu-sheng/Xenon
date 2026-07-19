@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from omniagent.utils.code_index import CodeIndex, Symbol
-from omniagent.utils.ast_analyzer import ASTAnalyzer
-from omniagent.utils.refactor import RefactorEngine
+from xenon.utils.code_index import CodeIndex, Symbol
+from xenon.utils.ast_analyzer import ASTAnalyzer
+from xenon.utils.refactor import RefactorEngine
 
 
 class TestCodeIndex:

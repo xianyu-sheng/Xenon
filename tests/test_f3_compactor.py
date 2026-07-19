@@ -1,6 +1,6 @@
 """F3 验收：Compactor 升级（6 段结构化 + 三层策略 + 安全截断 + 头尾截断 + 持久化 + 备选模型重试）。"""
-import omniagent.utils.llm_client as llm
-from omniagent.repl.context_manager import ContextManager, ConversationTurn
+import xenon.utils.llm_client as llm
+from xenon.repl.context_manager import ContextManager, ConversationTurn
 
 
 def _add_rounds(cm, n, big_user=None):

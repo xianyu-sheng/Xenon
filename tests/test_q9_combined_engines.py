@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from omniagent.engine.combined_engines import (
+from xenon.engine.combined_engines import (
     PlanReactEngine, PlanReflectionEngine, ReactReflectionEngine, _isolated_ctx,
 )
-from omniagent.engine.context import AgentContext
+from xenon.engine.context import AgentContext
 
 
 # --------------------------- _isolated_ctx ---------------------------

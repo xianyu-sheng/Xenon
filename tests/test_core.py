@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-from omniagent.engine.context import AgentContext
-from omniagent.nodes.base import BaseNode
-from omniagent.nodes.router_node import RouterNode
-from omniagent.nodes.tool_node import ToolNode
-from omniagent.engine.scheduler import DAGScheduler
+from xenon.engine.context import AgentContext
+from xenon.nodes.base import BaseNode
+from xenon.nodes.router_node import RouterNode
+from xenon.nodes.tool_node import ToolNode
+from xenon.engine.scheduler import DAGScheduler
 
 
 # ── AgentContext 测试 ─────────────────────────────────────
@@ -223,7 +223,7 @@ class TestToolNode:
 
 class TestConfigParser:
     def test_parse_workflow_basic(self):
-        from omniagent.utils.config_parser import parse_workflow
+        from xenon.utils.config_parser import parse_workflow
 
         config = {
             "models": {"planner": ["openai/gpt-4o"]},
@@ -251,7 +251,7 @@ class TestConfigParser:
         assert models["planner"] == ["openai/gpt-4o"]
 
     def test_parse_workflow_direct_model(self):
-        from omniagent.utils.config_parser import parse_workflow
+        from xenon.utils.config_parser import parse_workflow
 
         config = {
             "models": {},

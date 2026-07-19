@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 import pytest
-from omniagent.repl.session import (
+from xenon.repl.session import (
     auto_save, get_auto_session, cleanup_expired_sessions,
     get_session_age, SESSIONS_DIR, AUTO_SESSION_NAME, SESSION_TTL_DAYS,
 )
@@ -17,7 +17,7 @@ class TestAutoSave:
     def test_auto_save_creates_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             # 覆盖 SESSIONS_DIR
-            import omniagent.repl.session as mod
+            import xenon.repl.session as mod
             old_dir = mod.SESSIONS_DIR
             mod.SESSIONS_DIR = Path(tmp)
             try:
@@ -36,7 +36,7 @@ class TestAutoSave:
 
     def test_get_auto_session_returns_none_when_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
-            import omniagent.repl.session as mod
+            import xenon.repl.session as mod
             old_dir = mod.SESSIONS_DIR
             mod.SESSIONS_DIR = Path(tmp)
             try:
@@ -48,7 +48,7 @@ class TestAutoSave:
 class TestSessionExpiry:
     def test_expired_session_returns_none(self):
         with tempfile.TemporaryDirectory() as tmp:
-            import omniagent.repl.session as mod
+            import xenon.repl.session as mod
             old_dir = mod.SESSIONS_DIR
             mod.SESSIONS_DIR = Path(tmp)
             try:
@@ -80,7 +80,7 @@ class TestGetSessionAge:
 class TestCleanupExpired:
     def test_cleanup_removes_expired(self):
         with tempfile.TemporaryDirectory() as tmp:
-            import omniagent.repl.session as mod
+            import xenon.repl.session as mod
             old_dir = mod.SESSIONS_DIR
             mod.SESSIONS_DIR = Path(tmp)
             try:
