@@ -1744,7 +1744,30 @@ class REPL:
                 self.status_bar.set_last_model(model_id)
 
                 if response_text:
-                    # ── 响应后验证 1：检测 LLM 是否声称执行了文件操作 ──
+                    # ── 响应后验证 1：检测 LLM 直接输出工具调用 JSON ──
+                    # v0.6.1: direct 模式不传工具定义，但 LLM 训练数据中常含
+                    # {"tool": "list_files", ...} 格式。检测到后自动切 ReAct。
+                    if self._detect_tool_call_json(response_text):
+                        console.print()
+                        console.print(
+                            "[dim cyan]🔧 检测到 LLM 尝试调用工具但 direct 模式不可用，"
+                            "自动切换到 ReAct 模式执行...[/dim cyan]"
+                        )
+                        self.ctx_mgr.trim_last_assistant()
+                        try:
+                            self._run_react_engine(user_input, model_ids)
+                        except Exception as e:
+                            console.print(f"[error]❌ ReAct 重试失败: {e}[/error]")
+                            try:
+                                self.ctx_mgr.add_assistant_message(
+                                    f"[错误] ReAct 重试失败: {e}",
+                                    model_used=model_ids[0],
+                                )
+                            except Exception:
+                                pass
+                        return
+
+                    # ── 响应后验证 2：检测 LLM 是否声称执行了文件操作 ──
                     if self._detect_file_claim(response_text):
                         console.print()
                         console.print("[dim cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，自动切换到 ReAct 模式重新执行...[/dim cyan]")
@@ -2101,9 +2124,11 @@ class REPL:
         re.compile(r"github\.com/\w+/\w+", re.I),
         re.compile(r"(?:分析|拉取|克隆|查看).{0,10}(?:仓库|项目|代码库|repo)", re.I),
         re.compile(r"(?:analyze|clone|pull|review).{0,10}(?:repo|project|codebase)", re.I),
-        # 文件路径模式（./xxx, src/xxx, C:\xxx, .py, .js 等）
+        # 文件路径模式（./xxx, src/xxx, C:\xxx, /home/xxx, .py, .js 等）
         re.compile(r"(?:^|\s)(?:\./|\.\./|src/|tests?/|lib/|app/|dist/|build/)\S+", re.I),
         re.compile(r"(?:^|\s)[A-Z]:\\[\w\\/.]+", re.I),
+        # v0.6.1: Linux 绝对路径（/home/...、/tmp/...、/etc/... 等）
+        re.compile(r"(?:^|\s)/(?:home|tmp|etc|var|opt|usr|root|mnt)/\S+", re.I),
         re.compile(r"\b\w+\.(?:py|js|ts|jsx|tsx|java|c|cpp|h|go|rs|rb|php|html|css|json|yaml|yml|toml|xml|md|txt|sh|bat|ps1)\b", re.I),
         # 列出文件
         re.compile(r"(?:列出|显示|查看).{0,15}(?:文件|目录|文件夹|文件列表)", re.I),
@@ -2260,6 +2285,29 @@ class REPL:
         "I cannot", "I can't", "I'm unable",
         "I don't have access", "I'm not able",
     ]
+
+    @classmethod
+    def _detect_tool_call_json(cls, text: str) -> bool:
+        """检测 LLM 响应中是否包含未执行的工具调用 JSON。
+
+        direct 模式下 LLM 有时会输出 {"tool": "...", "arguments": {...}}
+        或 {"action": "...", "action_input": {...}} 格式的工具调用，
+        但因为 direct 模式不传工具定义，这些调用从未被执行。
+        """
+        if not text or len(text) < 20:
+            return False
+        # 检测 JSON 格式的工具调用
+        import re as _re
+        patterns = [
+            r'"tool"\s*:\s*"(?:list_files|read_file|write_file|command|web_fetch|git|search_files|edit_file|clone_repo|github_fetch)"',
+            r'"action"\s*:\s*"(?:list_files|read_file|write_file|command|web_fetch|git|search_files|edit_file|clone_repo|github_fetch)"',
+            r'"arguments"\s*:\s*\{',
+            r'"action_input"\s*:\s*\{',
+        ]
+        for pattern in patterns:
+            if _re.search(pattern, text, _re.IGNORECASE):
+                return True
+        return False
 
     @classmethod
     def _detect_file_claim(cls, text: str) -> bool:
