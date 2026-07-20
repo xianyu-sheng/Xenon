@@ -20,6 +20,7 @@ import ipaddress
 import logging
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -708,7 +709,15 @@ class ToolNode(BaseNode):
         except subprocess.TimeoutExpired:
             error_msg = f"命令执行超时 ({self.timeout}s): {resolved_cmd}"
             logger.error(f"[{self.id}] {error_msg}")
-            raise RuntimeError(error_msg)
+            return {
+                "action_type": "command",
+                "command": resolved_cmd,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": error_msg,
+                "success": False,
+                "error": error_msg,
+            }
 
     # ── 文件写入 ──────────────────────────────────────────
 
@@ -1632,9 +1641,19 @@ class ToolNode(BaseNode):
             self._write_output(context, output)
             return result
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"[{self.id}] Git 命令超时: {' '.join(cmd)}")
+            return {
+                "action_type": "git", "command": " ".join(cmd),
+                "returncode": -1, "stdout": "", "output": "",
+                "success": False,
+                "error": f"Git 命令超时 ({self.timeout}s): {' '.join(cmd)}",
+            }
         except FileNotFoundError:
-            raise RuntimeError(f"[{self.id}] Git 未安装或不在 PATH 中")
+            return {
+                "action_type": "git", "command": " ".join(cmd),
+                "returncode": -1, "stdout": "", "output": "",
+                "success": False,
+                "error": "Git 未安装或不在 PATH 中。请先安装 git。",
+            }
 
     # ── 网页抓取 ──────────────────────────────────────────
 
@@ -1686,7 +1705,11 @@ class ToolNode(BaseNode):
                 return result
 
         except ImportError:
-            raise RuntimeError(f"[{self.id}] web_fetch 需要 httpx 库")
+            return {
+                "action_type": "web_fetch", "url": url,
+                "content": "", "success": False,
+                "error": "web_fetch 需要 httpx 库。请 pip install httpx",
+            }
         except _SSRFRedirectError as e:
             return {
                 "action_type": "web_fetch", "url": url,
@@ -1724,7 +1747,11 @@ class ToolNode(BaseNode):
             return result
 
         except ImportError:
-            raise RuntimeError(f"[{self.id}] weather 工具需要 httpx 库")
+            return {
+                "action_type": "weather", "city": city,
+                "success": False, "content": "",
+                "error": "weather 工具需要 httpx 库。请 pip install httpx",
+            }
         except Exception as e:
             logger.error(f"[{self.id}] 天气查询失败: {e}")
             result = {
@@ -1817,7 +1844,11 @@ class ToolNode(BaseNode):
         try:
             import httpx
         except ImportError:
-            raise RuntimeError(f"[{self.id}] github_fetch 需要 httpx 库")
+            return {
+                "action_type": "github_fetch", "repo": repo,
+                "action": action, "content": "", "success": False,
+                "error": "github_fetch 需要 httpx 库。请 pip install httpx",
+            }
 
         headers = {"User-Agent": "Xenon/0.2"}
 
@@ -1965,7 +1996,6 @@ class ToolNode(BaseNode):
         if not (target_dir / ".git").exists():
             # v0.6.1: 处理残留目录（上次克隆失败可能留下空目录）
             if target_dir.exists():
-                import shutil
                 logger.warning(f"[{self.id}] 目标目录已存在但非 git 仓库，删除后重试: {target_dir}")
                 shutil.rmtree(target_dir, ignore_errors=True)
 
@@ -1983,8 +2013,7 @@ class ToolNode(BaseNode):
                         logger.info(f"[{self.id}] main 分支失败，尝试 master")
                         # 清理可能的残留
                         if target_dir.exists():
-                            import shutil as _shutil
-                            _shutil.rmtree(target_dir, ignore_errors=True)
+                            shutil.rmtree(target_dir, ignore_errors=True)
                         result = subprocess.run(
                             ["git", "clone", "--depth", "1", "--single-branch", "-b", "master",
                              clone_url, str(target_dir)],
