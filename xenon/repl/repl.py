@@ -2121,14 +2121,17 @@ class REPL:
         re.compile(r"(?:抓取|下载|获取|访问).{0,20}(?:网页|页面|url|网址)", re.I),
         re.compile(r"(?:fetch|download|scrape|crawl).{0,20}(?:web|page|url)", re.I),
         # GitHub / 仓库分析
-        re.compile(r"github\.com/\w+/\w+", re.I),
-        re.compile(r"(?:分析|拉取|克隆|查看).{0,10}(?:仓库|项目|代码库|repo)", re.I),
+        # v0.6.1: 支持用户名和仓库名中的 . 和 -
+        re.compile(r"github\.com/[\w.-]+/[\w.-]+", re.I),
+        re.compile(r"(?:分析|拉取|克隆|查看|学习|了解).{0,10}(?:仓库|项目|代码库|repo)", re.I),
         re.compile(r"(?:analyze|clone|pull|review).{0,10}(?:repo|project|codebase)", re.I),
-        # 文件路径模式（./xxx, src/xxx, C:\xxx, /home/xxx, .py, .js 等）
+        # 文件路径模式（./xxx, src/xxx, C:\xxx, /home/xxx, ~/xxx, $HOME/xxx, .py, .js 等）
         re.compile(r"(?:^|\s)(?:\./|\.\./|src/|tests?/|lib/|app/|dist/|build/)\S+", re.I),
         re.compile(r"(?:^|\s)[A-Z]:\\[\w\\/.]+", re.I),
-        # v0.6.1: Linux 绝对路径（/home/...、/tmp/...、/etc/... 等）
+        # v0.6.1: Linux 绝对路径 + ~ 家目录 + $HOME
         re.compile(r"(?:^|\s)/(?:home|tmp|etc|var|opt|usr|root|mnt)/\S+", re.I),
+        re.compile(r"(?:^|\s)~/\S+", re.I),
+        re.compile(r"\$HOME/\S+", re.I),
         re.compile(r"\b\w+\.(?:py|js|ts|jsx|tsx|java|c|cpp|h|go|rs|rb|php|html|css|json|yaml|yml|toml|xml|md|txt|sh|bat|ps1)\b", re.I),
         # 列出文件
         re.compile(r"(?:列出|显示|查看).{0,15}(?:文件|目录|文件夹|文件列表)", re.I),
