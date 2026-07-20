@@ -801,8 +801,33 @@ class ReActEngine(BaseEngine):
         return msg
 
     def _parse_response(self, response: str) -> dict[str, Any]:
-        """解析 LLM 的 JSON 输出（委托给 response_adapter 中间件）。"""
-        return parse_react(response)
+        """解析 LLM 的 JSON 输出（委托给 response_adapter 中间件）。
+
+        v0.6.1: 兜底 —— 如果 parse_react 未能提取 final_answer 但原始文本
+        明显包含 final_answer JSON 字段，用正则提取确保不丢失最终答案。
+        """
+        parsed = parse_react(response)
+        # 兜底：parse_react 成功返回 dict 但 final_answer 为空，
+        # 且原始文本明显包含 final_answer 字段时，正则强制提取。
+        if isinstance(parsed, dict) and not parsed.get("final_answer", "").strip():
+            if '"final_answer"' in response or '"answer"' in response:
+                import re
+                for key in ("final_answer", "answer"):
+                    m = re.search(
+                        rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"',
+                        response, re.DOTALL
+                    )
+                    if m:
+                        val = m.group(1)
+                        val = val.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+                        if len(val) > 10:
+                            logger.info(
+                                f"_parse_response: 兜底正则提取 {key} "
+                                f"(len={len(val)})"
+                            )
+                            parsed["final_answer"] = val
+                            break
+        return parsed
 
     def _build_tools_schema(self) -> list[dict[str, Any]]:
         """F5: 从 ``self.tools`` 构建 OpenAI 风格 tools schema 供 native FC。

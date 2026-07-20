@@ -421,6 +421,10 @@ class REPL:
             )
             result = "任务已执行，但未生成明确的回复内容。请尝试重新提问或使用更具体的指令。"
 
+        # v0.6.1: 安全网 —— 如果引擎返回的是未解析的 JSON 文本，
+        # 尝试从 JSON 中提取 final_answer，避免用户看到裸 JSON。
+        result = self._unwrap_json_result(result)
+
         if self._show_thinking:
             # ── 展开模式：重现完整执行过程（辅助信息全部 dim，只有最终答案高亮）──
             if self._last_mode_line:
@@ -473,6 +477,52 @@ class REPL:
     # 使后续对话能知道"刚刚创建/修改了哪些文件"。
     _FILE_CREATE_TOOLS = {"write_file", "create_directory", "batch_write"}
     _FILE_MODIFY_TOOLS = {"edit_file", "command"}
+
+    @staticmethod
+    def _unwrap_json_result(result: str) -> str:
+        """安全网：如果 result 是裸 JSON 文本，提取 final_answer。
+
+        当 parse_react 因内嵌 JSON/特殊字符解析失败时，引擎可能返回
+        原始 JSON 字符串而非提取后的 final_answer。此方法做最终兜底。
+        """
+        if not result or not result.strip():
+            return result
+        text = result.strip()
+        # 检测是否为 JSON 对象或数组
+        if not (text.startswith("{") or text.startswith("[")):
+            return result
+        if '"final_answer"' not in text and '"answer"' not in text:
+            return result
+        try:
+            import json as _json
+            data = _json.loads(text)
+            # 单对象
+            if isinstance(data, dict):
+                fa = data.get("final_answer") or data.get("answer") or data.get("result")
+                if fa and isinstance(fa, str) and len(fa) > 20:
+                    logger.info("_unwrap_json_result: 从 JSON 提取 final_answer")
+                    return fa
+            # 数组：取首个含 final_answer 的对象
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        fa = item.get("final_answer") or item.get("answer") or item.get("result")
+                        if fa and isinstance(fa, str) and len(fa) > 20:
+                            logger.info("_unwrap_json_result: 从 JSON 数组提取 final_answer")
+                            return fa
+        except Exception:
+            # JSON 解析失败，尝试正则提取
+            import re
+            for key in ("final_answer", "answer"):
+                m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+                if m:
+                    val = m.group(1)
+                    # 还原转义
+                    val = val.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+                    if len(val) > 20:
+                        logger.info(f"_unwrap_json_result: 正则提取 {key}")
+                        return val
+        return result
 
     def _track_session_files(self, panel) -> None:
         """从 ThinkingPanel 中提取文件路径，更新 ContextManager 工作记忆。"""
