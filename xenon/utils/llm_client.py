@@ -72,18 +72,23 @@ class LLMUsage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
 
     def add(self, other: "LLMUsage") -> None:
         self.prompt_tokens += other.prompt_tokens
         self.completion_tokens += other.completion_tokens
         self.total_tokens += other.total_tokens
+        self.cache_hit_tokens += other.cache_hit_tokens
+        self.cache_miss_tokens += other.cache_miss_tokens
 
 
 def _extract_usage(data: dict[str, Any] | None, provider: str) -> LLMUsage:
-    """从厂商响应 JSON 提取 usage，归一化为 LLMUsage。
+    """从厂商响应 JSON 提取 usage + 缓存命中数据，归一化为 LLMUsage。
 
     OpenAI 兼容：``usage.{prompt,completion,total}_tokens``；
     Anthropic：``usage.{input,output}_tokens``（无 total，求和）。
+    缓存字段：``usage.prompt_cache_hit_tokens`` / ``usage.prompt_cache_miss_tokens``。
     """
     if not isinstance(data, dict):
         return LLMUsage()
@@ -93,16 +98,57 @@ def _extract_usage(data: dict[str, Any] | None, provider: str) -> LLMUsage:
     if provider == "anthropic":
         p = int(u.get("input_tokens", 0) or 0)
         c = int(u.get("output_tokens", 0) or 0)
-        return LLMUsage(p, c, p + c)
+        return LLMUsage(prompt_tokens=p, completion_tokens=c, total_tokens=p + c)
     p = int(u.get("prompt_tokens", 0) or 0)
     c = int(u.get("completion_tokens", 0) or 0)
     t = u.get("total_tokens")
-    return LLMUsage(p, c, int(t) if t else (p + c))
+    # 缓存 token（DeepSeek / OpenAI 兼容字段，不存在则为 0）
+    hit = int(u.get("prompt_cache_hit_tokens", 0) or u.get("cache_hit_tokens", 0) or 0)
+    miss = int(u.get("prompt_cache_miss_tokens", 0) or u.get("cache_miss_tokens", 0) or 0)
+    return LLMUsage(
+        prompt_tokens=p, completion_tokens=c,
+        total_tokens=int(t) if t else (p + c),
+        cache_hit_tokens=hit, cache_miss_tokens=miss,
+    )
 
 
 _usage_tl = threading.local()
 _USAGE_CALLBACKS: list[Any] = []
 _USAGE_CB_LOCK = threading.Lock()
+
+# 全局响应回调（供 CacheTracker 等订阅原始 API 响应，纯本地计算）
+_RESPONSE_CALLBACKS: list[Any] = []
+_RESPONSE_CB_LOCK = threading.Lock()
+
+
+def register_response_callback(cb) -> Any:
+    """注册响应回调 ``cb(model_id, response_data: dict)``。
+
+    每次 chat_completion / chat_completion_with_tools 成功后调用，
+    传入原始 API 响应 JSON。回调异常被隔离（仅告警），不影响主调用链。
+    返回 unsubscribe 函数。
+    """
+    with _RESPONSE_CB_LOCK:
+        _RESPONSE_CALLBACKS.append(cb)
+
+    def _unsubscribe() -> None:
+        with _RESPONSE_CB_LOCK:
+            try:
+                _RESPONSE_CALLBACKS.remove(cb)
+            except ValueError:
+                pass
+    return _unsubscribe
+
+
+def _emit_response(model_id: str, data: dict[str, Any]) -> None:
+    """向所有响应回调发送原始 API 响应数据。"""
+    with _RESPONSE_CB_LOCK:
+        cbs = list(_RESPONSE_CALLBACKS)
+    for cb in cbs:
+        try:
+            cb(model_id, data)
+        except Exception:
+            logger.warning("响应回调执行异常（已隔离）", exc_info=True)
 
 
 def register_usage_callback(cb) -> Any:
@@ -133,11 +179,14 @@ def _emit_usage(model_id: str, usage: LLMUsage, latency: float) -> None:
             logger.warning("usage 回调执行异常（已隔离）", exc_info=True)
 
 
-def _acc_usage(provider: str, data: dict[str, Any] | None) -> None:
-    """把单次响应的 usage 累加到当前线程的累加器（若存在）。"""
+def _acc_usage(provider: str, data: dict[str, Any] | None, model_id: str = "") -> None:
+    """把单次响应的 usage 累加到当前线程累加器，并发出响应回调。"""
     acc = getattr(_usage_tl, "usage_acc", None)
     if acc is not None:
         acc.add(_extract_usage(data, provider))
+    # 发出响应回调（供 CacheTracker 等订阅原始 API 响应）
+    if isinstance(data, dict):
+        _emit_response(model_id, data)
 
 
 @dataclass
@@ -146,6 +195,8 @@ class _UsageTotals:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
     latency_sum: float = 0.0
 
 
@@ -169,6 +220,8 @@ class UsageTracker:
             t.prompt_tokens += usage.prompt_tokens
             t.completion_tokens += usage.completion_tokens
             t.total_tokens += usage.total_tokens
+            t.cache_hit_tokens += usage.cache_hit_tokens
+            t.cache_miss_tokens += usage.cache_miss_tokens
             t.latency_sum += latency
 
     def snapshot(self) -> dict[str, dict[str, Any]]:
@@ -603,8 +656,8 @@ def _call_openai_compat_once(
     resp = client.post(url, json=payload, headers=headers, timeout=timeout)
     resp.raise_for_status()
     data = resp.json()
-    # §8.8.1：提取并累加真实 usage（不再丢弃）
-    _acc_usage(endpoint.provider, data)
+    # §8.8.1：提取并累加真实 usage（不再丢弃），+ model_id 用于缓存追踪
+    _acc_usage(endpoint.provider, data, endpoint.model_name)
     msg = data["choices"][0]["message"]
     finish = data["choices"][0].get("finish_reason", "")
     content = msg.get("content") or ""
@@ -691,7 +744,7 @@ def _call_anthropic_once(
     resp.raise_for_status()
     data = resp.json()
     # §8.8.1：提取并累加真实 usage（Anthropic 用 input/output_tokens）
-    _acc_usage(endpoint.provider, data)
+    _acc_usage(endpoint.provider, data, endpoint.model_name)
     # content 是文本块列表；拼接所有 text 块（比仅取 [0] 更鲁棒）
     blocks = data.get("content", []) or []
     text = "".join(
@@ -869,6 +922,8 @@ def _call_openai_compat_with_tools(
     resp = client.post(url, json=payload, headers=headers, timeout=timeout)
     resp.raise_for_status()
     data = resp.json()
+    # §8.8.1：提取并累加真实 usage（含缓存命中数据）
+    _acc_usage(endpoint.provider, data, endpoint.model_name)
     choice = data.get("choices", [{}])[0]
     msg = choice.get("message", {})
     content = msg.get("content") or ""

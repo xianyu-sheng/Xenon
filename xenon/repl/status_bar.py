@@ -35,11 +35,13 @@ class StatusBar:
         registry: ModelRegistry,
         *,
         usage_tracker: Any = None,
+        cache_tracker: Any = None,  # CacheTracker（DeepSeek 缓存追踪）
     ) -> None:
         self.console = console
         self.ctx_mgr = ctx_mgr
         self.registry = registry
         self.usage_tracker = usage_tracker
+        self.cache_tracker = cache_tracker
         self._streaming = True
         self._last_model: str | None = None
         self._auto_router = None
@@ -180,11 +182,16 @@ class StatusBar:
         if self._tool_call_count > 0:
             parts.append(f"🔧{self._tool_call_count}")
         parts.append(f"{stats['total_messages']} msg")
-        if self.usage_tracker and (self.usage_tracker.cache_hits + self.usage_tracker.cache_misses) > 0:
-            parts.append(f"💾{self.usage_tracker.cache_hit_rate:.0%}")
-        if self.usage_tracker and self.usage_tracker.estimated_cost > 0:
-            cost = self.usage_tracker.estimated_cost
-            parts.append(f"💰{'<$0.01' if cost < 0.01 else f'${cost:.2f}'}")
+        if self.cache_tracker:
+            cr = self.cache_tracker
+            total_cache = cr.cache_hits + cr.cache_misses
+            if total_cache > 0:
+                parts.append(f"💾{cr.cache_hit_rate:.0%}")
+            if cr.estimated_cost_yuan > 0:
+                cost = cr.estimated_cost_yuan
+                parts.append(f"💰{'¥<0.01' if cost < 0.01 else f'¥{cost:.2f}'}")
+                if cr.savings_pct > 10:
+                    parts.append(f"💡-{cr.savings_pct}%")
         parts.append(self._fmt_duration(self.session_elapsed))
         parts.append(stream)
 

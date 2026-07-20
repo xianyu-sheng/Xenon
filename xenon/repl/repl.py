@@ -107,7 +107,10 @@ class REPL:
         self._novel_manager = NovelManager()
 
         # 状态栏
-        self.status_bar = StatusBar(console, self.ctx_mgr, self.registry)
+        from xenon.utils.deepseek_cache import CacheTracker
+        self._cache_tracker = CacheTracker()
+        self.status_bar = StatusBar(console, self.ctx_mgr, self.registry,
+                                    cache_tracker=self._cache_tracker)
 
         # v0.4.0: Auto router + model pool (replaces role_priority)
         from xenon.repl.model_pool import ModelPool
