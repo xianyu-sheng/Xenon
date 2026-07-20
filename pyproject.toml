@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xenon"
-version = "0.6.1"
+version = "0.6.2"
 description = "Xenon: AI coding assistant — where your wildest ideas come to life"
 readme = "README.md"
 license = {text = "MIT"}
