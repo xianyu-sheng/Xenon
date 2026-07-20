@@ -1083,6 +1083,8 @@ def _stream_openai_compat(
                     yield content
     if usage_data is not None:
         _emit_usage(model_id, _extract_usage(usage_data, endpoint.provider), time.time() - t0)
+        # 发出响应回调（供 CacheTracker 等订阅原始 API 响应）
+        _emit_response(model_id, usage_data)
 
 
 def _stream_anthropic(

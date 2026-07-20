@@ -174,14 +174,7 @@ class StatusBar:
         stream = "⚡" if self._streaming else "⏸"
 
         parts = []
-        if warn or notify:
-            parts.append(f"{warn}{notify}")
-        parts.append(model_display)
-        parts.append(mode.name)
-        parts.append(f"Token [{bar}] {stats['usage_ratio']}")
-        if self._tool_call_count > 0:
-            parts.append(f"🔧{self._tool_call_count}")
-        parts.append(f"{stats['total_messages']} msg")
+        # 缓存数据优先显示（最重要的差异化信息）
         if self.cache_tracker:
             cr = self.cache_tracker
             total_cache = cr.cache_hits + cr.cache_misses
@@ -189,9 +182,17 @@ class StatusBar:
                 parts.append(f"💾{cr.cache_hit_rate:.0%}")
             if cr.estimated_cost_yuan > 0:
                 cost = cr.estimated_cost_yuan
-                parts.append(f"💰{'¥<0.01' if cost < 0.01 else f'¥{cost:.2f}'}")
-                if cr.savings_pct > 10:
-                    parts.append(f"💡-{cr.savings_pct}%")
+                parts.append(f"💰{'<0.01' if cost < 0.01 else f'{cost:.2f}'}")
+                if cr.savings_pct >= 1:
+                    parts.append(f"💡{cr.savings_pct}%")
+        if warn or notify:
+            parts.append(f"{warn}{notify}")
+        parts.append(model_display)
+        parts.append(mode.name)
+        parts.append(f"Tk[{bar}]{stats['usage_ratio']}")
+        if self._tool_call_count > 0:
+            parts.append(f"🔧{self._tool_call_count}")
+        parts.append(f"{stats['total_messages']}m")
         parts.append(self._fmt_duration(self.session_elapsed))
         parts.append(stream)
 
