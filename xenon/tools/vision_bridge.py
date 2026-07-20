@@ -134,24 +134,70 @@ class VisionBridge:
         return self._vision_model_id is not None
 
     def _ensure_vision_model(self) -> str:
-        """查找模型池中的多模态模型，缓存结果。"""
+        """查找模型池中的多模态模型，缓存结果。
+
+        优先从模型池查找，再兜底扫描 credentials 中所有已配置模型。
+        """
         if self._vision_model_id:
             return self._vision_model_id
 
         if not self._model_pool:
             raise RuntimeError("VisionBridge 未初始化，请先调用 lazy_init()")
 
-        available = self._model_pool.list_models() if hasattr(
-            self._model_pool, "list_models"
-        ) else []
+        # 1) 从模型池查找
+        entries = self._model_pool.list_all()
+        available = [e.model_id for e in entries]
 
-        # 按优先级匹配
         for candidate in _VISION_CANDIDATES:
             for model_id in available:
                 if candidate in model_id.lower():
                     self._vision_model_id = model_id
                     logger.info("VisionBridge 已选择多模态模型: %s", model_id)
                     return model_id
+
+        for model_id in available:
+            if "vision" in model_id.lower() and "embedding" not in model_id.lower():
+                self._vision_model_id = model_id
+                logger.info("VisionBridge 已选择多模态模型 (vision match): %s", model_id)
+                return model_id
+
+        # 2) 兜底：扫描 credentials 中所有模型（不限于模型池 top-N）
+        try:
+            from xenon.repl.provider_registry import load_credentials, get_configured_providers
+            configured = get_configured_providers()
+            for p in configured:
+                if not p.key or not p.key.strip():
+                    continue
+                for model_name in (p.models or []):
+                    model_id = f"{p.key}/{model_name}"
+                    for candidate in _VISION_CANDIDATES:
+                        if candidate in model_id.lower():
+                            # 找到了！动态注册到模型池
+                            alias = model_name.replace(".", "-")
+                            try:
+                                self._model_pool.register(
+                                    model_id, alias=alias, weight=3.0,
+                                    api_key=p.api_key, base_url=p.base_url,
+                                )
+                            except Exception:
+                                pass
+                            self._vision_model_id = model_id
+                            logger.info("VisionBridge 发现并注册多模态模型: %s", model_id)
+                            return model_id
+                    if "vision" in model_id.lower() and "embedding" not in model_id.lower():
+                        alias = model_name.replace(".", "-")
+                        try:
+                            self._model_pool.register(
+                                model_id, alias=alias, weight=3.0,
+                                api_key=p.api_key, base_url=p.base_url,
+                            )
+                        except Exception:
+                            pass
+                        self._vision_model_id = model_id
+                        logger.info("VisionBridge 发现并注册多模态模型 (vision): %s", model_id)
+                        return model_id
+        except Exception as e:
+            logger.debug("Credentials 扫描失败: %s", e)
 
         raise RuntimeError(
             "模型池中未找到多模态模型。请配置一个支持图片输入的模型（如 gpt-4o-mini、"
@@ -186,6 +232,7 @@ class VisionBridge:
         if not force_refresh:
             cached = self._cache.get(image_hash)
             if cached:
+                cached.cached = True
                 logger.info("VisionBridge 缓存命中 (hash=%s...)", image_hash[:12])
                 return cached
 
