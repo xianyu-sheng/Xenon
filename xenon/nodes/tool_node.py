@@ -1995,21 +1995,19 @@ class ToolNode(BaseNode):
                 "error": f"repo 格式非法（应为 owner/repo）: {repo_input}",
             }
 
-        # ── 解析分支 ──
-        branch = self._resolve_template(self.branch, context) or "main"
-
         # ── 构建缓存路径 ──
         cache_root = Path.home() / ".xenon" / "repos"
         cache_root.mkdir(parents=True, exist_ok=True)
         target_dir = cache_root / repo.replace("/", "_")
 
-        # ── 克隆（如果尚未缓存）──
+        # ── 决议分支（前置：无论命中缓存与否都需要，供给 _analyze_cloned_repo）──
         clone_url = f"https://github.com/{repo}.git"
+        branch = self._resolve_branch_for_clone(clone_url, context)
+
+        # ── 克隆（如果尚未缓存）──
         if not (target_dir / ".git").exists():
-            # v0.6.1: 处理残留目录（上次克隆失败可能留下空目录）
-            if target_dir.exists():
-                logger.warning(f"[{self.id}] 目标目录已存在但非 git 仓库，删除后重试: {target_dir}")
-                shutil.rmtree(target_dir, ignore_errors=True)
+            # v0.6.1: 清理残留目录（上次克隆失败留下的半拉子目录）
+            self._rmtree_cleanup(target_dir)
 
             logger.info(f"[{self.id}] 克隆仓库: {clone_url} → {target_dir}")
             try:
@@ -2020,29 +2018,14 @@ class ToolNode(BaseNode):
                 )
                 if result.returncode != 0:
                     stderr = result.stderr.strip()
-                    # 如果 main 失败，尝试 master
-                    if branch == "main":
-                        logger.info(f"[{self.id}] main 分支失败，尝试 master")
-                        # 清理可能的残留
-                        if target_dir.exists():
-                            shutil.rmtree(target_dir, ignore_errors=True)
-                        result = subprocess.run(
-                            ["git", "clone", "--depth", "1", "--single-branch", "-b", "master",
-                             clone_url, str(target_dir)],
-                            capture_output=True, text=True, timeout=self.timeout,
-                        )
-                        if result.returncode != 0:
-                            stderr = result.stderr.strip()
-                    if result.returncode != 0:
-                        # v0.6.1: 增强错误信息，包含分支和 URL
-                        return {
-                            "action_type": "clone_repo", "repo": repo,
-                            "success": False,
-                            "error": (
-                                f"git clone 失败 (branch={branch}): {_last_error_lines(stderr)}"
-                                f"\n提示: 仓库可能不存在、已改名或需认证。可尝试用浏览器打开 {clone_url}"
-                            ),
-                        }
+                    return {
+                        "action_type": "clone_repo", "repo": repo,
+                        "success": False,
+                        "error": (
+                            f"git clone 失败 (branch={branch}): {_last_error_lines(stderr)}"
+                            f"\n提示: 仓库可能不存在、已改名或需认证。可尝试用浏览器打开 {clone_url}"
+                        ),
+                    }
             except FileNotFoundError:
                 return {
                     "action_type": "clone_repo", "repo": repo,
@@ -2060,6 +2043,69 @@ class ToolNode(BaseNode):
 
         # ── 分析克隆结果 ──
         return self._analyze_cloned_repo(target_dir, repo, branch)
+
+    # ── clone_repo 辅助方法 ───────────────────────────────────
+
+    @staticmethod
+    def _rmtree_cleanup(target_dir: Path) -> None:
+        """清理残留目录（上次克隆失败留下的半拉子目录）。
+
+        与 shutil.rmtree(ignore_errors=True) 不同：
+        - 先尝试正常删除
+        - 删除失败时记录 error 日志（留下排查痕迹）
+        - 不抛异常——清理是尽力而为，不应阻塞 clone 流程
+        """
+        if not target_dir.exists():
+            return
+        try:
+            shutil.rmtree(target_dir)
+            logger.info("已清理残留目录: %s", target_dir)
+        except OSError as e:
+            logger.error(
+                "清理残留目录失败 (%s)，clone 可能因 '目录非空' 失败: %s",
+                target_dir, e,
+            )
+
+    def _resolve_branch_for_clone(self, clone_url: str, context: AgentContext) -> str:
+        """决议 clone 使用的分支名。
+
+        优先级：
+        1. 用户显式指定分支（通过 template 参数）
+        2. git ls-remote 探测远程 HEAD 指向的默认分支
+        3. 兜底 'main'
+
+        与旧版 main→master 回退相比：不再靠猜，而是用 ls-remote 一次查清。
+        覆盖 main / master / develop / trunk 等任意默认分支名。
+        """
+        # 第 1 层：用户显式指定
+        explicit = self._resolve_template(self.branch, context)
+        if explicit and explicit.strip():
+            return explicit.strip()
+
+        # 第 2 层：ls-remote 探测
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["git", "ls-remote", "--symref", clone_url, "HEAD"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                # 输出形如: ref: refs/heads/main	HEAD
+                import re
+                m = re.search(r"ref: refs/heads/(\S+)", result.stdout)
+                if m:
+                    default_branch = m.group(1)
+                    logger.info(
+                        "[%s] ls-remote 探测默认分支: %s",
+                        self.id, default_branch,
+                    )
+                    return default_branch
+        except Exception as e:
+            logger.debug("[%s] ls-remote 失败，fallback main: %s", self.id, e)
+
+        # 第 3 层：兜底
+        logger.debug("[%s] 无法探测默认分支，兜底 main", self.id)
+        return "main"
 
     @staticmethod
     def _analyze_cloned_repo(target_dir: Path, repo: str, branch: str) -> dict[str, Any]:
