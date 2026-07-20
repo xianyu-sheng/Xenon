@@ -1425,6 +1425,16 @@ class REPL:
             else:
                 # 通用对话，无明确任务意图
                 console.print("[dim]💬 通用对话[/dim]")
+            # ── 缓存优化提示 ──
+            if hasattr(self, '_cache_tracker') and self._cache_tracker:
+                cr = self._cache_tracker
+                total = cr.cache_hits + cr.cache_misses
+                if total > 100 and was_optimized:
+                    rate = cr.cache_hit_rate
+                    if rate < 0.70:
+                        console.print(
+                            f"[dim cyan]💡 提示词已优化，预计可提升缓存命中率（当前 {rate:.0%}）[/dim cyan]"
+                        )
         else:
             optimized = user_input
 

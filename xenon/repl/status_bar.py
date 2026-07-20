@@ -161,8 +161,8 @@ class StatusBar:
             model_display = f"auto {active or '—'}"
         else:
             model_display = self._last_model or "—"
-        if len(model_display) > 22:
-            model_display = "…" + model_display[-21:]
+        if len(model_display) > 35:
+            model_display = "…" + model_display[-34:]
 
         bar_width = 8
         filled = min(int(pct_val / 100 * bar_width), bar_width)
@@ -173,32 +173,57 @@ class StatusBar:
         warn = "⚠ /compact · " if stats["needs_compact"] else ""
         stream = "⚡" if self._streaming else "⏸"
 
-        parts = []
-        # 缓存数据优先显示（最重要的差异化信息）
+        # ── 三段式布局：左(缓存) · 中(模型/范式) · 右(Token/消息/时长) ──
+        term_width = shutil.get_terminal_size().columns
+
+        # 左段：缓存数据（最重要）
+        left_parts: list[str] = []
         if self.cache_tracker:
             cr = self.cache_tracker
             total_cache = cr.cache_hits + cr.cache_misses
             if total_cache > 0:
-                parts.append(f"💾{cr.cache_hit_rate:.0%}")
+                left_parts.append(f"💾{cr.cache_hit_rate:.0%}")
             if cr.estimated_cost_yuan > 0:
                 cost = cr.estimated_cost_yuan
-                parts.append(f"💰{'<0.01' if cost < 0.01 else f'{cost:.2f}'}")
+                left_parts.append(f"💰{'<0.01' if cost < 0.01 else f'{cost:.2f}'}")
                 if cr.savings_pct >= 1:
-                    parts.append(f"💡{cr.savings_pct}%")
-        if warn or notify:
-            parts.append(f"{warn}{notify}")
-        parts.append(model_display)
-        parts.append(mode.name)
-        parts.append(f"Tk[{bar}]{stats['usage_ratio']}")
-        if self._tool_call_count > 0:
-            parts.append(f"🔧{self._tool_call_count}")
-        parts.append(f"{stats['total_messages']}m")
-        parts.append(self._fmt_duration(self.session_elapsed))
-        parts.append(stream)
+                    left_parts.append(f"💡{cr.savings_pct}%")
+        if not left_parts:
+            left = ""
+        else:
+            left = " ".join(left_parts)
 
-        line = " · ".join(str(p) for p in parts)
-        term_width = shutil.get_terminal_size().columns
-        return line[:term_width - 1] if len(line) > term_width else line
+        # 中段：模型名 + 范式 + 警告
+        center_parts = [model_display, mode.name]
+        if warn:
+            center_parts.insert(0, warn.rstrip(" · "))
+        center = " · ".join(center_parts)
+
+        # 右段：Token 条 + 消息数 + 工具数 + 时长 + 流式状态
+        right_parts = [f"{bar} {stats['usage_ratio']}"]
+        if self._tool_call_count > 0:
+            right_parts.append(f"🔧{self._tool_call_count}")
+        right_parts.append(f"{stats['total_messages']}m")
+        right_parts.append(self._fmt_duration(self.session_elapsed))
+        right_parts.append(stream)
+        right = " · ".join(right_parts)
+
+        # 三段式排版：左 → 中 ← 右，自适应间距
+        left_w = len(left)
+        right_w = len(right)
+        center_w = len(center)
+        available = term_width - left_w - right_w - 4  # 保留两个 "  " 分隔
+        if available >= center_w:
+            padding = available - center_w
+            left_pad = padding // 2
+            right_pad = padding - left_pad
+            line = f"{left}  {' ' * left_pad}{center}{' ' * right_pad}  {right}"
+        else:
+            line = f"{left}  {center}  {right}"
+            if len(line) > term_width:
+                line = line[:term_width - 1]
+
+        return line.rstrip()
 
     # ── 非 PT 模式 ─────────────────────────────────────────
 
