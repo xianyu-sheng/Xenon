@@ -101,7 +101,10 @@ class TestParseReAct:
 
     def test_no_json_returns_raw(self):
         result = parse_react("plain text")
-        assert result["final_answer"] == "plain text"
+        # v0.6.2: 无法解析 JSON 时，内容放入 thought 而非 final_answer
+        # 让引擎识别为 "需要进一步处理" 而非 "最终回答"
+        assert result["thought"] == "plain text"
+        assert result.get("final_answer", "") == ""
 
     def test_action_input_not_dict_fallback(self):
         raw = '{"action": "x", "action_input": "bad"}'

@@ -39,10 +39,12 @@ def test_parse_response_5_tool_calls():
     )
     # 必须不抛异常
     result = parse_react(text)
-    assert isinstance(result, dict)
-    # 由于 _extract_json 无法处理多 JSON 拼接，回退到 raw 文本
-    # 验证：要么 action 被识别（首个 JSON），要么 final_answer = raw 文本
-    if result.get("action"):
+    # v0.6.2: parse_react 现在能正确检测 JSON 数组并返回 list[dict]
+    if isinstance(result, list):
+        # 路径 1：多个 JSON 被解析为并行工具调用列表
+        assert len(result) == 5
+        assert result[0]["action"] in ("read_file", "list_files", "command", "git", "search_files")
+    elif result.get("action"):
         # 路径 1：识别到第一个 action（理想但罕见，因为 _extract_json 在最后 } 截断时整个内容当 raw）
         assert result["action"] in (
             "read_file", "list_files", "command", "git", "search_files"

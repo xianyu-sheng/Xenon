@@ -62,7 +62,7 @@ class TestSpawnSubagent:
         out = eng._spawn_subagent({"task": "总结这个模块"}, ctx, tracker)
 
         assert "✅" in out
-        assert "sub-d1-1" in out  # task_id：深度1，第1个
+        assert "sub-react-d1-1" in out  # v0.6.2: task_id 格式为 sub-{engine}-d{depth}-{num}
         assert "工具调用" in out
         assert "子任务结果" in out
 

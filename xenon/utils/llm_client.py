@@ -34,30 +34,6 @@ class ResponseTruncatedError(RuntimeError):
     """LLM 响应因 max_tokens 上限被截断，且续写次数耗尽仍不完整。"""
 
 
-# ── R3: 结构化 LLM 响应（含原生 function-calling tool_calls） ──
-
-
-@dataclass
-class LLMResponse:
-    """chat_completion_with_tools 的结构化返回。
-
-    - content: 模型文本回复（可能为空，当模型仅发起 tool_call 时）
-    - tool_calls: 原生 FC 解析出的工具调用列表，每项形如
-      {"id": str, "name": str, "arguments": dict}；无工具调用时为空列表
-    - finish_reason: OpenAI 风格的结束原因（stop|tool_calls|length|...）
-    - raw: 原始响应 JSON（调试用，可能为 None）
-    """
-
-    content: str = ""
-    tool_calls: list[dict[str, Any]] = field(default_factory=list)
-    finish_reason: str = ""
-    raw: dict[str, Any] | None = None
-
-    @property
-    def has_tool_calls(self) -> bool:
-        return bool(self.tool_calls)
-
-
 # ── §8.8.1：真实 token / 延迟统计（usage 不再丢弃）──────────────
 # chat_completion 返回 str 的契约不变（向后兼容，引擎/测试均不受影响），
 # 但每次成功调用经 usage 回调发出 (model_id, LLMUsage, latency)，供
@@ -81,6 +57,32 @@ class LLMUsage:
         self.total_tokens += other.total_tokens
         self.cache_hit_tokens += other.cache_hit_tokens
         self.cache_miss_tokens += other.cache_miss_tokens
+
+
+# ── R3: 结构化 LLM 响应（含原生 function-calling tool_calls） ──
+
+
+@dataclass
+class LLMResponse:
+    """chat_completion_with_tools 的结构化返回。
+
+    - content: 模型文本回复（可能为空，当模型仅发起 tool_call 时）
+    - tool_calls: 原生 FC 解析出的工具调用列表，每项形如
+      {"id": str, "name": str, "arguments": dict}；无工具调用时为空列表
+    - finish_reason: OpenAI 风格的结束原因（stop|tool_calls|length|...）
+    - usage: 本次调用的 token 用量（含缓存命中/未命中），由响应 JSON 提取
+    - raw: 原始响应 JSON（调试用，可能为 None）
+    """
+
+    content: str = ""
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    finish_reason: str = ""
+    usage: LLMUsage = field(default_factory=LLMUsage)
+    raw: dict[str, Any] | None = None
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return bool(self.tool_calls)
 
 
 def _extract_usage(data: dict[str, Any] | None, provider: str) -> LLMUsage:
@@ -929,7 +931,8 @@ def _call_openai_compat_with_tools(
     content = msg.get("content") or ""
     finish = choice.get("finish_reason", "")
     tool_calls = _parse_openai_tool_calls(msg)
-    return LLMResponse(content=content, tool_calls=tool_calls, finish_reason=finish, raw=data)
+    return LLMResponse(content=content, tool_calls=tool_calls, finish_reason=finish,
+                       usage=_extract_usage(data, endpoint.provider), raw=data)
 
 
 def _call_anthropic_with_tools(
@@ -999,7 +1002,8 @@ def _call_anthropic_with_tools(
     # Anthropic stop_reason → OpenAI 风格 finish_reason
     stop = data.get("stop_reason", "")
     finish = "tool_calls" if stop == "tool_use" else ("length" if stop == "max_tokens" else stop or "stop")
-    return LLMResponse(content=text, tool_calls=tool_calls, finish_reason=finish, raw=data)
+    return LLMResponse(content=text, tool_calls=tool_calls, finish_reason=finish,
+                       usage=_extract_usage(data, endpoint.provider), raw=data)
 
 
 # ── 流式调用接口 ──────────────────────────────────────────

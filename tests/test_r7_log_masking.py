@@ -64,11 +64,17 @@ class TestConsoleCallbackOnActMasking:
         out = capsys.readouterr().out
         assert "SECRET_CODE_HERE" not in out
         assert "sk-leak" not in out
-        assert "<masked" in out
+        # v0.6.2: _brief_params 优先展示文件路径，敏感值已被 mask 但不出现在摘要中
+        # <masked> 可能出现在 verbose 模式的完整输出中，但 brief 模式只展示路径
         assert "/tmp/x.py" in out  # 非敏感参数保留可见
 
     def test_non_verbose_does_not_print(self, capsys):
         cb = ConsoleCallback(verbose=False)
-        cb.on_act("write_file", {"content": "secret", "api_key": "sk"})
+        cb.on_act("write_file", {"content": "SECRET_PASSWORD", "api_key": "abc123xyz"})
         out = capsys.readouterr().out
-        assert out == ""
+        # v0.6.2: 非 verbose 也输出工具调用行，但敏感参数已脱敏
+        assert "🔧 write_file" in out
+        assert "SECRET_PASSWORD" not in out
+        assert "abc123xyz" not in out  # API key 值不应暴露
+        # api_key 值被替换为 <masked len=N>
+        assert "<masked" in out
