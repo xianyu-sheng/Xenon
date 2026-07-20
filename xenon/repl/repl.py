@@ -20,8 +20,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from rich.console import Console
+from rich import box
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 from rich.prompt import Prompt
 from rich.theme import Theme
@@ -55,11 +57,11 @@ except ImportError:
 
 # ── 自定义主题 ────────────────────────────────────────────
 _theme = Theme({
-    "user": "bold cyan",
-    "assistant": "green",
-    "system": "dim yellow",
-    "error": "bold red",
-    "command": "bold magenta",
+    "user": "bold #67e8f9",
+    "assistant": "#bbf7d0",
+    "system": "dim #facc15",
+    "error": "bold #fda4af",
+    "command": "bold #c4b5fd",
 })
 
 console = Console(theme=_theme)
@@ -218,10 +220,17 @@ class REPL:
                 event.app.invalidate()
 
         style = Style.from_dict({
-            # 提示符 `>` — 灰底白字色块，醒目锚点
-            "prompt": "bold #ffffff bg:#5c5c8a",
-            # 底部状态栏 — 暗色，不抢注意力
-            "bottom-toolbar": "#aaaaaa",
+            "prompt": "bold #ecfeff bg:#0e7490",
+            "bottom-toolbar": "bg:#0f172a #cbd5e1",
+            "toolbar.brand": "bold bg:#164e63 #a5f3fc",
+            "toolbar.separator": "bg:#0f172a #334155",
+            "toolbar.model": "bg:#0f172a #e0f2fe",
+            "toolbar.mode": "bg:#0f172a #c4b5fd",
+            "toolbar.good": "bold bg:#0f172a #86efac",
+            "toolbar.warning": "bold bg:#0f172a #fcd34d",
+            "toolbar.danger": "bold bg:#0f172a #fda4af",
+            "toolbar.notice": "bold bg:#0f172a #fde68a",
+            "toolbar.muted": "bg:#0f172a #94a3b8",
         })
 
         history_path = _HISTORY_DIR / "input_history.txt"
@@ -236,7 +245,7 @@ class REPL:
                     completer=self._completer,
                     key_bindings=kb,
                     style=style,
-                    bottom_toolbar=self.status_bar.get_toolbar_text,
+                    bottom_toolbar=self.status_bar.get_toolbar_fragments,
                 )
             except Exception:
                 logger.debug("prompt_toolkit 初始化失败，回退自建输入", exc_info=True)
@@ -884,11 +893,6 @@ class REPL:
         ]
         tip = random.choice(tips)
 
-        # ── 构建面板 ──
-        width = 62
-        top = f"[dim]╭{'─' * (width - 2)}╮[/dim]"
-        bottom = f"[dim]╰{'─' * (width - 2)}╯[/dim]"
-
         # v0.3.0+ 修复（B-4）：版本号从 pyproject.toml 动态读，不再硬编码。
         # 用 importlib.metadata 优先；失败兜底读本文件邻近的版本常量
         try:
@@ -897,24 +901,28 @@ class REPL:
         except Exception:
             _ver = "0.6.0"  # 兜底
 
-        lines = [
-            "",
-            f"  [bold white]Welcome to Xenon[/bold white]  [dim]v{_ver}[/dim]",
-            f"  [bold cyan]Where your wildest ideas come to life.[/bold cyan]",
-            "",
-            f"  [dim]范式[/dim]  [bold]{mode.name}[/bold]  [dim]— {mode.description}[/dim]",
-            f"  [dim]模型[/dim]  {model_display}",
-            "",
-            f"  {tip}",
-            "",
-        ]
+        details = Table.grid(padding=(0, 2))
+        details.add_column(style="dim #94a3b8", justify="right")
+        details.add_column()
+        details.add_row("MODE", f"[bold #c4b5fd]{mode.name}[/bold #c4b5fd]  [dim]{mode.description}[/dim]")
+        details.add_row("MODEL", model_display)
 
-        content = "\n".join(lines)
+        body = Table.grid(expand=True, padding=(0, 1))
+        body.add_column(ratio=1)
+        body.add_row("[bold #f8fafc]Your AI coding workspace[/bold #f8fafc]\n[dim #94a3b8]Plan, build, and iterate without leaving the terminal.[/dim #94a3b8]")
+        body.add_row(details)
+        body.add_row(f"[dim #64748b]TIP[/dim #64748b]  {tip}")
 
         console.print()
-        console.print(top)
-        console.print(content, end="")
-        console.print(bottom)
+        console.print(Panel(
+            body,
+            title=f"[bold #67e8f9] XENON [/bold #67e8f9] [dim]v{_ver}[/dim]",
+            subtitle="[dim]type /help to explore[/dim]",
+            border_style="#155e75",
+            box=box.ROUNDED,
+            padding=(1, 2),
+            width=min(76, max(48, console.width - 4)),
+        ))
         console.print()
 
     def _read_input(self) -> str:
@@ -946,7 +954,7 @@ class REPL:
                 )
 
         # 状态栏仅通过 bottom_toolbar 渲染（在输入框下方），不在 prompt 上方重复
-        message: list[tuple[str, str]] = [("class:prompt", "> ")]
+        message: list[tuple[str, str]] = [("class:prompt", "  ❯  ")]
 
         # 输入前打一条彩色引导线，在历史中一眼定位输入位置
         try:
