@@ -11,7 +11,7 @@
 
 ![Xenon terminal demo](docs/demo.gif)
 
-*💡 DeepSeek 缓存命中率实时追踪：底部 toolbar 显示 💾96% 命中率 / 💰¥<0.01 费用 / 💡92% 节省，`/cost` 查看完整面板，退出时自动打印省钱报告。🆕 **视觉桥接器**：Ctrl+Alt+V 粘贴图片 → 多模态模型转录 → DeepSeek 推理。全部数据走本地确定性计算，零额外 LLM 消费。*
+*💡 DeepSeek 缓存命中率实时追踪：底部 toolbar 显示 💾96% 命中率 / 💰¥<0.01 费用 / 💡92% 节省，`/cost` 查看完整面板，退出自动省钱报告。🆕 **视觉桥接器**：`/vision` 切换模式 → Ctrl+Alt+V 粘贴图片 → 多模态模型转录 → DeepSeek 推理。全部数据走本地确定性计算，零额外 LLM 消费。*
 
 > 📖 **[DeepSeek 缓存最佳实践指南 →](docs/deepseek-guide.md)** — 从原理到落地的完整闭环：提示词对齐策略 · 三层监控体系 · 费用对比数据 · 命中率骤降诊断
 
