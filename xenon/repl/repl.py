@@ -112,6 +112,14 @@ class REPL:
         self.status_bar = StatusBar(console, self.ctx_mgr, self.registry,
                                     cache_tracker=self._cache_tracker)
 
+        # ── 视觉桥接器（惰性加载） ──────────────────────────
+        from xenon.tools import VisionBridge, ClipboardMonitor
+        self._vision_bridge = VisionBridge()
+        self._vision_enabled = True          # 默认开启，可 /vision 切换
+        self._clipboard_monitor = ClipboardMonitor(
+            on_image=self._on_clipboard_image
+        )
+
         # v0.4.0: Auto router + model pool (replaces role_priority)
         from xenon.repl.model_pool import ModelPool
         from xenon.repl.auto_router import AutoRouter
@@ -667,6 +675,50 @@ class REPL:
             padding=(0, 1),
         ))
         cr.close()
+
+    def _on_clipboard_image(self, image_data: bytes) -> None:
+        """剪贴板图片回调 — 惰性初始化 VisionBridge 并转录图片。"""
+        if not self._vision_enabled:
+            console.print("[dim]👁 视觉模式已关闭，输入 /vision 开启[/dim]")
+            return
+
+        # 惰性初始化：首次调用才连接模型池
+        try:
+            self._vision_bridge.lazy_init(self.model_pool)
+        except Exception:
+            pass  # 可能已经初始化过
+
+        console.print("[dim]👁 正在用多模态模型转录图片...[/dim]")
+        try:
+            result = self._vision_bridge.describe_image(image_data)
+        except RuntimeError as e:
+            console.print(f"[yellow]⚠ {e}[/yellow]")
+            console.print(
+                "[dim]请配置一个多模态模型（如 gpt-4o-mini、claude-haiku、gemini-flash）。[/dim]"
+            )
+            return
+        except Exception as e:
+            console.print(f"[red]视觉转录失败: {e}[/red]")
+            return
+
+        # 注入到对话
+        description = (
+            f"[用户粘贴了一张图片，视觉模型 ({result.model_used}) "
+            f"已将其转录为文字：]\n\n{result.text}"
+        )
+        self.ctx_mgr.add_user_message(description)
+        console.print(
+            f"[dim green]👁 图片已转录 ({result.model_used}, {len(result.text)} 字符, "
+            f"{result.latency_ms:.0f}ms)[/dim green]"
+        )
+        # 自动触发一轮对话
+        self._handle_chat(description)
+
+    def _start_vision_monitor(self) -> None:
+        """惰性启动剪贴板监听（首次调用时激活）。"""
+        if not self._clipboard_monitor.is_running:
+            self._clipboard_monitor.start()
+            console.print("[dim]👁 视觉模式已开启 (Ctrl+Alt+V 粘贴图片)[/dim]")
 
     def _check_first_run(self) -> None:
         """首次启动时检测配置状态，自动引导。

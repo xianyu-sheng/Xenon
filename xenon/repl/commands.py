@@ -2896,3 +2896,53 @@ def _cmd_cost(*, args: str = "", session_state: dict = None, **kwargs: Any) -> s
         return f"[dim]未找到匹配 '{model_filter}' 的模型数据。[/dim]"
 
     return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════
+# /vision — 多模态视觉模式
+# ══════════════════════════════════════════════════════════════
+
+register_command(
+    "/vision",
+    "切换视觉粘贴模式 (Ctrl+Alt+V 粘贴图片，多模态模型转录)",
+    "/vision [on|off]",
+)
+
+
+@_handler("/vision")
+def _cmd_vision(*, args: str = "", session_state: dict = None, **kwargs: Any) -> str:
+    """切换视觉粘贴模式。
+
+    开启后，按 Ctrl+Alt+V 可将剪贴板图片通过模型池中
+    的多模态模型转录为文字，注入到对话中。
+    """
+    repl = session_state.get("_repl") if session_state else None
+    if not repl:
+        return "[dim]REPL 未初始化[/dim]"
+
+    bridge = getattr(repl, "_vision_bridge", None)
+    if not bridge:
+        return "[dim]视觉桥接器未初始化[/dim]"
+
+    arg = args.strip().lower()
+    if arg == "on":
+        repl._vision_enabled = True
+        repl._start_vision_monitor()
+        return (
+            "[bold green]👁 视觉模式已开启[/bold green]\n"
+            "按 [bold]Ctrl+Alt+V[/bold] 粘贴剪贴板图片，"
+            "系统将自动用多模态模型转录为文字。"
+        )
+    elif arg == "off":
+        repl._vision_enabled = False
+        if repl._clipboard_monitor.is_running:
+            repl._clipboard_monitor.stop()
+        return "[dim]👁 视觉模式已关闭[/dim]"
+    else:
+        status = "开启" if repl._vision_enabled else "关闭"
+        hint = (
+            f"👁 视觉模式: [bold]{status}[/bold]\n"
+            f"用法: /vision on 开启 | /vision off 关闭\n"
+            f"开启后按 Ctrl+Alt+V 粘贴剪贴板图片"
+        )
+        return hint
