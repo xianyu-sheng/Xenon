@@ -132,6 +132,13 @@ class ThinkingPanel:
     - 使用 dim 边框，与最终答案面板形成视觉层次
     """
 
+    # v0.6.1: 错误检测关键词（与 ConsoleCallback._brief_observation 保持一致）
+    _ERROR_KEYWORDS: tuple[str, ...] = (
+        "错误", "error", "失败", "fail", "不存在", "not found",
+        "拒绝", "denied", "超时", "timeout", "403", "429", "401",
+        "SecurityError", "路径越界", "fatal", "无法", "不能",
+    )
+
     def __init__(self) -> None:
         self.steps: list[ThinkingStep] = []
         self.errors: list[str] = []
@@ -152,10 +159,18 @@ class ThinkingPanel:
         self._current_step.action_input = action_input
 
     def add_observation(self, observation: str) -> None:
-        """记录一次观察结果，并完成当前步骤。"""
+        """记录一次观察结果，并完成当前步骤。
+
+        v0.6.1: 自动检测 observation 中的错误关键词，设置 is_error 标记。
+        """
         if self._current_step is None:
             self._current_step = ThinkingStep()
         self._current_step.observation = observation
+        # 自动检测错误
+        obs_lower = observation.lower()
+        self._current_step.is_error = any(
+            kw.lower() in obs_lower for kw in self._ERROR_KEYWORDS
+        )
         self.steps.append(self._current_step)
         self._current_step = None
 

@@ -1963,6 +1963,12 @@ class ToolNode(BaseNode):
         # ── 克隆（如果尚未缓存）──
         clone_url = f"https://github.com/{repo}.git"
         if not (target_dir / ".git").exists():
+            # v0.6.1: 处理残留目录（上次克隆失败可能留下空目录）
+            if target_dir.exists():
+                import shutil
+                logger.warning(f"[{self.id}] 目标目录已存在但非 git 仓库，删除后重试: {target_dir}")
+                shutil.rmtree(target_dir, ignore_errors=True)
+
             logger.info(f"[{self.id}] 克隆仓库: {clone_url} → {target_dir}")
             try:
                 result = subprocess.run(
@@ -1971,19 +1977,30 @@ class ToolNode(BaseNode):
                     capture_output=True, text=True, timeout=self.timeout,
                 )
                 if result.returncode != 0:
+                    stderr = result.stderr.strip()
                     # 如果 main 失败，尝试 master
                     if branch == "main":
                         logger.info(f"[{self.id}] main 分支失败，尝试 master")
+                        # 清理可能的残留
+                        if target_dir.exists():
+                            import shutil as _shutil
+                            _shutil.rmtree(target_dir, ignore_errors=True)
                         result = subprocess.run(
                             ["git", "clone", "--depth", "1", "--single-branch", "-b", "master",
                              clone_url, str(target_dir)],
                             capture_output=True, text=True, timeout=self.timeout,
                         )
+                        if result.returncode != 0:
+                            stderr = result.stderr.strip()
                     if result.returncode != 0:
+                        # v0.6.1: 增强错误信息，包含分支和 URL
                         return {
                             "action_type": "clone_repo", "repo": repo,
                             "success": False,
-                            "error": f"git clone 失败: {result.stderr.strip()}",
+                            "error": (
+                                f"git clone 失败 (branch={branch}): {stderr[:300]}"
+                                f"\n提示: 仓库可能不存在、已改名或需认证。可尝试用浏览器打开 {clone_url}"
+                            ),
                         }
             except FileNotFoundError:
                 return {
