@@ -1429,11 +1429,16 @@ class REPL:
             if hasattr(self, '_cache_tracker') and self._cache_tracker:
                 cr = self._cache_tracker
                 total = cr.cache_hits + cr.cache_misses
-                if total > 100 and was_optimized:
+                if total > 0 and was_optimized:
                     rate = cr.cache_hit_rate
+                    cost = cr.estimated_cost_yuan
                     if rate < 0.70:
                         console.print(
-                            f"[dim cyan]💡 提示词已优化，预计可提升缓存命中率（当前 {rate:.0%}）[/dim cyan]"
+                            f"[dim cyan]💡 提示词已优化，预计可提升缓存命中率（当前 {rate:.0%}，累计费用 ¥{cost:.4f}）[/dim cyan]"
+                        )
+                    else:
+                        console.print(
+                            f"[dim cyan]💡 提示词已优化，缓存模式持续生效中（命中率 {rate:.0%}，累计费用 ¥{cost:.4f}）[/dim cyan]"
                         )
         else:
             optimized = user_input
