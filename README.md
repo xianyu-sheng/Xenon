@@ -11,7 +11,7 @@
 
 ![Xenon terminal demo](docs/demo.gif)
 
-*💡 DeepSeek 缓存命中率实时追踪：底部 toolbar 显示 💾96% 命中率 / 💰¥<0.01 费用 / 💡92% 节省，`/cost` 查看完整面板，退出时自动打印省钱报告。全部数据走本地确定性计算，零额外 LLM 消费。*
+*💡 DeepSeek 缓存命中率实时追踪：底部 toolbar 显示 💾96% 命中率 / 💰¥<0.01 费用 / 💡92% 节省，`/cost` 查看完整面板，退出时自动打印省钱报告。🆕 **视觉桥接器**：Ctrl+Alt+V 粘贴图片 → 多模态模型转录 → DeepSeek 推理。全部数据走本地确定性计算，零额外 LLM 消费。*
 
 > 📖 **[DeepSeek 缓存最佳实践指南 →](docs/deepseek-guide.md)** — 从原理到落地的完整闭环：提示词对齐策略 · 三层监控体系 · 费用对比数据 · 命中率骤降诊断
 
@@ -212,6 +212,19 @@ xenon chat --engine react "帮我排查这个 bug"
 | **零额外成本** | 所有数据来自 API 响应 `usage` 字段 + 本地定价表，不消耗额外 LLM API |
 
 📖 **[DeepSeek 缓存最佳实践指南 →](docs/deepseek-guide.md)** — 从原理到落地，完整闭环。
+
+### 🆕 视觉桥接器（v0.6.1）
+
+让 DeepSeek 这个纯文本模型也能"看见"图片。通过模型池中的多模态模型转录图片，DeepSeek 负责推理。
+
+| 能力 | 说明 |
+|------|------|
+| **热键粘贴** | Ctrl+Alt+V 粘贴剪贴板图片，自动转录 |
+| **智能路由** | 自动匹配模型池中的多模态模型（gpt-4o-mini, claude-haiku, gemini-flash, doubao-vision 等 15+） |
+| **零外部依赖** | 复用现有模型池 Key，无需额外 API 配置 |
+| **惰性加载** | 首次热键触发才启动，REPL 启动 0ms 开销 |
+| **SHA256 缓存** | 相同图片不重复调用视觉模型 |
+| **跨平台** | Linux (xclip/wl-paste) / macOS (pbpaste) / Windows (PIL) |
 
 ### 模型调度
 
