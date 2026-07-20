@@ -212,22 +212,26 @@ class REPL:
             # 提示符 `>` — 灰底白字色块，醒目锚点
             "prompt": "bold #ffffff bg:#5c5c8a",
             # 底部状态栏 — 暗色，不抢注意力
-            "bottom-toolbar": "dim #888888",
+            "bottom-toolbar": "#aaaaaa",
         })
 
         history_path = _HISTORY_DIR / "input_history.txt"
 
-        try:
-            self._pt_session = PromptSession(
-                history=FileHistory(str(history_path)),
-                completer=self._completer,
-                key_bindings=kb,
-                style=style,
-                bottom_toolbar=self.status_bar.get_toolbar_text,
-            )
-        except Exception:
-            logger.debug("prompt_toolkit 初始化失败，回退自建输入", exc_info=True)
+        import os
+        if os.environ.get("XENON_NO_PT") == "1":
             self._pt_session = None
+        else:
+            try:
+                self._pt_session = PromptSession(
+                    history=FileHistory(str(history_path)),
+                    completer=self._completer,
+                    key_bindings=kb,
+                    style=style,
+                    bottom_toolbar=self.status_bar.get_toolbar_text,
+                )
+            except Exception:
+                logger.debug("prompt_toolkit 初始化失败，回退自建输入", exc_info=True)
+                self._pt_session = None
 
     def _confirm_tool(self, tool_name: str, params: dict, risk: str) -> tuple[bool, str]:
         import os

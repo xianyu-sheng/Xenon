@@ -258,8 +258,21 @@ class StatusBar:
         tool_part = f"🔧 {self._tool_call_count} · " if self._tool_call_count > 0 else ""
         dur = self._fmt_duration(self.session_elapsed)
 
+        # 缓存数据（与 PT toolbar 一致）
+        cache_part = ""
+        if self.cache_tracker:
+            cr = self.cache_tracker
+            total_cache = cr.cache_hits + cr.cache_misses
+            if total_cache > 0:
+                cache_part = f"💾{cr.cache_hit_rate:.0%} "
+                if cr.estimated_cost_yuan > 0:
+                    cost = cr.estimated_cost_yuan
+                    cache_part += f"💰{'<0.01' if cost < 0.01 else f'{cost:.2f}'} "
+                    if cr.savings_pct >= 1:
+                        cache_part += f"💡{cr.savings_pct}% · "
+
         line = (
-            f"[dim]  {notify}{warn}{escape(model_display)} · {mode.name} · "
+            f"[dim]  {cache_part}{notify}{warn}{escape(model_display)} · {mode.name} · "
             f"[{token_color}]Token {stats['estimated_tokens']:,}/{stats['max_tokens']:,} ({stats['usage_ratio']})[/{token_color}] · "
             f"{tool_part}消息 {stats['total_messages']} · {dur} · {stream}"
         ) + "[/dim]"
