@@ -146,10 +146,57 @@ class StatusBar:
     # ── prompt_toolkit bottom_toolbar ───────────────────────
 
     def get_toolbar_text(self) -> str:
+        """Return a plain-text toolbar for callers outside prompt_toolkit."""
         try:
             return self._toolbar_impl()
         except Exception:
             return "状态不可用"
+
+    def get_toolbar_fragments(self) -> list[tuple[str, str]]:
+        """Return styled prompt_toolkit fragments for the interactive toolbar.
+
+        Keeping visual treatment here (rather than embedding ANSI or Rich markup
+        in a string) makes the toolbar render consistently on Windows Terminal,
+        iTerm, and the plain prompt_toolkit fallback.
+        """
+        try:
+            stats = self.ctx_mgr.stats()
+            mode = self.registry.get_current_mode()
+            pct = self._parse_pct(stats["usage_ratio"])
+            model = self._last_model or "未设置"
+            if self._auto_router and not self._auto_router.is_empty():
+                model = f"auto · {self._auto_router.get_active_model_id() or model}"
+            if len(model) > 28:
+                model = "…" + model[-27:]
+
+            state_class = (
+                "class:toolbar.danger" if stats["needs_compact"] else "class:toolbar.muted"
+            )
+            usage_class = (
+                "class:toolbar.danger" if pct > 80 else
+                "class:toolbar.warning" if pct > 50 else
+                "class:toolbar.good"
+            )
+            fragments = [
+                ("class:toolbar.brand", "  XENON "),
+                ("class:toolbar.separator", "│"),
+                ("class:toolbar.model", f"  {model}  "),
+                ("class:toolbar.separator", "│"),
+                ("class:toolbar.mode", f"  {mode.name}  "),
+                ("class:toolbar.separator", "│"),
+                (usage_class, f"  context {stats['usage_ratio']}  "),
+                ("class:toolbar.separator", "│"),
+                ("class:toolbar.muted", f"  {stats['total_messages']} messages · {self._fmt_duration(self.session_elapsed)}  "),
+            ]
+            if self._tool_call_count:
+                fragments.extend([("class:toolbar.separator", "│"), ("class:toolbar.muted", f"  🔧 {self._tool_call_count}  ")])
+            if stats["needs_compact"]:
+                fragments.extend([("class:toolbar.separator", "│"), (state_class, "  ⚠ /compact  ")])
+            if self._notification:
+                fragments.extend([("class:toolbar.separator", "│"), ("class:toolbar.notice", f"  {self._notification}  ")])
+            return fragments
+        except Exception:
+            return [("class:toolbar.danger", "  状态不可用  ")]
 
     def _toolbar_impl(self) -> str:
         stats = self.ctx_mgr.stats()
