@@ -7,6 +7,7 @@
 [![Tests](https://img.shields.io/badge/tests-1110%2B-brightgreen.svg)]()
 [![HumanEval](https://img.shields.io/badge/HumanEval_Pass@1-88.4%25_(official)-success.svg)](https://github.com/openai/human-eval)
 [![v0.6.0](https://img.shields.io/badge/version-0.6.0-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases)
+[![DeepSeek 缓存指南](https://img.shields.io/badge/DeepSeek-缓存最佳实践-1a73e8.svg)](docs/deepseek-guide.md)
 
 ![Xenon terminal demo](docs/demo.gif)
 
