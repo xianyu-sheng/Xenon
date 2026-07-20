@@ -9,7 +9,8 @@
 - 零外部依赖：复用模型池现有 API Key，不需要额外配置
 - 惰性加载：首次热键触发才初始化，启动 0ms 开销
 - 自动降级：无多模态模型时提示配置，不崩溃
-- 缓存复用：相同图片 SHA256 缓存，避免重复调用
+- 缓存复用：相同图片 SHA256 缓存，LRU 淘汰避免重复调用
+- 纯查找不注册：_ensure_vision_model 只读不写，不污染模型池
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import hashlib
 import logging
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -73,26 +75,48 @@ class VisionResult:
 
 @dataclass
 class VisionCache:
-    """图片 → 文字缓存（基于 SHA256）。"""
-    _cache: dict[str, VisionResult] = field(default_factory=dict)
+    """图片 → 文字缓存（基于 SHA256，LRU 淘汰）。
+
+    使用 OrderedDict 实现 LRU：get / put 时将被访问条目移到末尾，
+    淘汰时删除开头最久未访问条目。
+    """
+    _cache: OrderedDict[str, VisionResult] = field(default_factory=OrderedDict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     max_size: int = 50
 
     def get(self, image_hash: str) -> VisionResult | None:
         with self._lock:
-            return self._cache.get(image_hash)
+            result = self._cache.get(image_hash)
+            if result is not None:
+                # LRU: 移到末尾（最近访问）
+                self._cache.move_to_end(image_hash)
+            return result
 
     def put(self, image_hash: str, result: VisionResult) -> None:
         with self._lock:
+            if image_hash in self._cache:
+                # 更新已有条目并标记为最近使用
+                self._cache.move_to_end(image_hash)
+                self._cache[image_hash] = result
+                return
             if len(self._cache) >= self.max_size:
-                # 删除最老的条目
-                oldest = next(iter(self._cache))
-                del self._cache[oldest]
+                # LRU 淘汰：删除最久未访问条目（开头）
+                evicted_key, evicted_val = self._cache.popitem(last=False)
+                logger.debug(
+                    "VisionCache LRU 淘汰: hash=%s..., age=%s",
+                    evicted_key[:12],
+                    evicted_val.latency_ms,
+                )
             self._cache[image_hash] = result
 
     def clear(self) -> None:
         with self._lock:
             self._cache.clear()
+
+    @property
+    def size(self) -> int:
+        with self._lock:
+            return len(self._cache)
 
 
 class VisionBridge:
@@ -114,6 +138,9 @@ class VisionBridge:
         self._initialized = False
         self._model_pool: Any = None
         self._vision_model_id: str | None = None
+        # 凭证信息（从 credentials 扫描获取，避免污染模型池）
+        self._vision_creds: dict[str, str] | None = None
+        self._vision_base_url: str | None = None
         self._cache = VisionCache()
 
     # ── 惰性初始化 ─────────────────────────────────────────────
@@ -134,9 +161,15 @@ class VisionBridge:
         return self._vision_model_id is not None
 
     def _ensure_vision_model(self) -> str:
-        """查找模型池中的多模态模型，缓存结果。
+        """纯查找：在模型池和 credentials 中查找可用的多模态模型。
 
-        优先从模型池查找，再兜底扫描 credentials 中所有已配置模型。
+        只读不写 —— 不会将模型注册进模型池，避免副作用和池震荡。
+
+        Returns:
+            model_id: 可用的多模态模型 ID
+
+        Raises:
+            RuntimeError: 未找到任何多模态模型
         """
         if self._vision_model_id:
             return self._vision_model_id
@@ -144,7 +177,7 @@ class VisionBridge:
         if not self._model_pool:
             raise RuntimeError("VisionBridge 未初始化，请先调用 lazy_init()")
 
-        # 1) 从模型池查找
+        # ── 第 1 层：模型池（已注册的活跃模型） ──
         entries = self._model_pool.list_all()
         available = [e.model_id for e in entries]
 
@@ -152,18 +185,18 @@ class VisionBridge:
             for model_id in available:
                 if candidate in model_id.lower():
                     self._vision_model_id = model_id
-                    logger.info("VisionBridge 已选择多模态模型: %s", model_id)
+                    logger.info("VisionBridge 已选择多模态模型（池中）: %s", model_id)
                     return model_id
 
         for model_id in available:
             if "vision" in model_id.lower() and "embedding" not in model_id.lower():
                 self._vision_model_id = model_id
-                logger.info("VisionBridge 已选择多模态模型 (vision match): %s", model_id)
+                logger.info("VisionBridge 已选择多模态模型（池中 vision match）: %s", model_id)
                 return model_id
 
-        # 2) 兜底：扫描 credentials 中所有模型（不限于模型池 top-N）
+        # ── 第 2 层：credentials 全量扫描（纯查找，不注册） ──
         try:
-            from xenon.repl.provider_registry import load_credentials, get_configured_providers
+            from xenon.repl.provider_registry import get_configured_providers
             configured = get_configured_providers()
             for p in configured:
                 if not p.key or not p.key.strip():
@@ -172,29 +205,22 @@ class VisionBridge:
                     model_id = f"{p.key}/{model_name}"
                     for candidate in _VISION_CANDIDATES:
                         if candidate in model_id.lower():
-                            # 找到了！动态注册到模型池
-                            alias = model_name.replace(".", "-")
-                            try:
-                                self._model_pool.register(
-                                    model_id, alias=alias, weight=3.0,
-                                    api_key=p.api_key, base_url=p.base_url,
-                                )
-                            except Exception:
-                                pass
                             self._vision_model_id = model_id
-                            logger.info("VisionBridge 发现并注册多模态模型: %s", model_id)
+                            self._vision_creds = {p.key: p.api_key} if p.api_key else None
+                            self._vision_base_url = p.base_url
+                            logger.info(
+                                "VisionBridge 发现多模态模型（credentials 中，未注册池）: %s",
+                                model_id,
+                            )
                             return model_id
                     if "vision" in model_id.lower() and "embedding" not in model_id.lower():
-                        alias = model_name.replace(".", "-")
-                        try:
-                            self._model_pool.register(
-                                model_id, alias=alias, weight=3.0,
-                                api_key=p.api_key, base_url=p.base_url,
-                            )
-                        except Exception:
-                            pass
                         self._vision_model_id = model_id
-                        logger.info("VisionBridge 发现并注册多模态模型 (vision): %s", model_id)
+                        self._vision_creds = {p.key: p.api_key} if p.api_key else None
+                        self._vision_base_url = p.base_url
+                        logger.info(
+                            "VisionBridge 发现多模态模型（credentials 中，未注册池）: %s",
+                            model_id,
+                        )
                         return model_id
         except Exception as e:
             logger.debug("Credentials 扫描失败: %s", e)
@@ -227,7 +253,7 @@ class VisionBridge:
         if not self._initialized:
             raise RuntimeError("VisionBridge 未初始化")
 
-        # SHA256 缓存
+        # SHA256 缓存（LRU）
         image_hash = hashlib.sha256(image_data).hexdigest()
         if not force_refresh:
             cached = self._cache.get(image_hash)
@@ -282,11 +308,19 @@ class VisionBridge:
             },
         ]
 
+        # 如果模型来自 credentials 扫描（非池中），显式传入凭证
+        kwargs: dict[str, Any] = {}
+        if self._vision_creds is not None:
+            kwargs["credentials"] = self._vision_creds
+        if self._vision_base_url is not None:
+            kwargs["base_url"] = self._vision_base_url
+
         response = chat_completion(
             model_id,
             messages=messages,
             max_tokens=4096,
             temperature=0.0,  # 转录任务，无创造性
+            **kwargs,
         )
 
         # 提取文本内容
