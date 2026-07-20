@@ -584,6 +584,7 @@ class REPL:
                 # alacritty/gnome-256color/screen-256color/vt100）直接退出 REPL。
                 if self._pending_exit:
                     self._auto_save_session()
+                    self._print_exit_report()
                     console.print("\n[dim]再见！[/dim]")
                     break
                 self._pending_exit = True
@@ -600,12 +601,68 @@ class REPL:
             if user_input.startswith("/"):
                 if self._handle_command(user_input):
                     self._auto_save_session()
+                    self._print_exit_report()
                     console.print("[dim]再见！[/dim]")
                     break
                 continue
 
             # 多轮对话（带 prompt 优化）
             self._handle_chat(user_input)
+
+    def _print_exit_report(self) -> None:
+        """P1-7：会话结束时打印省钱报告。"""
+        if not hasattr(self, '_cache_tracker') or not self._cache_tracker:
+            return
+        cr = self._cache_tracker
+        models = cr.all_models
+        if not models:
+            return
+
+        total_calls = 0
+        total_tokens = 0
+        total_cost = 0.0
+        total_saved = 0.0
+
+        lines: list[str] = []
+        for mid in models:
+            snap = cr.model_snapshot(mid)
+            if not snap:
+                continue
+            calls = snap.get("calls", 0)
+            prompt_t = snap.get("prompt_tokens", 0)
+            comp_t = snap.get("completion_tokens", 0)
+            hit = snap.get("cache_hit_tokens", 0)
+            miss = snap.get("cache_miss_tokens", 0)
+            rate = snap.get("cache_hit_rate", 0.0)
+            cost = snap.get("cost_yuan", 0.0)
+            saved = snap.get("saved_yuan", 0.0)
+
+            total_calls += calls
+            total_tokens += prompt_t + comp_t
+            total_cost += cost
+            total_saved += saved
+
+            short_name = mid.split("/")[-1] if "/" in mid else mid
+            if calls > 0:
+                lines.append(
+                    f"[dim]{short_name}[/dim]  {calls} 次 · {prompt_t + comp_t:,}t "
+                    f"· 💾{rate:.0%} · 💰¥{cost:.4f}"
+                )
+
+        if total_calls == 0:
+            return
+
+        overall_rate = cr.cache_hit_rate if total_tokens > 0 else 0.0
+        overall_pct = cr.savings_pct
+
+        console.print()
+        console.print(Panel(
+            "\n".join(lines) + f"\n\n[bold]合计[/bold]  {total_tokens:,} tokens · 💾{overall_rate:.0%} · 💰¥{total_cost:.4f} · 💡省 ¥{total_saved:.4f} ({overall_pct}%)",
+            title="[bold]📊 本次会话省钱报告[/bold]",
+            border_style="dim",
+            padding=(0, 1),
+        ))
+        cr.close()
 
     def _check_first_run(self) -> None:
         """首次启动时检测配置状态，自动引导。
