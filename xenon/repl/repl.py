@@ -23,6 +23,7 @@ from rich.console import Console
 from rich import box
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.padding import Padding
 from rich.table import Table
 from rich.text import Text
 from rich.prompt import Prompt
@@ -532,13 +533,26 @@ class REPL:
             else:
                 console.print(f"[dim]  💭 无工具调用[/dim]")
 
-        # 最终答案始终显示
-        console.print(Panel(
-            Markdown(result),
-            title=f"[bold]{title}[/bold]",
-            border_style=border_style,
-            padding=(0, 1),
-        ))
+        # 最终答案始终显示；正文保持正常亮度，不再使用大边框。
+        self._render_assistant_text(result, title=title)
+
+    @staticmethod
+    def _render_assistant_text(content: str, *, title: str = "Assistant", model_id: str | None = None) -> None:
+        """无边框渲染模型正文，让内容成为视觉焦点。"""
+        console.print()
+        header = Text()
+        header.append("● ", style="bold #67e8f9")
+        header.append(title, style="bold")
+        if model_id:
+            header.append(f"  {model_id}", style="dim")
+        console.print(header)
+        console.print(Padding(Markdown(content), (0, 0, 0, 2)))
+
+    @staticmethod
+    def _render_secondary_text(title: str, content: str) -> None:
+        """无边框渲染提示词等辅助信息，并整体降低视觉权重。"""
+        console.print(Text(f"  {title}", style="dim"))
+        console.print(Padding(Text(content, style="dim"), (0, 0, 0, 4)))
 
     # v0.5.4: 从成功的工具调用中提取文件路径，更新工作记忆，
     # 使后续对话能知道"刚刚创建/修改了哪些文件"。
@@ -1669,12 +1683,7 @@ class REPL:
 
             if was_optimized:
                 # 展示优化后的 prompt，帮助用户学习
-                console.print(Panel(
-                    optimized,
-                    title="[dim]📝 优化后的 Prompt（供学习参考）[/dim]",
-                    border_style="dim",
-                    padding=(0, 1),
-                ))
+                self._render_secondary_text("📝 优化后的 Prompt（供学习参考）", optimized)
                 if system_hint:
                     self.ctx_mgr.add_system_message(f"[指令上下文] {system_hint}")
             elif intent is not None:
@@ -2119,14 +2128,9 @@ class REPL:
 
         response_text = "".join(full_response)
 
-        # 流式完成后，用 Markdown Panel 渲染最终结果
+        # 流式完成后，无边框渲染最终结果
         if response_text.strip():
-            console.print(Panel(
-                Markdown(response_text),
-                title=f"[bold]Assistant[/bold] [dim]({model_id})[/dim]",
-                border_style="green",
-                padding=(0, 1),
-            ))
+            self._render_assistant_text(response_text, model_id=model_id)
 
         self.ctx_mgr.add_assistant_message(response_text, model_used=model_id)
         return response_text
@@ -2140,12 +2144,7 @@ class REPL:
 
         self.ctx_mgr.add_assistant_message(response, model_used=model_id)
 
-        console.print()
-        console.print(Panel(
-            Markdown(response),
-            title=f"[assistant]Assistant[/assistant] [dim]({model_id})[/dim]",
-            border_style="green",
-        ))
+        self._render_assistant_text(response, model_id=model_id)
         return response
 
     @staticmethod

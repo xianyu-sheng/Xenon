@@ -52,3 +52,18 @@ def test_toolbar_promotes_compaction_warning():
     bar.ctx_mgr.add_user_message("x" * 200_000)
     fragments = bar.get_toolbar_fragments()
     assert ("class:toolbar.danger", "⚠ /compact") in fragments
+
+
+def test_assistant_and_optimized_prompt_render_without_panels(monkeypatch):
+    output = io.StringIO()
+    test_console = Console(file=output, width=100, force_terminal=False)
+    monkeypatch.setattr("xenon.repl.repl.console", test_console)
+
+    REPL._render_assistant_text("正常亮度的回复", model_id="deepseek/v4")
+    REPL._render_secondary_text("📝 优化后的 Prompt", "辅助提示词")
+
+    rendered = output.getvalue()
+    assert "正常亮度的回复" in rendered
+    assert "辅助提示词" in rendered
+    assert "╭" not in rendered
+    assert "╰" not in rendered

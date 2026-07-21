@@ -41,6 +41,21 @@ from xenon.repl.model_registry import BUILTIN_MODES
 console = Console()
 
 
+class _DimNetworkFormatter(logging.Formatter):
+    """交互终端中降低网络请求日志亮度，不影响重定向和日志采集。"""
+
+    _DIM_LOGGERS = ("httpx", "httpcore", "openai")
+
+    def format(self, record: logging.LogRecord) -> str:
+        rendered = super().format(record)
+        if (
+            record.name.startswith(self._DIM_LOGGERS)
+            and getattr(sys.stderr, "isatty", lambda: False)()
+        ):
+            return f"\033[2m{rendered}\033[0m"
+        return rendered
+
+
 def cli() -> None:
     """CLI 入口函数。直接 xenon 启动 REPL。"""
     parser = argparse.ArgumentParser(
@@ -120,11 +135,12 @@ def cli() -> None:
 
     # 配置日志
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    log_handler = logging.StreamHandler()
+    log_handler.setFormatter(_DimNetworkFormatter(
+        "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         datefmt="%H:%M:%S",
-    )
+    ))
+    logging.basicConfig(level=log_level, handlers=[log_handler])
 
     cmd = args.command_or_workflow
 
