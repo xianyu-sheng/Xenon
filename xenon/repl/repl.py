@@ -308,8 +308,14 @@ class REPL:
         import os
         from xenon.repl.permissions import PermissionGate
 
-        if not sys.stdin.isatty() or os.environ.get("XENON_ASSUME_YES") == "1":
+        if os.environ.get("XENON_ASSUME_YES") == "1":
             return True, ""
+        if not sys.stdin.isatty():
+            return (
+                False,
+                "非交互环境无法确认危险操作；请显式使用 "
+                "/permissions bypass 或设置 XENON_ASSUME_YES=1",
+            )
 
         msg = PermissionGate.format_confirm_message(tool_name, params, risk)
         console.print()
@@ -326,6 +332,11 @@ class REPL:
         if choice == "y":
             return True, ""
         elif choice == "a":
+            if risk == "CRITICAL":
+                # 对 Shell/MCP/危险 Git 只批准当前这一次，不能把未来参数完全
+                # 不同的调用一起放行。
+                console.print("[dim]· CRITICAL 操作仅批准本次，不记忆永久允许[/dim]")
+                return True, ""
             self._permission_gate.allow_always(tool_name)
             return True, ""
         elif choice == "q":
@@ -1918,7 +1929,15 @@ class REPL:
 
         self._start_log_capture()
         callback = self._make_callback()
-        engine = ReActEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_iterations=10, callback=callback, model_configs=dict(self.registry.models))
+        engine = ReActEngine(
+            model_priority=model_ids,
+            model_pool=self.model_pool,
+            auto_router=self.auto_router,
+            max_iterations=10,
+            callback=callback,
+            model_configs=dict(self.registry.models),
+            permission_gate=self._permission_gate,
+        )
         self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
@@ -1961,7 +1980,15 @@ class REPL:
 
         self._start_log_capture()
         callback = self._make_callback()
-        engine = PlanExecuteEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_steps=20, callback=callback, model_configs=dict(self.registry.models))
+        engine = PlanExecuteEngine(
+            model_priority=model_ids,
+            model_pool=self.model_pool,
+            auto_router=self.auto_router,
+            max_steps=20,
+            callback=callback,
+            model_configs=dict(self.registry.models),
+            permission_gate=self._permission_gate,
+        )
         self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
@@ -1985,7 +2012,15 @@ class REPL:
 
         self._start_log_capture()
         callback = self._make_callback()
-        engine = ReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_rounds=3, callback=callback, model_configs=dict(self.registry.models))
+        engine = ReflectionEngine(
+            model_priority=model_ids,
+            model_pool=self.model_pool,
+            auto_router=self.auto_router,
+            max_rounds=3,
+            callback=callback,
+            model_configs=dict(self.registry.models),
+            permission_gate=self._permission_gate,
+        )
         self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
@@ -2009,7 +2044,16 @@ class REPL:
 
         self._start_log_capture()
         callback = self._make_callback()
-        engine = PlanReactEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_steps=10, react_iterations=8, callback=callback, model_configs=dict(self.registry.models))
+        engine = PlanReactEngine(
+            model_priority=model_ids,
+            model_pool=self.model_pool,
+            auto_router=self.auto_router,
+            max_steps=10,
+            react_iterations=8,
+            callback=callback,
+            model_configs=dict(self.registry.models),
+            permission_gate=self._permission_gate,
+        )
         self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
@@ -2033,7 +2077,16 @@ class REPL:
 
         self._start_log_capture()
         callback = self._make_callback()
-        engine = PlanReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, max_steps=10, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
+        engine = PlanReflectionEngine(
+            model_priority=model_ids,
+            model_pool=self.model_pool,
+            auto_router=self.auto_router,
+            max_steps=10,
+            review_rounds=2,
+            callback=callback,
+            model_configs=dict(self.registry.models),
+            permission_gate=self._permission_gate,
+        )
         self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
@@ -2057,7 +2110,16 @@ class REPL:
 
         self._start_log_capture()
         callback = self._make_callback()
-        engine = ReactReflectionEngine(model_priority=model_ids, model_pool=self.model_pool, auto_router=self.auto_router, react_iterations=8, review_rounds=2, callback=callback, model_configs=dict(self.registry.models))
+        engine = ReactReflectionEngine(
+            model_priority=model_ids,
+            model_pool=self.model_pool,
+            auto_router=self.auto_router,
+            react_iterations=8,
+            review_rounds=2,
+            callback=callback,
+            model_configs=dict(self.registry.models),
+            permission_gate=self._permission_gate,
+        )
         self._inject_mcp_tools_into_engine(engine)
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
@@ -2089,6 +2151,7 @@ class REPL:
             model_configs=dict(self.registry.models),
             model_pool=self.model_pool,
             auto_router=self.auto_router,
+            permission_gate=self._permission_gate,
         )
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)

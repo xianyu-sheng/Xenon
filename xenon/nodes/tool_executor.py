@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from xenon.engine.circuit_breaker import GLOBAL_BREAKERS, BreakerRegistry
+from xenon.engine.circuit_breaker import BreakerRegistry
 from xenon.engine.context import AgentContext
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes.tool_node import ToolNode, _DYNAMIC_TOOLS
@@ -32,6 +32,7 @@ _SENSITIVE_TOOLS = {"command"}  # 任意 shell 执行——最高风险
 _WRITE_TOOLS = {
     "write_file", "edit_file", "create_directory",
     "batch_write", "batch_edit", "edit_with_llm", "append_file",
+    "git", "refactor", "register_tool", "clone_repo",
 }
 # 其余按 INFO 处理（read_file/list_files/search_files/web_fetch/github_fetch...）
 
@@ -44,7 +45,11 @@ _TOOL_CONTENT_PARAMS = frozenset({
 
 def classify_tool(tool_name: str) -> str:
     """返回 INFO | WRITE | SENSITIVE。"""
-    if tool_name in _SENSITIVE_TOOLS:
+    if (
+        tool_name in _SENSITIVE_TOOLS
+        or tool_name == "mcp_call"
+        or tool_name in _DYNAMIC_TOOLS
+    ):
         return "SENSITIVE"
     if tool_name in _WRITE_TOOLS:
         return "WRITE"
@@ -307,7 +312,14 @@ class ToolExecutor:
 
         # ── Stage 3: 权限闸门（v0.5.0: 接入 PermissionGate） ──
         if self.permission_gate is not None:
-            allowed, reason = self.permission_gate.check(tool_name, params)
+            # SENSITIVE 是执行器掌握的最高风险信息，尤其覆盖运行时注册的
+            # 动态工具；后者的名称不在 PermissionGate 的静态工具表中。
+            risk_override = "CRITICAL" if tool_class == "SENSITIVE" else None
+            allowed, reason = self.permission_gate.check(
+                tool_name,
+                params,
+                risk_override=risk_override,
+            )
             if not allowed:
                 logger.info(f"权限拒绝: {tool_name} — {reason}")
                 if tracker:

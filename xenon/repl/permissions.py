@@ -24,17 +24,23 @@ class PermissionMode(Enum):
 
 # ── 工具分类 ────────────────────────────────────────────
 
-_CRITICAL_TOOLS: frozenset[str] = frozenset({"command"})
+_CRITICAL_TOOLS: frozenset[str] = frozenset({
+    "command",
+    # MCP servers may expose arbitrary external side effects.  Until a server
+    # advertises a trustworthy read/write schema, require an explicit approval.
+    "mcp_call",
+})
 
 _WRITE_TOOLS: frozenset[str] = frozenset({
     "write_file", "edit_file", "create_directory",
     "batch_write", "batch_edit", "edit_with_llm", "append_file",
+    "refactor", "register_tool", "clone_repo",
 })
 
 # git 命令中的危险子命令
 _DANGEROUS_GIT_COMMANDS: frozenset[str] = frozenset({
-    "push", "push --force", "force-push", "hard reset",
-    "reset --hard", "clean", "clean -fd",
+    "push", "reset", "clean", "checkout", "restore", "rebase", "merge",
+    "pull", "remote", "config", "branch -d", "branch -D", "tag -d",
 })
 
 
@@ -68,20 +74,32 @@ class PermissionGate:
             return "WRITE"
         if tool_name == "git":
             # git 工具的子命令决定风险
-            action = (params or {}).get("action", "")
-            if any(d in str(action) for d in _DANGEROUS_GIT_COMMANDS):
+            git_command = str(
+                (params or {}).get("git_command")
+                or (params or {}).get("action")
+                or ""
+            ).strip().lower()
+            if any(d.lower() in git_command for d in _DANGEROUS_GIT_COMMANDS):
                 return "CRITICAL"
+            if git_command in {"status", "diff", "diff_full", "log", "branch", "show"}:
+                return "READ"
             return "WRITE"
         return "READ"
 
-    def check(self, tool_name: str, params: dict | None = None) -> tuple[bool, str]:
+    def check(
+        self,
+        tool_name: str,
+        params: dict | None = None,
+        *,
+        risk_override: str | None = None,
+    ) -> tuple[bool, str]:
         """检查工具是否可以执行。
 
         Returns:
             (allowed, reason) — allowed=True 表示可以执行；
             allowed=False 时 reason 是拒绝原因。
         """
-        risk = self._classify(tool_name, params)
+        risk = risk_override or self._classify(tool_name, params)
 
         # PLAN 模式：只允许 READ
         if self.mode == PermissionMode.PLAN:
@@ -116,8 +134,9 @@ class PermissionGate:
         if self._confirm_callback is not None:
             return self._confirm_callback(tool_name, params, risk)
 
-        # 无回调（非交互模式）：默认允许
-        return True, ""
+        # 没有交互确认能力时必须 fail closed。自动化调用方如确实需要跳过
+        # 确认，应显式选择 BYPASS，而不是让 DEFAULT 静默失效。
+        return False, f"{risk} 操作需要确认，但当前没有可用的确认回调"
 
     def allow_always(self, tool_name: str) -> None:
         """会话级别：总是允许此工具。"""
@@ -142,7 +161,7 @@ class PermissionGate:
             path = params.get("file_path", params.get("path", "?"))
             lines.append(f"   编辑: [bold white]{path}[/bold white]")
         elif tool_name == "git":
-            action = params.get("action", "?")
+            action = params.get("git_command", params.get("action", "?"))
             lines.append(f"   操作: [bold white]{action}[/bold white]")
         elif tool_name == "create_directory":
             path = params.get("path", "?")

@@ -11,6 +11,7 @@ v0.4.0 Step 10: 添加任务 tier 估算，传给 ModelPool 的层级队列。
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from xenon.repl.difficulty_estimator import DifficultyEstimator, TaskProfile
 from xenon.repl.model_pool import ModelPool, FAILURE_THRESHOLD
