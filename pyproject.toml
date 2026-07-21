@@ -44,6 +44,7 @@ Issues = "https://github.com/xianyu-sheng/Xenon/issues"
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "pytest-timeout>=2.0",
 ]
 
 [project.scripts]

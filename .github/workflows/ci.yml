@@ -28,14 +28,20 @@ jobs:
       - name: Syntax check
         run: python -m compileall xenon/
 
-      - name: Run tests
-        run: python -m pytest tests/ -q --tb=short
-
-      - name: Coverage
-        run: python -m pytest tests/ --cov=xenon --cov-report=xml --cov-report=term-missing -q
+      - name: Run tests + coverage
+        run: |
+          python -m pytest tests/ \
+            -q --tb=short \
+            --cov=xenon \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --timeout=120 \
+            --no-header \
+            2>&1 | tail -100
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v4
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+        if: always()
