@@ -438,7 +438,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         history = data.get("history", [])
         if history:
             # 清空当前上下文并加载历史
-            repl.ctx_mgr.clear_history()
+            repl.ctx_mgr.clear()
             for msg in history:
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
@@ -1114,7 +1114,9 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
     if repl is None:
         return "❌ 无法获取 REPL 实例"
 
-    model_ids = getattr(repl, '_model_priority', None) or repl.model_pool.get_priority_list()
+    model_ids = [e.model_id for e in (repl.model_pool.get_healthy() or repl.model_pool.list_all())]
+    if not model_ids:
+        return "❌ 模型池为空，请先运行 /setup 配置模型。"
     model_configs = getattr(repl, '_model_configs', None) or {}
 
     # 构建引擎
@@ -1129,9 +1131,12 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
 
     # 构建上下文
     ctx = AgentContext()
-    # 复制当前对话历史
-    if hasattr(repl, '_session_history'):
-        ctx.set_conversation_messages(list(repl._session_history[-10:]))
+    # 复制当前对话历史（最近 10 条）
+    try:
+        history = repl.ctx_mgr.get_messages()[-10:]
+        ctx.set_conversation_messages(list(history))
+    except Exception:
+        pass
 
     # 构建 action_input
     if parallel_tasks:
