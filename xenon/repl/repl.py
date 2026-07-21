@@ -2299,16 +2299,17 @@ class REPL:
 
     @classmethod
     def _detect_tool_call_json(cls, text: str) -> bool:
-        """检测 LLM 响应中是否包含未执行的工具调用 JSON。
+        """检测 LLM 响应中是否包含未执行的工具调用 JSON 或 XML。
 
         direct 模式下 LLM 有时会输出 {"tool": "...", "arguments": {...}}
         或 {"action": "...", "action_input": {...}} 格式的工具调用，
-        但因为 direct 模式不传工具定义，这些调用从未被执行。
+        或 DeepSeek 旧版模型的 <uses_legacy_tools> XML 格式。
+        因为 direct 模式不传工具定义，这些调用从未被执行。
         """
         if not text or len(text) < 20:
             return False
-        # 检测 JSON 格式的工具调用
         import re as _re
+        # JSON 格式
         patterns = [
             r'"tool"\s*:\s*"(?:list_files|read_file|write_file|command|web_fetch|git|search_files|edit_file|clone_repo|github_fetch)"',
             r'"action"\s*:\s*"(?:list_files|read_file|write_file|command|web_fetch|git|search_files|edit_file|clone_repo|github_fetch)"',
@@ -2318,6 +2319,9 @@ class REPL:
         for pattern in patterns:
             if _re.search(pattern, text, _re.IGNORECASE):
                 return True
+        # v0.6.3: XML 格式（DeepSeek 旧版模型）
+        if _re.search(r'<uses_legacy_tools>|<tool_calls>|<tool_call\s+name=', text, _re.IGNORECASE):
+            return True
         return False
 
     @classmethod

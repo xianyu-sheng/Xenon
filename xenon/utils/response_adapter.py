@@ -309,12 +309,97 @@ def _split_adjacent_json_objects(text: str) -> list[dict] | None:
     return objects if objects else None
 
 
+def _extract_tool_call_xml(text: str) -> list[dict[str, Any]] | None:
+    """从 DeepSeek 旧版模型的 XML 工具调用格式中提取 action 列表。
+
+    输入示例::
+
+        <uses_legacy_tools>
+          <tool_calls>
+            <tool_call name="list_files">{"file_path": "."}</tool_call>
+            <tool_call name="read_file">{"file_path": "README.md"}</tool_call>
+          </tool_calls>
+        </uses_legacy_tools>
+
+    输出::
+
+        [
+            {"action": "list_files", "action_input": {"file_path": "."}},
+            {"action": "read_file", "action_input": {"file_path": "README.md"}},
+        ]
+
+    Returns:
+        list[dict] 或 None（未检测到 XML 工具调用格式）
+    """
+    import re
+
+    # 检测 <uses_legacy_tools> 或 <tool_calls> 包裹块
+    m = re.search(
+        r'<uses_legacy_tools>\s*(.*?)\s*</uses_legacy_tools>|'
+        r'<tool_calls>\s*(.*?)\s*</tool_calls>',
+        text, re.DOTALL
+    )
+    if not m:
+        return None
+
+    inner = m.group(1) or m.group(2) or ""
+
+    # 可能 <tool_calls> 直接包裹 <tool_call>（不在 uses_legacy_tools 内）
+    if not inner and m.group(2):
+        inner = m.group(2)
+
+    # 提取每个 <tool_call name="...">...</tool_call>
+    call_pattern = re.compile(
+        r'<tool_call\s+name="([^"]+)">(.*?)</tool_call>',
+        re.DOTALL
+    )
+    actions = []
+    for match in call_pattern.finditer(text):
+        tool_name = match.group(1).strip()
+        params_text = match.group(2).strip()
+        action_input: dict[str, Any] = {}
+        if params_text:
+            # 尝试解析为 JSON
+            try:
+                action_input = json.loads(params_text, strict=False)
+            except json.JSONDecodeError:
+                # 修复后重试
+                repaired = _repair_json(params_text)
+                if repaired:
+                    try:
+                        action_input = json.loads(repaired, strict=False)
+                    except json.JSONDecodeError:
+                        pass
+                if not action_input:
+                    action_input = {"_raw": params_text}
+        actions.append({"action": tool_name, "action_input": action_input})
+
+    if actions:
+        logger.info(
+            "_extract_tool_call_xml: 从 XML 提取 %d 个工具调用",
+            len(actions),
+        )
+        return actions
+    return None
+
+
 def _extract_json(text: str) -> dict | list | None:
     """从 LLM 输出中提取 JSON 对象或数组，处理 markdown 代码块和多余文字。
 
     v0.5.0: 支持 JSON 数组（并行工具调用场景）。
+    v0.6.3: 支持 DeepSeek 旧版模型的 <uses_legacy_tools> XML 格式。
     """
     text = text.strip()
+
+    # ── v0.6.3: XML 格式工具调用（DeepSeek 旧版模型）──
+    # <uses_legacy_tools>
+    #   <tool_calls>
+    #     <tool_call name="list_files">{"file_path": "."}</tool_call>
+    #   </tool_calls>
+    # </uses_legacy_tools>
+    xml_actions = _extract_tool_call_xml(text)
+    if xml_actions:
+        return xml_actions
 
     # 尝试 ```json ... ``` 代码块
     m = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
