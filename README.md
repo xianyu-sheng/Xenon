@@ -123,6 +123,7 @@ Xenon 不是 IDE 替代品——是**深度控制面板**。你仍在 VSCode/Jet
 
 | 文档 | 内容 |
 |------|------|
+| **[⚡ 快速上手指南](docs/GUIDE.md)** | 安装 → 配置 → 8 范式 → 多模型切换 → DeepSeek 接入（中英双语） |
 | **[架构设计](docs/ARCHITECTURE.md)** | 三大支柱详解 · 独有亮点 · 目录结构 · 设计原则 · vs Reasonix |
 | **[DeepSeek 缓存实践](docs/deepseek-guide.md)** | 原理 → 对齐策略 → 三层监控 → 费用对比 → 骤降诊断 |
 
