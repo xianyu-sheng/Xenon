@@ -224,6 +224,7 @@ class PlanExecuteEngine(BaseEngine):
         ctx = context or AgentContext()
         self._ctx_mgr = ctx_mgr  # F4
         tracker = ToolExecutionTracker()
+        self._last_tracker = tracker
         self._reset_interrupt()
         self._begin_run()  # P3-Q2: 链路追踪
 
@@ -472,8 +473,11 @@ class PlanExecuteEngine(BaseEngine):
     def _plan(self, user_input: str, context: AgentContext | None = None) -> dict[str, Any]:
         """Phase 1: 生成执行计划。"""
         messages = [{"role": "system", "content": self.system_prompt}]
+        memory_message = self._working_memory_message()
+        if memory_message is not None:
+            messages.append(memory_message)
         # F4: 优先消费 ctx_mgr（已压缩）消息；否则回退 AgentContext 历史 [-6:]
-        history = self._history_messages(context)
+        history = self._history_messages(context, current_user_input=user_input)
         if history:
             if self._ctx_mgr is not None:
                 messages.extend(history)  # 已由 ContextManager 压缩管理

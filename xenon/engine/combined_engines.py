@@ -17,6 +17,7 @@ from xenon.engine.context import AgentContext
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.react_engine import ReActEngine, BUILTIN_TOOLS
 from xenon.engine.reflection_engine import ReflectionEngine
+from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.utils.llm_client import chat_completion
 
 if TYPE_CHECKING:
@@ -64,6 +65,7 @@ class PlanReactEngine:
         self.auto_router = auto_router
         self.planner = PlanExecuteEngine(model_priority, max_steps=max_steps, callback=self.callback, model_configs=model_configs, model_pool=model_pool, auto_router=auto_router, permission_gate=permission_gate)
         self.reactor = ReActEngine(model_priority, max_iterations=react_iterations, callback=self.callback, model_configs=model_configs, model_pool=model_pool, auto_router=auto_router, permission_gate=permission_gate)
+        self._last_tracker: ToolExecutionTracker | None = None
 
     def run(
         self,
@@ -75,6 +77,8 @@ class PlanReactEngine:
         console = Console()
 
         ctx = context or AgentContext()
+        aggregate_tracker = ToolExecutionTracker()
+        self._last_tracker = aggregate_tracker
         # F4: 把 ctx_mgr 透传给子引擎（_plan 经 _ctx_mgr 消费，reactor 经 run ctx_mgr）
         self.planner._ctx_mgr = ctx_mgr
 
@@ -161,6 +165,10 @@ class PlanReactEngine:
                 status = "failed"
                 step_result = f"步骤执行失败: {e}"
                 console.print(f"[red]  ✗ 步骤 {step_id} 失败: {e}[/red]")
+
+            step_tracker = getattr(self.reactor, "_last_tracker", None)
+            if step_tracker is not None:
+                aggregate_tracker.calls.extend(step_tracker.calls)
 
             results.append({
                 "step_id": step_id,
@@ -262,6 +270,7 @@ class PlanReflectionEngine:
             auto_router=auto_router,
             permission_gate=permission_gate,
         )
+        self._last_tracker: ToolExecutionTracker | None = None
 
     def run(
         self,
@@ -274,6 +283,7 @@ class PlanReflectionEngine:
         # Phase 1: Plan-Execute 执行
         logger.info("PlanReflection Phase 1: 规划并执行")
         initial_output = self.planner.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
+        self._last_tracker = getattr(self.planner, "_last_tracker", None)
 
         # Phase 2: Reflection 审查和修正
         logger.info("PlanReflection Phase 2: 反思审查")
@@ -331,6 +341,7 @@ class ReactReflectionEngine:
             auto_router=auto_router,
             permission_gate=permission_gate,
         )
+        self._last_tracker: ToolExecutionTracker | None = None
 
     def run(
         self,
@@ -343,6 +354,7 @@ class ReactReflectionEngine:
         # Phase 1: ReAct 探索和执行
         logger.info("ReactReflection Phase 1: ReAct 探索执行")
         initial_output = self.reactor.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
+        self._last_tracker = getattr(self.reactor, "_last_tracker", None)
 
         # Phase 2: Reflection 审查和修正
         logger.info("ReactReflection Phase 2: 反思审查")

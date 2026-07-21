@@ -192,8 +192,11 @@ class ReflectionEngine(BaseEngine):
     def _execute(self, user_input: str, feedback: str = "", context: AgentContext | None = None) -> str:
         """执行阶段: LLM 生成输出。"""
         messages = [{"role": "system", "content": self.executor_prompt}]
+        memory_message = self._working_memory_message()
+        if memory_message is not None:
+            messages.append(memory_message)
         # F4: 优先消费 ctx_mgr（已压缩）消息；否则回退 AgentContext 历史 [-6:]
-        history = self._history_messages(context)
+        history = self._history_messages(context, current_user_input=user_input)
         if history:
             if self._ctx_mgr is not None:
                 messages.extend(history)

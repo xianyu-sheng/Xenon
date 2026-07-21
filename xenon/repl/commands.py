@@ -452,7 +452,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
 
         for i, s in enumerate(sessions, 1):
             display_name = s["name"]
-            if display_name.startswith("_auto_"):
+            if display_name.startswith("_auto"):
                 display_name = "[上次自动保存]"
             # 时间显示为相对时间，回退到绝对时间
             age = get_session_age(s) or s["saved_at"][:16]
@@ -484,17 +484,27 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
 
     try:
         history = data.get("history", [])
+        repl.ctx_mgr.clear()
         if history:
-            repl.ctx_mgr.clear()
             for msg in history:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                if role == "system":
-                    repl.ctx_mgr.add_system_message(content)
-                elif role == "assistant":
-                    repl.ctx_mgr.add_assistant_message(content)
-                else:
-                    repl.ctx_mgr.add_user_message(content)
+                repl.ctx_mgr.add_message(
+                    msg.get("role", "user"),
+                    msg.get("content", ""),
+                    model_used=msg.get("model_used"),
+                    node_id=msg.get("node_id"),
+                    metadata=msg.get("metadata", {}),
+                    task_tier=msg.get("task_tier", 3),
+                    turn_type=msg.get("turn_type"),
+                    semantic_group_id=msg.get("semantic_group_id"),
+                )
+        repl.ctx_mgr.replace_working_memory(
+            data.get("extra", {}).get("working_memory", {})
+        )
+
+        from xenon.engine.context import AgentContext
+        restored_context = AgentContext(initial=data.get("context", {}))
+        repl.agent_context = restored_context
+        repl._session_state["agent_context"] = restored_context
 
         # 恢复范式
         paradigm = data.get("extra", {}).get("paradigm")
@@ -685,11 +695,17 @@ def _cmd_save(*, args: str, ctx_mgr: ContextManager, session_state: dict, regist
     if not name:
         return "用法: /save <session_name>"
 
-    history = [{"role": t.role, "content": t.content, "model_used": t.model_used} for t in ctx_mgr.history]
+    history = ctx_mgr.export_history()
     agent_ctx = session_state.get("agent_context")
     ctx_store = agent_ctx.to_dict() if agent_ctx else {}
 
-    path = save_session(name, history, ctx_store, registry.export_config())
+    path = save_session(
+        name,
+        history,
+        ctx_store,
+        registry.export_config(),
+        extra={"working_memory": ctx_mgr.get_working_memory()},
+    )
     return f"✅ 会话已保存: {path}"
 
 
@@ -719,10 +735,26 @@ def _cmd_load(*, args: str, ctx_mgr: ContextManager, session_state: dict, regist
     ctx_mgr.save_snapshot()
     ctx_mgr.history.clear()
     for msg in data.get("history", []):
-        ctx_mgr.add_message(msg["role"], msg["content"], model_used=msg.get("model_used"))
+        ctx_mgr.add_message(
+            msg["role"],
+            msg["content"],
+            model_used=msg.get("model_used"),
+            node_id=msg.get("node_id"),
+            metadata=msg.get("metadata", {}),
+            task_tier=msg.get("task_tier", 3),
+            turn_type=msg.get("turn_type"),
+            semantic_group_id=msg.get("semantic_group_id"),
+        )
+    ctx_mgr.replace_working_memory(
+        data.get("extra", {}).get("working_memory", {})
+    )
 
     # 恢复 AgentContext
-    session_state["agent_context"] = AgentContext(initial=data.get("context", {}))
+    restored_context = AgentContext(initial=data.get("context", {}))
+    session_state["agent_context"] = restored_context
+    repl = session_state.get("_repl")
+    if repl is not None:
+        repl.agent_context = restored_context
 
     # 恢复模型配置
     if "model_config" in data:

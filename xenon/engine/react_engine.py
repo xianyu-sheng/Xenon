@@ -513,14 +513,18 @@ class ReActEngine(BaseEngine):
         ctx = context or AgentContext()
         tracker = ToolExecutionTracker()
         self._last_tracker = tracker  # P2-E5：供父引擎 spawn_agent 读取子 Agent 工具统计
+        self._ctx_mgr = ctx_mgr
         self._reset_interrupt()  # F6: 每轮 run 重置中断标志
         self._begin_run()  # P3-Q2: 生成本次 run 的链路 ID（贯穿所有 LLM 调用）
         self._recent_calls.clear()  # v0.6.3: 每次 run 重置重复调用跟踪
         messages = [{"role": "system", "content": self.system_prompt}]
+        memory_message = self._working_memory_message()
+        if memory_message is not None:
+            messages.append(memory_message)
         # F4: ctx_mgr 注入时消费其（已压缩）消息，不再自行 [-10:] 截断；
         # 否则回退 AgentContext 的对话历史（保留 [-10:] 兜底）。
         if ctx_mgr is not None:
-            history = [m for m in ctx_mgr.get_messages() if m.get("role") != "system"]
+            history = self._history_messages(ctx, current_user_input=user_input)
             messages.extend(history)
             logger.debug(f"ReAct 注入 ContextManager {len(history)} 条历史（已压缩）")
         else:

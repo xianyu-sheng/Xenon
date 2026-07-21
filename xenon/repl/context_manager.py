@@ -11,6 +11,7 @@ Context Manager — 对话历史与 Token 管理。
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import re
 import time
@@ -19,6 +20,11 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_SENSITIVE_MEMORY_KEY = re.compile(
+    r"(?:api[_-]?key|token|secret|password|authorization|cookie)",
+    re.IGNORECASE,
+)
 
 # P3-Q7 / §8.26.2：CJK 范围扩展——基本区 + 扩展 A + 兼容区 + 假名 + 韩文音节。
 # 原仅 '一' <= c <= '鿿'（U+4E00–U+9FFF）遗漏扩展 A/日文假名/韩文，致估算偏低。
@@ -219,6 +225,70 @@ class ContextManager:
         """获取当前工作记忆的浅拷贝。"""
         return dict(self._working_memory)
 
+    def replace_working_memory(self, memory: dict[str, Any] | None) -> None:
+        """Replace persistent working memory when loading a saved session."""
+        self._working_memory = dict(memory or {})
+
+    @classmethod
+    def _safe_context_value(cls, value: Any, *, key: str = "") -> Any:
+        """Bound and redact values before they enter a prompt or session trace."""
+        if key and _SENSITIVE_MEMORY_KEY.search(key):
+            return "[REDACTED]"
+        if isinstance(value, dict):
+            return {
+                str(k): cls._safe_context_value(v, key=str(k))
+                for k, v in list(value.items())[:20]
+            }
+        if isinstance(value, (list, tuple)):
+            return [cls._safe_context_value(v) for v in list(value)[:20]]
+        if isinstance(value, str):
+            return value[:1000]
+        if isinstance(value, (int, float, bool, type(None))):
+            return value
+        return str(value)[:1000]
+
+    def working_memory_prompt(self) -> str:
+        """Render bounded persistent facts for injection into the next LLM call."""
+        if not self._working_memory:
+            return ""
+        safe = self._safe_context_value(self._working_memory)
+        payload = json.dumps(safe, ensure_ascii=False, sort_keys=True)
+        return (
+            "[Xenon 持久工作记忆]\n"
+            "以下是本会话中已验证的状态；使用前如有必要可再次检查：\n"
+            f"{payload[:4000]}"
+        )
+
+    def add_tool_trace(
+        self,
+        tool_name: str,
+        params: dict[str, Any] | None,
+        success: bool,
+        result: str = "",
+        error: str | None = None,
+    ) -> None:
+        """Persist a compact, redacted tool call/result pair across turns."""
+        safe_params = self._safe_context_value(params or {})
+        params_text = json.dumps(safe_params, ensure_ascii=False, sort_keys=True)
+        group_id = self.begin_semantic_group()
+        self.add_message(
+            "assistant",
+            f"[工具调用: {tool_name}]\n参数: {params_text[:1500]}",
+            turn_type="tool_call",
+            semantic_group_id=group_id,
+            metadata={"tool_name": tool_name, "success": bool(success)},
+        )
+        status = "成功" if success else "失败"
+        detail = result or error or "（无文本结果）"
+        self.add_message(
+            "tool",
+            f"[{status}] {detail[:2000]}",
+            turn_type="tool_result",
+            semantic_group_id=group_id,
+            metadata={"tool_name": tool_name, "success": bool(success)},
+        )
+        self.end_semantic_group(group_id)
+
     def add_user_message(self, content: str) -> None:
         self.add_message("user", content)
 
@@ -228,9 +298,46 @@ class ContextManager:
     def add_system_message(self, content: str) -> None:
         self.add_message("system", content)
 
-    def get_messages(self) -> list[dict[str, str]]:
-        """将历史转换为 LLM API 所需的 messages 格式。"""
-        return [{"role": turn.role, "content": turn.content} for turn in self.history]
+    def get_messages(self, *, include_working_memory: bool = False) -> list[dict[str, str]]:
+        """Convert history to API-safe messages.
+
+        Persisted tool turns intentionally do not pretend to be native function
+        calls: without a provider-issued ``tool_call_id``, sending role=tool is
+        rejected by several OpenAI-compatible APIs.  They are therefore replayed
+        as user observations while retaining role=tool in ``history`` for
+        compaction, routing and session inspection.
+        """
+        messages: list[dict[str, str]] = []
+        if include_working_memory:
+            memory = self.working_memory_prompt()
+            if memory:
+                messages.append({"role": "system", "content": memory})
+        for turn in self.history:
+            if turn.role == "tool":
+                tool_name = str((turn.metadata or {}).get("tool_name", "unknown"))
+                messages.append({
+                    "role": "user",
+                    "content": f"[工具结果: {tool_name}]\n{turn.content}",
+                })
+            else:
+                messages.append({"role": turn.role, "content": turn.content})
+        return messages
+
+    def export_history(self) -> list[dict[str, Any]]:
+        """Serialize history without losing tool roles and semantic metadata."""
+        return [
+            {
+                "role": turn.role,
+                "content": turn.content,
+                "model_used": turn.model_used,
+                "node_id": turn.node_id,
+                "metadata": self._safe_context_value(turn.metadata),
+                "task_tier": turn.task_tier,
+                "turn_type": turn.turn_type,
+                "semantic_group_id": turn.semantic_group_id,
+            }
+            for turn in self.history
+        ]
 
     def trim_last_assistant(self) -> str | None:
         """移除并返回最后一条 assistant 消息（用于撤回 LLM 幻觉回复）。"""
@@ -928,6 +1035,7 @@ class ContextManager:
         """清空所有历史。"""
         self.save_snapshot()
         self.history.clear()
+        self._working_memory.clear()
         # P3-Q1 续：清空后真实 usage 不再对应 → 失效
         self._real_usage = None
 

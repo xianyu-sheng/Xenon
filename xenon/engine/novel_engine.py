@@ -279,6 +279,8 @@ class NovelEngine(BaseEngine):
         """
         ctx = context or AgentContext()
         tracker = ToolExecutionTracker()
+        self._last_tracker = tracker
+        self._ctx_mgr = ctx_mgr
         self._reset_interrupt()
         self._begin_run()  # P3-Q2: 链路追踪
 
@@ -309,6 +311,9 @@ class NovelEngine(BaseEngine):
 
         # ── 2. 构建消息 ──
         messages = [{"role": "system", "content": self.system_prompt}]
+        memory_message = self._working_memory_message()
+        if memory_message is not None:
+            messages.append(memory_message)
 
         # 注入项目上下文（这是核心 — AI 的完整创作记忆）
         project_ctx = project.get_all_context()
@@ -320,7 +325,7 @@ class NovelEngine(BaseEngine):
 
         # 注入对话历史
         if ctx_mgr is not None:
-            history = [m for m in ctx_mgr.get_messages() if m.get("role") != "system"]
+            history = self._history_messages(ctx, current_user_input=user_input)
             messages.extend(history)
             logger.debug(f"Novel 注入 ContextManager {len(history)} 条历史（已压缩）")
         else:

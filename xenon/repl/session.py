@@ -152,7 +152,7 @@ def auto_save(
     model_config: dict[str, Any],
     extra: dict[str, Any] | None = None,
 ) -> Path | None:
-    """退出时自动保存当前会话状态。
+    """Atomically checkpoint the current session to the stable ``_auto`` slot.
 
     Returns:
         保存的文件路径，失败返回 None。

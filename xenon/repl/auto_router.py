@@ -218,7 +218,12 @@ class AutoRouter:
             return False
         recent = (context_messages or [])[-4:]
         return any(
-            isinstance(m, dict) and m.get("role") in ("tool", "function", "tool_result")
+            isinstance(m, dict)
+            and (
+                m.get("role") in ("tool", "function", "tool_result")
+                or "[工具调用:" in str(m.get("content", ""))
+                or "[工具结果:" in str(m.get("content", ""))
+            )
             for m in recent
         )
 

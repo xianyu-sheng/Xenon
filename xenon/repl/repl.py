@@ -430,34 +430,25 @@ class REPL:
         return ConsoleCallback(verbose=self.verbose)
 
     def _auto_save_session(self) -> None:
-        """v0.4.0 Step 14: 退出时自动保存会话状态。
-
-        每次退出生成带时间戳的会话文件（_auto_YYYYMMDD_HHMMSS.json），
-        不覆盖历史记录，所有会话在 /resume 中均可恢复。
-        """
+        """Atomically checkpoint the active session during use and on exit."""
         try:
-            from datetime import datetime
-            from xenon.repl.session import auto_save, save_session, cleanup_expired_sessions
-            history = [{"role": m["role"], "content": m.get("content", "")}
-                       for m in self.ctx_mgr.get_messages() if m.get("role") != "system"]
-            if not history:
-                return  # 空会话不保存
-            context_store = {"mode": self.registry.current_mode}
-            model_config = self.model_pool.to_config()
+            from xenon.repl.session import auto_save, cleanup_expired_sessions
 
-            # 生成带时间戳的文件名
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            name = f"_auto_{ts}"
-            save_session(
-                name=name,
+            history = self.ctx_mgr.export_history()
+            context_store = self.agent_context.to_dict()
+            model_config = self.model_pool.to_config()
+            auto_save(
                 history=history,
                 context_store=context_store,
                 model_config=model_config,
-                extra={"paradigm": self.registry.current_mode},
+                extra={
+                    "paradigm": self.registry.current_mode,
+                    "working_memory": self.ctx_mgr.get_working_memory(),
+                },
             )
             cleanup_expired_sessions()
-        except Exception:
-            pass  # 保存失败不影响退出
+        except Exception as exc:
+            logger.debug("自动保存失败（不影响当前会话）: %s", exc)
 
     def _check_auto_resume(self) -> None:
         """v0.4.0 Step 14: 启动时检查可恢复的会话。"""
@@ -470,7 +461,7 @@ class REPL:
             latest = sessions[0]
             age = get_session_age(latest) or latest.get("saved_at", "")[:16]
             name = latest["name"]
-            if name.startswith("_auto_"):
+            if name.startswith("_auto"):
                 name = "上次自动保存"
             console.print(
                 f"\n[dim]┌─ {name} ({age}) · {latest['messages']} 条消息[/dim]"
@@ -708,6 +699,107 @@ class REPL:
                         prev_dirs.insert(0, d)  # 最近的在前
                 self.ctx_mgr.update_working_memory("session_active_dirs", prev_dirs[:5])
 
+    def _persist_engine_trace(self, engine: object) -> int:
+        """Move verified engine tool calls into cross-turn context and memory."""
+        if getattr(engine, "_xenon_trace_persisted", False):
+            return 0
+        setattr(engine, "_xenon_trace_persisted", True)
+        tracker = getattr(engine, "_last_tracker", None)
+        calls = list(getattr(tracker, "calls", []) or [])
+        if not calls:
+            return 0
+
+        import os as _os
+
+        created: list[str] = []
+        modified: list[str] = []
+        recent_activity: list[dict[str, object]] = []
+        for call in calls:
+            tool_name = str(getattr(call, "tool_name", "unknown"))
+            params = getattr(call, "params", {})
+            if not isinstance(params, dict):
+                params = {}
+            success = bool(getattr(call, "success", False))
+            result = str(getattr(call, "result_summary", "") or "")
+            error = getattr(call, "error", None)
+            self.ctx_mgr.add_tool_trace(
+                tool_name,
+                params,
+                success,
+                result=result,
+                error=str(error) if error else None,
+            )
+            recent_activity.append({
+                "tool": tool_name,
+                "success": success,
+                "summary": (result or str(error or ""))[:300],
+            })
+
+            if not success:
+                continue
+            paths: list[str] = []
+            for key in ("file_path", "file_paths", "path", "target_directory"):
+                value = params.get(key)
+                if isinstance(value, str):
+                    paths.append(value)
+                elif isinstance(value, list):
+                    paths.extend(str(v) for v in value if isinstance(v, str))
+            if tool_name == "batch_write":
+                for item in params.get("files", []):
+                    if isinstance(item, dict) and isinstance(item.get("path"), str):
+                        paths.append(item["path"])
+            for path in paths:
+                absolute = path if _os.path.isabs(path) else _os.path.abspath(path)
+                target = created if tool_name in self._FILE_CREATE_TOOLS else modified
+                if tool_name in self._FILE_CREATE_TOOLS | self._FILE_MODIFY_TOOLS:
+                    if absolute not in target:
+                        target.append(absolute)
+
+        memory = self.ctx_mgr.get_working_memory()
+        if created:
+            known = list(memory.get("session_created_files", []))
+            self.ctx_mgr.update_working_memory(
+                "session_created_files",
+                (known + [p for p in created if p not in known])[-100:],
+            )
+        if modified:
+            known = list(memory.get("session_modified_files", []))
+            self.ctx_mgr.update_working_memory(
+                "session_modified_files",
+                (known + [p for p in modified if p not in known])[-100:],
+            )
+        active_dirs = [
+            _os.path.dirname(path)
+            for path in created + modified
+            if _os.path.dirname(path)
+        ]
+        if active_dirs:
+            known_dirs = list(memory.get("session_active_dirs", []))
+            merged_dirs = active_dirs + [d for d in known_dirs if d not in active_dirs]
+            self.ctx_mgr.update_working_memory("session_active_dirs", merged_dirs[:10])
+
+        previous_activity = list(memory.get("recent_tool_activity", []))
+        self.ctx_mgr.update_working_memory(
+            "recent_tool_activity",
+            (previous_activity + recent_activity)[-12:],
+        )
+        return len(calls)
+
+    def _record_engine_error(
+        self,
+        mode_name: str,
+        error: Exception,
+        model_id: str | None = None,
+    ) -> None:
+        """Keep a failed engine turn balanced for safe follow-up context."""
+        try:
+            self.ctx_mgr.add_assistant_message(
+                f"[错误] {mode_name} 执行失败: {error}",
+                model_used=model_id,
+            )
+        except Exception:
+            self.ctx_mgr.trim_last_user()
+
     @staticmethod
     def _default_system_prompt() -> str:
         from datetime import datetime
@@ -800,10 +892,12 @@ class REPL:
                     self._print_exit_report()
                     console.print("[dim]再见！[/dim]")
                     break
+                self._auto_save_session()
                 continue
 
             # 多轮对话（带 prompt 优化）
             self._handle_chat(user_input)
+            self._auto_save_session()
 
     def _print_exit_report(self) -> None:
         """P1-7：会话结束时打印省钱报告。"""
@@ -1800,6 +1894,10 @@ class REPL:
             # B2: Ctrl+C 取消当前运行，返回提示符而非退出整个 REPL
             if getattr(self, "_log_capture_active", False):
                 self._captured_log = self._stop_log_capture()
+            try:
+                self.ctx_mgr.add_assistant_message("[已中断] 当前任务已由用户取消。")
+            except Exception:
+                self.ctx_mgr.trim_last_user()
             console.print("\n[dim]· 已中断，返回提示符[/dim]")
 
     def _run_direct(self, user_input: str, model_ids: list[str], intent: str | None = None) -> None:
@@ -1828,7 +1926,7 @@ class REPL:
             self._run_react_engine(user_input, model_ids)
             return
 
-        messages = self.ctx_mgr.get_messages()
+        messages = self.ctx_mgr.get_messages(include_working_memory=True)
 
         # v0.5.2: 过滤本会话已失败的模型，避免每次对话都重试不可用模型
         effective_ids = [m for m in model_ids if m not in self._failed_models]
@@ -2016,11 +2114,13 @@ class REPL:
                 f"head={result[:80] if isinstance(result, str) and result else repr(result)[:80]}"
             )
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "ReAct 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             # 异常时展开日志便于调试
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
@@ -2039,6 +2139,7 @@ class REPL:
                 except Exception:
                     pass
         finally:
+            self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
                 self._captured_log = self._stop_log_capture()
 
@@ -2063,17 +2164,21 @@ class REPL:
         try:
             result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Plan-Execute 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
                 console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ Plan-Execute 引擎执行失败: {e}[/error]")
+            self._record_engine_error("Plan-Execute", e, model_ids[0])
         finally:
+            self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
                 self._captured_log = self._stop_log_capture()
 
@@ -2098,17 +2203,21 @@ class REPL:
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
                 console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ Reflection 引擎执行失败: {e}[/error]")
+            self._record_engine_error("Reflection", e, model_ids[0])
         finally:
+            self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
                 self._captured_log = self._stop_log_capture()
 
@@ -2134,17 +2243,21 @@ class REPL:
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Plan+React 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
                 console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ Plan+React 引擎执行失败: {e}[/error]")
+            self._record_engine_error("Plan+React", e, model_ids[0])
         finally:
+            self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
                 self._captured_log = self._stop_log_capture()
 
@@ -2170,17 +2283,21 @@ class REPL:
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Plan+Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
                 console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ Plan+Reflection 引擎执行失败: {e}[/error]")
+            self._record_engine_error("Plan+Reflection", e, model_ids[0])
         finally:
+            self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
                 self._captured_log = self._stop_log_capture()
 
@@ -2206,17 +2323,21 @@ class REPL:
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "React+Reflection 结果")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
                 console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ React+Reflection 引擎执行失败: {e}[/error]")
+            self._record_engine_error("React+Reflection", e, model_ids[0])
         finally:
+            self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
                 self._captured_log = self._stop_log_capture()
 
@@ -2241,17 +2362,21 @@ class REPL:
         try:
             result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             self.ctx_mgr.add_assistant_message(result, model_used=model_ids[0])
             self._render_engine_result(callback, result, "Novel 创作结果", border_style="magenta")
             self.status_bar.set_last_model(model_ids[0])
         except Exception as e:
             self._captured_log = self._stop_log_capture()
+            self._persist_engine_trace(engine)
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
                 console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ 小说创作引擎执行失败: {e}[/error]")
+            self._record_engine_error("Novel", e, model_ids[0])
         finally:
+            self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
                 self._captured_log = self._stop_log_capture()
 

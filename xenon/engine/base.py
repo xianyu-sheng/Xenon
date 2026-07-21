@@ -65,6 +65,9 @@ class BaseEngine(ABC):
         self._interrupted: bool = False
         # F4: 本次 run 注入的 ContextManager（run 起点设置，供 _history_messages 消费）
         self._ctx_mgr: Any = None
+        # Last run's verified tool trace, exposed to the REPL for cross-turn
+        # persistence. Engines without tools leave it as None.
+        self._last_tracker: Any = None
         # P3-Q2: 链路追踪 ID——每次 run() 起点生成，贯穿该 run 内所有 _call_llm
         # 调用与 fallback；调试多模型失败时可把散落日志串成一条链（§8.8.4）。
         self.run_id: str | None = None
@@ -119,16 +122,42 @@ class BaseEngine(ABC):
         est = sum(len(m.get("content", "")) for m in messages) // 2
         return est > ratio * window
 
-    def _history_messages(self, context: Any) -> list[dict[str, str]]:
+    def _history_messages(
+        self,
+        context: Any,
+        current_user_input: str | None = None,
+    ) -> list[dict[str, str]]:
         """F4: 优先消费注入的 ctx_mgr（已压缩）消息，否则回退 AgentContext 历史。
 
         返回非 system 消息（system 由各引擎自行注入自己的 system_prompt）。
         """
         if self._ctx_mgr is not None:
-            return [m for m in self._ctx_mgr.get_messages() if m.get("role") != "system"]
+            messages = [
+                m for m in self._ctx_mgr.get_messages()
+                if m.get("role") != "system"
+            ]
+            # The REPL stores the current user turn before routing. Engines add
+            # that input themselves, so remove only an exact trailing duplicate.
+            if (
+                current_user_input is not None
+                and messages
+                and messages[-1].get("role") == "user"
+                and messages[-1].get("content") == current_user_input
+            ):
+                messages.pop()
+            return messages
         if context:
             return context.get_conversation_messages()
         return []
+
+    def _working_memory_message(self) -> dict[str, str] | None:
+        """Return the session's bounded working memory as a system message."""
+        if self._ctx_mgr is None:
+            return None
+        prompt = self._ctx_mgr.working_memory_prompt()
+        if not prompt:
+            return None
+        return {"role": "system", "content": prompt}
 
     def _maybe_compact_messages(
         self,
