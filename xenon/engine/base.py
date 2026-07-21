@@ -58,7 +58,14 @@ class BaseEngine(ABC):
         self.model_priority = list(model_priority)
         self.callback = callback or EngineCallback()
         # alias -> ModelConfig，供 _call_llm 读每模型 max_tokens/api_key/base_url（B4/B7）
-        self.model_configs = model_configs or {}
+        self.model_configs = dict(model_configs or {})
+        # ModelRegistry stores configs by alias while engines route canonical
+        # provider/model ids. Index both forms so per-model request options
+        # (base URL, key, token budget, reasoning effort) actually take effect.
+        for config in tuple(self.model_configs.values()):
+            model_id = getattr(config, "model_id", "")
+            if model_id:
+                self.model_configs.setdefault(model_id, config)
         self.temperature = temperature
         self.model_pool = model_pool  # v0.4.0
         self.auto_router = auto_router  # v0.4.0 Step 13
@@ -297,10 +304,16 @@ class BaseEngine(ABC):
                     if mk and "/" in model_id:
                         creds = {model_id.split("/", 1)[0].lower(): mk}
                 logger.debug(tp(f"调用模型 {model_id}"))
-                result = chat_completion(
-                    model_id, messages, max_tokens=mt,
-                    temperature=self.temperature, credentials=creds, base_url=base,
-                )
+                request_options: dict[str, Any] = {
+                    "max_tokens": mt,
+                    "temperature": self.temperature,
+                    "credentials": creds,
+                    "base_url": base,
+                }
+                effort = getattr(mc, "reasoning_effort", "") if mc else ""
+                if effort:
+                    request_options["reasoning_effort"] = effort
+                result = chat_completion(model_id, messages, **request_options)
                 # v0.4.0: record success to model pool
                 if self.model_pool:
                     self.model_pool.record_success(
@@ -438,10 +451,19 @@ class BaseEngine(ABC):
                     mk = getattr(mc, "api_key", "") or ""
                     if mk and "/" in model_id:
                         creds = {model_id.split("/", 1)[0].lower(): mk}
+                request_options: dict[str, Any] = {
+                    "tools": tools,
+                    "response_format": response_format,
+                    "credentials": creds,
+                    "base_url": base,
+                    "max_tokens": mt,
+                    "temperature": self.temperature,
+                }
+                effort = getattr(mc, "reasoning_effort", "") if mc else ""
+                if effort:
+                    request_options["reasoning_effort"] = effort
                 response = chat_completion_with_tools(
-                    model_id, messages, tools=tools, response_format=response_format,
-                    credentials=creds, base_url=base, max_tokens=mt,
-                    temperature=self.temperature,
+                    model_id, messages, **request_options,
                 )
                 self.last_model_used = model_id
                 return response

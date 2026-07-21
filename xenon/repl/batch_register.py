@@ -44,6 +44,7 @@ class ModelSpec:
     context_window: int = 0      # 0 = 不覆盖(用 _infer_capability 推断)
     max_tokens: int = 0          # 0 = 用默认 4096
     temperature: float = 0.0     # 0 = 用默认 0.7
+    reasoning_effort: str = ""  # low / medium / high / max
     tags: list[str] = field(default_factory=list)
     tier: int = 0                # 0 = 不覆盖
     discover: bool = False
@@ -138,6 +139,7 @@ def _spec_from_dict(d: dict[str, Any], idx: int) -> ModelSpec:
         context_window=int(d.get("context_window", 0) or 0),
         max_tokens=int(d.get("max_tokens", 0) or 0),
         temperature=float(d.get("temperature", 0.0) or 0.0),
+        reasoning_effort=str(d.get("reasoning_effort", "") or "").strip().lower(),
         tags=list(d.get("tags", []) or []),
         tier=int(d.get("tier", 0) or 0),
         discover=bool(d.get("discover", False)),
@@ -178,6 +180,11 @@ def validate(specs: list[ModelSpec]) -> list[str]:
             errors.append(f"{label}: tier 应在 1-5 之间(当前 {s.tier})")
         if s.context_window < 0:
             errors.append(f"{label}: context_window 不能为负")
+        if s.reasoning_effort not in {"", "low", "medium", "high", "max"}:
+            errors.append(
+                f"{label}: reasoning_effort 应为 low/medium/high/max "
+                f"(当前 {s.reasoning_effort!r})"
+            )
         # alias 唯一性
         if s.alias:
             if s.alias in seen_aliases:
@@ -237,6 +244,7 @@ def _expand_discover(specs: list[ModelSpec], result: BatchResult) -> list[ModelS
                 api_key=s.api_key,
                 base_url=s.base_url,
                 weight=s.weight,
+                reasoning_effort=s.reasoning_effort,
                 tags=list(s.tags),
                 tier=s.tier,
                 probe=s.probe,
@@ -364,6 +372,7 @@ def batch_register(
                 api_key=s.api_key, base_url=s.base_url,
                 max_tokens=s.max_tokens or 4096,
                 temperature=s.temperature or 0.7,
+                reasoning_effort=s.reasoning_effort,
                 context_window=s.context_window or 128000,
                 weight=s.weight,
             )

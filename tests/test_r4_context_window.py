@@ -20,6 +20,13 @@ class TestModelConfigContextWindow:
         reg.add_model("deepseek/deepseek-v4-flash", "ds-flash")
         assert reg.models["ds-pro"].context_window == 1_000_000
         assert reg.models["ds-flash"].context_window == 1_000_000
+        assert reg.models["ds-pro"].reasoning_effort == "max"
+        assert reg.models["ds-flash"].reasoning_effort == ""
+
+    def test_lookup_by_canonical_model_id(self):
+        reg = ModelRegistry()
+        config = reg.add_model("deepseek/deepseek-v4-pro", "ds-pro")
+        assert reg.get_model_by_id("deepseek/deepseek-v4-pro") is config
 
 
 class TestContextWindowFor:
@@ -51,6 +58,21 @@ class TestExportLoadRoundTrip:
         reg2 = ModelRegistry()
         reg2.load_from_file(p)
         assert reg2.models["gpt4"].context_window == 8000
+
+    def test_reasoning_effort_persisted(self, tmp_path):
+        reg = ModelRegistry()
+        reg.add_model(
+            "deepseek/deepseek-v4-pro",
+            "ds-pro",
+            reasoning_effort="high",
+        )
+        p = tmp_path / "models.yaml"
+        reg.save_to_file(p)
+
+        restored = ModelRegistry()
+        restored.load_from_file(p)
+
+        assert restored.models["ds-pro"].reasoning_effort == "high"
 
     def test_legacy_config_without_context_window_defaults(self, tmp_path):
         """旧配置文件无 context_window 字段时回退默认 128000。"""

@@ -29,6 +29,7 @@ class ModelConfig:
     base_url: str = ""      # 可选，自定义端点
     max_tokens: int = 4096  # 生成输出上限（B4 钳制用）
     temperature: float = 0.7
+    reasoning_effort: str = ""  # OpenAI-compatible reasoning level (low/medium/high/max)
     context_window: int = 128000  # 上下文窗口（R4）
     weight: float = 1.0            # v0.4.0: 模型池权重
 
@@ -104,7 +105,8 @@ class ModelRegistry:
         Args:
             model_id: "provider/model_name" 格式
             alias: 简短别名
-            **kwargs: api_key, base_url, max_tokens, temperature, context_window, weight
+            **kwargs: api_key, base_url, max_tokens, temperature,
+                reasoning_effort, context_window, weight
         """
         normalized_model = model_id.lower().rsplit("/", 1)[-1]
         if (
@@ -113,6 +115,10 @@ class ModelRegistry:
         ):
             # DeepSeek 官方 V4 模型规格（核对日期 2026-07-21）。
             kwargs["context_window"] = 1_000_000
+        if normalized_model == "deepseek-v4-pro" and not kwargs.get("reasoning_effort"):
+            # The official DeepSeek integration guide recommends max thinking
+            # for V4 Pro coding tasks. Users can still override this per model.
+            kwargs["reasoning_effort"] = "max"
         config = ModelConfig(model_id=model_id, alias=alias, **kwargs)
         self.models[alias] = config
         return config
@@ -142,6 +148,10 @@ class ModelRegistry:
 
     def get_model(self, alias: str) -> ModelConfig | None:
         return self.models.get(alias)
+
+    def get_model_by_id(self, model_id: str) -> ModelConfig | None:
+        """Look up runtime configuration by canonical provider/model id."""
+        return next((m for m in self.models.values() if m.model_id == model_id), None)
 
     def list_models(self) -> list[ModelConfig]:
         return list(self.models.values())
@@ -198,6 +208,7 @@ class ModelRegistry:
                     "base_url": m.base_url,
                     "max_tokens": m.max_tokens,
                     "temperature": m.temperature,
+                    "reasoning_effort": m.reasoning_effort,
                     "context_window": m.context_window,
                     "weight": m.weight,
                 }
@@ -232,6 +243,7 @@ class ModelRegistry:
                 base_url=mcfg.get("base_url", ""),
                 max_tokens=mcfg.get("max_tokens", 4096),
                 temperature=mcfg.get("temperature", 0.7),
+                reasoning_effort=mcfg.get("reasoning_effort", ""),
                 context_window=mcfg.get("context_window", 128000),
                 weight=mcfg.get("weight", 1.0),  # P0: 修复有损往返(export 写了 weight,load 原未读回)
             )

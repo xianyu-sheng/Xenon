@@ -2424,6 +2424,10 @@ class REPL:
         from rich.spinner import Spinner
 
         full_response = []
+        model_config = self.registry.get_model_by_id(model_id)
+        request_options: dict[str, Any] = {}
+        if model_config and model_config.reasoning_effort:
+            request_options["reasoning_effort"] = model_config.reasoning_effort
 
         # 流式阶段：显示 spinner + 实时 token 计数
         with Live(
@@ -2432,7 +2436,7 @@ class REPL:
             refresh_per_second=10,
             transient=True,  # 结束后自动清除 spinner
         ) as live:
-            for chunk in chat_completion_stream(model_id, messages):
+            for chunk in chat_completion_stream(model_id, messages, **request_options):
                 full_response.append(chunk)
                 token_count = len("".join(full_response))
                 live.update(
@@ -2453,7 +2457,11 @@ class REPL:
         from xenon.utils.llm_client import chat_completion
 
         console.print(f"[dim]· 调用 {model_id}…[/dim]")
-        response = chat_completion(model_id, messages)
+        model_config = self.registry.get_model_by_id(model_id)
+        request_options: dict[str, Any] = {}
+        if model_config and model_config.reasoning_effort:
+            request_options["reasoning_effort"] = model_config.reasoning_effort
+        response = chat_completion(model_id, messages, **request_options)
 
         self.ctx_mgr.add_assistant_message(response, model_used=model_id)
 

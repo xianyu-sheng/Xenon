@@ -2,10 +2,10 @@
 
 > 状态：**收录候选，尚未获得 DeepSeek 官方认证或背书。**
 
-本文用于准备向 DeepSeek 官方 GitHub 组织维护的
-[`awesome-deepseek-integration`](https://github.com/deepseek-ai/awesome-deepseek-integration)
-提交 Xenon 条目。进入该清单表示“被官方仓库收录为社区集成”，不等同于
-“DeepSeek 官方指定工具”。
+本文用于维护向 DeepSeek 官方 GitHub 组织的
+[`awesome-deepseek-agent`](https://github.com/deepseek-ai/awesome-deepseek-agent)
+提交的 [Xenon 集成指南 PR #301](https://github.com/deepseek-ai/awesome-deepseek-agent/pull/301)。
+进入该清单表示“被官方仓库收录为社区集成”，不等同于“DeepSeek 官方指定工具”。
 
 ## 当前 API 兼容基线
 
@@ -15,6 +15,7 @@
 |----------|------------|----------|
 | 正式模型为 `deepseek-v4-pro` / `deepseek-v4-flash` | 在线读取 `/models`；离线只回退到两个正式模型 | `xenon/repl/provider_registry.py` |
 | 1M 上下文 | 注册 V4 模型时默认设置 1,000,000 | `xenon/repl/model_registry.py` |
+| Max Thinking | V4 Pro 默认 `reasoning_effort=max`，支持按模型配置并透传普通、流式和原生工具请求 | `xenon/repl/model_registry.py`、`xenon/utils/llm_client.py` |
 | 思考模式工具续轮 | 保留 `reasoning_content`、assistant `tool_calls` 和匹配 `tool_call_id` 的结果 | `xenon/utils/llm_client.py`、`xenon/engine/base.py` |
 | 强制工具选择 | DeepSeek V4 使用 `required` / `none` / 指定函数时，仅对该请求关闭思考模式 | `xenon/utils/llm_client.py` |
 | 上下文缓存 usage | 读取命中/未命中 token，按模型显示命中率和费用 | `xenon/utils/deepseek_cache.py` |
@@ -25,7 +26,8 @@
 
 - [DeepSeek 模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)
 - [DeepSeek 思考模式与工具续轮](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode)
-- [Awesome DeepSeek Integrations](https://github.com/deepseek-ai/awesome-deepseek-integration)
+- [Awesome DeepSeek Agent](https://github.com/deepseek-ai/awesome-deepseek-agent)
+- [贡献规范](https://github.com/deepseek-ai/awesome-deepseek-agent/blob/main/CONTRIBUTING.md)
 
 ## 本地证据命令
 
@@ -40,32 +42,29 @@ xenon --version
 CI 还会在 Python 3.10、3.11、3.12 上重复离线测试，执行覆盖率门槛和发行包校验。
 需要真实 DeepSeek Key 或公网的测试均标记为 `live`，不会让外部网络波动污染离线 CI。
 
-## 建议提交条目
+## 当前 PR 文案
 
-该官方仓库在核对日期没有单独的 `CONTRIBUTING.md`；现有项目直接以三列表格维护。
-Xenon 作为终端工具，建议放在 `Others` 分类：
+仓库要求在英文和中文 README 的工具表中各增加一项，并同时提交双语指南。
+描述应保持简短、可验证：
 
-```html
-<tr>
-    <td style="font-size: 48px">✦</td>
-    <td><a href="https://github.com/xianyu-sheng/Xenon">Xenon</a></td>
-    <td>An open-source terminal AI coding workspace with first-class DeepSeek V4 support, native tool calling, permission-gated file and shell tools, context-cache cost tracking, resumable sessions, and MCP integration.</td>
-</tr>
+```markdown
+| **Xenon** | Terminal AI coding agent with DeepSeek V4 reasoning-effort support, native tool calling, cache-cost observability, permission-gated coding tools, and MCP integration. | [Guide](./docs/xenon.md) |
 ```
 
-建议 PR 标题：
+PR 标题：
 
 ```text
-Add Xenon terminal coding workspace
+docs: add Xenon — terminal coding agent with DeepSeek V4 support
 ```
 
-建议 PR 正文：
+PR 正文应聚焦已经验证的能力：
 
 ```text
-Xenon is an open-source terminal AI coding workspace with direct DeepSeek API
-support. It discovers available models from /models, supports DeepSeek V4
-thinking-mode tool calls, reports context-cache usage and estimated CNY cost,
-and includes permission-gated coding tools, session recovery, and MCP support.
+Xenon is an open-source terminal AI coding agent with direct DeepSeek API
+support. It discovers current models from /models, defaults V4 Pro to
+reasoning_effort=max, preserves reasoning_content across native tool-call
+rounds, and reports context-cache usage and estimated CNY cost. It also includes
+permission-gated coding tools, session recovery, and MCP integration.
 
 Repository: https://github.com/xianyu-sheng/Xenon
 License: MIT
@@ -80,6 +79,7 @@ Python: 3.10+
 - [x] README 中不使用“官方”“指定”“认证”等未经授权的表述
 - [x] README 已改用当前双线输入区、固定底栏、无边框回复的文本示意，不再嵌入旧版 `demo.gif`
 - [x] 本机可编辑安装已完成 DeepSeek V4 对话、强制/自动工具调用和 ReAct `read_file` 闭环验证
+- [x] `reasoning_effort=max` 已完成普通/流式/原生工具请求单测，并通过真实 V4 Pro 请求
 - [ ] 在全新、不引用本地源码的虚拟环境中完成发行包安装验收
 - [ ] 提交表格条目时保持英文描述简短、可验证，不使用竞品贬损性比较
 

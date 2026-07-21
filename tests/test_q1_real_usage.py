@@ -189,8 +189,10 @@ class _FakeStreamResp:
 class _FakeStreamClient:
     def __init__(self, lines: list[str]):
         self._lines = lines
+        self.requests: list[dict] = []
 
     def stream(self, method, url, **kw):
+        self.requests.append({"method": method, "url": url, **kw})
         return _FakeStreamResp(self._lines)
 
     def __enter__(self):
@@ -206,6 +208,23 @@ def _patch_stream(monkeypatch, provider: str, lines: list[str]):
 
 
 class TestStreamUsageOpenAI:
+    def test_reasoning_effort_passed_to_stream_payload(self, monkeypatch):
+        client = _FakeStreamClient([
+            'data: {"choices":[{"delta":{"content":"ok"}}]}',
+            "data: [DONE]",
+        ])
+        monkeypatch.setattr(lc, "_create_http_client", lambda timeout=120: client)
+        monkeypatch.setattr(lc, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai"))
+
+        chunks = list(lc.chat_completion_stream(
+            "openai/o3",
+            [{"role": "user", "content": "hi"}],
+            reasoning_effort="high",
+        ))
+
+        assert chunks == ["ok"]
+        assert client.requests[0]["json"]["reasoning_effort"] == "high"
+
     def test_emits_usage_from_final_chunk(self, monkeypatch):
         seen: list[tuple[str, LLMUsage, float]] = []
         unsub = register_usage_callback(lambda m, u, lat: seen.append((m, u, lat)))

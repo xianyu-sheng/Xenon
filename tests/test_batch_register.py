@@ -19,6 +19,7 @@ class TestParse:
             "  - alias: gpt4o\n"
             "    model_id: openai/gpt-4o\n"
             "    weight: 2.0\n"
+            "    reasoning_effort: high\n"
             "roles:\n"
             "  planner: [gpt4o]\n"
         )
@@ -27,6 +28,7 @@ class TestParse:
         assert profile == "fast"
         assert len(specs) == 1
         assert specs[0].alias == "gpt4o"
+        assert specs[0].reasoning_effort == "high"
         assert roles == {"planner": ["gpt4o"]}
 
     def test_parse_json_compatible(self, tmp_path):
@@ -90,6 +92,10 @@ class TestValidate:
     def test_duplicate_alias(self):
         errs = validate([self._spec(), self._spec()])
         assert any("重复" in e for e in errs)
+
+    def test_invalid_reasoning_effort(self):
+        errs = validate([self._spec(reasoning_effort="extreme")])
+        assert any("reasoning_effort" in e for e in errs)
 
 
 @pytest.fixture

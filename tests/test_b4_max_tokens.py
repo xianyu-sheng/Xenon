@@ -5,6 +5,22 @@ import xenon.utils.llm_client as lc
 
 
 class TestChatCompletionClampsMaxTokens:
+    def test_zero_retries_still_makes_one_probe_request(self, monkeypatch):
+        calls = []
+
+        def fake(endpoint, messages, max_tokens, temperature, timeout):
+            calls.append(endpoint.model_name)
+            return "ok"
+
+        monkeypatch.setattr(lc, "_call_openai_compat", fake)
+        assert lc.chat_completion(
+            "openai/gpt-4o",
+            [{"role": "user", "content": "ping"}],
+            credentials={"openai": "sk-test"},
+            max_retries=0,
+        ) == "ok"
+        assert calls == ["gpt-4o"]
+
     def test_openai_clamped_to_cap(self, monkeypatch):
         captured = {}
 
@@ -49,6 +65,32 @@ class TestChatCompletionClampsMaxTokens:
 
 
 class TestEngineReadsModelConfigMaxTokens:
+    def test_alias_keyed_registry_config_reaches_canonical_model(self, monkeypatch):
+        import xenon.engine.base as re_mod
+        from xenon.engine.react_engine import ReActEngine
+        from xenon.repl.model_registry import ModelRegistry
+
+        registry = ModelRegistry()
+        registry.add_model(
+            "deepseek/deepseek-v4-pro",
+            "ds-pro",
+            reasoning_effort="max",
+        )
+        captured = {}
+
+        def fake_chat(model_id, messages, **kwargs):
+            captured.update(kwargs)
+            return '{"final_answer":"ok"}'
+
+        monkeypatch.setattr(re_mod, "chat_completion", fake_chat)
+        engine = ReActEngine(
+            ["deepseek/deepseek-v4-pro"],
+            model_configs=dict(registry.models),
+        )
+        engine._call_llm([{"role": "user", "content": "hi"}])
+
+        assert captured["reasoning_effort"] == "max"
+
     def test_react_reads_model_config(self, monkeypatch):
         import xenon.engine.base as re_mod
         from xenon.engine.react_engine import ReActEngine

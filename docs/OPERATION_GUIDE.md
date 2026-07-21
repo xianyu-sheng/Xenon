@@ -157,6 +157,7 @@ xenon run config/default_flow.yaml --dry-run
 /set_model claude anthropic/claude-3-5-sonnet
 /set_model gpt openai/gpt-4o
 /set_model deepseek deepseek/deepseek-v4-pro
+/set_model ds-fast deepseek/deepseek-v4-pro reasoning_effort=high
 /set_model local ollama/llama3 base_url=http://localhost:11434
 /set_model custom openai/gpt-4o api_key=sk-xxx base_url=https://proxy.example.com/v1
 ```
@@ -164,6 +165,7 @@ xenon run config/default_flow.yaml --dry-run
 **支持的参数：**
 - `api_key=xxx` — 覆盖全局凭证
 - `base_url=xxx` — 自定义 API 端点
+- `reasoning_effort=low|medium|high|max` — OpenAI 兼容推理强度；DeepSeek V4 Pro 默认 `max`
 
 #### `/remove_model` — 移除模型
 

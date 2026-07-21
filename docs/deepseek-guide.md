@@ -34,6 +34,13 @@ DeepSeek API 实现了**自动上下文缓存**（Context Caching）。当你重
 
 DeepSeek V4 思考模式的工具续轮必须原样带回 `reasoning_content`、assistant `tool_calls` 和与之匹配的 `tool_call_id` 结果，Xenon 会自动保留这条协议链。思考模式不支持强制 `tool_choice`；当调用者显式使用 `required`、`none` 或指定函数时，Xenon 仅对该次请求自动设置 `thinking.type=disabled`，以保持 `tool_choice` 语义。
 
+`deepseek-v4-pro` 注册时默认使用 `reasoning_effort=max`。该配置会写入
+`models.yaml`，并透传到普通、流式和原生工具调用请求；需要降低延迟时可执行：
+
+```text
+❯ /set_model ds-pro deepseek/deepseek-v4-pro reasoning_effort=high
+```
+
 ### 对开发者的影响
 
 如果你在开发 AI 应用（Agent、Chatbot、代码助手），system prompt 和工具定义通常占据 2000-5000 token，且**每次调用都完全相同**。只要 prompt 结构对齐，这些固定部分就能持续命中缓存，带来巨大的成本节省。
@@ -163,6 +170,7 @@ response = chat_completion(
     "deepseek/deepseek-v4-pro",
     messages=[{"role": "user", "content": "你好"}],
     max_tokens=100,
+    reasoning_effort="max",
 )
 
 # 实时查询

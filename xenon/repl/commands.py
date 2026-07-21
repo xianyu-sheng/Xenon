@@ -134,7 +134,7 @@ def _cmd_help(*, args: str, **kwargs: Any) -> str:
 register_command(
     "/set_model",
     "交互式选择或配置模型",
-    "/set_model [alias] [provider/model_name] [api_key=xxx] [base_url=xxx]",
+    "/set_model [alias] [provider/model_name] [reasoning_effort=max] [base_url=xxx]",
 )
 
 @_handler("/set_model")
@@ -275,6 +275,8 @@ def _cmd_models(*, registry: ModelRegistry, **kwargs: Any) -> str:
         lines.append(f"  [{m.alias}] {m.model_id}")
         if m.base_url:
             lines.append(f"           端点: {m.base_url}")
+        if m.reasoning_effort:
+            lines.append(f"           推理强度: {m.reasoning_effort}")
 
     if registry.role_priority:
         lines.append("\n角色分配:")

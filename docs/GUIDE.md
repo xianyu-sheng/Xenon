@@ -124,6 +124,20 @@ context window, and up to 384K output. The legacy `deepseek-chat` and
 DeepSeek will retire them on 2026-07-24 23:59 Beijing time. When online, Xenon
 still discovers the model list from your endpoint rather than assuming it.
 
+Xenon registers `deepseek-v4-pro` with `reasoning_effort: max` by default. The
+value is persisted per model and is passed through ordinary, streaming, and
+native tool-calling requests. Override it when you need a different latency /
+reasoning trade-off:
+
+```text
+❯ /set_model ds-pro deepseek/deepseek-v4-pro reasoning_effort=high
+```
+
+Accepted values are `low`, `medium`, `high`, and `max`. A forced tool choice
+(`required`, `none`, or a named function) disables thinking for that individual
+request because DeepSeek does not allow forced tool choice and thinking mode in
+the same request.
+
 > **Cache savings**: Xenon's CacheTracker automatically shows how much
 > you save via DeepSeek's context caching. Hit `/cost` to see real-time numbers.
 

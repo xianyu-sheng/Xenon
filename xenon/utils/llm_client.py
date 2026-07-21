@@ -28,6 +28,28 @@ logger = logging.getLogger(__name__)
 # 时自动续写的最大次数；耗尽后抛 ResponseTruncatedError，而不是仅 logger.warning
 # 后静默返回被截断的内容。
 MAX_CONTINUATIONS = 3
+_REASONING_EFFORTS = frozenset({"low", "medium", "high", "max"})
+
+
+def _normalize_reasoning_effort(value: str | None) -> str | None:
+    """Validate an OpenAI-compatible reasoning effort value."""
+    if value is None or not str(value).strip():
+        return None
+    normalized = str(value).strip().lower()
+    if normalized not in _REASONING_EFFORTS:
+        allowed = ", ".join(sorted(_REASONING_EFFORTS))
+        raise ValueError(f"reasoning_effort 必须是 {allowed} 之一")
+    return normalized
+
+
+def _apply_reasoning_effort(
+    payload: dict[str, Any],
+    reasoning_effort: str | None,
+) -> None:
+    """Add reasoning_effort only when the caller explicitly configured it."""
+    normalized = _normalize_reasoning_effort(reasoning_effort)
+    if normalized:
+        payload["reasoning_effort"] = normalized
 
 
 class ResponseTruncatedError(RuntimeError):
@@ -534,6 +556,7 @@ def chat_completion(
     base_url: str | None = None,
     max_tokens: int = 4096,
     temperature: float = 0.7,
+    reasoning_effort: str | None = None,
     timeout: float = 120.0,
     max_retries: int = 3,
 ) -> str:
@@ -551,6 +574,7 @@ def chat_completion(
     import time
 
     endpoint = build_endpoint(model_id, credentials, base_url)
+    reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
     # B4: 按厂商输出上限钳制 max_tokens，防止 131072 等超限值引发 400 级联失败
     provider_cap = _PROVIDER_DEFAULTS.get(endpoint.provider, {}).get("max_output_tokens")
     if provider_cap and max_tokens > provider_cap:
@@ -561,12 +585,23 @@ def chat_completion(
     _usage_tl.usage_acc = LLMUsage()
     t0 = time.monotonic()
 
-    for attempt in range(max_retries):
+    # ``max_retries=0`` means one request without retry (used by probes), not
+    # zero requests followed by ``raise None``.
+    attempt_count = max(1, max_retries)
+    for attempt in range(attempt_count):
         try:
             if endpoint.provider == "anthropic":
                 text = _call_anthropic(endpoint, messages, max_tokens, temperature, timeout)
             else:
-                text = _call_openai_compat(endpoint, messages, max_tokens, temperature, timeout)
+                if reasoning_effort:
+                    text = _call_openai_compat(
+                        endpoint, messages, max_tokens, temperature, timeout,
+                        reasoning_effort=reasoning_effort,
+                    )
+                else:
+                    text = _call_openai_compat(
+                        endpoint, messages, max_tokens, temperature, timeout,
+                    )
             # 成功：发出 (model_id, 累计 usage, 延迟) 供 UsageTracker 等订阅
             latency = time.monotonic() - t0
             _emit_usage(model_id, getattr(_usage_tl, "usage_acc", LLMUsage()), latency)
@@ -577,13 +612,13 @@ def chat_completion(
             if status == 429:
                 # 限流 — 指数退避
                 wait = 2 ** attempt
-                logger.warning(f"[{model_id}] 429 限流，等待 {wait}s 后重试 (第 {attempt + 1}/{max_retries} 次)")
+                logger.warning(f"[{model_id}] 429 限流，等待 {wait}s 后重试 (第 {attempt + 1}/{attempt_count} 次)")
                 time.sleep(wait)
                 last_error = e
             elif 500 <= status < 600:
                 # 服务端错误 — 指数退避重试
                 wait = 2 ** attempt
-                logger.warning(f"[{model_id}] {status} 服务端错误，等待 {wait}s 后重试 (第 {attempt + 1}/{max_retries} 次)")
+                logger.warning(f"[{model_id}] {status} 服务端错误，等待 {wait}s 后重试 (第 {attempt + 1}/{attempt_count} 次)")
                 time.sleep(wait)
                 last_error = e
             else:
@@ -600,7 +635,7 @@ def chat_completion(
         ) as e:
             # 网络/协议错误 — 指数退避重试
             wait = min(2 ** attempt, 8)
-            logger.warning(f"[{model_id}] 网络错误 ({type(e).__name__}): {e}，等待 {wait}s 后重试 (第 {attempt + 1}/{max_retries} 次)")
+            logger.warning(f"[{model_id}] 网络错误 ({type(e).__name__}): {e}，等待 {wait}s 后重试 (第 {attempt + 1}/{attempt_count} 次)")
             time.sleep(wait)
             last_error = e
 
@@ -614,14 +649,23 @@ def _call_openai_compat(
     max_tokens: int,
     temperature: float,
     timeout: float,
+    *,
+    reasoning_effort: str | None = None,
 ) -> str:
     """OpenAI 兼容格式调用（B12: finish_reason=length 自动续写）。"""
     msgs = list(messages)  # 不修改调用方列表
     parts: list[str] = []
     attempts = 0
     while True:
-        content, finish = _call_openai_compat_once(
-            endpoint, msgs, max_tokens, temperature, timeout)
+        if reasoning_effort:
+            content, finish = _call_openai_compat_once(
+                endpoint, msgs, max_tokens, temperature, timeout,
+                reasoning_effort=reasoning_effort,
+            )
+        else:
+            content, finish = _call_openai_compat_once(
+                endpoint, msgs, max_tokens, temperature, timeout,
+            )
         if content:
             parts.append(content)
         if finish != "length":
@@ -644,6 +688,8 @@ def _call_openai_compat_once(
     max_tokens: int,
     temperature: float,
     timeout: float,
+    *,
+    reasoning_effort: str | None = None,
 ) -> tuple[str, str]:
     """单次 OpenAI 兼容调用，返回 (content, finish_reason)。"""
     url = f"{endpoint.base_url}/chat/completions"
@@ -657,6 +703,7 @@ def _call_openai_compat_once(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
+    _apply_reasoning_effort(payload, reasoning_effort)
     # R3: 复用 per-provider 长生命 Client（取代每次 with _create_http_client）
     client = _get_pooled_client(endpoint, timeout)
     resp = client.post(url, json=payload, headers=headers, timeout=timeout)
@@ -894,6 +941,7 @@ def chat_completion_with_tools(
     base_url: str | None = None,
     max_tokens: int = 4096,
     temperature: float = 0.7,
+    reasoning_effort: str | None = None,
     timeout: float = 120.0,
     max_retries: int = 3,
 ) -> LLMResponse:
@@ -912,17 +960,25 @@ def chat_completion_with_tools(
     import time
 
     endpoint = build_endpoint(model_id, credentials, base_url)
+    reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
     provider_cap = _PROVIDER_DEFAULTS.get(endpoint.provider, {}).get("max_output_tokens")
     if provider_cap and max_tokens > provider_cap:
         max_tokens = provider_cap
     last_error: Exception | None = None
 
-    for attempt in range(max_retries):
+    attempt_count = max(1, max_retries)
+    for attempt in range(attempt_count):
         try:
             if endpoint.provider == "anthropic":
                 return _call_anthropic_with_tools(
                     endpoint, messages, tools, response_format, tool_choice,
                     max_tokens, temperature, timeout,
+                )
+            if reasoning_effort:
+                return _call_openai_compat_with_tools(
+                    endpoint, messages, tools, response_format, tool_choice,
+                    max_tokens, temperature, timeout,
+                    reasoning_effort=reasoning_effort,
                 )
             return _call_openai_compat_with_tools(
                 endpoint, messages, tools, response_format, tool_choice,
@@ -932,7 +988,7 @@ def chat_completion_with_tools(
             status = e.response.status_code
             if status == 429 or 500 <= status < 600:
                 wait = 2 ** attempt
-                logger.warning(f"[{model_id}] {status} 失败，等待 {wait}s 重试 (第 {attempt + 1}/{max_retries} 次)")
+                logger.warning(f"[{model_id}] {status} 失败，等待 {wait}s 重试 (第 {attempt + 1}/{attempt_count} 次)")
                 time.sleep(wait)
                 last_error = e
             else:
@@ -958,6 +1014,8 @@ def _call_openai_compat_with_tools(
     max_tokens: int,
     temperature: float,
     timeout: float,
+    *,
+    reasoning_effort: str | None = None,
 ) -> LLMResponse:
     """OpenAI 兼容厂商的原生 FC 调用（单次，不带 B12 续写——FC 场景续写语义复杂，留给上层）。"""
     url = f"{endpoint.base_url}/chat/completions"
@@ -971,6 +1029,7 @@ def _call_openai_compat_with_tools(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
+    _apply_reasoning_effort(payload, reasoning_effort)
     norm_tools = _normalize_openai_tools(tools)
     if norm_tools:
         payload["tools"] = norm_tools
@@ -986,6 +1045,7 @@ def _call_openai_compat_with_tools(
             and endpoint.model_name.startswith("deepseek-v4-")
             and tool_choice != "auto"
         ):
+            payload.pop("reasoning_effort", None)
             payload["thinking"] = {"type": "disabled"}
 
     client = _get_pooled_client(endpoint, timeout)
@@ -1109,6 +1169,7 @@ def chat_completion_stream(
     base_url: str | None = None,
     max_tokens: int = 4096,
     temperature: float = 0.7,
+    reasoning_effort: str | None = None,
     timeout: float = 300.0,
 ) -> Generator[str, None, None]:
     """
@@ -1118,11 +1179,15 @@ def chat_completion_stream(
         逐步生成的文本片段（delta）。
     """
     endpoint = build_endpoint(model_id, credentials, base_url)
+    reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
 
     if endpoint.provider == "anthropic":
         yield from _stream_anthropic(endpoint, messages, max_tokens, temperature, timeout, model_id)
     else:
-        yield from _stream_openai_compat(endpoint, messages, max_tokens, temperature, timeout, model_id)
+        yield from _stream_openai_compat(
+            endpoint, messages, max_tokens, temperature, timeout, model_id,
+            reasoning_effort=reasoning_effort,
+        )
 
 
 def _stream_openai_compat(
@@ -1132,6 +1197,8 @@ def _stream_openai_compat(
     temperature: float,
     timeout: float,
     model_id: str,
+    *,
+    reasoning_effort: str | None = None,
 ) -> Generator[str, None, None]:
     """OpenAI 兼容格式流式调用。
 
@@ -1153,6 +1220,7 @@ def _stream_openai_compat(
         "temperature": temperature,
         "stream": True,
     }
+    _apply_reasoning_effort(payload, reasoning_effort)
     t0 = time.time()
     usage_data: dict[str, Any] | None = None
     with _create_http_client(timeout=timeout) as client:

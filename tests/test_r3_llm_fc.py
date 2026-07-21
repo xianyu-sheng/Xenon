@@ -132,6 +132,7 @@ class TestOpenaiFCPath:
             "openai/gpt-4o", [{"role": "user", "content": "echo hi"}],
             tools=[{"type": "function", "function": {"name": "echo", "parameters": {}}}],
             tool_choice="auto",
+            reasoning_effort="high",
         )
         assert resp.has_tool_calls
         assert resp.tool_calls[0]["name"] == "echo"
@@ -142,6 +143,7 @@ class TestOpenaiFCPath:
         sent = fake.posts[0]["json"]
         assert sent["tools"][0]["function"]["name"] == "echo"
         assert sent["tool_choice"] == "auto"
+        assert sent["reasoning_effort"] == "high"
 
     def test_openai_response_format_passed_through(self, monkeypatch):
         fake = _FakeClient()
@@ -175,11 +177,51 @@ class TestOpenaiFCPath:
             [{"role": "user", "content": "call echo"}],
             tools=[{"type": "function", "function": {"name": "echo", "parameters": {}}}],
             tool_choice="required",
+            reasoning_effort="max",
         )
 
         sent = fake.posts[0]["json"]
         assert sent["tool_choice"] == "required"
         assert sent["thinking"] == {"type": "disabled"}
+        assert "reasoning_effort" not in sent
+
+    def test_plain_deepseek_request_passes_reasoning_effort(self, monkeypatch):
+        fake = _FakeClient()
+        fake.set_payload({
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+        })
+        endpoint = ModelEndpoint(
+            provider="deepseek",
+            model_name="deepseek-v4-pro",
+            base_url="https://api.deepseek.com/v1",
+            api_key="k",
+        )
+        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+        monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: endpoint)
+
+        result = llm.chat_completion(
+            "deepseek/deepseek-v4-pro",
+            [{"role": "user", "content": "reason carefully"}],
+            reasoning_effort="max",
+        )
+
+        assert result == "ok"
+        assert fake.posts[0]["json"]["reasoning_effort"] == "max"
+
+    def test_invalid_reasoning_effort_rejected_before_request(self, monkeypatch):
+        monkeypatch.setattr(
+            llm,
+            "build_endpoint",
+            lambda mid, c=None, b=None: _endpoint("openai"),
+        )
+        import pytest
+
+        with pytest.raises(ValueError, match="reasoning_effort"):
+            llm.chat_completion(
+                "openai/gpt-4o",
+                [{"role": "user", "content": "hi"}],
+                reasoning_effort="extreme",
+            )
 
     def test_no_tools_degrades_to_text(self, monkeypatch):
         fake = _FakeClient()

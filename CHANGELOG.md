@@ -18,6 +18,8 @@
 ### DeepSeek V4 兼容性
 
 - 离线模型列表只保留 `deepseek-v4-pro` 与 `deepseek-v4-flash`，默认上下文更新为 1M。
+- V4 Pro 默认使用并持久化 `reasoning_effort=max`；普通、流式和原生工具调用均按模型配置透传。
+- 修复模型配置按别名保存、引擎按 canonical model ID 路由时配置未生效的问题。
 - 思考模式原生工具调用会保留 `reasoning_content`、`tool_calls` 与 `tool_call_id` 结果，支持当前会话跨轮续接。
 - ReAct 在正式 DeepSeek V4 为主模型时自动启用原生工具协议，仍可由调用方显式关闭。
 - 强制 `tool_choice` 时仅对该次 DeepSeek V4 请求关闭思考模式，避免官方 API 的不兼容组合返回 400。
