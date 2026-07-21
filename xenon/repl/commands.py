@@ -414,30 +414,98 @@ def _cmd_set_profile(*, args: str, session_state: dict, **kwargs: Any) -> str:
 
 # /resume ──────────────────────────────────────────────────
 
-register_command("/resume", "恢复上次自动保存的会话（v0.4.0）", "/resume [name]")
+register_command("/resume", "列出 / 恢复保存的会话", "/resume [序号或名称]")
 
 @_handler("/resume")
 def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
-    """v0.4.0 Step 14: 恢复自动保存的会话."""
-    from xenon.repl.session import get_auto_session, load_session, get_session_age
+    """断点恢复：列出所有会话，或按序号/名称加载指定会话。
+
+    用法:
+      /resume         列出所有已保存的会话（含自动保存）
+      /resume 1       加载第 1 个会话
+      /resume my-sess  加载名为 my-sess 的会话
+    """
+    from xenon.repl.session import list_sessions, load_session, get_session_age, get_auto_session
 
     repl = session_state.get("_repl")
     if not repl:
         return "❌ REPL 实例不可用。"
 
-    name = args.strip()
-    try:
-        if name:
-            data = load_session(name)
-        else:
-            data = get_auto_session()
-            if not data:
-                return "没有可恢复的会话。会话可能已过期（7 天）。"
+    arg = args.strip()
 
-        # 恢复对话历史
+    # ── 无参数：列出所有会话 ──
+    if not arg:
+        sessions = list_sessions()
+        # 同时检查自动保存（可能不在 list_sessions 中因为名称是 _auto）
+        auto = get_auto_session()
+        has_auto = bool(auto)
+
+        if not sessions and not has_auto:
+            return "没有已保存的会话。使用 /save <名称> 保存当前会话。"
+
+        from rich.table import Table
+        from rich.console import Console as RichConsole
+
+        table = Table(title="已保存的会话 · 输入 /resume <序号> 或 /resume <名称> 恢复",
+                      border_style="dim #64748b")
+        table.add_column("#", style="bold cyan", width=3)
+        table.add_column("名称", style="#67e8f9", max_width=30)
+        table.add_column("时间", style="dim #94a3b8", width=22)
+        table.add_column("消息", justify="right", width=6)
+
+        idx = 0
+        # 自动保存排第一
+        if has_auto:
+            idx += 1
+            table.add_row(
+                str(idx), "[上次自动保存]",
+                get_session_age(auto) or auto.get("saved_at", "")[:19],
+                str(len(auto.get("history", []))),
+            )
+
+        for s in sessions:
+            if s["name"] == "_auto":
+                continue  # 避免重复（list_sessions 可能已包含）
+            idx += 1
+            table.add_row(str(idx), s["name"], s["saved_at"][:19], str(s["messages"]))
+
+        console_out = RichConsole()
+        console_out.print()
+        console_out.print(table)
+        return ""  # 表格已打印，返空不重复显示
+
+    # ── 按序号加载 ──
+    if arg.isdigit():
+        sessions = list_sessions()
+        auto = get_auto_session()
+        # 构建序号→名称映射
+        idx_map: dict[int, str] = {}
+        num = 1
+        if auto:
+            idx_map[num] = "_auto"
+            num += 1
+        for s in sessions:
+            if s["name"] == "_auto":
+                continue
+            idx_map[num] = s["name"]
+            num += 1
+
+        idx = int(arg)
+        if idx not in idx_map:
+            return f"❌ 序号 {idx} 超出范围（共 {len(idx_map)} 个会话）。"
+        name = idx_map[idx]
+    else:
+        name = arg
+
+    # ── 加载会话 ──
+    try:
+        data = load_session(name)
+    except FileNotFoundError:
+        return f"❌ 会话 '{name}' 不存在。使用 /resume (无参数) 查看全部。"
+
+    try:
         history = data.get("history", [])
         if history:
-            # 清空当前上下文并加载历史
             repl.ctx_mgr.clear()
             for msg in history:
                 role = msg.get("role", "user")
@@ -466,8 +534,6 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         msgs = len(history)
         return f"✅ 已恢复会话 ({age}) · {msgs} 条消息 · 范式: {paradigm or 'direct'}"
 
-    except FileNotFoundError:
-        return f"❌ 会话 '{name}' 不存在。"
     except Exception as e:
         return f"❌ 恢复失败: {e}"
 

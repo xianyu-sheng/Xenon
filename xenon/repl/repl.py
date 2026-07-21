@@ -368,16 +368,23 @@ class REPL:
     def _check_auto_resume(self) -> None:
         """v0.4.0 Step 14: 启动时检查可恢复的会话。"""
         try:
-            from xenon.repl.session import get_auto_session, get_session_age
-            data = get_auto_session()
-            if data:
-                age = get_session_age(data) or "未知时间"
-                msgs = len(data.get("history", []))
-                mode = data.get("extra", {}).get("paradigm", "direct")
+            from xenon.repl.session import get_auto_session, get_session_age, list_sessions
+            sessions = list_sessions()
+            auto = get_auto_session()
+
+            if auto:
+                age = get_session_age(auto) or "未知时间"
+                msgs = len(auto.get("history", []))
+                mode = auto.get("extra", {}).get("paradigm", "direct")
                 console.print(
                     f"\n[dim]┌─ 上次会话 ({age}) · {msgs} 条消息 · 范式: {mode}[/dim]"
                 )
-                console.print("[dim]│  输入 [bold]/resume[/bold] 恢复，或直接开始新对话[/dim]")
+                console.print("[dim]│  输入 [bold]/resume[/bold] 列出全部会话并选择恢复[/dim]")
+            elif sessions:
+                console.print(
+                    f"\n[dim]┌─ {len(sessions)} 个已保存会话[/dim]"
+                )
+                console.print("[dim]│  输入 [bold]/resume[/bold] 查看并选择恢复[/dim]")
         except Exception:
             pass
 
