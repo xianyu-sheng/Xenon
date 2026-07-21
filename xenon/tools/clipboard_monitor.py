@@ -112,7 +112,7 @@ def _read_clipboard_image_macos() -> bytes | None:
 def _read_clipboard_image_windows() -> bytes | None:
     """Windows: 使用 PIL.ImageGrab 读剪贴板。"""
     try:
-        from PIL import ImageGrab, Image
+        from PIL import ImageGrab
         import io
 
         img = ImageGrab.grabclipboard()

@@ -31,6 +31,8 @@ from typing import Any, Callable
 
 import pytest
 
+pytestmark = pytest.mark.live
+
 import xenon.engine.base as engine_base
 import xenon.utils.llm_client as llm_client
 from xenon.repl.context_manager import ContextManager

@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 
 from xenon.repl.model_registry import BUILTIN_MODES
 
@@ -1004,7 +1003,7 @@ def _cmd_code(*, args: str, registry: ModelRegistry, ctx_mgr: ContextManager, se
                 timeout=30,
             )
             if proc.returncode == 0:
-                result_lines.append(f"✅ 运行成功:")
+                result_lines.append("✅ 运行成功:")
                 if proc.stdout:
                     result_lines.append(proc.stdout)
             else:
@@ -1129,7 +1128,6 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
       /sub-agent --parallel taskA|taskB|taskC   # 并行 3 个子任务
     """
     from xenon.engine.react_engine import ReActEngine
-    from xenon.mcp.registry import get_registry
     from xenon.engine.context import AgentContext
 
     if not args or not args.strip():
@@ -1197,7 +1195,6 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
     model_configs = getattr(repl, '_model_configs', None) or {}
 
     # 构建引擎
-    mcp_registry = get_registry()
     engine = ReActEngine(
         model_ids,
         max_iterations=15,
@@ -1437,7 +1434,7 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
 
             msg = f"✅ MCP 服务器 '{entry.name}' 已登记（按需连接）\n"
             msg += f"   {entry.description[:80]}\n"
-            msg += f"   下次启动或首次调用时自动连接"
+            msg += "   下次启动或首次调用时自动连接"
             if env_warnings:
                 msg += "\n\n" + "\n".join(env_warnings)
             return msg
@@ -1486,7 +1483,6 @@ def _cmd_library(*, args: str, **kwargs: Any) -> str:
 
     if sub in ("refresh", "update"):
         from xenon.repl.library import get_mcp_library, get_skill_library
-        import time
 
         lines = ["📚 库刷新结果:\n"]
 
@@ -1568,7 +1564,6 @@ register_command("/status", "显示详细状态信息", "/status")
 
 @_handler("/status")
 def _cmd_status(*, ctx_mgr: ContextManager, registry: ModelRegistry, session_state: dict, **kwargs: Any) -> str:
-    from xenon.repl.prompt_optimizer import get_intent_display
 
     stats = ctx_mgr.stats()
     mode = registry.get_current_mode()
@@ -1890,7 +1885,6 @@ def _cmd_shortcut(*, args: str, registry: ModelRegistry, session_state: dict[str
 def _shortcut_create_interactive(manager, registry=None) -> str:
     """交互式创建快捷指令。支持智能生成和手动配置。"""
     from rich.prompt import Prompt as _Prompt
-    from rich.panel import Panel
 
     console.print("\n[bold cyan]创建快捷指令[/bold cyan]\n")
 
@@ -2189,7 +2183,6 @@ def _cmd_skill(*, args: str, registry: ModelRegistry, session_state: dict[str, A
 def _skill_create_interactive(manager, registry=None) -> str:
     """交互式创建技能。支持智能生成和手动配置两种模式。"""
     from rich.prompt import Prompt as _Prompt
-    from rich.panel import Panel
 
     console.print("\n[bold cyan]创建技能[/bold cyan]\n")
 
@@ -2554,12 +2547,6 @@ def _skill_import_from_url(manager, url: str) -> str:
                 except json.JSONDecodeError:
                     pass
 
-            # 尝试获取 README 了解 skill 信息
-            readme_result = subprocess.run(
-                ["gh", "api", f"repos/{owner}/{repo}/readme"],
-                capture_output=True, text=True, timeout=30,
-            )
-
         # 方法 2: 直接用 curl 获取文件列表
         api_url = f"https://api.github.com/repos/{owner}/{repo}/contents"
         result = subprocess.run(
@@ -2574,10 +2561,10 @@ def _skill_import_from_url(manager, url: str) -> str:
         try:
             contents = _json.loads(result.stdout)
         except _json.JSONDecodeError:
-            return f"❌ 无法解析仓库内容 (可能触发了 GitHub API 限流)"
+            return "❌ 无法解析仓库内容 (可能触发了 GitHub API 限流)"
 
         if not isinstance(contents, list):
-            return f"❌ 仓库内容格式异常"
+            return "❌ 仓库内容格式异常"
 
         # 查找 YAML 文件（优先 .xenon/skills/ 目录下的）
         yaml_files = []
@@ -2657,7 +2644,7 @@ def _skill_import_from_url(manager, url: str) -> str:
         if imported:
             names = ", ".join(f"/{n}" for n in imported)
             return f"✅ 已从 {owner}/{repo} 导入 {len(imported)} 个技能: {names}"
-        return f"❌ 未能成功导入任何技能，请检查仓库中的 YAML 文件格式。"
+        return "❌ 未能成功导入任何技能，请检查仓库中的 YAML 文件格式。"
 
     except subprocess.TimeoutExpired:
         return "❌ GitHub API 请求超时，请稍后重试。"
@@ -2784,7 +2771,7 @@ def _cmd_novel(
                 f"({n['genre'] or '未分类'}) — "
                 f"{n['chapters']} 章, 约 {n['words']} 字{marker}"
             )
-        lines.append(f"\n使用 /novel switch <名称> 切换小说")
+        lines.append("\n使用 /novel switch <名称> 切换小说")
         return "\n".join(lines)
 
     elif subcmd == "switch":

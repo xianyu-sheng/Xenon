@@ -15,7 +15,6 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from xenon.utils.atomic_write import atomic_write_text
 

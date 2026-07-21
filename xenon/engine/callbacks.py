@@ -195,7 +195,6 @@ class ThinkingPanel:
         from rich.text import Text
         from rich.panel import Panel
         from rich.console import Group
-        from rich.table import Table
 
         if self.is_empty:
             return

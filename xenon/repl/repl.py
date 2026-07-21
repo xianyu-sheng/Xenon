@@ -18,8 +18,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from rich.console import Console
 from rich import box
 from rich.markdown import Markdown
@@ -37,6 +35,8 @@ from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.project_context import ProjectContext
 from xenon.repl.prompt_optimizer import get_intent_display, optimize_prompt
 from xenon.repl.status_bar import StatusBar
+
+logger = logging.getLogger(__name__)
 
 # ── prompt_toolkit（可选依赖，不可用时回退自建输入）────────────
 try:
@@ -552,7 +552,7 @@ class REPL:
                 header = " · ".join(header_parts) if header_parts else ""
                 console.print(f"[dim]  💭 {header}  [Ctrl+O 展开详情][/dim]")
             else:
-                console.print(f"[dim]  💭 无工具调用[/dim]")
+                console.print("[dim]  💭 无工具调用[/dim]")
 
         # 最终答案始终显示；正文保持正常亮度，不再使用大边框。
         self._render_assistant_text(result, title=title)
@@ -921,8 +921,6 @@ class REPL:
             calls = snap.get("calls", 0)
             prompt_t = snap.get("prompt_tokens", 0)
             comp_t = snap.get("completion_tokens", 0)
-            hit = snap.get("cache_hit_tokens", 0)
-            miss = snap.get("cache_miss_tokens", 0)
             rate = snap.get("cache_hit_rate", 0.0)
             cost = snap.get("cost_yuan", 0.0)
             saved = snap.get("saved_yuan", 0.0)
@@ -1044,7 +1042,7 @@ class REPL:
             if pool_count > 0:
                 console.print(f"[dim]· 已加载 {pool_count} 个模型到调用池[/dim]")
                 if len(configured) > 1:
-                    console.print(f"[dim]· auto 模式: 根据任务难度自动选择模型[/dim]")
+                    console.print("[dim]· auto 模式: 根据任务难度自动选择模型[/dim]")
             console.print()
 
         # 加载自定义快捷指令和技能
@@ -1285,7 +1283,7 @@ class REPL:
             elif ch in ('\x08', '\x7f'):
                 # Backspace: 删除光标左侧字符
                 if cursor_pos > 0:
-                    deleted = current_line.pop(cursor_pos - 1)
+                    current_line.pop(cursor_pos - 1)
                     cursor_pos -= 1
                     # 光标左移一格
                     sys.stdout.write('\033[1D')

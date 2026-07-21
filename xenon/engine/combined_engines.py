@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
-from xenon.engine.react_engine import ReActEngine, BUILTIN_TOOLS
+from xenon.engine.react_engine import ReActEngine
 from xenon.engine.reflection_engine import ReflectionEngine
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.utils.llm_client import chat_completion
@@ -104,7 +104,7 @@ class PlanReactEngine:
             console.print(f"  [dim]步骤 {s.get('id', '?')}: {s.get('task', '')}[/dim]")
 
         # Phase 2: 每步用 ReAct 执行
-        console.print(f"\n[dim]🔄 Phase 2: ReAct 逐步执行[/dim]")
+        console.print("\n[dim]🔄 Phase 2: ReAct 逐步执行[/dim]")
         results = []
 
         # 收集所有已发现的信息（文件列表、命令输出等）
@@ -182,7 +182,7 @@ class PlanReactEngine:
             ctx.set(f"step_{step_id}_status", status)
 
         # Phase 3: 汇总
-        console.print(f"\n[dim]📝 Phase 3: 汇总结果...[/dim]")
+        console.print("\n[dim]📝 Phase 3: 汇总结果...[/dim]")
         summary = self._summarize(user_input, results, analysis)
         return summary
 

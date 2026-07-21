@@ -12,12 +12,10 @@ import json
 import logging
 import select
 import subprocess
-import sys
 import threading
 import time
 from typing import Any
 
-import httpx
 
 from xenon.utils.llm_client import _create_http_client
 

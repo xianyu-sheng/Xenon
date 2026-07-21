@@ -18,7 +18,6 @@ from xenon.engine.context import AgentContext
 from xenon.engine.plan_dag import PlanDAG, PlanDAGCycleError
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes.tool_executor import ToolExecuteResult, ToolExecutor
-from xenon.nodes.tool_node import ToolNode
 from xenon.utils.response_adapter import parse_plan, parse_react
 
 if TYPE_CHECKING:

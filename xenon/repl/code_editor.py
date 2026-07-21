@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import difflib
 from pathlib import Path
-from typing import Any
 
 from xenon.utils.atomic_write import atomic_write_text as _atomic_write_text
 
@@ -177,7 +176,7 @@ class CodeEditor:
         try:
             from xenon.utils.llm_client import chat_completion
 
-            console.print(f"\n[dim]🤖 正在根据指令生成修改...[/dim]")
+            console.print("\n[dim]🤖 正在根据指令生成修改...[/dim]")
 
             response = None
             for model_id in model_priority:

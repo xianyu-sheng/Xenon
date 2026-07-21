@@ -17,7 +17,6 @@ import pytest
 
 from xenon.utils.deepseek_cache import (
     CacheTracker,
-    CacheSnapshot,
     _hash_system_prompt,
     _match_pricing,
 )
@@ -26,7 +25,6 @@ from xenon.utils.llm_client import (
     _extract_usage,
     register_response_callback,
     _emit_response,
-    _RESPONSE_CALLBACKS,
 )
 from xenon.repl.prompt_optimizer import (
     optimize_messages_for_cache,
@@ -156,7 +154,8 @@ class TestResponseCallback:
             assert r1 == ["a"]
             assert r2 == ["a"]
         finally:
-            u1(); u2()
+            u1()
+            u2()
 
 
 class TestCacheTrackerCore:

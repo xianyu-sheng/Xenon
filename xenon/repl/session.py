@@ -10,9 +10,8 @@ v0.4.0 Step 14: 新增 auto_save / get_auto_session / cleanup_expired_sessions�
 from __future__ import annotations
 
 import json
-import os
 import time as _time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 

@@ -255,7 +255,9 @@ class BaseEngine(ABC):
         """
         from xenon.engine.trace import new_call_id, prefix
         call_id = new_call_id()
-        tp = lambda msg: f"{prefix(self.run_id, call_id)} {msg}"
+
+        def tp(message: str) -> str:
+            return f"{prefix(self.run_id, call_id)} {message}"
         last_error: Exception | None = None
         for model_id in (model_priority or self.model_priority):
             started_at = time.monotonic()
@@ -678,13 +680,13 @@ class BaseEngine(ABC):
     def _exhaustion_report(self, user_input: str, tracker: ToolExecutionTracker) -> str:
         """F2: 从 tracker.calls 程序化拼出结构化报告（成功/失败/参数/最多 10 条）。"""
         lines = [
-            f"⚠️ 达到最大迭代次数，以下是已执行工具的结构化报告：",
+            "⚠️ 达到最大迭代次数，以下是已执行工具的结构化报告：",
             "",
             f"**用户需求**：{user_input}",
             "",
             f"**执行摘要**：{tracker.execution_summary()}",
             "",
-            f"**详细记录**（最多 10 条）：",
+            "**详细记录**（最多 10 条）：",
         ]
         for i, call in enumerate(tracker.calls[-10:], 1):
             status = "✓ 成功" if call.success else "✗ 失败"

@@ -331,8 +331,8 @@ def _compress_mutation(output: str, max_chars: int) -> str:
 
     # 提取 diff 统计
     diff_lines = re.findall(r"^[+\-].*$", output, re.MULTILINE)
-    added = sum(1 for l in diff_lines if l.startswith("+"))
-    removed = sum(1 for l in diff_lines if l.startswith("-"))
+    added = sum(1 for line in diff_lines if line.startswith("+"))
+    removed = sum(1 for line in diff_lines if line.startswith("-"))
 
     # 提取关键行
     head = output[: max_chars // 2]

@@ -8,9 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
-import json
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -144,6 +142,7 @@ class TestWeatherTool:
         # _weather 方法里 getattr(self, "city", "") or "Beijing" 会 fallback
         assert node.city == ""
 
+    @pytest.mark.live
     def test_weather_execute_with_city(self):
         """真实 API 调用：查询北京天气。"""
         node = ToolNode("w1", action_type="weather", city="Beijing", lang="zh")
@@ -156,6 +155,7 @@ class TestWeatherTool:
         assert "city" in info
         assert "clothing_advice" in info
 
+    @pytest.mark.live
     def test_weather_execute_shanghai(self):
         """真实 API 调用：查询上海天气。"""
         node = ToolNode("w1", action_type="weather", city="Shanghai", lang="zh")
@@ -166,6 +166,7 @@ class TestWeatherTool:
         # 上海温度应该与北京不同，不是简单的默认值
         assert "temperature" in info
 
+    @pytest.mark.live
     def test_weather_invalid_city_graceful(self):
         """不存在的城市应该优雅降级。"""
         node = ToolNode("w1", action_type="weather", city="不存在的城市xyz", lang="zh")
@@ -317,6 +318,7 @@ class TestDatetimeTool:
 
 
 class TestWebFetchTool:
+    @pytest.mark.live
     def test_web_fetch_public_url(self):
         """测试抓取公开 URL。"""
         node = ToolNode("wf1", action_type="web_fetch", url="https://httpbin.org/get?test=1")
@@ -336,6 +338,7 @@ class TestWebFetchTool:
 
 
 class TestGithubFetchTool:
+    @pytest.mark.live
     def test_github_list_files(self):
         """测试 GitHub 仓库文件列表。"""
         node = ToolNode("gh1", action_type="github_fetch", repo="python/cpython",
@@ -351,6 +354,7 @@ class TestGithubFetchTool:
         result = node.execute(_ctx())
         assert not result["success"]
 
+    @pytest.mark.live
     def test_github_repo_format_validation(self):
         """格式校验：owner/repo 正确格式应通过。"""
         node = ToolNode("gh3", action_type="github_fetch", repo="python/cpython",
@@ -448,6 +452,7 @@ class TestDynamicTools:
 
 
 class TestToolExecutor:
+    @pytest.mark.live
     def test_executor_weather(self):
         from xenon.nodes.tool_executor import ToolExecutor
 
@@ -499,6 +504,7 @@ class TestSecurityBoundary:
 class TestFallback:
     """测试工具的降级/回退方案。"""
 
+    @pytest.mark.live
     def test_weather_curl_fallback_available(self):
         """验证 curl 降级函数存在且可调用。"""
         from xenon.utils.weather import _get_weather_via_curl
@@ -510,6 +516,7 @@ class TestFallback:
         assert "temperature" in result
         assert result.get("via_fallback") is True
 
+    @pytest.mark.live
     def test_weather_primary_vs_fallback(self):
         """主路径不标记 via_fallback，降级路径标记。"""
         from xenon.utils.weather import get_weather
@@ -554,6 +561,7 @@ class TestFallback:
         assert not result["success"]
         assert "curl" in result.get("error", "").lower() or "command" in result.get("error", "").lower()
 
+    @pytest.mark.live
     def test_weather_tool_end_to_end_with_fallback_info(self):
         """天气工具端到端：查询应成功且包含 via_fallback 标记。"""
         node = ToolNode("w_fb", action_type="weather", city="Shenzhen", lang="zh")

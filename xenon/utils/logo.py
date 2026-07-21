@@ -116,7 +116,7 @@ def _build_frame(
         f"   {GRAY}╲{RESET}   {GRAY}╱{RESET}",
         f"    {GRAY}╰───╯{RESET}",
         f" {d_bot_left}       {d_bot_right}",
-        f"",
+        "",
         f"     {GRAY}X E N O N{RESET}",
     ]
     return lines

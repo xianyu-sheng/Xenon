@@ -14,7 +14,7 @@ from __future__ import annotations
 import ast
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -130,8 +130,8 @@ class ASTAnalyzer:
         """分析代码字符串。"""
         lines = code.splitlines()
         total_lines = len(lines)
-        blank_lines = sum(1 for l in lines if not l.strip())
-        comment_lines = sum(1 for l in lines if l.strip().startswith("#"))
+        blank_lines = sum(1 for line in lines if not line.strip())
+        comment_lines = sum(1 for line in lines if line.strip().startswith("#"))
 
         # 尝试解析
         syntax_valid = True

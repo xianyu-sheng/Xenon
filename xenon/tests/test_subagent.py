@@ -1,5 +1,4 @@
 """v0.6.1: 子 Agent 系统 P0/P1/P2 测试。"""
-import pytest
 from unittest.mock import MagicMock, patch
 import unittest.mock
 from xenon.engine.react_engine import ReActEngine, BUILTIN_TOOLS
@@ -173,7 +172,7 @@ class TestSubAgentSystem:
         sub = MagicMock()
         sub._last_tracker = None
         tracker = MagicMock()
-        result = eng._format_sub_result("id-1", "测试", "react", "完成", sub, tracker)
+        eng._format_sub_result("id-1", "测试", "react", "完成", sub, tracker)
         tracker.record.assert_called_once()
 
     # ── spawn_agent action_input 解析 ──────────────────
@@ -186,7 +185,7 @@ class TestSubAgentSystem:
             with patch.object(eng, '_format_sub_result', return_value="✅"):
                 with patch.object(ReActEngine, 'run', return_value="ok"):
                     ctx = AgentContext()
-                    result = eng._spawn_subagent(
+                    eng._spawn_subagent(
                         {"task": "test", "engine": "plan_execute"}, ctx, None,
                     )
                     eng._build_sub_engine.assert_called_once_with("plan_execute", unittest.mock.ANY)

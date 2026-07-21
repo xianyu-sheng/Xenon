@@ -98,9 +98,6 @@ class SemanticChunker:
         group_counter = 0
 
         for turn in turns:
-            tt = getattr(turn, "turn_type", "general")
-            role = getattr(turn, "role", "")
-
             if current is None:
                 # 开始新块
                 group_counter += 1
@@ -211,7 +208,6 @@ class SemanticChunker:
             # 简单块：保留首尾轮次，中间用摘要替代
             if chunk.size <= 2:
                 return None  # 不需要压缩
-            key = chunk.key_turns()
             summary_content = (
                 f"[语义块 {chunk.group_id}] "
                 f"包含 {chunk.size} 轮对话，类型: {chunk.chunk_type}"

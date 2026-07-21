@@ -87,8 +87,8 @@ def _http_fetch(url: str, timeout: float = 10.0) -> tuple[bool, str]:
             return True, resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         return False, f"HTTP {e.code}"
-    except urllib.error.URLError as e:
-        return False, f"网络不可达"
+    except urllib.error.URLError:
+        return False, "网络不可达"
     except Exception as e:
         return False, str(e)
 

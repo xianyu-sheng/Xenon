@@ -853,7 +853,7 @@ class ToolNode(BaseNode):
         try:
             file_size = path.stat().st_size
         except OSError:
-            return f"写入验证失败: 无法获取文件大小"
+            return "写入验证失败: 无法获取文件大小"
 
         if file_size > MAX_VERIFY_SIZE:
             logger.info(f"文件 {path} 大小 {file_size} 字节，跳过内容回读验证")
@@ -870,7 +870,7 @@ class ToolNode(BaseNode):
 
         if is_append:
             if not actual.endswith(expected_content) and expected_content not in actual:
-                return f"追加验证失败: 写入的内容未在文件中找到"
+                return "追加验证失败: 写入的内容未在文件中找到"
         else:
             if actual != expected_content:
                 return (
@@ -1259,7 +1259,7 @@ class ToolNode(BaseNode):
             root = "."
 
         index = CodeIndex(root)
-        count = index.build(max_files=200)
+        index.build(max_files=200)
         results = index.search(query, limit=30)
         stats = index.stats()
 
@@ -1512,7 +1512,6 @@ class ToolNode(BaseNode):
 
     def _mcp_call(self, context: AgentContext) -> dict[str, Any]:
         """调用 MCP 服务器工具。"""
-        from xenon.mcp.registry import MCPRegistry
 
         tool_name = self._resolve_template(self.tool_name, context)
         if not tool_name:
@@ -1877,7 +1876,6 @@ class ToolNode(BaseNode):
         logger.info(f"[{self.id}] 抓取网页: {url}")
 
         try:
-            import httpx
             # A5: 禁用自动重定向，逐跳校验 Location 防"重定向到内网"
             with _create_http_client(timeout=self.timeout, follow_redirects=False) as client:
                 resp = _fetch_with_redirect_check(client, url)
@@ -2529,7 +2527,9 @@ class ToolNode(BaseNode):
 
         # 语言统计（按文件数降序，最多 10 个）
         sorted_langs = sorted(lang_counts.items(), key=lambda x: -x[1])[:10]
-        lang_summary = ", ".join(f"{l}: {n}" for l, n in sorted_langs)
+        lang_summary = ", ".join(
+            f"{language}: {count}" for language, count in sorted_langs
+        )
 
         # 关键文件（最多 20 个）
         key_list = [f"  {p} — {d}" for p, d in sorted(key_files.items())[:20]]
@@ -2564,15 +2564,6 @@ class ToolNode(BaseNode):
 
     def _lsp_goto_def(self, context: AgentContext) -> dict[str, Any]:
         """LSP: 跳转到定义。"""
-        from xenon.utils.lsp_provider import LSPProvider
-
-        file_path = self._resolve_template(self.file_path or "", context)
-        line = int(self._resolve_template(str(self.action), context) or "1")
-        # line 参数通过 action_input 传入；从 params 中提取
-        # normalize_params 已经把 action_input 映射到对应字段
-        # 对于 lsp_goto_def，line 和 column 需要从 tool 执行时的 raw params 取
-        # 实际上 params 通过 normalize_params → ToolNode 属性
-        # 但 line/column 没有专用的 ToolNode 属性，需要从原始 params 取
         return self._lsp_call("goto_definition", context)
 
     def _lsp_find_refs(self, context: AgentContext) -> dict[str, Any]:

@@ -6,10 +6,25 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      OPENAI_API_KEY: ""
+      DEEPSEEK_API_KEY: ""
+      GITHUB_TOKEN: ""
+      GH_TOKEN: ""
+      XENON_ASSUME_YES: "1"
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
 
@@ -23,25 +38,50 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
-        run: pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev]"
 
       - name: Syntax check
-        run: python -m compileall xenon/
+        run: python -m compileall -q xenon tests
 
-      - name: Run tests + coverage
+      - name: Ruff
+        run: ruff check xenon
+
+      - name: Offline tests + coverage
         run: |
-          python -m pytest tests/ \
+          python -m pytest tests xenon/tests \
+            -m "not live and not e2e" \
             -q --tb=short \
             --cov=xenon \
             --cov-report=xml \
             --cov-report=term-missing \
+            --cov-fail-under=55 \
             --timeout=120 \
-            --no-header \
-            2>&1 | tail -100
+            --no-header
+
+      - name: Deterministic CLI end-to-end
+        run: python -m pytest tests/e2e -m e2e -q --tb=short --timeout=60
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v4
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
-        if: always()
+        if: always() && matrix.python-version == '3.12'
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build and verify distributions
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check dist/*

@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from xenon.utils.code_index import CodeIndex, Reference, Symbol
+from xenon.utils.code_index import CodeIndex, Reference
 from xenon.utils.ast_analyzer import ASTAnalyzer
 from xenon.utils.atomic_write import atomic_write_text
 

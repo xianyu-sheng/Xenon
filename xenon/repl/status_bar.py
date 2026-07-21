@@ -276,7 +276,6 @@ class StatusBar:
         bar = "█" * filled + "░" * (bar_width - filled)
 
         self._clear_expired_notification()
-        notify = f"{self._notification} · " if self._notification else ""
         warn = "⚠ /compact · " if stats["needs_compact"] else ""
         stream = "⚡" if self._streaming else "⏸"
 

@@ -25,7 +25,6 @@ from xenon.repl.provider_registry import (
     fetch_provider_models,
     MODEL_FETCH_ERRORS,
     register_custom_provider,
-    remove_custom_provider,
 )
 
 if TYPE_CHECKING:
@@ -395,7 +394,7 @@ def _select_model(registry: ModelRegistry, model_pool=None) -> None:
         # 自动设置 planner 角色
         aliases = [m.split(" (")[0] for m in selected_models]
         registry.assign_role("planner", aliases)
-        console.print(f"\n[green]已选择模型:[/green]")
+        console.print("\n[green]已选择模型:[/green]")
         for m in selected_models:
             console.print(f"  -> {m}")
         console.print(f"[dim]planner 角色优先级: {' -> '.join(aliases)}[/dim]\n")
@@ -546,8 +545,8 @@ def _register_custom(registry=None, model_pool=None) -> None:
     try:
         info = register_custom_provider(name, base_url, api_key)
         if "(auto-fetch failed" in str(info.models[0]) if info.models else "":
-            console.print(f"[yellow]⚠ 模型列表拉取失败，但已保存配置[/yellow]")
-            console.print(f"[dim]可稍后重试，或检查 base_url 是否正确[/dim]")
+            console.print("[yellow]⚠ 模型列表拉取失败，但已保存配置[/yellow]")
+            console.print("[dim]可稍后重试，或检查 base_url 是否正确[/dim]")
         else:
             import os as _os
             _max_per_provider = int(_os.environ.get("XENON_MAX_MODELS_PER_PROVIDER", "5"))
@@ -571,9 +570,9 @@ def _register_custom(registry=None, model_pool=None) -> None:
                     model_id = f"{info.key}/{model_name}"
                     alias = model_name.replace(".", "-")
                     registry.add_model(model_id, alias)
-                console.print(f"[green]✓ 已注册模型[/green]")
+                console.print("[green]✓ 已注册模型[/green]")
             else:
-                console.print(f"[dim]模型已保存，请用菜单3选择模型[/dim]")
+                console.print("[dim]模型已保存，请用菜单3选择模型[/dim]")
 
     except Exception as e:
         console.print(f"[red]✗ 注册失败: {e}[/red]")

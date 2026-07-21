@@ -20,7 +20,6 @@ from xenon.engine.hollow_detector import HollowDetector
 from xenon.engine.scout import DirectoryScout
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes.tool_executor import ToolExecutor
-from xenon.nodes.tool_node import ToolNode, _DYNAMIC_TOOLS
 from xenon.utils.response_adapter import parse_react
 
 if TYPE_CHECKING:
@@ -708,9 +707,9 @@ class ReActEngine(BaseEngine):
                                 raw_actions = expanded
                             else:
                                 observation = (
-                                    f"⚠️ LLM 返回了无效的工具调用格式。"
-                                    f"请使用标准 JSON："
-                                    f'{{"action": "工具名", "action_input": {{...}}}}'
+                                    "⚠️ LLM 返回了无效的工具调用格式。"
+                                    "请使用标准 JSON："
+                                    '{"action": "工具名", "action_input": {...}}'
                                 )
                                 self.callback.on_warning(f"无效 action 类型: {type(action_val).__name__}")
                                 messages.append({"role": "user", "content": f"Observation: {observation}"})
@@ -821,8 +820,8 @@ class ReActEngine(BaseEngine):
                             "LLM 响应包含工具调用但格式无法解析，要求重新输出"
                         )
                         logger.warning(
-                            f"ReAct: 响应含未解析的 action JSON，"
-                            f"要求模型使用标准格式重试"
+                            "ReAct: 响应含未解析的 action JSON，"
+                            "要求模型使用标准格式重试"
                         )
                         messages.append({"role": "user", "content": (
                             "你的回答格式不正确。请使用标准 JSON 格式：\n"

@@ -10,7 +10,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from xenon.engine.base import BaseEngine
-from xenon.engine.callbacks import ConsoleCallback, EngineCallback, SilentCallback
+from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
 from xenon.utils.response_adapter import parse_review
 
