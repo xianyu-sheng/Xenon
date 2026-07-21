@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime
+import os
+from contextlib import contextmanager, nullcontext
+from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -18,6 +20,17 @@ except ImportError:  # pragma: no cover - script execution fallback
 
 DEFAULT_TASKS_PATH = Path(__file__).with_name("tasks.yaml")
 DEFAULT_REPORT_PATH = Path(__file__).parent / "reports" / "mock_report.md"
+
+
+@contextmanager
+def _change_directory(path: str):
+    """Python 3.10-compatible equivalent of ``contextlib.chdir``."""
+    previous = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
 
 
 def load_tasks(path: str | Path = DEFAULT_TASKS_PATH) -> list[dict[str, Any]]:
@@ -103,8 +116,6 @@ class RealAgent:
     def run_task(self, task: dict[str, Any]) -> dict[str, Any]:
         from xenon.engine.callbacks import EngineCallback
         from xenon.repl.context_manager import ContextManager
-        import contextlib
-
         factory = self._engine_factory or self._default_engine_factory
         executed: list[str] = []
         answer = ""
@@ -115,7 +126,7 @@ class RealAgent:
         cm = ContextManager()
         turns_used = 1
         try:
-            with contextlib.chdir(self.workdir) if self.workdir else contextlib.nullcontext():
+            with _change_directory(self.workdir) if self.workdir else nullcontext():
                 for turn in range(self.max_turns):
                     turns_used = turn + 1
                     if turn == 0:
@@ -244,7 +255,7 @@ def write_report(
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     summary = summarize(results)
-    date = run_date or datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    date = run_date or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     lines = [
         "# Xenon Eval Report",
@@ -261,7 +272,7 @@ def write_report(
     elif mode == "real":
         lines.extend([
             "> Scoring: real 模式跑 ReAct 多轮闭环，按**实际执行**的工具评分",
-            f">（`expected_tools ⊆ executed` 且 final_answer 非空）。`success_criteria` 为人工复核提示，不自动评分。",
+            ">（`expected_tools ⊆ executed` 且 final_answer 非空）。`success_criteria` 为人工复核提示，不自动评分。",
             "",
         ])
     lines.extend([
