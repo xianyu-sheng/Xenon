@@ -33,6 +33,8 @@ def save_session(
     history: list[dict[str, Any]],
     context_store: dict[str, Any],
     model_config: dict[str, Any],
+    *,
+    extra: dict[str, Any] | None = None,
 ) -> Path:
     """
     保存当前会话到磁盘。
@@ -42,6 +44,7 @@ def save_session(
         history: 对话历史（已序列化为 dict 列表）。
         context_store: AgentContext 的当前状态。
         model_config: 当前模型配置。
+        extra: 额外元信息（如 paradigm）。
 
     Returns:
         保存的文件路径。
@@ -50,12 +53,14 @@ def save_session(
     filepath = sessions_dir / f"{name}.json"
 
     data = {
-        "version": "1.0",
+        "version": "2.0",
         "name": name,
         "saved_at": datetime.now().isoformat(),
+        "saved_at_ts": _time.time(),
         "history": history,
         "context": context_store,
         "model_config": model_config,
+        "extra": extra or {},
     }
 
     def _safe(obj: Any) -> Any:
@@ -98,29 +103,35 @@ def load_session(name: str) -> dict[str, Any]:
         return json.load(f)
 
 
-def list_sessions() -> list[dict[str, str]]:
-    """
-    列出所有保存的会话。
+def list_sessions() -> list[dict[str, Any]]:
+    """列出所有保存的会话（按时间倒序）。
 
     Returns:
-        会话信息列表 [{"name": ..., "saved_at": ..., "path": ...}]
+        会话信息列表，按 saved_at_ts 降序排列。
+        每个元素包含 name, saved_at, saved_at_ts, messages 字段。
     """
     sessions_dir = _ensure_sessions_dir()
     sessions = []
 
-    for f in sorted(sessions_dir.glob("*.json")):
+    for f in sessions_dir.glob("*.json"):
         try:
             with open(f, encoding="utf-8") as fp:
                 data = json.load(fp)
+            # 跳过空会话
+            if not data.get("history"):
+                continue
             sessions.append({
                 "name": data.get("name", f.stem),
                 "saved_at": data.get("saved_at", "unknown"),
+                "saved_at_ts": data.get("saved_at_ts", 0),
                 "path": str(f),
                 "messages": len(data.get("history", [])),
+                "paradigm": data.get("extra", {}).get("paradigm", ""),
             })
         except (json.JSONDecodeError, KeyError):
             continue
 
+    sessions.sort(key=lambda s: s["saved_at_ts"], reverse=True)
     return sessions
 
 

@@ -347,15 +347,26 @@ class REPL:
         return ConsoleCallback(verbose=self.verbose)
 
     def _auto_save_session(self) -> None:
-        """v0.4.0 Step 14: 退出时自动保存会话状态。"""
+        """v0.4.0 Step 14: 退出时自动保存会话状态。
+
+        每次退出生成带时间戳的会话文件（_auto_YYYYMMDD_HHMMSS.json），
+        不覆盖历史记录，所有会话在 /resume 中均可恢复。
+        """
         try:
-            from xenon.repl.session import auto_save, cleanup_expired_sessions
+            from datetime import datetime
+            from xenon.repl.session import auto_save, save_session, cleanup_expired_sessions
             history = [{"role": m["role"], "content": m.get("content", "")}
                        for m in self.ctx_mgr.get_messages() if m.get("role") != "system"]
+            if not history:
+                return  # 空会话不保存
             context_store = {"mode": self.registry.current_mode}
             model_config = self.model_pool.to_config()
 
-            auto_save(
+            # 生成带时间戳的文件名
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            name = f"_auto_{ts}"
+            save_session(
+                name=name,
                 history=history,
                 context_store=context_store,
                 model_config=model_config,
@@ -368,23 +379,23 @@ class REPL:
     def _check_auto_resume(self) -> None:
         """v0.4.0 Step 14: 启动时检查可恢复的会话。"""
         try:
-            from xenon.repl.session import get_auto_session, get_session_age, list_sessions
+            from xenon.repl.session import list_sessions, get_session_age
             sessions = list_sessions()
-            auto = get_auto_session()
+            if not sessions:
+                return
 
-            if auto:
-                age = get_session_age(auto) or "未知时间"
-                msgs = len(auto.get("history", []))
-                mode = auto.get("extra", {}).get("paradigm", "direct")
-                console.print(
-                    f"\n[dim]┌─ 上次会话 ({age}) · {msgs} 条消息 · 范式: {mode}[/dim]"
-                )
-                console.print("[dim]│  输入 [bold]/resume[/bold] 列出全部会话并选择恢复[/dim]")
-            elif sessions:
-                console.print(
-                    f"\n[dim]┌─ {len(sessions)} 个已保存会话[/dim]"
-                )
-                console.print("[dim]│  输入 [bold]/resume[/bold] 查看并选择恢复[/dim]")
+            latest = sessions[0]
+            age = get_session_age(latest) or latest.get("saved_at", "")[:16]
+            name = latest["name"]
+            if name.startswith("_auto_"):
+                name = "上次自动保存"
+            console.print(
+                f"\n[dim]┌─ {name} ({age}) · {latest['messages']} 条消息[/dim]"
+            )
+            if len(sessions) > 1:
+                console.print(f"[dim]│  输入 [bold]/resume[/bold] 从 {len(sessions)} 个历史会话中选择[/dim]")
+            else:
+                console.print("[dim]│  输入 [bold]/resume[/bold] 恢复，或直接开始新对话[/dim]")
         except Exception:
             pass
 

@@ -425,7 +425,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
       /resume 1       加载第 1 个会话
       /resume my-sess  加载名为 my-sess 的会话
     """
-    from xenon.repl.session import list_sessions, load_session, get_session_age, get_auto_session
+    from xenon.repl.session import list_sessions, load_session, get_session_age
 
     repl = session_state.get("_repl")
     if not repl:
@@ -436,68 +436,47 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
     # ── 无参数：列出所有会话 ──
     if not arg:
         sessions = list_sessions()
-        # 同时检查自动保存（可能不在 list_sessions 中因为名称是 _auto）
-        auto = get_auto_session()
-        has_auto = bool(auto)
-
-        if not sessions and not has_auto:
-            return "没有已保存的会话。使用 /save <名称> 保存当前会话。"
+        if not sessions:
+            return "没有已保存的会话。使用 /save <名称> 手动保存，或退出时自动保存。"
 
         from rich.table import Table
         from rich.console import Console as RichConsole
 
-        table = Table(title="已保存的会话 · 输入 /resume <序号> 或 /resume <名称> 恢复",
+        table = Table(title="已保存的会话 · 输入 /resume <序号> 恢复",
                       border_style="dim #64748b")
-        table.add_column("#", style="bold cyan", width=3)
-        table.add_column("名称", style="#67e8f9", max_width=30)
-        table.add_column("时间", style="dim #94a3b8", width=22)
+        table.add_column("#", style="bold cyan", width=3, justify="right")
+        table.add_column("名称", style="#67e8f9", max_width=32)
+        table.add_column("时间", style="dim #94a3b8", width=12)
         table.add_column("消息", justify="right", width=6)
+        table.add_column("范式", style="dim", width=10)
 
-        idx = 0
-        # 自动保存排第一
-        if has_auto:
-            idx += 1
+        for i, s in enumerate(sessions, 1):
+            display_name = s["name"]
+            if display_name.startswith("_auto_"):
+                display_name = "[上次自动保存]"
+            # 时间显示为相对时间，回退到绝对时间
+            age = get_session_age(s) or s["saved_at"][:16]
+            paradigm = s.get("paradigm", "")
             table.add_row(
-                str(idx), "[上次自动保存]",
-                get_session_age(auto) or auto.get("saved_at", "")[:19],
-                str(len(auto.get("history", []))),
+                str(i), display_name, age,
+                str(s["messages"]), paradigm,
             )
-
-        for s in sessions:
-            if s["name"] == "_auto":
-                continue  # 避免重复（list_sessions 可能已包含）
-            idx += 1
-            table.add_row(str(idx), s["name"], s["saved_at"][:19], str(s["messages"]))
 
         console_out = RichConsole()
         console_out.print()
         console_out.print(table)
-        return ""  # 表格已打印，返空不重复显示
+        return ""
 
-    # ── 按序号加载 ──
+    # ── 按序号或名称加载 ──
+    sessions = list_sessions()
     if arg.isdigit():
-        sessions = list_sessions()
-        auto = get_auto_session()
-        # 构建序号→名称映射
-        idx_map: dict[int, str] = {}
-        num = 1
-        if auto:
-            idx_map[num] = "_auto"
-            num += 1
-        for s in sessions:
-            if s["name"] == "_auto":
-                continue
-            idx_map[num] = s["name"]
-            num += 1
-
         idx = int(arg)
-        if idx not in idx_map:
-            return f"❌ 序号 {idx} 超出范围（共 {len(idx_map)} 个会话）。"
-        name = idx_map[idx]
+        if idx < 1 or idx > len(sessions):
+            return f"❌ 序号 {idx} 超出范围（共 {len(sessions)} 个会话）。"
+        name = sessions[idx - 1]["name"]
     else:
         name = arg
 
-    # ── 加载会话 ──
     try:
         data = load_session(name)
     except FileNotFoundError:
