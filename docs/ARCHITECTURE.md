@@ -191,6 +191,9 @@ REPL 层      ContextManager  · 消息历史 · 用户增删改
 
 设计意图：REPL 和引擎职责分离。REPL 管理用户可见的消息历史（支持 `/undo`、`/resume`），引擎使用隔离的上下文执行推理。
 
+会话持久化是非凭证边界：自动保存与手动保存会递归剔除明确的凭证字段，旧版
+会话首次读取时原子迁移并保持 `0600`，API Key 只从凭证配置或环境变量解析。
+
 已知代价：同步依赖手动调用 `agent_context.set_conversation_messages(ctx_mgr.get_messages())`，遗漏会导致 `AttributeError`。未来可改为观察者模式自动同步。
 
 ---

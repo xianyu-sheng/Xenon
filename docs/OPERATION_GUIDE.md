@@ -279,6 +279,9 @@ AgentContext 变量:
 /save my-session
 ```
 
+会话文件不会保存 API Key、访问令牌、Authorization 或密码。模型凭证始终从
+独立凭证配置或环境变量重新解析；加载旧版会话时会自动原子清理其中的凭证字段。
+
 保存内容：对话历史、AgentContext 变量、模型配置。
 
 #### `/load` — 加载会话

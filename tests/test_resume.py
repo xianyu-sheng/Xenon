@@ -6,10 +6,15 @@ import tempfile
 import time
 from pathlib import Path
 
-import pytest
 from xenon.repl.session import (
-    auto_save, get_auto_session, cleanup_expired_sessions,
-    get_session_age, SESSIONS_DIR, AUTO_SESSION_NAME, SESSION_TTL_DAYS,
+    AUTO_SESSION_NAME,
+    SESSION_TTL_DAYS,
+    auto_save,
+    cleanup_expired_sessions,
+    get_auto_session,
+    get_session_age,
+    load_session,
+    save_session,
 )
 
 
@@ -43,6 +48,74 @@ class TestAutoSave:
                 assert get_auto_session() is None
             finally:
                 mod.SESSIONS_DIR = old_dir
+
+    def test_auto_save_never_persists_provider_credentials(self, tmp_path, monkeypatch):
+        import xenon.repl.session as mod
+
+        monkeypatch.setattr(mod, "SESSIONS_DIR", tmp_path)
+        result = auto_save(
+            history=[{"role": "user", "content": "keep this text unchanged"}],
+            context_store={"provider": {"access_token": "context-secret"}},
+            model_config={
+                "pro": {
+                    "model_id": "deepseek/pro",
+                    "weight": 5.0,
+                    "api_key": "provider-secret",
+                    "base_url": "https://example.invalid/v1",
+                },
+            },
+            extra={"mcp": {"authorization": "Bearer secret"}},
+        )
+
+        assert result is not None
+        raw = result.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        assert data["version"] == "2.1"
+        assert "provider-secret" not in raw
+        assert "context-secret" not in raw
+        assert "Bearer secret" not in raw
+        assert "api_key" not in data["model_config"]["pro"]
+        assert data["model_config"]["pro"]["model_id"] == "deepseek/pro"
+        assert data["history"][0]["content"] == "keep this text unchanged"
+
+    def test_manual_save_also_removes_credentials(self, tmp_path, monkeypatch):
+        import xenon.repl.session as mod
+
+        monkeypatch.setattr(mod, "SESSIONS_DIR", tmp_path)
+        path = save_session(
+            "safe",
+            history=[],
+            context_store={},
+            model_config={"models": {"pro": {"api_key": "must-not-land"}}},
+        )
+
+        assert "must-not-land" not in path.read_text(encoding="utf-8")
+        assert load_session("safe")["model_config"] == {"models": {"pro": {}}}
+
+    def test_loading_legacy_session_scrubs_file_in_place(self, tmp_path, monkeypatch):
+        import xenon.repl.session as mod
+
+        monkeypatch.setattr(mod, "SESSIONS_DIR", tmp_path)
+        legacy = tmp_path / "legacy.json"
+        legacy.write_text(
+            json.dumps({
+                "version": "2.0",
+                "name": "legacy",
+                "history": [{"role": "user", "content": "hello"}],
+                "model_config": {
+                    "pro": {"model_id": "a/pro", "api_key": "legacy-secret"},
+                },
+            }),
+            encoding="utf-8",
+        )
+
+        data = load_session("legacy")
+
+        assert data["model_config"]["pro"] == {"model_id": "a/pro"}
+        rewritten = legacy.read_text(encoding="utf-8")
+        assert "legacy-secret" not in rewritten
+        assert "api_key" not in rewritten
+        assert legacy.stat().st_mode & 0o777 == 0o600
 
 
 class TestSessionExpiry:

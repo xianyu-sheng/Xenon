@@ -21,6 +21,75 @@ SESSIONS_DIR = Path.home() / ".xenon" / "sessions"
 SESSION_TTL_DAYS = 7
 AUTO_SESSION_NAME = "_auto"
 
+_SENSITIVE_SESSION_KEYS = frozenset({
+    "api_key",
+    "apikey",
+    "access_token",
+    "refresh_token",
+    "token",
+    "secret",
+    "client_secret",
+    "password",
+    "authorization",
+    "cookie",
+    "private_key",
+})
+
+
+def _is_sensitive_session_key(key: object) -> bool:
+    normalized = str(key).strip().lower().replace("-", "_")
+    return normalized in _SENSITIVE_SESSION_KEYS
+
+
+def _sanitize_session_data(obj: Any) -> tuple[Any, bool]:
+    """Remove credentials from persisted session structures.
+
+    Conversation text remains byte-for-byte intact.  Only values stored under
+    explicit credential field names are removed, including nested provider or
+    MCP configuration.  The boolean reports whether a legacy payload changed.
+    """
+    if isinstance(obj, dict):
+        cleaned: dict[str, Any] = {}
+        changed = False
+        for raw_key, value in obj.items():
+            key = str(raw_key)
+            if _is_sensitive_session_key(key):
+                changed = True
+                continue
+            safe_value, child_changed = _sanitize_session_data(value)
+            cleaned[key] = safe_value
+            changed = changed or child_changed or key != raw_key
+        return cleaned, changed
+    if isinstance(obj, (list, tuple)):
+        cleaned_items: list[Any] = []
+        changed = isinstance(obj, tuple)
+        for value in obj:
+            safe_value, child_changed = _sanitize_session_data(value)
+            cleaned_items.append(safe_value)
+            changed = changed or child_changed
+        return cleaned_items, changed
+    if isinstance(obj, (str, int, float, bool, type(None))):
+        return obj, False
+    return str(obj), True
+
+
+def _write_session_payload(filepath: Path, data: dict[str, Any]) -> None:
+    safe_data, _ = _sanitize_session_data(data)
+    content = json.dumps(safe_data, ensure_ascii=False, indent=2)
+    atomic_write_text(filepath, content, mode=0o600)
+
+
+def _load_and_migrate(filepath: Path) -> dict[str, Any]:
+    """Load a session and atomically scrub credentials from legacy files."""
+    with open(filepath, encoding="utf-8") as f:
+        raw = json.load(f)
+    data, changed = _sanitize_session_data(raw)
+    if not isinstance(data, dict):
+        raise ValueError(f"无效会话格式: {filepath}")
+    if changed:
+        _write_session_payload(filepath, data)
+    return data
+
 
 def _ensure_sessions_dir() -> Path:
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
@@ -52,7 +121,7 @@ def save_session(
     filepath = sessions_dir / f"{name}.json"
 
     data = {
-        "version": "2.0",
+        "version": "2.1",
         "name": name,
         "saved_at": datetime.now().isoformat(),
         "saved_at_ts": _time.time(),
@@ -62,19 +131,8 @@ def save_session(
         "extra": extra or {},
     }
 
-    def _safe(obj: Any) -> Any:
-        """将不可序列化的对象转为字符串。"""
-        if isinstance(obj, (str, int, float, bool, type(None))):
-            return obj
-        if isinstance(obj, dict):
-            return {str(k): _safe(v) for k, v in obj.items()}
-        if isinstance(obj, (list, tuple)):
-            return [_safe(v) for v in obj]
-        return str(obj)
-
-    # A9 原子写入 + A10 chmod 0600（会话可能含对话历史等敏感内容）
-    content = json.dumps(_safe(data), ensure_ascii=False, indent=2)
-    atomic_write_text(filepath, content, mode=0o600)
+    # A9 原子写入 + A10 chmod 0600；凭证字段在落盘前统一删除。
+    _write_session_payload(filepath, data)
 
     return filepath
 
@@ -98,8 +156,7 @@ def load_session(name: str) -> dict[str, Any]:
     if not filepath.exists():
         raise FileNotFoundError(f"会话 '{name}' 不存在: {filepath}")
 
-    with open(filepath, encoding="utf-8") as f:
-        return json.load(f)
+    return _load_and_migrate(filepath)
 
 
 def list_sessions() -> list[dict[str, Any]]:
@@ -114,8 +171,7 @@ def list_sessions() -> list[dict[str, Any]]:
 
     for f in sessions_dir.glob("*.json"):
         try:
-            with open(f, encoding="utf-8") as fp:
-                data = json.load(fp)
+            data = _load_and_migrate(f)
             # 跳过空会话
             if not data.get("history"):
                 continue
@@ -158,7 +214,7 @@ def auto_save(
     """
     try:
         data = {
-            "version": "2.0",
+            "version": "2.1",
             "name": AUTO_SESSION_NAME,
             "saved_at": datetime.now().isoformat(),
             "saved_at_ts": _time.time(),
@@ -170,17 +226,7 @@ def auto_save(
         sessions_dir = _ensure_sessions_dir()
         filepath = sessions_dir / f"{AUTO_SESSION_NAME}.json"
 
-        def _safe(obj: Any) -> Any:
-            if isinstance(obj, (str, int, float, bool, type(None))):
-                return obj
-            if isinstance(obj, dict):
-                return {str(k): _safe(v) for k, v in obj.items()}
-            if isinstance(obj, (list, tuple)):
-                return [_safe(v) for v in obj]
-            return str(obj)
-
-        content = json.dumps(_safe(data), ensure_ascii=False, indent=2)
-        atomic_write_text(filepath, content, mode=0o600)
+        _write_session_payload(filepath, data)
         return filepath
     except Exception:
         return None
@@ -197,8 +243,7 @@ def get_auto_session() -> dict[str, Any] | None:
         return None
 
     try:
-        with open(filepath, encoding="utf-8") as f:
-            data = json.load(f)
+        data = _load_and_migrate(filepath)
 
         ts = data.get("saved_at_ts", 0)
         if ts > 0 and (_time.time() - ts) > SESSION_TTL_DAYS * 86400:
