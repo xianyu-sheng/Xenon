@@ -208,6 +208,10 @@ class CacheEvent:
     model_id: str
     engine: str
     phase: str
+    project_hash: str
+    context_epoch: int
+    stable_prefix_hash: str
+    tool_schema_hash: str
     prompt_tokens: int
     completion_tokens: int
     cache_hit_tokens: int
@@ -298,6 +302,7 @@ def build_cache_event(
     cache_miss_tokens: int,
     cache_fields_present: bool,
     family_call: int,
+    previous_event: CacheEvent | None = None,
 ) -> CacheEvent:
     """Combine a request manifest with the provider's actual usage fields."""
     data = dict(manifest or {})
@@ -321,6 +326,22 @@ def build_cache_event(
     else:
         state, cause = "miss", "provider_best_effort_miss"
 
+    if cache_fields_present and not hit and family_call == 1 and previous_event is not None:
+        if previous_event.model_id != canonical_model_id(str(data.get("model_id") or model_id)):
+            cause = "model_switch"
+        elif previous_event.engine != str(data.get("engine") or "unknown"):
+            cause = "engine_switch"
+        elif previous_event.phase != str(data.get("phase") or "request"):
+            cause = "phase_switch"
+        elif previous_event.tool_schema_hash != str(data.get("tool_schema_hash") or ""):
+            cause = "toolset_changed"
+        elif previous_event.project_hash != str(data.get("project_hash") or ""):
+            cause = "project_changed"
+        elif previous_event.context_epoch != int(data.get("context_epoch") or 0):
+            cause = "context_compacted"
+        elif previous_event.stable_prefix_hash != str(data.get("stable_prefix_hash") or ""):
+            cause = "stable_prefix_changed"
+
     canonical_model = canonical_model_id(str(data.get("model_id") or model_id))
     return CacheEvent(
         schema_version=_SCHEMA_VERSION,
@@ -334,6 +355,10 @@ def build_cache_event(
         model_id=canonical_model,
         engine=str(data.get("engine") or "unknown"),
         phase=str(data.get("phase") or "request"),
+        project_hash=str(data.get("project_hash") or ""),
+        context_epoch=max(0, int(data.get("context_epoch") or 0)),
+        stable_prefix_hash=str(data.get("stable_prefix_hash") or ""),
+        tool_schema_hash=str(data.get("tool_schema_hash") or ""),
         prompt_tokens=prompt,
         completion_tokens=max(0, int(completion_tokens)),
         cache_hit_tokens=hit,

@@ -3275,6 +3275,11 @@ def _cmd_cost(*, args: str = "", session_state: dict = None, **kwargs: Any) -> s
 
     total_cache = tracker.cache_hits + tracker.cache_misses
     if total_cache == 0:
+        if tracker.total_calls > 0 and tracker.cache_reported_calls == 0:
+            return (
+                "[yellow]缓存命中率不可用（n/a）[/yellow]：当前厂商响应未提供 "
+                "cache hit/miss 字段，不能解释为 0%。使用 [bold]/cache doctor[/bold] 查看详情。"
+            )
         return "[dim]暂无缓存数据。进行 DeepSeek API 调用后自动统计。[/dim]"
 
     lines: list[str] = []
@@ -3319,6 +3324,141 @@ def _cmd_cost(*, args: str = "", session_state: dict = None, **kwargs: Any) -> s
         return f"[dim]未找到匹配 '{model_filter}' 的模型数据。[/dim]"
 
     return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════
+# /cache — 请求级缓存状态、解释、历史与诊断
+# ══════════════════════════════════════════════════════════════
+
+register_command(
+    "/cache",
+    "解释缓存状态与命中原因（完全本地，不调用 API）",
+    "/cache [status|explain|history [数量]|doctor]",
+)
+
+_CACHE_CAUSE_LABELS = {
+    "cache_hit": "厂商确认缓存命中",
+    "cold_family": "首次观察到这个缓存族",
+    "warming": "缓存族仍在预热阶段",
+    "provider_best_effort_miss": "稳定缓存族仍未命中（服务端缓存为 best-effort）",
+    "cache_fields_unavailable": "厂商未返回缓存字段",
+    "model_switch": "模型发生切换",
+    "engine_switch": "思考引擎发生切换",
+    "phase_switch": "引擎调用阶段发生切换",
+    "toolset_changed": "工具或请求契约发生变化",
+    "project_changed": "项目上下文发生变化",
+    "context_compacted": "上下文压缩、清空或撤销后进入新代次",
+    "stable_prefix_changed": "稳定提示前缀发生变化",
+}
+
+_CACHE_STATE_LABELS = {
+    "cold": "COLD",
+    "warming": "WARMING",
+    "warm": "WARM",
+    "miss": "MISS",
+    "unavailable": "N/A",
+}
+
+
+def _cache_tracker(session_state: dict | None):
+    repl = session_state.get("_repl") if session_state else None
+    return getattr(repl, "_cache_tracker", None) if repl else None
+
+
+def _cache_status(tracker) -> str:
+    event = tracker.latest_event
+    if event is None:
+        return (
+            "[bold]缓存状态: COLD[/bold]\n"
+            "  尚无模型响应。cold 表示没有观测样本，不是 0% 命中。\n"
+            "  Xenon 只读取厂商 usage，不会为预热额外发起付费请求。"
+        )
+    state = _CACHE_STATE_LABELS.get(event["state"], event["state"].upper())
+    total = tracker.cache_hits + tracker.cache_misses
+    rate = f"{tracker.cache_hit_rate:.1%}" if total else "n/a"
+    efficiency = event.get("prefix_efficiency")
+    efficiency_text = f"{efficiency:.1%}" if efficiency is not None else "n/a"
+    return "\n".join([
+        f"[bold]缓存状态: {state}[/bold]",
+        f"  实际命中率: [bold]{rate}[/bold]  ·  字段覆盖率: {tracker.cache_field_coverage:.0%}",
+        f"  最近请求: {event['model_id']} · {event['engine']}/{event['phase']}",
+        f"  实际 token: hit {event['cache_hit_tokens']:,} · miss {event['cache_miss_tokens']:,}",
+        f"  前缀效率: {efficiency_text}  ·  缓存族: {event['cache_family'][:12]}",
+        f"  证据来源: 厂商 usage 字段  ·  本地累计 {tracker.total_calls} 次请求",
+    ])
+
+
+def _cache_explain(tracker) -> str:
+    event = tracker.latest_event
+    if event is None:
+        return _cache_status(tracker)
+    cause = event.get("cause", "")
+    lines = [
+        f"[bold]最近一次缓存判定: {_CACHE_STATE_LABELS.get(event['state'], event['state'])}[/bold]",
+        f"  原因: {_CACHE_CAUSE_LABELS.get(cause, cause or '未知')}",
+        f"  请求族: {event['model_id']} · {event['engine']}/{event['phase']} · 第 {event['family_call']} 次",
+    ]
+    if event["cache_fields_present"]:
+        lines.append(
+            f"  直接证据: API 返回 hit={event['cache_hit_tokens']:,}, "
+            f"miss={event['cache_miss_tokens']:,}, 覆盖率={event['cache_field_coverage']:.0%}"
+        )
+    else:
+        lines.append("  直接证据: API 没有返回 cache hit/miss 字段，因此显示 n/a，而不是 0%。")
+    if cause not in {"cache_hit", "cache_fields_unavailable"}:
+        lines.append("  说明: 原因由本地 Manifest 差异推断；命中 token 始终以厂商 usage 为准。")
+    return "\n".join(lines)
+
+
+def _cache_history(tracker, limit: int) -> str:
+    events = tracker.stored_events(limit)
+    if not events:
+        return "[dim]暂无缓存历史。[/dim]"
+    lines = ["[bold]最近缓存请求（仅哈希与计数）[/bold]"]
+    for event in events:
+        stamp = datetime.fromtimestamp(float(event.get("timestamp", 0))).strftime("%m-%d %H:%M:%S")
+        state = _CACHE_STATE_LABELS.get(str(event.get("state", "")), "?")
+        cause = _CACHE_CAUSE_LABELS.get(str(event.get("cause", "")), str(event.get("cause", "")))
+        lines.append(
+            f"  {stamp}  {state:<7}  {event.get('model_id', '?')} "
+            f"· {event.get('engine', '?')}/{event.get('phase', '?')} "
+            f"· {int(event.get('cache_hit_tokens', 0)):,}/{int(event.get('cache_miss_tokens', 0)):,} "
+            f"· {cause}"
+        )
+    return "\n".join(lines)
+
+
+def _cache_doctor(tracker) -> str:
+    icons = {"ok": "✅", "warn": "⚠️", "info": "ℹ️"}
+    lines = ["[bold]Cache Doctor[/bold]"]
+    for check in tracker.diagnostics():
+        lines.append(
+            f"  {icons.get(check['level'], '·')} [bold]{check['name']}[/bold]: {check['detail']}"
+        )
+    lines.append("\n  建议先看 [bold]/cache explain[/bold]；缓存是服务端 best-effort，Xenon 不会制造付费预热流量。")
+    return "\n".join(lines)
+
+
+@_handler("/cache")
+def _cmd_cache(*, args: str = "", session_state: dict = None, **kwargs: Any) -> str:
+    tracker = _cache_tracker(session_state)
+    if tracker is None:
+        return "[dim]CacheTracker 未初始化。[/dim]"
+    parts = args.strip().split()
+    action = parts[0].lower() if parts else "status"
+    if action == "status":
+        return _cache_status(tracker)
+    if action == "explain":
+        return _cache_explain(tracker)
+    if action == "doctor":
+        return _cache_doctor(tracker)
+    if action == "history":
+        try:
+            limit = min(100, max(1, int(parts[1]))) if len(parts) > 1 else 10
+        except ValueError:
+            return "用法: /cache history [1-100]"
+        return _cache_history(tracker, limit)
+    return "用法: /cache [status|explain|history [数量]|doctor]"
 
 
 # ══════════════════════════════════════════════════════════════

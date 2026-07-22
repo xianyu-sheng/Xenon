@@ -75,6 +75,11 @@ class StatusBar:
         if self._notification and _time.monotonic() > self._notification_expires:
             self._notification = None
 
+    def _cache_badge(self) -> tuple[str, str] | None:
+        if not self.cache_tracker:
+            return None
+        return self.cache_tracker.cache_badge
+
     @staticmethod
     def _parse_pct(ratio) -> float:
         try:
@@ -131,6 +136,16 @@ class StatusBar:
         ])
         if self._tool_call_count > 0:
             status_parts.append(f"[bold cyan]🔧[/bold cyan] {self._tool_call_count}")
+        cache_badge = self._cache_badge()
+        if cache_badge:
+            cache_text, cache_style = cache_badge
+            rich_style = {
+                "good": "green",
+                "warning": "yellow",
+                "danger": "red",
+                "muted": "dim",
+            }.get(cache_style, "dim")
+            status_parts.append(f"[{rich_style}]{cache_text}[/{rich_style}]")
         status_parts.extend([
             f"[bold cyan]消息:[/bold cyan] {stats['total_messages']}",
             f"[bold cyan]时长:[/bold cyan] {self._fmt_duration(self.session_elapsed)}",
@@ -202,9 +217,8 @@ class StatusBar:
 
             # 缓存和费用是 Xenon 的核心差异，优先于消息数/时长展示。
             if self.cache_tracker:
-                total_cache = self.cache_tracker.cache_hits + self.cache_tracker.cache_misses
-                if total_cache > 0:
-                    groups.append((1, "class:toolbar.good", f"cache {self.cache_tracker.cache_hit_rate:.0%}"))
+                cache_text, cache_style = self.cache_tracker.cache_badge
+                groups.append((1, f"class:toolbar.{cache_style}", cache_text))
                 if self.cache_tracker.estimated_cost_yuan > 0:
                     cost = self.cache_tracker.estimated_cost_yuan
                     cost_text = "<¥0.01" if cost < 0.01 else f"¥{cost:.2f}"
@@ -286,9 +300,8 @@ class StatusBar:
         left_parts: list[str] = []
         if self.cache_tracker:
             cr = self.cache_tracker
-            total_cache = cr.cache_hits + cr.cache_misses
-            if total_cache > 0:
-                left_parts.append(f"💾{cr.cache_hit_rate:.0%}")
+            cache_text, _cache_style = cr.cache_badge
+            left_parts.append(f"💾{cache_text.removeprefix('cache ')}")
             if cr.estimated_cost_yuan > 0:
                 cost = cr.estimated_cost_yuan
                 left_parts.append(f"💰{'<0.01' if cost < 0.01 else f'{cost:.2f}'}")
@@ -368,14 +381,13 @@ class StatusBar:
         cache_part = ""
         if self.cache_tracker:
             cr = self.cache_tracker
-            total_cache = cr.cache_hits + cr.cache_misses
-            if total_cache > 0:
-                cache_part = f"💾{cr.cache_hit_rate:.0%} "
-                if cr.estimated_cost_yuan > 0:
-                    cost = cr.estimated_cost_yuan
-                    cache_part += f"💰{'<0.01' if cost < 0.01 else f'{cost:.2f}'} "
-                    if cr.savings_pct >= 1:
-                        cache_part += f"💡{cr.savings_pct}% · "
+            cache_text, _cache_style = cr.cache_badge
+            cache_part = f"💾{cache_text.removeprefix('cache ')} "
+            if cr.estimated_cost_yuan > 0:
+                cost = cr.estimated_cost_yuan
+                cache_part += f"💰{'<0.01' if cost < 0.01 else f'{cost:.2f}'} "
+                if cr.savings_pct >= 1:
+                    cache_part += f"💡{cr.savings_pct}% · "
 
         line = (
             f"[dim]  {cache_part}{notify}{warn}{escape(model_display)} · {mode.name} · "

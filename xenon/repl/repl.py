@@ -985,6 +985,9 @@ class REPL:
             prompt_t = snap.get("prompt_tokens", 0)
             comp_t = snap.get("completion_tokens", 0)
             rate = snap.get("cache_hit_rate", 0.0)
+            rate_text = (
+                f"{rate:.0%}" if snap.get("cache_reported_calls", 0) else "n/a"
+            )
             cost = snap.get("cost_yuan", 0.0)
             saved = snap.get("saved_yuan", 0.0)
 
@@ -997,18 +1000,20 @@ class REPL:
             if calls > 0:
                 lines.append(
                     f"[dim]{short_name}[/dim]  {calls} 次 · {prompt_t + comp_t:,}t "
-                    f"· 💾{rate:.0%} · 💰¥{cost:.4f}"
+                    f"· 💾{rate_text} · 💰¥{cost:.4f}"
                 )
 
         if total_calls == 0:
             return
 
-        overall_rate = cr.cache_hit_rate if total_tokens > 0 else 0.0
+        overall_rate = (
+            f"{cr.cache_hit_rate:.0%}" if cr.cache_reported_calls else "n/a"
+        )
         overall_pct = cr.savings_pct
 
         console.print()
         console.print(Panel(
-            "\n".join(lines) + f"\n\n[bold]合计[/bold]  {total_tokens:,} tokens · 💾{overall_rate:.0%} · 💰¥{total_cost:.4f} · 💡省 ¥{total_saved:.4f} ({overall_pct}%)",
+            "\n".join(lines) + f"\n\n[bold]合计[/bold]  {total_tokens:,} tokens · 💾{overall_rate} · 💰¥{total_cost:.4f} · 💡省 ¥{total_saved:.4f} ({overall_pct}%)",
             title="[bold]📊 本次会话省钱报告[/bold]",
             border_style="dim",
             padding=(0, 1),

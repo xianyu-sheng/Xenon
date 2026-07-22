@@ -300,6 +300,7 @@ class CacheTracker:
                 cache_miss_tokens=cache_miss,
                 cache_fields_present=cache_fields_present,
                 family_call=family_call,
+                previous_event=self._events[-1] if self._events else None,
             )
             self._events.append(event)
 
@@ -424,6 +425,98 @@ class CacheTracker:
         with self._lock:
             return [event.as_dict() for event in list(self._events)[-max(0, limit):]]
 
+    def stored_events(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Load privacy-safe cross-session history when persistence is enabled."""
+        if self._event_store is None:
+            return self.recent_events(limit)
+        return self._event_store.load(limit=max(0, limit))
+
+    @property
+    def total_calls(self) -> int:
+        with self._lock:
+            return sum(total.calls for total in self._models.values())
+
+    @property
+    def cache_reported_calls(self) -> int:
+        with self._lock:
+            return sum(total.cache_reported_calls for total in self._models.values())
+
+    @property
+    def cache_field_coverage(self) -> float:
+        calls = self.total_calls
+        return self.cache_reported_calls / calls if calls else 0.0
+
+    @property
+    def latest_event(self) -> dict[str, Any] | None:
+        with self._lock:
+            return self._events[-1].as_dict() if self._events else None
+
+    @property
+    def cache_badge(self) -> tuple[str, str]:
+        """Return ``(text, semantic_style)`` without treating unknown as 0%."""
+        event = self.latest_event
+        if event is None:
+            return "cache cold", "muted"
+        state = event["state"]
+        if state == "unavailable":
+            return "cache n/a", "muted"
+        if state == "cold":
+            return "cache cold", "warning"
+        if state == "warming":
+            return "cache warming", "warning"
+        if state == "miss" and self.cache_hits == 0:
+            return "cache 0% ↓", "danger"
+        return f"cache {self.cache_hit_rate:.0%}", "good"
+
+    def diagnostics(self) -> list[dict[str, str]]:
+        """Return deterministic local cache checks for ``/cache doctor``."""
+        events = self.recent_events(20)
+        checks: list[dict[str, str]] = []
+        if not events:
+            return [{
+                "level": "info",
+                "name": "观测样本",
+                "detail": "尚无模型响应；当前是 cold，不代表 0% 命中。",
+            }]
+        coverage = self.cache_field_coverage
+        checks.append({
+            "level": "ok" if coverage == 1.0 else "warn",
+            "name": "缓存字段",
+            "detail": f"厂商在 {self.cache_reported_calls}/{self.total_calls} 次响应中返回缓存字段（{coverage:.0%}）。",
+        })
+        families = {event["cache_family"] for event in events[-10:]}
+        churn = len(families) / min(10, len(events))
+        if len(events) < 3:
+            family_level = "info"
+            family_detail = (
+                f"当前仅 {len(events)} 个样本，至少 3 个样本后评估稳定性。"
+            )
+        else:
+            family_level = "ok" if churn <= 0.4 else "warn"
+            family_detail = (
+                f"最近 {min(10, len(events))} 次请求使用 {len(families)} 个缓存族。"
+            )
+        checks.append({
+            "level": family_level,
+            "name": "缓存族稳定性",
+            "detail": family_detail,
+        })
+        latest = events[-1]
+        efficiency = latest.get("prefix_efficiency")
+        if efficiency is not None:
+            checks.append({
+                "level": "ok" if efficiency >= 0.5 else "warn",
+                "name": "前缀效率",
+                "detail": f"最近请求实际命中/预期可缓存 token 约为 {efficiency:.0%}。",
+            })
+        if self._event_store is not None:
+            checks.append({
+                "level": "ok",
+                "name": "本地历史",
+                "detail": f"仅保存哈希与计数：{self._event_store.path}",
+            })
+        return checks
+
     def family_snapshot(self, cache_family: str) -> dict[str, Any]:
         """Summarize the current session's observations for one cache family."""
         with self._lock:
@@ -502,11 +595,11 @@ class CacheTracker:
                 return (
                     "system prompt 近期发生变动（{} 秒前），"
                     "这正是命中率下降的原因。建议恢复原来的 system prompt "
-                    "或将变动部分移至 user 消息中。使用 /fix-cache 一键优化。"
+                    "或将变动部分移至 user 消息中。使用 /cache doctor 检查。"
                 ).format(int(time_ago))
         return (
             "命中率下降可能是因为 prompt 结构发生了变化。"
-            "使用 /fix-cache 将固定内容前置以提升缓存命中。"
+            "使用 /cache explain 和 /cache doctor 查看本地证据。"
         )
 
     # ── system prompt 管理 ──────────────────────────────────
