@@ -144,6 +144,10 @@ JsonMarkdownBackend（metadata.json 权威 + Markdown 可读视图）
 - 冲突只提示不覆盖；`replace/rollback` 维护可逆的 supersession 版本链
 - `/memory inspect` 与 `/memory doctor` 提供来源、计数、权限和完整性诊断
 - `XENON.md` / `XENON.local.md` / `AGENTS.md` 后备与安全 `@path` 导入
+- `$HOME` 是账户隐私边界而非隐式项目：即使存在 `.git`、`package.json` 或
+  `pyproject.toml` 也不扫描；无项目模式仅加载用户全局指令与 user/session 记忆
+- 无项目时普通记忆候选默认转为 `user`，显式 project-local/shared 写入会被拒绝，
+  防止在家目录意外创建 `.xenon/memory` 或 `XENON.local.md`
 
 完整状态机、字段契约和路径布局见 [Memory System v2](MEMORY_SYSTEM_SPEC.md)。
 

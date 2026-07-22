@@ -108,12 +108,30 @@ class ProjectContext:
             search = search.parent
         self.working_dir = search.resolve()
         home = Path(os.path.expanduser("~")).resolve()
+        allow_home_project = os.environ.get("XENON_ALLOW_HOME_PROJECT", "").lower() in {
+            "1", "true", "yes", "on",
+        }
         max_levels = 5
+
+        # Reset all derived data so a refresh/directory change cannot retain a
+        # previous project's tree, rules, or key files.
+        self.root = None
+        self.project_type = "unknown"
+        self.rules = ""
+        self.rule_sources = []
+        self.file_tree = ""
+        self.key_files = {}
+        self._key_file_mtimes = {}
 
         # 向上查找包含项目标记的目录
         current = search.resolve()
         levels_up = 0
         while True:
+            # HOME is an account boundary, not an implicit project. Check it
+            # before markers: package.json/pyproject.toml in HOME often belong
+            # to shell tooling or dotfiles and must not authorize a full scan.
+            if current == home and not allow_home_project:
+                break
             for marker, ptype in _PROJECT_MARKERS.items():
                 if (current / marker).exists():
                     self.root = current
@@ -123,16 +141,16 @@ class ProjectContext:
                     return True
 
             # 有 .git 目录也视为项目根；但 $HOME 下的 .git 是 dotfiles，跳过
-            if (current / ".git").is_dir() and current != home:
+            if (
+                (current / ".git").is_dir()
+                and (current != home or allow_home_project)
+            ):
                 self.root = current
                 self.project_type = self._detect_type_from_content()
                 self._load_all()
                 self._initialized = True
                 return True
 
-            # 遇 $HOME 停止（不再向上，避免扫整个家目录）
-            if current == home:
-                break
             # 限制向上层数
             if levels_up >= max_levels:
                 break
@@ -143,9 +161,12 @@ class ProjectContext:
             current = parent
             levels_up += 1
 
-        # 没找到项目标记，用 cwd 作为根
-        self.root = search.resolve()
-        self.project_type = "unknown"
+        # A specific working directory can still be a bounded scratch project
+        # without markers. HOME and filesystem root remain explicitly
+        # unscoped, preventing broad scans and accidental project-memory roots.
+        resolved_search = search.resolve()
+        if resolved_search not in {home, Path(resolved_search.anchor)}:
+            self.root = resolved_search
         self._load_all()
         self._initialized = True
         return False
@@ -173,31 +194,35 @@ class ProjectContext:
         """
         self.rules = ""
         self.rule_sources = []
-        if not self.root:
-            return
-
         global_path = self._global_config_root / "XENON.md"
-        project_path = self._primary_instruction(self.root)
         candidates: list[tuple[Path, Path]] = [
             (global_path, self._global_config_root),
-            (project_path, self.root),
-            (self.root / ".xenon" / "rules.md", self.root),
-            (self.root / "XENON.local.md", self.root),
         ]
+        if not self.root:
+            project_candidates: list[tuple[Path, Path]] = []
+        else:
+            project_path = self._primary_instruction(self.root)
+            project_candidates = [
+                (project_path, self.root),
+                (self.root / ".xenon" / "rules.md", self.root),
+                (self.root / "XENON.local.md", self.root),
+            ]
+        candidates.extend(project_candidates)
         # Like Claude-style hierarchical instructions, directory-specific files
         # override broader project rules as the working directory gets deeper.
-        work_dir = self.working_dir or self.root
-        try:
-            relative = work_dir.resolve().relative_to(self.root.resolve())
-            current = self.root
-            for component in relative.parts:
-                current = current / component
-                candidates.extend([
-                    (self._primary_instruction(current), self.root),
-                    (current / "XENON.local.md", self.root),
-                ])
-        except (OSError, ValueError):
-            pass
+        if self.root:
+            work_dir = self.working_dir or self.root
+            try:
+                relative = work_dir.resolve().relative_to(self.root.resolve())
+                current = self.root
+                for component in relative.parts:
+                    current = current / component
+                    candidates.extend([
+                        (self._primary_instruction(current), self.root),
+                        (current / "XENON.local.md", self.root),
+                    ])
+            except (OSError, ValueError):
+                pass
         sections: list[str] = []
         for path, allowed_root in candidates:
             content = self._load_instruction_tree(
@@ -390,10 +415,17 @@ class ProjectContext:
         """刷新项目上下文。"""
         if self.root:
             self._load_all()
+        else:
+            self.detect(self.working_dir)
 
     def format_for_context(self) -> str:
         """格式化为注入 LLM 的上下文文本。"""
         if not self._initialized:
+            return ""
+
+        if not self.root:
+            if self.rules:
+                return f"[用户全局指令]\n{self.rules}"
             return ""
 
         parts: list[str] = []
@@ -417,6 +449,13 @@ class ProjectContext:
         """返回简短的项目摘要（用于 /project 命令）。"""
         if not self._initialized:
             return "未检测到项目上下文。"
+        if not self.root:
+            sources = ", ".join(self.rule_sources) if self.rule_sources else "无"
+            return (
+                "当前目录未检测到项目；已进入安全的无项目模式。\n"
+                "家目录文件树、关键文件和项目记忆均不会自动加载。\n"
+                f"用户全局规则: {sources}"
+            )
 
         lines = [
             f"项目类型: {_TYPE_DISPLAY.get(self.project_type, self.project_type)}",

@@ -3016,8 +3016,12 @@ class REPL:
         try:
             self.project_ctx.detect()
             ctx_text = self.project_ctx.format_for_context()
+            self.ctx_mgr.set_context_message(
+                "project",
+                ctx_text or None,
+                stable=True,
+            )
             if ctx_text:
-                self.ctx_mgr.set_context_message("project", ctx_text, stable=True)
                 logger.debug(f"注入项目上下文: {self.project_ctx.project_type}")
         except Exception as e:
             logger.debug(f"项目上下文检测失败: {e}")
@@ -3105,8 +3109,9 @@ class REPL:
 
         if not self.project_ctx._initialized:
             self.project_ctx.detect()
-        project_root = self.project_ctx.root or Path.cwd()
-        self._memory_service = MemoryService(MemoryBackendRegistry(project_root))
+        self._memory_service = MemoryService(
+            MemoryBackendRegistry(self.project_ctx.root)
+        )
         self._session_state["memory_service"] = self._memory_service
         return self._memory_service
 
@@ -3116,6 +3121,17 @@ class REPL:
 
             self._memory_detector = MemoryCandidateDetector()
         return self._memory_detector
+
+    def _has_active_project(self) -> bool:
+        """Return the project boundary without forcing filesystem discovery."""
+        project_ctx = getattr(self, "project_ctx", None)
+        if project_ctx is not None:
+            return getattr(project_ctx, "root", None) is not None
+        # Lightweight/library tests may construct REPL via ``__new__`` and
+        # inject an already-scoped memory service without ProjectContext.
+        service = getattr(self, "_memory_service", None)
+        registry = getattr(service, "registry", None)
+        return bool(getattr(registry, "has_project", False))
 
     def _handle_explicit_memory_request(self, user_input: str) -> bool:
         """Persist an unambiguous user request immediately and print a receipt."""
@@ -3131,6 +3147,27 @@ class REPL:
         if not proposal.content:
             console.print("[error]❌ 未写入记忆：当前会话中没有可引用的上一条内容[/error]")
             return True
+        if (
+            not self._has_active_project()
+            and proposal.scope.value.startswith("project-")
+        ):
+            explicitly_project_scoped = bool(re.search(
+                r"(?:项目本地|项目共享|仓库共享|团队记忆|project[- ](?:local|shared))",
+                user_input,
+                re.IGNORECASE,
+            ))
+            if explicitly_project_scoped:
+                console.print(
+                    "[error]❌ 未写入记忆：当前未检测到项目；"
+                    "请先进入具体项目目录，或明确使用用户全局记忆[/error]"
+                )
+                return True
+            from xenon.memory import MemoryScope
+
+            proposal.scope = MemoryScope.USER
+            console.print(
+                "[dim]· 当前为无项目模式，默认写入用户全局记忆[/dim]"
+            )
         try:
             receipt = self._get_memory_service().remember(
                 proposal.content,
@@ -3169,6 +3206,14 @@ class REPL:
             proposal = self._get_memory_detector().propose(user_input)
             if proposal is None:
                 return
+            if (
+                not self._has_active_project()
+                and proposal.scope.value.startswith("project-")
+            ):
+                from xenon.memory import MemoryScope
+
+                proposal.scope = MemoryScope.USER
+                proposal.reason += "；当前为无项目模式"
             service = self._get_memory_service()
             conflicts = service.find_conflicts(
                 proposal.content,
@@ -3212,6 +3257,16 @@ class REPL:
                     from xenon.memory import MemoryScope
 
                     proposal.scope = MemoryScope.SESSION
+
+            if (
+                not self._has_active_project()
+                and proposal.scope.value.startswith("project-")
+            ):
+                console.print(
+                    "[error]❌ 当前未检测到项目，不能写入项目记忆；"
+                    "请先进入具体项目目录[/error]"
+                )
+                return
 
             receipt = service.remember(
                 proposal.content,

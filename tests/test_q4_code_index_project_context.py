@@ -97,6 +97,27 @@ class TestDetectBoundary:
         assert pc.root == proj.resolve()
         assert pc.project_type == "unknown"
 
+    def test_detect_called_at_home_never_scans_home(self, tmp_path, monkeypatch):
+        """即使 HOME 有常见项目标记，默认启动也保持无项目模式。"""
+        home = tmp_path / "fakehome"
+        home.mkdir()
+        (home / ".git").mkdir()
+        (home / "pyproject.toml").write_text("")
+        (home / "personal.txt").write_text("private")
+        monkeypatch.setattr(
+            os.path,
+            "expanduser",
+            lambda p: str(home) if p == "~" else p,
+        )
+
+        pc = ProjectContext(global_config_root=tmp_path / "missing")
+        found = pc.detect(home)
+
+        assert found is False
+        assert pc.root is None
+        assert pc.file_tree == ""
+        assert pc.key_files == {}
+
     def test_detect_finds_marker_below_home(self, tmp_path, monkeypatch):
         """$HOME 与 cwd 之间的真实项目标记仍能被检测到。"""
         home = tmp_path / "fakehome"

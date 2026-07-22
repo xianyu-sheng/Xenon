@@ -19,6 +19,13 @@
 - 默认启动时仅抑制模型列表探测产生的 `httpx` INFO 噪声；`-v` 仍保留完整诊断，正常任务的 Ctrl+O 日志不受影响。
 - 无效提供商以脱敏摘要显示（如“认证失败 HTTP 401，已跳过”），不再输出原始请求行或响应正文；欢迎卡后统一展示可用模型和提供商数量。
 
+### 家目录隐私边界
+
+- `$HOME` 现在是明确的账户边界，不再因 `.git`、`package.json`、`pyproject.toml` 等标记被当作项目；家目录文件树、关键文件和项目规则不会自动注入模型。
+- 无项目模式仍加载用户全局指令，但项目上下文根保持为空；具体的无标记子目录仍可作为有界 scratch 工作区，不会向上继承家目录标记。
+- 记忆注册表支持无项目状态，此时只启用 `user` 与 `session`；普通“记住”默认落入用户全局，显式 project-local/project-shared 会要求先进入项目。
+- `/memory status` 明确显示未激活的项目作用域，`/project refresh` 同步重建记忆边界；不再以 `Path.cwd()` 回退并在家目录创建项目记忆文件。
+
 ### 权限确认可用性
 
 - 修复 Rich 将权限面板中的 `[y]`、`[n]`、`[a]`、`[q]` 误当作标记并吞掉的问题；面板现在明确显示每个操作的输入键，底部输入提示同步显示 `[y/n/a/q]`，并接受大小写输入。
@@ -53,8 +60,8 @@
 
 ### 验证
 
-- 离线回归：`1486 passed, 35 deselected`。
-- Ruff、`compileall`、SVG XML 校验、`git diff --check`、wheel 与 sdist 构建通过。
+- 离线回归：`1523 passed, 36 deselected`。
+- Ruff、`compileall`、SVG XML 校验、`git diff --check`、wheel 与 sdist 构建通过；家目录真实 TTY 启动下的 `/project` 与 `/memory status` 已验证。
 
 ## [0.7.0] — 2026-07-22
 

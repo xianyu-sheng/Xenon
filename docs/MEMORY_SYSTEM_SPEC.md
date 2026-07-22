@@ -27,6 +27,13 @@ The differentiator is the complete interaction loop rather than a new database:
 | project-shared | `.xenon/memory/shared/` | explicit user choice only | team conventions and decisions |
 | user | `~/.local/share/xenon/memory/` | explicit or confirmed | preferences reused across projects |
 
+When Xenon starts at the account home directory, HOME is treated as an unscoped
+privacy boundary even if it contains `.git`, `package.json`, or `pyproject.toml`.
+Only `user` and `session` scopes are active. An unqualified remember request
+defaults to `user`; an explicit project-local/shared request is rejected until
+the user enters a bounded project directory. Xenon never creates project memory
+or scans a project tree under HOME implicitly.
+
 `XENON.local.md` and `XENON.md` contain compact index imports, not an unbounded
 memory dump. `AGENTS.md` is a fallback project instruction filename when
 `XENON.md` is absent. The global instruction entry point is

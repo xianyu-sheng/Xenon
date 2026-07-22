@@ -855,6 +855,8 @@ class MemoryService:
             return
         if scope not in (MemoryScope.PROJECT_LOCAL, MemoryScope.PROJECT_SHARED):
             return
+        if self.registry.project_root is None:
+            raise ValueError("当前未检测到项目，无法创建项目记忆入口")
         filename = "XENON.local.md" if scope == MemoryScope.PROJECT_LOCAL else "XENON.md"
         relative_index = (
             ".xenon/memory/local/INDEX.md"
@@ -889,6 +891,8 @@ class MemoryService:
 
     def _ensure_local_git_excludes(self) -> None:
         """Keep private project memory out of commits without editing .gitignore."""
+        if self.registry.project_root is None:
+            return
         git_marker = self.registry.project_root / ".git"
         git_dir: Path | None = None
         if git_marker.is_dir():

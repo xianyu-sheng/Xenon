@@ -1883,8 +1883,11 @@ def _cmd_memory_v2(*, args: str, repl: Any) -> str:
             MemoryScope.PROJECT_LOCAL,
             MemoryScope.PROJECT_SHARED,
         ):
-            backend = service.registry.get(scope)
-            lines.append(f"  {scope.value}: {backend.root}")
+            try:
+                backend = service.registry.get(scope)
+                lines.append(f"  {scope.value}: {backend.root}")
+            except ValueError:
+                lines.append(f"  {scope.value}: 未激活（当前未检测到项目）")
         lines.extend([
             "  session: 当前进程内存（退出即清除）",
             "",
@@ -1999,7 +2002,11 @@ def _cmd_memory_v2(*, args: str, repl: Any) -> str:
             tokens = shlex.split(sub_args)
         except ValueError as exc:
             return f"记忆参数解析失败: {exc}"
-        scope = MemoryScope.PROJECT_LOCAL
+        scope = (
+            MemoryScope.PROJECT_LOCAL
+            if service.registry.has_project
+            else MemoryScope.USER
+        )
         kind = MemoryKind.FACT
         content: list[str] = []
         index = 0
@@ -3021,6 +3028,8 @@ def _cmd_project(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> 
     if args.strip().lower() == "refresh":
         pc.refresh()
         repl._project_injected = False
+        repl._memory_service = None
+        repl._session_state.pop("memory_service", None)
         return f"✅ 项目上下文已刷新。\n\n{pc.get_summary()}"
 
     if not pc._initialized:
