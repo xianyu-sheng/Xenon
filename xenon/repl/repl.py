@@ -1150,13 +1150,10 @@ class REPL:
         ]
         tip = random.choice(tips)
 
-        # v0.3.0+ 修复（B-4）：版本号从 pyproject.toml 动态读，不再硬编码。
-        # 用 importlib.metadata 优先；失败兜底读本文件邻近的版本常量
-        try:
-            from importlib.metadata import version as _pkg_version
-            _ver = _pkg_version("xenon")
-        except Exception:
-            _ver = "0.6.0"  # 兜底
+        # Editable installs can keep stale distribution metadata after the
+        # source tree version changes.  The running package constant is the
+        # authoritative version for the welcome screen and ``--version``.
+        from xenon import __version__ as _ver
 
         details = Table.grid(padding=(0, 2))
         details.add_column(style="dim #94a3b8", justify="right")
@@ -1869,8 +1866,7 @@ class REPL:
         # query 意图（天气/价格/汇率/新闻等实时数据）必然需要工具，direct 模式不向 API
         # 传工具，须路由到 ReAct（见 _detect_tool_need）。
         intent = self._detect_intent(user_input)
-        # 单轮优化提示是可替换上下文，不应作为永久 system turn 每轮累积。
-        self.ctx_mgr.set_context_message("prompt_hint", None)
+        system_hint: str | None = None
         if self.optimize_prompts:
             optimized, system_hint, was_optimized = optimize_prompt(user_input)
             console.print(f"[dim]🎯 意图: {get_intent_display(intent)}[/dim]")
@@ -1878,17 +1874,9 @@ class REPL:
             if was_optimized:
                 # 展示优化后的 prompt，帮助用户学习
                 self._render_secondary_text("📝 优化后的 Prompt（供学习参考）", optimized)
-                if system_hint:
-                    self.ctx_mgr.set_context_message(
-                        "prompt_hint", f"[指令上下文] {system_hint}"
-                    )
             elif intent is not None:
                 # 有明确任务意图，但提示词质量已足够好
                 console.print("[dim]✅ 提示词质量良好，无需优化[/dim]")
-                if system_hint:
-                    self.ctx_mgr.set_context_message(
-                        "prompt_hint", f"[指令上下文] {system_hint}"
-                    )
             else:
                 # 通用对话，无明确任务意图
                 console.print("[dim]💬 通用对话[/dim]")
@@ -1901,17 +1889,29 @@ class REPL:
                     cost = cr.estimated_cost_yuan
                     if rate < 0.70:
                         console.print(
-                            f"[dim cyan]💡 提示词已优化，预计可提升缓存命中率（当前 {rate:.0%}，累计费用 ¥{cost:.4f}）[/dim cyan]"
+                            f"[dim cyan]💡 提示词已结构化；当前缓存命中率 {rate:.0%}，累计费用 ¥{cost:.4f}[/dim cyan]"
                         )
                     else:
                         console.print(
-                            f"[dim cyan]💡 提示词已优化，缓存模式持续生效中（命中率 {rate:.0%}，累计费用 ¥{cost:.4f}）[/dim cyan]"
+                            f"[dim cyan]💡 提示词已结构化；缓存命中率 {rate:.0%}，累计费用 ¥{cost:.4f}[/dim cyan]"
                         )
         else:
             optimized = user_input
 
+        # A per-turn hint is volatile.  Keeping it as a system overlay ahead
+        # of history invalidates DeepSeek's exact-prefix cache on every intent
+        # change.  Bind it to this user turn instead, where it is both scoped
+        # correctly and retained as part of the reusable conversation.  Chat
+        # greetings intentionally remain byte-for-byte unchanged.
+        turn_prompt = optimized
+        if system_hint and intent != "chat":
+            turn_prompt = (
+                f"{optimized}\n\n"
+                f"## 本轮回答指导\n{system_hint}"
+            )
+
         # 添加用户消息
-        self.ctx_mgr.add_user_message(optimized)
+        self.ctx_mgr.add_user_message(turn_prompt)
 
         # 获取模型列表
         # v0.4.0: auto-route based on task difficulty
@@ -1920,7 +1920,7 @@ class REPL:
             model_ids = self.registry.get_role_priority("planner")
         else:
             model_ids = self.auto_router.route(
-                optimized, self.ctx_mgr.get_messages(), count=3,
+                turn_prompt, self.ctx_mgr.get_messages(), count=3,
                 preferred_models=self._preferred_model_ids or None,
             )
         if not model_ids:
@@ -1948,22 +1948,22 @@ class REPL:
 
         try:
             if mode == "react":
-                self._run_react_engine(optimized, model_ids)
+                self._run_react_engine(turn_prompt, model_ids)
             elif mode == "plan-execute":
-                self._run_plan_execute_engine(optimized, model_ids)
+                self._run_plan_execute_engine(turn_prompt, model_ids)
             elif mode == "reflection":
-                self._run_reflection_engine(optimized, model_ids)
+                self._run_reflection_engine(turn_prompt, model_ids)
             elif mode == "plan-react":
-                self._run_plan_react_engine(optimized, model_ids)
+                self._run_plan_react_engine(turn_prompt, model_ids)
             elif mode == "plan-reflection":
-                self._run_plan_reflection_engine(optimized, model_ids)
+                self._run_plan_reflection_engine(turn_prompt, model_ids)
             elif mode == "react-reflection":
-                self._run_react_reflection_engine(optimized, model_ids)
+                self._run_react_reflection_engine(turn_prompt, model_ids)
             elif mode == "novel":
-                self._run_novel_engine(optimized, model_ids)
+                self._run_novel_engine(turn_prompt, model_ids)
             else:
                 # direct 模式 — 直接调 LLM
-                self._run_direct(optimized, model_ids, intent=intent)
+                self._run_direct(turn_prompt, model_ids, intent=intent)
         except KeyboardInterrupt:
             # B2: Ctrl+C 取消当前运行，返回提示符而非退出整个 REPL
             if getattr(self, "_log_capture_active", False):
@@ -2808,7 +2808,7 @@ class REPL:
             self.project_ctx.detect()
             ctx_text = self.project_ctx.format_for_context()
             if ctx_text:
-                self.ctx_mgr.set_context_message("project", ctx_text)
+                self.ctx_mgr.set_context_message("project", ctx_text, stable=True)
                 logger.debug(f"注入项目上下文: {self.project_ctx.project_type}")
         except Exception as e:
             logger.debug(f"项目上下文检测失败: {e}")

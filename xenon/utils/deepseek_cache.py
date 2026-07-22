@@ -61,6 +61,25 @@ _LEGACY_MODEL_ALIASES = {
 }
 
 
+def _canonical_model_id(model_id: str) -> str:
+    """Return one stable accounting key across streaming and engine paths.
+
+    Streaming calls report the registry ID (``deepseek/model``), while the
+    blocking client historically reported only the provider-side model name.
+    DeepSeek names are unambiguous, so prefix bare names with their provider
+    and normalize casing.  Other providers keep their explicit key unchanged.
+    """
+    key = str(model_id or "").strip().lower()
+    if not key:
+        return "unknown"
+    if "/" in key:
+        provider, name = key.split("/", 1)
+        return f"{provider}/{name}"
+    if key.startswith("deepseek-"):
+        return f"deepseek/{key}"
+    return key
+
+
 def _match_pricing(model_id: str) -> dict[str, float]:
     """根据 model_id 匹配当前官方定价；未知模型保守按 V4 Pro 估算。"""
     key = model_id.lower().rsplit("/", 1)[-1].replace("_", "-")
@@ -193,6 +212,7 @@ class CacheTracker:
         # 基础 token 数
         prompt = int(usage_data.get("prompt_tokens", 0) or 0)
         completion = int(usage_data.get("completion_tokens", 0) or 0)
+        model_id = _canonical_model_id(model_id)
 
         # system prompt hash
         sys_hash = _hash_system_prompt(system_prompt) if system_prompt else ""
@@ -299,6 +319,7 @@ class CacheTracker:
 
     def model_snapshot(self, model_id: str) -> dict[str, Any]:
         """单个模型的快照（用于 /cost 面板）。"""
+        model_id = _canonical_model_id(model_id)
         with self._lock:
             t = self._models.get(model_id)
             if not t:

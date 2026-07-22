@@ -307,30 +307,29 @@ class NovelEngine(BaseEngine):
 
         # ── 2. 构建消息 ──
         messages = [{"role": "system", "content": self.system_prompt}]
-        memory_message = self._working_memory_message()
-        if memory_message is not None:
-            messages.append(memory_message)
-        messages.extend(self._context_messages())
 
-        # 注入项目上下文（这是核心 — AI 的完整创作记忆）
+        # 注入对话历史
+        if ctx_mgr is not None:
+            history = self._history_messages(ctx, current_user_input=user_input)
+            logger.debug(f"Novel 注入 ContextManager {len(history)} 条历史（已压缩）")
+        else:
+            history = ctx.get_conversation_messages()
+            if history:
+                recent = [m for m in history if m.get("role") != "system"][-10:]
+                history = recent
+                logger.debug(f"Novel 注入 {len(recent)} 条对话历史")
+            else:
+                history = []
+
+        messages.extend(self._cache_ordered_context(history))
+
+        # 小说上下文会随着章节写作变化，属于易变层，放在历史后面。
         project_ctx = project.get_all_context()
         if project_ctx:
             messages.append({
                 "role": "system",
                 "content": f"## 当前小说: {project.title}\n\n{project_ctx}",
             })
-
-        # 注入对话历史
-        if ctx_mgr is not None:
-            history = self._history_messages(ctx, current_user_input=user_input)
-            messages.extend(history)
-            logger.debug(f"Novel 注入 ContextManager {len(history)} 条历史（已压缩）")
-        else:
-            history = ctx.get_conversation_messages()
-            if history:
-                recent = [m for m in history if m.get("role") != "system"][-10:]
-                messages.extend(recent)
-                logger.debug(f"Novel 注入 {len(recent)} 条对话历史")
 
         messages.append({"role": "user", "content": user_input})
 

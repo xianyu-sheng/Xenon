@@ -261,6 +261,24 @@ class TestCacheTrackerMultiModel:
         assert s1["prompt_tokens"] == 500
         t.close()
 
+    def test_streaming_and_blocking_deepseek_ids_share_one_bucket(self):
+        t = CacheTracker()
+        t.record_response(
+            "deepseek/deepseek-v4-flash",
+            _ds_resp(1000, 100, 800, 200),
+        )
+        t.record_response(
+            "deepseek-v4-flash",
+            _ds_resp(500, 50, 400, 100),
+        )
+
+        assert t.all_models == ["deepseek/deepseek-v4-flash"]
+        snap = t.model_snapshot("deepseek-v4-flash")
+        assert snap["calls"] == 2
+        assert snap["prompt_tokens"] == 1500
+        assert snap["cache_hit_tokens"] == 1200
+        t.close()
+
     def test_model_snapshot_unknown_model(self):
         t = CacheTracker()
         assert t.model_snapshot("nonexistent") == {}

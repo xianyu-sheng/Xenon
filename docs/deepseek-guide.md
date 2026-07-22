@@ -77,13 +77,13 @@ DeepSeek 的缓存判定基于 **prompt 前缀匹配**：
 ```
 ✅ 正确结构：
 ┌─────────────────────────┐
-│ system_prompt（固定）     │  ← 每次相同，持续命中
-│ tool_definitions（固定）  │  ← 每次相同，持续命中
-│ safety_rules（固定）      │  ← 每次相同，持续命中
+│ system_prompt（固定）     │  ← 固定前缀
+│ project_context（会话稳定）│  ← 项目内保持稳定
+│ conversation_history     │  ← 已发生的完整对话
 ├─────────────────────────┤
-│ user_message（可能变化）  │  ← 从这里开始不同
-│ context: {current_time}  │  ← 动态内容放最后
-│ context: {working_dir}   │
+│ working_memory（易变）    │  ← 动态内容靠近尾部
+│ retrieved_memory（易变）  │
+│ current_user_message     │  ← 当前请求始终最后
 └─────────────────────────┘
 
 ❌ 错误结构：
@@ -94,14 +94,16 @@ DeepSeek 的缓存判定基于 **prompt 前缀匹配**：
 └─────────────────────────┘
 ```
 
-### Xenon 自动优化
+### Xenon 自动分层
 
-Xenon 的 `PromptOptimizer` 会自动检测并重组消息顺序：
+Xenon 在 `ContextManager` 和各推理引擎中统一使用缓存层级：
 
-- `optimize_messages_for_cache()` — 把 tool schema、system prompt 核心固定部分前置，时间戳、路径、用户变量等动态内容后置
-- `_is_dynamic_content()` — 正则检测日期/时间/路径/模板变量
+- 稳定层：引擎指令、会话内固定的项目上下文
+- 历史层：已经完成的用户/助手/工具对话，顺序不变
+- 易变层：工作记忆、按当前问题检索出的长期记忆
+- 当前轮：结构化后的用户请求及本轮回答指导
 
-**你不需要手动调整任何东西。** 优化器在每次对话时自动运行。优化后的 Prompt 会以无边框、低亮度的辅助文本显示，`/cost` 命令和固定底部状态栏会反馈缓存效果。
+单轮回答指导不会再作为 system overlay 插入历史前方。优化后的 Prompt 会以无边框、低亮度辅助文本显示；`/cost` 和固定底栏展示的是 DeepSeek API 返回的真实命中数据，而不是客户端预测值。
 
 ---
 

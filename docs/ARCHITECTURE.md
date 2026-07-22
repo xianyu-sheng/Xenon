@@ -47,7 +47,7 @@ L3 · 会话结束省钱报告
 **关键决策：**
 - 数据源 100% 来自 API 响应的 `usage.prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 字段
 - 本地版本化价格快照（V4 Flash: ¥0.02 / ¥1 / ¥2；V4 Pro: ¥0.025 / ¥3 / ¥6；单位均为百万 token）
-- PromptOptimizer 自动分离静态/动态内容，最大化前缀匹配窗口
+- ContextManager 与八种引擎统一采用“固定指令 → 稳定项目上下文 → 历史 → 易变记忆 → 当前请求”的缓存分层；单轮指导绑定当前用户消息
 
 **与 Reasonix Prefix-Cache Stability 的差异：**
 Reasonix 从消息排序角度预防缓存失效；Xenon 从用量追踪角度让缓存效益**可见、可量化、可优化**。两者互补但视角不同：Reasonix 做"如何不破坏缓存"，Xenon 做"缓存帮你省了多少钱"。

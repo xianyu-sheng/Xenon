@@ -5,6 +5,13 @@
 
 ## [Unreleased]
 
+### 缓存前缀稳定性与本地版本一致性
+
+- 上下文注入拆分为稳定层与易变层：固定引擎指令和项目上下文前置，已有对话历史保持连续，工作记忆与按轮检索记忆靠近当前用户请求。
+- 单轮 Prompt 指导不再作为会变化的 system overlay 插到历史之前，改为绑定到本轮用户消息；提示文案不再把“结构化 Prompt”和缓存提升作未经验证的因果关联。
+- Direct 流式路径和各推理引擎的 DeepSeek 模型 ID 统一归一为 `deepseek/<model>`，避免 `/cost` 把同一模型拆成两个统计桶。
+- 欢迎页与 `xenon --version` 统一读取运行源码的 `xenon.__version__`，避免 editable install 的旧 distribution metadata 显示过期版本。
+
 ### Star Core 品牌与终端活动状态
 
 - 正式视觉标志从圆角方形/六边形轨道更新为 Star Core：八芒氙蓝星核、非对称群星与断续轨道，小尺寸不再退化成方块。

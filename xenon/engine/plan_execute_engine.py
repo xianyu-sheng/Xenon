@@ -520,22 +520,18 @@ class PlanExecuteEngine(BaseEngine):
     def _plan(self, user_input: str, context: AgentContext | None = None) -> dict[str, Any]:
         """Phase 1: 生成执行计划。"""
         messages = [{"role": "system", "content": self.system_prompt}]
-        memory_message = self._working_memory_message()
-        if memory_message is not None:
-            messages.append(memory_message)
-        messages.extend(self._context_messages())
         # F4: 优先消费 ctx_mgr（已压缩）消息；否则回退 AgentContext 历史 [-6:]
         history = self._history_messages(context, current_user_input=user_input)
         if history:
             if self._ctx_mgr is not None:
-                messages.extend(history)  # 已由 ContextManager 压缩管理
                 logger.debug(f"Plan 注入 ContextManager {len(history)} 条历史")
             else:
                 recent = history[-6:]
-                messages.extend(recent)
+                history = recent
                 logger.debug(f"Plan 注入 {len(recent)} 条对话历史")
         else:
             logger.warning("Plan: 无对话历史可注入！")
+        messages.extend(self._cache_ordered_context(history))
 
         # 关键：将当前用户输入加入消息列表
         messages.append({"role": "user", "content": user_input})

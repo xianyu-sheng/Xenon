@@ -185,11 +185,31 @@ class BaseEngine(ABC):
             return None
         return {"role": "system", "content": prompt}
 
-    def _context_messages(self) -> list[dict[str, str]]:
-        """Return replaceable project/long-term-memory context layers."""
+    def _context_messages(self, *, stable: bool | None = None) -> list[dict[str, str]]:
+        """Return replaceable context layers, optionally by cache tier."""
         if self._ctx_mgr is None:
             return []
-        return self._ctx_mgr.get_context_messages()
+        return self._ctx_mgr.get_context_messages(stable=stable)
+
+    def _cache_ordered_context(
+        self,
+        history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Compose context without invalidating the reusable prompt prefix.
+
+        Engine-specific fixed instructions are added by the caller.  Stable
+        project context follows, then the already established conversation.
+        Working memory and query-dependent retrieval are volatile and stay at
+        the tail, immediately before the caller appends the current user turn.
+        """
+        result: list[dict[str, Any]] = []
+        result.extend(self._context_messages(stable=True))
+        result.extend(history)
+        memory_message = self._working_memory_message()
+        if memory_message is not None:
+            result.append(memory_message)
+        result.extend(self._context_messages(stable=False))
+        return result
 
     def _maybe_compact_messages(
         self,

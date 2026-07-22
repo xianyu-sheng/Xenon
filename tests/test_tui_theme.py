@@ -104,3 +104,16 @@ def test_assistant_and_optimized_prompt_render_without_panels(monkeypatch):
     assert "辅助提示词" in rendered
     assert "╭" not in rendered
     assert "╰" not in rendered
+
+
+def test_welcome_uses_running_source_version(monkeypatch):
+    from xenon import __version__
+
+    output = io.StringIO()
+    test_console = Console(file=output, width=100, force_terminal=False)
+    monkeypatch.setattr("xenon.repl.repl.console", test_console)
+    repl = REPL()
+
+    repl._print_welcome()
+
+    assert f"v{__version__}" in output.getvalue()

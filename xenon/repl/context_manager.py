@@ -171,7 +171,12 @@ class ContextManager:
         # 可替换的系统上下文层（项目规则、长期记忆检索、单轮指令等）。
         # 它们不属于聊天历史，避免每轮 append 后重复膨胀，也不会被 compact
         # 当成用户对话压缩掉。
-        self._context_messages: dict[str, str] = {}
+        # Replaceable prompt overlays are split by cache stability.  Stable
+        # layers (for example the project snapshot) belong immediately after
+        # the fixed system prompt.  Volatile layers (retrieved memories and
+        # other per-turn state) are kept near the current user request so a
+        # change cannot invalidate the reusable conversation prefix.
+        self._context_messages: dict[str, tuple[str, bool]] = {}
         if track_real_usage:
             self._subscribe_usage()
 
@@ -233,18 +238,35 @@ class ContextManager:
         """Replace persistent working memory when loading a saved session."""
         self._working_memory = dict(memory or {})
 
-    def set_context_message(self, key: str, content: str | None) -> None:
-        """Set or clear one replaceable system-context layer."""
+    def set_context_message(
+        self,
+        key: str,
+        content: str | None,
+        *,
+        stable: bool = False,
+    ) -> None:
+        """Set or clear one replaceable system-context layer.
+
+        ``stable=True`` is reserved for content that will not change during a
+        session, such as the detected project snapshot.  Query-dependent
+        memory and other turn-local context must use the default volatile
+        layer so they are appended after the reusable history prefix.
+        """
         if content and content.strip():
-            self._context_messages[str(key)] = content.strip()[:20_000]
+            self._context_messages[str(key)] = (content.strip()[:20_000], bool(stable))
         else:
             self._context_messages.pop(str(key), None)
 
-    def get_context_messages(self) -> list[dict[str, str]]:
-        """Return project/memory overlays in deterministic insertion order."""
+    def get_context_messages(self, *, stable: bool | None = None) -> list[dict[str, str]]:
+        """Return replaceable overlays in deterministic insertion order.
+
+        Passing ``stable=True`` or ``False`` selects a cache tier.  ``None``
+        preserves the public compatibility behaviour and returns both tiers.
+        """
         return [
             {"role": "system", "content": content}
-            for content in self._context_messages.values()
+            for content, is_stable in self._context_messages.values()
+            if stable is None or is_stable is stable
         ]
 
     @classmethod
@@ -368,25 +390,44 @@ class ContextManager:
         as user observations while retaining role=tool in ``history`` for
         compaction, routing and session inspection.
         """
+        history_messages: list[dict[str, Any]] = []
+        for turn in self.history:
+            api_message = (turn.metadata or {}).get("api_message")
+            if isinstance(api_message, dict):
+                history_messages.append(copy.deepcopy(api_message))
+            elif turn.role == "tool":
+                tool_name = str((turn.metadata or {}).get("tool_name", "unknown"))
+                history_messages.append({
+                    "role": "user",
+                    "content": f"[工具结果: {tool_name}]\n{turn.content}",
+                })
+            else:
+                history_messages.append({"role": turn.role, "content": turn.content})
+
+        # Keep the fixed leading system turn first, then cache-stable project
+        # context.  Existing conversation history remains ahead of volatile
+        # state.  The current user turn stays last so retrieved memory and
+        # working state apply to that request without breaking the earlier
+        # reusable prefix.
         messages: list[dict[str, Any]] = []
+        while history_messages and history_messages[0].get("role") == "system":
+            messages.append(history_messages.pop(0))
+        if include_context_messages:
+            messages.extend(self.get_context_messages(stable=True))
+
+        current_user: dict[str, Any] | None = None
+        if history_messages and history_messages[-1].get("role") == "user":
+            current_user = history_messages.pop()
+        messages.extend(history_messages)
+
         if include_working_memory:
             memory = self.working_memory_prompt()
             if memory:
                 messages.append({"role": "system", "content": memory})
         if include_context_messages:
-            messages.extend(self.get_context_messages())
-        for turn in self.history:
-            api_message = (turn.metadata or {}).get("api_message")
-            if isinstance(api_message, dict):
-                messages.append(copy.deepcopy(api_message))
-            elif turn.role == "tool":
-                tool_name = str((turn.metadata or {}).get("tool_name", "unknown"))
-                messages.append({
-                    "role": "user",
-                    "content": f"[工具结果: {tool_name}]\n{turn.content}",
-                })
-            else:
-                messages.append({"role": turn.role, "content": turn.content})
+            messages.extend(self.get_context_messages(stable=False))
+        if current_user is not None:
+            messages.append(current_user)
         return messages
 
     def export_history(self) -> list[dict[str, Any]]:

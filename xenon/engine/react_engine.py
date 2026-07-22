@@ -525,24 +525,21 @@ class ReActEngine(BaseEngine):
         self._begin_run()  # P3-Q2: 生成本次 run 的链路 ID（贯穿所有 LLM 调用）
         self._recent_calls.clear()  # v0.7.0: 每次 run 重置重复调用跟踪
         messages = [{"role": "system", "content": self.system_prompt}]
-        memory_message = self._working_memory_message()
-        if memory_message is not None:
-            messages.append(memory_message)
-        messages.extend(self._context_messages())
         # F4: ctx_mgr 注入时消费其（已压缩）消息，不再自行 [-10:] 截断；
         # 否则回退 AgentContext 的对话历史（保留 [-10:] 兜底）。
         if ctx_mgr is not None:
             history = self._history_messages(ctx, current_user_input=user_input)
-            messages.extend(history)
             logger.debug(f"ReAct 注入 ContextManager {len(history)} 条历史（已压缩）")
         else:
             history = ctx.get_conversation_messages()
             if history:
                 recent = [m for m in history if m.get("role") != "system"][-10:]
-                messages.extend(recent)
+                history = recent
                 logger.debug(f"ReAct 注入 {len(recent)} 条对话历史")
             else:
+                history = []
                 logger.warning("ReAct: 无对话历史可注入！")
+        messages.extend(self._cache_ordered_context(history))
         messages.append({"role": "user", "content": user_input})
         # P2-E1: 若启用 DirectoryScout，把项目文件树注入 user_input（防路径幻觉）。
         # 注意：注入发生在历史之后、首轮 LLM 调用之前，注入内容并入本轮 user 消息。
