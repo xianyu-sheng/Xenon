@@ -185,6 +185,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         mode=getattr(args, "mode", None),
         system_prompt=getattr(args, "system_prompt", None),
         config_path=getattr(args, "config", None),
+        verbose=getattr(args, "verbose", False),
     )
 
 

@@ -187,6 +187,8 @@ def test_repl_main_loop_animates_submitted_work_and_restores_title(monkeypatch):
     monkeypatch.setattr(repl, "_handle_chat", submitted.append)
     monkeypatch.setattr(repl, "_print_welcome", lambda: None)
     monkeypatch.setattr(repl, "_check_first_run", lambda: None)
+    monkeypatch.setattr(repl, "_load_custom_commands", lambda: None)
+    monkeypatch.setattr(repl, "_preload_mcp_server_configs", lambda: None)
     monkeypatch.setattr(repl, "_check_auto_resume", lambda: None)
     monkeypatch.setattr(repl, "_auto_save_session", lambda: None)
     monkeypatch.setattr(repl, "_print_exit_report", lambda: None)

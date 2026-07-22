@@ -912,10 +912,16 @@ class REPL:
         """启动 REPL 主循环。"""
         self._set_console_title()
         try:
+            # Discover configured providers before rendering the welcome card
+            # so MODEL reflects the runtime that will actually answer.
+            startup = self._check_first_run()
             self._print_welcome()
+            self._render_startup_summary(startup)
 
-            # 检查是否需要初始配置
-            self._check_first_run()
+            # Non-model extensions are intentionally loaded after the welcome
+            # card; they are local and do not affect its model status.
+            self._load_custom_commands()
+            self._preload_mcp_server_configs()
 
             # v0.4.0 Step 14: 检查可恢复的会话
             self._check_auto_resume()
@@ -1073,7 +1079,7 @@ class REPL:
             self._clipboard_monitor.start()
             console.print("[dim]👁 视觉模式已开启 (Ctrl+Alt+V 粘贴图片)[/dim]")
 
-    def _check_first_run(self) -> None:
+    def _check_first_run(self) -> dict[str, Any]:
         """首次启动时检测配置状态，自动引导。
 
         v0.3.0+ 修复（C-2）：从纯 yaml 检查改为 get_configured_providers 检查，
@@ -1082,14 +1088,33 @@ class REPL:
         from xenon.repl.provider_registry import get_configured_providers, load_credentials
 
         creds = load_credentials()
-        configured = get_configured_providers()
+        # httpx INFO is valuable in Ctrl+O execution details but is startup
+        # noise during a provider capability probe. Suppress it only for this
+        # narrow scope; --verbose preserves the original diagnostic stream.
+        probe_loggers = ("httpx", "httpcore", "openai")
+        saved_levels: dict[str, int] = {}
+        if not self.verbose:
+            for name in probe_loggers:
+                target = logging.getLogger(name)
+                saved_levels[name] = target.level
+                target.setLevel(logging.WARNING)
+        try:
+            configured = get_configured_providers()
+        finally:
+            for name, level in saved_levels.items():
+                logging.getLogger(name).setLevel(level)
 
-        if not creds and not configured:
-            # 完全没有配置（既没 yaml 也没 env）— 引导用户
-            console.print("[dim]· 尚未配置 API Key，输入 [bold cyan]/setup[/bold cyan] 进入配置向导[/dim]\n")
-        else:
+        failures: list[tuple[str, str]] = []
+        for provider in configured:
+            if provider.model_error:
+                failures.append((
+                    provider.name,
+                    self._summarize_provider_probe_error(provider.model_error),
+                ))
+
+        needs_setup = not creds and not configured and not self.registry.list_models()
+        if not needs_setup:
             # v0.4.0: always populate model pool from ALL configured providers
-            pool_count = 0
             import os as _os
             _max_per_provider = int(_os.environ.get("XENON_MAX_MODELS_PER_PROVIDER", "3"))
             for p in configured:
@@ -1107,7 +1132,6 @@ class REPL:
                             model_id, alias=alias, weight=3.0,
                             api_key=p.api_key, base_url=p.base_url,
                         )
-                        pool_count += 1
                     # Also ensure registry has it (backward compat)
                     if not self.registry.list_models() or alias not in {m.alias for m in self.registry.list_models()}:
                         self.registry.add_model(model_id, alias)
@@ -1116,17 +1140,65 @@ class REPL:
                         if alias not in self.registry.role_priority["planner"]:
                             self.registry.role_priority["planner"].append(alias)
 
-            if pool_count > 0:
-                console.print(f"[dim]· 已加载 {pool_count} 个模型到调用池[/dim]")
-                if len(configured) > 1:
-                    console.print("[dim]· auto 模式: 根据任务难度自动选择模型[/dim]")
-            console.print()
+        available_providers = sum(
+            1
+            for provider in configured
+            if provider.models
+            and not str(provider.models[0]).startswith("(auto-fetch")
+        )
+        return {
+            "needs_setup": needs_setup,
+            "configured_providers": len(configured),
+            "available_providers": available_providers,
+            "loaded_models": len(self.model_pool.list_all()),
+            "failures": failures,
+        }
 
-        # 加载自定义快捷指令和技能
-        self._load_custom_commands()
+    @staticmethod
+    def _summarize_provider_probe_error(error: str) -> str:
+        """Reduce provider errors to a safe, actionable startup label."""
+        status_match = re.search(r"HTTP\s+(\d{3})", error, re.IGNORECASE)
+        if status_match:
+            status = int(status_match.group(1))
+            if status in {401, 403}:
+                return f"认证失败（HTTP {status}）"
+            if status == 429:
+                return "请求受限（HTTP 429）"
+            if 500 <= status < 600:
+                return f"服务暂不可用（HTTP {status}）"
+            return f"模型列表请求失败（HTTP {status}）"
+        lowered = error.lower()
+        if any(token in lowered for token in ("timeout", "timed out")):
+            return "连接超时"
+        if any(token in lowered for token in ("connect", "network", "dns")):
+            return "网络连接失败"
+        return "模型列表获取失败"
 
-        # v0.5.4: 惰性登记 MCP 服务器（不连接，不阻塞启动）
-        self._preload_mcp_server_configs()
+    @staticmethod
+    def _render_startup_summary(summary: dict[str, Any] | None) -> None:
+        """Render concise startup facts after the model-aware welcome card."""
+        if not summary:
+            return
+        if summary.get("needs_setup"):
+            console.print(
+                "[dim]· 尚未配置 API Key，输入 "
+                "[bold cyan]/setup[/bold cyan] 进入配置向导[/dim]\n"
+            )
+            return
+
+        loaded = int(summary.get("loaded_models", 0))
+        providers = int(summary.get("available_providers", 0))
+        if loaded:
+            provider_text = f" · {providers} 个提供商" if providers else ""
+            console.print(
+                f"[dim]· 已准备 {loaded} 个模型{provider_text}"
+                " · auto 按任务难度选择[/dim]"
+            )
+        for name, reason in summary.get("failures", []):
+            console.print(
+                f"[dim yellow]· {name} 模型列表不可用：{reason}；已跳过[/dim yellow]"
+            )
+        console.print()
 
     def _print_welcome(self) -> None:
         """打印简洁的欢迎界面。
@@ -3345,6 +3417,7 @@ def start_repl(
     system_prompt: str | None = None,
     config_path: str | None = None,
     optimize: bool = True,
+    verbose: bool = False,
 ) -> None:
     """
     启动 REPL 的便捷入口。
@@ -3355,6 +3428,7 @@ def start_repl(
         system_prompt: 自定义系统提示词。
         config_path: 配置文件路径。
         optimize: 是否启用 prompt 自动优化。
+        verbose: 是否保留启动探测等详细诊断日志。
     """
     registry = ModelRegistry()
 
@@ -3375,7 +3449,12 @@ def start_repl(
         except ValueError as e:
             console.print(f"[yellow]⚠️  {e}[/yellow]")
 
-    repl = REPL(registry=registry, system_prompt=system_prompt, optimize_prompts=optimize)
+    repl = REPL(
+        registry=registry,
+        system_prompt=system_prompt,
+        optimize_prompts=optimize,
+        verbose=verbose,
+    )
     # P0: 打通 --config -> ModelPool。原仅喂 Registry,而 AutoRouter 只认 Pool,
     # 导致 --config 加载的模型形同虚设(池仍空)。复用 ModelPool.from_config。
     if config_path:
