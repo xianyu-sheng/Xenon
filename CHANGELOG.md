@@ -13,6 +13,8 @@
 - Reflection、Plan、ReAct、Novel、组合引擎与 Direct 对话均标注独立调用阶段；上下文 compact、clear、undo 会开启新的缓存代次。
 - 新增 `/cache status`、`/cache explain`、`/cache history`、`/cache doctor`，分别展示当前状态、最近一次证据、跨会话隐私安全历史和确定性诊断。
 - 状态栏使用 cold/warming/n/a/实际命中率语义；`/cost` 与退出报告不再把未提供缓存字段错误显示为 0%。
+- 普通文本、流式与原生工具请求统一经过五层 Prompt Compiler：STATIC、SESSION_STABLE、HISTORY、VOLATILE、CURRENT；编译器保持消息与工具协议语义顺序不变。
+- 工具 schema 和 response format 递归规范化并按工具名稳定排序，注册顺序变化不再制造新的工具前缀；动态 system 内容会进入 `/cache doctor` 告警而不会被静默改写。
 
 ### 缓存前缀稳定性与本地版本一致性
 
@@ -31,7 +33,7 @@
 
 ### 验证
 
-- 离线回归：`1466 passed, 35 deselected`。
+- 离线回归：`1474 passed, 35 deselected`。
 - Ruff、`compileall`、SVG XML 校验、`git diff --check`、wheel 与 sdist 构建通过。
 
 ## [0.7.0] — 2026-07-22

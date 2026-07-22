@@ -25,6 +25,10 @@ from xenon.utils.cache_telemetry import (
     MANIFEST_RESPONSE_KEY,
     build_prompt_manifest,
 )
+from xenon.utils.prompt_compiler import (
+    canonicalize_request_value,
+    compile_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +194,7 @@ def _set_cache_manifest(
     *,
     tools: list[dict[str, Any]] | None = None,
     request_shape: dict[str, Any] | None = None,
+    prompt_layout: dict[str, Any] | None = None,
     cache_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Describe the current request without retaining its original content."""
@@ -198,6 +203,7 @@ def _set_cache_manifest(
         messages,
         tools=tools,
         request_shape=request_shape,
+        prompt_layout=prompt_layout,
         cache_context=cache_context,
     ).as_dict()
     _usage_tl.cache_manifest = manifest
@@ -612,7 +618,14 @@ def chat_completion(
     import time
 
     endpoint = build_endpoint(model_id, credentials, base_url)
-    _set_cache_manifest(model_id, messages, cache_context=cache_context)
+    compiled = compile_prompt(messages)
+    messages = compiled.messages
+    _set_cache_manifest(
+        model_id,
+        messages,
+        cache_context=cache_context,
+        prompt_layout=compiled.layout(),
+    )
     reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
     # B4: 按厂商输出上限钳制 max_tokens，防止 131072 等超限值引发 400 级联失败
     provider_cap = _PROVIDER_DEFAULTS.get(endpoint.provider, {}).get("max_output_tokens")
@@ -1000,6 +1013,11 @@ def chat_completion_with_tools(
     import time
 
     endpoint = build_endpoint(model_id, credentials, base_url)
+    compiled = compile_prompt(messages, tools=tools)
+    messages = compiled.messages
+    tools = compiled.tools
+    response_format = canonicalize_request_value(response_format)
+    tool_choice = canonicalize_request_value(tool_choice)
     _set_cache_manifest(
         model_id,
         messages,
@@ -1009,6 +1027,7 @@ def chat_completion_with_tools(
             "tool_choice": tool_choice,
         },
         cache_context=cache_context,
+        prompt_layout=compiled.layout(),
     )
     reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
     provider_cap = _PROVIDER_DEFAULTS.get(endpoint.provider, {}).get("max_output_tokens")
@@ -1231,7 +1250,14 @@ def chat_completion_stream(
         逐步生成的文本片段（delta）。
     """
     endpoint = build_endpoint(model_id, credentials, base_url)
-    manifest = _set_cache_manifest(model_id, messages, cache_context=cache_context)
+    compiled = compile_prompt(messages)
+    messages = compiled.messages
+    manifest = _set_cache_manifest(
+        model_id,
+        messages,
+        cache_context=cache_context,
+        prompt_layout=compiled.layout(),
+    )
     reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
 
     if endpoint.provider == "anthropic":

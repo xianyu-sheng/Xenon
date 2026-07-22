@@ -502,6 +502,13 @@ class CacheTracker:
             "detail": family_detail,
         })
         latest = events[-1]
+        compiler_warnings = latest.get("compiler_warnings") or []
+        if any(str(item).startswith("dynamic_stable_system:") for item in compiler_warnings):
+            checks.append({
+                "level": "warn",
+                "name": "稳定前缀动态内容",
+                "detail": "固定 system 区检测到日期/时间等动态内容，建议移至当前请求层。",
+            })
         efficiency = latest.get("prefix_efficiency")
         if efficiency is not None:
             checks.append({

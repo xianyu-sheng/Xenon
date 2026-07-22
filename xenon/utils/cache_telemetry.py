@@ -119,6 +119,8 @@ class PromptManifest:
     stable_message_count: int
     estimated_prompt_tokens: int
     expected_cacheable_tokens: int
+    tier_token_estimates: dict[str, int]
+    compiler_warnings: list[str]
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -130,10 +132,12 @@ def build_prompt_manifest(
     *,
     tools: Sequence[Mapping[str, Any]] | None = None,
     request_shape: Mapping[str, Any] | None = None,
+    prompt_layout: Mapping[str, Any] | None = None,
     cache_context: Mapping[str, Any] | None = None,
 ) -> PromptManifest:
     """Build a manifest while keeping all original request text in memory only."""
     context = dict(cache_context or {})
+    layout = dict(prompt_layout or {})
     engine = str(context.get("engine") or "utility").strip().lower()
     phase = str(context.get("phase") or "request").strip().lower()
     project_hash = str(context.get("project_hash") or "")
@@ -175,6 +179,17 @@ def build_prompt_manifest(
         "stable_prefix_hash": stable_hash,
         "tool_schema_hash": tool_hash,
     }
+    try:
+        layout_expected = int(layout.get("expected_cacheable_tokens") or 0)
+    except (TypeError, ValueError):
+        layout_expected = 0
+    try:
+        layout_stable_count = int(layout.get("stable_prefix_messages") or 0)
+    except (TypeError, ValueError):
+        layout_stable_count = 0
+    tier_estimates = layout.get("tier_token_estimates")
+    if not isinstance(tier_estimates, dict):
+        tier_estimates = {}
     return PromptManifest(
         schema_version=_SCHEMA_VERSION,
         session_id=_SESSION_ID,
@@ -190,9 +205,18 @@ def build_prompt_manifest(
         prompt_hash=_opaque_digest(prompt_text),
         tool_schema_hash=tool_hash,
         message_count=len(normalized_messages),
-        stable_message_count=len(stable_messages),
+        stable_message_count=layout_stable_count or len(stable_messages),
         estimated_prompt_tokens=_estimated_tokens(prompt_text),
-        expected_cacheable_tokens=_estimated_tokens(prefix_text),
+        expected_cacheable_tokens=layout_expected or _estimated_tokens(prefix_text),
+        tier_token_estimates={
+            str(key): max(0, int(value))
+            for key, value in tier_estimates.items()
+            if isinstance(value, (int, float))
+        },
+        compiler_warnings=[
+            str(warning) for warning in layout.get("warnings", [])
+            if isinstance(warning, str)
+        ],
     )
 
 
@@ -212,6 +236,7 @@ class CacheEvent:
     context_epoch: int
     stable_prefix_hash: str
     tool_schema_hash: str
+    compiler_warnings: list[str]
     prompt_tokens: int
     completion_tokens: int
     cache_hit_tokens: int
@@ -359,6 +384,10 @@ def build_cache_event(
         context_epoch=max(0, int(data.get("context_epoch") or 0)),
         stable_prefix_hash=str(data.get("stable_prefix_hash") or ""),
         tool_schema_hash=str(data.get("tool_schema_hash") or ""),
+        compiler_warnings=[
+            str(warning) for warning in data.get("compiler_warnings", [])
+            if isinstance(warning, str)
+        ],
         prompt_tokens=prompt,
         completion_tokens=max(0, int(completion_tokens)),
         cache_hit_tokens=hit,
