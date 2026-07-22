@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 import sys
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -145,36 +146,59 @@ class ThinkingPanel:
         self.steps: list[ThinkingStep] = []
         self.errors: list[str] = []
         self.warnings: list[str] = []
-        self._current_step: ThinkingStep | None = None
+        self._pending_thought: str = ""
+        # Native function calling can emit several actions before any of their
+        # observations arrive.  Keep the actions in FIFO order so an
+        # observation is never attached to the next/previous tool by mistake.
+        self._awaiting_observations: deque[ThinkingStep] = deque()
 
     def add_thought(self, thought: str) -> None:
-        """记录一次思考。如果当前没有活跃步骤，创建新步骤。"""
-        if self._current_step is None:
-            self._current_step = ThinkingStep()
-        self._current_step.thought = thought
+        """记录本轮思考，附着到随后发出的第一个工具调用。"""
+        self._pending_thought = thought
 
     def add_action(self, action: str, action_input: dict) -> None:
-        """记录一次工具调用。"""
-        if self._current_step is None:
-            self._current_step = ThinkingStep()
-        self._current_step.action = action
-        self._current_step.action_input = action_input
+        """记录一次工具调用，并等待对应 observation。"""
+        step = ThinkingStep(
+            thought=self._pending_thought,
+            action=action,
+            action_input=action_input,
+        )
+        self._pending_thought = ""
+        self.steps.append(step)
+        self._awaiting_observations.append(step)
 
-    def add_observation(self, observation: str) -> None:
+    def add_observation(self, observation: str) -> ThinkingStep:
         """记录一次观察结果，并完成当前步骤。
 
         v0.6.1: 自动检测 observation 中的错误关键词，设置 is_error 标记。
         """
-        if self._current_step is None:
-            self._current_step = ThinkingStep()
-        self._current_step.observation = observation
+        if self._awaiting_observations:
+            step = self._awaiting_observations.popleft()
+        else:
+            # Engines may emit a synthetic observation (for example a budget
+            # rejection) without a preceding action. Preserve it as its own
+            # step instead of corrupting another tool's trace.
+            step = ThinkingStep(thought=self._pending_thought)
+            self._pending_thought = ""
+            self.steps.append(step)
+        step.observation = observation
         # 自动检测错误
         obs_lower = observation.lower()
-        self._current_step.is_error = any(
+        step.is_error = any(
             kw.lower() in obs_lower for kw in self._ERROR_KEYWORDS
         )
-        self.steps.append(self._current_step)
-        self._current_step = None
+        return step
+
+    def finalize(self) -> None:
+        """保留没有工具调用的最后一段纯思考。"""
+        if self._pending_thought:
+            self.steps.append(ThinkingStep(thought=self._pending_thought))
+            self._pending_thought = ""
+
+    @property
+    def _current_step(self) -> ThinkingStep | None:
+        """Backward-compatible view of the newest unfinished action."""
+        return self._awaiting_observations[-1] if self._awaiting_observations else None
 
     def add_error(self, error: str) -> None:
         self.errors.append(error)
@@ -188,7 +212,12 @@ class ThinkingPanel:
 
     @property
     def is_empty(self) -> bool:
-        return len(self.steps) == 0 and len(self.errors) == 0 and len(self.warnings) == 0
+        return (
+            len(self.steps) == 0
+            and not self._pending_thought
+            and len(self.errors) == 0
+            and len(self.warnings) == 0
+        )
 
     def __rich_console__(self, console, options):
         """Rich 协议：渲染思考面板 — 摘要行 + 折叠详情。"""
@@ -344,7 +373,7 @@ class ConsoleCallback(EngineCallback):
             self._update_activity(f"⠿ exploring  {action}{suffix}  ·  Ctrl+O details")
 
     def on_observe(self, observation: str) -> None:
-        self._panel.add_observation(observation)
+        step = self._panel.add_observation(observation)
         brief = self._brief_observation(observation)
         if self.verbose and brief:
             # 根据内容判断成功/失败
@@ -357,7 +386,7 @@ class ConsoleCallback(EngineCallback):
             obs_preview = observation[:300].replace("\n", " ")
             print(f"  [dim]👀 {obs_preview}[/dim]")
         else:
-            marker = "✗" if self._panel.steps[-1].is_error else "✓"
+            marker = "✗" if step.is_error else "✓"
             self._update_activity(f"{marker} explored  {self._tool_seq} tool call(s)  ·  Ctrl+O details")
 
     def on_step(self, step_id: int, total: int, task: str) -> None:
@@ -400,6 +429,7 @@ class ConsoleCallback(EngineCallback):
 
     def get_thinking_panel(self) -> ThinkingPanel | None:
         """获取思考面板，如果没有内容返回 None。"""
+        self._panel.finalize()
         if self._panel.is_empty:
             return None
         return self._panel

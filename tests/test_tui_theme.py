@@ -6,6 +6,7 @@ import io
 import os
 
 from rich.console import Console
+from prompt_toolkit.keys import Keys
 
 from xenon.repl.context_manager import ContextManager
 from xenon.repl.model_registry import ModelRegistry
@@ -45,6 +46,42 @@ def test_prompt_keeps_rule_with_input_and_status_at_screen_bottom():
 
     buffer_window = main_stack.children[1].content
     assert buffer_window.height() == 1
+
+
+def test_ctrl_o_suspends_prompt_toolkit_before_rendering(monkeypatch):
+    repl = REPL()
+    calls = []
+
+    def fake_run_in_terminal(callback):
+        calls.append(callback)
+
+    monkeypatch.setattr("xenon.repl.repl.run_in_terminal", fake_run_in_terminal)
+    binding = next(
+        item
+        for item in repl._pt_session.key_bindings.bindings
+        if item.keys == (Keys.ControlO,)
+    )
+    binding.handler(object())
+
+    assert calls == [repl._toggle_thinking_details]
+
+
+def test_shift_tab_suspends_prompt_toolkit_before_printing(monkeypatch):
+    repl = REPL()
+    calls = []
+
+    monkeypatch.setattr(
+        "xenon.repl.repl.run_in_terminal",
+        lambda callback: calls.append(callback),
+    )
+    binding = next(
+        item
+        for item in repl._pt_session.key_bindings.bindings
+        if item.keys == (Keys.BackTab,)
+    )
+    binding.handler(object())
+
+    assert calls == [repl._handle_shift_tab]
 
 
 def test_toolbar_promotes_compaction_warning():

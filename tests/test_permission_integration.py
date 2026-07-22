@@ -20,6 +20,31 @@ def test_default_gate_fails_closed_without_confirmation_callback():
     assert "需要确认" in reason
 
 
+def test_command_confirmation_displays_normalized_action_and_escapes_markup():
+    message = PermissionGate.format_confirm_message(
+        "command",
+        {"action": "find /tmp -name '[abc]*'"},
+        "CRITICAL",
+    )
+
+    assert "find /tmp" in message
+    assert "命令: ?" not in message
+    assert r"\[abc]" in message
+    assert "本会话允许相同操作" in message
+
+
+def test_critical_exact_approval_does_not_allow_a_different_command():
+    gate = PermissionGate(PermissionMode.DEFAULT)
+    first = {"action": "find /tmp -type f"}
+    second = {"action": "touch /tmp/new-file"}
+    gate.allow_exact("command", first)
+
+    assert gate.check("command", first) == (True, "")
+    allowed, reason = gate.check("command", second)
+    assert allowed is False
+    assert "需要确认" in reason
+
+
 def test_plan_mode_denies_all_mutating_tools_without_prompt():
     gate = PermissionGate(PermissionMode.PLAN)
 

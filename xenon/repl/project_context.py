@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 from pathlib import Path
 
 
@@ -75,13 +76,17 @@ _EXCLUDE_FILES = {
 class ProjectContext:
     """项目上下文感知器。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, global_config_root: Path | None = None) -> None:
         self.root: Path | None = None
+        self.working_dir: Path | None = None
         self.project_type: str = "unknown"
         self.rules: str = ""
+        self.rule_sources: list[str] = []
         self.file_tree: str = ""
         self.key_files: dict[str, str] = {}
         self._initialized: bool = False
+        config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        self._global_config_root = global_config_root or (config_home / "xenon")
         # §8.9.5：关键文件 mtime 缓存——refresh 时 mtime 未变的文件复用已读内容，
         # 避免每次 refresh 重读整批关键文件。
         self._key_file_mtimes: dict[str, float] = {}
@@ -99,6 +104,9 @@ class ProjectContext:
         dotfiles 仓库，不当项目根。
         """
         search = start_dir or Path.cwd()
+        if search.is_file():
+            search = search.parent
+        self.working_dir = search.resolve()
         home = Path(os.path.expanduser("~")).resolve()
         max_levels = 5
 
@@ -158,21 +166,117 @@ class ProjectContext:
         self._load_key_files()
 
     def _load_rules(self) -> None:
-        """加载 .xenon/rules.md。"""
+        """Load layered Xenon instructions and root-bounded ``@path`` imports.
+
+        Precedence is global → project/shared → legacy → project/local.  AGENTS.md
+        is a fallback only when XENON.md is absent at the project scope.
+        """
+        self.rules = ""
+        self.rule_sources = []
         if not self.root:
             return
-        rules_path = self.root / ".xenon" / "rules.md"
-        if rules_path.exists():
-            for enc in ("utf-8", "utf-8-sig", "gbk", "latin-1"):
-                try:
-                    content = rules_path.read_text(encoding=enc).strip()
-                    if content:
-                        self.rules = content[:3000]
-                        return
-                except (UnicodeDecodeError, UnicodeError):
-                    continue
-                except Exception:
-                    return
+
+        global_path = self._global_config_root / "XENON.md"
+        project_path = self._primary_instruction(self.root)
+        candidates: list[tuple[Path, Path]] = [
+            (global_path, self._global_config_root),
+            (project_path, self.root),
+            (self.root / ".xenon" / "rules.md", self.root),
+            (self.root / "XENON.local.md", self.root),
+        ]
+        # Like Claude-style hierarchical instructions, directory-specific files
+        # override broader project rules as the working directory gets deeper.
+        work_dir = self.working_dir or self.root
+        try:
+            relative = work_dir.resolve().relative_to(self.root.resolve())
+            current = self.root
+            for component in relative.parts:
+                current = current / component
+                candidates.extend([
+                    (self._primary_instruction(current), self.root),
+                    (current / "XENON.local.md", self.root),
+                ])
+        except (OSError, ValueError):
+            pass
+        sections: list[str] = []
+        for path, allowed_root in candidates:
+            content = self._load_instruction_tree(
+                path,
+                allowed_root=allowed_root,
+                visited=set(),
+                depth=0,
+            ).strip()
+            if not content:
+                continue
+            self.rule_sources.append(str(path))
+            sections.append(f"<!-- source: {path} -->\n{content}")
+        self.rules = "\n\n".join(sections)[:3000]
+
+    @staticmethod
+    def _primary_instruction(directory: Path) -> Path:
+        xenon_path = directory / "XENON.md"
+        return xenon_path if xenon_path.exists() else directory / "AGENTS.md"
+
+    def _load_instruction_tree(
+        self,
+        path: Path,
+        *,
+        allowed_root: Path,
+        visited: set[Path],
+        depth: int,
+    ) -> str:
+        """Read an instruction file with cycle, depth, size, and path guards."""
+        if depth > 5:
+            return ""
+        try:
+            resolved_root = allowed_root.resolve()
+            resolved = path.resolve()
+            if not resolved.is_relative_to(resolved_root):
+                return ""
+            if resolved in visited or not resolved.is_file():
+                return ""
+            if resolved.stat().st_size > 24_000:
+                return ""
+        except (OSError, RuntimeError):
+            return ""
+
+        content = ""
+        for encoding in ("utf-8", "utf-8-sig", "gbk", "latin-1"):
+            try:
+                content = resolved.read_text(encoding=encoding)
+                break
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+            except OSError:
+                return ""
+        if not content:
+            return ""
+
+        visited.add(resolved)
+        output: list[str] = []
+        for line in content[:12_000].splitlines():
+            match = re.match(r"^\s*@(?P<path>[^\s]+)\s*$", line)
+            if not match:
+                output.append(line)
+                continue
+            raw_import = match.group("path").strip("<>\"'")
+            imported_path = Path(raw_import)
+            if not imported_path.is_absolute():
+                imported_path = resolved.parent / imported_path
+            imported = self._load_instruction_tree(
+                imported_path,
+                allowed_root=resolved_root,
+                visited=visited,
+                depth=depth + 1,
+            )
+            if imported:
+                output.extend([
+                    f"<!-- imported: {raw_import} -->",
+                    imported,
+                    f"<!-- end import: {raw_import} -->",
+                ])
+        visited.remove(resolved)
+        return "\n".join(output)[:12_000]
 
     def _build_file_tree(self, max_depth: int = 3) -> None:
         """构建精简的文件树。"""
@@ -317,7 +421,7 @@ class ProjectContext:
         lines = [
             f"项目类型: {_TYPE_DISPLAY.get(self.project_type, self.project_type)}",
             f"根目录: {self.root}",
-            f"规则文件: {'有' if self.rules else '无 (.xenon/rules.md)'}",
+            f"规则文件: {', '.join(self.rule_sources) if self.rule_sources else '无'}",
             f"文件树: {len(self.file_tree.splitlines())} 项",
             f"关键配置: {', '.join(self.key_files.keys()) if self.key_files else '无'}",
         ]

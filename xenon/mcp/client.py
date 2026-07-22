@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from xenon import __version__
 from xenon.mcp.transport import MCPTransport, StdioTransport, SSETransport
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ class MCPClient:
             },
             "clientInfo": {
                 "name": self.name,
-                "version": "0.1.0",
+                "version": __version__,
             },
         })
 

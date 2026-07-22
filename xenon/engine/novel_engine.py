@@ -310,6 +310,7 @@ class NovelEngine(BaseEngine):
         memory_message = self._working_memory_message()
         if memory_message is not None:
             messages.append(memory_message)
+        messages.extend(self._context_messages())
 
         # 注入项目上下文（这是核心 — AI 的完整创作记忆）
         project_ctx = project.get_all_context()

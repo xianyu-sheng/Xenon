@@ -119,6 +119,22 @@ class TestConsoleCallback:
         captured = capsys.readouterr()
         assert captured.out == ""
 
+    def test_parallel_actions_keep_their_own_observations(self):
+        cb = ConsoleCallback(verbose=False)
+        cb.on_think("并行检查日期和天气")
+        cb.on_act("datetime", {})
+        cb.on_act("weather", {"city": "苏州"})
+
+        cb.on_observe("[datetime] 2026-07-22")
+        cb.on_observe("[weather] 晴，31°C")
+
+        panel = cb.get_thinking_panel()
+        assert panel is not None
+        assert panel.tool_call_count == 2
+        assert [step.action for step in panel.steps] == ["datetime", "weather"]
+        assert panel.steps[0].observation.startswith("[datetime]")
+        assert panel.steps[1].observation.startswith("[weather]")
+
     def test_step_hidden_non_verbose(self, capsys):
         cb = ConsoleCallback()
         cb.on_step(1, 3, "创建文件")

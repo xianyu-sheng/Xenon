@@ -66,7 +66,11 @@ class MemoryStore:
             "count": len(self.memories),
             "memories": [asdict(m) for m in self.memories],
         }
-        atomic_write_text(self.path, json.dumps(data, ensure_ascii=False, indent=2))  # A9 原子写
+        atomic_write_text(
+            self.path,
+            json.dumps(data, ensure_ascii=False, indent=2),
+            mode=0o600,
+        )  # A9 原子写；记忆可能含个人信息，固定为仅用户可读写
         logger.info(f"保存了 {len(self.memories)} 条记忆")
 
     def add(
@@ -109,12 +113,12 @@ class MemoryStore:
                     score += 1
 
             if score > 0:
-                m.last_accessed = datetime.now().isoformat()
-                m.access_count += 1
                 results.append((score, m))
 
         results.sort(key=lambda x: (-x[0], -x[1].access_count))
-        return [m for _, m in results[:limit]]
+        selected = [m for _, m in results[:limit]]
+        self._touch(selected)
+        return selected
 
     def get_relevant(self, context_text: str, limit: int = 5) -> list[Memory]:
         """根据上下文文本获取相关记忆。"""
@@ -150,8 +154,20 @@ class MemoryStore:
             if score > 0:
                 scored.append((score, m))
 
-        scored.sort(key=lambda x: -x[0])
-        return [m for _, m in scored[:limit]]
+        scored.sort(key=lambda x: (-x[0], -x[1].access_count))
+        selected = [m for _, m in scored[:limit]]
+        self._touch(selected)
+        return selected
+
+    def _touch(self, memories: list[Memory]) -> None:
+        """Persist retrieval metadata for LFU eviction across processes."""
+        if not memories:
+            return
+        now = datetime.now().isoformat()
+        for memory in memories:
+            memory.last_accessed = now
+            memory.access_count += 1
+        self._save()
 
     def list_all(self, type_filter: str | None = None) -> list[Memory]:
         """列出所有记忆。"""

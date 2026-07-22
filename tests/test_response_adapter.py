@@ -30,6 +30,33 @@ class TestExtractJson:
     def test_malformed_json(self):
         assert _extract_json("{broken json") is None
 
+    def test_deepseek_dsml_parallel_tool_calls(self):
+        text = (
+            '<｜｜DSML｜｜tool_calls>'
+            '<｜｜DSML｜｜invoke name="read_file">'
+            '<｜｜DSML｜｜parameter name="file_path" string="true">'
+            '/work/internal/provider'
+            '</｜｜DSML｜｜parameter>'
+            '</｜｜DSML｜｜invoke>'
+            '<｜｜DSML｜｜invoke name="read_file">'
+            '<｜｜DSML｜｜parameter name="file_path" string="true">'
+            '/work/internal/tool'
+            '</｜｜DSML｜｜parameter>'
+            '</｜｜DSML｜｜invoke>'
+            '</｜｜DSML｜｜tool_calls>'
+        )
+
+        assert _extract_json(text) == [
+            {
+                "action": "read_file",
+                "action_input": {"file_path": "/work/internal/provider"},
+            },
+            {
+                "action": "read_file",
+                "action_input": {"file_path": "/work/internal/tool"},
+            },
+        ]
+
 
 # ── parse_plan ─────────────────────────────────────────────────
 class TestParsePlan:

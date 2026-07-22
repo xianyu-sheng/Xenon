@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 # ── prompt_toolkit（可选依赖，不可用时回退自建输入）────────────
 try:
     from prompt_toolkit import PromptSession
+    from prompt_toolkit.application import run_in_terminal
     from prompt_toolkit.history import FileHistory
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.styles import Style
@@ -56,6 +57,7 @@ except ImportError:
     KeyBindings = None  # type: ignore
     Style = None  # type: ignore
     HTML = None  # type: ignore
+    run_in_terminal = None  # type: ignore
 
 # ── 自定义主题 ────────────────────────────────────────────
 _theme = Theme({
@@ -105,6 +107,9 @@ class REPL:
         # 项目上下文
         self.project_ctx = ProjectContext()
         self._project_injected = False
+        self._memory_service: Any = None
+        self._memory_detector: Any = None
+        self._pending_memory_use_ids: list[str] = []
 
         # 多小说管理器
         from xenon.engine.novel_manager import NovelManager
@@ -179,9 +184,12 @@ class REPL:
 
         @kb.add("s-tab")
         def _(event):
-            self._handle_shift_tab()
-            if hasattr(event, 'app'):
-                event.app.invalidate()
+            # Like Ctrl+O, the mode notification writes to stdout. Suspend the
+            # active prompt first so the fixed toolbar is not overwritten.
+            if run_in_terminal is not None:
+                run_in_terminal(self._handle_shift_tab)
+            else:
+                self._handle_shift_tab()
 
         @kb.add("escape", "enter", eager=True)
         def _(event):
@@ -194,33 +202,14 @@ class REPL:
             折叠 → 展开：重新打印模式行、捕获的日志、推理面板。
             展开 → 折叠：重新打印折叠摘要行。
             """
-            self._show_thinking = not self._show_thinking
-            console.print()
-            if self._show_thinking:
-                # ── 展开：重现完整执行过程 ──
-                if self._last_mode_line:
-                    console.print(f"[dim]{self._last_mode_line}[/dim]")
-                if self._captured_log:
-                    console.print(Text(self._captured_log.rstrip(), style="dim"))  # Ctrl+O 展开时
-                if self._last_thinking_panel is not None:
-                    console.print(self._last_thinking_panel)
-                console.print("[dim]  💭 思考过程已展开  [Ctrl+O 折叠][/dim]")
-            else:
-                # ── 折叠：仅一条摘要行 ──
-                panel = self._last_thinking_panel
-                if panel is not None:
-                    parts = []
-                    if panel.steps:
-                        parts.append(f"{len(panel.steps)} 次迭代")
-                    if panel.tool_call_count:
-                        parts.append(f"{panel.tool_call_count} 次工具调用")
-                    summary = " · ".join(parts) if parts else "无工具调用"
-                else:
-                    summary = "无推理步骤"
-                console.print(f"[dim]  💭 思考过程 · {summary}  [Ctrl+O][/dim]")
-            console.print()
-            if hasattr(event, 'app'):
-                event.app.invalidate()
+            # prompt_toolkit owns the terminal while input is active. Writing
+            # through Rich directly from this callback corrupts its input
+            # area/bottom toolbar. run_in_terminal temporarily erases the
+            # application, prints above it, then redraws it coherently.
+            if run_in_terminal is not None:
+                run_in_terminal(self._toggle_thinking_details)
+            else:  # defensive fallback for unusual prompt_toolkit versions
+                self._toggle_thinking_details()
 
         style = Style.from_dict({
             # 输入区借鉴 Claude Code / pi 的轻量层次：线条定界，避免整块底色。
@@ -257,6 +246,40 @@ class REPL:
             except Exception:
                 logger.debug("prompt_toolkit 初始化失败，回退自建输入", exc_info=True)
                 self._pt_session = None
+
+    def _toggle_thinking_details(self) -> None:
+        """Render the last execution trace while prompt_toolkit is suspended."""
+        if (
+            self._last_thinking_panel is None
+            and not self._captured_log
+            and not self._last_mode_line
+        ):
+            console.print("\n[dim]· 暂无可展开的执行详情[/dim]\n")
+            return
+
+        self._show_thinking = not self._show_thinking
+        console.print()
+        if self._show_thinking:
+            if self._last_mode_line:
+                console.print(f"[dim]{self._last_mode_line}[/dim]")
+            if self._captured_log:
+                console.print(Text(self._captured_log.rstrip(), style="dim"))
+            if self._last_thinking_panel is not None:
+                console.print(self._last_thinking_panel)
+            console.print("[dim]  💭 思考过程已展开  [Ctrl+O 折叠][/dim]")
+        else:
+            panel = self._last_thinking_panel
+            if panel is not None:
+                parts = []
+                if panel.steps:
+                    parts.append(f"{len(panel.steps)} 次迭代")
+                if panel.tool_call_count:
+                    parts.append(f"{panel.tool_call_count} 次工具调用")
+                summary = " · ".join(parts) if parts else "无工具调用"
+            else:
+                summary = "无推理步骤"
+            console.print(f"[dim]  💭 思考过程 · {summary}  [Ctrl+O][/dim]")
+        console.print()
 
     def _install_input_lower_rule(self) -> None:
         """让下边界紧贴输入区，同时保留固定在屏幕底端的状态栏。"""
@@ -335,9 +358,10 @@ class REPL:
             return True, ""
         elif choice == "a":
             if risk == "CRITICAL":
-                # 对 Shell/MCP/危险 Git 只批准当前这一次，不能把未来参数完全
-                # 不同的调用一起放行。
-                console.print("[dim]· CRITICAL 操作仅批准本次，不记忆永久允许[/dim]")
+                # 不按工具名放行任意未来 Shell/MCP/Git 操作，只记忆参数完全
+                # 相同的操作，既兑现 UI 文案又不扩大授权范围。
+                self._permission_gate.allow_exact(tool_name, params)
+                console.print("[dim]· 本会话将自动允许参数相同的操作[/dim]")
                 return True, ""
             self._permission_gate.allow_always(tool_name)
             return True, ""
@@ -1804,6 +1828,13 @@ class REPL:
         if not user_input or not user_input.strip():
             console.print("[dim]· 空输入已忽略[/dim]")
             return
+
+        # Resolve the project before a memory command so the default
+        # project-local destination is deterministic and visible in its receipt.
+        self._inject_project_context()
+        if self._handle_explicit_memory_request(user_input):
+            return
+
         # R4: 按激活模型上下文窗口校准 token 阈值（须在 needs_compact 之前）
         self._sync_context_window(self.auto_router.route(user_input, count=3))
         # 自动 compact 检查
@@ -1824,6 +1855,8 @@ class REPL:
         # query 意图（天气/价格/汇率/新闻等实时数据）必然需要工具，direct 模式不向 API
         # 传工具，须路由到 ReAct（见 _detect_tool_need）。
         intent = self._detect_intent(user_input)
+        # 单轮优化提示是可替换上下文，不应作为永久 system turn 每轮累积。
+        self.ctx_mgr.set_context_message("prompt_hint", None)
         if self.optimize_prompts:
             optimized, system_hint, was_optimized = optimize_prompt(user_input)
             console.print(f"[dim]🎯 意图: {get_intent_display(intent)}[/dim]")
@@ -1832,12 +1865,16 @@ class REPL:
                 # 展示优化后的 prompt，帮助用户学习
                 self._render_secondary_text("📝 优化后的 Prompt（供学习参考）", optimized)
                 if system_hint:
-                    self.ctx_mgr.add_system_message(f"[指令上下文] {system_hint}")
+                    self.ctx_mgr.set_context_message(
+                        "prompt_hint", f"[指令上下文] {system_hint}"
+                    )
             elif intent is not None:
                 # 有明确任务意图，但提示词质量已足够好
                 console.print("[dim]✅ 提示词质量良好，无需优化[/dim]")
                 if system_hint:
-                    self.ctx_mgr.add_system_message(f"[指令上下文] {system_hint}")
+                    self.ctx_mgr.set_context_message(
+                        "prompt_hint", f"[指令上下文] {system_hint}"
+                    )
             else:
                 # 通用对话，无明确任务意图
                 console.print("[dim]💬 通用对话[/dim]")
@@ -1923,6 +1960,16 @@ class REPL:
                 self.ctx_mgr.trim_last_user()
             console.print("\n[dim]· 已中断，返回提示符[/dim]")
 
+        # ``use_count`` means a memory reached a successfully completed answer,
+        # not merely that retrieval considered it. This keeps retention metrics
+        # honest and separate from ``retrieval_count``.
+        self._commit_memory_usage()
+
+        # A suggestion is shown after the answer, at most once per turn.  It is
+        # deliberately independent from XENON_ASSUME_YES: test/automation flags
+        # must never become consent for long-term memory.
+        self._maybe_suggest_memory(user_input)
+
     def _run_direct(self, user_input: str, model_ids: list[str], intent: str | None = None) -> None:
         """直接对话模式。自动检测工具需求并委派给 ReAct 引擎。
 
@@ -1949,7 +1996,18 @@ class REPL:
             self._run_react_engine(user_input, model_ids)
             return
 
-        messages = self.ctx_mgr.get_messages(include_working_memory=True)
+        # Direct calls also produce httpx/provider logs. Capture them while the
+        # spinner is active so they cannot overwrite the Live render; Ctrl+O
+        # can still reveal the captured diagnostics afterwards.
+        self._last_mode_line = "· Direct 对话"
+        self._last_thinking_panel = None
+        self._captured_log = ""
+        direct_log_chunks: list[str] = []
+
+        messages = self.ctx_mgr.get_messages(
+            include_working_memory=True,
+            include_context_messages=True,
+        )
 
         # v0.5.2: 过滤本会话已失败的模型，避免每次对话都重试不可用模型
         effective_ids = [m for m in model_ids if m not in self._failed_models]
@@ -1971,18 +2029,28 @@ class REPL:
                 and pool_entry.health.circuit_open_until <= started_at
             )
             try:
-                if self.streaming:
-                    response_text = self._stream_response(model_id, messages)
-                else:
-                    response_text = self._blocking_response(model_id, messages)
+                self._start_log_capture()
+                try:
+                    if self.streaming:
+                        response_text = self._stream_response(model_id, messages)
+                    else:
+                        response_text = self._blocking_response(model_id, messages)
+                finally:
+                    captured = self._stop_log_capture()
+                    if captured:
+                        direct_log_chunks.append(captured)
+                    self._captured_log = "\n".join(direct_log_chunks)
                 self.status_bar.set_last_model(model_id)
                 self.model_pool.record_success(
                     model_id,
                     time.monotonic() - started_at,
                 )
 
+                if not response_text or not response_text.strip():
+                    raise RuntimeError(f"模型 {model_id} 返回空响应")
+
                 if response_text:
-                    # ── 响应后验证 1：检测 LLM 直接输出工具调用 JSON ──
+                    # ── 响应后验证 1：检测 LLM 直接输出工具调用协议 ──
                     # v0.6.1: direct 模式不传工具定义，但 LLM 训练数据中常含
                     # {"tool": "list_files", ...} 格式。检测到后自动切 ReAct。
                     if self._detect_tool_call_json(response_text):
@@ -1991,7 +2059,6 @@ class REPL:
                             "[dim cyan]🔧 检测到 LLM 尝试调用工具但 direct 模式不可用，"
                             "自动切换到 ReAct 模式执行...[/dim cyan]"
                         )
-                        self.ctx_mgr.trim_last_assistant()
                         try:
                             self._run_react_engine(user_input, model_ids)
                         except Exception as e:
@@ -2009,7 +2076,6 @@ class REPL:
                     if self._detect_file_claim(response_text):
                         console.print()
                         console.print("[dim cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，自动切换到 ReAct 模式重新执行...[/dim cyan]")
-                        self.ctx_mgr.trim_last_assistant()
                         # P2-修复6 (观察项-1)：防御性 catch ——
                         # _run_react_engine 内部已加占位（修复5），但万一占位也失败
                         # （如 ctx_mgr 内部异常），这里再兜底一次防 user-only 序列。
@@ -2029,7 +2095,6 @@ class REPL:
                     if self._detect_denial(response_text):
                         console.print()
                         console.print("[dim]· LLM 无法完成任务 → ReAct 模式重试[/dim]")
-                        self.ctx_mgr.trim_last_assistant()
                         # P2-修复6 (观察项-1)：与 file_claim 同根问题，同样防御性 catch
                         try:
                             self._run_react_engine(user_input, model_ids)
@@ -2043,6 +2108,10 @@ class REPL:
                                 pass
                         return
 
+                # 验证完成后再持久化和渲染，避免把 DSML/JSON 伪工具调用
+                # 短暂显示给用户后才切 ReAct。
+                self.ctx_mgr.add_assistant_message(response_text, model_used=model_id)
+                self._render_assistant_text(response_text, model_id=model_id)
                 return
             except Exception as e:
                 last_error = e
@@ -2418,7 +2487,7 @@ class REPL:
                 self._captured_log = self._stop_log_capture()
 
     def _stream_response(self, model_id: str, messages: list[dict[str, str]]) -> str:
-        """流式输出模型回复，完成后 Markdown 渲染。返回完整响应文本。"""
+        """Collect a streamed reply for validation before rendering it."""
         from xenon.utils.llm_client import chat_completion_stream
         from rich.live import Live
         from rich.spinner import Spinner
@@ -2445,15 +2514,10 @@ class REPL:
 
         response_text = "".join(full_response)
 
-        # 流式完成后，无边框渲染最终结果
-        if response_text.strip():
-            self._render_assistant_text(response_text, model_id=model_id)
-
-        self.ctx_mgr.add_assistant_message(response_text, model_used=model_id)
         return response_text
 
     def _blocking_response(self, model_id: str, messages: list[dict[str, str]]) -> str:
-        """阻塞式输出模型回复。返回响应文本。"""
+        """Fetch a blocking reply for validation before rendering it."""
         from xenon.utils.llm_client import chat_completion
 
         console.print(f"[dim]· 调用 {model_id}…[/dim]")
@@ -2463,9 +2527,6 @@ class REPL:
             request_options["reasoning_effort"] = model_config.reasoning_effort
         response = chat_completion(model_id, messages, **request_options)
 
-        self.ctx_mgr.add_assistant_message(response, model_used=model_id)
-
-        self._render_assistant_text(response, model_id=model_id)
         return response
 
     @staticmethod
@@ -2676,11 +2737,11 @@ class REPL:
 
     @classmethod
     def _detect_tool_call_json(cls, text: str) -> bool:
-        """检测 LLM 响应中是否包含未执行的工具调用 JSON 或 XML。
+        """检测 LLM 响应中是否包含未执行的工具调用 JSON/XML/DSML。
 
         direct 模式下 LLM 有时会输出 {"tool": "...", "arguments": {...}}
         或 {"action": "...", "action_input": {...}} 格式的工具调用，
-        或 DeepSeek 旧版模型的 <uses_legacy_tools> XML 格式。
+        或 DeepSeek 的 DSML / 旧版 <uses_legacy_tools> XML 格式。
         因为 direct 模式不传工具定义，这些调用从未被执行。
         """
         if not text or len(text) < 20:
@@ -2696,8 +2757,19 @@ class REPL:
         for pattern in patterns:
             if _re.search(pattern, text, _re.IGNORECASE):
                 return True
-        # v0.6.3: XML 格式（DeepSeek 旧版模型）
+        # v0.7.0: XML 格式（DeepSeek 旧版模型）
         if _re.search(r'<uses_legacy_tools>|<tool_calls>|<tool_call\s+name=', text, _re.IGNORECASE):
+            return True
+        # DeepSeek V4 may serialize tool calls into the content field using
+        # full-width bars instead of returning OpenAI ``message.tool_calls``.
+        normalized = text.replace("｜", "|")
+        has_dsml_block = _re.search(
+            r'<\|\|DSML\|\|tool_calls\b', normalized, _re.IGNORECASE
+        )
+        has_dsml_invoke = _re.search(
+            r'<\|\|DSML\|\|invoke\s+name=', normalized, _re.IGNORECASE
+        )
+        if has_dsml_block and has_dsml_invoke:
             return True
         return False
 
@@ -2722,23 +2794,261 @@ class REPL:
             self.project_ctx.detect()
             ctx_text = self.project_ctx.format_for_context()
             if ctx_text:
-                self.ctx_mgr.add_system_message(ctx_text)
+                self.ctx_mgr.set_context_message("project", ctx_text)
                 logger.debug(f"注入项目上下文: {self.project_ctx.project_type}")
         except Exception as e:
             logger.debug(f"项目上下文检测失败: {e}")
 
     def _inject_memories(self, user_input: str) -> None:
-        """将相关记忆注入上下文。"""
+        """Inject bounded v2 memories and keep the v1 store as read compatibility."""
+        blocks: list[str] = []
+        self._pending_memory_use_ids = []
+        try:
+            service = self._get_memory_service()
+            context_window = getattr(self.ctx_mgr, "max_tokens", None)
+            retrieval_budget = service.policy.max_context_tokens
+            if context_window:
+                retrieval_budget = min(
+                    retrieval_budget, max(1, int(context_window * 0.08))
+                )
+            relevant = service.retrieve(
+                user_input,
+                limit=5,
+                token_budget=retrieval_budget,
+            )
+            memory_text = service.format_for_context(
+                relevant,
+                context_window=context_window,
+            )
+            if memory_text:
+                blocks.append(memory_text)
+                self._pending_memory_use_ids = [
+                    record.id for record in relevant if f"id={record.id}" in memory_text
+                ]
+                logger.debug(
+                    f"注入 {len(self._pending_memory_use_ids)} 条 v2 相关记忆"
+                )
+        except Exception as exc:
+            logger.debug(f"v2 记忆检索失败: {exc}")
+
         try:
             from xenon.repl.memory import MemoryStore
             store = MemoryStore()
             relevant = store.get_relevant(user_input, limit=3)
             if relevant:
                 memory_text = store.format_for_context(relevant)
-                self.ctx_mgr.add_system_message(memory_text)
-                logger.debug(f"注入 {len(relevant)} 条相关记忆")
-        except Exception:
-            pass  # 记忆注入失败不影响对话
+                blocks.append(memory_text)
+                logger.debug(f"注入 {len(relevant)} 条旧版相关记忆")
+        except Exception as exc:
+            logger.debug(f"旧版记忆检索失败: {exc}")
+
+        # 失败或无命中时不能沿用上一轮不相关的检索结果。
+        self.ctx_mgr.set_context_message(
+            "long_term_memory",
+            "\n\n".join(blocks) if blocks else None,
+        )
+
+    def _commit_memory_usage(self) -> None:
+        """Persist successful context use after the answer has been recorded."""
+        memory_ids = list(getattr(self, "_pending_memory_use_ids", []))
+        self._pending_memory_use_ids = []
+        if not memory_ids:
+            return
+        history = getattr(self.ctx_mgr, "history", [])
+        last_user = max(
+            (index for index, turn in enumerate(history) if turn.role == "user"),
+            default=-1,
+        )
+        answer = next(
+            (
+                str(turn.content).strip()
+                for turn in reversed(history[last_user + 1:])
+                if turn.role == "assistant"
+            ),
+            "",
+        )
+        if not answer or answer.startswith(("[错误]", "[已中断]")):
+            return
+        try:
+            self._get_memory_service().mark_used(memory_ids)
+        except Exception as exc:
+            logger.debug(f"记忆使用计数写入失败: {exc}")
+
+    def _get_memory_service(self):
+        """Create the v2 service lazily after project detection."""
+        if self._memory_service is not None:
+            return self._memory_service
+        from xenon.memory import MemoryBackendRegistry, MemoryService
+
+        if not self.project_ctx._initialized:
+            self.project_ctx.detect()
+        project_root = self.project_ctx.root or Path.cwd()
+        self._memory_service = MemoryService(MemoryBackendRegistry(project_root))
+        self._session_state["memory_service"] = self._memory_service
+        return self._memory_service
+
+    def _get_memory_detector(self):
+        if self._memory_detector is None:
+            from xenon.memory import MemoryCandidateDetector
+
+            self._memory_detector = MemoryCandidateDetector()
+        return self._memory_detector
+
+    def _handle_explicit_memory_request(self, user_input: str) -> bool:
+        """Persist an unambiguous user request immediately and print a receipt."""
+        detector = self._get_memory_detector()
+        proposal = detector.parse_reference(user_input)
+        if proposal is not None:
+            proposal.content = self._resolve_memory_reference()
+            proposal.kind = detector.detect_kind(proposal.content)
+        else:
+            proposal = detector.parse_explicit(user_input)
+        if proposal is None:
+            return False
+        if not proposal.content:
+            console.print("[error]❌ 未写入记忆：当前会话中没有可引用的上一条内容[/error]")
+            return True
+        try:
+            receipt = self._get_memory_service().remember(
+                proposal.content,
+                scope=proposal.scope,
+                kind=proposal.kind,
+                source="explicit-user-command",
+                confidence=1.0,
+                importance=0.7,
+            )
+        except ValueError as exc:
+            console.print(f"[error]❌ 未写入记忆：{exc}[/error]")
+            return True
+        except Exception as exc:
+            logger.exception("显式记忆写入失败")
+            console.print(f"[error]❌ 记忆写入失败：{exc}[/error]")
+            return True
+        self._render_memory_receipt(receipt)
+        return True
+
+    def _resolve_memory_reference(self) -> str:
+        """Resolve “this/previous item” to the latest visible conversational turn."""
+        history = getattr(self.ctx_mgr, "history", [])
+        for turn in reversed(history):
+            if getattr(turn, "role", "") not in {"user", "assistant"}:
+                continue
+            content = str(getattr(turn, "content", "")).strip()
+            if content and not content.startswith("[错误]"):
+                return content
+        return ""
+
+    def _maybe_suggest_memory(self, user_input: str) -> None:
+        """Offer one post-answer candidate; persistence always needs this prompt."""
+        try:
+            if not getattr(sys.stdin, "isatty", lambda: False)():
+                return
+            proposal = self._get_memory_detector().propose(user_input)
+            if proposal is None:
+                return
+            service = self._get_memory_service()
+            conflicts = service.find_conflicts(
+                proposal.content,
+                scope=proposal.scope,
+                kind=proposal.kind,
+            )
+            self._render_memory_proposal(
+                proposal,
+                service.destination_for(proposal.scope, proposal.kind),
+                conflicts,
+            )
+            choice = Prompt.ask(
+                "[bold cyan]处理这条记忆候选[/bold cyan]",
+                choices=["s", "e", "u", "l", "h", "t", "n"],
+                default="n",
+                show_choices=False,
+            )
+            if choice == "n":
+                console.print("[dim]· 已忽略，本轮没有写入记忆[/dim]")
+                return
+            if choice == "e":
+                edited = Prompt.ask("编辑记忆内容", default=proposal.content).strip()
+                if not edited:
+                    console.print("[dim]· 内容为空，已取消[/dim]")
+                    return
+                proposal.content = edited
+            elif choice == "u":
+                from xenon.memory import MemoryScope
+
+                proposal.scope = MemoryScope.USER
+            elif choice == "l":
+                from xenon.memory import MemoryScope
+
+                proposal.scope = MemoryScope.PROJECT_LOCAL
+            elif choice == "h":
+                from xenon.memory import MemoryScope
+
+                proposal.scope = MemoryScope.PROJECT_SHARED
+            elif choice == "t":
+                from xenon.memory import MemoryScope
+
+                proposal.scope = MemoryScope.SESSION
+
+            receipt = service.remember(
+                proposal.content,
+                scope=proposal.scope,
+                kind=proposal.kind,
+                source="user-confirmed-candidate",
+                confidence=proposal.confidence,
+            )
+            self._render_memory_receipt(receipt)
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]· 已取消，本轮没有写入记忆[/dim]")
+        except ValueError as exc:
+            console.print(f"[error]❌ 未写入记忆：{exc}[/error]")
+        except Exception as exc:
+            # Memory UX must never hide or invalidate the answer that preceded it.
+            logger.debug(f"记忆候选处理失败: {exc}", exc_info=True)
+
+    @staticmethod
+    def _render_memory_proposal(proposal, destination: str, conflicts=()) -> None:
+        table = Table.grid(padding=(0, 1))
+        table.add_column(style="dim")
+        table.add_column()
+        table.add_row("内容", Text(proposal.content))
+        table.add_row("原因", Text(proposal.reason))
+        table.add_row("默认范围", proposal.scope.value)
+        table.add_row("将写入", Text(destination))
+        if conflicts:
+            summary = "；".join(
+                f"[{item.record.id}] {item.reason}" for item in conflicts[:3]
+            )
+            table.add_row("潜在冲突", Text(summary, style="yellow"))
+        table.add_row(
+            "选项",
+            "s 保存 · e 编辑 · u 全局 · l 项目本地 · h 项目共享 · t 会话 · n 忽略",
+        )
+        console.print(Panel(table, title="🧠 Xenon 发现一条可能值得记住的信息", border_style="cyan"))
+
+    @staticmethod
+    def _render_memory_receipt(receipt) -> None:
+        action = "已写入" if receipt.created else "已去重并更新"
+        lines = [
+            f"{action} · ID: {receipt.record.id}",
+            f"范围: {receipt.record.scope.value} · 类型: {receipt.record.kind.value}",
+            f"位置: {receipt.destination}",
+            f"内容: {receipt.record.content}",
+            f"撤销: /memory archive {receipt.record.id}",
+        ]
+        if receipt.archived_ids:
+            lines.append(f"容量治理已归档: {', '.join(receipt.archived_ids)}")
+        if receipt.record.supersedes:
+            lines.append(f"已替代: {receipt.record.supersedes}")
+            lines[-1] += f" · 撤销替代: /memory rollback {receipt.record.id}"
+        elif receipt.conflict_ids:
+            lines.append(
+                "潜在冲突（未自动覆盖）: "
+                + ", ".join(receipt.conflict_ids)
+                + "；可用 /memory replace <旧ID> <新内容> 明确替代"
+            )
+        if receipt.warning:
+            lines.append(f"提示: {receipt.warning}")
+        console.print(Panel(Text("\n".join(lines)), title="🧠 记忆回执", border_style="green"))
 
     def _load_custom_commands(self) -> None:
         """加载自定义快捷指令和技能，动态注册为命令。"""

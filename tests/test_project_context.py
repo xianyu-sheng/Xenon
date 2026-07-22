@@ -1,11 +1,5 @@
 """ProjectContext 单元测试。"""
 
-import os
-import tempfile
-from pathlib import Path
-
-import pytest
-
 from xenon.repl.project_context import ProjectContext
 
 
@@ -45,7 +39,7 @@ class TestProjectContext:
     def test_detect_unknown_project(self, tmp_path):
         """无标记文件时返回 unknown。"""
         pc = ProjectContext()
-        found = pc.detect(tmp_path)
+        pc.detect(tmp_path)
         assert pc.project_type == "unknown"
 
     def test_load_rules(self, tmp_path):
@@ -140,3 +134,56 @@ class TestProjectContext:
         pc = ProjectContext()
         pc.detect(tmp_path)
         assert len(pc.rules) <= 3000
+
+    def test_layered_xenon_rules_and_agents_fallback(self, tmp_path):
+        global_root = tmp_path / "global"
+        global_root.mkdir()
+        (global_root / "XENON.md").write_text("全局规则", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text("")
+        (tmp_path / "AGENTS.md").write_text("后备项目规则", encoding="utf-8")
+        (tmp_path / "XENON.local.md").write_text("本地覆盖规则", encoding="utf-8")
+
+        pc = ProjectContext(global_config_root=global_root)
+        pc.detect(tmp_path)
+
+        assert pc.rules.index("全局规则") < pc.rules.index("后备项目规则")
+        assert pc.rules.index("后备项目规则") < pc.rules.index("本地覆盖规则")
+
+        (tmp_path / "XENON.md").write_text("正式项目规则", encoding="utf-8")
+        pc.refresh()
+        assert "正式项目规则" in pc.rules
+        assert "后备项目规则" not in pc.rules
+
+    def test_nested_rules_override_root_and_imports_are_root_bounded(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("")
+        (tmp_path / "shared.md").write_text("安全导入内容", encoding="utf-8")
+        (tmp_path / "XENON.md").write_text("根规则\n@shared.md", encoding="utf-8")
+        nested = tmp_path / "src" / "feature"
+        nested.mkdir(parents=True)
+        (nested / "XENON.md").write_text("最近目录规则", encoding="utf-8")
+        outside = tmp_path.parent / "outside-memory-rule.md"
+        outside.write_text("不应导入的内容", encoding="utf-8")
+        (nested / "XENON.local.md").write_text(
+            "嵌套本地规则\n@../../../outside-memory-rule.md",
+            encoding="utf-8",
+        )
+
+        pc = ProjectContext(global_config_root=tmp_path / "missing-global")
+        pc.detect(nested)
+
+        assert pc.rules.index("根规则") < pc.rules.index("最近目录规则")
+        assert pc.rules.index("最近目录规则") < pc.rules.index("嵌套本地规则")
+        assert "安全导入内容" in pc.rules
+        assert "不应导入的内容" not in pc.rules
+
+    def test_instruction_import_cycle_is_ignored(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("")
+        (tmp_path / "XENON.md").write_text("主规则\n@a.md", encoding="utf-8")
+        (tmp_path / "a.md").write_text("子规则\n@XENON.md", encoding="utf-8")
+
+        pc = ProjectContext(global_config_root=tmp_path / "missing-global")
+        pc.detect(tmp_path)
+
+        assert "主规则" in pc.rules
+        assert "子规则" in pc.rules
+        assert len(pc.rules) < 1000

@@ -392,7 +392,7 @@ class ReActEngine(BaseEngine):
         self._subagent_history: list[str] = []
         self._last_tracker: ToolExecutionTracker | None = None  # run() 末态供父引擎读取
         self._last_subagent: ReActEngine | None = None  # 最近一次 spawn 的子引擎（调试/测试）
-        # v0.6.3: 重复工具调用检测 —— 记录最近 N 次 (tool_name, params_sig, turn)
+        # v0.7.0: 重复工具调用检测 —— 记录最近 N 次 (tool_name, params_sig, turn)
         self._recent_calls: list[tuple[str, str, int]] = []
         self._max_recent_calls: int = 8
 
@@ -523,11 +523,12 @@ class ReActEngine(BaseEngine):
         self._ctx_mgr = ctx_mgr
         self._reset_interrupt()  # F6: 每轮 run 重置中断标志
         self._begin_run()  # P3-Q2: 生成本次 run 的链路 ID（贯穿所有 LLM 调用）
-        self._recent_calls.clear()  # v0.6.3: 每次 run 重置重复调用跟踪
+        self._recent_calls.clear()  # v0.7.0: 每次 run 重置重复调用跟踪
         messages = [{"role": "system", "content": self.system_prompt}]
         memory_message = self._working_memory_message()
         if memory_message is not None:
             messages.append(memory_message)
+        messages.extend(self._context_messages())
         # F4: ctx_mgr 注入时消费其（已压缩）消息，不再自行 [-10:] 截断；
         # 否则回退 AgentContext 的对话历史（保留 [-10:] 兜底）。
         if ctx_mgr is not None:
@@ -745,7 +746,7 @@ class ReActEngine(BaseEngine):
                     logger.debug(f"ReAct 行动: {action}({mask_sensitive_params(action_input)})")
                     self.callback.on_act(action, action_input)
 
-                    # v0.6.3: 重复工具调用检测
+                    # v0.7.0: 重复工具调用检测
                     dup_hint = self._check_duplicate_call(action, action_input, iteration)
                     if dup_hint:
                         observation = dup_hint
@@ -773,7 +774,7 @@ class ReActEngine(BaseEngine):
                     executable: list[dict] = []
                     blocked: dict[int, str] = {}
                     for a in raw_actions:
-                        # v0.6.3: 重复检测（并行路径中也检查）
+                        # v0.7.0: 重复检测（并行路径中也检查）
                         dup_hint = self._check_duplicate_call(
                             a["action"], a.get("action_input", {}), iteration
                         )
@@ -800,8 +801,14 @@ class ReActEngine(BaseEngine):
                             result = f"⚠️ {blocked.get(id(action), '未执行')}"
                         tool_observations.append(result)
                         observations.append(f"[{action['action']}] {result}")
-                    for a, obs in parallel_results:
-                        self.callback.on_observe(f"[{a['action']}] {obs[:200]}...")
+                    # Match every on_act with one on_observe in the same order.
+                    # Previously only executed actions emitted observations;
+                    # a blocked action shifted the FIFO and attached later
+                    # results to the wrong tool in the Ctrl+O detail panel.
+                    for action, obs in zip(raw_actions, tool_observations):
+                        self.callback.on_observe(
+                            f"[{action['action']}] {obs[:200]}..."
+                        )
                     observation = "\n\n".join(observations)
 
                 # F6: 接近上下文窗口时拒绝大 observation（截断），防止下一轮超限

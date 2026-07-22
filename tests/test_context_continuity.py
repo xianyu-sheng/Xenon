@@ -55,9 +55,23 @@ def test_working_memory_is_bounded_redacted_and_opt_in():
     assert "[REDACTED]" in messages[0]["content"]
 
 
+def test_replaceable_context_does_not_accumulate_in_history():
+    ctx = ContextManager()
+    ctx.set_context_message("long_term_memory", "first memory")
+    ctx.set_context_message("long_term_memory", "replacement memory")
+
+    assert ctx.history == []
+    assert ctx.get_messages() == []
+    messages = ctx.get_messages(include_context_messages=True)
+    assert len(messages) == 1
+    assert messages[0]["content"] == "replacement memory"
+
+
 def test_react_injects_memory_without_duplicating_current_user():
     ctx = ContextManager()
     ctx.update_working_memory("session_active_dirs", ["/work/project"])
+    ctx.set_context_message("project", "Follow XENON project rules")
+    ctx.set_context_message("long_term_memory", "User prefers concise output")
     ctx.add_user_message("继续")
     engine = ReActEngine(["openai/a"], max_iterations=2)
     captured: dict[str, list[dict[str, str]]] = {}
@@ -80,6 +94,8 @@ def test_react_injects_memory_without_duplicating_current_user():
         for message in messages
     ) == 1
     assert any("/work/project" in message["content"] for message in messages)
+    assert any("XENON project rules" in message["content"] for message in messages)
+    assert any("prefers concise" in message["content"] for message in messages)
 
 
 def test_repl_persists_tracker_and_file_memory_once(tmp_path):

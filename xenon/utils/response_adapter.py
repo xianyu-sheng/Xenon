@@ -408,15 +408,83 @@ def _extract_tool_call_xml(text: str) -> list[dict[str, Any]] | None:
     return None
 
 
+def _extract_tool_call_dsml(text: str) -> list[dict[str, Any]] | None:
+    """Extract DeepSeek's textual DSML tool-call protocol.
+
+    Some OpenAI-compatible responses expose DSML in ``content`` instead of a
+    structured ``message.tool_calls`` field. DeepSeek uses full-width vertical
+    bars in the sentinel, for example::
+
+        <｜｜DSML｜｜tool_calls>
+          <｜｜DSML｜｜invoke name="read_file">
+            <｜｜DSML｜｜parameter name="file_path" string="true">README.md
+            </｜｜DSML｜｜parameter>
+          </｜｜DSML｜｜invoke>
+        </｜｜DSML｜｜tool_calls>
+    """
+    import html
+    import re
+
+    normalized = text.replace("｜", "|")
+    if not re.search(r"<\|\|DSML\|\|tool_calls\b", normalized, re.IGNORECASE):
+        return None
+
+    invoke_pattern = re.compile(
+        r'<\|\|DSML\|\|invoke\s+name="([^"]+)"[^>]*>'
+        r'(.*?)'
+        r'</\|\|DSML\|\|invoke>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    parameter_pattern = re.compile(
+        r'<\|\|DSML\|\|parameter\s+name="([^"]+)"([^>]*)>'
+        r'(.*?)'
+        r'</\|\|DSML\|\|parameter>',
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    actions: list[dict[str, Any]] = []
+    for invoke in invoke_pattern.finditer(normalized):
+        tool_name = html.unescape(invoke.group(1)).strip()
+        action_input: dict[str, Any] = {}
+        for parameter in parameter_pattern.finditer(invoke.group(2)):
+            name = html.unescape(parameter.group(1)).strip()
+            attributes = parameter.group(2).lower()
+            raw_value = html.unescape(parameter.group(3)).strip()
+            value: Any = raw_value
+            # Preserve explicitly-string parameters. For structured values,
+            # parse JSON so mcp_call/tool_args and list parameters keep shape.
+            if 'string="true"' not in attributes and raw_value:
+                try:
+                    value = json.loads(raw_value, strict=False)
+                except (json.JSONDecodeError, TypeError):
+                    value = raw_value
+            action_input[name] = value
+        if tool_name:
+            actions.append({"action": tool_name, "action_input": action_input})
+
+    if actions:
+        logger.info(
+            "_extract_tool_call_dsml: 从 DSML 提取 %d 个工具调用",
+            len(actions),
+        )
+        return actions
+    return None
+
+
 def _extract_json(text: str) -> dict | list | None:
     """从 LLM 输出中提取 JSON 对象或数组，处理 markdown 代码块和多余文字。
 
     v0.5.0: 支持 JSON 数组（并行工具调用场景）。
-    v0.6.3: 支持 DeepSeek 旧版模型的 <uses_legacy_tools> XML 格式。
+    v0.7.0: 支持 DeepSeek 旧版模型的 <uses_legacy_tools> XML 格式。
     """
     text = text.strip()
 
-    # ── v0.6.3: XML 格式工具调用（DeepSeek 旧版模型）──
+    # ── DeepSeek DSML 文本协议 ──
+    dsml_actions = _extract_tool_call_dsml(text)
+    if dsml_actions:
+        return dsml_actions
+
+    # ── v0.7.0: XML 格式工具调用（DeepSeek 旧版模型）──
     # <uses_legacy_tools>
     #   <tool_calls>
     #     <tool_call name="list_files">{"file_path": "."}</tool_call>

@@ -5,9 +5,8 @@ Memory Store 跨会话记忆测试。
 from __future__ import annotations
 
 import tempfile
+import stat
 from pathlib import Path
-
-import pytest
 
 from xenon.repl.memory import MemoryStore, Memory
 
@@ -58,6 +57,18 @@ class TestMemoryStore:
             relevant = store.get_relevant("帮我写一个数据库查询")
             assert len(relevant) >= 1
             assert any("数据库" in m.content for m in relevant)
+
+            # 自动注入是主要检索路径，命中次数必须持久化，否则 LFU 会
+            # 退化成只按创建时间淘汰。
+            reloaded = MemoryStore(store.path)
+            matched = next(m for m in reloaded.memories if "PostgreSQL" in m.content)
+            assert matched.access_count == 1
+
+    def test_memory_file_is_private(self, tmp_path):
+        path = tmp_path / "memory.json"
+        MemoryStore(path).add("个人偏好", type="preference")
+
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
     def test_delete(self):
         """测试删除记忆。"""
@@ -126,3 +137,36 @@ class TestMemoryStore:
         assert len(m.tags) == 2
         assert m.access_count == 0
         assert len(m.id) == 8
+
+
+def test_memory_command_parses_type_and_tags_together(monkeypatch, tmp_path):
+    from xenon.repl import memory as memory_module
+    from xenon.repl.commands import _cmd_memory
+
+    path = tmp_path / "memory.json"
+    monkeypatch.setattr(memory_module, "_MEMORY_PATH", path)
+
+    result = _cmd_memory(
+        args="add 默认使用 Python --type preference --tags python,style",
+        session_state={},
+    )
+    saved = MemoryStore(path).memories
+
+    assert "已添加记忆" in result
+    assert saved[0].content == "默认使用 Python"
+    assert saved[0].type == "preference"
+    assert saved[0].tags == ["python", "style"]
+
+
+def test_memory_command_can_delete_one_entry(monkeypatch, tmp_path):
+    from xenon.repl import memory as memory_module
+    from xenon.repl.commands import _cmd_memory
+
+    path = tmp_path / "memory.json"
+    memory = MemoryStore(path).add("待删除")
+    monkeypatch.setattr(memory_module, "_MEMORY_PATH", path)
+
+    result = _cmd_memory(args=f"delete {memory.id}", session_state={})
+
+    assert "已删除记忆" in result
+    assert MemoryStore(path).memories == []

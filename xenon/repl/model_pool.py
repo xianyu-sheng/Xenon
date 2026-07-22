@@ -37,7 +37,7 @@ class CapabilityProfile:
 class HealthRecord:
     """运行时健康指标（动态，每次 API 调用更新）。
 
-    v0.6.3: 阈值熔断 + 有上限的指数退避机制。
+    v0.7.0: 阈值熔断 + 有上限的指数退避机制。
     - consecutive_failures: 连续失败次数（断路器用）
     - retry_cycle_count: 退避周期计数，每完成一次"禁止→解禁→重试仍失败"的周期 +1
     - circuit_open_until: 断路器打开截止时间戳，0 = 关闭
@@ -240,7 +240,7 @@ class ModelPool:
     def record_failure(self, alias: str, *, is_retry: bool = False) -> bool:
         """记录一次失败调用。alias 可以是 alias 或完整 model_id。
 
-        v0.6.3: 阈值熔断 + 有上限的指数退避。
+        v0.7.0: 阈值熔断 + 有上限的指数退避。
         - 前 ``FAILURE_THRESHOLD - 1`` 次失败只降低健康分，不熔断
         - 达到阈值后断路器打开 ``COOLDOWN_BASE`` 秒
         - 断路器到期后重试仍失败 (is_retry=True): 退避周期 +1，退避时间翻倍

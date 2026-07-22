@@ -523,6 +523,7 @@ class PlanExecuteEngine(BaseEngine):
         memory_message = self._working_memory_message()
         if memory_message is not None:
             messages.append(memory_message)
+        messages.extend(self._context_messages())
         # F4: 优先消费 ctx_mgr（已压缩）消息；否则回退 AgentContext 历史 [-6:]
         history = self._history_messages(context, current_user_input=user_input)
         if history:

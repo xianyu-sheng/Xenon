@@ -10,8 +10,12 @@ v0.5.0: 权限门控系统 — 危险工具操作确认。
 
 from __future__ import annotations
 
+import hashlib
+import json
 from enum import Enum
 from typing import Callable
+
+from rich.markup import escape
 
 
 class PermissionMode(Enum):
@@ -55,6 +59,8 @@ class PermissionGate:
         self.mode = mode
         # 会话级别记忆：用户选择"总是允许"的工具名集合
         self._session_allow: set[str] = set()
+        # CRITICAL 工具不能按工具名整体放行；只记忆参数完全相同的操作。
+        self._session_allow_exact: set[str] = set()
         # 外部确认回调：签名 (tool_name, params, risk_level) -> bool
         self._confirm_callback: Callable[[str, dict, str], bool] | None = None
 
@@ -112,7 +118,10 @@ class PermissionGate:
             return True, ""
 
         # 会话级别记忆
-        if tool_name in self._session_allow:
+        if (
+            tool_name in self._session_allow
+            or self._approval_key(tool_name, params or {}) in self._session_allow_exact
+        ):
             return True, ""
 
         # ACCEPT_EDITS 模式：仅 CRITICAL 需要确认
@@ -142,9 +151,27 @@ class PermissionGate:
         """会话级别：总是允许此工具。"""
         self._session_allow.add(tool_name)
 
+    @staticmethod
+    def _approval_key(tool_name: str, params: dict) -> str:
+        """Return a bounded, non-reversible signature for an exact action."""
+        payload = json.dumps(
+            params,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=repr,
+        )
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return f"{tool_name}:{digest}"
+
+    def allow_exact(self, tool_name: str, params: dict) -> None:
+        """本会话放行参数完全相同的一项 CRITICAL 操作。"""
+        self._session_allow_exact.add(self._approval_key(tool_name, params))
+
     def reset_session(self) -> None:
         """清除会话级别记忆。"""
         self._session_allow.clear()
+        self._session_allow_exact.clear()
 
     @staticmethod
     def format_confirm_message(tool_name: str, params: dict, risk: str) -> str:
@@ -152,21 +179,28 @@ class PermissionGate:
         lines = [f"⚠️  {risk} 操作: [bold yellow]{tool_name}[/bold yellow]"]
 
         if tool_name == "command":
-            cmd = params.get("command", params.get("cmd", "?"))
-            lines.append(f"   命令: [bold white]{cmd}[/bold white]")
+            # ToolExecutor normalizes command/cmd to ``action`` before the
+            # permission gate, so action must be the primary display field.
+            cmd = params.get("action", params.get("command", params.get("cmd", "?")))
+            lines.append(f"   命令: [bold white]{escape(str(cmd))}[/bold white]")
         elif tool_name == "write_file":
             path = params.get("file_path", params.get("path", "?"))
-            lines.append(f"   写入: [bold white]{path}[/bold white]")
+            lines.append(f"   写入: [bold white]{escape(str(path))}[/bold white]")
         elif tool_name == "edit_file":
             path = params.get("file_path", params.get("path", "?"))
-            lines.append(f"   编辑: [bold white]{path}[/bold white]")
+            lines.append(f"   编辑: [bold white]{escape(str(path))}[/bold white]")
         elif tool_name == "git":
             action = params.get("git_command", params.get("action", "?"))
-            lines.append(f"   操作: [bold white]{action}[/bold white]")
+            lines.append(f"   操作: [bold white]{escape(str(action))}[/bold white]")
         elif tool_name == "create_directory":
-            path = params.get("path", "?")
-            lines.append(f"   创建: [bold white]{path}[/bold white]")
+            path = params.get("file_path", params.get("path", "?"))
+            lines.append(f"   创建: [bold white]{escape(str(path))}[/bold white]")
+        elif tool_name == "mcp_call":
+            server = escape(str(params.get("mcp_server", "?")))
+            target = escape(str(params.get("tool_name", "?")))
+            lines.append(f"   MCP: [bold white]{server} / {target}[/bold white]")
 
         lines.append("")
-        lines.append("   [y] 确认  [n] 拒绝  [a] 本次会话总是允许  [q] 取消任务")
+        always_label = "本会话允许相同操作" if risk == "CRITICAL" else "本次会话总是允许"
+        lines.append(f"   [y] 确认  [n] 拒绝  [a] {always_label}  [q] 取消任务")
         return "\n".join(lines)

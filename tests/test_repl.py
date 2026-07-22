@@ -693,6 +693,59 @@ class TestToolDetection:
         assert REPL._detect_tool_need("how does machine learning work") is False
         assert REPL._detect_tool_need("你好") is False
 
+    def test_detects_deepseek_dsml_tool_protocol(self):
+        from xenon.repl.repl import REPL
+
+        response = (
+            "好的，先看实现："
+            '<｜｜DSML｜｜tool_calls>'
+            '<｜｜DSML｜｜invoke name="read_file">'
+            '<｜｜DSML｜｜parameter name="file_path" string="true">'
+            '/work/internal/provider'
+            '</｜｜DSML｜｜parameter>'
+            '</｜｜DSML｜｜invoke>'
+            '</｜｜DSML｜｜tool_calls>'
+        )
+
+        assert REPL._detect_tool_call_json(response) is True
+
+    def test_direct_dsml_is_rerouted_before_rendering(self, monkeypatch):
+        from xenon.repl.model_registry import ModelRegistry
+        from xenon.repl.repl import REPL
+
+        registry = ModelRegistry()
+        registry.add_model("openai/test", "test")
+        repl = REPL(registry=registry, streaming=False)
+        repl.ctx_mgr.add_user_message("讲解这里的接口驱动模式")
+        dsml = (
+            '<｜｜DSML｜｜tool_calls>'
+            '<｜｜DSML｜｜invoke name="read_file">'
+            '<｜｜DSML｜｜parameter name="file_path" string="true">README.md'
+            '</｜｜DSML｜｜parameter>'
+            '</｜｜DSML｜｜invoke>'
+            '</｜｜DSML｜｜tool_calls>'
+        )
+        rendered: list[str] = []
+        rerouted: list[tuple[str, list[str]]] = []
+
+        monkeypatch.setattr(repl, "_blocking_response", lambda *args: dsml)
+        monkeypatch.setattr(
+            repl,
+            "_render_assistant_text",
+            lambda content, **kwargs: rendered.append(content),
+        )
+        monkeypatch.setattr(
+            repl,
+            "_run_react_engine",
+            lambda text, models: rerouted.append((text, models)),
+        )
+
+        repl._run_direct("讲解这里的接口驱动模式", ["openai/test"])
+
+        assert rendered == []
+        assert rerouted == [("讲解这里的接口驱动模式", ["openai/test"])]
+        assert all("DSML" not in turn.content for turn in repl.ctx_mgr.history)
+
     def test_query_intent_routes_to_react(self):
         """query 意图（天气/价格/汇率/新闻等实时数据）必然需要工具 → 路由 ReAct。
 

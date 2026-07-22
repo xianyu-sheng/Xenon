@@ -3,9 +3,33 @@
 本文件记录 Xenon 各版本变更。版本号遵循语义化版本（预 1.0 阶段：
 `0.MINOR.PATCH`）。
 
-## [0.6.3] — 2026-07-21（待发布）
+## [0.7.0] — 2026-07-22
 
-> **版本性质：** 核心架构保持不变。本版的主体是 Bug 修复、可靠性/协议兼容性补强和工程门禁；双线输入区与固定底栏是主要的用户可见布局变更。
+> **版本性质：** 新增 User-Governed Memory 第四大产品支柱，并完成终端交互、工具协议、权限回执、上下文连续性和 DeepSeek V4 兼容性的系统性加固。
+
+### User-Governed Memory
+
+- 新增 `user`、`project-local`、`project-shared`、`session` 四层作用域；自动候选默认项目本地，未经确认绝不持久化。
+- `metadata.json` 保存权威状态与创建/更新/检索/使用时间、计数、重要度、置信度、固定、过期、来源和替代链；小型 Markdown 分类文件供用户直接检查。
+- 单条、分类、作用域和上下文注入均有 token 阈值；私有作用域超限后按重要度、置信度、时间、检索和成功使用次数自动归档，固定和项目共享记忆不自动淘汰。
+- 原子替换与跨进程事务锁共同保护读改写；线程及真实多进程并发写入不会丢失记录。
+- 潜在冲突只提示、不静默覆盖；`/memory replace` 与 `/memory rollback` 建立可逆的 supersession 版本链。
+- 新增 `/memory status/list/search --explain/inspect/doctor/add/archive/restore/pin/unpin/migrate` 操作面；损坏作用域可诊断且不阻断其他作用域检索。
+- `XENON.md`、`XENON.local.md`、`AGENTS.md` 后备层级与安全 `@path` 导入；限制根目录、符号链接、循环、深度和总字节预算。
+
+### 终端与工具调用修复
+
+- `Ctrl+O` / `Shift+Tab` 通过 prompt-toolkit 的终端切出机制重绘，展开折叠详情不再打乱固定输入区和状态栏。
+- 权限确认显示规范化后的真实命令/参数，不再出现 `命令: ?`；会话级放行按精确参数指纹记录。
+- ThinkingPanel 正确处理并行工具动作与观察，工具计数和顺序不再错位。
+- 识别 DeepSeek 文本形式 DSML 工具调用；direct 模式先验证再渲染，避免把协议标记当普通回复直接显示。
+- 项目上下文、长期记忆和单轮提示改为可替换 overlay，各推理引擎统一注入，避免跨轮累积和上下文遗漏。
+
+### 验证
+
+- 离线回归：`1432 passed, 35 deselected`。
+- 新增记忆并发、冲突/回滚、完整性诊断、上下文使用计数、指令层级和终端回归测试。
+- Python 变更范围 Ruff、`git diff --check`、wheel 与 sdist 构建通过。
 
 ### Bug 修复与可靠性补强
 

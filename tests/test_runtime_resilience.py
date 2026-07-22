@@ -99,6 +99,29 @@ def test_direct_terminal_failure_is_quarantined_for_session(monkeypatch):
     assert "openai/a" in repl._failed_models
 
 
+def test_direct_captures_provider_logs_away_from_spinner(monkeypatch):
+    repl = _repl()
+    rendered = []
+
+    def response(model_id, messages):
+        logging.getLogger("httpx").warning("HTTP Request: POST example.test 200 OK")
+        return "clean answer"
+
+    monkeypatch.setattr(repl, "_blocking_response", response)
+    monkeypatch.setattr(
+        repl,
+        "_render_assistant_text",
+        lambda content, **kwargs: rendered.append(content),
+    )
+
+    repl._run_direct("hello", ["openai/a"])
+
+    assert rendered == ["clean answer"]
+    assert "HTTP Request" in repl._captured_log
+    assert repl._last_thinking_panel is None
+    assert repl._log_capture_active is False
+
+
 def test_interrupted_engine_restores_all_logging_state(monkeypatch):
     from xenon.engine import react_engine as react_module
 

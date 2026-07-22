@@ -168,6 +168,10 @@ class ContextManager:
         self._turn_counter: int = 0  # 全局轮次计数器
         self._semantic_group_counter: int = 0  # 语义块 ID 计数器
         self._working_memory: dict[str, Any] = {}  # 跨压缩持久化的工作记忆
+        # 可替换的系统上下文层（项目规则、长期记忆检索、单轮指令等）。
+        # 它们不属于聊天历史，避免每轮 append 后重复膨胀，也不会被 compact
+        # 当成用户对话压缩掉。
+        self._context_messages: dict[str, str] = {}
         if track_real_usage:
             self._subscribe_usage()
 
@@ -228,6 +232,20 @@ class ContextManager:
     def replace_working_memory(self, memory: dict[str, Any] | None) -> None:
         """Replace persistent working memory when loading a saved session."""
         self._working_memory = dict(memory or {})
+
+    def set_context_message(self, key: str, content: str | None) -> None:
+        """Set or clear one replaceable system-context layer."""
+        if content and content.strip():
+            self._context_messages[str(key)] = content.strip()[:20_000]
+        else:
+            self._context_messages.pop(str(key), None)
+
+    def get_context_messages(self) -> list[dict[str, str]]:
+        """Return project/memory overlays in deterministic insertion order."""
+        return [
+            {"role": "system", "content": content}
+            for content in self._context_messages.values()
+        ]
 
     @classmethod
     def _safe_context_value(cls, value: Any, *, key: str = "") -> Any:
@@ -336,7 +354,12 @@ class ContextManager:
     def add_system_message(self, content: str) -> None:
         self.add_message("system", content)
 
-    def get_messages(self, *, include_working_memory: bool = False) -> list[dict[str, Any]]:
+    def get_messages(
+        self,
+        *,
+        include_working_memory: bool = False,
+        include_context_messages: bool = False,
+    ) -> list[dict[str, Any]]:
         """Convert history to API-safe messages.
 
         Persisted tool turns intentionally do not pretend to be native function
@@ -350,6 +373,8 @@ class ContextManager:
             memory = self.working_memory_prompt()
             if memory:
                 messages.append({"role": "system", "content": memory})
+        if include_context_messages:
+            messages.extend(self.get_context_messages())
         for turn in self.history:
             api_message = (turn.metadata or {}).get("api_message")
             if isinstance(api_message, dict):

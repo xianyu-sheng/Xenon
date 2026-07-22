@@ -185,6 +185,12 @@ class BaseEngine(ABC):
             return None
         return {"role": "system", "content": prompt}
 
+    def _context_messages(self) -> list[dict[str, str]]:
+        """Return replaceable project/long-term-memory context layers."""
+        if self._ctx_mgr is None:
+            return []
+        return self._ctx_mgr.get_context_messages()
+
     def _maybe_compact_messages(
         self,
         messages: list[dict[str, Any]],

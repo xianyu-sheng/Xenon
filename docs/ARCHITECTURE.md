@@ -2,24 +2,27 @@
 
 > **设计哲学：让开发者可靠、透明、低成本地使用 DeepSeek。**
 >
-> 核心抽象围绕缓存经济效益、工具权限和失败恢复设计。
+> 核心抽象围绕缓存经济效益、工具权限、用户治理记忆和失败恢复设计。
 
 ---
 
-## v0.6.3 变更边界
+## 当前开发分支变更边界
 
-v0.6.3 **不是架构重写**。三大支柱、REPL 与引擎分层、ModelPool、ContextManager / AgentContext 双上下文以及 7 阶段工具管线仍然保持原有责任边界。
+v0.7.0 保留既有 REPL 与引擎分层、ModelPool、ContextManager / AgentContext
+双上下文以及 7 阶段工具管线，并新增独立的用户治理记忆层。记忆通过
+ContextManager 的可替换上下文消息接入，不侵入八种推理引擎。
 
-| 变更类型 | v0.6.3 内容 | 是否改变顶层架构 |
+| 变更类型 | v0.7.0 内容 | 是否改变顶层架构 |
 |----------|--------------|--------------------|
 | Bug 修复/可靠性 | 权限透传、事务化写入、模型恢复、GitHub URL、Plan 失败传播、跨轮轨迹 | 否，是对已有组件契约的补齐 |
 | DeepSeek 兼容性 | V4 模型/价格、思考模式工具续轮、强制 `tool_choice` 兼容 | 否，扩展原有 LLM 客户端与 ReAct 协议实现 |
 | 工程门禁 | 离线/live/e2e 分层、Python 3.10–3.12、覆盖率和打包检查 | 否，属于验证与发行工程 |
 | TUI 重新排版 | 双线输入区、固定底栏、无边框回复、折叠详情 | 不改引擎架构，但是明显的交互层变更 |
+| Memory v2 | 四层作用域、显式授权/候选确认、有界检索、可恢复归档 | 是，新增独立顶层能力；不改变现有引擎协议 |
 
 ---
 
-## 三大架构支柱
+## 四大架构支柱
 
 ### 🏛️ Pillar 1 — Cache-Aware Cost Loop（缓存感知的费用闭环）
 
@@ -107,6 +110,37 @@ Stage 6 · 结果封装     → 统一 {success, error, data} 格式
 
 ---
 
+### 🏛️ Pillar 4 — User-Governed Memory（用户治理的透明记忆）
+
+**问题：** 单一全局记忆文件会混淆项目边界；静默自动写入让用户不知道模型记住了
+什么；记忆无限增长又会降低召回命中率和上下文注意力。
+
+**方案：** 四层作用域 + 接口驱动存储 + 可见确认 + 有界生命周期。
+
+```text
+MemoryCandidateDetector（明确授权 / 自动候选 / 密钥拒绝）
+                ↓
+MemoryService（去重 / 策略 / 检索 / 归档 / 回执）
+                ↓
+MemoryBackendRegistry（scope → backend）
+                ↓
+JsonMarkdownBackend（metadata.json 权威 + Markdown 可读视图）
+```
+
+- `user`、`project-local`、`project-shared`、`session` 四层隔离；自动候选默认本地
+- 自动候选在回答后展示内容、原因、范围和路径，未经用户确认不写入
+- 单条、分类文件、作用域和上下文注入分别设置 token 预算
+- 超阈值只归档低保留分记录；固定与共享规则不自动归档；支持恢复
+- 元数据读改写由跨进程事务锁保护；原子替换防半写，事务锁防并发丢更新
+- 检索分数可解释；检索次数与成功回答实际使用次数分开统计
+- 冲突只提示不覆盖；`replace/rollback` 维护可逆的 supersession 版本链
+- `/memory inspect` 与 `/memory doctor` 提供来源、计数、权限和完整性诊断
+- `XENON.md` / `XENON.local.md` / `AGENTS.md` 后备与安全 `@path` 导入
+
+完整状态机、字段契约和路径布局见 [Memory System v2](MEMORY_SYSTEM_SPEC.md)。
+
+---
+
 ## 独有亮点
 
 ### 1. 11 家模型商预设 · 3 Tier 分级 · 故障自动转移
@@ -180,6 +214,11 @@ xenon/
 │   ├── status_bar.py · 输入下边界 + 自适应固定底部 toolbar
 │   ├── model_pool.py · 模型池（11 家预设 / 3 Tier / 故障转移）
 │   └── auto_router.py · 任务难度评估 + 模型路由
+├── memory/           · 用户治理记忆
+│   ├── backend.py    · 存储接口 + JSON/Markdown 后端
+│   ├── registry.py   · 四层作用域注册表
+│   ├── service.py    · 去重、容量、检索、归档和回执策略
+│   └── candidate.py  · 显式授权与自动候选识别
 ├── nodes/            · 工具执行管线
 │   ├── tool_node.py  · 26 个工具实现（2600 行）
 │   └── tool_executor.py · 7 阶段流水线 + 断路器
