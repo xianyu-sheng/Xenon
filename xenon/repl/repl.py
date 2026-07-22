@@ -2131,6 +2131,8 @@ class REPL:
         if policy.requires_tools:
             if intent == "query":
                 console.print("[dim cyan]🔧 检测到信息查询（需实时数据），自动切换到 ReAct 模式...[/dim cyan]")
+            elif intent == "research":
+                console.print("[dim cyan]🔎 检测到资料调研（仅使用只读工具），自动切换到 ReAct 模式...[/dim cyan]")
             else:
                 console.print("[dim cyan]🔧 检测到需要工具执行，自动切换到 ReAct 模式...[/dim cyan]")
             self._run_react_engine(user_input, model_ids)

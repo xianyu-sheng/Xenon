@@ -92,12 +92,15 @@ _WRITE = re.compile(
     r"|(?:修复|重构|改造|升级|处理).{0,20}(?:bug|错误|问题|代码|项目|仓库|功能)"
     r"|(?:write|save|create|edit|modify|patch|replace|delete).{0,30}\b(?:file|directory|project|repo|disk)\b"
     r"|(?:写|保存|生成)(?:到|至|进)\s*(?:[/~.]|[A-Za-z]:\\)"
-    r"|(?:提交|推送|合并)(?:代码|更改|修改|commit|PR)?"
+    r"|(?:提交|推送|合并)(?:这|该|当前|上述|刚才|本次)?(?:份|个|些)?"
+    r"(?:代码|更改|修改|变更|commit|PR|分支|标签|版本)"
+    r"|(?:提交|推送|合并)(?:到|至)\s*(?:GitHub|GitLab|Gitee|origin|远程仓库)"
     r"|\bgit\s+(?:add|commit|push|merge|rebase|checkout)\b",
     re.IGNORECASE,
 )
 _READ_ONLY = re.compile(
-    r"(?:读取|查看|打开|检查|搜索|查找|列出|统计)(?:一下|下|这个|该|当前|文件|目录|内容|代码|项目|仓库)?"
+    r"(?:读取|查看|打开|检查|搜索|查询|查找|查一下|调研|调查|了解|研究|"
+    r"比较|对比|列出|统计)(?:一下|下|这个|该|当前|文件|目录|内容|代码|项目|仓库)?"
     r"|(?:分析|审查).{0,16}(?:文件|目录|项目|仓库|代码库)"
     r"|(?:read|view|inspect|search|find|list|count|check|grep)\b"
     r"|(?:show|open).{0,24}(?:content|file|directory|\w+\.[A-Za-z0-9]+)"
@@ -105,6 +108,17 @@ _READ_ONLY = re.compile(
     r"|(?:抓取|下载|访问).{0,16}(?:网页|页面|网址|URL)"
     r"|(?:fetch|download|scrape|crawl).{0,20}(?:web|page|url)"
     r"|https?://|github\.com/",
+    re.IGNORECASE,
+)
+
+_REQUEST_CUE = re.compile(
+    r"(?:请(?:你)?|请帮我|帮(?:我)?|麻烦(?:你)?|劳烦(?:你)?|能否|"
+    r"可否|可以(?:请)?(?:你)?)\s*",
+    re.IGNORECASE,
+)
+_DIRECT_BARE_GIT_REQUEST = re.compile(
+    r"(?:请(?:你)?|请帮我|帮(?:我)?|麻烦(?:你)?|现在|立即|直接|开始|继续)"
+    r"\s*(?:提交|推送|合并)(?:一下|吧)?(?:[，。！？,.!?]|$)",
     re.IGNORECASE,
 )
 _PATH_REFERENCE = re.compile(
@@ -150,9 +164,22 @@ def classify_execution_policy(
             explicit_no_execute=True,
         )
 
-    wants_execute = bool(_EXECUTE.search(source)) and not no_execute
-    wants_write = bool(_WRITE.search(source)) and not no_write
-    wants_read = bool(_READ_ONLY.search(source) or _PATH_REFERENCE.search(source))
+    # Long conversational prompts often state background plans before the
+    # actual request: "我打算提交到某平台，请你查一下……".  Authorize side
+    # effects from the final explicit request clause, while constraints above
+    # still apply to the complete original turn.
+    request_source = source
+    cues = list(_REQUEST_CUE.finditer(source))
+    if cues:
+        request_source = source[cues[-1].end():].strip() or source
+
+    wants_execute = bool(_EXECUTE.search(request_source)) and not no_execute
+    wants_write = bool(
+        _WRITE.search(request_source) or _DIRECT_BARE_GIT_REQUEST.search(source)
+    ) and not no_write
+    wants_read = bool(
+        _READ_ONLY.search(request_source) or _PATH_REFERENCE.search(request_source)
+    )
 
     if wants_execute:
         return ExecutionPolicy(
@@ -169,10 +196,10 @@ def classify_execution_policy(
             explicit_no_execute=no_execute,
         )
 
-    if intent == "query":
+    if intent in {"query", "research"}:
         return ExecutionPolicy(
             ExecutionLevel.READ_ONLY,
-            "实时信息查询需要只读工具",
+            "信息查询或资料调研只允许只读工具",
             explicit_no_write=no_write,
             explicit_no_execute=no_execute,
         )

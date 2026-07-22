@@ -4,8 +4,6 @@ Prompt Optimizer 测试。
 
 from __future__ import annotations
 
-import pytest
-
 from xenon.repl.prompt_optimizer import (
     detect_intent,
     optimize_prompt,
@@ -83,6 +81,10 @@ class TestDetectIntent:
     def test_query_intent(self):
         assert detect_intent("今天天气怎么样") == "query"
         assert detect_intent("查询今天黄金的价格") == "query"
+
+    def test_research_intent(self):
+        text = "请你查一下哪个大模型厂商的 Agent 项目维护更快，比如豆包和智普"
+        assert detect_intent(text) == "research"
 
 
 class TestAssessQuality:

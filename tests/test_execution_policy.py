@@ -66,6 +66,53 @@ def test_chat_only_constraint_wins_over_execute_words():
     assert policy.explicit_no_execute is True
 
 
+def test_research_request_uses_final_request_clause_not_background_plan():
+    text = (
+        "我打算将你提交到一些大模型厂商的官方 agent 接入工具，"
+        "但是 DeepSeek 的 PR 维护太慢了，请你查一下哪个大模型厂商维护更快，"
+        "比如豆包、智普这些？"
+    )
+
+    intent = detect_intent(text)
+    policy = classify_execution_policy(text, intent=intent)
+
+    assert intent == "research"
+    assert policy.level is ExecutionLevel.READ_ONLY
+    assert policy.reason == "信息查询或资料调研只允许只读工具"
+    assert execution_policy_denial(
+        "clone_repo",
+        {"repo": "THUDM/AgentBench"},
+        AgentContext({"_execution_level": int(policy.level)}),
+    ) is not None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "我计划以后提交 PR，请你先调研一下哪些厂商的社区维护更活跃",
+        "我想把项目推送到其他平台，帮我比较这些平台的 PR 响应速度",
+    ],
+)
+def test_hypothetical_write_background_does_not_authorize_writes(text):
+    policy = classify_execution_policy(text, intent=detect_intent(text))
+
+    assert policy.level is ExecutionLevel.READ_ONLY
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "请你把当前修改提交到 GitHub",
+        "现在提交",
+        "帮我推送一下",
+    ],
+)
+def test_explicit_git_requests_still_authorize_write(text):
+    policy = classify_execution_policy(text, intent=detect_intent(text))
+
+    assert policy.level is ExecutionLevel.WRITE
+
+
 def test_valid_raw_python_is_normalized_to_a_fenced_block():
     checked = validate_code_response(
         "用 Python 写一个加法函数",
@@ -141,6 +188,35 @@ def test_tool_executor_blocks_write_before_toolnode(monkeypatch):
     assert result.success is False
     assert "本轮执行策略" in result.observation
     assert executed == []
+
+
+def test_read_only_research_hides_and_blocks_clone_repo(monkeypatch):
+    executed: list[str] = []
+
+    def fake_execute(self, context):
+        executed.append(self.action_type)
+        return {"success": True, "content": "unexpected"}
+
+    monkeypatch.setattr("xenon.nodes.tool_executor.ToolNode.execute", fake_execute)
+    context = AgentContext({"_execution_level": int(ExecutionLevel.READ_ONLY)})
+    result = ToolExecutor().execute(
+        "clone_repo",
+        {"repo": "THUDM/AgentBench"},
+        context,
+        tools={"clone_repo": {"name": "clone_repo"}},
+    )
+
+    assert result.success is False
+    assert "只读" in result.observation
+    assert executed == []
+
+    engine = ReActEngine(["test/model"])
+    engine._active_execution_level = int(ExecutionLevel.READ_ONLY)
+    visible_tools = {
+        item["function"]["name"] for item in engine._build_tools_schema()
+    }
+    assert "github_fetch" in visible_tools
+    assert "clone_repo" not in visible_tools
 
 
 def test_code_text_that_mentions_a_saved_file_stays_in_direct(monkeypatch):

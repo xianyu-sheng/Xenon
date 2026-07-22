@@ -61,7 +61,7 @@ class DifficultyEstimator:
     def _measure_complexity(text: str, intent: str | None) -> float:
         score = 0.3
         intent_base = {
-            "chat": 0.05, "query": 0.1, "explain": 0.3,
+            "chat": 0.05, "query": 0.1, "research": 0.3, "explain": 0.3,
             "write_code": 0.5, "convert": 0.5, "write_test": 0.5,
             "debug": 0.6, "refactor": 0.6, "write_doc": 0.4,
             "design": 0.7, "novel": 0.6,

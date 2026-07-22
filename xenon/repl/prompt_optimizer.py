@@ -257,6 +257,31 @@ TEMPLATES: list[PromptTemplate] = [
         system_hint="你是一个信息查询助手。请使用工具获取实时数据，给出准确的回答。",
     ),
 
+    # 资料调研（与天气/票价等即时查询分离，默认严格只读）
+    PromptTemplate(
+        intent="research",
+        trigger_patterns=[
+            r"(?:查一下|查询|搜索|调研|调查|了解|研究|对比|比较).{0,40}"
+            r"(?:大模型|模型厂商|厂商|平台|agent|工具|项目|仓库|社区|维护|PR|issue|生态)",
+            r"(?:哪个|哪些|哪家).{0,30}(?:厂商|平台|项目|社区).{0,20}"
+            r"(?:更快|更活跃|维护|响应|推荐)",
+            r"(?:research|compare|investigate|look\s+up).{0,40}"
+            r"(?:vendor|platform|project|repository|community|maintenance|pull request)",
+        ],
+        template=(
+            "## 调研问题\n{task}\n\n"
+            "## 调研要求\n"
+            "1. 仅使用只读检索工具和公开信息\n"
+            "2. 比较维护活跃度、PR 响应与最近更新时间\n"
+            "3. 区分事实、推断和未知信息，并附可核验来源\n"
+            "4. 未经用户明确要求，不克隆仓库、不写入本地文件"
+        ),
+        system_hint=(
+            "你是一个资料调研助手。只使用只读检索工具获取公开证据；"
+            "不要通过克隆仓库或写文件完成信息查询。"
+        ),
+    ),
+
     # 解释代码（放最后，因为"代码"这个词太泛）
     PromptTemplate(
         intent="explain",
@@ -415,6 +440,7 @@ def get_intent_display(intent: str | None) -> str:
         "convert": "🔄 转换迁移",
         "novel": "📖 小说创作",
         "query": "🔍 信息查询",
+        "research": "🔎 资料调研",
         "write_doc": "📄 编写文档",
         "chat": "💬 闲聊对话",
     }
