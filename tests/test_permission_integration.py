@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import io
 
 import pytest
+from rich.console import Console
+from rich.panel import Panel
 
 from xenon.engine.context import AgentContext
 from xenon.nodes.tool_executor import ToolExecutor, classify_tool
@@ -31,6 +34,25 @@ def test_command_confirmation_displays_normalized_action_and_escapes_markup():
     assert "命令: ?" not in message
     assert r"\[abc]" in message
     assert "本会话允许相同操作" in message
+
+
+@pytest.mark.parametrize("risk", ["WRITE", "CRITICAL"])
+def test_confirmation_key_hints_survive_real_rich_panel_rendering(risk):
+    message = PermissionGate.format_confirm_message(
+        "write_file" if risk == "WRITE" else "command",
+        {"file_path": "/tmp/result.py", "action": "python result.py"},
+        risk,
+    )
+    output = io.StringIO()
+    console = Console(file=output, force_terminal=False, width=120)
+
+    console.print(Panel(message))
+
+    rendered = output.getvalue()
+    assert "[y] 确认" in rendered
+    assert "[n] 拒绝" in rendered
+    assert "[a]" in rendered
+    assert "[q] 取消任务" in rendered
 
 
 def test_critical_exact_approval_does_not_allow_a_different_command():

@@ -362,7 +362,7 @@ class REPL:
             try:
                 choice = Prompt.ask(
                     "选择", choices=["y", "n", "a", "q"], default="n",
-                    show_choices=False,
+                    show_choices=True, case_sensitive=False,
                 )
             except (KeyboardInterrupt, EOFError):
                 return False, "用户取消"

@@ -202,5 +202,17 @@ class PermissionGate:
 
         lines.append("")
         always_label = "本会话允许相同操作" if risk == "CRITICAL" else "本次会话总是允许"
-        lines.append(f"   [y] 确认  [n] 拒绝  [a] {always_label}  [q] 取消任务")
+        # This string is rendered as Rich markup by the REPL.  Bare ``[y]``
+        # looks like a markup tag and is silently removed, so escape literal
+        # key brackets while keeping the keys visually prominent.
+        y_key = escape("[y]")
+        n_key = escape("[n]")
+        a_key = escape("[a]")
+        q_key = escape("[q]")
+        lines.append(
+            f"   [bold cyan]{y_key}[/bold cyan] 确认  "
+            f"[bold cyan]{n_key}[/bold cyan] 拒绝  "
+            f"[bold cyan]{a_key}[/bold cyan] {always_label}  "
+            f"[bold cyan]{q_key}[/bold cyan] 取消任务"
+        )
         return "\n".join(lines)

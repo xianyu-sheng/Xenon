@@ -137,9 +137,15 @@ def test_repl_permission_prompt_freezes_and_resumes_activity(monkeypatch):
     )
     repl = REPL(streaming=False)
     repl._terminal_activity = indicator
+    prompt_options: dict = {}
     monkeypatch.delenv("XENON_ASSUME_YES", raising=False)
     monkeypatch.setattr("xenon.repl.repl.sys.stdin.isatty", lambda: True)
-    monkeypatch.setattr("xenon.repl.repl.Prompt.ask", lambda *a, **k: "y")
+
+    def answer_yes(*args, **kwargs):
+        prompt_options.update(kwargs)
+        return "y"
+
+    monkeypatch.setattr("xenon.repl.repl.Prompt.ask", answer_yes)
 
     with indicator.active():
         allowed, reason = repl._confirm_tool(
@@ -150,6 +156,9 @@ def test_repl_permission_prompt_freezes_and_resumes_activity(monkeypatch):
         assert indicator.state is TerminalActivityState.RUNNING
 
     assert (allowed, reason) == (True, "")
+    assert prompt_options["show_choices"] is True
+    assert prompt_options["case_sensitive"] is False
+    assert prompt_options["choices"] == ["y", "n", "a", "q"]
     assert "☆ Xenon · 等待命令确认" in titles
     assert titles[-1] == "✶·· Xenon"
     indicator.close()
