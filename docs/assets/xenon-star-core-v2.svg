@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
-  <title id="title">Xenon Star Core</title>
+  <title id="title">Xenon Star Core icon concept</title>
   <desc id="desc">A luminous xenon-blue eight-point star core surrounded by a small constellation.</desc>
   <defs>
     <radialGradient id="space" cx="50%" cy="46%" r="53%">
@@ -34,13 +34,17 @@
     <path id="star-five" d="M0-12 2.8-3.9 11.4-3.7 4.6 1.5 7.1 9.7 0 5-7.1 9.7-4.6 1.5-11.4-3.7-2.8-3.9Z"/>
   </defs>
 
+  <!-- A circle, not a rounded square: the silhouette remains stellar at tab-icon sizes. -->
   <circle cx="256" cy="256" r="242" fill="url(#space)"/>
   <circle cx="256" cy="256" r="241" fill="none" stroke="#759cff" stroke-opacity="0.16" stroke-width="2"/>
+
+  <!-- Broken orbital paths suggest a constellation/model network without boxing in the mark. -->
   <g fill="none" stroke="url(#orbit)" stroke-linecap="round">
     <ellipse cx="256" cy="256" rx="202" ry="82" stroke-width="2.2" stroke-dasharray="118 22 44 28" transform="rotate(-13 256 256)"/>
     <ellipse cx="256" cy="256" rx="96" ry="204" stroke-width="1.4" stroke-dasharray="48 34 104 26" transform="rotate(38 256 256)" opacity="0.56"/>
   </g>
 
+  <!-- Constellation pins. Different scales keep the composition organic rather than geometric. -->
   <g fill="#baf4ff" filter="url(#pin-glow)">
     <use href="#star-five" transform="translate(100 154) scale(.78)" opacity="0.92">
       <animate attributeName="opacity" values=".32;1;.45;.32" dur="2.4s" repeatCount="indefinite"/>
@@ -63,6 +67,7 @@
     <circle cx="331" cy="429" r="3" opacity=".78"/>
   </g>
 
+  <!-- The core is an eight-ray xenon discharge: unmistakably a star even at 16 px. -->
   <circle cx="256" cy="256" r="156" fill="url(#halo)" opacity=".74">
     <animate attributeName="r" values="146;164;146" dur="2.2s" repeatCount="indefinite"/>
     <animate attributeName="opacity" values=".54;.82;.54" dur="2.2s" repeatCount="indefinite"/>

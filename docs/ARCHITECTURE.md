@@ -230,7 +230,7 @@ xenon/
 │   ├── llm_client.py     · 多厂商 LLM 客户端
 │   ├── deepseek_cache.py · 缓存追踪器（SHA256 + 滚动窗口）
 │   ├── response_adapter.py · 输出解析（JSON 提取 + 字段别名）
-│   └── logo.py          · 启动动画（氙气轨道 Σ-3）
+│   └── logo.py          · Star Core 启动动画（八芒星核 + 群星）
 └── tests/            · 离线 / live / e2e 分层的 pytest 测试
 ```
 

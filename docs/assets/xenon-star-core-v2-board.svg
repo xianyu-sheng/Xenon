@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">Xenon Star Core v2 design board</title>
+  <desc id="desc">The proposed Xenon identity, small-size variants, and terminal tab animation frames.</desc>
+  <defs>
+    <radialGradient id="panel" cx="45%" cy="42%" r="72%">
+      <stop offset="0" stop-color="#17274a"/>
+      <stop offset="1" stop-color="#080d1a"/>
+    </radialGradient>
+    <linearGradient id="core" x1="0.15" y1="0.08" x2="0.84" y2="0.91">
+      <stop offset="0" stop-color="#f1feff"/>
+      <stop offset="0.3" stop-color="#8be9ff"/>
+      <stop offset="0.7" stop-color="#7695ff"/>
+      <stop offset="1" stop-color="#a788ff"/>
+    </linearGradient>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="9" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="small-glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <path id="core-star" d="M256 54 274 212 350 162 300 236 458 256 300 276 350 350 276 300 256 458 236 300 162 350 212 276 54 256 212 236 162 162 236 212Z"/>
+    <path id="star-five" d="M0-12 2.8-3.9 11.4-3.7 4.6 1.5 7.1 9.7 0 5-7.1 9.7-4.6 1.5-11.4-3.7-2.8-3.9Z"/>
+    <g id="mark">
+      <circle cx="256" cy="256" r="242" fill="url(#panel)"/>
+      <circle cx="256" cy="256" r="241" fill="none" stroke="#7695ff" stroke-opacity=".18" stroke-width="2"/>
+      <g fill="none" stroke="#749cff" stroke-opacity=".29" stroke-linecap="round">
+        <ellipse cx="256" cy="256" rx="202" ry="82" stroke-width="2" stroke-dasharray="118 22 44 28" transform="rotate(-13 256 256)"/>
+        <ellipse cx="256" cy="256" rx="96" ry="204" stroke-width="1.4" stroke-dasharray="48 34 104 26" transform="rotate(38 256 256)"/>
+      </g>
+      <g fill="#baf4ff" filter="url(#small-glow)">
+        <use href="#star-five" transform="translate(100 154) scale(.78)"/>
+        <use href="#star-five" transform="translate(406 168) scale(.48)" opacity=".7"/>
+        <use href="#star-five" transform="translate(414 342) scale(.86)" opacity=".9"/>
+        <use href="#star-five" transform="translate(114 376) scale(.42)" opacity=".62"/>
+      </g>
+      <circle cx="256" cy="256" r="150" fill="#7197ff" opacity=".11"/>
+      <use href="#core-star" fill="url(#core)" filter="url(#glow)"/>
+      <circle cx="256" cy="256" r="39" fill="#101b38" fill-opacity=".78" stroke="#c8f8ff" stroke-opacity=".62" stroke-width="1.5"/>
+      <text x="256" y="258" text-anchor="middle" dominant-baseline="middle" fill="#f5feff"
+            font-family="'SF Mono','Cascadia Code','JetBrains Mono',monospace" font-size="31" font-weight="750" letter-spacing="-2">Xe</text>
+    </g>
+    <g id="glyph">
+      <use href="#core-star" fill="url(#core)" filter="url(#small-glow)"/>
+      <circle cx="256" cy="256" r="34" fill="#eaffff"/>
+    </g>
+  </defs>
+
+  <rect width="1200" height="760" fill="#050812"/>
+  <text x="54" y="64" fill="#f3f8ff" font-family="Inter,system-ui,sans-serif" font-size="29" font-weight="700">Xenon Star Core</text>
+  <text x="54" y="92" fill="#71809d" font-family="Inter,system-ui,sans-serif" font-size="15" letter-spacing="2.4">IDENTITY CONCEPT · V2</text>
+
+  <!-- Primary mark -->
+  <rect x="42" y="122" width="546" height="582" rx="28" fill="#0a1020" stroke="#27334d"/>
+  <use href="#mark" transform="translate(93 144) scale(.87)"/>
+  <text x="315" y="624" text-anchor="middle" fill="#ecf7ff" font-family="Inter,system-ui,sans-serif" font-size="25" font-weight="650">星核 / Star Core</text>
+  <text x="315" y="653" text-anchor="middle" fill="#70819f" font-family="Inter,system-ui,sans-serif" font-size="14">氙蓝放电 · 八芒轮廓 · 环绕群星</text>
+  <g fill="#9ab0d1" font-family="Inter,system-ui,sans-serif" font-size="13">
+    <text x="117" y="683">● 不再依赖方形边框</text>
+    <text x="327" y="683">● 小尺寸隐藏 Xe，仅保留星爆</text>
+  </g>
+
+  <!-- Small-size proof -->
+  <rect x="618" y="122" width="540" height="196" rx="24" fill="#0a1020" stroke="#27334d"/>
+  <text x="650" y="160" fill="#eef7ff" font-family="Inter,system-ui,sans-serif" font-size="18" font-weight="650">小尺寸识别</text>
+  <text x="650" y="184" fill="#6f819f" font-family="Inter,system-ui,sans-serif" font-size="13">终端 / Dock / favicon 保留同一个星核轮廓</text>
+  <g>
+    <use href="#glyph" transform="translate(654 194) scale(.19)"/>
+    <use href="#glyph" transform="translate(786 217) scale(.10)"/>
+    <use href="#glyph" transform="translate(888 230) scale(.055)"/>
+    <use href="#glyph" transform="translate(972 237) scale(.03125)"/>
+  </g>
+  <g fill="#6f819f" font-family="'SF Mono','Cascadia Code',monospace" font-size="12" text-anchor="middle">
+    <text x="752" y="298">96 px</text>
+    <text x="837" y="298">48 px</text>
+    <text x="916" y="298">28 px</text>
+    <text x="988" y="298">16 px</text>
+  </g>
+
+  <!-- Terminal title states -->
+  <rect x="618" y="342" width="540" height="362" rx="24" fill="#0a1020" stroke="#27334d"/>
+  <text x="650" y="382" fill="#eef7ff" font-family="Inter,system-ui,sans-serif" font-size="18" font-weight="650">终端标签 · 状态语言</text>
+  <text x="650" y="407" fill="#6f819f" font-family="Inter,system-ui,sans-serif" font-size="13">固定字符宽度，运行时闪耀；等待用户时立即静止</text>
+
+  <g font-family="'SF Mono','Cascadia Code','JetBrains Mono',monospace">
+    <rect x="650" y="432" width="476" height="48" rx="10" fill="#111a2d"/>
+    <circle cx="672" cy="456" r="4" fill="#66ddb8"/>
+    <text x="691" y="462" fill="#dbe8f7" font-size="18"><tspan fill="#9aefff">✶</tspan><tspan fill="#51617b">··</tspan> Xenon</text>
+    <text x="1075" y="461" fill="#71809d" font-size="12" text-anchor="end">IDLE</text>
+
+    <rect x="650" y="492" width="476" height="48" rx="10" fill="#111a2d"/>
+    <circle cx="672" cy="516" r="4" fill="#7695ff"/>
+    <text x="691" y="522" fill="#dbe8f7" font-size="18"><tspan fill="#9aefff">✶</tspan><tspan fill="#51617b">··</tspan> Xenon</text>
+    <text x="1075" y="521" fill="#71809d" font-size="12" text-anchor="end">RUN · 1</text>
+
+    <rect x="650" y="546" width="476" height="48" rx="10" fill="#111a2d"/>
+    <circle cx="672" cy="570" r="4" fill="#8d84ff"/>
+    <text x="691" y="576" fill="#dbe8f7" font-size="18"><tspan fill="#51617b">·</tspan><tspan fill="#9aefff">✶</tspan><tspan fill="#51617b">·</tspan> Xenon</text>
+    <text x="1075" y="575" fill="#71809d" font-size="12" text-anchor="end">RUN · 2</text>
+
+    <rect x="650" y="600" width="476" height="48" rx="10" fill="#111a2d"/>
+    <circle cx="672" cy="624" r="4" fill="#a788ff"/>
+    <text x="691" y="630" fill="#dbe8f7" font-size="18"><tspan fill="#51617b">··</tspan><tspan fill="#9aefff">✶</tspan> Xenon</text>
+    <text x="1075" y="629" fill="#71809d" font-size="12" text-anchor="end">RUN · 3</text>
+
+    <text x="650" y="679" fill="#f0c879" font-size="14">☆·· Xenon · 等待确认</text>
+    <text x="920" y="679" fill="#6f819f" font-size="12">静止，不催促用户</text>
+  </g>
+</svg>

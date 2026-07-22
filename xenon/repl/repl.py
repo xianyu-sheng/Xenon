@@ -130,6 +130,11 @@ class REPL:
         )
         self._logo_shown: bool = False       # 启动动画只播一次
 
+        # 终端标签页活动状态：任务执行时星核移动，空闲/等待用户时静止。
+        # OSC 标题更新不触碰终端正文；非 TTY、CI 和 dumb 终端自动禁用。
+        from xenon.repl.terminal_activity import TerminalActivityIndicator
+        self._terminal_activity = TerminalActivityIndicator()
+
         # v0.4.0: Auto router + model pool (replaces role_priority)
         from xenon.repl.model_pool import ModelPool
         from xenon.repl.auto_router import AutoRouter
@@ -144,6 +149,7 @@ class REPL:
             "_novel_manager": self._novel_manager,
             "model_pool": self.model_pool,
             "auto_router": self.auto_router,
+            "terminal_activity": self._terminal_activity,
         }
 
         # v0.3.0+ 修复（C-3）：bash 风格——单次 Ctrl+C 重画 prompt 继续，
@@ -342,17 +348,20 @@ class REPL:
                 "/permissions bypass 或设置 XENON_ASSUME_YES=1",
             )
 
-        msg = PermissionGate.format_confirm_message(tool_name, params, risk)
-        console.print()
-        console.print(Panel(msg, border_style="yellow", padding=(0, 1)))
+        # Permission input is a genuine waiting state: freeze the tab starfield
+        # before rendering the prompt, then resume the parent task afterwards.
+        with self._terminal_waiting("等待命令确认"):
+            msg = PermissionGate.format_confirm_message(tool_name, params, risk)
+            console.print()
+            console.print(Panel(msg, border_style="yellow", padding=(0, 1)))
 
-        try:
-            choice = Prompt.ask(
-                "选择", choices=["y", "n", "a", "q"], default="n",
-                show_choices=False,
-            )
-        except (KeyboardInterrupt, EOFError):
-            return False, "用户取消"
+            try:
+                choice = Prompt.ask(
+                    "选择", choices=["y", "n", "a", "q"], default="n",
+                    show_choices=False,
+                )
+            except (KeyboardInterrupt, EOFError):
+                return False, "用户取消"
 
         if choice == "y":
             return True, ""
@@ -369,6 +378,15 @@ class REPL:
             return False, "用户取消任务"
         else:
             return False, "用户拒绝"
+
+    def _terminal_waiting(self, detail: str):
+        """Return a waiting context, with a no-op fallback for partial REPLs."""
+        from contextlib import nullcontext
+
+        activity = getattr(self, "_terminal_activity", None)
+        if activity is None:
+            return nullcontext()
+        return activity.waiting(detail)
 
     def _start_log_capture(self) -> None:
         """v0.5.3: 拦截引擎执行期间的日志输出。
@@ -877,76 +895,72 @@ class REPL:
             "请用中文回答，代码部分用英文。"
         )
 
-    @staticmethod
-    def _set_console_title() -> None:
-        """设置控制台窗口标题。"""
-        import sys
-        title = "✦ Xenon"
-        if sys.platform == "win32":
-            try:
-                import ctypes
-                ctypes.windll.kernel32.SetConsoleTitleW(title)
-            except Exception:
-                pass
-        else:
-            # Linux/macOS 用 ANSI 转义
-            sys.stdout.write(f"\033]0;{title}\007")
-            sys.stdout.flush()
+    def _set_console_title(self) -> None:
+        """Publish Xenon's static Star Core title before entering the REPL."""
+        self._terminal_activity.start()
 
     def run(self) -> None:
         """启动 REPL 主循环。"""
         self._set_console_title()
-        self._print_welcome()
+        try:
+            self._print_welcome()
 
-        # 检查是否需要初始配置
-        self._check_first_run()
+            # 检查是否需要初始配置
+            self._check_first_run()
 
-        # v0.4.0 Step 14: 检查可恢复的会话
-        self._check_auto_resume()
+            # v0.4.0 Step 14: 检查可恢复的会话
+            self._check_auto_resume()
 
-        # 初始化系统消息
-        if self.system_prompt:
-            self.ctx_mgr.add_system_message(self.system_prompt)
+            # 初始化系统消息
+            if self.system_prompt:
+                self.ctx_mgr.add_system_message(self.system_prompt)
 
-        while True:
-            # 显示状态栏（PT 模式由 bottom_toolbar 渲染，非 PT 模式才需单独打印）
-            if self._pt_session is None:
-                self.status_bar.print_status()
+            while True:
+                # 显示状态栏（PT 模式由 bottom_toolbar 渲染，非 PT 模式才需单独打印）
+                if self._pt_session is None:
+                    self.status_bar.print_status()
 
-            try:
-                user_input = self._read_input()
-            except (KeyboardInterrupt, EOFError):
-                # v0.3.0+ 修复（C-3）：bash 风格——单次 Ctrl+C 重画 prompt，
-                # 连续两次才退出。修复前空行 Ctrl+C 在 5/9 终端类型（xterm256color/
-                # alacritty/gnome-256color/screen-256color/vt100）直接退出 REPL。
-                if self._pending_exit:
+                try:
+                    user_input = self._read_input()
+                except (KeyboardInterrupt, EOFError):
+                    # v0.3.0+ 修复（C-3）：bash 风格——单次 Ctrl+C 重画 prompt，
+                    # 连续两次才退出。修复前空行 Ctrl+C 在 5/9 终端类型（xterm256color/
+                    # alacritty/gnome-256color/screen-256color/vt100）直接退出 REPL。
+                    if self._pending_exit:
+                        self._auto_save_session()
+                        self._print_exit_report()
+                        console.print("\n[dim]再见！[/dim]")
+                        break
+                    self._pending_exit = True
+                    console.print("\n[dim]· 已中断，按 Ctrl+C 再次退出[/dim]")
+                    continue
+
+                # 成功读取输入 → 重置 pending_exit
+                self._pending_exit = False
+
+                if not user_input:
+                    continue
+
+                # A submitted command/chat owns one activity scope. It settles
+                # synchronously before the next input prompt is rendered.
+                with self._terminal_activity.active():
+                    # 斜杠命令
+                    if user_input.startswith("/"):
+                        if self._handle_command(user_input):
+                            self._auto_save_session()
+                            self._print_exit_report()
+                            console.print("[dim]再见！[/dim]")
+                            break
+                        self._auto_save_session()
+                        continue
+
+                    # 多轮对话（带 prompt 优化）
+                    self._handle_chat(user_input)
                     self._auto_save_session()
-                    self._print_exit_report()
-                    console.print("\n[dim]再见！[/dim]")
-                    break
-                self._pending_exit = True
-                console.print("\n[dim]· 已中断，按 Ctrl+C 再次退出[/dim]")
-                continue
-
-            # 成功读取输入 → 重置 pending_exit
-            self._pending_exit = False
-
-            if not user_input:
-                continue
-
-            # 斜杠命令
-            if user_input.startswith("/"):
-                if self._handle_command(user_input):
-                    self._auto_save_session()
-                    self._print_exit_report()
-                    console.print("[dim]再见！[/dim]")
-                    break
-                self._auto_save_session()
-                continue
-
-            # 多轮对话（带 prompt 优化）
-            self._handle_chat(user_input)
-            self._auto_save_session()
+        finally:
+            # Stop the worker and restore the prior/best-effort shell title even
+            # when setup, a command, or an engine raises unexpectedly.
+            self._terminal_activity.close()
 
     def _print_exit_report(self) -> None:
         """P1-7：会话结束时打印省钱报告。"""
@@ -2952,42 +2966,43 @@ class REPL:
                 scope=proposal.scope,
                 kind=proposal.kind,
             )
-            self._render_memory_proposal(
-                proposal,
-                service.destination_for(proposal.scope, proposal.kind),
-                conflicts,
-            )
-            choice = Prompt.ask(
-                "[bold cyan]处理这条记忆候选[/bold cyan]",
-                choices=["s", "e", "u", "l", "h", "t", "n"],
-                default="n",
-                show_choices=False,
-            )
-            if choice == "n":
-                console.print("[dim]· 已忽略，本轮没有写入记忆[/dim]")
-                return
-            if choice == "e":
-                edited = Prompt.ask("编辑记忆内容", default=proposal.content).strip()
-                if not edited:
-                    console.print("[dim]· 内容为空，已取消[/dim]")
+            with self._terminal_waiting("等待记忆确认"):
+                self._render_memory_proposal(
+                    proposal,
+                    service.destination_for(proposal.scope, proposal.kind),
+                    conflicts,
+                )
+                choice = Prompt.ask(
+                    "[bold cyan]处理这条记忆候选[/bold cyan]",
+                    choices=["s", "e", "u", "l", "h", "t", "n"],
+                    default="n",
+                    show_choices=False,
+                )
+                if choice == "n":
+                    console.print("[dim]· 已忽略，本轮没有写入记忆[/dim]")
                     return
-                proposal.content = edited
-            elif choice == "u":
-                from xenon.memory import MemoryScope
+                if choice == "e":
+                    edited = Prompt.ask("编辑记忆内容", default=proposal.content).strip()
+                    if not edited:
+                        console.print("[dim]· 内容为空，已取消[/dim]")
+                        return
+                    proposal.content = edited
+                elif choice == "u":
+                    from xenon.memory import MemoryScope
 
-                proposal.scope = MemoryScope.USER
-            elif choice == "l":
-                from xenon.memory import MemoryScope
+                    proposal.scope = MemoryScope.USER
+                elif choice == "l":
+                    from xenon.memory import MemoryScope
 
-                proposal.scope = MemoryScope.PROJECT_LOCAL
-            elif choice == "h":
-                from xenon.memory import MemoryScope
+                    proposal.scope = MemoryScope.PROJECT_LOCAL
+                elif choice == "h":
+                    from xenon.memory import MemoryScope
 
-                proposal.scope = MemoryScope.PROJECT_SHARED
-            elif choice == "t":
-                from xenon.memory import MemoryScope
+                    proposal.scope = MemoryScope.PROJECT_SHARED
+                elif choice == "t":
+                    from xenon.memory import MemoryScope
 
-                proposal.scope = MemoryScope.SESSION
+                    proposal.scope = MemoryScope.SESSION
 
             receipt = service.remember(
                 proposal.content,

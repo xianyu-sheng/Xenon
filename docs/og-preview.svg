@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Xenon — Your AI coding workspace</title>
+  <desc id="desc">Xenon Star Core beside the product name and terminal-agent capabilities.</desc>
+  <defs>
+    <radialGradient id="bg" cx="30%" cy="42%" r="82%">
+      <stop offset="0" stop-color="#17284b"/>
+      <stop offset="0.45" stop-color="#0a1123"/>
+      <stop offset="1" stop-color="#040710"/>
+    </radialGradient>
+    <linearGradient id="core" x1="0.15" y1="0.08" x2="0.84" y2="0.91">
+      <stop offset="0" stop-color="#f1feff"/>
+      <stop offset="0.3" stop-color="#8be9ff"/>
+      <stop offset="0.7" stop-color="#7695ff"/>
+      <stop offset="1" stop-color="#a788ff"/>
+    </linearGradient>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="12" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <path id="star" d="M256 54 274 212 350 162 300 236 458 256 300 276 350 350 276 300 256 458 236 300 162 350 212 276 54 256 212 236 162 162 236 212Z"/>
+    <path id="star-five" d="M0-12 2.8-3.9 11.4-3.7 4.6 1.5 7.1 9.7 0 5-7.1 9.7-4.6 1.5-11.4-3.7-2.8-3.9Z"/>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <circle cx="330" cy="320" r="232" fill="#081022" stroke="#759cff" stroke-opacity=".18" stroke-width="2"/>
+  <g fill="none" stroke="#779cff" stroke-opacity=".30" stroke-linecap="round">
+    <ellipse cx="330" cy="320" rx="194" ry="76" stroke-width="2" stroke-dasharray="112 24 48 30" transform="rotate(-13 330 320)"/>
+    <ellipse cx="330" cy="320" rx="90" ry="196" stroke-width="1.4" stroke-dasharray="48 34 104 26" transform="rotate(38 330 320)"/>
+  </g>
+  <g fill="#baf4ff">
+    <use href="#star-five" transform="translate(178 220) scale(.72)"/>
+    <use href="#star-five" transform="translate(476 228) scale(.46)" opacity=".7"/>
+    <use href="#star-five" transform="translate(480 408) scale(.82)" opacity=".92"/>
+    <use href="#star-five" transform="translate(194 432) scale(.4)" opacity=".64"/>
+  </g>
+  <circle cx="330" cy="320" r="142" fill="#7397ff" opacity=".12"/>
+  <use href="#star" transform="translate(74 64)" fill="url(#core)" filter="url(#glow)"/>
+  <circle cx="330" cy="320" r="39" fill="#101b38" fill-opacity=".8" stroke="#c8f8ff" stroke-opacity=".62" stroke-width="1.5"/>
+  <text x="330" y="322" text-anchor="middle" dominant-baseline="middle" fill="#f5feff"
+        font-family="'SF Mono','Cascadia Code',monospace" font-size="31" font-weight="750" letter-spacing="-2">Xe</text>
+
+  <text x="635" y="246" fill="#f5f9ff" font-family="Inter,system-ui,sans-serif" font-size="76" font-weight="760" letter-spacing="-2">Xenon</text>
+  <text x="638" y="297" fill="#9babc4" font-family="Inter,system-ui,sans-serif" font-size="23">Your AI coding workspace in the terminal.</text>
+  <rect x="638" y="340" width="450" height="58" rx="13" fill="#101a2f" stroke="#273a60"/>
+  <circle cx="669" cy="369" r="5" fill="#79e3bd"/>
+  <text x="691" y="376" fill="#dce9f8" font-family="'SF Mono','Cascadia Code',monospace" font-size="21"><tspan fill="#9aefff">✶··</tspan> Xenon</text>
+  <text x="1056" y="375" fill="#71819c" text-anchor="end" font-family="'SF Mono','Cascadia Code',monospace" font-size="13">RUNNING</text>
+  <text x="638" y="455" fill="#8be9ff" font-family="Inter,system-ui,sans-serif" font-size="17" font-weight="650">DEEPSEEK V4</text>
+  <text x="791" y="455" fill="#7790b5" font-family="Inter,system-ui,sans-serif" font-size="17">8 ENGINES</text>
+  <text x="917" y="455" fill="#9b88ff" font-family="Inter,system-ui,sans-serif" font-size="17">USER-GOVERNED MEMORY</text>
+  <text x="638" y="497" fill="#657690" font-family="Inter,system-ui,sans-serif" font-size="16">Observable routing · permission-gated tools · local-first context</text>
+</svg>
