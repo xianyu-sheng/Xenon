@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-07-23
+
+> **版本性质：** 正式发布 Agent Skills、机器可读集成 CLI、火山方舟 Ark 一等
+> Provider、llms.txt 优先文档检索和真实 Skill/MCP 互操作验证；该版本是 Xenon
+> 接入 ArkCLI、VeADK 等外部 Agent 生态的稳定契约基线。
+
 ### ArkCLI / VeADK 生态端到端验证
 
 - 新增 `xenon integrations verify`：默认只读检查四层 Agent Skill 根目录、MCP
@@ -150,7 +156,7 @@
 
 ### 验证
 
-- 离线回归：`1546 passed, 36 deselected`。
+- 完整离线回归：`1600 passed, 36 deselected`。
 - Ruff、`compileall`、SVG XML 校验、`git diff --check`、wheel 与 sdist 构建通过；家目录真实 TTY 启动下的 `/project` 与 `/memory status` 已验证。
 
 ## [0.7.0] — 2026-07-22

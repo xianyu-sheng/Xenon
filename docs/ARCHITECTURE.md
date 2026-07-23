@@ -8,17 +8,20 @@
 
 ## 当前开发分支变更边界
 
-v0.7.0 保留既有 REPL 与引擎分层、ModelPool、ContextManager / AgentContext
-双上下文以及 7 阶段工具管线，并新增独立的用户治理记忆层。记忆通过
-ContextManager 的可替换上下文消息接入，不侵入八种推理引擎。
+v0.7.1 保留既有 REPL 与引擎分层、ModelPool、ContextManager / AgentContext
+双上下文以及 7 阶段工具管线，并在 v0.7.0 用户治理记忆层之上新增标准 Agent
+Skills、机器可读集成 CLI、Ark 一等 Provider 和 llms.txt 优先文档检索。这些能力
+分别接入既有技能、Provider、工具和 MCP 边界，不侵入八种推理引擎。
 
-| 变更类型 | v0.7.0 内容 | 是否改变顶层架构 |
+| 变更类型 | v0.7.1 内容 | 是否改变顶层架构 |
 |----------|--------------|--------------------|
 | Bug 修复/可靠性 | 权限透传、事务化写入、模型恢复、GitHub URL、Plan 失败传播、跨轮轨迹 | 否，是对已有组件契约的补齐 |
 | DeepSeek 兼容性 | V4 模型/价格、思考模式工具续轮、强制 `tool_choice` 兼容 | 否，扩展原有 LLM 客户端与 ReAct 协议实现 |
 | 工程门禁 | 离线/live/e2e 分层、Python 3.10–3.12、覆盖率和打包检查 | 否，属于验证与发行工程 |
 | TUI 重新排版 | 双线输入区、固定底栏、无边框回复、折叠详情 | 不改引擎架构，但是明显的交互层变更 |
 | Memory v2 | 四层作用域、显式授权/候选确认、有界检索、可恢复归档 | 是，新增独立顶层能力；不改变现有引擎协议 |
+| 外部生态集成 | 标准 `SKILL.md`、JSON CLI、真实 MCP 验证 | 否，稳定既有 Skill/MCP 扩展边界 |
+| Provider 与文档检索 | Ark 一等 Provider、`docs_fetch` 与 llms.txt 优先策略 | 否，扩展既有 Provider 和工具注册表 |
 
 ---
 

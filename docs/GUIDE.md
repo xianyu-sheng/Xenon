@@ -6,11 +6,11 @@ and DeepSeek cache cost optimization.
 ## Installation
 
 ```bash
-# Stable v0.7.0 release:
-pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.7.0"
+# Stable v0.7.1 release:
+pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.7.1"
 ```
 
-Remove `@v0.7.0` only when you intentionally want to follow the development
+Remove `@v0.7.1` only when you intentionally want to follow the development
 branch instead of the stable release.
 
 Requirements: Python 3.10+, Linux / macOS / Windows (PowerShell).
@@ -44,7 +44,7 @@ The tool automatically discovers available models from your API endpoint.
 
 ## Terminal UI
 
-Xenon v0.7.0 keeps the existing engine architecture and replaces the high-frequency
+Xenon v0.7.1 keeps the existing engine architecture and replaces the high-frequency
 conversation layout:
 
 ```text
@@ -172,8 +172,9 @@ Or add models permanently in `/setup`:
 
 ## Architecture
 
-The v0.7.0 work hardens the existing components, adds user-governed memory, and refreshes the TUI; it does
-not replace Xenon's top-level architecture. The three pillars remain:
+The v0.7.1 work hardens the existing components, adds ecosystem integration,
+user-governed memory, and the refreshed TUI; it does not replace Xenon's
+top-level architecture. The four pillars remain:
 
 1. **Cache-aware cost loop** — DeepSeek cache usage, request-family evidence,
    deterministic prompt-prefix compilation, and conservative peer-model cache
@@ -182,6 +183,8 @@ not replace Xenon's top-level architecture. The three pillars remain:
    each engine is a standalone module with pluggable callbacks.
 3. **7-stage tool pipeline** — Parameter normalization, hallucination checks,
    permissions, circuit breaking, execution, and structured results.
+4. **User-governed memory** — Four explicit scopes, confirmed persistence,
+   bounded retrieval, recoverable archival, and auditable Markdown storage.
 
 Provider registry, ModelPool failover, and ContextManager remain supporting
 components inside those boundaries.
