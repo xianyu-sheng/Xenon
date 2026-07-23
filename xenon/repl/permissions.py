@@ -196,8 +196,12 @@ class PermissionGate:
             path = params.get("file_path", params.get("path", "?"))
             lines.append(f"   创建: [bold white]{escape(str(path))}[/bold white]")
         elif tool_name == "mcp_call":
-            server = escape(str(params.get("mcp_server", "?")))
-            target = escape(str(params.get("tool_name", "?")))
+            raw_target = str(params.get("tool_name") or "未指定工具")
+            raw_server = str(params.get("mcp_server") or "")
+            if not raw_server and ":" in raw_target:
+                raw_server, raw_target = raw_target.split(":", 1)
+            server = escape(raw_server or "自动路由")
+            target = escape(raw_target)
             lines.append(f"   MCP: [bold white]{server} / {target}[/bold white]")
 
         lines.append("")

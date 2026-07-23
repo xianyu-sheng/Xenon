@@ -336,6 +336,30 @@ def detect_intent(text: str) -> str | None:
     return None
 
 
+_CONTEXTUAL_FOLLOWUP = re.compile(
+    r"^(?:结果|进展|然后|后来|查到(?:了)?|有(?:结果)?了|怎么样(?:了)?|"
+    r"继续(?:查|处理|刚才的)?|再试(?:一次|试)?)[呢吗了？?！!。.\s]*$"
+    r"|(?:为什么|怎么|为何).{0,40}(?:截断|没(?:有)?结果|只(?:返回|显示)|"
+    r"工具(?:调用)?|查询结果|数据不全)"
+    r"|(?:截断|筛选|过滤).{0,50}(?:之前|条件|结果|数据|内容)"
+    r"|(?:那|那么|所以)?\s*(?:你)?\s*(?:能不能|可以|可不可以|请)?\s*"
+    r"(?:再|重新)?(?:查|查询|筛选|过滤|继续|给出|返回).{0,40}"
+    r"(?:结果|条件|数据|内容)?[呢吗？?！!。.\s]*$",
+    re.IGNORECASE,
+)
+
+
+def is_contextual_followup(text: str) -> bool:
+    """Return whether *text* depends on the immediately preceding task.
+
+    This recognizes conversational references, not task intent.  Callers must
+    still find a compatible earlier task before inheriting any permission.
+    """
+
+    source = text.strip()
+    return bool(source and len(source) <= 180 and _CONTEXTUAL_FOLLOWUP.search(source))
+
+
 def assess_quality(user_input: str) -> tuple[bool, str]:
     """
     评估用户提示词质量，决定是否需要优化。
@@ -382,6 +406,7 @@ def optimize_prompt(
     *,
     lang: str = "Python",
     context_hints: dict[str, Any] | None = None,
+    intent: str | None = None,
 ) -> tuple[str, str | None, bool]:
     """
     优化用户输入，返回 (优化后的 prompt, 补充的 system hint, 是否实际优化)。
@@ -396,7 +421,9 @@ def optimize_prompt(
     Returns:
         (optimized_prompt, system_hint, was_optimized) — was_optimized 表示是否实际做了优化。
     """
-    intent = detect_intent(user_input)
+    # The REPL may resolve a terse follow-up (for example ``结果呢``) against
+    # the preceding turn.  Preserve that contextual intent here.
+    intent = intent if intent is not None else detect_intent(user_input)
 
     if intent is None:
         return user_input, None, False

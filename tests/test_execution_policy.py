@@ -44,6 +44,7 @@ def test_code_generation_without_side_effect_authorization_is_answer_only(text):
     [
         ("把代码保存到 /tmp/quicksort.py，不要运行", ExecutionLevel.WRITE),
         ("创建一个 hello.py 文件，内容是 print('hello')", ExecutionLevel.WRITE),
+        ("写一个 hello.py 文件，内容是 print('hello')", ExecutionLevel.WRITE),
         ("写入 /tmp/quicksort.py，然后运行测试", ExecutionLevel.EXECUTE),
         ("读取 src/main.py 并解释接口", ExecutionLevel.READ_ONLY),
         ("今天苏州天气怎么样", ExecutionLevel.READ_ONLY),

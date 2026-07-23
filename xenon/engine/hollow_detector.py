@@ -54,6 +54,11 @@ _FILE_PATH = re.compile(
 )
 _URL = re.compile(r"https?://\S+")
 _INLINE_CODE = re.compile(r"`[^`\n]{4,}`")
+_URL_ONLY = re.compile(r"https?://\S+")
+_UNRESOLVED_URL_PLACEHOLDER = re.compile(
+    r"\{[^{}\n]{0,40}(?:代码|电报码|参数|名称|日期|station|code|id|date)[^{}\n]{0,40}\}",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -74,6 +79,8 @@ class HollowResult:
             parts.append("- 回答过短，必须包含实质信息（代码/路径/数据/命令）。")
         if any("disproportionate" in r for r in self.reasons):
             parts.append("- 你已执行多次工具，请基于工具结果详细汇报，而非一句带过。")
+        if any("query_" in r for r in self.reasons):
+            parts.append("- 链接或接口地址不是查询结果；请实际调用只读工具，并整理返回的数据。")
         if self.hits:
             parts.append(f"- 避免套话表述（命中: {', '.join(self.hits)}），"
                          "直接给出代码块、文件路径或可执行步骤。")
@@ -128,7 +135,13 @@ class HollowDetector:
 
     # ── 主检测 ────────────────────────────────────────────────
 
-    def detect(self, text: str | None, tool_call_count: int = 0) -> HollowResult:
+    def detect(
+        self,
+        text: str | None,
+        tool_call_count: int = 0,
+        *,
+        require_query_result: bool = False,
+    ) -> HollowResult:
         """检测回答是否空洞。
 
         Returns:
@@ -147,6 +160,25 @@ class HollowDetector:
         reasons: list[str] = []
         hits: list[str] = []
         score = 0.0
+
+        # A search endpoint is not the requested search result.  This catches
+        # provider regressions where the model stops after constructing a URL,
+        # especially URLs that still contain unresolved station/date tokens.
+        if require_query_result:
+            if _URL_ONLY.search(stripped) and _UNRESOLVED_URL_PLACEHOLDER.search(stripped):
+                return HollowResult(
+                    True,
+                    ["query_placeholder: 查询 URL 仍含未解析占位符"],
+                    1.0,
+                )
+            residual = _URL_ONLY.sub("", stripped)
+            residual = re.sub(r"[\s\[\]()<>{}:：/|*_`~\-]+", "", residual)
+            if _URL_ONLY.search(stripped) and len(residual) < 8:
+                return HollowResult(
+                    True,
+                    ["query_url_only: 只返回查询 URL，未给出实际结果"],
+                    0.95,
+                )
 
         # ① 快速失败：< quick_fail_len
         if n < self.quick_fail_len:

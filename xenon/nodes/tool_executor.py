@@ -365,7 +365,14 @@ class ToolExecutor:
 
         # ── Stage 1: 标准化 ──
         try:
-            params = ToolNode.normalize_params(params)
+            try:
+                params = ToolNode.normalize_params(params, action_type=tool_name)
+            except TypeError as exc:
+                # Compatibility for third-party/test ToolNode shims that still
+                # expose the pre-0.7.1 one-argument normalizer.
+                if "action_type" not in str(exc):
+                    raise
+                params = ToolNode.normalize_params(params)
         except Exception as e:  # noqa: BLE001
             msg = f"参数标准化失败: {e}"
             return ToolExecuteResult(tool_name, False, msg, error=msg, tool_class=tool_class)
@@ -458,7 +465,11 @@ class ToolExecutor:
                     breaker.record_success()
                     summary = _extract_summary(
                         result,
-                        str_cap=12000 if tool_name == "docs_fetch" else 3000,
+                        str_cap=(
+                            12000
+                            if tool_name == "docs_fetch" or result.get("prefilter_applied")
+                            else 3000
+                        ),
                     )
                     if tracker:
                         tracker.record(tool_name, params, True, summary[:200])

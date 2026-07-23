@@ -1934,13 +1934,14 @@ class REPL:
 
         # Side effects are authorized by the original request, never by the
         # optimizer's generated wording or by the selected reasoning mode.
-        execution_policy = classify_execution_policy(
-            user_input,
-            intent=self._detect_intent(user_input),
-        )
+        intent, inherited_intent_source = self._resolve_turn_intent(user_input)
+        execution_policy = classify_execution_policy(user_input, intent=intent)
         self.agent_context.update({
             "_execution_level": int(execution_policy.level),
             "_execution_reason": execution_policy.reason,
+            # Preserve filter constraints for terse continuations such as
+            # "结果呢" that do not repeat the original query.
+            "_query_constraint_source": inherited_intent_source or "",
         })
 
         # Resolve the project before a memory command so the default
@@ -1972,13 +1973,18 @@ class REPL:
         # query 意图（天气/价格/汇率/新闻等实时数据）必然需要工具，direct 模式不向 API
         # 传工具，须路由到 ReAct（见 _detect_tool_need）。
         intent_input = skill_args if skill_name is not None else user_input
-        intent = self._detect_intent(intent_input)
+        if skill_name is not None:
+            intent = self._detect_intent(intent_input)
+            inherited_intent_source = None
         system_hint: str | None = None
         if skill_name is not None:
             optimized = user_input
             console.print(f"[dim cyan]🧩 Agent Skill: {skill_name}（正文与资源按需加载）[/dim cyan]")
         elif self.optimize_prompts:
-            optimized, system_hint, was_optimized = optimize_prompt(user_input)
+            optimized, system_hint, was_optimized = optimize_prompt(
+                user_input,
+                intent=intent,
+            )
             console.print(f"[dim]🎯 意图: {get_intent_display(intent)}[/dim]")
 
             if was_optimized:
@@ -2019,9 +2025,29 @@ class REPL:
                 f"{optimized}\n\n"
                 f"## 本轮回答指导\n{system_hint}"
             )
+        if inherited_intent_source:
+            turn_prompt = (
+                f"{turn_prompt}\n\n"
+                "## 延续上轮任务\n"
+                "保留上轮查询目标和全部筛选条件，继续取得实际结果；"
+                "不要只返回查询 URL。\n"
+                f"{inherited_intent_source}"
+            )
 
         # 添加用户消息
-        self.ctx_mgr.add_user_message(turn_prompt)
+        intent_source = (
+            inherited_intent_source
+            or (user_input if intent in {"query", "research"} else "")
+        )
+        self.ctx_mgr.add_user_message(
+            turn_prompt,
+            metadata={
+                "intent": intent,
+                "original_user_input": user_input,
+                "intent_source": intent_source,
+                "contextual_followup": bool(inherited_intent_source),
+            },
+        )
 
         # 获取模型列表
         # v0.4.0: auto-route based on task difficulty
@@ -2399,6 +2425,17 @@ class REPL:
         惰性模式下：只显示服务器名列表，不调用 discover_tools()。
         当 LLM 实际决定调用 mcp_call 时，_ensure_mcp_ready() 才触发连接。
         """
+        registry = getattr(self, "_mcp_registry", None)
+        has_mcp = bool(
+            registry
+            and (registry.clients or registry.has_pending_servers())
+        )
+        if not has_mcp and hasattr(engine, "tools"):
+            # A generic MCP entry with no configured server encourages the
+            # model to fabricate names such as ``train_query``.  Hide the
+            # impossible action instead of asking the user to approve it.
+            engine.tools = dict(engine.tools)
+            engine.tools.pop("mcp_call", None)
         try:
             mcp_tools_list = self._build_mcp_tools_list()
         except Exception as e:
@@ -2783,6 +2820,41 @@ class REPL:
         """检测用户意图。"""
         from xenon.repl.prompt_optimizer import detect_intent
         return detect_intent(text)
+
+    def _resolve_turn_intent(self, text: str) -> tuple[str | None, str | None]:
+        """Resolve a contextual follow-up against the latest compatible turn.
+
+        Only read-only query/research intent can be inherited.  This restores
+        access to retrieval tools without ever treating a conversational
+        reference as permission to write files or execute commands.
+        """
+        from xenon.repl.prompt_optimizer import is_contextual_followup
+
+        raw_intent = self._detect_intent(text)
+        if not is_contextual_followup(text):
+            return raw_intent, None
+
+        history = getattr(self.ctx_mgr, "history", [])
+        for turn in reversed(history[-20:]):
+            if getattr(turn, "role", "") != "user":
+                continue
+            metadata = getattr(turn, "metadata", {}) or {}
+            previous_intent = metadata.get("intent")
+            content = str(getattr(turn, "content", ""))
+            if previous_intent is None:
+                previous_intent = self._detect_intent(content)
+            if previous_intent in {"query", "research"}:
+                source = str(
+                    metadata.get("intent_source")
+                    or metadata.get("original_user_input")
+                    or content
+                ).strip()
+                return str(previous_intent), source[:2000] or None
+            # Legacy versions mislabeled retrieval follow-ups as debug.  Skip
+            # those, but do not jump across an unrelated substantive task.
+            if previous_intent not in {None, "debug", "chat"}:
+                break
+        return raw_intent, None
 
     # ── 工具需求检测 ──────────────────────────────────────────
     # Deprecated pattern inventory retained for compatibility and diagnostics.

@@ -370,8 +370,9 @@ class ContextManager:
             added += 1
         return added
 
-    def add_user_message(self, content: str) -> None:
-        self.add_message("user", content)
+    def add_user_message(self, content: str, **kwargs: Any) -> None:
+        """Append a user turn with optional semantic metadata."""
+        self.add_message("user", content, **kwargs)
 
     def add_assistant_message(self, content: str, *, model_used: str | None = None) -> None:
         self.add_message("assistant", content, model_used=model_used)
