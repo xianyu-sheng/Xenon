@@ -21,6 +21,8 @@ import re
 import shlex
 import shutil
 import sys
+import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -55,6 +57,8 @@ _FRONTMATTER_BYTES = 64 * 1024
 _SKILL_MD_BYTES = 256 * 1024
 _RESOURCE_BYTES = 128 * 1024
 _RESOURCE_COUNT = 500
+_INSTALL_MAX_FILES = 2_000
+_INSTALL_MAX_BYTES = 50 * 1024 * 1024
 
 
 class SkillFormatError(ValueError):
@@ -98,6 +102,18 @@ class Skill:
     @property
     def is_agent_skill(self) -> bool:
         return self.format == "agent-skill"
+
+
+@dataclass(frozen=True)
+class SkillInstallResult:
+    """Receipt for a completed local Agent Skill installation."""
+
+    name: str
+    destination: Path
+    scope: str
+    file_count: int
+    total_bytes: int
+    replaced: bool
 
 
 class SkillManager:
@@ -419,6 +435,116 @@ class SkillManager:
             ],
             "errors": list(self.load_errors),
         }
+
+    def install(
+        self,
+        source: str | Path,
+        *,
+        scope: str = "user",
+        force: bool = False,
+    ) -> SkillInstallResult:
+        """Validate and atomically install a local ``SKILL.md`` directory."""
+        source_path = Path(source).expanduser().resolve()
+        if source_path.is_dir():
+            source_dir = source_path
+            document = source_dir / "SKILL.md"
+        else:
+            document = source_path
+            source_dir = document.parent
+        if not document.is_file() or document.name != "SKILL.md":
+            raise SkillFormatError("安装源必须是技能目录或其中的 SKILL.md")
+
+        skill = self._load_agent_skill(document, "install-source", source_dir.parent)
+        target_root = self._scope_root(scope)
+        target_root.mkdir(parents=True, exist_ok=True)
+        destination = target_root / skill.name
+        if destination.resolve() == source_dir:
+            raise ValueError("安装源已位于目标目录")
+        if (destination.exists() or destination.is_symlink()) and not force:
+            raise FileExistsError(f"技能已存在: {destination}；使用 --force 明确替换")
+
+        file_count, total_bytes = self._validate_install_tree(source_dir)
+        temporary = Path(tempfile.mkdtemp(prefix=f".{skill.name}.install-", dir=target_root))
+        backup: Path | None = None
+        try:
+            shutil.rmtree(temporary)
+            shutil.copytree(source_dir, temporary, symlinks=True)
+            # Validate the copied document as the final artifact, not only the source.
+            self._load_agent_skill(temporary / "SKILL.md", "install-target", target_root)
+            replaced = destination.exists() or destination.is_symlink()
+            if replaced:
+                backup = target_root / f".{skill.name}.backup-{uuid.uuid4().hex}"
+                destination.rename(backup)
+            try:
+                temporary.rename(destination)
+            except BaseException:
+                if backup is not None and not destination.exists():
+                    backup.rename(destination)
+                raise
+            if backup is not None:
+                if backup.is_symlink():
+                    backup.unlink()
+                else:
+                    shutil.rmtree(backup)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+
+        self.load()
+        return SkillInstallResult(
+            name=skill.name,
+            destination=destination,
+            scope=scope,
+            file_count=file_count,
+            total_bytes=total_bytes,
+            replaced=replaced,
+        )
+
+    def _scope_root(self, scope: str) -> Path:
+        mapping: dict[str, Path | None] = {
+            "user": self.skills_dir,
+            "shared-user": self.shared_skills_dir,
+            "project": (
+                self.project_root / ".xenon" / "skills"
+                if self.project_root is not None else None
+            ),
+            "shared-project": (
+                self.project_root / ".agents" / "skills"
+                if self.project_root is not None else None
+            ),
+        }
+        if scope not in mapping:
+            raise ValueError("scope 必须是 user/shared-user/project/shared-project")
+        target = mapping[scope]
+        if target is None:
+            raise ValueError(f"作用域 {scope} 当前不可用（未检测到对应目录边界）")
+        return target
+
+    @staticmethod
+    def _validate_install_tree(source_dir: Path) -> tuple[int, int]:
+        root = source_dir.resolve()
+        file_count = 0
+        total_bytes = 0
+        for path in source_dir.rglob("*"):
+            if path.is_symlink():
+                if Path(os.readlink(path)).is_absolute():
+                    raise ValueError(f"安装源包含绝对符号链接: {path}")
+                try:
+                    path.resolve(strict=True).relative_to(root)
+                except (OSError, ValueError) as exc:
+                    raise ValueError(f"安装源包含越界符号链接: {path}") from exc
+                continue
+            if not path.is_file():
+                continue
+            file_count += 1
+            total_bytes += path.stat().st_size
+            if file_count > _INSTALL_MAX_FILES:
+                raise ValueError(f"技能文件数超过 {_INSTALL_MAX_FILES} 个限制")
+            if total_bytes > _INSTALL_MAX_BYTES:
+                raise ValueError(
+                    f"技能总大小超过 {_INSTALL_MAX_BYTES // (1024 * 1024)} MiB 限制"
+                )
+        return file_count, total_bytes
 
     def get(self, name: str) -> Skill | None:
         return self.skills.get(name.lstrip("/").lower())

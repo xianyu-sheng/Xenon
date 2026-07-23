@@ -58,6 +58,14 @@ class _DimNetworkFormatter(logging.Formatter):
 
 def cli() -> None:
     """CLI 入口函数。直接 xenon 启动 REPL。"""
+    if len(sys.argv) > 1 and sys.argv[1] in {"integrations", "skill", "mcp"}:
+        from xenon.integration_cli import run_integration_cli
+
+        exit_code = run_integration_cli(sys.argv[1:])
+        if exit_code:
+            raise SystemExit(exit_code)
+        return
+
     parser = argparse.ArgumentParser(
         prog="xenon",
         description="Xenon — 多模型 AI 编程助手",
@@ -68,7 +76,7 @@ def cli() -> None:
         "command_or_workflow",
         nargs="?",
         default=None,
-        help="子命令 (chat/run) 或 YAML 工作流文件路径",
+        help="子命令 (chat/run/models/integrations/skill/mcp) 或 YAML 工作流文件路径",
     )
     parser.add_argument(
         "workflow_path",

@@ -290,22 +290,24 @@ def fetch_provider_models(provider: ProviderInfo, api_key: str) -> list[str]:
 
 # ── 凭证管理 ──────────────────────────────────────────────
 
-def load_credentials() -> dict[str, str]:
+def load_credentials(path: Path | None = None) -> dict[str, Any]:
     """从文件加载凭证。"""
-    creds: dict[str, str] = {}
-    if CREDENTIALS_PATH.exists():
-        with open(CREDENTIALS_PATH, encoding="utf-8") as f:
+    credentials_path = path or CREDENTIALS_PATH
+    creds: dict[str, Any] = {}
+    if credentials_path.exists():
+        with open(credentials_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
             creds = {k.lower(): v for k, v in data.items()}
     return creds
 
 
-def save_credentials(creds: dict[str, str]) -> Path:
+def save_credentials(creds: dict[str, Any], path: Path | None = None) -> Path:
     """保存凭证到文件。"""
-    CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    credentials_path = path or CREDENTIALS_PATH
+    credentials_path.parent.mkdir(parents=True, exist_ok=True)
     content = yaml.dump(creds, allow_unicode=True, default_flow_style=False)
-    atomic_write_text(CREDENTIALS_PATH, content, mode=0o600)  # A9 原子写 + A10 chmod 0600
-    return CREDENTIALS_PATH
+    atomic_write_text(credentials_path, content, mode=0o600)  # A9 原子写 + A10 chmod 0600
+    return credentials_path
 
 
 def set_provider_key(provider_key: str, api_key: str) -> None:
@@ -500,16 +502,17 @@ list_custom_providers = _load_custom_providers
 _MCP_SERVERS_KEY = "_mcp_servers"
 
 
-def load_mcp_servers() -> list[dict[str, object]]:
+def load_mcp_servers(path: Path | None = None) -> list[dict[str, object]]:
     """从 credentials.yaml 加载已持久化的 MCP 服务器配置。
 
     Returns:
         [{"name": "12306", "command": "npx", "args": ["-y", "12306-mcp"]},
          {"name": "web", "url": "http://localhost:3000/sse"}, ...]
     """
-    if not CREDENTIALS_PATH.exists():
+    credentials_path = path or CREDENTIALS_PATH
+    if not credentials_path.exists():
         return []
-    with open(CREDENTIALS_PATH, encoding="utf-8") as f:
+    with open(credentials_path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     servers = data.get(_MCP_SERVERS_KEY, [])
     if not isinstance(servers, list):
@@ -517,31 +520,51 @@ def load_mcp_servers() -> list[dict[str, object]]:
     return servers
 
 
-def save_mcp_server(name: str, *, command: str = "", args: list[str] | None = None, url: str = "") -> None:
+def save_mcp_server(
+    name: str,
+    *,
+    command: str = "",
+    args: list[str] | None = None,
+    url: str = "",
+    env: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
+    path: Path | None = None,
+) -> None:
     """持久化一个 MCP 服务器配置（新增或更新同名配置）。"""
-    servers = load_mcp_servers()
-    # 移除同名旧配置
-    servers = [s for s in servers if s.get("name") != name]
-    entry: dict[str, object] = {"name": name}
-    if url:
-        entry["url"] = url
-    else:
-        entry["command"] = command
-        entry["args"] = args or []
-    servers.append(entry)
+    from xenon.memory.locking import InterProcessFileLock
 
-    creds = load_credentials()
-    creds[_MCP_SERVERS_KEY] = servers
-    save_credentials(creds)
+    credentials_path = path or CREDENTIALS_PATH
+    with InterProcessFileLock(credentials_path.with_suffix(".lock")):
+        servers = load_mcp_servers(credentials_path)
+        servers = [s for s in servers if s.get("name") != name]
+        entry: dict[str, object] = {"name": name}
+        if url:
+            entry["url"] = url
+            if headers:
+                entry["headers"] = headers
+        else:
+            entry["command"] = command
+            entry["args"] = args or []
+            if env:
+                entry["env"] = env
+        servers.append(entry)
+
+        creds = load_credentials(credentials_path)
+        creds[_MCP_SERVERS_KEY] = servers
+        save_credentials(creds, credentials_path)
 
 
-def remove_mcp_server(name: str) -> bool:
+def remove_mcp_server(name: str, *, path: Path | None = None) -> bool:
     """从持久化配置中移除一个 MCP 服务器。返回是否成功移除。"""
-    servers = load_mcp_servers()
-    new_servers = [s for s in servers if s.get("name") != name]
-    if len(new_servers) == len(servers):
-        return False
-    creds = load_credentials()
-    creds[_MCP_SERVERS_KEY] = new_servers
-    save_credentials(creds)
-    return True
+    from xenon.memory.locking import InterProcessFileLock
+
+    credentials_path = path or CREDENTIALS_PATH
+    with InterProcessFileLock(credentials_path.with_suffix(".lock")):
+        servers = load_mcp_servers(credentials_path)
+        new_servers = [s for s in servers if s.get("name") != name]
+        if len(new_servers) == len(servers):
+            return False
+        creds = load_credentials(credentials_path)
+        creds[_MCP_SERVERS_KEY] = new_servers
+        save_credentials(creds, credentials_path)
+        return True

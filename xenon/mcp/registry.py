@@ -38,6 +38,7 @@ class MCPRegistry:
         url: str | None = None,
         args: list[str] | None = None,
         env: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> MCPClient:
         """添加 MCP 服务器。
 
@@ -55,7 +56,7 @@ class MCPRegistry:
         if command:
             client = MCPClient.from_command(command, args, env, name=name)
         elif url:
-            client = MCPClient.from_url(url, name=name)
+            client = MCPClient.from_url(url, headers=headers, name=name)
         else:
             raise ValueError(f"MCP 服务器 '{name}' 需要 command 或 url")
 
@@ -70,6 +71,7 @@ class MCPRegistry:
         url: str | None = None,
         args: list[str] | None = None,
         env: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """仅存储服务器配置，不立即连接（惰性模式）。
 
@@ -83,6 +85,7 @@ class MCPRegistry:
             "url": url,
             "args": args or [],
             "env": env,
+            "headers": headers,
         }
         logger.info(f"MCP 服务器已登记（惰性）: {name}")
 
@@ -102,7 +105,11 @@ class MCPRegistry:
                 continue
             try:
                 if cfg.get("url"):
-                    self.add_server(n, url=str(cfg["url"]))
+                    self.add_server(
+                        n,
+                        url=str(cfg["url"]),
+                        headers=cfg.get("headers"),
+                    )
                 elif cfg.get("command"):
                     self.add_server(
                         n,
@@ -253,6 +260,7 @@ class MCPRegistry:
                     url=server.get("url"),
                     args=server.get("args"),
                     env=server.get("env"),
+                    headers=server.get("headers"),
                 )
             except Exception as e:
                 logger.warning(f"添加 MCP 服务器 '{name}' 失败: {e}")

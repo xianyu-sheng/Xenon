@@ -20,6 +20,20 @@
 - 新增 `/skill doctor`，显示扫描根、格式计数与逐文件错误；删除项目覆盖版本后，
   下层同名用户技能会自动恢复可见。
 
+### 外部集成 CLI
+
+- 新增 `xenon integrations describe --json` 版本化能力契约，公开 Agent Skills
+ 目录、MCP 传输能力和稳定命令模板，外部安装器无需猜测 Xenon 私有配置。
+- 新增 `xenon skill install/list/doctor`；安装会先校验完整目录与符号链接边界，
+  使用同文件系统临时目录原子落盘，支持四种作用域和显式 `--force` 替换回执。
+- 新增 `xenon mcp add/list/remove/doctor`；stdio 环境变量和 HTTP 认证头可以通过
+  stdin JSON/YAML 安全注入，结构化输出仅显示键名，不回显 token、header 值或
+  URL query。
+- MCP 配置写入加入跨进程锁与 `0600` 原子文件权限；REPL 惰性连接链路现可把
+  持久化的 stdio env 和 HTTP headers 完整传递到 transport。
+- JSON 模式保证 stdout 只含一个结构化对象；语法错误、业务错误和成功分别使用
+  稳定退出码 2、1、0，便于 Ark CLI 等外部 agent helper 自动判断结果。
+
 ### 会话凭证安全
 
 - 自动保存、`/save` 和旧会话迁移统一移除 `api_key`、token、authorization、password 等凭证字段；会话只保存恢复所需的非敏感模型元数据。

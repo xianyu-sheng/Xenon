@@ -2924,12 +2924,29 @@ class REPL:
                 continue
             try:
                 if s.get("url"):
-                    self._mcp_registry.add_server_pending(name, url=str(s["url"]))
+                    headers = s.get("headers")
+                    self._mcp_registry.add_server_pending(
+                        name,
+                        url=str(s["url"]),
+                        headers=(
+                            {str(k): str(v) for k, v in headers.items()}
+                            if isinstance(headers, dict) else None
+                        ),
+                    )
                 else:
                     cmd = str(s.get("command", ""))
                     args = [str(a) for a in s.get("args", [])]
+                    env = s.get("env")
                     if cmd:
-                        self._mcp_registry.add_server_pending(name, command=cmd, args=args)
+                        self._mcp_registry.add_server_pending(
+                            name,
+                            command=cmd,
+                            args=args,
+                            env=(
+                                {str(k): str(v) for k, v in env.items()}
+                                if isinstance(env, dict) else None
+                            ),
+                        )
                     else:
                         continue
                 pending_count += 1
