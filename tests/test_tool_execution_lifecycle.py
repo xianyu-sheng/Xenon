@@ -6,6 +6,8 @@ import threading
 import time
 
 from xenon.engine.context import AgentContext
+from xenon.engine.plan_dag import PlanDAG
+from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes import tool_executor as executor_module
 from xenon.nodes.tool_executor import (
@@ -289,6 +291,43 @@ def test_parallel_checkpoint_callbacks_are_serialized():
     assert all(not worker.is_alive() for worker in workers)
     assert maximum_overlap == 1
     assert len(context.get("_tool_execution_active")) == 12
+
+
+def test_parallel_plan_workers_publish_lifecycle_to_parent_context():
+    context = AgentContext()
+    published: list[dict] = []
+    context.set_tool_checkpoint_callback(
+        lambda checkpoint: published.append(checkpoint)
+    )
+    engine = PlanExecuteEngine(
+        ["test/model"], enable_parallel=True, max_parallel_workers=2
+    )
+
+    def fake_execute(_tool, params, worker_context, _tracker):
+        execution_id = f"step-{params['id']}"
+        base = {
+            "execution_id": execution_id,
+            "tool_name": "read_file",
+            "tool_class": "INFO",
+        }
+        worker_context.record_tool_checkpoint({**base, "state": "running"})
+        worker_context.record_tool_checkpoint({**base, "state": "succeeded"})
+        return "ok"
+
+    engine._execute_step_with_tool = fake_execute
+    steps = [
+        {"id": 1, "task": "a", "tool": "read_file", "params": {"id": 1}},
+        {"id": 2, "task": "b", "tool": "read_file", "params": {"id": 2}},
+    ]
+
+    results = engine._exec_wave_parallel(
+        [1, 2], PlanDAG(steps), "task", [], context, 2
+    )
+
+    assert len(results) == 2
+    assert len(published) == 4
+    assert {item["execution_id"] for item in published} == {"step-1", "step-2"}
+    assert context.get("_tool_execution_active") == {}
 
 
 def test_lifecycle_callback_persists_each_transition_to_session(

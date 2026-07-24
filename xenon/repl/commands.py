@@ -488,6 +488,27 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
 
     try:
         history = data.get("history", [])
+        if not isinstance(history, list):
+            return "❌ 恢复失败: 会话 history 格式无效。"
+        if not all(
+            isinstance(msg, dict)
+            and isinstance(msg.get("role"), str)
+            and isinstance(msg.get("content"), str)
+            for msg in history
+        ):
+            return "❌ 恢复失败: 会话消息格式无效。"
+        extra = data.get("extra", {})
+        if not isinstance(extra, dict):
+            extra = {}
+        working_memory = extra.get("working_memory", {})
+        if not isinstance(working_memory, dict):
+            working_memory = {}
+        model_config = data.get("model_config", {})
+        if not isinstance(model_config, dict):
+            model_config = {}
+        context_store = data.get("context", {})
+        if not isinstance(context_store, dict):
+            context_store = {}
         repl.ctx_mgr.clear()
         if history:
             for msg in history:
@@ -502,12 +523,12 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
                     semantic_group_id=msg.get("semantic_group_id"),
                 )
         repl.ctx_mgr.replace_working_memory(
-            data.get("extra", {}).get("working_memory", {})
+            working_memory
         )
 
         from xenon.engine.context import AgentContext
         from xenon.nodes.tool_executor import recover_tool_execution_checkpoint
-        restored_context = AgentContext(initial=data.get("context", {}))
+        restored_context = AgentContext(initial=context_store)
         repl.agent_context = restored_context
         repl._session_state["agent_context"] = restored_context
         restored_context.set_tool_checkpoint_callback(
@@ -516,7 +537,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         recovery_notice = recover_tool_execution_checkpoint(restored_context)
 
         # 恢复范式
-        paradigm = data.get("extra", {}).get("paradigm")
+        paradigm = extra.get("paradigm")
         if paradigm:
             try:
                 repl.registry.set_mode(paradigm)
@@ -524,7 +545,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
                 pass
 
         # 恢复模型池配置
-        mc = data.get("model_config", {})
+        mc = model_config
         if mc and repl.model_pool.is_empty():
             repl.model_pool.from_config(mc)
 
@@ -744,9 +765,28 @@ def _cmd_load(*, args: str, ctx_mgr: ContextManager, session_state: dict, regist
         return "已取消"
 
     # 恢复对话历史
+    history = data.get("history", [])
+    if not isinstance(history, list):
+        return "❌ 加载失败: 会话 history 格式无效。"
+    if not all(
+        isinstance(msg, dict)
+        and isinstance(msg.get("role"), str)
+        and isinstance(msg.get("content"), str)
+        for msg in history
+    ):
+        return "❌ 加载失败: 会话消息格式无效。"
+    extra = data.get("extra", {})
+    if not isinstance(extra, dict):
+        extra = {}
+    working_memory = extra.get("working_memory", {})
+    if not isinstance(working_memory, dict):
+        working_memory = {}
+    context_store = data.get("context", {})
+    if not isinstance(context_store, dict):
+        context_store = {}
     ctx_mgr.save_snapshot()
     ctx_mgr.history.clear()
-    for msg in data.get("history", []):
+    for msg in history:
         ctx_mgr.add_message(
             msg["role"],
             msg["content"],
@@ -758,11 +798,11 @@ def _cmd_load(*, args: str, ctx_mgr: ContextManager, session_state: dict, regist
             semantic_group_id=msg.get("semantic_group_id"),
         )
     ctx_mgr.replace_working_memory(
-        data.get("extra", {}).get("working_memory", {})
+        working_memory
     )
 
     # 恢复 AgentContext
-    restored_context = AgentContext(initial=data.get("context", {}))
+    restored_context = AgentContext(initial=context_store)
     session_state["agent_context"] = restored_context
     repl = session_state.get("_repl")
     recovery_notice = ""
@@ -775,9 +815,16 @@ def _cmd_load(*, args: str, ctx_mgr: ContextManager, session_state: dict, regist
         recovery_notice = recover_tool_execution_checkpoint(restored_context)
 
     # 恢复模型配置
+    model_config = data.get("model_config", {})
+    if not isinstance(model_config, dict):
+        model_config = {}
     if "model_config" in data:
-        for alias, mcfg in data.get("model_config", {}).get("models", {}).items():
-            registry.add_model(mcfg["model_id"], alias)
+        models = model_config.get("models", {})
+        if not isinstance(models, dict):
+            models = {}
+        for alias, mcfg in models.items():
+            if isinstance(mcfg, dict) and mcfg.get("model_id"):
+                registry.add_model(mcfg["model_id"], alias)
 
     result = f"✅ 会话 '{name}' 已加载。消息数: {len(ctx_mgr.history)}"
     if recovery_notice:

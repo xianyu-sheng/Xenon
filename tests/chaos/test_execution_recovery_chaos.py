@@ -156,6 +156,104 @@ def test_corrupt_resume_fails_closed_without_replacing_current_state(
     assert ctx_mgr.history[-1].content == "current conversation must survive"
 
 
+def test_malformed_active_key_is_migrated_and_removed():
+    context = AgentContext(initial={
+        "_tool_execution_active": {
+            "legacy-execution-key": {
+                "tool_name": "read_file",
+                "tool_class": "INFO",
+                "state": "running",
+            }
+        },
+        "_tool_execution_checkpoint": {
+            "tool_name": "read_file",
+            "tool_class": "INFO",
+            "state": "running",
+        },
+    })
+
+    notice = recover_tool_execution_checkpoint(context)
+
+    assert "1 个" in notice
+    assert context.get("_tool_execution_active") == {}
+    assert context.get("_tool_execution_checkpoint")["execution_id"] == (
+        "legacy-execution-key"
+    )
+
+
+def test_session_listing_skips_wrong_field_types_without_hiding_good_sessions(
+    tmp_path,
+    monkeypatch,
+):
+    import xenon.repl.session as session_module
+
+    monkeypatch.setattr(session_module, "SESSIONS_DIR", tmp_path)
+    session_module.save_session(
+        "good",
+        history=[{"role": "user", "content": "keep"}],
+        context_store={},
+        model_config={},
+    )
+    (tmp_path / "bad.json").write_text(
+        json.dumps({
+            "name": "bad",
+            "history": [{"role": "user", "content": "bad"}],
+            "extra": "wrong-type",
+            "saved_at_ts": "not-a-number",
+        }),
+        encoding="utf-8",
+    )
+
+    sessions = session_module.list_sessions()
+
+    assert {session["name"] for session in sessions} == {"good", "bad"}
+    bad = next(session for session in sessions if session["name"] == "bad")
+    assert bad["paradigm"] == ""
+    assert bad["saved_at_ts"] == 0
+
+
+def test_invalid_message_shape_is_rejected_before_current_history_is_cleared(
+    tmp_path,
+    monkeypatch,
+):
+    import xenon.repl.session as session_module
+
+    monkeypatch.setattr(session_module, "SESSIONS_DIR", tmp_path)
+    (tmp_path / "invalid-message.json").write_text(
+        json.dumps({
+            "name": "invalid-message",
+            "history": ["not-a-message"],
+            "context": {},
+            "model_config": {},
+            "extra": {},
+        }),
+        encoding="utf-8",
+    )
+    ctx_mgr = ContextManager()
+    ctx_mgr.add_user_message("current conversation must survive")
+
+    class _ReplStub:
+        def __init__(self):
+            self.ctx_mgr = ctx_mgr
+            self.agent_context = AgentContext({"sentinel": "preserved"})
+            self._session_state = {"agent_context": self.agent_context}
+            self.registry = ModelRegistry()
+            self.model_pool = ModelPool()
+
+    repl = _ReplStub()
+    result = dispatch_command(
+        "/resume",
+        "invalid-message",
+        registry=repl.registry,
+        ctx_mgr=ctx_mgr,
+        session_state={"_repl": repl},
+    )
+
+    assert result == "❌ 恢复失败: 会话消息格式无效。"
+    assert ctx_mgr.history[-1].content == "current conversation must survive"
+    assert repl.agent_context.get("sentinel") == "preserved"
+
+
 def test_six_thousand_transitions_keep_recovery_state_bounded():
     context = AgentContext()
 

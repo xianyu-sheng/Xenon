@@ -471,6 +471,12 @@ class PlanExecuteEngine(BaseEngine):
             # 隔离 ctx/tracker：仅复制对话消息作历史兜底，store/tracker 独立
             iso_ctx = AgentContext()
             iso_ctx.set_conversation_messages(list(ctx.get_conversation_messages()))
+            # The worker owns an isolated store, but its durable lifecycle
+            # events must be published to the parent session.  Otherwise an
+            # explicitly enabled parallel Plan-Execute run disappears from
+            # crash recovery even though ReAct's shared-context path works.
+            if hasattr(ctx, "record_tool_checkpoint"):
+                iso_ctx.set_tool_checkpoint_callback(ctx.record_tool_checkpoint)
             iso_tracker = ToolExecutionTracker()
             try:
                 if tool and tool != "null":

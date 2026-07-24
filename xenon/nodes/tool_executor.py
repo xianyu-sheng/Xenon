@@ -422,11 +422,11 @@ def recover_tool_execution_checkpoint(context: AgentContext) -> str:
     concurrently active executions are recovered, not only the newest event.
     """
     active = context.get("_tool_execution_active", {})
-    unfinished: list[dict[str, Any]] = []
+    unfinished: list[tuple[str, dict[str, Any]]] = []
     if isinstance(active, dict):
         unfinished.extend(
-            item
-            for item in active.values()
+            (str(execution_key), item)
+            for execution_key, item in active.items()
             if isinstance(item, dict)
             and str(item.get("state", "")) in _UNFINISHED_TOOL_STATES
         )
@@ -436,11 +436,16 @@ def recover_tool_execution_checkpoint(context: AgentContext) -> str:
     current = context.get("_tool_execution_checkpoint")
     if not unfinished and isinstance(current, dict):
         if str(current.get("state", "")) in _UNFINISHED_TOOL_STATES:
-            unfinished.append(current)
+            unfinished.append((str(current.get("execution_id", "")), current))
 
     restored_items: list[dict[str, Any]] = []
-    for item in unfinished:
+    for execution_key, item in unfinished:
         restored = dict(item)
+        # The active-ledger map key is authoritative for migrated entries. It
+        # also lets record_tool_checkpoint remove malformed entries that lack
+        # an execution_id instead of leaving them active forever.
+        if execution_key:
+            restored["execution_id"] = execution_key
         restored["state"] = ToolExecutionState.INTERRUPTED.value
         restored["updated_at"] = _utc_now()
         restored["error_kind"] = "process_interrupted"

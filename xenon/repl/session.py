@@ -172,18 +172,28 @@ def list_sessions() -> list[dict[str, Any]]:
     for f in sessions_dir.glob("*.json"):
         try:
             data = _load_and_migrate(f)
+            history = data.get("history")
             # 跳过空会话
-            if not data.get("history"):
+            if not isinstance(history, list) or not history:
                 continue
+            extra = data.get("extra", {})
+            if not isinstance(extra, dict):
+                extra = {}
+            saved_at = data.get("saved_at", "unknown")
+            if not isinstance(saved_at, str):
+                saved_at = str(saved_at)
+            saved_at_ts = data.get("saved_at_ts", 0)
+            if not isinstance(saved_at_ts, (int, float)):
+                saved_at_ts = 0
             sessions.append({
                 "name": data.get("name", f.stem),
-                "saved_at": data.get("saved_at", "unknown"),
-                "saved_at_ts": data.get("saved_at_ts", 0),
+                "saved_at": saved_at,
+                "saved_at_ts": saved_at_ts,
                 "path": str(f),
-                "messages": len(data.get("history", [])),
-                "paradigm": data.get("extra", {}).get("paradigm", ""),
+                "messages": len(history),
+                "paradigm": extra.get("paradigm", ""),
             })
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError, UnicodeError):
             continue
 
     sessions.sort(key=lambda s: s["saved_at_ts"], reverse=True)
@@ -251,7 +261,7 @@ def get_auto_session() -> dict[str, Any] | None:
             return None
 
         return data
-    except (json.JSONDecodeError, KeyError):
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError, UnicodeError):
         return None
 
 
@@ -275,7 +285,7 @@ def cleanup_expired_sessions() -> int:
             if ts > 0 and ts < threshold:
                 f.unlink()
                 deleted += 1
-        except (json.JSONDecodeError, KeyError, OSError):
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError, UnicodeError):
             # 损坏的文件也清理
             try:
                 f.unlink()
@@ -289,7 +299,7 @@ def cleanup_expired_sessions() -> int:
 def get_session_age(data: dict[str, Any]) -> str | None:
     """返回会话的人类可读年龄描述。"""
     ts = data.get("saved_at_ts", 0)
-    if ts <= 0:
+    if not isinstance(ts, (int, float)) or ts <= 0:
         return None
 
     elapsed = _time.time() - ts
