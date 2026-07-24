@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 from xenon.engine.circuit_breaker import BreakerRegistry
@@ -44,8 +48,20 @@ _TOOL_CONTENT_PARAMS = frozenset({
 })
 
 
-def classify_tool(tool_name: str) -> str:
-    """返回 INFO | WRITE | SENSITIVE。"""
+def classify_tool(
+    tool_name: str,
+    params: dict[str, Any] | None = None,
+) -> str:
+    """返回 INFO | WRITE | SENSITIVE，必要时细分 MCP 远端能力。"""
+    if tool_name == "mcp_call" and params:
+        remote_name = str(params.get("tool_name", ""))
+        if _EXECUTING_MCP_NAME.search(remote_name):
+            return "SENSITIVE"
+        if _MUTATING_MCP_NAME.search(remote_name):
+            return "WRITE"
+        if _READ_ONLY_MCP_NAME.search(remote_name):
+            return "INFO"
+        return "SENSITIVE"
     if (
         tool_name in _SENSITIVE_TOOLS
         or tool_name == "mcp_call"
@@ -265,6 +281,185 @@ def is_terminal_error(error: str) -> bool:
     return bool(_TERMINAL_PATTERNS.search(error))
 
 
+def is_timeout_error(error: str) -> bool:
+    """Return whether an error represents an execution timeout."""
+    return bool(re.search(r"timeout|timed out|超时", error or "", re.IGNORECASE))
+
+
+class ToolExecutionState(str, Enum):
+    """Stable lifecycle states shared by engines, sessions, and the REPL."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    RETRYING = "retrying"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
+
+
+_UNFINISHED_TOOL_STATES = frozenset({
+    ToolExecutionState.PENDING.value,
+    ToolExecutionState.RUNNING.value,
+    ToolExecutionState.RETRYING.value,
+})
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _resume_action(
+    state: ToolExecutionState,
+    tool_class: str,
+    *,
+    retryable: bool,
+) -> str:
+    if state in {ToolExecutionState.SUCCEEDED, ToolExecutionState.CANCELLED}:
+        return "none"
+    if tool_class != "INFO":
+        if state in {
+            ToolExecutionState.PENDING,
+            ToolExecutionState.RUNNING,
+            ToolExecutionState.RETRYING,
+            ToolExecutionState.TIMED_OUT,
+            ToolExecutionState.INTERRUPTED,
+        }:
+            return "manual_verification"
+        return "change_parameters"
+    if retryable or state in {
+        ToolExecutionState.TIMED_OUT,
+        ToolExecutionState.INTERRUPTED,
+    }:
+        return "retry"
+    return "change_parameters"
+
+
+def _record_lifecycle_checkpoint(
+    context: AgentContext,
+    events: list[dict[str, Any]],
+    *,
+    execution_id: str,
+    tool_name: str,
+    tool_class: str,
+    state: ToolExecutionState,
+    params: dict[str, Any],
+    attempt: int,
+    max_attempts: int,
+    started_at: str,
+    started_monotonic: float,
+    retryable: bool = False,
+    error_kind: str | None = None,
+) -> dict[str, Any]:
+    """Record a bounded, serializable checkpoint without argument values.
+
+    Tool arguments can contain source code, credentials, shell commands, or
+    user data.  Recovery only needs identity and policy metadata, so values are
+    intentionally never persisted here.
+    """
+    elapsed = max(0.0, time.monotonic() - started_monotonic)
+    recoverable = (
+        tool_class == "INFO"
+        and state
+        in {
+            ToolExecutionState.RETRYING,
+            ToolExecutionState.FAILED,
+            ToolExecutionState.TIMED_OUT,
+            ToolExecutionState.INTERRUPTED,
+        }
+    )
+    status_unknown = (
+        tool_class != "INFO"
+        and attempt > 0
+        and (
+            state in {
+                ToolExecutionState.TIMED_OUT,
+                ToolExecutionState.INTERRUPTED,
+            }
+            or error_kind == "transient"
+        )
+    )
+    checkpoint: dict[str, Any] = {
+        "schema_version": "1.0",
+        "execution_id": execution_id,
+        "tool_name": tool_name,
+        "tool_class": tool_class,
+        "state": state.value,
+        "attempt": attempt,
+        "max_attempts": max_attempts,
+        "started_at": started_at,
+        "updated_at": _utc_now(),
+        "elapsed_seconds": round(elapsed, 6),
+        "retryable": bool(retryable and tool_class == "INFO"),
+        "recoverable": recoverable,
+        "requires_confirmation": tool_class != "INFO",
+        "parameter_names": sorted(str(key) for key in params),
+        "resume_action": _resume_action(
+            state,
+            tool_class,
+            retryable=retryable,
+        ),
+    }
+    if status_unknown:
+        checkpoint["status_unknown"] = True
+        checkpoint["resume_action"] = "manual_verification"
+    if error_kind:
+        checkpoint["error_kind"] = error_kind
+    events.append(checkpoint.copy())
+    if hasattr(context, "record_tool_checkpoint"):
+        context.record_tool_checkpoint(checkpoint)
+    else:  # pragma: no cover - compatibility for third-party context shims
+        context.set("_tool_execution_checkpoint", checkpoint)
+    return checkpoint
+
+
+def recover_tool_execution_checkpoint(context: AgentContext) -> str:
+    """Normalize an unfinished durable checkpoint and return a user notice.
+
+    Recovery never replays a tool.  Read-only work may be explicitly retried;
+    stateful work is reported as status-unknown and requires verification.
+    """
+    current = context.get("_tool_execution_checkpoint")
+    if not isinstance(current, dict):
+        return ""
+    state = str(current.get("state", ""))
+    if state in _UNFINISHED_TOOL_STATES:
+        restored = dict(current)
+        restored["state"] = ToolExecutionState.INTERRUPTED.value
+        restored["updated_at"] = _utc_now()
+        restored["error_kind"] = "process_interrupted"
+        is_info = restored.get("tool_class") == "INFO"
+        restored["retryable"] = is_info
+        restored["recoverable"] = is_info
+        restored["resume_action"] = "retry" if is_info else "manual_verification"
+        if not is_info:
+            restored["status_unknown"] = True
+        if hasattr(context, "record_tool_checkpoint"):
+            context.record_tool_checkpoint(restored)
+        else:  # pragma: no cover
+            context.set("_tool_execution_checkpoint", restored)
+        current = restored
+        state = ToolExecutionState.INTERRUPTED.value
+
+    if state not in {
+        ToolExecutionState.INTERRUPTED.value,
+        ToolExecutionState.TIMED_OUT.value,
+    }:
+        return ""
+
+    tool_name = str(current.get("tool_name", "unknown"))
+    if current.get("tool_class") == "INFO":
+        return (
+            f"⚠️ 上次工具 {tool_name} 未完成（{state}），未自动重放；"
+            "这是只读操作，可由用户重新发起。"
+        )
+    return (
+        f"⚠️ 上次工具 {tool_name} 未完成（{state}），未自动重放；"
+        "该操作可能已部分生效，请先人工核验后再决定是否重试。"
+    )
+
+
 # ── 结果封装 ───────────────────────────────────────────────
 @dataclass
 class ToolExecuteResult:
@@ -279,11 +474,29 @@ class ToolExecuteResult:
     raw: dict[str, Any] | None = field(default=None, repr=False)
     structured: ToolResult | None = field(default=None, repr=False)
     cancelled: bool = False
+    state: ToolExecutionState | None = None
+    elapsed_seconds: float = 0.0
+    timed_out: bool = False
+    retryable: bool = False
+    recoverable: bool = False
+    execution_id: str = ""
+    lifecycle: tuple[dict[str, Any], ...] = field(default_factory=tuple, repr=False)
 
     def __post_init__(self) -> None:
         """Always expose a structured result, including early failures."""
         if not self.cancelled:
             self.cancelled = "取消任务" in (self.error or "")
+        if not self.timed_out:
+            self.timed_out = is_timeout_error(self.error or "")
+        if self.state is None:
+            if self.cancelled:
+                self.state = ToolExecutionState.CANCELLED
+            elif self.success:
+                self.state = ToolExecutionState.SUCCEEDED
+            elif self.timed_out:
+                self.state = ToolExecutionState.TIMED_OUT
+            else:
+                self.state = ToolExecutionState.FAILED
         if self.structured is None:
             raw = self.raw
             if raw is None:
@@ -303,6 +516,15 @@ class ToolExecuteResult:
         """按失败原因给情境化下一步提示。"""
         if self.success:
             return ""
+        if self.cancelled:
+            return f"工具 {self.tool_name} 已取消，不应自动重试。"
+        if self.timed_out:
+            if self.tool_class == "INFO":
+                return f"只读工具 {self.tool_name} 超时，可稍后显式重试。"
+            return (
+                f"工具 {self.tool_name} 超时且状态未知；请先核验副作用，"
+                "不要自动重试。"
+            )
         err = (self.error or "").lower()
         if "不存在" in err or "not found" in err:
             return f"工具 {self.tool_name} 报告目标不存在，请先用 list_files 确认路径。"
@@ -372,14 +594,99 @@ class ToolExecutor:
         tools: dict[str, Any] | None = None,
     ) -> ToolExecuteResult:
         """执行工具，返回 ToolExecuteResult。"""
-        tool_class = classify_tool(tool_name)
+        tool_class = classify_tool(tool_name, params)
+        execution_id = uuid.uuid4().hex
+        started_at = _utc_now()
+        started_monotonic = time.monotonic()
+        lifecycle: list[dict[str, Any]] = []
+        max_attempts = self.retry_attempts if tool_class == "INFO" else 1
+
+        def transition(
+            state: ToolExecutionState,
+            *,
+            attempt: int = 0,
+            retryable: bool = False,
+            error_kind: str | None = None,
+        ) -> dict[str, Any]:
+            return _record_lifecycle_checkpoint(
+                context,
+                lifecycle,
+                execution_id=execution_id,
+                tool_name=tool_name,
+                tool_class=tool_class,
+                state=state,
+                params=params,
+                attempt=attempt,
+                max_attempts=max_attempts,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                retryable=retryable,
+                error_kind=error_kind,
+            )
+
+        def finish(
+            success: bool,
+            observation: str,
+            *,
+            state: ToolExecutionState,
+            error: str | None = None,
+            attempts: int = 0,
+            raw: dict[str, Any] | None = None,
+            retryable: bool = False,
+            error_kind: str | None = None,
+        ) -> ToolExecuteResult:
+            checkpoint = transition(
+                state,
+                attempt=attempts,
+                retryable=retryable,
+                error_kind=error_kind,
+            )
+            if checkpoint.get("status_unknown"):
+                observation += (
+                    "\n⚠️ 本次有副作用的操作状态未知，可能已部分生效；"
+                    "必须先核验实际状态，不得自动重试。"
+                )
+            if tracker:
+                tracker.record(
+                    tool_name,
+                    params,
+                    success,
+                    observation,
+                    error=error,
+                    state=state.value,
+                    attempts=attempts,
+                    elapsed_seconds=float(checkpoint["elapsed_seconds"]),
+                )
+            return ToolExecuteResult(
+                tool_name=tool_name,
+                success=success,
+                observation=observation,
+                error=error,
+                tool_class=tool_class,
+                attempts=attempts,
+                raw=raw,
+                cancelled=state is ToolExecutionState.CANCELLED,
+                state=state,
+                elapsed_seconds=float(checkpoint["elapsed_seconds"]),
+                timed_out=state is ToolExecutionState.TIMED_OUT,
+                retryable=bool(checkpoint["retryable"]),
+                recoverable=bool(checkpoint["recoverable"]),
+                execution_id=execution_id,
+                lifecycle=tuple(lifecycle),
+            )
+
+        transition(ToolExecutionState.PENDING)
 
         # ── Stage 0: 工具存在性 ──
         if not self._tool_exists(tool_name, tools):
             msg = self._unknown_tool_msg(tool_name, tools)
-            if tracker:
-                tracker.record(tool_name, params, False, msg, error=msg)
-            return ToolExecuteResult(tool_name, False, msg, error=msg, tool_class=tool_class)
+            return finish(
+                False,
+                msg,
+                state=ToolExecutionState.FAILED,
+                error=msg,
+                error_kind="unknown_tool",
+            )
 
         # ── Stage 1: 标准化 ──
         try:
@@ -393,7 +700,13 @@ class ToolExecutor:
                 params = ToolNode.normalize_params(params)
         except Exception as e:  # noqa: BLE001
             msg = f"参数标准化失败: {e}"
-            return ToolExecuteResult(tool_name, False, msg, error=msg, tool_class=tool_class)
+            return finish(
+                False,
+                msg,
+                state=ToolExecutionState.FAILED,
+                error=msg,
+                error_kind="invalid_parameters",
+            )
 
         logger.debug(f"执行工具: {tool_name}, 参数: {mask_sensitive_params(params)}")
 
@@ -401,20 +714,12 @@ class ToolExecutor:
         policy_reason = execution_policy_denial(tool_name, params, context)
         if policy_reason:
             logger.info(f"执行策略拒绝: {tool_name} — {policy_reason}")
-            if tracker:
-                tracker.record(
-                    tool_name,
-                    params,
-                    False,
-                    policy_reason,
-                    error=policy_reason,
-                )
-            return ToolExecuteResult(
-                tool_name,
+            return finish(
                 False,
                 f"⛔ {policy_reason}",
+                state=ToolExecutionState.FAILED,
                 error=policy_reason,
-                tool_class=tool_class,
+                error_kind="policy_denied",
             )
 
         # ── Stage 2: 参数幻觉校验 ──
@@ -426,15 +731,26 @@ class ToolExecutor:
             err_msg = f"参数校验失败: {reason}"
             if hint:
                 err_msg += hint
-            if tracker:
-                tracker.record(tool_name, params, False, err_msg, error=reason)
-            return ToolExecuteResult(tool_name, False, err_msg, error=reason, tool_class=tool_class)
+            return finish(
+                False,
+                err_msg,
+                state=ToolExecutionState.FAILED,
+                error=reason,
+                error_kind="invalid_parameters",
+            )
 
         # ── Stage 3: 权限闸门（v0.5.0: 接入 PermissionGate） ──
         if self.permission_gate is not None:
             # SENSITIVE 是执行器掌握的最高风险信息，尤其覆盖运行时注册的
             # 动态工具；后者的名称不在 PermissionGate 的静态工具表中。
-            risk_override = "CRITICAL" if tool_class == "SENSITIVE" else None
+            if tool_name == "mcp_call":
+                risk_override = {
+                    "INFO": "READ",
+                    "WRITE": "WRITE",
+                    "SENSITIVE": "CRITICAL",
+                }[tool_class]
+            else:
+                risk_override = "CRITICAL" if tool_class == "SENSITIVE" else None
             allowed, reason = self.permission_gate.check(
                 tool_name,
                 params,
@@ -448,14 +764,16 @@ class ToolExecutor:
                     # the current task instead of merely feeding a denial back
                     # to the model for another attempt.
                     context.set("_task_cancelled", True)
-                if tracker:
-                    tracker.record(tool_name, params, False, reason, error=reason)
-                return ToolExecuteResult(
-                    tool_name, False,
+                return finish(
+                    False,
                     f"⛔ 操作被拒绝: {reason}",
+                    state=(
+                        ToolExecutionState.CANCELLED
+                        if cancelled
+                        else ToolExecutionState.FAILED
+                    ),
                     error=reason,
-                    tool_class=tool_class,
-                    cancelled=cancelled,
+                    error_kind=("cancelled" if cancelled else "permission_denied"),
                 )
         elif tool_class == "SENSITIVE":
             # 无 PermissionGate 时保持旧行为：仅记录
@@ -466,9 +784,14 @@ class ToolExecutor:
         if not breaker.allow():
             msg = f"工具 {tool_name} 断路器开启（连败熔断），已拒绝调用"
             logger.warning(msg)
-            if tracker:
-                tracker.record(tool_name, params, False, msg, error=msg)
-            return ToolExecuteResult(tool_name, False, msg, error=msg, tool_class=tool_class)
+            return finish(
+                False,
+                msg,
+                state=ToolExecutionState.FAILED,
+                error=msg,
+                retryable=tool_class == "INFO",
+                error_kind="circuit_open",
+            )
 
         # ── Stage 5+6: 执行 + 重试 ──
         last_error: str | None = None
@@ -479,9 +802,9 @@ class ToolExecutor:
         # commits or long clones.  Only read-only INFO tools are retryable, and
         # an individual tool result can explicitly opt out after doing its own
         # fallback (for example GitHub API -> public HTML).
-        max_attempts = self.retry_attempts if tool_class == "INFO" else 1
         for attempt in range(1, max_attempts + 1):
             attempts = attempt
+            transition(ToolExecutionState.RUNNING, attempt=attempt)
             try:
                 node = ToolNode(f"exec_{tool_name}", action_type=tool_name, **params)
                 result = enrich_tool_result(tool_name, node.execute(context))
@@ -496,34 +819,115 @@ class ToolExecutor:
                             else 3000
                         ),
                     )
-                    if tracker:
-                        tracker.record(tool_name, params, True, summary[:200])
-                    return ToolExecuteResult(
-                        tool_name, True, summary, tool_class=tool_class,
-                        attempts=attempts, raw=raw,
+                    return finish(
+                        True,
+                        summary,
+                        state=ToolExecutionState.SUCCEEDED,
+                        attempts=attempts,
+                        raw=raw,
                     )
                 # 执行返回失败
                 last_error = str(result.get("error") or result)
                 breaker.record_failure()
-                if result.get("retryable") is False:
-                    break
-                if is_terminal_error(last_error):
-                    break  # 终端错误不重试
-                logger.debug(f"工具 {tool_name} 第 {attempt} 次失败（瞬时）: {last_error[:120]}")
+                terminal = is_terminal_error(last_error)
+                can_retry = (
+                    result.get("retryable") is not False
+                    and not terminal
+                    and attempt < max_attempts
+                )
+                if can_retry:
+                    transition(
+                        ToolExecutionState.RETRYING,
+                        attempt=attempt,
+                        retryable=True,
+                        error_kind=(
+                            "timeout" if is_timeout_error(last_error) else "transient"
+                        ),
+                    )
+                    logger.debug(
+                        f"工具 {tool_name} 第 {attempt} 次失败（瞬时）: "
+                        f"{last_error[:120]}"
+                    )
+                    continue
+                final_state = (
+                    ToolExecutionState.TIMED_OUT
+                    if is_timeout_error(last_error)
+                    else ToolExecutionState.FAILED
+                )
+                return finish(
+                    False,
+                    f"工具执行失败: {last_error}",
+                    state=final_state,
+                    error=last_error,
+                    attempts=attempts,
+                    raw=raw,
+                    retryable=(
+                        tool_class == "INFO"
+                        and result.get("retryable") is not False
+                        and not terminal
+                    ),
+                    error_kind=(
+                        "timeout"
+                        if final_state is ToolExecutionState.TIMED_OUT
+                        else ("terminal" if terminal else "transient")
+                    ),
+                )
+            except KeyboardInterrupt:
+                context.set("_task_cancelled", True)
+                return finish(
+                    False,
+                    "工具执行已由用户中断",
+                    state=ToolExecutionState.CANCELLED,
+                    error="用户取消任务",
+                    attempts=attempts,
+                    raw=raw,
+                    error_kind="cancelled",
+                )
             except Exception as e:  # noqa: BLE001 — 单次执行异常归为失败
                 last_error = f"{type(e).__name__}: {e}"
                 breaker.record_failure()
                 logger.error(f"工具 {tool_name} 执行异常: {e}")
-                if is_terminal_error(last_error):
-                    break
+                terminal = is_terminal_error(last_error)
+                if not terminal and attempt < max_attempts:
+                    transition(
+                        ToolExecutionState.RETRYING,
+                        attempt=attempt,
+                        retryable=True,
+                        error_kind=(
+                            "timeout" if is_timeout_error(last_error) else "transient"
+                        ),
+                    )
+                    continue
+                final_state = (
+                    ToolExecutionState.TIMED_OUT
+                    if is_timeout_error(last_error)
+                    else ToolExecutionState.FAILED
+                )
+                return finish(
+                    False,
+                    f"工具执行失败: {last_error}",
+                    state=final_state,
+                    error=last_error,
+                    attempts=attempts,
+                    raw=raw,
+                    retryable=tool_class == "INFO" and not terminal,
+                    error_kind=(
+                        "timeout"
+                        if final_state is ToolExecutionState.TIMED_OUT
+                        else ("terminal" if terminal else "transient")
+                    ),
+                )
 
-        # 全部重试失败
+        # Defensive fallback; each loop branch above returns explicitly.
         obs = f"工具执行失败: {last_error}"
-        if tracker:
-            tracker.record(tool_name, params, False, obs, error=str(last_error))
-        return ToolExecuteResult(
-            tool_name, False, obs, error=str(last_error),
-            tool_class=tool_class, attempts=attempts, raw=raw,
+        return finish(
+            False,
+            obs,
+            state=ToolExecutionState.FAILED,
+            error=str(last_error),
+            attempts=attempts,
+            raw=raw,
+            error_kind="unknown",
         )
 
     # ── 辅助 ──

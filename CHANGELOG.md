@@ -5,6 +5,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- 工具执行生命周期统一为 pending/running/retrying/succeeded/failed/
+  timed_out/cancelled/interrupted，并在结果与追踪器中公开尝试次数和耗时。
+- 工具运行期间写入隐私安全的有界恢复点；恢复会话时只读操作可显式重试，
+  写入、命令和远端变更操作仅提示人工核验，绝不自动重放。
+- MCP 调用按远端工具名区分只读、写入和执行风险；查询类 MCP 不再被一律
+  当作 CRITICAL 操作，仍对未知或有副作用的远端工具保持保守确认。
+
 ### 权限确认与终端交互（第二阶段）
 
 - `PermissionGate` 增加可观测状态机：`PENDING`、`APPROVED`、`DENIED`、

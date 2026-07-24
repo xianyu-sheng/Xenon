@@ -8,7 +8,11 @@ AgentContext — 全局上下文总线。
 from __future__ import annotations
 
 import copy
+import logging
+import threading
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class AgentContext:
@@ -18,6 +22,11 @@ class AgentContext:
         self._store: dict[str, Any] = initial.copy() if initial else {}
         self._history: list[dict[str, Any]] = []  # 每步快照，用于调试回溯
         self._conversation_messages: list[dict[str, str]] = []  # 多轮对话历史
+        # Tool execution can happen in Plan-Execute worker threads.  Keep its
+        # durable checkpoint updates atomic without changing the historical
+        # single-threaded contract of the rest of AgentContext.
+        self._tool_checkpoint_lock = threading.RLock()
+        self._tool_checkpoint_callback: Any = None
 
     # ── 读写 ──────────────────────────────────────────────
     def get(self, key: str, default: Any = None) -> Any:
@@ -46,7 +55,38 @@ class AgentContext:
 
     def to_dict(self) -> dict[str, Any]:
         """返回内部状态的浅拷贝（公开接口，替代直接访问 _store）。"""
-        return self._store.copy()
+        with self._tool_checkpoint_lock:
+            return self._store.copy()
+
+    def set_tool_checkpoint_callback(self, callback: Any = None) -> None:
+        """Register a transient persistence hook for tool lifecycle changes.
+
+        The callback is deliberately kept outside ``_store`` so session JSON
+        never attempts to serialize a bound method or closure.
+        """
+        with self._tool_checkpoint_lock:
+            self._tool_checkpoint_callback = callback
+
+    def record_tool_checkpoint(
+        self,
+        checkpoint: dict[str, Any],
+        *,
+        history_limit: int = 32,
+    ) -> None:
+        """Atomically retain and optionally persist a privacy-safe checkpoint."""
+        callback = None
+        with self._tool_checkpoint_lock:
+            item = copy.deepcopy(checkpoint)
+            history = list(self._store.get("_tool_execution_history", []))
+            history.append(item)
+            self._store["_tool_execution_history"] = history[-history_limit:]
+            self._store["_tool_execution_checkpoint"] = item
+            callback = self._tool_checkpoint_callback
+        if callback is not None:
+            try:
+                callback(item)
+            except Exception as exc:  # noqa: BLE001 - persistence is best effort
+                logger.debug("工具恢复点持久化失败（不影响执行）: %s", exc)
 
     def items(self):
         """返回 _store.items() 的视图。"""

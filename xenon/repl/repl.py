@@ -186,6 +186,9 @@ class REPL:
         from xenon.repl.permissions import PermissionGate, PermissionMode
         self._permission_gate = PermissionGate(mode=PermissionMode.DEFAULT)
         self._permission_gate.set_confirm_callback(self._confirm_tool)
+        self.agent_context.set_tool_checkpoint_callback(
+            self._persist_tool_checkpoint
+        )
 
     def _init_prompt_toolkit(self) -> None:
         if not _HAS_PROMPT_TOOLKIT:
@@ -480,7 +483,11 @@ class REPL:
         from xenon.engine.callbacks import ConsoleCallback
         return ConsoleCallback(verbose=self.verbose)
 
-    def _auto_save_session(self) -> None:
+    def _persist_tool_checkpoint(self, _checkpoint: dict[str, Any]) -> None:
+        """Durably save an in-flight tool transition without maintenance work."""
+        self._auto_save_session(cleanup=False)
+
+    def _auto_save_session(self, *, cleanup: bool = True) -> None:
         """Atomically checkpoint the active session during use and on exit."""
         try:
             from xenon.repl.session import auto_save, cleanup_expired_sessions
@@ -497,7 +504,8 @@ class REPL:
                     "working_memory": self.ctx_mgr.get_working_memory(),
                 },
             )
-            cleanup_expired_sessions()
+            if cleanup:
+                cleanup_expired_sessions()
         except Exception as exc:
             logger.debug("自动保存失败（不影响当前会话）: %s", exc)
 

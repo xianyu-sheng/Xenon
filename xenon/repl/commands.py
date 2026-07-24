@@ -506,9 +506,14 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         )
 
         from xenon.engine.context import AgentContext
+        from xenon.nodes.tool_executor import recover_tool_execution_checkpoint
         restored_context = AgentContext(initial=data.get("context", {}))
         repl.agent_context = restored_context
         repl._session_state["agent_context"] = restored_context
+        restored_context.set_tool_checkpoint_callback(
+            repl._persist_tool_checkpoint
+        )
+        recovery_notice = recover_tool_execution_checkpoint(restored_context)
 
         # 恢复范式
         paradigm = data.get("extra", {}).get("paradigm")
@@ -525,7 +530,10 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
 
         age = get_session_age(data) or "未知时间"
         msgs = len(history)
-        return f"✅ 已恢复会话 ({age}) · {msgs} 条消息 · 范式: {paradigm or 'direct'}"
+        result = f"✅ 已恢复会话 ({age}) · {msgs} 条消息 · 范式: {paradigm or 'direct'}"
+        if recovery_notice:
+            result += f"\n{recovery_notice}"
+        return result
 
     except Exception as e:
         return f"❌ 恢复失败: {e}"
@@ -757,15 +765,24 @@ def _cmd_load(*, args: str, ctx_mgr: ContextManager, session_state: dict, regist
     restored_context = AgentContext(initial=data.get("context", {}))
     session_state["agent_context"] = restored_context
     repl = session_state.get("_repl")
+    recovery_notice = ""
     if repl is not None:
         repl.agent_context = restored_context
+        restored_context.set_tool_checkpoint_callback(
+            repl._persist_tool_checkpoint
+        )
+        from xenon.nodes.tool_executor import recover_tool_execution_checkpoint
+        recovery_notice = recover_tool_execution_checkpoint(restored_context)
 
     # 恢复模型配置
     if "model_config" in data:
         for alias, mcfg in data.get("model_config", {}).get("models", {}).items():
             registry.add_model(mcfg["model_id"], alias)
 
-    return f"✅ 会话 '{name}' 已加载。消息数: {len(ctx_mgr.history)}"
+    result = f"✅ 会话 '{name}' 已加载。消息数: {len(ctx_mgr.history)}"
+    if recovery_notice:
+        result += f"\n{recovery_notice}"
+    return result
 
 
 # /sessions ────────────────────────────────────────────────

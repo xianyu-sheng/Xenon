@@ -22,6 +22,9 @@ class ToolCall:
     success: bool
     result_summary: str
     error: str | None = None
+    state: str = ""
+    attempts: int = 1
+    elapsed_seconds: float = 0.0
 
 
 @dataclass
@@ -44,6 +47,9 @@ class ToolExecutionTracker:
         success: bool,
         result_summary: str = "",
         error: str | None = None,
+        state: str = "",
+        attempts: int = 1,
+        elapsed_seconds: float = 0.0,
     ) -> None:
         """记录一次工具调用。"""
         call = ToolCall(
@@ -52,6 +58,9 @@ class ToolExecutionTracker:
             success=success,
             result_summary=result_summary[:500],
             error=error,
+            state=state or ("succeeded" if success else "failed"),
+            attempts=max(0, attempts),
+            elapsed_seconds=max(0.0, elapsed_seconds),
         )
         self.calls.append(call)
         status = "成功" if success else "失败"
@@ -135,6 +144,9 @@ class ToolExecutionTracker:
                 "success": c.success,
                 "result": c.result_summary,
                 "error": c.error,
+                "state": c.state,
+                "attempts": c.attempts,
+                "elapsed_seconds": c.elapsed_seconds,
             }
             for c in self.calls
         ]
