@@ -10,10 +10,15 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
+import threading
 import uuid
 
 _LOGGER = logging.getLogger("xenon.trace")
+_CALL_ID_MASK = (1 << 24) - 1
+_CALL_ID_COUNTER = itertools.count(uuid.uuid4().int & _CALL_ID_MASK)
+_CALL_ID_LOCK = threading.Lock()
 
 
 def new_run_id() -> str:
@@ -22,8 +27,15 @@ def new_run_id() -> str:
 
 
 def new_call_id() -> str:
-    """生成一次 LLM 调用的 ID（6 位短 hex）。"""
-    return uuid.uuid4().hex[:6]
+    """生成一次 LLM 调用的 ID（6 位短 hex）。
+
+    The counter is process-local and starts at a random offset, preserving the
+    compact log format while making normal in-process calls collision-free.
+    It wraps only after 16,777,216 calls, at which point the six-character
+    format itself has been exhausted.
+    """
+    with _CALL_ID_LOCK:
+        return f"{next(_CALL_ID_COUNTER) & _CALL_ID_MASK:06x}"
 
 
 def prefix(run_id: str | None, call_id: str | None = None) -> str:

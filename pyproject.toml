@@ -45,7 +45,10 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "pytest-timeout>=2.0",
-    "ruff>=0.12.0",
+    # Ruff 0.16 changes the default rule set and turns the existing warning
+    # budget into a CI failure. Keep the formatter/linter contract stable
+    # until the codebase intentionally migrates to that rule set.
+    "ruff>=0.12.0,<0.16.0",
 ]
 
 [project.scripts]
