@@ -14,9 +14,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from pathlib import Path
 
-import pytest
 
 from xenon.repl.project_context import ProjectContext, _is_excluded_dir
 from xenon.utils.code_index import CodeIndex
@@ -290,7 +288,6 @@ class TestCodeIndexCache:
         cache_dir = tmp_path / "cache"
         cache_dir.mkdir()
         # 写入损坏 JSON
-        bad = cache_dir / "codeindex-deadbeef.json"
         # 先用一个真实 build 确定正确的缓存文件名
         CodeIndex(tmp_path, cache_dir=cache_dir).build()
         real = next(cache_dir.glob("codeindex-*.json"))

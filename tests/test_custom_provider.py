@@ -1,15 +1,11 @@
 """v0.4.0 Step 1: 动态模型商注册测试."""
 from __future__ import annotations
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from xenon.repl.provider_registry import (
     register_custom_provider,
     remove_custom_provider,
     _load_custom_providers,
-    _save_custom_provider,
-    _CUSTOM_PROVIDERS_KEY,
-    ProviderInfo,
     PROVIDERS,
 )
 

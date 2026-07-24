@@ -12,9 +12,7 @@ P2-E4 ReflectionEngine 增强 + §8.23 缺陷修复测试。
 
 from __future__ import annotations
 
-from typing import Any
 
-import pytest
 
 from xenon.engine.context import AgentContext
 from xenon.engine.reflection_engine import ReflectionEngine
@@ -206,6 +204,7 @@ class TestExecuteExceptionFallback:
         eng._call_llm = fake_call_llm
         out = eng.run("做 X", AgentContext())
         # 第一轮就失败，无最佳版本，返回空 + 警告
+        assert out == ""
         assert any("执行阶段失败" in w for w in cb.warnings)
 
 

@@ -1,5 +1,4 @@
 """v0.5.0: 语义分块器测试。"""
-import pytest
 from xenon.repl.semantic_chunker import SemanticChunker, _extract_tool_name_from_turn
 from xenon.repl.context_manager import ConversationTurn
 

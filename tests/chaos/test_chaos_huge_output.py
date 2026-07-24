@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
 
 from xenon.utils.response_adapter import parse_react
 

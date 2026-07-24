@@ -1,7 +1,6 @@
 """v0.5.0: 分层上下文策略测试。"""
 import pytest
 from xenon.repl.context_strategies import (
-    CompressionStrategy,
     TieredStrategySelector,
     ToolOutputClassifier,
     ToolOutputType,

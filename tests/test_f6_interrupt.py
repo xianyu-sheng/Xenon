@@ -7,7 +7,6 @@
 """
 from types import SimpleNamespace
 
-import xenon.engine.base as base_mod
 from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
 from xenon.engine.novel_engine import NovelEngine

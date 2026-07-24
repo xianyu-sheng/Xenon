@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 from xenon.engine.context import AgentContext
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes import tool_executor as executor_module
@@ -179,6 +182,113 @@ def test_checkpoint_callback_runs_during_execution_and_history_is_bounded(monkey
     assert len(history) == 32
     assert history[0]["index"] == 8
     assert history[-1]["index"] == 39
+
+
+def test_active_execution_ledger_tracks_parallel_work_independently():
+    context = AgentContext()
+
+    context.record_tool_checkpoint({
+        "execution_id": "read-1",
+        "tool_name": "read_file",
+        "tool_class": "INFO",
+        "state": "running",
+    })
+    context.record_tool_checkpoint({
+        "execution_id": "write-1",
+        "tool_name": "write_file",
+        "tool_class": "WRITE",
+        "state": "running",
+    })
+    context.record_tool_checkpoint({
+        "execution_id": "read-1",
+        "tool_name": "read_file",
+        "tool_class": "INFO",
+        "state": "succeeded",
+    })
+
+    active = context.get("_tool_execution_active")
+    assert set(active) == {"write-1"}
+    assert active["write-1"]["tool_name"] == "write_file"
+
+
+def test_recovery_normalizes_every_parallel_unfinished_execution():
+    context = AgentContext(initial={
+        "_tool_execution_active": {
+            "read-1": {
+                "execution_id": "read-1",
+                "tool_name": "web_fetch",
+                "tool_class": "INFO",
+                "state": "running",
+            },
+            "write-1": {
+                "execution_id": "write-1",
+                "tool_name": "write_file",
+                "tool_class": "WRITE",
+                "state": "retrying",
+            },
+        },
+        # The newest event alone would lose read-1 in the legacy scheme.
+        "_tool_execution_checkpoint": {
+            "execution_id": "write-1",
+            "tool_name": "write_file",
+            "tool_class": "WRITE",
+            "state": "retrying",
+        },
+    })
+
+    notice = recover_tool_execution_checkpoint(context)
+
+    assert "2 个" in notice
+    assert "web_fetch（只读，可重新发起）" in notice
+    assert "write_file（可能已部分生效，须人工核验）" in notice
+    assert context.get("_tool_execution_active") == {}
+    recovered = [
+        item for item in context.get("_tool_execution_history")
+        if item.get("state") == "interrupted"
+    ]
+    assert {item["execution_id"] for item in recovered} == {"read-1", "write-1"}
+    read = next(item for item in recovered if item["execution_id"] == "read-1")
+    write = next(item for item in recovered if item["execution_id"] == "write-1")
+    assert read["resume_action"] == "retry"
+    assert write["resume_action"] == "manual_verification"
+    assert write["status_unknown"] is True
+
+
+def test_parallel_checkpoint_callbacks_are_serialized():
+    context = AgentContext()
+    barrier = threading.Barrier(12)
+    lock = threading.Lock()
+    callbacks_in_progress = 0
+    maximum_overlap = 0
+
+    def persist(_checkpoint):
+        nonlocal callbacks_in_progress, maximum_overlap
+        with lock:
+            callbacks_in_progress += 1
+            maximum_overlap = max(maximum_overlap, callbacks_in_progress)
+        time.sleep(0.003)
+        with lock:
+            callbacks_in_progress -= 1
+
+    def publish(index):
+        barrier.wait()
+        context.record_tool_checkpoint({
+            "execution_id": f"parallel-{index}",
+            "tool_name": "read_file",
+            "tool_class": "INFO",
+            "state": "running",
+        })
+
+    context.set_tool_checkpoint_callback(persist)
+    workers = [threading.Thread(target=publish, args=(index,)) for index in range(12)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=2)
+
+    assert all(not worker.is_alive() for worker in workers)
+    assert maximum_overlap == 1
+    assert len(context.get("_tool_execution_active")) == 12
 
 
 def test_lifecycle_callback_persists_each_transition_to_session(

@@ -5,7 +5,6 @@
 RuntimeError，而不是被 ``readline()`` 永久阻塞。
 """
 import inspect
-import json
 import sys
 import time
 

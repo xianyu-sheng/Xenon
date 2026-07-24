@@ -7,9 +7,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-import pytest
 
-from xenon.repl.shortcut_manager import ShortcutManager, Shortcut
+from xenon.repl.shortcut_manager import ShortcutManager
 
 
 class TestShortcutManager:

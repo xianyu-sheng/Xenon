@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import pytest
 
 import xenon.engine.base as engine_base
 import xenon.utils.llm_client as llm_client

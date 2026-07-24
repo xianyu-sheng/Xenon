@@ -415,17 +415,32 @@ def _record_lifecycle_checkpoint(
 
 
 def recover_tool_execution_checkpoint(context: AgentContext) -> str:
-    """Normalize an unfinished durable checkpoint and return a user notice.
+    """Normalize unfinished durable checkpoints and return a user notice.
 
     Recovery never replays a tool.  Read-only work may be explicitly retried;
-    stateful work is reported as status-unknown and requires verification.
+    stateful work is reported as status-unknown and requires verification. All
+    concurrently active executions are recovered, not only the newest event.
     """
+    active = context.get("_tool_execution_active", {})
+    unfinished: list[dict[str, Any]] = []
+    if isinstance(active, dict):
+        unfinished.extend(
+            item
+            for item in active.values()
+            if isinstance(item, dict)
+            and str(item.get("state", "")) in _UNFINISHED_TOOL_STATES
+        )
+
+    # Sessions written before the active-execution ledger only contain the
+    # newest checkpoint. Keep that format recoverable during upgrades.
     current = context.get("_tool_execution_checkpoint")
-    if not isinstance(current, dict):
-        return ""
-    state = str(current.get("state", ""))
-    if state in _UNFINISHED_TOOL_STATES:
-        restored = dict(current)
+    if not unfinished and isinstance(current, dict):
+        if str(current.get("state", "")) in _UNFINISHED_TOOL_STATES:
+            unfinished.append(current)
+
+    restored_items: list[dict[str, Any]] = []
+    for item in unfinished:
+        restored = dict(item)
         restored["state"] = ToolExecutionState.INTERRUPTED.value
         restored["updated_at"] = _utc_now()
         restored["error_kind"] = "process_interrupted"
@@ -439,8 +454,25 @@ def recover_tool_execution_checkpoint(context: AgentContext) -> str:
             context.record_tool_checkpoint(restored)
         else:  # pragma: no cover
             context.set("_tool_execution_checkpoint", restored)
-        current = restored
-        state = ToolExecutionState.INTERRUPTED.value
+        restored_items.append(restored)
+
+    if restored_items:
+        details = []
+        for restored in restored_items:
+            tool_name = str(restored.get("tool_name", "unknown"))
+            if restored.get("tool_class") == "INFO":
+                details.append(f"{tool_name}（只读，可重新发起）")
+            else:
+                details.append(f"{tool_name}（可能已部分生效，须人工核验）")
+        return (
+            f"⚠️ 检测到 {len(restored_items)} 个上次未完成的工具执行，"
+            "均已标记为 interrupted，且未自动重放：\n- "
+            + "\n- ".join(details)
+        )
+
+    if not isinstance(current, dict):
+        return ""
+    state = str(current.get("state", ""))
 
     if state not in {
         ToolExecutionState.INTERRUPTED.value,

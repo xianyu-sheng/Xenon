@@ -1,7 +1,6 @@
 """v0.4.0 Step 2: ModelPool 测试."""
 from __future__ import annotations
 
-import pytest
 from xenon.repl.model_pool import (
     ModelPool, _infer_capability, FAILURE_THRESHOLD,
 )

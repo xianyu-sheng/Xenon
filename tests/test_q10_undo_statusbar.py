@@ -6,7 +6,7 @@ import io
 
 from rich.console import Console
 
-from xenon.repl.context_manager import ContextManager, ConversationTurn
+from xenon.repl.context_manager import ContextManager
 from xenon.repl.status_bar import StatusBar
 
 

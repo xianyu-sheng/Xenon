@@ -14,6 +14,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_ACTIVE_TOOL_STATES = frozenset({"pending", "running", "retrying"})
+
 
 class AgentContext:
     """线程不安全的全局状态总线，单次 DAG 执行周期内使用。"""
@@ -73,20 +75,42 @@ class AgentContext:
         *,
         history_limit: int = 32,
     ) -> None:
-        """Atomically retain and optionally persist a privacy-safe checkpoint."""
-        callback = None
+        """Atomically retain and optionally persist a privacy-safe checkpoint.
+
+        ``_tool_execution_checkpoint`` remains the backward-compatible newest
+        event. ``_tool_execution_active`` is the durable source of truth for
+        every concurrently unfinished execution, keyed by execution ID.
+        """
         with self._tool_checkpoint_lock:
             item = copy.deepcopy(checkpoint)
             history = list(self._store.get("_tool_execution_history", []))
             history.append(item)
             self._store["_tool_execution_history"] = history[-history_limit:]
             self._store["_tool_execution_checkpoint"] = item
+
+            execution_id = item.get("execution_id")
+            if execution_id:
+                active = copy.deepcopy(
+                    self._store.get("_tool_execution_active", {})
+                )
+                if not isinstance(active, dict):
+                    active = {}
+                execution_key = str(execution_id)
+                if item.get("state") in _ACTIVE_TOOL_STATES:
+                    active[execution_key] = item
+                else:
+                    active.pop(execution_key, None)
+                self._store["_tool_execution_active"] = active
             callback = self._tool_checkpoint_callback
-        if callback is not None:
-            try:
-                callback(item)
-            except Exception as exc:  # noqa: BLE001 - persistence is best effort
-                logger.debug("工具恢复点持久化失败（不影响执行）: %s", exc)
+            if callback is not None:
+                # Keep state publication and its atomic session write in one
+                # linearizable critical section.  If another worker could
+                # mutate the ledger while this callback was writing, a hard
+                # process kill could leave only the older worker on disk.
+                try:
+                    callback(item)
+                except Exception as exc:  # noqa: BLE001 - best effort
+                    logger.debug("工具恢复点持久化失败（不影响执行）: %s", exc)
 
     def items(self):
         """返回 _store.items() 的视图。"""

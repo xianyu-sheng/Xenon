@@ -16,7 +16,6 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-import pytest
 
 import xenon.utils.llm_client as lc
 from xenon.utils.llm_client import (

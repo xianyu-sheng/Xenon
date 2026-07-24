@@ -12,7 +12,6 @@ v0.3.0 修复后：
 
 from __future__ import annotations
 
-import pytest
 
 from xenon.repl.repl import REPL
 from xenon.repl.model_registry import ModelRegistry

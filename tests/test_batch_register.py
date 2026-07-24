@@ -110,7 +110,8 @@ class TestBatchRegister:
         f = tmp_path / "m.yaml"
         f.write_text("models:\n  - alias: gpt4o\n    model_id: openai/gpt-4o\n"
                      "    api_key: sk-t\n    weight: 2.0\n    tier: 4\n")
-        r = ModelRegistry(); p = ModelPool()
+        r = ModelRegistry()
+        p = ModelPool()
         result = batch_register(f, r, p, probe=True)
         assert "gpt4o" in result.registered
         assert r.get_model("gpt4o") is not None
@@ -120,7 +121,8 @@ class TestBatchRegister:
     def test_dry_run_no_register(self, tmp_path, stub_probe):
         f = tmp_path / "m.yaml"
         f.write_text("models:\n  - alias: gpt4o\n    model_id: openai/gpt-4o\n    api_key: sk-t\n")
-        r = ModelRegistry(); p = ModelPool()
+        r = ModelRegistry()
+        p = ModelPool()
         result = batch_register(f, r, p, dry_run=True)
         assert not result.registered
         assert r.get_model("gpt4o") is None
@@ -131,7 +133,8 @@ class TestBatchRegister:
         f = tmp_path / "m.yaml"
         f.write_text("models:\n  - alias: good\n    model_id: openai/gpt-4o\n    api_key: sk\n"
                      "  - alias: bad\n    model_id: openai/bad\n    api_key: wrong\n")
-        r = ModelRegistry(); p = ModelPool()
+        r = ModelRegistry()
+        p = ModelPool()
         result = batch_register(f, r, p, probe=True)
         assert p.get("good") is not None
         assert p.get("bad") is None
@@ -147,12 +150,14 @@ class TestBatchRegister:
         monkeypatch.setattr("xenon.repl.batch_register.probe_model", spy)
         f = tmp_path / "m.yaml"
         f.write_text("models:\n  - alias: gpt4o\n    model_id: openai/gpt-4o\n    api_key: sk\n")
-        r = ModelRegistry(); p = ModelPool()
+        r = ModelRegistry()
+        p = ModelPool()
         batch_register(f, r, p, probe=False)
         assert called == []  # probe=False 不应调用 probe_model
 
     def test_idempotent_update(self, tmp_path, stub_probe):
-        r = ModelRegistry(); p = ModelPool()
+        r = ModelRegistry()
+        p = ModelPool()
         r.add_model("openai/gpt-4o", "gpt4o", api_key="old", weight=1.0)
         p.register("openai/gpt-4o", alias="gpt4o", weight=1.0, api_key="old")
         f = tmp_path / "m.yaml"
@@ -168,7 +173,8 @@ class TestBatchRegister:
         f.write_text("models:\n  - alias: gpt4o\n    model_id: openai/gpt-4o\n    api_key: sk\n"
                      "  - alias: ds\n    model_id: deepseek/ds\n    api_key: sk\n"
                      "roles:\n  planner: [gpt4o, ds]\n")
-        r = ModelRegistry(); p = ModelPool()
+        r = ModelRegistry()
+        p = ModelPool()
         batch_register(f, r, p, probe=True)
         assert r.role_priority.get("planner") == ["gpt4o", "ds"]
 
@@ -182,7 +188,8 @@ class TestDiscover:
         f = tmp_path / "m.yaml"
         f.write_text("models:\n  - alias: ollama-local\n    model_id: ollama/qwen2.5:7b\n"
                      "    base_url: http://localhost:11434\n    discover: true\n")
-        r = ModelRegistry(); p = ModelPool()
+        r = ModelRegistry()
+        p = ModelPool()
         result = batch_register(f, r, p, probe=True)
         assert p.get("ollama-local") is not None      # 父模型
         assert p.get("qwen2-5-7b") is not None         # 子模型 qwen2.5:7b -> qwen2-5-7b
@@ -194,6 +201,7 @@ class TestDiscover:
                             lambda s, **kw: (True, ""))
         f = tmp_path / "m.yaml"
         f.write_text("models:\n  - alias: bad\n    model_id: ollama/x\n    discover: true\n")
-        r = ModelRegistry(); p = ModelPool()
+        r = ModelRegistry()
+        p = ModelPool()
         result = batch_register(f, r, p, probe=True)
         assert any("base_url" in reason for _, reason in result.failed)

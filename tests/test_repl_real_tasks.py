@@ -37,15 +37,11 @@ REPL 真实任务端到端测试（§9 验收 — 任务 A-N）。
 from __future__ import annotations
 
 import json
-import os
-import re
-from typing import Any
 
 import pytest
 
 import xenon.engine.base as engine_base
 import xenon.utils.llm_client as llm_client
-from xenon.repl.context_manager import ContextManager
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.prompt_optimizer import detect_intent
 from xenon.repl.repl import REPL
@@ -349,13 +345,7 @@ class TestEdgeCases:
             repl._handle_chat("")
         except Exception as e:
             pytest.fail(f"空输入崩: {e}")
-        # 看 ctx_mgr 是否有空 user 消息
-        last_user = next(
-            (m for m in reversed(repl.ctx_mgr.history) if m.role == "user"),
-            None,
-        )
         # NOTE: 不强制断言 add_user_message 行为，只验证不崩
-        # 但记录实际行为给报告用
 
     def test_pure_spaces_does_not_crash(self, monkeypatch):
         def responder(ctx):
@@ -607,7 +597,6 @@ class TestAdditionalConcerns:
         模拟：direct 模式 LLM 返回拒答 → trim + 递归调 ReAct → ReAct 抛异常。
         验证：第二轮 user 进来时，history 是否有无 assistant 回复的 user 消息。
         """
-        from xenon.repl.repl import REPL
 
         def responder(ctx):
             kind, model_id, messages = ctx
@@ -856,10 +845,6 @@ class TestKnownSuspicious:
         repl._handle_chat("今天天气怎么样")
         # ReAct 异常被 line 840-841 捕获，仅 print+return
         # 此时 user 消息已 add（line 745），assistant 未 add
-        user_only = [
-            m for m in repl.ctx_mgr.history
-            if m.role == "user"
-        ]
         # 找有没有 user 消息没有后续 assistant 消息
         last_user_idx = None
         last_asst_idx = None

@@ -1,9 +1,8 @@
 """v0.4.0 Steps 3-5: DifficultyEstimator + AutoRouter tests."""
 from __future__ import annotations
 
-import pytest
 from xenon.repl.difficulty_estimator import (
-    DifficultyEstimator, TaskProfile,
+    DifficultyEstimator,
 )
 from xenon.repl.auto_router import AutoRouter
 from xenon.repl.model_pool import ModelPool

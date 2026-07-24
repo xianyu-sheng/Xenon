@@ -1,8 +1,7 @@
 """v0.4.0 Step 10: Multi-priority queue scheduling tests."""
 from __future__ import annotations
 
-import pytest
-from xenon.repl.model_pool import ModelPool, MIN_TIER, MAX_TIER
+from xenon.repl.model_pool import ModelPool
 from xenon.repl.difficulty_estimator import DifficultyEstimator, TaskProfile
 
 

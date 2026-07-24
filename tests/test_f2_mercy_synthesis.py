@@ -241,7 +241,7 @@ class TestReActIntegration:
         eng._input_requires_tools = lambda u: True
         eng._execute_tool = lambda action, ai, ctx, tracker: executed.append(action) or "obs"
 
-        result = eng.run("做点事", AgentContext())
+        eng.run("做点事", AgentContext())
         # list_files 在收束阶段被拦截，不应出现在 executed
         assert "list_files" not in executed
         # 拦截应有 warning
@@ -263,18 +263,6 @@ class TestReActIntegration:
         assert result  # 非空
         assert "引擎被用户中断" not in result
 
-    def test_mercy_compile_no_data_error(self):
-        """预算耗尽且无工具调用 → 报错信息。"""
-        cb = _RecordingCallback()
-        eng = ReActEngine(["m1"], max_iterations=2, callback=cb)
-        # parse 返回既无 action 也无 final_answer → 走 else 分支返回 result
-        # 但若返回 thought only，会走 else 分支提前 return。改：返回 action 让循环跑，但 _execute_tool 不记？
-        # 实际上 _execute_tool 会记 tracker。要让 tracker 空，需 parse 不含 action。
-        # parse 返回空 dict → else 分支 → 提前 return（不耗尽）。
-        # 此路径无法通过 run() 触发 no-data mercy（else 总会 return）。
-        # 改测 _mercy_compile 直接：已在 TestMercyCompile 覆盖。这里跳过 run 路径。
-        pass
-
     def test_compression_reward_granted_on_compaction(self):
         """第 5 轮压缩成功 → budget.on_compression 被调用。"""
         eng = ReActEngine(
@@ -282,7 +270,6 @@ class TestReActIntegration:
             model_configs={"m1": SimpleNamespace(context_window=1000)},
         )
         # monkeypatch _maybe_compact_messages 使其在第 5 轮返回更短列表
-        original = eng._maybe_compact_messages
         call_count = {"n": 0}
 
         def fake_compact(messages, turn, every=5):

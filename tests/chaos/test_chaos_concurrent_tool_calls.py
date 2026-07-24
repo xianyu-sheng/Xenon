@@ -15,7 +15,6 @@ import time
 from unittest.mock import MagicMock
 
 import httpx
-import pytest
 
 import xenon.utils.llm_client as llm_client
 from xenon.utils.response_adapter import parse_react

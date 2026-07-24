@@ -5,7 +5,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import pytest
 from xenon.repl.routing_history import (
     RoutingHistory, RoutingRecord, RingBuffer,
 )
