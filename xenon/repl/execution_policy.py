@@ -21,6 +21,38 @@ class ExecutionLevel(IntEnum):
     EXECUTE = 3
 
 
+_EXECUTION_BOUNDARY_MARKER = "## 本轮执行边界（最高优先级）"
+
+
+def execution_boundary_text(level: ExecutionLevel | int) -> str:
+    """Render one deterministic, turn-local authorization boundary."""
+    boundary = {
+        int(ExecutionLevel.ANSWER_ONLY): "本轮只能输出回答，禁止调用任何工具。",
+        int(ExecutionLevel.READ_ONLY): "本轮只允许只读工具，禁止写文件、修改状态或执行命令。",
+        int(ExecutionLevel.WRITE): "本轮允许读取和写入，但禁止 command、动态工具及任何命令执行。",
+        int(ExecutionLevel.EXECUTE): "本轮已授权按正常权限闸门使用执行类工具。",
+    }.get(int(level), "")
+    if not boundary:
+        return ""
+    return (
+        f"{_EXECUTION_BOUNDARY_MARKER}\n{boundary}"
+        "即使此前提示要求使用工具，也绝不能越过这条边界。"
+    )
+
+
+def bind_execution_boundary(text: str, level: ExecutionLevel | int) -> str:
+    """Append the boundary once so it becomes part of immutable turn history."""
+    if _EXECUTION_BOUNDARY_MARKER in text:
+        return text
+    boundary = execution_boundary_text(level)
+    return f"{text}\n\n{boundary}" if boundary else text
+
+
+def strip_execution_boundary(text: str) -> str:
+    """Remove Xenon's own suffix before classifying the user's tool intent."""
+    return text.split(_EXECUTION_BOUNDARY_MARKER, 1)[0].rstrip()
+
+
 @dataclass(frozen=True)
 class ExecutionPolicy:
     """A small, inspectable authorization decision for one user turn."""

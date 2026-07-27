@@ -557,25 +557,20 @@ class ReActEngine(BaseEngine):
         self._begin_run()  # P3-Q2: 生成本次 run 的链路 ID（贯穿所有 LLM 调用）
         self._recent_calls.clear()  # v0.7.0: 每次 run 重置重复调用跟踪
         active_level = ctx.get("_execution_level")
-        system_prompt = self.system_prompt
+        original_user_input = user_input
         if active_level is not None:
-            boundary = {
-                0: "本轮只能输出回答，禁止调用任何工具。",
-                1: "本轮只允许只读工具，禁止写文件、修改状态或执行命令。",
-                2: "本轮允许读取和写入，但禁止 command、动态工具及任何命令执行。",
-                3: "本轮已授权按正常权限闸门使用执行类工具。",
-            }.get(int(active_level), "")
-            if boundary:
-                system_prompt = (
-                    f"{system_prompt}\n\n## 本轮执行边界（最高优先级）\n{boundary}"
-                    "即使此前提示要求使用工具，也绝不能越过这条边界。"
-                )
+            from xenon.repl.execution_policy import bind_execution_boundary
+
+            user_input = bind_execution_boundary(user_input, int(active_level))
         self._active_execution_level = active_level
-        messages = [{"role": "system", "content": system_prompt}]
+        messages = [{"role": "system", "content": self.system_prompt}]
         # F4: ctx_mgr 注入时消费其（已压缩）消息，不再自行 [-10:] 截断；
         # 否则回退 AgentContext 的对话历史（保留 [-10:] 兜底）。
         if ctx_mgr is not None:
-            history = self._history_messages(ctx, current_user_input=user_input)
+            history = self._history_messages(
+                ctx,
+                current_user_input=original_user_input,
+            )
             logger.debug(f"ReAct 注入 ContextManager {len(history)} 条历史（已压缩）")
         else:
             history = ctx.get_conversation_messages()
@@ -1542,9 +1537,13 @@ class ReActEngine(BaseEngine):
     @staticmethod
     def _input_requires_tools(text: str) -> bool:
         """Use the same side-effect boundary as the REPL router."""
-        from xenon.repl.execution_policy import classify_execution_policy
+        from xenon.repl.execution_policy import (
+            classify_execution_policy,
+            strip_execution_boundary,
+        )
         from xenon.repl.prompt_optimizer import detect_intent
 
+        text = strip_execution_boundary(text)
         return classify_execution_policy(
             text,
             intent=detect_intent(text),

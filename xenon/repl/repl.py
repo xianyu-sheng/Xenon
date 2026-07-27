@@ -35,6 +35,7 @@ from xenon.repl.context_manager import ContextManager
 from xenon.repl.execution_policy import (
     ExecutionLevel,
     ExecutionPolicy,
+    bind_execution_boundary,
     classify_execution_policy,
 )
 from xenon.repl.model_registry import ModelRegistry
@@ -2069,12 +2070,16 @@ class REPL:
                 f"{inherited_intent_source}"
             )
 
+        # Freeze authorization with this exact turn. ReAct must not mutate its
+        # leading system prompt when the execution level changes.
+        turn_prompt = bind_execution_boundary(turn_prompt, execution_policy.level)
+
         # 添加用户消息
         intent_source = (
             inherited_intent_source
             or (user_input if intent in {"query", "research"} else "")
         )
-        self.ctx_mgr.add_user_message(
+        turn_prompt = self.ctx_mgr.add_request_message(
             turn_prompt,
             metadata={
                 "intent": intent,
@@ -2242,7 +2247,7 @@ class REPL:
         direct_log_chunks: list[str] = []
 
         messages = self.ctx_mgr.get_messages(
-            include_working_memory=True,
+            include_working_memory=not self.ctx_mgr.current_request_context_frozen(),
             include_context_messages=True,
         )
 

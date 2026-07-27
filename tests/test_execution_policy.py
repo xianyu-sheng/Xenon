@@ -12,10 +12,24 @@ from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes.tool_executor import ToolExecutor, execution_policy_denial
 from xenon.repl.code_response import validate_code_response
 from xenon.repl.difficulty_estimator import DifficultyEstimator
-from xenon.repl.execution_policy import ExecutionLevel, classify_execution_policy
+from xenon.repl.execution_policy import (
+    ExecutionLevel,
+    bind_execution_boundary,
+    classify_execution_policy,
+    strip_execution_boundary,
+)
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.prompt_optimizer import detect_intent
 from xenon.repl.repl import REPL
+
+
+def test_turn_boundary_is_idempotent_and_ignored_by_intent_classification():
+    original = "请解释快速排序，不要调用工具"
+    bound = bind_execution_boundary(original, ExecutionLevel.ANSWER_ONLY)
+
+    assert bind_execution_boundary(bound, ExecutionLevel.ANSWER_ONLY) == bound
+    assert strip_execution_boundary(bound) == original
+    assert ReActEngine._input_requires_tools(bound) is False
 
 
 @pytest.mark.parametrize(

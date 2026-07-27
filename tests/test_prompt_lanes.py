@@ -176,3 +176,31 @@ def test_compiled_provider_call_records_lane_without_network(monkeypatch):
     assert len(snapshot) == 1
     assert snapshot[0]["request_count"] == 2
     assert snapshot[0]["last_event_id"] == 2
+
+
+def test_request_envelope_freezes_dynamic_context_and_keeps_prefix_append_only():
+    context = ContextManager()
+    context.add_system_message("fixed")
+    context.set_context_message("project", "stable project", stable=True)
+    context.update_working_memory("active_file", "/work/main.py")
+    context.set_context_message("retrieval", "first memory")
+
+    first_prompt = context.add_request_message("question one")
+    first_messages = context.get_messages(include_context_messages=True)
+    context.prompt_lanes.prepare(
+        "deepseek/pro", "direct", "chat", 0, first_messages,
+    )
+    context.add_assistant_message("answer one", model_used="deepseek/pro")
+    context.set_context_message("retrieval", "second memory")
+    second_prompt = context.add_request_message("question two")
+    second_messages = context.get_messages(include_context_messages=True)
+    decision = context.prompt_lanes.prepare(
+        "deepseek/pro", "direct", "chat", 0, second_messages,
+    )
+
+    assert "first memory" in first_prompt
+    assert "second memory" not in first_prompt
+    assert "second memory" in second_prompt
+    assert context.get_context_messages(stable=False) == []
+    assert decision.append_only is True
+    assert decision.reason == "prefix_extended"

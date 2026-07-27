@@ -234,6 +234,7 @@ def test_engine_phase_reaches_llm_manifest_context(monkeypatch) -> None:
         "engine": "_concrete",
         "phase": "review",
         "context_epoch": 3,
+        "event_cursor": 0,
     }
 
 

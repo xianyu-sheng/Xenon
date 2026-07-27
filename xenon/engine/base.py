@@ -206,6 +206,11 @@ class BaseEngine(ABC):
         result: list[dict[str, Any]] = []
         result.extend(self._context_messages(stable=True))
         result.extend(history)
+        if (
+            self._ctx_mgr is not None
+            and self._ctx_mgr.current_request_context_frozen()
+        ):
+            return result
         memory_message = self._working_memory_message()
         if memory_message is not None:
             result.append(memory_message)
