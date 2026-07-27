@@ -339,6 +339,10 @@ class BaseEngine(ABC):
                     "credentials": creds,
                     "base_url": base,
                     "cache_context": self._cache_context(effective_cache_phase),
+                    "cache_lane_registry": (
+                        getattr(self._ctx_mgr, "prompt_lanes", None)
+                        if self._ctx_mgr is not None else None
+                    ),
                 }
                 effort = getattr(mc, "reasoning_effort", "") if mc else ""
                 if effort:
@@ -496,6 +500,10 @@ class BaseEngine(ABC):
                     "temperature": self.temperature,
                     "cache_context": self._cache_context(
                         cache_phase or self._active_cache_phase
+                    ),
+                    "cache_lane_registry": (
+                        getattr(self._ctx_mgr, "prompt_lanes", None)
+                        if self._ctx_mgr is not None else None
                     ),
                 }
                 effort = getattr(mc, "reasoning_effort", "") if mc else ""
@@ -691,6 +699,10 @@ class BaseEngine(ABC):
             "engine": type(self).__name__.removesuffix("Engine").lower(),
             "phase": str(phase or "request").lower(),
             "context_epoch": epoch,
+            "event_cursor": (
+                getattr(self._ctx_mgr, "event_cursor", 0)
+                if self._ctx_mgr is not None else 0
+            ),
         }
 
     def _call_llm_for_phase(

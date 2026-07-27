@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from xenon.repl.prompt_lanes import PromptLaneRegistry, SessionEventLog
+
 logger = logging.getLogger(__name__)
 
 _SENSITIVE_MEMORY_KEY = re.compile(
@@ -180,6 +182,10 @@ class ContextManager:
         # Structural rewrites start a new cache family. Appending ordinary
         # conversation turns deliberately keeps the same epoch.
         self.cache_epoch: int = 0
+        # Cache Rails: one immutable provider-neutral event stream plus a
+        # content-free exact-prefix registry for every model/engine contract.
+        self.event_log = SessionEventLog(epoch=self.cache_epoch)
+        self.prompt_lanes = PromptLaneRegistry()
         if track_real_usage:
             self._subscribe_usage()
 
@@ -208,6 +214,30 @@ class ContextManager:
             **kwargs,
         )
         self.history.append(turn)
+        event = self.event_log.append(
+            "message",
+            role=role,
+            content=content,
+            model_id=turn.model_used,
+            metadata={
+                "turn_type": turn.turn_type,
+                "turn_index": turn.turn_index,
+                "task_tier": turn.task_tier,
+                "semantic_group_id": turn.semantic_group_id,
+            },
+        )
+        turn.metadata.setdefault("event_id", event.event_id)
+
+    @property
+    def event_cursor(self) -> int:
+        """Latest immutable conversation event visible to outgoing requests."""
+        return self.event_log.latest_id
+
+    def _advance_cache_epoch(self, reason: str) -> int:
+        """Start a new structural cache epoch while preserving the audit log."""
+        self.cache_epoch += 1
+        self.event_log.start_epoch(self.cache_epoch, reason)
+        return self.cache_epoch
 
     def set_active_tier(self, tier: int) -> None:
         """设置当前活跃任务层级（由 AutoRouter 在路由后调用）。"""
@@ -570,7 +600,7 @@ class ContextManager:
         if not self._undo_stack:
             return False
         self.history = self._undo_stack.pop()
-        self.cache_epoch += 1
+        self._advance_cache_epoch("undo")
         # P3-Q1 续：回退到旧快照后，记录的真实 usage 已不对应当前 history → 失效
         self._real_usage = None
         return True
@@ -780,7 +810,7 @@ class ContextManager:
             self._suppress_usage = prev_suppress
 
         self.history = new_history
-        self.cache_epoch += 1
+        self._advance_cache_epoch("compact")
         # 压缩后 history 结构性变更，旧真实 usage 不再对应 → 失效，下次调用重新填充
         self._real_usage = None
         self._persist_compact_md(summary, session_id)
@@ -1153,7 +1183,7 @@ class ContextManager:
         self.save_snapshot()
         self.history.clear()
         self._working_memory.clear()
-        self.cache_epoch += 1
+        self._advance_cache_epoch("clear")
         # P3-Q1 续：清空后真实 usage 不再对应 → 失效
         self._real_usage = None
 

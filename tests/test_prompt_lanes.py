@@ -7,6 +7,8 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from xenon.repl.prompt_lanes import PromptLaneRegistry, SessionEventLog
+from xenon.repl.context_manager import ContextManager
+from xenon.utils import llm_client
 
 
 def test_session_event_log_is_monotonic_and_immutable():
@@ -120,3 +122,57 @@ def test_contract_and_model_create_independent_lanes():
     assert len({direct.lane_id, react.lane_id, flash.lane_id}) == 3
     assert lanes.model_warmth("deepseek/pro")["eligible"] is True
 
+
+def test_context_manager_appends_events_and_advances_epoch():
+    context = ContextManager()
+    context.add_user_message("hello")
+    context.add_assistant_message("hi", model_used="deepseek/pro")
+
+    assert context.event_cursor == 2
+    events = context.event_log.snapshot()
+    assert [event.role for event in events] == ["user", "assistant"]
+    assert events[-1].model_id == "deepseek/pro"
+
+    context.clear()
+    assert context.cache_epoch == 1
+    assert context.event_log.snapshot()[-1].kind == "epoch_started"
+
+
+def test_compiled_provider_call_records_lane_without_network(monkeypatch):
+    lanes = PromptLaneRegistry()
+    monkeypatch.setattr(
+        llm_client,
+        "_call_openai_compat",
+        lambda endpoint, messages, max_tokens, temperature, timeout: "ok",
+    )
+    common = [
+        {"role": "system", "content": "fixed"},
+        {"role": "user", "content": "one"},
+    ]
+    options = {
+        "credentials": {"deepseek": "test-key"},
+        "max_retries": 1,
+        "cache_lane_registry": lanes,
+        "cache_context": {
+            "engine": "direct",
+            "phase": "chat",
+            "context_epoch": 0,
+            "event_cursor": 2,
+        },
+    }
+
+    assert llm_client.chat_completion("deepseek/test", common, **options) == "ok"
+    assert llm_client.chat_completion(
+        "deepseek/test",
+        [
+            *common,
+            {"role": "assistant", "content": "answer"},
+            {"role": "user", "content": "two"},
+        ],
+        **options,
+    ) == "ok"
+
+    snapshot = lanes.snapshots()
+    assert len(snapshot) == 1
+    assert snapshot[0]["request_count"] == 2
+    assert snapshot[0]["last_event_id"] == 2

@@ -2804,10 +2804,12 @@ class REPL:
         full_response = []
         model_config = self.registry.get_model_by_id(model_id)
         request_options: dict[str, Any] = {
+            "cache_lane_registry": self.ctx_mgr.prompt_lanes,
             "cache_context": {
                 "engine": "direct",
                 "phase": "chat",
                 "context_epoch": self.ctx_mgr.cache_epoch,
+                "event_cursor": self.ctx_mgr.event_cursor,
             },
         }
         if model_config and model_config.reasoning_effort:
@@ -2838,10 +2840,12 @@ class REPL:
         console.print(f"[dim]· 调用 {model_id}…[/dim]")
         model_config = self.registry.get_model_by_id(model_id)
         request_options: dict[str, Any] = {
+            "cache_lane_registry": self.ctx_mgr.prompt_lanes,
             "cache_context": {
                 "engine": "direct",
                 "phase": "chat",
                 "context_epoch": self.ctx_mgr.cache_epoch,
+                "event_cursor": self.ctx_mgr.event_cursor,
             },
         }
         if model_config and model_config.reasoning_effort:

@@ -234,6 +234,38 @@ def _response_with_manifest(
     return payload
 
 
+def _prepare_cache_lane(
+    registry: Any,
+    model_id: str,
+    messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    request_shape: dict[str, Any] | None = None,
+    cache_context: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Attach exact-prefix lane diagnostics after deterministic compilation."""
+    if registry is None:
+        return cache_context
+    context = dict(cache_context or {})
+    try:
+        decision = registry.prepare(
+            model_id,
+            str(context.get("engine") or "utility"),
+            str(context.get("phase") or "request"),
+            int(context.get("context_epoch") or 0),
+            messages,
+            tools=tools,
+            request_shape=request_shape,
+            event_cursor=int(context.get("event_cursor") or 0),
+        )
+        context.update(decision.cache_context())
+    except Exception:
+        # Cache telemetry must never make an otherwise valid provider request
+        # fail. The request proceeds without lane attribution.
+        logger.warning("缓存轨道记录失败（已隔离）", exc_info=True)
+    return context
+
+
 def register_usage_callback(cb) -> Any:
     """注册 usage 回调 ``cb(model_id, usage: LLMUsage, latency: float)``。
 
@@ -641,6 +673,7 @@ def chat_completion(
     temperature: float = 0.7,
     reasoning_effort: str | None = None,
     cache_context: dict[str, Any] | None = None,
+    cache_lane_registry: Any = None,
     timeout: float = 120.0,
     max_retries: int = 3,
 ) -> str:
@@ -660,6 +693,12 @@ def chat_completion(
     endpoint = build_endpoint(model_id, credentials, base_url)
     compiled = compile_prompt(messages)
     messages = compiled.messages
+    cache_context = _prepare_cache_lane(
+        cache_lane_registry,
+        model_id,
+        messages,
+        cache_context=cache_context,
+    )
     _set_cache_manifest(
         model_id,
         messages,
@@ -1035,6 +1074,7 @@ def chat_completion_with_tools(
     temperature: float = 0.7,
     reasoning_effort: str | None = None,
     cache_context: dict[str, Any] | None = None,
+    cache_lane_registry: Any = None,
     timeout: float = 120.0,
     max_retries: int = 3,
 ) -> LLMResponse:
@@ -1058,14 +1098,23 @@ def chat_completion_with_tools(
     tools = compiled.tools
     response_format = canonicalize_request_value(response_format)
     tool_choice = canonicalize_request_value(tool_choice)
+    request_shape = {
+        "response_format": response_format,
+        "tool_choice": tool_choice,
+    }
+    cache_context = _prepare_cache_lane(
+        cache_lane_registry,
+        model_id,
+        messages,
+        tools=tools,
+        request_shape=request_shape,
+        cache_context=cache_context,
+    )
     _set_cache_manifest(
         model_id,
         messages,
         tools=tools,
-        request_shape={
-            "response_format": response_format,
-            "tool_choice": tool_choice,
-        },
+        request_shape=request_shape,
         cache_context=cache_context,
         prompt_layout=compiled.layout(),
     )
@@ -1281,6 +1330,7 @@ def chat_completion_stream(
     temperature: float = 0.7,
     reasoning_effort: str | None = None,
     cache_context: dict[str, Any] | None = None,
+    cache_lane_registry: Any = None,
     timeout: float = 300.0,
 ) -> Generator[str, None, None]:
     """
@@ -1292,6 +1342,12 @@ def chat_completion_stream(
     endpoint = build_endpoint(model_id, credentials, base_url)
     compiled = compile_prompt(messages)
     messages = compiled.messages
+    cache_context = _prepare_cache_lane(
+        cache_lane_registry,
+        model_id,
+        messages,
+        cache_context=cache_context,
+    )
     manifest = _set_cache_manifest(
         model_id,
         messages,
