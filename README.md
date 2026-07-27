@@ -10,7 +10,7 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)]()
 [![CI](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml/badge.svg)](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/xianyu-sheng/Xenon/branch/main/graph/badge.svg)](https://codecov.io/gh/xianyu-sheng/Xenon)
-[![release v0.7.2](https://img.shields.io/badge/release-v0.7.2-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.7.2)
+[![release v0.7.3](https://img.shields.io/badge/release-v0.7.3-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.7.3)
 [![DeepSeek 缓存指南](https://img.shields.io/badge/DeepSeek-缓存最佳实践-1a73e8.svg)](docs/deepseek-guide.md)
 [![架构设计](https://img.shields.io/badge/📐-架构设计-8b5cf6.svg)](docs/ARCHITECTURE.md)
 
@@ -18,7 +18,7 @@
 
 ## 🖥️ 新版终端界面
 
-v0.7.2 在新版 TUI、User-Governed Memory、多模型、8 引擎和工具管线之上，
+v0.7.3 在新版 TUI、User-Governed Memory、多模型、8 引擎和工具管线之上，
 正式加入标准 Agent Skills、机器可读集成 CLI、Ark 一等 Provider、llms.txt 优先
 文档检索和真实 Skill/MCP 互操作验证。
 
@@ -26,7 +26,7 @@ v0.7.2 在新版 TUI、User-Governed Memory、多模型、8 引擎和工具管�
   💭 1 步 · 1 个工具  [Ctrl+O 展开详情]
 
 ● ReAct 结果
-  文件已读取，当前 Xenon 版本为 0.7.2。
+  文件已读取，当前 Xenon 版本为 0.7.3。
 
 ───────────────────────────────────────────────
   ❯ 继续输入…
@@ -134,7 +134,7 @@ token 阈值时按重要性、置信度、使用与时间综合归档，固定/�
 ## ⚡ 30 秒上手
 
 ```bash
-pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.7.2"
+pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.7.3"
 xenon                                                     # 启动 REPL
 
 ❯ /setup                # 配 API Key
@@ -142,7 +142,7 @@ xenon                                                     # 启动 REPL
 ❯ 你好                  # 开始对话
 ```
 
-上述命令安装经过回归验证的 `v0.7.2` tag；参与开发时可去掉 `@v0.7.2` 跟随 `main`。
+上述命令安装经过回归验证的 `v0.7.3` tag；参与开发时可去掉 `@v0.7.3` 跟随 `main`。
 
 固定底部状态栏实时显示 API、模型、范式、上下文、缓存、费用和工具计数。`/cost` 看完整账单，`Ctrl+O` 查看折叠过程，`Ctrl+Alt+V` 粘贴图片让 DeepSeek 推理。
 
