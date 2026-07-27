@@ -9,6 +9,7 @@
 - 增加发布验收清单，明确离线测试、E2E、构建、跨平台和真实任务评测的发布门槛。
 - CI 新增 Linux、Windows、macOS 的运行时安装、导入、编译和 `xenon --version` 冒烟矩阵。
 - 使用全新虚拟环境安装 v0.7.3 wheel，成功导入 Xenon 并运行 `xenon 0.7.3`。
+- GitHub Actions 的 checkout/setup-python 升级到 Node 24 运行时版本，避免旧 Node 20 进入退役窗口。
 
 ## [0.7.3] — 2026-07-27
 
