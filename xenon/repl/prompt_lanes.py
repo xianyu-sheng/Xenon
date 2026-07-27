@@ -23,6 +23,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from xenon.utils.token_estimate import estimate_text_tokens
+
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(
@@ -54,8 +56,7 @@ def _message_fingerprint(message: Mapping[str, Any]) -> str:
 
 
 def _estimated_tokens(messages: Sequence[Mapping[str, Any]]) -> int:
-    size = sum(len(_canonical_json(message)) for message in messages)
-    return max(1, (size + 3) // 4) if size else 0
+    return sum(estimate_text_tokens(_canonical_json(message)) for message in messages)
 
 
 @dataclass(frozen=True)
@@ -189,10 +190,22 @@ class LaneDecision:
 class PromptLaneRegistry:
     """Track exact-prefix continuity independently for every routed model."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_archived_lanes: int = 64) -> None:
+        if max_archived_lanes < 0:
+            raise ValueError("max_archived_lanes must be non-negative")
         self._active: dict[str, PromptLane] = {}
         self._archive: list[PromptLane] = []
+        self._max_archived_lanes = int(max_archived_lanes)
         self._lock = threading.RLock()
+
+    def _archive_lane(self, lane: PromptLane) -> None:
+        """Retain only recent forked lanes for bounded diagnostics memory."""
+        if self._max_archived_lanes == 0:
+            return
+        self._archive.append(lane)
+        overflow = len(self._archive) - self._max_archived_lanes
+        if overflow > 0:
+            del self._archive[:overflow]
 
     @staticmethod
     def _base_key(
@@ -286,7 +299,7 @@ class PromptLaneRegistry:
                     reusable_tokens = lane.estimated_prompt_tokens
                     reason = "exact_retry" if fingerprints == previous else "prefix_extended"
                 else:
-                    self._archive.append(lane)
+                    self._archive_lane(lane)
                     generation = lane.generation + 1
                     lane = PromptLane(
                         lane_id=f"{base_key[:16]}-g{generation}",

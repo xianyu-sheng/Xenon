@@ -9,6 +9,13 @@ import pytest
 from xenon.repl.prompt_lanes import PromptLaneRegistry, SessionEventLog
 from xenon.repl.context_manager import ContextManager
 from xenon.utils import llm_client
+from xenon.utils.token_estimate import estimate_text_tokens
+
+
+def test_token_estimate_counts_cjk_and_mixed_text_conservatively():
+    assert estimate_text_tokens("中文测试") == 4
+    assert estimate_text_tokens("abcd") == 1
+    assert estimate_text_tokens("中文abcd") == 3
 
 
 def test_session_event_log_is_monotonic_and_immutable():
@@ -100,6 +107,27 @@ def test_history_rewrite_forks_lane_generation():
     snapshots = lanes.snapshots()
     assert len(snapshots) == 2
     assert sum(snapshot["active"] for snapshot in snapshots) == 1
+
+
+def test_archived_lanes_are_bounded_to_recent_forks():
+    lanes = PromptLaneRegistry(max_archived_lanes=2)
+    for index in range(4):
+        lanes.prepare(
+            "deepseek/pro",
+            "direct",
+            "chat",
+            0,
+            [{"role": "user", "content": f"rewrite-{index}"}],
+        )
+
+    snapshots = lanes.snapshots()
+    assert len(snapshots) == 3
+    assert [item["generation"] for item in snapshots if not item["active"]] == [1, 2]
+
+
+def test_archived_lane_limit_rejects_negative_values():
+    with pytest.raises(ValueError, match="non-negative"):
+        PromptLaneRegistry(max_archived_lanes=-1)
 
 
 def test_contract_and_model_create_independent_lanes():

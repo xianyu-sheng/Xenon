@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from xenon.utils.token_estimate import estimate_text_tokens
+
 
 class CacheTier(str, Enum):
     STATIC = "static"
@@ -64,7 +66,7 @@ def _content_text(message: dict[str, Any]) -> str:
 
 
 def _estimated_tokens(text: str) -> int:
-    return max(1, (len(text) + 3) // 4) if text else 0
+    return estimate_text_tokens(text)
 
 
 def canonicalize_request_value(value: Any) -> Any:

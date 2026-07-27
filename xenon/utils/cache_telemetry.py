@@ -19,6 +19,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from xenon.utils.token_estimate import estimate_text_tokens
+
 
 MANIFEST_RESPONSE_KEY = "_xenon_cache_manifest"
 _SCHEMA_VERSION = 2
@@ -83,7 +85,7 @@ def _content_text(message: Mapping[str, Any]) -> str:
 
 def _estimated_tokens(text: str) -> int:
     # This number is used only as an expectation baseline, never for billing.
-    return max(1, (len(text) + 3) // 4) if text else 0
+    return estimate_text_tokens(text)
 
 
 def canonical_model_id(model_id: str) -> str:
