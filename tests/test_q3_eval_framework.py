@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 from evals.runner import (
     RealAgent,
+    isolated_eval_credentials,
     load_tasks,
     run_eval,
     validate_task,
@@ -173,6 +175,19 @@ class TestRealAgentScoring:
                 "expected_tools": ["secret_tool_name"]}
         agent.run_task(task)
         assert "secret_tool_name" not in captured["prompt"]
+
+
+class TestEvalCredentialIsolation:
+    def test_real_eval_redirects_persistence_to_workdir(self, tmp_path: Path, monkeypatch):
+        source = tmp_path / "source-credentials.yaml"
+        source.write_text("deepseek: test-only-value\n", encoding="utf-8")
+        monkeypatch.delenv("XENON_CREDENTIALS_PATH", raising=False)
+
+        with isolated_eval_credentials(tmp_path / "work", source) as target:
+            assert os.environ["XENON_CREDENTIALS_PATH"] == str(target)
+            assert target.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+
+        assert "XENON_CREDENTIALS_PATH" not in os.environ
 
 
 # ════════════════════════════════════════════════════════════

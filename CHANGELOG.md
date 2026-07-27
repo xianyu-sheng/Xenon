@@ -10,6 +10,7 @@
 - CI 新增 Linux、Windows、macOS 的运行时安装、导入、编译和 `xenon --version` 冒烟矩阵。
 - 使用全新虚拟环境安装 v0.7.3 wheel，成功导入 Xenon 并运行 `xenon 0.7.3`。
 - GitHub Actions 的 checkout/setup-python 升级到 Node 24 运行时版本，避免旧 Node 20 进入退役窗口。
+- 真实评测默认将 Provider/MCP 持久化重定向到隔离工作目录，避免评测任务污染用户凭证配置。
 
 ## [0.7.3] — 2026-07-27
 

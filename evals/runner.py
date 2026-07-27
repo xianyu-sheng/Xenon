@@ -23,6 +23,44 @@ DEFAULT_REPORT_PATH = Path(__file__).parent / "reports" / "mock_report.md"
 
 
 @contextmanager
+def isolated_eval_credentials(
+    workdir: str | Path,
+    source_path: str | Path | None = None,
+):
+    """Run an eval with provider/MCP persistence redirected into ``workdir``.
+
+    Real evals execute tools that may persist MCP servers or model settings. Copy
+    the user's credentials into a mode-0600 file under the disposable workdir,
+    then point Xenon's provider registry at that file before importing the runtime.
+    The source file is never modified and the environment override is restored.
+    """
+    source = Path(
+        source_path
+        or os.environ.get("XENON_CREDENTIALS_PATH", str(Path.home() / ".xenon" / "credentials.yaml")),
+    ).expanduser()
+    target = Path(workdir) / ".xenon" / "credentials.yaml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source.exists():
+        target.write_bytes(source.read_bytes())
+    else:
+        target.write_text("{}\n", encoding="utf-8")
+    try:
+        target.chmod(0o600)
+    except OSError:
+        pass
+
+    previous = os.environ.get("XENON_CREDENTIALS_PATH")
+    os.environ["XENON_CREDENTIALS_PATH"] = str(target)
+    try:
+        yield target
+    finally:
+        if previous is None:
+            os.environ.pop("XENON_CREDENTIALS_PATH", None)
+        else:
+            os.environ["XENON_CREDENTIALS_PATH"] = previous
+
+
+@contextmanager
 def _change_directory(path: str):
     """Python 3.10-compatible equivalent of ``contextlib.chdir``."""
     previous = Path.cwd()
@@ -313,13 +351,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tasks", default=str(DEFAULT_TASKS_PATH))
     parser.add_argument("--output", default=str(DEFAULT_REPORT_PATH))
     parser.add_argument(
+        "--credentials-path", default=None,
+        help="Optional source credentials file; real evals copy it into the isolated workdir.",
+    )
+    parser.add_argument(
         "--workdir", default=None,
         help="Optional working directory for --mode real (tool execution sandbox).",
     )
     args = parser.parse_args(argv)
 
     tasks = load_tasks(args.tasks)
-    results = run_eval(tasks, mode=args.mode, model=args.model, workdir=args.workdir)
+    if args.mode == "real" and not args.workdir:
+        parser.error("--workdir is required for --mode real so file and credential writes stay isolated")
+    credentials_context = (
+        isolated_eval_credentials(args.workdir, args.credentials_path)
+        if args.mode == "real" and args.workdir
+        else nullcontext()
+    )
+    with credentials_context:
+        results = run_eval(tasks, mode=args.mode, model=args.model, workdir=args.workdir)
     model = args.model or "mock-agent"
     report = write_report(results, args.output, mode=args.mode, model=model)
     print(f"Wrote eval report: {report}")

@@ -21,7 +21,11 @@ import yaml
 from xenon.utils.atomic_write import atomic_write_text
 from xenon.utils.llm_client import _create_http_client
 
-CREDENTIALS_PATH = Path.home() / ".xenon" / "credentials.yaml"
+_DEFAULT_CREDENTIALS_PATH = Path.home() / ".xenon" / "credentials.yaml"
+# 评测/沙箱可通过环境变量把持久化配置指向隔离文件；普通用户行为保持不变。
+CREDENTIALS_PATH = Path(
+    os.environ.get("XENON_CREDENTIALS_PATH", str(_DEFAULT_CREDENTIALS_PATH)),
+).expanduser()
 MODEL_LIST_TIMEOUT = 8.0
 
 logger = logging.getLogger(__name__)
