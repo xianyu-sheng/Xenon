@@ -269,6 +269,24 @@ class _EvalTelemetryCallback:
         self.errors = 0
         self.warnings = 0
 
+    # EngineCallback-compatible no-op hooks.  Keeping the callback duck-typed
+    # avoids importing the engine module during eval discovery while still
+    # satisfying every callback invocation used by ReAct/Plan engines.
+    def on_think(self, thought: str) -> None:
+        pass
+
+    def on_step(self, step_id: int, total: int, task: str) -> None:
+        pass
+
+    def on_step_done(self, step_id: int, success: bool, summary: str) -> None:
+        pass
+
+    def on_review(self, score: int, passed: bool, feedback: str) -> None:
+        pass
+
+    def on_finish(self, result: str) -> None:
+        pass
+
     def on_act(self, action: str, action_input: dict) -> None:
         self.tool_calls += 1
 
