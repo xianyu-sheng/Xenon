@@ -29,21 +29,29 @@ tasks:
     prompt: "Locate where shell commands are validated before execution."
     expected_tools: ["search_files", "read_file"]
     success_criteria: "The safety validation path is correctly explained."
+    assertions:
+      answer_contains_any: ["validate_tool_params", "_validate_command", "ToolExecutor"]
   - id: code-search-model-router
     category: code_search
     prompt: "Find where provider/model IDs are parsed and routed."
     expected_tools: ["search_files", "read_file"]
     success_criteria: "The model parsing and endpoint construction flow is described."
+    assertions:
+      answer_contains_any: ["build_endpoint", "provider_registry", "ModelEndpoint"]
   - id: code-search-context-injection
     category: code_search
     prompt: "Explain how project context is injected before the first chat."
     expected_tools: ["search_files", "read_file"]
     success_criteria: "ProjectContext detection and injection are identified."
+    assertions:
+      answer_contains_any: ["ProjectContext", "project_context", "context_manager"]
   - id: run-focused-tests
     category: tool_call
     prompt: "Run the callback tests and summarize any failures."
     expected_tools: ["command"]
     success_criteria: "The relevant pytest command is run and the failure summary is accurate."
+    assertions:
+      answer_contains_any: ["pytest", "test"]
   - id: inspect-git-status
     category: tool_call
     prompt: "Check the current git status and list only files relevant to this task."
@@ -59,6 +67,8 @@ tasks:
     prompt: "Use the weather tool to answer the current weather for Beijing."
     expected_tools: ["weather"]
     success_criteria: "The weather tool is called and the response is summarized."
+    assertions:
+      answer_contains_any: ["Beijing", "北京", "weather", "天气"]
   - id: remember-user-preference
     category: context_memory
     prompt: "Remember that the user prefers concise Chinese summaries for final answers."
@@ -94,8 +104,12 @@ tasks:
     prompt: "Explain a model call failure caused by a missing API key and guide setup."
     expected_tools: ["read_file"]
     success_criteria: "The answer points to local credentials and setup commands."
+    assertions:
+      answer_contains_any: ["credentials", "API Key", "凭证"]
   - id: mcp-tool-flow
     category: multi_turn_revision
     prompt: "Add an MCP server, list tools, and explain how the agent can call one."
     expected_tools: ["mcp_call", "read_file"]
     success_criteria: "The MCP registry flow and tool invocation path are correctly described."
+    assertions:
+      answer_contains_any: ["MCP", "/mcp", "mcp_call"]

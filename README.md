@@ -89,6 +89,18 @@ v0.7.3 的一次真实 20 任务评测结果为：通用任务成功率 **45%（
 - 为 REPL 命令、权限确认、记忆写入和会话恢复建立真实闭环场景。
 - 只有在正确性和可靠性不回退的前提下，才接受 Cache Rails、路由和 Token 优化。
 
+评测真实任务时建议使用独立任务目录，并查看报告中的 `Verified Success Rate`：
+
+```bash
+python evals/runner.py \
+  --mode real \
+  --model deepseek/deepseek-v4-pro \
+  --workdir /tmp/xenon-eval-workdir \
+  --isolate-tasks
+```
+
+未配置结果断言的旧任务会显示为 `Verified: n/a`，不会被误认为已经证明正确。
+
 ## 常用命令
 
 | 命令 | 用途 |

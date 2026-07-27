@@ -10,6 +10,7 @@ import pytest
 from evals.runner import (
     RealAgent,
     XenonMetrics,
+    evaluate_assertions,
     isolated_eval_credentials,
     load_tasks,
     run_eval,
@@ -65,6 +66,48 @@ class TestSchemaRelax:
         assert len(tasks) == 20
         # 现有任务仍带 success_criteria（人类复核用）
         assert all("success_criteria" in t for t in tasks)
+
+    def test_assertions_are_optional_but_validated(self):
+        task = {"id": "t", "category": "c", "prompt": "p", "expected_tools": [],
+                "assertions": {"answer_contains": ["done"]}}
+        validate_task(task)
+        with pytest.raises(ValueError, match="assertions"):
+            validate_task({**task, "assertions": ["done"]})
+
+
+class TestResultAssertions:
+    def test_file_and_answer_assertions_pass(self, tmp_path: Path):
+        (tmp_path / "result.txt").write_text("verified output\n", encoding="utf-8")
+        result = evaluate_assertions(
+            {"assertions": {
+                "files_exist": ["result.txt"],
+                "files_contain": {"result.txt": ["verified"]},
+                "answer_contains": ["done"],
+                "answer_not_contains": ["failed"],
+            }},
+            "done and verified",
+            workdir=tmp_path,
+        )
+        assert result["configured"] is True
+        assert result["passed"] is True
+        assert result["failures"] == []
+
+    def test_assertions_fail_for_missing_fact_or_escape(self, tmp_path: Path):
+        result = evaluate_assertions(
+            {"assertions": {
+                "files_exist": ["missing.txt", "../outside.txt"],
+                "answer_contains": ["verified"],
+            }},
+            "not verified",
+            workdir=tmp_path,
+        )
+        assert result["passed"] is False
+        assert any("missing file" in failure for failure in result["failures"])
+        assert any("escapes workdir" in failure for failure in result["failures"])
+
+    def test_unconfigured_assertions_are_explicit(self):
+        result = evaluate_assertions({}, "done")
+        assert result == {"configured": False, "passed": None, "checks": [], "failures": []}
 
 
 # ════════════════════════════════════════════════════════════
@@ -189,6 +232,18 @@ class TestEvalCredentialIsolation:
             assert target.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
 
         assert "XENON_CREDENTIALS_PATH" not in os.environ
+
+    def test_task_isolation_copies_fixture_without_credentials(self, tmp_path: Path):
+        root = tmp_path / "eval"
+        (root / ".xenon").mkdir(parents=True)
+        (root / ".xenon" / "rules.md").write_text("rules", encoding="utf-8")
+        (root / ".xenon" / "credentials.yaml").write_text("secret", encoding="utf-8")
+        (root / "fixture.txt").write_text("baseline", encoding="utf-8")
+        agent = RealAgent("m1", workdir=str(root), isolate_tasks=True)
+        task_dir = Path(agent._prepare_task_workdir({"id": "task-a"}))
+        assert (task_dir / "fixture.txt").read_text(encoding="utf-8") == "baseline"
+        assert (task_dir / ".xenon" / "rules.md").exists()
+        assert not (task_dir / ".xenon" / "credentials.yaml").exists()
 
 
 # ════════════════════════════════════════════════════════════

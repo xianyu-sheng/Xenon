@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,6 +93,114 @@ def validate_task(task: dict[str, Any]) -> None:
         raise ValueError(f"Task is missing required fields: {sorted(missing)}")
     if not isinstance(task["expected_tools"], list):
         raise ValueError(f"Task {task['id']} expected_tools must be a list.")
+    assertions = task.get("assertions")
+    if assertions is not None and not isinstance(assertions, dict):
+        raise ValueError(f"Task {task['id']} assertions must be a mapping.")
+
+
+def evaluate_assertions(
+    task: dict[str, Any],
+    answer: str,
+    *,
+    workdir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Evaluate privacy-safe, deterministic task result assertions.
+
+    Assertions are deliberately small and data-oriented.  They never inspect
+    prompts or credentials and are optional so legacy tasks remain runnable.
+    Supported keys:
+
+    ``files_exist``
+        Relative paths that must exist below the eval workdir.
+    ``files_contain`` / ``files_not_contain``
+        Mapping of relative path to one string or a list of strings.
+    ``answer_contains`` / ``answer_not_contains`` / ``answer_contains_any``
+        Literal checks against the final answer.
+    """
+    assertions = task.get("assertions")
+    if not assertions:
+        return {"configured": False, "passed": None, "checks": [], "failures": []}
+    if not isinstance(assertions, dict):
+        return {"configured": True, "passed": False, "checks": [], "failures": [
+            "assertions must be a mapping",
+        ]}
+
+    root = Path(workdir or Path.cwd()).resolve()
+    checks: list[str] = []
+    failures: list[str] = []
+
+    def safe_path(raw: Any) -> Path | None:
+        candidate = Path(str(raw))
+        if candidate.is_absolute():
+            failures.append(f"absolute assertion path is not allowed: {candidate}")
+            return None
+        resolved = (root / candidate).resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            failures.append(f"assertion path escapes workdir: {candidate}")
+            return None
+        return resolved
+
+    def strings(value: Any) -> list[str]:
+        values = value if isinstance(value, list) else [value]
+        return [str(item) for item in values]
+
+    for raw_path in strings(assertions.get("files_exist", [])):
+        path = safe_path(raw_path)
+        if path is None:
+            continue
+        if path.is_file():
+            checks.append(f"file exists: {raw_path}")
+        else:
+            failures.append(f"missing file: {raw_path}")
+
+    for key, negate in (("files_contain", False), ("files_not_contain", True)):
+        mapping = assertions.get(key, {})
+        if not isinstance(mapping, dict):
+            failures.append(f"{key} must be a mapping")
+            continue
+        for raw_path, expected in mapping.items():
+            path = safe_path(raw_path)
+            if path is None:
+                continue
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                failures.append(f"cannot read assertion file: {raw_path}")
+                continue
+            for needle in strings(expected):
+                present = needle in content
+                valid = not present if negate else present
+                label = "absent from" if negate else "present in"
+                if valid:
+                    checks.append(f"{needle!r} {label} {raw_path}")
+                else:
+                    failures.append(f"{needle!r} not {label} {raw_path}")
+
+    final_answer = str(answer or "")
+    for key, negate in (("answer_contains", False), ("answer_not_contains", True)):
+        for needle in strings(assertions.get(key, [])):
+            present = needle in final_answer
+            valid = not present if negate else present
+            if valid:
+                checks.append(f"answer {'omits' if negate else 'contains'} {needle!r}")
+            else:
+                failures.append(f"answer {'contains forbidden' if negate else 'does not contain'} {needle!r}")
+    any_needles = strings(assertions.get("answer_contains_any", []))
+    if any_needles:
+        matched = [needle for needle in any_needles if needle in final_answer]
+        if matched:
+            checks.append(f"answer contains one of {any_needles!r}")
+        else:
+            failures.append(f"answer contains none of {any_needles!r}")
+
+    return {
+        "configured": True,
+        "passed": not failures,
+        "checks": checks,
+        "failures": failures,
+    }
 
 
 class RealAgent:
@@ -117,13 +226,42 @@ class RealAgent:
         max_iterations: int = 8,
         max_turns: int = 3,
         workdir: str | None = None,
+        isolate_tasks: bool = False,
         engine_factory: Any = None,
     ) -> None:
         self.model = model
         self.max_iterations = max_iterations
         self.max_turns = max_turns
         self.workdir = workdir
+        self.isolate_tasks = isolate_tasks
         self._engine_factory = engine_factory
+
+    def _prepare_task_workdir(self, task: dict[str, Any]) -> str | None:
+        """Create a clean per-task copy while preserving the fixture baseline."""
+        if not self.workdir or not self.isolate_tasks:
+            return self.workdir
+        root = Path(self.workdir).resolve()
+        task_root = root / "tasks" / str(task["id"])
+        task_root.mkdir(parents=True, exist_ok=True)
+        excluded = {"tasks", ".git"}
+        for source in root.iterdir():
+            if source.name in excluded:
+                continue
+            target = task_root / source.name
+            if source.name == ".xenon":
+                target.mkdir(exist_ok=True)
+                for child in source.iterdir():
+                    if child.name in {"credentials.yaml", "sessions"}:
+                        continue
+                    if child.is_dir():
+                        shutil.copytree(child, target / child.name, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(child, target / child.name)
+            elif source.is_dir():
+                shutil.copytree(source, target, dirs_exist_ok=True)
+            elif source.is_file():
+                shutil.copy2(source, target)
+        return str(task_root)
 
     def _default_engine_factory(self, callback: Any) -> Any:
         from xenon.engine.react_engine import ReActEngine
@@ -163,8 +301,9 @@ class RealAgent:
         cm = ContextManager()
         turns_used = 1
         callback_telemetry = _EvalTelemetryCallback()
+        task_workdir = self._prepare_task_workdir(task)
         try:
-            with _change_directory(self.workdir) if self.workdir else nullcontext():
+            with _change_directory(task_workdir) if task_workdir else nullcontext():
                 for turn in range(self.max_turns):
                     turns_used = turn + 1
                     if turn == 0:
@@ -202,10 +341,15 @@ class RealAgent:
                         break
 
                 success, reason = self._score(task, executed, answer)
+                verification = evaluate_assertions(task, answer, workdir=task_workdir)
+                if success and verification["configured"] and not verification["passed"]:
+                    success = False
+                    reason = f"result assertions failed: {verification['failures']}"
                 notes = answer.strip()[:200] or reason
         except Exception as exc:  # noqa: BLE001 — eval 不应因单任务崩溃中断
             success, reason = False, f"engine run failed: {exc}"
             notes = reason[:200]
+            verification = evaluate_assertions(task, answer, workdir=task_workdir)
 
         missing = [t for t in expected if t not in executed]
         return {
@@ -219,6 +363,7 @@ class RealAgent:
             "tools_used": executed,
             "notes": notes,
             "scoring": reason,
+            "verification": verification,
             "turns_used": turns_used,
             "xenon_task_metrics": callback_telemetry.as_dict(),
         }
@@ -493,6 +638,7 @@ def run_eval(
     mode: str,
     model: str | None = None,
     workdir: str | None = None,
+    isolate_tasks: bool = False,
 ) -> list[dict[str, Any]]:
     """Run tasks through mock or real agent."""
     usage_tracker = cache_tracker = None
@@ -501,7 +647,7 @@ def run_eval(
     elif mode == "real":
         if not model:
             raise ValueError("--model is required when --mode real")
-        agent = RealAgent(model, workdir=workdir)
+        agent = RealAgent(model, workdir=workdir, isolate_tasks=isolate_tasks)
         # Subscribe once around the complete run.  These are existing Xenon
         # telemetry sources; no prompt or credential content is persisted.
         from xenon.utils.deepseek_cache import CacheTracker
@@ -543,6 +689,14 @@ def run_eval(
 def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(results)
     successes = sum(1 for result in results if result["success"])
+    verified = [
+        result for result in results
+        if result.get("verification", {}).get("configured")
+    ]
+    verified_successes = sum(
+        1 for result in verified
+        if result.get("success") and result.get("verification", {}).get("passed")
+    )
     return {
         "tasks": total,
         "successes": successes,
@@ -550,6 +704,9 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         "average_tokens": mean(result["token_count"] for result in results) if results else 0,
         "tool_calls": sum(result["tool_calls"] for result in results),
         "tool_failures": sum(result["tool_failures"] for result in results),
+        "verified_tasks": len(verified),
+        "verified_successes": verified_successes,
+        "verification_rate": (verified_successes / len(verified) * 100) if verified else None,
     }
 
 
@@ -585,7 +742,7 @@ def write_report(
     elif mode == "real":
         lines.extend([
             "> Scoring: real 模式跑 ReAct 多轮闭环，按**实际执行**的工具评分",
-            ">（`expected_tools ⊆ executed` 且 final_answer 非空）。`success_criteria` 为人工复核提示，不自动评分。",
+            ">（`expected_tools ⊆ executed` 且 final_answer 非空）；配置了 `assertions` 的任务还会执行结果断言。`success_criteria` 仍为人工复核提示。",
             "",
         ])
     lines.extend([
@@ -597,15 +754,21 @@ def write_report(
         f"- Average Tokens: {summary['average_tokens']:.1f}",
         f"- Tool Calls: {summary['tool_calls']}",
         f"- Tool Failures: {summary['tool_failures']}",
+        f"- Verified Tasks: {summary['verified_tasks']}/{summary['tasks']}",
+        f"- Verified Success Rate: {_display_metric(summary['verification_rate'], suffix='%')}",
         "",
-        "| Task | Category | Success | Tokens | Tool Calls | Tool Failures | Notes |",
-        "| --- | --- | --- | ---: | ---: | ---: | --- |",
+        "| Task | Category | Success | Verified | Tokens | Tool Calls | Tool Failures | Notes |",
+        "| --- | --- | --- | --- | ---: | ---: | ---: | --- |",
     ])
     for result in results:
         notes = str(result.get("notes", "")).replace("\n", " ")[:140]
         success = "yes" if result["success"] else "no"
+        verification = result.get("verification", {})
+        verified = "yes" if verification.get("configured") and verification.get("passed") else (
+            "failed" if verification.get("configured") else "n/a"
+        )
         lines.append(
-            f"| `{result['task_id']}` | {result['category']} | {success} | "
+            f"| `{result['task_id']}` | {result['category']} | {success} | {verified} | "
             f"{result['token_count']} | {result['tool_calls']} | {result['tool_failures']} | {notes} |"
         )
 
@@ -682,6 +845,10 @@ def main(argv: list[str] | None = None) -> int:
         "--workdir", default=None,
         help="Optional working directory for --mode real (tool execution sandbox).",
     )
+    parser.add_argument(
+        "--isolate-tasks", action="store_true",
+        help="Copy the fixture baseline into a clean subdirectory for each real task.",
+    )
     args = parser.parse_args(argv)
 
     tasks = load_tasks(args.tasks)
@@ -693,7 +860,10 @@ def main(argv: list[str] | None = None) -> int:
         else nullcontext()
     )
     with credentials_context:
-        results = run_eval(tasks, mode=args.mode, model=args.model, workdir=args.workdir)
+        results = run_eval(
+            tasks, mode=args.mode, model=args.model, workdir=args.workdir,
+            isolate_tasks=args.isolate_tasks,
+        )
     model = args.model or "mock-agent"
     report = write_report(results, args.output, mode=args.mode, model=model)
     print(f"Wrote eval report: {report}")
