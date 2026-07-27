@@ -3,6 +3,10 @@
 > 真实模型跑 ReAct 多轮闭环（方案 C 修复后），按**实际执行**的工具评分（`expected_tools ⊆ executed` 且 `final_answer` 非空）。
 > 数据生成：2026-07-08 10:10 UTC，DeepSeek-V4-Pro via 火山方舟。
 > **不**美化、不补全——这是真证据。
+>
+> **基线状态：** 本文记录的是历史 v0.7.2/v2 跑测，不是 v0.7.3 当前成功率。
+> v0.7.3 的真实评测需要在明确的供应商凭证、模型、费用和隔离工作目录下重新执行；
+> 在重跑前，不应把 45.0% 当作当前版本指标。
 
 ---
 
@@ -139,6 +143,21 @@
 - [`evals/reports/mock_report.md`](../evals/reports/mock_report.md) — Mock 模式（20/20 框架自检）
 - [`docs/reports/v0.2.2/REAL_TASK_TEST_REPORT.md`](reports/v0.2.2/REAL_TASK_TEST_REPORT.md) — REPL 端到端 84 用例（v0.2.2 发版证据）
 - [`docs/reports/v0.2.2/VERIFICATION_REPORT.md`](reports/v0.2.2/VERIFICATION_REPORT.md) — 独立验证报告（v0.2.2 发版证据）
+
+## 当前版本重跑基线
+
+在确认供应商凭证、预算和隔离目录后运行：
+
+```bash
+python evals/runner.py \
+  --mode real \
+  --model deepseek/deepseek-v4-pro \
+  --workdir /tmp/xenon-real-workdir \
+  --output evals/reports/real_report_v0.7.3.md
+```
+
+评测必须记录提交、模型、API 网关、任务集版本、运行时间、费用、成功率和失败分类。
+不要在默认 CI 中启用该命令；真实供应商测试应作为显式、可审计的验收步骤执行。
 
 ---
 
