@@ -21,9 +21,11 @@
 
 ### Validation
 
-- 完整离线套件达到 1,662 passed / 37 deselected；新增的 opt-in DeepSeek
-  真实验收在同一 Flash 轨道第二次追加请求中由 API 报告 1,024 hit / 124 miss
-  input tokens（约 89.2% 实际命中），轨道判定为 `prefix_extended`。
+- 完整离线套件达到 1,662 passed / 38 deselected；opt-in DeepSeek 真实验收除
+  单轨追加外，新增 Flash/Pro 交替 10 次调用：两个模型各保留 1 条轨道、各接收
+  5 次请求、0 次分叉；连续两轮完整验收中，剔除每轮两个模型各自的首次冷启动
+  后，16/16 次返回原轨道均有厂商缓存命中，两轮热调用 input token 命中率分别
+  为 96.57% 和 96.74%。
 
 ### Fixed
 
