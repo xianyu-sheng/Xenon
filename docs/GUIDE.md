@@ -6,11 +6,11 @@ and DeepSeek cache cost optimization.
 ## Installation
 
 ```bash
-# Stable v0.7.1 release:
-pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.7.1"
+# Stable v0.7.3 release:
+pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.7.3"
 ```
 
-Remove `@v0.7.1` only when you intentionally want to follow the development
+Remove `@v0.7.3` only when you intentionally want to follow the development
 branch instead of the stable release.
 
 Requirements: Python 3.10+, Linux / macOS / Windows (PowerShell).
@@ -44,8 +44,8 @@ The tool automatically discovers available models from your API endpoint.
 
 ## Terminal UI
 
-Xenon v0.7.1 keeps the existing engine architecture and replaces the high-frequency
-conversation layout:
+Xenon v0.7.3 keeps the existing engine architecture and adds cache-rail diagnostics
+to the terminal experience:
 
 ```text
 ───────────────────────────────────────────────
@@ -172,8 +172,8 @@ Or add models permanently in `/setup`:
 
 ## Architecture
 
-The v0.7.1 work hardens the existing components, adds ecosystem integration,
-user-governed memory, and the refreshed TUI; it does not replace Xenon's
+The v0.7.3 work hardens the existing components and adds cache-rail observability to
+the user-governed memory and refreshed TUI experience; it does not replace Xenon's
 top-level architecture. The four pillars remain:
 
 1. **Cache-aware cost loop** — DeepSeek cache usage, request-family evidence,
