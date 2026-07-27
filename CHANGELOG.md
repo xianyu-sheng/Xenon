@@ -19,6 +19,12 @@
 - 工作记忆、检索记忆、单轮回答指导和执行权限边界现在冻结进不可变请求信封，
   后续调用不再替换历史中间的动态块；ReAct 不再按轮修改第一条 system prompt。
 
+### Validation
+
+- 完整离线套件达到 1,662 passed / 37 deselected；新增的 opt-in DeepSeek
+  真实验收在同一 Flash 轨道第二次追加请求中由 API 报告 1,024 hit / 124 miss
+  input tokens（约 89.2% 实际命中），轨道判定为 `prefix_extended`。
+
 ### Fixed
 
 - 将开发依赖 Ruff 固定在 `0.16` 之前，避免上游默认规则集变更导致 CI
