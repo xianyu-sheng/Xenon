@@ -85,3 +85,31 @@ jobs:
           python -m pip install build twine
           python -m build
           python -m twine check dist/*
+
+  platform-smoke:
+    name: Platform smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime package
+        run: python -m pip install -e .
+
+      - name: Import and compile smoke test
+        run: |
+          python -c "import xenon; print(xenon.__version__)"
+          python -m compileall -q xenon
+
+      - name: CLI version smoke test
+        run: xenon --version

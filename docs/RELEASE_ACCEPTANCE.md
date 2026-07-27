@@ -18,6 +18,7 @@ uv build
 - Ruff：通过。
 - 离线套件（包含确定性 E2E）：`1662 passed / 38 deselected`。
 - 发行包：wheel 与 sdist 均成功生成。
+- 全新 Linux 虚拟环境：安装 v0.7.3 wheel、导入 Xenon 和运行 `xenon --version` 均成功。
 
 `live` 用例需要真实供应商凭证或公网，不能作为离线发布门禁；应在单独的验收记录中保存模型、日期、请求次数、失败原因和费用。
 
@@ -35,13 +36,13 @@ uv build
 
 ## 平台矩阵
 
-GitHub CI 当前覆盖 Linux 与 Python 3.10–3.12。Windows 和 macOS 的终端键位、PTY、剪贴板及路径行为需要独立 runner 或人工验收后，才能在发布说明中声称完整跨平台验证。
+GitHub CI 在 Linux 上运行完整测试，并在 Windows、macOS 上运行安装、导入、编译和 CLI 版本冒烟测试。这不等于完整验证了 Windows/macOS 的终端键位、PTY、剪贴板及全局热键；这些仍需要独立 runner 扩展或人工验收。
 
 | 平台 | 自动化 | 发布前最低要求 |
 |------|--------|----------------|
 | Linux | CI 全套离线测试、E2E、构建 | CI 全绿 |
-| Windows | 待独立 runner | PowerShell 启动、路径、Ctrl+C、基础 `/setup` |
-| macOS | 待独立 runner | 安装、启动、基础 TUI 和 `/setup` |
+| Windows | CI 安装/导入/编译/CLI 冒烟 | PowerShell 启动、路径、Ctrl+C、基础 `/setup` |
+| macOS | CI 安装/导入/编译/CLI 冒烟 | 安装、启动、基础 TUI 和 `/setup` |
 
 ## 发布记录
 
