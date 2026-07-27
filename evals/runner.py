@@ -152,7 +152,6 @@ class RealAgent:
         )
 
     def run_task(self, task: dict[str, Any]) -> dict[str, Any]:
-        from xenon.engine.callbacks import EngineCallback
         from xenon.repl.context_manager import ContextManager
         factory = self._engine_factory or self._default_engine_factory
         executed: list[str] = []
@@ -163,6 +162,7 @@ class RealAgent:
         # multi-turn：每轮共享 ContextManager 累积 history（F4 修复机制）
         cm = ContextManager()
         turns_used = 1
+        callback_telemetry = _EvalTelemetryCallback()
         try:
             with _change_directory(self.workdir) if self.workdir else nullcontext():
                 for turn in range(self.max_turns):
@@ -175,7 +175,7 @@ class RealAgent:
                         )
                     cm.add_user_message(user_input)
 
-                    eng = factory(EngineCallback())
+                    eng = factory(callback_telemetry)
                     # 包装 _execute_tool 记录实际执行的工具（门控/拦截的不计）
                     orig_execute = eng._execute_tool
 
@@ -185,7 +185,13 @@ class RealAgent:
 
                     eng._execute_tool = _recording_execute
                     # F4：ctx_mgr 注入，engine 消费（已压缩）历史
-                    answer = eng.run(user_input, ctx_mgr=cm) or ""
+                    try:
+                        answer = eng.run(user_input, ctx_mgr=cm) or ""
+                    finally:
+                        # Test doubles and injected engines may be reused for
+                        # multiple turns; do not wrap an already wrapped
+                        # method and create a recursive closure chain.
+                        eng._execute_tool = orig_execute
                     cm.add_assistant_message(answer)
 
                     # 早停：所有 expected_tools 都调过了（无需进入下一轮）
@@ -214,6 +220,7 @@ class RealAgent:
             "notes": notes,
             "scoring": reason,
             "turns_used": turns_used,
+            "xenon_task_metrics": callback_telemetry.as_dict(),
         }
 
     @staticmethod
@@ -249,6 +256,219 @@ class RealAgent:
         return "\n".join(lines)
 
 
+class _EvalTelemetryCallback:
+    """Privacy-safe callback counters for governance signals in real evals."""
+
+    def __init__(self) -> None:
+        self.tool_calls = 0
+        self.observations = 0
+        self.permission_denied = 0
+        self.permission_cancelled = 0
+        self.invalid_parameters = 0
+        self.path_blocks = 0
+        self.errors = 0
+        self.warnings = 0
+
+    def on_act(self, action: str, action_input: dict) -> None:
+        self.tool_calls += 1
+
+    def on_observe(self, observation: str) -> None:
+        self.observations += 1
+        text = str(observation).lower()
+        if "权限拒绝" in text or "操作被拒绝" in text or "permission_denied" in text:
+            self.permission_denied += 1
+        if "取消任务" in text or "cancelled" in text:
+            self.permission_cancelled += 1
+        if "参数校验失败" in text or "参数幻觉" in text or "invalid_parameters" in text:
+            self.invalid_parameters += 1
+        if "路径越界" in text or "outside allowed" in text:
+            self.path_blocks += 1
+
+    def on_error(self, error: str) -> None:
+        self.errors += 1
+
+    def on_warning(self, warning: str) -> None:
+        self.warnings += 1
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "tool_calls": self.tool_calls,
+            "observations": self.observations,
+            "permission_denied": self.permission_denied,
+            "permission_cancelled": self.permission_cancelled,
+            "invalid_parameters": self.invalid_parameters,
+            "path_blocks": self.path_blocks,
+            "errors": self.errors,
+            "warnings": self.warnings,
+        }
+
+
+class XenonMetrics:
+    """Aggregate Xenon-specific value signals without changing task scoring.
+
+    ``success_rate`` remains the general agent capability score.  This class
+    reports the independent signals that make Xenon useful in production:
+    provider-reported cache rails, token/cost savings, routing evidence and
+    the observability coverage of governance features.  Unknown values are
+    represented by ``None`` rather than being silently counted as zero.
+    """
+
+    @staticmethod
+    def _round(value: float | int | None, digits: int = 4) -> float | None:
+        return round(float(value), digits) if value is not None else None
+
+    @classmethod
+    def from_runtime(
+        cls,
+        results: list[dict[str, Any]],
+        *,
+        usage: dict[str, dict[str, Any]] | None = None,
+        cache: dict[str, Any] | None = None,
+        primary_model: str | None = None,
+    ) -> dict[str, Any]:
+        usage = usage or {}
+        cache = cache or {}
+        calls = sum(int(item.get("calls", 0) or 0) for item in usage.values())
+        prompt = sum(int(item.get("prompt_tokens", 0) or 0) for item in usage.values())
+        completion = sum(int(item.get("completion_tokens", 0) or 0) for item in usage.values())
+        total = sum(int(item.get("total_tokens", 0) or 0) for item in usage.values())
+        hit = sum(int(item.get("cache_hit_tokens", 0) or 0) for item in usage.values())
+        miss = sum(int(item.get("cache_miss_tokens", 0) or 0) for item in usage.values())
+        latency = sum(
+            float(item.get("latency_avg", 0.0) or 0.0) * int(item.get("calls", 0) or 0)
+            for item in usage.values()
+        )
+        models = sorted(str(model) for model in usage)
+        cache_calls = int(cache.get("total_calls", 0) or 0)
+        cache_coverage = cache.get("cache_field_coverage")
+        provider_cache = bool(cache_calls and cache_coverage and float(cache_coverage) > 0)
+        events = [event for event in cache.get("events", []) if isinstance(event, dict)]
+        if provider_cache:
+            # CacheTracker consumes the raw provider response and is the
+            # source of truth for cache accounting.  UsageTracker remains the
+            # source of truth for total/completion tokens, but some native
+            # tool-call paths only emit response telemetry.
+            hit = int(cache.get("cache_hits", hit) or 0)
+            miss = int(cache.get("cache_misses", miss) or 0)
+            if cache_calls > calls:
+                calls = cache_calls
+                prompt = sum(int(event.get("prompt_tokens", 0) or 0) for event in events)
+                completion = sum(int(event.get("completion_tokens", 0) or 0) for event in events)
+                total = prompt + completion
+        task_governance = [
+            result.get("xenon_task_metrics", {}) for result in results
+            if isinstance(result.get("xenon_task_metrics"), dict)
+        ]
+        governance_observed = bool(task_governance)
+        permission_denied = sum(int(item.get("permission_denied", 0) or 0) for item in task_governance)
+        permission_cancelled = sum(int(item.get("permission_cancelled", 0) or 0) for item in task_governance)
+        invalid_parameters = sum(int(item.get("invalid_parameters", 0) or 0) for item in task_governance)
+        path_blocks = sum(int(item.get("path_blocks", 0) or 0) for item in task_governance)
+        rails = {
+            "rail_count": len({str(event.get("cache_lane")) for event in events if event.get("cache_lane")}),
+            "cache_family_count": len({str(event.get("cache_family")) for event in events if event.get("cache_family")}),
+            "rail_forks": sum(1 for event in events if event.get("cause") in {
+                "model_switch", "engine_switch", "phase_switch", "toolset_changed",
+                "project_changed", "context_compacted", "stable_prefix_changed",
+                "history_rewritten",
+            }),
+            "context_epoch_changes": sum(1 for event in events if event.get("cause") == "context_compacted"),
+            "reusable_prefix_tokens": sum(int(event.get("cache_hit_tokens", 0) or 0) for event in events),
+        }
+
+        if provider_cache:
+            actual_cost = cache.get("estimated_cost_yuan")
+            saved_cost = cache.get("savings_yuan")
+            baseline_cost = (
+                float(actual_cost or 0) + float(saved_cost or 0)
+                if actual_cost is not None and saved_cost is not None else None
+            )
+            savings_pct = (
+                float(saved_cost) / baseline_cost * 100
+                if baseline_cost and saved_cost is not None else None
+            )
+            cost_quality = "provider_cache_fields"
+        elif calls:
+            # No cache field means a conservative all-miss estimate.  It is
+            # useful as a cost ceiling, but must never be labelled as savings.
+            actual_cost = baseline_cost = 0.0
+            try:
+                from xenon.utils.deepseek_cache import CacheTracker
+                pricing_tracker = CacheTracker(persist=False)
+                try:
+                    for model, item in usage.items():
+                        pricing = pricing_tracker.get_pricing(model)
+                        actual_cost += (int(item.get("prompt_tokens", 0) or 0) / 1_000_000) * pricing["input_cache_miss"]
+                        actual_cost += (int(item.get("completion_tokens", 0) or 0) / 1_000_000) * pricing["output"]
+                finally:
+                    pricing_tracker.close()
+            except Exception:  # pragma: no cover - pricing fallback only
+                actual_cost = None
+            baseline_cost = actual_cost
+            saved_cost = savings_pct = None
+            cost_quality = "all_miss_estimate_no_provider_cache_fields"
+        else:
+            actual_cost = baseline_cost = saved_cost = savings_pct = None
+            cost_quality = "no_llm_calls"
+
+        successful = sum(1 for result in results if result.get("success"))
+        model_calls = {model: int(item.get("calls", 0) or 0) for model, item in usage.items()}
+        non_primary_calls = (
+            sum(count for model, count in model_calls.items() if primary_model and model != primary_model)
+            if primary_model else None
+        )
+        return {
+            "source": "provider" if calls else "unavailable",
+            "observed_llm_calls": calls,
+            "models_used": models,
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": total,
+            "average_latency_seconds": cls._round(latency / calls if calls else None),
+            "cache": {
+                "status": "provider_reported" if provider_cache else ("unavailable" if not calls else "not_reported"),
+                "field_coverage": cls._round(cache_coverage),
+                "hit_tokens": hit if calls else None,
+                "miss_tokens": miss if calls else None,
+                "hit_rate": cls._round(hit / (hit + miss) if hit + miss else None),
+                **rails,
+            },
+            "cost": {
+                "estimated_actual_yuan": cls._round(actual_cost),
+                "all_cache_miss_baseline_yuan": cls._round(baseline_cost),
+                "saved_yuan": cls._round(saved_cost),
+                "saved_pct": cls._round(savings_pct, 2),
+                "quality": cost_quality,
+            },
+            "routing": {
+                "primary_model": primary_model,
+                "model_calls": model_calls,
+                "fallback_calls_observed": non_primary_calls,
+                "fallback_success_rate": None,
+                "note": "失败尝试不会产生 usage 回调；需路由事件才能计算完整 fallback 成功率。",
+            },
+            "governance": {
+                "permission_requests": (permission_denied + permission_cancelled if governance_observed else None),
+                "approved": None,
+                "denied": (permission_denied if governance_observed else None),
+                "cancelled": (permission_cancelled if governance_observed else None),
+                "invalid_parameter_blocks": (invalid_parameters if governance_observed else None),
+                "path_blocks": (path_blocks if governance_observed else None),
+                "status": "observed_tool_governance" if governance_observed else "not_instrumented_in_this_eval",
+            },
+            "memory_recovery": {
+                "memory_writes_confirmed": None,
+                "memory_retrieval_hits": None,
+                "session_resume_success": None,
+                "status": "not_instrumented_in_this_eval",
+            },
+            "efficiency": {
+                "tokens_per_successful_task": cls._round(total / successful if successful else None, 2),
+                "cost_per_successful_task_yuan": cls._round(float(actual_cost) / successful if actual_cost is not None and successful else None),
+            },
+        }
+
+
 def run_eval(
     tasks: list[dict[str, Any]],
     *,
@@ -257,15 +477,49 @@ def run_eval(
     workdir: str | None = None,
 ) -> list[dict[str, Any]]:
     """Run tasks through mock or real agent."""
+    usage_tracker = cache_tracker = None
     if mode == "mock":
         agent = MockAgent()
     elif mode == "real":
         if not model:
             raise ValueError("--model is required when --mode real")
         agent = RealAgent(model, workdir=workdir)
+        # Subscribe once around the complete run.  These are existing Xenon
+        # telemetry sources; no prompt or credential content is persisted.
+        from xenon.utils.deepseek_cache import CacheTracker
+        from xenon.utils.llm_client import UsageTracker
+        usage_tracker = UsageTracker()
+        cache_tracker = CacheTracker(persist=False)
     else:
         raise ValueError(f"Unsupported eval mode: {mode}")
-    return [agent.run_task(task) for task in tasks]
+    results: list[dict[str, Any]] = []
+    try:
+        results = [agent.run_task(task) for task in tasks]
+    finally:
+        if usage_tracker is not None and cache_tracker is not None:
+            runtime = {
+                "usage": usage_tracker.snapshot(),
+                "cache": {
+                    "total_calls": cache_tracker.total_calls,
+                    "cache_field_coverage": cache_tracker.cache_field_coverage,
+                    "cache_hits": cache_tracker.cache_hits,
+                    "cache_misses": cache_tracker.cache_misses,
+                    "estimated_cost_yuan": cache_tracker.estimated_cost_yuan,
+                    "savings_yuan": cache_tracker.savings_yuan,
+                    "events": cache_tracker.recent_events(10000),
+                },
+            }
+            metrics = XenonMetrics.from_runtime(
+                results,
+                usage=runtime["usage"],
+                cache=runtime["cache"],
+                primary_model=model,
+            )
+            for result in results:
+                result["_xenon_metrics"] = metrics
+            usage_tracker.close()
+            cache_tracker.close()
+    return results
 
 
 def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -293,6 +547,9 @@ def write_report(
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     summary = summarize(results)
+    xenon_metrics = results[0].get("_xenon_metrics") if results else None
+    if xenon_metrics is None:
+        xenon_metrics = XenonMetrics.from_runtime(results, primary_model=model if mode == "real" else None)
     date = run_date or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     lines = [
@@ -334,6 +591,40 @@ def write_report(
             f"{result['token_count']} | {result['tool_calls']} | {result['tool_failures']} | {notes} |"
         )
 
+    lines.extend([
+        "",
+        "## Xenon-Specific Value",
+        "",
+        "> These metrics are separate from task success rate. `N/A` means the signal was not observable in this run; it is never treated as zero.",
+        "",
+        "### Cache Rails and Cost",
+        "",
+        f"- Provider cache telemetry: **{xenon_metrics['cache']['status']}**",
+        f"- Cache field coverage: {_display_metric(xenon_metrics['cache']['field_coverage'], suffix='%', scale=100)}",
+        f"- Cache hit rate: {_display_metric(xenon_metrics['cache']['hit_rate'], suffix='%', scale=100)}",
+        f"- Reusable prefix / hit tokens: {_display_metric(xenon_metrics['cache']['reusable_prefix_tokens'])}",
+        f"- Cache rails: {_display_metric(xenon_metrics['cache']['rail_count'])}; rail forks: {_display_metric(xenon_metrics['cache']['rail_forks'])}; context compactions: {_display_metric(xenon_metrics['cache']['context_epoch_changes'])}",
+        f"- Estimated actual cost: {_display_currency(xenon_metrics['cost']['estimated_actual_yuan'])}",
+        f"- All-cache-miss baseline: {_display_currency(xenon_metrics['cost']['all_cache_miss_baseline_yuan'])}",
+        f"- Estimated savings: {_display_currency(xenon_metrics['cost']['saved_yuan'])} ({_display_metric(xenon_metrics['cost']['saved_pct'], suffix='%')})",
+        f"- Cost evidence: `{xenon_metrics['cost']['quality']}`",
+        "",
+        "### Routing, Governance and Recovery",
+        "",
+        f"- Models observed: {', '.join(xenon_metrics['models_used']) or 'N/A'}",
+        f"- Fallback calls observed: {_display_metric(xenon_metrics['routing']['fallback_calls_observed'])}",
+        f"- Fallback success rate: {_display_metric(xenon_metrics['routing']['fallback_success_rate'], suffix='%')}",
+        f"- Permission telemetry: `{xenon_metrics['governance']['status']}`",
+        f"- Permission denied/cancelled: {_display_metric(xenon_metrics['governance']['denied'])}/{_display_metric(xenon_metrics['governance']['cancelled'])}; invalid-parameter blocks: {_display_metric(xenon_metrics['governance']['invalid_parameter_blocks'])}; path blocks: {_display_metric(xenon_metrics['governance']['path_blocks'])}",
+        f"- Memory/recovery telemetry: `{xenon_metrics['memory_recovery']['status']}`",
+        "",
+        "### Efficiency",
+        "",
+        f"- Observed LLM calls: {_display_metric(xenon_metrics['observed_llm_calls'])}",
+        f"- Tokens per successful task: {_display_metric(xenon_metrics['efficiency']['tokens_per_successful_task'])}",
+        f"- Cost per successful task: {_display_currency(xenon_metrics['efficiency']['cost_per_successful_task_yuan'])}",
+    ])
+
     failures = [result for result in results if not result["success"]]
     if failures:
         lines.extend(["", "## Failure Summary", ""])
@@ -342,6 +633,21 @@ def write_report(
 
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return output
+
+
+def _display_metric(value: Any, *, suffix: str = "", scale: float = 1.0) -> str:
+    if value is None:
+        return "N/A"
+    number = float(value) * scale
+    if number.is_integer():
+        rendered = str(int(number))
+    else:
+        rendered = f"{number:.2f}"
+    return rendered + suffix
+
+
+def _display_currency(value: Any) -> str:
+    return "N/A" if value is None else f"¥{float(value):.4f}"
 
 
 def main(argv: list[str] | None = None) -> int:

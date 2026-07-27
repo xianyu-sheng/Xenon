@@ -347,6 +347,8 @@ class UsageTracker:
                     "prompt_tokens": t.prompt_tokens,
                     "completion_tokens": t.completion_tokens,
                     "total_tokens": t.total_tokens,
+                    "cache_hit_tokens": t.cache_hit_tokens,
+                    "cache_miss_tokens": t.cache_miss_tokens,
                     "latency_avg": (t.latency_sum / t.calls) if t.calls else 0.0,
                 }
                 for m, t in self._totals.items()

@@ -9,6 +9,7 @@ import pytest
 
 from evals.runner import (
     RealAgent,
+    XenonMetrics,
     isolated_eval_credentials,
     load_tasks,
     run_eval,
@@ -219,3 +220,35 @@ class TestMockSmokeTestLabel:
             run_date="2026-07-07 00:00:00 UTC")
         report = report_path.read_text(encoding="utf-8")
         assert "Scoring" in report or "实际执行" in report
+
+
+class TestXenonSpecificMetrics:
+    def test_cache_and_cost_metrics_are_separate_from_success_rate(self):
+        results = [{"success": True, "task_id": "t", "token_count": 10,
+                    "tool_calls": 1, "tool_failures": 0}]
+        metrics = XenonMetrics.from_runtime(
+            results,
+            usage={"deepseek/deepseek-v4-pro": {
+                "calls": 2, "prompt_tokens": 1000, "completion_tokens": 100,
+                "total_tokens": 1100, "latency_avg": 0.2,
+                "cache_hit_tokens": 800, "cache_miss_tokens": 200,
+            }},
+            cache={
+                "total_calls": 2, "cache_field_coverage": 1.0,
+                "estimated_cost_yuan": 0.001, "savings_yuan": 0.005,
+                "events": [{"cache_lane": "rail-a", "cache_family": "family-a",
+                            "cache_hit_tokens": 800, "cause": "cache_hit"}],
+            },
+            primary_model="deepseek/deepseek-v4-pro",
+        )
+        assert metrics["cache"]["hit_rate"] == 0.8
+        assert metrics["cache"]["rail_count"] == 1
+        assert metrics["cost"]["saved_yuan"] == 0.005
+        assert metrics["routing"]["fallback_calls_observed"] == 0
+        assert metrics["efficiency"]["tokens_per_successful_task"] == 1100
+
+    def test_unknown_signals_are_not_reported_as_zero(self):
+        metrics = XenonMetrics.from_runtime([], primary_model="m1")
+        assert metrics["cache"]["hit_rate"] is None
+        assert metrics["cost"]["saved_yuan"] is None
+        assert metrics["governance"]["permission_requests"] is None
