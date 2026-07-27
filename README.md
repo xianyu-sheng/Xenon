@@ -128,6 +128,7 @@ python evals/runner.py \
 | [TUI 操作](docs/TUI.md) | 输入区、状态栏与快捷键 |
 | [发布验收](docs/RELEASE_ACCEPTANCE.md) | 测试、构建、用户路径和跨平台发布门槛 |
 | [更新日志](CHANGELOG.md) | 各版本功能与验证结果 |
+| [完整审查报告](docs/XENON_AUDIT_2026-07-27.md) | 评测可信度、工程健康度与下一轮验收计划 |
 
 ## 社区与反馈
 
