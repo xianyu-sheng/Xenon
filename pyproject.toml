@@ -39,6 +39,7 @@ dependencies = [
 Homepage = "https://github.com/xianyu-sheng/Xenon"
 Repository = "https://github.com/xianyu-sheng/Xenon"
 Issues = "https://github.com/xianyu-sheng/Xenon/issues"
+Gitee = "https://gitee.com/xianyu-sheng123/Xenon"
 
 [project.optional-dependencies]
 dev = [

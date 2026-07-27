@@ -15,9 +15,17 @@
 Xenon 在终端中提供多模型对话、工具执行、自动路由、持久记忆和会话恢复。
 它重点解决三个工程问题：模型缓存是否真正命中、工具操作是否受控、长期记忆是否由用户决定。
 
+代码托管：
+[GitHub 主仓库](https://github.com/xianyu-sheng/Xenon) ·
+[Gitee 国内镜像](https://gitee.com/xianyu-sheng123/Xenon)
+
 ## 快速开始
 
 ```bash
+# 中国大陆网络优先：从 Gitee 镜像安装
+pip install -U "git+https://gitee.com/xianyu-sheng123/Xenon.git@v0.7.3"
+
+# 国际网络或上游开发：从 GitHub 安装
 pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.7.3"
 xenon
 ```
@@ -27,10 +35,13 @@ xenon
 开发安装：
 
 ```bash
-git clone https://github.com/xianyu-sheng/Xenon.git
+git clone https://gitee.com/xianyu-sheng123/Xenon.git
 cd Xenon
 pip install -e ".[dev]"
 ```
+
+需要参与代码开发时，也可以克隆
+[GitHub 主仓库](https://github.com/xianyu-sheng/Xenon)。两个仓库的源码和版本标签保持一致。
 
 ## 核心能力
 
@@ -80,6 +91,16 @@ v0.7.3 使用 DeepSeek Flash/Pro 交替调用 10 次进行真实验收。连续�
 | [TUI 操作](docs/TUI.md) | 输入区、状态栏与快捷键 |
 | [更新日志](CHANGELOG.md) | 各版本功能与验证结果 |
 
+## 社区与反馈
+
+- [Gitee Issues（中文使用反馈与安装问题）](https://gitee.com/xianyu-sheng123/Xenon/issues)
+- [GitHub Issues（代码问题、功能讨论与 PR）](https://github.com/xianyu-sheng/Xenon/issues)
+- [贡献指南](CONTRIBUTING.md)
+- [安全问题报告](SECURITY.md)
+
+GitHub 是 Xenon 的开发主线，Gitee 用作国内镜像、下载入口和中文社区反馈渠道。
+重要问题会同步回 GitHub，版本发布以 GitHub 为源头并同步创建 Gitee Release。
+
 ## 开发与测试
 
 ```bash
@@ -92,4 +113,4 @@ uv build
 
 ## License
 
-[MIT](LICENSE) · [Issues](https://github.com/xianyu-sheng/Xenon/issues)
+[MIT](LICENSE) · [GitHub](https://github.com/xianyu-sheng/Xenon) · [Gitee](https://gitee.com/xianyu-sheng123/Xenon)
