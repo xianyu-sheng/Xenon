@@ -340,20 +340,38 @@ class PromptLaneRegistry:
                 "active": lane in self._active.values(),
             } for lane in lanes)
 
-    def model_warmth(self, model_id: str) -> dict[str, Any]:
+    def model_warmth(
+        self,
+        model_id: str,
+        *,
+        engine: str | None = None,
+        phase: str | None = None,
+        max_age_seconds: float = 30 * 60,
+    ) -> dict[str, Any]:
         """Return the warmest active lane for a model without prompt content."""
         with self._lock:
             candidates = [
                 lane for lane in self._active.values()
                 if lane.model_id.lower() == str(model_id).lower()
+                and (engine is None or lane.engine.lower() == str(engine).lower())
+                and (phase is None or lane.phase.lower() == str(phase).lower())
             ]
             if not candidates:
                 return {"eligible": False, "reusable_tokens": 0, "age_seconds": None}
             lane = max(candidates, key=lambda item: item.last_used_at)
+            age = max(0.0, time.time() - lane.last_used_at)
+            reusable = lane.estimated_prompt_tokens
+            eligible = (
+                lane.request_count > 0
+                and reusable >= 256
+                and age <= max(0.0, float(max_age_seconds))
+            )
             return {
-                "eligible": lane.request_count > 0,
-                "reusable_tokens": lane.estimated_prompt_tokens,
-                "age_seconds": max(0.0, time.time() - lane.last_used_at),
+                "eligible": eligible,
+                "score": round(min(0.5, reusable / 16_384), 4) if eligible else 0.0,
+                "reason": "warm_prompt_lane" if eligible else "lane_too_small_or_stale",
+                "reusable_tokens": reusable,
+                "age_seconds": age,
                 "lane_id": lane.lane_id,
                 "engine": lane.engine,
                 "phase": lane.phase,

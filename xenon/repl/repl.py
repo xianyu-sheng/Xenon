@@ -2095,9 +2095,23 @@ class REPL:
             # Fallback to static registry for backward compat
             model_ids = self.registry.get_role_priority("planner")
         else:
+            route_engine = (
+                "react"
+                if skill_name is not None or execution_policy.requires_tools
+                else self.registry.current_mode.replace("-", "")
+            )
+            route_phase = {
+                "direct": "chat",
+                "react": "reason_act",
+                "planexecute": "plan",
+                "reflection": "execute",
+                "novel": "create",
+            }.get(route_engine, "request")
             model_ids = self.auto_router.route(
                 turn_prompt, self.ctx_mgr.get_messages(), count=3,
                 preferred_models=self._preferred_model_ids or None,
+                cache_engine=route_engine,
+                cache_phase=route_phase,
             )
         if not model_ids:
             console.print("[red]· 未配置模型，请先 [bold cyan]/setup[/bold cyan] 配置[/red]")

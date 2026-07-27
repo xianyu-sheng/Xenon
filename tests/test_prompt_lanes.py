@@ -120,7 +120,7 @@ def test_contract_and_model_create_independent_lanes():
     flash = lanes.prepare("deepseek/flash", "direct", "chat", 0, messages)
 
     assert len({direct.lane_id, react.lane_id, flash.lane_id}) == 3
-    assert lanes.model_warmth("deepseek/pro")["eligible"] is True
+    assert lanes.model_warmth("deepseek/pro")["lane_id"]
 
 
 def test_context_manager_appends_events_and_advances_epoch():

@@ -58,12 +58,12 @@ v0.7.2 在新版 TUI、User-Governed Memory、多模型、8 引擎和工具管�
 
 ```
 L1 · StatusBar   ● deepseek · context 3.1% · cache 99% · <¥0.01
-L2 · /cache      status · explain · history · doctor · optimize
+L2 · /cache      status · explain · history · lanes · doctor · optimize
 L3 · /cost       按模型拆分命中/未命中 token + 费用 breakdown + 节省
 L4 · 退出报告    /exit 时自动打印总账单
 ```
 
-五层 Prompt Compiler 稳定前缀，Prompt Manifest 用私有 HMAC 归因请求族；缓存亲和只在同能力层、基础分近似的健康模型之间打破平局，绝不以缓存换模型质量。
+Cache Rails 为每个模型/引擎/工具契约维护追加式提示词轨道；本轮记忆和执行边界冻结进不可变请求信封。Prompt Manifest 用私有 HMAC 归因请求族；缓存亲和只在同能力层、基础分近似的健康模型之间打破平局，绝不以缓存换模型质量。
 
 📖 **[DeepSeek 缓存最佳实践指南 →](docs/deepseek-guide.md)** · 📐 **[架构 §Pillar 1 →](docs/ARCHITECTURE.md#-pillar-1--cache-aware-cost-loop缓存感知的费用闭环)**
 
@@ -205,7 +205,7 @@ pip install -e ".[dev]"
 |----------|--|
 | `/setup` `/model <n>` `/models` | 配置与模型管理 |
 | `/mode [name]` `Shift+Tab` | 范式切换 |
-| `/cache status` `/cache explain` `/cache doctor` | 缓存状态、直接证据与确定性诊断 |
+| `/cache status` `/cache explain` `/cache lanes` `/cache doctor` | 缓存状态、模型轨道、直接证据与确定性诊断 |
 | `/cache optimize --dry-run` `/fix-cache --apply` | 只读优化报告 · 启用可逆的同能力缓存亲和 |
 | `/cost` `/vision on\|off` | 费用追踪 · 视觉模式 |
 | `/mcp browse` `/mcp install` | MCP 生态 |

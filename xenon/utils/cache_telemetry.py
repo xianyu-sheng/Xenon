@@ -21,7 +21,7 @@ from typing import Any
 
 
 MANIFEST_RESPONSE_KEY = "_xenon_cache_manifest"
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _SESSION_ID = secrets.token_hex(8)
 _SESSION_SECRET = secrets.token_bytes(32)
 _SECRET_LOCK = threading.Lock()
@@ -110,6 +110,13 @@ class PromptManifest:
     phase: str
     project_hash: str
     context_epoch: int
+    event_cursor: int
+    cache_lane: str
+    lane_generation: int
+    lane_append_only: bool
+    lane_reason: str
+    lane_reusable_messages: int
+    lane_reusable_tokens: int
     cache_family: str
     stable_prefix_hash: str
     history_prefix_hash: str
@@ -145,6 +152,16 @@ def build_prompt_manifest(
         context_epoch = max(0, int(context.get("context_epoch") or 0))
     except (TypeError, ValueError):
         context_epoch = 0
+    try:
+        event_cursor = max(0, int(context.get("event_cursor") or 0))
+    except (TypeError, ValueError):
+        event_cursor = 0
+    raw_cache_lane = str(context.get("cache_lane") or "")
+    cache_lane = _opaque_digest(raw_cache_lane) if raw_cache_lane else ""
+    try:
+        lane_generation = max(0, int(context.get("lane_generation") or 0))
+    except (TypeError, ValueError):
+        lane_generation = 0
 
     normalized_messages = [
         {"role": str(message.get("role", "")), "content": _content_text(message)}
@@ -176,6 +193,8 @@ def build_prompt_manifest(
         "phase": phase,
         "project_hash": project_hash,
         "context_epoch": context_epoch,
+        "cache_lane": cache_lane,
+        "lane_generation": lane_generation,
         "stable_prefix_hash": stable_hash,
         "tool_schema_hash": tool_hash,
     }
@@ -199,6 +218,15 @@ def build_prompt_manifest(
         phase=phase,
         project_hash=project_hash,
         context_epoch=context_epoch,
+        event_cursor=event_cursor,
+        cache_lane=cache_lane,
+        lane_generation=lane_generation,
+        lane_append_only=bool(context.get("lane_append_only", True)),
+        lane_reason=str(context.get("lane_reason") or "untracked"),
+        lane_reusable_messages=max(
+            0, int(context.get("lane_reusable_messages") or 0)
+        ),
+        lane_reusable_tokens=max(0, int(context.get("lane_reusable_tokens") or 0)),
         cache_family=_opaque_digest(family_material),
         stable_prefix_hash=stable_hash,
         history_prefix_hash=history_hash,
@@ -234,6 +262,13 @@ class CacheEvent:
     phase: str
     project_hash: str
     context_epoch: int
+    event_cursor: int
+    cache_lane: str
+    lane_generation: int
+    lane_append_only: bool
+    lane_reason: str
+    lane_reusable_messages: int
+    lane_reusable_tokens: int
     stable_prefix_hash: str
     tool_schema_hash: str
     compiler_warnings: list[str]
@@ -425,6 +460,8 @@ def build_cache_event(
             cause = "context_compacted"
         elif previous_event.stable_prefix_hash != str(data.get("stable_prefix_hash") or ""):
             cause = "stable_prefix_changed"
+    if not bool(data.get("lane_append_only", True)):
+        cause = "history_rewritten"
 
     canonical_model = canonical_model_id(str(data.get("model_id") or model_id))
     return CacheEvent(
@@ -441,6 +478,15 @@ def build_cache_event(
         phase=str(data.get("phase") or "request"),
         project_hash=str(data.get("project_hash") or ""),
         context_epoch=max(0, int(data.get("context_epoch") or 0)),
+        event_cursor=max(0, int(data.get("event_cursor") or 0)),
+        cache_lane=str(data.get("cache_lane") or ""),
+        lane_generation=max(0, int(data.get("lane_generation") or 0)),
+        lane_append_only=bool(data.get("lane_append_only", True)),
+        lane_reason=str(data.get("lane_reason") or "untracked"),
+        lane_reusable_messages=max(
+            0, int(data.get("lane_reusable_messages") or 0)
+        ),
+        lane_reusable_tokens=max(0, int(data.get("lane_reusable_tokens") or 0)),
         stable_prefix_hash=str(data.get("stable_prefix_hash") or ""),
         tool_schema_hash=str(data.get("tool_schema_hash") or ""),
         compiler_warnings=[

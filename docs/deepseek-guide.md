@@ -100,8 +100,8 @@ Xenon 在 `ContextManager` 和各推理引擎中统一使用缓存层级：
 
 - 稳定层：引擎指令、会话内固定的项目上下文
 - 历史层：已经完成的用户/助手/工具对话，顺序不变
-- 易变层：工作记忆、按当前问题检索出的长期记忆
-- 当前轮：结构化后的用户请求及本轮回答指导
+- 请求信封：工作记忆、按当前问题检索出的长期记忆、本轮执行边界和用户请求；首次发送后作为不可变历史保存
+- 模型轨道：按模型、引擎、阶段、工具契约和 context epoch 分轨，模型切走再返回时继续追加全局会话后缀
 
 单轮回答指导不会再作为 system overlay 插入历史前方。优化后的 Prompt 会以无边框、低亮度辅助文本显示；`/cost` 和固定底栏展示的是 DeepSeek API 返回的真实命中数据，而不是客户端预测值。
 
@@ -139,11 +139,16 @@ Xenon 提供四层缓存可见性与安全调优，全部基于本地确定性�
 ❯ /cache doctor
 Cache Doctor
   ✅ 缓存字段: 厂商在 3/3 次响应中返回缓存字段
+
+❯ /cache lanes
+Cache Rails · 模型提示词轨道
+  ● deepseek/deepseek-v4-pro · react/reason_act · 请求 4 · 约 12,480 tokens
 ```
 
 `status` 看当前状态，`explain` 区分厂商直接证据与本地 Manifest 推断，
-`history` 查看不含 Prompt 原文的跨会话记录，`doctor` 检查缓存族抖动、动态
-system 内容和前缀效率。没有缓存字段时显示 `N/A`，不会伪装成 `0%`。
+`history` 查看不含 Prompt 原文的跨会话记录，`lanes` 查看各模型的活跃追加式
+轨道、事件游标和可复用 Token，`doctor` 检查缓存族抖动、轨道分叉、动态 system
+内容和前缀效率。没有缓存字段时显示 `N/A`，不会伪装成 `0%`。
 
 `/cache optimize --dry-run` 只输出建议；`--apply` 启用保守的缓存亲和路由，
 `--disable` 可恢复。亲和只在同能力 tier、健康且基础分接近的模型之间打破

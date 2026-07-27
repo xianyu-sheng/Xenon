@@ -527,6 +527,24 @@ class CacheTracker:
             "detail": family_detail,
         })
         latest = events[-1]
+        if not bool(latest.get("lane_append_only", True)):
+            checks.append({
+                "level": "warn",
+                "name": "追加式轨道",
+                "detail": (
+                    "最近请求改写了同轨道历史；Xenon 已分叉新代次，"
+                    "该次调用不能复用旧轨道的完整前缀。"
+                ),
+            })
+        elif latest.get("cache_lane"):
+            checks.append({
+                "level": "ok",
+                "name": "追加式轨道",
+                "detail": (
+                    f"轨道 {str(latest['cache_lane'])[:12]} 保持精确前缀；"
+                    f"本次预计可复用 {int(latest.get('lane_reusable_tokens', 0)):,} tokens。"
+                ),
+            })
         compiler_warnings = latest.get("compiler_warnings") or []
         if any(str(item).startswith("dynamic_stable_system:") for item in compiler_warnings):
             checks.append({

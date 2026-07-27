@@ -53,13 +53,14 @@ L4 · 会话结束省钱报告
 **关键决策：**
 - 数据源 100% 来自 API 响应的 `usage.prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 字段
 - 本地版本化价格快照（V4 Flash: ¥0.02 / ¥1 / ¥2；V4 Pro: ¥0.025 / ¥3 / ¥6；单位均为百万 token）
-- ContextManager 与八种引擎统一采用“固定指令 → 稳定项目上下文 → 历史 → 易变记忆 → 当前请求”的缓存分层；单轮指导绑定当前用户消息
+- ContextManager 维护不可变会话事件流；工作记忆、检索记忆、单轮指导和执行边界冻结进当前请求信封，后续调用只追加历史
+- Cache Rails 按“模型 + 引擎 + 阶段 + 工具契约 + context epoch”维护独立轨道；模型切走再返回时继续同步全局事件后缀
 - 五层 Prompt Compiler 保持消息和工具协议语义不变，同时稳定工具 schema 与请求契约；私有 HMAC Manifest 只持久化哈希和计数
-- AutoRouter 只允许最近真实 hit 在同 tier、健康且基础分差不超过 0.25 的模型之间打破平局；显式模型、会话锁、能力和健康永远优先
+- AutoRouter 只允许最近真实 hit 或同契约精确前缀轨道，在同 tier、健康且基础分差不超过 0.25 的模型之间打破平局；显式模型、会话锁、能力和健康永远优先
 - `/cache optimize --dry-run` 不改设置，`--apply` / `--disable` 只切换可逆的本地亲和偏好，绝不生成付费预热请求
 
 **与 Reasonix Prefix-Cache Stability 的差异：**
-Reasonix 从消息排序角度预防缓存失效；Xenon 从用量追踪角度让缓存效益**可见、可量化、可优化**。两者互补但视角不同：Reasonix 做"如何不破坏缓存"，Xenon 做"缓存帮你省了多少钱"。
+Xenon 吸收 Reasonix 的稳定前缀思想，并扩展到自动多模型路由：统一事件流保证语义连续，每个模型轨道保证请求按原始前缀追加，Manifest 与厂商 usage 再让效果**可见、可量化、可优化**。本地轨道只代表可复用资格，真实命中仍以厂商返回为准。
 
 ---
 

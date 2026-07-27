@@ -55,6 +55,8 @@ class AutoRouter:
         context_messages: list[dict] | None = None,
         count: int = 3,
         preferred_models: list[str] | None = None,
+        cache_engine: str | None = None,
+        cache_phase: str | None = None,
     ) -> list[str]:
         """Select best models for the given task.
 
@@ -83,7 +85,12 @@ class AutoRouter:
             return locked_ids
 
         entries = self.pool.select_best(profile, count=count)
-        entries = self._apply_cache_affinity(entries, profile)
+        entries = self._apply_cache_affinity(
+            entries,
+            profile,
+            cache_engine=cache_engine,
+            cache_phase=cache_phase,
+        )
 
         result_ids: list[str]
         if entries:
@@ -132,7 +139,14 @@ class AutoRouter:
 
         return result_ids
 
-    def _apply_cache_affinity(self, entries: list[Any], profile: TaskProfile) -> list[Any]:
+    def _apply_cache_affinity(
+        self,
+        entries: list[Any],
+        profile: TaskProfile,
+        *,
+        cache_engine: str | None = None,
+        cache_phase: str | None = None,
+    ) -> list[Any]:
         """Use cache warmth only to break a near-tie between equivalent models.
 
         Capability tier, base routing score, health, explicit preferences and
@@ -173,6 +187,40 @@ class AutoRouter:
                 affinity = tracker.model_cache_affinity(entry.model_id)
             except Exception:
                 affinity = {"eligible": False, "score": 0.0, "reason": "tracker_error"}
+            lane_evidence: dict[str, Any] = {}
+            lanes = getattr(self.ctx_mgr, "prompt_lanes", None)
+            if lanes is not None and cache_engine and cache_phase:
+                try:
+                    lane_evidence = lanes.model_warmth(
+                        entry.model_id,
+                        engine=cache_engine,
+                        phase=cache_phase,
+                    )
+                except Exception:
+                    lane_evidence = {
+                        "eligible": False,
+                        "score": 0.0,
+                        "reason": "lane_tracker_error",
+                    }
+            if lane_evidence.get("eligible"):
+                if affinity.get("eligible"):
+                    affinity = {
+                        **affinity,
+                        "score": min(
+                            1.0,
+                            float(affinity.get("score", 0.0))
+                            + float(lane_evidence.get("score", 0.0)),
+                        ),
+                        "lane": lane_evidence,
+                    }
+                else:
+                    affinity = {
+                        **lane_evidence,
+                        "provider_reason": affinity.get("reason"),
+                        "evidence": "local_exact_prefix",
+                    }
+            elif lane_evidence:
+                affinity = {**affinity, "lane": lane_evidence}
             peer_indexes.append(index)
             evidence[entry.model_id] = {
                 **affinity,

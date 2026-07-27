@@ -16,7 +16,12 @@ from xenon.utils.deepseek_cache import CacheTracker
 
 
 def _state(tracker: CacheTracker) -> dict:
-    return {"_repl": SimpleNamespace(_cache_tracker=tracker)}
+    return {
+        "_repl": SimpleNamespace(
+            _cache_tracker=tracker,
+            ctx_mgr=ContextManager(),
+        )
+    }
 
 
 def _response(*, hit=0, miss=100, cache_fields=True, manifest=None) -> dict:
@@ -103,6 +108,33 @@ def test_history_and_doctor_use_privacy_safe_persisted_events(tmp_path) -> None:
     assert "private-question" not in history
     assert "缓存字段" in doctor
     assert "仅保存哈希与计数" in doctor
+    tracker.close()
+
+
+def test_cache_lanes_shows_content_free_model_rails() -> None:
+    tracker = CacheTracker()
+    state = _state(tracker)
+    context = state["_repl"].ctx_mgr
+    context.prompt_lanes.prepare(
+        "deepseek/pro",
+        "direct",
+        "chat",
+        0,
+        [
+            {"role": "system", "content": "private system"},
+            {"role": "user", "content": "private question" * 100},
+        ],
+        event_cursor=7,
+    )
+
+    text = _cmd_cache(args="lanes", session_state=state)
+
+    assert "Cache Rails" in text
+    assert "deepseek/pro" in text
+    assert "direct/chat" in text
+    assert "cursor 7" in text
+    assert "private system" not in text
+    assert "private question" not in text
     tracker.close()
 
 

@@ -101,6 +101,66 @@ def test_manifest_never_contains_raw_prompt_or_tool_text() -> None:
     assert "private-tool-name" not in serialized
 
 
+def test_manifest_attributes_append_only_lane_without_prompt_content() -> None:
+    context = {
+        "engine": "direct",
+        "phase": "chat",
+        "event_cursor": 9,
+        "cache_lane": "lane-safe-id",
+        "lane_generation": 2,
+        "lane_append_only": True,
+        "lane_reason": "prefix_extended",
+        "lane_reusable_messages": 4,
+        "lane_reusable_tokens": 1200,
+    }
+    manifest = build_prompt_manifest(
+        "deepseek-v4-flash",
+        _messages("private-current"),
+        cache_context=context,
+    )
+
+    assert manifest.cache_lane
+    assert manifest.cache_lane != "lane-safe-id"
+    assert manifest.lane_generation == 2
+    assert manifest.lane_append_only is True
+    assert manifest.lane_reusable_tokens == 1200
+    assert manifest.event_cursor == 9
+    assert "private-current" not in json.dumps(manifest.as_dict())
+
+    next_generation = build_prompt_manifest(
+        "deepseek-v4-flash",
+        _messages("private-current"),
+        cache_context={**context, "lane_generation": 3},
+    )
+    assert next_generation.cache_family != manifest.cache_family
+
+
+def test_non_append_lane_is_explained_as_history_rewrite() -> None:
+    manifest = build_prompt_manifest(
+        "deepseek-v4-flash",
+        _messages("q"),
+        cache_context={
+            "cache_lane": "forked",
+            "lane_generation": 1,
+            "lane_append_only": False,
+            "lane_reason": "history_rewritten",
+        },
+    ).as_dict()
+    event = build_cache_event(
+        manifest,
+        model_id="deepseek-v4-flash",
+        prompt_tokens=100,
+        completion_tokens=5,
+        cache_hit_tokens=0,
+        cache_miss_tokens=100,
+        cache_fields_present=True,
+        family_call=1,
+    )
+
+    assert event.cause == "history_rewritten"
+    assert event.lane_append_only is False
+
+
 @pytest.mark.parametrize(
     ("fields_present", "family_call", "hit", "state", "cause"),
     [

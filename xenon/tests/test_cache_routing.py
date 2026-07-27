@@ -7,6 +7,7 @@ import json
 from xenon.repl.auto_router import AutoRouter
 from xenon.repl.difficulty_estimator import TaskProfile
 from xenon.repl.model_pool import ModelPool
+from xenon.repl.context_manager import ContextManager
 from xenon.utils.cache_telemetry import (
     MANIFEST_RESPONSE_KEY,
     CacheEventStore,
@@ -187,7 +188,7 @@ def test_affinity_setting_is_private_persistent_and_reversible(tmp_path) -> None
     assert settings_path.stat().st_mode & 0o777 == 0o600
     assert json.loads(settings_path.read_text(encoding="utf-8")) == {
         "cache_affinity_enabled": False,
-        "schema_version": 1,
+        "schema_version": 2,
     }
 
     restored = CacheTracker(event_store=CacheEventStore(tmp_path))
@@ -198,3 +199,37 @@ def test_affinity_setting_is_private_persistent_and_reversible(tmp_path) -> None
     enabled_again = CacheTracker(event_store=CacheEventStore(tmp_path))
     assert enabled_again.cache_affinity_enabled is True
     enabled_again.close()
+
+
+def test_matching_local_prompt_lane_breaks_near_tie_without_claiming_provider_hit() -> None:
+    tracker = CacheTracker()
+    context = ContextManager()
+    context.prompt_lanes.prepare(
+        "provider/warm",
+        "direct",
+        "chat",
+        0,
+        [
+            {"role": "system", "content": "stable" * 300},
+            {"role": "user", "content": "current"},
+        ],
+    )
+    router = AutoRouter(
+        _peer_pool(),
+        estimator=_FixedEstimator(TaskProfile(complexity=0.5)),
+        cache_tracker=tracker,
+        context_manager=context,
+    )
+
+    result = router.route(
+        "same contract",
+        cache_engine="direct",
+        cache_phase="chat",
+    )
+
+    assert result[:2] == ["provider/warm", "provider/leader"]
+    evidence = router.last_cache_affinity_decision["evidence"]["provider/warm"]
+    assert evidence["reason"] == "warm_prompt_lane"
+    assert evidence["evidence"] == "local_exact_prefix"
+    assert tracker.cache_hits == 0
+    tracker.close()

@@ -3466,7 +3466,7 @@ def _cmd_cost(*, args: str = "", session_state: dict = None, **kwargs: Any) -> s
 register_command(
     "/cache",
     "解释缓存状态与命中原因（完全本地，不调用 API）",
-    "/cache [status|explain|history [数量]|doctor|optimize --dry-run|--apply|--disable]",
+    "/cache [status|explain|history [数量]|lanes|doctor|optimize --dry-run|--apply|--disable]",
 )
 register_command(
     "/fix-cache",
@@ -3487,6 +3487,7 @@ _CACHE_CAUSE_LABELS = {
     "project_changed": "项目上下文发生变化",
     "context_compacted": "上下文压缩、清空或撤销后进入新代次",
     "stable_prefix_changed": "稳定提示前缀发生变化",
+    "history_rewritten": "请求历史不是旧轨道的追加，已自动分叉新代次",
 }
 
 _CACHE_STATE_LABELS = {
@@ -3522,6 +3523,9 @@ def _cache_status(tracker) -> str:
         f"  最近请求: {event['model_id']} · {event['engine']}/{event['phase']}",
         f"  实际 token: hit {event['cache_hit_tokens']:,} · miss {event['cache_miss_tokens']:,}",
         f"  前缀效率: {efficiency_text}  ·  缓存族: {event['cache_family'][:12]}",
+        f"  缓存轨道: {(event.get('cache_lane') or '未跟踪')[:20]}"
+        f" · 代次 {int(event.get('lane_generation', 0))}"
+        f" · 可复用约 {int(event.get('lane_reusable_tokens', 0)):,} tokens",
         f"  证据来源: 厂商 usage 字段  ·  本地累计 {tracker.total_calls} 次请求",
     ])
 
@@ -3545,6 +3549,44 @@ def _cache_explain(tracker) -> str:
         lines.append("  直接证据: API 没有返回 cache hit/miss 字段，因此显示 n/a，而不是 0%。")
     if cause not in {"cache_hit", "cache_fields_unavailable"}:
         lines.append("  说明: 原因由本地 Manifest 差异推断；命中 token 始终以厂商 usage 为准。")
+    return "\n".join(lines)
+
+
+def _cache_lanes(repl) -> str:
+    context = getattr(repl, "ctx_mgr", None) if repl else None
+    registry = getattr(context, "prompt_lanes", None)
+    if registry is None:
+        return "[dim]PromptLaneRegistry 未初始化。[/dim]"
+    snapshots = registry.snapshots()
+    if not snapshots:
+        return (
+            "[bold]Cache Rails[/bold]\n"
+            "  尚无模型轨道；第一次实际模型调用后会自动创建。"
+        )
+    active = [item for item in snapshots if item.get("active")]
+    archived = [item for item in snapshots if not item.get("active")]
+    lines = [
+        "[bold]Cache Rails · 模型提示词轨道[/bold]",
+        f"  活跃 {len(active)} · 已归档 {len(archived)} · 上下文 epoch {context.cache_epoch}",
+    ]
+    for lane in sorted(
+        active,
+        key=lambda item: float(item.get("last_used_at", 0.0)),
+        reverse=True,
+    ):
+        lines.append(
+            f"  ● {lane['model_id']} · {lane['engine']}/{lane['phase']} "
+            f"· 请求 {lane['request_count']} · 约 {lane['estimated_prompt_tokens']:,} tokens "
+            f"· cursor {lane['last_event_id']} · {lane['lane_id']}"
+        )
+    if archived:
+        rewrites = sum(
+            1 for item in archived if item.get("fork_reason") == "history_rewritten"
+        )
+        lines.append(
+            f"  历史分叉: {rewrites} 次（压缩/撤销等正常 epoch 切换不计为分叉）"
+        )
+    lines.append("  说明：轨道只保存哈希与计数；真实命中仍以厂商 usage 为准。")
     return "\n".join(lines)
 
 
@@ -3657,6 +3699,9 @@ def _cmd_cache(*, args: str = "", session_state: dict = None, **kwargs: Any) -> 
         return _cache_explain(tracker)
     if action == "doctor":
         return _cache_doctor(tracker)
+    if action == "lanes":
+        repl = session_state.get("_repl") if session_state else None
+        return _cache_lanes(repl)
     if action == "optimize":
         mode = parts[1] if len(parts) > 1 else "--dry-run"
         repl = session_state.get("_repl") if session_state else None
@@ -3668,7 +3713,7 @@ def _cmd_cache(*, args: str = "", session_state: dict = None, **kwargs: Any) -> 
             return "用法: /cache history [1-100]"
         return _cache_history(tracker, limit)
     return (
-        "用法: /cache [status|explain|history [数量]|doctor|"
+        "用法: /cache [status|explain|history [数量]|lanes|doctor|"
         "optimize --dry-run|--apply|--disable]"
     )
 
