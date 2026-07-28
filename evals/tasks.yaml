@@ -3,113 +3,174 @@ tasks:
     category: file_edit
     prompt: "Modify src/main.py so the greet function accepts a name argument and update tests."
     expected_tools: ["read_file", "edit_file"]
+    fixture: edit-python-function
+    assertions:
+      commands_pass: ["python -m pytest -q tests/test_main.py"]
+      files_contain:
+        src/main.py: ["def greet(name)"]
+        tests/test_main.py: ["greet(\"World\")"]
     success_criteria: "The function signature is updated and relevant tests pass."
   - id: add-unit-test
     category: file_edit
-    prompt: "Add pytest coverage for a utility function that handles empty input."
+    prompt: "In src/utils.py, add pytest coverage in tests/test_utils.py for normalize_items handling empty input."
     expected_tools: ["read_file", "write_file"]
+    fixture: add-unit-test
+    assertions:
+      commands_pass: ["python -m pytest -q tests/test_utils.py"]
+      files_contain:
+        tests/test_utils.py: ["test_empty_input"]
     success_criteria: "A focused test is added without changing unrelated code."
   - id: refactor-duplicate-code
     category: file_edit
-    prompt: "Find duplicated parsing logic and extract a small helper."
+    prompt: "In src/parser.py, find duplicated parsing logic and extract a small _parse_parts helper."
     expected_tools: ["search_files", "read_file", "edit_file"]
+    fixture: refactor-duplicate-code
+    assertions:
+      files_contain:
+        src/parser.py: ["def _parse_parts"]
     success_criteria: "Duplication is reduced and behavior stays the same."
   - id: update-readme-command
     category: file_edit
-    prompt: "Update README usage instructions for a changed CLI flag."
+    prompt: "In README.md, update the usage instructions from --old to the changed --verbose CLI flag."
     expected_tools: ["read_file", "edit_file"]
+    fixture: update-readme-command
+    assertions:
+      files_contain:
+        README.md: ["--verbose"]
     success_criteria: "Documentation matches the CLI interface."
   - id: code-search-entrypoint
     category: code_search
-    prompt: "Find the CLI entrypoint and summarize how chat mode starts."
+    prompt: "In xenon_cli.py, find the CLI entrypoint and summarize how start_chat begins chat mode."
     expected_tools: ["search_files", "read_file"]
+    fixture: code-search-entrypoint
+    assertions:
+      answer_contains_any: ["start_chat", "main"]
     success_criteria: "The correct entrypoint and start function are identified."
   - id: code-search-tool-node
     category: code_search
-    prompt: "Locate where shell commands are validated before execution."
+    prompt: "In tooling.py, locate where shell command parameters are validated before execution."
     expected_tools: ["search_files", "read_file"]
+    fixture: code-search-tool-node
     success_criteria: "The safety validation path is correctly explained."
     assertions:
       answer_contains_any: ["validate_tool_params", "_validate_command", "ToolExecutor"]
   - id: code-search-model-router
     category: code_search
-    prompt: "Find where provider/model IDs are parsed and routed."
+    prompt: "In router.py, find where provider/model IDs are parsed and routed to ModelEndpoint."
     expected_tools: ["search_files", "read_file"]
+    fixture: code-search-model-router
     success_criteria: "The model parsing and endpoint construction flow is described."
     assertions:
       answer_contains_any: ["build_endpoint", "provider_registry", "ModelEndpoint"]
   - id: code-search-context-injection
     category: code_search
-    prompt: "Explain how project context is injected before the first chat."
+    prompt: "In context.py, explain how ProjectContext is injected before the first chat."
     expected_tools: ["search_files", "read_file"]
+    fixture: code-search-context-injection
     success_criteria: "ProjectContext detection and injection are identified."
     assertions:
       answer_contains_any: ["ProjectContext", "project_context", "context_manager"]
   - id: run-focused-tests
     category: tool_call
-    prompt: "Run the callback tests and summarize any failures."
+    prompt: "Run `python -m pytest -q tests/test_callback.py` and summarize any failures."
     expected_tools: ["command"]
-    success_criteria: "The relevant pytest command is run and the failure summary is accurate."
+    fixture: run-focused-tests
     assertions:
+      commands_pass: ["python -m pytest -q tests/test_callback.py"]
       answer_contains_any: ["pytest", "test"]
+    success_criteria: "The relevant pytest command is run and the failure summary is accurate."
   - id: inspect-git-status
     category: tool_call
-    prompt: "Check the current git status and list only files relevant to this task."
+    prompt: "In this isolated fixture, check git status and list only files relevant to the README task."
     expected_tools: ["git"]
+    fixture: inspect-git-status
+    assertions:
+      answer_contains_any: ["git", "tracked", "status"]
     success_criteria: "The answer distinguishes tracked changes from unrelated untracked files."
   - id: generate-diff-preview
     category: tool_call
-    prompt: "Show a diff preview before applying a proposed file edit."
+    prompt: "Show a diff preview for notes.txt before applying a proposed edit; do not edit it."
     expected_tools: ["diff_preview"]
+    fixture: generate-diff-preview
+    assertions:
+      answer_contains_any: ["diff", "preview"]
     success_criteria: "The diff is shown and no edit is applied without confirmation."
   - id: call-weather-tool
     category: tool_call
     prompt: "Use the weather tool to answer the current weather for Beijing."
     expected_tools: ["weather"]
+    fixture: call-weather-tool
     success_criteria: "The weather tool is called and the response is summarized."
     assertions:
       answer_contains_any: ["Beijing", "北京", "weather", "天气"]
   - id: remember-user-preference
     category: context_memory
-    prompt: "Remember that the user prefers concise Chinese summaries for final answers."
+    prompt: "Read and update .xenon/memory.md to remember that the user prefers concise Chinese summaries for final answers."
     expected_tools: ["read_file", "write_file"]
+    fixture: remember-user-preference
+    assertions:
+      files_contain:
+        .xenon/memory.md: ["concise Chinese summaries"]
     success_criteria: "The preference is persisted or acknowledged for future context."
   - id: use-project-rules
     category: context_memory
-    prompt: "Apply .xenon/rules.md instructions while editing a Python file."
+    prompt: "Read .xenon/rules.md, then edit src/config.py according to its rule and add the # rules-applied marker."
     expected_tools: ["read_file", "edit_file"]
+    fixture: use-project-rules
+    assertions:
+      files_contain:
+        src/config.py: ["SETTING = \"baseline\"", "# rules-applied"]
     success_criteria: "The edit follows the project rules."
   - id: load-saved-session
     category: context_memory
-    prompt: "Load a saved session and continue with the stored AgentContext."
+    prompt: "Load .xenon/sessions/session.json and continue with its stored AgentContext."
     expected_tools: ["read_file"]
+    fixture: load-saved-session
+    assertions:
+      answer_contains_any: ["session", "AgentContext", "上下文"]
     success_criteria: "Session history and context variables are restored."
   - id: compact-long-context
     category: context_memory
-    prompt: "Compact a long conversation while preserving recent turns."
+    prompt: "Read .xenon/long_context.txt and write .xenon/compact_summary.md preserving the recent user request."
     expected_tools: ["read_file", "write_file"]
+    fixture: compact-long-context
+    assertions:
+      files_exist: [.xenon/compact_summary.md]
+      files_contain:
+        .xenon/compact_summary.md: ["recent user request"]
     success_criteria: "A concise summary is produced and recent messages remain available."
   - id: revise-after-test-failure
     category: multi_turn_revision
-    prompt: "After tests fail, inspect the error, revise the patch, and rerun the focused test."
+    prompt: "Run tests/test_buggy.py, inspect the failure in src/buggy.py, change add to use addition, and rerun the focused test."
     expected_tools: ["command", "read_file", "edit_file"]
+    fixture: revise-after-test-failure
+    assertions:
+      commands_pass: ["python -m pytest -q tests/test_buggy.py"]
+      files_contain:
+        src/buggy.py: ["return a + b"]
     success_criteria: "The second attempt addresses the observed failure."
   - id: revise-after-review
     category: multi_turn_revision
-    prompt: "Use reviewer feedback to simplify a too-large abstraction."
+    prompt: "Use reviewer feedback to simplify src/abstraction.py by removing the too-large LargeAbstraction wrapper."
     expected_tools: ["read_file", "edit_file"]
+    fixture: revise-after-review
+    assertions:
+      files_not_contain:
+        src/abstraction.py: ["LargeAbstraction"]
     success_criteria: "The revision reduces complexity while keeping behavior intact."
   - id: handle-missing-api-key
     category: multi_turn_revision
-    prompt: "Explain a model call failure caused by a missing API key and guide setup."
+    prompt: "Read README.md and explain a model call failure caused by a missing API key, including local credentials setup."
     expected_tools: ["read_file"]
+    fixture: handle-missing-api-key
     success_criteria: "The answer points to local credentials and setup commands."
     assertions:
       answer_contains_any: ["credentials", "API Key", "凭证"]
   - id: mcp-tool-flow
     category: multi_turn_revision
-    prompt: "Add an MCP server, list tools, and explain how the agent can call one."
+    prompt: "Read .xenon/mcp.yaml, add an MCP server, list tools, and explain how the agent can call one."
     expected_tools: ["mcp_call", "read_file"]
+    fixture: mcp-tool-flow
     success_criteria: "The MCP registry flow and tool invocation path are correctly described."
     assertions:
       answer_contains_any: ["MCP", "/mcp", "mcp_call"]

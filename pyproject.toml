@@ -56,6 +56,7 @@ dev = [
 xenon = "xenon.main:cli"
 
 [tool.pytest.ini_options]
+norecursedirs = ["evals/fixtures"]
 markers = [
     "live: requires external network access or real provider credentials",
     "e2e: deterministic end-to-end CLI workflow",

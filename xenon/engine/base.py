@@ -349,6 +349,9 @@ class BaseEngine(ABC):
                         if self._ctx_mgr is not None else None
                     ),
                 }
+                request_timeout = getattr(self, "request_timeout", None)
+                if request_timeout is not None:
+                    request_options["timeout"] = float(request_timeout)
                 effort = getattr(mc, "reasoning_effort", "") if mc else ""
                 if effort:
                     request_options["reasoning_effort"] = effort
@@ -511,6 +514,9 @@ class BaseEngine(ABC):
                         if self._ctx_mgr is not None else None
                     ),
                 }
+                request_timeout = getattr(self, "request_timeout", None)
+                if request_timeout is not None:
+                    request_options["timeout"] = float(request_timeout)
                 effort = getattr(mc, "reasoning_effort", "") if mc else ""
                 if effort:
                     request_options["reasoning_effort"] = effort

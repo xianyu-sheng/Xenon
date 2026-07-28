@@ -1,0 +1,17 @@
+tasks:
+  - id: repl-help
+    command: /help
+    assertions:
+      answer_contains_any: ["可用命令", "/status", "/tools"]
+  - id: repl-mode
+    command: /mode
+    assertions:
+      answer_contains_any: ["react", "思考", "mode"]
+  - id: repl-tools
+    command: /tools
+    assertions:
+      answer_contains_any: ["read_file", "write_file", "工具"]
+  - id: repl-cost
+    command: /cost
+    assertions:
+      answer_contains_any: ["缓存", "cache", "费用", "cost"]
