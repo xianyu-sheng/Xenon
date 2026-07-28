@@ -671,6 +671,10 @@ class ToolNode(BaseNode):
         self.file_path = file_path
         self.content = content
         self.cwd = cwd
+        # Trusted orchestration input.  It is intentionally absent from
+        # _VALID_PARAMS, so model output cannot select a container or wrapper.
+        self.command_prefix: tuple[str, ...] = ()
+        self.command_prelude = ""
         self.timeout = timeout
         self.encoding = encoding
         self.append = append
@@ -714,6 +718,16 @@ class ToolNode(BaseNode):
         # v0.6.1: LSP 工具参数
         self._lsp_line = line
         self._lsp_column = column
+
+    def bind_command_runtime(
+        self,
+        prefix: tuple[str, ...],
+        prelude: str = "",
+    ) -> None:
+        """Bind trusted command orchestration after model params are parsed."""
+
+        self.command_prefix = tuple(prefix)
+        self.command_prelude = prelude
 
     # ── 参数规范化 ──────────────────────────────────────────
 
@@ -992,10 +1006,16 @@ class ToolNode(BaseNode):
         # 安全验证
         self._validate_command(resolved_cmd)
 
-        if sys.platform == "win32":
+        shell_command = (
+            f"{self.command_prelude}\n{resolved_cmd}"
+            if self.command_prelude else resolved_cmd
+        )
+        if self.command_prefix:
+            shell_exec = [*self.command_prefix, "/bin/bash", "-lc", shell_command]
+        elif sys.platform == "win32":
             shell_exec = ["powershell", "-Command", resolved_cmd]
         else:
-            shell_exec = ["/bin/bash", "-c", resolved_cmd]
+            shell_exec = ["/bin/bash", "-c", shell_command]
 
         logger.info(f"[{self.id}] 执行命令: {resolved_cmd}")
 
@@ -2205,8 +2225,9 @@ class ToolNode(BaseNode):
         logger.info(f"[{self.id}] git {' '.join(cmd[1:])}")
 
         try:
+            exec_cmd = [*self.command_prefix, *cmd] if self.command_prefix else cmd
             proc = subprocess.run(
-                cmd, capture_output=True, text=True,
+                exec_cmd, capture_output=True, text=True,
                 timeout=self.timeout, cwd=self.cwd or ".",
             )
             output = proc.stdout.strip() or proc.stderr.strip()

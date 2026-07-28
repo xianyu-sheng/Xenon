@@ -47,6 +47,9 @@ desktop.ini
 
 # Logs
 *.log
+/logs/build_images/
+/logs/run_evaluation/
+/xenon__*.json
 
 # Build artifacts
 *.bat

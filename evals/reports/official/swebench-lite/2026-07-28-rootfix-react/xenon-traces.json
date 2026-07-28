@@ -1,0 +1,108 @@
+[
+  {
+    "instance_id": "astropy__astropy-12907",
+    "model_name_or_path": "xenon/react/deepseek/deepseek-v4-flash",
+    "model_patch": "diff --git a/astropy/modeling/separable.py b/astropy/modeling/separable.py\nindex a308e2729..45bea3608 100644\n--- a/astropy/modeling/separable.py\n+++ b/astropy/modeling/separable.py\n@@ -242,7 +242,7 @@ def _cstack(left, right):\n         cright = _coord_matrix(right, 'right', noutp)\n     else:\n         cright = np.zeros((noutp, right.shape[1]))\n-        cright[-right.shape[0]:, -right.shape[1]:] = 1\n+        cright[-right.shape[0]:, -right.shape[1]:] = right\n \n     return np.hstack([cleft, cright])\n \n",
+    "engine": "react",
+    "elapsed_seconds": 45.869,
+    "error": null,
+    "output_tail": "[-right.shape[0]:, -right.shape[1]:] = 1   # BUG: loses separability info",
+    "tool_trace": [
+      {
+        "tool": "search_files",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.025669,
+        "error": null,
+        "result": "/tmp/xenon-rootfix-official-r2/astropy__astropy-12907/react/astropy/modeling/core.py:808: def _calculate_separability_matrix(self):\n/tmp/xenon-rootfix-official-r2/astropy__astropy-12907/react/astropy/modeling/separable.py:24: __all__ = [\"is_separable\", \"separability_matrix\"]\n/tmp/xenon-rootfix-official-r2/astropy__astropy-12907/react/astropy/modeling/separable.py:66: def separability_matrix(transform):\n/tmp/xenon-rootfix-official-r2/astropy__astropy-12907/react/astropy/modeling/separable.py:86: "
+      },
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.002899,
+        "error": null,
+        "result": "# Licensed under a 3-clause BSD style license - see LICENSE.rst\n\n\"\"\"\nFunctions to determine if a model is separable, i.e.\nif the model outputs are independent.\n\nIt analyzes ``n_inputs``, ``n_outputs`` and the operators\nin a compound model by stepping through the transforms\nand creating a ``coord_matrix`` of shape (``n_outputs``, ``n_inputs``).\n\n\nEach modeling operator is represented by a function which\ntakes two simple models (or two ``coord_matrix`` arrays) and\nreturns an array of shape (``n_ou"
+      },
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.004741,
+        "error": null,
+        "result": "\n        return self.__class__.n_inputs\n\n    @property\n    def n_outputs(self):\n        # TODO: remove the code in the ``if`` block when support\n        # for models with ``outputs`` as class variables is removed.\n        if hasattr(self.__class__, 'n_outputs') and isinstance(self.__class__.n_outputs, property):\n            try:\n                return len(self.__class__.outputs)\n            except TypeError:\n                try:\n                    return len(self.outputs)\n                except"
+      },
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.002597,
+        "error": null,
+        "result": "    separable_matrix = _separable(transform)\n    separable_matrix = np.where(separable_matrix != 0, True, False)\n    return separable_matrix\n\n\ndef _compute_n_outputs(left, right):\n    \"\"\"\n    Compute the number of outputs of two models.\n\n    The two models are the left and right model to an operation in\n    the expression tree of a compound model.\n\n    Parameters\n    ----------\n    left, right : `astropy.modeling.Model` or ndarray\n        If input is of an array, it is the output of `coord_matri"
+      },
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.000645,
+        "error": null,
+        "result": "            mat[-model.n_outputs:, -model.n_inputs:] = m\n        return mat\n    if not model.separable:\n        # this does not work for more than 2 coordinates\n        mat = np.zeros((noutp, model.n_inputs))\n        if pos == 'left':\n            mat[:model.n_outputs, : model.n_inputs] = 1\n        else:\n            mat[-model.n_outputs:, -model.n_inputs:] = 1\n    else:\n        mat = np.zeros((noutp, model.n_inputs))\n\n        for i in range(model.n_inputs):\n            mat[i, i] = 1\n        if po"
+      },
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.001934,
+        "error": null,
+        "result": "    is_separable : ndarray of dtype np.bool\n        An array of shape (transform.n_outputs,) of boolean type\n        Each element represents the separablity of the corresponding output.\n    \"\"\"\n    if (transform_matrix := transform._calculate_separability_matrix()) is not NotImplemented:\n        return transform_matrix\n    elif isinstance(transform, CompoundModel):\n        sepleft = _separable(transform.left)\n        sepright = _separable(transform.right)\n        return _operators[transform.op]("
+      },
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.003273,
+        "error": null,
+        "result": "        if pos == 'right':\n            mat = np.roll(mat, (noutp - model.n_outputs))\n    return mat\n\n\ndef _cstack(left, right):\n    \"\"\"\n    Function corresponding to '&' operation.\n\n    Parameters\n    ----------\n    left, right : `astropy.modeling.Model` or ndarray\n        If input is of an array, it is the output of `coord_matrix`.\n\n    Returns\n    -------\n    result : ndarray\n        Result from this operation.\n\n    \"\"\"\n    noutp = _compute_n_outputs(left, right)\n\n    if isinstance(left, Model"
+      },
+      {
+        "tool": "edit_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.008045,
+        "error": null,
+        "result": "（执行成功，无文本输出）"
+      }
+    ],
+    "patch_source": "workspace",
+    "patch_apply_success": true,
+    "patch_apply_error": null,
+    "runtime": {
+      "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest",
+      "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63",
+      "container_name": "sweb.xenon.astropy__astropy-12907.react.5b763b39",
+      "container_workdir": "/testbed"
+    },
+    "provider_usage": {},
+    "cache_metrics": {
+      "cache_hit_rate": null,
+      "reusable_tokens": 0,
+      "prompt_tokens": 0,
+      "estimated_tokens_saved": null,
+      "estimated_cost_saved": null
+    },
+    "context_metrics": {
+      "compression_triggered": false,
+      "tokens_before": null,
+      "tokens_after": null
+    },
+    "worktree": "/tmp/xenon-rootfix-official-r2/astropy__astropy-12907/react"
+  }
+]

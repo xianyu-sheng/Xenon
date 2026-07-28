@@ -18,7 +18,7 @@ from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.react_engine import ReActEngine
 from xenon.engine.reflection_engine import ReflectionEngine
 from xenon.engine.tool_tracker import ToolExecutionTracker
-from xenon.utils.llm_client import chat_completion
+from xenon.engine.execution_policy import EngineDeadlineExceeded
 
 if TYPE_CHECKING:
     from xenon.repl.context_manager import ContextManager
@@ -218,26 +218,19 @@ class PlanReactEngine:
         ]
 
         try:
-            for model_id in self.model_priority:
-                try:
-                    result = chat_completion(
-                        model_id,
-                        messages,
-                        max_tokens=4096,
-                        temperature=0.5,
-                        cache_context={
-                            "engine": "plan_react",
-                            "phase": "summarize",
-                        },
-                    )
-                    if result and result.strip():
-                        return result
-                except Exception:
-                    continue
-            # LLM 全部失败，返回原始结果
-            return f"## 执行计划\n{analysis}\n\n## 执行结果\n{results_text}{failed_text}"
+            result = self.planner._call_llm_for_phase(
+                "summarize",
+                messages,
+                max_tokens=4096,
+            )
+            if result and result.strip():
+                return result
+        except EngineDeadlineExceeded:
+            raise
+        # LLM 全部失败，返回原始结果
         except Exception:
-            return f"## 执行计划\n{analysis}\n\n## 执行结果\n{results_text}{failed_text}"
+            pass
+        return f"## 执行计划\n{analysis}\n\n## 执行结果\n{results_text}{failed_text}"
 
 
 class PlanReflectionEngine:
@@ -303,6 +296,8 @@ class PlanReflectionEngine:
                 f"原始任务: {user_input}\n\n执行结果:\n{initial_output}",
                 context=reflector_ctx, ctx_mgr=ctx_mgr,
             )
+        except EngineDeadlineExceeded:
+            raise
         except Exception as e:
             logger.warning(f"Reflection 阶段失败: {e}")
             self.callback.on_error(f"Reflection 阶段失败: {e}")
@@ -374,6 +369,8 @@ class ReactReflectionEngine:
                 f"原始任务: {user_input}\n\n执行结果:\n{initial_output}",
                 context=reflector_ctx, ctx_mgr=ctx_mgr,
             )
+        except EngineDeadlineExceeded:
+            raise
         except Exception as e:
             logger.warning(f"Reflection 阶段失败: {e}")
             self.callback.on_error(f"Reflection 阶段失败: {e}")

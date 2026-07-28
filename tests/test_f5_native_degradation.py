@@ -98,7 +98,7 @@ class TestCallLlmNative:
         def fake(mid, msgs, *, tools=None, response_format=None, **kw):
             calls.append((bool(tools), bool(response_format)))
             if tools and response_format:
-                raise RuntimeError("tier1 不支持 response_format")
+                raise _http_error(400)
             if tools:  # tier 2
                 return LLMResponse(content="", tool_calls=[
                     {"id": "1", "name": "command", "arguments": {"action": "ls"}}])
@@ -120,7 +120,7 @@ class TestCallLlmNative:
         def fake(mid, msgs, *, tools=None, response_format=None, **kw):
             calls.append((bool(tools), bool(response_format)))
             if tools:  # tier1, tier2 都带 tools → 失败
-                raise RuntimeError("不支持 tools")
+                raise _http_error(400)
             # tier3: format only
             return LLMResponse(content='{"thought":"t","final_answer":"done"}')
 
@@ -133,7 +133,10 @@ class TestCallLlmNative:
     def test_all_tiers_fail_fallback_to_call_llm(self, monkeypatch):
         """三层全败 → 回退 _call_llm。"""
         eng = _engine()
-        _patch_fc(monkeypatch, eng, lambda *a, **k: (_ for _ in ()).throw(RuntimeError("全挂")))
+        _patch_fc(
+            monkeypatch, eng,
+            lambda *a, **k: (_ for _ in ()).throw(_http_error(400)),
+        )
         eng._call_llm = lambda msgs, max_tokens=None: "fallback text"
         out = eng._call_llm_native([], [{"type": "function"}], {"type": "json_object"})
         assert out == "fallback text"
@@ -188,7 +191,7 @@ class TestCallLlmNative:
 
         def fake(mid, msgs, *, tools=None, response_format=None, **kw):
             calls.append((bool(tools), bool(response_format)))
-            raise RuntimeError("fail")
+            raise _http_error(400)
 
         _patch_fc(monkeypatch, eng, fake)
         eng._call_llm = lambda msgs, max_tokens=None: "fb"
@@ -198,6 +201,22 @@ class TestCallLlmNative:
         # tiers 列表：tier1=(T,None)→保留, tier2=(T,None)→保留, tier3=(None,None)→过滤
         # tier1 与 tier2 都是 (tools, None) → 两次相同调用
         assert all(c == (True, False) for c in calls)
+
+    def test_transient_failure_does_not_cascade_capability_tiers(self, monkeypatch):
+        """A timeout is not evidence that tools/format are unsupported."""
+        eng = _engine()
+        calls = []
+
+        def fake(*args, **kwargs):
+            calls.append((args, kwargs))
+            raise httpx.ReadTimeout("slow")
+
+        _patch_fc(monkeypatch, eng, fake)
+        with pytest.raises(RuntimeError, match="native provider request failed"):
+            eng._call_llm_native(
+                [], [{"type": "function"}], {"type": "json_object"}
+            )
+        assert len(calls) == 1
 
 
 # ════════════════════════════════════════════════════════════

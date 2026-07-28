@@ -1328,6 +1328,7 @@ class ReActEngine(BaseEngine):
                 subagent_timeout=self.subagent_timeout,
             )
             sub._subagent_depth = self._subagent_depth + 1
+            self._inherit_execution_context(sub)
             self._last_subagent = sub
             return sub
 
@@ -1340,6 +1341,7 @@ class ReActEngine(BaseEngine):
                 model_configs=self.model_configs,
             )
             setattr(sub, '_subagent_depth', self._subagent_depth + 1)
+            self._inherit_execution_context(sub)
             self._last_subagent = sub
             return sub
 
@@ -1353,6 +1355,7 @@ class ReActEngine(BaseEngine):
                 model_configs=self.model_configs,
             )
             setattr(sub, '_subagent_depth', self._subagent_depth + 1)
+            self._inherit_execution_context(sub)
             self._last_subagent = sub
             return sub
 
@@ -1365,6 +1368,7 @@ class ReActEngine(BaseEngine):
                 model_configs=self.model_configs,
             )
             setattr(sub, '_subagent_depth', self._subagent_depth + 1)
+            self._inherit_execution_context(sub)
             self._last_subagent = sub
             return sub
 
@@ -1379,6 +1383,7 @@ class ReActEngine(BaseEngine):
                 model_configs=self.model_configs,
             )
             setattr(sub, '_subagent_depth', self._subagent_depth + 1)
+            self._inherit_execution_context(sub)
             self._last_subagent = sub
             return sub
 
@@ -1392,6 +1397,7 @@ class ReActEngine(BaseEngine):
                 model_configs=self.model_configs,
             )
             setattr(sub, '_subagent_depth', self._subagent_depth + 1)
+            self._inherit_execution_context(sub)
             self._last_subagent = sub
             return sub
 
@@ -1405,6 +1411,7 @@ class ReActEngine(BaseEngine):
                 model_configs=self.model_configs,
             )
             setattr(sub, '_subagent_depth', self._subagent_depth + 1)
+            self._inherit_execution_context(sub)
             self._last_subagent = sub
             return sub
 
@@ -1420,6 +1427,7 @@ class ReActEngine(BaseEngine):
             )
             sub.tools = {}  # 不暴露工具
             sub._subagent_depth = self._subagent_depth + 1
+            self._inherit_execution_context(sub)
             self._last_subagent = sub
             return sub
 
@@ -1429,6 +1437,17 @@ class ReActEngine(BaseEngine):
                 "plan_react, plan_reflection, react_reflection, direct"
             )
             return f"⚠️ 不支持的引擎类型: '{engine_type}'。可用: {available}"
+
+    def _inherit_execution_context(self, sub_engine: Any) -> None:
+        """Give dynamically created sub-agents the parent's policy/runtime."""
+
+        from xenon.engine.execution_policy import bind_execution_policy
+        from xenon.engine.tool_runtime import bind_tool_runtime
+
+        bind_execution_policy(sub_engine, self.execution_policy)
+        runtime = getattr(self, "tool_runtime", None)
+        if runtime is not None:
+            bind_tool_runtime(sub_engine, runtime)
 
     def _format_sub_result(
         self,

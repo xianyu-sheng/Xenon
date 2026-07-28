@@ -615,11 +615,56 @@ class ToolExecutor:
         retry_attempts: int = 2,
         breakers: BreakerRegistry | None = None,
         permission_gate: Any = None,  # v0.5.0: PermissionGate
+        runtime: Any = None,
+        execution_policy: Any = None,
     ) -> None:
         self.retry_attempts = max(1, retry_attempts)
         # 默认每引擎独立注册表（同引擎内跨 run 累积断路状态，且保证测试隔离）
         self.breakers = breakers or BreakerRegistry()
         self.permission_gate = permission_gate  # v0.5.0: 工具确认门控
+        self.runtime = runtime
+        self.execution_policy = execution_policy
+
+    def set_runtime(self, runtime: Any) -> None:
+        """Set trusted runtime state that can never come from model params."""
+
+        self.runtime = runtime
+
+    def set_execution_policy(self, policy: Any) -> None:
+        self.execution_policy = policy
+
+    def _runtime_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        if self.runtime is None:
+            return params
+        bound = dict(params)
+        for key in ("file_path", "path", "directory"):
+            if key in bound:
+                bound[key] = self.runtime.translate_path(bound[key])
+        for collection in ("files", "edits"):
+            items = bound.get(collection)
+            if isinstance(items, list):
+                bound[collection] = [
+                    {
+                        **item,
+                        **{
+                            key: self.runtime.translate_path(item[key])
+                            for key in ("file_path", "path")
+                            if key in item
+                        },
+                    }
+                    if isinstance(item, dict) else item
+                    for item in items
+                ]
+        # Model-supplied cwd is ignored.  It cannot redirect file or command
+        # tools to a different checkout.
+        bound["cwd"] = str(self.runtime.workspace_root)
+        if self.execution_policy is not None:
+            remaining = self.execution_policy.remaining()
+            configured = float(bound.get("timeout", 60))
+            if remaining is not None:
+                configured = min(configured, remaining)
+            bound["timeout"] = max(0.001, configured)
+        return bound
 
     def execute(
         self,
@@ -631,6 +676,9 @@ class ToolExecutor:
         tools: dict[str, Any] | None = None,
     ) -> ToolExecuteResult:
         """执行工具，返回 ToolExecuteResult。"""
+        if self.execution_policy is not None:
+            self.execution_policy.check(f"tool:{tool_name}")
+            self.execution_policy.emit("tool_start", tool=tool_name)
         tool_class = classify_tool(tool_name, params)
         execution_id = uuid.uuid4().hex
         started_at = _utc_now()
@@ -693,6 +741,14 @@ class ToolExecutor:
                     state=state.value,
                     attempts=attempts,
                     elapsed_seconds=float(checkpoint["elapsed_seconds"]),
+                )
+            if self.execution_policy is not None:
+                self.execution_policy.emit(
+                    "tool_end",
+                    tool=tool_name,
+                    success=success,
+                    state=state.value,
+                    attempts=attempts,
                 )
             return ToolExecuteResult(
                 tool_name=tool_name,
@@ -843,7 +899,17 @@ class ToolExecutor:
             attempts = attempt
             transition(ToolExecutionState.RUNNING, attempt=attempt)
             try:
-                node = ToolNode(f"exec_{tool_name}", action_type=tool_name, **params)
+                node_params = self._runtime_params(params)
+                node = ToolNode(
+                    f"exec_{tool_name}",
+                    action_type=tool_name,
+                    **node_params,
+                )
+                if self.runtime is not None:
+                    node.bind_command_runtime(
+                        self.runtime.command_prefix,
+                        self.runtime.command_prelude,
+                    )
                 result = enrich_tool_result(tool_name, node.execute(context))
                 raw = result
                 if result.get("success", False):

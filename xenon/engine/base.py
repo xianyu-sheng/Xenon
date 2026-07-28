@@ -24,6 +24,10 @@ import httpx
 
 from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
+from xenon.engine.execution_policy import (
+    EngineDeadlineExceeded,
+    ExecutionPolicy,
+)
 from xenon.repl.model_pool import FAILURE_THRESHOLD  # v0.5.3
 from xenon.utils.llm_client import (
     ResponseTruncatedError,
@@ -89,6 +93,31 @@ class BaseEngine(ABC):
         # a later model and the REPL/status bar should report the real model.
         self.last_model_used: str | None = None
         self._active_cache_phase: str = "request"
+        # Exactly one retry layer owns transient retries.  Benchmark adapters
+        # replace this unbounded interactive policy with one absolute deadline
+        # shared by the whole engine graph.
+        self.execution_policy = ExecutionPolicy(
+            deadline_at=None,
+            request_timeout=120.0,
+            provider_attempts=1,
+            chain_retries=2,
+        )
+
+    def set_execution_policy(self, policy: ExecutionPolicy) -> None:
+        """Bind a policy to this engine (combined graphs use the graph binder)."""
+
+        self.execution_policy = policy
+        self.request_timeout = policy.request_timeout
+
+    def _provider_request_options(self, phase: str) -> dict[str, Any]:
+        """Return the sole provider retry/timeout settings for this request."""
+
+        policy = self.execution_policy
+        timeout = policy.request_budget(phase)
+        return {
+            "timeout": timeout,
+            "max_retries": policy.provider_attempts,
+        }
 
     def _begin_run(self) -> str:
         """P3-Q2: run() 起点调用——生成 run_id 并记日志，返回 run_id。
@@ -300,6 +329,41 @@ class BaseEngine(ABC):
         model_priority: list[str] | None = None,
         cache_phase: str | None = None,
     ) -> str:
+        """Call one model chain with one explicitly owned retry loop."""
+
+        policy = self.execution_policy
+        for retry in range(policy.chain_retries + 1):
+            policy.check("llm_chain")
+            try:
+                result = self._call_llm_once(
+                    messages,
+                    max_tokens,
+                    model_priority=model_priority,
+                    cache_phase=cache_phase,
+                )
+                return result
+            except EngineDeadlineExceeded:
+                raise
+            except RuntimeError as exc:
+                cause = exc.__cause__ if isinstance(exc.__cause__, Exception) else exc
+                if not self._is_transient_error(cause) or retry >= policy.chain_retries:
+                    raise
+                wait = self._extract_retry_after(cause, default=2.0 * (retry + 1))
+                logger.warning(
+                    "全链瞬时失败(%s)，退避 %.1fs 后重试(%s/%s)",
+                    type(cause).__name__, wait, retry + 1, policy.chain_retries,
+                )
+                policy.sleep(wait)
+        raise AssertionError("unreachable retry loop")
+
+    def _call_llm_once(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int | None = None,
+        *,
+        model_priority: list[str] | None = None,
+        cache_phase: str | None = None,
+    ) -> str:
         """调用 LLM，支持多模型 fallback。
 
         ``max_tokens`` 优先级：显式入参 > ``ModelConfig.max_tokens`` > 8192 默认；
@@ -325,6 +389,8 @@ class BaseEngine(ABC):
         last_error: Exception | None = None
         for model_id in (model_priority or self.model_priority):
             started_at = time.monotonic()
+            request_started = False
+            request_succeeded = False
             try:
                 if self.model_pool:
                     self.model_pool.acquire(model_id)  # P2: 并发计数+1(资源感知)
@@ -349,12 +415,19 @@ class BaseEngine(ABC):
                         if self._ctx_mgr is not None else None
                     ),
                 }
-                request_timeout = getattr(self, "request_timeout", None)
-                if request_timeout is not None:
-                    request_options["timeout"] = float(request_timeout)
+                request_options.update(
+                    self._provider_request_options(f"llm:{model_id}")
+                )
                 effort = getattr(mc, "reasoning_effort", "") if mc else ""
                 if effort:
                     request_options["reasoning_effort"] = effort
+                self.execution_policy.emit(
+                    "provider_request_start",
+                    phase=f"llm:{model_id}",
+                    timeout=request_options["timeout"],
+                    provider_attempts=request_options["max_retries"],
+                )
+                request_started = True
                 result = chat_completion(model_id, messages, **request_options)
                 # v0.4.0: record success to model pool
                 if self.model_pool:
@@ -363,6 +436,7 @@ class BaseEngine(ABC):
                         time.monotonic() - started_at,
                     )
                 self.last_model_used = model_id
+                request_succeeded = True
                 return result
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
@@ -393,36 +467,25 @@ class BaseEngine(ABC):
                     self._record_model_failure(model_id)
                 last_error = e
                 logger.warning(tp(f"模型 {model_id} 响应截断: {e}，尝试下一个..."))
+            except EngineDeadlineExceeded:
+                raise
             except Exception as e:
                 if self.model_pool:
                     self._record_model_failure(model_id)
                 last_error = e
                 logger.warning(tp(f"模型 {model_id} 失败: {e}，尝试下一个..."))
             finally:
+                if request_started:
+                    self.execution_policy.emit(
+                        "provider_request_end",
+                        phase=f"llm:{model_id}",
+                        success=request_succeeded,
+                    )
                 # P2: 释放并发计数(无论成败)
                 if self.model_pool:
                     self.model_pool.release(model_id)
-        # P2: 限流退避--全链瞬时失败时退避后重试链首,而非立即上抛
-        # (避免 ReAct 第 N 步 RPM 限流中断,浪费前 N-1 步 token)
-        if self._is_transient_error(last_error) and getattr(self, '_call_retry_depth', 0) < 2:
-            self._call_retry_depth = getattr(self, '_call_retry_depth', 0) + 1
-            try:
-                wait = self._extract_retry_after(last_error, default=2.0 * self._call_retry_depth)
-                logger.warning(tp(
-                    f"全链瞬时失败({type(last_error).__name__}),"
-                    f"退避 {wait:.1f}s 后重试(depth {self._call_retry_depth}/2)"))
-                import time as _t
-                _t.sleep(wait)
-                return self._call_llm(
-                    messages,
-                    max_tokens,
-                    model_priority=model_priority,
-                    cache_phase=effective_cache_phase,
-                )
-            finally:
-                self._call_retry_depth -= 1
         self.callback.on_error(f"所有模型均调用失败: {last_error}")
-        raise RuntimeError(f"所有模型均调用失败: {last_error}")
+        raise RuntimeError(f"所有模型均调用失败: {last_error}") from last_error
 
     def _record_model_failure(self, model_id: str) -> None:
         """Record a failed half-open probe without confusing it with a first failure."""
@@ -485,10 +548,15 @@ class BaseEngine(ABC):
         - 401/403 = 终端错误，立即上抛（认证坏 Key 切模型无意义）；
         - 400 = 该模型可能**不支持 tools/response_format** → 试下一个模型，
           全部 400 则本层降级（返回 None），让外层切到下一层 tier；
-        - 429/5xx/网络/截断 = 瞬时 → 试下一个模型，全败则本层降级。
+        - 429/5xx/网络/截断 = 瞬时 → 试下一个模型，全败立即报错，不能把
+          供应商故障误判为协议不兼容并重复请求其他 tier。
         """
         last_error: Exception | None = None
+        compatibility_only = True
         for model_id in self.model_priority:
+            self.execution_policy.check(f"native:{model_id}")
+            request_started = False
+            request_succeeded = False
             try:
                 mc = self.model_configs.get(model_id)
                 mt = max_tokens or getattr(mc, "max_tokens", None) or 4096
@@ -514,16 +582,24 @@ class BaseEngine(ABC):
                         if self._ctx_mgr is not None else None
                     ),
                 }
-                request_timeout = getattr(self, "request_timeout", None)
-                if request_timeout is not None:
-                    request_options["timeout"] = float(request_timeout)
+                request_options.update(
+                    self._provider_request_options(f"native:{model_id}")
+                )
                 effort = getattr(mc, "reasoning_effort", "") if mc else ""
                 if effort:
                     request_options["reasoning_effort"] = effort
+                self.execution_policy.emit(
+                    "provider_request_start",
+                    phase=f"native:{model_id}",
+                    timeout=request_options["timeout"],
+                    provider_attempts=request_options["max_retries"],
+                )
+                request_started = True
                 response = chat_completion_with_tools(
                     model_id, messages, **request_options,
                 )
                 self.last_model_used = model_id
+                request_succeeded = True
                 return response
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
@@ -533,6 +609,8 @@ class BaseEngine(ABC):
                     raise RuntimeError(
                         f"模型 {model_id} 认证失败 ({status})，请检查 API Key") from e
                 # 400（不支持 tools/format）/ 429 / 5xx：试下一个模型
+                if status != 400:
+                    compatibility_only = False
                 last_error = e
                 logger.warning(
                     f"模型 {model_id} native 调用 HTTP {status}: {e}，尝试下一个...")
@@ -540,12 +618,27 @@ class BaseEngine(ABC):
                 httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout,
                 httpx.RemoteProtocolError, httpx.WriteError, httpx.PoolTimeout,
             ) as e:
+                compatibility_only = False
                 last_error = e
                 logger.warning(f"模型 {model_id} 网络错误 ({type(e).__name__}): {e}，尝试下一个...")
+            except EngineDeadlineExceeded:
+                raise
             except Exception as e:  # noqa: BLE001 — 本层降级，不中断
+                compatibility_only = False
                 last_error = e
                 logger.warning(f"模型 {model_id} native 调用失败: {e}，尝试下一个...")
-        logger.warning(f"_call_with_tools_once 本层全败 ({last_error})，降级")
+            finally:
+                if request_started:
+                    self.execution_policy.emit(
+                        "provider_request_end",
+                        phase=f"native:{model_id}",
+                        success=request_succeeded,
+                    )
+        if last_error is not None and not compatibility_only:
+            raise RuntimeError(
+                f"native provider request failed: {last_error}"
+            ) from last_error
+        logger.warning(f"_call_with_tools_once 本层不兼容 ({last_error})，降级")
         return None
 
     @staticmethod
@@ -681,6 +774,7 @@ class BaseEngine(ABC):
         tiers = [(n, t, f) for n, t, f in tiers if (t or f)]
 
         for tier_name, tools, fmt in tiers:
+            self.execution_policy.check(tier_name)
             resp = self._call_with_tools_once(
                 messages,
                 tools,

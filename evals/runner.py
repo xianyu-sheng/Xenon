@@ -513,7 +513,7 @@ class RealAgent:
                             continue
                         seen_nodes.add(id(candidate))
                         engine_nodes.append(candidate)
-                        for attr in ("planner", "reactor"):
+                        for attr in ("planner", "reactor", "reflector", "executor"):
                             child = getattr(candidate, attr, None)
                             if child is not None:
                                 pending_nodes.append(child)

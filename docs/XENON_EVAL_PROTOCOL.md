@@ -65,3 +65,15 @@ python -m swebench.harness.run_evaluation \
 `resolved = false`，也不能把 `0/0` 伪装成成功率。供应商 429、HTTP 超时、工具
 参数拦截、错误工作目录和本地依赖缺失都保留在 Xenon trace 中，与官方 resolved
 结果分栏报告。
+
+运行时隔离规则：
+
+- Agent 工作树从官方 instance image 的 `/testbed` 提取；
+- 同一工作树 bind mount 回独立 Agent 容器的 `/testbed`；
+- 文件工具只操作该宿主工作树，command/git 只在该官方容器内执行；
+- Agent 容器不挂载 `eval.sh`、test patch 或 reference patch；
+- planner、reactor、reflector 与动态子 Agent 共享一个绝对 deadline；
+- provider 重试与引擎重试只能由一层负责，评测模式均设为单次；
+- 每个引擎在独立子进程运行，父进程实施 hard wall timeout 并持续写 heartbeat；
+- 工作树真实 diff 优先；无工作树修改时只接受能通过 `git apply --check` 的
+  明确 unified diff，禁止从自然语言猜测或修补 patch。
