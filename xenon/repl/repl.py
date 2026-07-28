@@ -38,6 +38,7 @@ from xenon.repl.execution_policy import (
     bind_execution_boundary,
     classify_execution_policy,
 )
+from xenon.repl.input_buffer import PastedTextStore
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.project_context import ProjectContext
 from xenon.repl.prompt_optimizer import get_intent_display, optimize_prompt
@@ -175,6 +176,7 @@ class REPL:
         self._pending_exit: bool = False
 
         # v0.5.0: prompt_toolkit 会话（命令历史 + Tab 补全 + 固定状态栏）
+        self._paste_store = PastedTextStore()
         self._pt_session: Any = None
         self._init_prompt_toolkit()
 
@@ -201,7 +203,19 @@ class REPL:
         if not _HAS_PROMPT_TOOLKIT:
             return
 
+        from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
+        from prompt_toolkit.keys import Keys
         from xenon.repl.completer import OmniCompleter
+
+        # Terminals do not agree on a Shift+Enter wire encoding.  prompt_toolkit
+        # 3.x collapses xterm's modifyOtherKeys form into a plain Enter and has
+        # no built-in mapping for kitty's CSI-u form.  Preserve the modifier by
+        # decoding both as Escape+Enter, which shares our Alt+Enter newline
+        # binding while leaving the ordinary CR/Enter path untouched.
+        shift_enter = (Keys.Escape, Keys.ControlM)
+        ANSI_SEQUENCES["\x1b[13;2u"] = shift_enter
+        ANSI_SEQUENCES["\x1b[27;2;13~"] = shift_enter
+
         cmd_names = list(COMMANDS.keys())
         self._completer = OmniCompleter(cmd_names)
 
@@ -219,6 +233,56 @@ class REPL:
         @kb.add("escape", "enter", eager=True)
         def _(event):
             event.current_buffer.insert_text("\n")
+
+        @kb.add(Keys.BracketedPaste)
+        def _(event):
+            """Fold only the editor view; retain the exact paste for submit."""
+            buffer = event.current_buffer
+            visible = self._paste_store.compact(
+                event.data,
+                occupied_text=buffer.text,
+            )
+            buffer.insert_text(visible)
+
+        @kb.add(Keys.Backspace)
+        def _(event):
+            """Treat a folded paste as one editor atom when deleting left."""
+            buffer = event.current_buffer
+            if buffer.selection_state is not None:
+                buffer.cut_selection()
+                return
+            token = self._paste_store.token_before_cursor(
+                buffer.text, buffer.cursor_position
+            )
+            buffer.delete_before_cursor(len(token) if token else 1)
+
+        @kb.add(Keys.Delete)
+        def _(event):
+            """Treat a folded paste as one editor atom when deleting right."""
+            buffer = event.current_buffer
+            if buffer.selection_state is not None:
+                buffer.cut_selection()
+                return
+            token = self._paste_store.token_after_cursor(
+                buffer.text, buffer.cursor_position
+            )
+            buffer.delete(count=len(token) if token else 1)
+
+        @kb.add(Keys.Left)
+        def _(event):
+            buffer = event.current_buffer
+            token = self._paste_store.token_before_cursor(
+                buffer.text, buffer.cursor_position
+            )
+            buffer.cursor_left(count=len(token) if token else 1)
+
+        @kb.add(Keys.Right)
+        def _(event):
+            buffer = event.current_buffer
+            token = self._paste_store.token_after_cursor(
+                buffer.text, buffer.cursor_position
+            )
+            buffer.cursor_right(count=len(token) if token else 1)
 
         @kb.add("c-o")
         def _(event):
@@ -255,13 +319,21 @@ class REPL:
 
         history_path = _HISTORY_DIR / "input_history.txt"
 
+        paste_store = self._paste_store
+
+        class _PasteAwareFileHistory(FileHistory):
+            """Never persist a UI-only paste token into reusable history."""
+
+            def append_string(self, string: str) -> None:
+                super().append_string(paste_store.expand(string))
+
         import os
         if os.environ.get("XENON_NO_PT") == "1":
             self._pt_session = None
         else:
             try:
                 self._pt_session = PromptSession(
-                    history=FileHistory(str(history_path)),
+                    history=_PasteAwareFileHistory(str(history_path)),
                     completer=self._completer,
                     key_bindings=kb,
                     style=style,
@@ -1322,6 +1394,7 @@ class REPL:
 
     def _read_input_pt(self) -> str:
         """上下平行线定界输入；运行状态独立固定在终端屏幕底端。"""
+        self._paste_store.reset()
         if hasattr(self, '_completer'):
             self._completer.update_commands(list(COMMANDS.keys()))
             if hasattr(self, 'model_pool') and self.model_pool:
@@ -1346,7 +1419,10 @@ class REPL:
         except EOFError:
             raise KeyboardInterrupt
 
-        return text.strip()
+        # Strip only editor whitespace around the visible value, then restore
+        # paste blocks.  Leading/trailing whitespace *inside* a pasted block is
+        # therefore preserved exactly.
+        return self._paste_store.expand(text.strip())
 
     def _read_input_windows(self) -> str:
         import ctypes
@@ -1532,6 +1608,8 @@ class REPL:
         粘贴多行文本会被自动检测并正确处理。
         """
         import sys
+        import codecs
+        import os
         import termios
         import tty
         import unicodedata
@@ -1562,6 +1640,9 @@ class REPL:
             return _display_width("".join(chars[:upto]))
 
         fd = sys.stdin.fileno()
+        decoder = codecs.getincrementaldecoder(sys.stdin.encoding or "utf-8")(
+            errors="replace"
+        )
         old_settings = termios.tcgetattr(fd)
         try:
             tty.setraw(fd)
@@ -1576,9 +1657,11 @@ class REPL:
             current_line: list[str] = []
             cursor_pos: int = 0
             prompt_active = True
+            paste_store = PastedTextStore()
 
             # ── 粘贴模式状态 ─────────────────────────────
             paste_mode = False
+            paste_buffer: list[str] = []
             # v0.3.0 修复（Bug：粘贴结束信号丢失时 paste_mode 死锁）：
             # 某些终端/网络/SSH 会把 \x1b[201~ 结束信号切碎或丢失，导致 paste_mode 永远 True，
             # 后续用户按键（空格/字母）进入 paste_mode 分支被插入 current_line 但不重绘，
@@ -1588,6 +1671,36 @@ class REPL:
             import time as _time
             paste_last_byte_at: float | None = None
             PASTE_TIMEOUT_S = 0.3
+
+            def _insert_text(text: str) -> None:
+                """Insert text at the cursor without turning lines into turns."""
+                nonlocal current_line, cursor_pos
+                parts = text.split("\n")
+                before = current_line[:cursor_pos]
+                after = current_line[cursor_pos:]
+                if len(parts) == 1:
+                    inserted = list(parts[0])
+                    current_line = before + inserted + after
+                    cursor_pos += len(inserted)
+                    return
+
+                lines.append("".join(before) + parts[0])
+                lines.extend(parts[1:-1])
+                current_line = list(parts[-1]) + after
+                cursor_pos = len(parts[-1])
+
+            def _finish_paste() -> None:
+                """Commit a paste to the editor as full text or one UI token."""
+                nonlocal paste_mode, paste_buffer, paste_last_byte_at
+                pasted = "".join(paste_buffer)
+                occupied = "\n".join([*lines, "".join(current_line)])
+                _insert_text(
+                    paste_store.compact(pasted, occupied_text=occupied)
+                )
+                paste_buffer = []
+                paste_mode = False
+                paste_last_byte_at = None
+                _redraw_line()
 
             def _redraw_line() -> None:
                 """清除当前行并重绘（正确处理 CJK 宽字符）。"""
@@ -1628,7 +1741,17 @@ class REPL:
             while True:
                 # 用 select 检查是否有输入（超时处理粘贴检测 + paste_mode 超时退出）
                 if select([sys.stdin], [], [], 0.01)[0]:
-                    ch = sys.stdin.read(1)
+                    # Do not combine select(fd) with TextIOWrapper.read(1): the
+                    # wrapper may prefetch the remaining bytes, leaving them in
+                    # Python's private buffer while select waits forever on an
+                    # already-empty fd.  Read the fd itself and decode Unicode
+                    # incrementally so batched paste/key sequences cannot hang.
+                    raw = os.read(fd, 1)
+                    if not raw:
+                        raise KeyboardInterrupt
+                    ch = decoder.decode(raw)
+                    if not ch:
+                        continue
                 else:
                     # v0.3.0 修复：paste_mode 期间 select 0.3s 无新字节 → 自动退出
                     # 解决"结束信号 \x1b[201~ 丢失导致 paste_mode 死锁"问题。
@@ -1637,9 +1760,7 @@ class REPL:
                         and paste_last_byte_at is not None
                         and _time.monotonic() - paste_last_byte_at > PASTE_TIMEOUT_S
                     ):
-                        paste_mode = False
-                        paste_last_byte_at = None
-                        _redraw_line()
+                        _finish_paste()
                     continue
 
                 # 处理转义序列
@@ -1655,27 +1776,19 @@ class REPL:
                     seq_buffer += ch
                     # 守卫 ①：paste end 总是截留（精确 6 字符匹配）
                     if seq_buffer == '\x1b[201~':
-                        paste_mode = False
                         seq_buffer = ''
-                        paste_last_byte_at = None
-                        _redraw_line()
+                        _finish_paste()
                         continue
                     if paste_mode:
                         # 守卫 ②：累积 8 字节时子串搜索 paste end
                         if '\x1b[201~' in seq_buffer:
                             idx = seq_buffer.index('\x1b[201~')
-                            for c in seq_buffer[:idx]:
-                                current_line.insert(cursor_pos, c)
-                                cursor_pos += 1
-                            paste_mode = False
+                            paste_buffer.extend(seq_buffer[:idx])
                             seq_buffer = ''
-                            paste_last_byte_at = None
-                            _redraw_line()
+                            _finish_paste()
                             continue
                         if len(seq_buffer) >= 8:
-                            for c in seq_buffer:
-                                current_line.insert(cursor_pos, c)
-                                cursor_pos += 1
+                            paste_buffer.extend(seq_buffer)
                             seq_buffer = ''
                             paste_last_byte_at = _time.monotonic()
                         continue
@@ -1686,15 +1799,14 @@ class REPL:
                     if seq_buffer == '\x1b[200~':
                         # 开始粘贴 — 暂停逐字符重绘
                         paste_mode = True
+                        paste_buffer = []
                         paste_last_byte_at = _time.monotonic()
                         seq_buffer = ""
                         continue
                     if seq_buffer == '\x1b[201~':
                         # 粘贴结束 — 一次性重绘
-                        paste_mode = False
-                        paste_last_byte_at = None
-                        _redraw_line()
                         seq_buffer = ""
+                        _finish_paste()
                         continue
 
                     # 尝试匹配已知序列
@@ -1719,6 +1831,19 @@ class REPL:
                         sys.stdout.write(CONTINUATION)
                         sys.stdout.flush()
                         seq_buffer = ""
+                        continue
+
+                    # Shift+Enter（xterm modifyOtherKeys）: \x1b[27;2;13~
+                    if seq_buffer == '\x1b[27;2;13~':
+                        lines.append("".join(current_line))
+                        current_line = []
+                        cursor_pos = 0
+                        sys.stdout.write("\r\n")
+                        sys.stdout.write(CONTINUATION)
+                        sys.stdout.flush()
+                        seq_buffer = ""
+                        continue
+                    if '\x1b[27;2;13~'.startswith(seq_buffer):
                         continue
 
                     # 方向键: \x1b[A (上), \x1b[B (下), \x1b[C (右), \x1b[D (左)
@@ -1777,28 +1902,22 @@ class REPL:
                 # ── 粘贴模式：缓冲修改，不重绘 ──
                 if paste_mode:
                     if ch in ('\r', '\n'):
-                        # 粘贴中的换行：完成当前行，开始新行
-                        lines.append("".join(current_line))
-                        current_line = []
-                        cursor_pos = 0
+                        paste_buffer.append(ch)
                     elif ch == '\x03':   # Ctrl+C during paste
                         sys.stdout.write("\r\n")
                         sys.stdout.flush()
                         raise KeyboardInterrupt
                     elif ch in ('\x7f', '\x08'):  # Backspace
-                        if cursor_pos > 0:
-                            current_line.pop(cursor_pos - 1)
-                            cursor_pos -= 1
+                        if paste_buffer:
+                            paste_buffer.pop()
                     elif ch == '\x1b':
                         # v0.3.0+ 修复（C-1 配套）：粘贴期间遇到 ESC 字节
                         # 不再走转义序列累积器（已在上方 if 屏蔽），改当普通
                         # 字符插入 buffer——用户主动复制粘贴含 ANSI 转义序列
                         # 的代码（如 `echo -e "\033[31m红色\033[0m"`）应保留 ESC
-                        current_line.insert(cursor_pos, ch)
-                        cursor_pos += 1
+                        paste_buffer.append(ch)
                     elif ord(ch) >= 0x20:
-                        current_line.insert(cursor_pos, ch)
-                        cursor_pos += 1
+                        paste_buffer.append(ch)
                     # v0.3.0 修复：每次粘贴期间字节都要刷新 last_byte_at，
                     # 否则 select 0.3s 超时检查会误判 paste_mode 空闲
                     paste_last_byte_at = _time.monotonic()
@@ -1852,7 +1971,7 @@ class REPL:
             if current_line:
                 lines.append("".join(current_line))
 
-            return "\n".join(lines)
+            return paste_store.expand("\n".join(lines))
 
         finally:
             # 禁用粘贴括号模式，恢复终端设置

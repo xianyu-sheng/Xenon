@@ -202,3 +202,75 @@ def test_ctrl_o_long_output_redraws_prompt_and_ctrl_c_remains_responsive(
 
     assert "CTRL-C-INTERRUPTED" in output
     assert "Traceback" not in output
+
+
+@pytest.mark.parametrize(
+    "newline_key",
+    [b"\x1b[13;2u", b"\x1b[27;2;13~", b"\x1b\r"],
+    ids=["kitty-shift-enter", "xterm-shift-enter", "alt-enter"],
+)
+def test_prompt_toolkit_modified_enter_inserts_newline_and_enter_submits(
+    pty_child,
+    newline_key,
+):
+    child = pty_child(
+        "from xenon.repl.repl import REPL\n"
+        "value = REPL(streaming=False)._read_input()\n"
+        "print(f'RESULT={value!r}', flush=True)\n"
+    )
+
+    child.wait_for("❯")
+    child.send(b"first" + newline_key + b"second\r")
+    output = child.finish()
+
+    assert "RESULT='first\\nsecond'" in output
+    assert "Traceback" not in output
+
+
+def test_prompt_toolkit_long_paste_is_folded_but_returns_full_text(pty_child):
+    child = pty_child(
+        "import hashlib\n"
+        "from xenon.repl.repl import REPL\n"
+        "value = REPL(streaming=False)._read_input()\n"
+        "digest = hashlib.sha256(value.encode()).hexdigest()\n"
+        "print(f'RESULT={len(value)}:{value.count(chr(10))}:{digest}', flush=True)\n"
+    )
+    payload = ("BEGIN\r\n" + "x" * 1200 + "\rEND").encode()
+    expected = "BEGIN\n" + "x" * 1200 + "\nEND"
+    expected_digest = __import__("hashlib").sha256(expected.encode()).hexdigest()
+
+    child.wait_for("❯")
+    child.send(b"\x1b[200~" + payload + b"\x1b[201~")
+    visible = child.wait_for("[Pasted #1 +1,210 chars]")
+    assert "BEGIN" not in _plain_terminal_text(visible)
+    child.send(b"\r")
+    output = child.finish()
+
+    assert f"RESULT=1210:2:{expected_digest}" in output
+    assert "Traceback" not in output
+
+
+def test_unix_fallback_long_paste_and_xterm_shift_enter(pty_child):
+    child = pty_child(
+        "import hashlib, os\n"
+        "os.environ['XENON_NO_PT'] = '1'\n"
+        "from xenon.repl.repl import REPL\n"
+        "value = REPL(streaming=False)._read_input()\n"
+        "digest = hashlib.sha256(value.encode()).hexdigest()\n"
+        "print(f'RESULT={value.count(chr(10))}:{len(value)}:{digest}', flush=True)\n"
+    )
+    # Multibyte input exercises the fd-level incremental decoder as well as
+    # the fallback paste compactor.
+    pasted = "中" * 1100
+    expected = f"first\n{pasted}tail\nlast"
+    expected_digest = __import__("hashlib").sha256(expected.encode()).hexdigest()
+
+    child.wait_for("You")
+    child.send(b"first\x1b[13;2u")
+    child.send(b"\x1b[200~" + pasted.encode() + b"\x1b[201~")
+    child.wait_for("[Pasted #1 +1,100 chars]")
+    child.send(b"tail\x1b[27;2;13~last\r")
+    output = child.finish()
+
+    assert f"RESULT=2:{len(expected)}:{expected_digest}" in output
+    assert "Traceback" not in output
