@@ -1,0 +1,57 @@
+{"timestamp": 1785288336.2435212, "event": "task_start", "instance_id": "astropy__astropy-12907"}
+{"timestamp": 1785288336.2475812, "event": "image_prepare_start", "instance_id": "astropy__astropy-12907", "namespace": "swebench"}
+{"timestamp": 1785288337.6058376, "event": "image_prepare_end", "instance_id": "astropy__astropy-12907", "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest", "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63"}
+{"timestamp": 1785288338.4292932, "event": "engine_start", "instance_id": "astropy__astropy-12907", "engine": "react"}
+{"timestamp": 1785288343.3657126, "event": "container_ready", "instance_id": "astropy__astropy-12907", "engine": "react", "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest", "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63", "container_name": "sweb.xenon.astropy__astropy-12907.react.0940d468", "container_workdir": "/testbed"}
+{"timestamp": 1785288343.40239, "event": "provider_request_start", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "timeout": 120.0, "provider_attempts": 3}
+{"timestamp": 1785288347.6189842, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 915.0}
+{"timestamp": 1785288350.3196964, "event": "provider_request_end", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "success": true}
+{"timestamp": 1785288350.3229692, "event": "tool_start", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "read_file"}
+{"timestamp": 1785288350.3272388, "event": "tool_end", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "read_file", "success": true, "state": "succeeded", "attempts": 1}
+{"timestamp": 1785288350.3294494, "event": "provider_request_start", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "timeout": 120.0, "provider_attempts": 3}
+{"timestamp": 1785288353.44556, "event": "provider_request_end", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "success": true}
+{"timestamp": 1785288353.4487307, "event": "tool_start", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "read_file"}
+{"timestamp": 1785288353.454262, "event": "tool_end", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "read_file", "success": true, "state": "succeeded", "attempts": 1}
+{"timestamp": 1785288353.4568563, "event": "provider_request_start", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "timeout": 120.0, "provider_attempts": 3}
+{"timestamp": 1785288355.8081796, "event": "provider_request_end", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "success": true}
+{"timestamp": 1785288355.8110397, "event": "tool_start", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "read_file"}
+{"timestamp": 1785288355.8166304, "event": "tool_end", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "read_file", "success": true, "state": "succeeded", "attempts": 1}
+{"timestamp": 1785288355.8195095, "event": "provider_request_start", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "timeout": 120.0, "provider_attempts": 3}
+{"timestamp": 1785288357.631917, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 904.987}
+{"timestamp": 1785288357.7506158, "event": "provider_request_end", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "success": true}
+{"timestamp": 1785288357.7522163, "event": "tool_start", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "read_file"}
+{"timestamp": 1785288357.7543314, "event": "tool_end", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "read_file", "success": true, "state": "succeeded", "attempts": 1}
+{"timestamp": 1785288357.7558508, "event": "provider_pacing", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "delay_seconds": 0.064}
+{"timestamp": 1785288357.8210084, "event": "provider_request_start", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "timeout": 120.0, "provider_attempts": 3}
+{"timestamp": 1785288367.6430674, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 894.975}
+{"timestamp": 1785288377.6550565, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 884.964}
+{"timestamp": 1785288377.8070278, "event": "provider_request_end", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "success": true}
+{"timestamp": 1785288377.8102956, "event": "tool_start", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "edit_file"}
+{"timestamp": 1785288377.821107, "event": "tool_end", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "edit_file", "success": true, "state": "succeeded", "attempts": 1}
+{"timestamp": 1785288377.8238041, "event": "provider_request_start", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "timeout": 120.0, "provider_attempts": 3}
+{"timestamp": 1785288381.0684826, "event": "provider_request_end", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "success": true}
+{"timestamp": 1785288381.0717266, "event": "tool_start", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "command"}
+{"timestamp": 1785288381.075325, "event": "tool_end", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "command", "success": false, "state": "failed", "attempts": 0}
+{"timestamp": 1785288381.077803, "event": "provider_request_start", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "timeout": 120.0, "provider_attempts": 3}
+{"timestamp": 1785288384.837385, "event": "provider_request_end", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "success": true}
+{"timestamp": 1785288384.8509502, "event": "tool_start", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "write_file"}
+{"timestamp": 1785288384.874371, "event": "tool_end", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "write_file", "success": true, "state": "succeeded", "attempts": 1}
+{"timestamp": 1785288384.8828871, "event": "provider_request_start", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "timeout": 120.0, "provider_attempts": 3}
+{"timestamp": 1785288386.5284288, "event": "provider_request_end", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "success": true}
+{"timestamp": 1785288386.5314307, "event": "tool_start", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "command"}
+{"timestamp": 1785288386.91218, "event": "tool_end", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "command", "success": false, "state": "failed", "attempts": 1}
+{"timestamp": 1785288386.9152598, "event": "provider_request_start", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "timeout": 120.0, "provider_attempts": 3}
+{"timestamp": 1785288387.66704, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 874.952}
+{"timestamp": 1785288389.1959126, "event": "provider_request_end", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "success": true}
+{"timestamp": 1785288389.1988158, "event": "tool_start", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "read_file"}
+{"timestamp": 1785288389.2048333, "event": "tool_end", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "read_file", "success": true, "state": "succeeded", "attempts": 1}
+{"timestamp": 1785288389.2077744, "event": "provider_request_start", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "timeout": 120.0, "provider_attempts": 3}
+{"timestamp": 1785288391.5331, "event": "provider_request_end", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "native:deepseek/deepseek-v4-pro", "success": true}
+{"timestamp": 1785288391.5359507, "event": "tool_start", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "read_file"}
+{"timestamp": 1785288391.5410101, "event": "tool_end", "instance_id": "astropy__astropy-12907", "engine": "react", "tool": "read_file", "success": true, "state": "succeeded", "attempts": 1}
+{"timestamp": 1785288391.5435932, "event": "provider_request_start", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "llm:deepseek/deepseek-v4-pro", "timeout": 120.0, "provider_attempts": 3}
+{"timestamp": 1785288397.6790373, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 864.94}
+{"timestamp": 1785288407.6917794, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 854.927}
+{"timestamp": 1785288408.5259166, "event": "provider_request_end", "instance_id": "astropy__astropy-12907", "engine": "react", "phase": "llm:deepseek/deepseek-v4-pro", "success": true}
+{"timestamp": 1785288408.9045765, "event": "patch_extracted", "instance_id": "astropy__astropy-12907", "engine": "react", "patch_source": "workspace", "apply_success": true, "patch_bytes": 504}
+{"timestamp": 1785288410.2063506, "event": "engine_end", "instance_id": "astropy__astropy-12907", "engine": "react", "error": null, "elapsed_seconds": 71.775}

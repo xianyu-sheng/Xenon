@@ -41,6 +41,25 @@ MAX_CONTINUATIONS = 3
 _REASONING_EFFORTS = frozenset({"low", "medium", "high", "max"})
 
 
+def _retry_delay(error: httpx.HTTPStatusError, attempt: int) -> float:
+    """Return a bounded provider-directed retry delay when available."""
+    try:
+        headers = error.response.headers
+        retry_after = headers.get("retry-after")
+        if retry_after is None:
+            # Plain mappings used by adapters/tests are not necessarily
+            # case-insensitive like ``httpx.Headers``.
+            retry_after = headers.get("Retry-After")
+    except (AttributeError, TypeError):
+        retry_after = None
+    if retry_after is not None:
+        try:
+            return min(max(float(retry_after), 0.0), 30.0)
+        except (TypeError, ValueError):
+            pass
+    return min(float(2 ** attempt), 30.0)
+
+
 def _normalize_reasoning_effort(value: str | None) -> str | None:
     """Validate an OpenAI-compatible reasoning effort value."""
     if value is None or not str(value).strip():
@@ -743,17 +762,21 @@ def chat_completion(
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             if status == 429:
-                # 限流 — 指数退避
-                wait = 2 ** attempt
-                logger.warning(f"[{model_id}] 429 限流，等待 {wait}s 后重试 (第 {attempt + 1}/{attempt_count} 次)")
-                time.sleep(wait)
                 last_error = e
+                if attempt + 1 >= attempt_count:
+                    break
+                # Prefer the provider's rolling-window guidance when present.
+                wait = _retry_delay(e, attempt)
+                logger.warning(f"[{model_id}] 429 限流，等待 {wait:g}s 后重试 (第 {attempt + 1}/{attempt_count} 次)")
+                time.sleep(wait)
             elif 500 <= status < 600:
-                # 服务端错误 — 指数退避重试
-                wait = 2 ** attempt
-                logger.warning(f"[{model_id}] {status} 服务端错误，等待 {wait}s 后重试 (第 {attempt + 1}/{attempt_count} 次)")
-                time.sleep(wait)
                 last_error = e
+                if attempt + 1 >= attempt_count:
+                    break
+                # 服务端错误 — 指数退避重试
+                wait = _retry_delay(e, attempt)
+                logger.warning(f"[{model_id}] {status} 服务端错误，等待 {wait:g}s 后重试 (第 {attempt + 1}/{attempt_count} 次)")
+                time.sleep(wait)
             else:
                 # 其他 HTTP 错误 — 不重试
                 raise
@@ -767,10 +790,12 @@ def chat_completion(
             httpx.PoolTimeout,           # 连接池耗尽
         ) as e:
             # 网络/协议错误 — 指数退避重试
+            last_error = e
+            if attempt + 1 >= attempt_count:
+                break
             wait = min(2 ** attempt, 8)
             logger.warning(f"[{model_id}] 网络错误 ({type(e).__name__}): {e}，等待 {wait}s 后重试 (第 {attempt + 1}/{attempt_count} 次)")
             time.sleep(wait)
-            last_error = e
 
     # 所有重试都失败
     raise last_error
@@ -1126,41 +1151,56 @@ def chat_completion_with_tools(
         max_tokens = provider_cap
     last_error: Exception | None = None
 
+    # Keep the callback contract identical to ``chat_completion``.  Native
+    # function-calling used to return usage on LLMResponse only, which made
+    # UsageTracker and Cache Rails report zero calls for tool-heavy engines.
+    _usage_tl.usage_acc = LLMUsage()
+    started_at = time.monotonic()
+
     attempt_count = max(1, max_retries)
     for attempt in range(attempt_count):
         try:
             if endpoint.provider == "anthropic":
-                return _call_anthropic_with_tools(
+                response = _call_anthropic_with_tools(
                     endpoint, messages, tools, response_format, tool_choice,
                     max_tokens, temperature, timeout,
                 )
-            if reasoning_effort:
-                return _call_openai_compat_with_tools(
+            elif reasoning_effort:
+                response = _call_openai_compat_with_tools(
                     endpoint, messages, tools, response_format, tool_choice,
                     max_tokens, temperature, timeout,
                     reasoning_effort=reasoning_effort,
                 )
-            return _call_openai_compat_with_tools(
-                endpoint, messages, tools, response_format, tool_choice,
-                max_tokens, temperature, timeout,
-            )
+            else:
+                response = _call_openai_compat_with_tools(
+                    endpoint, messages, tools, response_format, tool_choice,
+                    max_tokens, temperature, timeout,
+                )
+            accumulated = getattr(_usage_tl, "usage_acc", None)
+            usage = accumulated if isinstance(accumulated, LLMUsage) else response.usage
+            _emit_usage(model_id, usage, time.monotonic() - started_at)
+            return response
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             if status == 429 or 500 <= status < 600:
-                wait = 2 ** attempt
-                logger.warning(f"[{model_id}] {status} 失败，等待 {wait}s 重试 (第 {attempt + 1}/{attempt_count} 次)")
-                time.sleep(wait)
                 last_error = e
+                if attempt + 1 >= attempt_count:
+                    break
+                wait = _retry_delay(e, attempt)
+                logger.warning(f"[{model_id}] {status} 失败，等待 {wait:g}s 重试 (第 {attempt + 1}/{attempt_count} 次)")
+                time.sleep(wait)
             else:
                 raise
         except (
             httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout,
             httpx.RemoteProtocolError, httpx.WriteError, httpx.PoolTimeout,
         ) as e:
+            last_error = e
+            if attempt + 1 >= attempt_count:
+                break
             wait = min(2 ** attempt, 8)
             logger.warning(f"[{model_id}] 网络错误 ({type(e).__name__}): {e}，等待 {wait}s 重试")
             time.sleep(wait)
-            last_error = e
 
     raise last_error  # type: ignore[misc]
 

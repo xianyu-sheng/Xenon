@@ -1,0 +1,45 @@
+{"timestamp": 1785286924.6260738, "event": "task_start", "instance_id": "astropy__astropy-12907"}
+{"timestamp": 1785286924.6311095, "event": "image_prepare_start", "instance_id": "astropy__astropy-12907", "namespace": "swebench"}
+{"timestamp": 1785286926.108283, "event": "image_prepare_end", "instance_id": "astropy__astropy-12907", "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest", "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63"}
+{"timestamp": 1785286926.9490108, "event": "engine_start", "instance_id": "astropy__astropy-12907", "engine": "react"}
+{"timestamp": 1785286936.1208732, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 915.0}
+{"timestamp": 1785286946.1319156, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 904.989}
+{"timestamp": 1785286956.1439736, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 894.978}
+{"timestamp": 1785286966.1560585, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 884.965}
+{"timestamp": 1785286976.1688187, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 874.952}
+{"timestamp": 1785286986.1809268, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 864.94}
+{"timestamp": 1785286996.192986, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 854.928}
+{"timestamp": 1785287006.2050982, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 844.916}
+{"timestamp": 1785287016.2189324, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 834.902}
+{"timestamp": 1785287026.231629, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 824.89}
+{"timestamp": 1785287036.2439852, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 814.877}
+{"timestamp": 1785287046.3059192, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 804.815}
+{"timestamp": 1785287056.3179224, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 794.803}
+{"timestamp": 1785287066.329931, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 784.791}
+{"timestamp": 1785287076.341978, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 774.779}
+{"timestamp": 1785287086.3538032, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 764.767}
+{"timestamp": 1785287096.3649764, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 754.756}
+{"timestamp": 1785287106.3769853, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 744.744}
+{"timestamp": 1785287116.388798, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 734.732}
+{"timestamp": 1785287126.4019787, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 724.719}
+{"timestamp": 1785287136.4175298, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 714.704}
+{"timestamp": 1785287146.4299378, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 704.691}
+{"timestamp": 1785287156.4440114, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 694.677}
+{"timestamp": 1785287166.4575076, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 684.664}
+{"timestamp": 1785287176.4701834, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 674.651}
+{"timestamp": 1785287186.4819915, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 664.639}
+{"timestamp": 1785287196.494996, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 654.626}
+{"timestamp": 1785287206.5070016, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 644.614}
+{"timestamp": 1785287216.5188642, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 634.602}
+{"timestamp": 1785287226.6460052, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 624.475}
+{"timestamp": 1785287236.6578078, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 614.463}
+{"timestamp": 1785287246.669955, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 604.451}
+{"timestamp": 1785287256.6838253, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 594.437}
+{"timestamp": 1785287266.6980052, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 584.423}
+{"timestamp": 1785287276.9570181, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 574.164}
+{"timestamp": 1785287286.9700236, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 564.151}
+{"timestamp": 1785287296.9819875, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 554.139}
+{"timestamp": 1785287306.9939795, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 544.127}
+{"timestamp": 1785287317.0070105, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 534.115}
+{"timestamp": 1785287327.0189757, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 524.102}
+{"timestamp": 1785287337.0309289, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "react", "remaining_seconds": 514.09}

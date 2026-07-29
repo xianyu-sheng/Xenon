@@ -1,0 +1,12 @@
+{"timestamp": 1785288269.5171843, "event": "task_start", "instance_id": "astropy__astropy-12907"}
+{"timestamp": 1785288269.522591, "event": "image_prepare_start", "instance_id": "astropy__astropy-12907", "namespace": "swebench"}
+{"timestamp": 1785288279.5340276, "event": "image_prepare_heartbeat", "instance_id": "astropy__astropy-12907", "elapsed_seconds": 10.011, "remaining_seconds": 599.999}
+{"timestamp": 1785288283.3958035, "event": "image_prepare_end", "instance_id": "astropy__astropy-12907", "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest", "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63"}
+{"timestamp": 1785288284.6599438, "event": "engine_start", "instance_id": "astropy__astropy-12907", "engine": "direct"}
+{"timestamp": 1785288289.395475, "event": "container_ready", "instance_id": "astropy__astropy-12907", "engine": "direct", "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest", "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63", "container_name": "sweb.xenon.astropy__astropy-12907.direct.54c36bc7", "container_workdir": "/testbed"}
+{"timestamp": 1785288289.3980443, "event": "provider_request_start", "instance_id": "astropy__astropy-12907", "engine": "direct", "phase": "direct"}
+{"timestamp": 1785288293.4090405, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "direct", "remaining_seconds": 915.0}
+{"timestamp": 1785288303.4210205, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "direct", "remaining_seconds": 904.988}
+{"timestamp": 1785288303.6922457, "event": "provider_request_end", "instance_id": "astropy__astropy-12907", "engine": "direct", "phase": "direct", "success": true}
+{"timestamp": 1785288304.058591, "event": "patch_extracted", "instance_id": "astropy__astropy-12907", "engine": "direct", "patch_source": "empty", "apply_success": false, "patch_bytes": 0}
+{"timestamp": 1785288304.168337, "event": "engine_end", "instance_id": "astropy__astropy-12907", "engine": "direct", "error": null, "elapsed_seconds": 19.508}

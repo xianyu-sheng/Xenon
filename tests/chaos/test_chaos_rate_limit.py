@@ -144,7 +144,9 @@ def test_429_exponential_backoff_delays(monkeypatch):
     delays: list[float] = []
 
     def fake_post(url, **kwargs):
-        return _make_429_response()
+        response = _make_429_response()
+        response.headers = {}
+        return response
 
     def fake_sleep(s):
         delays.append(s)
@@ -167,6 +169,32 @@ def test_429_exponential_backoff_delays(monkeypatch):
             [{"role": "user", "content": "hi"}],
             max_retries=3,
         )
-    # max_retries=3 共 3 次尝试，每次失败后 sleep：
-    # attempt 0 → 1s, attempt 1 → 2s, attempt 2 → 4s（最后一次失败后 sleep）
-    assert delays == [1, 2, 4], f"应符合 2^n 退避，实际 {delays}"
+    # max_retries=3 共 3 次尝试，只在确实还有下一次请求时 sleep。
+    assert delays == [1, 2], f"应符合 2^n 退避，实际 {delays}"
+
+
+def test_429_honours_retry_after(monkeypatch):
+    """Provider rolling-window guidance takes precedence over local backoff."""
+    delays: list[float] = []
+
+    response = _make_429_response()
+    response.headers = {"Retry-After": "7"}
+    fake_client = MagicMock()
+    fake_client.is_closed = False
+    fake_client.post.return_value = response
+    fake_client.close = MagicMock()
+
+    monkeypatch.setattr(llm_client, "_get_pooled_client", lambda *a, **kw: fake_client)
+    monkeypatch.setattr(llm_client, "build_endpoint", lambda *a, **kw: MagicMock(
+        provider="openai", model_name="gpt-4o", base_url="https://api.test/v1",
+        api_key="sk-test", max_tokens=4096,
+    ))
+    monkeypatch.setattr(time, "sleep", delays.append)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        llm_client.chat_completion(
+            "openai/gpt-4o",
+            [{"role": "user", "content": "hi"}],
+            max_retries=2,
+        )
+    assert delays == [7.0]

@@ -1,0 +1,17 @@
+{"timestamp": 1785285913.1284232, "event": "task_start", "instance_id": "astropy__astropy-12907"}
+{"timestamp": 1785285913.1322417, "event": "image_prepare_start", "instance_id": "astropy__astropy-12907", "namespace": "swebench"}
+{"timestamp": 1785285914.6914124, "event": "image_prepare_end", "instance_id": "astropy__astropy-12907", "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest", "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63"}
+{"timestamp": 1785285915.472951, "event": "engine_start", "instance_id": "astropy__astropy-12907", "engine": "reflection"}
+{"timestamp": 1785285924.7050834, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "reflection", "remaining_seconds": 915.0}
+{"timestamp": 1785285934.717221, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "reflection", "remaining_seconds": 904.988}
+{"timestamp": 1785285944.7299669, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "reflection", "remaining_seconds": 894.975}
+{"timestamp": 1785285954.741923, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "reflection", "remaining_seconds": 884.963}
+{"timestamp": 1785285964.7542863, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "reflection", "remaining_seconds": 874.951}
+{"timestamp": 1785285974.7672668, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "reflection", "remaining_seconds": 864.938}
+{"timestamp": 1785285984.7790945, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "reflection", "remaining_seconds": 854.926}
+{"timestamp": 1785285994.79196, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "reflection", "remaining_seconds": 844.913}
+{"timestamp": 1785286004.8040001, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "reflection", "remaining_seconds": 834.901}
+{"timestamp": 1785286014.8160093, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "reflection", "remaining_seconds": 824.889}
+{"timestamp": 1785286024.8279607, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "reflection", "remaining_seconds": 814.877}
+{"timestamp": 1785286034.8399434, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "reflection", "remaining_seconds": 804.865}
+{"timestamp": 1785286044.8519483, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "reflection", "remaining_seconds": 794.853}

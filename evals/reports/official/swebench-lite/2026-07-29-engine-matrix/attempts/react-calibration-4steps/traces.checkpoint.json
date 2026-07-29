@@ -1,0 +1,63 @@
+[
+  {
+    "instance_id": "astropy__astropy-12907",
+    "model_name_or_path": "xenon/react/custom/deepseek-v4-pro-260425",
+    "model_patch": "",
+    "engine": "react",
+    "elapsed_seconds": 35.856,
+    "error": null,
+    "output_tail": "{}",
+    "tool_trace": [
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.003196,
+        "error": null,
+        "result": "# Licensed under a 3-clause BSD style license - see LICENSE.rst\n\n\"\"\"\nFunctions to determine if a model is separable, i.e.\nif the model outputs are independent.\n\nIt analyzes ``n_inputs``, ``n_outputs`` and the operators\nin a compound model by stepping through the transforms\nand creating a ``coord_matrix`` of shape (``n_outputs``, ``n_inputs``).\n\n\nEach modeling operator is represented by a function which\ntakes two simple models (or two ``coord_matrix`` arrays) and\nreturns an array of shape (``n_ou"
+      },
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.002774,
+        "error": null,
+        "result": "    >>> separability_matrix(Shift(1) & Shift(2) | Mapping([0, 1, 0, 1]) | \\\n        Polynomial2D(1) & Polynomial2D(2))\n        array([[ True,  True], [ True,  True]]...)\n    >>> separability_matrix(Shift(1) & Shift(2) | Mapping([0, 1, 0, 1]))\n        array([[ True, False], [False,  True], [ True, False], [False,  True]]...)\n\n    \"\"\"\n    if transform.n_inputs == 1 and transform.n_outputs > 1:\n        return np.ones((transform.n_outputs, transform.n_inputs),\n                       dtype=np.bool_)\n"
+      },
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.001351,
+        "error": null,
+        "result": "\ndef _coord_matrix(model, pos, noutp):\n    \"\"\"\n    Create an array representing inputs and outputs of a simple model.\n\n    The array has a shape (noutp, model.n_inputs).\n\n    Parameters\n    ----------\n    model : `astropy.modeling.Model`\n        model\n    pos : str\n        Position of this model in the expression tree.\n        One of ['left', 'right'].\n    noutp : int\n        Number of outputs of the compound model of which the input model\n        is a left or right child.\n\n    \"\"\"\n    if isinst"
+      }
+    ],
+    "patch_source": "empty",
+    "patch_apply_success": false,
+    "patch_apply_error": "engine produced neither workspace changes nor a unified diff",
+    "runtime": {
+      "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest",
+      "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63",
+      "container_name": "sweb.xenon.astropy__astropy-12907.react.2ac50cb4",
+      "container_workdir": "/testbed"
+    },
+    "provider_usage": {},
+    "cache_metrics": {
+      "cache_hit_rate": null,
+      "reusable_tokens": 0,
+      "prompt_tokens": 0,
+      "estimated_tokens_saved": null,
+      "estimated_cost_saved": null
+    },
+    "context_metrics": {
+      "compression_triggered": false,
+      "tokens_before": null,
+      "tokens_after": null
+    },
+    "worktree": "/tmp/swebench-official-matrix-20260729/astropy__astropy-12907/react"
+  }
+]

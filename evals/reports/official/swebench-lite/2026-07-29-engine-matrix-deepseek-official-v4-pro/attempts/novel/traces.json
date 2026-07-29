@@ -1,0 +1,35 @@
+[
+  {
+    "instance_id": "astropy__astropy-12907",
+    "model_name_or_path": "xenon/novel/deepseek/deepseek-v4-pro",
+    "model_patch": "",
+    "engine": "novel",
+    "elapsed_seconds": 9.086,
+    "error": null,
+    "output_tail": "你还没有创建任何小说项目。\n\n使用 `/novel init <名称>` 创建一本新小说，例如：\n  `/novel init 星际迷途 科幻`\n  `/novel init 月下独行 武侠`",
+    "tool_trace": [],
+    "patch_source": "empty",
+    "patch_apply_success": false,
+    "patch_apply_error": "engine produced neither workspace changes nor a unified diff",
+    "runtime": {
+      "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest",
+      "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63",
+      "container_name": "sweb.xenon.astropy__astropy-12907.novel.dd5d5bc8",
+      "container_workdir": "/testbed"
+    },
+    "provider_usage": {},
+    "cache_metrics": {
+      "cache_hit_rate": null,
+      "reusable_tokens": 0,
+      "prompt_tokens": 0,
+      "estimated_tokens_saved": null,
+      "estimated_cost_saved": null
+    },
+    "context_metrics": {
+      "compression_triggered": false,
+      "tokens_before": null,
+      "tokens_after": null
+    },
+    "worktree": "/tmp/swebench-official-deepseek-v4-pro-matrix-20260729/astropy__astropy-12907/novel"
+  }
+]

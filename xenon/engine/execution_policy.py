@@ -8,7 +8,8 @@ monotonic deadline instead of each receiving a fresh per-request timeout.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator
 
 
@@ -33,7 +34,12 @@ class ExecutionPolicy:
     request_timeout: float = 120.0
     provider_attempts: int = 1
     chain_retries: int = 0
+    min_request_interval: float = 0.0
     event_sink: EventSink | None = None
+    _next_request_at: float = field(default=0.0, init=False, repr=False)
+    _request_lock: Any = field(
+        default_factory=threading.Lock, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.request_timeout <= 0:
@@ -42,6 +48,8 @@ class ExecutionPolicy:
             raise ValueError("provider_attempts must be at least 1")
         if self.chain_retries < 0:
             raise ValueError("chain_retries must not be negative")
+        if self.min_request_interval < 0:
+            raise ValueError("min_request_interval must not be negative")
         if self.provider_attempts > 1 and self.chain_retries > 0:
             raise ValueError(
                 "provider_attempts and chain_retries cannot both own retries"
@@ -55,6 +63,7 @@ class ExecutionPolicy:
         request_timeout: float | None = None,
         provider_attempts: int = 1,
         chain_retries: int = 0,
+        min_request_interval: float = 0.0,
         event_sink: EventSink | None = None,
     ) -> "ExecutionPolicy":
         if timeout <= 0:
@@ -64,6 +73,7 @@ class ExecutionPolicy:
             request_timeout=request_timeout or timeout,
             provider_attempts=provider_attempts,
             chain_retries=chain_retries,
+            min_request_interval=min_request_interval,
             event_sink=event_sink,
         )
 
@@ -96,6 +106,36 @@ class ExecutionPolicy:
         budget = min(self.request_timeout, remaining)
         # Avoid handing httpx a zero timeout due to clock granularity.
         return max(0.001, budget)
+
+    def wait_for_request_slot(self, phase: str = "provider_request") -> None:
+        """Pace a shared engine graph without multiplying provider retries.
+
+        Combined engines share this policy object, so planner, reactor and
+        reflector requests reserve one monotonic sequence of start slots.  The
+        default interval is zero; benchmark adapters can opt into pacing when
+        a provider enforces a low rolling RPM limit.
+        """
+        if self.min_request_interval <= 0:
+            self.check(phase)
+            return
+        with self._request_lock:
+            now = time.monotonic()
+            scheduled = max(now, self._next_request_at)
+            delay = scheduled - now
+            remaining = self.remaining()
+            if remaining is not None and delay >= remaining:
+                self.emit("deadline_exceeded", phase="provider_pacing")
+                raise EngineDeadlineExceeded(
+                    "engine deadline would be exceeded during provider pacing"
+                )
+            self._next_request_at = scheduled + self.min_request_interval
+        if delay > 0:
+            self.emit(
+                "provider_pacing",
+                phase=phase,
+                delay_seconds=round(delay, 3),
+            )
+            self.sleep(delay, phase="provider_pacing")
 
     def sleep(self, seconds: float, phase: str = "retry_backoff") -> None:
         remaining = self.remaining()

@@ -35,6 +35,33 @@ def test_absolute_deadline_shrinks_later_request_budget(monkeypatch):
     assert policy.request_budget("later") == 6.5
 
 
+def test_shared_policy_paces_requests_across_engine_graph(monkeypatch):
+    clock = iter([100.0, 101.0])
+    sleeps = []
+    monkeypatch.setattr(
+        "xenon.engine.execution_policy.time.monotonic", lambda: next(clock)
+    )
+    monkeypatch.setattr(
+        "xenon.engine.execution_policy.time.sleep", lambda seconds: sleeps.append(seconds)
+    )
+    policy = ExecutionPolicy(
+        deadline_at=None,
+        request_timeout=8.0,
+        min_request_interval=3.0,
+    )
+
+    policy.wait_for_request_slot("planner")
+    policy.wait_for_request_slot("reactor")
+
+    assert sleeps == [2.0]
+    assert policy._next_request_at == 106.0
+
+
+def test_negative_request_interval_is_rejected():
+    with pytest.raises(ValueError, match="min_request_interval"):
+        ExecutionPolicy(deadline_at=None, min_request_interval=-1)
+
+
 def test_provider_and_engine_retries_do_not_multiply(monkeypatch):
     calls = []
 

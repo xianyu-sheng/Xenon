@@ -111,6 +111,8 @@ def _append_event(path: Path | None, event: str, **fields: Any) -> None:
 
 def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
             max_steps: int, request_timeout: float, engine_timeout: float,
+            min_request_interval: float = 0.0,
+            provider_attempts: int = 1,
             events_path: Path | None = None,
             namespace: str | None = "swebench") -> dict[str, Any]:
     instance_id = instance["instance_id"]
@@ -127,8 +129,9 @@ def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
     policy = ExecutionPolicy.from_timeout(
         engine_timeout,
         request_timeout=request_timeout,
-        provider_attempts=1,
+        provider_attempts=provider_attempts,
         chain_retries=0,
+        min_request_interval=min_request_interval,
         event_sink=lambda event, fields: _append_event(
             events_path, event, instance_id=instance_id,
             engine=engine_name, **fields,
@@ -151,6 +154,7 @@ def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
             _append_event(events_path, "container_ready", instance_id=instance_id,
                           engine=engine_name, **runtime_metadata)
             if engine_name == "direct":
+                policy.wait_for_request_slot("direct")
                 policy.emit("provider_request_start", phase="direct")
                 output = chat_completion(
                     model,
@@ -300,7 +304,8 @@ def _prepare_with_timeout(instance: dict[str, Any], root: Path,
     deadline = started + timeout
     _append_event(events_path, "image_prepare_start",
                   instance_id=instance["instance_id"], namespace=namespace)
-    while process.is_alive():
+    result: dict[str, Any] | None = None
+    while result is None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             process.terminate()
@@ -314,20 +319,26 @@ def _prepare_with_timeout(instance: dict[str, Any], root: Path,
                 f"official image preparation exceeded {timeout}s for "
                 f"{instance['instance_id']}"
             )
-        process.join(min(10.0, remaining))
-        if process.is_alive():
+        try:
+            # Drain the pipe while the child is alive.  Waiting for child exit
+            # before Queue.get can deadlock when the feeder pipe fills.
+            result = queue.get(timeout=min(10.0, remaining))
+        except queue_module.Empty:
+            if not process.is_alive():
+                raise RuntimeError(
+                    "image preparation exited without a result "
+                    f"({process.exitcode})"
+                )
             _append_event(
                 events_path, "image_prepare_heartbeat",
                 instance_id=instance["instance_id"],
                 elapsed_seconds=round(time.monotonic() - started, 3),
                 remaining_seconds=round(remaining, 3),
             )
-    try:
-        result = queue.get(timeout=5)
-    except queue_module.Empty as exc:
-        raise RuntimeError(
-            f"image preparation exited without a result ({process.exitcode})"
-        ) from exc
+    process.join(5)
+    if process.is_alive():
+        process.terminate()
+        process.join()
     if "error" in result:
         raise RuntimeError(result["error"])
     _append_event(events_path, "image_prepare_end",
@@ -343,7 +354,8 @@ def _run_with_hard_timeout(kwargs: dict[str, Any], timeout: float,
     process = ctx.Process(target=_child_run, args=(queue, kwargs))
     process.start()
     deadline = time.monotonic() + timeout
-    while process.is_alive():
+    message: dict[str, Any] | None = None
+    while message is None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             process.terminate()
@@ -375,18 +387,24 @@ def _run_with_hard_timeout(kwargs: dict[str, Any], timeout: float,
                 "context_metrics": {},
                 "worktree": str(kwargs["root"] / kwargs["instance"]["instance_id"] / kwargs["engine_name"]),
             }
-        process.join(min(10.0, remaining))
-        if process.is_alive():
+        try:
+            # Read before join.  A completed engine result can exceed the OS
+            # pipe buffer (tool traces + patch + telemetry); the child feeder
+            # cannot exit until the parent drains it.
+            message = queue.get(timeout=min(10.0, remaining))
+        except queue_module.Empty:
+            if not process.is_alive():
+                raise RuntimeError(
+                    f"engine child exited without a result ({process.exitcode})"
+                )
             _append_event(events_path, "heartbeat",
                           instance_id=kwargs["instance"]["instance_id"],
                           engine=kwargs["engine_name"],
                           remaining_seconds=round(remaining, 3))
-    try:
-        message = queue.get(timeout=5)
-    except queue_module.Empty as exc:
-        raise RuntimeError(
-            f"engine child exited without a result ({process.exitcode})"
-        ) from exc
+    process.join(5)
+    if process.is_alive():
+        process.terminate()
+        process.join()
     if "error" in message:
         raise RuntimeError(message["error"])
     return message["result"]
@@ -406,11 +424,23 @@ def main() -> int:
     parser.add_argument("--engine-timeout", type=float, default=900)
     parser.add_argument("--prepare-timeout", type=float, default=1800)
     parser.add_argument(
+        "--min-request-interval", type=float, default=0.0,
+        help="Minimum seconds between provider request starts in one engine graph.",
+    )
+    parser.add_argument(
+        "--provider-attempts", type=int, default=1,
+        help="Total attempts owned by the provider client for transient failures.",
+    )
+    parser.add_argument(
         "--namespace", default="swebench",
         help="Official image namespace; use 'none' to build locally",
     )
     parser.add_argument("--predictions", type=Path, required=True)
     parser.add_argument("--traces", type=Path, required=True)
+    parser.add_argument(
+        "--resume-completed", action="store_true",
+        help="Reuse a validated .xenon_result.json already written by this run.",
+    )
     args = parser.parse_args()
     namespace = None if args.namespace.lower() == "none" else args.namespace
     ids = set(args.instance_id)
@@ -419,9 +449,15 @@ def main() -> int:
     if len(instances) != len(ids):
         found = {x["instance_id"] for x in instances}
         raise SystemExit(f"unknown official instance(s): {sorted(ids - found)}")
+    if args.min_request_interval < 0:
+        parser.error("--min-request-interval must be non-negative")
+    if args.provider_attempts < 1:
+        parser.error("--provider-attempts must be at least 1")
     engines = list(ALL_ENGINES if "all" in args.engines else args.engines)
     results = []
-    events_path = args.traces.with_suffix(".events.jsonl")
+    # Children chdir into the official task worktree.  Resolve before spawn so
+    # every lifecycle event remains in the requested report directory.
+    events_path = args.traces.with_suffix(".events.jsonl").resolve()
     events_path.unlink(missing_ok=True)
     original = Path.cwd()
     try:
@@ -436,6 +472,37 @@ def main() -> int:
             for instance in instances:
                 for name in engines:
                     os.chdir(original)
+                    completed_path = (
+                        args.prepared_root / instance["instance_id"] / name
+                        / ".xenon_result.json"
+                    )
+                    expected_model = f"xenon/{name}/{args.model}"
+                    if args.resume_completed and completed_path.exists():
+                        completed = json.loads(completed_path.read_text())
+                        if (
+                            completed.get("instance_id") != instance["instance_id"]
+                            or completed.get("engine") != name
+                            or completed.get("model_name_or_path") != expected_model
+                        ):
+                            raise RuntimeError(
+                                f"stale completed result does not match run: {completed_path}"
+                            )
+                        # A provider outage, timeout, or bootstrap error is a
+                        # checkpoint, not a completed capability result.
+                        if completed.get("error") is None:
+                            results.append(completed)
+                            _append_event(
+                                events_path, "completed_result_recovered",
+                                instance_id=instance["instance_id"], engine=name,
+                                result_path=str(completed_path),
+                            )
+                            continue
+                        _append_event(
+                            events_path, "failed_result_not_recovered",
+                            instance_id=instance["instance_id"], engine=name,
+                            result_path=str(completed_path),
+                            error=str(completed.get("error"))[:500],
+                        )
                     kwargs = {
                         "instance": instance,
                         "engine_name": name,
@@ -444,6 +511,8 @@ def main() -> int:
                         "max_steps": args.max_steps,
                         "request_timeout": args.request_timeout,
                         "engine_timeout": args.engine_timeout,
+                        "min_request_interval": args.min_request_interval,
+                        "provider_attempts": args.provider_attempts,
                         "events_path": events_path,
                         "namespace": namespace,
                     }

@@ -1,0 +1,6 @@
+{"timestamp": 1785286674.2253785, "event": "task_start", "instance_id": "astropy__astropy-12907"}
+{"timestamp": 1785286674.2305288, "event": "image_prepare_start", "instance_id": "astropy__astropy-12907", "namespace": "swebench"}
+{"timestamp": 1785286684.2420204, "event": "image_prepare_heartbeat", "instance_id": "astropy__astropy-12907", "elapsed_seconds": 10.011, "remaining_seconds": 599.998}
+{"timestamp": 1785286692.0685446, "event": "image_prepare_end", "instance_id": "astropy__astropy-12907", "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest", "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63"}
+{"timestamp": 1785286694.1915534, "event": "engine_start", "instance_id": "astropy__astropy-12907", "engine": "direct"}
+{"timestamp": 1785286702.673712, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "direct", "remaining_seconds": 915.0}

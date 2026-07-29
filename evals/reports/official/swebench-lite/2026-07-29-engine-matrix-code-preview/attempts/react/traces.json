@@ -1,0 +1,136 @@
+[
+  {
+    "instance_id": "astropy__astropy-12907",
+    "model_name_or_path": "xenon/react/custom/doubao-seed-2-0-code-preview-260215",
+    "model_patch": "diff --git a/astropy/modeling/separable.py b/astropy/modeling/separable.py\nindex a308e2729..45bea3608 100644\n--- a/astropy/modeling/separable.py\n+++ b/astropy/modeling/separable.py\n@@ -242,7 +242,7 @@ def _cstack(left, right):\n         cright = _coord_matrix(right, 'right', noutp)\n     else:\n         cright = np.zeros((noutp, right.shape[1]))\n-        cright[-right.shape[0]:, -right.shape[1]:] = 1\n+        cright[-right.shape[0]:, -right.shape[1]:] = right\n \n     return np.hstack([cleft, cright])\n \n",
+    "engine": "react",
+    "elapsed_seconds": 158.341,
+    "error": null,
+    "output_tail": "call__(*inputs, **kwargs)\\nastropy/modeling/core.py:1080: in __call__\\n    outputs = self._generic_evaluate(evaluate, inputs,\\nastropy/modeling/core.py:1044: in _generic_evaluate\\n    outputs = evaluate(_inputs)\\nastropy/modeling/core.py:940: in evaluate\\n    return self.evaluate(*chain(_inputs, parameters))\\nastropy/modeling/rotations.py:504: in evaluate\\n    result = np.dot(cls._compute_matrix(angle), inarr)\\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \\n\\nangle = array([0.78539816])\\n\\n    @staticmethod\\n    def _compute_matrix(angle):\\n>       return np.array([[math.cos(angle), -math.sin(angle)],\\n                         [math.sin(angle), math.cos(angle)]],\\n                        dtype=np.float64)\\nE       DeprecationWarning: Conversion of an array with ndim > 0 to a scalar is deprecated, and will error in future. Ensure you extract a single element from your array before performing this operation. (Deprecated NumPy 1.25.)\\n\\nastropy/modeling/rotations.py:513: DeprecationWarning\\n=========================== short test summary info ============================\\nFAILED astropy/modeling/tests/test_compound.py::test_simple_two_model_compose_2d\\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!\\n========================= 1 failed, 16 passed in 0.52s =========================\\n', 'records': [], 'total': None, 'matched': None, 'truncated': False, 'next_cursor': None, 'filters': {}, 'metadata': {'command': 'python -m pytest astropy/modeling/tests/test_compound.py -xvs', 'returncode': 1, 'stderr': '<frozen importlib._bootstrap>:228: RuntimeWarning: numpy.ndarray size changed, may indicate binary incompatibility. Expected 80 from C header, got 96 from PyObject\\n', 'kind': 'command_result'}, 'error': None, 'schema_version': '1.0'}, 'kind': 'command_result', 'source': None, 'records': [], 'total': None, 'matched': None, 'truncated': False, 'next_cursor': None, 'filters': {}}\n\n请基于以上执行结果判断任务完成度，或重新发起更具体的指令。",
+    "tool_trace": [
+      {
+        "tool": "list_files",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.001985,
+        "error": null,
+        "result": "/tmp/swebench-official-code-matrix-20260729/astropy__astropy-12907/react/astropy/modeling/__init__.py\n/tmp/swebench-official-code-matrix-20260729/astropy__astropy-12907/react/astropy/modeling/__pycache__/setup_package.cpython-39.pyc\n/tmp/swebench-official-code-matrix-20260729/astropy__astropy-12907/react/astropy/modeling/bounding_box.py\n/tmp/swebench-official-code-matrix-20260729/astropy__astropy-12907/react/astropy/modeling/convolution.py\n/tmp/swebench-official-code-matrix-20260729/astropy__ast"
+      },
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.000602,
+        "error": null,
+        "result": "# Licensed under a 3-clause BSD style license - see LICENSE.rst\n\n\"\"\"\nFunctions to determine if a model is separable, i.e.\nif the model outputs are independent.\n\nIt analyzes ``n_inputs``, ``n_outputs`` and the operators\nin a compound model by stepping through the transforms\nand creating a ``coord_matrix`` of shape (``n_outputs``, ``n_inputs``).\n\n\nEach modeling operator is represented by a function which\ntakes two simple models (or two ``coord_matrix`` arrays) and\nreturns an array of shape (``n_ou"
+      },
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.003698,
+        "error": null,
+        "result": "    separable_matrix = _separable(transform)\n    separable_matrix = np.where(separable_matrix != 0, True, False)\n    return separable_matrix\n\n\ndef _compute_n_outputs(left, right):\n    \"\"\"\n    Compute the number of outputs of two models.\n\n    The two models are the left and right model to an operation in\n    the expression tree of a compound model.\n\n    Parameters\n    ----------\n    left, right : `astropy.modeling.Model` or ndarray\n        If input is of an array, it is the output of `coord_matri"
+      },
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.001675,
+        "error": null,
+        "result": "            mat[-model.n_outputs:, -model.n_inputs:] = m\n        return mat\n    if not model.separable:\n        # this does not work for more than 2 coordinates\n        mat = np.zeros((noutp, model.n_inputs))\n        if pos == 'left':\n            mat[:model.n_outputs, : model.n_inputs] = 1\n        else:\n            mat[-model.n_outputs:, -model.n_inputs:] = 1\n    else:\n        mat = np.zeros((noutp, model.n_inputs))\n\n        for i in range(model.n_inputs):\n            mat[i, i] = 1\n        if po"
+      },
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.000795,
+        "error": null,
+        "result": "    is_separable : ndarray of dtype np.bool\n        An array of shape (transform.n_outputs,) of boolean type\n        Each element represents the separablity of the corresponding output.\n    \"\"\"\n    if (transform_matrix := transform._calculate_separability_matrix()) is not NotImplemented:\n        return transform_matrix\n    elif isinstance(transform, CompoundModel):\n        sepleft = _separable(transform.left)\n        sepright = _separable(transform.right)\n        return _operators[transform.op]("
+      },
+      {
+        "tool": "write_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.042718,
+        "error": null,
+        "result": "（执行成功，无文本输出）"
+      },
+      {
+        "tool": "command",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 2.331326,
+        "error": null,
+        "result": "First test (cm):\n[[ True False]\n [False  True]]\n\nSecond test (Pix2Sky_TAN & Linear1D(10) & Linear1D(5)):\n[[ True  True False False]\n [ True  True False False]\n [False False  True False]\n [False False False  True]]\n\nThird test (nested: Pix2Sky_TAN() & cm):\n[[ True  True False False]\n [ True  True False False]\n [False False  True  True]\n [False False  True  True]]\n"
+      },
+      {
+        "tool": "edit_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.008144,
+        "error": null,
+        "result": "（执行成功，无文本输出）"
+      },
+      {
+        "tool": "command",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.717226,
+        "error": null,
+        "result": "First test (cm):\n[[ True False]\n [False  True]]\n\nSecond test (Pix2Sky_TAN & Linear1D(10) & Linear1D(5)):\n[[ True  True False False]\n [ True  True False False]\n [False False  True False]\n [False False False  True]]\n\nThird test (nested: Pix2Sky_TAN() & cm):\n[[ True  True False False]\n [ True  True False False]\n [False False  True False]\n [False False False  True]]\n"
+      },
+      {
+        "tool": "command",
+        "success": false,
+        "state": "failed",
+        "attempts": 1,
+        "elapsed_seconds": 2.129731,
+        "error": "{'action_type': 'command', 'command': 'python -m pytest astropy/modeling/tests/test_compound.py -xvs', 'returncode': 1, 'stdout': 'Internet access disabled\\n============================= test session starts ==============================\\nplatform linux -- Python 3.9.20, pytest-7.4.0, pluggy-1.3.0 -- /opt/miniconda3/envs/testbed/bin/python\\ncachedir: .pytest_cache\\nhypothesis profile \\'ci\\' -> database=None, deadline=None, print_blob=True, derandomize=True\\n\\nRunning tests with Astropy version 5.1.dev623+gd16bfe05a.d20250910.\\nRunning tests in astropy/modeling/tests/test_compound.py.\\n\\nDate: 2026-07-29T01:04:41\\n\\nPlatform: Linux-6.17.0-35-generic-x86_64-with-glibc2.35\\n\\nExecutable: /opt/miniconda3/envs/testbed/bin/python\\n\\nFull Python Version: \\n3.9.20 (main, Oct  3 2024, 07:27:41) \\n[GCC 11.2.0]\\n\\nencodings: sys: utf-8, locale: UTF-8, filesystem: utf-8\\nbyteorder: little\\nfloat info: dig: 15, mant_dig: 15\\n\\nPackage versions: \\nNumpy: 1.25.2\\nScipy: not available\\nMatplotlib: not available\\nh5py: not available\\nPandas: not available\\nPyERFA: 2.0.0.3\\nCython: not available\\nScikit-image: not available\\nasdf: not available\\npyarrow: not available\\n\\nUsing Astropy options: remote_data: none.\\n\\nARCH_ON_CI: undefined\\nIS_CRON: undefined\\n\\nrootdir: /testbed\\nconfigfile: setup.cfg\\nplugins: doctestplus-1.0.0, hypothesis-6.82.6, astropy-header-0.2.2, astropy-0.10.0, cov-4.1.0, remotedata-0.4.0, xdist-3.3.1, mock-3.11.1, openfiles-0.5.0, filter-subpackage-0.1.2, arraydiff-0.5.0\\ncollecting ... collected 69 items\\n\\nastropy/modeling/tests/test_compound.py::test_model_set[<lambda>-result0] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set[<lambda>-result1] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set[<lambda>-result2] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set[<lambda>-result3] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set[<lambda>-result4] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set_raises_value_error[<lambda>-result0] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set_raises_value_error[<lambda>-result1] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set_raises_value_error[<lambda>-result2] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set_raises_value_error[<lambda>-result3] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set_raises_value_error[<lambda>-result4] PASSED\\nastropy/modeling/tests/test_compound.py::test_two_model_instance_arithmetic_1d[<lambda>-5.0] PASSED\\nastropy/modeling/tests/test_compound.py::test_two_model_instance_arithmetic_1d[<lambda>--1.0] PASSED\\nastropy/modeling/tests/test_compound.py::test_two_model_instance_arithmetic_1d[<lambda>-6.0] PASSED\\nastropy/modeling/tests/test_compound.py::test_two_model_instance_arithmetic_1d[<lambda>-0.6666666666666666] PASSED\\nastropy/modeling/tests/test_compound.py::test_two_model_instance_arithmetic_1d[<lambda>-8.0] PASSED\\nastropy/modeling/tests/test_compound.py::test_simple_two_model_compose_1d PASSED\\nastropy/modeling/tests/test_compound.py::test_simple_two_model_compose_2d FAILED\\n\\n=================================== FAILURES ===================================\\n_______________________ test_simple_two_model_compose_2d _______________________\\n\\n    def test_simple_two_model_compose_2d():\\n        \"\"\"\\n        A simple example consisting of two rotations.\\n        \"\"\"\\n    \\n        r1 = Rotation2D(45) | Rotation2D(45)\\n    \\n        assert isinstance(r1, CompoundModel)\\n        assert r1.n_inputs == 2\\n        assert r1.n_outputs == 2\\n>       assert_allclose(r1(0, 1), (-1, 0), atol=1e-10)\\n\\nastropy/modeling/tests/test_compound.py:106: \\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \\nastropy/modeling/core.py:1080: in __call__\\n    outputs = self._generic_evaluate(evaluate, inputs,\\nastropy/modeling/core.py:1044: in _generic_evaluate\\n    outputs = evaluate(_inputs)\\nastropy/modeling/core.py:3200: in evaluate\\n    return self._evaluate(*_inputs, **kwargs)\\nastropy/modeling/core.py:3226: in _evaluate\\n    leftval = self.left(*args, **kw)\\nastropy/modeling/core.py:398: in __call__\\n    new_call = make_function_with_signature(\\nastropy/modeling/core.py:377: in __call__\\n    return super(cls, self).__call__(*inputs, **kwargs)\\nastropy/modeling/core.py:1080: in __call__\\n    outputs = self._generic_evaluate(evaluate, inputs,\\nastropy/modeling/core.py:1044: in _generic_evaluate\\n    outputs = evaluate(_inputs)\\nastropy/modeling/core.py:940: in evaluate\\n    return self.evaluate(*chain(_inputs, parameters))\\nastropy/modeling/rotations.py:504: in evaluate\\n    result = np.dot(cls._compute_matrix(angle), inarr)\\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \\n\\nangle = array([0.78539816])\\n\\n    @staticmethod\\n    def _compute_matrix(angle):\\n>       return np.array([[math.cos(angle), -math.sin(angle)],\\n                         [math.sin(angle), math.cos(angle)]],\\n                        dtype=np.float64)\\nE       DeprecationWarning: Conversion of an array with ndim > 0 to a scalar is deprecated, and will error in future. Ensure you extract a single element from your array before performing this operation. (Deprecated NumPy 1.25.)\\n\\nastropy/modeling/rotations.py:513: DeprecationWarning\\n=========================== short test summary info ============================\\nFAILED astropy/modeling/tests/test_compound.py::test_simple_two_model_compose_2d\\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!\\n========================= 1 failed, 16 passed in 0.52s =========================\\n', 'stderr': '<frozen importlib._bootstrap>:228: RuntimeWarning: numpy.ndarray size changed, may indicate binary incompatibility. Expected 80 from C header, got 96 from PyObject\\n', 'success': False, 'schema_version': '1.0', 'tool_result': {'tool_name': 'command', 'success': False, 'kind': 'command_result', 'source': None, 'content': 'Internet access disabled\\n============================= test session starts ==============================\\nplatform linux -- Python 3.9.20, pytest-7.4.0, pluggy-1.3.0 -- /opt/miniconda3/envs/testbed/bin/python\\ncachedir: .pytest_cache\\nhypothesis profile \\'ci\\' -> database=None, deadline=None, print_blob=True, derandomize=True\\n\\nRunning tests with Astropy version 5.1.dev623+gd16bfe05a.d20250910.\\nRunning tests in astropy/modeling/tests/test_compound.py.\\n\\nDate: 2026-07-29T01:04:41\\n\\nPlatform: Linux-6.17.0-35-generic-x86_64-with-glibc2.35\\n\\nExecutable: /opt/miniconda3/envs/testbed/bin/python\\n\\nFull Python Version: \\n3.9.20 (main, Oct  3 2024, 07:27:41) \\n[GCC 11.2.0]\\n\\nencodings: sys: utf-8, locale: UTF-8, filesystem: utf-8\\nbyteorder: little\\nfloat info: dig: 15, mant_dig: 15\\n\\nPackage versions: \\nNumpy: 1.25.2\\nScipy: not available\\nMatplotlib: not available\\nh5py: not available\\nPandas: not available\\nPyERFA: 2.0.0.3\\nCython: not available\\nScikit-image: not available\\nasdf: not available\\npyarrow: not available\\n\\nUsing Astropy options: remote_data: none.\\n\\nARCH_ON_CI: undefined\\nIS_CRON: undefined\\n\\nrootdir: /testbed\\nconfigfile: setup.cfg\\nplugins: doctestplus-1.0.0, hypothesis-6.82.6, astropy-header-0.2.2, astropy-0.10.0, cov-4.1.0, remotedata-0.4.0, xdist-3.3.1, mock-3.11.1, openfiles-0.5.0, filter-subpackage-0.1.2, arraydiff-0.5.0\\ncollecting ... collected 69 items\\n\\nastropy/modeling/tests/test_compound.py::test_model_set[<lambda>-result0] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set[<lambda>-result1] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set[<lambda>-result2] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set[<lambda>-result3] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set[<lambda>-result4] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set_raises_value_error[<lambda>-result0] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set_raises_value_error[<lambda>-result1] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set_raises_value_error[<lambda>-result2] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set_raises_value_error[<lambda>-result3] PASSED\\nastropy/modeling/tests/test_compound.py::test_model_set_raises_value_error[<lambda>-result4] PASSED\\nastropy/modeling/tests/test_compound.py::test_two_model_instance_arithmetic_1d[<lambda>-5.0] PASSED\\nastropy/modeling/tests/test_compound.py::test_two_model_instance_arithmetic_1d[<lambda>--1.0] PASSED\\nastropy/modeling/tests/test_compound.py::test_two_model_instance_arithmetic_1d[<lambda>-6.0] PASSED\\nastropy/modeling/tests/test_compound.py::test_two_model_instance_arithmetic_1d[<lambda>-0.6666666666666666] PASSED\\nastropy/modeling/tests/test_compound.py::test_two_model_instance_arithmetic_1d[<lambda>-8.0] PASSED\\nastropy/modeling/tests/test_compound.py::test_simple_two_model_compose_1d PASSED\\nastropy/modeling/tests/test_compound.py::test_simple_two_model_compose_2d FAILED\\n\\n=================================== FAILURES ===================================\\n_______________________ test_simple_two_model_compose_2d _______________________\\n\\n    def test_simple_two_model_compose_2d():\\n        \"\"\"\\n        A simple example consisting of two rotations.\\n        \"\"\"\\n    \\n        r1 = Rotation2D(45) | Rotation2D(45)\\n    \\n        assert isinstance(r1, CompoundModel)\\n        assert r1.n_inputs == 2\\n        assert r1.n_outputs == 2\\n>       assert_allclose(r1(0, 1), (-1, 0), atol=1e-10)\\n\\nastropy/modeling/tests/test_compound.py:106: \\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \\nastropy/modeling/core.py:1080: in __call__\\n    outputs = self._generic_evaluate(evaluate, inputs,\\nastropy/modeling/core.py:1044: in _generic_evaluate\\n    outputs = evaluate(_inputs)\\nastropy/modeling/core.py:3200: in evaluate\\n    return self._evaluate(*_inputs, **kwargs)\\nastropy/modeling/core.py:3226: in _evaluate\\n    leftval = self.left(*args, **kw)\\nastropy/modeling/core.py:398: in __call__\\n    new_call = make_function_with_signature(\\nastropy/modeling/core.py:377: in __call__\\n    return super(cls, self).__call__(*inputs, **kwargs)\\nastropy/modeling/core.py:1080: in __call__\\n    outputs = self._generic_evaluate(evaluate, inputs,\\nastropy/modeling/core.py:1044: in _generic_evaluate\\n    outputs = evaluate(_inputs)\\nastropy/modeling/core.py:940: in evaluate\\n    return self.evaluate(*chain(_inputs, parameters))\\nastropy/modeling/rotations.py:504: in evaluate\\n    result = np.dot(cls._compute_matrix(angle), inarr)\\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \\n\\nangle = array([0.78539816])\\n\\n    @staticmethod\\n    def _compute_matrix(angle):\\n>       return np.array([[math.cos(angle), -math.sin(angle)],\\n                         [math.sin(angle), math.cos(angle)]],\\n                        dtype=np.float64)\\nE       DeprecationWarning: Conversion of an array with ndim > 0 to a scalar is deprecated, and will error in future. Ensure you extract a single element from your array before performing this operation. (Deprecated NumPy 1.25.)\\n\\nastropy/modeling/rotations.py:513: DeprecationWarning\\n=========================== short test summary info ============================\\nFAILED astropy/modeling/tests/test_compound.py::test_simple_two_model_compose_2d\\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!\\n========================= 1 failed, 16 passed in 0.52s =========================\\n', 'records': [], 'total': None, 'matched': None, 'truncated': False, 'next_cursor': None, 'filters': {}, 'metadata': {'command': 'python -m pytest astropy/modeling/tests/test_compound.py -xvs', 'returncode': 1, 'stderr': '<frozen importlib._bootstrap>:228: RuntimeWarning: numpy.ndarray size changed, may indicate binary incompatibility. Expected 80 from C header, got 96 from PyObject\\n', 'kind': 'command_result'}, 'error': None, 'schema_version': '1.0'}, 'kind': 'command_result', 'source': None, 'records': [], 'total': None, 'matched': None, 'truncated': False, 'next_cursor': None, 'filters': {}}",
+        "result": "工具执行失败: {'action_type': 'command', 'command': 'python -m pytest astropy/modeling/tests/test_compound.py -xvs', 'returncode': 1, 'stdout': 'Internet access disabled\\n============================= test session starts ==============================\\nplatform linux -- Python 3.9.20, pytest-7.4.0, pluggy-1.3.0 -- /opt/miniconda3/envs/testbed/bin/python\\ncachedir: .pytest_cache\\nhypothesis profile \\'ci\\' -> database=None, deadline=None, print_blob=True, derandomize=True\\n\\nRunning tests with Astropy v"
+      }
+    ],
+    "patch_source": "workspace",
+    "patch_apply_success": true,
+    "patch_apply_error": null,
+    "runtime": {
+      "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest",
+      "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63",
+      "container_name": "sweb.xenon.astropy__astropy-12907.react.28a38247",
+      "container_workdir": "/testbed"
+    },
+    "provider_usage": {
+      "custom/doubao-seed-2-0-code-preview-260215": {
+        "calls": 10,
+        "prompt_tokens": 196036,
+        "completion_tokens": 1770,
+        "total_tokens": 197806,
+        "cache_hit_tokens": 129672,
+        "cache_miss_tokens": 66364,
+        "latency_avg": 13.0677388650598
+      }
+    },
+    "cache_metrics": {
+      "cache_hit_rate": 0.6614703421820481,
+      "reusable_tokens": 129672,
+      "prompt_tokens": 196036,
+      "estimated_tokens_saved": null,
+      "estimated_cost_saved": null
+    },
+    "context_metrics": {
+      "compression_triggered": false,
+      "tokens_before": null,
+      "tokens_after": null
+    },
+    "worktree": "/tmp/swebench-official-code-matrix-20260729/astropy__astropy-12907/react"
+  }
+]

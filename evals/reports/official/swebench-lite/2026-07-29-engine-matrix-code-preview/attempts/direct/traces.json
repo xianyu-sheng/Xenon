@@ -1,0 +1,45 @@
+[
+  {
+    "instance_id": "astropy__astropy-12907",
+    "model_name_or_path": "xenon/direct/custom/doubao-seed-2-0-code-preview-260215",
+    "model_patch": "",
+    "engine": "direct",
+    "elapsed_seconds": 15.954,
+    "error": null,
+    "output_tail": "Let's start by exploring the repository structure and finding the relevant code files.\n```bash\ncd /home/astropy && ls -la && git status\n```",
+    "tool_trace": [],
+    "patch_source": "empty",
+    "patch_apply_success": false,
+    "patch_apply_error": "engine produced neither workspace changes nor a unified diff",
+    "runtime": {
+      "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest",
+      "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63",
+      "container_name": "sweb.xenon.astropy__astropy-12907.direct.bd7c7380",
+      "container_workdir": "/testbed"
+    },
+    "provider_usage": {
+      "custom/doubao-seed-2-0-code-preview-260215": {
+        "calls": 1,
+        "prompt_tokens": 509,
+        "completion_tokens": 125,
+        "total_tokens": 634,
+        "cache_hit_tokens": 0,
+        "cache_miss_tokens": 509,
+        "latency_avg": 6.461822343990207
+      }
+    },
+    "cache_metrics": {
+      "cache_hit_rate": 0.0,
+      "reusable_tokens": 0,
+      "prompt_tokens": 509,
+      "estimated_tokens_saved": null,
+      "estimated_cost_saved": null
+    },
+    "context_metrics": {
+      "compression_triggered": false,
+      "tokens_before": null,
+      "tokens_after": null
+    },
+    "worktree": "/tmp/swebench-official-code-matrix-20260729/astropy__astropy-12907/direct"
+  }
+]

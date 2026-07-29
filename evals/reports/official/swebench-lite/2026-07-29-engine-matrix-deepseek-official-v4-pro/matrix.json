@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "dataset": "SWE-bench/SWE-bench_Lite",
+  "split": "test",
+  "instance_id": "astropy__astropy-12907",
+  "model": "deepseek/deepseek-v4-pro",
+  "provider": "DeepSeek official API",
+  "official_harness_version": "4.1.0",
+  "summary": {
+    "verified_success": 3,
+    "engine_instance_attempts": 8,
+    "verified_success_rate": 0.375,
+    "result_assertion_pass_rate": 0.375,
+    "tool_success": 61,
+    "tool_total": 65,
+    "tool_execution_success_rate": 0.9384615384615385,
+    "provider_calls": 89,
+    "prompt_tokens": 1037954,
+    "completion_tokens": 111129,
+    "cache_hit_tokens": 855296,
+    "cache_hit_rate": 0.8240211030546634,
+    "estimated_tokens_saved": null,
+    "estimated_cost_saved": null,
+    "context_compression_benefit": null,
+    "elapsed_seconds": 1838.911
+  },
+  "engines": [
+    {"engine": "direct", "official_status": "empty_patch", "patch_bytes": 0, "patch_apply_success": false, "tool_success": 0, "tool_total": 0, "provider_calls": 1, "prompt_tokens": 522, "completion_tokens": 915, "cache_hit_tokens": 0, "cache_hit_rate": 0.0, "elapsed_seconds": 19.508},
+    {"engine": "react", "official_status": "resolved", "patch_bytes": 504, "patch_apply_success": true, "tool_success": 8, "tool_total": 10, "provider_calls": 11, "prompt_tokens": 182558, "completion_tokens": 4284, "cache_hit_tokens": 161152, "cache_hit_rate": 0.882744114199323, "elapsed_seconds": 71.775},
+    {"engine": "plan-execute", "official_status": "empty_patch", "patch_bytes": 0, "patch_apply_success": false, "tool_success": 0, "tool_total": 0, "provider_calls": 1, "prompt_tokens": 2562, "completion_tokens": 793, "cache_hit_tokens": 0, "cache_hit_rate": 0.0, "elapsed_seconds": 18.616},
+    {"engine": "reflection", "official_status": "empty_patch", "patch_bytes": 0, "patch_apply_success": false, "tool_success": 0, "tool_total": 0, "provider_calls": 10, "prompt_tokens": 86041, "completion_tokens": 49579, "cache_hit_tokens": 13952, "cache_hit_rate": 0.16215525156611382, "elapsed_seconds": 827.468},
+    {"engine": "plan-react", "official_status": "resolved", "patch_bytes": 504, "patch_apply_success": true, "tool_success": 40, "tool_total": 41, "provider_calls": 49, "prompt_tokens": 595979, "completion_tokens": 31222, "cache_hit_tokens": 546816, "cache_hit_rate": 0.9175088383986684, "elapsed_seconds": 462.285},
+    {"engine": "plan-reflection", "official_status": "empty_patch", "patch_bytes": 0, "patch_apply_success": false, "tool_success": 2, "tool_total": 2, "provider_calls": 4, "prompt_tokens": 5719, "completion_tokens": 6571, "cache_hit_tokens": 2560, "cache_hit_rate": 0.44763070466864835, "elapsed_seconds": 127.493},
+    {"engine": "react-reflection", "official_status": "resolved", "patch_bytes": 504, "patch_apply_success": true, "tool_success": 11, "tool_total": 12, "provider_calls": 13, "prompt_tokens": 164573, "completion_tokens": 17765, "cache_hit_tokens": 130816, "cache_hit_rate": 0.7948812988764864, "elapsed_seconds": 302.68},
+    {"engine": "novel", "official_status": "empty_patch", "patch_bytes": 0, "patch_apply_success": false, "tool_success": 0, "tool_total": 0, "provider_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cache_hit_tokens": 0, "cache_hit_rate": null, "elapsed_seconds": 9.086}
+  ]
+}

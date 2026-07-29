@@ -1,0 +1,35 @@
+[
+  {
+    "instance_id": "astropy__astropy-12907",
+    "model_name_or_path": "xenon/plan-react/custom/deepseek-v4-pro-260425",
+    "model_patch": "",
+    "engine": "plan-react",
+    "elapsed_seconds": 11.015,
+    "error": null,
+    "output_tail": "规划阶段失败: 所有模型均调用失败: Client error '429 Too Many Requests' for url 'https://ark.cn-beijing.volces.com/api/v3/chat/completions'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429",
+    "tool_trace": [],
+    "patch_source": "empty",
+    "patch_apply_success": false,
+    "patch_apply_error": "engine produced neither workspace changes nor a unified diff",
+    "runtime": {
+      "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest",
+      "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63",
+      "container_name": "sweb.xenon.astropy__astropy-12907.plan-react.fc3eb7cc",
+      "container_workdir": "/testbed"
+    },
+    "provider_usage": {},
+    "cache_metrics": {
+      "cache_hit_rate": null,
+      "reusable_tokens": 0,
+      "prompt_tokens": 0,
+      "estimated_tokens_saved": null,
+      "estimated_cost_saved": null
+    },
+    "context_metrics": {
+      "compression_triggered": false,
+      "tokens_before": null,
+      "tokens_after": null
+    },
+    "worktree": "/tmp/swebench-official-matrix-20260729/astropy__astropy-12907/plan-react"
+  }
+]

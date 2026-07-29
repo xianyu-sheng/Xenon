@@ -1,0 +1,14 @@
+{"timestamp": 1785286078.5404935, "event": "task_start", "instance_id": "astropy__astropy-12907"}
+{"timestamp": 1785286078.5461648, "event": "image_prepare_start", "instance_id": "astropy__astropy-12907", "namespace": "swebench"}
+{"timestamp": 1785286079.9231668, "event": "image_prepare_end", "instance_id": "astropy__astropy-12907", "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest", "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63"}
+{"timestamp": 1785286080.7399948, "event": "engine_start", "instance_id": "astropy__astropy-12907", "engine": "plan-react"}
+{"timestamp": 1785286089.9360237, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "plan-react", "remaining_seconds": 915.0}
+{"timestamp": 1785286099.948029, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "plan-react", "remaining_seconds": 904.988}
+{"timestamp": 1785286109.9601736, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "plan-react", "remaining_seconds": 894.976}
+{"timestamp": 1785286119.9730523, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "plan-react", "remaining_seconds": 884.964}
+{"timestamp": 1785286129.9849596, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "plan-react", "remaining_seconds": 874.951}
+{"timestamp": 1785286139.9969656, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "plan-react", "remaining_seconds": 864.939}
+{"timestamp": 1785286150.0091984, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "plan-react", "remaining_seconds": 854.927}
+{"timestamp": 1785286160.0851467, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "plan-react", "remaining_seconds": 844.851}
+{"timestamp": 1785286170.0982587, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "plan-react", "remaining_seconds": 834.839}
+{"timestamp": 1785286180.1108563, "event": "heartbeat", "instance_id": "astropy__astropy-12907", "engine": "plan-react", "remaining_seconds": 824.825}

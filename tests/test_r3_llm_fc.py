@@ -112,6 +112,38 @@ class TestToolConversion:
 
 # ── chat_completion_with_tools：OpenAI 路径 ─────────────────
 class TestOpenaiFCPath:
+    def test_native_tool_call_emits_usage_to_tracker(self, monkeypatch):
+        fake = _FakeClient()
+        fake.set_payload({
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 2,
+                "total_tokens": 12,
+                "prompt_tokens_details": {"cached_tokens": 4},
+            },
+        })
+        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+        monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai"))
+        tracker = llm.UsageTracker()
+        try:
+            chat_completion_with_tools(
+                "openai/gpt-4o", [{"role": "user", "content": "x"}],
+                tools=[{"type": "function", "function": {"name": "echo", "parameters": {}}}],
+            )
+            usage = tracker.snapshot()["openai/gpt-4o"]
+            assert usage.pop("latency_avg") >= 0
+            assert usage == {
+                "calls": 1,
+                "prompt_tokens": 10,
+                "completion_tokens": 2,
+                "total_tokens": 12,
+                "cache_hit_tokens": 4,
+                "cache_miss_tokens": 6,
+            }
+        finally:
+            tracker.close()
+
     def test_openai_returns_structured_tool_calls(self, monkeypatch):
         fake = _FakeClient()
         fake.set_payload({

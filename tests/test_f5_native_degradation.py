@@ -112,6 +112,27 @@ class TestCallLlmNative:
         assert (True, True) in calls
         assert (True, False) in calls
 
+    def test_incompatible_shape_is_not_retried_on_later_iterations(self, monkeypatch):
+        eng = _engine()
+        calls = []
+
+        def fake(mid, msgs, *, tools=None, response_format=None, **kw):
+            shape = (bool(tools), bool(response_format))
+            calls.append(shape)
+            if shape == (True, True):
+                raise _http_error(400)
+            return LLMResponse(content="", tool_calls=[{
+                "id": "1", "name": "command", "arguments": {"action": "pwd"},
+            }])
+
+        _patch_fc(monkeypatch, eng, fake)
+        for _ in range(2):
+            eng._call_llm_native(
+                [], [{"type": "function"}], {"type": "json_object"}
+            )
+
+        assert calls == [(True, True), (True, False), (True, False)]
+
     def test_tier1_tier2_fail_tier3_format_only(self, monkeypatch):
         """tier①② 都失败 → tier③(format only) 返回 content。"""
         eng = _engine()
@@ -196,11 +217,9 @@ class TestCallLlmNative:
         _patch_fc(monkeypatch, eng, fake)
         eng._call_llm = lambda msgs, max_tokens=None: "fb"
         eng._call_llm_native([], [{"type": "function"}], None)
-        # 只有 tier1(tools+format?) 不——format=None：tier1=(True,False)?
-        # 实际：tools=T,format=None → tier1=(T,空被过滤)? tiers = [(t1,T,None),(t2,T,None)] 去重?
-        # tiers 列表：tier1=(T,None)→保留, tier2=(T,None)→保留, tier3=(None,None)→过滤
-        # tier1 与 tier2 都是 (tools, None) → 两次相同调用
+        # Duplicate tools-only tiers are collapsed into one provider request.
         assert all(c == (True, False) for c in calls)
+        assert len(calls) == 1
 
     def test_transient_failure_does_not_cascade_capability_tiers(self, monkeypatch):
         """A timeout is not evidence that tools/format are unsupported."""

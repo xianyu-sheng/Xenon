@@ -1,0 +1,55 @@
+[
+  {
+    "instance_id": "astropy__astropy-12907",
+    "model_name_or_path": "xenon/plan-execute/custom/deepseek-v4-pro-260425",
+    "model_patch": "",
+    "engine": "plan-execute",
+    "elapsed_seconds": 28.163,
+    "error": null,
+    "output_tail": "执行总结：已成功读取 `astropy/modeling/separable.py` 文件以理解 `separability_matrix` 的实现逻辑，但未执行任何修复、测试或文件修改操作。\n\n- **成功**：读取源代码文件（步骤 1）。\n- **失败**：无。\n- **跳过**：无。\n\n当前工作区未产生任何代码变更，原始问题（嵌套 CompoundModel 的可分离性矩阵计算错误）尚未被修复。",
+    "tool_trace": [
+      {
+        "tool": "read_file",
+        "success": true,
+        "state": "succeeded",
+        "attempts": 1,
+        "elapsed_seconds": 0.003442,
+        "error": null,
+        "result": "# Licensed under a 3-clause BSD style license - see LICENSE.rst\n\n\"\"\"\nFunctions to determine if a model is separable, i.e.\nif the model outputs are independent.\n\nIt analyzes ``n_inputs``, ``n_outputs`` and the operators\nin a compound model by stepping through the transforms\nand creating a ``coord_matrix`` of shape (``n_outputs``, ``n_inputs``).\n\n\nEach modeling operator is represented by a function which\ntakes two simple models (or two ``coord_matrix`` arrays) and\nreturns an array of shape (``n_ou"
+      }
+    ],
+    "patch_source": "empty",
+    "patch_apply_success": false,
+    "patch_apply_error": "engine produced neither workspace changes nor a unified diff",
+    "runtime": {
+      "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest",
+      "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63",
+      "container_name": "sweb.xenon.astropy__astropy-12907.plan-execute.06d5df37",
+      "container_workdir": "/testbed"
+    },
+    "provider_usage": {
+      "custom/deepseek-v4-pro-260425": {
+        "calls": 2,
+        "prompt_tokens": 3330,
+        "completion_tokens": 1018,
+        "total_tokens": 4348,
+        "cache_hit_tokens": 0,
+        "cache_miss_tokens": 3330,
+        "latency_avg": 11.406689849914983
+      }
+    },
+    "cache_metrics": {
+      "cache_hit_rate": 0.0,
+      "reusable_tokens": 0,
+      "prompt_tokens": 3330,
+      "estimated_tokens_saved": null,
+      "estimated_cost_saved": null
+    },
+    "context_metrics": {
+      "compression_triggered": false,
+      "tokens_before": null,
+      "tokens_after": null
+    },
+    "worktree": "/tmp/swebench-official-matrix-20260729/astropy__astropy-12907/plan-execute"
+  }
+]

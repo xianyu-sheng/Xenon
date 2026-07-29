@@ -88,6 +88,13 @@ class BaseEngine(ABC):
         # last_provider_messages 供 REPL 按原协议持久到后续用户轮次。
         self._pending_native_response: Any = None
         self._last_provider_messages: list[dict[str, Any]] = []
+        # Session-local protocol capability memory.  A 400 from one native
+        # request shape is stable compatibility evidence; retrying the same
+        # tools+format shape every ReAct iteration wastes RPM and can hide the
+        # actual task result behind provider limits.
+        self._unsupported_native_shapes: set[
+            tuple[tuple[str, ...], bool, bool]
+        ] = set()
         # The provider that actually completed the most recent request.  This
         # must not be inferred from model_priority[0]: fallback may succeed on
         # a later model and the REPL/status bar should report the real model.
@@ -113,6 +120,7 @@ class BaseEngine(ABC):
         """Return the sole provider retry/timeout settings for this request."""
 
         policy = self.execution_policy
+        policy.wait_for_request_slot(phase)
         timeout = policy.request_budget(phase)
         return {
             "timeout": timeout,
@@ -770,10 +778,27 @@ class BaseEngine(ABC):
             ("tier2_tools_only", tools_schema, None),
             ("tier3_format_only", None, response_format),
         ]
-        # 过滤掉 tools/format 都没有的空层（避免与 fallback 重复）
-        tiers = [(n, t, f) for n, t, f in tiers if (t or f)]
+        # Filter the empty fallback and duplicate shapes (tools-only input used
+        # to produce identical tier1/tier2 requests).
+        unique_tiers = []
+        seen_shapes: set[tuple[bool, bool]] = set()
+        for name, tools, fmt in tiers:
+            shape = (bool(tools), bool(fmt))
+            if not any(shape) or shape in seen_shapes:
+                continue
+            seen_shapes.add(shape)
+            unique_tiers.append((name, tools, fmt))
+        tiers = unique_tiers
 
         for tier_name, tools, fmt in tiers:
+            capability_key = (
+                tuple(self.model_priority), bool(tools), bool(fmt)
+            )
+            if capability_key in self._unsupported_native_shapes:
+                logger.debug(
+                    "_call_llm_native 跳过已确认不兼容层: %s", tier_name
+                )
+                continue
             self.execution_policy.check(tier_name)
             resp = self._call_with_tools_once(
                 messages,
@@ -782,6 +807,7 @@ class BaseEngine(ABC):
                 max_tokens,
             )
             if resp is None:
+                self._unsupported_native_shapes.add(capability_key)
                 continue  # 本层降级，试下一层
             if resp.has_tool_calls:
                 logger.info(f"_call_llm_native {tier_name} 拿到原生 tool_calls")
