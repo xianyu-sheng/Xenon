@@ -1,0 +1,43 @@
+{
+  "instance_id": "astropy__astropy-12907",
+  "model_name_or_path": "xenon/direct/deepseek/deepseek-v4-pro",
+  "model_patch": "",
+  "engine": "direct",
+  "elapsed_seconds": 30.52,
+  "error": null,
+  "output_tail": "I'll start by examining the relevant source file to understand the bug in `separability_matrix`. Then I'll implement the minimal fix.\n\n<｜｜DSML｜｜Tool>\n<read filepath=\"/home/user/astropy__modeling__fix__separable__nested__compounds/astropy/modeling/separable.py\" />\n</｜｜DSML｜｜Tool>",
+  "tool_trace": [],
+  "patch_source": "empty",
+  "patch_apply_success": false,
+  "patch_apply_error": "engine produced neither workspace changes nor a unified diff",
+  "runtime": {
+    "image_key": "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest",
+    "image_id": "sha256:f3f63bb87d581c0e7b47f900dd82165b71040e1758d3c29e915e2b18da9baf63",
+    "container_name": "sweb.xenon.astropy__astropy-12907.direct.95c86e1c",
+    "container_workdir": "/testbed"
+  },
+  "provider_usage": {
+    "deepseek/deepseek-v4-pro": {
+      "calls": 1,
+      "prompt_tokens": 522,
+      "completion_tokens": 659,
+      "total_tokens": 1181,
+      "cache_hit_tokens": 512,
+      "cache_miss_tokens": 10,
+      "latency_avg": 18.34121259395033
+    }
+  },
+  "cache_metrics": {
+    "cache_hit_rate": 0.9808429118773946,
+    "reusable_tokens": 512,
+    "prompt_tokens": 522,
+    "estimated_tokens_saved": null,
+    "estimated_cost_saved": null
+  },
+  "context_metrics": {
+    "compression_triggered": false,
+    "tokens_before": null,
+    "tokens_after": null
+  },
+  "worktree": "/tmp/swebench-xenon-7-engine-postfix/astropy__astropy-12907/direct"
+}
