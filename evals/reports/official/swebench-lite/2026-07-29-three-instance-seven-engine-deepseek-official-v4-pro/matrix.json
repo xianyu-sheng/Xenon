@@ -1,0 +1,73 @@
+{
+  "schema_version": "xenon.swebench.official.matrix.v1",
+  "dataset": "SWE-bench/SWE-bench_Lite",
+  "split": "test",
+  "instances": [
+    "astropy__astropy-14182",
+    "django__django-10914",
+    "pytest-dev__pytest-11143"
+  ],
+  "model": "deepseek/deepseek-v4-pro",
+  "provider": "DeepSeek official API (api.deepseek.com)",
+  "evaluator": "swebench==4.1.0 official harness",
+  "engines": ["direct", "react", "plan-execute", "reflection", "plan-react", "plan-reflection", "react-reflection"],
+  "aggregate": {
+    "cells": 21,
+    "verified_success_rate": 0.5238095238,
+    "official_result_assertion_pass_rate": 0.5238095238,
+    "official_resolved_cells": 11,
+    "unresolved_cells": 4,
+    "empty_patch_cells": 10,
+    "error_cells": 0,
+    "tool_execution_success_rate": 0.9417989418,
+    "tool_calls_succeeded": 178,
+    "tool_calls_total": 189,
+    "provider_calls": 216,
+    "prompt_tokens": 2603586,
+    "completion_tokens": 114548,
+    "total_tokens": 2718134,
+    "cache_hit_tokens": 2334720,
+    "cache_rails_hit_rate": 0.8967324298,
+    "estimated_tokens_saved": null,
+    "estimated_cost_saved": null,
+    "context_compression_triggered": false,
+    "generation_elapsed_seconds": 2087.874
+  },
+  "rows": [
+    {
+      "engine": "direct",
+      "official": {"resolved": [], "unresolved": [], "empty_patch": ["astropy__astropy-14182", "django__django-10914", "pytest-dev__pytest-11143"], "errors": []},
+      "cells": 3, "workspace_patches": 0, "calls": 3, "prompt_tokens": 3268, "completion_tokens": 2001, "total_tokens": 5269, "cache_hit_tokens": 0, "cache_rails_hit_rate": 0.0, "tool_success": 0, "tool_total": 0, "elapsed_seconds": 65.07
+    },
+    {
+      "engine": "react",
+      "official": {"resolved": ["django__django-10914", "pytest-dev__pytest-11143"], "unresolved": ["astropy__astropy-14182"], "empty_patch": [], "errors": []},
+      "cells": 3, "workspace_patches": 3, "calls": 32, "prompt_tokens": 524998, "completion_tokens": 14637, "total_tokens": 539635, "cache_hit_tokens": 478976, "cache_rails_hit_rate": 0.9123387137, "tool_success": 31, "tool_total": 33, "elapsed_seconds": 257.844
+    },
+    {
+      "engine": "plan-execute",
+      "official": {"resolved": [], "unresolved": [], "empty_patch": ["astropy__astropy-14182", "django__django-10914", "pytest-dev__pytest-11143"], "errors": []},
+      "cells": 3, "workspace_patches": 0, "calls": 4, "prompt_tokens": 11865, "completion_tokens": 3125, "total_tokens": 14990, "cache_hit_tokens": 4096, "cache_rails_hit_rate": 0.3452170249, "tool_success": 1, "tool_total": 1, "elapsed_seconds": 69.308
+    },
+    {
+      "engine": "reflection",
+      "official": {"resolved": [], "unresolved": [], "empty_patch": ["astropy__astropy-14182", "django__django-10914", "pytest-dev__pytest-11143"], "errors": []},
+      "cells": 3, "workspace_patches": 0, "calls": 6, "prompt_tokens": 48536, "completion_tokens": 22006, "total_tokens": 70542, "cache_hit_tokens": 22912, "cache_rails_hit_rate": 0.4720619746, "tool_success": 0, "tool_total": 0, "elapsed_seconds": 355.109
+    },
+    {
+      "engine": "plan-react",
+      "official": {"resolved": ["django__django-10914"], "unresolved": ["astropy__astropy-14182"], "empty_patch": ["pytest-dev__pytest-11143"], "errors": []},
+      "cells": 3, "workspace_patches": 2, "calls": 81, "prompt_tokens": 987024, "completion_tokens": 24742, "total_tokens": 1011766, "cache_hit_tokens": 910080, "cache_rails_hit_rate": 0.9220444877, "tool_success": 74, "tool_total": 79, "elapsed_seconds": 432.133
+    },
+    {
+      "engine": "plan-reflection",
+      "official": {"resolved": ["django__django-10914", "pytest-dev__pytest-11143"], "unresolved": ["astropy__astropy-14182"], "empty_patch": [], "errors": []},
+      "cells": 3, "workspace_patches": 3, "calls": 42, "prompt_tokens": 459269, "completion_tokens": 18218, "total_tokens": 477487, "cache_hit_tokens": 409472, "cache_rails_hit_rate": 0.8915733481, "tool_success": 32, "tool_total": 34, "elapsed_seconds": 337.137
+    },
+    {
+      "engine": "react-reflection",
+      "official": {"resolved": ["django__django-10914", "pytest-dev__pytest-11143"], "unresolved": ["astropy__astropy-14182"], "empty_patch": [], "errors": []},
+      "cells": 3, "workspace_patches": 3, "calls": 48, "prompt_tokens": 568626, "completion_tokens": 29819, "total_tokens": 598445, "cache_hit_tokens": 509184, "cache_rails_hit_rate": 0.8954638022, "tool_success": 40, "tool_total": 42, "elapsed_seconds": 571.273
+    }
+  ]
+}

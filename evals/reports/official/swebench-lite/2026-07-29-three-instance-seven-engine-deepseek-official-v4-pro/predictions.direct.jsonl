@@ -1,0 +1,3 @@
+{"instance_id": "astropy__astropy-14182", "model_name_or_path": "xenon/direct/deepseek/deepseek-v4-pro", "model_patch": ""}
+{"instance_id": "django__django-10914", "model_name_or_path": "xenon/direct/deepseek/deepseek-v4-pro", "model_patch": ""}
+{"instance_id": "pytest-dev__pytest-11143", "model_name_or_path": "xenon/direct/deepseek/deepseek-v4-pro", "model_patch": ""}

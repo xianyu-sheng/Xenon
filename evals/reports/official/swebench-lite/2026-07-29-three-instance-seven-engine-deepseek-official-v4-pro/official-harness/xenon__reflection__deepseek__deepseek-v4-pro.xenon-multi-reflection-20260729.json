@@ -1,0 +1,25 @@
+{
+    "total_instances": 3,
+    "submitted_instances": 3,
+    "completed_instances": 0,
+    "resolved_instances": 0,
+    "unresolved_instances": 0,
+    "empty_patch_instances": 3,
+    "error_instances": 0,
+    "completed_ids": [],
+    "incomplete_ids": [],
+    "empty_patch_ids": [
+        "astropy__astropy-14182",
+        "django__django-10914",
+        "pytest-dev__pytest-11143"
+    ],
+    "submitted_ids": [
+        "astropy__astropy-14182",
+        "django__django-10914",
+        "pytest-dev__pytest-11143"
+    ],
+    "resolved_ids": [],
+    "unresolved_ids": [],
+    "error_ids": [],
+    "schema_version": 2
+}
