@@ -1595,8 +1595,7 @@ class REPL:
         sys.stdout.write("\n")
         return result.strip()
 
-    @staticmethod
-    def _read_input_unix() -> str:
+    def _read_input_unix(self) -> str:
         """Linux/macOS 原始终端输入：支持 Alt+Enter 换行，方向键编辑。
 
         使用时将终端设为原始模式，逐字节读取并解析 ANSI 转义序列。
@@ -1943,6 +1942,15 @@ class REPL:
                     if cursor_pos < len(current_line):
                         current_line.pop(cursor_pos)
                         _redraw_line()
+
+                elif ch == '\x0f':   # Ctrl+O：展开/折叠最近一次执行详情
+                    # This path is used when prompt_toolkit is unavailable or
+                    # disabled.  Previously Ctrl+O was only registered in the
+                    # prompt_toolkit key map, so the fallback editor silently
+                    # ignored it.  Render above the raw editor and redraw the
+                    # current prompt so input is not lost.
+                    self._toggle_thinking_details()
+                    _redraw_line()
 
                 elif ch in ('\x7f', '\x08'):  # Backspace
                     if cursor_pos > 0:
@@ -2636,7 +2644,11 @@ class REPL:
             model_priority=model_ids,
             model_pool=self.model_pool,
             auto_router=self.auto_router,
-            max_iterations=10,
+            # Ordinary chat tasks can involve several read/edit/verify cycles.
+            # Keep the engine's explicit per-run cap, but give the interactive
+            # path enough room for a medium-length task; protocol retries and
+            # compression still remain bounded by BudgetManager's 2× cap.
+            max_iterations=15,
             callback=callback,
             model_configs=dict(self.registry.models),
             permission_gate=self._permission_gate,
@@ -2660,6 +2672,13 @@ class REPL:
                 self.status_bar.set_last_model(model_used)
         except Exception as e:
             self._captured_log = self._stop_log_capture()
+            # Preserve the panel on exceptional engine exits as well.  Without
+            # this, Ctrl+O had only raw logs available after a retry/LLM error,
+            # so the detailed tool timeline appeared to be missing.
+            try:
+                self._last_thinking_panel = callback.get_thinking_panel()
+            except Exception:
+                self._last_thinking_panel = None
             self._persist_engine_trace(engine)
             # 异常时展开日志便于调试
             if self._last_mode_line:

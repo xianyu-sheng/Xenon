@@ -12,6 +12,7 @@
 
 - ``on_compression()``：上下文被压缩（省 token）→ +N 轮；
 - ``on_hollow_answer()``：检测到空洞回答 → +N 轮（给机会补救，而非直接判失败）。
+- ``on_retry()``：模型协议/格式需要重试 → +N 轮，避免重试直接撞上固定预算。
 
 ``bonus`` 只扩展 ``can_continue()`` 上限，**不改变阶段边界**（CONVERGE 仍按 base
 的 75% 触发），保证收束节奏不被奖励打乱。``max_total_multiplier`` 给 bonus 封顶
@@ -68,6 +69,7 @@ class BudgetManager:
     # 奖励配额（默认值，可覆盖）
     compression_reward: int = 2
     hollow_reward: int = 3
+    retry_reward: int = 1
     # 阶段边界（占 base max 的比例）
     explore_ratio: float = 0.25
     converge_ratio: float = 0.75
@@ -145,6 +147,16 @@ class BudgetManager:
         """
         reward = self.hollow_reward if n is None else max(0, n)
         return self._grant("hollow", reward)
+
+    def on_retry(self, n: int | None = None) -> int:
+        """协议格式重试奖励：为一次可恢复的模型输出错误增加预算。
+
+        重试本身已经消耗了当前迭代；如果不显式补充预算，格式错误会同时
+        吃掉一次有效工作轮次。奖励受与其它软预算奖励相同的 2× 上限约束，
+        因而不会把模型置于无限重试循环。
+        """
+        reward = self.retry_reward if n is None else max(0, n)
+        return self._grant("retry", reward)
 
     def _grant(self, kind: str, reward: int) -> int:
         """发放奖励，受 ``max_total_multiplier`` 封顶；超封顶则记 0。"""

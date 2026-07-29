@@ -242,6 +242,25 @@ class TestCallLlmNative:
 # ReAct native_fc 集成
 # ════════════════════════════════════════════════════════════
 class TestReActNativeFc:
+    def test_unparseable_action_retries_without_budget_attribute_error(self, monkeypatch):
+        """格式错误是可恢复的协议事件，不应因缺少 BudgetManager 方法崩溃。"""
+        eng = ReActEngine(["m1"], max_iterations=2, native_fc=False)
+        responses = iter([
+            '{"action":"read_file","action_input":{"file_path":"a.py"}}' + " " * 60,
+            '{"final_answer":"已完成格式重试"}',
+        ])
+        monkeypatch.setattr(eng, "_call_llm", lambda *a, **k: next(responses))
+        def parse(raw):
+            if "final_answer" in raw:
+                return {"thought": "", "action": "", "final_answer": "已完成格式重试"}
+            return {"thought": raw, "action": "", "final_answer": ""}
+
+        monkeypatch.setattr(eng, "_parse_response", parse)
+
+        result = eng.run("请说明格式重试", AgentContext())
+
+        assert result == "已完成格式重试"
+
     def test_build_tools_schema_structure(self):
         eng = ReActEngine(["m1"], native_fc=True)
         schema = eng._build_tools_schema()

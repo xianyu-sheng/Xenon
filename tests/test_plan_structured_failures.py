@@ -133,3 +133,18 @@ def test_summary_prompt_contains_explicit_step_statuses(monkeypatch):
     prompt = captured["messages"][1]["content"]
     assert "[OK]" in prompt
     assert "[FAILED]" in prompt
+
+
+def test_planner_retries_once_after_unparseable_response(monkeypatch):
+    engine = PlanExecuteEngine(["model"])
+    responses = iter([
+        "<tool_calls>not a plan</tool_calls>",
+        '{"analysis":"修复任务","steps":[{"id":1,"task":"读取文件",'
+        '"tool":"read_file","params":{"file_path":"a.py"}}]}',
+    ])
+    monkeypatch.setattr(engine, "_call_llm_for_phase", lambda *a, **k: next(responses))
+
+    result = engine._plan("修复 a.py", AgentContext())
+
+    assert len(result["steps"]) == 1
+    assert result["steps"][0]["tool"] == "read_file"

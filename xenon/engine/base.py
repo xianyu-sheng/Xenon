@@ -714,7 +714,15 @@ class BaseEngine(ABC):
                 obs = f"⛔ 工具 {tool_name} 执行异常: {e}"
             return idx, obs
 
-        if len(actions) <= 1:
+        # Never run side-effecting actions concurrently.  The model may return
+        # a JSON array containing writes/commands even though the prompt asks
+        # it not to; prompt text is not a safety boundary.  Fall back to the
+        # same ordered path used for a single action.
+        parallel_allowed = all(
+            action.get("action", "") in self._PARALLEL_SAFE_TOOLS
+            for action in actions
+        )
+        if len(actions) <= 1 or not parallel_allowed:
             # 单工具：直接执行
             for i, a in enumerate(actions):
                 _, obs = _exec_one(i, a)

@@ -89,6 +89,19 @@ class TestRewards:
         assert b.bonus == 3
         assert b.rewards == [("hollow", 3)]
 
+    def test_on_retry_adds_default_and_records_reason(self):
+        b = BudgetManager(max_iterations=10)
+        b.on_retry()
+        assert b.bonus == 1
+        assert b.total == 11
+        assert b.rewards == [("retry", 1)]
+
+    def test_on_retry_respects_cap(self):
+        b = BudgetManager(max_iterations=2, max_total_multiplier=2.0)
+        b.on_retry(10)
+        assert b.bonus == 2
+        assert b.total == 4
+
     def test_reward_custom_n(self):
         b = BudgetManager(max_iterations=10)
         b.on_compression(5)

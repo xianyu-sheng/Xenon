@@ -204,6 +204,34 @@ def test_ctrl_o_long_output_redraws_prompt_and_ctrl_c_remains_responsive(
     assert "Traceback" not in output
 
 
+def test_ctrl_o_works_in_raw_input_fallback_when_prompt_toolkit_disabled(
+    pty_child,
+):
+    """Ctrl+O must not depend on prompt_toolkit being available."""
+    child = pty_child(
+        "import os\n"
+        "os.environ['XENON_NO_PT'] = '1'\n"
+        "from xenon.repl.repl import REPL\n"
+        "repl = REPL(streaming=False)\n"
+        "repl._last_mode_line = 'RAW-MODE-SENTINEL'\n"
+        "repl._captured_log = 'RAW-DETAIL-SENTINEL'\n"
+        "print('RAW-READY', flush=True)\n"
+        "value = repl._read_input()\n"
+        "print(f'RAW-RESULT={value}', flush=True)\n"
+    )
+
+    child.wait_for("RAW-READY")
+    child.wait_for("You")
+    child.send(b"\x0f")
+    expanded = child.wait_for("思考过程已展开", timeout=8)
+    assert "RAW-MODE-SENTINEL" in expanded
+    assert "RAW-DETAIL-SENTINEL" in expanded
+    child.send(b"done\r")
+    output = child.finish()
+    assert "RAW-RESULT=done" in output
+    assert "Traceback" not in output
+
+
 @pytest.mark.parametrize(
     "newline_key",
     [b"\x1b[13;2u", b"\x1b[27;2;13~", b"\x1b\r"],

@@ -556,6 +556,31 @@ class PlanExecuteEngine(BaseEngine):
         else:
             logger.debug(f"LLM 原始响应 (前500字): {response[:500]}")
         result = self._parse_json(response)
+
+        # A planner protocol error must not terminate a tool-capable engine
+        # before execution starts.  Providers occasionally return native tool
+        # markup, truncated JSON, or prose despite the JSON-only contract.
+        # Give one bounded format-recovery attempt; the retry is deliberately
+        # independent of the task text so it applies to every project.
+        if not result.get("steps"):
+            messages.append({
+                "role": "user",
+                "content": (
+                    "上一次规划响应无法解析为执行步骤。请重新输出且只能输出一个完整 JSON 对象，"
+                    "不要使用工具标记、Markdown 或解释文字。格式必须是："
+                    '{"analysis":"...","steps":[{"id":1,"task":"...",'
+                    '"tool":null,"params":{},"depends_on":[]}]}'
+                ),
+            })
+            logger.warning("Planner 未生成可解析步骤，执行一次格式恢复重试")
+            retry_response = self._call_llm_for_phase("plan", messages)
+            retry_result = self._parse_json(retry_response)
+            if retry_result.get("steps"):
+                result = retry_result
+            elif retry_response:
+                # Preserve the most recent provider evidence for diagnostics;
+                # the caller still fails closed when no executable plan exists.
+                result = retry_result
         logger.debug(f"解析后: steps={len(result.get('steps', []))}, analysis={result.get('analysis', '')[:100]}")
         return result
 

@@ -1178,27 +1178,30 @@ class ReActEngine(BaseEngine):
 
         # 超时控制：在线程池中执行 sub.run()
         if timeout and timeout > 0:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(sub_engine.run, task, sub_ctx)
-                try:
-                    answer = future.result(timeout=timeout)
-                except concurrent.futures.TimeoutError:
-                    logger.warning("子 Agent %s 超时（%ds），返回部分结果", task_id, timeout)
-                    # 尝试从子引擎获取部分结果
-                    partial = getattr(sub_engine, '_last_answer', None)
-                    if partial:
-                        answer = f"[超时截断] {partial}"
-                    else:
-                        answer = f"执行超时（{timeout}s），子任务未完成。建议缩小范围或增加超时。"
-                    # 尝试优雅关闭（如果子引擎有 cancel 方法）
-                    if hasattr(sub_engine, 'cancel'):
-                        try:
-                            sub_engine.cancel()
-                        except Exception:
-                            pass
-                except Exception as e:
-                    logger.exception("子 Agent %s 执行异常", task_id)
-                    answer = f"执行异常: {e}"
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(sub_engine.run, task, sub_ctx)
+            try:
+                answer = future.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                logger.warning("子 Agent %s 超时（%ds），返回部分结果", task_id, timeout)
+                partial = getattr(sub_engine, '_last_answer', None)
+                if partial:
+                    answer = f"[超时截断] {partial}"
+                else:
+                    answer = f"执行超时（{timeout}s），子任务未完成。建议缩小范围或增加超时。"
+                if hasattr(sub_engine, 'cancel'):
+                    try:
+                        sub_engine.cancel()
+                    except Exception:
+                        pass
+                # Do not wait for a stuck child when returning a timeout result.
+                executor.shutdown(wait=False, cancel_futures=True)
+            except Exception as e:
+                executor.shutdown(wait=True)
+                logger.exception("子 Agent %s 执行异常", task_id)
+                answer = f"执行异常: {e}"
+            else:
+                executor.shutdown(wait=True)
         else:
             try:
                 answer = sub_engine.run(task, sub_ctx)
@@ -1256,9 +1259,18 @@ class ReActEngine(BaseEngine):
 
             try:
                 if timeout and timeout > 0:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as inner:
-                        fut = inner.submit(sub_engine.run, t, sub_ctx)
+                    inner = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    fut = inner.submit(sub_engine.run, t, sub_ctx)
+                    try:
                         answer = fut.result(timeout=timeout)
+                    except concurrent.futures.TimeoutError:
+                        answer = f"[超时 {timeout}s]"
+                        inner.shutdown(wait=False, cancel_futures=True)
+                    except Exception:
+                        inner.shutdown(wait=True)
+                        raise
+                    else:
+                        inner.shutdown(wait=True)
                 else:
                     answer = sub_engine.run(t, sub_ctx)
             except concurrent.futures.TimeoutError:
