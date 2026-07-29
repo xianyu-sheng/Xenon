@@ -509,10 +509,14 @@ class ReActEngine(BaseEngine):
             shell_info = "bash"
             large_file_hint = "head/tail/sed 命令"
 
-        from datetime import datetime
-        now = datetime.now()
+        from datetime import date as _date
+        today = _date.today()
         weekdays_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-        current_datetime = f"{now.year}年{now.month}月{now.day}日 {weekdays_cn[now.weekday()]} {now.strftime('%H:%M:%S')}"
+        # 只注入日期（精度到天），不注入时分秒。
+        # 原因：system prompt 是 Cache Rails 的稳定前缀，秒级时间戳每轮都不同，
+        # 会导致每次引擎实例化时 cache lane 分叉，使缓存命中率归零。
+        # 精确时间可通过 command 工具（`date` / `Get-Date`）实时获取。
+        current_date = f"{today.year}年{today.month}月{today.day}日 {weekdays_cn[today.weekday()]}"
 
         env_info = f"""
 
@@ -522,11 +526,12 @@ class ReActEngine(BaseEngine):
 - Shell: {shell_info}
 - Python: {sys.version.split()[0]}
 - 工作目录: 通过命令 `pwd`（Linux/macOS）或 `Get-Location`（Windows）获取
-- 当前日期时间: {current_datetime}
+- 当前日期: {current_date}
 
 重要：
 - 根据操作系统使用正确的命令。Windows 下不要使用 ls, cat, mkdir -p, uname, which, grep 等 Linux 命令。
-- 当用户询问日期、时间、星期几时，直接回答上面提供的当前日期时间，不要编造或猜测。
+- 当用户询问日期、星期几时，直接回答上面提供的当前日期，不要编造或猜测。
+- 当用户询问精确时间时，使用 command 工具执行 `date`（Linux/macOS）或 `Get-Date`（Windows）。
 """
         return REACT_SYSTEM_PROMPT.format(tools_desc=tools_desc, large_file_hint=large_file_hint) + env_info
 
