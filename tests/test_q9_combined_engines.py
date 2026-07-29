@@ -374,3 +374,11 @@ def test_combined_engine_reports_model_that_produced_final_output():
 
     assert eng.run("改进这个回答") == "repaired"
     assert eng.last_model_used == "provider/repair"
+
+
+def test_reflection_repair_budget_matches_parent_execution_budget():
+    plan = PlanReflectionEngine(["provider/model"], max_steps=10)
+    react = ReactReflectionEngine(["provider/model"], react_iterations=8)
+
+    assert plan.repairer.max_iterations == 10
+    assert react.repairer.max_iterations == 8

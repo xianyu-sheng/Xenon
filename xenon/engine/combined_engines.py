@@ -444,7 +444,7 @@ class PlanReflectionEngine(_ReflectionCombination):
         max_steps: int = 15,
         review_rounds: int = 2,
         pass_threshold: int = 7,
-        repair_iterations: int = 5,
+        repair_iterations: int | None = None,
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
         model_pool: Any = None,
@@ -472,8 +472,11 @@ class PlanReflectionEngine(_ReflectionCombination):
             pass_threshold=pass_threshold,
             **common,
         )
+        repair_budget = (
+            min(max_steps, 10) if repair_iterations is None else repair_iterations
+        )
         self.repairer = ReActEngine(
-            model_priority, max_iterations=max(1, repair_iterations), **common
+            model_priority, max_iterations=max(1, repair_budget), **common
         )
         self._last_tracker: ToolExecutionTracker | None = None
         self.last_model_used: str | None = None
@@ -533,7 +536,7 @@ class ReactReflectionEngine(_ReflectionCombination):
         # from being reset before the combination has aggregated its evidence.
         self.repairer = ReActEngine(
             model_priority,
-            max_iterations=max(1, min(react_iterations, 5)),
+            max_iterations=max(1, min(react_iterations, 10)),
             **common,
         )
         self.reflector = ReflectionEngine(
