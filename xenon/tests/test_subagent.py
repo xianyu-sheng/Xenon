@@ -43,14 +43,13 @@ class TestSubAgentSystem:
         result = eng._spawn_subagent({"task": "test"}, ctx, None)
         assert "深度超限" in result
 
-    def test_all_eight_engine_types_buildable(self):
-        """所有 8 种引擎类型均可构建。"""
+    def test_all_seven_engine_types_buildable(self):
+        """所有 7 种引擎类型均可构建。"""
         eng = self._make_engine()
         expected = {
             "react": "ReActEngine",
             "plan_execute": "PlanExecuteEngine",
             "reflection": "ReflectionEngine",
-            "novel": "NovelEngine",
             "plan_react": "PlanReactEngine",
             "plan_reflection": "PlanReflectionEngine",
             "react_reflection": "ReactReflectionEngine",
@@ -62,13 +61,12 @@ class TestSubAgentSystem:
             assert cls_name in type(sub).__name__, f"{etype} 期望 {cls_name}, 实际 {type(sub).__name__}"
 
     def test_invalid_engine_rejected_with_all_options(self):
-        """不支持的引擎类型列举所有 8 种可用选项。"""
+        """不支持的引擎类型列举所有 7 种可用选项。"""
         eng = self._make_engine()
         result = eng._build_sub_engine("nonexistent", "id")
         assert "plan_react" in result
         assert "plan_reflection" in result
         assert "react_reflection" in result
-        assert "novel" in result
         assert "direct" in result
 
     def test_build_sub_engine_react(self):
@@ -209,6 +207,6 @@ class TestSubAgentSystem:
             # 验证 ThreadPoolExecutor 被调用
             mock_exec.assert_called()
 
-    # ── P1: 多引擎构建（8 种引擎）───────────────────
+    # ── P1: 多引擎构建（7 种引擎）───────────────────
 
-    # 已由 test_all_eight_engine_types_buildable 和 test_invalid_engine_rejected_with_all_options 覆盖
+    # 已由 test_all_seven_engine_types_buildable 和 test_invalid_engine_rejected_with_all_options 覆盖

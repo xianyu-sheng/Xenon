@@ -74,7 +74,6 @@ See [TUI.md](TUI.md) for the complete layout contract, shortcuts, and fallback b
 | `react` | Think → Act → Observe loop | File ops, coding, debugging |
 | `plan-execute` | Plan first, then execute in DAG order | Multi-step refactors |
 | `reflection` | Execute then self-review | Quality-critical tasks |
-| `novel` | Long-form writing with chapter planning | Documentation, reports |
 | `plan-react` | Plan + ReAct per step | Complex multi-file tasks |
 | `plan-reflection` | Plan + self-review per step | Production-grade refactors |
 | `react-reflection` | ReAct + final review | Code with quality gates |

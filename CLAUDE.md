@@ -70,7 +70,7 @@ MCPRegistry (唯一真相源)
 ### 各引擎对 MCP 的支持要求
 
 所有引擎（ReAct / PlanExecute / Reflection / PlanReact / PlanReflection /
-ReactReflection / Novel）在创建后都应调用 `_inject_mcp_tools_into_engine()`，
+ReactReflection）在创建后都应调用 `_inject_mcp_tools_into_engine()`，
 确保 LLM 在任意范式下都能看到可用的 MCP 工具列表。
 
 ## 项目结构

@@ -155,6 +155,7 @@ class ExecutionPolicy:
 _ENGINE_CHILDREN = (
     "planner",
     "reactor",
+    "repairer",
     "reflector",
     "executor",
     "_last_subagent",

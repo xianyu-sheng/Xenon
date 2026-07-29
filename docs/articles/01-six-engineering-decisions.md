@@ -1,6 +1,6 @@
 # 从零构建 AI Agent：6 个让我重新理解"智能体"的工程决策
 
-> 19K 行 Python，12 家模型商，8 种推理范式，1000+ 测试。这不是一篇"我做了个 AI 编程助手"的软文——这是我在构建过程中遇到的 6 个非直觉工程问题，以及为什么标准答案不总是对的。
+> 19K 行 Python，12 家模型商，7 种推理范式，1000+ 测试。这不是一篇"我做了个 AI 编程助手"的软文——这是我在构建过程中遇到的 6 个非直觉工程问题，以及为什么标准答案不总是对的。
 
 ---
 
@@ -28,7 +28,6 @@ xenon/engine/
 ├── react_engine.py            # 循环直到 finish
 ├── plan_execute_engine.py     # DAG + 拓扑排序
 ├── reflection_engine.py       # 双模型互审
-├── novel_engine.py            # 创意写作专用
 ├── plan_react_engine.py       # 计划 → ReAct
 ├── plan_reflection_engine.py  # 计划 → 审查
 └── react_reflection_engine.py # ReAct → 审查

@@ -167,3 +167,9 @@ class TestParseReview:
         assert result["feedback"] == "looks good"
         assert result["pass"] is False
         assert result["score"] == 0
+
+    def test_missing_or_invalid_score_fails_closed(self):
+        missing = parse_review('{"pass": true, "feedback": "looks fine"}')
+        invalid = parse_review('{"pass": true, "score": "excellent"}')
+        assert missing["score"] == 0
+        assert invalid["score"] == 0

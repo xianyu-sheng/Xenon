@@ -27,7 +27,7 @@ DEFAULT_REPL_TASKS_PATH = Path(__file__).with_name("repl_tasks.yaml")
 DEFAULT_REPORT_PATH = Path(__file__).parent / "reports" / "mock_report.md"
 SUPPORTED_ENGINE_TYPES = (
     "direct", "react", "plan-execute", "reflection", "plan-react",
-    "plan-reflection", "react-reflection", "novel",
+    "plan-reflection", "react-reflection",
 )
 
 
@@ -438,13 +438,10 @@ class RealAgent:
             return ReactReflectionEngine(
                 **common, react_iterations=self.max_iterations, review_rounds=2,
             )
-        if self.engine_type == "novel":
-            from xenon.engine.novel_engine import NovelEngine
-            return NovelEngine(**common, max_iterations=self.max_iterations)
         raise ValueError(
             f"Unsupported engine_type {self.engine_type!r}; expected one of "
             "direct, react, plan-execute, reflection, plan-react, plan-reflection, "
-            "react-reflection, novel"
+            "react-reflection"
         )
 
     def _build_context(self) -> Any:
@@ -704,7 +701,7 @@ class RealAgent:
     ) -> tuple[bool, str]:
         """评分：全部 expected_tools 成功执行且 final_answer 非空。"""
         expected = set(task.get("expected_tools", []))
-        if engine_type in {"direct", "reflection", "novel"}:
+        if engine_type in {"direct", "reflection"}:
             if not (answer or "").strip():
                 return False, "empty final answer"
             return True, f"answer-only baseline ({engine_type}); tool expectation not applicable"

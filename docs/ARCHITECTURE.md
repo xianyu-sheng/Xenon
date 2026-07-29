@@ -11,7 +11,7 @@
 v0.7.3 保留既有 REPL 与引擎分层、ModelPool、ContextManager / AgentContext
 双上下文以及 7 阶段工具管线，并在 v0.7.0 用户治理记忆层之上新增标准 Agent
 Skills、机器可读集成 CLI、Ark 一等 Provider 和 llms.txt 优先文档检索。这些能力
-分别接入既有技能、Provider、工具和 MCP 边界，不侵入八种推理引擎；v0.7.3
+分别接入既有技能、Provider、工具和 MCP 边界，不侵入七种推理引擎；v0.7.3
 进一步加入按模型隔离的 Cache Rails 和不可变请求信封。
 
 | 变更类型 | v0.7.3 内容 | 是否改变顶层架构 |
@@ -68,9 +68,9 @@ Xenon 吸收 Reasonix 的稳定前缀思想，并扩展到自动多模型路由�
 
 ### 🏛️ Pillar 2 — 8-Engine Auto-Router（八引擎自动路由）
 
-**问题：** 不同任务需要不同的推理策略。简单问答走 direct 足够，复杂编程任务需要 ReAct 的思考-行动-观察循环，长文创作需要 Novel 引擎的大纲-章节模式。
+**问题：** 不同任务需要不同的推理策略。简单问答走 direct 足够，复杂编程任务需要 ReAct 的思考-行动-观察循环，复杂链路可组合规划与证据审查。
 
-**方案：** 8 种推理范式 + 任务难度自动检测 + 模型智能路由。
+**方案：** 7 种推理范式 + 任务难度自动检测 + 模型智能路由。
 
 ```
 用户输入
@@ -82,7 +82,6 @@ AutoRouter（任务难度评估 + 意图检测）
 │ react        · 思考→行动→观察 循环       │
 │ plan-execute · 规划→分步执行             │
 │ reflection   · 输出→自反思→修正          │
-│ novel        · 大纲→章节 长文生成        │
 │ plan-react   · 规划 + ReAct 嵌套执行     │
 │ plan-reflection · 规划 + 反思审查        │
 │ react-reflection · ReAct + 反思审查      │
@@ -230,7 +229,7 @@ TUI 只消费引擎已有的回调和状态，不参与模型选择、推理循�
 
 ```
 xenon/
-├── engine/           · 8 种推理引擎（react / plan-execute / reflection / novel + 组合）
+├── engine/           · 7 种推理引擎（direct / react / plan-execute / reflection + 组合）
 │   ├── base.py       · 引擎基类（LLM 调用 / 模型路由 / 权限闸门）
 │   ├── callbacks.py  · 回调体系 + 可折叠执行轨迹数据
 │   ├── budget.py     · 三阶段软预算管理（探索→利用→收束）
@@ -280,7 +279,7 @@ Reasonix 是公开的第三方参考项目，不是 DeepSeek 发布的“官方�
 | 维度 | Reasonix | Xenon |
 |------|----------|-------|
 | 分发 | Go 单一静态二进制、跨平台构建 | Python 3.10+ 包与 `xenon` CLI |
-| 核心扩展 | 配置/注册表驱动，内置与 MCP 插件 | 8 种引擎、26 个内置工具与 MCP |
+| 核心扩展 | 配置/注册表驱动，内置与 MCP 插件 | 7 种引擎、26 个内置工具与 MCP |
 | 工具安全 | allow/ask/deny 策略、工具契约 | 权限闸门、事务化写入、结构化失败与断路器 |
 | 恢复 | 检查点、恢复规范与持久会话 | 自动保存、跨轮工具轨迹、工作记忆与模型恢复 |
 | 主机集成 | ACP、远程与多客户端能力 | 当前以终端 TUI 为主，尚未实现 ACP |

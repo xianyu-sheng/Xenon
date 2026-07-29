@@ -32,7 +32,6 @@ from xenon.engine.execution_policy import (
     ExecutionPolicy,
     bind_execution_policy,
 )
-from xenon.engine.novel_engine import NovelEngine
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.react_engine import ReActEngine
 from xenon.engine.reflection_engine import ReflectionEngine
@@ -48,7 +47,7 @@ from evals.swebench_runtime import (
 
 ALL_ENGINES = (
     "direct", "react", "plan-execute", "reflection", "plan-react",
-    "plan-reflection", "react-reflection", "novel",
+    "plan-reflection", "react-reflection",
 )
 
 
@@ -93,8 +92,6 @@ def _engine(name: str, model: str, config: ModelConfig, max_steps: int):
     if name == "react-reflection":
         return ReactReflectionEngine(models, react_iterations=max_steps,
                                      review_rounds=max_steps, **common)
-    if name == "novel":
-        return NovelEngine(models, max_iterations=max_steps, **common)
     return None
 
 

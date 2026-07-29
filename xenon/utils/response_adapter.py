@@ -50,8 +50,11 @@ def _react_template() -> dict:
 
 def _reflection_template() -> dict:
     return {
-        "pass": True,
-        "score": 8,
+        # Reviews are a correctness gate.  Missing fields must fail closed;
+        # otherwise a syntactically valid ``{"feedback": ...}`` silently
+        # becomes an 8/10 pass.
+        "pass": False,
+        "score": 0,
         "feedback": "",
         "issues": [],
         "suggestions": [],
@@ -691,11 +694,13 @@ def parse_review(raw: str) -> dict[str, Any]:
     # pass 字段兼容多种写法
     if isinstance(result["pass"], str):
         result["pass"] = result["pass"].lower() in ("true", "pass", "yes", "ok", "1")
-    # score 确保是数字
+    # score 确保是数字；无效分数不能回退到一个可能通过的中间值。
     if not isinstance(result["score"], (int, float)):
         try:
             result["score"] = int(result["score"])
         except (ValueError, TypeError):
-            result["score"] = 5
+            result["score"] = 0
+
+    result["score"] = max(0, min(10, int(result["score"])))
 
     return result

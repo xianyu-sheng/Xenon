@@ -119,10 +119,6 @@ class REPL:
         self._memory_detector: Any = None
         self._pending_memory_use_ids: list[str] = []
 
-        # 多小说管理器
-        from xenon.engine.novel_manager import NovelManager
-        self._novel_manager = NovelManager()
-
         # 状态栏
         from xenon.utils.deepseek_cache import CacheTracker
         self._cache_tracker = CacheTracker(persist=True)
@@ -163,7 +159,6 @@ class REPL:
         self._session_state: dict[str, Any] = {
             "agent_context": self.agent_context,
             "_repl": self,
-            "_novel_manager": self._novel_manager,
             "model_pool": self.model_pool,
             "auto_router": self.auto_router,
             "terminal_activity": self._terminal_activity,
@@ -2224,7 +2219,6 @@ class REPL:
                 "react": "reason_act",
                 "planexecute": "plan",
                 "reflection": "execute",
-                "novel": "create",
             }.get(route_engine, "request")
             model_ids = self.auto_router.route(
                 turn_prompt, self.ctx_mgr.get_messages(), count=3,
@@ -2285,8 +2279,6 @@ class REPL:
                 self._run_plan_reflection_engine(turn_prompt, model_ids)
             elif mode == "react-reflection":
                 self._run_react_reflection_engine(turn_prompt, model_ids)
-            elif mode == "novel":
-                self._run_novel_engine(turn_prompt, model_ids)
             else:
                 # direct 模式 — 直接调 LLM
                 self._run_direct(
@@ -2598,27 +2590,36 @@ class REPL:
         惰性模式下：只显示服务器名列表，不调用 discover_tools()。
         当 LLM 实际决定调用 mcp_call 时，_ensure_mcp_ready() 才触发连接。
         """
+        from xenon.engine.execution_policy import walk_engine_graph
+
+        nodes = list(walk_engine_graph(engine))
         registry = getattr(self, "_mcp_registry", None)
         has_mcp = bool(
             registry
             and (registry.clients or registry.has_pending_servers())
         )
-        if not has_mcp and hasattr(engine, "tools"):
-            # A generic MCP entry with no configured server encourages the
-            # model to fabricate names such as ``train_query``.  Hide the
-            # impossible action instead of asking the user to approve it.
-            engine.tools = dict(engine.tools)
-            engine.tools.pop("mcp_call", None)
+        if not has_mcp:
+            for node in nodes:
+                if not hasattr(node, "tools"):
+                    continue
+                # A generic MCP entry with no configured server encourages the
+                # model to fabricate names such as ``train_query``.  Hide the
+                # impossible action from every executable child in a combined
+                # engine, not just from its tool-less wrapper.
+                node.tools = dict(node.tools)
+                node.tools.pop("mcp_call", None)
         try:
             mcp_tools_list = self._build_mcp_tools_list()
         except Exception as e:
             logger.debug(f"构建 MCP 工具列表失败: {e}")
             return
-        if hasattr(engine, '_mcp_tools_list'):
+        for node in nodes:
+            if not hasattr(node, '_mcp_tools_list'):
+                continue
             try:
-                engine._mcp_tools_list = mcp_tools_list
-                if hasattr(engine, '_build_system_prompt'):
-                    engine.system_prompt = engine._build_system_prompt()
+                node._mcp_tools_list = mcp_tools_list
+                if hasattr(node, '_build_system_prompt'):
+                    node.system_prompt = node._build_system_prompt()
             except Exception as e:
                 logger.warning(f"注入 MCP 工具列表到引擎失败: {e}")
 
@@ -2887,47 +2888,6 @@ class REPL:
                 console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ React+Reflection 引擎执行失败: {e}[/error]")
             self._record_engine_error("React+Reflection", e, model_ids[0])
-        finally:
-            self._persist_engine_trace(engine)
-            if getattr(self, "_log_capture_active", False):
-                self._captured_log = self._stop_log_capture()
-
-    def _run_novel_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """小说创作引擎模式（支持多小说隔离）。"""
-        from xenon.engine.novel_engine import NovelEngine
-
-        self._last_mode_line = "· Novel 小说创作模式"
-
-        self._start_log_capture()
-        callback = self._make_callback()
-        engine = NovelEngine(
-            model_priority=model_ids,
-            max_iterations=15,
-            callback=callback,
-            novel_manager=self._novel_manager,
-            model_configs=dict(self.registry.models),
-            model_pool=self.model_pool,
-            auto_router=self.auto_router,
-            permission_gate=self._permission_gate,
-        )
-        try:
-            result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
-            self._captured_log = self._stop_log_capture()
-            self._persist_engine_trace(engine)
-            model_used = self._engine_model_used(engine, model_ids)
-            self.ctx_mgr.add_assistant_message(result, model_used=model_used)
-            self._render_engine_result(callback, result, "Novel 创作结果", border_style="magenta")
-            if model_used:
-                self.status_bar.set_last_model(model_used)
-        except Exception as e:
-            self._captured_log = self._stop_log_capture()
-            self._persist_engine_trace(engine)
-            if self._last_mode_line:
-                console.print(f"[dim]{self._last_mode_line}[/dim]")
-            if self._captured_log:
-                console.print(Text(self._captured_log.rstrip(), style="dim"))
-            console.print(f"[error]❌ 小说创作引擎执行失败: {e}[/error]")
-            self._record_engine_error("Novel", e, model_ids[0])
         finally:
             self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):

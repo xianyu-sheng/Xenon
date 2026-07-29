@@ -277,7 +277,6 @@ def test_dynamic_tools_are_classified_as_sensitive(monkeypatch):
             "ReactReflectionEngine",
             "_run_react_reflection_engine",
         ),
-        ("xenon.engine.novel_engine", "NovelEngine", "_run_novel_engine"),
     ],
 )
 def test_every_repl_engine_receives_the_live_permission_gate(

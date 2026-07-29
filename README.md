@@ -49,7 +49,7 @@ pip install -e ".[dev]"
 |------|------|
 | DeepSeek 适配 | V4 模型发现、`reasoning_effort`、原生工具调用、思考消息连续性 |
 | Cache Rails | 按模型和执行契约维护追加式提示词轨道；`/cache` 与 `/cost` 展示厂商 usage 和费用 |
-| 执行引擎 | direct、ReAct、Plan-Execute、Reflection、Novel 和三种组合模式 |
+| 执行引擎 | direct、ReAct、Plan-Execute、Reflection 和三种组合模式 |
 | 工具安全 | 权限确认、超时、断路器、结构化结果和中断恢复点 |
 | 用户治理记忆 | 会话、项目本地、项目共享、用户全局四个作用域；自动候选必须确认后才写入 |
 | 扩展 | Agent Skills、MCP（stdio/HTTP/SSE）、Ark 与 OpenAI-compatible Provider |

@@ -61,6 +61,12 @@ REVIEWER_PROMPT = """你是一个严格的质量审查员。请审查执行者�
 - 缺少必要的注释或文档 → score ≤ 8
 
 pass=true 当且仅当 score >= 7。
+
+当提供“真实执行证据”时：
+- 工具成功、文件变更和测试结果以证据为准，不采信执行者的文字自述
+- 没有真实变更时，不得因为输出中包含代码块或 diff 就声称任务已落地
+- 有工具失败时，判断失败是否已由后续成功操作恢复
+- 只负责判定和列出问题，不生成替代答案、补丁或长篇分析
 """
 
 
@@ -214,15 +220,62 @@ class ReflectionEngine(BaseEngine):
         §8.23.11 / E4：用 ``reviewer_model_priority``（独立于执行者模型），
         避免同模型自我审查盲区。
         """
+        return self._review_with_evidence(user_input, output)
+
+    def review_existing(
+        self,
+        user_input: str,
+        output: str,
+        *,
+        evidence: str = "",
+        context: AgentContext | None = None,
+        ctx_mgr: ContextManager | None = None,
+    ) -> dict[str, Any]:
+        """Review an already executed phase without regenerating its output.
+
+        Combined engines use this as a strict gate.  It deliberately performs
+        one bounded reviewer call: correction belongs to a tool-capable repair
+        phase, not to Reflection's text executor.
+        """
+
+        self._ctx_mgr = ctx_mgr
+        self._begin_run()
+        review = self._review_with_evidence(user_input, output, evidence=evidence)
+        score = review.get("score", 0)
+        passed = score >= self.pass_threshold
+        review["pass"] = passed
+        self.callback.on_review(score, passed, review.get("feedback", "")[:200])
+        return review
+
+    def _review_with_evidence(
+        self,
+        user_input: str,
+        output: str,
+        *,
+        evidence: str = "",
+    ) -> dict[str, Any]:
+        """Run one bounded, fail-closed review over output and real evidence."""
+
+        evidence_section = (
+            f"\n\n真实执行证据（优先级高于文字自述）:\n{evidence}"
+            if evidence else ""
+        )
         messages = [
             {"role": "system", "content": self.reviewer_prompt},
-            {"role": "user", "content": f"用户需求:\n{user_input}\n\n执行者输出:\n{output}"},
+            {
+                "role": "user",
+                "content": (
+                    f"用户需求:\n{user_input}\n\n执行者输出:\n{output}"
+                    f"{evidence_section}"
+                ),
+            },
         ]
 
         response = self._call_llm_for_phase(
             "review",
             messages,
             model_priority=self.reviewer_model_priority,
+            max_tokens=1200,
         )
         return self._parse_review(response)
 

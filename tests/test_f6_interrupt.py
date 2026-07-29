@@ -9,7 +9,6 @@ from types import SimpleNamespace
 
 from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
-from xenon.engine.novel_engine import NovelEngine
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.react_engine import ReActEngine
 
@@ -113,44 +112,6 @@ class TestReActInterrupt:
         result = eng.run("你好", AgentContext())
         assert seen["reset"] is False
         assert result == "done"
-
-
-# ── Novel 中断 ──────────────────────────────────────────────
-class _FakeProject:
-    slug = "test"
-    title = "测试小说"
-
-    def get_all_context(self):
-        return ""
-
-
-class _FakeNovelManager:
-    def detect_novel(self, user_input): return _FakeProject()
-    def list_novels(self): return []
-    def update_context(self, slug, operation, detail): pass
-
-
-class TestNovelInterrupt:
-    def test_interrupt_breaks_loop(self):
-        cb = _RecordingCallback()
-        eng = NovelEngine(
-            ["m1"], max_iterations=5,
-            novel_manager=_FakeNovelManager(), callback=cb,
-        )
-        calls = {"n": 0}
-
-        def fake_llm(messages):
-            calls["n"] += 1
-            eng.interrupt()
-            return "raw"
-
-        eng._call_llm = fake_llm
-        eng._parse_response = lambda resp: {"thought": "t", "action": "echo", "action_input": {}}
-        eng._execute_tool = lambda action, action_input, ctx, tracker: "obs"
-
-        eng.run("写第一章", AgentContext())
-        assert calls["n"] == 1
-        assert any("引擎被用户中断，停止迭代" in w for w in cb.warnings)
 
 
 # ── Plan-Execute 中断 ──────────────────────────────────────

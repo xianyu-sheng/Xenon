@@ -23,7 +23,7 @@
 | --- | :---: | :---: | :---: | :---: | :---: |
 | **MCP 协议** | ✅ stdio + SSE | ❌ | ✅ 一等公民 | ✅ | ✅ stdio/http/sse |
 | **多模型路由** | ✅ 6 provider | ✅ ~10 | ❌ Claude only | ✅ 50+ | ✅ 18+ |
-| **多范式引擎** | ✅ **8 种** | ❌ | ❌ | ❌ | ⚠️ 可 mid-session 换 LLM |
+| **多范式引擎** | ✅ **7 种** | ❌ | ❌ | ❌ | ⚠️ 可 mid-session 换 LLM |
 | **本地优先** | ✅ Ollama + 本地凭据 | ⚠️ CLI 本地，模型云 | ❌ | ✅ | ✅ Ollama / llama.cpp |
 | **工具断路器** | ✅ 3 失败熔断 | ❌ | ❌ | ❌ | ❌ |
 | **上下文压缩** | ✅ 6 步 @ 80% | ❌ | ✅ | ❌ | ❌ |
@@ -66,18 +66,18 @@
 
 | 项目 | 能力 |
 | --- | --- |
-| **Xenon** | **8 种推理范式**：`direct` / `react` / `plan-execute` / `reflection` / `novel`（创意写作）+ 3 个组合引擎 `plan-react` / `plan-reflection` / `react-reflection`；同一套 REPL 内 `/mode` 切换。 |
+| **Xenon** | **7 种推理范式**：`direct` / `react` / `plan-execute` / `reflection` + 3 个组合引擎 `plan-react` / `plan-reflection` / `react-reflection`；同一套 REPL 内 `/mode` 切换。 |
 | Aider | 单范式：chat + 工具调用循环。 |
 | Claude Code | 单范式：单 agent loop。 |
 | OpenCode | 单范式。 |
 | Crush | "Flexible: switch LLMs mid-session preserving context" — 这是**换模型**（同范式内），不是换范式。 |
 
-**Xenon 优势**：**这是全表最强的差异化点**。8 种范式意味着：
+**Xenon 优势**：**这是全表最强的差异化点**。7 种范式意味着：
 - 简单问答 → `direct` 省 token
 - 工具调用 → `react` 经典循环
 - 多步任务 → `plan-execute` 自动分解（PlanDAG 拓扑并行）
 - 质量敏感 → `reflection` 独立审查者模型
-- 创意写作 → `novel` 长文续写引擎（v0.2.0 Q5 添加）
+- 创意写作 → 由通用 `direct` / `reflection` 模式处理，不再维护产品定位之外的专用引擎
 - 复合场景 → 3 个组合引擎（隔离 ctx + reviewer 模型实现多范式协同）
 
 其他 4 个项目都**没有真正的多范式切换**——Aider / Claude Code / OpenCode 是单 agent loop，Crush 是 mid-session 换 LLM（**换模型不换范式**）。
@@ -140,7 +140,7 @@
 | 我只用 Claude 模型，要 MCP | Claude Code（官方、一等 MCP） |
 | 我要 50+ provider，TUI 美观 | OpenCode |
 | 我要 Go 写的快、轻、本地多运行时 | Crush |
-| **我要多范式（8 种）+ 6 provider + MCP + 工程化三件套** | **Xenon** |
+| **我要多范式（7 种）+ 6 provider + MCP + 工程化三件套** | **Xenon** |
 | 我要研究 Agent 范式（PlanDAG / Reflection / 组合引擎实现） | **Xenon**（这是实验平台） |
 | 我要做国产 / 中文 / 本地化 | **Xenon**（DeepSeek / Qwen / Ollama 三件套） |
 

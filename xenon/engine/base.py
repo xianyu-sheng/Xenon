@@ -1,11 +1,11 @@
 """BaseEngine — 引擎抽象基类（R2）。
 
-抽取公共属性与 ``_call_llm``，消除 react/plan/reflection/novel 四份
+抽取公共属性与 ``_call_llm``，消除执行引擎之间的重复实现
 ``_call_llm`` 复制及参数漂移：
 
 - ``max_tokens`` 硬编码 131072 vs 8192（B4 已修，此处统一来源）；
 - ``temperature`` 0.3 vs 0.8 散落各处；
-- B7 的 per-model ``api_key``/``base_url`` 覆盖在 novel 中未生效（漂移 bug）。
+- B7 的 per-model ``api_key``/``base_url`` 覆盖统一由基类生效。
 
 子类只需实现 ``run`` 与自身特有参数（``max_iterations``/``max_steps``/
 ``max_rounds`` 等），公共 LLM 调用与多模型 fallback 由本基类提供。
@@ -376,7 +376,7 @@ class BaseEngine(ABC):
 
         ``max_tokens`` 优先级：显式入参 > ``ModelConfig.max_tokens`` > 8192 默认；
         ``chat_completion`` 再按厂商上限钳制（B4）。``api_key``/``base_url`` 按
-        模型覆盖（B7）。温度取 ``self.temperature``（novel=0.8，其余=0.3）。
+        模型覆盖（B7）。温度取 ``self.temperature``。
 
         ``model_priority``：可选的模型优先级覆盖（§8.23.11 / E4——Reflection 的
         reviewer 用独立模型列表，避免执行者与审查者同模型的自我审查盲区）；

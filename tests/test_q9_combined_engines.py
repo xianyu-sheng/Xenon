@@ -6,6 +6,7 @@ from xenon.engine.combined_engines import (
     PlanReactEngine, PlanReflectionEngine, ReactReflectionEngine, _isolated_ctx,
 )
 from xenon.engine.context import AgentContext
+from xenon.engine.tool_tracker import ToolExecutionTracker
 
 
 # --------------------------- _isolated_ctx ---------------------------
@@ -167,12 +168,12 @@ def test_react_reflection_reflector_gets_isolated_ctx():
 
     reflector_ctxs = []
 
-    def fake_reflector_run(user_input, context=None, ctx_mgr=None):
+    def fake_review(user_input, output, evidence="", context=None, ctx_mgr=None):
         reflector_ctxs.append(context)
-        return "final output"
+        return {"pass": True, "score": 9, "feedback": "ok", "issues": []}
 
     eng.reactor.run = fake_reactor_run
-    eng.reflector.run = fake_reflector_run
+    eng.reflector.review_existing = fake_review
     eng.run("任务")
     assert reactor_writes["done"]
     assert len(reflector_ctxs) == 1
@@ -189,11 +190,187 @@ def test_plan_reflection_reflector_gets_isolated_ctx():
 
     reflector_ctxs = []
 
-    def fake_reflector_run(user_input, context=None, ctx_mgr=None):
+    def fake_review(user_input, output, evidence="", context=None, ctx_mgr=None):
         reflector_ctxs.append(context)
-        return "final"
+        return {"pass": True, "score": 9, "feedback": "ok", "issues": []}
 
     eng.planner.run = fake_planner_run
-    eng.reflector.run = fake_reflector_run
+    eng.reflector.review_existing = fake_review
     eng.run("任务")
     assert reflector_ctxs[0].get("planner_secret") is None
+
+
+def test_plan_react_skips_steps_covered_by_verified_change_and_test():
+    eng = PlanReactEngine(["openai/test"], max_steps=4, react_iterations=1)
+    eng.planner._plan = lambda user_input, ctx: {
+        "analysis": "fix then test",
+        "steps": [
+            {"id": 1, "task": "分析问题"},
+            {"id": 2, "task": "修复 target.py"},
+            {"id": 3, "task": "运行 pytest 验证"},
+            {"id": 4, "task": "总结结果"},
+        ],
+    }
+    calls = []
+
+    def fake_run(user_input, context=None, ctx_mgr=None):
+        calls.append(user_input)
+        tracker = ToolExecutionTracker()
+        tracker.record(
+            "edit_file", {"file_path": "target.py"}, True, "edited"
+        )
+        tracker.record("command", {"action": "pytest -q"}, True, "1 passed")
+        eng.reactor._last_tracker = tracker
+        return "问题已修复并通过测试"
+
+    eng.reactor.run = fake_run
+    captured = []
+    eng._summarize = (
+        lambda user_input, results, analysis="": captured.extend(results) or "done"
+    )
+
+    assert eng.run("修复 target.py") == "done"
+    assert len(calls) == 1
+    assert [item["status"] for item in captured] == [
+        "ok", "skipped", "skipped", "skipped"
+    ]
+    assert len(eng._last_tracker.calls) == 2
+
+
+def test_reflection_pass_preserves_executed_output_without_text_regeneration():
+    eng = ReactReflectionEngine(["openai/test"], react_iterations=1)
+    eng.reactor.run = lambda *args, **kwargs: "verified initial"
+    eng.reactor._last_tracker = ToolExecutionTracker()
+    reviews = []
+
+    def review(*args, **kwargs):
+        reviews.append(kwargs["evidence"])
+        return {"pass": True, "score": 9, "feedback": "ok", "issues": []}
+
+    eng.reflector.review_existing = review
+    eng.repairer.run = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("repair must not run")
+    )
+
+    assert eng.run("回答问题") == "verified initial"
+    assert len(reviews) == 1
+
+
+def test_failed_review_uses_tool_capable_repair_and_aggregates_trace():
+    eng = PlanReflectionEngine(["openai/test"], max_steps=1, review_rounds=1)
+    initial_tracker = ToolExecutionTracker()
+    initial_tracker.record("read_file", {"file_path": "x.py"}, True, "read")
+
+    def planner_run(*args, **kwargs):
+        eng.planner._last_tracker = initial_tracker
+        return "only inspected"
+
+    eng.planner.run = planner_run
+    eng.reflector.review_existing = lambda *args, **kwargs: {
+        "pass": False,
+        "score": 3,
+        "feedback": "implementation missing",
+        "issues": ["file unchanged"],
+    }
+    eng.repairer._input_requires_tools = lambda value: True
+
+    def repair(*args, **kwargs):
+        tracker = ToolExecutionTracker()
+        tracker.record("edit_file", {"file_path": "x.py"}, True, "fixed")
+        tracker.record("command", {"action": "pytest -q"}, True, "passed")
+        eng.repairer._last_tracker = tracker
+        return "fixed and tested"
+
+    eng.repairer.run = repair
+
+    assert eng.run("修复 x.py") == "fixed and tested"
+    assert [call.tool_name for call in eng._last_tracker.calls] == [
+        "read_file", "edit_file", "command"
+    ]
+
+
+def test_tool_task_repair_without_real_change_keeps_initial_output():
+    eng = ReactReflectionEngine(
+        ["openai/test"], react_iterations=1, review_rounds=1
+    )
+    initial_tracker = ToolExecutionTracker()
+
+    def initial(*args, **kwargs):
+        eng.reactor._last_tracker = initial_tracker
+        return "initial result"
+
+    eng.reactor.run = initial
+    eng.reflector.review_existing = lambda *args, **kwargs: {
+        "pass": False,
+        "score": 2,
+        "feedback": "not applied",
+        "issues": [],
+    }
+    eng.repairer._input_requires_tools = lambda value: True
+
+    def hollow_repair(*args, **kwargs):
+        eng.repairer._last_tracker = ToolExecutionTracker()
+        return "```diff\nnot actually applied\n```"
+
+    eng.repairer.run = hollow_repair
+    assert eng.run("修改文件") == "initial result"
+
+
+def test_high_review_score_cannot_pass_write_task_without_mutation():
+    eng = PlanReflectionEngine(
+        ["openai/test"], max_steps=1, review_rounds=1
+    )
+
+    def planner(*args, **kwargs):
+        eng.planner._last_tracker = ToolExecutionTracker()
+        return "I inspected the file and everything is fixed"
+
+    eng.planner.run = planner
+    eng.reflector.review_existing = lambda *args, **kwargs: {
+        "pass": True,
+        "score": 10,
+        "feedback": "perfect",
+        "issues": [],
+    }
+    repair_calls = []
+
+    def repair(*args, **kwargs):
+        repair_calls.append(args[0])
+        tracker = ToolExecutionTracker()
+        tracker.record("edit_file", {"file_path": "x.py"}, True, "fixed")
+        eng.repairer._last_tracker = tracker
+        return "actually fixed"
+
+    eng.repairer.run = repair
+
+    assert eng.run("修复 x.py") == "actually fixed"
+    assert repair_calls
+    assert "没有成功的状态变更工具记录" in repair_calls[0]
+
+
+def test_combined_engine_reports_model_that_produced_final_output():
+    eng = ReactReflectionEngine(["provider/initial"], review_rounds=1)
+
+    def initial(*args, **kwargs):
+        eng.reactor.last_model_used = "provider/initial"
+        eng.reactor._last_tracker = ToolExecutionTracker()
+        return "initial"
+
+    eng.reactor.run = initial
+    eng.reflector.review_existing = lambda *args, **kwargs: {
+        "pass": False,
+        "score": 2,
+        "feedback": "revise",
+        "issues": [],
+    }
+    eng.repairer._input_requires_tools = lambda value: False
+
+    def repair(*args, **kwargs):
+        eng.repairer.last_model_used = "provider/repair"
+        eng.repairer._last_tracker = ToolExecutionTracker()
+        return "repaired"
+
+    eng.repairer.run = repair
+
+    assert eng.run("改进这个回答") == "repaired"
+    assert eng.last_model_used == "provider/repair"

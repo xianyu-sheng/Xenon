@@ -32,7 +32,7 @@ python evals/runner.py --mode real --engines all \
   --output /tmp/xenon-engine-matrix/report.md
 ```
 
-当前矩阵覆盖：`direct`、`react`、`plan-execute`、`reflection`、`plan-react`、`plan-reflection`、`react-reflection` 和 `novel`。`direct`/`reflection`/`novel` 的工具期望对文件任务标记为不适用，但仍单独报告最终回答和结果断言，不会伪造工具成功率。
+当前矩阵覆盖：`direct`、`react`、`plan-execute`、`reflection`、`plan-react`、`plan-reflection` 和 `react-reflection`。历史八引擎报告保留原始结果作为审计证据；NovelEngine 自后续版本起已移除。`direct`/`reflection` 的工具期望对文件任务标记为不适用，但仍单独报告最终回答和结果断言，不会伪造工具成功率。
 
 每个真实引擎批次还会在工作目录写入 `checkpoints/<engine>.jsonl`：每完成一个任务立即落盘，包含 task/engine 创建、引擎运行、断言和异常事件。`--request-timeout` 控制单次供应商 HTTP 请求超时，避免一个无响应请求阻塞整批评测。
 

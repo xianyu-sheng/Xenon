@@ -268,8 +268,8 @@ BUILTIN_TOOLS = {
             "可隔离的子问题，如『分析某模块并总结』『给某文件补单测』）。\n"
             "- 单任务: 传 task 参数，选填 engine 和 timeout（秒）。\n"
             "- 批量并行: 传 task_list=[{\"task\": \"...\", \"engine\": \"react\"}, ...]（最多10个）。\n"
-            "- 8 种引擎: react（思考-行动循环,默认）、plan_execute（规划-执行）、\n"
-            "  reflection（反思-修正）、novel（小说创作）、\n"
+            "- 7 种引擎: react（思考-行动循环,默认）、plan_execute（规划-执行）、\n"
+            "  reflection（反思-修正）、\n"
             "  plan_react（规划+ReAct组合）、plan_reflection（规划+反思组合）、\n"
             "  react_reflection（ReAct+反思组合）、direct（直答,无工具）。\n"
             "完成后返回摘要+工具调用统计+最终回答。不要用于单步操作。"
@@ -277,7 +277,7 @@ BUILTIN_TOOLS = {
         "params": {
             "task": "委派给子 Agent 的子任务描述（单任务，与 task_list 二选一）",
             "task_list": "批量子任务列表 [{\"task\": \"...\", \"engine\": \"react\", \"timeout\": 30}, ...]",
-            "engine": "引擎类型: react(默认)/plan_execute/reflection/novel/plan_react/plan_reflection/react_reflection/direct",
+            "engine": "引擎类型: react(默认)/plan_execute/reflection/plan_react/plan_reflection/react_reflection/direct",
             "timeout": "超时秒数（默认使用引擎配置，0=无超时）",
         },
     },
@@ -1307,13 +1307,13 @@ class ReActEngine(BaseEngine):
         return f"{summary}\n\n" + "\n".join(lines)
 
     def _build_sub_engine(self, engine_type: str, task_id: str):
-        """v0.6.1-P1: 按类型构建子引擎实例（共 8 种引擎）。
+        """v0.6.1-P1: 按类型构建子引擎实例（共 7 种引擎）。
 
         Returns:
             子引擎实例或错误消息字符串。
 
         支持的引擎:
-        - react / plan_execute / reflection / novel        （基础引擎）
+        - react / plan_execute / reflection                （基础引擎）
         - plan_react / plan_reflection / react_reflection  （组合引擎）
         - direct                                            （无工具直答）
         """
@@ -1351,19 +1351,6 @@ class ReActEngine(BaseEngine):
                 self.model_priority,
                 max_rounds=min(self.max_subagent_iterations, 5),
                 pass_threshold=6,
-                callback=self.callback,
-                model_configs=self.model_configs,
-            )
-            setattr(sub, '_subagent_depth', self._subagent_depth + 1)
-            self._inherit_execution_context(sub)
-            self._last_subagent = sub
-            return sub
-
-        elif engine_type == "novel":
-            from xenon.engine.novel_engine import NovelEngine
-            sub = NovelEngine(
-                self.model_priority,
-                max_iterations=self.max_subagent_iterations,
                 callback=self.callback,
                 model_configs=self.model_configs,
             )
@@ -1433,7 +1420,7 @@ class ReActEngine(BaseEngine):
 
         else:
             available = (
-                "react, plan_execute, reflection, novel, "
+                "react, plan_execute, reflection, "
                 "plan_react, plan_reflection, react_reflection, direct"
             )
             return f"⚠️ 不支持的引擎类型: '{engine_type}'。可用: {available}"

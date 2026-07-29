@@ -1,49 +1,123 @@
-"""
-Combined Engines — 思考范式组合引擎。
-
-将多种思考范式组合使用，发挥各自优势：
-- PlanReactEngine: 全局规划 + 每步 ReAct 执行
-- PlanReflectionEngine: 规划执行 + 反思修正
-- ReactReflectionEngine: ReAct 探索 + 反思审查
-"""
+"""Combined reasoning engines with verified state hand-off between phases."""
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
+from xenon.engine.execution_evidence import ExecutionEvidence, workspace_root_for
+from xenon.engine.execution_policy import EngineDeadlineExceeded
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.react_engine import ReActEngine
 from xenon.engine.reflection_engine import ReflectionEngine
 from xenon.engine.tool_tracker import ToolExecutionTracker
-from xenon.engine.execution_policy import EngineDeadlineExceeded
 
 if TYPE_CHECKING:
     from xenon.repl.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
 
+_TEST_STEP = re.compile(r"测试|验证|回归|test|verify|check|lint", re.IGNORECASE)
+_SUMMARY_STEP = re.compile(r"总结|汇总|报告|说明|summary|report", re.IGNORECASE)
+_INSPECT_STEP = re.compile(
+    r"分析|检查|读取|定位|调查|了解|inspect|read|analy[sz]e|investigate|locate",
+    re.IGNORECASE,
+)
+_IMPLEMENT_STEP = re.compile(
+    r"实现|修复|修改|更新|创建|编写|重构|删除|重命名|"
+    r"implement|fix|modify|update|create|write|refactor|delete|rename|patch",
+    re.IGNORECASE,
+)
+_PATH_IN_TEXT = re.compile(
+    r"(?:[\w.-]+/)*[\w.-]+\.(?:py|js|ts|tsx|jsx|json|ya?ml|toml|md|txt|rs|go|java|cpp|c|h)"
+)
+
 
 def _isolated_ctx(ctx: AgentContext) -> AgentContext:
-    """为 reflector 构造隔离 ctx（P3-Q9 / §8.19.6）。
+    """Copy durable conversation/checkpoint links, never phase-local store state."""
 
-    新 store 不含 reactor 写入的 ``step_N_result`` 等中间状态，避免反思基线被
-    污染；仅复制对话消息作历史兜底（ctx_mgr 注入时 reflector 走 ctx_mgr）。
-    """
     fresh = AgentContext()
     fresh.set_conversation_messages(list(ctx.get_conversation_messages()))
+    if hasattr(ctx, "record_tool_checkpoint"):
+        fresh.set_tool_checkpoint_callback(ctx.record_tool_checkpoint)
     return fresh
 
 
-class PlanReactEngine:
-    """
-    Plan + React 组合引擎。
+def _merge_tracker(target: ToolExecutionTracker, source: ToolExecutionTracker | None) -> None:
+    if source is not None:
+        target.calls.extend(source.calls)
 
-    策略：用 Plan-Execute 做全局规划，每个步骤用 ReAct 循环执行。
-    适合需要既有宏观规划、又有灵活工具调用的复杂任务。
-    """
+
+def _step_kind(task: str) -> str:
+    if _TEST_STEP.search(task):
+        return "test"
+    if _SUMMARY_STEP.search(task):
+        return "summary"
+    if _IMPLEMENT_STEP.search(task):
+        return "implement"
+    if _INSPECT_STEP.search(task):
+        return "inspect"
+    return "other"
+
+
+def _planned_paths(step: dict[str, Any]) -> set[str]:
+    paths = set(_PATH_IN_TEXT.findall(str(step.get("task", ""))))
+    params = step.get("params")
+    if isinstance(params, dict):
+        for key in ("file_path", "path"):
+            value = params.get(key)
+            if isinstance(value, str) and value:
+                paths.add(value)
+    return paths
+
+
+def _skip_reason(
+    step: dict[str, Any],
+    evidence: ExecutionEvidence,
+    *,
+    implementation_steps: int,
+) -> str | None:
+    """Skip only when verified state already covers the planned operation."""
+
+    if evidence.exact_call_succeeded(step.get("tool"), step.get("params")):
+        return "同一工具和参数已经成功执行"
+
+    kind = _step_kind(str(step.get("task", "")))
+    if kind == "test" and evidence.successful_tests:
+        return "已有成功的真实测试执行记录"
+    if kind == "summary" and evidence.implementation_verified:
+        return "实现与测试均已验证，最终结果将由本地证据汇总"
+    if kind in {"inspect", "other"} and evidence.implementation_verified:
+        return "工作区变更和测试均已完成，无需重复探索"
+    if kind == "implement" and evidence.implementation_verified:
+        planned = _planned_paths(step)
+        changed = evidence.changed_files
+        if implementation_steps == 1:
+            return "唯一实现阶段已由前一步完成并通过测试"
+        if planned and any(
+            target == changed_path
+            or target.endswith("/" + changed_path)
+            or changed_path.endswith("/" + target)
+            for target in planned
+            for changed_path in changed
+        ):
+            return "计划目标文件已经修改并通过测试"
+    return None
+
+
+def _review_feedback(review: dict[str, Any]) -> str:
+    feedback = str(review.get("feedback") or "审查未通过")
+    issues = review.get("issues")
+    if isinstance(issues, list) and issues:
+        feedback += "\n" + "\n".join(f"- {issue}" for issue in issues[:12])
+    return feedback
+
+
+class PlanReactEngine:
+    """Plan globally, then execute uncovered steps through isolated ReAct runs."""
 
     def __init__(
         self,
@@ -53,9 +127,9 @@ class PlanReactEngine:
         react_iterations: int = 8,
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
-        model_pool: Any = None,          # v0.4.0
-        auto_router: Any = None,         # v0.4.0 Step 13
-        permission_gate: Any = None,     # v0.5.0
+        model_pool: Any = None,
+        auto_router: Any = None,
+        permission_gate: Any = None,
     ) -> None:
         self.model_priority = model_priority
         self.max_steps = max_steps
@@ -63,9 +137,19 @@ class PlanReactEngine:
         self.callback = callback or EngineCallback()
         self.model_pool = model_pool
         self.auto_router = auto_router
-        self.planner = PlanExecuteEngine(model_priority, max_steps=max_steps, callback=self.callback, model_configs=model_configs, model_pool=model_pool, auto_router=auto_router, permission_gate=permission_gate)
-        self.reactor = ReActEngine(model_priority, max_iterations=react_iterations, callback=self.callback, model_configs=model_configs, model_pool=model_pool, auto_router=auto_router, permission_gate=permission_gate)
+        common = dict(
+            callback=self.callback,
+            model_configs=model_configs,
+            model_pool=model_pool,
+            auto_router=auto_router,
+            permission_gate=permission_gate,
+        )
+        self.planner = PlanExecuteEngine(model_priority, max_steps=max_steps, **common)
+        self.reactor = ReActEngine(
+            model_priority, max_iterations=react_iterations, **common
+        )
         self._last_tracker: ToolExecutionTracker | None = None
+        self.last_model_used: str | None = None
 
     def run(
         self,
@@ -73,173 +157,285 @@ class PlanReactEngine:
         context: AgentContext | None = None,
         ctx_mgr: ContextManager | None = None,
     ) -> str:
-        from rich.console import Console
-        console = Console()
-
         ctx = context or AgentContext()
-        aggregate_tracker = ToolExecutionTracker()
-        self._last_tracker = aggregate_tracker
-        # F4: 把 ctx_mgr 透传给子引擎（_plan 经 _ctx_mgr 消费，reactor 经 run ctx_mgr）
+        aggregate = ToolExecutionTracker()
+        self._last_tracker = aggregate
         self.planner._ctx_mgr = ctx_mgr
 
-        # Phase 1: 全局规划
-        console.print("[dim]📋 Phase 1: 生成执行计划...[/dim]")
         try:
             plan = self.planner._plan(user_input, ctx)
-        except Exception as e:
-            console.print(f"[red]  ✗ 规划阶段异常: {e}[/red]")
-            return f"规划阶段失败: {e}"
-        steps = plan.get("steps", [])
-        analysis = plan.get("analysis", "")
-        logger.info(f"Plan 结果: steps={len(steps)}, analysis={analysis[:200] if analysis else '(空)'}")
-
-        if not steps:
-            console.print(f"[yellow]  ⚠ 未生成步骤，analysis={analysis[:200] if analysis else '(空)'}[/yellow]")
-            return analysis or "未能生成有效的执行计划。"
-
-        console.print(f"[dim]📋 计划生成 {len(steps)} 个步骤[/dim]")
-
-        # 显示计划
-        for s in steps:
-            console.print(f"  [dim]步骤 {s.get('id', '?')}: {s.get('task', '')}[/dim]")
-
-        # Phase 2: 每步用 ReAct 执行
-        console.print("\n[dim]🔄 Phase 2: ReAct 逐步执行[/dim]")
-        results = []
-
-        # 收集所有已发现的信息（文件列表、命令输出等）
-        discovered_info: list[str] = []
-
-        for i, step in enumerate(steps[:self.max_steps]):
-            step_task = step.get("task", "")
-            step_id = step.get("id", i + 1)
-
-            console.print(f"\n[cyan]🔄 步骤 {step_id}/{len(steps)}: {step_task}[/cyan]")
-
-            # 构建包含全局上下文的 ReAct 输入
-            # P3-Q9 / §8.19.1：prev_context 只含成功步骤，失败错误串不当"已发现信息"
-            prev_context = ""
-            ok_results = [r for r in results if r.get("status") == "ok"]
-            if ok_results:
-                prev_context = "\n\n## 之前步骤已发现的信息:\n" + "\n".join(
-                    f"- 步骤 {r['step_id']} ({r['task']}): {r['result'][:300]}"
-                    for r in ok_results
-                )
-
-            # 注入已发现的关键信息
-            info_context = ""
-            if discovered_info:
-                info_context = "\n\n## 已知信息（不要重复查询）:\n" + "\n".join(
-                    f"- {info}" for info in discovered_info[-20:]
-                )
-
-            react_input = (
-                f"全局任务: {user_input}\n"
-                f"当前步骤 ({step_id}/{len(steps)}): {step_task}"
-                f"{prev_context}{info_context}\n\n"
-                f"重要：利用上面已有的信息，不要重复执行已经完成的操作。"
-            )
-
-            # 用 ReAct 执行当前步骤
-            # P3-Q9 / §8.19.1：标记步骤成败，失败错误串不进入 discovered_info/prev_context
-            status = "ok"
-            try:
-                step_result = self.reactor.run(react_input, context=ctx, ctx_mgr=ctx_mgr)
-                if not step_result or not step_result.strip():
-                    step_result = f"(步骤 {step_id} 执行完成，无文本输出)"
-                console.print(f"[green]  ✓ 步骤 {step_id} 完成 ({len(step_result)} 字符)[/green]")
-
-                # 仅从成功结果提取关键信息（文件路径、命令输出等）
-                import re
-                # 提取文件路径
-                paths = re.findall(r'[\w/\\.-]+\.(?:py|js|ts|json|yaml|yml|toml|md|txt|bat|ps1|png|ico)', step_result)
-                for p in paths[:5]:
-                    discovered_info.append(f"文件: {p}")
-                # 提取关键发现
-                if "Windows" in step_result:
-                    discovered_info.append("操作系统: Windows")
-                if "Linux" in step_result:
-                    discovered_info.append("操作系统: Linux")
-
-            except Exception as e:
-                status = "failed"
-                step_result = f"步骤执行失败: {e}"
-                console.print(f"[red]  ✗ 步骤 {step_id} 失败: {e}[/red]")
-
-            step_tracker = getattr(self.reactor, "_last_tracker", None)
-            if step_tracker is not None:
-                aggregate_tracker.calls.extend(step_tracker.calls)
-
-            results.append({
-                "step_id": step_id,
-                "task": step_task,
-                "result": step_result,
-                "status": status,
-            })
-
-            # 存入上下文（标记状态，供跨引擎消费方区分成功/失败）
-            ctx.set(f"step_{step_id}_result", step_result)
-            ctx.set(f"step_{step_id}_status", status)
-
-        # Phase 3: 汇总
-        console.print("\n[dim]📝 Phase 3: 汇总结果...[/dim]")
-        summary = self._summarize(user_input, results, analysis)
-        return summary
-
-    def _summarize(self, user_input: str, results: list[dict], analysis: str = "") -> str:
-        """汇总所有步骤的结果。
-
-        P3-Q9 / §8.19.1：区分成功/失败步骤——失败步骤单列"失败的步骤"段，
-        不与成功结果混排，避免错误串被当正常结果整合。
-        """
-        ok_results = [r for r in results if r.get("status") == "ok"]
-        failed_results = [r for r in results if r.get("status") == "failed"]
-
-        results_text = "\n\n".join(
-            f"## 步骤 {r['step_id']}: {r['task']}\n{r['result']}"
-            for r in ok_results
-        ) if ok_results else "(无成功完成的步骤)"
-
-        failed_text = ""
-        if failed_results:
-            failed_text = "\n\n## 失败的步骤\n" + "\n".join(
-                f"- 步骤 {r['step_id']} ({r['task']}): {r['result']}"
-                for r in failed_results
-            )
-
-        # 如果所有成功步骤结果都很短，直接返回
-        all_short = all(len(r['result']) < 100 for r in ok_results)
-        if all_short and len(ok_results) <= 2:
-            return f"## 执行计划\n{analysis}\n\n## 执行结果\n{results_text}{failed_text}"
-
-        messages = [
-            {"role": "system", "content": "你是一个任务汇总专家。请根据各步骤的执行结果，给出最终的完整回答。整合所有步骤的输出，形成连贯的结论。用中文回答。"},
-            {"role": "user", "content": f"原始任务: {user_input}\n\n任务分析: {analysis}\n\n各步骤执行结果:\n{results_text}{failed_text}"},
-        ]
-
-        try:
-            result = self.planner._call_llm_for_phase(
-                "summarize",
-                messages,
-                max_tokens=4096,
-            )
-            if result and result.strip():
-                return result
         except EngineDeadlineExceeded:
             raise
-        # LLM 全部失败，返回原始结果
+        except Exception as exc:
+            logger.exception("Plan-ReAct planning failed")
+            return f"规划阶段失败: {exc}"
+
+        steps = list(plan.get("steps") or [])[: self.max_steps]
+        analysis = str(plan.get("analysis") or "")
+        if not steps:
+            self.callback.on_warning("未能生成有效的执行计划")
+            return analysis or "未能生成有效的执行计划。"
+
+        implementation_steps = sum(
+            _step_kind(str(step.get("task", ""))) == "implement" for step in steps
+        )
+        results: list[dict[str, Any]] = []
+        workspace_root = workspace_root_for(self.reactor)
+
+        for index, step in enumerate(steps, 1):
+            step_id = step.get("id", index)
+            task = str(step.get("task") or "")
+            evidence = ExecutionEvidence.capture(aggregate, workspace_root)
+            reason = _skip_reason(
+                step, evidence, implementation_steps=implementation_steps
+            )
+            if reason:
+                result = f"步骤已跳过：{reason}"
+                results.append({
+                    "step_id": step_id,
+                    "task": task,
+                    "result": result,
+                    "status": "skipped",
+                    "evidence": evidence.render(max_diff_chars=2_000),
+                })
+                ctx.set(f"step_{step_id}_result", result)
+                ctx.set(f"step_{step_id}_status", "skipped")
+                self.callback.on_step_done(step_id, True, result)
+                continue
+
+            self.callback.on_step(step_id, len(steps), task)
+            phase_ctx = _isolated_ctx(ctx)
+            phase_ctx.set("combined_completed_steps", [
+                {
+                    "step_id": item["step_id"],
+                    "task": item["task"],
+                    "status": item["status"],
+                }
+                for item in results
+            ])
+            react_input = (
+                f"全局任务:\n{user_input}\n\n"
+                f"完整计划:\n{analysis}\n\n"
+                f"当前步骤 ({step_id}/{len(steps)}):\n{task}\n\n"
+                "执行规则：先核对下方真实证据；已完成的操作不要重复。"
+                "如果本步骤或整个任务已经由真实状态覆盖，直接说明并结束。"
+                "需要操作时必须使用工具，完成后运行适当验证。\n\n"
+                f"已验证执行证据:\n{evidence.render(max_diff_chars=6_000)}"
+            )
+
+            status = "ok"
+            self.reactor._last_tracker = None
+            try:
+                result = self.reactor.run(
+                    react_input, context=phase_ctx, ctx_mgr=ctx_mgr
+                )
+                result = result.strip() if result and result.strip() else "(步骤完成，无文本输出)"
+            except EngineDeadlineExceeded:
+                raise
+            except Exception as exc:
+                logger.exception("Plan-ReAct step %r failed", step_id)
+                status = "failed"
+                result = f"步骤执行失败: {exc}"
+
+            _merge_tracker(aggregate, self.reactor._last_tracker)
+            if self.reactor.last_model_used:
+                self.last_model_used = self.reactor.last_model_used
+            after = ExecutionEvidence.capture(aggregate, workspace_root)
+            results.append({
+                "step_id": step_id,
+                "task": task,
+                "result": result,
+                "status": status,
+                "evidence": after.render(max_diff_chars=2_000),
+            })
+            ctx.set(f"step_{step_id}_result", result)
+            ctx.set(f"step_{step_id}_status", status)
+            self.callback.on_step_done(step_id, status == "ok", result[:200])
+
+        return self._summarize(user_input, results, analysis)
+
+    def _summarize(
+        self,
+        user_input: str,
+        results: list[dict[str, Any]],
+        analysis: str = "",
+    ) -> str:
+        ok = [result for result in results if result.get("status") == "ok"]
+        failed = [result for result in results if result.get("status") == "failed"]
+        evidence = ExecutionEvidence.capture(
+            self._last_tracker, workspace_root_for(self.reactor)
+        )
+
+        # Coding/tool runs already have a final ReAct answer plus verified state.
+        # A fresh LLM summary used to be a costly, lossy phase that could invent a
+        # patch different from the real worktree.
+        if ok and (evidence.has_workspace_change or evidence.successful_tests):
+            answer = ok[-1]["result"]
+            if failed:
+                answer += "\n\n未恢复的步骤失败:\n" + "\n".join(
+                    f"- {item['task']}: {item['result']}" for item in failed
+                )
+            return answer
+
+        successful_text = "\n\n".join(
+            f"## 步骤 {item['step_id']}: {item['task']}\n{item['result']}"
+            for item in ok
+        ) or "(无成功完成的步骤)"
+        failed_text = ""
+        if failed:
+            failed_text = "\n\n## 失败的步骤\n" + "\n".join(
+                f"- 步骤 {item['step_id']} ({item['task']}): {item['result']}"
+                for item in failed
+            )
+        if all(len(item["result"]) < 100 for item in ok) and len(ok) <= 2:
+            return f"## 执行计划\n{analysis}\n\n## 执行结果\n{successful_text}{failed_text}"
+
+        messages = [
+            {
+                "role": "system",
+                "content": "根据各步骤结果给出简洁、连贯的最终回答；不要编造未执行的操作。",
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"原始任务: {user_input}\n\n任务分析: {analysis}\n\n"
+                    f"各步骤结果:\n{successful_text}{failed_text}"
+                ),
+            },
+        ]
+        try:
+            output = self.planner._call_llm_for_phase(
+                "summarize", messages, max_tokens=1600
+            )
+            if output and output.strip():
+                self.last_model_used = self.planner.last_model_used
+                return output
+        except EngineDeadlineExceeded:
+            raise
         except Exception:
-            pass
-        return f"## 执行计划\n{analysis}\n\n## 执行结果\n{results_text}{failed_text}"
+            logger.warning("Plan-ReAct summary failed", exc_info=True)
+        return f"## 执行计划\n{analysis}\n\n## 执行结果\n{successful_text}{failed_text}"
 
 
-class PlanReflectionEngine:
-    """
-    Plan + Reflection 组合引擎。
+class _ReflectionCombination:
+    """Shared strict review and one-shot tool-capable repair workflow."""
 
-    策略：用 Plan-Execute 做规划和执行，最后用 Reflection 审查和修正输出质量。
-    适合需要高质量最终输出的任务。
-    """
+    reflector: ReflectionEngine
+    repairer: ReActEngine
+    review_rounds: int
+    callback: EngineCallback
+    _last_tracker: ToolExecutionTracker | None
+
+    def _review_and_repair(
+        self,
+        user_input: str,
+        initial_output: str,
+        initial_tracker: ToolExecutionTracker | None,
+        initial_model_used: str | None,
+        ctx: AgentContext,
+        ctx_mgr: ContextManager | None,
+    ) -> str:
+        aggregate = ToolExecutionTracker()
+        _merge_tracker(aggregate, initial_tracker)
+        self._last_tracker = aggregate
+        self.last_model_used = initial_model_used
+        root = workspace_root_for(self.repairer)
+        initial_evidence = ExecutionEvidence.capture(aggregate, root)
+        state_change_required = bool(_IMPLEMENT_STEP.search(user_input))
+        review_ctx = _isolated_ctx(ctx)
+
+        try:
+            review = self.reflector.review_existing(
+                user_input,
+                initial_output,
+                evidence=initial_evidence.render(),
+                context=review_ctx,
+                ctx_mgr=ctx_mgr,
+            )
+        except EngineDeadlineExceeded:
+            raise
+        except Exception as exc:
+            logger.warning("Reflection review failed; preserving executed result: %s", exc)
+            self.callback.on_error(f"Reflection 审查失败: {exc}")
+            return initial_output
+
+        # A reviewer score cannot certify a write task when no mutating tool
+        # actually succeeded.  This programmatic gate fixes the former
+        # "read-only plan + self-score 10" false success mode.
+        if review.get("pass") and not (
+            state_change_required and initial_evidence.mutation_count == 0
+        ):
+            return initial_output
+        if review.get("pass"):
+            review = {
+                **review,
+                "pass": False,
+                "feedback": "任务要求修改状态，但没有成功的状态变更工具记录",
+                "issues": ["工作区修改尚未通过工具落地"],
+            }
+
+        repair_prompt = (
+            f"原始任务:\n{user_input}\n\n"
+            f"当前执行结果:\n{initial_output}\n\n"
+            f"审查反馈:\n{_review_feedback(review)}\n\n"
+            "修正规则：以真实工作区和工具结果为准。先检查现状，只修复审查指出且"
+            "确实存在的问题；需要改变文件时必须用工具落地，并运行聚焦验证。"
+            "不要只输出一个未应用的补丁，也不要重复已经成功的操作。\n\n"
+            f"真实执行证据:\n{initial_evidence.render(max_diff_chars=10_000)}"
+        )
+        repair_ctx = _isolated_ctx(ctx)
+        self.repairer._last_tracker = None
+        try:
+            repaired_output = self.repairer.run(
+                repair_prompt, context=repair_ctx, ctx_mgr=ctx_mgr
+            )
+        except EngineDeadlineExceeded:
+            raise
+        except Exception as exc:
+            logger.warning("Reflection repair failed; preserving executed result: %s", exc)
+            self.callback.on_error(f"Reflection 修复失败: {exc}")
+            return initial_output
+
+        repair_tracker = self.repairer._last_tracker
+        _merge_tracker(aggregate, repair_tracker)
+        repaired_evidence = ExecutionEvidence.capture(aggregate, root)
+        repair_changed_state = bool(
+            repair_tracker
+            and any(call.success for call in repair_tracker.calls)
+            and repaired_evidence.mutation_count > initial_evidence.mutation_count
+        )
+        if state_change_required and not repair_changed_state:
+            logger.warning(
+                "Reflection repair made no verified state change; preserving initial output"
+            )
+            return initial_output
+
+        if self.repairer.last_model_used:
+            self.last_model_used = self.repairer.last_model_used
+
+        if self.review_rounds > 1:
+            try:
+                post_review = self.reflector.review_existing(
+                    user_input,
+                    repaired_output,
+                    evidence=repaired_evidence.render(),
+                    context=_isolated_ctx(ctx),
+                    ctx_mgr=ctx_mgr,
+                )
+                if not post_review.get("pass"):
+                    self.callback.on_warning(
+                        "修复已落地，但复审仍未通过；保留真实工作区并报告当前结果"
+                    )
+            except EngineDeadlineExceeded:
+                raise
+            except Exception as exc:
+                logger.warning("Post-repair review failed: %s", exc)
+
+        return repaired_output or initial_output
+
+
+class PlanReflectionEngine(_ReflectionCombination):
+    """Plan-Execute followed by evidence review and one tool-capable repair."""
 
     def __init__(
         self,
@@ -248,11 +444,12 @@ class PlanReflectionEngine:
         max_steps: int = 15,
         review_rounds: int = 2,
         pass_threshold: int = 7,
+        repair_iterations: int = 5,
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
-        model_pool: Any = None,          # v0.4.0
-        auto_router: Any = None,         # v0.4.0 Step 13
-        permission_gate: Any = None,     # v0.5.0
+        model_pool: Any = None,
+        auto_router: Any = None,
+        permission_gate: Any = None,
     ) -> None:
         self.model_priority = model_priority
         self.max_steps = max_steps
@@ -261,18 +458,25 @@ class PlanReflectionEngine:
         self.callback = callback or EngineCallback()
         self.model_pool = model_pool
         self.auto_router = auto_router
-        self.planner = PlanExecuteEngine(model_priority, max_steps=max_steps, callback=self.callback, model_configs=model_configs, model_pool=model_pool, auto_router=auto_router, permission_gate=permission_gate)
-        self.reflector = ReflectionEngine(
-            model_priority,
-            max_rounds=review_rounds,
-            pass_threshold=pass_threshold,
+        common = dict(
             callback=self.callback,
             model_configs=model_configs,
             model_pool=model_pool,
             auto_router=auto_router,
             permission_gate=permission_gate,
         )
+        self.planner = PlanExecuteEngine(model_priority, max_steps=max_steps, **common)
+        self.reflector = ReflectionEngine(
+            model_priority,
+            max_rounds=review_rounds,
+            pass_threshold=pass_threshold,
+            **common,
+        )
+        self.repairer = ReActEngine(
+            model_priority, max_iterations=max(1, repair_iterations), **common
+        )
         self._last_tracker: ToolExecutionTracker | None = None
+        self.last_model_used: str | None = None
 
     def run(
         self,
@@ -281,38 +485,19 @@ class PlanReflectionEngine:
         ctx_mgr: ContextManager | None = None,
     ) -> str:
         ctx = context or AgentContext()
-
-        # Phase 1: Plan-Execute 执行
-        logger.info("PlanReflection Phase 1: 规划并执行")
-        initial_output = self.planner.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
-        self._last_tracker = getattr(self.planner, "_last_tracker", None)
-
-        # Phase 2: Reflection 审查和修正
-        logger.info("PlanReflection Phase 2: 反思审查")
-        # P3-Q9 / §8.19.6：reflector 用隔离 ctx，避免 reactor 中间状态污染反思基线
-        reflector_ctx = _isolated_ctx(ctx)
-        try:
-            final_output = self.reflector.run(
-                f"原始任务: {user_input}\n\n执行结果:\n{initial_output}",
-                context=reflector_ctx, ctx_mgr=ctx_mgr,
-            )
-        except EngineDeadlineExceeded:
-            raise
-        except Exception as e:
-            logger.warning(f"Reflection 阶段失败: {e}")
-            self.callback.on_error(f"Reflection 阶段失败: {e}")
-            final_output = initial_output
-
-        return final_output
+        initial = self.planner.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
+        return self._review_and_repair(
+            user_input,
+            initial,
+            self.planner._last_tracker,
+            self.planner.last_model_used,
+            ctx,
+            ctx_mgr,
+        )
 
 
-class ReactReflectionEngine:
-    """
-    ReAct + Reflection 组合引擎。
-
-    策略：用 ReAct 进行探索和执行，最后用 Reflection 审查输出质量。
-    适合需要工具探索且要求高质量输出的任务。
-    """
+class ReactReflectionEngine(_ReflectionCombination):
+    """ReAct followed by evidence review and one bounded corrective ReAct run."""
 
     def __init__(
         self,
@@ -323,9 +508,9 @@ class ReactReflectionEngine:
         pass_threshold: int = 7,
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
-        model_pool: Any = None,          # v0.4.0
-        auto_router: Any = None,         # v0.4.0 Step 13
-        permission_gate: Any = None,     # v0.5.0
+        model_pool: Any = None,
+        auto_router: Any = None,
+        permission_gate: Any = None,
     ) -> None:
         self.model_priority = model_priority
         self.react_iterations = react_iterations
@@ -334,18 +519,31 @@ class ReactReflectionEngine:
         self.callback = callback or EngineCallback()
         self.model_pool = model_pool
         self.auto_router = auto_router
-        self.reactor = ReActEngine(model_priority, max_iterations=react_iterations, callback=self.callback, model_configs=model_configs, model_pool=model_pool, auto_router=auto_router, permission_gate=permission_gate)
-        self.reflector = ReflectionEngine(
-            model_priority,
-            max_rounds=review_rounds,
-            pass_threshold=pass_threshold,
+        common = dict(
             callback=self.callback,
             model_configs=model_configs,
             model_pool=model_pool,
             auto_router=auto_router,
             permission_gate=permission_gate,
         )
+        self.reactor = ReActEngine(
+            model_priority, max_iterations=react_iterations, **common
+        )
+        # A separate repairer prevents the initial ReAct tracker and loop state
+        # from being reset before the combination has aggregated its evidence.
+        self.repairer = ReActEngine(
+            model_priority,
+            max_iterations=max(1, min(react_iterations, 5)),
+            **common,
+        )
+        self.reflector = ReflectionEngine(
+            model_priority,
+            max_rounds=review_rounds,
+            pass_threshold=pass_threshold,
+            **common,
+        )
         self._last_tracker: ToolExecutionTracker | None = None
+        self.last_model_used: str | None = None
 
     def run(
         self,
@@ -354,26 +552,12 @@ class ReactReflectionEngine:
         ctx_mgr: ContextManager | None = None,
     ) -> str:
         ctx = context or AgentContext()
-
-        # Phase 1: ReAct 探索和执行
-        logger.info("ReactReflection Phase 1: ReAct 探索执行")
-        initial_output = self.reactor.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
-        self._last_tracker = getattr(self.reactor, "_last_tracker", None)
-
-        # Phase 2: Reflection 审查和修正
-        logger.info("ReactReflection Phase 2: 反思审查")
-        # P3-Q9 / §8.19.6：reflector 用隔离 ctx，避免 reactor 中间状态污染反思基线
-        reflector_ctx = _isolated_ctx(ctx)
-        try:
-            final_output = self.reflector.run(
-                f"原始任务: {user_input}\n\n执行结果:\n{initial_output}",
-                context=reflector_ctx, ctx_mgr=ctx_mgr,
-            )
-        except EngineDeadlineExceeded:
-            raise
-        except Exception as e:
-            logger.warning(f"Reflection 阶段失败: {e}")
-            self.callback.on_error(f"Reflection 阶段失败: {e}")
-            final_output = initial_output
-
-        return final_output
+        initial = self.reactor.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
+        return self._review_and_repair(
+            user_input,
+            initial,
+            self.reactor._last_tracker,
+            self.reactor.last_model_used,
+            ctx,
+            ctx_mgr,
+        )

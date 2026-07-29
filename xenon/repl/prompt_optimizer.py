@@ -194,6 +194,8 @@ TEMPLATES: list[PromptTemplate] = [
 
     # 小说创作
     PromptTemplate(
+        # This is a creative-writing intent routed through the general engines;
+        # it is not the removed NovelEngine execution mode.
         intent="novel",
         trigger_patterns=[
             r"(?:写|创作|编写|生成).*(?:小说|故事|章节|短篇|长篇|网文)",

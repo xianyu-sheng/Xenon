@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "xenon"
 version = "0.7.3"
-description = "Xenon: Local-first AI coding assistant with 8 reasoning paradigms and 20+ built-in tools"
+description = "Xenon: Local-first AI coding assistant with 7 reasoning paradigms and 20+ built-in tools"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -75,3 +75,4 @@ show_missing = true
 
 [tool.setuptools.packages.find]
 include = ["xenon*"]
+exclude = ["xenon.tests", "xenon.tests.*"]

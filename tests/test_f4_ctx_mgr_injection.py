@@ -143,12 +143,14 @@ class TestCompositeForwarding:
             received.append(("reactor", ctx_mgr))
             return "reactor output"
 
-        def fake_reflector_run(user_input, context=None, ctx_mgr=None):
+        def fake_review(
+            user_input, output, evidence="", context=None, ctx_mgr=None
+        ):
             received.append(("reflector", ctx_mgr))
-            return "final output"
+            return {"pass": True, "score": 9, "feedback": "ok", "issues": []}
 
         eng.reactor.run = fake_reactor_run
-        eng.reflector.run = fake_reflector_run
+        eng.reflector.review_existing = fake_review
 
         cm = _ctx_mgr_with(2)
         eng.run("任务", ctx_mgr=cm)

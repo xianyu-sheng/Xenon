@@ -182,6 +182,7 @@ def test_runtime_is_bound_to_every_tool_executor(tmp_path):
     bind_tool_runtime(engine, runtime)
 
     assert engine.reactor._tool_executor.runtime is runtime
+    assert engine.repairer._tool_executor.runtime is runtime
 
 
 def _repo(path: Path) -> None:

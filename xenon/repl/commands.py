@@ -1183,7 +1183,7 @@ def _cmd_verbose(*, args: str, session_state: dict, **kwargs: Any) -> str:
 register_command(
     "/sub-agent",
     "委派子 Agent 执行任务（支持多引擎和并行）",
-    "/sub-agent <task> [--engine react|plan_execute|reflection|novel|plan_react|plan_reflection|react_reflection|direct] [--timeout N] [--parallel task1|task2|...]",
+    "/sub-agent <task> [--engine react|plan_execute|reflection|plan_react|plan_reflection|react_reflection|direct] [--timeout N] [--parallel task1|task2|...]",
 )
 
 @_handler("/sub-agent")
@@ -1211,7 +1211,6 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
             "  react              思考-行动循环（默认，适合复杂多步任务）\n"
             "  plan_execute       规划-执行（适合多步骤结构化任务）\n"
             "  reflection         反思-修正（适合需要自我审查的任务）\n"
-            "  novel              小说创作（适合创意写作）\n"
             "  plan_react         规划+ReAct 组合（先规划再逐步执行）\n"
             "  plan_reflection    规划+反思组合（规划执行后自我审查）\n"
             "  react_reflection   ReAct+反思组合（探索后自我审查）\n"
@@ -3201,138 +3200,6 @@ def _cmd_edit(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
         return "❌ 未配置模型，无法使用 LLM 辅助编辑。请先 /set_model。"
 
     return CodeEditor.edit_with_llm(file_path, instruction, model_ids, confirm=True)
-
-
-# /novel ─────────────────────────────────────────────────────
-
-register_command("/novel", "多小说项目管理", "/novel [init <名称> [类型]|list|switch <名称>|status|delete <名称>]")
-
-
-@_handler("/novel")
-def _cmd_novel(
-    *, args: str, registry: ModelRegistry, ctx_mgr: ContextManager,
-    session_state: dict[str, Any], **kwargs: Any,
-) -> str:
-    """多小说项目管理命令。"""
-    from xenon.engine.novel_manager import NovelManager
-
-    parts = args.strip().split(maxsplit=2)
-    subcmd = parts[0].lower() if parts else "status"
-    subargs = parts[1] if len(parts) > 1 else ""
-    subargs2 = parts[2] if len(parts) > 2 else ""
-
-    # 确保 NovelManager 存在
-    if not hasattr(session_state.get("_repl", None) or object(), '_novel_manager'):
-        pass  # Manager 在 repl 中初始化
-    manager = session_state.get("_novel_manager")
-    if not manager:
-        manager = NovelManager()
-        session_state["_novel_manager"] = manager
-
-    if subcmd == "init":
-        # /novel init <名称> [类型]
-        if not subargs:
-            return "用法: /novel init <名称> [类型]\n示例: /novel init 星际迷途 科幻"
-        title = subargs
-        genre = subargs2
-        project = manager.create_novel(title, genre)
-        return (
-            f"✅ 小说「{title}」已创建\n\n"
-            f"  📁 项目目录: .novel/projects/{project.slug}/\n"
-            f"  📂 类型: {genre or '未分类'}\n\n"
-            f"现在可以在 Novel 模式下直接说「帮我写第一章」来开始创作。\n"
-            f"使用 /novel list 查看所有小说。"
-        )
-
-    elif subcmd == "list":
-        # 列出所有小说
-        novels = manager.list_novels()
-        if not novels:
-            return "还没有创建任何小说。使用 /novel init <名称> 创建。"
-        lines = ["📚 小说列表:\n"]
-        for n in novels:
-            marker = " ← 当前" if n["is_active"] else ""
-            lines.append(
-                f"  {'▸' if n['is_active'] else '•'} **{n['title']}** "
-                f"({n['genre'] or '未分类'}) — "
-                f"{n['chapters']} 章, 约 {n['words']} 字{marker}"
-            )
-        lines.append("\n使用 /novel switch <名称> 切换小说")
-        return "\n".join(lines)
-
-    elif subcmd == "switch":
-        # 切换当前小说
-        if not subargs:
-            return "用法: /novel switch <名称>"
-        # 按标题或 slug 查找
-        novels = manager.list_novels()
-        target = None
-        for n in novels:
-            if subargs in n["title"] or subargs == n["slug"]:
-                target = n["slug"]
-                break
-        if not target:
-            return f"找不到小说「{subargs}」。使用 /novel list 查看所有小说。"
-        project = manager.switch_novel(target)
-        if project:
-            return f"✅ 已切换到「{project.title}」\n现在可以继续创作这本小说了。"
-        return f"切换失败: {subargs}"
-
-    elif subcmd == "status":
-        # 显示当前小说状态
-        current = manager.get_current()
-        if not current:
-            novels = manager.list_novels()
-            if not novels:
-                return "还没有创建任何小说。使用 /novel init <名称> 创建。"
-            return "没有活跃的小说。使用 /novel switch <名称> 切换。"
-
-        lines = [f"📖 当前小说: **{current.title}**\n"]
-        lines.append(f"  类型: {current.genre or '未分类'}")
-        lines.append(f"  创建: {current.created_at}")
-        lines.append(f"  更新: {current.updated_at}")
-        lines.append(f"  章节: {current.chapter_count()} 个")
-        lines.append(f"  字数: 约 {current.total_words()} 字")
-
-        # 角色统计
-        if current.characters_path().exists():
-            try:
-                import json
-                chars = json.loads(current.characters_path().read_text(encoding="utf-8"))
-                if isinstance(chars, list):
-                    lines.append(f"  角色: {len(chars)} 个")
-            except Exception:
-                pass
-
-        lines.append(f"\n  📁 {current.base_dir}")
-        return "\n".join(lines)
-
-    elif subcmd == "delete":
-        # 删除小说
-        if not subargs:
-            return "用法: /novel delete <名称>"
-        novels = manager.list_novels()
-        target = None
-        for n in novels:
-            if subargs in n["title"] or subargs == n["slug"]:
-                target = n["slug"]
-                break
-        if not target:
-            return f"找不到小说「{subargs}」。"
-        title = next((n["title"] for n in novels if n["slug"] == target), target)
-        manager.delete_novel(target)
-        return f"🗑️ 已删除「{title}」"
-
-    else:
-        return (
-            "用法: /novel <子命令>\n\n"
-            "子命令:\n"
-            "  init <名称> [类型] — 创建新小说\n"
-            "  list               — 列出所有小说\n"
-            "  switch <名称>      — 切换当前小说\n"
-            "  status             — 查看当前小说状态\n"
-            "  delete <名称>      — 删除小说"
-        )
 
 
 # ── /permissions — v0.5.0 权限模式管理 ─────────────────────
