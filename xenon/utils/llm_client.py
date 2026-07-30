@@ -1339,9 +1339,13 @@ def _call_openai_compat_with_tools(
         # DeepSeek V4 默认开启思考模式，而服务端不允许思考模式与
         # required/none/指定函数等强制选择同时使用。此时优先保证
         # tool_choice 语义，仅关闭这一次请求的思考模式。
+        # DeepSeek V4 keeps the same thinking/tool-choice constraint when it
+        # is reached through the official DeepSeek endpoint, Ark's
+        # OpenAI-compatible endpoint, or a legacy custom-provider alias.  Do
+        # not key this solely on ``endpoint.provider``: credentials created by
+        # older Xenon versions commonly use ``custom/`` for Ark models.
         if (
-            endpoint.provider == "deepseek"
-            and endpoint.model_name.startswith("deepseek-v4-")
+            endpoint.model_name.lower().startswith("deepseek-v4-")
             and tool_choice != "auto"
         ):
             payload.pop("reasoning_effort", None)

@@ -410,10 +410,13 @@ class ReActEngine(BaseEngine):
         # 其他模型仍保持关闭，调用方也可显式传入 True/False 覆盖。
         if native_fc is None:
             primary = model_priority[0].lower() if model_priority else ""
-            self.native_fc = primary in {
-                "deepseek/deepseek-v4-pro",
-                "deepseek/deepseek-v4-flash",
-            }
+            # V4's native function-calling protocol is a model capability,
+            # not an endpoint-prefix capability.  Ark and legacy custom
+            # providers expose the same ``deepseek-v4-*`` model family.
+            self.native_fc = (
+                "/" in primary
+                and primary.rsplit("/", 1)[-1].startswith("deepseek-v4-")
+            )
         else:
             self.native_fc = native_fc
         # P2-E1: DirectoryScout 项目结构扫描（防路径幻觉）。仅当显式传入 project_root
