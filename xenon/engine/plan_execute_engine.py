@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from xenon.engine.base import BaseEngine
@@ -389,7 +390,19 @@ class PlanExecuteEngine(BaseEngine):
             for sid in to_run:
                 self.callback.on_step(sid, total, dag.step(sid).get("task", ""))
 
+            parallel_downgrade: str | None = None
             if self.enable_parallel and len(to_run) > 1:
+                parallel_downgrade = self._wave_parallel_blocker(to_run, dag)
+                if parallel_downgrade is not None:
+                    # 用户显式开了并行，降级必须可见，否则只会觉得"并行没生效"。
+                    self.callback.on_warning(
+                        f"本波次退回串行以保护工作区：{parallel_downgrade}"
+                    )
+            if (
+                self.enable_parallel
+                and len(to_run) > 1
+                and parallel_downgrade is None
+            ):
                 wave_results = self._exec_wave_parallel(
                     to_run, dag, user_input, results, ctx, total,
                 )
@@ -431,6 +444,10 @@ class PlanExecuteEngine(BaseEngine):
         """波内串行执行（共享主 ctx/tracker，无并发无竞争）。
 
         返回 [(sid, task, result, None)]，sub_tracker=None 表示已直接写入主 tracker。
+
+        单步抛异常转为失败结果，不连坐整波——与 ``_exec_wave_parallel`` 同一契约。
+        串行是默认路径，此前缺少这层隔离：任意一步抛异常会直接冒泡终止整个 DAG，
+        已完成步骤的结果和后续可执行步骤一起丢失。
         """
         out: list[tuple[Any, str, StepOutcome, None]] = []
         for sid in to_run:
@@ -439,15 +456,128 @@ class PlanExecuteEngine(BaseEngine):
             tool = step.get("tool")
             params = step.get("params", {})
             prev_results = self._build_prev_results(results)
-            if tool and tool != "null":
-                raw_result = self._execute_step_with_tool(tool, params, ctx, tracker)
-            else:
-                raw_result = self._execute_step_with_llm(
-                    sid, total, step_task, prev_results, user_input, tracker,
-                    context=ctx,
-                )
-            out.append((sid, step_task, self._step_outcome(raw_result), None))
+            try:
+                if tool and tool != "null":
+                    raw_result = self._execute_step_with_tool(tool, params, ctx, tracker)
+                else:
+                    raw_result = self._execute_step_with_llm(
+                        sid, total, step_task, prev_results, user_input, tracker,
+                        context=ctx,
+                    )
+                outcome = self._step_outcome(raw_result)
+            except Exception as e:  # 单步异常不连坐整波
+                logger.exception("DAG 串行步骤 %r 执行异常", sid)
+                outcome = StepOutcome(f"执行异常: {e}", False, str(e))
+            out.append((sid, step_task, outcome, None))
         return out
+
+    @staticmethod
+    def _declared_paths(tool: str, params: dict[str, Any]) -> list[str] | None:
+        """列出某步骤声明会触及的路径；无法枚举时返回 ``None``。
+
+        ``None`` 表示「足迹不可知」，调用方必须按最坏情况处理（退回串行）。
+        返回空列表表示该工具确实不触及任何路径。
+        """
+        if not isinstance(params, dict):
+            return None
+
+        def _norm(raw: Any) -> str | None:
+            text = str(raw or "").strip()
+            if not text:
+                return None
+            try:
+                return str(Path(text).expanduser().resolve())
+            except (OSError, RuntimeError, ValueError):
+                return text
+
+        # 批量工具的路径藏在列表里，逐项枚举
+        if tool == "batch_write":
+            specs = params.get("files")
+            if not isinstance(specs, list):
+                return None
+            paths = []
+            for spec in specs:
+                if not isinstance(spec, dict):
+                    return None
+                path = _norm(spec.get("path") or spec.get("file_path"))
+                if path is None:
+                    return None
+                paths.append(path)
+            return paths
+        if tool == "batch_edit":
+            specs = params.get("edits")
+            if not isinstance(specs, list):
+                return None
+            paths = []
+            for spec in specs:
+                if not isinstance(spec, dict):
+                    return None
+                path = _norm(spec.get("file_path") or spec.get("path"))
+                if path is None:
+                    return None
+                paths.append(path)
+            return paths
+
+        single = _norm(params.get("file_path") or params.get("path"))
+        return [single] if single else []
+
+    def _wave_parallel_blocker(
+        self, to_run: list[Any], dag: PlanDAG,
+    ) -> str | None:
+        """判断波次能否真正并发；可以则返回 ``None``，否则返回人类可读的原因。
+
+        按**声明资源冲突**判定，而非工具黑名单。``_exec_wave_parallel`` 隔离了
+        ctx/tracker，解决的是**进程内**数据竞争；它不能防止两个步骤并发读写同一个
+        文件造成的**工作区**竞态。planner 是 LLM 生成的，完全可能把冲突步骤放进同
+        一波次——prompt 约束不是安全边界，必须在代码层判定。
+
+        判定规则（结构性，不枚举领域关键词）：
+
+        1. **足迹不可知 → 整波串行**：LLM 步骤（``tool`` 为空）内部跑迷你 ReAct，
+           可调用任意工具（含写入与 shell）；``SENSITIVE``（任意 shell）与仓库级
+           工具（git/clone_repo 等）影响面无法静态枚举；写工具但路径无法枚举同样
+           按最坏情况处理。
+        2. **同一路径被写、且被一个以上步骤触及 → 整波串行**（写写、读写都算）。
+        3. 其余情况（写不同路径、或全是只读）允许并发——并发读不损坏工作区。
+
+        因此「写 a.py + 写 b.py」仍可并行，而「两步都写 a.py」会被挡下。
+        """
+        from xenon.nodes.tool_executor import classify_tool
+
+        # 影响面无法静态枚举的工具：仓库级/远端/派生 Agent
+        opaque_tools = {
+            "git", "clone_repo", "register_tool", "mcp_call", "spawn_agent",
+        }
+        readers: dict[str, list[Any]] = {}
+        writers: dict[str, list[Any]] = {}
+
+        for sid in to_run:
+            step = dag.step(sid)
+            tool = step.get("tool")
+            params = step.get("params", {}) or {}
+            if not tool or tool == "null":
+                return f"步骤 {sid} 由 LLM 执行，可能调用任意工具，足迹不可预知"
+            if tool in opaque_tools or classify_tool(tool, params) == "SENSITIVE":
+                return f"步骤 {sid} 使用 {tool}，影响范围无法静态判定"
+
+            paths = self._declared_paths(tool, params)
+            is_reader = tool in self._PARALLEL_SAFE_TOOLS
+            if paths is None:
+                if is_reader:
+                    # 只读工具即使路径不可知也不会破坏工作区
+                    continue
+                return f"步骤 {sid} 的写入路径无法枚举（{tool}）"
+            target = readers if is_reader else writers
+            for path in paths:
+                target.setdefault(path, []).append(sid)
+
+        for path, writer_ids in writers.items():
+            touching = list(writer_ids) + readers.get(path, [])
+            if len(touching) > 1:
+                return (
+                    f"步骤 {sorted(set(touching))} 同时触及 {path}（含写入）"
+                )
+        return None
 
     def _exec_wave_parallel(
         self, to_run: list[Any], dag: PlanDAG, user_input: str,

@@ -265,12 +265,19 @@ class BaseEngine(ABC):
         新增：压缩前对工具观察消息（"Observation: ..."）做分类压缩，
         减少工具输出占用的 prompt 空间，让 LLM 摘要更聚焦于推理链。
         """
-        if turn <= 0 or turn % every != 0:
+        if turn <= 0:
+            return messages
+        # 压缩时机必须是 fail-safe：定期压缩抑制 O(n²) 增长，但一旦已经逼近
+        # 上下文窗口就不能再等下一个周期——下一次 provider 调用就会超限失败。
+        # 压缩本身会把体积降到阈值以下，所以这个分支不会每轮重复触发。
+        urgent = self._near_context_window(messages, ratio=0.75)
+        if not urgent and turn % every != 0:
             return messages
         # ContextManager 的摘要格式不能表达 provider-issued tool_call_id。
-        # 一旦存在原生工具协议消息，本轮保持原样，避免压缩后产生无效历史。
+        # 原生工具协议消息改走 block 级压缩，保持 tool_calls/tool 成对完整；
+        # 绝不把它们交给 ContextManager 摘要，那会产生无效历史。
         if any(message.get("role") == "tool" or message.get("tool_calls") for message in messages):
-            return messages
+            return self._compact_native_tool_messages(messages)
         try:
             from xenon.repl.context_manager import ContextManager
 
@@ -285,6 +292,101 @@ class BaseEngine(ABC):
             return compacted if compacted else messages
         except Exception as e:  # noqa: BLE001 — 压缩绝不能中断主循环
             logger.warning(f"in-run 压缩失败（已忽略，沿用原 messages）: {e}")
+            return messages
+
+    @staticmethod
+    def _split_protocol_blocks(
+        messages: list[dict[str, Any]],
+    ) -> list[list[dict[str, Any]]]:
+        """把消息切成「原子块」，使 tool 协议成对关系永不被拆开。
+
+        OpenAI/DeepSeek 协议约束：带 ``tool_calls`` 的 assistant 消息之后，必须
+        紧跟每个 ``tool_call_id`` 对应的 ``role="tool"`` 消息。裁剪历史时这组消息
+        必须作为一个整体保留或整体丢弃——只丢一半会让请求直接被 provider 拒绝。
+
+        返回块列表；每块要么是单条普通消息，要么是 ``[assistant(+tool_calls),
+        tool, tool, ...]``。孤立的 ``role="tool"``（上游异常导致）并入前一块，
+        避免它单独成块后被丢弃而留下悬挂引用。
+        """
+        blocks: list[list[dict[str, Any]]] = []
+        for message in messages:
+            role = message.get("role")
+            if role == "tool":
+                # tool 消息永远属于前一个 assistant 块；没有前块说明历史已损坏，
+                # 单独成块以便后续整体丢弃。
+                if blocks and blocks[-1] and blocks[-1][0].get("tool_calls"):
+                    blocks[-1].append(message)
+                else:
+                    blocks.append([message])
+                continue
+            blocks.append([message])
+        return blocks
+
+    def _compact_native_tool_messages(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        keep_recent_blocks: int = 6,
+    ) -> list[dict[str, Any]]:
+        """在保持 tool 协议完整的前提下压缩原生工具调用历史。
+
+        根因背景：原生工具协议下 in-run 压缩被整体跳过，长任务的 messages 会一直
+        增长到超出上下文窗口，下一次 provider 调用直接失败。修复策略不是「删消息」
+        而是「按协议块裁剪」：
+
+        1. 保留 system 消息与第一条 user 消息（任务定义，丢了模型会跑偏）；
+        2. 保留最近 ``keep_recent_blocks`` 个块（近期推理链）；
+        3. 中间被丢弃的块折叠成一条 user 摘要消息，说明丢了多少轮工具交互——
+           普通 user 消息不需要 tool 配对，所以这样替换后历史依然合法。
+
+        只有在确实超出预算时才裁剪；否则原样返回，避免无谓丢失上下文。
+        """
+        if not self._near_context_window(messages, ratio=0.6):
+            return messages
+        try:
+            blocks = self._split_protocol_blocks(messages)
+            head: list[list[dict[str, Any]]] = []
+            rest = blocks
+            # 头部：连续的 system 消息 + 紧随的第一条 user 消息
+            while rest and rest[0][0].get("role") == "system":
+                head.append(rest.pop(0))
+            if rest and rest[0][0].get("role") == "user":
+                head.append(rest.pop(0))
+            if len(rest) <= keep_recent_blocks:
+                return messages
+            dropped = rest[:-keep_recent_blocks]
+            tail = rest[-keep_recent_blocks:]
+            dropped_tool_results = sum(
+                1
+                for block in dropped
+                for message in block
+                if message.get("role") == "tool"
+            )
+            summary = {
+                "role": "user",
+                "content": (
+                    "[历史已压缩] 为控制上下文长度，已省略 "
+                    f"{len(dropped)} 轮较早的推理与 {dropped_tool_results} 条工具结果。"
+                    "上述任务目标与下面最近的执行记录仍然有效；"
+                    "如需早期结果请重新调用对应工具确认，不要凭记忆假设。"
+                ),
+            }
+            compacted = [
+                message for block in head for message in block
+            ]
+            compacted.append(summary)
+            compacted.extend(message for block in tail for message in block)
+            logger.info(
+                "原生工具协议 in-run 压缩：%s → %s 条消息（丢弃 %s 块）",
+                len(messages),
+                len(compacted),
+                len(dropped),
+            )
+            return compacted
+        except Exception as e:  # noqa: BLE001 — 压缩绝不能中断主循环
+            logger.warning(
+                f"原生工具协议压缩失败（已忽略，沿用原 messages）: {e}"
+            )
             return messages
 
     @staticmethod

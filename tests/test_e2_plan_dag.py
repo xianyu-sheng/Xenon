@@ -257,19 +257,31 @@ class TestDAGEngaged:
 
 class TestParallelWaves:
     def test_parallel_runs_concurrently(self):
-        """钻石计划 + 并发：wave1 两步并发，墙钟 ≈ 2×sleep 而非 3×。"""
+        """钻石计划 + 并发：wave1 两个**只读**步骤并发，墙钟 ≈ 2×sleep 而非 3×。
+
+        只读工具（read_file）无工作区竞态，是并发真正被允许的场景。
+        """
         plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
-            {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": [1]},
+            {"id": 1, "task": "t1", "tool": "read_file",
+             "params": {"file_path": "seed.py"}, "depends_on": []},
+            {"id": 2, "task": "t2", "tool": "read_file",
+             "params": {"file_path": "a.py"}, "depends_on": [1]},
+            {"id": 3, "task": "t3", "tool": "read_file",
+             "params": {"file_path": "b.py"}, "depends_on": [1]},
         ]}
 
-        eng_p, _ = _engine(plan, enable_parallel=True, execute_sleep=0.4)
+        def _sleepy_tool(tool, params, ctx, tracker):
+            time.sleep(0.4)
+            return f"工具 {tool} 完成"
+
+        eng_p, _ = _engine(plan, enable_parallel=True)
+        eng_p._execute_step_with_tool = _sleepy_tool
         t0 = time.monotonic()
         eng_p.run("做", AgentContext())
         parallel_elapsed = time.monotonic() - t0
 
-        eng_s, _ = _engine(plan, enable_parallel=False, execute_sleep=0.4)
+        eng_s, _ = _engine(plan, enable_parallel=False)
+        eng_s._execute_step_with_tool = _sleepy_tool
         t0 = time.monotonic()
         eng_s.run("做", AgentContext())
         serial_elapsed = time.monotonic() - t0
@@ -278,6 +290,62 @@ class TestParallelWaves:
         assert parallel_elapsed < 1.0, f"并发未生效: {parallel_elapsed:.2f}s"
         assert serial_elapsed > 1.1, f"串行基线异常: {serial_elapsed:.2f}s"
         assert parallel_elapsed < serial_elapsed
+
+    def test_llm_step_wave_downgrades_to_serial_with_warning(self):
+        """LLM 步骤内部可调用任意工具 → 整波退回串行，且降级对用户可见。"""
+        plan = {"analysis": "a", "steps": [
+            {"id": 1, "task": "t1", "tool": "read_file",
+             "params": {"file_path": "seed.py"}, "depends_on": []},
+            {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
+            {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": [1]},
+        ]}
+        eng, _ = _engine(plan, enable_parallel=True)
+        eng._execute_step_with_tool = lambda t, p, c, tr: "ok"
+        eng._exec_wave_parallel = _boom  # 走到并发路径即失败
+
+        warnings: list[str] = []
+        eng.callback.on_warning = warnings.append
+
+        out = eng.run("做", AgentContext())
+        assert out == "SUMMARY"
+        assert any("退回串行" in w for w in warnings), warnings
+
+    def test_same_path_writes_downgrade_to_serial(self):
+        """同一波次两步写同一文件 → 退回串行，避免工作区竞态。"""
+        plan = {"analysis": "a", "steps": [
+            {"id": 1, "task": "t1", "tool": "read_file",
+             "params": {"file_path": "seed.py"}, "depends_on": []},
+            {"id": 2, "task": "t2", "tool": "write_file",
+             "params": {"file_path": "same.py", "content": "x"}, "depends_on": [1]},
+            {"id": 3, "task": "t3", "tool": "write_file",
+             "params": {"file_path": "same.py", "content": "y"}, "depends_on": [1]},
+        ]}
+        eng, _ = _engine(plan, enable_parallel=True)
+        eng._execute_step_with_tool = lambda t, p, c, tr: "ok"
+        eng._exec_wave_parallel = _boom  # 走到并发路径即失败
+
+        warnings: list[str] = []
+        eng.callback.on_warning = warnings.append
+
+        out = eng.run("做", AgentContext())
+        assert out == "SUMMARY"
+        assert any("same.py" in w for w in warnings), warnings
+
+    def test_serial_step_exception_does_not_abort_wave(self):
+        """串行波次中单步抛异常 → 转为失败结果，后续步骤仍执行（与并发同契约）。"""
+        plan = {"analysis": "a", "steps": [
+            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
+            {"id": 2, "task": "boom", "tool": None, "params": {}, "depends_on": [1]},
+            {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": [1]},
+        ]}
+        # depends_on 触发 DAG；enable_parallel=False → 波内走 _exec_wave_serial
+        eng, _ = _engine(plan, enable_parallel=False, raise_tasks={"boom"})
+        eng._exec_wave_parallel = _boom  # 走到并发路径即失败
+        ctx = AgentContext()
+        eng.run("做", ctx)
+        assert "执行异常" in ctx.get("step_2_result")
+        # 异常步骤没有连坐后续步骤
+        assert ctx.get("step_3_result")
 
     def test_parallel_isolated_trackers_merged(self):
         """并发波次中每个工具步骤持有独立 tracker，波次结束合并入主 tracker。"""
