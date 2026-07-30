@@ -171,6 +171,7 @@ class TestToolExecutorPipeline:
         assert "未知工具" in r.observation
 
     def test_param_hallucination_blocked(self, monkeypatch):
+        _FakeNode.script = [{"success": True, "content": "must not execute"}]
         ex = _executor(monkeypatch)
         r = ex.execute(
             "write_file",
@@ -179,6 +180,8 @@ class TestToolExecutorPipeline:
         )
         assert r.success is False
         assert "参数校验失败" in r.observation
+        assert r.attempts == 0
+        assert len(_FakeNode.script) == 1
 
     def test_success_path(self, monkeypatch):
         _FakeNode.script = [{"success": True, "content": "hello"}]

@@ -554,7 +554,21 @@ def _load_credentials() -> dict[str, str]:
     if _CREDENTIALS_PATH.exists():
         with open(_CREDENTIALS_PATH, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-            creds = {k.lower(): v for k, v in data.items()}
+            if isinstance(data, dict):
+                for key, value in data.items():
+                    normalized_key = str(key).strip().lower()
+                    if not normalized_key:
+                        continue
+                    if isinstance(value, str):
+                        value = value.strip()
+                        if not value:
+                            continue
+                    # Keep the legacy custom-provider mapping available to
+                    # build_endpoint while rejecting blank scalar secrets.
+                    creds[normalized_key] = value
+            else:
+                logger.warning("凭证文件不是 YAML 映射，忽略其内容: %s", _CREDENTIALS_PATH)
+                data = {}
             if not creds.get("ark"):
                 legacy_key = _legacy_ark_api_key(data)
                 if legacy_key:
@@ -564,14 +578,14 @@ def _load_credentials() -> dict[str, str]:
     # 此前无条件覆盖导致 ~/.bashrc 旧 key 覆盖 yaml 新 key，对齐 provider_registry 行为
     for provider, cfg in _PROVIDER_DEFAULTS.items():
         env_val = os.getenv(cfg["env_key"])
-        if env_val and not creds.get(provider):
-            creds[provider] = env_val
+        if isinstance(env_val, str) and env_val.strip() and not creds.get(provider):
+            creds[provider] = env_val.strip()
 
     # v0.3.0+ 修复（C-2）：anthropic 额外 fallback ANTHROPIC_AUTH_TOKEN
     if not creds.get("anthropic"):
         auth_token = os.getenv("ANTHROPIC_AUTH_TOKEN")
-        if auth_token:
-            creds["anthropic"] = auth_token
+        if isinstance(auth_token, str) and auth_token.strip():
+            creds["anthropic"] = auth_token.strip()
     return creds
 
 
@@ -589,8 +603,8 @@ def _legacy_ark_api_key(data: dict[str, Any]) -> str:
         except ValueError:
             continue
         api_key = config.get("api_key")
-        if hostname == "ark.cn-beijing.volces.com" and isinstance(api_key, str) and api_key:
-            candidates.append(api_key)
+        if hostname == "ark.cn-beijing.volces.com" and isinstance(api_key, str) and api_key.strip():
+            candidates.append(api_key.strip())
     unique = list(dict.fromkeys(candidates))
     return unique[0] if len(unique) == 1 else ""
 
@@ -661,9 +675,11 @@ def build_endpoint(model_id: str, credentials: dict[str, str] | None = None, bas
             )
 
     api_key = creds.get(provider, "")
+    api_key = api_key.strip() if isinstance(api_key, str) else ""
     # v0.5.3: 自定义模型商的 API Key 优先从 custom_config 取
     if not api_key and custom_config:
         api_key = custom_config.get("api_key", "")
+        api_key = api_key.strip() if isinstance(api_key, str) else ""
     if not api_key:
         raise ValueError(
             f"未找到 {provider} 的 API Key。"
@@ -810,7 +826,14 @@ def _call_openai_compat(
     *,
     reasoning_effort: str | None = None,
 ) -> str:
-    """OpenAI 兼容格式调用（B12: finish_reason=length 自动续写）。"""
+    """OpenAI 兼容格式调用（B12: finish_reason=length 自动续写）。
+
+    A plain ``"继续"`` continuation is safe for prose, but not for the JSON
+    and DSML streams used by the ReAct fallback.  A model may restart the
+    object after that prompt, leaving the concatenated response invalid.  We
+    therefore keep the old behaviour for prose and ask for a *fragment* for
+    structured responses; JSON is repaired/validated before it is returned.
+    """
     msgs = list(messages)  # 不修改调用方列表
     parts: list[str] = []
     attempts = 0
@@ -826,18 +849,94 @@ def _call_openai_compat(
             )
         if content:
             parts.append(content)
+        combined = "".join(parts)
         if finish != "length":
-            return "".join(parts)
+            return _finalize_structured_text(combined)
         # 被截断 → 追加部分内容为 assistant，再请求"继续"
         if attempts >= MAX_CONTINUATIONS:
+            repaired = _finalize_structured_text(combined)
+            if repaired != combined and _structured_response_kind(combined) == "json":
+                logger.warning(
+                    "结构化 JSON 在续写次数耗尽后已修复，避免返回非法协议"
+                )
+                return repaired
             raise ResponseTruncatedError(
                 f"API 响应在 {MAX_CONTINUATIONS} 次续写后仍被截断 "
                 f"(finish_reason=length)，内容可能不完整；请增大 max_tokens 或精简输入。"
             )
         attempts += 1
-        logger.info("API 响应被截断 (finish_reason=length)，自动续写…")
+        kind = _structured_response_kind(combined)
+        logger.info(
+            "API 响应被截断 (finish_reason=length)，自动续写%s…",
+            f"（{kind} 协议片段）" if kind else "",
+        )
         msgs.append({"role": "assistant", "content": content or ""})
-        msgs.append({"role": "user", "content": "继续"})
+        msgs.append({
+            "role": "user",
+            "content": _continuation_prompt(kind),
+        })
+
+
+def _structured_response_kind(text: str) -> str | None:
+    """Return the response protocol when ``text`` looks structured.
+
+    This intentionally only classifies unquoted protocol markers at the
+    beginning (or the explicit DSML/XML markers).  Ordinary prose containing
+    an example JSON object keeps the historical continuation behaviour.
+    """
+    stripped = (text or "").lstrip()
+    if stripped.startswith(("{", "[")) or stripped.startswith("```json"):
+        return "json"
+    # DeepSeek sometimes emits full-width vertical bars in DSML markers.
+    lowered = stripped.replace("｜", "|").lower()
+    if any(marker in lowered for marker in (
+        "<||dsml||tool_calls", "<uses_legacy_tools", "<tool_calls",
+    )):
+        return "dsml"
+    return None
+
+
+def _continuation_prompt(kind: str | None) -> str:
+    """Build a continuation instruction that preserves the active protocol."""
+    if kind == "json":
+        return (
+            "继续输出上一个 JSON 对象被截断的剩余片段。只输出缺失内容，"
+            "不要重复已经输出的字符，不要添加说明或新的 JSON 对象。"
+        )
+    if kind == "dsml":
+        return (
+            "继续输出上一个 DSML 工具调用协议被截断的剩余片段。只输出缺失的"
+            "标签或参数，不要重复已输出内容，不要改用 JSON 或自然语言。"
+        )
+    return "继续"
+
+
+def _finalize_structured_text(text: str) -> str:
+    """Validate structured text and repair a provider-side hard truncation.
+
+    ``finish_reason`` is occasionally reported as ``stop`` even when the
+    provider cut a JSON object at a byte boundary.  Returning a best-effort
+    repaired object is safer than handing an invalid protocol to the ReAct
+    parser; prose is returned byte-for-byte unchanged.
+    """
+    kind = _structured_response_kind(text)
+    if kind != "json":
+        return text
+    try:
+        json.loads(text, strict=False)
+        return text
+    except (TypeError, ValueError, json.JSONDecodeError):
+        try:
+            from xenon.utils.response_adapter import _repair_json
+
+            repaired = _repair_json(text)
+            if repaired:
+                json.loads(repaired, strict=False)
+                logger.warning("结构化 JSON 响应已在客户端修复后返回")
+                return repaired
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+        return text
 
 
 def _call_openai_compat_once(
@@ -1260,6 +1359,15 @@ def _call_openai_compat_with_tools(
     reasoning = msg.get("reasoning_content") or msg.get("thinking") or ""
     finish = choice.get("finish_reason", "")
     tool_calls = _parse_openai_tool_calls(msg)
+    # Native FC responses cannot be resumed by appending a user "continue":
+    # the assistant/tool_call_id envelope must remain one atomic protocol
+    # message.  Never expose a truncated tool call to the executor; failing
+    # closed lets the engine report/recover the protocol error instead.
+    if finish == "length":
+        raise ResponseTruncatedError(
+            "原生工具调用响应因 finish_reason=length 被截断，"
+            "为避免执行不完整的工具参数，已拒绝该响应。"
+        )
     return LLMResponse(
         content=content,
         reasoning_content=reasoning,
@@ -1334,6 +1442,11 @@ def _call_anthropic_with_tools(
     # Anthropic stop_reason → OpenAI 风格 finish_reason
     stop = data.get("stop_reason", "")
     finish = "tool_calls" if stop == "tool_use" else ("length" if stop == "max_tokens" else stop or "stop")
+    if finish == "length":
+        raise ResponseTruncatedError(
+            "Anthropic 原生工具调用响应因 stop_reason=max_tokens 被截断，"
+            "为避免执行不完整的工具参数，已拒绝该响应。"
+        )
     canonical_calls = [
         {
             "id": call.get("id", ""),

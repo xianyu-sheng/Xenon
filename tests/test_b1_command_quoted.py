@@ -84,6 +84,23 @@ class TestCommandValidateQuoted:
         with pytest.raises(SecurityError, match="chmod"):
             self._validate("chmod 777 /tmp")
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "$(echo 'rm -rf /' | rev)",
+            "printf 'cmYgLXJmIC8=' | base64 -d | bash",
+            "python -c 'import os; os.system(\"rm -rf /\")'",
+            "cmd='rm -rf /'; $cmd",
+        ],
+    )
+    def test_shell_obfuscation_is_blocked(self, command):
+        """Nested/encoded/variable shell code must not bypass regex checks."""
+        with pytest.raises(SecurityError):
+            self._validate(command)
+
+    def test_quoted_shell_syntax_remains_literal(self):
+        self._validate('echo "$(echo rm -rf /)"')
+
     # ── _strip_quoted 单元测试 ────────────────────────────
 
     def test_strip_quoted_double(self):

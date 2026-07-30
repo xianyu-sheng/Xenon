@@ -70,6 +70,31 @@ class TestOpenaiCompatAutoContinue:
         assert seen[1][-2] == {"role": "assistant", "content": "p1"}
         assert seen[1][-1] == {"role": "user", "content": "继续"}
 
+    def test_json_continuation_preserves_protocol_and_is_valid(self, monkeypatch):
+        seen = []
+        seq = [
+            ('{"action":"read_file","action_input":{"file_path":"README', "length"),
+            ('.md"}}', "stop"),
+        ]
+
+        def fake_once(ep, msgs, mt, t, to):
+            seen.append(msgs)
+            return seq.pop(0)
+
+        monkeypatch.setattr(lc, "_call_openai_compat_once", fake_once)
+        out = lc._call_openai_compat(_ep(), [{"role": "user", "content": "hi"}], 100, 0.3, 10)
+
+        assert lc.json.loads(out)["action"] == "read_file"
+        assert "只输出缺失内容" in seen[1][-1]["content"]
+
+    def test_truncated_json_is_repaired_before_return(self, monkeypatch):
+        def fake_once(ep, msgs, mt, t, to):
+            return ('{"action":"read_file","action_input":{"file_path":"README.md"', "stop")
+
+        monkeypatch.setattr(lc, "_call_openai_compat_once", fake_once)
+        out = lc._call_openai_compat(_ep(), [{"role": "user", "content": "hi"}], 100, 0.3, 10)
+        assert lc.json.loads(out)["action_input"]["file_path"] == "README.md"
+
 
 class TestAnthropicAutoContinue:
     def test_end_turn_no_continue(self, monkeypatch):

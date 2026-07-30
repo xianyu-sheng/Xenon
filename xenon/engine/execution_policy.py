@@ -19,6 +19,11 @@ class EngineDeadlineExceeded(TimeoutError):
 
 EventSink = Callable[[str, dict[str, Any]], None]
 
+# Standalone engines must have a finite safety budget even when an integration
+# forgets to bind a per-run policy.  Interactive callers can still replace it
+# with a shorter/longer shared policy through ``bind_execution_policy``.
+DEFAULT_ENGINE_TIMEOUT = 600.0
+
 
 @dataclass(slots=True)
 class ExecutionPolicy:

@@ -42,6 +42,12 @@ class TestResolveApiKey:
         with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "env-key"}):
             assert _resolve_api_key("deepseek", info, creds) == "env-key"
 
+    def test_yaml_whitespace_falls_back_to_env_key(self):
+        """Blank/space-padded YAML values must not shadow a real env key."""
+        info = PROVIDERS["deepseek"]
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": " env-key "}, clear=True):
+            assert _resolve_api_key("deepseek", info, {"deepseek": "  "}) == "env-key"
+
     def test_yaml_empty_env_empty_returns_empty(self):
         """yaml 空、env 空 → 返回空串。"""
         info = PROVIDERS["openai"]

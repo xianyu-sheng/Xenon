@@ -5,10 +5,13 @@
 - Anthropic：tools 转原生格式，解析 tool_use 块，tool_choice 映射，response_format 降级为 system 提示；
 - per-provider 长生命 httpx Client 池：同 endpoint 复用、close_clients 清空。
 """
+import pytest
+
 import xenon.utils.llm_client as llm
 from xenon.utils.llm_client import (
     LLMResponse,
     ModelEndpoint,
+    ResponseTruncatedError,
     _normalize_openai_tools,
     _openai_to_anthropic_tools,
     _parse_anthropic_tool_calls,
@@ -112,6 +115,35 @@ class TestToolConversion:
 
 # ── chat_completion_with_tools：OpenAI 路径 ─────────────────
 class TestOpenaiFCPath:
+    def test_truncated_native_tool_call_is_rejected(self, monkeypatch):
+        """A partial tool envelope must never reach the executor."""
+        fake = _FakeClient()
+        fake.set_payload({
+            "choices": [{
+                "message": {
+                    "tool_calls": [{
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "echo", "arguments": '{"text":"x'},
+                    }],
+                },
+                "finish_reason": "length",
+            }],
+        })
+        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+
+        with pytest.raises(ResponseTruncatedError):
+            llm._call_openai_compat_with_tools(
+                _endpoint("openai"),
+                [{"role": "user", "content": "echo"}],
+                tools=[{"type": "function", "function": {"name": "echo"}}],
+                response_format=None,
+                tool_choice=None,
+                max_tokens=16,
+                temperature=0,
+                timeout=10,
+            )
+
     def test_native_tool_call_emits_usage_to_tracker(self, monkeypatch):
         fake = _FakeClient()
         fake.set_payload({

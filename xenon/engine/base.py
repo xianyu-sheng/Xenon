@@ -25,6 +25,7 @@ import httpx
 from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
 from xenon.engine.execution_policy import (
+    DEFAULT_ENGINE_TIMEOUT,
     EngineDeadlineExceeded,
     ExecutionPolicy,
 )
@@ -103,10 +104,9 @@ class BaseEngine(ABC):
         # Exactly one retry layer owns transient retries.  Benchmark adapters
         # replace this unbounded interactive policy with one absolute deadline
         # shared by the whole engine graph.
-        self.execution_policy = ExecutionPolicy(
-            deadline_at=None,
+        self.execution_policy = ExecutionPolicy.from_timeout(
+            DEFAULT_ENGINE_TIMEOUT,
             request_timeout=120.0,
-            provider_attempts=1,
             chain_retries=2,
         )
 
@@ -733,6 +733,12 @@ class BaseEngine(ABC):
                 logger.warning(f"模型 {model_id} 网络错误 ({type(e).__name__}): {e}，尝试下一个...")
             except EngineDeadlineExceeded:
                 raise
+            except ResponseTruncatedError as e:
+                compatibility_only = False
+                last_error = e
+                logger.warning(
+                    f"模型 {model_id} native 响应截断，尝试下一个..."
+                )
             except Exception as e:  # noqa: BLE001 — 本层降级，不中断
                 compatibility_only = False
                 last_error = e
@@ -744,6 +750,8 @@ class BaseEngine(ABC):
                         phase=f"native:{model_id}",
                         success=request_succeeded,
                     )
+        if isinstance(last_error, ResponseTruncatedError):
+            raise last_error
         if last_error is not None and not compatibility_only:
             raise RuntimeError(
                 f"native provider request failed: {last_error}"
@@ -910,12 +918,23 @@ class BaseEngine(ABC):
                 )
                 continue
             self.execution_policy.check(tier_name)
-            resp = self._call_with_tools_once(
-                messages,
-                tools,
-                fmt,
-                max_tokens,
-            )
+            try:
+                resp = self._call_with_tools_once(
+                    messages,
+                    tools,
+                    fmt,
+                    max_tokens,
+                )
+            except ResponseTruncatedError as exc:
+                # A native tool envelope is atomic and cannot be resumed by
+                # appending a user message. Try the next compatibility tier;
+                # the final plain-text fallback has protocol-aware repair.
+                logger.warning(
+                    "_call_llm_native %s 响应截断，降级下一层: %s",
+                    tier_name,
+                    exc,
+                )
+                continue
             if resp is None:
                 self._unsupported_native_shapes.add(capability_key)
                 continue  # 本层降级，试下一层

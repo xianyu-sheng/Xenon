@@ -394,7 +394,21 @@ def _read_credentials(path: Path | None = None) -> dict[str, Any]:
         return {}
     with open(credentials_path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
-    return {str(key).lower(): value for key, value in data.items()}
+    if not isinstance(data, dict):
+        logger.warning("凭证文件不是 YAML 映射，忽略其内容: %s", credentials_path)
+        return {}
+    cleaned: dict[str, Any] = {}
+    for key, value in data.items():
+        normalized_key = str(key).strip().lower()
+        if not normalized_key:
+            continue
+        if isinstance(value, str):
+            value = value.strip()
+            # 空字符串不是凭证：丢弃它，让环境变量 fallback 正常生效。
+            if not value:
+                continue
+        cleaned[normalized_key] = value
+    return cleaned
 
 
 def _legacy_ark_api_key(data: dict[str, Any]) -> str:
@@ -411,8 +425,8 @@ def _legacy_ark_api_key(data: dict[str, Any]) -> str:
         except ValueError:
             continue
         api_key = config.get("api_key")
-        if hostname == "ark.cn-beijing.volces.com" and isinstance(api_key, str) and api_key:
-            candidates.append(api_key)
+        if hostname == "ark.cn-beijing.volces.com" and isinstance(api_key, str) and api_key.strip():
+            candidates.append(api_key.strip())
     unique = list(dict.fromkeys(candidates))
     return unique[0] if len(unique) == 1 else ""
 
@@ -501,6 +515,7 @@ def get_configured_providers(*, refresh_models: bool = True) -> list[ProviderInf
     # v0.4.0: 合并自定义模型商
     for key, cfg in _load_custom_providers().items():
         api_key = cfg.get("api_key", "")
+        api_key = api_key.strip() if isinstance(api_key, str) else ""
         if not api_key:
             continue
         # v0.5.2: 修补空 key（纯中文名称register时key为空 → model_id变成 /model）
@@ -509,7 +524,7 @@ def get_configured_providers(*, refresh_models: bool = True) -> list[ProviderInf
         info_copy = ProviderInfo(
             name=cfg.get("name", key),
             key=key,
-            base_url=cfg.get("base_url", ""),
+            base_url=str(cfg.get("base_url", "")).strip(),
             env_key="",
             models=cfg.get("models", []),
             api_key=api_key,
@@ -531,17 +546,18 @@ def _resolve_api_key(
     无法使用 xenon。现在支持 yaml → env_key → anthropic 特殊 fallback。
     """
     # 1) yaml 配置优先（用户明确指定的最优先）
-    if creds.get(provider_key):
-        return creds[provider_key]
+    yaml_value = creds.get(provider_key)
+    if isinstance(yaml_value, str) and yaml_value.strip():
+        return yaml_value.strip()
     # 2) 标准环境变量
     val = os.getenv(info.env_key)
-    if val:
-        return val
+    if isinstance(val, str) and val.strip():
+        return val.strip()
     # 3) anthropic 厂商额外 fallback：Claude Code / SDK 用 ANTHROPIC_AUTH_TOKEN
     if provider_key == "anthropic":
         val = os.getenv("ANTHROPIC_AUTH_TOKEN")
-        if val:
-            return val
+        if isinstance(val, str) and val.strip():
+            return val.strip()
     return ""
 
 

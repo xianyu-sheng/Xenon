@@ -17,6 +17,8 @@ from xenon.engine.execution_policy import (
 )
 from xenon.engine.tool_runtime import ToolRuntime, bind_tool_runtime
 from xenon.nodes.tool_executor import ToolExecutor
+from xenon.engine.plan_execute_engine import PlanExecuteEngine
+from xenon.engine.react_engine import ReActEngine
 
 
 class _Engine(BaseEngine):
@@ -141,6 +143,14 @@ def test_policy_reaches_planner_reactor_and_reflector(factory):
     assert all(node.execution_policy is policy for node in nodes)
     tool_owner = getattr(engine, "reactor", None) or getattr(engine, "planner", None)
     assert tool_owner._tool_executor.execution_policy is policy
+
+
+@pytest.mark.parametrize("factory", [ReActEngine, PlanExecuteEngine])
+def test_standalone_engine_binds_policy_to_tool_executor(factory):
+    """Direct construction must retain the engine deadline without a binder."""
+    engine = factory(["provider/model"])
+    assert engine._tool_executor.execution_policy is engine.execution_policy
+    assert engine.execution_policy.deadline_at is not None
 
 
 def test_tool_runtime_overrides_model_cwd_and_prefix(tmp_path, monkeypatch):

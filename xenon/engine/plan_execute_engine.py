@@ -193,7 +193,12 @@ class PlanExecuteEngine(BaseEngine):
         else:
             self.system_prompt = self._build_plan_prompt()
         # F1: 工具执行门面（7 阶段流水线）
-        self._tool_executor = ToolExecutor(permission_gate=permission_gate)
+        # Keep standalone Plan-Execute instances under the same deadline and
+        # retry owner as the engine even when no graph binder is used.
+        self._tool_executor = ToolExecutor(
+            permission_gate=permission_gate,
+            execution_policy=self.execution_policy,
+        )
 
     @staticmethod
     def _build_plan_prompt() -> str:

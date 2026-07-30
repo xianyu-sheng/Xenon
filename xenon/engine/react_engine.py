@@ -396,7 +396,13 @@ class ReActEngine(BaseEngine):
         self._mcp_tools_list = ""
         self.system_prompt = system_prompt or self._build_system_prompt()
         # F1: 工具执行门面（7 阶段流水线：校验/断路器/重试/封装）
-        self._tool_executor = ToolExecutor(permission_gate=permission_gate)
+        # Bind the engine's shared policy at construction time.  Relying on a
+        # later graph-wide ``bind_execution_policy`` call left directly-created
+        # engines with an unbounded tool executor.
+        self._tool_executor = ToolExecutor(
+            permission_gate=permission_gate,
+            execution_policy=self.execution_policy,
+        )
         # F2: 空洞回答检测器（无状态，实例共享）
         self._hollow = HollowDetector()
         # F5: DeepSeek V4 的思考模式工具协议已经单元测试和真实 API

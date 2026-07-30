@@ -570,6 +570,12 @@ _DANGEROUS_CMD_PATTERNS = [
     r"\bshutdown\b", r"\breboot\b", r"\bhalt\b",
     # 下载并执行
     r"curl.*\|\s*(?:bash|sh|python|node)", r"wget.*\|\s*(?:bash|sh|python|node)",
+    # 常见的编码/解释器混淆：黑名单不可能穷举 payload，先拒绝
+    # 将外部/编码字符串交给解释器执行的高风险形态。
+    r"\b(?:base64|openssl)\b[^\n|;&]*(?:-d|--decode)[^\n|;&]*\|\s*(?:bash|sh|zsh|python\w*|node)\b",
+    r"\b(?:python\w*|perl|ruby|node)\s+-[ce]\s+",
+    r"\b(?:bash|sh|zsh|pwsh|powershell)\s+-c\s+",
+    r"\beval\s+",
     # PowerShell 危险命令
     r"Remove-Item\s+-[rR].*C:\\", r"Format-Volume",
     r"Clear-RecycleBin\s+-Force",
@@ -922,6 +928,15 @@ class ToolNode(BaseNode):
             return
 
         cmd_lower = cmd.lower().strip()
+        # Shell command/process substitution executes a nested command before
+        # the outer command is parsed.  A regex over the visible text cannot
+        # see a payload assembled by ``$(...)``/backticks, so reject these
+        # constructs at the shell boundary.  Quoted literals remain allowed.
+        if self._has_unquoted_shell_substitution(cmd_lower):
+            raise SecurityError(
+                "命令包含未授权的 shell 命令替换（$()/反引号/进程替换），"
+                "为防止混淆执行已拦截。"
+            )
         # v0.3.0+ 修复（B-1）：匹配前先剥取引号内容（防止 echo "rm -rf /" 等
         # 字符串字面量触发误报）。通用机制，不针对特定任务加白名单。
         cmd_stripped = self._strip_quoted(cmd_lower)
@@ -931,6 +946,53 @@ class ToolNode(BaseNode):
                     f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。"
                     f"命令: {cmd[:100]}"
                 )
+
+    @staticmethod
+    def _has_unquoted_shell_substitution(command: str) -> bool:
+        """Detect shell substitution syntax outside quoted string literals."""
+        quote: str | None = None
+        escaped = False
+        i = 0
+        while i < len(command):
+            char = command[i]
+            if escaped:
+                escaped = False
+                i += 1
+                continue
+            if char == "\\" and quote != "'":
+                escaped = True
+                i += 1
+                continue
+            if quote:
+                if char == quote:
+                    quote = None
+                i += 1
+                continue
+            if char in ("'", '"'):
+                quote = char
+                i += 1
+                continue
+            if char == "`" or command.startswith("$(", i):
+                return True
+            # Unquoted variable expansion can turn an innocuous-looking token
+            # into a command assembled at runtime (``$cmd -rf /``).  The
+            # command tool has explicit file/path parameters for safe data
+            # flow, so require callers to avoid dynamic shell code here.
+            if (
+                char == "$"
+                and i + 1 < len(command)
+                and (
+                    command[i + 1] == "{"
+                    or re.match(
+                        r"[a-z_][a-z0-9_]*", command[i + 1:], re.IGNORECASE
+                    )
+                )
+            ):
+                return True
+            if char in "<>" and i + 1 < len(command) and command[i + 1] == "(":
+                return True
+            i += 1
+        return False
 
     @staticmethod
     def _strip_quoted(cmd_lower: str) -> str:

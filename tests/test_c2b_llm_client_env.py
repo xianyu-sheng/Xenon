@@ -57,6 +57,23 @@ class TestLLMClientAuthTokenFallback:
                 assert creds.get("deepseek") == "ds-key"
                 assert creds.get("openai") == "oai-key"
 
+    def test_yaml_secret_is_stripped_and_blank_values_are_ignored(self, tmp_path):
+        credentials = tmp_path / "credentials.yaml"
+        credentials.write_text(
+            "openai: '  yaml-key  '\n"
+            "deepseek: '   '\n",
+            encoding="utf-8",
+        )
+        with patch("xenon.utils.llm_client._CREDENTIALS_PATH", credentials):
+            with patch.dict(
+                os.environ,
+                {"DEEPSEEK_API_KEY": " env-key "},
+                clear=True,
+            ):
+                loaded = _load_credentials()
+                assert loaded["openai"] == "yaml-key"
+                assert loaded["deepseek"] == "env-key"
+
     def test_build_endpoint_uses_anthropic_base_url_env(self):
         """build_endpoint 优先用 ANTHROPIC_BASE_URL env 而非 defaults。"""
         env = {
