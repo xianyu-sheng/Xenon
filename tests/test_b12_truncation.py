@@ -56,6 +56,41 @@ class TestOpenaiCompatAutoContinue:
         lc._call_openai_compat(_ep(), original, 100, 0.3, 10)
         assert original == [{"role": "user", "content": "hi"}]
 
+    def test_reasoning_only_truncation_expands_budget_before_continuing(
+        self, monkeypatch
+    ):
+        seen = []
+        seq = [("", "length"), ('{"answer":"ok"}', "stop")]
+
+        def fake_once(ep, msgs, mt, t, to):
+            seen.append((list(msgs), mt))
+            return seq.pop(0)
+
+        monkeypatch.setattr(lc, "_call_openai_compat_once", fake_once)
+        original = [{"role": "user", "content": "hi"}]
+        out = lc._call_openai_compat(_ep(), original, 100, 0.3, 10)
+
+        assert lc.json.loads(out) == {"answer": "ok"}
+        assert [mt for _, mt in seen] == [100, 356]
+        assert seen[1][0] == original
+
+    def test_reasoning_only_expansion_is_bounded_by_provider_cap(
+        self, monkeypatch
+    ):
+        seen = []
+
+        def fake_once(ep, msgs, mt, t, to):
+            seen.append(mt)
+            return "", "length"
+
+        monkeypatch.setattr(lc, "_call_openai_compat_once", fake_once)
+        with pytest.raises(ResponseTruncatedError):
+            lc._call_openai_compat(_ep(), [{"role": "user", "content": "hi"}], 16000, 0.3, 10)
+
+        # OpenAI's configured cap is 16384; a failed expansion at the cap
+        # falls through to the normal bounded truncation error immediately.
+        assert seen == [16000, 16384]
+
     def test_continuation_appends_assistant_and_continue(self, monkeypatch):
         seen = []
         seq = [("p1", "length"), ("p2", "stop")]

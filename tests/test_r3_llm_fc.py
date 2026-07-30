@@ -115,6 +115,30 @@ class TestToolConversion:
 
 # ── chat_completion_with_tools：OpenAI 路径 ─────────────────
 class TestOpenaiFCPath:
+    def test_plain_length_does_not_expose_unfinished_reasoning(self, monkeypatch):
+        fake = _FakeClient()
+        fake.set_payload({
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "reasoning_content": "unfinished hidden reasoning",
+                },
+                "finish_reason": "length",
+            }],
+        })
+        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+
+        content, finish = llm._call_openai_compat_once(
+            _endpoint("deepseek"),
+            [{"role": "user", "content": "return JSON"}],
+            max_tokens=16,
+            temperature=0,
+            timeout=10,
+        )
+
+        assert finish == "length"
+        assert content == ""
+
     def test_truncated_native_tool_call_is_rejected(self, monkeypatch):
         """A partial tool envelope must never reach the executor."""
         fake = _FakeClient()
