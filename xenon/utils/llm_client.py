@@ -837,21 +837,54 @@ def _call_openai_compat(
     msgs = list(messages)  # 不修改调用方列表
     parts: list[str] = []
     attempts = 0
+    current_max_tokens = max_tokens
     while True:
         if reasoning_effort:
             content, finish = _call_openai_compat_once(
-                endpoint, msgs, max_tokens, temperature, timeout,
+                endpoint, msgs, current_max_tokens, temperature, timeout,
                 reasoning_effort=reasoning_effort,
             )
         else:
             content, finish = _call_openai_compat_once(
-                endpoint, msgs, max_tokens, temperature, timeout,
+                endpoint, msgs, current_max_tokens, temperature, timeout,
             )
         if content:
             parts.append(content)
         combined = "".join(parts)
         if finish != "length":
             return _finalize_structured_text(combined)
+        # Thinking models may spend the entire output budget on hidden
+        # reasoning and return no visible content.  Treating that unfinished
+        # reasoning as the assistant's answer corrupts JSON/DSML protocols;
+        # asking "continue" also starts a new turn instead of completing the
+        # original answer.  Retry the unchanged request with a larger budget
+        # until visible output appears (or the bounded retry budget is used).
+        if not content:
+            if attempts < MAX_CONTINUATIONS:
+                provider_cap = int(
+                    _PROVIDER_DEFAULTS.get(endpoint.provider, {}).get(
+                        "max_output_tokens", 8192,
+                    )
+                )
+                expanded = min(
+                    provider_cap,
+                    max(current_max_tokens * 2, current_max_tokens + 256),
+                )
+                if expanded > current_max_tokens:
+                    attempts += 1
+                    logger.info(
+                        "API 推理阶段在可见输出前被截断，扩大 max_tokens: %s → %s "
+                        "(%s/%s)",
+                        current_max_tokens,
+                        expanded,
+                        attempts,
+                        MAX_CONTINUATIONS,
+                    )
+                    current_max_tokens = expanded
+                    continue
+            # At the provider cap there is no safe continuation fragment to
+            # send back. Fall through to the bounded fail-closed path below.
+            attempts = MAX_CONTINUATIONS
         # 被截断 → 追加部分内容为 assistant，再请求"继续"
         if attempts >= MAX_CONTINUATIONS:
             repaired = _finalize_structured_text(combined)
@@ -980,8 +1013,9 @@ def _call_openai_compat_once(
     else:
         logger.warning(f"API 响应: content 和 reasoning_content 均为空! finish_reason={finish}")
 
-    # 推理模型：content 可能为空，真正的答案在 reasoning_content 末尾
-    if not content and reasoning:
+    # 推理模型在正常结束时偶尔只返回 reasoning_content；保留兼容兜底。
+    # ``length`` 表示该推理本身尚未完成，绝不能把它冒充最终答案或协议正文。
+    if not content and reasoning and finish != "length":
         content = reasoning
 
     return content, finish
