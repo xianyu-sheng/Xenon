@@ -55,6 +55,8 @@ def test_native_protocol_preserves_reasoning_and_tool_call_id():
 def test_react_auto_enables_native_fc_for_canonical_deepseek_v4():
     assert ReActEngine(["deepseek/deepseek-v4-pro"]).native_fc is True
     assert ReActEngine(["deepseek/deepseek-v4-flash"]).native_fc is True
+    assert ReActEngine(["ark/deepseek-v4-pro-260425"]).native_fc is True
+    assert ReActEngine(["custom/deepseek-v4-flash-260425"]).native_fc is True
     assert ReActEngine(["deepseek/deepseek-v4-pro"], native_fc=False).native_fc is False
     assert ReActEngine(["openai/gpt-4o"]).native_fc is False
 

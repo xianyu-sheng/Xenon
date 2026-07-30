@@ -249,6 +249,36 @@ class TestOpenaiFCPath:
         assert sent["thinking"] == {"type": "disabled"}
         assert "reasoning_effort" not in sent
 
+    @pytest.mark.parametrize("provider", ["ark", "custom"])
+    def test_v4_forced_tool_choice_disables_thinking_on_compat_aliases(
+        self, monkeypatch, provider
+    ):
+        """Ark/legacy custom V4 endpoints must obey DeepSeek's same rule."""
+        fake = _FakeClient()
+        fake.set_payload({
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+        })
+        endpoint = ModelEndpoint(
+            provider=provider,
+            model_name="deepseek-v4-flash-260425",
+            base_url="https://ark.cn-beijing.volces.com/api/v3",
+            api_key="k",
+        )
+        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+        monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: endpoint)
+
+        llm.chat_completion_with_tools(
+            f"{provider}/deepseek-v4-flash-260425",
+            [{"role": "user", "content": "call echo"}],
+            tools=[{"type": "function", "function": {"name": "echo", "parameters": {}}}],
+            tool_choice="required",
+            reasoning_effort="max",
+        )
+
+        sent = fake.posts[0]["json"]
+        assert sent["thinking"] == {"type": "disabled"}
+        assert "reasoning_effort" not in sent
+
     def test_plain_deepseek_request_passes_reasoning_effort(self, monkeypatch):
         fake = _FakeClient()
         fake.set_payload({

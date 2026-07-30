@@ -95,6 +95,39 @@ class TestOpenaiCompatAutoContinue:
         out = lc._call_openai_compat(_ep(), [{"role": "user", "content": "hi"}], 100, 0.3, 10)
         assert lc.json.loads(out)["action_input"]["file_path"] == "README.md"
 
+    def test_dsml_continuation_keeps_tag_stream_intact(self, monkeypatch):
+        """DSML must request only the missing fragment, not a new protocol."""
+        seen = []
+        seq = [
+            (
+                '<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="read_file">'
+                '<｜｜DSML｜｜parameter name="file_path" string="true">README',
+                "length",
+            ),
+            (
+                ".md</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke>"
+                "</｜｜DSML｜｜tool_calls>",
+                "stop",
+            ),
+        ]
+
+        def fake_once(ep, msgs, mt, t, to):
+            seen.append(msgs)
+            return seq.pop(0)
+
+        monkeypatch.setattr(lc, "_call_openai_compat_once", fake_once)
+        out = lc._call_openai_compat(
+            _ep("deepseek"), [{"role": "user", "content": "hi"}],
+            100, 0.3, 10,
+        )
+
+        from xenon.utils.response_adapter import parse_react
+
+        parsed = parse_react(out)
+        assert parsed[0]["action"] == "read_file"
+        assert parsed[0]["action_input"]["file_path"] == "README.md"
+        assert "只输出缺失的" in seen[1][-1]["content"]
+
 
 class TestAnthropicAutoContinue:
     def test_end_turn_no_continue(self, monkeypatch):
