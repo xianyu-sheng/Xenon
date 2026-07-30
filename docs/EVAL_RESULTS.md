@@ -19,12 +19,41 @@
 
 评测期间发现 MCP 任务会写持久化配置；本次使用隔离目录执行后已清理临时条目。后续真实评测必须通过 runner 的凭证隔离，不得直接使用用户的 `~/.xenon/credentials.yaml`。
 
-### Xenon 专属价值指标有效跑测（2026-07-27）
+### 缓存前缀稳定性修复后的跑测（2026-07-29，当前基准）
+
+| 指标 | 结果 |
+|------|------|
+| 验证通过率（机器断言） | **65.0%（13/20）** |
+| 工具执行成功率 | **95.09%**（112 次调用 / 8 次失败） |
+| 结果断言通过率 | **90%** |
+| 厂商上报缓存命中率 | **97.35%**（字段覆盖 100%） |
+| 可复用前缀 token | **1,152,256** |
+| 实际成本 / 全 miss 基线 | **¥0.2567 / ¥3.6847** |
+| 节省 | **¥3.4280（93.03%）** |
+| 轨道数 / 分叉数 | 3 / 14 |
+| 观测 LLM 调用 | 131 |
+
+报告：`evals/reports/official/2026-07-29-react-real/report.md`
+
+**这次跑测修正了一个此前让缓存指标失真的缺陷。** `ReActEngine._build_system_prompt()`
+把 `datetime.now().strftime('%H:%M:%S')` 注入 system prompt 的运行环境段，而 REPL
+每轮新建引擎（`repl.py:2643`）。system prompt 属于 Cache Rails 的稳定前缀，参与轨道
+契约哈希，因此**每轮都会分叉**，跨轮 `reusable_tokens` 恒为 0，每轮都报 `cold_start`。
+
+修复前 README/本文档报告的 85.98% 命中率，实际只反映**单次 run 内部**多轮 ReAct
+迭代共享同一引擎实例的复用，**不是跨轮复用**——这两件事差别很大。修复方式是改用
+`date.today()`（精度到天），精确时间交由 `command` 工具（`date` / `Get-Date`）实时获取。
+`tests/test_cache_prompt_stability.py` 锁定该不变量：同一天内多次实例化的 system prompt
+必须完全一致，且不得包含 `HH:MM:SS` 模式。
+
+### 历史记录：Xenon 专属价值指标跑测（2026-07-27，含上述缺陷）
 
 修正聚合口径并补齐评测回调后，真实跑测结果为：通用任务成功率 **45.0%（9/20）**；
 CacheTracker 缓存字段覆盖 100%，Cache Rails 命中率 **85.98%**，可复用前缀命中
 **1,416,064 tokens**。估算实际费用 **¥1.0684**，全 prompt cache-miss 基线 **¥5.2812**，
 预计节省 **¥4.2128（79.77%）**。同时观测到 1 次 Rail 分叉、2 次参数拦截和 2 次路径越界拦截。
+
+> 保留此条用于对比。其缓存命中率受上述 system prompt 时间戳缺陷影响，不代表跨轮复用能力。
 
 评测报告将 CacheTracker 作为缓存命中/费用的唯一来源，把 UsageTracker 作为总 Token/延迟来源，
 避免原生 tool-call 路径下两套回调产生口径差异。任务成功率与 Xenon 价值指标保持独立，不合并成一个含义不清的总分。
@@ -147,14 +176,22 @@ CacheTracker 缓存字段覆盖 100%，Cache Rails 命中率 **85.98%**，可复
 
 ## 六、简历用法（实事求是 v2 版）
 
-> **真实评测**（DeepSeek-V4-Pro，2026-07-08）：
-> - 20 任务 6 类别真实 ReAct 闭环评测，**成功率 45%**（v1 25% → v2 45% +80%）
-> - **3 个根因修复**：RealAgent multi-turn / workdir 隔离 / ReAct 自适应拒绝兜底
-> - 9 个成功任务覆盖 `file_edit` / `code_search` / `tool_call` / `context_memory` 四类
-> - 工具调用 160 次（v1 56 次），断路器 / 异常处理 / multi-turn history 路径**全部正常**
-> - 真实数据见 [`evals/reports/real_report.md`](../evals/reports/real_report.md)
+> **真实评测**（DeepSeek-V4-Pro，2026-07-29）：
+> - 自建 20 任务 6 类别真实 ReAct 闭环评测，**机器断言验证通过率 65%**
+>   （25% → 45% → 65%，三轮根因修复累积）
+> - **工具执行成功率 95.09%**（112 次调用），结果断言通过率 90%
+> - **Cache Rails 厂商上报命中率 97.35%**，节省 93.03%（¥0.2567 vs ¥3.6847 全 miss 基线）
+> - **SWE-bench Lite 官方 harness 已接入**：1 instance × 7 引擎矩阵通过 4/7；
+>   30-instance 分层抽样已确定待运行
+> - 数据见 [`evals/reports/official/2026-07-29-react-real/`](../evals/reports/official/2026-07-29-react-real/report.md)
 
-> **不要**写"20 任务全过"或"准确率 90%"——这是夸大。当前数据是 45%，且明确归类了 11 个失败（4 个是任务设计而非引擎问题）。
+> **可以讲的工程故事**：发现自己的核心指标测错了对象——system prompt 里的秒级时间戳
+> 让 Cache Rails 每轮分叉，此前报告的命中率只是单次 run 内的复用，不是跨轮复用。
+> 定位、修复、加回归测试锁定不变量。这比一个漂亮数字更有说服力。
+
+> **不要**写"20 任务全过"、"准确率 90%"，或把 SWE-bench 的 4/7 说成榜单成绩。
+> 当前自建套件是 65%，SWE-bench 只跑了 1 个 instance 用于验证 harness 接入。
+> WebArena / GAIA 未评测，原因已在 README 标注，不要含糊成"计划中"。
 
 ---
 
