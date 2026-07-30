@@ -549,26 +549,30 @@ class REPL:
                 _lg = logging.getLogger(_name)
                 try:
                     _lg.removeHandler(self._log_handler)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("移除临时日志 handler 失败 (%s): %s", _name, exc)
                 # 恢复原有 handler
                 for _h in self._saved_handlers.get(_name, []):
                     try:
                         _lg.addHandler(_h)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        # 恢复失败意味着该 logger 之后永久失去输出，必须留痕。
+                        logger.warning(
+                            "恢复原日志 handler 失败 (%s)，该 logger 的输出可能丢失: %s",
+                            _name, exc,
+                        )
                 if _name in self._saved_propagate:
                     _lg.propagate = self._saved_propagate[_name]
         finally:
             self._log_capture_active = False
             try:
                 self._log_handler.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("关闭临时日志 handler 失败: %s", exc)
             try:
                 _captured = self._log_buffer.getvalue()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("读取捕获日志缓冲失败（本次执行详情将为空）: %s", exc)
         return _captured
 
     def _make_callback(self):
@@ -624,8 +628,9 @@ class REPL:
                 console.print(f"[dim]│  输入 [bold]/resume[/bold] 从 {len(sessions)} 个历史会话中选择[/dim]")
             else:
                 console.print("[dim]│  输入 [bold]/resume[/bold] 恢复，或直接开始新对话[/dim]")
-        except Exception:
-            pass
+        except Exception as exc:
+            # 纯提示，失败不影响启动；但要留痕，否则"为什么没有恢复提示"无从排查。
+            logger.debug("渲染历史会话提示失败: %s", exc)
 
     def _handle_shift_tab(self) -> None:
         """Shift+Tab 按下：循环切换到下一个可用思维范式。"""
@@ -644,8 +649,14 @@ class REPL:
                 f"\n[dim]┌─ Shift+Tab 切换范式 → [bold]{mode.name}[/bold]"
                 f" — {mode.description}[/dim]"
             )
-        except ValueError:
-            pass
+        except ValueError as exc:
+            # 静默失败会让用户以为 Shift+Tab 这个键坏了。切换失败必须给反馈，
+            # 并指向可用的替代路径。
+            logger.warning("Shift+Tab 切换范式到 %r 失败: %s", next_mode_name, exc)
+            console.print(
+                f"\n[warning]⚠ 无法切换到范式 {next_mode_name}：{exc}[/warning]\n"
+                "[dim]│  用 [bold]/mode[/bold] 查看并手动选择可用范式[/dim]"
+            )
 
     def _render_engine_result(self, callback, result: str, title: str, border_style: str = "green") -> None:
         """渲染引擎结果：默认折叠执行过程，仅显示最终答案。
@@ -2436,13 +2447,9 @@ class REPL:
                             self._run_react_engine(user_input, model_ids)
                         except Exception as e:
                             console.print(f"[error]❌ ReAct 重试失败: {e}[/error]")
-                            try:
-                                self.ctx_mgr.add_assistant_message(
-                                    f"[错误] ReAct 重试失败: {e}",
-                                    model_used=model_ids[0],
-                                )
-                            except Exception:
-                                pass
+                            self._record_engine_error(
+                                f"[错误] ReAct 重试失败: {e}", model_ids[0]
+                            )
                         return
 
                     # ── 响应后验证 2：检测 LLM 是否声称执行了文件操作 ──
@@ -2464,12 +2471,9 @@ class REPL:
                                 self._run_react_engine(user_input, model_ids)
                             except Exception as e:
                                 console.print(f"[error]❌ ReAct 重试失败: {e}[/error]")
-                                try:
-                                    self.ctx_mgr.add_assistant_message(
-                                        f"[错误] ReAct 重试失败: {e}", model_used=model_ids[0],
-                                    )
-                                except Exception:
-                                    pass
+                                self._record_engine_error(
+                                    f"[错误] ReAct 重试失败: {e}", model_ids[0]
+                                )
                             return
 
                     # ── 响应后验证 2：检测 LLM 是否回复了拒绝性内容 ──
@@ -2483,12 +2487,9 @@ class REPL:
                             self._run_react_engine(user_input, model_ids)
                         except Exception as e:
                             console.print(f"[error]❌ ReAct 重试失败: {e}[/error]")
-                            try:
-                                self.ctx_mgr.add_assistant_message(
-                                    f"[错误] ReAct 重试失败: {e}", model_used=model_ids[0],
-                                )
-                            except Exception:
-                                pass
+                            self._record_engine_error(
+                                f"[错误] ReAct 重试失败: {e}", model_ids[0]
+                            )
                         return
 
                 if intent == "write_code" and policy.level is ExecutionLevel.ANSWER_ONLY:
@@ -2631,6 +2632,34 @@ class REPL:
             except Exception as e:
                 logger.warning(f"注入 MCP 工具列表到引擎失败: {e}")
 
+    def _record_engine_error(self, message: str, model_used: str | None) -> None:
+        """记录引擎错误到对话历史，并保证历史不残留 user-only 序列。
+
+        引擎抛异常时 user 消息已入 history 但没有对应的 assistant 响应。这种
+        user-only 序列会污染下一轮的上下文与缓存前缀，所以必须二选一收尾：
+
+        1. 优先写入 assistant 占位错误消息（保留失败信息，用户可见）；
+        2. 写入失败则回退 ``trim_last_user()`` 清掉孤立 user 消息。
+
+        两步都失败时记日志——此前这里是静默 ``pass``，历史已损坏却无任何线索，
+        表现为「下一轮忽然行为异常」且无法排查。
+        """
+        try:
+            self.ctx_mgr.add_assistant_message(message, model_used=model_used)
+            return
+        except Exception as exc:
+            logger.warning(
+                "写入 assistant 错误占位失败，回退清理孤立 user 消息: %s", exc
+            )
+        try:
+            self.ctx_mgr.trim_last_user()
+        except Exception as exc:
+            logger.error(
+                "清理孤立 user 消息也失败，对话历史可能残留 user-only 序列"
+                "（建议 /clear 或 /resume 重建上下文）: %s",
+                exc,
+            )
+
     def _run_react_engine(self, user_input: str, model_ids: list[str]) -> None:
         """ReAct 引擎模式。"""
         from xenon.engine.react_engine import ReActEngine
@@ -2688,15 +2717,9 @@ class REPL:
             import traceback
             logger.error(f"ReAct 引擎异常:\n{traceback.format_exc()}")
             console.print(f"[error]❌ ReAct 引擎执行失败: {e}[/error]")
-            try:
-                self.ctx_mgr.add_assistant_message(
-                    f"[错误] ReAct 引擎执行失败: {e}", model_used=model_ids[0],
-                )
-            except Exception:
-                try:
-                    self.ctx_mgr.trim_last_user()
-                except Exception:
-                    pass
+            self._record_engine_error(
+                f"[错误] ReAct 引擎执行失败: {e}", model_ids[0]
+            )
         finally:
             if hasattr(callback, "finish_activity"):
                 callback.finish_activity()
