@@ -319,6 +319,8 @@ xenon/
 │   ├── tool_families/utility.py · weather / datetime
 │   ├── tool_families/lsp.py · Jedi 代码导航工具
 │   ├── tool_families/file_mutation.py · 原子写入、编辑、批处理与回滚
+│   ├── tool_families/read_only_files.py · read/list/search 文件工具
+│   ├── tool_families/result_filtering.py · 时间/关键词结果预筛选
 │   ├── tool_node.py  · 现有工具实现（迁移兼容外观）
 │   └── tool_executor.py · 7 阶段流水线 + 断路器
 ├── tools/            · 惰性加载工具
