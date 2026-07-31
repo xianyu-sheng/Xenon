@@ -15,6 +15,14 @@ from rich.console import Console
 from rich.panel import Panel
 
 from xenon.repl.model_registry import BUILTIN_MODES
+from xenon.repl.command_registry import (
+    COMMANDS,
+    _HANDLERS,
+    ExitSignal,
+    command_handler,
+    dispatch_command,
+    register_command,
+)
 
 if TYPE_CHECKING:
     from xenon.repl.model_registry import ModelRegistry
@@ -40,63 +48,13 @@ def _confirm(prompt: str, default: bool = False) -> bool:
         return default
 
 
-# ── 命令注册表 ────────────────────────────────────────────
-
-COMMANDS: dict[str, dict[str, Any]] = {}
-
-
-def register_command(name: str, description: str, usage: str = "") -> None:
-    """注册一个斜杠命令。"""
-    COMMANDS[name] = {"description": description, "usage": usage}
-
-
-def dispatch_command(
-    name: str,
-    args: str,
-    *,
-    registry: ModelRegistry,
-    ctx_mgr: ContextManager,
-    session_state: dict[str, Any],
-) -> str | None:
-    """
-    分发并执行一个斜杠命令。
-
-    Returns:
-        命令输出文本，None 表示无输出。
-    """
-    handler = _HANDLERS.get(name)
-    if not handler:
-        return f"未知命令: {name}。输入 /help 查看可用命令。"
-    # P3-Q8 / §8.20.8：dispatch 兜底——任一 handler 抛异常（/code subprocess、
-    # /run scheduler、/mcp 网络、/edit LLM）不再冒泡崩 REPL，转为友好错误。
-    # ExitSignal 是正常退出意图，必须放行不能吞。
-    try:
-        return handler(args=args, registry=registry, ctx_mgr=ctx_mgr, session_state=session_state)
-    except ExitSignal:
-        raise
-    except Exception as e:
-        return f"❌ 命令执行失败 ({name}): {e}"
-
-
 # ── 命令处理器 ────────────────────────────────────────────
 
-_HANDLERS: dict[str, Any] = {}
-
-
-def _handler(name: str):
-    """装饰器：注册命令处理函数。"""
-    def decorator(func):
-        _HANDLERS[name] = func
-        return func
-    return decorator
+# Private compatibility name retained for existing command modules/tests.
+_handler = command_handler
 
 
 # /exit /quit /bye ─────────────────────────────────────────
-
-class ExitSignal(Exception):
-    """通知 REPL 主循环退出。"""
-    pass
-
 
 register_command("/exit", "退出 Xenon", "/exit")
 register_command("/quit", "退出 Xenon（别名）", "/quit")
