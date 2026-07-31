@@ -100,7 +100,12 @@ def test_clear_cancelled_keeps_history(monkeypatch):
     """用户选'否' → 取消，历史保留。"""
     monkeypatch.delenv("XENON_ASSUME_YES", raising=False)
     import xenon.repl.commands as cmds
+    import xenon.repl.command_groups.common as common
+    import xenon.repl.command_groups.session as session
+
     monkeypatch.setattr(cmds, "_confirm", lambda *a, **kw: False)
+    monkeypatch.setattr(common, "confirm_action", lambda *a, **kw: False)
+    monkeypatch.setattr(session, "confirm_action", lambda *a, **kw: False)
 
     reg = ModelRegistry()
     ctx_mgr = ContextManager()
