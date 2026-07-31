@@ -118,3 +118,39 @@ class TestParseReactFallback:
             assert result.get("action") or result.get("final_answer"), (
                 f"parse_react 解析失败且无回退: {result}"
             )
+
+
+def test_react_recovers_from_prose_status_fragment(monkeypatch):
+    """A plan fragment must not be accepted as the first ReAct result."""
+    import xenon.engine.base as engine_base
+    import xenon.utils.llm_client as llm_client
+    from xenon.engine.callbacks import SilentCallback
+    from xenon.engine.react_engine import ReActEngine
+
+    responses = [
+        "## 第 2 步\n启动 Zotero 并检查服务状态。\n（后续步骤尚未执行）",
+        '{"final_answer":"已完成诊断：服务未启动，端口未监听。"}',
+    ]
+
+    def fake_call(*_args, **_kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(engine_base, "chat_completion", fake_call)
+    monkeypatch.setattr(llm_client, "chat_completion", fake_call)
+    monkeypatch.setattr(
+        llm_client,
+        "chat_completion_stream",
+        lambda *_args, **_kwargs: iter([fake_call()]),
+    )
+
+    callback = SilentCallback()
+    engine = ReActEngine(
+        ["openai/gpt-4o"],
+        max_iterations=4,
+        native_fc=False,
+        callback=callback,
+    )
+    result = engine.run("给出完整诊断结果")
+
+    assert result == "已完成诊断：服务未启动，端口未监听。"
+    assert any("未结构化" in str(event) for event in callback.events)

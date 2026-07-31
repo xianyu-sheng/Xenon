@@ -622,6 +622,11 @@ class ReActEngine(BaseEngine):
         # 新逻辑：至少 2 次重试，最多是 max_iterations 的一半（保留一半预算给正常迭代）。
         # 通用机制改进，不针对特定任务加白名单。
         max_no_tool_retries = max(2, self.max_iterations // 2)
+        # A model occasionally emits a prose plan/status fragment instead of
+        # the required ReAct JSON. Give it a small formatting recovery window
+        # before accepting that fragment as the final answer.
+        malformed_response_retries = 0
+        max_malformed_response_retries = 2
 
         while budget.can_continue():
             budget.spend()
@@ -918,6 +923,7 @@ class ReActEngine(BaseEngine):
                     messages.append({"role": "user", "content": obs_msg})
                 logger.debug(f"ReAct 观察: {observation[:200]}")
                 no_tool_streak = 0
+                malformed_response_retries = 0
                 consecutive_failures = tracker.consecutive_failures()
                 if consecutive_failures >= self._max_consecutive_tool_failures:
                     warning = (
@@ -940,7 +946,7 @@ class ReActEngine(BaseEngine):
                 # v0.6.1: 如果原始响应包含 "action" 模式的 JSON 片段（说明解析
                 # 失败但模型确实尝试输出工具调用），不直接展示 raw text，
                 # 而是要求模型重新输出格式正确的 JSON。
-                if response and len(response.strip()) > 50:
+                if response and len(response.strip()) > 20:
                     raw_cleaned = response.strip()
                     # 检测：原始响应中是否包含未成功解析的 action JSON
                     if '"action"' in raw_cleaned and ('"action_input"' in raw_cleaned or '"action_type"' in raw_cleaned):
@@ -955,6 +961,25 @@ class ReActEngine(BaseEngine):
                             "你的回答格式不正确。请使用标准 JSON 格式：\n"
                             '{"action": "工具名", "action_input": {...}}\n'
                             '或 {"final_answer": "你的回答"}'
+                        )})
+                        budget.on_retry()
+                        continue
+                    if malformed_response_retries < max_malformed_response_retries:
+                        malformed_response_retries += 1
+                        self.callback.on_warning(
+                            "LLM 返回了未结构化的中间内容，要求输出完整 final_answer"
+                        )
+                        logger.warning(
+                            "ReAct: 收到未结构化 prose 片段，要求格式恢复 "
+                            "(%s/%s)",
+                            malformed_response_retries,
+                            max_malformed_response_retries,
+                        )
+                        messages.append({"role": "user", "content": (
+                            "不要停在计划、步骤或状态描述。请完成当前任务并只输出标准 JSON：\n"
+                            '{"final_answer": "完整、可直接展示给用户的最终结果"}\n'
+                            "如果仍需工具，请输出："
+                            '{"action": "工具名", "action_input": {...}}'
                         )})
                         budget.on_retry()
                         continue
