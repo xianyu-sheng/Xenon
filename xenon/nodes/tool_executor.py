@@ -26,6 +26,7 @@ from xenon.engine.circuit_breaker import BreakerRegistry
 from xenon.engine.context import AgentContext
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes.tool_node import ToolNode, _DYNAMIC_TOOLS
+from xenon.nodes.tool_registry import BUILTIN_TOOL_REGISTRY
 from xenon.nodes.tool_result import ToolResult, enrich_tool_result
 from xenon.engine.callbacks import mask_sensitive_params
 
@@ -1050,8 +1051,9 @@ class ToolExecutor:
             return True
         if tool_name in tools:
             return True
-        return tool_name in _DYNAMIC_TOOLS
+        return tool_name in _DYNAMIC_TOOLS or BUILTIN_TOOL_REGISTRY.contains(tool_name)
 
     def _unknown_tool_msg(self, tool_name: str, tools: dict[str, Any] | None) -> str:
-        available = list((tools or {}).keys()) + list(_DYNAMIC_TOOLS.keys())
+        available = list((tools or {}).keys()) + list(BUILTIN_TOOL_REGISTRY.names())
+        available.extend(name for name in _DYNAMIC_TOOLS if name not in available)
         return f"错误: 未知工具 '{tool_name}'，可用工具: {available}"

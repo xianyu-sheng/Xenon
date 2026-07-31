@@ -34,6 +34,10 @@ import httpx
 from xenon.engine.context import AgentContext
 from xenon.utils.llm_client import _create_http_client
 from xenon.nodes.base import BaseNode
+from xenon.nodes.tool_registry import (
+    BUILTIN_TOOL_METHODS,
+    BUILTIN_TOOL_REGISTRY,
+)
 from xenon.nodes.tool_result import enrich_tool_result
 from xenon.utils.atomic_write import atomic_write_bytes, atomic_write_text
 from xenon.utils.github_reference import parse_github_reference
@@ -87,14 +91,7 @@ _DANGEROUS_MODULE_TOPS: frozenset[str] = frozenset({
 
 # 内置 action_type 集合：动态工具注册时禁止重名（防内置工具名劫持）。
 # 注意：若新增内置 action_type，需同步本集合（与 ToolNode.execute 的 handlers 字典保持一致）。
-_BUILTIN_ACTION_TYPES: frozenset[str] = frozenset({
-    "command", "write_file", "read_file", "list_files", "search_files",
-    "git", "web_fetch", "edit_file", "create_directory", "batch_write",
-    "batch_edit", "code_index", "ast_analyze", "refactor", "diff_preview",
-    "mcp_call", "github_fetch", "weather", "datetime", "register_tool",
-    "clone_repo", "lsp_goto_def", "lsp_find_refs", "lsp_hover",
-    "lsp_diagnostics", "lsp_symbols",
-})
+_BUILTIN_ACTION_TYPES: frozenset[str] = frozenset(BUILTIN_TOOL_METHODS)
 
 
 def _last_error_lines(stderr: str, max_chars: int = 300) -> str:
@@ -1018,37 +1015,8 @@ class ToolNode(BaseNode):
                 )
 
     def execute(self, context: AgentContext) -> dict[str, Any]:
-        """根据 action_type 分发到不同的处理方法。"""
-        handlers = {
-            "command": self._exec_command,
-            "write_file": self._write_file,
-            "read_file": self._read_file,
-            "list_files": self._list_files,
-            "search_files": self._search_files,
-            "git": self._git,
-            "web_fetch": self._web_fetch,
-            "docs_fetch": self._docs_fetch,
-            "edit_file": self._edit_file,
-            "create_directory": self._create_directory,
-            "batch_write": self._batch_write,
-            "batch_edit": self._batch_edit,
-            "code_index": self._code_index,
-            "ast_analyze": self._ast_analyze,
-            "refactor": self._refactor,
-            "diff_preview": self._diff_preview,
-            "mcp_call": self._mcp_call,
-            "github_fetch": self._github_fetch,
-            "clone_repo": self._clone_repo,
-            "lsp_goto_def": self._lsp_goto_def,
-            "lsp_find_refs": self._lsp_find_refs,
-            "lsp_hover": self._lsp_hover,
-            "lsp_diagnostics": self._lsp_diagnostics,
-            "lsp_symbols": self._lsp_symbols,
-            "weather": self._weather,
-            "datetime": self._datetime,
-            "register_tool": self._register_tool,
-        }
-        handler = handlers.get(self.action_type)
+        """根据注册表分发工具，保留旧的 ToolNode 调用契约。"""
+        handler = BUILTIN_TOOL_REGISTRY.bind(self.action_type, self)
         if not handler:
             # 尝试从动态工具注册表中查找
             dynamic = _DYNAMIC_TOOLS.get(self.action_type)
