@@ -4,6 +4,75 @@
 >
 > 核心抽象围绕缓存经济效益、工具权限、用户治理记忆和失败恢复设计。
 
+## 0.8 社区实验场架构转向
+
+Xenon 的长期定位是**可扩展的 AI 编程 Agent 试验场**，而不是追赶商业产品的
+功能清单。项目要让贡献者可以低成本验证 Prompt、工具调用、推理范式和多模态
+想法，同时保持每一步都能被测试和真实启动验证。
+
+这会带来四条架构约束：
+
+1. **核心小而稳定。** Agent 循环、消息协议、执行策略和结果契约是核心边界；
+   UI、具体工具、Provider 和实验性策略不能反向侵入核心。
+2. **扩展优先注册。** 新工具、引擎、Provider 和斜杠命令通过 Registry 注册，
+   不要求贡献者修改一个数千行的中心文件。
+3. **兼容迁移。** 大文件拆分采用“新模块实现 + 旧路径兼容导出”的方式，先锁定
+   公开行为，再逐步搬迁实现；每批修改都必须通过离线回归和启动 smoke test。
+4. **实验可观测。** 每个实验能力都要能说明输入、输出、工具轨迹、失败原因和
+   最小复现测试，不能只依赖一次成功的演示截图。
+
+### 目标模块边界
+
+```text
+                    ┌─────────────────────────┐
+                    │       REPL / CLI         │
+                    │ 输入、渲染、命令、会话    │
+                    └────────────┬────────────┘
+                                 │ orchestration API
+             ┌───────────────────┼───────────────────┐
+             ▼                   ▼                   ▼
+      EngineRegistry       ProviderRegistry       CommandRegistry
+      direct/ReAct/...     OpenAI/DeepSeek/...   /mode /mcp /memory...
+             │                   │                   │
+             └──────────────┬────┴───────────────────┘
+                            ▼
+                    Core contracts + AgentContext
+                            │
+             ┌──────────────┴──────────────┐
+             ▼                             ▼
+       ToolExecutor                    MemoryService
+       policy/retry/audit              scopes/backends
+             │
+       ToolRegistry
+       files / shell / git / web / MCP / code
+```
+
+稳定扩展契约计划固定为：
+
+```python
+register_tool_handler("my_tool", handler, description="...")
+register_engine("my_engine", EngineClass)
+register_provider("my_provider", ProviderAdapter)
+register_command("/my-command", handler)
+```
+
+当前已完成第一步：`xenon.nodes.tool_registry.ToolRegistry` 接管了 `ToolNode` 的
+内置分发。旧的 `ToolNode(...).execute(context)` 仍然保持兼容；下一步会按工具族
+拆出文件、Shell、网络、代码分析和 MCP/LSP 实现，并让工具 schema 也从同一注册表
+生成。其它注册表会在对应大文件拆分时逐步加入，而不是一次性重写所有引擎。
+
+### 大文件拆分顺序
+
+| 阶段 | 目标 | 兼容策略 |
+|------|------|----------|
+| A | ToolNode → ToolRegistry + 工具族模块 | 保留 `xenon.nodes.tool_node.ToolNode` 导入路径 |
+| B | REPL 输入/渲染/引擎运行/记忆门面 | `REPL` 继续作为薄编排外观 |
+| C | Slash commands 按 core/model/session/integration 拆分 | 保留 `commands.COMMANDS` 和 `dispatch_command` |
+| D | ReAct/Base 引擎拆出协议解析、工具循环、子 Agent | 保留现有 Engine 类构造和 `run()` |
+| E | LLM client 拆出 endpoint、transport、protocol、streaming | 保留 `chat_completion*` 函数 |
+
+任何阶段如果回归或启动验证失败，先停止在当前阶段修复，不继续叠加拆分。
+
 ---
 
 ## 当前开发分支变更边界
@@ -113,7 +182,7 @@ Stage 1 · 参数标准化   → 模板解析 + 类型转换
 Stage 2 · 幻觉检测     → validate_tool_params 拦截明显错误的参数
 Stage 3 · 权限闸门     → PermissionGate（敏感操作需用户确认）
 Stage 4 · 断路器       → 连续失败 N 次自动熔断，防止无限重试
-Stage 5 · 执行         → 安全沙箱（路径越界/SSRF/命令注入检测）
+Stage 5 · 执行         → 当前为路径/SSRF/命令注入防御；独立沙箱是下一阶段架构目标
 Stage 6 · 结果封装     → 统一 {success, error, data} 格式
          + 重试        → 仅只读 INFO 工具最多 2 次智能重试
 ```
@@ -246,7 +315,8 @@ xenon/
 │   ├── service.py    · 去重、容量、检索、归档和回执策略
 │   └── candidate.py  · 显式授权与自动候选识别
 ├── nodes/            · 工具执行管线
-│   ├── tool_node.py  · 26 个工具实现（2600 行）
+│   ├── tool_registry.py · 内置/插件工具注册与分发接缝
+│   ├── tool_node.py  · 现有工具实现（迁移兼容外观）
 │   └── tool_executor.py · 7 阶段流水线 + 断路器
 ├── tools/            · 惰性加载工具
 │   ├── vision_bridge.py  · 视觉桥接器（多模态→文字→DeepSeek）

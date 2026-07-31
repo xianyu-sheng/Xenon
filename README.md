@@ -4,7 +4,12 @@
 
 <h1 align="center">Xenon</h1>
 
-**面向 DeepSeek 的终端 AI 编程工作区。**
+**面向实验、学习和社区协作的可扩展终端 AI 编程 Agent 试验场。**
+
+Xenon 不以复刻商业级闭源 coding agent 为目标。它更像一个“AI 编程乌托邦”：
+把模型协议、推理范式、工具调用和终端交互拆成可观察、可替换的模块，让任何人都
+可以用一个小插件验证自己的 Agent 想法，并通过 Issue 或 PR 与社区一起迭代。
+正确性、安全性和可回归验证仍然是底线；“易扩展”不是牺牲工程纪律的借口。
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -67,6 +72,13 @@ Cache Rails 按模型与执行契约维护追加式提示词轨道，只在前�
 详见 [DeepSeek 缓存指南](docs/deepseek-guide.md)。
 
 ## 产品方向与质量门槛
+
+### 社区实验场定位
+
+Xenon 的核心价值是降低 Agent 实验的门槛，而不是和 Codex、Claude Code 等成熟
+产品比较功能数量。新增工具、执行引擎、Provider 或交互能力，都应该有清晰的
+注册接口、最小测试和可复现的启动验证。欢迎通过 Issue 提出想法，或提交带测试
+的 PR；架构演进记录在 [架构设计](docs/ARCHITECTURE.md) 中。
 
 Xenon 的优先级是**正确性优先，效率放大**。Cache Rails 能降低一次正确任务的
 Token 和费用，但不能抵消错误的工具选择、错误的文件修改或未经验证的结论。
