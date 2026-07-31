@@ -191,6 +191,16 @@ class TestSkillManager:
         # 完全不匹配的应返回 None
         assert _fuzzy_match_subcommand("xyzabc123") is None
 
+    def test_skill_group_preserves_legacy_command_exports(self):
+        from xenon.repl.command_groups.skill import (
+            _cmd_skill as grouped_cmd_skill,
+            _extract_skill_name as grouped_extract_skill_name,
+        )
+        from xenon.repl.commands import _cmd_skill, _extract_skill_name
+
+        assert _cmd_skill is grouped_cmd_skill
+        assert _extract_skill_name is grouped_extract_skill_name
+
     def test_extract_skill_name_english(self):
         """测试从英文输入提取 skill 名称。"""
         from xenon.repl.commands import _extract_skill_name
