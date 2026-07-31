@@ -60,3 +60,7 @@ def test_code_family_is_owned_by_extension_module() -> None:
 
 def test_git_family_is_owned_by_extension_module() -> None:
     assert ToolNode._git.__module__.endswith("tool_families.git_tools")
+
+
+def test_mcp_family_is_owned_by_extension_module() -> None:
+    assert ToolNode._mcp_call.__module__.endswith("tool_families.mcp_tools")

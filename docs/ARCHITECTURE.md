@@ -323,6 +323,7 @@ xenon/
 │   ├── tool_families/result_filtering.py · 时间/关键词结果预筛选
 │   ├── tool_families/code_tools.py · code index、AST、重构与 diff 预览
 │   ├── tool_families/git_tools.py · Git 状态、差异、日志与受控写操作
+│   ├── tool_families/mcp_tools.py · MCP 注册表调用与结果摘要
 │   ├── tool_node.py  · 现有工具实现（迁移兼容外观）
 │   └── tool_executor.py · 7 阶段流水线 + 断路器
 ├── tools/            · 惰性加载工具
