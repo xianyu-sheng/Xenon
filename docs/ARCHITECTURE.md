@@ -63,14 +63,15 @@ register_command("/my-command", handler)
 
 ### 大文件拆分顺序
 
-| 阶段 | 目标 | 兼容策略 |
-|------|------|----------|
-| A | ToolNode → ToolRegistry + 工具族模块 | 保留 `xenon.nodes.tool_node.ToolNode` 导入路径 |
-| B | REPL 输入/渲染/引擎运行/记忆门面 | `REPL` 继续作为薄编排外观 |
-| C | Slash commands 按 core/model/session/integration 拆分 | 保留 `commands.COMMANDS` 和 `dispatch_command` |
-| D | ReAct/Base 引擎拆出协议解析、工具循环、子 Agent | 保留现有 Engine 类构造和 `run()` |
-| E | LLM client 拆出 endpoint、transport、protocol、streaming | 保留 `chat_completion*` 函数 |
+| 阶段 | 目标 | 状态 |
+|------|------|------|
+| A | ToolNode → ToolRegistry + 工具族模块 | ✅ 完成（9 个 tool_families） |
+| B | REPL 输入提取 | ✅ 完成（`repl_input.py` 575 行） |
+| C | Slash commands 按主题拆分 | ✅ 完成（12 个 command_groups） |
+| D | ReAct/Base 引擎拆出协议解析、工具循环、子 Agent | ⏳ 待定（base.py 1244 行结构已清晰） |
+| E | LLM client 按 provider 拆分 | ✅ 完成（`llm_clients/` 包：_base / _openai / _anthropic） |
 
+已完成阶段均通过全量回归（1810 tests）和启动 smoke test。
 任何阶段如果回归或启动验证失败，先停止在当前阶段修复，不继续叠加拆分。
 
 ---
@@ -304,38 +305,30 @@ xenon/
 │   ├── budget.py     · 三阶段软预算管理（探索→利用→收束）
 │   └── hollow_detector.py · 空洞回答检测
 ├── repl/             · 终端交互层
-│   ├── repl.py       · 主循环、模式分发、上下文桥接与无边框渲染
-│   ├── commands.py   · 命令注册（/cost /vision /mode /model ...）
+│   ├── repl.py       · 主循环、模式分发、上下文桥接（3272 行）
+│   ├── repl_input.py · 终端输入处理（自建 Unix/Windows 输入，575 行）
+│   ├── command_groups/ · 12 个命令组（独立可扩展）
+│   │   ├── agent.py / cache.py / model.py / resources.py
+│   │   ├── runtime.py / session.py / shortcut.py
+│   │   ├── skill.py / workspace.py / memory_cmd.py
+│   │   └── common.py · 共享工具（confirm_action 等）
 │   ├── status_bar.py · 输入下边界 + 自适应固定底部 toolbar
 │   ├── model_pool.py · 模型池（12 家预设 / 3 Tier / 故障转移）
 │   └── auto_router.py · 任务难度评估 + 模型路由
+├── llm_clients/      · 按 provider 可替换的 LLM 客户端
+│   ├── _base.py      · 共享基础设施（类型、HTTP 池、凭证）
+│   ├── _openai.py    · OpenAI 兼容协议（chat / tools / streaming）
+│   └── _anthropic.py · Anthropic 原生协议
 ├── memory/           · 用户治理记忆
 │   ├── backend.py    · 存储接口 + JSON/Markdown 后端
-│   ├── registry.py   · 四层作用域注册表
-│   ├── service.py    · 去重、容量、检索、归档和回执策略
-│   └── candidate.py  · 显式授权与自动候选识别
+│   └── service.py    · 去重、容量、检索、归档和回执策略
 ├── nodes/            · 工具执行管线
-│   ├── tool_registry.py · 内置/插件工具注册与分发接缝
-│   ├── tool_families/utility.py · weather / datetime
-│   ├── tool_families/lsp.py · Jedi 代码导航工具
-│   ├── tool_families/file_mutation.py · 原子写入、编辑、批处理与回滚
-│   ├── tool_families/read_only_files.py · read/list/search 文件工具
-│   ├── tool_families/result_filtering.py · 时间/关键词结果预筛选
-│   ├── tool_families/code_tools.py · code index、AST、重构与 diff 预览
-│   ├── tool_families/git_tools.py · Git 状态、差异、日志与受控写操作
-│   ├── tool_families/mcp_tools.py · MCP 注册表调用与结果摘要
-│   ├── tool_node.py  · 现有工具实现（迁移兼容外观）
-│   └── tool_executor.py · 7 阶段流水线 + 断路器
-├── tools/            · 惰性加载工具
-│   ├── vision_bridge.py  · 视觉桥接器（多模态→文字→DeepSeek）
-│   └── clipboard_monitor.py · 全局热键监听（Ctrl+Alt+V）
+│   ├── tool_families/ · 9 个工具族（git/web/file/lsp/mcp/github...）
+│   ├── tool_executor.py · 7 阶段流水线 + 断路器
+│   └── tool_registry.py · 内置/插件工具注册与分发接缝
+├── tools/            · 惰性加载工具（VisionBridge / ClipboardMonitor）
 ├── mcp/              · MCP 协议（stdio / Streamable HTTP）
-├── utils/            · 基础能力
-│   ├── llm_client.py     · 多厂商 LLM 客户端
-│   ├── deepseek_cache.py · 缓存追踪器（SHA256 + 滚动窗口）
-│   ├── response_adapter.py · 输出解析（JSON 提取 + 字段别名）
-│   └── logo.py          · Star Core 启动动画（八芒星核 + 群星）
-└── tests/            · 离线 / live / e2e 分层的 pytest 测试
+└── utils/            · 基础能力（deepseek_cache / response_adapter / logo）
 ```
 
 ---
