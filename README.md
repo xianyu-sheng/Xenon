@@ -6,10 +6,9 @@
 
 **面向实验、学习和社区协作的可扩展终端 AI 编程 Agent 试验场。**
 
-Xenon 不以复刻商业级闭源 coding agent 为目标。它更像一个“AI 编程乌托邦”：
-把模型协议、推理范式、工具调用和终端交互拆成可观察、可替换的模块，让任何人都
-可以用一个小插件验证自己的 Agent 想法，并通过 Issue 或 PR 与社区一起迭代。
-正确性、安全性和可回归验证仍然是底线；“易扩展”不是牺牲工程纪律的借口。
+Xenon 不以复刻商业级闭源 coding agent 为目标。它更像一个"AI 编程乌托邦"：
+把模型协议、推理范式、工具调用和终端交互拆成**可观察、可替换的模块**，让任何人
+都可以用一个小插件验证自己的 Agent 想法，并通过 Issue 或 PR 与社区一起迭代。
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -17,12 +16,116 @@ Xenon 不以复刻商业级闭源 coding agent 为目标。它更像一个“AI 
 [![codecov](https://codecov.io/gh/xianyu-sheng/Xenon/branch/main/graph/badge.svg)](https://codecov.io/gh/xianyu-sheng/Xenon)
 [![release v0.7.3](https://img.shields.io/badge/release-v0.7.3-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.7.3)
 
-Xenon 在终端中提供多模型对话、工具执行、自动路由、持久记忆和会话恢复。
-它重点解决三个工程问题：模型缓存是否真正命中、工具操作是否受控、长期记忆是否由用户决定。
-
 代码托管：
 [GitHub 主仓库](https://github.com/xianyu-sheng/Xenon) ·
 [Gitee 国内镜像](https://gitee.com/xianyu-sheng123/Xenon)
+
+---
+
+## 架构一览
+
+```
+用户输入
+   │
+   ▼
+┌──────────────────────────────────────────────┐
+│  REPL / CLI  (repl.py + repl_input.py)       │  ← 终端交互
+├──────────────────────────────────────────────┤
+│  命令层  12 个 command_groups/*.py            │  ← /help /model /mcp /memory ...
+│          每个命令组是一个独立可替换的模块       │
+├──────────────────────────────────────────────┤
+│  引擎层  7 种推理范式 (BaseEngine ABC)         │  ← direct / ReAct / Plan-Execute
+│  工具层  9 个 tool_families + 7 阶段管线       │  ← git / web / file / lsp / mcp ...
+│  记忆层  memory/ (4 作用域 + 事务锁)           │  ← user / project / session
+│  MCP 层  mcp/ (stdio / HTTP / SSE)            │  ← 7000+ 可发现服务器
+├──────────────────────────────────────────────┤
+│  Provider 层  llm_clients/                    │  ← _openai / _anthropic (可替换)
+│              每加一个厂商只需加一个文件          │
+└──────────────────────────────────────────────┘
+```
+
+---
+
+## 如何扩展 — 四个例子
+
+Xenon 的设计目标是：**每加一种新能力，只需写一个文件**。以下是四种最常见扩展的
+具体做法。
+
+### 1. 添加一个新工具
+
+在 `xenon/nodes/tool_families/` 下创建 `my_tool.py`：
+
+```python
+# xenon/nodes/tool_families/my_tool.py
+def register(registry):
+    registry.register(
+        name="my_search",
+        description="搜索我的知识库",
+        parameters={"query": "string", "limit": "int"},
+        handler=_handle_search,
+    )
+
+def _handle_search(params, ctx):
+    query = params["query"]
+    limit = params.get("limit", 10)
+    results = my_search_backend(query, limit)
+    return {"success": True, "data": results}
+```
+
+然后在 `tool_registry.py` 的 `_load_builtins()` 里加一行 `import`。不需要修改
+工具执行管线、权限系统或引擎代码。
+
+### 2. 添加一个新的推理引擎
+
+```python
+# xenon/engine/my_engine.py
+from xenon.engine.base import BaseEngine
+
+class MyEngine(BaseEngine):
+    """自定义推理范式。"""
+
+    def run(self, user_input: str, context=None) -> str:
+        self._begin_run()
+        messages = self._history_messages(user_input, limit=20)
+        # 自定义推理逻辑...
+        return self._call_llm(messages, phase="my_engine")
+```
+
+然后在 `xenon/repl/repl.py` 的 `_handle_chat()` 里加上对新引擎的 dispatch。
+引擎自动继承断路器、工具安全、记忆注入等全部基础设施。
+
+### 3. 添加一个新命令
+
+在 `xenon/repl/command_groups/` 对应主题文件里（例如 `workspace.py`）加：
+
+```python
+from xenon.repl.command_registry import command_handler, register_command
+
+register_command("/my-feature", "我的新功能", "/my-feature [args]")
+
+@command_handler("/my-feature")
+def _cmd_my_feature(*, args: str, session_state: dict, **kwargs):
+    return f"你输入了: {args}"
+```
+
+重启 Xenon 后 `/help` 会自动列出，`/my-feature hello` 即可使用。
+**不需要修改 `commands.py`**（它只是 re-export 层）。
+
+### 4. 添加一个新的 LLM Provider
+
+```python
+# xenon/llm_clients/_my_provider.py
+def chat(messages, max_tokens, temperature, timeout):
+    """实现 MyProvider 的原生协议。"""
+    resp = httpx.post("https://api.myprovider.com/v1/chat", json={...})
+    return resp.json()["content"]
+```
+
+然后在 `xenon/utils/llm_client.py` 的 `chat_completion()` 里加一个
+`elif endpoint.provider == "my_provider":` 分支。`_base.py` 里的
+HTTP 连接池、重试逻辑、凭证管理和 usage 追踪对任何 provider 通用。
+
+---
 
 ## 快速开始
 
@@ -35,18 +138,10 @@ pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.7.3"
 xenon
 ```
 
-进入 Xenon 后运行 `/setup` 配置模型和 API Key，然后直接描述任务。Python 3.10 及以上版本可用。
+进入 Xenon 后运行 `/setup` 配置模型和 API Key，然后直接描述任务。
+Python 3.10 及以上版本可用。
 
-开发安装：
-
-```bash
-git clone https://gitee.com/xianyu-sheng123/Xenon.git
-cd Xenon
-pip install -e ".[dev]"
-```
-
-需要参与代码开发时，也可以克隆
-[GitHub 主仓库](https://github.com/xianyu-sheng/Xenon)。两个仓库的源码和版本标签保持一致。
+---
 
 ## 核心能力
 
@@ -60,162 +155,47 @@ pip install -e ".[dev]"
 | 扩展 | Agent Skills、MCP（stdio/HTTP/SSE）、Ark 与 OpenAI-compatible Provider |
 | 终端界面 | 多行输入、固定状态栏、`Ctrl+O` 折叠详情、运行状态图标 |
 
-### Cache Rails 验证
-
-Cache Rails 按模型与执行契约维护追加式提示词轨道，只在前缀确实延续时复用。
-真实命中率始终以 API 返回的 `usage` 为准，本地轨道估算不会冒充厂商数据；
-`/cache` 与 `/cost` 展示厂商字段、轨道状态和费用。
-
-最近一次 20 任务真实评测的厂商上报命中率为 **97.35%**，节省 **93.03%**，
-详见下方[评测结果](#评测结果)。
-
-详见 [DeepSeek 缓存指南](docs/deepseek-guide.md)。
-
-## 产品方向与质量门槛
-
-### 社区实验场定位
-
-Xenon 的核心价值是降低 Agent 实验的门槛，而不是和 Codex、Claude Code 等成熟
-产品比较功能数量。新增工具、执行引擎、Provider 或交互能力，都应该有清晰的
-注册接口、最小测试和可复现的启动验证。欢迎通过 Issue 提出想法，或提交带测试
-的 PR；架构演进记录在 [架构设计](docs/ARCHITECTURE.md) 中。
-
-Xenon 的优先级是**正确性优先，效率放大**。Cache Rails 能降低一次正确任务的
-Token 和费用，但不能抵消错误的工具选择、错误的文件修改或未经验证的结论。
-因此我们不会把缓存节省率与任务正确率合并成一个总分：先确认结果做对，再衡量
-完成同一结果用了多少 Token 和费用。
-
-当前评测分为三层：
-
-1. **任务正确性**：实际执行了必要工具、结果非空，并逐步增加文件状态、测试结果和语义结果校验。
-2. **执行可靠性**：工具参数校验、路径边界、权限决策、模型 fallback、记忆确认和会话恢复。
-3. **效率价值**：Cache Rails 命中率、可复用前缀、全 miss 成本基线、实际节省和延迟。
-
 ### 评测结果
 
-所有数字来自可复现的真实运行，命令和报告路径一并给出。缓存与成本以 API 返回的
-`usage` 为准，本地估算不会冒充厂商数据。
+所有数字来自可复现的真实运行。缓存与成本以 API 返回的 `usage` 为准。
 
-#### 自建评测套件（20 任务，2026-07-29）
+| 评测 | 指标 | 结果 |
+|------|------|------|
+| 自建 20 任务 | 机器断言通过率 | 65%（13/20） |
+| 自建 20 任务 | 工具执行成功率 | 95.09% |
+| Cache Rails | 厂商上报命中率 | 97.35%，节省 93.03% |
+| SWE-bench Lite | 引擎-实例格通过率 | 57.14%（4/7，1 instance × 7 engines 矩阵验证） |
 
-| 指标 | 结果 |
-|------|------|
-| 验证通过率（机器断言） | **65%（13/20）** |
-| 工具执行成功率 | **95.09%**（112 次调用 / 8 次失败） |
-| 结果断言通过率 | **90%** |
-| 引擎 / 模型 | ReAct / `deepseek-v4-pro` |
+**未跑的项目一律标注原因，不以"计划中"占位充当结果。**
 
-```bash
-python evals/runner.py --mode real --model deepseek/deepseek-v4-pro \
-  --workdir /tmp/xenon-eval --isolate-tasks --engines react
-```
-
-报告：[`evals/reports/official/2026-07-29-react-real/`](evals/reports/official/2026-07-29-react-real/report.md)
-
-#### Cache Rails（同一次运行内实测）
-
-| 指标 | 结果 |
-|------|------|
-| 厂商上报命中率 | **97.35%**（字段覆盖 100%） |
-| 可复用前缀 token | **1,152,256** |
-| 实际成本 / 全 miss 基线 | **¥0.2567 / ¥3.6847** |
-| 节省 | **93.03%** |
-| 轨道数 / 分叉数 | 3 / 14 |
-
-这组数字建立在一个已修复的缺陷之上：此前 ReAct 的 system prompt 注入了**秒级**
-时间戳，而 REPL 每轮新建引擎，导致缓存轨道每轮分叉、跨轮复用恒为 0。修复前
-README 报告的命中率实际只反映**单次 run 内**多轮迭代的复用，不是跨轮复用。
-现已改为按天注入日期，并加了回归测试锁定「同一天内 system prompt 必须完全一致」。
-
-#### SWE-bench Lite（官方 harness）
-
-| 指标 | 结果 |
-|------|------|
-| 引擎-实例格通过率 | **57.14%（4/7）** |
-| 工具执行成功率 | **90.70%（39/43）** |
-| Cache Rails 命中率 | **89.33%** |
-
-**范围限制**：这是 1 个 instance × 7 个引擎的矩阵，用于验证官方 harness 接入与
-引擎间差异，**不是** SWE-bench Lite 的规模化跑分，不能与公开榜单直接比较。
-30-instance 分层抽样已确定（`evals/swebench_select.py`，种子固定、digest 可校验），
-待镜像拉取网络问题解决后运行。
-
-#### 未评测项
-
-| Benchmark | 状态 | 原因 |
-|-----------|------|------|
-| WebArena | 未评测 | 需自建整站环境（约 200GB 镜像），当前硬件条件不具备 |
-| GAIA | 未评测 | 数据集需 HuggingFace 授权访问 |
-| SWE-bench Lite 全量 | 未评测 | 官方镜像预拉取受网络限制，流程已就绪 |
-
-未跑的项目一律标注原因，不以「计划中」占位充当结果。
-
-#### 当前开发门槛
-
-- 提升任务正确率仍是首要目标；缓存节省不能抵消错误的工具选择或未验证的结论。
-- 继续为文件编辑、代码搜索和多轮修订补齐可机器验证的结果断言。
-- 只有在正确性和可靠性不回退的前提下，才接受 Cache Rails、路由和 Token 优化。
-
-评测真实任务时建议使用独立任务目录，并查看报告中的 `Verified Success Rate`：
-
-```bash
-python evals/runner.py \
-  --mode real \
-  --model deepseek/deepseek-v4-pro \
-  --workdir /tmp/xenon-eval-workdir \
-  --isolate-tasks
-```
-
-未配置结果断言的旧任务会显示为 `Verified: n/a`，不会被误认为已经证明正确。
-
-## 常用命令
-
-| 命令 | 用途 |
-|------|------|
-| `/setup` `/model` `/pool` | 配置模型与故障转移池 |
-| `/mode` `Shift+Tab` | 选择或切换执行引擎 |
-| `/cache` `/cost` | 查看缓存证据、轨道和费用 |
-| `/memory status` `/memory inspect` | 查看记忆范围、路径和元数据 |
-| `/mcp` `/skill` | 管理 MCP 与 Agent Skills |
-| `/save` `/resume` | 保存或恢复会话 |
-| `Ctrl+O` | 展开或折叠最近一次执行详情 |
-
-运行 `/help` 查看完整命令列表。
+---
 
 ## 文档
 
 | 文档 | 内容 |
 |------|------|
-| [快速上手](docs/GUIDE.md) | 安装、配置、模型与执行模式 |
 | [架构设计](docs/ARCHITECTURE.md) | 缓存、路由、工具、记忆与恢复机制 |
+| [快速上手](docs/GUIDE.md) | 安装、配置、模型与执行模式 |
 | [DeepSeek 缓存](docs/deepseek-guide.md) | Cache Rails、usage、费用与诊断 |
 | [记忆系统](docs/MEMORY_SYSTEM_SPEC.md) | 作用域、用户确认、容量治理与回滚 |
 | [Agent Skills](docs/AGENT_SKILLS.md) | `SKILL.md` 发现、加载与安全边界 |
-| [外部集成](docs/INTEGRATIONS.md) | Skill/MCP 的机器可读集成契约 |
 | [TUI 操作](docs/TUI.md) | 输入区、状态栏与快捷键 |
-| [发布验收](docs/RELEASE_ACCEPTANCE.md) | 测试、构建、用户路径和跨平台发布门槛 |
+| [贡献指南](CONTRIBUTING.md) | Issue / PR 流程、代码规范 |
 | [更新日志](CHANGELOG.md) | 各版本功能与验证结果 |
-| [完整审查报告](docs/XENON_AUDIT_2026-07-27.md) | 评测可信度、工程健康度与下一轮验收计划 |
 
-## 社区与反馈
+---
 
-- [Gitee Issues（中文使用反馈与安装问题）](https://gitee.com/xianyu-sheng123/Xenon/issues)
-- [GitHub Issues（代码问题、功能讨论与 PR）](https://github.com/xianyu-sheng/Xenon/issues)
-- [贡献指南](CONTRIBUTING.md)
-- [安全问题报告](SECURITY.md)
-
-GitHub 是 Xenon 的开发主线，Gitee 用作国内镜像、下载入口和中文社区反馈渠道。
-重要问题会同步回 GitHub，版本发布以 GitHub 为源头并同步创建 Gitee Release。
-
-## 开发与测试
+## 开发
 
 ```bash
+git clone https://github.com/xianyu-sheng/Xenon.git
+cd Xenon
+pip install -e ".[dev]"
 ruff check xenon tests
 pytest -q -m "not live"
-uv build
 ```
 
-真实供应商测试默认不会运行，需显式选择带 `live` 标记的用例。
+---
 
 ## License
 
