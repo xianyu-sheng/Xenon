@@ -51,3 +51,8 @@ def test_lsp_family_keeps_toolnode_error_contract() -> None:
     result = ToolNode("lsp", action_type="lsp_symbols").execute(AgentContext())
     assert result["success"] is False
     assert "缺少 file_path" in result["error"]
+
+
+def test_code_family_is_owned_by_extension_module() -> None:
+    assert ToolNode._code_index.__module__.endswith("tool_families.code_tools")
+    assert ToolNode._diff_preview.__module__.endswith("tool_families.code_tools")
