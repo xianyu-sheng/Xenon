@@ -20,14 +20,14 @@ from xenon.repl.command_registry import (
     _HANDLERS,
     ExitSignal,
     command_handler,
-    dispatch_command,
+    dispatch_command,  # noqa: F401 - compatibility export
     register_command,
 )
 from xenon.repl.command_groups.runtime import (
-    cmd_optimize as _cmd_optimize,
-    cmd_stream as _cmd_stream,
-    cmd_thinking as _cmd_thinking,
-    cmd_verbose as _cmd_verbose,
+    cmd_optimize as _cmd_optimize,  # noqa: F401 - compatibility export
+    cmd_stream as _cmd_stream,  # noqa: F401 - compatibility export
+    cmd_thinking as _cmd_thinking,  # noqa: F401 - compatibility export
+    cmd_verbose as _cmd_verbose,  # noqa: F401 - compatibility export
 )
 
 if TYPE_CHECKING:

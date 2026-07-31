@@ -17,6 +17,7 @@ from xenon.engine.budget import BudgetManager
 from xenon.engine.callbacks import EngineCallback, mask_sensitive_params
 from xenon.engine.context import AgentContext
 from xenon.engine.hollow_detector import HollowDetector
+from xenon.engine.react_prompts import BUILTIN_TOOLS, REACT_SYSTEM_PROMPT
 from xenon.engine.scout import DirectoryScout
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes.tool_executor import (
@@ -30,10 +31,6 @@ if TYPE_CHECKING:
     from xenon.repl.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
-
-from xenon.engine.react_prompts import BUILTIN_TOOLS, REACT_SYSTEM_PROMPT
-
-
 
 class ReActEngine(BaseEngine):
     """ReAct 思考-行动-观察循环引擎。"""

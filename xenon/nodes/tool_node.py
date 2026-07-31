@@ -18,18 +18,25 @@ from __future__ import annotations
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
-
-import httpx
 
 from xenon.engine.context import AgentContext
-from xenon.utils.llm_client import _create_http_client
 from xenon.nodes.base import BaseNode
+from xenon.nodes.network_security import (
+    MAX_REDIRECTS as _MAX_REDIRECTS,  # noqa: F401 - private compatibility export
+    RFC1918_NETWORKS as _RFC1918_NETWORKS,  # noqa: F401 - private compatibility export
+    SSRF_DOMAIN_ALLOWLIST as _SSRF_DOMAIN_ALLOWLIST,  # noqa: F401 - private compatibility export
+    SSRFRedirectError as _SSRFRedirectError,  # noqa: F401 - private compatibility export
+    SecurityError,
+    fetch_with_redirect_check as _network_fetch_with_redirect_check,
+    is_internal_ip as _is_internal_ip,  # noqa: F401 - private compatibility export
+    is_rfc1918_private as _is_rfc1918_private,  # noqa: F401 - private compatibility export
+    resolve_host_ips as _resolve_host_ips,  # noqa: F401 - private compatibility export
+    ssrf_check_url as _ssrf_check_url,
+)
 from xenon.nodes.tool_families.code_tools import CodeToolsMixin
 from xenon.nodes.tool_families.file_mutation import FileMutationToolsMixin
 from xenon.nodes.tool_families.git_tools import GitToolsMixin
@@ -53,19 +60,9 @@ from xenon.nodes.tool_registry import (
     BUILTIN_TOOL_REGISTRY,
 )
 from xenon.nodes.tool_result import enrich_tool_result
-from xenon.nodes.network_security import (
-    MAX_REDIRECTS as _MAX_REDIRECTS,
-    SSRFRedirectError as _SSRFRedirectError,
-    SSRF_DOMAIN_ALLOWLIST as _SSRF_DOMAIN_ALLOWLIST,
-    RFC1918_NETWORKS as _RFC1918_NETWORKS,
-    SecurityError,
-    fetch_with_redirect_check as _network_fetch_with_redirect_check,
-    is_internal_ip as _is_internal_ip,
-    is_rfc1918_private as _is_rfc1918_private,
-    resolve_host_ips as _resolve_host_ips,
-    ssrf_check_url as _ssrf_check_url,
+from xenon.utils.llm_client import (  # noqa: F401 - private compatibility export
+    _create_http_client,
 )
-from xenon.utils.github_reference import parse_github_reference
 
 logger = logging.getLogger(__name__)
 
