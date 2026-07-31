@@ -56,3 +56,7 @@ def test_lsp_family_keeps_toolnode_error_contract() -> None:
 def test_code_family_is_owned_by_extension_module() -> None:
     assert ToolNode._code_index.__module__.endswith("tool_families.code_tools")
     assert ToolNode._diff_preview.__module__.endswith("tool_families.code_tools")
+
+
+def test_git_family_is_owned_by_extension_module() -> None:
+    assert ToolNode._git.__module__.endswith("tool_families.git_tools")
