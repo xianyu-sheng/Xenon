@@ -34,6 +34,7 @@ import httpx
 from xenon.engine.context import AgentContext
 from xenon.utils.llm_client import _create_http_client
 from xenon.nodes.base import BaseNode
+from xenon.nodes.tool_families.lsp import LSPToolsMixin
 from xenon.nodes.tool_families.utility import UtilityToolsMixin
 from xenon.nodes.tool_registry import (
     BUILTIN_TOOL_METHODS,
@@ -594,7 +595,7 @@ class SecurityError(Exception):
     pass
 
 
-class ToolNode(UtilityToolsMixin, BaseNode):
+class ToolNode(LSPToolsMixin, UtilityToolsMixin, BaseNode):
     """本地工具执行节点，支持命令执行、文件操作、搜索、Git 和网页抓取。"""
 
     def __init__(
@@ -3312,71 +3313,6 @@ class ToolNode(UtilityToolsMixin, BaseNode):
             "content": summary,
             "success": True,
         }
-
-    # ── LSP 工具（基于 Jedi）────────────────────────────────
-
-    def _lsp_goto_def(self, context: AgentContext) -> dict[str, Any]:
-        """LSP: 跳转到定义。"""
-        return self._lsp_call("goto_definition", context)
-
-    def _lsp_find_refs(self, context: AgentContext) -> dict[str, Any]:
-        """LSP: 查找引用。"""
-        return self._lsp_call("find_references", context)
-
-    def _lsp_hover(self, context: AgentContext) -> dict[str, Any]:
-        """LSP: 悬停信息。"""
-        return self._lsp_call("get_hover", context)
-
-    def _lsp_diagnostics(self, context: AgentContext) -> dict[str, Any]:
-        """LSP: 诊断信息。"""
-        from xenon.utils.lsp_provider import LSPProvider
-        file_path = self._resolve_template(self.file_path or "", context)
-        if not file_path:
-            return {"success": False, "error": "缺少 file_path 参数"}
-        return LSPProvider.get_diagnostics(file_path)
-
-    def _lsp_symbols(self, context: AgentContext) -> dict[str, Any]:
-        """LSP: 文件符号列表。"""
-        from xenon.utils.lsp_provider import LSPProvider
-        file_path = self._resolve_template(self.file_path or "", context)
-        if not file_path:
-            return {"success": False, "error": "缺少 file_path 参数"}
-        return LSPProvider.get_symbols(file_path)
-
-    def _lsp_call(self, method: str, context: AgentContext) -> dict[str, Any]:
-        """通用 LSP 调用分派。"""
-        from xenon.utils.lsp_provider import LSPProvider
-
-        file_path = self._resolve_template(self.file_path or "", context)
-        if not file_path:
-            return {"success": False, "error": "缺少 file_path 参数"}
-
-        # line/column 从原始 action_input 获取（通过 normalize_params 后落在 action 字段中，
-        # 但实际 line/column 是独立的参数，需要特殊处理）
-        # 实际上 action_input = {"file_path": "...", "line": 10, "column": 5}
-        # normalize_params 把 file_path 映射到 self.file_path，line/column 没有标准映射
-        # 所以需要在 tool 执行时从原始 context 或 action_input 获取
-        # v0.6.1: 对于 LSP 工具，line/column 从 self 的附加属性获取
-        line = getattr(self, '_lsp_line', None)
-        column = getattr(self, '_lsp_column', None)
-
-        if line is None or column is None:
-            return {"success": False, "error": "缺少 line 或 column 参数"}
-
-        try:
-            line = int(line)
-            column = int(column)
-        except (ValueError, TypeError):
-            return {"success": False, "error": f"line/column 必须为整数: line={line}, column={column}"}
-
-        if method == "goto_definition":
-            return LSPProvider.goto_definition(file_path, line, column)
-        elif method == "find_references":
-            return LSPProvider.find_references(file_path, line, column)
-        elif method == "get_hover":
-            return LSPProvider.get_hover(file_path, line, column)
-        else:
-            return {"success": False, "error": f"未知 LSP 方法: {method}"}
 
     @staticmethod
     def _html_to_text(html: str) -> str:

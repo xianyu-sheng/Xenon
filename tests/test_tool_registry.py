@@ -46,3 +46,8 @@ def test_registry_rejects_accidental_duplicate_registration() -> None:
     else:  # pragma: no cover - assertion keeps the contract explicit
         raise AssertionError("duplicate tool registration must fail")
 
+
+def test_lsp_family_keeps_toolnode_error_contract() -> None:
+    result = ToolNode("lsp", action_type="lsp_symbols").execute(AgentContext())
+    assert result["success"] is False
+    assert "缺少 file_path" in result["error"]
