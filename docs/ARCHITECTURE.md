@@ -316,6 +316,7 @@ xenon/
 │   └── candidate.py  · 显式授权与自动候选识别
 ├── nodes/            · 工具执行管线
 │   ├── tool_registry.py · 内置/插件工具注册与分发接缝
+│   ├── tool_families/utility.py · weather / datetime（首个已迁移工具族）
 │   ├── tool_node.py  · 现有工具实现（迁移兼容外观）
 │   └── tool_executor.py · 7 阶段流水线 + 断路器
 ├── tools/            · 惰性加载工具
