@@ -15,17 +15,15 @@ ToolNode — 本地工具执行节点。
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import os
 import re
 import shutil
-import socket
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse, quote
+from urllib.parse import quote
 
 import httpx
 
@@ -37,6 +35,7 @@ from xenon.nodes.tool_families.file_mutation import FileMutationToolsMixin
 from xenon.nodes.tool_families.git_tools import GitToolsMixin
 from xenon.nodes.tool_families.lsp import LSPToolsMixin
 from xenon.nodes.tool_families.mcp_tools import MCPToolsMixin
+from xenon.nodes.tool_families.web_tools import WebToolsMixin
 from xenon.nodes.tool_families.read_only_files import (
     MAX_READ_SIZE,  # noqa: F401 - private compatibility export
     ReadOnlyFileToolsMixin,
@@ -53,9 +52,28 @@ from xenon.nodes.tool_registry import (
     BUILTIN_TOOL_REGISTRY,
 )
 from xenon.nodes.tool_result import enrich_tool_result
+from xenon.nodes.network_security import (
+    MAX_REDIRECTS as _MAX_REDIRECTS,
+    SSRFRedirectError as _SSRFRedirectError,
+    SSRF_DOMAIN_ALLOWLIST as _SSRF_DOMAIN_ALLOWLIST,
+    RFC1918_NETWORKS as _RFC1918_NETWORKS,
+    SecurityError,
+    fetch_with_redirect_check as _network_fetch_with_redirect_check,
+    is_internal_ip as _is_internal_ip,
+    is_rfc1918_private as _is_rfc1918_private,
+    resolve_host_ips as _resolve_host_ips,
+    ssrf_check_url as _ssrf_check_url,
+)
 from xenon.utils.github_reference import parse_github_reference
 
 logger = logging.getLogger(__name__)
+
+
+def _fetch_with_redirect_check(client, url: str, headers: dict | None = None):
+    """Compatibility wrapper retaining the old patchable SSRF checker."""
+    return _network_fetch_with_redirect_check(
+        client, url, headers, check_url=_ssrf_check_url,
+    )
 
 # ── 动态工具注册表 ──────────────────────────────────────────
 # 存储通过 register_tool 注册的自定义工具
@@ -140,143 +158,6 @@ def _validate_register_module(module_path: str) -> tuple[bool, str]:
     return True, ""
 
 
-# ── SSRF 防护（A5，§8.3.3 / §8.24.1）──────────────────────
-# web_fetch 等工具抓取 URL 前必须校验目标 IP，禁止访问内网/保留/环回/链路本地地址。
-_MAX_REDIRECTS = 5
-
-
-class _SSRFRedirectError(Exception):
-    """重定向目标未通过 SSRF 校验时抛出。"""
-
-
-# ── RFC 1918 / RFC 6598 私有网络范围（显式定义，避免 ipaddress.is_private
-# 误伤 198.18.0.0/15 等 IANA 基准测试保留段） ──────────────────
-_RFC1918_NETWORKS: list[ipaddress._BaseNetwork] = [
-    ipaddress.ip_network("10.0.0.0/8"),        # RFC 1918
-    ipaddress.ip_network("172.16.0.0/12"),     # RFC 1918
-    ipaddress.ip_network("192.168.0.0/16"),    # RFC 1918
-    ipaddress.ip_network("100.64.0.0/10"),     # RFC 6598 CGNAT
-    ipaddress.ip_network("fc00::/7"),          # IPv6 ULA
-]
-
-
-def _is_rfc1918_private(ip: ipaddress._BaseAddress) -> bool:
-    """检查 IP 是否在 RFC 1918 / RFC 6598 私有地址段内。
-
-    不使用 ipaddress.is_private，因为它把 198.18.0.0/15（IANA 基准测试）
-    也归入 private，导致 wttr.in 等合法公网服务被 SSRF 误拦。
-    """
-    return any(ip in net for net in _RFC1918_NETWORKS)
-
-
-def _is_internal_ip(ip: ipaddress._BaseAddress) -> bool:
-    """判断 IP 是否为内网/保留/环回/链路本地/组播/未指定等不可达外部地址。"""
-    return bool(
-        ip.is_loopback or ip.is_link_local or ip.is_reserved
-        or ip.is_multicast or ip.is_unspecified or _is_rfc1918_private(ip)
-    )
-
-
-def _resolve_host_ips(host: str) -> list[str]:
-    """将 host 解析为 IP 字符串列表（含 IPv6）。
-
-    host 可以是域名或字面量 IP；ipaddress.ip_address 接受十进制整数编码（如 2130706433），
-    getaddrinfo 兜底处理十六进制/八进制编码与域名 DNS 解析。
-    """
-    # 先尝试直接当字面量 IP 解析
-    try:
-        return [str(ipaddress.ip_address(host))]
-    except ValueError:
-        pass
-    # 域名/编码 IP：DNS 解析全部地址（去重保序）
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except socket.gaierror:
-        return []
-    seen: list[str] = []
-    for info in infos:
-        ip_str = info[4][0]
-        # getaddrinfo 对 IPv6 可能带 %scope，去掉
-        ip_str = ip_str.split("%", 1)[0]
-        if ip_str not in seen:
-            seen.append(ip_str)
-    return seen
-
-
-# ── SSRF 已知安全域名白名单 ─────────────────────────────────
-# 这些是公认的公共 API 服务，即使 DNS 解析到非标准 IP（如 CDN 使用的
-# 198.18.0.0/15 基准测试段），也允许访问。白名单在 SSRF 校验前检查，
-# 匹配则跳过 IP 级校验，作为防御纵深（defense-in-depth）的最后一道防线。
-_SSRF_DOMAIN_ALLOWLIST: frozenset[str] = frozenset({
-    "wttr.in",                     # 天气 API
-    "weather.com.cn",              # 中国天气网
-    "api.github.com",              # GitHub API
-    "raw.githubusercontent.com",   # GitHub raw 内容
-    "httpbin.org",                 # HTTP 测试
-    "postman-echo.com",            # HTTP 测试
-})
-
-
-def _ssrf_check_url(url: str) -> tuple[bool, str]:
-    """SSRF 校验：解析 URL 的 host，拒绝内网/保留/环回/链路本地地址。
-
-    返回 (ok, reason)；ok=False 时 reason 为拒绝原因。覆盖 IPv4/IPv6、十进制/十六进制
-    IP 编码、localhost、元数据地址 169.254.169.254、[::1] 等。
-    """
-    try:
-        parsed = urlparse(url)
-    except Exception as e:
-        return False, f"URL 解析失败: {e}"
-    scheme = (parsed.scheme or "").lower()
-    if scheme not in ("http", "https"):
-        return False, f"仅允许 http/https 协议，拒绝: {scheme or '(空)'}"
-    host = parsed.hostname
-    if not host:
-        return False, "URL 缺少 host"
-
-    # ── 域名白名单：已知公共 API 跳过 IP 校验（防御纵深） ──
-    host_lower = host.lower()
-    if host_lower in _SSRF_DOMAIN_ALLOWLIST or any(
-        host_lower.endswith("." + allowed) for allowed in _SSRF_DOMAIN_ALLOWLIST
-    ):
-        return True, ""
-
-    ips = _resolve_host_ips(host)
-    if not ips:
-        return False, f"无法解析 host: {host}"
-    for ip_str in ips:
-        try:
-            ip = ipaddress.ip_address(ip_str)
-        except ValueError:
-            continue
-        if _is_internal_ip(ip):
-            return False, f"禁止访问内网/保留地址: {host} -> {ip_str}"
-    return True, ""
-
-
-def _fetch_with_redirect_check(client, url: str, headers: dict | None = None):
-    """逐跳跟随重定向，每个 Location 都经过 SSRF 校验。最多 _MAX_REDIRECTS 跳。
-
-    用于替代 httpx 的 follow_redirects=True，防止"重定向到内网"绕过起始 URL 校验。
-    """
-    import httpx
-    current = url
-    hdrs = headers or {"User-Agent": "Xenon/0.2"}
-    for _ in range(_MAX_REDIRECTS + 1):
-        resp = client.get(current, headers=hdrs)
-        if not resp.is_redirect:
-            return resp
-        location = resp.headers.get("location", "")
-        if not location:
-            return resp
-        next_url = str(httpx.URL(current).join(location))
-        ok, reason = _ssrf_check_url(next_url)
-        if not ok:
-            raise _SSRFRedirectError(f"{next_url}: {reason}")
-        current = next_url
-    raise _SSRFRedirectError(f"重定向次数超过上限 ({_MAX_REDIRECTS})")
-
-
 # ── 安全常量 ──────────────────────────────────────────────
 
 # 系统敏感路径黑名单（写入操作禁止）
@@ -327,11 +208,6 @@ _DANGEROUS_GIT_PATTERNS = [
 ]
 
 
-class SecurityError(Exception):
-    """安全策略违规异常。"""
-    pass
-
-
 class ToolNode(
     CodeToolsMixin,
     FileMutationToolsMixin,
@@ -341,6 +217,7 @@ class ToolNode(
     LSPToolsMixin,
     ResultFilteringMixin,
     UtilityToolsMixin,
+    WebToolsMixin,
     BaseNode,
 ):
     """本地工具执行节点，支持命令执行、文件操作、搜索、Git 和网页抓取。"""
@@ -833,281 +710,7 @@ class ToolNode(
                 "error": error_msg,
             }
 
-    # ── 网页抓取 ──────────────────────────────────────────
-
-    def _web_fetch(self, context: AgentContext) -> dict[str, Any]:
-        """抓取网页内容，返回纯文本。"""
-        url = self._resolve_template(self.url, context)
-        if not url:
-            url = self._resolve_template(self.action, context)
-        if not url:
-            raise ValueError(f"[{self.id}] web_fetch 需要 url")
-
-        # A GitHub HTML/raw URL is repository data, not a generic webpage.
-        # Route it through the typed GitHub client so pasted links, private
-        # repositories and blob/issue/pull semantics work even if the model
-        # selected web_fetch.
-        host = (urlparse(url).hostname or "").lower()
-        if host in {"github.com", "www.github.com", "raw.githubusercontent.com"}:
-            try:
-                parse_github_reference(url)
-            except ValueError:
-                # Organization/user/search pages are ordinary public HTML, not
-                # repository references.  Keep them on the generic fetch path
-                # instead of returning the misleading "owner/repo" error.
-                if host == "raw.githubusercontent.com":
-                    return {
-                        "action_type": "web_fetch", "url": url,
-                        "content": "", "success": False,
-                        "retryable": False,
-                        "error": "无效的 GitHub raw 文件 URL",
-                    }
-            else:
-                github_node = ToolNode(
-                    f"{self.id}:github",
-                    action_type="github_fetch",
-                    repo=url,
-                    branch="",
-                    timeout=self.timeout,
-                    output_slot=self.output_slot,
-                    security_enabled=self.security_enabled,
-                )
-                return github_node._github_fetch(context)
-
-        # A5: SSRF 防护 — 校验起始 URL 的目标 IP（覆盖 IPv6/编码 IP/元数据地址/file://）
-        ok, reason = _ssrf_check_url(url)
-        if not ok:
-            return {
-                "action_type": "web_fetch", "url": url,
-                "content": "", "success": False,
-                "error": (
-                    f"SSRF 拦截: {reason}"
-                    f"。可尝试用 command 工具执行 curl 获取数据作为降级方案"
-                ),
-            }
-
-        logger.info(f"[{self.id}] 抓取网页: {url}")
-
-        try:
-            # A5: 禁用自动重定向，逐跳校验 Location 防"重定向到内网"
-            with _create_http_client(timeout=self.timeout, follow_redirects=False) as client:
-                resp = _fetch_with_redirect_check(client, url)
-                resp.raise_for_status()
-
-                content_type = resp.headers.get("content-type", "")
-                if "text/html" in content_type:
-                    text = self._html_to_text(resp.text)
-                else:
-                    text = resp.text
-
-                # User constraints are applied to the complete response before
-                # prefix truncation.  This keeps tail records (for example
-                # evening trains in a chronologically sorted timetable) visible.
-                text, filter_meta = self._prefilter_result_text(text, context)
-                if not filter_meta and len(text) > 50000:
-                    text = text[:50000] + "\n\n... (内容已截断，超过 50000 字符)"
-
-                result = {
-                    "action_type": "web_fetch", "url": str(resp.url),
-                    "status_code": resp.status_code, "content": text,
-                    "content_length": len(text), "success": True,
-                    **filter_meta,
-                }
-                self._write_output(context, text[:12000 if filter_meta else 5000])
-                return result
-
-        except ImportError:
-            return {
-                "action_type": "web_fetch", "url": url,
-                "content": "", "success": False,
-                "error": "web_fetch 需要 httpx 库。请 pip install httpx",
-            }
-        except _SSRFRedirectError as e:
-            return {
-                "action_type": "web_fetch", "url": url,
-                "content": "", "success": False,
-                "error": f"SSRF 拦截(重定向): {e}",
-            }
-        except Exception as e:
-            result = {
-                "action_type": "web_fetch", "url": url,
-                "content": "", "success": False, "error": str(e),
-            }
-            self._write_output(context, f"抓取失败: {e}")
-            return result
-
-    def _docs_fetch(self, context: AgentContext) -> dict[str, Any]:
-        """Discover llms.txt and retrieve a bounded, query-relevant doc bundle."""
-        from xenon.utils.llms_txt import (
-            llms_candidate_urls,
-            parse_llms_txt,
-            select_llms_links,
-        )
-
-        url = self._resolve_template(self.url, context)
-        if not url:
-            url = self._resolve_template(self.action, context)
-        if not url:
-            raise ValueError(f"[{self.id}] docs_fetch 需要 url")
-        # ToolExecutor historically normalizes "query" to search_pattern.
-        query = self._resolve_template(
-            self.query or self.search_pattern, context
-        )
-        max_pages = max(0, min(int(self.max_pages), 8))
-        max_chars = max(1000, min(int(self.max_chars), 30000))
-        discovery_urls = llms_candidate_urls(url)
-        attempts: list[dict[str, Any]] = []
-
-        def fetch_text(client, target: str) -> tuple[str, str, int]:
-            ok, reason = _ssrf_check_url(target)
-            if not ok:
-                raise SecurityError(f"SSRF 拦截: {reason}")
-            response = _fetch_with_redirect_check(client, target)
-            if response.status_code == 404:
-                return "", str(response.url), 404
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "")
-            text = (
-                self._html_to_text(response.text)
-                if "text/html" in content_type
-                else response.text
-            )
-            return text, str(response.url), response.status_code
-
-        try:
-            with _create_http_client(timeout=self.timeout, follow_redirects=False) as client:
-                index_text = ""
-                index_url = ""
-                index_kind = ""
-                for candidate in discovery_urls:
-                    try:
-                        text, final_url, status = fetch_text(client, candidate)
-                    except (httpx.HTTPError, _SSRFRedirectError, SecurityError) as exc:
-                        attempts.append({"url": candidate, "error": str(exc)[:160]})
-                        continue
-                    attempts.append({"url": candidate, "status_code": status})
-                    if status == 404 or not text.strip():
-                        continue
-                    index_text = text
-                    index_url = final_url
-                    index_kind = final_url.rstrip("/").rsplit("/", 1)[-1].casefold()
-                    break
-
-                if index_text and index_kind in {
-                    "llms-full.txt", "llms-ctx.txt", "llms-ctx-full.txt",
-                }:
-                    truncated = len(index_text) > max_chars
-                    if truncated:
-                        suffix = "\n\n... (文档已按上下文预算截断)"
-                        content = index_text[:max(0, max_chars - len(suffix))] + suffix
-                    else:
-                        content = index_text
-                    result = {
-                        "action_type": "docs_fetch",
-                        "url": url,
-                        "strategy": "llms-full",
-                        "discovery_url": index_url,
-                        "discovery_attempts": attempts,
-                        "selected_sources": [index_url],
-                        "discovered_links": 0,
-                        "content": content,
-                        "content_length": len(content),
-                        "truncated": truncated,
-                        "success": True,
-                    }
-                    self._write_output(context, content[:5000])
-                    return result
-
-                if index_text:
-                    try:
-                        document = parse_llms_txt(index_text, index_url)
-                    except ValueError as exc:
-                        attempts.append({"url": index_url, "error": str(exc)})
-                    else:
-                        selected = select_llms_links(
-                            document, query, max_pages=max_pages
-                        )
-                        parts = [f"# {document.title}"]
-                        if document.summary:
-                            parts.append(f"> {document.summary}")
-                        if document.details:
-                            parts.append(document.details)
-                        selected_sources: list[str] = []
-                        source_errors: list[dict[str, str]] = []
-                        for link in selected:
-                            try:
-                                page, final_url, status = fetch_text(client, link.url)
-                                if status == 404 or not page.strip():
-                                    raise ValueError(f"HTTP {status}")
-                            except Exception as exc:  # isolated linked-page failure
-                                source_errors.append({
-                                    "url": link.url, "error": str(exc)[:160],
-                                })
-                                continue
-                            selected_sources.append(final_url)
-                            parts.extend([
-                                f"## {link.title}",
-                                f"Source: {final_url}",
-                                page,
-                            ])
-                            if sum(len(part) for part in parts) >= max_chars:
-                                break
-
-                        combined = "\n\n".join(parts)
-                        truncated = len(combined) > max_chars
-                        if truncated:
-                            suffix = "\n\n... (文档包已按上下文预算截断)"
-                            content = combined[:max(0, max_chars - len(suffix))] + suffix
-                        else:
-                            content = combined
-                        result = {
-                            "action_type": "docs_fetch",
-                            "url": url,
-                            "query": query,
-                            "strategy": "llms-index",
-                            "discovery_url": index_url,
-                            "discovery_attempts": attempts,
-                            "selected_sources": selected_sources,
-                            "source_errors": source_errors,
-                            "discovered_links": len(document.links),
-                            "optional_links": sum(
-                                1 for link in document.links if link.optional
-                            ),
-                            "content": content,
-                            "content_length": len(content),
-                            "truncated": truncated,
-                            "success": True,
-                        }
-                        self._write_output(context, content[:5000])
-                        return result
-
-            # No valid index: preserve usefulness by reusing the hardened web
-            # fetch path for the exact user URL.
-            fallback = ToolNode(
-                f"{self.id}:fallback",
-                action_type="web_fetch",
-                url=url,
-                timeout=self.timeout,
-                output_slot=self.output_slot,
-                security_enabled=self.security_enabled,
-            )._web_fetch(context)
-            fallback["action_type"] = "docs_fetch"
-            fallback["strategy"] = "html-fallback"
-            fallback["discovery_attempts"] = attempts
-            fallback["degraded"] = True
-            return fallback
-        except Exception as exc:
-            result = {
-                "action_type": "docs_fetch",
-                "url": url,
-                "strategy": "failed",
-                "discovery_attempts": attempts,
-                "content": "",
-                "success": False,
-                "error": str(exc),
-            }
-            self._write_output(context, f"文档抓取失败: {exc}")
-            return result
+    # Web/document retrieval is implemented by WebToolsMixin.
 
     def _github_fetch(self, context: AgentContext) -> dict[str, Any]:
         """Fetch repository files, README, issues and pull requests via GitHub API."""
@@ -1860,21 +1463,7 @@ class ToolNode(
             "success": True,
         }
 
-    @staticmethod
-    def _html_to_text(html: str) -> str:
-        """简单 HTML 转纯文本。"""
-        import re
-        text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r'<br\s*/?\s*>', '\n', text, flags=re.IGNORECASE)
-        text = re.sub(r'</(p|div|h[1-6]|li|tr)>', '\n', text, flags=re.IGNORECASE)
-        text = re.sub(r'<[^>]+>', '', text)
-        text = re.sub(r'&nbsp;', ' ', text)
-        text = re.sub(r'&lt;', '<', text)
-        text = re.sub(r'&gt;', '>', text)
-        text = re.sub(r'&amp;', '&', text)
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        return text.strip()
+    # HTML normalization is provided by WebToolsMixin.
 
     # ── 动态工具注册 ──────────────────────────────────────
 
