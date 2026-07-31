@@ -318,6 +318,7 @@ xenon/
 │   ├── tool_registry.py · 内置/插件工具注册与分发接缝
 │   ├── tool_families/utility.py · weather / datetime
 │   ├── tool_families/lsp.py · Jedi 代码导航工具
+│   ├── tool_families/file_mutation.py · 原子写入、编辑、批处理与回滚
 │   ├── tool_node.py  · 现有工具实现（迁移兼容外观）
 │   └── tool_executor.py · 7 阶段流水线 + 断路器
 ├── tools/            · 惰性加载工具

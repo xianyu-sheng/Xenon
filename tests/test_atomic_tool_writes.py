@@ -22,12 +22,12 @@ def test_atomic_write_preserves_mode_and_creates_exact_backup(tmp_path):
 
 
 def test_write_file_failure_keeps_original(monkeypatch, tmp_path):
-    from xenon.nodes import tool_node
+    from xenon.nodes.tool_families import file_mutation
 
     target = tmp_path / "important.txt"
     target.write_text("original")
     monkeypatch.setattr(
-        tool_node,
+        file_mutation,
         "atomic_write_text",
         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")),
     )
@@ -61,20 +61,20 @@ def test_edit_file_is_atomic_and_leaves_backup(tmp_path):
 
 
 def test_batch_write_rolls_back_existing_and_new_files(monkeypatch, tmp_path):
-    from xenon.nodes import tool_node
+    from xenon.nodes.tool_families import file_mutation
 
     existing = tmp_path / "a.txt"
     created = tmp_path / "b.txt"
     failing = tmp_path / "c.txt"
     existing.write_text("old-a")
-    real_atomic_write = tool_node.atomic_write_text
+    real_atomic_write = file_mutation.atomic_write_text
 
     def fail_last(path, content, **kwargs):
         if str(path) == str(failing):
             raise OSError("simulated disk failure")
         return real_atomic_write(path, content, **kwargs)
 
-    monkeypatch.setattr(tool_node, "atomic_write_text", fail_last)
+    monkeypatch.setattr(file_mutation, "atomic_write_text", fail_last)
     result = ToolNode(
         "batch",
         action_type="batch_write",
@@ -130,20 +130,20 @@ def test_batch_edit_supports_ordered_edits_to_same_file(tmp_path):
 
 
 def test_batch_edit_execution_failure_restores_every_file(monkeypatch, tmp_path):
-    from xenon.nodes import tool_node
+    from xenon.nodes.tool_families import file_mutation
 
     first = tmp_path / "a.txt"
     second = tmp_path / "b.txt"
     first.write_text("old-a")
     second.write_text("old-b")
-    real_atomic_write = tool_node.atomic_write_text
+    real_atomic_write = file_mutation.atomic_write_text
 
     def fail_second(path, content, **kwargs):
         if str(path) == str(second):
             raise OSError("simulated disk failure")
         return real_atomic_write(path, content, **kwargs)
 
-    monkeypatch.setattr(tool_node, "atomic_write_text", fail_second)
+    monkeypatch.setattr(file_mutation, "atomic_write_text", fail_second)
     result = ToolNode(
         "batch-edit",
         action_type="batch_edit",
