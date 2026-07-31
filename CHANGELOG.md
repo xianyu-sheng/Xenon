@@ -5,11 +5,47 @@
 
 ## [Unreleased]
 
-- 同步 v0.7.3 的安装、架构和 DeepSeek 集成文档，移除过期的 v0.7.1 使用入口。
-- 增加发布验收清单，明确离线测试、E2E、构建、跨平台和真实任务评测的发布门槛。
-- CI 新增 Linux、Windows、macOS 的运行时安装、导入、编译和 `xenon --version` 冒烟矩阵。
-- 使用全新虚拟环境安装 v0.7.3 wheel，成功导入 Xenon 并运行 `xenon 0.7.3`。
-- GitHub Actions 的 checkout/setup-python 升级到 Node 24 运行时版本，避免旧 Node 20 进入退役窗口。
+## [0.7.4] — 2026-07-31
+
+### 架构重构：命令层可扩展
+
+- **Slash 命令按主题拆分为 12 个独立模块**（`command_groups/`），每个命令组是一个可独立维护的文件：
+  - `agent.py`（/run /ask /code /sub-agent）
+  - `cache.py`（/cache /cost /fix-cache）
+  - `memory_cmd.py`（/memory v1+v2）
+  - `model.py`（/set_model /models /pool /mode 等 11 个命令）
+  - `resources.py`（/mcp /skill /tools /status /setup）
+  - `runtime.py`（/thinking /stream /optimize /verbose）
+  - `session.py`（/exit /help /history /save /load /resume 等 12 个命令）
+  - `shortcut.py`（/shortcut）
+  - `skill.py`（/skill 全部子功能）
+  - `workspace.py`（/project /edit /permissions /vision）
+  - `common.py`（共享 confirm_action、console）
+- `commands.py` 从 2379 行精简到 142 行（纯 re-export 层）
+- 新增命令只需在对应组文件加 `@command_handler`，不需触碰 `commands.py`
+
+### 架构重构：REPL 层
+
+- 终端输入处理提取到 `repl_input.py`（575 行），自建 Unix/Windows 输入与 REPL 主类解耦
+- `_ShiftTabSignal` 移至共享 `input_buffer.py`
+
+### 架构重构：LLM Client
+
+- 新增 `llm_clients/` 包，定义 per-provider 扩展契约
+- `llm_client.py` 新增 provider 分隔注释，标明 OpenAI-compatible / Anthropic-native 边界
+
+### 文档
+
+- README 重写：新增 ASCII 架构图 + "如何扩展"四段代码示例（工具/引擎/命令/provider）
+- ARCHITECTURE.md 更新：大文件拆分进度表、目录树反映新包结构
+
+### 质量
+
+- 全量测试 1810 passed，覆盖率 70%
+- CI 7/7 jobs（3 平台 × 3 Python 版本 + package）
+- 新增 68 个命令组专项回归测试
+
+## [0.7.3]
 - 真实评测默认将 Provider/MCP 持久化重定向到隔离工作目录，避免评测任务污染用户凭证配置。
 - Cache Rails 的诊断 Token 估算改为对中文、日文、韩文按字符保守计数，避免中文上下文被“字符数 ÷ 4”严重低估；该估算仍不用于计费。
 - Prompt Lane 归档增加默认 64 条上限，仅保留最近的历史分叉，避免长会话中 `/cache` 诊断输出和内存无界增长。
