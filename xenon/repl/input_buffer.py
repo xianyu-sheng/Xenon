@@ -14,6 +14,15 @@ from collections import OrderedDict
 PASTE_COMPACT_THRESHOLD = 1000
 
 
+class _ShiftTabSignal(Exception):
+    """Raised by terminal input handlers when Shift+Tab is pressed.
+
+    The REPL catches this to cycle reasoning paradigms without
+    disturbing the current input buffer.
+    """
+    pass
+
+
 def normalize_input_newlines(text: str) -> str:
     """Use LF internally without changing any other user-authored content."""
     return text.replace("\r\n", "\n").replace("\r", "\n")
