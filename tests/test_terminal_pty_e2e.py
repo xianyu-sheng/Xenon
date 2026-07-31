@@ -158,7 +158,7 @@ def test_permission_prompt_shows_keys_and_accepts_real_tty_input(
     assert "命令: find /tmp -type f" in prompt
     assert "[y] 确认" in prompt
     assert "[n] 拒绝" in prompt
-    assert "[a] 本会话允许相同操作" in prompt
+    assert "[a] 本会话总是允许此工具" in prompt
     assert "[q] 取消任务" in prompt
     child.send(answer)
     output = child.finish()

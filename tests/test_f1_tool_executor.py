@@ -74,6 +74,17 @@ class TestValidateToolParams:
         ok, _ = validate_tool_params({"file_path": "/tmp/normal_path"})
         assert ok is True
 
+    def test_long_shell_pipeline_with_trailing_quote_passes(self):
+        command = (
+            "curl -sS http://localhost:23119/ 2>&1; "
+            "ss -tlnp | grep 23119 || echo \"PORT_NOT_LISTENING\"; "
+            "ps aux | grep -i zotero | grep -v grep || echo \"NO_ZOTERO_PROCESS\"; "
+            "find ~/.zotero ~/.local/opt/zotero -maxdepth 4 -type f -name \"prefs.js\" "
+            "-o -name \"*.sqlite\" 2>/dev/null"
+        )
+        ok, reason = validate_tool_params({"action": command})
+        assert ok is True, reason
+
 
 # ── 断路器 ─────────────────────────────────────────────────
 class TestCircuitBreaker:

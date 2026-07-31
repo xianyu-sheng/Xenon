@@ -59,6 +59,27 @@ def test_session_decision_is_applied_by_the_gate():
     assert gate.state is PermissionState.APPROVED
 
 
+def test_session_decision_allows_later_critical_tool_calls():
+    """Interactive [a] means this tool is trusted for the rest of the session."""
+    gate = PermissionGate(PermissionMode.DEFAULT)
+    gate.set_confirm_callback(lambda *_args: PermissionDecision.ALLOW_SESSION)
+
+    assert gate.check("command", {"action": "echo first"}) == (True, "")
+    assert gate.check("command", {"action": "ss -tlnp | grep 23119"}) == (True, "")
+    assert gate.session_allowed_tools == ("command",)
+
+
+def test_permission_mode_change_revokes_session_approval():
+    gate = PermissionGate(PermissionMode.DEFAULT)
+    gate.allow_always("command")
+    gate.set_mode(PermissionMode.PLAN)
+
+    allowed, reason = gate.check("command", {"action": "echo blocked"})
+    assert allowed is False
+    assert "PLAN 模式禁止" in reason
+    assert gate.session_allowed_tools == ()
+
+
 def test_cancel_decision_marks_context_and_tool_result_cancelled():
     gate = PermissionGate(PermissionMode.DEFAULT)
     gate.set_confirm_callback(lambda *_args: (False, "用户取消任务"))
@@ -114,7 +135,7 @@ def test_command_confirmation_displays_normalized_action_and_escapes_markup():
     assert "find /tmp" in message
     assert "命令: ?" not in message
     assert r"\[abc]" in message
-    assert "本会话允许相同操作" in message
+    assert "本会话总是允许此工具" in message
 
 
 @pytest.mark.parametrize("risk", ["WRITE", "CRITICAL"])

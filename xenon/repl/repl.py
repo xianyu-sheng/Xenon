@@ -464,13 +464,12 @@ class REPL:
                 allowed = True
                 reason = ""
             elif choice == "a":
-                if risk == "CRITICAL":
-                    # 不按工具名放行任意未来 Shell/MCP/Git 操作，只记忆参数完全
-                    # 相同的操作，既兑现 UI 文案又不扩大授权范围。
-                    self._permission_gate.allow_exact(tool_name, params)
-                    console.print("[dim]· 本会话将自动允许参数相同的操作[/dim]")
-                else:
-                    self._permission_gate.allow_always(tool_name)
+                # [a] is an explicit session-level trust decision. Keep the
+                # narrow ``allow_exact`` API for programmatic callers, but do
+                # not prompt once per newly generated shell command in an
+                # interactive ReAct run.
+                self._permission_gate.allow_always(tool_name)
+                console.print("[dim]· 本会话将自动允许此工具的后续调用[/dim]")
                 allowed = True
                 reason = ""
             elif choice == "q":

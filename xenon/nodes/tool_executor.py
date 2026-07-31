@@ -203,10 +203,20 @@ def _validate_param_value(name: str, value: Any) -> list[str]:
         hits.append("括号不配平")
     if name in ("file_path", "path", "dir", "directory") and _RE_WIN_ILLEGAL.search(value):
         hits.append("Windows 非法字符")
-    if _RE_TRAILING_ILLEGAL.search(value):
+    # Shell commands commonly end in a quoted argument (for example
+    # ``echo "done"``). A trailing quote is not evidence of a path
+    # hallucination for command/action parameters; ToolNode's security parser
+    # performs the real shell and dangerous-operation checks.
+    if _RE_TRAILING_ILLEGAL.search(value) and name not in ("command", "action"):
         hits.append("末尾非法字符")
     # v0.5.3: command/action 放宽到 2000 字符（shell 命令和 Python -c 可以很长）
-    cmd_max_len = 2000 if _is_shell_payload else 200
+    # Complete diagnostic pipelines can legitimately exceed 200 characters.
+    # Keep a bounded ceiling, but do not reject them before the command safety
+    # layer gets a chance to inspect the actual operations.
+    if name in ("command", "action"):
+        cmd_max_len = 4096
+    else:
+        cmd_max_len = 2000 if _is_shell_payload else 200
     if name in ("file_path", "path", "command", "action") and len(value) > cmd_max_len:
         hits.append(f"超长(>{cmd_max_len})")
     if name in ("file_path", "path", "command") and _chinese_ratio(value) > 0.5:

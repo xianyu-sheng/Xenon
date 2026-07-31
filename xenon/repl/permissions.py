@@ -123,7 +123,9 @@ class PermissionGate:
         self.mode = mode
         # 会话级别记忆：用户选择"总是允许"的工具名集合
         self._session_allow: set[str] = set()
-        # CRITICAL 工具不能按工具名整体放行；只记忆参数完全相同的操作。
+        # ``allow_exact`` remains available for integrations that want a
+        # narrow approval. Interactive [a] / ALLOW_SESSION is intentionally
+        # broader: it approves later calls of this tool in the same session.
         self._session_allow_exact: set[str] = set()
         # 外部确认回调：签名 (tool_name, params, risk_level) -> bool
         self._confirm_callback: Callable[[str, dict, str], Any] | None = None
@@ -141,7 +143,9 @@ class PermissionGate:
     def set_mode(self, mode: PermissionMode) -> None:
         """切换权限模式。"""
         self.mode = mode
-        self._state = PermissionState.IDLE
+        # A mode change is an authorization boundary. Do not carry an
+        # earlier session-level [a] approval into PLAN/BYPASS/DEFAULT changes.
+        self.reset_session()
 
     @property
     def state(self) -> PermissionState:
@@ -259,10 +263,7 @@ class PermissionGate:
             allowed, reason, decision = self._normalize_response(response)
             if allowed:
                 if decision is PermissionDecision.ALLOW_SESSION:
-                    if risk == "CRITICAL":
-                        self.allow_exact(tool_name, params)
-                    else:
-                        self.allow_always(tool_name)
+                    self.allow_always(tool_name)
                 self._state = PermissionState.APPROVED
             elif decision is PermissionDecision.CANCEL or "取消" in reason:
                 self._state = PermissionState.CANCELLED
@@ -369,7 +370,7 @@ class PermissionGate:
             )
 
         lines.append("")
-        always_label = "本会话允许相同操作" if risk == "CRITICAL" else "本次会话总是允许"
+        always_label = "本会话总是允许此工具" if risk == "CRITICAL" else "本次会话总是允许"
         # This string is rendered as Rich markup by the REPL.  Bare ``[y]``
         # looks like a markup tag and is silently removed, so escape literal
         # key brackets while keeping the keys visually prominent.
