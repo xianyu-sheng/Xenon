@@ -7,6 +7,11 @@ from types import SimpleNamespace
 
 from rich.console import Console
 
+from xenon.repl.command_groups.cache import (
+    _cmd_cache as _group_cmd_cache,
+    _cmd_cost as _group_cmd_cost,
+    _cmd_fix_cache as _group_cmd_fix_cache,
+)
 from xenon.repl.commands import COMMANDS, _cmd_cache, _cmd_cost, _cmd_fix_cache
 from xenon.repl.context_manager import ContextManager
 from xenon.repl.model_registry import ModelRegistry
@@ -35,6 +40,12 @@ def _response(*, hit=0, miss=100, cache_fields=True, manifest=None) -> dict:
     if manifest:
         response[MANIFEST_RESPONSE_KEY] = manifest
     return response
+
+
+def test_cache_group_preserves_legacy_command_exports() -> None:
+    assert _cmd_cache is _group_cmd_cache
+    assert _cmd_cost is _group_cmd_cost
+    assert _cmd_fix_cache is _group_cmd_fix_cache
 
 
 def test_cache_command_is_registered_and_cold_is_not_zero() -> None:
