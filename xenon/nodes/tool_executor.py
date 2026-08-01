@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 
 
 # ── 工具分类 ───────────────────────────────────────────────
+# 注意：以下两个集合是迁移阶段的**兜底备用**，逐步将被注册表里的 risk 字段取代。
+# classify_tool / required_execution_level 优先查注册表 risk，查不到才走这里。
+# 不在注册表且不在这两个集合里的工具（如未知插件），按 SENSITIVE/level-3 处理，
+# 与 MCP 未知工具的「不假设只读」原则一致（tool_executor.py:116-118 旧注释）。
 _SENSITIVE_TOOLS = {"command"}  # 任意 shell 执行——最高风险
 _WRITE_TOOLS = {
     "write_file", "edit_file", "create_directory",
@@ -53,7 +57,15 @@ def classify_tool(
     tool_name: str,
     params: dict[str, Any] | None = None,
 ) -> str:
-    """返回 INFO | WRITE | SENSITIVE，必要时细分 MCP 远端能力。"""
+    """返回 INFO | WRITE | SENSITIVE，必要时细分 MCP 远端能力。
+
+    查询优先级：
+    1. mcp_call 特判（远端工具名按语义判断）
+    2. BUILTIN_TOOL_REGISTRY 的 risk 字段（涵盖内置工具与所有 register_tool_handler 注册的插件）
+    3. _DYNAMIC_TOOLS（LLM 运行时通过 register_tool 元工具注册）→ SENSITIVE
+    4. 硬编码集合兜底（迁移阶段残留）
+    5. 默认 SENSITIVE（「未知即从严」，与 MCP 未知工具一致）
+    """
     if tool_name == "mcp_call" and params:
         remote_name = str(params.get("tool_name", ""))
         if _EXECUTING_MCP_NAME.search(remote_name):
@@ -63,15 +75,22 @@ def classify_tool(
         if _READ_ONLY_MCP_NAME.search(remote_name):
             return "INFO"
         return "SENSITIVE"
-    if (
-        tool_name in _SENSITIVE_TOOLS
-        or tool_name == "mcp_call"
-        or tool_name in _DYNAMIC_TOOLS
-    ):
+    if tool_name == "mcp_call":
+        return "SENSITIVE"
+    # 优先查注册表 risk 字段
+    defn = BUILTIN_TOOL_REGISTRY.get(tool_name)
+    if defn is not None:
+        return defn.risk
+    # LLM 运行时注册的动态工具
+    if tool_name in _DYNAMIC_TOOLS:
+        return "SENSITIVE"
+    # 硬编码集合兜底（迁移期）
+    if tool_name in _SENSITIVE_TOOLS:
         return "SENSITIVE"
     if tool_name in _WRITE_TOOLS:
         return "WRITE"
-    return "INFO"
+    # 未知工具从严：不假设只读
+    return "SENSITIVE"
 
 
 _MUTATING_MCP_NAME = re.compile(
@@ -123,7 +142,12 @@ def required_execution_level(tool_name: str, params: dict[str, Any]) -> int:
     if tool_name == "spawn_agent":
         # A delegated agent could otherwise bypass the parent turn's boundary.
         return 3
-    return 1
+    # 查注册表 risk 字段（优先级高于旧的硬编码集合）
+    defn = BUILTIN_TOOL_REGISTRY.get(tool_name)
+    if defn is not None:
+        return {"INFO": 1, "WRITE": 2, "SENSITIVE": 3}.get(defn.risk, 3)
+    # 未知工具从严：不假设只读（同 MCP 未知远端工具）
+    return 3
 
 
 def execution_policy_denial(

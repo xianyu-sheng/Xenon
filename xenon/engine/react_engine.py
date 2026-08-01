@@ -25,6 +25,7 @@ from xenon.nodes.tool_executor import (
     execution_policy_denial,
     required_execution_level,
 )
+from xenon.nodes.tool_registry import BUILTIN_TOOL_REGISTRY
 from xenon.utils.response_adapter import parse_react
 
 if TYPE_CHECKING:
@@ -62,7 +63,14 @@ class ReActEngine(BaseEngine):
             permission_gate=permission_gate,
         )
         self.max_iterations = max_iterations
-        self.tools = tools or BUILTIN_TOOLS
+        # Merge plugin tool schemas so the model can actually see and call them.
+        # BUILTIN_TOOLS is a static dict; plugin_schemas() returns only tools
+        # registered via register_tool_handler(..., category="plugin").
+        # If no plugin tools are registered yet, this is a no-op.
+        plugin = BUILTIN_TOOL_REGISTRY.plugin_schemas()
+        self.tools = dict(tools or BUILTIN_TOOLS)
+        if plugin:
+            self.tools.update(plugin)
         # v0.5.3: MCP 工具列表占位——_build_system_prompt 注入实际可用工具
         self._mcp_tools_list = ""
         self.system_prompt = system_prompt or self._build_system_prompt()
