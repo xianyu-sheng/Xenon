@@ -16,6 +16,9 @@ from typing import Any
 
 import yaml
 
+import xenon.engine.builtin_engines  # noqa: F401  # 触发内置范式注册
+from xenon.engine.registry import ENGINE_REGISTRY
+
 from xenon.utils.atomic_write import atomic_write_text
 
 
@@ -44,35 +47,14 @@ class ThinkingMode:
 
 
 # ── 预置思考范式 ──────────────────────────────────────────
+# 由 ENGINE_REGISTRY 派生，避免范式清单出现第二份来源。此前这里是一份手工维护
+# 的字典，与 repl.py 的 dispatch 链、setup_wizard 的说明文案和 evals 的白名单
+# 各自独立，新增一种范式要四处同改，漏一处就静默不生效。
+#
+# 名称与描述的唯一来源是 xenon/engine/builtin_engines.py 的 register_engine()。
 BUILTIN_MODES: dict[str, ThinkingMode] = {
-    "direct": ThinkingMode(
-        name="direct",
-        description="直接对话，不使用特殊引擎（默认模式）",
-    ),
-    "plan-execute": ThinkingMode(
-        name="plan-execute",
-        description="先用强模型规划，再逐步执行，适合复杂任务",
-    ),
-    "react": ThinkingMode(
-        name="react",
-        description="思考-行动-观察循环，适合需要工具的探索性任务",
-    ),
-    "reflection": ThinkingMode(
-        name="reflection",
-        description="执行后自我审查并修正，适合高质量代码生成",
-    ),
-    "plan-react": ThinkingMode(
-        name="plan-react",
-        description="全局规划 + 每步 ReAct 执行，适合复杂多步骤任务",
-    ),
-    "plan-reflection": ThinkingMode(
-        name="plan-reflection",
-        description="规划执行 + 反思修正，适合需要高质量输出的任务",
-    ),
-    "react-reflection": ThinkingMode(
-        name="react-reflection",
-        description="ReAct 探索 + 反思审查，适合需要工具且要求高质量的任务",
-    ),
+    name: ThinkingMode(name=name, description=spec.description)
+    for name, spec in ENGINE_REGISTRY.items()
 }
 
 

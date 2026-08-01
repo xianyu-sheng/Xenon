@@ -25,10 +25,19 @@ except ImportError:  # pragma: no cover - script execution fallback
 DEFAULT_TASKS_PATH = Path(__file__).with_name("tasks.yaml")
 DEFAULT_REPL_TASKS_PATH = Path(__file__).with_name("repl_tasks.yaml")
 DEFAULT_REPORT_PATH = Path(__file__).parent / "reports" / "mock_report.md"
-SUPPORTED_ENGINE_TYPES = (
-    "direct", "react", "plan-execute", "reflection", "plan-react",
-    "plan-reflection", "react-reflection",
-)
+def _supported_engine_types() -> tuple[str, ...]:
+    """从 ENGINE_REGISTRY 派生受支持的引擎名，避免维护第二份白名单。
+
+    此前这里是一份硬编码元组，新增一种范式必须同步修改，漏改的表现是
+    「/mode 能切但 eval 拒绝运行」。
+    """
+    import xenon.engine.builtin_engines  # noqa: F401  # 触发内置范式注册
+    from xenon.engine.registry import ENGINE_REGISTRY
+
+    return ENGINE_REGISTRY.names()
+
+
+SUPPORTED_ENGINE_TYPES = _supported_engine_types()
 
 
 @contextmanager
@@ -440,8 +449,7 @@ class RealAgent:
             )
         raise ValueError(
             f"Unsupported engine_type {self.engine_type!r}; expected one of "
-            "direct, react, plan-execute, reflection, plan-react, plan-reflection, "
-            "react-reflection"
+            + ", ".join(SUPPORTED_ENGINE_TYPES)
         )
 
     def _build_context(self) -> Any:
