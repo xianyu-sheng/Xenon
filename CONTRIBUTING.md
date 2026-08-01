@@ -27,9 +27,11 @@
 3. 在本地运行：
 
    ```bash
-   ruff check xenon tests
+   ruff check xenon tests evals
    pytest -q -m "not live"
    ```
+
+   这与 CI 的 lint 范围一致（`.github/workflows/ci.yml`）。
 
 4. 在 PR 描述中说明背景、方案和验证结果。
 

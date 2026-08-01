@@ -5,11 +5,13 @@ v0.5.0 上下文压缩实效评测（自适应版）。
 """
 from __future__ import annotations
 
-import json, sys, time
+import json
+import sys
+import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from xenon.repl.context_manager import ContextManager, ConversationTurn
+from xenon.repl.context_manager import ContextManager
 from xenon.repl.context_strategies import TieredStrategySelector, SpaceBudget
 from xenon.utils.llm_client import chat_completion
 
@@ -83,7 +85,7 @@ def build_and_compact(
           f"摘要前100字: {result[:100]}...")
 
     if not compressed:
-        print(f"    ⚠️ 压缩未触发！原因可能是 older 为空。")
+        print("    ⚠️ 压缩未触发！原因可能是 older 为空。")
 
     return cm2, result, compressed
 
@@ -261,9 +263,9 @@ def main(model_id="deepseek/deepseek-v4-pro"):
     elif avg >= 0.70:
         print(f"\n  ✅ 基本可用。{triggered_count}/3 场景触发压缩，信息保留率 {avg:.0%}。")
     elif avg >= 0.50:
-        print(f"\n  ⚠️ 有信息丢失。需优化策略参数。")
+        print("\n  ⚠️ 有信息丢失。需优化策略参数。")
     else:
-        print(f"\n  ❌ 严重信息丢失。策略需要重新设计。")
+        print("\n  ❌ 严重信息丢失。策略需要重新设计。")
 
     return {"model": model_id, "avg_score": avg, "total": total,
             "compression_triggered": triggered_count,
@@ -275,4 +277,4 @@ if __name__ == "__main__":
     report = main(model)
     Path("/tmp/xenon_context_eval.json").write_text(
         json.dumps(report, indent=2, ensure_ascii=False, default=str))
-    print(f"\n报告: /tmp/xenon_context_eval.json")
+    print("\n报告: /tmp/xenon_context_eval.json")

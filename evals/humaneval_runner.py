@@ -85,7 +85,6 @@ def extract_code(generated: str, entry_point: str) -> str:
         body_start = def_idx + 1
         # Determine base indentation from the def line
         def_indent = len(lines[def_idx]) - len(lines[def_idx].lstrip())
-        body_indent = def_indent + 4  # standard 4-space body indent
 
         # Skip docstring if present
         for i in range(def_idx + 1, len(lines)):
@@ -138,10 +137,12 @@ def extract_code(generated: str, entry_point: str) -> str:
                               or body_lines[-1].strip().startswith("Here")):
             body_lines.pop()
         # If all we have is comment lines with no indentation, something went wrong
-        if body_lines and all(not l.startswith((" ", "\t")) for l in body_lines if l.strip()):
+        if body_lines and all(
+            not line.startswith((" ", "\t")) for line in body_lines if line.strip()
+        ):
             # Try to find any indented section
-            for i, l in enumerate(body_lines):
-                if l.startswith("    ") or l.startswith("\t"):
+            for i, line in enumerate(body_lines):
+                if line.startswith("    ") or line.startswith("\t"):
                     body_lines = body_lines[i:]
                     break
         return "\n".join(body_lines)
@@ -252,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", default="/tmp/humaneval_report.json")
     args = p.parse_args(argv)
 
-    print(f"HumanEval via xenon")
+    print("HumanEval via xenon")
     print(f"  Model:  {args.model}")
     print(f"  Tasks:  {args.num_tasks}")
     print(f"  Pass@k: k={args.num_samples}")

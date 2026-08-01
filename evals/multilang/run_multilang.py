@@ -6,7 +6,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from evals.runner import RealAgent
+# 必须在上面的 sys.path.insert 之后导入，否则找不到 evals 包。
+from evals.runner import RealAgent  # noqa: E402
 
 
 def run_real(task, *, model, max_turns=3, workdir=None):
