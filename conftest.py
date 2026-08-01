@@ -1,5 +1,12 @@
-"""
-Test configuration — disable security path validation for unit tests.
+"""仓库级 pytest 配置 — 对 ``tests/`` 和 ``xenon/tests/`` 两棵测试树同时生效。
+
+这些 autouse fixture 原先只放在 ``tests/conftest.py``，因此 ``xenon/tests/``
+下的用例一个都拿不到（pytest 的 conftest 按目录树生效）。其中
+``_isolate_chat_completion_mock`` 负责兜住 ``chat_completion`` 的 mock 泄漏，
+而 ``xenon/tests/`` 恰好放着直接打 LLM 客户端的 cache 相关用例，缺失该兜底
+会让泄漏在同进程内污染后续测试。
+
+提到仓库根目录后，两棵树行为一致。
 """
 import pytest
 
@@ -7,9 +14,34 @@ import pytest
 # 后续无论哪个测试怎么 mock，autouse fixture 都能恢复到这个 orig。
 import xenon.engine.base as _engine_base
 import xenon.utils.llm_client as _llm_client
+
 _ORIG_ENGINE_CHAT = _engine_base.chat_completion
 _ORIG_UTIL_CHAT = _llm_client.chat_completion
 _ORIG_UTIL_STREAM = _llm_client.chat_completion_stream
+
+# 同理，在任何 fixture 打补丁之前保存真实的路径校验实现，供需要断言安全边界的
+# 用例通过 ``real_path_validation`` fixture 取回。
+from xenon.nodes.tool_node import ToolNode as _ToolNode  # noqa: E402
+
+_ORIG_VALIDATE_PATH = _ToolNode._validate_path
+
+
+@pytest.fixture
+def real_path_validation():
+    """opt-out：恢复真实的 ``ToolNode._validate_path``。
+
+    ``_disable_security_for_tests`` 默认把路径校验换成宽松版本，方便绝大多数
+    用例使用临时目录。但断言路径校验**本身**的用例（如安全边界测试）必须拿到
+    真实实现，否则断言失去意义。这类用例显式声明本 fixture 即可。
+    """
+    from xenon.nodes.tool_node import ToolNode
+
+    patched = ToolNode._validate_path
+    ToolNode._validate_path = _ORIG_VALIDATE_PATH
+    try:
+        yield
+    finally:
+        ToolNode._validate_path = patched
 
 
 @pytest.fixture(autouse=True)
@@ -18,7 +50,11 @@ def _disable_security_for_tests():
 
     Tests use temp directories and non-existent paths that are outside
     the project directory, which would trigger path validation errors.
+
+    需要真实校验的用例请声明 ``real_path_validation`` fixture 反转本行为。
     """
+    from pathlib import Path
+
     from xenon.nodes.tool_node import ToolNode
 
     original = ToolNode._validate_path
@@ -26,11 +62,10 @@ def _disable_security_for_tests():
     def permissive_validate(self, file_path, *, for_write=False):
         """Skip security checks in tests."""
         if not file_path:
-            from pathlib import Path
             return Path(file_path)
-        path = __import__("pathlib").Path(file_path)
+        path = Path(file_path)
         if self.cwd and not path.is_absolute():
-            path = __import__("pathlib").Path(self.cwd) / path
+            path = Path(self.cwd) / path
         return path
 
     ToolNode._validate_path = permissive_validate
