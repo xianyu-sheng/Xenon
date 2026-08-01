@@ -50,11 +50,14 @@ Xenon 的长期定位是**可扩展的 AI 编程 Agent 试验场**，而不是�
 稳定扩展契约计划固定为：
 
 ```python
-register_tool_handler("my_tool", handler, description="...")
-register_engine("my_engine", EngineClass)
-register_provider("my_provider", ProviderAdapter)
-register_command("/my-command", handler)
+register_tool_handler("my_tool", handler, description="...")   # ✅ 已实现（元数据尚未收敛，见 issue #8）
+register_command("/my-command", handler)                        # ✅ 已实现
+register_engine("my_engine", EngineClass)                       # ⏳ 未实现，见 issue #6
+register_provider("my_provider", ProviderAdapter)               # ⏳ 未实现，见 issue #7
 ```
+
+四条契约中已落地两条。标注 ⏳ 的两条目前需要修改多处现有文件才能接入新能力，
+对应 issue 已列出确切的改动点清单。
 
 当前已完成第一步：`xenon.nodes.tool_registry.ToolRegistry` 接管了 `ToolNode` 的
 内置分发。旧的 `ToolNode(...).execute(context)` 仍然保持兼容；下一步会按工具族
@@ -69,9 +72,9 @@ register_command("/my-command", handler)
 | B | REPL 输入提取 | ✅ 完成（`repl_input.py` 575 行） |
 | C | Slash commands 按主题拆分 | ✅ 完成（12 个 command_groups） |
 | D | ReAct/Base 引擎拆出协议解析、工具循环、子 Agent | ⏳ 待定（base.py 1244 行结构已清晰） |
-| E | LLM client 按 provider 拆分 | ✅ 完成（`llm_clients/` 包：_base / _openai / _anthropic） |
+| E | LLM client 按 provider 拆分 | ⏳ 待定（`b766f5a` 拆过一版，`5497457` 已回退；实现仍在 `utils/llm_client.py`，`llm_clients/` 目前只有 re-export） |
 
-已完成阶段均通过全量回归（1810 tests）和启动 smoke test。
+已完成阶段均通过全量离线回归和启动 smoke test（当前基线见 CI）。
 任何阶段如果回归或启动验证失败，先停止在当前阶段修复，不继续叠加拆分。
 
 ---
