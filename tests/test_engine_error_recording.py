@@ -111,3 +111,86 @@ class TestNoSilentSwallows:
             f"repl.py 出现静默吞异常，行号 {offenders}；"
             "请至少记录一条 logger 日志说明失败原因"
         )
+
+
+def _repl_source_lines() -> list[str]:
+    """读取 repl.py 源码行，供静态门禁使用。"""
+    import pathlib
+
+    import xenon.repl.repl as mod
+
+    return pathlib.Path(mod.__file__).read_text(encoding="utf-8").splitlines()
+
+
+class TestNoDuplicateMethodDefinitions:
+    """回归门禁：类内不得重复定义同名方法。
+
+    历史 bug：``_record_engine_error`` 在 repl.py 里定义了两次（``:966`` 三参数
+    版与 ``:2073`` 两参数版）。Python 后定义覆盖前定义，于是 5 处按三参数签名
+    调用的地方必抛 ``TypeError``——而它们全在引擎的 ``except`` 块里，导致异常
+    处理器自己再抛异常，既盖掉原始失败原因，又让 ``_record_engine_error`` 的
+    收尾逻辑完全跑不到，留下污染下一轮缓存前缀的孤立 user 消息。
+
+    单测只覆盖了能用的那条路（两参数形式），所以全量绿也没抓到。此处改用静态
+    扫描，从结构上防止同类问题。
+    """
+
+    def test_repl_defines_no_method_twice(self):
+        import ast
+
+        import xenon.repl.repl as mod
+
+        tree = ast.parse("\n".join(_repl_source_lines()))
+        duplicates: dict[str, list[tuple[str, list[int]]]] = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            seen: dict[str, list[int]] = {}
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    seen.setdefault(item.name, []).append(item.lineno)
+            dupes = [(n, ls) for n, ls in seen.items() if len(ls) > 1]
+            if dupes:
+                duplicates[node.name] = dupes
+
+        assert not duplicates, (
+            f"{mod.__file__} 中存在重复方法定义（后者覆盖前者，静默生效）: "
+            f"{duplicates}"
+        )
+
+
+class TestRecordEngineErrorCallSites:
+    """回归门禁：所有调用点必须匹配生效签名。"""
+
+    def test_every_call_site_passes_two_arguments(self):
+        import ast
+
+        import xenon.repl.repl as mod
+
+        tree = ast.parse("\n".join(_repl_source_lines()))
+        bad: list[tuple[int, int]] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if isinstance(fn, ast.Attribute) and fn.attr == "_record_engine_error":
+                n_args = len(node.args) + len(node.keywords)
+                if n_args != 2:
+                    bad.append((node.lineno, n_args))
+
+        assert not bad, (
+            "_record_engine_error(message, model_used) 只收 2 个参数，"
+            f"以下调用点参数个数不符 (行号, 个数): {bad}。"
+            f"文件: {mod.__file__}"
+        )
+
+    def test_signature_is_message_and_model(self):
+        """签名本身也钉住，避免有人改回三参数版又不改调用点。"""
+        import inspect
+
+        from xenon.repl.repl import REPL
+
+        params = list(inspect.signature(REPL._record_engine_error).parameters)
+        assert params == ["self", "message", "model_used"], (
+            f"签名已变更为 {params}；若确需修改，请同步全部调用点并更新本测试"
+        )
