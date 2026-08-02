@@ -5,11 +5,13 @@ v0.5.0 真实场景压力测试。
 目标：压缩后，后续任务能否正确使用早期上下文中的关键信息。
 """
 
-import json, sys, time, re
+import json
+import sys
+import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from xenon.repl.context_manager import ContextManager, ConversationTurn
+from xenon.repl.context_manager import ContextManager
 from xenon.repl.context_strategies import TieredStrategySelector, SpaceBudget
 from xenon.utils.llm_client import chat_completion
 
@@ -428,18 +430,18 @@ def run_stress_test(model_id="deepseek/deepseek-v4-pro"):
     low = sum(1 for s in all_scores if s < 0.5)
 
     print(f"\n{'='*60}")
-    print(f"压力测试结果")
+    print("压力测试结果")
     print(f"{'='*60}")
     print(f"  压缩: {turns_before}→{turns_after} 轮, 耗时 {elapsed:.0f}ms")
     print(f"  查询: {len(queries)}, 综合得分: {avg:.0%}")
     print(f"  高召回: {high}/{len(queries)} | 中: {mid}/{len(queries)} | 低: {low}/{len(queries)}")
 
     if avg >= 0.85:
-        print(f"\n  ✅ 真实压力测试通过 — 压缩后上下文有效保留了关键信息。")
+        print("\n  ✅ 真实压力测试通过 — 压缩后上下文有效保留了关键信息。")
     elif avg >= 0.70:
-        print(f"\n  ⚠️ 基本可用，部分信息有损。")
+        print("\n  ⚠️ 基本可用，部分信息有损。")
     else:
-        print(f"\n  ❌ 压缩导致严重信息丢失。")
+        print("\n  ❌ 压缩导致严重信息丢失。")
 
     return {"avg_score": avg, "latency_ms": elapsed, "details": all_scores}
 

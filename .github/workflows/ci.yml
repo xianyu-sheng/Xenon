@@ -44,7 +44,7 @@ jobs:
         run: python -m compileall -q xenon tests
 
       - name: Ruff
-        run: ruff check xenon
+        run: ruff check xenon tests evals
 
       - name: Offline tests + coverage
         run: |

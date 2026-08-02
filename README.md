@@ -205,7 +205,7 @@ Python 3.10 及以上版本可用。
 git clone https://github.com/xianyu-sheng/Xenon.git
 cd Xenon
 pip install -e ".[dev]"
-ruff check xenon tests
+ruff check xenon tests evals
 pytest -q -m "not live"
 ```
 
