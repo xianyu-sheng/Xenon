@@ -14,7 +14,7 @@ Xenon 不以复刻商业级闭源 coding agent 为目标。它更像一个"AI �
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml/badge.svg)](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/xianyu-sheng/Xenon/branch/main/graph/badge.svg)](https://codecov.io/gh/xianyu-sheng/Xenon)
-[![release v0.7.3](https://img.shields.io/badge/release-v0.7.3-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.7.3)
+[![release v0.7.4](https://img.shields.io/badge/release-v0.7.4-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.7.4)
 
 代码托管：
 [GitHub 主仓库](https://github.com/xianyu-sheng/Xenon) ·
@@ -39,8 +39,8 @@ Xenon 不以复刻商业级闭源 coding agent 为目标。它更像一个"AI �
 │  记忆层  memory/ (4 作用域 + 事务锁)           │  ← user / project / session
 │  MCP 层  mcp/ (stdio / HTTP / SSE)            │  ← 7000+ 可发现服务器
 ├──────────────────────────────────────────────┤
-│  Provider 层  llm_clients/                    │  ← _openai / _anthropic (可替换)
-│              每加一个厂商只需加一个文件          │
+│  Provider 层  utils/llm_client.py             │  ← 12 家厂商预设 + 原生协议分支
+│              llm_clients/ 为规划中的拆分目标     │
 └──────────────────────────────────────────────┘
 ```
 
@@ -48,51 +48,56 @@ Xenon 不以复刻商业级闭源 coding agent 为目标。它更像一个"AI �
 
 ## 如何扩展 — 四个例子
 
-Xenon 的设计目标是：**每加一种新能力，只需写一个文件**。以下是四种最常见扩展的
-具体做法。
+Xenon 的**目标**是「每加一种新能力只需写一个文件」。四条扩展路径的成熟度不同，
+下面标注了各自的现状；正在收敛的部分见
+[开放 issue](https://github.com/xianyu-sheng/Xenon/issues)。
 
 ### 1. 添加一个新工具
 
-在 `xenon/nodes/tool_families/` 下创建 `my_tool.py`：
+> 现状：注册与分发已经打通，但工具的 description/params 仍在
+> `xenon/engine/react_prompts.py` 的 `BUILTIN_TOOLS` 里单独维护，
+> 注册表尚未成为唯一来源。收敛进展见 issue #8。
 
 ```python
-# xenon/nodes/tool_families/my_tool.py
-def register(registry):
-    registry.register(
-        name="my_search",
-        description="搜索我的知识库",
-        parameters={"query": "string", "limit": "int"},
-        handler=_handle_search,
-    )
+from xenon.nodes.tool_registry import register_tool_handler
 
-def _handle_search(params, ctx):
-    query = params["query"]
-    limit = params.get("limit", 10)
-    results = my_search_backend(query, limit)
-    return {"success": True, "data": results}
+def _handle_search(node, context):
+    """handler 契约是 (node, context)。
+
+    node    — 已归一化校验的调用（参数在 node 上）
+    context — Xenon 的 AgentContext
+    """
+    query = getattr(node, "search_pattern", "")
+    return {"action_type": "my_search", "success": True, "content": f"搜索: {query}"}
+
+register_tool_handler("my_search", _handle_search, description="搜索我的知识库")
 ```
 
-然后在 `tool_registry.py` 的 `_load_builtins()` 里加一行 `import`。不需要修改
-工具执行管线、权限系统或引擎代码。
+目前还需要同步一件事：把工具的 name/description/params 加进
+`xenon/engine/react_prompts.py` 的 `BUILTIN_TOOLS`，否则模型看不到这个工具。
 
 ### 2. 添加一个新的推理引擎
+
+> 现状：`BaseEngine` 抽象已就位（唯一抽象方法是 `run()`），但还没有
+> `register_engine()`；接入一种新范式目前需要改多处。收敛进展见 issue #6。
 
 ```python
 # xenon/engine/my_engine.py
 from xenon.engine.base import BaseEngine
 
 class MyEngine(BaseEngine):
-    """自定义推理范式。"""
+    """自定义推理范式。BaseEngine.__init__ 需要 model_priority 等参数。"""
 
-    def run(self, user_input: str, context=None) -> str:
+    def run(self, user_input, context=None) -> str:
         self._begin_run()
         messages = self._history_messages(user_input, limit=20)
         # 自定义推理逻辑...
         return self._call_llm(messages, phase="my_engine")
 ```
 
-然后在 `xenon/repl/repl.py` 的 `_handle_chat()` 里加上对新引擎的 dispatch。
-引擎自动继承断路器、工具安全、记忆注入等全部基础设施。
+引擎自动继承断路器、工具安全、记忆注入等基础设施。但接入 REPL 目前还需要同步
+改 `xenon/repl/model_registry.py` 的 `BUILTIN_MODES`、`xenon/repl/repl.py`
+的 dispatch 分支，以及 `evals/runner.py` 的引擎白名单。
 
 ### 3. 添加一个新命令
 
@@ -113,17 +118,26 @@ def _cmd_my_feature(*, args: str, session_state: dict, **kwargs):
 
 ### 4. 添加一个新的 LLM Provider
 
+> 现状：provider 实现集中在 `xenon/utils/llm_client.py`，尚未按厂商拆包，
+> 也还没有 `register_provider()`。收敛进展见 issue #5 / #7。
+
+若厂商是 OpenAI 兼容协议，只需在 `xenon/utils/llm_client.py` 的
+`_PROVIDER_DEFAULTS` 加一项：
+
 ```python
-# xenon/llm_clients/_my_provider.py
-def chat(messages, max_tokens, temperature, timeout):
-    """实现 MyProvider 的原生协议。"""
-    resp = httpx.post("https://api.myprovider.com/v1/chat", json={...})
-    return resp.json()["content"]
+"my_provider": {
+    "base_url": "https://api.myprovider.com/v1",
+    "env_key": "MY_PROVIDER_API_KEY",
+    "max_output_tokens": 8192,
+},
 ```
 
-然后在 `xenon/utils/llm_client.py` 的 `chat_completion()` 里加一个
-`elif endpoint.provider == "my_provider":` 分支。`_base.py` 里的
-HTTP 连接池、重试逻辑、凭证管理和 usage 追踪对任何 provider 通用。
+同时需要在 `xenon/repl/provider_registry.py` 的 `PROVIDERS` 和
+`xenon/repl/model_pool.py` 的 `cost_map` 各加一项。若是原生（非 OpenAI 兼容）
+协议，还需在 `chat_completion()` / `chat_completion_with_tools()` /
+`chat_completion_stream()` 三个入口各加分支 —— anthropic 就是这样接的。
+
+HTTP 连接池、重试、凭证管理和 usage 追踪对所有 provider 通用。
 
 ---
 
@@ -131,10 +145,10 @@ HTTP 连接池、重试逻辑、凭证管理和 usage 追踪对任何 provider �
 
 ```bash
 # 中国大陆网络优先：从 Gitee 镜像安装
-pip install -U "git+https://gitee.com/xianyu-sheng123/Xenon.git@v0.7.3"
+pip install -U "git+https://gitee.com/xianyu-sheng123/Xenon.git@v0.7.4"
 
 # 国际网络或上游开发：从 GitHub 安装
-pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.7.3"
+pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.7.4"
 xenon
 ```
 
