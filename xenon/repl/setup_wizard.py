@@ -500,7 +500,12 @@ def _model_hint(model_name: str) -> str:
 
 
 def _mode_scene(mode_name: str) -> str:
-    """返回范式的推荐场景。"""
+    """返回范式的推荐场景。
+
+    内置范式用这里的精简文案（比 spec.description 更短，适合向导表格）；
+    第三方通过 ``register_engine()`` 新增的范式回退到注册表里的 description，
+    这样向导不会出现空白行。
+    """
     scenes = {
         "plan-execute": "复杂任务、多步骤编程",
         "react": "探索性任务、试错调试",
@@ -509,7 +514,13 @@ def _mode_scene(mode_name: str) -> str:
         "plan-reflection": "规划执行+质量保证",
         "react-reflection": "探索执行+审查修正",
     }
-    return scenes.get(mode_name, "")
+    if mode_name in scenes:
+        return scenes[mode_name]
+
+    from xenon.engine.registry import ENGINE_REGISTRY
+
+    spec = ENGINE_REGISTRY.get(mode_name)
+    return spec.description if spec else ""
 
 
 # ── v0.4.0: 自定义模型商注册 ──────────────────────────────

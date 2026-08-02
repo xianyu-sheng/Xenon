@@ -30,6 +30,7 @@ from rich.prompt import Prompt
 from rich.theme import Theme
 
 from xenon.engine.context import AgentContext
+from xenon.engine.registry import ENGINE_REGISTRY, EngineSpec
 from xenon.repl.commands import COMMANDS, dispatch_command
 from xenon.repl.context_manager import ContextManager
 from xenon.repl.execution_policy import (
@@ -1709,26 +1710,31 @@ class REPL:
                     intent=intent,
                     execution_policy=execution_policy,
                 )
-            elif mode == "react":
-                self._run_react_engine(turn_prompt, model_ids)
-            elif mode == "plan-execute":
-                self._run_plan_execute_engine(turn_prompt, model_ids)
-            elif mode == "reflection":
-                self._run_reflection_engine(turn_prompt, model_ids)
-            elif mode == "plan-react":
-                self._run_plan_react_engine(turn_prompt, model_ids)
-            elif mode == "plan-reflection":
-                self._run_plan_reflection_engine(turn_prompt, model_ids)
-            elif mode == "react-reflection":
-                self._run_react_reflection_engine(turn_prompt, model_ids)
             else:
-                # direct 模式 — 直接调 LLM
-                self._run_direct(
-                    turn_prompt,
-                    model_ids,
-                    intent=intent,
-                    execution_policy=execution_policy,
-                )
+                # 由 ENGINE_REGISTRY 查表分发，替代原先的 if/elif 链。
+                # 未注册的 mode 显式报错，不静默回落到 direct —— 那种回落会让
+                # 用户以为在跑新范式，其实在跑 direct，且没有任何提示。
+                spec = ENGINE_REGISTRY.get(mode)
+                if spec is None:
+                    available = ", ".join(sorted(ENGINE_REGISTRY.names()))
+                    console.print(
+                        f"[error]❌ 未注册的思考范式: {mode}[/error]\n"
+                        f"[dim]可用: {available}[/dim]"
+                    )
+                    logger.error("未注册的思考范式: %s（可用: %s）", mode, available)
+                    self._record_engine_error(
+                        f"[错误] 未注册的思考范式: {mode}", model_ids[0]
+                    )
+                elif spec.runs_engine:
+                    self._run_engine(spec, turn_prompt, model_ids)
+                else:
+                    # direct 模式 — 直接调 LLM，不走引擎循环
+                    self._run_direct(
+                        turn_prompt,
+                        model_ids,
+                        intent=intent,
+                        execution_policy=execution_policy,
+                    )
         except KeyboardInterrupt:
             # B2: Ctrl+C 取消当前运行，返回提示符而非退出整个 REPL
             if getattr(self, "_log_capture_active", False):
@@ -2083,65 +2089,73 @@ class REPL:
                 exc,
             )
 
-    def _run_react_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """ReAct 引擎模式。"""
-        from xenon.engine.react_engine import ReActEngine
+    def _run_engine(self, spec: EngineSpec, user_input: str, model_ids: list[str]) -> None:
+        """按 ``EngineSpec`` 运行一种推理范式 —— 全部引擎共用的唯一流程。
 
-        # v0.5.3: 模式行不直接打印，存储供 Ctrl+O 展开时使用
-        self._last_mode_line = "· ReAct 思考 → 行动 → 观察"
+        此前六个 ``_run_*_engine`` 方法（约 275 行）逐行同构，只差引擎类、
+        一两个调参 kwargs、模式行文案和结果标题。差异现在由 ``EngineSpec``
+        承载（见 ``xenon/engine/builtin_engines.py``），公共流程只此一份：
+
+            日志捕获 → 构造引擎 → 注入 MCP 工具 → run() → 落 trace
+            → 渲染结果 → 异常收尾 → finally 收尾
+
+        收敛的直接好处：``_record_engine_error`` 之类的收尾调用只有一个调用点，
+        不会再出现「五个副本里有五种写法」的漂移。
+        """
+        self._last_mode_line = spec.mode_line
 
         self._start_log_capture()
         callback = self._make_callback()
-        engine = ReActEngine(
+        engine = spec.factory(
             model_priority=model_ids,
             model_pool=self.model_pool,
             auto_router=self.auto_router,
-            # Ordinary chat tasks can involve several read/edit/verify cycles.
-            # Keep the engine's explicit per-run cap, but give the interactive
-            # path enough room for a medium-length task; protocol retries and
-            # compression still remain bounded by BudgetManager's 2× cap.
-            max_iterations=15,
             callback=callback,
             model_configs=dict(self.registry.models),
             permission_gate=self._permission_gate,
         )
         self._inject_mcp_tools_into_engine(engine)
         try:
-            result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
-            # v0.5.3: 诊断日志 — 记录结果实际值，用于排查空白面板根因
-            logger.info(
-                f"_run_react_engine: result type={type(result).__name__}, "
-                f"len={len(result) if isinstance(result, str) else 'N/A'}, "
-                f"strip_len={len(result.strip()) if isinstance(result, str) and result else 0}, "
-                f"head={result[:80] if isinstance(result, str) and result else repr(result)[:80]}"
+            result = engine.run(
+                user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr
             )
+            if spec.log_result_diagnostics:
+                # 诊断日志 — 记录结果实际值，用于排查空白面板根因。
+                logger.info(
+                    f"_run_engine[{spec.name}]: result type={type(result).__name__}, "
+                    f"len={len(result) if isinstance(result, str) else 'N/A'}, "
+                    f"strip_len={len(result.strip()) if isinstance(result, str) and result else 0}, "
+                    f"head={result[:80] if isinstance(result, str) and result else repr(result)[:80]}"
+                )
             self._captured_log = self._stop_log_capture()
             self._persist_engine_trace(engine)
             model_used = self._engine_model_used(engine, model_ids)
             self.ctx_mgr.add_assistant_message(result, model_used=model_used)
-            self._render_engine_result(callback, result, "ReAct 结果")
+            self._render_engine_result(callback, result, spec.result_title)
             if model_used:
                 self.status_bar.set_last_model(model_used)
         except Exception as e:
             self._captured_log = self._stop_log_capture()
-            # Preserve the panel on exceptional engine exits as well.  Without
-            # this, Ctrl+O had only raw logs available after a retry/LLM error,
-            # so the detailed tool timeline appeared to be missing.
-            try:
-                self._last_thinking_panel = callback.get_thinking_panel()
-            except Exception:
-                self._last_thinking_panel = None
+            if spec.preserve_thinking_panel:
+                # 异常退出时也保留面板。缺了这步，重试/LLM 报错后 Ctrl+O 只有
+                # 原始日志可看，详细工具时间线看起来像丢了。
+                try:
+                    self._last_thinking_panel = callback.get_thinking_panel()
+                except Exception:
+                    self._last_thinking_panel = None
             self._persist_engine_trace(engine)
             # 异常时展开日志便于调试
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
             if self._captured_log:
                 console.print(Text(self._captured_log.rstrip(), style="dim"))
-            import traceback
-            logger.error(f"ReAct 引擎异常:\n{traceback.format_exc()}")
-            console.print(f"[error]❌ ReAct 引擎执行失败: {e}[/error]")
+            if spec.log_result_diagnostics:
+                import traceback
+
+                logger.error(f"{spec.label} 引擎异常:\n{traceback.format_exc()}")
+            console.print(f"[error]❌ {spec.label} 引擎执行失败: {e}[/error]")
             self._record_engine_error(
-                f"[错误] ReAct 引擎执行失败: {e}", model_ids[0]
+                f"[错误] {spec.label} 引擎执行失败: {e}", model_ids[0]
             )
         finally:
             if hasattr(callback, "finish_activity"):
@@ -2150,223 +2164,43 @@ class REPL:
             if getattr(self, "_log_capture_active", False):
                 self._captured_log = self._stop_log_capture()
 
+    # ── 兼容层 ─────────────────────────────────────────────
+    # 旧的 per-engine 方法名保留为薄封装：外部脚本、测试和 monkeypatch 可能
+    # 直接引用它们。实现统一走 _run_engine。
+
+    def _run_react_engine(self, user_input: str, model_ids: list[str]) -> None:
+        """ReAct 引擎模式（兼容入口，实现见 _run_engine）。"""
+        self._run_engine(ENGINE_REGISTRY.require("react"), user_input, model_ids)
+
     def _run_plan_execute_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """Plan-Execute 引擎模式。"""
-        from xenon.engine.plan_execute_engine import PlanExecuteEngine
-
-        self._last_mode_line = "· Plan-Execute 规划 → 逐步执行"
-
-        self._start_log_capture()
-        callback = self._make_callback()
-        engine = PlanExecuteEngine(
-            model_priority=model_ids,
-            model_pool=self.model_pool,
-            auto_router=self.auto_router,
-            max_steps=20,
-            callback=callback,
-            model_configs=dict(self.registry.models),
-            permission_gate=self._permission_gate,
+        """Plan-Execute 引擎模式（兼容入口）。"""
+        self._run_engine(
+            ENGINE_REGISTRY.require("plan-execute"), user_input, model_ids
         )
-        self._inject_mcp_tools_into_engine(engine)
-        try:
-            result = engine.run(user_input, self.agent_context, ctx_mgr=self.ctx_mgr)
-            self._captured_log = self._stop_log_capture()
-            self._persist_engine_trace(engine)
-            model_used = self._engine_model_used(engine, model_ids)
-            self.ctx_mgr.add_assistant_message(result, model_used=model_used)
-            self._render_engine_result(callback, result, "Plan-Execute 结果")
-            if model_used:
-                self.status_bar.set_last_model(model_used)
-        except Exception as e:
-            self._captured_log = self._stop_log_capture()
-            self._persist_engine_trace(engine)
-            if self._last_mode_line:
-                console.print(f"[dim]{self._last_mode_line}[/dim]")
-            if self._captured_log:
-                console.print(Text(self._captured_log.rstrip(), style="dim"))
-            console.print(f"[error]❌ Plan-Execute 引擎执行失败: {e}[/error]")
-            self._record_engine_error(
-                f"[错误] Plan-Execute 引擎执行失败: {e}", model_ids[0]
-            )
-        finally:
-            self._persist_engine_trace(engine)
-            if getattr(self, "_log_capture_active", False):
-                self._captured_log = self._stop_log_capture()
 
     def _run_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """Reflection 引擎模式。"""
-        from xenon.engine.reflection_engine import ReflectionEngine
-
-        self._last_mode_line = "· Reflection 执行 → 审查 → 修正"
-
-        self._start_log_capture()
-        callback = self._make_callback()
-        engine = ReflectionEngine(
-            model_priority=model_ids,
-            model_pool=self.model_pool,
-            auto_router=self.auto_router,
-            max_rounds=3,
-            callback=callback,
-            model_configs=dict(self.registry.models),
-            permission_gate=self._permission_gate,
-        )
-        self._inject_mcp_tools_into_engine(engine)
-        try:
-            result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
-            self._captured_log = self._stop_log_capture()
-            self._persist_engine_trace(engine)
-            model_used = self._engine_model_used(engine, model_ids)
-            self.ctx_mgr.add_assistant_message(result, model_used=model_used)
-            self._render_engine_result(callback, result, "Reflection 结果")
-            if model_used:
-                self.status_bar.set_last_model(model_used)
-        except Exception as e:
-            self._captured_log = self._stop_log_capture()
-            self._persist_engine_trace(engine)
-            if self._last_mode_line:
-                console.print(f"[dim]{self._last_mode_line}[/dim]")
-            if self._captured_log:
-                console.print(Text(self._captured_log.rstrip(), style="dim"))
-            console.print(f"[error]❌ Reflection 引擎执行失败: {e}[/error]")
-            self._record_engine_error(
-                f"[错误] Reflection 引擎执行失败: {e}", model_ids[0]
-            )
-        finally:
-            self._persist_engine_trace(engine)
-            if getattr(self, "_log_capture_active", False):
-                self._captured_log = self._stop_log_capture()
+        """Reflection 引擎模式（兼容入口）。"""
+        self._run_engine(ENGINE_REGISTRY.require("reflection"), user_input, model_ids)
 
     def _run_plan_react_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """Plan + React 组合引擎模式。"""
-        from xenon.engine.combined_engines import PlanReactEngine
+        """Plan + React 组合引擎模式（兼容入口）。"""
+        self._run_engine(ENGINE_REGISTRY.require("plan-react"), user_input, model_ids)
 
-        self._last_mode_line = "· Plan+React 全局规划 → 每步 ReAct 执行"
-
-        self._start_log_capture()
-        callback = self._make_callback()
-        engine = PlanReactEngine(
-            model_priority=model_ids,
-            model_pool=self.model_pool,
-            auto_router=self.auto_router,
-            max_steps=10,
-            react_iterations=8,
-            callback=callback,
-            model_configs=dict(self.registry.models),
-            permission_gate=self._permission_gate,
+    def _run_plan_reflection_engine(
+        self, user_input: str, model_ids: list[str]
+    ) -> None:
+        """Plan + Reflection 组合引擎模式（兼容入口）。"""
+        self._run_engine(
+            ENGINE_REGISTRY.require("plan-reflection"), user_input, model_ids
         )
-        self._inject_mcp_tools_into_engine(engine)
-        try:
-            result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
-            self._captured_log = self._stop_log_capture()
-            self._persist_engine_trace(engine)
-            model_used = self._engine_model_used(engine, model_ids)
-            self.ctx_mgr.add_assistant_message(result, model_used=model_used)
-            self._render_engine_result(callback, result, "Plan+React 结果")
-            if model_used:
-                self.status_bar.set_last_model(model_used)
-        except Exception as e:
-            self._captured_log = self._stop_log_capture()
-            self._persist_engine_trace(engine)
-            if self._last_mode_line:
-                console.print(f"[dim]{self._last_mode_line}[/dim]")
-            if self._captured_log:
-                console.print(Text(self._captured_log.rstrip(), style="dim"))
-            console.print(f"[error]❌ Plan+React 引擎执行失败: {e}[/error]")
-            self._record_engine_error(
-                f"[错误] Plan+React 引擎执行失败: {e}", model_ids[0]
-            )
-        finally:
-            self._persist_engine_trace(engine)
-            if getattr(self, "_log_capture_active", False):
-                self._captured_log = self._stop_log_capture()
 
-    def _run_plan_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """Plan + Reflection 组合引擎模式。"""
-        from xenon.engine.combined_engines import PlanReflectionEngine
-
-        self._last_mode_line = "· Plan+Reflection 规划执行 → 反思修正"
-
-        self._start_log_capture()
-        callback = self._make_callback()
-        engine = PlanReflectionEngine(
-            model_priority=model_ids,
-            model_pool=self.model_pool,
-            auto_router=self.auto_router,
-            max_steps=10,
-            review_rounds=2,
-            callback=callback,
-            model_configs=dict(self.registry.models),
-            permission_gate=self._permission_gate,
+    def _run_react_reflection_engine(
+        self, user_input: str, model_ids: list[str]
+    ) -> None:
+        """ReAct + Reflection 组合引擎模式（兼容入口）。"""
+        self._run_engine(
+            ENGINE_REGISTRY.require("react-reflection"), user_input, model_ids
         )
-        self._inject_mcp_tools_into_engine(engine)
-        try:
-            result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
-            self._captured_log = self._stop_log_capture()
-            self._persist_engine_trace(engine)
-            model_used = self._engine_model_used(engine, model_ids)
-            self.ctx_mgr.add_assistant_message(result, model_used=model_used)
-            self._render_engine_result(callback, result, "Plan+Reflection 结果")
-            if model_used:
-                self.status_bar.set_last_model(model_used)
-        except Exception as e:
-            self._captured_log = self._stop_log_capture()
-            self._persist_engine_trace(engine)
-            if self._last_mode_line:
-                console.print(f"[dim]{self._last_mode_line}[/dim]")
-            if self._captured_log:
-                console.print(Text(self._captured_log.rstrip(), style="dim"))
-            console.print(f"[error]❌ Plan+Reflection 引擎执行失败: {e}[/error]")
-            self._record_engine_error(
-                f"[错误] Plan+Reflection 引擎执行失败: {e}", model_ids[0]
-            )
-        finally:
-            self._persist_engine_trace(engine)
-            if getattr(self, "_log_capture_active", False):
-                self._captured_log = self._stop_log_capture()
-
-    def _run_react_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """ReAct + Reflection 组合引擎模式。"""
-        from xenon.engine.combined_engines import ReactReflectionEngine
-
-        self._last_mode_line = "· React+Reflection 探索 → 反思审查"
-
-        self._start_log_capture()
-        callback = self._make_callback()
-        engine = ReactReflectionEngine(
-            model_priority=model_ids,
-            model_pool=self.model_pool,
-            auto_router=self.auto_router,
-            react_iterations=8,
-            review_rounds=2,
-            callback=callback,
-            model_configs=dict(self.registry.models),
-            permission_gate=self._permission_gate,
-        )
-        self._inject_mcp_tools_into_engine(engine)
-        try:
-            result = engine.run(user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr)
-            self._captured_log = self._stop_log_capture()
-            self._persist_engine_trace(engine)
-            model_used = self._engine_model_used(engine, model_ids)
-            self.ctx_mgr.add_assistant_message(result, model_used=model_used)
-            self._render_engine_result(callback, result, "React+Reflection 结果")
-            if model_used:
-                self.status_bar.set_last_model(model_used)
-        except Exception as e:
-            self._captured_log = self._stop_log_capture()
-            self._persist_engine_trace(engine)
-            if self._last_mode_line:
-                console.print(f"[dim]{self._last_mode_line}[/dim]")
-            if self._captured_log:
-                console.print(Text(self._captured_log.rstrip(), style="dim"))
-            console.print(f"[error]❌ React+Reflection 引擎执行失败: {e}[/error]")
-            self._record_engine_error(
-                f"[错误] React+Reflection 引擎执行失败: {e}", model_ids[0]
-            )
-        finally:
-            self._persist_engine_trace(engine)
-            if getattr(self, "_log_capture_active", False):
-                self._captured_log = self._stop_log_capture()
 
     def _stream_response(self, model_id: str, messages: list[dict[str, str]]) -> str:
         """Collect a streamed reply for validation before rendering it."""
