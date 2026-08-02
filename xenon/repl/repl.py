@@ -963,21 +963,6 @@ class REPL:
         )
         return len(calls)
 
-    def _record_engine_error(
-        self,
-        mode_name: str,
-        error: Exception,
-        model_id: str | None = None,
-    ) -> None:
-        """Keep a failed engine turn balanced for safe follow-up context."""
-        try:
-            self.ctx_mgr.add_assistant_message(
-                f"[错误] {mode_name} 执行失败: {error}",
-                model_used=model_id,
-            )
-        except Exception:
-            self.ctx_mgr.trim_last_user()
-
     @staticmethod
     def _engine_model_used(engine: object, model_ids: list[str]) -> str | None:
         """Return the model that actually answered, falling back safely.
@@ -2200,7 +2185,9 @@ class REPL:
             if self._captured_log:
                 console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ Plan-Execute 引擎执行失败: {e}[/error]")
-            self._record_engine_error("Plan-Execute", e, model_ids[0])
+            self._record_engine_error(
+                f"[错误] Plan-Execute 引擎执行失败: {e}", model_ids[0]
+            )
         finally:
             self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
@@ -2241,7 +2228,9 @@ class REPL:
             if self._captured_log:
                 console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ Reflection 引擎执行失败: {e}[/error]")
-            self._record_engine_error("Reflection", e, model_ids[0])
+            self._record_engine_error(
+                f"[错误] Reflection 引擎执行失败: {e}", model_ids[0]
+            )
         finally:
             self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
@@ -2283,7 +2272,9 @@ class REPL:
             if self._captured_log:
                 console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ Plan+React 引擎执行失败: {e}[/error]")
-            self._record_engine_error("Plan+React", e, model_ids[0])
+            self._record_engine_error(
+                f"[错误] Plan+React 引擎执行失败: {e}", model_ids[0]
+            )
         finally:
             self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
@@ -2325,7 +2316,9 @@ class REPL:
             if self._captured_log:
                 console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ Plan+Reflection 引擎执行失败: {e}[/error]")
-            self._record_engine_error("Plan+Reflection", e, model_ids[0])
+            self._record_engine_error(
+                f"[错误] Plan+Reflection 引擎执行失败: {e}", model_ids[0]
+            )
         finally:
             self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
@@ -2367,7 +2360,9 @@ class REPL:
             if self._captured_log:
                 console.print(Text(self._captured_log.rstrip(), style="dim"))
             console.print(f"[error]❌ React+Reflection 引擎执行失败: {e}[/error]")
-            self._record_engine_error("React+Reflection", e, model_ids[0])
+            self._record_engine_error(
+                f"[错误] React+Reflection 引擎执行失败: {e}", model_ids[0]
+            )
         finally:
             self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
