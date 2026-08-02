@@ -10,15 +10,42 @@ Plugin handlers receive ``(node, context)``.  The node is the normalized,
 validated invocation and the context is Xenon's ``AgentContext``.  Keeping the
 signature explicit makes the extension point usable today while leaving room
 for a narrower ``ToolInvocation`` object in a later compatibility release.
+
+## Extension contract (per docs/ARCHITECTURE.md)
+
+    from xenon.nodes.tool_registry import register_tool_handler
+
+    @register_tool_handler(
+        "sqlite_query",
+        description="对本地 SQLite 数据库执行 SQL 查询",
+        params={"db_path": "数据库文件路径", "sql": "SQL 语句"},
+        risk="WRITE",   # SELECT 用 INFO，INSERT/UPDATE/DELETE 用 WRITE
+    )
+    def _handle_sqlite(node, context):
+        import sqlite3
+        db = getattr(node, "db_path", "")
+        sql = getattr(node, "sql", "")
+        with sqlite3.connect(db) as conn:
+            rows = conn.execute(sql).fetchall()
+        return {"action_type": "sqlite_query", "success": True, "content": str(rows)}
+
+三个作用：
+1. 向 ``BUILTIN_TOOL_REGISTRY`` 注册分发处理器
+2. 向 ``PLUGIN_TOOL_SCHEMAS`` 注入 LLM 可见的名称/描述/参数
+3. 向 ``PLUGIN_TOOL_RISK`` 记录风险级别，供 ``classify_tool``/``required_execution_level`` 查询
+
+未声明 ``risk`` 的插件工具默认为 SENSITIVE / level-3（最高风险），
+与 MCP 未知工具的默认策略一致。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable
+from dataclasses import dataclass, field
+from typing import Any, Callable, Literal
 
 
 ToolHandler = Callable[[Any, Any], dict[str, Any]]
+ToolRisk = Literal["INFO", "WRITE", "SENSITIVE"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +56,11 @@ class ToolDefinition:
     handler: str | ToolHandler
     description: str = ""
     category: str = "builtin"
+    # 工具参数描述字典，key = 参数名，value = 参数说明；喂给 LLM 的 schema。
+    params: dict[str, str] = field(default_factory=dict)
+    # 风险级别：INFO=只读无需确认, WRITE=写操作需确认, SENSITIVE=高危需确认。
+    # 插件工具默认 SENSITIVE，遵守「未知即从严」原则（与 MCP 未知工具一致）。
+    risk: ToolRisk = "SENSITIVE"
 
 
 class ToolRegistry:
@@ -44,6 +76,8 @@ class ToolRegistry:
         *,
         description: str = "",
         category: str = "plugin",
+        params: dict[str, str] | None = None,
+        risk: ToolRisk = "SENSITIVE",
         replace: bool = False,
     ) -> ToolDefinition:
         normalized = str(name).strip()
@@ -58,6 +92,8 @@ class ToolRegistry:
             handler=handler,
             description=str(description or ""),
             category=str(category or "plugin"),
+            params=dict(params or {}),
+            risk=risk,
         )
         self._definitions[normalized] = definition
         return definition
@@ -69,12 +105,16 @@ class ToolRegistry:
         *,
         description: str = "",
         category: str = "builtin",
+        params: dict[str, str] | None = None,
+        risk: ToolRisk = "SENSITIVE",
     ) -> ToolDefinition:
         return self.register(
             name,
             method_name,
             description=description,
             category=category,
+            params=params,
+            risk=risk,
         )
 
     def get(self, name: str) -> ToolDefinition | None:
@@ -108,6 +148,19 @@ class ToolRegistry:
 
     def unregister(self, name: str) -> ToolDefinition | None:
         return self._definitions.pop(str(name), None)
+
+    def plugin_schemas(self) -> dict[str, dict[str, Any]]:
+        """返回所有插件工具（category='plugin'）的 LLM schema 字典。
+
+        格式与 ``react_prompts.BUILTIN_TOOLS`` 一致：
+        ``{name: {name, description, params}}``。
+        引擎在初始化时将这些 schema 合并入 ``self.tools``，让 LLM 知道插件工具存在。
+        """
+        return {
+            d.name: {"name": d.name, "description": d.description, "params": d.params}
+            for d in self._definitions.values()
+            if d.category == "plugin"
+        }
 
 
 # Built-in method names are the single source of truth during the migration.
@@ -145,23 +198,71 @@ BUILTIN_TOOL_METHODS: dict[str, str] = {
 
 BUILTIN_TOOL_REGISTRY = ToolRegistry()
 for _tool_name, _method_name in BUILTIN_TOOL_METHODS.items():
-    BUILTIN_TOOL_REGISTRY.register_method(_tool_name, _method_name)
+    # 内置工具的风险级别在此声明。写操作工具用 WRITE，高危用 SENSITIVE，
+    # 只读用 INFO。此前 tool_executor.py 里有两份硬编码集合；现在注册表是
+    # 唯一来源，tool_executor 只需查 definition.risk。
+    _risk: ToolRisk = "SENSITIVE"
+    if _tool_name in {
+        "read_file", "list_files", "search_files", "code_index",
+        "ast_analyze", "diff_preview", "web_fetch", "docs_fetch",
+        "github_fetch", "weather", "datetime", "lsp_hover",
+        "lsp_goto_def", "lsp_find_refs", "lsp_diagnostics", "lsp_symbols",
+    }:
+        _risk = "INFO"
+    elif _tool_name in {
+        "write_file", "edit_file", "create_directory", "batch_write",
+        "batch_edit", "refactor", "git", "clone_repo",
+    }:
+        _risk = "WRITE"
+    # command / mcp_call / register_tool 保持 SENSITIVE（默认值）
+    BUILTIN_TOOL_REGISTRY.register_method(_tool_name, _method_name, risk=_risk)
 
 
 def register_tool_handler(
     name: str,
-    handler: ToolHandler,
+    handler: ToolHandler | None = None,
     *,
     description: str = "",
+    params: dict[str, str] | None = None,
+    risk: ToolRisk = "SENSITIVE",
     category: str = "plugin",
     replace: bool = False,
-) -> ToolDefinition:
-    """Register a Python handler in the process-wide extension registry."""
-    return BUILTIN_TOOL_REGISTRY.register(
-        name,
-        handler,
-        description=description,
-        category=category,
-        replace=replace,
-    )
+) -> Any:
+    """Register a Python handler in the process-wide extension registry.
 
+    可作为普通函数或装饰器使用::
+
+        # 函数式
+        register_tool_handler("my_tool", my_handler, description="...",
+                              params={"key": "说明"}, risk="INFO")
+
+        # 装饰器
+        @register_tool_handler("my_tool", description="...",
+                               params={"key": "说明"}, risk="WRITE")
+        def my_handler(node, context):
+            ...
+
+    注册后，工具会：
+    1. 被 BUILTIN_TOOL_REGISTRY 分发（``ToolNode`` 能执行它）
+    2. 出现在 ``BUILTIN_TOOL_REGISTRY.plugin_schemas()`` 里（引擎启动时合并进
+       ``self.tools``，LLM 能看见它）
+    3. 被 ``classify_tool`` / ``required_execution_level`` 正确分类
+       （``risk`` 默认 SENSITIVE，不会静默绕过权限确认）
+    """
+    if handler is None:
+        # 装饰器用法：register_tool_handler("name", description=...) 返回 decorator
+        def decorator(fn: ToolHandler) -> ToolHandler:
+            BUILTIN_TOOL_REGISTRY.register(
+                name, fn,
+                description=description, params=params, risk=risk,
+                category=category, replace=replace,
+            )
+            return fn
+        return decorator
+
+    # 函数式用法：register_tool_handler("name", handler, ...)
+    return BUILTIN_TOOL_REGISTRY.register(
+        name, handler,
+        description=description, params=params or {}, risk=risk,
+        category=category, replace=replace,
+    )
