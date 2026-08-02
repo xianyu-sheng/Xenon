@@ -482,7 +482,18 @@ class TestToolExecutor:
 
 
 class TestSecurityBoundary:
-    def test_path_traversal_blocked(self):
+    """真实安全边界断言 —— 必须绕过 conftest 的宽松路径校验。
+
+    仓库级 ``_disable_security_for_tests`` 会把 ``ToolNode._validate_path``
+    换成宽松版本，方便绝大多数用例使用临时目录。但本类断言的正是路径校验
+    本身，因此需要显式恢复真实实现，否则断言会失去意义。
+
+    历史背景：这些用例过去位于 ``tests/conftest.py`` 的作用域之外（在
+    ``xenon/tests/`` 下），因而"恰好"拿到了真实校验。把 fixture 提到仓库根
+    目录后，必须显式声明这一依赖。
+    """
+
+    def test_path_traversal_blocked(self, real_path_validation):
         node = ToolNode("s1", action_type="read_file", file_path="/etc/passwd")
         with pytest.raises(Exception):
             node.execute(_ctx())
@@ -492,7 +503,7 @@ class TestSecurityBoundary:
         with pytest.raises(Exception):
             node.execute(_ctx())
 
-    def test_write_sensitive_path_blocked(self):
+    def test_write_sensitive_path_blocked(self, real_path_validation):
         node = ToolNode("s3", action_type="write_file", file_path="/etc/hosts", content="evil")
         with pytest.raises(Exception):
             node.execute(_ctx())
