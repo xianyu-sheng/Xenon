@@ -2886,7 +2886,7 @@ class REPL:
 
     def _load_custom_commands(self) -> None:
         """加载自定义快捷指令和技能，动态注册为命令。"""
-        from xenon.repl.commands import register_command, _HANDLERS
+        from xenon.repl.command_registry import register_command, _HANDLERS
 
         # 加载快捷指令
         try:
