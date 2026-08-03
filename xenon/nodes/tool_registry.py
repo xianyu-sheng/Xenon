@@ -46,6 +46,7 @@ from typing import Any, Callable, Literal
 
 ToolHandler = Callable[[Any, Any], dict[str, Any]]
 ToolRisk = Literal["INFO", "WRITE", "SENSITIVE"]
+_VALID_TOOL_RISKS = frozenset({"INFO", "WRITE", "SENSITIVE"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,8 +86,17 @@ class ToolRegistry:
             raise ValueError("工具名不能为空")
         if not callable(handler) and not isinstance(handler, str):
             raise TypeError("工具处理器必须是可调用对象或方法名")
+        if risk not in _VALID_TOOL_RISKS:
+            raise ValueError(
+                f"工具风险级别无效: {risk!r}，必须是 INFO、WRITE 或 SENSITIVE"
+            )
         if normalized in self._definitions and not replace:
             raise ValueError(f"工具已注册: {normalized}")
+        if (
+            normalized in self._definitions
+            and self._definitions[normalized].category == "builtin"
+        ):
+            raise ValueError(f"不能覆盖内置工具: {normalized}")
         definition = ToolDefinition(
             name=normalized,
             handler=handler,

@@ -110,6 +110,18 @@ class EngineRegistry:
         name = str(spec.name).strip()
         if not name:
             raise ValueError("引擎名不能为空")
+        if name != spec.name:
+            spec = EngineSpec(
+                name=name,
+                description=spec.description,
+                factory=spec.factory,
+                mode_line=spec.mode_line,
+                result_title=spec.result_title,
+                error_label=spec.error_label,
+                preserve_thinking_panel=spec.preserve_thinking_panel,
+                log_result_diagnostics=spec.log_result_diagnostics,
+                metadata=dict(spec.metadata),
+            )
         if name in self._specs and not replace:
             raise ValueError(f"引擎已注册: {name}（如需覆盖请传 replace=True）")
         self._specs[name] = spec
@@ -117,7 +129,7 @@ class EngineRegistry:
 
     def get(self, name: str) -> EngineSpec | None:
         self._ensure_builtins()
-        return self._specs.get(str(name))
+        return self._specs.get(str(name).strip())
 
     def require(self, name: str) -> EngineSpec:
         """取出 spec，未注册时显式报错而不是静默回落。
@@ -134,7 +146,7 @@ class EngineRegistry:
 
     def contains(self, name: str) -> bool:
         self._ensure_builtins()
-        return str(name) in self._specs
+        return str(name).strip() in self._specs
 
     def names(self) -> tuple[str, ...]:
         self._ensure_builtins()
@@ -146,7 +158,7 @@ class EngineRegistry:
 
     def unregister(self, name: str) -> EngineSpec | None:
         self._ensure_builtins()
-        return self._specs.pop(str(name), None)
+        return self._specs.pop(str(name).strip(), None)
 
 
 # 进程级注册表。内置范式在首次查询时加载，见 EngineRegistry._ensure_builtins。

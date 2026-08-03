@@ -81,6 +81,12 @@ class TestRegistryBasics:
         with pytest.raises(ValueError, match="不能为空"):
             clean_registry.register(EngineSpec(name="  "))
 
+    def test_name_is_normalized_in_returned_spec(self, clean_registry):
+        spec = clean_registry.register(EngineSpec(name="  tot  "))
+        assert spec.name == "tot"
+        assert clean_registry.get("tot") is spec
+        assert clean_registry.unregister("  tot  ") is spec
+
     def test_require_raises_on_unknown(self, clean_registry):
         """未注册必须显式报错，而不是返回 None 让调用方静默回落。"""
         clean_registry.register(EngineSpec(name="react"))

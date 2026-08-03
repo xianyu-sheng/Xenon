@@ -255,3 +255,11 @@ class TestRegistryIsolation:
         d = BUILTIN_TOOL_REGISTRY.get("override_me")
         assert d.description == "v2"
         assert d.risk == "WRITE"
+
+    def test_invalid_risk_is_rejected(self):
+        with pytest.raises(ValueError, match="风险"):
+            ToolRegistry().register("bad_risk", _handler, risk="BAD")
+
+    def test_public_registration_cannot_replace_builtin_tool(self):
+        with pytest.raises(ValueError, match="内置"):
+            register_tool_handler("command", _handler, risk="INFO", replace=True)
