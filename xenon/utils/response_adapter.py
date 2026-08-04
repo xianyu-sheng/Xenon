@@ -603,6 +603,17 @@ def parse_plan(raw: str) -> dict[str, Any]:
     if data is None:
         return {**_analysis_template(), "analysis": raw, "task": raw}
 
+    # LLM 偶尔返回顶层 JSON 数组（误把 steps 当成整体输出）。_pick 假定
+    # dict 输入，对 list 会抛 AttributeError——规划器协议错误不应杀死
+    # 整个引擎（SWE-bench 实测：pylint plan-reflection 因此崩溃）。
+    # 容错：取数组首个 dict；无法恢复时返回空计划（调用方走格式重试）。
+    if isinstance(data, list):
+        first_dict = next((x for x in data if isinstance(x, dict)), None)
+        if first_dict is None:
+            logger.warning("parse_plan: LLM 返回 JSON 数组且无 dict 元素，按空计划处理")
+            return _analysis_template()
+        data = first_dict
+
     result = _pick(data, _PLAN_FIELD_ALIASES)
 
     # 统一 analysis 字段
