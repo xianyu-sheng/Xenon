@@ -68,7 +68,6 @@ class _WriteTracker(ToolExecutionTracker):
 
     @staticmethod
     def _make_call(tool: str, params: dict, success: bool):
-        from dataclasses import make_dataclass
         import types
 
         ns = types.SimpleNamespace(

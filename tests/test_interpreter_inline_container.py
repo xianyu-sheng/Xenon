@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import pytest
 
-from xenon.engine.context import AgentContext
-from xenon.nodes.base import BaseNode
 from xenon.nodes.tool_node import SecurityError, ToolNode
 
 
