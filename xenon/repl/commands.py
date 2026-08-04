@@ -15,6 +15,7 @@ from xenon.repl.command_registry import (
     ExitSignal,  # noqa: F401 - compatibility export
     command_handler,
     dispatch_command,  # noqa: F401 - compatibility export
+    register_command,  # noqa: F401 - compatibility export
     )
 from xenon.repl.command_groups.runtime import (
     cmd_optimize as _cmd_optimize,  # noqa: F401 - compatibility export
