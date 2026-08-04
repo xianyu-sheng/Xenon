@@ -341,6 +341,10 @@ class ToolNode(
         self.command_template = command_template
         self.params = params or {}
         self.security_enabled = security_enabled
+        # SWE-bench 隔离容器（docker exec）内允许解释器内联验证（python -c 等）。
+        # 容器边界已吸收 RCE 风险——命令在一次性沙箱中执行，不影响宿主机。
+        # 宿主机（无 command_prefix）保持拦截，行为不变。
+        self.allow_interpreter_inline = False
         self._extra_start_line = start_line
         self._extra_max_lines = max_lines
         # v0.6.1: LSP 工具参数
@@ -356,6 +360,11 @@ class ToolNode(
 
         self.command_prefix = tuple(prefix)
         self.command_prelude = prelude
+        # docker exec 前缀 = 命令在一次性隔离容器中执行。容器边界已吸收
+        # 解释器内联（python -c 等）的 RCE 风险，放行验证型命令；宿主机
+        # （空前缀）保持拦截，行为不变。
+        if len(prefix) >= 2 and prefix[0] == "docker" and prefix[1] == "exec":
+            self.allow_interpreter_inline = True
 
     # ── 参数规范化 ──────────────────────────────────────────
 
@@ -563,6 +572,15 @@ class ToolNode(
         # 字符串字面量触发误报）。通用机制，不针对特定任务加白名单。
         cmd_stripped = self._strip_quoted(cmd_lower)
         for pattern in _DANGEROUS_CMD_PATTERNS:
+            # 隔离容器内放行解释器内联验证（python -c / python -e 等）：
+            # SWE-bench 评测的标准工作流，容器边界已隔离 RCE 风险。
+            # 宿主机上保持拦截。其他危险模式（rm -rf /、shutdown、base64 等）
+            # 在容器内同样拦截，防止破坏评测环境。
+            if (
+                getattr(self, "allow_interpreter_inline", False)
+                and pattern == r"\b(?:python\w*|perl|ruby|node)\s+-[ce]\s+"
+            ):
+                continue
             if re.search(pattern, cmd_stripped):
                 raise SecurityError(
                     f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。"

@@ -53,8 +53,45 @@ def prepare_official_source(
     *,
     namespace: str | None = "swebench",
 ) -> tuple[Path, str, str]:
-    """Build through official APIs and extract its pristine ``/testbed``."""
+    """Build through official APIs and extract its pristine ``/testbed``.
 
+    Cache-first: if the official source is already extracted on disk, return it
+    without calling ``make_test_spec`` (which fetches from raw.githubusercontent.com).
+    This avoids GitHub SSL errors when the image and testbed are already cached.
+    """
+    import docker as _docker
+
+    # ── Cache-first path: avoid make_test_spec (GitHub fetch) if testbed exists ──
+    # Scan _official_source for a cached testbed matching this instance_id.
+    # The cache key is <instance_id>/<image_sha_prefix>/testbed.
+    cache_base = prepared_root / "_official_source" / instance["instance_id"]
+    if cache_base.exists():
+        for img_dir in sorted(cache_base.iterdir(), reverse=True):
+            testbed = img_dir / "testbed"
+            if testbed.exists():
+                # Reconstruct image_key from Docker by matching the sha prefix
+                client = _docker.from_env()
+                try:
+                    candidates = client.images.list()
+                    image_key = None
+                    image_id = None
+                    sha_prefix = img_dir.name
+                    for img in candidates:
+                        if img.id and sha_prefix in img.id:
+                            for tag in img.tags:
+                                if "sweb.eval" in tag and instance["instance_id"].lower().replace("__", "_") in tag.lower():
+                                    image_key = tag.split(":")[0] if ":" in tag else tag
+                                    image_id = img.id
+                                    break
+                            if image_key:
+                                break
+                    if image_key and image_id:
+                        client.close()
+                        return testbed, image_key, image_id
+                finally:
+                    client.close()
+
+    # ── Slow path: build via official APIs ──
     client, spec = _docker_and_spec(instance, namespace)
     try:
         image = client.images.get(spec.instance_image_key)

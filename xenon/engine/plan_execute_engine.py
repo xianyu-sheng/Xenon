@@ -278,9 +278,119 @@ class PlanExecuteEngine(BaseEngine):
         else:
             results = self._run_serial(capped, user_input, ctx, tracker, total)
 
+        # Phase 2.5: 任务完成度校验（SWE-bench 发现：计划可能只有侦察步骤，
+        # 执行完「理解问题」就收工，从不实际修改文件）。
+        # ReAct 有 `requires_tools and not tracker.has_executions()` 纠偏，
+        # Plan-Execute 此前没有对应机制。这里补上同构检查：
+        # 若任务需要写操作（执行级别 ≥ WRITE）但 tracker 无任何成功写类工具，
+        # 强制追加一轮补救执行，让 LLM 真正落盘修改，而非只输出分析文本。
+        results = self._ensure_task_completed(
+            user_input, results, ctx, tracker, total,
+        )
+
         # 汇总结果 — 附加工具执行摘要
         summary = self._summarize(user_input, plan.get("analysis", ""), results, tracker)
         return summary
+
+    # ── Phase 2.5: 任务完成度校验 ────────────────────────────
+    # 写类工具集合（与 tool_executor._WRITE_TOOLS 保持一致；command 也算——
+    # SWE-bench 场景中修改通常经 command 跑脚本，或直接 write/edit 落盘）。
+    _WRITE_TOOL_NAMES = frozenset({
+        "write_file", "edit_file", "create_directory", "batch_write",
+        "batch_edit", "edit_with_llm", "append_file", "refactor",
+        "git", "command",
+    })
+
+    def _has_successful_write(self, tracker: ToolExecutionTracker | None) -> bool:
+        """是否已有任何成功的写类工具执行（文件被真正修改）。"""
+        if tracker is None:
+            return False
+        return any(
+            c.success and c.tool_name in self._WRITE_TOOL_NAMES
+            for c in tracker.calls
+        )
+
+    @staticmethod
+    def _task_requires_write(user_input: str) -> bool:
+        """判断任务是否需要写操作（基于执行级别，非领域关键词枚举）。
+
+        WRITE(2)/EXECUTE(3) 级别意味着用户要求文件变更或命令执行；
+        ANSWER_ONLY(0)/READ_ONLY(1) 级别不需要落盘。
+        """
+        try:
+            from xenon.repl.execution_policy import (
+                ExecutionLevel,
+                classify_execution_policy,
+            )
+            policy = classify_execution_policy(user_input)
+            return int(policy.level) >= int(ExecutionLevel.WRITE)
+        except Exception:  # 分类失败时保守视为需要写（SWE-bench 场景默认）
+            logger.warning("任务写操作判定失败，保守视为需要写")
+            return True
+
+    def _ensure_task_completed(
+        self,
+        user_input: str,
+        results: list[dict[str, Any]],
+        ctx: AgentContext,
+        tracker: ToolExecutionTracker,
+        total: int,
+    ) -> list[dict[str, Any]]:
+        """若任务需要写文件但没有任何成功写类工具，强制追加一轮补救执行。
+
+        返回补充后的 results；无缺口时原样返回（零行为变化，向后兼容）。
+        """
+        if self._has_successful_write(tracker):
+            return results
+        if not self._task_requires_write(user_input):
+            return results
+
+        # 已达 max_steps 上限时不再追加，避免无限循环
+        if len(results) >= self.max_steps:
+            logger.warning(
+                "任务需要写操作但无写类工具执行，且已达 max_steps=%d 上限，"
+                "不再追加补救步骤", self.max_steps,
+            )
+            return results
+
+        logger.warning(
+            "Plan-Execute: 任务需要写操作但未执行任何写类工具，触发补救执行"
+        )
+        self.callback.on_warning(
+            "检测到任务需要实际修改文件，但计划步骤只做了侦察。"
+            "正在强制追加补救执行…"
+        )
+
+        remediation_step = {
+            "id": len(results) + 1,
+            "task": (
+                "【强制补救】前面步骤只完成了侦察/分析，尚未实际修改任何文件。"
+                "请立即使用 write_file / edit_file / batch_write 等工具真正修改"
+                "目标文件完成修复，不要只输出分析文本。"
+            ),
+            "tool": None,
+            "params": {},
+            "depends_on": [],
+        }
+        step_id = remediation_step["id"]
+        prev_results = self._build_prev_results(results)
+        raw_result = self._execute_step_with_llm(
+            step_id, total + 1, remediation_step["task"],
+            prev_results, user_input, tracker, context=ctx,
+        )
+        outcome = self._step_outcome(raw_result)
+        results.append({
+            "step_id": step_id,
+            "task": remediation_step["task"],
+            "result": outcome.content,
+            "status": "ok" if outcome.success else "failed",
+            "error": outcome.error,
+        })
+        ctx.set(f"step_{step_id}_result", outcome.content)
+        ctx.set(f"step_{step_id}_status", "ok" if outcome.success else "failed")
+        self.callback.on_step_done(step_id, outcome.success, outcome.content[:200])
+        logger.debug(f"补救步骤 {step_id} 完成: {outcome.content[:100]}")
+        return results
 
     # ── Phase 2: 串行执行（原行为，向后兼容） ─────────────────
     def _run_serial(

@@ -50,6 +50,16 @@ ALL_ENGINES = (
     "plan-reflection", "react-reflection",
 )
 
+# SWE-bench 是代码编辑评测：只有具备文件修改能力的引擎才有意义。
+# direct（裸 LLM 单轮调用）与 reflection（纯文本 Generate-Critique-Refine）
+# 不操作文件系统，永远产生空补丁——承认边界，不作为 `all` 的默认成员。
+CODE_EDITING_ENGINES = (
+    "react", "plan-execute", "plan-react",
+    "plan-reflection", "react-reflection",
+)
+
+_NON_CODE_EDITING = frozenset(ALL_ENGINES) - frozenset(CODE_EDITING_ENGINES)
+
 
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=cwd, text=True).strip()
@@ -416,6 +426,10 @@ def main() -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--engines", nargs="+", default=["all"],
                         choices=["all", *ALL_ENGINES])
+    parser.add_argument(
+        "--include-non-editing", action="store_true",
+        help="同时运行 direct/reflection 等不修改文件系统的引擎（默认排除）。",
+    )
     parser.add_argument("--max-steps", type=int, default=3)
     parser.add_argument("--request-timeout", type=float, default=60)
     parser.add_argument("--engine-timeout", type=float, default=900)
@@ -451,6 +465,16 @@ def main() -> int:
     if args.provider_attempts < 1:
         parser.error("--provider-attempts must be at least 1")
     engines = list(ALL_ENGINES if "all" in args.engines else args.engines)
+    if not args.include_non_editing:
+        excluded = [e for e in engines if e in _NON_CODE_EDITING]
+        if excluded:
+            print(
+                f"排除不修改文件系统的引擎（SWE-bench 代码编辑评测不适用）: "
+                f"{', '.join(excluded)}。用 --include-non-editing 显式包含。"
+            )
+            engines = [e for e in engines if e not in _NON_CODE_EDITING]
+    if not engines:
+        raise SystemExit("没有可运行的引擎（全部被排除）。")
     results = []
     # Children chdir into the official task worktree.  Resolve before spawn so
     # every lifecycle event remains in the requested report directory.
