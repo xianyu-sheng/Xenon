@@ -56,6 +56,13 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
    - 互不依赖的步骤留空 `[]`，它们会被**并发执行**以加速
    - 必须等某步产物才能进行的步骤，务必填 `depends_on`，否则可能读到空结果
    - 仅填写已存在的步骤 id；禁止自环（`depends_on` 含自身）或循环
+8. **修改/修复/创建类任务必须以写工具步骤收尾**：任务要求改代码、修 bug、
+   写文件时，计划的**最后一步必须是** write_file / edit_file / batch_write /
+   batch_edit / create_directory 等写操作，不能以"分析需求"、"理解代码"、
+   "设计方案"这类 tool=null 的纯侦察步骤结尾。侦察（read_file/search_files）
+   只是前置手段，不是交付物——不做实际修改的计划是不完整的。
+9. **完整闭环**：计划应覆盖 侦察 → 修改 → 验证 三个阶段；若任务明确要
+   修复 bug，验证步骤（如运行测试）应放在修改步骤之后。
 
 ## ⚠️ 重要：可用工具列表（完整且唯一）
 
@@ -253,6 +260,17 @@ class PlanExecuteEngine(BaseEngine):
             self.callback.on_warning("未能生成有效的执行计划")
             return plan.get("analysis", "未能生成有效的执行计划。")
 
+        # Phase 1.5: 计划完整性校验（根因修复，非事后补救）。
+        # SWE-bench 发现：规划阶段的 prompt 未约束「修改类任务必须以写步骤
+        # 收尾」，LLM 常生成只有侦察步骤（read/search）的计划，执行完
+        # 「理解问题」就收工 → 空补丁。这里在执行前校验计划结构：
+        # 若任务需要写操作但计划不含任何写工具步骤，让 LLM 重新规划一次。
+        steps = self._ensure_plan_has_write_step(user_input, plan, ctx)
+
+        if not steps:
+            self.callback.on_warning("计划完整性校验后仍无有效步骤")
+            return "未能生成包含实际修改步骤的有效执行计划。"
+
         logger.info(f"计划生成 {len(steps)} 个步骤")
         total = min(len(steps), self.max_steps)
         capped = steps[:self.max_steps]
@@ -292,7 +310,7 @@ class PlanExecuteEngine(BaseEngine):
         summary = self._summarize(user_input, plan.get("analysis", ""), results, tracker)
         return summary
 
-    # ── Phase 2.5: 任务完成度校验 ────────────────────────────
+    # ── Phase 1.5: 计划完整性校验 ────────────────────────────
     # 写类工具集合（与 tool_executor._WRITE_TOOLS 保持一致；command 也算——
     # SWE-bench 场景中修改通常经 command 跑脚本，或直接 write/edit 落盘）。
     _WRITE_TOOL_NAMES = frozenset({
@@ -300,6 +318,69 @@ class PlanExecuteEngine(BaseEngine):
         "batch_edit", "edit_with_llm", "append_file", "refactor",
         "git", "command",
     })
+
+    @classmethod
+    def _plan_has_write_step(cls, steps: list[dict[str, Any]]) -> bool:
+        """计划中是否至少包含一个写类工具步骤。"""
+        return any(
+            isinstance(step, dict) and step.get("tool") in cls._WRITE_TOOL_NAMES
+            for step in steps
+        )
+
+    def _ensure_plan_has_write_step(
+        self,
+        user_input: str,
+        plan: dict[str, Any],
+        context: AgentContext | None,
+    ) -> list[dict[str, Any]]:
+        """若任务需要写操作但计划无写步骤，让 LLM 重新规划一次（根因修复）。
+
+        返回修正后的 steps；LLM 重新规划仍无写步骤时，保留原计划并返回空，
+        由调用方终止（避免执行一个注定产出空补丁的计划）。
+        """
+        steps = list(plan.get("steps", []) or [])
+        if not steps:
+            return steps
+        if not self._task_requires_write(user_input):
+            return steps
+        if self._plan_has_write_step(steps):
+            return steps
+
+        logger.warning(
+            "计划完整性校验: 任务需要写操作但计划 %d 步均无写工具，要求重新规划",
+            len(steps),
+        )
+        self.callback.on_warning(
+            "检测到计划缺少实际修改步骤（只有侦察/分析）。正在要求重新规划…"
+        )
+
+        messages = [{"role": "system", "content": self.system_prompt}]
+        history = self._history_messages(context, current_user_input=user_input)
+        if history:
+            messages.extend(self._cache_ordered_context(history))
+        messages.extend([
+            {"role": "user", "content": user_input},
+            {
+                "role": "user",
+                "content": (
+                    "你刚才生成的计划只包含侦察/分析步骤（read_file/search_files/"
+                    "tool=null），没有任何实际修改步骤。这个任务需要真正修改文件。\n"
+                    "请重新规划：计划必须以 write_file / edit_file / batch_write / "
+                    "batch_edit 等写工具步骤收尾，侦察只是前置手段。只输出 JSON。"
+                ),
+            },
+        ])
+        retry_response = self._call_llm_for_phase("plan", messages)
+        retry_plan = self._parse_json(retry_response)
+        retry_steps = list(retry_plan.get("steps", []) or [])
+
+        if self._plan_has_write_step(retry_steps):
+            logger.info("重新规划成功：%d 步，含写工具步骤", len(retry_steps))
+            return retry_steps
+
+        logger.warning("重新规划仍无写工具步骤，放弃执行该计划")
+        self.callback.on_warning("重新规划后计划仍缺修改步骤，终止执行")
+        return []
 
     def _has_successful_write(self, tracker: ToolExecutionTracker | None) -> bool:
         """是否已有任何成功的写类工具执行（文件被真正修改）。"""
@@ -377,6 +458,7 @@ class PlanExecuteEngine(BaseEngine):
         raw_result = self._execute_step_with_llm(
             step_id, total + 1, remediation_step["task"],
             prev_results, user_input, tracker, context=ctx,
+            require_write_tool=True,
         )
         outcome = self._step_outcome(raw_result)
         results.append({
@@ -840,6 +922,7 @@ class PlanExecuteEngine(BaseEngine):
         self, step_id: int, total: int, task: str, prev_results: str, original: str,
         tracker: ToolExecutionTracker | None = None,
         context: AgentContext | None = None,
+        require_write_tool: bool = False,
     ) -> str:
         """使用 LLM 执行不需要工具的步骤（§Q4 迷你 ReAct：最多 N 轮 Thought→Action→Observation）。
 
@@ -847,6 +930,11 @@ class PlanExecuteEngine(BaseEngine):
         LLM 在 ``max_mini_react_rounds`` 轮内按需调用工具（复用 ``parse_react`` 解析 +
         ``_execute_step_with_tool`` 执行），无需工具时首轮即 ``final_answer``。
         结束后仍走 ``_verify_llm_file_claims`` 校验文件声明。
+
+        ``require_write_tool=True``（Phase 2.5 补救执行）：任务需要落盘修改但
+        尚未执行任何写类工具。此时 prompt 明确要求必须调用写工具；LLM 若在
+        无写工具的情况下给出 final_answer，拒绝接受并要求重试（同 ReAct 的
+        空洞回答纠偏），直到真正执行 write/edit 或耗尽轮次。
 
         向后兼容：LLM 返回纯文本时，``parse_react`` 置 ``final_answer=raw``，首轮即
         收敛，行为与原单次调用一致（结果为该纯文本）。
@@ -856,6 +944,13 @@ class PlanExecuteEngine(BaseEngine):
             max_rounds=self.max_mini_react_rounds,
             step_task=task, previous_results=prev_results,
         )
+        if require_write_tool:
+            prompt += (
+                "\n\n⚠️ 本步骤是强制补救：任务需要实际修改文件，但此前没有任何"
+                "写操作。你必须调用 write_file / edit_file / batch_write / "
+                "batch_edit 等写工具真正修改目标文件；只输出分析文本而不调用"
+                "写工具将被拒绝，不会被视为完成。"
+            )
         messages = [
             {"role": "system", "content": f"原始任务: {original}"},
             {"role": "user", "content": prompt},
@@ -863,6 +958,8 @@ class PlanExecuteEngine(BaseEngine):
         ctx = context or AgentContext()
         final_answer: str | None = None
         last_response = ""
+        no_write_retries = 0
+        max_no_write_retries = 2
         for rnd in range(1, self.max_mini_react_rounds + 1):
             last_response = self._call_llm_for_phase(
                 "execute_step",
@@ -870,8 +967,34 @@ class PlanExecuteEngine(BaseEngine):
                 model_priority=self.executor_model_priority,
             )
             parsed = parse_react(last_response)
+            if not isinstance(parsed, dict):
+                parsed = {}
 
             if parsed.get("final_answer"):
+                # 强制补救模式：无写工具时拒绝接受 final_answer，要求重试
+                if require_write_tool and not self._has_successful_write(tracker):
+                    if no_write_retries < max_no_write_retries:
+                        no_write_retries += 1
+                        force_msg = (
+                            "⚠️ 你仍未调用任何写工具就给出了最终回答。"
+                            "这个任务需要实际修改文件，请使用 write_file / "
+                            "edit_file / batch_write 等工具真正落盘修改，"
+                            "然后再给出 final_answer。"
+                        )
+                        messages.append({"role": "user", "content": force_msg})
+                        self.callback.on_warning(
+                            f"补救执行: LLM 未写文件就 final_answer，要求重试 "
+                            f"({no_write_retries}/{max_no_write_retries})"
+                        )
+                        continue
+                    self.callback.on_warning(
+                        "补救执行: LLM 连续拒绝写工具，附带警告返回"
+                    )
+                    final_answer = parsed["final_answer"] + (
+                        "\n\n⚠️ **警告**: 任务需要修改文件但 LLM 未调用任何写工具，"
+                        "文件变更可能未真正落地。"
+                    )
+                    break
                 final_answer = parsed["final_answer"]
                 logger.debug("迷你 ReAct 第 %d/%d 轮给出 final_answer", rnd, self.max_mini_react_rounds)
                 break
