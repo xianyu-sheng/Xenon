@@ -206,6 +206,13 @@ class PlanExecuteEngine(BaseEngine):
             permission_gate=permission_gate,
             execution_policy=self.execution_policy,
         )
+        # EvidenceGate 管线（Step 1）：挂载默认确定性校验门。
+        # plan/completion/output 三阶段层层过滤，校验与补救分离——
+        # Gate 判定，本引擎保留补救逻辑（重新规划/追加步骤/追加警告）。
+        from xenon.engine.evidence_gate import default_gates
+
+        for gate in default_gates():
+            self.register_gate(gate)
 
     @staticmethod
     def _build_plan_prompt() -> str:
@@ -311,21 +318,16 @@ class PlanExecuteEngine(BaseEngine):
         return summary
 
     # ── Phase 1.5: 计划完整性校验 ────────────────────────────
-    # 写类工具集合（与 tool_executor._WRITE_TOOLS 保持一致；command 也算——
-    # SWE-bench 场景中修改通常经 command 跑脚本，或直接 write/edit 落盘）。
-    _WRITE_TOOL_NAMES = frozenset({
-        "write_file", "edit_file", "create_directory", "batch_write",
-        "batch_edit", "edit_with_llm", "append_file", "refactor",
-        "git", "command",
-    })
+    # 写类工具集合的单一真相源已迁移到 evidence_gate.WRITE_TOOL_NAMES；
+    # 这里保留类属性引用以向后兼容（内部方法已委托 Gate）。
+    from xenon.engine.evidence_gate import WRITE_TOOL_NAMES as _WRITE_TOOL_NAMES
 
     @classmethod
     def _plan_has_write_step(cls, steps: list[dict[str, Any]]) -> bool:
         """计划中是否至少包含一个写类工具步骤。"""
-        return any(
-            isinstance(step, dict) and step.get("tool") in cls._WRITE_TOOL_NAMES
-            for step in steps
-        )
+        from xenon.engine.evidence_gate import plan_has_write_step
+
+        return plan_has_write_step(steps)
 
     def _ensure_plan_has_write_step(
         self,
@@ -335,8 +337,9 @@ class PlanExecuteEngine(BaseEngine):
     ) -> list[dict[str, Any]]:
         """若任务需要写操作但计划无写步骤，让 LLM 重新规划一次（根因修复）。
 
-        返回修正后的 steps；LLM 重新规划仍无写步骤时，保留原计划并返回空，
-        由调用方终止（避免执行一个注定产出空补丁的计划）。
+        校验委托给 EvidenceGate 管线（phase="plan" 的 PlanCompletenessGate，
+        确定性、零 LLM）；本方法只保留补救动作（让 LLM 重新规划一次）。
+        返回修正后的 steps；LLM 重新规划仍无写步骤时返回空，由调用方终止。
         """
         steps = list(plan.get("steps", []) or [])
         if not steps:
@@ -344,6 +347,13 @@ class PlanExecuteEngine(BaseEngine):
         if not self._task_requires_write(user_input):
             return steps
         if self._plan_has_write_step(steps):
+            return steps
+
+        # ── Gate 判定（确定性，与上面三条件等价，单一真相源）──
+        verdict = self.gate_failed(
+            "plan", context, user_input=user_input, plan=plan,
+        )
+        if verdict is None:
             return steps
 
         logger.warning(
@@ -384,12 +394,9 @@ class PlanExecuteEngine(BaseEngine):
 
     def _has_successful_write(self, tracker: ToolExecutionTracker | None) -> bool:
         """是否已有任何成功的写类工具执行（文件被真正修改）。"""
-        if tracker is None:
-            return False
-        return any(
-            c.success and c.tool_name in self._WRITE_TOOL_NAMES
-            for c in tracker.calls
-        )
+        from xenon.engine.evidence_gate import has_successful_write
+
+        return has_successful_write(tracker)
 
     @staticmethod
     def _task_requires_write(user_input: str) -> bool:
@@ -398,16 +405,9 @@ class PlanExecuteEngine(BaseEngine):
         WRITE(2)/EXECUTE(3) 级别意味着用户要求文件变更或命令执行；
         ANSWER_ONLY(0)/READ_ONLY(1) 级别不需要落盘。
         """
-        try:
-            from xenon.repl.execution_policy import (
-                ExecutionLevel,
-                classify_execution_policy,
-            )
-            policy = classify_execution_policy(user_input)
-            return int(policy.level) >= int(ExecutionLevel.WRITE)
-        except Exception:  # 分类失败时保守视为需要写（SWE-bench 场景默认）
-            logger.warning("任务写操作判定失败，保守视为需要写")
-            return True
+        from xenon.engine.evidence_gate import task_requires_write
+
+        return task_requires_write(user_input)
 
     def _ensure_task_completed(
         self,
@@ -419,19 +419,28 @@ class PlanExecuteEngine(BaseEngine):
     ) -> list[dict[str, Any]]:
         """若任务需要写文件但没有任何成功写类工具，强制追加一轮补救执行。
 
-        返回补充后的 results；无缺口时原样返回（零行为变化，向后兼容）。
+        校验委托给 EvidenceGate 管线（phase="completion" 的
+        TaskCompletionGate，确定性、零 LLM）；本方法只保留补救动作（强制
+        追加一轮补救执行）。返回补充后的 results；无缺口时原样返回。
         """
         if self._has_successful_write(tracker):
             return results
         if not self._task_requires_write(user_input):
             return results
-
-        # 已达 max_steps 上限时不再追加，避免无限循环
         if len(results) >= self.max_steps:
             logger.warning(
                 "任务需要写操作但无写类工具执行，且已达 max_steps=%d 上限，"
                 "不再追加补救步骤", self.max_steps,
             )
+            return results
+
+        # ── Gate 判定（确定性，与上面三条件等价，单一真相源）──
+        verdict = self.gate_failed(
+            "completion", ctx,
+            user_input=user_input, results=results, tracker=tracker,
+            max_steps=self.max_steps,
+        )
+        if verdict is None:
             return results
 
         logger.warning(
@@ -1050,75 +1059,14 @@ class PlanExecuteEngine(BaseEngine):
     ) -> str:
         """检查 LLM 输出中是否声称创建/写入了文件，但实际未通过工具执行。
 
-        如果检测到未验证的文件声明，追加警告信息。
+        校验委托给 FileClaimGate（evidence_gate.py，确定性、零 LLM）；
+        若 Gate 拒绝，把 payload（警告文本）追加到输出末尾。
         """
-        import re
+        from xenon.engine.evidence_gate import FileClaimGate
 
-        # 检测文件操作声明的关键词
-        claim_patterns = [
-            r"(?:已|已经|成功)?(?:创建|新建|生成|写入|保存)(?:了)?",
-            r"(?:created|written|saved|generated|initialized|made)",
-            r"(?:文件|目录|文件夹)(?:已|已经)",
-        ]
-
-        has_claim = any(re.search(p, llm_output, re.IGNORECASE) for p in claim_patterns)
-        if not has_claim:
-            return llm_output
-
-        # 提取提到的文件路径
-        file_patterns = [
-            r'[\w/\\.-]+\.(?:py|js|ts|html|css|json|yaml|yml|toml|md|txt|sh|bat|ps1|go|rs|java|c|cpp|h)',
-            r'(?:src|lib|app|test|tests|dist|build|bin|config|docs)[/\\][\w/\\.-]+',
-        ]
-        mentioned_files = set()
-        for pattern in file_patterns:
-            mentioned_files.update(re.findall(pattern, llm_output))
-
-        if not mentioned_files:
-            return llm_output
-
-        # 检查哪些文件真的通过工具创建了（B8: 扩展工具集，含 batch_write/batch_edit/edit_file）
-        verified_files = set()
-        if tracker:
-            for call in tracker.calls:
-                if not call.success:
-                    continue
-                tool = call.tool_name
-                if tool in ("write_file", "create_directory", "edit_file"):
-                    fp = call.params.get("file_path", "")
-                    if fp:
-                        verified_files.add(fp)
-                elif tool == "batch_write":
-                    # files: [{"path": "...", "content": "..."}, ...]
-                    for spec in call.params.get("files", []) or []:
-                        fp = (spec.get("path") or spec.get("file_path", "")) if isinstance(spec, dict) else ""
-                        if fp:
-                            verified_files.add(fp)
-                elif tool == "batch_edit":
-                    # edits: [{"file_path": "...", "old_text": ..., "new_text": ...}, ...]
-                    for spec in call.params.get("edits", []) or []:
-                        fp = spec.get("file_path", "") if isinstance(spec, dict) else ""
-                        if fp:
-                            verified_files.add(fp)
-
-        # 对每个提到的文件，验证是否真的存在或被工具创建
-        unverified = []
-        for f in mentioned_files:
-            if f in verified_files:
-                continue
-            from pathlib import Path
-            if not Path(f).exists():
-                unverified.append(f)
-
-        if unverified:
-            warning = (
-                f"\n\n⚠️ **注意**: 以上内容中提到了创建文件 "
-                f"`{'`, `'.join(unverified)}`，"
-                f"但这些文件未经工具验证，可能并未实际创建。"
-                f"如需真正创建文件，请使用 write_file 工具。"
-            )
-            return llm_output + warning
-
+        verdict = FileClaimGate().check(None, output=llm_output, tracker=tracker)
+        if not verdict.passed and verdict.payload:
+            return llm_output + verdict.payload
         return llm_output
 
     def _summarize(

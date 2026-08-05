@@ -109,6 +109,45 @@ class BaseEngine(ABC):
             request_timeout=120.0,
             chain_retries=2,
         )
+        # EvidenceGate 管线：竖着贯穿会话生命周期（plan → completion →
+        # output → evidence），每层确定性校验、层层过滤。Step 1 骨架：
+        # 引擎按 phase 挂载 Gate，校验与补救分离（Gate 判定，引擎补救）。
+        self._gates: list[Any] = []
+
+    def register_gate(self, gate: Any) -> None:
+        """挂载一个 EvidenceGate 到本引擎的会话级管线。"""
+
+        self._gates.append(gate)
+
+    def run_gates(
+        self,
+        phase: str,
+        ctx: AgentContext | None = None,
+        **kwargs: Any,
+    ) -> list[Any]:
+        """运行指定 phase 的所有 Gate，返回 GateVerdict 列表（按注册序）。
+
+        确定性、零 LLM；调用方（引擎 run 流程）根据 verdict 决定补救动作。
+        """
+
+        return [
+            gate.check(ctx, **kwargs)
+            for gate in self._gates
+            if getattr(gate, "phase", None) == phase
+        ]
+
+    def gate_failed(
+        self,
+        phase: str,
+        ctx: AgentContext | None = None,
+        **kwargs: Any,
+    ) -> Any | None:
+        """运行指定 phase 的 Gate，返回第一个未通过的 verdict；全通过返回 None。"""
+
+        for verdict in self.run_gates(phase, ctx, **kwargs):
+            if not verdict.passed:
+                return verdict
+        return None
 
     def set_execution_policy(self, policy: ExecutionPolicy) -> None:
         """Bind a policy to this engine (combined graphs use the graph binder)."""
