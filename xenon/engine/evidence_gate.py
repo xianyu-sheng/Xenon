@@ -184,6 +184,98 @@ def verify_file_claims(llm_output: str, tracker: Any | None = None) -> tuple[boo
     return (len(unverified) == 0), unverified
 
 
+# ── 修复绑定分析（FixBindingGate 的纯函数，数据驱动设计）────────
+# 背景（SWE-bench 实测，rootfix_3 的 matplotlib 案例）：
+#   plan-reflection 的补丁是「重复+特判」模式——新增行复制了 context 中
+#   已有的赋值语句（xa[xa>N-1] = np.uint8(...) ≃ 现有 xa[xa>N-1] = ...），
+#   修复表面症状而非根因；react/plan-execute 等通过补丁要么修改现有行，
+#   要么插入全新的防御逻辑。据此设计三条确定性判据：
+#     1) 修改现有行（- 行）→ 强绑定信号
+#     2) 纯追加 + 新增行与现有代码相似度 ≥ 阈值 → 重复特判（补救）信号
+#     3) 纯追加 + 无重复 → 防御性插入（合法）信号
+_ADD_LINE_RE = re.compile(r"^\+[^+]")
+_DEL_LINE_RE = re.compile(r"^-")
+
+_FIX_SIMILARITY_THRESHOLD = 0.5  # 与现有行 token 重叠率 ≥ 50% 视为「重复特判」
+
+
+def _patch_from_tracker(tracker: Any | None) -> str:
+    """从 tracker 的写工具调用恢复简化补丁文本（无 git diff 时的兜底）。
+
+    把 edit_file 的 new_text 标 ``+``、old_text 标 ``-``，拼成 diff 风格
+    文本，供 patch_binding_stats 分析「新增 vs 现有」模式。
+    """
+    if tracker is None:
+        return ""
+    parts: list[str] = []
+    for call in getattr(tracker, "calls", []):
+        if not call.success:
+            continue
+        params = getattr(call, "params", {}) or {}
+        tool = getattr(call, "tool_name", "")
+        if tool == "edit_file":
+            old_text = params.get("old_text", "")
+            new_text = params.get("new_text", "")
+            if new_text:
+                for line in str(new_text).splitlines():
+                    parts.append("+" + line)
+                if old_text:
+                    for line in str(old_text).splitlines():
+                        parts.append("-" + line)
+    return "\n".join(parts)
+
+
+def _token_set(text: str) -> set[str]:
+    return set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text))
+
+
+def line_similarity(a: str, b: str) -> float:
+    """基于标识符 token 的 Jaccard 相似度（0~1）。"""
+    ta, tb = _token_set(a), _token_set(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def patch_binding_stats(patch: str) -> dict[str, Any]:
+    """分析补丁的根因绑定特征（确定性，零 LLM）。
+
+    返回:
+        added_lines: 新增行列表（去 +/- 前缀）
+        context_lines: 现有行列表（context 行 + 被删除行）
+        modified_count: 修改的现有行数（- 行数）
+        max_context_similarity: 新增行与任一现有行的最大相似度
+    """
+    added: list[str] = []
+    context: list[str] = []
+    for line in patch.splitlines():
+        if _ADD_LINE_RE.match(line):
+            added.append(line[1:].strip())
+        elif line.startswith("---") or line.startswith("+++"):
+            continue
+        elif line.startswith(" "):
+            context.append(line[1:].strip())
+        elif _DEL_LINE_RE.match(line):
+            context.append(line[1:].strip())
+
+    modified_count = sum(
+        1 for line in patch.splitlines()
+        if _DEL_LINE_RE.match(line) and not line.startswith("---")
+    )
+    max_sim = 0.0
+    for a in added:
+        for c in context:
+            sim = line_similarity(a, c)
+            if sim > max_sim:
+                max_sim = sim
+    return {
+        "added_lines": added,
+        "context_lines": context,
+        "modified_count": modified_count,
+        "max_context_similarity": max_sim,
+    }
+
+
 # ── 具体 Gate ──────────────────────────────────────────────
 class PlanCompletenessGate(EvidenceGate):
     """Phase 1.5 计划完整性：任务需写但计划无写步骤 → 拒绝。
@@ -319,9 +411,65 @@ class EvidenceCaptureGate(EvidenceGate):
         )
 
 
+class FixBindingGate(EvidenceGate):
+    """修复绑定：补丁必须「绑定根因」而非「表面特判」→ 拒绝/警告。
+
+    SWE-bench 实测（rootfix_3 matplotlib）：plan-reflection 的补丁是
+    「重复+特判」模式——新增行复制 context 中已有的赋值语句
+    （xa[xa>N-1] = np.uint8(...) ≃ 现有 xa[xa>N-1] = ...），修复表面
+    症状而非根因，导致修好 uint8 却破坏 ~160 个 colormap 测试。
+    本 Gate 用三条确定性判据识别该模式（零 LLM）：
+
+      1) 修改现有行（- 行）→ 强绑定信号，通过
+      2) 纯追加 + 新增行与现有代码相似度 ≥ 阈值 → 重复特判（补救），拒绝
+      3) 纯追加 + 无重复 → 防御性插入（如加 import/边界检查），通过
+    """
+
+    phase = "fix"
+
+    def check(
+        self,
+        ctx: Any,
+        *,
+        patch: str = "",
+        output: str = "",
+        tracker: Any | None = None,
+        workspace_root: Path | None = None,
+        **kwargs: Any,
+    ) -> GateVerdict:
+        patch_text = patch or ""
+        if not patch_text and tracker is not None:
+            # 从 tracker 的写工具恢复补丁（无 git diff 时的兜底）
+            patch_text = _patch_from_tracker(tracker)
+        if not patch_text:
+            # 没有补丁信息时无法判定——按通过处理（不误伤只读任务）
+            return GateVerdict(self.phase, True, "无补丁信息，跳过绑定校验", "info")
+
+        stats = patch_binding_stats(patch_text)
+        if stats["modified_count"] > 0:
+            return GateVerdict(
+                self.phase, True,
+                "补丁修改了 %d 个现有行，绑定根因" % stats["modified_count"],
+                "info",
+            )
+
+        max_sim = stats["max_context_similarity"]
+        if max_sim >= _FIX_SIMILARITY_THRESHOLD:
+            reason = (
+                "补丁为纯追加，且新增行与现有代码相似度 %.0f%%，"
+                "疑似「重复+特判」的表面修复而非根因修复" % (max_sim * 100)
+            )
+            return GateVerdict(self.phase, False, reason, "warning")
+
+        return GateVerdict(
+            self.phase, True,
+            "补丁为纯追加且无重复模式（防御性插入）", "info",
+        )
+
+
 # ── 便捷工厂：默认 Gate 管线 ───────────────────────────────
 def default_gates() -> list[EvidenceGate]:
-    """返回默认会话级 Gate 管线（竖着贯穿：plan → completion → output）。
+    """返回默认会话级 Gate 管线（竖着贯穿：plan → completion → fix → output）。
 
     注意：EvidenceCaptureGate 是收集型门，由组合引擎按需挂载，不在
     默认管线内（避免对纯执行引擎造成多余开销）。
@@ -329,5 +477,6 @@ def default_gates() -> list[EvidenceGate]:
     return [
         PlanCompletenessGate(),
         TaskCompletionGate(),
+        FixBindingGate(),
         FileClaimGate(),
     ]

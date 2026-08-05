@@ -313,6 +313,17 @@ class PlanExecuteEngine(BaseEngine):
             user_input, results, ctx, tracker, total,
         )
 
+        # Phase 2.8: 修复绑定校验（FixBindingGate）——补丁必须「绑定根因」
+        # 而非「重复+特判」的表面修复。SWE-bench 实测（matplotlib）：
+        # 特判补丁修好 uint8 却破坏 ~160 个测试。此处只判定+告警，
+        # 不阻断交付（最终结果仍由 _summarize 汇总，warning 已进回调）。
+        # 补丁文本由 Gate 从 tracker 的写工具调用恢复。
+        fix_verdict = self.gate_failed(
+            "fix", ctx, tracker=tracker,
+        )
+        if fix_verdict is not None:
+            self.callback.on_warning(f"修复绑定校验: {fix_verdict.reason}")
+
         # 汇总结果 — 附加工具执行摘要
         summary = self._summarize(user_input, plan.get("analysis", ""), results, tracker)
         return summary
