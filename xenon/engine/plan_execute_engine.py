@@ -205,6 +205,7 @@ class PlanExecuteEngine(BaseEngine):
         self._tool_executor = ToolExecutor(
             permission_gate=permission_gate,
             execution_policy=self.execution_policy,
+            evidence_enforcement="enforce",
         )
         # EvidenceGate 管线（Step 1）：挂载默认确定性校验门。
         # EvidenceGate 默认管线由 BaseEngine 统一挂载；本引擎保留

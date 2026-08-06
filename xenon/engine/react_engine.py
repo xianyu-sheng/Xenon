@@ -81,6 +81,7 @@ class ReActEngine(BaseEngine):
         self._tool_executor = ToolExecutor(
             permission_gate=permission_gate,
             execution_policy=self.execution_policy,
+            evidence_enforcement="enforce",
         )
         # F2: 空洞回答检测器（无状态，实例共享）
         self._hollow = HollowDetector()

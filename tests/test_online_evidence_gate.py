@@ -10,6 +10,10 @@ from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes.tool_executor import ToolExecutor
 
 
+def _executor(ledger: EvidenceLedger, mode: str = "enforce") -> ToolExecutor:
+    return ToolExecutor(evidence_ledger=ledger, evidence_enforcement=mode)
+
+
 def test_execute_enforcement_blocks_before_toolnode(monkeypatch, tmp_path: Path) -> None:
     """真正 execute 路径必须在 ToolNode 运行前阻断盲编辑。"""
     target = tmp_path / "module.py"
@@ -51,8 +55,26 @@ def test_execute_records_shared_context_ledger_for_direct_user(monkeypatch) -> N
     assert len(ledger.query(kind=EventKind.TOOL_OBSERVATION)) == 1
 
 
-def _executor(ledger: EvidenceLedger, mode: str = "enforce") -> ToolExecutor:
-    return ToolExecutor(evidence_ledger=ledger, evidence_enforcement=mode)
+def test_production_engines_default_to_enforce() -> None:
+    from xenon.engine.plan_execute_engine import PlanExecuteEngine
+    from xenon.engine.react_engine import ReActEngine
+
+    assert ReActEngine(["mock/model"])._tool_executor.evidence_enforcement == "enforce"
+    assert PlanExecuteEngine(["mock/model"], max_steps=1)._tool_executor.evidence_enforcement == "enforce"
+
+
+def test_finalize_evidence_builds_delivery_pack() -> None:
+    from xenon.engine.plan_execute_engine import PlanExecuteEngine
+
+    engine = PlanExecuteEngine(["mock/model"], max_steps=1)
+    context = AgentContext()
+    engine._begin_run()
+    engine._bind_evidence_ledger(context)
+    pack = engine.finalize_evidence(context=context, output="完成")
+    assert pack.integrity_verified is True
+    assert pack.session_id == engine.run_id
+    assert pack.event_count >= 3
+
 
 
 def test_pre_tool_allows_edit_after_exact_read(tmp_path: Path) -> None:

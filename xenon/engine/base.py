@@ -185,6 +185,39 @@ class BaseEngine(ABC):
         self.evidence_ledger = ledger
         return ledger
 
+    def finalize_evidence(
+        self,
+        *,
+        context: AgentContext | None = None,
+        output: str = "",
+        tracker: Any | None = None,
+        workspace_root: Any = None,
+    ) -> Any:
+        """Build the delivery EvidencePack only after final deterministic gates pass."""
+        from xenon.engine.evidence_runtime import EvidencePack, EvidenceSource, EventKind, LifecyclePhase
+        ctx = context or AgentContext()
+        ledger = self.evidence_ledger or ctx.get("_evidence_ledger")
+        if ledger is None:
+            raise RuntimeError("evidence ledger is not bound to this task")
+        for phase, kwargs in (
+            ("fix", {"tracker": tracker}),
+            ("output", {"output": output, "tracker": tracker, "workspace_root": workspace_root}),
+        ):
+            verdict = self.gate_failed(phase, ctx, **kwargs)
+            ledger.append(
+                LifecyclePhase.DELIVERY, EventKind.GATE_VERDICT, EvidenceSource.GATE,
+                {"phase": phase, "passed": verdict is None,
+                 "reason": verdict.reason if verdict else "passed"},
+            )
+            if verdict is not None:
+                raise RuntimeError(f"delivery evidence gate failed ({phase}): {verdict.reason}")
+        pack = EvidencePack.build(ledger)
+        ledger.append(
+            LifecyclePhase.DELIVERY, EventKind.DELIVERY, EvidenceSource.ENGINE,
+            {"event_count": pack.event_count, "gate_failures": pack.gate_failures},
+        )
+        return EvidencePack.build(ledger)
+
     def set_execution_policy(self, policy: ExecutionPolicy) -> None:
         """Bind a policy to this engine (combined graphs use the graph binder)."""
 
