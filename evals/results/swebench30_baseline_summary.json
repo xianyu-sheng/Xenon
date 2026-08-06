@@ -1,0 +1,44 @@
+{
+  "benchmark": "SWE-bench_Lite",
+  "instances": 30,
+  "engines": [
+    "react",
+    "plan-execute",
+    "plan-react",
+    "plan-reflection",
+    "react-reflection"
+  ],
+  "cells_total": 150,
+  "patches_total": 83,
+  "graded_total": 83,
+  "resolved_total": 38,
+  "per_engine": {
+    "react": {
+      "resolved": 9,
+      "graded": 21,
+      "rate": 42.9
+    },
+    "plan-execute": {
+      "resolved": 4,
+      "graded": 9,
+      "rate": 44.4
+    },
+    "plan-react": {
+      "resolved": 6,
+      "graded": 12,
+      "rate": 50.0
+    },
+    "plan-reflection": {
+      "resolved": 8,
+      "graded": 18,
+      "rate": 44.4
+    },
+    "react-reflection": {
+      "resolved": 11,
+      "graded": 23,
+      "rate": 47.8
+    }
+  },
+  "model_mix": "deepseek-v4-pro / doubao-seed-2-0-lite / deepseek-v4-flash / glm-5.1 (heyroute relay)",
+  "date": "2026-08-06"
+}
