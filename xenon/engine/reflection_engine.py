@@ -125,9 +125,11 @@ class ReflectionEngine(BaseEngine):
             修正后的最终输出
         """
         feedback = ""
+        ctx = context or AgentContext()
         self._reset_interrupt()
         self._ctx_mgr = ctx_mgr  # F4
         self._begin_run()  # P3-Q2: 链路追踪
+        self._bind_evidence_ledger(ctx)
 
         # §8.23.4/10 / E4：版本回退——跟踪历史最佳（按 score）输出。
         # 若后续修正轮把输出改得更差（reviewer 误判越改越差，§8.23.10），
@@ -145,7 +147,7 @@ class ReflectionEngine(BaseEngine):
 
             # Execute（§8.23.8：执行失败兜底，返回已生成的部分输出而非冒泡）
             try:
-                output = self._execute(user_input, feedback, context)
+                output = self._execute(user_input, feedback, ctx)
             except Exception as e:  # noqa: BLE001 — 生成失败不应炸掉整个 reflection
                 logger.warning(f"Reflection 执行阶段失败: {e}")
                 self.callback.on_warning(f"执行阶段失败: {e}")

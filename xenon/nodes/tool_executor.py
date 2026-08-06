@@ -20,6 +20,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from xenon.engine.circuit_breaker import BreakerRegistry
@@ -29,6 +30,13 @@ from xenon.nodes.tool_node import ToolNode, _DYNAMIC_TOOLS
 from xenon.nodes.tool_registry import BUILTIN_TOOL_REGISTRY
 from xenon.nodes.tool_result import ToolResult, enrich_tool_result
 from xenon.engine.callbacks import mask_sensitive_params
+from xenon.engine.evidence_gate import GateVerdict
+from xenon.engine.evidence_runtime import (
+    EvidenceLedger,
+    EvidenceSource,
+    EventKind,
+    LifecyclePhase,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -652,17 +660,123 @@ class ToolExecutor:
         permission_gate: Any = None,  # v0.5.0: PermissionGate
         runtime: Any = None,
         execution_policy: Any = None,
+        evidence_ledger: EvidenceLedger | None = None,
+        evidence_enforcement: str = "observe",
+        evidence_gates: list[Any] | None = None,
     ) -> None:
+        if evidence_enforcement not in {"observe", "enforce"}:
+            raise ValueError("evidence_enforcement must be 'observe' or 'enforce'")
         self.retry_attempts = max(1, retry_attempts)
         # 默认每引擎独立注册表（同引擎内跨 run 累积断路状态，且保证测试隔离）
         self.breakers = breakers or BreakerRegistry()
         self.permission_gate = permission_gate  # v0.5.0: 工具确认门控
         self.runtime = runtime
         self.execution_policy = execution_policy
+        self.evidence_ledger = evidence_ledger
+        self.evidence_enforcement = evidence_enforcement
+        self.evidence_gates: list[Any] = list(evidence_gates or [])
+
+    def register_evidence_gate(self, gate: Any) -> None:
+        """挂载一个在线工具边界 Gate；Gate 只判定，不直接执行补救。"""
+        self.evidence_gates.append(gate)
+
+    @staticmethod
+    def _target_paths(params: dict[str, Any]) -> set[str]:
+        """提取写操作目标路径，支持单文件和批量 edits/files。"""
+        paths: set[str] = set()
+        for key in ("file_path", "path"):
+            value = params.get(key)
+            if isinstance(value, str) and value:
+                paths.add(value)
+        for key in ("files", "edits"):
+            values = params.get(key)
+            if isinstance(values, list):
+                for value in values:
+                    if isinstance(value, dict):
+                        path = value.get("file_path") or value.get("path")
+                        if isinstance(path, str) and path:
+                            paths.add(path)
+        return paths
+
+    def _resolve_ledger(self, context: AgentContext) -> EvidenceLedger:
+        """Resolve the task-scoped ledger from Context, creating only for direct use.
+
+        Engines bind a run ledger at task start. The fallback preserves library users
+        that invoke ToolExecutor directly, while ensuring all calls sharing one
+        AgentContext append to the same chain.
+        """
+        if self.evidence_ledger is not None:
+            return self.evidence_ledger
+        ledger = context.get("_evidence_ledger")
+        if isinstance(ledger, EvidenceLedger):
+            return ledger
+        session_id = str(context.get("_evidence_session_id") or uuid.uuid4().hex)
+        ledger = EvidenceLedger(session_id)
+        context.set("_evidence_session_id", session_id)
+        context.set("_evidence_ledger", ledger)
+        ledger.append(
+            LifecyclePhase.TASK, EventKind.TASK_FACT, EvidenceSource.ENGINE,
+            {"origin": "ToolExecutor.direct", "reason": "no engine ledger bound"},
+        )
+        return ledger
+
+    def _ledger_event(
+        self, context: AgentContext, phase: LifecyclePhase, kind: EventKind, source: EvidenceSource,
+        payload: dict[str, Any],
+    ) -> None:
+        self._resolve_ledger(context).append(phase, kind, source, payload)
+
+    def before_tool(
+        self, tool_name: str, params: dict[str, Any], context: AgentContext,
+        tracker: ToolExecutionTracker | None,
+    ) -> GateVerdict:
+        """在线 pre-tool Gate：执行前写入请求证据并阻断未绑定事实的编辑。"""
+        safe_params = mask_sensitive_params(params)
+        self._ledger_event(
+            context, LifecyclePhase.PRE_TOOL, EventKind.TOOL_REQUEST, EvidenceSource.ENGINE,
+            {"tool": tool_name, "params": safe_params},
+        )
+        if tool_name not in {"write_file", "edit_file", "append_file", "batch_write", "batch_edit", "refactor"}:
+            return GateVerdict("pre_tool", True, "非文件写入工具，跳过事实绑定", "info")
+        targets = self._target_paths(params)
+        # 只对已存在的目标文件强制先读；创建新文件没有可读取的先验事实。
+        existing = {path for path in targets if Path(path).is_file()}
+        if not existing:
+            return GateVerdict("pre_tool", True, "新建文件或无可验证目标", "info")
+        read_paths: set[str] = set()
+        for call in getattr(tracker, "calls", []) if tracker is not None else []:
+            if not call.success or call.tool_name not in {"read_file", "search_files"}:
+                continue
+            read_paths.update(self._target_paths(call.params or {}))
+        missing = sorted(existing - read_paths)
+        if not missing:
+            return GateVerdict("pre_tool", True, "所有现有写入目标均有先前读取证据", "info")
+        reason = "写入前缺少目标文件读取证据: " + ", ".join(missing[:3])
+        enforced = self.evidence_enforcement == "enforce"
+        self._ledger_event(
+            context, LifecyclePhase.PRE_TOOL, EventKind.GATE_VERDICT, EvidenceSource.GATE,
+            {"gate": "FactBindingGate", "passed": not enforced, "reason": reason,
+             "enforced": enforced, "missing_paths": missing},
+        )
+        return GateVerdict("pre_tool", not enforced, reason, "warning", {"missing_paths": missing})
+
+    def record_tool_observation(
+        self, tool_name: str, params: dict[str, Any], success: bool,
+        observation: str, tracker: ToolExecutionTracker | None,
+        context: AgentContext | None = None,
+    ) -> None:
+        """记录执行后证据；正文只保留摘要，敏感参数不进入 ledger。"""
+        context = context or AgentContext()
+        if self.evidence_ledger is not None:
+            context.set("_evidence_ledger", self.evidence_ledger)
+        self._ledger_event(
+            context, LifecyclePhase.POST_TOOL, EventKind.TOOL_OBSERVATION, EvidenceSource.TOOL,
+            {"tool": tool_name, "params": mask_sensitive_params(params),
+             "success": success, "summary": observation[:500]},
+        )
 
     def set_runtime(self, runtime: Any) -> None:
         """Set trusted runtime state that can never come from model params."""
-
         self.runtime = runtime
 
     def set_execution_policy(self, policy: Any) -> None:
@@ -777,6 +891,7 @@ class ToolExecutor:
                     attempts=attempts,
                     elapsed_seconds=float(checkpoint["elapsed_seconds"]),
                 )
+            self.record_tool_observation(tool_name, params, success, observation, tracker, context)
             if self.execution_policy is not None:
                 self.execution_policy.emit(
                     "tool_end",
@@ -865,6 +980,20 @@ class ToolExecutor:
                 state=ToolExecutionState.FAILED,
                 error=reason,
                 error_kind="invalid_parameters",
+            )
+
+        # ── Stage 2.5: 在线证据闸门（写入发生前） ──
+        # 这是全引擎共享的执行边界：通过 ToolExecutor 的任何写工具都必须
+        # 先产生可验证的读取事实，enforce 模式下缺失证据直接阻止 ToolNode。
+        evidence_verdict = self.before_tool(tool_name, params, context, tracker)
+        if not evidence_verdict.passed:
+            logger.info("在线事实绑定拒绝: %s — %s", tool_name, evidence_verdict.reason)
+            return finish(
+                False,
+                f"⛔ 在线证据验证拒绝: {evidence_verdict.reason}",
+                state=ToolExecutionState.FAILED,
+                error=evidence_verdict.reason,
+                error_kind="evidence_denied",
             )
 
         # ── Stage 3: 权限闸门（v0.5.0: 接入 PermissionGate） ──

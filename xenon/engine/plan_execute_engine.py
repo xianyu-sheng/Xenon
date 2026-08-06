@@ -253,6 +253,7 @@ class PlanExecuteEngine(BaseEngine):
         self._last_tracker = tracker
         self._reset_interrupt()
         self._begin_run()  # P3-Q2: 链路追踪
+        self._bind_evidence_ledger(ctx)
 
         # Phase 1: Planning
         logger.info("Plan-Execute Phase 1: 规划中...")

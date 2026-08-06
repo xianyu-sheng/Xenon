@@ -14,6 +14,7 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from threading import RLock
 from typing import Any, Iterable
 
 
@@ -137,27 +138,30 @@ class EvidenceLedger:
             raise ValueError("session_id must not be empty")
         self.session_id = session_id
         self.events: list[EvidenceEvent] = []
+        self._lock = RLock()
         for event in events or ():
             self.append_event(event)
 
     def append(self, phase: str | LifecyclePhase, kind: str | EventKind,
                source: str | EvidenceSource, payload: dict[str, Any] | None = None) -> EvidenceEvent:
-        event = EvidenceEvent.create(session_id=self.session_id, phase=phase, kind=kind,
-                                     source=source, payload=payload,
-                                     sequence=len(self.events) + 1,
-                                     predecessor_id=self.events[-1].event_id if self.events else None)
-        self.events.append(event)
-        return event
+        with self._lock:
+            event = EvidenceEvent.create(session_id=self.session_id, phase=phase, kind=kind,
+                                         source=source, payload=payload,
+                                         sequence=len(self.events) + 1,
+                                         predecessor_id=self.events[-1].event_id if self.events else None)
+            self.events.append(event)
+            return event
 
     def append_event(self, event: EvidenceEvent) -> EvidenceEvent:
-        if event.session_id != self.session_id:
-            raise ValueError("event session_id does not match ledger")
-        expected = len(self.events) + 1
-        predecessor = self.events[-1].event_id if self.events else None
-        if event.sequence != expected or event.predecessor_id != predecessor:
-            raise ValueError("event does not continue ledger chain")
-        self.events.append(event)
-        return event
+        with self._lock:
+            if event.session_id != self.session_id:
+                raise ValueError("event session_id does not match ledger")
+            expected = len(self.events) + 1
+            predecessor = self.events[-1].event_id if self.events else None
+            if event.sequence != expected or event.predecessor_id != predecessor:
+                raise ValueError("event does not continue ledger chain")
+            self.events.append(event)
+            return event
 
     def query(self, *, phase: str | LifecyclePhase | None = None,
               kind: str | EventKind | None = None,

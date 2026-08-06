@@ -164,6 +164,27 @@ class BaseEngine(ABC):
         logging.getLogger("xenon.engine").warning(message)
         return message
 
+    def _bind_evidence_ledger(self, context: AgentContext) -> Any:
+        """Create and bind one ledger to the current task context.
+
+        ToolExecutor resolves this Context key, so every engine/tool call within
+        the task appends to the same hash chain rather than a private audit log.
+        """
+        from xenon.engine.evidence_runtime import (
+            EvidenceLedger, EvidenceSource, EventKind, LifecyclePhase,
+        )
+        if self.run_id is None:
+            self._begin_run()
+        ledger = EvidenceLedger(self.run_id or "unknown")
+        ledger.append(
+            LifecyclePhase.TASK, EventKind.TASK_FACT, EvidenceSource.ENGINE,
+            {"engine": type(self).__name__, "run_id": self.run_id},
+        )
+        context.set("_evidence_session_id", self.run_id)
+        context.set("_evidence_ledger", ledger)
+        self.evidence_ledger = ledger
+        return ledger
+
     def set_execution_policy(self, policy: ExecutionPolicy) -> None:
         """Bind a policy to this engine (combined graphs use the graph binder)."""
 
