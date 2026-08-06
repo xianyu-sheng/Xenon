@@ -85,6 +85,7 @@ class BaseEngine(ABC):
         # P3-Q2: 链路追踪 ID——每次 run() 起点生成，贯穿该 run 内所有 _call_llm
         # 调用与 fallback；调试多模型失败时可把散落日志串成一条链（§8.8.4）。
         self.run_id: str | None = None
+        self.evidence_ledger: Any = None
         # Native function-calling 的协议消息。pending 供当前工具执行轮消费；
         # last_provider_messages 供 REPL 按原协议持久到后续用户轮次。
         self._pending_native_response: Any = None

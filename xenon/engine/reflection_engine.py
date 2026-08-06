@@ -152,8 +152,10 @@ class ReflectionEngine(BaseEngine):
                 logger.warning(f"Reflection 执行阶段失败: {e}")
                 self.callback.on_warning(f"执行阶段失败: {e}")
                 if best_output is not None:
+                    self.finalize_evidence(context=ctx, output=best_output)
                     self.callback.on_finish(best_output)
                     return best_output
+                self.finalize_evidence(context=ctx, output=output)
                 self.callback.on_finish(output)
                 return output
 
@@ -173,6 +175,7 @@ class ReflectionEngine(BaseEngine):
 
             if passed:
                 logger.info(f"审查通过 (分数: {score})")
+                self.finalize_evidence(context=ctx, output=output)
                 self.callback.on_finish(output)
                 return output
 
@@ -194,6 +197,7 @@ class ReflectionEngine(BaseEngine):
             f"⚠️ 达到最大修正轮次 ({self.max_rounds}) 仍未通过审查"
             f"（最高评分 {best_score}/{self.pass_threshold} 通过线）\n\n{final_output}"
         )
+        self.finalize_evidence(context=ctx, output=marked)
         self.callback.on_finish(final_output)
         return marked
 

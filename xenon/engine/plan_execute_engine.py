@@ -331,6 +331,7 @@ class PlanExecuteEngine(BaseEngine):
 
         # 汇总结果 — 附加工具执行摘要
         summary = self._summarize(user_input, plan.get("analysis", ""), results, tracker)
+        self.finalize_evidence(context=ctx, output=summary, tracker=tracker)
         return summary
 
     # ── Phase 1.5: 计划完整性校验 ────────────────────────────

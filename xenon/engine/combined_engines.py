@@ -43,6 +43,12 @@ def _isolated_ctx(ctx: AgentContext) -> AgentContext:
     fresh.set_conversation_messages(list(ctx.get_conversation_messages()))
     if hasattr(ctx, "record_tool_checkpoint"):
         fresh.set_tool_checkpoint_callback(ctx.record_tool_checkpoint)
+    ledger = ctx.get("_evidence_ledger")
+    session_id = ctx.get("_evidence_session_id")
+    if ledger is not None:
+        fresh.set("_evidence_ledger", ledger)
+    if session_id:
+        fresh.set("_evidence_session_id", session_id)
     return fresh
 
 
@@ -151,6 +157,13 @@ class PlanReactEngine:
         self._last_tracker: ToolExecutionTracker | None = None
         self.last_model_used: str | None = None
 
+    def _finalize_plan_react(self, ctx: AgentContext, output: str) -> str:
+        if ctx.get("_evidence_ledger") is None:
+            self.planner._begin_run()
+            self.planner._bind_evidence_ledger(ctx)
+        self.planner.finalize_evidence(context=ctx, output=output, tracker=self._last_tracker)
+        return output
+
     def run(
         self,
         user_input: str,
@@ -252,7 +265,7 @@ class PlanReactEngine:
             ctx.set(f"step_{step_id}_status", status)
             self.callback.on_step_done(step_id, status == "ok", result[:200])
 
-        return self._summarize(user_input, results, analysis)
+        return self._finalize_plan_react(ctx, self._summarize(user_input, results, analysis))
 
     def _summarize(
         self,
@@ -326,6 +339,17 @@ class _ReflectionCombination:
     callback: EngineCallback
     _last_tracker: ToolExecutionTracker | None
 
+    def _finalize_combined(self, ctx: AgentContext, output: str) -> str:
+        """Close the composite lifecycle at one shared delivery boundary."""
+        finalizer = getattr(self, "repairer", None) or getattr(self, "reactor", None)
+        if finalizer is None:
+            raise RuntimeError("combined engine has no finalizer")
+        if ctx.get("_evidence_ledger") is None:
+            finalizer._begin_run()
+            finalizer._bind_evidence_ledger(ctx)
+        finalizer.finalize_evidence(context=ctx, output=output, tracker=self._last_tracker)
+        return output
+
     def _review_and_repair(
         self,
         user_input: str,
@@ -357,7 +381,7 @@ class _ReflectionCombination:
         except Exception as exc:
             logger.warning("Reflection review failed; preserving executed result: %s", exc)
             self.callback.on_error(f"Reflection 审查失败: {exc}")
-            return initial_output
+            return self._finalize_combined(ctx, initial_output)
 
         # A reviewer score cannot certify a write task when no mutating tool
         # actually succeeded.  This programmatic gate fixes the former
@@ -365,7 +389,7 @@ class _ReflectionCombination:
         if review.get("pass") and not (
             state_change_required and initial_evidence.mutation_count == 0
         ):
-            return initial_output
+            return self._finalize_combined(ctx, initial_output)
         if review.get("pass"):
             review = {
                 **review,
@@ -394,7 +418,7 @@ class _ReflectionCombination:
         except Exception as exc:
             logger.warning("Reflection repair failed; preserving executed result: %s", exc)
             self.callback.on_error(f"Reflection 修复失败: {exc}")
-            return initial_output
+            return self._finalize_combined(ctx, initial_output)
 
         repair_tracker = self.repairer._last_tracker
         _merge_tracker(aggregate, repair_tracker)
@@ -408,7 +432,7 @@ class _ReflectionCombination:
             logger.warning(
                 "Reflection repair made no verified state change; preserving initial output"
             )
-            return initial_output
+            return self._finalize_combined(ctx, initial_output)
 
         if self.repairer.last_model_used:
             self.last_model_used = self.repairer.last_model_used
@@ -431,7 +455,7 @@ class _ReflectionCombination:
             except Exception as exc:
                 logger.warning("Post-repair review failed: %s", exc)
 
-        return repaired_output or initial_output
+        return self._finalize_combined(ctx, repaired_output or initial_output)
 
 
 class PlanReflectionEngine(_ReflectionCombination):

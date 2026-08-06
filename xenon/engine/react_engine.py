@@ -422,6 +422,7 @@ class ReActEngine(BaseEngine):
                             f"ReAct: LLM 连续拒绝工具调用，附带警告返回 "
                             f"(streak={no_tool_streak}, limit={max_no_tool_retries})"
                         )
+                        self.finalize_evidence(context=ctx, output=answer + warning, tracker=tracker)
                         self.callback.on_finish(answer + warning)
                         return answer + warning
 
@@ -430,6 +431,7 @@ class ReActEngine(BaseEngine):
                 if tracker.has_executions():
                     summary = tracker.execution_summary()
                     logger.debug(f"ReAct 工具执行摘要: {summary}")
+                self.finalize_evidence(context=ctx, output=answer, tracker=tracker)
                 self.callback.on_finish(answer)
                 return answer
 
