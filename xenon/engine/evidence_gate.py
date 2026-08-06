@@ -467,14 +467,86 @@ class FixBindingGate(EvidenceGate):
         )
 
 
+class FactBindingGate(EvidenceGate):
+    """事实绑定：写文件前必须先读过该文件 → 拒绝盲写。
+
+    SWE-bench 实测发现：glm-5.1 / deepseek-v4-flash 等中小模型经常
+    在没有 read_file / search 的情况下直接 write_file / edit_file，
+    导致补丁改错位置或基于幻觉的文件结构。本 Gate 检查 tracker 中
+    每个成功写操作的目标文件是否在写之前已被读取过（确定性，零 LLM）。
+
+    判据：对每个成功的 write/edit 调用，检查同一文件路径是否在更早的
+    call 中有成功的 read_file / search_files。若无 → 拒绝（盲写）。
+    """
+
+    phase = "fact"
+
+    _READ_TOOLS = frozenset({
+        "read_file", "search_files", "interpreter", "search", "grep", "find",
+    })
+
+    @staticmethod
+    def _command_reads(params: dict[str, Any]) -> bool:
+        """仅把明确的查看命令视为读取；不能把所有 command 当作读。"""
+        text = str(params.get("action") or params.get("command") or "").strip().lower()
+        return bool(re.match(r"^(cat|head|tail|less|sed\s+-n|grep|rg|find)\b", text))
+
+    def check(
+        self,
+        ctx: Any,
+        *,
+        tracker: Any | None = None,
+        **kwargs: Any,
+    ) -> GateVerdict:
+        if tracker is None:
+            return GateVerdict(self.phase, True, "无 tracker，跳过", "info")
+        calls = getattr(tracker, "calls", [])
+        if not calls:
+            return GateVerdict(self.phase, True, "无工具调用", "info")
+
+        read_files: set[str] = set()
+        blind_writes: list[str] = []
+
+        for call in calls:
+            if not call.success:
+                continue
+            tool = call.tool_name
+            params = call.params or {}
+            if tool in self._READ_TOOLS or (
+                tool == "command" and self._command_reads(params)
+            ):
+                path = params.get("file_path") or params.get("path") or params.get("pattern", "")
+                if path:
+                    read_files.add(str(path))
+            elif tool in WRITE_TOOL_NAMES:
+                target = params.get("file_path") or params.get("path", "")
+                if target and str(target) not in read_files:
+                    blind_writes.append(str(target))
+                # 写之后该文件算作"已知"
+                if target:
+                    read_files.add(str(target))
+
+        if blind_writes:
+            uniq = list(dict.fromkeys(blind_writes))
+            return GateVerdict(
+                self.phase, False,
+                "检测到 %d 个文件在写入前未被读取（盲写）: %s"
+                % (len(uniq), ", ".join(uniq[:3])),
+                "warning",
+                payload={"blind_files": uniq},
+            )
+        return GateVerdict(self.phase, True, "所有写入文件均已先读取", "info")
+
+
 # ── 便捷工厂：默认 Gate 管线 ───────────────────────────────
 def default_gates() -> list[EvidenceGate]:
-    """返回默认会话级 Gate 管线（竖着贯穿：plan → completion → fix → output）。
+    """返回默认会话级 Gate 管线（竖着贯穿：fact → plan → completion → fix → output）。
 
     注意：EvidenceCaptureGate 是收集型门，由组合引擎按需挂载，不在
     默认管线内（避免对纯执行引擎造成多余开销）。
     """
     return [
+        FactBindingGate(),
         PlanCompletenessGate(),
         TaskCompletionGate(),
         FixBindingGate(),

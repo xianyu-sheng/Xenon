@@ -109,10 +109,12 @@ class BaseEngine(ABC):
             request_timeout=120.0,
             chain_retries=2,
         )
-        # EvidenceGate 管线：竖着贯穿会话生命周期（plan → completion →
-        # output → evidence），每层确定性校验、层层过滤。Step 1 骨架：
-        # 引擎按 phase 挂载 Gate，校验与补救分离（Gate 判定，引擎补救）。
-        self._gates: list[Any] = []
+        # EvidenceGate 管线：竖着贯穿会话生命周期（fact → plan → completion →
+        # fix → output），每层确定性校验、层层过滤。引擎可通过 register_gate
+        # 追加专用 Gate；默认管线在基类统一挂载，避免各引擎漏接。
+        from xenon.engine.evidence_gate import default_gates
+
+        self._gates: list[Any] = list(default_gates())
 
     def register_gate(self, gate: Any) -> None:
         """挂载一个 EvidenceGate 到本引擎的会话级管线。"""
@@ -143,11 +145,24 @@ class BaseEngine(ABC):
         **kwargs: Any,
     ) -> Any | None:
         """运行指定 phase 的 Gate，返回第一个未通过的 verdict；全通过返回 None。"""
-
         for verdict in self.run_gates(phase, ctx, **kwargs):
             if not verdict.passed:
                 return verdict
         return None
+
+    def gate_warning(
+        self,
+        phase: str,
+        ctx: AgentContext | None = None,
+        **kwargs: Any,
+    ) -> str | None:
+        """运行 Gate 并把拒绝转换为可观测 warning；不调用 LLM、不阻断交付。"""
+        verdict = self.gate_failed(phase, ctx, **kwargs)
+        if verdict is None:
+            return None
+        message = f"{phase} EvidenceGate: {verdict.reason}"
+        logging.getLogger("xenon.engine").warning(message)
+        return message
 
     def set_execution_policy(self, policy: ExecutionPolicy) -> None:
         """Bind a policy to this engine (combined graphs use the graph binder)."""

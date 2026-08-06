@@ -207,12 +207,8 @@ class PlanExecuteEngine(BaseEngine):
             execution_policy=self.execution_policy,
         )
         # EvidenceGate 管线（Step 1）：挂载默认确定性校验门。
-        # plan/completion/output 三阶段层层过滤，校验与补救分离——
-        # Gate 判定，本引擎保留补救逻辑（重新规划/追加步骤/追加警告）。
-        from xenon.engine.evidence_gate import default_gates
-
-        for gate in default_gates():
-            self.register_gate(gate)
+        # EvidenceGate 默认管线由 BaseEngine 统一挂载；本引擎保留
+        # register_gate 扩展点，校验与补救逻辑仍由本引擎负责。
 
     @staticmethod
     def _build_plan_prompt() -> str:
@@ -312,6 +308,13 @@ class PlanExecuteEngine(BaseEngine):
         results = self._ensure_task_completed(
             user_input, results, ctx, tracker, total,
         )
+
+        # Phase 2.7: 事实绑定校验——每个写入目标应先有读取证据。
+        # 这是确定性审计，不阻断交付；引擎通过 callback 暴露 warning，
+        # 供后续补救/可观测性消费。
+        fact_verdict = self.gate_failed("fact", ctx, tracker=tracker)
+        if fact_verdict is not None:
+            self.callback.on_warning(f"事实绑定校验: {fact_verdict.reason}")
 
         # Phase 2.8: 修复绑定校验（FixBindingGate）——补丁必须「绑定根因」
         # 而非「重复+特判」的表面修复。SWE-bench 实测（matplotlib）：
