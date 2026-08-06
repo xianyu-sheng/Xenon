@@ -170,10 +170,19 @@ class BaseEngine(ABC):
 
         ToolExecutor resolves this Context key, so every engine/tool call within
         the task appends to the same hash chain rather than a private audit log.
+        If the context already carries a runtime (e.g. the REPL started the task
+        first), reuse its ledger so task intake and engine events stay in one chain.
         """
         from xenon.engine.evidence_runtime import (
             EvidenceLedger, EvidenceSource, EventKind, LifecyclePhase,
         )
+        existing = context.get_evidence_runtime()
+        if existing is not None:
+            ledger = existing.ledger
+            self.evidence_ledger = ledger
+            context.set("_evidence_session_id", ledger.session_id)
+            context.set("_evidence_ledger", ledger)
+            return ledger
         if self.run_id is None:
             self._begin_run()
         ledger = EvidenceLedger(self.run_id or "unknown")
@@ -183,6 +192,7 @@ class BaseEngine(ABC):
         )
         context.set("_evidence_session_id", self.run_id)
         context.set("_evidence_ledger", ledger)
+        context.bind_evidence(ledger)
         self.evidence_ledger = ledger
         return ledger
 

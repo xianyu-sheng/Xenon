@@ -707,6 +707,9 @@ class ToolExecutor:
         """
         if self.evidence_ledger is not None:
             return self.evidence_ledger
+        runtime = context.get_evidence_runtime()
+        if runtime is not None:
+            return runtime.ledger
         ledger = context.get("_evidence_ledger")
         if isinstance(ledger, EvidenceLedger):
             return ledger
@@ -714,6 +717,7 @@ class ToolExecutor:
         ledger = EvidenceLedger(session_id)
         context.set("_evidence_session_id", session_id)
         context.set("_evidence_ledger", ledger)
+        context.bind_evidence(ledger)
         ledger.append(
             LifecyclePhase.TASK, EventKind.TASK_FACT, EvidenceSource.ENGINE,
             {"origin": "ToolExecutor.direct", "reason": "no engine ledger bound"},

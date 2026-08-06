@@ -23,7 +23,8 @@ class AgentContext:
     def __init__(self, initial: dict[str, Any] | None = None) -> None:
         self._store: dict[str, Any] = initial.copy() if initial else {}
         self._history: list[dict[str, Any]] = []  # 每步快照，用于调试回溯
-        self._conversation_messages: list[dict[str, str]] = []  # 多轮对话历史
+        self._conversation_messages: list[dict[str, str]] = []
+        self._evidence_runtime: Any = None
         # Tool execution can happen in Plan-Execute worker threads.  Keep its
         # durable checkpoint updates atomic without changing the historical
         # single-threaded contract of the rest of AgentContext.
@@ -50,6 +51,34 @@ class AgentContext:
     def set_conversation_messages(self, messages: list[dict[str, str]]) -> None:
         """设置多轮对话历史（由 REPL 层注入）。"""
         self._conversation_messages = messages
+
+    # ── Evidence Runtime 门面（跨层统一入口）──────────────────
+    @property
+    def evidence(self) -> Any:
+        """懒创建并返回本任务共享的 EvidenceRuntime 门面。
+
+        任何持有本 Context 的模块（REPL/Engine/ToolExecutor/Node/MCP/Session）
+        都通过它写入或查询同一条证据链。不会进入 session 序列化存储。
+        """
+        if self._evidence_runtime is None:
+            from xenon.engine.evidence_runtime import EvidenceRuntime
+
+            self._evidence_runtime = EvidenceRuntime()
+        return self._evidence_runtime
+
+    def get_evidence_runtime(self) -> Any | None:
+        """返回已绑定的 EvidenceRuntime；未创建时返回 None（不触发创建）。"""
+        return self._evidence_runtime
+
+    def bind_evidence(self, ledger: Any) -> Any:
+        """把现有 EvidenceLedger 绑定到本任务的 EvidenceRuntime。
+
+        Args:
+            ledger: EvidenceLedger 实例（通常由引擎在任务起点创建）。
+        """
+        runtime = self.evidence
+        runtime._ledger = ledger  # noqa: SLF001 — 门面内部状态，统一契约
+        return runtime
 
     def get_conversation_messages(self) -> list[dict[str, str]]:
         """获取多轮对话历史。"""

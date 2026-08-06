@@ -17,6 +17,8 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Iterable
 
+from xenon.engine.evidence_gate import GateVerdict
+
 
 class _StringEnum(str, Enum):
     def __str__(self) -> str:
@@ -245,3 +247,222 @@ class EvidencePack:
         return {"session_id": self.session_id, "event_count": self.event_count,
                 "gate_failures": self.gate_failures,
                 "integrity_verified": self.integrity_verified, "events": list(self.events)}
+
+
+class EvidenceRuntime:
+    """跨层公共 Evidence 门面（REPL/Engine/ToolExecutor/Node/MCP/Session 统一入口）。
+
+    任何持有 AgentContext 的模块都可以通过 ``context.evidence`` 访问本门面：
+       - 记录任务开始 / LLM 声明 / 工具请求 / 工具观察 / Gate 判定 / 验证结果
+       - 按 phase/kind/source 查询事件
+       - 注册并运行确定性 Gate（校验与补救分离：Gate 只判定）
+       - finalize 构建交付 EvidencePack（幂等）
+       - persist / load JSONL 持久化
+
+    本门面是 EvidenceLedger 的运行时包装；引擎与工具层通过同一 ledger 共享
+    一条哈希链，任何模块写入的事件都进入同一任务证据流。
+    """
+
+    def __init__(self, ledger: EvidenceLedger | None = None) -> None:
+        self._ledger = ledger or EvidenceLedger(uuid.uuid4().hex)
+        self._gates: list[Any] = []
+
+    # ── ledger 访问 ────────────────────────────────────────
+    @property
+    def ledger(self) -> EvidenceLedger:
+        return self._ledger
+
+    @property
+    def session_id(self) -> str:
+        return self._ledger.session_id
+
+    # ── Gate 注册与运行 ────────────────────────────────────
+    def register_gate(self, gate: Any) -> None:
+        """挂载一个确定性 Gate（零 LLM）。"""
+        self._gates.append(gate)
+
+    def run_gates(
+        self,
+        phase: str,
+        ctx: Any = None,
+        **kwargs: Any,
+    ) -> list[GateVerdict]:
+        """运行指定 phase 的 Gate，返回判定列表（按注册序）。"""
+        return [
+            gate.check(ctx, **kwargs)
+            for gate in self._gates
+            if getattr(gate, "phase", None) == phase
+        ]
+
+    def gate_failed(
+        self,
+        phase: str,
+        ctx: Any = None,
+        **kwargs: Any,
+    ) -> GateVerdict | None:
+        """返回第一个未通过的判定；全部通过返回 None。"""
+        for verdict in self.run_gates(phase, ctx, **kwargs):
+            if not verdict.passed:
+                return verdict
+        return None
+
+    # ── 生命周期记录 ───────────────────────────────────────
+    def start_task(
+        self,
+        *,
+        engine: str = "",
+        user_input: str = "",
+        **extra: Any,
+    ) -> EvidenceEvent:
+        payload: dict[str, Any] = {"engine": engine}
+        if user_input:
+            payload["user_input"] = user_input[:500]
+        payload.update(extra)
+        return self._ledger.append(
+            LifecyclePhase.TASK, EventKind.TASK_FACT, EvidenceSource.ENGINE, payload,
+        )
+
+    def record_claim(self, *, text: str = "", **extra: Any) -> EvidenceEvent:
+        return self._ledger.append(
+            LifecyclePhase.UNDERSTANDING, EventKind.CLAIM, EvidenceSource.LLM,
+            {"text": text[:500], **extra},
+        )
+
+    def record_plan(self, *, plan: Any = None, **extra: Any) -> EvidenceEvent:
+        return self._ledger.append(
+            LifecyclePhase.PLANNING, EventKind.PLAN, EvidenceSource.LLM,
+            {"plan_summary": _summary(plan), **extra},
+        )
+
+    def record_tool_request(
+        self,
+        *,
+        tool: str,
+        params: dict[str, Any] | None = None,
+        **extra: Any,
+    ) -> EvidenceEvent:
+        return self._ledger.append(
+            LifecyclePhase.PRE_TOOL, EventKind.TOOL_REQUEST, EvidenceSource.ENGINE,
+            {"tool": tool, "params": _sanitize(params), **extra},
+        )
+
+    def record_tool_observation(
+        self,
+        *,
+        tool: str,
+        params: dict[str, Any] | None = None,
+        success: bool = True,
+        summary: str = "",
+        **extra: Any,
+    ) -> EvidenceEvent:
+        return self._ledger.append(
+            LifecyclePhase.POST_TOOL, EventKind.TOOL_OBSERVATION, EvidenceSource.TOOL,
+            {"tool": tool, "params": _sanitize(params), "success": success,
+             "summary": summary[:500], **extra},
+        )
+
+    def record_gate_verdict(
+        self,
+        *,
+        gate: str,
+        passed: bool,
+        reason: str = "",
+        phase: str = "validation",
+        **extra: Any,
+    ) -> EvidenceEvent:
+        return self._ledger.append(
+            LifecyclePhase.VALIDATION, EventKind.GATE_VERDICT, EvidenceSource.GATE,
+            {"gate": gate, "passed": passed, "reason": reason[:500], "phase": phase, **extra},
+        )
+
+    def record_validation(
+        self,
+        *,
+        kind: str,
+        passed: bool,
+        detail: str = "",
+        **extra: Any,
+    ) -> EvidenceEvent:
+        return self._ledger.append(
+            LifecyclePhase.VALIDATION, EventKind.VALIDATION_RESULT, EvidenceSource.TEST,
+            {"kind": kind, "passed": passed, "detail": detail[:500], **extra},
+        )
+
+    def record_delivery(self, *, output: str = "", **extra: Any) -> EvidenceEvent:
+        return self._ledger.append(
+            LifecyclePhase.DELIVERY, EventKind.DELIVERY, EvidenceSource.ENGINE,
+            {"output": output[:500], **extra},
+        )
+
+    def query(
+        self,
+        *,
+        phase: str | LifecyclePhase | None = None,
+        kind: str | EventKind | None = None,
+        source: str | EvidenceSource | None = None,
+    ) -> list[EvidenceEvent]:
+        return self._ledger.query(phase=phase, kind=kind, source=source)
+
+    # ── 交付与持久化 ───────────────────────────────────────
+    def finalize(
+        self,
+        *,
+        output: str = "",
+        tracker: Any = None,
+        workspace_root: Any = None,
+        run_delivery_gates: bool = True,
+    ) -> EvidencePack:
+        """构建交付 EvidencePack（幂等）。
+
+        已存在 delivery 事件时直接重算 pack，不重复记录。
+        """
+        has_delivery = any(e.kind == EventKind.DELIVERY.value for e in self._ledger.events)
+        if not has_delivery and run_delivery_gates:
+            for phase, kwargs in (
+                ("fix", {"tracker": tracker}),
+                ("output", {"output": output, "tracker": tracker,
+                            "workspace_root": workspace_root}),
+            ):
+                verdict = self.gate_failed(phase, None, **kwargs)
+                self.record_gate_verdict(
+                    gate=phase, passed=verdict is None,
+                    reason=verdict.reason if verdict else "passed", phase=phase,
+                )
+        if not has_delivery:
+            pack = EvidencePack.build(self._ledger)
+            self.record_delivery(
+                output=output,
+                event_count=pack.event_count,
+                gate_failures=pack.gate_failures,
+            )
+        return EvidencePack.build(self._ledger)
+
+    def persist(self, path: str | Path) -> None:
+        """把当前任务证据流写为 JSONL。"""
+        self._ledger.write_jsonl(path)
+
+    @classmethod
+    def load(cls, path: str | Path) -> "EvidenceRuntime":
+        """从 JSONL 恢复门面（含哈希链完整性校验）。"""
+        return cls(EvidenceLedger.read_jsonl(path))
+
+    def snapshot(self) -> dict[str, Any]:
+        return self._ledger.snapshot()
+
+
+def _summary(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value[:500]
+    return repr(value)[:500]
+
+
+def _sanitize(params: dict[str, Any] | None) -> dict[str, Any]:
+    """脱敏敏感参数（复用 callbacks 的掩码规则，不引入运行时依赖）。"""
+    if not params:
+        return {}
+    from xenon.engine.callbacks import mask_sensitive_params
+
+    masked = mask_sensitive_params(params)
+    return masked if isinstance(masked, dict) else {"value": str(masked)[:500]}

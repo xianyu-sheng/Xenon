@@ -14,6 +14,23 @@ from xenon.mcp.client import MCPClient
 logger = logging.getLogger(__name__)
 
 
+def _mcp_result_summary(result: dict[str, Any]) -> str:
+    """从 MCP tools/call 结果提取短摘要（content 文本或错误）。"""
+    if not isinstance(result, dict):
+        return str(result)[:300]
+    if result.get("error"):
+        return str(result["error"])[:300]
+    content = result.get("content")
+    if isinstance(content, list):
+        texts = []
+        for item in content:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                texts.append(item["text"])
+        joined = " ".join(texts)
+        return joined[:300] if joined else str(result)[:300]
+    return str(result)[:300]
+
+
 class MCPRegistry:
     """MCP 服务器注册表。
 
@@ -152,10 +169,19 @@ class MCPRegistry:
 
         return all_tools
 
-    def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    def call_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None = None,
+        context: Any = None,
+    ) -> dict[str, Any]:
         """调用 MCP 工具。支持 server:tool 或直接 tool 名称。
 
         如果工具所在服务器尚未连接（惰性），则自动先连接。
+
+        传入 ``context``（AgentContext）时，调用前后自动向该任务的
+        EvidenceRuntime 写入 tool_request / tool_observation 证据，
+        与 ToolExecutor 的在线验证链共用同一条 ledger。
         """
         # 尝试从 tool_map 查找
         entry = self.tool_map.get(tool_name)
@@ -203,7 +229,34 @@ class MCPRegistry:
 
         server_name, tool_info = entry
         client = self.clients[server_name]
-        return client.call_tool(tool_info["name"], arguments)
+
+        # 在线验证链：调用前记录工具请求证据（context 可选传入）。
+        # 用 .evidence 触发懒创建——任何持有 AgentContext 的调用方都能接入。
+        runtime = getattr(context, "evidence", None) if context is not None else None
+        if runtime is not None:
+            runtime.record_tool_request(
+                tool=f"mcp_call:{tool_name}",
+                params={"server": server_name, "arguments": arguments or {}},
+            )
+        try:
+            result = client.call_tool(tool_info["name"], arguments)
+        except Exception as exc:
+            if runtime is not None:
+                runtime.record_tool_observation(
+                    tool=f"mcp_call:{tool_name}",
+                    params={"server": server_name},
+                    success=False,
+                    summary=str(exc)[:300],
+                )
+            raise
+        if runtime is not None:
+            runtime.record_tool_observation(
+                tool=f"mcp_call:{tool_name}",
+                params={"server": server_name},
+                success=True,
+                summary=_mcp_result_summary(result),
+            )
+        return result
 
     def format_all_tools_for_prompt(self) -> str:
         """将所有 MCP 工具格式化为 LLM 提示词。"""

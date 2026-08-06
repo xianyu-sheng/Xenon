@@ -2115,6 +2115,13 @@ class REPL:
             permission_gate=self._permission_gate,
         )
         self._inject_mcp_tools_into_engine(engine)
+        # 在线验证链：任务摄入——REPL 先创建任务证据，引擎复用同一条 ledger。
+        try:
+            self.agent_context.evidence.start_task(
+                engine=spec.name, user_input=user_input[:500],
+            )
+        except Exception as exc:  # noqa: BLE001 — 证据记录失败不阻断主流程
+            logger.debug("任务证据记录失败（不影响执行）: %s", exc)
         try:
             result = engine.run(
                 user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr
