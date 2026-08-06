@@ -37,6 +37,23 @@ deepseek-v4-flash / glm-5.1，经 heyroute 中转）。因此：
    - 通过率显著提升 → 在线验证链有效
    - 通过率下降 → 需检查 Gate 误杀（尤其 FactBindingGate 的盲写阻断）
 
+## 回归验证结果（2026-08-06，同模型 A/B）
+
+在线验证链（Evidence Runtime + enforce + 跨层门面，commit 64eca4e）完成后，
+用与基线相同的模型（heyroute/deepseek-v4-flash）重跑 9 个基线有补丁的单元格：
+
+- 补丁产出：9/9（基线 9/9）
+- 基线 resolved=True 的 6 个单元格：6/6 重跑后仍通过 → **回归保护率 100%**
+- FactBindingGate 误杀：0 次（正常 read→edit 流程全部放行）
+- FileClaimGate 按设计拦截 1 次：sphinx-7738/plan-execute，LLM 声称修改
+  docstring.py 但 edit 实际失败（缺 old_text 参数），Gate 抓住幻觉拒绝交付；
+  该单元格基线官方评分本就 False → 零实际损失
+
+结论：**新框架零回归**，且在线验证链在真实 SWE-bench 任务中验证了
+"LLM 的话只能作为 Claim，工具结果才是 Evidence"。
+
+明细见 `swebench30_regression_detail.json`。
+
 ## 生成命令（复现）
 
 ```bash

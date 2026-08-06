@@ -1,0 +1,14 @@
+{
+  "date": "2026-08-06",
+  "purpose": "同模型 A/B 回归验证：在线验证链（Evidence Runtime + enforce + 跨层门面）完成后验证框架不引入回归",
+  "model": "heyroute/deepseek-v4-flash（与基线相同模型）",
+  "cells": 9,
+  "patch_production": "9/9（基线 9/9）",
+  "gate_false_kills": 0,
+  "gate_interceptions": 1,
+  "interception_detail": "sphinx-7738/plan-execute: FileClaimGate 拦截 LLM 声称修改 docstring.py 但 edit 实际失败；基线官方评分 False，零实际损失",
+  "resolved_cells_baseline": 6,
+  "resolved_cells_rerun": 6,
+  "regression_protection_rate": "6/6 = 100%",
+  "conclusion": "零回归：所有基线通过单元格重跑后仍通过；Gate 未误杀正常流程；1 次按设计拦截 LLM 幻觉"
+}

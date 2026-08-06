@@ -1,0 +1,65 @@
+[
+  {
+    "instance_id": "django__django-15061",
+    "engine": "plan-execute",
+    "baseline_resolved": false,
+    "rerun_resolved": false,
+    "status": "consistent"
+  },
+  {
+    "instance_id": "django__django-16041",
+    "engine": "react",
+    "baseline_resolved": true,
+    "rerun_resolved": true,
+    "status": "kept"
+  },
+  {
+    "instance_id": "django__django-16041",
+    "engine": "react-reflection",
+    "baseline_resolved": true,
+    "rerun_resolved": true,
+    "status": "kept"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-13439",
+    "engine": "plan-execute",
+    "baseline_resolved": true,
+    "rerun_resolved": true,
+    "status": "kept"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-13439",
+    "engine": "plan-react",
+    "baseline_resolved": true,
+    "rerun_resolved": true,
+    "status": "kept"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-13439",
+    "engine": "react",
+    "baseline_resolved": true,
+    "rerun_resolved": true,
+    "status": "kept"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-13439",
+    "engine": "react-reflection",
+    "baseline_resolved": true,
+    "rerun_resolved": true,
+    "status": "kept"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-25747",
+    "engine": "react-reflection",
+    "baseline_resolved": false,
+    "rerun_resolved": false,
+    "status": "consistent"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-7738",
+    "engine": "plan-execute",
+    "baseline_resolved": false,
+    "rerun_resolved": null,
+    "status": "consistent"
+  }
+]
