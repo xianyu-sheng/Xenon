@@ -57,6 +57,37 @@ def test_model_hint_local_unknown():
     assert _model_hint_local("some-random-model") == ""
 
 
+def test_model_accepts_alias_and_updates_auto_router_preference():
+    from types import SimpleNamespace
+
+    from xenon.repl.model_pool import ModelPool
+    from xenon.repl.model_registry import ModelRegistry
+
+    class _Router:
+        def __init__(self):
+            self.reset_count = 0
+
+        def reset_session_lock(self):
+            self.reset_count += 1
+
+    reg = ModelRegistry()
+    reg.add_model("heyroute/deepseek-v4-flash", "heyroute0-deepseek")
+    pool = ModelPool()
+    router = _Router()
+    repl = SimpleNamespace(auto_router=router, _preferred_model_ids=[], _failed_models=set())
+    result = _cmd_model(
+        args="heyroute0-deepseek",
+        registry=reg,
+        session_state={"_repl": repl, "model_pool": pool},
+    )
+
+    assert "已切换到" in result
+    assert reg.role_priority["planner"] == ["heyroute0-deepseek"]
+    assert repl._preferred_model_ids == ["heyroute/deepseek-v4-flash"]
+    assert router.reset_count == 1
+    assert pool.get("heyroute0-deepseek") is not None
+
+
 def test_models_no_registry():
     from xenon.repl.model_registry import ModelRegistry
 

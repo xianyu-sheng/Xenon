@@ -350,10 +350,40 @@ def _cmd_mode(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
 
 # /model ───────────────────────────────────────────────────
 
-# v0.4.0 removed: register_command("/model", "交互式切换模型", "/model")
+register_command(
+    "/model",
+    "按别名或 provider/model 直接切换模型",
+    "/model [alias|provider/model]",
+)
+
+
+def _activate_model(selected: Any, *, registry: ModelRegistry, session_state: dict) -> None:
+    """Make a selected model effective for both static and auto routing."""
+    registry.role_priority["planner"] = [selected.alias]
+    repl = session_state.get("_repl")
+    if repl is not None:
+        # AutoRouter otherwise keeps choosing from its scored pool and can
+        # ignore the planner role changed by /model.
+        repl._preferred_model_ids = [selected.model_id]
+        auto_router = getattr(repl, "auto_router", None)
+        if auto_router is not None and hasattr(auto_router, "reset_session_lock"):
+            auto_router.reset_session_lock()
+        if hasattr(repl, "_failed_models"):
+            repl._failed_models.discard(selected.model_id)
+
+    pool = session_state.get("model_pool")
+    if pool is not None and hasattr(pool, "get") and pool.get(selected.alias) is None:
+        pool.register(
+            selected.model_id,
+            alias=selected.alias,
+            weight=getattr(selected, "weight", 1.0),
+            api_key=getattr(selected, "api_key", ""),
+            base_url=getattr(selected, "base_url", ""),
+        )
+
 
 @command_handler("/model")
-def _cmd_model(*, session_state: dict, registry: ModelRegistry, **kwargs: Any) -> str:
+def _cmd_model(*, args: str = "", session_state: dict, registry: ModelRegistry, **kwargs: Any) -> str:
     from rich.table import Table as _Table
     from rich.prompt import IntPrompt as _IntPrompt
     from rich.console import Console as _Console
@@ -361,6 +391,19 @@ def _cmd_model(*, session_state: dict, registry: ModelRegistry, **kwargs: Any) -
     models = registry.list_models()
     if not models:
         return "暂无已注册模型。请先执行 /set_model 注册模型。"
+
+    requested = args.strip()
+    if requested:
+        # Accept either the displayed alias or the canonical provider/model ID.
+        selected = next(
+            (m for m in models if m.alias == requested or m.model_id == requested),
+            None,
+        )
+        if selected is None:
+            aliases = ", ".join(m.alias for m in models)
+            return f"❌ 未找到模型 '{requested}'。可用别名: {aliases}"
+        _activate_model(selected, registry=registry, session_state=session_state)
+        return f"✅ 已切换到: {selected.alias} ({selected.model_id})"
 
     console = kwargs.get("console") or _Console()
     current_aliases = registry.role_priority.get("planner", [])
@@ -388,11 +431,7 @@ def _cmd_model(*, session_state: dict, registry: ModelRegistry, **kwargs: Any) -
         return "已取消"
 
     selected = models[choice - 1]
-    registry.role_priority["planner"] = [selected.alias]
-    # v0.5.2: 清除该模型的失败标记，允许重新调用
-    repl = session_state.get("_repl")
-    if repl and hasattr(repl, "_failed_models"):
-        repl._failed_models.discard(selected.model_id)
+    _activate_model(selected, registry=registry, session_state=session_state)
     return f"✅ 已切换到: {selected.alias} ({selected.model_id})"
 
 
@@ -426,6 +465,5 @@ def _cmd_provider(**kwargs: Any) -> str:
             lines.append(f"  {p.name} — {', '.join(p.models[:3])}...")
 
     return "\n".join(lines)
-
 
 

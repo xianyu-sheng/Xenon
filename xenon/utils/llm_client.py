@@ -476,6 +476,10 @@ class ModelEndpoint:
     base_url: str        # API 基础地址
     api_key: str = field(repr=False, default="")
     max_tokens: int = 4096
+    # Custom providers default to OpenAI Chat Completions.  A provider may
+    # explicitly declare ``api_style: anthropic`` in credentials.yaml so a
+    # relay's native Anthropic endpoint is not accidentally sent OpenAI JSON.
+    api_style: str = "chat_completions"
 
 
 # ── 厂商默认配置 ──────────────────────────────────────────
@@ -651,6 +655,16 @@ def _load_custom_provider_config(provider_key: str) -> dict | None:
         return None
 
 
+def _is_anthropic_endpoint(endpoint: ModelEndpoint) -> bool:
+    """Return whether an endpoint must use Anthropic's native wire format."""
+    return endpoint.provider == "anthropic" or getattr(endpoint, "api_style", "") == "anthropic"
+
+
+def _usage_provider(endpoint: ModelEndpoint) -> str:
+    """Normalize provider name for usage fields on custom native endpoints."""
+    return "anthropic" if _is_anthropic_endpoint(endpoint) else endpoint.provider
+
+
 def build_endpoint(model_id: str, credentials: dict[str, str] | None = None, base_url: str | None = None) -> ModelEndpoint:
     """根据 model_id 构建完整的调用端点信息。
 
@@ -694,6 +708,11 @@ def build_endpoint(model_id: str, credentials: dict[str, str] | None = None, bas
             or defaults["base_url"]
         ),
         api_key=api_key,
+        api_style=(
+            str((custom_config or {}).get("api_style", "chat_completions")).strip().lower()
+            if custom_config
+            else "chat_completions"
+        ),
     )
 
 
@@ -758,7 +777,7 @@ def chat_completion(
     attempt_count = max(1, max_retries)
     for attempt in range(attempt_count):
         try:
-            if endpoint.provider == "anthropic":
+            if _is_anthropic_endpoint(endpoint):
                 text = _call_anthropic(endpoint, messages, max_tokens, temperature, timeout)
             else:
                 if reasoning_effort:
@@ -1004,7 +1023,7 @@ def _call_openai_compat_once(
     resp.raise_for_status()
     data = resp.json()
     # §8.8.1：提取并累加真实 usage（不再丢弃），+ model_id 用于缓存追踪
-    _acc_usage(endpoint.provider, data, f"{endpoint.provider}/{endpoint.model_name}")
+    _acc_usage(_usage_provider(endpoint), data, f"{endpoint.provider}/{endpoint.model_name}")
     msg = data["choices"][0]["message"]
     finish = data["choices"][0].get("finish_reason", "")
     content = msg.get("content") or ""
@@ -1090,7 +1109,7 @@ def _call_anthropic_once(
     resp.raise_for_status()
     data = resp.json()
     # §8.8.1：提取并累加真实 usage（Anthropic 用 input/output_tokens）
-    _acc_usage(endpoint.provider, data, f"{endpoint.provider}/{endpoint.model_name}")
+    _acc_usage(_usage_provider(endpoint), data, f"{endpoint.provider}/{endpoint.model_name}")
     # content 是文本块列表；拼接所有 text 块（比仅取 [0] 更鲁棒）
     blocks = data.get("content", []) or []
     text = "".join(
@@ -1301,7 +1320,7 @@ def chat_completion_with_tools(
     attempt_count = max(1, max_retries)
     for attempt in range(attempt_count):
         try:
-            if endpoint.provider == "anthropic":
+            if _is_anthropic_endpoint(endpoint):
                 response = _call_anthropic_with_tools(
                     endpoint, messages, tools, response_format, tool_choice,
                     max_tokens, temperature, timeout,
@@ -1398,7 +1417,7 @@ def _call_openai_compat_with_tools(
     resp.raise_for_status()
     data = resp.json()
     # §8.8.1：提取并累加真实 usage（含缓存命中数据）
-    _acc_usage(endpoint.provider, data, f"{endpoint.provider}/{endpoint.model_name}")
+    _acc_usage(_usage_provider(endpoint), data, f"{endpoint.provider}/{endpoint.model_name}")
     choice = data.get("choices", [{}])[0]
     msg = choice.get("message", {})
     content = msg.get("content") or ""
@@ -1419,7 +1438,7 @@ def _call_openai_compat_with_tools(
         reasoning_content=reasoning,
         tool_calls=tool_calls,
         finish_reason=finish,
-        usage=_extract_usage(data, endpoint.provider),
+        usage=_extract_usage(data, _usage_provider(endpoint)),
         raw=data,
         provider=endpoint.provider,
         assistant_message=dict(msg),
@@ -1482,7 +1501,7 @@ def _call_anthropic_with_tools(
     resp = client.post(url, json=payload, headers=headers, timeout=timeout)
     resp.raise_for_status()
     data = resp.json()
-    _acc_usage(endpoint.provider, data, f"{endpoint.provider}/{endpoint.model_name}")
+    _acc_usage(_usage_provider(endpoint), data, f"{endpoint.provider}/{endpoint.model_name}")
     blocks = data.get("content", []) or []
     text, tool_calls, _ = _parse_anthropic_tool_calls(blocks)
     # Anthropic stop_reason → OpenAI 风格 finish_reason
@@ -1511,7 +1530,7 @@ def _call_anthropic_with_tools(
         content=text,
         tool_calls=tool_calls,
         finish_reason=finish,
-        usage=_extract_usage(data, endpoint.provider),
+        usage=_extract_usage(data, _usage_provider(endpoint)),
         raw=data,
         provider=endpoint.provider,
         assistant_message=assistant_message,
@@ -1557,7 +1576,7 @@ def chat_completion_stream(
     )
     reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
 
-    if endpoint.provider == "anthropic":
+    if _is_anthropic_endpoint(endpoint):
         yield from _stream_anthropic(
             endpoint, messages, max_tokens, temperature, timeout, model_id, manifest,
         )
@@ -1630,7 +1649,7 @@ def _stream_openai_compat(
                 if content:
                     yield content
     if usage_data is not None:
-        _emit_usage(model_id, _extract_usage(usage_data, endpoint.provider), time.time() - t0)
+        _emit_usage(model_id, _extract_usage(usage_data, _usage_provider(endpoint)), time.time() - t0)
         # 发出响应回调（供 CacheTracker 等订阅原始 API 响应）
         _emit_response(model_id, _response_with_manifest(usage_data, manifest))
 
