@@ -126,10 +126,62 @@ _CLAIM_PATTERNS = [
     r"(?:created|written|saved|generated|initialized|made)",
     r"(?:文件|目录|文件夹)(?:已|已经)",
 ]
+# 路径类文件声称：必须包含路径分隔符（/ 或 \）。裸 `self.c`、`obj.config`
+# 这类代码/属性引用不带分隔符，绝不会被误判为文件。这修复了 SWE-bench
+# 实测 40% 误杀（django 实例 final output 含 ORM 字段引用 self.c 被当文件）。
 _FILE_PATTERNS = [
-    r"[\w/\\.-]+\.(?:py|js|ts|html|css|json|yaml|yml|toml|md|txt|sh|bat|ps1|go|rs|java|c|cpp|h)",
-    r"(?:src|lib|app|test|tests|dist|build|bin|config|docs)[/\\][\w/\\.-]+",
+    r"[\w.\-]+[/\\][\w./\\\-]+\.[A-Za-z0-9]+",
 ]
+# 裸文件名声称：必须由声明动词开头（"创建了 docstring.py" / "saved models.py"），
+# 动词后可跟连接词延续的并列文件名（"已保存 A 和 B"）。无动词开头的裸名
+# （代码片段中的 self.c、foo.py 引用）不视为文件声称。
+_CLAIMED_BARE_FILE_RE = re.compile(
+    r"[\w.\-]+\.(?:py|js|ts|html|css|json|yaml|yml|toml|md|txt|sh|bat|ps1|go|rs|java|c|cpp|h)",
+    re.IGNORECASE,
+)
+_CLAIMED_FILE_PATTERN = re.compile(
+    r"(?:创建|新建|生成|写入|保存|写入到|created|written|saved|generated|"
+    r"initialized|made)\s*(?:了)?\s*[`'\"\[]?[\w.\-]+\.(?:py|js|ts|html|css|"
+    r"json|yaml|yml|toml|md|txt|sh|bat|ps1|go|rs|java|c|cpp|h)[`'\"]?"
+    r"(?:\s*(?:、|，|,|和|与|及|以及|and|&)\s*[`'\"\[]?[\w.\-]+\.(?:py|js|ts|"
+    r"html|css|json|yaml|yml|toml|md|txt|sh|bat|ps1|go|rs|java|c|cpp|h)[`'\"]?)*",
+    re.IGNORECASE,
+)
+
+
+def _strip_diff_prefix(path: str) -> str:
+    """剥掉 diff 头部的 a/、b/ 前缀（`diff --git a/x b/x`、`--- a/x`、`+++ b/x`）。
+
+    保留单段路径（`a/foo.py` 剥成 `foo.py` 后交给动词/后缀匹配裁决），
+    避免把 diff 上下文里的路径当成"声称的文件"。
+    """
+    for prefix in ("a/", "b/"):
+        if path.startswith(prefix) and "/" in path[len(prefix):]:
+            return path[len(prefix):]
+    return path
+
+
+def _extract_claimed_files(llm_output: str) -> set[str]:
+    """提取 LLM 输出中声称涉及的文件（路径类 + 声明动词开头的裸名序列）。"""
+    mentioned: set[str] = set()
+    for pattern in _FILE_PATTERNS:
+        for m in re.findall(pattern, llm_output):
+            mentioned.add(_strip_diff_prefix(m))
+    for m in _CLAIMED_FILE_PATTERN.finditer(llm_output):
+        mentioned.update(_CLAIMED_BARE_FILE_RE.findall(m.group(0)))
+    return mentioned
+
+
+def _path_matches_verified(claimed: str, verified: set[str]) -> bool:
+    """声称路径与已验证路径做后缀匹配（相对/绝对、./ 前缀兼容）。"""
+    claimed_norm = Path(claimed).as_posix().lstrip("./")
+    for v in verified:
+        v_norm = Path(v).as_posix().lstrip("./")
+        if claimed_norm == v_norm:
+            return True
+        if claimed_norm.endswith("/" + v_norm) or v_norm.endswith("/" + claimed_norm):
+            return True
+    return False
 
 
 def _verified_files_from_tracker(tracker: Any | None) -> set[str]:
@@ -168,19 +220,18 @@ def verify_file_claims(llm_output: str, tracker: Any | None = None) -> tuple[boo
     if not has_claim:
         return True, []
 
-    mentioned_files: set[str] = set()
-    for pattern in _FILE_PATTERNS:
-        mentioned_files.update(re.findall(pattern, llm_output))
+    mentioned_files = _extract_claimed_files(llm_output)
     if not mentioned_files:
         return True, []
 
     verified = _verified_files_from_tracker(tracker)
     unverified: list[str] = []
     for f in mentioned_files:
-        if f in verified:
+        if _path_matches_verified(f, verified):
             continue
-        if not Path(f).exists():
-            unverified.append(f)
+        if Path(f).exists():
+            continue
+        unverified.append(f)
     return (len(unverified) == 0), unverified
 
 
