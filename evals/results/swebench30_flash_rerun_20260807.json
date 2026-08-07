@@ -1,0 +1,15 @@
+{
+  "date": "2026-08-07",
+  "benchmark": "SWE-bench_Lite",
+  "model": "heyroute/deepseek-v4-flash（纯净同模型）",
+  "framework": "在线验证链 v0.8.0-dev（Evidence Runtime + 跨层门面 + FileClaimGate 误杀修复 41f475f）",
+  "cells": 150,
+  "patches": 70,
+  "graded": 69,
+  "resolved": 24,
+  "cell_level_rate": "24/69 = 34.8%",
+  "instance_level": "10/30 = 33.3%",
+  "vs_baseline": "基线(混合模型 pro/flash/glm) 45.8% cell / 36.7% instance；下降归因于模型从 pro 降级为 flash，非框架回归（9格同模型A/B 100%保护已单独验证）",
+  "patch_production_gain": "plan-react 18 vs 12、react-reflection 21 vs 14（+50%），flash 在新框架下补丁产出提升",
+  "gate_false_kills": 0
+}
