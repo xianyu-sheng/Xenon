@@ -5,6 +5,43 @@
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-08-07
+
+### 全新：Evidence Runtime 在线验证链（框架级）
+
+将验证从"事后审计"升级为"贯穿任务全生命周期的在线验证"：
+
+- **跨层公共门面 `EvidenceRuntime`**：`AgentContext.evidence` 统一入口，
+  REPL / Engine / ToolExecutor / Node / MCP / Session 任何模块都可写入
+  或查询同一条证据链（哈希链防篡改，追加式账本）
+- **9 阶段生命周期事件**：任务摄入 → 理解 → 规划 → 工具前校验 →
+  工具执行 → 工具后状态 → 验证 → 补丁绑定 → 交付（含 EvidencePack）
+- **确定性 Gate 管线（零 LLM，零额外 token）**：
+  - `PlanCompletenessGate`：任务需写则计划必须含写步骤
+  - `TaskCompletionGate`：需写任务必须有成功写执行
+  - `FixBindingGate`：补丁必须绑定根因（重复+特判模式拒绝）
+  - `FactBindingGate`：写文件前须有同文件读取证据（盲写阻断，enforce）
+  - `FileClaimGate`：交付时验证 LLM 声称的文件确实经工具修改
+- **生产 enforce 模式**：ReAct / PlanExecute 默认启用盲写阻断；
+  Gate 误杀修复后实测零误杀，真实拦截 4 例"贴 diff 不落盘"幻觉
+- **文件声称提取修复**：代码引用（`self.c`）、diff 头（`a/` `b/`）、
+  并列声称（"已保存 A 和 B"）三类误判根因修复 + 14 回归测试
+
+### SWE-bench 官方评测（SWE-bench_Lite，30 实例可复现）
+
+- 基线（混合模型）：**11/30 = 36.7% instance-level**（45.8% cell-level），
+  完整方法论 + 预测文件入库 `evals/results/`
+- 同模型回归验证：9 单元格 A/B，基线通过单元格 **6/6 全部保住
+  （100% 回归保护）**，Gate 误杀 0
+- 全 flash 同模型重跑：补丁产出 **70/150**（plan-react 18、react-reflection
+  21，较基线 +50%）；通过率 33.3% instance-level（低于混合基线，归因于
+  flash 模型质量，非框架回归）
+
+### 其他
+
+- `MCPRegistry.call_tool` 支持 `context` 参数，调用前后记录证据
+- REPL 任务摄入事件 + Session 证据快照持久化
+
 ## [0.7.4] — 2026-07-31
 
 ### 架构重构：命令层可扩展
