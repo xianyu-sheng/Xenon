@@ -5,6 +5,60 @@
 
 ## [Unreleased]
 
+### 安全
+
+- **会话名路径穿越修复（`/save`）**：`save_session` / `load_session` /
+  `delete_session` 三个入口此前直接把用户输入拼进文件路径，
+  `/save ../evil` 可把会话文件写到 `~/.xenon/sessions/` 目录之外
+  （实测写入 `~/.xenon/evil.json`）。新增统一解析点 `_session_path()`：
+  拒绝路径分隔符 / `..` 分量 / 绝对路径 / 空名 / 首尾空白，
+  resolve 后二次确认目标仍在会话目录内。中文会话名不受影响。
+  回归测试 12 例（含「零文件逃逸」断言）。
+
+### 修复
+
+- **工作流配置解析输入校验**：`parse_workflow` 此前对 YAML 结构全部
+  假设 dict/list，畸形配置向用户泄漏 Python 内部错误
+  （`AttributeError: 'str' object has no attribute 'get'`）。
+  新增统一校验层：models/nodes 容器类型、逐节点 dict 校验、节点 id
+  去重、YAML 语法错误与空文件识别，全部转为带定位信息的 ValueError。
+- **`_build_tool_node` 参数静默丢弃**：此前只转发 17 个固定参数，
+  ToolNode 支持的 `limit` / `cursor` / `files` / `edits` 等 40+ 参数
+  在 YAML 中配置后会被静默忽略。改为白名单校验（拼写错误的字段名
+  立即报错）+ 全参数透传。
+- **断路器把调用方错误计入熔断**：`ToolExecutor` 的异常分支此前对一切
+  异常无条件 `record_failure()`，LLM 连续 3 次构造非法参数（如
+  `read_file` 缺 `file_path`）后断路器开启，后续参数完全合法的调用
+  也被「连败熔断」拒绝（实测复现）。断路器语义修正为只度量工具自身
+  故障（超时/网络/限流）；参数缺失、文件不存在、安全拦截等终端错误
+  不再计入熔断。`_TERMINAL_PATTERNS` 同步补齐「需要 xx 参数」「路径
+  越界」「危险命令」等参数错误与安全拦截模式。
+- **MCP 服务器名零校验**：`add_server_pending` 惰性注册此前接受空名、
+  含 `:` 的名字——后者与 `server:tool` 工具命名空间冲突，会让
+  `call_tool` 的路由解析产生歧义，且惰性模式要到首次工具调用才失败。
+  新增 `_validate_server_name()` 统一校验（空名/首尾空白/冒号），
+  并在注册时校验 command/url 至少其一。
+- **`ModelPool.from_config` 输入校验**：顶层 list、entry 为字符串此前
+  泄漏 `AttributeError`；`weight` 为字符串或负数静默通过、破坏加权
+  调度。新增类型校验 + `_coerce_weight()` 收敛（数字字符串自动转换，
+  非数字/非正数报 ValueError）。
+- **快捷指令名零校验**：`ShortcutManager.create` 此前接受 `../evil`、
+  `a/b`、空名、空步骤——名字会动态注册成 `/<name>` 斜杠命令，污染
+  命令命名空间。新增命名校验（仅字母/数字/下划线/连字符/Unicode
+  文字）与空步骤拒绝。
+- **`evals/swebench_xenon.py` 跨目录运行**：此前只能在仓库根目录以
+  `python -m` 方式调用，从任意 cwd 直接运行报
+  `ModuleNotFoundError: No module named 'evals'`。显式补仓库根目录
+  到 `sys.path`，三种调用方式（直接 / `-m` / 仓库内）均验证。
+
+### 测试
+
+- 新增 60 个回归测试（配置校验 11 + 会话路径安全 12 + 输入边界 22 +
+  断路器分类 15），全套 2044 测试通过，Ruff / compileall 全绿。
+- 本轮缺陷全部由「边界探针模拟调用」方法论发现：对每个公开入口做
+  畸形输入 / 路径穿越 / 损坏文件三类探针，与 Evidence Runtime 的
+  「LLM 输出是 Claim 不是 Evidence」哲学同源——外部输入皆不可信。
+
 ## [0.8.0] — 2026-08-07
 
 ### 全新：Evidence Runtime 在线验证链（框架级）

@@ -14,6 +14,26 @@ from xenon.mcp.client import MCPClient
 logger = logging.getLogger(__name__)
 
 
+def _validate_server_name(name: str) -> None:
+    """校验 MCP 服务器名的合法性（命名空间标识符）。
+
+    服务器名会进入两处对格式敏感的下游：
+    1. 工具全局命名空间 ``{server}:{tool}``——含 ``:`` 的名字会让
+       ``call_tool`` 的 ``split(":", 1)`` 路由解析产生歧义；
+    2. credentials.yaml 持久化——空名/纯空白名会落盘成无法引用的条目。
+    惰性模式（add_server_pending）不在注册时连接，若不在这里拦截，
+    非法名字要到首次工具调用才失败，排查链路长得多。
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(f"MCP 服务器名不能为空: {name!r}")
+    if name != name.strip():
+        raise ValueError(f"MCP 服务器名首尾不能含空白字符: {name!r}")
+    if ":" in name:
+        raise ValueError(
+            f"MCP 服务器名不能包含 ':'（与工具命名空间 server:tool 冲突）: {name!r}"
+        )
+
+
 def _mcp_result_summary(result: dict[str, Any]) -> str:
     """从 MCP tools/call 结果提取短摘要（content 文本或错误）。"""
     if not isinstance(result, dict):
@@ -66,6 +86,7 @@ class MCPRegistry:
             args: 命令参数
             env: 环境变量
         """
+        _validate_server_name(name)
         if name in self.clients:
             logger.warning(f"MCP 服务器 '{name}' 已存在，跳过")
             return self.clients[name]
@@ -94,6 +115,9 @@ class MCPRegistry:
 
         首次 discover_tools() 或 _ensure_connected(name) 时才真正启动子进程。
         """
+        _validate_server_name(name)
+        if not command and not url:
+            raise ValueError(f"MCP 服务器 '{name}' 需要 command 或 url")
         if name in self.clients or name in self._pending_configs:
             logger.debug(f"MCP 服务器 '{name}' 已注册（惰性或已连接），跳过")
             return

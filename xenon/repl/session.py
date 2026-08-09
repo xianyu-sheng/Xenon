@@ -96,6 +96,34 @@ def _ensure_sessions_dir() -> Path:
     return SESSIONS_DIR
 
 
+def _session_path(name: str, sessions_dir: Path) -> Path:
+    """把用户提供的会话名解析成 sessions 目录内的安全文件路径。
+
+    会话名是 REPL 用户输入（/save <name>），直接拼路径会让 ``../x``
+    之类的输入逃逸出 sessions 目录（写到 ``~/.xenon/`` 甚至更上层），
+    而 ``/save a/b`` 因中间目录不存在直接抛 FileNotFoundError。
+    这里统一做三段防护：路径分隔符/``.`` 分量 → ValueError；
+    空名（含纯空白）→ ValueError；resolve 后二次确认仍在目录内。
+    """
+    stripped = name.strip()
+    if not stripped:
+        raise ValueError("会话名不能为空")
+    if name != stripped:
+        raise ValueError(f"会话名首尾不能含空白字符: {name!r}")
+    parts = Path(name).parts
+    if (
+        Path(name).is_absolute()
+        or any(part in ("..",) for part in parts)
+        or any(sep in name for sep in ("/", "\\"))
+    ):
+        raise ValueError(f"会话名不能包含路径分隔符或 '..': {name!r}")
+    filepath = sessions_dir / f"{name}.json"
+    resolved = filepath.resolve()
+    if resolved.parent != sessions_dir.resolve():
+        raise ValueError(f"会话名解析后超出会话目录: {name!r}")
+    return filepath
+
+
 def save_session(
     name: str,
     history: list[dict[str, Any]],
@@ -118,7 +146,7 @@ def save_session(
         保存的文件路径。
     """
     sessions_dir = _ensure_sessions_dir()
-    filepath = sessions_dir / f"{name}.json"
+    filepath = _session_path(name, sessions_dir)
 
     data = {
         "version": "2.1",
@@ -151,7 +179,7 @@ def load_session(name: str) -> dict[str, Any]:
         FileNotFoundError: 会话文件不存在。
     """
     sessions_dir = _ensure_sessions_dir()
-    filepath = sessions_dir / f"{name}.json"
+    filepath = _session_path(name, sessions_dir)
 
     if not filepath.exists():
         raise FileNotFoundError(f"会话 '{name}' 不存在: {filepath}")
@@ -202,7 +230,7 @@ def list_sessions() -> list[dict[str, Any]]:
 
 def delete_session(name: str) -> bool:
     """删除一个保存的会话。"""
-    filepath = SESSIONS_DIR / f"{name}.json"
+    filepath = _session_path(name, _ensure_sessions_dir())
     if filepath.exists():
         filepath.unlink()
         return True

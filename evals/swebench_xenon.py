@@ -14,32 +14,40 @@ import multiprocessing
 import os
 import queue as queue_module
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
-from datasets import load_dataset
+# 允许从任意 cwd 直接运行（python evals/swebench_xenon.py ...）：
+# Python 只把脚本所在目录（evals/）放进 sys.path，仓库根目录不在其中，
+# 跨包导入 evals.swebench_runtime 会 ModuleNotFoundError。显式补上根目录。
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-from xenon.engine.callbacks import EngineCallback
-from xenon.engine.combined_engines import (
+from datasets import load_dataset  # noqa: E402
+
+from xenon.engine.callbacks import EngineCallback  # noqa: E402
+from xenon.engine.combined_engines import (  # noqa: E402
     PlanReactEngine,
     PlanReflectionEngine,
     ReactReflectionEngine,
 )
-from xenon.engine.context import AgentContext
-from xenon.engine.coding_contract import finalize_coding_run
-from xenon.engine.execution_policy import (
+from xenon.engine.context import AgentContext  # noqa: E402
+from xenon.engine.coding_contract import finalize_coding_run  # noqa: E402
+from xenon.engine.execution_policy import (  # noqa: E402
     ExecutionPolicy,
     bind_execution_policy,
 )
-from xenon.engine.plan_execute_engine import PlanExecuteEngine
-from xenon.engine.react_engine import ReActEngine
-from xenon.engine.reflection_engine import ReflectionEngine
-from xenon.engine.tool_runtime import bind_tool_runtime
-from xenon.repl.model_registry import ModelConfig
-from xenon.utils.llm_client import UsageTracker, chat_completion
+from xenon.engine.plan_execute_engine import PlanExecuteEngine  # noqa: E402
+from xenon.engine.react_engine import ReActEngine  # noqa: E402
+from xenon.engine.reflection_engine import ReflectionEngine  # noqa: E402
+from xenon.engine.tool_runtime import bind_tool_runtime  # noqa: E402
+from xenon.repl.model_registry import ModelConfig  # noqa: E402
+from xenon.utils.llm_client import UsageTracker, chat_completion  # noqa: E402
 
-from evals.swebench_runtime import (
+from evals.swebench_runtime import (  # noqa: E402
     create_official_runtime,
     prepare_official_source,
 )

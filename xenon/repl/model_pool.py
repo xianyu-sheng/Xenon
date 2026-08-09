@@ -502,19 +502,45 @@ class ModelPool:
 
     def from_config(self, data: dict[str, dict[str, Any]]) -> None:
         """从配置恢复（会重建 tier 队列）."""
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"模型池配置格式错误，期望 dict，收到: {type(data).__name__}"
+            )
         # 先清空（释放锁后再逐条 register，避免 register 内部加锁时死锁）
         with self._lock:
             self._entries.clear()
             for t in range(MIN_TIER, MAX_TIER + 1):
                 self._tier_queues[t].clear()
         for alias, cfg in data.items():
+            if not isinstance(cfg, dict):
+                raise ValueError(
+                    f"模型 '{alias}' 的配置格式错误，期望 dict，"
+                    f"收到: {type(cfg).__name__}: {cfg!r}"
+                )
             self.register(
-                model_id=cfg.get("model_id", ""),
-                alias=alias,
-                weight=cfg.get("weight", 1.0),
-                api_key=cfg.get("api_key", ""),
-                base_url=cfg.get("base_url", ""),
+                model_id=str(cfg.get("model_id", "")),
+                alias=str(alias),
+                weight=_coerce_weight(cfg.get("weight", 1.0), alias),
+                api_key=str(cfg.get("api_key", "")),
+                base_url=str(cfg.get("base_url", "")),
             )
+
+
+def _coerce_weight(value: Any, alias: str) -> float:
+    """把 YAML 里的 weight 字段收敛为非负 float。
+
+    用户手写 ``weight: high`` 或负数曾静默通过，导致加权调度行为
+    不可预期；这里统一在入口处失败或纠正。
+    """
+    try:
+        w = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"模型 '{alias}' 的 weight 必须是数字，收到: {value!r}"
+        ) from None
+    if w <= 0:
+        raise ValueError(f"模型 '{alias}' 的 weight 必须为正数，收到: {w}")
+    return w
 
 
 def _infer_capability(model_id: str) -> CapabilityProfile:
