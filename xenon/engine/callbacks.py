@@ -76,6 +76,10 @@ class EngineCallback:
         """警告事件。"""
         pass
 
+    def on_tip(self, tip: str) -> None:
+        """任务级能力提示（默认不输出，避免干扰非交互调用）。"""
+        pass
+
     def on_finish(self, result: str) -> None:
         """引擎执行完成。"""
         pass
@@ -110,6 +114,9 @@ class SilentCallback(EngineCallback):
 
     def on_warning(self, warning: str) -> None:
         self.events.append(("warning", warning))
+
+    def on_tip(self, tip: str) -> None:
+        self.events.append(("tip", tip))
 
     def on_finish(self, result: str) -> None:
         self.events.append(("finish", result))
@@ -453,6 +460,10 @@ class ConsoleCallback(EngineCallback):
         self._panel.add_thought(thought)
         if self.verbose:
             print(f"  [dim]🤔 {thought[:200]}[/dim]")
+
+    def on_tip(self, tip: str) -> None:
+        if self.verbose or getattr(sys.stdout, "isatty", lambda: False)():
+            print(f"  💡 Tip: {tip}")
 
     def on_act(self, action: str, action_input: dict) -> None:
         self._panel.add_action(action, action_input)

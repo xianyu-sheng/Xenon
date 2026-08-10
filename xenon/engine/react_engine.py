@@ -19,6 +19,7 @@ from xenon.engine.context import AgentContext
 from xenon.engine.hollow_detector import HollowDetector
 from xenon.engine.react_prompts import BUILTIN_TOOLS, REACT_SYSTEM_PROMPT
 from xenon.engine.scout import DirectoryScout
+from xenon.engine.strategy_guide import get_strategy_advice
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes.tool_executor import (
     ToolExecutor,
@@ -222,7 +223,8 @@ class ReActEngine(BaseEngine):
 - 当用户询问日期、星期几时，直接回答上面提供的当前日期，不要编造或猜测。
 - 当用户询问精确时间时，使用 command 工具执行 `date`（Linux/macOS）或 `Get-Date`（Windows）。
 """
-        return REACT_SYSTEM_PROMPT.format(tools_desc=tools_desc, large_file_hint=large_file_hint) + env_info
+        from xenon.engine.strategy_guide import STRATEGY_GUIDE
+        return REACT_SYSTEM_PROMPT.format(tools_desc=tools_desc, large_file_hint=large_file_hint) + env_info + STRATEGY_GUIDE
 
     def run(
         self,
@@ -243,6 +245,8 @@ class ReActEngine(BaseEngine):
             最终答案文本
         """
         ctx = context or AgentContext()
+        if not ctx.get("_strategy_phase_context", False):
+            ctx.set("_strategy_tip_emitted", False)
         ctx.set("_current_user_request", user_input)
         tracker = ToolExecutionTracker()
         self._last_tracker = tracker  # P2-E5：供父引擎 spawn_agent 读取子 Agent 工具统计
@@ -286,7 +290,17 @@ class ReActEngine(BaseEngine):
         # 判断输入是否需要工具操作
         requires_tools = self._input_requires_tools(user_input)
         from xenon.repl.prompt_optimizer import detect_intent
-        requires_query_result = detect_intent(user_input) in {"query", "research"}
+        intent = detect_intent(user_input)
+        strategy = get_strategy_advice(intent, frozenset(self.tools), user_input)
+        if strategy.prompt:
+            messages[-1]["content"] = f"{messages[-1]['content']}\n\n{strategy.prompt}"
+            # Combined engines may run several ReAct phases for one user task.
+            # Carry this marker through the shared context so the UI shows one
+            # useful Tip per task, while every phase still receives the advice.
+            if not ctx.get("_strategy_tip_emitted", False):
+                self.callback.on_tip(strategy.tip)
+                ctx.set("_strategy_tip_emitted", True)
+        requires_query_result = intent in {"query", "research"}
         no_tool_streak = 0  # 连续未执行工具的轮次
 
         # F5: native_fc 开启时预构建 tools schema 与 response_format（循环内复用）

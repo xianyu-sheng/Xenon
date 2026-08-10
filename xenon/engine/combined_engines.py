@@ -49,6 +49,9 @@ def _isolated_ctx(ctx: AgentContext) -> AgentContext:
         fresh.set("_evidence_ledger", ledger)
     if session_id:
         fresh.set("_evidence_session_id", session_id)
+    if ctx.get("_strategy_tip_emitted", False):
+        fresh.set("_strategy_tip_emitted", True)
+    fresh.set("_strategy_phase_context", True)
     return fresh
 
 

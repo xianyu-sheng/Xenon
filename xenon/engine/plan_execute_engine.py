@@ -17,8 +17,10 @@ from xenon.engine.base import BaseEngine
 from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
 from xenon.engine.plan_dag import PlanDAG, PlanDAGCycleError
+from xenon.engine.strategy_guide import get_strategy_advice
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes.tool_executor import ToolExecuteResult, ToolExecutor
+from xenon.nodes.tool_registry import BUILTIN_TOOL_REGISTRY
 from xenon.utils.response_adapter import parse_plan, parse_react
 
 if TYPE_CHECKING:
@@ -224,11 +226,12 @@ class PlanExecuteEngine(BaseEngine):
             shell_examples = "如 ls, cat, mkdir -p, grep, find"
             shell_avoid = "PowerShell 命令（如 Get-ChildItem, Copy-Item）"
 
+        from xenon.engine.strategy_guide import STRATEGY_GUIDE
         return PLAN_SYSTEM_PROMPT.format(
             shell_name=shell_name,
             shell_examples=shell_examples,
             shell_avoid=shell_avoid,
-        )
+        ) + STRATEGY_GUIDE
 
     def run(
         self,
@@ -887,6 +890,9 @@ class PlanExecuteEngine(BaseEngine):
     def _plan(self, user_input: str, context: AgentContext | None = None) -> dict[str, Any]:
         """Phase 1: 生成执行计划。"""
         messages = [{"role": "system", "content": self.system_prompt}]
+        ctx = context or AgentContext()
+        if not ctx.get("_strategy_phase_context", False):
+            ctx.set("_strategy_tip_emitted", False)
         # F4: 优先消费 ctx_mgr（已压缩）消息；否则回退 AgentContext 历史 [-6:]
         history = self._history_messages(context, current_user_input=user_input)
         if history:
@@ -901,7 +907,19 @@ class PlanExecuteEngine(BaseEngine):
         messages.extend(self._cache_ordered_context(history))
 
         # 关键：将当前用户输入加入消息列表
-        messages.append({"role": "user", "content": user_input})
+        user_message = user_input
+        from xenon.repl.prompt_optimizer import detect_intent
+        strategy = get_strategy_advice(
+            detect_intent(user_input),
+            frozenset(BUILTIN_TOOL_REGISTRY.names()),
+            user_input,
+        )
+        if strategy.prompt:
+            user_message = f"{user_input}\n\n{strategy.prompt}"
+            if not ctx.get("_strategy_tip_emitted", False):
+                self.callback.on_tip(strategy.tip)
+                ctx.set("_strategy_tip_emitted", True)
+        messages.append({"role": "user", "content": user_message})
 
         response = self._call_llm_for_phase("plan", messages)
         if not response or not response.strip():

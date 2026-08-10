@@ -130,7 +130,7 @@ BUILTIN_TOOLS = {
     },
     "search_files": {
         "name": "search_files",
-        "description": "在本机指定目录中搜索包含关键词的文件，返回匹配的文件路径和行内容。类似 grep 功能。结果支持 limit/cursor 分页。",
+        "description": "在本机指定目录中搜索包含关键词的文件，返回匹配的文件路径和行内容。类似 grep 功能。结果支持 limit/cursor 分页。**调试时先用它定位错误相关代码，再 read_file 深入阅读。**",
         "params": {"file_path": "搜索的根目录", "search_pattern": "要搜索的文本关键词或正则表达式", "file_filter": "文件名过滤，如 *.py（可选）", "limit": "每页数量（可选，1-1000）", "cursor": "上一页返回的 next_cursor（可选）"},
     },
     "git": {
@@ -175,22 +175,22 @@ BUILTIN_TOOLS = {
     },
     "batch_write": {
         "name": "batch_write",
-        "description": "一次性写入多个文件（原子操作，全部成功或全部回滚）。适合创建多文件项目结构。",
+        "description": "一次性写入多个文件（原子操作，全部成功或全部回滚）。适合创建多文件项目结构。**批量创建文件时优先用这个，比逐个 write_file 更高效安全。**",
         "params": {"files": "文件列表，格式: [{path: a.py, content: 文件内容}, ...]"},
     },
     "batch_edit": {
         "name": "batch_edit",
-        "description": "一次性编辑多个文件，每个编辑操作独立执行和验证。适合跨文件重构。",
+        "description": "一次性编辑多个文件，每个编辑操作独立执行和验证。适合跨文件重构。**跨文件修改时用这个，比逐个 edit_file 更高效，自动验证每个修改。**",
         "params": {"edits": "编辑列表，格式: [{file_path: a.py, old_text: 原文, new_text: 新文}, ...]"},
     },
     "code_index": {
         "name": "code_index",
-        "description": "基于 AST 解析搜索项目中的代码符号（函数定义、类定义、变量名）。返回符号名称、所在文件和行号。仅支持 Python 文件。",
+        "description": "基于 AST 解析搜索项目中的代码符号（函数定义、类定义、变量名）。返回符号名称、所在文件和行号。仅支持 Python 文件。**比 search_files 更快定位符号定义，重构前先查引用。**",
         "params": {"search_pattern": "要搜索的符号名或部分关键词", "file_path": "索引的根目录（可选，默认当前目录）"},
     },
     "ast_analyze": {
         "name": "ast_analyze",
-        "description": "对 Python 文件进行 AST 深度分析：提取所有函数签名、类结构、继承关系、圈复杂度、未使用的 import。仅支持 .py 文件。",
+        "description": "对 Python 文件进行 AST 深度分析：提取所有函数签名、类结构、继承关系、圈复杂度、未使用的 import。仅支持 .py 文件。**自动发现未用 import 和复杂度过高的函数，代码审查时先用。**",
         "params": {"file_path": "要分析的 Python 文件路径"},
     },
     "refactor": {
@@ -292,6 +292,7 @@ BUILTIN_TOOLS = {
         "description": (
             "查找指定位置符号的所有引用（跨文件）。返回每个引用的"
             "文件路径、行号、列号、代码行。用于分析符号的使用情况。"
+            "**重构/重命名前先调用，确保找全所有引用点。**"
         ),
         "params": {
             "file_path": "源文件路径",
