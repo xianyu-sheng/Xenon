@@ -125,3 +125,71 @@ class TestModelPoolFromConfigValidation:
         p = ModelPool()
         p.from_config({"pro": {"model_id": "a/b", "weight": "2.5"}})
         assert p._entries["pro"].weight == 2.5
+
+
+class TestPermissionGateUnknownRisk:
+    """risk_override 非法值曾静默 fallthrough 到「允许」。
+
+    risk_override 是 ToolExecutor 掌握的最高风险信息（覆盖运行时注册的
+    动态工具——名字不在静态工具表中）。权限层遇到无法识别的风险等级
+    必须 fail-closed，而非放行。
+    """
+
+    @pytest.fixture
+    def gate(self):
+        import logging
+        # disable() 是进程级全局开关，必须配对恢复——否则后续任何依赖
+        # 日志捕获的测试（test_runtime_resilience 等）会因 root logger
+        # 被静默而失败（全套件跑时的顺序依赖污染）。
+        logging.disable(logging.CRITICAL)
+        try:
+            from xenon.repl.permissions import PermissionGate
+            yield PermissionGate()
+        finally:
+            logging.disable(logging.NOTSET)
+
+    @pytest.mark.parametrize("risk", ["BOGUS_RISK", "bogus", "Write", "critical "])
+    def test_unknown_risk_fails_closed(self, gate, risk):
+        allowed, reason = gate.check("mcp_call", {"server": "s"}, risk_override=risk)
+        assert allowed is False
+        assert "CRITICAL" in reason
+
+    @pytest.mark.parametrize(
+        ("risk", "expected_allowed"),
+        [("READ", True), ("WRITE", False), ("CRITICAL", False)],
+    )
+    def test_valid_risks_unchanged(self, gate, risk, expected_allowed):
+        # DEFAULT 模式无确认回调：READ 放行，WRITE/CRITICAL 要求确认
+        allowed, _ = gate.check("mcp_call", {"server": "s"}, risk_override=risk)
+        assert allowed is expected_allowed
+
+
+class TestDifficultyEstimatorBoundary:
+    """空输入与重复刷屏内容不应被调度成困难任务。
+
+    空串此前落到 intent_base 默认 0.3 + 基础 0.3 = 0.6（tier 3 标准任务）；
+    "x"*100000 因长度加分冲到 tier 5——长度是信息密度的弱信号，
+    重复内容长度大但信息量为零。
+    """
+
+    @pytest.mark.parametrize("text", ["", "   ", "\n\n  \t"])
+    def test_empty_input_is_trivial(self, text):
+        from xenon.repl.difficulty_estimator import DifficultyEstimator
+        est = DifficultyEstimator()
+        tier = DifficultyEstimator.estimate_tier(est.estimate(text, []))
+        assert tier == 1
+
+    @pytest.mark.parametrize("text", ["x" * 100000, "🎉" * 20000, "aaaa" * 5000])
+    def test_repetitive_flood_not_hard(self, text):
+        from xenon.repl.difficulty_estimator import DifficultyEstimator
+        est = DifficultyEstimator()
+        tier = DifficultyEstimator.estimate_tier(est.estimate(text, []))
+        assert tier <= 3
+
+    def test_real_complex_task_still_tier5(self):
+        from xenon.repl.difficulty_estimator import DifficultyEstimator
+        est = DifficultyEstimator()
+        tier = DifficultyEstimator.estimate_tier(
+            est.estimate("帮我重构整个项目的架构，考虑性能和并发安全", [])
+        )
+        assert tier == 5

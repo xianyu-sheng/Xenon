@@ -269,3 +269,45 @@ def test_code_text_that_mentions_a_saved_file_stays_in_direct(monkeypatch):
 
     assert rerouted == []
     assert rendered == ['```python\nprint("文件已保存")\n```']
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "帮我重构这个模块",
+        "更新文档里的安装步骤",
+        "纠正这个错误",
+        "改进这个函数的实现",
+        "删除多余的日志代码",
+        "把重复代码重构成函数",
+        "优化一下这个算法",
+        "修改配置文件",
+        "把这个函数改成异步的",
+    ],
+)
+def test_chinese_mutation_requests_authorize_write(text):
+    """中文修改类请求曾整体漏判为 ANSWER_ONLY（英文同义请求正确到 WRITE）。
+
+    该分类器是全引擎共享层（ReAct/PlanExecute/EvidenceGate 的
+    task_requires_write 都走这里），漏判会让 Agent 把「重构这个模块」
+    当成闲聊回答，不调用任何工具。
+    """
+    policy = classify_execution_policy(text, intent=detect_intent(text))
+    assert policy.level >= ExecutionLevel.WRITE
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "分析一下这个模块",
+        "这个函数是干什么的",
+        "解释这段代码的逻辑",
+        "写一个 Python 爬虫",
+        "把这个概念解释一下",
+        "把这段话翻译成英文",
+    ],
+)
+def test_chinese_readonly_or_answer_requests_not_escalated(text):
+    """防过冲：只读/问答/纯生成请求不得因新模式被误判成 WRITE。"""
+    policy = classify_execution_policy(text, intent=detect_intent(text))
+    assert policy.level in (ExecutionLevel.ANSWER_ONLY, ExecutionLevel.READ_ONLY)

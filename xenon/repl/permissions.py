@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
 
 from rich.markup import escape
+
+logger = logging.getLogger(__name__)
 
 
 class PermissionMode(Enum):
@@ -196,6 +199,18 @@ class PermissionGate:
             allowed=False 时 reason 是拒绝原因。
         """
         risk = risk_override or self._classify(tool_name, params)
+
+        # risk_override 是 ToolExecutor 掌握的最高风险信息（尤其覆盖运行时
+        # 注册的动态工具——它们的名称不在 _classify 的静态工具表中）。非法
+        # 值绝不能静默 fallthrough 到「允许」：权限层遇到无法识别的风险
+        # 等级必须 fail-closed。
+        _VALID_RISKS = {"READ", "WRITE", "CRITICAL"}
+        if risk not in _VALID_RISKS:
+            logger.warning(
+                "权限闸门收到未知风险等级 %r（tool=%s），按 CRITICAL 处理",
+                risk, tool_name,
+            )
+            risk = "CRITICAL"
 
         # PLAN 模式：只允许 READ
         if self.mode == PermissionMode.PLAN:

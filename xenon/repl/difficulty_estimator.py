@@ -59,6 +59,11 @@ class DifficultyEstimator:
 
     @staticmethod
     def _measure_complexity(text: str, intent: str | None) -> float:
+        # 空/纯空白输入没有任何任务信号，按最低复杂度处理——否则
+        # 空串会落到 intent_base 的默认 0.3 + 基础 0.3 = 0.6（tier 3），
+        # 把「无任务」调度成「标准任务」。
+        if not text or not text.strip():
+            return 0.1
         score = 0.3
         intent_base = {
             "chat": 0.05, "query": 0.1, "research": 0.3, "explain": 0.3,
@@ -73,14 +78,18 @@ class DifficultyEstimator:
             score += 0.15
         if re.search(r"(?:复杂|困难|很难|挑战|大规模)", text):
             score += 0.1
-        # v0.5.6: 更细致的长度感知
+        # v0.5.6: 更细致的长度感知。长度是「信息密度」的弱信号——
+        # 重复字符/刷屏内容（如 "x"*100000）长度大但信息量为零，
+        # 不能按长文处理加分，否则噪声输入被调度成 tier 5 困难任务。
         text_len = len(text)
-        if text_len > 200:
-            score += 0.05
-        if text_len > 500:
-            score += 0.08
-        if text_len > 1000:
-            score += 0.1
+        is_repetitive = text_len > 200 and len(set(text)) <= 4
+        if not is_repetitive:
+            if text_len > 200:
+                score += 0.05
+            if text_len > 500:
+                score += 0.08
+            if text_len > 1000:
+                score += 0.1
         # v0.5.6: 有换行/分段说明用户花了心思，任务可能更细
         if "\n" in text:
             score += 0.03

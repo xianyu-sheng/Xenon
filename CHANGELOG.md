@@ -54,10 +54,32 @@
 ### 测试
 
 - 新增 60 个回归测试（配置校验 11 + 会话路径安全 12 + 输入边界 22 +
-  断路器分类 15），全套 2044 测试通过，Ruff / compileall 全绿。
+  断路器分类 15），全套 2073 测试通过，Ruff / compileall 全绿。
 - 本轮缺陷全部由「边界探针模拟调用」方法论发现：对每个公开入口做
   畸形输入 / 路径穿越 / 损坏文件三类探针，与 Evidence Runtime 的
   「LLM 输出是 Claim 不是 Evidence」哲学同源——外部输入皆不可信。
+
+### 第二轮深挖（共享分类器 / 权限闸门 / 调度估算）
+
+- **执行策略分类器漏判中文修改请求**（`execution_policy.py`）：
+  「帮我重构这个模块」「纠正这个错误」「更新文档」「删除多余日志代码」
+  「把重复代码重构成函数」此前整体落到 ANSWER_ONLY，而英文同义请求
+  （`improve the function` / `correct the output`）正确判为 WRITE。
+  该分类器是全引擎共享层（ReAct/PlanExecute/EvidenceGate 的
+  `task_requires_write` 都走这里），漏判会让 Agent 把明确的修改请求
+  当成闲聊、不调用任何工具。补齐中文修改动词+代码实体模式与
+  「把/将 X 改成 Y」动宾倒装模式，回归测试含防过冲护栏（只读/问答
+  请求不得被新模式误判成 WRITE）。
+- **权限闸门对未知风险等级 fail-open**（`permissions.py`）：
+  `risk_override` 是 ToolExecutor 掌握的最高风险信息（覆盖运行时注册
+  的动态工具——名字不在静态工具表），但非法值（如 `BOGUS_RISK`）
+  此前静默 fallthrough 到「允许」。权限层遇到无法识别的风险等级现在
+  一律按 CRITICAL 处理（fail-closed）。
+- **难度估算器把空输入/刷屏内容调度成困难任务**（`difficulty_estimator.py`）：
+  空串此前落到默认 intent 基础分 0.6（tier 3 标准任务）；「x」*100000
+  因长度加分冲到 tier 5。长度是信息密度的弱信号——重复内容长度大
+  但信息量为零。空/纯空白输入现在固定最低复杂度，重复刷屏内容
+  （unique 字符 ≤4）跳过长度加分。
 
 ## [0.8.0] — 2026-08-07
 
