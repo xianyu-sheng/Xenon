@@ -176,3 +176,53 @@ class TestCleanupExpired:
                 assert fresh_file.exists()    # 应保留
             finally:
                 mod.SESSIONS_DIR = old_dir
+
+
+class TestSessionNamePathTraversal:
+    """会话名直接拼路径曾允许 ../evil 逃逸出 sessions 目录（写到 ~/.xenon/）。
+
+    修复后 save/load/delete 三个入口统一走 _session_path 校验，
+    路径分隔符/.. 分量/空名/首尾空白一律 ValueError。
+    """
+
+    import pytest
+
+    @pytest.fixture(autouse=True)
+    def _isolate(self, tmp_path, monkeypatch):
+        import xenon.repl.session as mod
+        monkeypatch.setattr(mod, "SESSIONS_DIR", tmp_path / "sessions")
+        self.mod = mod
+        self.root = tmp_path
+
+    @pytest.mark.parametrize(
+        "name",
+        ["../evil", "..\\evil2", "a/b", "..", "/abs/x", " leading", "trailing "],
+    )
+    def test_save_rejects_traversal_names(self, name):
+        import pytest
+        with pytest.raises(ValueError, match="会话名"):
+            save_session(name, history=[], context_store={}, model_config={})
+        # 不得有任何文件写到 sessions 目录之外
+        stray = [p for p in self.root.rglob("*.json")]
+        assert stray == []
+
+    @pytest.mark.parametrize("name", ["", "   "])
+    def test_save_rejects_empty_names(self, name):
+        import pytest
+        with pytest.raises(ValueError, match="会话名不能为空"):
+            save_session(name, history=[], context_store={}, model_config={})
+
+    def test_load_and_delete_reject_traversal(self):
+        import pytest
+        with pytest.raises(ValueError, match="会话名"):
+            load_session("../x")
+        with pytest.raises(ValueError, match="会话名"):
+            from xenon.repl.session import delete_session
+            delete_session("../x")
+
+    def test_normal_and_unicode_names_unaffected(self):
+        save_session("t1", history=[{"role": "user", "content": "hi"}],
+                     context_store={}, model_config={})
+        assert load_session("t1")["name"] == "t1"
+        save_session("我的会话-01", history=[], context_store={}, model_config={})
+        assert load_session("我的会话-01")["name"] == "我的会话-01"

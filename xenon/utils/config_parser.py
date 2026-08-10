@@ -25,10 +25,15 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"配置文件不存在: {path}")
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise ValueError(f"配置文件 YAML 语法错误: {path}: {e}") from e
+    if data is None:
+        raise ValueError(f"配置文件为空: {path}")
     if not isinstance(data, dict):
-        raise ValueError(f"配置文件格式错误，期望 dict，收到: {type(data)}")
+        raise ValueError(f"配置文件格式错误，期望 dict，收到: {type(data).__name__}")
     return data
 
 
@@ -49,6 +54,10 @@ def parse_workflow(config: dict[str, Any]) -> tuple[dict[str, BaseNode], dict[st
     # 提取全局模型优先级
     models_config: dict[str, list[str]] = {}
     raw_models = config.get("models", {})
+    if not isinstance(raw_models, dict):
+        raise ValueError(
+            f"models 字段格式错误，期望 dict，收到: {type(raw_models).__name__}"
+        )
     for role, value in raw_models.items():
         if isinstance(value, str):
             models_config[role] = [value]
@@ -62,9 +71,26 @@ def parse_workflow(config: dict[str, Any]) -> tuple[dict[str, BaseNode], dict[st
     raw_nodes = config.get("nodes", [])
     if not raw_nodes:
         raise ValueError("配置中未定义任何 nodes")
+    if not isinstance(raw_nodes, list):
+        raise ValueError(
+            f"nodes 字段格式错误，期望 list，收到: {type(raw_nodes).__name__}"
+        )
 
-    for node_cfg in raw_nodes:
-        node = _build_node(node_cfg, models_config)
+    for i, node_cfg in enumerate(raw_nodes):
+        if not isinstance(node_cfg, dict):
+            raise ValueError(
+                f"第 {i + 1} 个节点配置格式错误，期望 dict，"
+                f"收到: {type(node_cfg).__name__}: {node_cfg!r}"
+            )
+        try:
+            node = _build_node(node_cfg, models_config)
+        except ValueError:
+            raise
+        except Exception as e:
+            node_id = node_cfg.get("id", f"#{i + 1}")
+            raise ValueError(f"节点 {node_id} 配置错误: {e}") from e
+        if node.id in nodes:
+            raise ValueError(f"节点 id 重复: {node.id}")
         nodes[node.id] = node
 
     return nodes, models_config
@@ -142,26 +168,36 @@ def _build_tool_node(
     if action_type == "command" and not action:
         raise ValueError(f"ToolNode {node_id} (command) 缺少 action")
 
+    # 已知 key 白名单：拼写错误的 key 会静默丢失，提前报错
+    known_keys = {
+        "id", "type", "output_slot", "next", "action_type", "action",
+        "file_path", "content", "cwd", "timeout", "encoding", "append",
+        "pattern", "max_depth", "limit", "cursor", "search_pattern",
+        "file_filter", "git_command", "url", "start_time", "end_time",
+        "max_pages", "max_chars", "old_text", "new_text", "files",
+        "edits", "symbol", "query", "old_name", "new_name",
+        "refactor_action", "tool_name", "tool_args", "mcp_server",
+        "repo", "github_action", "github_path", "branch", "city",
+        "lang", "description", "python_function", "command_template",
+        "params", "security_enabled", "start_line", "max_lines",
+        "line", "column",
+    }
+    unknown = set(cfg) - known_keys
+    if unknown:
+        raise ValueError(
+            f"ToolNode {node_id} 存在未知配置字段: {sorted(unknown)}"
+        )
+
+    tool_kwargs = {
+        k: cfg[k]
+        for k in known_keys - {"id", "type", "output_slot", "next"}
+        if k in cfg
+    }
     return ToolNode(
         node_id=node_id,
-        action_type=action_type,
-        action=action,
-        file_path=cfg.get("file_path"),
-        content=cfg.get("content"),
         output_slot=output_slot,
-        cwd=cfg.get("cwd"),
-        timeout=cfg.get("timeout", 60),
         default_next=default_next,
-        encoding=cfg.get("encoding", "utf-8"),
-        append=cfg.get("append", False),
-        pattern=cfg.get("pattern", "*"),
-        max_depth=cfg.get("max_depth", 5),
-        search_pattern=cfg.get("search_pattern", ""),
-        file_filter=cfg.get("file_filter", ""),
-        git_command=cfg.get("git_command", "status"),
-        url=cfg.get("url", ""),
-        old_text=cfg.get("old_text", ""),
-        new_text=cfg.get("new_text", ""),
+        **tool_kwargs,
     )
 
 

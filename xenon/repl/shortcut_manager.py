@@ -90,6 +90,16 @@ class ShortcutManager:
         """创建一个快捷指令。"""
         # 清理名称
         name = name.lstrip("/").lower().replace(" ", "_")
+        if not name:
+            raise ValueError("快捷指令名不能为空")
+        if not name.replace("_", "").replace("-", "").isalnum():
+            # 名称会动态注册成 /<name> 斜杠命令——含路径分隔符或
+            # 冒号等符号的名字既无法作为命令调用，也污染命名空间。
+            raise ValueError(
+                f"快捷指令名只能包含字母/数字/下划线/连字符: {name!r}"
+            )
+        if not steps:
+            raise ValueError("快捷指令至少需要一个执行步骤")
 
         shortcut = Shortcut(
             name=name,

@@ -279,7 +279,12 @@ _TERMINAL_PATTERNS = re.compile(
     r"文件不存在|不存在|not found|no such|找不到|permission denied|"
     r"权限拒绝|access denied|参数非法|非法参数|invalid param|illegal|"
     r"is a directory|not a directory|already exists|已存在|"
-    r"不支持|unsupported|unknown action",
+    r"不支持|unsupported|unknown action|"
+    # 参数缺失/必需参数（"read_file 需要 file_path" / "需要 file_path 参数"）：
+    # 调用方构造错误，重试同样参数必然再失败，属终端错误且不应计入断路器。
+    r"需要\s*\w+|required|missing.*param|"
+    # 安全拦截（路径越界/危险命令）同样是终端且非工具故障。
+    r"路径越界|危险命令|未授权的|security",
     re.IGNORECASE,
 )
 _TRANSIENT_PATTERNS = re.compile(
@@ -1099,8 +1104,14 @@ class ToolExecutor:
                     )
                 # 执行返回失败
                 last_error = str(result.get("error") or result)
-                breaker.record_failure()
                 terminal = is_terminal_error(last_error)
+                if not terminal:
+                    # 断路器度量的是「工具自身故障」（超时/网络/限流）。
+                    # 终端错误（参数非法/文件不存在/安全拦截）是调用方
+                    # （LLM）的问题，重试同样的参数必然再失败——既不值得
+                    # 重试，也不应计入熔断，否则 LLM 连续几次参数幻觉后，
+                    # 后续的合法调用会被断路器一并拒绝（实测复现）。
+                    breaker.record_failure()
                 can_retry = (
                     result.get("retryable") is not False
                     and not terminal
@@ -1156,9 +1167,12 @@ class ToolExecutor:
                 )
             except Exception as e:  # noqa: BLE001 — 单次执行异常归为失败
                 last_error = f"{type(e).__name__}: {e}"
-                breaker.record_failure()
                 logger.error(f"工具 {tool_name} 执行异常: {e}")
                 terminal = is_terminal_error(last_error)
+                if not terminal:
+                    # 同上：终端错误（参数/权限/安全拦截）不计入断路器，
+                    # 避免调用方错误熔断掉后续合法调用。
+                    breaker.record_failure()
                 if not terminal and attempt < max_attempts:
                     transition(
                         ToolExecutionState.RETRYING,
