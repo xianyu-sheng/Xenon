@@ -81,6 +81,17 @@
   但信息量为零。空/纯空白输入现在固定最低复杂度，重复刷屏内容
   （unique 字符 ≤4）跳过长度加分。
 
+### 真实链路验证（heyroute/deepseek-v4-flash，成本 <¥0.01）
+
+修复后用真实 LLM 跑端到端修复任务（「修复 calc.py 中 add 的减法/加法
+错误，用工具实际改文件」），完整证据链闭合：分类器将中文「修复 bug」
+正确路由到 WRITE 并真实调用工具；read→edit→write_test→command 测试
+→read 复核的工具链完整；host 环境 `python -c` 安全拦截按设计触发且
+Agent 自动降级为写脚本执行；edit 前有同文件 read（FactBindingGate 的
+read-before-write 证据链完整）；独立复核 `add(2,3)==5` 等断言全过，
+最终回答的产物清单与实际文件一致。两轮工作的验证从「单测 + 模拟调用」
+闭环到「真实 LLM 端到端」。
+
 ## [0.8.0] — 2026-08-07
 
 ### 全新：Evidence Runtime 在线验证链（框架级）
