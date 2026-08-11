@@ -41,8 +41,27 @@ _HOLLOW_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("建议你/您",         re.compile(r"建议(你|您)")),
     ("可以尝试",          re.compile(r"可以尝试")),
     ("首先其次最后",      re.compile(r"首先[，,、].{0,40}(其次|然后).{0,40}(最后|最终)")),
-    ("省略号填充",        re.compile(r"…{2,}|\.{4,}|……+")),
+    ("省略号填充",        re.compile(r"…{2,}|\\.{4,}|……+")),
+    # ── 完成型空洞（v0.8.1）：声称「已完成」但无实质产物的虚假完成。
+    # 与上面的分析型套话互补：分析型是「说了很多但没做」，
+    # 完成型是「说做完了但其实没做/没证据」。判定语义也不同：
+    # 完成型的核心证据是「产物存在」（文件路径/代码块），因此命中
+    # 完成型 pattern 时只凭「无实质结构」判空洞——短但附路径/代码的
+    # 合法交付不误伤；分析型维持「长度不足 或 无实质结构」原逻辑。
+    ("已完成修复",        re.compile(r"(?:已|已经)(?:完成|成功|顺利|搞定)(?:修复|解决|改正|修补|搞定)")),
+    ("声称完成",          re.compile(r"(?:已|已经)(?:完成|搞定|处理好|处理完毕|弄好)(?:了|啦|！|!)?$")),
+    ("修复完成",          re.compile(r"(?:修复|解决|处理)(?:已完成|已结束|完毕|好了|成功)")),
+    ("声称已保存",        re.compile(r"(?:已|已经)(?:保存|写入|落盘|更新)(?:了)?(?:文件|到文件)?$")),
+    ("声称已修改",        re.compile(r"(?:已|已经)(?:修改|更改|改写)(?:了)?(?:文件|代码)?$")),
+    ("声称已测试",        re.compile(r"(?:已|已经)(?:测试|验证|跑通)(?:了)?(?:通过)?$|(?:测试|验证)(?:已通过|通过了?)$")),
+    ("问题已解决",        re.compile(r"(?:问题|bug|错误)(?:已|已经)?(?:解决|修复|消除)(?:了)?$")),
 ]
+
+# 完成型空洞 pattern 名集合——命中后仅凭「无实质结构」判定（见上注释）
+_COMPLETION_PATTERNS = {
+    "已完成修复", "声称完成", "修复完成", "声称已保存",
+    "声称已修改", "声称已测试", "问题已解决",
+}
 
 # 实质内容标记：代码块 / 文件路径 / URL / 有内容的内联代码 / 命令
 _CODE_BLOCK = re.compile(r"```")
@@ -200,7 +219,16 @@ class HollowDetector:
         if hits:
             length_insufficient = n < self.min_length
             struct_poor = not self.has_substance(stripped)
-            if length_insufficient or struct_poor:
+            # 完成型空洞：核心证据是「产物存在」——短但附路径/代码的
+            # 合法交付不误伤，只凭「无实质结构」判空洞。
+            # 分析型套话：维持「长度不足 或 无实质结构」原逻辑。
+            completion_hits = [h for h in hits if h in _COMPLETION_PATTERNS]
+            if completion_hits and not struct_poor:
+                logger.debug(
+                    "HollowDetector: 完成型 pattern 命中 %s 但有实质结构，不判空洞",
+                    completion_hits,
+                )
+            elif length_insufficient or struct_poor:
                 tags = []
                 if length_insufficient:
                     tags.append(f"长度不足<{self.min_length}")

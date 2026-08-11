@@ -514,18 +514,43 @@ class PlanExecuteEngine(BaseEngine):
         # Mid-task steering：执行途中用户补充要求。步骤循环顶部的检查点
         # 消费（当前步骤已完成，无副作用残留），并以附加指令注入后续
         # 步骤的执行 prompt，让 LLM 自行判断如何调整剩余工作。
+        # 若补充到达时剩余步骤全是工具步骤（确定性执行，无法承载
+        # 补充），则触发剩余计划重规划（把补充并入原任务重新 _plan）。
         _steer_pending: list[dict[str, Any]] = []
-        for i, step in enumerate(steps):
+        i = 0
+        while i < len(steps):
             if self._interrupted:
                 self.callback.on_warning("引擎被用户中断，停止执行")
                 logger.info("Plan-Execute 被中断，退出步骤循环")
                 break
             # 消费 steering：进入下一个步骤前合并补充要求
             _steer_pending.extend(self._drain_steering())
+            step = steps[i]
             step_id = step.get("id", i + 1)
             step_task = step.get("task", "")
             tool = step.get("tool")
             params = step.get("params", {})
+            is_tool_step = bool(tool and tool != "null")
+
+            if _steer_pending and not is_tool_step:
+                # 本步骤是 LLM 步骤：steering 直接注入本步骤执行 prompt
+                # （下方 _execute_step_with_llm 会消费 _steer_pending）
+                pass
+            elif _steer_pending:
+                # 本步骤是工具步骤（确定性执行无法承载补充）：
+                # 剩余计划重规划，把补充并入原任务重新生成。
+                done_ids = {r["step_id"] for r in results}
+                new_steps = self._replan_remaining(
+                    user_input, ctx, _steer_pending, done_ids,
+                )
+                if new_steps:
+                    steps = new_steps
+                    i = 0  # 用新计划从头重新调度（已完成步骤会被跳过/去重）
+                    self.callback.on_warning(
+                        f"已收到补充要求，剩余 {len(new_steps)} 步已重新规划"
+                    )
+                _steer_pending = []
+                continue
 
             logger.debug(f"执行步骤 {step_id}: {step_task}")
             self.callback.on_step(step_id, total, step_task)
@@ -544,6 +569,7 @@ class PlanExecuteEngine(BaseEngine):
                 )
                 _steer_pending = []
             outcome = self._step_outcome(raw_result)
+            i += 1
 
             results.append({
                 "step_id": step_id,
@@ -561,6 +587,40 @@ class PlanExecuteEngine(BaseEngine):
                 self.callback.on_warning("用户取消任务，停止后续计划步骤")
                 break
         return results
+
+    def _replan_remaining(
+        self,
+        user_input: str,
+        ctx: AgentContext,
+        steering_msgs: list[dict[str, Any]],
+        done_ids: set[Any],
+    ) -> list[dict[str, Any]]:
+        """用户补充到达且剩余步骤无法承载时，把补充并入原任务重新规划。
+
+        Mid-task steering 的完整语义：工具步骤（read_file/write_file 等）
+        是确定性执行（tool+params 已定），无法承载「补充/修改要求」——
+        补充意味着任务目标变了，计划本身需要重做。此方法把补充要求
+        并入原 user_input 重新调用 _plan，并过滤掉已完成步骤（按 id），
+        返回新的剩余计划。失败/空计划时返回 []（调用方保留原计划）。
+        """
+        steer_text = self.steering_prompt(steering_msgs)
+        new_input = f"{user_input}\n\n[用户中途补充]\n{steer_text}"
+        try:
+            plan = self._plan(new_input, ctx)
+        except Exception as exc:  # noqa: BLE001 — 重规划失败不崩溃主流程
+            logger.warning("补充后重规划失败，保留原计划: %s", exc)
+            self.callback.on_warning(f"补充后重规划失败，继续原计划：{exc}")
+            return []
+        new_steps = list(plan.get("steps") or [])
+        if not new_steps:
+            self.callback.on_warning("补充后重规划未生成有效步骤，继续原计划")
+            return []
+        # 过滤已完成步骤（按 step_id），避免重复执行
+        filtered = [s for s in new_steps if s.get("id") not in done_ids]
+        if not filtered:
+            # 新计划全是已完成步骤：接受原计划（可能 id 已复用）
+            return new_steps
+        return filtered
 
     # ── Phase 2: DAG 波次执行（P2-E2） ────────────────────────
     def _run_dag(
@@ -586,14 +646,58 @@ class PlanExecuteEngine(BaseEngine):
         # Mid-task steering：波次检查点消费用户补充，注入后续串行波次。
         # 并行波次不传递 steering（并发步骤注入补充会语义混乱），
         # 补充在并行波次结束后、下一个波次检查点才被消费。
+        # 若补充到达时剩余步骤全是工具步骤（确定性执行无法承载），
+        # 触发剩余计划重规划并重建 DAG。
         _steer_pending: list[dict[str, Any]] = []
 
-        for wave in waves:
+        wave_index = 0
+        while wave_index < len(waves):
+            wave = waves[wave_index]
             if self._interrupted:
                 self.callback.on_warning("引擎被用户中断，停止执行")
                 logger.info("Plan-Execute DAG 被中断，退出波次循环")
                 break
             _steer_pending.extend(self._drain_steering())
+
+            # 若 steering 已到达且本波次全是工具步骤（无法承载补充）：
+            # 剩余计划重规划，重建 DAG 从头调度（已完成步骤按 id 过滤）。
+            if _steer_pending:
+                wave_tools = [
+                    dag.step(sid).get("tool")
+                    for sid in wave
+                ]
+                wave_all_tool = bool(wave_tools) and all(
+                    t and t != "null" for t in wave_tools
+                )
+                if wave_all_tool:
+                    done_ids = {r["step_id"] for r in results}
+                    new_steps = self._replan_remaining(
+                        user_input, ctx, _steer_pending, done_ids,
+                    )
+                    if new_steps:
+                        steps = new_steps
+                        try:
+                            dag = PlanDAG(new_steps)
+                        except (PlanDAGCycleError, ValueError) as exc:
+                            logger.warning(
+                                "补充后重规划 DAG 无效 (%s)，沿用原计划", exc
+                            )
+                            self.callback.on_warning(
+                                f"补充后重规划依赖图无效，沿用原计划：{exc}"
+                            )
+                        else:
+                            waves = dag.waves()
+                            wave_index = 0
+                            self.callback.on_warning(
+                                f"已收到补充要求，剩余 {len(new_steps)} 步已重新规划"
+                            )
+                    _steer_pending = []
+                    # 重规划成功 → 已从头调度（wave_index=0）；
+                    # 重规划失败/沿用原计划 → 前进索引继续原波次。
+                    # 两种路径都不能让 while 停在原地（死循环防护）。
+                    if wave_index != 0:
+                        wave_index += 1
+                    continue
 
             # 划分：依赖失败/跳过的步骤级联跳过，其余可执行
             dep_map = dag.dependency_map()
@@ -625,6 +729,7 @@ class PlanExecuteEngine(BaseEngine):
                 self.callback.on_step_done(sid, False, result[:200])
 
             if not to_run:
+                wave_index += 1  # while 循环：波次全跳过也必须前进索引
                 continue
 
             # 可执行步骤：先发 on_step（主线程，按波内顺序），再执行
@@ -676,6 +781,7 @@ class PlanExecuteEngine(BaseEngine):
             if ctx.get("_task_cancelled"):
                 self.callback.on_warning("用户取消任务，停止后续计划步骤")
                 break
+            wave_index += 1
 
         return results
 

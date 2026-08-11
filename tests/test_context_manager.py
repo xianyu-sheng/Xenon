@@ -53,3 +53,30 @@ class TestCompact:
         assert result == "手动摘要"
         assert cm.history[0].role == "system"
         assert "之前 4 条消息" in cm.history[0].content
+
+
+class TestLongSessionStability:
+    """长时稳定性（C6）：连续多轮对话无句柄泄漏、compact 真实路径稳定。"""
+
+    def test_60_rounds_no_fd_leak_and_compact_stable(self):
+        """60 轮对话：fd 不增长，compact 按需触发并保留摘要。"""
+        import os
+
+        def count_fds():
+            return len(os.listdir("/proc/self/fd"))
+
+        fd0 = count_fds()
+        cm = ContextManager()
+        cm.max_tokens = 3000
+        cm.compact_threshold = 0.5
+        for i in range(60):
+            cm.add_user_message(f"第 {i} 轮：{'长文本内容 ' * 20}")
+            cm.add_assistant_message(f"回答 {i}：{'结果内容 ' * 10}")
+            if cm.needs_compact():
+                cm.compact(f"摘要 {i}")
+        fd1 = count_fds()
+        # 不允许句柄泄漏（允许 ±5 抖动）
+        assert fd1 - fd0 <= 5, f"fd 泄漏: {fd0} -> {fd1}"
+        # compact 真实触发过：history 被压缩且保留摘要
+        assert len(cm.history) < 120
+        assert any("摘要" in m.content for m in cm.history)

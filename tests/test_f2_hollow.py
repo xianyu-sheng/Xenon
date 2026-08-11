@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from xenon.engine.hollow_detector import HollowDetector, _HOLLOW_PATTERNS
+from xenon.engine.hollow_detector import (
+    HollowDetector,
+    _COMPLETION_PATTERNS,
+    _HOLLOW_PATTERNS,
+)
 
 
 class TestQuickFail:
@@ -117,8 +121,9 @@ class TestRegexCombo:
 
 
 class TestPatternCoverage:
-    def test_15_patterns_exist(self):
-        assert len(_HOLLOW_PATTERNS) == 15
+    def test_patterns_exist(self):
+        # v0.8.1: 15 分析型套话 + 7 完成型空洞 = 22
+        assert len(_HOLLOW_PATTERNS) == 22
 
     def test_each_pattern_compiles_and_matches(self):
         """每个正则至少能匹配其名称对应的样例。"""
@@ -138,9 +143,44 @@ class TestPatternCoverage:
             "可以尝试": "可以尝试一下",
             "首先其次最后": "首先，A。其次，B。最后，C。",
             "省略号填充": "然后……",
+            "已完成修复": "已完成修复",
+            "声称完成": "已经搞定",
+            "修复完成": "修复已完成",
+            "声称已保存": "文件已保存",
+            "声称已修改": "我已经修改了文件",
+            "声称已测试": "测试已通过",
+            "问题已解决": "问题已解决",
         }
         for name, pat in _HOLLOW_PATTERNS:
             assert pat.search(samples[name]) is not None, f"{name} 未匹配样例"
+
+
+class TestCompletionHollow:
+    """完成型空洞（v0.8.1）：声称已完成但无实质产物的虚假完成。"""
+
+    def test_completion_claim_without_substance_is_hollow(self):
+        hd = HollowDetector()
+        for text in [
+            "已完成修复，问题解决了",
+            "搞定，文件已更新",
+            "问题已解决",
+            "修复已完成",
+            "已保存文件",
+        ]:
+            result = hd.detect(text, tool_call_count=0)
+            assert result.is_hollow, f"应判空洞: {text!r}"
+            assert any(h in _COMPLETION_PATTERNS for h in result.hits)
+
+    def test_completion_with_file_path_not_hollow(self):
+        """短但附文件路径/代码的合法交付不得误伤。"""
+        hd = HollowDetector()
+        for text in [
+            "已完成修复，修改了 /tmp/x.py 中的 add 函数并验证通过",
+            "问题已解决：/tmp/x.py 第 12 行改为 `return a + b`",
+            "搞定，文件已更新，改动如下：\n```python\ndef add(a,b): return a+b\n```",
+        ]:
+            result = hd.detect(text, tool_call_count=3)
+            assert not result.is_hollow, f"不应误伤: {text!r}"
 
 
 class TestHint:

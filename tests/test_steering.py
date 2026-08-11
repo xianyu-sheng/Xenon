@@ -315,3 +315,116 @@ class TestPlanExecuteConsumesSteering:
         engine.run("执行计划", context=AgentContext())
         assert engine.steering_consumed
         assert "注意边界情况" in step_seen["text"]
+
+
+class TestPlanExecuteParallelWaveSteering:
+    """DAG 并行波次的 steering 语义。
+
+    设计：并行波次 worker 不传 steering（并发步骤注入补充会语义混乱），
+    steering 在波次循环顶部消费、注入下一个串行波次。本测试验证：
+    并行波次执行期间注入的 steering，在下一个波次检查点被消费。
+    """
+
+    def test_parallel_wave_steering_consumed_at_next_wave(self, monkeypatch):
+        engine = PlanExecuteEngine(
+            model_priority=["deepseek/deepseek-v4-flash"],
+            max_steps=6,
+            enable_parallel=True,
+        )
+        # 两个无依赖步骤（wave1 并行 LLM）+ 一个依赖步骤（wave2 LLM）。
+        # 全部用 LLM 步骤（tool=null）——steering 只注入 LLM 步骤，
+        # 工具步骤是确定性的（tool+params），补充要求不影响它。
+        # 任务输入用只读分析，避免 PlanCompletenessGate 写校验拦截。
+        plan = (
+            '{"analysis": "计划", "steps": ['
+            '{"id": 1, "task": "A", "tool": null}, '
+            '{"id": 2, "task": "B", "tool": null}, '
+            '{"id": 3, "task": "C", "tool": null, "depends_on": [1, 2]}]}'
+        )
+        wave_seen = {"text": ""}
+        injected = {"done": False}
+
+        def fake_call(phase, messages, **kwargs):
+            if phase == "plan":
+                return plan
+            if phase == "execute_step":
+                # 步骤 1 执行期间注入（wave1 并行中）——应在 wave2 检查点消费
+                if not injected["done"]:
+                    engine.steer("补充：wave2 必须注意边界情况")
+                    injected["done"] = True
+                if "用户中途补充" in str(messages):
+                    wave_seen["text"] = str(messages)
+                return '{"thought": "t", "final_answer": "步骤完成"}'
+            return "汇总完成"
+
+        monkeypatch.setattr(engine, "_call_llm_for_phase", fake_call)
+
+        engine.run("分析模块结构", context=AgentContext())
+        # steering 最终被消费（wave2 检查点）
+        assert engine.steering_consumed
+        assert "wave2 必须注意边界情况" in wave_seen["text"]
+
+
+class TestPlanExecuteToolStepReplan:
+    """全工具步骤计划 + steering 到达 → 触发剩余计划重规划。
+
+    回归：真实 LLM 测试发现——计划只有 read_file/write_file 工具步骤时，
+    steering 在波次检查点被消费但无处注入（工具步骤不经过 LLM），
+    补充要求静默丢失。修复：检测到 steering 到达且本步骤/波次全是
+    工具步骤时，把补充并入原任务重新 _plan 生成剩余计划。
+    """
+
+    def test_serial_tool_step_triggers_replan(self, monkeypatch):
+        engine = PlanExecuteEngine(
+            model_priority=["deepseek/deepseek-v4-flash"],
+            max_steps=6,
+        )
+        # 计划：纯工具步骤（read_file + write_file），无 LLM 步骤
+        plan = (
+            '{"analysis": "计划", "steps": ['
+            '{"id": 1, "task": "读取文件", "tool": "read_file", '
+            '"params": {"file_path": "/tmp/x.py"}}, '
+            '{"id": 2, "task": "修改代码", "tool": "write_file", '
+            '"params": {"file_path": "/tmp/x.py", "content": "x"}}]}'
+        )
+        replanned = {"called": False}
+        injected = {"done": False}
+
+        def fake_call(phase, messages, **kwargs):
+            if phase == "plan":
+                # 第一次 plan：注入 steering（模拟执行中用户补充）
+                if not injected["done"]:
+                    engine.steer("补充：docstring 用中文写")
+                    injected["done"] = True
+                # 第二次 plan（重规划）：返回含 LLM 步骤的新计划
+                if replanned["called"]:
+                    return (
+                        '{"analysis": "重规划", "steps": ['
+                        '{"id": 1, "task": "读取文件", "tool": "read_file", '
+                        '"params": {"file_path": "/tmp/x.py"}}, '
+                        '{"id": 3, "task": "加中文 docstring", "tool": null}, '
+                        '{"id": 4, "task": "写回文件", "tool": "write_file", '
+                        '"params": {"file_path": "/tmp/x.py", "content": "y"}}]}'
+                    )
+                return plan
+            if phase == "execute_step":
+                return '{"thought": "t", "final_answer": "步骤完成"}'
+            return "汇总完成"
+
+        monkeypatch.setattr(engine, "_call_llm_for_phase", fake_call)
+        # 工具执行 mock（避免真实文件操作）
+        monkeypatch.setattr(
+            engine, "_execute_step_with_tool",
+            lambda *a, **k: "工具执行结果",
+        )
+        # 拦截 _replan_remaining 确认被调用
+        orig_replan = engine._replan_remaining
+        def spy_replan(user_input, ctx, steering_msgs, done_ids):
+            replanned["called"] = True
+            return orig_replan(user_input, ctx, steering_msgs, done_ids)
+        monkeypatch.setattr(engine, "_replan_remaining", spy_replan)
+
+        engine.run("修改文件", context=AgentContext())
+        # steering 被消费且触发了重规划
+        assert engine.steering_consumed
+        assert replanned["called"], "全工具步骤时补充必须触发重规划"

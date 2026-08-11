@@ -44,6 +44,26 @@ def test_cli_version(tmp_path):
     assert result.stdout.strip().startswith("xenon ")
 
 
+def test_cli_error_paths_return_nonzero_exit_code(tmp_path):
+    """回归锁定：CLI 错误路径必须返回非零退出码，脚本/CI 才能感知失败。
+
+    历史问题：错误路径曾恒为 exit 0（如 run 不存在的配置文件、
+    skill 未知子命令），自动化无法感知失败。当前约定：用法错误 2、
+    文件/资源错误 1。
+    """
+    cases = [
+        # (args, 期望退出码区间下限)
+        (["run", "/tmp/nonexistent_flow_xyz_never.yaml"], 1),
+        (["skill", "nonexistent-subcommand"], 2),
+        (["--definitely-invalid-flag"], 2),
+    ]
+    for args, min_code in cases:
+        result = _run_cli(*args, home=tmp_path)
+        assert result.returncode >= min_code, (
+            f"CLI 错误路径 {args} 应返回非零退出码，实际 {result.returncode}"
+        )
+
+
 def test_cli_executes_offline_datetime_workflow(tmp_path):
     workflow = tmp_path / "offline.yaml"
     workflow.write_text(

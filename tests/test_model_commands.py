@@ -97,6 +97,37 @@ def test_remove_model_needs_alias():
     assert "用法" in result
 
 
+def test_remove_model_unknown_alias_reports_not_found():
+    """回归锁定：移除不存在的模型必须明确报「不存在」。
+
+    历史上曾出现假阳性成功消息（✅ 已移除 但什么都没删），
+    该行为已被修复；此用例防止将来回归。
+    """
+    from xenon.repl.model_registry import ModelRegistry
+
+    reg = ModelRegistry()
+    reg.add_model("deepseek/deepseek-v4-flash", "deepseek-v4-flash")
+    result = _cmd_remove_model(args="ghost", registry=reg)
+    assert "ghost" in result
+    assert "不存在" in result
+    assert "✅" not in result
+    # 移除存在模型后，列表确实减少
+    ok = _cmd_remove_model(args="deepseek-v4-flash", registry=reg)
+    assert "已移除" in ok
+    assert "deepseek-v4-flash" not in reg.models
+
+
+def test_remove_model_by_model_id():
+    """按 model_id 移除（v0.5.2 特性：custom/xxx 形式）也应生效。"""
+    from xenon.repl.model_registry import ModelRegistry
+
+    reg = ModelRegistry()
+    reg.add_model("custom/glm-5-2", "alias-x")
+    result = _cmd_remove_model(args="custom/glm-5-2", registry=reg)
+    assert "已移除" in result
+    assert "alias-x" not in reg.models
+
+
 def test_provider_no_config():
     result = _cmd_provider()
     assert "已配置的厂商" in result
