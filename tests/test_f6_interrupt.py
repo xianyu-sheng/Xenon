@@ -129,7 +129,7 @@ class TestPlanInterrupt:
             "analysis": "",
         }
 
-        def fake_step(step_id, total, task, prev, user_input, tracker, context=None):
+        def fake_step(step_id, total, task, prev, user_input, tracker, context=None, steering=None):
             eng.interrupt()  # 第 1 步执行中置位
             return "step1 ok"
 

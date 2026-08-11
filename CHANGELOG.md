@@ -5,6 +5,33 @@
 
 ## [Unreleased]
 
+### 新特性：Mid-task Steering — 任务运行中的人机协作转向
+
+Codex / Claude Code / Hermes 都支持任务运行中用户补充要求，Xenon
+此前是同步阻塞模型——引擎 run() 期间 stdin 不被读取，用户只能
+Ctrl+C 取消，无法「转向」。本特性在 **BaseEngine 抽象层**实现统一的
+steering 通道（7 引擎一处继承，不各自实现）：
+
+- **`engine.steer(text)` 线程安全入队**：任务运行中任意时刻注入补充/
+  修改要求；消息先入队，引擎在下一个迭代检查点消费——当前工具调用
+  不被打断（避免副作用中途掐断留下脏状态）。
+- **ReAct**：迭代循环顶部消费，以 user 消息并入对话，让 LLM 自行判断
+  补充/修改/新增语义并调整后续步骤。
+- **Plan-Execute**：串行与 DAG 波次循环顶部消费，注入后续步骤的执行
+  prompt（并行波次不传递，避免并发注入语义混乱）。
+- **Reflection**：修正轮边界消费，并入下一轮执行的 feedback。
+- **组合引擎（Plan-React / Plan-Reflection / React-Reflection）**：通过
+  `SteeringMixin` 在 run() 阶段边界消费——组合引擎不是 BaseEngine 子类
+  且子引擎 run() 起点会清空预注入队列，因此 steering 在组合层持有、
+  在步骤/修复阶段边界拼进传给子引擎的 prompt。7 引擎全部支持 steering。
+- **REPL 输入监听线程**：引擎运行期间后台线程读取 stdin，非空且非
+  斜杠命令的输入通过 `steer()` 注入并打印「↪ 已收到你的补充，Agent
+  正在调整计划…」；斜杠命令仍由主循环处理，避免双线程竞争 stdin；
+  非 TTY / prompt_toolkit 会话静默降级。
+- **真实 LLM 端到端验证**：任务运行中注入「给 add 函数加中文
+  docstring」，引擎消费后 LLM 自主调整——add 获得完整 docstring 且
+  顺带统一了 multiply 风格，已完成工作未被重做、函数行为不变。
+
 ### 安全
 
 - **会话名路径穿越修复（`/save`）**：`save_session` / `load_session` /

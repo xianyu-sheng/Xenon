@@ -2122,6 +2122,10 @@ class REPL:
             )
         except Exception as exc:  # noqa: BLE001 — 证据记录失败不阻断主流程
             logger.debug("任务证据记录失败（不影响执行）: %s", exc)
+        # Mid-task steering：任务运行期间启动输入监听线程，用户补充/修改
+        # 要求通过 engine.steer() 注入，引擎在下一个迭代检查点消费并让
+        # LLM 自行判断如何调整后续步骤（不打断当前工具调用）。
+        steering_thread = self._start_steering_listener(engine)
         try:
             result = engine.run(
                 user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr
@@ -2165,11 +2169,71 @@ class REPL:
                 f"[错误] {spec.label} 引擎执行失败: {e}", model_ids[0]
             )
         finally:
+            # 停掉 steering 监听线程（engine.run 已返回，不再需要输入注入）
+            self._stop_steering_listener(steering_thread)
             if hasattr(callback, "finish_activity"):
                 callback.finish_activity()
             self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
                 self._captured_log = self._stop_log_capture()
+
+    # ── Mid-task steering 输入监听 ──────────────────────────
+    # 引擎运行期间，用户可以在终端继续输入。这些输入通过 engine.steer()
+    # 注入任务（引擎在迭代检查点消费并让 LLM 自行判断如何调整），而不是
+    # 排队到引擎结束后的下一轮对话。斜杠命令 / 空行在监听线程内忽略——
+    # 它们仍由主循环处理，避免两个线程竞争同一 stdin。
+
+    def _start_steering_listener(self, engine: Any) -> threading.Thread | None:
+        """启动 steering 监听线程；非 TTY / 不可用环境静默降级返回 None。"""
+        import sys
+
+        if self._pt_session is not None or not sys.stdin.isatty():
+            # prompt_toolkit 会话或非交互输入：无法在引擎运行期间安全地
+            # 从后台线程读 stdin，静默降级（功能不可用时不影响主流程）。
+            return None
+        stop = threading.Event()
+        thread = threading.Thread(
+            target=self._steering_listener_loop,
+            args=(engine, stop),
+            name="steering-listener",
+            daemon=True,
+        )
+        thread._xenon_stop_event = stop  # type: ignore[attr-defined]
+        thread.start()
+        return thread
+
+    def _steering_listener_loop(self, engine: Any, stop: threading.Event) -> None:
+        """监听线程主体：阻塞读一行，非空且非斜杠命令则注入 engine。"""
+        import sys
+
+        while not stop.is_set():
+            try:
+                line = sys.stdin.readline()
+            except Exception:  # noqa: BLE001 — 读取失败即退出监听
+                return
+            if not line:
+                return  # EOF
+            text = line.strip()
+            if not text or text.startswith("/"):
+                continue
+            try:
+                if engine.steer(text):
+                    console.print(
+                        "[dim]↪ 已收到你的补充，Agent 正在调整计划…[/dim]"
+                    )
+            except Exception:  # noqa: BLE001 — steering 失败不崩溃主流程
+                return
+
+    def _stop_steering_listener(self, thread: threading.Thread | None) -> None:
+        """停止监听线程并等待其退出（防悬挂线程）。"""
+        if thread is None:
+            return
+        stop = getattr(thread, "_xenon_stop_event", None)
+        if stop is not None:
+            stop.set()
+        # readline() 是阻塞的；主流程已结束，此处仅尽力 join（短超时），
+        # 线程本身是 daemon，不会阻止进程退出。
+        thread.join(timeout=0.5)
 
     # ── 兼容层 ─────────────────────────────────────────────
     # 旧的 per-engine 方法名保留为薄封装：外部脚本、测试和 monkeypatch 可能

@@ -256,6 +256,7 @@ class PlanExecuteEngine(BaseEngine):
         tracker = ToolExecutionTracker()
         self._last_tracker = tracker
         self._reset_interrupt()
+        self._reset_steering()  # mid-task steering：每轮 run 重置队列与消费记录
         self._begin_run()  # P3-Q2: 链路追踪
         self._bind_evidence_ledger(ctx)
 
@@ -510,11 +511,17 @@ class PlanExecuteEngine(BaseEngine):
     ) -> list[dict[str, Any]]:
         """逐串行执行步骤（原 Plan-Execute Phase 2 行为）。"""
         results: list[dict[str, Any]] = []
+        # Mid-task steering：执行途中用户补充要求。步骤循环顶部的检查点
+        # 消费（当前步骤已完成，无副作用残留），并以附加指令注入后续
+        # 步骤的执行 prompt，让 LLM 自行判断如何调整剩余工作。
+        _steer_pending: list[dict[str, Any]] = []
         for i, step in enumerate(steps):
             if self._interrupted:
                 self.callback.on_warning("引擎被用户中断，停止执行")
                 logger.info("Plan-Execute 被中断，退出步骤循环")
                 break
+            # 消费 steering：进入下一个步骤前合并补充要求
+            _steer_pending.extend(self._drain_steering())
             step_id = step.get("id", i + 1)
             step_task = step.get("task", "")
             tool = step.get("tool")
@@ -533,7 +540,9 @@ class PlanExecuteEngine(BaseEngine):
                 raw_result = self._execute_step_with_llm(
                     step_id, len(steps), step_task, prev_results, user_input, tracker,
                     context=ctx,
+                    steering=_steer_pending,
                 )
+                _steer_pending = []
             outcome = self._step_outcome(raw_result)
 
             results.append({
@@ -574,11 +583,17 @@ class PlanExecuteEngine(BaseEngine):
         failed_ids: set[Any] = set()
         skipped_ids: set[Any] = set()
 
+        # Mid-task steering：波次检查点消费用户补充，注入后续串行波次。
+        # 并行波次不传递 steering（并发步骤注入补充会语义混乱），
+        # 补充在并行波次结束后、下一个波次检查点才被消费。
+        _steer_pending: list[dict[str, Any]] = []
+
         for wave in waves:
             if self._interrupted:
                 self.callback.on_warning("引擎被用户中断，停止执行")
                 logger.info("Plan-Execute DAG 被中断，退出波次循环")
                 break
+            _steer_pending.extend(self._drain_steering())
 
             # 划分：依赖失败/跳过的步骤级联跳过，其余可执行
             dep_map = dag.dependency_map()
@@ -635,7 +650,9 @@ class PlanExecuteEngine(BaseEngine):
             else:
                 wave_results = self._exec_wave_serial(
                     to_run, dag, user_input, results, ctx, tracker, total,
+                    steering=_steer_pending,
                 )
+            _steer_pending = []
 
             # 合并（主线程，单线程，无竞争）：追加结果 + 合并隔离 tracker
             for sid, step_task, outcome, sub_tracker in wave_results:
@@ -666,6 +683,7 @@ class PlanExecuteEngine(BaseEngine):
         self, to_run: list[Any], dag: PlanDAG, user_input: str,
         results: list[dict[str, Any]], ctx: AgentContext,
         tracker: ToolExecutionTracker, total: int,
+        steering: list[dict[str, Any]] | None = None,
     ) -> list[tuple[Any, str, StepOutcome, None]]:
         """波内串行执行（共享主 ctx/tracker，无并发无竞争）。
 
@@ -674,6 +692,8 @@ class PlanExecuteEngine(BaseEngine):
         单步抛异常转为失败结果，不连坐整波——与 ``_exec_wave_parallel`` 同一契约。
         串行是默认路径，此前缺少这层隔离：任意一步抛异常会直接冒泡终止整个 DAG，
         已完成步骤的结果和后续可执行步骤一起丢失。
+
+        ``steering``：波次检查点收集到的用户中途补充，合并进本波步骤执行。
         """
         out: list[tuple[Any, str, StepOutcome, None]] = []
         for sid in to_run:
@@ -689,6 +709,7 @@ class PlanExecuteEngine(BaseEngine):
                     raw_result = self._execute_step_with_llm(
                         sid, total, step_task, prev_results, user_input, tracker,
                         context=ctx,
+                        steering=steering,
                     )
                 outcome = self._step_outcome(raw_result)
             except Exception as e:  # 单步异常不连坐整波
@@ -967,6 +988,7 @@ class PlanExecuteEngine(BaseEngine):
         tracker: ToolExecutionTracker | None = None,
         context: AgentContext | None = None,
         require_write_tool: bool = False,
+        steering: list[dict[str, Any]] | None = None,
     ) -> str:
         """使用 LLM 执行不需要工具的步骤（§Q4 迷你 ReAct：最多 N 轮 Thought→Action→Observation）。
 
@@ -980,6 +1002,10 @@ class PlanExecuteEngine(BaseEngine):
         无写工具的情况下给出 final_answer，拒绝接受并要求重试（同 ReAct 的
         空洞回答纠偏），直到真正执行 write/edit 或耗尽轮次。
 
+        ``steering``（mid-task steering）：执行途中用户补充/修改要求，由
+        ``_run_serial``/``_run_dag`` 在步骤检查点收集后传入；合并进本步骤
+        的执行 prompt，让 LLM 自行判断如何调整本步骤及剩余工作。
+
         向后兼容：LLM 返回纯文本时，``parse_react`` 置 ``final_answer=raw``，首轮即
         收敛，行为与原单次调用一致（结果为该纯文本）。
         """
@@ -988,6 +1014,11 @@ class PlanExecuteEngine(BaseEngine):
             max_rounds=self.max_mini_react_rounds,
             step_task=task, previous_results=prev_results,
         )
+        if steering:
+            prompt += (
+                "\n\n## 用户中途补充\n"
+                + self.steering_prompt(steering)
+            )
         if require_write_tool:
             prompt += (
                 "\n\n⚠️ 本步骤是强制补救：任务需要实际修改文件，但此前没有任何"

@@ -127,6 +127,7 @@ class ReflectionEngine(BaseEngine):
         feedback = ""
         ctx = context or AgentContext()
         self._reset_interrupt()
+        self._reset_steering()  # mid-task steering：每轮 run 重置
         self._ctx_mgr = ctx_mgr  # F4
         self._begin_run()  # P3-Q2: 链路追踪
         self._bind_evidence_ledger(ctx)
@@ -144,6 +145,16 @@ class ReflectionEngine(BaseEngine):
                 logger.info("Reflection 被中断，退出修正循环")
                 break
             logger.debug(f"Reflection 第 {round_num} 轮")
+
+            # Mid-task steering：修正轮边界消费用户补充，并入下一轮执行
+            # 的 feedback（子引擎 run 起点会清掉预注入，在检查点消费）。
+            steering_msgs = self._drain_steering()
+            if steering_msgs:
+                steer_text = self.steering_prompt(steering_msgs)
+                feedback = (feedback + "\n\n" + steer_text) if feedback else steer_text
+                self.callback.on_warning(
+                    f"已收到 {len(steering_msgs)} 条补充要求，正在调整输出…"
+                )
 
             # Execute（§8.23.8：执行失败兜底，返回已生成的部分输出而非冒泡）
             try:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import queue
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 from xenon.engine.callbacks import EngineCallback
@@ -19,6 +21,58 @@ if TYPE_CHECKING:
     from xenon.repl.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
+
+
+class SteeringMixin:
+    """组合引擎共享的 mid-task steering 原语。
+
+    组合引擎不是 BaseEngine 子类（无 steer 通道自动继承），但 REPL 只
+    持有顶层引擎引用。此 mixin 提供与 BaseEngine 相同语义的队列/消费/
+    重置原语，组合引擎在 run() 的阶段边界消费补充要求，并拼进传给
+    子引擎的 prompt——子引擎 run() 起点会 _reset_steering()，因此
+    steering 必须在组合层持有，不能预注入子引擎。
+    """
+
+    def __init__(self) -> None:
+        self._steering_queue: "queue.Queue[dict[str, Any]]" = queue.Queue()
+        self.steering_consumed: list[dict[str, Any]] = []
+
+    def steer(self, text: str) -> bool:
+        """任务运行中注入一条用户补充/修改要求（线程安全）。"""
+        if not text or not text.strip():
+            return False
+        self._steering_queue.put({
+            "text": text.strip(),
+            "ts": time.time(),
+        })
+        return True
+
+    def _drain_steering(self) -> list[dict[str, Any]]:
+        """取出并记录当前所有待消费的 steering 消息（FIFO）。"""
+        drained: list[dict[str, Any]] = []
+        while True:
+            try:
+                msg = self._steering_queue.get_nowait()
+            except queue.Empty:
+                break
+            drained.append(msg)
+            self.steering_consumed.append(msg)
+        return drained
+
+    def _reset_steering(self) -> None:
+        """每轮 run() 开头清空队列与消费记录。"""
+        while True:
+            try:
+                self._steering_queue.get_nowait()
+            except queue.Empty:
+                break
+        self.steering_consumed = []
+
+    @staticmethod
+    def steering_prompt(msgs: list[dict[str, Any]]) -> str:
+        """渲染补充要求注入指令（语义与 BaseEngine.steering_prompt 一致）。"""
+        from xenon.engine.base import BaseEngine
+        return BaseEngine.steering_prompt(msgs)
 
 _TEST_STEP = re.compile(r"测试|验证|回归|test|verify|check|lint", re.IGNORECASE)
 _SUMMARY_STEP = re.compile(r"总结|汇总|报告|说明|summary|report", re.IGNORECASE)
@@ -125,7 +179,7 @@ def _review_feedback(review: dict[str, Any]) -> str:
     return feedback
 
 
-class PlanReactEngine:
+class PlanReactEngine(SteeringMixin):
     """Plan globally, then execute uncovered steps through isolated ReAct runs."""
 
     def __init__(
@@ -140,6 +194,7 @@ class PlanReactEngine:
         auto_router: Any = None,
         permission_gate: Any = None,
     ) -> None:
+        SteeringMixin.__init__(self)
         self.model_priority = model_priority
         self.max_steps = max_steps
         self.react_iterations = react_iterations
@@ -174,6 +229,7 @@ class PlanReactEngine:
         ctx_mgr: ContextManager | None = None,
     ) -> str:
         ctx = context or AgentContext()
+        self._reset_steering()  # mid-task steering：每轮 run 重置
         aggregate = ToolExecutionTracker()
         self._last_tracker = aggregate
         self.planner._ctx_mgr = ctx_mgr
@@ -220,6 +276,15 @@ class PlanReactEngine:
                 continue
 
             self.callback.on_step(step_id, len(steps), task)
+            # Mid-task steering：步骤边界消费用户补充，并入当前步骤的
+            # ReAct prompt（子引擎 run 起点会清掉预注入，必须在组合层拼）。
+            steer_text = ""
+            steering_msgs = self._drain_steering()
+            if steering_msgs:
+                steer_text = "\n\n" + self.steering_prompt(steering_msgs)
+                self.callback.on_warning(
+                    f"已收到 {len(steering_msgs)} 条补充要求，正在调整当前步骤…"
+                )
             phase_ctx = _isolated_ctx(ctx)
             phase_ctx.set("combined_completed_steps", [
                 {
@@ -237,6 +302,7 @@ class PlanReactEngine:
                 "如果本步骤或整个任务已经由真实状态覆盖，直接说明并结束。"
                 "需要操作时必须使用工具，完成后运行适当验证。\n\n"
                 f"已验证执行证据:\n{evidence.render(max_diff_chars=6_000)}"
+                f"{steer_text}"
             )
 
             status = "ok"
@@ -333,7 +399,7 @@ class PlanReactEngine:
         return f"## 执行计划\n{analysis}\n\n## 执行结果\n{successful_text}{failed_text}"
 
 
-class _ReflectionCombination:
+class _ReflectionCombination(SteeringMixin):
     """Shared strict review and one-shot tool-capable repair workflow."""
 
     reflector: ReflectionEngine
@@ -341,6 +407,9 @@ class _ReflectionCombination:
     review_rounds: int
     callback: EngineCallback
     _last_tracker: ToolExecutionTracker | None
+
+    def __init__(self) -> None:
+        SteeringMixin.__init__(self)
 
     def _finalize_combined(self, ctx: AgentContext, output: str) -> str:
         """Close the composite lifecycle at one shared delivery boundary."""
@@ -371,6 +440,11 @@ class _ReflectionCombination:
         state_change_required = bool(_IMPLEMENT_STEP.search(user_input))
         review_ctx = _isolated_ctx(ctx)
 
+        # Mid-task steering：必须在 review 之前消费——若 review pass 直接
+        # 收尾（下方 return），steering 会永远留在队列里被静默丢弃。
+        # 用户补充/修改要求说明任务尚未按新意图完成，必须进入修复阶段。
+        steering_msgs = self._drain_steering()
+
         try:
             review = self.reflector.review_existing(
                 user_input,
@@ -389,17 +463,27 @@ class _ReflectionCombination:
         # A reviewer score cannot certify a write task when no mutating tool
         # actually succeeded.  This programmatic gate fixes the former
         # "read-only plan + self-score 10" false success mode.
-        if review.get("pass") and not (
+        if review.get("pass") and not steering_msgs and not (
             state_change_required and initial_evidence.mutation_count == 0
         ):
             return self._finalize_combined(ctx, initial_output)
         if review.get("pass"):
-            review = {
-                **review,
-                "pass": False,
-                "feedback": "任务要求修改状态，但没有成功的状态变更工具记录",
-                "issues": ["工作区修改尚未通过工具落地"],
-            }
+            # review 通过但存在用户补充（任务未按新意图完成），或写任务
+            # 无落地证据：都不能直接收尾，强制进入修复阶段。
+            if steering_msgs:
+                review = {
+                    **review,
+                    "pass": False,
+                    "feedback": "用户补充/修改了任务要求，请按补充要求继续调整",
+                    "issues": ["用户补充要求尚未反映在输出中"],
+                }
+            else:
+                review = {
+                    **review,
+                    "pass": False,
+                    "feedback": "任务要求修改状态，但没有成功的状态变更工具记录",
+                    "issues": ["工作区修改尚未通过工具落地"],
+                }
 
         repair_prompt = (
             f"原始任务:\n{user_input}\n\n"
@@ -410,6 +494,11 @@ class _ReflectionCombination:
             "不要只输出一个未应用的补丁，也不要重复已经成功的操作。\n\n"
             f"真实执行证据:\n{initial_evidence.render(max_diff_chars=10_000)}"
         )
+        if steering_msgs:
+            repair_prompt += "\n\n" + self.steering_prompt(steering_msgs)
+            self.callback.on_warning(
+                f"已收到 {len(steering_msgs)} 条补充要求，正在调整修复…"
+            )
         repair_ctx = _isolated_ctx(ctx)
         self.repairer._last_tracker = None
         try:
@@ -478,6 +567,7 @@ class PlanReflectionEngine(_ReflectionCombination):
         auto_router: Any = None,
         permission_gate: Any = None,
     ) -> None:
+        SteeringMixin.__init__(self)
         self.model_priority = model_priority
         self.max_steps = max_steps
         self.review_rounds = review_rounds
@@ -515,6 +605,7 @@ class PlanReflectionEngine(_ReflectionCombination):
         ctx_mgr: ContextManager | None = None,
     ) -> str:
         ctx = context or AgentContext()
+        self._reset_steering()  # mid-task steering：每轮 run 重置
         initial = self.planner.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
         return self._review_and_repair(
             user_input,
@@ -542,6 +633,7 @@ class ReactReflectionEngine(_ReflectionCombination):
         auto_router: Any = None,
         permission_gate: Any = None,
     ) -> None:
+        SteeringMixin.__init__(self)
         self.model_priority = model_priority
         self.react_iterations = react_iterations
         self.review_rounds = review_rounds
@@ -582,6 +674,7 @@ class ReactReflectionEngine(_ReflectionCombination):
         ctx_mgr: ContextManager | None = None,
     ) -> str:
         ctx = context or AgentContext()
+        self._reset_steering()  # mid-task steering：每轮 run 重置
         initial = self.reactor.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
         return self._review_and_repair(
             user_input,

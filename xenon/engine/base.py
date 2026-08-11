@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import queue
 import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
@@ -77,6 +78,14 @@ class BaseEngine(ABC):
         self.permission_gate = permission_gate  # v0.5.0
         # F6: 协作式中断标志，外部调 interrupt() 后 run() 在下一轮退出
         self._interrupted: bool = False
+        # Mid-task steering：任务运行期间用户补充/修改要求的通道。
+        # 与 F6 中断互补——interrupt() 是「退出」，steer() 是「转向」：
+        # 消息先入队，引擎在下一个迭代检查点消费，当前工具调用不被打断
+        # （避免副作用中途掐断留下脏状态）。7 个引擎全部在 BaseEngine
+        # 继承该机制，不各自实现。
+        self._steering_queue: "queue.Queue[dict[str, Any]]" = queue.Queue()
+        # 本次 run 已消费的 steering 消息（供 REPL 展示/测试断言）
+        self.steering_consumed: list[dict[str, Any]] = []
         # F4: 本次 run 注入的 ContextManager（run 起点设置，供 _history_messages 消费）
         self._ctx_mgr: Any = None
         # Last run's verified tool trace, exposed to the REPL for cross-turn
@@ -268,6 +277,65 @@ class BaseEngine(ABC):
     def _reset_interrupt(self) -> None:
         """每轮 run() 开头重置中断标志。"""
         self._interrupted = False
+
+    def steer(self, text: str) -> bool:
+        """任务运行中注入一条用户补充/修改要求。
+
+        线程安全：REPL 的输入监听线程在引擎运行时调用。
+        消息进入队列后由引擎在下一个迭代检查点消费（当前工具调用
+        不被打断，避免副作用中途掐断）。返回是否入队成功。
+        """
+        if not text or not text.strip():
+            return False
+        self._steering_queue.put({
+            "text": text.strip(),
+            "ts": time.time(),
+        })
+        return True
+
+    def _drain_steering(self) -> list[dict[str, Any]]:
+        """取出并记录当前所有待消费的 steering 消息（FIFO）。
+
+        引擎在每个迭代/步骤循环顶部调用；空队列返回 []。已消费消息
+        记录到 ``steering_consumed`` 供 REPL 展示与测试断言。
+        """
+        drained: list[dict[str, Any]] = []
+        while True:
+            try:
+                msg = self._steering_queue.get_nowait()
+            except queue.Empty:
+                break
+            drained.append(msg)
+            self.steering_consumed.append(msg)
+        return drained
+
+    def _reset_steering(self) -> None:
+        """每轮 run() 开头清空队列与消费记录（steering 不跨 run 串扰）。"""
+        while True:
+            try:
+                self._steering_queue.get_nowait()
+            except queue.Empty:
+                break
+        self.steering_consumed = []
+
+    @staticmethod
+    def steering_prompt(msgs: list[dict[str, Any]]) -> str:
+        """把一条或多条 steering 消息渲染成注入指令（单一真相源）。
+
+        语义约定（由 LLM 自行判断，程序不做意图分类）：
+        补充的信息并入原任务；修改/新增要求调整后续步骤；
+        已完成的工作不重复。返回的文本由各引擎拼进下一轮 prompt。
+        """
+        joined = "\n".join(
+            f"- {m.get('text', '')}" for m in msgs
+        )
+        return (
+            "用户在任务执行过程中补充了要求（原任务继续有效）：\n"
+            f"{joined}\n\n"
+            "请判断这些补充是对原任务的补充、修改还是新增要求，"
+            "并据此调整后续步骤。已完成且仍然有效的工作不要重复执行；"
+            "若需要调整已完成的产物，请明确指出并重新执行相关步骤。"
+        )
 
     def _resolve_model(self, step_description: str = "", count: int = 3) -> list[str]:
         """v0.4.0 Step 13: 为当前子步骤解析模型列表。

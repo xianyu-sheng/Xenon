@@ -252,6 +252,7 @@ class ReActEngine(BaseEngine):
         self._last_tracker = tracker  # P2-E5：供父引擎 spawn_agent 读取子 Agent 工具统计
         self._ctx_mgr = ctx_mgr
         self._reset_interrupt()  # F6: 每轮 run 重置中断标志
+        self._reset_steering()  # mid-task steering：每轮 run 重置队列与消费记录
         self._begin_run()  # P3-Q2: 生成本次 run 的链路 ID（贯穿所有 LLM 调用）
         self._bind_evidence_ledger(ctx)
         self._recent_calls.clear()  # v0.7.0: 每次 run 重置重复调用跟踪
@@ -332,6 +333,21 @@ class ReActEngine(BaseEngine):
                 self.callback.on_warning("引擎被用户中断，停止迭代")
                 logger.info("ReAct 被中断，退出迭代循环")
                 break
+
+            # Mid-task steering：用户在任务运行中补充/修改要求。
+            # 在迭代检查点消费（当前工具调用已完成，无副作用残留），
+            # 以 user 消息并入对话，让 LLM 判断如何调整后续步骤。
+            steering_msgs = self._drain_steering()
+            if steering_msgs:
+                steer_text = self.steering_prompt(steering_msgs)
+                messages.append({"role": "user", "content": steer_text})
+                self.callback.on_warning(
+                    f"已收到 {len(steering_msgs)} 条补充要求，正在调整计划…"
+                )
+                logger.info(
+                    f"ReAct 迭代 {iteration}: 消费 {len(steering_msgs)} 条 steering"
+                )
+
             logger.debug(f"ReAct 迭代 {iteration}/{budget.total}")
 
             # F2: 合成提示注入（按预算/工具/阶段选择场景）
