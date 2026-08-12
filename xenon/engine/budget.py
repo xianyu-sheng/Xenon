@@ -73,8 +73,11 @@ class BudgetManager:
     # 阶段边界（占 base max 的比例）
     explore_ratio: float = 0.25
     converge_ratio: float = 0.75
-    # bonus 封顶倍数（默认 2× base，防止奖励无限累积）
-    max_total_multiplier: float = 2.0
+    # bonus 封顶倍数（默认 3× base——v0.8.2 起：复杂任务（SWE-bench 类）
+    # 需要「读 → 改 → 验证 → 失败反馈 → 再改」的迭代循环，2× 上限
+    # （40+80=120）在极端任务上仍可能提前耗尽；3× 上限（40+120=160）
+    # 为动态奖励留足空间，同时仍防奖励无限累积。）
+    max_total_multiplier: float = 3.0
     # 收束阶段禁用工具集（可注入便于测试/扩展）
     blocked_in_converge: frozenset[str] = field(default_factory=lambda: CONVERGE_BLOCKED_TOOLS)
     # 奖励历史（可观测，供 mercy compile / debug 用）

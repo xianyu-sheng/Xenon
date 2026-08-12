@@ -5,6 +5,31 @@
 
 ## [Unreleased]
 
+### 框架能力提升（v0.8.2 素材）
+
+- **最大迭代轮次扩大**：ReAct 默认 10 → 40、PlanExecute 默认 20 → 40、
+  组合引擎 8 → 24、Reflection 3 → 8，BudgetManager 动态奖励封顶
+  2× → 3×（base 40 + bonus 最多 120 = 160 上限）。复杂任务（SWE-bench
+  类「读 → 改 → 验证 → 失败反馈 → 再改」循环）此前在 32 轮内可能
+  提前耗尽预算；扩大后信息收集与迭代验证空间充足，简单任务不受影响
+  （预算只是上限，final_answer 收敛即退出）。
+- **交付闸门补救循环（「贴 diff 不落盘」根因修复）**：FileClaimGate
+  拦截此前直接 raise（拦截 ≠ 修复）。v0.8.2 起 ReAct 增加第三纠偏
+  循环——交付预检失败时注入补救提示（「请实际调用 write_file 落盘，
+  不要只输出 diff」）再迭代再验证（最多 2 次，超限保持 fail-closed）；
+  PlanExecute 在汇总前预检，失败追加「落盘补救」步骤。SWE-bench
+  最大失分点从「拦截判负」变成「拦截 → 引导落盘 → 重验」。
+- **验证链闭环**：PlanExecute 新增 `_ensure_verification_loop`——
+  修改已落盘但测试命令失败（pytest 等）且无成功测试时，把失败输出
+  反馈给 LLM 追加一轮「读取失败 → 定位根因 → 修改 → 再验证」修复
+  （SWE-bench 硬实例 sympy/django 的共同失败模式）。
+
+### 测试
+
+- 新增 5 个回归测试（test_delivery_remediation.py：补救提示生成、
+  ReAct 拦截→补救→落盘、重试耗尽不挂死、验证闭环触发/跳过），
+  全套 2110 测试通过，Ruff / compileall 全绿。
+
 ## [0.8.1] — 2026-08-11
 
 ### 新特性：Mid-task Steering — 任务运行中的人机协作转向

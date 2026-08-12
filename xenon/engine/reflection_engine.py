@@ -77,7 +77,7 @@ class ReflectionEngine(BaseEngine):
         self,
         model_priority: list[str],
         *,
-        max_rounds: int = 3,
+        max_rounds: int = 8,
         pass_threshold: int = 7,
         executor_prompt: str | None = None,
         reviewer_prompt: str | None = None,

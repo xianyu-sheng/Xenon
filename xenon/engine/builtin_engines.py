@@ -26,37 +26,37 @@ def _make_react(**kwargs: Any) -> Any:
     # 普通对话任务可能涉及若干次「读 / 改 / 验证」循环。保留引擎自身的单次运行
     # 上限，同时给交互路径留出中等长度任务的空间；协议重试与压缩仍受
     # BudgetManager 的 2× 上限约束。
-    return ReActEngine(max_iterations=15, **kwargs)
+    return ReActEngine(max_iterations=40, **kwargs)
 
 
 def _make_plan_execute(**kwargs: Any) -> Any:
     from xenon.engine.plan_execute_engine import PlanExecuteEngine
 
-    return PlanExecuteEngine(max_steps=20, **kwargs)
+    return PlanExecuteEngine(max_steps=40, **kwargs)
 
 
 def _make_reflection(**kwargs: Any) -> Any:
     from xenon.engine.reflection_engine import ReflectionEngine
 
-    return ReflectionEngine(max_rounds=3, **kwargs)
+    return ReflectionEngine(max_rounds=8, **kwargs)
 
 
 def _make_plan_react(**kwargs: Any) -> Any:
     from xenon.engine.combined_engines import PlanReactEngine
 
-    return PlanReactEngine(max_steps=10, react_iterations=8, **kwargs)
+    return PlanReactEngine(max_steps=24, react_iterations=24, **kwargs)
 
 
 def _make_plan_reflection(**kwargs: Any) -> Any:
     from xenon.engine.combined_engines import PlanReflectionEngine
 
-    return PlanReflectionEngine(max_steps=10, review_rounds=2, **kwargs)
+    return PlanReflectionEngine(max_steps=24, review_rounds=2, **kwargs)
 
 
 def _make_react_reflection(**kwargs: Any) -> Any:
     from xenon.engine.combined_engines import ReactReflectionEngine
 
-    return ReactReflectionEngine(react_iterations=8, review_rounds=2, **kwargs)
+    return ReactReflectionEngine(react_iterations=24, review_rounds=2, **kwargs)
 
 
 # ── 注册 ──────────────────────────────────────────────────

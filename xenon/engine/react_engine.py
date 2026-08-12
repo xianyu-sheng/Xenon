@@ -41,7 +41,7 @@ class ReActEngine(BaseEngine):
         self,
         model_priority: list[str],
         *,
-        max_iterations: int = 10,
+        max_iterations: int = 40,
         system_prompt: str | None = None,
         tools: dict[str, dict] | None = None,
         callback: EngineCallback | None = None,
@@ -313,6 +313,11 @@ class ReActEngine(BaseEngine):
         # F2: 空洞回答补救上限（最多拒绝 1 次，第二次强制接受避免死循环）
         MAX_HOLLOW_REJECTIONS = 1
         hollow_rejections = 0
+        # v0.8.2: 交付闸门补救上限——「贴 diff 不落盘」的第三纠偏循环。
+        # FileClaimGate 拦截后注入补救提示再迭代（最多 2 次，超限接受结果
+        # 并在 finalize 时照常 raise，保持 fail-closed 语义）。
+        MAX_DELIVERY_REJECTIONS = 2
+        delivery_rejections = 0
         # 方案 C 根因 3 修复：no_tool_streak 重试上限自适应 max_iterations。
         # 旧逻辑固定 2 次后放弃，导致 LLM 容易"硬扛"过 2 次后文字声称完成。
         # 新逻辑：至少 2 次重试，最多是 max_iterations 的一半（保留一半预算给正常迭代）。
@@ -461,6 +466,34 @@ class ReActEngine(BaseEngine):
                 if tracker.has_executions():
                     summary = tracker.execution_summary()
                     logger.debug(f"ReAct 工具执行摘要: {summary}")
+                # ── v0.8.2: 交付闸门补救循环（第三纠偏）──
+                # 贴 diff 不落盘是 SWE-bench 最大失分点：LLM 声称改/建了文件
+                # 但工具记录无写证据。FileClaimGate 拦截后若还有预算与补救
+                # 次数，注入补救提示让 LLM 真正落盘再交付——拦截不是终点，
+                # 拦截结果要反馈回 LLM（与空洞回答/无工具声称同构的循环）。
+                verdict = self.delivery_gate_verdict(
+                    context=ctx, output=answer, tracker=tracker,
+                )
+                if (
+                    verdict is not None
+                    and budget.can_continue()
+                    and delivery_rejections < MAX_DELIVERY_REJECTIONS
+                ):
+                    delivery_rejections += 1
+                    budget.on_retry()
+                    messages.append({
+                        "role": "user",
+                        "content": self.delivery_remediation_prompt(verdict),
+                    })
+                    self.callback.on_warning(
+                        f"交付校验未通过（{verdict.reason[:80]}），"
+                        f"已要求重新落盘（{delivery_rejections}/{MAX_DELIVERY_REJECTIONS}）"
+                    )
+                    logger.warning(
+                        f"ReAct: 交付闸门拦截，注入补救提示 "
+                        f"({delivery_rejections}/{MAX_DELIVERY_REJECTIONS})"
+                    )
+                    continue
                 self.finalize_evidence(context=ctx, output=answer, tracker=tracker)
                 self.callback.on_finish(answer)
                 return answer

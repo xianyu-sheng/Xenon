@@ -238,6 +238,51 @@ class BaseEngine(ABC):
         )
         return EvidencePack.build(ledger)
 
+    def delivery_gate_verdict(
+        self,
+        *,
+        context: AgentContext | None = None,
+        output: str = "",
+        tracker: Any = None,
+        workspace_root: Any = None,
+    ) -> Any:
+        """只做交付闸门判定（不 raise），供引擎补救循环预检。
+
+        与 ``finalize_evidence`` 共享同一 Gate 管线（fix + output 两个 phase），
+        但失败时返回 verdict 而非抛异常——让引擎有机会注入补救提示、
+        再迭代一轮、再验证。这是「贴 diff 不落盘」的根因修复：拦截
+        不是终点，拦截结果要反馈回 LLM。
+        """
+        ctx = context or AgentContext()
+        ledger = self.evidence_ledger or ctx.get("_evidence_ledger")
+        if ledger is None:
+            raise RuntimeError("evidence ledger is not bound to this task")
+        for phase, kwargs in (
+            ("fix", {"tracker": tracker}),
+            ("output", {"output": output, "tracker": tracker, "workspace_root": workspace_root}),
+        ):
+            verdict = self.gate_failed(phase, ctx, **kwargs)
+            if verdict is not None:
+                return verdict
+        return None
+
+    def delivery_remediation_prompt(self, verdict: Any) -> str:
+        """把交付闸门拦截转成补救指令（单一真相源，供各引擎注入）。
+
+        FileClaimGate 拦截的典型场景：LLM 声称修改/创建了文件，但工具
+        执行记录里没有对应 write/edit 证据（「贴 diff 不落盘」）。补救
+        指令明确要求：实际调用写工具落盘，落盘后用只读工具验证，再交付。
+        """
+        reason = getattr(verdict, "reason", str(verdict))
+        return (
+            "⚠️ 交付校验未通过，请修正后重新交付：\n"
+            f"- 校验原因：{reason}\n"
+            "- 你声称修改/创建了文件，但工具执行记录中没有对应的写操作证据。\n"
+            "- 请实际调用 write_file / edit_file / batch_write 等写工具将改动落盘，"
+            "落盘后可用 read_file 验证内容，确认无误后再给出 final_answer。\n"
+            "- 不要只输出 diff 文本或描述性文字代替真实修改。"
+        )
+
     def set_execution_policy(self, policy: ExecutionPolicy) -> None:
         """Bind a policy to this engine (combined graphs use the graph binder)."""
 
