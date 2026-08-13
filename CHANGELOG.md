@@ -5,7 +5,20 @@
 
 ## [Unreleased]
 
-### 框架能力提升（v0.8.2 素材）
+## [0.8.2] — 2026-08-13
+
+### SWE-bench 官方评测提升（同模型对比实证）
+
+同模型（deepseek-v4-flash）、同参数（--max-steps 10）、同实例集
+（seed 20260729）对比 v0.8.0-dev：
+
+- **instance-level：33.3% → 40.0%**（10/30 → 12/30，+6.7pp）
+- **cell-level：34.8% → 45.8%**（24/69 → 33/72，+11.0pp）
+- 12 个 resolved 实例覆盖 8 个仓库，含历史硬实例 sympy-14817
+- 即便最便宜模型 + 单次尝试，40.0% 已超过混合模型基线 36.7%
+- 完整报告：`evals/results/SWEBENCH_REPORT.md` §2.5
+
+### 框架能力提升
 
 - **最大迭代轮次扩大**：ReAct 默认 10 → 40、PlanExecute 默认 20 → 40、
   组合引擎 8 → 24、Reflection 3 → 8，BudgetManager 动态奖励封顶

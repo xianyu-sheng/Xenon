@@ -1,0 +1,65 @@
+{
+  "date": "2026-08-13",
+  "benchmark": "SWE-bench_Lite",
+  "model": "heyroute/deepseek-v4-flash（与基线同模型同参数）",
+  "framework": "v0.8.2（落盘补救循环 + 验证闭环 + 迭代预算扩大）",
+  "seed": 20260729,
+  "instances": 30,
+  "cells": 150,
+  "patch_production": "73/150 = 48.7%",
+  "per_engine_patches": {
+    "react": 19,
+    "plan-execute": 7,
+    "plan-react": 14,
+    "plan-reflection": 14,
+    "react-reflection": 19
+  },
+  "graded": {
+    "react": 19,
+    "plan-execute": 7,
+    "plan-react": 13,
+    "plan-reflection": 14,
+    "react-reflection": 19
+  },
+  "resolved": {
+    "react": 9,
+    "plan-execute": 2,
+    "plan-react": 8,
+    "plan-reflection": 7,
+    "react-reflection": 7
+  },
+  "cell_level": "33/72 = 45.8%",
+  "instance_level": "12/30 = 40.0%",
+  "resolved_instances": [
+    "astropy__astropy-12907",
+    "django__django-10914",
+    "django__django-11099",
+    "django__django-12453",
+    "django__django-14608",
+    "django__django-16041",
+    "matplotlib__matplotlib-23562",
+    "matplotlib__matplotlib-24970",
+    "psf__requests-863",
+    "pylint-dev__pylint-6506",
+    "scikit-learn__scikit-learn-13439",
+    "sympy__sympy-14817"
+  ],
+  "vs_baseline": {
+    "baseline_v080": {
+      "cell": "24/69 = 34.8%",
+      "instance": "10/30 = 33.3%"
+    },
+    "v082": {
+      "cell": "33/72 = 45.8%",
+      "instance": "12/30 = 40.0%"
+    },
+    "cell_delta": "+11.0pp",
+    "instance_delta": "+6.7pp",
+    "note": "同模型（flash）同参数（--max-steps 10）同实例集（seed 20260729），唯一变量 = 框架 v0.8.0-dev → v0.8.2"
+  },
+  "rerun": "15 个失败单元格重跑恢复 15 个 patch（网络/截断/gate 拦截重试）",
+  "artifacts": {
+    "predictions": "/tmp/swebench_pred/final_*.jsonl",
+    "reports": "xenon-v0.8.2-*.final-*-v082.json"
+  }
+}
