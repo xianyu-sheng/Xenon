@@ -4,11 +4,8 @@
 
 <h1 align="center">Xenon</h1>
 
-**面向实验、学习和社区协作的可扩展终端 AI 编程 Agent 试验场。**
-
-Xenon 不以复刻商业级闭源 coding agent 为目标。它更像一个"AI 编程乌托邦"：
-把模型协议、推理范式、工具调用和终端交互拆成**可观察、可替换的模块**，让任何人
-都可以用一个小插件验证自己的 Agent 想法，并通过 Issue 或 PR 与社区一起迭代。
+**开源的 AI 编程 Agent 框架。** 7 种推理范式、12 家 LLM Provider、插件级
+工具引擎与记忆系统，可在终端交互或 SWE-bench 等自动化评测中运行。
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -17,154 +14,70 @@ Xenon 不以复刻商业级闭源 coding agent 为目标。它更像一个"AI �
 [![release v0.8.2](https://img.shields.io/badge/release-v0.8.2-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.8.2)
 
 代码托管：
-[GitHub 主仓库](https://github.com/xianyu-sheng/Xenon) ·
-[Gitee 国内镜像](https://gitee.com/xianyu-sheng123/Xenon)
+[GitHub](https://github.com/xianyu-sheng/Xenon) ·
+[Gitee 镜像](https://gitee.com/xianyu-sheng123/Xenon)
 
 ---
 
-## 架构一览
+## 架构
 
 ```
 用户输入
    │
    ▼
-┌──────────────────────────────────────────────┐
-│  REPL / CLI  (repl.py + repl_input.py)       │  ← 终端交互
-├──────────────────────────────────────────────┤
-│  命令层  12 个 command_groups/*.py            │  ← /help /model /mcp /memory ...
-│          每个命令组是一个独立可替换的模块       │
-├──────────────────────────────────────────────┤
-│  引擎层  7 种推理范式 (BaseEngine ABC)         │  ← direct / ReAct / Plan-Execute
-│  工具层  9 个 tool_families + 7 阶段管线       │  ← git / web / file / lsp / mcp ...
-│  记忆层  memory/ (4 作用域 + 事务锁)           │  ← user / project / session
-│  MCP 层  mcp/ (stdio / HTTP / SSE)            │  ← 7000+ 可发现服务器
-├──────────────────────────────────────────────┤
-│  Provider 层  utils/llm_client.py             │  ← 12 家厂商预设 + 原生协议分支
-│              llm_clients/ 为规划中的拆分目标     │
-└──────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│  REPL / CLI  终端交互层                          │  ← 输入解析、会话管理、命令系统
+│  (repl/)     11 个命令组（/mode /cache /mcp ...）│
+├─────────────────────────────────────────────────┤
+│  引擎层  7 种推理范式（BaseEngine + registry）     │  ← 推理策略
+│  工具层  10 个 tool_families + 7 阶段管线         │  ← 文件/代码/网络/搜索/MCP...
+│  记忆层  4 作用域 (user/project-local/project-    │  ← 跨会话状态管理
+│           shared/session)                        │
+│  MCP 层  客户端（stdio/HTTP/SSE）                │  ← 外部工具协议
+├─────────────────────────────────────────────────┤
+│  Provider 层  llm_client.py + 12 厂商预设        │  ← 模型调用、缓存、用量追踪
+└─────────────────────────────────────────────────┘
 ```
 
----
+### 推理引擎
 
-## 如何扩展 — 四个例子
+| 引擎 | 策略 | 适用场景 |
+|------|------|---------|
+| direct | 单次 LLM 调用 | 无工具需求的简单任务 |
+| react | ReAct 循环 (Thought→Action→Observation) | 需要工具交互的通用任务 |
+| plan-execute | 计划→步骤执行→验证闭环 | 多步骤代码修改 |
+| reflection | 执行→审查→反馈→再执行 | 需要质量审查的复杂任务 |
+| plan-react | 计划→ReAct 步骤执行 | 结构化分解后的工具执行 |
+| plan-reflection | 计划→执行→审查→修复 | 完整开发流程 |
+| react-reflection | ReAct→审查→ReAct 修复 | 已有结果后审查改进 |
 
-Xenon 的**目标**是「每加一种新能力只需写一个文件」。四条扩展路径的成熟度不同，
-下面标注了各自的现状；正在收敛的部分见
-[开放 issue](https://github.com/xianyu-sheng/Xenon/issues)。
-
-### 1. 添加一个新工具
-
-> 现状：注册与分发已经打通，但工具的 description/params 仍在
-> `xenon/engine/react_prompts.py` 的 `BUILTIN_TOOLS` 里单独维护，
-> 注册表尚未成为唯一来源。收敛进展见 issue #8。
-
-```python
-from xenon.nodes.tool_registry import register_tool_handler
-
-def _handle_search(node, context):
-    """handler 契约是 (node, context)。
-
-    node    — 已归一化校验的调用（参数在 node 上）
-    context — Xenon 的 AgentContext
-    """
-    query = getattr(node, "search_pattern", "")
-    return {"action_type": "my_search", "success": True, "content": f"搜索: {query}"}
-
-register_tool_handler("my_search", _handle_search, description="搜索我的知识库")
-```
-
-目前还需要同步一件事：把工具的 name/description/params 加进
-`xenon/engine/react_prompts.py` 的 `BUILTIN_TOOLS`，否则模型看不到这个工具。
-
-### 2. 添加一个新的推理引擎
-
-> 现状：`register_engine()` 已落地，是新增范式的唯一入口 —— 注册一次，
-> `/mode` 列表、REPL 分发、setup wizard 与 evals 白名单全部自动认得它，
-> 无需再改任何现有文件。见 `xenon/engine/registry.py` 与
-> `tests/test_engine_registry.py`。
-
-```python
-# xenon/engine/my_engine.py —— 注册一个 EngineSpec 即可，公共 kwargs 由 REPL 统一组装
-from xenon.engine.base import BaseEngine
-from xenon.engine.registry import register_engine
-
-class MyEngine(BaseEngine):
-    """自定义推理范式。BaseEngine.__init__ 需要 model_priority 等参数。"""
-
-    def run(self, user_input, context=None) -> str:
-        self._begin_run()
-        messages = self._history_messages(user_input, limit=20)
-        # 自定义推理逻辑...
-        return self._call_llm(messages, phase="my_engine")
-
-register_engine(
-    "my-engine",
-    factory=lambda **kw: MyEngine(**kw),
-    description="我的自定义推理范式",
-    mode_line="· MyEngine 执行",
-    result_title="MyEngine 结果",
-)
-```
-
-引擎自动继承断路器、工具安全、记忆注入等基础设施。`/mode`、REPL 分发、
-setup wizard 与 evals 白名单都从注册表派生，注册一次即可被它们认到，
-无需再维护各处的硬编码清单。
-
-### 3. 添加一个新命令
-
-在 `xenon/repl/command_groups/` 对应主题文件里（例如 `workspace.py`）加：
-
-```python
-from xenon.repl.command_registry import command_handler, register_command
-
-register_command("/my-feature", "我的新功能", "/my-feature [args]")
-
-@command_handler("/my-feature")
-def _cmd_my_feature(*, args: str, session_state: dict, **kwargs):
-    return f"你输入了: {args}"
-```
-
-重启 Xenon 后 `/help` 会自动列出，`/my-feature hello` 即可使用。
-**不需要修改 `commands.py`**（它只是 re-export 层）。
-
-### 4. 添加一个新的 LLM Provider
-
-> 现状：provider 实现集中在 `xenon/utils/llm_client.py`，尚未按厂商拆包，
-> 也还没有 `register_provider()`。收敛进展见 issue #5 / #7。
-
-若厂商是 OpenAI 兼容协议，只需在 `xenon/utils/llm_client.py` 的
-`_PROVIDER_DEFAULTS` 加一项：
-
-```python
-"my_provider": {
-    "base_url": "https://api.myprovider.com/v1",
-    "env_key": "MY_PROVIDER_API_KEY",
-    "max_output_tokens": 8192,
-},
-```
-
-同时需要在 `xenon/repl/provider_registry.py` 的 `PROVIDERS` 和
-`xenon/repl/model_pool.py` 的 `cost_map` 各加一项。若是原生（非 OpenAI 兼容）
-协议，还需在 `chat_completion()` / `chat_completion_with_tools()` /
-`chat_completion_stream()` 三个入口各加分支 —— anthropic 就是这样接的。
-
-HTTP 连接池、重试、凭证管理和 usage 追踪对所有 provider 通用。
+引擎通过 `register_engine()` 注册（见 `xenon/engine/registry.py`），新增范式
+无需修改 REPL、evals 或 setup wizard 的硬编码清单。
 
 ---
 
 ## 快速开始
 
 ```bash
-# 中国大陆网络优先：从 Gitee 镜像安装
-pip install -U "git+https://gitee.com/xianyu-sheng123/Xenon.git@v0.8.2"
-
-# 国际网络或上游开发：从 GitHub 安装
+# 安装
 pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.8.2"
+
+# 启动
 xenon
 ```
 
-进入 Xenon 后运行 `/setup` 配置模型和 API Key，然后直接描述任务。
-Python 3.10 及以上版本可用。
+进入后运行 `/setup` 配置模型和 API Key，然后直接描述任务。
+Python 3.10+ 可用。
+
+### 开发环境
+
+```bash
+git clone https://github.com/xianyu-sheng/Xenon.git
+cd Xenon
+pip install -e ".[dev]"
+ruff check xenon tests evals
+pytest -q -m "not live"
+```
 
 ---
 
@@ -172,26 +85,63 @@ Python 3.10 及以上版本可用。
 
 | 能力 | 说明 |
 |------|------|
-| DeepSeek 适配 | V4 模型发现、`reasoning_effort`、原生工具调用、思考消息连续性 |
-| Cache Rails | 按模型和执行契约维护追加式提示词轨道；`/cache` 与 `/cost` 展示厂商 usage 和费用 |
-| 执行引擎 | direct、ReAct、Plan-Execute、Reflection 和三种组合模式 |
-| 工具安全 | 权限确认、超时、断路器、结构化结果和中断恢复点 |
-| 用户治理记忆 | 会话、项目本地、项目共享、用户全局四个作用域；自动候选必须确认后才写入 |
-| 扩展 | Agent Skills、MCP（stdio/HTTP/SSE）、Ark 与 OpenAI-compatible Provider |
-| 终端界面 | 多行输入、固定状态栏、`Ctrl+O` 折叠详情、运行状态图标 |
+| **推理引擎** | 7 种范式，通过 `register_engine()` 注册，自动继承工具安全、记忆注入、断路器 |
+| **工具系统** | 10 个 tool_families（文件读写、代码搜索、git、网络、shell、MCP 等），`register_tool_handler()` 注册 |
+| **LLM Provider** | 12 家厂商预设（OpenAI、Anthropic、DeepSeek、Google、Ark 等），OpenAI 兼容协议自动适配 |
+| **记忆系统** | 4 作用域（user / project-local / project-shared / session），加权检索 + token 预算压缩 |
+| **MCP 客户端** | stdio / HTTP / SSE 传输，自动发现与工具注入 |
+| **Cache Rails** | 按模型和执行契约维护追加式提示词轨道；`/cache` 与 `/cost` 展示厂商 usage 和费用 |
+| **工具安全** | 权限确认、超时、断路器、证据闸门、结构化结果与中断恢复 |
+| **终端界面** | 多行输入、固定状态栏、`Ctrl+O` 折叠详情、运行状态图标 |
+| **Agent Skills** | `SKILL.md` 驱动的技能加载系统 |
 
 ### 评测结果
 
-所有数字来自可复现的真实运行。缓存与成本以 API 返回的 `usage` 为准。
+所有数字来自可复现的真实运行，同模型 A/B 对比，官方 SWE-bench 标准 grading。
 
-| 评测 | 指标 | 结果 |
-|------|------|------|
-| 自建 20 任务 | 机器断言通过率 | 65%（13/20） |
-| 自建 20 任务 | 工具执行成功率 | 95.09% |
-| Cache Rails | 厂商上报命中率 | 97.35%，节省 93.03% |
-| SWE-bench Lite | 引擎-实例格通过率 | 57.14%（4/7，1 instance × 7 engines 矩阵验证） |
+| 评测 | 指标 | 结果 | 说明 |
+|------|------|------|------|
+| SWE-bench Lite | instance-level | **40.0%**（12/30，同模型 A/B +6.7pp） | v0.8.2 官方 harness |
+| SWE-bench Lite | cell-level | **45.8%**（33/72，同模型 A/B +11.0pp） | 5 引擎 × 30 实例矩阵 |
+| cache rails | 厂商上报命中率 | 97.35%，节省 93.03% token | 追加式语境缓存 |
 
-**未跑的项目一律标注原因，不以"计划中"占位充当结果。**
+每引擎 resolved：react 9、plan-execute 2、plan-react 8、plan-reflection 7、react-reflection 7。
+
+---
+
+## 项目结构
+
+```
+xenon/
+├── engine/            # 推理引擎（7 种范式 + registry）
+│   ├── base.py       # BaseEngine ABC
+│   ├── registry.py   # EngineSpec + register_engine()
+│   ├── verification_loop.py  # 跨轮次验证循环（v0.8.3）
+│   ├── react_engine.py
+│   ├── plan_execute_engine.py
+│   ├── reflection_engine.py
+│   └── combined_engines.py
+├── nodes/             # 工具层
+│   ├── tool_families/ # 10 个工具族（file_mutation / search / git / command / web / mcp...）
+│   ├── tool_registry.py
+│   ├── tool_executor.py
+│   └── tool_node.py
+├── memory/            # 记忆系统
+│   ├── service.py    # 4 作用域 CRUD
+│   ├── retrieval.py  # 加权检索
+│   └── compiler.py   # token 预算压缩
+├── mcp/               # MCP 客户端（transport / client / registry）
+├── repl/              # 终端交互层
+│   ├── command_groups/ # 12 个命令组
+│   ├── provider_registry.py
+│   └── model_pool.py
+├── utils/             # LLM 客户端、缓存、原子写入
+└── repl.py            # 入口
+evals/
+├── swebench_xenon.py  # SWE-bench 评测适配器
+├── swebench_runtime.py # 官方运行时（Docker 容器）
+└── results/           # 评测结果存档
+```
 
 ---
 
@@ -210,15 +160,16 @@ Python 3.10 及以上版本可用。
 
 ---
 
-## 开发
+## 扩展
 
-```bash
-git clone https://github.com/xianyu-sheng/Xenon.git
-cd Xenon
-pip install -e ".[dev]"
-ruff check xenon tests evals
-pytest -q -m "not live"
-```
+Xenon 提供四条扩展路径，注册后自动被框架识别：
+
+| 扩展 | 入口 | 状态 |
+|------|------|------|
+| 新工具 | `register_tool_handler()` | 已落地，需同步 tools 描述至模型可见 |
+| 新引擎 | `register_engine()` + `EngineSpec` | ✅ 已落地，注册一次自动识别 |
+| 新命令 | `register_command()` + `@command_handler` | ✅ 已落地 |
+| 新 Provider | `_PROVIDER_DEFAULTS` + `PROVIDERS` + `cost_map` | 12 家已接入，`register_provider()` 待落地 |
 
 ---
 
