@@ -15,6 +15,70 @@ MAX_WRITE_SIZE = 10 * 1024 * 1024
 MAX_VERIFY_SIZE = 1 * 1024 * 1024
 
 
+def _normalize_ws(text: str) -> str:
+    """归一化空白：连续空白（含换行）→ 单个空格，用于模糊匹配。"""
+    import re
+
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _normalized_match(content: str, old_text: str) -> str | None:
+    """空白归一化后查找 old_text 的唯一匹配，返回文件中的实际文本。
+
+    LLM 生成的 old_text 常因缩进/换行/行尾空白与文件内容有细微差异，
+    精确匹配失败。这里把 old_text 按空白分词，用 ``\\s+`` 连接后做正则
+    搜索，等效于「空白不敏感」匹配。若唯一匹配，返回文件中的原始文本
+    （保留原格式），用于精确替换。若 0 或 2+ 匹配，返回 None 让调用方
+    继续报错。
+    """
+    import re
+
+    tokens = re.split(r"\s+", old_text.strip())
+    if not tokens:
+        return None
+    # 每个 token 独立转义，然后以 \s+ 连接 —— 空白（含换行/缩进）完全灵活。
+    pattern = r"\s+".join(re.escape(t) for t in tokens)
+    matches = list(re.finditer(pattern, content))
+    if len(matches) != 1:
+        return None
+    m = matches[0]
+    # 向前包含匹配起点前的行内缩进（空格/tab），使替换不破坏代码格式。
+    # 不含换行：多行 old_text 的跨行空白已由 \s+ 吞入匹配本身。
+    start = m.start()
+    while start > 0 and content[start - 1] in " \t":
+        start -= 1
+    return content[start : m.end()]
+
+
+def _nearby_context(content: str, old_text: str, radius: int = 80) -> str:
+    """未找到匹配时，返回与 old_text 最相似片段的附近上下文，帮助 LLM 修正。"""
+    import difflib
+
+    norm_old = _normalize_ws(old_text)
+    if not norm_old:
+        return ""
+    # 以行为单位找最相似的片段
+    lines = content.splitlines()
+    best_score = -1.0
+    best_idx = 0
+    # 滑动窗口：取归一化后的行组与 old_text 比较
+    window = max(1, len(norm_old) // 40)  # 粗略估计行数
+    for i in range(len(lines) - window + 1):
+        chunk = _normalize_ws("\n".join(lines[i : i + window]))
+        score = difflib.SequenceMatcher(None, chunk, norm_old).ratio()
+        if score > best_score:
+            best_score = score
+            best_idx = i
+    lo = max(0, best_idx - 2)
+    hi = min(len(lines), best_idx + window + 2)
+    snippet = "\n".join(lines[lo:hi])
+    return (
+        f"。\n文件中最接近的片段（行 {lo + 1}-{hi}，相似度 "
+        f"{best_score:.0%}）：\n```\n{snippet[:400]}\n```\n"
+        "请核对实际内容后重新生成 old_text（注意缩进与换行）。"
+    )
+
+
 class FileMutationToolsMixin:
     """Write, edit and batch-mutate files with rollback guarantees."""
 
@@ -165,7 +229,18 @@ class FileMutationToolsMixin:
         content = path.read_text(encoding=self.encoding)
         count = content.count(old_text)
         if count == 0:
-            return {"error": "未找到匹配文本", "success": False}
+            # v0.8.3: 智能匹配回退——LLM 生成的 old_text 常因缩进/换行/空白
+            # 与文件实际内容有细微差异导致精确匹配失败。归一化空白后重试。
+            normalized_hit = _normalized_match(content, old_text)
+            if normalized_hit is None:
+                hint = _nearby_context(content, old_text)
+                return {
+                    "error": "未找到匹配文本" + hint,
+                    "success": False,
+                }
+            # 归一化匹配成功：用实际内容作为替换目标，保留原格式
+            old_text = normalized_hit
+            count = content.count(old_text)
         if count > 1:
             return {"error": f"找到 {count} 处匹配，请提供更多上下文", "success": False}
 
