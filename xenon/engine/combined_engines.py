@@ -212,6 +212,12 @@ class PlanReactEngine(SteeringMixin):
         self.reactor = ReActEngine(
             model_priority, max_iterations=react_iterations, **common
         )
+        # v0.8.3: 引擎层跨轮次验证循环
+        from xenon.engine.verification_loop import VerificationLoop
+        self.verification_loop = VerificationLoop(
+            max_rounds=8, max_steps=self.max_steps,
+        )
+        self.verification_loop._engine = self
         self._last_tracker: ToolExecutionTracker | None = None
         self.last_model_used: str | None = None
 
@@ -334,6 +340,35 @@ class PlanReactEngine(SteeringMixin):
             ctx.set(f"step_{step_id}_status", status)
             self.callback.on_step_done(step_id, status == "ok", result[:200])
 
+        # v0.8.3: 学习式验证循环——步骤执行完毕后，若需要验证则进入修复循环
+        evidence = ExecutionEvidence.capture(aggregate, workspace_root)
+        self.verification_loop.reset()
+        self.verification_loop._active = True
+        while self.verification_loop.should_continue:
+            repair_prompt = self.verification_loop.feed(evidence, user_input)
+            if repair_prompt is None:
+                break
+            logger.warning(
+                "PlanReact: 学习式验证循环 R%d——注入修复步骤",
+                self.verification_loop.round_count + 1,
+            )
+            self.callback.on_warning(
+                "检测到修改已落盘但测试未通过，正在读取失败输出并修复…"
+            )
+            phase_ctx = _isolated_ctx(ctx)
+            self.reactor._last_tracker = None
+            try:
+                _ = self.reactor.run(
+                    repair_prompt, context=phase_ctx, ctx_mgr=ctx_mgr,
+                )
+                _merge_tracker(aggregate, self.reactor._last_tracker)
+            except Exception as exc:
+                logger.warning("PlanReact 验证修复失败: %s", exc)
+                break
+            evidence = ExecutionEvidence.capture(aggregate, workspace_root)
+            outcome_tag = "fixed" if evidence.successful_tests else "still_failing"
+            self.verification_loop.record_outcome(evidence, outcome=outcome_tag)
+
         return self._finalize_plan_react(ctx, self._summarize(user_input, results, analysis))
 
     def _summarize(
@@ -410,6 +445,10 @@ class _ReflectionCombination(SteeringMixin):
 
     def __init__(self) -> None:
         SteeringMixin.__init__(self)
+        # v0.8.3: 引擎层跨轮次验证循环（组合层，在子引擎各自验证后聚合检查）
+        from xenon.engine.verification_loop import VerificationLoop
+        self.verification_loop = VerificationLoop(max_rounds=8)
+        self.verification_loop._engine = self
 
     def _finalize_combined(self, ctx: AgentContext, output: str) -> str:
         """Close the composite lifecycle at one shared delivery boundary."""
@@ -547,6 +586,36 @@ class _ReflectionCombination(SteeringMixin):
             except Exception as exc:
                 logger.warning("Post-repair review failed: %s", exc)
 
+        # v0.8.3: 学习式验证循环——修复后检查是否需要进一步验证
+        evidence = ExecutionEvidence.capture(aggregate, root)
+        self.verification_loop.reset()
+        self.verification_loop._active = True
+        while self.verification_loop.should_continue:
+            v_prompt = self.verification_loop.feed(evidence, user_input)
+            if v_prompt is None:
+                break
+            logger.warning(
+                "Reflection组合: 学习式验证循环 R%d——注入修复",
+                self.verification_loop.round_count + 1,
+            )
+            self.callback.on_warning(
+                "检测到修改已落盘但测试未通过，正在读取失败输出并修复…"
+            )
+            repair_ctx = _isolated_ctx(ctx)
+            self.repairer._last_tracker = None
+            try:
+                v_result = self.repairer.run(
+                    v_prompt, context=repair_ctx, ctx_mgr=ctx_mgr,
+                )
+                _merge_tracker(aggregate, self.repairer._last_tracker)
+                repaired_output = v_result
+            except Exception as exc:
+                logger.warning("Reflection组合 验证修复失败: %s", exc)
+                break
+            evidence = ExecutionEvidence.capture(aggregate, root)
+            outcome_tag = "fixed" if evidence.successful_tests else "still_failing"
+            self.verification_loop.record_outcome(evidence, outcome=outcome_tag)
+
         return self._finalize_combined(ctx, repaired_output or initial_output)
 
 
@@ -567,7 +636,7 @@ class PlanReflectionEngine(_ReflectionCombination):
         auto_router: Any = None,
         permission_gate: Any = None,
     ) -> None:
-        SteeringMixin.__init__(self)
+        super().__init__()
         self.model_priority = model_priority
         self.max_steps = max_steps
         self.review_rounds = review_rounds
@@ -633,7 +702,7 @@ class ReactReflectionEngine(_ReflectionCombination):
         auto_router: Any = None,
         permission_gate: Any = None,
     ) -> None:
-        SteeringMixin.__init__(self)
+        super().__init__()
         self.model_priority = model_priority
         self.react_iterations = react_iterations
         self.review_rounds = review_rounds
