@@ -84,6 +84,12 @@ class ReActEngine(BaseEngine):
             execution_policy=self.execution_policy,
             evidence_enforcement="enforce",
         )
+        # v0.8.3: 引擎层跨轮次验证循环
+        from xenon.engine.verification_loop import VerificationLoop
+        self.verification_loop = VerificationLoop(
+            max_rounds=8, max_steps=self.max_iterations,
+        )
+        self.verification_loop._engine = self
         # F2: 空洞回答检测器（无状态，实例共享）
         self._hollow = HollowDetector()
         # F5: DeepSeek V4 的思考模式工具协议已经单元测试和真实 API
@@ -494,9 +500,63 @@ class ReActEngine(BaseEngine):
                         f"({delivery_rejections}/{MAX_DELIVERY_REJECTIONS})"
                     )
                     continue
-                self.finalize_evidence(context=ctx, output=answer, tracker=tracker)
-                self.callback.on_finish(answer)
-                return answer
+
+                # ── v0.8.3: 学习式验证循环（跨轮次状态传递）──
+                # 在 React 交付闸门通过后，检查是否需要验证修复。
+                # 若需要，注入修复提示并继续主循环，让 LLM 修复后再交付。
+                # React 的「多轮」由主循环自然提供（每次跳转回主循环头，
+                # 下一轮迭代再回到此检查点）。
+                from xenon.engine.execution_evidence import (
+                    ExecutionEvidence,
+                    workspace_root_for,
+                )
+
+                # 首次进入时重置，后续由主循环自然迭代驱动
+                if not getattr(self, '_verification_active', False):
+                    self.verification_loop.reset()
+                    self.verification_loop._active = True
+                    self._verification_active = True
+                else:
+                    # 非首次：记录上一轮修复结果后再继续
+                    evidence = ExecutionEvidence.capture(tracker, workspace_root_for(self))
+                    outcome_tag = "fixed" if evidence.successful_tests else "still_failing"
+                    self.verification_loop.record_outcome(evidence, outcome=outcome_tag)
+                evidence = ExecutionEvidence.capture(tracker, workspace_root_for(self))
+
+                if not self.verification_loop.should_continue:
+                    # 验证条件不满足，直接交付
+                    self.finalize_evidence(context=ctx, output=answer, tracker=tracker)
+                    self.callback.on_finish(answer)
+                    return answer
+
+                repair_prompt = self.verification_loop.feed(evidence, user_input)
+                if repair_prompt is None:
+                    # 无修复提示（已验证通过/无失败测试），直接交付
+                    self.finalize_evidence(context=ctx, output=answer, tracker=tracker)
+                    self.callback.on_finish(answer)
+                    return answer
+
+                if not budget.can_continue() or iteration >= self.max_iterations:
+                    logger.warning(
+                        "VerificationLoop (ReAct): 预算耗尽，终止验证循环"
+                    )
+                    self.finalize_evidence(context=ctx, output=answer, tracker=tracker)
+                    self.callback.on_finish(answer)
+                    return answer
+
+                self.callback.on_warning(
+                    "检测到修改已落盘但测试未通过，正在读取失败输出并修复…"
+                )
+                logger.warning(
+                    "ReAct: 学习式验证循环 R%d——注入修复提示",
+                    self.verification_loop.round_count + 1,
+                )
+                messages.append({
+                    "role": "user",
+                    "content": repair_prompt,
+                })
+                # 重新进入主循环（下一轮迭代会回到此检查点）
+                continue  # 回到 while budget.can_continue() 顶部
 
             # v0.5.3: Python 的 "key" in list 检查的是值成员而非键存在，
             # 所以 list[dict] 永远返回 False，导致并行工具调用被静默跳过。
