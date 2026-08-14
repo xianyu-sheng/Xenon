@@ -92,7 +92,7 @@ ReactReflection）在创建后都应调用 `_inject_mcp_tools_into_engine()`，
 
 **反例**（禁止）：
 - 改了代码 → 只跑单元测试 → 提交推送
-- 单元测试 1110 全绿 ≠ 真实场景可用
+- 单元测试全绿 ≠ 真实场景可用
 
 **正例**（期望）：
 - 改完 MCP 输出 bug → 启动 xenon → `/mcp add 12306` →
@@ -102,7 +102,7 @@ ReactReflection）在创建后都应调用 `_inject_mcp_tools_into_engine()`，
 
 - 版本号: `__init__.py` + `pyproject.toml` + `repl.py` 兜底值 三处统一
 - CHANGELOG: 按版本倒序，每版本记录变更类别和测试结果
-- 测试: 1110 个单元测试，`python3 -m pytest tests/ -q`
+- 测试: `tests/` 1983 + `xenon/tests/` 200 = 2183 个测试，`python3 -m pytest tests/ -q`
 - 发布: `git tag -a vX.Y.Z` + `gh release create`
 
 ### 每次修改后自动安装

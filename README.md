@@ -14,7 +14,7 @@ Xenon 不以复刻商业级闭源 coding agent 为目标。它更像一个"AI �
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml/badge.svg)](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/xianyu-sheng/Xenon/branch/main/graph/badge.svg)](https://codecov.io/gh/xianyu-sheng/Xenon)
-[![release v0.7.4](https://img.shields.io/badge/release-v0.7.4-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.7.4)
+[![release v0.8.2](https://img.shields.io/badge/release-v0.8.2-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.8.2)
 
 代码托管：
 [GitHub 主仓库](https://github.com/xianyu-sheng/Xenon) ·
@@ -145,10 +145,10 @@ HTTP 连接池、重试、凭证管理和 usage 追踪对所有 provider 通用�
 
 ```bash
 # 中国大陆网络优先：从 Gitee 镜像安装
-pip install -U "git+https://gitee.com/xianyu-sheng123/Xenon.git@v0.7.4"
+pip install -U "git+https://gitee.com/xianyu-sheng123/Xenon.git@v0.8.2"
 
 # 国际网络或上游开发：从 GitHub 安装
-pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.7.4"
+pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.8.2"
 xenon
 ```
 
