@@ -84,17 +84,16 @@ def _extract_failure_summary(evidence: ExecutionEvidence) -> str:
 def _should_verify(evidence: ExecutionEvidence, user_input: str) -> bool:
     """Determine whether verification is needed.
 
-    Conditions (matching v0.8.2 semantics, plus v0.8.3 write-failure fix):
+    Conditions:
     1. Task requires write operations
-    2. Tracker has write attempts (success OR failure) — 写失败也是需要补救的信号
-    3. Has failed test commands
-    4. No successful test commands
+    2. Tracker has write attempts (success OR failure)
+    3. Has failed command(s) — 不限于测试命令；写代码后任何失败命令
+      都可能反映验证失败（如 python -c 内联验证、python script.py 运行脚本）
+    4. No successful test commands — 若已有成功测试说明修复已通过
 
-    v0.8.3 修复：原来要求「有成功写操作」才触发。实测 SWE-bench 发现
-    edit_file 失败（未找到匹配文本）是最常见失败模式之一——此时无成功写
-    操作，验证循环不触发，LLM 直接收工，patch 为空。改为「有写尝试
-    （成功或失败）」都触发，让 LLM 知道编辑没生效、需要重新读取正确
-    内容再改。
+    v0.8.3 实测：LLM 常用 python -c / python script.py 做内联验证，
+    这些命令不匹配 _TEST_COMMAND（pytest/unittest 等），导致验证
+    循环漏掉「写成功但验证失败」的场景。改为任何失败命令都触发。
     """
     from xenon.engine.evidence_gate import task_requires_write
     if not task_requires_write(user_input):
@@ -106,15 +105,8 @@ def _should_verify(evidence: ExecutionEvidence, user_input: str) -> bool:
         return False
     if evidence.successful_tests:
         return False
-    has_failed_test = any(
-        not c.success
-        and c.tool_name == "command"
-        and _TEST_COMMAND.search(
-            str(c.params.get("command") or c.params.get("cmd") or "")
-        )
-        for c in evidence.calls
-    )
-    if not has_failed_test:
+    has_failed_command = any(not c.success for c in evidence.calls)
+    if not has_failed_command:
         return False
     return True
 
