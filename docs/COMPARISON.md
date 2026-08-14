@@ -22,7 +22,7 @@
 | 维度 | Xenon | Aider | Claude Code | OpenCode | Crush |
 | --- | :---: | :---: | :---: | :---: | :---: |
 | **MCP 协议** | ✅ stdio + SSE | ❌ | ✅ 一等公民 | ✅ | ✅ stdio/http/sse |
-| **多模型路由** | ✅ 6 provider | ✅ ~10 | ❌ Claude only | ✅ 50+ | ✅ 18+ |
+| **多模型路由** | ✅ 12 家厂商 | ✅ ~10 | ❌ Claude only | ✅ 50+ | ✅ 18+ |
 | **多范式引擎** | ✅ **7 种** | ❌ | ❌ | ❌ | ⚠️ 可 mid-session 换 LLM |
 | **本地优先** | ✅ Ollama + 本地凭据 | ⚠️ CLI 本地，模型云 | ❌ | ✅ | ✅ Ollama / llama.cpp |
 | **工具断路器** | ✅ 3 失败熔断 | ❌ | ❌ | ❌ | ❌ |
@@ -53,14 +53,14 @@
 
 | 项目 | 能力 |
 | --- | --- |
-| **Xenon** | 6 provider 一处配置：`openai` / `anthropic` / `deepseek` / `gemini` / `qwen` / `ollama`（含本地模型）；`provider_priority` 角色级优先级；per-provider `httpx.Client` 长连接池复用（v0.2.0 R3 修复）。 |
+| **Xenon** | 12 家厂商一处配置：`openai` / `anthropic` / `deepseek` / `ark` / `google` / `zhipu` / `qwen` / `moonshot` / `baichuan` / `minimax` / `xiaomi` / `ollama`（含本地模型）；`provider_priority` 角色级优先级；per-provider `httpx.Client` 长连接池复用（v0.2.0 R3 修复）。 |
 | Aider | ~10 provider，OpenAI 兼容协议都可接入。 |
 | Claude Code | 仅 Claude 系列模型（opus / sonnet / haiku）。 |
 | OpenCode | 50+ provider，Catwalk 自动发现。 |
 | Crush | 18+ 内置 provider，支持 OpenAI / Anthropic 兼容协议自接入。 |
 
 **Xenon 优势**：和 Aider / Crush 同级（多 provider 接入），但有**断路器自动降级**——3 连续失败自动冷却，比 Crush 多了这个生产级特性。
-**Xenon 劣势**：provider 数量不如 OpenCode（50+）和 Crush（18+），但 6 个覆盖了主流 + 本地。
+**Xenon 劣势**：provider 数量不如 OpenCode（50+）和 Crush（18+），但 12 个覆盖了主流 + 本地。
 
 ### 3. 多范式引擎（**核心差异化**）
 
@@ -92,7 +92,7 @@
 | OpenCode | 开源，Ollama 支持。 |
 | Crush | 开源，Ollama / llama.cpp / LM Studio / LiteLLM / omlx 全支持。 |
 
-**Xenon 优势**：和 Crush 同级（Ollama + 凭据本地 + 状态本地），但多模型 provider 数量是 Crush 的 1/3。
+**Xenon 优势**：和 Crush 同级（Ollama + 凭据本地 + 状态本地），但多模型 provider 数量约 Crush 的 2/3。
 **Xenon 劣势**：本地运行时支持不如 Crush 细（Crush 支持 5 种本地运行时，Xenon 只支持 Ollama）。
 
 ### 5. 工具断路器
@@ -140,7 +140,7 @@
 | 我只用 Claude 模型，要 MCP | Claude Code（官方、一等 MCP） |
 | 我要 50+ provider，TUI 美观 | OpenCode |
 | 我要 Go 写的快、轻、本地多运行时 | Crush |
-| **我要多范式（7 种）+ 6 provider + MCP + 工程化三件套** | **Xenon** |
+| **我要多范式（7 种）+ 12 家厂商 + MCP + 工程化三件套** | **Xenon** |
 | 我要研究 Agent 范式（PlanDAG / Reflection / 组合引擎实现） | **Xenon**（这是实验平台） |
 | 我要做国产 / 中文 / 本地化 | **Xenon**（DeepSeek / Qwen / Ollama 三件套） |
 
@@ -149,7 +149,7 @@
 ## 已知后续项
 
 - MCP server **不自动重启**（Xenon 唯一不补的 MCP 特性，#19 v0.3.0 路线）
-- provider 数量（6）落后 OpenCode（50+）和 Crush（18+），但 6 个覆盖主流
+- provider 数量（12）落后 OpenCode（50+）和 Crush（18+），但 12 个覆盖主流
 - 本地运行时仅支持 Ollama，Crush 支持 5 种
 
 提交 issue 之前可以先看 [CHANGELOG.md](../CHANGELOG.md) 确认版本。

@@ -14,7 +14,7 @@ Xenon 不以复刻商业级闭源 coding agent 为目标。它更像一个"AI �
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml/badge.svg)](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/xianyu-sheng/Xenon/branch/main/graph/badge.svg)](https://codecov.io/gh/xianyu-sheng/Xenon)
-[![release v0.7.4](https://img.shields.io/badge/release-v0.7.4-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.7.4)
+[![release v0.8.2](https://img.shields.io/badge/release-v0.8.2-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.8.2)
 
 代码托管：
 [GitHub 主仓库](https://github.com/xianyu-sheng/Xenon) ·
@@ -78,12 +78,15 @@ register_tool_handler("my_search", _handle_search, description="搜索我的知�
 
 ### 2. 添加一个新的推理引擎
 
-> 现状：`BaseEngine` 抽象已就位（唯一抽象方法是 `run()`），但还没有
-> `register_engine()`；接入一种新范式目前需要改多处。收敛进展见 issue #6。
+> 现状：`register_engine()` 已落地，是新增范式的唯一入口 —— 注册一次，
+> `/mode` 列表、REPL 分发、setup wizard 与 evals 白名单全部自动认得它，
+> 无需再改任何现有文件。见 `xenon/engine/registry.py` 与
+> `tests/test_engine_registry.py`。
 
 ```python
-# xenon/engine/my_engine.py
+# xenon/engine/my_engine.py —— 注册一个 EngineSpec 即可，公共 kwargs 由 REPL 统一组装
 from xenon.engine.base import BaseEngine
+from xenon.engine.registry import register_engine
 
 class MyEngine(BaseEngine):
     """自定义推理范式。BaseEngine.__init__ 需要 model_priority 等参数。"""
@@ -93,11 +96,19 @@ class MyEngine(BaseEngine):
         messages = self._history_messages(user_input, limit=20)
         # 自定义推理逻辑...
         return self._call_llm(messages, phase="my_engine")
+
+register_engine(
+    "my-engine",
+    factory=lambda **kw: MyEngine(**kw),
+    description="我的自定义推理范式",
+    mode_line="· MyEngine 执行",
+    result_title="MyEngine 结果",
+)
 ```
 
-引擎自动继承断路器、工具安全、记忆注入等基础设施。但接入 REPL 目前还需要同步
-改 `xenon/repl/model_registry.py` 的 `BUILTIN_MODES`、`xenon/repl/repl.py`
-的 dispatch 分支，以及 `evals/runner.py` 的引擎白名单。
+引擎自动继承断路器、工具安全、记忆注入等基础设施。`/mode`、REPL 分发、
+setup wizard 与 evals 白名单都从注册表派生，注册一次即可被它们认到，
+无需再维护各处的硬编码清单。
 
 ### 3. 添加一个新命令
 
@@ -145,10 +156,10 @@ HTTP 连接池、重试、凭证管理和 usage 追踪对所有 provider 通用�
 
 ```bash
 # 中国大陆网络优先：从 Gitee 镜像安装
-pip install -U "git+https://gitee.com/xianyu-sheng123/Xenon.git@v0.7.4"
+pip install -U "git+https://gitee.com/xianyu-sheng123/Xenon.git@v0.8.2"
 
 # 国际网络或上游开发：从 GitHub 安装
-pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.7.4"
+pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.8.2"
 xenon
 ```
 

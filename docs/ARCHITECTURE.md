@@ -52,12 +52,12 @@ Xenon 的长期定位是**可扩展的 AI 编程 Agent 试验场**，而不是�
 ```python
 register_tool_handler("my_tool", handler, description="...")   # ✅ 已实现（元数据尚未收敛，见 issue #8）
 register_command("/my-command", handler)                        # ✅ 已实现
-register_engine("my_engine", EngineClass)                       # ⏳ 未实现，见 issue #6
+register_engine("my_engine", EngineClass)                       # ✅ 已实现（见 xenon/engine/registry.py）
 register_provider("my_provider", ProviderAdapter)               # ⏳ 未实现，见 issue #7
 ```
 
-四条契约中已落地两条。标注 ⏳ 的两条目前需要修改多处现有文件才能接入新能力，
-对应 issue 已列出确切的改动点清单。
+四条契约中已落地三条。仅剩 register_provider 一条未落地，需要修改多处现有文件
+才能接入新能力，对应 issue #7 已列出确切的改动点清单。
 
 当前已完成第一步：`xenon.nodes.tool_registry.ToolRegistry` 接管了 `ToolNode` 的
 内置分发。旧的 `ToolNode(...).execute(context)` 仍然保持兼容；下一步会按工具族
