@@ -74,14 +74,26 @@ def _git(cwd: Path, *args: str) -> str:
 
 
 def _prompt(instance: dict[str, Any]) -> str:
+    # FAIL_TO_PASS 测试名（test_patch 已应用，在原始代码上应失败）
+    fail_tests = instance.get("FAIL_TO_PASS", [])
+    fail_hint = ""
+    if fail_tests:
+        # 取前 3 个测试名（prompt 太长会稀释注意力）
+        samples = fail_tests[:3]
+        fail_hint = (
+            "\n\n以下测试在原始代码上失败，你的修复应让它们通过：\n"
+            + "\n".join(f"  - {t}" for t in samples)
+            + ("\n  ...（等" if len(fail_tests) > 3 else "")
+        )
     return f"""You are fixing an official SWE-bench task in the current repository.
 Work directly in this working directory.  Inspect the code, implement the
-minimal correct fix, and run focused tests when practical.  Actually edit the
-working tree; do not only describe a patch.  Do not use a reference patch and
-do not change tests unless required by the issue.  Leave all code changes in
-the working tree for grading.  If this engine cannot edit files with tools,
-return only a complete git-style unified diff that can be applied with
-`git apply`; do not return a prose approximation of a patch.
+minimal correct fix, and __run focused tests to verify your fix__.
+Actually edit the working tree using the available tools; do not only describe
+a patch.  Do not use a reference patch and do not change tests unless required
+by the issue.  Leave all code changes in the working tree for grading.
+If this engine cannot edit files with tools, return only a complete git-style
+unified diff that can be applied with `git apply`; do not return a prose
+approximation of a patch.{fail_hint}
 
 Official issue statement:
 {instance['problem_statement']}
