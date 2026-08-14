@@ -84,16 +84,25 @@ def _extract_failure_summary(evidence: ExecutionEvidence) -> str:
 def _should_verify(evidence: ExecutionEvidence, user_input: str) -> bool:
     """Determine whether verification is needed.
 
-    All conditions must be met (matching v0.8.2 semantics):
+    Conditions (matching v0.8.2 semantics, plus v0.8.3 write-failure fix):
     1. Task requires write operations
-    2. Tracker has successful write operations
+    2. Tracker has write attempts (success OR failure) — 写失败也是需要补救的信号
     3. Has failed test commands
     4. No successful test commands
+
+    v0.8.3 修复：原来要求「有成功写操作」才触发。实测 SWE-bench 发现
+    edit_file 失败（未找到匹配文本）是最常见失败模式之一——此时无成功写
+    操作，验证循环不触发，LLM 直接收工，patch 为空。改为「有写尝试
+    （成功或失败）」都触发，让 LLM 知道编辑没生效、需要重新读取正确
+    内容再改。
     """
     from xenon.engine.evidence_gate import task_requires_write
     if not task_requires_write(user_input):
         return False
-    if not any(c.success and c.tool_name in _WRITE_TOOL_NAMES for c in evidence.calls):
+    has_write_attempt = any(
+        c.tool_name in _WRITE_TOOL_NAMES for c in evidence.calls
+    )
+    if not has_write_attempt:
         return False
     if evidence.successful_tests:
         return False
@@ -344,11 +353,12 @@ class VerificationLoop:
             elif call.tool_name == "command":
                 cmd = str(call.params.get("command") or call.params.get("cmd") or "")
                 if _TEST_COMMAND.search(cmd):
-                    key = f"test_pass:{cmd[:100]}"
+                    cmd_short = cmd[:200]
+                    key = f"test_pass:{cmd_short}"
                     self.success_cache[key] = _EvidenceEntry(
                         evidence_id=eid,
                         category="test_pass",
-                        target=cmd[:200],
+                        target=cmd_short,
                         summary=f"测试通过: {cmd[:120]}",
                         source_round=source_round,
                     )

@@ -83,6 +83,38 @@ class TestShouldVerify:
         ev = _make_evidence(write=True, test_pass=False)
         assert _should_verify(ev, "fix the bug") is False
 
+    def test_write_failure_still_triggers(self):
+        """v0.8.3 回归：edit_file 失败（无成功写）也应触发验证循环。
+
+        实测 SWE-bench：edit_file 未找到匹配文本是最常见失败模式，
+        此时 tracker 无成功写操作，原条件 2 不满足导致验证循环不触发、
+        LLM 直接收工、patch 为空。修复后「有写尝试（成功或失败）」即触发。
+        """
+        tracker = ToolExecutionTracker()
+        # 写失败：edit_file 未找到匹配文本
+        tracker.record(tool_name="edit_file",
+                       params={"file_path": "src/x.py", "old_text": "不匹配"},
+                       success=False,
+                       result_summary="工具执行失败: 未找到匹配文本",
+                       error="工具执行失败: 未找到匹配文本")
+        # 测试命令失败
+        tracker.record(tool_name="command", params={"command": "pytest tests/"},
+                       success=False,
+                       result_summary="AssertionError: assert 1 == 2",
+                       error="AssertionError: assert 1 == 2")
+        ev = ExecutionEvidence.capture(tracker)
+        assert _should_verify(ev, "fix the bug") is True
+
+    def test_write_attempt_only_triggers(self):
+        """写尝试存在（无论成败）+ 测试失败 → 触发验证。"""
+        tracker = ToolExecutionTracker()
+        tracker.record(tool_name="append_file", params={"file_path": "a.log"},
+                       success=True, result_summary="appended")
+        tracker.record(tool_name="command", params={"command": "pytest t.py"},
+                       success=False, error="FAILED test_x", result_summary="")
+        ev = ExecutionEvidence.capture(tracker)
+        assert _should_verify(ev, "fix the bug") is True
+
 
 # ── _extract_failure_summary ──────────────────────────────────
 

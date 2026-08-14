@@ -262,6 +262,7 @@ class ReActEngine(BaseEngine):
         self._begin_run()  # P3-Q2: 生成本次 run 的链路 ID（贯穿所有 LLM 调用）
         self._bind_evidence_ledger(ctx)
         self._recent_calls.clear()  # v0.7.0: 每次 run 重置重复调用跟踪
+        self._verification_active = False  # v0.8.3: 每次 run 重置验证循环状态
         active_level = ctx.get("_execution_level")
         original_user_input = user_input
         if active_level is not None:
