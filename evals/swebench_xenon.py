@@ -83,7 +83,7 @@ def _prompt(instance: dict[str, Any]) -> str:
         fail_hint = (
             "\n\n以下测试在原始代码上失败，你的修复应让它们通过：\n"
             + "\n".join(f"  - {t}" for t in samples)
-            + ("\n  ...（等" if len(fail_tests) > 3 else "")
+            + ("\n  ...（等）" if len(fail_tests) > 3 else "")
         )
     return f"""You are fixing an official SWE-bench task in the current repository.
 Work directly in this working directory.  Inspect the code, implement the

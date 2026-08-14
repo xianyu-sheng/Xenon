@@ -50,7 +50,7 @@ def _normalized_match(content: str, old_text: str) -> str | None:
     return content[start : m.end()]
 
 
-def _nearby_context(content: str, old_text: str, radius: int = 80) -> str:
+def _nearby_context(content: str, old_text: str) -> str:
     """未找到匹配时，返回与 old_text 最相似片段的附近上下文，帮助 LLM 修正。"""
     import difflib
 

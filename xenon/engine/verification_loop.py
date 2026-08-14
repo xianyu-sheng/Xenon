@@ -105,7 +105,9 @@ def _should_verify(evidence: ExecutionEvidence, user_input: str) -> bool:
         return False
     if evidence.successful_tests:
         return False
-    has_failed_command = any(not c.success for c in evidence.calls)
+    has_failed_command = any(
+        not c.success and c.tool_name == "command" for c in evidence.calls
+    )
     if not has_failed_command:
         return False
     return True
@@ -312,11 +314,11 @@ class VerificationLoop:
         context = self.build_context_summary()
 
         prompt = (
-            "【验证闭环】文件已修改，但测试命令失败。\n\n"
+            "【验证闭环】文件已修改，但后续命令执行失败。\n\n"
             f"失败输出：{raw_detail}\n\n"
             f"{context}\n\n"
-            "请：1) 读取测试失败的具体断言/错误信息；2) 定位根因并修改代码；"
-            "3) 重新运行测试命令验证通过；4) 确认通过后再给出最终总结。\n"
+            "请：1) 读取失败的具体错误信息；2) 定位根因并修改代码；"
+            "3) 重新运行验证命令确认通过；4) 确认通过后再给出最终总结。\n"
             "不要重复已经验证通过的操作（见上方「已验证可复用的操作」列表）。"
         )
         return prompt
