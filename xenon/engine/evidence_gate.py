@@ -110,12 +110,23 @@ def plan_has_write_step(steps: list[dict[str, Any]]) -> bool:
     )
 
 
+# 歧义工具：可读可写，成功执行不代表一定发生了写入。
+# has_successful_write 会排除它们，改用 workspace_status（git diff）检测实际变更。
+_UNSURE_WRITE_TOOLS: frozenset[str] = frozenset({"command", "git"})
+
+
 def has_successful_write(tracker: Any | None) -> bool:
-    """是否已有任何成功的写类工具执行（文件被真正修改）。"""
+    """是否已有任何成功的写类工具执行（文件被真正修改）。
+
+    command 和 git 是歧义工具（pytest/ls 也是 command），排除在外；
+    它们的写入由 workspace_status（git diff）检测，见 has_workspace_change。
+    """
     if tracker is None:
         return False
     return any(
-        call.success and call.tool_name in WRITE_TOOL_NAMES
+        call.success
+        and call.tool_name in WRITE_TOOL_NAMES
+        and call.tool_name not in _UNSURE_WRITE_TOOLS
         for call in tracker.calls
     )
 
