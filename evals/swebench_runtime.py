@@ -34,6 +34,60 @@ def _docker_and_spec(instance: dict[str, Any], namespace: str | None = "swebench
     return docker.from_env(), make_test_spec(instance, namespace=namespace)
 
 
+def _apply_test_patch(worktree: Path, test_patch: str, instance_id: str) -> None:
+    """Apply the official FAIL_TO_PASS test patch into an engine worktree.
+
+    - Applies with ``git apply`` from the repo root (test paths are repo-relative).
+    - Commits immediately so the final ``git diff`` reflects only the agent's
+      edits, not the injected test patch.
+    - **Anti-cheat**: after applying, the touched test files are made read-only
+      on disk. The agent therefore cannot edit them to make FAIL_TO_PASS pass
+      by tampering with the tests themselves; any write attempt fails loudly.
+    """
+    import subprocess
+
+    patch_file = worktree / ".test_patch"
+    patch_file.write_text(test_patch, encoding="utf-8")
+    try:
+        apply = subprocess.run(
+            ["git", "-C", str(worktree), "apply", "--whitespace=fix", str(patch_file)],
+            capture_output=True, text=True, timeout=60,
+        )
+        if apply.returncode != 0:
+            # Fallback: try patch -p1 (some test patches use context that git
+            # apply rejects but GNU patch accepts).
+            fallback = subprocess.run(
+                ["patch", "-p1", "-d", str(worktree), "-i", str(patch_file)],
+                capture_output=True, text=True, timeout=60,
+            )
+            if fallback.returncode != 0:
+                raise RuntimeError(
+                    f"test_patch application failed for {instance_id}: "
+                    f"{apply.stderr[:300]} / {fallback.stderr[:300]}"
+                )
+    finally:
+        patch_file.unlink(missing_ok=True)
+
+    # Anti-cheat: lock the touched test files read-only.
+    touched = subprocess.run(
+        ["git", "-C", str(worktree), "diff", "--name-only", "HEAD"],
+        capture_output=True, text=True, timeout=30,
+    )
+    for rel in touched.stdout.splitlines():
+        path = worktree / rel
+        if path.is_file():
+            path.chmod(0o444)
+
+    subprocess.run(
+        ["git", "-C", str(worktree), "add", "-A"],
+        capture_output=True, text=True, timeout=60,
+    )
+    subprocess.run(
+        ["git", "-C", str(worktree), "commit", "-q", "-m", "apply test_patch (eval)"],
+        capture_output=True, text=True, timeout=60,
+    )
+
+
 def _extract_testbed(container: Any, destination: Path) -> None:
     stream, _ = container.get_archive("/testbed")
     destination.mkdir(parents=True, exist_ok=False)
@@ -205,6 +259,17 @@ def create_official_runtime(
         shutil.rmtree(worktree)
     worktree.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, worktree, symlinks=True)
+
+    # ── v0.8.3: 应用 test_patch（主流 agent 评测做法）──
+    # SWE-bench 官方镜像的 /testbed 是原始仓库，FAIL_TO_PASS 测试的
+    # 失败断言不在其中——agent 跑测试全部通过，验证循环的「测试失败」
+    # 信号永不出现。OpenHands/SWE-agent 等主流框架在 agent 运行时都会
+    # 应用 test_patch，让 FAIL_TO_PASS 测试真实失败：
+    #   agent 修代码 → 跑测试失败 → 验证循环反馈失败详情 → 再修 → 通过
+    # 应用后立即 commit，使最终 git diff 只反映 agent 的修改。
+    test_patch = instance.get("test_patch") or ""
+    if test_patch.strip():
+        _apply_test_patch(worktree, test_patch, instance["instance_id"])
 
     client, spec = _docker_and_spec(instance, namespace)
     name = f"sweb.xenon.{spec.instance_id.lower()}.{engine_name}.{uuid.uuid4().hex[:8]}"

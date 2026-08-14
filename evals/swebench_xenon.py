@@ -88,29 +88,34 @@ Official issue statement:
 """
 
 
-def _engine(name: str, model: str, config: ModelConfig, max_steps: int):
+def _engine(name: str, model: str, config: ModelConfig, max_steps: int,
+            verification_loop: bool = True):
     models = [model]
     configs = {model: config}
     callback = EngineCallback()
     common = dict(model_configs=configs, callback=callback)
     if name == "react":
-        return ReActEngine(models, max_iterations=max_steps, native_fc=True,
+        engine = ReActEngine(models, max_iterations=max_steps, native_fc=True,
                            project_root=str(Path.cwd()), **common)
-    if name == "plan-execute":
-        return PlanExecuteEngine(models, max_steps=max_steps,
+    elif name == "plan-execute":
+        engine = PlanExecuteEngine(models, max_steps=max_steps,
                                  max_mini_react_rounds=1, **common)
-    if name == "reflection":
-        return ReflectionEngine(models, max_rounds=max_steps, **common)
-    if name == "plan-react":
-        return PlanReactEngine(models, max_steps=max_steps,
+    elif name == "reflection":
+        engine = ReflectionEngine(models, max_rounds=max_steps, **common)
+    elif name == "plan-react":
+        engine = PlanReactEngine(models, max_steps=max_steps,
                                react_iterations=max_steps, **common)
-    if name == "plan-reflection":
-        return PlanReflectionEngine(models, max_steps=max_steps,
+    elif name == "plan-reflection":
+        engine = PlanReflectionEngine(models, max_steps=max_steps,
                                     review_rounds=max_steps, **common)
-    if name == "react-reflection":
-        return ReactReflectionEngine(models, react_iterations=max_steps,
+    elif name == "react-reflection":
+        engine = ReactReflectionEngine(models, react_iterations=max_steps,
                                      review_rounds=max_steps, **common)
-    return None
+    else:
+        return None
+    # v0.8.3 A/B: 开关验证循环（引擎维度的全局开关）
+    engine._verification_enabled = verification_loop
+    return engine
 
 
 def _append_event(path: Path | None, event: str, **fields: Any) -> None:
@@ -129,7 +134,8 @@ def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
             min_request_interval: float = 0.0,
             provider_attempts: int = 1,
             events_path: Path | None = None,
-            namespace: str | None = "swebench") -> dict[str, Any]:
+            namespace: str | None = "swebench",
+            verification_loop: bool = True) -> dict[str, Any]:
     instance_id = instance["instance_id"]
     config = ModelConfig(model_id=model, alias=model, max_tokens=8192,
                          context_window=1_000_000)
@@ -181,7 +187,8 @@ def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
                 )
                 policy.emit("provider_request_end", phase="direct", success=True)
             else:
-                engine = _engine(engine_name, model, config, max_steps)
+                engine = _engine(engine_name, model, config, max_steps,
+                                 verification_loop=verification_loop)
                 bind_execution_policy(engine, policy)
                 bind_tool_runtime(engine, runtime.tool_runtime)
                 output = engine.run(_prompt(instance), AgentContext()) or ""
@@ -454,6 +461,10 @@ def main() -> int:
         "--namespace", default="swebench",
         help="Official image namespace; use 'none' to build locally",
     )
+    parser.add_argument(
+        "--no-verification-loop", action="store_true",
+        help="A/B 对照组：关闭验证循环，保持 v0.8.2 单轮行为。用于同实例同模型对比。",
+    )
     parser.add_argument("--predictions", type=Path, required=True)
     parser.add_argument("--traces", type=Path, required=True)
     parser.add_argument(
@@ -544,6 +555,7 @@ def main() -> int:
                         "provider_attempts": args.provider_attempts,
                         "events_path": events_path,
                         "namespace": namespace,
+                        "verification_loop": not args.no_verification_loop,
                     }
                     results.append(_run_with_hard_timeout(
                         kwargs, args.engine_timeout + 15, events_path

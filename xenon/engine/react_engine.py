@@ -54,6 +54,7 @@ class ReActEngine(BaseEngine):
         model_pool: Any = None,          # v0.4.0
         auto_router: Any = None,         # v0.4.0 Step 13
         permission_gate: Any = None,     # v0.5.0: PermissionGate
+        verification_loop: bool = True,  # v0.8.3 A/B
     ) -> None:
         # R2: 公共属性（model_priority/callback/model_configs/temperature）与
         # _call_llm 由 BaseEngine 提供，消除四份复制与参数漂移。
@@ -90,6 +91,7 @@ class ReActEngine(BaseEngine):
             max_rounds=8, max_steps=self.max_iterations,
         )
         self.verification_loop._engine = self
+        self._verification_enabled = verification_loop
         # F2: 空洞回答检测器（无状态，实例共享）
         self._hollow = HollowDetector()
         # F5: DeepSeek V4 的思考模式工具协议已经单元测试和真实 API
@@ -513,10 +515,13 @@ class ReActEngine(BaseEngine):
                 )
 
                 # 首次进入时重置，后续由主循环自然迭代驱动
-                if not getattr(self, '_verification_active', False):
+                if not getattr(self, '_verification_enabled', True):
+                    pass
+                elif not getattr(self, '_verification_active', False):
                     self.verification_loop.reset()
                     self.verification_loop._active = True
                     self._verification_active = True
+                    evidence = ExecutionEvidence.capture(tracker, workspace_root_for(self))
                 else:
                     # 非首次：记录上一轮修复结果后再继续
                     evidence = ExecutionEvidence.capture(tracker, workspace_root_for(self))

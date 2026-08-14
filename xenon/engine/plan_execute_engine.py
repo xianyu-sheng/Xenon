@@ -177,6 +177,7 @@ class PlanExecuteEngine(BaseEngine):
         model_pool: Any = None,          # v0.4.0
         auto_router: Any = None,         # v0.4.0 Step 13
         permission_gate: Any = None,     # v0.5.0
+        verification_loop: bool = True,  # v0.8.3
     ) -> None:
         # R2: 公共属性与 _call_llm 由 BaseEngine 提供。
         super().__init__(
@@ -203,6 +204,7 @@ class PlanExecuteEngine(BaseEngine):
             max_rounds=8, max_steps=self.max_steps,
         )
         self.verification_loop._engine = self
+        self._verification_enabled = verification_loop
         if system_prompt:
             self.system_prompt = system_prompt
         else:
@@ -584,7 +586,12 @@ class PlanExecuteEngine(BaseEngine):
         3. 若返回 prompt，执行修复步骤
         4. 重新捕获证据 → ``VerificationLoop.record_outcome()``
         5. 若 ``should_continue`` 则回到 2
+
+        ``verification_loop=False``（A/B 对照组）时直接返回，保持
+        v0.8.2 单轮行为——用于同实例同模型开/关验证循环的对比评测。
         """
+        if not getattr(self, "_verification_enabled", True):
+            return
         from xenon.engine.execution_evidence import (
             ExecutionEvidence,
             workspace_root_for,
