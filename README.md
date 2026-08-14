@@ -4,8 +4,12 @@
 
 <h1 align="center">Xenon</h1>
 
-**开源的 AI 编程 Agent 框架。** 7 种推理范式、12 家 LLM Provider、插件级
-工具引擎与记忆系统，可在终端交互或 SWE-bench 等自动化评测中运行。
+**面向实验、学习和社区协作的可扩展终端 AI 编程 Agent 试验场。**
+
+7 种推理范式、12 家 LLM Provider、插件级工具引擎与记忆系统，可在终端
+交互或 SWE-bench 等自动化评测中运行。框架核心是**可观察、可替换的模块**
+——模型协议、推理范式、工具调用和终端交互均可独立扩展，通过 Issue 或
+PR 与社区一起迭代。
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
