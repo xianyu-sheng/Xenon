@@ -147,10 +147,7 @@ def required_execution_level(tool_name: str, params: dict[str, Any]) -> int:
         return 3
     if tool_name in _WRITE_TOOLS or tool_name == "create_skill":
         return 2
-    if tool_name == "spawn_agent":
-        # A delegated agent could otherwise bypass the parent turn's boundary.
-        return 3
-    # 查注册表 risk 字段（优先级高于旧的硬编码集合）
+    # 查注册表 risk 字段（spawn_agent 等引擎专用工具也在此查表，不再硬编码兜底）
     defn = BUILTIN_TOOL_REGISTRY.get(tool_name)
     if defn is not None:
         return {"INFO": 1, "WRITE": 2, "SENSITIVE": 3}.get(defn.risk, 3)
