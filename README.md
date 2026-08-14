@@ -166,14 +166,93 @@ evals/
 
 ## 扩展
 
-Xenon 提供四条扩展路径，注册后自动被框架识别：
+Xenon 提供五条扩展路径。注册后自动被框架识别：
 
-| 扩展 | 入口 | 状态 |
-|------|------|------|
-| 新工具 | `register_tool_handler()` | 已落地，需同步 tools 描述至模型可见 |
-| 新引擎 | `register_engine()` + `EngineSpec` | ✅ 已落地，注册一次自动识别 |
-| 新命令 | `register_command()` + `@command_handler` | ✅ 已落地 |
-| 新 Provider | `_PROVIDER_DEFAULTS` + `PROVIDERS` + `cost_map` | 12 家已接入，`register_provider()` 待落地 |
+### 1. 注册一个 MCP 服务器（终端命令）
+
+```bash
+# 文件系统 MCP 服务器 —— 终端内执行，注册后自动发现工具
+xenon> /mcp add fs npx -y @modelcontextprotocol/server-filesystem .
+✅ MCP 服务器 'fs' 已连接  发现 10 个工具
+
+# HTTP（SSE）传输
+xenon> /mcp add web http://localhost:3000/sse
+```
+
+出处：`xenon/repl/command_groups/resources.py` /mcp add 子命令，
+`xenon/mcp/registry.py` 服务器注册与工具发现。
+
+### 2. 注册一个 Skill（终端命令）
+
+```bash
+# 交互式创建
+xenon> /skill create
+# 之后 Xenon 会引导填写名称、描述和执行提示
+
+# 从 GitHub 仓库导入
+xenon> /skill import https://github.com/user/repo/tree/main/skills/my-skill
+
+# 查看已安装的技能
+xenon> /skill list
+```
+
+Skill 存储在 `.xenon/skills/<name>/SKILL.md`，启动时自动发现。
+出处：`xenon/repl/command_groups/skill.py`，`xenon/repl/skill_manager.py`。
+
+### 3. 注册一个新工具（Python API）
+
+```python
+from xenon.nodes.tool_registry import register_tool_handler
+
+def _handle_search(node, context):
+    query = getattr(node, "search_pattern", "")
+    return {"action_type": "my_search", "success": True, "content": f"搜索: {query}"}
+
+register_tool_handler("my_search", _handle_search, description="搜索我的知识库")
+```
+
+注册后工具自动被 `ToolNode` 分发引擎识别，并合并进模型可见的工具列表
+（`BUILTIN_TOOL_REGISTRY.plugin_schemas()`）。出处：
+`xenon/nodes/tool_registry.py`。
+
+### 4. 注册一个新推理引擎（Python API）
+
+```python
+from xenon.engine.base import BaseEngine
+from xenon.engine.registry import register_engine
+
+class MyEngine(BaseEngine):
+    def run(self, user_input, context=None) -> str:
+        self._begin_run()
+        messages = self._history_messages(user_input, limit=20)
+        return self._call_llm(messages, phase="my_engine")
+
+register_engine(
+    "my-engine",
+    factory=lambda **kw: MyEngine(**kw),
+    description="我的自定义推理范式",
+    mode_line="· MyEngine 执行",
+    result_title="MyEngine 结果",
+)
+```
+
+注册一次，`/mode` 列表、REPL 分发、setup wizard 与 evals 白名单全部自动识别。
+出处：`xenon/engine/registry.py`，`tests/test_engine_registry.py`。
+
+### 5. 注册一个新命令（终端命令 + Python API）
+
+```python
+# 在 xenon/repl/command_groups/ 对应主题文件里
+from xenon.repl.command_registry import command_handler, register_command
+
+register_command("/my-feature", "我的新功能", "/my-feature [args]")
+
+@command_handler("/my-feature")
+def _cmd_my_feature(*, args: str, session_state: dict, **kwargs):
+    return f"你输入了: {args}"
+```
+
+重启后 `/help` 自动列出。出处：`xenon/repl/command_registry.py`。
 
 ---
 
