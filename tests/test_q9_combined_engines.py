@@ -382,3 +382,41 @@ def test_reflection_repair_budget_matches_parent_execution_budget():
 
     assert plan.repairer.max_iterations == 10
     assert react.repairer.max_iterations == 8
+
+
+# ------------------- verification_loop A/B 开关传播（issue #20） -------------------
+
+def test_plan_react_verification_flag_propagates():
+    """verification_loop=False 必须传播到组合引擎自身与子引擎。
+
+    回归 issue #20：组合引擎此前忽略 _verification_enabled，
+    swebench_xenon.py 的 --no-verification-loop A/B 对照对组合引擎无效。
+    """
+    off = PlanReactEngine(["m1"], verification_loop=False)
+    assert off._verification_enabled is False
+    assert off.planner._verification_enabled is False
+    assert off.reactor._verification_enabled is False
+
+
+def test_plan_reflection_verification_flag_propagates():
+    off = PlanReflectionEngine(["m1"], verification_loop=False)
+    assert off._verification_enabled is False
+    assert off.planner._verification_enabled is False
+    assert off.repairer._verification_enabled is False
+
+
+def test_react_reflection_verification_flag_propagates():
+    off = ReactReflectionEngine(["m1"], verification_loop=False)
+    assert off._verification_enabled is False
+    assert off.reactor._verification_enabled is False
+    assert off.repairer._verification_enabled is False
+
+
+def test_combined_engines_default_verification_on():
+    """默认 verification_loop=True（与 React/PlanExecute 一致）。"""
+    for eng in (
+        PlanReactEngine(["m1"]),
+        PlanReflectionEngine(["m1"]),
+        ReactReflectionEngine(["m1"]),
+    ):
+        assert eng._verification_enabled is True
