@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 # classify_tool / required_execution_level 优先查注册表 risk，查不到才走这里。
 # 不在注册表且不在这两个集合里的工具（如未知插件），按 SENSITIVE/level-3 处理，
 # 与 MCP 未知工具的「不假设只读」原则一致（tool_executor.py:116-118 旧注释）。
-_SENSITIVE_TOOLS = {"command"}  # 任意 shell 执行——最高风险
+_SENSITIVE_TOOLS = {"command", "spawn_agent"}  # 任意 shell 执行 + 子 Agent 委派——最高风险
 _WRITE_TOOLS = {
     "write_file", "edit_file", "create_directory",
     "batch_write", "batch_edit", "edit_with_llm", "append_file",
@@ -147,9 +147,6 @@ def required_execution_level(tool_name: str, params: dict[str, Any]) -> int:
         return 3
     if tool_name in _WRITE_TOOLS or tool_name == "create_skill":
         return 2
-    if tool_name == "spawn_agent":
-        # A delegated agent could otherwise bypass the parent turn's boundary.
-        return 3
     # 查注册表 risk 字段（优先级高于旧的硬编码集合）
     defn = BUILTIN_TOOL_REGISTRY.get(tool_name)
     if defn is not None:
