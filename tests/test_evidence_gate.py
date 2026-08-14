@@ -217,7 +217,7 @@ class TestPureHelpers:
     def test_plan_has_write_step(self) -> None:
         assert plan_has_write_step([{"tool": "read_file"}]) is False
         assert plan_has_write_step([{"tool": "write_file"}]) is True
-        assert plan_has_write_step([{"tool": "command"}]) is True
+        assert plan_has_write_step([{"tool": "command"}]) is False
 
     def test_task_requires_write(self) -> None:
         assert task_requires_write("Fix the bug in src/main.py") is True

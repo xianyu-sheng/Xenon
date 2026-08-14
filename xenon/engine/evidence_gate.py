@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 WRITE_TOOL_NAMES = frozenset({
     "write_file", "edit_file", "create_directory", "batch_write",
     "batch_edit", "edit_with_llm", "append_file", "refactor",
-    "git", "command",
 })
 
 

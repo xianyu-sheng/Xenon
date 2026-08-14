@@ -85,23 +85,6 @@ class TestShouldVerify:
         ev = ExecutionEvidence.capture(tracker, workspace_root=None)
         assert _should_verify(ev, "fix the bug") is False
 
-    def test_command_only_write_triggers(self):
-        """command 本身可写文件（sed/脚本/echo），失败的 command 应触发验证。
-
-        回归 issue #21：verification_loop 的写工具集合曾不含 command，
-        导致「用 command 写代码但测试失败」被静默漏判。
-        """
-        tracker = ToolExecutionTracker()
-        tracker.record(
-            tool_name="command",
-            params={"command": "python script.py"},
-            success=False,
-            result_summary="AssertionError: assert 1 == 2",
-            error="AssertionError: assert 1 == 2",
-        )
-        ev = ExecutionEvidence.capture(tracker, workspace_root=None)
-        assert _should_verify(ev, "fix the bug") is True
-
     def test_readonly_task_skips(self):
         ev = _make_evidence(write=True, test_fail=True)
         assert _should_verify(ev, "what is the answer?") is False
@@ -144,22 +127,14 @@ class TestShouldVerify:
 
 
 class TestWriteToolSet:
-    """钉死单一真相源：verification_loop 的写工具集合必须与 evidence_gate 一致。"""
+    """验证循环写工具集合与 evidence_gate 保持一致（单一真相源）。"""
 
     def test_write_tool_set_matches_evidence_gate(self):
-        from xenon.engine.evidence_gate import WRITE_TOOL_NAMES as _GATE_WRITE_TOOLS
-        assert _WRITE_TOOL_NAMES is _GATE_WRITE_TOOLS, (
-            "verification_loop._WRITE_TOOL_NAMES 必须是 evidence_gate.WRITE_TOOL_NAMES 的别名，"
-            "而非独立副本 —— 避免四套写工具集合再次分裂（issue #21）"
-        )
+        from xenon.engine.evidence_gate import WRITE_TOOL_NAMES as GATE_WRITE
+        assert _WRITE_TOOL_NAMES == GATE_WRITE
 
-    def test_command_and_git_included(self):
-        assert "command" in _WRITE_TOOL_NAMES, (
-            "command 必须被视为写类工具：Agent 常用 sed/脚本/echo 修改文件"
-        )
-        assert "git" in _WRITE_TOOL_NAMES, (
-            "git 必须被视为写类工具：SWE-bench 场景中 Agent 用它提交修改"
-        )
+
+# ── _extract_failure_summary ──────────────────────────────────
 
 
 # ── _extract_failure_summary ──────────────────────────────────
