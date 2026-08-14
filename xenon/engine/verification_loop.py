@@ -22,14 +22,10 @@ from xenon.engine.execution_evidence import (
     ExecutionEvidence,
     _TEST_COMMAND,
 )
+from xenon.engine.evidence_gate import WRITE_TOOL_NAMES as _WRITE_TOOL_NAMES
 from xenon.engine.tool_tracker import ToolCall
 
 logger = logging.getLogger(__name__)
-
-_WRITE_TOOL_NAMES = frozenset({
-    "write_file", "edit_file", "append_file",
-    "batch_write", "batch_edit", "create_directory",
-})
 
 
 @dataclass
