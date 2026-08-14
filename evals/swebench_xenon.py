@@ -53,20 +53,25 @@ from evals.swebench_runtime import (  # noqa: E402
 )
 
 
-ALL_ENGINES = (
-    "direct", "react", "plan-execute", "reflection", "plan-react",
-    "plan-reflection", "react-reflection",
-)
+def _all_engines() -> tuple[str, ...]:
+    """从 ENGINE_REGISTRY 派生（单一真相源，不再硬编码）。"""
+    # 惰性导入：避免 evals 模块 import 时触发引擎注册表加载
+    import xenon.engine.builtin_engines  # noqa: F401  # 触发内置范式注册
+    from xenon.engine.registry import ENGINE_REGISTRY
+    return ENGINE_REGISTRY.names()
+
+ALL_ENGINES = _all_engines()
 
 # SWE-bench 是代码编辑评测：只有具备文件修改能力的引擎才有意义。
 # direct（裸 LLM 单轮调用）与 reflection（纯文本 Generate-Critique-Refine）
 # 不操作文件系统，永远产生空补丁——承认边界，不作为 `all` 的默认成员。
-CODE_EDITING_ENGINES = (
-    "react", "plan-execute", "plan-react",
-    "plan-reflection", "react-reflection",
-)
+# 注：条件用 EngineSpec 的 runs_engine 还不够——reflection 也 runs_engine，
+# 但它的修改循环是纯文本的，不操作文件系统。
+_NON_CODE_EDITING: frozenset[str] = frozenset({"direct", "reflection"})
 
-_NON_CODE_EDITING = frozenset(ALL_ENGINES) - frozenset(CODE_EDITING_ENGINES)
+CODE_EDITING_ENGINES = tuple(
+    n for n in ALL_ENGINES if n not in _NON_CODE_EDITING
+)
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -106,6 +111,9 @@ def _engine(name: str, model: str, config: ModelConfig, max_steps: int,
     configs = {model: config}
     callback = EngineCallback()
     common = dict(model_configs=configs, callback=callback)
+    # 引擎构造仍用 if/elif 链——各引擎有独特 kwargs（native_fc、project_root、
+    # max_mini_react_rounds 等），不能直接调 EngineSpec.factory() 透传。
+    # 未来可在 EngineSpec 增加 swbench_kwargs 结构化元数据，届时收敛为查表。
     if name == "react":
         engine = ReActEngine(models, max_iterations=max_steps, native_fc=True,
                            project_root=str(Path.cwd()), **common)
