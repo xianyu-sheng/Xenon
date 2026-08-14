@@ -65,14 +65,24 @@ class ReActEngine(BaseEngine):
             permission_gate=permission_gate,
         )
         self.max_iterations = max_iterations
-        # Merge plugin tool schemas so the model can actually see and call them.
-        # BUILTIN_TOOLS is a static dict; plugin_schemas() returns only tools
-        # registered via register_tool_handler(..., category="plugin").
-        # If no plugin tools are registered yet, this is a no-op.
-        plugin = BUILTIN_TOOL_REGISTRY.plugin_schemas()
-        self.tools = dict(tools or BUILTIN_TOOLS)
-        if plugin:
-            self.tools.update(plugin)
+        # P0: 工具 schema 从注册表派生（单一真相源）。
+        # all_visible_schemas() 返回内置+插件工具，排除 visible_to_llm=False
+        # 的元工具（如 register_tool）。BUILTIN_TOOLS 保留为回退。
+        # 显式传 tools= 时用它做基，插件仍然合并进去（否则子 Agent 看不到插件）。
+        try:
+            registry_tools = BUILTIN_TOOL_REGISTRY.all_visible_schemas()
+            if registry_tools:
+                self.tools = dict(registry_tools)
+            else:
+                self.tools = dict(tools or BUILTIN_TOOLS)
+        except Exception:
+            self.tools = dict(tools or BUILTIN_TOOLS)
+        # 显式 tools 参数中的工具可能是注册表外的（子 Agent 自定义），
+        # 追加到注册表派生结果后，确保不丢失
+        if tools:
+            for name, schema in tools.items():
+                if name not in self.tools:
+                    self.tools[name] = dict(schema)
         # v0.5.3: MCP 工具列表占位——_build_system_prompt 注入实际可用工具
         self._mcp_tools_list = ""
         self.system_prompt = system_prompt or self._build_system_prompt()

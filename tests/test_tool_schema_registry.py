@@ -263,3 +263,37 @@ class TestRegistryIsolation:
     def test_public_registration_cannot_replace_builtin_tool(self):
         with pytest.raises(ValueError, match="内置"):
             register_tool_handler("command", _handler, risk="INFO", replace=True)
+
+
+class TestVisibilityToLLM:
+    """P0: visible_to_llm 标记和 all_visible_schemas 收敛。"""
+
+    def test_register_tool_not_visible(self):
+        """register_tool 是元工具，不应暴露给 LLM。"""
+        schemas = BUILTIN_TOOL_REGISTRY.all_visible_schemas()
+        assert "register_tool" not in schemas, (
+            "register_tool 不应出现在 all_visible_schemas 中"
+        )
+        d = BUILTIN_TOOL_REGISTRY.get("register_tool")
+        assert d is not None
+        assert d.visible_to_llm is False
+
+    def test_builtin_tools_visible(self):
+        """内置工具默认 visible_to_llm=True。"""
+        schemas = BUILTIN_TOOL_REGISTRY.all_visible_schemas()
+        for name in ("read_file", "write_file", "command", "spawn_agent"):
+            assert name in schemas, f"{name} 应对 LLM 可见"
+
+    def test_all_visible_includes_plugins(self, temp_tool):
+        """插件工具（默认 visible_to_llm=True）也出现在 all_visible_schemas 中。"""
+        temp_tool("my_plugin", description="插件", params={"a": "参数"})
+        schemas = BUILTIN_TOOL_REGISTRY.all_visible_schemas()
+        assert "my_plugin" in schemas
+        assert schemas["my_plugin"]["description"] == "插件"
+
+    def test_plugin_schemas_unchanged(self, temp_tool):
+        """plugin_schemas() 仍只返回插件，保持向后兼容。"""
+        temp_tool("my_plugin")
+        schemas = BUILTIN_TOOL_REGISTRY.plugin_schemas()
+        assert "my_plugin" in schemas
+        assert "read_file" not in schemas

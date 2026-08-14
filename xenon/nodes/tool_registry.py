@@ -62,6 +62,9 @@ class ToolDefinition:
     # 风险级别：INFO=只读无需确认, WRITE=写操作需确认, SENSITIVE=高危需确认。
     # 插件工具默认 SENSITIVE，遵守「未知即从严」原则（与 MCP 未知工具一致）。
     risk: ToolRisk = "SENSITIVE"
+    # 是否对 LLM 可见（默认 True）。元工具（如 register_tool）应设为 False，
+    # 避免 LLM 在对话中调用管理类工具。
+    visible_to_llm: bool = True
 
 
 class ToolRegistry:
@@ -79,6 +82,7 @@ class ToolRegistry:
         category: str = "plugin",
         params: dict[str, str] | None = None,
         risk: ToolRisk = "SENSITIVE",
+        visible_to_llm: bool = True,
         replace: bool = False,
     ) -> ToolDefinition:
         normalized = str(name).strip()
@@ -104,6 +108,7 @@ class ToolRegistry:
             category=str(category or "plugin"),
             params=dict(params or {}),
             risk=risk,
+            visible_to_llm=visible_to_llm,
         )
         self._definitions[normalized] = definition
         return definition
@@ -117,6 +122,7 @@ class ToolRegistry:
         category: str = "builtin",
         params: dict[str, str] | None = None,
         risk: ToolRisk = "SENSITIVE",
+        visible_to_llm: bool = True,
     ) -> ToolDefinition:
         return self.register(
             name,
@@ -125,6 +131,7 @@ class ToolRegistry:
             category=category,
             params=params,
             risk=risk,
+            visible_to_llm=visible_to_llm,
         )
 
     def get(self, name: str) -> ToolDefinition | None:
@@ -172,6 +179,27 @@ class ToolRegistry:
             if d.category == "plugin"
         }
 
+    def all_visible_schemas(self) -> dict[str, dict[str, Any]]:
+        """返回所有对 LLM 可见的工具 schema（内置 + 插件）。
+
+        内置工具的 description/params 从 react_prompts.BUILTIN_TOOLS 获取
+        （迁移阶段：未来内置工具的描述也应在注册时声明）。
+        visible_to_llm=False 的工具（如 register_tool）不会出现在结果中。
+        """
+        from xenon.engine.react_prompts import BUILTIN_TOOLS as _LEGACY_BUILTIN
+        result: dict[str, dict[str, Any]] = {}
+        for d in self._definitions.values():
+            if not d.visible_to_llm:
+                continue
+            if d.category == "builtin" and d.name in _LEGACY_BUILTIN:
+                # 内置工具优先用 BUILTIN_TOOLS 的完整描述（含中文参数说明）
+                result[d.name] = dict(_LEGACY_BUILTIN[d.name])
+            else:
+                result[d.name] = {
+                    "name": d.name, "description": d.description, "params": d.params,
+                }
+        return result
+
 
 # Built-in method names are the single source of truth during the migration.
 # ``ToolNode`` imports this mapping for compatibility with its old private
@@ -204,7 +232,10 @@ BUILTIN_TOOL_METHODS: dict[str, str] = {
     "weather": "_weather",
     "datetime": "_datetime",
     "register_tool": "_register_tool",
+    "spawn_agent": "_spawn_agent",
 }
+# 元工具：不应暴露给 LLM（visible_to_llm=False）
+_BUILTIN_VISIBILITY: dict[str, bool] = {"register_tool": False}
 
 BUILTIN_TOOL_REGISTRY = ToolRegistry()
 for _tool_name, _method_name in BUILTIN_TOOL_METHODS.items():
@@ -224,8 +255,11 @@ for _tool_name, _method_name in BUILTIN_TOOL_METHODS.items():
         "batch_edit", "refactor", "git", "clone_repo",
     }:
         _risk = "WRITE"
-    # command / mcp_call / register_tool 保持 SENSITIVE（默认值）
-    BUILTIN_TOOL_REGISTRY.register_method(_tool_name, _method_name, risk=_risk)
+    # command / mcp_call / register_tool / spawn_agent 保持 SENSITIVE（默认值）
+    BUILTIN_TOOL_REGISTRY.register_method(
+        _tool_name, _method_name, risk=_risk,
+        visible_to_llm=_BUILTIN_VISIBILITY.get(_tool_name, True),
+    )
 
 
 def register_tool_handler(
