@@ -141,7 +141,7 @@ class MCPRegistry:
 
         names_to_connect = [name] if name else list(self._pending_configs.keys())
         for n in names_to_connect:
-            cfg = self._pending_configs.pop(n, None)
+            cfg = self._pending_configs.get(n)
             if cfg is None:
                 continue
             try:
@@ -158,8 +158,10 @@ class MCPRegistry:
                         args=[str(a) for a in cfg.get("args", [])],
                         env=cfg.get("env"),
                     )
+                self._pending_configs.pop(n, None)  # 连接成功后才移除配置
             except Exception as e:
                 logger.warning(f"惰性连接 MCP '{n}' 失败: {e}")
+                # 配置保留在 _pending_configs 中，下次 discover_tools() 重试
 
     def has_pending_servers(self) -> bool:
         """是否有尚未连接的惰性服务器。"""
