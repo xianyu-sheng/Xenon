@@ -197,6 +197,12 @@ class PlanExecuteEngine(BaseEngine):
         # P2-E2 §Q4 迷你 ReAct：无工具步骤最多跑 N 轮 Thought→Action→Observation
         # （复用 parse_react + _execute_step_with_tool），无需工具时首轮即 final_answer。
         self.max_mini_react_rounds = max(1, max_mini_react_rounds)
+        # v0.8.3: 引擎层跨轮次验证循环
+        from xenon.engine.verification_loop import VerificationLoop
+        self.verification_loop = VerificationLoop(
+            max_rounds=8, max_steps=self.max_steps,
+        )
+        self.verification_loop._engine = self
         if system_prompt:
             self.system_prompt = system_prompt
         else:
@@ -314,9 +320,11 @@ class PlanExecuteEngine(BaseEngine):
         results = self._ensure_task_completed(
             user_input, results, ctx, tracker, total,
         )
-        # Phase 2.6: 验证链闭环——修改已落盘但测试失败时，反馈失败输出
-        # 给 LLM 追加一轮修复（SWE-bench 硬实例的共同失败模式）。
-        results = self._ensure_verification_loop(
+        # Phase 2.6: 学习式验证循环（v0.8.3）——跨轮次状态传递。
+        # 在任务执行完毕后，捕获 ExecutionEvidence，若需要验证则进入
+        # 多轮循环（失败时间线累积 + 成功缓存复用），直到修复通过、
+        # 预算耗尽或无进展。
+        self._run_verification_loop(
             user_input, results, ctx, tracker, total,
         )
 
@@ -558,97 +566,89 @@ class PlanExecuteEngine(BaseEngine):
         logger.debug(f"补救步骤 {step_id} 完成: {outcome.content[:100]}")
         return results
 
-    def _ensure_verification_loop(
+    def _run_verification_loop(
         self,
         user_input: str,
         results: list[dict[str, Any]],
         ctx: AgentContext,
         tracker: ToolExecutionTracker,
         total: int,
-    ) -> list[dict[str, Any]]:
-        """验证链闭环（v0.8.2）：验证失败反馈到修复循环。
+    ) -> None:
+        """学习式验证循环（v0.8.3）：跨轮次状态传递，多轮修复。
 
-        SWE-bench 硬实例（sympy/django 格式精确断言等）的共同失败模式：
-        计划执行完就收工，测试命令失败（断言不过）没有反馈给 LLM 修复。
-        ExecutionEvidence 已识别 `_TEST_COMMAND`（pytest/tox/unittest 等）
-        与失败调用——这里把「写了文件但测试失败且无成功测试」转成一轮
-        修复执行：读取失败输出 → 定位断言 → 修改代码 → 再验证。
+        替代 v0.8.2 的单轮 ``_ensure_verification_loop``。
 
-        条件（全部满足才触发，防成本膨胀）：
-        1. 任务需要写操作（用户输入含修改语义）
-        2. tracker 有成功写操作（改了文件）
-        3. 有失败的验证类命令（command 且匹配测试命令，success=False）
-        4. 没有任何成功的测试命令
-        5. 还有步骤预算（results < max_steps）
+        流程：
+        1. 捕获 ExecutionEvidence
+        2. ``VerificationLoop.feed()`` → 返回修复 prompt 或 None
+        3. 若返回 prompt，执行修复步骤
+        4. 重新捕获证据 → ``VerificationLoop.record_outcome()``
+        5. 若 ``should_continue`` 则回到 2
         """
-        from xenon.engine.evidence_gate import task_requires_write
         from xenon.engine.execution_evidence import (
-            _TEST_COMMAND,
             ExecutionEvidence,
             workspace_root_for,
         )
 
-        if not task_requires_write(user_input):
-            return results
-        if len(results) >= self.max_steps:
-            return results
-        if not any(c.success and c.tool_name in self._WRITE_TOOL_NAMES for c in tracker.calls):
-            return results
-
+        self.verification_loop.reset()
+        self.verification_loop._active = True
         evidence = ExecutionEvidence.capture(tracker, workspace_root_for(self))
-        if evidence.successful_tests:
-            return results  # 已有成功测试，验证闭环已达成
-        failed_test_calls = [
-            c for c in tracker.calls
-            if not c.success
-            and c.tool_name == "command"
-            and _TEST_COMMAND.search(str(c.params.get("command") or c.params.get("cmd") or ""))
-        ]
-        if not failed_test_calls:
-            return results  # 没有失败的验证命令，无反馈可闭环
 
-        logger.warning(
-            "Plan-Execute: 验证链闭环——测试命令失败且无成功测试，追加修复轮"
-        )
-        self.callback.on_warning(
-            "检测到修改已落盘但测试未通过，正在读取失败输出并修复…"
-        )
-        failed_detail = "; ".join(
-            str(c.result_summary)[:200] or str(c.error)[:200]
-            for c in failed_test_calls[:3]
-        )
-        remediation_step = {
-            "id": len(results) + 1,
-            "task": (
-                "【验证闭环】文件已修改，但测试命令失败：\n"
-                f"失败输出：{failed_detail}\n"
-                "请：1) 读取测试失败的具体断言/错误信息；2) 定位根因并修改代码；"
-                "3) 重新运行测试命令验证通过；4) 确认通过后再给出最终总结。"
-            ),
-            "tool": None,
-            "params": {},
-            "depends_on": [],
-        }
-        step_id = remediation_step["id"]
-        prev_results = self._build_prev_results(results)
-        raw_result = self._execute_step_with_llm(
-            step_id, total + 1, remediation_step["task"],
-            prev_results, user_input, tracker, context=ctx,
-            require_write_tool=True,
-        )
-        outcome = self._step_outcome(raw_result)
-        results.append({
-            "step_id": step_id,
-            "task": remediation_step["task"],
-            "result": outcome.content,
-            "status": "ok" if outcome.success else "failed",
-            "error": outcome.error,
-        })
-        ctx.set(f"step_{step_id}_result", outcome.content)
-        ctx.set(f"step_{step_id}_status", "ok" if outcome.success else "failed")
-        self.callback.on_step_done(step_id, outcome.success, outcome.content[:200])
-        logger.debug(f"验证闭环修复步骤 {step_id} 完成: {outcome.content[:100]}")
-        return results
+        while self.verification_loop.should_continue:
+            repair_prompt = self.verification_loop.feed(evidence, user_input)
+            if repair_prompt is None:
+                break
+
+            if len(results) >= self.max_steps:
+                logger.warning(
+                    "VerificationLoop: 步骤预算耗尽，终止验证循环"
+                )
+                break
+
+            logger.warning(
+                "Plan-Execute: 学习式验证循环 R%d——追加修复轮",
+                self.verification_loop.round_count + 1,
+            )
+            self.callback.on_warning(
+                "检测到修改已落盘但测试未通过，正在读取失败输出并修复…"
+            )
+
+            step_id = len(results) + 1
+            remediation_step = {
+                "id": step_id,
+                "task": repair_prompt,
+                "tool": None,
+                "params": {},
+                "depends_on": [],
+            }
+            prev_results = self._build_prev_results(results)
+            raw_result = self._execute_step_with_llm(
+                step_id, total + 1, remediation_step["task"],
+                prev_results, user_input, tracker, context=ctx,
+                require_write_tool=True,
+            )
+            outcome = self._step_outcome(raw_result)
+            results.append({
+                "step_id": step_id,
+                "task": remediation_step["task"],
+                "result": outcome.content,
+                "status": "ok" if outcome.success else "failed",
+                "error": outcome.error,
+            })
+            ctx.set(f"step_{step_id}_result", outcome.content)
+            ctx.set(f"step_{step_id}_status", "ok" if outcome.success else "failed")
+            self.callback.on_step_done(step_id, outcome.success, outcome.content[:200])
+
+            # 重新捕获证据并记录本轮结果
+            evidence = ExecutionEvidence.capture(tracker, workspace_root_for(self))
+            outcome_tag = "fixed" if outcome.success and evidence.successful_tests else "still_failing"
+            self.verification_loop.record_outcome(evidence, outcome=outcome_tag)
+
+        if self.verification_loop.total_rounds_used > 0:
+            logger.info(
+                "VerificationLoop: 完成 %d 轮验证循环",
+                self.verification_loop.total_rounds_used,
+            )
 
     # ── Phase 2: 串行执行（原行为，向后兼容） ─────────────────
     def _run_serial(
