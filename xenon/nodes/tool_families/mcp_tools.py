@@ -17,8 +17,11 @@ class MCPToolsMixin:
         if not tool_name:
             return {
                 "action_type": "mcp_call",
+                "tool": tool_name,
                 "success": False,
                 "error": "需要 tool_name 参数",
+                "content": None,
+                "metadata": None,
             }
 
         # 获取注册表（从 context 或创建新的）
@@ -26,8 +29,11 @@ class MCPToolsMixin:
         if not registry:
             return {
                 "action_type": "mcp_call",
+                "tool": tool_name,
                 "success": False,
                 "error": "MCP 未初始化。请先使用 /mcp add 命令添加 MCP 服务器",
+                "content": None,
+                "metadata": None,
             }
 
         try:
@@ -70,5 +76,7 @@ class MCPToolsMixin:
                 "tool": tool_name,
                 "success": False,
                 "error": str(e),
+                "content": None,
+                "metadata": None,
             }
 
