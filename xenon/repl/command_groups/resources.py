@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 # /mcp ──────────────────────────────────────────────────
 
-register_command("/mcp", "管理 MCP 服务器连接", "/mcp [add|list|tools|remove|discover|install] [args]")
+register_command("/mcp", "管理 MCP 服务器连接", "/mcp [add|list|tools|remove|discover|install|refresh] [args]")
 
 @command_handler("/mcp")
 def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
@@ -218,6 +218,19 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
         except Exception as e:
             return f"❌ 安装失败: {e}"
 
+    elif sub == "refresh":
+        # 刷新 MCP 工具映射（中途 /mcp add 后，工具列表需要重新注入引擎）
+        registry.tool_map.clear()
+        tools = registry.discover_tools()
+        total = sum(len(v) for v in tools.values())
+        # 通知 REPL 刷新缓存的 _mcp_tools_list
+        if hasattr(repl, "_build_mcp_tools_list"):
+            try:
+                repl._mcp_tools_list = repl._build_mcp_tools_list()
+            except Exception:
+                pass
+        return f"✅ 已刷新 MCP 工具映射（共 {total} 个工具）"
+
     else:
         # 无子命令或无效子命令 → 显示完整使用指南
         return _MCP_USAGE
@@ -238,6 +251,7 @@ _MCP_USAGE = """\
   /mcp list                   查看已安装列表
   /mcp tools                  查看已发现工具
   /mcp remove <名称>          移除
+  /mcp refresh                刷新工具映射（/mcp add 后立即生效）
 
 🔄 其他：
   /library refresh            强制刷新库缓存
