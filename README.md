@@ -15,7 +15,7 @@ PR 与社区一起迭代。
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml/badge.svg)](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/xianyu-sheng/Xenon/branch/main/graph/badge.svg)](https://codecov.io/gh/xianyu-sheng/Xenon)
-[![release v0.8.2](https://img.shields.io/badge/release-v0.8.2-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.8.2)
+[![release v0.8.3](https://img.shields.io/badge/release-v0.8.3-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.8.3)
 
 代码托管：
 [GitHub](https://github.com/xianyu-sheng/Xenon) ·
@@ -64,7 +64,7 @@ PR 与社区一起迭代。
 
 ```bash
 # 安装
-pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.8.2"
+pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.8.3"
 
 # 启动
 xenon
