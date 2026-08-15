@@ -482,7 +482,7 @@ class ToolNode(
         if not self.security_enabled:
             return path
 
-        resolved = path.resolve()
+        resolved = Path(os.path.normpath(str(path)))
         root = self._get_allowed_root()
 
         # v0.5.3: 允许读写 /tmp 等临时目录
