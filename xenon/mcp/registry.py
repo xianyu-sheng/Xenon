@@ -14,6 +14,42 @@ from xenon.mcp.client import MCPClient
 logger = logging.getLogger(__name__)
 
 
+CATEGORY_KEYWORDS = {
+    "write_file": [
+        "write", "edit", "create", "append", "insert", "save", "overwrite", "put",
+        "modify", "update", "patch", "replace"
+    ],
+    "read_file": [
+        "read", "get", "fetch", "load", "cat", "view", "show", "open",
+        "display", "print", "output"
+    ],
+    "search": [
+        "search", "grep", "find", "query", "locate", "scan", "match",
+        "lookup", "filter", "detect"
+    ],
+    "command": [
+        "command", "exec", "run", "shell", "bash", "terminal", "sh",
+        "execute", "spawn", "launch"
+    ],
+    "git": [
+        "git", "commit", "push", "pull", "clone", "branch", "checkout",
+        "merge", "rebase", "status", "diff", "log"
+    ],
+    "web": [
+        "web", "http", "fetch", "download", "browse", "request",
+        "get_url", "post", "scrape", "crawl"
+    ],
+    "directory": [
+        "list", "ls", "dir", "directory", "mkdir", "rmdir", "tree",
+        "walk", "enumerate"
+    ],
+    "database": [
+        "db", "database", "sql", "query", "insert", "update", "delete",
+        "select", "table", "schema"
+    ],
+}
+
+
 def infer_category(tool_name: str, description: str = "") -> str:
     """根据工具名和描述推断工具分类。"""
     text = (tool_name + " " + description).lower()
