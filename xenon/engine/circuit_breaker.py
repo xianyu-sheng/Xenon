@@ -42,6 +42,7 @@ class CircuitBreaker:
         if self.state == self.OPEN:
             if self._clock() - self.opened_at >= self.cooldown:
                 self.state = self.HALF_OPEN
+                self._probing = True
                 return True  # 放行一次试探
             return False
         return True
@@ -51,6 +52,7 @@ class CircuitBreaker:
         self.failures = 0
         self.state = self.CLOSED
         self.cooldown = self._base_cooldown  # 恢复基础冷却
+        self._probing = False
 
     def record_failure(self) -> None:
         """失败：累计；达阈值转 open（half_open 下失败立即转 open 且冷却翻倍）。"""
@@ -65,6 +67,7 @@ class CircuitBreaker:
     def _open(self, *, doubled: bool) -> None:
         self.state = self.OPEN
         self.opened_at = self._clock()
+        self._probing = False
         if doubled:
             self.cooldown = min(self.cooldown * 2, self.max_cooldown)
 
@@ -75,6 +78,7 @@ class BreakerRegistry:
     def __init__(self, **breaker_kwargs) -> None:
         self._breakers: dict[str, CircuitBreaker] = {}
         self._breaker_kwargs = breaker_kwargs
+        self._probing = False
 
     def get(self, tool_name: str) -> CircuitBreaker:
         b = self._breakers.get(tool_name)
