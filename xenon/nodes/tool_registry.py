@@ -204,6 +204,7 @@ BUILTIN_TOOL_METHODS: dict[str, str] = {
     "weather": "_weather",
     "datetime": "_datetime",
     "register_tool": "_register_tool",
+    "spawn_agent": "_spawn_agent",  # 引擎层拦截，注册表仅声明 risk 分类
 }
 
 BUILTIN_TOOL_REGISTRY = ToolRegistry()
