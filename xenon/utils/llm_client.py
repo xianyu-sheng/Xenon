@@ -1397,6 +1397,8 @@ def _call_openai_compat_with_tools(
     resp = client.post(url, json=payload, headers=headers, timeout=timeout)
     resp.raise_for_status()
     data = resp.json()
+    if not data or not isinstance(data, dict):
+        raise RuntimeError(f"空响应或非 JSON: {resp.text[:200]}")
     # §8.8.1：提取并累加真实 usage（含缓存命中数据）
     _acc_usage(endpoint.provider, data, f"{endpoint.provider}/{endpoint.model_name}")
     choice = data.get("choices", [{}])[0]
