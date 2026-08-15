@@ -87,8 +87,26 @@ class BreakerRegistry:
             self._breakers[tool_name] = b
         return b
 
-    def reset(self) -> None:
-        self._breakers.clear()
+    def reset(self, tool_name: str | None = None) -> None:
+        """重置断路器状态。
+
+        Args:
+            tool_name: 若指定，仅重置该工具的 breaker；
+                      若为 None，重置所有 breaker（保留对象，只清状态）。
+        """
+        if tool_name:
+            b = self._breakers.get(tool_name)
+            if b:
+                b.failures = 0
+                b.state = CircuitBreaker.CLOSED
+                b.cooldown = b._base_cooldown
+                b._probing = False
+        else:
+            for b in self._breakers.values():
+                b.failures = 0
+                b.state = CircuitBreaker.CLOSED
+                b.cooldown = b._base_cooldown
+                b._probing = False
 
 
 # 进程级共享注册表（四引擎默认共用，使断路状态跨 run 累积）
