@@ -21,6 +21,9 @@ _NON_REPOSITORY_ROUTES = frozenset({
     "sponsors",
     "topics",
     "users",
+    # GitHub Discussions / Projects 等非仓库页面
+    "discussions",
+    "projects",
 })
 
 
@@ -113,10 +116,10 @@ def parse_github_reference(value: str) -> GitHubReference:
             path="/".join(parts[4:]),
         )
 
-    if kind in {"issues", "pull", "pulls"}:
+    if kind in {"issues", "pull", "pulls", "discussions"}:
         if len(parts) < 4 or not parts[3].isdigit():
             raise ValueError(f"GitHub {kind} URL 缺少有效编号")
-        normalized = "issue" if kind == "issues" else "pull"
+        normalized = "issue" if kind == "issues" else "pull" if kind in {"pull", "pulls"} else "discussion"
         return GitHubReference(
             owner,
             repo,
