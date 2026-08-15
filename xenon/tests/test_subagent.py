@@ -20,9 +20,9 @@ class TestSubAgentSystem:
     # ── P0: 超时控制 ──────────────────────────────────
 
     def test_subagent_timeout_param_default(self):
-        """subagent_timeout 默认值为 None。"""
+        """subagent_timeout 默认值为 300（5 分钟），防止子 Agent 死循环。"""
         eng = self._make_engine()
-        assert eng.subagent_timeout is None
+        assert eng.subagent_timeout == 300
 
     def test_subagent_timeout_param_set(self):
         """subagent_timeout 可以显式设置。"""

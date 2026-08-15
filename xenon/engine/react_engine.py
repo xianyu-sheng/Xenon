@@ -50,7 +50,7 @@ class ReActEngine(BaseEngine):
         project_root: str | None = None,
         max_subagent_iterations: int = 6,
         max_subagent_depth: int = 1,
-        subagent_timeout: int | None = None,  # v0.6.1-P0: 子 Agent 超时秒数
+        subagent_timeout: int | None = 300,  # v0.6.1-P0: 子 Agent 超时秒数（默认 5 分钟，防止死循环）
         model_pool: Any = None,          # v0.4.0
         auto_router: Any = None,         # v0.4.0 Step 13
         permission_gate: Any = None,     # v0.5.0: PermissionGate
@@ -1008,6 +1008,8 @@ class ReActEngine(BaseEngine):
         engine_type = (action_input.get("engine") or action_input.get("engine_type") or "react").lower()
 
         # 超时：优先用 action_input 中的值，其次用引擎默认值
+        # 默认 300 秒（5 分钟），防止子 Agent 死循环导致父 Agent 无限等待
+        # 用户可通过 timeout 参数覆盖，或设为 None 允许无限等待（风险自负）
         timeout = action_input.get("timeout")
         if timeout is None:
             timeout = self.subagent_timeout
