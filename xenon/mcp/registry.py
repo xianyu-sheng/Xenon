@@ -67,6 +67,7 @@ class MCPRegistry:
         self.tool_map: dict[str, tuple[str, dict[str, Any]]] = {}
         # 惰性模式：尚未连接的服务器配置（name -> {command, args, url, env}）
         self._pending_configs: dict[str, dict[str, Any]] = {}
+        self.tool_categories: dict[str, list[str]] = {}
 
     def add_server(
         self,
@@ -190,6 +191,9 @@ class MCPRegistry:
                     if tool_name not in self.tool_map:
                         self.tool_map[tool_name] = (server_name, tool)
                 logger.info(f"MCP 服务器 '{server_name}': 发现 {len(tools)} 个工具")
+                # 分类
+                cat = infer_category(tool_name, tool.get("description", "") if isinstance(tool, dict) else "")
+                self.tool_categories.setdefault(cat, []).append(global_name)
             except Exception as e:
                 logger.warning(f"MCP 服务器 '{server_name}' 工具发现失败: {e}")
 
