@@ -14,6 +14,15 @@ from xenon.mcp.client import MCPClient
 logger = logging.getLogger(__name__)
 
 
+def infer_category(tool_name: str, description: str = "") -> str:
+    """根据工具名和描述推断工具分类。"""
+    text = (tool_name + " " + description).lower()
+    for cat, kws in CATEGORY_KEYWORDS.items():
+        if any(kw in text for kw in kws):
+            return cat
+    return "other"
+
+
 def _validate_server_name(name: str) -> None:
     """校验 MCP 服务器名的合法性（命名空间标识符）。
 
