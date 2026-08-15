@@ -979,8 +979,8 @@ class REPL:
 
     @staticmethod
     def _default_system_prompt() -> str:
-        from datetime import datetime
-        now = datetime.now()
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
         weekdays_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
         current_date = f"{now.year}年{now.month}月{now.day}日 {weekdays_cn[now.weekday()]}"
         return (

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import time as _time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -151,7 +151,7 @@ def save_session(
     data = {
         "version": "2.1",
         "name": name,
-        "saved_at": datetime.now().isoformat(),
+        "saved_at": datetime.now(timezone.utc).isoformat(),
         "saved_at_ts": _time.time(),
         "history": history,
         "context": context_store,
@@ -254,7 +254,7 @@ def auto_save(
         data = {
             "version": "2.1",
             "name": AUTO_SESSION_NAME,
-            "saved_at": datetime.now().isoformat(),
+            "saved_at": datetime.now(timezone.utc).isoformat(),
             "saved_at_ts": _time.time(),
             "history": history,
             "context": context_store,
