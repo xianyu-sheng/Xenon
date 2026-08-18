@@ -17,7 +17,6 @@ import threading
 import pytest
 
 from xenon.mcp.registry import (
-    CATEGORY_KEYWORDS,
     MCPRegistry,
     _redact_text,
     infer_category,
