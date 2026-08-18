@@ -418,10 +418,13 @@ class TaskCompletionGate(EvidenceGate):
             return GateVerdict(self.phase, True, "已有成功写类工具执行", "info")
         if not task_requires_write(user_input):
             return GateVerdict(self.phase, True, "任务不需要写操作", "info")
-        if results is not None and max_steps > 0 and len(results) >= max_steps:
+        if results is not None and max_steps > 0 and len(results) >= max_steps + 8:
+            # v0.8.3: 从「>= max_steps 拦截」放宽为「远超 max_steps 兜底」。
+            # SWE-bench 实测（django-16408 官方 API 0 patch）：侦察型计划吃满
+            # max_steps 后补救被挡，从不落盘。补救是一次性动作，不会无限循环。
             return GateVerdict(
                 self.phase, True,
-                "已达 max_steps=%d 上限，不追加补救" % max_steps, "info",
+                "结果数远超 max_steps=%d 上限，不追加补救" % max_steps, "info",
             )
         return GateVerdict(
             self.phase,

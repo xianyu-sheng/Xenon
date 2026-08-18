@@ -302,6 +302,25 @@ class PlanExecuteEngine(BaseEngine):
         logger.info(f"计划生成 {len(steps)} 个步骤")
         total = min(len(steps), self.max_steps)
         capped = steps[:self.max_steps]
+        # v0.8.3: 截断不得砍掉写步骤——SWE-bench 实测（django-16408 官方 API）：
+        # plan 共 12 步、写步骤在第 11 位，cap=10 后计划全是侦察步骤，
+        # 10 步跑完 0 patch。若完整计划含写步骤但截断后丢失，把第一个写
+        # 步骤置换进截断段（替换末尾的侦察步骤），保证执行路径可达落盘。
+        if len(steps) > len(capped) and not self._plan_has_write_step(capped):
+            from xenon.engine.evidence_gate import WRITE_TOOL_NAMES as _WRITE_TOOLS
+            write_idx = next(
+                (i for i, s in enumerate(steps) if s.get("tool") in _WRITE_TOOLS),
+                None,
+            )
+            if write_idx is not None:
+                logger.warning(
+                    "计划 %d 步截断到 %d 步丢失写步骤（原第 %d 步），置换保留",
+                    len(steps), len(capped), write_idx + 1,
+                )
+                self.callback.on_warning(
+                    f"计划截断丢失了写步骤（原第 {write_idx + 1} 步），已置换保留"
+                )
+                capped = capped[:-1] + [steps[write_idx]]
 
         # Phase 2: Execution
         logger.info("Plan-Execute Phase 2: 执行中...")
@@ -363,50 +382,51 @@ class PlanExecuteEngine(BaseEngine):
         # 贴 diff 不落盘（LLM 声称改/建文件但无写证据）是 SWE-bench 最大
         # 失分点。预检交付闸门，失败且有预算时追加一轮「落盘补救」步骤，
         # 让 LLM 真正执行写工具后再汇总交付——拦截不是终点。
-        if len(results) < self.max_steps:
-            pre_verdict = self.delivery_gate_verdict(
-                context=ctx, output="", tracker=tracker,
+        # v0.8.3: 移除 max_steps 硬限制（与 _ensure_task_completed 同源修复：
+        # 侦察型计划吃满预算后补救曾被挡住，0 patch）。
+        pre_verdict = self.delivery_gate_verdict(
+            context=ctx, output="", tracker=tracker,
+        )
+        if pre_verdict is not None:
+            logger.warning(
+                "Plan-Execute: 交付闸门预检未通过（%s），追加落盘补救",
+                pre_verdict.reason[:80],
             )
-            if pre_verdict is not None:
-                logger.warning(
-                    "Plan-Execute: 交付闸门预检未通过（%s），追加落盘补救",
-                    pre_verdict.reason[:80],
-                )
-                self.callback.on_warning(
-                    f"交付校验预检未通过（{pre_verdict.reason[:60]}），"
-                    "正在追加落盘补救执行…"
-                )
-                remediation_step = {
-                    "id": len(results) + 1,
-                    "task": (
-                        "【落盘补救】交付校验发现你声称修改/创建了文件，但工具执行"
-                        "记录中没有对应的写操作证据（校验原因：" 
-                        f"{pre_verdict.reason}）。请立即使用 write_file / edit_file "
-                        "/ batch_write 等工具真正把改动写入目标文件，写入后用 "
-                        "read_file 验证内容，确认无误后再给出最终总结。"
-                    ),
-                    "tool": None,
-                    "params": {},
-                    "depends_on": [],
-                }
-                step_id = remediation_step["id"]
-                prev_results = self._build_prev_results(results)
-                raw_result = self._execute_step_with_llm(
-                    step_id, total + 1, remediation_step["task"],
-                    prev_results, user_input, tracker, context=ctx,
-                    require_write_tool=True,
-                )
-                outcome = self._step_outcome(raw_result)
-                results.append({
-                    "step_id": step_id,
-                    "task": remediation_step["task"],
-                    "result": outcome.content,
-                    "status": "ok" if outcome.success else "failed",
-                    "error": outcome.error,
-                })
-                ctx.set(f"step_{step_id}_result", outcome.content)
-                ctx.set(f"step_{step_id}_status", "ok" if outcome.success else "failed")
-                self.callback.on_step_done(step_id, outcome.success, outcome.content[:200])
+            self.callback.on_warning(
+                f"交付校验预检未通过（{pre_verdict.reason[:60]}），"
+                "正在追加落盘补救执行…"
+            )
+            remediation_step = {
+                "id": len(results) + 1,
+                "task": (
+                    "【落盘补救】交付校验发现你声称修改/创建了文件，但工具执行"
+                    "记录中没有对应的写操作证据（校验原因："
+                    f"{pre_verdict.reason}）。请立即使用 write_file / edit_file "
+                    "/ batch_write 等工具真正把改动写入目标文件，写入后用 "
+                    "read_file 验证内容，确认无误后再给出最终总结。"
+                ),
+                "tool": None,
+                "params": {},
+                "depends_on": [],
+            }
+            step_id = remediation_step["id"]
+            prev_results = self._build_prev_results(results)
+            raw_result = self._execute_step_with_llm(
+                step_id, total + 1, remediation_step["task"],
+                prev_results, user_input, tracker, context=ctx,
+                require_write_tool=True,
+            )
+            outcome = self._step_outcome(raw_result)
+            results.append({
+                "step_id": step_id,
+                "task": remediation_step["task"],
+                "result": outcome.content,
+                "status": "ok" if outcome.success else "failed",
+                "error": outcome.error,
+            })
+            ctx.set(f"step_{step_id}_result", outcome.content)
+            ctx.set(f"step_{step_id}_status", "ok" if outcome.success else "failed")
+            self.callback.on_step_done(step_id, outcome.success, outcome.content[:200])
 
         # 汇总结果 — 附加工具执行摘要
         summary = self._summarize(user_input, plan.get("analysis", ""), results, tracker)
@@ -524,11 +544,17 @@ class PlanExecuteEngine(BaseEngine):
         if not self._task_requires_write(user_input):
             return results
         if len(results) >= self.max_steps:
-            logger.warning(
-                "任务需要写操作但无写类工具执行，且已达 max_steps=%d 上限，"
-                "不再追加补救步骤", self.max_steps,
-            )
-            return results
+            # v0.8.3 修复：不再硬拦截。此前「侦察型计划吃满 max_steps →
+            # 补救被挡 → 0 patch」（SWE-bench 实测 django-16408）。补救是
+            # 一次性动作（本方法只在 run() 调用一次，追加单个补救步骤），
+            # 不会无限循环；防御性上限改为 len(results) >= max_steps + 8
+            # 兜底（防未来调用方改成循环调用时的失控）。
+            if len(results) >= self.max_steps + 8:
+                logger.warning(
+                    "任务需要写操作但无写类工具执行，且结果已远超 max_steps，"
+                    "不再追加补救步骤", self.max_steps,
+                )
+                return results
 
         # ── Gate 判定（确定性，与上面三条件等价，单一真相源）──
         verdict = self.gate_failed(
@@ -1298,21 +1324,36 @@ class PlanExecuteEngine(BaseEngine):
                 f"（file_path/old_text/new_text 等必须齐全且与文件实际内容匹配），"
                 f"真正完成本步骤后再输出 final_answer。"
             )
+            # 原步骤是写工具时，补救轮强制要求调用写工具（require_write_tool
+            # 会拒绝无写工具的 final_answer）；成功判定也以「新增成功写工具
+            # 调用」为准——SWE-bench 实测（django-16408）：edit_file 缺参数
+            # 失败后，补救轮 LLM 只补一次 read_file 就被旧判定（任意成功工具
+            # 调用）当成「已修复」，实际 0 patch。
+            from xenon.engine.evidence_gate import WRITE_TOOL_NAMES as _W_NAMES
+            target_write = tool in _W_NAMES
+            write_ok_before = self._has_successful_write(tracker)
             ok_before = self._successful_call_count(tracker)
             raw = self._execute_step_with_llm(
                 step_id, total, remediation_task, prev_results, user_input,
                 tracker, context=ctx,
                 steering=steering,
+                require_write_tool=target_write,
             )
             outcome = self._step_outcome(raw)
-            # 补救成功以「tracker 新增了成功工具调用」为准，而非 LLM 文本
+            # 补救成功以「tracker 新增了真实执行证据」为准，而非 LLM 文本
             # （迷你 ReAct 轮次耗尽时，LLM 输出的 action JSON 会被文本启发
-            # 误判为成功）。工具步骤的补救必须留下真实执行证据。
-            if self._successful_call_count(tracker) > ok_before:
+            # 误判为成功）。写工具步骤要求新增成功写调用；其他工具步骤
+            # 要求新增任意成功调用（重试成功即可）。
+            if target_write:
+                remediated = self._has_successful_write(tracker) and not write_ok_before
+            else:
+                remediated = self._successful_call_count(tracker) > ok_before
+            if remediated:
                 return outcome
             logger.warning(
-                "Plan-Execute 补救轮 %d/%d 未产生成功工具调用，视为失败",
+                "Plan-Execute 补救轮 %d/%d 未产生%s成功工具调用，视为失败",
                 attempt, self.tool_remediation_attempts,
+                "写" if target_write else "",
             )
             outcome = StepOutcome(
                 str(outcome.content),

@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # 时自动续写的最大次数；耗尽后抛 ResponseTruncatedError，而不是仅 logger.warning
 # 后静默返回被截断的内容。
 MAX_CONTINUATIONS = 3
-_REASONING_EFFORTS = frozenset({"low", "medium", "high", "max"})
+_REASONING_EFFORTS = frozenset({"low", "medium", "high", "max", "off"})
 
 
 def _retry_delay(error: httpx.HTTPStatusError, attempt: int) -> float:
@@ -75,9 +75,18 @@ def _apply_reasoning_effort(
     payload: dict[str, Any],
     reasoning_effort: str | None,
 ) -> None:
-    """Add reasoning_effort only when the caller explicitly configured it."""
+    """Add reasoning_effort only when the caller explicitly configured it.
+
+    ``off``（DeepSeek V4 官方 API 实测）表示关闭思考模式：默认思考模式会
+    把整个 max_tokens 预算花在 reasoning 上（500/500 tokens 全被推理吃掉，
+    content 为空且 finish_reason=length），SWE-bench 评测直接截断失败。
+    关闭后走 ``thinking: {\"type\": \"disabled\"}``（DeepSeek V4 协议），
+    直接输出可见内容。其他值照旧走 ``reasoning_effort`` 字段。
+    """
     normalized = _normalize_reasoning_effort(reasoning_effort)
-    if normalized:
+    if normalized == "off":
+        payload["thinking"] = {"type": "disabled"}
+    elif normalized:
         payload["reasoning_effort"] = normalized
 
 

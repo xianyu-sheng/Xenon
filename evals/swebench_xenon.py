@@ -155,10 +155,12 @@ def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
             provider_attempts: int = 1,
             events_path: Path | None = None,
             namespace: str | None = "swebench",
-            verification_loop: bool = True) -> dict[str, Any]:
+            verification_loop: bool = True,
+            reasoning_effort: str | None = None) -> dict[str, Any]:
     instance_id = instance["instance_id"]
     config = ModelConfig(model_id=model, alias=model, max_tokens=8192,
-                         context_window=1_000_000)
+                         context_window=1_000_000,
+                         reasoning_effort=reasoning_effort)
     started = time.time()
     output = ""
     error = None
@@ -478,6 +480,12 @@ def main() -> int:
         help="Total attempts owned by the provider client for transient failures.",
     )
     parser.add_argument(
+        "--reasoning-effort", default=None,
+        choices=["off", "low", "medium", "high", "max"],
+        help="DeepSeek V4 官方 API 默认思考模式会耗尽 max_tokens 导致截断；"
+             "评测官方 API 时建议传 off。",
+    )
+    parser.add_argument(
         "--namespace", default="swebench",
         help="Official image namespace; use 'none' to build locally",
     )
@@ -576,6 +584,7 @@ def main() -> int:
                         "events_path": events_path,
                         "namespace": namespace,
                         "verification_loop": not args.no_verification_loop,
+                        "reasoning_effort": args.reasoning_effort,
                     }
                     results.append(_run_with_hard_timeout(
                         kwargs, args.engine_timeout + 15, events_path

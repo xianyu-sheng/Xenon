@@ -124,7 +124,21 @@ class TestTaskCompletionGate:
             tracker=_make_tracker([]),
             max_steps=10,
         )
-        assert verdict.passed is True  # 达上限不追加，防无限循环
+        # v0.8.3: 恰达 max_steps 不再拦截（侦察型计划吃满预算后补救曾被挡，
+        # 0 patch 实测）。仅远超上限（+8）时兜底，防未来循环调用失控。
+        assert verdict.passed is False
+
+    def test_passes_far_beyond_max_steps(self) -> None:
+        """远超 max_steps（+8）时兜底拦截，防无限循环。"""
+        gate = TaskCompletionGate()
+        verdict = gate.check(
+            None,
+            user_input="Fix the bug",
+            results=[{"step_id": i} for i in range(19)],
+            tracker=_make_tracker([]),
+            max_steps=10,
+        )
+        assert verdict.passed is True
 
 
 class TestFileClaimGate:
