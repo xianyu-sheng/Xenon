@@ -6,8 +6,6 @@
 - Rich 渲染
 """
 import pytest
-from io import StringIO
-from unittest.mock import Mock, patch
 from rich.console import Console
 
 
@@ -33,7 +31,6 @@ class TestTUIStatusBar:
 
     def test_rich_console_available(self):
         """测试 Rich Console 可用"""
-        from rich.console import Console
 
         console = Console()
         assert console is not None
@@ -69,7 +66,6 @@ class TestTUIDisplay:
     def test_markdown_rendering(self):
         """测试 Markdown 渲染"""
         from rich.markdown import Markdown
-        from rich.console import Console
 
         md = Markdown("# Test\n\n**Bold** text")
         assert md is not None
@@ -84,7 +80,6 @@ class TestTUIDisplay:
     def test_table_rendering(self):
         """测试表格渲染"""
         from rich.table import Table
-        from rich.console import Console
 
         table = Table(title="Test Table")
         table.add_column("Col1")
@@ -102,7 +97,6 @@ class TestTUIDisplay:
     def test_panel_rendering(self):
         """测试 Panel 渲染"""
         from rich.panel import Panel
-        from rich.console import Console
 
         panel = Panel("Test content", title="Test Panel")
 

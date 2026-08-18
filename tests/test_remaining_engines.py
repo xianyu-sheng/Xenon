@@ -8,7 +8,6 @@
 """
 import json
 import pytest
-from pathlib import Path
 from xenon.engine.reflection_engine import ReflectionEngine
 from xenon.engine.combined_engines import (
     PlanReflectionEngine,
@@ -16,7 +15,6 @@ from xenon.engine.combined_engines import (
 )
 from xenon.engine.context import AgentContext
 from xenon.engine.callbacks import SilentCallback
-from xenon.engine.base import BaseEngine
 
 
 # ============================================================================
@@ -204,7 +202,6 @@ class TestPlanReflectionEngine:
         assert result is not None
         # 策略提示在组合引擎中发射
         # 如果使用能触发策略的任务描述
-        tips = [v for k, v in callback.events if k == "tip"]
         # 组合引擎应该发射策略提示（如果任务触发识别）
         # 修改为更宽松的验证
         assert len(callback.events) > 0  # 至少有事件
@@ -261,7 +258,7 @@ class TestPlanReflectionEngine:
         monkeypatch.setattr(engine.reflector, "_call_llm_for_phase", fake_review)
 
         ctx = AgentContext()
-        result = engine.run("执行并审查任务", ctx)
+        engine.run("执行并审查任务", ctx)
 
         assert review_count[0] >= 1
 
@@ -346,7 +343,7 @@ class TestReactReflectionEngine:
         monkeypatch.setattr(engine.reflector, "_call_llm_for_phase", fake_review)
 
         ctx = AgentContext()
-        result = engine.run("测试修复流程", ctx)
+        engine.run("测试修复流程", ctx)
 
         assert review_count[0] >= 1
 

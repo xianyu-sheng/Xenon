@@ -8,14 +8,10 @@
 """
 import json
 import pytest
-from pathlib import Path
 from xenon.engine.react_engine import ReActEngine
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
-from xenon.engine.reflection_engine import ReflectionEngine
 from xenon.engine.combined_engines import (
     PlanReactEngine,
-    PlanReflectionEngine,
-    ReactReflectionEngine,
 )
 from xenon.engine.context import AgentContext
 from xenon.engine.callbacks import SilentCallback
@@ -138,7 +134,7 @@ class TestEngines:
 
         ctx = AgentContext()
         # 使用一个能触发策略识别的任务
-        result = engine.run("修复 bug.py 并运行测试", ctx)
+        engine.run("修复 bug.py 并运行测试", ctx)
 
         # 验证策略提示被发射（组合引擎应该发射）
         tips = [v for k, v in callback.events if k == "tip"]
@@ -208,7 +204,7 @@ class TestTools:
         monkeypatch.setattr(engine, "_call_llm", fake_llm_final)
 
         ctx = AgentContext()
-        result = engine.run("创建测试文件", ctx)
+        engine.run("创建测试文件", ctx)
 
         assert target_file.exists()
         assert target_file.read_text() == "Test output"

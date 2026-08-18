@@ -98,7 +98,7 @@ class TestCommandList:
 
         uncategorized = set(COMMANDS.keys()) - all_categorized
         if uncategorized:
-            print(f"\n未分类命令:")
+            print("\n未分类命令:")
             for cmd in sorted(uncategorized):
                 desc = COMMANDS[cmd].get('description', '')
                 print(f"  ? {cmd:20} - {desc[:40]}")
