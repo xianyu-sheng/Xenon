@@ -5,6 +5,27 @@
 
 ## [Unreleased]
 
+### MCPRegistry 健壮性对齐（评审驱动的工程修补）
+
+针对外部代码评审（Cilpiot）指出的高优先级问题，对齐 CLAUDE.md 的
+「server:tool 统一命名空间」契约：
+
+- **短名歧义不再隐式路由**：多个 MCP 服务器提供同名工具时，短名不注册、
+  call_tool 报明确错误并给出 `server:tool` 全名提示；唯一短名仍作为
+  便利别名注册（向后兼容）。`/mcp remove` 后重新 discover 会重算歧义集合。
+- **并发安全**：MCPRegistry 共享状态（clients/tool_map/_pending_configs/
+  tool_categories/短名追踪）写入路径全部加 RLock 保护。
+- **类型守卫**：discover_tools 跳过非 dict / 无合法 name 的工具条目，
+  不再以 "unknown" 占位；call_tool 对缺失 name 的工具信息做兜底，
+  不再 KeyError 崩溃。
+- **evidence 脱敏**：call_tool 写入证据链的异常与结果摘要经
+  `_redact_text` 脱敏（API key/Bearer/URL query），与 callbacks 的
+  R7 参数级脱敏互补。
+- **infer_category 词边界**：关键词匹配改为词边界正则（"web" 不再误中
+  "webhook"），并标注该分类为仅供展示的死数据、不应做路由决策。
+- 测试：新增 tests/test_mcp_registry_robustness.py（16 个用例：
+  歧义/全名路由/类型守卫/脱敏/并发/词边界）。
+
 ## [0.8.2] — 2026-08-13
 
 ### SWE-bench 官方评测提升（同模型对比实证）
