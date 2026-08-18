@@ -665,6 +665,7 @@ class ToolExecutor:
         evidence_ledger: EvidenceLedger | None = None,
         evidence_enforcement: str = "observe",
         evidence_gates: list[Any] | None = None,
+        evidence_auto_read: bool = True,  # v0.8.3: 盲编辑自动补读
     ) -> None:
         if evidence_enforcement not in {"observe", "enforce"}:
             raise ValueError("evidence_enforcement must be 'observe' or 'enforce'")
@@ -677,6 +678,12 @@ class ToolExecutor:
         self.evidence_ledger = evidence_ledger
         self.evidence_enforcement = evidence_enforcement
         self.evidence_gates: list[Any] = list(evidence_gates or [])
+        # v0.8.3: FactBindingGate 拦截「盲编辑」（缺读取证据）后，自动对
+        # 缺失路径补一次 read_file 再重试原工具。SWE-bench 实测
+        # （matplotlib-23562 等）：LLM 只 search_files 定位就 edit，被拦
+        # 后 plan-execute 引擎直接放弃该步骤——自动补读让拦截成为
+        # 一次可自我修复的瞬时事件，而不是永久失败。
+        self.evidence_auto_read = evidence_auto_read
 
     def register_evidence_gate(self, gate: Any) -> None:
         """挂载一个在线工具边界 Gate；Gate 只判定，不直接执行补救。"""
@@ -731,6 +738,38 @@ class ToolExecutor:
         payload: dict[str, Any],
     ) -> None:
         self._resolve_ledger(context).append(phase, kind, source, payload)
+
+    def _auto_read_missing_paths(
+        self,
+        missing_paths: list[str],
+        tool_name: str,
+        context: AgentContext,
+        tracker: ToolExecutionTracker | None,
+    ) -> bool:
+        """对缺失读取证据的路径自动补 read_file，返回是否全部补齐。
+
+        只读操作本身不经过事实绑定（before_tool 对非写工具直接放行），
+        无递归风险；每次 read 走完整 7 阶段流水线，正常记录 tracker 与
+        ledger，重试原工具时证据即可匹配。
+        """
+        read_ok = False
+        for path in missing_paths:
+            try:
+                result = self.execute(
+                    "read_file", {"file_path": path}, context, tracker,
+                )
+            except Exception as exc:  # noqa: BLE001 — 补读失败不阻断原拦截
+                logger.warning("自动补读 %s 失败: %s", path, exc)
+                continue
+            if result.success:
+                read_ok = True
+            else:
+                logger.warning("自动补读 %s 未成功: %s", path, result.error)
+        if not read_ok:
+            logger.warning(
+                "自动补读未产生任何成功读取，维持拦截 %s", tool_name,
+            )
+        return read_ok
 
     def before_tool(
         self, tool_name: str, params: dict[str, Any], context: AgentContext,
@@ -994,13 +1033,30 @@ class ToolExecutor:
         evidence_verdict = self.before_tool(tool_name, params, context, tracker)
         if not evidence_verdict.passed:
             logger.info("在线事实绑定拒绝: %s — %s", tool_name, evidence_verdict.reason)
-            return finish(
-                False,
-                f"⛔ 在线证据验证拒绝: {evidence_verdict.reason}",
-                state=ToolExecutionState.FAILED,
-                error=evidence_verdict.reason,
-                error_kind="evidence_denied",
-            )
+            # v0.8.3: 自动补救——拦截原因「缺读取证据」时，对缺失路径自动
+            # 补 read_file 后重试原工具（最多一次）。read_file 走完整 7 阶段
+            # 流水线（记录 tracker + ledger），重试后证据充足即可放行。
+            if self.evidence_auto_read:
+                missing = (
+                    evidence_verdict.payload or {}
+                ).get("missing_paths")
+                if missing and self._auto_read_missing_paths(
+                    missing, tool_name, context, tracker,
+                ):
+                    evidence_verdict = self.before_tool(tool_name, params, context, tracker)
+                    if evidence_verdict.passed:
+                        logger.info(
+                            "自动补读后证据充足，放行 %s（原拦截: %s）",
+                            tool_name, evidence_verdict.reason,
+                        )
+            if not evidence_verdict.passed:
+                return finish(
+                    False,
+                    f"⛔ 在线证据验证拒绝: {evidence_verdict.reason}",
+                    state=ToolExecutionState.FAILED,
+                    error=evidence_verdict.reason,
+                    error_kind="evidence_denied",
+                )
 
         # ── Stage 3: 权限闸门（v0.5.0: 接入 PermissionGate） ──
         if self.permission_gate is not None:

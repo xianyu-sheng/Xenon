@@ -174,6 +174,7 @@ class PlanExecuteEngine(BaseEngine):
         enable_parallel: bool = False,
         max_parallel_workers: int = 4,
         max_mini_react_rounds: int = 3,
+        tool_remediation_attempts: int = 1,
         model_pool: Any = None,          # v0.4.0
         auto_router: Any = None,         # v0.4.0 Step 13
         permission_gate: Any = None,     # v0.5.0
@@ -198,6 +199,10 @@ class PlanExecuteEngine(BaseEngine):
         # P2-E2 §Q4 迷你 ReAct：无工具步骤最多跑 N 轮 Thought→Action→Observation
         # （复用 parse_react + _execute_step_with_tool），无需工具时首轮即 final_answer。
         self.max_mini_react_rounds = max(1, max_mini_react_rounds)
+        # v0.8.3+: 工具步骤失败自动降级迷你 ReAct 补救次数（SWE-bench 实测：
+        # plan 阶段预生成 params 一次性执行，失败（缺参/匹配失败/证据门拦截）
+        # 即跳过——这是 23 空 patch 的最大根因。补救让 LLM 现场重新生成参数。
+        self.tool_remediation_attempts = max(0, tool_remediation_attempts)
         # v0.8.3: 引擎层跨轮次验证循环
         from xenon.engine.verification_loop import VerificationLoop
         self.verification_loop = VerificationLoop(
@@ -711,8 +716,11 @@ class PlanExecuteEngine(BaseEngine):
             prev_results = self._build_prev_results(results)
 
             if tool and tool != "null":
-                # 使用工具执行
-                raw_result = self._execute_step_with_tool(tool, params, ctx, tracker)
+                # 使用工具执行（失败自动降级迷你 ReAct 补救）
+                outcome = self._execute_tool_step(
+                    step_id, len(steps), step_task, tool, params, user_input,
+                    ctx, tracker, prev_results,
+                )
             else:
                 # 使用 LLM 执行 — §Q4 迷你 ReAct（会验证文件操作声明）
                 raw_result = self._execute_step_with_llm(
@@ -720,8 +728,8 @@ class PlanExecuteEngine(BaseEngine):
                     context=ctx,
                     steering=_steer_pending,
                 )
+                outcome = self._step_outcome(raw_result)
                 _steer_pending = []
-            outcome = self._step_outcome(raw_result)
             i += 1
 
             results.append({
@@ -963,14 +971,17 @@ class PlanExecuteEngine(BaseEngine):
             prev_results = self._build_prev_results(results)
             try:
                 if tool and tool != "null":
-                    raw_result = self._execute_step_with_tool(tool, params, ctx, tracker)
+                    outcome = self._execute_tool_step(
+                        sid, total, step_task, tool, params, user_input,
+                        ctx, tracker, prev_results,
+                    )
                 else:
                     raw_result = self._execute_step_with_llm(
                         sid, total, step_task, prev_results, user_input, tracker,
                         context=ctx,
                         steering=steering,
                     )
-                outcome = self._step_outcome(raw_result)
+                    outcome = self._step_outcome(raw_result)
             except Exception as e:  # 单步异常不连坐整波
                 logger.exception("DAG 串行步骤 %r 执行异常", sid)
                 outcome = StepOutcome(f"执行异常: {e}", False, str(e))
@@ -1116,15 +1127,16 @@ class PlanExecuteEngine(BaseEngine):
             iso_tracker = ToolExecutionTracker()
             try:
                 if tool and tool != "null":
-                    raw_result = self._execute_step_with_tool(
-                        tool, params, iso_ctx, iso_tracker,
+                    outcome = self._execute_tool_step(
+                        sid, total, step_task, tool, params, user_input,
+                        iso_ctx, iso_tracker, prev_map[sid],
                     )
                 else:
                     raw_result = self._execute_step_with_llm(
                         sid, total, step_task, prev_map[sid], user_input, iso_tracker,
                         context=iso_ctx,
                     )
-                outcome = self._step_outcome(raw_result)
+                    outcome = self._step_outcome(raw_result)
             except Exception as e:  # 单步异常不连坐整波
                 logger.exception("DAG 并发步骤 %r 执行异常", sid)
                 outcome = StepOutcome(f"执行异常: {e}", False, str(e))
@@ -1234,6 +1246,100 @@ class PlanExecuteEngine(BaseEngine):
                 result = retry_result
         logger.debug(f"解析后: steps={len(result.get('steps', []))}, analysis={result.get('analysis', '')[:100]}")
         return result
+
+    def _execute_tool_step(
+        self,
+        step_id: int, total: int, step_task: str,
+        tool: str, params: dict, user_input: str,
+        ctx: AgentContext, tracker: ToolExecutionTracker | None,
+        prev_results: str,
+        *,
+        steering: list[dict[str, Any]] | None = None,
+    ) -> StepOutcome:
+        """工具步骤执行 + 失败自动降级迷你 ReAct 补救。
+
+        SWE-bench 实测（plan-execute 23 空 patch 的根因之一）：plan 阶段 LLM
+        预生成的 params 被一次性透传执行，失败（缺 file_path/old_text、
+        old_text 匹配失败、证据门拦截等）后步骤直接标记 failed 继续下一步，
+        没有任何纠错机会——而同实例 react 引擎靠 10 轮主循环自我纠错。
+
+        补救机制：预生成 params 执行失败时，把本步骤转给 ``_execute_step_with_llm``
+        （迷你 ReAct，现场重新生成工具参数），携带失败 Observation 与原因，
+        最多 ``tool_remediation_attempts`` 次。失败不再被静默跳过。
+        """
+        raw_result = self._execute_step_with_tool(tool, params, ctx, tracker)
+        outcome = self._step_outcome(raw_result)
+        if outcome.success or not self._is_remediable_tool_failure(raw_result, outcome):
+            return outcome
+
+        for attempt in range(1, self.tool_remediation_attempts + 1):
+            error_snippet = str(outcome.error or outcome.content)[:200]
+            self.callback.on_warning(
+                f"工具步骤 {step_id} 失败（{error_snippet}），"
+                f"降级迷你 ReAct 补救 ({attempt}/{self.tool_remediation_attempts})"
+            )
+            logger.warning(
+                "Plan-Execute 工具步骤 %d 失败（%s），启动迷你 ReAct 补救 %d/%d",
+                step_id, error_snippet, attempt, self.tool_remediation_attempts,
+            )
+            remediation_task = (
+                f"{step_task}\n\n"
+                f"⚠️ 注意：本步骤此前按计划参数调用工具 `{tool}` 失败：\n"
+                f"失败原因：{error_snippet}\n"
+                f"请重新分析：如需工具请自行生成完整正确的参数"
+                f"（file_path/old_text/new_text 等必须齐全且与文件实际内容匹配），"
+                f"真正完成本步骤后再输出 final_answer。"
+            )
+            ok_before = self._successful_call_count(tracker)
+            raw = self._execute_step_with_llm(
+                step_id, total, remediation_task, prev_results, user_input,
+                tracker, context=ctx,
+                steering=steering,
+            )
+            outcome = self._step_outcome(raw)
+            # 补救成功以「tracker 新增了成功工具调用」为准，而非 LLM 文本
+            # （迷你 ReAct 轮次耗尽时，LLM 输出的 action JSON 会被文本启发
+            # 误判为成功）。工具步骤的补救必须留下真实执行证据。
+            if self._successful_call_count(tracker) > ok_before:
+                return outcome
+            logger.warning(
+                "Plan-Execute 补救轮 %d/%d 未产生成功工具调用，视为失败",
+                attempt, self.tool_remediation_attempts,
+            )
+            outcome = StepOutcome(
+                str(outcome.content),
+                False,
+                "工具步骤补救后仍未执行成功: " + error_snippet,
+            )
+        return outcome
+
+    @staticmethod
+    def _successful_call_count(tracker: ToolExecutionTracker | None) -> int:
+        """tracker 中成功工具调用的数量（None 安全）。"""
+        if tracker is None:
+            return 0
+        return sum(1 for call in tracker.calls if call.success)
+
+    def _is_remediable_tool_failure(
+        self, raw: ToolExecuteResult, outcome: StepOutcome,
+    ) -> bool:
+        """工具步骤失败是否值得降级迷你 ReAct 补救。
+
+        排除不可补救的失败：
+        - 用户取消（cancelled）——补救会绕过用户意志
+        - 权限/用户拒绝（permission_denied / 用户拒绝）——重试同样参数必再失败
+        - tool_remediation_attempts=0（显式关闭）
+        其余失败（缺参数、old_text 匹配失败、证据门拦截、路径错误等）都是
+        LLM 可当场修正的，值得补救。
+        """
+        if self.tool_remediation_attempts <= 0:
+            return False
+        if getattr(raw, "cancelled", False):
+            return False
+        error = str(outcome.error or outcome.content or "")
+        if any(token in error for token in ("拒绝", "取消", "cancelled")):
+            return False
+        return True
 
     def _execute_step_with_tool(
         self, tool: str, params: dict, context: AgentContext,

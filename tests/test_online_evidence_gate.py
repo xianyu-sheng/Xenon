@@ -8,14 +8,16 @@ from xenon.engine.evidence_gate import FactBindingGate
 from xenon.engine.evidence_runtime import EventKind, EvidenceLedger, LifecyclePhase
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes.tool_executor import ToolExecutor
+from xenon.nodes.tool_node import ToolNode
 
 
-def _executor(ledger: EvidenceLedger, mode: str = "enforce") -> ToolExecutor:
-    return ToolExecutor(evidence_ledger=ledger, evidence_enforcement=mode)
+def _executor(ledger: EvidenceLedger, mode: str = "enforce", **kw) -> ToolExecutor:
+    return ToolExecutor(evidence_ledger=ledger, evidence_enforcement=mode, **kw)
 
 
 def test_execute_enforcement_blocks_before_toolnode(monkeypatch, tmp_path: Path) -> None:
-    """真正 execute 路径必须在 ToolNode 运行前阻断盲编辑。"""
+    """真正 execute 路径必须在 ToolNode 运行前阻断盲编辑
+    （关闭 auto-read 时，验证拦截本身）。"""
     target = tmp_path / "module.py"
     target.write_text("value = 1\n", encoding="utf-8")
     invoked = False
@@ -27,7 +29,7 @@ def test_execute_enforcement_blocks_before_toolnode(monkeypatch, tmp_path: Path)
 
     monkeypatch.setattr("xenon.nodes.tool_executor.ToolNode.execute", should_not_run)
     ledger = EvidenceLedger("run-1")
-    result = _executor(ledger).execute(
+    result = _executor(ledger, evidence_auto_read=False).execute(
         "edit_file", {"file_path": str(target), "old_text": "value = 1", "new_text": "value = 2"},
         AgentContext(), tracker=ToolExecutionTracker(),
     )
@@ -37,6 +39,32 @@ def test_execute_enforcement_blocks_before_toolnode(monkeypatch, tmp_path: Path)
     assert len(ledger.query(kind=EventKind.TOOL_REQUEST)) == 1
     assert len(ledger.query(kind=EventKind.GATE_VERDICT)) == 1
     assert len(ledger.query(kind=EventKind.TOOL_OBSERVATION)) == 1
+
+
+def test_execute_auto_read_remediates_blind_edit(monkeypatch, tmp_path: Path) -> None:
+    """SWE-bench 实测修复（matplotlib-23562）：盲编辑被拦截后，
+    自动补 read_file 再重试原工具 → 编辑成功。"""
+    target = tmp_path / "module.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+    real_execute = ToolNode.execute
+
+    def real_tool(self, context):
+        return real_execute(self, context)
+
+    monkeypatch.setattr("xenon.nodes.tool_executor.ToolNode.execute", real_tool)
+    ledger = EvidenceLedger("run-1")
+    tracker = ToolExecutionTracker()
+    result = _executor(ledger).execute(  # evidence_auto_read=True（默认）
+        "edit_file",
+        {"file_path": str(target), "old_text": "value = 1", "new_text": "value = 2"},
+        AgentContext(), tracker=tracker,
+    )
+    assert result.success is True, result.error
+    assert target.read_text(encoding="utf-8") == "value = 2\n"
+    # 自动补读必须留下真实证据：tracker 里有 read_file + edit_file
+    tools = [c.tool_name for c in tracker.calls if c.success]
+    assert tools.count("read_file") >= 1
+    assert "edit_file" in tools
 
 
 def test_execute_records_shared_context_ledger_for_direct_user(monkeypatch) -> None:

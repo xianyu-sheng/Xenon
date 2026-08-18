@@ -371,13 +371,13 @@ class ToolNode(
     # LLM 经常使用与 ToolNode 不同的参数名，这里统一映射。
     # 注意: pattern 是 list_files 的合法参数，不能作为 search_pattern 的别名。
     _PARAM_ALIASES: dict[str, list[str]] = {
-        "file_path":      ["path", "dir", "directory", "folder", "filepath", "file", "target"],
+        "file_path":      ["path", "dir", "directory", "folder", "filepath", "file", "target", "filePath"],
         "action":         ["command", "cmd", "shell", "exec", "run", "execute"],
-        "content":        ["text", "data", "body", "value"],
-        "search_pattern": ["query", "keyword", "term", "search"],
+        "content":        ["text", "data", "body", "value", "fileContent"],
+        "search_pattern": ["query", "keyword", "term", "search", "searchPattern", "queryString"],
         "file_filter":    ["filter", "glob", "filetype", "ext", "extension"],
-        "old_text":       ["old", "find", "search_text", "before", "original"],
-        "new_text":       ["new", "replace", "replace_text", "after", "replacement"],
+        "old_text":       ["old", "find", "search_text", "before", "original", "oldText", "oldString", "searchString", "originalText"],
+        "new_text":       ["new", "replace", "replace_text", "after", "replacement", "newText", "newString", "replacementText", "replaceString"],
         "git_command":    ["subcommand", "git_cmd", "git_subcmd"],
         "url":            ["uri", "link", "href"],
         "symbol":         ["name", "func", "function_name", "class_name", "identifier"],

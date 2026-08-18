@@ -633,6 +633,36 @@ def parse_plan(raw: str) -> dict[str, Any]:
     return result
 
 
+def _coerce_action_input(value: Any) -> dict[str, Any]:
+    """action_input 必须是 dict；LLM 经常输出 JSON 字符串（嵌套转义/单引号）。
+
+    SWE-bench 实测（plan-execute 8 例「缺少 file_path/old_text」）：字符串形式的
+    action_input 此前被静默置空，导致工具参数全部丢失、编辑步骤直接失败。
+    这里尝试逐层解析：原串 → 修复器（_repair_json 处理截断/缺失引号）→ 空。
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        stripped = value.strip()
+        # 常见形态："{\"file_path\": ...}"（转义）或 '{"file_path": ...}'
+        for candidate in (stripped, stripped.replace("'", '"')):
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        repaired = _repair_json(stripped)
+        if repaired:
+            try:
+                parsed = json.loads(repaired, strict=False)
+            except json.JSONDecodeError:
+                return {}
+            if isinstance(parsed, dict):
+                return parsed
+    return {}
+
+
 def parse_react(raw: str) -> dict[str, Any] | list[dict[str, Any]]:
     """解析 LLM 输出为标准 ReAct 结构。
 
@@ -657,8 +687,8 @@ def parse_react(raw: str) -> dict[str, Any] | list[dict[str, Any]]:
         for item in data:
             if isinstance(item, dict):
                 act = _pick(item, _REACT_FIELD_ALIASES)
-                if "action_input" in act and not isinstance(act["action_input"], dict):
-                    act["action_input"] = {}
+                if "action_input" in act:
+                    act["action_input"] = _coerce_action_input(act["action_input"])
                 actions.append(act)
         if actions:
             return actions
@@ -670,8 +700,8 @@ def parse_react(raw: str) -> dict[str, Any] | list[dict[str, Any]]:
     # 之前这里用 setdefault 填充了所有模板字段（包括 final_answer=""），
     # 导致引擎的 "final_answer" in parsed 检查永远为 True，
     # 即使 LLM 实际返回的是 action 也会被误判为最终回答。
-    if "action_input" in result and not isinstance(result["action_input"], dict):
-        result["action_input"] = {}
+    if "action_input" in result:
+        result["action_input"] = _coerce_action_input(result["action_input"])
     if "options" in result and not isinstance(result["options"], list):
         result["options"] = []
 

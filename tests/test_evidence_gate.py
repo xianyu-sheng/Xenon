@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import types
 
+from xenon.engine.context import AgentContext
 from xenon.engine.evidence_gate import (
     EvidenceCaptureGate,
     FileClaimGate,
@@ -242,3 +243,71 @@ class TestBackwardCompatibility:
         assert eng._has_successful_write(tracker) is True
         # 类属性向后兼容
         assert "edit_file" in eng._WRITE_TOOL_NAMES
+
+
+class TestFinalizeEvidenceLayeredDelivery:
+    """finalize_evidence 交付动作分层（SWE-bench 实测误杀回归）。
+
+    背景：修复已通过写工具真正落盘（patch 已产出），但 LLM 总结里声称的
+    辅助文件（复现脚本等）未经工具验证。此前 finalize_evidence 无条件
+    raise，把已完成的成果整体丢弃（sphinx-7738、plan-reflection 6 例、
+    react-reflection 3 例）。分层：已落盘 → 降级记录不 raise；从未落盘
+    → 维持 fail-closed（防「贴 diff 不落盘」）。
+    """
+
+    @staticmethod
+    def _make_engine():
+        from xenon.engine.react_engine import ReActEngine
+
+        engine = ReActEngine(
+            model_priority=["deepseek/deepseek-v4-flash"],
+            max_iterations=2,
+            native_fc=False,
+        )
+        engine._begin_run()
+        return engine
+
+    @staticmethod
+    def _bind(engine, ctx):
+        engine._bind_evidence_ledger(ctx)
+        return engine.evidence_ledger
+
+    def test_landed_claim_does_not_raise(self) -> None:
+        """已落盘 + 未验证声称 → 不 raise，成果保留（ledger 记 degraded）。"""
+        engine = self._make_engine()
+        ctx = AgentContext()
+        ledger = self._bind(engine, ctx)
+        tracker = _make_tracker([
+            _make_call("edit_file", {"file_path": "src/real_fix.py"}, True),
+        ])
+        output = "已修改 src/real_fix.py 完成修复；并创建了 tmp/repro.py 复现脚本。"
+        # 不应 raise
+        engine.finalize_evidence(context=ctx, output=output, tracker=tracker)
+        events = [e for e in ledger.events if getattr(e.kind, "value", str(e.kind)) == "gate_verdict"]
+        degraded = [e for e in events if e.payload.get("degraded")]
+        assert degraded, "已落盘场景必须记录降级警告"
+
+    def test_no_write_still_raises(self) -> None:
+        """从未落盘 + 声称创建 → 维持 fail-closed raise（贴 diff 不落盘）。"""
+        engine = self._make_engine()
+        ctx = AgentContext()
+        self._bind(engine, ctx)
+        tracker = _make_tracker([
+            _make_call("read_file", {"file_path": "src/real_fix.py"}, True),
+        ])
+        output = "我创建了 src/real_fix.py，修改完成。"
+        try:
+            engine.finalize_evidence(context=ctx, output=output, tracker=tracker)
+        except RuntimeError as exc:
+            assert "delivery evidence gate failed" in str(exc)
+        else:
+            raise AssertionError("未落盘 + 声称创建必须 fail-closed raise")
+
+    def test_clean_output_passes(self) -> None:
+        engine = self._make_engine()
+        ctx = AgentContext()
+        self._bind(engine, ctx)
+        tracker = _make_tracker([
+            _make_call("edit_file", {"file_path": "src/real_fix.py"}, True),
+        ])
+        engine.finalize_evidence(context=ctx, output="修复完成。", tracker=tracker)

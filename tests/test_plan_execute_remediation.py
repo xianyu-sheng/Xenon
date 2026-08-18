@@ -12,6 +12,7 @@ import pytest
 from xenon.engine.context import AgentContext
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.tool_tracker import ToolExecutionTracker
+from xenon.nodes.tool_executor import ToolExecuteResult
 
 
 class _NoopCallback:
@@ -278,3 +279,137 @@ def test_remediation_forces_write_tool(monkeypatch) -> None:
     )
     assert calls["n"] >= 2  # 第一次 final_answer 被拒绝，要求重试
     assert "write_file" in out  # 最终执行了写工具
+
+
+class TestToolStepRemediation:
+    """工具步骤失败自动降级迷你 ReAct 补救（SWE-bench 实测修复）。
+
+    背景：plan 阶段预生成 params 一次性执行，失败即跳过（plan-execute
+    23 空 patch 的最大根因之一：缺 file_path/old_text、匹配失败、证据门
+    拦截）。修复后：失败的工具步骤转迷你 ReAct，LLM 现场重新生成参数。
+    """
+
+    def _engine(self, attempts=1):
+        return PlanExecuteEngine(
+            ["provider/model"],
+            callback=_NoopCallback(),
+            tool_remediation_attempts=attempts,
+            max_mini_react_rounds=1,
+        )
+
+    def test_tool_failure_triggers_mini_react_remediation(self, monkeypatch):
+        """缺参数失败 → 补救轮 LLM 重新生成正确参数 → 步骤成功。"""
+        engine = self._engine()
+        calls = {"tool": 0, "llm": 0}
+        tracker = ToolExecutionTracker()
+
+        def fake_tool(tool, params, ctx, tracker=None, **kw):
+            calls["tool"] += 1
+            if calls["tool"] == 1:
+                tracker.record(
+                    tool, params, False,
+                    "ValueError: [exec_edit_file] edit_file 需要 file_path",
+                )
+                return ToolExecuteResult(
+                    "edit_file", False,
+                    "ValueError: [exec_edit_file] edit_file 需要 file_path",
+                    error="ValueError: edit_file 需要 file_path",
+                )
+            tracker.record(tool, params, True, "编辑成功")
+            return ToolExecuteResult("edit_file", True, "编辑成功")
+
+        def fake_llm(phase, messages, **kw):
+            calls["llm"] += 1
+            # 补救 prompt 必须携带失败原因
+            joined = str(messages)
+            assert "需要 file_path" in joined
+            return (
+                '{"thought": "重新生成参数", "action": "edit_file", '
+                '"action_input": {"file_path": "a.py", "old_text": "x", '
+                '"new_text": "y"}}'
+            )
+
+        monkeypatch.setattr(engine._tool_executor, "execute", fake_tool)
+        monkeypatch.setattr(engine, "_call_llm_for_phase", fake_llm)
+
+        outcome = engine._execute_tool_step(
+            1, 3, "修改 a.py", "edit_file", {}, "修复 bug",
+            AgentContext(), tracker, "(无)",
+        )
+        assert outcome.success is True
+        assert calls["tool"] == 2
+        assert calls["llm"] == 1
+        # 补救的工具调用必须进了 tracker（patch 才能生成）
+        assert any(c.success and c.tool_name == "edit_file" for c in tracker.calls)
+
+    def test_user_denial_never_remediated(self, monkeypatch):
+        """用户拒绝/权限拒绝 → 不补救（重试会绕过用户意志）。"""
+        engine = self._engine(attempts=3)
+        llm_called = {"n": 0}
+        tracker = ToolExecutionTracker()
+
+        def fake_tool(tool, params, ctx, **kw):
+            return ToolExecuteResult(
+                "write_file", False,
+                "⛔ 操作被拒绝: 用户拒绝",
+                error="用户拒绝",
+                cancelled=True,
+            )
+
+        monkeypatch.setattr(engine._tool_executor, "execute", fake_tool)
+        monkeypatch.setattr(engine, "_call_llm_for_phase",
+                            lambda *a, **k: llm_called.__setitem__("n", llm_called["n"] + 1) or "")
+
+        outcome = engine._execute_tool_step(
+            1, 1, "写文件", "write_file", {}, "写文件",
+            AgentContext(), tracker, "(无)",
+        )
+        assert outcome.success is False
+        assert llm_called["n"] == 0, "用户拒绝不得触发补救 LLM 调用"
+
+    def test_success_no_remediation(self, monkeypatch):
+        engine = self._engine()
+        llm_called = {"n": 0}
+        tracker = ToolExecutionTracker()
+
+        def fake_tool(tool, params, ctx, **kw):
+            return ToolExecuteResult("read_file", True, "内容")
+
+        monkeypatch.setattr(engine._tool_executor, "execute", fake_tool)
+        monkeypatch.setattr(engine, "_call_llm_for_phase",
+                            lambda *a, **k: llm_called.__setitem__("n", llm_called["n"] + 1) or "")
+
+        outcome = engine._execute_tool_step(
+            1, 1, "读文件", "read_file", {}, "读文件",
+            AgentContext(), tracker, "(无)",
+        )
+        assert outcome.success is True
+        assert llm_called["n"] == 0
+
+    def test_attempts_exhausted_returns_last_failure(self, monkeypatch):
+        """补救次数用尽后返回最终失败，不无限循环。"""
+        engine = self._engine(attempts=2)
+        calls = {"tool": 0, "llm": 0}
+
+        def fake_tool(tool, params, ctx, tracker=None, **kw):
+            calls["tool"] += 1
+            if tracker is not None:
+                tracker.record(tool, params, False, "未找到匹配文本")
+            return ToolExecuteResult(
+                "edit_file", False, "未找到匹配文本", error="未找到匹配文本",
+            )
+
+        monkeypatch.setattr(engine._tool_executor, "execute", fake_tool)
+        monkeypatch.setattr(
+            engine, "_call_llm_for_phase",
+            lambda *a, **k: calls.__setitem__("llm", calls["llm"] + 1)
+            or '{"thought": "t", "action": "edit_file", "action_input": {"file_path": "a.py"}}',
+        )
+
+        outcome = engine._execute_tool_step(
+            1, 1, "改 a.py", "edit_file", {}, "改 a.py",
+            AgentContext(), ToolExecutionTracker(), "(无)",
+        )
+        assert outcome.success is False
+        assert calls["tool"] == 3  # 初始 1 + 补救 2
+        assert calls["llm"] == 2

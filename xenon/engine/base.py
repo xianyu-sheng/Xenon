@@ -234,6 +234,22 @@ class BaseEngine(ABC):
                  "reason": verdict.reason if verdict else "passed"},
             )
             if verdict is not None:
+                # SWE-bench 实测回归（sphinx-7738、plan-reflection 6 例、
+                # react-reflection 3 例）：修复已通过写工具真正落盘（patch
+                # 已产出），但 LLM 总结里声称的辅助文件（复现脚本等）未
+                # 经工具验证。此前此处无条件 raise，直接把已完成的成果
+                # 整体丢弃。分层：任务已落盘 → 门失败降级为已记录警告，
+                # 产出保留；任务从未落盘 → 维持 fail-closed（防「贴 diff
+                # 不落盘」，这是本门的原始目的）。
+                from xenon.engine.evidence_gate import has_successful_write
+
+                if has_successful_write(tracker):
+                    ledger.append(
+                        LifecyclePhase.DELIVERY, EventKind.GATE_VERDICT, EvidenceSource.GATE,
+                        {"phase": phase, "passed": False, "degraded": True,
+                         "reason": verdict.reason},
+                    )
+                    continue
                 raise RuntimeError(f"delivery evidence gate failed ({phase}): {verdict.reason}")
         pack = EvidencePack.build(ledger)
         ledger.append(
