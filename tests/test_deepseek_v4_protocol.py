@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from xenon.engine.base import BaseEngine
 from xenon.engine.context import AgentContext
 from xenon.engine.react_engine import ReActEngine
@@ -122,3 +124,55 @@ def test_react_sends_complete_deepseek_tool_protocol_on_next_iteration(monkeypat
 
     assert result == "done"
     assert len(engine._last_provider_messages) == 2
+
+
+def test_native_all_models_failed_falls_back_to_text_protocol(monkeypatch):
+    """SWE-bench 实测修复：native 请求全模型 5xx 时不再让引擎崩溃，
+    熔断 native 并整体回退文本协议（_call_llm + chain_retries 重试）。"""
+    engine = ReActEngine(
+        ["deepseek/deepseek-v4-pro"],
+        max_iterations=3,
+        native_fc=True,
+    )
+    text_calls = {"n": 0}
+
+    def fail_native(messages, tools, response_format, max_tokens=None):
+        raise RuntimeError("native provider request failed: Server error '500'")
+
+    def fake_text(messages, max_tokens=None, **kwargs):
+        text_calls["n"] += 1
+        return '{"thought": "t", "final_answer": "文本协议成功"}'
+
+    monkeypatch.setattr(engine, "_call_with_tools_once", fail_native)
+    monkeypatch.setattr(engine, "_call_llm", fake_text)
+
+    result = engine.run("修复这个 bug", AgentContext())
+    assert result.startswith("文本协议成功")
+    assert text_calls["n"] >= 1
+    assert engine._native_request_failed is True
+    # 熔断后 _call_llm_native 直接走文本协议（不再触碰 native 请求）
+    assert engine._call_llm_native(
+        [{"role": "user", "content": "x"}],
+        [{"type": "function", "function": {"name": "f"}}],
+        None,
+    ) == '{"thought": "t", "final_answer": "文本协议成功"}'
+
+
+def test_native_non_provider_error_still_propagates(monkeypatch):
+    """非「native provider request failed」的 RuntimeError 仍应冒泡。"""
+    engine = ReActEngine(
+        ["deepseek/deepseek-v4-pro"],
+        max_iterations=2,
+        native_fc=True,
+    )
+
+    def fail_native(messages, tools, response_format, max_tokens=None):
+        raise RuntimeError("模型 auth 失败 (401)")
+
+    monkeypatch.setattr(engine, "_call_with_tools_once", fail_native)
+    with pytest.raises(RuntimeError, match="auth 失败"):
+        engine._call_llm_native(
+            [{"role": "user", "content": "x"}],
+            [{"type": "function", "function": {"name": "f"}}],
+            None,
+        )

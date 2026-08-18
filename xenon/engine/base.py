@@ -106,6 +106,12 @@ class BaseEngine(ABC):
         self._unsupported_native_shapes: set[
             tuple[tuple[str, ...], bool, bool]
         ] = set()
+        # v0.8.3: native 请求整体失败（5xx/网络断连全模型）后熔断——本 run
+        # 内直接走文本协议（_call_llm 带 chain_retries 重试 + 模型池切换），
+        # 避免每个 ReAct 迭代都重复 native 失败请求。SWE-bench 实测：
+        # react 4 例因 "native provider request failed" 直接挂掉整个单元格，
+        # 而文本协议 + parse_react 完全有能力完成同一任务。
+        self._native_request_failed = False
         # The provider that actually completed the most recent request.  This
         # must not be inferred from model_priority[0]: fallback may succeed on
         # a later model and the REPL/status bar should report the real model.
@@ -1138,6 +1144,13 @@ class BaseEngine(ABC):
         ``response_format`` 时直接回退 ``_call_llm``。
         """
         self._pending_native_response = None
+        if self._native_request_failed:
+            logger.info(
+                "native 请求此前整体失败，本次直接走文本协议（熔断）"
+            )
+            if max_tokens is None:
+                return self._call_llm(messages)
+            return self._call_llm(messages, max_tokens=max_tokens)
         if not tools_schema and not response_format:
             if max_tokens is None:
                 return self._call_llm(messages)
@@ -1177,6 +1190,16 @@ class BaseEngine(ABC):
                     fmt,
                     max_tokens,
                 )
+            except RuntimeError as exc:
+                # v0.8.3: native 全模型失败（5xx/网络断连）→ 熔断并整体回退
+                # 文本协议，而不是让引擎整个 run 崩溃（SWE-bench react 4 例）。
+                if "native provider request failed" in str(exc):
+                    logger.warning(
+                        "native 请求整体失败（%s），熔断并回退文本协议", exc,
+                    )
+                    self._native_request_failed = True
+                    break
+                raise
             except ResponseTruncatedError as exc:
                 # A native tool envelope is atomic and cannot be resumed by
                 # appending a user message. Try the next compatibility tier;

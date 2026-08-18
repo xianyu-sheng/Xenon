@@ -222,7 +222,11 @@ class TestCallLlmNative:
         assert len(calls) == 1
 
     def test_transient_failure_does_not_cascade_capability_tiers(self, monkeypatch):
-        """A timeout is not evidence that tools/format are unsupported."""
+        """A timeout is not evidence that tools/format are unsupported.
+
+        v0.8.3 起瞬时失败不再 raise 崩溃引擎：熔断 native 并整体回退
+        文本协议（_call_llm）。不 cascade tiers 的语义保留（只调 1 次）。
+        """
         eng = _engine()
         calls = []
 
@@ -231,10 +235,12 @@ class TestCallLlmNative:
             raise httpx.ReadTimeout("slow")
 
         _patch_fc(monkeypatch, eng, fake)
-        with pytest.raises(RuntimeError, match="native provider request failed"):
-            eng._call_llm_native(
-                [], [{"type": "function"}], {"type": "json_object"}
-            )
+        eng._call_llm = lambda msgs, max_tokens=None: "fallback"
+        out = eng._call_llm_native(
+            [], [{"type": "function"}], {"type": "json_object"}
+        )
+        assert out == "fallback"
+        assert eng._native_request_failed is True
         assert len(calls) == 1
 
 

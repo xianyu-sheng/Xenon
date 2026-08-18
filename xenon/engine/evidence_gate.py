@@ -214,7 +214,38 @@ def _verified_files_from_tracker(tracker: Any | None) -> set[str]:
     return verified
 
 
-def verify_file_claims(llm_output: str, tracker: Any | None = None) -> tuple[bool, list[str]]:
+def _claimed_path_exists(claimed: str, workspace_root: Any = None) -> bool:
+    """声称的文件是否真实存在于磁盘（含 workspace_root 相对路径解析）。
+
+    SWE-bench 实测：command 工具创建的辅助文件（复现脚本等）不在
+    verified 集合（那里只认文件工具），此前裸 ``Path(f).exists()`` 只按
+    进程 cwd 判断，声称的相对路径（"tmp/repro.py"）与沙箱绝对路径
+    （"/testbed/tmp/repro.py"）对不上就误杀。这里同时尝试：原始路径、
+    workspace_root 相对路径、以及去掉前导 ./ 与 testbed/ 前缀的变体。
+    """
+    candidates = [claimed]
+    root = str(workspace_root or "").strip()
+    if root:
+        root = root.rstrip("/")
+        candidates.append(f"{root}/{claimed.lstrip('./')}")
+    for variant in list(candidates):
+        stripped = variant.lstrip("./")
+        if stripped.startswith("testbed/"):
+            candidates.append(stripped[len("testbed/"):])
+    for candidate in candidates:
+        try:
+            if Path(candidate).exists():
+                return True
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return False
+
+
+def verify_file_claims(
+    llm_output: str,
+    tracker: Any | None = None,
+    workspace_root: Any = None,
+) -> tuple[bool, list[str]]:
     """检查 LLM 输出中是否声称创建/写入了文件，但实际未通过工具执行。
 
     返回 (passed, unverified_files)。纯校验，不修改输出文本。
@@ -232,7 +263,7 @@ def verify_file_claims(llm_output: str, tracker: Any | None = None) -> tuple[boo
     for f in mentioned_files:
         if _path_matches_verified(f, verified):
             continue
-        if Path(f).exists():
+        if _claimed_path_exists(f, workspace_root):
             continue
         unverified.append(f)
     return (len(unverified) == 0), unverified
@@ -417,7 +448,10 @@ class FileClaimGate(EvidenceGate):
         tracker: Any | None = None,
         **kwargs: Any,
     ) -> GateVerdict:
-        passed, unverified = verify_file_claims(output, tracker)
+        passed, unverified = verify_file_claims(
+            output, tracker,
+            workspace_root=kwargs.get("workspace_root"),
+        )
         if passed:
             return GateVerdict(self.phase, True, "无未验证的文件声明", "info")
         warning = (

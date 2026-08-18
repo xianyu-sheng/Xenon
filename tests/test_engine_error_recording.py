@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 
+from xenon.engine.context import AgentContext
 from xenon.repl.repl import REPL
 
 
@@ -194,3 +195,76 @@ class TestRecordEngineErrorCallSites:
         assert params == ["self", "message", "model_used"], (
             f"签名已变更为 {params}；若确需修改，请同步全部调用点并更新本测试"
         )
+
+
+class TestReadOnlyParalysisDetection:
+    """纯读瘫痪检测（SWE-bench 实测 react-reflection 3 例修复）。
+
+    连续 4 轮只读工具（read/search）后，任务需要写时必须注入
+    强制转写提示；纯查询任务不触发。
+    """
+
+    def _engine(self, **kw):
+        from xenon.engine.react_engine import ReActEngine
+
+        return ReActEngine(
+            ["provider/model"], max_iterations=12, native_fc=False, **kw
+        )
+
+    def test_injects_write_prompt_after_4_read_only_rounds(self, monkeypatch):
+        engine = self._engine()
+        calls = {"n": 0}
+        warnings = []
+
+        def fake_llm(phase, messages, **kwargs):
+            calls["n"] += 1
+            # 前 4 轮只读侦察，第 5 轮收到强制转写提示后改写字
+            if calls["n"] <= 4:
+                return (
+                    '{"thought": "t", "action": "read_file", '
+                    '"action_input": {"file_path": "a.py"}}'
+                )
+            assert "连续多轮只读" in str(messages), "必须注入强制转写提示"
+            return (
+                '{"thought": "t", "action": "write_file", '
+                '"action_input": {"file_path": "b.py", "content": "x"}}'
+            )
+
+        def fake_execute(tool, params, context, tracker=None, **kw):
+            from xenon.nodes.tool_executor import ToolExecuteResult
+
+            if tool == "write_file":
+                tracker.record(tool, params, True, "已写")
+                return ToolExecuteResult(tool, True, "已写")
+            return ToolExecuteResult(tool, True, "内容")
+
+        monkeypatch.setattr(engine, "_call_llm_for_phase", fake_llm)
+        monkeypatch.setattr(engine._tool_executor, "execute", fake_execute)
+        engine.callback.on_warning = lambda w: warnings.append(w)
+
+        engine.run("修复 a.py 里的 bug", AgentContext())
+        assert any("纯只读" in w for w in warnings), warnings
+
+    def test_query_task_never_triggers(self, monkeypatch):
+        engine = self._engine()
+        calls = {"n": 0}
+
+        def fake_llm(phase, messages, **kwargs):
+            calls["n"] += 1
+            if calls["n"] <= 6:
+                return (
+                    '{"thought": "t", "action": "search_files", '
+                    '"action_input": {"file_path": ".", "search_pattern": "x"}}'
+                )
+            return '{"thought": "t", "final_answer": "查询结果"}'
+
+        def fake_execute(tool, params, context, tracker=None, **kw):
+            from xenon.nodes.tool_executor import ToolExecuteResult
+
+            return ToolExecuteResult(tool, True, "命中")
+
+        monkeypatch.setattr(engine, "_call_llm_for_phase", fake_llm)
+        monkeypatch.setattr(engine._tool_executor, "execute", fake_execute)
+
+        result = engine.run("搜索 x 在项目里的位置", AgentContext())
+        assert "查询结果" in result

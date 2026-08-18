@@ -146,3 +146,40 @@ class TestVerifyFileClaimsNoFalsePositive:
         passed, unverified = verify_file_claims(output, tracker)
         assert passed is False
         assert "brand_new_module.py" in unverified
+
+
+class TestCommandCreatedFiles:
+    """command 工具创建的辅助文件不应被误判为未验证声称（SWE-bench 实测）。
+
+    sphinx-7738：LLM 通过 command 创建 tmp/repro.py 复现脚本，patch 已
+    落盘。声称的相对路径与沙箱绝对路径（workspace_root）对不上，此前
+    被误判为未验证文件。verify_file_claims 应结合 workspace_root 解析。
+    """
+
+    def test_relative_claim_resolves_under_workspace_root(self, tmp_path) -> None:
+        target = tmp_path / "tmp" / "repro.py"
+        target.parent.mkdir(parents=True)
+        target.write_text("print(1)\n", encoding="utf-8")
+        passed, unverified = verify_file_claims(
+            "已创建 tmp/repro.py 复现脚本。", None,
+            workspace_root=str(tmp_path),
+        )
+        assert passed is True, unverified
+
+    def test_testbed_prefix_variant(self, tmp_path) -> None:
+        target = tmp_path / "sympy" / "printing" / "latex.py"
+        target.parent.mkdir(parents=True)
+        target.write_text("x = 1\n", encoding="utf-8")
+        passed, unverified = verify_file_claims(
+            "已修改 testbed/sympy/printing/latex.py。", None,
+            workspace_root=str(tmp_path),
+        )
+        assert passed is True, unverified
+
+    def test_still_rejects_when_not_on_disk(self, tmp_path) -> None:
+        passed, unverified = verify_file_claims(
+            "创建了 brand_new_module.py 并实现功能。", None,
+            workspace_root=str(tmp_path),
+        )
+        assert passed is False
+        assert "brand_new_module.py" in unverified

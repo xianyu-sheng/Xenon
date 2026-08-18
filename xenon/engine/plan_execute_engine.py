@@ -175,6 +175,7 @@ class PlanExecuteEngine(BaseEngine):
         max_parallel_workers: int = 4,
         max_mini_react_rounds: int = 3,
         tool_remediation_attempts: int = 1,
+        plan_max_tokens: int = 4096,
         model_pool: Any = None,          # v0.4.0
         auto_router: Any = None,         # v0.4.0 Step 13
         permission_gate: Any = None,     # v0.5.0
@@ -203,6 +204,11 @@ class PlanExecuteEngine(BaseEngine):
         # plan 阶段预生成 params 一次性执行，失败（缺参/匹配失败/证据门拦截）
         # 即跳过——这是 23 空 patch 的最大根因。补救让 LLM 现场重新生成参数。
         self.tool_remediation_attempts = max(0, tool_remediation_attempts)
+        # v0.8.3+: plan 阶段输出 token 上限。SWE-bench 实测 plan-react 9 例
+        # 915s 硬超时 tools=0：plan 用慢模型且无 max_tokens 约束，单次生成
+        # 耗尽整个引擎预算。plan JSON（分析+步骤）通常 <2K tokens，4096
+        # 上限足够且防止超长输出拖死引擎。
+        self.plan_max_tokens = max(1024, plan_max_tokens)
         # v0.8.3: 引擎层跨轮次验证循环
         from xenon.engine.verification_loop import VerificationLoop
         self.verification_loop = VerificationLoop(
@@ -1213,7 +1219,7 @@ class PlanExecuteEngine(BaseEngine):
                 ctx.set("_strategy_tip_emitted", True)
         messages.append({"role": "user", "content": user_message})
 
-        response = self._call_llm_for_phase("plan", messages)
+        response = self._call_llm_for_phase("plan", messages, max_tokens=self.plan_max_tokens)
         if not response or not response.strip():
             logger.warning("LLM 返回了空响应！请检查 API 配置和模型是否支持。")
         else:
@@ -1236,7 +1242,9 @@ class PlanExecuteEngine(BaseEngine):
                 ),
             })
             logger.warning("Planner 未生成可解析步骤，执行一次格式恢复重试")
-            retry_response = self._call_llm_for_phase("plan", messages)
+            retry_response = self._call_llm_for_phase(
+                "plan", messages, max_tokens=self.plan_max_tokens,
+            )
             retry_result = self._parse_json(retry_response)
             if retry_result.get("steps"):
                 result = retry_result

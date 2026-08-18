@@ -34,6 +34,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# v0.8.3: 纯读瘫痪检测——连续只读工具（侦察类）超过阈值且任务需要写时，
+# 注入提示强制转写。SWE-bench 实测 react-reflection 3 例 10-18 轮全读不写。
+_READ_ONLY_TOOL_NAMES = frozenset({
+    "read_file", "search_files", "list_files", "docs_fetch",
+    "web_fetch", "code_index", "ast_analyze", "github_fetch",
+})
+
+READ_ONLY_REMEDIATION_PROMPT = (
+    "⚠️ 你已连续多轮只读操作（读取/搜索/浏览），但任务需要实际修改文件。\n"
+    "请立即使用 write_file / edit_file / batch_write / batch_edit 等写工具"
+    "真正落盘修改，不要继续无限侦察。\n"
+    "若确实还需要确认信息，最多再读一轮，然后必须开始修改。"
+)
+
 class ReActEngine(BaseEngine):
     """ReAct 思考-行动-观察循环引擎。"""
 
@@ -312,6 +326,13 @@ class ReActEngine(BaseEngine):
                 ctx.set("_strategy_tip_emitted", True)
         requires_query_result = intent in {"query", "research"}
         no_tool_streak = 0  # 连续未执行工具的轮次
+        # v0.8.3: 纯读瘫痪检测（SWE-bench 实测 react-reflection 3 例：
+        # 10-18 轮 read/search 从不 edit，反思环节导致行动不足）。
+        # 连续只读超过阈值且任务需要写 → 注入提示强制转写。
+        read_only_streak = 0
+        read_only_hints = 0
+        MAX_READ_ONLY_STREAK = 4
+        MAX_READ_ONLY_HINTS = 2
 
         # F5: native_fc 开启时预构建 tools schema 与 response_format（循环内复用）
         tools_schema = self._build_tools_schema() if (self.native_fc and self.tools) else None
@@ -641,6 +662,32 @@ class ReActEngine(BaseEngine):
                             logger.info(f"ReAct: 收束阶段拦截工具 {action}")
                         else:
                             observation = self._execute_tool(action, action_input, ctx, tracker)
+                    # v0.8.3: 纯读瘫痪检测——连续只读后强制转写（任务需要写时）
+                    if (
+                        requires_tools
+                        and action in _READ_ONLY_TOOL_NAMES
+                        and getattr(observation, "success", True)
+                    ):
+                        read_only_streak += 1
+                    else:
+                        read_only_streak = 0
+                    if (
+                        read_only_streak >= MAX_READ_ONLY_STREAK
+                        and read_only_hints < MAX_READ_ONLY_HINTS
+                    ):
+                        read_only_hints += 1
+                        read_only_streak = 0
+                        messages.append({
+                            "role": "user",
+                            "content": READ_ONLY_REMEDIATION_PROMPT,
+                        })
+                        self.callback.on_warning(
+                            f"检测到 {MAX_READ_ONLY_STREAK} 轮纯只读操作，"
+                            f"注入强制转写提示 ({read_only_hints}/{MAX_READ_ONLY_HINTS})"
+                        )
+                        logger.warning(
+                            f"ReAct: 纯读瘫痪提示 {read_only_hints}/{MAX_READ_ONLY_HINTS}"
+                        )
                     self.callback.on_observe(observation)
                     tool_observations = [observation]
                 else:

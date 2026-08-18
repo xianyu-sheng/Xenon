@@ -11,6 +11,7 @@ from xenon.engine.base import BaseEngine
 from xenon.engine.coding_contract import finalize_coding_run
 from xenon.engine.combined_engines import PlanReflectionEngine, ReactReflectionEngine
 from xenon.engine.execution_policy import (
+    EngineDeadlineExceeded,
     ExecutionPolicy,
     bind_execution_policy,
     walk_engine_graph,
@@ -101,7 +102,10 @@ def test_deadline_stops_native_fallback_tiers(monkeypatch):
 
     monkeypatch.setattr("xenon.engine.base.chat_completion_with_tools", expire)
 
-    with pytest.raises(RuntimeError, match="native provider request failed"):
+    # v0.8.3: 瞬时失败不再 raise「native provider request failed」，而是熔断
+    # 回退文本协议；deadline 已过期时文本回退的 policy.check 抛
+    # EngineDeadlineExceeded（停止语义更准确）。核心断言不变：只调 1 次 tier。
+    with pytest.raises(EngineDeadlineExceeded):
         engine._call_llm_native(
             [{"role": "user", "content": "x"}],
             tools_schema=[{"type": "function", "function": {"name": "x"}}],
