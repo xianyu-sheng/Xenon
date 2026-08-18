@@ -40,6 +40,13 @@ credentials.yaml
 *.key
 *.pem
 
+# API keys and real API test files
+.env
+.env.*
+test_*_real_api.py
+*_real_api.py
+**/*_real_api.py
+
 # OS
 .DS_Store
 Thumbs.db
