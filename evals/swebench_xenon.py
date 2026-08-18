@@ -118,8 +118,11 @@ def _engine(name: str, model: str, config: ModelConfig, max_steps: int,
         engine = ReActEngine(models, max_iterations=max_steps, native_fc=True,
                            project_root=str(Path.cwd()), **common)
     elif name == "plan-execute":
+        # v0.8.3: 迷你 ReAct 轮次从 1 提到 3。SWE-bench 实测（django-16408）：
+        # 轮次=1 时补救轮 LLM 只能做一件事——先 read 就没轮次再 edit，
+        # 写步骤永远无法完成（0 patch）。3 轮足够 read+edit+verify。
         engine = PlanExecuteEngine(models, max_steps=max_steps,
-                                 max_mini_react_rounds=1, **common)
+                                 max_mini_react_rounds=3, **common)
     elif name == "reflection":
         engine = ReflectionEngine(models, max_rounds=max_steps, **common)
     elif name == "plan-react":

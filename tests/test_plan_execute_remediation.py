@@ -231,7 +231,11 @@ def test_ensure_plan_replans_when_no_write(monkeypatch) -> None:
 
 
 def test_ensure_plan_aborts_when_replan_still_no_write(monkeypatch) -> None:
-    """重新规划仍无写步骤 → 返回空（调用方终止执行）。"""
+    """重新规划仍无写步骤 → 降级执行原计划（Phase 2.5 补救兜底落盘）。
+
+    v0.8.3 修复：放弃 = 必然 0 patch（SWE-bench django-16408 官方 API
+    实测）；返回原侦察计划，由 _ensure_task_completed 的强制写补救兜底。
+    """
     engine = PlanExecuteEngine(["mock/model"], max_steps=8)
     ctx = AgentContext()
     plan = {"steps": [
@@ -247,7 +251,7 @@ def test_ensure_plan_aborts_when_replan_still_no_write(monkeypatch) -> None:
     out = engine._ensure_plan_has_write_step(
         "Fix the bug in src/main.py", plan, ctx
     )
-    assert out == []
+    assert out == plan["steps"]  # 降级执行原计划而非放弃
 
 
 def test_remediation_forces_write_tool(monkeypatch) -> None:
@@ -437,7 +441,7 @@ class TestWriteStepPreservationAndRemediationBudget:
                 {"id": 2, "task": "搜", "tool": "search_files", "params": {}},
                 {"id": 3, "task": "分析", "tool": None, "params": {}},
                 {"id": 4, "task": "编辑", "tool": "edit_file",
-                 "params": {"file_path": "a.py"}},
+                 "params": {"file_path": "a.py", "old_text": "x", "new_text": "y"}},
             ]},
         )
         captured = {}
@@ -570,3 +574,41 @@ class TestToolRemediationRequiresWrite:
         assert any(
             c.tool_name == "edit_file" and c.success for c in tracker.calls
         )
+
+
+class TestIncompleteEditStepNormalization:
+    """edit 步骤参数不全 → 转 LLM 步骤（SWE-bench django-16408 实测）。
+
+    plan 阶段未读文件，edit_file 缺 old_text/new_text 时确定性执行必然
+    失败；转为 tool=None 后迷你 ReAct 现场先读后写。
+    """
+
+    def test_edit_missing_params_becomes_llm_step(self) -> None:
+        engine = PlanExecuteEngine(["provider/model"], callback=_NoopCallback())
+        steps = [
+            {"id": 1, "task": "读", "tool": "read_file", "params": {"file_path": "a.py"}},
+            {"id": 2, "task": "改", "tool": "edit_file",
+             "params": {"file_path": "a.py"}},  # 缺 old_text/new_text
+        ]
+        out = engine._normalize_incomplete_edit_steps(steps)
+        assert out[1]["tool"] is None
+        assert "read_file" in out[1]["task"]  # 提示先读后写
+        assert out[0]["tool"] == "read_file"  # 完整步骤不动
+
+    def test_edit_with_full_params_kept(self) -> None:
+        engine = PlanExecuteEngine(["provider/model"], callback=_NoopCallback())
+        steps = [
+            {"id": 1, "task": "改", "tool": "edit_file",
+             "params": {"file_path": "a.py", "old_text": "x", "new_text": "y"}},
+        ]
+        out = engine._normalize_incomplete_edit_steps(steps)
+        assert out[0]["tool"] == "edit_file"
+
+    def test_batch_edit_incomplete_becomes_llm_step(self) -> None:
+        engine = PlanExecuteEngine(["provider/model"], callback=_NoopCallback())
+        steps = [
+            {"id": 1, "task": "批量改", "tool": "batch_edit",
+             "params": {"edits": [{"file_path": "a.py", "old_text": "x"}]}},
+        ]
+        out = engine._normalize_incomplete_edit_steps(steps)
+        assert out[0]["tool"] is None

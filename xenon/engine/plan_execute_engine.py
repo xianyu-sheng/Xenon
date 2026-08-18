@@ -294,6 +294,11 @@ class PlanExecuteEngine(BaseEngine):
         # 「理解问题」就收工 → 空补丁。这里在执行前校验计划结构：
         # 若任务需要写操作但计划不含任何写工具步骤，让 LLM 重新规划一次。
         steps = self._ensure_plan_has_write_step(user_input, plan, ctx)
+        # v0.8.3: edit 步骤参数不全（plan 阶段未读文件，old_text/new_text
+        # 无法预知）→ 转为 LLM 步骤，执行时迷你 ReAct 现场先读后写。
+        # SWE-bench 实测（django-16408）：plan 生成的 edit 步骤缺 old_text
+        # 确定性执行必然失败，补救轮 1-3 轮也难一次成功。
+        steps = self._normalize_incomplete_edit_steps(steps)
 
         if not steps:
             self.callback.on_warning("计划完整性校验后仍无有效步骤")
@@ -504,9 +509,17 @@ class PlanExecuteEngine(BaseEngine):
             logger.info("重新规划成功：%d 步，含写工具步骤", len(retry_steps))
             return retry_steps
 
-        logger.warning("重新规划仍无写工具步骤，放弃执行该计划")
-        self.callback.on_warning("重新规划后计划仍缺修改步骤，终止执行")
-        return []
+        # v0.8.3: 不再放弃——SWE-bench 实测（django-16408 官方 API）重规划
+        # 仍无写步骤时直接终止 = 必然 0 patch。降级执行原始侦察计划，让
+        # Phase 2.5 的 _ensure_task_completed 补救（require_write_tool 强制
+        # 写工具）兜底落盘。
+        logger.warning(
+            "重新规划仍无写工具步骤，降级执行原计划（Phase 2.5 补救兜底落盘）",
+        )
+        self.callback.on_warning(
+            "重新规划后计划仍缺修改步骤，降级执行原计划并由完成度补救兜底"
+        )
+        return steps
 
     def _has_successful_write(self, tracker: ToolExecutionTracker | None) -> bool:
         """是否已有任何成功的写类工具执行（文件被真正修改）。"""
@@ -695,6 +708,47 @@ class PlanExecuteEngine(BaseEngine):
             )
 
     # ── Phase 2: 串行执行（原行为，向后兼容） ─────────────────
+    @staticmethod
+    def _normalize_incomplete_edit_steps(
+        steps: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """edit_file/batch_edit 步骤参数不全 → 转为 LLM 步骤（迷你 ReAct 现场执行）。
+
+        SWE-bench 实测（django-16408 官方 API）：plan 阶段 LLM 尚未读取目标
+        文件内容，生成的 edit_file 步骤缺 old_text/new_text（或为空），
+        确定性工具执行必然报「需要 old_text」失败。转为 tool=None 的 LLM
+        步骤后，执行时迷你 ReAct 先 read_file 拿到实际内容，再以精确匹配
+        的 old_text/new_text 完成修改——先读后写，参数由执行期现场生成。
+        """
+        normalized: list[dict[str, Any]] = []
+        for step in steps:
+            tool = step.get("tool")
+            params = step.get("params") or {}
+            if tool in {"edit_file", "batch_edit"} and not isinstance(params, dict):
+                params = {}
+            if tool in {"edit_file", "batch_edit"} and isinstance(params, dict):
+                if tool == "edit_file":
+                    incomplete = not (params.get("old_text") and params.get("new_text"))
+                else:  # batch_edit：edits 列表为空或任一项缺 old/new
+                    edits = params.get("edits") or []
+                    incomplete = not edits or any(
+                        not (e.get("old_text") and e.get("new_text"))
+                        for e in edits if isinstance(e, dict)
+                    )
+                if incomplete:
+                    target = params.get("file_path", "目标文件")
+                    step = dict(step)
+                    step["tool"] = None
+                    step["params"] = {}
+                    step["task"] = (
+                        f"{step.get('task', '编辑文件')}\n"
+                        f"（目标文件: {target}。请先用 read_file 读取目标文件"
+                        f"实际内容，再调用 edit_file 用精确匹配的 old_text/"
+                        f"new_text 完成最小修改。）"
+                    )
+            normalized.append(step)
+        return normalized
+
     def _run_serial(
         self, steps: list[dict[str, Any]], user_input: str,
         ctx: AgentContext, tracker: ToolExecutionTracker, total: int,
