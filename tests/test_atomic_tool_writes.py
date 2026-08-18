@@ -157,3 +157,38 @@ def test_batch_edit_execution_failure_restores_every_file(monkeypatch, tmp_path)
     assert result["rolled_back"] is True
     assert first.read_text() == "old-a"
     assert second.read_text() == "old-b"
+
+
+class TestNoOpEditDetection:
+    """编辑无变化检测（SWE-bench matplotlib-24970 实测）。
+
+    new_text 与 old_text 内容相同（或归一化匹配吞缩进后等价）→ 之前
+    edit 报告成功但 git diff 为空 → patch 丢失。现在视为失败让补救接管。
+    """
+
+    def test_identical_new_text_rejected(self, tmp_path):
+        from xenon.nodes.tool_node import ToolNode as FileMutationTools
+
+        target = tmp_path / "a.py"
+        target.write_text("        value = 1\n", encoding="utf-8")
+        tool = FileMutationTools(
+            "e1", action_type="edit_file", file_path=str(target),
+            old_text="value = 1", new_text="value = 1",
+        )
+        result = tool._edit_file(AgentContext())
+        assert result["success"] is False
+        assert "未产生任何变化" in result["error"]
+        assert target.read_text(encoding="utf-8") == "        value = 1\n"
+
+    def test_real_change_still_passes(self, tmp_path):
+        from xenon.nodes.tool_node import ToolNode as FileMutationTools
+
+        target = tmp_path / "a.py"
+        target.write_text("value = 1\n", encoding="utf-8")
+        tool = FileMutationTools(
+            "e1", action_type="edit_file", file_path=str(target),
+            old_text="value = 1", new_text="value = 2",
+        )
+        result = tool._edit_file(AgentContext())
+        assert result["success"] is True
+        assert target.read_text(encoding="utf-8") == "value = 2\n"

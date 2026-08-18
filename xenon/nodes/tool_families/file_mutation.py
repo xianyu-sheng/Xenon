@@ -245,6 +245,20 @@ class FileMutationToolsMixin:
             return {"error": f"找到 {count} 处匹配，请提供更多上下文", "success": False}
 
         new_content = content.replace(old_text, new_text, 1)
+        # v0.8.3: 编辑无变化检测——SWE-bench 实测（matplotlib-24970）：
+        # LLM 生成的 new_text 与 old_text 内容相同（或归一化匹配吞掉缩进后
+        # 替换等价），edit 报告成功但工作区 git diff 为空 → patch 丢失。
+        # 视为失败让补救/验证循环接管，而不是静默产出空补丁。
+        if new_content == content:
+            return {
+                "file": str(path),
+                "replacements": 0,
+                "success": False,
+                "error": (
+                    "编辑未产生任何变化：new_text 与 old_text 内容相同"
+                    "（或替换结果与原文等价）。请重新生成真正修改内容的 new_text。"
+                ),
+            }
         snapshot = self._snapshot_path(path)
         try:
             atomic_write_text(path, new_content, backup=True, encoding=self.encoding)
