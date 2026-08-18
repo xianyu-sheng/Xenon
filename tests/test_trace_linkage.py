@@ -11,7 +11,6 @@ import logging
 
 from xenon.engine.trace import (
     TraceContextFilter,
-    get_trace_run_id,
     prefix,
     set_trace_run_id,
 )
