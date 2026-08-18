@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from xenon.repl.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
+from xenon.engine.trace import TraceContextFilter  # noqa: E402
+logger.addFilter(TraceContextFilter())
 
 EXECUTOR_PROMPT = """你是一个专业的代码和技术执行者。请根据用户的需求生成高质量的输出。
 

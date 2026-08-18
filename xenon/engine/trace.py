@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import itertools
 import logging
 import threading
@@ -56,3 +57,34 @@ class _TraceAdapter(logging.LoggerAdapter):
 
     def process(self, msg, kwargs):
         return f"{self.extra['trace']} {msg}", kwargs
+
+
+# ── v0.8.3: 模块级日志自动带 [run_id] 前缀 ─────────────────
+# 引擎模块 logger 挂 TraceContextFilter 后，所有日志自动带当前 run_id，
+# 无需改每个调用点。run_id 由 _begin_run() 写入 contextvar（线程隔离），
+# 工具执行层（ToolExecutor）日志也随之贯通——排查时整条链可关联。
+
+_TRACE_RUN_VAR: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "trace_run_id", default=""
+)
+
+
+def set_trace_run_id(run_id: str | None) -> None:
+    """设置当前上下文（线程/协程）的 run_id；None/空则清除。"""
+    _TRACE_RUN_VAR.set(run_id or "")
+
+
+def get_trace_run_id() -> str:
+    return _TRACE_RUN_VAR.get()
+
+
+class TraceContextFilter(logging.Filter):
+    """日志过滤器：message 自动加 ``[run_id]`` 前缀（避免双重前缀）。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        run_id = _TRACE_RUN_VAR.get()
+        if run_id:
+            message = record.getMessage()
+            if not message.startswith(f"[{run_id}]") and not message.startswith("["):
+                record.msg = f"[{run_id}] {record.msg}"
+        return True

@@ -152,6 +152,32 @@ def _append_event(path: Path | None, event: str, **fields: Any) -> None:
         os.fsync(stream.fileno())
 
 
+def classify_error(error: str | None) -> str:
+    """把引擎错误归类，排查 SWE-bench 失败时一眼定位类别。
+
+    类别：network（断连/超时）、truncation（响应截断）、provider（模型/认证）、
+    gate（证据门/交付门）、tool（工具调用）、deadline（引擎超时）、empty（无错误）。
+    """
+    if not error:
+        return "none"
+    if "Server disconnected" in error or "ECONN" in error or "无法连接" in error \
+            or "SSLError" in error or "ReadTimeout" in error or "ConnectError" in error \
+            or "Server error" in error:
+        return "network"
+    if "截断" in error or "finish_reason=length" in error:
+        return "truncation"
+    if "EngineDeadlineExceeded" in error or "hard wall timeout" in error:
+        return "deadline"
+    if "delivery evidence gate" in error or "声称创建" in error \
+            or "证据" in error or "gate failed" in error:
+        return "gate"
+    if "不支持的 provider" in error or "认证失败" in error or "401" in error or "403" in error:
+        return "provider"
+    if "所有模型均调用失败" in error:
+        return "provider"
+    return "tool"
+
+
 def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
             max_steps: int, request_timeout: float, engine_timeout: float,
             min_request_interval: float = 0.0,
@@ -259,6 +285,7 @@ def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
         "engine": engine_name,
         "elapsed_seconds": round(time.time() - started, 3),
         "error": error,
+        "error_category": classify_error(error),
         "output_tail": output[-2000:],
         "tool_trace": trace,
         "patch_source": (
@@ -423,6 +450,7 @@ def _run_with_hard_timeout(kwargs: dict[str, Any], timeout: float,
                 "engine": kwargs["engine_name"],
                 "elapsed_seconds": timeout,
                 "error": f"EngineDeadlineExceeded: hard wall timeout ({timeout}s)",
+                "error_category": "deadline",
                 "output_tail": "",
                 "tool_trace": [],
                 "patch_source": "empty",

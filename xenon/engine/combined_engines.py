@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from xenon.repl.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
+from xenon.engine.trace import TraceContextFilter  # noqa: E402
+logger.addFilter(TraceContextFilter())
 
 
 class SteeringMixin:

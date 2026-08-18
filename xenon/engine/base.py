@@ -42,6 +42,8 @@ if TYPE_CHECKING:
     from xenon.engine.tool_tracker import ToolExecutionTracker
 
 logger = logging.getLogger(__name__)
+from xenon.engine.trace import TraceContextFilter  # noqa: E402
+logger.addFilter(TraceContextFilter())
 
 
 class BaseEngine(ABC):
@@ -333,7 +335,9 @@ class BaseEngine(ABC):
         ``[run_id]`` 前缀；``_call_llm`` 内每次调用再生成 ``call_id`` 细分。
         """
         from xenon.engine.trace import new_run_id, prefix
+        from xenon.engine.trace import set_trace_run_id
         self.run_id = new_run_id()
+        set_trace_run_id(self.run_id)
         self.last_model_used = None
         self._pending_native_response = None
         self._last_provider_messages = []

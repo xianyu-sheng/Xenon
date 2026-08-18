@@ -39,6 +39,8 @@ from xenon.engine.evidence_runtime import (
 )
 
 logger = logging.getLogger(__name__)
+from xenon.engine.trace import TraceContextFilter  # noqa: E402
+logger.addFilter(TraceContextFilter())
 
 
 # ── 工具分类 ───────────────────────────────────────────────
@@ -875,6 +877,12 @@ class ToolExecutor:
             self.execution_policy.emit("tool_start", tool=tool_name)
         tool_class = classify_tool(tool_name, params)
         execution_id = uuid.uuid4().hex
+        # v0.8.3: 链路贯通——工具执行日志带 [run_id/exec_id] 前缀。此前工具层
+        # 是链路断裂点（只有 LLM 调用层有 run_id），排查「哪次工具失败」时
+        # 无法从日志关联到具体 run/execution。run_id 取自 context 的会话 ID
+        # （_bind_evidence_ledger 写入），exec_id 每次执行独立。
+        run_id = context.get("_evidence_session_id") if context is not None else None
+        trace_p = f"[{run_id}/{execution_id[:6]}] " if run_id else ""
         started_at = _utc_now()
         started_monotonic = time.monotonic()
         lifecycle: list[dict[str, Any]] = []
@@ -996,12 +1004,12 @@ class ToolExecutor:
                 error_kind="invalid_parameters",
             )
 
-        logger.debug(f"执行工具: {tool_name}, 参数: {mask_sensitive_params(params)}")
+        logger.debug(f"{trace_p}执行工具: {tool_name}, 参数: {mask_sensitive_params(params)}")
 
         # ── Stage 1.5: 本轮执行策略硬边界 ──
         policy_reason = execution_policy_denial(tool_name, params, context)
         if policy_reason:
-            logger.info(f"执行策略拒绝: {tool_name} — {policy_reason}")
+            logger.info(f"{trace_p}执行策略拒绝: {tool_name} — {policy_reason}")
             return finish(
                 False,
                 f"⛔ {policy_reason}",
@@ -1013,7 +1021,7 @@ class ToolExecutor:
         # ── Stage 2: 参数幻觉校验 ──
         ok, reason = validate_tool_params(params)
         if not ok:
-            logger.warning(f"参数幻觉拦截: {tool_name} — {reason}")
+            logger.warning(f"{trace_p}参数幻觉拦截: {tool_name} — {reason}")
             # v0.5.3: 提示替代工具，帮助 LLM 恢复
             hint = _tool_alternative_hint(tool_name, params)
             err_msg = f"参数校验失败: {reason}"
@@ -1032,7 +1040,9 @@ class ToolExecutor:
         # 先产生可验证的读取事实，enforce 模式下缺失证据直接阻止 ToolNode。
         evidence_verdict = self.before_tool(tool_name, params, context, tracker)
         if not evidence_verdict.passed:
-            logger.info("在线事实绑定拒绝: %s — %s", tool_name, evidence_verdict.reason)
+            logger.info(
+                f"{trace_p}在线事实绑定拒绝: {tool_name} — {evidence_verdict.reason}",
+            )
             # v0.8.3: 自动补救——拦截原因「缺读取证据」时，对缺失路径自动
             # 补 read_file 后重试原工具（最多一次）。read_file 走完整 7 阶段
             # 流水线（记录 tracker + ledger），重试后证据充足即可放行。
@@ -1046,8 +1056,7 @@ class ToolExecutor:
                     evidence_verdict = self.before_tool(tool_name, params, context, tracker)
                     if evidence_verdict.passed:
                         logger.info(
-                            "自动补读后证据充足，放行 %s（原拦截: %s）",
-                            tool_name, evidence_verdict.reason,
+                            f"{trace_p}自动补读后证据充足，放行 {tool_name}（原拦截: {evidence_verdict.reason}）",
                         )
             if not evidence_verdict.passed:
                 return finish(
@@ -1076,7 +1085,7 @@ class ToolExecutor:
                 risk_override=risk_override,
             )
             if not allowed:
-                logger.info(f"权限拒绝: {tool_name} — {reason}")
+                logger.info(f"{trace_p}权限拒绝: {tool_name} — {reason}")
                 cancelled = "取消任务" in reason
                 if cancelled:
                     # Engines share this context, so a user pressing q stops
@@ -1102,7 +1111,7 @@ class ToolExecutor:
         breaker = self.breakers.get(tool_name)
         if not breaker.allow():
             msg = f"工具 {tool_name} 断路器开启（连败熔断），已拒绝调用"
-            logger.warning(msg)
+            logger.warning(f"{trace_p}{msg}")
             return finish(
                 False,
                 msg,
@@ -1220,7 +1229,7 @@ class ToolExecutor:
                 )
             except Exception as e:  # noqa: BLE001 — 单次执行异常归为失败
                 last_error = f"{type(e).__name__}: {e}"
-                logger.error(f"工具 {tool_name} 执行异常: {e}")
+                logger.error(f"{trace_p}工具 {tool_name} 执行异常: {e}")
                 terminal = is_terminal_error(last_error)
                 if not terminal:
                     # 同上：终端错误（参数/权限/安全拦截）不计入断路器，

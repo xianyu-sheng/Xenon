@@ -33,6 +33,8 @@ if TYPE_CHECKING:
     from xenon.repl.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
+from xenon.engine.trace import TraceContextFilter  # noqa: E402
+logger.addFilter(TraceContextFilter())
 
 # v0.8.3: 纯读瘫痪检测——连续只读工具（侦察类）超过阈值且任务需要写时，
 # 注入提示强制转写。SWE-bench 实测 react-reflection 3 例 10-18 轮全读不写。
