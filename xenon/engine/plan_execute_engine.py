@@ -175,7 +175,7 @@ class PlanExecuteEngine(BaseEngine):
         max_parallel_workers: int = 4,
         max_mini_react_rounds: int = 3,
         tool_remediation_attempts: int = 1,
-        plan_max_tokens: int = 4096,
+        plan_max_tokens: int = 8192,
         model_pool: Any = None,          # v0.4.0
         auto_router: Any = None,         # v0.4.0 Step 13
         permission_gate: Any = None,     # v0.5.0
@@ -204,10 +204,10 @@ class PlanExecuteEngine(BaseEngine):
         # plan 阶段预生成 params 一次性执行，失败（缺参/匹配失败/证据门拦截）
         # 即跳过——这是 23 空 patch 的最大根因。补救让 LLM 现场重新生成参数。
         self.tool_remediation_attempts = max(0, tool_remediation_attempts)
-        # v0.8.3+: plan 阶段输出 token 上限。SWE-bench 实测 plan-react 9 例
-        # 915s 硬超时 tools=0：plan 用慢模型且无 max_tokens 约束，单次生成
-        # 耗尽整个引擎预算。plan JSON（分析+步骤）通常 <2K tokens，4096
-        # 上限足够且防止超长输出拖死引擎。
+        # v0.8.3+: plan 阶段输出 token 上限。默认 8192（与 B4 全局默认一致，
+        # 不改变原有行为）；SWE-bench 实测 DeepSeek 官方 API 的 v4-flash 带长
+        # 推理阶段，4096 会截断 plan JSON 直接打死实例，因此默认必须保守。
+        # plan-react 915s 硬超时场景由显式调小该值缓解（评测方按模型调节）。
         self.plan_max_tokens = max(1024, plan_max_tokens)
         # v0.8.3: 引擎层跨轮次验证循环
         from xenon.engine.verification_loop import VerificationLoop
