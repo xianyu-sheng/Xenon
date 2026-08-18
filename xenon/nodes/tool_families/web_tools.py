@@ -8,6 +8,7 @@ other network-backed tools can reuse the same boundary.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 from urllib.parse import urlparse
 
@@ -81,10 +82,18 @@ class WebToolsMixin:
 
         logger.info("[%s] 抓取网页: %s", self.id, url)
         try:
+            # api.github.com 速率限制更严，若有 token 则附带认证提高限额
+            extra_headers = {}
+            if (urlparse(url).hostname or "") == "api.github.com":
+                token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+                if token:
+                    extra_headers["Authorization"] = f"Bearer {token}"
+                    logger.debug("[%s] 使用 GITHUB_TOKEN 认证", self.id)
+
             with tool_module._create_http_client(
                 timeout=self.timeout, follow_redirects=False
             ) as client:
-                resp = tool_module._fetch_with_redirect_check(client, url)
+                resp = tool_module._fetch_with_redirect_check(client, url, headers=extra_headers)
                 resp.raise_for_status()
                 content_type = resp.headers.get("content-type", "")
                 text = self._html_to_text(resp.text) if "text/html" in content_type else resp.text
