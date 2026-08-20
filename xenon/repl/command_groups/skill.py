@@ -5,6 +5,7 @@ The group owns skill discovery, creation, execution, and import workflows.
 
 from __future__ import annotations
 
+import subprocess
 from typing import TYPE_CHECKING, Any
 
 from xenon.repl.command_groups.common import console
@@ -13,6 +14,7 @@ from xenon.repl.command_registry import (
     command_handler,
     register_command,
 )
+from xenon.utils.github_auth import github_auth_headers
 
 if TYPE_CHECKING:
     from xenon.repl.model_registry import ModelRegistry
@@ -531,6 +533,24 @@ def _extract_skill_name(sub: str, sub_args: str) -> str:
     return f"skill-{content_hash}"
 
 
+def _github_curl_get(url: str):
+    """Fetch a GitHub URL without placing its token in process arguments."""
+    command = ["curl", "-sL"]
+    auth_headers = github_auth_headers()
+    input_text = None
+    if auth_headers:
+        command.extend(["--header", "@-"])
+        input_text = "".join(f"{key}: {value}\n" for key, value in auth_headers.items())
+    command.append(url)
+    return subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        input=input_text,
+    )
+
+
 def _skill_import_from_url(manager, url: str) -> str:
     """v0.5.4: 从 URL 导入 skill。
 
@@ -540,7 +560,6 @@ def _skill_import_from_url(manager, url: str) -> str:
     - owner/repo
     """
     import re
-    import subprocess
 
     # 解析 URL
     url = url.strip()
@@ -582,10 +601,7 @@ def _skill_import_from_url(manager, url: str) -> str:
 
         # 方法 2: 直接用 curl 获取文件列表
         api_url = f"https://api.github.com/repos/{owner}/{repo}/contents"
-        result = subprocess.run(
-            ["curl", "-sL", api_url],
-            capture_output=True, text=True, timeout=30,
-        )
+        result = _github_curl_get(api_url)
 
         if result.returncode != 0 or not result.stdout.strip():
             return f"❌ 无法获取仓库内容: {api_url}"
@@ -608,20 +624,14 @@ def _skill_import_from_url(manager, url: str) -> str:
             if name == ".xenon" and item.get("type") == "dir":
                 # 递归获取 .xenon/skills/ 目录
                 sub_url = item.get("url", "")
-                sub_result = subprocess.run(
-                    ["curl", "-sL", sub_url],
-                    capture_output=True, text=True, timeout=30,
-                )
+                sub_result = _github_curl_get(sub_url)
                 try:
                     sub_contents = _json.loads(sub_result.stdout)
                     if isinstance(sub_contents, list):
                         for si in sub_contents:
                             if si.get("name") == "skills" and si.get("type") == "dir":
                                 skills_url = si.get("url", "")
-                                skills_result = subprocess.run(
-                                    ["curl", "-sL", skills_url],
-                                    capture_output=True, text=True, timeout=30,
-                                )
+                                skills_result = _github_curl_get(skills_url)
                                 try:
                                     skills_contents = _json.loads(skills_result.stdout)
                                     if isinstance(skills_contents, list):
@@ -647,10 +657,7 @@ def _skill_import_from_url(manager, url: str) -> str:
             if not download_url:
                 continue
 
-            yaml_result = subprocess.run(
-                ["curl", "-sL", download_url],
-                capture_output=True, text=True, timeout=30,
-            )
+            yaml_result = _github_curl_get(download_url)
             if yaml_result.returncode != 0:
                 continue
 
@@ -683,4 +690,3 @@ def _skill_import_from_url(manager, url: str) -> str:
         return "❌ GitHub API 请求超时，请稍后重试。"
     except Exception as e:
         return f"❌ 导入失败: {e}"
-

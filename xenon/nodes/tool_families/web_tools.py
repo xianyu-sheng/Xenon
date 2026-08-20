@@ -8,12 +8,12 @@ other network-backed tools can reuse the same boundary.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 from urllib.parse import urlparse
 
 from xenon.engine.context import AgentContext
 from xenon.nodes.network_security import SSRFRedirectError, SecurityError
+from xenon.utils.github_auth import github_auth_headers
 from xenon.utils.github_reference import parse_github_reference
 
 logger = logging.getLogger(__name__)
@@ -85,10 +85,9 @@ class WebToolsMixin:
             # api.github.com 速率限制更严，若有 token 则附带认证提高限额
             extra_headers = {}
             if (urlparse(url).hostname or "") == "api.github.com":
-                token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-                if token:
-                    extra_headers["Authorization"] = f"Bearer {token}"
-                    logger.debug("[%s] 使用 GITHUB_TOKEN 认证", self.id)
+                extra_headers.update(github_auth_headers())
+                if extra_headers:
+                    logger.debug("[%s] 使用已配置的 GitHub Token 认证", self.id)
 
             with tool_module._create_http_client(
                 timeout=self.timeout, follow_redirects=False
@@ -286,4 +285,3 @@ class WebToolsMixin:
         text = re.sub(r"&amp;", "&", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
-

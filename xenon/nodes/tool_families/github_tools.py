@@ -16,6 +16,7 @@ from typing import Any
 from urllib.parse import quote
 
 from xenon.engine.context import AgentContext
+from xenon.utils.github_auth import github_auth_headers, load_github_token
 from xenon.utils.github_reference import parse_github_reference
 
 logger = logging.getLogger(__name__)
@@ -398,9 +399,7 @@ class GitHubToolsMixin:
             "User-Agent": "Xenon/0.6",
             "X-GitHub-Api-Version": "2022-11-28",
         }
-        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+        headers.update(github_auth_headers())
         return headers
 
     @staticmethod
@@ -582,7 +581,7 @@ class GitHubToolsMixin:
         """Pass GitHub auth to git without embedding a token in the clone URL."""
         env = os.environ.copy()
         env["GIT_TERMINAL_PROMPT"] = "0"
-        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        token = load_github_token()
         if token:
             try:
                 config_index = int(env.get("GIT_CONFIG_COUNT", "0"))
