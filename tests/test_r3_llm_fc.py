@@ -246,6 +246,75 @@ class TestOpenaiFCPath:
         assert resp.content == '{"k":1}'
         assert fake.posts[0]["json"]["response_format"] == {"type": "json_object"}
 
+    def test_configured_large_output_budget_is_not_clamped(self, monkeypatch):
+        fake = _FakeClient()
+        fake.set_payload({
+            "choices": [{"message": {"content": '{"k":1}'}, "finish_reason": "stop"}],
+        })
+        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+        monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai"))
+
+        chat_completion_with_tools(
+            "openai/deepseek-v4-pro",
+            [{"role": "user", "content": "x"}],
+            response_format={"type": "json_object"},
+            max_tokens=256000,
+        )
+
+        assert fake.posts[0]["json"]["max_tokens"] == 256000
+
+    def test_incomplete_json_final_answer_is_rejected_even_when_finish_is_stop(
+        self, monkeypatch,
+    ):
+        fake = _FakeClient()
+        fake.set_payload({
+            "choices": [{
+                "message": {"content": '{"final_answer":"第一课其实是'},
+                "finish_reason": "stop",
+            }],
+        })
+        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+
+        with pytest.raises(ResponseTruncatedError, match="完整 JSON"):
+            llm._call_openai_compat_with_tools(
+                _endpoint("openai"),
+                [{"role": "user", "content": "explain"}],
+                tools=[{"type": "function", "function": {"name": "read_file"}}],
+                response_format={"type": "json_object"},
+                tool_choice=None,
+                max_tokens=8192,
+                temperature=0,
+                timeout=10,
+            )
+
+    def test_trailing_text_after_complete_json_is_discarded(self, monkeypatch):
+        fake = _FakeClient()
+        fake.set_payload({
+            "choices": [{
+                "message": {
+                    "content": '{"final_answer":"完整回答。[END]"}\n未经请求的额外文字',
+                },
+                "finish_reason": "stop",
+            }],
+        })
+        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+
+        response = llm._call_openai_compat_with_tools(
+            _endpoint("openai"),
+            [{"role": "user", "content": "explain"}],
+            tools=[],
+            response_format={"type": "json_object"},
+            tool_choice=None,
+            max_tokens=8192,
+            temperature=0,
+            timeout=10,
+        )
+
+        assert llm.json.loads(response.content) == {
+            "final_answer": "完整回答。[END]",
+        }
+        assert "额外文字" not in response.content
+
     def test_deepseek_v4_forced_tool_choice_disables_thinking(self, monkeypatch):
         fake = _FakeClient()
         fake.set_payload({

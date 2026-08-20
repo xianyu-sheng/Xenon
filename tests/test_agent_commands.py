@@ -33,6 +33,38 @@ def test_ask_needs_model():
     assert "用法" in result
 
 
+def test_ask_uses_model_output_budget_and_endpoint(monkeypatch):
+    from xenon.repl.context_manager import ContextManager
+    from xenon.repl.model_registry import ModelRegistry
+
+    reg = ModelRegistry()
+    reg.add_model(
+        "openai/deepseek-v4-pro",
+        "pro",
+        api_key="sk-private",
+        base_url="https://relay.example/v1",
+        max_tokens=256000,
+        reasoning_effort="max",
+    )
+    captured = {}
+
+    def fake_chat(model_id, messages, **kwargs):
+        captured.update(kwargs)
+        return "完整回答。"
+
+    monkeypatch.setattr("xenon.utils.llm_client.chat_completion", fake_chat)
+
+    assert _cmd_ask(
+        args="pro 解释架构",
+        registry=reg,
+        ctx_mgr=ContextManager(),
+    ) == "完整回答。"
+    assert captured["max_tokens"] == 256000
+    assert captured["credentials"] == {"openai": "sk-private"}
+    assert captured["base_url"] == "https://relay.example/v1"
+    assert captured["reasoning_effort"] == "max"
+
+
 def test_code_needs_task():
     from xenon.repl.model_registry import ModelRegistry
     from xenon.repl.context_manager import ContextManager

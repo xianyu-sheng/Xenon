@@ -492,17 +492,14 @@ _PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "env_key": "OPENAI_API_KEY",
-        "max_output_tokens": 16384,
     },
     "anthropic": {
         "base_url": "https://api.anthropic.com",
         "env_key": "ANTHROPIC_API_KEY",
-        "max_output_tokens": 8192,
     },
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1",
         "env_key": "DEEPSEEK_API_KEY",
-        "max_output_tokens": 8192,
     },
     "ark": {
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
@@ -511,42 +508,34 @@ _PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
     "google": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "env_key": "GOOGLE_API_KEY",
-        "max_output_tokens": 8192,
     },
     "zhipu": {
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "env_key": "ZHIPU_API_KEY",
-        "max_output_tokens": 8192,
     },
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "env_key": "QWEN_API_KEY",
-        "max_output_tokens": 8192,
     },
     "moonshot": {
         "base_url": "https://api.moonshot.cn/v1",
         "env_key": "MOONSHOT_API_KEY",
-        "max_output_tokens": 8192,
     },
     "baichuan": {
         "base_url": "https://api.baichuan-ai.com/v1",
         "env_key": "BAICHUAN_API_KEY",
-        "max_output_tokens": 4096,
     },
     "minimax": {
         "base_url": "https://api.minimax.chat/v1",
         "env_key": "MINIMAX_API_KEY",
-        "max_output_tokens": 4096,
     },
     "ollama": {
         "base_url": "http://localhost:11434/v1",
         "env_key": "OLLAMA_API_KEY",
-        "max_output_tokens": 32768,
     },
     "xiaomi": {
         "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
         "env_key": "XIAOMI_API_KEY",
-        "max_output_tokens": 8192,
     },
 }
 
@@ -676,7 +665,7 @@ def build_endpoint(model_id: str, credentials: dict[str, str] | None = None, bas
         custom_config = _load_custom_provider_config(provider)
         if custom_config:
             defaults = {"base_url": custom_config["base_url"],
-                        "env_key": "", "max_output_tokens": 8192}
+                        "env_key": ""}
         else:
             raise ValueError(
                 f"不支持的 provider: {provider}，内置: {list(_PROVIDER_DEFAULTS.keys())}。"
@@ -752,10 +741,11 @@ def chat_completion(
         prompt_layout=compiled.layout(),
     )
     reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
-    # B4: 按厂商输出上限钳制 max_tokens，防止 131072 等超限值引发 400 级联失败
-    provider_cap = _PROVIDER_DEFAULTS.get(endpoint.provider, {}).get("max_output_tokens")
-    if provider_cap and max_tokens > provider_cap:
-        max_tokens = provider_cap
+    # The model configuration is the output-budget authority.  Xenon used to
+    # clamp this value by provider name (for example OpenAI-compatible relays
+    # to 16K), which silently overrode the real model capability and could cut
+    # long answers.  Pass the configured value through unchanged; an upstream
+    # capability error remains explicit and can be fixed in that model entry.
     last_error = None
 
     # §8.8.1：为本调用初始化 usage 累加器（线程局部，跨续写次数累加）
@@ -874,14 +864,9 @@ def _call_openai_compat(
         # until visible output appears (or the bounded retry budget is used).
         if not content:
             if attempts < MAX_CONTINUATIONS:
-                provider_cap = int(
-                    _PROVIDER_DEFAULTS.get(endpoint.provider, {}).get(
-                        "max_output_tokens", 8192,
-                    )
-                )
-                expanded = min(
-                    provider_cap,
-                    max(current_max_tokens * 2, current_max_tokens + 256),
+                expanded = max(
+                    current_max_tokens * 2,
+                    current_max_tokens + 256,
                 )
                 if expanded > current_max_tokens:
                     attempts += 1
@@ -895,8 +880,8 @@ def _call_openai_compat(
                     )
                     current_max_tokens = expanded
                     continue
-            # At the provider cap there is no safe continuation fragment to
-            # send back. Fall through to the bounded fail-closed path below.
+            # There is no visible fragment that can be continued safely.
+            # Fall through to the bounded fail-closed path below.
             attempts = MAX_CONTINUATIONS
         # 被截断 → 追加部分内容为 assistant，再请求"继续"
         if attempts >= MAX_CONTINUATIONS:
@@ -1296,9 +1281,6 @@ def chat_completion_with_tools(
         prompt_layout=compiled.layout(),
     )
     reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
-    provider_cap = _PROVIDER_DEFAULTS.get(endpoint.provider, {}).get("max_output_tokens")
-    if provider_cap and max_tokens > provider_cap:
-        max_tokens = provider_cap
     last_error: Exception | None = None
 
     # Keep the callback contract identical to ``chat_completion``.  Native
@@ -1425,6 +1407,7 @@ def _call_openai_compat_with_tools(
             "原生工具调用响应因 finish_reason=length 被截断，"
             "为避免执行不完整的工具参数，已拒绝该响应。"
         )
+    content = _normalize_structured_final_content(content, tool_calls, response_format)
     return LLMResponse(
         content=content,
         reasoning_content=reasoning,
@@ -1504,6 +1487,7 @@ def _call_anthropic_with_tools(
             "Anthropic 原生工具调用响应因 stop_reason=max_tokens 被截断，"
             "为避免执行不完整的工具参数，已拒绝该响应。"
         )
+    text = _normalize_structured_final_content(text, tool_calls, response_format)
     canonical_calls = [
         {
             "id": call.get("id", ""),
@@ -1527,6 +1511,38 @@ def _call_anthropic_with_tools(
         provider=endpoint.provider,
         assistant_message=assistant_message,
     )
+
+
+def _normalize_structured_final_content(
+    content: str,
+    tool_calls: list[dict[str, Any]],
+    response_format: dict[str, Any] | None,
+) -> str:
+    """Keep one complete JSON result; reject a cut one before tolerant repair."""
+    if (
+        not response_format
+        or not content
+        or tool_calls
+        or "json" not in json.dumps(response_format).lower()
+    ):
+        return content
+    stripped = content.lstrip()
+    try:
+        parsed, end = json.JSONDecoder(strict=False).raw_decode(stripped)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        # parse_react can repair a cut JSON string by adding closing quotes and
+        # braces.  That is useful for recovering tool envelopes, but a repaired
+        # final_answer is still semantically incomplete.  Reject it here so the
+        # engine retries instead of presenting a fragment.
+        raise ResponseTruncatedError(
+            "原生结构化响应不是完整 JSON，拒绝把修复后的残缺回答当作最终结果"
+        ) from exc
+    if not isinstance(parsed, (dict, list)):
+        raise ResponseTruncatedError("原生结构化响应未返回 JSON 对象或数组")
+    if stripped[end:].strip():
+        logger.warning("原生结构化响应在完整 JSON 后含额外文本，已丢弃额外部分")
+        return json.dumps(parsed, ensure_ascii=False)
+    return content
 
 
 # ── 流式调用接口 ──────────────────────────────────────────
@@ -1618,6 +1634,7 @@ def _stream_openai_compat(
     _apply_reasoning_effort(payload, reasoning_effort)
     t0 = time.time()
     usage_data: dict[str, Any] | None = None
+    finish_reason = ""
     with _create_http_client(timeout=timeout) as client:
         with client.stream("POST", url, json=payload, headers=headers) as resp:
             resp.raise_for_status()
@@ -1636,7 +1653,9 @@ def _stream_openai_compat(
                 choices = chunk.get("choices") or []
                 if not choices:
                     continue
-                delta = choices[0].get("delta", {})
+                choice = choices[0]
+                finish_reason = choice.get("finish_reason") or finish_reason
+                delta = choice.get("delta", {})
                 content = delta.get("content")
                 if content:
                     yield content
@@ -1644,6 +1663,11 @@ def _stream_openai_compat(
         _emit_usage(model_id, _extract_usage(usage_data, endpoint.provider), time.time() - t0)
         # 发出响应回调（供 CacheTracker 等订阅原始 API 响应）
         _emit_response(model_id, _response_with_manifest(usage_data, manifest))
+    if finish_reason == "length":
+        raise ResponseTruncatedError(
+            "流式 API 响应因 finish_reason=length 被截断，"
+            "已拒绝把残缺内容当作完整回答"
+        )
 
 
 def _stream_anthropic(
@@ -1683,6 +1707,7 @@ def _stream_anthropic(
     t0 = time.time()
     input_tokens = 0
     output_tokens = 0
+    stop_reason = ""
     with _create_http_client(timeout=timeout) as client:
         with client.stream("POST", url, json=payload, headers=headers) as resp:
             resp.raise_for_status()
@@ -1700,6 +1725,10 @@ def _stream_anthropic(
                     input_tokens = int(u.get("input_tokens", 0) or 0)
                     output_tokens = int(u.get("output_tokens", 0) or 0)
                 elif etype == "message_delta":
+                    stop_reason = (
+                        (event.get("delta") or {}).get("stop_reason")
+                        or stop_reason
+                    )
                     u = event.get("usage") or {}
                     if "output_tokens" in u:
                         output_tokens = int(u.get("output_tokens", 0) or 0)
@@ -1723,4 +1752,9 @@ def _stream_anthropic(
                 }},
                 manifest,
             ),
+        )
+    if stop_reason == "max_tokens":
+        raise ResponseTruncatedError(
+            "Anthropic 流式响应因 stop_reason=max_tokens 被截断，"
+            "已拒绝把残缺内容当作完整回答"
         )

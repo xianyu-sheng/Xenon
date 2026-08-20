@@ -5,6 +5,19 @@
 
 ## [Unreleased]
 
+### 最终回答完整性与输出预算
+
+- 模型配置的 `max_tokens` 现在是用户可见回答的唯一 Xenon 侧输出预算；移除按
+  provider 名称写死的二次钳制，并让 direct、流式、`/ask`、`/code` 与原生
+  function-calling 路径一致传递模型配置。上游模型自身的上下文/输出能力仍由
+  上游明确报错，不再由 Xenon 静默缩短。
+- ReAct 遇到残缺 JSON、明显停在半句/未闭合 Markdown 的 `final_answer` 时
+  fail closed 并要求基于已有工具证据完整重写；完整 JSON 后的游离文本会被
+  丢弃，避免混入未请求来源。
+- 子 Agent 最终回答及无结构化回答回退不再按 2000/1000 字符裁剪；流式协议
+  明确返回 `finish_reason=length` 或 `stop_reason=max_tokens` 时拒绝保存半截
+  内容。
+
 ### 执行边界：修复文档读取请求误路由
 
 - 保留用户请求中位于“请你分析/读取”之前的文件路径证据，避免 `.pdf`、

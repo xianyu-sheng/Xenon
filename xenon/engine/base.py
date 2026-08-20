@@ -3,7 +3,7 @@
 抽取公共属性与 ``_call_llm``，消除执行引擎之间的重复实现
 ``_call_llm`` 复制及参数漂移：
 
-- ``max_tokens`` 硬编码 131072 vs 8192（B4 已修，此处统一来源）；
+- ``max_tokens`` 硬编码值散落（B4 已修，此处统一读取模型配置且不再二次钳制）；
 - ``temperature`` 0.3 vs 0.8 散落各处；
 - B7 的 per-model ``api_key``/``base_url`` 覆盖统一由基类生效。
 
@@ -739,8 +739,8 @@ class BaseEngine(ABC):
         """调用 LLM，支持多模型 fallback。
 
         ``max_tokens`` 优先级：显式入参 > ``ModelConfig.max_tokens`` > 8192 默认；
-        ``chat_completion`` 再按厂商上限钳制（B4）。``api_key``/``base_url`` 按
-        模型覆盖（B7）。温度取 ``self.temperature``。
+        该值原样传给上游，不再按 provider 名称做可能失真的硬钳制。
+        ``api_key``/``base_url`` 按模型覆盖（B7）。温度取 ``self.temperature``。
 
         ``model_priority``：可选的模型优先级覆盖（§8.23.11 / E4——Reflection 的
         reviewer 用独立模型列表，避免执行者与审查者同模型的自我审查盲区）；

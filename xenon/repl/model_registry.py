@@ -30,7 +30,7 @@ class ModelConfig:
     alias: str = ""         # 简短别名，如 "claude", "gpt4"
     api_key: str = ""       # 可选，覆盖全局凭证
     base_url: str = ""      # 可选，自定义端点
-    max_tokens: int = 4096  # 生成输出上限（B4 钳制用）
+    max_tokens: int = 4096  # 请求给上游的生成预算；Xenon 不再二次钳制
     temperature: float = 0.7
     reasoning_effort: str = ""  # OpenAI-compatible reasoning level (low/medium/high/max)
     context_window: int = 128000  # 上下文窗口（R4）
