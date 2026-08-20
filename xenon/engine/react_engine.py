@@ -338,6 +338,16 @@ class ReActEngine(BaseEngine):
         requires_tools = self._input_requires_tools(user_input)
         from xenon.repl.prompt_optimizer import detect_intent
         intent = detect_intent(user_input)
+        from xenon.repl.execution_policy import (
+            ExecutionLevel,
+            classify_execution_policy,
+        )
+        policy_level = (
+            int(active_level)
+            if active_level is not None
+            else int(classify_execution_policy(original_user_input, intent=intent).level)
+        )
+        requires_mutation = policy_level >= int(ExecutionLevel.WRITE)
         strategy = get_strategy_advice(intent, frozenset(self.tools), user_input)
         if strategy.prompt:
             messages[-1]["content"] = f"{messages[-1]['content']}\n\n{strategy.prompt}"
@@ -418,12 +428,21 @@ class ReActEngine(BaseEngine):
                     messages.append({"role": "user", "content": synth[1]})
                     logger.debug(f"ReAct 合成提示 [{synth[0]}]")
 
+            # 收束阶段不再把工具 schema 交给模型。此前预算门控虽然会
+            # 拦截探索工具，但模型仍能持续生成原生 tool_calls，形成
+            # “调用 → 拦截 → 再调用”的空转循环。保留 JSON response_format
+            # 让模型只生成 final_answer，并在结构化输出失败时沿原降级链恢复。
+            active_tools_schema = (
+                None if budget.is_converge_phase() else tools_schema
+            )
             # 调用 LLM（F5: native_fc 开启时走三层降级，否则纯文本 _call_llm）
-            if self.native_fc and tools_schema is not None:
+            if self.native_fc and (
+                active_tools_schema is not None or response_format is not None
+            ):
                 response = self._call_llm_native_for_phase(
                     "reason_act",
                     messages,
-                    tools_schema,
+                    active_tools_schema,
                     response_format,
                 )
             else:
@@ -717,7 +736,7 @@ class ReActEngine(BaseEngine):
                             observation = self._execute_tool(action, action_input, ctx, tracker)
                     # v0.8.3: 纯读瘫痪检测——连续只读后强制转写（任务需要写时）
                     if (
-                        requires_tools
+                        requires_mutation
                         and action in _READ_ONLY_TOOL_NAMES
                         and getattr(observation, "success", True)
                     ):

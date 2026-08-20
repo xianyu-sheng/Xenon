@@ -10,7 +10,7 @@ import pytest
 from xenon.engine.base import BaseEngine
 from xenon.engine.context import AgentContext
 from xenon.engine.react_engine import ReActEngine
-from xenon.utils.llm_client import LLMResponse
+from xenon.utils.llm_client import LLMResponse, ResponseTruncatedError
 
 
 # ── 辅助 ────────────────────────────────────────────────────
@@ -111,6 +111,28 @@ class TestCallLlmNative:
         # tier1 与 tier2 都被调用
         assert (True, True) in calls
         assert (True, False) in calls
+
+    def test_truncated_structured_tier_degrades_instead_of_escaping(self, monkeypatch):
+        """A cut JSON response must reach the next native compatibility tier."""
+        eng = _engine()
+        calls = []
+
+        def fake(mid, msgs, *, tools=None, response_format=None, **kw):
+            calls.append((bool(tools), bool(response_format)))
+            if tools and response_format:
+                raise ResponseTruncatedError("cut structured JSON")
+            return LLMResponse(
+                content='{"thought":"t","final_answer":"complete"}'
+            )
+
+        _patch_fc(monkeypatch, eng, fake)
+
+        out = eng._call_llm_native(
+            [], [{"type": "function"}], {"type": "json_object"}
+        )
+
+        assert json.loads(out)["final_answer"] == "complete"
+        assert calls[:2] == [(True, True), (True, False)]
 
     def test_incompatible_shape_is_not_retried_on_later_iterations(self, monkeypatch):
         eng = _engine()
