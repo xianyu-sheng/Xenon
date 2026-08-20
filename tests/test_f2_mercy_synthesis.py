@@ -247,6 +247,47 @@ class TestReActIntegration:
         # 拦截应有 warning
         assert any("收束阶段" in w for w in cb.warnings)
 
+    def test_native_converge_phase_removes_tool_schema(self, monkeypatch):
+        """Convergence must make a final-only call, not invite more tool calls."""
+        from xenon.repl.execution_policy import ExecutionLevel
+        from xenon.nodes.tool_executor import ToolExecuteResult
+
+        eng = ReActEngine(["m1"], max_iterations=4, native_fc=True)
+        seen_tools = []
+        calls = {"n": 0}
+
+        def fake_native(
+            phase, messages, tools_schema=None, response_format=None,
+            max_tokens=None,
+        ):
+            calls["n"] += 1
+            seen_tools.append(tools_schema)
+            if calls["n"] <= 2:
+                return (
+                    '{"thought":"read evidence","action":"github_fetch",'
+                    '"action_input":{"repo":"owner/repo"}}'
+                )
+            return '{"thought":"done","final_answer":"完整学习回答。"}'
+
+        def fake_execute(tool, params, context, tracker=None, **kwargs):
+            if tracker is not None:
+                tracker.record(tool, params, True, "repository evidence")
+            return ToolExecuteResult(tool, True, "repository evidence")
+
+        monkeypatch.setattr(eng, "_call_llm_native_for_phase", fake_native)
+        monkeypatch.setattr(eng._tool_executor, "execute", fake_execute)
+
+        result = eng.run(
+            "https://github.com/deepseek-ai/deepseek-harness"
+            "我想要学习Deepseek Harenss 请你带着我来学习",
+            AgentContext({"_execution_level": int(ExecutionLevel.READ_ONLY)}),
+        )
+
+        assert result == "完整学习回答。"
+        assert seen_tools[0]
+        assert seen_tools[1]
+        assert seen_tools[2] is None
+
     def test_mercy_compile_on_budget_exhaustion(self):
         """预算耗尽（无中断、无 final_answer、有工具调用）→ mercy compile 合成。"""
         cb = _RecordingCallback()

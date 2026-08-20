@@ -1194,6 +1194,16 @@ class BaseEngine(ABC):
                     fmt,
                     max_tokens,
                 )
+            except ResponseTruncatedError as exc:
+                # ``ResponseTruncatedError`` subclasses ``RuntimeError``.
+                # Keep this branch first so a cut structured response reaches
+                # the next compatibility tier instead of escaping the engine.
+                logger.warning(
+                    "_call_llm_native %s 响应截断，降级下一层: %s",
+                    tier_name,
+                    exc,
+                )
+                continue
             except RuntimeError as exc:
                 # v0.8.3: native 全模型失败（5xx/网络断连）→ 熔断并整体回退
                 # 文本协议，而不是让引擎整个 run 崩溃（SWE-bench react 4 例）。
@@ -1204,16 +1214,6 @@ class BaseEngine(ABC):
                     self._native_request_failed = True
                     break
                 raise
-            except ResponseTruncatedError as exc:
-                # A native tool envelope is atomic and cannot be resumed by
-                # appending a user message. Try the next compatibility tier;
-                # the final plain-text fallback has protocol-aware repair.
-                logger.warning(
-                    "_call_llm_native %s 响应截断，降级下一层: %s",
-                    tier_name,
-                    exc,
-                )
-                continue
             if resp is None:
                 self._unsupported_native_shapes.add(capability_key)
                 continue  # 本层降级，试下一层

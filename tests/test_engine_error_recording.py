@@ -248,9 +248,12 @@ class TestReadOnlyParalysisDetection:
     def test_query_task_never_triggers(self, monkeypatch):
         engine = self._engine()
         calls = {"n": 0}
+        seen_messages = []
+        warnings = []
 
         def fake_llm(phase, messages, **kwargs):
             calls["n"] += 1
+            seen_messages.append(str(messages))
             if calls["n"] <= 6:
                 return (
                     '{"thought": "t", "action": "search_files", '
@@ -265,6 +268,9 @@ class TestReadOnlyParalysisDetection:
 
         monkeypatch.setattr(engine, "_call_llm_for_phase", fake_llm)
         monkeypatch.setattr(engine._tool_executor, "execute", fake_execute)
+        engine.callback.on_warning = lambda warning: warnings.append(warning)
 
         result = engine.run("搜索 x 在项目里的位置", AgentContext())
         assert "查询结果" in result
+        assert not any("你已连续多轮只读操作" in message for message in seen_messages)
+        assert not any("纯只读" in warning for warning in warnings)
