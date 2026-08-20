@@ -61,6 +61,9 @@ def test_code_generation_without_side_effect_authorization_is_answer_only(text):
         ("写一个 hello.py 文件，内容是 print('hello')", ExecutionLevel.WRITE),
         ("写入 /tmp/quicksort.py，然后运行测试", ExecutionLevel.EXECUTE),
         ("读取 src/main.py 并解释接口", ExecutionLevel.READ_ONLY),
+        ("继续，读简历文件", ExecutionLevel.READ_ONLY),
+        ("允许你读工具？以后都可以读", ExecutionLevel.READ_ONLY),
+        ("resume.tex 请你分析候选人的经历", ExecutionLevel.READ_ONLY),
         ("今天苏州天气怎么样", ExecutionLevel.READ_ONLY),
         ("请修复这个 bug", ExecutionLevel.WRITE),
     ],
@@ -109,6 +112,48 @@ def test_research_request_uses_final_request_clause_not_background_plan():
     ],
 )
 def test_hypothetical_write_background_does_not_authorize_writes(text):
+    policy = classify_execution_policy(text, intent=detect_intent(text))
+
+    assert policy.level is ExecutionLevel.READ_ONLY
+
+
+def test_document_paths_before_request_cue_still_authorize_read_only():
+    """路径证据不能因最后一个“请你”而被裁掉。
+
+    简历、论文等文档通常先给出绝对路径，再写“请你分析”。这类请求
+    必须进入 ReAct，并保留只读权限；不能落到没有 tools schema 的 direct。
+    """
+    text = (
+        "/media/xianyu-sheng/32 GB/去实习需要拷贝的文件/工作/2027-ai agent-校招简历-v3.pdf\n"
+        "/media/xianyu-sheng/32 GB/去实习需要拷贝的文件/工作/秋招简历_v6_Kimi版.tex "
+        "请你分析一下我的秋招简历寻找 AI Agent 开发岗位是否有优势"
+    )
+
+    policy = classify_execution_policy(text, intent=detect_intent(text))
+
+    assert policy.level is ExecutionLevel.READ_ONLY
+    assert policy.requires_tools is True
+    assert ReActEngine._input_requires_tools(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "继续，读简历文件",
+        "请读取 /tmp/resume.tex",
+        "允许你读工具读取 /tmp/resume.pdf",
+    ],
+)
+def test_spoken_read_requests_route_to_tools(text):
+    policy = classify_execution_policy(text, intent=detect_intent(text))
+
+    assert policy.level is ExecutionLevel.READ_ONLY
+    assert policy.requires_tools is True
+
+
+def test_plain_can_in_background_is_not_treated_as_request_cue():
+    text = "允许你读工具？谁跟你说的不能读工具了？以后都可以读"
+
     policy = classify_execution_policy(text, intent=detect_intent(text))
 
     assert policy.level is ExecutionLevel.READ_ONLY

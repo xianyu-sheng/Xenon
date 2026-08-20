@@ -154,6 +154,10 @@ _WRITE = re.compile(
 _READ_ONLY = re.compile(
     r"(?:读取|查看|打开|检查|搜索|查询|查找|查一下|调研|调查|了解|研究|"
     r"比较|对比|列出|统计)(?:一下|下|这个|该|当前|文件|目录|内容|代码|项目|仓库)?"
+    # “读”是中文口语中最常见的文件读取请求。使用“短对象 + 外部资源类型”
+    # 的语言结构，而不是枚举简历/论文等业务领域；同时排除“读懂”。
+    r"|(?:读|阅读)(?!懂)(?:一下|下)?[^，。！？,.!?\n]{0,12}"
+    r"(?:工具|文件|目录|内容|代码|项目|仓库|文档|资料)"
     r"|(?:分析|审查).{0,16}(?:文件|目录|项目|仓库|代码库)"
     r"|(?:read|view|inspect|search|find|list|count|check|grep)\b"
     r"|(?:show|open).{0,24}(?:content|file|directory|\w+\.[A-Za-z0-9]+)"
@@ -166,7 +170,7 @@ _READ_ONLY = re.compile(
 
 _REQUEST_CUE = re.compile(
     r"(?:请(?:你)?|请帮我|帮(?:我)?|麻烦(?:你)?|劳烦(?:你)?|能否|"
-    r"可否|可以(?:请)?(?:你)?)\s*",
+    r"可否|可以(?:请你|帮我))\s*",
     re.IGNORECASE,
 )
 _DIRECT_BARE_GIT_REQUEST = re.compile(
@@ -177,7 +181,7 @@ _DIRECT_BARE_GIT_REQUEST = re.compile(
 _PATH_REFERENCE = re.compile(
     r"(?:^|\s)(?:\./|\.\./|src/|tests?/|lib/|app/|[/~])\S+"
     r"|(?:^|\s)[A-Za-z]:\\\S+"
-    r"|\b\w+\.(?:py|js|ts|jsx|tsx|java|c|cpp|h|go|rs|rb|php|html|css|json|yaml|yml|toml|xml|md|txt|sh|bat|ps1)\b",
+    r"|\b\w+\.(?:py|js|ts|jsx|tsx|java|c|cpp|h|go|rs|rb|php|html|css|json|yaml|yml|toml|xml|md|txt|pdf|tex|docx?|rtf|csv|sh|bat|ps1)\b",
     re.IGNORECASE,
 )
 
@@ -230,8 +234,14 @@ def classify_execution_policy(
     wants_write = bool(
         _WRITE.search(request_source) or _DIRECT_BARE_GIT_REQUEST.search(source)
     ) and not no_write
+    # Keep path evidence from the complete user turn.  A path is frequently
+    # placed before “请你分析/读取…”, and request_source intentionally starts
+    # after the last polite request cue.  Looking only at request_source used
+    # to discard `/media/.../resume.tex` and route the turn to direct mode.
     wants_read = bool(
-        _READ_ONLY.search(request_source) or _PATH_REFERENCE.search(request_source)
+        _READ_ONLY.search(request_source)
+        or _PATH_REFERENCE.search(request_source)
+        or _PATH_REFERENCE.search(source)
     )
 
     if wants_execute:
