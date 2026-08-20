@@ -2001,7 +2001,16 @@ class REPL:
                     f"[dim yellow]模型 {model_id} {state}: {e}[/dim yellow]"
                 )
 
+        error_message = f"[错误] 所有模型均调用失败: {last_error}"
         console.print(f"[error]❌ 所有模型均调用失败: {last_error}[/error]")
+        # The request message was already persisted before direct execution.
+        # Always close the turn after every model fails; otherwise the next
+        # request creates ``user -> user`` history and the provider may answer
+        # the older, unresolved prompt instead of the current one.
+        self._record_engine_error(
+            error_message,
+            model_ids[0] if model_ids else None,
+        )
 
     @staticmethod
     def _is_terminal_model_error(error: Exception) -> bool:
