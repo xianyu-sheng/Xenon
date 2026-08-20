@@ -155,14 +155,15 @@ class TestSubAgentSystem:
         result = eng._format_sub_result("id-1", "测试", "react", "执行超时（30s）", sub, None)
         assert "⏱️" in result or "超时" in result
 
-    def test_format_sub_result_truncated(self):
-        """过长结果被截断。"""
+    def test_format_sub_result_preserves_long_answer(self):
+        """子 Agent 的最终回答不得因字符数被裁掉。"""
         eng = self._make_engine()
         sub = MagicMock()
         sub._last_tracker = None
         long_answer = "A" * 3000
         result = eng._format_sub_result("id-1", "测试", "react", long_answer, sub, None)
-        assert "截断" in result
+        assert long_answer in result
+        assert "截断" not in result
 
     def test_format_sub_result_tracks_to_parent(self):
         """结果记入父 tracker。"""

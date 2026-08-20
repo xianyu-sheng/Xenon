@@ -74,7 +74,7 @@ class TestOpenaiCompatAutoContinue:
         assert [mt for _, mt in seen] == [100, 356]
         assert seen[1][0] == original
 
-    def test_reasoning_only_expansion_is_bounded_by_provider_cap(
+    def test_reasoning_only_expansion_is_not_clamped_by_provider_name(
         self, monkeypatch
     ):
         seen = []
@@ -87,9 +87,9 @@ class TestOpenaiCompatAutoContinue:
         with pytest.raises(ResponseTruncatedError):
             lc._call_openai_compat(_ep(), [{"role": "user", "content": "hi"}], 16000, 0.3, 10)
 
-        # OpenAI's configured cap is 16384; a failed expansion at the cap
-        # falls through to the normal bounded truncation error immediately.
-        assert seen == [16000, 16384]
+        # Retry count remains bounded, but Xenon no longer invents a 16K cap
+        # for every OpenAI-compatible endpoint/model.
+        assert seen == [16000, 32000, 64000, 128000]
 
     def test_continuation_appends_assistant_and_continue(self, monkeypatch):
         seen = []

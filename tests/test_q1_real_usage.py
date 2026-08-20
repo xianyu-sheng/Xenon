@@ -13,8 +13,7 @@ Q1 第一步（chat_completion 经 usage 回调发出 LLMUsage）已落地于 te
 
 from __future__ import annotations
 
-
-
+import pytest
 import xenon.utils.llm_client as lc
 from xenon.repl.context_manager import ContextManager
 from xenon.utils.llm_client import (
@@ -205,6 +204,21 @@ def _patch_stream(monkeypatch, provider: str, lines: list[str]):
 
 
 class TestStreamUsageOpenAI:
+    def test_length_finish_is_rejected(self, monkeypatch):
+        lines = [
+            'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"length"}]}',
+            "data: [DONE]",
+        ]
+        _patch_stream(monkeypatch, "openai", lines)
+
+        with pytest.raises(lc.ResponseTruncatedError, match="finish_reason=length"):
+            list(lc.chat_completion_stream(
+                "openai/gpt-4o",
+                [{"role": "user", "content": "hi"}],
+                credentials={"openai": "sk-test"},
+            ))
+
     def test_reasoning_effort_passed_to_stream_payload(self, monkeypatch):
         client = _FakeStreamClient([
             'data: {"choices":[{"delta":{"content":"ok"}}]}',
@@ -265,6 +279,20 @@ class TestStreamUsageOpenAI:
 
 
 class TestStreamUsageAnthropic:
+    def test_max_tokens_stop_is_rejected(self, monkeypatch):
+        lines = [
+            'data: {"type":"content_block_delta","delta":{"text":"partial"}}',
+            'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":4}}',
+        ]
+        _patch_stream(monkeypatch, "anthropic", lines)
+
+        with pytest.raises(lc.ResponseTruncatedError, match="stop_reason=max_tokens"):
+            list(lc.chat_completion_stream(
+                "anthropic/claude-3-5-sonnet",
+                [{"role": "user", "content": "hi"}],
+                credentials={"anthropic": "sk-test"},
+            ))
+
     def test_emits_usage_from_events(self, monkeypatch):
         seen: list[tuple[str, LLMUsage, float]] = []
         unsub = register_usage_callback(lambda m, u, lat: seen.append((m, u, lat)))

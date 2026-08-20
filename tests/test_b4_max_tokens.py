@@ -1,10 +1,10 @@
-"""B4 验收：去除 max_tokens=131072 硬编码 + chat_completion 按厂商上限钳制。"""
+"""B4 验收：模型配置控制输出预算，客户端不按厂商名二次钳制。"""
 from types import SimpleNamespace
 
 import xenon.utils.llm_client as lc
 
 
-class TestChatCompletionClampsMaxTokens:
+class TestChatCompletionPreservesMaxTokens:
     def test_zero_retries_still_makes_one_probe_request(self, monkeypatch):
         calls = []
 
@@ -21,7 +21,7 @@ class TestChatCompletionClampsMaxTokens:
         ) == "ok"
         assert calls == ["gpt-4o"]
 
-    def test_openai_clamped_to_cap(self, monkeypatch):
+    def test_openai_budget_passes_through(self, monkeypatch):
         captured = {}
 
         def fake(endpoint, messages, max_tokens, temperature, timeout):
@@ -33,9 +33,9 @@ class TestChatCompletionClampsMaxTokens:
             "openai/gpt-4o", [{"role": "user", "content": "hi"}],
             credentials={"openai": "sk-test"}, max_tokens=131072,
         )
-        assert captured["mt"] == 16384  # openai 厂商上限
+        assert captured["mt"] == 131072
 
-    def test_anthropic_clamped_to_cap(self, monkeypatch):
+    def test_anthropic_budget_passes_through(self, monkeypatch):
         captured = {}
 
         def fake(endpoint, messages, max_tokens, temperature, timeout):
@@ -47,7 +47,7 @@ class TestChatCompletionClampsMaxTokens:
             "anthropic/claude-3-5-sonnet", [{"role": "user", "content": "hi"}],
             credentials={"anthropic": "sk-test"}, max_tokens=131072,
         )
-        assert captured["mt"] == 8192  # anthropic 厂商上限
+        assert captured["mt"] == 131072
 
     def test_below_cap_unchanged(self, monkeypatch):
         captured = {}

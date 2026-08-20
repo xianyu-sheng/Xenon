@@ -2290,8 +2290,17 @@ class REPL:
                 "event_cursor": self.ctx_mgr.event_cursor,
             },
         }
-        if model_config and model_config.reasoning_effort:
-            request_options["reasoning_effort"] = model_config.reasoning_effort
+        if model_config:
+            request_options["max_tokens"] = model_config.max_tokens
+            request_options["temperature"] = model_config.temperature
+            if model_config.api_key and "/" in model_id:
+                request_options["credentials"] = {
+                    model_id.split("/", 1)[0].lower(): model_config.api_key,
+                }
+            if model_config.base_url:
+                request_options["base_url"] = model_config.base_url
+            if model_config.reasoning_effort:
+                request_options["reasoning_effort"] = model_config.reasoning_effort
 
         # 流式阶段：显示 spinner + 实时 token 计数
         with Live(
@@ -2326,8 +2335,17 @@ class REPL:
                 "event_cursor": self.ctx_mgr.event_cursor,
             },
         }
-        if model_config and model_config.reasoning_effort:
-            request_options["reasoning_effort"] = model_config.reasoning_effort
+        if model_config:
+            request_options["max_tokens"] = model_config.max_tokens
+            request_options["temperature"] = model_config.temperature
+            if model_config.api_key and "/" in model_id:
+                request_options["credentials"] = {
+                    model_id.split("/", 1)[0].lower(): model_config.api_key,
+                }
+            if model_config.base_url:
+                request_options["base_url"] = model_config.base_url
+            if model_config.reasoning_effort:
+                request_options["reasoning_effort"] = model_config.reasoning_effort
         response = chat_completion(model_id, messages, **request_options)
 
         return response

@@ -104,7 +104,18 @@ def _cmd_ask(*, args: str, registry: ModelRegistry, ctx_mgr: ContextManager, **k
         return f"❌ 模型 '{alias}' 不存在。使用 /models 查看可用模型。"
 
     try:
-        response = chat_completion(model.model_id, [{"role": "user", "content": question}])
+        credentials = None
+        if model.api_key and "/" in model.model_id:
+            credentials = {model.model_id.split("/", 1)[0].lower(): model.api_key}
+        response = chat_completion(
+            model.model_id,
+            [{"role": "user", "content": question}],
+            max_tokens=model.max_tokens,
+            temperature=model.temperature,
+            credentials=credentials,
+            base_url=model.base_url or None,
+            reasoning_effort=model.reasoning_effort or None,
+        )
         ctx_mgr.add_user_message(f"/ask {alias} {question}")
         ctx_mgr.add_assistant_message(response, model_used=model.model_id)
         return response
@@ -173,7 +184,19 @@ def _cmd_code(*, args: str, registry: ModelRegistry, ctx_mgr: ContextManager, se
 3. 包含必要的 import 和注释"""
 
     try:
-        code = chat_completion(model_ids[0], [{"role": "user", "content": prompt}])
+        model = registry.get_model_by_id(model_ids[0])
+        credentials = None
+        if model and model.api_key and "/" in model.model_id:
+            credentials = {model.model_id.split("/", 1)[0].lower(): model.api_key}
+        code = chat_completion(
+            model_ids[0],
+            [{"role": "user", "content": prompt}],
+            max_tokens=model.max_tokens if model else 4096,
+            temperature=model.temperature if model else 0.7,
+            credentials=credentials,
+            base_url=(model.base_url or None) if model else None,
+            reasoning_effort=(model.reasoning_effort or None) if model else None,
+        )
     except Exception as e:
         return f"❌ 代码生成失败: {e}"
 
@@ -368,6 +391,5 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
     except Exception as e:
         logger.exception("/sub-agent 执行失败")
         return f"❌ 子 Agent 执行失败: {e}"
-
 
 
