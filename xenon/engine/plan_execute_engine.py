@@ -80,7 +80,7 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
 - git: {{"git_command": "status|diff|log|add|commit"}} — 本机 Git 操作（查看类+基本操作）。
 - web_fetch: {{"url": "完整URL"}} — HTTP GET 抓取任意 URL 内容（HTML 自动转文本）。不能列 GitHub 仓库文件。
 - docs_fetch: {{"url": "文档站点URL", "query": "主题", "max_pages": 4}} — 优先发现 llms.txt/llms-full.txt 并按主题读取官方文档；不存在时降级抓取原页面。
-- github_fetch: {{"repo": "owner/repo 或 GitHub 完整 URL", "github_action": "list_files|fetch_file|fetch_readme|fetch_issue|fetch_pull", "github_path": "文件/目录路径", "branch": "可选"}} — 支持仓库、blob、tree、issue、pull、raw URL；留空分支时自动读取默认分支。GITHUB_TOKEN/GH_TOKEN 可访问私有仓库。
+- github_fetch: {{"repo": "owner/repo 或 GitHub 完整 URL", "github_action": "list_files|fetch_file|fetch_readme|fetch_issue|fetch_pull", "github_path": "文件/目录路径", "branch": "可选"}} — 支持仓库、blob、tree、issue、pull、raw URL；留空分支时自动读取默认分支。GITHUB_TOKEN、GH_TOKEN 或 credentials.yaml 的 github.token 可用于认证访问。
 - clone_repo: {{"repo": "owner/repo 或完整 URL", "branch": "可选"}} — 将 GitHub 仓库克隆到本地缓存（~/.xenon/repos/）并分析；留空分支时探测远程 HEAD，缓存命中时安全拉取更新且不覆盖本地修改。
 - lsp_goto_def: {{"file_path": "Python文件", "line": 行号, "column": 列号}} — 跳转到符号定义（跨文件跟踪 import）。
 - lsp_find_refs: {{"file_path": "Python文件", "line": 行号, "column": 列号}} — 查找符号的所有引用（跨文件）。

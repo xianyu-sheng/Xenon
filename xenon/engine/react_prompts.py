@@ -221,7 +221,7 @@ BUILTIN_TOOLS = {
     },
     "github_fetch": {
         "name": "github_fetch",
-        "description": "GitHub 专用只读工具。支持 owner/repo，以及仓库、blob、tree、issue、pull 和 raw 完整 URL；repo_activity 可直接获取最近 push、PR 抽样和合并耗时等维护信号，无需克隆仓库。API 限流时会尝试公开 HTML 降级。设置 GITHUB_TOKEN 或 GH_TOKEN 后支持私有仓库。",
+        "description": "GitHub 专用只读工具。支持 owner/repo，以及仓库、blob、tree、issue、pull 和 raw 完整 URL；repo_activity 可直接获取最近 push、PR 抽样和合并耗时等维护信号，无需克隆仓库。API 限流时会尝试公开 HTML 降级。设置 GITHUB_TOKEN、GH_TOKEN 或 credentials.yaml 的 github.token 后支持认证访问。",
         "params": {"repo": "owner/repo 或完整 GitHub URL", "github_action": "list_files | fetch_file | fetch_readme | fetch_issue | fetch_pull | repo_activity", "github_path": "文件或目录路径", "branch": "分支名（可选；留空自动读取仓库默认分支）"},
     },
     "weather": {
