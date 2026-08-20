@@ -136,6 +136,20 @@ def test_document_paths_before_request_cue_still_authorize_read_only():
     assert ReActEngine._input_requires_tools(text) is True
 
 
+def test_repository_url_before_request_cue_still_authorizes_read_only():
+    """Repository evidence before the final “请你” must not be discarded."""
+    text = (
+        "https://github.com/deepseek-ai/deepseek-harness"
+        "我想要学习 DeepSeek Harness，请你带着我来学习"
+    )
+
+    policy = classify_execution_policy(text, intent=detect_intent(text))
+
+    assert policy.level is ExecutionLevel.READ_ONLY
+    assert policy.requires_tools is True
+    assert "本轮只允许只读工具" in bind_execution_boundary(text, policy.level)
+
+
 @pytest.mark.parametrize(
     "text",
     [

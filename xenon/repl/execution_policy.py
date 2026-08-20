@@ -184,6 +184,7 @@ _PATH_REFERENCE = re.compile(
     r"|\b\w+\.(?:py|js|ts|jsx|tsx|java|c|cpp|h|go|rs|rb|php|html|css|json|yaml|yml|toml|xml|md|txt|pdf|tex|docx?|rtf|csv|sh|bat|ps1)\b",
     re.IGNORECASE,
 )
+_URL_REFERENCE = re.compile(r"https?://|github\.com/", re.IGNORECASE)
 
 
 def classify_execution_policy(
@@ -234,14 +235,16 @@ def classify_execution_policy(
     wants_write = bool(
         _WRITE.search(request_source) or _DIRECT_BARE_GIT_REQUEST.search(source)
     ) and not no_write
-    # Keep path evidence from the complete user turn.  A path is frequently
-    # placed before “请你分析/读取…”, and request_source intentionally starts
+    # Keep path/URL evidence from the complete user turn.  They are frequently
+    # placed before “请你分析/学习…”, while request_source intentionally starts
     # after the last polite request cue.  Looking only at request_source used
-    # to discard `/media/.../resume.tex` and route the turn to direct mode.
+    # to discard `/media/.../resume.tex` and GitHub repository URLs, routing
+    # those turns to direct mode without a read-only tools schema.
     wants_read = bool(
         _READ_ONLY.search(request_source)
         or _PATH_REFERENCE.search(request_source)
         or _PATH_REFERENCE.search(source)
+        or _URL_REFERENCE.search(source)
     )
 
     if wants_execute:

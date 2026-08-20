@@ -1122,6 +1122,49 @@ class TestFileClaimDenialRecursiveReact:
         assert "ReAct 引擎执行失败" in error_msgs[-1].content
 
 
+def test_direct_failure_closes_turn_before_next_user_message(monkeypatch):
+    """Rejected direct output must not leak the old request into the next turn."""
+    from xenon.repl.context_manager import ContextManager
+    from xenon.repl.model_registry import ModelRegistry
+    from xenon.repl.repl import REPL
+
+    registry = ModelRegistry()
+    registry.add_model("openai/test", "test")
+    registry.assign_role("planner", ["test"])
+    repl = REPL(
+        registry=registry,
+        ctx_mgr=ContextManager(),
+        streaming=False,
+        optimize_prompts=False,
+    )
+    responses = iter([
+        "我无法直接访问这个仓库。",
+        "你好！",
+    ])
+    seen_messages = []
+
+    def fake_response(model_id, messages):
+        seen_messages.append(list(messages))
+        return next(responses)
+
+    monkeypatch.setattr(repl, "_blocking_response", fake_response)
+    monkeypatch.setattr(repl, "_render_assistant_text", lambda *args, **kwargs: None)
+
+    repl._handle_chat("解释这个项目")
+    assert [turn.role for turn in repl.ctx_mgr.history[-2:]] == [
+        "user", "assistant",
+    ]
+    assert "[错误] 所有模型均调用失败" in repl.ctx_mgr.history[-1].content
+
+    repl._handle_chat("你好")
+
+    assert repl.ctx_mgr.history[-1].role == "assistant"
+    assert repl.ctx_mgr.history[-1].content == "你好！"
+    assert [message["role"] for message in seen_messages[1][-3:]] == [
+        "user", "assistant", "user",
+    ]
+
+
 class TestReadInputUnixPasteMode:
     """v0.3.0+ 修复（C-1）：粘贴模式期间 ESC 字节不再被转义序列累积器吞掉。
 
