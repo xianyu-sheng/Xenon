@@ -193,3 +193,58 @@ class TestDifficultyEstimatorBoundary:
             est.estimate("帮我重构整个项目的架构，考虑性能和并发安全", [])
         )
         assert tier == 5
+
+
+class TestEngineRunInputValidation:
+    """引擎 run() 对 None/非字符串输入的统一防御。
+
+    Bug 背景：ReActEngine.run(None) 此前穿透到 execution_policy.strip_execution_boundary
+    的 text.split() 裸崩 AttributeError（react_engine.py:338 → execution_policy.py:53）。
+    根因是 base.py:1521 的 run(user_input: str) 契约无入口校验，各引擎假设上游
+    （REPL/工作流/会话重放）总传 str。根因级修复：BaseEngine 提供统一校验，
+    全部 6 个引擎 run() 首行调用。
+    """
+
+    def _make_engine(self):
+        from xenon.engine.react_engine import ReActEngine
+        return ReActEngine(["prov/m1"])
+
+    @pytest.mark.parametrize("bad_input", [None, 123, ["task"]])
+    def test_react_run_rejects_non_str(self, bad_input):
+        eng = self._make_engine()
+        with pytest.raises(ValueError, match="user_input 必须为非空字符串"):
+            eng.run(bad_input)
+
+    def test_react_run_rejects_empty_string(self):
+        eng = self._make_engine()
+        with pytest.raises(ValueError, match="user_input 必须为非空字符串"):
+            eng.run("   ")
+
+    def test_all_engine_runs_validate(self):
+        """全部 6 个引擎 run() 首行都应调用统一校验。"""
+        import inspect
+        from xenon.engine.react_engine import ReActEngine
+        from xenon.engine.plan_execute_engine import PlanExecuteEngine
+        from xenon.engine.reflection_engine import ReflectionEngine
+        from xenon.engine.combined_engines import (
+            PlanReactEngine,
+            PlanReflectionEngine,
+            ReactReflectionEngine,
+        )
+
+        for cls in (
+            ReActEngine,
+            PlanExecuteEngine,
+            ReflectionEngine,
+            PlanReactEngine,
+            PlanReflectionEngine,
+            ReactReflectionEngine,
+        ):
+            src = inspect.getsource(cls.run)
+            assert "_validate_run_input" in src, (
+                f"{cls.__name__}.run 未调用统一输入校验"
+            )
+
+    def test_validation_in_base_engine(self):
+        from xenon.engine.base import BaseEngine
+        assert hasattr(BaseEngine, "_validate_run_input")

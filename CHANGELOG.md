@@ -5,6 +5,35 @@
 
 ## [Unreleased]
 
+### 自审修复：MCP / 引擎输入 / 子代理超时（2026-08-21 全面审计）
+
+- **fix(mcp): `discover_tools` 重建 `tool_map`，消除工具集收缩后的幽灵工具。**
+  此前 server 撤掉某工具后重新发现，`tool_map` 残留死条目，`call_tool` 仍会
+  路由到已消失的工具（`registry.py` 只增不删；全清仅在 `close_all`）。现与
+  `_short_name_owners` 等三个共享派生态一并重建，并补「工具集收缩/增长/
+  幽灵调用拒绝/单 server 失败不影响他人」四条回归测试。
+- **fix(engine): 全部引擎 `run()` 入口统一输入校验。** `ReActEngine.run(None)`
+  此前穿透到 `execution_policy.strip_execution_boundary` 的 `text.split()`
+  裸崩 `AttributeError`。根因是 `BaseEngine.run` 契约无入口防护；现提供
+  `_validate_run_input` fail-fast（组合引擎经 `SteeringMixin` 对齐同语义），
+  None/非字符串/空白输入统一抛带定位信息的 `ValueError`。
+- **fix(spawn): 超时路径接上 F6 协作式取消。** `_spawn_subagent` 超时后只
+  `shutdown(wait=False)` 放弃等待，子线程继续后台执行（写文件/调工具），
+  且原代码探测不存在的 `cancel()` 方法——真正的取消通道 `interrupt()`
+  （`base.py` F6，run 循环每轮检查）从未接上。现单任务与批量并行路径超时
+  均发送 `interrupt()`；组合引擎经 `SteeringMixin.interrupt()` 转发子引擎。
+- **tests: live 测试无凭据时 skip 而非 fail。** `test_answer_only_live` 在
+  无 `DEEPSEEK_API_KEY` 的环境以断言失败收场（贡献者本地/CI 误判回归）；
+  现按 `llm_client.py` 的实际凭据来源做 `skipif`。
+- **feat(api): 包级公共 API（懒加载）。** `import xenon` 零子模块开销；
+  `xenon.create_engine(name, model_priority, **kwargs)` 走 `ENGINE_REGISTRY`
+  稳定契约构造引擎，`xenon.list_engines()` 列出范式。README「框架核心是
+  可观察、可替换的模块」自此有编程式入口。
+- **refactor(engine): Plan-Execute DAG 执行器拆分（模块拆分第一步）。**
+  `_run_dag`/`_exec_wave_*`/`_declared_paths`/`_wave_parallel_blocker`/
+  `_build_prev_results`/`_step_outcome` 与 `StepOutcome` 纯移动至
+  `plan_dag_executor.py`（1646→1247 行），零行为变化，266 项相关测试全绿。
+
 ### 最终回答完整性与输出预算
 
 - 模型配置的 `max_tokens` 现在是用户可见回答的唯一 Xenon 侧输出预算；移除按

@@ -52,6 +52,22 @@ class BaseEngine(ABC):
     # observation 截断阈值（子类可覆盖）；统一可配，替代各处硬编码 2000。
     observation_truncate: int = 2000
 
+    @staticmethod
+    def _validate_run_input(user_input: str) -> str:
+        """run() 入口的统一输入校验（全部引擎共用）。
+
+        契约（base.py run 抽象签名）只标注 ``user_input: str``，但上游
+        REPL/工作流 YAML/会话重放可能传 None 或非字符串——此前会穿透到
+        execution_policy.strip_execution_boundary 的 text.split() 裸崩
+        AttributeError。统一在入口 fail-fast，给出可定位的错误信息。
+        """
+        if not isinstance(user_input, str) or not user_input.strip():
+            raise ValueError(
+                f"user_input 必须为非空字符串，收到: {type(user_input).__name__} "
+                f"{user_input!r:.80}"
+            )
+        return user_input
+
     def __init__(
         self,
         model_priority: list[str],

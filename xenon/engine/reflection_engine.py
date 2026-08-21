@@ -126,6 +126,7 @@ class ReflectionEngine(BaseEngine):
         Returns:
             修正后的最终输出
         """
+        self._validate_run_input(user_input)
         feedback = ""
         ctx = context or AgentContext()
         self._reset_interrupt()

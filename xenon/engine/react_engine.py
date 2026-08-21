@@ -289,6 +289,7 @@ class ReActEngine(BaseEngine):
         Returns:
             最终答案文本
         """
+        self._validate_run_input(user_input)
         ctx = context or AgentContext()
         if not ctx.get("_strategy_phase_context", False):
             ctx.set("_strategy_tip_emitted", False)
@@ -1161,11 +1162,14 @@ class ReActEngine(BaseEngine):
                     answer = f"[超时截断] {partial}"
                 else:
                     answer = f"执行超时（{timeout}s），子任务未完成。建议缩小范围或增加超时。"
-                if hasattr(sub_engine, 'cancel'):
+                if hasattr(sub_engine, 'interrupt'):
+                    # F6 协作式取消：置位中断标志，子引擎 run 循环在下一个
+                    # 迭代检查点自行退出。Python 无法强杀线程——超时语义
+                    # 是「放弃等待 + 请求取消」，而非强制终止。
                     try:
-                        sub_engine.cancel()
+                        sub_engine.interrupt()
                     except Exception:
-                        pass
+                        logger.exception("子 Agent %s 取消信号发送失败", task_id)
                 # Do not wait for a stuck child when returning a timeout result.
                 executor.shutdown(wait=False, cancel_futures=True)
             except Exception as e:
@@ -1237,6 +1241,13 @@ class ReActEngine(BaseEngine):
                         answer = fut.result(timeout=timeout)
                     except concurrent.futures.TimeoutError:
                         answer = f"[超时 {timeout}s]"
+                        # 与单任务路径同语义：放弃等待的同时请求协作式取消，
+                        # 防止僵尸子代理继续写共享工作区。
+                        if hasattr(sub_engine, 'interrupt'):
+                            try:
+                                sub_engine.interrupt()
+                            except Exception:
+                                logger.exception("批量子任务 %s 取消信号发送失败", tid)
                         inner.shutdown(wait=False, cancel_futures=True)
                     except Exception:
                         inner.shutdown(wait=True)

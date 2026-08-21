@@ -264,3 +264,68 @@ class TestCategoryWordBoundary:
         assert infer_category("run_shell", "") == "command"
         assert infer_category("git_status", "") == "git"
         assert infer_category("fetch_url", "") == "read_file"  # read_file 先于 web 命中 "fetch"
+
+class TestToolSetShrink:
+    """回归：server 工具集收缩后 tool_map 不得残留幽灵条目。
+
+    根因：discover_tools() 重建 _short_name_owners/ambiguous_short_names/
+    tool_categories 三个共享态，但 tool_map 只增不删（registry.py:306），
+    只有 close_all()（registry.py:479）才清空。server 热更新工具集或
+    断线重连后，已消失的工具仍可被 call_tool 路由到。
+    """
+
+    def test_shrunk_tool_not_left_in_tool_map(self):
+        reg = MCPRegistry()
+        client = _FakeClient(
+            [{"name": "read", "description": "r"}, {"name": "write", "description": "w"}]
+        )
+        reg.clients["fs"] = client
+        reg.discover_tools()
+        assert "fs:write" in reg.tool_map and "write" in reg.tool_map
+
+        # server 撤掉 write 工具后重新发现
+        client._tools = [{"name": "read", "description": "r"}]
+        reg.discover_tools()
+
+        assert "fs:write" not in reg.tool_map, "全名幽灵条目残留"
+        assert "write" not in reg.tool_map, "短名幽灵条目残留"
+        assert sorted(reg.tool_map.keys()) == ["fs:read", "read"]
+
+    def test_shrunk_tool_call_rejected_after_rediscover(self):
+        reg = MCPRegistry()
+        client = _FakeClient(
+            [{"name": "read", "description": "r"}, {"name": "write", "description": "w"}]
+        )
+        reg.clients["fs"] = client
+        reg.discover_tools()
+
+        client._tools = [{"name": "read", "description": "r"}]
+        reg.discover_tools()
+
+        # 幽灵调用应被既有未知工具防御拒绝（ValueError + 可用列表提示）
+        with pytest.raises(ValueError, match="未知 MCP 工具"):
+            reg.call_tool("fs:write")
+
+    def test_tool_set_growth_still_accumulates(self):
+        reg = MCPRegistry()
+        client = _FakeClient([{"name": "read", "description": "r"}])
+        reg.clients["fs"] = client
+        reg.discover_tools()
+
+        client._tools.append({"name": "stat", "description": "s"})
+        reg.discover_tools()
+
+        assert {"fs:read", "read", "fs:stat", "stat"} <= set(reg.tool_map.keys())
+
+    def test_failed_server_keeps_others_tools(self):
+        """单 server 发现失败不得把其他 server 的工具一并清掉。"""
+        reg = MCPRegistry()
+        ok_client = _FakeClient([{"name": "read", "description": "r"}])
+        bad_client = _FakeClient([], fail_list=True)
+        reg.clients["good"] = ok_client
+        reg.clients["bad"] = bad_client
+        reg.discover_tools()
+
+        assert "good:read" in reg.tool_map
+        # bad server 无工具 → 不产生条目，也不影响 good
+        assert not any(k.startswith("bad:") for k in reg.tool_map)

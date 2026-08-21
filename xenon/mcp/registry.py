@@ -281,6 +281,9 @@ class MCPRegistry:
         with self._lock:
             # 重建追踪状态：server 增删/连接失败后，残留的短名归属
             # 会让已移除的 server 继续影响歧义判定，必须每次重算。
+            # tool_map 同属共享派生态——server 工具集收缩（热更新/重连）
+            # 后，只增不删会留下可路由的"幽灵工具"，必须一并重建。
+            self.tool_map = {}
             self._short_name_owners = {}
             self.ambiguous_short_names = set()
             self.tool_categories = {}

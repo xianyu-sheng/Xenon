@@ -10,7 +10,20 @@ from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.repl import REPL
 
 
-@pytest.mark.live
+def _live_credentials_available() -> bool:
+    """deepseek 直连凭据是否可用（llm_client.py:502 只认 DEEPSEEK_API_KEY）。"""
+    import os
+
+    return bool(os.environ.get("DEEPSEEK_API_KEY"))
+
+
+pytestmark = [
+    pytest.mark.live,
+    pytest.mark.skipif(
+        not _live_credentials_available(),
+        reason="live 测试需要 DEEPSEEK_API_KEY 或 ~/.xenon/credentials.yaml 中的 deepseek 凭据",
+    ),
+]
 def test_real_model_keeps_chat_only_code_out_of_tools_and_disk(tmp_path, monkeypatch):
     model_id = "deepseek/deepseek-v4-flash"
     registry = ModelRegistry()

@@ -39,6 +39,33 @@ class SteeringMixin:
         self._steering_queue: "queue.Queue[dict[str, Any]]" = queue.Queue()
         self.steering_consumed: list[dict[str, Any]] = []
 
+    @staticmethod
+    def _validate_run_input(user_input: str) -> str:
+        """run() 入口统一输入校验（与 BaseEngine 同语义）。
+
+        组合引擎不继承 BaseEngine（组合优于继承），但 run() 契约一致，
+        校验原语经此 Mixin 对齐——见 BaseEngine._validate_run_input 的
+        fail-fast 依据。
+        """
+        from xenon.engine.base import BaseEngine
+
+        return BaseEngine._validate_run_input(user_input)
+
+    def interrupt(self) -> None:
+        """F6 协作式中断：转发给全部子引擎。
+
+        父引擎 spawn_agent 超时后调用 interrupt() 请求取消（react_engine
+        超时路径）。组合引擎自身无循环可检查标志，语义 = 让正在跑的
+        子引擎在各自迭代检查点退出。
+        """
+        for attr in ("planner", "executor", "reactor", "repairer", "reflector"):
+            sub = getattr(self, attr, None)
+            if sub is not None and hasattr(sub, "interrupt"):
+                try:
+                    sub.interrupt()
+                except Exception:  # pragma: no cover - 尽力转发
+                    pass
+
     def steer(self, text: str) -> bool:
         """任务运行中注入一条用户补充/修改要求（线程安全）。"""
         if not text or not text.strip():
@@ -242,6 +269,7 @@ class PlanReactEngine(SteeringMixin):
         context: AgentContext | None = None,
         ctx_mgr: ContextManager | None = None,
     ) -> str:
+        self._validate_run_input(user_input)
         ctx = context or AgentContext()
         self._reset_steering()  # mid-task steering：每轮 run 重置
         aggregate = ToolExecutionTracker()
@@ -689,6 +717,7 @@ class PlanReflectionEngine(_ReflectionCombination):
         context: AgentContext | None = None,
         ctx_mgr: ContextManager | None = None,
     ) -> str:
+        self._validate_run_input(user_input)
         ctx = context or AgentContext()
         self._reset_steering()  # mid-task steering：每轮 run 重置
         initial = self.planner.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
@@ -760,6 +789,7 @@ class ReactReflectionEngine(_ReflectionCombination):
         context: AgentContext | None = None,
         ctx_mgr: ContextManager | None = None,
     ) -> str:
+        self._validate_run_input(user_input)
         ctx = context or AgentContext()
         self._reset_steering()  # mid-task steering：每轮 run 重置
         initial = self.reactor.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
