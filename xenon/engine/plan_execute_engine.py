@@ -8,15 +8,12 @@ Phase 2: Execution — 逐步执行，每步结果写入 context
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from xenon.engine.base import BaseEngine
 from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
-from xenon.engine.plan_dag import PlanDAG, PlanDAGCycleError
+from xenon.engine.plan_dag import PlanDAGCycleError
 from xenon.engine.plan_dag_executor import PlanDAGExecutorMixin, StepOutcome
 from xenon.engine.strategy_guide import get_strategy_advice
 from xenon.engine.tool_tracker import ToolExecutionTracker
