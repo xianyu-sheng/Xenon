@@ -4,22 +4,42 @@
 
 <h1 align="center">Xenon</h1>
 
-**面向实验、学习和社区协作的可扩展终端 AI 编程 Agent 试验场。**
+**Agent Harness —— 运行、约束、评测 AI 编程 Agent 的开源运行时。**
 
-7 种推理范式、12 家 LLM Provider、插件级工具引擎与记忆系统，可在终端
-交互或 SWE-bench 等自动化评测中运行。框架核心是**可观察、可替换的模块**
-——模型协议、推理范式、工具调用和终端交互均可独立扩展，通过 Issue 或
-PR 与社区一起迭代。
+Xenon 不只是一个能写代码的 Agent，而是让 Agent **可信地**运行所需的那层基础设施：
+7 种可替换的推理范式、证据约束的验证闭环、执行隔离边界、以及可复现的评测链路。
+同一套运行时既支撑终端交互，也支撑 SWE-bench 官方评测——**两条路径共享同一组
+隔离与验证约束**，因此评测数字对交互场景同样成立。
+
+可以当命令行工具直接用，也可以当库嵌进你自己的 Agent 评测流程。
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml/badge.svg)](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/xianyu-sheng/Xenon/branch/main/graph/badge.svg)](https://codecov.io/gh/xianyu-sheng/Xenon)
-[![release v0.8.3](https://img.shields.io/badge/release-v0.8.3-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.8.3)
+[![release v0.8.5](https://img.shields.io/badge/release-v0.8.5-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.8.5)
 
 代码托管：
 [GitHub](https://github.com/xianyu-sheng/Xenon) ·
 [Gitee 镜像](https://gitee.com/xianyu-sheng123/Xenon)
+
+---
+
+## Harness 的五层职责
+
+一个 Agent Harness 要回答的不是「模型能不能写出这段代码」，而是「**这个系统的输出
+能不能被信任**」。Xenon 把这个问题拆成五层，每层都可独立替换与观察：
+
+| 层 | 职责 | 实现 |
+|---|---|---|
+| **推理** | 用哪种策略把任务推进下去 | 7 种范式 + `register_engine()` 注册契约 |
+| **工具** | 副作用如何发生、如何被记录 | ToolExecutor 7 阶段管线 + 10 个 tool_families |
+| **约束** | 什么不允许发生 | 路径围栏 + 权限门 + 命令注入拦截 |
+| **验证** | 凭什么相信结果 | Evidence Runtime：工具结果是 Evidence，LLM 输出只是 Claim |
+| **度量** | 改动到底有没有效 | SWE-bench 官方 harness + 同模型 A/B + 落盘 seed |
+
+第 3、4 层是 Xenon 与「又一个 Agent CLI」的真正区别——**它们决定了前两层的输出
+能否被采信**。
 
 ---
 
@@ -34,10 +54,19 @@ PR 与社区一起迭代。
 - **可观察性**：每个推理步骤、工具调用、缓存命中都有迹可循
 - **可替换性**：推理引擎、工具、Provider 通过注册机制解耦，无需修改核心代码
 - **证据导向**：工具输出是 Evidence，LLM 输出是 Claim——验证闭环抑制幻觉
+- **边界一致**：交互与评测共享同一组隔离约束，评测数字对日常使用同样成立
+
+**安全边界（v0.8.5 实测加固）：**
+- 文件写入受工作区围栏约束，**跟随符号链接**校验真实目标
+- 模型提供的 `cwd` 一律被可信根覆盖，无法移动围栏本身
+- 命令替换（`$()`/反引号/进程替换）、危险命令、敏感路径与凭证文件均拦截
+- 隔离层经系统性边界探测，已修复的逃逸路径均有回归测试锁定
+  （详见 [v0.8.5](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.8.5)）
 
 **适用场景：**
 - 研究推理范式效果的学术团队
-- 需要对 Agent 行为做精细控制的工程师
+- 需要评测自己 Agent 的团队（复用 `evals/` 的可复现链路）
+- 需要对 Agent 行为与副作用做精细控制的工程师
 - 想在本地终端完成代码任务的开发者
 
 ---
@@ -45,7 +74,7 @@ PR 与社区一起迭代。
 ## 架构
 
 ```
-用户输入
+用户输入 / 评测 harness
    │
    ▼
 ┌─────────────────────────────────────────────────┐
@@ -54,6 +83,9 @@ PR 与社区一起迭代。
 ├─────────────────────────────────────────────────┤
 │  引擎层  7 种推理范式（BaseEngine + registry）     │  ← 推理策略
 │  工具层  10 个 tool_families + 7 阶段管线         │  ← 文件/代码/网络/搜索/MCP...
+│  约束层  ToolRuntime 工作区绑定 + 路径围栏         │  ← 副作用边界（交互/评测同源）
+│           + 权限门 + 命令注入拦截                  │
+│  验证层  Evidence Runtime（Claim vs Evidence）    │  ← 结果凭什么可信
 │  记忆层  4 作用域 (user/project-local/project-    │  ← 跨会话状态管理
 │           shared/session)                        │
 │  MCP 层  客户端（stdio/HTTP/SSE）                │  ← 外部工具协议
@@ -61,6 +93,10 @@ PR 与社区一起迭代。
 │  Provider 层  llm_client.py + 12 厂商预设        │  ← 模型调用、缓存、用量追踪
 └─────────────────────────────────────────────────┘
 ```
+
+约束层与验证层是 Harness 的承重墙：**所有文件副作用都经由 ToolExecutor 这一条
+通道**，因此一处加固即全局生效——v0.8.5 的两个逃逸修复各自只改一个收敛点，
+就覆盖了 12 个调用点与全部 7 种范式。
 
 ### 推理引擎
 
