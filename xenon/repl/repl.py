@@ -2098,6 +2098,34 @@ class REPL:
                 exc,
             )
 
+    def _bind_interactive_tool_runtime(self, engine: Any) -> None:
+        """Give the interactive path the same workspace binding as evals.
+
+        ``bind_tool_runtime`` was previously called only for spawned
+        sub-agents (``react_engine``) and SWE-bench (``evals/``), leaving
+        interactive runs with ``ToolExecutor.runtime is None``.  In that state
+        ``_runtime_params`` returns model params untouched, so the ``cwd`` the
+        model supplied survives — and ``cwd`` is in ``ToolNode._VALID_PARAMS``.
+        Since the fence root is derived from ``cwd``
+        (``ToolNode._get_allowed_root``), a model-chosen ``cwd`` moved the
+        fence itself rather than being contained by it.
+
+        Binding one runtime makes ``_runtime_params`` overwrite ``cwd`` with
+        the trusted workspace root on every tool call, so interactive and
+        evaluation runs enforce the same boundary.
+        """
+        from xenon.engine.tool_runtime import ToolRuntime, bind_tool_runtime
+
+        try:
+            root = self.project_ctx.root or self.project_ctx.working_dir or Path.cwd()
+            bind_tool_runtime(engine, ToolRuntime(workspace_root=Path(root)))
+        except Exception as exc:  # noqa: BLE001 — never block a task on binding
+            # A missing/renamed directory must not make the task unrunnable;
+            # ToolNode's own fence still applies via its cwd fallback.
+            logger.warning(
+                "工具运行时绑定失败，本次任务回退到 ToolNode 自身围栏: %s", exc
+            )
+
     def _run_engine(self, spec: EngineSpec, user_input: str, model_ids: list[str]) -> None:
         """按 ``EngineSpec`` 运行一种推理范式 —— 全部引擎共用的唯一流程。
 
@@ -2124,6 +2152,9 @@ class REPL:
             permission_gate=self._permission_gate,
         )
         self._inject_mcp_tools_into_engine(engine)
+        # 工作区绑定：与评测路径一致（见 _bind_interactive_tool_runtime）。
+        # 必须在 run() 之前——绑定后模型提供的 cwd 才会被可信根覆盖。
+        self._bind_interactive_tool_runtime(engine)
         # 在线验证链：任务摄入——REPL 先创建任务证据，引擎复用同一条 ledger。
         try:
             self.agent_context.evidence.start_task(
