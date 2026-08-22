@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__version__ = "0.8.4"
+__version__ = "0.8.5"
 
 __all__ = ["__version__", "create_engine", "list_engines"]
 

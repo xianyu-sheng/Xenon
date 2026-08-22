@@ -5,6 +5,42 @@
 
 ## [Unreleased]
 
+## [0.8.5] — 2026-08-22
+
+### 安全修复：两处沙箱逃逸（写入可越出工作区围栏）
+
+两个漏洞均实测复现后修复，各自带可复现 POC 与「临时回退修复 → 断言必须
+FAIL」的有效性自检，确认测试真的锁住行为而非恒真。
+
+- **fix(security): 路径围栏跟随符号链接。** `_validate_path` 用
+  `os.path.normpath` 规范化，它只在字符串层面消解 `..`，不跟随符号链接。
+  工作区内存在指向外部的链接时，路径在字符串上看仍在围栏内 → 校验放行 →
+  写入实际落在围栏外。读路径同样中招，意味着 A13 的凭证读取防护也能被
+  绕过。符号链接在克隆仓库、`node_modules`、虚拟环境里极常见，Agent 自己
+  也能用 `command` 工具创建链接后再写入。现改用
+  `Path.resolve(strict=False)`，让围栏比对看到真实目标；12 个调用点全部
+  经由此单一收敛点，无需逐个改。恶意路径无法关掉围栏：符号链接循环由
+  pathlib 抛 `RuntimeError`（**不是** `OSError`，最初只捕 OSError 导致
+  异常直接泄漏给调用方），超长路径抛 `OSError`，两者都退回文本规范化且
+  结果仍在围栏内。
+- **fix(security): 交互路径绑定 ToolRuntime。** `bind_tool_runtime` 此前
+  只在子代理 spawn 与 SWE-bench 评测中调用，`xenon/repl/` 下一处都没有，
+  交互模式始终运行在 `ToolExecutor.runtime is None` 状态。该状态下
+  `_runtime_params` 原样返回模型参数，而 `cwd` 在 `ToolNode._VALID_PARAMS`
+  内、围栏根又由 `cwd` 推导——模型自选的 `cwd` 因此**移动围栏本身**而不是
+  被围栏约束。现在 `_run_engine`（七种范式唯一装配收敛点）绑定 ToolRuntime，
+  可信根覆盖每次工具调用的 `cwd`。子代理连带受益：spawn 路径读取
+  `node.tool_runtime`，此前交互模式下它恒为 None。绑定失败只记警告不上抛，
+  任务不因目录被删而整体不可运行。
+- **一致性**：此前交互模式与评测模式跑在两套不同的隔离强度上——40% 的
+  SWE-bench 成绩是在强隔离（容器 + 绑定 runtime）下测的，交互模式却没有
+  同等约束。本版消除该差异。
+- **测试**：新增 `tests/test_symlink_fence.py`（14 例）与
+  `tests/test_interactive_tool_runtime.py`（6 例）。全量
+  **2359 passed, 8 skipped**，零回归。
+
+## [0.8.4] — 2026-08-21
+
 ### 自审修复：MCP / 引擎输入 / 子代理超时（2026-08-21 全面审计）
 
 - **fix(mcp): `discover_tools` 重建 `tool_map`，消除工具集收缩后的幽灵工具。**
