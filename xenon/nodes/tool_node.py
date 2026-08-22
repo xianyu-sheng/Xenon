@@ -458,6 +458,33 @@ class ToolNode(
             return Path(self.cwd).resolve()
         return Path.cwd().resolve()
 
+    @staticmethod
+    def _extra_allowed_roots() -> tuple[Path, ...]:
+        """v0.5.3: 允许读写 /tmp 等临时目录。
+
+        提取为方法以便测试时可 monkeypatch 清空，否则基于 tmp_path 的测试
+        无法验证符号链接逃逸防护——逃逸目标若落在 /tmp 会被此规则直接放行。
+        """
+        return (Path("/tmp").resolve(), Path("/var/tmp").resolve())
+
+    @staticmethod
+    def _real_path_for_check(path: Path) -> Path:
+        """Resolve symlinks so containment checks see the real target.
+
+        Write paths routinely point at files that do not exist yet, so
+        ``strict=True`` is unusable here.  ``Path.resolve(strict=False)``
+        resolves the existing prefix (where any symlink actually lives) and
+        appends the remaining components unchanged, which is exactly the
+        guarantee the fence needs.  A hostile path can never turn containment
+        checking off: symlink loops surface as ``RuntimeError`` from
+        ``pathlib`` (not ``OSError``) while over-long paths raise ``OSError``,
+        so both fall back to the textual form, which stays inside the fence.
+        """
+        try:
+            return path.resolve(strict=False)
+        except (OSError, RuntimeError):
+            return Path(os.path.normpath(str(path)))
+
     def _validate_path(self, file_path: str, *, for_write: bool = False) -> Path:
         """验证文件路径是否在安全范围内。
 
@@ -482,14 +509,16 @@ class ToolNode(
         if not self.security_enabled:
             return path
 
-        resolved = Path(os.path.normpath(str(path)))
+        # ``os.path.normpath`` only collapses ``..`` textually; it does not
+        # follow symlinks.  A link inside the workspace (common in cloned
+        # repositories, ``node_modules`` and virtualenvs, and creatable by the
+        # agent itself via ``command``) therefore passed the fence while the
+        # write landed outside it.  Resolve the real path so the containment
+        # check below sees the true target.  ``strict=False`` keeps writes to
+        # not-yet-existing files working: the existing prefix is resolved and
+        # the remaining components are appended verbatim.
+        resolved = self._real_path_for_check(path)
         root = self._get_allowed_root()
-
-        # v0.5.3: 允许读写 /tmp 等临时目录
-        _ALLOWED_EXTRA_ROOTS = [
-            Path("/tmp").resolve(),
-            Path("/var/tmp").resolve(),
-        ]
 
         # 检查路径是否在允许的根目录下
         in_allowed_root = False
@@ -500,7 +529,7 @@ class ToolNode(
             pass
 
         if not in_allowed_root:
-            for extra in _ALLOWED_EXTRA_ROOTS:
+            for extra in self._extra_allowed_roots():
                 try:
                     resolved.relative_to(extra)
                     in_allowed_root = True
