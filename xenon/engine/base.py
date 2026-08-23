@@ -81,6 +81,21 @@ class BaseEngine(ABC):
     ) -> None:
         self.model_priority = list(model_priority)
         self.callback = callback or EngineCallback()
+        # 事件路由：ExecutionPolicy.emit() → EngineCallback.on_*()
+        def _route_policy_events(event: str, fields: dict[str, Any]) -> None:
+            if event == "provider_request_start":
+                self.callback.on_provider_request_start(
+                    phase=fields.get("phase", "unknown"),
+                    timeout=fields.get("timeout", 0.0),
+                    provider_attempts=fields.get("provider_attempts", 0),
+                )
+            elif event == "provider_request_end":
+                self.callback.on_provider_request_end(
+                    phase=fields.get("phase", "unknown"),
+                    success=fields.get("success", False),
+                )
+            # 未来可扩展 deadline_exceeded、tool_execution_start 等事件
+
         # alias -> ModelConfig，供 _call_llm 读每模型 max_tokens/api_key/base_url（B4/B7）
         self.model_configs = dict(model_configs or {})
         # ModelRegistry stores configs by alias while engines route canonical
@@ -142,6 +157,7 @@ class BaseEngine(ABC):
             DEFAULT_ENGINE_TIMEOUT,
             request_timeout=120.0,
             chain_retries=2,
+            event_sink=_route_policy_events,
         )
         # EvidenceGate 管线：竖着贯穿会话生命周期（fact → plan → completion →
         # fix → output），每层确定性校验、层层过滤。引擎可通过 register_gate

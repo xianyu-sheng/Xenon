@@ -84,6 +84,27 @@ class EngineCallback:
         """引擎执行完成。"""
         pass
 
+    def on_provider_request_start(
+        self, phase: str, timeout: float, provider_attempts: int
+    ) -> None:
+        """LLM 请求开始（发给 provider 之前）。
+
+        Args:
+            phase: 请求阶段标识（如 "llm:deepseek/deepseek-chat"）。
+            timeout: 本次请求的超时（秒）。
+            provider_attempts: 该 provider 的最大重试次数。
+        """
+        pass
+
+    def on_provider_request_end(self, phase: str, success: bool) -> None:
+        """LLM 请求结束（收到响应或最终失败后）。
+
+        Args:
+            phase: 请求阶段标识（与 start 对应）。
+            success: 是否成功（True = 拿到响应；False = 重试耗尽或异常）。
+        """
+        pass
+
 
 class SilentCallback(EngineCallback):
     """静默回调，用于测试。只记录事件不输出。"""
@@ -120,6 +141,16 @@ class SilentCallback(EngineCallback):
 
     def on_finish(self, result: str) -> None:
         self.events.append(("finish", result))
+
+    def on_provider_request_start(
+        self, phase: str, timeout: float, provider_attempts: int
+    ) -> None:
+        self.events.append(
+            ("provider_request_start", {"phase": phase, "timeout": timeout, "provider_attempts": provider_attempts})
+        )
+
+    def on_provider_request_end(self, phase: str, success: bool) -> None:
+        self.events.append(("provider_request_end", {"phase": phase, "success": success}))
 
 
 # ── 思考步骤数据结构 ──────────────────────────────────────────
