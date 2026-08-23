@@ -139,6 +139,10 @@ class PermissionGate:
         self._state = PermissionState.IDLE
         self._last_request: PermissionRequest | None = None
 
+        # ★ Phase 2: 执行策略集成
+        self._current_execution_level: int | None = None
+        self._current_request_text: str | None = None
+
     def set_confirm_callback(self, cb: Callable[[str, dict, str], Any]) -> None:
         """设置确认回调（由 REPL 层注入）。"""
         self._confirm_callback = cb
@@ -149,6 +153,27 @@ class PermissionGate:
         # A mode change is an authorization boundary. Do not carry an
         # earlier session-level [a] approval into PLAN/BYPASS/DEFAULT changes.
         self.reset_session()
+
+    def set_execution_context(
+        self,
+        execution_level: int,
+        request_text: str,
+    ) -> None:
+        """
+        设置当前请求的执行上下文（Phase 2 新增）
+
+        由 REPL 在处理用户输入时调用，将 ExecutionPolicy 传递给权限门。
+
+        Args:
+            execution_level: ExecutionLevel 的整数值
+                - 0: ANSWER_ONLY
+                - 1: READ_ONLY
+                - 2: WRITE
+                - 3: EXECUTE
+            request_text: 用户原始请求（用于确认框显示）
+        """
+        self._current_execution_level = execution_level
+        self._current_request_text = request_text
 
     @property
     def state(self) -> PermissionState:
@@ -224,6 +249,22 @@ class PermissionGate:
         if self.mode == PermissionMode.BYPASS:
             self._state = PermissionState.APPROVED
             return True, ""
+
+        # ★ Phase 2: 检查执行策略是否已覆盖该风险级别
+        # （在 PLAN/BYPASS 之后，在会话记忆之前）
+        if self._current_execution_level is not None:
+            # 风险级别到执行级别的映射
+            risk_to_level = {
+                "READ": 1,      # ExecutionLevel.READ_ONLY
+                "WRITE": 2,     # ExecutionLevel.WRITE
+                "CRITICAL": 3,  # ExecutionLevel.EXECUTE
+            }
+            required_level = risk_to_level.get(risk, 3)
+
+            if self._current_execution_level >= required_level:
+                # 用户已在原始请求中明确授权此级别的操作
+                self._state = PermissionState.APPROVED
+                return True, "用户已在原始请求中授权此操作"
 
         # 会话级别记忆
         if (
@@ -340,10 +381,16 @@ class PermissionGate:
         self._state = PermissionState.IDLE
         self._last_request = None
 
-    @staticmethod
-    def format_confirm_message(tool_name: str, params: dict, risk: str) -> str:
-        """格式化确认提示消息。"""
+    def format_confirm_message(self, tool_name: str, params: dict, risk: str) -> str:
+        """格式化确认提示消息（Phase 2：显示用户原始请求）。"""
         lines = [f"⚠️  {risk} 操作: [bold yellow]{tool_name}[/bold yellow]"]
+
+        # ★ Phase 2: 显示用户原始请求
+        if self._current_request_text:
+            request_preview = self._current_request_text
+            if len(request_preview) > 60:
+                request_preview = request_preview[:57] + "..."
+            lines.append(f"   原始请求: [dim]{escape(request_preview)}[/dim]")
 
         if tool_name == "command":
             # ToolExecutor normalizes command/cmd to ``action`` before the

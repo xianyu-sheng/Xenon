@@ -16,10 +16,22 @@ from pathlib import Path
 from typing import Any
 
 from xenon.utils.atomic_write import atomic_write_text
+from xenon.repl.session_slot_manager import SessionSlotManager
 
 SESSIONS_DIR = Path.home() / ".xenon" / "sessions"
 SESSION_TTL_DAYS = 7
 AUTO_SESSION_NAME = "_auto"
+
+# 全局槽位管理器实例（单例模式）
+_global_slot_manager: SessionSlotManager | None = None
+
+
+def get_slot_manager() -> SessionSlotManager:
+    """获取全局槽位管理器（惰性初始化）"""
+    global _global_slot_manager
+    if _global_slot_manager is None:
+        _global_slot_manager = SessionSlotManager()
+    return _global_slot_manager
 
 _SENSITIVE_SESSION_KEYS = frozenset({
     "api_key",
@@ -245,15 +257,21 @@ def auto_save(
     model_config: dict[str, Any],
     extra: dict[str, Any] | None = None,
 ) -> Path | None:
-    """Atomically checkpoint the current session to the stable ``_auto`` slot.
+    """Atomically checkpoint the current session to an auto-save slot.
+
+    使用多槽位机制，每个会话有独立的槽位，防止 /resume 覆盖。
 
     Returns:
         保存的文件路径，失败返回 None。
     """
     try:
+        slot_manager = get_slot_manager()
+        filepath = slot_manager.ensure_slot()  # 惰性分配槽位
+
         data = {
             "version": "2.1",
             "name": AUTO_SESSION_NAME,
+            "session_id": slot_manager.get_current_slot_id(),  # 记录槽位 ID
             "saved_at": datetime.now(timezone.utc).isoformat(),
             "saved_at_ts": _time.time(),
             "history": history,
@@ -261,8 +279,6 @@ def auto_save(
             "model_config": model_config,
             "extra": extra or {},
         }
-        sessions_dir = _ensure_sessions_dir()
-        filepath = sessions_dir / f"{AUTO_SESSION_NAME}.json"
 
         _write_session_payload(filepath, data)
         return filepath
