@@ -350,7 +350,7 @@ def _cmd_mode(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
 
 # /model ───────────────────────────────────────────────────
 
-# v0.4.0 removed: register_command("/model", "交互式切换模型", "/model")
+register_command("/model", "交互式切换模型", "/model")
 
 @command_handler("/model")
 def _cmd_model(*, session_state: dict, registry: ModelRegistry, **kwargs: Any) -> str:
