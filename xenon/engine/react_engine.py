@@ -1149,6 +1149,15 @@ class ReActEngine(BaseEngine):
         sub_ctx = AgentContext()
         sub_ctx.set_conversation_messages(list(context.get_conversation_messages()))
 
+        # P1 安全：继承父 Agent 的执行权限级别
+        # 防止权限提升：父 Agent 只有只读权限时，子 Agent 不应该能执行写操作
+        execution_level = context.get("_execution_level")
+        if execution_level is not None:
+            sub_ctx["_execution_level"] = execution_level
+        execution_reason = context.get("_execution_reason")
+        if execution_reason is not None:
+            sub_ctx["_execution_reason"] = execution_reason
+
         # 超时控制：在线程池中执行 sub.run()
         if timeout and timeout > 0:
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -1232,6 +1241,14 @@ class ReActEngine(BaseEngine):
 
             sub_ctx = AgentContext()
             sub_ctx.set_conversation_messages(list(context.get_conversation_messages()))
+
+            # P1 安全：继承父 Agent 的执行权限级别（批量并行任务）
+            execution_level = context.get("_execution_level")
+            if execution_level is not None:
+                sub_ctx["_execution_level"] = execution_level
+            execution_reason = context.get("_execution_reason")
+            if execution_reason is not None:
+                sub_ctx["_execution_reason"] = execution_reason
 
             try:
                 if timeout and timeout > 0:
