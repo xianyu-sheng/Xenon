@@ -16,6 +16,7 @@ eggs/
 venv/
 env/
 ENV/
+.xenon-venv/
 
 # IDE
 .idea/
@@ -50,6 +51,9 @@ test_*_real_api.py
 # OS
 .DS_Store
 Thumbs.db
+
+# Git hook 临时文件
+.xenon-install.lock
 desktop.ini
 
 # Logs
