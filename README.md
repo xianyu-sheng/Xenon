@@ -119,7 +119,7 @@ Xenon 作为 Agent Harness，要回答的不是「模型能不能写出这段代
 
 ```bash
 # 安装
-pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.8.3"
+pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.8.5"
 
 # 启动
 xenon
@@ -191,7 +191,7 @@ xenon/
 │   └── compiler.py   # token 预算压缩
 ├── mcp/               # MCP 客户端（transport / client / registry）
 ├── repl/              # 终端交互层
-│   ├── command_groups/ # 12 个命令组
+│   ├── command_groups/ # 11 个命令组
 │   ├── provider_registry.py
 │   └── model_pool.py
 ├── utils/             # LLM 客户端、缓存、原子写入

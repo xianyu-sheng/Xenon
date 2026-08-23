@@ -7,7 +7,7 @@ and DeepSeek cache cost optimization.
 
 ```bash
 # Stable v0.7.3 release:
-pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.7.3"
+pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.8.5"
 ```
 
 Remove `@v0.7.3` only when you intentionally want to follow the development
