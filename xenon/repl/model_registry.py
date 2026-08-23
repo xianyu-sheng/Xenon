@@ -255,3 +255,68 @@ class ModelRegistry:
                 self.set_mode(data["mode"])
             except ValueError:
                 pass
+
+    def load_from_credentials(self, credentials_path: str | Path | None = None) -> None:
+        """从 credentials.yaml 的 providers 段加载模型。
+
+        v0.8.5: 统一配置源 - 支持从 credentials.yaml 中声明的 providers 自动加载模型。
+        只添加 models.yaml 中不存在的模型，避免覆盖用户手动配置。
+
+        Args:
+            credentials_path: credentials.yaml 路径，默认为 ~/.xenon/credentials.yaml
+        """
+        if credentials_path is None:
+            credentials_path = Path.home() / ".xenon" / "credentials.yaml"
+        else:
+            credentials_path = Path(credentials_path)
+
+        if not credentials_path.exists():
+            return
+
+        try:
+            with open(credentials_path, encoding="utf-8") as f:
+                creds = yaml.safe_load(f) or {}
+        except Exception:
+            return
+
+        providers = creds.get("providers", {})
+        if not providers:
+            return
+
+        # 获取已存在的 model_id 列表（来自 models.yaml）
+        existing_model_ids = {m.model_id for m in self.models.values()}
+
+        for provider_key, provider_config in providers.items():
+            if not isinstance(provider_config, dict):
+                continue
+
+            api_key = provider_config.get("api_key", "")
+            base_url = provider_config.get("base_url", "")
+            models_list = provider_config.get("models", [])
+
+            if not models_list:
+                continue
+
+            for model_name in models_list:
+                # 构造 model_id (provider_key/model_name)
+                model_id = f"{provider_key}/{model_name}"
+
+                # 跳过已存在的模型（models.yaml 优先）
+                if model_id in existing_model_ids:
+                    continue
+
+                # 生成别名
+                alias = model_name.replace(".", "-").replace("/", "-")
+
+                # 注册模型（weight=1.0 作为默认值，低于 models.yaml 中手动配置的优先级）
+                try:
+                    self.add_model(
+                        model_id=model_id,
+                        alias=alias,
+                        api_key=api_key,
+                        base_url=base_url,
+                        weight=1.0,  # 默认权重，低于手动配置
+                    )
+                except Exception:
+                    # 忽略注册失败的模型
+                    continue

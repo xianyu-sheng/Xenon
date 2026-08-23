@@ -3206,6 +3206,10 @@ def start_repl(
     if config_path:
         registry.load_from_file(config_path)
 
+    # v0.8.5: 统一配置源 - 从 credentials.yaml 的 providers 段加载模型
+    # models.yaml 中的配置优先（已在 load_from_file 中加载）
+    registry.load_from_credentials()
+
     if models:
         for i, model_id in enumerate(models):
             alias = model_id.split("/")[-1] if "/" in model_id else f"model_{i}"
