@@ -26,7 +26,7 @@ register_command(
 )
 
 @command_handler("/set_model")
-def _cmd_set_model(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
+def _cmd_set_model(*, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any) -> str:
     from rich.table import Table as _Table
     from rich.prompt import IntPrompt as _IntPrompt
 
@@ -128,7 +128,17 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
 
     try:
         config = registry.add_model(model_id, alias)
-        return f"✅ 模型已设置: {alias} -> {config.model_id}"
+
+        # v0.8.5: 自动切换到选中的模型
+        repl = session_state.get("_repl")
+        if repl:
+            # 更新首选模型
+            repl._preferred_model_ids = [model_id]
+            # 更新 auto_router 的首选模型
+            if hasattr(repl, 'auto_router') and repl.auto_router:
+                repl.auto_router._preferred_model_ids = [model_id]
+
+        return f"✅ 模型已设置并切换: {alias} -> {config.model_id}"
     except Exception as e:
         return f"❌ 设置失败: {e}"
 
