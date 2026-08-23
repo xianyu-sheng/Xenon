@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "xenon-harness"
 version = "0.8.5"
-description = "Agent Harness: runtime for running, constraining, and evaluating AI coding agents"
+description = "Xenon: Agent Harness for running, constraining, and evaluating AI coding agents"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

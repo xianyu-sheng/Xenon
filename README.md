@@ -4,7 +4,7 @@
 
 <h1 align="center">Xenon</h1>
 
-**Agent Harness —— 运行、约束、评测 AI 编程 Agent 的开源运行时。**
+**Agent Harness for AI coding agents** — 运行、约束、评测的开源运行时。
 
 Xenon 不只是一个能写代码的 Agent，而是让 Agent **可信地**运行所需的那层基础设施：
 7 种可替换的推理范式、证据约束的验证闭环、执行隔离边界、以及可复现的评测链路。
@@ -27,7 +27,7 @@ Xenon 不只是一个能写代码的 Agent，而是让 Agent **可信地**运行
 
 ## Harness 的五层职责
 
-一个 Agent Harness 要回答的不是「模型能不能写出这段代码」，而是「**这个系统的输出
+Xenon 作为 Agent Harness，要回答的不是「模型能不能写出这段代码」，而是「**这个系统的输出
 能不能被信任**」。Xenon 把这个问题拆成五层，每层都可独立替换与观察：
 
 | 层 | 职责 | 实现 |
