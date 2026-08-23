@@ -294,12 +294,30 @@ class ModelRegistry:
             base_url = provider_config.get("base_url", "")
             models_list = provider_config.get("models", [])
 
+            # v0.8.5: 识别真实 provider（根据 api_mode/api_style）
+            # heyroute-claude -> anthropic
+            # heyroute-deepseek -> openai
+            # heyroute-gpt -> openai
+            api_mode = provider_config.get("api_mode", "")
+            api_style = provider_config.get("api_style", "")
+
+            # 确定真实的 provider 前缀
+            if api_mode == "anthropic" or api_style == "anthropic":
+                real_provider = "anthropic"
+            elif "gpt" in provider_key.lower() or "openai" in provider_key.lower():
+                real_provider = "openai"
+            elif "deepseek" in provider_key.lower():
+                real_provider = "openai"  # DeepSeek 兼容 OpenAI API
+            else:
+                # 默认使用 provider_key 作为前缀
+                real_provider = provider_key
+
             if not models_list:
                 continue
 
             for model_name in models_list:
-                # 构造 model_id (provider_key/model_name)
-                model_id = f"{provider_key}/{model_name}"
+                # 构造 model_id 使用真实 provider
+                model_id = f"{real_provider}/{model_name}"
 
                 # 跳过已存在的模型（models.yaml 优先）
                 if model_id in existing_model_ids:
