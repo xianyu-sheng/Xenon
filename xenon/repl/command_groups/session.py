@@ -8,6 +8,7 @@ context inspection, and configuration inspection.
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from xenon.repl.command_groups.common import confirm_action
@@ -268,7 +269,7 @@ register_command("/resume", "列出 / 恢复保存的会话", "/resume [序号�
 @command_handler("/resume")
 def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
     """断点恢复：列出所有会话，或按序号/名称加载指定会话。"""
-    from xenon.repl.session import list_sessions, load_session, get_session_age
+    from xenon.repl.session import list_sessions, load_session, get_session_age, _load_and_migrate
 
     repl = session_state.get("_repl")
     if not repl:
@@ -315,14 +316,18 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         idx = int(arg)
         if idx < 1 or idx > len(sessions):
             return f"❌ 序号 {idx} 超出范围（共 {len(sessions)} 个会话）。"
-        name = sessions[idx - 1]["name"]
+        # Fix #75: 直接从路径加载，避免 name 字段与实际文件名不匹配
+        session_path = Path(sessions[idx - 1]["path"])
+        try:
+            data = _load_and_migrate(session_path)
+        except FileNotFoundError:
+            return f"❌ 会话文件不存在: {session_path}"
     else:
-        name = arg
-
-    try:
-        data = load_session(name)
-    except FileNotFoundError:
-        return f"❌ 会话 '{name}' 不存在。使用 /resume (无参数) 查看全部。"
+        # 命名模式：通过 load_session(name) 加载
+        try:
+            data = load_session(arg)
+        except FileNotFoundError:
+            return f"❌ 会话 '{arg}' 不存在。使用 /resume (无参数) 查看全部。"
 
     try:
         history = data.get("history", [])
