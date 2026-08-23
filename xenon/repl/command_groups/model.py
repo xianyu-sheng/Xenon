@@ -60,7 +60,11 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
     # 无参数 → 交互式选择
     from xenon.repl.provider_registry import get_configured_providers
     configured = get_configured_providers()
-    if not configured:
+
+    # v0.8.5: 同时读取 models.yaml 中已注册的模型
+    existing_models = registry.list_models()
+
+    if not configured and not existing_models:
         return "❌ 尚未配置任何 API Key，请先执行 /setup 配置"
 
     table = _Table(show_header=True, header_style="bold")
@@ -71,12 +75,30 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
 
     all_models: list[tuple[str, str, str]] = []  # (model_id, short_name, provider_key)
     idx = 1
+
+    # 1. 先显示 models.yaml 中已配置的模型
+    if existing_models:
+        for model_config in existing_models:
+            provider = model_config.model_id.split("/")[0] if "/" in model_config.model_id else "custom"
+            model_name = model_config.alias or model_config.model_id.split("/")[-1]
+            hint = f"✅ 已配置 (weight={model_config.weight})"
+            table.add_row(str(idx), provider, model_name, hint)
+            all_models.append((model_config.model_id, model_config.alias, provider))
+            idx += 1
+
+    # 2. 再显示从 providers 实时拉取的模型
     for p in configured:
         if not p.models:
             table.add_row("-", p.name, "实时获取失败", p.model_error or "请检查 API Key / 网络 / base_url")
             continue
         for m in p.models:
             model_id = f"{p.key}/{m}"
+            # 检查是否已在 models.yaml 中
+            already_configured = any(
+                mc.model_id == model_id for mc in existing_models
+            )
+            if already_configured:
+                continue  # 跳过重复项
             hint = _model_hint_local(m)
             table.add_row(str(idx), p.name, m, hint)
             all_models.append((model_id, m, p.key))
