@@ -421,10 +421,18 @@ def _cmd_model(*, session_state: dict, registry: ModelRegistry, **kwargs: Any) -
 
     selected = models[choice - 1]
     registry.role_priority["planner"] = [selected.alias]
-    # v0.5.2: 清除该模型的失败标记，允许重新调用
+
+    # v0.8.5: 同时设置 _preferred_model_ids，确保模型真正切换
     repl = session_state.get("_repl")
-    if repl and hasattr(repl, "_failed_models"):
-        repl._failed_models.discard(selected.model_id)
+    if repl:
+        repl._preferred_model_ids = [selected.model_id]
+        # 同步到 auto_router
+        if hasattr(repl, 'auto_router') and repl.auto_router:
+            repl.auto_router._preferred_model_ids = [selected.model_id]
+        # v0.5.2: 清除该模型的失败标记，允许重新调用
+        if hasattr(repl, "_failed_models"):
+            repl._failed_models.discard(selected.model_id)
+
     return f"✅ 已切换到: {selected.alias} ({selected.model_id})"
 
 
