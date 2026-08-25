@@ -1243,6 +1243,11 @@ class REPL:
                 for model_name in p.models[:_max_per_provider]:  # top N per provider (P0: 可配置)
                     model_id = f"{p.key}/{model_name}"
                     alias = model_name.replace(".", "-")
+                    # 探测出的模型如果已由 models.yaml / credentials.yaml 配置过
+                    # （裸名相同、provider 前缀不同），跳过整条注册：否则池与
+                    # 注册表会各留一份同模型条目，且探测项缺少 max_tokens 等字段。
+                    if self.registry.get_model_by_id(model_id) is not None:
+                        continue
                     # Register to pool (if not already there)
                     if not self.model_pool.get(alias):
                         self.model_pool.register(
@@ -1250,7 +1255,7 @@ class REPL:
                             api_key=p.api_key, base_url=p.base_url,
                         )
                     # Also ensure registry has it (backward compat)
-                    if not self.registry.list_models() or alias not in {m.alias for m in self.registry.list_models()}:
+                    if alias not in {m.alias for m in self.registry.list_models()}:
                         self.registry.add_model(model_id, alias)
                         if "planner" not in self.registry.role_priority:
                             self.registry.role_priority["planner"] = []
@@ -3218,8 +3223,15 @@ def start_repl(
     """
     registry = ModelRegistry()
 
+    # 未显式 --config 时也要加载默认 models.yaml：它是手工配置的真相源，
+    # 承载 max_tokens / weight / reasoning_effort 等 credentials.yaml 派生
+    # 路径给不出的字段。漏掉它会让用户精心配置的模型被同名派生项取代。
     if config_path:
         registry.load_from_file(config_path)
+    else:
+        default_models = Path.home() / ".xenon" / "models.yaml"
+        if default_models.exists():
+            registry.load_from_file(default_models)
 
     # v0.8.5: 统一配置源 - 从 credentials.yaml 的 providers 段加载模型
     # models.yaml 中的配置优先（已在 load_from_file 中加载）
