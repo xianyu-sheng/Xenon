@@ -493,10 +493,14 @@ class ToolNode(
             for_write: True 表示写入操作（更严格），False 表示读取操作
 
         Returns:
-            验证通过的 Path 对象（保留原始路径格式）
+            验证通过的 resolved Path 对象（已解析符号链接）
 
         Raises:
             SecurityError: 路径不安全
+
+        Security:
+            返回 resolved 路径防止符号链接逃逸。调用者必须使用返回值
+            而不是原始 file_path，否则回滚等操作可能写入沙箱外。
         """
         if not file_path:
             raise SecurityError("文件路径不能为空")
@@ -573,8 +577,11 @@ class ToolNode(
                         f"禁止读取敏感凭证文件: {resolved}"
                     )
 
-        # 返回原始路径格式（不调用 resolve，保留 Windows 短路径等）
-        return path
+        # 返回 resolved 路径防止符号链接逃逸（CVE-2026-XXXX 修复）
+        # 历史上返回原始 path 是为了"保留 Windows 短路径等"，但这造成了
+        # 安全漏洞：验证用 resolved 但操作用 path，攻击者可通过符号链接逃逸。
+        # 现在统一返回 resolved，调用者必须使用返回值而不是原始 file_path。
+        return resolved
 
     def _validate_command(self, cmd: str) -> None:
         """验证命令是否安全。
@@ -697,6 +704,11 @@ class ToolNode(
                     self.action_type, self._exec_dynamic_tool(dynamic, context)
                 )
             raise ValueError(f"[{self.id}] 不支持的 action_type: {self.action_type}")
+
+        # SecurityError 继续向上抛出：ToolExecutor 已把它归类为终端错误
+        # （_TERMINAL_PATTERNS 匹配「路径越界」等），不重试、不计入断路器。
+        # 在此吞成 success=False 的返回值反而会让直接调用 execute() 的调用方
+        # （含既有安全边界测试）失去「拦截」这一信号。
         return enrich_tool_result(self.action_type, handler(context))
 
     # ── 命令执行 ──────────────────────────────────────────
