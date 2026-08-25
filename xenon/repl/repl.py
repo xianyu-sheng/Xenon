@@ -191,7 +191,9 @@ class REPL:
 
         # v0.5.0: 工具权限门控
         from xenon.repl.permissions import PermissionGate, PermissionMode
-        self._permission_gate = PermissionGate(mode=PermissionMode.DEFAULT)
+        # 默认 ACCEPT_EDITS：文件编辑/写入自动放行，Shell 和危险 git 仍需确认。
+        # 这在保留关键安全边界的同时，消除了编码工作流中高频写入操作的确认摩擦。
+        self._permission_gate = PermissionGate(mode=PermissionMode.ACCEPT_EDITS)
         self._permission_gate.set_confirm_callback(self._confirm_tool)
         self.agent_context.set_tool_checkpoint_callback(
             self._persist_tool_checkpoint
@@ -2355,6 +2357,12 @@ class REPL:
                 request_options["base_url"] = model_config.base_url
             if model_config.reasoning_effort:
                 request_options["reasoning_effort"] = model_config.reasoning_effort
+        else:
+            # 解析不到配置时不要静默沿用 llm_client 的 4096 默认值——那会截断
+            # 长回答，用户续问时得再付一次完整 prompt 前缀的钱。
+            logger.warning(
+                "模型 %s 未找到运行时配置，生成预算将使用上游默认值", model_id
+            )
 
         # 流式阶段：显示 spinner + 实时 token 计数
         with Live(
@@ -2400,6 +2408,10 @@ class REPL:
                 request_options["base_url"] = model_config.base_url
             if model_config.reasoning_effort:
                 request_options["reasoning_effort"] = model_config.reasoning_effort
+        else:
+            logger.warning(
+                "模型 %s 未找到运行时配置，生成预算将使用上游默认值", model_id
+            )
         response = chat_completion(model_id, messages, **request_options)
 
         return response
@@ -3171,6 +3183,9 @@ def _maybe_start_config_watcher(repl: "REPL", registry: ModelRegistry,
     def _on_reload() -> None:
         try:
             registry.load_from_file(watch_path)
+            # 与启动路径保持同一套配置源：只重载 models.yaml 会让
+            # credentials.yaml 声明的中转站模型在热加载后消失。
+            registry.load_from_credentials()
             cfg = registry.export_config().get("models", {})
             repl.model_pool.from_config(cfg)
             logger.info("配置已热加载(inotify): %d 个模型", len(cfg))

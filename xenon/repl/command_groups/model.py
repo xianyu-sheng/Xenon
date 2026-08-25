@@ -303,6 +303,10 @@ def _cmd_reload_models(*, args: str, registry: ModelRegistry, session_state: dic
         return "❌ 调用池不可用"
 
     registry.load_from_file(path)
+    # 启动时(repl.py)是 load_from_file + load_from_credentials 两步。这里只做
+    # 第一步会让 credentials.yaml 声明的中转站模型在重载后凭空消失，调用池也
+    # 跟着丢掉它们。两个入口必须加载同一套配置源。
+    registry.load_from_credentials()
     models_cfg = registry.export_config().get("models", {})
     pool.from_config(models_cfg)
     return f"✅ 已从 {path} 重载 {len(models_cfg)} 个模型到调用池"

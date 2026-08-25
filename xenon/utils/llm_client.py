@@ -626,6 +626,13 @@ def _load_custom_provider_config(provider_key: str) -> dict | None:
 
     v0.5.3: 兼容旧版本产生的空 key（纯中文名称注册时 key 被清空）。
     查找顺序：exact key → "custom"（修补后的默认 key）→ 空字符串（旧版本遗留）。
+
+    自定义模型商历史上有两个段名：``/setup`` 写 ``_custom_providers``，而
+    ``providers`` 段由外部集成（integration_cli）写入。ModelRegistry 只读
+    ``providers`` 并据此注册模型，本函数原先只读 ``_custom_providers``——于是
+    ``providers`` 段声明的模型商能注册出模型、却无法解析出 endpoint，选中即报
+    「不支持的 provider」。两段现在都读，``_custom_providers`` 优先，使配置源
+    在注册层与调用层之间保持一致。
     """
     try:
         import yaml as _yaml
@@ -634,13 +641,21 @@ def _load_custom_provider_config(provider_key: str) -> dict | None:
             return None
         with open(path, encoding="utf-8") as f:
             data = _yaml.safe_load(f) or {}
-        custom_providers = data.get("_custom_providers", {})
+        custom_providers = data.get("_custom_providers")
+        custom_providers = custom_providers if isinstance(custom_providers, dict) else {}
+        declared = data.get("providers")
+        declared = declared if isinstance(declared, dict) else {}
         # v0.5.3: 兼容空 key 和修补后的 "custom" key
         cfg = (
             custom_providers.get(provider_key)
+            or declared.get(provider_key)
             or custom_providers.get("custom")
             or custom_providers.get("")
         )
+        if not isinstance(cfg, dict) or not cfg.get("base_url"):
+            # 没有 base_url 的条目无法构成 endpoint，交由调用方报「不支持的
+            # provider」，而不是返回半个配置导致更晚、更难懂的失败。
+            return None
         # 如果通过空 key 找到，自动修复为 "custom"（下次保存时生效）
         if cfg is not None and not custom_providers.get(provider_key):
             custom_providers["custom"] = cfg
