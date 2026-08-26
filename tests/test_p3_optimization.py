@@ -16,14 +16,18 @@ from xenon.repl.status_bar import StatusBar
 
 
 def test_parse_pct_string_with_percent_sign():
-    """测试_parse_pct("0.5%")返回0.5（即0.5%）。
+    """测试_parse_pct("0.5%")返回0.005（即0.5%的比例值）。
 
-    P3-Low 2.8 修复：带百分号的字符串应直接返回数值本身，
-    例如 "0.5%" 返回 0.5（表示0.5%），而不是将其作为比例乘以100。
+    P3-Low 2.8 修复：统一返回0.0-1.0范围的比例值。
+    "0.5%" → 0.005（0.5% = 0.5/100 = 0.005）
+    "50%" → 0.5（50% = 50/100 = 0.5）
 
     状态：✓ 已实现
     """
     result = StatusBar._parse_pct("0.5%")
+    assert result == 0.005, f"Expected 0.005, got {result}"
+
+    result = StatusBar._parse_pct("50%")
     assert result == 0.5, f"Expected 0.5, got {result}"
 
 

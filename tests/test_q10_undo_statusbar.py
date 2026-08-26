@@ -141,11 +141,13 @@ def test_render_no_warning_when_not_needed():
 # --------------------------- _parse_pct ---------------------------
 
 def test_parse_pct_string_percent():
-    assert StatusBar._parse_pct("85.0%") == 85.0
+    # P3-Low 修复：_parse_pct 现在返回 0.0-1.0 范围
+    assert StatusBar._parse_pct("85.0%") == 0.85
 
 
 def test_parse_pct_float_ratio():
-    assert StatusBar._parse_pct(0.85) == 85.0
+    # P3-Low 修复：_parse_pct 现在返回 0.0-1.0 范围
+    assert StatusBar._parse_pct(0.85) == 0.85
 
 
 def test_parse_pct_invalid_returns_zero():

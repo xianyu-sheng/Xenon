@@ -44,7 +44,9 @@ _CJK_RE = re.compile(
 def _estimate_tokens(text: str) -> int:
     """估算 token 数（模块级，供 ``ConversationTurn`` 缓存与 ``ContextManager`` 共用）。
 
-    规则（注释与代码统一，§8.26.2 修正原注释 len/3 与代码 len//2 不一致）：
+    优先使用 tiktoken 进行精确计算，失败时回退到启发式估算。
+
+    启发式规则：
     - CJK 字符（含扩展 A/兼容/假名/韩文）约 2 token/字；
     - 英文约 1.3 token/word；
     - 代码/JSON 密集按 0.4×chars；
@@ -53,6 +55,16 @@ def _estimate_tokens(text: str) -> int:
     if not text:
         return 0
 
+    # 尝试使用 tiktoken 进行精确计算
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except Exception as e:
+        # tiktoken 失败，回退到启发式估算
+        logger.debug("tiktoken 计算失败，回退启发式估算: %s", e)
+
+    # 启发式估算
     cjk_count = len(_CJK_RE.findall(text))
     words = len(text.split())
     chars = len(text)
@@ -713,7 +725,7 @@ class ContextManager:
             total = sum(turn.token_count for turn in self.history)
         # P0-Critical: 当使用启发式估算时，更新来源标记
         if total > 0 and self._last_usage_source == "none":
-            self._last_usage_source = "heuristic"
+            self._last_usage_source = "estimated"
         return total
 
     def real_usage(self) -> dict[str, int] | None:
@@ -982,7 +994,7 @@ class ContextManager:
             # P0-Critical: 压缩后重新估算累计 token，并更新来源标记
             estimated = sum(turn.token_count for turn in self.history)
             self._cumulative_tokens = estimated
-            self._last_usage_source = "heuristic"
+            self._last_usage_source = "estimated"
         self._persist_compact_md(summary, session_id)
         # Problem 5: compact 后通知状态栏刷新（锁外调用，避免回调死锁）
         self._notify_status_change()
