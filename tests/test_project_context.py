@@ -110,8 +110,12 @@ class TestProjectContext:
         summary = pc.get_summary()
         assert "Python" in summary
 
-    def test_refresh(self, tmp_path):
+    def test_refresh(self, tmp_path, monkeypatch):
         """刷新项目上下文。"""
+        # 隔离全局配置，使用临时目录作为 HOME
+        monkeypatch.setenv("HOME", str(tmp_path / "fake_home"))
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "fake_config"))
+
         (tmp_path / "pyproject.toml").write_text("")
         pc = ProjectContext()
         pc.detect(tmp_path)
