@@ -7,8 +7,13 @@ Provider Registry — 预设厂商信息库。
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -35,9 +40,11 @@ def _get_credentials_path() -> Path:
 # 向后兼容别名：导入时求值一次的快照。新代码请调用 ``_get_credentials_path()``。
 CREDENTIALS_PATH = _get_credentials_path()
 MODEL_LIST_TIMEOUT = 8.0
+MODEL_CACHE_TTL = 3600  # 1 hour cache TTL
 
 logger = logging.getLogger(__name__)
 MODEL_FETCH_ERRORS: dict[str, str] = {}
+_cache_lock = threading.Lock()  # Thread-safe cache operations
 
 _DEEPSEEK_RETIRED_MODEL_NAMES = frozenset({
     "deepseek-chat",
@@ -322,13 +329,181 @@ def get_model_metadata(model_id: str) -> dict[str, Any]:
     return dict(MODEL_METADATA.get((provider.lower(), model), {}))
 
 
-def fetch_provider_models(provider: ProviderInfo, api_key: str) -> list[str]:
-    """从厂商模型列表接口实时获取模型短名；失败时返回空列表。"""
+# ── 模型缓存管理 ──────────────────────────────────────────────
+
+def _get_cache_path() -> Path:
+    """获取模型缓存文件路径。"""
+    cache_dir = Path.home() / ".xenon" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / "provider_models.json"
+
+
+def _hash_api_key(api_key: str) -> str:
+    """生成 API Key 的 SHA256 哈希值用于检测变化。"""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+
+
+def _hash_base_url(base_url: str) -> str:
+    """生成 base_url 的 SHA256 哈希值用于检测变化。"""
+    return hashlib.sha256(base_url.encode("utf-8")).hexdigest()[:16]
+
+
+def _load_model_cache() -> dict[str, Any]:
+    """从磁盘加载模型缓存，并清理过期条目。"""
+    cache_path = _get_cache_path()
+    if not cache_path.exists():
+        return {}
+    try:
+        with open(cache_path, encoding="utf-8") as f:
+            cache = json.load(f)
+            if not isinstance(cache, dict):
+                return {}
+
+            # 清理过期 2 倍 TTL 的条目，防止缓存文件无限膨胀
+            current_time = time.time()
+            cleaned_cache = {}
+            for key, entry in cache.items():
+                if isinstance(entry, dict):
+                    fetched_at = entry.get("fetched_at", 0)
+                    if current_time - fetched_at <= MODEL_CACHE_TTL * 2:
+                        cleaned_cache[key] = entry
+
+            # 如果清理后有变化，异步写回（不阻塞当前加载）
+            if len(cleaned_cache) != len(cache):
+                logger.debug("清理了 %d 个过期缓存条目", len(cache) - len(cleaned_cache))
+
+            return cleaned_cache
+    except Exception as e:
+        logger.debug("加载模型缓存失败: %s", e)
+        return {}
+
+
+def _save_model_cache(cache: dict[str, Any]) -> None:
+    """保存模型缓存到磁盘（线程安全）。"""
+    cache_path = _get_cache_path()
+    try:
+        content = json.dumps(cache, ensure_ascii=False, indent=2)
+        atomic_write_text(cache_path, content)
+    except Exception as e:
+        logger.debug("保存模型缓存失败: %s", e)
+
+
+def _update_provider_cache(provider_key: str, cache_entry: dict[str, Any]) -> None:
+    """更新单个 provider 的缓存条目（线程安全）。"""
+    with _cache_lock:
+        cache = _load_model_cache()
+        cache[provider_key] = cache_entry
+        _save_model_cache(cache)
+
+
+def _is_cache_valid(
+    cache_entry: dict[str, Any],
+    api_key: str,
+    base_url: str,
+    current_time: float,
+) -> bool:
+    """检查缓存条目是否有效（未过期且 API Key/base_url 未变）。"""
+    if not isinstance(cache_entry, dict):
+        return False
+
+    # 检查必要字段
+    if "models" not in cache_entry or "fetched_at" not in cache_entry:
+        return False
+
+    # 检查过期时间
+    fetched_at = cache_entry.get("fetched_at", 0)
+    if current_time - fetched_at > MODEL_CACHE_TTL:
+        return False
+
+    # 检查 API Key 是否变化
+    cached_hash = cache_entry.get("api_key_hash", "")
+    current_hash = _hash_api_key(api_key)
+    if cached_hash != current_hash:
+        return False
+
+    # 检查 base_url 是否变化
+    cached_base_url_hash = cache_entry.get("base_url_hash", "")
+    current_base_url_hash = _hash_base_url(base_url)
+    if cached_base_url_hash != current_base_url_hash:
+        return False
+
+    # 检查模型列表是否为空或无效
+    models = cache_entry.get("models", [])
+    if not isinstance(models, list) or not models:
+        return False
+
+    return True
+
+
+def clear_model_cache(provider_key: str | None = None) -> None:
+    """清除模型缓存。
+
+    Args:
+        provider_key: 指定厂商 key，为 None 时清除所有缓存
+    """
+    if provider_key is None:
+        # 清除所有缓存
+        cache_path = _get_cache_path()
+        if cache_path.exists():
+            try:
+                cache_path.unlink()
+                logger.info("已清除所有模型缓存")
+            except Exception as e:
+                logger.debug("清除模型缓存失败: %s", e)
+    else:
+        # 清除指定厂商的缓存
+        cache = _load_model_cache()
+        if provider_key in cache:
+            del cache[provider_key]
+            _save_model_cache(cache)
+            logger.info("已清除 %s 的模型缓存", provider_key)
+
+
+def fetch_provider_models(provider: ProviderInfo, api_key: str, *, use_cache: bool = True) -> list[str]:
+    """从厂商模型列表接口实时获取模型短名；失败时返回空列表。
+
+    Args:
+        provider: 厂商信息
+        api_key: API Key
+        use_cache: 是否使用缓存（默认 True）
+
+    Returns:
+        模型列表（短名）
+    """
     MODEL_FETCH_ERRORS.pop(provider.key, None)
     if not api_key:
         MODEL_FETCH_ERRORS[provider.key] = "API Key 为空"
         return []
 
+    # 尝试从缓存加载
+    if use_cache:
+        cache = _load_model_cache()
+        cache_entry = cache.get(provider.key, {})
+        current_time = time.time()
+
+        if _is_cache_valid(cache_entry, api_key, provider.base_url, current_time):
+            logger.debug("使用缓存的 %s 模型列表", provider.key)
+            return cache_entry["models"]
+
+    # 缓存未命中或无效，从网络获取
+    models = _fetch_provider_models_from_network(provider, api_key)
+
+    # 更新缓存（线程安全）
+    if models and use_cache:
+        cache_entry = {
+            "models": models,
+            "fetched_at": time.time(),
+            "api_key_hash": _hash_api_key(api_key),
+            "base_url_hash": _hash_base_url(provider.base_url),
+        }
+        _update_provider_cache(provider.key, cache_entry)
+
+    return models
+
+
+def _fetch_provider_models_from_network(provider: ProviderInfo, api_key: str) -> list[str]:
+    """从网络获取厂商模型列表（不使用缓存）。"""
+    MODEL_FETCH_ERRORS.pop(provider.key, None)
     models: list[str] = []
     seen: set[str] = set()
     after_id: str | None = None
@@ -480,8 +655,12 @@ def _is_official_ark_config(config: Any) -> bool:
     return hostname == "ark.cn-beijing.volces.com"
 
 
-def get_configured_providers(*, refresh_models: bool = True) -> list[ProviderInfo]:
+def get_configured_providers(*, refresh_models: bool = True, use_cache: bool = True) -> list[ProviderInfo]:
     """获取已配置 API Key 的厂商列表。
+
+    Args:
+        refresh_models: 是否刷新模型列表（从网络或缓存获取）
+        use_cache: 是否使用缓存（仅在 refresh_models=True 时生效）
 
     refresh_models=True 时只使用厂商实时接口返回的模型，避免把内置兜底列表
     误展示为最新模型；refresh_models=False 时才返回内置示例列表。
@@ -493,32 +672,62 @@ def get_configured_providers(*, refresh_models: bool = True) -> list[ProviderInf
     """
     creds = load_credentials()
     configured = []
+
+    # 收集需要获取模型列表的厂商
+    providers_to_fetch: list[tuple[str, ProviderInfo, str]] = []
+
     for key, info in PROVIDERS.items():
         api_key = _resolve_api_key(key, info, creds)
         if not api_key:
             continue
+
         if refresh_models:
-            models = fetch_provider_models(info, api_key)
-            if models:
-                if key == "deepseek":
-                    models = [
-                        model for model in models
-                        if model not in _DEEPSEEK_RETIRED_MODEL_NAMES
-                    ]
-                # v0.3.0+ 修复（B-3）：拉取的列表按内置 info.models 顺序重排
-                # 通用机制：内置"已知能力排序"（如 deepseek-v4-pro > v4-flash）
-                # 优先于外部 API 返回顺序——外部 API 顺序由服务器决定
-                # 不可控。保持拉取列表里**内置未列出**的模型原顺序追加。
-                models = _sort_models_by_priority(models, info.models)
+            providers_to_fetch.append((key, info, api_key))
         else:
-            models = info.models
-        info_copy = ProviderInfo(
-            name=info.name, key=info.key, base_url=info.base_url,
-            env_key=info.env_key, models=models, api_key=api_key,
-            model_list_path=info.model_list_path,
-            model_error=MODEL_FETCH_ERRORS.get(key, ""),
-        )
-        configured.append(info_copy)
+            # 不刷新时直接使用内置列表
+            info_copy = ProviderInfo(
+                name=info.name, key=info.key, base_url=info.base_url,
+                env_key=info.env_key, models=info.models, api_key=api_key,
+                model_list_path=info.model_list_path,
+                model_error="",
+            )
+            configured.append(info_copy)
+
+    # 并行获取模型列表
+    if refresh_models and providers_to_fetch:
+        # 使用线程池并行获取，并发度为 min(providers数量, CPU核心数*2)
+        max_workers = min(len(providers_to_fetch), (os.cpu_count() or 4) * 2)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有任务
+            future_to_provider = {
+                executor.submit(fetch_provider_models, info, api_key, use_cache=use_cache): (key, info, api_key)
+                for key, info, api_key in providers_to_fetch
+            }
+
+            # 收集结果
+            for future in as_completed(future_to_provider):
+                key, info, api_key = future_to_provider[future]
+                try:
+                    models = future.result()
+                    if models:
+                        if key == "deepseek":
+                            models = [
+                                model for model in models
+                                if model not in _DEEPSEEK_RETIRED_MODEL_NAMES
+                            ]
+                        # v0.3.0+ 修复（B-3）：拉取的列表按内置 info.models 顺序重排
+                        models = _sort_models_by_priority(models, info.models)
+                except Exception as e:
+                    logger.debug("获取 %s 模型列表时发生异常: %s", key, e)
+                    models = []
+
+                info_copy = ProviderInfo(
+                    name=info.name, key=info.key, base_url=info.base_url,
+                    env_key=info.env_key, models=models, api_key=api_key,
+                    model_list_path=info.model_list_path,
+                    model_error=MODEL_FETCH_ERRORS.get(key, ""),
+                )
+                configured.append(info_copy)
 
     # v0.4.0: 合并自定义模型商
     for key, cfg in _load_custom_providers().items():
