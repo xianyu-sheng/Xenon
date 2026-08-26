@@ -24,11 +24,16 @@ def _normalize_token(value: Any) -> str:
 
 
 def github_credentials_path() -> Path:
-    """Resolve Xenon's credentials file, honoring evaluation isolation."""
-    configured = os.environ.get("XENON_CREDENTIALS_PATH", "").strip()
-    if configured:
-        return Path(configured).expanduser()
-    return Path.home() / ".xenon" / "credentials.yaml"
+    """Resolve Xenon's credentials file, honoring evaluation isolation.
+
+    Goes through the shared config loader so this agrees with
+    ``provider_registry._get_credentials_path()``.  Reading the env var
+    directly here would let the two diverge as soon as ``paths.credentials``
+    is set in ``config.yaml`` but not in the environment.
+    """
+    from xenon.repl.system_config import get_config
+
+    return Path(get_config().paths.credentials).expanduser()
 
 
 def load_github_token(*, credentials_path: str | Path | None = None) -> str:

@@ -72,7 +72,7 @@ class TestContextManager:
         # 英文：4 个 word
         assert mgr.estimate_tokens("hello world foo bar") >= 4
         # 中文：4 个字 * 1.5
-        assert mgr.estimate_tokens("你好世界") >= 6
+        assert mgr.estimate_tokens("你好世界") >= 4
 
     def test_usage_ratio(self):
         mgr = ContextManager(max_tokens=100)
@@ -82,7 +82,8 @@ class TestContextManager:
 
     def test_needs_compact(self):
         mgr = ContextManager(max_tokens=100, compact_threshold=0.5)
-        mgr.add_user_message("a" * 100)
+        # 使用多样化文本避免 tiktoken 高压缩率
+        mgr.add_user_message("The quick brown fox jumps over the lazy dog. " * 5)
         assert mgr.needs_compact() is True
 
     def test_compact(self):
@@ -127,10 +128,10 @@ class TestContextManager:
         # F3 三层策略：需 usage_ratio 落在 60-85%（Tier 2）才会触发压缩。
         # 无 model_priority 时 Tier 2 的 6 段 LLM 路径无可用模型 → 回退 _auto_summary。
         mgr = ContextManager(max_tokens=250)
-        # 需要超过 3 轮才能触发自动压缩
+        # 使用更多文本确保 usage_ratio > 60%
         for i in range(4):
-            mgr.add_user_message(f"如何写快速排序？步骤 {i+1}")
-            mgr.add_assistant_message(f"快速排序是一种分治算法...步骤 {i+1}")
+            mgr.add_user_message(f"如何写快速排序？请详细说明每一步的实现细节和算法复杂度分析。步骤 {i+1}")
+            mgr.add_assistant_message(f"快速排序是一种分治算法，通过选择基准元素进行分区操作...步骤 {i+1}")
 
         summary = mgr.compact()
         assert "快速排序" in summary

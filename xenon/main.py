@@ -133,6 +133,14 @@ def cli() -> None:
         help="显示详细日志",
     )
     parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="list",
+        default=None,
+        metavar="序号或名称",
+        help="恢复历史会话（不带参数列出可选会话，带序号或名称直接恢复）",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__import__('xenon').__version__}",
@@ -151,6 +159,22 @@ def cli() -> None:
     logging.basicConfig(level=log_level, handlers=[log_handler])
 
     cmd = args.command_or_workflow
+
+    # --resume 在进入 REPL 之前处理：列表形态直接打印后退出，
+    # 序号/名称形态先校验存在性，避免无效参数被静默忽略后进了空白 REPL。
+    resume_arg = getattr(args, "resume", None)
+    if resume_arg is not None:
+        if cmd not in (None, "chat"):
+            console.print(
+                f"[red]--resume 只能用于交互式会话（xenon 或 xenon chat），"
+                f"不能与 '{cmd}' 一起使用。[/red]"
+            )
+            sys.exit(2)
+        if resume_arg == "list":
+            _print_session_list()
+            return
+        resume_arg = _validate_resume_target(resume_arg)
+        args.resume = resume_arg
 
     # 路由
     if cmd == "run":
@@ -184,6 +208,93 @@ def cli() -> None:
         _cmd_chat(args)
 
 
+def _print_session_list() -> None:
+    """`xenon --resume`（无参数）：打印可恢复的会话表，不进入 REPL。
+
+    表格列与 /resume 无参数分支保持一致（# / 名称 / 时间 / 消息 / 范式），
+    这样命令行和 REPL 里看到的是同一张表、同一套序号。
+    """
+    from xenon.repl.session import get_session_age, list_sessions
+
+    sessions = list_sessions()
+    if not sessions:
+        console.print(
+            "\n[yellow]没有已保存的会话。[/yellow]\n"
+            "[dim]直接运行 xenon 开始新对话，退出时会自动保存。[/dim]"
+        )
+        return
+
+    table = Table(
+        title="已保存的会话 · 用 xenon --resume <序号> 恢复",
+        border_style="dim #64748b",
+    )
+    table.add_column("#", style="bold cyan", width=3, justify="right")
+    table.add_column("名称", style="#67e8f9", max_width=32)
+    table.add_column("时间", style="dim #94a3b8", width=12)
+    table.add_column("消息", justify="right", width=6)
+    table.add_column("范式", style="dim", width=10)
+
+    for i, s in enumerate(sessions, 1):
+        display_name = s["name"]
+        if display_name.startswith("_auto"):
+            display_name = "[上次自动保存]"
+        age = get_session_age(s) or str(s.get("saved_at", ""))[:16]
+        table.add_row(
+            str(i), display_name, age,
+            str(s["messages"]), s.get("paradigm", ""),
+        )
+
+    console.print()
+    console.print(table)
+    console.print(
+        "[dim]恢复指定会话: [bold]xenon --resume <序号>[/bold]"
+        " 或 [bold]xenon --resume <名称>[/bold][/dim]"
+    )
+
+
+def _validate_resume_target(target: str) -> str:
+    """校验 --resume 的序号/名称确实指向一个会话，无效则报错退出。
+
+    只做存在性校验并把「访问」记在账上，实际恢复交给 REPL 里的 /resume
+    处理器完成，避免恢复逻辑在 CLI 和 REPL 两处分叉。
+    """
+    from xenon.repl.session import list_sessions, touch_session
+
+    sessions = list_sessions()
+    arg = target.strip()
+
+    if not arg:
+        console.print("[red]--resume 的参数不能为空。[/red]")
+        sys.exit(2)
+
+    if arg.isdigit():
+        idx = int(arg)
+        if not sessions:
+            console.print(
+                "[red]没有已保存的会话，无法按序号恢复。[/red]\n"
+                "[dim]用 xenon --resume 查看当前可恢复的会话。[/dim]"
+            )
+            sys.exit(2)
+        if idx < 1 or idx > len(sessions):
+            console.print(
+                f"[red]序号 {idx} 超出范围（共 {len(sessions)} 个会话）。[/red]\n"
+                "[dim]用 xenon --resume 查看可用序号。[/dim]"
+            )
+            sys.exit(2)
+        # 序号分支在 REPL 里走 _load_and_migrate（不计访问），这里补记一次，
+        # 保证按序号恢复和按名称恢复的热度统计口径一致。
+        touch_session(Path(sessions[idx - 1]["path"]))
+        return arg
+
+    if not any(s["name"] == arg for s in sessions):
+        console.print(
+            f"[red]会话 '{arg}' 不存在。[/red]\n"
+            "[dim]用 xenon --resume 查看全部可恢复的会话。[/dim]"
+        )
+        sys.exit(2)
+    return arg
+
+
 def _cmd_chat(args: argparse.Namespace) -> None:
     """启动交互式 REPL。"""
     from xenon.repl.repl import start_repl
@@ -194,6 +305,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         system_prompt=getattr(args, "system_prompt", None),
         config_path=getattr(args, "config", None),
         verbose=getattr(args, "verbose", False),
+        resume=getattr(args, "resume", None),
     )
 
 

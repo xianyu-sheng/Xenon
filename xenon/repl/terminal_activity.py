@@ -20,6 +20,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Iterator, TextIO
 
+from xenon.repl.system_config import get_config
+
 
 class TerminalActivityState(Enum):
     """User-visible execution states for the terminal tab."""
@@ -69,7 +71,7 @@ class TerminalActivityIndicator:
         self._interval = max(0.08, float(interval))
         self._enabled = self._detect_enabled() if enabled is None else bool(enabled)
         self._ascii_only = (
-            os.environ.get("XENON_TERMINAL_ASCII") == "1"
+            get_config().interaction.terminal_ascii
             if ascii_only is None
             else bool(ascii_only)
         )

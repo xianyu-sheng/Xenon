@@ -98,8 +98,9 @@ _CHAT_OUTPUT = re.compile(
     re.IGNORECASE,
 )
 _NO_WRITE = re.compile(
-    r"(?:不要|无需|不需要|禁止|不)(?:再)?(?:写入|保存|创建|新建|落盘)(?:任何)?(?:到)?(?:文件|磁盘)?"
-    r"|(?:不|无需)(?:写|存)(?:入|到)?(?:任何)?文件"
+    r"(?:不要|不用|别|勿|无需|不需要|禁止|不)(?:再)?"
+    r"(?:写入|保存|创建|新建|落盘)(?:任何)?(?:到)?(?:文件|磁盘)?"
+    r"|(?:不要|不用|别|勿|无需|不)(?:再)?(?:写|存|建)(?:入|到)?(?:任何)?文件"
     r"|(?:do\s+not|don't|without)\s+(?:write|save|create|modify)(?:\s+(?:any|a|the))?\s+files?"
     r"|\bno\s+file\s+(?:write|changes?)\b",
     re.IGNORECASE,
@@ -168,6 +169,53 @@ _READ_ONLY = re.compile(
     re.IGNORECASE,
 )
 
+# ── 隐含意图（显式动词缺失时的兜底） ──────────────────────
+# 上面的 _WRITE / _READ_ONLY 要求用户说出「写入/保存/修改」这类显式动词。
+# 但真实请求里目标往往由句式承载而非动词：「我需要一个 config.yaml」
+# 「帮我把这段存起来」表达的是写盘意图，却一个显式写入动词都没有，此前
+# 被判成 ANSWER_ONLY——LLM 拿不到写工具，只能把内容贴在对话里，用户看到的
+# 就是「明明让他写文件，他却只是聊天」。
+#
+# 这里刻意不枚举业务领域，只描述语言结构：需求句式（需要/想要/给我）+
+# 文件实体（扩展名/路径/目录），或处置句式（把…存/放/整理）。
+_IMPLICIT_WRITE = re.compile(
+    # 需求句式 + 具名文件：「我需要一个 config.yaml」「给我一份 README.md」
+    # 三条边界，缺一条就会误判：
+    #  1. 裸的「要/想」要排除前置否定，否则「不要写文件」被读成授权；
+    #  2. 需求动词后不能紧跟生成动词——「想写一个脚本」要的是代码本身，
+    #     不是磁盘上的文件，属于 write_code 的仅回答语义；
+    #  3. 实体必须是**带扩展名的具名文件**。裸的「脚本/模块/配置」在
+    #     「写个脚本给我看看」里指的是内容，不是落盘目标。
+    r"(?<![不别勿])(?:需要|想要|想|要|给我|来一个|来个|搞|弄)"
+    r"(?!\s*(?:写|编写|生成|做|实现|设计))(?:一个|一份|个|份)?"
+    r"[^，。！？,.!?\n]{0,16}"
+    r"(?:\w+\.[A-Za-z0-9]{1,6}\b|文件|文件夹|目录)"
+    # 处置句式：「把这段存起来」「将结果保存下来」（存/放/整理 + 趋向补语）
+    r"|(?:把|将)[^，。！？,.!?\n]{0,24}(?:存|放|落|整理|归档|导出)"
+    r"(?:起来|下来|到|进|成|好)"
+    # 口语完成动词 + 缺陷实体：「搞定这个 bug」「处理下这个报错」
+    r"|(?:搞定|解决|处理|收拾|干掉|消掉)(?:一下|下)?"
+    r"[^，。！？,.!?\n]{0,12}"
+    r"(?:bug|BUG|错误|报错|异常|问题|崩溃|失败|警告|warning)"
+    # 英文需求句式
+    r"|(?:need|want|give\s+me|make\s+me|create\s+me)\s+"
+    r"(?:a|an|the|one)?\s*[^,.!?\n]{0,16}"
+    r"(?:\w+\.[A-Za-z0-9]+|file|script|config|directory|folder|module)",
+    re.IGNORECASE,
+)
+_IMPLICIT_READ = re.compile(
+    # 认知动词 + 外部实体：「看看这个项目」「了解下这份代码」
+    r"(?:看看|看下|瞧瞧|了解|熟悉|摸清|梳理|捋一下|过一遍)(?:一下|下)?"
+    r"[^，。！？,.!?\n]{0,12}"
+    r"(?:文件|目录|代码|项目|仓库|实现|结构|逻辑|配置|文档|日志)"
+    # 疑问句式指向代码实体：「这个函数是干什么的」「哪里定义的」
+    r"|(?:是(?:干|做)什么|干嘛用|有什么用|在哪(?:里)?|哪里)"
+    r"(?:的|之)?(?:定义|实现|调用|声明)?"
+    # 英文认知动词
+    r"|(?:take\s+a\s+look|walk\s+through|go\s+over|figure\s+out)\b",
+    re.IGNORECASE,
+)
+
 _REQUEST_CUE = re.compile(
     r"(?:请(?:你)?|请帮我|帮(?:我)?|麻烦(?:你)?|劳烦(?:你)?|能否|"
     r"可否|可以(?:请你|帮我))\s*",
@@ -232,8 +280,12 @@ def classify_execution_policy(
         request_source = source[cues[-1].end():].strip() or source
 
     wants_execute = bool(_EXECUTE.search(request_source)) and not no_execute
+    # 显式写入动词优先；缺失时再看隐含写盘句式（需求/处置/口语修复），
+    # 否则「我需要一个 config.yaml」这类请求会掉到 ANSWER_ONLY。
     wants_write = bool(
-        _WRITE.search(request_source) or _DIRECT_BARE_GIT_REQUEST.search(source)
+        _WRITE.search(request_source)
+        or _DIRECT_BARE_GIT_REQUEST.search(source)
+        or _IMPLICIT_WRITE.search(request_source)
     ) and not no_write
     # Keep path/URL evidence from the complete user turn.  They are frequently
     # placed before “请你分析/学习…”, while request_source intentionally starts
@@ -242,6 +294,7 @@ def classify_execution_policy(
     # those turns to direct mode without a read-only tools schema.
     wants_read = bool(
         _READ_ONLY.search(request_source)
+        or _IMPLICIT_READ.search(request_source)
         or _PATH_REFERENCE.search(request_source)
         or _PATH_REFERENCE.search(source)
         or _URL_REFERENCE.search(source)

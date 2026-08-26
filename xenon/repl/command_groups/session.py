@@ -269,7 +269,10 @@ register_command("/resume", "列出 / 恢复保存的会话", "/resume [序号�
 @command_handler("/resume")
 def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
     """断点恢复：列出所有会话，或按序号/名称加载指定会话。"""
-    from xenon.repl.session import list_sessions, load_session, get_session_age, _load_and_migrate
+    from xenon.repl.session import (
+        list_sessions, load_session, get_session_age, _load_and_migrate,
+        touch_session,
+    )
 
     repl = session_state.get("_repl")
     if not repl:
@@ -322,6 +325,10 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
             data = _load_and_migrate(session_path)
         except FileNotFoundError:
             return f"❌ 会话文件不存在: {session_path}"
+        # 按序号恢复也是一次真实加载。_load_and_migrate 本身不计访问
+        # （它被 list_sessions 循环调用，计在那里会让列一次表就把所有会话
+        # 计数全加一），所以这里显式补记，与按名称恢复的口径保持一致。
+        touch_session(session_path)
     else:
         # 命名模式：通过 load_session(name) 加载
         try:
@@ -442,7 +449,19 @@ def _cmd_compact(
     model_ids = registry.get_role_priority("planner") if not summary else None
     result = ctx_mgr.compact(summary, model_priority=model_ids)
     stats = ctx_mgr.stats()
-    return f"✅ 对话已压缩。当前 Token: {stats['estimated_tokens']:,} ({stats['usage_ratio']})\n\n摘要:\n{result}"
+
+    # P3-Low 2.9: 提供快照持久化状态反馈
+    snapshot_info = ""
+    if hasattr(ctx_mgr, '_last_snapshot_path') and ctx_mgr._last_snapshot_path:
+        snapshot_info = f"\n📝 快照已保存: {ctx_mgr._last_snapshot_path}"
+    elif hasattr(ctx_mgr, '_last_snapshot_error') and ctx_mgr._last_snapshot_error:
+        snapshot_info = f"\n⚠️  快照保存失败: {ctx_mgr._last_snapshot_error}"
+
+    # 格式化 usage_ratio（现在是 float 而非字符串）
+    usage_ratio = stats['usage_ratio']
+    usage_str = f"{usage_ratio:.1%}" if isinstance(usage_ratio, (int, float)) else str(usage_ratio)
+
+    return f"✅ 对话已压缩。当前 Token: {stats['estimated_tokens']:,} ({usage_str}){snapshot_info}\n\n摘要:\n{result}"
 
 
 # /config ──────────────────────────────────────────────────

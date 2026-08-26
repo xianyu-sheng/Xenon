@@ -86,3 +86,100 @@ def cmd_verbose(*, args: str, session_state: dict, **kwargs: Any) -> str:
         return f"当前详细模式: {status}\n用法: /verbose on 或 /verbose off"
     return "❌ 无法获取 REPL 状态"
 
+
+register_command("/restart", "优雅重启 REPL（重载配置、可选保存会话）", "/restart [--fresh]")
+
+
+@command_handler("/restart")
+def cmd_restart(*, args: str, session_state: dict, **kwargs: Any) -> str:
+    """优雅重启 REPL。
+
+    用法：
+        /restart        - 保存并恢复会话
+        /restart --fresh - 不保存会话，全新启动
+    """
+    repl = session_state.get("_repl")
+    if not repl:
+        return "❌ 无法获取 REPL 状态"
+
+    if not hasattr(repl, "_restart_manager"):
+        return "❌ 重启管理器未初始化"
+
+    # 解析参数
+    preserve_session = "--fresh" not in args.lower()
+
+    # 请求重启（主循环会检测并处理）
+    repl._restart_manager.coordinator.request_restart(preserve_session)
+
+    if preserve_session:
+        return "🔄 正在准备重启（保存会话）..."
+    else:
+        return "🔄 正在准备重启（全新会话）..."
+
+
+register_command("/debug-tokens", "显示详细的 token 计算信息", "/debug-tokens")
+
+
+@command_handler("/debug-tokens")
+def cmd_debug_tokens(*, args: str, session_state: dict, **kwargs: Any) -> str:
+    """显示详细的 token 计算信息（P0-Critical）。
+
+    用法：
+        /debug-tokens        - 显示完整统计
+        /debug-tokens --per-turn - 包含每条消息的详细 token 数
+    """
+    repl = session_state.get("_repl")
+    if not repl:
+        return "❌ 无法获取 REPL 状态"
+
+    ctx = repl.context
+    if not ctx:
+        return "❌ 无法获取 ContextManager"
+
+    debug_info = ctx.debug_tokens()
+    show_per_turn = "--per-turn" in args.lower()
+
+    lines = [
+        "🔍 Token 计算详情",
+        "",
+        "## 总览",
+        f"  历史消息数: {debug_info['history_length']}",
+        f"  启发式估算总计: {debug_info['estimated_total']} tokens",
+        f"  当前使用量: {debug_info['current_usage']} tokens",
+        f"  累计 token 数: {debug_info['cumulative_tokens']} tokens",
+        f"  数据来源: {debug_info['last_usage_source']}",
+        f"  最大容量: {debug_info['max_tokens']} tokens",
+        f"  使用率: {debug_info['usage_ratio']:.1%}",
+        "",
+    ]
+
+    if debug_info['real_usage']:
+        lines.extend([
+            "## 最近一次真实 Usage",
+            f"  Prompt tokens: {debug_info['real_usage']['prompt']}",
+            f"  Completion tokens: {debug_info['real_usage']['completion']}",
+            f"  Total tokens: {debug_info['real_usage']['total']}",
+            "",
+        ])
+    else:
+        lines.extend([
+            "## 最近一次真实 Usage",
+            "  （无真实 usage 数据，可能是首次调用前或使用了 mock）",
+            "",
+        ])
+
+    if show_per_turn and debug_info['per_turn']:
+        lines.append("## 每条消息的 Token 详情")
+        for turn_info in debug_info['per_turn']:
+            lines.append(
+                f"  [{turn_info['index']}] {turn_info['role']} "
+                f"({turn_info['turn_type']}): {turn_info['tokens']} tokens"
+            )
+            lines.append(f"      预览: {turn_info['content_preview']}")
+        lines.append("")
+        lines.append("💡 提示: 使用 /debug-tokens --per-turn 查看每条消息的详细信息")
+    elif not show_per_turn:
+        lines.append("💡 提示: 使用 /debug-tokens --per-turn 查看每条消息的详细信息")
+
+    return "\n".join(lines)
+

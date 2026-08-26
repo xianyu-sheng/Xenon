@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,14 +37,16 @@ _CJK_RE = re.compile(
     r'一-鿿'    # CJK 基本区
     r'豈-﫿'    # CJK 兼容表意
     r'぀-ヿ'    # 平假名 + 片假名
-    r'가-힯]'   # 韩文音节
+    r'가-힣]'   # 韩文音节 (U+AC00-U+D7A3)
 )
 
 
 def _estimate_tokens(text: str) -> int:
     """估算 token 数（模块级，供 ``ConversationTurn`` 缓存与 ``ContextManager`` 共用）。
 
-    规则（注释与代码统一，§8.26.2 修正原注释 len/3 与代码 len//2 不一致）：
+    优先使用 tiktoken 进行精确计算，失败时回退到启发式估算。
+
+    启发式规则：
     - CJK 字符（含扩展 A/兼容/假名/韩文）约 2 token/字；
     - 英文约 1.3 token/word；
     - 代码/JSON 密集按 0.4×chars；
@@ -52,6 +55,16 @@ def _estimate_tokens(text: str) -> int:
     if not text:
         return 0
 
+    # 尝试使用 tiktoken 进行精确计算
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except Exception as e:
+        # tiktoken 失败，回退到启发式估算
+        logger.debug("tiktoken 计算失败，回退启发式估算: %s", e)
+
+    # 启发式估算
     cjk_count = len(_CJK_RE.findall(text))
     words = len(text.split())
     chars = len(text)
@@ -143,21 +156,34 @@ class ContextManager:
         compact_threshold: float = 0.6,
         compact_force: float = 0.85,
         track_real_usage: bool = False,
+        max_undo_snapshots: int | None = None,
     ) -> None:
         self.max_tokens = max_tokens
         # F3 双阈值：compact_threshold=warn（60%，触发 LLM 压缩），
         # compact_force=force（85%，跳过 LLM 改用安全截断，避免超限输入）
         self.compact_threshold = compact_threshold
         self.compact_force = compact_force
+        # P2-Medium：并发安全 — history 与 _undo_stack 由 _lock 保护
+        self._lock = threading.Lock()
         self.history: list[ConversationTurn] = []
         self._undo_stack: list[list[ConversationTurn]] = []
         # P3-Q10 / §8.26.9：undo 栈上限，防多次 /compact 全量 deepcopy 线性堆积累积内存。
-        self.max_undo_snapshots: int = 5
+        # P3-Low 问题3修复：从配置读取，默认值提升到10
+        if max_undo_snapshots is None:
+            try:
+                from xenon.repl.system_config import get_config
+                max_undo_snapshots = get_config().limits.max_undo_snapshots
+            except Exception:  # noqa: BLE001 — 配置读取失败时使用默认值
+                max_undo_snapshots = 10
+        self.max_undo_snapshots: int = max_undo_snapshots
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
         # F3 压缩持久化（可选）：设置后每次压缩写一份 markdown 快照
         self.session_id: str | None = None
         self.persist_dir: Path | None = None
+        # P3-Low 问题2修复：持久化状态跟踪
+        self._last_snapshot_path: str | None = None
+        self._last_snapshot_error: str | None = None
         # P3-Q1 续 / §8.8.1：真实 usage 优先于启发式估算。
         # track_real_usage=True 时订阅 llm_client 的 usage 回调，记录最近一次
         # chat_completion 调用的真实 token 用量；current_token_usage() 优先返回
@@ -166,6 +192,9 @@ class ContextManager:
         self._real_usage: dict[str, int] | None = None
         self._suppress_usage: bool = False  # compact 自身摘要调用期间抑制记录
         self._usage_unsub: Any = None
+        # P0-Critical: 累计 token 计数器（跨多次调用累加真实 usage）
+        self._cumulative_tokens: int = 0
+        self._last_usage_source: str = "none"  # "real" | "estimated" | "none"
         # v0.5.0：分层上下文管理
         self._active_tier: int = 3  # 当前活跃任务层级 (Q1-Q5)
         self._turn_counter: int = 0  # 全局轮次计数器
@@ -187,47 +216,66 @@ class ContextManager:
         # content-free exact-prefix registry for every model/engine contract.
         self.event_log = SessionEventLog(epoch=self.cache_epoch)
         self.prompt_lanes = PromptLaneRegistry()
+        # Problem 5: StatusBar refresh 回调机制
+        self._status_refresh_callbacks: list[Any] = []
         if track_real_usage:
             self._subscribe_usage()
 
     # ── 对话管理 ──────────────────────────────────────────
 
+    def register_status_refresh_callback(self, callback: Any) -> None:
+        """Problem 5: 注册状态栏刷新回调，在状态变更时调用。"""
+        if callback is not None and callback not in self._status_refresh_callbacks:
+            self._status_refresh_callbacks.append(callback)
+
+    def _notify_status_change(self) -> None:
+        """Problem 5: 通知所有注册的状态栏刷新回调。"""
+        for callback in self._status_refresh_callbacks:
+            try:
+                callback()
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"状态栏刷新回调异常（已忽略）: {e}")
+
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """添加一条消息到历史。
 
         v0.5.0：自动标注 task_tier、turn_type、turn_index。
+        P2-Medium：线程安全保护。
         """
-        # 自动推断 turn_type
-        turn_type = kwargs.pop("turn_type", None)
-        if turn_type is None:
-            turn_type = _infer_turn_type(role, content)
-        # 自动标注 task_tier（可通过 kwargs 覆盖）
-        task_tier = kwargs.pop("task_tier", None)
-        if task_tier is None:
-            task_tier = self._active_tier
-        # 自增轮次计数器
-        self._turn_counter += 1
-        turn = ConversationTurn(
-            role=role, content=content,
-            task_tier=task_tier,
-            turn_type=turn_type,
-            turn_index=self._turn_counter,
-            **kwargs,
-        )
-        self.history.append(turn)
-        event = self.event_log.append(
-            "message",
-            role=role,
-            content=content,
-            model_id=turn.model_used,
-            metadata={
-                "turn_type": turn.turn_type,
-                "turn_index": turn.turn_index,
-                "task_tier": turn.task_tier,
-                "semantic_group_id": turn.semantic_group_id,
-            },
-        )
-        turn.metadata.setdefault("event_id", event.event_id)
+        with self._lock:
+            # 自动推断 turn_type
+            turn_type = kwargs.pop("turn_type", None)
+            if turn_type is None:
+                turn_type = _infer_turn_type(role, content)
+            # 自动标注 task_tier（可通过 kwargs 覆盖）
+            task_tier = kwargs.pop("task_tier", None)
+            if task_tier is None:
+                task_tier = self._active_tier
+            # 自增轮次计数器
+            self._turn_counter += 1
+            turn = ConversationTurn(
+                role=role, content=content,
+                task_tier=task_tier,
+                turn_type=turn_type,
+                turn_index=self._turn_counter,
+                **kwargs,
+            )
+            self.history.append(turn)
+            event = self.event_log.append(
+                "message",
+                role=role,
+                content=content,
+                model_id=turn.model_used,
+                metadata={
+                    "turn_type": turn.turn_type,
+                    "turn_index": turn.turn_index,
+                    "task_tier": turn.task_tier,
+                    "semantic_group_id": turn.semantic_group_id,
+                },
+            )
+            turn.metadata.setdefault("event_id", event.event_id)
+        # Problem 5: 添加消息后通知状态栏刷新（锁外调用，避免回调死锁）
+        self._notify_status_change()
 
     @property
     def event_cursor(self) -> int:
@@ -474,9 +522,13 @@ class ContextManager:
         rejected by several OpenAI-compatible APIs.  They are therefore replayed
         as user observations while retaining role=tool in ``history`` for
         compaction, routing and session inspection.
+        P2-Medium：线程安全保护（读取 history）。
         """
+        with self._lock:
+            history_copy = list(self.history)
+
         history_messages: list[dict[str, Any]] = []
-        for turn in self.history:
+        for turn in history_copy:
             api_message = (turn.metadata or {}).get("api_message")
             if isinstance(api_message, dict):
                 history_messages.append(copy.deepcopy(api_message))
@@ -516,7 +568,13 @@ class ContextManager:
         return messages
 
     def export_history(self) -> list[dict[str, Any]]:
-        """Serialize history without losing tool roles and semantic metadata."""
+        """Serialize history without losing tool roles and semantic metadata.
+
+        P2-Medium：线程安全保护（读取 history）。
+        """
+        with self._lock:
+            history_copy = list(self.history)
+
         return [
             {
                 "role": turn.role,
@@ -532,15 +590,26 @@ class ContextManager:
                 "turn_type": turn.turn_type,
                 "semantic_group_id": turn.semantic_group_id,
             }
-            for turn in self.history
+            for turn in history_copy
         ]
 
     def trim_last_assistant(self) -> str | None:
-        """移除并返回最后一条 assistant 消息（用于撤回 LLM 幻觉回复）。"""
-        for i in range(len(self.history) - 1, -1, -1):
-            if self.history[i].role == "assistant":
-                return self.history.pop(i).content
-        return None
+        """移除并返回最后一条 assistant 消息（用于撤回 LLM 幻觉回复）。
+
+        P2-Medium：线程安全保护。
+        """
+        content = None
+        with self._lock:
+            for i in range(len(self.history) - 1, -1, -1):
+                if self.history[i].role == "assistant":
+                    content = self.history.pop(i).content
+                    break
+        # Problem 1: trim 后更新 cache_epoch（锁外调用）
+        if content is not None:
+            self._advance_cache_epoch("trim_assistant")
+            # Problem 5: trim 后通知状态栏刷新
+            self._notify_status_change()
+        return content
 
     def trim_last_user(self) -> str | None:
         """移除并返回最后一条 user 消息（用于引擎异常时清理孤立 user 消息）。
@@ -548,11 +617,20 @@ class ContextManager:
         P2-修复5 (观察项-2)：当 LLM 引擎抛异常时，user 消息已 add 但无对应
         assistant 响应，history 出现 user-only 序列。优先用 add_assistant_message
         占位错误消息，无法占位时回退到此方法清理 user 消息。
+        P2-Medium：线程安全保护。
         """
-        for i in range(len(self.history) - 1, -1, -1):
-            if self.history[i].role == "user":
-                return self.history.pop(i).content
-        return None
+        content = None
+        with self._lock:
+            for i in range(len(self.history) - 1, -1, -1):
+                if self.history[i].role == "user":
+                    content = self.history.pop(i).content
+                    break
+        # Problem 1: trim 后更新 cache_epoch（锁外调用）
+        if content is not None:
+            self._advance_cache_epoch("trim_user")
+            # Problem 5: trim 后通知状态栏刷新
+            self._notify_status_change()
+        return content
 
     # ── Token 估算 ────────────────────────────────────────
 
@@ -560,24 +638,44 @@ class ContextManager:
         """订阅 llm_client 的 usage 回调（P3-Q1 续 / §8.8.1）。
 
         懒导入避免 repl ↔ utils 循环；回调异常已被 llm_client 隔离，这里只做记录。
+        P1: 订阅后验证回调是否成功注册到 _USAGE_CALLBACKS。
         """
         try:
             from xenon.utils.llm_client import register_usage_callback
 
             self._usage_unsub = register_usage_callback(self._on_usage)
+
+            # P1: 验证回调是否成功注册（非阻塞式验证）
+            try:
+                from xenon.utils.llm_client import _USAGE_CALLBACKS
+                if self._on_usage not in _USAGE_CALLBACKS:
+                    logger.warning("回调已注册但未在 _USAGE_CALLBACKS 中找到（测试环境可忽略）")
+            except Exception:  # noqa: BLE001 — 验证失败不影响订阅
+                pass
+
+            logger.debug("Usage callback successfully registered")
         except Exception:  # noqa: BLE001 — 订阅失败不应阻断 ContextManager 构造
             logger.warning("真实 usage 订阅失败，回退启发式估算", exc_info=True)
             self._usage_unsub = None
 
     def _on_usage(self, model_id: str, usage: Any, latency: float) -> None:
-        """usage 回调适配：把 LLMUsage 转成 dict 记录（compact 期间抑制）。"""
+        """usage 回调适配：把 LLMUsage 转成 dict 记录（compact 期间抑制）。
+
+        P0-Critical: 记录详细的 usage 信息供调试。
+        """
         if self._suppress_usage:
             return
-        self.record_real_usage(
-            getattr(usage, "prompt_tokens", 0),
-            getattr(usage, "completion_tokens", 0),
-            getattr(usage, "total_tokens", 0),
+
+        prompt_tokens = getattr(usage, "prompt_tokens", 0)
+        completion_tokens = getattr(usage, "completion_tokens", 0)
+        total_tokens = getattr(usage, "total_tokens", 0)
+
+        logger.debug(
+            "Usage callback triggered: model=%s, prompt=%d, completion=%d, total=%d, latency=%.2fs",
+            model_id, prompt_tokens, completion_tokens, total_tokens, latency
         )
+
+        self.record_real_usage(prompt_tokens, completion_tokens, total_tokens)
 
     def record_real_usage(
         self,
@@ -590,6 +688,8 @@ class ContextManager:
         total_tokens 缺省时取 prompt+completion。该值反映模型实际看到的输入+
         输出大小 ≈ 当前历史占用（直连模式下与 history 一一对应；引擎模式下含
         ReAct/Plan 草稿，略偏高，偏向更早触发 compact，安全侧）。
+
+        P0-Critical: 同时累加到 _cumulative_tokens，记录跨调用的总 token 用量。
         """
         total = int(total_tokens) if total_tokens else int(prompt_tokens) + int(completion_tokens)
         self._real_usage = {
@@ -597,6 +697,11 @@ class ContextManager:
             "completion": int(completion_tokens),
             "total": total,
         }
+        # 累加到累计计数器
+        self._cumulative_tokens += total
+        self._last_usage_source = "real"
+        # Problem 5: 通知状态栏刷新
+        self._notify_status_change()
 
     def estimate_tokens(self, text: str) -> int:
         """估算 token 数（委托模块函数，保留向后兼容）。
@@ -611,10 +716,17 @@ class ContextManager:
         优先返回真实 usage 的 total_tokens（最近一次 chat_completion 的
         prompt+completion ≈ 当前历史占用）；无真实数据时回退各 turn 缓存的
         ``token_count`` 求和（O(n) 免重算，§8.9.2 memoization）。
+        P2-Medium：线程安全保护（读取 history）。
+        P0-Critical: 使用启发式估算时更新 _last_usage_source。
         """
         if self._real_usage is not None:
             return self._real_usage["total"]
-        return sum(turn.token_count for turn in self.history)
+        with self._lock:
+            total = sum(turn.token_count for turn in self.history)
+        # P0-Critical: 当使用启发式估算时，更新来源标记
+        if total > 0 and self._last_usage_source == "none":
+            self._last_usage_source = "estimated"
+        return total
 
     def real_usage(self) -> dict[str, int] | None:
         """最近一次真实 usage（prompt/completion/total），无则 None。"""
@@ -635,11 +747,15 @@ class ContextManager:
 
         P3-Q10 / §8.26.9：栈有 ``max_undo_snapshots`` 上限，超出时丢弃最旧快照，
         避免多次 /compact 全量 deepcopy 线性堆积累积内存。
+        P2-Medium：线程安全保护。
         """
-        self._undo_stack.append(copy.deepcopy(self.history))
-        overflow = len(self._undo_stack) - self.max_undo_snapshots
-        if overflow > 0:
-            del self._undo_stack[:overflow]
+        with self._lock:
+            self._undo_stack.append(copy.deepcopy(self.history))
+            overflow = len(self._undo_stack) - self.max_undo_snapshots
+            if overflow > 0:
+                del self._undo_stack[:overflow]
+        # Problem 5: save_snapshot 会改变 undo_available，通知状态栏刷新
+        self._notify_status_change()
 
     def undo(self) -> bool:
         """
@@ -647,13 +763,17 @@ class ContextManager:
 
         Returns:
             True 如果成功回退，False 如果没有可回退的快照。
+        P2-Medium：线程安全保护。
         """
-        if not self._undo_stack:
-            return False
-        self.history = self._undo_stack.pop()
-        self._advance_cache_epoch("undo")
-        # P3-Q1 续：回退到旧快照后，记录的真实 usage 已不对应当前 history → 失效
-        self._real_usage = None
+        with self._lock:
+            if not self._undo_stack:
+                return False
+            self.history = self._undo_stack.pop()
+            self._advance_cache_epoch("undo")
+            # P3-Q1 续：回退到旧快照后，记录的真实 usage 已不对应当前 history → 失效
+            self._real_usage = None
+        # Problem 5: undo 后通知状态栏刷新（锁外调用，避免回调死锁）
+        self._notify_status_change()
         return True
 
     @property
@@ -860,24 +980,73 @@ class ContextManager:
         finally:
             self._suppress_usage = prev_suppress
 
-        self.history = new_history
-        self._advance_cache_epoch("compact")
-        # 压缩后 history 结构性变更，旧真实 usage 不再对应 → 失效，下次调用重新填充
-        self._real_usage = None
+        # P2-Medium：修改 history 需要加锁
+        with self._lock:
+            self.history = new_history
+            # Problem 1: 先更新 cache_epoch，因为后续清理依赖新 epoch
+            self._advance_cache_epoch("compact")
+            # Problem 3: compact 后清空 prompt_lanes
+            self.prompt_lanes = PromptLaneRegistry()
+            # Problem 4: compact 后清理旧 event_log（保留当前 epoch 的事件）
+            self._cleanup_old_events()
+            # 压缩后 history 结构性变更，旧真实 usage 不再对应 → 失效，下次调用重新填充
+            self._real_usage = None
+            # P0-Critical: 压缩后重新估算累计 token，并更新来源标记
+            estimated = sum(turn.token_count for turn in self.history)
+            self._cumulative_tokens = estimated
+            self._last_usage_source = "estimated"
         self._persist_compact_md(summary, session_id)
+        # Problem 5: compact 后通知状态栏刷新（锁外调用，避免回调死锁）
+        self._notify_status_change()
         return summary
 
     def _split_recent(self, keep_rounds: int = 3) -> tuple[list[ConversationTurn], list[ConversationTurn]]:
-        """按 user 轮数切分 older / recent（recent 保留最近 keep_rounds 轮完整对话）。"""
-        user_count = 0
-        cut_idx = 0
-        for i in range(len(self.history) - 1, -1, -1):
-            if self.history[i].role == "user":
-                user_count += 1
-                if user_count >= keep_rounds:
-                    cut_idx = i
-                    break
-        return self.history[:cut_idx], self.history[cut_idx:]
+        """按 user 轮数切分 older / recent（recent 保留最近 keep_rounds 轮完整对话）。
+
+        P2-Medium：线程安全保护（读取 history）。
+        """
+        with self._lock:
+            user_count = 0
+            cut_idx = 0
+            for i in range(len(self.history) - 1, -1, -1):
+                if self.history[i].role == "user":
+                    user_count += 1
+                    if user_count >= keep_rounds:
+                        cut_idx = i
+                        break
+            return self.history[:cut_idx], self.history[cut_idx:]
+
+    def _cleanup_old_events(self) -> None:
+        """Problem 4: compact 后清理旧 event_log（保留当前 epoch 的事件）。
+
+        清理不在新 history 范围内的事件，确保 event_log 与 history 保持一致。
+        """
+        # 收集当前 history 中所有有效的 event_id
+        valid_event_ids = set()
+        for turn in self.history:
+            event_id = (turn.metadata or {}).get("event_id")
+            if event_id is not None:
+                valid_event_ids.add(event_id)
+
+        # 清理 event_log 中不在当前 history 范围内的事件
+        # 保留当前 epoch 的所有事件（因为可能还有未记录到 history 的事件）
+        current_epoch = self.cache_epoch
+        to_remove = []
+
+        for event_id, event in enumerate(self.event_log._events):
+            # 保留当前 epoch 的事件
+            if event.epoch == current_epoch:
+                continue
+            # 保留在当前 history 中引用的事件
+            if event_id in valid_event_ids:
+                continue
+            # 其他旧事件标记为待删除
+            to_remove.append(event_id)
+
+        # 从后向前删除，避免索引错位
+        for event_id in reversed(to_remove):
+            if 0 <= event_id < len(self.event_log._events):
+                self.event_log._events.pop(event_id)
 
     def _safe_truncation(self) -> list[ConversationTurn]:
         """F3 Tier 3 安全截断：保留所有 system 消息 + 最近 30% 非系统消息（min5 max20）。"""
@@ -993,8 +1162,19 @@ class ContextManager:
             lines.append(f"【{seg}】{content}")
         return "\n".join(lines)
 
-    def _persist_compact_md(self, summary: str, session_id: str | None) -> None:
-        """F3 持久化：压缩成功后写一份带时间戳的 markdown 快照。"""
+    def _persist_compact_md(self, summary: str, session_id: str | None) -> bool:
+        """F3 持久化：压缩成功后写一份带时间戳的 markdown 快照。
+
+        返回:
+            bool: True 表示持久化成功，False 表示失败
+
+        副作用:
+            成功时设置 self._last_snapshot_path，失败时设置 self._last_snapshot_error
+        """
+        # 清空上次的状态
+        self._last_snapshot_path = None
+        self._last_snapshot_error = None
+
         try:
             sid = session_id or self.session_id or "default"
             base = self.persist_dir or (Path.home() / ".xenon" / "sessions" / sid)
@@ -1009,8 +1189,13 @@ class ContextManager:
                 encoding="utf-8",
             )
             logger.debug(f"压缩快照已持久化: {path}")
+            self._last_snapshot_path = str(path)
+            return True
         except Exception as e:  # noqa: BLE001 — 持久化失败不影响压缩主流程
-            logger.warning(f"压缩快照持久化失败（已忽略）: {e}")
+            error_msg = str(e)
+            logger.warning(f"压缩快照持久化失败: {error_msg}")
+            self._last_snapshot_error = error_msg
+            return False
 
     def _llm_summary_nseg(
         self,
@@ -1213,30 +1398,86 @@ class ContextManager:
     # ── 统计 ──────────────────────────────────────────────
 
     def stats(self) -> dict[str, Any]:
-        """返回当前上下文统计信息。"""
+        """返回当前上下文统计信息。
+
+        P0-Critical: token_source 正确反映 _last_usage_source 的值。
+        P2-Medium: usage_ratio 超过 100% 时显示 "100%+" 避免用户困惑。
+        """
         real = self._real_usage
+        ratio = self.usage_ratio()
+        # P2-Medium：进度条超限保护 — 超过或等于 100% 时显示 "100%+" 而非 "125.0%"
+        # 使用 >= 1.0 而非 > 1.0，因为恰好 100% 时也应该显示为 "100%"（不带小数点更简洁）
+        if ratio >= 1.0:
+            usage_ratio_str = "100%+"
+        else:
+            usage_ratio_str = f"{ratio:.1%}"
+
+        with self._lock:
+            total_msg = len(self.history)
+            user_msg = sum(1 for t in self.history if t.role == "user")
+            assistant_msg = sum(1 for t in self.history if t.role == "assistant")
+            system_msg = sum(1 for t in self.history if t.role == "system")
+
         return {
-            "total_messages": len(self.history),
-            "user_messages": sum(1 for t in self.history if t.role == "user"),
-            "assistant_messages": sum(1 for t in self.history if t.role == "assistant"),
-            "system_messages": sum(1 for t in self.history if t.role == "system"),
+            "total_messages": total_msg,
+            "user_messages": user_msg,
+            "assistant_messages": assistant_msg,
+            "system_messages": system_msg,
             "estimated_tokens": self.current_token_usage(),
-            "token_source": "real" if real is not None else "heuristic",
+            "token_source": self._last_usage_source,
             "real_usage": dict(real) if real is not None else None,
             "max_tokens": self.max_tokens,
-            "usage_ratio": f"{self.usage_ratio():.1%}",
+            "usage_ratio": usage_ratio_str,
             "undo_available": self.undo_depth,
             "needs_compact": self.needs_compact(),
+            "cumulative_tokens": self._cumulative_tokens,
         }
 
     def clear(self) -> None:
-        """清空所有历史。"""
+        """清空所有历史。
+
+        P2-Medium：线程安全保护。
+        """
         self.save_snapshot()
-        self.history.clear()
-        self._working_memory.clear()
-        self._advance_cache_epoch("clear")
-        # P3-Q1 续：清空后真实 usage 不再对应 → 失效
-        self._real_usage = None
+        with self._lock:
+            self.history.clear()
+            self._working_memory.clear()
+            self._advance_cache_epoch("clear")
+            # P3-Q1 续：清空后真实 usage 不再对应 → 失效
+            self._real_usage = None
+            # P0-Critical: 清空后重置累计计数器
+            self._cumulative_tokens = 0
+            self._last_usage_source = "none"
+        # Problem 5: clear 后通知状态栏刷新（锁外调用，避免回调死锁）
+        self._notify_status_change()
+
+    def debug_tokens(self) -> dict[str, Any]:
+        """返回详细的 token 计算信息（供 /debug-tokens 命令使用）。
+
+        P0-Critical: 提供 estimated vs actual 的对比和详细来源信息。
+        """
+        estimated_total = sum(turn.token_count for turn in self.history)
+        per_turn_details = []
+        for i, turn in enumerate(self.history):
+            per_turn_details.append({
+                "index": i,
+                "role": turn.role,
+                "turn_type": turn.turn_type,
+                "tokens": turn.token_count,
+                "content_preview": turn.content[:100] + ("..." if len(turn.content) > 100 else ""),
+            })
+
+        return {
+            "history_length": len(self.history),
+            "estimated_total": estimated_total,
+            "current_usage": self.current_token_usage(),
+            "cumulative_tokens": self._cumulative_tokens,
+            "last_usage_source": self._last_usage_source,
+            "real_usage": dict(self._real_usage) if self._real_usage else None,
+            "max_tokens": self.max_tokens,
+            "usage_ratio": self.usage_ratio(),
+            "per_turn": per_turn_details,
+        }
 
     def close(self) -> None:
         """退订 usage 回调（P3-Q1 续）：长生命周期对象销毁前调用，避免回调泄漏。"""

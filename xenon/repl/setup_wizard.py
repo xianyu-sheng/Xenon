@@ -26,6 +26,7 @@ from xenon.repl.provider_registry import (
     MODEL_FETCH_ERRORS,
     register_custom_provider,
 )
+from xenon.repl.system_config import get_config
 
 if TYPE_CHECKING:
     from xenon.repl.model_registry import ModelRegistry
@@ -560,8 +561,7 @@ def _register_custom(registry=None, model_pool=None) -> None:
             console.print("[yellow]⚠ 模型列表拉取失败，但已保存配置[/yellow]")
             console.print("[dim]可稍后重试，或检查 base_url 是否正确[/dim]")
         else:
-            import os as _os
-            _max_per_provider = int(_os.environ.get("XENON_MAX_MODELS_PER_PROVIDER", "5"))
+            _max_per_provider = get_config().limits.wizard_preview_models
             console.print(f"[green]✓ 发现 {len(info.models)} 个模型[/green]")
             for m in info.models[:_max_per_provider]:
                 console.print(f"  - {m}")

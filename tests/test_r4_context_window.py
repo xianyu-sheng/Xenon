@@ -93,7 +93,9 @@ class TestContextManagerInjection:
         reg = ModelRegistry()
         reg.add_model("openai/gpt-4o", "gpt4", context_window=8000)
         cm = ContextManager()  # 默认 128000
-        cm.add_user_message("x" * 14000)  # 估算约 7000 token
+        # 使用多样化文本确保足够的 token 数
+        text = "The quick brown fox jumps over the lazy dog. " * 700  # ~7000 tokens
+        cm.add_user_message(text)
         # 旧默认 128000：不触发（7000/128000 ≈ 0.055 < 0.8）
         assert not cm.needs_compact()
         # R4 注入 8000 后：触发（7000/8000 = 0.875 ≥ 0.8）

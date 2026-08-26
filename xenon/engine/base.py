@@ -105,6 +105,13 @@ class BaseEngine(ABC):
             model_id = getattr(config, "model_id", "")
             if model_id:
                 self.model_configs.setdefault(model_id, config)
+                # Telemetry and routing also refer to models by bare name (no
+                # provider prefix). Without this index those lookups miss and
+                # the caller silently falls back to a hard-coded token budget.
+                bare = model_id.rsplit("/", 1)[-1]
+                if bare and bare != model_id:
+                    self.model_configs.setdefault(bare, config)
+        self._unresolved_models: set[str] = set()
         self.temperature = temperature
         self.model_pool = model_pool  # v0.4.0
         self.auto_router = auto_router  # v0.4.0 Step 13
@@ -798,7 +805,7 @@ class BaseEngine(ABC):
             try:
                 if self.model_pool:
                     self.model_pool.acquire(model_id)  # P2: 并发计数+1(资源感知)
-                mc = self.model_configs.get(model_id)
+                mc = self._resolve_model_config(model_id)
                 mt = max_tokens or getattr(mc, "max_tokens", None) or 8192
                 creds = None
                 base = None
@@ -962,7 +969,7 @@ class BaseEngine(ABC):
             request_started = False
             request_succeeded = False
             try:
-                mc = self.model_configs.get(model_id)
+                mc = self._resolve_model_config(model_id)
                 mt = max_tokens or getattr(mc, "max_tokens", None) or 4096
                 creds = None
                 base = None
@@ -1155,6 +1162,34 @@ class BaseEngine(ABC):
         默认实现返回占位文本。
         """
         return f"[工具 {tool_name} 未实现]"
+
+    def _resolve_model_config(self, model_id: str) -> Any | None:
+        """Resolve per-model config, tolerating the several id forms in use.
+
+        ``model_configs`` is indexed by alias, canonical ``provider/model`` id
+        and bare model name (see ``__init__``).  Routing and telemetry layers
+        each normalise ids differently, so a plain dict lookup used to miss and
+        the caller silently fell back to a hard-coded ``max_tokens`` — which
+        truncated replies and forced the user to pay the full prompt prefix
+        again on the follow-up turn.  A miss is now logged once per id so the
+        same class of bug cannot go unnoticed again.
+        """
+        key = str(model_id or "").strip()
+        if not key:
+            return None
+
+        config = self.model_configs.get(key)
+        if config is None:
+            config = self.model_configs.get(key.rsplit("/", 1)[-1])
+
+        if config is None and key not in self._unresolved_models:
+            self._unresolved_models.add(key)
+            logger.warning(
+                "模型 %s 未找到运行时配置，将使用默认生成预算（已知配置: %s）",
+                key,
+                sorted(self.model_configs),
+            )
+        return config
 
     def _call_llm_native(
         self,

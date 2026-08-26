@@ -52,16 +52,24 @@ class StatusBar:
 
     def set_last_model(self, model_id: str) -> None:
         self._last_model = model_id
+        # Problem 5: 状态变更时刷新
+        self.refresh()
 
     def set_streaming(self, enabled: bool) -> None:
         self._streaming = enabled
+        # Problem 5: 状态变更时刷新
+        self.refresh()
 
     def set_mode_notification(self, mode_name: str) -> None:
         self._notification = f"🔄{mode_name}"
         self._notification_expires = _time.monotonic() + 3.0
+        # Problem 5: 状态变更时刷新
+        self.refresh()
 
     def add_tool_call(self) -> None:
         self._tool_call_count += 1
+        # Problem 5: 状态变更时刷新
+        self.refresh()
 
     @property
     def tool_call_count(self) -> int:
@@ -75,6 +83,20 @@ class StatusBar:
         if self._notification and _time.monotonic() > self._notification_expires:
             self._notification = None
 
+    # ── Problem 5: 状态刷新 ─────────────────────────────
+
+    def refresh(self) -> None:
+        """刷新状态栏显示（由状态变更点调用）。
+
+        在 prompt_toolkit 交互模式下，状态栏会自动重绘；
+        在非交互模式下，可以选择性地打印状态更新。
+        此方法作为统一的刷新入口，便于未来扩展。
+        """
+        # prompt_toolkit 模式下，状态栏由 get_toolbar_fragments 自动拉取最新状态
+        # 非 PT 模式下的 print_status 是显式调用，不需要在这里触发
+        # 此方法主要作为状态变更的钩子点，便于调试和扩展
+        pass
+
     def _cache_badge(self) -> tuple[str, str] | None:
         if not self.cache_tracker:
             return None
@@ -82,10 +104,14 @@ class StatusBar:
 
     @staticmethod
     def _parse_pct(ratio) -> float:
+        """解析百分比值，返回0.0-1.0范围的比例值。"""
         try:
             if isinstance(ratio, str):
-                return float(ratio.strip('%'))
-            return float(ratio) * 100 if ratio <= 1 else float(ratio)
+                # "50%" → 0.5
+                return float(ratio.strip('%')) / 100
+            val = float(ratio)
+            # 75 → 0.75, 0.5 → 0.5
+            return val / 100 if val > 1 else val
         except (ValueError, TypeError, AttributeError):
             return 0.0
 

@@ -16,8 +16,8 @@ class TestCustomProviderRegistration:
     def test_register_custom_provider_generates_key(self, tmp_path, monkeypatch):
         """注册自定义模型商自动生成 key."""
         monkeypatch.setattr(
-            "xenon.repl.provider_registry.CREDENTIALS_PATH",
-            tmp_path / "creds.yaml",
+            "xenon.repl.provider_registry._get_credentials_path",
+            lambda: tmp_path / "creds.yaml",
         )
         with patch("xenon.repl.provider_registry.fetch_provider_models",
                    return_value=["model-a", "model-b"]):
@@ -31,8 +31,8 @@ class TestCustomProviderRegistration:
     def test_custom_provider_persisted_to_yaml(self, tmp_path, monkeypatch):
         """自定义模型商持久化到 credentials.yaml."""
         monkeypatch.setattr(
-            "xenon.repl.provider_registry.CREDENTIALS_PATH",
-            tmp_path / "creds.yaml",
+            "xenon.repl.provider_registry._get_credentials_path",
+            lambda: tmp_path / "creds.yaml",
         )
         with patch("xenon.repl.provider_registry.fetch_provider_models",
                    return_value=["m1"]):
@@ -47,8 +47,8 @@ class TestCustomProviderRegistration:
     def test_remove_custom_provider(self, tmp_path, monkeypatch):
         """删除自定义模型商."""
         monkeypatch.setattr(
-            "xenon.repl.provider_registry.CREDENTIALS_PATH",
-            tmp_path / "creds.yaml",
+            "xenon.repl.provider_registry._get_credentials_path",
+            lambda: tmp_path / "creds.yaml",
         )
         with patch("xenon.repl.provider_registry.fetch_provider_models",
                    return_value=["m1"]):
@@ -60,8 +60,8 @@ class TestCustomProviderRegistration:
     def test_empty_custom_providers_returns_empty_dict(self, tmp_path, monkeypatch):
         """无自定义模型商时返回空 dict."""
         monkeypatch.setattr(
-            "xenon.repl.provider_registry.CREDENTIALS_PATH",
-            tmp_path / "nonexistent.yaml",
+            "xenon.repl.provider_registry._get_credentials_path",
+            lambda: tmp_path / "nonexistent.yaml",
         )
         assert _load_custom_providers() == {}
 

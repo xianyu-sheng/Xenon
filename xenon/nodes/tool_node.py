@@ -48,6 +48,7 @@ from xenon.nodes.tool_families.read_only_files import (
     MAX_READ_SIZE,  # noqa: F401 - private compatibility export
     ReadOnlyFileToolsMixin,
 )
+from xenon.repl.system_config import get_config
 from xenon.nodes.tool_families.result_filtering import (
     ResultFilteringMixin,
     _infer_time_window,  # noqa: F401 - private compatibility export
@@ -105,12 +106,20 @@ def list_dynamic_tools() -> list[str]:
 
 # ── register_tool 安全策略 ──────────────────────────────
 # 模式1（python_function）允许导入的模块前缀白名单。
-# 默认仅允许项目自身模块；可通过环境变量 XENON_REGISTER_MODULE_ALLOW
-# （逗号分隔）显式追加额外的安全模块前缀，供高级用户扩展。
-_EXTRA_ALLOWED_MODULES = os.environ.get("XENON_REGISTER_MODULE_ALLOW", "")
-_ALLOWED_MODULE_PREFIXES: tuple[str, ...] = ("xenon.",) + tuple(
-    p.strip() + "." for p in _EXTRA_ALLOWED_MODULES.split(",") if p.strip()
-)
+# 默认仅允许项目自身模块；可通过配置文件 development.register_module_allow
+# 或环境变量 XENON_REGISTER_MODULE_ALLOW（逗号分隔）显式追加额外的安全模块前缀，
+# 供高级用户扩展。
+def _get_allowed_module_prefixes() -> tuple[str, ...]:
+    """获取允许注册的模块前缀列表。"""
+    extra = get_config().development.register_module_allow
+    return ("xenon.",) + tuple(
+        p.strip() + "." for p in extra.split(",") if p.strip()
+    )
+
+# 向后兼容别名：导入时求值一次的快照。新代码请直接调用
+# ``_get_allowed_module_prefixes()``——把结果冻结在模块全局里会让配置文件
+# 只在「模块导入前就已存在」时才生效，且测试无法通过重指 CONFIG_PATH 生效。
+_ALLOWED_MODULE_PREFIXES: tuple[str, ...] = _get_allowed_module_prefixes()
 
 # 危险模块顶层名：即便落在允许前缀内也一律拒绝导入（防 os.system / subprocess 等 RCE）。
 _DANGEROUS_MODULE_TOPS: frozenset[str] = frozenset({
@@ -149,10 +158,10 @@ def _validate_register_module(module_path: str) -> tuple[bool, str]:
         logger.warning(f"[register_tool] 拒绝导入危险模块: {mp}")
         return False, (f"安全策略禁止导入危险模块: {top}"
                        f"（os/subprocess/builtins/importlib 等不可注册）")
-    if not any(mp.startswith(p) for p in _ALLOWED_MODULE_PREFIXES):
+    if not any(mp.startswith(p) for p in _get_allowed_module_prefixes()):
         logger.warning(f"[register_tool] 模块不在白名单: {mp}")
         return False, (f"模块 {top} 不在注册白名单内（仅允许 xenon.*，"
-                       f"或通过环境变量 XENON_REGISTER_MODULE_ALLOW 显式声明）")
+                       f"或通过配置文件 development.register_module_allow 显式声明）")
     return True, ""
 
 
@@ -493,10 +502,14 @@ class ToolNode(
             for_write: True 表示写入操作（更严格），False 表示读取操作
 
         Returns:
-            验证通过的 Path 对象（保留原始路径格式）
+            验证通过的 resolved Path 对象（已解析符号链接）
 
         Raises:
             SecurityError: 路径不安全
+
+        Security:
+            返回 resolved 路径防止符号链接逃逸。调用者必须使用返回值
+            而不是原始 file_path，否则回滚等操作可能写入沙箱外。
         """
         if not file_path:
             raise SecurityError("文件路径不能为空")
@@ -573,8 +586,11 @@ class ToolNode(
                         f"禁止读取敏感凭证文件: {resolved}"
                     )
 
-        # 返回原始路径格式（不调用 resolve，保留 Windows 短路径等）
-        return path
+        # 返回 resolved 路径防止符号链接逃逸（CVE-2026-XXXX 修复）
+        # 历史上返回原始 path 是为了"保留 Windows 短路径等"，但这造成了
+        # 安全漏洞：验证用 resolved 但操作用 path，攻击者可通过符号链接逃逸。
+        # 现在统一返回 resolved，调用者必须使用返回值而不是原始 file_path。
+        return resolved
 
     def _validate_command(self, cmd: str) -> None:
         """验证命令是否安全。
@@ -697,6 +713,11 @@ class ToolNode(
                     self.action_type, self._exec_dynamic_tool(dynamic, context)
                 )
             raise ValueError(f"[{self.id}] 不支持的 action_type: {self.action_type}")
+
+        # SecurityError 继续向上抛出：ToolExecutor 已把它归类为终端错误
+        # （_TERMINAL_PATTERNS 匹配「路径越界」等），不重试、不计入断路器。
+        # 在此吞成 success=False 的返回值反而会让直接调用 execute() 的调用方
+        # （含既有安全边界测试）失去「拦截」这一信号。
         return enrich_tool_result(self.action_type, handler(context))
 
     # ── 命令执行 ──────────────────────────────────────────

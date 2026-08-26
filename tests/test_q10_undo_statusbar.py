@@ -14,7 +14,8 @@ from xenon.repl.status_bar import StatusBar
 
 def test_undo_stack_default_limit():
     cm = ContextManager()
-    assert cm.max_undo_snapshots == 5
+    # P3-Low 问题3修复：默认值已从 5 提升到 10
+    assert cm.max_undo_snapshots == 10
 
 
 def test_undo_stack_caps_at_limit():
@@ -120,7 +121,9 @@ def test_print_status_stats_exception_does_not_raise():
 def test_render_needs_compact_warning_first():
     """needs_compact 时 ⚠需压缩 在状态行首位，窄屏截断不丢核心信号。"""
     cm = ContextManager()
-    cm.add_user_message("x" * 200000)  # 触发 needs_compact（~78%）
+    # 使用多样化文本确保足够的 token 数以触发 needs_compact (>= 60% of 128k = 76.8k tokens)
+    text = "The quick brown fox jumps over the lazy dog. " * 8000  # ~80k tokens
+    cm.add_user_message(text)
     bar = _make_bar(ctx_mgr=cm)
     panel = bar.render()
     content = str(panel.renderable)
@@ -140,11 +143,13 @@ def test_render_no_warning_when_not_needed():
 # --------------------------- _parse_pct ---------------------------
 
 def test_parse_pct_string_percent():
-    assert StatusBar._parse_pct("85.0%") == 85.0
+    # P3-Low 修复：_parse_pct 现在返回 0.0-1.0 范围
+    assert StatusBar._parse_pct("85.0%") == 0.85
 
 
 def test_parse_pct_float_ratio():
-    assert StatusBar._parse_pct(0.85) == 85.0
+    # P3-Low 修复：_parse_pct 现在返回 0.0-1.0 范围
+    assert StatusBar._parse_pct(0.85) == 0.85
 
 
 def test_parse_pct_invalid_returns_zero():

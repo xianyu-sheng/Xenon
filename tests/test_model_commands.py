@@ -69,7 +69,7 @@ def test_mode_no_args():
     from xenon.repl.model_registry import ModelRegistry
 
     reg = ModelRegistry()
-    result = _cmd_mode(args="", registry=reg)
+    result = _cmd_mode(args="", registry=reg, session_state={})
     assert "当前范式" in result
 
 
@@ -77,7 +77,7 @@ def test_mode_list_shows_builtin():
     from xenon.repl.model_registry import ModelRegistry
 
     reg = ModelRegistry()
-    result = _cmd_mode(args="", registry=reg)
+    result = _cmd_mode(args="", registry=reg, session_state={})
     assert "可用范式" in result
 
 
@@ -168,5 +168,5 @@ def test_set_model_no_args_no_provider(monkeypatch):
         lambda: [],
     )
     reg = ModelRegistry()
-    result = _cmd_set_model(args="", registry=reg)
+    result = _cmd_set_model(args="", registry=reg, session_state={})
     assert "尚未配置任何 API Key" in result

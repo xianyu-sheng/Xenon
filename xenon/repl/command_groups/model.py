@@ -303,6 +303,10 @@ def _cmd_reload_models(*, args: str, registry: ModelRegistry, session_state: dic
         return "❌ 调用池不可用"
 
     registry.load_from_file(path)
+    # 启动时(repl.py)是 load_from_file + load_from_credentials 两步。这里只做
+    # 第一步会让 credentials.yaml 声明的中转站模型在重载后凭空消失，调用池也
+    # 跟着丢掉它们。两个入口必须加载同一套配置源。
+    registry.load_from_credentials()
     models_cfg = registry.export_config().get("models", {})
     pool.from_config(models_cfg)
     return f"✅ 已从 {path} 重载 {len(models_cfg)} 个模型到调用池"
@@ -363,7 +367,7 @@ register_command(
 )
 
 @command_handler("/mode")
-def _cmd_mode(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
+def _cmd_mode(*, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any) -> str:
     if not args:
         current = registry.get_current_mode()
         lines = [f"当前范式: {current.name} — {current.description}\n"]
@@ -375,6 +379,10 @@ def _cmd_mode(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
 
     try:
         mode = registry.set_mode(args.strip())
+        # P1-High: 更新状态栏显示
+        repl = session_state.get("_repl")
+        if repl and hasattr(repl, 'status_bar'):
+            repl.status_bar.refresh()
         return f"✅ 已切换到范式: {mode.name} — {mode.description}"
     except ValueError as e:
         return f"❌ {e}"
@@ -429,6 +437,11 @@ def _cmd_model(*, session_state: dict, registry: ModelRegistry, **kwargs: Any) -
         # 同步到 auto_router
         if hasattr(repl, 'auto_router') and repl.auto_router:
             repl.auto_router._preferred_model_ids = [selected.model_id]
+            # P1-High: 更新 _last_successful_model_id 和状态栏
+            repl.auto_router.record_model_success(selected.model_id)
+        # P1-High: 更新状态栏显示
+        if hasattr(repl, 'status_bar'):
+            repl.status_bar.set_last_model(selected.model_id)
         # v0.5.2: 清除该模型的失败标记，允许重新调用
         if hasattr(repl, "_failed_models"):
             repl._failed_models.discard(selected.model_id)

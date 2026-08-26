@@ -120,7 +120,9 @@ class ReActEngine(BaseEngine):
         self._tool_executor = ToolExecutor(
             permission_gate=permission_gate,
             execution_policy=self.execution_policy,
-            evidence_enforcement="enforce",
+            # observe：证据链仍完整写入 ledger 供事后审计，但不实时阻断
+            # 用户已明确授权的写操作（enforce 会误拦「直接写文件」这类指令）。
+            evidence_enforcement="observe",
         )
         # v0.8.3: 引擎层跨轮次验证循环
         from xenon.engine.verification_loop import VerificationLoop

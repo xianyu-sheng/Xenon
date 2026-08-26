@@ -12,6 +12,8 @@ import os
 import re
 from pathlib import Path
 
+from xenon.repl.system_config import get_config
+
 
 # ── 项目类型检测标记 ───────────────────────────────────────
 
@@ -108,9 +110,7 @@ class ProjectContext:
             search = search.parent
         self.working_dir = search.resolve()
         home = Path(os.path.expanduser("~")).resolve()
-        allow_home_project = os.environ.get("XENON_ALLOW_HOME_PROJECT", "").lower() in {
-            "1", "true", "yes", "on",
-        }
+        allow_home_project = get_config().development.allow_home_project
         max_levels = 5
 
         # Reset all derived data so a refresh/directory change cannot retain a

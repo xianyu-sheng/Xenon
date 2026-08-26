@@ -52,27 +52,51 @@ class TestIsTerminalError:
 # ── 参数幻觉校验 ───────────────────────────────────────────
 class TestValidateToolParams:
     def test_legit_params_pass(self):
-        ok, _ = validate_tool_params({"file_path": "/tmp/x.py", "content": "print(1)"})
+        ok, _, level = validate_tool_params({"file_path": "/tmp/x.py", "content": "print(1)"})
         assert ok is True
+        assert level == "pass"
 
     def test_content_whitelist_exempt(self):
         """content 即使像代码也不被拦（白名单豁免）。"""
-        ok, _ = validate_tool_params({"content": "def foo():\n  return x}{"})
+        ok, _, level = validate_tool_params({"content": "def foo():\n  return x}{"})
         assert ok is True
+        assert level == "pass"
 
-    def test_hallucination_blocked(self):
-        """≥2 条件命中 → 拦截。"""
-        ok, reason = validate_tool_params({
+    def test_two_hits_warn_but_pass(self):
+        """2 条件命中 → 只警告，放行（避免误杀合法参数）。"""
+        ok, reason, level = validate_tool_params({
             "file_path": "def foo(x):->: <not a path>"  # 函数签名 + Windows 非法字符 + 末尾非法
         })
+        assert ok is True
+        assert level == "warn"
+        assert "file_path" in reason
+
+    def test_three_hits_blocked(self):
+        """≥3 条件命中 → 拦截。"""
+        ok, reason, level = validate_tool_params({
+            # 函数签名 + Windows 非法字符 + 中文占比过高 + 末尾非法字符
+            "file_path": "def 读取文件(参数):-> 中文说明很长很长的一段描述内容 <非法>",
+        })
         assert ok is False
+        assert level == "block"
+        assert "file_path" in reason
+
+    def test_strict_env_restores_two_hit_block(self, monkeypatch):
+        """XENON_STRICT_VALIDATION=1 时 2 条命中恢复为拦截。"""
+        monkeypatch.setenv("XENON_STRICT_VALIDATION", "1")
+        ok, reason, level = validate_tool_params({
+            "file_path": "def foo(x):->: <not a path>"
+        })
+        assert ok is False
+        assert level == "block"
         assert "file_path" in reason
 
     def test_single_hit_not_blocked(self):
         """单条件命中不拦（防误杀合法长路径）。"""
         # 仅末尾非法字符一个条件
-        ok, _ = validate_tool_params({"file_path": "/tmp/normal_path"})
+        ok, _, level = validate_tool_params({"file_path": "/tmp/normal_path"})
         assert ok is True
+        assert level == "pass"
 
     def test_long_shell_pipeline_with_trailing_quote_passes(self):
         command = (
@@ -82,7 +106,7 @@ class TestValidateToolParams:
             "find ~/.zotero ~/.local/opt/zotero -maxdepth 4 -type f -name \"prefs.js\" "
             "-o -name \"*.sqlite\" 2>/dev/null"
         )
-        ok, reason = validate_tool_params({"action": command})
+        ok, reason, _ = validate_tool_params({"action": command})
         assert ok is True, reason
 
 
@@ -182,17 +206,31 @@ class TestToolExecutorPipeline:
         assert "未知工具" in r.observation
 
     def test_param_hallucination_blocked(self, monkeypatch):
+        """≥3 条命中才在流水线里拦截（2 条只警告放行）。"""
         _FakeNode.script = [{"success": True, "content": "must not execute"}]
         ex = _executor(monkeypatch)
         r = ex.execute(
             "write_file",
-            {"file_path": "def foo():->: <bad>", "content": "x"},
+            # 函数签名 + Windows 非法字符 + 中文占比过高
+            {"file_path": "def 读取文件(参数):-> 中文说明很长很长的一段描述内容 <非法>", "content": "x"},
             AgentContext(), tools={"write_file": {}},
         )
         assert r.success is False
         assert "参数校验失败" in r.observation
         assert r.attempts == 0
         assert len(_FakeNode.script) == 1
+
+    def test_param_two_hits_warn_and_execute(self, monkeypatch):
+        """2 条命中：记录警告但继续执行，不再拦截。"""
+        _FakeNode.script = [{"success": True, "content": "executed"}]
+        ex = _executor(monkeypatch)
+        r = ex.execute(
+            "write_file",
+            {"file_path": "def foo():->: <bad>", "content": "x"},
+            AgentContext(), tools={"write_file": {}},
+        )
+        assert r.success is True
+        assert r.observation == "executed"
 
     def test_success_path(self, monkeypatch):
         _FakeNode.script = [{"success": True, "content": "hello"}]
