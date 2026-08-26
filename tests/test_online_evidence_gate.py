@@ -83,12 +83,18 @@ def test_execute_records_shared_context_ledger_for_direct_user(monkeypatch) -> N
     assert len(ledger.query(kind=EventKind.TOOL_OBSERVATION)) == 1
 
 
-def test_production_engines_default_to_enforce() -> None:
+def test_production_engines_default_to_observe() -> None:
+    """生产引擎默认 observe：证据链照常写入 ledger 供事后审计，但不实时阻断。
+
+    enforce 会在用户明确要求写文件时也硬拦（「⛔ 在线证据验证拒绝」），
+    体验不可接受；证据链的价值在事后审计而非实时闸门。enforce 能力保留，
+    调用方仍可显式传 mode="enforce"（本文件其它测试即如此）。
+    """
     from xenon.engine.plan_execute_engine import PlanExecuteEngine
     from xenon.engine.react_engine import ReActEngine
 
-    assert ReActEngine(["mock/model"])._tool_executor.evidence_enforcement == "enforce"
-    assert PlanExecuteEngine(["mock/model"], max_steps=1)._tool_executor.evidence_enforcement == "enforce"
+    assert ReActEngine(["mock/model"])._tool_executor.evidence_enforcement == "observe"
+    assert PlanExecuteEngine(["mock/model"], max_steps=1)._tool_executor.evidence_enforcement == "observe"
 
 
 def test_finalize_evidence_builds_delivery_pack() -> None:

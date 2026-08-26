@@ -841,7 +841,12 @@ class TestE2EProjectTask:
 
         try:
             with _quiet_console():
-                repl = _make_repl_mock(responder)
+                # 这个 responder 只实现 ReAct 协议（单个 thought/action/
+                # action_input），所以范式必须显式钉住。否则「写…再写…最后跑」
+                # 的多阶段句式会被范式自动路由送进 Plan-Execute，规划阶段拿到
+                # ReAct 格式的回复解析不出计划，整轮空转。本测试要验证的是
+                # 写→测→跑的端到端工具链，不是范式选择。
+                repl = _make_repl_mock(responder, mode="react")
                 try:
                     repl._handle_chat(
                         f"在 {tmp_path} 写一个 add 函数，"

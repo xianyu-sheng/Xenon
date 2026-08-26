@@ -218,7 +218,9 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         self._tool_executor = ToolExecutor(
             permission_gate=permission_gate,
             execution_policy=self.execution_policy,
-            evidence_enforcement="enforce",
+            # observe：证据链仍完整写入 ledger 供事后审计，但不实时阻断
+            # 用户已明确授权的写操作（enforce 会误拦「直接写文件」这类指令）。
+            evidence_enforcement="observe",
         )
         # EvidenceGate 管线（Step 1）：挂载默认确定性校验门。
         # EvidenceGate 默认管线由 BaseEngine 统一挂载；本引擎保留

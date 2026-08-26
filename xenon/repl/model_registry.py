@@ -341,10 +341,9 @@ class ModelRegistry:
         if not declared:
             return
 
-        # 仅仅是「同名」不足以判定误写回：中转站往往转售同一批模型，用户手工
-        # 配置的 deepseek-pro 和 providers 段列出的 deepseek-v4-pro 本就重名。
-        # 派生模型的判别特征是它由 load_from_credentials 生成的那套默认值：
-        # weight 恰为 1.0、且没有任何手工调过的字段。
+        # v0.8.6: 派生模型的权威判据是 derived 字段（load_from_credentials 在
+        # 派生时已打标），不再用启发式反推。v0.8.5 的 weight==1.0 判据会误报
+        # 手工配置的 weight: 1.0（正是 ModelConfig 默认值）。
         suspects: list[str] = []
         for alias, mcfg in loaded.items():
             if not isinstance(mcfg, dict):
@@ -352,19 +351,15 @@ class ModelRegistry:
             bare = str(mcfg.get("model_id", "")).rsplit("/", 1)[-1].lower()
             if bare not in declared:
                 continue
-            hand_tuned = any(
-                mcfg.get(field)
-                for field in ("reasoning_effort", "context_window", "temperature")
-            )
-            if hand_tuned or float(mcfg.get("weight", 1.0) or 1.0) != 1.0:
-                continue
-            suspects.append(alias)
+            # derived 字段是权威判据
+            if mcfg.get("derived") is True:
+                suspects.append(alias)
 
         if suspects:
             logger.warning(
-                "%s 中的模型 %s 看起来是 credentials.yaml 派生模型被写回（权重与"
-                "字段均为自动注册时的默认值）。它们将不再随 credentials.yaml 更新；"
-                "如非手工配置，建议从 models.yaml 中删除。",
+                "%s 中的模型 %s 带有 derived=True 标记，说明它们由 "
+                "load_from_credentials 派生但被误写回文件。它们将不再随 "
+                "credentials.yaml 更新；如非手工配置，建议从 models.yaml 中删除。",
                 path,
                 ", ".join(sorted(suspects)),
             )

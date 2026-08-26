@@ -269,7 +269,10 @@ register_command("/resume", "列出 / 恢复保存的会话", "/resume [序号�
 @command_handler("/resume")
 def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
     """断点恢复：列出所有会话，或按序号/名称加载指定会话。"""
-    from xenon.repl.session import list_sessions, load_session, get_session_age, _load_and_migrate
+    from xenon.repl.session import (
+        list_sessions, load_session, get_session_age, _load_and_migrate,
+        touch_session,
+    )
 
     repl = session_state.get("_repl")
     if not repl:
@@ -322,6 +325,10 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
             data = _load_and_migrate(session_path)
         except FileNotFoundError:
             return f"❌ 会话文件不存在: {session_path}"
+        # 按序号恢复也是一次真实加载。_load_and_migrate 本身不计访问
+        # （它被 list_sessions 循环调用，计在那里会让列一次表就把所有会话
+        # 计数全加一），所以这里显式补记，与按名称恢复的口径保持一致。
+        touch_session(session_path)
     else:
         # 命名模式：通过 load_session(name) 加载
         try:
