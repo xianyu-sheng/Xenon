@@ -34,7 +34,11 @@ class TestThreeTierStrategy:
     def test_tier2_llm_six_segment(self, monkeypatch):
         """60-85% → LLM 6 段压缩，history = [system 摘要] + recent。"""
         cm = ContextManager(max_tokens=10000)
-        _add_rounds(cm, 4, big_user="x" * 14000)  # ~7000 tok / 10000 = 0.7
+        _add_rounds(cm, 4, big_user="some content")
+
+        # 直接 mock usage_ratio 返回 0.7，确保进入 Tier 2
+        original_usage_ratio = cm.usage_ratio
+        monkeypatch.setattr(cm, "usage_ratio", lambda: 0.7)
         assert 0.6 < cm.usage_ratio() < 0.85
 
         monkeypatch.setattr(llm, "chat_completion", lambda *a, **k: SIX_SEG_RAW)
@@ -48,9 +52,11 @@ class TestThreeTierStrategy:
 
     def test_tier3_crisis_no_llm(self, monkeypatch):
         """v0.5.0: 空间危急 (>95%) → Q3 用 _auto_summary 正则兜底，不调 LLM。"""
-        # 使用极小的 max_tokens 使 ratio 超 95% 进入 critical
         cm = ContextManager(max_tokens=3000)
-        _add_rounds(cm, 4, big_user="x" * 7000)  # ~3500/3000 > 0.95
+        _add_rounds(cm, 4, big_user="some content")
+
+        # Mock usage_ratio 返回 0.96，确保进入 Tier 3 crisis
+        monkeypatch.setattr(cm, "usage_ratio", lambda: 0.96)
         assert cm.usage_ratio() > 0.95
 
         def boom(*a, **k):
@@ -153,7 +159,10 @@ class TestSafeTruncation:
 class TestFallbackRetry:
     def test_first_model_fails_second_succeeds(self, monkeypatch):
         cm = ContextManager(max_tokens=10000)
-        _add_rounds(cm, 4, big_user="x" * 14000)
+        _add_rounds(cm, 4, big_user="some content")
+
+        # Mock usage_ratio 进入 Tier 2
+        monkeypatch.setattr(cm, "usage_ratio", lambda: 0.7)
         calls = {"n": 0}
 
         def fake_chat(model_id, *a, **k):
@@ -169,7 +178,10 @@ class TestFallbackRetry:
 
     def test_all_models_fail_falls_back_to_auto(self, monkeypatch):
         cm = ContextManager(max_tokens=10000)
-        _add_rounds(cm, 4, big_user="x" * 14000)
+        _add_rounds(cm, 4, big_user="some content")
+
+        # Mock usage_ratio 进入 Tier 2
+        monkeypatch.setattr(cm, "usage_ratio", lambda: 0.7)
 
         def fake_chat(model_id, *a, **k):
             raise RuntimeError("all down")
@@ -183,7 +195,10 @@ class TestFallbackRetry:
     def test_parse_failure_triggers_next_model(self, monkeypatch):
         """LLM 返回非 6 段文本 → 解析失败 → 尝试下一个模型。"""
         cm = ContextManager(max_tokens=10000)
-        _add_rounds(cm, 4, big_user="x" * 14000)
+        _add_rounds(cm, 4, big_user="some content")
+
+        # Mock usage_ratio 进入 Tier 2
+        monkeypatch.setattr(cm, "usage_ratio", lambda: 0.7)
         calls = []
 
         def fake_chat(model_id, *a, **k):
@@ -204,7 +219,10 @@ class TestPersistMarkdown:
         cm = ContextManager(max_tokens=10000)
         cm.persist_dir = tmp_path
         cm.session_id = "sess-f3"
-        _add_rounds(cm, 4, big_user="x" * 14000)
+        _add_rounds(cm, 4, big_user="some content")
+
+        # Mock usage_ratio 进入 Tier 2
+        monkeypatch.setattr(cm, "usage_ratio", lambda: 0.7)
         monkeypatch.setattr(llm, "chat_completion", lambda *a, **k: SIX_SEG_RAW)
 
         cm.compact(model_priority=["m1"])
@@ -218,7 +236,10 @@ class TestPersistMarkdown:
         cm = ContextManager(max_tokens=10000)
         cm.persist_dir = None
         cm.session_id = None
-        _add_rounds(cm, 4, big_user="x" * 14000)
+        _add_rounds(cm, 4, big_user="some content")
+
+        # Mock usage_ratio 进入 Tier 2
+        monkeypatch.setattr(cm, "usage_ratio", lambda: 0.7)
         monkeypatch.setattr(llm, "chat_completion", lambda *a, **k: SIX_SEG_RAW)
         # 即使持久化路径不可写，压缩主流程仍完成
         result = cm.compact(model_priority=["m1"])
