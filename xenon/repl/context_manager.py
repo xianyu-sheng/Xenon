@@ -586,6 +586,7 @@ class ContextManager:
 
         P2-Medium：线程安全保护。
         """
+        content = None
         with self._lock:
             for i in range(len(self.history) - 1, -1, -1):
                 if self.history[i].role == "assistant":
@@ -594,10 +595,9 @@ class ContextManager:
                     self._advance_cache_epoch("trim_assistant")
                     # Problem 5: trim 后通知状态栏刷新（锁外调用，避免回调死锁）
                     break
-            else:
-                return None
-        self._notify_status_change()
-        return content if 'content' in locals() else None
+        if content is not None:
+            self._notify_status_change()
+        return content
 
     def trim_last_user(self) -> str | None:
         """移除并返回最后一条 user 消息（用于引擎异常时清理孤立 user 消息）。
@@ -607,15 +607,18 @@ class ContextManager:
         占位错误消息，无法占位时回退到此方法清理 user 消息。
         P2-Medium：线程安全保护。
         """
+        content = None
         with self._lock:
             for i in range(len(self.history) - 1, -1, -1):
                 if self.history[i].role == "user":
                     content = self.history.pop(i).content
                     # Problem 1: trim 后更新 cache_epoch
                     self._advance_cache_epoch("trim_user")
-        # Problem 5: trim 后通知状态栏刷新（锁外调用，避免回调死锁）
-        self._notify_status_change()
-        return content if 'content' in locals() else None
+                    break
+        if content is not None:
+            # Problem 5: trim 后通知状态栏刷新（锁外调用，避免回调死锁）
+            self._notify_status_change()
+        return content
 
     # ── Token 估算 ────────────────────────────────────────
 
@@ -623,24 +626,44 @@ class ContextManager:
         """订阅 llm_client 的 usage 回调（P3-Q1 续 / §8.8.1）。
 
         懒导入避免 repl ↔ utils 循环；回调异常已被 llm_client 隔离，这里只做记录。
+        P1: 订阅后验证回调是否成功注册到 _USAGE_CALLBACKS。
         """
         try:
             from xenon.utils.llm_client import register_usage_callback
 
             self._usage_unsub = register_usage_callback(self._on_usage)
+
+            # P1: 验证回调是否成功注册（非阻塞式验证）
+            try:
+                from xenon.utils.llm_client import _USAGE_CALLBACKS
+                if self._on_usage not in _USAGE_CALLBACKS:
+                    logger.warning("回调已注册但未在 _USAGE_CALLBACKS 中找到（测试环境可忽略）")
+            except Exception:  # noqa: BLE001 — 验证失败不影响订阅
+                pass
+
+            logger.debug("Usage callback successfully registered")
         except Exception:  # noqa: BLE001 — 订阅失败不应阻断 ContextManager 构造
             logger.warning("真实 usage 订阅失败，回退启发式估算", exc_info=True)
             self._usage_unsub = None
 
     def _on_usage(self, model_id: str, usage: Any, latency: float) -> None:
-        """usage 回调适配：把 LLMUsage 转成 dict 记录（compact 期间抑制）。"""
+        """usage 回调适配：把 LLMUsage 转成 dict 记录（compact 期间抑制）。
+
+        P0-Critical: 记录详细的 usage 信息供调试。
+        """
         if self._suppress_usage:
             return
-        self.record_real_usage(
-            getattr(usage, "prompt_tokens", 0),
-            getattr(usage, "completion_tokens", 0),
-            getattr(usage, "total_tokens", 0),
+
+        prompt_tokens = getattr(usage, "prompt_tokens", 0)
+        completion_tokens = getattr(usage, "completion_tokens", 0)
+        total_tokens = getattr(usage, "total_tokens", 0)
+
+        logger.debug(
+            "Usage callback triggered: model=%s, prompt=%d, completion=%d, total=%d, latency=%.2fs",
+            model_id, prompt_tokens, completion_tokens, total_tokens, latency
         )
+
+        self.record_real_usage(prompt_tokens, completion_tokens, total_tokens)
 
     def record_real_usage(
         self,
@@ -976,11 +999,34 @@ class ContextManager:
     def _cleanup_old_events(self) -> None:
         """Problem 4: compact 后清理旧 event_log（保留当前 epoch 的事件）。
 
-        这是一个占位实现，清理逻辑由 SessionEventLog 内部管理。
+        清理不在新 history 范围内的事件，确保 event_log 与 history 保持一致。
         """
-        # SessionEventLog 在 start_epoch 时已经处理了旧事件的清理
-        # 这里作为显式的清理点，未来可以添加更多逻辑
-        pass
+        # 收集当前 history 中所有有效的 event_id
+        valid_event_ids = set()
+        for turn in self.history:
+            event_id = (turn.metadata or {}).get("event_id")
+            if event_id is not None:
+                valid_event_ids.add(event_id)
+
+        # 清理 event_log 中不在当前 history 范围内的事件
+        # 保留当前 epoch 的所有事件（因为可能还有未记录到 history 的事件）
+        current_epoch = self.cache_epoch
+        to_remove = []
+
+        for event_id, event in enumerate(self.event_log._events):
+            # 保留当前 epoch 的事件
+            if event.epoch == current_epoch:
+                continue
+            # 保留在当前 history 中引用的事件
+            if event_id in valid_event_ids:
+                continue
+            # 其他旧事件标记为待删除
+            to_remove.append(event_id)
+
+        # 从后向前删除，避免索引错位
+        for event_id in reversed(to_remove):
+            if 0 <= event_id < len(self.event_log._events):
+                self.event_log._events.pop(event_id)
 
     def _safe_truncation(self) -> list[ConversationTurn]:
         """F3 Tier 3 安全截断：保留所有 system 消息 + 最近 30% 非系统消息（min5 max20）。"""
