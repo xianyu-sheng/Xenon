@@ -449,7 +449,19 @@ def _cmd_compact(
     model_ids = registry.get_role_priority("planner") if not summary else None
     result = ctx_mgr.compact(summary, model_priority=model_ids)
     stats = ctx_mgr.stats()
-    return f"✅ 对话已压缩。当前 Token: {stats['estimated_tokens']:,} ({stats['usage_ratio']})\n\n摘要:\n{result}"
+
+    # P3-Low 2.9: 提供快照持久化状态反馈
+    snapshot_info = ""
+    if hasattr(ctx_mgr, '_last_snapshot_path') and ctx_mgr._last_snapshot_path:
+        snapshot_info = f"\n📝 快照已保存: {ctx_mgr._last_snapshot_path}"
+    elif hasattr(ctx_mgr, '_last_snapshot_error') and ctx_mgr._last_snapshot_error:
+        snapshot_info = f"\n⚠️  快照保存失败: {ctx_mgr._last_snapshot_error}"
+
+    # 格式化 usage_ratio（现在是 float 而非字符串）
+    usage_ratio = stats['usage_ratio']
+    usage_str = f"{usage_ratio:.1%}" if isinstance(usage_ratio, (int, float)) else str(usage_ratio)
+
+    return f"✅ 对话已压缩。当前 Token: {stats['estimated_tokens']:,} ({usage_str}){snapshot_info}\n\n摘要:\n{result}"
 
 
 # /config ──────────────────────────────────────────────────
