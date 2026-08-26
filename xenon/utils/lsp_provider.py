@@ -104,21 +104,23 @@ class LSPProvider:
                     start = max(0, def_line - 1)
                     end = min(len(lines), def_line + 4)
                     code_snippet = "\n".join(
-                        f"{i+1:4d}| {lines[i]}" for i in range(start, end)
+                        f"{i + 1:4d}| {lines[i]}" for i in range(start, end)
                     )
                 except Exception:
                     pass
 
-            results.append({
-                "name": d.name,
-                "type": d.type,
-                "module_path": def_path,
-                "line": def_line,
-                "column": def_column,
-                "description": d.description,
-                "docstring": d.docstring(raw=True)[:500] if d.docstring() else "",
-                "code_snippet": code_snippet,
-            })
+            results.append(
+                {
+                    "name": d.name,
+                    "type": d.type,
+                    "module_path": def_path,
+                    "line": def_line,
+                    "column": def_column,
+                    "description": d.description,
+                    "docstring": d.docstring(raw=True)[:500] if d.docstring() else "",
+                    "code_snippet": code_snippet,
+                }
+            )
 
         return {
             "success": True,
@@ -193,14 +195,16 @@ class LSPProvider:
                 except Exception:
                     pass
 
-            results.append({
-                "name": ref.name,
-                "module_path": ref_path,
-                "line": ref_line,
-                "column": ref_column,
-                "code_line": code_line,
-                "in_same_file": ref_path == str(path),
-            })
+            results.append(
+                {
+                    "name": ref.name,
+                    "module_path": ref_path,
+                    "line": ref_line,
+                    "column": ref_column,
+                    "code_line": code_line,
+                    "in_same_file": ref_path == str(path),
+                }
+            )
 
         # 按文件分组统计
         file_groups: dict[str, int] = {}
@@ -255,17 +259,23 @@ class LSPProvider:
         for sig in signatures[:5]:
             params = []
             for p in sig.params:
-                params.append({
-                    "name": p.name,
-                    "description": p.description,
-                    "infer_type": getattr(p, "infer_type", ""),
-                })
-            sig_list.append({
-                "name": sig.name,
-                "description": sig.description,
-                "params": params,
-                "docstring": sig.docstring(raw=True)[:500] if sig.docstring() else "",
-            })
+                params.append(
+                    {
+                        "name": p.name,
+                        "description": p.description,
+                        "infer_type": getattr(p, "infer_type", ""),
+                    }
+                )
+            sig_list.append(
+                {
+                    "name": sig.name,
+                    "description": sig.description,
+                    "params": params,
+                    "docstring": sig.docstring(raw=True)[:500]
+                    if sig.docstring()
+                    else "",
+                }
+            )
 
         help_text = ""
         if helps:
@@ -276,12 +286,16 @@ class LSPProvider:
             names = script.infer(line, column)
             type_info = []
             for n in names[:5]:
-                type_info.append({
-                    "name": n.name,
-                    "type": n.type,
-                    "description": n.description,
-                    "docstring": n.docstring(raw=True)[:300] if n.docstring() else "",
-                })
+                type_info.append(
+                    {
+                        "name": n.name,
+                        "type": n.type,
+                        "description": n.description,
+                        "docstring": n.docstring(raw=True)[:300]
+                        if n.docstring()
+                        else "",
+                    }
+                )
         except Exception:
             type_info = []
 
@@ -322,14 +336,16 @@ class LSPProvider:
             # jedi 的 get_syntax_errors 返回语法错误
             errors = script.get_syntax_errors()
             for e in errors:
-                diagnostics.append({
-                    "severity": "Error",
-                    "line": e.line,
-                    "column": e.column,
-                    "message": e.message,
-                    "until_line": getattr(e, "until_line", e.line),
-                    "until_column": getattr(e, "until_column", e.column + 1),
-                })
+                diagnostics.append(
+                    {
+                        "severity": "Error",
+                        "line": e.line,
+                        "column": e.column,
+                        "message": e.message,
+                        "until_line": getattr(e, "until_line", e.line),
+                        "until_column": getattr(e, "until_column", e.column + 1),
+                    }
+                )
         except Exception as e:
             logger.warning(f"jedi diagnostics 失败: {e}")
 
@@ -369,7 +385,9 @@ class LSPProvider:
 
         try:
             script = jedi.Script(source, path=str(path))
-            names = script.get_names(all_scopes=True, definitions=True, references=False)
+            names = script.get_names(
+                all_scopes=True, definitions=True, references=False
+            )
         except Exception as e:
             logger.warning(f"jedi get_symbols 失败: {e}")
             return {"success": False, "error": f"分析失败: {e}"}

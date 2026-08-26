@@ -24,7 +24,11 @@ from xenon.utils.llm_client import (
 
 
 def _endpoint(provider: str) -> ModelEndpoint:
-    base = "https://api.anthropic.com" if provider == "anthropic" else "https://api.openai.com/v1"
+    base = (
+        "https://api.anthropic.com"
+        if provider == "anthropic"
+        else "https://api.openai.com/v1"
+    )
     return ModelEndpoint(provider=provider, model_name="m", base_url=base, api_key="k")
 
 
@@ -199,8 +203,12 @@ class _FakeStreamClient:
 
 
 def _patch_stream(monkeypatch, provider: str, lines: list[str]):
-    monkeypatch.setattr(lc, "_create_http_client", lambda timeout=120: _FakeStreamClient(lines))
-    monkeypatch.setattr(lc, "build_endpoint", lambda mid, c=None, b=None: _endpoint(provider))
+    monkeypatch.setattr(
+        lc, "_create_http_client", lambda timeout=120: _FakeStreamClient(lines)
+    )
+    monkeypatch.setattr(
+        lc, "build_endpoint", lambda mid, c=None, b=None: _endpoint(provider)
+    )
 
 
 class TestStreamUsageOpenAI:
@@ -213,25 +221,33 @@ class TestStreamUsageOpenAI:
         _patch_stream(monkeypatch, "openai", lines)
 
         with pytest.raises(lc.ResponseTruncatedError, match="finish_reason=length"):
-            list(lc.chat_completion_stream(
-                "openai/gpt-4o",
-                [{"role": "user", "content": "hi"}],
-                credentials={"openai": "sk-test"},
-            ))
+            list(
+                lc.chat_completion_stream(
+                    "openai/gpt-4o",
+                    [{"role": "user", "content": "hi"}],
+                    credentials={"openai": "sk-test"},
+                )
+            )
 
     def test_reasoning_effort_passed_to_stream_payload(self, monkeypatch):
-        client = _FakeStreamClient([
-            'data: {"choices":[{"delta":{"content":"ok"}}]}',
-            "data: [DONE]",
-        ])
+        client = _FakeStreamClient(
+            [
+                'data: {"choices":[{"delta":{"content":"ok"}}]}',
+                "data: [DONE]",
+            ]
+        )
         monkeypatch.setattr(lc, "_create_http_client", lambda timeout=120: client)
-        monkeypatch.setattr(lc, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai"))
+        monkeypatch.setattr(
+            lc, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai")
+        )
 
-        chunks = list(lc.chat_completion_stream(
-            "openai/o3",
-            [{"role": "user", "content": "hi"}],
-            reasoning_effort="high",
-        ))
+        chunks = list(
+            lc.chat_completion_stream(
+                "openai/o3",
+                [{"role": "user", "content": "hi"}],
+                reasoning_effort="high",
+            )
+        )
 
         assert chunks == ["ok"]
         assert client.requests[0]["json"]["reasoning_effort"] == "high"
@@ -247,9 +263,13 @@ class TestStreamUsageOpenAI:
         ]
         _patch_stream(monkeypatch, "openai", lines)
         try:
-            chunks = list(lc.chat_completion_stream(
-                "openai/gpt-4o", [{"role": "user", "content": "hi"}],
-                credentials={"openai": "sk-test"}))
+            chunks = list(
+                lc.chat_completion_stream(
+                    "openai/gpt-4o",
+                    [{"role": "user", "content": "hi"}],
+                    credentials={"openai": "sk-test"},
+                )
+            )
         finally:
             unsub()
 
@@ -271,8 +291,13 @@ class TestStreamUsageOpenAI:
         ]
         _patch_stream(monkeypatch, "openai", lines)
         try:
-            list(lc.chat_completion_stream("openai/gpt-4o", [{"role": "user", "content": "hi"}],
-                                           credentials={"openai": "sk-test"}))
+            list(
+                lc.chat_completion_stream(
+                    "openai/gpt-4o",
+                    [{"role": "user", "content": "hi"}],
+                    credentials={"openai": "sk-test"},
+                )
+            )
         finally:
             unsub()
         assert seen == []  # 无 usage chunk → 不 emit
@@ -287,11 +312,13 @@ class TestStreamUsageAnthropic:
         _patch_stream(monkeypatch, "anthropic", lines)
 
         with pytest.raises(lc.ResponseTruncatedError, match="stop_reason=max_tokens"):
-            list(lc.chat_completion_stream(
-                "anthropic/claude-3-5-sonnet",
-                [{"role": "user", "content": "hi"}],
-                credentials={"anthropic": "sk-test"},
-            ))
+            list(
+                lc.chat_completion_stream(
+                    "anthropic/claude-3-5-sonnet",
+                    [{"role": "user", "content": "hi"}],
+                    credentials={"anthropic": "sk-test"},
+                )
+            )
 
     def test_emits_usage_from_events(self, monkeypatch):
         seen: list[tuple[str, LLMUsage, float]] = []
@@ -303,9 +330,13 @@ class TestStreamUsageAnthropic:
         ]
         _patch_stream(monkeypatch, "anthropic", lines)
         try:
-            chunks = list(lc.chat_completion_stream(
-                "anthropic/claude-3-5-sonnet", [{"role": "user", "content": "hi"}],
-                credentials={"anthropic": "sk-test"}))
+            chunks = list(
+                lc.chat_completion_stream(
+                    "anthropic/claude-3-5-sonnet",
+                    [{"role": "user", "content": "hi"}],
+                    credentials={"anthropic": "sk-test"},
+                )
+            )
         finally:
             unsub()
 

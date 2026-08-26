@@ -49,10 +49,12 @@ class TestPlanCompletenessGate:
         verdict = gate.check(
             None,
             user_input="Fix the bug in src/main.py",
-            plan={"steps": [
-                {"id": 1, "task": "读", "tool": "read_file"},
-                {"id": 2, "task": "分析", "tool": None},
-            ]},
+            plan={
+                "steps": [
+                    {"id": 1, "task": "读", "tool": "read_file"},
+                    {"id": 2, "task": "分析", "tool": None},
+                ]
+            },
         )
         assert verdict.passed is False
         assert verdict.phase == "plan"
@@ -62,10 +64,12 @@ class TestPlanCompletenessGate:
         verdict = gate.check(
             None,
             user_input="Fix the bug in src/main.py",
-            plan={"steps": [
-                {"id": 1, "task": "读", "tool": "read_file"},
-                {"id": 2, "task": "改", "tool": "edit_file"},
-            ]},
+            plan={
+                "steps": [
+                    {"id": 1, "task": "读", "tool": "read_file"},
+                    {"id": 2, "task": "改", "tool": "edit_file"},
+                ]
+            },
         )
         assert verdict.passed is True
 
@@ -81,7 +85,9 @@ class TestPlanCompletenessGate:
     def test_empty_plan_passes_to_caller(self) -> None:
         gate = PlanCompletenessGate()
         verdict = gate.check(
-            None, user_input="Fix bug", plan={"steps": []},
+            None,
+            user_input="Fix bug",
+            plan={"steps": []},
         )
         assert verdict.passed is True  # 空计划由调用方另行处理
 
@@ -89,9 +95,11 @@ class TestPlanCompletenessGate:
 class TestTaskCompletionGate:
     def test_rejects_no_write_for_write_task(self) -> None:
         gate = TaskCompletionGate()
-        tracker = _make_tracker([
-            _make_call("read_file", {"file_path": "a.py"}, True),
-        ])
+        tracker = _make_tracker(
+            [
+                _make_call("read_file", {"file_path": "a.py"}, True),
+            ]
+        )
         verdict = gate.check(
             None,
             user_input="Fix the bug in src/main.py",
@@ -103,9 +111,11 @@ class TestTaskCompletionGate:
 
     def test_passes_when_write_succeeded(self) -> None:
         gate = TaskCompletionGate()
-        tracker = _make_tracker([
-            _make_call("edit_file", {"file_path": "a.py"}, True),
-        ])
+        tracker = _make_tracker(
+            [
+                _make_call("edit_file", {"file_path": "a.py"}, True),
+            ]
+        )
         verdict = gate.check(
             None,
             user_input="Fix the bug in src/main.py",
@@ -152,7 +162,9 @@ class TestFileClaimGate:
         verdict = gate.check(
             None,
             output="我创建了 src/new_module.py，实现了功能。",
-            tracker=_make_tracker([_make_call("read_file", {"file_path": "a.py"}, True)]),
+            tracker=_make_tracker(
+                [_make_call("read_file", {"file_path": "a.py"}, True)]
+            ),
         )
         assert verdict.passed is False
         assert verdict.payload is not None
@@ -160,9 +172,11 @@ class TestFileClaimGate:
 
     def test_passes_verified_claim(self) -> None:
         gate = FileClaimGate()
-        tracker = _make_tracker([
-            _make_call("write_file", {"file_path": "src/new_module.py"}, True),
-        ])
+        tracker = _make_tracker(
+            [
+                _make_call("write_file", {"file_path": "src/new_module.py"}, True),
+            ]
+        )
         verdict = gate.check(
             None,
             output="我创建了 src/new_module.py，实现了功能。",
@@ -174,9 +188,11 @@ class TestFileClaimGate:
 class TestEvidenceCaptureGate:
     def test_captures_evidence(self) -> None:
         gate = EvidenceCaptureGate()
-        tracker = _make_tracker([
-            _make_call("edit_file", {"file_path": "a.py"}, True),
-        ])
+        tracker = _make_tracker(
+            [
+                _make_call("edit_file", {"file_path": "a.py"}, True),
+            ]
+        )
         verdict = gate.check(None, tracker=tracker)
         assert verdict.passed is True
         assert verdict.payload is not None
@@ -214,10 +230,12 @@ class TestPipelineOnPlanExecuteEngine:
         verdict = eng.gate_failed(
             "plan",
             user_input="Fix the bug",
-            plan={"steps": [
-                {"id": 1, "task": "读", "tool": "read_file"},
-                {"id": 2, "task": "改", "tool": "edit_file"},
-            ]},
+            plan={
+                "steps": [
+                    {"id": 1, "task": "读", "tool": "read_file"},
+                    {"id": 2, "task": "改", "tool": "edit_file"},
+                ]
+            },
         )
         assert verdict is None
 
@@ -291,13 +309,19 @@ class TestFinalizeEvidenceLayeredDelivery:
         engine = self._make_engine()
         ctx = AgentContext()
         ledger = self._bind(engine, ctx)
-        tracker = _make_tracker([
-            _make_call("edit_file", {"file_path": "src/real_fix.py"}, True),
-        ])
+        tracker = _make_tracker(
+            [
+                _make_call("edit_file", {"file_path": "src/real_fix.py"}, True),
+            ]
+        )
         output = "已修改 src/real_fix.py 完成修复；并创建了 tmp/repro.py 复现脚本。"
         # 不应 raise
         engine.finalize_evidence(context=ctx, output=output, tracker=tracker)
-        events = [e for e in ledger.events if getattr(e.kind, "value", str(e.kind)) == "gate_verdict"]
+        events = [
+            e
+            for e in ledger.events
+            if getattr(e.kind, "value", str(e.kind)) == "gate_verdict"
+        ]
         degraded = [e for e in events if e.payload.get("degraded")]
         assert degraded, "已落盘场景必须记录降级警告"
 
@@ -306,9 +330,11 @@ class TestFinalizeEvidenceLayeredDelivery:
         engine = self._make_engine()
         ctx = AgentContext()
         self._bind(engine, ctx)
-        tracker = _make_tracker([
-            _make_call("read_file", {"file_path": "src/real_fix.py"}, True),
-        ])
+        tracker = _make_tracker(
+            [
+                _make_call("read_file", {"file_path": "src/real_fix.py"}, True),
+            ]
+        )
         output = "我创建了 src/real_fix.py，修改完成。"
         try:
             engine.finalize_evidence(context=ctx, output=output, tracker=tracker)
@@ -321,7 +347,9 @@ class TestFinalizeEvidenceLayeredDelivery:
         engine = self._make_engine()
         ctx = AgentContext()
         self._bind(engine, ctx)
-        tracker = _make_tracker([
-            _make_call("edit_file", {"file_path": "src/real_fix.py"}, True),
-        ])
+        tracker = _make_tracker(
+            [
+                _make_call("edit_file", {"file_path": "src/real_fix.py"}, True),
+            ]
+        )
         engine.finalize_evidence(context=ctx, output="修复完成。", tracker=tracker)

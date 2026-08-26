@@ -76,8 +76,7 @@ class MemoryService:
                 (
                     item
                     for item in target
-                    if item.checksum == checksum
-                    and item.status == MemoryStatus.ACTIVE
+                    if item.checksum == checksum and item.status == MemoryStatus.ACTIVE
                 ),
                 None,
             )
@@ -170,14 +169,10 @@ class MemoryService:
         ]
         ranked = self.retriever.rank(query, candidates)
         budget = (
-            token_budget
-            if token_budget is not None
-            else self.policy.max_context_tokens
+            token_budget if token_budget is not None else self.policy.max_context_tokens
         )
         result_limit = (
-            limit
-            if limit is not None
-            else self.policy.default_retrieval_limit
+            limit if limit is not None else self.policy.default_retrieval_limit
         )
         selected: list[MemoryMatch] = []
         used = 0
@@ -207,7 +202,11 @@ class MemoryService:
         include_archived: bool = False,
         tolerate_errors: bool = False,
     ) -> list[MemoryRecord]:
-        scopes = (scope,) if scope else (*self.registry.persistent_scopes(), MemoryScope.SESSION)
+        scopes = (
+            (scope,)
+            if scope
+            else (*self.registry.persistent_scopes(), MemoryScope.SESSION)
+        )
         records: list[MemoryRecord] = []
         for item_scope in scopes:
             try:
@@ -321,9 +320,7 @@ class MemoryService:
             try:
                 self.registry.get(scope).archive_records([superseded, *archived])
             except (OSError, ValueError) as exc:
-                warning = self._join_warnings(
-                    warning, f"归档日志写入失败：{exc}"
-                )
+                warning = self._join_warnings(warning, f"归档日志写入失败：{exc}")
             warning = self._join_warnings(warning, self._entrypoint_warning(scope))
         return MemoryReceipt(
             record=replacement,
@@ -421,9 +418,7 @@ class MemoryService:
                     (item for item in records if item.id == record.supersedes), None
                 )
                 if previous is None:
-                    raise ValueError(
-                        f"记忆 [{memory_id}] 的替代链已损坏，拒绝恢复"
-                    )
+                    raise ValueError(f"记忆 [{memory_id}] 的替代链已损坏，拒绝恢复")
                 if previous.status == MemoryStatus.ACTIVE:
                     previous.status = MemoryStatus.SUPERSEDED
                     previous.updated_at = now
@@ -463,13 +458,12 @@ class MemoryService:
         changed_total = 0
         records = [
             record
-            for record in self.list_records(
-                include_archived=True, tolerate_errors=True
-            )
+            for record in self.list_records(include_archived=True, tolerate_errors=True)
             if record.id in wanted
         ]
         scopes = {record.scope for record in records}
         for scope in scopes:
+
             def mutate(records: list[MemoryRecord]) -> int:
                 changed = 0
                 for record in records:
@@ -531,9 +525,7 @@ class MemoryService:
             for record in records:
                 if record.checksum != content_checksum(record.content):
                     issues.append(
-                        MemoryHealthIssue(
-                            "error", scope, "内容校验和不匹配", record.id
-                        )
+                        MemoryHealthIssue("error", scope, "内容校验和不匹配", record.id)
                     )
                 if MemoryCandidateDetector.contains_secret(record.content):
                     issues.append(
@@ -625,7 +617,11 @@ class MemoryService:
         if scope == MemoryScope.SESSION:
             if include_archived:
                 return self._session_records
-            return [item for item in self._session_records if item.status == MemoryStatus.ACTIVE]
+            return [
+                item
+                for item in self._session_records
+                if item.status == MemoryStatus.ACTIVE
+            ]
         return self.registry.get(scope).list_records(include_archived=include_archived)
 
     def _maintain_scope(
@@ -656,14 +652,23 @@ class MemoryService:
             active = [item for item in records if item.status == MemoryStatus.ACTIVE]
             total = sum(estimate_tokens(item.content) for item in active)
             heavy_kinds = {
-                kind for kind in MemoryKind
-                if sum(estimate_tokens(item.content) for item in active if item.kind == kind)
+                kind
+                for kind in MemoryKind
+                if sum(
+                    estimate_tokens(item.content)
+                    for item in active
+                    if item.kind == kind
+                )
                 > self.policy.max_leaf_tokens
             }
             if total <= self.policy.max_active_tokens and not heavy_kinds:
                 break
             victim_index = next(
-                (i for i, item in enumerate(candidates) if not heavy_kinds or item.kind in heavy_kinds),
+                (
+                    i
+                    for i, item in enumerate(candidates)
+                    if not heavy_kinds or item.kind in heavy_kinds
+                ),
                 None,
             )
             if victim_index is None:
@@ -676,7 +681,11 @@ class MemoryService:
         if any(item.status == MemoryStatus.ACTIVE for item in records):
             remaining = [item for item in records if item.status == MemoryStatus.ACTIVE]
             remaining_over_leaf = any(
-                sum(estimate_tokens(item.content) for item in remaining if item.kind == kind)
+                sum(
+                    estimate_tokens(item.content)
+                    for item in remaining
+                    if item.kind == kind
+                )
                 > self.policy.max_leaf_tokens
                 for kind in MemoryKind
             )
@@ -695,7 +704,9 @@ class MemoryService:
             created = datetime.fromisoformat(record.created_at)
             if created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)
-            age_days = max(0.0, (datetime.now(timezone.utc) - created).total_seconds() / 86400)
+            age_days = max(
+                0.0, (datetime.now(timezone.utc) - created).total_seconds() / 86400
+            )
         except ValueError:
             pass
         recency = 1.0 / (1.0 + age_days / 30.0)
@@ -771,9 +782,7 @@ class MemoryService:
                 and signature[0] == other_signature[0]
                 and signature[1] != other_signature[1]
             ):
-                conflicts.append(
-                    MemoryConflict(record, "同一主题存在不同取值", 0.95)
-                )
+                conflicts.append(MemoryConflict(record, "同一主题存在不同取值", 0.95))
                 continue
             other_polarity = self._polarity_signature(record.content)
             if (
@@ -782,9 +791,7 @@ class MemoryService:
                 and polarity[0] == other_polarity[0]
                 and polarity[1] != other_polarity[1]
             ):
-                conflicts.append(
-                    MemoryConflict(record, "同一约束存在相反要求", 0.98)
-                )
+                conflicts.append(MemoryConflict(record, "同一约束存在相反要求", 0.98))
         return sorted(conflicts, key=lambda item: (-item.confidence, item.record.id))
 
     @staticmethod
@@ -857,7 +864,9 @@ class MemoryService:
             return
         if self.registry.project_root is None:
             raise ValueError("当前未检测到项目，无法创建项目记忆入口")
-        filename = "XENON.local.md" if scope == MemoryScope.PROJECT_LOCAL else "XENON.md"
+        filename = (
+            "XENON.local.md" if scope == MemoryScope.PROJECT_LOCAL else "XENON.md"
+        )
         relative_index = (
             ".xenon/memory/local/INDEX.md"
             if scope == MemoryScope.PROJECT_LOCAL
@@ -876,7 +885,11 @@ class MemoryService:
             f"{marker}\n"
             "<!-- xenon-memory-index:end -->\n"
         )
-        atomic_write_text(path, current.rstrip() + "\n" + block, mode=0o600 if scope == MemoryScope.PROJECT_LOCAL else 0o644)
+        atomic_write_text(
+            path,
+            current.rstrip() + "\n" + block,
+            mode=0o600 if scope == MemoryScope.PROJECT_LOCAL else 0o644,
+        )
         if scope == MemoryScope.PROJECT_LOCAL:
             self._ensure_local_git_excludes()
 
@@ -902,7 +915,11 @@ class MemoryService:
                 marker = git_marker.read_text(encoding="utf-8").strip()
                 if marker.startswith("gitdir:"):
                     candidate = Path(marker.split(":", 1)[1].strip())
-                    git_dir = candidate if candidate.is_absolute() else git_marker.parent / candidate
+                    git_dir = (
+                        candidate
+                        if candidate.is_absolute()
+                        else git_marker.parent / candidate
+                    )
             except OSError:
                 return
         if git_dir is None:
@@ -912,7 +929,8 @@ class MemoryService:
             exclude.parent.mkdir(parents=True, exist_ok=True)
             current = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
             additions = [
-                entry for entry in ("/XENON.local.md", "/.xenon/memory/local/")
+                entry
+                for entry in ("/XENON.local.md", "/.xenon/memory/local/")
                 if entry not in current.splitlines()
             ]
             if additions:

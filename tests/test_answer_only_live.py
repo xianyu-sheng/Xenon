@@ -24,6 +24,8 @@ pytestmark = [
         reason="live 测试需要 DEEPSEEK_API_KEY 或 ~/.xenon/credentials.yaml 中的 deepseek 凭据",
     ),
 ]
+
+
 def test_real_model_keeps_chat_only_code_out_of_tools_and_disk(tmp_path, monkeypatch):
     model_id = "deepseek/deepseek-v4-flash"
     registry = ModelRegistry()

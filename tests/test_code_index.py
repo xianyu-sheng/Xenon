@@ -5,7 +5,6 @@ Code Index 和 AST Analyzer 测试。
 from __future__ import annotations
 
 
-
 from xenon.utils.code_index import CodeIndex
 from xenon.utils.ast_analyzer import ASTAnalyzer
 from xenon.utils.refactor import RefactorEngine
@@ -16,7 +15,7 @@ class TestCodeIndex:
 
     def test_index_python_functions(self, tmp_path):
         """索引 Python 函数。"""
-        code = '''
+        code = """
 def hello():
     pass
 
@@ -26,7 +25,7 @@ def add(a, b):
 class Foo:
     def bar(self):
         pass
-'''
+"""
         (tmp_path / "test.py").write_text(code)
         index = CodeIndex(tmp_path)
         count = index.build()
@@ -49,11 +48,11 @@ class Foo:
 
     def test_index_python_imports(self, tmp_path):
         """索引 Python 导入。"""
-        code = '''
+        code = """
 import os
 from pathlib import Path
 from typing import Any, Dict
-'''
+"""
         (tmp_path / "test.py").write_text(code)
         index = CodeIndex(tmp_path)
         index.build()
@@ -79,10 +78,10 @@ from typing import Any, Dict
 
     def test_find_definition(self, tmp_path):
         """精确查找定义。"""
-        code = '''
+        code = """
 def target_func():
     pass
-'''
+"""
         (tmp_path / "test.py").write_text(code)
         index = CodeIndex(tmp_path)
         index.build()
@@ -201,13 +200,13 @@ class Dog(Animal):
 
     def test_extract_signatures(self):
         """提取函数签名。"""
-        code = '''
+        code = """
 def add(a: int, b: int) -> int:
     return a + b
 
 def greet(name, greeting="Hello"):
     pass
-'''
+"""
         analyzer = ASTAnalyzer()
         sigs = analyzer.extract_signatures(code)
 
@@ -218,7 +217,7 @@ def greet(name, greeting="Hello"):
 
     def test_complexity(self):
         """复杂度计算。"""
-        code = '''
+        code = """
 def complex_func(x):
     if x > 0:
         for i in range(x):
@@ -228,20 +227,20 @@ def complex_func(x):
         while x < 0:
             x += 1
     return x
-'''
+"""
         analyzer = ASTAnalyzer()
         result = analyzer.analyze_code(code)
         assert result.complexity > 1
 
     def test_unused_imports(self):
         """未使用导入检测。"""
-        code = '''
+        code = """
 import os
 import sys
 from pathlib import Path
 
 p = Path(".")
-'''
+"""
         analyzer = ASTAnalyzer()
         result = analyzer.analyze_code(code)
         assert "os" in result.unused_imports
@@ -249,10 +248,10 @@ p = Path(".")
 
     def test_summary(self):
         """摘要格式。"""
-        code = '''
+        code = """
 def f(): pass
 class C: pass
-'''
+"""
         analyzer = ASTAnalyzer()
         result = analyzer.analyze_code(code)
         summary = result.summary()

@@ -263,7 +263,10 @@ class TestCategoryWordBoundary:
         assert infer_category("read_file", "") == "read_file"
         assert infer_category("run_shell", "") == "command"
         assert infer_category("git_status", "") == "git"
-        assert infer_category("fetch_url", "") == "read_file"  # read_file 先于 web 命中 "fetch"
+        assert (
+            infer_category("fetch_url", "") == "read_file"
+        )  # read_file 先于 web 命中 "fetch"
+
 
 class TestToolSetShrink:
     """回归：server 工具集收缩后 tool_map 不得残留幽灵条目。
@@ -277,7 +280,10 @@ class TestToolSetShrink:
     def test_shrunk_tool_not_left_in_tool_map(self):
         reg = MCPRegistry()
         client = _FakeClient(
-            [{"name": "read", "description": "r"}, {"name": "write", "description": "w"}]
+            [
+                {"name": "read", "description": "r"},
+                {"name": "write", "description": "w"},
+            ]
         )
         reg.clients["fs"] = client
         reg.discover_tools()
@@ -294,7 +300,10 @@ class TestToolSetShrink:
     def test_shrunk_tool_call_rejected_after_rediscover(self):
         reg = MCPRegistry()
         client = _FakeClient(
-            [{"name": "read", "description": "r"}, {"name": "write", "description": "w"}]
+            [
+                {"name": "read", "description": "r"},
+                {"name": "write", "description": "w"},
+            ]
         )
         reg.clients["fs"] = client
         reg.discover_tools()

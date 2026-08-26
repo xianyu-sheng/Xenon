@@ -78,13 +78,15 @@ def test_deepseek_reports_cache_usage_for_extended_prompt_lane() -> None:
         assert latest["lane_append_only"] is True
         assert latest["lane_reason"] == "prefix_extended"
         assert latest["lane_reusable_tokens"] > 0
-        print({
-            "model": latest["model_id"],
-            "hit_tokens": latest["cache_hit_tokens"],
-            "miss_tokens": latest["cache_miss_tokens"],
-            "lane_reusable_tokens": latest["lane_reusable_tokens"],
-            "lane_reason": latest["lane_reason"],
-        })
+        print(
+            {
+                "model": latest["model_id"],
+                "hit_tokens": latest["cache_hit_tokens"],
+                "miss_tokens": latest["cache_miss_tokens"],
+                "lane_reusable_tokens": latest["lane_reusable_tokens"],
+                "lane_reason": latest["lane_reason"],
+            }
+        )
     finally:
         tracker.close()
 
@@ -149,9 +151,7 @@ def test_deepseek_cache_rails_survive_ten_alternating_model_calls() -> None:
 
         reused_events: list[dict[str, object]] = []
         for model_id in models:
-            model_events = [
-                event for event in events if event["model_id"] == model_id
-            ]
+            model_events = [event for event in events if event["model_id"] == model_id]
             assert len(model_events) == 5
             assert model_events[0]["lane_reason"] == "cold_start"
             for event in model_events[1:]:
@@ -160,12 +160,8 @@ def test_deepseek_cache_rails_survive_ten_alternating_model_calls() -> None:
                 assert int(event["lane_reusable_tokens"]) > 0
             reused_events.extend(model_events[1:])
 
-        warm_hits = sum(
-            int(event["cache_hit_tokens"]) > 0 for event in reused_events
-        )
-        warm_hit_tokens = sum(
-            int(event["cache_hit_tokens"]) for event in reused_events
-        )
+        warm_hits = sum(int(event["cache_hit_tokens"]) > 0 for event in reused_events)
+        warm_hit_tokens = sum(int(event["cache_hit_tokens"]) for event in reused_events)
         warm_miss_tokens = sum(
             int(event["cache_miss_tokens"]) for event in reused_events
         )
@@ -180,24 +176,24 @@ def test_deepseek_cache_rails_survive_ten_alternating_model_calls() -> None:
         assert warm_hits >= 6
         assert warm_hit_rate >= 0.5
 
-        print({
-            "calls": [
-                {
-                    "turn": event["turn"],
-                    "model": event["model_id"],
-                    "hit": event["cache_hit_tokens"],
-                    "miss": event["cache_miss_tokens"],
-                    "lane_reason": event["lane_reason"],
-                }
-                for event in events
-            ],
-            "active_lanes": len(lanes),
-            "archived_lanes": len(archived),
-            "requests_per_lane": sorted(
-                lane["request_count"] for lane in lanes
-            ),
-            "warm_calls_with_hits": f"{warm_hits}/8",
-            "warm_hit_rate": round(warm_hit_rate, 4),
-        })
+        print(
+            {
+                "calls": [
+                    {
+                        "turn": event["turn"],
+                        "model": event["model_id"],
+                        "hit": event["cache_hit_tokens"],
+                        "miss": event["cache_miss_tokens"],
+                        "lane_reason": event["lane_reason"],
+                    }
+                    for event in events
+                ],
+                "active_lanes": len(lanes),
+                "archived_lanes": len(archived),
+                "requests_per_lane": sorted(lane["request_count"] for lane in lanes),
+                "warm_calls_with_hits": f"{warm_hits}/8",
+                "warm_hit_rate": round(warm_hit_rate, 4),
+            }
+        )
     finally:
         tracker.close()

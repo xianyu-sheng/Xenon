@@ -190,15 +190,18 @@ def test_compiled_provider_call_records_lane_without_network(monkeypatch):
     }
 
     assert llm_client.chat_completion("deepseek/test", common, **options) == "ok"
-    assert llm_client.chat_completion(
-        "deepseek/test",
-        [
-            *common,
-            {"role": "assistant", "content": "answer"},
-            {"role": "user", "content": "two"},
-        ],
-        **options,
-    ) == "ok"
+    assert (
+        llm_client.chat_completion(
+            "deepseek/test",
+            [
+                *common,
+                {"role": "assistant", "content": "answer"},
+                {"role": "user", "content": "two"},
+            ],
+            **options,
+        )
+        == "ok"
+    )
 
     snapshot = lanes.snapshots()
     assert len(snapshot) == 1
@@ -216,14 +219,22 @@ def test_request_envelope_freezes_dynamic_context_and_keeps_prefix_append_only()
     first_prompt = context.add_request_message("question one")
     first_messages = context.get_messages(include_context_messages=True)
     context.prompt_lanes.prepare(
-        "deepseek/pro", "direct", "chat", 0, first_messages,
+        "deepseek/pro",
+        "direct",
+        "chat",
+        0,
+        first_messages,
     )
     context.add_assistant_message("answer one", model_used="deepseek/pro")
     context.set_context_message("retrieval", "second memory")
     second_prompt = context.add_request_message("question two")
     second_messages = context.get_messages(include_context_messages=True)
     decision = context.prompt_lanes.prepare(
-        "deepseek/pro", "direct", "chat", 0, second_messages,
+        "deepseek/pro",
+        "direct",
+        "chat",
+        0,
+        second_messages,
     )
 
     assert "first memory" in first_prompt

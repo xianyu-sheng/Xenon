@@ -17,6 +17,7 @@ from xenon.engine.scheduler import DAGScheduler
 
 # ── AgentContext 测试 ─────────────────────────────────────
 
+
 class TestAgentContext:
     def test_init_empty(self):
         ctx = AgentContext()
@@ -57,66 +58,108 @@ class TestAgentContext:
 
 # ── RouterNode 测试 ──────────────────────────────────────
 
+
 class TestRouterNode:
     def test_eq_match(self):
         ctx = AgentContext(initial={"status": "done"})
-        router = RouterNode("r1", rules=[
-            {"condition": {"key": "status", "op": "==", "value": "done"}, "next": "end"},
-        ])
+        router = RouterNode(
+            "r1",
+            rules=[
+                {
+                    "condition": {"key": "status", "op": "==", "value": "done"},
+                    "next": "end",
+                },
+            ],
+        )
         result = router.execute(ctx)
         assert result["next_node"] == "end"
 
     def test_no_match_with_default(self):
         ctx = AgentContext(initial={"status": "running"})
-        router = RouterNode("r1", rules=[
-            {"condition": {"key": "status", "op": "==", "value": "done"}, "next": "end"},
-        ], default_next="loop")
+        router = RouterNode(
+            "r1",
+            rules=[
+                {
+                    "condition": {"key": "status", "op": "==", "value": "done"},
+                    "next": "end",
+                },
+            ],
+            default_next="loop",
+        )
         result = router.execute(ctx)
         assert result["next_node"] == "loop"
 
     def test_no_match_no_default_raises(self):
         ctx = AgentContext(initial={"status": "running"})
-        router = RouterNode("r1", rules=[
-            {"condition": {"key": "status", "op": "==", "value": "done"}, "next": "end"},
-        ])
+        router = RouterNode(
+            "r1",
+            rules=[
+                {
+                    "condition": {"key": "status", "op": "==", "value": "done"},
+                    "next": "end",
+                },
+            ],
+        )
         with pytest.raises(RuntimeError, match="无规则命中"):
             router.execute(ctx)
 
     def test_contains_operator(self):
         ctx = AgentContext(initial={"output": "DONE - all steps complete"})
-        router = RouterNode("r1", rules=[
-            {"condition": {"key": "output", "op": "contains", "value": "DONE"}, "next": "review"},
-        ])
+        router = RouterNode(
+            "r1",
+            rules=[
+                {
+                    "condition": {"key": "output", "op": "contains", "value": "DONE"},
+                    "next": "review",
+                },
+            ],
+        )
         result = router.execute(ctx)
         assert result["next_node"] == "review"
 
     def test_numeric_comparison(self):
         ctx = AgentContext(initial={"retry_count": 3})
-        router = RouterNode("r1", rules=[
-            {"condition": {"key": "retry_count", "op": ">=", "value": 3}, "next": "error"},
-        ])
+        router = RouterNode(
+            "r1",
+            rules=[
+                {
+                    "condition": {"key": "retry_count", "op": ">=", "value": 3},
+                    "next": "error",
+                },
+            ],
+        )
         result = router.execute(ctx)
         assert result["next_node"] == "error"
 
     def test_is_truthy(self):
         ctx = AgentContext(initial={"plan": "some plan here"})
-        router = RouterNode("r1", rules=[
-            {"condition": {"key": "plan", "op": "is_truthy", "value": True}, "next": "exec"},
-        ])
+        router = RouterNode(
+            "r1",
+            rules=[
+                {
+                    "condition": {"key": "plan", "op": "is_truthy", "value": True},
+                    "next": "exec",
+                },
+            ],
+        )
         result = router.execute(ctx)
         assert result["next_node"] == "exec"
 
     def test_rules_evaluated_in_order(self):
         ctx = AgentContext(initial={"a": 1, "b": 2})
-        router = RouterNode("r1", rules=[
-            {"condition": {"key": "a", "op": "==", "value": 1}, "next": "first"},
-            {"condition": {"key": "b", "op": "==", "value": 2}, "next": "second"},
-        ])
+        router = RouterNode(
+            "r1",
+            rules=[
+                {"condition": {"key": "a", "op": "==", "value": 1}, "next": "first"},
+                {"condition": {"key": "b", "op": "==", "value": 2}, "next": "second"},
+            ],
+        )
         result = router.execute(ctx)
         assert result["next_node"] == "first"
 
 
 # ── DAGScheduler 测试 ────────────────────────────────────
+
 
 class SimpleNode(BaseNode):
     """测试用简单节点：将固定值写入 context。"""
@@ -141,9 +184,15 @@ class TestDAGScheduler:
     def test_simple_linear_flow(self):
         """三个节点线性执行: start -> check(router) -> end。"""
         n1 = SimpleNode("start", "hello", output_slot="msg", default_next="check")
-        router = RouterNode("check", rules=[
-            {"condition": {"key": "msg", "op": "==", "value": "hello"}, "next": "end"},
-        ])
+        router = RouterNode(
+            "check",
+            rules=[
+                {
+                    "condition": {"key": "msg", "op": "==", "value": "hello"},
+                    "next": "end",
+                },
+            ],
+        )
         n2 = SimpleNode("end", "done")
 
         nodes = {"start": n1, "check": router, "end": n2}
@@ -156,9 +205,16 @@ class TestDAGScheduler:
     def test_max_steps_termination(self):
         """循环图超过最大步数时强制终止。"""
         n1 = SimpleNode("loop", "again", output_slot="x", default_next="decide")
-        router = RouterNode("decide", rules=[
-            {"condition": {"key": "x", "op": "==", "value": "never"}, "next": "end"},
-        ], default_next="loop")
+        router = RouterNode(
+            "decide",
+            rules=[
+                {
+                    "condition": {"key": "x", "op": "==", "value": "never"},
+                    "next": "end",
+                },
+            ],
+            default_next="loop",
+        )
         n2 = SimpleNode("end", "done")
 
         nodes = {"loop": n1, "decide": router, "end": n2}
@@ -179,9 +235,15 @@ class TestDAGScheduler:
                 return {"echo": val}
 
         n1 = ReadNode("reader", default_next="check")
-        router = RouterNode("check", rules=[
-            {"condition": {"key": "echo", "op": "==", "value": "hi"}, "next": "end"},
-        ])
+        router = RouterNode(
+            "check",
+            rules=[
+                {
+                    "condition": {"key": "echo", "op": "==", "value": "hi"},
+                    "next": "end",
+                },
+            ],
+        )
         n2 = SimpleNode("end", "done")
 
         nodes = {"reader": n1, "check": router, "end": n2}
@@ -203,6 +265,7 @@ class TestDAGScheduler:
 
 # ── ToolNode 测试 ────────────────────────────────────────
 
+
 class TestToolNode:
     def test_echo_command(self):
         ctx = AgentContext()
@@ -220,6 +283,7 @@ class TestToolNode:
 
 
 # ── Config Parser 测试 ───────────────────────────────────
+
 
 class TestConfigParser:
     def test_parse_workflow_basic(self):
@@ -239,7 +303,14 @@ class TestConfigParser:
                     "id": "route",
                     "type": "router",
                     "rules": [
-                        {"condition": {"key": "out", "op": "is_truthy", "value": True}, "next": "step1"},
+                        {
+                            "condition": {
+                                "key": "out",
+                                "op": "is_truthy",
+                                "value": True,
+                            },
+                            "next": "step1",
+                        },
                     ],
                     "default_next": "step1",
                 },

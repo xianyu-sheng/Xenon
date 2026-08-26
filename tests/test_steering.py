@@ -33,7 +33,10 @@ class TestBaseEngineSteeringPrimitives:
         assert [m["text"] for m in drained] == ["补充要求 A", "补充要求 B"]
         # 消费后队列为空，且记录到 steering_consumed
         assert eng._drain_steering() == []
-        assert [m["text"] for m in eng.steering_consumed] == ["补充要求 A", "补充要求 B"]
+        assert [m["text"] for m in eng.steering_consumed] == [
+            "补充要求 A",
+            "补充要求 B",
+        ]
 
     def test_steer_rejects_blank(self):
         eng = _MinimalEngine(model_priority=["deepseek/deepseek-v4-flash"])
@@ -52,9 +55,7 @@ class TestBaseEngineSteeringPrimitives:
         assert eng.steering_consumed == []
 
     def test_steering_prompt_contains_supplement(self):
-        prompt = BaseEngine.steering_prompt(
-            [{"text": "把输出改成 JSON 格式"}]
-        )
+        prompt = BaseEngine.steering_prompt([{"text": "把输出改成 JSON 格式"}])
         assert "把输出改成 JSON 格式" in prompt
         assert "原任务继续有效" in prompt
 
@@ -91,13 +92,16 @@ class TestReActConsumesSteering:
         monkeypatch.setattr(engine, "_call_llm_for_phase", fake_call)
         # 工具执行用假 executor：search_files 返回空结果
         monkeypatch.setattr(
-            engine, "_execute_tool",
+            engine,
+            "_execute_tool",
             lambda *a, **k: "未找到匹配文件",
         )
 
         result = engine.run("分析这个项目", context=AgentContext())
         # steering 在第二次迭代检查点被消费
-        assert [m["text"] for m in engine.steering_consumed] == ["补充：请输出 JSON 格式"]
+        assert [m["text"] for m in engine.steering_consumed] == [
+            "补充：请输出 JSON 格式"
+        ]
         assert "完成" in result
 
 
@@ -110,6 +114,7 @@ class TestCombinedEnginesConsumeSteering:
 
     def test_plan_react_steer_into_step_input(self, monkeypatch):
         from xenon.engine.combined_engines import PlanReactEngine
+
         engine = PlanReactEngine(
             model_priority=["deepseek/deepseek-v4-flash"],
             max_steps=3,
@@ -121,7 +126,10 @@ class TestCombinedEnginesConsumeSteering:
             if not injected["done"]:
                 engine.steer("补充：用中文写注释")
                 injected["done"] = True
-            return {"analysis": "计划", "steps": [{"id": 1, "task": "实现功能"}, {"id": 2, "task": "写测试"}]}
+            return {
+                "analysis": "计划",
+                "steps": [{"id": 1, "task": "实现功能"}, {"id": 2, "task": "写测试"}],
+            }
 
         monkeypatch.setattr(engine.planner, "_plan", fake_plan)
 
@@ -139,6 +147,7 @@ class TestCombinedEnginesConsumeSteering:
 
     def test_reflection_combination_steer_into_repair_prompt(self, monkeypatch):
         from xenon.engine.combined_engines import ReactReflectionEngine
+
         engine = ReactReflectionEngine(
             model_priority=["deepseek/deepseek-v4-flash"],
             review_rounds=1,
@@ -172,6 +181,7 @@ class TestCombinedEnginesConsumeSteering:
 
     def test_reflection_engine_steer_into_feedback(self, monkeypatch):
         from xenon.engine.reflection_engine import ReflectionEngine
+
         engine = ReflectionEngine(
             model_priority=["deepseek/deepseek-v4-flash"],
             max_rounds=2,
@@ -205,6 +215,7 @@ class TestCombinedEnginesConsumeSteering:
         return，补充要求被静默丢弃（真实 LLM 多引擎测试发现）。
         """
         from xenon.engine.combined_engines import ReactReflectionEngine
+
         engine = ReactReflectionEngine(
             model_priority=["deepseek/deepseek-v4-flash"],
             review_rounds=1,
@@ -276,7 +287,11 @@ class TestPlanExecuteConsumesSteering:
             if phase == "execute_step":
                 if "用户中途补充" in str(messages):
                     seen["text"] = str(messages)
-                return step_responses.pop(0) if step_responses else '{"thought": "t", "final_answer": "步骤完成"}'
+                return (
+                    step_responses.pop(0)
+                    if step_responses
+                    else '{"thought": "t", "final_answer": "步骤完成"}'
+                )
             return "汇总完成"
 
         monkeypatch.setattr(engine, "_call_llm_for_phase", fake_call)
@@ -414,14 +429,17 @@ class TestPlanExecuteToolStepReplan:
         monkeypatch.setattr(engine, "_call_llm_for_phase", fake_call)
         # 工具执行 mock（避免真实文件操作）
         monkeypatch.setattr(
-            engine, "_execute_step_with_tool",
+            engine,
+            "_execute_step_with_tool",
             lambda *a, **k: "工具执行结果",
         )
         # 拦截 _replan_remaining 确认被调用
         orig_replan = engine._replan_remaining
+
         def spy_replan(user_input, ctx, steering_msgs, done_ids):
             replanned["called"] = True
             return orig_replan(user_input, ctx, steering_msgs, done_ids)
+
         monkeypatch.setattr(engine, "_replan_remaining", spy_replan)
 
         engine.run("修改文件", context=AgentContext())

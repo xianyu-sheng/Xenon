@@ -24,14 +24,15 @@ def test_complete_or_short_answers_are_not_rejected():
     assert _answer_looks_incomplete("好的") is False
     assert _answer_looks_incomplete("这是经过工具验证的完整架构说明。" * 10) is False
     assert _answer_looks_incomplete("本机配置和源码证据都表明这个设计是可靠的") is False
-    assert _answer_looks_incomplete("上述工具输出已经核对，按这个方案修改是可以的") is False
+    assert (
+        _answer_looks_incomplete("上述工具输出已经核对，按这个方案修改是可以的")
+        is False
+    )
 
 
 def test_react_rewrites_abrupt_final_answer_instead_of_displaying_it(monkeypatch):
     partial = (
-        "已读取本机配置并确认插件清单。\n\n"
-        "## 第一课\n\n"
-        "### 1.1 你启动一个 dsh，其实是"
+        "已读取本机配置并确认插件清单。\n\n## 第一课\n\n### 1.1 你启动一个 dsh，其实是"
     )
     complete = (
         "已读取本机配置并确认插件清单。\n\n"
@@ -39,10 +40,12 @@ def test_react_rewrites_abrupt_final_answer_instead_of_displaying_it(monkeypatch
         "dsh 启动时会依次装配基础 bundle、profile patch 与运行时插件。"
         "你先掌握分层组装、依赖注入和插件生命周期这三个架构思想即可。"
     )
-    responses = iter([
-        json.dumps({"final_answer": partial}, ensure_ascii=False),
-        json.dumps({"final_answer": complete}, ensure_ascii=False),
-    ])
+    responses = iter(
+        [
+            json.dumps({"final_answer": partial}, ensure_ascii=False),
+            json.dumps({"final_answer": complete}, ensure_ascii=False),
+        ]
+    )
     seen_messages = []
     engine = ReActEngine(
         ["test/model"],
@@ -70,7 +73,12 @@ def test_subagent_formatter_preserves_answer_without_character_cap():
     answer = "来源明确的长答案。" * 2000
 
     result = engine._format_sub_result(
-        "sub-1", "架构分析", "react", answer, object(), None,
+        "sub-1",
+        "架构分析",
+        "react",
+        answer,
+        object(),
+        None,
     )
 
     assert answer in result
@@ -97,10 +105,13 @@ def test_direct_blocking_uses_complete_model_request_config(monkeypatch):
     monkeypatch.setattr("xenon.utils.llm_client.chat_completion", fake_chat)
     repl = REPL(registry=registry, ctx_mgr=ContextManager(), streaming=False)
 
-    assert repl._blocking_response(
-        "openai/deepseek-v4-pro",
-        [{"role": "user", "content": "解释架构"}],
-    ) == "完整回答。"
+    assert (
+        repl._blocking_response(
+            "openai/deepseek-v4-pro",
+            [{"role": "user", "content": "解释架构"}],
+        )
+        == "完整回答。"
+    )
     assert captured["max_tokens"] == 256000
     assert captured["temperature"] == 0.25
     assert captured["credentials"] == {"openai": "sk-private"}
@@ -129,10 +140,13 @@ def test_direct_streaming_uses_complete_model_request_config(monkeypatch):
     monkeypatch.setattr("xenon.utils.llm_client.chat_completion_stream", fake_stream)
     repl = REPL(registry=registry, ctx_mgr=ContextManager(), streaming=True)
 
-    assert repl._stream_response(
-        "openai/deepseek-v4-pro",
-        [{"role": "user", "content": "解释架构"}],
-    ) == "完整回答。"
+    assert (
+        repl._stream_response(
+            "openai/deepseek-v4-pro",
+            [{"role": "user", "content": "解释架构"}],
+        )
+        == "完整回答。"
+    )
     assert captured["max_tokens"] == 256000
     assert captured["temperature"] == 0.25
     assert captured["credentials"] == {"openai": "sk-private"}

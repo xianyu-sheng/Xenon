@@ -1,4 +1,5 @@
 """F1 验收：ToolExecutor 7 阶段门面 + 参数幻觉校验 + 断路器 + 重试 + 结果封装。"""
+
 from xenon.engine.circuit_breaker import CircuitBreaker
 from xenon.engine.context import AgentContext
 from xenon.engine.tool_tracker import ToolExecutionTracker
@@ -52,7 +53,9 @@ class TestIsTerminalError:
 # ── 参数幻觉校验 ───────────────────────────────────────────
 class TestValidateToolParams:
     def test_legit_params_pass(self):
-        ok, _, level = validate_tool_params({"file_path": "/tmp/x.py", "content": "print(1)"})
+        ok, _, level = validate_tool_params(
+            {"file_path": "/tmp/x.py", "content": "print(1)"}
+        )
         assert ok is True
         assert level == "pass"
 
@@ -64,19 +67,23 @@ class TestValidateToolParams:
 
     def test_two_hits_warn_but_pass(self):
         """2 条件命中 → 只警告，放行（避免误杀合法参数）。"""
-        ok, reason, level = validate_tool_params({
-            "file_path": "def foo(x):->: <not a path>"  # 函数签名 + Windows 非法字符 + 末尾非法
-        })
+        ok, reason, level = validate_tool_params(
+            {
+                "file_path": "def foo(x):->: <not a path>"  # 函数签名 + Windows 非法字符 + 末尾非法
+            }
+        )
         assert ok is True
         assert level == "warn"
         assert "file_path" in reason
 
     def test_three_hits_blocked(self):
         """≥3 条件命中 → 拦截。"""
-        ok, reason, level = validate_tool_params({
-            # 函数签名 + Windows 非法字符 + 中文占比过高 + 末尾非法字符
-            "file_path": "def 读取文件(参数):-> 中文说明很长很长的一段描述内容 <非法>",
-        })
+        ok, reason, level = validate_tool_params(
+            {
+                # 函数签名 + Windows 非法字符 + 中文占比过高 + 末尾非法字符
+                "file_path": "def 读取文件(参数):-> 中文说明很长很长的一段描述内容 <非法>",
+            }
+        )
         assert ok is False
         assert level == "block"
         assert "file_path" in reason
@@ -84,9 +91,9 @@ class TestValidateToolParams:
     def test_strict_env_restores_two_hit_block(self, monkeypatch):
         """XENON_STRICT_VALIDATION=1 时 2 条命中恢复为拦截。"""
         monkeypatch.setenv("XENON_STRICT_VALIDATION", "1")
-        ok, reason, level = validate_tool_params({
-            "file_path": "def foo(x):->: <not a path>"
-        })
+        ok, reason, level = validate_tool_params(
+            {"file_path": "def foo(x):->: <not a path>"}
+        )
         assert ok is False
         assert level == "block"
         assert "file_path" in reason
@@ -101,10 +108,10 @@ class TestValidateToolParams:
     def test_long_shell_pipeline_with_trailing_quote_passes(self):
         command = (
             "curl -sS http://localhost:23119/ 2>&1; "
-            "ss -tlnp | grep 23119 || echo \"PORT_NOT_LISTENING\"; "
-            "ps aux | grep -i zotero | grep -v grep || echo \"NO_ZOTERO_PROCESS\"; "
-            "find ~/.zotero ~/.local/opt/zotero -maxdepth 4 -type f -name \"prefs.js\" "
-            "-o -name \"*.sqlite\" 2>/dev/null"
+            'ss -tlnp | grep 23119 || echo "PORT_NOT_LISTENING"; '
+            'ps aux | grep -i zotero | grep -v grep || echo "NO_ZOTERO_PROCESS"; '
+            'find ~/.zotero ~/.local/opt/zotero -maxdepth 4 -type f -name "prefs.js" '
+            '-o -name "*.sqlite" 2>/dev/null'
         )
         ok, reason, _ = validate_tool_params({"action": command})
         assert ok is True, reason
@@ -201,7 +208,9 @@ def _executor(monkeypatch, *, retry_attempts=2):
 class TestToolExecutorPipeline:
     def test_unknown_tool_returns_failure(self, monkeypatch):
         ex = _executor(monkeypatch)
-        r = ex.execute("no_such_tool", {"x": 1}, AgentContext(), tools={"read_file": {}})
+        r = ex.execute(
+            "no_such_tool", {"x": 1}, AgentContext(), tools={"read_file": {}}
+        )
         assert r.success is False
         assert "未知工具" in r.observation
 
@@ -212,8 +221,12 @@ class TestToolExecutorPipeline:
         r = ex.execute(
             "write_file",
             # 函数签名 + Windows 非法字符 + 中文占比过高
-            {"file_path": "def 读取文件(参数):-> 中文说明很长很长的一段描述内容 <非法>", "content": "x"},
-            AgentContext(), tools={"write_file": {}},
+            {
+                "file_path": "def 读取文件(参数):-> 中文说明很长很长的一段描述内容 <非法>",
+                "content": "x",
+            },
+            AgentContext(),
+            tools={"write_file": {}},
         )
         assert r.success is False
         assert "参数校验失败" in r.observation
@@ -227,7 +240,8 @@ class TestToolExecutorPipeline:
         r = ex.execute(
             "write_file",
             {"file_path": "def foo():->: <bad>", "content": "x"},
-            AgentContext(), tools={"write_file": {}},
+            AgentContext(),
+            tools={"write_file": {}},
         )
         assert r.success is True
         assert r.observation == "executed"
@@ -235,7 +249,9 @@ class TestToolExecutorPipeline:
     def test_success_path(self, monkeypatch):
         _FakeNode.script = [{"success": True, "content": "hello"}]
         ex = _executor(monkeypatch)
-        r = ex.execute("read_file", {"file_path": "/x"}, AgentContext(), tools={"read_file": {}})
+        r = ex.execute(
+            "read_file", {"file_path": "/x"}, AgentContext(), tools={"read_file": {}}
+        )
         assert r.success is True
         assert r.observation == "hello"
         assert r.tool_class == "INFO"
@@ -248,7 +264,9 @@ class TestToolExecutorPipeline:
             {"success": True, "content": "ok"},
         ]
         ex = _executor(monkeypatch, retry_attempts=3)
-        r = ex.execute("read_file", {"file_path": "/x"}, AgentContext(), tools={"read_file": {}})
+        r = ex.execute(
+            "read_file", {"file_path": "/x"}, AgentContext(), tools={"read_file": {}}
+        )
         assert r.success is True
         assert r.attempts == 3
 
@@ -295,7 +313,9 @@ class TestToolExecutorPipeline:
     def test_terminal_error_no_retry(self, monkeypatch):
         _FakeNode.script = [{"success": False, "error": "文件不存在"}]
         ex = _executor(monkeypatch, retry_attempts=3)
-        r = ex.execute("read_file", {"file_path": "/x"}, AgentContext(), tools={"read_file": {}})
+        r = ex.execute(
+            "read_file", {"file_path": "/x"}, AgentContext(), tools={"read_file": {}}
+        )
         assert r.success is False
         assert r.attempts == 1  # 终端错误未重试
 
@@ -304,9 +324,16 @@ class TestToolExecutorPipeline:
         ex = _executor(monkeypatch, retry_attempts=1)
         # 连续 3 次 execute 失败 → 第 4 次断路器拒绝
         for _ in range(3):
-            r = ex.execute("read_file", {"file_path": "/x"}, AgentContext(), tools={"read_file": {}})
+            r = ex.execute(
+                "read_file",
+                {"file_path": "/x"},
+                AgentContext(),
+                tools={"read_file": {}},
+            )
             assert r.success is False
-        r4 = ex.execute("read_file", {"file_path": "/x"}, AgentContext(), tools={"read_file": {}})
+        r4 = ex.execute(
+            "read_file", {"file_path": "/x"}, AgentContext(), tools={"read_file": {}}
+        )
         assert r4.success is False
         assert "断路器" in r4.observation
 
@@ -314,7 +341,13 @@ class TestToolExecutorPipeline:
         _FakeNode.script = [{"success": True, "content": "data"}]
         ex = _executor(monkeypatch)
         tracker = ToolExecutionTracker()
-        ex.execute("read_file", {"file_path": "/x"}, AgentContext(), tracker=tracker, tools={"read_file": {}})
+        ex.execute(
+            "read_file",
+            {"file_path": "/x"},
+            AgentContext(),
+            tracker=tracker,
+            tools={"read_file": {}},
+        )
         assert tracker.has_executions()
         rec = tracker.get_history()[0]
         assert rec["success"] is True
@@ -322,7 +355,9 @@ class TestToolExecutorPipeline:
     def test_next_hint_contextual(self, monkeypatch):
         _FakeNode.script = [{"success": False, "error": "文件不存在: /x"}]
         ex = _executor(monkeypatch, retry_attempts=1)
-        r = ex.execute("read_file", {"file_path": "/x"}, AgentContext(), tools={"read_file": {}})
+        r = ex.execute(
+            "read_file", {"file_path": "/x"}, AgentContext(), tools={"read_file": {}}
+        )
         hint = r.next_hint()
         assert "list_files" in hint or "确认路径" in hint
 

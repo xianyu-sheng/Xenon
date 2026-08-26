@@ -3,6 +3,7 @@
 目标：验证 ReAct 引擎在 LLM 直接返回 final_answer（无 tool_call）时的
 行为——尤其是当任务**需要工具**时不能静默接受（v0.2.x 已知路径）。
 """
+
 from __future__ import annotations
 
 

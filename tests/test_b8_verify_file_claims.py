@@ -4,6 +4,7 @@
 batch_edit 工具成功调用 → 不再误报"未经工具验证"（B8 之前仅认
 write_file/create_directory，会对 edit/batch 类调用误报）。
 """
+
 from types import SimpleNamespace
 
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
@@ -23,58 +24,94 @@ class TestVerifyLlmFileClaimsExtendedTools:
         assert "b8_missing.py" in out
 
     def test_write_file_still_verifies(self):
-        tracker = SimpleNamespace(calls=[
-            _call("write_file", {"file_path": "b8_write_nonexistent.py"})])
+        tracker = SimpleNamespace(
+            calls=[_call("write_file", {"file_path": "b8_write_nonexistent.py"})]
+        )
         out = PlanExecuteEngine._verify_llm_file_claims(
-            "已保存 b8_write_nonexistent.py 的内容", tracker=tracker)
+            "已保存 b8_write_nonexistent.py 的内容", tracker=tracker
+        )
         assert "未经工具验证" not in out
 
     def test_edit_file_verifies_claim(self):
         """B8: edit_file 现计入已验证（之前只认 write_file/create_directory）。"""
-        tracker = SimpleNamespace(calls=[
-            _call("edit_file", {"file_path": "b8_edit_nonexistent.py"})])
+        tracker = SimpleNamespace(
+            calls=[_call("edit_file", {"file_path": "b8_edit_nonexistent.py"})]
+        )
         out = PlanExecuteEngine._verify_llm_file_claims(
-            "已保存 b8_edit_nonexistent.py 的修改", tracker=tracker)
+            "已保存 b8_edit_nonexistent.py 的修改", tracker=tracker
+        )
         assert "未经工具验证" not in out
 
     def test_batch_write_verifies_all_paths(self):
         """B8: batch_write 的 files 列表逐个提路径（兼容 path 与 file_path 两种键）。"""
-        tracker = SimpleNamespace(calls=[
-            _call("batch_write", {"files": [
-                {"path": "b8_bw_a_nonexistent.py", "content": "x"},
-                {"file_path": "b8_bw_b_nonexistent.py", "content": "y"},
-            ]}),
-        ])
+        tracker = SimpleNamespace(
+            calls=[
+                _call(
+                    "batch_write",
+                    {
+                        "files": [
+                            {"path": "b8_bw_a_nonexistent.py", "content": "x"},
+                            {"file_path": "b8_bw_b_nonexistent.py", "content": "y"},
+                        ]
+                    },
+                ),
+            ]
+        )
         out = PlanExecuteEngine._verify_llm_file_claims(
-            "已保存 b8_bw_a_nonexistent.py 和 b8_bw_b_nonexistent.py", tracker=tracker)
+            "已保存 b8_bw_a_nonexistent.py 和 b8_bw_b_nonexistent.py", tracker=tracker
+        )
         assert "未经工具验证" not in out
 
     def test_batch_edit_verifies_claim(self):
         """B8: batch_edit 的 edits 列表逐个提 file_path。"""
-        tracker = SimpleNamespace(calls=[
-            _call("batch_edit", {"edits": [
-                {"file_path": "b8_be_nonexistent.py", "old_text": "a", "new_text": "b"},
-            ]}),
-        ])
+        tracker = SimpleNamespace(
+            calls=[
+                _call(
+                    "batch_edit",
+                    {
+                        "edits": [
+                            {
+                                "file_path": "b8_be_nonexistent.py",
+                                "old_text": "a",
+                                "new_text": "b",
+                            },
+                        ]
+                    },
+                ),
+            ]
+        )
         out = PlanExecuteEngine._verify_llm_file_claims(
-            "已保存 b8_be_nonexistent.py 的修改", tracker=tracker)
+            "已保存 b8_be_nonexistent.py 的修改", tracker=tracker
+        )
         assert "未经工具验证" not in out
 
     def test_batch_write_partial_warns_for_unwritten(self):
-        tracker = SimpleNamespace(calls=[
-            _call("batch_write", {"files": [
-                {"path": "b8_bw_a_nonexistent.py", "content": "x"}]}),
-        ])
+        tracker = SimpleNamespace(
+            calls=[
+                _call(
+                    "batch_write",
+                    {"files": [{"path": "b8_bw_a_nonexistent.py", "content": "x"}]},
+                ),
+            ]
+        )
         out = PlanExecuteEngine._verify_llm_file_claims(
-            "已保存 b8_bw_a_nonexistent.py 和 b8_missing.py", tracker=tracker)
+            "已保存 b8_bw_a_nonexistent.py 和 b8_missing.py", tracker=tracker
+        )
         assert "b8_missing.py" in out
         assert "未经工具验证" in out
 
     def test_failed_tool_call_not_counted(self):
         """失败的工具调用不应计入已验证。"""
-        tracker = SimpleNamespace(calls=[
-            _call("write_file", {"file_path": "b8_write_nonexistent.py"}, success=False),
-        ])
+        tracker = SimpleNamespace(
+            calls=[
+                _call(
+                    "write_file",
+                    {"file_path": "b8_write_nonexistent.py"},
+                    success=False,
+                ),
+            ]
+        )
         out = PlanExecuteEngine._verify_llm_file_claims(
-            "已保存 b8_missing.py", tracker=tracker)
+            "已保存 b8_missing.py", tracker=tracker
+        )
         assert "未经工具验证" in out

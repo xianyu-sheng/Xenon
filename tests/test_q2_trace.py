@@ -9,6 +9,7 @@ from xenon.engine.trace import new_run_id, new_call_id, prefix, trace_logger
 
 # --------------------------- ID 生成 ---------------------------
 
+
 def test_new_run_id_length_and_hex():
     rid = new_run_id()
     assert len(rid) == 8
@@ -33,6 +34,7 @@ def test_new_call_id_uniqueness():
 
 # --------------------------- prefix() ---------------------------
 
+
 def test_prefix_run_only():
     assert prefix("abc12345") == "[abc12345]"
 
@@ -54,6 +56,7 @@ def test_prefix_none_call_omits_slash():
 
 # --------------------------- trace_logger ---------------------------
 
+
 def test_trace_logger_emits_prefix(caplog):
     caplog.set_level(logging.INFO, logger="xenon.trace")
     tl = trace_logger("abc12345", "deadbe")
@@ -64,8 +67,10 @@ def test_trace_logger_emits_prefix(caplog):
 
 # --------------------------- BaseEngine._begin_run / _call_llm ---------------------------
 
+
 def _make_engine():
     from xenon.engine.react_engine import ReActEngine
+
     return ReActEngine(["test/model"])
 
 
@@ -77,8 +82,9 @@ def test_begin_run_sets_run_id(caplog):
     assert eng.run_id == rid
     assert len(rid) == 8
     # 日志带 [run_id] 前缀 + "run 开始"
-    assert any(f"[{rid}]" in r.message and "run 开始" in r.message
-               for r in caplog.records)
+    assert any(
+        f"[{rid}]" in r.message and "run 开始" in r.message for r in caplog.records
+    )
 
 
 def test_begin_run_generates_different_ids_per_run():
@@ -113,8 +119,7 @@ def test_call_llm_logs_carry_run_call_prefix(caplog):
         base_mod.chat_completion = orig
 
     # 所有 _call_llm 日志都带同一 [run_id/...] 前缀
-    engine_logs = [r.message for r in caplog.records
-                   if r.name == "xenon.engine.base"]
+    engine_logs = [r.message for r in caplog.records if r.name == "xenon.engine.base"]
     prefixed = [m for m in engine_logs if f"[{rid}/" in m]
     assert prefixed, f"未找到带 [{rid}/call_id] 前缀的日志: {engine_logs}"
     # 失败日志内容存在
@@ -124,6 +129,7 @@ def test_call_llm_logs_carry_run_call_prefix(caplog):
 def test_react_run_sets_run_id():
     """ReAct run() 开头调 _begin_run，run_id 在 run 内非 None。"""
     from xenon.engine.react_engine import ReActEngine
+
     eng = ReActEngine(["m1"])
 
     seen_run_id = {}
@@ -164,6 +170,7 @@ def test_call_llm_call_id_differs_across_calls(caplog):
         base_mod.chat_completion = orig
 
     import re
+
     for r in caplog.records:
         if r.name == "xenon.engine.base" and f"[{rid}/" in r.message:
             m = re.search(rf"\[{rid}/([0-9a-f]{{6}})\]", r.message)

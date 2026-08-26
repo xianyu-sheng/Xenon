@@ -55,6 +55,7 @@ def _masked_input(prompt_text: str) -> str:
         except (AttributeError, ValueError, termios.error, OSError):
             # stdin 非 TTY（管道 / 重定向 / 无终端）→ 回退 getpass
             import getpass
+
             try:
                 return getpass.getpass(f"{prompt_text}: ")
             except (KeyboardInterrupt, EOFError):
@@ -132,33 +133,34 @@ def _masked_input(prompt_text: str) -> str:
         return "".join(chars)
 
     import msvcrt
+
     sys.stdout.write(f"{prompt_text}: ")
     sys.stdout.flush()
     chars: list[str] = []
     while True:
         ch = msvcrt.getwch()
-        if ch in ('\r', '\n'):
+        if ch in ("\r", "\n"):
             # 粘贴多行时，\r\n 中的 \n 会作为第二次回车 → 直接结束
-            sys.stdout.write('\n')
+            sys.stdout.write("\n")
             sys.stdout.flush()
             break
-        elif ch == '\x03':  # Ctrl+C
+        elif ch == "\x03":  # Ctrl+C
             raise KeyboardInterrupt
-        elif ch in ('\x08', '\x7f'):  # Backspace
+        elif ch in ("\x08", "\x7f"):  # Backspace
             if chars:
                 chars.pop()
-                sys.stdout.write('\b \b')
+                sys.stdout.write("\b \b")
                 sys.stdout.flush()
-        elif ch == '\x1b':  # Escape — 清空
+        elif ch == "\x1b":  # Escape — 清空
             for _ in chars:
-                sys.stdout.write('\b \b')
+                sys.stdout.write("\b \b")
             chars.clear()
             sys.stdout.flush()
         else:
             chars.append(ch)
-            sys.stdout.write('*')
+            sys.stdout.write("*")
             sys.stdout.flush()
-    return ''.join(chars)
+    return "".join(chars)
 
 
 def _clean_api_key(raw: str) -> str:
@@ -225,7 +227,9 @@ def interactive_setup(registry: ModelRegistry, model_pool=None) -> None:
         console.print("  [cyan]6[/cyan]. 注册自定义模型商 [dim](v0.4.0)[/dim]")
         console.print("  [cyan]0[/cyan]. 退出配置\n")
 
-        choice = Prompt.ask("请输入数字", choices=["0", "1", "2", "3", "4", "5", "6"], default="0")
+        choice = Prompt.ask(
+            "请输入数字", choices=["0", "1", "2", "3", "4", "5", "6"], default="0"
+        )
 
         if choice == "0":
             console.print("[dim]配置完成[/dim]\n")
@@ -257,12 +261,21 @@ def _setup_api_key(model_pool=None) -> None:
 
     creds = load_credentials()
     for i, p in enumerate(providers, 1):
-        status = "[green]已配置[/green]" if p.key in creds and creds[p.key] else "[dim]未配置[/dim]"
+        status = (
+            "[green]已配置[/green]"
+            if p.key in creds and creds[p.key]
+            else "[dim]未配置[/dim]"
+        )
         models_str = ", ".join(p.models[:3]) + ("..." if len(p.models) > 3 else "")
         table.add_row(str(i), p.name, models_str, status)
     # v0.4.0: add custom provider entry
     custom_idx = len(providers) + 1
-    table.add_row(str(custom_idx), "[bold cyan]自定义模型商[/bold cyan]", "任意 OpenAI 兼容 API", "[dim]手动添加[/dim]")
+    table.add_row(
+        str(custom_idx),
+        "[bold cyan]自定义模型商[/bold cyan]",
+        "任意 OpenAI 兼容 API",
+        "[dim]手动添加[/dim]",
+    )
 
     console.print(table)
     console.print()
@@ -281,7 +294,11 @@ def _setup_api_key(model_pool=None) -> None:
     console.print(f"  环境变量: [dim]{provider.env_key}[/dim]")
     console.print(f"  可用模型: [dim]{', '.join(provider.models)}[/dim]\n")
 
-    api_key = _clean_api_key(_masked_input(f"请输入 {provider.name} 的 API Key（可粘贴，输入会显示，回车确认）"))
+    api_key = _clean_api_key(
+        _masked_input(
+            f"请输入 {provider.name} 的 API Key（可粘贴，输入会显示，回车确认）"
+        )
+    )
 
     if api_key:
         # P3-Q6 / §8.16.1：保存前连通性测试，失败时询问是否仍保存。
@@ -317,8 +334,14 @@ def _show_configured() -> None:
     table.add_column("可用模型")
 
     for p in configured:
-        key_display = p.api_key[:8] + "****" + p.api_key[-4:] if len(p.api_key) > 12 else "****"
-        models = ", ".join(p.models[:4]) if p.models else f"获取失败: {p.model_error or '未知错误'}"
+        key_display = (
+            p.api_key[:8] + "****" + p.api_key[-4:] if len(p.api_key) > 12 else "****"
+        )
+        models = (
+            ", ".join(p.models[:4])
+            if p.models
+            else f"获取失败: {p.model_error or '未知错误'}"
+        )
         table.add_row(p.name, key_display, models)
 
     console.print(table)
@@ -346,7 +369,12 @@ def _select_model(registry: ModelRegistry, model_pool=None) -> None:
     idx = 1
     for p in configured:
         if not p.models:
-            table.add_row("-", p.name, "实时获取失败", p.model_error or "请检查 API Key / 网络 / base_url")
+            table.add_row(
+                "-",
+                p.name,
+                "实时获取失败",
+                p.model_error or "请检查 API Key / 网络 / base_url",
+            )
             continue
         for m in p.models:
             model_id = f"{p.key}/{m}"
@@ -384,11 +412,15 @@ def _select_model(registry: ModelRegistry, model_pool=None) -> None:
                 if provider_info:
                     creds = load_credentials()
                     from xenon.repl.provider_registry import _resolve_api_key
+
                     api_key = _resolve_api_key(provider, provider_info, creds)
                     base_url = provider_info.base_url
                 model_pool.register(
-                    model_id, alias=alias, weight=3.0,
-                    api_key=api_key, base_url=base_url,
+                    model_id,
+                    alias=alias,
+                    weight=3.0,
+                    api_key=api_key,
+                    base_url=base_url,
                 )
 
     if selected_models:
@@ -433,7 +465,9 @@ def _select_mode(registry: ModelRegistry) -> None:
 
     selected = mode_list[choice - 1]
     registry.set_mode(selected.name)
-    console.print(f"\n[green]已切换到: {selected.name}[/green] — {selected.description}\n")
+    console.print(
+        f"\n[green]已切换到: {selected.name}[/green] — {selected.description}\n"
+    )
 
 
 def _remove_api_key(registry: "ModelRegistry") -> None:
@@ -467,7 +501,9 @@ def _remove_api_key(registry: "ModelRegistry") -> None:
         removed = _purge_provider_models(registry, provider.key)
         console.print(f"[green]已删除 {provider.name} 的 API Key[/green]")
         if removed:
-            console.print(f"[dim]已联动移除 {removed} 个 {provider.name} 模型并重置角色优先级[/dim]")
+            console.print(
+                f"[dim]已联动移除 {removed} 个 {provider.name} 模型并重置角色优先级[/dim]"
+            )
         console.print()
 
 
@@ -526,6 +562,7 @@ def _mode_scene(mode_name: str) -> str:
 
 # ── v0.4.0: 自定义模型商注册 ──────────────────────────────
 
+
 def _register_custom(registry=None, model_pool=None) -> None:
     """注册自定义模型商——用户输入名称、base_url、API key。
 
@@ -533,9 +570,11 @@ def _register_custom(registry=None, model_pool=None) -> None:
     """
     # Try to get model_pool from registry if not provided
     if model_pool is None and registry is not None:
-        model_pool = getattr(registry, 'model_pool', None)
+        model_pool = getattr(registry, "model_pool", None)
     console.print("\n[bold cyan]═══ 注册自定义模型商 ═══[/bold cyan]")
-    console.print("[dim]适用于任意 OpenAI 兼容 API（豆包、零一万物、本地模型等）[/dim]\n")
+    console.print(
+        "[dim]适用于任意 OpenAI 兼容 API（豆包、零一万物、本地模型等）[/dim]\n"
+    )
 
     name = Prompt.ask("模型商名称", default="")
     if not name.strip():
@@ -574,9 +613,16 @@ def _register_custom(registry=None, model_pool=None) -> None:
                 for model_name in info.models[:_max_per_provider]:
                     model_id = f"{info.key}/{model_name}"
                     alias = model_name.replace(".", "-")
-                    model_pool.register(model_id, alias=alias, weight=3.0,
-                                        api_key=api_key, base_url=info.base_url)
-                console.print(f"[green]✓ 已自动注册 {min(len(info.models), _max_per_provider)} 个模型到调用池[/green]")
+                    model_pool.register(
+                        model_id,
+                        alias=alias,
+                        weight=3.0,
+                        api_key=api_key,
+                        base_url=info.base_url,
+                    )
+                console.print(
+                    f"[green]✓ 已自动注册 {min(len(info.models), _max_per_provider)} 个模型到调用池[/green]"
+                )
             elif registry is not None:
                 for model_name in info.models[:_max_per_provider]:
                     model_id = f"{info.key}/{model_name}"

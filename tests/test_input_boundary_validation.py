@@ -67,6 +67,7 @@ class TestShortcutNameValidation:
     @pytest.fixture
     def manager(self, tmp_path):
         from xenon.repl.shortcut_manager import ShortcutManager
+
         return ShortcutManager(path=tmp_path / "shortcuts.yaml")
 
     def test_normal_and_unicode_names(self, manager):
@@ -96,32 +97,38 @@ class TestModelPoolFromConfigValidation:
 
     def test_normal_config(self):
         from xenon.repl.model_pool import ModelPool
+
         p = ModelPool()
         p.from_config({"pro": {"model_id": "deepseek/v4-pro", "weight": 5.0}})
         assert len(p._entries) == 1
 
     def test_top_level_list_rejected(self):
         from xenon.repl.model_pool import ModelPool
+
         with pytest.raises(ValueError, match="模型池配置格式错误"):
             ModelPool().from_config(["x"])
 
     def test_non_dict_entry_rejected(self):
         from xenon.repl.model_pool import ModelPool
+
         with pytest.raises(ValueError, match="模型 'pro' 的配置格式错误"):
             ModelPool().from_config({"pro": "just-a-string"})
 
     def test_string_weight_rejected(self):
         from xenon.repl.model_pool import ModelPool
+
         with pytest.raises(ValueError, match="weight 必须是数字"):
             ModelPool().from_config({"pro": {"model_id": "a/b", "weight": "high"}})
 
     def test_negative_weight_rejected(self):
         from xenon.repl.model_pool import ModelPool
+
         with pytest.raises(ValueError, match="weight 必须为正数"):
             ModelPool().from_config({"pro": {"model_id": "a/b", "weight": -5}})
 
     def test_numeric_string_weight_coerced(self):
         from xenon.repl.model_pool import ModelPool
+
         p = ModelPool()
         p.from_config({"pro": {"model_id": "a/b", "weight": "2.5"}})
         assert p._entries["pro"].weight == 2.5
@@ -138,12 +145,14 @@ class TestPermissionGateUnknownRisk:
     @pytest.fixture
     def gate(self):
         import logging
+
         # disable() 是进程级全局开关，必须配对恢复——否则后续任何依赖
         # 日志捕获的测试（test_runtime_resilience 等）会因 root logger
         # 被静默而失败（全套件跑时的顺序依赖污染）。
         logging.disable(logging.CRITICAL)
         try:
             from xenon.repl.permissions import PermissionGate
+
             yield PermissionGate()
         finally:
             logging.disable(logging.NOTSET)
@@ -175,6 +184,7 @@ class TestDifficultyEstimatorBoundary:
     @pytest.mark.parametrize("text", ["", "   ", "\n\n  \t"])
     def test_empty_input_is_trivial(self, text):
         from xenon.repl.difficulty_estimator import DifficultyEstimator
+
         est = DifficultyEstimator()
         tier = DifficultyEstimator.estimate_tier(est.estimate(text, []))
         assert tier == 1
@@ -182,12 +192,14 @@ class TestDifficultyEstimatorBoundary:
     @pytest.mark.parametrize("text", ["x" * 100000, "🎉" * 20000, "aaaa" * 5000])
     def test_repetitive_flood_not_hard(self, text):
         from xenon.repl.difficulty_estimator import DifficultyEstimator
+
         est = DifficultyEstimator()
         tier = DifficultyEstimator.estimate_tier(est.estimate(text, []))
         assert tier <= 3
 
     def test_real_complex_task_still_tier5(self):
         from xenon.repl.difficulty_estimator import DifficultyEstimator
+
         est = DifficultyEstimator()
         tier = DifficultyEstimator.estimate_tier(
             est.estimate("帮我重构整个项目的架构，考虑性能和并发安全", [])
@@ -207,6 +219,7 @@ class TestEngineRunInputValidation:
 
     def _make_engine(self):
         from xenon.engine.react_engine import ReActEngine
+
         return ReActEngine(["prov/m1"])
 
     @pytest.mark.parametrize("bad_input", [None, 123, ["task"]])
@@ -247,4 +260,5 @@ class TestEngineRunInputValidation:
 
     def test_validation_in_base_engine(self):
         from xenon.engine.base import BaseEngine
+
         assert hasattr(BaseEngine, "_validate_run_input")

@@ -139,7 +139,9 @@ def test_run_initializes_models_before_rendering_welcome(monkeypatch):
         "_render_startup_summary",
         lambda value: events.append("summary"),
     )
-    monkeypatch.setattr(repl, "_load_custom_commands", lambda: events.append("commands"))
+    monkeypatch.setattr(
+        repl, "_load_custom_commands", lambda: events.append("commands")
+    )
     monkeypatch.setattr(
         repl,
         "_preload_mcp_server_configs",

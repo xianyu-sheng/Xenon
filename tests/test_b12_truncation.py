@@ -4,6 +4,7 @@
 通过 monkeypatch 单次调用助手 _call_*_once 注入脚本化的 (content, reason)
 序列，验证续写循环与异常路径，不依赖真实网络。
 """
+
 import pytest
 
 import xenon.utils.llm_client as lc
@@ -11,7 +12,9 @@ from xenon.utils.llm_client import ModelEndpoint, ResponseTruncatedError
 
 
 def _ep(provider: str = "openai") -> ModelEndpoint:
-    return ModelEndpoint(provider=provider, model_name="m", base_url="http://x", api_key="k")
+    return ModelEndpoint(
+        provider=provider, model_name="m", base_url="http://x", api_key="k"
+    )
 
 
 class TestOpenaiCompatAutoContinue:
@@ -23,7 +26,9 @@ class TestOpenaiCompatAutoContinue:
             return ("hello", "stop")
 
         monkeypatch.setattr(lc, "_call_openai_compat_once", fake_once)
-        out = lc._call_openai_compat(_ep(), [{"role": "user", "content": "hi"}], 100, 0.3, 10)
+        out = lc._call_openai_compat(
+            _ep(), [{"role": "user", "content": "hi"}], 100, 0.3, 10
+        )
         assert out == "hello"
         assert len(calls) == 1  # 未触发续写
 
@@ -34,7 +39,9 @@ class TestOpenaiCompatAutoContinue:
             return seq.pop(0)
 
         monkeypatch.setattr(lc, "_call_openai_compat_once", fake_once)
-        out = lc._call_openai_compat(_ep(), [{"role": "user", "content": "hi"}], 100, 0.3, 10)
+        out = lc._call_openai_compat(
+            _ep(), [{"role": "user", "content": "hi"}], 100, 0.3, 10
+        )
         assert out == "part1part2"
 
     def test_exhausted_continuations_raises(self, monkeypatch):
@@ -43,7 +50,9 @@ class TestOpenaiCompatAutoContinue:
 
         monkeypatch.setattr(lc, "_call_openai_compat_once", fake_once)
         with pytest.raises(ResponseTruncatedError):
-            lc._call_openai_compat(_ep(), [{"role": "user", "content": "hi"}], 100, 0.3, 10)
+            lc._call_openai_compat(
+                _ep(), [{"role": "user", "content": "hi"}], 100, 0.3, 10
+            )
 
     def test_does_not_mutate_caller_messages(self, monkeypatch):
         seq = [("a", "length"), ("b", "stop")]
@@ -85,7 +94,9 @@ class TestOpenaiCompatAutoContinue:
 
         monkeypatch.setattr(lc, "_call_openai_compat_once", fake_once)
         with pytest.raises(ResponseTruncatedError):
-            lc._call_openai_compat(_ep(), [{"role": "user", "content": "hi"}], 16000, 0.3, 10)
+            lc._call_openai_compat(
+                _ep(), [{"role": "user", "content": "hi"}], 16000, 0.3, 10
+            )
 
         # Retry count remains bounded, but Xenon no longer invents a 16K cap
         # for every OpenAI-compatible endpoint/model.
@@ -117,17 +128,24 @@ class TestOpenaiCompatAutoContinue:
             return seq.pop(0)
 
         monkeypatch.setattr(lc, "_call_openai_compat_once", fake_once)
-        out = lc._call_openai_compat(_ep(), [{"role": "user", "content": "hi"}], 100, 0.3, 10)
+        out = lc._call_openai_compat(
+            _ep(), [{"role": "user", "content": "hi"}], 100, 0.3, 10
+        )
 
         assert lc.json.loads(out)["action"] == "read_file"
         assert "只输出缺失内容" in seen[1][-1]["content"]
 
     def test_truncated_json_is_repaired_before_return(self, monkeypatch):
         def fake_once(ep, msgs, mt, t, to):
-            return ('{"action":"read_file","action_input":{"file_path":"README.md"', "stop")
+            return (
+                '{"action":"read_file","action_input":{"file_path":"README.md"',
+                "stop",
+            )
 
         monkeypatch.setattr(lc, "_call_openai_compat_once", fake_once)
-        out = lc._call_openai_compat(_ep(), [{"role": "user", "content": "hi"}], 100, 0.3, 10)
+        out = lc._call_openai_compat(
+            _ep(), [{"role": "user", "content": "hi"}], 100, 0.3, 10
+        )
         assert lc.json.loads(out)["action_input"]["file_path"] == "README.md"
 
     def test_dsml_continuation_keeps_tag_stream_intact(self, monkeypatch):
@@ -152,8 +170,11 @@ class TestOpenaiCompatAutoContinue:
 
         monkeypatch.setattr(lc, "_call_openai_compat_once", fake_once)
         out = lc._call_openai_compat(
-            _ep("deepseek"), [{"role": "user", "content": "hi"}],
-            100, 0.3, 10,
+            _ep("deepseek"),
+            [{"role": "user", "content": "hi"}],
+            100,
+            0.3,
+            10,
         )
 
         from xenon.utils.response_adapter import parse_react
@@ -173,7 +194,9 @@ class TestAnthropicAutoContinue:
             return ("done", "end_turn")
 
         monkeypatch.setattr(lc, "_call_anthropic_once", fake_once)
-        out = lc._call_anthropic(_ep("anthropic"), [{"role": "user", "content": "hi"}], 100, 0.3, 10)
+        out = lc._call_anthropic(
+            _ep("anthropic"), [{"role": "user", "content": "hi"}], 100, 0.3, 10
+        )
         assert out == "done"
         assert len(calls) == 1
 
@@ -184,7 +207,9 @@ class TestAnthropicAutoContinue:
             return seq.pop(0)
 
         monkeypatch.setattr(lc, "_call_anthropic_once", fake_once)
-        out = lc._call_anthropic(_ep("anthropic"), [{"role": "user", "content": "hi"}], 100, 0.3, 10)
+        out = lc._call_anthropic(
+            _ep("anthropic"), [{"role": "user", "content": "hi"}], 100, 0.3, 10
+        )
         assert out == "ab"
 
     def test_exhausted_raises(self, monkeypatch):
@@ -193,7 +218,9 @@ class TestAnthropicAutoContinue:
 
         monkeypatch.setattr(lc, "_call_anthropic_once", fake_once)
         with pytest.raises(ResponseTruncatedError):
-            lc._call_anthropic(_ep("anthropic"), [{"role": "user", "content": "hi"}], 100, 0.3, 10)
+            lc._call_anthropic(
+                _ep("anthropic"), [{"role": "user", "content": "hi"}], 100, 0.3, 10
+            )
 
 
 def test_response_truncated_error_is_runtime_error():

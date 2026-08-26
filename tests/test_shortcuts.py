@@ -64,7 +64,9 @@ class TestShortcutManager:
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = ShortcutManager(Path(tmpdir) / "shortcuts.yaml")
             manager.create(
-                "greet", "问候", ["echo hello {name}"],
+                "greet",
+                "问候",
+                ["echo hello {name}"],
                 params=[{"name": "name", "default": "world"}],
             )
 
@@ -76,7 +78,9 @@ class TestShortcutManager:
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = ShortcutManager(Path(tmpdir) / "shortcuts.yaml")
             manager.create(
-                "greet", "问候", ["echo hello {name}"],
+                "greet",
+                "问候",
+                ["echo hello {name}"],
                 params=[{"name": "name", "default": "world"}],
             )
 

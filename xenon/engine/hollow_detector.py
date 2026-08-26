@@ -27,40 +27,65 @@ logger = logging.getLogger(__name__)
 # ── 15 个反模式正则 ──────────────────────────────────────────
 # (名称, 编译后的正则)。命中"套话/承诺/ advisory"类表述。
 _HOLLOW_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("接下来我将",        re.compile(r"接下来我将")),
-    ("基于以上分析",      re.compile(r"基于以上(分析|内容|讨论|步骤)")),
-    ("整体设计完善",      re.compile(r"整体(设计|架构|方案).{0,4}(完善|合理|清晰|完整|健全)")),
-    ("综上所述",          re.compile(r"综上所述")),
-    ("总而言之",          re.compile(r"总而言之")),
-    ("需要注意的是",      re.compile(r"需要注意(的是)?")),
-    ("在此基础上",        re.compile(r"在此基础上")),
-    ("通过以上",          re.compile(r"通过以上")),
-    ("如下所示",          re.compile(r"如下所示")),
-    ("具体如下",          re.compile(r"具体如下")),
-    ("我认为/我觉得",     re.compile(r"我(认为|觉得|个人理解)")),
-    ("建议你/您",         re.compile(r"建议(你|您)")),
-    ("可以尝试",          re.compile(r"可以尝试")),
-    ("首先其次最后",      re.compile(r"首先[，,、].{0,40}(其次|然后).{0,40}(最后|最终)")),
-    ("省略号填充",        re.compile(r"…{2,}|\\.{4,}|……+")),
+    ("接下来我将", re.compile(r"接下来我将")),
+    ("基于以上分析", re.compile(r"基于以上(分析|内容|讨论|步骤)")),
+    (
+        "整体设计完善",
+        re.compile(r"整体(设计|架构|方案).{0,4}(完善|合理|清晰|完整|健全)"),
+    ),
+    ("综上所述", re.compile(r"综上所述")),
+    ("总而言之", re.compile(r"总而言之")),
+    ("需要注意的是", re.compile(r"需要注意(的是)?")),
+    ("在此基础上", re.compile(r"在此基础上")),
+    ("通过以上", re.compile(r"通过以上")),
+    ("如下所示", re.compile(r"如下所示")),
+    ("具体如下", re.compile(r"具体如下")),
+    ("我认为/我觉得", re.compile(r"我(认为|觉得|个人理解)")),
+    ("建议你/您", re.compile(r"建议(你|您)")),
+    ("可以尝试", re.compile(r"可以尝试")),
+    ("首先其次最后", re.compile(r"首先[，,、].{0,40}(其次|然后).{0,40}(最后|最终)")),
+    ("省略号填充", re.compile(r"…{2,}|\\.{4,}|……+")),
     # ── 完成型空洞（v0.8.1）：声称「已完成」但无实质产物的虚假完成。
     # 与上面的分析型套话互补：分析型是「说了很多但没做」，
     # 完成型是「说做完了但其实没做/没证据」。判定语义也不同：
     # 完成型的核心证据是「产物存在」（文件路径/代码块），因此命中
     # 完成型 pattern 时只凭「无实质结构」判空洞——短但附路径/代码的
     # 合法交付不误伤；分析型维持「长度不足 或 无实质结构」原逻辑。
-    ("已完成修复",        re.compile(r"(?:已|已经)(?:完成|成功|顺利|搞定)(?:修复|解决|改正|修补|搞定)")),
-    ("声称完成",          re.compile(r"(?:已|已经)(?:完成|搞定|处理好|处理完毕|弄好)(?:了|啦|！|!)?$")),
-    ("修复完成",          re.compile(r"(?:修复|解决|处理)(?:已完成|已结束|完毕|好了|成功)")),
-    ("声称已保存",        re.compile(r"(?:已|已经)(?:保存|写入|落盘|更新)(?:了)?(?:文件|到文件)?$")),
-    ("声称已修改",        re.compile(r"(?:已|已经)(?:修改|更改|改写)(?:了)?(?:文件|代码)?$")),
-    ("声称已测试",        re.compile(r"(?:已|已经)(?:测试|验证|跑通)(?:了)?(?:通过)?$|(?:测试|验证)(?:已通过|通过了?)$")),
-    ("问题已解决",        re.compile(r"(?:问题|bug|错误)(?:已|已经)?(?:解决|修复|消除)(?:了)?$")),
+    (
+        "已完成修复",
+        re.compile(r"(?:已|已经)(?:完成|成功|顺利|搞定)(?:修复|解决|改正|修补|搞定)"),
+    ),
+    (
+        "声称完成",
+        re.compile(r"(?:已|已经)(?:完成|搞定|处理好|处理完毕|弄好)(?:了|啦|！|!)?$"),
+    ),
+    ("修复完成", re.compile(r"(?:修复|解决|处理)(?:已完成|已结束|完毕|好了|成功)")),
+    (
+        "声称已保存",
+        re.compile(r"(?:已|已经)(?:保存|写入|落盘|更新)(?:了)?(?:文件|到文件)?$"),
+    ),
+    ("声称已修改", re.compile(r"(?:已|已经)(?:修改|更改|改写)(?:了)?(?:文件|代码)?$")),
+    (
+        "声称已测试",
+        re.compile(
+            r"(?:已|已经)(?:测试|验证|跑通)(?:了)?(?:通过)?$|(?:测试|验证)(?:已通过|通过了?)$"
+        ),
+    ),
+    (
+        "问题已解决",
+        re.compile(r"(?:问题|bug|错误)(?:已|已经)?(?:解决|修复|消除)(?:了)?$"),
+    ),
 ]
 
 # 完成型空洞 pattern 名集合——命中后仅凭「无实质结构」判定（见上注释）
 _COMPLETION_PATTERNS = {
-    "已完成修复", "声称完成", "修复完成", "声称已保存",
-    "声称已修改", "声称已测试", "问题已解决",
+    "已完成修复",
+    "声称完成",
+    "修复完成",
+    "声称已保存",
+    "声称已修改",
+    "声称已测试",
+    "问题已解决",
 }
 
 # 实质内容标记：代码块 / 文件路径 / URL / 有内容的内联代码 / 命令
@@ -99,11 +124,17 @@ class HollowResult:
         if any("disproportionate" in r for r in self.reasons):
             parts.append("- 你已执行多次工具，请基于工具结果详细汇报，而非一句带过。")
         if any("query_" in r for r in self.reasons):
-            parts.append("- 链接或接口地址不是查询结果；请实际调用只读工具，并整理返回的数据。")
+            parts.append(
+                "- 链接或接口地址不是查询结果；请实际调用只读工具，并整理返回的数据。"
+            )
         if self.hits:
-            parts.append(f"- 避免套话表述（命中: {', '.join(self.hits)}），"
-                         "直接给出代码块、文件路径或可执行步骤。")
-        parts.append("若任务确已完成，请在 final_answer 中附上产物（文件路径/代码/命令输出）。")
+            parts.append(
+                f"- 避免套话表述（命中: {', '.join(self.hits)}），"
+                "直接给出代码块、文件路径或可执行步骤。"
+            )
+        parts.append(
+            "若任务确已完成，请在 final_answer 中附上产物（文件路径/代码/命令输出）。"
+        )
         return "\n".join(parts)
 
 
@@ -184,7 +215,9 @@ class HollowDetector:
         # provider regressions where the model stops after constructing a URL,
         # especially URLs that still contain unresolved station/date tokens.
         if require_query_result:
-            if _URL_ONLY.search(stripped) and _UNRESOLVED_URL_PLACEHOLDER.search(stripped):
+            if _URL_ONLY.search(stripped) and _UNRESOLVED_URL_PLACEHOLDER.search(
+                stripped
+            ):
                 return HollowResult(
                     True,
                     ["query_placeholder: 查询 URL 仍含未解析占位符"],
@@ -207,7 +240,10 @@ class HollowDetector:
             return HollowResult(True, reasons, score, hits)
 
         # ② 不成比例：tool_calls 多但回答极短
-        if tool_call_count >= self.disproportionate_tools and n < self.disproportionate_len:
+        if (
+            tool_call_count >= self.disproportionate_tools
+            and n < self.disproportionate_len
+        ):
             reasons.append(
                 f"disproportionate: {tool_call_count}次工具调用但回答仅{n}字符"
                 f"(<{self.disproportionate_len})"
@@ -234,9 +270,7 @@ class HollowDetector:
                     tags.append(f"长度不足<{self.min_length}")
                 if struct_poor:
                     tags.append("结构差(无代码/路径/URL)")
-                reasons.append(
-                    f"regex: 命中{hits} 且 ({'/'.join(tags)})"
-                )
+                reasons.append(f"regex: 命中{hits} 且 ({'/'.join(tags)})")
                 # 分数：基础 0.7 + 每多命中一个 +0.05，封顶 0.95
                 score = max(score, min(0.95, 0.7 + 0.05 * len(hits)))
 

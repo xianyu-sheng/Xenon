@@ -24,11 +24,21 @@ from xenon.engine.callbacks import EngineCallback
 logger = logging.getLogger(__name__)
 
 # 支持的事件类型（与 EngineCallback 钩子对齐 + §8.27.3 扩展 start/iteration）
-EVENT_TYPES: frozenset[str] = frozenset({
-    "think", "act", "observe", "step", "step_done",
-    "review", "error", "warning", "finish",
-    "start", "iteration",
-})
+EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "think",
+        "act",
+        "observe",
+        "step",
+        "step_done",
+        "review",
+        "error",
+        "warning",
+        "finish",
+        "start",
+        "iteration",
+    }
+)
 
 Handler = Callable[..., Any]
 
@@ -62,7 +72,9 @@ class EventBus:
             except Exception as e:
                 logger.warning(
                     "EventBus 订阅者 %s 处理 %s 异常（已隔离）: %s",
-                    getattr(handler, "__name__", handler), event_type, e,
+                    getattr(handler, "__name__", handler),
+                    event_type,
+                    e,
                 )
 
     def subscriber_count(self, event_type: str) -> int:

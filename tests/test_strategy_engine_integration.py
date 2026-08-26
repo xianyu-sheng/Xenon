@@ -1,4 +1,5 @@
 """Engine integration tests for task-local strategy advice."""
+
 from __future__ import annotations
 
 import json
@@ -81,7 +82,9 @@ def test_new_top_level_task_resets_tip_marker(monkeypatch):
     monkeypatch.setattr(
         engine,
         "_call_llm",
-        lambda messages, **kwargs: json.dumps({"thought": "done", "final_answer": "ok"}),
+        lambda messages, **kwargs: json.dumps(
+            {"thought": "done", "final_answer": "ok"}
+        ),
     )
     engine.run("修复 first.py 的 bug", context)
     engine.run("修复 second.py 的 bug", context)

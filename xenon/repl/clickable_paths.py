@@ -58,28 +58,71 @@ def make_clickable(file_path: str, line: int = 0, display: str | None = None) ->
 #   ~/home/file.py
 #   C:\\Windows\\path (Windows)
 _PATH_PATTERN = re.compile(
-    r'(?<!\w)'
-    r'('
-    r'(?:~|\.\.?)?'          # ~ / . / ..
-    r'(?:/[-\w.+@]+)+'       # /path/to/file
-    r'(?:\.\w+)?'             # .extension (optional)
-    r'(?::\d+)?'              # :line_number (optional)
-    r'|'
-    r'[A-Za-z]:\\[-\w.\\ +@]+'  # Windows: C:\path\to\file
-    r'(?:\.\w+)?'
-    r')'
-    r'(?!\w)'
+    r"(?<!\w)"
+    r"("
+    r"(?:~|\.\.?)?"  # ~ / . / ..
+    r"(?:/[-\w.+@]+)+"  # /path/to/file
+    r"(?:\.\w+)?"  # .extension (optional)
+    r"(?::\d+)?"  # :line_number (optional)
+    r"|"
+    r"[A-Za-z]:\\[-\w.\\ +@]+"  # Windows: C:\path\to\file
+    r"(?:\.\w+)?"
+    r")"
+    r"(?!\w)"
 )
 
 # 常见代码文件扩展名——用于过滤误匹配（如 URL、英文句子中的"a/b"）
-_CODE_EXTS = frozenset({
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".h",
-    ".go", ".rs", ".rb", ".php", ".html", ".css", ".json", ".yaml", ".yml",
-    ".toml", ".xml", ".md", ".txt", ".sh", ".bat", ".ps1", ".sql", ".r",
-    ".swift", ".kt", ".scala", ".clj", ".ex", ".exs", ".erl", ".hrl",
-    ".vue", ".svelte", ".astro", ".tf", ".proto", ".cfg", ".ini", ".conf",
-    ".lock", ".toml", ".gradle", ".sbt",
-})
+_CODE_EXTS = frozenset(
+    {
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".java",
+        ".c",
+        ".cpp",
+        ".h",
+        ".go",
+        ".rs",
+        ".rb",
+        ".php",
+        ".html",
+        ".css",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".xml",
+        ".md",
+        ".txt",
+        ".sh",
+        ".bat",
+        ".ps1",
+        ".sql",
+        ".r",
+        ".swift",
+        ".kt",
+        ".scala",
+        ".clj",
+        ".ex",
+        ".exs",
+        ".erl",
+        ".hrl",
+        ".vue",
+        ".svelte",
+        ".astro",
+        ".tf",
+        ".proto",
+        ".cfg",
+        ".ini",
+        ".conf",
+        ".lock",
+        ".toml",
+        ".gradle",
+        ".sbt",
+    }
+)
 
 
 def _is_likely_path(text: str) -> bool:
@@ -142,7 +185,9 @@ def format_output_with_links(text: str) -> str:
 
             # 检查是否在 OSC-8 链接内（避免嵌套）
             before = line[cursor:start]
-            if _OSC8 in before and before.rfind(_OSC8) > before.rfind(_ST if _ST in before else "\x00"):
+            if _OSC8 in before and before.rfind(_OSC8) > before.rfind(
+                _ST if _ST in before else "\x00"
+            ):
                 continue
 
             # 追加匹配之前的文本
@@ -151,7 +196,11 @@ def format_output_with_links(text: str) -> str:
             # 解析行号
             line_num = 0
             clean_path = path
-            if ":" in path and not path.startswith(("~", ".", "C:")) and "://" not in path:
+            if (
+                ":" in path
+                and not path.startswith(("~", ".", "C:"))
+                and "://" not in path
+            ):
                 candidate_parts = path.rsplit(":", 1)
                 if len(candidate_parts) == 2 and candidate_parts[1].isdigit():
                     clean_path = candidate_parts[0]

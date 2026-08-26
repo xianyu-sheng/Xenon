@@ -6,6 +6,7 @@
 - REPL 命令
 - 策略指导
 """
+
 import json
 import pytest
 from xenon.engine.react_engine import ReActEngine
@@ -21,6 +22,7 @@ from xenon.engine.callbacks import SilentCallback
 # 引擎测试
 # ============================================================================
 
+
 class TestEngines:
     """测试所有引擎类型"""
 
@@ -31,11 +33,13 @@ class TestEngines:
 
         def fake_llm(messages, **kwargs):
             # 模拟：读取文件 → 返回结果
-            return json.dumps({
-                "thought": "需要读取测试文件",
-                "action": "read_file",
-                "action_input": {"file_path": str(tmp_path / "test.txt")}
-            })
+            return json.dumps(
+                {
+                    "thought": "需要读取测试文件",
+                    "action": "read_file",
+                    "action_input": {"file_path": str(tmp_path / "test.txt")},
+                }
+            )
 
         # 创建测试文件
         test_file = tmp_path / "test.txt"
@@ -46,10 +50,12 @@ class TestEngines:
         # 第一次调用会读文件，第二次应该返回 final_answer
         def fake_llm_with_final(messages, **kwargs):
             if len([m for m in messages if m.get("role") == "user"]) > 1:
-                return json.dumps({
-                    "thought": "文件已读取",
-                    "final_answer": "文件内容是: Hello Xenon!"
-                })
+                return json.dumps(
+                    {
+                        "thought": "文件已读取",
+                        "final_answer": "文件内容是: Hello Xenon!",
+                    }
+                )
             return fake_llm(messages, **kwargs)
 
         monkeypatch.setattr(engine, "_call_llm", fake_llm_with_final)
@@ -66,31 +72,30 @@ class TestEngines:
         engine = PlanExecuteEngine(["test/model"], callback=callback, max_steps=2)
 
         def fake_plan(phase, messages, **kwargs):
-            return json.dumps({
-                "analysis": "简单的两步任务",
-                "steps": [
-                    {
-                        "id": 1,
-                        "task": "列出当前目录",
-                        "tool": "command",
-                        "params": {"action": "ls -la"},
-                        "depends_on": []
-                    },
-                    {
-                        "id": 2,
-                        "task": "总结结果",
-                        "tool": None,
-                        "params": {},
-                        "depends_on": [1]
-                    }
-                ]
-            })
+            return json.dumps(
+                {
+                    "analysis": "简单的两步任务",
+                    "steps": [
+                        {
+                            "id": 1,
+                            "task": "列出当前目录",
+                            "tool": "command",
+                            "params": {"action": "ls -la"},
+                            "depends_on": [],
+                        },
+                        {
+                            "id": 2,
+                            "task": "总结结果",
+                            "tool": None,
+                            "params": {},
+                            "depends_on": [1],
+                        },
+                    ],
+                }
+            )
 
         def fake_execute(messages, **kwargs):
-            return json.dumps({
-                "thought": "执行完成",
-                "final_answer": "目录列表已获取"
-            })
+            return json.dumps({"thought": "执行完成", "final_answer": "目录列表已获取"})
 
         monkeypatch.setattr(engine, "_call_llm_for_phase", fake_plan)
         monkeypatch.setattr(engine, "_call_llm", fake_execute)
@@ -105,29 +110,27 @@ class TestEngines:
         """测试 Plan-ReAct 组合引擎"""
         callback = SilentCallback()
         engine = PlanReactEngine(
-            ["test/model"],
-            callback=callback,
-            max_steps=1,
-            react_iterations=2
+            ["test/model"], callback=callback, max_steps=1, react_iterations=2
         )
 
         def fake_plan(phase, messages, **kwargs):
-            return json.dumps({
-                "analysis": "单步任务",
-                "steps": [{
-                    "id": 1,
-                    "task": "回答问题",
-                    "tool": None,
-                    "params": {},
-                    "depends_on": []
-                }]
-            })
+            return json.dumps(
+                {
+                    "analysis": "单步任务",
+                    "steps": [
+                        {
+                            "id": 1,
+                            "task": "回答问题",
+                            "tool": None,
+                            "params": {},
+                            "depends_on": [],
+                        }
+                    ],
+                }
+            )
 
         def fake_react(messages, **kwargs):
-            return json.dumps({
-                "thought": "完成",
-                "final_answer": "任务完成"
-            })
+            return json.dumps({"thought": "完成", "final_answer": "任务完成"})
 
         monkeypatch.setattr(engine.planner, "_call_llm_for_phase", fake_plan)
         monkeypatch.setattr(engine.reactor, "_call_llm", fake_react)
@@ -146,6 +149,7 @@ class TestEngines:
 # 工具测试
 # ============================================================================
 
+
 class TestTools:
     """测试所有工具功能"""
 
@@ -157,18 +161,17 @@ class TestTools:
         engine = ReActEngine(["test/model"], max_iterations=2)
 
         def fake_llm(messages, **kwargs):
-            return json.dumps({
-                "thought": "读取文件",
-                "action": "read_file",
-                "action_input": {"file_path": str(test_file)}
-            })
+            return json.dumps(
+                {
+                    "thought": "读取文件",
+                    "action": "read_file",
+                    "action_input": {"file_path": str(test_file)},
+                }
+            )
 
         def fake_llm_final(messages, **kwargs):
             if "Sample content" in str(messages):
-                return json.dumps({
-                    "thought": "文件已读",
-                    "final_answer": "读取成功"
-                })
+                return json.dumps({"thought": "文件已读", "final_answer": "读取成功"})
             return fake_llm(messages, **kwargs)
 
         monkeypatch.setattr(engine, "_call_llm", fake_llm_final)
@@ -184,21 +187,20 @@ class TestTools:
         engine = ReActEngine(["test/model"], max_iterations=2)
 
         def fake_llm(messages, **kwargs):
-            return json.dumps({
-                "thought": "写入文件",
-                "action": "write_file",
-                "action_input": {
-                    "file_path": str(target_file),
-                    "content": "Test output"
+            return json.dumps(
+                {
+                    "thought": "写入文件",
+                    "action": "write_file",
+                    "action_input": {
+                        "file_path": str(target_file),
+                        "content": "Test output",
+                    },
                 }
-            })
+            )
 
         def fake_llm_final(messages, **kwargs):
             if target_file.exists():
-                return json.dumps({
-                    "thought": "文件已写入",
-                    "final_answer": "写入成功"
-                })
+                return json.dumps({"thought": "文件已写入", "final_answer": "写入成功"})
             return fake_llm(messages, **kwargs)
 
         monkeypatch.setattr(engine, "_call_llm", fake_llm_final)
@@ -214,18 +216,17 @@ class TestTools:
         engine = ReActEngine(["test/model"], max_iterations=2)
 
         def fake_llm(messages, **kwargs):
-            return json.dumps({
-                "thought": "执行命令",
-                "action": "command",
-                "action_input": {"action": "echo 'Hello from command'"}
-            })
+            return json.dumps(
+                {
+                    "thought": "执行命令",
+                    "action": "command",
+                    "action_input": {"action": "echo 'Hello from command'"},
+                }
+            )
 
         def fake_llm_final(messages, **kwargs):
             if "Hello from command" in str(messages):
-                return json.dumps({
-                    "thought": "命令已执行",
-                    "final_answer": "命令成功"
-                })
+                return json.dumps({"thought": "命令已执行", "final_answer": "命令成功"})
             return fake_llm(messages, **kwargs)
 
         monkeypatch.setattr(engine, "_call_llm", fake_llm_final)
@@ -239,6 +240,7 @@ class TestTools:
 # 策略指导测试
 # ============================================================================
 
+
 class TestStrategyGuidance:
     """测试策略指导系统"""
 
@@ -248,10 +250,7 @@ class TestStrategyGuidance:
         engine = ReActEngine(["test/model"], callback=callback, max_iterations=1)
 
         def fake_llm(messages, **kwargs):
-            return json.dumps({
-                "thought": "完成",
-                "final_answer": "OK"
-            })
+            return json.dumps({"thought": "完成", "final_answer": "OK"})
 
         monkeypatch.setattr(engine, "_call_llm", fake_llm)
 
@@ -269,10 +268,7 @@ class TestStrategyGuidance:
         engine = ReActEngine(["test/model"], callback=callback, max_iterations=1)
 
         def fake_llm(messages, **kwargs):
-            return json.dumps({
-                "thought": "完成",
-                "final_answer": "OK"
-            })
+            return json.dumps({"thought": "完成", "final_answer": "OK"})
 
         monkeypatch.setattr(engine, "_call_llm", fake_llm)
 

@@ -9,6 +9,7 @@ P1-A: 统一 models.yaml schema,融合 ModelRegistry(别名/角色)与 ModelPool
 - discover/probe 均可选,默认 probe 开、discover 关。
 - 幂等:重复 alias 视为更新;逐个注册,单条失败记 failed 继续(不回滚已成功的已校验条目)。
 """
+
 from __future__ import annotations
 
 import logging
@@ -36,31 +37,35 @@ DISCOVER_TIMEOUT = 10.0
 @dataclass
 class ModelSpec:
     """单个模型的注册规格(解析 + 校验后的中间结构)。"""
+
     alias: str
     model_id: str
     api_key: str = ""
     base_url: str = ""
     weight: float = 1.0
-    context_window: int = 0      # 0 = 不覆盖(用 _infer_capability 推断)
-    max_tokens: int = 0          # 0 = 用默认 4096
-    temperature: float = 0.0     # 0 = 用默认 0.7
+    context_window: int = 0  # 0 = 不覆盖(用 _infer_capability 推断)
+    max_tokens: int = 0  # 0 = 用默认 4096
+    temperature: float = 0.0  # 0 = 用默认 0.7
     reasoning_effort: str = ""  # low / medium / high / max
     tags: list[str] = field(default_factory=list)
-    tier: int = 0                # 0 = 不覆盖
+    tier: int = 0  # 0 = 不覆盖
     discover: bool = False
     probe: bool = True
-    source: str = "file"         # "file" | "discover:<parent>"
+    source: str = "file"  # "file" | "discover:<parent>"
 
 
 @dataclass
 class BatchResult:
     """批量注册结果。"""
-    registered: list[str] = field(default_factory=list)          # 成功注册的 alias
-    updated: list[str] = field(default_factory=list)             # 已存在被更新
+
+    registered: list[str] = field(default_factory=list)  # 成功注册的 alias
+    updated: list[str] = field(default_factory=list)  # 已存在被更新
     failed: list[tuple[str, str]] = field(default_factory=list)  # (alias, reason)
     probed_ok: list[str] = field(default_factory=list)
     probed_fail: list[tuple[str, str]] = field(default_factory=list)  # (alias, err)
-    discovered: list[tuple[str, str]] = field(default_factory=list)   # (parent_alias, child_model_id)
+    discovered: list[tuple[str, str]] = field(
+        default_factory=list
+    )  # (parent_alias, child_model_id)
     roles: dict[str, list[str]] = field(default_factory=dict)
     profile: str = "balanced"
 
@@ -87,7 +92,10 @@ class BatchResult:
 
 # ── 解析 ────────────────────────────────────────────────────
 
-def parse_file(path: str | Path) -> tuple[list[ModelSpec], dict[str, list[str]], str, list[str]]:
+
+def parse_file(
+    path: str | Path,
+) -> tuple[list[ModelSpec], dict[str, list[str]], str, list[str]]:
     """解析 models.yaml/JSON 文件。
 
     Returns:
@@ -105,13 +113,21 @@ def parse_file(path: str | Path) -> tuple[list[ModelSpec], dict[str, list[str]],
         return [], {}, "balanced", [f"YAML/JSON 解析失败: {e}"]
 
     if not isinstance(data, dict):
-        return [], {}, "balanced", [f"文件顶层应为映射(dict),实为 {type(data).__name__}"]
+        return (
+            [],
+            {},
+            "balanced",
+            [f"文件顶层应为映射(dict),实为 {type(data).__name__}"],
+        )
 
     profile = str(data.get("profile", "balanced")).strip() or "balanced"
     raw_models = data.get("models", [])
     if isinstance(raw_models, dict):
         # 兼容 {alias: {fields}} 形式(registry.export_config 风格)
-        raw_models = [{"alias": a, **(v if isinstance(v, dict) else {})} for a, v in raw_models.items()]
+        raw_models = [
+            {"alias": a, **(v if isinstance(v, dict) else {})}
+            for a, v in raw_models.items()
+        ]
     if not isinstance(raw_models, list):
         return [], {}, profile, [f"'models' 应为列表,实为 {type(raw_models).__name__}"]
 
@@ -123,7 +139,11 @@ def parse_file(path: str | Path) -> tuple[list[ModelSpec], dict[str, list[str]],
         specs.append(_spec_from_dict(item, idx))
 
     roles_raw = data.get("roles", {})
-    roles = {str(k): list(v) for k, v in roles_raw.items()} if isinstance(roles_raw, dict) else {}
+    roles = (
+        {str(k): list(v) for k, v in roles_raw.items()}
+        if isinstance(roles_raw, dict)
+        else {}
+    )
 
     return specs, roles, profile, errors
 
@@ -159,6 +179,7 @@ def _resolve_env(value: Any) -> str:
 
 # ── 校验 ────────────────────────────────────────────────────
 
+
 def validate(specs: list[ModelSpec]) -> list[str]:
     """字段校验,返回错误列表(每条对应一个坏 spec,含 alias/序号)。"""
     errors: list[str] = []
@@ -173,7 +194,9 @@ def validate(specs: list[ModelSpec]) -> list[str]:
         if not s.model_id:
             errors.append(f"{label}: model_id 不能为空")
         elif "/" not in s.model_id:
-            errors.append(f"{label}: model_id 应为 'provider/model_name' 格式(缺少 '/')")
+            errors.append(
+                f"{label}: model_id 应为 'provider/model_name' 格式(缺少 '/')"
+            )
         if s.weight <= 0:
             errors.append(f"{label}: weight 必须大于 0(当前 {s.weight})")
         if s.tier != 0 and not (1 <= s.tier <= 5):
@@ -188,7 +211,9 @@ def validate(specs: list[ModelSpec]) -> list[str]:
         # alias 唯一性
         if s.alias:
             if s.alias in seen_aliases:
-                errors.append(f"{label}: alias 重复(与 models[{seen_aliases[s.alias]}] 冲突)")
+                errors.append(
+                    f"{label}: alias 重复(与 models[{seen_aliases[s.alias]}] 冲突)"
+                )
             else:
                 seen_aliases[s.alias] = i
 
@@ -197,12 +222,16 @@ def validate(specs: list[ModelSpec]) -> list[str]:
 
 # ── discover(上游 /v1/models 自动发现)──────────────────────
 
-def discover_models(base_url: str, api_key: str, *, timeout: float = DISCOVER_TIMEOUT) -> list[str]:
+
+def discover_models(
+    base_url: str, api_key: str, *, timeout: float = DISCOVER_TIMEOUT
+) -> list[str]:
     """GET {base_url}/v1/models 拉取上游可用模型列表(OpenAI 兼容)。
 
     用于 Ollama/vLLM/本地兼容端点;闭源商默认不开 discover。
     """
     import httpx
+
     url = base_url.rstrip("/") + "/v1/models"
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     with httpx.Client(timeout=timeout) as client:
@@ -238,22 +267,25 @@ def _expand_discover(specs: list[ModelSpec], result: BatchResult) -> list[ModelS
             if child_alias == s.alias:
                 continue
             result.discovered.append((s.alias, f"{provider}/{child}"))
-            expanded.append(ModelSpec(
-                alias=child_alias,
-                model_id=f"{provider}/{child}",
-                api_key=s.api_key,
-                base_url=s.base_url,
-                weight=s.weight,
-                reasoning_effort=s.reasoning_effort,
-                tags=list(s.tags),
-                tier=s.tier,
-                probe=s.probe,
-                source=f"discover:{s.alias}",
-            ))
+            expanded.append(
+                ModelSpec(
+                    alias=child_alias,
+                    model_id=f"{provider}/{child}",
+                    api_key=s.api_key,
+                    base_url=s.base_url,
+                    weight=s.weight,
+                    reasoning_effort=s.reasoning_effort,
+                    tags=list(s.tags),
+                    tier=s.tier,
+                    probe=s.probe,
+                    source=f"discover:{s.alias}",
+                )
+            )
     return expanded
 
 
 # ── probe(单 token 验活)────────────────────────────────────
+
 
 def probe_model(spec: ModelSpec, *, timeout: float = PROBE_TIMEOUT) -> tuple[bool, str]:
     """对单个模型发最小请求验活(捕获失效 key/网络/限流)。
@@ -261,6 +293,7 @@ def probe_model(spec: ModelSpec, *, timeout: float = PROBE_TIMEOUT) -> tuple[boo
     复用 llm_client.chat_completion 以复用 provider 适配(Anthropic 原生 vs OpenAI 兼容)。
     """
     from xenon.utils.llm_client import chat_completion
+
     provider = spec.model_id.split("/")[0] if "/" in spec.model_id else ""
     creds = {provider: spec.api_key} if spec.api_key else None
     try:
@@ -279,7 +312,9 @@ def probe_model(spec: ModelSpec, *, timeout: float = PROBE_TIMEOUT) -> tuple[boo
         return False, str(e)[:200]
 
 
-def _run_probes(specs: list[ModelSpec], result: BatchResult, *, max_workers: int = PROBE_MAX_WORKERS) -> list[ModelSpec]:
+def _run_probes(
+    specs: list[ModelSpec], result: BatchResult, *, max_workers: int = PROBE_MAX_WORKERS
+) -> list[ModelSpec]:
     """并发 probe;返回通过验证的 specs(probe fail 的记 probed_fail 并排除)。"""
     to_probe = [s for s in specs if s.probe]
     skip_probe = [s for s in specs if not s.probe]
@@ -304,6 +339,7 @@ def _run_probes(specs: list[ModelSpec], result: BatchResult, *, max_workers: int
 
 
 # ── 主流程 ──────────────────────────────────────────────────
+
 
 def batch_register(
     path: str | Path,
@@ -368,8 +404,10 @@ def batch_register(
                 cap_overrides["context_window"] = s.context_window
 
             registry.add_model(
-                s.model_id, s.alias,
-                api_key=s.api_key, base_url=s.base_url,
+                s.model_id,
+                s.alias,
+                api_key=s.api_key,
+                base_url=s.base_url,
                 max_tokens=s.max_tokens or 4096,
                 temperature=s.temperature or 0.7,
                 reasoning_effort=s.reasoning_effort,
@@ -377,8 +415,12 @@ def batch_register(
                 weight=s.weight,
             )
             pool.register(
-                s.model_id, alias=s.alias, weight=s.weight,
-                api_key=s.api_key, base_url=s.base_url, **cap_overrides,
+                s.model_id,
+                alias=s.alias,
+                weight=s.weight,
+                api_key=s.api_key,
+                base_url=s.base_url,
+                **cap_overrides,
             )
 
             if existed_in_registry or existed_in_pool:

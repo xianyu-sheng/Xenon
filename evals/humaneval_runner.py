@@ -132,9 +132,11 @@ def extract_code(generated: str, entry_point: str) -> str:
                 continue
             body_lines.append(line)
         # Trim trailing empty/noise lines
-        while body_lines and (not body_lines[-1].strip()
-                              or body_lines[-1].strip() in ("```",)
-                              or body_lines[-1].strip().startswith("Here")):
+        while body_lines and (
+            not body_lines[-1].strip()
+            or body_lines[-1].strip() in ("```",)
+            or body_lines[-1].strip().startswith("Here")
+        ):
             body_lines.pop()
         # If all we have is comment lines with no indentation, something went wrong
         if body_lines and all(
@@ -156,9 +158,12 @@ def evaluate_task(task: dict[str, Any], completion: str) -> dict[str, Any]:
     Full code = prompt + body + test + check().
     """
     full_code = (
-        task["prompt"] + "\n"
-        + completion + "\n\n"
-        + task["test"] + "\n\n"
+        task["prompt"]
+        + "\n"
+        + completion
+        + "\n\n"
+        + task["test"]
+        + "\n\n"
         + f"check({task['entry_point']})\n"
     )
 
@@ -189,7 +194,7 @@ def run_humaneval(
     for i, task in enumerate(tasks):
         task_id = task["task_id"]
         prompt = build_prompt(task)
-        print(f"[{i+1}/{num_tasks}] {task_id} ...", end=" ", flush=True)
+        print(f"[{i + 1}/{num_tasks}] {task_id} ...", end=" ", flush=True)
 
         samples = []
         for _ in range(num_samples):
@@ -210,11 +215,13 @@ def run_humaneval(
                 if eval_result["passed"]:
                     break
             except Exception as e:
-                samples.append({
-                    "task_id": task_id,
-                    "passed": False,
-                    "error": f"API: {e}",
-                })
+                samples.append(
+                    {
+                        "task_id": task_id,
+                        "passed": False,
+                        "error": f"API: {e}",
+                    }
+                )
 
         any_passed = any(s["passed"] for s in samples)
         status = "PASS" if any_passed else "FAIL"
@@ -222,13 +229,15 @@ def run_humaneval(
         detail = f"({err})" if err and not any_passed else ""
         print(f"{status} {detail}")
 
-        results.append({
-            "task_id": task_id,
-            "passed": samples[0]["passed"] if samples else False,
-            "pass_at_k": any_passed,
-            "samples": len(samples),
-            "error": samples[0].get("error") if not any_passed else None,
-        })
+        results.append(
+            {
+                "task_id": task_id,
+                "passed": samples[0]["passed"] if samples else False,
+                "pass_at_k": any_passed,
+                "samples": len(samples),
+                "error": samples[0].get("error") if not any_passed else None,
+            }
+        )
 
     return results
 
@@ -239,13 +248,16 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "total": total,
         "passed": passed,
-        "pass_rate": f"{passed}/{total} ({passed/total*100:.1f}%)" if total else "N/A",
+        "pass_rate": f"{passed}/{total} ({passed / total * 100:.1f}%)"
+        if total
+        else "N/A",
         "results": results,
     }
 
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
+
     p = argparse.ArgumentParser(description="HumanEval benchmark for xenon")
     p.add_argument("--model", default="deepseek/deepseek-v4-pro")
     p.add_argument("--num-tasks", type=int, default=20)
@@ -266,9 +278,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     summary = summarize(results)
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"Result: {summary['pass_rate']}")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

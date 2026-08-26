@@ -46,6 +46,7 @@ class AutoRouter:
         # P1-B SAAR: 会话感知路由(粘性锁,防止 ReAct/Plan-Execute 中途切模型
         # 致上下文漂移 + prompt cache 失效)
         from xenon.repl.session_lock import SessionLock
+
         self.session_lock = SessionLock()
         self.session_lock_enabled = True
         self.drift_threshold = 3  # 连续 N 次决策漂移才释放锁
@@ -121,12 +122,19 @@ class AutoRouter:
             result_ids = prioritized[:count]
 
         # P1-B SAAR: 检测到工具调用流时加锁,保证后续请求路由连续(避免中途切模型)
-        if (self.session_lock_enabled and result_ids
-                and self._is_tool_flow(context_messages, profile)):
+        if (
+            self.session_lock_enabled
+            and result_ids
+            and self._is_tool_flow(context_messages, profile)
+        ):
             self.session_lock.lock(result_ids[0], task_tier, reason="tool_flow")
 
         # Step 9: 记录路由决策
-        scores = [self.pool.score_for_profile(e, profile) for e in entries] if entries else []
+        scores = (
+            [self.pool.score_for_profile(e, profile) for e in entries]
+            if entries
+            else []
+        )
         record = RoutingRecord(
             timestamp=time.time(),
             user_input_preview=user_input[:120],
@@ -240,7 +248,8 @@ class AutoRouter:
             }
 
         warm_peers = [
-            entries[index] for index in peer_indexes
+            entries[index]
+            for index in peer_indexes
             if evidence[entries[index].model_id].get("eligible")
         ]
         if not warm_peers:
@@ -267,7 +276,9 @@ class AutoRouter:
         after = [entry.model_id for entry in reordered]
         self.last_cache_affinity_decision = {
             "applied": after != before,
-            "reason": "warm_equivalent_peer" if after != before else "leader_already_preferred",
+            "reason": "warm_equivalent_peer"
+            if after != before
+            else "leader_already_preferred",
             "before": before,
             "after": after,
             "score_gap_limit": self.cache_affinity_max_score_gap,
@@ -304,7 +315,11 @@ class AutoRouter:
             self._last_successful_model_id = model_id
 
     def _session_lock_route(
-        self, user_input: str, profile: TaskProfile, task_tier: int, count: int,
+        self,
+        user_input: str,
+        profile: TaskProfile,
+        task_tier: int,
+        count: int,
     ) -> list[str] | None:
         """SAAR 短路:锁有效时返回锁定模型优先列表;None 表示走正常流程。
 
@@ -340,20 +355,26 @@ class AutoRouter:
             "before": result_ids,
             "after": result_ids,
         }
-        scores = [self.pool.score_for_profile(e, profile) for e in entries] if entries else []
-        self.history.record(RoutingRecord(
-            timestamp=time.time(),
-            user_input_preview=user_input[:120],
-            intent=profile.intent,
-            complexity=profile.complexity,
-            requires_reasoning=profile.requires_reasoning,
-            requires_code_generation=profile.requires_code_generation,
-            requires_tools=profile.requires_tools,
-            estimated_tokens=profile.estimated_tokens,
-            task_tier=task_tier,
-            selected_models=result_ids,
-            scores=scores,
-        ))
+        scores = (
+            [self.pool.score_for_profile(e, profile) for e in entries]
+            if entries
+            else []
+        )
+        self.history.record(
+            RoutingRecord(
+                timestamp=time.time(),
+                user_input_preview=user_input[:120],
+                intent=profile.intent,
+                complexity=profile.complexity,
+                requires_reasoning=profile.requires_reasoning,
+                requires_code_generation=profile.requires_code_generation,
+                requires_tools=profile.requires_tools,
+                estimated_tokens=profile.estimated_tokens,
+                task_tier=task_tier,
+                selected_models=result_ids,
+                scores=scores,
+            )
+        )
         return result_ids
 
     def _find_entry_by_model_id(self, model_id: str):
@@ -376,7 +397,9 @@ class AutoRouter:
         return True
 
     @staticmethod
-    def _is_tool_flow(context_messages: list[dict] | None, profile: TaskProfile) -> bool:
+    def _is_tool_flow(
+        context_messages: list[dict] | None, profile: TaskProfile
+    ) -> bool:
         """判断是否处于工具调用流(需要工具 + 近期上下文含 tool 角色消息)。
 
         首次工具任务(尚无 tool 消息)不锁;进入循环后才锁,避免过度粘性。
@@ -399,6 +422,7 @@ class AutoRouter:
         """Fall back to static ModelRegistry if pool is empty."""
         try:
             from xenon.repl.model_registry import ModelRegistry
+
             reg = ModelRegistry()
             models = reg.list_models()
             if models:

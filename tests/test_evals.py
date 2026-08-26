@@ -9,7 +9,13 @@ def test_loads_twenty_eval_tasks():
     tasks = load_tasks()
     assert len(tasks) == 20
     for task in tasks:
-        assert {"id", "category", "prompt", "expected_tools", "success_criteria"} <= set(task)
+        assert {
+            "id",
+            "category",
+            "prompt",
+            "expected_tools",
+            "success_criteria",
+        } <= set(task)
         assert isinstance(task["expected_tools"], list)
 
 

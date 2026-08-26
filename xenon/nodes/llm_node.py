@@ -103,8 +103,10 @@ class LLMNode(BaseNode):
     def _resolve_template(template: str, context: AgentContext) -> str:
         """将 prompt 中的 {key} 替换为 context 中对应值。"""
         import re
+
         def _replace(m: re.Match) -> str:
             key = m.group(1)
             val = context.get(key)
             return str(val) if val is not None else m.group(0)
+
         return re.sub(r"\{(\w+)\}", _replace, template)

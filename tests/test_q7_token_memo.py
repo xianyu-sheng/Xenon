@@ -5,11 +5,15 @@ from __future__ import annotations
 import copy
 
 from xenon.repl.context_manager import (
-    ContextManager, ConversationTurn, _estimate_tokens, _CJK_RE,
+    ContextManager,
+    ConversationTurn,
+    _estimate_tokens,
+    _CJK_RE,
 )
 
 
 # --------------------------- estimate_tokens 基础（向后兼容） ---------------------------
+
 
 def test_estimate_tokens_empty():
     assert _estimate_tokens("") == 0
@@ -44,6 +48,7 @@ def test_estimate_tokens_code_heavy():
 
 # --------------------------- CJK 范围扩展 ---------------------------
 
+
 def test_cjk_regex_includes_hiragana():
     assert len(_CJK_RE.findall("こんにちは")) == 5
 
@@ -77,6 +82,7 @@ def test_estimate_tokens_hangul_counted_as_cjk():
 
 # --------------------------- ConversationTurn.token_count 缓存 ---------------------------
 
+
 def test_turn_token_count_computed():
     t = ConversationTurn(role="user", content="hello world")
     assert t.token_count > 0
@@ -88,9 +94,14 @@ def test_turn_token_count_caches(monkeypatch):
 
     def counting(text):
         calls.append(text)
-        return _estimate_tokens.__wrapped__(text) if hasattr(_estimate_tokens, "__wrapped__") else 42
+        return (
+            _estimate_tokens.__wrapped__(text)
+            if hasattr(_estimate_tokens, "__wrapped__")
+            else 42
+        )
 
     import xenon.repl.context_manager as cm_mod
+
     monkeypatch.setattr(cm_mod, "_estimate_tokens", counting)
     t = ConversationTurn(role="user", content="some content here")
     v1 = t.token_count
@@ -127,6 +138,7 @@ def test_deepcopy_preserves_cache():
 
 
 # --------------------------- current_token_usage 用缓存 ---------------------------
+
 
 def test_current_token_usage_sums_cached(monkeypatch):
     """current_token_usage 求和缓存值，多次调用不重算（O(n) 免重算）。"""

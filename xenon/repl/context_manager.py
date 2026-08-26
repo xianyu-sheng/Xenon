@@ -33,11 +33,11 @@ _SENSITIVE_MEMORY_KEY = re.compile(
 # P3-Q7 / §8.26.2：CJK 范围扩展——基本区 + 扩展 A + 兼容区 + 假名 + 韩文音节。
 # 原仅 '一' <= c <= '鿿'（U+4E00–U+9FFF）遗漏扩展 A/日文假名/韩文，致估算偏低。
 _CJK_RE = re.compile(
-    r'[㐀-䶿'   # CJK 扩展 A
-    r'一-鿿'    # CJK 基本区
-    r'豈-﫿'    # CJK 兼容表意
-    r'぀-ヿ'    # 平假名 + 片假名
-    r'가-힣]'   # 韩文音节 (U+AC00-U+D7A3)
+    r"[㐀-䶿"  # CJK 扩展 A
+    r"一-鿿"  # CJK 基本区
+    r"豈-﫿"  # CJK 兼容表意
+    r"぀-ヿ"  # 平假名 + 片假名
+    r"가-힣]"  # 韩文音节 (U+AC00-U+D7A3)
 )
 
 
@@ -58,6 +58,7 @@ def _estimate_tokens(text: str) -> int:
     # 尝试使用 tiktoken 进行精确计算
     try:
         import tiktoken
+
         enc = tiktoken.get_encoding("cl100k_base")
         return len(enc.encode(text))
     except Exception as e:
@@ -70,7 +71,7 @@ def _estimate_tokens(text: str) -> int:
     chars = len(text)
 
     # 检测是否包含大量代码/JSON
-    code_chars = text.count('{') + text.count('}') + text.count(';') + text.count('=')
+    code_chars = text.count("{") + text.count("}") + text.count(";") + text.count("=")
     is_code_heavy = code_chars > chars * 0.02
 
     # 基础估算：至少 len//2（防止无空格长串被低估）
@@ -111,6 +112,7 @@ def _guess_tool_name(turn: Any) -> str:
     if content.startswith("Observation:"):
         # 尝试提取工具名
         import re as _re
+
         m = _re.match(r"Observation:\s*(\w+)", content)
         if m:
             return m.group(1)
@@ -128,11 +130,15 @@ class ConversationTurn:
     metadata: dict[str, Any] = field(default_factory=dict)
     # v0.5.0：分层上下文标注
     task_tier: int = 3  # Q1-Q5，来自 AutoRouter 路由决策
-    turn_type: str = "general"  # user_input | assistant_output | tool_call | tool_result
+    turn_type: str = (
+        "general"  # user_input | assistant_output | tool_call | tool_result
+    )
     semantic_group_id: str | None = None  # 语义块分组 ID
     turn_index: int = 0  # 对话中的全局位置序号
     # P3-Q7 / §8.9.2：token 估算懒缓存——content 添加后不变，避免状态栏/每轮全量重算。
-    _token_count: int | None = field(default=None, init=False, repr=False, compare=False)
+    _token_count: int | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def token_count(self) -> int:
@@ -172,6 +178,7 @@ class ContextManager:
         if max_undo_snapshots is None:
             try:
                 from xenon.repl.system_config import get_config
+
                 max_undo_snapshots = get_config().limits.max_undo_snapshots
             except Exception:  # noqa: BLE001 — 配置读取失败时使用默认值
                 max_undo_snapshots = 10
@@ -258,7 +265,8 @@ class ContextManager:
             # 自增轮次计数器
             self._turn_counter += 1
             turn = ConversationTurn(
-                role=role, content=content,
+                role=role,
+                content=content,
                 task_tier=task_tier,
                 turn_type=turn_type,
                 turn_index=self._turn_counter,
@@ -343,7 +351,9 @@ class ContextManager:
         else:
             self._context_messages.pop(str(key), None)
 
-    def get_context_messages(self, *, stable: bool | None = None) -> list[dict[str, str]]:
+    def get_context_messages(
+        self, *, stable: bool | None = None
+    ) -> list[dict[str, str]]:
         """Return replaceable overlays in deterministic insertion order.
 
         Passing ``stable=True`` or ``False`` selects a cache tier.  ``None``
@@ -419,12 +429,14 @@ class ContextManager:
             key: value for key, value in self._context_messages.items() if value[1]
         }
         metadata = dict(kwargs.pop("metadata", {}) or {})
-        metadata.update({
-            "request_context_frozen": True,
-            "request_envelope_hash": hashlib.sha256(
-                envelope.encode("utf-8")
-            ).hexdigest(),
-        })
+        metadata.update(
+            {
+                "request_context_frozen": True,
+                "request_envelope_hash": hashlib.sha256(
+                    envelope.encode("utf-8")
+                ).hexdigest(),
+            }
+        )
         self.add_user_message(envelope, metadata=metadata, **kwargs)
         return envelope
 
@@ -487,7 +499,9 @@ class ContextManager:
             elif message.get("tool_calls"):
                 names = []
                 for call in message.get("tool_calls", []):
-                    function = call.get("function", {}) if isinstance(call, dict) else {}
+                    function = (
+                        call.get("function", {}) if isinstance(call, dict) else {}
+                    )
                     name = str(function.get("name", ""))
                     if name:
                         names.append(name)
@@ -507,7 +521,9 @@ class ContextManager:
         """Append a user turn with optional semantic metadata."""
         self.add_message("user", content, **kwargs)
 
-    def add_assistant_message(self, content: str, *, model_used: str | None = None) -> None:
+    def add_assistant_message(
+        self, content: str, *, model_used: str | None = None
+    ) -> None:
         self.add_message("assistant", content, model_used=model_used)
 
     def add_system_message(self, content: str) -> None:
@@ -538,10 +554,12 @@ class ContextManager:
                 history_messages.append(copy.deepcopy(api_message))
             elif turn.role == "tool":
                 tool_name = str((turn.metadata or {}).get("tool_name", "unknown"))
-                history_messages.append({
-                    "role": "user",
-                    "content": f"[工具结果: {tool_name}]\n{turn.content}",
-                })
+                history_messages.append(
+                    {
+                        "role": "user",
+                        "content": f"[工具结果: {tool_name}]\n{turn.content}",
+                    }
+                )
             else:
                 history_messages.append({"role": turn.role, "content": turn.content})
 
@@ -585,11 +603,13 @@ class ContextManager:
                 "content": turn.content,
                 "model_used": turn.model_used,
                 "node_id": turn.node_id,
-                "metadata": self._safe_context_value({
-                    key: value
-                    for key, value in (turn.metadata or {}).items()
-                    if key != "api_message"
-                }),
+                "metadata": self._safe_context_value(
+                    {
+                        key: value
+                        for key, value in (turn.metadata or {}).items()
+                        if key != "api_message"
+                    }
+                ),
                 "task_tier": turn.task_tier,
                 "turn_type": turn.turn_type,
                 "semantic_group_id": turn.semantic_group_id,
@@ -652,8 +672,11 @@ class ContextManager:
             # P1: 验证回调是否成功注册（非阻塞式验证）
             try:
                 from xenon.utils.llm_client import _USAGE_CALLBACKS
+
                 if self._on_usage not in _USAGE_CALLBACKS:
-                    logger.warning("回调已注册但未在 _USAGE_CALLBACKS 中找到（测试环境可忽略）")
+                    logger.warning(
+                        "回调已注册但未在 _USAGE_CALLBACKS 中找到（测试环境可忽略）"
+                    )
             except Exception:  # noqa: BLE001 — 验证失败不影响订阅
                 pass
 
@@ -676,7 +699,11 @@ class ContextManager:
 
         logger.debug(
             "Usage callback triggered: model=%s, prompt=%d, completion=%d, total=%d, latency=%.2fs",
-            model_id, prompt_tokens, completion_tokens, total_tokens, latency
+            model_id,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            latency,
         )
 
         self.record_real_usage(prompt_tokens, completion_tokens, total_tokens)
@@ -695,7 +722,11 @@ class ContextManager:
 
         P0-Critical: 同时累加到 _cumulative_tokens，记录跨调用的总 token 用量。
         """
-        total = int(total_tokens) if total_tokens else int(prompt_tokens) + int(completion_tokens)
+        total = (
+            int(total_tokens)
+            if total_tokens
+            else int(prompt_tokens) + int(completion_tokens)
+        )
         self._real_usage = {
             "prompt": int(prompt_tokens),
             "completion": int(completion_tokens),
@@ -738,7 +769,9 @@ class ContextManager:
 
     def usage_ratio(self) -> float:
         """当前 token 使用率 (0.0 ~ 1.0+)。"""
-        return self.current_token_usage() / self.max_tokens if self.max_tokens > 0 else 0.0
+        return (
+            self.current_token_usage() / self.max_tokens if self.max_tokens > 0 else 0.0
+        )
 
     def needs_compact(self) -> bool:
         """是否需要压缩。"""
@@ -806,8 +839,12 @@ class ContextManager:
 
     # F3：6 段结构化摘要的段名（顺序即输出顺序）
     _SIX_SEGMENTS = (
-        "原始目标", "已完成步骤", "关键约束",
-        "当前文件状态", "剩余待办", "关键数据",
+        "原始目标",
+        "已完成步骤",
+        "关键约束",
+        "当前文件状态",
+        "剩余待办",
+        "关键数据",
     )
 
     def _preprocess_older(
@@ -837,7 +874,9 @@ class ContextManager:
                 return list(older)
 
             classifier = ToolOutputClassifier()
-            max_chars = getattr(strategy, "tool_output_max_chars", 500) if strategy else 500
+            max_chars = (
+                getattr(strategy, "tool_output_max_chars", 500) if strategy else 500
+            )
 
             processed: list[ConversationTurn] = []
             for chunk in chunks:
@@ -847,8 +886,11 @@ class ContextManager:
                         tt = getattr(turn, "turn_type", "general")
                         if tt == "tool_result":
                             tool_name = _guess_tool_name(turn)
-                            compressed = classifier.compress(tool_name, turn.content, max_chars=max_chars)
+                            compressed = classifier.compress(
+                                tool_name, turn.content, max_chars=max_chars
+                            )
                             import copy
+
                             new_turn = copy.copy(turn)
                             new_turn.content = compressed
                             processed.append(new_turn)
@@ -925,7 +967,10 @@ class ContextManager:
                 # 危急：无法调用 LLM → 分层截断
                 current_idx = self._turn_counter
                 new_history, crisis_summary = handle_crisis(
-                    older, recent, strategy, current_idx,
+                    older,
+                    recent,
+                    strategy,
+                    current_idx,
                 )
                 summary = crisis_summary or (
                     f"（上下文使用率 {ratio:.0%}，空间危急，"
@@ -939,14 +984,16 @@ class ContextManager:
                 elif self._active_tier == 3:
                     # Q3: 尝试最小模型
                     summary = self._llm_summary_nseg(
-                        model_priority, older,
+                        model_priority,
+                        older,
                         n_segments=3,
                         max_prompt_chars=1500,
                     )
                 else:
                     # Q4-Q5: 先压缩工具输出腾空间，再调 LLM
                     summary = self._llm_summary_after_tool_trim(
-                        model_priority, older,
+                        model_priority,
+                        older,
                         n_segments=strategy.summary_segments,
                         strategy=strategy,
                     )
@@ -967,12 +1014,15 @@ class ContextManager:
                 if self._active_tier <= 2 and not summary:
                     # Q1-Q2: 3 段简化摘要
                     summary = summary or self._llm_summary_nseg(
-                        model_priority, older, n_segments=3,
+                        model_priority,
+                        older,
+                        n_segments=3,
                     )
                 else:
                     # Q3-Q5: 6 段结构化摘要（或手动摘要）
                     summary = summary or self._llm_summary_6seg(
-                        model_priority, older,
+                        model_priority,
+                        older,
                     )
                 summary_turn = ConversationTurn(
                     role="system",
@@ -1009,7 +1059,9 @@ class ContextManager:
         self._notify_status_change()
         return summary
 
-    def _split_recent(self, keep_rounds: int = 3) -> tuple[list[ConversationTurn], list[ConversationTurn]]:
+    def _split_recent(
+        self, keep_rounds: int = 3
+    ) -> tuple[list[ConversationTurn], list[ConversationTurn]]:
         """按 user 轮数切分 older / recent（recent 保留最近 keep_rounds 轮完整对话）。
 
         P2-Medium：线程安全保护（读取 history）。
@@ -1069,7 +1121,9 @@ class ContextManager:
         head_system = system_msgs[:1]
         return head_system + non_system[-keep:]
 
-    def _head_tail_truncate(self, text: str, head_ratio: float = 0.4, tail_ratio: float = 0.5) -> str:
+    def _head_tail_truncate(
+        self, text: str, head_ratio: float = 0.4, tail_ratio: float = 0.5
+    ) -> str:
         """F3 输入头尾截断：取前 40% + 后 50%，丢弃中间 10%，控制 LLM 摘要输入体量。
 
         仅对长文本（≥200 字符）生效——短文本截断反而损失信息。
@@ -1083,7 +1137,11 @@ class ContextManager:
         tail_start = n - int(n * tail_ratio)
         if head_end >= tail_start:
             return text  # 文本不长，无需截断
-        return text[:head_end] + f"\n…（省略中间 {tail_start - head_end} 字符）…\n" + text[tail_start:]
+        return (
+            text[:head_end]
+            + f"\n…（省略中间 {tail_start - head_end} 字符）…\n"
+            + text[tail_start:]
+        )
 
     def _llm_summary_6seg(
         self,
@@ -1100,7 +1158,12 @@ class ContextManager:
             # 构建对话文本：tier-aware 截断（高阶任务保留更多细节）
             parts = []
             for t in messages[-15:]:
-                tag = {"user": "用户", "assistant": "助手", "system": "系统", "tool": "工具"}.get(t.role, t.role)
+                tag = {
+                    "user": "用户",
+                    "assistant": "助手",
+                    "system": "系统",
+                    "tool": "工具",
+                }.get(t.role, t.role)
                 turn_tier = getattr(t, "task_tier", 3)
                 if turn_tier >= 4:
                     limit = 500  # Q4-Q5：保留更多细节，含代码参数、架构决策
@@ -1113,7 +1176,7 @@ class ContextManager:
 
             system_prompt = (
                 "请将以下对话压缩为严格的 6 段结构化摘要，每段以【段名】开头，"
-                "该段无内容时写\"无\"。总长不超过 600 字。段名与顺序固定：\n"
+                '该段无内容时写"无"。总长不超过 600 字。段名与顺序固定：\n'
                 "【原始目标】用户的核心需求与最终目标。\n"
                 "【已完成步骤】已执行的操作及其结果（含工具调用）。\n"
                 "【关键约束】用户强调的约束、偏好、技术栈、命名规范。\n"
@@ -1129,7 +1192,9 @@ class ContextManager:
             # 备选模型重试：依次尝试 model_priority，首个成功且解析通过即返回
             for model_id in self._reorder_for_summary(model_priority):
                 try:
-                    raw = chat_completion(model_id, msgs, max_tokens=1000, temperature=0.1)
+                    raw = chat_completion(
+                        model_id, msgs, max_tokens=1000, temperature=0.1
+                    )
                     parsed = self._parse_six_segments(raw)
                     if parsed:
                         return parsed
@@ -1224,7 +1289,12 @@ class ContextManager:
             # 构建对话文本
             parts = []
             for t in messages[-15:]:
-                tag = {"user": "用户", "assistant": "助手", "system": "系统", "tool": "工具"}.get(t.role, t.role)
+                tag = {
+                    "user": "用户",
+                    "assistant": "助手",
+                    "system": "系统",
+                    "tool": "工具",
+                }.get(t.role, t.role)
                 turn_tier = getattr(t, "task_tier", 3)
                 limit = 500 if turn_tier >= 4 else (300 if turn_tier >= 2 else 150)
                 parts.append(f"[{tag}] {t.content[:limit]}")
@@ -1235,7 +1305,7 @@ class ContextManager:
             if n_segments <= 3:
                 system_prompt = (
                     "请将以下对话压缩为简洁的 3 段摘要，每段以【段名】开头，"
-                    "该段无内容时写\"无\"。总长不超过 300 字。段名与顺序固定：\n"
+                    '该段无内容时写"无"。总长不超过 300 字。段名与顺序固定：\n'
                     "【原始目标】用户的需求。\n"
                     "【已完成步骤】已执行的操作。\n"
                     "【当前状态】涉及的文件和关键结论。"
@@ -1244,7 +1314,7 @@ class ContextManager:
             else:
                 system_prompt = (
                     "请将以下对话压缩为严格的 6 段结构化摘要，每段以【段名】开头，"
-                    "该段无内容时写\"无\"。总长不超过 600 字。段名与顺序固定：\n"
+                    '该段无内容时写"无"。总长不超过 600 字。段名与顺序固定：\n'
                     "【原始目标】用户的核心需求与最终目标。\n"
                     "【已完成步骤】已执行的操作及其结果（含工具调用）。\n"
                     "【关键约束】用户强调的约束、偏好、技术栈、命名规范。\n"
@@ -1264,12 +1334,16 @@ class ContextManager:
                 try:
                     # 3 段约需 300 tokens，6 段约需 1000 tokens（中文字 ×2）
                     tok_budget = 300 if n_segments <= 3 else 1000
-                    raw = chat_completion(model_id, msgs, max_tokens=tok_budget, temperature=0.1)
+                    raw = chat_completion(
+                        model_id, msgs, max_tokens=tok_budget, temperature=0.1
+                    )
                     parsed = self._parse_n_segments(raw, segments_to_parse)
                     if parsed:
                         return parsed
                 except Exception as e:
-                    logger.warning(f"{n_segments} 段摘要模型 {model_id} 失败: {e}，尝试下一个")
+                    logger.warning(
+                        f"{n_segments} 段摘要模型 {model_id} 失败: {e}，尝试下一个"
+                    )
                     continue
 
             return self._auto_summary(messages=messages)
@@ -1319,8 +1393,7 @@ class ContextManager:
 
             # 检查是否有工具结果需要压缩
             has_tool_results = any(
-                getattr(t, "turn_type", "general") == "tool_result"
-                for t in messages
+                getattr(t, "turn_type", "general") == "tool_result" for t in messages
             )
 
             if not has_tool_results:
@@ -1334,11 +1407,13 @@ class ContextManager:
                 if getattr(turn, "turn_type", "general") == "tool_result":
                     tool_name = _guess_tool_name(turn)
                     compressed_content = classifier.compress(
-                        tool_name, turn.content,
+                        tool_name,
+                        turn.content,
                         max_chars=300,
                         phase="converge",
                     )
                     import copy
+
                     new_turn = copy.copy(turn)
                     new_turn.content = compressed_content
                     trimmed.append(new_turn)
@@ -1346,7 +1421,8 @@ class ContextManager:
                     trimmed.append(turn)
 
             return self._llm_summary_nseg(
-                model_priority, trimmed,
+                model_priority,
+                trimmed,
                 n_segments=n_segments,
                 max_prompt_chars=3000,  # 放宽到 3000（原 2000 过激）
             )
@@ -1365,7 +1441,10 @@ class ContextManager:
         user_requests = []
 
         import re
-        path_pattern = re.compile(r'[\w/\\.-]+\.(?:py|js|ts|html|css|json|yaml|yml|toml|md|txt|sh|go|rs)')
+
+        path_pattern = re.compile(
+            r"[\w/\\.-]+\.(?:py|js|ts|html|css|json|yaml|yml|toml|md|txt|sh|go|rs)"
+        )
 
         for t in target:
             content = t.content
@@ -1378,7 +1457,18 @@ class ContextManager:
             if t.role == "user":
                 user_requests.append(content[:200])
             # 提取操作
-            if any(kw in content.lower() for kw in ["创建", "写入", "修改", "删除", "created", "written", "modified"]):
+            if any(
+                kw in content.lower()
+                for kw in [
+                    "创建",
+                    "写入",
+                    "修改",
+                    "删除",
+                    "created",
+                    "written",
+                    "modified",
+                ]
+            ):
                 operations.append(content[:150])
 
         parts = []
@@ -1468,13 +1558,16 @@ class ContextManager:
         estimated_total = sum(turn.token_count for turn in self.history)
         per_turn_details = []
         for i, turn in enumerate(self.history):
-            per_turn_details.append({
-                "index": i,
-                "role": turn.role,
-                "turn_type": turn.turn_type,
-                "tokens": turn.token_count,
-                "content_preview": turn.content[:100] + ("..." if len(turn.content) > 100 else ""),
-            })
+            per_turn_details.append(
+                {
+                    "index": i,
+                    "role": turn.role,
+                    "turn_type": turn.turn_type,
+                    "tokens": turn.token_count,
+                    "content_preview": turn.content[:100]
+                    + ("..." if len(turn.content) > 100 else ""),
+                }
+            )
 
         return {
             "history_length": len(self.history),

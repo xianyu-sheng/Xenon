@@ -4,6 +4,7 @@ LLM 响应适配器中间件
 将 LLM 的各种 JSON 输出格式统一转换为引擎期望的标准结构。
 引擎只面向标准结构编程，不再关心 LLM 输出细节。
 """
+
 from __future__ import annotations
 
 import json
@@ -65,44 +66,68 @@ def _reflection_template() -> dict:
 # key: 标准字段名, value: 可能出现的别名列表（优先级从高到低）
 _PLAN_FIELD_ALIASES = {
     "analysis": ["analysis", "task", "summary", "goal", "background", "description"],
-    "task":     ["task", "analysis", "summary", "description"],
-    "goal":     ["goal", "objective", "target"],
+    "task": ["task", "analysis", "summary", "description"],
+    "goal": ["goal", "objective", "target"],
     "background": ["background", "context", "premise"],
 }
 
 _STEP_FIELD_ALIASES = {
-    "id":          ["id", "step_number", "step_id", "num", "number", "index"],
-    "task":        ["task", "description", "step", "action", "instruction", "content", "name"],
-    "tool":        ["tool", "action", "tool_name", "command", "function", "method"],
-    "params":      ["params", "parameters", "args", "arguments", "input", "kwargs"],
+    "id": ["id", "step_number", "step_id", "num", "number", "index"],
+    "task": ["task", "description", "step", "action", "instruction", "content", "name"],
+    "tool": ["tool", "action", "tool_name", "command", "function", "method"],
+    "params": ["params", "parameters", "args", "arguments", "input", "kwargs"],
     "description": ["description", "detail", "details", "explain", "note"],
-    "depends_on":  ["depends_on", "deps", "dependencies", "after", "requires", "prerequisite", "prerequisites"],
+    "depends_on": [
+        "depends_on",
+        "deps",
+        "dependencies",
+        "after",
+        "requires",
+        "prerequisite",
+        "prerequisites",
+    ],
 }
 
 _REACT_FIELD_ALIASES = {
-    "thought":       ["thought", "thinking", "reasoning", "reason", "analysis"],
-    "action":        ["action", "tool", "command", "function", "method", "operation"],
-    "action_input":  ["action_input", "input", "args", "parameters", "params", "arguments"],
-    "final_answer":  ["final_answer", "answer", "result", "output", "response", "conclusion"],
-    "question":      ["question", "query", "ask"],
-    "options":       ["options", "choices", "alternatives"],
+    "thought": ["thought", "thinking", "reasoning", "reason", "analysis"],
+    "action": ["action", "tool", "command", "function", "method", "operation"],
+    "action_input": [
+        "action_input",
+        "input",
+        "args",
+        "parameters",
+        "params",
+        "arguments",
+    ],
+    "final_answer": [
+        "final_answer",
+        "answer",
+        "result",
+        "output",
+        "response",
+        "conclusion",
+    ],
+    "question": ["question", "query", "ask"],
+    "options": ["options", "choices", "alternatives"],
 }
 
 _REVIEW_FIELD_ALIASES = {
-    "pass":         ["pass", "passed", "is_pass", "approved", "ok", "sufficient"],
-    "score":        ["score", "rating", "grade", "points", "quality"],
-    "feedback":     ["feedback", "comment", "review", "opinion", "comments", "suggestion"],
-    "issues":       ["issues", "problems", "errors", "defects", "bugs"],
-    "suggestions":  ["suggestions", "improvements", "recommendations", "fixes"],
+    "pass": ["pass", "passed", "is_pass", "approved", "ok", "sufficient"],
+    "score": ["score", "rating", "grade", "points", "quality"],
+    "feedback": ["feedback", "comment", "review", "opinion", "comments", "suggestion"],
+    "issues": ["issues", "problems", "errors", "defects", "bugs"],
+    "suggestions": ["suggestions", "improvements", "recommendations", "fixes"],
     "is_sufficient": ["is_sufficient", "sufficient", "complete", "enough", "ready"],
     "completeness_score": ["completeness_score", "completeness", "score", "coverage"],
-    "missing":      ["missing", "gaps", "lacks", "needed", "deficiencies"],
-    "filled_plan":  ["filled_plan", "plan", "completed_plan", "full_plan", "result"],
+    "missing": ["missing", "gaps", "lacks", "needed", "deficiencies"],
+    "filled_plan": ["filled_plan", "plan", "completed_plan", "full_plan", "result"],
 }
 
 
 # ── 核心工具函数 ──────────────────────────────────────────────
-def _pick(data: dict, aliases: dict[str, list[str]], strict: bool = False) -> dict[str, Any]:
+def _pick(
+    data: dict, aliases: dict[str, list[str]], strict: bool = False
+) -> dict[str, Any]:
     """从 data 中按别名表提取字段，返回标准字段名→值的字典。
 
     Args:
@@ -152,6 +177,7 @@ def _normalize_step(step: Any, index: int) -> dict:
 
 # ── JSON 提取 ─────────────────────────────────────────────────
 
+
 def _repair_json(text: str) -> str | None:
     """尝试修复被截断或格式不完整的 JSON。
 
@@ -169,21 +195,25 @@ def _repair_json(text: str) -> str | None:
     # 0. 提取 JSON 主体：从第一个 { 或 [ 到最后一个 } 或 ]
     # 去掉前后非 JSON 文字（如 "text before {"key": 1}" ）。
     # 如果找不到闭合括号则跳过此步，交由后续步骤处理。
-    first_brace = text.find('{')
-    first_bracket = text.find('[')
+    first_brace = text.find("{")
+    first_bracket = text.find("[")
     if first_brace == -1 and first_bracket == -1:
         return None  # 没有 JSON 结构
-    start = first_brace if first_bracket == -1 else (
-        first_bracket if first_brace == -1 else min(first_brace, first_bracket)
+    start = (
+        first_brace
+        if first_bracket == -1
+        else (first_bracket if first_brace == -1 else min(first_brace, first_bracket))
     )
-    last_brace = text.rfind('}')
-    last_bracket = text.rfind(']')
-    end = last_brace if last_bracket == -1 else (
-        last_bracket if last_brace == -1 else max(last_brace, last_bracket)
+    last_brace = text.rfind("}")
+    last_bracket = text.rfind("]")
+    end = (
+        last_brace
+        if last_bracket == -1
+        else (last_bracket if last_brace == -1 else max(last_brace, last_bracket))
     )
     # 只有当找到闭合括号且与开头不同位置时才截取
     if end > start:
-        text = text[start:end + 1]
+        text = text[start : end + 1]
     elif start > 0:
         # 有开头没闭合 → 截掉开头前的文字，保留不完整的 JSON 主体
         text = text[start:]
@@ -196,7 +226,7 @@ def _repair_json(text: str) -> str | None:
         if escape_next:
             escape_next = False
             continue
-        if c == '\\':
+        if c == "\\":
             escape_next = True
             continue
         if c == '"':
@@ -208,27 +238,27 @@ def _repair_json(text: str) -> str | None:
         prefix = text[:last_quote_pos]
 
         # 去掉不完整的字符串
-        text = prefix.rstrip().rstrip(',')
+        text = prefix.rstrip().rstrip(",")
 
         # 检查是否留下了一个孤立的 key: （值被截断的情况）
         # 如果去掉不完整字符串后，末尾是 ":"，说明截断了值，需要连 key 一起去掉
         # 例如: ...,"search_pattern": → 应该去掉整个 "search_pattern":
         stripped = text.rstrip()
-        if stripped.endswith(':'):
+        if stripped.endswith(":"):
             # 去掉冒号和前面的 key
-            text = stripped[:-1].rstrip().rstrip(',')
+            text = stripped[:-1].rstrip().rstrip(",")
             # 如果 key 带引号，去掉引号
             if text.endswith('"'):
                 # 找到这个引号的匹配引号
                 key_end = len(text) - 1
                 key_start = text.rfind('"', 0, key_end)
                 if key_start != -1:
-                    text = text[:key_start].rstrip().rstrip(',')
+                    text = text[:key_start].rstrip().rstrip(",")
 
     # 3. 去掉尾部逗号（包括对象/数组内部尾部的 ,} 和 ,]）
-    text = re.sub(r',\s*}', '}', text)
-    text = re.sub(r',\s*]', ']', text)
-    text = text.rstrip(',')
+    text = re.sub(r",\s*}", "}", text)
+    text = re.sub(r",\s*]", "]", text)
+    text = text.rstrip(",")
 
     # 4. 用栈追踪未闭合的括号（保持正确的嵌套顺序）
     bracket_stack: list[str] = []
@@ -238,7 +268,7 @@ def _repair_json(text: str) -> str | None:
         if esc:
             esc = False
             continue
-        if c == '\\':
+        if c == "\\":
             esc = True
             continue
         if c == '"':
@@ -246,21 +276,21 @@ def _repair_json(text: str) -> str | None:
             continue
         if in_str:
             continue
-        if c == '{':
-            bracket_stack.append('{')
-        elif c == '[':
-            bracket_stack.append('[')
-        elif c == '}':
-            if bracket_stack and bracket_stack[-1] == '{':
+        if c == "{":
+            bracket_stack.append("{")
+        elif c == "[":
+            bracket_stack.append("[")
+        elif c == "}":
+            if bracket_stack and bracket_stack[-1] == "{":
                 bracket_stack.pop()
-        elif c == ']':
-            if bracket_stack and bracket_stack[-1] == '[':
+        elif c == "]":
+            if bracket_stack and bracket_stack[-1] == "[":
                 bracket_stack.pop()
 
     # 5. 按正确的逆序关闭未闭合的括号
-    close_map = {'{': '}', '[': ']'}
+    close_map = {"{": "}", "[": "]"}
     for bracket in reversed(bracket_stack):
-        text += close_map.get(bracket, '')
+        text += close_map.get(bracket, "")
 
     return text
 
@@ -285,9 +315,9 @@ def _split_adjacent_json_objects(text: str) -> list[dict] | None:
         after_close = brace_close + 1
         # 允许空白和换行
         j = after_close
-        while j < len(text) and text[j] in (' ', '\n', '\r', '\t'):
+        while j < len(text) and text[j] in (" ", "\n", "\r", "\t"):
             j += 1
-        if j < len(text) and text[j] == '{':
+        if j < len(text) and text[j] == "{":
             boundaries.append((brace_close, j))
             i = j
         else:
@@ -300,7 +330,7 @@ def _split_adjacent_json_objects(text: str) -> list[dict] | None:
     objects: list[dict] = []
     prev_start = 0
     for close_pos, open_pos in boundaries:
-        segment = text[prev_start:close_pos + 1].strip()
+        segment = text[prev_start : close_pos + 1].strip()
         if segment:
             try:
                 obj = json.loads(segment, strict=False)
@@ -363,9 +393,10 @@ def _extract_tool_call_xml(text: str) -> list[dict[str, Any]] | None:
 
     # 检测 <uses_legacy_tools> 或 <tool_calls> 包裹块
     m = re.search(
-        r'<uses_legacy_tools>\s*(.*?)\s*</uses_legacy_tools>|'
-        r'<tool_calls>\s*(.*?)\s*</tool_calls>',
-        text, re.DOTALL
+        r"<uses_legacy_tools>\s*(.*?)\s*</uses_legacy_tools>|"
+        r"<tool_calls>\s*(.*?)\s*</tool_calls>",
+        text,
+        re.DOTALL,
     )
     if not m:
         return None
@@ -378,8 +409,7 @@ def _extract_tool_call_xml(text: str) -> list[dict[str, Any]] | None:
 
     # 提取每个 <tool_call name="...">...</tool_call>
     call_pattern = re.compile(
-        r'<tool_call\s+name="([^"]+)">(.*?)</tool_call>',
-        re.DOTALL
+        r'<tool_call\s+name="([^"]+)">(.*?)</tool_call>', re.DOTALL
     )
     actions = []
     for match in call_pattern.finditer(text):
@@ -434,14 +464,14 @@ def _extract_tool_call_dsml(text: str) -> list[dict[str, Any]] | None:
 
     invoke_pattern = re.compile(
         r'<\|\|DSML\|\|invoke\s+name="([^"]+)"[^>]*>'
-        r'(.*?)'
-        r'</\|\|DSML\|\|invoke>',
+        r"(.*?)"
+        r"</\|\|DSML\|\|invoke>",
         re.IGNORECASE | re.DOTALL,
     )
     parameter_pattern = re.compile(
         r'<\|\|DSML\|\|parameter\s+name="([^"]+)"([^>]*)>'
-        r'(.*?)'
-        r'</\|\|DSML\|\|parameter>',
+        r"(.*?)"
+        r"</\|\|DSML\|\|parameter>",
         re.IGNORECASE | re.DOTALL,
     )
 
@@ -551,7 +581,7 @@ def _extract_json(text: str) -> dict | list | None:
     if brace_start != -1 and (bracket_start == -1 or brace_start < bracket_start):
         if brace_end > brace_start:
             try:
-                return json.loads(text[brace_start:brace_end + 1], strict=False)
+                return json.loads(text[brace_start : brace_end + 1], strict=False)
             except json.JSONDecodeError:
                 pass
             # 尝试修复截断的 JSON
@@ -566,7 +596,7 @@ def _extract_json(text: str) -> dict | list | None:
     # 数组次之：[ 在 { 之前，或只有 [
     if bracket_start != -1 and bracket_end > bracket_start:
         try:
-            result = json.loads(text[bracket_start:bracket_end + 1], strict=False)
+            result = json.loads(text[bracket_start : bracket_end + 1], strict=False)
             if isinstance(result, list):
                 return result
         except json.JSONDecodeError:

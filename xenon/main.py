@@ -12,6 +12,7 @@ import sys
 # ── 设置 UTF-8 编码（必须在其他导入之前）──
 if sys.platform == "win32":
     import os
+
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -21,6 +22,7 @@ if sys.platform == "win32":
     # 启用 Windows ANSI 支持
     try:
         import ctypes
+
         kernel32 = ctypes.windll.kernel32
         kernel32.SetConsoleOutputCP(65001)  # UTF-8
         kernel32.SetConsoleCP(65001)
@@ -85,7 +87,8 @@ def cli() -> None:
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
-        "-m", "--model",
+        "-m",
+        "--model",
         nargs="+",
         metavar="PROVIDER/MODEL",
         help="初始模型列表",
@@ -107,7 +110,8 @@ def cli() -> None:
         help="模型配置文件路径",
     )
     parser.add_argument(
-        "-f", "--file",
+        "-f",
+        "--file",
         default=None,
         help="models import 子命令的配置文件路径",
     )
@@ -128,7 +132,8 @@ def cli() -> None:
         help="仅展示工作流结构，不执行（run 模式）",
     )
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help="显示详细日志",
     )
@@ -152,10 +157,12 @@ def cli() -> None:
     # 配置日志
     log_level = logging.DEBUG if args.verbose else logging.INFO
     log_handler = logging.StreamHandler()
-    log_handler.setFormatter(_DimNetworkFormatter(
-        "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        datefmt="%H:%M:%S",
-    ))
+    log_handler.setFormatter(
+        _DimNetworkFormatter(
+            "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
     logging.basicConfig(level=log_level, handlers=[log_handler])
 
     cmd = args.command_or_workflow
@@ -240,8 +247,11 @@ def _print_session_list() -> None:
             display_name = "[上次自动保存]"
         age = get_session_age(s) or str(s.get("saved_at", ""))[:16]
         table.add_row(
-            str(i), display_name, age,
-            str(s["messages"]), s.get("paradigm", ""),
+            str(i),
+            display_name,
+            age,
+            str(s["messages"]),
+            s.get("paradigm", ""),
         )
 
     console.print()
@@ -322,7 +332,9 @@ def _cmd_models_import(args: argparse.Namespace) -> None:
 
     registry = ModelRegistry()
     pool = ModelPool()
-    result = batch_register(file, registry, pool, probe=not args.no_probe, dry_run=args.dry_run)
+    result = batch_register(
+        file, registry, pool, probe=not args.no_probe, dry_run=args.dry_run
+    )
     console.print(result.summary())
 
     if not args.dry_run and (result.registered or result.updated):
@@ -381,6 +393,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
 # ── 展示函数 ──────────────────────────────────────────────
 
+
 def _display_workflow_info(
     config: dict,
     nodes: dict,
@@ -390,11 +403,13 @@ def _display_workflow_info(
     workflow_name = config.get("workflow", "unnamed")
     version = config.get("version", "unknown")
 
-    console.print(Panel(
-        f"[bold cyan]Xenon[/bold cyan] v{version}\n"
-        f"工作流: [bold]{workflow_name}[/bold]",
-        title="✶ Xenon",
-    ))
+    console.print(
+        Panel(
+            f"[bold cyan]Xenon[/bold cyan] v{version}\n"
+            f"工作流: [bold]{workflow_name}[/bold]",
+            title="✶ Xenon",
+        )
+    )
 
     if models:
         table = Table(title="📦 模型优先级配置")
@@ -412,6 +427,7 @@ def _display_workflow_info(
 
 def _find_start_node(nodes: dict) -> str:
     from xenon.nodes.router_node import RouterNode
+
     for node_id, node in nodes.items():
         if not isinstance(node, RouterNode):
             return node_id
@@ -439,7 +455,9 @@ def _display_result(result: dict) -> None:
             if st == "success" and entry.get("result"):
                 res = entry["result"]
                 if "content" in res:
-                    detail = res["content"][:80] + ("..." if len(res["content"]) > 80 else "")
+                    detail = res["content"][:80] + (
+                        "..." if len(res["content"]) > 80 else ""
+                    )
                 elif "next_node" in res:
                     detail = f"→ {res['next_node']}"
                 elif "stdout" in res:

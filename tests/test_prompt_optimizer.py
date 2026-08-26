@@ -95,15 +95,21 @@ class TestAssessQuality:
         assert needs is True
 
     def test_structured_input_no_optimization(self):
-        needs, reason = assess_quality("## 任务\n请帮我实现一个排序算法\n\n## 要求\n1. 使用 Python\n2. 时间复杂度 O(n log n)")
+        needs, reason = assess_quality(
+            "## 任务\n请帮我实现一个排序算法\n\n## 要求\n1. 使用 Python\n2. 时间复杂度 O(n log n)"
+        )
         assert needs is False
 
     def test_code_block_no_optimization(self):
-        needs, reason = assess_quality("请帮我看看这段代码\n```python\nprint('hello')\n```")
+        needs, reason = assess_quality(
+            "请帮我看看这段代码\n```python\nprint('hello')\n```"
+        )
         assert needs is False
 
     def test_long_detailed_input_no_optimization(self):
-        needs, reason = assess_quality("请帮我实现一个完整的用户管理系统\n包含注册、登录、密码重置功能\n使用 FastAPI + SQLAlchemy\n数据库用 PostgreSQL")
+        needs, reason = assess_quality(
+            "请帮我实现一个完整的用户管理系统\n包含注册、登录、密码重置功能\n使用 FastAPI + SQLAlchemy\n数据库用 PostgreSQL"
+        )
         assert needs is False
 
     def test_casual_input_needs_optimization(self):
@@ -181,6 +187,7 @@ class TestGetIntentDisplay:
 
     def test_all_templates_have_display(self):
         from xenon.repl.prompt_optimizer import TEMPLATES
+
         for tmpl in TEMPLATES:
             display = get_intent_display(tmpl.intent)
             assert display != tmpl.intent  # 不应该返回原始 intent

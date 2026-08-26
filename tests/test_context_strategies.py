@@ -1,4 +1,5 @@
 """v0.5.0: 分层上下文策略测试。"""
+
 import pytest
 from xenon.repl.context_strategies import (
     TieredStrategySelector,
@@ -16,6 +17,7 @@ from xenon.repl.context_strategies import (
 
 
 # ── 策略选择 ────────────────────────────────────────────────
+
 
 class TestTieredStrategySelector:
     def test_select_q1(self):
@@ -67,6 +69,7 @@ class TestTieredStrategySelector:
 
 # ── 工具输出分类 ────────────────────────────────────────────
 
+
 class TestToolOutputClassifier:
     def test_classify_structural(self):
         assert ToolOutputClassifier.classify("read_file") == ToolOutputType.STRUCTURAL
@@ -107,12 +110,14 @@ class TestToolOutputClassifier:
 
     def test_compress_structural_preserves_signatures(self):
         """结构化输出保留函数签名。"""
-        out = "\n".join([
-            "def foo(a, b):",
-            "    " + "x" * 500,
-            "def bar(c):",
-            "    " + "y" * 500,
-        ])
+        out = "\n".join(
+            [
+                "def foo(a, b):",
+                "    " + "x" * 500,
+                "def bar(c):",
+                "    " + "y" * 500,
+            ]
+        )
         result = ToolOutputClassifier.compress("read_file", out, max_chars=200)
         assert "foo(a, b)" in result or "def foo" in result
         assert len(result) < len(out)
@@ -127,6 +132,7 @@ class TestToolOutputClassifier:
 
 
 # ── 重要性衰减 ──────────────────────────────────────────────
+
 
 class TestImportanceCalculator:
     def test_tier_score_q5(self):
@@ -156,17 +162,33 @@ class TestImportanceCalculator:
     def test_filter_by_importance(self):
         """过滤低重要性轮次。"""
         from xenon.repl.context_manager import ConversationTurn
+
         turns = [
-            ConversationTurn(role="user", content="重要问题", task_tier=5, turn_index=5, turn_type="user_input"),
-            ConversationTurn(role="assistant", content="知道了", task_tier=1, turn_index=6, turn_type="assistant_output"),
+            ConversationTurn(
+                role="user",
+                content="重要问题",
+                task_tier=5,
+                turn_index=5,
+                turn_type="user_input",
+            ),
+            ConversationTurn(
+                role="assistant",
+                content="知道了",
+                task_tier=1,
+                turn_index=6,
+                turn_type="assistant_output",
+            ),
         ]
-        filtered = ImportanceCalculator.filter_by_importance(turns, current_index=10, decay_rate=0.85, min_score=0.1)
+        filtered = ImportanceCalculator.filter_by_importance(
+            turns, current_index=10, decay_rate=0.85, min_score=0.1
+        )
         # user_input 始终保留
         assert len(filtered) >= 1
         assert filtered[0].content == "重要问题"
 
 
 # ── 空间预算 ────────────────────────────────────────────────
+
 
 class TestSpaceBudget:
     def test_ample(self):
@@ -185,10 +207,14 @@ class TestSpaceBudget:
 
 # ── 危急处理 ────────────────────────────────────────────────
 
+
 class TestCrisisHandling:
     def _make_turn(self, content, tier=1, role="user", tt="user_input", idx=0):
         from xenon.repl.context_manager import ConversationTurn
-        return ConversationTurn(role=role, content=content, task_tier=tier, turn_type=tt, turn_index=idx)
+
+        return ConversationTurn(
+            role=role, content=content, task_tier=tier, turn_type=tt, turn_index=idx
+        )
 
     def test_q1_crisis_drop(self):
         """Q1 危急 → 直接丢弃 older。"""
@@ -213,7 +239,13 @@ class TestCrisisHandling:
         strategy = TieredStrategySelector().get_preset(3)
         older = [
             self._make_turn("帮我写一个排序函数", tier=3, idx=0),
-            self._make_turn("已创建 sort.py 文件", tier=3, role="assistant", tt="assistant_output", idx=1),
+            self._make_turn(
+                "已创建 sort.py 文件",
+                tier=3,
+                role="assistant",
+                tt="assistant_output",
+                idx=1,
+            ),
         ]
         recent = [self._make_turn("最近消息", tier=3, idx=10)]
         new_hist, summary = handle_crisis(older, recent, strategy, 10)
@@ -223,9 +255,7 @@ class TestCrisisHandling:
     def test_q4_crisis_structured_truncate(self):
         """Q4 危急 → 结构化截断。"""
         strategy = TieredStrategySelector().get_preset(4)
-        older = [
-            self._make_turn("长" * 500, tier=4, idx=i) for i in range(10)
-        ]
+        older = [self._make_turn("长" * 500, tier=4, idx=i) for i in range(10)]
         recent = [self._make_turn("最近", tier=4, idx=100)]
         new_hist, summary = handle_crisis(older, recent, strategy, 100)
         assert "截断" in summary
@@ -235,13 +265,11 @@ class TestCrisisHandling:
     def test_q5_crisis_cross_tier_evict(self):
         """Q5 危急 → 跨 tier 驱逐。"""
         strategy = TieredStrategySelector().get_preset(5)
-        older = [
-            self._make_turn("Q1 消息", tier=1, idx=i) for i in range(3)
-        ] + [
-            self._make_turn("Q3 消息", tier=3, idx=i) for i in range(3, 6)
-        ] + [
-            self._make_turn("Q5 消息", tier=5, idx=i) for i in range(6, 9)
-        ]
+        older = (
+            [self._make_turn("Q1 消息", tier=1, idx=i) for i in range(3)]
+            + [self._make_turn("Q3 消息", tier=3, idx=i) for i in range(3, 6)]
+            + [self._make_turn("Q5 消息", tier=5, idx=i) for i in range(6, 9)]
+        )
         recent = [self._make_turn("最近", tier=5, idx=100)]
         new_hist, summary = handle_crisis(older, recent, strategy, 100)
         # Q1 被丢弃，Q3 被摘要，Q5 被保留 → 总消息数减少
@@ -251,6 +279,7 @@ class TestCrisisHandling:
 
 
 # ── 压缩函数 ────────────────────────────────────────────────
+
 
 class TestCompressFunctions:
     def test_structural_preserves_def(self):

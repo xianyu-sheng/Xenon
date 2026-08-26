@@ -155,7 +155,9 @@ def test_reload_models_nonexistent():
     from xenon.repl.model_registry import ModelRegistry
 
     reg = ModelRegistry()
-    result = _cmd_reload_models(args="/nonexistent/file.yaml", registry=reg, session_state={})
+    result = _cmd_reload_models(
+        args="/nonexistent/file.yaml", registry=reg, session_state={}
+    )
     assert "不存在" in result
 
 

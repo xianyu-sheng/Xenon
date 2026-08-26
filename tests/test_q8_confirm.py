@@ -11,6 +11,7 @@ from xenon.repl.model_registry import ModelRegistry
 
 # --------------------------- _confirm() ---------------------------
 
+
 def test_confirm_auto_yes_when_env_set(monkeypatch):
     monkeypatch.setenv("XENON_ASSUME_YES", "1")
     assert _confirm("危险操作？", default=False) is True
@@ -23,6 +24,7 @@ def test_confirm_eof_returns_default(monkeypatch):
 
     def boom(*a, **kw):
         raise EOFError
+
     monkeypatch.setattr(rp.Confirm, "ask", boom)
     assert _confirm("x", default=False) is False
     assert _confirm("x", default=True) is True
@@ -37,6 +39,7 @@ def test_confirm_calls_ask_when_no_env(monkeypatch):
     def fake_ask(prompt, default=False):
         calls.append((prompt, default))
         return False
+
     monkeypatch.setattr(rp.Confirm, "ask", fake_ask)
     assert _confirm("真的吗？", default=False) is False
     assert len(calls) == 1
@@ -44,6 +47,7 @@ def test_confirm_calls_ask_when_no_env(monkeypatch):
 
 
 # --------------------------- dispatch_command 兜底 ---------------------------
+
 
 def test_dispatch_catches_handler_exception():
     reg = ModelRegistry()
@@ -54,7 +58,9 @@ def test_dispatch_catches_handler_exception():
 
     _HANDLERS["/boom"] = boom
     try:
-        result = dispatch_command("/boom", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+        result = dispatch_command(
+            "/boom", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+        )
         assert "❌" in result
         assert "命令执行失败" in result
         assert "/boom" in result
@@ -72,7 +78,9 @@ def test_dispatch_lets_exit_signal_propagate():
     _HANDLERS["/exitnow"] = raise_exit
     try:
         with pytest.raises(ExitSignal):
-            dispatch_command("/exitnow", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+            dispatch_command(
+                "/exitnow", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+            )
     finally:
         _HANDLERS.pop("/exitnow", None)
 
@@ -80,18 +88,23 @@ def test_dispatch_lets_exit_signal_propagate():
 def test_dispatch_unknown_command():
     reg = ModelRegistry()
     ctx_mgr = ContextManager()
-    result = dispatch_command("/nope", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+    result = dispatch_command(
+        "/nope", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+    )
     assert "未知命令" in result
 
 
 # --------------------------- /clear 确认 ---------------------------
+
 
 def test_clear_confirmed_clears_history():
     """autouse fixture 设了 XENON_ASSUME_YES=1 → /clear 直接清空。"""
     reg = ModelRegistry()
     ctx_mgr = ContextManager()
     ctx_mgr.add_user_message("test")
-    result = dispatch_command("/clear", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+    result = dispatch_command(
+        "/clear", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+    )
     assert "✅" in result
     assert len(ctx_mgr.history) == 0
 
@@ -110,12 +123,15 @@ def test_clear_cancelled_keeps_history(monkeypatch):
     reg = ModelRegistry()
     ctx_mgr = ContextManager()
     ctx_mgr.add_user_message("keep me")
-    result = dispatch_command("/clear", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+    result = dispatch_command(
+        "/clear", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+    )
     assert "已取消" in result
     assert len(ctx_mgr.history) == 1  # 未清空
 
 
 # --------------------------- /shortcut run 未找到 ---------------------------
+
 
 def test_shortcut_run_not_found():
     reg = ModelRegistry()

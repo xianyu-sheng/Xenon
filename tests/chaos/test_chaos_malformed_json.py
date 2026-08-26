@@ -4,6 +4,7 @@
 broken JSON 时的行为。ReAct 引擎依赖 ``parse_react`` 解析 LLM 输出；
 若解析失败，应回退到 thought / final_answer 字段而非抛异常。
 """
+
 from __future__ import annotations
 
 
@@ -19,6 +20,7 @@ class TestRepairJson:
         repaired = _repair_json(broken)
         assert repaired is not None
         import json
+
         data = json.loads(repaired, strict=False)
         assert data["thought"] == "ok"
 

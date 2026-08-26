@@ -59,19 +59,35 @@ class ToolResult:
         if not isinstance(records, list):
             if action_type == "list_files" and isinstance(payload.get("files"), list):
                 records = payload["files"]
-            elif action_type == "search_files" and isinstance(payload.get("matches"), list):
+            elif action_type == "search_files" and isinstance(
+                payload.get("matches"), list
+            ):
                 records = payload["matches"]
             else:
                 records = []
 
         source = _first_value(
-            payload, "source", "url", "path", "file_path", "repo", "tool",
+            payload,
+            "source",
+            "url",
+            "path",
+            "file_path",
+            "repo",
+            "tool",
         )
         total = _first_value(
-            payload, "total", "count", "match_count", "records_detected",
+            payload,
+            "total",
+            "count",
+            "match_count",
+            "records_detected",
         )
         matched = _first_value(
-            payload, "matched", "returned_count", "records_matched", "match_count",
+            payload,
+            "matched",
+            "returned_count",
+            "records_matched",
+            "match_count",
         )
         if total is None and records:
             total = len(records)
@@ -91,15 +107,42 @@ class ToolResult:
                 filters[target_key] = payload[source_key]
 
         known = {
-            "action_type", "success", "content", "stdout", "output", "files",
-            "matches", "records", "source", "url", "path", "file_path", "repo",
-            "tool", "total", "count", "match_count", "records_detected", "matched",
-            "returned_count", "records_matched", "truncated", "filtered_content_truncated",
-            "next_cursor", "filters", "filter_type", "filter_start_time", "filter_end_time",
-            "query", "error", "schema_version", "tool_result",
+            "action_type",
+            "success",
+            "content",
+            "stdout",
+            "output",
+            "files",
+            "matches",
+            "records",
+            "source",
+            "url",
+            "path",
+            "file_path",
+            "repo",
+            "tool",
+            "total",
+            "count",
+            "match_count",
+            "records_detected",
+            "matched",
+            "returned_count",
+            "records_matched",
+            "truncated",
+            "filtered_content_truncated",
+            "next_cursor",
+            "filters",
+            "filter_type",
+            "filter_start_time",
+            "filter_end_time",
+            "query",
+            "error",
+            "schema_version",
+            "tool_result",
         }
         metadata = {
-            key: value for key, value in payload.items()
+            key: value
+            for key, value in payload.items()
             if key not in known and key != "success"
         }
         return cls(
@@ -168,18 +211,27 @@ def enrich_tool_result(
     ``result["tool_result"]`` or the duplicated canonical fields while older
     integrations continue reading ``content``, ``files`` and ``count``.
     """
-    result = dict(raw) if isinstance(raw, dict) else {
-        "success": False,
-        "error": "工具没有返回字典结果",
-    }
+    result = (
+        dict(raw)
+        if isinstance(raw, dict)
+        else {
+            "success": False,
+            "error": "工具没有返回字典结果",
+        }
+    )
     structured = ToolResult.from_raw(tool_name, result)
     canonical = structured.to_dict()
     result["schema_version"] = TOOL_RESULT_SCHEMA_VERSION
     result["tool_result"] = canonical
     for key in (
-        "kind", "source", "records", "total", "matched", "truncated",
-        "next_cursor", "filters",
+        "kind",
+        "source",
+        "records",
+        "total",
+        "matched",
+        "truncated",
+        "next_cursor",
+        "filters",
     ):
         result.setdefault(key, canonical[key])
     return result
-

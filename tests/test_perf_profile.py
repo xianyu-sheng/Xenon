@@ -8,6 +8,7 @@
 - _is_transient_error / _extract_retry_after 静态辅助
 - _call_llm 全链 429 退避重试 / 400 终端错误不重试
 """
+
 import httpx
 import pytest
 
@@ -23,6 +24,7 @@ def _http_error(status: int, headers=None) -> httpx.HTTPStatusError:
 
 
 # ── perf_profile / _score ───────────────────────────────
+
 
 class TestPerfProfile:
     def test_default_balanced(self):
@@ -59,7 +61,9 @@ class TestPerfProfile:
     def test_cost_prefers_cheap(self):
         """cost 提升 cost_efficiency 权重 -> 高性价比 budget 模型胜出。"""
         pool = ModelPool()
-        e_mini = pool.register("deepseek/deepseek-v4-flash", alias="mini")  # cost_eff 0.7
+        e_mini = pool.register(
+            "deepseek/deepseek-v4-flash", alias="mini"
+        )  # cost_eff 0.7
         e_pro = pool.register("openai/gpt-4o", alias="pro")  # cost_eff 0.1
         pool.set_perf_profile("cost")
         profile = TaskProfile(complexity=0.5)
@@ -67,6 +71,7 @@ class TestPerfProfile:
 
 
 # ── in_flight 负载因子 ─────────────────────────────────
+
 
 class TestInFlightPenalty:
     def test_in_flight_lowers_score(self):
@@ -105,6 +110,7 @@ class TestInFlightPenalty:
 
 # ── acquire / release ───────────────────────────────────
 
+
 class TestAcquireRelease:
     def test_acquire_increments(self):
         pool = ModelPool()
@@ -137,53 +143,70 @@ class TestAcquireRelease:
 
 # ── 限流退避辅助 ───────────────────────────────────────
 
+
 class TestTransientError:
     def test_429_transient(self):
         from xenon.engine.plan_execute_engine import PlanExecuteEngine
+
         assert PlanExecuteEngine._is_transient_error(_http_error(429)) is True
 
     def test_503_transient(self):
         from xenon.engine.plan_execute_engine import PlanExecuteEngine
+
         assert PlanExecuteEngine._is_transient_error(_http_error(503)) is True
 
     def test_400_not_transient(self):
         from xenon.engine.plan_execute_engine import PlanExecuteEngine
+
         assert PlanExecuteEngine._is_transient_error(_http_error(400)) is False
 
     def test_network_error_transient(self):
         from xenon.engine.plan_execute_engine import PlanExecuteEngine
+
         req = httpx.Request("POST", "http://x")
-        assert PlanExecuteEngine._is_transient_error(
-            httpx.ConnectError("boom", request=req)) is True
+        assert (
+            PlanExecuteEngine._is_transient_error(
+                httpx.ConnectError("boom", request=req)
+            )
+            is True
+        )
 
     def test_none_not_transient(self):
         from xenon.engine.plan_execute_engine import PlanExecuteEngine
+
         assert PlanExecuteEngine._is_transient_error(None) is False
 
 
 class TestExtractRetryAfter:
     def test_header_value(self):
         from xenon.engine.plan_execute_engine import PlanExecuteEngine
+
         err = _http_error(429, headers={"retry-after": "5"})
         assert PlanExecuteEngine._extract_retry_after(err, default=2.0) == 5.0
 
     def test_default_when_absent(self):
         from xenon.engine.plan_execute_engine import PlanExecuteEngine
-        assert PlanExecuteEngine._extract_retry_after(_http_error(429), default=2.0) == 2.0
+
+        assert (
+            PlanExecuteEngine._extract_retry_after(_http_error(429), default=2.0) == 2.0
+        )
 
     def test_capped_at_30(self):
         from xenon.engine.plan_execute_engine import PlanExecuteEngine
+
         err = _http_error(429, headers={"retry-after": "60"})
         assert PlanExecuteEngine._extract_retry_after(err, default=2.0) == 30.0
 
     def test_non_http_returns_default(self):
         from xenon.engine.plan_execute_engine import PlanExecuteEngine
+
         req = httpx.Request("POST", "http://x")
         err = httpx.ConnectError("boom", request=req)
         assert PlanExecuteEngine._extract_retry_after(err, default=3.0) == 3.0
 
 
 # ── _call_llm 限流退避端到端 ────────────────────────────
+
 
 class TestCallLLMRetry:
     def test_retries_on_429_then_succeeds(self, monkeypatch):

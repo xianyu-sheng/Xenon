@@ -28,8 +28,7 @@ _SMITHERY_PAGE_SIZE = 100  # 每页拉取数量
 # ── GitHub 云端库（精品补充 / 非 Smithery 覆盖）─────────
 
 _GITHUB_MCP_URL = (
-    "https://raw.githubusercontent.com/xianyu-sheng/Xenon/main/"
-    "library/mcp_library.yaml"
+    "https://raw.githubusercontent.com/xianyu-sheng/Xenon/main/library/mcp_library.yaml"
 )
 _GITHUB_SKILL_URL = (
     "https://raw.githubusercontent.com/xianyu-sheng/Xenon/main/"
@@ -39,27 +38,29 @@ _GITHUB_SKILL_URL = (
 # ── 本地缓存 ────────────────────────────────────────────
 
 _USER_DATA = Path.home() / ".xenon"
-_CACHE_MCP = _USER_DATA / "mcp_library.cache.json"      # 缓存 Smithery 合并结果
-_CACHE_SKILL = _USER_DATA / "skill_library.cache.yaml"   # 缓存 Skill YAML
+_CACHE_MCP = _USER_DATA / "mcp_library.cache.json"  # 缓存 Smithery 合并结果
+_CACHE_SKILL = _USER_DATA / "skill_library.cache.yaml"  # 缓存 Skill YAML
 _CACHE_TTL = 1800  # 30 分钟缓存有效期
 
 
 # ── 数据模型 ────────────────────────────────────────────
 
+
 @dataclass
 class MCPServerEntry:
     """MCP 库中的一个条目。"""
-    name: str              # 唯一标识（qualifiedName）
-    display_name: str = "" # 显示名
+
+    name: str  # 唯一标识（qualifiedName）
+    display_name: str = ""  # 显示名
     description: str = ""
-    command: str = ""      # 本地 npx 命令
+    command: str = ""  # 本地 npx 命令
     args: list[str] = field(default_factory=list)
-    url: str = ""          # 远程 SSE URL（Smithery remote）
+    url: str = ""  # 远程 SSE URL（Smithery remote）
     env: dict[str, str] = field(default_factory=dict)
     category: str = ""
     homepage: str = ""
     note: str = ""
-    source: str = ""       # "smithery" | "github"
+    source: str = ""  # "smithery" | "github"
 
 
 @dataclass
@@ -73,6 +74,7 @@ class SkillEntry:
 
 
 # ── HTTP 拉取 ───────────────────────────────────────────
+
 
 def _http_fetch(url: str, timeout: float = 10.0) -> tuple[bool, str]:
     """从 URL 拉取文本。返回 (成功, 内容或错误信息)。"""
@@ -117,6 +119,7 @@ def fetch_smithery_detail(qualified_name: str) -> tuple[bool, dict | str]:
 
 # ── 缓存 ────────────────────────────────────────────────
 
+
 def _cache_valid(cache_path: Path) -> bool:
     try:
         if not cache_path.exists():
@@ -129,6 +132,7 @@ def _cache_valid(cache_path: Path) -> bool:
 # ══════════════════════════════════════════════════════════
 # MCP 库 — Smithery + GitHub 双源
 # ══════════════════════════════════════════════════════════
+
 
 class MCPLibrary:
     """MCP 服务器库：实时查询 Smithery 注册中心，GitHub YAML 补充。"""
@@ -209,7 +213,8 @@ class MCPLibrary:
                         display_name=raw.get("displayName", qn),
                         description=raw.get("description", ""),
                         url=first_conn.get("deploymentUrl", "") if is_remote else "",
-                        homepage=raw.get("homepage", "") or f"https://smithery.ai/server/{qn}",
+                        homepage=raw.get("homepage", "")
+                        or f"https://smithery.ai/server/{qn}",
                         source="smithery",
                     )
                     all_servers.append(entry)
@@ -302,7 +307,9 @@ class MCPLibrary:
                     for e in self._entries
                 ],
             }
-            _CACHE_MCP.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            _CACHE_MCP.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
         except Exception as e:
             logger.debug(f"保存 MCP 缓存失败: {e}")
 
@@ -337,23 +344,32 @@ class MCPLibrary:
         """内置离线兜底（最精简的几个）。"""
         fallback = [
             MCPServerEntry(
-                name="fetch", display_name="Fetch",
+                name="fetch",
+                display_name="Fetch",
                 description="HTTP 网页抓取 — 将网页内容转为 Markdown",
-                command="npx", args=["-y", "@modelcontextprotocol/server-fetch"],
-                category="网络", source="fallback",
+                command="npx",
+                args=["-y", "@modelcontextprotocol/server-fetch"],
+                category="网络",
+                source="fallback",
             ),
             MCPServerEntry(
-                name="filesystem", display_name="Filesystem",
+                name="filesystem",
+                display_name="Filesystem",
                 description="安全的文件系统读写",
-                command="npx", args=["-y", "@modelcontextprotocol/server-filesystem", "."],
-                category="系统", source="fallback",
+                command="npx",
+                args=["-y", "@modelcontextprotocol/server-filesystem", "."],
+                category="系统",
+                source="fallback",
             ),
             MCPServerEntry(
-                name="brave", display_name="Brave Search",
+                name="brave",
+                display_name="Brave Search",
                 description="Brave 搜索引擎 — 网页搜索",
-                command="npx", args=["-y", "@modelcontextprotocol/server-brave-search"],
+                command="npx",
+                args=["-y", "@modelcontextprotocol/server-brave-search"],
                 env={"BRAVE_API_KEY": "<你的 Brave API Key>"},
-                category="搜索", source="fallback",
+                category="搜索",
+                source="fallback",
             ),
         ]
         for e in fallback:
@@ -382,11 +398,14 @@ class MCPLibrary:
         if keyword:
             kw = keyword.lower()
             return sorted(
-                [e for e in self._entries
-                 if kw in e.name.lower()
-                 or kw in e.description.lower()
-                 or kw in e.category.lower()
-                 or kw in e.display_name.lower()],
+                [
+                    e
+                    for e in self._entries
+                    if kw in e.name.lower()
+                    or kw in e.description.lower()
+                    or kw in e.category.lower()
+                    or kw in e.display_name.lower()
+                ],
                 key=lambda e: e.name,
             )
         return sorted(self._entries, key=lambda e: e.name)
@@ -408,6 +427,7 @@ class MCPLibrary:
 # ══════════════════════════════════════════════════════════
 # Skill 库 — GitHub 云端
 # ══════════════════════════════════════════════════════════
+
 
 class SkillLibrary:
     """Skill 云端库。"""
@@ -482,8 +502,15 @@ class SkillLibrary:
             description="AI 生成 commit message（内置离线兜底）",
             category="开发",
             steps=[
-                {"type": "command", "action": "git diff --cached", "output_var": "diff"},
-                {"type": "llm", "prompt": "根据以下 git diff 生成一条规范的 commit message（中文 50 字以内）：\n{diff}"},
+                {
+                    "type": "command",
+                    "action": "git diff --cached",
+                    "output_var": "diff",
+                },
+                {
+                    "type": "llm",
+                    "prompt": "根据以下 git diff 生成一条规范的 commit message（中文 50 字以内）：\n{diff}",
+                },
             ],
         )
         self._entries.append(e)
@@ -506,10 +533,13 @@ class SkillLibrary:
         if keyword:
             kw = keyword.lower()
             return sorted(
-                [e for e in self._entries
-                 if kw in e.name.lower()
-                 or kw in e.description.lower()
-                 or kw in (e.category or "").lower()],
+                [
+                    e
+                    for e in self._entries
+                    if kw in e.name.lower()
+                    or kw in e.description.lower()
+                    or kw in (e.category or "").lower()
+                ],
                 key=lambda e: e.name,
             )
         return sorted(self._entries, key=lambda e: e.name)
@@ -549,6 +579,7 @@ class SkillLibrary:
     def refresh_repl_skills(self) -> None:
         try:
             from xenon.repl.skill_manager import SkillManager
+
             mgr = SkillManager()
             mgr.load()
         except Exception as e:

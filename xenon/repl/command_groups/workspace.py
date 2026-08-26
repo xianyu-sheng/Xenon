@@ -74,7 +74,9 @@ def _cmd_edit(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
 
             ext = Path(file_path).suffix.lstrip(".")
             console.print(f"\n[bold]{file_path}[/bold] ({line_count} 行)\n")
-            console.print(Syntax(content, ext or "text", theme="monokai", line_numbers=False))
+            console.print(
+                Syntax(content, ext or "text", theme="monokai", line_numbers=False)
+            )
             return ""
         except FileNotFoundError as exc:
             return str(exc)
@@ -88,7 +90,11 @@ def _cmd_edit(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
 
 # ── /permissions — v0.5.0 权限模式管理 ─────────────────────
 
-register_command("/permissions", "查看/切换工具执行权限模式", "/permissions [default|accept_edits|bypass|plan]")
+register_command(
+    "/permissions",
+    "查看/切换工具执行权限模式",
+    "/permissions [default|accept_edits|bypass|plan]",
+)
 
 
 @command_handler("/permissions")
@@ -115,7 +121,11 @@ def _cmd_permissions(
             "用法: /permissions <模式名>",
             f"最近确认状态: {gate.state.value}",
             "已记忆允许的工具: "
-            + (", ".join(gate.session_allowed_tools) if gate.session_allowed_tools else "(无)"),
+            + (
+                ", ".join(gate.session_allowed_tools)
+                if gate.session_allowed_tools
+                else "(无)"
+            ),
         ]
         return "\n".join(lines)
 
@@ -149,7 +159,9 @@ register_command(
 
 
 @command_handler("/vision")
-def _cmd_vision(*, args: str = "", session_state: dict[str, Any] | None = None, **kwargs: Any) -> str:
+def _cmd_vision(
+    *, args: str = "", session_state: dict[str, Any] | None = None, **kwargs: Any
+) -> str:
     """切换视觉粘贴模式。"""
     repl = session_state.get("_repl") if session_state else None
     if not repl:

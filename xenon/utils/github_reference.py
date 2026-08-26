@@ -7,24 +7,26 @@ from dataclasses import dataclass
 from urllib.parse import unquote, urlsplit
 
 _PART_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-_NON_REPOSITORY_ROUTES = frozenset({
-    "collections",
-    "enterprise",
-    "explore",
-    "features",
-    "marketplace",
-    "notifications",
-    "organizations",
-    "orgs",
-    "search",
-    "settings",
-    "sponsors",
-    "topics",
-    "users",
-    # GitHub Discussions / Projects 等非仓库页面
-    "discussions",
-    "projects",
-})
+_NON_REPOSITORY_ROUTES = frozenset(
+    {
+        "collections",
+        "enterprise",
+        "explore",
+        "features",
+        "marketplace",
+        "notifications",
+        "organizations",
+        "orgs",
+        "search",
+        "settings",
+        "sponsors",
+        "topics",
+        "users",
+        # GitHub Discussions / Projects 等非仓库页面
+        "discussions",
+        "projects",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -79,7 +81,10 @@ def parse_github_reference(value: str) -> GitHubReference:
     if len(parts) < 2:
         raise ValueError("GitHub 仓库格式应为 owner/repo")
 
-    if host in {"github.com", "www.github.com"} and parts[0].lower() in _NON_REPOSITORY_ROUTES:
+    if (
+        host in {"github.com", "www.github.com"}
+        and parts[0].lower() in _NON_REPOSITORY_ROUTES
+    ):
         raise ValueError("GitHub URL 指向站点页面而不是 owner/repo 仓库")
 
     owner, repo = parts[0], parts[1]
@@ -119,7 +124,13 @@ def parse_github_reference(value: str) -> GitHubReference:
     if kind in {"issues", "pull", "pulls", "discussions"}:
         if len(parts) < 4 or not parts[3].isdigit():
             raise ValueError(f"GitHub {kind} URL 缺少有效编号")
-        normalized = "issue" if kind == "issues" else "pull" if kind in {"pull", "pulls"} else "discussion"
+        normalized = (
+            "issue"
+            if kind == "issues"
+            else "pull"
+            if kind in {"pull", "pulls"}
+            else "discussion"
+        )
         return GitHubReference(
             owner,
             repo,

@@ -48,7 +48,8 @@ from xenon.repl.status_bar import StatusBar
 from xenon.repl.system_config import get_config
 
 from xenon.repl.repl_input import (  # noqa: E402
-    _read_input_unix, _read_input_windows,
+    _read_input_unix,
+    _read_input_windows,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ try:
     from prompt_toolkit.styles import Style
     from prompt_toolkit.formatted_text import HTML
     from pathlib import Path as _Path
+
     _HISTORY_DIR = _Path.home() / ".xenon"
     _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
     _HAS_PROMPT_TOOLKIT = True
@@ -75,17 +77,17 @@ except ImportError:
     run_in_terminal = None  # type: ignore
 
 # ── 自定义主题 ────────────────────────────────────────────
-_theme = Theme({
-    "user": "bold #67e8f9",
-    "assistant": "#bbf7d0",
-    "system": "dim #facc15",
-    "error": "bold #fda4af",
-    "command": "bold #c4b5fd",
-})
+_theme = Theme(
+    {
+        "user": "bold #67e8f9",
+        "assistant": "#bbf7d0",
+        "system": "dim #facc15",
+        "error": "bold #fda4af",
+        "command": "bold #c4b5fd",
+    }
+)
 
 console = Console(theme=_theme)
-
-
 
 
 class REPL:
@@ -129,22 +131,24 @@ class REPL:
 
         # 状态栏
         from xenon.utils.deepseek_cache import CacheTracker
+
         self._cache_tracker = CacheTracker(persist=True)
-        self.status_bar = StatusBar(console, self.ctx_mgr, self.registry,
-                                    cache_tracker=self._cache_tracker)
+        self.status_bar = StatusBar(
+            console, self.ctx_mgr, self.registry, cache_tracker=self._cache_tracker
+        )
 
         # ── 视觉桥接器（惰性加载） ──────────────────────────
         from xenon.tools import VisionBridge, ClipboardMonitor
+
         self._vision_bridge = VisionBridge()
-        self._vision_enabled = True          # 默认开启，可 /vision 切换
-        self._clipboard_monitor = ClipboardMonitor(
-            on_image=self._on_clipboard_image
-        )
-        self._logo_shown: bool = False       # 启动动画只播一次
+        self._vision_enabled = True  # 默认开启，可 /vision 切换
+        self._clipboard_monitor = ClipboardMonitor(on_image=self._on_clipboard_image)
+        self._logo_shown: bool = False  # 启动动画只播一次
 
         # 终端标签页活动状态：任务执行时星核移动，空闲/等待用户时静止。
         # OSC 标题更新不触碰终端正文；非 TTY、CI 和 dumb 终端自动禁用。
         from xenon.repl.terminal_activity import TerminalActivityIndicator
+
         self._terminal_activity = TerminalActivityIndicator()
         # Permission callbacks may arrive from parallel tool workers.  Only
         # one confirmation frontend may own stdin at a time; otherwise several
@@ -155,6 +159,7 @@ class REPL:
         # v0.4.0: Auto router + model pool (replaces role_priority)
         from xenon.repl.model_pool import ModelPool
         from xenon.repl.auto_router import AutoRouter
+
         self.model_pool = ModelPool()
         self.auto_router = AutoRouter(
             self.model_pool,
@@ -196,21 +201,21 @@ class REPL:
         # v0.5.3: 折叠思考过程 — 默认隐藏，Ctrl+O 展开
         self._show_thinking: bool = False
         self._last_thinking_panel: Any = None
-        self._captured_log: str = ""       # 引擎执行期间捕获的日志文本
-        self._last_mode_line: str = ""     # 上次引擎的模式行
+        self._captured_log: str = ""  # 引擎执行期间捕获的日志文本
+        self._last_mode_line: str = ""  # 上次引擎的模式行
 
         # v0.5.0: 工具权限门控
         from xenon.repl.permissions import PermissionGate, PermissionMode
+
         # 默认 ACCEPT_EDITS：文件编辑/写入自动放行，Shell 和危险 git 仍需确认。
         # 这在保留关键安全边界的同时，消除了编码工作流中高频写入操作的确认摩擦。
         self._permission_gate = PermissionGate(mode=PermissionMode.ACCEPT_EDITS)
         self._permission_gate.set_confirm_callback(self._confirm_tool)
-        self.agent_context.set_tool_checkpoint_callback(
-            self._persist_tool_checkpoint
-        )
+        self.agent_context.set_tool_checkpoint_callback(self._persist_tool_checkpoint)
 
         # 优雅重启管理器
         from xenon.repl.graceful_restart import GracefulRestartManager
+
         self._restart_manager = GracefulRestartManager(self)
         signal_ok = self._restart_manager.install_signal_handlers()
         if not signal_ok:
@@ -317,22 +322,24 @@ class REPL:
             else:  # defensive fallback for unusual prompt_toolkit versions
                 self._toggle_thinking_details()
 
-        style = Style.from_dict({
-            # 输入区借鉴 Claude Code / pi 的轻量层次：线条定界，避免整块底色。
-            "prompt": "bold #67e8f9",
-            "input.rule": "#334155",
-            "bottom-toolbar": "noreverse",
-            "bottom-toolbar.text": "#94a3b8",
-            "toolbar.separator": "#475569",
-            "toolbar.model": "#cbd5e1",
-            "toolbar.mode": "#c4b5fd",
-            "toolbar.good": "bold #86efac",
-            "toolbar.warning": "bold #fcd34d",
-            "toolbar.danger": "bold #fda4af",
-            "toolbar.notice": "bold #fde68a",
-            "toolbar.muted": "#94a3b8",
-            "toolbar.hint": "#64748b italic",
-        })
+        style = Style.from_dict(
+            {
+                # 输入区借鉴 Claude Code / pi 的轻量层次：线条定界，避免整块底色。
+                "prompt": "bold #67e8f9",
+                "input.rule": "#334155",
+                "bottom-toolbar": "noreverse",
+                "bottom-toolbar.text": "#94a3b8",
+                "toolbar.separator": "#475569",
+                "toolbar.model": "#cbd5e1",
+                "toolbar.mode": "#c4b5fd",
+                "toolbar.good": "bold #86efac",
+                "toolbar.warning": "bold #fcd34d",
+                "toolbar.danger": "bold #fda4af",
+                "toolbar.notice": "bold #fde68a",
+                "toolbar.muted": "#94a3b8",
+                "toolbar.hint": "#64748b italic",
+            }
+        )
 
         history_path = _HISTORY_DIR / "input_history.txt"
 
@@ -418,7 +425,9 @@ class REPL:
 
         # 默认 Buffer Window 会吞掉状态栏上方的全部剩余高度。按实际输入内容
         # 固定它的当前高度，空白空间便会留在下边界之后，而不是输入和下边界之间。
-        buffer_container = main_stack.children[1] if len(main_stack.children) > 1 else None
+        buffer_container = (
+            main_stack.children[1] if len(main_stack.children) > 1 else None
+        )
         buffer_window = getattr(buffer_container, "content", None)
 
         def input_height() -> int:
@@ -442,7 +451,9 @@ class REPL:
         )
         main_stack.children.append(lower_rule)
 
-    def _confirm_tool(self, tool_name: str, params: dict, risk: str) -> tuple[bool, str]:
+    def _confirm_tool(
+        self, tool_name: str, params: dict, risk: str
+    ) -> tuple[bool, str]:
         from xenon.repl.permissions import PermissionGate
         from xenon.repl.system_config import get_config
 
@@ -475,8 +486,11 @@ class REPL:
 
                 try:
                     choice = Prompt.ask(
-                        "选择", choices=["y", "n", "a", "q"], default="n",
-                        show_choices=True, case_sensitive=False,
+                        "选择",
+                        choices=["y", "n", "a", "q"],
+                        default="n",
+                        show_choices=True,
+                        case_sensitive=False,
                     )
                 except (KeyboardInterrupt, EOFError):
                     return False, "用户取消"
@@ -520,6 +534,7 @@ class REPL:
         StringIO handler。这样日志不会输出到 stderr，而是被收集供折叠/展开使用。
         """
         import io as _io
+
         if getattr(self, "_log_capture_active", False):
             # Defensive cleanup if a previous run was interrupted outside the
             # normal Exception path.
@@ -528,8 +543,8 @@ class REPL:
         self._log_handler = logging.StreamHandler(self._log_buffer)
         self._log_handler.setFormatter(
             logging.Formatter(
-                '%(asctime)s [%(name)s] %(levelname)s: %(message)s',
-                datefmt='%H:%M:%S',
+                "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+                datefmt="%H:%M:%S",
             )
         )
         self._log_handler.setLevel(logging.INFO)
@@ -541,8 +556,11 @@ class REPL:
         # 遍历所有已注册的 logger，找到 xenon.* / httpx / openai / httpcore 及 root
         for _lg_name, _lg_obj in logging.root.manager.loggerDict.items():
             if isinstance(_lg_obj, logging.Logger):
-                if (_lg_name.startswith('xenon') or
-                    _lg_name in ('httpx', 'openai', 'httpcore')):
+                if _lg_name.startswith("xenon") or _lg_name in (
+                    "httpx",
+                    "openai",
+                    "httpcore",
+                ):
                     _capture_names.append(_lg_name)
         for _name in _capture_names:
             _lg = logging.getLogger(_name)
@@ -579,7 +597,8 @@ class REPL:
                         # 恢复失败意味着该 logger 之后永久失去输出，必须留痕。
                         logger.warning(
                             "恢复原日志 handler 失败 (%s)，该 logger 的输出可能丢失: %s",
-                            _name, exc,
+                            _name,
+                            exc,
                         )
                 if _name in self._saved_propagate:
                     _lg.propagate = self._saved_propagate[_name]
@@ -598,6 +617,7 @@ class REPL:
     def _make_callback(self):
         """根据 verbose 状态创建引擎回调。"""
         from xenon.engine.callbacks import ConsoleCallback
+
         callback = ConsoleCallback(verbose=self.verbose)
         self._active_callback = callback
         return callback
@@ -632,6 +652,7 @@ class REPL:
         """v0.4.0 Step 14: 启动时检查可恢复的会话。"""
         try:
             from xenon.repl.session import list_sessions, get_session_age
+
             sessions = list_sessions()
             if not sessions:
                 return
@@ -645,9 +666,13 @@ class REPL:
                 f"\n[dim]┌─ {name} ({age}) · {latest['messages']} 条消息[/dim]"
             )
             if len(sessions) > 1:
-                console.print(f"[dim]│  输入 [bold]/resume[/bold] 从 {len(sessions)} 个历史会话中选择[/dim]")
+                console.print(
+                    f"[dim]│  输入 [bold]/resume[/bold] 从 {len(sessions)} 个历史会话中选择[/dim]"
+                )
             else:
-                console.print("[dim]│  输入 [bold]/resume[/bold] 恢复，或直接开始新对话[/dim]")
+                console.print(
+                    "[dim]│  输入 [bold]/resume[/bold] 恢复，或直接开始新对话[/dim]"
+                )
         except Exception as exc:
             # 纯提示，失败不影响启动；但要留痕，否则"为什么没有恢复提示"无从排查。
             logger.debug("渲染历史会话提示失败: %s", exc)
@@ -697,7 +722,9 @@ class REPL:
                 "[dim]│  用 [bold]/mode[/bold] 查看并手动选择可用范式[/dim]"
             )
 
-    def _render_engine_result(self, callback, result: str, title: str, border_style: str = "green") -> None:
+    def _render_engine_result(
+        self, callback, result: str, title: str, border_style: str = "green"
+    ) -> None:
         """渲染引擎结果：默认折叠执行过程，仅显示最终答案。
 
         v0.5.3: 执行日志（工具调用/HTTP 请求/引擎信息）默认全部隐藏。
@@ -727,7 +754,9 @@ class REPL:
                 f"(result={result!r}, steps={step_count}, tools={tool_count}, "
                 f"title={title!r})"
             )
-            result = "任务已执行，但未生成明确的回复内容。请尝试重新提问或使用更具体的指令。"
+            result = (
+                "任务已执行，但未生成明确的回复内容。请尝试重新提问或使用更具体的指令。"
+            )
 
         # v0.6.1: 安全网 —— 如果引擎返回的是未解析的 JSON 文本，
         # 尝试从 JSON 中提取 final_answer，避免用户看到裸 JSON。
@@ -750,7 +779,9 @@ class REPL:
                     header_parts.append(f"{step_count} 步")
                 if tool_count:
                     header_parts.append(f"{tool_count} 个工具")
-                error_count = sum(1 for step in panel.steps if step.is_error) + len(panel.errors)
+                error_count = sum(1 for step in panel.steps if step.is_error) + len(
+                    panel.errors
+                )
                 if error_count:
                     header_parts.append(f"{error_count} 个错误")
                 header = " · ".join(header_parts) if header_parts else ""
@@ -762,7 +793,9 @@ class REPL:
         self._render_assistant_text(result, title=title)
 
     @staticmethod
-    def _render_assistant_text(content: str, *, title: str = "Assistant", model_id: str | None = None) -> None:
+    def _render_assistant_text(
+        content: str, *, title: str = "Assistant", model_id: str | None = None
+    ) -> None:
         """无边框渲染模型正文，让内容成为视觉焦点。"""
         console.print()
         header = Text()
@@ -801,10 +834,13 @@ class REPL:
             return result
         try:
             import json as _json
+
             data = _json.loads(text)
             # 单对象
             if isinstance(data, dict):
-                fa = data.get("final_answer") or data.get("answer") or data.get("result")
+                fa = (
+                    data.get("final_answer") or data.get("answer") or data.get("result")
+                )
                 if fa and isinstance(fa, str) and len(fa) > 20:
                     logger.info("_unwrap_json_result: 从 JSON 提取 final_answer")
                     return fa
@@ -812,19 +848,30 @@ class REPL:
             if isinstance(data, list):
                 for item in data:
                     if isinstance(item, dict):
-                        fa = item.get("final_answer") or item.get("answer") or item.get("result")
+                        fa = (
+                            item.get("final_answer")
+                            or item.get("answer")
+                            or item.get("result")
+                        )
                         if fa and isinstance(fa, str) and len(fa) > 20:
-                            logger.info("_unwrap_json_result: 从 JSON 数组提取 final_answer")
+                            logger.info(
+                                "_unwrap_json_result: 从 JSON 数组提取 final_answer"
+                            )
                             return fa
         except Exception:
             # JSON 解析失败，尝试正则提取
             import re
+
             for key in ("final_answer", "answer"):
                 m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
                 if m:
                     val = m.group(1)
                     # 还原转义
-                    val = val.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+                    val = (
+                        val.replace("\\n", "\n")
+                        .replace("\\t", "\t")
+                        .replace('\\"', '"')
+                    )
                     if len(val) > 20:
                         logger.info(f"_unwrap_json_result: 正则提取 {key}")
                         return val
@@ -913,11 +960,10 @@ class REPL:
         if not calls:
             return 0
 
-        provider_messages = list(
-            getattr(engine, "_last_provider_messages", []) or []
-        )
+        provider_messages = list(getattr(engine, "_last_provider_messages", []) or [])
         provider_tool_results = sum(
-            1 for message in provider_messages
+            1
+            for message in provider_messages
             if isinstance(message, dict) and message.get("role") == "tool"
         )
         if provider_messages:
@@ -945,11 +991,13 @@ class REPL:
                     result=result,
                     error=str(error) if error else None,
                 )
-            recent_activity.append({
-                "tool": tool_name,
-                "success": success,
-                "summary": (result or str(error or ""))[:300],
-            })
+            recent_activity.append(
+                {
+                    "tool": tool_name,
+                    "success": success,
+                    "summary": (result or str(error or ""))[:300],
+                }
+            )
 
             if not success:
                 continue
@@ -1074,14 +1122,26 @@ class REPL:
 
             # 返回失败结果，让 REPL 继续运行
             from xenon.repl.graceful_restart import RestartOutcome
+
             return RestartOutcome(ok=False, message=str(e))
 
     @staticmethod
     def _default_system_prompt() -> str:
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc)
-        weekdays_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-        current_date = f"{now.year}年{now.month}月{now.day}日 {weekdays_cn[now.weekday()]}"
+        weekdays_cn = [
+            "星期一",
+            "星期二",
+            "星期三",
+            "星期四",
+            "星期五",
+            "星期六",
+            "星期日",
+        ]
+        current_date = (
+            f"{now.year}年{now.month}月{now.day}日 {weekdays_cn[now.weekday()]}"
+        )
         return (
             "你是 Xenon 的 AI 编程助手。"
             "你可以帮助用户编写代码、调试问题、解释概念。\n\n"
@@ -1136,7 +1196,9 @@ class REPL:
 
             while True:
                 # 检查重启请求（信号或 /restart 命令触发）
-                should_restart, preserve = self._restart_manager.coordinator.should_restart()
+                should_restart, preserve = (
+                    self._restart_manager.coordinator.should_restart()
+                )
                 if should_restart:
                     self._restart_manager.coordinator.clear()
                     outcome = self._process_restart_request(preserve)
@@ -1195,7 +1257,7 @@ class REPL:
 
     def _print_exit_report(self) -> None:
         """P1-7：会话结束时打印省钱报告。"""
-        if not hasattr(self, '_cache_tracker') or not self._cache_tracker:
+        if not hasattr(self, "_cache_tracker") or not self._cache_tracker:
             return
         cr = self._cache_tracker
         models = cr.all_models
@@ -1216,9 +1278,7 @@ class REPL:
             prompt_t = snap.get("prompt_tokens", 0)
             comp_t = snap.get("completion_tokens", 0)
             rate = snap.get("cache_hit_rate", 0.0)
-            rate_text = (
-                f"{rate:.0%}" if snap.get("cache_reported_calls", 0) else "n/a"
-            )
+            rate_text = f"{rate:.0%}" if snap.get("cache_reported_calls", 0) else "n/a"
             cost = snap.get("cost_yuan", 0.0)
             saved = snap.get("saved_yuan", 0.0)
 
@@ -1237,18 +1297,19 @@ class REPL:
         if total_calls == 0:
             return
 
-        overall_rate = (
-            f"{cr.cache_hit_rate:.0%}" if cr.cache_reported_calls else "n/a"
-        )
+        overall_rate = f"{cr.cache_hit_rate:.0%}" if cr.cache_reported_calls else "n/a"
         overall_pct = cr.savings_pct
 
         console.print()
-        console.print(Panel(
-            "\n".join(lines) + f"\n\n[bold]合计[/bold]  {total_tokens:,} tokens · 💾{overall_rate} · 💰¥{total_cost:.4f} · 💡省 ¥{total_saved:.4f} ({overall_pct}%)",
-            title="[bold]📊 本次会话省钱报告[/bold]",
-            border_style="dim",
-            padding=(0, 1),
-        ))
+        console.print(
+            Panel(
+                "\n".join(lines)
+                + f"\n\n[bold]合计[/bold]  {total_tokens:,} tokens · 💾{overall_rate} · 💰¥{total_cost:.4f} · 💡省 ¥{total_saved:.4f} ({overall_pct}%)",
+                title="[bold]📊 本次会话省钱报告[/bold]",
+                border_style="dim",
+                padding=(0, 1),
+            )
+        )
         cr.close()
 
     def _on_clipboard_image(self, image_data: bytes) -> None:
@@ -1301,7 +1362,10 @@ class REPL:
         v0.3.0+ 修复（C-2）：从纯 yaml 检查改为 get_configured_providers 检查，
         兼容 env 变量（Claude Code 内 ANTHROPIC_AUTH_TOKEN 也能触发自动加载）。
         """
-        from xenon.repl.provider_registry import get_configured_providers, load_credentials
+        from xenon.repl.provider_registry import (
+            get_configured_providers,
+            load_credentials,
+        )
 
         creds = load_credentials()
         # httpx INFO is valuable in Ctrl+O execution details but is startup
@@ -1323,10 +1387,12 @@ class REPL:
         failures: list[tuple[str, str]] = []
         for provider in configured:
             if provider.model_error:
-                failures.append((
-                    provider.name,
-                    self._summarize_provider_probe_error(provider.model_error),
-                ))
+                failures.append(
+                    (
+                        provider.name,
+                        self._summarize_provider_probe_error(provider.model_error),
+                    )
+                )
 
         needs_setup = not creds and not configured and not self.registry.list_models()
         if not needs_setup:
@@ -1336,9 +1402,13 @@ class REPL:
                 if not p.models or "(auto-fetch" in str(p.models[0]):
                     continue
                 if not p.key or not p.key.strip():
-                    logger.warning(f"跳过空 key 的 provider（name={p.name!r}），model_id 会变成 /model_name 导致路由失败")
+                    logger.warning(
+                        f"跳过空 key 的 provider（name={p.name!r}），model_id 会变成 /model_name 导致路由失败"
+                    )
                     continue
-                for model_name in p.models[:_max_per_provider]:  # top N per provider (P0: 可配置)
+                for model_name in p.models[
+                    :_max_per_provider
+                ]:  # top N per provider (P0: 可配置)
                     model_id = f"{p.key}/{model_name}"
                     alias = model_name.replace(".", "-")
                     # v0.8.6: 探测出的模型如果已由 models.yaml 手工配置（在池里），
@@ -1351,8 +1421,11 @@ class REPL:
                         continue
                     # Register to pool
                     self.model_pool.register(
-                        model_id, alias=alias, weight=3.0,
-                        api_key=p.api_key, base_url=p.base_url,
+                        model_id,
+                        alias=alias,
+                        weight=3.0,
+                        api_key=p.api_key,
+                        base_url=p.base_url,
                     )
                     # Also ensure registry has it (backward compat)
                     if alias not in {m.alias for m in self.registry.list_models()}:
@@ -1365,8 +1438,7 @@ class REPL:
         available_providers = sum(
             1
             for provider in configured
-            if provider.models
-            and not str(provider.models[0]).startswith("(auto-fetch")
+            if provider.models and not str(provider.models[0]).startswith("(auto-fetch")
         )
         return {
             "needs_setup": needs_setup,
@@ -1435,6 +1507,7 @@ class REPL:
             self._logo_shown = True
             try:
                 from xenon.utils.logo import print_logo as _print_logo
+
                 _print_logo(animated=True, duration=2.0)
             except Exception:
                 pass  # Logo 加载失败不影响启动
@@ -1448,7 +1521,9 @@ class REPL:
             if len(models) > 1:
                 model_display += f" [dim]+{len(models) - 1}[/dim]"
         else:
-            model_display = "[dim]未配置 — 输入 [bold cyan]/setup[/bold cyan] 开始[/dim]"
+            model_display = (
+                "[dim]未配置 — 输入 [bold cyan]/setup[/bold cyan] 开始[/dim]"
+            )
 
         # ── 随机提示 ──
         tips = [
@@ -1466,25 +1541,32 @@ class REPL:
         details = Table.grid(padding=(0, 2))
         details.add_column(style="dim #94a3b8", justify="right")
         details.add_column()
-        details.add_row("MODE", f"[bold #c4b5fd]{mode.name}[/bold #c4b5fd]  [dim]{mode.description}[/dim]")
+        details.add_row(
+            "MODE",
+            f"[bold #c4b5fd]{mode.name}[/bold #c4b5fd]  [dim]{mode.description}[/dim]",
+        )
         details.add_row("MODEL", model_display)
 
         body = Table.grid(expand=True, padding=(0, 1))
         body.add_column(ratio=1)
-        body.add_row("[bold #f8fafc]Your AI coding workspace[/bold #f8fafc]\n[dim #94a3b8]Plan, build, and iterate without leaving the terminal.[/dim #94a3b8]")
+        body.add_row(
+            "[bold #f8fafc]Your AI coding workspace[/bold #f8fafc]\n[dim #94a3b8]Plan, build, and iterate without leaving the terminal.[/dim #94a3b8]"
+        )
         body.add_row(details)
         body.add_row(f"[dim #64748b]TIP[/dim #64748b]  {tip}")
 
         console.print()
-        console.print(Panel(
-            body,
-            title=f"[bold #67e8f9] XENON [/bold #67e8f9] [dim]v{_ver}[/dim]",
-            subtitle="[dim]type /help to explore[/dim]",
-            border_style="#155e75",
-            box=box.ROUNDED,
-            padding=(1, 2),
-            width=min(76, max(48, console.width - 4)),
-        ))
+        console.print(
+            Panel(
+                body,
+                title=f"[bold #67e8f9] XENON [/bold #67e8f9] [dim]v{_ver}[/dim]",
+                subtitle="[dim]type /help to explore[/dim]",
+                border_style="#155e75",
+                box=box.ROUNDED,
+                padding=(1, 2),
+                width=min(76, max(48, console.width - 4)),
+            )
+        )
         console.print()
 
     def _read_input(self) -> str:
@@ -1497,6 +1579,7 @@ class REPL:
                 return ""
 
         import sys
+
         if sys.platform != "win32":
             try:
                 return self._read_input_unix()
@@ -1509,9 +1592,9 @@ class REPL:
     def _read_input_pt(self) -> str:
         """上下平行线定界输入；运行状态独立固定在终端屏幕底端。"""
         self._paste_store.reset()
-        if hasattr(self, '_completer'):
+        if hasattr(self, "_completer"):
             self._completer.update_commands(list(COMMANDS.keys()))
-            if hasattr(self, 'model_pool') and self.model_pool:
+            if hasattr(self, "model_pool") and self.model_pool:
                 self._completer.update_models(
                     [e.alias for e in self.model_pool.list_all()]
                 )
@@ -1519,6 +1602,7 @@ class REPL:
         # 上边界属于多行 prompt；下边界由主输入布局追加并紧贴输入内容；
         # API/模型状态则由原生 bottom_toolbar 固定在整个终端屏幕底端。
         import shutil
+
         width = max(20, shutil.get_terminal_size((80, 24)).columns - 1)
         message: list[tuple[str, str]] = [
             ("class:input.rule", "─" * width),
@@ -1564,7 +1648,9 @@ class REPL:
             from xenon.utils.llm_client import chat_completion
 
             model_ids = self.registry.get_role_priority("planner")
-            effective = [m for m in model_ids if m not in getattr(self, "_failed_models", set())]
+            effective = [
+                m for m in model_ids if m not in getattr(self, "_failed_models", set())
+            ]
             if not effective:
                 effective = model_ids
             if effective:
@@ -1617,7 +1703,14 @@ class REPL:
             return True
 
         if output:
-            console.print(Panel(output, title=f"[bold]{cmd_name}[/bold]", border_style="dim", padding=(0, 1)))
+            console.print(
+                Panel(
+                    output,
+                    title=f"[bold]{cmd_name}[/bold]",
+                    border_style="dim",
+                    padding=(0, 1),
+                )
+            )
         return False
 
     def _sync_context_window(self, model_aliases: list[str]) -> None:
@@ -1650,13 +1743,15 @@ class REPL:
         # optimizer's generated wording or by the selected reasoning mode.
         intent, inherited_intent_source = self._resolve_turn_intent(user_input)
         execution_policy = classify_execution_policy(user_input, intent=intent)
-        self.agent_context.update({
-            "_execution_level": int(execution_policy.level),
-            "_execution_reason": execution_policy.reason,
-            # Preserve filter constraints for terse continuations such as
-            # "结果呢" that do not repeat the original query.
-            "_query_constraint_source": inherited_intent_source or "",
-        })
+        self.agent_context.update(
+            {
+                "_execution_level": int(execution_policy.level),
+                "_execution_reason": execution_policy.reason,
+                # Preserve filter constraints for terse continuations such as
+                # "结果呢" that do not repeat the original query.
+                "_query_constraint_source": inherited_intent_source or "",
+            }
+        )
 
         # Resolve the project before a memory command so the default
         # project-local destination is deterministic and visible in its receipt.
@@ -1670,7 +1765,9 @@ class REPL:
         self._sync_context_window(self.auto_router.route(user_input, count=3))
         # 自动 compact 检查
         if self.ctx_mgr.needs_compact():
-            console.print("[dim]· 对话较长，建议 [bold cyan]/compact[/bold cyan] 压缩[/dim]")
+            console.print(
+                "[dim]· 对话较长，建议 [bold cyan]/compact[/bold cyan] 压缩[/dim]"
+            )
 
         # 保存 undo 快照
         self.ctx_mgr.save_snapshot()
@@ -1693,7 +1790,9 @@ class REPL:
         system_hint: str | None = None
         if skill_name is not None:
             optimized = user_input
-            console.print(f"[dim cyan]🧩 Agent Skill: {skill_name}（正文与资源按需加载）[/dim cyan]")
+            console.print(
+                f"[dim cyan]🧩 Agent Skill: {skill_name}（正文与资源按需加载）[/dim cyan]"
+            )
         elif self.optimize_prompts:
             optimized, system_hint, was_optimized = optimize_prompt(
                 user_input,
@@ -1703,7 +1802,9 @@ class REPL:
 
             if was_optimized:
                 # 展示优化后的 prompt，帮助用户学习
-                self._render_secondary_text("📝 优化后的 Prompt（供学习参考）", optimized)
+                self._render_secondary_text(
+                    "📝 优化后的 Prompt（供学习参考）", optimized
+                )
             elif intent is not None:
                 # 有明确任务意图，但提示词质量已足够好
                 console.print("[dim]✅ 提示词质量良好，无需优化[/dim]")
@@ -1711,7 +1812,7 @@ class REPL:
                 # 通用对话，无明确任务意图
                 console.print("[dim]💬 通用对话[/dim]")
             # ── 缓存优化提示 ──
-            if hasattr(self, '_cache_tracker') and self._cache_tracker:
+            if hasattr(self, "_cache_tracker") and self._cache_tracker:
                 cr = self._cache_tracker
                 total = cr.cache_hits + cr.cache_misses
                 if total > 0 and was_optimized:
@@ -1735,10 +1836,7 @@ class REPL:
         # greetings intentionally remain byte-for-byte unchanged.
         turn_prompt = optimized
         if system_hint and intent != "chat":
-            turn_prompt = (
-                f"{optimized}\n\n"
-                f"## 本轮回答指导\n{system_hint}"
-            )
+            turn_prompt = f"{optimized}\n\n## 本轮回答指导\n{system_hint}"
         if inherited_intent_source:
             turn_prompt = (
                 f"{turn_prompt}\n\n"
@@ -1753,9 +1851,8 @@ class REPL:
         turn_prompt = bind_execution_boundary(turn_prompt, execution_policy.level)
 
         # 添加用户消息
-        intent_source = (
-            inherited_intent_source
-            or (user_input if intent in {"query", "research"} else "")
+        intent_source = inherited_intent_source or (
+            user_input if intent in {"query", "research"} else ""
         )
         turn_prompt = self.ctx_mgr.add_request_message(
             turn_prompt,
@@ -1785,13 +1882,17 @@ class REPL:
                 "reflection": "execute",
             }.get(route_engine, "request")
             model_ids = self.auto_router.route(
-                turn_prompt, self.ctx_mgr.get_messages(), count=3,
+                turn_prompt,
+                self.ctx_mgr.get_messages(),
+                count=3,
                 preferred_models=self._preferred_model_ids or None,
                 cache_engine=route_engine,
                 cache_phase=route_phase,
             )
         if not model_ids:
-            console.print("[red]· 未配置模型，请先 [bold cyan]/setup[/bold cyan] 配置[/red]")
+            console.print(
+                "[red]· 未配置模型，请先 [bold cyan]/setup[/bold cyan] 配置[/red]"
+            )
             return
 
         # v0.5.2: 过滤本会话已失败的模型（统一入口，覆盖所有引擎模式）
@@ -1906,7 +2007,8 @@ class REPL:
 
         try:
             profile = self.auto_router.estimator.estimate(
-                user_input, self.ctx_mgr.get_messages(),
+                user_input,
+                self.ctx_mgr.get_messages(),
             )
         except Exception as exc:  # noqa: BLE001 — 推荐失败不该阻断对话
             logger.debug("范式推荐失败，保留当前范式: %s", exc)
@@ -1948,19 +2050,27 @@ class REPL:
             user_input,
             intent=intent,
         )
-        self.agent_context.update({
-            "_execution_level": int(policy.level),
-            "_execution_reason": policy.reason,
-        })
+        self.agent_context.update(
+            {
+                "_execution_level": int(policy.level),
+                "_execution_reason": policy.reason,
+            }
+        )
 
         # 检测是否需要工具执行（文件/命令任务，或 query 意图实时数据查询）
         if policy.requires_tools:
             if intent == "query":
-                console.print("[dim cyan]🔧 检测到信息查询（需实时数据），自动切换到 ReAct 模式...[/dim cyan]")
+                console.print(
+                    "[dim cyan]🔧 检测到信息查询（需实时数据），自动切换到 ReAct 模式...[/dim cyan]"
+                )
             elif intent == "research":
-                console.print("[dim cyan]🔎 检测到资料调研（仅使用只读工具），自动切换到 ReAct 模式...[/dim cyan]")
+                console.print(
+                    "[dim cyan]🔎 检测到资料调研（仅使用只读工具），自动切换到 ReAct 模式...[/dim cyan]"
+                )
             else:
-                console.print("[dim cyan]🔧 检测到需要工具执行，自动切换到 ReAct 模式...[/dim cyan]")
+                console.print(
+                    "[dim cyan]🔧 检测到需要工具执行，自动切换到 ReAct 模式...[/dim cyan]"
+                )
             self._run_react_engine(user_input, model_ids)
             return
 
@@ -1974,11 +2084,15 @@ class REPL:
             # Some short external questions do not match a prompt template.
             # MCP availability is enough to infer a read-only boundary, never
             # a write/execute authorization.
-            self.agent_context.update({
-                "_execution_level": int(ExecutionLevel.READ_ONLY),
-                "_execution_reason": "外部信息查询仅授权只读 MCP 工具",
-            })
-            console.print("[dim cyan]🔧 检测到可用 MCP 工具，自动切换到 ReAct 模式...[/dim cyan]")
+            self.agent_context.update(
+                {
+                    "_execution_level": int(ExecutionLevel.READ_ONLY),
+                    "_execution_reason": "外部信息查询仅授权只读 MCP 工具",
+                }
+            )
+            console.print(
+                "[dim cyan]🔧 检测到可用 MCP 工具，自动切换到 ReAct 模式...[/dim cyan]"
+            )
             self._run_react_engine(user_input, model_ids)
             return
 
@@ -2063,7 +2177,9 @@ class REPL:
                                     "模型违反仅回答约束，声称执行了文件操作"
                                 )
                             console.print()
-                            console.print("[dim cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，自动切换到 ReAct 模式重新执行...[/dim cyan]")
+                            console.print(
+                                "[dim cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，自动切换到 ReAct 模式重新执行...[/dim cyan]"
+                            )
                             # P2-修复6 (观察项-1)：防御性 catch ——
                             # _run_react_engine 内部已加占位（修复5），但万一占位也失败
                             # （如 ctx_mgr 内部异常），这里再兜底一次防 user-only 序列。
@@ -2092,7 +2208,10 @@ class REPL:
                             )
                         return
 
-                if intent == "write_code" and policy.level is ExecutionLevel.ANSWER_ONLY:
+                if (
+                    intent == "write_code"
+                    and policy.level is ExecutionLevel.ANSWER_ONLY
+                ):
                     from xenon.repl.code_response import validate_code_response
 
                     checked = validate_code_response(user_input, response_text)
@@ -2170,9 +2289,7 @@ class REPL:
                         is_retry=is_retry_probe,
                     )
                     state = "调用失败，尝试备用模型"
-                console.print(
-                    f"[dim yellow]模型 {model_id} {state}: {e}[/dim yellow]"
-                )
+                console.print(f"[dim yellow]模型 {model_id} {state}: {e}[/dim yellow]")
 
         error_message = f"[错误] 所有模型均调用失败: {last_error}"
         console.print(f"[error]❌ 所有模型均调用失败: {last_error}[/error]")
@@ -2193,13 +2310,16 @@ class REPL:
         if isinstance(error, httpx.HTTPStatusError):
             return error.response.status_code in {400, 401, 403, 404, 422}
         text = str(error).lower()
-        return any(marker in text for marker in (
-            "invalid api key",
-            "authentication",
-            "unauthorized",
-            "unknown model",
-            "model not found",
-        ))
+        return any(
+            marker in text
+            for marker in (
+                "invalid api key",
+                "authentication",
+                "unauthorized",
+                "unknown model",
+                "model not found",
+            )
+        )
 
     def _inject_mcp_tools_into_engine(self, engine: object) -> None:
         """v0.5.4: 将可用 MCP 工具（或惰性描述）注入引擎的 system prompt。
@@ -2215,8 +2335,7 @@ class REPL:
         nodes = list(walk_engine_graph(engine))
         registry = getattr(self, "_mcp_registry", None)
         has_mcp = bool(
-            registry
-            and (registry.clients or registry.has_pending_servers())
+            registry and (registry.clients or registry.has_pending_servers())
         )
         if not has_mcp:
             for node in nodes:
@@ -2234,11 +2353,11 @@ class REPL:
             logger.debug(f"构建 MCP 工具列表失败: {e}")
             return
         for node in nodes:
-            if not hasattr(node, '_mcp_tools_list'):
+            if not hasattr(node, "_mcp_tools_list"):
                 continue
             try:
                 node._mcp_tools_list = mcp_tools_list
-                if hasattr(node, '_build_system_prompt'):
+                if hasattr(node, "_build_system_prompt"):
                     node.system_prompt = node._build_system_prompt()
             except Exception as e:
                 logger.warning(f"注入 MCP 工具列表到引擎失败: {e}")
@@ -2299,7 +2418,9 @@ class REPL:
                 "工具运行时绑定失败，本次任务回退到 ToolNode 自身围栏: %s", exc
             )
 
-    def _run_engine(self, spec: EngineSpec, user_input: str, model_ids: list[str]) -> None:
+    def _run_engine(
+        self, spec: EngineSpec, user_input: str, model_ids: list[str]
+    ) -> None:
         """按 ``EngineSpec`` 运行一种推理范式 —— 全部引擎共用的唯一流程。
 
         此前六个 ``_run_*_engine`` 方法（约 275 行）逐行同构，只差引擎类、
@@ -2331,7 +2452,8 @@ class REPL:
         # 在线验证链：任务摄入——REPL 先创建任务证据，引擎复用同一条 ledger。
         try:
             self.agent_context.evidence.start_task(
-                engine=spec.name, user_input=user_input[:500],
+                engine=spec.name,
+                user_input=user_input[:500],
             )
         except Exception as exc:  # noqa: BLE001 — 证据记录失败不阻断主流程
             logger.debug("任务证据记录失败（不影响执行）: %s", exc)
@@ -2432,9 +2554,7 @@ class REPL:
                 continue
             try:
                 if engine.steer(text):
-                    console.print(
-                        "[dim]↪ 已收到你的补充，Agent 正在调整计划…[/dim]"
-                    )
+                    console.print("[dim]↪ 已收到你的补充，Agent 正在调整计划…[/dim]")
             except Exception:  # noqa: BLE001 — steering 失败不崩溃主流程
                 return
 
@@ -2459,9 +2579,7 @@ class REPL:
 
     def _run_plan_execute_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Plan-Execute 引擎模式（兼容入口）。"""
-        self._run_engine(
-            ENGINE_REGISTRY.require("plan-execute"), user_input, model_ids
-        )
+        self._run_engine(ENGINE_REGISTRY.require("plan-execute"), user_input, model_ids)
 
     def _run_reflection_engine(self, user_input: str, model_ids: list[str]) -> None:
         """Reflection 引擎模式（兼容入口）。"""
@@ -2578,6 +2696,7 @@ class REPL:
     def _detect_intent(text: str) -> str | None:
         """检测用户意图。"""
         from xenon.repl.prompt_optimizer import detect_intent
+
         return detect_intent(text)
 
     def _resolve_turn_intent(self, text: str) -> tuple[str | None, str | None]:
@@ -2633,13 +2752,24 @@ class REPL:
         re.compile(r"(?:删除|移除|清除).{0,20}(?:文件|目录)", re.I),
         re.compile(r"(?:delete|remove).{0,20}(?:file|dir)", re.I),
         # 命令执行（含代词：执行它/运行这个/跑一下）
-        re.compile(r"(?:执行|运行|跑).{0,15}(?:命令|脚本|程序|命令行|测试|pytest|npm|pip|python|node)", re.I),
-        re.compile(r"(?:执行|运行|跑|试试).{0,5}(?:它|他|她|这个|一下|看看|试试)", re.I),
+        re.compile(
+            r"(?:执行|运行|跑).{0,15}(?:命令|脚本|程序|命令行|测试|pytest|npm|pip|python|node)",
+            re.I,
+        ),
+        re.compile(
+            r"(?:执行|运行|跑|试试).{0,5}(?:它|他|她|这个|一下|看看|试试)", re.I
+        ),
         re.compile(r"(?:试试|试下).{0,3}(?:执行|运行|跑)", re.I),
-        re.compile(r"(?:run|execute|exec).{0,15}(?:command|script|cmd|test|pytest|npm|pip|python|node|it|this)", re.I),
+        re.compile(
+            r"(?:run|execute|exec).{0,15}(?:command|script|cmd|test|pytest|npm|pip|python|node|it|this)",
+            re.I,
+        ),
         re.compile(r"(?:run|execute|exec)\s+it", re.I),
         # Git 操作
-        re.compile(r"\bgit\b.{0,20}(?:commit|push|pull|add|clone|checkout|branch|merge|stash)", re.I),
+        re.compile(
+            r"\bgit\b.{0,20}(?:commit|push|pull|add|clone|checkout|branch|merge|stash)",
+            re.I,
+        ),
         re.compile(r"(?:提交|推送|拉取|克隆|分支|合并)", re.I),
         # 搜索
         re.compile(r"(?:搜索|查找|grep|find).{0,20}(?:文件|内容|代码|文本|字符)", re.I),
@@ -2650,16 +2780,25 @@ class REPL:
         # GitHub / 仓库分析
         # v0.6.1: 支持用户名和仓库名中的 . 和 -
         re.compile(r"github\.com/[\w.-]+/[\w.-]+", re.I),
-        re.compile(r"(?:分析|拉取|克隆|查看|学习|了解).{0,10}(?:仓库|项目|代码库|repo)", re.I),
-        re.compile(r"(?:analyze|clone|pull|review).{0,10}(?:repo|project|codebase)", re.I),
+        re.compile(
+            r"(?:分析|拉取|克隆|查看|学习|了解).{0,10}(?:仓库|项目|代码库|repo)", re.I
+        ),
+        re.compile(
+            r"(?:analyze|clone|pull|review).{0,10}(?:repo|project|codebase)", re.I
+        ),
         # 文件路径模式（./xxx, src/xxx, C:\xxx, /home/xxx, ~/xxx, $HOME/xxx, .py, .js 等）
-        re.compile(r"(?:^|\s)(?:\./|\.\./|src/|tests?/|lib/|app/|dist/|build/)\S+", re.I),
+        re.compile(
+            r"(?:^|\s)(?:\./|\.\./|src/|tests?/|lib/|app/|dist/|build/)\S+", re.I
+        ),
         re.compile(r"(?:^|\s)[A-Z]:\\[\w\\/.]+", re.I),
         # v0.6.1: Linux 绝对路径 + ~ 家目录 + $HOME
         re.compile(r"(?:^|\s)/(?:home|tmp|etc|var|opt|usr|root|mnt)/\S+", re.I),
         re.compile(r"(?:^|\s)~/\S+", re.I),
         re.compile(r"\$HOME/\S+", re.I),
-        re.compile(r"\b\w+\.(?:py|js|ts|jsx|tsx|java|c|cpp|h|go|rs|rb|php|html|css|json|yaml|yml|toml|xml|md|txt|sh|bat|ps1)\b", re.I),
+        re.compile(
+            r"\b\w+\.(?:py|js|ts|jsx|tsx|java|c|cpp|h|go|rs|rb|php|html|css|json|yaml|yml|toml|xml|md|txt|sh|bat|ps1)\b",
+            re.I,
+        ),
         # 列出文件
         re.compile(r"(?:列出|显示|查看).{0,15}(?:文件|目录|文件夹|文件列表)", re.I),
         re.compile(r"(?:list|ls|dir|tree).{0,15}(?:file|dir|folder)", re.I),
@@ -2667,10 +2806,18 @@ class REPL:
         re.compile(r"(?:创建|新建|建|mkdir).{0,10}(?:目录|文件夹|folder|dir)", re.I),
         re.compile(r"(?:create|make|mkdir).{0,10}(?:dir|folder|directory)", re.I),
         # 通用编程任务（容易涉及文件操作）
-        re.compile(r"(?:帮我|请|给).{0,5}(?:写|做|创建|实现|开发|搭|建).{0,20}(?:一个|个|项目|工程|脚本|程序|代码)", re.I),
-        re.compile(r"(?:help\s+me|please).{0,10}(?:write|create|build|implement|develop|make).{0,20}(?:a|an|the|project|script|app|code)", re.I),
+        re.compile(
+            r"(?:帮我|请|给).{0,5}(?:写|做|创建|实现|开发|搭|建).{0,20}(?:一个|个|项目|工程|脚本|程序|代码)",
+            re.I,
+        ),
+        re.compile(
+            r"(?:help\s+me|please).{0,10}(?:write|create|build|implement|develop|make).{0,20}(?:a|an|the|project|script|app|code)",
+            re.I,
+        ),
         # 安装/包管理
-        re.compile(r"(?:安装|install).{0,15}(?:包|库|依赖|package|pip|npm|yarn|cargo)", re.I),
+        re.compile(
+            r"(?:安装|install).{0,15}(?:包|库|依赖|package|pip|npm|yarn|cargo)", re.I
+        ),
     ]
 
     @classmethod
@@ -2689,7 +2836,7 @@ class REPL:
     def _has_mcp_tools(self) -> bool:
         """检查是否有 MCP 服务器可用（含已连接和惰性）。"""
         try:
-            registry = getattr(self, '_mcp_registry', None)
+            registry = getattr(self, "_mcp_registry", None)
             if registry is None:
                 return False
             return bool(registry.clients) or registry.has_pending_servers()
@@ -2704,7 +2851,7 @@ class REPL:
 
         LLM 需要知道有哪些 MCP 工具可用，才能正确调用 mcp_call。
         """
-        registry = getattr(self, '_mcp_registry', None)
+        registry = getattr(self, "_mcp_registry", None)
         if not registry:
             return ""
 
@@ -2714,7 +2861,11 @@ class REPL:
         if registry.tool_map:
             tools_by_server: dict[str, list[tuple[str, str]]] = {}
             for full_name, (server_name, tool) in registry.tool_map.items():
-                desc = tool.get("description", "")[:80] if isinstance(tool, dict) else str(tool)[:80]
+                desc = (
+                    tool.get("description", "")[:80]
+                    if isinstance(tool, dict)
+                    else str(tool)[:80]
+                )
                 tools_by_server.setdefault(server_name, []).append((full_name, desc))
 
             parts.append("当前可用的 MCP 工具：")
@@ -2728,7 +2879,9 @@ class REPL:
         if pending:
             parts.append("\n可用的 MCP 服务器（首次调用时自动连接）：")
             for name in sorted(pending):
-                parts.append(f"  - {name}:* — 使用 mcp_call tool_name=\"{name}:<工具名>\" 调用")
+                parts.append(
+                    f'  - {name}:* — 使用 mcp_call tool_name="{name}:<工具名>" 调用'
+                )
 
         return "\n".join(parts) if len(parts) > 1 else ""
 
@@ -2744,7 +2897,7 @@ class REPL:
         if not servers:
             return
 
-        if not hasattr(self, '_mcp_registry') or self._mcp_registry is None:
+        if not hasattr(self, "_mcp_registry") or self._mcp_registry is None:
             self._mcp_registry = MCPRegistry()
             self.agent_context.set("_mcp_registry", self._mcp_registry)
 
@@ -2761,7 +2914,8 @@ class REPL:
                         url=str(s["url"]),
                         headers=(
                             {str(k): str(v) for k, v in headers.items()}
-                            if isinstance(headers, dict) else None
+                            if isinstance(headers, dict)
+                            else None
                         ),
                     )
                 else:
@@ -2775,7 +2929,8 @@ class REPL:
                             args=args,
                             env=(
                                 {str(k): str(v) for k, v in env.items()}
-                                if isinstance(env, dict) else None
+                                if isinstance(env, dict)
+                                else None
                             ),
                         )
                     else:
@@ -2795,7 +2950,7 @@ class REPL:
         在 LLM 决定使用 mcp_call 时调用，或用户执行 /mcp tools 时调用。
         连接完成后更新 _mcp_tools_list 以供后续引擎注入。
         """
-        registry = getattr(self, '_mcp_registry', None)
+        registry = getattr(self, "_mcp_registry", None)
         if not registry or not registry.has_pending_servers():
             return
 
@@ -2803,27 +2958,62 @@ class REPL:
         try:
             registry.discover_tools()
             total = sum(len(c.tools) for c in registry.clients.values())
-            console.print(f"[dim] 就绪（{len(registry.clients)} 个服务器，{total} 个工具）[/dim]")
+            console.print(
+                f"[dim] 就绪（{len(registry.clients)} 个服务器，{total} 个工具）[/dim]"
+            )
         except Exception as e:
             console.print(f"[dim] 部分失败: {e}[/dim]")
 
     _FILE_CLAIM_KEYWORDS: list[str] = [
-        "已创建", "已经创建", "已生成", "已经生成", "已写入", "已经写入",
-        "已保存", "已经保存", "已新建", "已经新建", "已建立", "已经建立",
-        "创建了", "生成了", "写入了", "保存了", "新建了",
-        "created", "written", "saved", "generated",
-        "文件已", "目录已", "文件夹已",
+        "已创建",
+        "已经创建",
+        "已生成",
+        "已经生成",
+        "已写入",
+        "已经写入",
+        "已保存",
+        "已经保存",
+        "已新建",
+        "已经新建",
+        "已建立",
+        "已经建立",
+        "创建了",
+        "生成了",
+        "写入了",
+        "保存了",
+        "新建了",
+        "created",
+        "written",
+        "saved",
+        "generated",
+        "文件已",
+        "目录已",
+        "文件夹已",
     ]
 
     # LLM 拒绝性回复的关键词 — 表示它不知道怎么做，应该切换到 ReAct
     _DENIAL_KEYWORDS: list[str] = [
-        "无法直接", "无法获取", "无法查询", "无法访问", "无法提供",
-        "不能直接", "不能获取", "不能查询", "不能访问",
-        "没有连接", "没有接入", "没有访问",
-        "不具备", "不支持直接",
-        "无法实时", "无法获取实时",
-        "I cannot", "I can't", "I'm unable",
-        "I don't have access", "I'm not able",
+        "无法直接",
+        "无法获取",
+        "无法查询",
+        "无法访问",
+        "无法提供",
+        "不能直接",
+        "不能获取",
+        "不能查询",
+        "不能访问",
+        "没有连接",
+        "没有接入",
+        "没有访问",
+        "不具备",
+        "不支持直接",
+        "无法实时",
+        "无法获取实时",
+        "I cannot",
+        "I can't",
+        "I'm unable",
+        "I don't have access",
+        "I'm not able",
     ]
 
     @classmethod
@@ -2838,6 +3028,7 @@ class REPL:
         if not text or len(text) < 20:
             return False
         import re as _re
+
         # JSON 格式
         patterns = [
             r'"tool"\s*:\s*"(?:list_files|read_file|write_file|command|web_fetch|docs_fetch|git|search_files|edit_file|clone_repo|github_fetch)"',
@@ -2849,16 +3040,18 @@ class REPL:
             if _re.search(pattern, text, _re.IGNORECASE):
                 return True
         # v0.7.0: XML 格式（DeepSeek 旧版模型）
-        if _re.search(r'<uses_legacy_tools>|<tool_calls>|<tool_call\s+name=', text, _re.IGNORECASE):
+        if _re.search(
+            r"<uses_legacy_tools>|<tool_calls>|<tool_call\s+name=", text, _re.IGNORECASE
+        ):
             return True
         # DeepSeek V4 may serialize tool calls into the content field using
         # full-width bars instead of returning OpenAI ``message.tool_calls``.
         normalized = text.replace("｜", "|")
         has_dsml_block = _re.search(
-            r'<\|\|DSML\|\|tool_calls\b', normalized, _re.IGNORECASE
+            r"<\|\|DSML\|\|tool_calls\b", normalized, _re.IGNORECASE
         )
         has_dsml_invoke = _re.search(
-            r'<\|\|DSML\|\|invoke\s+name=', normalized, _re.IGNORECASE
+            r"<\|\|DSML\|\|invoke\s+name=", normalized, _re.IGNORECASE
         )
         if has_dsml_block and has_dsml_invoke:
             return True
@@ -2920,14 +3113,13 @@ class REPL:
                 self._pending_memory_use_ids = [
                     record.id for record in relevant if f"id={record.id}" in memory_text
                 ]
-                logger.debug(
-                    f"注入 {len(self._pending_memory_use_ids)} 条 v2 相关记忆"
-                )
+                logger.debug(f"注入 {len(self._pending_memory_use_ids)} 条 v2 相关记忆")
         except Exception as exc:
             logger.debug(f"v2 记忆检索失败: {exc}")
 
         try:
             from xenon.repl.memory import MemoryStore
+
             store = MemoryStore()
             relevant = store.get_relevant(user_input, limit=3)
             if relevant:
@@ -2957,7 +3149,7 @@ class REPL:
         answer = next(
             (
                 str(turn.content).strip()
-                for turn in reversed(history[last_user + 1:])
+                for turn in reversed(history[last_user + 1 :])
                 if turn.role == "assistant"
             ),
             "",
@@ -3013,17 +3205,20 @@ class REPL:
         if proposal is None:
             return False
         if not proposal.content:
-            console.print("[error]❌ 未写入记忆：当前会话中没有可引用的上一条内容[/error]")
+            console.print(
+                "[error]❌ 未写入记忆：当前会话中没有可引用的上一条内容[/error]"
+            )
             return True
-        if (
-            not self._has_active_project()
-            and proposal.scope.value.startswith("project-")
+        if not self._has_active_project() and proposal.scope.value.startswith(
+            "project-"
         ):
-            explicitly_project_scoped = bool(re.search(
-                r"(?:项目本地|项目共享|仓库共享|团队记忆|project[- ](?:local|shared))",
-                user_input,
-                re.IGNORECASE,
-            ))
+            explicitly_project_scoped = bool(
+                re.search(
+                    r"(?:项目本地|项目共享|仓库共享|团队记忆|project[- ](?:local|shared))",
+                    user_input,
+                    re.IGNORECASE,
+                )
+            )
             if explicitly_project_scoped:
                 console.print(
                     "[error]❌ 未写入记忆：当前未检测到项目；"
@@ -3033,9 +3228,7 @@ class REPL:
             from xenon.memory import MemoryScope
 
             proposal.scope = MemoryScope.USER
-            console.print(
-                "[dim]· 当前为无项目模式，默认写入用户全局记忆[/dim]"
-            )
+            console.print("[dim]· 当前为无项目模式，默认写入用户全局记忆[/dim]")
         try:
             receipt = self._get_memory_service().remember(
                 proposal.content,
@@ -3074,9 +3267,8 @@ class REPL:
             proposal = self._get_memory_detector().propose(user_input)
             if proposal is None:
                 return
-            if (
-                not self._has_active_project()
-                and proposal.scope.value.startswith("project-")
+            if not self._has_active_project() and proposal.scope.value.startswith(
+                "project-"
             ):
                 from xenon.memory import MemoryScope
 
@@ -3104,7 +3296,9 @@ class REPL:
                     console.print("[dim]· 已忽略，本轮没有写入记忆[/dim]")
                     return
                 if choice == "e":
-                    edited = Prompt.ask("编辑记忆内容", default=proposal.content).strip()
+                    edited = Prompt.ask(
+                        "编辑记忆内容", default=proposal.content
+                    ).strip()
                     if not edited:
                         console.print("[dim]· 内容为空，已取消[/dim]")
                         return
@@ -3126,9 +3320,8 @@ class REPL:
 
                     proposal.scope = MemoryScope.SESSION
 
-            if (
-                not self._has_active_project()
-                and proposal.scope.value.startswith("project-")
+            if not self._has_active_project() and proposal.scope.value.startswith(
+                "project-"
             ):
                 console.print(
                     "[error]❌ 当前未检测到项目，不能写入项目记忆；"
@@ -3170,7 +3363,11 @@ class REPL:
             "选项",
             "s 保存 · e 编辑 · u 全局 · l 项目本地 · h 项目共享 · t 会话 · n 忽略",
         )
-        console.print(Panel(table, title="🧠 Xenon 发现一条可能值得记住的信息", border_style="cyan"))
+        console.print(
+            Panel(
+                table, title="🧠 Xenon 发现一条可能值得记住的信息", border_style="cyan"
+            )
+        )
 
     @staticmethod
     def _render_memory_receipt(receipt) -> None:
@@ -3195,7 +3392,9 @@ class REPL:
             )
         if receipt.warning:
             lines.append(f"提示: {receipt.warning}")
-        console.print(Panel(Text("\n".join(lines)), title="🧠 记忆回执", border_style="green"))
+        console.print(
+            Panel(Text("\n".join(lines)), title="🧠 记忆回执", border_style="green")
+        )
 
     def _load_custom_commands(self) -> None:
         """加载自定义快捷指令和技能，动态注册为命令。"""
@@ -3204,14 +3403,18 @@ class REPL:
         # 加载快捷指令
         try:
             from xenon.repl.shortcut_manager import ShortcutManager
+
             sm = ShortcutManager()
             for sc in sm.list_all():
                 cmd_name = f"/{sc.name}"
                 if cmd_name not in _HANDLERS:
+
                     def make_shortcut_handler(sc_name):
                         def handler(*, args: str, **kwargs: Any) -> str:
                             return sm.execute(sc_name, args)
+
                         return handler
+
                     _HANDLERS[cmd_name] = make_shortcut_handler(sc.name)
                     register_command(cmd_name, f"[快捷] {sc.description}", cmd_name)
             if sm.list_all():
@@ -3223,14 +3426,19 @@ class REPL:
         try:
             from xenon.repl.commands import _execute_installed_skill
             from xenon.repl.skill_manager import SkillManager
+
             skm = SkillManager()
             for sk in skm.list_all():
                 cmd_name = f"/{sk.name}"
                 if cmd_name not in _HANDLERS:
+
                     def make_skill_handler(sk_name):
                         def handler(
-                            *, args: str, registry: ModelRegistry,
-                            session_state=None, **kwargs: Any,
+                            *,
+                            args: str,
+                            registry: ModelRegistry,
+                            session_state=None,
+                            **kwargs: Any,
                         ) -> str:
                             return _execute_installed_skill(
                                 skm,
@@ -3239,7 +3447,9 @@ class REPL:
                                 registry=registry,
                                 session_state=session_state,
                             )
+
                         return handler
+
                     _HANDLERS[cmd_name] = make_skill_handler(sk.name)
                     register_command(cmd_name, f"[技能] {sk.description}", cmd_name)
             if skm.list_all():
@@ -3260,18 +3470,18 @@ class REPL:
 
 # 疑问结构（通用语言特征，不依赖领域关键词）
 _RE_QUESTION_STRUCTURE = re.compile(
-    r"[吗呢吧啊][？?]?$"           # 句末疑问语气词
-    r"|[？?]$"                      # 问号结尾
+    r"[吗呢吧啊][？?]?$"  # 句末疑问语气词
+    r"|[？?]$"  # 问号结尾
     r"|有没有|会不会|能不能|可不可以"  # 正反问结构
-    r"|怎么(?:走|去|办|样|回事)"    # 疑问代词 + 动作
-    r"|在哪里|在哪|什么时候|几点|多少" # 疑问短语
-    r"|what|when|where|how|which|who", # 英文疑问词
+    r"|怎么(?:走|去|办|样|回事)"  # 疑问代词 + 动作
+    r"|在哪里|在哪|什么时候|几点|多少"  # 疑问短语
+    r"|what|when|where|how|which|who",  # 英文疑问词
     re.IGNORECASE,
 )
 _RE_QUERY_VERB = re.compile(
     r"(?:帮|请|给).{0,3}(?:我)?(?:查|搜|找|查询|搜索|查找|看看|了解)"  # 委托查询
-    r"|^(?:查|搜|找|查询|搜索|查找|看看)"                              # 句首查询动词
-    r"|(?:search|find|look\s*up|check|query)\s",                       # 英文查询
+    r"|^(?:查|搜|找|查询|搜索|查找|看看)"  # 句首查询动词
+    r"|(?:search|find|look\s*up|check|query)\s",  # 英文查询
     re.IGNORECASE,
 )
 _RE_TIME_SENSITIVE = re.compile(
@@ -3292,6 +3502,7 @@ _RE_CODE_CONTEXT = re.compile(
 # ── Method assignments from extracted input module ──
 REPL._read_input_windows = _read_input_windows
 REPL._read_input_unix = _read_input_unix
+
 
 def _looks_like_external_query(text: str) -> bool:
     """通用判断：输入是否具有"外部信息查询"特征。

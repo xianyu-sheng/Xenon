@@ -129,8 +129,11 @@ class TestRunTask:
         fake_engine = MagicMock()
         fake_engine.run.side_effect = lambda *a, **k: (order.append("run"), "OK")[1]
 
-        with patch("xenon._create_engine", return_value=fake_engine), patch(
-            "xenon._bind_workspace", side_effect=lambda e, w: order.append("bind")
+        with (
+            patch("xenon._create_engine", return_value=fake_engine),
+            patch(
+                "xenon._bind_workspace", side_effect=lambda e, w: order.append("bind")
+            ),
         ):
             result = xenon.run_task(
                 "task", workspace=str(tmp_path), model_priority=["x/y"]
@@ -149,9 +152,7 @@ class TestRunTask:
 
     def test_run_task_nonexistent_workspace_raises(self):
         with pytest.raises(ValueError, match="not a directory"):
-            xenon.run_task(
-                "task", workspace="/nope/nope/nope", model_priority=["x/y"]
-            )
+            xenon.run_task("task", workspace="/nope/nope/nope", model_priority=["x/y"])
 
     def test_run_task_unknown_engine_raises(self, tmp_path):
         with pytest.raises(KeyError, match="未注册的引擎"):
@@ -174,8 +175,9 @@ class TestRunTask:
         fake_engine = MagicMock()
         fake_engine.run.return_value = "done"
 
-        with patch("xenon._create_engine") as mock_create, patch(
-            "xenon._bind_workspace"
+        with (
+            patch("xenon._create_engine") as mock_create,
+            patch("xenon._bind_workspace"),
         ):
             xenon.run_task("task", workspace=str(tmp_path), model_priority=["x/y"])
             # 检查 create_engine 是否被调用时带了 SilentCallback

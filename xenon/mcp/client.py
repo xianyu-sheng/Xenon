@@ -39,16 +39,26 @@ class MCPClient:
         self._initialized = False
 
     @classmethod
-    def from_command(cls, command: str, args: list[str] | None = None,
-                     env: dict[str, str] | None = None, name: str = "xenon",
-                     request_timeout: float = 30.0) -> MCPClient:
+    def from_command(
+        cls,
+        command: str,
+        args: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        name: str = "xenon",
+        request_timeout: float = 30.0,
+    ) -> MCPClient:
         """从命令行创建 stdio 客户端。"""
         transport = StdioTransport(command, args, env)
         return cls(transport, name, request_timeout=request_timeout)
 
     @classmethod
-    def from_url(cls, url: str, headers: dict[str, str] | None = None,
-                 name: str = "xenon", request_timeout: float = 30.0) -> MCPClient:
+    def from_url(
+        cls,
+        url: str,
+        headers: dict[str, str] | None = None,
+        name: str = "xenon",
+        request_timeout: float = 30.0,
+    ) -> MCPClient:
         """从 URL 创建 SSE 客户端。"""
         transport = SSETransport(url, headers, timeout=request_timeout)
         return cls(transport, name, request_timeout=request_timeout)
@@ -69,14 +79,17 @@ class MCPClient:
 
     def initialize(self) -> dict[str, Any]:
         """初始化 MCP 连接。"""
-        result = self._request("initialize", {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {
-                "name": self.name,
-                "version": __version__,
+        result = self._request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": self.name,
+                    "version": __version__,
+                },
             },
-        })
+        )
 
         if "error" in result:
             raise RuntimeError(f"MCP 初始化失败: {result['error']}")
@@ -85,10 +98,12 @@ class MCPClient:
         self._initialized = True
 
         # 发送 initialized 通知
-        self.transport.send({
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized",
-        })
+        self.transport.send(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+            }
+        )
 
         logger.info(f"MCP 服务器已连接: {self.server_info.get('name', 'unknown')}")
         return result.get("result", {})
@@ -105,7 +120,9 @@ class MCPClient:
         self.tools = result.get("result", {}).get("tools", [])
         return self.tools
 
-    def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    def call_tool(
+        self, name: str, arguments: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """调用服务器工具。"""
         if not self._initialized:
             self.initialize()

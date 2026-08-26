@@ -1,4 +1,5 @@
 """v0.6.1: 子 Agent 系统 P0/P1/P2 测试。"""
+
 from unittest.mock import MagicMock, patch
 import unittest.mock
 from xenon.engine.react_engine import ReActEngine, BUILTIN_TOOLS
@@ -58,7 +59,9 @@ class TestSubAgentSystem:
         for etype, cls_name in expected.items():
             sub = eng._build_sub_engine(etype, f"t-{etype}")
             assert not isinstance(sub, str), f"{etype} 构建失败: {sub}"
-            assert cls_name in type(sub).__name__, f"{etype} 期望 {cls_name}, 实际 {type(sub).__name__}"
+            assert cls_name in type(sub).__name__, (
+                f"{etype} 期望 {cls_name}, 实际 {type(sub).__name__}"
+            )
 
     def test_invalid_engine_rejected_with_all_options(self):
         """不支持的引擎类型列举所有 7 种可用选项。"""
@@ -111,10 +114,14 @@ class TestSubAgentSystem:
         eng = self._make_engine()
         ctx = AgentContext()
 
-        with patch.object(ReActEngine, 'run', return_value="子任务完成"):
+        with patch.object(ReActEngine, "run", return_value="子任务完成"):
             result = eng._spawn_all_subagents(
-                [{"task": "task1", "engine": "react"}, {"task": "task2", "engine": "react"}],
-                ctx, None,
+                [
+                    {"task": "task1", "engine": "react"},
+                    {"task": "task2", "engine": "react"},
+                ],
+                ctx,
+                None,
             )
 
         assert "并行完成" in result
@@ -142,7 +149,9 @@ class TestSubAgentSystem:
         eng = self._make_engine()
         sub = MagicMock()
         sub._last_tracker = None
-        result = eng._format_sub_result("id-1", "测试任务", "react", "任务完成", sub, None)
+        result = eng._format_sub_result(
+            "id-1", "测试任务", "react", "任务完成", sub, None
+        )
         assert "✅" in result
         assert "id-1" in result
         assert "react" in result
@@ -152,7 +161,9 @@ class TestSubAgentSystem:
         eng = self._make_engine()
         sub = MagicMock()
         sub._last_tracker = None
-        result = eng._format_sub_result("id-1", "测试", "react", "执行超时（30s）", sub, None)
+        result = eng._format_sub_result(
+            "id-1", "测试", "react", "执行超时（30s）", sub, None
+        )
         assert "⏱️" in result or "超时" in result
 
     def test_format_sub_result_preserves_long_answer(self):
@@ -180,29 +191,37 @@ class TestSubAgentSystem:
         """action_input 中的 engine 参数被正确读取。"""
         eng = self._make_engine()
 
-        with patch.object(eng, '_build_sub_engine', return_value=MagicMock()):
-            with patch.object(eng, '_format_sub_result', return_value="✅"):
-                with patch.object(ReActEngine, 'run', return_value="ok"):
+        with patch.object(eng, "_build_sub_engine", return_value=MagicMock()):
+            with patch.object(eng, "_format_sub_result", return_value="✅"):
+                with patch.object(ReActEngine, "run", return_value="ok"):
                     ctx = AgentContext()
                     eng._spawn_subagent(
-                        {"task": "test", "engine": "plan_execute"}, ctx, None,
+                        {"task": "test", "engine": "plan_execute"},
+                        ctx,
+                        None,
                     )
-                    eng._build_sub_engine.assert_called_once_with("plan_execute", unittest.mock.ANY)
+                    eng._build_sub_engine.assert_called_once_with(
+                        "plan_execute", unittest.mock.ANY
+                    )
                     # 注意 'unittest' 需要在 pytest 环境也能工作
 
     def test_spawn_with_timeout(self):
         """action_input 中的 timeout 参数被正确读取。"""
         eng = self._make_engine(subagent_timeout=None)
 
-        with patch('concurrent.futures.ThreadPoolExecutor') as mock_exec:
+        with patch("concurrent.futures.ThreadPoolExecutor") as mock_exec:
             mock_future = MagicMock()
             mock_future.result.return_value = "ok"
-            mock_exec.return_value.__enter__.return_value.submit.return_value = mock_future
+            mock_exec.return_value.__enter__.return_value.submit.return_value = (
+                mock_future
+            )
 
-            with patch.object(eng, '_build_sub_engine', return_value=MagicMock()):
+            with patch.object(eng, "_build_sub_engine", return_value=MagicMock()):
                 ctx = AgentContext()
                 eng._spawn_subagent(
-                    {"task": "test", "timeout": 10}, ctx, None,
+                    {"task": "test", "timeout": 10},
+                    ctx,
+                    None,
                 )
 
             # 验证 ThreadPoolExecutor 被调用

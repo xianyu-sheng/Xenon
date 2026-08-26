@@ -42,7 +42,9 @@ def test_prompt_keeps_rule_with_input_and_status_at_screen_bottom():
     root = repl._pt_session.app.layout.container
     main = root.children[0]
     main_stack = main.alternative_content.content
-    assert main_stack.children[-1].content.text == repl.status_bar.get_input_rule_fragments
+    assert (
+        main_stack.children[-1].content.text == repl.status_bar.get_input_rule_fragments
+    )
 
     buffer_window = main_stack.children[1].content
     assert buffer_window.height() == 1

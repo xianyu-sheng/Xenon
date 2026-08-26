@@ -21,7 +21,9 @@ class ToolRuntime:
     def __post_init__(self) -> None:
         object.__setattr__(self, "workspace_root", self.workspace_root.resolve())
         if not self.workspace_root.is_dir():
-            raise ValueError(f"workspace_root is not a directory: {self.workspace_root}")
+            raise ValueError(
+                f"workspace_root is not a directory: {self.workspace_root}"
+            )
         if any(not isinstance(part, str) or not part for part in self.command_prefix):
             raise ValueError("command_prefix must contain non-empty strings")
 

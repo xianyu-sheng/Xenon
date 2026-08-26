@@ -60,10 +60,7 @@ class TestRecordEngineError:
         ctx = _Recorder(add_fails=True)
         with caplog.at_level(logging.WARNING):
             _repl(ctx)._record_engine_error("[错误] boom", "m1")
-        assert any(
-            "回退清理孤立 user" in r.getMessage()
-            for r in caplog.records
-        )
+        assert any("回退清理孤立 user" in r.getMessage() for r in caplog.records)
 
     def test_logs_error_when_both_steps_fail(self, caplog):
         ctx = _Recorder(add_fails=True, trim_fails=True)
@@ -90,11 +87,10 @@ class TestNoSilentSwallows:
         import pathlib
         import re
 
-        src = pathlib.Path(
-            REPL.__module__.replace(".", "/") + ".py"
-        )
+        src = pathlib.Path(REPL.__module__.replace(".", "/") + ".py")
         if not src.exists():  # pragma: no cover - 包安装布局兜底
             import xenon.repl.repl as mod
+
             src = pathlib.Path(mod.__file__)
         lines = src.read_text(encoding="utf-8").splitlines()
         offenders = []
@@ -155,8 +151,7 @@ class TestNoDuplicateMethodDefinitions:
                 duplicates[node.name] = dupes
 
         assert not duplicates, (
-            f"{mod.__file__} 中存在重复方法定义（后者覆盖前者，静默生效）: "
-            f"{duplicates}"
+            f"{mod.__file__} 中存在重复方法定义（后者覆盖前者，静默生效）: {duplicates}"
         )
 
 
@@ -207,9 +202,7 @@ class TestReadOnlyParalysisDetection:
     def _engine(self, **kw):
         from xenon.engine.react_engine import ReActEngine
 
-        return ReActEngine(
-            ["provider/model"], max_iterations=12, native_fc=False, **kw
-        )
+        return ReActEngine(["provider/model"], max_iterations=12, native_fc=False, **kw)
 
     def test_injects_write_prompt_after_4_read_only_rounds(self, monkeypatch):
         engine = self._engine()

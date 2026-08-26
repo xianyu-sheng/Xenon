@@ -86,7 +86,9 @@ class TestDetectBoundary:
         proj = home / "code" / "myproj"
         proj.mkdir(parents=True)
 
-        monkeypatch.setattr(os.path, "expanduser", lambda p: str(home) if p == "~" else p)
+        monkeypatch.setattr(
+            os.path, "expanduser", lambda p: str(home) if p == "~" else p
+        )
 
         pc = ProjectContext()
         found = pc.detect(proj)
@@ -125,7 +127,9 @@ class TestDetectBoundary:
         proj.mkdir(parents=True)
         (proj / "pyproject.toml").write_text("[project]\nname='x'")
 
-        monkeypatch.setattr(os.path, "expanduser", lambda p: str(home) if p == "~" else p)
+        monkeypatch.setattr(
+            os.path, "expanduser", lambda p: str(home) if p == "~" else p
+        )
 
         pc = ProjectContext()
         found = pc.detect(proj)
@@ -173,6 +177,7 @@ class TestProjectContextKeyFileMtime:
         pc.detect(tmp_path)
 
         import pathlib
+
         calls = {"n": 0}
         orig = pathlib.Path.read_text
 
@@ -311,5 +316,7 @@ class TestCodeIndexCache:
         assert not idx2.find_definition("f")
         assert idx2.find_definition("g")
         # 缓存中也应清理
-        data = json.loads(next(cache_dir.glob("codeindex-*.json")).read_text(encoding="utf-8"))
+        data = json.loads(
+            next(cache_dir.glob("codeindex-*.json")).read_text(encoding="utf-8")
+        )
         assert not any(p.endswith("a.py") for p in data["files"])

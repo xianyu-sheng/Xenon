@@ -52,12 +52,16 @@ class TestReActDeliveryRemediation:
                 # 先写 a.py（有工具执行，避免触发 no_tool_streak）
                 return (
                     '{"thought": "先写 a", "action": "write_file", '
-                    '"action_input": {"file_path": "' + str(tmp_path / "a.py") + '", "content": "a = 1"}}'
+                    '"action_input": {"file_path": "'
+                    + str(tmp_path / "a.py")
+                    + '", "content": "a = 1"}}'
                 )
             if calls["n"] == 2:
                 # 声称创建了 x.py，但从未写过它 → 交付闸门应拦截
                 return (
-                    '{"thought": "完成了", "final_answer": "已创建 ' + str(target) + '"}'
+                    '{"thought": "完成了", "final_answer": "已创建 '
+                    + str(target)
+                    + '"}'
                 )
             # 第三轮起：补救提示应已注入
             joined = str(messages)
@@ -66,13 +70,16 @@ class TestReActDeliveryRemediation:
             # 补救后真正写 x.py
             return (
                 '{"thought": "落盘", "action": "write_file", '
-                '"action_input": {"file_path": "' + str(target) + '", "content": "x = 1"}}'
+                '"action_input": {"file_path": "'
+                + str(target)
+                + '", "content": "x = 1"}}'
             )
 
         monkeypatch.setattr(engine, "_call_llm_for_phase", fake_call)
 
         engine.run(
-            f"创建 {target}", context=AgentContext(),
+            f"创建 {target}",
+            context=AgentContext(),
         )
         assert remediated["seen"], "补救提示必须注入补救轮"
         assert "x = 1" in open(target).read()
@@ -92,14 +99,17 @@ class TestReActDeliveryRemediation:
             if calls["n"] == 1:
                 return (
                     '{"thought": "先写 a", "action": "write_file", '
-                    '"action_input": {"file_path": "' + str(tmp_path / "a.py") + '", "content": "a = 1"}}'
+                    '"action_input": {"file_path": "'
+                    + str(tmp_path / "a.py")
+                    + '", "content": "a = 1"}}'
                 )
             # 之后一直声称完成但从不写 x.py（闸门永远拦截）
             return '{"thought": "t", "final_answer": "完成了"}'
 
         monkeypatch.setattr(engine, "_call_llm_for_phase", fake_call)
         monkeypatch.setattr(
-            engine, "delivery_gate_verdict",
+            engine,
+            "delivery_gate_verdict",
             lambda **k: type("V", (), {"reason": "声称创建但无证据"})(),
         )
 
@@ -123,9 +133,13 @@ class TestVerificationLoop:
         plan = (
             '{"analysis": "计划", "steps": ['
             '{"id": 1, "task": "修改代码", "tool": "write_file", '
-            '"params": {"file_path": "' + str(tmp_path / "x.py") + '", "content": "def f(): return 1"}}, '
+            '"params": {"file_path": "'
+            + str(tmp_path / "x.py")
+            + '", "content": "def f(): return 1"}}, '
             '{"id": 2, "task": "运行测试", "tool": "command", '
-            '"params": {"command": "python -m pytest ' + str(tmp_path / "test_x.py") + '"}}]}'
+            '"params": {"command": "python -m pytest '
+            + str(tmp_path / "test_x.py")
+            + '"}}]}'
         )
         repair_seen = {"called": False}
 
@@ -144,13 +158,21 @@ class TestVerificationLoop:
         def fake_cmd(tool, params, ctx, tracker, **kwargs):
             if tool == "command":
                 tracker.record(
-                    "command", params, False, "assert 失败: expected 2 got 1",
+                    "command",
+                    params,
+                    False,
+                    "assert 失败: expected 2 got 1",
                     error="FAILED test_x.py::test_f",
                 )
                 return "❌ 测试失败: assert 失败"
             # write_file 真实写
             from xenon.nodes.tool_executor import ToolExecutor
-            return ToolExecutor().execute(tool, params, ctx, tracker=tracker).format_observation()
+
+            return (
+                ToolExecutor()
+                .execute(tool, params, ctx, tracker=tracker)
+                .format_observation()
+            )
 
         monkeypatch.setattr(engine, "_execute_step_with_tool", fake_cmd)
 
@@ -168,9 +190,13 @@ class TestVerificationLoop:
         plan = (
             '{"analysis": "计划", "steps": ['
             '{"id": 1, "task": "修改代码", "tool": "write_file", '
-            '"params": {"file_path": "' + str(tmp_path / "x.py") + '", "content": "x=1"}}, '
+            '"params": {"file_path": "'
+            + str(tmp_path / "x.py")
+            + '", "content": "x=1"}}, '
             '{"id": 2, "task": "运行测试", "tool": "command", '
-            '"params": {"command": "python -m pytest ' + str(tmp_path / "test_x.py") + '"}}]}'
+            '"params": {"command": "python -m pytest '
+            + str(tmp_path / "test_x.py")
+            + '"}}]}'
         )
         repair_seen = {"called": False}
 
@@ -190,7 +216,12 @@ class TestVerificationLoop:
                 tracker.record("command", params, True, "1 passed")
                 return "✅ 1 passed"
             from xenon.nodes.tool_executor import ToolExecutor
-            return ToolExecutor().execute(tool, params, ctx, tracker=tracker).format_observation()
+
+            return (
+                ToolExecutor()
+                .execute(tool, params, ctx, tracker=tracker)
+                .format_observation()
+            )
 
         monkeypatch.setattr(engine, "_execute_step_with_tool", fake_cmd)
 

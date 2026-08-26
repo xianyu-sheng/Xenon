@@ -1,4 +1,5 @@
 """Test strategy advice integration in combined engines."""
+
 from __future__ import annotations
 
 import json
@@ -15,15 +16,25 @@ from xenon.engine.context import AgentContext
 def test_plan_react_shows_strategy_tip(monkeypatch):
     """PlanReactEngine should display strategy tip for recognized tasks."""
     callback = SilentCallback()
-    engine = PlanReactEngine(["test/model"], callback=callback, max_steps=2, react_iterations=1)
+    engine = PlanReactEngine(
+        ["test/model"], callback=callback, max_steps=2, react_iterations=1
+    )
 
     def fake_plan(phase, messages, **kwargs):
-        return json.dumps({
-            "analysis": "test plan",
-            "steps": [
-                {"id": 1, "task": "read file", "tool": "read_file", "params": {"file_path": "test.py"}, "depends_on": []}
-            ]
-        })
+        return json.dumps(
+            {
+                "analysis": "test plan",
+                "steps": [
+                    {
+                        "id": 1,
+                        "task": "read file",
+                        "tool": "read_file",
+                        "params": {"file_path": "test.py"},
+                        "depends_on": [],
+                    }
+                ],
+            }
+        )
 
     def fake_react(messages, **kwargs):
         return json.dumps({"thought": "done", "final_answer": "ok"})
@@ -44,13 +55,12 @@ def test_plan_react_shows_strategy_tip(monkeypatch):
 def test_plan_react_chat_does_not_show_strategy(monkeypatch):
     """PlanReactEngine should not show strategy for chat-only tasks."""
     callback = SilentCallback()
-    engine = PlanReactEngine(["test/model"], callback=callback, max_steps=1, react_iterations=1)
+    engine = PlanReactEngine(
+        ["test/model"], callback=callback, max_steps=1, react_iterations=1
+    )
 
     def fake_plan(phase, messages, **kwargs):
-        return json.dumps({
-            "analysis": "chat response",
-            "steps": []
-        })
+        return json.dumps({"analysis": "chat response", "steps": []})
 
     monkeypatch.setattr(engine.planner, "_call_llm_for_phase", fake_plan)
 
@@ -68,7 +78,7 @@ def test_plan_reflection_shows_strategy_tip(monkeypatch):
         callback=callback,
         max_steps=1,
         review_rounds=1,
-        pass_threshold=5
+        pass_threshold=5,
     )
 
     def fake_plan(messages, **kwargs):
@@ -96,7 +106,7 @@ def test_react_reflection_shows_strategy_tip(monkeypatch):
         callback=callback,
         react_iterations=1,
         review_rounds=1,
-        pass_threshold=5
+        pass_threshold=5,
     )
 
     def fake_react(messages, **kwargs):
@@ -120,13 +130,25 @@ def test_react_reflection_shows_strategy_tip(monkeypatch):
 def test_combined_engine_respects_tip_deduplication(monkeypatch):
     """Combined engines should not emit duplicate tips for same context."""
     callback = SilentCallback()
-    engine = PlanReactEngine(["test/model"], callback=callback, max_steps=1, react_iterations=1)
+    engine = PlanReactEngine(
+        ["test/model"], callback=callback, max_steps=1, react_iterations=1
+    )
 
     def fake_plan(phase, messages, **kwargs):
-        return json.dumps({
-            "analysis": "test",
-            "steps": [{"id": 1, "task": "test", "tool": None, "params": {}, "depends_on": []}]
-        })
+        return json.dumps(
+            {
+                "analysis": "test",
+                "steps": [
+                    {
+                        "id": 1,
+                        "task": "test",
+                        "tool": None,
+                        "params": {},
+                        "depends_on": [],
+                    }
+                ],
+            }
+        )
 
     def fake_react(messages, **kwargs):
         return json.dumps({"thought": "done", "final_answer": "ok"})

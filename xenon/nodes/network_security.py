@@ -67,14 +67,16 @@ def resolve_host_ips(host: str) -> list[str]:
     return resolved
 
 
-SSRF_DOMAIN_ALLOWLIST: frozenset[str] = frozenset({
-    "wttr.in",
-    "weather.com.cn",
-    "api.github.com",
-    "raw.githubusercontent.com",
-    "httpbin.org",
-    "postman-echo.com",
-})
+SSRF_DOMAIN_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "wttr.in",
+        "weather.com.cn",
+        "api.github.com",
+        "raw.githubusercontent.com",
+        "httpbin.org",
+        "postman-echo.com",
+    }
+)
 
 
 def ssrf_check_url(url: str) -> tuple[bool, str]:

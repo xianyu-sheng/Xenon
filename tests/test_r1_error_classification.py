@@ -4,6 +4,7 @@
 - 429/5xx/网络/截断 = 瞬时，切下一个模型；
 - 全部失败 → on_error + RuntimeError。
 """
+
 import httpx
 import pytest
 
@@ -96,7 +97,10 @@ class TestTransientErrorsSwitchModel:
             return '{"final_answer":"ok"}'
 
         monkeypatch.setattr(base_mod, "chat_completion", fake)
-        assert eng._call_llm([{"role": "user", "content": "hi"}]) == '{"final_answer":"ok"}'
+        assert (
+            eng._call_llm([{"role": "user", "content": "hi"}])
+            == '{"final_answer":"ok"}'
+        )
 
     def test_network_error_switches_to_next(self, monkeypatch):
         eng, _ = _engine(["openai/a", "anthropic/b"])
@@ -107,7 +111,10 @@ class TestTransientErrorsSwitchModel:
             return '{"final_answer":"ok"}'
 
         monkeypatch.setattr(base_mod, "chat_completion", fake)
-        assert eng._call_llm([{"role": "user", "content": "hi"}]) == '{"final_answer":"ok"}'
+        assert (
+            eng._call_llm([{"role": "user", "content": "hi"}])
+            == '{"final_answer":"ok"}'
+        )
 
     def test_truncation_switches_to_next(self, monkeypatch):
         eng, _ = _engine(["openai/a", "anthropic/b"])
@@ -118,7 +125,10 @@ class TestTransientErrorsSwitchModel:
             return '{"final_answer":"ok"}'
 
         monkeypatch.setattr(base_mod, "chat_completion", fake)
-        assert eng._call_llm([{"role": "user", "content": "hi"}]) == '{"final_answer":"ok"}'
+        assert (
+            eng._call_llm([{"role": "user", "content": "hi"}])
+            == '{"final_answer":"ok"}'
+        )
 
 
 class TestAllModelsFail:

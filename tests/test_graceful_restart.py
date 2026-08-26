@@ -204,8 +204,18 @@ class TestGracefulRestartManager:
             "version": 1,
             "timestamp": time.time(),
             "history": [
-                {"role": "user", "content": "hello", "model_used": None, "metadata": {}},
-                {"role": "assistant", "content": "world", "model_used": "model1", "metadata": {}},
+                {
+                    "role": "user",
+                    "content": "hello",
+                    "model_used": None,
+                    "metadata": {},
+                },
+                {
+                    "role": "assistant",
+                    "content": "world",
+                    "model_used": "model1",
+                    "metadata": {},
+                },
             ],
             "working_memory": {"test": "data"},
             "working_directory": str(Path.cwd()),
@@ -299,12 +309,15 @@ class TestGracefulRestartManager:
 
     def test_reload_components(self, manager, mock_repl):
         """重新初始化组件。"""
-        with patch("xenon.repl.system_config.reload_config") as mock_reload, \
-             patch("xenon.repl.model_pool.ModelPool") as MockModelPool, \
-             patch("xenon.repl.auto_router.AutoRouter") as MockAutoRouter, \
-             patch("xenon.repl.terminal_activity.TerminalActivityIndicator") as MockTerminal, \
-             patch("xenon.tools.ClipboardMonitor") as MockClipboard:
-
+        with (
+            patch("xenon.repl.system_config.reload_config") as mock_reload,
+            patch("xenon.repl.model_pool.ModelPool") as MockModelPool,
+            patch("xenon.repl.auto_router.AutoRouter") as MockAutoRouter,
+            patch(
+                "xenon.repl.terminal_activity.TerminalActivityIndicator"
+            ) as MockTerminal,
+            patch("xenon.tools.ClipboardMonitor") as MockClipboard,
+        ):
             mock_reload.return_value = MagicMock()
             mock_pool = MagicMock()
             MockModelPool.return_value = mock_pool
@@ -331,12 +344,13 @@ class TestGracefulRestartManager:
 
     def test_perform_restart_success_with_session(self, manager, mock_repl, tmp_path):
         """执行重启：保存并恢复会话成功。"""
-        with patch.object(manager, "validate_config") as mock_validate, \
-             patch.object(manager, "save_session_state") as mock_save, \
-             patch.object(manager, "cleanup_resources") as mock_cleanup, \
-             patch.object(manager, "reload_components") as mock_reload, \
-             patch.object(manager, "restore_session_state") as mock_restore:
-
+        with (
+            patch.object(manager, "validate_config") as mock_validate,
+            patch.object(manager, "save_session_state") as mock_save,
+            patch.object(manager, "cleanup_resources") as mock_cleanup,
+            patch.object(manager, "reload_components") as mock_reload,
+            patch.object(manager, "restore_session_state") as mock_restore,
+        ):
             mock_validate.return_value = (True, "")
             session_file = tmp_path / "session.json"
             mock_save.return_value = session_file
@@ -353,10 +367,11 @@ class TestGracefulRestartManager:
 
     def test_perform_restart_success_without_session(self, manager, mock_repl):
         """执行重启：不保存会话，全新启动。"""
-        with patch.object(manager, "validate_config") as mock_validate, \
-             patch.object(manager, "cleanup_resources"), \
-             patch.object(manager, "reload_components"):
-
+        with (
+            patch.object(manager, "validate_config") as mock_validate,
+            patch.object(manager, "cleanup_resources"),
+            patch.object(manager, "reload_components"),
+        ):
             mock_validate.return_value = (True, "")
 
             outcome = manager.perform_restart(preserve_session=False)
@@ -368,9 +383,10 @@ class TestGracefulRestartManager:
 
     def test_perform_restart_save_session_fails(self, manager, mock_repl):
         """执行重启：会话保存失败，取消重启。"""
-        with patch.object(manager, "validate_config") as mock_validate, \
-             patch.object(manager, "save_session_state") as mock_save:
-
+        with (
+            patch.object(manager, "validate_config") as mock_validate,
+            patch.object(manager, "save_session_state") as mock_save,
+        ):
             mock_validate.return_value = (True, "")
             mock_save.return_value = None  # 保存失败
 
@@ -383,10 +399,11 @@ class TestGracefulRestartManager:
 
     def test_perform_restart_reload_fails(self, manager, mock_repl):
         """执行重启：组件初始化失败。"""
-        with patch.object(manager, "validate_config") as mock_validate, \
-             patch.object(manager, "cleanup_resources"), \
-             patch.object(manager, "reload_components") as mock_reload:
-
+        with (
+            patch.object(manager, "validate_config") as mock_validate,
+            patch.object(manager, "cleanup_resources"),
+            patch.object(manager, "reload_components") as mock_reload,
+        ):
             mock_validate.return_value = (True, "")
             mock_reload.side_effect = RuntimeError("初始化失败")
 

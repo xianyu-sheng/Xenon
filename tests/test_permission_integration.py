@@ -35,11 +35,13 @@ def test_default_gate_fails_closed_without_confirmation_callback():
 
 def test_permission_state_machine_tracks_approval_denial_and_cancel():
     gate = PermissionGate(PermissionMode.DEFAULT)
-    responses = iter([
-        PermissionDecision.ALLOW_ONCE,
-        PermissionDecision.DENY,
-        PermissionDecision.CANCEL,
-    ])
+    responses = iter(
+        [
+            PermissionDecision.ALLOW_ONCE,
+            PermissionDecision.DENY,
+            PermissionDecision.CANCEL,
+        ]
+    )
     gate.set_confirm_callback(lambda *_args: next(responses))
 
     assert gate.check("command", {"action": "echo once"}) == (True, "")
@@ -108,10 +110,12 @@ def test_react_stops_without_a_second_model_turn_after_cancel(monkeypatch):
         native_fc=False,
         permission_gate=gate,
     )
-    responses = iter([
-        '{"thought":"execute","action":"command","action_input":{"action":"echo hi"}}',
-        '{"final_answer":"this must not be requested"}',
-    ])
+    responses = iter(
+        [
+            '{"thought":"execute","action":"command","action_input":{"action":"echo hi"}}',
+            '{"final_answer":"this must not be requested"}',
+        ]
+    )
     calls = {"count": 0}
 
     def fake_llm(*_args, **_kwargs):
@@ -215,7 +219,9 @@ def test_dangerous_git_uses_git_command_and_requires_critical_confirmation(git_c
     seen = []
     gate = PermissionGate(PermissionMode.DEFAULT)
     gate.set_confirm_callback(
-        lambda tool, params, risk: (seen.append((tool, params, risk)) or (False, "denied"))
+        lambda tool, params, risk: (
+            seen.append((tool, params, risk)) or (False, "denied")
+        )
     )
 
     allowed, reason = gate.check("git", {"git_command": git_command})
@@ -258,7 +264,7 @@ def test_dynamic_tools_are_classified_as_sensitive(monkeypatch):
     seen_risks = []
     gate = PermissionGate(PermissionMode.DEFAULT)
     gate.set_confirm_callback(
-        lambda tool, params, risk: (seen_risks.append(risk) or (False, "denied"))
+        lambda tool, params, risk: seen_risks.append(risk) or (False, "denied")
     )
     result = ToolExecutor(permission_gate=gate).execute(
         "custom_side_effect", {}, AgentContext()

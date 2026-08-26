@@ -21,10 +21,10 @@ from typing import Any
 class PromptTemplate:
     """Prompt 模板。"""
 
-    intent: str             # 意图标识
+    intent: str  # 意图标识
     trigger_patterns: list[str]  # 触发词/正则
-    template: str           # 结构化模板
-    system_hint: str        # 对应的 system prompt 补充
+    template: str  # 结构化模板
+    system_hint: str  # 对应的 system prompt 补充
 
 
 # ── 意图识别规则 ──────────────────────────────────────────
@@ -52,7 +52,6 @@ TEMPLATES: list[PromptTemplate] = [
         ),
         system_hint="你是一个调试专家。请先分析错误根因，再给出修复方案和代码。",
     ),
-
     # 测试（在写代码之前，因为"帮我写测试"不应匹配写代码）
     PromptTemplate(
         intent="write_test",
@@ -72,7 +71,6 @@ TEMPLATES: list[PromptTemplate] = [
         ),
         system_hint="你是一个测试专家。请编写全面的单元测试，覆盖正常流程、边界情况和异常情况。",
     ),
-
     # 转换/迁移（在解释之前，因为"转成"不应匹配解释）
     PromptTemplate(
         intent="convert",
@@ -91,7 +89,6 @@ TEMPLATES: list[PromptTemplate] = [
         ),
         system_hint="你是一个代码迁移专家。请确保转换后的代码功能完全一致，并使用目标平台的最佳实践。",
     ),
-
     # 重构/优化（在解释之前）
     # v0.5.4: "清理"/"整理"/"clean"/"enhance" 是歧义词——"清理项目"可能是删除文件
     # 而非重构代码。拆分为两组：(1) 明确代码重构词 → 独立匹配；
@@ -120,7 +117,6 @@ TEMPLATES: list[PromptTemplate] = [
         ),
         system_hint="你是一个代码质量专家。请从可读性、性能、可维护性角度优化代码。",
     ),
-
     # 编写文档（P3-Q5 / §8.15.4：补 write_doc 意图。须排在 write_code 之前，
     # 否则「帮我写一份文档」「write a doc」会被 write_code 的宽泛 trigger 抢走。）
     PromptTemplate(
@@ -143,7 +139,6 @@ TEMPLATES: list[PromptTemplate] = [
         ),
         system_hint="你是一个技术写作专家。输出的文档结构清晰、示例可复现、面向目标读者。",
     ),
-
     # 写代码
     PromptTemplate(
         intent="write_code",
@@ -169,7 +164,6 @@ TEMPLATES: list[PromptTemplate] = [
             "除非用户明确要求，否则不要写入文件、不要执行命令。"
         ),
     ),
-
     # 设计/架构
     PromptTemplate(
         intent="design",
@@ -191,7 +185,6 @@ TEMPLATES: list[PromptTemplate] = [
         ),
         system_hint="你是一个系统架构师。请给出清晰、可落地的架构设计方案。",
     ),
-
     # 小说创作
     PromptTemplate(
         # This is a creative-writing intent routed through the general engines;
@@ -226,7 +219,6 @@ TEMPLATES: list[PromptTemplate] = [
         ),
         system_hint="你是一位资深小说创作助手。请运用专业的叙事技巧进行创作，注重展示而非叙述、角色驱动、感官沉浸。所有创作内容请保存到文件。",
     ),
-
     # 信息查询（天气、时间等需要工具的查询）
     PromptTemplate(
         intent="query",
@@ -258,7 +250,6 @@ TEMPLATES: list[PromptTemplate] = [
         ),
         system_hint="你是一个信息查询助手。请使用工具获取实时数据，给出准确的回答。",
     ),
-
     # 资料调研（与天气/票价等即时查询分离，默认严格只读）
     PromptTemplate(
         intent="research",
@@ -283,7 +274,6 @@ TEMPLATES: list[PromptTemplate] = [
             "不要通过克隆仓库或写文件完成信息查询。"
         ),
     ),
-
     # 解释代码（放最后，因为"代码"这个词太泛）
     PromptTemplate(
         intent="explain",
@@ -305,7 +295,6 @@ TEMPLATES: list[PromptTemplate] = [
         ),
         system_hint="你是一个技术文档专家。请用清晰、结构化的方式解释代码和技术概念。",
     ),
-
     # 闲聊/问候（P3-Q5 / §8.15.4：最低优先级，仅匹配纯问候/致谢，避免抢真实意图）
     PromptTemplate(
         intent="chat",
@@ -320,7 +309,6 @@ TEMPLATES: list[PromptTemplate] = [
         template="{task}",
         system_hint="你是一个友好的助手。对问候和致谢给出简短、自然的回应。",
     ),
-
 ]
 
 
@@ -376,7 +364,9 @@ def assess_quality(user_input: str) -> tuple[bool, str]:
         return True, "输入过短，补充细节有助于获得更好的回答"
 
     # 2. 已经结构化（包含 ## 标记或编号列表）— 不需要优化
-    if re.search(r"^##\s+", text, re.MULTILINE) or re.search(r"^\d+\.\s+", text, re.MULTILINE):
+    if re.search(r"^##\s+", text, re.MULTILINE) or re.search(
+        r"^\d+\.\s+", text, re.MULTILINE
+    ):
         return False, "已结构化"
 
     # 3. 长度 > 150 且有换行 — 大概率是详细描述，不需要优化
@@ -538,7 +528,10 @@ def optimize_messages_for_cache(
         if other_messages and other_messages[0]["role"] == "user":
             # 注入到首条 user 消息
             other_messages[0]["content"] = (
-                "[上下文信息]\n" + dynamic_text + "\n\n[任务]\n" + other_messages[0]["content"]
+                "[上下文信息]\n"
+                + dynamic_text
+                + "\n\n[任务]\n"
+                + other_messages[0]["content"]
             )
         else:
             # 插入为独立的 user 消息
@@ -554,13 +547,14 @@ def _is_dynamic_content(text: str) -> bool:
     system prompt 中的动态内容会破坏 prefix caching，应移至 user 消息。
     """
     import re
+
     dynamic_patterns = [
-        r'\d{4}[-/]\d{2}[-/]\d{2}',           # 日期
-        r'\d{2}:\d{2}:\d{2}',                   # 时间
-        r'(?:/|[A-Z]:\\)[^\s,;]+',             # 文件路径
-        r'\bcurrent (?:time|date|datetime)\b',
-        r'\b\$\{[^}]+\}',                       # ${VAR} 模板变量
-        r'\buser(?:name|_id|_name)\b',
+        r"\d{4}[-/]\d{2}[-/]\d{2}",  # 日期
+        r"\d{2}:\d{2}:\d{2}",  # 时间
+        r"(?:/|[A-Z]:\\)[^\s,;]+",  # 文件路径
+        r"\bcurrent (?:time|date|datetime)\b",
+        r"\b\$\{[^}]+\}",  # ${VAR} 模板变量
+        r"\buser(?:name|_id|_name)\b",
     ]
     for pat in dynamic_patterns:
         if re.search(pat, text, re.IGNORECASE):

@@ -119,7 +119,9 @@ def test_no_query_prefers_core_before_optional() -> None:
     document = parse_llms_txt(INDEX, "https://docs.example/llms.txt")
     selected = select_llms_links(document, max_pages=3)
     assert [link.title for link in selected] == [
-        "Quickstart", "Function calling", "Migration",
+        "Quickstart",
+        "Function calling",
+        "Migration",
     ]
 
 
@@ -136,15 +138,18 @@ def test_candidate_discovery_is_bounded_and_subpath_first() -> None:
 
 
 def test_docs_fetch_selects_query_relevant_page(monkeypatch) -> None:
-    client = _patch_http(monkeypatch, {
-        "https://docs.example/docs/llms.txt": _Response(
-            "https://docs.example/docs/llms.txt", INDEX
-        ),
-        "https://docs.example/docs/tools.md": _Response(
-            "https://docs.example/docs/tools.md",
-            "# Tools\nUse tool_choice and JSON Schema.",
-        ),
-    })
+    client = _patch_http(
+        monkeypatch,
+        {
+            "https://docs.example/docs/llms.txt": _Response(
+                "https://docs.example/docs/llms.txt", INDEX
+            ),
+            "https://docs.example/docs/tools.md": _Response(
+                "https://docs.example/docs/tools.md",
+                "# Tools\nUse tool_choice and JSON Schema.",
+            ),
+        },
+    )
     node = ToolNode(
         "docs",
         action_type="docs_fetch",
@@ -169,20 +174,26 @@ def test_docs_fetch_selects_query_relevant_page(monkeypatch) -> None:
 
 
 def test_docs_fetch_converts_linked_html_to_text(monkeypatch) -> None:
-    _patch_http(monkeypatch, {
-        "https://docs.example/llms.txt": _Response(
-            "https://docs.example/llms.txt", INDEX
-        ),
-        "https://docs.example/docs/quickstart.md": _Response(
-            "https://docs.example/docs/quickstart.md",
-            "<html><body><h1>Install</h1><script>bad()</script><p>pip install sdk</p></body></html>",
-            content_type="text/html",
-        ),
-    })
+    _patch_http(
+        monkeypatch,
+        {
+            "https://docs.example/llms.txt": _Response(
+                "https://docs.example/llms.txt", INDEX
+            ),
+            "https://docs.example/docs/quickstart.md": _Response(
+                "https://docs.example/docs/quickstart.md",
+                "<html><body><h1>Install</h1><script>bad()</script><p>pip install sdk</p></body></html>",
+                content_type="text/html",
+            ),
+        },
+    )
 
     result = ToolNode(
-        "docs", action_type="docs_fetch", url="https://docs.example/",
-        query="install quickstart", max_pages=1,
+        "docs",
+        action_type="docs_fetch",
+        url="https://docs.example/",
+        query="install quickstart",
+        max_pages=1,
     ).execute(AgentContext())
 
     assert "pip install sdk" in result["content"]
@@ -190,14 +201,19 @@ def test_docs_fetch_converts_linked_html_to_text(monkeypatch) -> None:
 
 
 def test_docs_fetch_uses_full_file_when_index_missing(monkeypatch) -> None:
-    client = _patch_http(monkeypatch, {
-        "https://docs.example/llms-full.txt": _Response(
-            "https://docs.example/llms-full.txt", "# Full docs\n" + "x" * 4000
-        ),
-    })
+    client = _patch_http(
+        monkeypatch,
+        {
+            "https://docs.example/llms-full.txt": _Response(
+                "https://docs.example/llms-full.txt", "# Full docs\n" + "x" * 4000
+            ),
+        },
+    )
 
     result = ToolNode(
-        "docs", action_type="docs_fetch", url="https://docs.example/guide",
+        "docs",
+        action_type="docs_fetch",
+        url="https://docs.example/guide",
         max_chars=1000,
     ).execute(AgentContext())
 
@@ -208,16 +224,21 @@ def test_docs_fetch_uses_full_file_when_index_missing(monkeypatch) -> None:
 
 
 def test_docs_fetch_falls_back_to_requested_html(monkeypatch) -> None:
-    _patch_http(monkeypatch, {
-        "https://docs.example/guide": _Response(
-            "https://docs.example/guide",
-            "<html><body><h1>Guide</h1><p>Fallback works.</p></body></html>",
-            content_type="text/html",
-        ),
-    })
+    _patch_http(
+        monkeypatch,
+        {
+            "https://docs.example/guide": _Response(
+                "https://docs.example/guide",
+                "<html><body><h1>Guide</h1><p>Fallback works.</p></body></html>",
+                content_type="text/html",
+            ),
+        },
+    )
 
     result = ToolNode(
-        "docs", action_type="docs_fetch", url="https://docs.example/guide",
+        "docs",
+        action_type="docs_fetch",
+        url="https://docs.example/guide",
     ).execute(AgentContext())
 
     assert result["success"] is True
@@ -228,20 +249,25 @@ def test_docs_fetch_falls_back_to_requested_html(monkeypatch) -> None:
 
 
 def test_link_failure_is_isolated_from_other_selected_pages(monkeypatch) -> None:
-    _patch_http(monkeypatch, {
-        "https://docs.example/llms.txt": _Response(
-            "https://docs.example/llms.txt", INDEX
-        ),
-        "https://docs.example/docs/quickstart.md": _Response(
-            "https://docs.example/docs/quickstart.md", status=503
-        ),
-        "https://docs.example/docs/tools.md": _Response(
-            "https://docs.example/docs/tools.md", "# Tools\nworking"
-        ),
-    })
+    _patch_http(
+        monkeypatch,
+        {
+            "https://docs.example/llms.txt": _Response(
+                "https://docs.example/llms.txt", INDEX
+            ),
+            "https://docs.example/docs/quickstart.md": _Response(
+                "https://docs.example/docs/quickstart.md", status=503
+            ),
+            "https://docs.example/docs/tools.md": _Response(
+                "https://docs.example/docs/tools.md", "# Tools\nworking"
+            ),
+        },
+    )
 
     result = ToolNode(
-        "docs", action_type="docs_fetch", url="https://docs.example/",
+        "docs",
+        action_type="docs_fetch",
+        url="https://docs.example/",
         max_pages=2,
     ).execute(AgentContext())
 
@@ -257,11 +283,13 @@ def test_private_link_from_index_is_blocked_before_request(monkeypatch) -> None:
 
 - [Metadata](http://169.254.169.254/latest): Never fetch this
 """
-    client = _Client({
-        "https://docs.example/llms.txt": _Response(
-            "https://docs.example/llms.txt", index
-        ),
-    })
+    client = _Client(
+        {
+            "https://docs.example/llms.txt": _Response(
+                "https://docs.example/llms.txt", index
+            ),
+        }
+    )
     monkeypatch.setattr(
         "xenon.nodes.tool_node._create_http_client", lambda **kwargs: client
     )
@@ -275,8 +303,11 @@ def test_private_link_from_index_is_blocked_before_request(monkeypatch) -> None:
     )
 
     result = ToolNode(
-        "docs", action_type="docs_fetch", url="https://docs.example/",
-        query="metadata", max_pages=1,
+        "docs",
+        action_type="docs_fetch",
+        url="https://docs.example/",
+        query="metadata",
+        max_pages=1,
     ).execute(AgentContext())
 
     assert result["success"] is True
@@ -289,11 +320,14 @@ def test_tool_executor_accepts_query_alias_and_keeps_large_doc_observation(
     monkeypatch,
 ) -> None:
     body = "# Tools\n" + "z" * 6000
-    _patch_http(monkeypatch, {
-        "https://docs.example/llms-full.txt": _Response(
-            "https://docs.example/llms-full.txt", body
-        ),
-    })
+    _patch_http(
+        monkeypatch,
+        {
+            "https://docs.example/llms-full.txt": _Response(
+                "https://docs.example/llms-full.txt", body
+            ),
+        },
+    )
     result = ToolExecutor(retry_attempts=1).execute(
         "docs_fetch",
         {"url": "https://docs.example/llms-full.txt", "query": "tools"},
@@ -309,5 +343,8 @@ def test_docs_fetch_is_read_only_and_published_to_react_schema() -> None:
     assert classify_tool("docs_fetch") == "INFO"
     assert "docs_fetch" in BUILTIN_TOOLS
     assert set(BUILTIN_TOOLS["docs_fetch"]["params"]) == {
-        "url", "query", "max_pages", "max_chars",
+        "url",
+        "query",
+        "max_pages",
+        "max_chars",
     }

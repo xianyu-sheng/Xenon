@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 from xenon.engine.trace import TraceContextFilter  # noqa: E402
+
 logger.addFilter(TraceContextFilter())
 
 
@@ -81,6 +82,7 @@ class BaseEngine(ABC):
     ) -> None:
         self.model_priority = list(model_priority)
         self.callback = callback or EngineCallback()
+
         # 事件路由：ExecutionPolicy.emit() → EngineCallback.on_*()
         def _route_policy_events(event: str, fields: dict[str, Any]) -> None:
             if event == "provider_request_start":
@@ -143,9 +145,7 @@ class BaseEngine(ABC):
         # request shape is stable compatibility evidence; retrying the same
         # tools+format shape every ReAct iteration wastes RPM and can hide the
         # actual task result behind provider limits.
-        self._unsupported_native_shapes: set[
-            tuple[tuple[str, ...], bool, bool]
-        ] = set()
+        self._unsupported_native_shapes: set[tuple[tuple[str, ...], bool, bool]] = set()
         # v0.8.3: native 请求整体失败（5xx/网络断连全模型）后熔断——本 run
         # 内直接走文本协议（_call_llm 带 chain_retries 重试 + 模型池切换），
         # 避免每个 ReAct 迭代都重复 native 失败请求。SWE-bench 实测：
@@ -234,8 +234,12 @@ class BaseEngine(ABC):
         first), reuse its ledger so task intake and engine events stay in one chain.
         """
         from xenon.engine.evidence_runtime import (
-            EvidenceLedger, EvidenceSource, EventKind, LifecyclePhase,
+            EvidenceLedger,
+            EvidenceSource,
+            EventKind,
+            LifecyclePhase,
         )
+
         existing = context.get_evidence_runtime()
         if existing is not None:
             ledger = existing.ledger
@@ -247,7 +251,9 @@ class BaseEngine(ABC):
             self._begin_run()
         ledger = EvidenceLedger(self.run_id or "unknown")
         ledger.append(
-            LifecyclePhase.TASK, EventKind.TASK_FACT, EvidenceSource.ENGINE,
+            LifecyclePhase.TASK,
+            EventKind.TASK_FACT,
+            EvidenceSource.ENGINE,
             {"engine": type(self).__name__, "run_id": self.run_id},
         )
         context.set("_evidence_session_id", self.run_id)
@@ -265,20 +271,38 @@ class BaseEngine(ABC):
         workspace_root: Any = None,
     ) -> Any:
         """Build the delivery EvidencePack only after final deterministic gates pass."""
-        from xenon.engine.evidence_runtime import EvidencePack, EvidenceSource, EventKind, LifecyclePhase
+        from xenon.engine.evidence_runtime import (
+            EvidencePack,
+            EvidenceSource,
+            EventKind,
+            LifecyclePhase,
+        )
+
         ctx = context or AgentContext()
         ledger = self.evidence_ledger or ctx.get("_evidence_ledger")
         if ledger is None:
             raise RuntimeError("evidence ledger is not bound to this task")
         for phase, kwargs in (
             ("fix", {"tracker": tracker}),
-            ("output", {"output": output, "tracker": tracker, "workspace_root": workspace_root}),
+            (
+                "output",
+                {
+                    "output": output,
+                    "tracker": tracker,
+                    "workspace_root": workspace_root,
+                },
+            ),
         ):
             verdict = self.gate_failed(phase, ctx, **kwargs)
             ledger.append(
-                LifecyclePhase.DELIVERY, EventKind.GATE_VERDICT, EvidenceSource.GATE,
-                {"phase": phase, "passed": verdict is None,
-                 "reason": verdict.reason if verdict else "passed"},
+                LifecyclePhase.DELIVERY,
+                EventKind.GATE_VERDICT,
+                EvidenceSource.GATE,
+                {
+                    "phase": phase,
+                    "passed": verdict is None,
+                    "reason": verdict.reason if verdict else "passed",
+                },
             )
             if verdict is not None:
                 # SWE-bench 实测回归（sphinx-7738、plan-reflection 6 例、
@@ -292,15 +316,25 @@ class BaseEngine(ABC):
 
                 if has_successful_write(tracker):
                     ledger.append(
-                        LifecyclePhase.DELIVERY, EventKind.GATE_VERDICT, EvidenceSource.GATE,
-                        {"phase": phase, "passed": False, "degraded": True,
-                         "reason": verdict.reason},
+                        LifecyclePhase.DELIVERY,
+                        EventKind.GATE_VERDICT,
+                        EvidenceSource.GATE,
+                        {
+                            "phase": phase,
+                            "passed": False,
+                            "degraded": True,
+                            "reason": verdict.reason,
+                        },
                     )
                     continue
-                raise RuntimeError(f"delivery evidence gate failed ({phase}): {verdict.reason}")
+                raise RuntimeError(
+                    f"delivery evidence gate failed ({phase}): {verdict.reason}"
+                )
         pack = EvidencePack.build(ledger)
         ledger.append(
-            LifecyclePhase.DELIVERY, EventKind.DELIVERY, EvidenceSource.ENGINE,
+            LifecyclePhase.DELIVERY,
+            EventKind.DELIVERY,
+            EvidenceSource.ENGINE,
             {"event_count": pack.event_count, "gate_failures": pack.gate_failures},
         )
         return EvidencePack.build(ledger)
@@ -326,7 +360,14 @@ class BaseEngine(ABC):
             raise RuntimeError("evidence ledger is not bound to this task")
         for phase, kwargs in (
             ("fix", {"tracker": tracker}),
-            ("output", {"output": output, "tracker": tracker, "workspace_root": workspace_root}),
+            (
+                "output",
+                {
+                    "output": output,
+                    "tracker": tracker,
+                    "workspace_root": workspace_root,
+                },
+            ),
         ):
             verdict = self.gate_failed(phase, ctx, **kwargs)
             if verdict is not None:
@@ -375,13 +416,15 @@ class BaseEngine(ABC):
         """
         from xenon.engine.trace import new_run_id, prefix
         from xenon.engine.trace import set_trace_run_id
+
         self.run_id = new_run_id()
         set_trace_run_id(self.run_id)
         self.last_model_used = None
         self._pending_native_response = None
         self._last_provider_messages = []
         logging.getLogger("xenon.engine").info(
-            f"{prefix(self.run_id)} run 开始 ({type(self).__name__})")
+            f"{prefix(self.run_id)} run 开始 ({type(self).__name__})"
+        )
         return self.run_id
 
     def interrupt(self) -> None:
@@ -401,10 +444,12 @@ class BaseEngine(ABC):
         """
         if not text or not text.strip():
             return False
-        self._steering_queue.put({
-            "text": text.strip(),
-            "ts": time.time(),
-        })
+        self._steering_queue.put(
+            {
+                "text": text.strip(),
+                "ts": time.time(),
+            }
+        )
         return True
 
     def _drain_steering(self) -> list[dict[str, Any]]:
@@ -440,9 +485,7 @@ class BaseEngine(ABC):
         补充的信息并入原任务；修改/新增要求调整后续步骤；
         已完成的工作不重复。返回的文本由各引擎拼进下一轮 prompt。
         """
-        joined = "\n".join(
-            f"- {m.get('text', '')}" for m in msgs
-        )
+        joined = "\n".join(f"- {m.get('text', '')}" for m in msgs)
         return (
             "用户在任务执行过程中补充了要求（原任务继续有效）：\n"
             f"{joined}\n\n"
@@ -470,7 +513,9 @@ class BaseEngine(ABC):
         ]
         return min(windows) if windows else 128000
 
-    def _near_context_window(self, messages: list[dict[str, Any]], ratio: float = 0.8) -> bool:
+    def _near_context_window(
+        self, messages: list[dict[str, Any]], ratio: float = 0.8
+    ) -> bool:
         """F6: 估算 messages token 是否接近上下文窗口（默认 80%）。
 
         粗估（字符数//2）仅用于预算预警/拒绝大 observation，非精确计费。
@@ -478,6 +523,7 @@ class BaseEngine(ABC):
         window = self._context_window()
         if window <= 0:
             return False
+
         def content_size(message: dict[str, Any]) -> int:
             content = message.get("content", "")
             if isinstance(content, str):
@@ -498,8 +544,7 @@ class BaseEngine(ABC):
         """
         if self._ctx_mgr is not None:
             messages = [
-                m for m in self._ctx_mgr.get_messages()
-                if m.get("role") != "system"
+                m for m in self._ctx_mgr.get_messages() if m.get("role") != "system"
             ]
             # The REPL stores the current user turn before routing. Engines add
             # that input themselves, so remove only an exact trailing duplicate.
@@ -544,10 +589,7 @@ class BaseEngine(ABC):
         result: list[dict[str, Any]] = []
         result.extend(self._context_messages(stable=True))
         result.extend(history)
-        if (
-            self._ctx_mgr is not None
-            and self._ctx_mgr.current_request_context_frozen()
-        ):
+        if self._ctx_mgr is not None and self._ctx_mgr.current_request_context_frozen():
             return result
         memory_message = self._working_memory_message()
         if memory_message is not None:
@@ -577,7 +619,10 @@ class BaseEngine(ABC):
         # ContextManager 的摘要格式不能表达 provider-issued tool_call_id。
         # 原生工具协议消息改走 block 级压缩，保持 tool_calls/tool 成对完整；
         # 绝不把它们交给 ContextManager 摘要，那会产生无效历史。
-        if any(message.get("role") == "tool" or message.get("tool_calls") for message in messages):
+        if any(
+            message.get("role") == "tool" or message.get("tool_calls")
+            for message in messages
+        ):
             return self._compact_native_tool_messages(messages)
         try:
             from xenon.repl.context_manager import ContextManager
@@ -672,9 +717,7 @@ class BaseEngine(ABC):
                     "如需早期结果请重新调用对应工具确认，不要凭记忆假设。"
                 ),
             }
-            compacted = [
-                message for block in head for message in block
-            ]
+            compacted = [message for block in head for message in block]
             compacted.append(summary)
             compacted.extend(message for block in tail for message in block)
             logger.info(
@@ -685,9 +728,7 @@ class BaseEngine(ABC):
             )
             return compacted
         except Exception as e:  # noqa: BLE001 — 压缩绝不能中断主循环
-            logger.warning(
-                f"原生工具协议压缩失败（已忽略，沿用原 messages）: {e}"
-            )
+            logger.warning(f"原生工具协议压缩失败（已忽略，沿用原 messages）: {e}")
             return messages
 
     @staticmethod
@@ -705,6 +746,7 @@ class BaseEngine(ABC):
         # 尝试加载分类器（懒导入避免循环依赖）
         try:
             from xenon.repl.context_strategies import ToolOutputClassifier
+
             classifier = ToolOutputClassifier()
         except Exception:
             return messages  # 分类器不可用时原样返回
@@ -720,11 +762,15 @@ class BaseEngine(ABC):
                 tool_name = obs_match.group(1) or "unknown"
                 tool_output = obs_match.group(2)
                 try:
-                    compressed_output = classifier.compress(tool_name, tool_output, max_chars=500)
-                    result.append({
-                        "role": m.get("role", "user"),
-                        "content": f"Observation: [{tool_name}] {compressed_output}",
-                    })
+                    compressed_output = classifier.compress(
+                        tool_name, tool_output, max_chars=500
+                    )
+                    result.append(
+                        {
+                            "role": m.get("role", "user"),
+                            "content": f"Observation: [{tool_name}] {compressed_output}",
+                        }
+                    )
                 except Exception:
                     result.append(m)  # 压缩失败，原样保留
             else:
@@ -762,7 +808,10 @@ class BaseEngine(ABC):
                 wait = self._extract_retry_after(cause, default=2.0 * (retry + 1))
                 logger.warning(
                     "全链瞬时失败(%s)，退避 %.1fs 后重试(%s/%s)",
-                    type(cause).__name__, wait, retry + 1, policy.chain_retries,
+                    type(cause).__name__,
+                    wait,
+                    retry + 1,
+                    policy.chain_retries,
                 )
                 policy.sleep(wait)
         raise AssertionError("unreachable retry loop")
@@ -792,13 +841,15 @@ class BaseEngine(ABC):
         - 全部模型失败 → ``callback.on_error`` + 抛 RuntimeError。
         """
         from xenon.engine.trace import new_call_id, prefix
+
         call_id = new_call_id()
         effective_cache_phase = cache_phase or self._active_cache_phase
 
         def tp(message: str) -> str:
             return f"{prefix(self.run_id, call_id)} {message}"
+
         last_error: Exception | None = None
-        for model_id in (model_priority or self.model_priority):
+        for model_id in model_priority or self.model_priority:
             started_at = time.monotonic()
             request_started = False
             request_succeeded = False
@@ -823,7 +874,8 @@ class BaseEngine(ABC):
                     "cache_context": self._cache_context(effective_cache_phase),
                     "cache_lane_registry": (
                         getattr(self._ctx_mgr, "prompt_lanes", None)
-                        if self._ctx_mgr is not None else None
+                        if self._ctx_mgr is not None
+                        else None
                     ),
                 }
                 request_options.update(
@@ -853,26 +905,39 @@ class BaseEngine(ABC):
                 status = e.response.status_code
                 if status in (401, 403):
                     self.callback.on_error(
-                        f"模型 {model_id} 认证失败 ({status})，请检查 API Key")
+                        f"模型 {model_id} 认证失败 ({status})，请检查 API Key"
+                    )
                     raise RuntimeError(
-                        f"模型 {model_id} 认证失败 ({status})，请检查 API Key") from e
+                        f"模型 {model_id} 认证失败 ({status})，请检查 API Key"
+                    ) from e
                 if status == 400:
                     self.callback.on_error(f"模型 {model_id} 请求被拒 (400): {e}")
                     raise RuntimeError(
-                        f"模型 {model_id} 请求被拒 (400)，请检查参数/模型名") from e
+                        f"模型 {model_id} 请求被拒 (400)，请检查参数/模型名"
+                    ) from e
                 # 429/5xx/其他 HTTP：瞬时，切下一个模型
                 if self.model_pool:
                     self._record_model_failure(model_id)
                 last_error = e
-                logger.warning(tp(f"模型 {model_id} HTTP {status} 失败: {e}，尝试下一个..."))
+                logger.warning(
+                    tp(f"模型 {model_id} HTTP {status} 失败: {e}，尝试下一个...")
+                )
             except (
-                httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout,
-                httpx.RemoteProtocolError, httpx.WriteError, httpx.PoolTimeout,
+                httpx.ConnectError,
+                httpx.ReadTimeout,
+                httpx.ConnectTimeout,
+                httpx.RemoteProtocolError,
+                httpx.WriteError,
+                httpx.PoolTimeout,
             ) as e:
                 if self.model_pool:
                     self._record_model_failure(model_id)
                 last_error = e
-                logger.warning(tp(f"模型 {model_id} 网络错误 ({type(e).__name__}): {e}，尝试下一个..."))
+                logger.warning(
+                    tp(
+                        f"模型 {model_id} 网络错误 ({type(e).__name__}): {e}，尝试下一个..."
+                    )
+                )
             except ResponseTruncatedError as e:
                 if self.model_pool:
                     self._record_model_failure(model_id)
@@ -921,8 +986,17 @@ class BaseEngine(ABC):
             return False
         if isinstance(e, ResponseTruncatedError):
             return True
-        if isinstance(e, (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout,
-                          httpx.RemoteProtocolError, httpx.WriteError, httpx.PoolTimeout)):
+        if isinstance(
+            e,
+            (
+                httpx.ConnectError,
+                httpx.ReadTimeout,
+                httpx.ConnectTimeout,
+                httpx.RemoteProtocolError,
+                httpx.WriteError,
+                httpx.PoolTimeout,
+            ),
+        ):
             return True
         if isinstance(e, httpx.HTTPStatusError):
             status = e.response.status_code
@@ -990,7 +1064,8 @@ class BaseEngine(ABC):
                     ),
                     "cache_lane_registry": (
                         getattr(self._ctx_mgr, "prompt_lanes", None)
-                        if self._ctx_mgr is not None else None
+                        if self._ctx_mgr is not None
+                        else None
                     ),
                 }
                 request_options.update(
@@ -1007,7 +1082,9 @@ class BaseEngine(ABC):
                 )
                 request_started = True
                 response = chat_completion_with_tools(
-                    model_id, messages, **request_options,
+                    model_id,
+                    messages,
+                    **request_options,
                 )
                 self.last_model_used = model_id
                 request_succeeded = True
@@ -1016,30 +1093,37 @@ class BaseEngine(ABC):
                 status = e.response.status_code
                 if status in (401, 403):
                     self.callback.on_error(
-                        f"模型 {model_id} 认证失败 ({status})，请检查 API Key")
+                        f"模型 {model_id} 认证失败 ({status})，请检查 API Key"
+                    )
                     raise RuntimeError(
-                        f"模型 {model_id} 认证失败 ({status})，请检查 API Key") from e
+                        f"模型 {model_id} 认证失败 ({status})，请检查 API Key"
+                    ) from e
                 # 400（不支持 tools/format）/ 429 / 5xx：试下一个模型
                 if status != 400:
                     compatibility_only = False
                 last_error = e
                 logger.warning(
-                    f"模型 {model_id} native 调用 HTTP {status}: {e}，尝试下一个...")
+                    f"模型 {model_id} native 调用 HTTP {status}: {e}，尝试下一个..."
+                )
             except (
-                httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout,
-                httpx.RemoteProtocolError, httpx.WriteError, httpx.PoolTimeout,
+                httpx.ConnectError,
+                httpx.ReadTimeout,
+                httpx.ConnectTimeout,
+                httpx.RemoteProtocolError,
+                httpx.WriteError,
+                httpx.PoolTimeout,
             ) as e:
                 compatibility_only = False
                 last_error = e
-                logger.warning(f"模型 {model_id} 网络错误 ({type(e).__name__}): {e}，尝试下一个...")
+                logger.warning(
+                    f"模型 {model_id} 网络错误 ({type(e).__name__}): {e}，尝试下一个..."
+                )
             except EngineDeadlineExceeded:
                 raise
             except ResponseTruncatedError as e:
                 compatibility_only = False
                 last_error = e
-                logger.warning(
-                    f"模型 {model_id} native 响应截断，尝试下一个..."
-                )
+                logger.warning(f"模型 {model_id} native 响应截断，尝试下一个...")
             except Exception as e:  # noqa: BLE001 — 本层降级，不中断
                 compatibility_only = False
                 last_error = e
@@ -1089,11 +1173,20 @@ class BaseEngine(ABC):
     # ── v0.5.0: 并行工具执行 ───────────────────────────────
 
     # 无副作用、可安全并行的工具类型
-    _PARALLEL_SAFE_TOOLS: frozenset[str] = frozenset({
-        "read_file", "search_files", "list_files",
-        "code_index", "ast_analyze", "web_fetch", "docs_fetch",
-        "github_fetch", "weather", "datetime",
-    })
+    _PARALLEL_SAFE_TOOLS: frozenset[str] = frozenset(
+        {
+            "read_file",
+            "search_files",
+            "list_files",
+            "code_index",
+            "ast_analyze",
+            "web_fetch",
+            "docs_fetch",
+            "github_fetch",
+            "weather",
+            "datetime",
+        }
+    )
 
     def _execute_tools_parallel(
         self,
@@ -1130,8 +1223,7 @@ class BaseEngine(ABC):
         # it not to; prompt text is not a safety boundary.  Fall back to the
         # same ordered path used for a single action.
         parallel_allowed = all(
-            action.get("action", "") in self._PARALLEL_SAFE_TOOLS
-            for action in actions
+            action.get("action", "") in self._PARALLEL_SAFE_TOOLS for action in actions
         )
         if len(actions) <= 1 or not parallel_allowed:
             # 单工具：直接执行
@@ -1140,7 +1232,9 @@ class BaseEngine(ABC):
                 results[i] = obs
         else:
             with ThreadPoolExecutor(max_workers=min(max_workers, len(actions))) as pool:
-                futures = {pool.submit(_exec_one, i, a): i for i, a in enumerate(actions)}
+                futures = {
+                    pool.submit(_exec_one, i, a): i for i, a in enumerate(actions)
+                }
                 for future in as_completed(futures):
                     try:
                         idx, obs = future.result()
@@ -1153,8 +1247,11 @@ class BaseEngine(ABC):
         return [(actions[i], results.get(i, "⛔ 未执行")) for i in range(len(actions))]
 
     def _execute_tool(
-        self, tool_name: str, params: dict[str, Any],
-        context: Any, tracker: Any,
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+        context: Any,
+        tracker: Any,
     ) -> str:
         """执行单个工具并返回观察文本。
 
@@ -1216,9 +1313,7 @@ class BaseEngine(ABC):
         """
         self._pending_native_response = None
         if self._native_request_failed:
-            logger.info(
-                "native 请求此前整体失败，本次直接走文本协议（熔断）"
-            )
+            logger.info("native 请求此前整体失败，本次直接走文本协议（熔断）")
             if max_tokens is None:
                 return self._call_llm(messages)
             return self._call_llm(messages, max_tokens=max_tokens)
@@ -1245,13 +1340,9 @@ class BaseEngine(ABC):
         tiers = unique_tiers
 
         for tier_name, tools, fmt in tiers:
-            capability_key = (
-                tuple(self.model_priority), bool(tools), bool(fmt)
-            )
+            capability_key = (tuple(self.model_priority), bool(tools), bool(fmt))
             if capability_key in self._unsupported_native_shapes:
-                logger.debug(
-                    "_call_llm_native 跳过已确认不兼容层: %s", tier_name
-                )
+                logger.debug("_call_llm_native 跳过已确认不兼容层: %s", tier_name)
                 continue
             self.execution_policy.check(tier_name)
             try:
@@ -1276,7 +1367,8 @@ class BaseEngine(ABC):
                 # 文本协议，而不是让引擎整个 run 崩溃（SWE-bench react 4 例）。
                 if "native provider request failed" in str(exc):
                     logger.warning(
-                        "native 请求整体失败（%s），熔断并回退文本协议", exc,
+                        "native 请求整体失败（%s），熔断并回退文本协议",
+                        exc,
                     )
                     self._native_request_failed = True
                     break
@@ -1307,7 +1399,8 @@ class BaseEngine(ABC):
             "context_epoch": epoch,
             "event_cursor": (
                 getattr(self._ctx_mgr, "event_cursor", 0)
-                if self._ctx_mgr is not None else 0
+                if self._ctx_mgr is not None
+                else 0
             ),
         }
 
@@ -1399,7 +1492,9 @@ class BaseEngine(ABC):
         assistant = copy.deepcopy(getattr(response, "assistant_message", None) or {})
         assistant["role"] = "assistant"
         assistant["content"] = assistant.get("content") or ""
-        if getattr(response, "reasoning_content", "") and not assistant.get("reasoning_content"):
+        if getattr(response, "reasoning_content", "") and not assistant.get(
+            "reasoning_content"
+        ):
             assistant["reasoning_content"] = response.reasoning_content
         if not assistant.get("tool_calls"):
             assistant["tool_calls"] = [
@@ -1418,11 +1513,13 @@ class BaseEngine(ABC):
 
         protocol_messages: list[dict[str, Any]] = [assistant]
         for call, observation in zip(tool_calls, observations):
-            protocol_messages.append({
-                "role": "tool",
-                "tool_call_id": str(call.get("id", "")),
-                "content": observation,
-            })
+            protocol_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": str(call.get("id", "")),
+                    "content": observation,
+                }
+            )
 
         self._last_provider_messages.extend(copy.deepcopy(protocol_messages))
         return protocol_messages
@@ -1561,18 +1658,30 @@ class BaseEngine(ABC):
         # ① 备选模型合成（有工具数据才值得合成）
         if tracker and tracker.has_executions():
             try:
-                answer = self._call_llm_for_phase("synthesis", [
-                    {"role": "system",
-                     "content": "你是 Agent 的收尾合成器，直接输出最终回答，不要 JSON/ReAct 格式。"},
-                    {"role": "user", "content": self._synthesis_prompt(user_input, tracker)},
-                ])
+                answer = self._call_llm_for_phase(
+                    "synthesis",
+                    [
+                        {
+                            "role": "system",
+                            "content": "你是 Agent 的收尾合成器，直接输出最终回答，不要 JSON/ReAct 格式。",
+                        },
+                        {
+                            "role": "user",
+                            "content": self._synthesis_prompt(user_input, tracker),
+                        },
+                    ],
+                )
                 if answer and answer.strip():
-                    self.callback.on_warning("迭代耗尽，已用 LLM 合成最终回答（mercy compile）")
+                    self.callback.on_warning(
+                        "迭代耗尽，已用 LLM 合成最终回答（mercy compile）"
+                    )
                     return answer.strip()
             except Exception as e:  # noqa: BLE001 — 合成失败回退报告，不抛
                 logger.warning(f"mercy compile 合成失败，回退结构化报告: {e}")
             # ② 结构化报告
-            self.callback.on_warning("迭代耗尽，已生成结构化执行报告（exhaustion report）")
+            self.callback.on_warning(
+                "迭代耗尽，已生成结构化执行报告（exhaustion report）"
+            )
             return self._exhaustion_report(user_input, tracker)
 
         # ③ 无数据

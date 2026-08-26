@@ -17,14 +17,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from xenon.repl.difficulty_estimator import DifficultyEstimator
-from xenon.repl.llm_intent_classifier import get_llm_classifier, classify_intent_with_llm
+from xenon.repl.llm_intent_classifier import (
+    get_llm_classifier,
+    classify_intent_with_llm,
+)
 from xenon.repl.prompt_optimizer import detect_intent
 
 # 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(levelname)s [%(name)s] %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 
 # 启用 LLM 分类器的 DEBUG 日志
 logging.getLogger("xenon.repl.llm_intent_classifier").setLevel(logging.DEBUG)
@@ -32,9 +32,9 @@ logging.getLogger("xenon.repl.llm_intent_classifier").setLevel(logging.DEBUG)
 
 def test_regex_classification():
     """测试正则分类器能识别的情况（不应调用 LLM）。"""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("测试 1: 正则分类器能识别的请求")
-    print("="*60)
+    print("=" * 60)
 
     test_cases = [
         ("帮我写一个排序函数", "write_code"),
@@ -56,16 +56,16 @@ def test_regex_classification():
         print(f"  最终结果: {intent}")
 
         if regex_result == expected:
-            print(f"  ✓ 正则分类正确")
+            print("  ✓ 正则分类正确")
         else:
             print(f"  ✗ 正则分类错误，期望 {expected}")
 
 
 def test_llm_fallback():
     """测试正则无法识别、需要 LLM 回退的情况。"""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("测试 2: 需要 LLM 回退的请求")
-    print("="*60)
+    print("=" * 60)
 
     # 这些是故意构造的、正则可能无法准确识别的请求
     test_cases = [
@@ -91,16 +91,16 @@ def test_llm_fallback():
         if regex_result is None and intent is not None:
             print(f"  ✓ LLM 回退成功，识别为: {intent}")
         elif regex_result is not None:
-            print(f"  → 正则已识别，无需 LLM")
+            print("  → 正则已识别，无需 LLM")
         else:
-            print(f"  → 两者都无法识别")
+            print("  → 两者都无法识别")
 
 
 def test_ambiguous_input():
     """测试模糊输入（期望返回 None）。"""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("测试 3: 模糊输入")
-    print("="*60)
+    print("=" * 60)
 
     test_cases = [
         "嗯",
@@ -117,16 +117,16 @@ def test_ambiguous_input():
         print(f"  最终结果: {intent}")
 
         if intent is None:
-            print(f"  ✓ 正确识别为无法判断")
+            print("  ✓ 正确识别为无法判断")
         else:
-            print(f"  ✗ 不应识别出意图")
+            print("  ✗ 不应识别出意图")
 
 
 def test_llm_classifier_direct():
     """直接调用 LLM 分类器测试。"""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("测试 4: 直接调用 LLM 分类器")
-    print("="*60)
+    print("=" * 60)
 
     test_cases = [
         "重构缓存模块的并发逻辑",
@@ -135,7 +135,7 @@ def test_llm_classifier_direct():
     ]
 
     classifier = get_llm_classifier()
-    print(f"\n分类器配置:")
+    print("\n分类器配置:")
     print(f"  启用: {classifier.enabled}")
     print(f"  模型: {classifier.model}")
     print(f"  置信度阈值: {classifier.confidence_threshold}")
@@ -154,9 +154,9 @@ def test_llm_classifier_direct():
 
 def test_with_context():
     """测试带上下文的分类。"""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("测试 5: 带上下文的分类")
-    print("="*60)
+    print("=" * 60)
 
     context = [
         {"role": "user", "content": "我在做一个电商系统"},
@@ -172,9 +172,9 @@ def test_with_context():
 
 
 if __name__ == "__main__":
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("LLM 意图分类器真实调用测试")
-    print("="*60)
+    print("=" * 60)
 
     try:
         # 测试 1: 正则能识别的
@@ -192,9 +192,9 @@ if __name__ == "__main__":
         # 测试 5: 带上下文
         test_with_context()
 
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("测试完成！")
-        print("="*60)
+        print("=" * 60)
 
     except KeyboardInterrupt:
         print("\n\n测试被中断")
@@ -202,5 +202,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n\n测试失败: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

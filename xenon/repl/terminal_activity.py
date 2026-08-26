@@ -207,8 +207,7 @@ class TerminalActivityIndicator:
         while True:
             with self._condition:
                 self._condition.wait_for(
-                    lambda: self._closed
-                    or self._state is TerminalActivityState.RUNNING
+                    lambda: self._closed or self._state is TerminalActivityState.RUNNING
                 )
                 if self._closed:
                     return
@@ -217,8 +216,9 @@ class TerminalActivityIndicator:
                 # RUNNING transition cannot race the confirmation UI or
                 # produce an unexpected frame immediately after it resumes.
                 stopped = self._condition.wait_for(
-                    lambda: self._closed
-                    or self._state is not TerminalActivityState.RUNNING,
+                    lambda: (
+                        self._closed or self._state is not TerminalActivityState.RUNNING
+                    ),
                     timeout=self._interval,
                 )
                 if self._closed:

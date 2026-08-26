@@ -5,6 +5,7 @@
 - _context_window() 取 model_configs 中最小的 context_window（瓶颈模型）；
 - _near_context_window() 在消息体量接近窗口 80% 时返回 True，触发观察截断。
 """
+
 from types import SimpleNamespace
 
 from xenon.engine.callbacks import EngineCallback
@@ -20,15 +21,32 @@ class _RecordingCallback(EngineCallback):
         self.acts: list[tuple] = []
         self.steps: list = []
 
-    def on_think(self, thought): pass
-    def on_act(self, action, action_input): self.acts.append((action, action_input))
-    def on_observe(self, observation): pass
-    def on_step(self, step_id, total, task): self.steps.append(step_id)
-    def on_step_done(self, *a, **k): pass
-    def on_review(self, *a, **k): pass
-    def on_error(self, error): pass
-    def on_warning(self, warning): self.warnings.append(warning)
-    def on_finish(self, result): self.finishes.append(result)
+    def on_think(self, thought):
+        pass
+
+    def on_act(self, action, action_input):
+        self.acts.append((action, action_input))
+
+    def on_observe(self, observation):
+        pass
+
+    def on_step(self, step_id, total, task):
+        self.steps.append(step_id)
+
+    def on_step_done(self, *a, **k):
+        pass
+
+    def on_review(self, *a, **k):
+        pass
+
+    def on_error(self, error):
+        pass
+
+    def on_warning(self, warning):
+        self.warnings.append(warning)
+
+    def on_finish(self, result):
+        self.finishes.append(result)
 
 
 # ── 上下文窗口辅助 ──────────────────────────────────────────
@@ -47,7 +65,10 @@ class TestContextWindowHelpers:
         assert eng._context_window() == 128000
 
     def test_context_window_ignores_zero(self):
-        configs = {"a": SimpleNamespace(context_window=0), "b": SimpleNamespace(context_window=64000)}
+        configs = {
+            "a": SimpleNamespace(context_window=0),
+            "b": SimpleNamespace(context_window=64000),
+        }
         eng = ReActEngine(["a", "b"], model_configs=configs)
         assert eng._context_window() == 64000
 
@@ -84,7 +105,11 @@ class TestReActInterrupt:
             return "raw"  # 会被 _parse_response 解析
 
         eng._call_llm = fake_llm
-        eng._parse_response = lambda resp: {"thought": "t", "action": "echo", "action_input": {}}
+        eng._parse_response = lambda resp: {
+            "thought": "t",
+            "action": "echo",
+            "action_input": {},
+        }
         eng._execute_tool = lambda action, action_input, ctx, tracker: "obs"
         eng._input_requires_tools = lambda u: True
 
@@ -129,7 +154,9 @@ class TestPlanInterrupt:
             "analysis": "",
         }
 
-        def fake_step(step_id, total, task, prev, user_input, tracker, context=None, steering=None):
+        def fake_step(
+            step_id, total, task, prev, user_input, tracker, context=None, steering=None
+        ):
             eng.interrupt()  # 第 1 步执行中置位
             return "step1 ok"
 

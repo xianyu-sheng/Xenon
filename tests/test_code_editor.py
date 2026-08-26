@@ -1,6 +1,5 @@
 """CodeEditor 单元测试。"""
 
-
 import pytest
 
 from xenon.repl.code_editor import CodeEditor

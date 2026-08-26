@@ -170,7 +170,10 @@ def test_scenario_5_mode_command_updates_statusbar():
     final = bar.render()
     final_content = str(final.renderable)
 
-    assert "plan-execute" in final_content.lower() or "plan_execute" in final_content.lower()
+    assert (
+        "plan-execute" in final_content.lower()
+        or "plan_execute" in final_content.lower()
+    )
 
 
 def test_statusbar_refresh_after_state_changes():
@@ -243,6 +246,7 @@ def test_statusbar_exception_safety():
     class BrokenCtx:
         def stats(self):
             raise RuntimeError("Simulated failure")
+
         def __getattr__(self, name):
             raise AttributeError(name)
 

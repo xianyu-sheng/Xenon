@@ -23,6 +23,7 @@
     # 热加载（可选）
     reload_config()
 """
+
 from __future__ import annotations
 
 import logging
@@ -45,6 +46,7 @@ CONFIG_PATH = Path(
 @dataclass
 class ValidationConfig:
     """参数校验配置。"""
+
     # XENON_STRICT_VALIDATION: 严格模式（≥2 命中即阻止）
     strict: bool = False
 
@@ -52,6 +54,7 @@ class ValidationConfig:
 @dataclass
 class EngineConfig:
     """引擎行为配置。"""
+
     # XENON_NO_AUTO_ENGINE: 禁用范式自动路由
     disable_auto_routing: bool = False
 
@@ -59,6 +62,7 @@ class EngineConfig:
 @dataclass
 class WatchConfig:
     """配置文件热加载配置。"""
+
     # XENON_CONFIG_WATCH: 配置文件热加载开关（models.yaml）
     enabled: bool = True
 
@@ -66,6 +70,7 @@ class WatchConfig:
 @dataclass
 class LimitsConfig:
     """资源限制配置。"""
+
     # XENON_MAX_MODELS_PER_PROVIDER: 每个 provider 实际注册进模型池的上限
     max_models_per_provider: int = 3
     # 配置向导里「发现了哪些模型」预览清单的显示条数。与上面那项分开，是因为
@@ -79,6 +84,7 @@ class LimitsConfig:
 @dataclass
 class PathsConfig:
     """路径配置。"""
+
     # XENON_CREDENTIALS_PATH: 凭证文件路径
     credentials: str = str(Path.home() / ".xenon" / "credentials.yaml")
     # XENON_CACHE_DIR: 缓存目录（主要用于测试）
@@ -90,6 +96,7 @@ class PathsConfig:
 @dataclass
 class InteractionConfig:
     """交互行为配置。"""
+
     # XENON_ASSUME_YES: 自动确认所有交互提示
     assume_yes: bool = False
     # XENON_TERMINAL_ASCII: 终端 ASCII 模式（禁用 Unicode 字符）
@@ -99,6 +106,7 @@ class InteractionConfig:
 @dataclass
 class DevelopmentConfig:
     """开发/调试配置。"""
+
     # XENON_REGISTER_MODULE_ALLOW: 允许注册的模块列表（逗号分隔）
     register_module_allow: str = ""
     # XENON_ALLOW_HOME_PROJECT: 允许在 home 目录使用项目
@@ -110,6 +118,7 @@ class DevelopmentConfig:
 @dataclass
 class IntentClassifierConfig:
     """意图分类器配置。"""
+
     # XENON_INTENT_CLASSIFIER_ENABLED: 启用 LLM 意图分类器
     enabled: bool = False
     # XENON_INTENT_CLASSIFIER_MODEL: LLM 分类器使用的模型
@@ -123,6 +132,7 @@ class IntentClassifierConfig:
 @dataclass
 class SystemConfig:
     """系统配置根对象。"""
+
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     engine: EngineConfig = field(default_factory=EngineConfig)
     watch: WatchConfig = field(default_factory=WatchConfig)
@@ -130,7 +140,9 @@ class SystemConfig:
     paths: PathsConfig = field(default_factory=PathsConfig)
     interaction: InteractionConfig = field(default_factory=InteractionConfig)
     development: DevelopmentConfig = field(default_factory=DevelopmentConfig)
-    intent_classifier: IntentClassifierConfig = field(default_factory=IntentClassifierConfig)
+    intent_classifier: IntentClassifierConfig = field(
+        default_factory=IntentClassifierConfig
+    )
 
 
 # 文件层缓存：只缓存 yaml 解析结果（按 路径+mtime 失效）。
@@ -202,14 +214,18 @@ def _coerce_bool(value: Any, fallback: bool, origin: str) -> bool:
             return False
     if value is None:
         return fallback
-    logger.warning("配置项 %s 不是有效布尔值: %r，使用默认值 %r", origin, value, fallback)
+    logger.warning(
+        "配置项 %s 不是有效布尔值: %r，使用默认值 %r", origin, value, fallback
+    )
     return fallback
 
 
 def _coerce_int(value: Any, fallback: int, origin: str) -> int:
     """把配置文件里的值强制成 int；无法识别时告警并回退。"""
     if isinstance(value, bool):  # bool 是 int 子类，先挡掉避免 True→1
-        logger.warning("配置项 %s 应为整数，收到布尔值 %r，使用默认值 %r", origin, value, fallback)
+        logger.warning(
+            "配置项 %s 应为整数，收到布尔值 %r，使用默认值 %r", origin, value, fallback
+        )
         return fallback
     if isinstance(value, int):
         return value
@@ -253,7 +269,12 @@ def _coerce_str(value: Any, fallback: str, origin: str) -> str:
 def _coerce_float(value: Any, fallback: float, origin: str) -> float:
     """把配置文件里的值强制成 float；无法识别时告警并回退。"""
     if isinstance(value, bool):  # bool 是 int 子类，先挡掉
-        logger.warning("配置项 %s 应为浮点数，收到布尔值 %r，使用默认值 %r", origin, value, fallback)
+        logger.warning(
+            "配置项 %s 应为浮点数，收到布尔值 %r，使用默认值 %r",
+            origin,
+            value,
+            fallback,
+        )
         return fallback
     if isinstance(value, (int, float)):
         return float(value)
@@ -264,7 +285,9 @@ def _coerce_float(value: Any, fallback: float, origin: str) -> float:
             pass
     if value is None:
         return fallback
-    logger.warning("配置项 %s 不是有效浮点数: %r，使用默认值 %r", origin, value, fallback)
+    logger.warning(
+        "配置项 %s 不是有效浮点数: %r，使用默认值 %r", origin, value, fallback
+    )
     return fallback
 
 
@@ -344,7 +367,8 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
         disable_auto_routing=_get_bool_env(
             "XENON_NO_AUTO_ENGINE",
             _coerce_bool(
-                engine_data.get("disable_auto_routing"), False,
+                engine_data.get("disable_auto_routing"),
+                False,
                 "engine.disable_auto_routing",
             ),
         ),
@@ -362,31 +386,37 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
             _get_int_env(
                 "XENON_MAX_MODELS_PER_PROVIDER",
                 _coerce_int(
-                    limits_data.get("max_models_per_provider"), 3,
+                    limits_data.get("max_models_per_provider"),
+                    3,
                     "limits.max_models_per_provider",
                 ),
             ),
-            3, "limits.max_models_per_provider",
+            3,
+            "limits.max_models_per_provider",
         ),
         wizard_preview_models=_at_least_one(
             _get_int_env(
                 "XENON_WIZARD_PREVIEW_MODELS",
                 _coerce_int(
-                    limits_data.get("wizard_preview_models"), 5,
+                    limits_data.get("wizard_preview_models"),
+                    5,
                     "limits.wizard_preview_models",
                 ),
             ),
-            5, "limits.wizard_preview_models",
+            5,
+            "limits.wizard_preview_models",
         ),
         max_undo_snapshots=_at_least_one(
             _get_int_env(
                 "XENON_MAX_UNDO_SNAPSHOTS",
                 _coerce_int(
-                    limits_data.get("max_undo_snapshots"), 10,
+                    limits_data.get("max_undo_snapshots"),
+                    10,
                     "limits.max_undo_snapshots",
                 ),
             ),
-            1, "limits.max_undo_snapshots",
+            1,
+            "limits.max_undo_snapshots",
         ),
     )
 
@@ -394,7 +424,8 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
         credentials=_get_str_env(
             "XENON_CREDENTIALS_PATH",
             _coerce_str(
-                paths_data.get("credentials"), default_credentials,
+                paths_data.get("credentials"),
+                default_credentials,
                 "paths.credentials",
             ),
         ),
@@ -412,14 +443,16 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
         assume_yes=_get_bool_env(
             "XENON_ASSUME_YES",
             _coerce_bool(
-                interaction_data.get("assume_yes"), False,
+                interaction_data.get("assume_yes"),
+                False,
                 "interaction.assume_yes",
             ),
         ),
         terminal_ascii=_get_bool_env(
             "XENON_TERMINAL_ASCII",
             _coerce_bool(
-                interaction_data.get("terminal_ascii"), False,
+                interaction_data.get("terminal_ascii"),
+                False,
                 "interaction.terminal_ascii",
             ),
         ),
@@ -429,14 +462,16 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
         register_module_allow=_get_str_env(
             "XENON_REGISTER_MODULE_ALLOW",
             _coerce_str(
-                development_data.get("register_module_allow"), "",
+                development_data.get("register_module_allow"),
+                "",
                 "development.register_module_allow",
             ),
         ),
         allow_home_project=_get_bool_env(
             "XENON_ALLOW_HOME_PROJECT",
             _coerce_bool(
-                development_data.get("allow_home_project"), False,
+                development_data.get("allow_home_project"),
+                False,
                 "development.allow_home_project",
             ),
         ),
@@ -450,28 +485,32 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
         enabled=_get_bool_env(
             "XENON_INTENT_CLASSIFIER_ENABLED",
             _coerce_bool(
-                intent_classifier_data.get("enabled"), False,
+                intent_classifier_data.get("enabled"),
+                False,
                 "intent_classifier.enabled",
             ),
         ),
         model=_get_str_env(
             "XENON_INTENT_CLASSIFIER_MODEL",
             _coerce_str(
-                intent_classifier_data.get("model"), "",
+                intent_classifier_data.get("model"),
+                "",
                 "intent_classifier.model",
             ),
         ),
         confidence_threshold=_get_float_env(
             "XENON_INTENT_CLASSIFIER_CONFIDENCE",
             _coerce_float(
-                intent_classifier_data.get("confidence_threshold"), 0.7,
+                intent_classifier_data.get("confidence_threshold"),
+                0.7,
                 "intent_classifier.confidence_threshold",
             ),
         ),
         timeout=_get_float_env(
             "XENON_INTENT_CLASSIFIER_TIMEOUT",
             _coerce_float(
-                intent_classifier_data.get("timeout"), 5.0,
+                intent_classifier_data.get("timeout"),
+                5.0,
                 "intent_classifier.timeout",
             ),
         ),

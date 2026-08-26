@@ -1,4 +1,5 @@
 """B4 验收：模型配置控制输出预算，客户端不按厂商名二次钳制。"""
+
 from types import SimpleNamespace
 
 import xenon.utils.llm_client as lc
@@ -13,12 +14,15 @@ class TestChatCompletionPreservesMaxTokens:
             return "ok"
 
         monkeypatch.setattr(lc, "_call_openai_compat", fake)
-        assert lc.chat_completion(
-            "openai/gpt-4o",
-            [{"role": "user", "content": "ping"}],
-            credentials={"openai": "sk-test"},
-            max_retries=0,
-        ) == "ok"
+        assert (
+            lc.chat_completion(
+                "openai/gpt-4o",
+                [{"role": "user", "content": "ping"}],
+                credentials={"openai": "sk-test"},
+                max_retries=0,
+            )
+            == "ok"
+        )
         assert calls == ["gpt-4o"]
 
     def test_openai_budget_passes_through(self, monkeypatch):
@@ -30,8 +34,10 @@ class TestChatCompletionPreservesMaxTokens:
 
         monkeypatch.setattr(lc, "_call_openai_compat", fake)
         lc.chat_completion(
-            "openai/gpt-4o", [{"role": "user", "content": "hi"}],
-            credentials={"openai": "sk-test"}, max_tokens=131072,
+            "openai/gpt-4o",
+            [{"role": "user", "content": "hi"}],
+            credentials={"openai": "sk-test"},
+            max_tokens=131072,
         )
         assert captured["mt"] == 131072
 
@@ -44,8 +50,10 @@ class TestChatCompletionPreservesMaxTokens:
 
         monkeypatch.setattr(lc, "_call_anthropic", fake)
         lc.chat_completion(
-            "anthropic/claude-3-5-sonnet", [{"role": "user", "content": "hi"}],
-            credentials={"anthropic": "sk-test"}, max_tokens=131072,
+            "anthropic/claude-3-5-sonnet",
+            [{"role": "user", "content": "hi"}],
+            credentials={"anthropic": "sk-test"},
+            max_tokens=131072,
         )
         assert captured["mt"] == 131072
 
@@ -58,8 +66,10 @@ class TestChatCompletionPreservesMaxTokens:
 
         monkeypatch.setattr(lc, "_call_openai_compat", fake)
         lc.chat_completion(
-            "openai/gpt-4o", [{"role": "user", "content": "hi"}],
-            credentials={"openai": "sk-test"}, max_tokens=1000,
+            "openai/gpt-4o",
+            [{"role": "user", "content": "hi"}],
+            credentials={"openai": "sk-test"},
+            max_tokens=1000,
         )
         assert captured["mt"] == 1000
 

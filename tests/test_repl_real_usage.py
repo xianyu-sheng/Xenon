@@ -64,6 +64,7 @@ REAL_LLM_REPLIES: list[dict[str, Any]] = []
 def _quiet_console():
     """重定向 REPL 的 console 到 StringIO，避免污染 pytest 输出。"""
     import xenon.repl.repl as repl_mod
+
     orig = repl_mod.console
     buf = StringIO()
     repl_mod.console = type(orig)(file=buf, force_terminal=False, width=120)
@@ -92,7 +93,9 @@ def _make_repl_real(
     if mode != "direct":
         reg.set_mode(mode)
     return REPL(
-        registry=reg, streaming=False, optimize_prompts=optimize_prompts,
+        registry=reg,
+        streaming=False,
+        optimize_prompts=optimize_prompts,
     )
 
 
@@ -125,12 +128,16 @@ def _make_repl_mock(
     llm_client.chat_completion_stream = fake_util_stream
 
     reg = ModelRegistry()
-    reg.add_model("openai/gpt-4o", "gpt4", api_key="sk-test", base_url="https://api.test.com")
+    reg.add_model(
+        "openai/gpt-4o", "gpt4", api_key="sk-test", base_url="https://api.test.com"
+    )
     reg.assign_role("planner", ["gpt4"])
     if mode != "direct":
         reg.set_mode(mode)
     repl = REPL(
-        registry=reg, streaming=False, optimize_prompts=optimize_prompts,
+        registry=reg,
+        streaming=False,
+        optimize_prompts=optimize_prompts,
     )
     repl._test_patches = (orig_engine, orig_util, orig_util_stream)
     return repl
@@ -150,11 +157,13 @@ def _final_answer_json(text: str) -> str:
 
 def _record_reply(scenario: str, user_input: str, reply: str) -> None:
     """记录真实 LLM 回复（供报告用）。"""
-    REAL_LLM_REPLIES.append({
-        "scenario": scenario,
-        "user_input": user_input,
-        "reply": reply[:400],
-    })
+    REAL_LLM_REPLIES.append(
+        {
+            "scenario": scenario,
+            "user_input": user_input,
+            "reply": reply[:400],
+        }
+    )
 
 
 # ── 场景 1：真实 LLM 烟雾测试 ─────────────────────────
@@ -219,12 +228,15 @@ class TestQueryRoutingReal:
                 seen_in_engine.append(model_id)
                 # ReAct 第一次：尝试搜索工具
                 if call_count[0] == 1:
-                    return json.dumps({
-                        "thought": "查询苏州天气",
-                        "action": "web_search",
-                        "action_input": {"query": "苏州天气"},
-                        "final_answer": "",
-                    }, ensure_ascii=False)
+                    return json.dumps(
+                        {
+                            "thought": "查询苏州天气",
+                            "action": "web_search",
+                            "action_input": {"query": "苏州天气"},
+                            "final_answer": "",
+                        },
+                        ensure_ascii=False,
+                    )
                 # 后续：返回 final_answer
                 return _final_answer_json("苏州当前 25°C 晴，西北风 3 级")
             return "direct 闲聊"
@@ -242,7 +254,9 @@ class TestQueryRoutingReal:
                 for m in repl.ctx_mgr.history
                 if m.role == "assistant"
             )
-            print(f"\n[场景2] query 路由: seen_in_engine={len(seen_in_engine)}次, react_trace={has_react_trace}")
+            print(
+                f"\n[场景2] query 路由: seen_in_engine={len(seen_in_engine)}次, react_trace={has_react_trace}"
+            )
 
 
 # ── 场景 3：write_code 路由 + 真实文件创建 ─────────────────
@@ -265,10 +279,15 @@ class TestWriteCodeReal:
         def mock_execute(self, context):
             # 通过 self.action_type 区分
             if self.action_type == "write_file":
-                write_file_called.append({"tool": "write_file", "args": {
-                    "file_path": self.file_path,
-                    "content": self.content,
-                }})
+                write_file_called.append(
+                    {
+                        "tool": "write_file",
+                        "args": {
+                            "file_path": self.file_path,
+                            "content": self.content,
+                        },
+                    }
+                )
                 file_path = self.file_path
                 content = self.content or ""
                 if file_path:
@@ -283,21 +302,25 @@ class TestWriteCodeReal:
 
         ToolNode.execute = mock_execute
         try:
+
             def responder(ctx):
                 call_count[0] += 1
                 kind, model_id, messages = ctx
                 if kind == "engine":
                     seen_in_engine.append(model_id)
                     if call_count[0] == 1:
-                        return json.dumps({
-                            "thought": "写 hello.py",
-                            "action": "write_file",
-                            "action_input": {
-                                "path": str(tmp_path / "hello.py"),
-                                "content": "print('hello')",
+                        return json.dumps(
+                            {
+                                "thought": "写 hello.py",
+                                "action": "write_file",
+                                "action_input": {
+                                    "path": str(tmp_path / "hello.py"),
+                                    "content": "print('hello')",
+                                },
+                                "final_answer": "",
                             },
-                            "final_answer": "",
-                        }, ensure_ascii=False)
+                            ensure_ascii=False,
+                        )
                     return _final_answer_json(f"已写入 {tmp_path / 'hello.py'}")
                 return "direct"
 
@@ -315,7 +338,9 @@ class TestWriteCodeReal:
                 assert hello_py.exists(), f"hello.py 未被创建: {hello_py}"
                 content = hello_py.read_text(encoding="utf-8")
                 assert "hello" in content, f"内容不符: {content}"
-                print(f"\n[场景3] write_code 创建文件成功: {hello_py}, 内容: {content!r}")
+                print(
+                    f"\n[场景3] write_code 创建文件成功: {hello_py}, 内容: {content!r}"
+                )
         finally:
             ToolNode.execute = orig_execute
 
@@ -332,7 +357,7 @@ class TestMultiTurnContext:
             repl = _make_repl_mock(lambda ctx: "ok")
             try:
                 for i in range(5):
-                    repl._handle_chat(f"第 {i+1} 轮问话")
+                    repl._handle_chat(f"第 {i + 1} 轮问话")
             finally:
                 _restore_repl(repl)
 
@@ -340,7 +365,9 @@ class TestMultiTurnContext:
             n_asst = sum(1 for m in repl.ctx_mgr.history if m.role == "assistant")
             assert n_user >= 5, f"user 消息应 >= 5，实际 {n_user}"
             assert n_asst >= 5, f"assistant 消息应 >= 5，实际 {n_asst}"
-            print(f"\n[场景4] 5 轮: user={n_user}, asst={n_asst}, total={len(repl.ctx_mgr.history)}")
+            print(
+                f"\n[场景4] 5 轮: user={n_user}, asst={n_asst}, total={len(repl.ctx_mgr.history)}"
+            )
 
     @SKIP_NO_LLM
     def test_5_turns_real_llm_remember_context(self):
@@ -363,12 +390,18 @@ class TestMultiTurnContext:
                 assert n2 > n1 and n3 > n2 and n4 > n3 and n5 > n4
                 # 找到最后一条 assistant
                 last_asst = next(
-                    (m for m in reversed(repl.ctx_mgr.history) if m.role == "assistant"),
+                    (
+                        m
+                        for m in reversed(repl.ctx_mgr.history)
+                        if m.role == "assistant"
+                    ),
                     None,
                 )
                 _record_reply("4-5轮", "总结", last_asst.content if last_asst else "")
                 print(f"\n[场景4-真实] 5 轮 history: {n1}→{n5}")
-                print(f"[场景4-真实] LLM 总结: {last_asst.content[:300] if last_asst else 'N/A'}")
+                print(
+                    f"[场景4-真实] LLM 总结: {last_asst.content[:300] if last_asst else 'N/A'}"
+                )
             finally:
                 pass
 
@@ -418,7 +451,9 @@ class TestModeSwitchReal:
         # react 模式多了 ReAct 引擎注入的系统消息
         # 至少 1 个走的引擎不同
         print(f"\n[场景5] direct history={n_direct}, react history={n_react}")
-        print(f"  direct 走 util: {len(seen_direct_util)}, react 走 engine: {len(seen_react_engine)}")
+        print(
+            f"  direct 走 util: {len(seen_direct_util)}, react 走 engine: {len(seen_react_engine)}"
+        )
         assert seen_direct_util, "direct 模式应走 util.chat_completion"
         assert seen_react_engine, "react 模式应走 engine.chat_completion"
 
@@ -444,8 +479,12 @@ class TestCompactReal:
 
             # 检查 needs_compact
             needs = repl.ctx_mgr.needs_compact()
-            assert needs, f"20 轮后 needs_compact() 应 True，实际 {needs}, ratio={repl.ctx_mgr.usage_ratio():.2%}"
-            print(f"\n[场景6] 20 轮后 needs_compact=True, ratio={repl.ctx_mgr.usage_ratio():.2%}")
+            assert needs, (
+                f"20 轮后 needs_compact() 应 True，实际 {needs}, ratio={repl.ctx_mgr.usage_ratio():.2%}"
+            )
+            print(
+                f"\n[场景6] 20 轮后 needs_compact=True, ratio={repl.ctx_mgr.usage_ratio():.2%}"
+            )
 
             # 手动调用 compact
             with _quiet_console():
@@ -464,7 +503,7 @@ class TestDebugRealistic:
 
     def test_debug_buggy_file(self, tmp_path):
         """创建有 bug 的 Python 文件，mock LLM 给修复建议。"""
-        buggy_code = '''
+        buggy_code = """
 def add(a, b):
     return a - b  # 应该是 +
 
@@ -474,7 +513,7 @@ def divide(a, b):
 if __name__ == "__main__":
     print(add(1, 2))  # 期望 3，实际 -1
     print(divide(10, 0))  # ZeroDivisionError
-'''
+"""
         bug_file = tmp_path / "buggy.py"
         bug_file.write_text(buggy_code, encoding="utf-8")
 
@@ -547,7 +586,9 @@ class TestMixedIntents:
     def test_write_code_then_query(self):
         """先写代码，再查询。"""
         with _quiet_console():
-            repl = _make_repl_mock(lambda ctx: _final_answer_json("ok") if ctx[0] == "engine" else "ok")
+            repl = _make_repl_mock(
+                lambda ctx: _final_answer_json("ok") if ctx[0] == "engine" else "ok"
+            )
             try:
                 repl._handle_chat("写一个 hello.py")
                 repl._handle_chat("今天天气怎么样")
@@ -594,14 +635,16 @@ class TestDryRunWorkflow:
         # 调用子进程
         result = subprocess.run(
             [sys.executable, "-m", "xenon.main", "run", str(workflow_src), "--dry-run"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
             cwd=str(tmp_path),
         )
         output = result.stdout + result.stderr
         # 验证输出包含工作流信息
-        assert "plan-and-execute" in output or "工作流" in output or "Dry-run" in output, (
-            f"dry-run 输出异常: {output[:500]}"
-        )
+        assert (
+            "plan-and-execute" in output or "工作流" in output or "Dry-run" in output
+        ), f"dry-run 输出异常: {output[:500]}"
         assert "Dry-run" in output, f"未显示 Dry-run 标识: {output[:500]}"
         print(f"\n[场景10] dry-run 输出前 300 字:\n{output[:300]}")
 
@@ -616,7 +659,9 @@ class TestCLISubcommands:
         """xenon --help 应正常返回帮助信息。"""
         result = subprocess.run(
             [sys.executable, "-m", "xenon.main", "--help"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         output = result.stdout
         assert "Xenon" in output or "xenon" in output
@@ -631,6 +676,7 @@ class TestCLISubcommands:
         content = pyproject.read_text(encoding="utf-8")
         # 提取 version = "x.y.z"
         import re
+
         m = re.search(r'version\s*=\s*"([^"]+)"', content)
         assert m, f"未找到 version: {content[:200]}"
         version = m.group(1)
@@ -646,7 +692,9 @@ class TestCLISubcommands:
             # 试 python -m xenon.main
             result = subprocess.run(
                 [sys.executable, "-c", "from xenon.main import cli; print('OK')"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             assert result.returncode == 0
             print("\n[场景11c] xenon 作为 Python 模块可调用")
@@ -682,8 +730,10 @@ class TestSlashCommands:
                 assert repl.registry.current_mode == "direct"
                 # 切换到 react
                 from xenon.repl.commands import dispatch_command
+
                 dispatch_command(
-                    "/mode", "react",
+                    "/mode",
+                    "react",
                     registry=repl.registry,
                     ctx_mgr=repl.ctx_mgr,
                     session_state=repl._session_state,
@@ -695,7 +745,9 @@ class TestSlashCommands:
             assert repl.registry.current_mode == "react", (
                 f"mode 未切换: {repl.registry.current_mode}"
             )
-            print(f"\n[场景12b] /mode react 切换成功，current={repl.registry.current_mode}")
+            print(
+                f"\n[场景12b] /mode react 切换成功，current={repl.registry.current_mode}"
+            )
 
     def test_status_command(self):
         """/status 应返回 REPL 状态信息。"""
@@ -703,10 +755,12 @@ class TestSlashCommands:
             repl = _make_repl_mock(lambda ctx: "ok")
             try:
                 from xenon.repl.commands import dispatch_command
+
                 # 先添加 1 轮
                 repl._handle_chat("hello")
                 output = dispatch_command(
-                    "/status", "",
+                    "/status",
+                    "",
                     registry=repl.registry,
                     ctx_mgr=repl.ctx_mgr,
                     session_state=repl._session_state,
@@ -715,7 +769,9 @@ class TestSlashCommands:
                 _restore_repl(repl)
                 pytest.fail(f"/status 崩: {e}")
             _restore_repl(repl)
-            print(f"\n[场景12c] /status 输出: {str(output)[:200] if output else 'None'}")
+            print(
+                f"\n[场景12c] /status 输出: {str(output)[:200] if output else 'None'}"
+            )
 
     def test_clear_command(self):
         """/clear 应清空 history。"""
@@ -726,8 +782,10 @@ class TestSlashCommands:
                 n_before = len(repl.ctx_mgr.history)
                 assert n_before > 0
                 from xenon.repl.commands import dispatch_command
+
                 dispatch_command(
-                    "/clear", "",
+                    "/clear",
+                    "",
                     registry=repl.registry,
                     ctx_mgr=repl.ctx_mgr,
                     session_state=repl._session_state,
@@ -737,7 +795,9 @@ class TestSlashCommands:
                 pytest.fail(f"/clear 崩: {e}")
             _restore_repl(repl)
             n_after = len(repl.ctx_mgr.history)
-            assert n_after < n_before, f"/clear 后 history 应减少: {n_before} → {n_after}"
+            assert n_after < n_before, (
+                f"/clear 后 history 应减少: {n_before} → {n_after}"
+            )
             print(f"\n[场景12d] /clear: {n_before} → {n_after}")
 
 
@@ -750,14 +810,20 @@ class TestE2EProjectTask:
     def test_full_e2e_workflow(self, tmp_path):
         """完整 e2e：写函数 + 写测试 + 跑测试（mock 工具执行）。"""
         # 初始化 git
-        subprocess.run(["git", "init"], cwd=str(tmp_path), check=True, capture_output=True)
+        subprocess.run(
+            ["git", "init"], cwd=str(tmp_path), check=True, capture_output=True
+        )
         subprocess.run(
             ["git", "config", "user.email", "test@test.com"],
-            cwd=str(tmp_path), check=True, capture_output=True,
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
         )
         subprocess.run(
             ["git", "config", "user.name", "Test"],
-            cwd=str(tmp_path), check=True, capture_output=True,
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
         )
 
         # 准备：写一个 add 函数文件
@@ -768,17 +834,20 @@ class TestE2EProjectTask:
 
         # 模拟工具执行 — ToolNode.execute(self, context)
         from xenon.nodes.tool_node import ToolNode
+
         orig_execute = ToolNode.execute
 
         def mock_execute(self, context):
-            call_log.append({
-                "tool": self.action_type,
-                "args": {
-                    "file_path": getattr(self, "file_path", None),
-                    "content": getattr(self, "content", None),
-                    "action": getattr(self, "action", None),
-                },
-            })
+            call_log.append(
+                {
+                    "tool": self.action_type,
+                    "args": {
+                        "file_path": getattr(self, "file_path", None),
+                        "content": getattr(self, "content", None),
+                        "action": getattr(self, "action", None),
+                    },
+                }
+            )
             if self.action_type == "write_file":
                 file_path = self.file_path
                 content = self.content or ""
@@ -806,35 +875,44 @@ class TestE2EProjectTask:
             if kind == "engine":
                 if call_count[0] == 1:
                     # 第 1 步：写函数
-                    return json.dumps({
-                        "thought": "写 add 函数",
-                        "action": "write_file",
-                        "action_input": {
-                            "path": str(code_file),
-                            "content": "def add(a, b):\n    return a + b\n",
+                    return json.dumps(
+                        {
+                            "thought": "写 add 函数",
+                            "action": "write_file",
+                            "action_input": {
+                                "path": str(code_file),
+                                "content": "def add(a, b):\n    return a + b\n",
+                            },
+                            "final_answer": "",
                         },
-                        "final_answer": "",
-                    }, ensure_ascii=False)
+                        ensure_ascii=False,
+                    )
                 elif call_count[0] == 2:
                     # 第 2 步：写测试
-                    return json.dumps({
-                        "thought": "写测试",
-                        "action": "write_file",
-                        "action_input": {
-                            "path": str(test_file),
-                            "content": "from math_utils import add\n\ndef test_add():\n    assert add(1, 2) == 3\n",
+                    return json.dumps(
+                        {
+                            "thought": "写测试",
+                            "action": "write_file",
+                            "action_input": {
+                                "path": str(test_file),
+                                "content": "from math_utils import add\n\ndef test_add():\n    assert add(1, 2) == 3\n",
+                            },
+                            "final_answer": "",
                         },
-                        "final_answer": "",
-                    }, ensure_ascii=False)
+                        ensure_ascii=False,
+                    )
                 elif call_count[0] == 3:
                     # 第 3 步：跑测试
                     # 修正：工具名是 "command"（不是 "run_command"），参数名是 "action"（不是 "command"）
-                    return json.dumps({
-                        "thought": "跑测试",
-                        "action": "command",
-                        "action_input": {"action": "pytest test_math_utils.py -v"},
-                        "final_answer": "",
-                    }, ensure_ascii=False)
+                    return json.dumps(
+                        {
+                            "thought": "跑测试",
+                            "action": "command",
+                            "action_input": {"action": "pytest test_math_utils.py -v"},
+                            "final_answer": "",
+                        },
+                        ensure_ascii=False,
+                    )
                 else:
                     return _final_answer_json("全部完成")
             return "ok"
@@ -849,8 +927,7 @@ class TestE2EProjectTask:
                 repl = _make_repl_mock(responder, mode="react")
                 try:
                     repl._handle_chat(
-                        f"在 {tmp_path} 写一个 add 函数，"
-                        f"再写测试文件，最后跑测试验证"
+                        f"在 {tmp_path} 写一个 add 函数，再写测试文件，最后跑测试验证"
                     )
                 finally:
                     _restore_repl(repl)
@@ -880,6 +957,7 @@ class TestRealLLMWriteFile:
     def test_real_llm_writes_hello_py(self, tmp_path):
         """真实 LLM 写 hello.py，验证文件真的被创建。"""
         from xenon.nodes.tool_node import ToolNode
+
         orig_execute = ToolNode.execute
 
         file_written: list[Path] = []
@@ -895,7 +973,10 @@ class TestRealLLMWriteFile:
                     p.parent.mkdir(parents=True, exist_ok=True)
                     p.write_text(content, encoding="utf-8")
                     file_written.append(p)
-                    return {"success": True, "content": f"File written: {p}\n{content[:100]}"}
+                    return {
+                        "success": True,
+                        "content": f"File written: {p}\n{content[:100]}",
+                    }
                 return {"success": False, "error": "no path"}
             return orig_execute(self, context)
 
@@ -914,7 +995,11 @@ class TestRealLLMWriteFile:
 
                 # 验证：ctx_mgr 有 assistant 消息
                 last_asst = next(
-                    (m for m in reversed(repl.ctx_mgr.history) if m.role == "assistant"),
+                    (
+                        m
+                        for m in reversed(repl.ctx_mgr.history)
+                        if m.role == "assistant"
+                    ),
                     None,
                 )
                 assert last_asst is not None
@@ -975,7 +1060,7 @@ class TestRealLLMExplainCode:
 
     def test_real_llm_explain_code(self, tmp_path):
         """让 LLM 解释 Python 代码。"""
-        code = '''
+        code = """
 def quicksort(arr):
     if len(arr) <= 1:
         return arr
@@ -983,7 +1068,7 @@ def quicksort(arr):
     left = [x for x in arr[1:] if x < pivot]
     right = [x for x in arr[1:] if x >= pivot]
     return quicksort(left) + [pivot] + quicksort(right)
-'''
+"""
         code_file = tmp_path / "quicksort.py"
         code_file.write_text(code, encoding="utf-8")
 

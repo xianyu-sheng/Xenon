@@ -1,4 +1,5 @@
 """FileClaimGate 误杀回归测试：代码引用不得被当作文件声称。"""
+
 from __future__ import annotations
 
 from xenon.engine.evidence_gate import (
@@ -100,7 +101,9 @@ class TestDiffContextNotFalsePositive:
 
     def test_diff_verified_by_tracker_passes(self) -> None:
         tracker = FakeTracker([])
-        tracker.calls = [FakeCall("edit_file", "/tmp/w/django/db/backends/base/creation.py")]
+        tracker.calls = [
+            FakeCall("edit_file", "/tmp/w/django/db/backends/base/creation.py")
+        ]
         output = (
             "diff --git a/django/db/backends/base/creation.py b/django/db/backends/base/creation.py\n"
             "--- a/django/db/backends/base/creation.py\n"
@@ -135,7 +138,9 @@ class TestVerifyFileClaimsNoFalsePositive:
 
     def test_real_claim_verified_by_tracker(self) -> None:
         tracker = FakeTracker([])
-        tracker.calls = [FakeCall("edit_file", "/tmp/work/django/db/backends/base/creation.py")]
+        tracker.calls = [
+            FakeCall("edit_file", "/tmp/work/django/db/backends/base/creation.py")
+        ]
         output = "已修改 django/db/backends/base/creation.py。"
         passed, unverified = verify_file_claims(output, tracker)
         assert passed is True, unverified
@@ -161,7 +166,8 @@ class TestCommandCreatedFiles:
         target.parent.mkdir(parents=True)
         target.write_text("print(1)\n", encoding="utf-8")
         passed, unverified = verify_file_claims(
-            "已创建 tmp/repro.py 复现脚本。", None,
+            "已创建 tmp/repro.py 复现脚本。",
+            None,
             workspace_root=str(tmp_path),
         )
         assert passed is True, unverified
@@ -171,14 +177,16 @@ class TestCommandCreatedFiles:
         target.parent.mkdir(parents=True)
         target.write_text("x = 1\n", encoding="utf-8")
         passed, unverified = verify_file_claims(
-            "已修改 testbed/sympy/printing/latex.py。", None,
+            "已修改 testbed/sympy/printing/latex.py。",
+            None,
             workspace_root=str(tmp_path),
         )
         assert passed is True, unverified
 
     def test_still_rejects_when_not_on_disk(self, tmp_path) -> None:
         passed, unverified = verify_file_claims(
-            "创建了 brand_new_module.py 并实现功能。", None,
+            "创建了 brand_new_module.py 并实现功能。",
+            None,
             workspace_root=str(tmp_path),
         )
         assert passed is False

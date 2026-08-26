@@ -13,6 +13,7 @@
 
 建在 AutoRouter 之上,纯内存状态(不依赖 routing_history 持久化)。
 """
+
 from __future__ import annotations
 
 import time
@@ -26,6 +27,7 @@ class SessionLock:
     线程安全由 AutoRouter 调用方保证(REPL 主循环单线程主导 route;
     ModelPool 自身线程安全,锁仅持有 model_id 引用)。
     """
+
     locked_model_id: str | None = None
     locked_tier: int = 0
     drift_count: int = 0

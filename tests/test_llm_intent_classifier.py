@@ -52,7 +52,9 @@ class TestLLMIntentClassifier:
 
     def test_parse_response_with_markdown_blocks(self):
         """测试解析带 markdown 代码块的响应。"""
-        response = '```json\n{"intent": "debug", "confidence": 0.9, "reasoning": "test"}\n```'
+        response = (
+            '```json\n{"intent": "debug", "confidence": 0.9, "reasoning": "test"}\n```'
+        )
         result = LLMIntentClassifier._parse_response(response)
 
         assert result.intent == "debug"
@@ -60,7 +62,9 @@ class TestLLMIntentClassifier:
 
     def test_parse_response_invalid_intent(self):
         """测试解析无效意图类别的响应。"""
-        response = '{"intent": "invalid_intent", "confidence": 0.9, "reasoning": "test"}'
+        response = (
+            '{"intent": "invalid_intent", "confidence": 0.9, "reasoning": "test"}'
+        )
         result = LLMIntentClassifier._parse_response(response)
 
         assert result.intent is None

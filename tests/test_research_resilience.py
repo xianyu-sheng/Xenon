@@ -9,12 +9,14 @@ from xenon.repl.execution_policy import ExecutionLevel
 
 
 def test_react_stops_exploring_after_three_consecutive_tool_failures(monkeypatch):
-    responses = iter([
-        '{"action":"web_fetch","action_input":{"url":"https://a.invalid"}}',
-        '{"action":"web_fetch","action_input":{"url":"https://b.invalid"}}',
-        '{"action":"web_fetch","action_input":{"url":"https://c.invalid"}}',
-        "现有外部来源均不可访问，因此只能报告证据不足，建议稍后重试。",
-    ])
+    responses = iter(
+        [
+            '{"action":"web_fetch","action_input":{"url":"https://a.invalid"}}',
+            '{"action":"web_fetch","action_input":{"url":"https://b.invalid"}}',
+            '{"action":"web_fetch","action_input":{"url":"https://c.invalid"}}',
+            "现有外部来源均不可访问，因此只能报告证据不足，建议稍后重试。",
+        ]
+    )
     callback = SilentCallback()
     engine = ReActEngine(
         ["test/model"],

@@ -62,20 +62,34 @@ class RefactorEngine:
         if definition_file:
             dpath = str(Path(definition_file).resolve())
             if not Path(dpath).exists():
-                return {"changes": [], "errors": [f"definition_file 不存在: {definition_file}"], "success": False}
+                return {
+                    "changes": [],
+                    "errors": [f"definition_file 不存在: {definition_file}"],
+                    "success": False,
+                }
             refs: list[Reference] = []
-            pattern = re.compile(r'\b' + re.escape(old_name) + r'\b')
+            pattern = re.compile(r"\b" + re.escape(old_name) + r"\b")
             try:
                 dcontent = Path(dpath).read_text(encoding="utf-8", errors="replace")
             except Exception as e:
-                return {"changes": [], "errors": [f"读取 {dpath} 失败: {e}"], "success": False}
+                return {
+                    "changes": [],
+                    "errors": [f"读取 {dpath} 失败: {e}"],
+                    "success": False,
+                }
             for i, line in enumerate(dcontent.splitlines(), 1):
                 for m in pattern.finditer(line):
-                    refs.append(Reference(name=old_name, file_path=dpath, line=i, col=m.start()))
+                    refs.append(
+                        Reference(name=old_name, file_path=dpath, line=i, col=m.start())
+                    )
         else:
             refs = self.index.find_references(old_name, limit=1000)
         if not refs:
-            return {"changes": [], "errors": [f"未找到 '{old_name}' 的引用"], "success": False}
+            return {
+                "changes": [],
+                "errors": [f"未找到 '{old_name}' 的引用"],
+                "success": False,
+            }
 
         # 按文件分组
         files_to_edit: dict[str, list[tuple[int, int]]] = {}
@@ -102,10 +116,10 @@ class RefactorEngine:
                     prefix = line[:col]
                     suffix = line[col:]
                     # 验证指定位置确实是目标符号
-                    if not re.match(r'\b' + re.escape(old_name) + r'\b', suffix):
+                    if not re.match(r"\b" + re.escape(old_name) + r"\b", suffix):
                         continue
                     new_suffix = re.sub(
-                        r'\b' + re.escape(old_name) + r'\b',
+                        r"\b" + re.escape(old_name) + r"\b",
                         new_name,
                         suffix,
                         count=1,
@@ -114,12 +128,14 @@ class RefactorEngine:
                         new_line = prefix + new_suffix
                         lines[line_no - 1] = new_line
                         modified = True
-                        changes.append({
-                            "file": file_path,
-                            "line": line_no,
-                            "old": line.rstrip(),
-                            "new": new_line.rstrip(),
-                        })
+                        changes.append(
+                            {
+                                "file": file_path,
+                                "line": line_no,
+                                "old": line.rstrip(),
+                                "new": new_line.rstrip(),
+                            }
+                        )
 
                 if modified and not dry_run:
                     new_content = "".join(lines)
@@ -127,7 +143,9 @@ class RefactorEngine:
                     if file_path.endswith(".py"):
                         syntax_errors = self.analyzer.check_syntax(new_content)
                         if syntax_errors:
-                            errors.append(f"{file_path}: 重命名后语法错误 — {syntax_errors[0]}")
+                            errors.append(
+                                f"{file_path}: 重命名后语法错误 — {syntax_errors[0]}"
+                            )
                             continue
                     atomic_write_text(file_path, new_content)
 
@@ -153,8 +171,10 @@ class RefactorEngine:
             return {"success": False, "error": f"文件不存在: {path}"}
         # A7: __init__.py 的导入多为包公开 API 的重导出，不能当未使用删除（§8.13.1）
         if path.name == "__init__.py":
-            return {"success": False,
-                    "error": "跳过 __init__.py：其导入通常为包公开 API 的重导出，自动清理会破坏对外接口"}
+            return {
+                "success": False,
+                "error": "跳过 __init__.py：其导入通常为包公开 API 的重导出，自动清理会破坏对外接口",
+            }
 
         analysis = self.analyzer.analyze_file(path)
         if not analysis.syntax_valid:
@@ -171,16 +191,16 @@ class RefactorEngine:
             for i, line in enumerate(lines):
                 stripped = line.strip()
                 # 匹配 import X（整行删除）
-                if re.match(rf'^import\s+{re.escape(unused_name)}(\s*$)', stripped):
+                if re.match(rf"^import\s+{re.escape(unused_name)}(\s*$)", stripped):
                     removed.append({"line": i + 1, "text": stripped})
                     lines[i] = ""
                     break
                 # 匹配 import X, Y, Z（只移除 X）
-                elif re.match(rf'^import\s+.*\b{re.escape(unused_name)}\b', stripped):
+                elif re.match(rf"^import\s+.*\b{re.escape(unused_name)}\b", stripped):
                     # 移除 import 语句中的单个名字
                     new_line = re.sub(
-                        rf',\s*{re.escape(unused_name)}\b|\b{re.escape(unused_name)}\s*,',
-                        '',
+                        rf",\s*{re.escape(unused_name)}\b|\b{re.escape(unused_name)}\s*,",
+                        "",
                         line,
                     )
                     if new_line.strip() != stripped:
@@ -188,21 +208,25 @@ class RefactorEngine:
                         lines[i] = new_line
                         break
                 # 匹配 from Y import X（如果是唯一导入，删整行）
-                elif re.match(rf'^from\s+\S+\s+import\s+{re.escape(unused_name)}\s*$', stripped):
+                elif re.match(
+                    rf"^from\s+\S+\s+import\s+{re.escape(unused_name)}\s*$", stripped
+                ):
                     removed.append({"line": i + 1, "text": stripped})
                     lines[i] = ""
                     break
                 # 匹配 from Y import a, X, b（只移除 X）
-                elif re.match(rf'^from\s+\S+\s+import\s+.*\b{re.escape(unused_name)}\b', stripped):
+                elif re.match(
+                    rf"^from\s+\S+\s+import\s+.*\b{re.escape(unused_name)}\b", stripped
+                ):
                     # 精确移除名字，保留其他导入
                     new_line = re.sub(
-                        rf',\s*{re.escape(unused_name)}\b|\b{re.escape(unused_name)}\s*,\s*',
-                        ', ',
+                        rf",\s*{re.escape(unused_name)}\b|\b{re.escape(unused_name)}\s*,\s*",
+                        ", ",
                         line,
                     )
                     # 清理可能的 "import ," 或尾部逗号
-                    new_line = re.sub(r'import\s*,\s*', 'import ', new_line)
-                    new_line = re.sub(r',\s*([)\n])', r'\1', new_line)
+                    new_line = re.sub(r"import\s*,\s*", "import ", new_line)
+                    new_line = re.sub(r",\s*([)\n])", r"\1", new_line)
                     if new_line.strip() != stripped:
                         removed.append({"line": i + 1, "text": stripped})
                         lines[i] = new_line
@@ -229,40 +253,48 @@ class RefactorEngine:
         # 高复杂度函数
         for func in analysis.functions:
             if func.complexity > 10:
-                suggestions.append({
-                    "type": "high_complexity",
-                    "target": func.name,
-                    "line": func.line,
-                    "message": f"函数 '{func.name}' 复杂度 {func.complexity}，建议拆分",
-                })
+                suggestions.append(
+                    {
+                        "type": "high_complexity",
+                        "target": func.name,
+                        "line": func.line,
+                        "message": f"函数 '{func.name}' 复杂度 {func.complexity}，建议拆分",
+                    }
+                )
 
         # 长函数
         for func in analysis.functions:
             if func.end_line and func.end_line - func.line > 50:
-                suggestions.append({
-                    "type": "long_function",
-                    "target": func.name,
-                    "line": func.line,
-                    "message": f"函数 '{func.name}' 长度 {func.end_line - func.line} 行，建议拆分",
-                })
+                suggestions.append(
+                    {
+                        "type": "long_function",
+                        "target": func.name,
+                        "line": func.line,
+                        "message": f"函数 '{func.name}' 长度 {func.end_line - func.line} 行，建议拆分",
+                    }
+                )
 
         # 未使用导入
         if analysis.unused_imports:
-            suggestions.append({
-                "type": "unused_imports",
-                "target": ", ".join(analysis.unused_imports),
-                "message": f"未使用的导入: {', '.join(analysis.unused_imports)}",
-            })
+            suggestions.append(
+                {
+                    "type": "unused_imports",
+                    "target": ", ".join(analysis.unused_imports),
+                    "message": f"未使用的导入: {', '.join(analysis.unused_imports)}",
+                }
+            )
 
         # 大类
         for cls in analysis.classes:
             if len(cls.methods) > 15:
-                suggestions.append({
-                    "type": "large_class",
-                    "target": cls.name,
-                    "line": cls.line,
-                    "message": f"类 '{cls.name}' 有 {len(cls.methods)} 个方法，考虑拆分职责",
-                })
+                suggestions.append(
+                    {
+                        "type": "large_class",
+                        "target": cls.name,
+                        "line": cls.line,
+                        "message": f"类 '{cls.name}' 有 {len(cls.methods)} 个方法，考虑拆分职责",
+                    }
+                )
 
         return {
             "file": str(file_path),
@@ -273,6 +305,7 @@ class RefactorEngine:
     def _match_filter(self, file_path: str, filter_pattern: str) -> bool:
         """检查文件是否匹配过滤模式。"""
         import fnmatch
+
         return fnmatch.fnmatch(file_path, filter_pattern) or fnmatch.fnmatch(
             Path(file_path).name, filter_pattern
         )

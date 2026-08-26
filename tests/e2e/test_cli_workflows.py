@@ -18,14 +18,16 @@ PYTHON_EXECUTABLE = shutil.which("python") or sys.executable
 
 def _run_cli(*args: str, home: Path) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env.update({
-        "HOME": str(home),
-        "OPENAI_API_KEY": "",
-        "DEEPSEEK_API_KEY": "",
-        "GITHUB_TOKEN": "",
-        "GH_TOKEN": "",
-        "NO_COLOR": "1",
-    })
+    env.update(
+        {
+            "HOME": str(home),
+            "OPENAI_API_KEY": "",
+            "DEEPSEEK_API_KEY": "",
+            "GITHUB_TOKEN": "",
+            "GH_TOKEN": "",
+            "NO_COLOR": "1",
+        }
+    )
     return subprocess.run(
         [PYTHON_EXECUTABLE, "-m", "xenon.main", *args],
         cwd=PROJECT_ROOT,

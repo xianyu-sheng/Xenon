@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 from xenon.engine.trace import TraceContextFilter  # noqa: E402
+
 logger.addFilter(TraceContextFilter())
 
 EXECUTOR_PROMPT = """你是一个专业的代码和技术执行者。请根据用户的需求生成高质量的输出。
@@ -86,15 +87,18 @@ class ReflectionEngine(BaseEngine):
         reviewer_model_priority: list[str] | None = None,
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
-        model_pool: Any = None,          # v0.4.0
-        auto_router: Any = None,         # v0.4.0 Step 13
-        permission_gate: Any = None,     # v0.5.0
+        model_pool: Any = None,  # v0.4.0
+        auto_router: Any = None,  # v0.4.0 Step 13
+        permission_gate: Any = None,  # v0.5.0
     ) -> None:
         # R2: 公共属性与 _call_llm 由 BaseEngine 提供。
         super().__init__(
-            model_priority, callback=callback,
-            model_configs=model_configs, temperature=0.3,
-            model_pool=model_pool, auto_router=auto_router,
+            model_priority,
+            callback=callback,
+            model_configs=model_configs,
+            temperature=0.3,
+            model_pool=model_pool,
+            auto_router=auto_router,
             permission_gate=permission_gate,
         )
         self.max_rounds = max_rounds
@@ -105,7 +109,9 @@ class ReflectionEngine(BaseEngine):
         # 避免同模型的自我审查盲区（executor 的系统性盲区 reviewer 也会有）。
         # 默认与执行者同（向后兼容）。
         self.reviewer_model_priority: list[str] = (
-            list(reviewer_model_priority) if reviewer_model_priority else list(model_priority)
+            list(reviewer_model_priority)
+            if reviewer_model_priority
+            else list(model_priority)
         )
 
     def run(
@@ -206,7 +212,9 @@ class ReflectionEngine(BaseEngine):
         logger.info(
             f"达到最大修正轮次 ({self.max_rounds})，返回最佳版本 (最高评分 {best_score})"
         )
-        self.callback.on_warning(f"达到最大修正轮次 ({self.max_rounds})，最高评分 {best_score}")
+        self.callback.on_warning(
+            f"达到最大修正轮次 ({self.max_rounds})，最高评分 {best_score}"
+        )
         marked = (
             f"⚠️ 达到最大修正轮次 ({self.max_rounds}) 仍未通过审查"
             f"（最高评分 {best_score}/{self.pass_threshold} 通过线）\n\n{final_output}"
@@ -215,7 +223,9 @@ class ReflectionEngine(BaseEngine):
         self.callback.on_finish(final_output)
         return marked
 
-    def _execute(self, user_input: str, feedback: str = "", context: AgentContext | None = None) -> str:
+    def _execute(
+        self, user_input: str, feedback: str = "", context: AgentContext | None = None
+    ) -> str:
         """执行阶段: LLM 生成输出。"""
         messages = [{"role": "system", "content": self.executor_prompt}]
         # F4: 优先消费 ctx_mgr（已压缩）消息；否则回退 AgentContext 历史 [-6:]
@@ -225,10 +235,12 @@ class ReflectionEngine(BaseEngine):
         messages.extend(self._cache_ordered_context(history))
 
         if feedback:
-            messages.append({
-                "role": "user",
-                "content": f"原始需求: {user_input}\n\n上一轮审查反馈:\n{feedback}\n\n请根据反馈改进你的输出。",
-            })
+            messages.append(
+                {
+                    "role": "user",
+                    "content": f"原始需求: {user_input}\n\n上一轮审查反馈:\n{feedback}\n\n请根据反馈改进你的输出。",
+                }
+            )
         else:
             messages.append({"role": "user", "content": user_input})
 
@@ -277,8 +289,7 @@ class ReflectionEngine(BaseEngine):
         """Run one bounded, fail-closed review over output and real evidence."""
 
         evidence_section = (
-            f"\n\n真实执行证据（优先级高于文字自述）:\n{evidence}"
-            if evidence else ""
+            f"\n\n真实执行证据（优先级高于文字自述）:\n{evidence}" if evidence else ""
         )
         messages = [
             {"role": "system", "content": self.reviewer_prompt},

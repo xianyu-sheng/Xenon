@@ -239,9 +239,7 @@ def build_prompt_manifest(
         lane_generation=lane_generation,
         lane_append_only=bool(context.get("lane_append_only", True)),
         lane_reason=str(context.get("lane_reason") or "untracked"),
-        lane_reusable_messages=max(
-            0, int(context.get("lane_reusable_messages") or 0)
-        ),
+        lane_reusable_messages=max(0, int(context.get("lane_reusable_messages") or 0)),
         lane_reusable_tokens=max(0, int(context.get("lane_reusable_tokens") or 0)),
         cache_family=_opaque_digest(family_material),
         stable_prefix_hash=stable_hash,
@@ -258,7 +256,8 @@ def build_prompt_manifest(
             if isinstance(value, (int, float))
         },
         compiler_warnings=[
-            str(warning) for warning in layout.get("warnings", [])
+            str(warning)
+            for warning in layout.get("warnings", [])
             if isinstance(warning, str)
         ],
     )
@@ -357,7 +356,7 @@ class CacheEventStore:
         records = self._load_locked()
         if len(records) <= self.max_events:
             return
-        kept = records[-self.max_events:]
+        kept = records[-self.max_events :]
         temporary = self.path.with_suffix(".jsonl.tmp")
         temporary.write_text(
             "".join(_canonical_json(record) + "\n" for record in kept),
@@ -397,10 +396,15 @@ class CacheSettingsStore:
         return defaults
 
     def save_cache_affinity(self, enabled: bool) -> None:
-        payload = _canonical_json({
-            "schema_version": _SCHEMA_VERSION,
-            "cache_affinity_enabled": bool(enabled),
-        }) + "\n"
+        payload = (
+            _canonical_json(
+                {
+                    "schema_version": _SCHEMA_VERSION,
+                    "cache_affinity_enabled": bool(enabled),
+                }
+            )
+            + "\n"
+        )
         with self._lock:
             self.directory.mkdir(parents=True, exist_ok=True)
             temporary = self.path.with_name(
@@ -459,8 +463,15 @@ def build_cache_event(
     else:
         state, cause = "miss", "provider_best_effort_miss"
 
-    if cache_fields_present and not hit and family_call == 1 and previous_event is not None:
-        if previous_event.model_id != canonical_model_id(str(data.get("model_id") or model_id)):
+    if (
+        cache_fields_present
+        and not hit
+        and family_call == 1
+        and previous_event is not None
+    ):
+        if previous_event.model_id != canonical_model_id(
+            str(data.get("model_id") or model_id)
+        ):
             cause = "model_switch"
         elif previous_event.engine != str(data.get("engine") or "unknown"):
             cause = "engine_switch"
@@ -472,7 +483,9 @@ def build_cache_event(
             cause = "project_changed"
         elif previous_event.context_epoch != int(data.get("context_epoch") or 0):
             cause = "context_compacted"
-        elif previous_event.stable_prefix_hash != str(data.get("stable_prefix_hash") or ""):
+        elif previous_event.stable_prefix_hash != str(
+            data.get("stable_prefix_hash") or ""
+        ):
             cause = "stable_prefix_changed"
     if not bool(data.get("lane_append_only", True)):
         cause = "history_rewritten"
@@ -483,10 +496,15 @@ def build_cache_event(
         timestamp=time.time(),
         session_id=str(data.get("session_id") or _SESSION_ID),
         request_id=str(data.get("request_id") or secrets.token_hex(8)),
-        cache_family=str(data.get("cache_family") or _opaque_digest({
-            "model": canonical_model,
-            "legacy": True,
-        })),
+        cache_family=str(
+            data.get("cache_family")
+            or _opaque_digest(
+                {
+                    "model": canonical_model,
+                    "legacy": True,
+                }
+            )
+        ),
         model_id=canonical_model,
         engine=str(data.get("engine") or "unknown"),
         phase=str(data.get("phase") or "request"),
@@ -497,14 +515,13 @@ def build_cache_event(
         lane_generation=max(0, int(data.get("lane_generation") or 0)),
         lane_append_only=bool(data.get("lane_append_only", True)),
         lane_reason=str(data.get("lane_reason") or "untracked"),
-        lane_reusable_messages=max(
-            0, int(data.get("lane_reusable_messages") or 0)
-        ),
+        lane_reusable_messages=max(0, int(data.get("lane_reusable_messages") or 0)),
         lane_reusable_tokens=max(0, int(data.get("lane_reusable_tokens") or 0)),
         stable_prefix_hash=str(data.get("stable_prefix_hash") or ""),
         tool_schema_hash=str(data.get("tool_schema_hash") or ""),
         compiler_warnings=[
-            str(warning) for warning in data.get("compiler_warnings", [])
+            str(warning)
+            for warning in data.get("compiler_warnings", [])
             if isinstance(warning, str)
         ],
         prompt_tokens=prompt,

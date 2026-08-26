@@ -1,18 +1,13 @@
 """测试模型缓存功能。"""
 
-import json
-import os
-import tempfile
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from xenon.repl.provider_registry import (
     MODEL_CACHE_TTL,
     ProviderInfo,
-    _get_cache_path,
     _hash_api_key,
     _hash_base_url,
     _is_cache_valid,
@@ -21,7 +16,6 @@ from xenon.repl.provider_registry import (
     _update_provider_cache,
     clear_model_cache,
     fetch_provider_models,
-    get_configured_providers,
 )
 
 

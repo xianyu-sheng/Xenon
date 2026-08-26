@@ -119,9 +119,7 @@ class AgentContext:
 
             execution_id = item.get("execution_id")
             if execution_id:
-                active = copy.deepcopy(
-                    self._store.get("_tool_execution_active", {})
-                )
+                active = copy.deepcopy(self._store.get("_tool_execution_active", {}))
                 if not isinstance(active, dict):
                     active = {}
                 execution_key = str(execution_id)

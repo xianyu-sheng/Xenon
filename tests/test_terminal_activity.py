@@ -92,7 +92,9 @@ def test_ascii_fallback_uses_fixed_width_frames():
         assert titles[-1] == "- Xenon · 等待确认"
     indicator.close()
 
-    running = [title for title in titles if title.endswith(" Xenon") and len(title) == 9]
+    running = [
+        title for title in titles if title.endswith(" Xenon") and len(title) == 9
+    ]
     assert "*.. Xenon" in running
 
 

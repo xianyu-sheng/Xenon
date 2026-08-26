@@ -15,7 +15,9 @@ class CodeToolsMixin:
         """代码索引搜索。"""
         from xenon.utils.code_index import CodeIndex
 
-        query = self._resolve_template(self.search_pattern or self.symbol or "", context)
+        query = self._resolve_template(
+            self.search_pattern or self.symbol or "", context
+        )
         file_path = self._resolve_template(self.file_path or "", context)
 
         if not query:
@@ -39,21 +41,25 @@ class CodeToolsMixin:
 
         matches = []
         for sym in results:
-            matches.append({
-                "name": sym.name,
-                "kind": sym.kind,
-                "file": sym.file_path,
-                "line": sym.line,
-                "parent": sym.parent or "",
-                "signature": sym.signature,
-            })
+            matches.append(
+                {
+                    "name": sym.name,
+                    "kind": sym.kind,
+                    "file": sym.file_path,
+                    "line": sym.line,
+                    "parent": sym.parent or "",
+                    "signature": sym.signature,
+                }
+            )
 
         display = f"索引 {stats['files']} 个文件, {stats['symbols']} 个符号\n"
         display += f"搜索 '{query}': 找到 {len(matches)} 个匹配\n"
         for m in matches[:20]:
-            parent = f"{m['parent']}." if m['parent'] else ""
-            sig = f"({m['signature']})" if m['signature'] else ""
-            display += f"  {m['kind']} {parent}{m['name']}{sig} @ {m['file']}:{m['line']}\n"
+            parent = f"{m['parent']}." if m["parent"] else ""
+            sig = f"({m['signature']})" if m["signature"] else ""
+            display += (
+                f"  {m['kind']} {parent}{m['name']}{sig} @ {m['file']}:{m['line']}\n"
+            )
 
         result = {
             "action_type": "code_index",
@@ -110,7 +116,9 @@ class CodeToolsMixin:
             display += "\n\n类:\n"
             for c in result.classes[:10]:
                 bases = f"({', '.join(c.bases)})" if c.bases else ""
-                display += f"  class {c.name}{bases} @ 行{c.line}, {len(c.methods)} 个方法\n"
+                display += (
+                    f"  class {c.name}{bases} @ 行{c.line}, {len(c.methods)} 个方法\n"
+                )
 
         ret = {
             "action_type": "ast_analyze",
@@ -192,7 +200,11 @@ class CodeToolsMixin:
             else:
                 display += "没有未使用的导入\n"
             self._write_output(context, display)
-            return {"action_type": "refactor", "refactor_action": "clean_imports", **result}
+            return {
+                "action_type": "refactor",
+                "refactor_action": "clean_imports",
+                **result,
+            }
 
         elif action == "analyze":
             if not file_path:
@@ -265,12 +277,15 @@ class CodeToolsMixin:
         # 生成 diff
         old_lines = content.splitlines(keepends=True)
         new_lines = new_content.splitlines(keepends=True)
-        diff = list(difflib.unified_diff(
-            old_lines, new_lines,
-            fromfile=f"a/{Path(file_path).name}",
-            tofile=f"b/{Path(file_path).name}",
-            lineterm="",
-        ))
+        diff = list(
+            difflib.unified_diff(
+                old_lines,
+                new_lines,
+                fromfile=f"a/{Path(file_path).name}",
+                tofile=f"b/{Path(file_path).name}",
+                lineterm="",
+            )
+        )
 
         diff_text = "\n".join(diff) if diff else "(无变化)"
 
@@ -283,4 +298,3 @@ class CodeToolsMixin:
         }
         self._write_output(context, diff_text)
         return result
-

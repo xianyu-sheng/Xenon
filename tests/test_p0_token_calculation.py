@@ -242,7 +242,11 @@ class TestDebugTokens:
         assert debug_info["history_length"] == 2
         assert debug_info["cumulative_tokens"] == 150
         assert debug_info["last_usage_source"] == "real"
-        assert debug_info["real_usage"] == {"prompt": 100, "completion": 50, "total": 150}
+        assert debug_info["real_usage"] == {
+            "prompt": 100,
+            "completion": 50,
+            "total": 150,
+        }
 
     def test_debug_tokens_per_turn_details(self):
         """验证 debug_tokens 返回每轮 token 详情。"""

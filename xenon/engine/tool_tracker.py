@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ToolCall:
     """单次工具调用记录。"""
+
     tool_name: str
     params: dict[str, Any]
     success: bool

@@ -50,31 +50,40 @@ class GitToolsMixin:
         try:
             exec_cmd = [*self.command_prefix, *cmd] if self.command_prefix else cmd
             proc = subprocess.run(
-                exec_cmd, capture_output=True, text=True,
-                timeout=self.timeout, cwd=self.cwd or ".",
+                exec_cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                cwd=self.cwd or ".",
             )
             output = proc.stdout.strip() or proc.stderr.strip()
             result = {
-                "action_type": "git", "command": " ".join(cmd),
+                "action_type": "git",
+                "command": " ".join(cmd),
                 "returncode": proc.returncode,
-                "stdout": output,    # v0.5.3: 统一字段名，与 command 工具一致
-                "output": output,    # 保留兼容
+                "stdout": output,  # v0.5.3: 统一字段名，与 command 工具一致
+                "output": output,  # 保留兼容
                 "success": proc.returncode == 0,
             }
             self._write_output(context, output)
             return result
         except subprocess.TimeoutExpired:
             return {
-                "action_type": "git", "command": " ".join(cmd),
-                "returncode": -1, "stdout": "", "output": "",
+                "action_type": "git",
+                "command": " ".join(cmd),
+                "returncode": -1,
+                "stdout": "",
+                "output": "",
                 "success": False,
                 "error": f"Git 命令超时 ({self.timeout}s): {' '.join(cmd)}",
             }
         except FileNotFoundError:
             return {
-                "action_type": "git", "command": " ".join(cmd),
-                "returncode": -1, "stdout": "", "output": "",
+                "action_type": "git",
+                "command": " ".join(cmd),
+                "returncode": -1,
+                "stdout": "",
+                "output": "",
                 "success": False,
                 "error": "Git 未安装或不在 PATH 中。请先安装 git。",
             }
-

@@ -5,6 +5,7 @@
 - 命令输出格式
 - Rich 渲染
 """
+
 import pytest
 from rich.console import Console
 
@@ -22,8 +23,8 @@ class TestTUIStatusBar:
 
         # 状态栏应该能显示这些信息
         expected_features = [
-            'Console',  # Rich Console
-            'REPL',     # REPL 类
+            "Console",  # Rich Console
+            "REPL",  # REPL 类
         ]
 
         for feature in expected_features:
@@ -51,7 +52,7 @@ class TestTUIStatusBar:
             "context_usage": "10%",
             "cache_status": "hit",
             "cost": "$0.01",
-            "time": "00:05"
+            "time": "00:05",
         }
 
         # 验证所有关键字段都存在

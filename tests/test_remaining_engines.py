@@ -6,6 +6,7 @@
 - PlanReflection 引擎（完整测试）
 - ReactReflection 引擎（完整测试）
 """
+
 import json
 import pytest
 from xenon.engine.reflection_engine import ReflectionEngine
@@ -21,6 +22,7 @@ from xenon.engine.callbacks import SilentCallback
 # Reflection 引擎测试
 # ============================================================================
 
+
 class TestReflectionEngine:
     """测试 Reflection（反思）引擎"""
 
@@ -28,10 +30,7 @@ class TestReflectionEngine:
         """测试 Reflection 引擎基本功能"""
         callback = SilentCallback()
         engine = ReflectionEngine(
-            ["test/model"],
-            callback=callback,
-            max_rounds=2,
-            pass_threshold=7
+            ["test/model"], callback=callback, max_rounds=2, pass_threshold=7
         )
 
         # 第一次生成答案
@@ -40,25 +39,31 @@ class TestReflectionEngine:
 
         # 第一次审查（未通过）
         review_count = [0]
+
         def fake_review(phase, messages, **kwargs):
             review_count[0] += 1
             if review_count[0] == 1:
-                return json.dumps({
-                    "score": 6,
-                    "passed": False,
-                    "feedback": "答案太简单，需要更详细的解释"
-                })
+                return json.dumps(
+                    {
+                        "score": 6,
+                        "passed": False,
+                        "feedback": "答案太简单，需要更详细的解释",
+                    }
+                )
             else:
-                return json.dumps({
-                    "score": 9,
-                    "passed": True,
-                    "feedback": "很好，答案详细且准确"
-                })
+                return json.dumps(
+                    {"score": 9, "passed": True, "feedback": "很好，答案详细且准确"}
+                )
 
-        monkeypatch.setattr(engine, "_call_llm_for_phase",
-                          lambda phase, messages, **kwargs:
-                          fake_review(phase, messages, **kwargs) if phase == "review"
-                          else fake_generate(phase, messages, **kwargs))
+        monkeypatch.setattr(
+            engine,
+            "_call_llm_for_phase",
+            lambda phase, messages, **kwargs: (
+                fake_review(phase, messages, **kwargs)
+                if phase == "review"
+                else fake_generate(phase, messages, **kwargs)
+            ),
+        )
 
         ctx = AgentContext()
         result = engine.run("计算 2+2", ctx)
@@ -77,26 +82,24 @@ class TestReflectionEngine:
         """测试 Reflection 引擎立即通过的场景"""
         callback = SilentCallback()
         engine = ReflectionEngine(
-            ["test/model"],
-            callback=callback,
-            max_rounds=2,
-            pass_threshold=7
+            ["test/model"], callback=callback, max_rounds=2, pass_threshold=7
         )
 
         def fake_generate(phase, messages, **kwargs):
             return "完美的答案"
 
         def fake_review(phase, messages, **kwargs):
-            return json.dumps({
-                "score": 10,
-                "passed": True,
-                "feedback": "完美！"
-            })
+            return json.dumps({"score": 10, "passed": True, "feedback": "完美！"})
 
-        monkeypatch.setattr(engine, "_call_llm_for_phase",
-                          lambda phase, messages, **kwargs:
-                          fake_review(phase, messages, **kwargs) if phase == "review"
-                          else fake_generate(phase, messages, **kwargs))
+        monkeypatch.setattr(
+            engine,
+            "_call_llm_for_phase",
+            lambda phase, messages, **kwargs: (
+                fake_review(phase, messages, **kwargs)
+                if phase == "review"
+                else fake_generate(phase, messages, **kwargs)
+            ),
+        )
 
         ctx = AgentContext()
         result = engine.run("测试任务", ctx)
@@ -109,6 +112,7 @@ class TestReflectionEngine:
 # ============================================================================
 # Direct 引擎测试
 # ============================================================================
+
 
 class TestDirectEngine:
     """测试 Direct（直接对话）引擎"""
@@ -123,10 +127,9 @@ class TestDirectEngine:
 
         def fake_llm(messages, **kwargs):
             # 直接返回 final_answer，不使用工具
-            return json.dumps({
-                "thought": "这是直接回答",
-                "final_answer": "你好！我是 Xenon。"
-            })
+            return json.dumps(
+                {"thought": "这是直接回答", "final_answer": "你好！我是 Xenon。"}
+            )
 
         monkeypatch.setattr(engine, "_call_llm", fake_llm)
 
@@ -141,6 +144,7 @@ class TestDirectEngine:
 # PlanReflection 引擎完整测试
 # ============================================================================
 
+
 class TestPlanReflectionEngine:
     """测试 PlanReflection 组合引擎"""
 
@@ -152,45 +156,40 @@ class TestPlanReflectionEngine:
             callback=callback,
             max_steps=2,
             review_rounds=2,
-            pass_threshold=7
+            pass_threshold=7,
         )
 
         # 规划阶段
         def fake_plan(phase, messages, **kwargs):
-            return json.dumps({
-                "analysis": "两步任务",
-                "steps": [
-                    {
-                        "id": 1,
-                        "task": "步骤1",
-                        "tool": None,
-                        "params": {},
-                        "depends_on": []
-                    },
-                    {
-                        "id": 2,
-                        "task": "步骤2",
-                        "tool": None,
-                        "params": {},
-                        "depends_on": [1]
-                    }
-                ]
-            })
+            return json.dumps(
+                {
+                    "analysis": "两步任务",
+                    "steps": [
+                        {
+                            "id": 1,
+                            "task": "步骤1",
+                            "tool": None,
+                            "params": {},
+                            "depends_on": [],
+                        },
+                        {
+                            "id": 2,
+                            "task": "步骤2",
+                            "tool": None,
+                            "params": {},
+                            "depends_on": [1],
+                        },
+                    ],
+                }
+            )
 
         # 执行阶段
         def fake_execute(messages, **kwargs):
-            return json.dumps({
-                "thought": "完成",
-                "final_answer": "任务完成"
-            })
+            return json.dumps({"thought": "完成", "final_answer": "任务完成"})
 
         # 审查阶段
         def fake_review(phase, messages, **kwargs):
-            return json.dumps({
-                "score": 9,
-                "passed": True,
-                "feedback": "执行很好"
-            })
+            return json.dumps({"score": 9, "passed": True, "feedback": "执行很好"})
 
         monkeypatch.setattr(engine.planner, "_call_llm_for_phase", fake_plan)
         monkeypatch.setattr(engine.planner, "_call_llm", fake_execute)
@@ -215,42 +214,36 @@ class TestPlanReflectionEngine:
             max_steps=1,
             review_rounds=2,
             pass_threshold=7,
-            repair_iterations=2
+            repair_iterations=2,
         )
 
         def fake_plan(phase, messages, **kwargs):
-            return json.dumps({
-                "analysis": "单步任务",
-                "steps": [{
-                    "id": 1,
-                    "task": "执行任务",
-                    "tool": None,
-                    "params": {},
-                    "depends_on": []
-                }]
-            })
+            return json.dumps(
+                {
+                    "analysis": "单步任务",
+                    "steps": [
+                        {
+                            "id": 1,
+                            "task": "执行任务",
+                            "tool": None,
+                            "params": {},
+                            "depends_on": [],
+                        }
+                    ],
+                }
+            )
 
         def fake_execute(messages, **kwargs):
-            return json.dumps({
-                "thought": "完成",
-                "final_answer": "初始结果"
-            })
+            return json.dumps({"thought": "完成", "final_answer": "初始结果"})
 
         # 第一次审查失败，第二次（修复后）通过
         review_count = [0]
+
         def fake_review(phase, messages, **kwargs):
             review_count[0] += 1
             if review_count[0] == 1:
-                return json.dumps({
-                    "score": 5,
-                    "passed": False,
-                    "feedback": "需要改进"
-                })
-            return json.dumps({
-                "score": 8,
-                "passed": True,
-                "feedback": "很好"
-            })
+                return json.dumps({"score": 5, "passed": False, "feedback": "需要改进"})
+            return json.dumps({"score": 8, "passed": True, "feedback": "很好"})
 
         monkeypatch.setattr(engine.planner, "_call_llm_for_phase", fake_plan)
         monkeypatch.setattr(engine.planner, "_call_llm", fake_execute)
@@ -267,6 +260,7 @@ class TestPlanReflectionEngine:
 # ReactReflection 引擎完整测试
 # ============================================================================
 
+
 class TestReactReflectionEngine:
     """测试 ReactReflection 组合引擎"""
 
@@ -278,23 +272,16 @@ class TestReactReflectionEngine:
             callback=callback,
             react_iterations=2,
             review_rounds=2,
-            pass_threshold=7
+            pass_threshold=7,
         )
 
         # ReAct 执行
         def fake_react(messages, **kwargs):
-            return json.dumps({
-                "thought": "完成",
-                "final_answer": "ReAct 结果"
-            })
+            return json.dumps({"thought": "完成", "final_answer": "ReAct 结果"})
 
         # 审查
         def fake_review(phase, messages, **kwargs):
-            return json.dumps({
-                "score": 9,
-                "passed": True,
-                "feedback": "很好"
-            })
+            return json.dumps({"score": 9, "passed": True, "feedback": "很好"})
 
         monkeypatch.setattr(engine.reactor, "_call_llm", fake_react)
         monkeypatch.setattr(engine.reflector, "_call_llm_for_phase", fake_review)
@@ -314,29 +301,19 @@ class TestReactReflectionEngine:
             callback=callback,
             react_iterations=2,
             review_rounds=2,
-            pass_threshold=7
+            pass_threshold=7,
         )
 
         def fake_react(messages, **kwargs):
-            return json.dumps({
-                "thought": "完成",
-                "final_answer": "结果"
-            })
+            return json.dumps({"thought": "完成", "final_answer": "结果"})
 
         review_count = [0]
+
         def fake_review(phase, messages, **kwargs):
             review_count[0] += 1
             if review_count[0] == 1:
-                return json.dumps({
-                    "score": 4,
-                    "passed": False,
-                    "feedback": "需要重做"
-                })
-            return json.dumps({
-                "score": 8,
-                "passed": True,
-                "feedback": "改进后很好"
-            })
+                return json.dumps({"score": 4, "passed": False, "feedback": "需要重做"})
+            return json.dumps({"score": 8, "passed": True, "feedback": "改进后很好"})
 
         monkeypatch.setattr(engine.reactor, "_call_llm", fake_react)
         monkeypatch.setattr(engine.repairer, "_call_llm", fake_react)

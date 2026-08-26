@@ -5,6 +5,7 @@
 2. 不会让 REPL 进入死循环；
 3. 失败信息传递到 ReAct 引擎后能被识别为 Observation（继续推进）。
 """
+
 from __future__ import annotations
 
 from xenon.engine.context import AgentContext
@@ -51,8 +52,11 @@ def test_tool_exception_does_not_hang(monkeypatch):
     ex = _executor_with_node(monkeypatch, _BoomNode)
     tracker = ToolExecutionTracker()
     r = ex.execute(
-        "read_file", {"file_path": "/x"}, AgentContext(),
-        tracker=tracker, tools={"read_file": {}},
+        "read_file",
+        {"file_path": "/x"},
+        AgentContext(),
+        tracker=tracker,
+        tools={"read_file": {}},
     )
     assert r.success is False
     assert "boom" in r.error.lower() or "runtimeerror" in r.error.lower()
@@ -65,7 +69,9 @@ def test_tool_returning_failure_does_not_retry_terminal(monkeypatch):
     """tool 返回 success=False 且错误是 terminal（permission denied）→ 不重试。"""
     ex = _executor_with_node(monkeypatch, _ReturnFailureNode)
     r = ex.execute(
-        "read_file", {"file_path": "/x"}, AgentContext(),
+        "read_file",
+        {"file_path": "/x"},
+        AgentContext(),
         tools={"read_file": {}},
     )
     assert r.success is False
@@ -77,7 +83,9 @@ def test_tool_exception_retry_capped(monkeypatch):
     """tool 持续抛异常 → 重试次数受 retry_attempts 限制，不无限循环。"""
     ex = _executor_with_node(monkeypatch, _BoomNode)
     r = ex.execute(
-        "command", {"action": "rm -rf /"}, AgentContext(),
+        "command",
+        {"action": "rm -rf /"},
+        AgentContext(),
         tools={"command": {}},
     )
     assert r.success is False

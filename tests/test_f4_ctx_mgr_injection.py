@@ -5,6 +5,7 @@
 - 引擎内每 5 轮调 _maybe_compact_messages 触发 in-run 压缩（抑制 O(n²) 增长）；
 - 组合引擎把 ctx_mgr 透传给子引擎。
 """
+
 from types import SimpleNamespace
 
 from xenon.engine.combined_engines import ReactReflectionEngine
@@ -46,9 +47,10 @@ class TestCtxMgrInjection:
     def test_react_without_ctx_mgr_caps_at_10(self):
         """无 ctx_mgr → 回退 AgentContext 历史 [-10:]（向后兼容）。"""
         ctx = AgentContext()
-        ctx.set_conversation_messages([
-            {"role": "user", "content": f"历史user{i}"} for i in range(20)
-        ] + [{"role": "assistant", "content": f"历史asst{i}"} for i in range(20)])
+        ctx.set_conversation_messages(
+            [{"role": "user", "content": f"历史user{i}"} for i in range(20)]
+            + [{"role": "assistant", "content": f"历史asst{i}"} for i in range(20)]
+        )
         eng = ReActEngine(["m1"], max_iterations=3)
         captured = {}
 
@@ -102,7 +104,9 @@ class TestMaybeCompactMessages:
         assert eng._maybe_compact_messages(msgs, 0) is msgs
 
     def test_invokes_compact_at_turn_5(self, monkeypatch):
-        eng = ReActEngine(["m1"], model_configs={"m1": SimpleNamespace(context_window=1000)})
+        eng = ReActEngine(
+            ["m1"], model_configs={"m1": SimpleNamespace(context_window=1000)}
+        )
         called = {"n": 0}
 
         def fake_compact(self_cm, *a, **k):
@@ -125,9 +129,7 @@ class TestMaybeCompactMessages:
         def boom(self_cm, *a, **k):
             raise RuntimeError("compact exploded")
 
-        monkeypatch.setattr(
-            "xenon.repl.context_manager.ContextManager.compact", boom
-        )
+        monkeypatch.setattr("xenon.repl.context_manager.ContextManager.compact", boom)
         msgs = [{"role": "user", "content": "msg"}]
         out = eng._maybe_compact_messages(msgs, 5)
         assert out is msgs  # 压缩失败时沿用原 messages
@@ -143,9 +145,7 @@ class TestCompositeForwarding:
             received.append(("reactor", ctx_mgr))
             return "reactor output"
 
-        def fake_review(
-            user_input, output, evidence="", context=None, ctx_mgr=None
-        ):
+        def fake_review(user_input, output, evidence="", context=None, ctx_mgr=None):
             received.append(("reflector", ctx_mgr))
             return {"pass": True, "score": 9, "feedback": "ok", "issues": []}
 

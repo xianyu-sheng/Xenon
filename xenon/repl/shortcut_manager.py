@@ -36,11 +36,12 @@ _SHORTCUTS_PATH = Path.home() / ".xenon" / "shortcuts.yaml"
 @dataclass
 class Shortcut:
     """一条快捷指令。"""
-    name: str                    # 命令名，如 "deploy"
-    description: str = ""        # 描述
+
+    name: str  # 命令名，如 "deploy"
+    description: str = ""  # 描述
     steps: list[str] = field(default_factory=list)  # 要执行的命令列表
     params: list[dict[str, str]] = field(default_factory=list)  # 参数定义
-    cwd: str | None = None       # 工作目录
+    cwd: str | None = None  # 工作目录
 
 
 class ShortcutManager:
@@ -75,7 +76,9 @@ class ShortcutManager:
             "shortcuts": [asdict(s) for s in self.shortcuts.values()],
         }
         self.path.write_text(
-            yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False),
+            yaml.dump(
+                data, allow_unicode=True, default_flow_style=False, sort_keys=False
+            ),
             encoding="utf-8",
         )
 
@@ -95,9 +98,7 @@ class ShortcutManager:
         if not name.replace("_", "").replace("-", "").isalnum():
             # 名称会动态注册成 /<name> 斜杠命令——含路径分隔符或
             # 冒号等符号的名字既无法作为命令调用，也污染命名空间。
-            raise ValueError(
-                f"快捷指令名只能包含字母/数字/下划线/连字符: {name!r}"
-            )
+            raise ValueError(f"快捷指令名只能包含字母/数字/下划线/连字符: {name!r}")
         if not steps:
             raise ValueError("快捷指令至少需要一个执行步骤")
 
@@ -153,13 +154,17 @@ class ShortcutManager:
                 if sys.platform == "win32":
                     proc = subprocess.run(
                         ["powershell", "-Command", cmd],
-                        capture_output=True, text=True, timeout=60,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
                         cwd=shortcut.cwd,
                     )
                 else:
                     proc = subprocess.run(
                         ["/bin/bash", "-c", cmd],
-                        capture_output=True, text=True, timeout=60,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
                         cwd=shortcut.cwd,
                     )
 

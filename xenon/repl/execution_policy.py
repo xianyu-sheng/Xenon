@@ -28,8 +28,12 @@ def execution_boundary_text(level: ExecutionLevel | int) -> str:
     """Render one deterministic, turn-local authorization boundary."""
     boundary = {
         int(ExecutionLevel.ANSWER_ONLY): "本轮只能输出回答，禁止调用任何工具。",
-        int(ExecutionLevel.READ_ONLY): "本轮只允许只读工具，禁止写文件、修改状态或执行命令。",
-        int(ExecutionLevel.WRITE): "本轮允许读取和写入，但禁止 command、动态工具及任何命令执行。",
+        int(
+            ExecutionLevel.READ_ONLY
+        ): "本轮只允许只读工具，禁止写文件、修改状态或执行命令。",
+        int(
+            ExecutionLevel.WRITE
+        ): "本轮允许读取和写入，但禁止 command、动态工具及任何命令执行。",
         int(ExecutionLevel.EXECUTE): "本轮已授权按正常权限闸门使用执行类工具。",
     }.get(int(level), "")
     if not boundary:
@@ -277,16 +281,19 @@ def classify_execution_policy(
     request_source = source
     cues = list(_REQUEST_CUE.finditer(source))
     if cues:
-        request_source = source[cues[-1].end():].strip() or source
+        request_source = source[cues[-1].end() :].strip() or source
 
     wants_execute = bool(_EXECUTE.search(request_source)) and not no_execute
     # 显式写入动词优先；缺失时再看隐含写盘句式（需求/处置/口语修复），
     # 否则「我需要一个 config.yaml」这类请求会掉到 ANSWER_ONLY。
-    wants_write = bool(
-        _WRITE.search(request_source)
-        or _DIRECT_BARE_GIT_REQUEST.search(source)
-        or _IMPLICIT_WRITE.search(request_source)
-    ) and not no_write
+    wants_write = (
+        bool(
+            _WRITE.search(request_source)
+            or _DIRECT_BARE_GIT_REQUEST.search(source)
+            or _IMPLICIT_WRITE.search(request_source)
+        )
+        and not no_write
+    )
     # Keep path/URL evidence from the complete user turn.  They are frequently
     # placed before “请你分析/学习…”, while request_source intentionally starts
     # after the last polite request cue.  Looking only at request_source used

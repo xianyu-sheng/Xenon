@@ -7,6 +7,8 @@
 import time
 from pathlib import Path
 
+from xenon.repl.provider_registry import get_configured_providers
+
 # 清除缓存以测试冷启动
 cache_path = Path.home() / ".xenon" / "cache" / "provider_models.json"
 if cache_path.exists():
@@ -15,7 +17,6 @@ if cache_path.exists():
 
 print("\n=== 测试 1: 冷启动（无缓存，并行请求）===")
 start = time.time()
-from xenon.repl.provider_registry import get_configured_providers
 providers = get_configured_providers(refresh_models=True, use_cache=True)
 cold_time = time.time() - start
 
@@ -42,6 +43,6 @@ print(f"节省时间: {cold_time - warm_time:.2f}s")
 if warm_time < 0.1:
     print("✓ 热启动 <100ms，达到优化目标")
 else:
-    print(f"⚠ 热启动 {warm_time*1000:.0f}ms，可能有改进空间")
+    print(f"⚠ 热启动 {warm_time * 1000:.0f}ms，可能有改进空间")
 
 print(f"\n缓存位置: {cache_path}")

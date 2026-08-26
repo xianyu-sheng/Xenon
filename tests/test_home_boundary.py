@@ -102,11 +102,13 @@ def test_plain_remember_in_unscoped_mode_defaults_to_user_global(tmp_path, monke
     repl = REPL(streaming=False)
     repl.project_ctx.root = None
     repl.project_ctx._initialized = True
-    repl._memory_service = MemoryService(MemoryBackendRegistry(
-        None,
-        user_data_root=tmp_path / "user-memory",
-        user_config_root=tmp_path / "user-config",
-    ))
+    repl._memory_service = MemoryService(
+        MemoryBackendRegistry(
+            None,
+            user_data_root=tmp_path / "user-memory",
+            user_config_root=tmp_path / "user-config",
+        )
+    )
 
     handled = repl._handle_explicit_memory_request("记住：我喜欢简洁输出")
 
@@ -126,11 +128,13 @@ def test_explicit_project_memory_is_rejected_without_a_project(tmp_path, monkeyp
     repl = REPL(streaming=False)
     repl.project_ctx.root = None
     repl.project_ctx._initialized = True
-    repl._memory_service = MemoryService(MemoryBackendRegistry(
-        None,
-        user_data_root=tmp_path / "user-memory",
-        user_config_root=tmp_path / "user-config",
-    ))
+    repl._memory_service = MemoryService(
+        MemoryBackendRegistry(
+            None,
+            user_data_root=tmp_path / "user-memory",
+            user_config_root=tmp_path / "user-config",
+        )
+    )
 
     handled = repl._handle_explicit_memory_request(
         "记住：项目使用 Python 3.12，存到项目本地记忆"
@@ -143,11 +147,13 @@ def test_explicit_project_memory_is_rejected_without_a_project(tmp_path, monkeyp
 
 def test_memory_status_marks_project_scopes_inactive_without_project(tmp_path):
     repl = REPL(streaming=False)
-    repl._memory_service = MemoryService(MemoryBackendRegistry(
-        None,
-        user_data_root=tmp_path / "user-memory",
-        user_config_root=tmp_path / "user-config",
-    ))
+    repl._memory_service = MemoryService(
+        MemoryBackendRegistry(
+            None,
+            user_data_root=tmp_path / "user-memory",
+            user_config_root=tmp_path / "user-config",
+        )
+    )
 
     result = _cmd_memory_v2(args="status", repl=repl)
 
@@ -157,11 +163,13 @@ def test_memory_status_marks_project_scopes_inactive_without_project(tmp_path):
 
 def test_memory_add_defaults_to_user_scope_without_project(tmp_path):
     repl = REPL(streaming=False)
-    repl._memory_service = MemoryService(MemoryBackendRegistry(
-        None,
-        user_data_root=tmp_path / "user-memory",
-        user_config_root=tmp_path / "user-config",
-    ))
+    repl._memory_service = MemoryService(
+        MemoryBackendRegistry(
+            None,
+            user_data_root=tmp_path / "user-memory",
+            user_config_root=tmp_path / "user-config",
+        )
+    )
 
     result = _cmd_memory_v2(args="add 默认使用简洁输出", repl=repl)
 

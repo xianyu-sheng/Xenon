@@ -53,7 +53,10 @@ def test_project_local_write_has_json_markdown_receipt_and_private_mode(tmp_path
     assert receipt.destination == str(destination)
     assert receipt.created is True
     assert receipt.record.id in destination.read_text(encoding="utf-8")
-    assert json.loads(metadata.read_text(encoding="utf-8"))["items"][0]["content"] == receipt.record.content
+    assert (
+        json.loads(metadata.read_text(encoding="utf-8"))["items"][0]["content"]
+        == receipt.record.content
+    )
     assert stat.S_IMODE(metadata.stat().st_mode) == 0o600
     assert stat.S_IMODE(metadata.parent.stat().st_mode) == 0o700
     assert "@.xenon/memory/local/INDEX.md" in (
@@ -103,7 +106,9 @@ def test_exact_duplicate_updates_one_record(tmp_path):
 def test_threshold_archives_low_value_old_record_but_protects_new_write(tmp_path):
     service = make_service(
         tmp_path,
-        policy=MemoryPolicy(max_item_tokens=100, max_leaf_tokens=18, max_active_tokens=100),
+        policy=MemoryPolicy(
+            max_item_tokens=100, max_leaf_tokens=18, max_active_tokens=100
+        ),
     )
     old = service.remember("旧的项目背景信息一二三四五六", importance=0.1)
     new = service.remember("新的项目背景信息七八九十十一", importance=0.9)
@@ -112,16 +117,26 @@ def test_threshold_archives_low_value_old_record_but_protects_new_write(tmp_path
         scope=MemoryScope.PROJECT_LOCAL,
         include_archived=True,
     )
-    assert next(item for item in all_records if item.id == old.record.id).status == MemoryStatus.ARCHIVED
-    assert next(item for item in all_records if item.id == new.record.id).status == MemoryStatus.ACTIVE
+    assert (
+        next(item for item in all_records if item.id == old.record.id).status
+        == MemoryStatus.ARCHIVED
+    )
+    assert (
+        next(item for item in all_records if item.id == new.record.id).status
+        == MemoryStatus.ACTIVE
+    )
     assert old.record.id in new.archived_ids
-    assert (service.registry.get(MemoryScope.PROJECT_LOCAL).root / "archive.jsonl").exists()
+    assert (
+        service.registry.get(MemoryScope.PROJECT_LOCAL).root / "archive.jsonl"
+    ).exists()
 
 
 def test_pinned_memory_is_never_automatically_archived(tmp_path):
     service = make_service(
         tmp_path,
-        policy=MemoryPolicy(max_item_tokens=100, max_leaf_tokens=10, max_active_tokens=100),
+        policy=MemoryPolicy(
+            max_item_tokens=100, max_leaf_tokens=10, max_active_tokens=100
+        ),
     )
     pinned = service.remember("必须保留的固定约束", pinned=True)
     receipt = service.remember("本轮新增的重要事实")
@@ -134,7 +149,9 @@ def test_pinned_memory_is_never_automatically_archived(tmp_path):
 def test_shared_scope_warns_instead_of_auto_archiving(tmp_path):
     service = make_service(
         tmp_path,
-        policy=MemoryPolicy(max_item_tokens=100, max_leaf_tokens=10, max_active_tokens=100),
+        policy=MemoryPolicy(
+            max_item_tokens=100, max_leaf_tokens=10, max_active_tokens=100
+        ),
     )
     service.remember("团队共享约束第一条", scope=MemoryScope.PROJECT_SHARED)
     receipt = service.remember("团队共享约束第二条", scope=MemoryScope.PROJECT_SHARED)
@@ -155,8 +172,12 @@ def test_archive_is_reversible(tmp_path):
 
 def test_retrieval_is_cross_scope_bounded_and_persists_access_count(tmp_path):
     service = make_service(tmp_path)
-    local = service.remember("数据库固定使用 PostgreSQL", scope=MemoryScope.PROJECT_LOCAL)
-    service.remember("我偏好简洁回答", scope=MemoryScope.USER, kind=MemoryKind.PREFERENCE)
+    local = service.remember(
+        "数据库固定使用 PostgreSQL", scope=MemoryScope.PROJECT_LOCAL
+    )
+    service.remember(
+        "我偏好简洁回答", scope=MemoryScope.USER, kind=MemoryKind.PREFERENCE
+    )
 
     selected = service.retrieve("帮我设计 PostgreSQL 数据库", token_budget=100, limit=3)
     reloaded = service.list_records(scope=MemoryScope.PROJECT_LOCAL)[0]
@@ -172,7 +193,9 @@ def test_session_memory_never_writes_disk(tmp_path):
     receipt = service.remember("只在当前会话使用", scope=MemoryScope.SESSION)
 
     assert receipt.destination == "当前会话（不写入磁盘）"
-    assert service.list_records(scope=MemoryScope.SESSION)[0].content == "只在当前会话使用"
+    assert (
+        service.list_records(scope=MemoryScope.SESSION)[0].content == "只在当前会话使用"
+    )
     assert not (tmp_path / "user-memory").exists()
 
 
@@ -181,7 +204,9 @@ def test_user_memory_creates_transparent_global_index_pointer(tmp_path):
     receipt = service.remember("我偏好简洁回答", scope=MemoryScope.USER)
 
     entrypoint = tmp_path / "user-config/XENON.md"
-    assert str((tmp_path / "user-memory/INDEX.md")) in entrypoint.read_text(encoding="utf-8")
+    assert str((tmp_path / "user-memory/INDEX.md")) in entrypoint.read_text(
+        encoding="utf-8"
+    )
     assert receipt.destination.endswith("project.md")
     assert stat.S_IMODE(entrypoint.stat().st_mode) == 0o600
 
@@ -224,10 +249,30 @@ def test_auxiliary_entrypoint_failure_returns_warning_after_successful_write(
 @pytest.mark.parametrize(
     ("text", "scope", "kind", "content"),
     [
-        ("把“项目默认使用 Python 3.12”存入我的项目本地记忆", MemoryScope.PROJECT_LOCAL, MemoryKind.FACT, "项目默认使用 Python 3.12"),
-        ("请记住：我偏好简洁输出", MemoryScope.PROJECT_LOCAL, MemoryKind.PREFERENCE, "我偏好简洁输出"),
-        ("将团队必须跑 pytest 写入项目共享记忆", MemoryScope.PROJECT_SHARED, MemoryKind.CONSTRAINT, "团队必须跑 pytest"),
-        ("remember this project uses uv", MemoryScope.PROJECT_LOCAL, MemoryKind.FACT, "this project uses uv"),
+        (
+            "把“项目默认使用 Python 3.12”存入我的项目本地记忆",
+            MemoryScope.PROJECT_LOCAL,
+            MemoryKind.FACT,
+            "项目默认使用 Python 3.12",
+        ),
+        (
+            "请记住：我偏好简洁输出",
+            MemoryScope.PROJECT_LOCAL,
+            MemoryKind.PREFERENCE,
+            "我偏好简洁输出",
+        ),
+        (
+            "将团队必须跑 pytest 写入项目共享记忆",
+            MemoryScope.PROJECT_SHARED,
+            MemoryKind.CONSTRAINT,
+            "团队必须跑 pytest",
+        ),
+        (
+            "remember this project uses uv",
+            MemoryScope.PROJECT_LOCAL,
+            MemoryKind.FACT,
+            "this project uses uv",
+        ),
     ],
 )
 def test_explicit_request_parser(text, scope, kind, content):
@@ -264,8 +309,7 @@ def test_automatic_candidate_rejects_questions_and_secrets():
 
 def test_context_compiler_enforces_budget_and_exposes_provenance():
     records = [
-        MemoryRecord(content=f"项目事实 {index} " + "很长" * 10)
-        for index in range(5)
+        MemoryRecord(content=f"项目事实 {index} " + "很长" * 10) for index in range(5)
     ]
     output = MemoryContextCompiler().compile(records, token_budget=80)
 
@@ -291,7 +335,9 @@ def test_repl_explicit_memory_request_writes_and_shows_receipt(monkeypatch, tmp_
 
     service = make_service(tmp_path)
     output = StringIO()
-    monkeypatch.setattr(repl_module, "console", Console(file=output, force_terminal=False))
+    monkeypatch.setattr(
+        repl_module, "console", Console(file=output, force_terminal=False)
+    )
     repl = repl_module.REPL.__new__(repl_module.REPL)
     repl._memory_detector = MemoryCandidateDetector()
     repl._memory_service = service
@@ -312,16 +358,16 @@ def test_repl_can_store_the_previous_turn_by_reference(monkeypatch, tmp_path):
 
     service = make_service(tmp_path)
     output = StringIO()
-    monkeypatch.setattr(repl_module, "console", Console(file=output, force_terminal=False))
+    monkeypatch.setattr(
+        repl_module, "console", Console(file=output, force_terminal=False)
+    )
     repl = repl_module.REPL.__new__(repl_module.REPL)
     repl._memory_detector = MemoryCandidateDetector()
     repl._memory_service = service
     repl.ctx_mgr = ContextManager()
     repl.ctx_mgr.add_assistant_message("项目架构采用接口驱动加注册表模式")
 
-    handled = repl._handle_explicit_memory_request(
-        "这一条帮我存入我的项目本地记忆"
-    )
+    handled = repl._handle_explicit_memory_request("这一条帮我存入我的项目本地记忆")
 
     assert handled is True
     assert service.list_records()[0].content == "项目架构采用接口驱动加注册表模式"
@@ -437,8 +483,14 @@ def test_explicit_replace_and_rollback_preserve_version_chain(tmp_path):
         scope=MemoryScope.PROJECT_LOCAL,
         include_archived=True,
     )
-    assert next(item for item in records if item.id == previous.id).status == MemoryStatus.ACTIVE
-    assert next(item for item in records if item.id == current.id).status == MemoryStatus.ARCHIVED
+    assert (
+        next(item for item in records if item.id == previous.id).status
+        == MemoryStatus.ACTIVE
+    )
+    assert (
+        next(item for item in records if item.id == current.id).status
+        == MemoryStatus.ARCHIVED
+    )
 
 
 def test_explain_retrieval_does_not_touch_but_retrieve_does(tmp_path):
@@ -603,8 +655,14 @@ def test_restore_after_rollback_keeps_only_one_active_version(tmp_path):
         scope=MemoryScope.PROJECT_LOCAL,
         include_archived=True,
     )
-    assert next(item for item in records if item.id == previous.record.id).status == MemoryStatus.SUPERSEDED
-    assert next(item for item in records if item.id == current.record.id).status == MemoryStatus.ACTIVE
+    assert (
+        next(item for item in records if item.id == previous.record.id).status
+        == MemoryStatus.SUPERSEDED
+    )
+    assert (
+        next(item for item in records if item.id == current.record.id).status
+        == MemoryStatus.ACTIVE
+    )
 
 
 def test_memory_inspector_replace_pin_and_doctor_commands(tmp_path):
@@ -630,9 +688,7 @@ def test_memory_inspector_replace_pin_and_doctor_commands(tmp_path):
         session_state=session,
     )
     replacement_id = service.list_records()[0].id
-    rolled_back = _cmd_memory(
-        args=f"rollback {replacement_id}", session_state=session
-    )
+    rolled_back = _cmd_memory(args=f"rollback {replacement_id}", session_state=session)
     doctor = _cmd_memory(args="doctor", session_state=session)
 
     assert "已添加" in added

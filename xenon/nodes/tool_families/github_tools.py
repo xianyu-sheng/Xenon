@@ -24,29 +24,38 @@ logger = logging.getLogger(__name__)
 
 def _tool_node_module():
     import xenon.nodes.tool_node as tool_module
+
     return tool_module
+
 
 class GitHubToolsMixin:
     """Fetch GitHub resources and clone/analyse repositories."""
+
     def _github_fetch(self, context: AgentContext) -> dict[str, Any]:
         """Fetch repository files, README, issues and pull requests via GitHub API."""
         repo_input = self._resolve_template(self.repo, context)
         if not repo_input:
-            raise ValueError(f"[{self.id}] github_fetch 需要 repo 参数（格式: owner/repo）")
+            raise ValueError(
+                f"[{self.id}] github_fetch 需要 repo 参数（格式: owner/repo）"
+            )
 
         try:
             reference = parse_github_reference(repo_input)
         except ValueError as exc:
             return {
-                "action_type": "github_fetch", "repo": repo_input,
-                "content": "", "success": False,
+                "action_type": "github_fetch",
+                "repo": repo_input,
+                "content": "",
+                "success": False,
                 "error": str(exc),
             }
         repo = reference.slug
 
         action = self._resolve_template(self.github_action, context) or "list_files"
         branch_value = (self._resolve_template(self.branch, context) or "").strip()
-        path_value = (self._resolve_template(self.github_path, context) or "").strip("/")
+        path_value = (self._resolve_template(self.github_path, context) or "").strip(
+            "/"
+        )
 
         # A pasted resource URL carries stronger semantics than the default
         # list_files action, while explicit branch/path parameters still win.
@@ -67,24 +76,35 @@ class GitHubToolsMixin:
             import httpx
         except ImportError:
             return {
-                "action_type": "github_fetch", "repo": repo,
-                "action": action, "content": "", "success": False,
+                "action_type": "github_fetch",
+                "repo": repo,
+                "action": action,
+                "content": "",
+                "success": False,
                 "error": "github_fetch 需要 httpx 库。请 pip install httpx",
             }
 
         headers = self._github_headers()
 
         try:
-            with _tool_node_module()._create_http_client(timeout=self.timeout, follow_redirects=True) as client:
+            with _tool_node_module()._create_http_client(
+                timeout=self.timeout, follow_redirects=True
+            ) as client:
                 if action in {"list_files", "fetch_file", "fetch_readme"}:
                     branch_value = branch_value or self._github_default_branch(
-                        client, repo, headers,
+                        client,
+                        repo,
+                        headers,
                     )
                 branch = quote(branch_value, safe="")
                 github_path = quote(path_value, safe="/")
                 logger.info(
                     "[%s] GitHub %s: %s (branch=%s, path=%s)",
-                    self.id, action, repo, branch_value or "-", path_value or "-",
+                    self.id,
+                    action,
+                    repo,
+                    branch_value or "-",
+                    path_value or "-",
                 )
 
                 if action == "list_files":
@@ -97,7 +117,8 @@ class GitHubToolsMixin:
                     data = resp.json()
                     prefix = path_value.rstrip("/") + "/" if path_value else ""
                     files = [
-                        item["path"] for item in data.get("tree", [])
+                        item["path"]
+                        for item in data.get("tree", [])
                         if item.get("type") == "blob"
                         and not item.get("path", "").startswith(".git/")
                         and (not prefix or item.get("path", "").startswith(prefix))
@@ -113,18 +134,25 @@ class GitHubToolsMixin:
                         )
                     self._write_output(context, result_text[:5000])
                     return {
-                        "action_type": "github_fetch", "repo": repo,
-                        "action": action, "branch": branch_value,
-                        "path": path_value, "files": files,
-                        "file_count": len(files), "content": result_text,
+                        "action_type": "github_fetch",
+                        "repo": repo,
+                        "action": action,
+                        "branch": branch_value,
+                        "path": path_value,
+                        "files": files,
+                        "file_count": len(files),
+                        "content": result_text,
                         "success": True,
                     }
 
                 if action == "fetch_file":
                     if not github_path:
                         return {
-                            "action_type": "github_fetch", "repo": repo,
-                            "action": action, "content": "", "success": False,
+                            "action_type": "github_fetch",
+                            "repo": repo,
+                            "action": action,
+                            "content": "",
+                            "success": False,
                             "error": "fetch_file 需要 github_path 参数",
                         }
                     api_url = (
@@ -139,10 +167,14 @@ class GitHubToolsMixin:
                         text = text[:50000] + "\n\n... (内容已截断，超过 50000 字符)"
                     self._write_output(context, text[:5000])
                     return {
-                        "action_type": "github_fetch", "repo": repo,
-                        "action": action, "branch": branch_value,
-                        "path": path_value, "content": text,
-                        "content_length": len(text), "success": True,
+                        "action_type": "github_fetch",
+                        "repo": repo,
+                        "action": action,
+                        "branch": branch_value,
+                        "path": path_value,
+                        "content": text,
+                        "content_length": len(text),
+                        "success": True,
                     }
 
                 if action == "fetch_readme":
@@ -155,18 +187,24 @@ class GitHubToolsMixin:
                         text = text[:20000] + "\n\n... (已截断)"
                     self._write_output(context, text[:5000])
                     return {
-                        "action_type": "github_fetch", "repo": repo,
-                        "action": action, "branch": branch_value,
+                        "action_type": "github_fetch",
+                        "repo": repo,
+                        "action": action,
+                        "branch": branch_value,
                         "path": data.get("path", "README"),
-                        "content": text, "success": True,
+                        "content": text,
+                        "success": True,
                     }
 
                 if action in {"fetch_issue", "fetch_pull"}:
                     number = reference.number
                     if number is None:
                         return {
-                            "action_type": "github_fetch", "repo": repo,
-                            "action": action, "content": "", "success": False,
+                            "action_type": "github_fetch",
+                            "repo": repo,
+                            "action": action,
+                            "content": "",
+                            "success": False,
                             "error": f"{action} 需要 issues/pull URL 中的编号",
                         }
                     endpoint = "issues" if action == "fetch_issue" else "pulls"
@@ -177,11 +215,14 @@ class GitHubToolsMixin:
                     content = self._format_github_discussion(data, action, number)
                     self._write_output(context, content[:5000])
                     return {
-                        "action_type": "github_fetch", "repo": repo,
-                        "action": action, "number": number,
+                        "action_type": "github_fetch",
+                        "repo": repo,
+                        "action": action,
+                        "number": number,
                         "state": data.get("state", ""),
                         "title": data.get("title", ""),
-                        "content": content, "success": True,
+                        "content": content,
+                        "success": True,
                     }
 
                 if action == "repo_activity":
@@ -193,8 +234,11 @@ class GitHubToolsMixin:
                     )
 
                 return {
-                    "action_type": "github_fetch", "repo": repo,
-                    "action": action, "content": "", "success": False,
+                    "action_type": "github_fetch",
+                    "repo": repo,
+                    "action": action,
+                    "content": "",
+                    "success": False,
                     "error": (
                         f"不支持的 github_action: {action}（可选: list_files, "
                         "fetch_file, fetch_readme, fetch_issue, fetch_pull, "
@@ -216,8 +260,11 @@ class GitHubToolsMixin:
                 if fallback.get("success"):
                     return fallback
             return {
-                "action_type": "github_fetch", "repo": repo,
-                "action": action, "content": "", "success": False,
+                "action_type": "github_fetch",
+                "repo": repo,
+                "action": action,
+                "content": "",
+                "success": False,
                 "retryable": False,
                 "error": (
                     f"GitHub API 错误: {e.response.status_code} "
@@ -235,11 +282,15 @@ class GitHubToolsMixin:
             if fallback.get("success"):
                 return fallback
             return {
-                "action_type": "github_fetch", "repo": repo,
-                "action": action, "content": "", "success": False,
+                "action_type": "github_fetch",
+                "repo": repo,
+                "action": action,
+                "content": "",
+                "success": False,
                 "retryable": False,
                 "error": f"GitHub 操作失败: {e}",
             }
+
     def _github_repo_activity(
         self,
         client: Any,
@@ -295,11 +346,13 @@ class GitHubToolsMixin:
         ]
         if median_merge is not None:
             lines.append(f"- 已合并抽样 PR 的中位合并耗时: {median_merge:.1f} 小时")
-        lines.extend([
-            "",
-            "说明：以上是公开 API 的最近 30 条 PR 抽样信号，不能等同于官方 SLA；",
-            "比较多个项目时应使用相同时间窗口，并结合 CONTRIBUTING/提交入口核验。",
-        ])
+        lines.extend(
+            [
+                "",
+                "说明：以上是公开 API 的最近 30 条 PR 抽样信号，不能等同于官方 SLA；",
+                "比较多个项目时应使用相同时间窗口，并结合 CONTRIBUTING/提交入口核验。",
+            ]
+        )
         content = "\n".join(lines)
         self._write_output(context, content)
         return {
@@ -325,6 +378,7 @@ class GitHubToolsMixin:
             return datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
+
     def _github_html_fallback(
         self,
         context: AgentContext,
@@ -414,7 +468,9 @@ class GitHubToolsMixin:
 
     @staticmethod
     def _format_github_discussion(
-        data: dict[str, Any], action: str, number: int,
+        data: dict[str, Any],
+        action: str,
+        number: int,
     ) -> str:
         kind = "Pull Request" if action == "fetch_pull" else "Issue"
         user = data.get("user") or {}
@@ -440,6 +496,7 @@ class GitHubToolsMixin:
             raise ValueError(f"GitHub 未返回 {repo} 的默认分支")
         _tool_node_module()._GITHUB_DEFAULT_BRANCH_CACHE[repo] = branch
         return branch
+
     def _clone_repo(self, context: AgentContext) -> dict[str, Any]:
         """将 GitHub 仓库克隆到本地缓存并返回结构化摘要。
 
@@ -448,15 +505,19 @@ class GitHubToolsMixin:
         - 自动分析：目录结构、关键文件、代码统计
         """
         import subprocess
+
         repo_input = self._resolve_template(self.repo, context)
         if not repo_input:
-            raise ValueError(f"[{self.id}] clone_repo 需要 repo 参数（格式: owner/repo 或完整 URL）")
+            raise ValueError(
+                f"[{self.id}] clone_repo 需要 repo 参数（格式: owner/repo 或完整 URL）"
+            )
 
         try:
             reference = parse_github_reference(repo_input)
         except ValueError as exc:
             return {
-                "action_type": "clone_repo", "repo": repo_input,
+                "action_type": "clone_repo",
+                "repo": repo_input,
                 "success": False,
                 "error": str(exc),
             }
@@ -486,14 +547,27 @@ class GitHubToolsMixin:
             logger.info(f"[{self.id}] 克隆仓库: {clone_url} → {target_dir}")
             try:
                 result = subprocess.run(
-                    ["git", "clone", "--depth", "1", "--single-branch", "-b", branch,
-                     clone_url, str(target_dir)],
-                    capture_output=True, text=True, timeout=self.timeout, env=git_env,
+                    [
+                        "git",
+                        "clone",
+                        "--depth",
+                        "1",
+                        "--single-branch",
+                        "-b",
+                        branch,
+                        clone_url,
+                        str(target_dir),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout,
+                    env=git_env,
                 )
                 if result.returncode != 0:
                     stderr = result.stderr.strip()
                     return {
-                        "action_type": "clone_repo", "repo": repo,
+                        "action_type": "clone_repo",
+                        "repo": repo,
                         "success": False,
                         "error": (
                             f"git clone 失败 (branch={branch}): {_tool_node_module()._last_error_lines(stderr)}"
@@ -503,14 +577,16 @@ class GitHubToolsMixin:
                 cache_updated = True
             except FileNotFoundError:
                 return {
-                    "action_type": "clone_repo", "repo": repo,
+                    "action_type": "clone_repo",
+                    "repo": repo,
                     "success": False,
                     "error": "本机未安装 git，无法克隆仓库。请先安装 git。",
                 }
             except subprocess.TimeoutExpired:
                 self._rmtree_cleanup(target_dir)
                 return {
-                    "action_type": "clone_repo", "repo": repo,
+                    "action_type": "clone_repo",
+                    "repo": repo,
                     "success": False,
                     "retryable": False,
                     "error": (
@@ -524,13 +600,35 @@ class GitHubToolsMixin:
             # diverged cache remains usable, but the caller sees a warning.
             try:
                 fetch = subprocess.run(
-                    ["git", "-C", str(target_dir), "fetch", "--depth", "1", "origin", branch],
-                    capture_output=True, text=True, timeout=self.timeout, env=git_env,
+                    [
+                        "git",
+                        "-C",
+                        str(target_dir),
+                        "fetch",
+                        "--depth",
+                        "1",
+                        "origin",
+                        branch,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout,
+                    env=git_env,
                 )
                 if fetch.returncode == 0:
                     merge = subprocess.run(
-                        ["git", "-C", str(target_dir), "merge", "--ff-only", "FETCH_HEAD"],
-                        capture_output=True, text=True, timeout=self.timeout, env=git_env,
+                        [
+                            "git",
+                            "-C",
+                            str(target_dir),
+                            "merge",
+                            "--ff-only",
+                            "FETCH_HEAD",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=self.timeout,
+                        env=git_env,
                     )
                     cache_updated = merge.returncode == 0
                     if not cache_updated:
@@ -573,7 +671,8 @@ class GitHubToolsMixin:
         except OSError as e:
             logger.error(
                 "清理残留目录失败 (%s)，clone 可能因 '目录非空' 失败: %s",
-                target_dir, e,
+                target_dir,
+                e,
             )
 
     @staticmethod
@@ -587,11 +686,13 @@ class GitHubToolsMixin:
                 config_index = int(env.get("GIT_CONFIG_COUNT", "0"))
             except ValueError:
                 config_index = 0
-            env.update({
-                "GIT_CONFIG_COUNT": str(config_index + 1),
-                f"GIT_CONFIG_KEY_{config_index}": "http.extraHeader",
-                f"GIT_CONFIG_VALUE_{config_index}": f"Authorization: Bearer {token}",
-            })
+            env.update(
+                {
+                    "GIT_CONFIG_COUNT": str(config_index + 1),
+                    f"GIT_CONFIG_KEY_{config_index}": "http.extraHeader",
+                    f"GIT_CONFIG_VALUE_{config_index}": f"Authorization: Bearer {token}",
+                }
+            )
         return env
 
     def _resolve_branch_for_clone(
@@ -620,21 +721,26 @@ class GitHubToolsMixin:
 
         # 第 2 层：ls-remote 探测
         import subprocess
+
         try:
             result = subprocess.run(
                 ["git", "ls-remote", "--symref", clone_url, "HEAD"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
                 env=self._git_auth_env(),
             )
             if result.returncode == 0:
                 # 输出形如: ref: refs/heads/main	HEAD
                 import re
+
                 m = re.search(r"ref: refs/heads/(\S+)", result.stdout)
                 if m:
                     default_branch = m.group(1)
                     logger.info(
                         "[%s] ls-remote 探测默认分支: %s",
-                        self.id, default_branch,
+                        self.id,
+                        default_branch,
                     )
                     return default_branch
         except Exception as e:
@@ -645,7 +751,9 @@ class GitHubToolsMixin:
         return "main"
 
     @staticmethod
-    def _analyze_cloned_repo(target_dir: Path, repo: str, branch: str) -> dict[str, Any]:
+    def _analyze_cloned_repo(
+        target_dir: Path, repo: str, branch: str
+    ) -> dict[str, Any]:
         """分析已克隆的仓库，返回结构化摘要。"""
         import fnmatch
 
@@ -658,43 +766,84 @@ class GitHubToolsMixin:
 
         # 忽略的目录和文件
         ignore_patterns = [
-            ".git", "__pycache__", "node_modules", ".venv", "venv",
-            ".tox", ".eggs", "*.egg-info", ".pytest_cache", ".mypy_cache",
-            ".ruff_cache", "dist", "build", "*.pyc", ".DS_Store",
+            ".git",
+            "__pycache__",
+            "node_modules",
+            ".venv",
+            "venv",
+            ".tox",
+            ".eggs",
+            "*.egg-info",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            "dist",
+            "build",
+            "*.pyc",
+            ".DS_Store",
         ]
 
         ext_to_lang = {
-            ".py": "Python", ".js": "JavaScript", ".ts": "TypeScript",
-            ".go": "Go", ".rs": "Rust", ".java": "Java", ".c": "C",
-            ".cpp": "C++", ".h": "C/C++ Header", ".rb": "Ruby",
-            ".sh": "Shell", ".bash": "Shell", ".zsh": "Shell",
-            ".yaml": "YAML", ".yml": "YAML", ".json": "JSON",
-            ".toml": "TOML", ".md": "Markdown", ".rst": "reStructuredText",
-            ".txt": "Text", ".html": "HTML", ".css": "CSS",
-            ".sql": "SQL", ".dockerfile": "Dockerfile",
+            ".py": "Python",
+            ".js": "JavaScript",
+            ".ts": "TypeScript",
+            ".go": "Go",
+            ".rs": "Rust",
+            ".java": "Java",
+            ".c": "C",
+            ".cpp": "C++",
+            ".h": "C/C++ Header",
+            ".rb": "Ruby",
+            ".sh": "Shell",
+            ".bash": "Shell",
+            ".zsh": "Shell",
+            ".yaml": "YAML",
+            ".yml": "YAML",
+            ".json": "JSON",
+            ".toml": "TOML",
+            ".md": "Markdown",
+            ".rst": "reStructuredText",
+            ".txt": "Text",
+            ".html": "HTML",
+            ".css": "CSS",
+            ".sql": "SQL",
+            ".dockerfile": "Dockerfile",
         }
 
         key_file_patterns = {
-            "README.md": "项目说明", "README.rst": "项目说明",
-            "README": "项目说明", "pyproject.toml": "Python 项目配置",
-            "setup.py": "Python 打包配置", "setup.cfg": "Python 打包配置",
-            "package.json": "Node.js 项目配置", "Cargo.toml": "Rust 项目配置",
-            "go.mod": "Go 模块定义", "Makefile": "构建脚本",
-            "Dockerfile": "容器镜像定义", "docker-compose.yml": "容器编排",
-            ".github/workflows": "CI 工作流", "LICENSE": "许可证",
+            "README.md": "项目说明",
+            "README.rst": "项目说明",
+            "README": "项目说明",
+            "pyproject.toml": "Python 项目配置",
+            "setup.py": "Python 打包配置",
+            "setup.cfg": "Python 打包配置",
+            "package.json": "Node.js 项目配置",
+            "Cargo.toml": "Rust 项目配置",
+            "go.mod": "Go 模块定义",
+            "Makefile": "构建脚本",
+            "Dockerfile": "容器镜像定义",
+            "docker-compose.yml": "容器编排",
+            ".github/workflows": "CI 工作流",
+            "LICENSE": "许可证",
         }
 
         for root, _dirs, files in os.walk(target_dir):
             # 跳过忽略的目录
             rel_root = os.path.relpath(root, target_dir)
             parts = rel_root.split(os.sep)
-            if any(fnmatch.fnmatch(p, pat) or p in ignore_patterns for p in parts for pat in ignore_patterns):
+            if any(
+                fnmatch.fnmatch(p, pat) or p in ignore_patterns
+                for p in parts
+                for pat in ignore_patterns
+            ):
                 _dirs[:] = []  # 不进入子目录
                 continue
             # 就地过滤忽略的目录
             _ignored: list[str] = []
             for d in _dirs:
-                if d in ignore_patterns or any(fnmatch.fnmatch(d, p) for p in ignore_patterns):
+                if d in ignore_patterns or any(
+                    fnmatch.fnmatch(d, p) for p in ignore_patterns
+                ):
                     _ignored.append(d)
             for d in _ignored:
                 _dirs.remove(d)
@@ -714,12 +863,34 @@ class GitHubToolsMixin:
                 lang_counts[lang] = lang_counts.get(lang, 0) + 1
 
                 # 行数统计（仅文本文件）
-                if ext.lower() in {'.py', '.js', '.ts', '.go', '.rs', '.java', '.c', '.cpp',
-                                    '.h', '.rb', '.sh', '.bash', '.zsh', '.yaml', '.yml',
-                                    '.json', '.toml', '.md', '.rst', '.txt', '.html', '.css',
-                                    '.sql', ''}:
+                if ext.lower() in {
+                    ".py",
+                    ".js",
+                    ".ts",
+                    ".go",
+                    ".rs",
+                    ".java",
+                    ".c",
+                    ".cpp",
+                    ".h",
+                    ".rb",
+                    ".sh",
+                    ".bash",
+                    ".zsh",
+                    ".yaml",
+                    ".yml",
+                    ".json",
+                    ".toml",
+                    ".md",
+                    ".rst",
+                    ".txt",
+                    ".html",
+                    ".css",
+                    ".sql",
+                    "",
+                }:
                     try:
-                        with open(fpath, encoding='utf-8', errors='ignore') as f:
+                        with open(fpath, encoding="utf-8", errors="ignore") as f:
                             line_count = sum(1 for _ in f)
                         total_lines += line_count
                     except Exception:

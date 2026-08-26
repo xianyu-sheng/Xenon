@@ -4,6 +4,7 @@
 ``ConnectError`` 时能正确重试，且 2 次失败后第 3 次成功也能完成调用。
 本测试**不调真实 LLM**——只 unit-test 风格 mock httpx.Client.post。
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -19,9 +20,7 @@ def _make_response(text: str = "hello") -> MagicMock:
     resp = MagicMock(spec=httpx.Response)
     resp.status_code = 200
     resp.json.return_value = {
-        "choices": [
-            {"message": {"content": text}, "finish_reason": "stop"}
-        ],
+        "choices": [{"message": {"content": text}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
     }
     resp.raise_for_status = MagicMock()
@@ -44,10 +43,17 @@ def test_network_outage_retries(monkeypatch):
     fake_client.close = MagicMock()
 
     monkeypatch.setattr(llm_client, "_get_pooled_client", lambda *a, **kw: fake_client)
-    monkeypatch.setattr(llm_client, "build_endpoint", lambda *a, **kw: MagicMock(
-        provider="openai", model_name="gpt-4o", base_url="https://api.test/v1",
-        api_key="sk-test", max_tokens=4096,
-    ))
+    monkeypatch.setattr(
+        llm_client,
+        "build_endpoint",
+        lambda *a, **kw: MagicMock(
+            provider="openai",
+            model_name="gpt-4o",
+            base_url="https://api.test/v1",
+            api_key="sk-test",
+            max_tokens=4096,
+        ),
+    )
 
     # max_retries=3，第三次能成功
     result = llm_client.chat_completion(
@@ -56,11 +62,14 @@ def test_network_outage_retries(monkeypatch):
         max_retries=3,
     )
     assert result == "recovered after retry"
-    assert call_count["n"] == 3, f"应重试 3 次（2 失败 + 1 成功），实际 {call_count['n']}"
+    assert call_count["n"] == 3, (
+        f"应重试 3 次（2 失败 + 1 成功），实际 {call_count['n']}"
+    )
 
 
 def test_network_outage_exhausted_raises(monkeypatch):
     """持续 ConnectError 超过 max_retries → 应抛最后一次的 ConnectError。"""
+
     def fake_post(url, **kwargs):
         raise httpx.ConnectError("permanent failure")
 
@@ -70,10 +79,17 @@ def test_network_outage_exhausted_raises(monkeypatch):
     fake_client.close = MagicMock()
 
     monkeypatch.setattr(llm_client, "_get_pooled_client", lambda *a, **kw: fake_client)
-    monkeypatch.setattr(llm_client, "build_endpoint", lambda *a, **kw: MagicMock(
-        provider="openai", model_name="gpt-4o", base_url="https://api.test/v1",
-        api_key="sk-test", max_tokens=4096,
-    ))
+    monkeypatch.setattr(
+        llm_client,
+        "build_endpoint",
+        lambda *a, **kw: MagicMock(
+            provider="openai",
+            model_name="gpt-4o",
+            base_url="https://api.test/v1",
+            api_key="sk-test",
+            max_tokens=4096,
+        ),
+    )
 
     with pytest.raises(httpx.ConnectError):
         llm_client.chat_completion(

@@ -73,6 +73,7 @@ def _run(pty_env, capfd, chunks, timeout=3.0):
 
 # --------------------------- 基本掩码 + 粘贴反馈 ---------------------------
 
+
 def test_plain_input_masks_with_stars(pty_env, capfd):
     res, out = _run(pty_env, capfd, [(b"sk-abc123\n", 0)])
     assert res["value"] == "sk-abc123"
@@ -105,6 +106,7 @@ def test_ctrl_c_raises_keyboard_interrupt(pty_env, capfd):
 
 # --------------------------- bracketed-paste 粘贴 ---------------------------
 
+
 def test_bracketed_paste_markers_stripped(pty_env, capfd):
     # prompt_toolkit REPL 开启 bracketed-paste 时，粘贴带 \e[200~..\e[201~ 标记
     # 修复后读取期间关闭该模式；即便标记漏入，转义序列消费器也会丢弃
@@ -126,6 +128,7 @@ def test_arrow_keys_ignored(pty_env, capfd):
 
 
 # --------------------------- 非 TTY 回退 ---------------------------
+
 
 def test_non_tty_falls_back_to_getpass(monkeypatch):
     # stdin 无 fileno 或 tcgetattr 失败 → 回退 getpass，不抛异常

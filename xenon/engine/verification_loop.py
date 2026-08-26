@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class _EvidenceEntry:
     """A single piece of verified evidence, with expiry tracking."""
+
     evidence_id: str
     category: str  # "test_pass" | "file_write" | "tool_call"
     target: str  # file path, test command, or tool name
@@ -42,6 +43,7 @@ class _EvidenceEntry:
 @dataclass
 class _RoundRecord:
     """Record of one verification loop round."""
+
     round: int
     failed_test_summary: str  # structured summary of failures
     raw_failure_detail: str  # full failure output (truncated)
@@ -63,9 +65,19 @@ def _extract_failure_summary(evidence: ExecutionEvidence) -> str:
         key_line = ""
         for line in lines[:15]:
             stripped = line.strip()
-            if any(kw in stripped for kw in ("AssertionError", "Error:", "FAILED",
-                                              "assert ", "TypeError", "NameError",
-                                              "ModuleNotFoundError", "ImportError")):
+            if any(
+                kw in stripped
+                for kw in (
+                    "AssertionError",
+                    "Error:",
+                    "FAILED",
+                    "assert ",
+                    "TypeError",
+                    "NameError",
+                    "ModuleNotFoundError",
+                    "ImportError",
+                )
+            ):
                 key_line = stripped[:150]
                 break
         if not key_line and lines:
@@ -92,11 +104,10 @@ def _should_verify(evidence: ExecutionEvidence, user_input: str) -> bool:
     循环漏掉「写成功但验证失败」的场景。改为任何失败命令都触发。
     """
     from xenon.engine.evidence_gate import task_requires_write
+
     if not task_requires_write(user_input):
         return False
-    has_write_attempt = any(
-        c.tool_name in _WRITE_TOOL_NAMES for c in evidence.calls
-    )
+    has_write_attempt = any(c.tool_name in _WRITE_TOOL_NAMES for c in evidence.calls)
     if not has_write_attempt:
         return False
     if evidence.successful_tests:
@@ -162,9 +173,7 @@ class VerificationLoop:
 
         # Check budget
         if self.round_count >= self.max_rounds:
-            logger.warning(
-                f"VerificationLoop: 已达轮次上限 {self.max_rounds}，终止"
-            )
+            logger.warning(f"VerificationLoop: 已达轮次上限 {self.max_rounds}，终止")
             self._active = False
             return None
 
@@ -273,9 +282,7 @@ class VerificationLoop:
                 )
             # Earlier rounds: compressed
             for rec in self.failure_timeline[:-3]:
-                lines.append(
-                    f"  R{rec.round}: {rec.outcome} (压缩)"
-                )
+                lines.append(f"  R{rec.round}: {rec.outcome} (压缩)")
         # Success cache
         valid_entries = [e for e in self.success_cache.values() if e.valid]
         if valid_entries:
@@ -331,6 +338,7 @@ class VerificationLoop:
             eid = self._make_evidence_id(call, source_round)
             if call.tool_name in _WRITE_TOOL_NAMES:
                 from xenon.engine.execution_evidence import _call_paths
+
                 for path in _call_paths(call):
                     key = f"file_write:{path}"
                     self.success_cache[key] = _EvidenceEntry(
@@ -365,13 +373,12 @@ class VerificationLoop:
                 continue
             if call.tool_name in _WRITE_TOOL_NAMES:
                 from xenon.engine.execution_evidence import _call_paths
+
                 for path in _call_paths(call):
                     key = f"file_write:{path}"
                     if key in self.success_cache:
                         self.success_cache[key].valid = False
-                        logger.debug(
-                            f"VerificationLoop: 证据 {key} 失效（文件被重写）"
-                        )
+                        logger.debug(f"VerificationLoop: 证据 {key} 失效（文件被重写）")
             if call.tool_name == "command":
                 cmd = str(call.params.get("command") or call.params.get("cmd") or "")
                 if _TEST_COMMAND.search(cmd):
@@ -388,4 +395,4 @@ class VerificationLoop:
         cmd = str(call.params.get("command") or call.params.get("cmd") or "")
         path = call.params.get("file_path") or call.params.get("path") or ""
         tool = call.tool_name
-        return f"R{source_round}_{tool}_{cmd[:20]}_{path[:20]}" .strip("_")
+        return f"R{source_round}_{tool}_{cmd[:20]}_{path[:20]}".strip("_")

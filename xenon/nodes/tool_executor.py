@@ -11,6 +11,7 @@
 
 四引擎把 ``ToolNode(...).execute()`` 换成 ``ToolExecutor().execute(tool, params, ctx, tracker)``。
 """
+
 from __future__ import annotations
 
 import logging
@@ -41,6 +42,7 @@ from xenon.repl.system_config import get_config
 
 logger = logging.getLogger(__name__)
 from xenon.engine.trace import TraceContextFilter  # noqa: E402
+
 logger.addFilter(TraceContextFilter())
 
 
@@ -49,19 +51,39 @@ logger.addFilter(TraceContextFilter())
 # classify_tool / required_execution_level 优先查注册表 risk，查不到才走这里。
 # 不在注册表且不在这两个集合里的工具（如未知插件），按 SENSITIVE/level-3 处理，
 # 与 MCP 未知工具的「不假设只读」原则一致（tool_executor.py:116-118 旧注释）。
-_SENSITIVE_TOOLS = {"command", "spawn_agent"}  # 任意 shell 执行 + 子 Agent 委派——最高风险
+_SENSITIVE_TOOLS = {
+    "command",
+    "spawn_agent",
+}  # 任意 shell 执行 + 子 Agent 委派——最高风险
 _WRITE_TOOLS = {
-    "write_file", "edit_file", "create_directory",
-    "batch_write", "batch_edit", "edit_with_llm", "append_file",
-    "git", "refactor", "register_tool", "clone_repo",
+    "write_file",
+    "edit_file",
+    "create_directory",
+    "batch_write",
+    "batch_edit",
+    "edit_with_llm",
+    "append_file",
+    "git",
+    "refactor",
+    "register_tool",
+    "clone_repo",
 }
 # 其余按 INFO 处理（read_file/list_files/search_files/web_fetch/github_fetch...）
 
 # 参数幻觉校验豁免白名单：这些参数合法持有长文本/代码，不参与结构性检查
-_TOOL_CONTENT_PARAMS = frozenset({
-    "content", "old_text", "new_text", "code", "text",
-    "diff", "patch", "replacement", "snippet",
-})
+_TOOL_CONTENT_PARAMS = frozenset(
+    {
+        "content",
+        "old_text",
+        "new_text",
+        "code",
+        "text",
+        "diff",
+        "patch",
+        "replacement",
+        "snippet",
+    }
+)
 
 
 def classify_tool(
@@ -234,7 +256,9 @@ def _validate_param_value(name: str, value: Any) -> list[str]:
         hits.append("疑似函数签名")
     if not _balanced(value):
         hits.append("括号不配平")
-    if name in ("file_path", "path", "dir", "directory") and _RE_WIN_ILLEGAL.search(value):
+    if name in ("file_path", "path", "dir", "directory") and _RE_WIN_ILLEGAL.search(
+        value
+    ):
         hits.append("Windows 非法字符")
     # Shell commands commonly end in a quoted argument (for example
     # ``echo "done"``). A trailing quote is not evidence of a path
@@ -289,6 +313,7 @@ def validate_tool_params(
     # 获取校验级别
     if tool_gate is None:
         from xenon.engine.tool_gate import ToolGate
+
         tool_gate = ToolGate.from_config(get_config())
 
     if tool_name:
@@ -313,7 +338,11 @@ def validate_tool_params(
             continue
         hits = _validate_param_value(name, value)
         if len(hits) >= block_threshold:
-            return False, f"参数 '{name}' 疑似 LLM 幻觉（命中: {'; '.join(hits)}）", "block"
+            return (
+                False,
+                f"参数 '{name}' 疑似 LLM 幻觉（命中: {'; '.join(hits)}）",
+                "block",
+            )
         if len(hits) >= 2 and warn is None:
             warn = (True, f"参数 '{name}' 参数可疑（命中: {'; '.join(hits)}）", "warn")
     if warn is not None:
@@ -343,7 +372,11 @@ _TRANSIENT_PATTERNS = re.compile(
 
 # v0.5.3: 参数校验拦截时提示替代工具，帮助 LLM 恢复
 _TOOL_ALTERNATIVES: dict[str, list[str]] = {
-    "command": ["search_files（搜索文件内容）", "read_file（读取文件）", "list_files（列出文件）"],
+    "command": [
+        "search_files（搜索文件内容）",
+        "read_file（读取文件）",
+        "list_files（列出文件）",
+    ],
     "write_file": ["batch_write（批量写入）"],
     "edit_file": ["batch_edit（批量编辑）"],
 }
@@ -394,11 +427,13 @@ class ToolExecutionState(str, Enum):
     INTERRUPTED = "interrupted"
 
 
-_UNFINISHED_TOOL_STATES = frozenset({
-    ToolExecutionState.PENDING.value,
-    ToolExecutionState.RUNNING.value,
-    ToolExecutionState.RETRYING.value,
-})
+_UNFINISHED_TOOL_STATES = frozenset(
+    {
+        ToolExecutionState.PENDING.value,
+        ToolExecutionState.RUNNING.value,
+        ToolExecutionState.RETRYING.value,
+    }
+)
 
 
 def _utc_now() -> str:
@@ -454,21 +489,18 @@ def _record_lifecycle_checkpoint(
     intentionally never persisted here.
     """
     elapsed = max(0.0, time.monotonic() - started_monotonic)
-    recoverable = (
-        tool_class == "INFO"
-        and state
-        in {
-            ToolExecutionState.RETRYING,
-            ToolExecutionState.FAILED,
-            ToolExecutionState.TIMED_OUT,
-            ToolExecutionState.INTERRUPTED,
-        }
-    )
+    recoverable = tool_class == "INFO" and state in {
+        ToolExecutionState.RETRYING,
+        ToolExecutionState.FAILED,
+        ToolExecutionState.TIMED_OUT,
+        ToolExecutionState.INTERRUPTED,
+    }
     status_unknown = (
         tool_class != "INFO"
         and attempt > 0
         and (
-            state in {
+            state
+            in {
                 ToolExecutionState.TIMED_OUT,
                 ToolExecutionState.INTERRUPTED,
             }
@@ -566,8 +598,7 @@ def recover_tool_execution_checkpoint(context: AgentContext) -> str:
                 details.append(f"{tool_name}（可能已部分生效，须人工核验）")
         return (
             f"⚠️ 检测到 {len(restored_items)} 个上次未完成的工具执行，"
-            "均已标记为 interrupted，且未自动重放：\n- "
-            + "\n- ".join(details)
+            "均已标记为 interrupted，且未自动重放：\n- " + "\n- ".join(details)
         )
 
     if not isinstance(current, dict):
@@ -654,8 +685,7 @@ class ToolExecuteResult:
             if self.tool_class == "INFO":
                 return f"只读工具 {self.tool_name} 超时，可稍后显式重试。"
             return (
-                f"工具 {self.tool_name} 超时且状态未知；请先核验副作用，"
-                "不要自动重试。"
+                f"工具 {self.tool_name} 超时且状态未知；请先核验副作用，不要自动重试。"
             )
         err = (self.error or "").lower()
         if "不存在" in err or "not found" in err:
@@ -670,7 +700,9 @@ class ToolExecuteResult:
 
 
 # ── 观察摘要提取（与原引擎逻辑一致） ───────────────────────
-def _extract_summary(result: dict[str, Any], list_cap: int = 50, str_cap: int = 3000) -> str:
+def _extract_summary(
+    result: dict[str, Any], list_cap: int = 50, str_cap: int = 3000
+) -> str:
     """从工具结果中提取 LLM 可读的文本摘要。
 
     按优先级查找: content → stdout → output → files。
@@ -738,6 +770,7 @@ class ToolExecutor:
         # 统一工具门控：自动创建实例（无需修改引擎）
         if tool_gate is None:
             from xenon.engine.tool_gate import ToolGate
+
             tool_gate = ToolGate.from_config(get_config())
         self.tool_gate = tool_gate
 
@@ -784,13 +817,19 @@ class ToolExecutor:
         context.set("_evidence_ledger", ledger)
         context.bind_evidence(ledger)
         ledger.append(
-            LifecyclePhase.TASK, EventKind.TASK_FACT, EvidenceSource.ENGINE,
+            LifecyclePhase.TASK,
+            EventKind.TASK_FACT,
+            EvidenceSource.ENGINE,
             {"origin": "ToolExecutor.direct", "reason": "no engine ledger bound"},
         )
         return ledger
 
     def _ledger_event(
-        self, context: AgentContext, phase: LifecyclePhase, kind: EventKind, source: EvidenceSource,
+        self,
+        context: AgentContext,
+        phase: LifecyclePhase,
+        kind: EventKind,
+        source: EvidenceSource,
         payload: dict[str, Any],
     ) -> None:
         self._resolve_ledger(context).append(phase, kind, source, payload)
@@ -812,7 +851,10 @@ class ToolExecutor:
         for path in missing_paths:
             try:
                 result = self.execute(
-                    "read_file", {"file_path": path}, context, tracker,
+                    "read_file",
+                    {"file_path": path},
+                    context,
+                    tracker,
                 )
             except Exception as exc:  # noqa: BLE001 — 补读失败不阻断原拦截
                 logger.warning("自动补读 %s 失败: %s", path, exc)
@@ -823,21 +865,35 @@ class ToolExecutor:
                 logger.warning("自动补读 %s 未成功: %s", path, result.error)
         if not read_ok:
             logger.warning(
-                "自动补读未产生任何成功读取，维持拦截 %s", tool_name,
+                "自动补读未产生任何成功读取，维持拦截 %s",
+                tool_name,
             )
         return read_ok
 
     def before_tool(
-        self, tool_name: str, params: dict[str, Any], context: AgentContext,
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+        context: AgentContext,
         tracker: ToolExecutionTracker | None,
     ) -> GateVerdict:
         """在线 pre-tool Gate：执行前写入请求证据并阻断未绑定事实的编辑。"""
         safe_params = mask_sensitive_params(params)
         self._ledger_event(
-            context, LifecyclePhase.PRE_TOOL, EventKind.TOOL_REQUEST, EvidenceSource.ENGINE,
+            context,
+            LifecyclePhase.PRE_TOOL,
+            EventKind.TOOL_REQUEST,
+            EvidenceSource.ENGINE,
             {"tool": tool_name, "params": safe_params},
         )
-        if tool_name not in {"write_file", "edit_file", "append_file", "batch_write", "batch_edit", "refactor"}:
+        if tool_name not in {
+            "write_file",
+            "edit_file",
+            "append_file",
+            "batch_write",
+            "batch_edit",
+            "refactor",
+        }:
             return GateVerdict("pre_tool", True, "非文件写入工具，跳过事实绑定", "info")
         targets = self._target_paths(params)
         # 只对已存在的目标文件强制先读；创建新文件没有可读取的先验事实。
@@ -851,19 +907,35 @@ class ToolExecutor:
             read_paths.update(self._target_paths(call.params or {}))
         missing = sorted(existing - read_paths)
         if not missing:
-            return GateVerdict("pre_tool", True, "所有现有写入目标均有先前读取证据", "info")
+            return GateVerdict(
+                "pre_tool", True, "所有现有写入目标均有先前读取证据", "info"
+            )
         reason = "写入前缺少目标文件读取证据: " + ", ".join(missing[:3])
         enforced = self.evidence_enforcement == "enforce"
         self._ledger_event(
-            context, LifecyclePhase.PRE_TOOL, EventKind.GATE_VERDICT, EvidenceSource.GATE,
-            {"gate": "FactBindingGate", "passed": not enforced, "reason": reason,
-             "enforced": enforced, "missing_paths": missing},
+            context,
+            LifecyclePhase.PRE_TOOL,
+            EventKind.GATE_VERDICT,
+            EvidenceSource.GATE,
+            {
+                "gate": "FactBindingGate",
+                "passed": not enforced,
+                "reason": reason,
+                "enforced": enforced,
+                "missing_paths": missing,
+            },
         )
-        return GateVerdict("pre_tool", not enforced, reason, "warning", {"missing_paths": missing})
+        return GateVerdict(
+            "pre_tool", not enforced, reason, "warning", {"missing_paths": missing}
+        )
 
     def record_tool_observation(
-        self, tool_name: str, params: dict[str, Any], success: bool,
-        observation: str, tracker: ToolExecutionTracker | None,
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+        success: bool,
+        observation: str,
+        tracker: ToolExecutionTracker | None,
         context: AgentContext | None = None,
     ) -> None:
         """记录执行后证据；正文只保留摘要，敏感参数不进入 ledger。"""
@@ -871,9 +943,16 @@ class ToolExecutor:
         if self.evidence_ledger is not None:
             context.set("_evidence_ledger", self.evidence_ledger)
         self._ledger_event(
-            context, LifecyclePhase.POST_TOOL, EventKind.TOOL_OBSERVATION, EvidenceSource.TOOL,
-            {"tool": tool_name, "params": mask_sensitive_params(params),
-             "success": success, "summary": observation[:500]},
+            context,
+            LifecyclePhase.POST_TOOL,
+            EventKind.TOOL_OBSERVATION,
+            EvidenceSource.TOOL,
+            {
+                "tool": tool_name,
+                "params": mask_sensitive_params(params),
+                "success": success,
+                "summary": observation[:500],
+            },
         )
 
     def set_runtime(self, runtime: Any) -> None:
@@ -902,7 +981,8 @@ class ToolExecutor:
                             if key in item
                         },
                     }
-                    if isinstance(item, dict) else item
+                    if isinstance(item, dict)
+                    else item
                     for item in items
                 ]
         # Model-supplied cwd is ignored.  It cannot redirect file or command
@@ -998,7 +1078,9 @@ class ToolExecutor:
                     attempts=attempts,
                     elapsed_seconds=float(checkpoint["elapsed_seconds"]),
                 )
-            self.record_tool_observation(tool_name, params, success, observation, tracker, context)
+            self.record_tool_observation(
+                tool_name, params, success, observation, tracker, context
+            )
             if self.execution_policy is not None:
                 self.execution_policy.emit(
                     "tool_end",
@@ -1058,7 +1140,9 @@ class ToolExecutor:
                 error_kind="invalid_parameters",
             )
 
-        logger.debug(f"{trace_p}执行工具: {tool_name}, 参数: {mask_sensitive_params(params)}")
+        logger.debug(
+            f"{trace_p}执行工具: {tool_name}, 参数: {mask_sensitive_params(params)}"
+        )
 
         # ── Stage 0.5: 工具门控黑名单检查 ──
         gate_passed, gate_reason = self.tool_gate.check_before(tool_name, params)
@@ -1116,13 +1200,16 @@ class ToolExecutor:
             # 补 read_file 后重试原工具（最多一次）。read_file 走完整 7 阶段
             # 流水线（记录 tracker + ledger），重试后证据充足即可放行。
             if self.evidence_auto_read:
-                missing = (
-                    evidence_verdict.payload or {}
-                ).get("missing_paths")
+                missing = (evidence_verdict.payload or {}).get("missing_paths")
                 if missing and self._auto_read_missing_paths(
-                    missing, tool_name, context, tracker,
+                    missing,
+                    tool_name,
+                    context,
+                    tracker,
                 ):
-                    evidence_verdict = self.before_tool(tool_name, params, context, tracker)
+                    evidence_verdict = self.before_tool(
+                        tool_name, params, context, tracker
+                    )
                     if evidence_verdict.passed:
                         logger.info(
                             f"{trace_p}自动补读后证据充足，放行 {tool_name}（原拦截: {evidence_verdict.reason}）",
@@ -1222,7 +1309,8 @@ class ToolExecutor:
                         result,
                         str_cap=(
                             12000
-                            if tool_name == "docs_fetch" or result.get("prefilter_applied")
+                            if tool_name == "docs_fetch"
+                            or result.get("prefilter_applied")
                             else 3000
                         ),
                     )

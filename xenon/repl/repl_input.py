@@ -1,11 +1,10 @@
-"""Terminal input handling for the REPL — extracted from repl.py.
-"""
+"""Terminal input handling for the REPL — extracted from repl.py."""
+
 from __future__ import annotations
 
 import sys
 
 from xenon.repl.input_buffer import PastedTextStore, _ShiftTabSignal
-
 
 
 def _read_input_windows(self) -> str:
@@ -29,7 +28,12 @@ def _read_input_windows(self) -> str:
         _fields_ = [("X", wt.SHORT), ("Y", wt.SHORT)]
 
     class SMALL_RECT(ctypes.Structure):
-        _fields_ = [("Left", wt.SHORT), ("Top", wt.SHORT), ("Right", wt.SHORT), ("Bottom", wt.SHORT)]
+        _fields_ = [
+            ("Left", wt.SHORT),
+            ("Top", wt.SHORT),
+            ("Right", wt.SHORT),
+            ("Bottom", wt.SHORT),
+        ]
 
     class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
         _fields_ = [
@@ -45,11 +49,20 @@ def _read_input_windows(self) -> str:
     SetConsoleCursorPosition.restype = wt.BOOL
 
     FillConsoleOutputCharacterW = kernel32.FillConsoleOutputCharacterW
-    FillConsoleOutputCharacterW.argtypes = [wt.HANDLE, wt.WCHAR, wt.DWORD, COORD, ctypes.POINTER(wt.DWORD)]
+    FillConsoleOutputCharacterW.argtypes = [
+        wt.HANDLE,
+        wt.WCHAR,
+        wt.DWORD,
+        COORD,
+        ctypes.POINTER(wt.DWORD),
+    ]
     FillConsoleOutputCharacterW.restype = wt.BOOL
 
     GetConsoleScreenBufferInfo = kernel32.GetConsoleScreenBufferInfo
-    GetConsoleScreenBufferInfo.argtypes = [wt.HANDLE, ctypes.POINTER(CONSOLE_SCREEN_BUFFER_INFO)]
+    GetConsoleScreenBufferInfo.argtypes = [
+        wt.HANDLE,
+        ctypes.POINTER(CONSOLE_SCREEN_BUFFER_INFO),
+    ]
     GetConsoleScreenBufferInfo.restype = wt.BOOL
 
     def shift_held() -> bool:
@@ -72,7 +85,9 @@ def _read_input_windows(self) -> str:
                 new_pos = COORD(pos.X - 2, pos.Y)
                 move_cursor(new_pos)
                 written = wt.DWORD(0)
-                FillConsoleOutputCharacterW(h_stdout, ' ', 2, new_pos, ctypes.byref(written))
+                FillConsoleOutputCharacterW(
+                    h_stdout, " ", 2, new_pos, ctypes.byref(written)
+                )
         else:
             # ASCII：ANSI 一次搞定
             sys.stdout.write("\b \b")
@@ -102,7 +117,7 @@ def _read_input_windows(self) -> str:
     while True:
         ch = msvcrt.getwch()
 
-        if ch in ('\r', '\n'):
+        if ch in ("\r", "\n"):
             if shift_held():
                 # 多行模式：跳到行尾再换行
                 if cursor_pos < len(current_line):
@@ -119,47 +134,47 @@ def _read_input_windows(self) -> str:
                     sys.stdout.write(f"\033[{len(current_line) - cursor_pos}C")
                 break
 
-        elif ch == '\x03':
+        elif ch == "\x03":
             raise KeyboardInterrupt
 
-        elif ch in ('\x08', '\x7f'):
+        elif ch in ("\x08", "\x7f"):
             # Backspace: 删除光标左侧字符
             if cursor_pos > 0:
                 current_line.pop(cursor_pos - 1)
                 cursor_pos -= 1
                 # 光标左移一格
-                sys.stdout.write('\033[1D')
+                sys.stdout.write("\033[1D")
                 # 重绘后面的字符并清除行尾
                 _redraw_from_cursor()
 
-        elif ch in ('\x00', '\xe0'):
+        elif ch in ("\x00", "\xe0"):
             # 扩展键序列（方向键、Home/End 等）
             second = msvcrt.getwch()
-            if second == 'K':        # ← 左箭头
+            if second == "K":  # ← 左箭头
                 if cursor_pos > 0:
                     cursor_pos -= 1
-                    sys.stdout.write('\033[1D')
+                    sys.stdout.write("\033[1D")
                     sys.stdout.flush()
-            elif second == 'M':      # → 右箭头
+            elif second == "M":  # → 右箭头
                 if cursor_pos < len(current_line):
                     cursor_pos += 1
-                    sys.stdout.write('\033[1C')
+                    sys.stdout.write("\033[1C")
                     sys.stdout.flush()
-            elif second == 'H':      # Home
+            elif second == "H":  # Home
                 if cursor_pos > 0:
                     sys.stdout.write(f"\033[{cursor_pos}D")
                     cursor_pos = 0
                     sys.stdout.flush()
-            elif second == 'O':      # End
+            elif second == "O":  # End
                 if cursor_pos < len(current_line):
                     sys.stdout.write(f"\033[{len(current_line) - cursor_pos}C")
                     cursor_pos = len(current_line)
                     sys.stdout.flush()
-            elif second == 'S':      # Delete
+            elif second == "S":  # Delete
                 if cursor_pos < len(current_line):
                     current_line.pop(cursor_pos)
                     _redraw_from_cursor()
-            elif second == '\x0f':  # Shift+Tab
+            elif second == "\x0f":  # Shift+Tab
                 self._handle_shift_tab()
                 # 不向 current_line 插入任何字符
 
@@ -206,7 +221,7 @@ def _read_input_unix(self) -> str:
     def _char_width(ch: str) -> int:
         """返回单个字符的终端显示宽度。"""
         ea = unicodedata.east_asian_width(ch)
-        if ea in ('W', 'F'):
+        if ea in ("W", "F"):
             return 2
         return 1
 
@@ -217,7 +232,8 @@ def _read_input_unix(self) -> str:
     def _prompt_printable(prompt_str: str) -> str:
         """剥离 ANSI 转义序列，得到 prompt 的可打印文本。"""
         import re
-        return re.sub(r'\033\[[0-9;]*[a-zA-Z]', '', prompt_str)
+
+        return re.sub(r"\033\[[0-9;]*[a-zA-Z]", "", prompt_str)
 
     def _line_width_upto(chars: list[str], upto: int) -> int:
         """计算 current_line 中前 upto 个字符的终端显示宽度。"""
@@ -234,7 +250,7 @@ def _read_input_unix(self) -> str:
         # ── 启用终端粘贴括号模式 ────────────────────
         # 粘贴时终端发送 \x1b[200~ 开始 / \x1b[201~ 结束，
         # 从而在粘贴期间批量处理字符，避免每字符一次重绘。
-        sys.stdout.write('\x1b[?2004h')
+        sys.stdout.write("\x1b[?2004h")
         sys.stdout.flush()
 
         lines: list[str] = []
@@ -253,6 +269,7 @@ def _read_input_unix(self) -> str:
         # select 0.3s 无新字节 → 自动退出 paste_mode + 强制 _redraw_line()。
         # 通用机制改进，不针对特定任务/终端加白名单。
         import time as _time
+
         paste_last_byte_at: float | None = None
         PASTE_TIMEOUT_S = 0.3
 
@@ -278,9 +295,7 @@ def _read_input_unix(self) -> str:
             nonlocal paste_mode, paste_buffer, paste_last_byte_at
             pasted = "".join(paste_buffer)
             occupied = "\n".join([*lines, "".join(current_line)])
-            _insert_text(
-                paste_store.compact(pasted, occupied_text=occupied)
-            )
+            _insert_text(paste_store.compact(pasted, occupied_text=occupied))
             paste_buffer = []
             paste_mode = False
             paste_last_byte_at = None
@@ -356,38 +371,38 @@ def _read_input_unix(self) -> str:
             #   ② paste_mode 期间累积到 8 字节**子串搜索** paste end：
             #      - 含 paste end → 前部分追加 buffer + 关闭 paste_mode
             #      - 不含 → 整批追加 buffer（保留用户主动复制的 ESC 字节）
-            if seq_buffer or ch == '\x1b':
+            if seq_buffer or ch == "\x1b":
                 seq_buffer += ch
                 # 守卫 ①：paste end 总是截留（精确 6 字符匹配）
-                if seq_buffer == '\x1b[201~':
-                    seq_buffer = ''
+                if seq_buffer == "\x1b[201~":
+                    seq_buffer = ""
                     _finish_paste()
                     continue
                 if paste_mode:
                     # 守卫 ②：累积 8 字节时子串搜索 paste end
-                    if '\x1b[201~' in seq_buffer:
-                        idx = seq_buffer.index('\x1b[201~')
+                    if "\x1b[201~" in seq_buffer:
+                        idx = seq_buffer.index("\x1b[201~")
                         paste_buffer.extend(seq_buffer[:idx])
-                        seq_buffer = ''
+                        seq_buffer = ""
                         _finish_paste()
                         continue
                     if len(seq_buffer) >= 8:
                         paste_buffer.extend(seq_buffer)
-                        seq_buffer = ''
+                        seq_buffer = ""
                         paste_last_byte_at = _time.monotonic()
                     continue
-                if len(seq_buffer) == 1 and ch == '\x1b':
+                if len(seq_buffer) == 1 and ch == "\x1b":
                     continue  # 等待更多字节
 
                 # ── 粘贴括号模式 ────────────────────
-                if seq_buffer == '\x1b[200~':
+                if seq_buffer == "\x1b[200~":
                     # 开始粘贴 — 暂停逐字符重绘
                     paste_mode = True
                     paste_buffer = []
                     paste_last_byte_at = _time.monotonic()
                     seq_buffer = ""
                     continue
-                if seq_buffer == '\x1b[201~':
+                if seq_buffer == "\x1b[201~":
                     # 粘贴结束 — 一次性重绘
                     seq_buffer = ""
                     _finish_paste()
@@ -395,7 +410,7 @@ def _read_input_unix(self) -> str:
 
                 # 尝试匹配已知序列
                 # Alt+Enter: \x1b\r
-                if seq_buffer == '\x1b\r':
+                if seq_buffer == "\x1b\r":
                     # 插入换行
                     lines.append("".join(current_line))
                     current_line = []
@@ -407,7 +422,7 @@ def _read_input_unix(self) -> str:
                     continue
 
                 # Shift+Enter（kitty 键盘协议）: \x1b[13;2u
-                if seq_buffer == '\x1b[13;2u':
+                if seq_buffer == "\x1b[13;2u":
                     lines.append("".join(current_line))
                     current_line = []
                     cursor_pos = 0
@@ -418,7 +433,7 @@ def _read_input_unix(self) -> str:
                     continue
 
                 # Shift+Enter（xterm modifyOtherKeys）: \x1b[27;2;13~
-                if seq_buffer == '\x1b[27;2;13~':
+                if seq_buffer == "\x1b[27;2;13~":
                     lines.append("".join(current_line))
                     current_line = []
                     cursor_pos = 0
@@ -427,23 +442,23 @@ def _read_input_unix(self) -> str:
                     sys.stdout.flush()
                     seq_buffer = ""
                     continue
-                if '\x1b[27;2;13~'.startswith(seq_buffer):
+                if "\x1b[27;2;13~".startswith(seq_buffer):
                     continue
 
                 # 方向键: \x1b[A (上), \x1b[B (下), \x1b[C (右), \x1b[D (左)
-                if seq_buffer == '\x1b[A':    # Up — 忽略
+                if seq_buffer == "\x1b[A":  # Up — 忽略
                     seq_buffer = ""
                     continue
-                if seq_buffer == '\x1b[B':    # Down — 忽略
+                if seq_buffer == "\x1b[B":  # Down — 忽略
                     seq_buffer = ""
                     continue
-                if seq_buffer == '\x1b[C':    # Right
+                if seq_buffer == "\x1b[C":  # Right
                     if cursor_pos < len(current_line):
                         cursor_pos += 1
                         _move_cursor_to(cursor_pos)
                     seq_buffer = ""
                     continue
-                if seq_buffer == '\x1b[D':    # Left
+                if seq_buffer == "\x1b[D":  # Left
                     if cursor_pos > 0:
                         cursor_pos -= 1
                         _move_cursor_to(cursor_pos)
@@ -451,19 +466,19 @@ def _read_input_unix(self) -> str:
                     continue
 
                 # Home: \x1b[H 或 \x1b[1~
-                if seq_buffer in ('\x1b[H', '\x1b[1~', '\x1bOH'):
+                if seq_buffer in ("\x1b[H", "\x1b[1~", "\x1bOH"):
                     _move_cursor_to(0)
                     seq_buffer = ""
                     continue
 
                 # End: \x1b[F 或 \x1b[4~ 或 \x1bOF
-                if seq_buffer in ('\x1b[F', '\x1b[4~', '\x1bOF'):
+                if seq_buffer in ("\x1b[F", "\x1b[4~", "\x1bOF"):
                     _move_cursor_to(len(current_line))
                     seq_buffer = ""
                     continue
 
                 # Delete: \x1b[3~
-                if seq_buffer == '\x1b[3~':
+                if seq_buffer == "\x1b[3~":
                     if cursor_pos < len(current_line):
                         current_line.pop(cursor_pos)
                         _redraw_line()
@@ -471,7 +486,7 @@ def _read_input_unix(self) -> str:
                     continue
 
                 # Shift+Tab: \x1b[Z → 切换思考范式
-                if seq_buffer == '\x1b[Z':
+                if seq_buffer == "\x1b[Z":
                     seq_buffer = ""
                     raise _ShiftTabSignal()
 
@@ -485,16 +500,16 @@ def _read_input_unix(self) -> str:
 
             # ── 粘贴模式：缓冲修改，不重绘 ──
             if paste_mode:
-                if ch in ('\r', '\n'):
+                if ch in ("\r", "\n"):
                     paste_buffer.append(ch)
-                elif ch == '\x03':   # Ctrl+C during paste
+                elif ch == "\x03":  # Ctrl+C during paste
                     sys.stdout.write("\r\n")
                     sys.stdout.flush()
                     raise KeyboardInterrupt
-                elif ch in ('\x7f', '\x08'):  # Backspace
+                elif ch in ("\x7f", "\x08"):  # Backspace
                     if paste_buffer:
                         paste_buffer.pop()
-                elif ch == '\x1b':
+                elif ch == "\x1b":
                     # v0.3.0+ 修复（C-1 配套）：粘贴期间遇到 ESC 字节
                     # 不再走转义序列累积器（已在上方 if 屏蔽），改当普通
                     # 字符插入 buffer——用户主动复制粘贴含 ANSI 转义序列
@@ -509,7 +524,7 @@ def _read_input_unix(self) -> str:
 
             # ── 普通字符处理 ──
 
-            if ch in ('\r', '\n'):
+            if ch in ("\r", "\n"):
                 # Enter → 提交
                 # 将光标移到行尾
                 _move_cursor_to(len(current_line))
@@ -517,12 +532,12 @@ def _read_input_unix(self) -> str:
                 sys.stdout.flush()
                 break
 
-            elif ch == '\x03':   # Ctrl+C
+            elif ch == "\x03":  # Ctrl+C
                 sys.stdout.write("\r\n")
                 sys.stdout.flush()
                 raise KeyboardInterrupt
 
-            elif ch == '\x04':   # Ctrl+D
+            elif ch == "\x04":  # Ctrl+D
                 if not current_line and not lines:
                     # 空行 Ctrl+D → EOF
                     sys.stdout.write("\r\n")
@@ -533,7 +548,7 @@ def _read_input_unix(self) -> str:
                     current_line.pop(cursor_pos)
                     _redraw_line()
 
-            elif ch == '\x0f':   # Ctrl+O：展开/折叠最近一次执行详情
+            elif ch == "\x0f":  # Ctrl+O：展开/折叠最近一次执行详情
                 # This path is used when prompt_toolkit is unavailable or
                 # disabled.  Previously Ctrl+O was only registered in the
                 # prompt_toolkit key map, so the fallback editor silently
@@ -542,15 +557,15 @@ def _read_input_unix(self) -> str:
                 self._toggle_thinking_details()
                 _redraw_line()
 
-            elif ch in ('\x7f', '\x08'):  # Backspace
+            elif ch in ("\x7f", "\x08"):  # Backspace
                 if cursor_pos > 0:
                     current_line.pop(cursor_pos - 1)
                     _move_cursor_to(cursor_pos - 1)
                     _redraw_line()
 
-            elif ch == '\t':     # Tab → 4 空格
+            elif ch == "\t":  # Tab → 4 空格
                 for _ in range(4):
-                    current_line.insert(cursor_pos, ' ')
+                    current_line.insert(cursor_pos, " ")
                 cursor_pos += 4
                 _move_cursor_to(cursor_pos)
                 _redraw_line()
@@ -568,8 +583,6 @@ def _read_input_unix(self) -> str:
 
     finally:
         # 禁用粘贴括号模式，恢复终端设置
-        sys.stdout.write('\x1b[?2004l')
+        sys.stdout.write("\x1b[?2004l")
         sys.stdout.flush()
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-

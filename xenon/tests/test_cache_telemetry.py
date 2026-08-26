@@ -79,13 +79,18 @@ def test_phase_tool_schema_and_epoch_split_cache_families() -> None:
         cache_context={"engine": "react", "phase": "reason_act"},
     )
 
-    assert len({
-        base.cache_family,
-        reviewed.cache_family,
-        with_tool.cache_family,
-        compacted.cache_family,
-        different_contract.cache_family,
-    }) == 5
+    assert (
+        len(
+            {
+                base.cache_family,
+                reviewed.cache_family,
+                with_tool.cache_family,
+                compacted.cache_family,
+                different_contract.cache_family,
+            }
+        )
+        == 5
+    )
 
 
 def test_manifest_never_contains_raw_prompt_or_tool_text() -> None:
@@ -200,16 +205,18 @@ def test_event_store_is_bounded_and_contains_no_prompts(tmp_path) -> None:
         _messages("do-not-persist-this"),
     ).as_dict()
     for family_call in range(1, 16):
-        store.append(build_cache_event(
-            manifest,
-            model_id="deepseek-v4-flash",
-            prompt_tokens=100,
-            completion_tokens=10,
-            cache_hit_tokens=80,
-            cache_miss_tokens=20,
-            cache_fields_present=True,
-            family_call=family_call,
-        ))
+        store.append(
+            build_cache_event(
+                manifest,
+                model_id="deepseek-v4-flash",
+                prompt_tokens=100,
+                completion_tokens=10,
+                cache_hit_tokens=80,
+                cache_miss_tokens=20,
+                cache_fields_present=True,
+                family_call=family_call,
+            )
+        )
 
     assert len(store.load()) == 10
     assert "do-not-persist-this" not in store.path.read_text(encoding="utf-8")
@@ -248,19 +255,25 @@ def test_tracker_distinguishes_missing_fields_from_explicit_zero() -> None:
     tracker = CacheTracker()
     manifest = build_prompt_manifest("deepseek-v4-flash", _messages("q")).as_dict()
 
-    tracker.record_response("deepseek-v4-flash", {
-        "usage": {"prompt_tokens": 100, "completion_tokens": 5},
-        MANIFEST_RESPONSE_KEY: manifest,
-    })
-    tracker.record_response("deepseek-v4-flash", {
-        "usage": {
-            "prompt_tokens": 100,
-            "completion_tokens": 5,
-            "prompt_cache_hit_tokens": 0,
-            "prompt_cache_miss_tokens": 100,
+    tracker.record_response(
+        "deepseek-v4-flash",
+        {
+            "usage": {"prompt_tokens": 100, "completion_tokens": 5},
+            MANIFEST_RESPONSE_KEY: manifest,
         },
-        MANIFEST_RESPONSE_KEY: manifest,
-    })
+    )
+    tracker.record_response(
+        "deepseek-v4-flash",
+        {
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 5,
+                "prompt_cache_hit_tokens": 0,
+                "prompt_cache_miss_tokens": 100,
+            },
+            MANIFEST_RESPONSE_KEY: manifest,
+        },
+    )
 
     events = tracker.recent_events()
     assert events[0]["state"] == "unavailable"

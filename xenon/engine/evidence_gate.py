@@ -31,10 +31,18 @@ logger = logging.getLogger(__name__)
 # ── 写类工具集合（单一真相源）────────────────────────────
 # 与 tool_executor._WRITE_TOOLS 保持一致；command 也算——SWE-bench 场景中
 # 修改通常经 command 跑脚本，或直接 write/edit 落盘。
-WRITE_TOOL_NAMES = frozenset({
-    "write_file", "edit_file", "create_directory", "batch_write",
-    "batch_edit", "edit_with_llm", "append_file", "refactor",
-})
+WRITE_TOOL_NAMES = frozenset(
+    {
+        "write_file",
+        "edit_file",
+        "create_directory",
+        "batch_write",
+        "batch_edit",
+        "edit_with_llm",
+        "append_file",
+        "refactor",
+    }
+)
 
 
 # ── 校验结果契约 ──────────────────────────────────────────
@@ -118,8 +126,7 @@ def has_successful_write(tracker: Any | None) -> bool:
     if tracker is None:
         return False
     return any(
-        call.success and call.tool_name in WRITE_TOOL_NAMES
-        for call in tracker.calls
+        call.success and call.tool_name in WRITE_TOOL_NAMES for call in tracker.calls
     )
 
 
@@ -159,8 +166,8 @@ def _strip_diff_prefix(path: str) -> str:
     避免把 diff 上下文里的路径当成"声称的文件"。
     """
     for prefix in ("a/", "b/"):
-        if path.startswith(prefix) and "/" in path[len(prefix):]:
-            return path[len(prefix):]
+        if path.startswith(prefix) and "/" in path[len(prefix) :]:
+            return path[len(prefix) :]
     return path
 
 
@@ -203,7 +210,11 @@ def _verified_files_from_tracker(tracker: Any | None) -> set[str]:
                 verified.add(fp)
         elif tool == "batch_write":
             for spec in params.get("files", []) or []:
-                fp = (spec.get("path") or spec.get("file_path", "")) if isinstance(spec, dict) else ""
+                fp = (
+                    (spec.get("path") or spec.get("file_path", ""))
+                    if isinstance(spec, dict)
+                    else ""
+                )
                 if fp:
                     verified.add(fp)
         elif tool == "batch_edit":
@@ -231,7 +242,7 @@ def _claimed_path_exists(claimed: str, workspace_root: Any = None) -> bool:
     for variant in list(candidates):
         stripped = variant.lstrip("./")
         if stripped.startswith("testbed/"):
-            candidates.append(stripped[len("testbed/"):])
+            candidates.append(stripped[len("testbed/") :])
     for candidate in candidates:
         try:
             if Path(candidate).exists():
@@ -344,7 +355,8 @@ def patch_binding_stats(patch: str) -> dict[str, Any]:
             context.append(line[1:].strip())
 
     modified_count = sum(
-        1 for line in patch.splitlines()
+        1
+        for line in patch.splitlines()
         if _DEL_LINE_RE.match(line) and not line.startswith("---")
     )
     max_sim = 0.0
@@ -423,8 +435,10 @@ class TaskCompletionGate(EvidenceGate):
             # SWE-bench 实测（django-16408 官方 API 0 patch）：侦察型计划吃满
             # max_steps 后补救被挡，从不落盘。补救是一次性动作，不会无限循环。
             return GateVerdict(
-                self.phase, True,
-                "结果数远超 max_steps=%d 上限，不追加补救" % max_steps, "info",
+                self.phase,
+                True,
+                "结果数远超 max_steps=%d 上限，不追加补救" % max_steps,
+                "info",
             )
         return GateVerdict(
             self.phase,
@@ -452,7 +466,8 @@ class FileClaimGate(EvidenceGate):
         **kwargs: Any,
     ) -> GateVerdict:
         passed, unverified = verify_file_claims(
-            output, tracker,
+            output,
+            tracker,
             workspace_root=kwargs.get("workspace_root"),
         )
         if passed:
@@ -464,7 +479,8 @@ class FileClaimGate(EvidenceGate):
             "如需真正创建文件，请使用 write_file 工具。"
         )
         return GateVerdict(
-            self.phase, False,
+            self.phase,
+            False,
             "LLM 声称创建但未经工具验证的文件: %s" % ", ".join(unverified),
             "warning",
             payload=warning,
@@ -493,9 +509,12 @@ class EvidenceCaptureGate(EvidenceGate):
 
         evidence = ExecutionEvidence.capture(tracker, workspace_root)
         return GateVerdict(
-            self.phase, True,
-            "证据捕获完成: %d 调用, %d 变更文件" % (
-                len(evidence.calls), len(evidence.changed_files),
+            self.phase,
+            True,
+            "证据捕获完成: %d 调用, %d 变更文件"
+            % (
+                len(evidence.calls),
+                len(evidence.changed_files),
             ),
             "info",
             payload=evidence,
@@ -539,7 +558,8 @@ class FixBindingGate(EvidenceGate):
         stats = patch_binding_stats(patch_text)
         if stats["modified_count"] > 0:
             return GateVerdict(
-                self.phase, True,
+                self.phase,
+                True,
                 "补丁修改了 %d 个现有行，绑定根因" % stats["modified_count"],
                 "info",
             )
@@ -553,8 +573,10 @@ class FixBindingGate(EvidenceGate):
             return GateVerdict(self.phase, False, reason, "warning")
 
         return GateVerdict(
-            self.phase, True,
-            "补丁为纯追加且无重复模式（防御性插入）", "info",
+            self.phase,
+            True,
+            "补丁为纯追加且无重复模式（防御性插入）",
+            "info",
         )
 
 
@@ -572,9 +594,16 @@ class FactBindingGate(EvidenceGate):
 
     phase = "fact"
 
-    _READ_TOOLS = frozenset({
-        "read_file", "search_files", "interpreter", "search", "grep", "find",
-    })
+    _READ_TOOLS = frozenset(
+        {
+            "read_file",
+            "search_files",
+            "interpreter",
+            "search",
+            "grep",
+            "find",
+        }
+    )
 
     @staticmethod
     def _command_reads(params: dict[str, Any]) -> bool:
@@ -606,7 +635,11 @@ class FactBindingGate(EvidenceGate):
             if tool in self._READ_TOOLS or (
                 tool == "command" and self._command_reads(params)
             ):
-                path = params.get("file_path") or params.get("path") or params.get("pattern", "")
+                path = (
+                    params.get("file_path")
+                    or params.get("path")
+                    or params.get("pattern", "")
+                )
                 if path:
                     read_files.add(str(path))
             elif tool in WRITE_TOOL_NAMES:
@@ -620,7 +653,8 @@ class FactBindingGate(EvidenceGate):
         if blind_writes:
             uniq = list(dict.fromkeys(blind_writes))
             return GateVerdict(
-                self.phase, False,
+                self.phase,
+                False,
                 "检测到 %d 个文件在写入前未被读取（盲写）: %s"
                 % (len(uniq), ", ".join(uniq[:3])),
                 "warning",

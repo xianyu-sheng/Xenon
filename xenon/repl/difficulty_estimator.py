@@ -14,6 +14,7 @@ from dataclasses import dataclass
 @dataclass
 class TaskProfile:
     """Task profile used by AutoRouter for model selection."""
+
     intent: str | None = None
     complexity: float = 0.3
     requires_reasoning: bool = False
@@ -34,17 +35,28 @@ class DifficultyEstimator:
     """Analyzes user input and produces a TaskProfile."""
 
     def estimate(
-        self, user_input: str, context_messages: list[dict] | None = None,
+        self,
+        user_input: str,
+        context_messages: list[dict] | None = None,
     ) -> TaskProfile:
         context = context_messages or []
         intent = self._detect_intent(user_input)
         complexity = self._measure_complexity(user_input, intent)
         requires_tools = self._needs_tools(user_input, intent)
         requires_code = intent in (
-            "write_code", "convert", "refactor", "debug", "write_test",
+            "write_code",
+            "convert",
+            "refactor",
+            "debug",
+            "write_test",
         )
         requires_reasoning = intent in (
-            "debug", "design", "refactor", "novel", "write_test", "explain",
+            "debug",
+            "design",
+            "refactor",
+            "novel",
+            "write_test",
+            "explain",
         )
         est_tokens = self._estimate_tokens(user_input, context)
 
@@ -58,7 +70,8 @@ class DifficultyEstimator:
         )
 
         return TaskProfile(
-            intent=intent, complexity=complexity,
+            intent=intent,
+            complexity=complexity,
             requires_reasoning=requires_reasoning,
             requires_code_generation=requires_code,
             requires_tools=requires_tools,
@@ -73,16 +86,19 @@ class DifficultyEstimator:
     @staticmethod
     def _detect_intent(text: str) -> str | None:
         from xenon.repl.prompt_optimizer import detect_intent
+
         intent = detect_intent(text)
 
         # 如果正则分类器无法识别，尝试使用 LLM 分类器
         if intent is None:
             try:
                 from xenon.repl.llm_intent_classifier import classify_intent_with_llm
+
                 intent = classify_intent_with_llm(text)
             except Exception as e:
                 # LLM 分类器失败时静默降级，不影响主流程
                 import logging
+
                 logger = logging.getLogger(__name__)
                 logger.debug(f"LLM 意图分类失败，保持 None: {e}")
 
@@ -97,13 +113,24 @@ class DifficultyEstimator:
             return 0.1
         score = 0.3
         intent_base = {
-            "chat": 0.05, "query": 0.1, "research": 0.3, "explain": 0.3,
-            "write_code": 0.5, "convert": 0.5, "write_test": 0.5,
-            "debug": 0.6, "refactor": 0.6, "write_doc": 0.4,
-            "design": 0.7, "novel": 0.6,
+            "chat": 0.05,
+            "query": 0.1,
+            "research": 0.3,
+            "explain": 0.3,
+            "write_code": 0.5,
+            "convert": 0.5,
+            "write_test": 0.5,
+            "debug": 0.6,
+            "refactor": 0.6,
+            "write_doc": 0.4,
+            "design": 0.7,
+            "novel": 0.6,
         }
         score += intent_base.get(intent, 0.3)
-        if re.search(r"(?:多步|逐步|迭代|反复|多个文件|整个|项目|工程|系统|重构|重写|迁移|改造)", text):
+        if re.search(
+            r"(?:多步|逐步|迭代|反复|多个文件|整个|项目|工程|系统|重构|重写|迁移|改造)",
+            text,
+        ):
             score += 0.15
         if re.search(r"(?:性能|优化|安全|并发|分布式|架构|设计模式)", text):
             score += 0.15
@@ -216,7 +243,8 @@ class DifficultyEstimator:
 
         if multi_stage and wants_quality:
             return (
-                "plan-reflection", 0.75,
+                "plan-reflection",
+                0.75,
                 "多阶段任务且有质量要求：规划执行后反思修正",
             )
         if multi_stage:
@@ -225,12 +253,17 @@ class DifficultyEstimator:
         # 反过来排会让所有带质量要求的高复杂度任务都被 plan-react 吞掉，
         # reflection 永远轮不到。
         if wants_quality and intent in {
-            "write_code", "write_test", "write_doc", "refactor", "debug",
+            "write_code",
+            "write_test",
+            "write_doc",
+            "refactor",
+            "debug",
         }:
             return "reflection", 0.7, "有明确质量要求：执行后自我审查并修正"
         if complexity > 0.7 and requires_reasoning:
             return (
-                "plan-react", 0.7,
+                "plan-react",
+                0.7,
                 "高复杂度推理任务：全局规划 + 每步 ReAct 执行",
             )
         # 多轮对话里的工具任务通常是"改—验—再改"的探索循环。
@@ -246,7 +279,8 @@ class DifficultyEstimator:
 
     @staticmethod
     def _estimate_tokens(
-        user_input: str, context_messages: list[dict],
+        user_input: str,
+        context_messages: list[dict],
     ) -> int:
         total = len(user_input)
         for m in context_messages:

@@ -25,6 +25,8 @@ except ImportError:  # pragma: no cover - script execution fallback
 DEFAULT_TASKS_PATH = Path(__file__).with_name("tasks.yaml")
 DEFAULT_REPL_TASKS_PATH = Path(__file__).with_name("repl_tasks.yaml")
 DEFAULT_REPORT_PATH = Path(__file__).parent / "reports" / "mock_report.md"
+
+
 def _supported_engine_types() -> tuple[str, ...]:
     """从 ENGINE_REGISTRY 派生受支持的引擎名，避免维护第二份白名单。
 
@@ -54,7 +56,9 @@ def isolated_eval_credentials(
     """
     source = Path(
         source_path
-        or os.environ.get("XENON_CREDENTIALS_PATH", str(Path.home() / ".xenon" / "credentials.yaml")),
+        or os.environ.get(
+            "XENON_CREDENTIALS_PATH", str(Path.home() / ".xenon" / "credentials.yaml")
+        ),
     ).expanduser()
     target = Path(workdir) / ".xenon" / "credentials.yaml"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -131,12 +135,16 @@ class ReplCommandAgent:
                     repl = REPL(streaming=False, optimize_prompts=False)
                 raw = str(task["command"]).strip()
                 parts = raw.split(maxsplit=1)
-                answer = str(dispatch_command(
-                    parts[0], parts[1] if len(parts) > 1 else "",
-                    registry=repl.registry,
-                    ctx_mgr=repl.ctx_mgr,
-                    session_state=repl._session_state,
-                ) or "")
+                answer = str(
+                    dispatch_command(
+                        parts[0],
+                        parts[1] if len(parts) > 1 else "",
+                        registry=repl.registry,
+                        ctx_mgr=repl.ctx_mgr,
+                        session_state=repl._session_state,
+                    )
+                    or ""
+                )
                 verification = evaluate_assertions(task, answer, workdir=self.workdir)
                 success = bool(answer.strip()) and (
                     not verification["configured"] or verification["passed"]
@@ -153,7 +161,8 @@ class ReplCommandAgent:
             "category": "repl_command",
             "success": success,
             "model": "xenon-repl",
-            "token_count": estimate_tokens(str(task.get("command", ""))) + estimate_tokens(answer),
+            "token_count": estimate_tokens(str(task.get("command", "")))
+            + estimate_tokens(answer),
             "tool_calls": 0,
             "tool_failures": 0,
             "tools_used": [],
@@ -177,9 +186,13 @@ class _DirectEvalEngine:
     def run(self, user_input: str, context: Any = None, ctx_mgr: Any = None) -> str:
         from xenon.utils.llm_client import chat_completion
 
-        messages = ctx_mgr.get_messages() if ctx_mgr is not None else [
-            {"role": "user", "content": user_input},
-        ]
+        messages = (
+            ctx_mgr.get_messages()
+            if ctx_mgr is not None
+            else [
+                {"role": "user", "content": user_input},
+            ]
+        )
         return chat_completion(self.model, messages, max_tokens=1024, temperature=0.3)
 
 
@@ -234,9 +247,14 @@ def evaluate_assertions(
     if not assertions:
         return {"configured": False, "passed": None, "checks": [], "failures": []}
     if not isinstance(assertions, dict):
-        return {"configured": True, "passed": False, "checks": [], "failures": [
-            "assertions must be a mapping",
-        ]}
+        return {
+            "configured": True,
+            "passed": False,
+            "checks": [],
+            "failures": [
+                "assertions must be a mapping",
+            ],
+        }
 
     root = Path(workdir or Path.cwd()).resolve()
     checks: list[str] = []
@@ -299,7 +317,9 @@ def evaluate_assertions(
             if valid:
                 checks.append(f"answer {'omits' if negate else 'contains'} {needle!r}")
             else:
-                failures.append(f"answer {'contains forbidden' if negate else 'does not contain'} {needle!r}")
+                failures.append(
+                    f"answer {'contains forbidden' if negate else 'does not contain'} {needle!r}"
+                )
     any_needles = strings(assertions.get("answer_contains_any", []))
     if any_needles:
         matched = [needle for needle in any_needles if needle in final_answer]
@@ -314,8 +334,13 @@ def evaluate_assertions(
     for command in commands if isinstance(commands, list) else []:
         try:
             completed = subprocess.run(
-                str(command), cwd=root, shell=True, capture_output=True,
-                text=True, timeout=30, check=False,
+                str(command),
+                cwd=root,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             failures.append(f"command failed to run: {command!r} ({exc})")
@@ -325,7 +350,9 @@ def evaluate_assertions(
         else:
             detail = (completed.stdout + completed.stderr).strip().splitlines()
             suffix = f": {detail[-1][:160]}" if detail else ""
-            failures.append(f"command failed ({completed.returncode}): {command!r}{suffix}")
+            failures.append(
+                f"command failed ({completed.returncode}): {command!r}{suffix}"
+            )
 
     return {
         "configured": True,
@@ -382,8 +409,7 @@ class RealAgent:
         excluded = {"tasks", ".git"}
         fixture = task.get("fixture")
         fixture_root = (
-            Path(__file__).with_name("fixtures") / str(fixture)
-            if fixture else None
+            Path(__file__).with_name("fixtures") / str(fixture) if fixture else None
         )
         if fixture_root is not None and not fixture_root.is_dir():
             raise ValueError(f"Task fixture does not exist: {fixture_root}")
@@ -422,30 +448,42 @@ class RealAgent:
             return _DirectEvalEngine(self.model, callback)
         if self.engine_type == "react":
             from xenon.engine.react_engine import ReActEngine
+
             return ReActEngine(
-                **common, max_iterations=self.max_iterations,
+                **common,
+                max_iterations=self.max_iterations,
             )
         if self.engine_type == "plan-execute":
             from xenon.engine.plan_execute_engine import PlanExecuteEngine
+
             return PlanExecuteEngine(**common, max_steps=self.max_iterations)
         if self.engine_type == "reflection":
             from xenon.engine.reflection_engine import ReflectionEngine
+
             return ReflectionEngine(**common, max_rounds=min(3, self.max_iterations))
         if self.engine_type == "plan-react":
             from xenon.engine.combined_engines import PlanReactEngine
+
             return PlanReactEngine(
-                **common, max_steps=self.max_iterations,
+                **common,
+                max_steps=self.max_iterations,
                 react_iterations=self.max_iterations,
             )
         if self.engine_type == "plan-reflection":
             from xenon.engine.combined_engines import PlanReflectionEngine
+
             return PlanReflectionEngine(
-                **common, max_steps=self.max_iterations, review_rounds=2,
+                **common,
+                max_steps=self.max_iterations,
+                review_rounds=2,
             )
         if self.engine_type == "react-reflection":
             from xenon.engine.combined_engines import ReactReflectionEngine
+
             return ReactReflectionEngine(
-                **common, react_iterations=self.max_iterations, review_rounds=2,
+                **common,
+                react_iterations=self.max_iterations,
+                review_rounds=2,
             )
         raise ValueError(
             f"Unsupported engine_type {self.engine_type!r}; expected one of "
@@ -458,7 +496,10 @@ class RealAgent:
         return AgentContext()
 
     def _synthesize_review_prompt(
-        self, original_prompt: str, prev_answer: str, turn: int,
+        self,
+        original_prompt: str,
+        prev_answer: str,
+        turn: int,
     ) -> str:
         """生成第 N 轮的 review feedback prompt（通用机制，不针对特定任务）。
 
@@ -473,6 +514,7 @@ class RealAgent:
 
     def run_task(self, task: dict[str, Any]) -> dict[str, Any]:
         from xenon.repl.context_manager import ContextManager
+
         factory = self._engine_factory or self._default_engine_factory
         executed: list[str] = []
         successful_tools: list[str] = []
@@ -487,7 +529,9 @@ class RealAgent:
         callback_telemetry = _EvalTelemetryCallback()
         task_workdir = self._prepare_task_workdir(task)
         started_at = datetime.now(timezone.utc).isoformat()
-        callback_telemetry.record("task_start", task_id=task["id"], engine=self.engine_type)
+        callback_telemetry.record(
+            "task_start", task_id=task["id"], engine=self.engine_type
+        )
         try:
             with _change_directory(task_workdir) if task_workdir else nullcontext():
                 for turn in range(self.max_turns):
@@ -496,7 +540,9 @@ class RealAgent:
                         user_input = self._build_prompt(task)
                     else:
                         user_input = self._synthesize_review_prompt(
-                            original_prompt, answer, turn,
+                            original_prompt,
+                            answer,
+                            turn,
                         )
                     cm.add_user_message(user_input)
 
@@ -528,10 +574,17 @@ class RealAgent:
                         # stalled provider response from blocking a matrix.
                         node.request_timeout = self.request_timeout
 
-                    def _snapshot_target(action: str, params: dict[str, Any]) -> str | None:
+                    def _snapshot_target(
+                        action: str, params: dict[str, Any]
+                    ) -> str | None:
                         if action not in {
-                            "write_file", "edit_file", "create_directory",
-                            "batch_write", "batch_edit", "append_file", "refactor",
+                            "write_file",
+                            "edit_file",
+                            "create_directory",
+                            "batch_write",
+                            "batch_edit",
+                            "append_file",
+                            "refactor",
                         }:
                             return None
                         raw = params.get("file_path") or params.get("path")
@@ -543,23 +596,38 @@ class RealAgent:
                         target = target.resolve()
                         try:
                             if target.is_file():
-                                return "file:" + hashlib.sha256(target.read_bytes()).hexdigest()
+                                return (
+                                    "file:"
+                                    + hashlib.sha256(target.read_bytes()).hexdigest()
+                                )
                             if target.is_dir():
-                                return "dir:" + ",".join(sorted(p.name for p in target.iterdir()))
+                                return "dir:" + ",".join(
+                                    sorted(p.name for p in target.iterdir())
+                                )
                             return "missing"
                         except OSError:
                             return None
 
-                    def _record_result(action: str, params: dict[str, Any], result: Any, before: str | None) -> None:
+                    def _record_result(
+                        action: str,
+                        params: dict[str, Any],
+                        result: Any,
+                        before: str | None,
+                    ) -> None:
                         if isinstance(result, dict):
                             success = bool(result.get("success", False))
-                            state = str(result.get("state") or ("succeeded" if success else "failed"))
+                            state = str(
+                                result.get("state")
+                                or ("succeeded" if success else "failed")
+                            )
                             error = result.get("error")
                             lifecycle = result.get("lifecycle", ()) or ()
                             attempts = int(result.get("attempts", 1) or 1)
                         else:
                             success = bool(getattr(result, "success", False))
-                            state = getattr(getattr(result, "state", None), "value", None)
+                            state = getattr(
+                                getattr(result, "state", None), "value", None
+                            )
                             error = getattr(result, "error", None)
                             lifecycle = getattr(result, "lifecycle", ()) or ()
                             attempts = int(getattr(result, "attempts", 1) or 1)
@@ -567,20 +635,32 @@ class RealAgent:
                         checkpoint = lifecycle[-1] if lifecycle else {}
                         if success:
                             successful_tools.append(action)
-                        tool_events.append({
-                            "tool": action,
-                            "success": success,
-                            "state": state or ("succeeded" if success else "failed"),
-                            "error": str(error) if error else None,
-                            "attempts": attempts,
-                            "state_changed": (before != after) if before is not None and after is not None else None,
-                            "confirmation_required": checkpoint.get("requires_confirmation"),
-                            "confirmation_outcome": (
-                                "denied" if checkpoint.get("error_kind") in {"permission_denied", "policy_denied"}
-                                else "cancelled" if checkpoint.get("error_kind") == "cancelled"
-                                else "approved_or_not_required" if success else "not_executed"
-                            ),
-                        })
+                        tool_events.append(
+                            {
+                                "tool": action,
+                                "success": success,
+                                "state": state
+                                or ("succeeded" if success else "failed"),
+                                "error": str(error) if error else None,
+                                "attempts": attempts,
+                                "state_changed": (before != after)
+                                if before is not None and after is not None
+                                else None,
+                                "confirmation_required": checkpoint.get(
+                                    "requires_confirmation"
+                                ),
+                                "confirmation_outcome": (
+                                    "denied"
+                                    if checkpoint.get("error_kind")
+                                    in {"permission_denied", "policy_denied"}
+                                    else "cancelled"
+                                    if checkpoint.get("error_kind") == "cancelled"
+                                    else "approved_or_not_required"
+                                    if success
+                                    else "not_executed"
+                                ),
+                            }
+                        )
 
                     executor_hooks: list[tuple[Any, Any]] = []
                     execute_hooks: list[tuple[Any, Any]] = []
@@ -590,9 +670,18 @@ class RealAgent:
                         if executor is None or not callable(original):
                             continue
 
-                        def _recording_executor(action, params, context, tracker=None, _original=original, **kwargs):
+                        def _recording_executor(
+                            action,
+                            params,
+                            context,
+                            tracker=None,
+                            _original=original,
+                            **kwargs,
+                        ):
                             before = _snapshot_target(action, params)
-                            result = _original(action, params, context, tracker=tracker, **kwargs)
+                            result = _original(
+                                action, params, context, tracker=tracker, **kwargs
+                            )
                             _record_result(action, params, result, before)
                             return result
 
@@ -609,7 +698,13 @@ class RealAgent:
                         if not callable(original_execute):
                             continue
 
-                        def _recording_nested_execute(action, action_input, ctx, tracker=None, _original=original_execute):
+                        def _recording_nested_execute(
+                            action,
+                            action_input,
+                            ctx,
+                            tracker=None,
+                            _original=original_execute,
+                        ):
                             executed.append(action)
                             return _original(action, action_input, ctx, tracker)
 
@@ -624,12 +719,18 @@ class RealAgent:
                         executed.append(action)
                         if not has_top_executor:
                             successful_tools.append(action)
-                            tool_events.append({
-                                "tool": action, "success": True, "state": "succeeded",
-                                "error": None, "attempts": 1, "state_changed": None,
-                                "confirmation_required": None,
-                                "confirmation_outcome": "unknown_engine_result",
-                            })
+                            tool_events.append(
+                                {
+                                    "tool": action,
+                                    "success": True,
+                                    "state": "succeeded",
+                                    "error": None,
+                                    "attempts": 1,
+                                    "state_changed": None,
+                                    "confirmation_required": None,
+                                    "confirmation_outcome": "unknown_engine_result",
+                                }
+                            )
                         if orig_execute is None:
                             return ""
                         return orig_execute(action, action_input, ctx, tracker)
@@ -661,12 +762,21 @@ class RealAgent:
                         break
 
                 success, reason = self._score(
-                    task, executed, answer, successful_tools=successful_tools,
+                    task,
+                    executed,
+                    answer,
+                    successful_tools=successful_tools,
                     engine_type=self.engine_type,
                 )
                 verification = evaluate_assertions(task, answer, workdir=task_workdir)
-                callback_telemetry.record("assertions_end", passed=verification.get("passed"))
-                if success and verification["configured"] and not verification["passed"]:
+                callback_telemetry.record(
+                    "assertions_end", passed=verification.get("passed")
+                )
+                if (
+                    success
+                    and verification["configured"]
+                    and not verification["passed"]
+                ):
                     success = False
                     reason = f"result assertions failed: {verification['failures']}"
                 notes = answer.strip()[:200] or reason
@@ -703,8 +813,11 @@ class RealAgent:
 
     @staticmethod
     def _score(
-        task: dict[str, Any], executed: list[str], answer: str,
-        *, successful_tools: list[str] | None = None,
+        task: dict[str, Any],
+        executed: list[str],
+        answer: str,
+        *,
+        successful_tools: list[str] | None = None,
         engine_type: str = "react",
     ) -> tuple[bool, str]:
         """评分：全部 expected_tools 成功执行且 final_answer 非空。"""
@@ -712,7 +825,10 @@ class RealAgent:
         if engine_type in {"direct", "reflection"}:
             if not (answer or "").strip():
                 return False, "empty final answer"
-            return True, f"answer-only baseline ({engine_type}); tool expectation not applicable"
+            return (
+                True,
+                f"answer-only baseline ({engine_type}); tool expectation not applicable",
+            )
         observed = set(successful_tools if successful_tools is not None else executed)
         missing = expected - observed
         if missing:
@@ -759,11 +875,13 @@ class _EvalTelemetryCallback:
         self.events: list[dict[str, Any]] = []
 
     def record(self, event: str, **fields: Any) -> None:
-        self.events.append({
-            "event": event,
-            "at": datetime.now(timezone.utc).isoformat(),
-            **fields,
-        })
+        self.events.append(
+            {
+                "event": event,
+                "at": datetime.now(timezone.utc).isoformat(),
+                **fields,
+            }
+        )
 
     # EngineCallback-compatible no-op hooks.  Keeping the callback duck-typed
     # avoids importing the engine module during eval discovery while still
@@ -844,10 +962,14 @@ class XenonMetrics:
         cache = cache or {}
         calls = sum(int(item.get("calls", 0) or 0) for item in usage.values())
         prompt = sum(int(item.get("prompt_tokens", 0) or 0) for item in usage.values())
-        completion = sum(int(item.get("completion_tokens", 0) or 0) for item in usage.values())
+        completion = sum(
+            int(item.get("completion_tokens", 0) or 0) for item in usage.values()
+        )
         total = sum(int(item.get("total_tokens", 0) or 0) for item in usage.values())
         hit = sum(int(item.get("cache_hit_tokens", 0) or 0) for item in usage.values())
-        miss = sum(int(item.get("cache_miss_tokens", 0) or 0) for item in usage.values())
+        miss = sum(
+            int(item.get("cache_miss_tokens", 0) or 0) for item in usage.values()
+        )
         latency = sum(
             float(item.get("latency_avg", 0.0) or 0.0) * int(item.get("calls", 0) or 0)
             for item in usage.values()
@@ -855,7 +977,9 @@ class XenonMetrics:
         models = sorted(str(model) for model in usage)
         cache_calls = int(cache.get("total_calls", 0) or 0)
         cache_coverage = cache.get("cache_field_coverage")
-        provider_cache = bool(cache_calls and cache_coverage and float(cache_coverage) > 0)
+        provider_cache = bool(
+            cache_calls and cache_coverage and float(cache_coverage) > 0
+        )
         events = [event for event in cache.get("events", []) if isinstance(event, dict)]
         if provider_cache:
             # CacheTracker consumes the raw provider response and is the
@@ -866,28 +990,67 @@ class XenonMetrics:
             miss = int(cache.get("cache_misses", miss) or 0)
             if cache_calls > calls:
                 calls = cache_calls
-                prompt = sum(int(event.get("prompt_tokens", 0) or 0) for event in events)
-                completion = sum(int(event.get("completion_tokens", 0) or 0) for event in events)
+                prompt = sum(
+                    int(event.get("prompt_tokens", 0) or 0) for event in events
+                )
+                completion = sum(
+                    int(event.get("completion_tokens", 0) or 0) for event in events
+                )
                 total = prompt + completion
         task_governance = [
-            result.get("xenon_task_metrics", {}) for result in results
+            result.get("xenon_task_metrics", {})
+            for result in results
             if isinstance(result.get("xenon_task_metrics"), dict)
         ]
         governance_observed = bool(task_governance)
-        permission_denied = sum(int(item.get("permission_denied", 0) or 0) for item in task_governance)
-        permission_cancelled = sum(int(item.get("permission_cancelled", 0) or 0) for item in task_governance)
-        invalid_parameters = sum(int(item.get("invalid_parameters", 0) or 0) for item in task_governance)
-        path_blocks = sum(int(item.get("path_blocks", 0) or 0) for item in task_governance)
+        permission_denied = sum(
+            int(item.get("permission_denied", 0) or 0) for item in task_governance
+        )
+        permission_cancelled = sum(
+            int(item.get("permission_cancelled", 0) or 0) for item in task_governance
+        )
+        invalid_parameters = sum(
+            int(item.get("invalid_parameters", 0) or 0) for item in task_governance
+        )
+        path_blocks = sum(
+            int(item.get("path_blocks", 0) or 0) for item in task_governance
+        )
         rails = {
-            "rail_count": len({str(event.get("cache_lane")) for event in events if event.get("cache_lane")}),
-            "cache_family_count": len({str(event.get("cache_family")) for event in events if event.get("cache_family")}),
-            "rail_forks": sum(1 for event in events if event.get("cause") in {
-                "model_switch", "engine_switch", "phase_switch", "toolset_changed",
-                "project_changed", "context_compacted", "stable_prefix_changed",
-                "history_rewritten",
-            }),
-            "context_epoch_changes": sum(1 for event in events if event.get("cause") == "context_compacted"),
-            "reusable_prefix_tokens": sum(int(event.get("cache_hit_tokens", 0) or 0) for event in events),
+            "rail_count": len(
+                {
+                    str(event.get("cache_lane"))
+                    for event in events
+                    if event.get("cache_lane")
+                }
+            ),
+            "cache_family_count": len(
+                {
+                    str(event.get("cache_family"))
+                    for event in events
+                    if event.get("cache_family")
+                }
+            ),
+            "rail_forks": sum(
+                1
+                for event in events
+                if event.get("cause")
+                in {
+                    "model_switch",
+                    "engine_switch",
+                    "phase_switch",
+                    "toolset_changed",
+                    "project_changed",
+                    "context_compacted",
+                    "stable_prefix_changed",
+                    "history_rewritten",
+                }
+            ),
+            "context_epoch_changes": sum(
+                1 for event in events if event.get("cause") == "context_compacted"
+            ),
+            "reusable_prefix_tokens": sum(
+                int(event.get("cache_hit_tokens", 0) or 0) for event in events
+            ),
         }
 
         if provider_cache:
@@ -895,11 +1058,13 @@ class XenonMetrics:
             saved_cost = cache.get("savings_yuan")
             baseline_cost = (
                 float(actual_cost or 0) + float(saved_cost or 0)
-                if actual_cost is not None and saved_cost is not None else None
+                if actual_cost is not None and saved_cost is not None
+                else None
             )
             savings_pct = (
                 float(saved_cost) / baseline_cost * 100
-                if baseline_cost and saved_cost is not None else None
+                if baseline_cost and saved_cost is not None
+                else None
             )
             cost_quality = "provider_cache_fields"
         elif calls:
@@ -908,12 +1073,17 @@ class XenonMetrics:
             actual_cost = baseline_cost = 0.0
             try:
                 from xenon.utils.deepseek_cache import CacheTracker
+
                 pricing_tracker = CacheTracker(persist=False)
                 try:
                     for model, item in usage.items():
                         pricing = pricing_tracker.get_pricing(model)
-                        actual_cost += (int(item.get("prompt_tokens", 0) or 0) / 1_000_000) * pricing["input_cache_miss"]
-                        actual_cost += (int(item.get("completion_tokens", 0) or 0) / 1_000_000) * pricing["output"]
+                        actual_cost += (
+                            int(item.get("prompt_tokens", 0) or 0) / 1_000_000
+                        ) * pricing["input_cache_miss"]
+                        actual_cost += (
+                            int(item.get("completion_tokens", 0) or 0) / 1_000_000
+                        ) * pricing["output"]
                 finally:
                     pricing_tracker.close()
             except Exception:  # pragma: no cover - pricing fallback only
@@ -926,10 +1096,17 @@ class XenonMetrics:
             cost_quality = "no_llm_calls"
 
         successful = sum(1 for result in results if result.get("success"))
-        model_calls = {model: int(item.get("calls", 0) or 0) for model, item in usage.items()}
+        model_calls = {
+            model: int(item.get("calls", 0) or 0) for model, item in usage.items()
+        }
         non_primary_calls = (
-            sum(count for model, count in model_calls.items() if primary_model and model != primary_model)
-            if primary_model else None
+            sum(
+                count
+                for model, count in model_calls.items()
+                if primary_model and model != primary_model
+            )
+            if primary_model
+            else None
         )
         return {
             "source": "provider" if calls else "unavailable",
@@ -940,7 +1117,9 @@ class XenonMetrics:
             "total_tokens": total,
             "average_latency_seconds": cls._round(latency / calls if calls else None),
             "cache": {
-                "status": "provider_reported" if provider_cache else ("unavailable" if not calls else "not_reported"),
+                "status": "provider_reported"
+                if provider_cache
+                else ("unavailable" if not calls else "not_reported"),
                 "field_coverage": cls._round(cache_coverage),
                 "hit_tokens": hit if calls else None,
                 "miss_tokens": miss if calls else None,
@@ -962,13 +1141,21 @@ class XenonMetrics:
                 "note": "失败尝试不会产生 usage 回调；需路由事件才能计算完整 fallback 成功率。",
             },
             "governance": {
-                "permission_requests": (permission_denied + permission_cancelled if governance_observed else None),
+                "permission_requests": (
+                    permission_denied + permission_cancelled
+                    if governance_observed
+                    else None
+                ),
                 "approved": None,
                 "denied": (permission_denied if governance_observed else None),
                 "cancelled": (permission_cancelled if governance_observed else None),
-                "invalid_parameter_blocks": (invalid_parameters if governance_observed else None),
+                "invalid_parameter_blocks": (
+                    invalid_parameters if governance_observed else None
+                ),
                 "path_blocks": (path_blocks if governance_observed else None),
-                "status": "observed_tool_governance" if governance_observed else "not_instrumented_in_this_eval",
+                "status": "observed_tool_governance"
+                if governance_observed
+                else "not_instrumented_in_this_eval",
             },
             "memory_recovery": {
                 "memory_writes_confirmed": None,
@@ -977,8 +1164,14 @@ class XenonMetrics:
                 "status": "not_instrumented_in_this_eval",
             },
             "efficiency": {
-                "tokens_per_successful_task": cls._round(total / successful if successful else None, 2),
-                "cost_per_successful_task_yuan": cls._round(float(actual_cost) / successful if actual_cost is not None and successful else None),
+                "tokens_per_successful_task": cls._round(
+                    total / successful if successful else None, 2
+                ),
+                "cost_per_successful_task_yuan": cls._round(
+                    float(actual_cost) / successful
+                    if actual_cost is not None and successful
+                    else None
+                ),
             },
         }
 
@@ -1004,14 +1197,19 @@ def run_eval(
         if not model:
             raise ValueError("--model is required when --mode real")
         agent = RealAgent(
-            model, engine_type=engine_type, workdir=workdir,
-            isolate_tasks=isolate_tasks, max_iterations=max_iterations,
-            max_turns=max_turns, request_timeout=request_timeout,
+            model,
+            engine_type=engine_type,
+            workdir=workdir,
+            isolate_tasks=isolate_tasks,
+            max_iterations=max_iterations,
+            max_turns=max_turns,
+            request_timeout=request_timeout,
         )
         # Subscribe once around the complete run.  These are existing Xenon
         # telemetry sources; no prompt or credential content is persisted.
         from xenon.utils.deepseek_cache import CacheTracker
         from xenon.utils.llm_client import UsageTracker
+
         usage_tracker = UsageTracker()
         cache_tracker = CacheTracker(persist=False)
     else:
@@ -1054,7 +1252,9 @@ def run_eval(
     return results
 
 
-def run_repl_eval(tasks: list[dict[str, Any]], *, workdir: str | None = None) -> list[dict[str, Any]]:
+def run_repl_eval(
+    tasks: list[dict[str, Any]], *, workdir: str | None = None
+) -> list[dict[str, Any]]:
     """Run the isolated slash-command suite through the real Xenon REPL."""
     agent = ReplCommandAgent(workdir=workdir)
     return [agent.run_task(task) for task in tasks]
@@ -1077,9 +1277,14 @@ def run_eval_matrix(
         raise ValueError(f"Unsupported engines: {unknown}")
     return {
         engine: run_eval(
-            tasks, mode="real", model=model, engine_type=engine,
-            workdir=workdir, isolate_tasks=isolate_tasks,
-            max_iterations=max_iterations, max_turns=max_turns,
+            tasks,
+            mode="real",
+            model=model,
+            engine_type=engine,
+            workdir=workdir,
+            isolate_tasks=isolate_tasks,
+            max_iterations=max_iterations,
+            max_turns=max_turns,
             request_timeout=request_timeout,
             checkpoint_path=Path(workdir) / "checkpoints" / f"{engine}.jsonl",
         )
@@ -1091,15 +1296,17 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(results)
     successes = sum(1 for result in results if result["success"])
     verified = [
-        result for result in results
-        if result.get("verification", {}).get("configured")
+        result for result in results if result.get("verification", {}).get("configured")
     ]
     verified_successes = sum(
-        1 for result in verified
+        1
+        for result in verified
         if result.get("success") and result.get("verification", {}).get("passed")
     )
     tool_events = [
-        event for result in results for event in result.get("tool_events", [])
+        event
+        for result in results
+        for event in result.get("tool_events", [])
         if isinstance(event, dict)
     ]
     tool_attempts = len(tool_events)
@@ -1108,26 +1315,36 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         result for result in results if result.get("verification", {}).get("configured")
     ]
     assertion_passes = sum(
-        1 for result in configured_assertions
+        1
+        for result in configured_assertions
         if result.get("verification", {}).get("passed") is True
     )
     return {
         "tasks": total,
         "successes": successes,
         "success_rate": (successes / total * 100) if total else 0.0,
-        "average_tokens": mean(result["token_count"] for result in results) if results else 0,
+        "average_tokens": mean(result["token_count"] for result in results)
+        if results
+        else 0,
         "tool_calls": sum(result["tool_calls"] for result in results),
         "tool_failures": sum(result["tool_failures"] for result in results),
         "verified_tasks": len(verified),
         "verified_successes": verified_successes,
-        "verification_rate": (verified_successes / len(verified) * 100) if verified else None,
+        "verification_rate": (verified_successes / len(verified) * 100)
+        if verified
+        else None,
         "verified_success_rate": (verified_successes / total * 100) if total else 0.0,
         "tool_execution_attempts": tool_attempts,
         "tool_execution_successes": tool_successes,
-        "tool_execution_success_rate": (tool_successes / tool_attempts * 100) if tool_attempts else None,
+        "tool_execution_success_rate": (tool_successes / tool_attempts * 100)
+        if tool_attempts
+        else None,
         "result_assertion_passes": assertion_passes,
-        "result_assertion_pass_rate": (assertion_passes / len(configured_assertions) * 100)
-        if configured_assertions else None,
+        "result_assertion_pass_rate": (
+            assertion_passes / len(configured_assertions) * 100
+        )
+        if configured_assertions
+        else None,
     }
 
 
@@ -1145,7 +1362,9 @@ def write_report(
     summary = summarize(results)
     xenon_metrics = results[0].get("_xenon_metrics") if results else None
     if xenon_metrics is None:
-        xenon_metrics = XenonMetrics.from_runtime(results, primary_model=model if mode == "real" else None)
+        xenon_metrics = XenonMetrics.from_runtime(
+            results, primary_model=model if mode == "real" else None
+        )
     date = run_date or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     engine_name = str(results[0].get("engine", "n/a")) if results else "n/a"
 
@@ -1155,83 +1374,93 @@ def write_report(
     ]
     # §8.14.3 修复：mock 模式显式标注为框架自检，不代表 agent 能力
     if mode == "mock":
-        lines.extend([
-            "> ⚠️ **Framework smoke test — NOT an agent capability measurement.**",
-            "> mock 模式仅验证 eval 框架自身能跑通 + YAML 可解析，success_rate 恒 100%，",
-            "> 与模型/引擎能力无关。判断 agent 能力请用 `--mode real`。",
-            "",
-        ])
+        lines.extend(
+            [
+                "> ⚠️ **Framework smoke test — NOT an agent capability measurement.**",
+                "> mock 模式仅验证 eval 框架自身能跑通 + YAML 可解析，success_rate 恒 100%，",
+                "> 与模型/引擎能力无关。判断 agent 能力请用 `--mode real`。",
+                "",
+            ]
+        )
     elif mode == "real":
-        lines.extend([
-            "> Scoring: real 模式跑 ReAct 多轮闭环，按**实际执行**的工具评分",
-            ">（`expected_tools ⊆ executed` 且 final_answer 非空）；配置了 `assertions` 的任务还会执行结果断言。`success_criteria` 仍为人工复核提示。",
+        lines.extend(
+            [
+                "> Scoring: real 模式跑 ReAct 多轮闭环，按**实际执行**的工具评分",
+                ">（`expected_tools ⊆ executed` 且 final_answer 非空）；配置了 `assertions` 的任务还会执行结果断言。`success_criteria` 仍为人工复核提示。",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            f"- Mode: `{mode}`",
+            f"- Evaluation suite: `{'REPL command' if mode == 'repl' else 'ReAct/tool'}`",
+            f"- Engine: `{engine_name}`",
+            f"- Model: `{model}`",
+            f"- Run date: `{date}`",
+            f"- Tasks: {summary['tasks']}",
+            f"- Success Rate: {summary['success_rate']:.1f}%",
+            f"- Average Tokens: {summary['average_tokens']:.1f}",
+            f"- Tool Calls: {summary['tool_calls']}",
+            f"- Tool Failures: {summary['tool_failures']}",
+            f"- Verified Tasks: {summary['verified_tasks']}/{summary['tasks']}",
+            f"- Verified Success Rate: {_display_metric(summary['verification_rate'], suffix='%')}",
+            f"- Verified Success Rate (all tasks): {_display_metric(summary['verified_success_rate'], suffix='%')}",
+            f"- Tool Execution Success Rate: {_display_metric(summary['tool_execution_success_rate'], suffix='%')}",
+            f"- Result Assertion Pass Rate: {_display_metric(summary['result_assertion_pass_rate'], suffix='%')}",
             "",
-        ])
-    lines.extend([
-        f"- Mode: `{mode}`",
-        f"- Evaluation suite: `{'REPL command' if mode == 'repl' else 'ReAct/tool'}`",
-        f"- Engine: `{engine_name}`",
-        f"- Model: `{model}`",
-        f"- Run date: `{date}`",
-        f"- Tasks: {summary['tasks']}",
-        f"- Success Rate: {summary['success_rate']:.1f}%",
-        f"- Average Tokens: {summary['average_tokens']:.1f}",
-        f"- Tool Calls: {summary['tool_calls']}",
-        f"- Tool Failures: {summary['tool_failures']}",
-        f"- Verified Tasks: {summary['verified_tasks']}/{summary['tasks']}",
-        f"- Verified Success Rate: {_display_metric(summary['verification_rate'], suffix='%')}",
-        f"- Verified Success Rate (all tasks): {_display_metric(summary['verified_success_rate'], suffix='%')}",
-        f"- Tool Execution Success Rate: {_display_metric(summary['tool_execution_success_rate'], suffix='%')}",
-        f"- Result Assertion Pass Rate: {_display_metric(summary['result_assertion_pass_rate'], suffix='%')}",
-        "",
-        "| Task | Category | Success | Verified | Tokens | Tool Calls | Tool Failures | Notes |",
-        "| --- | --- | --- | --- | ---: | ---: | ---: | --- |",
-    ])
+            "| Task | Category | Success | Verified | Tokens | Tool Calls | Tool Failures | Notes |",
+            "| --- | --- | --- | --- | ---: | ---: | ---: | --- |",
+        ]
+    )
     for result in results:
         notes = str(result.get("notes", "")).replace("\n", " ")[:140]
         success = "yes" if result["success"] else "no"
         verification = result.get("verification", {})
-        verified = "yes" if verification.get("configured") and verification.get("passed") else (
-            "failed" if verification.get("configured") else "n/a"
+        verified = (
+            "yes"
+            if verification.get("configured") and verification.get("passed")
+            else ("failed" if verification.get("configured") else "n/a")
         )
         lines.append(
             f"| `{result['task_id']}` | {result['category']} | {success} | {verified} | "
             f"{result['token_count']} | {result['tool_calls']} | {result['tool_failures']} | {notes} |"
         )
 
-    lines.extend([
-        "",
-        "## Xenon-Specific Value",
-        "",
-        "> These metrics are separate from task success rate. `N/A` means the signal was not observable in this run; it is never treated as zero.",
-        "",
-        "### Cache Rails and Cost",
-        "",
-        f"- Provider cache telemetry: **{xenon_metrics['cache']['status']}**",
-        f"- Cache field coverage: {_display_metric(xenon_metrics['cache']['field_coverage'], suffix='%', scale=100)}",
-        f"- Cache hit rate: {_display_metric(xenon_metrics['cache']['hit_rate'], suffix='%', scale=100)}",
-        f"- Reusable prefix / hit tokens: {_display_metric(xenon_metrics['cache']['reusable_prefix_tokens'])}",
-        f"- Cache rails: {_display_metric(xenon_metrics['cache']['rail_count'])}; rail forks: {_display_metric(xenon_metrics['cache']['rail_forks'])}; context compactions: {_display_metric(xenon_metrics['cache']['context_epoch_changes'])}",
-        f"- Estimated actual cost: {_display_currency(xenon_metrics['cost']['estimated_actual_yuan'])}",
-        f"- All-cache-miss baseline: {_display_currency(xenon_metrics['cost']['all_cache_miss_baseline_yuan'])}",
-        f"- Estimated savings: {_display_currency(xenon_metrics['cost']['saved_yuan'])} ({_display_metric(xenon_metrics['cost']['saved_pct'], suffix='%')})",
-        f"- Cost evidence: `{xenon_metrics['cost']['quality']}`",
-        "",
-        "### Routing, Governance and Recovery",
-        "",
-        f"- Models observed: {', '.join(xenon_metrics['models_used']) or 'N/A'}",
-        f"- Fallback calls observed: {_display_metric(xenon_metrics['routing']['fallback_calls_observed'])}",
-        f"- Fallback success rate: {_display_metric(xenon_metrics['routing']['fallback_success_rate'], suffix='%')}",
-        f"- Permission telemetry: `{xenon_metrics['governance']['status']}`",
-        f"- Permission denied/cancelled: {_display_metric(xenon_metrics['governance']['denied'])}/{_display_metric(xenon_metrics['governance']['cancelled'])}; invalid-parameter blocks: {_display_metric(xenon_metrics['governance']['invalid_parameter_blocks'])}; path blocks: {_display_metric(xenon_metrics['governance']['path_blocks'])}",
-        f"- Memory/recovery telemetry: `{xenon_metrics['memory_recovery']['status']}`",
-        "",
-        "### Efficiency",
-        "",
-        f"- Observed LLM calls: {_display_metric(xenon_metrics['observed_llm_calls'])}",
-        f"- Tokens per successful task: {_display_metric(xenon_metrics['efficiency']['tokens_per_successful_task'])}",
-        f"- Cost per successful task: {_display_currency(xenon_metrics['efficiency']['cost_per_successful_task_yuan'])}",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Xenon-Specific Value",
+            "",
+            "> These metrics are separate from task success rate. `N/A` means the signal was not observable in this run; it is never treated as zero.",
+            "",
+            "### Cache Rails and Cost",
+            "",
+            f"- Provider cache telemetry: **{xenon_metrics['cache']['status']}**",
+            f"- Cache field coverage: {_display_metric(xenon_metrics['cache']['field_coverage'], suffix='%', scale=100)}",
+            f"- Cache hit rate: {_display_metric(xenon_metrics['cache']['hit_rate'], suffix='%', scale=100)}",
+            f"- Reusable prefix / hit tokens: {_display_metric(xenon_metrics['cache']['reusable_prefix_tokens'])}",
+            f"- Cache rails: {_display_metric(xenon_metrics['cache']['rail_count'])}; rail forks: {_display_metric(xenon_metrics['cache']['rail_forks'])}; context compactions: {_display_metric(xenon_metrics['cache']['context_epoch_changes'])}",
+            f"- Estimated actual cost: {_display_currency(xenon_metrics['cost']['estimated_actual_yuan'])}",
+            f"- All-cache-miss baseline: {_display_currency(xenon_metrics['cost']['all_cache_miss_baseline_yuan'])}",
+            f"- Estimated savings: {_display_currency(xenon_metrics['cost']['saved_yuan'])} ({_display_metric(xenon_metrics['cost']['saved_pct'], suffix='%')})",
+            f"- Cost evidence: `{xenon_metrics['cost']['quality']}`",
+            "",
+            "### Routing, Governance and Recovery",
+            "",
+            f"- Models observed: {', '.join(xenon_metrics['models_used']) or 'N/A'}",
+            f"- Fallback calls observed: {_display_metric(xenon_metrics['routing']['fallback_calls_observed'])}",
+            f"- Fallback success rate: {_display_metric(xenon_metrics['routing']['fallback_success_rate'], suffix='%')}",
+            f"- Permission telemetry: `{xenon_metrics['governance']['status']}`",
+            f"- Permission denied/cancelled: {_display_metric(xenon_metrics['governance']['denied'])}/{_display_metric(xenon_metrics['governance']['cancelled'])}; invalid-parameter blocks: {_display_metric(xenon_metrics['governance']['invalid_parameter_blocks'])}; path blocks: {_display_metric(xenon_metrics['governance']['path_blocks'])}",
+            f"- Memory/recovery telemetry: `{xenon_metrics['memory_recovery']['status']}`",
+            "",
+            "### Efficiency",
+            "",
+            f"- Observed LLM calls: {_display_metric(xenon_metrics['observed_llm_calls'])}",
+            f"- Tokens per successful task: {_display_metric(xenon_metrics['efficiency']['tokens_per_successful_task'])}",
+            f"- Cost per successful task: {_display_currency(xenon_metrics['efficiency']['cost_per_successful_task_yuan'])}",
+        ]
+    )
 
     failures = [result for result in results if not result["success"]]
     if failures:
@@ -1261,7 +1490,8 @@ def write_matrix_report(
         engine_reports[engine] = engine_path
 
     lines = [
-        "# Xenon Engine Matrix Report", "",
+        "# Xenon Engine Matrix Report",
+        "",
         f"- Model: `{model}`",
         f"- Engines: {', '.join(matrix)}",
         "",
@@ -1302,12 +1532,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run Xenon evals.")
     parser.add_argument("--mode", choices=["mock", "real"], default="mock")
     parser.add_argument(
-        "--suite", choices=["react", "repl"], default="react",
+        "--suite",
+        choices=["react", "repl"],
+        default="react",
         help="react: model/tool evals; repl: real Xenon slash-command evals.",
     )
-    parser.add_argument("--model", default=None, help="Required for --mode real, e.g. deepseek/deepseek-v4-pro")
     parser.add_argument(
-        "--engines", default="react",
+        "--model",
+        default=None,
+        help="Required for --mode real, e.g. deepseek/deepseek-v4-pro",
+    )
+    parser.add_argument(
+        "--engines",
+        default="react",
         help="Comma-separated engine types, or `all` for the full engine matrix.",
     )
     parser.add_argument("--max-iterations", type=int, default=8)
@@ -1316,22 +1553,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tasks", default=None)
     parser.add_argument("--output", default=str(DEFAULT_REPORT_PATH))
     parser.add_argument(
-        "--credentials-path", default=None,
+        "--credentials-path",
+        default=None,
         help="Optional source credentials file; real evals copy it into the isolated workdir.",
     )
     parser.add_argument(
-        "--workdir", default=None,
+        "--workdir",
+        default=None,
         help="Optional working directory for --mode real (tool execution sandbox).",
     )
     parser.add_argument(
-        "--isolate-tasks", action="store_true",
+        "--isolate-tasks",
+        action="store_true",
         help="Copy the fixture baseline into a clean subdirectory for each real task.",
     )
     args = parser.parse_args(argv)
     if args.max_iterations < 1 or args.max_turns < 1 or args.request_timeout <= 0:
-        parser.error("--max-iterations/--max-turns must be >= 1 and --request-timeout > 0")
+        parser.error(
+            "--max-iterations/--max-turns must be >= 1 and --request-timeout > 0"
+        )
 
-    tasks_path = args.tasks or (DEFAULT_REPL_TASKS_PATH if args.suite == "repl" else DEFAULT_TASKS_PATH)
+    tasks_path = args.tasks or (
+        DEFAULT_REPL_TASKS_PATH if args.suite == "repl" else DEFAULT_TASKS_PATH
+    )
     tasks = load_tasks(tasks_path)
     if args.suite == "repl":
         if not args.workdir:
@@ -1342,21 +1586,31 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Wrote eval report: {report}")
         return 0
     if args.mode == "real" and not args.workdir:
-        parser.error("--workdir is required for --mode real so file and credential writes stay isolated")
+        parser.error(
+            "--workdir is required for --mode real so file and credential writes stay isolated"
+        )
     if args.mode == "real":
-        requested_engines = list(SUPPORTED_ENGINE_TYPES) if args.engines == "all" else [
-            item.strip() for item in args.engines.split(",") if item.strip()
-        ]
+        requested_engines = (
+            list(SUPPORTED_ENGINE_TYPES)
+            if args.engines == "all"
+            else [item.strip() for item in args.engines.split(",") if item.strip()]
+        )
         unknown = sorted(set(requested_engines) - set(SUPPORTED_ENGINE_TYPES))
         if unknown:
             parser.error(f"unknown engine(s): {', '.join(unknown)}")
         if len(requested_engines) > 1:
-            credentials_context = isolated_eval_credentials(args.workdir, args.credentials_path)
+            credentials_context = isolated_eval_credentials(
+                args.workdir, args.credentials_path
+            )
             with credentials_context:
                 matrix = run_eval_matrix(
-                    tasks, model=args.model, engines=requested_engines,
-                    workdir=args.workdir, isolate_tasks=args.isolate_tasks,
-                    max_iterations=args.max_iterations, max_turns=args.max_turns,
+                    tasks,
+                    model=args.model,
+                    engines=requested_engines,
+                    workdir=args.workdir,
+                    isolate_tasks=args.isolate_tasks,
+                    max_iterations=args.max_iterations,
+                    max_turns=args.max_turns,
                     request_timeout=args.request_timeout,
                 )
             report = write_matrix_report(matrix, args.output, model=args.model)
@@ -1372,11 +1626,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     with credentials_context:
         results = run_eval(
-            tasks, mode=args.mode, model=args.model, engine_type=engine_type, workdir=args.workdir,
-            isolate_tasks=args.isolate_tasks, max_iterations=args.max_iterations,
-            max_turns=args.max_turns, request_timeout=args.request_timeout,
-            checkpoint_path=(Path(args.workdir) / "checkpoints" / f"{engine_type}.jsonl")
-            if args.mode == "real" and args.workdir else None,
+            tasks,
+            mode=args.mode,
+            model=args.model,
+            engine_type=engine_type,
+            workdir=args.workdir,
+            isolate_tasks=args.isolate_tasks,
+            max_iterations=args.max_iterations,
+            max_turns=args.max_turns,
+            request_timeout=args.request_timeout,
+            checkpoint_path=(
+                Path(args.workdir) / "checkpoints" / f"{engine_type}.jsonl"
+            )
+            if args.mode == "real" and args.workdir
+            else None,
         )
     model = args.model or "mock-agent"
     report = write_report(results, args.output, mode=args.mode, model=model)

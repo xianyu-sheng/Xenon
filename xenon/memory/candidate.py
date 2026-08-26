@@ -9,7 +9,9 @@ from xenon.memory.models import MemoryKind, MemoryProposal, MemoryScope
 
 
 _SECRET_PATTERNS = (
-    re.compile(r"\b(?:api[_-]?key|access[_-]?token|secret|password|passwd)\b\s*[:=]", re.I),
+    re.compile(
+        r"\b(?:api[_-]?key|access[_-]?token|secret|password|passwd)\b\s*[:=]", re.I
+    ),
     re.compile(r"\b(?:sk|ak)-[A-Za-z0-9_-]{12,}\b"),
     re.compile(r"\b(?:ghp_|github_pat_|AKIA)[A-Za-z0-9_]{12,}\b"),
     re.compile(r"\bBearer\s+[A-Za-z0-9._~-]{12,}\b", re.I),
@@ -22,7 +24,10 @@ class MemoryCandidateDetector:
     """Detect candidates without ever persisting them by itself."""
 
     _EXPLICIT_PATTERNS = (
-        re.compile(r"^\s*(?:请)?(?:帮我)?(?:记住|记下|记忆|保存为记忆)\s*[:：]?\s*(?P<body>.+)$", re.S),
+        re.compile(
+            r"^\s*(?:请)?(?:帮我)?(?:记住|记下|记忆|保存为记忆)\s*[:：]?\s*(?P<body>.+)$",
+            re.S,
+        ),
         re.compile(
             r"^\s*(?:请)?(?:帮我)?(?:把|将)\s*(?P<body>.+?)\s*"
             r"(?:存入|写入|记录到|保存到).{0,12}(?:记忆|memory)\s*$",
@@ -37,11 +42,37 @@ class MemoryCandidateDetector:
     )
 
     _AUTO_SIGNALS: tuple[tuple[re.Pattern[str], str, MemoryKind], ...] = (
-        (re.compile(r"(?:我(?:更)?喜欢|我偏好|我的习惯|prefer|preference)", re.I), "稳定的用户偏好", MemoryKind.PREFERENCE),
-        (re.compile(r"(?:以后|今后|始终|一律|永远).{0,24}(?:要|不要|使用|采用|保持)", re.I), "可复用的长期约定", MemoryKind.CONSTRAINT),
-        (re.compile(r"(?:项目|仓库|代码库).{0,24}(?:使用|采用|基于|要求|禁止)", re.I), "项目级事实或约束", MemoryKind.FACT),
-        (re.compile(r"(?:我们决定|已经决定|架构决策|decision)", re.I), "可复用的项目决策", MemoryKind.DECISION),
-        (re.compile(r"(?:下次|以后).{0,24}(?:避免|先|记得)|(?:踩坑|根因是|教训)", re.I), "可能避免重复错误的经验", MemoryKind.LESSON),
+        (
+            re.compile(r"(?:我(?:更)?喜欢|我偏好|我的习惯|prefer|preference)", re.I),
+            "稳定的用户偏好",
+            MemoryKind.PREFERENCE,
+        ),
+        (
+            re.compile(
+                r"(?:以后|今后|始终|一律|永远).{0,24}(?:要|不要|使用|采用|保持)", re.I
+            ),
+            "可复用的长期约定",
+            MemoryKind.CONSTRAINT,
+        ),
+        (
+            re.compile(
+                r"(?:项目|仓库|代码库).{0,24}(?:使用|采用|基于|要求|禁止)", re.I
+            ),
+            "项目级事实或约束",
+            MemoryKind.FACT,
+        ),
+        (
+            re.compile(r"(?:我们决定|已经决定|架构决策|decision)", re.I),
+            "可复用的项目决策",
+            MemoryKind.DECISION,
+        ),
+        (
+            re.compile(
+                r"(?:下次|以后).{0,24}(?:避免|先|记得)|(?:踩坑|根因是|教训)", re.I
+            ),
+            "可能避免重复错误的经验",
+            MemoryKind.LESSON,
+        ),
     )
 
     def parse_explicit(self, text: str) -> MemoryProposal | None:
@@ -131,7 +162,7 @@ class MemoryCandidateDetector:
         pairs = (("“", "”"), ("‘", "’"), ('"', '"'), ("'", "'"), ("`", "`"))
         for left, right in pairs:
             if len(value) >= 2 and value.startswith(left) and value.endswith(right):
-                return value[len(left):-len(right)].strip()
+                return value[len(left) : -len(right)].strip()
         return value
 
     @staticmethod

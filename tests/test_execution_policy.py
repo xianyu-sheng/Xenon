@@ -97,11 +97,14 @@ def test_research_request_uses_final_request_clause_not_background_plan():
     assert intent == "research"
     assert policy.level is ExecutionLevel.READ_ONLY
     assert policy.reason == "信息查询或资料调研只允许只读工具"
-    assert execution_policy_denial(
-        "clone_repo",
-        {"repo": "THUDM/AgentBench"},
-        AgentContext({"_execution_level": int(policy.level)}),
-    ) is not None
+    assert (
+        execution_policy_denial(
+            "clone_repo",
+            {"repo": "THUDM/AgentBench"},
+            AgentContext({"_execution_level": int(policy.level)}),
+        )
+        is not None
+    )
 
 
 @pytest.mark.parametrize(
@@ -231,7 +234,10 @@ def test_corrupted_code_is_rejected_before_render(response, reason_fragment):
     ],
 )
 def test_tool_boundary_is_enforced_below_the_router(
-    authorized, tool_name, params, blocked,
+    authorized,
+    tool_name,
+    params,
+    blocked,
 ):
     context = AgentContext({"_execution_level": authorized})
 
@@ -286,9 +292,7 @@ def test_read_only_research_hides_and_blocks_clone_repo(monkeypatch):
 
     engine = ReActEngine(["test/model"])
     engine._active_execution_level = int(ExecutionLevel.READ_ONLY)
-    visible_tools = {
-        item["function"]["name"] for item in engine._build_tools_schema()
-    }
+    visible_tools = {item["function"]["name"] for item in engine._build_tools_schema()}
     assert "github_fetch" in visible_tools
     assert "clone_repo" not in visible_tools
 

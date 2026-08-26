@@ -14,6 +14,7 @@ from xenon.repl.model_registry import ModelRegistry
 
 # --------------------------- _clean_api_key export 前缀 ---------------------------
 
+
 def test_clean_strips_export_prefix_double_quotes():
     raw = 'export OPENAI_API_KEY="sk-abc123"'
     assert _clean_api_key(raw) == "sk-abc123"
@@ -62,9 +63,11 @@ def test_clean_does_not_strip_partial_prefix():
 
 # --------------------------- _test_key_connectivity ---------------------------
 
+
 def test_connectivity_ok(monkeypatch):
     provider = SimpleNamespace(key="openai")
     import xenon.repl.setup_wizard as sw
+
     monkeypatch.setattr(sw, "fetch_provider_models", lambda p, k: ["gpt-4", "gpt-3.5"])
     monkeypatch.setattr(sw, "MODEL_FETCH_ERRORS", {})
     ok, detail = _test_key_connectivity(provider, "sk-valid")
@@ -75,6 +78,7 @@ def test_connectivity_ok(monkeypatch):
 def test_connectivity_fail(monkeypatch):
     provider = SimpleNamespace(key="openai")
     import xenon.repl.setup_wizard as sw
+
     monkeypatch.setattr(sw, "fetch_provider_models", lambda p, k: [])
     monkeypatch.setattr(sw, "MODEL_FETCH_ERRORS", {"openai": "HTTP 401: Unauthorized"})
     ok, detail = _test_key_connectivity(provider, "sk-bad")
@@ -85,6 +89,7 @@ def test_connectivity_fail(monkeypatch):
 def test_connectivity_fail_unknown_error(monkeypatch):
     provider = SimpleNamespace(key="anthropic")
     import xenon.repl.setup_wizard as sw
+
     monkeypatch.setattr(sw, "fetch_provider_models", lambda p, k: [])
     monkeypatch.setattr(sw, "MODEL_FETCH_ERRORS", {})
     ok, detail = _test_key_connectivity(provider, "sk-x")
@@ -93,6 +98,7 @@ def test_connectivity_fail_unknown_error(monkeypatch):
 
 
 # --------------------------- _purge_provider_models ---------------------------
+
 
 def _registry_with_models():
     reg = ModelRegistry()

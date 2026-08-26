@@ -237,11 +237,13 @@ class PromptLaneRegistry:
             if str(message.get("role", "")) != "system":
                 break
             stable_prefix.append(message)
-        return _digest({
-            "stable_prefix": stable_prefix,
-            "tools": list(tools or []),
-            "request_shape": dict(request_shape or {}),
-        })
+        return _digest(
+            {
+                "stable_prefix": stable_prefix,
+                "tools": list(tools or []),
+                "request_shape": dict(request_shape or {}),
+            }
+        )
 
     def prepare(
         self,
@@ -292,12 +294,14 @@ class PromptLaneRegistry:
                 previous = lane.message_fingerprints
                 append_only = (
                     len(fingerprints) >= len(previous)
-                    and fingerprints[:len(previous)] == previous
+                    and fingerprints[: len(previous)] == previous
                 )
                 if append_only:
                     reusable_count = len(previous)
                     reusable_tokens = lane.estimated_prompt_tokens
-                    reason = "exact_retry" if fingerprints == previous else "prefix_extended"
+                    reason = (
+                        "exact_retry" if fingerprints == previous else "prefix_extended"
+                    )
                 else:
                     self._archive_lane(lane)
                     generation = lane.generation + 1
@@ -338,20 +342,23 @@ class PromptLaneRegistry:
         """Return content-free diagnostics for active and archived lanes."""
         with self._lock:
             lanes = [*self._active.values(), *self._archive]
-            return tuple({
-                "lane_id": lane.lane_id,
-                "model_id": lane.model_id,
-                "engine": lane.engine,
-                "phase": lane.phase,
-                "context_epoch": lane.context_epoch,
-                "generation": lane.generation,
-                "request_count": lane.request_count,
-                "last_event_id": lane.last_event_id,
-                "estimated_prompt_tokens": lane.estimated_prompt_tokens,
-                "last_used_at": lane.last_used_at,
-                "fork_reason": lane.fork_reason,
-                "active": lane in self._active.values(),
-            } for lane in lanes)
+            return tuple(
+                {
+                    "lane_id": lane.lane_id,
+                    "model_id": lane.model_id,
+                    "engine": lane.engine,
+                    "phase": lane.phase,
+                    "context_epoch": lane.context_epoch,
+                    "generation": lane.generation,
+                    "request_count": lane.request_count,
+                    "last_event_id": lane.last_event_id,
+                    "estimated_prompt_tokens": lane.estimated_prompt_tokens,
+                    "last_used_at": lane.last_used_at,
+                    "fork_reason": lane.fork_reason,
+                    "active": lane in self._active.values(),
+                }
+                for lane in lanes
+            )
 
     def model_warmth(
         self,
@@ -364,7 +371,8 @@ class PromptLaneRegistry:
         """Return the warmest active lane for a model without prompt content."""
         with self._lock:
             candidates = [
-                lane for lane in self._active.values()
+                lane
+                for lane in self._active.values()
                 if lane.model_id.lower() == str(model_id).lower()
                 and (engine is None or lane.engine.lower() == str(engine).lower())
                 and (phase is None or lane.phase.lower() == str(phase).lower())

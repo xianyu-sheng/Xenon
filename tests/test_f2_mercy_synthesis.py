@@ -17,23 +17,45 @@ class _RecordingCallback:
         self.errors = []
         self.finishes = []
 
-    def on_think(self, t): pass
-    def on_act(self, a, p): pass
-    def on_observe(self, o): pass
-    def on_step(self, *a, **k): pass
-    def on_step_done(self, *a, **k): pass
-    def on_review(self, *a, **k): pass
-    def on_warning(self, w): self.warnings.append(w)
-    def on_error(self, e): self.errors.append(e)
-    def on_finish(self, r): self.finishes.append(r)
+    def on_think(self, t):
+        pass
+
+    def on_act(self, a, p):
+        pass
+
+    def on_observe(self, o):
+        pass
+
+    def on_step(self, *a, **k):
+        pass
+
+    def on_step_done(self, *a, **k):
+        pass
+
+    def on_review(self, *a, **k):
+        pass
+
+    def on_warning(self, w):
+        self.warnings.append(w)
+
+    def on_error(self, e):
+        self.errors.append(e)
+
+    def on_finish(self, r):
+        self.finishes.append(r)
 
 
 def _tracker_with(calls):
     """构造含若干工具调用的 tracker。calls: [(name, success, summary)]。"""
     t = ToolExecutionTracker()
     for name, success, summary in calls:
-        t.record(name, {"file_path": "x.py"}, success, summary,
-                 error=None if success else "boom")
+        t.record(
+            name,
+            {"file_path": "x.py"},
+            success,
+            summary,
+            error=None if success else "boom",
+        )
     return t
 
 
@@ -87,11 +109,13 @@ class TestSynthesisInjection:
     def test_progress_expansion_mid_execution(self):
         b = BudgetManager(max_iterations=10)
         b.spend(5)  # EXECUTE
-        tracker = _tracker_with([
-            ("write_file", True, "ok1"),
-            ("command", True, "ok2"),
-            ("read_file", True, "ok3"),
-        ])
+        tracker = _tracker_with(
+            [
+                ("write_file", True, "ok1"),
+                ("command", True, "ok2"),
+                ("read_file", True, "ok3"),
+            ]
+        )
         r = self.eng._inject_synthesis_prompt(b, tracker)
         assert r[0] == "progress_expansion"
 
@@ -143,10 +167,12 @@ class TestMercyCompile:
 
     def test_synthesis_failure_falls_back_to_report(self):
         eng = ReActEngine(["m1"], max_iterations=3)
-        tracker = _tracker_with([
-            ("write_file", True, "写入 a.py"),
-            ("command", False, ""),
-        ])
+        tracker = _tracker_with(
+            [
+                ("write_file", True, "写入 a.py"),
+                ("command", False, ""),
+            ]
+        )
 
         def boom(messages, max_tokens=None):
             raise RuntimeError("LLM 挂了")
@@ -200,7 +226,10 @@ class TestReActIntegration:
             return '{"thought":"t","final_answer":"综上所述，整体设计完善。"}'
 
         eng._call_llm = fake_llm
-        eng._parse_response = lambda r: {"thought": "t", "final_answer": "综上所述，整体设计完善。"}
+        eng._parse_response = lambda r: {
+            "thought": "t",
+            "final_answer": "综上所述，整体设计完善。",
+        }
         eng._input_requires_tools = lambda u: False
         # 模拟已有工具执行（进入收束阶段 + has_executions 触发空洞检测）
         eng._execute_tool = lambda action, ai, ctx, tracker: "obs"
@@ -209,11 +238,17 @@ class TestReActIntegration:
         responses = [
             {"thought": "t", "action": "write_file", "action_input": {}},  # 执行工具
             {"thought": "t", "final_answer": "综上所述，整体设计完善。"},  # 空洞
-            {"thought": "t", "final_answer": "综上所述，整体设计完善。"},  # 再次空洞→接受
+            {
+                "thought": "t",
+                "final_answer": "综上所述，整体设计完善。",
+            },  # 再次空洞→接受
         ]
         ri = {"i": -1}
         eng._call_llm = lambda messages, max_tokens=None: "raw"
-        eng._parse_response = lambda r: (ri.__setitem__("i", ri["i"] + 1) or responses[min(ri["i"], len(responses)-1)])
+        eng._parse_response = lambda r: (
+            ri.__setitem__("i", ri["i"] + 1)
+            or responses[min(ri["i"], len(responses) - 1)]
+        )
         eng._input_requires_tools = lambda u: True
         eng._execute_tool = lambda action, ai, ctx, tracker: "obs"
 
@@ -229,17 +264,38 @@ class TestReActIntegration:
         eng = ReActEngine(["m1"], max_iterations=4, callback=cb)
         executed = []
         responses = [
-            {"thought": "t", "action": "write_file", "action_input": {}},  # spend1 EXPLORE
-            {"thought": "t", "action": "write_file", "action_input": {}},  # spend2 EXPLORE
-            {"thought": "t", "action": "write_file", "action_input": {}},  # spend3 CONVERGE(75%)→write_file 允许
-            {"thought": "t", "action": "list_files", "action_input": {}},  # spend4 CONVERGE→list_files 拦截
+            {
+                "thought": "t",
+                "action": "write_file",
+                "action_input": {},
+            },  # spend1 EXPLORE
+            {
+                "thought": "t",
+                "action": "write_file",
+                "action_input": {},
+            },  # spend2 EXPLORE
+            {
+                "thought": "t",
+                "action": "write_file",
+                "action_input": {},
+            },  # spend3 CONVERGE(75%)→write_file 允许
+            {
+                "thought": "t",
+                "action": "list_files",
+                "action_input": {},
+            },  # spend4 CONVERGE→list_files 拦截
             {"thought": "t", "final_answer": "完成"},
         ]
         ri = {"i": -1}
         eng._call_llm = lambda messages, max_tokens=None: "raw"
-        eng._parse_response = lambda r: (ri.__setitem__("i", ri["i"] + 1) or responses[min(ri["i"], len(responses)-1)])
+        eng._parse_response = lambda r: (
+            ri.__setitem__("i", ri["i"] + 1)
+            or responses[min(ri["i"], len(responses) - 1)]
+        )
         eng._input_requires_tools = lambda u: True
-        eng._execute_tool = lambda action, ai, ctx, tracker: executed.append(action) or "obs"
+        eng._execute_tool = lambda action, ai, ctx, tracker: (
+            executed.append(action) or "obs"
+        )
 
         eng.run("做点事", AgentContext())
         # list_files 在收束阶段被拦截，不应出现在 executed
@@ -257,7 +313,10 @@ class TestReActIntegration:
         calls = {"n": 0}
 
         def fake_native(
-            phase, messages, tools_schema=None, response_format=None,
+            phase,
+            messages,
+            tools_schema=None,
+            response_format=None,
             max_tokens=None,
         ):
             calls["n"] += 1
@@ -294,7 +353,11 @@ class TestReActIntegration:
         eng = ReActEngine(["m1"], max_iterations=3, callback=cb)
         # 始终返回 action，永不 final_answer → 耗尽
         eng._call_llm = lambda messages, max_tokens=None: "raw"
-        eng._parse_response = lambda r: {"thought": "t", "action": "write_file", "action_input": {}}
+        eng._parse_response = lambda r: {
+            "thought": "t",
+            "action": "write_file",
+            "action_input": {},
+        }
         eng._input_requires_tools = lambda u: True
         eng._execute_tool = lambda action, ai, ctx, tracker: "obs"
         # mercy compile 的合成调用：_call_llm 会被同一 fake 调用 → 返回 "raw"
@@ -307,7 +370,8 @@ class TestReActIntegration:
     def test_compression_reward_granted_on_compaction(self):
         """第 5 轮压缩成功 → budget.on_compression 被调用。"""
         eng = ReActEngine(
-            ["m1"], max_iterations=8,
+            ["m1"],
+            max_iterations=8,
             model_configs={"m1": SimpleNamespace(context_window=1000)},
         )
         # monkeypatch _maybe_compact_messages 使其在第 5 轮返回更短列表
@@ -320,11 +384,15 @@ class TestReActIntegration:
             return messages
 
         eng._maybe_compact_messages = fake_compact
-        responses = [{"thought": "t", "action": "write_file", "action_input": {}}] * 7 + \
-                    [{"thought": "t", "final_answer": "完成"}]
+        responses = [
+            {"thought": "t", "action": "write_file", "action_input": {}}
+        ] * 7 + [{"thought": "t", "final_answer": "完成"}]
         ri = {"i": -1}
         eng._call_llm = lambda messages, max_tokens=None: "raw"
-        eng._parse_response = lambda r: (ri.__setitem__("i", ri["i"] + 1) or responses[min(ri["i"], len(responses)-1)])
+        eng._parse_response = lambda r: (
+            ri.__setitem__("i", ri["i"] + 1)
+            or responses[min(ri["i"], len(responses) - 1)]
+        )
         eng._input_requires_tools = lambda u: True
         eng._execute_tool = lambda action, ai, ctx, tracker: "obs"
 

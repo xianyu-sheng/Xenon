@@ -1,4 +1,5 @@
 """P1-B: SAAR 会话感知路由(粘性锁)测试。"""
+
 from __future__ import annotations
 
 import time
@@ -12,6 +13,7 @@ from xenon.repl.session_lock import SessionLock
 
 class _FakeEstimator:
     """可控 estimator:返回固定 TaskProfile(estimate_tier 走真实静态方法)。"""
+
     def __init__(self, profile: TaskProfile):
         self._p = profile
 
@@ -47,7 +49,9 @@ class TestSAARLockAcquisition:
         pool = ModelPool()
         pool.register("a/pro", alias="pro", weight=5.0)
         router = AutoRouter(pool)
-        router.estimator = _FakeEstimator(TaskProfile(requires_tools=True, complexity=0.5))
+        router.estimator = _FakeEstimator(
+            TaskProfile(requires_tools=True, complexity=0.5)
+        )
         ctx = [{"role": "user", "content": "x"}, {"role": "tool", "content": "result"}]
         router.route("do something", context_messages=ctx)
         assert router.session_lock.is_locked()
@@ -58,7 +62,9 @@ class TestSAARLockAcquisition:
         pool = ModelPool()
         pool.register("a/pro", alias="pro", weight=5.0)
         router = AutoRouter(pool)
-        router.estimator = _FakeEstimator(TaskProfile(requires_tools=True, complexity=0.5))
+        router.estimator = _FakeEstimator(
+            TaskProfile(requires_tools=True, complexity=0.5)
+        )
         router.route("do something", context_messages=None)
         assert not router.session_lock.is_locked()
 
@@ -67,7 +73,9 @@ class TestSAARLockAcquisition:
         pool = ModelPool()
         pool.register("a/pro", alias="pro", weight=5.0)
         router = AutoRouter(pool)
-        router.estimator = _FakeEstimator(TaskProfile(requires_tools=False, complexity=0.5))
+        router.estimator = _FakeEstimator(
+            TaskProfile(requires_tools=False, complexity=0.5)
+        )
         ctx = [{"role": "tool", "content": "r"}]
         router.route("chat", context_messages=ctx)
         assert not router.session_lock.is_locked()
@@ -81,7 +89,9 @@ class TestSAARShortCircuit:
         pool.register("a/pro", alias="pro", weight=5.0)
         pool.register("b/mini", alias="mini", weight=0.5)
         router = AutoRouter(pool)
-        router.estimator = _FakeEstimator(TaskProfile(requires_tools=True, complexity=0.5))
+        router.estimator = _FakeEstimator(
+            TaskProfile(requires_tools=True, complexity=0.5)
+        )
         ctx = [{"role": "tool", "content": "r"}]
         router.route("x", context_messages=ctx)  # 加锁
         locked = router.session_lock.locked_model_id
@@ -121,7 +131,9 @@ class TestSAARShortCircuit:
         router = AutoRouter(pool)
         router.drift_threshold = 2
         router.session_lock.lock("a/pro", 3, "tool_flow")  # locked_tier=3
-        profile_tier5 = TaskProfile(requires_tools=True, complexity=0.9)  # estimate_tier -> 5
+        profile_tier5 = TaskProfile(
+            requires_tools=True, complexity=0.9
+        )  # estimate_tier -> 5
         # 第一次漂移:drift_count=1 < 2,仍锁
         router._session_lock_route("x", profile_tier5, 5, 3)
         assert router.session_lock.is_locked()

@@ -8,6 +8,7 @@
 **注意**：xenon 官方 ReAct 引擎设计为串行单工具，本测试侧重于
 "不抛异常、有合理回退"。
 """
+
 from __future__ import annotations
 
 import threading
@@ -21,6 +22,7 @@ from xenon.utils.response_adapter import parse_react
 
 
 # ── 场景 1: LLM 返回 5 个 tool_call ──
+
 
 def test_parse_response_5_tool_calls():
     """验证 parse_react 遇到 5 个 JSON 拼接（不合法但需稳健）不崩溃。
@@ -42,11 +44,21 @@ def test_parse_response_5_tool_calls():
     if isinstance(result, list):
         # 路径 1：多个 JSON 被解析为并行工具调用列表
         assert len(result) == 5
-        assert result[0]["action"] in ("read_file", "list_files", "command", "git", "search_files")
+        assert result[0]["action"] in (
+            "read_file",
+            "list_files",
+            "command",
+            "git",
+            "search_files",
+        )
     elif result.get("action"):
         # 路径 1：识别到第一个 action（理想但罕见，因为 _extract_json 在最后 } 截断时整个内容当 raw）
         assert result["action"] in (
-            "read_file", "list_files", "command", "git", "search_files"
+            "read_file",
+            "list_files",
+            "command",
+            "git",
+            "search_files",
         )
     else:
         # 路径 2：回退到 raw 文本（当前实现）
@@ -60,6 +72,7 @@ def test_parse_react_with_5_actions_in_single_json():
     Python json.loads 取最后一个，但 _pick alias 后也应稳健。"""
     # Python json 默认取最后一个 key
     import json
+
     text = '{"action": "read_file", "action": "list_files", "action": "command"}'
     data = json.loads(text)
     # json.loads 行为：取最后一个 action="command"
@@ -67,6 +80,7 @@ def test_parse_react_with_5_actions_in_single_json():
 
 
 # ── 场景 2: 并发 LLM 调用 ──
+
 
 def _make_response(text: str = "ok") -> MagicMock:
     resp = MagicMock(spec=httpx.Response)
@@ -95,10 +109,17 @@ def test_concurrent_llm_calls_thread_safe(monkeypatch):
     fake_client.close = MagicMock()
 
     monkeypatch.setattr(llm_client, "_get_pooled_client", lambda *a, **kw: fake_client)
-    monkeypatch.setattr(llm_client, "build_endpoint", lambda *a, **kw: MagicMock(
-        provider="openai", model_name="gpt-4o", base_url="https://api.test/v1",
-        api_key="sk-test", max_tokens=4096,
-    ))
+    monkeypatch.setattr(
+        llm_client,
+        "build_endpoint",
+        lambda *a, **kw: MagicMock(
+            provider="openai",
+            model_name="gpt-4o",
+            base_url="https://api.test/v1",
+            api_key="sk-test",
+            max_tokens=4096,
+        ),
+    )
 
     results = []
     errors = []

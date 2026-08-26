@@ -21,7 +21,9 @@ CACHE_PATH = CACHE_DIR / "benchmark_cache.json"
 CACHE_TTL_S = 86400 * 7  # 7 days
 
 # HuggingFace Open LLM Leaderboard v3 API
-HF_LEADERBOARD_URL = "https://huggingface.co/api/leaderboards/open-llm-leaderboard/results"
+HF_LEADERBOARD_URL = (
+    "https://huggingface.co/api/leaderboards/open-llm-leaderboard/results"
+)
 
 # 模型别名到排行榜名称的映射
 _MODEL_NAME_OVERRIDES: dict[str, str] = {
@@ -39,11 +41,11 @@ _MODEL_NAME_OVERRIDES: dict[str, str] = {
 
 # 基准分数到 tier 的映射
 _TIER_BY_SCORE: list[tuple[float, int]] = [
-    (0.80, 5),   # ≥ 80% → tier 5 (flagship)
-    (0.65, 4),   # ≥ 65% → tier 4
-    (0.50, 3),   # ≥ 50% → tier 3
-    (0.35, 2),   # ≥ 35% → tier 2
-    (0.0,  1),   # below → tier 1
+    (0.80, 5),  # ≥ 80% → tier 5 (flagship)
+    (0.65, 4),  # ≥ 65% → tier 4
+    (0.50, 3),  # ≥ 50% → tier 3
+    (0.35, 2),  # ≥ 35% → tier 2
+    (0.0, 1),  # below → tier 1
 ]
 
 
@@ -83,8 +85,18 @@ class BenchmarkFetcher:
     def _average_score(data: dict[str, Any]) -> float | None:
         """从基准测试结果计算平均分。"""
         scores = []
-        for key in ("average", "mmlu", "bbh", "gsm8k", "humaneval", "truthfulqa",
-                    "mmlu_pro", "gpqa", "musr", "ifeval"):
+        for key in (
+            "average",
+            "mmlu",
+            "bbh",
+            "gsm8k",
+            "humaneval",
+            "truthfulqa",
+            "mmlu_pro",
+            "gpqa",
+            "musr",
+            "ifeval",
+        ):
             val = data.get(key)
             if val is not None:
                 try:

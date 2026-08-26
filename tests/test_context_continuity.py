@@ -115,10 +115,13 @@ def test_react_injects_memory_without_duplicating_current_user():
 
     assert engine.run("继续", AgentContext(), ctx_mgr=ctx) == "ok"
     messages = captured["messages"]
-    assert sum(
-        message["role"] == "user" and message["content"] == "继续"
-        for message in messages
-    ) == 1
+    assert (
+        sum(
+            message["role"] == "user" and message["content"] == "继续"
+            for message in messages
+        )
+        == 1
+    )
     assert any("/work/project" in message["content"] for message in messages)
     assert any("XENON project rules" in message["content"] for message in messages)
     assert any("prefers concise" in message["content"] for message in messages)
@@ -144,7 +147,9 @@ def test_repl_binds_turn_hint_to_user_prompt_not_system_overlay(monkeypatch):
     monkeypatch.setattr(
         repl,
         "_run_direct",
-        lambda prompt, model_ids, intent=None, execution_policy=None: captured.append(prompt),
+        lambda prompt, model_ids, intent=None, execution_policy=None: captured.append(
+            prompt
+        ),
     )
 
     repl._handle_chat("帮我写一个快速排序算法")
@@ -176,7 +181,9 @@ def test_repl_persists_tracker_and_file_memory_once(tmp_path):
     assert repl._persist_engine_trace(engine) == 1
     assert repl._persist_engine_trace(engine) == 0
     assert [turn.role for turn in repl.ctx_mgr.history] == [
-        "user", "assistant", "tool",
+        "user",
+        "assistant",
+        "tool",
     ]
     memory = repl.ctx_mgr.get_working_memory()
     assert str(target) in memory["session_created_files"]
@@ -253,9 +260,9 @@ def test_runtime_checkpoint_preserves_tool_roles_and_memory(monkeypatch, tmp_pat
     saved = session_module.load_session("_auto")
 
     assert [item["role"] for item in saved["history"]] == [
-        "user", "assistant", "tool",
+        "user",
+        "assistant",
+        "tool",
     ]
     assert saved["history"][-1]["turn_type"] == "tool_result"
-    assert saved["extra"]["working_memory"]["session_active_dirs"] == [
-        str(tmp_path)
-    ]
+    assert saved["extra"]["working_memory"]["session_active_dirs"] == [str(tmp_path)]

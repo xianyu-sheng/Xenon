@@ -1,24 +1,19 @@
 """测试启动性能优化 - 缓存、并行请求、过期逻辑、API Key 变化。"""
 
-import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from xenon.repl.provider_registry import (
     MODEL_CACHE_TTL,
     ProviderInfo,
-    _get_cache_path,
     _hash_api_key,
     _hash_base_url,
     _is_cache_valid,
     _load_model_cache,
     _save_model_cache,
-    _update_provider_cache,
-    clear_model_cache,
     fetch_provider_models,
     get_configured_providers,
 )
@@ -43,8 +38,10 @@ def temp_cache_dir(tmp_path):
 @pytest.fixture
 def mock_credentials():
     """模拟配置的 credentials。"""
-    with patch("xenon.repl.provider_registry.load_credentials") as mock_creds, \
-         patch("xenon.repl.provider_registry._load_custom_providers") as mock_custom:
+    with (
+        patch("xenon.repl.provider_registry.load_credentials") as mock_creds,
+        patch("xenon.repl.provider_registry._load_custom_providers") as mock_custom,
+    ):
         # 模拟配置了 3 个 provider
         mock_creds.return_value = {
             "openai": "test-openai-key",
@@ -111,7 +108,6 @@ def test_cached_startup_is_fast(mock_fetch, temp_cache_dir, mock_credentials):
 @patch("xenon.repl.provider_registry._fetch_provider_models_from_network")
 def test_optimal_concurrency_level(mock_fetch, temp_cache_dir, mock_credentials):
     """测试并发度优化（使用 CPU 核心数 * 2）。"""
-    import os
 
     mock_fetch.side_effect = mock_network_delay
 
@@ -128,6 +124,9 @@ def test_optimal_concurrency_level(mock_fetch, temp_cache_dir, mock_credentials)
     start_time = time.time()
     providers = get_configured_providers(refresh_models=True, use_cache=False)
     elapsed = time.time() - start_time
+
+    # 验证返回了正确数量的 providers
+    assert len(providers) == 3, f"应该返回 3 个 providers，实际返回 {len(providers)}"
 
     # 验证所有调用基本同时发生（并行）
     if len(call_times) > 1:
@@ -231,6 +230,9 @@ class TestParallelRequestCorrectness:
                 for i, p in enumerate(providers)
             ]
             results = [f.result() for f in as_completed(futures)]
+
+        # 验证所有请求都成功完成
+        assert len(results) == 10, f"应该有 10 个结果，实际有 {len(results)}"
 
         # 验证所有结果都被正确保存
         cache = _load_model_cache()

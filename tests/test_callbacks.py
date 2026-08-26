@@ -20,7 +20,9 @@ class TestSilentCallback:
     def test_records_act(self):
         cb = SilentCallback()
         cb.on_act("write_file", {"file_path": "a.py", "content": "x"})
-        assert cb.events == [("act", ("write_file", {"file_path": "a.py", "content": "x"}))]
+        assert cb.events == [
+            ("act", ("write_file", {"file_path": "a.py", "content": "x"}))
+        ]
 
     def test_records_observe(self):
         cb = SilentCallback()
@@ -159,7 +161,9 @@ class TestConsoleCallback:
 
         callback.on_act("clone_repo", {"repo": "owner/repo"})
         deadline = time.monotonic() + 1
-        while "Ctrl+C 取消" not in "".join(stream.parts) and time.monotonic() < deadline:
+        while (
+            "Ctrl+C 取消" not in "".join(stream.parts) and time.monotonic() < deadline
+        ):
             time.sleep(0.01)
         callback.on_observe("克隆完成")
         rendered = "".join(stream.parts)

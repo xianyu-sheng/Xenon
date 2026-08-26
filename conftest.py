@@ -8,6 +8,7 @@
 
 提到仓库根目录后，两棵树行为一致。
 """
+
 import pytest
 
 # 在 conftest 加载时（最早时刻，mock 还没发生）保存 chat_completion 的真实原始引用。

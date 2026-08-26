@@ -90,18 +90,21 @@ class _WriteTracker(ToolExecutionTracker):
 def test_task_requires_write_detects_code_fix() -> None:
     """SWE-bench 风格「fix the bug / modify」请求应判定为需要写。"""
     engine = PlanExecuteEngine(["mock/model"], max_steps=4)
-    assert engine._task_requires_write(
-        "You are fixing an official SWE-bench task. Implement the minimal "
-        "correct fix in the working tree."
-    ) is True
+    assert (
+        engine._task_requires_write(
+            "You are fixing an official SWE-bench task. Implement the minimal "
+            "correct fix in the working tree."
+        )
+        is True
+    )
 
 
 def test_task_requires_write_allows_read_only() -> None:
     """纯查询请求不应触发写补救。"""
     engine = PlanExecuteEngine(["mock/model"], max_steps=4)
-    assert engine._task_requires_write(
-        "What is the current weather in Beijing?"
-    ) is False
+    assert (
+        engine._task_requires_write("What is the current weather in Beijing?") is False
+    )
 
 
 def test_has_successful_write_true_when_write_executed() -> None:
@@ -125,6 +128,7 @@ def test_ensure_skipped_when_write_done(monkeypatch) -> None:
     engine = PlanExecuteEngine(["mock/model"], max_steps=8)
     tracker = _WriteTracker(with_write=True)
     from xenon.engine.context import AgentContext
+
     ctx = AgentContext()
 
     results = [{"step_id": 1, "task": "t", "result": "r", "status": "ok"}]
@@ -140,6 +144,7 @@ def test_ensure_triggers_remediation_when_no_write(monkeypatch) -> None:
     engine = PlanExecuteEngine(["mock/model"], max_steps=8)
     tracker = ToolExecutionTracker()
     from xenon.engine.context import AgentContext
+
     ctx = AgentContext()
 
     results = [{"step_id": 1, "task": "侦察", "result": "理解了", "status": "ok"}]
@@ -147,7 +152,8 @@ def test_ensure_triggers_remediation_when_no_write(monkeypatch) -> None:
     # 让 _execute_step_with_llm 返回带 write_file 声明的文本，
     # 并让跟踪器记录一个 write_file 调用（模拟补救步骤实际落盘）。
     monkeypatch.setattr(
-        engine, "_execute_step_with_llm",
+        engine,
+        "_execute_step_with_llm",
         lambda *a, **kw: "已通过 write_file 修改 src/main.py",
     )
 
@@ -163,6 +169,7 @@ def test_ensure_not_triggered_for_read_only_task(monkeypatch) -> None:
     engine = PlanExecuteEngine(["mock/model"], max_steps=8)
     tracker = ToolExecutionTracker()
     from xenon.engine.context import AgentContext
+
     ctx = AgentContext()
     results = [{"step_id": 1, "task": "t", "result": "r", "status": "ok"}]
 
@@ -174,36 +181,50 @@ def test_ensure_not_triggered_for_read_only_task(monkeypatch) -> None:
 
 # ── Phase 1.5 计划完整性校验测试 ───────────────────────────
 
+
 def test_plan_has_write_step_detects_write_tools() -> None:
     engine = PlanExecuteEngine(["mock/model"], max_steps=4)
-    assert engine._plan_has_write_step([
-        {"id": 1, "task": "侦察", "tool": "read_file"},
-        {"id": 2, "task": "修改", "tool": "write_file"},
-    ]) is True
+    assert (
+        engine._plan_has_write_step(
+            [
+                {"id": 1, "task": "侦察", "tool": "read_file"},
+                {"id": 2, "task": "修改", "tool": "write_file"},
+            ]
+        )
+        is True
+    )
 
 
 def test_plan_has_write_step_false_for_recon_only() -> None:
     engine = PlanExecuteEngine(["mock/model"], max_steps=4)
-    assert engine._plan_has_write_step([
-        {"id": 1, "task": "侦察", "tool": "read_file"},
-        {"id": 2, "task": "分析", "tool": None},
-    ]) is False
+    assert (
+        engine._plan_has_write_step(
+            [
+                {"id": 1, "task": "侦察", "tool": "read_file"},
+                {"id": 2, "task": "分析", "tool": None},
+            ]
+        )
+        is False
+    )
 
 
 def test_ensure_plan_keeps_plan_with_write(monkeypatch) -> None:
     """计划已含写步骤时不重新规划（零行为变化）。"""
     engine = PlanExecuteEngine(["mock/model"], max_steps=8)
     ctx = AgentContext()
-    plan = {"steps": [
-        {"id": 1, "task": "读", "tool": "read_file"},
-        {"id": 2, "task": "改", "tool": "edit_file"},
-    ]}
+    plan = {
+        "steps": [
+            {"id": 1, "task": "读", "tool": "read_file"},
+            {"id": 2, "task": "改", "tool": "edit_file"},
+        ]
+    }
     called = {"n": 0}
-    monkeypatch.setattr(engine, "_call_llm_for_phase",
-                        lambda *a, **kw: (called.__setitem__("n", called["n"] + 1) or "{}"))
-    out = engine._ensure_plan_has_write_step(
-        "Fix the bug in src/main.py", plan, ctx
+    monkeypatch.setattr(
+        engine,
+        "_call_llm_for_phase",
+        lambda *a, **kw: called.__setitem__("n", called["n"] + 1) or "{}",
     )
+    out = engine._ensure_plan_has_write_step("Fix the bug in src/main.py", plan, ctx)
     assert len(out) == 2
     assert called["n"] == 0  # 未重新规划
 
@@ -212,20 +233,19 @@ def test_ensure_plan_replans_when_no_write(monkeypatch) -> None:
     """任务需写但计划无写步骤 → 重新规划。"""
     engine = PlanExecuteEngine(["mock/model"], max_steps=8)
     ctx = AgentContext()
-    plan = {"steps": [
-        {"id": 1, "task": "读", "tool": "read_file"},
-        {"id": 2, "task": "理解", "tool": None},
-    ]}
+    plan = {
+        "steps": [
+            {"id": 1, "task": "读", "tool": "read_file"},
+            {"id": 2, "task": "理解", "tool": None},
+        ]
+    }
     retry_json = (
         '{"analysis":"重规划","steps":['
         '{"id":1,"task":"读","tool":"read_file"},'
         '{"id":2,"task":"改","tool":"write_file","params":{"file_path":"src/main.py"}}]}'
     )
-    monkeypatch.setattr(engine, "_call_llm_for_phase",
-                        lambda *a, **kw: retry_json)
-    out = engine._ensure_plan_has_write_step(
-        "Fix the bug in src/main.py", plan, ctx
-    )
+    monkeypatch.setattr(engine, "_call_llm_for_phase", lambda *a, **kw: retry_json)
+    out = engine._ensure_plan_has_write_step("Fix the bug in src/main.py", plan, ctx)
     assert len(out) == 2
     assert out[-1]["tool"] == "write_file"
 
@@ -238,19 +258,18 @@ def test_ensure_plan_aborts_when_replan_still_no_write(monkeypatch) -> None:
     """
     engine = PlanExecuteEngine(["mock/model"], max_steps=8)
     ctx = AgentContext()
-    plan = {"steps": [
-        {"id": 1, "task": "读", "tool": "read_file"},
-    ]}
+    plan = {
+        "steps": [
+            {"id": 1, "task": "读", "tool": "read_file"},
+        ]
+    }
     retry_json = (
         '{"analysis":"仍无写","steps":['
         '{"id":1,"task":"读","tool":"read_file"},'
         '{"id":2,"task":"分析","tool":null}]}'
     )
-    monkeypatch.setattr(engine, "_call_llm_for_phase",
-                        lambda *a, **kw: retry_json)
-    out = engine._ensure_plan_has_write_step(
-        "Fix the bug in src/main.py", plan, ctx
-    )
+    monkeypatch.setattr(engine, "_call_llm_for_phase", lambda *a, **kw: retry_json)
+    out = engine._ensure_plan_has_write_step("Fix the bug in src/main.py", plan, ctx)
     assert out == plan["steps"]  # 降级执行原计划而非放弃
 
 
@@ -273,16 +292,26 @@ def test_remediation_forces_write_tool(monkeypatch) -> None:
     # 记录 write_file 成功到 tracker
     def fake_tool(tool, params, context, tracker=None, **kw):
         tracker.record(
-            "write_file", params, True, error=None,
-            attempts=1, elapsed_seconds=0.1,
+            "write_file",
+            params,
+            True,
+            error=None,
+            attempts=1,
+            elapsed_seconds=0.1,
         )
         return "ok"
 
     monkeypatch.setattr(engine, "_execute_step_with_tool", fake_tool)
 
     out = engine._execute_step_with_llm(
-        1, 2, "强制修改", "(无)", "Fix the bug",
-        tracker=tracker, context=ctx, require_write_tool=True,
+        1,
+        2,
+        "强制修改",
+        "(无)",
+        "Fix the bug",
+        tracker=tracker,
+        context=ctx,
+        require_write_tool=True,
     )
     assert calls["n"] >= 2  # 第一次 final_answer 被拒绝，要求重试
     assert "write_file" in out  # 最终执行了写工具
@@ -314,11 +343,14 @@ class TestToolStepRemediation:
             calls["tool"] += 1
             if calls["tool"] == 1:
                 tracker.record(
-                    tool, params, False,
+                    tool,
+                    params,
+                    False,
                     "ValueError: [exec_edit_file] edit_file 需要 file_path",
                 )
                 return ToolExecuteResult(
-                    "edit_file", False,
+                    "edit_file",
+                    False,
                     "ValueError: [exec_edit_file] edit_file 需要 file_path",
                     error="ValueError: edit_file 需要 file_path",
                 )
@@ -340,8 +372,15 @@ class TestToolStepRemediation:
         monkeypatch.setattr(engine, "_call_llm_for_phase", fake_llm)
 
         outcome = engine._execute_tool_step(
-            1, 3, "修改 a.py", "edit_file", {}, "修复 bug",
-            AgentContext(), tracker, "(无)",
+            1,
+            3,
+            "修改 a.py",
+            "edit_file",
+            {},
+            "修复 bug",
+            AgentContext(),
+            tracker,
+            "(无)",
         )
         assert outcome.success is True
         assert calls["tool"] == 2
@@ -357,19 +396,30 @@ class TestToolStepRemediation:
 
         def fake_tool(tool, params, ctx, **kw):
             return ToolExecuteResult(
-                "write_file", False,
+                "write_file",
+                False,
                 "⛔ 操作被拒绝: 用户拒绝",
                 error="用户拒绝",
                 cancelled=True,
             )
 
         monkeypatch.setattr(engine._tool_executor, "execute", fake_tool)
-        monkeypatch.setattr(engine, "_call_llm_for_phase",
-                            lambda *a, **k: llm_called.__setitem__("n", llm_called["n"] + 1) or "")
+        monkeypatch.setattr(
+            engine,
+            "_call_llm_for_phase",
+            lambda *a, **k: llm_called.__setitem__("n", llm_called["n"] + 1) or "",
+        )
 
         outcome = engine._execute_tool_step(
-            1, 1, "写文件", "write_file", {}, "写文件",
-            AgentContext(), tracker, "(无)",
+            1,
+            1,
+            "写文件",
+            "write_file",
+            {},
+            "写文件",
+            AgentContext(),
+            tracker,
+            "(无)",
         )
         assert outcome.success is False
         assert llm_called["n"] == 0, "用户拒绝不得触发补救 LLM 调用"
@@ -383,12 +433,22 @@ class TestToolStepRemediation:
             return ToolExecuteResult("read_file", True, "内容")
 
         monkeypatch.setattr(engine._tool_executor, "execute", fake_tool)
-        monkeypatch.setattr(engine, "_call_llm_for_phase",
-                            lambda *a, **k: llm_called.__setitem__("n", llm_called["n"] + 1) or "")
+        monkeypatch.setattr(
+            engine,
+            "_call_llm_for_phase",
+            lambda *a, **k: llm_called.__setitem__("n", llm_called["n"] + 1) or "",
+        )
 
         outcome = engine._execute_tool_step(
-            1, 1, "读文件", "read_file", {}, "读文件",
-            AgentContext(), tracker, "(无)",
+            1,
+            1,
+            "读文件",
+            "read_file",
+            {},
+            "读文件",
+            AgentContext(),
+            tracker,
+            "(无)",
         )
         assert outcome.success is True
         assert llm_called["n"] == 0
@@ -403,19 +463,32 @@ class TestToolStepRemediation:
             if tracker is not None:
                 tracker.record(tool, params, False, "未找到匹配文本")
             return ToolExecuteResult(
-                "edit_file", False, "未找到匹配文本", error="未找到匹配文本",
+                "edit_file",
+                False,
+                "未找到匹配文本",
+                error="未找到匹配文本",
             )
 
         monkeypatch.setattr(engine._tool_executor, "execute", fake_tool)
         monkeypatch.setattr(
-            engine, "_call_llm_for_phase",
-            lambda *a, **k: calls.__setitem__("llm", calls["llm"] + 1)
-            or '{"thought": "t", "action": "edit_file", "action_input": {"file_path": "a.py"}}',
+            engine,
+            "_call_llm_for_phase",
+            lambda *a, **k: (
+                calls.__setitem__("llm", calls["llm"] + 1)
+                or '{"thought": "t", "action": "edit_file", "action_input": {"file_path": "a.py"}}'
+            ),
         )
 
         outcome = engine._execute_tool_step(
-            1, 1, "改 a.py", "edit_file", {}, "改 a.py",
-            AgentContext(), ToolExecutionTracker(), "(无)",
+            1,
+            1,
+            "改 a.py",
+            "edit_file",
+            {},
+            "改 a.py",
+            AgentContext(),
+            ToolExecutionTracker(),
+            "(无)",
         )
         assert outcome.success is False
         assert calls["tool"] == 3  # 初始 1 + 补救 2
@@ -432,17 +505,31 @@ class TestWriteStepPreservationAndRemediationBudget:
 
     def test_cap_preserves_write_step_beyond_budget(self, monkeypatch):
         engine = PlanExecuteEngine(
-            ["provider/model"], callback=_NoopCallback(), max_steps=3,
+            ["provider/model"],
+            callback=_NoopCallback(),
+            max_steps=3,
         )
         monkeypatch.setattr(
-            engine, "_plan",
-            lambda *a, **k: {"analysis": "a", "steps": [
-                {"id": 1, "task": "读", "tool": "read_file", "params": {}},
-                {"id": 2, "task": "搜", "tool": "search_files", "params": {}},
-                {"id": 3, "task": "分析", "tool": None, "params": {}},
-                {"id": 4, "task": "编辑", "tool": "edit_file",
-                 "params": {"file_path": "a.py", "old_text": "x", "new_text": "y"}},
-            ]},
+            engine,
+            "_plan",
+            lambda *a, **k: {
+                "analysis": "a",
+                "steps": [
+                    {"id": 1, "task": "读", "tool": "read_file", "params": {}},
+                    {"id": 2, "task": "搜", "tool": "search_files", "params": {}},
+                    {"id": 3, "task": "分析", "tool": None, "params": {}},
+                    {
+                        "id": 4,
+                        "task": "编辑",
+                        "tool": "edit_file",
+                        "params": {
+                            "file_path": "a.py",
+                            "old_text": "x",
+                            "new_text": "y",
+                        },
+                    },
+                ],
+            },
         )
         captured = {}
 
@@ -452,7 +539,8 @@ class TestWriteStepPreservationAndRemediationBudget:
 
         monkeypatch.setattr(engine, "_run_serial", fake_serial)
         monkeypatch.setattr(
-            engine, "_execute_step_with_llm",
+            engine,
+            "_execute_step_with_llm",
             lambda *a, **k: "已写入",
         )
         monkeypatch.setattr(engine, "_summarize", lambda *a, **k: "完成")
@@ -465,7 +553,9 @@ class TestWriteStepPreservationAndRemediationBudget:
     def test_ensure_task_completed_remediates_at_max_steps(self, monkeypatch):
         """侦察步骤吃满 max_steps 后，补救仍必须触发（不再被硬拦截）。"""
         engine = PlanExecuteEngine(
-            ["provider/model"], callback=_NoopCallback(), max_steps=2,
+            ["provider/model"],
+            callback=_NoopCallback(),
+            max_steps=2,
         )
         tracker = ToolExecutionTracker()
         # 前 2 步全是成功侦察（读），无任何写，且结果数已达 max_steps
@@ -477,22 +567,35 @@ class TestWriteStepPreservationAndRemediationBudget:
         ]
         ctx = AgentContext()
 
-        def fake_remediation(step_id, total, task, prev, original, tracker, context=None,
-                             require_write_tool=False, steering=None):
+        def fake_remediation(
+            step_id,
+            total,
+            task,
+            prev,
+            original,
+            tracker,
+            context=None,
+            require_write_tool=False,
+            steering=None,
+        ):
             assert require_write_tool is True, "补救必须强制写工具"
-            tracker.record("write_file", {"file_path": "c.py", "content": "x"}, True, "ok")
+            tracker.record(
+                "write_file", {"file_path": "c.py", "content": "x"}, True, "ok"
+            )
             return "已写入 c.py"
 
         monkeypatch.setattr(engine, "_execute_step_with_llm", fake_remediation)
 
         results = engine._ensure_task_completed(
-            "修复 bug（需要写文件）", results, ctx, tracker, 2,
+            "修复 bug（需要写文件）",
+            results,
+            ctx,
+            tracker,
+            2,
         )
         # max_steps=2 已满，补救必须仍追加并真正写盘
         assert len(results) == 3, "max_steps 已满时补救被硬拦截（0 patch 根因）"
-        assert any(
-            c.tool_name == "write_file" and c.success for c in tracker.calls
-        )
+        assert any(c.tool_name == "write_file" and c.success for c in tracker.calls)
 
 
 class TestToolRemediationRequiresWrite:
@@ -504,8 +607,10 @@ class TestToolRemediationRequiresWrite:
 
     def test_read_only_remediation_not_counted_as_fix(self, monkeypatch):
         engine = PlanExecuteEngine(
-            ["provider/model"], callback=_NoopCallback(),
-            tool_remediation_attempts=1, max_mini_react_rounds=1,
+            ["provider/model"],
+            callback=_NoopCallback(),
+            tool_remediation_attempts=1,
+            max_mini_react_rounds=1,
         )
         tracker = ToolExecutionTracker()
         calls = {"tool": 0}
@@ -515,7 +620,10 @@ class TestToolRemediationRequiresWrite:
             if calls["tool"] == 1:
                 tracker.record(tool, params, False, "需要 file_path")
                 return ToolExecuteResult(
-                    "edit_file", False, "需要 file_path", error="需要 file_path",
+                    "edit_file",
+                    False,
+                    "需要 file_path",
+                    error="需要 file_path",
                 )
             # 补救轮 LLM 只读文件（成功）——不算修复
             tracker.record(tool, params, True, "read ok")
@@ -523,7 +631,8 @@ class TestToolRemediationRequiresWrite:
 
         monkeypatch.setattr(engine._tool_executor, "execute", fake_tool)
         monkeypatch.setattr(
-            engine, "_call_llm_for_phase",
+            engine,
+            "_call_llm_for_phase",
             lambda *a, **k: (
                 '{"thought": "先读一下", "action": "read_file", '
                 '"action_input": {"file_path": "a.py"}}'
@@ -531,8 +640,15 @@ class TestToolRemediationRequiresWrite:
         )
 
         outcome = engine._execute_tool_step(
-            1, 3, "编辑 a.py", "edit_file", {}, "修复 bug",
-            AgentContext(), tracker, "(无)",
+            1,
+            3,
+            "编辑 a.py",
+            "edit_file",
+            {},
+            "修复 bug",
+            AgentContext(),
+            tracker,
+            "(无)",
         )
         # 只读补救不算成功 → 步骤仍失败（避免 0 patch 假阳性）
         assert outcome.success is False
@@ -540,8 +656,10 @@ class TestToolRemediationRequiresWrite:
 
     def test_write_remediation_counts_as_fix(self, monkeypatch):
         engine = PlanExecuteEngine(
-            ["provider/model"], callback=_NoopCallback(),
-            tool_remediation_attempts=1, max_mini_react_rounds=1,
+            ["provider/model"],
+            callback=_NoopCallback(),
+            tool_remediation_attempts=1,
+            max_mini_react_rounds=1,
         )
         tracker = ToolExecutionTracker()
         calls = {"tool": 0}
@@ -551,14 +669,18 @@ class TestToolRemediationRequiresWrite:
             if calls["tool"] == 1:
                 tracker.record(tool, params, False, "需要 file_path")
                 return ToolExecuteResult(
-                    "edit_file", False, "需要 file_path", error="需要 file_path",
+                    "edit_file",
+                    False,
+                    "需要 file_path",
+                    error="需要 file_path",
                 )
             tracker.record(tool, params, True, "edit ok")
             return ToolExecuteResult("edit_file", True, "edit ok")
 
         monkeypatch.setattr(engine._tool_executor, "execute", fake_tool)
         monkeypatch.setattr(
-            engine, "_call_llm_for_phase",
+            engine,
+            "_call_llm_for_phase",
             lambda *a, **k: (
                 '{"thought": "重新生成参数", "action": "edit_file", '
                 '"action_input": {"file_path": "a.py", "old_text": "x", '
@@ -567,13 +689,18 @@ class TestToolRemediationRequiresWrite:
         )
 
         outcome = engine._execute_tool_step(
-            1, 3, "编辑 a.py", "edit_file", {}, "修复 bug",
-            AgentContext(), tracker, "(无)",
+            1,
+            3,
+            "编辑 a.py",
+            "edit_file",
+            {},
+            "修复 bug",
+            AgentContext(),
+            tracker,
+            "(无)",
         )
         assert outcome.success is True
-        assert any(
-            c.tool_name == "edit_file" and c.success for c in tracker.calls
-        )
+        assert any(c.tool_name == "edit_file" and c.success for c in tracker.calls)
 
 
 class TestIncompleteEditStepNormalization:
@@ -586,9 +713,18 @@ class TestIncompleteEditStepNormalization:
     def test_edit_missing_params_becomes_llm_step(self) -> None:
         engine = PlanExecuteEngine(["provider/model"], callback=_NoopCallback())
         steps = [
-            {"id": 1, "task": "读", "tool": "read_file", "params": {"file_path": "a.py"}},
-            {"id": 2, "task": "改", "tool": "edit_file",
-             "params": {"file_path": "a.py"}},  # 缺 old_text/new_text
+            {
+                "id": 1,
+                "task": "读",
+                "tool": "read_file",
+                "params": {"file_path": "a.py"},
+            },
+            {
+                "id": 2,
+                "task": "改",
+                "tool": "edit_file",
+                "params": {"file_path": "a.py"},
+            },  # 缺 old_text/new_text
         ]
         out = engine._normalize_incomplete_edit_steps(steps)
         assert out[1]["tool"] is None
@@ -598,8 +734,12 @@ class TestIncompleteEditStepNormalization:
     def test_edit_with_full_params_kept(self) -> None:
         engine = PlanExecuteEngine(["provider/model"], callback=_NoopCallback())
         steps = [
-            {"id": 1, "task": "改", "tool": "edit_file",
-             "params": {"file_path": "a.py", "old_text": "x", "new_text": "y"}},
+            {
+                "id": 1,
+                "task": "改",
+                "tool": "edit_file",
+                "params": {"file_path": "a.py", "old_text": "x", "new_text": "y"},
+            },
         ]
         out = engine._normalize_incomplete_edit_steps(steps)
         assert out[0]["tool"] == "edit_file"
@@ -607,8 +747,12 @@ class TestIncompleteEditStepNormalization:
     def test_batch_edit_incomplete_becomes_llm_step(self) -> None:
         engine = PlanExecuteEngine(["provider/model"], callback=_NoopCallback())
         steps = [
-            {"id": 1, "task": "批量改", "tool": "batch_edit",
-             "params": {"edits": [{"file_path": "a.py", "old_text": "x"}]}},
+            {
+                "id": 1,
+                "task": "批量改",
+                "tool": "batch_edit",
+                "params": {"edits": [{"file_path": "a.py", "old_text": "x"}]},
+            },
         ]
         out = engine._normalize_incomplete_edit_steps(steps)
         assert out[0]["tool"] is None

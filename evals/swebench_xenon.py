@@ -58,7 +58,9 @@ def _all_engines() -> tuple[str, ...]:
     # 惰性导入：避免 evals 模块 import 时触发引擎注册表加载
     import xenon.engine.builtin_engines  # noqa: F401  # 触发内置范式注册
     from xenon.engine.registry import ENGINE_REGISTRY
+
     return ENGINE_REGISTRY.names()
+
 
 ALL_ENGINES = _all_engines()
 
@@ -69,9 +71,7 @@ ALL_ENGINES = _all_engines()
 # 但它的修改循环是纯文本的，不操作文件系统。
 _NON_CODE_EDITING: frozenset[str] = frozenset({"direct", "reflection"})
 
-CODE_EDITING_ENGINES = tuple(
-    n for n in ALL_ENGINES if n not in _NON_CODE_EDITING
-)
+CODE_EDITING_ENGINES = tuple(n for n in ALL_ENGINES if n not in _NON_CODE_EDITING)
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -101,12 +101,17 @@ unified diff that can be applied with `git apply`; do not return a prose
 approximation of a patch.{fail_hint}
 
 Official issue statement:
-{instance['problem_statement']}
+{instance["problem_statement"]}
 """
 
 
-def _engine(name: str, model: str, config: ModelConfig, max_steps: int,
-            verification_loop: bool = True):
+def _engine(
+    name: str,
+    model: str,
+    config: ModelConfig,
+    max_steps: int,
+    verification_loop: bool = True,
+):
     models = [model]
     configs = {model: config}
     callback = EngineCallback()
@@ -115,25 +120,34 @@ def _engine(name: str, model: str, config: ModelConfig, max_steps: int,
     # max_mini_react_rounds 等），不能直接调 EngineSpec.factory() 透传。
     # 未来可在 EngineSpec 增加 swbench_kwargs 结构化元数据，届时收敛为查表。
     if name == "react":
-        engine = ReActEngine(models, max_iterations=max_steps, native_fc=True,
-                           project_root=str(Path.cwd()), **common)
+        engine = ReActEngine(
+            models,
+            max_iterations=max_steps,
+            native_fc=True,
+            project_root=str(Path.cwd()),
+            **common,
+        )
     elif name == "plan-execute":
         # v0.8.3: 迷你 ReAct 轮次从 1 提到 3。SWE-bench 实测（django-16408）：
         # 轮次=1 时补救轮 LLM 只能做一件事——先 read 就没轮次再 edit，
         # 写步骤永远无法完成（0 patch）。3 轮足够 read+edit+verify。
-        engine = PlanExecuteEngine(models, max_steps=max_steps,
-                                 max_mini_react_rounds=3, **common)
+        engine = PlanExecuteEngine(
+            models, max_steps=max_steps, max_mini_react_rounds=3, **common
+        )
     elif name == "reflection":
         engine = ReflectionEngine(models, max_rounds=max_steps, **common)
     elif name == "plan-react":
-        engine = PlanReactEngine(models, max_steps=max_steps,
-                               react_iterations=max_steps, **common)
+        engine = PlanReactEngine(
+            models, max_steps=max_steps, react_iterations=max_steps, **common
+        )
     elif name == "plan-reflection":
-        engine = PlanReflectionEngine(models, max_steps=max_steps,
-                                    review_rounds=max_steps, **common)
+        engine = PlanReflectionEngine(
+            models, max_steps=max_steps, review_rounds=max_steps, **common
+        )
     elif name == "react-reflection":
-        engine = ReactReflectionEngine(models, react_iterations=max_steps,
-                                     review_rounds=max_steps, **common)
+        engine = ReactReflectionEngine(
+            models, react_iterations=max_steps, review_rounds=max_steps, **common
+        )
     else:
         return None
     # v0.8.3 A/B: 开关验证循环（引擎维度的全局开关）
@@ -160,36 +174,62 @@ def classify_error(error: str | None) -> str:
     """
     if not error:
         return "none"
-    if "Server disconnected" in error or "ECONN" in error or "无法连接" in error \
-            or "SSLError" in error or "ReadTimeout" in error or "ConnectError" in error \
-            or "Server error" in error:
+    if (
+        "Server disconnected" in error
+        or "ECONN" in error
+        or "无法连接" in error
+        or "SSLError" in error
+        or "ReadTimeout" in error
+        or "ConnectError" in error
+        or "Server error" in error
+    ):
         return "network"
     if "截断" in error or "finish_reason=length" in error:
         return "truncation"
     if "EngineDeadlineExceeded" in error or "hard wall timeout" in error:
         return "deadline"
-    if "delivery evidence gate" in error or "声称创建" in error \
-            or "证据" in error or "gate failed" in error:
+    if (
+        "delivery evidence gate" in error
+        or "声称创建" in error
+        or "证据" in error
+        or "gate failed" in error
+    ):
         return "gate"
-    if "不支持的 provider" in error or "认证失败" in error or "401" in error or "403" in error:
+    if (
+        "不支持的 provider" in error
+        or "认证失败" in error
+        or "401" in error
+        or "403" in error
+    ):
         return "provider"
     if "所有模型均调用失败" in error:
         return "provider"
     return "tool"
 
 
-def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
-            max_steps: int, request_timeout: float, engine_timeout: float,
-            min_request_interval: float = 0.0,
-            provider_attempts: int = 1,
-            events_path: Path | None = None,
-            namespace: str | None = "swebench",
-            verification_loop: bool = True,
-            reasoning_effort: str | None = None) -> dict[str, Any]:
+def run_one(
+    instance: dict[str, Any],
+    engine_name: str,
+    root: Path,
+    model: str,
+    max_steps: int,
+    request_timeout: float,
+    engine_timeout: float,
+    min_request_interval: float = 0.0,
+    provider_attempts: int = 1,
+    events_path: Path | None = None,
+    namespace: str | None = "swebench",
+    verification_loop: bool = True,
+    reasoning_effort: str | None = None,
+) -> dict[str, Any]:
     instance_id = instance["instance_id"]
-    config = ModelConfig(model_id=model, alias=model, max_tokens=8192,
-                         context_window=1_000_000,
-                         reasoning_effort=reasoning_effort)
+    config = ModelConfig(
+        model_id=model,
+        alias=model,
+        max_tokens=8192,
+        context_window=1_000_000,
+        reasoning_effort=reasoning_effort,
+    )
     started = time.time()
     output = ""
     error = None
@@ -205,12 +245,16 @@ def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
         chain_retries=0,
         min_request_interval=min_request_interval,
         event_sink=lambda event, fields: _append_event(
-            events_path, event, instance_id=instance_id,
-            engine=engine_name, **fields,
+            events_path,
+            event,
+            instance_id=instance_id,
+            engine=engine_name,
+            **fields,
         ),
     )
-    _append_event(events_path, "engine_start", instance_id=instance_id,
-                  engine=engine_name)
+    _append_event(
+        events_path, "engine_start", instance_id=instance_id, engine=engine_name
+    )
     try:
         with create_official_runtime(
             instance, root, engine_name, namespace=namespace
@@ -223,8 +267,13 @@ def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
                 "container_name": runtime.container_name,
                 "container_workdir": runtime.container_workdir,
             }
-            _append_event(events_path, "container_ready", instance_id=instance_id,
-                          engine=engine_name, **runtime_metadata)
+            _append_event(
+                events_path,
+                "container_ready",
+                instance_id=instance_id,
+                engine=engine_name,
+                **runtime_metadata,
+            )
             if engine_name == "direct":
                 policy.wait_for_request_slot("direct")
                 policy.emit("provider_request_start", phase="direct")
@@ -238,25 +287,30 @@ def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
                 )
                 policy.emit("provider_request_end", phase="direct", success=True)
             else:
-                engine = _engine(engine_name, model, config, max_steps,
-                                 verification_loop=verification_loop)
+                engine = _engine(
+                    engine_name,
+                    model,
+                    config,
+                    max_steps,
+                    verification_loop=verification_loop,
+                )
                 bind_execution_policy(engine, policy)
                 bind_tool_runtime(engine, runtime.tool_runtime)
                 output = engine.run(_prompt(instance), AgentContext()) or ""
                 tracker = getattr(engine, "_last_tracker", None)
                 for call in list(getattr(tracker, "calls", []) or []):
-                    trace.append({
-                        "tool": getattr(call, "tool_name", "unknown"),
-                        "success": bool(getattr(call, "success", False)),
-                        "state": getattr(call, "state", None),
-                        "attempts": getattr(call, "attempts", None),
-                        "elapsed_seconds": getattr(call, "elapsed_seconds", None),
-                        "error": getattr(call, "error", None),
-                        "result": str(getattr(call, "result_summary", ""))[:500],
-                    })
-            coding_result = finalize_coding_run(
-                worktree, output, tool_trace=trace
-            )
+                    trace.append(
+                        {
+                            "tool": getattr(call, "tool_name", "unknown"),
+                            "success": bool(getattr(call, "success", False)),
+                            "state": getattr(call, "state", None),
+                            "attempts": getattr(call, "attempts", None),
+                            "elapsed_seconds": getattr(call, "elapsed_seconds", None),
+                            "error": getattr(call, "error", None),
+                            "result": str(getattr(call, "result_summary", ""))[:500],
+                        }
+                    )
+            coding_result = finalize_coding_run(worktree, output, tool_trace=trace)
             _append_event(
                 events_path,
                 "patch_extracted",
@@ -271,8 +325,10 @@ def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
     finally:
         provider_usage = usage_tracker.snapshot()
         usage_tracker.close()
-    patch = coding_result.patch if coding_result is not None else (
-        _git(worktree, "diff") if worktree.exists() else ""
+    patch = (
+        coding_result.patch
+        if coding_result is not None
+        else (_git(worktree, "diff") if worktree.exists() else "")
     )
     prompt_tokens = sum(x["prompt_tokens"] for x in provider_usage.values())
     cache_hits = sum(x["cache_hit_tokens"] for x in provider_usage.values())
@@ -321,9 +377,14 @@ def run_one(instance: dict[str, Any], engine_name: str, root: Path, model: str,
         (worktree / ".xenon_result.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2)
         )
-    _append_event(events_path, "engine_end", instance_id=instance_id,
-                  engine=engine_name, error=error,
-                  elapsed_seconds=result["elapsed_seconds"])
+    _append_event(
+        events_path,
+        "engine_end",
+        instance_id=instance_id,
+        engine=engine_name,
+        error=error,
+        elapsed_seconds=result["elapsed_seconds"],
+    )
     return result
 
 
@@ -334,15 +395,20 @@ def _child_run(queue: Any, kwargs: dict[str, Any]) -> None:
         queue.put({"error": f"{type(exc).__name__}: {exc}"})
 
 
-def _child_prepare(queue: Any, instance: dict[str, Any], root: Path,
-                   namespace: str | None) -> None:
+def _child_prepare(
+    queue: Any, instance: dict[str, Any], root: Path, namespace: str | None
+) -> None:
     try:
         source, image_key, image_id = prepare_official_source(
             instance, root, namespace=namespace
         )
-        queue.put({
-            "source": str(source), "image_key": image_key, "image_id": image_id,
-        })
+        queue.put(
+            {
+                "source": str(source),
+                "image_key": image_key,
+                "image_id": image_id,
+            }
+        )
     except BaseException as exc:
         queue.put({"error": f"{type(exc).__name__}: {exc}"})
 
@@ -365,9 +431,13 @@ def _cleanup_engine_containers(instance_id: str, engine_name: str) -> None:
         pass
 
 
-def _prepare_with_timeout(instance: dict[str, Any], root: Path,
-                          namespace: str | None, timeout: float,
-                          events_path: Path) -> dict[str, str]:
+def _prepare_with_timeout(
+    instance: dict[str, Any],
+    root: Path,
+    namespace: str | None,
+    timeout: float,
+    events_path: Path,
+) -> dict[str, str]:
     ctx = multiprocessing.get_context("spawn")
     queue = ctx.Queue()
     process = ctx.Process(
@@ -376,8 +446,12 @@ def _prepare_with_timeout(instance: dict[str, Any], root: Path,
     process.start()
     started = time.monotonic()
     deadline = started + timeout
-    _append_event(events_path, "image_prepare_start",
-                  instance_id=instance["instance_id"], namespace=namespace)
+    _append_event(
+        events_path,
+        "image_prepare_start",
+        instance_id=instance["instance_id"],
+        namespace=namespace,
+    )
     result: dict[str, Any] | None = None
     while result is None:
         remaining = deadline - time.monotonic()
@@ -387,8 +461,12 @@ def _prepare_with_timeout(instance: dict[str, Any], root: Path,
             if process.is_alive():
                 process.kill()
                 process.join()
-            _append_event(events_path, "image_prepare_timeout",
-                          instance_id=instance["instance_id"], timeout=timeout)
+            _append_event(
+                events_path,
+                "image_prepare_timeout",
+                instance_id=instance["instance_id"],
+                timeout=timeout,
+            )
             raise TimeoutError(
                 f"official image preparation exceeded {timeout}s for "
                 f"{instance['instance_id']}"
@@ -400,11 +478,11 @@ def _prepare_with_timeout(instance: dict[str, Any], root: Path,
         except queue_module.Empty:
             if not process.is_alive():
                 raise RuntimeError(
-                    "image preparation exited without a result "
-                    f"({process.exitcode})"
+                    f"image preparation exited without a result ({process.exitcode})"
                 )
             _append_event(
-                events_path, "image_prepare_heartbeat",
+                events_path,
+                "image_prepare_heartbeat",
                 instance_id=instance["instance_id"],
                 elapsed_seconds=round(time.monotonic() - started, 3),
                 remaining_seconds=round(remaining, 3),
@@ -415,14 +493,19 @@ def _prepare_with_timeout(instance: dict[str, Any], root: Path,
         process.join()
     if "error" in result:
         raise RuntimeError(result["error"])
-    _append_event(events_path, "image_prepare_end",
-                  instance_id=instance["instance_id"],
-                  image_key=result["image_key"], image_id=result["image_id"])
+    _append_event(
+        events_path,
+        "image_prepare_end",
+        instance_id=instance["instance_id"],
+        image_key=result["image_key"],
+        image_id=result["image_id"],
+    )
     return result
 
 
-def _run_with_hard_timeout(kwargs: dict[str, Any], timeout: float,
-                           events_path: Path) -> dict[str, Any]:
+def _run_with_hard_timeout(
+    kwargs: dict[str, Any], timeout: float, events_path: Path
+) -> dict[str, Any]:
     ctx = multiprocessing.get_context("spawn")
     queue = ctx.Queue()
     process = ctx.Process(target=_child_run, args=(queue, kwargs))
@@ -440,9 +523,13 @@ def _run_with_hard_timeout(kwargs: dict[str, Any], timeout: float,
             _cleanup_engine_containers(
                 kwargs["instance"]["instance_id"], kwargs["engine_name"]
             )
-            _append_event(events_path, "hard_timeout",
-                          instance_id=kwargs["instance"]["instance_id"],
-                          engine=kwargs["engine_name"], timeout=timeout)
+            _append_event(
+                events_path,
+                "hard_timeout",
+                instance_id=kwargs["instance"]["instance_id"],
+                engine=kwargs["engine_name"],
+                timeout=timeout,
+            )
             return {
                 "instance_id": kwargs["instance"]["instance_id"],
                 "model_name_or_path": f"xenon/{kwargs['engine_name']}/{kwargs['model']}",
@@ -460,7 +547,11 @@ def _run_with_hard_timeout(kwargs: dict[str, Any], timeout: float,
                 "provider_usage": {},
                 "cache_metrics": {},
                 "context_metrics": {},
-                "worktree": str(kwargs["root"] / kwargs["instance"]["instance_id"] / kwargs["engine_name"]),
+                "worktree": str(
+                    kwargs["root"]
+                    / kwargs["instance"]["instance_id"]
+                    / kwargs["engine_name"]
+                ),
             }
         try:
             # Read before join.  A completed engine result can exceed the OS
@@ -472,10 +563,13 @@ def _run_with_hard_timeout(kwargs: dict[str, Any], timeout: float,
                 raise RuntimeError(
                     f"engine child exited without a result ({process.exitcode})"
                 )
-            _append_event(events_path, "heartbeat",
-                          instance_id=kwargs["instance"]["instance_id"],
-                          engine=kwargs["engine_name"],
-                          remaining_seconds=round(remaining, 3))
+            _append_event(
+                events_path,
+                "heartbeat",
+                instance_id=kwargs["instance"]["instance_id"],
+                engine=kwargs["engine_name"],
+                remaining_seconds=round(remaining, 3),
+            )
     process.join(5)
     if process.is_alive():
         process.terminate()
@@ -492,10 +586,12 @@ def main() -> int:
     parser.add_argument("--instance-id", action="append", required=True)
     parser.add_argument("--prepared-root", type=Path, required=True)
     parser.add_argument("--model", required=True)
-    parser.add_argument("--engines", nargs="+", default=["all"],
-                        choices=["all", *ALL_ENGINES])
     parser.add_argument(
-        "--include-non-editing", action="store_true",
+        "--engines", nargs="+", default=["all"], choices=["all", *ALL_ENGINES]
+    )
+    parser.add_argument(
+        "--include-non-editing",
+        action="store_true",
         help="同时运行 direct/reflection 等不修改文件系统的引擎（默认排除）。",
     )
     parser.add_argument("--max-steps", type=int, default=3)
@@ -503,31 +599,39 @@ def main() -> int:
     parser.add_argument("--engine-timeout", type=float, default=900)
     parser.add_argument("--prepare-timeout", type=float, default=1800)
     parser.add_argument(
-        "--min-request-interval", type=float, default=0.0,
+        "--min-request-interval",
+        type=float,
+        default=0.0,
         help="Minimum seconds between provider request starts in one engine graph.",
     )
     parser.add_argument(
-        "--provider-attempts", type=int, default=1,
+        "--provider-attempts",
+        type=int,
+        default=1,
         help="Total attempts owned by the provider client for transient failures.",
     )
     parser.add_argument(
-        "--reasoning-effort", default=None,
+        "--reasoning-effort",
+        default=None,
         choices=["off", "low", "medium", "high", "max"],
         help="DeepSeek V4 官方 API 默认思考模式会耗尽 max_tokens 导致截断；"
-             "评测官方 API 时建议传 off。",
+        "评测官方 API 时建议传 off。",
     )
     parser.add_argument(
-        "--namespace", default="swebench",
+        "--namespace",
+        default="swebench",
         help="Official image namespace; use 'none' to build locally",
     )
     parser.add_argument(
-        "--no-verification-loop", action="store_true",
+        "--no-verification-loop",
+        action="store_true",
         help="A/B 对照组：关闭验证循环，保持 v0.8.2 单轮行为。用于同实例同模型对比。",
     )
     parser.add_argument("--predictions", type=Path, required=True)
     parser.add_argument("--traces", type=Path, required=True)
     parser.add_argument(
-        "--resume-completed", action="store_true",
+        "--resume-completed",
+        action="store_true",
         help="Reuse a validated .xenon_result.json already written by this run.",
     )
     args = parser.parse_args()
@@ -562,17 +666,23 @@ def main() -> int:
     try:
         try:
             for instance in instances:
-                _append_event(events_path, "task_start",
-                              instance_id=instance["instance_id"])
+                _append_event(
+                    events_path, "task_start", instance_id=instance["instance_id"]
+                )
                 _prepare_with_timeout(
-                    instance, args.prepared_root, namespace,
-                    args.prepare_timeout, events_path,
+                    instance,
+                    args.prepared_root,
+                    namespace,
+                    args.prepare_timeout,
+                    events_path,
                 )
             for instance in instances:
                 for name in engines:
                     os.chdir(original)
                     completed_path = (
-                        args.prepared_root / instance["instance_id"] / name
+                        args.prepared_root
+                        / instance["instance_id"]
+                        / name
                         / ".xenon_result.json"
                     )
                     expected_model = f"xenon/{name}/{args.model}"
@@ -591,14 +701,18 @@ def main() -> int:
                         if completed.get("error") is None:
                             results.append(completed)
                             _append_event(
-                                events_path, "completed_result_recovered",
-                                instance_id=instance["instance_id"], engine=name,
+                                events_path,
+                                "completed_result_recovered",
+                                instance_id=instance["instance_id"],
+                                engine=name,
                                 result_path=str(completed_path),
                             )
                             continue
                         _append_event(
-                            events_path, "failed_result_not_recovered",
-                            instance_id=instance["instance_id"], engine=name,
+                            events_path,
+                            "failed_result_not_recovered",
+                            instance_id=instance["instance_id"],
+                            engine=name,
                             result_path=str(completed_path),
                             error=str(completed.get("error"))[:500],
                         )
@@ -617,9 +731,11 @@ def main() -> int:
                         "verification_loop": not args.no_verification_loop,
                         "reasoning_effort": args.reasoning_effort,
                     }
-                    results.append(_run_with_hard_timeout(
-                        kwargs, args.engine_timeout + 15, events_path
-                    ))
+                    results.append(
+                        _run_with_hard_timeout(
+                            kwargs, args.engine_timeout + 15, events_path
+                        )
+                    )
                     # A provider outage or manual stop must not erase already
                     # completed engine runs.
                     args.traces.parent.mkdir(parents=True, exist_ok=True)
@@ -644,16 +760,35 @@ def main() -> int:
             for row in results:
                 if row["engine"] != engine_name:
                     continue
-                f.write(json.dumps({k: row[k] for k in
-                                    ("instance_id", "model_name_or_path", "model_patch")},
-                                   ensure_ascii=False) + "\n")
+                f.write(
+                    json.dumps(
+                        {
+                            k: row[k]
+                            for k in (
+                                "instance_id",
+                                "model_name_or_path",
+                                "model_patch",
+                            )
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
         prediction_files[engine_name] = str(path)
     args.traces.parent.mkdir(parents=True, exist_ok=True)
     args.traces.write_text(json.dumps(results, ensure_ascii=False, indent=2))
-    print(json.dumps({"instances": len(instances), "engines": engines,
-                      "predictions": prediction_files,
-                      "traces": str(args.traces),
-                      "events": str(events_path)}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "instances": len(instances),
+                "engines": engines,
+                "predictions": prediction_files,
+                "traces": str(args.traces),
+                "events": str(events_path),
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

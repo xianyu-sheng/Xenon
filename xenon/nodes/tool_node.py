@@ -71,8 +71,12 @@ logger = logging.getLogger(__name__)
 def _fetch_with_redirect_check(client, url: str, headers: dict | None = None):
     """Compatibility wrapper retaining the old patchable SSRF checker."""
     return _network_fetch_with_redirect_check(
-        client, url, headers, check_url=_ssrf_check_url,
+        client,
+        url,
+        headers,
+        check_url=_ssrf_check_url,
     )
+
 
 # ── 动态工具注册表 ──────────────────────────────────────────
 # 存储通过 register_tool 注册的自定义工具
@@ -112,9 +116,8 @@ def list_dynamic_tools() -> list[str]:
 def _get_allowed_module_prefixes() -> tuple[str, ...]:
     """获取允许注册的模块前缀列表。"""
     extra = get_config().development.register_module_allow
-    return ("xenon.",) + tuple(
-        p.strip() + "." for p in extra.split(",") if p.strip()
-    )
+    return ("xenon.",) + tuple(p.strip() + "." for p in extra.split(",") if p.strip())
+
 
 # 向后兼容别名：导入时求值一次的快照。新代码请直接调用
 # ``_get_allowed_module_prefixes()``——把结果冻结在模块全局里会让配置文件
@@ -122,10 +125,22 @@ def _get_allowed_module_prefixes() -> tuple[str, ...]:
 _ALLOWED_MODULE_PREFIXES: tuple[str, ...] = _get_allowed_module_prefixes()
 
 # 危险模块顶层名：即便落在允许前缀内也一律拒绝导入（防 os.system / subprocess 等 RCE）。
-_DANGEROUS_MODULE_TOPS: frozenset[str] = frozenset({
-    "os", "subprocess", "builtins", "importlib", "sys", "shutil",
-    "ctypes", "pickle", "socket", "ssl", "multiprocessing", "pty",
-})
+_DANGEROUS_MODULE_TOPS: frozenset[str] = frozenset(
+    {
+        "os",
+        "subprocess",
+        "builtins",
+        "importlib",
+        "sys",
+        "shutil",
+        "ctypes",
+        "pickle",
+        "socket",
+        "ssl",
+        "multiprocessing",
+        "pty",
+    }
+)
 
 # 内置 action_type 集合：动态工具注册时禁止重名（防内置工具名劫持）。
 # 注意：若新增内置 action_type，需同步本集合（与 ToolNode.execute 的 handlers 字典保持一致）。
@@ -141,7 +156,7 @@ def _last_error_lines(stderr: str, max_chars: int = 300) -> str:
     stderr = stderr.strip()
     if len(stderr) <= max_chars:
         return stderr
-    return "…" + stderr[-(max_chars - 1):]
+    return "…" + stderr[-(max_chars - 1) :]
 
 
 def _validate_register_module(module_path: str) -> tuple[bool, str]:
@@ -156,12 +171,16 @@ def _validate_register_module(module_path: str) -> tuple[bool, str]:
     top = mp.split(".", 1)[0]
     if top in _DANGEROUS_MODULE_TOPS:
         logger.warning(f"[register_tool] 拒绝导入危险模块: {mp}")
-        return False, (f"安全策略禁止导入危险模块: {top}"
-                       f"（os/subprocess/builtins/importlib 等不可注册）")
+        return False, (
+            f"安全策略禁止导入危险模块: {top}"
+            f"（os/subprocess/builtins/importlib 等不可注册）"
+        )
     if not any(mp.startswith(p) for p in _get_allowed_module_prefixes()):
         logger.warning(f"[register_tool] 模块不在白名单: {mp}")
-        return False, (f"模块 {top} 不在注册白名单内（仅允许 xenon.*，"
-                       f"或通过配置文件 development.register_module_allow 显式声明）")
+        return False, (
+            f"模块 {top} 不在注册白名单内（仅允许 xenon.*，"
+            f"或通过配置文件 development.register_module_allow 显式声明）"
+        )
     return True, ""
 
 
@@ -169,31 +188,55 @@ def _validate_register_module(module_path: str) -> tuple[bool, str]:
 
 # 系统敏感路径黑名单（写入操作禁止）
 _SENSITIVE_PATHS = [
-    "c:\\windows", "c:\\program files", "c:\\programdata",
-    "/etc", "/usr", "/bin", "/sbin", "/boot", "/dev", "/proc", "/sys",
-    "/var/log", "/root/.ssh", "/root/.gnupg",
+    "c:\\windows",
+    "c:\\program files",
+    "c:\\programdata",
+    "/etc",
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/boot",
+    "/dev",
+    "/proc",
+    "/sys",
+    "/var/log",
+    "/root/.ssh",
+    "/root/.gnupg",
 ]
 
 # 用户敏感目录黑名单
 _USER_SENSITIVE = [
-    ".ssh", ".gnupg", ".aws", ".azure", ".config/gh",
-    ".docker/config.json", "credentials", "id_rsa", "id_ed25519",
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".azure",
+    ".config/gh",
+    ".docker/config.json",
+    "credentials",
+    "id_rsa",
+    "id_ed25519",
 ]
 
 # 危险命令黑名单模式
 _DANGEROUS_CMD_PATTERNS = [
     # 删除根目录/系统目录
-    r"rm\s+(-[rfR]+\s+)?/", r"rm\s+(-[rfR]+\s+)?~",
-    r"rmdir\s+/", r"del\s+/[sfq]\s+[a-zA-Z]:\\",
+    r"rm\s+(-[rfR]+\s+)?/",
+    r"rm\s+(-[rfR]+\s+)?~",
+    r"rmdir\s+/",
+    r"del\s+/[sfq]\s+[a-zA-Z]:\\",
     r"del\s+/[sfq]\s+C:\\",
     # 格式化
-    r"\bformat\s+[a-zA-Z]:", r"\bmkfs\b",
+    r"\bformat\s+[a-zA-Z]:",
+    r"\bmkfs\b",
     # 磁盘直接写入
     r"\bdd\s+if=",
     # 系统关机/重启
-    r"\bshutdown\b", r"\breboot\b", r"\bhalt\b",
+    r"\bshutdown\b",
+    r"\breboot\b",
+    r"\bhalt\b",
     # 下载并执行
-    r"curl.*\|\s*(?:bash|sh|python|node)", r"wget.*\|\s*(?:bash|sh|python|node)",
+    r"curl.*\|\s*(?:bash|sh|python|node)",
+    r"wget.*\|\s*(?:bash|sh|python|node)",
     # 常见的编码/解释器混淆：黑名单不可能穷举 payload，先拒绝
     # 将外部/编码字符串交给解释器执行的高风险形态。
     r"\b(?:base64|openssl)\b[^\n|;&]*(?:-d|--decode)[^\n|;&]*\|\s*(?:bash|sh|zsh|python\w*|node)\b",
@@ -201,17 +244,24 @@ _DANGEROUS_CMD_PATTERNS = [
     r"\b(?:bash|sh|zsh|pwsh|powershell)\s+-c\s+",
     r"\beval\s+",
     # PowerShell 危险命令
-    r"Remove-Item\s+-[rR].*C:\\", r"Format-Volume",
+    r"Remove-Item\s+-[rR].*C:\\",
+    r"Format-Volume",
     r"Clear-RecycleBin\s+-Force",
     # 权限变更
-    r"\bchmod\s+777\b", r"\bchown\b.*root",
+    r"\bchmod\s+777\b",
+    r"\bchown\b.*root",
 ]
 
 # 危险 Git 子命令
 _DANGEROUS_GIT_PATTERNS = [
-    "push --force", "push -f", "reset --hard",
-    "clean -fd", "clean -fXd", "checkout -- .",
-    "branch -D", "reflog expire --all",
+    "push --force",
+    "push -f",
+    "reset --hard",
+    "clean -fd",
+    "clean -fXd",
+    "checkout -- .",
+    "branch -D",
+    "reflog expire --all",
 ]
 
 
@@ -380,45 +430,117 @@ class ToolNode(
     # LLM 经常使用与 ToolNode 不同的参数名，这里统一映射。
     # 注意: pattern 是 list_files 的合法参数，不能作为 search_pattern 的别名。
     _PARAM_ALIASES: dict[str, list[str]] = {
-        "file_path":      ["path", "dir", "directory", "folder", "filepath", "file", "target", "filePath"],
-        "action":         ["command", "cmd", "shell", "exec", "run", "execute"],
-        "content":        ["text", "data", "body", "value", "fileContent"],
-        "search_pattern": ["query", "keyword", "term", "search", "searchPattern", "queryString"],
-        "file_filter":    ["filter", "glob", "filetype", "ext", "extension"],
-        "old_text":       ["old", "find", "search_text", "before", "original", "oldText", "oldString", "searchString", "originalText"],
-        "new_text":       ["new", "replace", "replace_text", "after", "replacement", "newText", "newString", "replacementText", "replaceString"],
-        "git_command":    ["subcommand", "git_cmd", "git_subcmd"],
-        "url":            ["uri", "link", "href"],
-        "symbol":         ["name", "func", "function_name", "class_name", "identifier"],
-        "old_name":       ["from", "before_name"],
-        "new_name":       ["to", "after_name"],
-        "repo":           ["repository", "repo_url", "github_url", "github_repo"],
-        "github_action":  ["gh_action", "git_action"],
-        "github_path":    ["gh_path", "file", "filepath"],
-        "branch":         ["ref", "git_branch"],
-        "city":           ["location", "place", "address"],
-        "lang":           ["language", "locale"],
+        "file_path": [
+            "path",
+            "dir",
+            "directory",
+            "folder",
+            "filepath",
+            "file",
+            "target",
+            "filePath",
+        ],
+        "action": ["command", "cmd", "shell", "exec", "run", "execute"],
+        "content": ["text", "data", "body", "value", "fileContent"],
+        "search_pattern": [
+            "query",
+            "keyword",
+            "term",
+            "search",
+            "searchPattern",
+            "queryString",
+        ],
+        "file_filter": ["filter", "glob", "filetype", "ext", "extension"],
+        "old_text": [
+            "old",
+            "find",
+            "search_text",
+            "before",
+            "original",
+            "oldText",
+            "oldString",
+            "searchString",
+            "originalText",
+        ],
+        "new_text": [
+            "new",
+            "replace",
+            "replace_text",
+            "after",
+            "replacement",
+            "newText",
+            "newString",
+            "replacementText",
+            "replaceString",
+        ],
+        "git_command": ["subcommand", "git_cmd", "git_subcmd"],
+        "url": ["uri", "link", "href"],
+        "symbol": ["name", "func", "function_name", "class_name", "identifier"],
+        "old_name": ["from", "before_name"],
+        "new_name": ["to", "after_name"],
+        "repo": ["repository", "repo_url", "github_url", "github_repo"],
+        "github_action": ["gh_action", "git_action"],
+        "github_path": ["gh_path", "file", "filepath"],
+        "branch": ["ref", "git_branch"],
+        "city": ["location", "place", "address"],
+        "lang": ["language", "locale"],
         # v0.6.1: LSP 参数
-        "line":           ["row", "lineno", "line_number"],
-        "column":         ["col", "colno", "column_number", "cursor"],
+        "line": ["row", "lineno", "line_number"],
+        "column": ["col", "colno", "column_number", "cursor"],
     }
 
     # ToolNode.__init__ 接受的所有合法参数名（不含 node_id，它是位置参数）
     _VALID_PARAMS: set[str] = {
-        "action_type", "action", "file_path", "content", "output_slot",
-        "cwd", "timeout", "default_next", "encoding", "append",
-        "pattern", "max_depth", "search_pattern", "file_filter",
-        "limit", "cursor",
-        "git_command", "url", "start_time", "end_time", "old_text", "new_text",
-        "max_pages", "max_chars",
-        "files", "edits", "symbol", "query",
-        "old_name", "new_name", "refactor_action",
-        "tool_name", "tool_args", "mcp_server",
-        "repo", "github_action", "github_path", "branch",
-        "city", "lang", "description", "python_function", "command_template", "params",
-        "security_enabled", "start_line", "max_lines",
+        "action_type",
+        "action",
+        "file_path",
+        "content",
+        "output_slot",
+        "cwd",
+        "timeout",
+        "default_next",
+        "encoding",
+        "append",
+        "pattern",
+        "max_depth",
+        "search_pattern",
+        "file_filter",
+        "limit",
+        "cursor",
+        "git_command",
+        "url",
+        "start_time",
+        "end_time",
+        "old_text",
+        "new_text",
+        "max_pages",
+        "max_chars",
+        "files",
+        "edits",
+        "symbol",
+        "query",
+        "old_name",
+        "new_name",
+        "refactor_action",
+        "tool_name",
+        "tool_args",
+        "mcp_server",
+        "repo",
+        "github_action",
+        "github_path",
+        "branch",
+        "city",
+        "lang",
+        "description",
+        "python_function",
+        "command_template",
+        "params",
+        "security_enabled",
+        "start_line",
+        "max_lines",
         # v0.6.1: LSP 工具参数
-        "line", "column",
+        "line",
+        "column",
     }
 
     @classmethod
@@ -440,10 +562,11 @@ class ToolNode(
         if "cursor" not in result and "next_cursor" in result:
             result["cursor"] = result.pop("next_cursor")
         for std_name, aliases in cls._PARAM_ALIASES.items():
-            if (
-                std_name == "search_pattern"
-                and action_type in {"docs_fetch", "web_fetch", "mcp_call"}
-            ):
+            if std_name == "search_pattern" and action_type in {
+                "docs_fetch",
+                "web_fetch",
+                "mcp_call",
+            }:
                 aliases = [alias for alias in aliases if alias != "query"]
             if std_name in result:
                 continue  # 标准名已存在，不覆盖
@@ -564,27 +687,23 @@ class ToolNode(
             resolved_normalized = resolved_lower.rstrip("/") + "/"
             for sensitive in _SENSITIVE_PATHS:
                 sensitive_normalized = sensitive.lower().rstrip("/") + "/"
-                if resolved_normalized.startswith(sensitive_normalized) or \
-                   ("/" + sensitive_normalized.lstrip("/")) in resolved_normalized:
-                    raise SecurityError(
-                        f"禁止写入系统敏感路径: {resolved}"
-                    )
+                if (
+                    resolved_normalized.startswith(sensitive_normalized)
+                    or ("/" + sensitive_normalized.lstrip("/")) in resolved_normalized
+                ):
+                    raise SecurityError(f"禁止写入系统敏感路径: {resolved}")
             # 检查用户敏感文件（文件名精确匹配）
             name_lower = resolved.name.lower()
             for sensitive in _USER_SENSITIVE:
                 if name_lower == sensitive or name_lower.endswith(sensitive):
-                    raise SecurityError(
-                        f"禁止写入敏感文件: {resolved}"
-                    )
+                    raise SecurityError(f"禁止写入敏感文件: {resolved}")
         else:
             # A13: 读取操作也禁止凭证等高敏感文件，防 prompt 注入诱导泄露凭证
             name_lower = resolved.name.lower()
             resolved_lower = str(resolved).lower().replace("\\", "/")
             for sensitive in _USER_SENSITIVE:
                 if sensitive in name_lower or sensitive in resolved_lower:
-                    raise SecurityError(
-                        f"禁止读取敏感凭证文件: {resolved}"
-                    )
+                    raise SecurityError(f"禁止读取敏感凭证文件: {resolved}")
 
         # 返回 resolved 路径防止符号链接逃逸（CVE-2026-XXXX 修复）
         # 历史上返回原始 path 是为了"保留 Windows 短路径等"，但这造成了
@@ -628,8 +747,7 @@ class ToolNode(
                 continue
             if re.search(pattern, cmd_stripped):
                 raise SecurityError(
-                    f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。"
-                    f"命令: {cmd[:100]}"
+                    f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。命令: {cmd[:100]}"
                 )
 
     @staticmethod
@@ -668,9 +786,7 @@ class ToolNode(
                 and i + 1 < len(command)
                 and (
                     command[i + 1] == "{"
-                    or re.match(
-                        r"[a-z_][a-z0-9_]*", command[i + 1:], re.IGNORECASE
-                    )
+                    or re.match(r"[a-z_][a-z0-9_]*", command[i + 1 :], re.IGNORECASE)
                 )
             ):
                 return True
@@ -698,8 +814,7 @@ class ToolNode(
         for dangerous in _DANGEROUS_GIT_PATTERNS:
             if dangerous.lower() in cmd_lower:
                 raise SecurityError(
-                    f"危险 Git 命令被拦截: '{dangerous}'。"
-                    f"完整命令: git {git_cmd[:80]}"
+                    f"危险 Git 命令被拦截: '{dangerous}'。完整命令: git {git_cmd[:80]}"
                 )
 
     def execute(self, context: AgentContext) -> dict[str, Any]:
@@ -731,7 +846,8 @@ class ToolNode(
 
         shell_command = (
             f"{self.command_prelude}\n{resolved_cmd}"
-            if self.command_prelude else resolved_cmd
+            if self.command_prelude
+            else resolved_cmd
         )
         if self.command_prefix:
             shell_exec = [*self.command_prefix, "/bin/bash", "-lc", shell_command]
@@ -781,7 +897,6 @@ class ToolNode(
 
     # GitHub retrieval and repository analysis are provided by GitHubToolsMixin.
 
-
     # HTML normalization is provided by WebToolsMixin.
 
     # ── 动态工具注册 ──────────────────────────────────────
@@ -796,76 +911,129 @@ class ToolNode(
         params_raw = getattr(self, "params", {})
         if isinstance(params_raw, str):
             import json
+
             try:
                 params_raw = json.loads(params_raw)
             except json.JSONDecodeError:
                 params_raw = {}
 
         if not tool_name:
-            return {"action_type": "register_tool", "success": False, "error": "缺少 tool_name 参数"}
+            return {
+                "action_type": "register_tool",
+                "success": False,
+                "error": "缺少 tool_name 参数",
+            }
 
         # A3: 重名检查 — 禁止劫持内置 action_type，禁止覆盖已注册动态工具（除非 overwrite=True）
-        overwrite = str(self._resolve_template(getattr(self, "overwrite", ""), context)).strip().lower() in (
-            "1", "true", "yes", "on",
+        overwrite = str(
+            self._resolve_template(getattr(self, "overwrite", ""), context)
+        ).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
         )
         if tool_name in _BUILTIN_ACTION_TYPES:
-            return {"action_type": "register_tool", "success": False,
-                    "error": f"工具名 '{tool_name}' 与内置 action_type 冲突，禁止注册（防内置工具名劫持）"}
+            return {
+                "action_type": "register_tool",
+                "success": False,
+                "error": f"工具名 '{tool_name}' 与内置 action_type 冲突，禁止注册（防内置工具名劫持）",
+            }
         if tool_name in _DYNAMIC_TOOLS and not overwrite:
-            return {"action_type": "register_tool", "success": False,
-                    "error": f"工具名 '{tool_name}' 已被注册为动态工具；如需覆盖请显式设置 overwrite=true"}
+            return {
+                "action_type": "register_tool",
+                "success": False,
+                "error": f"工具名 '{tool_name}' 已被注册为动态工具；如需覆盖请显式设置 overwrite=true",
+            }
 
         # 模式 1: Python 函数
-        python_function = self._resolve_template(getattr(self, "python_function", ""), context)
+        python_function = self._resolve_template(
+            getattr(self, "python_function", ""), context
+        )
         if python_function:
             try:
                 parts = python_function.rsplit(".", 1)
                 if len(parts) != 2:
-                    return {"action_type": "register_tool", "success": False,
-                            "error": f"python_function 格式错误，应为 module.function，收到: {python_function}"}
+                    return {
+                        "action_type": "register_tool",
+                        "success": False,
+                        "error": f"python_function 格式错误，应为 module.function，收到: {python_function}",
+                    }
                 module_path, func_name = parts
                 # A1: 模块白名单校验 — 拒绝导入 os/subprocess/builtins/importlib 等危险模块
                 ok, reason = _validate_register_module(module_path)
                 if not ok:
-                    return {"action_type": "register_tool", "success": False, "error": reason}
+                    return {
+                        "action_type": "register_tool",
+                        "success": False,
+                        "error": reason,
+                    }
                 import importlib
+
                 mod = importlib.import_module(module_path)
                 func = getattr(mod, func_name)
                 if not callable(func):
-                    return {"action_type": "register_tool", "success": False,
-                            "error": f"{python_function} 不是可调用对象"}
+                    return {
+                        "action_type": "register_tool",
+                        "success": False,
+                        "error": f"{python_function} 不是可调用对象",
+                    }
 
                 def make_handler(fn):
                     def handler(ctx):
                         # 从上下文中提取参数
                         kwargs = {}
-                        for key in (params_raw.get("properties") or {}):
+                        for key in params_raw.get("properties") or {}:
                             val = ctx.get(key)
                             if val is not None:
                                 kwargs[key] = val
                         try:
                             result = fn(**kwargs) if kwargs else fn()
-                            return {"action_type": tool_name, "success": True, "content": str(result)}
+                            return {
+                                "action_type": tool_name,
+                                "success": True,
+                                "content": str(result),
+                            }
                         except Exception as e:
-                            return {"action_type": tool_name, "success": False, "error": str(e)}
+                            return {
+                                "action_type": tool_name,
+                                "success": False,
+                                "error": str(e),
+                            }
+
                     return handler
 
-                register_dynamic_tool(tool_name, make_handler(func), description or f"自定义工具: {tool_name}", params_raw)
-                msg = f"✅ 工具 '{tool_name}' 注册成功（Python 函数: {python_function}）"
+                register_dynamic_tool(
+                    tool_name,
+                    make_handler(func),
+                    description or f"自定义工具: {tool_name}",
+                    params_raw,
+                )
+                msg = (
+                    f"✅ 工具 '{tool_name}' 注册成功（Python 函数: {python_function}）"
+                )
                 logger.info(f"[register_tool] {msg}")
                 return {"action_type": "register_tool", "success": True, "content": msg}
 
             except Exception as e:
-                return {"action_type": "register_tool", "success": False, "error": f"注册失败: {e}"}
+                return {
+                    "action_type": "register_tool",
+                    "success": False,
+                    "error": f"注册失败: {e}",
+                }
 
         # 模式 2: Shell 命令模板
-        command_template = self._resolve_template(getattr(self, "command_template", ""), context)
+        command_template = self._resolve_template(
+            getattr(self, "command_template", ""), context
+        )
         if command_template:
+
             def cmd_handler(ctx):
                 import shlex
+
                 cmd = command_template
                 # 替换模板变量（A4: 对替换值 shlex.quote 防 shell 注入）
-                for key in (params_raw.get("properties") or {}):
+                for key in params_raw.get("properties") or {}:
                     val = ctx.get(key)
                     if val is not None:
                         cmd = cmd.replace(f"{{{key}}}", shlex.quote(str(val)))
@@ -876,28 +1044,54 @@ class ToolNode(
                     output = result.stdout.strip()
                     if result.returncode != 0:
                         output += f"\nSTDERR: {result.stderr.strip()}"
-                    return {"action_type": tool_name, "success": result.returncode == 0,
-                            "content": output, "command": cmd}
+                    return {
+                        "action_type": tool_name,
+                        "success": result.returncode == 0,
+                        "content": output,
+                        "command": cmd,
+                    }
                 except subprocess.TimeoutExpired:
-                    return {"action_type": tool_name, "success": False, "error": "命令超时 (30s)"}
+                    return {
+                        "action_type": tool_name,
+                        "success": False,
+                        "error": "命令超时 (30s)",
+                    }
                 except Exception as e:
                     return {"action_type": tool_name, "success": False, "error": str(e)}
 
-            register_dynamic_tool(tool_name, cmd_handler, description or f"自定义命令: {tool_name}", params_raw)
+            register_dynamic_tool(
+                tool_name,
+                cmd_handler,
+                description or f"自定义命令: {tool_name}",
+                params_raw,
+            )
             msg = f"✅ 工具 '{tool_name}' 注册成功（命令模板: {command_template}）"
             logger.info(f"[register_tool] {msg}")
             return {"action_type": "register_tool", "success": True, "content": msg}
 
-        return {"action_type": "register_tool", "success": False,
-                "error": "必须提供 python_function 或 command_template 参数"}
+        return {
+            "action_type": "register_tool",
+            "success": False,
+            "error": "必须提供 python_function 或 command_template 参数",
+        }
 
-    def _exec_dynamic_tool(self, tool_info: dict, context: AgentContext) -> dict[str, Any]:
+    def _exec_dynamic_tool(
+        self, tool_info: dict, context: AgentContext
+    ) -> dict[str, Any]:
         """执行已注册的动态工具。"""
         handler = tool_info["handler"]
         try:
             # 将 ToolNode 的属性作为参数传给 handler
             result = handler(context)
-            return result if isinstance(result, dict) else {"action_type": self.action_type, "success": True, "content": str(result)}
+            return (
+                result
+                if isinstance(result, dict)
+                else {
+                    "action_type": self.action_type,
+                    "success": True,
+                    "content": str(result),
+                }
+            )
         except Exception as e:
             logger.error(f"[动态工具] {self.action_type} 执行失败: {e}")
             return {"action_type": self.action_type, "success": False, "error": str(e)}
@@ -907,8 +1101,10 @@ class ToolNode(
     @staticmethod
     def _resolve_template(template: str, context: AgentContext) -> str:
         import re
+
         def _replace(m: re.Match) -> str:
             key = m.group(1)
             val = context.get(key)
             return str(val) if val is not None else m.group(0)
+
         return re.sub(r"\{(\w+)\}", _replace, template)

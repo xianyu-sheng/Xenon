@@ -20,6 +20,7 @@ register_command(
     "/memory status|list|search|inspect|doctor|add|replace|rollback|archive|restore|pin|migrate|clear [参数]",
 )
 
+
 @command_handler("/memory")
 def _cmd_memory(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> str:
     repl = session_state.get("_repl")
@@ -41,7 +42,12 @@ def _cmd_memory(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> s
 
         lines = [f"共 {len(memories)} 条记忆:\n"]
         for m in memories:
-            emoji = {"fact": "📌", "project": "📁", "error": "⚠️", "preference": "⭐"}.get(m.type, "📝")
+            emoji = {
+                "fact": "📌",
+                "project": "📁",
+                "error": "⚠️",
+                "preference": "⭐",
+            }.get(m.type, "📝")
             lines.append(f"  {emoji} [{m.id}] [{m.type}] {m.content[:80]}")
             if m.tags:
                 lines.append(f"     标签: {', '.join(m.tags)}")
@@ -57,7 +63,12 @@ def _cmd_memory(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> s
 
         lines = [f"搜索 '{sub_args}' 找到 {len(results)} 条:\n"]
         for m in results:
-            emoji = {"fact": "📌", "project": "📁", "error": "⚠️", "preference": "⭐"}.get(m.type, "📝")
+            emoji = {
+                "fact": "📌",
+                "project": "📁",
+                "error": "⚠️",
+                "preference": "⭐",
+            }.get(m.type, "📝")
             lines.append(f"  {emoji} [{m.id}] {m.content[:80]}")
         return "\n".join(lines)
 
@@ -157,17 +168,19 @@ def _cmd_memory_v2(*, args: str, repl: Any) -> str:
                 lines.append(f"  {scope.value}: {backend.root}")
             except ValueError:
                 lines.append(f"  {scope.value}: 未激活（当前未检测到项目）")
-        lines.extend([
-            "  session: 当前进程内存（退出即清除）",
-            "",
-            "metadata.json 是机器权威数据；INDEX.md 与分类 Markdown 是可读视图。",
-            "写入采用跨进程事务锁；冲突只提示，不会静默覆盖。",
-            (
-                f"阈值: 单条 {service.policy.max_item_tokens} · "
-                f"分类 {service.policy.max_leaf_tokens} · "
-                f"作用域 {service.policy.max_active_tokens} tokens"
-            ),
-        ])
+        lines.extend(
+            [
+                "  session: 当前进程内存（退出即清除）",
+                "",
+                "metadata.json 是机器权威数据；INDEX.md 与分类 Markdown 是可读视图。",
+                "写入采用跨进程事务锁；冲突只提示，不会静默覆盖。",
+                (
+                    f"阈值: 单条 {service.policy.max_item_tokens} · "
+                    f"分类 {service.policy.max_leaf_tokens} · "
+                    f"作用域 {service.policy.max_active_tokens} tokens"
+                ),
+            ]
+        )
         return "\n".join(lines)
 
     if sub == "list":
@@ -290,12 +303,16 @@ def _cmd_memory_v2(*, args: str, repl: Any) -> str:
                     index += 1
                 elif token in {"--kind", "--type"}:
                     raw_kind = tokens[index + 1]
-                    raw_kind = {"project": "fact", "error": "lesson"}.get(raw_kind, raw_kind)
+                    raw_kind = {"project": "fact", "error": "lesson"}.get(
+                        raw_kind, raw_kind
+                    )
                     kind = MemoryKind(raw_kind)
                     index += 2
                 elif token.startswith(("--kind=", "--type=")):
                     raw_kind = token.split("=", 1)[1]
-                    raw_kind = {"project": "fact", "error": "lesson"}.get(raw_kind, raw_kind)
+                    raw_kind = {"project": "fact", "error": "lesson"}.get(
+                        raw_kind, raw_kind
+                    )
                     kind = MemoryKind(raw_kind)
                     index += 1
                 else:
@@ -321,7 +338,8 @@ def _cmd_memory_v2(*, args: str, repl: Any) -> str:
         )
         if receipt.conflict_ids:
             result += (
-                "\n⚠️ 潜在冲突（未覆盖）: " + ", ".join(receipt.conflict_ids)
+                "\n⚠️ 潜在冲突（未覆盖）: "
+                + ", ".join(receipt.conflict_ids)
                 + "\n明确替代: /memory replace <旧ID> <新内容>"
             )
         if receipt.warning:
@@ -364,7 +382,9 @@ def _cmd_memory_v2(*, args: str, repl: Any) -> str:
         if not memory_id:
             return "用法: /memory archive <记忆 ID>"
         if service.archive(memory_id):
-            return f"✅ 已归档记忆 [{memory_id}]（可用 /memory restore {memory_id} 恢复）"
+            return (
+                f"✅ 已归档记忆 [{memory_id}]（可用 /memory restore {memory_id} 恢复）"
+            )
         return f"未找到活动记忆 [{memory_id}]"
 
     if sub == "restore":
@@ -439,7 +459,9 @@ def _cmd_memory_v2(*, args: str, repl: Any) -> str:
         records = service.list_records()
         if not records:
             return "暂无活动记忆。"
-        if not confirm_action(f"确认归档全部 {len(records)} 条活动记忆？", default=False):
+        if not confirm_action(
+            f"确认归档全部 {len(records)} 条活动记忆？", default=False
+        ):
             return "已取消。"
         for record in records:
             service.archive(record.id)
@@ -449,5 +471,3 @@ def _cmd_memory_v2(*, args: str, repl: Any) -> str:
         "用法: /memory status|list|search|inspect|doctor|add|replace|rollback|"
         "archive|restore|pin|unpin|migrate|clear [参数]"
     )
-
-

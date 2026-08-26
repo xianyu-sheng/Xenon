@@ -9,6 +9,7 @@ from xenon.engine.event_bus import EventBus, CallbackBusBridge, EVENT_TYPES
 
 # --------------------------- subscribe / publish ---------------------------
 
+
 def test_single_subscriber_receives():
     bus = EventBus()
     got = []
@@ -53,6 +54,7 @@ def test_publish_passes_multiple_args():
 
 # --------------------------- unsubscribe ---------------------------
 
+
 def test_unsubscribe_removes_handler():
     bus = EventBus()
     got = []
@@ -84,6 +86,7 @@ def test_unsubscribe_only_removes_target():
 
 # --------------------------- 异常隔离 ---------------------------
 
+
 def test_handler_exception_isolated(caplog):
     """一个订阅者抛异常不影响其他订阅者与发布方。"""
     bus = EventBus()
@@ -91,6 +94,7 @@ def test_handler_exception_isolated(caplog):
 
     def bad(t):
         raise RuntimeError("boom")
+
     bus.subscribe("think", bad)
     bus.subscribe("think", ok.append)
     caplog.set_level(logging.WARNING)
@@ -100,6 +104,7 @@ def test_handler_exception_isolated(caplog):
 
 
 # --------------------------- 杂项 ---------------------------
+
 
 def test_subscriber_count():
     bus = EventBus()
@@ -120,12 +125,22 @@ def test_clear():
 
 
 def test_event_types_complete():
-    for evt in ["think", "act", "observe", "step", "step_done",
-                "review", "error", "warning", "finish"]:
+    for evt in [
+        "think",
+        "act",
+        "observe",
+        "step",
+        "step_done",
+        "review",
+        "error",
+        "warning",
+        "finish",
+    ]:
         assert evt in EVENT_TYPES
 
 
 # --------------------------- CallbackBusBridge ---------------------------
+
 
 def test_bridge_forwards_on_think():
     bus = EventBus()
@@ -156,6 +171,7 @@ def test_bridge_forwards_on_act_with_args():
 
 def test_bridge_is_engine_callback():
     from xenon.engine.callbacks import EngineCallback
+
     bus = EventBus()
     bridge = CallbackBusBridge(bus)
     assert isinstance(bridge, EngineCallback)
@@ -174,6 +190,7 @@ def test_bridge_multiple_subscribers_fanout():
 
 # --------------------------- 引擎集成 ---------------------------
 
+
 def test_react_engine_with_bridge_publishes_finish():
     """ReAct 引擎照常 self.callback（桥接），订阅者收到 finish 事件。"""
     from xenon.engine.react_engine import ReActEngine
@@ -188,6 +205,7 @@ def test_react_engine_with_bridge_publishes_finish():
 
     def fake_llm(messages, **kw):
         return "Thought: 我想想\nFinal Answer: done"
+
     eng._call_llm = fake_llm
     eng.max_iterations = 2
     eng.run("hi")

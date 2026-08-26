@@ -7,13 +7,16 @@ from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 
-_LINK_RE = re.compile(
-    r"^\s*[-*+]\s+\[([^\]]+)]\(([^)]+)\)(?:\s*:\s*(.*))?\s*$"
-)
+_LINK_RE = re.compile(r"^\s*[-*+]\s+\[([^\]]+)]\(([^)]+)\)(?:\s*:\s*(.*))?\s*$")
 _TOKEN_RE = re.compile(r"[a-z0-9_.-]+|[\u3400-\u9fff]", re.IGNORECASE)
-_KNOWN_FILES = frozenset({
-    "llms.txt", "llms-full.txt", "llms-ctx.txt", "llms-ctx-full.txt",
-})
+_KNOWN_FILES = frozenset(
+    {
+        "llms.txt",
+        "llms-full.txt",
+        "llms-ctx.txt",
+        "llms-ctx-full.txt",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -60,14 +63,16 @@ def parse_llms_txt(text: str, base_url: str) -> LLMSTxtDocument:
         match = _LINK_RE.match(line)
         if match and section:
             raw_url = match.group(2).strip().strip("<>")
-            links.append(LLMSTxtLink(
-                title=match.group(1).strip(),
-                url=urljoin(base_url, raw_url),
-                description=(match.group(3) or "").strip(),
-                section=section,
-                optional=section.casefold() == "optional",
-                order=len(links),
-            ))
+            links.append(
+                LLMSTxtLink(
+                    title=match.group(1).strip(),
+                    url=urljoin(base_url, raw_url),
+                    description=(match.group(3) or "").strip(),
+                    section=section,
+                    optional=section.casefold() == "optional",
+                    order=len(links),
+                )
+            )
             continue
         if not section and stripped.startswith(">"):
             summary_lines.append(stripped[1:].strip())
@@ -154,4 +159,3 @@ def llms_candidate_urls(url: str) -> list[str]:
 
 def _tokens(value: str) -> list[str]:
     return [match.group(0).casefold() for match in _TOKEN_RE.finditer(value or "")]
-

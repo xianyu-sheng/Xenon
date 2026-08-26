@@ -17,6 +17,7 @@ from xenon.repl.model_registry import ModelRegistry
 
 # ── Mock 辅助函数 ──────────────────────────────────────────
 
+
 def _make_mock_client(fake_get):
     """
     创建一个假的 _create_http_client 工厂，用于在测试中替换
@@ -51,6 +52,7 @@ def _make_mock_client(fake_get):
 
 
 # ── ContextManager 测试 ──────────────────────────────────
+
 
 class TestContextManager:
     def test_add_messages(self):
@@ -90,8 +92,8 @@ class TestContextManager:
         mgr = ContextManager()
         # 添加足够多的消息（超过 3 轮）以触发压缩
         for i in range(4):
-            mgr.add_user_message(f"question {i+1}")
-            mgr.add_assistant_message(f"answer {i+1}")
+            mgr.add_user_message(f"question {i + 1}")
+            mgr.add_assistant_message(f"answer {i + 1}")
 
         summary = mgr.compact("这是摘要")
         assert summary == "这是摘要"
@@ -103,8 +105,8 @@ class TestContextManager:
         """压缩应保留最近 3 轮对话。"""
         mgr = ContextManager()
         for i in range(5):
-            mgr.add_user_message(f"q{i+1}")
-            mgr.add_assistant_message(f"a{i+1}")
+            mgr.add_user_message(f"q{i + 1}")
+            mgr.add_assistant_message(f"a{i + 1}")
 
         mgr.compact("摘要")
         # 第 1 条是摘要，后面保留最近 3 轮
@@ -130,8 +132,12 @@ class TestContextManager:
         mgr = ContextManager(max_tokens=250)
         # 使用更多文本确保 usage_ratio > 60%
         for i in range(4):
-            mgr.add_user_message(f"如何写快速排序？请详细说明每一步的实现细节和算法复杂度分析。步骤 {i+1}")
-            mgr.add_assistant_message(f"快速排序是一种分治算法，通过选择基准元素进行分区操作...步骤 {i+1}")
+            mgr.add_user_message(
+                f"如何写快速排序？请详细说明每一步的实现细节和算法复杂度分析。步骤 {i + 1}"
+            )
+            mgr.add_assistant_message(
+                f"快速排序是一种分治算法，通过选择基准元素进行分区操作...步骤 {i + 1}"
+            )
 
         summary = mgr.compact()
         assert "快速排序" in summary
@@ -174,6 +180,7 @@ class TestContextManager:
 
 
 # ── ModelRegistry 测试 ───────────────────────────────────
+
 
 class TestModelRegistry:
     def test_add_model(self):
@@ -277,16 +284,24 @@ class TestModelRegistry:
 
 # ── ProviderRegistry 测试 ────────────────────────────────
 
+
 class TestProviderRegistry:
     def test_get_configured_providers_refreshes_openai_models(self, monkeypatch):
         import xenon.repl.provider_registry as provider_registry
 
         # C-2: 清掉所有可能的 env 干扰，确保只测 yaml 路径
         for env_name in (
-            "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
-            "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "GOOGLE_API_KEY",
-            "ZHIPU_API_KEY", "QWEN_API_KEY", "MOONSHOT_API_KEY",
-            "BAICHUAN_API_KEY", "MINIMAX_API_KEY", "OLLAMA_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "OPENAI_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "GOOGLE_API_KEY",
+            "ZHIPU_API_KEY",
+            "QWEN_API_KEY",
+            "MOONSHOT_API_KEY",
+            "BAICHUAN_API_KEY",
+            "MINIMAX_API_KEY",
+            "OLLAMA_API_KEY",
             "XIAOMI_API_KEY",
         ):
             monkeypatch.delenv(env_name, raising=False)
@@ -310,8 +325,14 @@ class TestProviderRegistry:
             calls.append((url, headers))
             return FakeResponse()
 
-        monkeypatch.setattr(provider_registry, "load_credentials", lambda: {"openai": "sk-test"})
-        monkeypatch.setattr(provider_registry, "_create_http_client", _make_mock_client(fake_get))
+        monkeypatch.setattr(
+            provider_registry, "load_credentials", lambda: {"openai": "sk-test"}
+        )
+        monkeypatch.setattr(
+            provider_registry, "_create_http_client", _make_mock_client(fake_get)
+        )
+        monkeypatch.setattr(provider_registry, "_load_model_cache", lambda: {})
+        monkeypatch.setattr(provider_registry, "_save_model_cache", lambda x: None)
 
         configured = provider_registry.get_configured_providers()
         openai = next(p for p in configured if p.key == "openai")
@@ -330,10 +351,17 @@ class TestProviderRegistry:
 
         # C-2: 清掉所有可能的 env 干扰
         for env_name in (
-            "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
-            "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "GOOGLE_API_KEY",
-            "ZHIPU_API_KEY", "QWEN_API_KEY", "MOONSHOT_API_KEY",
-            "BAICHUAN_API_KEY", "MINIMAX_API_KEY", "OLLAMA_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "OPENAI_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "GOOGLE_API_KEY",
+            "ZHIPU_API_KEY",
+            "QWEN_API_KEY",
+            "MOONSHOT_API_KEY",
+            "BAICHUAN_API_KEY",
+            "MINIMAX_API_KEY",
+            "OLLAMA_API_KEY",
             "XIAOMI_API_KEY",
         ):
             monkeypatch.delenv(env_name, raising=False)
@@ -343,13 +371,15 @@ class TestProviderRegistry:
                 pass
 
             def json(self):
-                return {"data": [
-                    {"id": "deepseek-chat"},
-                    {"id": "deepseek-v4-pro"},
-                    {"id": "deepseek-reasoner"},
-                    {"id": "deepseek-v4-flash"},
-                    {"id": "deepseek-coder"},
-                ]}
+                return {
+                    "data": [
+                        {"id": "deepseek-chat"},
+                        {"id": "deepseek-v4-pro"},
+                        {"id": "deepseek-reasoner"},
+                        {"id": "deepseek-v4-flash"},
+                        {"id": "deepseek-coder"},
+                    ]
+                }
 
         calls = []
 
@@ -357,8 +387,14 @@ class TestProviderRegistry:
             calls.append((url, headers))
             return FakeResponse()
 
-        monkeypatch.setattr(provider_registry, "load_credentials", lambda: {"deepseek": "sk-test"})
-        monkeypatch.setattr(provider_registry, "_create_http_client", _make_mock_client(fake_get))
+        monkeypatch.setattr(
+            provider_registry, "load_credentials", lambda: {"deepseek": "sk-test"}
+        )
+        monkeypatch.setattr(
+            provider_registry, "_create_http_client", _make_mock_client(fake_get)
+        )
+        monkeypatch.setattr(provider_registry, "_load_model_cache", lambda: {})
+        monkeypatch.setattr(provider_registry, "_save_model_cache", lambda x: None)
 
         configured = provider_registry.get_configured_providers()
         deepseek = next(p for p in configured if p.key == "deepseek")
@@ -373,10 +409,17 @@ class TestProviderRegistry:
 
         # C-2: 清掉所有可能的 env 干扰
         for env_name in (
-            "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
-            "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "GOOGLE_API_KEY",
-            "ZHIPU_API_KEY", "QWEN_API_KEY", "MOONSHOT_API_KEY",
-            "BAICHUAN_API_KEY", "MINIMAX_API_KEY", "OLLAMA_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "OPENAI_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "GOOGLE_API_KEY",
+            "ZHIPU_API_KEY",
+            "QWEN_API_KEY",
+            "MOONSHOT_API_KEY",
+            "BAICHUAN_API_KEY",
+            "MINIMAX_API_KEY",
+            "OLLAMA_API_KEY",
             "XIAOMI_API_KEY",
         ):
             monkeypatch.delenv(env_name, raising=False)
@@ -384,15 +427,22 @@ class TestProviderRegistry:
         def fake_get(url, headers):
             raise provider_registry.httpx.ConnectError("network down")
 
-        monkeypatch.setattr(provider_registry, "load_credentials", lambda: {"openai": "sk-test"})
-        monkeypatch.setattr(provider_registry, "_create_http_client", _make_mock_client(fake_get))
+        monkeypatch.setattr(
+            provider_registry, "load_credentials", lambda: {"openai": "sk-test"}
+        )
+        monkeypatch.setattr(
+            provider_registry, "_create_http_client", _make_mock_client(fake_get)
+        )
+        monkeypatch.setattr(provider_registry, "_load_model_cache", lambda: {})
 
         configured = provider_registry.get_configured_providers()
         openai = next(p for p in configured if p.key == "openai")
 
         assert openai.models == []
 
-    def test_fetch_provider_models_uses_anthropic_headers_and_pagination(self, monkeypatch):
+    def test_fetch_provider_models_uses_anthropic_headers_and_pagination(
+        self, monkeypatch
+    ):
         import xenon.repl.provider_registry as provider_registry
 
         class FakeResponse:
@@ -408,15 +458,24 @@ class TestProviderRegistry:
         payloads = [
             {
                 "data": [
-                    {"id": "claude-4.5-sonnet-20260601", "created_at": "2026-06-01T00:00:00Z"},
-                    {"id": "claude-sonnet-4-20250514", "created_at": "2025-05-14T00:00:00Z"},
+                    {
+                        "id": "claude-4.5-sonnet-20260601",
+                        "created_at": "2026-06-01T00:00:00Z",
+                    },
+                    {
+                        "id": "claude-sonnet-4-20250514",
+                        "created_at": "2025-05-14T00:00:00Z",
+                    },
                 ],
                 "has_more": True,
                 "last_id": "claude-sonnet-4-20250514",
             },
             {
                 "data": [
-                    {"id": "claude-3-5-sonnet-20241022", "created_at": "2024-10-22T00:00:00Z"},
+                    {
+                        "id": "claude-3-5-sonnet-20241022",
+                        "created_at": "2024-10-22T00:00:00Z",
+                    },
                 ],
                 "has_more": False,
             },
@@ -427,11 +486,16 @@ class TestProviderRegistry:
             calls.append((url, headers))
             return FakeResponse(payloads[len(calls) - 1])
 
-        monkeypatch.setattr(provider_registry, "_create_http_client", _make_mock_client(fake_get))
+        monkeypatch.setattr(
+            provider_registry, "_create_http_client", _make_mock_client(fake_get)
+        )
+        monkeypatch.setattr(provider_registry, "_load_model_cache", lambda: {})
+        monkeypatch.setattr(provider_registry, "_save_model_cache", lambda x: None)
 
         models = provider_registry.fetch_provider_models(
             provider_registry.PROVIDERS["anthropic"],
             "sk-ant-test",
+            use_cache=False,
         )
 
         assert models == [
@@ -440,12 +504,16 @@ class TestProviderRegistry:
             "claude-3-5-sonnet-20241022",
         ]
         assert calls[0][0] == "https://api.anthropic.com/v1/models"
-        assert calls[1][0] == "https://api.anthropic.com/v1/models?after_id=claude-sonnet-4-20250514"
+        assert (
+            calls[1][0]
+            == "https://api.anthropic.com/v1/models?after_id=claude-sonnet-4-20250514"
+        )
         assert calls[0][1]["x-api-key"] == "sk-ant-test"
         assert calls[0][1]["anthropic-version"] == "2023-06-01"
 
 
 # ── Command Dispatch 测试 ────────────────────────────────
+
 
 class TestCommands:
     def test_help_command(self):
@@ -453,7 +521,9 @@ class TestCommands:
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
-        result = dispatch_command("/help", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+        result = dispatch_command(
+            "/help", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+        )
         assert "可用命令" in result
         assert "/set_model" in result
 
@@ -463,8 +533,11 @@ class TestCommands:
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
         result = dispatch_command(
-            "/set_model", "gpt4 openai/gpt-4o",
-            registry=reg, ctx_mgr=ctx_mgr, session_state={},
+            "/set_model",
+            "gpt4 openai/gpt-4o",
+            registry=reg,
+            ctx_mgr=ctx_mgr,
+            session_state={},
         )
         assert "✅" in result
         assert "gpt4" in reg.models
@@ -476,8 +549,11 @@ class TestCommands:
         ctx_mgr = ContextManager()
         # 无参数 → 要么提示先配置，要么显示交互菜单（取决于环境是否有已配置的厂商）
         result = dispatch_command(
-            "/set_model", "",
-            registry=reg, ctx_mgr=ctx_mgr, session_state={},
+            "/set_model",
+            "",
+            registry=reg,
+            ctx_mgr=ctx_mgr,
+            session_state={},
         )
         # 结果可能是提示配置，也可能是交互菜单的输出
         assert isinstance(result, str)
@@ -497,9 +573,13 @@ class TestCommands:
             models=[],
             api_key="sk-test",
         )
-        monkeypatch.setattr(provider_registry, "get_configured_providers", lambda: [provider])
+        monkeypatch.setattr(
+            provider_registry, "get_configured_providers", lambda: [provider]
+        )
 
-        result = dispatch_command("/set_model", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+        result = dispatch_command(
+            "/set_model", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+        )
 
         assert "未能实时获取任何模型" in result
 
@@ -508,7 +588,9 @@ class TestCommands:
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
-        result = dispatch_command("/models", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+        result = dispatch_command(
+            "/models", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+        )
         assert "暂无" in result
 
     def test_models_command_with_models(self):
@@ -517,7 +599,9 @@ class TestCommands:
         reg = ModelRegistry()
         reg.add_model("openai/gpt-4o", "gpt4")
         ctx_mgr = ContextManager()
-        result = dispatch_command("/models", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+        result = dispatch_command(
+            "/models", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+        )
         assert "gpt4" in result
 
     def test_mode_command(self):
@@ -525,7 +609,9 @@ class TestCommands:
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
-        result = dispatch_command("/mode", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+        result = dispatch_command(
+            "/mode", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+        )
         assert "plan-execute" in result
 
     def test_mode_switch(self):
@@ -534,8 +620,11 @@ class TestCommands:
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
         result = dispatch_command(
-            "/mode", "react",
-            registry=reg, ctx_mgr=ctx_mgr, session_state={},
+            "/mode",
+            "react",
+            registry=reg,
+            ctx_mgr=ctx_mgr,
+            session_state={},
         )
         assert "✅" in result
         assert reg.current_mode == "react"
@@ -546,7 +635,9 @@ class TestCommands:
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
         ctx_mgr.add_user_message("test")
-        result = dispatch_command("/context", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+        result = dispatch_command(
+            "/context", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+        )
         assert "消息总数" in result
 
     def test_compact_command(self):
@@ -555,7 +646,9 @@ class TestCommands:
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
         ctx_mgr.add_user_message("test message")
-        result = dispatch_command("/compact", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+        result = dispatch_command(
+            "/compact", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+        )
         assert "✅" in result
 
     def test_undo_command(self):
@@ -565,7 +658,9 @@ class TestCommands:
         ctx_mgr = ContextManager()
         ctx_mgr.save_snapshot()
         ctx_mgr.add_user_message("msg")
-        result = dispatch_command("/undo", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+        result = dispatch_command(
+            "/undo", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+        )
         assert "✅" in result
 
     def test_undo_command_empty(self):
@@ -573,7 +668,9 @@ class TestCommands:
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
-        result = dispatch_command("/undo", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+        result = dispatch_command(
+            "/undo", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+        )
         assert "没有" in result
 
     def test_clear_command(self):
@@ -582,7 +679,9 @@ class TestCommands:
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
         ctx_mgr.add_user_message("test")
-        result = dispatch_command("/clear", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+        result = dispatch_command(
+            "/clear", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+        )
         assert "✅" in result
         assert len(ctx_mgr.history) == 0
 
@@ -591,7 +690,9 @@ class TestCommands:
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
-        result = dispatch_command("/nonexistent", "", registry=reg, ctx_mgr=ctx_mgr, session_state={})
+        result = dispatch_command(
+            "/nonexistent", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
+        )
         assert "未知命令" in result
 
     def test_set_role_command(self):
@@ -602,19 +703,24 @@ class TestCommands:
         reg.add_model("anthropic/claude-3-5-sonnet", "claude")
         ctx_mgr = ContextManager()
         result = dispatch_command(
-            "/set_role", "planner claude gpt4",
-            registry=reg, ctx_mgr=ctx_mgr, session_state={},
+            "/set_role",
+            "planner claude gpt4",
+            registry=reg,
+            ctx_mgr=ctx_mgr,
+            session_state={},
         )
         assert "✅" in result
 
 
 # ── Tool Detection 测试 ──────────────────────────────────
 
+
 class TestToolDetection:
     """测试 direct 模式自动工具委派检测。"""
 
     def test_file_write_chinese(self):
         from xenon.repl.repl import REPL
+
         assert REPL._detect_tool_need("帮我创建一个 hello.py 文件") is True
         assert REPL._detect_tool_need("写入文件到 config.yaml") is True
         assert REPL._detect_tool_need("保存这个文件") is True
@@ -622,40 +728,47 @@ class TestToolDetection:
 
     def test_file_write_english(self):
         from xenon.repl.repl import REPL
+
         assert REPL._detect_tool_need("write a file to hello.py") is True
         assert REPL._detect_tool_need("create a new config file") is True
         assert REPL._detect_tool_need("save this to disk") is True
 
     def test_file_read_chinese(self):
         from xenon.repl.repl import REPL
+
         assert REPL._detect_tool_need("读取 config.yaml 文件") is True
         assert REPL._detect_tool_need("查看 main.py 的内容") is True
         assert REPL._detect_tool_need("打开这个文件看看") is True
 
     def test_file_read_english(self):
         from xenon.repl.repl import REPL
+
         assert REPL._detect_tool_need("read the config file") is True
         assert REPL._detect_tool_need("show me the content of main.py") is True
 
     def test_file_edit_chinese(self):
         from xenon.repl.repl import REPL
+
         assert REPL._detect_tool_need("修改 main.py 文件中的函数") is True
         assert REPL._detect_tool_need("编辑 config.yaml 的配置") is True
         assert REPL._detect_tool_need("替换文件中的 TODO") is True
 
     def test_file_edit_english(self):
         from xenon.repl.repl import REPL
+
         assert REPL._detect_tool_need("edit the main.py file") is True
         assert REPL._detect_tool_need("modify the config.yaml") is True
 
     def test_command_execution(self):
         from xenon.repl.repl import REPL
+
         assert REPL._detect_tool_need("执行命令 python main.py") is True
         assert REPL._detect_tool_need("运行 pytest 测试") is True
         assert REPL._detect_tool_need("run the test suite") is True
 
     def test_git_operations(self):
         from xenon.repl.repl import REPL
+
         assert REPL._detect_tool_need("git commit -m 'fix'") is True
         assert REPL._detect_tool_need("git push origin main") is True
         assert REPL._detect_tool_need("提交代码到 git") is True
@@ -663,17 +776,20 @@ class TestToolDetection:
 
     def test_search(self):
         from xenon.repl.repl import REPL
+
         assert REPL._detect_tool_need("搜索文件中的 TODO") is True
         assert REPL._detect_tool_need("find all Python files") is True
         assert REPL._detect_tool_need("grep for error messages") is True
 
     def test_web_fetch(self):
         from xenon.repl.repl import REPL
+
         assert REPL._detect_tool_need("抓取这个网页的内容") is True
         assert REPL._detect_tool_need("fetch the page at https://example.com") is True
 
     def test_file_path_pattern(self):
         from xenon.repl.repl import REPL
+
         assert REPL._detect_tool_need("看看 src/main.py 怎么写的") is True
         assert REPL._detect_tool_need("打开 ./config.yaml") is True
         assert REPL._detect_tool_need("检查 tests/test_tools.py") is True
@@ -681,12 +797,14 @@ class TestToolDetection:
 
     def test_list_files(self):
         from xenon.repl.repl import REPL
+
         assert REPL._detect_tool_need("列出当前目录的文件") is True
         assert REPL._detect_tool_need("查看文件夹内容") is True
         assert REPL._detect_tool_need("list all files") is True
 
     def test_no_tool_needed(self):
         from xenon.repl.repl import REPL
+
         assert REPL._detect_tool_need("什么是快速排序？") is False
         assert REPL._detect_tool_need("解释一下 Python 的装饰器") is False
         assert REPL._detect_tool_need("帮我分析这段代码的逻辑") is False
@@ -699,13 +817,13 @@ class TestToolDetection:
 
         response = (
             "好的，先看实现："
-            '<｜｜DSML｜｜tool_calls>'
+            "<｜｜DSML｜｜tool_calls>"
             '<｜｜DSML｜｜invoke name="read_file">'
             '<｜｜DSML｜｜parameter name="file_path" string="true">'
-            '/work/internal/provider'
-            '</｜｜DSML｜｜parameter>'
-            '</｜｜DSML｜｜invoke>'
-            '</｜｜DSML｜｜tool_calls>'
+            "/work/internal/provider"
+            "</｜｜DSML｜｜parameter>"
+            "</｜｜DSML｜｜invoke>"
+            "</｜｜DSML｜｜tool_calls>"
         )
 
         assert REPL._detect_tool_call_json(response) is True
@@ -719,12 +837,12 @@ class TestToolDetection:
         repl = REPL(registry=registry, streaming=False)
         repl.ctx_mgr.add_user_message("讲解这里的接口驱动模式")
         dsml = (
-            '<｜｜DSML｜｜tool_calls>'
+            "<｜｜DSML｜｜tool_calls>"
             '<｜｜DSML｜｜invoke name="read_file">'
             '<｜｜DSML｜｜parameter name="file_path" string="true">README.md'
-            '</｜｜DSML｜｜parameter>'
-            '</｜｜DSML｜｜invoke>'
-            '</｜｜DSML｜｜tool_calls>'
+            "</｜｜DSML｜｜parameter>"
+            "</｜｜DSML｜｜invoke>"
+            "</｜｜DSML｜｜tool_calls>"
         )
         rendered: list[str] = []
         rerouted: list[tuple[str, list[str]]] = []
@@ -766,11 +884,14 @@ class TestToolDetection:
         ]
         for text in cases:
             assert detect_intent(text) == "query", f"意图识别失败: {text}"
-            assert REPL._detect_tool_need(text, intent="query") is True, f"query 应触发工具: {text}"
+            assert REPL._detect_tool_need(text, intent="query") is True, (
+                f"query 应触发工具: {text}"
+            )
 
     def test_non_query_intent_not_auto_triggered(self):
         """非 query 意图（chat/explain）且无编程/文件/命令关键词时不触发工具。"""
         from xenon.repl.repl import REPL
+
         # chat 意图 + 无工具关键词 → False
         assert REPL._detect_tool_need("你好", intent="chat") is False
         assert REPL._detect_tool_need("谢谢", intent="chat") is False
@@ -779,13 +900,16 @@ class TestToolDetection:
         # 无 intent 时，天气等实时查询不触发（无天气正则，避免误判）
         assert REPL._detect_tool_need("今天天气怎么样", intent=None) is False
 
-    @pytest.mark.parametrize("text", [
-        "写一个 Python 爬虫",                          # 缺"帮我/请/给"前缀
-        "用 JS 写一个待办事项应用",                    # 缺前缀 + 应用不在触发词
-        "我想写一个 Python 脚本查询天气",              # "我想"不在"帮我/请/给"内
-        "写一段 Go 代码实现 HTTP 服务",                # 缺前缀
-        "用 Rust 写一个命令行工具",                    # 缺前缀
-    ])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "写一个 Python 爬虫",  # 缺"帮我/请/给"前缀
+            "用 JS 写一个待办事项应用",  # 缺前缀 + 应用不在触发词
+            "我想写一个 Python 脚本查询天气",  # "我想"不在"帮我/请/给"内
+            "写一段 Go 代码实现 HTTP 服务",  # 缺前缀
+            "用 Rust 写一个命令行工具",  # 缺前缀
+        ],
+    )
     def test_write_code_intent_defaults_to_chat_output(self, text):
         """代码生成不等于写盘授权；未指定副作用时应走 Direct。"""
         from xenon.repl.repl import REPL
@@ -799,6 +923,7 @@ class TestToolDetection:
 
 
 # ── _handle_chat 空输入防护测试 ──────────────────────────
+
 
 class TestHandleChatEmptyInput:
     """P2-修复2（B-3）：_handle_chat 入口空输入防护。
@@ -884,6 +1009,7 @@ class TestHandleChatEmptyInput:
 
 # ── detect_intent 条件句 + 实时天气关键词 ──────────────────
 
+
 class TestDetectIntentConditionalQuery:
     """P3-修复3（B-2）：query trigger 补条件句与实时天气关键词。
 
@@ -893,17 +1019,20 @@ class TestDetectIntentConditionalQuery:
     3. 简短问句「今天天气」等
     """
 
-    @pytest.mark.parametrize("text", [
-        "如果今天下雨就告诉我",          # 条件句 + 实时天气
-        "要是下雪就提醒我",              # 条件句 + 提醒
-        "假如明天晴天就告诉我",          # 条件句 + 实时天气
-        "万一下午下暴雨就告诉我",        # 条件句 + 实时天气
-        "今天会不会下雨",                # 纯问句 + 实时天气
-        "今天天气",                      # 简短问句 + 实时天气
-        "现在天气怎么样",                # 实时问句
-        "目前气温",                      # 实时问句
-        "今天多云",                      # 实时天气
-    ])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "如果今天下雨就告诉我",  # 条件句 + 实时天气
+            "要是下雪就提醒我",  # 条件句 + 提醒
+            "假如明天晴天就告诉我",  # 条件句 + 实时天气
+            "万一下午下暴雨就告诉我",  # 条件句 + 实时天气
+            "今天会不会下雨",  # 纯问句 + 实时天气
+            "今天天气",  # 简短问句 + 实时天气
+            "现在天气怎么样",  # 实时问句
+            "目前气温",  # 实时问句
+            "今天多云",  # 实时天气
+        ],
+    )
     def test_conditional_or_realtime_weather_detected_as_query(self, text):
         """条件句 / 实时天气关键词输入应识别为 query 意图。"""
         from xenon.repl.prompt_optimizer import detect_intent
@@ -915,6 +1044,7 @@ class TestDetectIntentConditionalQuery:
 
 # ── chat 模板不污染 user content ──────────────────────────
 
+
 class TestChatTemplateNoPollution:
     """P3-修复4（B-4）：chat 模板不应内联指令到 user content。
 
@@ -923,13 +1053,16 @@ class TestChatTemplateNoPollution:
     注入）重复，且污染 user 消息发到 LLM。
     """
 
-    @pytest.mark.parametrize("text", [
-        "你好",
-        "hi",
-        "谢谢",
-        "再见",
-        "早上好",
-    ])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "你好",
+            "hi",
+            "谢谢",
+            "再见",
+            "早上好",
+        ],
+    )
     def test_chat_intent_optimize_returns_original_text(self, text):
         """optimize_prompt 对 chat 类输入应返回原文本，不追加指令。"""
         from xenon.repl.prompt_optimizer import optimize_prompt
@@ -957,6 +1090,7 @@ class TestChatTemplateNoPollution:
 
 
 # ── ReAct 异常占位 assistant 消息 ──────────────────────────
+
 
 class TestReactExceptionAssistantPlaceholder:
     """P2-修复5 (观察项-2)：ReAct 引擎异常时占位 assistant 消息防 history 孤立。
@@ -1023,9 +1157,11 @@ class TestReactExceptionAssistantPlaceholder:
 
         repl = self._build_repl()
         repl.ctx_mgr.add_user_message("user msg to be cleaned")
+
         # Mock add_assistant_message 让其抛异常，触发 fallback trim_last_user
         def failing_add(*args, **kwargs):
             raise RuntimeError("add failed")
+
         monkeypatch.setattr(repl.ctx_mgr, "add_assistant_message", failing_add)
 
         repl._run_react_engine("user msg to be cleaned", ["gpt4"])
@@ -1037,6 +1173,7 @@ class TestReactExceptionAssistantPlaceholder:
 
 
 # ── file_claim/denial 递归 ReAct 异常占位 ──────────────────
+
 
 class TestFileClaimDenialRecursiveReact:
     """P2-修复6 (观察项-1)：file_claim/denial 触发 trim + 递归 ReAct 失败时占位 assistant。
@@ -1071,9 +1208,11 @@ class TestFileClaimDenialRecursiveReact:
         验证修复6 的外层 try/except 兜底机制生效。
         """
         repl = self._build_repl_with_history(monkeypatch)
+
         # Mock _run_react_engine 让其抛异常（绕过修复5 的内部 catch）
         def failing_react(user_input, model_ids):
             raise RuntimeError("simulated recursive failure")
+
         monkeypatch.setattr(repl, "_run_react_engine", failing_react)
 
         # 模拟 file_claim 路径：trim_last_assistant + _run_react_engine（外层 try catch）
@@ -1083,7 +1222,8 @@ class TestFileClaimDenialRecursiveReact:
             repl._run_react_engine("帮我创建 hello.py", ["gpt4"])
         except Exception as e:
             repl.ctx_mgr.add_assistant_message(
-                f"[错误] ReAct 重试失败: {e}", model_used="gpt4",
+                f"[错误] ReAct 重试失败: {e}",
+                model_used="gpt4",
             )
 
         # 验证：history 有 user + [错误] assistant 成对
@@ -1092,7 +1232,9 @@ class TestFileClaimDenialRecursiveReact:
         assert history[0].role == "user"
         assert history[0].content == "帮我创建 hello.py"
         # 找到 [错误] 标记的 assistant 消息
-        error_msgs = [m for m in history if m.role == "assistant" and "[错误]" in m.content]
+        error_msgs = [
+            m for m in history if m.role == "assistant" and "[错误]" in m.content
+        ]
         assert error_msgs, f"应有 [错误] 占位 assistant 消息: {history}"
         assert "ReAct 重试失败" in error_msgs[-1].content
 
@@ -1117,7 +1259,9 @@ class TestFileClaimDenialRecursiveReact:
         # 验证：修复5 内部的占位消息生效
         history = repl.ctx_mgr.history
         # 找到 [错误] 标记
-        error_msgs = [m for m in history if m.role == "assistant" and "[错误]" in m.content]
+        error_msgs = [
+            m for m in history if m.role == "assistant" and "[错误]" in m.content
+        ]
         assert error_msgs, f"应有修复5 的 [错误] 占位: {history}"
         # 是 ReAct 引擎执行失败，不是 ReAct 重试失败
         assert "ReAct 引擎执行失败" in error_msgs[-1].content
@@ -1138,10 +1282,12 @@ def test_direct_failure_closes_turn_before_next_user_message(monkeypatch):
         streaming=False,
         optimize_prompts=False,
     )
-    responses = iter([
-        "我无法直接访问这个仓库。",
-        "你好！",
-    ])
+    responses = iter(
+        [
+            "我无法直接访问这个仓库。",
+            "你好！",
+        ]
+    )
     seen_messages = []
 
     def fake_response(model_id, messages):
@@ -1153,7 +1299,8 @@ def test_direct_failure_closes_turn_before_next_user_message(monkeypatch):
 
     repl._handle_chat("解释这个项目")
     assert [turn.role for turn in repl.ctx_mgr.history[-2:]] == [
-        "user", "assistant",
+        "user",
+        "assistant",
     ]
     assert "[错误] 所有模型均调用失败" in repl.ctx_mgr.history[-1].content
 
@@ -1162,7 +1309,9 @@ def test_direct_failure_closes_turn_before_next_user_message(monkeypatch):
     assert repl.ctx_mgr.history[-1].role == "assistant"
     assert repl.ctx_mgr.history[-1].content == "你好！"
     assert [message["role"] for message in seen_messages[1][-3:]] == [
-        "user", "assistant", "user",
+        "user",
+        "assistant",
+        "user",
     ]
 
 
@@ -1202,10 +1351,10 @@ class TestReadInputUnixPasteMode:
         # 拼接：paste start + 内容 + paste end（不含 \\r 提交）
         data = (
             b"\x1b[200~"  # paste start
-            b"AB"          # 2 ASCII
-            b"\x1b[31m"   # ESC + [31m（粘贴内容中的 ANSI）
+            b"AB"  # 2 ASCII
+            b"\x1b[31m"  # ESC + [31m（粘贴内容中的 ANSI）
             b"CD"
-            b"\x1b[0m"     # ESC + [0m
+            b"\x1b[0m"  # ESC + [0m
             b"\x1b[201~"  # paste end
         )
 
@@ -1217,7 +1366,7 @@ class TestReadInputUnixPasteMode:
         lines = []
         i = 0
         while i < len(data):
-            ch = data[i:i+1].decode("utf-8", errors="replace")
+            ch = data[i : i + 1].decode("utf-8", errors="replace")
             i += 1
 
             # 模拟 repl.py 的累积器（含 C-1 修复双守卫）

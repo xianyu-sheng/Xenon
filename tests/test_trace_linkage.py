@@ -65,9 +65,9 @@ class TestTraceContextFilter:
             logging.getLogger("xenon.nodes.tool_executor"),
             logging.getLogger("xenon.engine.base"),
         ):
-            assert any(
-                isinstance(f, TraceContextFilter) for f in logger.filters
-            ), f"{logger.name} 未挂 TraceContextFilter"
+            assert any(isinstance(f, TraceContextFilter) for f in logger.filters), (
+                f"{logger.name} 未挂 TraceContextFilter"
+            )
 
 
 class TestToolExecutorTracePrefix:
@@ -92,7 +92,8 @@ class TestToolExecutorTracePrefix:
             result = ex.execute(
                 "edit_file",
                 {"file_path": str(target), "old_text": "x = 1", "new_text": "x = 2"},
-                ctx, tracker=ToolExecutionTracker(),
+                ctx,
+                tracker=ToolExecutionTracker(),
             )
             # 自动补读后应成功；无论成败，日志必须带 [run1234/ 前缀
             log_text = buf.getvalue()

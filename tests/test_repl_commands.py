@@ -3,6 +3,7 @@
 测试所有关键的斜杠命令功能
 注意：Xenon 使用单斜杠 / 作为命令前缀
 """
+
 import pytest
 
 
@@ -15,9 +16,18 @@ class TestSlashCommands:
 
         # 验证关键命令已注册
         essential_commands = [
-            "/help", "/mode", "/models", "/set_model", "/tools",
-            "/status", "/clear", "/save", "/resume", "/setup",
-            "/exit", "/quit"
+            "/help",
+            "/mode",
+            "/models",
+            "/set_model",
+            "/tools",
+            "/status",
+            "/clear",
+            "/save",
+            "/resume",
+            "/setup",
+            "/exit",
+            "/quit",
         ]
 
         for cmd in essential_commands:
@@ -26,6 +36,7 @@ class TestSlashCommands:
     def test_all_commands_registered(self):
         """测试所有命令都已注册"""
         from xenon.repl.commands import COMMANDS
+
         # Xenon 有约 49 个命令
         assert len(COMMANDS) >= 45, f"应该有至少 45 个命令，实际有 {len(COMMANDS)} 个"
 
@@ -61,19 +72,43 @@ class TestCommandList:
         """列出所有命令用于文档"""
         from xenon.repl.commands import COMMANDS
 
-        print("\n" + "="*70)
+        print("\n" + "=" * 70)
         print("Xenon 所有斜杠命令列表 (单斜杠 /)")
-        print("="*70)
+        print("=" * 70)
 
         categories = {
-            "模型管理": ["/mode", "/models", "/set_model", "/set_profile",
-                       "/set_role", "/pool", "/provider", "/import_models",
-                       "/reload_models", "/remove_model"],
-            "会话管理": ["/save", "/resume", "/clear", "/history", "/sessions",
-                       "/load", "/compact", "/undo"],
+            "模型管理": [
+                "/mode",
+                "/models",
+                "/set_model",
+                "/set_profile",
+                "/set_role",
+                "/pool",
+                "/provider",
+                "/import_models",
+                "/reload_models",
+                "/remove_model",
+            ],
+            "会话管理": [
+                "/save",
+                "/resume",
+                "/clear",
+                "/history",
+                "/sessions",
+                "/load",
+                "/compact",
+                "/undo",
+            ],
             "工具管理": ["/tools", "/setup", "/mcp", "/library"],
             "技能管理": ["/skill", "/skill-discover", "/skill-install", "/shortcut"],
-            "系统信息": ["/help", "/status", "/cost", "/cache", "/fix-cache", "/context"],
+            "系统信息": [
+                "/help",
+                "/status",
+                "/cost",
+                "/cache",
+                "/fix-cache",
+                "/context",
+            ],
             "运行控制": ["/run", "/code", "/ask", "/sub-agent"],
             "显示选项": ["/optimize", "/stream", "/thinking", "/verbose", "/vision"],
             "配置管理": ["/config", "/project", "/permissions", "/memory"],
@@ -85,7 +120,7 @@ class TestCommandList:
             print(f"\n{category}:")
             for cmd in commands:
                 if cmd in COMMANDS:
-                    desc = COMMANDS[cmd].get('description', '')
+                    desc = COMMANDS[cmd].get("description", "")
                     print(f"  ✓ {cmd:20} - {desc[:40]}")
                     found_count += 1
                 else:
@@ -100,14 +135,14 @@ class TestCommandList:
         if uncategorized:
             print("\n未分类命令:")
             for cmd in sorted(uncategorized):
-                desc = COMMANDS[cmd].get('description', '')
+                desc = COMMANDS[cmd].get("description", "")
                 print(f"  ? {cmd:20} - {desc[:40]}")
 
-        print("\n" + "="*70)
+        print("\n" + "=" * 70)
         print(f"总计: {len(COMMANDS)} 个注册命令")
         print(f"已分类: {found_count} 个")
         print(f"未分类: {len(uncategorized)} 个")
-        print("="*70)
+        print("=" * 70)
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ from xenon.utils.atomic_write import atomic_write_text
 from xenon.utils.llm_client import _create_http_client
 from xenon.repl.system_config import get_config
 
+
 def _get_credentials_path() -> Path:
     """获取凭证文件路径（支持配置文件和环境变量）。
 
@@ -46,11 +47,13 @@ logger = logging.getLogger(__name__)
 MODEL_FETCH_ERRORS: dict[str, str] = {}
 _cache_lock = threading.Lock()  # Thread-safe cache operations
 
-_DEEPSEEK_RETIRED_MODEL_NAMES = frozenset({
-    "deepseek-chat",
-    "deepseek-reasoner",
-    "deepseek-coder",
-})
+_DEEPSEEK_RETIRED_MODEL_NAMES = frozenset(
+    {
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "deepseek-coder",
+    }
+)
 
 ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 ARK_FALLBACK_MODELS = [
@@ -65,14 +68,15 @@ MODEL_METADATA: dict[tuple[str, str], dict[str, Any]] = {}
 @dataclass
 class ProviderInfo:
     """厂商预设信息。"""
-    name: str               # 显示名
-    key: str                # 内部标识
-    base_url: str           # API 地址
-    env_key: str            # 环境变量名
-    models: list[str]       # 离线兜底模型列表（短名）
-    api_key: str = ""       # 用户填入的 key
+
+    name: str  # 显示名
+    key: str  # 内部标识
+    base_url: str  # API 地址
+    env_key: str  # 环境变量名
+    models: list[str]  # 离线兜底模型列表（短名）
+    api_key: str = ""  # 用户填入的 key
     model_list_path: str = "models"  # 支持 OpenAI 兼容 /models 时填入
-    model_error: str = ""    # 实时模型列表获取失败原因
+    model_error: str = ""  # 实时模型列表获取失败原因
 
 
 # ── 预设厂商 ──────────────────────────────────────────────
@@ -83,14 +87,26 @@ PROVIDERS: dict[str, ProviderInfo] = {
         key="openai",
         base_url="https://api.openai.com/v1",
         env_key="OPENAI_API_KEY",
-        models=["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo", "o1-preview", "o1-mini"],
+        models=[
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4-turbo",
+            "gpt-3.5-turbo",
+            "o1-preview",
+            "o1-mini",
+        ],
     ),
     "anthropic": ProviderInfo(
         name="Anthropic",
         key="anthropic",
         base_url="https://api.anthropic.com",
         env_key="ANTHROPIC_API_KEY",
-        models=["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
+        models=[
+            "claude-sonnet-4-20250514",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-20241022",
+            "claude-3-opus-20240229",
+        ],
         model_list_path="https://api.anthropic.com/v1/models",
     ),
     "deepseek": ProviderInfo(
@@ -113,7 +129,12 @@ PROVIDERS: dict[str, ProviderInfo] = {
         key="google",
         base_url="https://generativelanguage.googleapis.com/v1beta/openai",
         env_key="GOOGLE_API_KEY",
-        models=["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-pro", "gemini-1.5-flash"],
+        models=[
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-pro",
+            "gemini-1.5-flash",
+        ],
     ),
     "zhipu": ProviderInfo(
         name="智谱 GLM",
@@ -155,7 +176,14 @@ PROVIDERS: dict[str, ProviderInfo] = {
         key="ollama",
         base_url="http://localhost:11434/v1",
         env_key="OLLAMA_API_KEY",
-        models=["llama3", "llama3.1", "codellama", "deepseek-coder-v2", "qwen2.5", "mistral"],
+        models=[
+            "llama3",
+            "llama3.1",
+            "codellama",
+            "deepseek-coder-v2",
+            "qwen2.5",
+            "mistral",
+        ],
     ),
     "xiaomi": ProviderInfo(
         name="小米 MiMo",
@@ -331,6 +359,7 @@ def get_model_metadata(model_id: str) -> dict[str, Any]:
 
 # ── 模型缓存管理 ──────────────────────────────────────────────
 
+
 def _get_cache_path() -> Path:
     """获取模型缓存文件路径。"""
     cache_dir = Path.home() / ".xenon" / "cache"
@@ -370,7 +399,9 @@ def _load_model_cache() -> dict[str, Any]:
 
             # 如果清理后有变化，异步写回（不阻塞当前加载）
             if len(cleaned_cache) != len(cache):
-                logger.debug("清理了 %d 个过期缓存条目", len(cache) - len(cleaned_cache))
+                logger.debug(
+                    "清理了 %d 个过期缓存条目", len(cache) - len(cleaned_cache)
+                )
 
             return cleaned_cache
     except Exception as e:
@@ -459,7 +490,9 @@ def clear_model_cache(provider_key: str | None = None) -> None:
             logger.info("已清除 %s 的模型缓存", provider_key)
 
 
-def fetch_provider_models(provider: ProviderInfo, api_key: str, *, use_cache: bool = True) -> list[str]:
+def fetch_provider_models(
+    provider: ProviderInfo, api_key: str, *, use_cache: bool = True
+) -> list[str]:
     """从厂商模型列表接口实时获取模型短名；失败时返回空列表。
 
     Args:
@@ -501,7 +534,9 @@ def fetch_provider_models(provider: ProviderInfo, api_key: str, *, use_cache: bo
     return models
 
 
-def _fetch_provider_models_from_network(provider: ProviderInfo, api_key: str) -> list[str]:
+def _fetch_provider_models_from_network(
+    provider: ProviderInfo, api_key: str
+) -> list[str]:
     """从网络获取厂商模型列表（不使用缓存）。"""
     MODEL_FETCH_ERRORS.pop(provider.key, None)
     models: list[str] = []
@@ -524,8 +559,14 @@ def _fetch_provider_models_from_network(provider: ProviderInfo, api_key: str) ->
                 except httpx.HTTPStatusError as e:
                     body = e.response.text.strip().replace("\n", " ")
                     detail = body[:160] if body else e.response.reason_phrase
-                    MODEL_FETCH_ERRORS[provider.key] = f"HTTP {e.response.status_code}: {detail}"
-                    logger.debug("获取 %s 实时模型列表失败: %s", provider.key, MODEL_FETCH_ERRORS[provider.key])
+                    MODEL_FETCH_ERRORS[provider.key] = (
+                        f"HTTP {e.response.status_code}: {detail}"
+                    )
+                    logger.debug(
+                        "获取 %s 实时模型列表失败: %s",
+                        provider.key,
+                        MODEL_FETCH_ERRORS[provider.key],
+                    )
                     return []
                 payload = response.json()
                 items = _extract_model_items(payload)
@@ -546,13 +587,18 @@ def _fetch_provider_models_from_network(provider: ProviderInfo, api_key: str) ->
                 after_id = str(payload["last_id"])
     except Exception as e:
         MODEL_FETCH_ERRORS[provider.key] = f"{e.__class__.__name__}: {e}"
-        logger.debug("获取 %s 实时模型列表失败: %s", provider.key, MODEL_FETCH_ERRORS[provider.key])
+        logger.debug(
+            "获取 %s 实时模型列表失败: %s",
+            provider.key,
+            MODEL_FETCH_ERRORS[provider.key],
+        )
         return []
 
     return models
 
 
 # ── 凭证管理 ──────────────────────────────────────────────
+
 
 def load_credentials(path: Path | None = None) -> dict[str, Any]:
     """从文件加载凭证，并兼容旧版 custom Ark 配置。
@@ -604,11 +650,17 @@ def _legacy_ark_api_key(data: dict[str, Any]) -> str:
         if not isinstance(config, dict):
             continue
         try:
-            hostname = (urlparse(str(config.get("base_url", ""))).hostname or "").lower()
+            hostname = (
+                urlparse(str(config.get("base_url", ""))).hostname or ""
+            ).lower()
         except ValueError:
             continue
         api_key = config.get("api_key")
-        if hostname == "ark.cn-beijing.volces.com" and isinstance(api_key, str) and api_key.strip():
+        if (
+            hostname == "ark.cn-beijing.volces.com"
+            and isinstance(api_key, str)
+            and api_key.strip()
+        ):
             candidates.append(api_key.strip())
     unique = list(dict.fromkeys(candidates))
     return unique[0] if len(unique) == 1 else ""
@@ -619,7 +671,9 @@ def save_credentials(creds: dict[str, Any], path: Path | None = None) -> Path:
     credentials_path = path or _get_credentials_path()
     credentials_path.parent.mkdir(parents=True, exist_ok=True)
     content = yaml.dump(creds, allow_unicode=True, default_flow_style=False)
-    atomic_write_text(credentials_path, content, mode=0o600)  # A9 原子写 + A10 chmod 0600
+    atomic_write_text(
+        credentials_path, content, mode=0o600
+    )  # A9 原子写 + A10 chmod 0600
     return credentials_path
 
 
@@ -655,7 +709,9 @@ def _is_official_ark_config(config: Any) -> bool:
     return hostname == "ark.cn-beijing.volces.com"
 
 
-def get_configured_providers(*, refresh_models: bool = True, use_cache: bool = True) -> list[ProviderInfo]:
+def get_configured_providers(
+    *, refresh_models: bool = True, use_cache: bool = True
+) -> list[ProviderInfo]:
     """获取已配置 API Key 的厂商列表。
 
     Args:
@@ -686,8 +742,12 @@ def get_configured_providers(*, refresh_models: bool = True, use_cache: bool = T
         else:
             # 不刷新时直接使用内置列表
             info_copy = ProviderInfo(
-                name=info.name, key=info.key, base_url=info.base_url,
-                env_key=info.env_key, models=info.models, api_key=api_key,
+                name=info.name,
+                key=info.key,
+                base_url=info.base_url,
+                env_key=info.env_key,
+                models=info.models,
+                api_key=api_key,
                 model_list_path=info.model_list_path,
                 model_error="",
             )
@@ -700,7 +760,9 @@ def get_configured_providers(*, refresh_models: bool = True, use_cache: bool = T
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交所有任务
             future_to_provider = {
-                executor.submit(fetch_provider_models, info, api_key, use_cache=use_cache): (key, info, api_key)
+                executor.submit(
+                    fetch_provider_models, info, api_key, use_cache=use_cache
+                ): (key, info, api_key)
                 for key, info, api_key in providers_to_fetch
             }
 
@@ -712,7 +774,8 @@ def get_configured_providers(*, refresh_models: bool = True, use_cache: bool = T
                     if models:
                         if key == "deepseek":
                             models = [
-                                model for model in models
+                                model
+                                for model in models
                                 if model not in _DEEPSEEK_RETIRED_MODEL_NAMES
                             ]
                         # v0.3.0+ 修复（B-3）：拉取的列表按内置 info.models 顺序重排
@@ -722,8 +785,12 @@ def get_configured_providers(*, refresh_models: bool = True, use_cache: bool = T
                     models = []
 
                 info_copy = ProviderInfo(
-                    name=info.name, key=info.key, base_url=info.base_url,
-                    env_key=info.env_key, models=models, api_key=api_key,
+                    name=info.name,
+                    key=info.key,
+                    base_url=info.base_url,
+                    env_key=info.env_key,
+                    models=models,
+                    api_key=api_key,
                     model_list_path=info.model_list_path,
                     model_error=MODEL_FETCH_ERRORS.get(key, ""),
                 )
@@ -778,9 +845,7 @@ def _resolve_api_key(
     return ""
 
 
-def _sort_models_by_priority(
-    fetched: list[str], priority: list[str]
-) -> list[str]:
+def _sort_models_by_priority(fetched: list[str], priority: list[str]) -> list[str]:
     """按内置 priority 列表顺序重排 fetched 列表。
 
     v0.3.0+ 修复（B-3）：deepseek API 返回的模型列表里
@@ -796,6 +861,7 @@ def _sort_models_by_priority(
     in_priority.sort(key=lambda m: p_idx[m])
     return in_priority + not_in_priority
 
+
 # ── 动态模型商注册 (v0.4.0) ──────────────────────────────
 
 _CUSTOM_PROVIDERS_KEY = "_custom_providers"
@@ -808,14 +874,19 @@ def register_custom_provider(name: str, base_url: str, api_key: str):
     自定义模型商存入 credentials.yaml 的 _custom_providers 段。
     """
     import re as _re
+
     key = _re.sub(r"[^a-z0-9]", "", name.lower())[:20]
     # v0.5.2: 纯中文/Unicode 名称会导致 key 为空 → model_id 变 /model 格式
     if not key:
         key = "custom"
 
     info = ProviderInfo(
-        name=name, key=key, base_url=base_url.rstrip("/"),
-        env_key="", models=[], api_key=api_key,
+        name=name,
+        key=key,
+        base_url=base_url.rstrip("/"),
+        env_key="",
+        models=[],
+        api_key=api_key,
         model_list_path="models",
     )
     models = fetch_provider_models(info, api_key)
@@ -854,8 +925,10 @@ def _save_custom_provider(info: ProviderInfo) -> None:
     """持久化自定义模型商。"""
     all_custom = _load_custom_providers()
     all_custom[info.key] = {
-        "name": info.name, "base_url": info.base_url,
-        "api_key": info.api_key, "models": info.models,
+        "name": info.name,
+        "base_url": info.base_url,
+        "api_key": info.api_key,
+        "models": info.models,
     }
     creds = _read_credentials()
     creds[_CUSTOM_PROVIDERS_KEY] = all_custom
