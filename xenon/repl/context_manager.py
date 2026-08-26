@@ -591,11 +591,11 @@ class ContextManager:
             for i in range(len(self.history) - 1, -1, -1):
                 if self.history[i].role == "assistant":
                     content = self.history.pop(i).content
-                    # Problem 1: trim 后更新 cache_epoch
-                    self._advance_cache_epoch("trim_assistant")
-                    # Problem 5: trim 后通知状态栏刷新（锁外调用，避免回调死锁）
                     break
+        # Problem 1: trim 后更新 cache_epoch（锁外调用）
         if content is not None:
+            self._advance_cache_epoch("trim_assistant")
+            # Problem 5: trim 后通知状态栏刷新
             self._notify_status_change()
         return content
 
@@ -612,11 +612,11 @@ class ContextManager:
             for i in range(len(self.history) - 1, -1, -1):
                 if self.history[i].role == "user":
                     content = self.history.pop(i).content
-                    # Problem 1: trim 后更新 cache_epoch
-                    self._advance_cache_epoch("trim_user")
                     break
+        # Problem 1: trim 后更新 cache_epoch（锁外调用）
         if content is not None:
-            # Problem 5: trim 后通知状态栏刷新（锁外调用，避免回调死锁）
+            self._advance_cache_epoch("trim_user")
+            # Problem 5: trim 后通知状态栏刷新
             self._notify_status_change()
         return content
 
@@ -705,11 +705,16 @@ class ContextManager:
         prompt+completion ≈ 当前历史占用）；无真实数据时回退各 turn 缓存的
         ``token_count`` 求和（O(n) 免重算，§8.9.2 memoization）。
         P2-Medium：线程安全保护（读取 history）。
+        P0-Critical: 使用启发式估算时更新 _last_usage_source。
         """
         if self._real_usage is not None:
             return self._real_usage["total"]
         with self._lock:
-            return sum(turn.token_count for turn in self.history)
+            total = sum(turn.token_count for turn in self.history)
+        # P0-Critical: 当使用启发式估算时，更新来源标记
+        if total > 0 and self._last_usage_source == "none":
+            self._last_usage_source = "heuristic"
+        return total
 
     def real_usage(self) -> dict[str, int] | None:
         """最近一次真实 usage（prompt/completion/total），无则 None。"""
@@ -737,6 +742,8 @@ class ContextManager:
             overflow = len(self._undo_stack) - self.max_undo_snapshots
             if overflow > 0:
                 del self._undo_stack[:overflow]
+        # Problem 5: save_snapshot 会改变 undo_available，通知状态栏刷新
+        self._notify_status_change()
 
     def undo(self) -> bool:
         """
@@ -964,6 +971,7 @@ class ContextManager:
         # P2-Medium：修改 history 需要加锁
         with self._lock:
             self.history = new_history
+            # Problem 1: 先更新 cache_epoch，因为后续清理依赖新 epoch
             self._advance_cache_epoch("compact")
             # Problem 3: compact 后清空 prompt_lanes
             self.prompt_lanes = PromptLaneRegistry()
@@ -974,7 +982,7 @@ class ContextManager:
             # P0-Critical: 压缩后重新估算累计 token，并更新来源标记
             estimated = sum(turn.token_count for turn in self.history)
             self._cumulative_tokens = estimated
-            self._last_usage_source = "estimated"
+            self._last_usage_source = "heuristic"
         self._persist_compact_md(summary, session_id)
         # Problem 5: compact 后通知状态栏刷新（锁外调用，避免回调死锁）
         self._notify_status_change()

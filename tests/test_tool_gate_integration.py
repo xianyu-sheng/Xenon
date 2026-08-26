@@ -13,9 +13,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
-import pytest
 
 from xenon.engine.context import AgentContext
 from xenon.engine.tool_gate import (

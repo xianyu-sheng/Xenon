@@ -344,7 +344,6 @@ class REPL:
             def append_string(self, string: str) -> None:
                 super().append_string(paste_store.expand(string))
 
-        import os
         if os.environ.get("XENON_NO_PT") == "1":
             self._pt_session = None
         else:
@@ -1044,7 +1043,7 @@ class REPL:
             try:
                 # 尝试自动保存会话
                 saved_path = self._auto_save_session()
-            except Exception as save_error:
+            except Exception:
                 logger.error("二级兜底保存会话失败", exc_info=True)
 
                 # 三级兜底：auto_save 也失败，查找最新会话文件

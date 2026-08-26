@@ -14,7 +14,8 @@ from xenon.repl.status_bar import StatusBar
 
 def test_undo_stack_default_limit():
     cm = ContextManager()
-    assert cm.max_undo_snapshots == 5
+    # P3-Low 问题3修复：默认值已从 5 提升到 10
+    assert cm.max_undo_snapshots == 10
 
 
 def test_undo_stack_caps_at_limit():

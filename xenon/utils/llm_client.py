@@ -218,7 +218,11 @@ def register_response_callback(cb) -> Any:
 
 
 def _emit_response(model_id: str, data: dict[str, Any]) -> None:
-    """向所有响应回调发送原始 API 响应数据。"""
+    """向所有响应回调发送原始 API 响应数据。
+
+    P1: 迭代前在锁内复制回调列表，避免与 register/unregister 并发时的竞态条件。
+    回调在锁外执行，避免回调内部操作导致死锁。
+    """
     with _RESPONSE_CB_LOCK:
         cbs = list(_RESPONSE_CALLBACKS)
     for cb in cbs:
@@ -313,6 +317,11 @@ def register_usage_callback(cb) -> Any:
 
 
 def _emit_usage(model_id: str, usage: LLMUsage, latency: float) -> None:
+    """发送 usage 数据到所有注册的回调。
+
+    P1: 迭代前在锁内复制回调列表，避免与 register/unregister 并发时的竞态条件。
+    回调在锁外执行，避免回调内部操作导致死锁。
+    """
     with _USAGE_CB_LOCK:
         cbs = list(_USAGE_CALLBACKS)
     for cb in cbs:

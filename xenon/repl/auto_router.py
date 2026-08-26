@@ -292,12 +292,21 @@ class AutoRouter:
         """显式释放会话锁(新会话 / /reset / clear context 时调用)。"""
         self.session_lock.release()
 
+    def record_model_success(self, model_id: str) -> None:
+        """记录模型调用成功（更新 _last_successful_model_id）。
+
+        Problem 2: 在引擎层调用成功后调用此方法，用于跟踪最近成功的模型。
+        """
+        with self._lock:
+            self._last_successful_model_id = model_id
+
     def _session_lock_route(
         self, user_input: str, profile: TaskProfile, task_tier: int, count: int,
     ) -> list[str] | None:
         """SAAR 短路:锁有效时返回锁定模型优先列表;None 表示走正常流程。
 
         释放条件(任一):锁定模型失联/failover 不健康、决策漂移连续超阈值。
+        Problem 2: 熔断时清空 _last_successful_model_id。
         """
         if not self.session_lock_enabled or not self.session_lock.is_locked():
             return None
@@ -307,7 +316,6 @@ class AutoRouter:
             # 锁定模型失联或因 failover 不健康 -> 释放,下次 route 重选并重锁
             self.session_lock.release()
             # Problem 2: 熔断时清空最近成功模型记录
-            # P2-Medium: 并发安全 — 使用锁保护写入
             with self._lock:
                 self._last_successful_model_id = None
             return None

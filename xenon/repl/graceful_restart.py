@@ -23,12 +23,11 @@ import logging
 import os
 import signal
 import sys
-import tempfile
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from xenon.repl.repl import REPL
@@ -310,7 +309,7 @@ class GracefulRestartManager:
 
         try:
             # 创建临时上下文，全部写入成功后再替换
-            from xenon.repl.context_manager import ContextManager, ConversationTurn
+            from xenon.repl.context_manager import ContextManager
             temp_ctx = ContextManager(
                 max_tokens=self.repl.ctx_mgr.max_tokens,
                 track_real_usage=True,
