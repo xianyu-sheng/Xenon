@@ -20,12 +20,20 @@ import yaml
 
 from xenon.utils.atomic_write import atomic_write_text
 from xenon.utils.llm_client import _create_http_client
+from xenon.repl.system_config import get_config
 
-_DEFAULT_CREDENTIALS_PATH = Path.home() / ".xenon" / "credentials.yaml"
-# 评测/沙箱可通过环境变量把持久化配置指向隔离文件；普通用户行为保持不变。
-CREDENTIALS_PATH = Path(
-    os.environ.get("XENON_CREDENTIALS_PATH", str(_DEFAULT_CREDENTIALS_PATH)),
-).expanduser()
+def _get_credentials_path() -> Path:
+    """获取凭证文件路径（支持配置文件和环境变量）。
+
+    评测/沙箱可把持久化配置指向隔离文件；普通用户行为保持不变。每次调用都重新
+    解析，因为配置来源本身是活的：环境变量可以在进程运行中改，config.yaml 也
+    可以被编辑。
+    """
+    return Path(get_config().paths.credentials).expanduser()
+
+
+# 向后兼容别名：导入时求值一次的快照。新代码请调用 ``_get_credentials_path()``。
+CREDENTIALS_PATH = _get_credentials_path()
 MODEL_LIST_TIMEOUT = 8.0
 
 logger = logging.getLogger(__name__)
@@ -378,7 +386,7 @@ def load_credentials(path: Path | None = None) -> dict[str, Any]:
     官方 Ark 数据面地址，运行时将它映射为一等 ``ark`` provider；这里只返回
     兼容视图，不会静默改写用户文件。
     """
-    credentials_path = path or CREDENTIALS_PATH
+    credentials_path = path or _get_credentials_path()
     creds = _read_credentials(credentials_path)
     if not creds.get("ark"):
         legacy_key = _legacy_ark_api_key(creds)
@@ -389,7 +397,7 @@ def load_credentials(path: Path | None = None) -> dict[str, Any]:
 
 def _read_credentials(path: Path | None = None) -> dict[str, Any]:
     """Read the exact on-disk mapping without compatibility projections."""
-    credentials_path = path or CREDENTIALS_PATH
+    credentials_path = path or _get_credentials_path()
     if not credentials_path.exists():
         return {}
     with open(credentials_path, encoding="utf-8") as f:
@@ -433,7 +441,7 @@ def _legacy_ark_api_key(data: dict[str, Any]) -> str:
 
 def save_credentials(creds: dict[str, Any], path: Path | None = None) -> Path:
     """保存凭证到文件。"""
-    credentials_path = path or CREDENTIALS_PATH
+    credentials_path = path or _get_credentials_path()
     credentials_path.parent.mkdir(parents=True, exist_ok=True)
     content = yaml.dump(creds, allow_unicode=True, default_flow_style=False)
     atomic_write_text(credentials_path, content, mode=0o600)  # A9 原子写 + A10 chmod 0600
@@ -625,9 +633,10 @@ def remove_custom_provider(key: str) -> bool:
 
 def _load_custom_providers() -> dict:
     """从 credentials.yaml 加载自定义模型商。"""
-    if not CREDENTIALS_PATH.exists():
+    credentials_path = _get_credentials_path()
+    if not credentials_path.exists():
         return {}
-    with open(CREDENTIALS_PATH, encoding="utf-8") as f:
+    with open(credentials_path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     return data.get(_CUSTOM_PROVIDERS_KEY, {}) or {}
 
@@ -659,7 +668,7 @@ def load_mcp_servers(path: Path | None = None) -> list[dict[str, object]]:
         [{"name": "12306", "command": "npx", "args": ["-y", "12306-mcp"]},
          {"name": "web", "url": "http://localhost:3000/sse"}, ...]
     """
-    credentials_path = path or CREDENTIALS_PATH
+    credentials_path = path or _get_credentials_path()
     if not credentials_path.exists():
         return []
     with open(credentials_path, encoding="utf-8") as f:
@@ -683,7 +692,7 @@ def save_mcp_server(
     """持久化一个 MCP 服务器配置（新增或更新同名配置）。"""
     from xenon.memory.locking import InterProcessFileLock
 
-    credentials_path = path or CREDENTIALS_PATH
+    credentials_path = path or _get_credentials_path()
     with InterProcessFileLock(credentials_path.with_suffix(".lock")):
         servers = load_mcp_servers(credentials_path)
         servers = [s for s in servers if s.get("name") != name]
@@ -708,7 +717,7 @@ def remove_mcp_server(name: str, *, path: Path | None = None) -> bool:
     """从持久化配置中移除一个 MCP 服务器。返回是否成功移除。"""
     from xenon.memory.locking import InterProcessFileLock
 
-    credentials_path = path or CREDENTIALS_PATH
+    credentials_path = path or _get_credentials_path()
     with InterProcessFileLock(credentials_path.with_suffix(".lock")):
         servers = load_mcp_servers(credentials_path)
         new_servers = [s for s in servers if s.get("name") != name]

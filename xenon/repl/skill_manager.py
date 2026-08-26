@@ -29,6 +29,8 @@ from typing import Any
 
 import yaml
 
+from xenon.repl.system_config import get_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -146,7 +148,7 @@ class SkillManager:
     @staticmethod
     def _detect_project_root(start: Path | None = None) -> Path | None:
         """Find a bounded project root without scanning project contents."""
-        configured = os.environ.get("XENON_PROJECT_ROOT", "").strip()
+        configured = get_config().paths.project_root
         if configured:
             candidate = Path(configured).expanduser().resolve()
             return candidate if candidate.is_dir() else None

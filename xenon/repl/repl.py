@@ -12,6 +12,7 @@ REPL — 交互式命令行主循环。
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
 import threading
@@ -44,6 +45,7 @@ from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.project_context import ProjectContext
 from xenon.repl.prompt_optimizer import get_intent_display, optimize_prompt
 from xenon.repl.status_bar import StatusBar
+from xenon.repl.system_config import get_config
 
 from xenon.repl.repl_input import (  # noqa: E402
     _read_input_unix, _read_input_windows,
@@ -104,8 +106,11 @@ class REPL:
         streaming: bool = True,
         optimize_prompts: bool = True,
         verbose: bool = False,
+        resume: str | None = None,
     ) -> None:
         self.registry = registry or ModelRegistry()
+        # 启动即恢复的目标（xenon --resume <序号|名称>）；None 表示不恢复。
+        self._startup_resume = resume
         # P3-Q1 续 / §8.8.1：开启真实 usage 跟踪——ContextManager 订阅
         # llm_client 的 usage 回调，current_token_usage() 优先用真实 total_tokens。
         self.ctx_mgr = ctx_mgr or ContextManager(track_real_usage=True)
@@ -441,10 +446,10 @@ class REPL:
         main_stack.children.append(lower_rule)
 
     def _confirm_tool(self, tool_name: str, params: dict, risk: str) -> tuple[bool, str]:
-        import os
         from xenon.repl.permissions import PermissionGate
+        from xenon.repl.system_config import get_config
 
-        if os.environ.get("XENON_ASSUME_YES") == "1":
+        if get_config().interaction.assume_yes:
             return True, ""
         if not sys.stdin.isatty():
             return (
@@ -649,6 +654,25 @@ class REPL:
         except Exception as exc:
             # 纯提示，失败不影响启动；但要留痕，否则"为什么没有恢复提示"无从排查。
             logger.debug("渲染历史会话提示失败: %s", exc)
+
+    def _run_startup_resume(self) -> None:
+        """执行 `xenon --resume <序号|名称>` 请求的启动即恢复。
+
+        直接派发 /resume，让 CLI 入口和 REPL 内的 /resume 走同一条恢复路径；
+        输出照常打印，用户能看到恢复了哪个会话、多少条消息。
+        """
+        target = getattr(self, "_startup_resume", None)
+        if not target:
+            return
+        # 只消费一次：避免 run() 被重入时重复恢复、覆盖用户已有的对话。
+        self._startup_resume = None
+        try:
+            self._handle_command(f"/resume {target}")
+        except Exception as exc:
+            # 恢复失败不该让 REPL 起不来，但必须让用户看见——否则会误以为
+            # 会话已恢复，继续在空白上下文里提问。
+            logger.warning("启动时恢复会话 %r 失败: %s", target, exc)
+            console.print(f"\n[warning]⚠ 恢复会话 '{target}' 失败：{exc}[/warning]")
 
     def _handle_shift_tab(self) -> None:
         """Shift+Tab 按下：循环切换到下一个可用思维范式。"""
@@ -1047,6 +1071,10 @@ class REPL:
             if self.system_prompt:
                 self.ctx_mgr.add_system_message(self.system_prompt)
 
+            # xenon --resume <序号|名称>：进主循环前派发一次 /resume，
+            # 恢复逻辑完全复用 /resume 处理器，不在此处重复实现。
+            self._run_startup_resume()
+
             while True:
                 # 显示状态栏（PT 模式由 bottom_toolbar 渲染，非 PT 模式才需单独打印）
                 if self._pt_session is None:
@@ -1232,8 +1260,7 @@ class REPL:
         needs_setup = not creds and not configured and not self.registry.list_models()
         if not needs_setup:
             # v0.4.0: always populate model pool from ALL configured providers
-            import os as _os
-            _max_per_provider = int(_os.environ.get("XENON_MAX_MODELS_PER_PROVIDER", "3"))
+            _max_per_provider = get_config().limits.max_models_per_provider
             for p in configured:
                 if not p.models or "(auto-fetch" in str(p.models[0]):
                     continue
@@ -1243,17 +1270,19 @@ class REPL:
                 for model_name in p.models[:_max_per_provider]:  # top N per provider (P0: 可配置)
                     model_id = f"{p.key}/{model_name}"
                     alias = model_name.replace(".", "-")
-                    # 探测出的模型如果已由 models.yaml / credentials.yaml 配置过
-                    # （裸名相同、provider 前缀不同），跳过整条注册：否则池与
-                    # 注册表会各留一份同模型条目，且探测项缺少 max_tokens 等字段。
-                    if self.registry.get_model_by_id(model_id) is not None:
+                    # v0.8.6: 探测出的模型如果已由 models.yaml 手工配置（在池里），
+                    # 跳过自动注册——保留那份配置（可能带自定义 weight/tier）。
+                    # v0.8.5 之前用 registry.get_model_by_id 判断，跳过后不进池，
+                    # 导致你越配好 models.yaml，AutoRouter 反而越没模型可选。
+                    # 现在 Registry 配置由上面 3343 行 from_config 统一填池，此
+                    # 分支只补探测到的、未在池里的。
+                    if self.model_pool.get(alias):
                         continue
-                    # Register to pool (if not already there)
-                    if not self.model_pool.get(alias):
-                        self.model_pool.register(
-                            model_id, alias=alias, weight=3.0,
-                            api_key=p.api_key, base_url=p.base_url,
-                        )
+                    # Register to pool
+                    self.model_pool.register(
+                        model_id, alias=alias, weight=3.0,
+                        api_key=p.api_key, base_url=p.base_url,
+                    )
                     # Also ensure registry has it (backward compat)
                     if alias not in {m.alias for m in self.registry.list_models()}:
                         self.registry.add_model(model_id, alias)
@@ -1711,7 +1740,7 @@ class REPL:
         self.agent_context.set_conversation_messages(self.ctx_mgr.get_messages())
 
         # 根据当前思考范式选择执行方式
-        mode = self.registry.current_mode
+        mode = self._select_turn_mode(user_input, execution_policy)
 
         try:
             if skill_name is not None:
@@ -1776,6 +1805,56 @@ class REPL:
         # must never become consent for long-term memory.
         if skill_name is None:
             self._maybe_suggest_memory(user_input)
+
+    # 自动切换范式的置信度门槛。低于此值保留当前范式——宁可少切，
+    # 也不要让用户觉得范式在背后乱跳。
+    _ENGINE_SWITCH_THRESHOLD = 0.6
+
+    def _select_turn_mode(
+        self,
+        user_input: str,
+        execution_policy: ExecutionPolicy,
+    ) -> str:
+        """为本轮选择范式：仅在用户停留在默认 direct 时才自动升级。
+
+        这里刻意**只返回本轮使用的范式，不写回 registry.current_mode**：
+        自动路由是一次性的判断，用户下一句话可能完全换个任务；把它固化成
+        会话状态会让 /mode 显示的内容与实际执行的范式长期不一致。
+
+        用户一旦显式 /mode 或 Shift+Tab 选过范式，就完全尊重该选择——
+        自动化不该覆盖人的明确意图。
+        """
+        current = self.registry.current_mode
+        if current != "direct":
+            return current
+        # 无需工具的轮次没有范式可选：引擎循环的价值全在工具调用上。
+        if not execution_policy.requires_tools:
+            return current
+        if get_config().engine.disable_auto_routing:
+            return current
+
+        try:
+            profile = self.auto_router.estimator.estimate(
+                user_input, self.ctx_mgr.get_messages(),
+            )
+        except Exception as exc:  # noqa: BLE001 — 推荐失败不该阻断对话
+            logger.debug("范式推荐失败，保留当前范式: %s", exc)
+            return current
+
+        engine = getattr(profile, "recommended_engine", "direct")
+        confidence = float(getattr(profile, "engine_confidence", 0.0) or 0.0)
+        if engine == current or confidence < self._ENGINE_SWITCH_THRESHOLD:
+            return current
+        if ENGINE_REGISTRY.get(engine) is None:
+            logger.warning("推荐了未注册的范式 %r，保留 %s", engine, current)
+            return current
+
+        reason = getattr(profile, "engine_reason", "") or "任务结构更适合该范式"
+        console.print(
+            f"[dim cyan]🧭 {reason} → 本轮使用 [bold]{engine}[/bold] 范式"
+            f"（/mode 可固定，config.yaml engine.disable_auto_routing 可关闭）[/dim cyan]"
+        )
+        return engine
 
     def _run_direct(
         self,
@@ -3209,6 +3288,7 @@ def start_repl(
     config_path: str | None = None,
     optimize: bool = True,
     verbose: bool = False,
+    resume: str | None = None,
 ) -> None:
     """
     启动 REPL 的便捷入口。
@@ -3220,6 +3300,8 @@ def start_repl(
         config_path: 配置文件路径。
         optimize: 是否启用 prompt 自动优化。
         verbose: 是否保留启动探测等详细诊断日志。
+        resume: 非空时在进入主循环前恢复该会话（序号或名称），
+            实现上直接派发一次 /resume，复用 REPL 内既有的恢复逻辑。
     """
     registry = ModelRegistry()
 
@@ -3256,11 +3338,18 @@ def start_repl(
         system_prompt=system_prompt,
         optimize_prompts=optimize,
         verbose=verbose,
+        resume=resume,
     )
     # P0: 打通 --config -> ModelPool。原仅喂 Registry,而 AutoRouter 只认 Pool,
     # 导致 --config 加载的模型形同虚设(池仍空)。复用 ModelPool.from_config。
-    if config_path:
-        repl.model_pool.from_config(registry.export_config().get("models", {}))
+    #
+    # v0.8.6: 池是 AutoRouter 的唯一数据源，无论配置来自 --config 还是默认
+    # models.yaml（上面 3310-3314 行）都必须喂；否则 weight/tier 只写进
+    # Registry，AutoRouter 拿不到就退化成 get_role_priority 兜底顺序。
+    # 之前这行在 if config_path: 里，导致无 --config 时池空、精心配置的
+    # models.yaml 完全不生效（_check_first_run 的探测路径有个 1277 行
+    # continue 跳过了 Registry 已有的模型，反而越是配好就越不进池）。
+    repl.model_pool.from_config(registry.export_config().get("models", {}))
     # v0.5.3: 用户显式指定的模型优先于 auto-router 的选择
     if models:
         repl._preferred_model_ids = list(models)

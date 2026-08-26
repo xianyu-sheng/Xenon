@@ -7,7 +7,7 @@
 - debounce 0.5s 防多次写触发抖动;
 - 回调在 watcher 线程内执行,异常被捕获不波及主循环。
 
-开关:env ``XENON_CONFIG_WATCH``,默认 "1"(开),设 "0" 关闭。
+开关: 配置文件 ``watch.enabled`` 或环境变量 ``XENON_CONFIG_WATCH``,默认开启。
 """
 from __future__ import annotations
 
@@ -19,6 +19,8 @@ import struct
 import threading
 from pathlib import Path
 from typing import Callable
+
+from xenon.repl.system_config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +68,9 @@ def is_watch_supported() -> bool:
 
 
 def is_watch_enabled() -> bool:
-    """env 开关:默认开,``XENON_CONFIG_WATCH=0`` 关。"""
-    return os.environ.get("XENON_CONFIG_WATCH", "1") not in ("0", "false", "False")
+    """配置开关: 默认开启，配置文件 ``watch.enabled=false`` 或环境变量
+    ``XENON_CONFIG_WATCH=0`` 关闭。"""
+    return get_config().watch.enabled
 
 
 class ConfigWatcher:

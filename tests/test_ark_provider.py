@@ -173,7 +173,7 @@ def test_unrelated_write_does_not_silently_persist_legacy_ark(
             "volc": {"base_url": providers.ARK_BASE_URL, "api_key": "legacy-secret"}
         }
     }), encoding="utf-8")
-    monkeypatch.setattr(providers, "CREDENTIALS_PATH", path)
+    monkeypatch.setattr(providers, "_get_credentials_path", lambda: path)
 
     providers.set_provider_key("openai", "openai-secret")
     stored = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -194,7 +194,7 @@ def test_remove_ark_key_removes_legacy_ark_but_preserves_other_custom(
             "other": {"base_url": "https://example.com/v1", "api_key": "other-secret"},
         },
     }), encoding="utf-8")
-    monkeypatch.setattr(providers, "CREDENTIALS_PATH", path)
+    monkeypatch.setattr(providers, "_get_credentials_path", lambda: path)
 
     providers.remove_provider_key("ark")
     stored = yaml.safe_load(path.read_text(encoding="utf-8"))

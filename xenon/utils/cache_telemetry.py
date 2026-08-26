@@ -30,6 +30,20 @@ _SECRET_LOCK = threading.Lock()
 _PERSISTENT_SECRET_CONFIGURED = False
 
 
+def _default_cache_dir() -> Path:
+    """Resolve the cache directory through the shared config loader.
+
+    Imported lazily: this module sits under ``xenon.utils`` and is pulled in by
+    low-level code, while the loader lives under ``xenon.repl``.  A top-level
+    import would tie the two layers together for a value only needed at
+    construction time.
+    """
+    from xenon.repl.system_config import get_config
+
+    configured = get_config().paths.cache
+    return Path(configured) if configured else Path.home() / ".xenon" / "cache"
+
+
 def _canonical_json(value: Any) -> str:
     return json.dumps(
         value,
@@ -299,8 +313,7 @@ class CacheEventStore:
         *,
         max_events: int = 500,
     ) -> None:
-        configured = os.getenv("XENON_CACHE_DIR")
-        self.directory = Path(directory or configured or (Path.home() / ".xenon" / "cache"))
+        self.directory = Path(directory or _default_cache_dir())
         self.path = self.directory / "events.jsonl"
         self.max_events = max(10, int(max_events))
         self._lock = threading.Lock()
@@ -362,8 +375,7 @@ class CacheSettingsStore:
     """
 
     def __init__(self, directory: str | Path | None = None) -> None:
-        configured = os.getenv("XENON_CACHE_DIR")
-        self.directory = Path(directory or configured or (Path.home() / ".xenon" / "cache"))
+        self.directory = Path(directory or _default_cache_dir())
         self.path = self.directory / "settings.json"
         self._lock = threading.Lock()
 

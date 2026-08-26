@@ -2,7 +2,7 @@
 
 包裹 ``ToolNode``（保留其接口不动，向后兼容），串起：
   1. 标准化（normalize_params）
-  2. 参数幻觉校验（_validate_tool_params）
+  2. 参数幻觉校验（validate_tool_params，三级 pass/warn/block）
   3. 工具分类（INFO/WRITE/SENSITIVE）+ 权限闸门
   4. 断路器（CircuitBreaker.allow）
   5. 执行（委托 ToolNode）
@@ -37,6 +37,7 @@ from xenon.engine.evidence_runtime import (
     EventKind,
     LifecyclePhase,
 )
+from xenon.repl.system_config import get_config
 
 logger = logging.getLogger(__name__)
 from xenon.engine.trace import TraceContextFilter  # noqa: E402
@@ -258,19 +259,36 @@ def _validate_param_value(name: str, value: Any) -> list[str]:
     return hits
 
 
-def validate_tool_params(params: dict[str, Any]) -> tuple[bool, str]:
-    """参数幻觉校验：组合判定（≥2 条件命中才拦），content 白名单豁免。
+def validate_tool_params(params: dict[str, Any]) -> tuple[bool, str, str]:
+    """参数幻觉校验：三级判定，content 白名单豁免。
+
+    合法的长 shell 命令 / heredoc / 含代码的参数容易命中 2 条结构性特征，
+    旧的「≥2 即拦」会误杀并导致 LLM 收到拒绝后反复重试，故放宽为分级：
+
+    - 命中 ≥3 条 → ``(False, reason, "block")``  拦截
+    - 命中 ==2 条 → ``(True, reason, "warn")``   记日志但放行
+    - 其余         → ``(True, "", "pass")``
+
+    配置 ``validation.strict=true`` 或环境变量 ``XENON_STRICT_VALIDATION=1``
+    可恢复旧的严格行为（≥2 条即 block）。
 
     Returns:
-        (ok, reason) — ok=False 时 reason 描述命中条件。
+        (ok, reason, level) — level ∈ {"pass", "warn", "block"}。
     """
+    strict = get_config().validation.strict
+    block_threshold = 2 if strict else 3
+    warn: tuple[bool, str, str] | None = None
     for name, value in params.items():
         if name in _TOOL_CONTENT_PARAMS:
             continue
         hits = _validate_param_value(name, value)
-        if len(hits) >= 2:
-            return False, f"参数 '{name}' 疑似 LLM 幻觉（命中: {'; '.join(hits)}）"
-    return True, ""
+        if len(hits) >= block_threshold:
+            return False, f"参数 '{name}' 疑似 LLM 幻觉（命中: {'; '.join(hits)}）", "block"
+        if len(hits) >= 2 and warn is None:
+            warn = (True, f"参数 '{name}' 参数可疑（命中: {'; '.join(hits)}）", "warn")
+    if warn is not None:
+        return warn
+    return True, "", "pass"
 
 
 # ── 错误分类 ───────────────────────────────────────────────
@@ -1019,8 +1037,11 @@ class ToolExecutor:
             )
 
         # ── Stage 2: 参数幻觉校验 ──
-        ok, reason = validate_tool_params(params)
-        if not ok:
+        _ok, reason, level = validate_tool_params(params)
+        if level == "warn":
+            # 2 条命中：疑似但不足以拦截（长 shell / heredoc 常触发），仅记录。
+            logger.warning(f"{trace_p}参数可疑但放行: {tool_name} — {reason}")
+        if level == "block":
             logger.warning(f"{trace_p}参数幻觉拦截: {tool_name} — {reason}")
             # v0.5.3: 提示替代工具，帮助 LLM 恢复
             hint = _tool_alternative_hint(tool_name, params)
