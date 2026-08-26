@@ -14,7 +14,6 @@ from __future__ import annotations
 import logging
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from xenon.repl.context_manager import ContextManager, _estimate_tokens
 
@@ -75,7 +74,7 @@ class TestUsageCallbackLogs:
         with patch("xenon.utils.llm_client.register_usage_callback") as mock_register:
             mock_register.return_value = lambda: None  # mock unsub function
 
-            ctx = ContextManager(track_real_usage=True)
+            _ = ContextManager(track_real_usage=True)
 
             # 验证成功日志
             assert "Usage callback successfully registered" in caplog.text
@@ -171,7 +170,7 @@ class TestCompactUpdatesSource:
         assert initial_cumulative == 150
 
         # 触发 compact（提供 summary，避免调用 LLM）
-        summary = ctx.compact(summary="Test summary")
+        _ = ctx.compact(summary="Test summary")
 
         # 验证 source 已更新为 estimated
         assert ctx._last_usage_source == "estimated"

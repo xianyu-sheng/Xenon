@@ -4,11 +4,10 @@ import json
 import os
 import signal
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -52,7 +51,6 @@ class TestRestartCoordinator:
         from xenon.repl.graceful_restart import RestartCoordinator
 
         coordinator = RestartCoordinator()
-        results = []
 
         def requester(preserve: bool):
             coordinator.request_restart(preserve_session=preserve)
@@ -134,7 +132,7 @@ class TestGracefulRestartManager:
             pytest.skip("Windows 平台不支持信号")
 
         manager.install_signal_handlers()
-        original_sighup = manager._original_handlers[signal.SIGHUP]
+        _ = manager._original_handlers[signal.SIGHUP]  # 验证已安装
 
         manager.uninstall_signal_handlers()
         assert manager._handlers_installed is False
@@ -356,8 +354,8 @@ class TestGracefulRestartManager:
     def test_perform_restart_success_without_session(self, manager, mock_repl):
         """执行重启：不保存会话，全新启动。"""
         with patch.object(manager, "validate_config") as mock_validate, \
-             patch.object(manager, "cleanup_resources") as mock_cleanup, \
-             patch.object(manager, "reload_components") as mock_reload:
+             patch.object(manager, "cleanup_resources"), \
+             patch.object(manager, "reload_components"):
 
             mock_validate.return_value = (True, "")
 
@@ -386,7 +384,7 @@ class TestGracefulRestartManager:
     def test_perform_restart_reload_fails(self, manager, mock_repl):
         """执行重启：组件初始化失败。"""
         with patch.object(manager, "validate_config") as mock_validate, \
-             patch.object(manager, "cleanup_resources") as mock_cleanup, \
+             patch.object(manager, "cleanup_resources"), \
              patch.object(manager, "reload_components") as mock_reload:
 
             mock_validate.return_value = (True, "")

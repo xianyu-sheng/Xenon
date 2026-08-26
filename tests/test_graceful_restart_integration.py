@@ -4,7 +4,6 @@ import json
 import os
 import signal
 import sys
-import tempfile
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -19,7 +18,7 @@ class TestGracefulRestartIntegration:
     @pytest.fixture
     def mock_full_repl(self):
         """构造完整的 Mock REPL（更接近真实环境）。"""
-        from xenon.repl.context_manager import ContextManager, ConversationTurn
+        from xenon.repl.context_manager import ContextManager
 
         repl = MagicMock()
 
@@ -56,7 +55,7 @@ class TestGracefulRestartIntegration:
 
         # 记录原始历史
         original_history_len = len(mock_full_repl.ctx_mgr.history)
-        original_memory = dict(mock_full_repl.ctx_mgr._working_memory)
+        _ = dict(mock_full_repl.ctx_mgr._working_memory)  # 记录但不使用
 
         with patch("xenon.repl.system_config.reload_config") as mock_reload, \
              patch("xenon.repl.model_pool.ModelPool") as MockModelPool, \
