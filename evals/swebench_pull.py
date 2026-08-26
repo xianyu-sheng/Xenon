@@ -19,8 +19,9 @@ from pathlib import Path
 from typing import Any
 
 
-def image_keys(instance_ids: list[str], dataset: str, split: str,
-               namespace: str = "swebench") -> dict[str, str]:
+def image_keys(
+    instance_ids: list[str], dataset: str, split: str, namespace: str = "swebench"
+) -> dict[str, str]:
     from datasets import load_dataset
     from swebench.harness.test_spec.test_spec import make_test_spec
 
@@ -45,7 +46,8 @@ def _free_gb(path: str = "/") -> float:
 def _pull(key: str) -> tuple[str, bool, str]:
     proc = subprocess.run(
         ["docker", "pull", "--quiet", key],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     detail = (proc.stderr or proc.stdout).strip().splitlines()
     return key, proc.returncode == 0, (detail[-1] if detail else "")
@@ -58,8 +60,12 @@ def main() -> int:
     parser.add_argument("--split", default="test")
     parser.add_argument("--namespace", default="swebench")
     parser.add_argument("--workers", type=int, default=3)
-    parser.add_argument("--min-free-gb", type=float, default=40.0,
-                        help="Abort before a pull if free disk drops below this.")
+    parser.add_argument(
+        "--min-free-gb",
+        type=float,
+        default=40.0,
+        help="Abort before a pull if free disk drops below this.",
+    )
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
 
@@ -81,8 +87,10 @@ def main() -> int:
         for done in as_completed(futures):
             key, ok, detail = done.result()
             results[key] = {"pulled": ok, "detail": detail}
-            print(f"{'OK  ' if ok else 'FAIL'} {key} ({_free_gb():.1f} GB free)",
-                  flush=True)
+            print(
+                f"{'OK  ' if ok else 'FAIL'} {key} ({_free_gb():.1f} GB free)",
+                flush=True,
+            )
 
     report = {
         "manifest": str(args.manifest),
@@ -99,9 +107,16 @@ def main() -> int:
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-    print(json.dumps({k: report[k] for k in
-                      ("requested_images", "pulled", "failed", "disk_cost_gb")},
-                     ensure_ascii=False), flush=True)
+    print(
+        json.dumps(
+            {
+                k: report[k]
+                for k in ("requested_images", "pulled", "failed", "disk_cost_gb")
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
     return 0 if not report["failed"] else 1
 
 

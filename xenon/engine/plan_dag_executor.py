@@ -37,8 +37,12 @@ class PlanDAGExecutorMixin:
 
     # ── Phase 2: DAG 波次执行（P2-E2） ────────────────────────
     def _run_dag(
-        self, steps: list[dict[str, Any]], user_input: str,
-        ctx: AgentContext, tracker: ToolExecutionTracker, total: int,
+        self,
+        steps: list[dict[str, Any]],
+        user_input: str,
+        ctx: AgentContext,
+        tracker: ToolExecutionTracker,
+        total: int,
     ) -> list[dict[str, Any]]:
         """拓扑波次执行：同 wave 并发（若 enable_parallel），波次间串行。
 
@@ -49,7 +53,9 @@ class PlanDAGExecutorMixin:
         waves = dag.waves()
         logger.info(
             "DAG 执行：%d 个步骤分为 %d 个波次（并行=%s）",
-            len(steps), len(waves), self.enable_parallel,
+            len(steps),
+            len(waves),
+            self.enable_parallel,
         )
 
         results: list[dict[str, Any]] = []
@@ -75,17 +81,17 @@ class PlanDAGExecutorMixin:
             # 若 steering 已到达且本波次全是工具步骤（无法承载补充）：
             # 剩余计划重规划，重建 DAG 从头调度（已完成步骤按 id 过滤）。
             if _steer_pending:
-                wave_tools = [
-                    dag.step(sid).get("tool")
-                    for sid in wave
-                ]
+                wave_tools = [dag.step(sid).get("tool") for sid in wave]
                 wave_all_tool = bool(wave_tools) and all(
                     t and t != "null" for t in wave_tools
                 )
                 if wave_all_tool:
                     done_ids = {r["step_id"] for r in results}
                     new_steps = self._replan_remaining(
-                        user_input, ctx, _steer_pending, done_ids,
+                        user_input,
+                        ctx,
+                        _steer_pending,
+                        done_ids,
                     )
                     if new_steps:
                         steps = new_steps
@@ -129,13 +135,15 @@ class PlanDAGExecutorMixin:
                 step_task = step.get("task", "")
                 result = "⏭️ 步骤已跳过：前置依赖失败或被跳过"
                 self.callback.on_step(sid, total, step_task)
-                results.append({
-                    "step_id": sid,
-                    "task": step_task,
-                    "result": result,
-                    "status": "skipped",
-                    "error": "前置依赖失败或被跳过",
-                })
+                results.append(
+                    {
+                        "step_id": sid,
+                        "task": step_task,
+                        "result": result,
+                        "status": "skipped",
+                        "error": "前置依赖失败或被跳过",
+                    }
+                )
                 ctx.set(f"step_{sid}_result", result)
                 ctx.set(f"step_{sid}_status", "skipped")
                 skipped_ids.add(sid)
@@ -157,17 +165,24 @@ class PlanDAGExecutorMixin:
                     self.callback.on_warning(
                         f"本波次退回串行以保护工作区：{parallel_downgrade}"
                     )
-            if (
-                self.enable_parallel
-                and len(to_run) > 1
-                and parallel_downgrade is None
-            ):
+            if self.enable_parallel and len(to_run) > 1 and parallel_downgrade is None:
                 wave_results = self._exec_wave_parallel(
-                    to_run, dag, user_input, results, ctx, total,
+                    to_run,
+                    dag,
+                    user_input,
+                    results,
+                    ctx,
+                    total,
                 )
             else:
                 wave_results = self._exec_wave_serial(
-                    to_run, dag, user_input, results, ctx, tracker, total,
+                    to_run,
+                    dag,
+                    user_input,
+                    results,
+                    ctx,
+                    tracker,
+                    total,
                     steering=_steer_pending,
                 )
             _steer_pending = []
@@ -175,13 +190,15 @@ class PlanDAGExecutorMixin:
             # 合并（主线程，单线程，无竞争）：追加结果 + 合并隔离 tracker
             for sid, step_task, outcome, sub_tracker in wave_results:
                 status = "ok" if outcome.success else "failed"
-                results.append({
-                    "step_id": sid,
-                    "task": step_task,
-                    "result": outcome.content,
-                    "status": status,
-                    "error": outcome.error,
-                })
+                results.append(
+                    {
+                        "step_id": sid,
+                        "task": step_task,
+                        "result": outcome.content,
+                        "status": status,
+                        "error": outcome.error,
+                    }
+                )
                 ctx.set(f"step_{sid}_result", outcome.content)
                 ctx.set(f"step_{sid}_status", status)
                 if sub_tracker is not None:
@@ -199,9 +216,14 @@ class PlanDAGExecutorMixin:
         return results
 
     def _exec_wave_serial(
-        self, to_run: list[Any], dag: PlanDAG, user_input: str,
-        results: list[dict[str, Any]], ctx: AgentContext,
-        tracker: ToolExecutionTracker, total: int,
+        self,
+        to_run: list[Any],
+        dag: PlanDAG,
+        user_input: str,
+        results: list[dict[str, Any]],
+        ctx: AgentContext,
+        tracker: ToolExecutionTracker,
+        total: int,
         steering: list[dict[str, Any]] | None = None,
     ) -> list[tuple[Any, str, StepOutcome, None]]:
         """波内串行执行（共享主 ctx/tracker，无并发无竞争）。
@@ -224,12 +246,24 @@ class PlanDAGExecutorMixin:
             try:
                 if tool and tool != "null":
                     outcome = self._execute_tool_step(
-                        sid, total, step_task, tool, params, user_input,
-                        ctx, tracker, prev_results,
+                        sid,
+                        total,
+                        step_task,
+                        tool,
+                        params,
+                        user_input,
+                        ctx,
+                        tracker,
+                        prev_results,
                     )
                 else:
                     raw_result = self._execute_step_with_llm(
-                        sid, total, step_task, prev_results, user_input, tracker,
+                        sid,
+                        total,
+                        step_task,
+                        prev_results,
+                        user_input,
+                        tracker,
                         context=ctx,
                         steering=steering,
                     )
@@ -291,7 +325,9 @@ class PlanDAGExecutorMixin:
         return [single] if single else []
 
     def _wave_parallel_blocker(
-        self, to_run: list[Any], dag: PlanDAG,
+        self,
+        to_run: list[Any],
+        dag: PlanDAG,
     ) -> str | None:
         """判断波次能否真正并发；可以则返回 ``None``，否则返回人类可读的原因。
 
@@ -315,7 +351,11 @@ class PlanDAGExecutorMixin:
 
         # 影响面无法静态枚举的工具：仓库级/远端/派生 Agent
         opaque_tools = {
-            "git", "clone_repo", "register_tool", "mcp_call", "spawn_agent",
+            "git",
+            "clone_repo",
+            "register_tool",
+            "mcp_call",
+            "spawn_agent",
         }
         readers: dict[str, list[Any]] = {}
         writers: dict[str, list[Any]] = {}
@@ -343,14 +383,17 @@ class PlanDAGExecutorMixin:
         for path, writer_ids in writers.items():
             touching = list(writer_ids) + readers.get(path, [])
             if len(touching) > 1:
-                return (
-                    f"步骤 {sorted(set(touching))} 同时触及 {path}（含写入）"
-                )
+                return f"步骤 {sorted(set(touching))} 同时触及 {path}（含写入）"
         return None
 
     def _exec_wave_parallel(
-        self, to_run: list[Any], dag: PlanDAG, user_input: str,
-        results: list[dict[str, Any]], ctx: AgentContext, total: int,
+        self,
+        to_run: list[Any],
+        dag: PlanDAG,
+        user_input: str,
+        results: list[dict[str, Any]],
+        ctx: AgentContext,
+        total: int,
     ) -> list[tuple[Any, str, StepOutcome, ToolExecutionTracker]]:
         """波内并发执行（ThreadPoolExecutor 包同步调用）。
 
@@ -380,12 +423,24 @@ class PlanDAGExecutorMixin:
             try:
                 if tool and tool != "null":
                     outcome = self._execute_tool_step(
-                        sid, total, step_task, tool, params, user_input,
-                        iso_ctx, iso_tracker, prev_map[sid],
+                        sid,
+                        total,
+                        step_task,
+                        tool,
+                        params,
+                        user_input,
+                        iso_ctx,
+                        iso_tracker,
+                        prev_map[sid],
                     )
                 else:
                     raw_result = self._execute_step_with_llm(
-                        sid, total, step_task, prev_map[sid], user_input, iso_tracker,
+                        sid,
+                        total,
+                        step_task,
+                        prev_map[sid],
+                        user_input,
+                        iso_tracker,
                         context=iso_ctx,
                     )
                     outcome = self._step_outcome(raw_result)
@@ -406,12 +461,13 @@ class PlanDAGExecutorMixin:
     @staticmethod
     def _build_prev_results(results: list[dict[str, Any]]) -> str:
         """Build context from successful steps only, never from failure text."""
-        successful = [result for result in results if result.get("status", "ok") == "ok"]
+        successful = [
+            result for result in results if result.get("status", "ok") == "ok"
+        ]
         if not successful:
             return "(无)"
         return "\n".join(
-            f"步骤 {r['step_id']}: {r['result'][:200]}"
-            for r in successful[-3:]
+            f"步骤 {r['step_id']}: {r['result'][:200]}" for r in successful[-3:]
         )
 
     @staticmethod

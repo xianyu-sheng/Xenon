@@ -37,7 +37,9 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     return data
 
 
-def parse_workflow(config: dict[str, Any]) -> tuple[dict[str, BaseNode], dict[str, list[str]]]:
+def parse_workflow(
+    config: dict[str, Any],
+) -> tuple[dict[str, BaseNode], dict[str, list[str]]]:
     """
     解析工作流配置，返回 (nodes_dict, models_dict)。
 
@@ -170,23 +172,61 @@ def _build_tool_node(
 
     # 已知 key 白名单：拼写错误的 key 会静默丢失，提前报错
     known_keys = {
-        "id", "type", "output_slot", "next", "action_type", "action",
-        "file_path", "content", "cwd", "timeout", "encoding", "append",
-        "pattern", "max_depth", "limit", "cursor", "search_pattern",
-        "file_filter", "git_command", "url", "start_time", "end_time",
-        "max_pages", "max_chars", "old_text", "new_text", "files",
-        "edits", "symbol", "query", "old_name", "new_name",
-        "refactor_action", "tool_name", "tool_args", "mcp_server",
-        "repo", "github_action", "github_path", "branch", "city",
-        "lang", "description", "python_function", "command_template",
-        "params", "security_enabled", "start_line", "max_lines",
-        "line", "column",
+        "id",
+        "type",
+        "output_slot",
+        "next",
+        "action_type",
+        "action",
+        "file_path",
+        "content",
+        "cwd",
+        "timeout",
+        "encoding",
+        "append",
+        "pattern",
+        "max_depth",
+        "limit",
+        "cursor",
+        "search_pattern",
+        "file_filter",
+        "git_command",
+        "url",
+        "start_time",
+        "end_time",
+        "max_pages",
+        "max_chars",
+        "old_text",
+        "new_text",
+        "files",
+        "edits",
+        "symbol",
+        "query",
+        "old_name",
+        "new_name",
+        "refactor_action",
+        "tool_name",
+        "tool_args",
+        "mcp_server",
+        "repo",
+        "github_action",
+        "github_path",
+        "branch",
+        "city",
+        "lang",
+        "description",
+        "python_function",
+        "command_template",
+        "params",
+        "security_enabled",
+        "start_line",
+        "max_lines",
+        "line",
+        "column",
     }
     unknown = set(cfg) - known_keys
     if unknown:
-        raise ValueError(
-            f"ToolNode {node_id} 存在未知配置字段: {sorted(unknown)}"
-        )
+        raise ValueError(f"ToolNode {node_id} 存在未知配置字段: {sorted(unknown)}")
 
     tool_kwargs = {
         k: cfg[k]
@@ -201,7 +241,9 @@ def _build_tool_node(
     )
 
 
-def _build_router_node(cfg: dict[str, Any], node_id: str, output_slot: str | None) -> RouterNode:
+def _build_router_node(
+    cfg: dict[str, Any], node_id: str, output_slot: str | None
+) -> RouterNode:
     """构建 RouterNode。"""
     rules = cfg.get("rules", [])
     if not rules:

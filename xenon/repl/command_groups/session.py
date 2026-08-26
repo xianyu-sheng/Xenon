@@ -85,13 +85,14 @@ def _cmd_history(*, args: str, session_state: dict, **kwargs: Any) -> str:
         dt = datetime.fromtimestamp(r.timestamp).strftime("%H:%M:%S")
         tier_info = f" 层级={r.task_tier}" if r.task_tier is not None else ""
         lines.append(
-            f"  {i}. [{dt}] 意图={r.intent or '?'} "
-            f"复杂度={r.complexity:.2f}{tier_info}"
+            f"  {i}. [{dt}] 意图={r.intent or '?'} 复杂度={r.complexity:.2f}{tier_info}"
         )
         lines.append(f"     输入: {r.user_input_preview}")
         if r.selected_models:
             model_strs = []
-            for m, s in zip(r.selected_models, r.scores or [0.0] * len(r.selected_models)):
+            for m, s in zip(
+                r.selected_models, r.scores or [0.0] * len(r.selected_models)
+            ):
                 model_strs.append(f"{m}({s:.1f})")
             lines.append(f"     模型: {', '.join(model_strs)}")
         lines.append("")
@@ -131,8 +132,12 @@ register_command("/save", "保存当前会话", "/save <session_name>")
 
 @command_handler("/save")
 def _cmd_save(
-    *, args: str, ctx_mgr: ContextManager, session_state: dict,
-    registry: ModelRegistry, **kwargs: Any,
+    *,
+    args: str,
+    ctx_mgr: ContextManager,
+    session_state: dict,
+    registry: ModelRegistry,
+    **kwargs: Any,
 ) -> str:
     from xenon.repl.session import save_session
 
@@ -161,8 +166,12 @@ register_command("/load", "加载已保存的会话", "/load <session_name>")
 
 @command_handler("/load")
 def _cmd_load(
-    *, args: str, ctx_mgr: ContextManager, session_state: dict,
-    registry: ModelRegistry, **kwargs: Any,
+    *,
+    args: str,
+    ctx_mgr: ContextManager,
+    session_state: dict,
+    registry: ModelRegistry,
+    **kwargs: Any,
 ) -> str:
     from xenon.repl.session import load_session
     from xenon.engine.context import AgentContext
@@ -176,7 +185,9 @@ def _cmd_load(
     except FileNotFoundError as exc:
         return f"❌ {exc}"
 
-    if not confirm_action(f"加载会话 '{name}' 将覆盖当前对话历史，确认？", default=False):
+    if not confirm_action(
+        f"加载会话 '{name}' 将覆盖当前对话历史，确认？", default=False
+    ):
         return "已取消"
 
     history = data.get("history", [])
@@ -219,10 +230,9 @@ def _cmd_load(
     recovery_notice = ""
     if repl is not None:
         repl.agent_context = restored_context
-        restored_context.set_tool_checkpoint_callback(
-            repl._persist_tool_checkpoint
-        )
+        restored_context.set_tool_checkpoint_callback(repl._persist_tool_checkpoint)
         from xenon.nodes.tool_executor import recover_tool_execution_checkpoint
+
         recovery_notice = recover_tool_execution_checkpoint(restored_context)
 
     model_config = data.get("model_config", {})
@@ -257,7 +267,9 @@ def _cmd_sessions(**kwargs: Any) -> str:
 
     lines = ["已保存的会话:\n"]
     for s in sessions:
-        lines.append(f"  {s['name']:<20} {s['saved_at'][:19]}  ({s['messages']} 条消息)")
+        lines.append(
+            f"  {s['name']:<20} {s['saved_at'][:19]}  ({s['messages']} 条消息)"
+        )
     return "\n".join(lines)
 
 
@@ -270,7 +282,10 @@ register_command("/resume", "列出 / 恢复保存的会话", "/resume [序号�
 def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
     """断点恢复：列出所有会话，或按序号/名称加载指定会话。"""
     from xenon.repl.session import (
-        list_sessions, load_session, get_session_age, _load_and_migrate,
+        list_sessions,
+        load_session,
+        get_session_age,
+        _load_and_migrate,
         touch_session,
     )
 
@@ -305,8 +320,11 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
             age = get_session_age(s) or s["saved_at"][:16]
             paradigm = s.get("paradigm", "")
             table.add_row(
-                str(i), display_name, age,
-                str(s["messages"]), paradigm,
+                str(i),
+                display_name,
+                age,
+                str(s["messages"]),
+                paradigm,
             )
 
         console_out = RichConsole()
@@ -376,12 +394,11 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
 
         from xenon.engine.context import AgentContext
         from xenon.nodes.tool_executor import recover_tool_execution_checkpoint
+
         restored_context = AgentContext(initial=context_store)
         repl.agent_context = restored_context
         repl._session_state["agent_context"] = restored_context
-        restored_context.set_tool_checkpoint_callback(
-            repl._persist_tool_checkpoint
-        )
+        restored_context.set_tool_checkpoint_callback(repl._persist_tool_checkpoint)
         recovery_notice = recover_tool_execution_checkpoint(restored_context)
 
         paradigm = extra.get("paradigm")
@@ -413,7 +430,10 @@ register_command("/context", "显示当前上下文状态", "/context")
 
 @command_handler("/context")
 def _cmd_context(
-    *, ctx_mgr: ContextManager, session_state: dict, **kwargs: Any,
+    *,
+    ctx_mgr: ContextManager,
+    session_state: dict,
+    **kwargs: Any,
 ) -> str:
     stats = ctx_mgr.stats()
     lines = [
@@ -438,12 +458,18 @@ def _cmd_context(
 
 # /compact ─────────────────────────────────────────────────
 
-register_command("/compact", "压缩对话历史，释放 context window", "/compact [自定义摘要]")
+register_command(
+    "/compact", "压缩对话历史，释放 context window", "/compact [自定义摘要]"
+)
 
 
 @command_handler("/compact")
 def _cmd_compact(
-    *, args: str, ctx_mgr: ContextManager, registry: ModelRegistry, **kwargs: Any,
+    *,
+    args: str,
+    ctx_mgr: ContextManager,
+    registry: ModelRegistry,
+    **kwargs: Any,
 ) -> str:
     summary = args.strip() if args.strip() else None
     model_ids = registry.get_role_priority("planner") if not summary else None
@@ -452,14 +478,18 @@ def _cmd_compact(
 
     # P3-Low 2.9: 提供快照持久化状态反馈
     snapshot_info = ""
-    if hasattr(ctx_mgr, '_last_snapshot_path') and ctx_mgr._last_snapshot_path:
+    if hasattr(ctx_mgr, "_last_snapshot_path") and ctx_mgr._last_snapshot_path:
         snapshot_info = f"\n📝 快照已保存: {ctx_mgr._last_snapshot_path}"
-    elif hasattr(ctx_mgr, '_last_snapshot_error') and ctx_mgr._last_snapshot_error:
+    elif hasattr(ctx_mgr, "_last_snapshot_error") and ctx_mgr._last_snapshot_error:
         snapshot_info = f"\n⚠️  快照保存失败: {ctx_mgr._last_snapshot_error}"
 
     # 格式化 usage_ratio（现在是 float 而非字符串）
-    usage_ratio = stats['usage_ratio']
-    usage_str = f"{usage_ratio:.1%}" if isinstance(usage_ratio, (int, float)) else str(usage_ratio)
+    usage_ratio = stats["usage_ratio"]
+    usage_str = (
+        f"{usage_ratio:.1%}"
+        if isinstance(usage_ratio, (int, float))
+        else str(usage_ratio)
+    )
 
     return f"✅ 对话已压缩。当前 Token: {stats['estimated_tokens']:,} ({usage_str}){snapshot_info}\n\n摘要:\n{result}"
 
@@ -478,5 +508,6 @@ def _cmd_config(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
         return f"✅ 配置已保存到: {path}"
 
     import json
+
     config = registry.export_config()
     return f"当前配置:\n{json.dumps(config, indent=2, ensure_ascii=False)}"

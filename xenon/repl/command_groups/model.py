@@ -25,8 +25,11 @@ register_command(
     "/set_model [alias] [provider/model_name] [reasoning_effort=max] [base_url=xxx]",
 )
 
+
 @command_handler("/set_model")
-def _cmd_set_model(*, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any) -> str:
+def _cmd_set_model(
+    *, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any
+) -> str:
     from rich.table import Table as _Table
     from rich.prompt import IntPrompt as _IntPrompt
 
@@ -45,9 +48,12 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, session_state: dict, *
         if "api_key" in extra:
             from rich.prompt import Prompt as _Prompt
             from rich.console import Console as _Console
+
             console = kwargs.get("console") or _Console()
             if extra.get("api_key"):
-                console.print("[dim]检测到命令行明文 api_key，已忽略并改用掩码输入（建议今后用 api_key= 空值触发掩码输入）[/dim]")
+                console.print(
+                    "[dim]检测到命令行明文 api_key，已忽略并改用掩码输入（建议今后用 api_key= 空值触发掩码输入）[/dim]"
+                )
             extra["api_key"] = _Prompt.ask("API Key", password=True)
             if not extra["api_key"]:
                 return "❌ 未输入 API Key"
@@ -59,6 +65,7 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, session_state: dict, *
 
     # 无参数 → 交互式选择
     from xenon.repl.provider_registry import get_configured_providers
+
     configured = get_configured_providers()
 
     # v0.8.5: 同时读取 models.yaml 中已注册的模型
@@ -79,7 +86,11 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, session_state: dict, *
     # 1. 先显示 models.yaml 中已配置的模型
     if existing_models:
         for model_config in existing_models:
-            provider = model_config.model_id.split("/")[0] if "/" in model_config.model_id else "custom"
+            provider = (
+                model_config.model_id.split("/")[0]
+                if "/" in model_config.model_id
+                else "custom"
+            )
             model_name = model_config.alias or model_config.model_id.split("/")[-1]
             hint = f"✅ 已配置 (weight={model_config.weight})"
             table.add_row(str(idx), provider, model_name, hint)
@@ -89,14 +100,17 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, session_state: dict, *
     # 2. 再显示从 providers 实时拉取的模型
     for p in configured:
         if not p.models:
-            table.add_row("-", p.name, "实时获取失败", p.model_error or "请检查 API Key / 网络 / base_url")
+            table.add_row(
+                "-",
+                p.name,
+                "实时获取失败",
+                p.model_error or "请检查 API Key / 网络 / base_url",
+            )
             continue
         for m in p.models:
             model_id = f"{p.key}/{m}"
             # 检查是否已在 models.yaml 中
-            already_configured = any(
-                mc.model_id == model_id for mc in existing_models
-            )
+            already_configured = any(mc.model_id == model_id for mc in existing_models)
             if already_configured:
                 continue  # 跳过重复项
             hint = _model_hint_local(m)
@@ -105,6 +119,7 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, session_state: dict, *
             idx += 1
 
     from rich.console import Console as _Console
+
     console = kwargs.get("console") or _Console()
     console.print(table)
     console.print()
@@ -135,7 +150,7 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, session_state: dict, *
             # 更新首选模型
             repl._preferred_model_ids = [model_id]
             # 更新 auto_router 的首选模型
-            if hasattr(repl, 'auto_router') and repl.auto_router:
+            if hasattr(repl, "auto_router") and repl.auto_router:
                 repl.auto_router._preferred_model_ids = [model_id]
 
         return f"✅ 模型已设置并切换: {alias} -> {config.model_id}"
@@ -145,17 +160,27 @@ def _cmd_set_model(*, args: str, registry: ModelRegistry, session_state: dict, *
 
 def _model_hint_local(model_name: str) -> str:
     hints = {
-        "gpt-4o": "旗舰，全能", "gpt-4o-mini": "便宜，快速", "gpt-4-turbo": "上代旗舰",
-        "gpt-3.5-turbo": "最便宜", "o1-preview": "推理增强", "o1-mini": "推理，便宜",
-        "claude-sonnet-4-20250514": "最新旗舰", "claude-3-5-sonnet-20241022": "旗舰，编程强",
-        "claude-3-5-haiku-20241022": "快速，便宜", "claude-3-opus-20240229": "最强推理",
+        "gpt-4o": "旗舰，全能",
+        "gpt-4o-mini": "便宜，快速",
+        "gpt-4-turbo": "上代旗舰",
+        "gpt-3.5-turbo": "最便宜",
+        "o1-preview": "推理增强",
+        "o1-mini": "推理，便宜",
+        "claude-sonnet-4-20250514": "最新旗舰",
+        "claude-3-5-sonnet-20241022": "旗舰，编程强",
+        "claude-3-5-haiku-20241022": "快速，便宜",
+        "claude-3-opus-20240229": "最强推理",
         "deepseek-v4-pro": "旗舰编程与复杂 Agent · 1M 上下文",
         "deepseek-v4-flash": "高并发高性价比 · 1M 上下文",
         "deepseek-chat": "旧别名（2026-07-24 停用）",
         "deepseek-reasoner": "旧别名（2026-07-24 停用）",
-        "gemini-2.0-flash": "最新，快速", "gemini-1.5-pro": "长上下文",
-        "glm-4-plus": "旗舰", "glm-4-flash": "快速，免费",
-        "qwen-max": "旗舰", "qwen-plus": "性价比高", "qwen-turbo": "快速，便宜",
+        "gemini-2.0-flash": "最新，快速",
+        "gemini-1.5-pro": "长上下文",
+        "glm-4-plus": "旗舰",
+        "glm-4-flash": "快速，免费",
+        "qwen-max": "旗舰",
+        "qwen-plus": "性价比高",
+        "qwen-turbo": "快速，便宜",
         "moonshot-v1-128k": "128K 上下文",
     }
     return hints.get(model_name, "")
@@ -164,6 +189,7 @@ def _model_hint_local(model_name: str) -> str:
 # /remove_model ────────────────────────────────────────────
 
 register_command("/remove_model", "移除一个模型", "/remove_model <alias>")
+
 
 @command_handler("/remove_model")
 def _cmd_remove_model(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
@@ -179,9 +205,11 @@ def _cmd_remove_model(*, args: str, registry: ModelRegistry, **kwargs: Any) -> s
             return f"✅ 模型 '{alias}' 已移除"
     return f"❌ 模型 '{alias}' 不存在"
 
+
 # /models ──────────────────────────────────────────────────
 
 register_command("/models", "列出所有已注册的模型及其角色分配", "/models")
+
 
 @command_handler("/models")
 def _cmd_models(*, registry: ModelRegistry, **kwargs: Any) -> str:
@@ -204,9 +232,11 @@ def _cmd_models(*, registry: ModelRegistry, **kwargs: Any) -> str:
 
     return "\n".join(lines)
 
+
 # /pool ────────────────────────────────────────────────────
 
 register_command("/pool", "查看模型调用池（v0.4.0）", "/pool")
+
 
 @command_handler("/pool")
 def _cmd_pool(*, session_state: dict, **kwargs: Any) -> str:
@@ -232,8 +262,12 @@ def _cmd_pool(*, session_state: dict, **kwargs: Any) -> str:
             if not e:
                 continue
             h = e.health
-            status = "[green]●[/green]" if h.consecutive_failures == 0 else (
-                "[red]✕[/red]" if h.circuit_open_until > 0 else "[yellow]◐[/yellow]"
+            status = (
+                "[green]●[/green]"
+                if h.consecutive_failures == 0
+                else (
+                    "[red]✕[/red]" if h.circuit_open_until > 0 else "[yellow]◐[/yellow]"
+                )
             )
             health_str = f"调用{h.total_calls}次"
             if h.avg_latency > 0:
@@ -245,6 +279,7 @@ def _cmd_pool(*, session_state: dict, **kwargs: Any) -> str:
 
     return "\n".join(lines)
 
+
 # /import_models ───────────────────────────────────────────
 
 register_command(
@@ -255,7 +290,9 @@ register_command(
 
 
 @command_handler("/import_models")
-def _cmd_import_models(*, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any) -> str:
+def _cmd_import_models(
+    *, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any
+) -> str:
     """P1-A: 批量注册模型(discover+probe+事务注册),注册后持久化到 ~/.xenon/models.yaml。"""
     from xenon.repl.batch_register import batch_register
 
@@ -282,6 +319,7 @@ def _cmd_import_models(*, args: str, registry: ModelRegistry, session_state: dic
             summary += f"\n⚠️  持久化失败: {e}"
     return summary
 
+
 # /reload_models ───────────────────────────────────────────
 
 register_command(
@@ -292,7 +330,9 @@ register_command(
 
 
 @command_handler("/reload_models")
-def _cmd_reload_models(*, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any) -> str:
+def _cmd_reload_models(
+    *, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any
+) -> str:
     """P1-A: 显式热重载(替代文件 watcher,避免 REPL 内竞态)。"""
     path = args.strip() or str(Path.home() / ".xenon" / "models.yaml")
     if not Path(path).exists():
@@ -311,6 +351,33 @@ def _cmd_reload_models(*, args: str, registry: ModelRegistry, session_state: dic
     pool.from_config(models_cfg)
     return f"✅ 已从 {path} 重载 {len(models_cfg)} 个模型到调用池"
 
+
+# /refresh ─────────────────────────────────────────────────
+
+register_command(
+    "/refresh",
+    "清除模型缓存并重新获取模型列表",
+    "/refresh [models|cache|all]",
+)
+
+
+@command_handler("/refresh")
+def _cmd_refresh(*, args: str, **kwargs: Any) -> str:
+    """清除模型缓存，强制从厂商接口重新获取模型列表。"""
+    from xenon.repl.provider_registry import clear_model_cache
+
+    subcommand = args.strip().lower() or "models"
+
+    if subcommand in ("models", "cache", "all"):
+        try:
+            clear_model_cache()
+            return "✅ 模型缓存已清除，下次启动将重新获取模型列表"
+        except Exception as e:
+            return f"❌ 清除缓存失败: {e}"
+    else:
+        return f"❌ 未知子命令 '{subcommand}'，可用: models | cache | all"
+
+
 # /set_profile ─────────────────────────────────────────────
 
 register_command(
@@ -328,11 +395,14 @@ def _cmd_set_profile(*, args: str, session_state: dict, **kwargs: Any) -> str:
     if pool is None:
         return "❌ 调用池不可用"
     if not profile:
-        return (f"当前性能偏好: [bold]{pool.perf_profile}[/bold]\n"
-                f"可选: fast(极速) | cost(成本优先) | balanced(均衡)")
+        return (
+            f"当前性能偏好: [bold]{pool.perf_profile}[/bold]\n"
+            f"可选: fast(极速) | cost(成本优先) | balanced(均衡)"
+        )
     if pool.set_perf_profile(profile):
         return f"✅ 性能偏好已设为: {profile}"
     return f"❌ 无效的偏好 '{profile}',可选: fast | cost | balanced"
+
 
 # /set_role ────────────────────────────────────────────────
 
@@ -342,13 +412,16 @@ register_command(
     "/set_role <role> <alias1> [alias2] [alias3] ...",
 )
 
+
 @command_handler("/set_role")
 def _cmd_set_role(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
     parts = args.split()
     if len(parts) < 2:
-        return "用法: /set_role <role> <alias1> [alias2] ...\n" \
-               "示例: /set_role planner claude gpt\n" \
-               "       /set_role coder deepseek gpt-mini"
+        return (
+            "用法: /set_role <role> <alias1> [alias2] ...\n"
+            "示例: /set_role planner claude gpt\n"
+            "       /set_role coder deepseek gpt-mini"
+        )
 
     role = parts[0]
     aliases = parts[1:]
@@ -358,6 +431,7 @@ def _cmd_set_role(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
     except ValueError as e:
         return f"❌ {e}"
 
+
 # /mode ────────────────────────────────────────────────────
 
 register_command(
@@ -366,8 +440,11 @@ register_command(
     "/mode [mode_name]\n可用: " + ", ".join(BUILTIN_MODES.keys()),
 )
 
+
 @command_handler("/mode")
-def _cmd_mode(*, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any) -> str:
+def _cmd_mode(
+    *, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any
+) -> str:
     if not args:
         current = registry.get_current_mode()
         lines = [f"当前范式: {current.name} — {current.description}\n"]
@@ -381,7 +458,7 @@ def _cmd_mode(*, args: str, registry: ModelRegistry, session_state: dict, **kwar
         mode = registry.set_mode(args.strip())
         # P1-High: 更新状态栏显示
         repl = session_state.get("_repl")
-        if repl and hasattr(repl, 'status_bar'):
+        if repl and hasattr(repl, "status_bar"):
             repl.status_bar.refresh()
         return f"✅ 已切换到范式: {mode.name} — {mode.description}"
     except ValueError as e:
@@ -391,6 +468,7 @@ def _cmd_mode(*, args: str, registry: ModelRegistry, session_state: dict, **kwar
 # /model ───────────────────────────────────────────────────
 
 register_command("/model", "交互式切换模型", "/model")
+
 
 @command_handler("/model")
 def _cmd_model(*, session_state: dict, registry: ModelRegistry, **kwargs: Any) -> str:
@@ -419,11 +497,13 @@ def _cmd_model(*, session_state: dict, registry: ModelRegistry, **kwargs: Any) -
     console.print()
 
     try:
-        choice = int(_IntPrompt.ask(
-            "输入编号切换模型",
-            choices=[str(i) for i in range(1, len(models) + 1)],
-            default="1",
-        ))
+        choice = int(
+            _IntPrompt.ask(
+                "输入编号切换模型",
+                choices=[str(i) for i in range(1, len(models) + 1)],
+                default="1",
+            )
+        )
     except (KeyboardInterrupt, EOFError, OSError):
         return "已取消"
 
@@ -435,12 +515,12 @@ def _cmd_model(*, session_state: dict, registry: ModelRegistry, **kwargs: Any) -
     if repl:
         repl._preferred_model_ids = [selected.model_id]
         # 同步到 auto_router
-        if hasattr(repl, 'auto_router') and repl.auto_router:
+        if hasattr(repl, "auto_router") and repl.auto_router:
             repl.auto_router._preferred_model_ids = [selected.model_id]
             # P1-High: 更新 _last_successful_model_id 和状态栏
             repl.auto_router.record_model_success(selected.model_id)
         # P1-High: 更新状态栏显示
-        if hasattr(repl, 'status_bar'):
+        if hasattr(repl, "status_bar"):
             repl.status_bar.set_last_model(selected.model_id)
         # v0.5.2: 清除该模型的失败标记，允许重新调用
         if hasattr(repl, "_failed_models"):
@@ -449,10 +529,10 @@ def _cmd_model(*, session_state: dict, registry: ModelRegistry, **kwargs: Any) -
     return f"✅ 已切换到: {selected.alias} ({selected.model_id})"
 
 
-
 # /provider ────────────────────────────────────────────────
 
 register_command("/provider", "查看已配置的厂商和可用模型", "/provider")
+
 
 @command_handler("/provider")
 def _cmd_provider(**kwargs: Any) -> str:
@@ -472,13 +552,12 @@ def _cmd_provider(**kwargs: Any) -> str:
         lines.append("  (无)")
         lines.append("\n输入 /setup 配置 API Key")
 
-    unconfigured = [p for p in PROVIDERS.values() if p.key not in {c.key for c in configured}]
+    unconfigured = [
+        p for p in PROVIDERS.values() if p.key not in {c.key for c in configured}
+    ]
     if unconfigured:
         lines.append("\n可用但未配置的厂商:")
         for p in unconfigured:
             lines.append(f"  {p.name} — {', '.join(p.models[:3])}...")
 
     return "\n".join(lines)
-
-
-

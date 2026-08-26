@@ -38,10 +38,18 @@ class BudgetPhase(str, Enum):
 
 # 收束阶段禁用的纯探索型工具（只读、易沦为拖延）。
 # read_file 显式豁免——收束阶段仍允许"读一次验证"，只拦"反复 list/search 探索"。
-CONVERGE_BLOCKED_TOOLS = frozenset({
-    "list_files", "search_files", "code_index", "ast_analyze",
-    "diff_preview", "web_fetch", "docs_fetch", "github_fetch",
-})
+CONVERGE_BLOCKED_TOOLS = frozenset(
+    {
+        "list_files",
+        "search_files",
+        "code_index",
+        "ast_analyze",
+        "diff_preview",
+        "web_fetch",
+        "docs_fetch",
+        "github_fetch",
+    }
+)
 
 
 @dataclass
@@ -79,7 +87,9 @@ class BudgetManager:
     # 为动态奖励留足空间，同时仍防奖励无限累积。）
     max_total_multiplier: float = 3.0
     # 收束阶段禁用工具集（可注入便于测试/扩展）
-    blocked_in_converge: frozenset[str] = field(default_factory=lambda: CONVERGE_BLOCKED_TOOLS)
+    blocked_in_converge: frozenset[str] = field(
+        default_factory=lambda: CONVERGE_BLOCKED_TOOLS
+    )
     # 奖励历史（可观测，供 mercy compile / debug 用）
     rewards: list[tuple[str, int]] = field(default_factory=list)
 

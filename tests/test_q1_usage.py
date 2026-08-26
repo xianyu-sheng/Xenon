@@ -29,7 +29,11 @@ from xenon.utils.llm_client import (
 
 
 def _endpoint(provider: str) -> ModelEndpoint:
-    base = "https://api.anthropic.com" if provider == "anthropic" else "https://api.openai.com/v1"
+    base = (
+        "https://api.anthropic.com"
+        if provider == "anthropic"
+        else "https://api.openai.com/v1"
+    )
     return ModelEndpoint(provider=provider, model_name="m", base_url=base, api_key="k")
 
 
@@ -42,7 +46,8 @@ class _FakeResponse:
         if self.status_code >= 400:
             req = httpx.Request("POST", "http://x")
             raise httpx.HTTPStatusError(
-                f"HTTP {self.status_code}", request=req,
+                f"HTTP {self.status_code}",
+                request=req,
                 response=httpx.Response(self.status_code, request=req),
             )
 
@@ -68,7 +73,9 @@ class _FakeClient:
 
 def _patch_provider(monkeypatch, provider: str, fake: _FakeClient) -> None:
     monkeypatch.setattr(lc, "_get_pooled_client", lambda endpoint, timeout=120: fake)
-    monkeypatch.setattr(lc, "build_endpoint", lambda mid, c=None, b=None: _endpoint(provider))
+    monkeypatch.setattr(
+        lc, "build_endpoint", lambda mid, c=None, b=None: _endpoint(provider)
+    )
 
 
 # ── _extract_usage 归一化 ────────────────────────────────────
@@ -76,7 +83,9 @@ def _patch_provider(monkeypatch, provider: str, fake: _FakeClient) -> None:
 
 class TestExtractUsage:
     def test_openai_compat_format(self):
-        data = {"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+        data = {
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        }
         u = _extract_usage(data, "openai")
         assert u.prompt_tokens == 10
         assert u.completion_tokens == 5
@@ -98,7 +107,9 @@ class TestExtractUsage:
 
     def test_partial_usage_fields(self):
         # 缺 total_tokens → 用 prompt+completion 求和
-        u = _extract_usage({"usage": {"prompt_tokens": 4, "completion_tokens": 6}}, "openai")
+        u = _extract_usage(
+            {"usage": {"prompt_tokens": 4, "completion_tokens": 6}}, "openai"
+        )
         assert u.total_tokens == 10
 
 
@@ -109,14 +120,23 @@ class TestChatCompletionEmitsUsage:
     def test_openai_usage_emitted_with_latency(self, monkeypatch):
         seen: list[tuple[str, LLMUsage, float]] = []
         unsub = register_usage_callback(lambda m, u, lat: seen.append((m, u, lat)))
-        fake = _FakeClient(payload={
-            "choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
-        })
+        fake = _FakeClient(
+            payload={
+                "choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 8,
+                    "total_tokens": 20,
+                },
+            }
+        )
         _patch_provider(monkeypatch, "openai", fake)
         try:
-            text = lc.chat_completion("openai/gpt-4o", [{"role": "user", "content": "hi"}],
-                                      credentials={"openai": "sk-test"})
+            text = lc.chat_completion(
+                "openai/gpt-4o",
+                [{"role": "user", "content": "hi"}],
+                credentials={"openai": "sk-test"},
+            )
         finally:
             unsub()
 
@@ -132,16 +152,20 @@ class TestChatCompletionEmitsUsage:
     def test_anthropic_usage_emitted(self, monkeypatch):
         seen: list[tuple[str, LLMUsage, float]] = []
         unsub = register_usage_callback(lambda m, u, lat: seen.append((m, u, lat)))
-        fake = _FakeClient(payload={
-            "content": [{"type": "text", "text": "hi back"}],
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 5, "output_tokens": 4},
-        })
+        fake = _FakeClient(
+            payload={
+                "content": [{"type": "text", "text": "hi back"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 5, "output_tokens": 4},
+            }
+        )
         _patch_provider(monkeypatch, "anthropic", fake)
         try:
-            text = lc.chat_completion("anthropic/claude-3-5-sonnet",
-                                      [{"role": "user", "content": "hi"}],
-                                      credentials={"anthropic": "sk-test"})
+            text = lc.chat_completion(
+                "anthropic/claude-3-5-sonnet",
+                [{"role": "user", "content": "hi"}],
+                credentials={"anthropic": "sk-test"},
+            )
         finally:
             unsub()
 
@@ -155,14 +179,19 @@ class TestChatCompletionEmitsUsage:
     def test_no_usage_field_still_emits_zero(self, monkeypatch):
         seen: list[tuple[str, LLMUsage, float]] = []
         unsub = register_usage_callback(lambda m, u, lat: seen.append((m, u, lat)))
-        fake = _FakeClient(payload={
-            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-            # 无 usage 字段
-        })
+        fake = _FakeClient(
+            payload={
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                # 无 usage 字段
+            }
+        )
         _patch_provider(monkeypatch, "openai", fake)
         try:
-            lc.chat_completion("openai/gpt-4o", [{"role": "user", "content": "hi"}],
-                               credentials={"openai": "sk-test"})
+            lc.chat_completion(
+                "openai/gpt-4o",
+                [{"role": "user", "content": "hi"}],
+                credentials={"openai": "sk-test"},
+            )
         finally:
             unsub()
 
@@ -173,20 +202,37 @@ class TestChatCompletionEmitsUsage:
         """续写多次 once 的 usage 应累加为一次 chat_completion 的总量。"""
         seen: list[tuple[str, LLMUsage, float]] = []
         unsub = register_usage_callback(lambda m, u, lat: seen.append((m, u, lat)))
-        fake = _FakeClient(payloads=[
-            {
-                "choices": [{"message": {"content": "part1"}, "finish_reason": "length"}],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-            },
-            {
-                "choices": [{"message": {"content": "part2"}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 20, "completion_tokens": 7, "total_tokens": 27},
-            },
-        ])
+        fake = _FakeClient(
+            payloads=[
+                {
+                    "choices": [
+                        {"message": {"content": "part1"}, "finish_reason": "length"}
+                    ],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 15,
+                    },
+                },
+                {
+                    "choices": [
+                        {"message": {"content": "part2"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {
+                        "prompt_tokens": 20,
+                        "completion_tokens": 7,
+                        "total_tokens": 27,
+                    },
+                },
+            ]
+        )
         _patch_provider(monkeypatch, "openai", fake)
         try:
-            text = lc.chat_completion("openai/gpt-4o", [{"role": "user", "content": "hi"}],
-                                      credentials={"openai": "sk-test"})
+            text = lc.chat_completion(
+                "openai/gpt-4o",
+                [{"role": "user", "content": "hi"}],
+                credentials={"openai": "sk-test"},
+            )
         finally:
             unsub()
 
@@ -204,16 +250,28 @@ class TestChatCompletionEmitsUsage:
 class TestUsageTracker:
     def test_tracker_accumulates(self, monkeypatch):
         tracker = UsageTracker()
-        fake = _FakeClient(payload={
-            "choices": [{"message": {"content": "x"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
-        })
+        fake = _FakeClient(
+            payload={
+                "choices": [{"message": {"content": "x"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "total_tokens": 150,
+                },
+            }
+        )
         _patch_provider(monkeypatch, "openai", fake)
         try:
-            lc.chat_completion("openai/gpt-4o", [{"role": "user", "content": "hi"}],
-                               credentials={"openai": "sk-test"})
-            lc.chat_completion("openai/gpt-4o", [{"role": "user", "content": "hi"}],
-                               credentials={"openai": "sk-test"})
+            lc.chat_completion(
+                "openai/gpt-4o",
+                [{"role": "user", "content": "hi"}],
+                credentials={"openai": "sk-test"},
+            )
+            lc.chat_completion(
+                "openai/gpt-4o",
+                [{"role": "user", "content": "hi"}],
+                credentials={"openai": "sk-test"},
+            )
 
             snap = tracker.snapshot()
             assert "openai/gpt-4o" in snap
@@ -230,31 +288,51 @@ class TestUsageTracker:
     def test_tracker_close_unsubscribes(self, monkeypatch):
         tracker = UsageTracker()
         tracker.close()
-        fake = _FakeClient(payload={
-            "choices": [{"message": {"content": "x"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        })
+        fake = _FakeClient(
+            payload={
+                "choices": [{"message": {"content": "x"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            }
+        )
         _patch_provider(monkeypatch, "openai", fake)
-        lc.chat_completion("openai/gpt-4o", [{"role": "user", "content": "hi"}],
-                           credentials={"openai": "sk-test"})
+        lc.chat_completion(
+            "openai/gpt-4o",
+            [{"role": "user", "content": "hi"}],
+            credentials={"openai": "sk-test"},
+        )
         # close 后不再累计
         assert tracker.total_tokens() == 0
 
     def test_callback_exception_isolated(self, monkeypatch):
         """回调抛异常不应影响主调用链。"""
+
         def bad_cb(m, u, lat):
             raise RuntimeError("boom")
+
         unsub = register_usage_callback(bad_cb)
         ok: list[int] = []
         unsub2 = register_usage_callback(lambda m, u, lat: ok.append(u.total_tokens))
-        fake = _FakeClient(payload={
-            "choices": [{"message": {"content": "x"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        })
+        fake = _FakeClient(
+            payload={
+                "choices": [{"message": {"content": "x"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            }
+        )
         _patch_provider(monkeypatch, "openai", fake)
         try:
-            text = lc.chat_completion("openai/gpt-4o", [{"role": "user", "content": "hi"}],
-                                      credentials={"openai": "sk-test"})
+            text = lc.chat_completion(
+                "openai/gpt-4o",
+                [{"role": "user", "content": "hi"}],
+                credentials={"openai": "sk-test"},
+            )
         finally:
             unsub()
             unsub2()
@@ -268,7 +346,9 @@ class TestUsageTracker:
 
 class TestLLMResponseRaw:
     def test_llmresponse_has_tool_calls_property(self):
-        r = LLMResponse(content="x", tool_calls=[{"id": "1", "name": "f", "arguments": {}}])
+        r = LLMResponse(
+            content="x", tool_calls=[{"id": "1", "name": "f", "arguments": {}}]
+        )
         assert r.has_tool_calls is True
         r2 = LLMResponse(content="x")
         assert r2.has_tool_calls is False

@@ -40,11 +40,13 @@ def _tool_round(call_id: str, payload: str) -> list[dict[str, Any]]:
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [{
-                "id": call_id,
-                "type": "function",
-                "function": {"name": "read_file", "arguments": "{}"},
-            }],
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ],
         },
         {"role": "tool", "tool_call_id": call_id, "content": payload},
     ]
@@ -87,15 +89,23 @@ class TestSplitProtocolBlocks:
         assert blocks[2][1]["role"] == "tool"
 
     def test_multiple_tools_stay_in_same_block(self):
-        messages = [{
-            "role": "assistant", "content": "",
-            "tool_calls": [
-                {"id": "a", "type": "function",
-                 "function": {"name": "read_file", "arguments": "{}"}},
-                {"id": "b", "type": "function",
-                 "function": {"name": "read_file", "arguments": "{}"}},
-            ],
-        },
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "a",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{}"},
+                    },
+                    {
+                        "id": "b",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{}"},
+                    },
+                ],
+            },
             {"role": "tool", "tool_call_id": "a", "content": "ra"},
             {"role": "tool", "tool_call_id": "b", "content": "rb"},
         ]
@@ -137,8 +147,7 @@ class TestCompactNativeToolMessages:
         assert out[1]["content"] == "the original task"
         # 折叠摘要就位，且是不需要配对的 user 消息
         assert any(
-            m["role"] == "user" and "历史已压缩" in m.get("content", "")
-            for m in out
+            m["role"] == "user" and "历史已压缩" in m.get("content", "") for m in out
         )
         # 最近若干轮保留
         assert out[-1]["role"] == "tool"
@@ -149,9 +158,7 @@ class TestCompactNativeToolMessages:
         for i in range(30):
             messages.extend(_tool_round(f"c{i}", "y" * 150))
         for keep in (1, 2, 3, 5, 8):
-            out = eng._compact_native_tool_messages(
-                messages, keep_recent_blocks=keep
-            )
+            out = eng._compact_native_tool_messages(messages, keep_recent_blocks=keep)
             assert _protocol_is_valid(out), f"keep_recent_blocks={keep} 破坏了协议"
 
     def test_failure_falls_back_to_original(self, monkeypatch):

@@ -52,7 +52,10 @@ def test_compact_persistence_failure_feedback():
     # P3-Low 问题2修复：持久化失败时_last_snapshot_error应被设置
     assert hasattr(cm, "_last_snapshot_error"), "应该有_last_snapshot_error属性"
     assert cm._last_snapshot_error is not None, "持久化失败时应设置错误信息"
-    assert "No such file or directory" in cm._last_snapshot_error or "Permission denied" in cm._last_snapshot_error
+    assert (
+        "No such file or directory" in cm._last_snapshot_error
+        or "Permission denied" in cm._last_snapshot_error
+    )
 
 
 def test_max_undo_snapshots_configurable():
@@ -93,10 +96,13 @@ def test_max_undo_snapshots_env_override():
         os.environ["XENON_MAX_UNDO_SNAPSHOTS"] = "20"
         # P3-Low 问题3修复：需要reload配置以应用环境变量
         from xenon.repl.system_config import reload_config
+
         reload_config()
 
         cm = ContextManager()
-        assert cm.max_undo_snapshots == 20, f"环境变量应生效，期望20，实际{cm.max_undo_snapshots}"
+        assert cm.max_undo_snapshots == 20, (
+            f"环境变量应生效，期望20，实际{cm.max_undo_snapshots}"
+        )
     finally:
         if old_val is None:
             os.environ.pop("XENON_MAX_UNDO_SNAPSHOTS", None)
@@ -128,4 +134,3 @@ def test_compact_persistence_success_feedback():
         assert hasattr(cm, "_last_snapshot_path"), "应该有_last_snapshot_path属性"
         assert cm._last_snapshot_path is not None, "持久化成功时应设置快照路径"
         assert Path(cm._last_snapshot_path).exists(), "快照文件应该存在"
-

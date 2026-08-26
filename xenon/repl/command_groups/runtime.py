@@ -69,7 +69,9 @@ def cmd_optimize(*, args: str, session_state: dict, **kwargs: Any) -> str:
     return "❌ 无法获取 REPL 状态"
 
 
-register_command("/verbose", "切换详细输出模式（显示思考过程和工具调用）", "/verbose [on|off]")
+register_command(
+    "/verbose", "切换详细输出模式（显示思考过程和工具调用）", "/verbose [on|off]"
+)
 
 
 @command_handler("/verbose")
@@ -87,7 +89,9 @@ def cmd_verbose(*, args: str, session_state: dict, **kwargs: Any) -> str:
     return "❌ 无法获取 REPL 状态"
 
 
-register_command("/restart", "优雅重启 REPL（重载配置、可选保存会话）", "/restart [--fresh]")
+register_command(
+    "/restart", "优雅重启 REPL（重载配置、可选保存会话）", "/restart [--fresh]"
+)
 
 
 @command_handler("/restart")
@@ -153,24 +157,28 @@ def cmd_debug_tokens(*, args: str, session_state: dict, **kwargs: Any) -> str:
         "",
     ]
 
-    if debug_info['real_usage']:
-        lines.extend([
-            "## 最近一次真实 Usage",
-            f"  Prompt tokens: {debug_info['real_usage']['prompt']}",
-            f"  Completion tokens: {debug_info['real_usage']['completion']}",
-            f"  Total tokens: {debug_info['real_usage']['total']}",
-            "",
-        ])
+    if debug_info["real_usage"]:
+        lines.extend(
+            [
+                "## 最近一次真实 Usage",
+                f"  Prompt tokens: {debug_info['real_usage']['prompt']}",
+                f"  Completion tokens: {debug_info['real_usage']['completion']}",
+                f"  Total tokens: {debug_info['real_usage']['total']}",
+                "",
+            ]
+        )
     else:
-        lines.extend([
-            "## 最近一次真实 Usage",
-            "  （无真实 usage 数据，可能是首次调用前或使用了 mock）",
-            "",
-        ])
+        lines.extend(
+            [
+                "## 最近一次真实 Usage",
+                "  （无真实 usage 数据，可能是首次调用前或使用了 mock）",
+                "",
+            ]
+        )
 
-    if show_per_turn and debug_info['per_turn']:
+    if show_per_turn and debug_info["per_turn"]:
         lines.append("## 每条消息的 Token 详情")
-        for turn_info in debug_info['per_turn']:
+        for turn_info in debug_info["per_turn"]:
             lines.append(
                 f"  [{turn_info['index']}] {turn_info['role']} "
                 f"({turn_info['turn_type']}): {turn_info['tokens']} tokens"
@@ -182,4 +190,3 @@ def cmd_debug_tokens(*, args: str, session_state: dict, **kwargs: Any) -> str:
         lines.append("💡 提示: 使用 /debug-tokens --per-turn 查看每条消息的详细信息")
 
     return "\n".join(lines)
-

@@ -45,7 +45,8 @@ def test_shared_policy_paces_requests_across_engine_graph(monkeypatch):
         "xenon.engine.execution_policy.time.monotonic", lambda: next(clock)
     )
     monkeypatch.setattr(
-        "xenon.engine.execution_policy.time.sleep", lambda seconds: sleeps.append(seconds)
+        "xenon.engine.execution_policy.time.sleep",
+        lambda seconds: sleeps.append(seconds),
     )
     policy = ExecutionPolicy(
         deadline_at=None,
@@ -201,7 +202,9 @@ def test_runtime_is_bound_to_every_tool_executor(tmp_path):
 
 def _repo(path: Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=path, check=True
+    )
     subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
     (path / "value.txt").write_text("old\n")
     subprocess.run(["git", "add", "value.txt"], cwd=path, check=True)

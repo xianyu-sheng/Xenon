@@ -4,12 +4,15 @@
   command_template 等）值替换为 <masked len=N>，大小写不敏感；非敏感保留。
 - ConsoleCallback.on_act verbose 输出不泄露敏感值。
 """
+
 from xenon.engine.callbacks import ConsoleCallback, mask_sensitive_params
 
 
 class TestMaskSensitiveParams:
     def test_masks_api_key_token_content(self):
-        out = mask_sensitive_params({"api_key": "sk-x", "token": "tok", "content": "abc"})
+        out = mask_sensitive_params(
+            {"api_key": "sk-x", "token": "tok", "content": "abc"}
+        )
         assert out["api_key"].startswith("<masked")
         assert out["token"].startswith("<masked")
         assert out["content"].startswith("<masked")
@@ -17,10 +20,12 @@ class TestMaskSensitiveParams:
         assert "abc" not in out.values()
 
     def test_masks_python_function_command_template(self):
-        out = mask_sensitive_params({
-            "python_function": "def f(): pass",
-            "command_template": "rm -rf /tmp",
-        })
+        out = mask_sensitive_params(
+            {
+                "python_function": "def f(): pass",
+                "command_template": "rm -rf /tmp",
+            }
+        )
         assert out["python_function"].startswith("<masked")
         assert out["command_template"].startswith("<masked")
         assert "def f" not in str(out["python_function"])
@@ -56,11 +61,14 @@ class TestMaskSensitiveParams:
 class TestConsoleCallbackOnActMasking:
     def test_verbose_output_does_not_leak_sensitive(self, capsys):
         cb = ConsoleCallback(verbose=True)
-        cb.on_act("write_file", {
-            "file_path": "/tmp/x.py",
-            "content": "SECRET_CODE_HERE",
-            "api_key": "sk-leak",
-        })
+        cb.on_act(
+            "write_file",
+            {
+                "file_path": "/tmp/x.py",
+                "content": "SECRET_CODE_HERE",
+                "api_key": "sk-leak",
+            },
+        )
         out = capsys.readouterr().out
         assert "SECRET_CODE_HERE" not in out
         assert "sk-leak" not in out

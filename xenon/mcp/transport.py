@@ -38,7 +38,12 @@ class MCPTransport:
 class StdioTransport(MCPTransport):
     """通过子进程 stdio 通信。"""
 
-    def __init__(self, command: str, args: list[str] | None = None, env: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        command: str,
+        args: list[str] | None = None,
+        env: dict[str, str] | None = None,
+    ) -> None:
         self.command = command
         self.args = args or []
         self.env = env
@@ -54,6 +59,7 @@ class StdioTransport(MCPTransport):
         """启动子进程。"""
         cmd = [self.command] + self.args
         import os
+
         child_env = dict(os.environ)
         if self.env:
             child_env.update(self.env)
@@ -121,8 +127,8 @@ class StdioTransport(MCPTransport):
         while True:
             nl = self._read_buf.find(b"\n")
             if nl >= 0:
-                line = bytes(self._read_buf[:nl + 1])
-                del self._read_buf[:nl + 1]
+                line = bytes(self._read_buf[: nl + 1])
+                del self._read_buf[: nl + 1]
                 return line.decode("utf-8", errors="replace")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -165,8 +171,13 @@ class StdioTransport(MCPTransport):
         except Exception:
             return ""
 
-    def request(self, method: str, params: dict[str, Any] | None = None,
-                max_lines: int = 50, timeout: float = 30.0) -> dict[str, Any]:
+    def request(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        max_lines: int = 50,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
         """发送请求并等待响应（原子操作，带墙钟超时）。
 
         - ``max_lines``：最多读取的行数上限（防止被无关通知/日志行无限消耗）。
@@ -200,11 +211,13 @@ class StdioTransport(MCPTransport):
                 line = self._readline_with_timeout(deadline)
                 if line is None:
                     raise RuntimeError(
-                        f"MCP 请求超时：{timeout}s 内未收到 id={request_id} 的响应")
+                        f"MCP 请求超时：{timeout}s 内未收到 id={request_id} 的响应"
+                    )
                 if line == "":
                     stderr = self._read_stderr_safely()
                     raise RuntimeError(
-                        f"MCP 子进程无输出（EOF）。stderr: {stderr[:500]}")
+                        f"MCP 子进程无输出（EOF）。stderr: {stderr[:500]}"
+                    )
                 try:
                     response = json.loads(line)
                 except json.JSONDecodeError as e:
@@ -217,7 +230,8 @@ class StdioTransport(MCPTransport):
                     continue
 
             raise RuntimeError(
-                f"MCP 请求超时：读取 {max_lines} 行后仍未收到 id={request_id} 的响应")
+                f"MCP 请求超时：读取 {max_lines} 行后仍未收到 id={request_id} 的响应"
+            )
 
     def close(self) -> None:
         """关闭子进程。"""
@@ -289,7 +303,9 @@ class SSETransport(MCPTransport):
         except Exception as e:
             raise RuntimeError(f"MCP SSE 接收失败: {e}")
 
-    def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def request(
+        self, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """发送请求。SSE 模式下直接用 POST 请求-响应。"""
         self._request_id += 1
         message = {

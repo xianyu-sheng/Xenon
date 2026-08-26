@@ -24,8 +24,11 @@ register_command(
     "/shortcut create|list|run|delete [参数]",
 )
 
+
 @command_handler("/shortcut")
-def _cmd_shortcut(*, args: str, registry: ModelRegistry, session_state: dict[str, Any], **kwargs: Any) -> str:
+def _cmd_shortcut(
+    *, args: str, registry: ModelRegistry, session_state: dict[str, Any], **kwargs: Any
+) -> str:
     from xenon.repl.shortcut_manager import ShortcutManager
 
     manager = ShortcutManager()
@@ -59,9 +62,12 @@ def _cmd_shortcut(*, args: str, registry: ModelRegistry, session_state: dict[str
         if sc is None:
             return f"❌ 未找到快捷指令 '{name}'"
         steps_preview = "\n".join(f"  {i}. {s}" for i, s in enumerate(sc.steps, 1))
-        console.print(Panel(steps_preview or "  (无步骤)", title=f"快捷指令 '{name}' 将执行"))
+        console.print(
+            Panel(steps_preview or "  (无步骤)", title=f"快捷指令 '{name}' 将执行")
+        )
         if not confirm_action(
-            f"运行快捷指令 '{name}'（将执行以上 {len(sc.steps)} 步命令）？", default=False
+            f"运行快捷指令 '{name}'（将执行以上 {len(sc.steps)} 步命令）？",
+            default=False,
         ):
             return "已取消"
         return manager.execute(name, run_args)
@@ -88,7 +94,9 @@ def _shortcut_create_interactive(manager, registry=None) -> str:
 
     # 选择创建模式
     console.print("\n[dim]创建模式:[/dim]")
-    console.print("  [bold]1[/bold]. 🤖 智能生成 — 只需描述，Agent 自动生成命令（推荐）")
+    console.print(
+        "  [bold]1[/bold]. 🤖 智能生成 — 只需描述，Agent 自动生成命令（推荐）"
+    )
     console.print("  [bold]2[/bold]. ✏️  手动配置 — 逐行输入命令")
 
     mode = _Prompt.ask("选择模式", choices=["1", "2"], default="1")
@@ -117,12 +125,14 @@ def _shortcut_auto_generate(name: str, description: str, manager, registry=None)
         preview_lines.append(f"  [bold]{i}.[/bold] [cyan]{step}[/cyan]")
     preview = "\n".join(preview_lines)
 
-    console.print(Panel(
-        preview,
-        title="[bold green]✅ 自动生成的快捷指令[/bold green]",
-        border_style="green",
-        padding=(1, 2),
-    ))
+    console.print(
+        Panel(
+            preview,
+            title="[bold green]✅ 自动生成的快捷指令[/bold green]",
+            border_style="green",
+            padding=(1, 2),
+        )
+    )
 
     console.print("\n[dim]👆 以上是 Agent 根据你的描述自动生成的命令。[/dim]\n")
 
@@ -137,6 +147,7 @@ def _shortcut_auto_generate(name: str, description: str, manager, registry=None)
     shortcut = manager.create(name, description, steps)
     return f"✅ 快捷指令 /{shortcut.name} 已创建！使用 /{shortcut.name} 执行。"
 
+
 def _generate_shortcut_steps(description: str, registry=None) -> list[str]:
     """用 LLM 根据描述生成快捷指令命令。"""
     try:
@@ -147,6 +158,7 @@ def _generate_shortcut_steps(description: str, registry=None) -> list[str]:
             return []
 
         import sys
+
         if sys.platform == "win32":
             shell_hint = "Windows PowerShell"
             example = '["Write-Host \'hello\'", "Get-ChildItem"]'
@@ -166,13 +178,18 @@ def _generate_shortcut_steps(description: str, registry=None) -> list[str]:
 示例: {example}"""
 
         messages = [
-            {"role": "system", "content": "你是一个命令生成器。根据用户描述生成 shell 命令数组。只返回 JSON 数组。"},
+            {
+                "role": "system",
+                "content": "你是一个命令生成器。根据用户描述生成 shell 命令数组。只返回 JSON 数组。",
+            },
             {"role": "user", "content": prompt},
         ]
 
         for model_id in model_ids:
             try:
-                response = chat_completion(model_id, messages, max_tokens=500, temperature=0.3)
+                response = chat_completion(
+                    model_id, messages, max_tokens=500, temperature=0.3
+                )
                 return _parse_shortcut_steps(response)
             except Exception:
                 continue
@@ -210,7 +227,9 @@ def _parse_shortcut_steps(response: str) -> list[str]:
     return []
 
 
-def _shortcut_manual_create(name: str, description: str, manager, pre_steps=None) -> str:
+def _shortcut_manual_create(
+    name: str, description: str, manager, pre_steps=None
+) -> str:
     """手动配置快捷指令。"""
     from rich.prompt import Prompt as _Prompt
 

@@ -96,7 +96,10 @@ class TestGetConfiguredProvidersEnvFallback:
 
     def test_env_only_anthropic_appears_in_configured(self):
         """只设 ANTHROPIC_AUTH_TOKEN（没 yaml）→ anthropic 出现在 configured。"""
-        env = {"ANTHROPIC_AUTH_TOKEN": "claude-code-token", "HOME": os.environ.get("HOME", "/tmp")}
+        env = {
+            "ANTHROPIC_AUTH_TOKEN": "claude-code-token",
+            "HOME": os.environ.get("HOME", "/tmp"),
+        }
         with patch.dict(os.environ, env, clear=True):
             # 清 yaml：mock load_credentials 返回空
             with patch(
@@ -110,7 +113,9 @@ class TestGetConfiguredProvidersEnvFallback:
                 ):
                     configured = get_configured_providers()
                     keys = [p.key for p in configured]
-                    assert "anthropic" in keys, f"anthropic 应在 configured 中，实际: {keys}"
+                    assert "anthropic" in keys, (
+                        f"anthropic 应在 configured 中，实际: {keys}"
+                    )
                     p = next(p for p in configured if p.key == "anthropic")
                     assert p.api_key == "claude-code-token"
 

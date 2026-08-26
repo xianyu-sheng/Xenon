@@ -5,6 +5,7 @@ an append-only, hash-chained protocol for claims, observations, gate verdicts,
 operations, state snapshots, and validation results. Adapters can emit events at
 any lifecycle boundary without coupling engines to persistence details.
 """
+
 from __future__ import annotations
 
 import copy
@@ -59,7 +60,9 @@ class EvidenceSource(_StringEnum):
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=repr)
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=repr
+    )
 
 
 def _enum_value(value: str | Enum, enum_type: type[Enum]) -> str:
@@ -84,9 +87,14 @@ class EvidenceEvent:
 
     @classmethod
     def create(
-        cls, *, session_id: str, phase: str | LifecyclePhase,
-        kind: str | EventKind, source: str | EvidenceSource,
-        payload: dict[str, Any] | None = None, sequence: int = 0,
+        cls,
+        *,
+        session_id: str,
+        phase: str | LifecyclePhase,
+        kind: str | EventKind,
+        source: str | EvidenceSource,
+        payload: dict[str, Any] | None = None,
+        sequence: int = 0,
         predecessor_id: str | None = None,
     ) -> "EvidenceEvent":
         phase_value = _enum_value(phase, LifecyclePhase)
@@ -94,16 +102,28 @@ class EvidenceEvent:
         source_value = _enum_value(source, EvidenceSource)
         if not session_id:
             raise ValueError("session_id must not be empty")
-        event = cls(uuid.uuid4().hex, session_id, sequence, phase_value, kind_value,
-                    source_value, copy.deepcopy(payload or {}), predecessor_id)
+        event = cls(
+            uuid.uuid4().hex,
+            session_id,
+            sequence,
+            phase_value,
+            kind_value,
+            source_value,
+            copy.deepcopy(payload or {}),
+            predecessor_id,
+        )
         event.content_hash = event._calculate_hash()
         return event
 
     def _calculate_hash(self) -> str:
         body = {
-            "event_id": self.event_id, "session_id": self.session_id,
-            "sequence": self.sequence, "phase": self.phase, "kind": self.kind,
-            "source": self.source, "payload": self.payload,
+            "event_id": self.event_id,
+            "session_id": self.session_id,
+            "sequence": self.sequence,
+            "phase": self.phase,
+            "kind": self.kind,
+            "source": self.source,
+            "payload": self.payload,
             "predecessor_id": self.predecessor_id,
         }
         return hashlib.sha256(_canonical(body).encode()).hexdigest()
@@ -113,20 +133,40 @@ class EvidenceEvent:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "event_id": self.event_id, "session_id": self.session_id,
-            "sequence": self.sequence, "phase": self.phase, "kind": self.kind,
-            "source": self.source, "payload": copy.deepcopy(self.payload),
-            "predecessor_id": self.predecessor_id, "content_hash": self.content_hash,
+            "event_id": self.event_id,
+            "session_id": self.session_id,
+            "sequence": self.sequence,
+            "phase": self.phase,
+            "kind": self.kind,
+            "source": self.source,
+            "payload": copy.deepcopy(self.payload),
+            "predecessor_id": self.predecessor_id,
+            "content_hash": self.content_hash,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EvidenceEvent":
-        required = {"event_id", "session_id", "sequence", "phase", "kind", "source", "payload", "content_hash"}
+        required = {
+            "event_id",
+            "session_id",
+            "sequence",
+            "phase",
+            "kind",
+            "source",
+            "payload",
+            "content_hash",
+        }
         if not isinstance(data, dict) or not required.issubset(data):
             raise ValueError("invalid evidence event")
-        event = cls.create(session_id=str(data["session_id"]), phase=data["phase"],
-                           kind=data["kind"], source=data["source"], payload=data["payload"],
-                           sequence=int(data["sequence"]), predecessor_id=data.get("predecessor_id"))
+        event = cls.create(
+            session_id=str(data["session_id"]),
+            phase=data["phase"],
+            kind=data["kind"],
+            source=data["source"],
+            payload=data["payload"],
+            sequence=int(data["sequence"]),
+            predecessor_id=data.get("predecessor_id"),
+        )
         event.event_id = str(data["event_id"])
         event.content_hash = str(data["content_hash"])
         return event
@@ -135,7 +175,9 @@ class EvidenceEvent:
 class EvidenceLedger:
     """Hash-chained, session-scoped evidence stream."""
 
-    def __init__(self, session_id: str, events: Iterable[EvidenceEvent] | None = None) -> None:
+    def __init__(
+        self, session_id: str, events: Iterable[EvidenceEvent] | None = None
+    ) -> None:
         if not session_id:
             raise ValueError("session_id must not be empty")
         self.session_id = session_id
@@ -144,13 +186,23 @@ class EvidenceLedger:
         for event in events or ():
             self.append_event(event)
 
-    def append(self, phase: str | LifecyclePhase, kind: str | EventKind,
-               source: str | EvidenceSource, payload: dict[str, Any] | None = None) -> EvidenceEvent:
+    def append(
+        self,
+        phase: str | LifecyclePhase,
+        kind: str | EventKind,
+        source: str | EvidenceSource,
+        payload: dict[str, Any] | None = None,
+    ) -> EvidenceEvent:
         with self._lock:
-            event = EvidenceEvent.create(session_id=self.session_id, phase=phase, kind=kind,
-                                         source=source, payload=payload,
-                                         sequence=len(self.events) + 1,
-                                         predecessor_id=self.events[-1].event_id if self.events else None)
+            event = EvidenceEvent.create(
+                session_id=self.session_id,
+                phase=phase,
+                kind=kind,
+                source=source,
+                payload=payload,
+                sequence=len(self.events) + 1,
+                predecessor_id=self.events[-1].event_id if self.events else None,
+            )
             self.events.append(event)
             return event
 
@@ -165,15 +217,25 @@ class EvidenceLedger:
             self.events.append(event)
             return event
 
-    def query(self, *, phase: str | LifecyclePhase | None = None,
-              kind: str | EventKind | None = None,
-              source: str | EvidenceSource | None = None) -> list[EvidenceEvent]:
+    def query(
+        self,
+        *,
+        phase: str | LifecyclePhase | None = None,
+        kind: str | EventKind | None = None,
+        source: str | EvidenceSource | None = None,
+    ) -> list[EvidenceEvent]:
         phase_value = _enum_value(phase, LifecyclePhase) if phase is not None else None
         kind_value = _enum_value(kind, EventKind) if kind is not None else None
-        source_value = _enum_value(source, EvidenceSource) if source is not None else None
-        return [e for e in self.events if (phase_value is None or e.phase == phase_value)
-                and (kind_value is None or e.kind == kind_value)
-                and (source_value is None or e.source == source_value)]
+        source_value = (
+            _enum_value(source, EvidenceSource) if source is not None else None
+        )
+        return [
+            e
+            for e in self.events
+            if (phase_value is None or e.phase == phase_value)
+            and (kind_value is None or e.kind == kind_value)
+            and (source_value is None or e.source == source_value)
+        ]
 
     def verify_integrity(self) -> bool:
         previous: EvidenceEvent | None = None
@@ -188,11 +250,16 @@ class EvidenceLedger:
         return True
 
     def snapshot(self) -> dict[str, Any]:
-        return {"session_id": self.session_id, "events": [e.to_dict() for e in self.events]}
+        return {
+            "session_id": self.session_id,
+            "events": [e.to_dict() for e in self.events],
+        }
 
     @classmethod
     def from_snapshot(cls, snapshot: dict[str, Any]) -> "EvidenceLedger":
-        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("events"), list):
+        if not isinstance(snapshot, dict) or not isinstance(
+            snapshot.get("events"), list
+        ):
             raise ValueError("invalid evidence ledger snapshot")
         ledger = cls(
             str(snapshot.get("session_id", "")),
@@ -221,8 +288,12 @@ class EvidenceLedger:
                         raise ValueError("invalid evidence event") from exc
         if not events:
             raise ValueError("evidence ledger is empty")
-        return cls.from_snapshot({"session_id": events[0].session_id,
-                                  "events": [e.to_dict() for e in events]})
+        return cls.from_snapshot(
+            {
+                "session_id": events[0].session_id,
+                "events": [e.to_dict() for e in events],
+            }
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,15 +309,28 @@ class EvidencePack:
         integrity = ledger.verify_integrity()
         if not integrity:
             raise ValueError("cannot build EvidencePack from an invalid ledger")
-        failures = sum(1 for e in ledger.events if e.kind == EventKind.GATE_VERDICT.value
-                       and e.payload.get("passed") is False)
-        return cls(ledger.session_id, len(ledger.events), failures, True,
-                   tuple(e.to_dict() for e in ledger.events))
+        failures = sum(
+            1
+            for e in ledger.events
+            if e.kind == EventKind.GATE_VERDICT.value
+            and e.payload.get("passed") is False
+        )
+        return cls(
+            ledger.session_id,
+            len(ledger.events),
+            failures,
+            True,
+            tuple(e.to_dict() for e in ledger.events),
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return {"session_id": self.session_id, "event_count": self.event_count,
-                "gate_failures": self.gate_failures,
-                "integrity_verified": self.integrity_verified, "events": list(self.events)}
+        return {
+            "session_id": self.session_id,
+            "event_count": self.event_count,
+            "gate_failures": self.gate_failures,
+            "integrity_verified": self.integrity_verified,
+            "events": list(self.events),
+        }
 
 
 class EvidenceRuntime:
@@ -319,18 +403,25 @@ class EvidenceRuntime:
             payload["user_input"] = user_input[:500]
         payload.update(extra)
         return self._ledger.append(
-            LifecyclePhase.TASK, EventKind.TASK_FACT, EvidenceSource.ENGINE, payload,
+            LifecyclePhase.TASK,
+            EventKind.TASK_FACT,
+            EvidenceSource.ENGINE,
+            payload,
         )
 
     def record_claim(self, *, text: str = "", **extra: Any) -> EvidenceEvent:
         return self._ledger.append(
-            LifecyclePhase.UNDERSTANDING, EventKind.CLAIM, EvidenceSource.LLM,
+            LifecyclePhase.UNDERSTANDING,
+            EventKind.CLAIM,
+            EvidenceSource.LLM,
             {"text": text[:500], **extra},
         )
 
     def record_plan(self, *, plan: Any = None, **extra: Any) -> EvidenceEvent:
         return self._ledger.append(
-            LifecyclePhase.PLANNING, EventKind.PLAN, EvidenceSource.LLM,
+            LifecyclePhase.PLANNING,
+            EventKind.PLAN,
+            EvidenceSource.LLM,
             {"plan_summary": _summary(plan), **extra},
         )
 
@@ -342,7 +433,9 @@ class EvidenceRuntime:
         **extra: Any,
     ) -> EvidenceEvent:
         return self._ledger.append(
-            LifecyclePhase.PRE_TOOL, EventKind.TOOL_REQUEST, EvidenceSource.ENGINE,
+            LifecyclePhase.PRE_TOOL,
+            EventKind.TOOL_REQUEST,
+            EvidenceSource.ENGINE,
             {"tool": tool, "params": _sanitize(params), **extra},
         )
 
@@ -356,9 +449,16 @@ class EvidenceRuntime:
         **extra: Any,
     ) -> EvidenceEvent:
         return self._ledger.append(
-            LifecyclePhase.POST_TOOL, EventKind.TOOL_OBSERVATION, EvidenceSource.TOOL,
-            {"tool": tool, "params": _sanitize(params), "success": success,
-             "summary": summary[:500], **extra},
+            LifecyclePhase.POST_TOOL,
+            EventKind.TOOL_OBSERVATION,
+            EvidenceSource.TOOL,
+            {
+                "tool": tool,
+                "params": _sanitize(params),
+                "success": success,
+                "summary": summary[:500],
+                **extra,
+            },
         )
 
     def record_gate_verdict(
@@ -371,8 +471,16 @@ class EvidenceRuntime:
         **extra: Any,
     ) -> EvidenceEvent:
         return self._ledger.append(
-            LifecyclePhase.VALIDATION, EventKind.GATE_VERDICT, EvidenceSource.GATE,
-            {"gate": gate, "passed": passed, "reason": reason[:500], "phase": phase, **extra},
+            LifecyclePhase.VALIDATION,
+            EventKind.GATE_VERDICT,
+            EvidenceSource.GATE,
+            {
+                "gate": gate,
+                "passed": passed,
+                "reason": reason[:500],
+                "phase": phase,
+                **extra,
+            },
         )
 
     def record_validation(
@@ -384,13 +492,17 @@ class EvidenceRuntime:
         **extra: Any,
     ) -> EvidenceEvent:
         return self._ledger.append(
-            LifecyclePhase.VALIDATION, EventKind.VALIDATION_RESULT, EvidenceSource.TEST,
+            LifecyclePhase.VALIDATION,
+            EventKind.VALIDATION_RESULT,
+            EvidenceSource.TEST,
             {"kind": kind, "passed": passed, "detail": detail[:500], **extra},
         )
 
     def record_delivery(self, *, output: str = "", **extra: Any) -> EvidenceEvent:
         return self._ledger.append(
-            LifecyclePhase.DELIVERY, EventKind.DELIVERY, EvidenceSource.ENGINE,
+            LifecyclePhase.DELIVERY,
+            EventKind.DELIVERY,
+            EvidenceSource.ENGINE,
             {"output": output[:500], **extra},
         )
 
@@ -416,17 +528,27 @@ class EvidenceRuntime:
 
         已存在 delivery 事件时直接重算 pack，不重复记录。
         """
-        has_delivery = any(e.kind == EventKind.DELIVERY.value for e in self._ledger.events)
+        has_delivery = any(
+            e.kind == EventKind.DELIVERY.value for e in self._ledger.events
+        )
         if not has_delivery and run_delivery_gates:
             for phase, kwargs in (
                 ("fix", {"tracker": tracker}),
-                ("output", {"output": output, "tracker": tracker,
-                            "workspace_root": workspace_root}),
+                (
+                    "output",
+                    {
+                        "output": output,
+                        "tracker": tracker,
+                        "workspace_root": workspace_root,
+                    },
+                ),
             ):
                 verdict = self.gate_failed(phase, None, **kwargs)
                 self.record_gate_verdict(
-                    gate=phase, passed=verdict is None,
-                    reason=verdict.reason if verdict else "passed", phase=phase,
+                    gate=phase,
+                    passed=verdict is None,
+                    reason=verdict.reason if verdict else "passed",
+                    phase=phase,
                 )
         if not has_delivery:
             pack = EvidencePack.build(self._ledger)

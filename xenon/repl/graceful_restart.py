@@ -51,6 +51,7 @@ class RestartOutcome:
         message: 用户可见的提示信息
         context_reset: 上下文是否被 clear()（恢复失败的降级状态标志）
     """
+
     ok: bool
     message: str
     context_reset: bool = False
@@ -174,6 +175,7 @@ class GracefulRestartManager:
         try:
             # 尝试重新加载配置文件
             from xenon.repl.system_config import reload_config
+
             config = reload_config()
 
             # 基本有效性检查
@@ -211,12 +213,14 @@ class GracefulRestartManager:
             # 构造会话快照
             history_data = []
             for turn in self.repl.ctx_mgr.history:
-                history_data.append({
-                    "role": turn.role,
-                    "content": turn.content,
-                    "model_used": turn.model_used,
-                    "metadata": turn.metadata,
-                })
+                history_data.append(
+                    {
+                        "role": turn.role,
+                        "content": turn.content,
+                        "model_used": turn.model_used,
+                        "metadata": turn.metadata,
+                    }
+                )
 
             snapshot = {
                 "version": _SESSION_FORMAT_VERSION,
@@ -273,7 +277,7 @@ class GracefulRestartManager:
             return RestartOutcome(
                 ok=False,
                 message=f"会话文件版本不兼容 (期望 {_SESSION_FORMAT_VERSION}, 实际 {version})\n"
-                        f"文件保留在 {session_file.absolute()}",
+                f"文件保留在 {session_file.absolute()}",
             )
 
         # 历史记录校验
@@ -290,19 +294,21 @@ class GracefulRestartManager:
                 return RestartOutcome(
                     ok=False,
                     message=f"会话文件格式错误: history[{i}] 不是字典\n"
-                            f"文件保留在 {session_file.absolute()}",
+                    f"文件保留在 {session_file.absolute()}",
                 )
             if "role" not in turn_data or "content" not in turn_data:
                 return RestartOutcome(
                     ok=False,
                     message=f"会话文件格式错误: history[{i}] 缺少 role 或 content\n"
-                            f"文件保留在 {session_file.absolute()}",
+                    f"文件保留在 {session_file.absolute()}",
                 )
-            if not isinstance(turn_data["role"], str) or not isinstance(turn_data["content"], str):
+            if not isinstance(turn_data["role"], str) or not isinstance(
+                turn_data["content"], str
+            ):
                 return RestartOutcome(
                     ok=False,
                     message=f"会话文件格式错误: history[{i}] 的 role/content 不是字符串\n"
-                            f"文件保留在 {session_file.absolute()}",
+                    f"文件保留在 {session_file.absolute()}",
                 )
 
         # ── 写入段：整体包在 try 块，任一步失败都清空上下文 ──
@@ -310,6 +316,7 @@ class GracefulRestartManager:
         try:
             # 创建临时上下文，全部写入成功后再替换
             from xenon.repl.context_manager import ContextManager
+
             temp_ctx = ContextManager(
                 max_tokens=self.repl.ctx_mgr.max_tokens,
                 track_real_usage=True,
@@ -402,7 +409,9 @@ class GracefulRestartManager:
         # 清理 MCP 服务器连接
         logger.debug("清理 MCP 连接...")
         try:
-            if hasattr(self.repl, "agent_context") and hasattr(self.repl.agent_context, "close_all_mcp"):
+            if hasattr(self.repl, "agent_context") and hasattr(
+                self.repl.agent_context, "close_all_mcp"
+            ):
                 self.repl.agent_context.close_all_mcp()
         except Exception as e:
             logger.warning(f"清理 MCP 连接失败: {e}")
@@ -423,6 +432,7 @@ class GracefulRestartManager:
 
         # 重载配置
         from xenon.repl.system_config import reload_config
+
         reload_config()
 
         # 重建模型池
@@ -438,16 +448,20 @@ class GracefulRestartManager:
         self.repl.status_bar._auto_router = self.repl.auto_router
 
         # 从配置重新加载模型
-        config_data = self.repl.registry.export_config(include_derived=True).get("models", {})
+        config_data = self.repl.registry.export_config(include_derived=True).get(
+            "models", {}
+        )
         self.repl.model_pool.from_config(config_data)
 
         # 重建终端活动指示器
         from xenon.repl.terminal_activity import TerminalActivityIndicator
+
         self.repl._terminal_activity = TerminalActivityIndicator()
         self.repl._session_state["terminal_activity"] = self.repl._terminal_activity
 
         # 重建剪贴板监听器
         from xenon.tools import ClipboardMonitor
+
         self.repl._clipboard_monitor = ClipboardMonitor(
             on_image=self.repl._on_clipboard_image
         )

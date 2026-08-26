@@ -40,7 +40,8 @@ def _read_clipboard_image_linux() -> bytes | None:
     try:
         result = subprocess.run(
             ["wl-paste", "-t", "image/png"],
-            capture_output=True, timeout=2,
+            capture_output=True,
+            timeout=2,
         )
         if result.returncode == 0 and result.stdout:
             return result.stdout
@@ -53,7 +54,8 @@ def _read_clipboard_image_linux() -> bytes | None:
     try:
         result = subprocess.run(
             ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
-            capture_output=True, timeout=2,
+            capture_output=True,
+            timeout=2,
         )
         if result.returncode == 0 and result.stdout:
             return result.stdout
@@ -70,17 +72,20 @@ def _read_clipboard_image_macos() -> bytes | None:
     try:
         # 检查剪贴板是否有图片
         check = subprocess.run(
-            ["osascript", "-e",
-             'get the clipboard as «class PNGf»'],
-            capture_output=True, timeout=3,
+            ["osascript", "-e", "get the clipboard as «class PNGf»"],
+            capture_output=True,
+            timeout=3,
         )
         if check.returncode == 0 and check.stdout.strip():
             # 转换为 PNG 字节
             result = subprocess.run(
-                ["osascript", "-e",
-                 'set img to the clipboard as «class PNGf»\n'
-                 'return img'],
-                capture_output=True, timeout=3,
+                [
+                    "osascript",
+                    "-e",
+                    "set img to the clipboard as «class PNGf»\nreturn img",
+                ],
+                capture_output=True,
+                timeout=3,
             )
             if result.returncode == 0:
                 raw = result.stdout.strip()
@@ -220,9 +225,11 @@ class ClipboardMonitor:
                 except Exception as e:
                     logger.error("热键回调异常: %s", e)
 
-            self._hotkey_listener = keyboard.GlobalHotKeys({
-                _HOTKEY_COMBO: on_activate,
-            })
+            self._hotkey_listener = keyboard.GlobalHotKeys(
+                {
+                    _HOTKEY_COMBO: on_activate,
+                }
+            )
             self._hotkey_listener.start()
             logger.info("热键注册成功: %s", _HOTKEY_COMBO)
 
@@ -233,10 +240,7 @@ class ClipboardMonitor:
             self._hotkey_listener.stop()
 
         except ImportError:
-            logger.warning(
-                "pynput 未安装，剪贴板监听不可用。"
-                "安装: pip install pynput"
-            )
+            logger.warning("pynput 未安装，剪贴板监听不可用。安装: pip install pynput")
             self._running = False
         except Exception as e:
             logger.error("热键监听失败: %s", e)

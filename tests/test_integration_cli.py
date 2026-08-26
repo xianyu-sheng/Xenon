@@ -38,11 +38,7 @@ def _write_skill(root: Path, name: str = "sample") -> Path:
 
 def _write_mcp_server(path: Path, *, hang: bool = False) -> Path:
     if hang:
-        source = (
-            "import sys,time\n"
-            "sys.stdin.readline()\n"
-            "time.sleep(3600)\n"
-        )
+        source = "import sys,time\nsys.stdin.readline()\ntime.sleep(3600)\n"
     else:
         source = (
             "import json,sys\n"
@@ -99,7 +95,9 @@ def test_integrations_describe_json_is_machine_readable(tmp_path, capsys):
     assert payload["product"]["id"] == "xenon"
     assert payload["agent_skills"]["format"] == "SKILL.md"
     assert str(home / ".agents" / "skills") in payload["agent_skills"]["user_paths"]
-    assert str(project / ".xenon" / "skills") in payload["agent_skills"]["project_paths"]
+    assert (
+        str(project / ".xenon" / "skills") in payload["agent_skills"]["project_paths"]
+    )
     assert payload["mcp"]["supports_stdio_env"] is True
     assert payload["mcp"]["supports_http_headers"] is True
     assert payload["mcp"]["protocol_version"] == "2024-11-05"
@@ -248,9 +246,7 @@ def test_skill_install_list_and_force_replace(tmp_path, capsys):
     assert receipt["replaced"] is False
     assert destination.joinpath("references/guide.md").read_text() == "guide"
 
-    code, stdout, _, _, _ = _run(
-        ["skill", "list", "--json"], tmp_path, capsys
-    )
+    code, stdout, _, _, _ = _run(["skill", "list", "--json"], tmp_path, capsys)
     listing = json.loads(stdout)
     assert code == 0
     assert listing["count"] == 1
@@ -287,7 +283,9 @@ def test_skill_install_rejects_out_of_tree_symlink(tmp_path, capsys):
 
 
 def test_mcp_stdio_config_from_stdin_persists_but_redacts_secrets(
-    tmp_path, capsys, monkeypatch,
+    tmp_path,
+    capsys,
+    monkeypatch,
 ):
     secret = "plan-key-super-secret"
     config = {
@@ -400,7 +398,9 @@ def test_repl_preload_preserves_persisted_mcp_credentials(monkeypatch):
             "headers": {"Authorization": "Bearer http-secret"},
         },
     ]
-    monkeypatch.setattr("xenon.repl.provider_registry.load_mcp_servers", lambda: servers)
+    monkeypatch.setattr(
+        "xenon.repl.provider_registry.load_mcp_servers", lambda: servers
+    )
     repl = REPL.__new__(REPL)
     repl._mcp_registry = None
     repl.agent_context = AgentContext()
@@ -434,9 +434,7 @@ def test_mcp_legacy_command_form_and_doctor(tmp_path, capsys):
 def test_mcp_remove_is_explicit_and_noninteractive(tmp_path, capsys):
     _run(["mcp", "add", "local", sys.executable, "--json"], tmp_path, capsys)
 
-    code, stdout, _, _, _ = _run(
-        ["mcp", "remove", "local", "--json"], tmp_path, capsys
-    )
+    code, stdout, _, _, _ = _run(["mcp", "remove", "local", "--json"], tmp_path, capsys)
 
     assert code == 0
     assert json.loads(stdout)["removed"] is True
@@ -444,7 +442,9 @@ def test_mcp_remove_is_explicit_and_noninteractive(tmp_path, capsys):
     assert json.loads(stdout)["count"] == 0
 
 
-def test_invalid_mcp_config_is_rejected_before_persistence(tmp_path, capsys, monkeypatch):
+def test_invalid_mcp_config_is_rejected_before_persistence(
+    tmp_path, capsys, monkeypatch
+):
     monkeypatch.setattr(
         sys,
         "stdin",
@@ -493,7 +493,9 @@ def test_main_routes_integration_commands_without_starting_repl(monkeypatch):
     import xenon.main as main
 
     calls = []
-    monkeypatch.setattr(integration_cli, "run_integration_cli", lambda argv: calls.append(argv) or 0)
+    monkeypatch.setattr(
+        integration_cli, "run_integration_cli", lambda argv: calls.append(argv) or 0
+    )
     monkeypatch.setattr(sys, "argv", ["xenon", "integrations", "describe", "--json"])
 
     main.cli()
@@ -502,9 +504,7 @@ def test_main_routes_integration_commands_without_starting_repl(monkeypatch):
 
 
 def test_invalid_json_command_keeps_stdout_structured(tmp_path, capsys):
-    code, stdout, stderr, _, _ = _run(
-        ["skill", "install", "--json"], tmp_path, capsys
-    )
+    code, stdout, stderr, _, _ = _run(["skill", "install", "--json"], tmp_path, capsys)
 
     assert code == 2
     assert stderr == ""

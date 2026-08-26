@@ -14,7 +14,9 @@ def test_static_guide_is_compact_and_generic():
 
 
 def test_debug_advice_contains_composable_tools():
-    advice = get_strategy_advice("debug", {"read_file", "search_files", "edit_file", "command"})
+    advice = get_strategy_advice(
+        "debug", {"read_file", "search_files", "edit_file", "command"}
+    )
     assert isinstance(advice, StrategyAdvice)
     assert advice.intent == "debug"
     assert "search_files" in advice.prompt

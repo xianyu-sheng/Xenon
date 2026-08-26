@@ -18,16 +18,16 @@ class RoutingRecord:
     """单次路由决策记录。"""
 
     timestamp: float
-    user_input_preview: str          # 前 120 字符
+    user_input_preview: str  # 前 120 字符
     intent: str | None
     complexity: float
     requires_reasoning: bool
     requires_code_generation: bool
     requires_tools: bool
     estimated_tokens: int
-    task_tier: int | None            # Step 10 填充
-    selected_models: list[str]       # model_id 列表，按分数降序
-    scores: list[float]              # 对应的 _score 值
+    task_tier: int | None  # Step 10 填充
+    selected_models: list[str]  # model_id 列表，按分数降序
+    scores: list[float]  # 对应的 _score 值
 
 
 class RingBuffer:
@@ -103,7 +103,7 @@ class RoutingHistory:
             return
         try:
             data = json.loads(self._persist_path.read_text())
-            for item in data[-self._ring.maxsize:]:
+            for item in data[-self._ring.maxsize :]:
                 record = RoutingRecord(**item)
                 self._ring.append(record)
         except Exception:

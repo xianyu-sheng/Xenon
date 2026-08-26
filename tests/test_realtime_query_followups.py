@@ -32,17 +32,19 @@ def _schedule_text() -> str:
         arrival_minutes = index * 15 + 45
         arrival_hour, arrival_minute = divmod(arrival_minutes % (24 * 60), 60)
         records.append(
-            "\n".join([
-                f"{hour:02d}:{minute:02d}",
-                "昆山南",
-                "0时45分",
-                f"G{7000 + index}",
-                f"{arrival_hour:02d}:{arrival_minute:02d}",
-                "常州",
-                "二等座54",
-                "预订",
-                "票务说明" * 150,
-            ])
+            "\n".join(
+                [
+                    f"{hour:02d}:{minute:02d}",
+                    "昆山南",
+                    "0时45分",
+                    f"G{7000 + index}",
+                    f"{arrival_hour:02d}:{arrival_minute:02d}",
+                    "常州",
+                    "二等座54",
+                    "预订",
+                    "票务说明" * 150,
+                ]
+            )
         )
     return "\n\n".join(records)
 
@@ -72,13 +74,16 @@ def test_long_schedule_is_filtered_before_prefix_truncation():
 
 
 def test_structured_mcp_json_is_filtered_before_truncation():
-    source = json.dumps({
-        "trains": [
-            {"train_no": "G1", "departure_time": "17:55"},
-            {"train_no": "G2", "departure_time": "18:05"},
-            {"train_no": "G3", "departure_time": "20:30"},
-        ]
-    }, ensure_ascii=False)
+    source = json.dumps(
+        {
+            "trains": [
+                {"train_no": "G1", "departure_time": "17:55"},
+                {"train_no": "G2", "departure_time": "18:05"},
+                {"train_no": "G3", "departure_time": "20:30"},
+            ]
+        },
+        ensure_ascii=False,
+    )
 
     filtered, metadata = _prefilter_time_records(
         source,
@@ -99,9 +104,10 @@ def test_12306_pipe_records_are_filtered_inside_json():
         fields.extend([departure, "20:00", "01:00", "Y"])
         return "|".join(fields)
 
-    source = json.dumps({
-        "data": {"result": [record("G1", "17:40"), record("G2", "18:20")]}
-    }, ensure_ascii=False)
+    source = json.dumps(
+        {"data": {"result": [record("G1", "17:40"), record("G2", "18:20")]}},
+        ensure_ascii=False,
+    )
     filtered, metadata = _prefilter_time_records(
         source,
         start_time="18:00",
@@ -117,9 +123,11 @@ def test_12306_pipe_records_are_filtered_inside_json():
 
 def test_tool_node_inherits_time_constraint_from_query_context():
     node = ToolNode("fetch", action_type="web_fetch", url="https://example.com/list")
-    context = AgentContext({
-        "_query_constraint_source": "查周五昆山到常州车票，晚上六点之后",
-    })
+    context = AgentContext(
+        {
+            "_query_constraint_source": "查周五昆山到常州车票，晚上六点之后",
+        }
+    )
 
     filtered, metadata = node._prefilter_result_text(_schedule_text(), context)
 
@@ -161,7 +169,9 @@ def test_web_fetch_query_parameter_is_not_rewritten_as_file_search():
 
 
 def test_retrieval_followups_are_recognized_without_becoming_debug_tasks():
-    long_followup = "为什么被截断了呢？是输出太长了吗？那你能不能在截断之前用我给的条件筛选呢？"
+    long_followup = (
+        "为什么被截断了呢？是输出太长了吗？那你能不能在截断之前用我给的条件筛选呢？"
+    )
     assert is_contextual_followup(long_followup) is True
     assert is_contextual_followup("结果呢") is True
     assert is_contextual_followup("为什么这段 Python 代码运行失败") is False

@@ -10,7 +10,9 @@ from xenon.engine.context import AgentContext
 class MCPToolsMixin:
     """Call a configured MCP registry through the ToolNode contract."""
 
-    def _validate_mcp_paths(self, args: dict[str, Any], context: AgentContext) -> str | None:
+    def _validate_mcp_paths(
+        self, args: dict[str, Any], context: AgentContext
+    ) -> str | None:
         """验证 MCP 工具参数中的文件路径。
 
         Args:
@@ -26,14 +28,28 @@ class MCPToolsMixin:
         """
         # 常见的文件路径参数名
         PATH_PARAM_NAMES = {
-            'path', 'file_path', 'filepath', 'file', 'filename',
-            'dir', 'directory', 'folder', 'uri', 'url',
-            'source', 'destination', 'target', 'output',
-            'input_path', 'output_path', 'src', 'dst'
+            "path",
+            "file_path",
+            "filepath",
+            "file",
+            "filename",
+            "dir",
+            "directory",
+            "folder",
+            "uri",
+            "url",
+            "source",
+            "destination",
+            "target",
+            "output",
+            "input_path",
+            "output_path",
+            "src",
+            "dst",
         }
 
         # 检查是否有 _validate_path 方法（来自 ToolNode）
-        if not hasattr(self, '_validate_path'):
+        if not hasattr(self, "_validate_path"):
             # 如果没有路径验证能力（不应该发生），跳过检查
             return None
 
@@ -47,7 +63,7 @@ class MCPToolsMixin:
                 continue
 
             # 跳过明显不是文件路径的值（URL、相对路径等）
-            if value.startswith(('http://', 'https://', 'file://', 'ftp://')):
+            if value.startswith(("http://", "https://", "file://", "ftp://")):
                 continue
             if not value or len(value) > 500:  # 路径不应该太长
                 continue
@@ -55,10 +71,20 @@ class MCPToolsMixin:
             # 尝试验证路径
             try:
                 # 推断是否为写入操作（基于工具名和参数名）
-                tool_name = self.tool_name.lower() if hasattr(self, 'tool_name') else ''
-                is_write = any(keyword in tool_name or keyword in key_lower
-                             for keyword in ['write', 'save', 'create', 'edit',
-                                           'delete', 'remove', 'update', 'modify'])
+                tool_name = self.tool_name.lower() if hasattr(self, "tool_name") else ""
+                is_write = any(
+                    keyword in tool_name or keyword in key_lower
+                    for keyword in [
+                        "write",
+                        "save",
+                        "create",
+                        "edit",
+                        "delete",
+                        "remove",
+                        "update",
+                        "modify",
+                    ]
+                )
 
                 # 调用 ToolNode 的路径验证
                 self._validate_path(value, for_write=is_write)
@@ -151,4 +177,3 @@ class MCPToolsMixin:
                 "content": None,
                 "metadata": None,
             }
-

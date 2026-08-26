@@ -36,6 +36,7 @@ from xenon.repl.prompt_optimizer import (
 # 辅助
 # ══════════════════════════════════════════════════════════════
 
+
 def _ds_resp(prompt=1000, completion=200, hit=800, miss=200) -> dict:
     return {
         "usage": {
@@ -65,32 +66,40 @@ class TestLLMUsageCache:
         assert a.prompt_tokens == 500  # 0 + 500
 
     def test_extract_usage_deepseek_cache_fields(self):
-        u = _extract_usage({
-            "usage": {
-                "prompt_tokens": 1000,
-                "completion_tokens": 200,
-                "prompt_cache_hit_tokens": 800,
-                "prompt_cache_miss_tokens": 200,
-            }
-        }, "deepseek")
+        u = _extract_usage(
+            {
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 200,
+                    "prompt_cache_hit_tokens": 800,
+                    "prompt_cache_miss_tokens": 200,
+                }
+            },
+            "deepseek",
+        )
         assert u.cache_hit_tokens == 800
         assert u.cache_miss_tokens == 200
 
     def test_extract_usage_no_cache_fields(self):
-        u = _extract_usage({
-            "usage": {"prompt_tokens": 500, "completion_tokens": 100}
-        }, "openai")
+        u = _extract_usage(
+            {"usage": {"prompt_tokens": 500, "completion_tokens": 100}}, "openai"
+        )
         assert u.cache_hit_tokens == 0
         assert u.cache_miss_tokens == 0
 
     def test_extract_usage_alternate_cache_field_names(self):
         """兼容 cache_hit_tokens / cache_miss_tokens 字段名。"""
-        u = _extract_usage({
-            "usage": {
-                "prompt_tokens": 1000, "completion_tokens": 200,
-                "cache_hit_tokens": 700, "cache_miss_tokens": 300,
-            }
-        }, "custom")
+        u = _extract_usage(
+            {
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 200,
+                    "cache_hit_tokens": 700,
+                    "cache_miss_tokens": 300,
+                }
+            },
+            "custom",
+        )
         assert u.cache_hit_tokens == 700
         assert u.cache_miss_tokens == 300
 
@@ -103,9 +112,9 @@ class TestLLMUsageCache:
         assert u.prompt_tokens == 0
 
     def test_extract_usage_anthropic_no_cache(self):
-        u = _extract_usage({
-            "usage": {"input_tokens": 100, "output_tokens": 50}
-        }, "anthropic")
+        u = _extract_usage(
+            {"usage": {"input_tokens": 100, "output_tokens": 50}}, "anthropic"
+        )
         assert u.cache_hit_tokens == 0
         assert u.cache_miss_tokens == 0
         assert u.total_tokens == 150
@@ -138,6 +147,7 @@ class TestResponseCallback:
     def test_callback_exception_isolated(self):
         def bad_cb(model_id, data):
             raise RuntimeError("boom")
+
         unsub = register_response_callback(bad_cb)
         try:
             # 不应抛出
@@ -229,7 +239,9 @@ class TestCacheTrackerCore:
 
     def test_no_cache_data(self):
         t = CacheTracker()
-        t.record_response("openai/gpt-4o", {"usage": {"prompt_tokens": 100, "completion_tokens": 50}})
+        t.record_response(
+            "openai/gpt-4o", {"usage": {"prompt_tokens": 100, "completion_tokens": 50}}
+        )
         assert t.cache_hits == 0
         assert t.cache_misses == 0
         assert t.cache_hit_rate == 0.0
@@ -329,7 +341,9 @@ class TestCacheTrackerDropDetection:
     def test_all_zero_cache_no_alert(self):
         t = CacheTracker()
         for _ in range(15):
-            t.record_response("x", {"usage": {"prompt_tokens": 100, "completion_tokens": 50}})
+            t.record_response(
+                "x", {"usage": {"prompt_tokens": 100, "completion_tokens": 50}}
+            )
         assert t.check_hit_rate_drop() is None
         t.close()
 
@@ -457,8 +471,8 @@ class TestCacheTrackerAutoCallback:
 # PromptOptimizer 缓存优化
 # ══════════════════════════════════════════════════════════════
 
-class TestOptimizeMessagesForCache:
 
+class TestOptimizeMessagesForCache:
     def test_stable_parts_first(self):
         messages = [
             {"role": "system", "content": "You are a coder."},
@@ -521,14 +535,11 @@ class TestOptimizeMessagesForCache:
         ]
         result = optimize_messages_for_cache(messages)
         assert any(m["role"] == "system" for m in result)
-        sys_combined = " ".join(
-            m["content"] for m in result if m["role"] == "system"
-        )
+        sys_combined = " ".join(m["content"] for m in result if m["role"] == "system")
         assert "helpful assistant" in sys_combined
 
 
 class TestIsDynamicContent:
-
     def test_date(self):
         assert _is_dynamic_content("Today is 2025-07-20")
 
@@ -554,29 +565,39 @@ class TestIsDynamicContent:
 # LLMUsage _extract_usage 集成
 # ══════════════════════════════════════════════════════════════
 
-class TestExtractUsageEdgeCases:
 
+class TestExtractUsageEdgeCases:
     def test_cache_hit_zero_when_not_present(self):
-        u = _extract_usage({
-            "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
-        }, "deepseek")
+        u = _extract_usage(
+            {
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "total_tokens": 150,
+                }
+            },
+            "deepseek",
+        )
         assert u.cache_hit_tokens == 0
         assert u.cache_miss_tokens == 0
 
     def test_total_tokens_fallback(self):
-        u = _extract_usage({
-            "usage": {"prompt_tokens": 100, "completion_tokens": 50}
-        }, "deepseek")
+        u = _extract_usage(
+            {"usage": {"prompt_tokens": 100, "completion_tokens": 50}}, "deepseek"
+        )
         assert u.total_tokens == 150
 
     def test_string_values_still_parse(self):
         """兼容字符串数字的 usage 值（某些代理会这样返回）。"""
-        u = _extract_usage({
-            "usage": {
-                "prompt_tokens": "100",
-                "completion_tokens": "50",
-                "prompt_cache_hit_tokens": "80",
-            }
-        }, "deepseek")
+        u = _extract_usage(
+            {
+                "usage": {
+                    "prompt_tokens": "100",
+                    "completion_tokens": "50",
+                    "prompt_cache_hit_tokens": "80",
+                }
+            },
+            "deepseek",
+        )
         assert u.prompt_tokens == 100
         assert u.cache_hit_tokens == 80

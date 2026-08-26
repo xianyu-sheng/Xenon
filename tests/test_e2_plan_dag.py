@@ -27,8 +27,10 @@ from xenon.utils.response_adapter import parse_plan
 # ── PlanDAG 单元 ────────────────────────────────────────────
 def _steps(*specs):
     """specs: (id, [deps]) 元组序列 → steps 列表。"""
-    return [{"id": i, "task": f"t{i}", "tool": None, "params": {}, "depends_on": list(d)}
-            for i, d in specs]
+    return [
+        {"id": i, "task": f"t{i}", "tool": None, "params": {}, "depends_on": list(d)}
+        for i, d in specs
+    ]
 
 
 class TestPlanDAG:
@@ -103,36 +105,74 @@ class TestPlanDAG:
 # ── parse_plan depends_on ───────────────────────────────────
 class TestParsePlanDependsOn:
     def test_preserves_depends_on_list(self):
-        raw = json.dumps({"analysis": "a", "steps": [
-            {"id": 1, "task": "a", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "b", "tool": "write_file", "params": {}, "depends_on": [1]},
-        ]})
+        raw = json.dumps(
+            {
+                "analysis": "a",
+                "steps": [
+                    {
+                        "id": 1,
+                        "task": "a",
+                        "tool": None,
+                        "params": {},
+                        "depends_on": [],
+                    },
+                    {
+                        "id": 2,
+                        "task": "b",
+                        "tool": "write_file",
+                        "params": {},
+                        "depends_on": [1],
+                    },
+                ],
+            }
+        )
         steps = parse_plan(raw)["steps"]
         assert steps[0]["depends_on"] == []
         assert steps[1]["depends_on"] == [1]
 
     def test_scalar_dep_coerced_to_list(self):
-        raw = json.dumps({"analysis": "a", "steps": [
-            {"id": 1, "task": "a", "tool": None, "params": {}},
-            {"id": 2, "task": "b", "tool": None, "params": {}, "depends_on": 1},
-        ]})
+        raw = json.dumps(
+            {
+                "analysis": "a",
+                "steps": [
+                    {"id": 1, "task": "a", "tool": None, "params": {}},
+                    {"id": 2, "task": "b", "tool": None, "params": {}, "depends_on": 1},
+                ],
+            }
+        )
         steps = parse_plan(raw)["steps"]
         assert steps[0]["depends_on"] == []
         assert steps[1]["depends_on"] == [1]
 
     def test_default_empty_when_absent(self):
-        raw = json.dumps({"analysis": "a", "steps": [
-            {"id": 1, "task": "a", "tool": None, "params": {}},
-        ]})
+        raw = json.dumps(
+            {
+                "analysis": "a",
+                "steps": [
+                    {"id": 1, "task": "a", "tool": None, "params": {}},
+                ],
+            }
+        )
         steps = parse_plan(raw)["steps"]
         assert steps[0]["depends_on"] == []
 
     def test_dep_aliases(self):
-        raw = json.dumps({"analysis": "a", "steps": [
-            {"id": 1, "task": "a", "tool": None, "params": {}},
-            {"id": 2, "task": "b", "tool": None, "params": {}, "after": [1]},
-            {"id": 3, "task": "c", "tool": None, "params": {}, "requires": [1, 2]},
-        ]})
+        raw = json.dumps(
+            {
+                "analysis": "a",
+                "steps": [
+                    {"id": 1, "task": "a", "tool": None, "params": {}},
+                    {"id": 2, "task": "b", "tool": None, "params": {}, "after": [1]},
+                    {
+                        "id": 3,
+                        "task": "c",
+                        "tool": None,
+                        "params": {},
+                        "requires": [1, 2],
+                    },
+                ],
+            }
+        )
         steps = parse_plan(raw)["steps"]
         assert steps[1]["depends_on"] == [1]
         assert steps[2]["depends_on"] == [1, 2]
@@ -147,8 +187,15 @@ class _PlanLLM:
     - 否则（执行步骤）→ 按 step_task 匹配 step_results/fail_tasks/raise_tasks
     """
 
-    def __init__(self, plan, step_results=None, summary="SUMMARY",
-                 fail_tasks=None, raise_tasks=None, execute_sleep=0.0):
+    def __init__(
+        self,
+        plan,
+        step_results=None,
+        summary="SUMMARY",
+        fail_tasks=None,
+        raise_tasks=None,
+        execute_sleep=0.0,
+    ):
         self.plan = plan
         self.step_results = step_results or {}
         self.summary = summary
@@ -184,8 +231,14 @@ class _PlanLLM:
         return f"完成: {task}"
 
 
-def _engine(plan, *, enable_parallel=False, executor_model_priority=None,
-            model_priority=None, **llm_kw):
+def _engine(
+    plan,
+    *,
+    enable_parallel=False,
+    executor_model_priority=None,
+    model_priority=None,
+    **llm_kw,
+):
     eng = PlanExecuteEngine(
         model_priority or ["m1"],
         executor_model_priority=executor_model_priority,
@@ -204,11 +257,14 @@ def _boom(*a, **k):
 class TestSerialDefault:
     def test_no_deps_uses_serial_path(self):
         """无 depends_on + 默认 enable_parallel=False → 走 _run_serial，行为不变。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": []},
-            {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": []},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
+                {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": []},
+                {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": []},
+            ],
+        }
         eng, fake = _engine(plan)
         # 若误走 DAG 路径，此处抛错
         eng._run_dag = _boom
@@ -220,10 +276,19 @@ class TestSerialDefault:
         assert len(exec_calls) == 3
 
     def test_serial_results_in_order(self):
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "alpha", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "beta", "tool": None, "params": {}, "depends_on": []},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {
+                    "id": 1,
+                    "task": "alpha",
+                    "tool": None,
+                    "params": {},
+                    "depends_on": [],
+                },
+                {"id": 2, "task": "beta", "tool": None, "params": {}, "depends_on": []},
+            ],
+        }
         eng, _ = _engine(plan, step_results={"alpha": "A", "beta": "B"})
         ctx = AgentContext()
         eng.run("做", ctx)
@@ -234,10 +299,13 @@ class TestSerialDefault:
 
 class TestDAGEngaged:
     def test_depends_on_engages_dag_not_serial(self):
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
+                {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
+            ],
+        }
         eng, _ = _engine(plan)  # enable_parallel=False，但 depends_on 存在 → DAG
         eng._run_serial = pytest.fail.__call__  # type: ignore[assignment]
         out = eng.run("做", AgentContext())
@@ -245,10 +313,25 @@ class TestDAGEngaged:
 
     def test_dag_respects_wave_order(self):
         """DAG 串行波次：step2 依赖 step1 → step1 必先执行。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "first", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "second", "tool": None, "params": {}, "depends_on": [1]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {
+                    "id": 1,
+                    "task": "first",
+                    "tool": None,
+                    "params": {},
+                    "depends_on": [],
+                },
+                {
+                    "id": 2,
+                    "task": "second",
+                    "tool": None,
+                    "params": {},
+                    "depends_on": [1],
+                },
+            ],
+        }
         eng, fake = _engine(plan)
         eng.run("做", AgentContext())
         # 依赖在前：first 必须先于 second 执行
@@ -261,14 +344,32 @@ class TestParallelWaves:
 
         只读工具（read_file）无工作区竞态，是并发真正被允许的场景。
         """
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": "read_file",
-             "params": {"file_path": "seed.py"}, "depends_on": []},
-            {"id": 2, "task": "t2", "tool": "read_file",
-             "params": {"file_path": "a.py"}, "depends_on": [1]},
-            {"id": 3, "task": "t3", "tool": "read_file",
-             "params": {"file_path": "b.py"}, "depends_on": [1]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {
+                    "id": 1,
+                    "task": "t1",
+                    "tool": "read_file",
+                    "params": {"file_path": "seed.py"},
+                    "depends_on": [],
+                },
+                {
+                    "id": 2,
+                    "task": "t2",
+                    "tool": "read_file",
+                    "params": {"file_path": "a.py"},
+                    "depends_on": [1],
+                },
+                {
+                    "id": 3,
+                    "task": "t3",
+                    "tool": "read_file",
+                    "params": {"file_path": "b.py"},
+                    "depends_on": [1],
+                },
+            ],
+        }
 
         def _sleepy_tool(tool, params, ctx, tracker):
             time.sleep(0.4)
@@ -293,12 +394,20 @@ class TestParallelWaves:
 
     def test_llm_step_wave_downgrades_to_serial_with_warning(self):
         """LLM 步骤内部可调用任意工具 → 整波退回串行，且降级对用户可见。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": "read_file",
-             "params": {"file_path": "seed.py"}, "depends_on": []},
-            {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
-            {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": [1]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {
+                    "id": 1,
+                    "task": "t1",
+                    "tool": "read_file",
+                    "params": {"file_path": "seed.py"},
+                    "depends_on": [],
+                },
+                {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
+                {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": [1]},
+            ],
+        }
         eng, _ = _engine(plan, enable_parallel=True)
         eng._execute_step_with_tool = lambda t, p, c, tr: "ok"
         eng._exec_wave_parallel = _boom  # 走到并发路径即失败
@@ -312,14 +421,32 @@ class TestParallelWaves:
 
     def test_same_path_writes_downgrade_to_serial(self):
         """同一波次两步写同一文件 → 退回串行，避免工作区竞态。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": "read_file",
-             "params": {"file_path": "seed.py"}, "depends_on": []},
-            {"id": 2, "task": "t2", "tool": "write_file",
-             "params": {"file_path": "same.py", "content": "x"}, "depends_on": [1]},
-            {"id": 3, "task": "t3", "tool": "write_file",
-             "params": {"file_path": "same.py", "content": "y"}, "depends_on": [1]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {
+                    "id": 1,
+                    "task": "t1",
+                    "tool": "read_file",
+                    "params": {"file_path": "seed.py"},
+                    "depends_on": [],
+                },
+                {
+                    "id": 2,
+                    "task": "t2",
+                    "tool": "write_file",
+                    "params": {"file_path": "same.py", "content": "x"},
+                    "depends_on": [1],
+                },
+                {
+                    "id": 3,
+                    "task": "t3",
+                    "tool": "write_file",
+                    "params": {"file_path": "same.py", "content": "y"},
+                    "depends_on": [1],
+                },
+            ],
+        }
         eng, _ = _engine(plan, enable_parallel=True)
         eng._execute_step_with_tool = lambda t, p, c, tr: "ok"
         eng._exec_wave_parallel = _boom  # 走到并发路径即失败
@@ -333,11 +460,20 @@ class TestParallelWaves:
 
     def test_serial_step_exception_does_not_abort_wave(self):
         """串行波次中单步抛异常 → 转为失败结果，后续步骤仍执行（与并发同契约）。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "boom", "tool": None, "params": {}, "depends_on": [1]},
-            {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": [1]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
+                {
+                    "id": 2,
+                    "task": "boom",
+                    "tool": None,
+                    "params": {},
+                    "depends_on": [1],
+                },
+                {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": [1]},
+            ],
+        }
         # depends_on 触发 DAG；enable_parallel=False → 波内走 _exec_wave_serial
         eng, _ = _engine(plan, enable_parallel=False, raise_tasks={"boom"})
         eng._exec_wave_parallel = _boom  # 走到并发路径即失败
@@ -349,13 +485,26 @@ class TestParallelWaves:
 
     def test_parallel_isolated_trackers_merged(self):
         """并发波次中每个工具步骤持有独立 tracker，波次结束合并入主 tracker。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "t2", "tool": "write_file",
-             "params": {"file_path": "a.py", "content": "x"}, "depends_on": [1]},
-            {"id": 3, "task": "t3", "tool": "write_file",
-             "params": {"file_path": "b.py", "content": "y"}, "depends_on": [1]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
+                {
+                    "id": 2,
+                    "task": "t2",
+                    "tool": "write_file",
+                    "params": {"file_path": "a.py", "content": "x"},
+                    "depends_on": [1],
+                },
+                {
+                    "id": 3,
+                    "task": "t3",
+                    "tool": "write_file",
+                    "params": {"file_path": "b.py", "content": "y"},
+                    "depends_on": [1],
+                },
+            ],
+        }
         eng, _ = _engine(plan, enable_parallel=True)
 
         seen_trackers = []
@@ -378,10 +527,13 @@ class TestParallelWaves:
 
     def test_parallel_single_step_wave_serial(self):
         """enable_parallel=True 但每波仅 1 步 → 走 _exec_wave_serial，不抛错。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
+                {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
+            ],
+        }
         eng, fake = _engine(plan, enable_parallel=True)
         out = eng.run("做", AgentContext())
         assert out == "SUMMARY"
@@ -389,11 +541,20 @@ class TestParallelWaves:
 
     def test_parallel_step_exception_becomes_failure(self):
         """并发波次中单步抛异常 → 转为"执行异常"结果，不连坐整波。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "boom", "tool": None, "params": {}, "depends_on": [1]},
-            {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": [1]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
+                {
+                    "id": 2,
+                    "task": "boom",
+                    "tool": None,
+                    "params": {},
+                    "depends_on": [1],
+                },
+                {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": [1]},
+            ],
+        }
         eng, _ = _engine(plan, enable_parallel=True, raise_tasks={"boom"})
         ctx = AgentContext()
         eng.run("做", ctx)
@@ -406,11 +567,14 @@ class TestParallelWaves:
 class TestSkipCascade:
     def test_failed_step_dependent_skipped(self):
         """step2 失败 → 依赖它的 step3 被跳过（修复 §8.27.1）。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
-            {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": [2]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
+                {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
+                {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": [2]},
+            ],
+        }
         eng, _ = _engine(plan, fail_tasks={"t2"})  # enable_parallel=False，DAG 串行波次
         ctx = AgentContext()
         eng.run("做", ctx)
@@ -419,12 +583,15 @@ class TestSkipCascade:
 
     def test_skip_cascade_chains(self):
         """step2 失败 → step3（依赖2）跳过 → step4（依赖3）也跳过。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
-            {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": [2]},
-            {"id": 4, "task": "t4", "tool": None, "params": {}, "depends_on": [3]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
+                {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
+                {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": [2]},
+                {"id": 4, "task": "t4", "tool": None, "params": {}, "depends_on": [3]},
+            ],
+        }
         eng, _ = _engine(plan, fail_tasks={"t2"})
         ctx = AgentContext()
         eng.run("做", ctx)
@@ -433,11 +600,20 @@ class TestSkipCascade:
 
     def test_independent_step_still_runs_after_failure(self):
         """step2 失败 → 不依赖它的 step3 仍执行（不全局中止）。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
-            {"id": 3, "task": "t3", "tool": None, "params": {}, "depends_on": []},  # 独立
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
+                {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
+                {
+                    "id": 3,
+                    "task": "t3",
+                    "tool": None,
+                    "params": {},
+                    "depends_on": [],
+                },  # 独立
+            ],
+        }
         eng, _ = _engine(plan, fail_tasks={"t2"})
         ctx = AgentContext()
         eng.run("做", ctx)
@@ -448,10 +624,13 @@ class TestSkipCascade:
 class TestFallback:
     def test_cycle_falls_back_to_serial(self):
         """循环依赖 → PlanDAGCycleError → 回退串行，on_warning 触发。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": [2]},
-            {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": [2]},
+                {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
+            ],
+        }
         eng, fake = _engine(plan)
         warnings = []
         eng.callback.on_warning = lambda msg: warnings.append(msg)
@@ -463,11 +642,14 @@ class TestFallback:
 
     def test_duplicate_id_falls_back_to_serial(self):
         # 含 depends_on → 触发 DAG；重复 id → ValueError → 回退串行
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
-            {"id": 2, "task": "t3", "tool": None, "params": {}, "depends_on": [2]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
+                {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
+                {"id": 2, "task": "t3", "tool": None, "params": {}, "depends_on": [2]},
+            ],
+        }
         eng, _ = _engine(plan)
         warnings = []
         eng.callback.on_warning = lambda msg: warnings.append(msg)
@@ -480,10 +662,13 @@ class TestDualModel:
     def test_executor_model_priority_routed(self):
         """规划用 model_priority（_call_llm 不传 model_priority→None）；
         执行/总结用 executor_model_priority。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
-            {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
-        ]}
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
+                {"id": 2, "task": "t2", "tool": None, "params": {}, "depends_on": [1]},
+            ],
+        }
         eng, fake = _engine(
             plan,
             model_priority=["plan/m"],
@@ -500,10 +685,15 @@ class TestDualModel:
 
     def test_executor_defaults_to_planner_list(self):
         """未显式指定 executor_model_priority → 回退到规划模型列表。"""
-        plan = {"analysis": "a", "steps": [
-            {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
-        ]}
-        eng, fake = _engine(plan, model_priority=["only/m"])  # 无 executor_model_priority
+        plan = {
+            "analysis": "a",
+            "steps": [
+                {"id": 1, "task": "t1", "tool": None, "params": {}, "depends_on": []},
+            ],
+        }
+        eng, fake = _engine(
+            plan, model_priority=["only/m"]
+        )  # 无 executor_model_priority
         assert eng.executor_model_priority == ["only/m"]
         eng.run("做", AgentContext())
         exec_calls = [c for c in fake.calls if c[0] == "execute"]

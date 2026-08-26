@@ -66,7 +66,7 @@ class LexicalMemoryRetriever:
         for segment in re.findall(r"[\u4e00-\u9fff]+", text):
             for size in (2, 3, 4):
                 terms.update(
-                    segment[index:index + size]
+                    segment[index : index + size]
                     for index in range(len(segment) - size + 1)
                 )
         return terms

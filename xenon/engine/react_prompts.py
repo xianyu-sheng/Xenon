@@ -116,7 +116,11 @@ BUILTIN_TOOLS = {
     "read_file": {
         "name": "read_file",
         "description": "读取本机文件内容并返回文本。支持分段读取（start_line 从 1 开始，max_lines 为行数）。仅限本地文件，不能读取 URL（请用 web_fetch）或 GitHub 仓库文件（请用 github_fetch）。",
-        "params": {"file_path": "本地文件的绝对或相对路径", "start_line": "起始行号（可选，从 1 开始）", "max_lines": "读取行数（可选）"},
+        "params": {
+            "file_path": "本地文件的绝对或相对路径",
+            "start_line": "起始行号（可选，从 1 开始）",
+            "max_lines": "读取行数（可选）",
+        },
     },
     "write_file": {
         "name": "write_file",
@@ -126,17 +130,30 @@ BUILTIN_TOOLS = {
     "list_files": {
         "name": "list_files",
         "description": "列出本机指定目录下的文件和子目录。仅限本地目录，不能列出 GitHub 仓库文件（请用 github_fetch）。结果支持 limit/cursor 分页，必须先使用返回的 next_cursor 获取下一页。",
-        "params": {"file_path": "本地目录路径", "pattern": "glob 过滤模式，如 *.py 或 src/**/*.ts（可选，默认 *）", "limit": "每页数量（可选，1-1000）", "cursor": "上一页返回的 next_cursor（可选）"},
+        "params": {
+            "file_path": "本地目录路径",
+            "pattern": "glob 过滤模式，如 *.py 或 src/**/*.ts（可选，默认 *）",
+            "limit": "每页数量（可选，1-1000）",
+            "cursor": "上一页返回的 next_cursor（可选）",
+        },
     },
     "search_files": {
         "name": "search_files",
         "description": "在本机指定目录中搜索包含关键词的文件，返回匹配的文件路径和行内容。类似 grep 功能。结果支持 limit/cursor 分页。**调试时先用它定位错误相关代码，再 read_file 深入阅读。**",
-        "params": {"file_path": "搜索的根目录", "search_pattern": "要搜索的文本关键词或正则表达式", "file_filter": "文件名过滤，如 *.py（可选）", "limit": "每页数量（可选，1-1000）", "cursor": "上一页返回的 next_cursor（可选）"},
+        "params": {
+            "file_path": "搜索的根目录",
+            "search_pattern": "要搜索的文本关键词或正则表达式",
+            "file_filter": "文件名过滤，如 *.py（可选）",
+            "limit": "每页数量（可选，1-1000）",
+            "cursor": "上一页返回的 next_cursor（可选）",
+        },
     },
     "git": {
         "name": "git",
         "description": "在本机执行 Git 版本控制操作。只支持查看类命令（status/diff/log/branch）和基本操作（add/commit）。",
-        "params": {"git_command": "Git 子命令，如 'status'、'diff'、'log --oneline -10'、'add -A'、'commit -m msg'"},
+        "params": {
+            "git_command": "Git 子命令，如 'status'、'diff'、'log --oneline -10'、'add -A'、'commit -m msg'"
+        },
     },
     "web_fetch": {
         "name": "web_fetch",
@@ -181,12 +198,17 @@ BUILTIN_TOOLS = {
     "batch_edit": {
         "name": "batch_edit",
         "description": "一次性编辑多个文件，每个编辑操作独立执行和验证。适合跨文件重构。**跨文件修改时用这个，比逐个 edit_file 更高效，自动验证每个修改。**",
-        "params": {"edits": "编辑列表，格式: [{file_path: a.py, old_text: 原文, new_text: 新文}, ...]"},
+        "params": {
+            "edits": "编辑列表，格式: [{file_path: a.py, old_text: 原文, new_text: 新文}, ...]"
+        },
     },
     "code_index": {
         "name": "code_index",
         "description": "基于 AST 解析搜索项目中的代码符号（函数定义、类定义、变量名）。返回符号名称、所在文件和行号。仅支持 Python 文件。**比 search_files 更快定位符号定义，重构前先查引用。**",
-        "params": {"search_pattern": "要搜索的符号名或部分关键词", "file_path": "索引的根目录（可选，默认当前目录）"},
+        "params": {
+            "search_pattern": "要搜索的符号名或部分关键词",
+            "file_path": "索引的根目录（可选，默认当前目录）",
+        },
     },
     "ast_analyze": {
         "name": "ast_analyze",
@@ -196,12 +218,21 @@ BUILTIN_TOOLS = {
     "refactor": {
         "name": "refactor",
         "description": "代码重构工具。rename: 单文件作用域重命名符号（函数/类/变量，需指定 file_path 以避免误改其他模块同名符号）；clean_imports: 删除未使用的 import（跳过 __init__.py）；analyze: 分析文件的重构建议。",
-        "params": {"refactor_action": "rename（重命名）| clean_imports（清理导入）| analyze（分析建议）", "old_name": "旧符号名（rename 时必填）", "new_name": "新符号名（rename 时必填）", "file_path": "目标文件路径（rename/clean_imports/analyze 时必填）"},
+        "params": {
+            "refactor_action": "rename（重命名）| clean_imports（清理导入）| analyze（分析建议）",
+            "old_name": "旧符号名（rename 时必填）",
+            "new_name": "新符号名（rename 时必填）",
+            "file_path": "目标文件路径（rename/clean_imports/analyze 时必填）",
+        },
     },
     "diff_preview": {
         "name": "diff_preview",
         "description": "预览对文件的修改效果（生成 diff），但不实际修改文件。用于在执行 edit_file 前确认修改是否正确。",
-        "params": {"file_path": "要预览修改的文件路径", "old_text": "要被替换的原文（编辑模式）", "new_text": "替换后的新文"},
+        "params": {
+            "file_path": "要预览修改的文件路径",
+            "old_text": "要被替换的原文（编辑模式）",
+            "new_text": "替换后的新文",
+        },
     },
     "mcp_call": {
         "name": "mcp_call",
@@ -222,12 +253,20 @@ BUILTIN_TOOLS = {
     "github_fetch": {
         "name": "github_fetch",
         "description": "GitHub 专用只读工具。支持 owner/repo，以及仓库、blob、tree、issue、pull 和 raw 完整 URL；repo_activity 可直接获取最近 push、PR 抽样和合并耗时等维护信号，无需克隆仓库。API 限流时会尝试公开 HTML 降级。设置 GITHUB_TOKEN、GH_TOKEN 或 credentials.yaml 的 github.token 后支持认证访问。",
-        "params": {"repo": "owner/repo 或完整 GitHub URL", "github_action": "list_files | fetch_file | fetch_readme | fetch_issue | fetch_pull | repo_activity", "github_path": "文件或目录路径", "branch": "分支名（可选；留空自动读取仓库默认分支）"},
+        "params": {
+            "repo": "owner/repo 或完整 GitHub URL",
+            "github_action": "list_files | fetch_file | fetch_readme | fetch_issue | fetch_pull | repo_activity",
+            "github_path": "文件或目录路径",
+            "branch": "分支名（可选；留空自动读取仓库默认分支）",
+        },
     },
     "weather": {
         "name": "weather",
         "description": "查询指定城市的实时天气信息，包括温度、湿度、风速、穿衣建议等。支持中文城市名（如 '北京'、'重庆'）和英文城市名（如 'Beijing'、'Chongqing'）。",
-        "params": {"city": "城市名称，如 '北京'、'重庆'、'Shanghai'", "lang": "语言，zh 中文（默认）或 en 英文"},
+        "params": {
+            "city": "城市名称，如 '北京'、'重庆'、'Shanghai'",
+            "lang": "语言，zh 中文（默认）或 en 英文",
+        },
     },
     "datetime": {
         "name": "datetime",
@@ -240,7 +279,7 @@ BUILTIN_TOOLS = {
             "委派一个子 Agent 独立完成子任务（适合需要多步工具调用、"
             "可隔离的子问题，如『分析某模块并总结』『给某文件补单测』）。\n"
             "- 单任务: 传 task 参数，选填 engine 和 timeout（秒）。\n"
-            "- 批量并行: 传 task_list=[{\"task\": \"...\", \"engine\": \"react\"}, ...]（最多10个）。\n"
+            '- 批量并行: 传 task_list=[{"task": "...", "engine": "react"}, ...]（最多10个）。\n'
             "- 7 种引擎: react（思考-行动循环,默认）、plan_execute（规划-执行）、\n"
             "  reflection（反思-修正）、\n"
             "  plan_react（规划+ReAct组合）、plan_reflection（规划+反思组合）、\n"
@@ -249,7 +288,7 @@ BUILTIN_TOOLS = {
         ),
         "params": {
             "task": "委派给子 Agent 的子任务描述（单任务，与 task_list 二选一）",
-            "task_list": "批量子任务列表 [{\"task\": \"...\", \"engine\": \"react\", \"timeout\": 30}, ...]",
+            "task_list": '批量子任务列表 [{"task": "...", "engine": "react", "timeout": 30}, ...]',
             "engine": "引擎类型: react(默认)/plan_execute/reflection/plan_react/plan_reflection/react_reflection/direct",
             "timeout": "超时秒数（默认使用引擎配置，0=无超时）",
         },

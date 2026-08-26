@@ -23,7 +23,8 @@ MAX_TIER = 5
 @dataclass
 class CapabilityProfile:
     """从模型名推断的能力画像（静态，注册时生成）."""
-    tier: int = 3                # 1 (cheapest) to 5 (flagship)
+
+    tier: int = 3  # 1 (cheapest) to 5 (flagship)
     reasoning_score: float = 0.4
     coding_score: float = 0.4
     tool_use_score: float = 0.5
@@ -43,6 +44,7 @@ class HealthRecord:
     - circuit_open_until: 断路器打开截止时间戳，0 = 关闭
     - permanently_evicted: 仅供用户显式的运行时驱逐；网络失败不会修改配置
     """
+
     total_calls: int = 0
     success_count: int = 0
     failure_count: int = 0
@@ -50,28 +52,29 @@ class HealthRecord:
     retry_cycle_count: int = 0
     avg_latency: float = 0.0
     last_latencies: list[float] = field(default_factory=list)
-    circuit_open_until: float = 0.0          # timestamp, 0 = closed
+    circuit_open_until: float = 0.0  # timestamp, 0 = closed
     last_used_at: float = 0.0
     permanently_evicted: bool = False
-    in_flight: int = 0          # P2: 当前并发调用数(资源感知调度用)
+    in_flight: int = 0  # P2: 当前并发调用数(资源感知调度用)
 
 
 @dataclass
 class PoolEntry:
     """模型池中的一个模型条目."""
-    model_id: str          # "deepseek/deepseek-v4-pro"
-    alias: str             # "deepseek-v4-pro"
-    weight: float = 1.0    # user-configured priority
+
+    model_id: str  # "deepseek/deepseek-v4-pro"
+    alias: str  # "deepseek-v4-pro"
+    weight: float = 1.0  # user-configured priority
     capability: CapabilityProfile = field(default_factory=CapabilityProfile)
     health: HealthRecord = field(default_factory=HealthRecord)
     api_key: str = ""
     base_url: str = ""
 
 
-FAILURE_THRESHOLD = 3        # 连续失败次数触发断路器
-COOLDOWN_BASE = 30.0         # 首次退避时间（秒）
-MAX_COOLDOWN = 600.0         # 最大退避时间（秒）
-MAX_RETRY_CYCLES = 3         # 达到后保持 MAX_COOLDOWN，但不删除用户配置
+FAILURE_THRESHOLD = 3  # 连续失败次数触发断路器
+COOLDOWN_BASE = 30.0  # 首次退避时间（秒）
+MAX_COOLDOWN = 600.0  # 最大退避时间（秒）
+MAX_RETRY_CYCLES = 3  # 达到后保持 MAX_COOLDOWN，但不删除用户配置
 
 
 class ModelPool:
@@ -85,7 +88,7 @@ class ModelPool:
     """
 
     def __init__(self):
-        self._entries: dict[str, PoolEntry] = {}   # alias -> entry
+        self._entries: dict[str, PoolEntry] = {}  # alias -> entry
         self._tier_queues: dict[int, list[str]] = {  # tier -> [alias, ...]
             t: [] for t in range(MIN_TIER, MAX_TIER + 1)
         }
@@ -115,8 +118,11 @@ class ModelPool:
         if "tier" not in overrides:
             try:
                 from xenon.repl.benchmark_fetcher import get_benchmark_fetcher
+
                 fetcher = get_benchmark_fetcher()
-                benchmark_tier = fetcher.estimate_tier(model_id, fallback_tier=capability.tier)
+                benchmark_tier = fetcher.estimate_tier(
+                    model_id, fallback_tier=capability.tier
+                )
                 if benchmark_tier != capability.tier:
                     capability.tier = benchmark_tier
             except Exception:
@@ -128,8 +134,12 @@ class ModelPool:
                 setattr(capability, k, v)
 
         entry = PoolEntry(
-            model_id=model_id, alias=alias, weight=weight,
-            capability=capability, api_key=api_key, base_url=base_url,
+            model_id=model_id,
+            alias=alias,
+            weight=weight,
+            capability=capability,
+            api_key=api_key,
+            base_url=base_url,
         )
         with self._lock:
             self._entries[alias] = entry
@@ -246,20 +256,21 @@ class ModelPool:
 
         回调签名: callback(model_id: str) -> None (简化版，只传 model_id)
         """
+
         # 包装回调，只传 model_id
         def wrapper(model_id: str, alias: str) -> None:
             callback(model_id)
 
         if callback is not None:
             # 存储原始回调和包装器的映射，用于后续移除
-            if not hasattr(self, '_callback_wrappers'):
+            if not hasattr(self, "_callback_wrappers"):
                 self._callback_wrappers = {}
             self._callback_wrappers[id(callback)] = wrapper
             self.register_on_model_removed(wrapper)
 
     def remove_removal_callback(self, callback: Any) -> None:
         """Problem 6: 移除模型移除回调。"""
-        if not hasattr(self, '_callback_wrappers'):
+        if not hasattr(self, "_callback_wrappers"):
             return
 
         wrapper = self._callback_wrappers.get(id(callback))
@@ -279,9 +290,8 @@ class ModelPool:
                 callback(model_id, alias)
             except Exception as e:  # noqa: BLE001
                 import logging
-                logging.getLogger(__name__).debug(
-                    f"模型移除回调异常（已忽略）: {e}"
-                )
+
+                logging.getLogger(__name__).debug(f"模型移除回调异常（已忽略）: {e}")
 
     # ── 健康更新 ───────────────────────────────────────
 
@@ -300,7 +310,7 @@ class ModelPool:
             h.total_calls += 1
             h.success_count += 1
             h.consecutive_failures = 0
-            h.retry_cycle_count = 0       # v0.5.3: 成功后重置退避计数
+            h.retry_cycle_count = 0  # v0.5.3: 成功后重置退避计数
             h.circuit_open_until = 0.0
             h.permanently_evicted = False
             h.last_used_at = time.monotonic()
@@ -353,7 +363,7 @@ class ModelPool:
 
             # 指数退避: COOLDOWN_BASE * 2^(retry_cycle_count)
             h.retry_cycle_count = min(h.retry_cycle_count, MAX_RETRY_CYCLES)
-            multiplier = 2 ** h.retry_cycle_count
+            multiplier = 2**h.retry_cycle_count
             cooldown = min(COOLDOWN_BASE * multiplier, MAX_COOLDOWN)
             h.circuit_open_until = time.monotonic() + cooldown
             return False
@@ -373,7 +383,8 @@ class ModelPool:
 
         def _healthy_aliases(t: int) -> list[str]:
             return [
-                a for a in self._tier_queues.get(t, [])
+                a
+                for a in self._tier_queues.get(t, [])
                 if a in self._entries
                 and self._entries[a].health.circuit_open_until <= now
                 and not self._entries[a].health.permanently_evicted
@@ -417,13 +428,16 @@ class ModelPool:
         now = time.monotonic()
         with self._lock:
             return [
-                e for e in self._entries.values()
+                e
+                for e in self._entries.values()
                 if e.health.circuit_open_until <= now
                 and not e.health.permanently_evicted
             ]
 
     def select_best(
-        self, profile: Any, count: int = 3,
+        self,
+        profile: Any,
+        count: int = 3,
     ) -> list[PoolEntry]:
         """根据任务 profile 选择最佳模型。
 
@@ -631,10 +645,30 @@ def _infer_capability(model_id: str) -> CapabilityProfile:
     name = (parts[1] if len(parts) > 1 else model_id).lower()
 
     # Tier
-    flagship_kw = ("pro", "max", "plus", "large", "opus", "sonnet-4",
-                   "v4-pro", "4o", "4.0", "turbo-2025")
-    budget_kw = ("mini", "flash", "lite", "small", "medium", "v4-flash",
-                 "1.5-flash", "haiku", "air", "8k")
+    flagship_kw = (
+        "pro",
+        "max",
+        "plus",
+        "large",
+        "opus",
+        "sonnet-4",
+        "v4-pro",
+        "4o",
+        "4.0",
+        "turbo-2025",
+    )
+    budget_kw = (
+        "mini",
+        "flash",
+        "lite",
+        "small",
+        "medium",
+        "v4-flash",
+        "1.5-flash",
+        "haiku",
+        "air",
+        "8k",
+    )
 
     if any(kw in name for kw in flagship_kw):
         tier = 5
@@ -645,14 +679,14 @@ def _infer_capability(model_id: str) -> CapabilityProfile:
 
     # Reasoning
     reasoning_kw = ("reasoner", "o1", "o3", "opus", "thinking", "sonnet")
-    reasoning_score = 0.8 if any(kw in name for kw in reasoning_kw) else (
-        0.5 if tier >= 4 else 0.3
+    reasoning_score = (
+        0.8 if any(kw in name for kw in reasoning_kw) else (0.5 if tier >= 4 else 0.3)
     )
 
     # Coding
     coding_kw = ("coder", "sonnet", "v4-pro", "deepseek")
-    coding_score = 0.85 if any(kw in name for kw in coding_kw) else (
-        0.6 if tier >= 4 else 0.3
+    coding_score = (
+        0.85 if any(kw in name for kw in coding_kw) else (0.6 if tier >= 4 else 0.3)
     )
 
     # Tool use
@@ -662,11 +696,18 @@ def _infer_capability(model_id: str) -> CapabilityProfile:
 
     # Cost
     cost_map = {
-        "openai": 0.3, "anthropic": 0.2, "deepseek": 0.8,
+        "openai": 0.3,
+        "anthropic": 0.2,
+        "deepseek": 0.8,
         "ark": 0.7,
-        "google": 0.6, "zhipu": 0.7, "qwen": 0.7,
-        "moonshot": 0.6, "ollama": 0.9, "xiaomi": 0.6,
-        "baichuan": 0.7, "minimax": 0.6,
+        "google": 0.6,
+        "zhipu": 0.7,
+        "qwen": 0.7,
+        "moonshot": 0.6,
+        "ollama": 0.9,
+        "xiaomi": 0.6,
+        "baichuan": 0.7,
+        "minimax": 0.6,
     }
     base_cost = cost_map.get(provider, 0.5)
     cost_efficiency = max(0.1, base_cost - (tier - 1) * 0.1)

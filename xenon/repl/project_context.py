@@ -52,13 +52,32 @@ _TYPE_DISPLAY = {
 # 排除的目录（不进入文件树）。
 # §8.21.3：原 `_EXCLUDE_DIRS` 是含 `*.egg-info` 的 set，但用 `name in set` 精确匹配，
 # glob 模式永远不命中 → `*.egg-info` 目录实际未被排除。拆成 literal（精确名）+ glob
-#（fnmatch 模式），glob 走 fnmatch.fnmatchcase。
-_EXCLUDE_DIRS_LITERAL = frozenset({
-    "node_modules", ".git", "__pycache__", ".venv", "venv", "env",
-    ".tox", ".mypy_cache", ".pytest_cache", "dist", "build",
-    ".eggs", ".idea", ".vscode", ".claude",
-    "target", "bin", "obj", ".next", ".nuxt", "coverage",
-})
+# （fnmatch 模式），glob 走 fnmatch.fnmatchcase。
+_EXCLUDE_DIRS_LITERAL = frozenset(
+    {
+        "node_modules",
+        ".git",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "env",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+        "dist",
+        "build",
+        ".eggs",
+        ".idea",
+        ".vscode",
+        ".claude",
+        "target",
+        "bin",
+        "obj",
+        ".next",
+        ".nuxt",
+        "coverage",
+    }
+)
 _EXCLUDE_DIRS_GLOB = ("*.egg-info",)
 
 
@@ -68,10 +87,20 @@ def _is_excluded_dir(name: str) -> bool:
         return True
     return any(fnmatch.fnmatchcase(name, pat) for pat in _EXCLUDE_DIRS_GLOB)
 
+
 # 排除的文件模式
 _EXCLUDE_FILES = {
-    "*.pyc", "*.pyo", "*.class", "*.o", "*.so", "*.dll",
-    "*.exe", "*.log", "*.cache", "*.lock", "*.min.js",
+    "*.pyc",
+    "*.pyo",
+    "*.class",
+    "*.o",
+    "*.so",
+    "*.dll",
+    "*.exe",
+    "*.log",
+    "*.cache",
+    "*.lock",
+    "*.min.js",
 }
 
 
@@ -141,10 +170,7 @@ class ProjectContext:
                     return True
 
             # 有 .git 目录也视为项目根；但 $HOME 下的 .git 是 dotfiles，跳过
-            if (
-                (current / ".git").is_dir()
-                and (current != home or allow_home_project)
-            ):
+            if (current / ".git").is_dir() and (current != home or allow_home_project):
                 self.root = current
                 self.project_type = self._detect_type_from_content()
                 self._load_all()
@@ -217,10 +243,12 @@ class ProjectContext:
                 current = self.root
                 for component in relative.parts:
                     current = current / component
-                    candidates.extend([
-                        (self._primary_instruction(current), self.root),
-                        (current / "XENON.local.md", self.root),
-                    ])
+                    candidates.extend(
+                        [
+                            (self._primary_instruction(current), self.root),
+                            (current / "XENON.local.md", self.root),
+                        ]
+                    )
             except (OSError, ValueError):
                 pass
         sections: list[str] = []
@@ -295,11 +323,13 @@ class ProjectContext:
                 depth=depth + 1,
             )
             if imported:
-                output.extend([
-                    f"<!-- imported: {raw_import} -->",
-                    imported,
-                    f"<!-- end import: {raw_import} -->",
-                ])
+                output.extend(
+                    [
+                        f"<!-- imported: {raw_import} -->",
+                        imported,
+                        f"<!-- end import: {raw_import} -->",
+                    ]
+                )
         visited.remove(resolved)
         return "\n".join(output)[:12_000]
 
@@ -315,7 +345,9 @@ class ProjectContext:
             if depth > max_depth:
                 return
             try:
-                entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+                entries = sorted(
+                    path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())
+                )
             except PermissionError:
                 return
 
@@ -351,7 +383,7 @@ class ProjectContext:
                     try:
                         s = entry.stat().st_size
                         if s > 1024 * 1024:
-                            size = f" ({s // (1024*1024)}MB)"
+                            size = f" ({s // (1024 * 1024)}MB)"
                         elif s > 1024:
                             size = f" ({s // 1024}KB)"
                     except Exception:
@@ -377,9 +409,17 @@ class ProjectContext:
             return
 
         key_patterns = [
-            "pyproject.toml", "package.json", "Cargo.toml", "go.mod",
-            "pom.xml", "build.gradle", "README.md", "README.rst",
-            ".env.example", "docker-compose.yml", "Dockerfile",
+            "pyproject.toml",
+            "package.json",
+            "Cargo.toml",
+            "go.mod",
+            "pom.xml",
+            "build.gradle",
+            "README.md",
+            "README.rst",
+            ".env.example",
+            "docker-compose.yml",
+            "Dockerfile",
         ]
 
         new_files: dict[str, str] = {}
@@ -394,7 +434,11 @@ class ProjectContext:
                 mtime = 0.0
 
             # mtime 未变 → 复用已缓存内容，跳过读盘
-            if mtime and name in self.key_files and self._key_file_mtimes.get(name) == mtime:
+            if (
+                mtime
+                and name in self.key_files
+                and self._key_file_mtimes.get(name) == mtime
+            ):
                 new_files[name] = self.key_files[name]
                 new_mtimes[name] = mtime
                 continue
@@ -429,7 +473,9 @@ class ProjectContext:
             return ""
 
         parts: list[str] = []
-        parts.append(f"[项目上下文] 类型: {_TYPE_DISPLAY.get(self.project_type, self.project_type)}")
+        parts.append(
+            f"[项目上下文] 类型: {_TYPE_DISPLAY.get(self.project_type, self.project_type)}"
+        )
         parts.append(f"根目录: {self.root}")
 
         if self.rules:

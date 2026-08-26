@@ -50,8 +50,10 @@ class WebToolsMixin:
             except ValueError:
                 if host == "raw.githubusercontent.com":
                     return {
-                        "action_type": "web_fetch", "url": url,
-                        "content": "", "success": False,
+                        "action_type": "web_fetch",
+                        "url": url,
+                        "content": "",
+                        "success": False,
                         "retryable": False,
                         "error": "无效的 GitHub raw 文件 URL",
                     }
@@ -72,8 +74,10 @@ class WebToolsMixin:
         ok, reason = tool_module._ssrf_check_url(url)
         if not ok:
             return {
-                "action_type": "web_fetch", "url": url,
-                "content": "", "success": False,
+                "action_type": "web_fetch",
+                "url": url,
+                "content": "",
+                "success": False,
                 "error": (
                     f"SSRF 拦截: {reason}"
                     f"。可尝试用 command 工具执行 curl 获取数据作为降级方案"
@@ -92,37 +96,53 @@ class WebToolsMixin:
             with tool_module._create_http_client(
                 timeout=self.timeout, follow_redirects=False
             ) as client:
-                resp = tool_module._fetch_with_redirect_check(client, url, headers=extra_headers)
+                resp = tool_module._fetch_with_redirect_check(
+                    client, url, headers=extra_headers
+                )
                 resp.raise_for_status()
                 content_type = resp.headers.get("content-type", "")
-                text = self._html_to_text(resp.text) if "text/html" in content_type else resp.text
+                text = (
+                    self._html_to_text(resp.text)
+                    if "text/html" in content_type
+                    else resp.text
+                )
                 text, filter_meta = self._prefilter_result_text(text, context)
                 if not filter_meta and len(text) > 50000:
                     text = text[:50000] + "\n\n... (内容已截断，超过 50000 字符)"
                 result = {
-                    "action_type": "web_fetch", "url": str(resp.url),
-                    "status_code": resp.status_code, "content": text,
-                    "content_length": len(text), "success": True,
+                    "action_type": "web_fetch",
+                    "url": str(resp.url),
+                    "status_code": resp.status_code,
+                    "content": text,
+                    "content_length": len(text),
+                    "success": True,
                     **filter_meta,
                 }
-                self._write_output(context, text[:12000 if filter_meta else 5000])
+                self._write_output(context, text[: 12000 if filter_meta else 5000])
                 return result
         except ImportError:
             return {
-                "action_type": "web_fetch", "url": url,
-                "content": "", "success": False,
+                "action_type": "web_fetch",
+                "url": url,
+                "content": "",
+                "success": False,
                 "error": "web_fetch 需要 httpx 库。请 pip install httpx",
             }
         except (SSRFRedirectError, tool_module._SSRFRedirectError) as exc:
             return {
-                "action_type": "web_fetch", "url": url,
-                "content": "", "success": False,
+                "action_type": "web_fetch",
+                "url": url,
+                "content": "",
+                "success": False,
                 "error": f"SSRF 拦截(重定向): {exc}",
             }
         except Exception as exc:
             result = {
-                "action_type": "web_fetch", "url": url,
-                "content": "", "success": False, "error": str(exc),
+                "action_type": "web_fetch",
+                "url": url,
+                "content": "",
+                "success": False,
+                "error": str(exc),
             }
             self._write_output(context, f"抓取失败: {exc}")
             return result
@@ -158,7 +178,11 @@ class WebToolsMixin:
                 return "", str(response.url), 404
             response.raise_for_status()
             content_type = response.headers.get("content-type", "")
-            text = self._html_to_text(response.text) if "text/html" in content_type else response.text
+            text = (
+                self._html_to_text(response.text)
+                if "text/html" in content_type
+                else response.text
+            )
             return text, str(response.url), response.status_code
 
         try:
@@ -171,8 +195,12 @@ class WebToolsMixin:
                 for candidate in discovery_urls:
                     try:
                         text, final_url, status = fetch_text(client, candidate)
-                    except (httpx.HTTPError, SSRFRedirectError,
-                            tool_module._SSRFRedirectError, SecurityError) as exc:
+                    except (
+                        httpx.HTTPError,
+                        SSRFRedirectError,
+                        tool_module._SSRFRedirectError,
+                        SecurityError,
+                    ) as exc:
                         attempts.append({"url": candidate, "error": str(exc)[:160]})
                         continue
                     attempts.append({"url": candidate, "status_code": status})
@@ -184,21 +212,28 @@ class WebToolsMixin:
                     break
 
                 if index_text and index_kind in {
-                    "llms-full.txt", "llms-ctx.txt", "llms-ctx-full.txt",
+                    "llms-full.txt",
+                    "llms-ctx.txt",
+                    "llms-ctx-full.txt",
                 }:
                     truncated = len(index_text) > max_chars
                     if truncated:
                         suffix = "\n\n... (文档已按上下文预算截断)"
-                        content = index_text[:max(0, max_chars - len(suffix))] + suffix
+                        content = index_text[: max(0, max_chars - len(suffix))] + suffix
                     else:
                         content = index_text
                     result = {
-                        "action_type": "docs_fetch", "url": url,
-                        "strategy": "llms-full", "discovery_url": index_url,
+                        "action_type": "docs_fetch",
+                        "url": url,
+                        "strategy": "llms-full",
+                        "discovery_url": index_url,
                         "discovery_attempts": attempts,
-                        "selected_sources": [index_url], "discovered_links": 0,
-                        "content": content, "content_length": len(content),
-                        "truncated": truncated, "success": True,
+                        "selected_sources": [index_url],
+                        "discovered_links": 0,
+                        "content": content,
+                        "content_length": len(content),
+                        "truncated": truncated,
+                        "success": True,
                     }
                     self._write_output(context, content[:5000])
                     return result
@@ -209,7 +244,9 @@ class WebToolsMixin:
                     except ValueError as exc:
                         attempts.append({"url": index_url, "error": str(exc)})
                     else:
-                        selected = select_llms_links(document, query, max_pages=max_pages)
+                        selected = select_llms_links(
+                            document, query, max_pages=max_pages
+                        )
                         parts = [f"# {document.title}"]
                         if document.summary:
                             parts.append(f"> {document.summary}")
@@ -223,36 +260,52 @@ class WebToolsMixin:
                                 if status == 404 or not page.strip():
                                     raise ValueError(f"HTTP {status}")
                             except Exception as exc:
-                                source_errors.append({"url": link.url, "error": str(exc)[:160]})
+                                source_errors.append(
+                                    {"url": link.url, "error": str(exc)[:160]}
+                                )
                                 continue
                             selected_sources.append(final_url)
-                            parts.extend([f"## {link.title}", f"Source: {final_url}", page])
+                            parts.extend(
+                                [f"## {link.title}", f"Source: {final_url}", page]
+                            )
                             if sum(len(part) for part in parts) >= max_chars:
                                 break
                         combined = "\n\n".join(parts)
                         truncated = len(combined) > max_chars
                         if truncated:
                             suffix = "\n\n... (文档包已按上下文预算截断)"
-                            content = combined[:max(0, max_chars - len(suffix))] + suffix
+                            content = (
+                                combined[: max(0, max_chars - len(suffix))] + suffix
+                            )
                         else:
                             content = combined
                         result = {
-                            "action_type": "docs_fetch", "url": url, "query": query,
-                            "strategy": "llms-index", "discovery_url": index_url,
+                            "action_type": "docs_fetch",
+                            "url": url,
+                            "query": query,
+                            "strategy": "llms-index",
+                            "discovery_url": index_url,
                             "discovery_attempts": attempts,
                             "selected_sources": selected_sources,
                             "source_errors": source_errors,
                             "discovered_links": len(document.links),
-                            "optional_links": sum(1 for link in document.links if link.optional),
-                            "content": content, "content_length": len(content),
-                            "truncated": truncated, "success": True,
+                            "optional_links": sum(
+                                1 for link in document.links if link.optional
+                            ),
+                            "content": content,
+                            "content_length": len(content),
+                            "truncated": truncated,
+                            "success": True,
                         }
                         self._write_output(context, content[:5000])
                         return result
 
             fallback = tool_module.ToolNode(
-                f"{self.id}:fallback", action_type="web_fetch", url=url,
-                timeout=self.timeout, output_slot=self.output_slot,
+                f"{self.id}:fallback",
+                action_type="web_fetch",
+                url=url,
+                timeout=self.timeout,
+                output_slot=self.output_slot,
                 security_enabled=self.security_enabled,
             )._web_fetch(context)
             fallback["action_type"] = "docs_fetch"
@@ -262,8 +315,12 @@ class WebToolsMixin:
             return fallback
         except Exception as exc:
             result = {
-                "action_type": "docs_fetch", "url": url, "strategy": "failed",
-                "discovery_attempts": attempts, "content": "", "success": False,
+                "action_type": "docs_fetch",
+                "url": url,
+                "strategy": "failed",
+                "discovery_attempts": attempts,
+                "content": "",
+                "success": False,
                 "error": str(exc),
             }
             self._write_output(context, f"文档抓取失败: {exc}")
@@ -274,8 +331,12 @@ class WebToolsMixin:
         """Convert a small HTML response to plain text without extra deps."""
         import re
 
-        text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(
+            r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE
+        )
+        text = re.sub(
+            r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE
+        )
         text = re.sub(r"<br\s*/?\s*>", "\n", text, flags=re.IGNORECASE)
         text = re.sub(r"</(p|div|h[1-6]|li|tr)>", "\n", text, flags=re.IGNORECASE)
         text = re.sub(r"<[^>]+>", "", text)

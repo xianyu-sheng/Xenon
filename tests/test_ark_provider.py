@@ -101,21 +101,25 @@ def test_ark_model_discovery_uses_bearer_and_stable_priority(monkeypatch) -> Non
     class _GetClient:
         def get(self, url, headers):
             calls.append((url, headers))
-            return _Response({"data": [
-                {"id": "legacy-model"},
-                {"id": "glm-5-2-260617"},
+            return _Response(
                 {
-                    "id": "doubao-seed-2-1-pro-260628",
-                    "task_type": ["TextGeneration"],
-                    "token_limits": {"context_window": 262144},
-                },
-                {"id": "deepseek-v4-pro-260425"},
-                {
-                    "id": "doubao-seedream-5-0-pro-260628",
-                    "task_type": ["TextToImage"],
-                    "modalities": {"output_modalities": ["image"]},
-                },
-            ]})
+                    "data": [
+                        {"id": "legacy-model"},
+                        {"id": "glm-5-2-260617"},
+                        {
+                            "id": "doubao-seed-2-1-pro-260628",
+                            "task_type": ["TextGeneration"],
+                            "token_limits": {"context_window": 262144},
+                        },
+                        {"id": "deepseek-v4-pro-260425"},
+                        {
+                            "id": "doubao-seedream-5-0-pro-260628",
+                            "task_type": ["TextToImage"],
+                            "modalities": {"output_modalities": ["image"]},
+                        },
+                    ]
+                }
+            )
 
         def __enter__(self):
             return self
@@ -125,6 +129,8 @@ def test_ark_model_discovery_uses_bearer_and_stable_priority(monkeypatch) -> Non
 
     monkeypatch.setattr(providers, "_create_http_client", lambda timeout: _GetClient())
     monkeypatch.setattr(providers, "load_credentials", lambda: {"ark": "secret"})
+    monkeypatch.setattr(providers, "_load_model_cache", lambda: {})
+    monkeypatch.setattr(providers, "_save_model_cache", lambda x: None)
 
     configured = providers.get_configured_providers()
     ark = next(item for item in configured if item.key == "ark")
@@ -135,13 +141,16 @@ def test_ark_model_discovery_uses_bearer_and_stable_priority(monkeypatch) -> Non
         "deepseek-v4-pro-260425",
         "legacy-model",
     ]
-    assert calls == [(
-        "https://ark.cn-beijing.volces.com/api/v3/models",
-        {"Accept": "application/json", "Authorization": "Bearer secret"},
-    )]
-    assert providers.get_model_metadata(
-        "ark/doubao-seed-2-1-pro-260628"
-    )["context_window"] == 262144
+    assert calls == [
+        (
+            "https://ark.cn-beijing.volces.com/api/v3/models",
+            {"Accept": "application/json", "Authorization": "Bearer secret"},
+        )
+    ]
+    assert (
+        providers.get_model_metadata("ark/doubao-seed-2-1-pro-260628")["context_window"]
+        == 262144
+    )
     assert "doubao-seedream-5-0-pro-260628" not in ark.models
 
 
@@ -168,11 +177,19 @@ def test_unrelated_write_does_not_silently_persist_legacy_ark(
     tmp_path: Path, monkeypatch
 ) -> None:
     path = tmp_path / "credentials.yaml"
-    path.write_text(yaml.safe_dump({
-        "_custom_providers": {
-            "volc": {"base_url": providers.ARK_BASE_URL, "api_key": "legacy-secret"}
-        }
-    }), encoding="utf-8")
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "_custom_providers": {
+                    "volc": {
+                        "base_url": providers.ARK_BASE_URL,
+                        "api_key": "legacy-secret",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(providers, "_get_credentials_path", lambda: path)
 
     providers.set_provider_key("openai", "openai-secret")
@@ -187,13 +204,24 @@ def test_remove_ark_key_removes_legacy_ark_but_preserves_other_custom(
     tmp_path: Path, monkeypatch
 ) -> None:
     path = tmp_path / "credentials.yaml"
-    path.write_text(yaml.safe_dump({
-        "ark": "explicit-secret",
-        "_custom_providers": {
-            "volc": {"base_url": providers.ARK_BASE_URL, "api_key": "legacy-secret"},
-            "other": {"base_url": "https://example.com/v1", "api_key": "other-secret"},
-        },
-    }), encoding="utf-8")
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "ark": "explicit-secret",
+                "_custom_providers": {
+                    "volc": {
+                        "base_url": providers.ARK_BASE_URL,
+                        "api_key": "legacy-secret",
+                    },
+                    "other": {
+                        "base_url": "https://example.com/v1",
+                        "api_key": "other-secret",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(providers, "_get_credentials_path", lambda: path)
 
     providers.remove_provider_key("ark")
@@ -205,10 +233,12 @@ def test_remove_ark_key_removes_legacy_ark_but_preserves_other_custom(
 
 
 def test_ambiguous_legacy_ark_keys_are_not_guessed() -> None:
-    data = {"_custom_providers": {
-        "one": {"base_url": providers.ARK_BASE_URL, "api_key": "one"},
-        "two": {"base_url": providers.ARK_BASE_URL, "api_key": "two"},
-    }}
+    data = {
+        "_custom_providers": {
+            "one": {"base_url": providers.ARK_BASE_URL, "api_key": "one"},
+            "two": {"base_url": providers.ARK_BASE_URL, "api_key": "two"},
+        }
+    }
     assert providers._legacy_ark_api_key(data) == ""
     assert llm._legacy_ark_api_key(data) == ""
 
@@ -228,17 +258,24 @@ def test_build_ark_endpoint_uses_env_and_allows_base_override(monkeypatch) -> No
 
 def test_ark_native_tool_call_and_cache_usage(monkeypatch) -> None:
     payload = {
-        "choices": [{
-            "message": {
-                "content": None,
-                "tool_calls": [{
-                    "id": "call_ark_1",
-                    "type": "function",
-                    "function": {"name": "weather", "arguments": '{"city":"苏州"}'},
-                }],
-            },
-            "finish_reason": "tool_calls",
-        }],
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_ark_1",
+                            "type": "function",
+                            "function": {
+                                "name": "weather",
+                                "arguments": '{"city":"苏州"}',
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
         "usage": {
             "prompt_tokens": 100,
             "completion_tokens": 8,
@@ -261,9 +298,9 @@ def test_ark_native_tool_call_and_cache_usage(monkeypatch) -> None:
         tracker.close()
 
     assert response.provider == "ark"
-    assert response.tool_calls == [{
-        "id": "call_ark_1", "name": "weather", "arguments": {"city": "苏州"}
-    }]
+    assert response.tool_calls == [
+        {"id": "call_ark_1", "name": "weather", "arguments": {"city": "苏州"}}
+    ]
     assert response.usage.cache_hit_tokens == 72
     assert response.usage.cache_miss_tokens == 28
     assert snapshot["cache_hit_tokens"] == 72
@@ -285,12 +322,14 @@ def test_ark_stream_requests_and_emits_final_usage(monkeypatch) -> None:
             "prompt_tokens_details": {"cached_tokens": 40},
         },
     }
-    client = _StreamClient([
-        'data: {"choices":[{"delta":{"content":"你"}}]}',
-        'data: {"choices":[{"delta":{"content":"好"}}]}',
-        f"data: {json.dumps(usage_chunk)}",
-        "data: [DONE]",
-    ])
+    client = _StreamClient(
+        [
+            'data: {"choices":[{"delta":{"content":"你"}}]}',
+            'data: {"choices":[{"delta":{"content":"好"}}]}',
+            f"data: {json.dumps(usage_chunk)}",
+            "data: [DONE]",
+        ]
+    )
     seen: list[tuple[str, llm.LLMUsage]] = []
     unsubscribe = llm.register_usage_callback(
         lambda model, usage, latency: seen.append((model, usage))
@@ -298,10 +337,12 @@ def test_ark_stream_requests_and_emits_final_usage(monkeypatch) -> None:
     monkeypatch.setattr(llm, "build_endpoint", lambda *args, **kwargs: _ark_endpoint())
     monkeypatch.setattr(llm, "_create_http_client", lambda timeout: client)
     try:
-        chunks = list(llm.chat_completion_stream(
-            "ark/doubao-seed-2-1-pro-260628",
-            [{"role": "user", "content": "你好"}],
-        ))
+        chunks = list(
+            llm.chat_completion_stream(
+                "ark/doubao-seed-2-1-pro-260628",
+                [{"role": "user", "content": "你好"}],
+            )
+        )
     finally:
         unsubscribe()
 

@@ -12,6 +12,7 @@ from xenon.repl.status_bar import StatusBar
 
 # --------------------------- _undo_stack 上限 ---------------------------
 
+
 def test_undo_stack_default_limit():
     cm = ContextManager()
     # P3-Low 问题3修复：默认值已从 5 提升到 10
@@ -64,8 +65,10 @@ def test_undo_stack_large_limit_keeps_all():
 
 # --------------------------- status_bar try/except 兜底 ---------------------------
 
+
 def _make_bar(ctx_mgr=None, registry=None):
     from xenon.repl.model_registry import ModelRegistry
+
     console = Console(file=io.StringIO(), width=120, force_terminal=False)
     cm = ctx_mgr or ContextManager()
     reg = registry or ModelRegistry()
@@ -80,11 +83,14 @@ def test_render_normal_returns_panel():
 
 def test_render_stats_exception_returns_fallback():
     """stats() 抛异常 → render 不崩，返回"状态不可用"降级面板。"""
+
     class BoomCtx:
         def stats(self):
             raise RuntimeError("stats 炸了")
+
         def __getattr__(self, name):
             raise AttributeError(name)
+
     bar = _make_bar()
     bar.ctx_mgr = BoomCtx()
     panel = bar.render()  # 不应抛
@@ -94,11 +100,14 @@ def test_render_stats_exception_returns_fallback():
 
 def test_render_missing_stats_field_returns_fallback():
     """stats 缺字段（KeyError）→ 降级。"""
+
     class HalfCtx:
         def stats(self):
             return {"estimated_tokens": 0}  # 缺 max_tokens 等
+
         def __getattr__(self, name):
             raise AttributeError(name)
+
     bar = _make_bar()
     bar.ctx_mgr = HalfCtx()
     panel = bar.render()
@@ -109,14 +118,17 @@ def test_print_status_stats_exception_does_not_raise():
     class BoomCtx:
         def stats(self):
             raise RuntimeError("boom")
+
         def __getattr__(self, name):
             raise AttributeError(name)
+
     bar = _make_bar()
     bar.ctx_mgr = BoomCtx()
     bar.print_status()  # 不应抛
 
 
 # --------------------------- ⚠需压缩 警告置首（窄屏可见） ---------------------------
+
 
 def test_render_needs_compact_warning_first():
     """needs_compact 时 ⚠需压缩 在状态行首位，窄屏截断不丢核心信号。"""
@@ -141,6 +153,7 @@ def test_render_no_warning_when_not_needed():
 
 
 # --------------------------- _parse_pct ---------------------------
+
 
 def test_parse_pct_string_percent():
     # P3-Low 修复：_parse_pct 现在返回 0.0-1.0 范围

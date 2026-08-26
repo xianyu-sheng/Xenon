@@ -214,15 +214,33 @@ for _tool_name, _method_name in BUILTIN_TOOL_METHODS.items():
     # 唯一来源，tool_executor 只需查 definition.risk。
     _risk: ToolRisk = "SENSITIVE"
     if _tool_name in {
-        "read_file", "list_files", "search_files", "code_index",
-        "ast_analyze", "diff_preview", "web_fetch", "docs_fetch",
-        "github_fetch", "weather", "datetime", "lsp_hover",
-        "lsp_goto_def", "lsp_find_refs", "lsp_diagnostics", "lsp_symbols",
+        "read_file",
+        "list_files",
+        "search_files",
+        "code_index",
+        "ast_analyze",
+        "diff_preview",
+        "web_fetch",
+        "docs_fetch",
+        "github_fetch",
+        "weather",
+        "datetime",
+        "lsp_hover",
+        "lsp_goto_def",
+        "lsp_find_refs",
+        "lsp_diagnostics",
+        "lsp_symbols",
     }:
         _risk = "INFO"
     elif _tool_name in {
-        "write_file", "edit_file", "create_directory", "batch_write",
-        "batch_edit", "refactor", "git", "clone_repo",
+        "write_file",
+        "edit_file",
+        "create_directory",
+        "batch_write",
+        "batch_edit",
+        "refactor",
+        "git",
+        "clone_repo",
     }:
         _risk = "WRITE"
     # command / mcp_call / register_tool 保持 SENSITIVE（默认值）
@@ -264,16 +282,25 @@ def register_tool_handler(
         # 装饰器用法：register_tool_handler("name", description=...) 返回 decorator
         def decorator(fn: ToolHandler) -> ToolHandler:
             BUILTIN_TOOL_REGISTRY.register(
-                name, fn,
-                description=description, params=params, risk=risk,
-                category=category, replace=replace,
+                name,
+                fn,
+                description=description,
+                params=params,
+                risk=risk,
+                category=category,
+                replace=replace,
             )
             return fn
+
         return decorator
 
     # 函数式用法：register_tool_handler("name", handler, ...)
     return BUILTIN_TOOL_REGISTRY.register(
-        name, handler,
-        description=description, params=params or {}, risk=risk,
-        category=category, replace=replace,
+        name,
+        handler,
+        description=description,
+        params=params or {},
+        risk=risk,
+        category=category,
+        replace=replace,
     )

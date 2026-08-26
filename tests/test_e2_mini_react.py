@@ -47,12 +47,16 @@ class _FakeLLM:
 
 
 def _action_json(tool: str, params: dict) -> str:
-    return json.dumps({"thought": "need tool", "action": tool, "action_input": params},
-                      ensure_ascii=False)
+    return json.dumps(
+        {"thought": "need tool", "action": tool, "action_input": params},
+        ensure_ascii=False,
+    )
 
 
 def _final_json(text: str) -> str:
-    return json.dumps({"thought": "summarize", "final_answer": text}, ensure_ascii=False)
+    return json.dumps(
+        {"thought": "summarize", "final_answer": text}, ensure_ascii=False
+    )
 
 
 # ── 单元：直接调用 _execute_step_with_llm ────────────────────
@@ -77,10 +81,12 @@ class TestBackwardCompat:
 class TestActionLoop:
     def test_action_then_final_answer(self):
         eng = _eng()
-        eng._call_llm = _FakeLLM([
-            _action_json("read_file", {"file_path": "x.py"}),
-            _final_json("基于 x.py 的结论"),
-        ])
+        eng._call_llm = _FakeLLM(
+            [
+                _action_json("read_file", {"file_path": "x.py"}),
+                _final_json("基于 x.py 的结论"),
+            ]
+        )
         observed: list[tuple[str, dict]] = []
         eng._execute_step_with_tool = lambda tool, params, ctx, tracker=None: (
             observed.append((tool, params)) or "OBS: x.py 内容"
@@ -98,7 +104,9 @@ class TestActionLoop:
     def test_exhausts_rounds_bounded(self):
         """持续 action 不给 final_answer → 调用次数封顶 max_mini_react_rounds。"""
         eng = _eng(max_mini_react_rounds=3)
-        eng._call_llm = _FakeLLM([_action_json("read_file", {"file_path": f"f{i}.py"}) for i in range(10)])
+        eng._call_llm = _FakeLLM(
+            [_action_json("read_file", {"file_path": f"f{i}.py"}) for i in range(10)]
+        )
         eng._execute_step_with_tool = lambda tool, params, ctx, tracker=None: "OBS"
 
         eng._execute_step_with_llm(1, 1, "分析", "", "原始任务", None)
@@ -106,7 +114,9 @@ class TestActionLoop:
 
     def test_custom_rounds(self):
         eng = _eng(max_mini_react_rounds=2)
-        eng._call_llm = _FakeLLM([_action_json("read_file", {"file_path": "f.py"}) for _ in range(10)])
+        eng._call_llm = _FakeLLM(
+            [_action_json("read_file", {"file_path": "f.py"}) for _ in range(10)]
+        )
         eng._execute_step_with_tool = lambda tool, params, ctx, tracker=None: "OBS"
 
         eng._execute_step_with_llm(1, 1, "分析", "", "原始任务", None)
@@ -115,13 +125,16 @@ class TestActionLoop:
     def test_tool_exception_becomes_observation(self):
         """工具抛异常 → observation 含 ⚠️，循环继续到 final_answer。"""
         eng = _eng()
-        eng._call_llm = _FakeLLM([
-            _action_json("read_file", {"file_path": "bad.py"}),
-            _final_json("容错结论"),
-        ])
+        eng._call_llm = _FakeLLM(
+            [
+                _action_json("read_file", {"file_path": "bad.py"}),
+                _final_json("容错结论"),
+            ]
+        )
 
         def boom(tool, params, ctx, tracker=None):
             raise RuntimeError("disk error")
+
         eng._execute_step_with_tool = boom
 
         out = eng._execute_step_with_llm(1, 1, "分析", "", "原始任务", None)
@@ -148,8 +161,12 @@ class TestFileClaimsStillVerified:
         tracker = ToolExecutionTracker()
         # 模拟 write_file 已成功执行
         from types import SimpleNamespace
-        tracker.calls.append(SimpleNamespace(
-            tool_name="write_file", params={"file_path": "ok.py"}, success=True))
+
+        tracker.calls.append(
+            SimpleNamespace(
+                tool_name="write_file", params={"file_path": "ok.py"}, success=True
+            )
+        )
 
         out = eng._execute_step_with_llm(1, 1, "保存", "", "原始任务", tracker)
         assert "未经工具验证" not in out
@@ -163,9 +180,18 @@ class TestRunIntegration:
         """run() 中无工具步骤走迷你 ReAct，步骤结果为 final_answer。"""
         from xenon.engine.callbacks import EngineCallback
 
-        plan = {"analysis": "单步分析", "steps": [
-            {"id": 1, "task": "分析需求并总结", "tool": None, "params": {}, "depends_on": []},
-        ]}
+        plan = {
+            "analysis": "单步分析",
+            "steps": [
+                {
+                    "id": 1,
+                    "task": "分析需求并总结",
+                    "tool": None,
+                    "params": {},
+                    "depends_on": [],
+                },
+            ],
+        }
 
         class _BranchLLM:
             def __init__(self):

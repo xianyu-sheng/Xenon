@@ -57,12 +57,15 @@ class TestGracefulRestartIntegration:
         original_history_len = len(mock_full_repl.ctx_mgr.history)
         _ = dict(mock_full_repl.ctx_mgr._working_memory)  # 记录但不使用
 
-        with patch("xenon.repl.system_config.reload_config") as mock_reload, \
-             patch("xenon.repl.model_pool.ModelPool") as MockModelPool, \
-             patch("xenon.repl.auto_router.AutoRouter") as MockAutoRouter, \
-             patch("xenon.repl.terminal_activity.TerminalActivityIndicator") as MockTerminal, \
-             patch("xenon.tools.ClipboardMonitor") as MockClipboard:
-
+        with (
+            patch("xenon.repl.system_config.reload_config") as mock_reload,
+            patch("xenon.repl.model_pool.ModelPool") as MockModelPool,
+            patch("xenon.repl.auto_router.AutoRouter") as MockAutoRouter,
+            patch(
+                "xenon.repl.terminal_activity.TerminalActivityIndicator"
+            ) as MockTerminal,
+            patch("xenon.tools.ClipboardMonitor") as MockClipboard,
+        ):
             # Mock 配置和组件
             mock_config = MagicMock()
             mock_config.validation = MagicMock()
@@ -109,12 +112,13 @@ class TestGracefulRestartIntegration:
         original_history_len = len(mock_full_repl.ctx_mgr.history)
         assert original_history_len > 0  # 确保有历史数据
 
-        with patch("xenon.repl.system_config.reload_config") as mock_reload, \
-             patch("xenon.repl.model_pool.ModelPool"), \
-             patch("xenon.repl.auto_router.AutoRouter"), \
-             patch("xenon.repl.terminal_activity.TerminalActivityIndicator"), \
-             patch("xenon.tools.ClipboardMonitor"):
-
+        with (
+            patch("xenon.repl.system_config.reload_config") as mock_reload,
+            patch("xenon.repl.model_pool.ModelPool"),
+            patch("xenon.repl.auto_router.AutoRouter"),
+            patch("xenon.repl.terminal_activity.TerminalActivityIndicator"),
+            patch("xenon.tools.ClipboardMonitor"),
+        ):
             mock_config = MagicMock()
             mock_config.validation = MagicMock()
             mock_reload.return_value = mock_config
@@ -183,7 +187,9 @@ class TestGracefulRestartIntegration:
         # 清理应该不阻塞（虽然我们没有实现超时机制，但应该捕获异常）
         with patch("xenon.repl.graceful_restart.logger") as mock_logger:
             # 修改为立即抛异常（模拟超时后的行为）
-            mock_full_repl._terminal_activity.close.side_effect = RuntimeError("timeout")
+            mock_full_repl._terminal_activity.close.side_effect = RuntimeError(
+                "timeout"
+            )
             manager.cleanup_resources()
 
             # 验证记录了警告
@@ -201,7 +207,12 @@ class TestGracefulRestartIntegration:
             "version": 1,
             "timestamp": time.time(),
             "history": [
-                {"role": "user", "content": "hello", "model_used": None, "metadata": {}},
+                {
+                    "role": "user",
+                    "content": "hello",
+                    "model_used": None,
+                    "metadata": {},
+                },
             ],
             "working_memory": {},
             "working_directory": str(Path.cwd()),
@@ -332,12 +343,13 @@ class TestGracefulRestartIntegration:
         manager = GracefulRestartManager(mock_full_repl)
         mock_full_repl.ctx_mgr.history.clear()
 
-        with patch("xenon.repl.system_config.reload_config") as mock_reload, \
-             patch("xenon.repl.model_pool.ModelPool"), \
-             patch("xenon.repl.auto_router.AutoRouter"), \
-             patch("xenon.repl.terminal_activity.TerminalActivityIndicator"), \
-             patch("xenon.tools.ClipboardMonitor"):
-
+        with (
+            patch("xenon.repl.system_config.reload_config") as mock_reload,
+            patch("xenon.repl.model_pool.ModelPool"),
+            patch("xenon.repl.auto_router.AutoRouter"),
+            patch("xenon.repl.terminal_activity.TerminalActivityIndicator"),
+            patch("xenon.tools.ClipboardMonitor"),
+        ):
             mock_config = MagicMock()
             mock_config.validation = MagicMock()
             mock_reload.return_value = mock_config
@@ -359,12 +371,13 @@ class TestGracefulRestartIntegration:
             mock_full_repl.ctx_mgr.add_message("user", f"message {i}")
             mock_full_repl.ctx_mgr.add_message("assistant", f"response {i}")
 
-        with patch("xenon.repl.system_config.reload_config") as mock_reload, \
-             patch("xenon.repl.model_pool.ModelPool"), \
-             patch("xenon.repl.auto_router.AutoRouter"), \
-             patch("xenon.repl.terminal_activity.TerminalActivityIndicator"), \
-             patch("xenon.tools.ClipboardMonitor"):
-
+        with (
+            patch("xenon.repl.system_config.reload_config") as mock_reload,
+            patch("xenon.repl.model_pool.ModelPool"),
+            patch("xenon.repl.auto_router.AutoRouter"),
+            patch("xenon.repl.terminal_activity.TerminalActivityIndicator"),
+            patch("xenon.tools.ClipboardMonitor"),
+        ):
             mock_config = MagicMock()
             mock_config.validation = MagicMock()
             mock_reload.return_value = mock_config

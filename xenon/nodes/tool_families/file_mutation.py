@@ -335,7 +335,7 @@ class FileMutationToolsMixin:
             return {
                 "action_type": "batch_write",
                 "success": False,
-                "error": "batch_write 需要 files 参数，格式: [{\"path\": \"...\", \"content\": \"...\"}]",
+                "error": 'batch_write 需要 files 参数，格式: [{"path": "...", "content": "..."}]',
             }
 
         prepared: list[tuple[int, Path, str, int]] = []
@@ -368,20 +368,24 @@ class FileMutationToolsMixin:
                     except Exception as exc:  # noqa: BLE001 - aggregate validation
                         error = str(exc)
             if error or path is None:
-                results.append({
-                    "index": i,
-                    "path": str(path) if path else "",
-                    "success": False,
-                    "error": error or "无效路径",
-                })
+                results.append(
+                    {
+                        "index": i,
+                        "path": str(path) if path else "",
+                        "success": False,
+                        "error": error or "无效路径",
+                    }
+                )
             else:
                 prepared.append((i, path, content, content_bytes))
-                results.append({
-                    "index": i,
-                    "path": str(path),
-                    "success": False,
-                    "error": "事务尚未提交",
-                })
+                results.append(
+                    {
+                        "index": i,
+                        "path": str(path),
+                        "success": False,
+                        "error": "事务尚未提交",
+                    }
+                )
 
         if len(prepared) != len(self.files):
             for result in results:
@@ -442,7 +446,7 @@ class FileMutationToolsMixin:
             return {
                 "action_type": "batch_edit",
                 "success": False,
-                "error": "batch_edit 需要 edits 参数，格式: [{\"file_path\": \"...\", \"old_text\": \"...\", \"new_text\": \"...\"}]",
+                "error": 'batch_edit 需要 edits 参数，格式: [{"file_path": "...", "old_text": "...", "new_text": "..."}]',
             }
 
         results: list[dict[str, Any]] = []
@@ -472,7 +476,9 @@ class FileMutationToolsMixin:
                         error = f"文件不存在: {path}"
                     else:
                         if path not in staged_content:
-                            staged_content[path] = path.read_text(encoding=self.encoding)
+                            staged_content[path] = path.read_text(
+                                encoding=self.encoding
+                            )
                             path_order.append(path)
                         count = staged_content[path].count(old_text)
                         if count == 0:
@@ -485,12 +491,14 @@ class FileMutationToolsMixin:
                             )
                 except Exception as exc:  # noqa: BLE001 - aggregate validation
                     error = f"编辑预检异常: {exc}"
-            results.append({
-                "index": i,
-                "file": str(path) if path else str(file_path),
-                "success": False,
-                "error": error or "事务尚未提交",
-            })
+            results.append(
+                {
+                    "index": i,
+                    "file": str(path) if path else str(file_path),
+                    "success": False,
+                    "error": error or "事务尚未提交",
+                }
+            )
 
         if any(result["error"] != "事务尚未提交" for result in results):
             for result in results:
@@ -546,4 +554,3 @@ class FileMutationToolsMixin:
             "success": True,
             "results": results,
         }
-

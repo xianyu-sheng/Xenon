@@ -189,24 +189,30 @@ def test_checkpoint_callback_runs_during_execution_and_history_is_bounded(monkey
 def test_active_execution_ledger_tracks_parallel_work_independently():
     context = AgentContext()
 
-    context.record_tool_checkpoint({
-        "execution_id": "read-1",
-        "tool_name": "read_file",
-        "tool_class": "INFO",
-        "state": "running",
-    })
-    context.record_tool_checkpoint({
-        "execution_id": "write-1",
-        "tool_name": "write_file",
-        "tool_class": "WRITE",
-        "state": "running",
-    })
-    context.record_tool_checkpoint({
-        "execution_id": "read-1",
-        "tool_name": "read_file",
-        "tool_class": "INFO",
-        "state": "succeeded",
-    })
+    context.record_tool_checkpoint(
+        {
+            "execution_id": "read-1",
+            "tool_name": "read_file",
+            "tool_class": "INFO",
+            "state": "running",
+        }
+    )
+    context.record_tool_checkpoint(
+        {
+            "execution_id": "write-1",
+            "tool_name": "write_file",
+            "tool_class": "WRITE",
+            "state": "running",
+        }
+    )
+    context.record_tool_checkpoint(
+        {
+            "execution_id": "read-1",
+            "tool_name": "read_file",
+            "tool_class": "INFO",
+            "state": "succeeded",
+        }
+    )
 
     active = context.get("_tool_execution_active")
     assert set(active) == {"write-1"}
@@ -214,29 +220,31 @@ def test_active_execution_ledger_tracks_parallel_work_independently():
 
 
 def test_recovery_normalizes_every_parallel_unfinished_execution():
-    context = AgentContext(initial={
-        "_tool_execution_active": {
-            "read-1": {
-                "execution_id": "read-1",
-                "tool_name": "web_fetch",
-                "tool_class": "INFO",
-                "state": "running",
+    context = AgentContext(
+        initial={
+            "_tool_execution_active": {
+                "read-1": {
+                    "execution_id": "read-1",
+                    "tool_name": "web_fetch",
+                    "tool_class": "INFO",
+                    "state": "running",
+                },
+                "write-1": {
+                    "execution_id": "write-1",
+                    "tool_name": "write_file",
+                    "tool_class": "WRITE",
+                    "state": "retrying",
+                },
             },
-            "write-1": {
+            # The newest event alone would lose read-1 in the legacy scheme.
+            "_tool_execution_checkpoint": {
                 "execution_id": "write-1",
                 "tool_name": "write_file",
                 "tool_class": "WRITE",
                 "state": "retrying",
             },
-        },
-        # The newest event alone would lose read-1 in the legacy scheme.
-        "_tool_execution_checkpoint": {
-            "execution_id": "write-1",
-            "tool_name": "write_file",
-            "tool_class": "WRITE",
-            "state": "retrying",
-        },
-    })
+        }
+    )
 
     notice = recover_tool_execution_checkpoint(context)
 
@@ -245,7 +253,8 @@ def test_recovery_normalizes_every_parallel_unfinished_execution():
     assert "write_file（可能已部分生效，须人工核验）" in notice
     assert context.get("_tool_execution_active") == {}
     recovered = [
-        item for item in context.get("_tool_execution_history")
+        item
+        for item in context.get("_tool_execution_history")
         if item.get("state") == "interrupted"
     ]
     assert {item["execution_id"] for item in recovered} == {"read-1", "write-1"}
@@ -274,12 +283,14 @@ def test_parallel_checkpoint_callbacks_are_serialized():
 
     def publish(index):
         barrier.wait()
-        context.record_tool_checkpoint({
-            "execution_id": f"parallel-{index}",
-            "tool_name": "read_file",
-            "tool_class": "INFO",
-            "state": "running",
-        })
+        context.record_tool_checkpoint(
+            {
+                "execution_id": f"parallel-{index}",
+                "tool_name": "read_file",
+                "tool_class": "INFO",
+                "state": "running",
+            }
+        )
 
     context.set_tool_checkpoint_callback(persist)
     workers = [threading.Thread(target=publish, args=(index,)) for index in range(12)]
@@ -320,9 +331,7 @@ def test_parallel_plan_workers_publish_lifecycle_to_parent_context():
         {"id": 2, "task": "b", "tool": "read_file", "params": {"id": 2}},
     ]
 
-    results = engine._exec_wave_parallel(
-        [1, 2], PlanDAG(steps), "task", [], context, 2
-    )
+    results = engine._exec_wave_parallel([1, 2], PlanDAG(steps), "task", [], context, 2)
 
     assert len(results) == 2
     assert len(published) == 4
@@ -362,13 +371,15 @@ def test_lifecycle_callback_persists_each_transition_to_session(
 
 
 def test_recovery_never_replays_and_distinguishes_read_from_write():
-    read_context = AgentContext(initial={
-        "_tool_execution_checkpoint": {
-            "tool_name": "web_fetch",
-            "tool_class": "INFO",
-            "state": "running",
+    read_context = AgentContext(
+        initial={
+            "_tool_execution_checkpoint": {
+                "tool_name": "web_fetch",
+                "tool_class": "INFO",
+                "state": "running",
+            }
         }
-    })
+    )
     read_notice = recover_tool_execution_checkpoint(read_context)
     read_checkpoint = read_context.get("_tool_execution_checkpoint")
 
@@ -377,13 +388,15 @@ def test_recovery_never_replays_and_distinguishes_read_from_write():
     assert read_checkpoint["resume_action"] == "retry"
     assert "未自动重放" in read_notice
 
-    write_context = AgentContext(initial={
-        "_tool_execution_checkpoint": {
-            "tool_name": "write_file",
-            "tool_class": "WRITE",
-            "state": "retrying",
+    write_context = AgentContext(
+        initial={
+            "_tool_execution_checkpoint": {
+                "tool_name": "write_file",
+                "tool_class": "WRITE",
+                "state": "retrying",
+            }
         }
-    })
+    )
     write_notice = recover_tool_execution_checkpoint(write_context)
     write_checkpoint = write_context.get("_tool_execution_checkpoint")
 

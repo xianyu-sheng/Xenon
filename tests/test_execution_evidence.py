@@ -37,9 +37,7 @@ def test_evidence_reads_real_worktree_diff(tmp_path):
         cwd=tmp_path,
         check=True,
     )
-    subprocess.run(
-        ["git", "config", "user.name", "Test"], cwd=tmp_path, check=True
-    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     target = tmp_path / "value.txt"
     target.write_text("old\n")
     subprocess.run(["git", "add", "value.txt"], cwd=tmp_path, check=True)

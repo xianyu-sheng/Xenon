@@ -31,9 +31,19 @@ def _patch_chat(monkeypatch, responder):
 
     父引擎与子引擎（同进程新建实例）均经此，确保子 Agent 也走 mock。
     """
-    def fake(model_id, messages, *, max_tokens=None, temperature=0.3,
-             credentials=None, base_url=None, **kw):
+
+    def fake(
+        model_id,
+        messages,
+        *,
+        max_tokens=None,
+        temperature=0.3,
+        credentials=None,
+        base_url=None,
+        **kw,
+    ):
         return responder(messages)
+
     monkeypatch.setattr(base, "chat_completion", fake)
 
 
@@ -60,7 +70,9 @@ class TestSpawnSubagent:
         out = eng._spawn_subagent({"task": "总结这个模块"}, ctx, tracker)
 
         assert "✅" in out
-        assert "sub-react-d1-1" in out  # v0.6.2: task_id 格式为 sub-{engine}-d{depth}-{num}
+        assert (
+            "sub-react-d1-1" in out
+        )  # v0.6.2: task_id 格式为 sub-{engine}-d{depth}-{num}
         assert "工具调用" in out
         assert "子任务结果" in out
 
@@ -110,6 +122,7 @@ class TestSpawnSubagent:
     def test_subagent_exception_becomes_failure(self, monkeypatch):
         def boom(messages):
             raise RuntimeError("子 Agent 炸了")
+
         _patch_chat(monkeypatch, boom)
         eng = ReActEngine(["m1"])
         tracker = ToolExecutionTracker()
@@ -123,7 +136,9 @@ class TestDepthLimit:
     def test_depth_zero_refuses_when_max_zero(self, monkeypatch):
         _patch_chat(monkeypatch, lambda m: _final_answer_json("x"))
         eng = ReActEngine(["m1"], max_subagent_depth=0)
-        out = eng._spawn_subagent({"task": "总结"}, AgentContext(), ToolExecutionTracker())
+        out = eng._spawn_subagent(
+            {"task": "总结"}, AgentContext(), ToolExecutionTracker()
+        )
         assert "嵌套深度超限" in out
         assert eng._last_subagent is None  # 未创建子引擎
 
@@ -132,12 +147,16 @@ class TestDepthLimit:
         _patch_chat(monkeypatch, lambda m: _final_answer_json("x"))
         eng = ReActEngine(["m1"], max_subagent_depth=1)
         # 父 spawn 一次（应成功）
-        out1 = eng._spawn_subagent({"task": "总结"}, AgentContext(), ToolExecutionTracker())
+        out1 = eng._spawn_subagent(
+            {"task": "总结"}, AgentContext(), ToolExecutionTracker()
+        )
         assert "✅" in out1
         sub = eng._last_subagent
         assert sub._subagent_depth == 1
         # 子再 spawn → 拒绝
-        out2 = sub._spawn_subagent({"task": "再委派"}, AgentContext(), ToolExecutionTracker())
+        out2 = sub._spawn_subagent(
+            {"task": "再委派"}, AgentContext(), ToolExecutionTracker()
+        )
         assert "嵌套深度超限" in out2
 
 
@@ -155,9 +174,14 @@ class TestEndToEnd:
             if not state["spawned"]:
                 state["spawned"] = True
                 return json.dumps(
-                    {"thought": "委派", "action": "spawn_agent",
-                     "action_input": {"task": "分析并总结"}, "final_answer": ""},
-                    ensure_ascii=False)
+                    {
+                        "thought": "委派",
+                        "action": "spawn_agent",
+                        "action_input": {"task": "分析并总结"},
+                        "final_answer": "",
+                    },
+                    ensure_ascii=False,
+                )
             return _final_answer_json("已完成")
 
         _patch_chat(monkeypatch, responder)

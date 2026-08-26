@@ -3,12 +3,14 @@ v0.5.0 上下文压缩实效评测（自适应版）。
 
 自动调整参数确保压缩真实触发，然后验证信息保留率。
 """
+
 from __future__ import annotations
 
 import json
 import sys
 import time
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from xenon.repl.context_manager import ContextManager
@@ -41,7 +43,9 @@ def build_and_compact(
         cm.add_user_message(user_msg)
         cm.add_assistant_message(
             asst_msg,
-            model_used="deepseek/deepseek-v4-pro" if tier >= 3 else "deepseek/deepseek-v4-flash",
+            model_used="deepseek/deepseek-v4-pro"
+            if tier >= 3
+            else "deepseek/deepseek-v4-flash",
         )
 
     actual_tokens = cm.current_token_usage()
@@ -56,7 +60,11 @@ def build_and_compact(
     # 确保有 older 可压缩：需要至少 strategy.keep_recent_rounds + 1 轮用户消息
     user_count = sum(1 for t in cm.history if t.role == "user")
     if user_count <= strategy.keep_recent_rounds:
-        return cm, f"用户轮数 {user_count} <= keep_recent {strategy.keep_recent_rounds}，无 older 可压缩", False
+        return (
+            cm,
+            f"用户轮数 {user_count} <= keep_recent {strategy.keep_recent_rounds}，无 older 可压缩",
+            False,
+        )
 
     # 重建 ContextManager with calculated max_tokens
     cm2 = ContextManager(max_tokens=target_max_tokens)
@@ -67,10 +75,14 @@ def build_and_compact(
     ratio = cm2.usage_ratio()
     space = SpaceBudget.evaluate(ratio)
 
-    print(f"  [{label}] tokens={actual_tokens}, max_tokens={target_max_tokens}, "
-          f"ratio={ratio:.1%}, space={space}, tier=Q{tier}")
-    print(f"    策略: trigger={trigger}, keep_recent={strategy.keep_recent_rounds}, "
-          f"crisis={strategy.crisis_action}")
+    print(
+        f"  [{label}] tokens={actual_tokens}, max_tokens={target_max_tokens}, "
+        f"ratio={ratio:.1%}, space={space}, tier=Q{tier}"
+    )
+    print(
+        f"    策略: trigger={trigger}, keep_recent={strategy.keep_recent_rounds}, "
+        f"crisis={strategy.crisis_action}"
+    )
 
     # 触发压缩
     t0 = time.time()
@@ -81,8 +93,10 @@ def build_and_compact(
     n_after = len(cm2.history)
     compressed = n_after < n_before
 
-    print(f"    压缩: {n_before}→{n_after} 轮, 耗时={elapsed:.0f}ms, "
-          f"摘要前100字: {result[:100]}...")
+    print(
+        f"    压缩: {n_before}→{n_after} 轮, 耗时={elapsed:.0f}ms, "
+        f"摘要前100字: {result[:100]}..."
+    )
 
     if not compressed:
         print("    ⚠️ 压缩未触发！原因可能是 older 为空。")
@@ -102,14 +116,20 @@ def verify(cm: ContextManager, queries: list[dict], model_id: str) -> list[dict]
             "=== 对话上下文 ===\n"
         )
         for turn in context_turns:
-            role_label = {"user": "用户", "assistant": "助手", "system": "系统"}.get(turn["role"], turn["role"])
+            role_label = {"user": "用户", "assistant": "助手", "system": "系统"}.get(
+                turn["role"], turn["role"]
+            )
             prompt += f"[{role_label}] {turn['content'][:400]}\n\n"
         prompt += f"=== 问题 ===\n{q['query']}\n\n请用一句话简洁回答。"
 
         try:
             t0 = time.time()
-            resp = chat_completion(model_id, [{"role": "user", "content": prompt}],
-                                   temperature=0.0, max_tokens=150)
+            resp = chat_completion(
+                model_id,
+                [{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=150,
+            )
             elapsed = (time.time() - t0) * 1000
             answer = resp.strip()[:300]
             expected = q["expected_keywords"]
@@ -117,18 +137,34 @@ def verify(cm: ContextManager, queries: list[dict], model_id: str) -> list[dict]
             missing = [kw for kw in expected if kw.lower() not in answer.lower()]
             score = len(matched) / len(expected) if expected else 1.0
 
-            print(f"    [{i+1}/{len(queries)}] {q['query'][:50]}...")
+            print(f"    [{i + 1}/{len(queries)}] {q['query'][:50]}...")
             print(f"      答: {answer[:120]}")
-            print(f"      得分: {score:.0%} (匹配 {matched}, 缺失 {missing}) [{elapsed:.0f}ms]")
+            print(
+                f"      得分: {score:.0%} (匹配 {matched}, 缺失 {missing}) [{elapsed:.0f}ms]"
+            )
 
-            results.append({"query": q["query"], "answer": answer,
-                           "matched": matched, "missing": missing,
-                           "score": score, "latency_ms": elapsed})
+            results.append(
+                {
+                    "query": q["query"],
+                    "answer": answer,
+                    "matched": matched,
+                    "missing": missing,
+                    "score": score,
+                    "latency_ms": elapsed,
+                }
+            )
         except Exception as e:
-            print(f"    [{i+1}] ❌ API失败: {e}")
-            results.append({"query": q["query"], "answer": "",
-                           "matched": [], "missing": q["expected_keywords"],
-                           "score": 0.0, "error": str(e)})
+            print(f"    [{i + 1}] ❌ API失败: {e}")
+            results.append(
+                {
+                    "query": q["query"],
+                    "answer": "",
+                    "matched": [],
+                    "missing": q["expected_keywords"],
+                    "score": 0.0,
+                    "error": str(e),
+                }
+            )
     return results
 
 
@@ -148,28 +184,58 @@ def main(model_id="deepseek/deepseek-v4-pro"):
 
     # 6 轮用户消息（> Q4 keep_recent=4），带大量填充确保 token 充足
     rounds1 = [
-        ("我想用 Python 实现网页爬虫，需要并发抓取和 JSON 存储结果。",
-         "好的。方案：aiohttp + Semaphore + BeautifulSoup + JSON 存储。" + make_fill("x", 400)),
-        ("请创建 crawler.py 主文件",
-         "已创建。WebCrawler 类：默认并发数 5，超时 30 秒，用 Semaphore 控并发。" + make_fill("y", 400)),
-        ("创建 storage.py，需支持增量追加和 URL 去重",
-         "已创建。ResultStorage 类：基于 URL 的 seen_urls 集合去重，输出 results.json。" + make_fill("z", 400)),
-        ("创建 config.yaml 配置文件",
-         "已创建。max_retries=3, retry_delay=2, output_dir=./data, format=json。" + make_fill("w", 400)),
-        ("分析性能瓶颈",
-         "网络 I/O 占 80%，HTML 解析 10%，JSON 序列化 5%。建议连接池复用。" + make_fill("v", 300)),
-        ("确认所有文件已创建",
-         "已确认：crawler.py, storage.py, config.yaml 均已创建。" + make_fill("u", 200)),
+        (
+            "我想用 Python 实现网页爬虫，需要并发抓取和 JSON 存储结果。",
+            "好的。方案：aiohttp + Semaphore + BeautifulSoup + JSON 存储。"
+            + make_fill("x", 400),
+        ),
+        (
+            "请创建 crawler.py 主文件",
+            "已创建。WebCrawler 类：默认并发数 5，超时 30 秒，用 Semaphore 控并发。"
+            + make_fill("y", 400),
+        ),
+        (
+            "创建 storage.py，需支持增量追加和 URL 去重",
+            "已创建。ResultStorage 类：基于 URL 的 seen_urls 集合去重，输出 results.json。"
+            + make_fill("z", 400),
+        ),
+        (
+            "创建 config.yaml 配置文件",
+            "已创建。max_retries=3, retry_delay=2, output_dir=./data, format=json。"
+            + make_fill("w", 400),
+        ),
+        (
+            "分析性能瓶颈",
+            "网络 I/O 占 80%，HTML 解析 10%，JSON 序列化 5%。建议连接池复用。"
+            + make_fill("v", 300),
+        ),
+        (
+            "确认所有文件已创建",
+            "已确认：crawler.py, storage.py, config.yaml 均已创建。"
+            + make_fill("u", 200),
+        ),
     ]
 
     cm1, _, triggered1 = build_and_compact(4, rounds1, "Q4编程", model_id)
     compression_triggered += 1 if triggered1 else 0
 
     queries1 = [
-        {"query": "用户最初要求爬虫支持哪两个核心功能？", "expected_keywords": ["并发", "JSON"]},
-        {"query": "crawler.py 的默认并发数是多少？超时多少秒？", "expected_keywords": ["5", "30"]},
-        {"query": "storage.py 的去重策略基于什么？输出文件名是什么？", "expected_keywords": ["URL", "results.json"]},
-        {"query": "config.yaml 中 max_retries 和 retry_delay 的值？", "expected_keywords": ["3", "2"]},
+        {
+            "query": "用户最初要求爬虫支持哪两个核心功能？",
+            "expected_keywords": ["并发", "JSON"],
+        },
+        {
+            "query": "crawler.py 的默认并发数是多少？超时多少秒？",
+            "expected_keywords": ["5", "30"],
+        },
+        {
+            "query": "storage.py 的去重策略基于什么？输出文件名是什么？",
+            "expected_keywords": ["URL", "results.json"],
+        },
+        {
+            "query": "config.yaml 中 max_retries 和 retry_delay 的值？",
+            "expected_keywords": ["3", "2"],
+        },
         {"query": "性能瓶颈中占比最大的是什么？", "expected_keywords": ["网络", "I/O"]},
     ]
     print("\n  验证压缩后信息有效性:")
@@ -194,7 +260,10 @@ def main(model_id="deepseek/deepseek-v4-pro"):
 
     queries2 = [
         {"query": "用户最初说了什么？", "expected_keywords": ["你好"]},
-        {"query": "用户要求翻译什么内容？翻译结果是什么？", "expected_keywords": ["hello", "你好"]},
+        {
+            "query": "用户要求翻译什么内容？翻译结果是什么？",
+            "expected_keywords": ["hello", "你好"],
+        },
     ]
     print("\n  验证压缩后信息有效性:")
     all_results.extend(verify(cm2, queries2, model_id))
@@ -208,31 +277,45 @@ def main(model_id="deepseek/deepseek-v4-pro"):
     rounds3 = [
         ("你好", "你好！"),
         ("今天天气如何", "抱歉无法查询天气。"),
-        ("写一个斐波那契函数",
-         "def fib(n): return n if n<=1 else fib(n-1)+fib(n-2)"),
-        ("请设计分布式任务调度系统。要求：优先级队列、工作窃取、故障恢复、水平扩展。",
-         "## 架构\n- TaskRouter 任务路由\n- PriorityQueue 五级 P0-P4\n"
-         "- WorkerPool 推荐 10 节点\n- WorkStealingScheduler\n"
-         "- FaultTolerance: SWIM 协议\n- 单节点 1000 tasks/s\n"
-         "- 集群 10000 tasks/s\n- 消息队列: Redis Streams\n"
-         "- 水平扩展: K8s HPA\n" + make_fill("架构", 500)),
-        ("水平扩展的具体实现方案？",
-         "K8s HPA + 自定义指标:\n- 最小 3 副本, 最大 20 副本\n"
-         "- 扩容冷却 60s, 缩容冷却 300s\n"
-         "- 自定义 Metrics Adapter 采集队列深度\n" + make_fill("扩展", 300)),
-        ("故障恢复机制再详细说明一下",
-         "SWIM 协议:\n- 心跳间隔 1s, 超时 3s\n- 怀疑机制 + 多播传播\n"
-         "- 故障检测后自动重分配任务\n- 任务幂等性设计\n" + make_fill("故障", 250)),
+        ("写一个斐波那契函数", "def fib(n): return n if n<=1 else fib(n-1)+fib(n-2)"),
+        (
+            "请设计分布式任务调度系统。要求：优先级队列、工作窃取、故障恢复、水平扩展。",
+            "## 架构\n- TaskRouter 任务路由\n- PriorityQueue 五级 P0-P4\n"
+            "- WorkerPool 推荐 10 节点\n- WorkStealingScheduler\n"
+            "- FaultTolerance: SWIM 协议\n- 单节点 1000 tasks/s\n"
+            "- 集群 10000 tasks/s\n- 消息队列: Redis Streams\n"
+            "- 水平扩展: K8s HPA\n" + make_fill("架构", 500),
+        ),
+        (
+            "水平扩展的具体实现方案？",
+            "K8s HPA + 自定义指标:\n- 最小 3 副本, 最大 20 副本\n"
+            "- 扩容冷却 60s, 缩容冷却 300s\n"
+            "- 自定义 Metrics Adapter 采集队列深度\n" + make_fill("扩展", 300),
+        ),
+        (
+            "故障恢复机制再详细说明一下",
+            "SWIM 协议:\n- 心跳间隔 1s, 超时 3s\n- 怀疑机制 + 多播传播\n"
+            "- 故障检测后自动重分配任务\n- 任务幂等性设计\n" + make_fill("故障", 250),
+        ),
     ]
 
     cm3, _, triggered3 = build_and_compact(5, rounds3, "Q5混合", model_id)
     compression_triggered += 1 if triggered3 else 0
 
     queries3 = [
-        {"query": "分布式调度系统有哪四个核心要求？", "expected_keywords": ["优先级队列", "工作窃取", "故障恢复", "水平扩展"]},
-        {"query": "WorkerPool 推荐多少节点？集群目标处理能力是多少 tasks/s？", "expected_keywords": ["10", "10000"]},
+        {
+            "query": "分布式调度系统有哪四个核心要求？",
+            "expected_keywords": ["优先级队列", "工作窃取", "故障恢复", "水平扩展"],
+        },
+        {
+            "query": "WorkerPool 推荐多少节点？集群目标处理能力是多少 tasks/s？",
+            "expected_keywords": ["10", "10000"],
+        },
         {"query": "消息队列使用什么技术？", "expected_keywords": ["Redis"]},
-        {"query": "K8s HPA 的最小和最大副本数是多少？冷却时间呢？", "expected_keywords": ["3", "20", "60", "300"]},
+        {
+            "query": "K8s HPA 的最小和最大副本数是多少？冷却时间呢？",
+            "expected_keywords": ["3", "20", "60", "300"],
+        },
     ]
     print("\n  验证压缩后信息有效性:")
     all_results.extend(verify(cm3, queries3, model_id))
@@ -253,28 +336,44 @@ def main(model_id="deepseek/deepseek-v4-pro"):
     print(f"  压缩触发场景: {triggered_count}/3")
     print(f"  验证查询数: {total}")
     print(f"  综合得分: {avg:.1%}")
-    print(f"  高召回(≥75%): {high}/{total} | 中召回: {mid}/{total} | 低召回: {low}/{total}")
-    print(f"  平均延迟: {sum(r.get('latency_ms', 0) for r in all_results) / max(total, 1):.0f}ms")
+    print(
+        f"  高召回(≥75%): {high}/{total} | 中召回: {mid}/{total} | 低召回: {low}/{total}"
+    )
+    print(
+        f"  平均延迟: {sum(r.get('latency_ms', 0) for r in all_results) / max(total, 1):.0f}ms"
+    )
 
     if triggered_count == 0:
         print("\n  ❌ 压缩未在任何场景触发，无法评测压缩效果。")
     elif avg >= 0.85:
-        print(f"\n  ✅ 压缩有效！{triggered_count}/3 场景真实触发压缩，信息保留率 {avg:.0%}。")
+        print(
+            f"\n  ✅ 压缩有效！{triggered_count}/3 场景真实触发压缩，信息保留率 {avg:.0%}。"
+        )
     elif avg >= 0.70:
-        print(f"\n  ✅ 基本可用。{triggered_count}/3 场景触发压缩，信息保留率 {avg:.0%}。")
+        print(
+            f"\n  ✅ 基本可用。{triggered_count}/3 场景触发压缩，信息保留率 {avg:.0%}。"
+        )
     elif avg >= 0.50:
         print("\n  ⚠️ 有信息丢失。需优化策略参数。")
     else:
         print("\n  ❌ 严重信息丢失。策略需要重新设计。")
 
-    return {"model": model_id, "avg_score": avg, "total": total,
-            "compression_triggered": triggered_count,
-            "high": high, "mid": mid, "low": low, "details": all_results}
+    return {
+        "model": model_id,
+        "avg_score": avg,
+        "total": total,
+        "compression_triggered": triggered_count,
+        "high": high,
+        "mid": mid,
+        "low": low,
+        "details": all_results,
+    }
 
 
 if __name__ == "__main__":
     model = sys.argv[1] if len(sys.argv) > 1 else "deepseek/deepseek-v4-pro"
     report = main(model)
     Path("/tmp/xenon_context_eval.json").write_text(
-        json.dumps(report, indent=2, ensure_ascii=False, default=str))
+        json.dumps(report, indent=2, ensure_ascii=False, default=str)
+    )
     print("\n报告: /tmp/xenon_context_eval.json")

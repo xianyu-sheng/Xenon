@@ -5,6 +5,7 @@
 - 参数漂移消除：temperature 集中（react/plan/reflection=0.3）；
 - observation 截断阈值统一为可配属性。
 """
+
 from types import SimpleNamespace
 
 from xenon.engine.base import BaseEngine
@@ -23,7 +24,9 @@ class TestBaseEngineInheritance:
         """基础引擎不再各自携带 _call_llm 副本，统一继承自 BaseEngine。"""
         base_method = BaseEngine._call_llm
         for cls in (ReActEngine, PlanExecuteEngine, ReflectionEngine):
-            assert "_call_llm" not in cls.__dict__, f"{cls.__name__} 仍自带 _call_llm 副本"
+            assert "_call_llm" not in cls.__dict__, (
+                f"{cls.__name__} 仍自带 _call_llm 副本"
+            )
             assert cls._call_llm is base_method
 
 
@@ -31,6 +34,7 @@ class TestTemperatureDriftEliminated:
     def test_react_plan_reflection_use_0_3(self):
         for cls in (ReActEngine, PlanExecuteEngine, ReflectionEngine):
             assert cls(["openai/gpt-4o"]).temperature == 0.3
+
 
 class TestObservationTruncateConfigurable:
     def test_default_is_2000(self):
@@ -54,10 +58,13 @@ class TestBaseEngineIsAbstract:
 class TestActualModelReporting:
     def test_repl_prefers_engine_actual_model(self):
         engine = SimpleNamespace(last_model_used="deepseek/deepseek-v4-flash")
-        assert REPL._engine_model_used(
-            engine,
-            ["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"],
-        ) == "deepseek/deepseek-v4-flash"
+        assert (
+            REPL._engine_model_used(
+                engine,
+                ["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"],
+            )
+            == "deepseek/deepseek-v4-flash"
+        )
 
     def test_repl_falls_back_when_engine_has_not_completed_a_call(self):
         engine = SimpleNamespace(last_model_used=None)

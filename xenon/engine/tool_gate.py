@@ -19,6 +19,7 @@
 会话隔离：
 每个 ToolGate 实例持有独立的 metrics，多会话互不干扰。
 """
+
 from __future__ import annotations
 
 import logging
@@ -34,21 +35,24 @@ logger = logging.getLogger(__name__)
 
 class ParamValidationLevel(str, Enum):
     """参数校验级别枚举。"""
-    STRICT = "strict"      # ≥2 条命中即拦截
+
+    STRICT = "strict"  # ≥2 条命中即拦截
     MODERATE = "moderate"  # ≥3 条命中才拦截（默认）
-    LENIENT = "lenient"    # 不拦截，仅记录
+    LENIENT = "lenient"  # 不拦截，仅记录
 
 
 class EvidenceMode(str, Enum):
     """证据链模式枚举。"""
-    ENFORCE = "enforce"    # 强制要求证据，缺失则拒绝
-    OBSERVE = "observe"    # 记录但不拒绝（默认）
+
+    ENFORCE = "enforce"  # 强制要求证据，缺失则拒绝
+    OBSERVE = "observe"  # 记录但不拒绝（默认）
     DISABLED = "disabled"  # 完全禁用证据链
 
 
 @dataclass
 class ToolGateConfig:
     """单个工具的门控配置（用于 tool_overrides）。"""
+
     disabled: bool = False
     param_validation: ParamValidationLevel | None = None
     evidence_mode: EvidenceMode | None = None
@@ -60,15 +64,20 @@ class ToolGateConfig:
 @dataclass
 class ToolGateMetrics:
     """工具门控指标（会话级，每个 ToolGate 实例独立）。"""
-    denied_by_disabled: int = 0     # 黑名单拒绝次数
-    denied_by_evidence: int = 0     # 证据链拒绝次数
-    denied_by_params: int = 0       # 参数校验拒绝次数
-    auto_reads_triggered: int = 0   # 自动读取触发次数
+
+    denied_by_disabled: int = 0  # 黑名单拒绝次数
+    denied_by_evidence: int = 0  # 证据链拒绝次数
+    denied_by_params: int = 0  # 参数校验拒绝次数
+    auto_reads_triggered: int = 0  # 自动读取触发次数
 
     def record_denial(self, reason: str) -> None:
         """记录拒绝事件到对应指标。"""
         reason_lower = reason.lower()
-        if "disabled" in reason_lower or "黑名单" in reason_lower or "禁用" in reason_lower:
+        if (
+            "disabled" in reason_lower
+            or "黑名单" in reason_lower
+            or "禁用" in reason_lower
+        ):
             self.denied_by_disabled += 1
         elif "evidence" in reason_lower or "证据" in reason_lower:
             self.denied_by_evidence += 1
@@ -143,7 +152,11 @@ class ToolGate:
         tool_overrides: dict[str, ToolGateConfig] = {}
 
         # 优先检查 validation.strict（向后兼容）
-        if hasattr(config, "validation") and hasattr(config.validation, "strict") and config.validation.strict:
+        if (
+            hasattr(config, "validation")
+            and hasattr(config.validation, "strict")
+            and config.validation.strict
+        ):
             param_validation = ParamValidationLevel.STRICT
 
         # 尝试读取 tool_gate 配置段
@@ -187,11 +200,14 @@ class ToolGate:
                     pv_override = override_data.get("param_validation")
                     if pv_override:
                         try:
-                            tool_config.param_validation = ParamValidationLevel(pv_override)
+                            tool_config.param_validation = ParamValidationLevel(
+                                pv_override
+                            )
                         except (ValueError, TypeError):
                             logger.warning(
                                 "tool_overrides.%s.param_validation 值无效: %r",
-                                tool_name, pv_override
+                                tool_name,
+                                pv_override,
                             )
 
                     # evidence_mode 覆盖
@@ -202,7 +218,8 @@ class ToolGate:
                         except (ValueError, TypeError):
                             logger.warning(
                                 "tool_overrides.%s.evidence_mode 值无效: %r",
-                                tool_name, em_override
+                                tool_name,
+                                em_override,
                             )
 
                     tool_overrides[tool_name] = tool_config

@@ -60,8 +60,7 @@ class TestLLMClientAuthTokenFallback:
     def test_yaml_secret_is_stripped_and_blank_values_are_ignored(self, tmp_path):
         credentials = tmp_path / "credentials.yaml"
         credentials.write_text(
-            "openai: '  yaml-key  '\n"
-            "deepseek: '   '\n",
+            "openai: '  yaml-key  '\ndeepseek: '   '\n",
             encoding="utf-8",
         )
         with patch("xenon.utils.llm_client._CREDENTIALS_PATH", credentials):

@@ -265,9 +265,7 @@ class TestUnknownModeDoesNotSilentlyFallBack:
         src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
         # dispatch 分支里必须存在「未注册」提示，且必须调用 _record_engine_error
         # 收尾（否则历史里会留下孤立 user 消息）
-        assert "未注册的思考范式" in src, (
-            "dispatch 未对未注册范式给出显式错误提示"
-        )
+        assert "未注册的思考范式" in src, "dispatch 未对未注册范式给出显式错误提示"
         tree = ast.parse(src)
         # 确认 ENGINE_REGISTRY.get 被用于 dispatch
         uses_registry = any(

@@ -130,8 +130,13 @@ class TestPatchBindingStats:
 
 class TestLineSimilarity:
     def test_identical_lines(self) -> None:
-        assert line_similarity("xa[xa > self.N - 1] = self._i_over",
-                               "xa[xa > self.N - 1] = self._i_over") == 1.0
+        assert (
+            line_similarity(
+                "xa[xa > self.N - 1] = self._i_over",
+                "xa[xa > self.N - 1] = self._i_over",
+            )
+            == 1.0
+        )
 
     def test_similar_lines(self) -> None:
         # 特判补丁：np.uint8() 包装 vs 原赋值

@@ -23,11 +23,13 @@ def _native_response() -> LLMResponse:
         "role": "assistant",
         "content": "",
         "reasoning_content": "I need the current time before answering.",
-        "tool_calls": [{
-            "id": "call_time",
-            "type": "function",
-            "function": {"name": "datetime", "arguments": "{}"},
-        }],
+        "tool_calls": [
+            {
+                "id": "call_time",
+                "type": "function",
+                "function": {"name": "datetime", "arguments": "{}"},
+            }
+        ],
     }
     return LLMResponse(
         reasoning_content=message["reasoning_content"],
@@ -107,8 +109,7 @@ def test_react_sends_complete_deepseek_tool_protocol_on_next_iteration(monkeypat
         if len(seen) == 1:
             return _native_response()
         assistant_index = next(
-            index for index, message in enumerate(messages)
-            if message.get("tool_calls")
+            index for index, message in enumerate(messages) if message.get("tool_calls")
         )
         assistant = messages[assistant_index]
         tool_result = messages[assistant_index + 1]
@@ -151,11 +152,14 @@ def test_native_all_models_failed_falls_back_to_text_protocol(monkeypatch):
     assert text_calls["n"] >= 1
     assert engine._native_request_failed is True
     # 熔断后 _call_llm_native 直接走文本协议（不再触碰 native 请求）
-    assert engine._call_llm_native(
-        [{"role": "user", "content": "x"}],
-        [{"type": "function", "function": {"name": "f"}}],
-        None,
-    ) == '{"thought": "t", "final_answer": "文本协议成功"}'
+    assert (
+        engine._call_llm_native(
+            [{"role": "user", "content": "x"}],
+            [{"type": "function", "function": {"name": "f"}}],
+            None,
+        )
+        == '{"thought": "t", "final_answer": "文本协议成功"}'
+    )
 
 
 def test_native_non_provider_error_still_propagates(monkeypatch):

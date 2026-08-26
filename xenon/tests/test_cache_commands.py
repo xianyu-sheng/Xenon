@@ -16,7 +16,11 @@ from xenon.repl.commands import COMMANDS, _cmd_cache, _cmd_cost, _cmd_fix_cache
 from xenon.repl.context_manager import ContextManager
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.status_bar import StatusBar
-from xenon.utils.cache_telemetry import CacheEventStore, MANIFEST_RESPONSE_KEY, build_prompt_manifest
+from xenon.utils.cache_telemetry import (
+    CacheEventStore,
+    MANIFEST_RESPONSE_KEY,
+    build_prompt_manifest,
+)
 from xenon.utils.deepseek_cache import CacheTracker
 
 
@@ -32,10 +36,12 @@ def _state(tracker: CacheTracker) -> dict:
 def _response(*, hit=0, miss=100, cache_fields=True, manifest=None) -> dict:
     usage = {"prompt_tokens": 100, "completion_tokens": 5}
     if cache_fields:
-        usage.update({
-            "prompt_cache_hit_tokens": hit,
-            "prompt_cache_miss_tokens": miss,
-        })
+        usage.update(
+            {
+                "prompt_cache_hit_tokens": hit,
+                "prompt_cache_miss_tokens": miss,
+            }
+        )
     response = {"usage": usage}
     if manifest:
         response[MANIFEST_RESPONSE_KEY] = manifest
@@ -104,8 +110,10 @@ def test_history_and_doctor_use_privacy_safe_persisted_events(tmp_path) -> None:
     tracker = CacheTracker(event_store=CacheEventStore(tmp_path))
     manifest = build_prompt_manifest(
         "deepseek-v4-flash",
-        [{"role": "system", "content": "private-system"},
-         {"role": "user", "content": "private-question"}],
+        [
+            {"role": "system", "content": "private-system"},
+            {"role": "user", "content": "private-question"},
+        ],
     ).as_dict()
     tracker.record_response(
         "deepseek-v4-flash",
@@ -167,7 +175,9 @@ def test_toolbar_shows_cold_na_and_actual_rate() -> None:
     tracker.close()
 
 
-def test_cache_optimize_dry_run_is_read_only_and_fix_cache_is_real_alias(tmp_path) -> None:
+def test_cache_optimize_dry_run_is_read_only_and_fix_cache_is_real_alias(
+    tmp_path,
+) -> None:
     tracker = CacheTracker(event_store=CacheEventStore(tmp_path))
     state = _state(tracker)
 

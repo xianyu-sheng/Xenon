@@ -1,2 +1,1 @@
 """Thematic slash-command groups."""
-

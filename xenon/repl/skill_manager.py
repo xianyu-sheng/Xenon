@@ -174,10 +174,12 @@ class SkillManager:
             roots.append(("user-shared", self.shared_skills_dir))
         roots.append(("user", self.skills_dir))
         if self.project_root is not None:
-            roots.extend([
-                ("project-shared", self.project_root / ".agents" / "skills"),
-                ("project", self.project_root / ".xenon" / "skills"),
-            ])
+            roots.extend(
+                [
+                    ("project-shared", self.project_root / ".agents" / "skills"),
+                    ("project", self.project_root / ".xenon" / "skills"),
+                ]
+            )
 
         unique: list[tuple[str, Path]] = []
         seen: set[Path] = set()
@@ -203,7 +205,9 @@ class SkillManager:
                 self._load_one(path, source, root, self._load_legacy_skill)
             for path in sorted(root.glob("*/SKILL.md")):
                 self._load_one(path, source, root, self._load_agent_skill)
-        logger.info("加载了 %d 个技能（%d 个错误）", len(self.skills), len(self.load_errors))
+        logger.info(
+            "加载了 %d 个技能（%d 个错误）", len(self.skills), len(self.load_errors)
+        )
 
     def _load_one(self, path: Path, source: str, root: Path, loader) -> None:
         try:
@@ -221,16 +225,16 @@ class SkillManager:
     def _validate_name(raw: Any) -> str:
         name = str(raw or "").strip().lower()
         if not _SKILL_NAME_RE.fullmatch(name):
-            raise SkillFormatError(
-                "name 必须为 1-64 位小写字母、数字、连字符或下划线"
-            )
+            raise SkillFormatError("name 必须为 1-64 位小写字母、数字、连字符或下划线")
         return name
 
     @staticmethod
     def _validate_legacy_name(raw: Any) -> str:
         name = str(raw or "").strip().lower().replace(" ", "_")
         if not _LEGACY_SKILL_NAME_RE.fullmatch(name) or name.startswith("."):
-            raise SkillFormatError("旧技能 name 必须为 1-64 位文字、数字、连字符或下划线")
+            raise SkillFormatError(
+                "旧技能 name 必须为 1-64 位文字、数字、连字符或下划线"
+            )
         return name
 
     def _load_legacy_skill(self, path: Path, source: str, root: Path) -> Skill:
@@ -247,7 +251,9 @@ class SkillManager:
             description=str(data.get("description", "")),
             system_prompt=str(data.get("system_prompt", "")),
             steps=steps,
-            params=data.get("params", []) if isinstance(data.get("params", []), list) else [],
+            params=data.get("params", [])
+            if isinstance(data.get("params", []), list)
+            else [],
             source=source,
             path=path,
             root=root,
@@ -283,7 +289,9 @@ class SkillManager:
         )
 
     @staticmethod
-    def _read_agent_document(path: Path, *, metadata_only: bool) -> tuple[dict[str, Any], str]:
+    def _read_agent_document(
+        path: Path, *, metadata_only: bool
+    ) -> tuple[dict[str, Any], str]:
         if metadata_only:
             header_lines: list[bytes] = []
             consumed = 0
@@ -318,7 +326,9 @@ class SkillManager:
         else:
             raw = path.read_bytes()
             if len(raw) > _SKILL_MD_BYTES:
-                raise SkillFormatError(f"SKILL.md 超过 {_SKILL_MD_BYTES // 1024} KiB 限制")
+                raise SkillFormatError(
+                    f"SKILL.md 超过 {_SKILL_MD_BYTES // 1024} KiB 限制"
+                )
         try:
             text = raw.decode("utf-8-sig")
         except UnicodeDecodeError as exc:
@@ -327,7 +337,9 @@ class SkillManager:
         lines = text.splitlines()
         if not lines or lines[0].strip() != "---":
             raise SkillFormatError("缺少 YAML frontmatter 起始分隔符 ---")
-        closing = next((i for i, line in enumerate(lines[1:], 1) if line.strip() == "---"), None)
+        closing = next(
+            (i for i, line in enumerate(lines[1:], 1) if line.strip() == "---"), None
+        )
         if closing is None:
             raise SkillFormatError("缺少 YAML frontmatter 结束分隔符 ---")
         try:
@@ -336,7 +348,7 @@ class SkillManager:
             raise SkillFormatError(f"frontmatter YAML 无效: {exc}") from exc
         if not isinstance(frontmatter, dict):
             raise SkillFormatError("frontmatter 必须是对象")
-        body = "" if metadata_only else "\n".join(lines[closing + 1:]).strip()
+        body = "" if metadata_only else "\n".join(lines[closing + 1 :]).strip()
         return frontmatter, body
 
     def save(self) -> None:
@@ -369,7 +381,9 @@ class SkillManager:
         }
         path = self.skills_dir / f"{skill.name}.yaml"
         path.write_text(
-            yaml.safe_dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False),
+            yaml.safe_dump(
+                data, allow_unicode=True, default_flow_style=False, sort_keys=False
+            ),
             encoding="utf-8",
         )
         skill.path = path
@@ -407,7 +421,11 @@ class SkillManager:
         if skill.is_agent_skill:
             directory = skill.path.parent
             configured_parent = next(
-                (root for _, root in self._roots if directory.parent.absolute() == root.absolute()),
+                (
+                    root
+                    for _, root in self._roots
+                    if directory.parent.absolute() == root.absolute()
+                ),
                 None,
             )
             if configured_parent is None:
@@ -429,8 +447,12 @@ class SkillManager:
         """Return a deterministic, secret-free discovery report."""
         return {
             "skill_count": len(self.skills),
-            "agent_skill_count": sum(skill.is_agent_skill for skill in self.skills.values()),
-            "legacy_skill_count": sum(not skill.is_agent_skill for skill in self.skills.values()),
+            "agent_skill_count": sum(
+                skill.is_agent_skill for skill in self.skills.values()
+            ),
+            "legacy_skill_count": sum(
+                not skill.is_agent_skill for skill in self.skills.values()
+            ),
             "roots": [
                 {"source": source, "path": str(root), "exists": root.is_dir()}
                 for source, root in self._roots
@@ -466,13 +488,17 @@ class SkillManager:
             raise FileExistsError(f"技能已存在: {destination}；使用 --force 明确替换")
 
         file_count, total_bytes = self._validate_install_tree(source_dir)
-        temporary = Path(tempfile.mkdtemp(prefix=f".{skill.name}.install-", dir=target_root))
+        temporary = Path(
+            tempfile.mkdtemp(prefix=f".{skill.name}.install-", dir=target_root)
+        )
         backup: Path | None = None
         try:
             shutil.rmtree(temporary)
             shutil.copytree(source_dir, temporary, symlinks=True)
             # Validate the copied document as the final artifact, not only the source.
-            self._load_agent_skill(temporary / "SKILL.md", "install-target", target_root)
+            self._load_agent_skill(
+                temporary / "SKILL.md", "install-target", target_root
+            )
             replaced = destination.exists() or destination.is_symlink()
             if replaced:
                 backup = target_root / f".{skill.name}.backup-{uuid.uuid4().hex}"
@@ -508,11 +534,13 @@ class SkillManager:
             "shared-user": self.shared_skills_dir,
             "project": (
                 self.project_root / ".xenon" / "skills"
-                if self.project_root is not None else None
+                if self.project_root is not None
+                else None
             ),
             "shared-project": (
                 self.project_root / ".agents" / "skills"
-                if self.project_root is not None else None
+                if self.project_root is not None
+                else None
             ),
         }
         if scope not in mapping:
@@ -559,7 +587,9 @@ class SkillManager:
         if not skill.is_agent_skill or skill.path is None:
             return skill.system_prompt
         if skill.instructions is None:
-            _, skill.instructions = self._read_agent_document(skill.path, metadata_only=False)
+            _, skill.instructions = self._read_agent_document(
+                skill.path, metadata_only=False
+            )
         return skill.instructions
 
     def list_resources(self, name: str) -> list[str]:
@@ -580,7 +610,9 @@ class SkillManager:
             resources.append(relative.as_posix())
         return resources
 
-    def read_resource(self, name: str, relative_path: str, *, max_bytes: int = _RESOURCE_BYTES) -> str:
+    def read_resource(
+        self, name: str, relative_path: str, *, max_bytes: int = _RESOURCE_BYTES
+    ) -> str:
         """Read one UTF-8 text resource with traversal, symlink, and size guards."""
         skill = self._require_agent_skill(name)
         requested = Path(relative_path)
@@ -625,7 +657,9 @@ class SkillManager:
             f"## 用户调用参数\n{request}"
         )
 
-    def execute(self, name: str, args: str, model_priority: list[str] | None = None) -> str:
+    def execute(
+        self, name: str, args: str, model_priority: list[str] | None = None
+    ) -> str:
         """Execute a legacy recipe or an LLM-only standard skill fallback."""
         skill = self.get(name)
         if not skill:
@@ -654,7 +688,9 @@ class SkillManager:
         for index, step in enumerate(skill.steps):
             try:
                 if step.type == "llm":
-                    output = self._execute_llm_step(step, context, skill.system_prompt, model_priority)
+                    output = self._execute_llm_step(
+                        step, context, skill.system_prompt, model_priority
+                    )
                 elif step.type == "command":
                     output = self._execute_command_step(step, context)
                 elif step.type == "echo":
@@ -704,11 +740,17 @@ class SkillManager:
         try:
             if sys.platform == "win32":
                 proc = subprocess.run(
-                    ["powershell", "-Command", cmd], capture_output=True, text=True, timeout=60,
+                    ["powershell", "-Command", cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
                 )
             else:
                 proc = subprocess.run(
-                    ["/bin/bash", "-c", cmd], capture_output=True, text=True, timeout=60,
+                    ["/bin/bash", "-c", cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
                 )
             output = proc.stdout.strip()
             if proc.stderr.strip():
@@ -736,7 +778,9 @@ class SkillManager:
 
     @staticmethod
     def _parse_args(args: str, params: list[dict[str, str]]) -> dict[str, str]:
-        result = {param["name"]: param["default"] for param in params if "default" in param}
+        result = {
+            param["name"]: param["default"] for param in params if "default" in param
+        }
         if args.strip():
             parts = args.split()
             for index, param in enumerate(params):

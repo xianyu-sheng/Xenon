@@ -59,26 +59,42 @@ def _cmd_cost(*, args: str = "", session_state: dict = None, **kwargs: Any) -> s
 
         lines.append(f"\n[bold cyan]模型:[/bold cyan] {model_id}")
         lines.append(f"  [dim]调用次数:[/dim] {snap['calls']}")
-        lines.append(f"  [dim]Input:[/dim] {snap['prompt_tokens']:,} tokens"
-                     f"  [dim]Output:[/dim] {snap['completion_tokens']:,} tokens")
-        lines.append(f"  [bold cyan]缓存命中:[/bold cyan] [{hr_color}]{snap['cache_hit_tokens']:,}[/{hr_color}]"
-                     f"  ([{hr_color}]{hr:.1%}[/{hr_color}])")
-        lines.append(f"  [dim]缓存未命中:[/dim] {snap['cache_miss_tokens']:,}"
-                     f"  ([dim]{1 - hr:.1%}[/dim])")
+        lines.append(
+            f"  [dim]Input:[/dim] {snap['prompt_tokens']:,} tokens"
+            f"  [dim]Output:[/dim] {snap['completion_tokens']:,} tokens"
+        )
+        lines.append(
+            f"  [bold cyan]缓存命中:[/bold cyan] [{hr_color}]{snap['cache_hit_tokens']:,}[/{hr_color}]"
+            f"  ([{hr_color}]{hr:.1%}[/{hr_color}])"
+        )
+        lines.append(
+            f"  [dim]缓存未命中:[/dim] {snap['cache_miss_tokens']:,}"
+            f"  ([dim]{1 - hr:.1%}[/dim])"
+        )
         lines.append(f"  [bold yellow]预估费用:[/bold yellow] ¥{snap['cost_yuan']:.4f}")
-        if snap['saved_yuan'] > 0.0001:
-            saved_pct = int(snap['saved_yuan'] / (snap['cost_yuan'] + snap['saved_yuan']) * 100)
-            lines.append(f"  [bold green]节省:[/bold green] ¥{snap['saved_yuan']:.4f} ({saved_pct}%)"
-                         f"  [dim]vs 全未命中[/dim]")
+        if snap["saved_yuan"] > 0.0001:
+            saved_pct = int(
+                snap["saved_yuan"] / (snap["cost_yuan"] + snap["saved_yuan"]) * 100
+            )
+            lines.append(
+                f"  [bold green]节省:[/bold green] ¥{snap['saved_yuan']:.4f} ({saved_pct}%)"
+                f"  [dim]vs 全未命中[/dim]"
+            )
         lines.append("")
 
     # 汇总
     if len(models) > 1:
         lines.append("[bold]─── 汇总 ───[/bold]")
-        lines.append(f"  [dim]总缓存命中率:[/dim] [bold]{tracker.cache_hit_rate_pct}[/bold]")
-        lines.append(f"  [dim]总费用:[/dim] [bold yellow]{tracker.estimated_cost_display}[/bold yellow]")
+        lines.append(
+            f"  [dim]总缓存命中率:[/dim] [bold]{tracker.cache_hit_rate_pct}[/bold]"
+        )
+        lines.append(
+            f"  [dim]总费用:[/dim] [bold yellow]{tracker.estimated_cost_display}[/bold yellow]"
+        )
         if tracker.savings_pct > 0:
-            lines.append(f"  [dim]总节省:[/dim] [bold green]¥{tracker.savings_yuan:.4f} ({tracker.savings_pct}%)[/bold green]")
+            lines.append(
+                f"  [dim]总节省:[/dim] [bold green]¥{tracker.savings_yuan:.4f} ({tracker.savings_pct}%)[/bold green]"
+            )
 
     if not lines:
         return f"[dim]未找到匹配 '{model_filter}' 的模型数据。[/dim]"
@@ -144,17 +160,19 @@ def _cache_status(tracker) -> str:
     rate = f"{tracker.cache_hit_rate:.1%}" if total else "n/a"
     efficiency = event.get("prefix_efficiency")
     efficiency_text = f"{efficiency:.1%}" if efficiency is not None else "n/a"
-    return "\n".join([
-        f"[bold]缓存状态: {state}[/bold]",
-        f"  实际命中率: [bold]{rate}[/bold]  ·  字段覆盖率: {tracker.cache_field_coverage:.0%}",
-        f"  最近请求: {event['model_id']} · {event['engine']}/{event['phase']}",
-        f"  实际 token: hit {event['cache_hit_tokens']:,} · miss {event['cache_miss_tokens']:,}",
-        f"  前缀效率: {efficiency_text}  ·  缓存族: {event['cache_family'][:12]}",
-        f"  缓存轨道: {(event.get('cache_lane') or '未跟踪')[:20]}"
-        f" · 代次 {int(event.get('lane_generation', 0))}"
-        f" · 可复用约 {int(event.get('lane_reusable_tokens', 0)):,} tokens",
-        f"  证据来源: 厂商 usage 字段  ·  本地累计 {tracker.total_calls} 次请求",
-    ])
+    return "\n".join(
+        [
+            f"[bold]缓存状态: {state}[/bold]",
+            f"  实际命中率: [bold]{rate}[/bold]  ·  字段覆盖率: {tracker.cache_field_coverage:.0%}",
+            f"  最近请求: {event['model_id']} · {event['engine']}/{event['phase']}",
+            f"  实际 token: hit {event['cache_hit_tokens']:,} · miss {event['cache_miss_tokens']:,}",
+            f"  前缀效率: {efficiency_text}  ·  缓存族: {event['cache_family'][:12]}",
+            f"  缓存轨道: {(event.get('cache_lane') or '未跟踪')[:20]}"
+            f" · 代次 {int(event.get('lane_generation', 0))}"
+            f" · 可复用约 {int(event.get('lane_reusable_tokens', 0)):,} tokens",
+            f"  证据来源: 厂商 usage 字段  ·  本地累计 {tracker.total_calls} 次请求",
+        ]
+    )
 
 
 def _cache_explain(tracker) -> str:
@@ -173,9 +191,13 @@ def _cache_explain(tracker) -> str:
             f"miss={event['cache_miss_tokens']:,}, 覆盖率={event['cache_field_coverage']:.0%}"
         )
     else:
-        lines.append("  直接证据: API 没有返回 cache hit/miss 字段，因此显示 n/a，而不是 0%。")
+        lines.append(
+            "  直接证据: API 没有返回 cache hit/miss 字段，因此显示 n/a，而不是 0%。"
+        )
     if cause not in {"cache_hit", "cache_fields_unavailable"}:
-        lines.append("  说明: 原因由本地 Manifest 差异推断；命中 token 始终以厂商 usage 为准。")
+        lines.append(
+            "  说明: 原因由本地 Manifest 差异推断；命中 token 始终以厂商 usage 为准。"
+        )
     return "\n".join(lines)
 
 
@@ -187,8 +209,7 @@ def _cache_lanes(repl) -> str:
     snapshots = registry.snapshots()
     if not snapshots:
         return (
-            "[bold]Cache Rails[/bold]\n"
-            "  尚无模型轨道；第一次实际模型调用后会自动创建。"
+            "[bold]Cache Rails[/bold]\n  尚无模型轨道；第一次实际模型调用后会自动创建。"
         )
     active = [item for item in snapshots if item.get("active")]
     archived = [item for item in snapshots if not item.get("active")]
@@ -223,9 +244,13 @@ def _cache_history(tracker, limit: int) -> str:
         return "[dim]暂无缓存历史。[/dim]"
     lines = ["[bold]最近缓存请求（仅哈希与计数）[/bold]"]
     for event in events:
-        stamp = datetime.fromtimestamp(float(event.get("timestamp", 0))).strftime("%m-%d %H:%M:%S")
+        stamp = datetime.fromtimestamp(float(event.get("timestamp", 0))).strftime(
+            "%m-%d %H:%M:%S"
+        )
         state = _CACHE_STATE_LABELS.get(str(event.get("state", "")), "?")
-        cause = _CACHE_CAUSE_LABELS.get(str(event.get("cause", "")), str(event.get("cause", "")))
+        cause = _CACHE_CAUSE_LABELS.get(
+            str(event.get("cause", "")), str(event.get("cause", ""))
+        )
         lines.append(
             f"  {stamp}  {state:<7}  {event.get('model_id', '?')} "
             f"· {event.get('engine', '?')}/{event.get('phase', '?')} "
@@ -242,7 +267,9 @@ def _cache_doctor(tracker) -> str:
         lines.append(
             f"  {icons.get(check['level'], '·')} [bold]{check['name']}[/bold]: {check['detail']}"
         )
-    lines.append("\n  建议先看 [bold]/cache explain[/bold]；缓存是服务端 best-effort，Xenon 不会制造付费预热流量。")
+    lines.append(
+        "\n  建议先看 [bold]/cache explain[/bold]；缓存是服务端 best-effort，Xenon 不会制造付费预热流量。"
+    )
     return "\n".join(lines)
 
 
@@ -299,8 +326,7 @@ def _cache_optimize(tracker, repl, mode: str) -> str:
         )
 
     warnings = [
-        check for check in tracker.diagnostics()
-        if check.get("level") == "warn"
+        check for check in tracker.diagnostics() if check.get("level") == "warn"
     ]
     if warnings:
         lines.append("\n  需要人工判断（不会自动修改）：")
@@ -350,6 +376,3 @@ def _cmd_fix_cache(*, args: str = "", session_state: dict = None, **kwargs: Any)
     """Compatibility entry point backed by the real cache optimizer."""
     mode = args.strip() or "--dry-run"
     return _cmd_cache(args=f"optimize {mode}", session_state=session_state)
-
-
-

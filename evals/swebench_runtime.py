@@ -51,14 +51,18 @@ def _apply_test_patch(worktree: Path, test_patch: str, instance_id: str) -> None
     try:
         apply = subprocess.run(
             ["git", "-C", str(worktree), "apply", "--whitespace=fix", str(patch_file)],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         if apply.returncode != 0:
             # Fallback: try patch -p1 (some test patches use context that git
             # apply rejects but GNU patch accepts).
             fallback = subprocess.run(
                 ["patch", "-p1", "-d", str(worktree), "-i", str(patch_file)],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True,
+                text=True,
+                timeout=60,
             )
             if fallback.returncode != 0:
                 raise RuntimeError(
@@ -71,7 +75,9 @@ def _apply_test_patch(worktree: Path, test_patch: str, instance_id: str) -> None
     # Anti-cheat: lock the touched test files read-only.
     touched = subprocess.run(
         ["git", "-C", str(worktree), "diff", "--name-only", "HEAD"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     for rel in touched.stdout.splitlines():
         path = worktree / rel
@@ -80,11 +86,15 @@ def _apply_test_patch(worktree: Path, test_patch: str, instance_id: str) -> None
 
     subprocess.run(
         ["git", "-C", str(worktree), "add", "-A"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     subprocess.run(
         ["git", "-C", str(worktree), "commit", "-q", "-m", "apply test_patch (eval)"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
 
 
@@ -133,7 +143,13 @@ def prepare_official_source(
                     for img in candidates:
                         if img.id and sha_prefix in img.id:
                             for tag in img.tags:
-                                if "sweb.eval" in tag and instance["instance_id"].lower().replace("__", "_") in tag.lower():
+                                if (
+                                    "sweb.eval" in tag
+                                    and instance["instance_id"]
+                                    .lower()
+                                    .replace("__", "_")
+                                    in tag.lower()
+                                ):
                                     image_key = tag.split(":")[0] if ":" in tag else tag
                                     image_id = img.id
                                     break
@@ -180,8 +196,12 @@ def prepare_official_source(
     container = None
     try:
         container = build_container(
-            spec, client, run_id, build_logger,
-            nocache=False, force_rebuild=False,
+            spec,
+            client,
+            run_id,
+            build_logger,
+            nocache=False,
+            force_rebuild=False,
         )
         image_id = container.image.id
         image_key = spec.instance_image_key
@@ -220,7 +240,11 @@ class OfficialTaskRuntime:
         return ToolRuntime(
             workspace_root=self.host_worktree,
             command_prefix=(
-                "docker", "exec", "-w", self.container_workdir, self.container_name,
+                "docker",
+                "exec",
+                "-w",
+                self.container_workdir,
+                self.container_name,
             ),
             backend_workdir=self.container_workdir,
             command_prelude=(

@@ -23,11 +23,12 @@ if TYPE_CHECKING:
 
 class ToolOutputType(str, Enum):
     """工具输出分类（v0.5.0）。"""
-    STRUCTURAL = "structural"   # read_file, ast_analyze — 保留签名，截断函数体
-    TRANSIENT = "transient"     # command, web_fetch — 保留退出码 + 头尾
-    POINTER = "pointer"         # search_files, list_files — 保留为路径列表
-    MUTATION = "mutation"       # write_file, edit_file — 保留 diff 摘要
-    META = "meta"               # git, mcp_call — 保留操作名 + 结果摘要
+
+    STRUCTURAL = "structural"  # read_file, ast_analyze — 保留签名，截断函数体
+    TRANSIENT = "transient"  # command, web_fetch — 保留退出码 + 头尾
+    POINTER = "pointer"  # search_files, list_files — 保留为路径列表
+    MUTATION = "mutation"  # write_file, edit_file — 保留 diff 摘要
+    META = "meta"  # git, mcp_call — 保留操作名 + 结果摘要
 
 
 # ── 压缩策略 ────────────────────────────────────────────────
@@ -38,27 +39,30 @@ class CompressionStrategy:
     """单个 tier 的压缩策略参数集。"""
 
     tier: int
-    trigger_threshold: float       # 触发压缩的 usage_ratio（0-1）
-    tool_output_max_chars: int     # 工具输出保留最大字符数
-    summary_segments: int          # 摘要段数（3 或 6）
-    preserve_reasoning: bool       # 是否保留推理链
-    decay_rate: float              # 每轮重要性衰减率
-    keep_recent_rounds: int        # 保留最近 N 轮完整对话
+    trigger_threshold: float  # 触发压缩的 usage_ratio（0-1）
+    tool_output_max_chars: int  # 工具输出保留最大字符数
+    summary_segments: int  # 摘要段数（3 或 6）
+    preserve_reasoning: bool  # 是否保留推理链
+    decay_rate: float  # 每轮重要性衰减率
+    keep_recent_rounds: int  # 保留最近 N 轮完整对话
     # 危急模式策略
     crisis_action: str = "auto_summary"  # drop | label | auto_summary | structured_truncate | cross_tier_evict
-    crisis_truncate_head: int = 150      # 结构化截断保留前 N 字符
-    crisis_truncate_tail: int = 100      # 结构化截断保留后 N 字符
-    crisis_keep_top_n: int = 5           # 结构化截断保留最重要 N 条
+    crisis_truncate_head: int = 150  # 结构化截断保留前 N 字符
+    crisis_truncate_tail: int = 100  # 结构化截断保留后 N 字符
+    crisis_keep_top_n: int = 5  # 结构化截断保留最重要 N 条
     working_memory_keys: list[str] = field(default_factory=list)
 
     def apply_phase_modifier(self, phase: str) -> CompressionStrategy:
         """根据 BudgetManager 阶段调整策略参数，返回新策略（不修改原实例）。"""
         import copy
+
         modified = copy.copy(self)
         if phase == "explore":
             modified.tool_output_max_chars = self.tool_output_max_chars * 4
         elif phase == "converge":
-            modified.tool_output_max_chars = max(50, int(self.tool_output_max_chars * 0.3))
+            modified.tool_output_max_chars = max(
+                50, int(self.tool_output_max_chars * 0.3)
+            )
             modified.trigger_threshold = max(0.35, self.trigger_threshold - 0.15)
         return modified
 
@@ -141,7 +145,9 @@ class TieredStrategySelector:
         strategy = selector.select(tier=4, phase="execute")
     """
 
-    def select(self, tier: int, phase: str | BudgetPhase | None = None) -> CompressionStrategy:
+    def select(
+        self, tier: int, phase: str | BudgetPhase | None = None
+    ) -> CompressionStrategy:
         """选择并返回（可选阶段调整后的）压缩策略。
 
         Args:
@@ -297,7 +303,9 @@ def _compress_transient(output: str, max_chars: int) -> str:
 
     # 提取 exit code / status
     status = ""
-    exit_match = re.search(r"(?:exit|return)\s*(?:code|status)?\s*[:=]?\s*(\d+)", output, re.I)
+    exit_match = re.search(
+        r"(?:exit|return)\s*(?:code|status)?\s*[:=]?\s*(\d+)", output, re.I
+    )
     if exit_match:
         status = f"[退出码: {exit_match.group(1)}] "
 
@@ -317,7 +325,9 @@ def _compress_pointer(output: str, max_chars: int) -> str:
         r"(?:^|\s)((?:[\w\-./\\]+/)*[\w\-./\\]+\.\w{1,10})",
         re.MULTILINE,
     )
-    paths = list(dict.fromkeys(path_pattern.findall(output)))[:50]  # 去重保序，最多 50 条
+    paths = list(dict.fromkeys(path_pattern.findall(output)))[
+        :50
+    ]  # 去重保序，最多 50 条
 
     if paths:
         return f"[{len(paths)} 个文件/目录]\n" + "\n".join(paths[: max_chars // 30])
@@ -389,7 +399,7 @@ class ImportanceCalculator:
         """
         distance = max(0, current_index - turn_index)
         base = ImportanceCalculator.tier_score(turn_tier)
-        return base * (decay_rate ** distance)
+        return base * (decay_rate**distance)
 
     @staticmethod
     def filter_by_importance(
@@ -408,7 +418,10 @@ class ImportanceCalculator:
             turn_idx = getattr(turn, "turn_index", current_index)
             turn_type = getattr(turn, "turn_type", "general")
             score = ImportanceCalculator.effective_importance(
-                turn_tier, turn_idx, current_index, decay_rate,
+                turn_tier,
+                turn_idx,
+                current_index,
+                decay_rate,
             )
             if score >= min_score or turn_type == "user_input":
                 result.append(turn)
@@ -427,8 +440,8 @@ class SpaceBudget:
         state = sb.evaluate(usage_ratio=0.92)  # → "critical"
     """
 
-    AMPLE_THRESHOLD = 0.15    # 空闲 >15% → 充裕
-    TIGHT_THRESHOLD = 0.05    # 空闲 5-15% → 紧张，<5% → 危急
+    AMPLE_THRESHOLD = 0.15  # 空闲 >15% → 充裕
+    TIGHT_THRESHOLD = 0.05  # 空闲 5-15% → 紧张，<5% → 危急
 
     @classmethod
     def evaluate(cls, usage_ratio: float) -> str:
@@ -481,12 +494,16 @@ def handle_crisis(
     elif action == "label":
         # Q2: 单行标注
         n = len(older)
-        label_turn = type(older[0])(
-            role="system",
-            content=f"[已丢弃 {n} 条低优先级对话]",
-            task_tier=tier,
-            turn_type="system",
-        ) if older else None
+        label_turn = (
+            type(older[0])(
+                role="system",
+                content=f"[已丢弃 {n} 条低优先级对话]",
+                task_tier=tier,
+                turn_type="system",
+            )
+            if older
+            else None
+        )
         if label_turn:
             return [label_turn] + list(recent), f"（{n} 条低优先级对话已丢弃）"
         return list(recent), ""
@@ -494,15 +511,20 @@ def handle_crisis(
     elif action == "auto_summary":
         # Q3: 使用 _auto_summary() 正则兜底
         from xenon.repl.context_manager import ContextManager
+
         dummy = ContextManager()
         dummy.history = list(older)
         summary = dummy._auto_summary(messages=list(older))
-        summary_turn = type(older[0])(
-            role="system",
-            content=f"[对话历史摘要（本地提取）]\n\n{summary}",
-            task_tier=tier,
-            turn_type="system",
-        ) if older else None
+        summary_turn = (
+            type(older[0])(
+                role="system",
+                content=f"[对话历史摘要（本地提取）]\n\n{summary}",
+                task_tier=tier,
+                turn_type="system",
+            )
+            if older
+            else None
+        )
         if summary_turn:
             return [summary_turn] + list(recent), summary
         return list(recent), summary
@@ -518,16 +540,23 @@ def handle_crisis(
     else:
         # 未知 action → 回退到 Q3 行为
         from xenon.repl.context_manager import ContextManager
+
         dummy = ContextManager()
         dummy.history = list(older)
         summary = dummy._auto_summary(messages=list(older))
-        summary_turn = type(older[0])(
-            role="system",
-            content=f"[对话历史摘要]\n\n{summary}",
-            task_tier=tier,
-            turn_type="system",
-        ) if older else None
-        return ([summary_turn] + list(recent)) if summary_turn else (list(recent), summary)
+        summary_turn = (
+            type(older[0])(
+                role="system",
+                content=f"[对话历史摘要]\n\n{summary}",
+                task_tier=tier,
+                turn_type="system",
+            )
+            if older
+            else None
+        )
+        return (
+            ([summary_turn] + list(recent)) if summary_turn else (list(recent), summary)
+        )
 
 
 def _structured_truncate(
@@ -552,6 +581,7 @@ def _structured_truncate(
         new_content = f"{head}\n…（省略中间 {len(content) - head_chars - tail_chars} 字符）…\n{tail}"
         # Create a new turn with truncated content
         import copy
+
         new_turn = copy.copy(turn)
         new_turn.content = new_content
         truncated.append(new_turn)
@@ -559,13 +589,17 @@ def _structured_truncate(
     # 按重要性排序，保留 top N
     if len(truncated) > keep_n:
         from xenon.repl.context_strategies import ImportanceCalculator
+
         scored = [
-            (ImportanceCalculator.effective_importance(
-                getattr(t, "task_tier", 3),
-                getattr(t, "turn_index", current_index),
-                current_index,
-                strategy.decay_rate,
-            ), t)
+            (
+                ImportanceCalculator.effective_importance(
+                    getattr(t, "task_tier", 3),
+                    getattr(t, "turn_index", current_index),
+                    current_index,
+                    strategy.decay_rate,
+                ),
+                t,
+            )
             for t in truncated
         ]
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -609,27 +643,36 @@ def _cross_tier_evict(
             # Q3: 正则摘要
             if tiers.get(t):
                 from xenon.repl.context_manager import ContextManager
+
                 dummy = ContextManager()
                 dummy.history = list(tiers[t])
                 summary = dummy._auto_summary(messages=list(tiers[t]))
                 template_turn = tiers[t][0]
-                kept.append(type(template_turn)(
-                    role="system",
-                    content=f"[Q3 任务摘要]\n\n{summary}",
-                    task_tier=3,
-                    turn_type="system",
-                ))
+                kept.append(
+                    type(template_turn)(
+                        role="system",
+                        content=f"[Q3 任务摘要]\n\n{summary}",
+                        task_tier=3,
+                        turn_type="system",
+                    )
+                )
         else:
             # Q4-Q5: 保留但结构化截断
             for turn in tiers.get(t, []):
                 content = turn.content
-                if len(content) > strategy.crisis_truncate_head + strategy.crisis_truncate_tail + 100:
+                if (
+                    len(content)
+                    > strategy.crisis_truncate_head
+                    + strategy.crisis_truncate_tail
+                    + 100
+                ):
                     import copy
+
                     new_turn = copy.copy(turn)
                     new_turn.content = (
-                        content[:strategy.crisis_truncate_head]
+                        content[: strategy.crisis_truncate_head]
                         + f"\n…（省略中间 {len(content) - strategy.crisis_truncate_head - strategy.crisis_truncate_tail} 字符）…\n"
-                        + content[-strategy.crisis_truncate_tail:]
+                        + content[-strategy.crisis_truncate_tail :]
                     )
                     kept.append(new_turn)
                 else:
@@ -640,7 +683,11 @@ def _cross_tier_evict(
         parts.append(f"丢弃 {dropped_count} 条 Q1 对话")
     if labeled_count:
         parts.append(f"压缩 {labeled_count} 条 Q2 对话")
-    summary = f"（空间危急：{', '.join(parts)}，保留 {len(kept)} 条重要对话）" if parts else ""
+    summary = (
+        f"（空间危急：{', '.join(parts)}，保留 {len(kept)} 条重要对话）"
+        if parts
+        else ""
+    )
     return kept + list(recent), summary
 
 

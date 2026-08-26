@@ -16,7 +16,7 @@ from xenon.repl.command_registry import (
     command_handler,
     dispatch_command,  # noqa: F401 - compatibility export
     register_command,  # noqa: F401 - compatibility export
-    )
+)
 from xenon.repl.command_groups.runtime import (
     cmd_optimize as _cmd_optimize,  # noqa: F401 - compatibility export
     cmd_stream as _cmd_stream,  # noqa: F401 - compatibility export
@@ -133,10 +133,6 @@ _confirm = confirm_action
 
 # Model and provider commands live in repl.command_groups.model.
 # Agent execution commands live in repl.command_groups.agent.
-
-
-
-
 
 
 # Memory commands live in repl.command_groups.memory_cmd.

@@ -26,9 +26,7 @@ _DIFF_FENCE = re.compile(r"```(?:diff|patch)\s*\n(.*?)```", re.DOTALL | re.IGNOR
 
 
 def _git_diff(worktree: Path) -> str:
-    return subprocess.check_output(
-        ["git", "diff", "--binary"], cwd=worktree, text=True
-    )
+    return subprocess.check_output(["git", "diff", "--binary"], cwd=worktree, text=True)
 
 
 def extract_unified_diff(answer: str) -> str | None:

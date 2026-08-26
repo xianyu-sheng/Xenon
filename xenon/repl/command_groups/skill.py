@@ -46,6 +46,7 @@ for _canonical, _aliases in _FUZZY_ALIASES.items():
 def _fuzzy_match_subcommand(sub: str) -> str | None:
     """模糊匹配子命令名，返回规范名或 None。"""
     import difflib
+
     canonical = list(_FUZZY_ALIASES.keys())
     # 精确别名匹配
     if sub in _SKILL_FUZZY:
@@ -56,7 +57,9 @@ def _fuzzy_match_subcommand(sub: str) -> str | None:
 
 
 @command_handler("/skill")
-def _cmd_skill(*, args: str, registry: ModelRegistry, session_state: dict[str, Any], **kwargs: Any) -> str:
+def _cmd_skill(
+    *, args: str, registry: ModelRegistry, session_state: dict[str, Any], **kwargs: Any
+) -> str:
     from xenon.repl.skill_manager import SkillManager
 
     manager = SkillManager()
@@ -87,7 +90,9 @@ def _cmd_skill(*, args: str, registry: ModelRegistry, session_state: dict[str, A
                 type_counts: dict[str, int] = {}
                 for st in s.steps:
                     type_counts[st.type] = type_counts.get(st.type, 0) + 1
-                step_summary = ", ".join(f"{n}×{t}" for t, n in sorted(type_counts.items()))
+                step_summary = ", ".join(
+                    f"{n}×{t}" for t, n in sorted(type_counts.items())
+                )
                 lines.append(f"  /{s.name} — {s.description}")
                 lines.append(f"    {len(s.steps)} 步 ({step_summary})")
             installed = "\n".join(lines) + "\n"
@@ -174,10 +179,12 @@ def _cmd_skill(*, args: str, registry: ModelRegistry, session_state: dict[str, A
         # 单个 typo 词（如 /skill xyz）显示帮助而非静默创建 skill。
         # 阈值：args 总长度 > 15 字符或包含中文（说明用户在描述需求）。
         full_args = args.strip()
-        has_chinese = any('一' <= c <= '鿿' for c in full_args)
+        has_chinese = any("一" <= c <= "鿿" for c in full_args)
         if len(full_args) > 15 or has_chinese:
             name = _extract_skill_name(sub, sub_args)
-            return _skill_auto_generate(name, args, manager, registry, interactive=False)
+            return _skill_auto_generate(
+                name, args, manager, registry, interactive=False
+            )
         else:
             # sub 可能是 typo — 显示帮助并给出模糊匹配建议
             hint = ""
@@ -203,7 +210,9 @@ def _skill_create_interactive(manager, registry=None) -> str:
 
     # 选择创建模式
     console.print("\n[dim]创建模式:[/dim]")
-    console.print("  [bold]1[/bold]. 🤖 智能生成 — 只需描述，Agent 自动生成步骤（推荐）")
+    console.print(
+        "  [bold]1[/bold]. 🤖 智能生成 — 只需描述，Agent 自动生成步骤（推荐）"
+    )
     console.print("  [bold]2[/bold]. ✏️  手动配置 — 逐步骤手动添加")
 
     mode = _Prompt.ask("选择模式", choices=["1", "2"], default="1")
@@ -214,7 +223,9 @@ def _skill_create_interactive(manager, registry=None) -> str:
         return _skill_manual_create(name, description, manager)
 
 
-def _skill_auto_generate(name: str, description: str, manager, registry=None, *, interactive: bool = True) -> str:
+def _skill_auto_generate(
+    name: str, description: str, manager, registry=None, *, interactive: bool = True
+) -> str:
     """智能生成技能步骤。
 
     Args:
@@ -243,12 +254,14 @@ def _skill_auto_generate(name: str, description: str, manager, registry=None, *,
             system_prompt = ""
 
     # 展示生成结果供用户学习
-    console.print(Panel(
-        _format_skill_preview(steps, system_prompt),
-        title="[bold green]✅ 自动生成的技能[/bold green]",
-        border_style="green",
-        padding=(1, 2),
-    ))
+    console.print(
+        Panel(
+            _format_skill_preview(steps, system_prompt),
+            title="[bold green]✅ 自动生成的技能[/bold green]",
+            border_style="green",
+            padding=(1, 2),
+        )
+    )
 
     if interactive:
         console.print("\n[dim]👆 以上是 Agent 根据你的描述自动生成的步骤。[/dim]")
@@ -264,7 +277,13 @@ def _skill_auto_generate(name: str, description: str, manager, registry=None, *,
             return "❌ 已取消创建。"
 
         if action == "edit":
-            return _skill_manual_create(name, description, manager, pre_steps=steps, pre_system_prompt=system_prompt)
+            return _skill_manual_create(
+                name,
+                description,
+                manager,
+                pre_steps=steps,
+                pre_system_prompt=system_prompt,
+            )
 
     # 直接保存
     skill = manager.create(name, description, steps, system_prompt=system_prompt)
@@ -305,13 +324,18 @@ def _generate_skill_steps(description: str, registry=None) -> tuple[list[dict], 
 {{"system_prompt": "你是一个代码审查专家", "steps": [{{"type": "llm", "prompt": "请审查以下代码:\\n{{input}}", "output_var": "review"}}]}}"""
 
         messages = [
-            {"role": "system", "content": "你是一个技能配置生成器。根据用户描述生成可执行的技能步骤配置。只返回 JSON。"},
+            {
+                "role": "system",
+                "content": "你是一个技能配置生成器。根据用户描述生成可执行的技能步骤配置。只返回 JSON。",
+            },
             {"role": "user", "content": prompt},
         ]
 
         for model_id in model_ids:
             try:
-                response = chat_completion(model_id, messages, max_tokens=1000, temperature=0.3)
+                response = chat_completion(
+                    model_id, messages, max_tokens=1000, temperature=0.3
+                )
                 return _parse_skill_steps(response)
             except Exception:
                 continue
@@ -348,7 +372,7 @@ def _parse_skill_steps(response: str) -> tuple[list[dict], str]:
         brace_end = text.rfind("}")
         if brace_start != -1 and brace_end != -1:
             try:
-                data = json.loads(text[brace_start:brace_end + 1])
+                data = json.loads(text[brace_start : brace_end + 1])
             except json.JSONDecodeError:
                 return [], ""
         else:
@@ -372,7 +396,11 @@ def _parse_skill_steps(response: str) -> tuple[list[dict], str]:
 def _fallback_skill_steps(description: str) -> list[dict]:
     """LLM 不可用时的默认步骤。"""
     return [
-        {"type": "llm", "prompt": f"根据以下需求执行操作:\n{{input}}\n\n需求: {description}", "output_var": "result"},
+        {
+            "type": "llm",
+            "prompt": f"根据以下需求执行操作:\n{{input}}\n\n需求: {description}",
+            "output_var": "result",
+        },
     ]
 
 
@@ -384,20 +412,34 @@ def _format_skill_preview(steps: list[dict], system_prompt: str) -> str:
 
     for i, step in enumerate(steps, 1):
         stype = step.get("type", "?")
-        icons = {"llm": "🧠", "command": "⚡", "echo": "📢", "write_file": "📝", "read_file": "📖"}
+        icons = {
+            "llm": "🧠",
+            "command": "⚡",
+            "echo": "📢",
+            "write_file": "📝",
+            "read_file": "📖",
+        }
         icon = icons.get(stype, "❓")
 
         if stype == "llm":
             prompt_preview = step.get("prompt", "")[:80]
             lines.append(f"  {icon} 步骤 {i} [cyan]LLM[/cyan]: {prompt_preview}")
         elif stype == "command":
-            lines.append(f"  {icon} 步骤 {i} [yellow]命令[/yellow]: {step.get('action', '')}")
+            lines.append(
+                f"  {icon} 步骤 {i} [yellow]命令[/yellow]: {step.get('action', '')}"
+            )
         elif stype == "echo":
-            lines.append(f"  {icon} 步骤 {i} [green]输出[/green]: {step.get('prompt', '')[:60]}")
+            lines.append(
+                f"  {icon} 步骤 {i} [green]输出[/green]: {step.get('prompt', '')[:60]}"
+            )
         elif stype == "write_file":
-            lines.append(f"  {icon} 步骤 {i} [magenta]写文件[/magenta]: {step.get('file_path', '')}")
+            lines.append(
+                f"  {icon} 步骤 {i} [magenta]写文件[/magenta]: {step.get('file_path', '')}"
+            )
         elif stype == "read_file":
-            lines.append(f"  {icon} 步骤 {i} [blue]读文件[/blue]: {step.get('file_path', '')}")
+            lines.append(
+                f"  {icon} 步骤 {i} [blue]读文件[/blue]: {step.get('file_path', '')}"
+            )
 
         if step.get("output_var"):
             lines.append(f"       → 输出到: [dim]{step['output_var']}[/dim]")
@@ -405,22 +447,31 @@ def _format_skill_preview(steps: list[dict], system_prompt: str) -> str:
     return "\n".join(lines)
 
 
-def _skill_manual_create(name: str, description: str, manager, pre_steps=None, pre_system_prompt="") -> str:
+def _skill_manual_create(
+    name: str, description: str, manager, pre_steps=None, pre_system_prompt=""
+) -> str:
     """手动配置技能步骤。"""
     from rich.prompt import Prompt as _Prompt
 
     system_prompt = _Prompt.ask("系统提示词（可选）", default=pre_system_prompt or "")
 
     if pre_steps:
-        console.print(f"\n[dim]已有 {len(pre_steps)} 个生成的步骤，继续添加更多步骤。[/dim]")
+        console.print(
+            f"\n[dim]已有 {len(pre_steps)} 个生成的步骤，继续添加更多步骤。[/dim]"
+        )
         steps = list(pre_steps)
     else:
-        console.print("\n添加步骤（支持类型: llm, command, echo, write_file, read_file）")
+        console.print(
+            "\n添加步骤（支持类型: llm, command, echo, write_file, read_file）"
+        )
         steps = []
 
     while True:
         console.print(f"\n[dim]步骤 {len(steps) + 1}[/dim]")
-        step_type = _Prompt.ask("  类型", choices=["llm", "command", "echo", "write_file", "read_file", "done"])
+        step_type = _Prompt.ask(
+            "  类型",
+            choices=["llm", "command", "echo", "write_file", "read_file", "done"],
+        )
         if step_type == "done":
             break
 
@@ -455,7 +506,9 @@ def _skill_manual_create(name: str, description: str, manager, pre_steps=None, p
 # ── skill 辅助函数 ─────────────────────────────────────────
 
 
-def _execute_installed_skill(manager, name, args, *, registry, session_state=None) -> str:
+def _execute_installed_skill(
+    manager, name, args, *, registry, session_state=None
+) -> str:
     """Execute a skill through the safe agent loop when a REPL is available."""
     skill = manager.get(name)
     if skill is None:
@@ -477,6 +530,7 @@ def _register_skill_handler(skill, manager) -> None:
     """v0.5.4: 动态注册 skill 为命令处理器，无需重启即可用 /<name> 调用。"""
     cmd_name = f"/{skill.name}"
     if cmd_name not in _HANDLERS:
+
         def make_handler(sk_name):
             def handler(*, args: str, registry, session_state=None, **kw: Any) -> str:
                 return _execute_installed_skill(
@@ -486,7 +540,9 @@ def _register_skill_handler(skill, manager) -> None:
                     registry=registry,
                     session_state=session_state,
                 )
+
             return handler
+
         _HANDLERS[cmd_name] = make_handler(skill.name)
         register_command(cmd_name, f"[技能] {skill.description}", cmd_name)
 
@@ -505,7 +561,9 @@ def _extract_skill_name(sub: str, sub_args: str) -> str:
     # 1) 尝试从 sub_args 中提取英文标识符（优先 sub_args 因为 sub 可能是 typo）
     if sub_args:
         # "创建/设计 xxx skill" → xxx
-        m = re.search(r"(?:创建|设计|一个|叫|名为)\s*[\"']?([a-zA-Z][a-zA-Z0-9_-]*)", sub_args)
+        m = re.search(
+            r"(?:创建|设计|一个|叫|名为)\s*[\"']?([a-zA-Z][a-zA-Z0-9_-]*)", sub_args
+        )
         if m:
             return m.group(1).strip("-").lower()
 
@@ -529,6 +587,7 @@ def _extract_skill_name(sub: str, sub_args: str) -> str:
 
     # 4) 无法提取英文名——用描述内容的稳定哈希生成唯一名（比时间戳更稳定）
     import hashlib
+
     content_hash = hashlib.md5(combined.encode()).hexdigest()[:6]
     return f"skill-{content_hash}"
 
@@ -580,21 +639,25 @@ def _skill_import_from_url(manager, url: str) -> str:
     try:
         # 使用 gh CLI 或 curl 获取仓库内容
         # 方法 1: 尝试 gh CLI
-        gh_available = subprocess.run(
-            ["which", "gh"], capture_output=True, text=True
-        ).returncode == 0
+        gh_available = (
+            subprocess.run(["which", "gh"], capture_output=True, text=True).returncode
+            == 0
+        )
 
         if gh_available:
             # 用 gh 获取仓库文件树
             result = subprocess.run(
                 ["gh", "repo", "view", f"{owner}/{repo}", "--json", "name,description"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             if result.returncode == 0:
                 import json
+
                 try:
                     info = json.loads(result.stdout)
-                    repo_desc = info.get('description', '无描述')
+                    repo_desc = info.get("description", "无描述")
                     console.print(f"[dim]  仓库: {repo_desc}[/dim]")
                 except json.JSONDecodeError:
                     pass
@@ -607,6 +670,7 @@ def _skill_import_from_url(manager, url: str) -> str:
             return f"❌ 无法获取仓库内容: {api_url}"
 
         import json as _json
+
         try:
             contents = _json.loads(result.stdout)
         except _json.JSONDecodeError:
@@ -636,7 +700,9 @@ def _skill_import_from_url(manager, url: str) -> str:
                                     skills_contents = _json.loads(skills_result.stdout)
                                     if isinstance(skills_contents, list):
                                         for ski in skills_contents:
-                                            if ski.get("name", "").endswith((".yaml", ".yml")):
+                                            if ski.get("name", "").endswith(
+                                                (".yaml", ".yml")
+                                            ):
                                                 yaml_files.append(ski)
                                 except _json.JSONDecodeError:
                                     pass
@@ -663,6 +729,7 @@ def _skill_import_from_url(manager, url: str) -> str:
 
             try:
                 import yaml as _yaml
+
                 data = _yaml.safe_load(yaml_result.stdout)
                 if not data or "name" not in data:
                     continue
@@ -679,7 +746,9 @@ def _skill_import_from_url(manager, url: str) -> str:
                 imported.append(skill.name)
 
             except Exception as e:
-                console.print(f"[yellow]⚠️  导入 {yf.get('name', '?')} 失败: {e}[/yellow]")
+                console.print(
+                    f"[yellow]⚠️  导入 {yf.get('name', '?')} 失败: {e}[/yellow]"
+                )
 
         if imported:
             names = ", ".join(f"/{n}" for n in imported)

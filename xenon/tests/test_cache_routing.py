@@ -33,15 +33,18 @@ def _record_warm(tracker: CacheTracker, model_id: str) -> None:
         ],
         cache_context={"engine": "direct", "phase": "chat"},
     ).as_dict()
-    tracker.record_response(model_id, {
-        "usage": {
-            "prompt_tokens": 100,
-            "completion_tokens": 5,
-            "prompt_cache_hit_tokens": 90,
-            "prompt_cache_miss_tokens": 10,
+    tracker.record_response(
+        model_id,
+        {
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 5,
+                "prompt_cache_hit_tokens": 90,
+                "prompt_cache_miss_tokens": 10,
+            },
+            MANIFEST_RESPONSE_KEY: manifest,
         },
-        MANIFEST_RESPONSE_KEY: manifest,
-    })
+    )
 
 
 def _peer_pool(*, leader_weight: float = 1.05) -> ModelPool:
@@ -201,7 +204,9 @@ def test_affinity_setting_is_private_persistent_and_reversible(tmp_path) -> None
     enabled_again.close()
 
 
-def test_matching_local_prompt_lane_breaks_near_tie_without_claiming_provider_hit() -> None:
+def test_matching_local_prompt_lane_breaks_near_tie_without_claiming_provider_hit() -> (
+    None
+):
     tracker = CacheTracker()
     context = ContextManager()
     context.prompt_lanes.prepare(

@@ -29,7 +29,9 @@ def _failure(tool="write_file"):
 def test_serial_uses_native_success_flag_not_text_prefix(monkeypatch):
     callback = CaptureCallback()
     engine = PlanExecuteEngine(["model"], callback=callback)
-    monkeypatch.setattr(engine._tool_executor, "execute", lambda *args, **kwargs: _failure())
+    monkeypatch.setattr(
+        engine._tool_executor, "execute", lambda *args, **kwargs: _failure()
+    )
     ctx = AgentContext()
 
     results = engine._run_serial(
@@ -53,7 +55,9 @@ def test_native_success_is_not_overridden_by_failure_like_content(monkeypatch):
         True,
         "执行失败案例.md 的内容读取成功",
     )
-    monkeypatch.setattr(engine._tool_executor, "execute", lambda *args, **kwargs: native)
+    monkeypatch.setattr(
+        engine._tool_executor, "execute", lambda *args, **kwargs: native
+    )
 
     results = engine._run_serial(
         [{"id": 1, "task": "read", "tool": "read_file", "params": {}}],
@@ -68,7 +72,9 @@ def test_native_success_is_not_overridden_by_failure_like_content(monkeypatch):
 
 def test_dag_skips_dependency_after_structured_tool_failure(monkeypatch):
     engine = PlanExecuteEngine(["model"])
-    monkeypatch.setattr(engine._tool_executor, "execute", lambda *args, **kwargs: _failure())
+    monkeypatch.setattr(
+        engine._tool_executor, "execute", lambda *args, **kwargs: _failure()
+    )
     steps = [
         {
             "id": 1,
@@ -100,11 +106,13 @@ def test_dag_skips_dependency_after_structured_tool_failure(monkeypatch):
 
 
 def test_previous_result_context_excludes_failures_and_skips():
-    previous = PlanExecuteEngine._build_prev_results([
-        {"step_id": 1, "result": "verified", "status": "ok"},
-        {"step_id": 2, "result": "secret failure details", "status": "failed"},
-        {"step_id": 3, "result": "skipped", "status": "skipped"},
-    ])
+    previous = PlanExecuteEngine._build_prev_results(
+        [
+            {"step_id": 1, "result": "verified", "status": "ok"},
+            {"step_id": 2, "result": "secret failure details", "status": "failed"},
+            {"step_id": 3, "result": "skipped", "status": "skipped"},
+        ]
+    )
 
     assert "verified" in previous
     assert "failure" not in previous
@@ -137,11 +145,13 @@ def test_summary_prompt_contains_explicit_step_statuses(monkeypatch):
 
 def test_planner_retries_once_after_unparseable_response(monkeypatch):
     engine = PlanExecuteEngine(["model"])
-    responses = iter([
-        "<tool_calls>not a plan</tool_calls>",
-        '{"analysis":"修复任务","steps":[{"id":1,"task":"读取文件",'
-        '"tool":"read_file","params":{"file_path":"a.py"}}]}',
-    ])
+    responses = iter(
+        [
+            "<tool_calls>not a plan</tool_calls>",
+            '{"analysis":"修复任务","steps":[{"id":1,"task":"读取文件",'
+            '"tool":"read_file","params":{"file_path":"a.py"}}]}',
+        ]
+    )
     monkeypatch.setattr(engine, "_call_llm_for_phase", lambda *a, **k: next(responses))
 
     result = engine._plan("修复 a.py", AgentContext())

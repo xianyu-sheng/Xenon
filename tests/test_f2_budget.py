@@ -149,8 +149,16 @@ class TestToolGating:
     def test_converge_blocks_exploration_tools(self):
         b = BudgetManager(max_iterations=10)
         b.spend(8)  # CONVERGE
-        for tool in ("list_files", "search_files", "code_index", "ast_analyze",
-                     "diff_preview", "web_fetch", "docs_fetch", "github_fetch"):
+        for tool in (
+            "list_files",
+            "search_files",
+            "code_index",
+            "ast_analyze",
+            "diff_preview",
+            "web_fetch",
+            "docs_fetch",
+            "github_fetch",
+        ):
             allow, reason = b.allow_tool(tool)
             assert allow is False, f"{tool} 应被禁用"
             assert "收束阶段" in reason
@@ -173,10 +181,18 @@ class TestToolGating:
 
     def test_blocked_set_contents(self):
         """CONVERGE_BLOCKED_TOOLS 恰为 8 个探索型工具。"""
-        assert CONVERGE_BLOCKED_TOOLS == frozenset({
-            "list_files", "search_files", "code_index", "ast_analyze",
-            "diff_preview", "web_fetch", "docs_fetch", "github_fetch",
-        })
+        assert CONVERGE_BLOCKED_TOOLS == frozenset(
+            {
+                "list_files",
+                "search_files",
+                "code_index",
+                "ast_analyze",
+                "diff_preview",
+                "web_fetch",
+                "docs_fetch",
+                "github_fetch",
+            }
+        )
 
 
 class TestSummaryReset:

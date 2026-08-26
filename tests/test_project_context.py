@@ -46,7 +46,9 @@ class TestProjectContext:
         """加载 .xenon/rules.md。"""
         rules_dir = tmp_path / ".xenon"
         rules_dir.mkdir()
-        (rules_dir / "rules.md").write_text("使用 Python 3.12\n遵循 PEP 8", encoding="utf-8")
+        (rules_dir / "rules.md").write_text(
+            "使用 Python 3.12\n遵循 PEP 8", encoding="utf-8"
+        )
         (tmp_path / "pyproject.toml").write_text("")
 
         pc = ProjectContext()

@@ -13,7 +13,6 @@ P2-E4 ReflectionEngine 增强 + §8.23 缺陷修复测试。
 from __future__ import annotations
 
 
-
 from xenon.engine.context import AgentContext
 from xenon.engine.reflection_engine import ReflectionEngine
 
@@ -42,7 +41,9 @@ class _RecordingCallback:
         return lambda *a, **k: None
 
 
-def _make_engine(monkeypatch, *, reviewer_model_priority=None, max_rounds=3, pass_threshold=7):
+def _make_engine(
+    monkeypatch, *, reviewer_model_priority=None, max_rounds=3, pass_threshold=7
+):
     cb = _RecordingCallback()
     eng = ReflectionEngine(
         ["executor/m"],
@@ -61,7 +62,10 @@ class TestReviewerModelPriority:
     def test_reviewer_uses_independent_model_list(self, monkeypatch):
         """_review 应以 reviewer_model_priority 调 _call_llm（走真实 _call_llm）。"""
         import xenon.engine.base as base_mod
-        eng, _ = _make_engine(monkeypatch, reviewer_model_priority=["reviewer/m", "fallback/m"])
+
+        eng, _ = _make_engine(
+            monkeypatch, reviewer_model_priority=["reviewer/m", "fallback/m"]
+        )
         seen_models: list[str] = []
 
         def fake_chat(model_id, messages, **k):

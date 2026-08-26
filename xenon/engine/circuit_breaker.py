@@ -7,6 +7,7 @@
 
 时钟可注入（``clock``）以支持单测；默认 ``time.monotonic``。
 """
+
 from __future__ import annotations
 
 import time

@@ -40,6 +40,7 @@ class TestNormalizeParams:
 
     def test_all_init_params_in_valid_params(self):
         import inspect
+
         sig = inspect.signature(ToolNode.__init__)
         for name, param in sig.parameters.items():
             if name in ("self", "node_id"):
@@ -55,10 +56,15 @@ class TestNormalizeParams:
         assert "lang" in result
 
     def test_register_tool_params_not_filtered(self):
-        result = ToolNode.normalize_params({
-            "tool_name": "t1", "description": "d", "python_function": "xenon.foo.bar",
-            "command_template": "echo {x}", "params": {"type": "object"},
-        })
+        result = ToolNode.normalize_params(
+            {
+                "tool_name": "t1",
+                "description": "d",
+                "python_function": "xenon.foo.bar",
+                "command_template": "echo {x}",
+                "params": {"type": "object"},
+            }
+        )
         for key in ("description", "python_function", "command_template", "params"):
             assert key in result, f"'{key}' 被过滤了"
 
@@ -84,11 +90,13 @@ class TestSSRF:
     def test_198_18_benchnmark_not_blocked(self):
         """198.18.0.0/15 是 IANA 基准测试段，不应被拦截。"""
         import ipaddress
+
         assert not _is_internal_ip(ipaddress.ip_address("198.18.0.4"))
         assert not _is_rfc1918_private(ipaddress.ip_address("198.18.0.4"))
 
     def test_rfc1918_blocked(self):
         import ipaddress
+
         for ip_str in ("10.0.0.1", "172.16.0.1", "192.168.1.1", "100.64.0.1"):
             assert _is_internal_ip(ipaddress.ip_address(ip_str)), (
                 f"RFC 1918 {ip_str} 应被拦截"
@@ -96,11 +104,13 @@ class TestSSRF:
 
     def test_loopback_blocked(self):
         import ipaddress
+
         assert _is_internal_ip(ipaddress.ip_address("127.0.0.1"))
         assert _is_internal_ip(ipaddress.ip_address("::1"))
 
     def test_public_not_blocked(self):
         import ipaddress
+
         for ip_str in ("8.8.8.8", "1.1.1.1", "208.67.222.222"):
             assert not _is_internal_ip(ipaddress.ip_address(ip_str)), (
                 f"公网 IP {ip_str} 不应被拦截"
@@ -195,7 +205,9 @@ class TestFileTools:
     def test_write_and_read(self, tmpdir):
         fname = str(tmpdir / "test.txt")
         # write
-        node = ToolNode("w1", action_type="write_file", file_path=fname, content="hello world")
+        node = ToolNode(
+            "w1", action_type="write_file", file_path=fname, content="hello world"
+        )
         result = node.execute(_ctx())
         assert result["success"], f"write failed: {result.get('error')}"
         # read
@@ -214,14 +226,21 @@ class TestFileTools:
     def test_list_files(self, tmpdir):
         (tmpdir / "a.txt").write_text("a")
         (tmpdir / "b.py").write_text("b")
-        node = ToolNode("l1", action_type="list_files", file_path=str(tmpdir), pattern="*")
+        node = ToolNode(
+            "l1", action_type="list_files", file_path=str(tmpdir), pattern="*"
+        )
         result = node.execute(_ctx())
         assert result["success"], f"list_files failed: {result.get('error')}"
         assert result["count"] >= 2
 
     def test_search_files(self, tmpdir):
         (tmpdir / "code.py").write_text("def foo():\n    return 42\n")
-        node = ToolNode("s1", action_type="search_files", file_path=str(tmpdir), search_pattern="foo")
+        node = ToolNode(
+            "s1",
+            action_type="search_files",
+            file_path=str(tmpdir),
+            search_pattern="foo",
+        )
         result = node.execute(_ctx())
         assert result["success"], f"search_files failed: {result.get('error')}"
         assert result["match_count"] >= 1
@@ -229,7 +248,13 @@ class TestFileTools:
     def test_edit_file(self, tmpdir):
         fname = str(tmpdir / "edit.txt")
         Path(fname).write_text("hello world")
-        node = ToolNode("e1", action_type="edit_file", file_path=fname, old_text="world", new_text="python")
+        node = ToolNode(
+            "e1",
+            action_type="edit_file",
+            file_path=fname,
+            old_text="world",
+            new_text="python",
+        )
         result = node.execute(_ctx())
         assert result["success"], f"edit_file failed: {result.get('error', result)}"
         assert "python" in Path(fname).read_text()
@@ -237,10 +262,14 @@ class TestFileTools:
     def test_batch_write(self, tmpdir):
         f1 = str(tmpdir / "b1.txt")
         f2 = str(tmpdir / "b2.txt")
-        node = ToolNode("bw1", action_type="batch_write", files=[
-            {"path": f1, "content": "content1"},
-            {"path": f2, "content": "content2"},
-        ])
+        node = ToolNode(
+            "bw1",
+            action_type="batch_write",
+            files=[
+                {"path": f1, "content": "content1"},
+                {"path": f2, "content": "content2"},
+            ],
+        )
         result = node.execute(_ctx())
         assert result["success"], f"batch_write failed: {result.get('error', result)}"
         assert Path(f1).read_text() == "content1"
@@ -249,9 +278,13 @@ class TestFileTools:
     def test_batch_edit(self, tmpdir):
         fname = str(tmpdir / "be.txt")
         Path(fname).write_text("line1\nline2\n")
-        node = ToolNode("be1", action_type="batch_edit", edits=[
-            {"file_path": fname, "old_text": "line1", "new_text": "modified1"},
-        ])
+        node = ToolNode(
+            "be1",
+            action_type="batch_edit",
+            edits=[
+                {"file_path": fname, "old_text": "line1", "new_text": "modified1"},
+            ],
+        )
         result = node.execute(_ctx())
         assert result["success"], f"batch_edit failed: {result.get('error', result)}"
         assert "modified1" in Path(fname).read_text()
@@ -282,11 +315,18 @@ class TestGitTool:
     def test_git_status(self, tmp_path):
         """在临时 git 仓库中测试 git status。"""
         import subprocess
+
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=repo, capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=repo,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"], cwd=repo, capture_output=True
+        )
         (repo / "f.txt").write_text("test")
         subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
         subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
@@ -321,7 +361,9 @@ class TestWebFetchTool:
     @pytest.mark.live
     def test_web_fetch_public_url(self):
         """测试抓取公开 URL。"""
-        node = ToolNode("wf1", action_type="web_fetch", url="https://httpbin.org/get?test=1")
+        node = ToolNode(
+            "wf1", action_type="web_fetch", url="https://httpbin.org/get?test=1"
+        )
         result = node.execute(_ctx())
         assert result["success"], f"web_fetch failed: {result.get('error', result)}"
         assert "content" in result
@@ -341,8 +383,13 @@ class TestGithubFetchTool:
     @pytest.mark.live
     def test_github_list_files(self):
         """测试 GitHub 仓库文件列表。"""
-        node = ToolNode("gh1", action_type="github_fetch", repo="python/cpython",
-                        github_action="list_files", branch="main")
+        node = ToolNode(
+            "gh1",
+            action_type="github_fetch",
+            repo="python/cpython",
+            github_action="list_files",
+            branch="main",
+        )
         result = node.execute(_ctx())
         # GitHub API 可能限流，允许失败但不应崩溃
         assert isinstance(result, dict)
@@ -350,15 +397,22 @@ class TestGithubFetchTool:
 
     def test_github_invalid_repo_format(self):
         """非法 repo 格式应返回错误，不崩溃。"""
-        node = ToolNode("gh2", action_type="github_fetch", repo="invalid/repo/with/slashes")
+        node = ToolNode(
+            "gh2", action_type="github_fetch", repo="invalid/repo/with/slashes"
+        )
         result = node.execute(_ctx())
         assert not result["success"]
 
     @pytest.mark.live
     def test_github_repo_format_validation(self):
         """格式校验：owner/repo 正确格式应通过。"""
-        node = ToolNode("gh3", action_type="github_fetch", repo="python/cpython",
-                        github_action="list_files", branch="main")
+        node = ToolNode(
+            "gh3",
+            action_type="github_fetch",
+            repo="python/cpython",
+            github_action="list_files",
+            branch="main",
+        )
         result = node.execute(_ctx())
         # 不应因格式错误崩溃，可能因网络/限流失败但至少不应是格式错误
         assert isinstance(result, dict)
@@ -373,18 +427,28 @@ class TestCodeAnalysis:
     def test_code_index(self, tmp_path):
         src = tmp_path / "src"
         src.mkdir()
-        (src / "mod.py").write_text("def hello():\n    return 'world'\n\nclass Greeter:\n    def greet(self):\n        pass\n")
-        node = ToolNode("ci1", action_type="code_index", file_path=str(src),
-                        search_pattern="hello", security_enabled=False)
+        (src / "mod.py").write_text(
+            "def hello():\n    return 'world'\n\nclass Greeter:\n    def greet(self):\n        pass\n"
+        )
+        node = ToolNode(
+            "ci1",
+            action_type="code_index",
+            file_path=str(src),
+            search_pattern="hello",
+            security_enabled=False,
+        )
         result = node.execute(_ctx())
         assert result["success"], f"code_index failed: {result.get('error', result)}"
         assert result["matches"]
 
     def test_ast_analyze(self, tmp_path):
         f = tmp_path / "test.py"
-        f.write_text("def foo(x: int) -> str:\n    return str(x)\n\nclass Bar:\n    pass\n")
-        node = ToolNode("aa1", action_type="ast_analyze", file_path=str(f),
-                        security_enabled=False)
+        f.write_text(
+            "def foo(x: int) -> str:\n    return str(x)\n\nclass Bar:\n    pass\n"
+        )
+        node = ToolNode(
+            "aa1", action_type="ast_analyze", file_path=str(f), security_enabled=False
+        )
         result = node.execute(_ctx())
         assert result["success"], f"ast_analyze failed: {result.get('error', result)}"
         assert result["functions"] >= 1
@@ -398,8 +462,14 @@ class TestDiffPreview:
     def test_diff_preview_edit(self, tmp_path):
         f = tmp_path / "f.txt"
         f.write_text("hello world")
-        node = ToolNode("dp1", action_type="diff_preview", file_path=str(f),
-                        old_text="world", new_text="python", security_enabled=False)
+        node = ToolNode(
+            "dp1",
+            action_type="diff_preview",
+            file_path=str(f),
+            old_text="world",
+            new_text="python",
+            security_enabled=False,
+        )
         result = node.execute(_ctx())
         assert result["success"], f"diff_preview failed: {result.get('error', result)}"
         assert result["has_changes"]
@@ -410,15 +480,24 @@ class TestDiffPreview:
 
 class TestRegisterTool:
     def test_register_rejects_builtin_name(self):
-        node = ToolNode("rt1", action_type="register_tool", tool_name="weather",
-                        description="hijack", python_function="xenon.utils.weather.get_weather")
+        node = ToolNode(
+            "rt1",
+            action_type="register_tool",
+            tool_name="weather",
+            description="hijack",
+            python_function="xenon.utils.weather.get_weather",
+        )
         result = node.execute(_ctx())
         assert not result["success"]
         assert "内置" in result.get("error", "") or "冲突" in result.get("error", "")
 
     def test_register_rejects_dangerous_module(self):
-        node = ToolNode("rt2", action_type="register_tool", tool_name="my_os",
-                        python_function="os.system")
+        node = ToolNode(
+            "rt2",
+            action_type="register_tool",
+            tool_name="my_os",
+            python_function="os.system",
+        )
         result = node.execute(_ctx())
         assert not result["success"]
         assert "危险" in result.get("error", "") or "安全" in result.get("error", "")
@@ -435,14 +514,20 @@ class TestDynamicTools:
         tool_name = "test_dyn_tool"
 
         def my_handler(ctx):
-            return {"action_type": tool_name, "success": True, "content": "dynamic result"}
+            return {
+                "action_type": tool_name,
+                "success": True,
+                "content": "dynamic result",
+            }
 
         register_dynamic_tool(tool_name, my_handler, "test dynamic tool", {})
 
         try:
             node = ToolNode("dyn1", action_type=tool_name)
             result = node.execute(_ctx())
-            assert result["success"], f"dynamic tool failed: {result.get('error', result)}"
+            assert result["success"], (
+                f"dynamic tool failed: {result.get('error', result)}"
+            )
             assert "dynamic result" in str(result.get("content", ""))
         finally:
             _DYNAMIC_TOOLS.pop(tool_name, None)
@@ -466,12 +551,15 @@ class TestToolExecutor:
 
         executor = ToolExecutor()
         ctx = _ctx()
-        result = executor.execute("nonexistent_tool_xyz", {}, ctx, tools={"weather": None})
+        result = executor.execute(
+            "nonexistent_tool_xyz", {}, ctx, tools={"weather": None}
+        )
         assert not result.success
         assert "未知" in result.error or "错误" in result.error
 
     def test_executor_classify(self):
         from xenon.nodes.tool_executor import classify_tool
+
         assert classify_tool("command") == "SENSITIVE"
         assert classify_tool("write_file") == "WRITE"
         assert classify_tool("read_file") == "INFO"
@@ -504,7 +592,9 @@ class TestSecurityBoundary:
             node.execute(_ctx())
 
     def test_write_sensitive_path_blocked(self, real_path_validation):
-        node = ToolNode("s3", action_type="write_file", file_path="/etc/hosts", content="evil")
+        node = ToolNode(
+            "s3", action_type="write_file", file_path="/etc/hosts", content="evil"
+        )
         with pytest.raises(Exception):
             node.execute(_ctx())
 
@@ -519,9 +609,9 @@ class TestFallback:
     def test_weather_curl_fallback_available(self):
         """验证 curl 降级函数存在且可调用。"""
         from xenon.utils.weather import _get_weather_via_curl
+
         result = _get_weather_via_curl(
-            "https://wttr.in/Beijing?format=j1&lang=zh",
-            "Beijing", "Beijing", "zh"
+            "https://wttr.in/Beijing?format=j1&lang=zh", "Beijing", "Beijing", "zh"
         )
         assert "error" not in result, f"curl fallback failed: {result.get('error')}"
         assert "temperature" in result
@@ -531,6 +621,7 @@ class TestFallback:
     def test_weather_primary_vs_fallback(self):
         """主路径不标记 via_fallback，降级路径标记。"""
         from xenon.utils.weather import get_weather
+
         info = get_weather("Beijing", "zh")
         assert "error" not in info
         # 主路径成功时 via_fallback 应为 False
@@ -539,6 +630,7 @@ class TestFallback:
     def test_ssrf_allowlist_wttr_in(self):
         """wttr.in 在 SSRF 白名单中。"""
         from xenon.nodes.tool_node import _ssrf_check_url, _SSRF_DOMAIN_ALLOWLIST
+
         assert "wttr.in" in _SSRF_DOMAIN_ALLOWLIST
         ok, _ = _ssrf_check_url("https://wttr.in/Suzhou?lang=zh")
         assert ok
@@ -546,6 +638,7 @@ class TestFallback:
     def test_ssrf_allowlist_weather_com_cn(self):
         """weather.com.cn 在 SSRF 白名单中。"""
         from xenon.nodes.tool_node import _ssrf_check_url, _SSRF_DOMAIN_ALLOWLIST
+
         assert "weather.com.cn" in _SSRF_DOMAIN_ALLOWLIST
         ok, _ = _ssrf_check_url("http://www.weather.com.cn/weather1d/101190401.shtml")
         assert ok
@@ -553,14 +646,18 @@ class TestFallback:
     def test_ssrf_allowlist_github(self):
         """GitHub API 域名在 SSRF 白名单中。"""
         from xenon.nodes.tool_node import _ssrf_check_url
+
         ok, _ = _ssrf_check_url("https://api.github.com/repos/python/cpython")
         assert ok
-        ok2, _ = _ssrf_check_url("https://raw.githubusercontent.com/python/cpython/main/README.md")
+        ok2, _ = _ssrf_check_url(
+            "https://raw.githubusercontent.com/python/cpython/main/README.md"
+        )
         assert ok2
 
     def test_ssrf_allowlist_subdomain(self):
         """白名单也应匹配子域名（如 xxx.api.github.com）。"""
         from xenon.nodes.tool_node import _ssrf_check_url
+
         # api.github.com 的子域名
         ok, _ = _ssrf_check_url("https://api.github.com/meta")
         assert ok
@@ -570,7 +667,10 @@ class TestFallback:
         node = ToolNode("wf_fb", action_type="web_fetch", url="http://127.0.0.1:9999/")
         result = node.execute(_ctx())
         assert not result["success"]
-        assert "curl" in result.get("error", "").lower() or "command" in result.get("error", "").lower()
+        assert (
+            "curl" in result.get("error", "").lower()
+            or "command" in result.get("error", "").lower()
+        )
 
     @pytest.mark.live
     def test_weather_tool_end_to_end_with_fallback_info(self):

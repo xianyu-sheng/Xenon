@@ -66,6 +66,7 @@ VISION_SYSTEM_PROMPT = """你是一个精准的图片内容转录助手。
 @dataclass
 class VisionResult:
     """视觉转录结果。"""
+
     text: str
     model_used: str
     latency_ms: float
@@ -79,6 +80,7 @@ class VisionCache:
     使用 OrderedDict 实现 LRU：get / put 时将被访问条目移到末尾，
     淘汰时删除开头最久未访问条目。
     """
+
     _cache: OrderedDict[str, VisionResult] = field(default_factory=OrderedDict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     max_size: int = 50
@@ -190,29 +192,37 @@ class VisionBridge:
         for model_id in available:
             if "vision" in model_id.lower() and "embedding" not in model_id.lower():
                 self._vision_model_id = model_id
-                logger.info("VisionBridge 已选择多模态模型（池中 vision match）: %s", model_id)
+                logger.info(
+                    "VisionBridge 已选择多模态模型（池中 vision match）: %s", model_id
+                )
                 return model_id
 
         # ── 第 2 层：credentials 全量扫描（纯查找，不注册） ──
         try:
             from xenon.repl.provider_registry import get_configured_providers
+
             configured = get_configured_providers()
             for p in configured:
                 if not p.key or not p.key.strip():
                     continue
-                for model_name in (p.models or []):
+                for model_name in p.models or []:
                     model_id = f"{p.key}/{model_name}"
                     for candidate in _VISION_CANDIDATES:
                         if candidate in model_id.lower():
                             self._vision_model_id = model_id
-                            self._vision_creds = {p.key: p.api_key} if p.api_key else None
+                            self._vision_creds = (
+                                {p.key: p.api_key} if p.api_key else None
+                            )
                             self._vision_base_url = p.base_url
                             logger.info(
                                 "VisionBridge 发现多模态模型（credentials 中，未注册池）: %s",
                                 model_id,
                             )
                             return model_id
-                    if "vision" in model_id.lower() and "embedding" not in model_id.lower():
+                    if (
+                        "vision" in model_id.lower()
+                        and "embedding" not in model_id.lower()
+                    ):
                         self._vision_model_id = model_id
                         self._vision_creds = {p.key: p.api_key} if p.api_key else None
                         self._vision_base_url = p.base_url
@@ -286,13 +296,13 @@ class VisionBridge:
         self._cache.put(image_hash, result)
         logger.info(
             "VisionBridge 转录完成: %d 字符, 模型=%s, 耗时=%.0fms",
-            len(text), model_id, latency,
+            len(text),
+            model_id,
+            latency,
         )
         return result
 
-    def _call_vision_api(
-        self, model_id: str, data_url: str, mime_type: str
-    ) -> str:
+    def _call_vision_api(self, model_id: str, data_url: str, mime_type: str) -> str:
         """调用 OpenAI 兼容 vision API（支持 99% 的模型商）。"""
         from xenon.utils.llm_client import chat_completion
 

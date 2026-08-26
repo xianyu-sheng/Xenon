@@ -54,11 +54,14 @@ def test_ask_uses_model_output_budget_and_endpoint(monkeypatch):
 
     monkeypatch.setattr("xenon.utils.llm_client.chat_completion", fake_chat)
 
-    assert _cmd_ask(
-        args="pro 解释架构",
-        registry=reg,
-        ctx_mgr=ContextManager(),
-    ) == "完整回答。"
+    assert (
+        _cmd_ask(
+            args="pro 解释架构",
+            registry=reg,
+            ctx_mgr=ContextManager(),
+        )
+        == "完整回答。"
+    )
     assert captured["max_tokens"] == 256000
     assert captured["credentials"] == {"openai": "sk-private"}
     assert captured["base_url"] == "https://relay.example/v1"

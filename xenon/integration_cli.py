@@ -159,7 +159,8 @@ def _run_integrations(argv: list[str], context: IntegrationContext) -> int:
                     str(project / ".agents" / "skills"),
                     str(project / ".xenon" / "skills"),
                 ]
-                if project is not None else []
+                if project is not None
+                else []
             ),
             "install_command": (
                 "xenon skill install <path> "
@@ -189,13 +190,15 @@ def _run_integrations(argv: list[str], context: IntegrationContext) -> int:
 def _describe_text(payload: dict[str, Any]) -> str:
     skills = payload["agent_skills"]
     mcp = payload["mcp"]
-    return "\n".join([
-        f"Xenon {payload['product']['version']} integration contract v{payload['schema_version']}",
-        "Agent Skills: SKILL.md（渐进式加载）",
-        *[f"  - {path}" for path in skills["user_paths"] + skills["project_paths"]],
-        f"MCP: {', '.join(mcp['transports'])}（stdio env / HTTP headers）",
-        "JSON: 所有集成命令支持 --json",
-    ])
+    return "\n".join(
+        [
+            f"Xenon {payload['product']['version']} integration contract v{payload['schema_version']}",
+            "Agent Skills: SKILL.md（渐进式加载）",
+            *[f"  - {path}" for path in skills["user_paths"] + skills["project_paths"]],
+            f"MCP: {', '.join(mcp['transports'])}（stdio env / HTTP headers）",
+            "JSON: 所有集成命令支持 --json",
+        ]
+    )
 
 
 def _verify_integrations(
@@ -242,27 +245,29 @@ def _verify_integrations(
             "mcp_connectivity": connectivity,
         },
     }
-    text = "\n".join([
-        "Xenon 外部集成验证",
-        (
-            f"Agent Skills: {skill_check['agent_skill_count']} 个标准技能 · "
-            f"{skill_check['error_count']} 个错误"
-        ),
-        (
-            f"MCP 配置: {mcp_check['server_count']} 个 · "
-            f"静态错误 {len(mcp_check['errors'])}"
-        ),
-        (
-            "MCP 连接: 未请求"
-            if not connectivity["requested"]
-            else (
-                f"{connectivity['reachable_server_count']}/"
-                f"{connectivity['selected_server_count']} 可达 · "
-                f"{connectivity['tool_count']} 个工具"
-            )
-        ),
-        "结果: " + ("通过" if ok else "失败"),
-    ])
+    text = "\n".join(
+        [
+            "Xenon 外部集成验证",
+            (
+                f"Agent Skills: {skill_check['agent_skill_count']} 个标准技能 · "
+                f"{skill_check['error_count']} 个错误"
+            ),
+            (
+                f"MCP 配置: {mcp_check['server_count']} 个 · "
+                f"静态错误 {len(mcp_check['errors'])}"
+            ),
+            (
+                "MCP 连接: 未请求"
+                if not connectivity["requested"]
+                else (
+                    f"{connectivity['reachable_server_count']}/"
+                    f"{connectivity['selected_server_count']} 可达 · "
+                    f"{connectivity['tool_count']} 个工具"
+                )
+            ),
+            "结果: " + ("通过" if ok else "失败"),
+        ]
+    )
     _emit(payload, json_output=json_output, text=text)
     return 0 if ok else 1
 
@@ -295,10 +300,7 @@ def _probe_mcp_servers(
             "servers": [],
         }
 
-    reports = [
-        _probe_mcp_server(by_name[name], timeout=timeout)
-        for name in names[:32]
-    ]
+    reports = [_probe_mcp_server(by_name[name], timeout=timeout) for name in names[:32]]
     reachable = sum(1 for report in reports if report["ok"])
     return {
         "ok": reachable == len(names) and len(names) <= 32,
@@ -356,7 +358,9 @@ def _probe_mcp_server(server: dict[str, Any], *, timeout: float) -> dict[str, An
             ),
             "server_info": {
                 "name": _safe_probe_text(server_info.get("name"), fallback="unknown"),
-                "version": _safe_probe_text(server_info.get("version"), fallback="unknown"),
+                "version": _safe_probe_text(
+                    server_info.get("version"), fallback="unknown"
+                ),
             },
             "tool_count": len(tools),
             "tools": tool_names,
@@ -418,7 +422,9 @@ def _run_skill(argv: list[str], context: IntegrationContext) -> int:
         )
         parser.add_argument("--force", action="store_true")
         options = parser.parse_args(rest)
-        receipt = manager.install(options.source, scope=options.scope, force=options.force)
+        receipt = manager.install(
+            options.source, scope=options.scope, force=options.force
+        )
         payload = {
             "ok": True,
             "action": "installed",
@@ -456,7 +462,10 @@ def _run_skill(argv: list[str], context: IntegrationContext) -> int:
         payload = {"ok": True, "count": len(skills), "skills": skills}
         text = "\n".join(
             [f"已安装 {len(skills)} 个技能:"]
-            + [f"  /{item['name']} · {item['format']} · {item['source']}" for item in skills]
+            + [
+                f"  /{item['name']} · {item['format']} · {item['source']}"
+                for item in skills
+            ]
         )
         _emit(payload, json_output=json_output, text=text)
         return 0
@@ -502,7 +511,10 @@ def _run_mcp(argv: list[str], context: IntegrationContext) -> int:
         payload = {"ok": True, "count": len(servers), "servers": servers}
         text = "\n".join(
             [f"已配置 {len(servers)} 个 MCP 服务器:"]
-            + [f"  {server['name']} · {server['transport']} · {server['target']}" for server in servers]
+            + [
+                f"  {server['name']} · {server['transport']} · {server['target']}"
+                for server in servers
+            ]
         )
         _emit(payload, json_output=json_output, text=text)
         return 0
@@ -512,17 +524,23 @@ def _run_mcp(argv: list[str], context: IntegrationContext) -> int:
         _emit(
             payload,
             json_output=json_output,
-            text=(f"✅ 已移除 MCP 服务器 '{rest[0]}'" if removed else f"未找到 MCP 服务器 '{rest[0]}'"),
+            text=(
+                f"✅ 已移除 MCP 服务器 '{rest[0]}'"
+                if removed
+                else f"未找到 MCP 服务器 '{rest[0]}'"
+            ),
         )
         return 0 if removed else 1
     if action == "doctor" and not rest:
         payload = _doctor_mcp(context)
-        text = "\n".join([
-            f"MCP 配置: {payload['server_count']} 个服务器",
-            f"错误: {len(payload['errors'])} · 警告: {len(payload['warnings'])}",
-            *[f"  ❌ {item}" for item in payload["errors"]],
-            *[f"  ⚠️  {item}" for item in payload["warnings"]],
-        ])
+        text = "\n".join(
+            [
+                f"MCP 配置: {payload['server_count']} 个服务器",
+                f"错误: {len(payload['errors'])} · 警告: {len(payload['warnings'])}",
+                *[f"  ❌ {item}" for item in payload["errors"]],
+                *[f"  ⚠️  {item}" for item in payload["warnings"]],
+            ]
+        )
         _emit(payload, json_output=json_output, text=text)
         return 0 if payload["ok"] else 1
 
@@ -534,7 +552,7 @@ def _mcp_add(argv: list[str], context: IntegrationContext, *, json_output: bool)
     passthrough: list[str] = []
     if "--" in argv:
         delimiter = argv.index("--")
-        argv, passthrough = argv[:delimiter], argv[delimiter + 1:]
+        argv, passthrough = argv[:delimiter], argv[delimiter + 1 :]
     parser = _ArgumentParser(prog="xenon mcp add", add_help=False)
     parser.add_argument("name")
     parser.add_argument("target", nargs="?")
@@ -550,7 +568,18 @@ def _mcp_add(argv: list[str], context: IntegrationContext, *, json_output: bool)
         raise ValueError("MCP 名称必须为 1-64 位字母、数字、点、连字符或下划线")
 
     if options.config:
-        if any((options.target, options.command, options.url, options.arg, options.env, options.header, unknown, passthrough)):
+        if any(
+            (
+                options.target,
+                options.command,
+                options.url,
+                options.arg,
+                options.env,
+                options.header,
+                unknown,
+                passthrough,
+            )
+        ):
             raise ValueError("--config 不能与命令、URL、env、header 或额外参数混用")
         config = _read_mcp_config(options.config)
     else:
@@ -624,7 +653,9 @@ def _read_mcp_config(location: str) -> dict[str, Any]:
 
 
 def _validate_mcp_config(config: dict[str, Any]) -> dict[str, Any]:
-    transport = str(config.get("transport") or ("http" if config.get("url") else "stdio")).lower()
+    transport = str(
+        config.get("transport") or ("http" if config.get("url") else "stdio")
+    ).lower()
     if transport == "sse":
         transport = "http"
     if transport not in {"stdio", "http"}:
@@ -635,15 +666,17 @@ def _validate_mcp_config(config: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("stdio MCP 缺少 command")
         args = config.get("args", [])
         env = config.get("env", {})
-        if not isinstance(args, list) or not all(isinstance(item, str) for item in args):
+        if not isinstance(args, list) or not all(
+            isinstance(item, str) for item in args
+        ):
             raise ValueError("stdio MCP args 必须是字符串数组")
         if not isinstance(env, dict) or not all(
-            isinstance(key, str) and isinstance(value, str) for key, value in env.items()
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in env.items()
         ):
             raise ValueError("stdio MCP env 必须是字符串键值对象")
         invalid_env = [
-            key for key in env
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key)
+            key for key in env if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key)
         ]
         if invalid_env:
             raise ValueError(f"stdio MCP env key 无效: {invalid_env[0]}")
@@ -666,12 +699,14 @@ def _validate_mcp_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("HTTP MCP URL 端口无效") from exc
     headers = config.get("headers", {})
     if not isinstance(headers, dict) or not all(
-        isinstance(key, str) and isinstance(value, str) for key, value in headers.items()
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in headers.items()
     ):
         raise ValueError("HTTP MCP headers 必须是字符串键值对象")
     invalid_header = next(
         (
-            key for key, value in headers.items()
+            key
+            for key, value in headers.items()
             if not key or any(char in key + value for char in "\r\n")
         ),
         None,
@@ -728,7 +763,9 @@ def _redact_url(url: str) -> str:
     hostname = parsed.hostname or ""
     if parsed.port:
         hostname = f"{hostname}:{parsed.port}"
-    return urlunsplit((parsed.scheme, hostname, parsed.path, "<redacted>" if parsed.query else "", ""))
+    return urlunsplit(
+        (parsed.scheme, hostname, parsed.path, "<redacted>" if parsed.query else "", "")
+    )
 
 
 def _doctor_mcp(context: IntegrationContext) -> dict[str, Any]:
@@ -796,7 +833,11 @@ def _emit(payload: dict[str, Any], *, json_output: bool, text: str) -> None:
 
 def _emit_error(message: str, *, json_output: bool) -> None:
     if json_output:
-        print(json.dumps({"ok": False, "error": message}, ensure_ascii=False, sort_keys=True))
+        print(
+            json.dumps(
+                {"ok": False, "error": message}, ensure_ascii=False, sort_keys=True
+            )
+        )
     else:
         print(f"❌ {message}", file=sys.stderr)
 

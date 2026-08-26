@@ -1,4 +1,5 @@
 """v0.4.0 Step 14: Session resume tests."""
+
 from __future__ import annotations
 
 import json
@@ -23,6 +24,7 @@ class TestAutoSave:
         with tempfile.TemporaryDirectory() as tmp:
             # 覆盖 SESSIONS_DIR
             import xenon.repl.session as mod
+
             old_dir = mod.SESSIONS_DIR
             mod.SESSIONS_DIR = Path(tmp)
             try:
@@ -42,6 +44,7 @@ class TestAutoSave:
     def test_get_auto_session_returns_none_when_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             import xenon.repl.session as mod
+
             old_dir = mod.SESSIONS_DIR
             mod.SESSIONS_DIR = Path(tmp)
             try:
@@ -98,14 +101,16 @@ class TestAutoSave:
         monkeypatch.setattr(mod, "SESSIONS_DIR", tmp_path)
         legacy = tmp_path / "legacy.json"
         legacy.write_text(
-            json.dumps({
-                "version": "2.0",
-                "name": "legacy",
-                "history": [{"role": "user", "content": "hello"}],
-                "model_config": {
-                    "pro": {"model_id": "a/pro", "api_key": "legacy-secret"},
-                },
-            }),
+            json.dumps(
+                {
+                    "version": "2.0",
+                    "name": "legacy",
+                    "history": [{"role": "user", "content": "hello"}],
+                    "model_config": {
+                        "pro": {"model_id": "a/pro", "api_key": "legacy-secret"},
+                    },
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -122,6 +127,7 @@ class TestSessionExpiry:
     def test_expired_session_returns_none(self):
         with tempfile.TemporaryDirectory() as tmp:
             import xenon.repl.session as mod
+
             old_dir = mod.SESSIONS_DIR
             mod.SESSIONS_DIR = Path(tmp)
             try:
@@ -154,26 +160,35 @@ class TestCleanupExpired:
     def test_cleanup_removes_expired(self):
         with tempfile.TemporaryDirectory() as tmp:
             import xenon.repl.session as mod
+
             old_dir = mod.SESSIONS_DIR
             mod.SESSIONS_DIR = Path(tmp)
             try:
                 # 创建过期会话
                 old_file = Path(tmp) / f"{AUTO_SESSION_NAME}.json"
-                old_file.write_text(json.dumps({
-                    "saved_at_ts": time.time() - 10 * 86400,
-                    "history": [],
-                }))
+                old_file.write_text(
+                    json.dumps(
+                        {
+                            "saved_at_ts": time.time() - 10 * 86400,
+                            "history": [],
+                        }
+                    )
+                )
                 # 创建新鲜会话
                 fresh_file = Path(tmp) / "_auto_fresh.json"
-                fresh_file.write_text(json.dumps({
-                    "saved_at_ts": time.time() - 60,
-                    "history": [],
-                }))
+                fresh_file.write_text(
+                    json.dumps(
+                        {
+                            "saved_at_ts": time.time() - 60,
+                            "history": [],
+                        }
+                    )
+                )
 
                 deleted = cleanup_expired_sessions()
                 assert deleted >= 1
                 assert not old_file.exists()  # 应被删除
-                assert fresh_file.exists()    # 应保留
+                assert fresh_file.exists()  # 应保留
             finally:
                 mod.SESSIONS_DIR = old_dir
 
@@ -190,6 +205,7 @@ class TestSessionNamePathTraversal:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
         import xenon.repl.session as mod
+
         monkeypatch.setattr(mod, "SESSIONS_DIR", tmp_path / "sessions")
         self.mod = mod
         self.root = tmp_path
@@ -200,6 +216,7 @@ class TestSessionNamePathTraversal:
     )
     def test_save_rejects_traversal_names(self, name):
         import pytest
+
         with pytest.raises(ValueError, match="会话名"):
             save_session(name, history=[], context_store={}, model_config={})
         # 不得有任何文件写到 sessions 目录之外
@@ -209,20 +226,27 @@ class TestSessionNamePathTraversal:
     @pytest.mark.parametrize("name", ["", "   "])
     def test_save_rejects_empty_names(self, name):
         import pytest
+
         with pytest.raises(ValueError, match="会话名不能为空"):
             save_session(name, history=[], context_store={}, model_config={})
 
     def test_load_and_delete_reject_traversal(self):
         import pytest
+
         with pytest.raises(ValueError, match="会话名"):
             load_session("../x")
         with pytest.raises(ValueError, match="会话名"):
             from xenon.repl.session import delete_session
+
             delete_session("../x")
 
     def test_normal_and_unicode_names_unaffected(self):
-        save_session("t1", history=[{"role": "user", "content": "hi"}],
-                     context_store={}, model_config={})
+        save_session(
+            "t1",
+            history=[{"role": "user", "content": "hi"}],
+            context_store={},
+            model_config={},
+        )
         assert load_session("t1")["name"] == "t1"
         save_session("我的会话-01", history=[], context_store={}, model_config={})
         assert load_session("我的会话-01")["name"] == "我的会话-01"

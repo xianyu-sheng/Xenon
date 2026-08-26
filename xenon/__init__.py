@@ -87,9 +87,7 @@ def _create_engine(name: str, model_priority: list[str], **kwargs: Any) -> Any:
 
     spec = ENGINE_REGISTRY.require(name)
     if spec.factory is None:
-        raise KeyError(
-            f"范式 '{name}' 不走引擎循环（无 factory），无法创建实例"
-        )
+        raise KeyError(f"范式 '{name}' 不走引擎循环（无 factory），无法创建实例")
     return spec.factory(model_priority=model_priority, **kwargs)
 
 

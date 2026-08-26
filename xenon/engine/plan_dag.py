@@ -64,9 +64,11 @@ class PlanDAG:
 
     def __init__(self, steps: list[dict[str, Any]]) -> None:
         self.steps = list(steps)
-        self._ids: list[Any] = []          # 保序的规范化 id 列表
+        self._ids: list[Any] = []  # 保序的规范化 id 列表
         self._by_id: dict[Any, dict[str, Any]] = {}
-        self._deps: dict[Any, list[Any]] = {}  # id -> 规范化依赖 id 列表（仅含已知节点）
+        self._deps: dict[
+            Any, list[Any]
+        ] = {}  # id -> 规范化依赖 id 列表（仅含已知节点）
         self._has_edges: bool = False
         self._build()
 

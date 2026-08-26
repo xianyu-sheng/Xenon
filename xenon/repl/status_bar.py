@@ -108,7 +108,7 @@ class StatusBar:
         try:
             if isinstance(ratio, str):
                 # "50%" → 0.5
-                return float(ratio.strip('%')) / 100
+                return float(ratio.strip("%")) / 100
             val = float(ratio)
             # 75 → 0.75, 0.5 → 0.5
             return val / 100 if val > 1 else val
@@ -155,11 +155,13 @@ class StatusBar:
         status_parts: list[str] = []
         if stats["needs_compact"]:
             status_parts.append("[bold red]⚠需压缩[/bold red]")
-        status_parts.extend([
-            f"[bold cyan]模型:[/bold cyan] {escape(model_display)}",
-            f"[bold cyan]范式:[/bold cyan] {mode.name}",
-            f"[bold cyan]Token:[/bold cyan] {bar} {used:,}/{max_tok:,} ({stats['usage_ratio']})",
-        ])
+        status_parts.extend(
+            [
+                f"[bold cyan]模型:[/bold cyan] {escape(model_display)}",
+                f"[bold cyan]范式:[/bold cyan] {mode.name}",
+                f"[bold cyan]Token:[/bold cyan] {bar} {used:,}/{max_tok:,} ({stats['usage_ratio']})",
+            ]
+        )
         if self._tool_call_count > 0:
             status_parts.append(f"[bold cyan]🔧[/bold cyan] {self._tool_call_count}")
         cache_badge = self._cache_badge()
@@ -172,17 +174,28 @@ class StatusBar:
                 "muted": "dim",
             }.get(cache_style, "dim")
             status_parts.append(f"[{rich_style}]{cache_text}[/{rich_style}]")
-        status_parts.extend([
-            f"[bold cyan]消息:[/bold cyan] {stats['total_messages']}",
-            f"[bold cyan]时长:[/bold cyan] {self._fmt_duration(self.session_elapsed)}",
-            f"[bold cyan]{stream_icon}[/bold cyan]",
-        ])
+        status_parts.extend(
+            [
+                f"[bold cyan]消息:[/bold cyan] {stats['total_messages']}",
+                f"[bold cyan]时长:[/bold cyan] {self._fmt_duration(self.session_elapsed)}",
+                f"[bold cyan]{stream_icon}[/bold cyan]",
+            ]
+        )
         if stats["undo_available"] > 0:
             status_parts.append(f"[dim]↩×{stats['undo_available']}[/dim]")
 
         self._clear_expired_notification()
-        notification_line = f"[bold yellow]{self._notification}[/bold yellow]  " if self._notification else ""
-        return Panel(notification_line + "  │  ".join(status_parts), style="dim", height=1, padding=(0, 1))
+        notification_line = (
+            f"[bold yellow]{self._notification}[/bold yellow]  "
+            if self._notification
+            else ""
+        )
+        return Panel(
+            notification_line + "  │  ".join(status_parts),
+            style="dim",
+            height=1,
+            padding=(0, 1),
+        )
 
     # ── prompt_toolkit bottom_toolbar ───────────────────────
 
@@ -214,7 +227,9 @@ class StatusBar:
             term_width = shutil.get_terminal_size((80, 24)).columns
 
             provider_model = self._last_model or ""
-            provider = provider_model.split("/", 1)[0] if "/" in provider_model else "API"
+            provider = (
+                provider_model.split("/", 1)[0] if "/" in provider_model else "API"
+            )
             if self._last_model:
                 api_style, api_text = "class:toolbar.good", f"  ● {provider}"
             elif self.registry.list_models():
@@ -228,9 +243,11 @@ class StatusBar:
                 context_text = str(stats["usage_ratio"])
 
             usage_class = (
-                "class:toolbar.danger" if pct > 80 else
-                "class:toolbar.warning" if pct > 50 else
-                "class:toolbar.good"
+                "class:toolbar.danger"
+                if pct > 80
+                else "class:toolbar.warning"
+                if pct > 50
+                else "class:toolbar.good"
             )
             # (优先级, 样式, 文本)。先按优先级装入宽度预算，再按视觉顺序输出。
             # 这样 60 列终端也不会因为长模型名或快捷键提示发生折行抖动。
@@ -256,8 +273,12 @@ class StatusBar:
                 groups.append((1, "class:toolbar.notice", self._notification))
 
             if self._tool_call_count:
-                groups.append((3, "class:toolbar.muted", f"tools {self._tool_call_count}"))
-            groups.append((3, "class:toolbar.muted", self._fmt_duration(self.session_elapsed)))
+                groups.append(
+                    (3, "class:toolbar.muted", f"tools {self._tool_call_count}")
+                )
+            groups.append(
+                (3, "class:toolbar.muted", self._fmt_duration(self.session_elapsed))
+            )
             groups.append((4, "class:toolbar.hint", "Ctrl+O details"))
             groups.append((5, "class:toolbar.hint", "Shift+Tab mode"))
 
@@ -366,7 +387,7 @@ class StatusBar:
         else:
             line = f"{left}  {center}  {right}"
             if len(line) > term_width:
-                line = line[:term_width - 1]
+                line = line[: term_width - 1]
 
         return line.rstrip()
 
@@ -398,9 +419,17 @@ class StatusBar:
         stream = "⚡" if self._streaming else "⏸"
 
         self._clear_expired_notification()
-        notify = f"[bold yellow]{self._notification}[/bold yellow] · " if self._notification else ""
-        warn = "[bold red]⚠ 建议 /compact[/bold red] · " if stats["needs_compact"] else ""
-        tool_part = f"🔧 {self._tool_call_count} · " if self._tool_call_count > 0 else ""
+        notify = (
+            f"[bold yellow]{self._notification}[/bold yellow] · "
+            if self._notification
+            else ""
+        )
+        warn = (
+            "[bold red]⚠ 建议 /compact[/bold red] · " if stats["needs_compact"] else ""
+        )
+        tool_part = (
+            f"🔧 {self._tool_call_count} · " if self._tool_call_count > 0 else ""
+        )
         dur = self._fmt_duration(self.session_elapsed)
 
         # 缓存数据（与 PT toolbar 一致）

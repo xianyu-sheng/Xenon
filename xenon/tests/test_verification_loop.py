@@ -49,13 +49,19 @@ def _make_tracker(
     return tracker
 
 
-def _make_evidence(write: bool = False, test_pass: bool = False,
-                   test_fail: bool = False,
-                   fail_error: str = "AssertionError: assert 1 == 2",
-                   write_path: str = "/tmp/test/file.py") -> ExecutionEvidence:
+def _make_evidence(
+    write: bool = False,
+    test_pass: bool = False,
+    test_fail: bool = False,
+    fail_error: str = "AssertionError: assert 1 == 2",
+    write_path: str = "/tmp/test/file.py",
+) -> ExecutionEvidence:
     tracker = _make_tracker(
-        write_success=write, test_success=test_pass, test_fail=test_fail,
-        write_path=write_path, fail_error=fail_error,
+        write_success=write,
+        test_success=test_pass,
+        test_fail=test_fail,
+        write_path=write_path,
+        fail_error=fail_error,
     )
     return ExecutionEvidence.capture(tracker, workspace_root=None)
 
@@ -102,26 +108,40 @@ class TestShouldVerify:
         """
         tracker = ToolExecutionTracker()
         # 写失败：edit_file 未找到匹配文本
-        tracker.record(tool_name="edit_file",
-                       params={"file_path": "src/x.py", "old_text": "不匹配"},
-                       success=False,
-                       result_summary="工具执行失败: 未找到匹配文本",
-                       error="工具执行失败: 未找到匹配文本")
+        tracker.record(
+            tool_name="edit_file",
+            params={"file_path": "src/x.py", "old_text": "不匹配"},
+            success=False,
+            result_summary="工具执行失败: 未找到匹配文本",
+            error="工具执行失败: 未找到匹配文本",
+        )
         # 测试命令失败
-        tracker.record(tool_name="command", params={"command": "pytest tests/"},
-                       success=False,
-                       result_summary="AssertionError: assert 1 == 2",
-                       error="AssertionError: assert 1 == 2")
+        tracker.record(
+            tool_name="command",
+            params={"command": "pytest tests/"},
+            success=False,
+            result_summary="AssertionError: assert 1 == 2",
+            error="AssertionError: assert 1 == 2",
+        )
         ev = ExecutionEvidence.capture(tracker)
         assert _should_verify(ev, "fix the bug") is True
 
     def test_write_attempt_only_triggers(self):
         """写尝试存在（无论成败）+ 测试失败 → 触发验证。"""
         tracker = ToolExecutionTracker()
-        tracker.record(tool_name="append_file", params={"file_path": "a.log"},
-                       success=True, result_summary="appended")
-        tracker.record(tool_name="command", params={"command": "pytest t.py"},
-                       success=False, error="FAILED test_x", result_summary="")
+        tracker.record(
+            tool_name="append_file",
+            params={"file_path": "a.log"},
+            success=True,
+            result_summary="appended",
+        )
+        tracker.record(
+            tool_name="command",
+            params={"command": "pytest t.py"},
+            success=False,
+            error="FAILED test_x",
+            result_summary="",
+        )
         ev = ExecutionEvidence.capture(tracker)
         assert _should_verify(ev, "fix the bug") is True
 
@@ -131,6 +151,7 @@ class TestWriteToolSet:
 
     def test_write_tool_set_matches_evidence_gate(self):
         from xenon.engine.evidence_gate import WRITE_TOOL_NAMES as GATE_WRITE
+
         assert _WRITE_TOOL_NAMES == GATE_WRITE
 
 
@@ -142,20 +163,37 @@ class TestWriteToolSet:
 
 class TestExtractFailureSummary:
     def test_extracts_assertion_error(self):
-        ev = _make_evidence(write=True, test_fail=True,
-                            fail_error="AssertionError: assert 1 == 2\n  x = 1\n  y = 2")
+        ev = _make_evidence(
+            write=True,
+            test_fail=True,
+            fail_error="AssertionError: assert 1 == 2\n  x = 1\n  y = 2",
+        )
         summary = _extract_failure_summary(ev)
         assert "AssertionError" in summary
         assert "assert 1" in summary
 
     def test_multiple_failures_joined(self):
         tracker = ToolExecutionTracker()
-        tracker.record(tool_name="write_file", params={"file_path": "a.py"},
-                       success=True, result_summary="wrote")
-        tracker.record(tool_name="command", params={"command": "pytest t1.py"},
-                       success=False, error="Error: assert x", result_summary="")
-        tracker.record(tool_name="command", params={"command": "pytest t2.py"},
-                       success=False, error="Error: assert y", result_summary="")
+        tracker.record(
+            tool_name="write_file",
+            params={"file_path": "a.py"},
+            success=True,
+            result_summary="wrote",
+        )
+        tracker.record(
+            tool_name="command",
+            params={"command": "pytest t1.py"},
+            success=False,
+            error="Error: assert x",
+            result_summary="",
+        )
+        tracker.record(
+            tool_name="command",
+            params={"command": "pytest t2.py"},
+            success=False,
+            error="Error: assert y",
+            result_summary="",
+        )
         ev = ExecutionEvidence.capture(tracker)
         summary = _extract_failure_summary(ev)
         assert "assert x" in summary
@@ -230,8 +268,7 @@ class TestVerificationLoop:
     def test_stuck_detection(self):
         loop = VerificationLoop(max_rounds=8, stuck_threshold=2)
         loop._active = True
-        ev = _make_evidence(write=True, test_fail=True,
-                            fail_error="Error: same error")
+        ev = _make_evidence(write=True, test_fail=True, fail_error="Error: same error")
         # R1: first feed → records baseline, no match yet
         assert loop.feed(ev, "fix it") is not None
         loop.record_outcome(ev, "still_failing")
@@ -249,12 +286,14 @@ class TestVerificationLoop:
         """Different failure summaries = making progress = not stuck."""
         loop = VerificationLoop(max_rounds=8, stuck_threshold=2)
         loop._active = True
-        ev1 = _make_evidence(write=True, test_fail=True,
-                             fail_error="Error: assert 1 == 2")
+        ev1 = _make_evidence(
+            write=True, test_fail=True, fail_error="Error: assert 1 == 2"
+        )
         loop.feed(ev1, "fix it")
         loop.record_outcome(ev1, "still_failing")
-        ev2 = _make_evidence(write=True, test_fail=True,
-                             fail_error="Error: assert 2 == 3")
+        ev2 = _make_evidence(
+            write=True, test_fail=True, fail_error="Error: assert 2 == 3"
+        )
         result = loop.feed(ev2, "fix it")
         assert result is not None  # different failure = progress
         assert not loop.is_stuck
@@ -286,20 +325,23 @@ class TestVerificationLoop:
         if file_key in cache:
             assert cache[file_key].valid
             # Round 2: same file written again → should invalidate
-            ev2 = _make_evidence(write=True, test_fail=True,
-                                 write_path="/tmp/test/file.py")
+            ev2 = _make_evidence(
+                write=True, test_fail=True, write_path="/tmp/test/file.py"
+            )
             loop._invalidate_stale_evidence(ev2)
             assert not cache[file_key].valid
 
     def test_failure_timeline_accumulation(self):
         loop = VerificationLoop(max_rounds=8)
         loop._active = True
-        ev = _make_evidence(write=True, test_fail=True,
-                            fail_error="Error: round 1 fail")
+        ev = _make_evidence(
+            write=True, test_fail=True, fail_error="Error: round 1 fail"
+        )
         loop.feed(ev, "fix it")
         loop.record_outcome(ev, "still_failing")
-        ev2 = _make_evidence(write=True, test_fail=True,
-                             fail_error="Error: round 2 fail")
+        ev2 = _make_evidence(
+            write=True, test_fail=True, fail_error="Error: round 2 fail"
+        )
         loop.feed(ev2, "fix it")
         loop.record_outcome(ev2, "still_failing")
         assert len(loop.failure_timeline) == 2

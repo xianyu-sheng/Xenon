@@ -75,12 +75,14 @@ class DAGScheduler:
                     f"检测到循环: 节点 '{current_id}' 已访问 "
                     f"{visit_counts[current_id]} 次，强制终止"
                 )
-                execution_log.append({
-                    "step": steps + 1,
-                    "node": current_id,
-                    "status": "cycle_detected",
-                    "error": f"节点 '{current_id}' 重复执行 {visit_counts[current_id]} 次，可能存在死循环",
-                })
+                execution_log.append(
+                    {
+                        "step": steps + 1,
+                        "node": current_id,
+                        "status": "cycle_detected",
+                        "error": f"节点 '{current_id}' 重复执行 {visit_counts[current_id]} 次，可能存在死循环",
+                    }
+                )
                 break
 
             # 保存每步快照
@@ -92,20 +94,24 @@ class DAGScheduler:
                 result = node.execute(ctx)
             except Exception as e:
                 logger.error(f"节点 {current_id} 执行失败: {e}")
-                execution_log.append({
-                    "step": steps,
-                    "node": current_id,
-                    "status": "error",
-                    "error": str(e),
-                })
+                execution_log.append(
+                    {
+                        "step": steps,
+                        "node": current_id,
+                        "status": "error",
+                        "error": str(e),
+                    }
+                )
                 raise
 
-            execution_log.append({
-                "step": steps,
-                "node": current_id,
-                "status": "success",
-                "result": result,
-            })
+            execution_log.append(
+                {
+                    "step": steps,
+                    "node": current_id,
+                    "status": "success",
+                    "result": result,
+                }
+            )
 
             # 决定下一跳
             current_id = self._next_hop(node, result)
@@ -114,7 +120,11 @@ class DAGScheduler:
         if steps >= self.max_steps:
             status = "max_steps_reached"
             logger.warning(f"工作流达到最大步数 {self.max_steps}，强制终止")
-        elif visit_counts.get(current_id, 0) > MAX_VISITS_PER_NODE if current_id else False:
+        elif (
+            visit_counts.get(current_id, 0) > MAX_VISITS_PER_NODE
+            if current_id
+            else False
+        ):
             status = "cycle_detected"
         else:
             status = "completed"

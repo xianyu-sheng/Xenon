@@ -28,9 +28,7 @@ class TestInterpreterInlineInContainer:
         node.bind_command_runtime(())  # 空前缀 = 宿主机
         assert node.allow_interpreter_inline is False
         with pytest.raises(SecurityError):
-            node._validate_command(
-                'python -c "import os; print(1)"'
-            )
+            node._validate_command('python -c "import os; print(1)"')
 
     def test_container_allows_python_c(self) -> None:
         """docker exec 容器内 python -c 放行（SWE-bench 验证循环）。"""

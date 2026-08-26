@@ -29,6 +29,7 @@ from xenon.repl.system_config import (
 def reset_file_cache():
     """每个测试前后清空 yaml 文件缓存，避免跨测试串味。"""
     import xenon.repl.system_config as config_module
+
     config_module._file_cache = None
     config_module._file_cache_key = None
     yield
@@ -46,6 +47,7 @@ def config_file(tmp_path: Path) -> Path:
 def mock_config_path(config_file: Path, monkeypatch):
     """将 CONFIG_PATH 替换为临时路径。"""
     import xenon.repl.system_config as config_module
+
     monkeypatch.setattr(config_module, "CONFIG_PATH", config_file)
     return config_file
 
@@ -155,7 +157,7 @@ def test_env_overrides_file(mock_config_path: Path, monkeypatch):
         ("False", False),
         ("no", False),
         ("off", False),
-        ("", False),         # 空值 → 默认值 False
+        ("", False),  # 空值 → 默认值 False
         ("invalid", False),  # 无效值 → 默认值 False
     ],
 )
@@ -300,7 +302,7 @@ def test_malformed_section_ignored(mock_config_path: Path, monkeypatch):
 
     config = load_config()
     assert config.validation.strict is False  # 坏分组回退默认
-    assert config.watch.enabled is False      # 好分组照常生效
+    assert config.watch.enabled is False  # 好分组照常生效
 
 
 def test_reload_config(mock_config_path: Path, monkeypatch):

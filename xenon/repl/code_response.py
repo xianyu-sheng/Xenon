@@ -71,6 +71,8 @@ def validate_code_response(request: str, response: str) -> CodeResponseCheck:
 
     # For other languages, require recognizable code structure.  Syntax-level
     # validation can be added per language without weakening this boundary.
-    if not re.search(r"[{};]|\b(?:class|function|func|fn|const|let|var|import)\b", content):
+    if not re.search(
+        r"[{};]|\b(?:class|function|func|fn|const|let|var|import)\b", content
+    ):
         return CodeResponseCheck(False, response, "回复不像完整代码")
     return CodeResponseCheck(True, f"```\n{content}\n```")

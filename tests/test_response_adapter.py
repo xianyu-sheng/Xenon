@@ -1,4 +1,5 @@
 """Tests for response_adapter — LLM 输出中间件。"""
+
 from xenon.utils.response_adapter import (
     _extract_json,
     parse_plan,
@@ -32,18 +33,18 @@ class TestExtractJson:
 
     def test_deepseek_dsml_parallel_tool_calls(self):
         text = (
-            '<｜｜DSML｜｜tool_calls>'
+            "<｜｜DSML｜｜tool_calls>"
             '<｜｜DSML｜｜invoke name="read_file">'
             '<｜｜DSML｜｜parameter name="file_path" string="true">'
-            '/work/internal/provider'
-            '</｜｜DSML｜｜parameter>'
-            '</｜｜DSML｜｜invoke>'
+            "/work/internal/provider"
+            "</｜｜DSML｜｜parameter>"
+            "</｜｜DSML｜｜invoke>"
             '<｜｜DSML｜｜invoke name="read_file">'
             '<｜｜DSML｜｜parameter name="file_path" string="true">'
-            '/work/internal/tool'
-            '</｜｜DSML｜｜parameter>'
-            '</｜｜DSML｜｜invoke>'
-            '</｜｜DSML｜｜tool_calls>'
+            "/work/internal/tool"
+            "</｜｜DSML｜｜parameter>"
+            "</｜｜DSML｜｜invoke>"
+            "</｜｜DSML｜｜tool_calls>"
         )
 
         assert _extract_json(text) == [
@@ -143,8 +144,8 @@ class TestParseReAct:
         （嵌套转义）时解析为 dict，不再静默置空丢参数。"""
         raw = (
             '{"action": "edit_file", "action_input": '
-            '"{\\\"file_path\\\": \\\"django/conf/global_settings.py\\\", '
-            '\\\"old_text\\\": \\\"a\\\", \\\"new_text\\\": \\\"b\\\"}"}'
+            '"{\\"file_path\\": \\"django/conf/global_settings.py\\", '
+            '\\"old_text\\": \\"a\\", \\"new_text\\": \\"b\\"}"}'
         )
         result = parse_react(raw)
         assert result["action_input"] == {
@@ -155,7 +156,7 @@ class TestParseReAct:
 
     def test_action_input_single_quote_json_parsed(self):
         raw = (
-            "{\"action\": \"edit_file\", \"action_input\": "
+            '{"action": "edit_file", "action_input": '
             "\"{'file_path': 'a.py', 'old_text': 'x'}\"}"
         )
         result = parse_react(raw)
@@ -168,7 +169,7 @@ class TestParseReAct:
 
     def test_parallel_action_input_string_json(self):
         raw = (
-            '[{"action": "read_file", "action_input": "{\\\"file_path\\\": \\\"a.py\\\"}"}'
+            '[{"action": "read_file", "action_input": "{\\"file_path\\": \\"a.py\\"}"}'
             ', {"action": "edit_file", "action_input": {"file_path": "b.py"}}]'
         )
         result = parse_react(raw)

@@ -6,6 +6,7 @@
 - 引擎的 observation 截断（_near_context_window 保护）应生效；
 - LLM 内部 retry/重试不被超大 payload 阻塞。
 """
+
 from __future__ import annotations
 
 import time
@@ -73,8 +74,10 @@ class TestEngineWithHugeObservation:
             @staticmethod
             def normalize_params(p):
                 return p
+
             def __init__(self, name, action_type=None, **params):
                 pass
+
             def execute(self, context):
                 return {"success": True, "content": huge_output}
 
@@ -102,10 +105,16 @@ class TestEngineWithHugeObservation:
             max_iterations=5,
             callback=SilentCallback(),
             model_configs={
-                "openai/gpt-4o": type("MC", (), {
-                    "api_key": "sk", "base_url": "https://api.test/v1",
-                    "max_tokens": 4096, "context_window": 128000,
-                })(),
+                "openai/gpt-4o": type(
+                    "MC",
+                    (),
+                    {
+                        "api_key": "sk",
+                        "base_url": "https://api.test/v1",
+                        "max_tokens": 4096,
+                        "context_window": 128000,
+                    },
+                )(),
             },
         )
         start = time.monotonic()

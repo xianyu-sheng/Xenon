@@ -9,6 +9,7 @@ import json
 import sys
 import time
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from xenon.repl.context_manager import ContextManager
@@ -21,67 +22,67 @@ def realistic_read_file(path: str) -> str:
     files = {
         "/app/main.py": (
             '"""Main application entry point."""\n'
-            'import asyncio\n'
-            'from crawler import WebCrawler\n'
-            'from storage import ResultStorage\n'
-            'from config import load_config\n\n'
-            'async def main():\n'
+            "import asyncio\n"
+            "from crawler import WebCrawler\n"
+            "from storage import ResultStorage\n"
+            "from config import load_config\n\n"
+            "async def main():\n"
             '    config = load_config("config.yaml")\n'
-            '    crawler = WebCrawler(\n'
+            "    crawler = WebCrawler(\n"
             '        concurrency=config["crawler"]["concurrency"],\n'
             '        timeout=config["crawler"]["timeout"],\n'
-            '    )\n'
+            "    )\n"
             '    storage = ResultStorage(config["storage"]["output_dir"])\n'
             '    urls = ["https://example.com", "https://httpbin.org"]\n'
-            '    results = await crawler.crawl(urls)\n'
-            '    storage.save(results)\n'
+            "    results = await crawler.crawl(urls)\n"
+            "    storage.save(results)\n"
             '    print(f"Crawled {len(results)} pages")\n\n'
             'if __name__ == "__main__":\n'
-            '    asyncio.run(main())\n'
+            "    asyncio.run(main())\n"
         ),
         "/app/crawler.py": (
             '"""Async web crawler with concurrency control."""\n'
-            'import asyncio\n'
-            'import aiohttp\n'
-            'from bs4 import BeautifulSoup\n\n'
-            'class WebCrawler:\n'
-            '    def __init__(self, concurrency=5, timeout=30):\n'
-            '        self.concurrency = concurrency\n'
-            '        self.timeout = timeout\n'
-            '        self.session = None\n'
-            '        self.semaphore = asyncio.Semaphore(concurrency)\n'
-            '        self.results = []\n\n'
-            '    async def fetch(self, url):\n'
-            '        async with self.semaphore:\n'
-            '            async with self.session.get(url, timeout=self.timeout) as resp:\n'
-            '                html = await resp.text()\n'
-            '                return self.parse(html, url)\n\n'
-            '    def parse(self, html, url):\n'
+            "import asyncio\n"
+            "import aiohttp\n"
+            "from bs4 import BeautifulSoup\n\n"
+            "class WebCrawler:\n"
+            "    def __init__(self, concurrency=5, timeout=30):\n"
+            "        self.concurrency = concurrency\n"
+            "        self.timeout = timeout\n"
+            "        self.session = None\n"
+            "        self.semaphore = asyncio.Semaphore(concurrency)\n"
+            "        self.results = []\n\n"
+            "    async def fetch(self, url):\n"
+            "        async with self.semaphore:\n"
+            "            async with self.session.get(url, timeout=self.timeout) as resp:\n"
+            "                html = await resp.text()\n"
+            "                return self.parse(html, url)\n\n"
+            "    def parse(self, html, url):\n"
             '        soup = BeautifulSoup(html, "html.parser")\n'
-            '        return {\n'
+            "        return {\n"
             '            "url": url,\n'
             '            "title": soup.title.string if soup.title else "",\n'
             '            "links": [a.get("href") for a in soup.find_all("a")[:10]],\n'
-            '        }\n'
+            "        }\n"
         ),
         "/app/storage.py": (
             '"""JSON-based result storage with dedup."""\n'
-            'import json, os\n'
-            'from pathlib import Path\n\n'
-            'class ResultStorage:\n'
+            "import json, os\n"
+            "from pathlib import Path\n\n"
+            "class ResultStorage:\n"
             '    def __init__(self, output_dir="./data"):\n'
-            '        self.output_dir = Path(output_dir)\n'
-            '        self.output_dir.mkdir(parents=True, exist_ok=True)\n'
+            "        self.output_dir = Path(output_dir)\n"
+            "        self.output_dir.mkdir(parents=True, exist_ok=True)\n"
             '        self.output_file = self.output_dir / "results.json"\n'
-            '        self.seen_urls = set()\n\n'
-            '    def save(self, results):\n'
-            '        existing = self._load()\n'
-            '        for r in results:\n'
+            "        self.seen_urls = set()\n\n"
+            "    def save(self, results):\n"
+            "        existing = self._load()\n"
+            "        for r in results:\n"
             '            if r["url"] not in self.seen_urls:\n'
-            '                existing.append(r)\n'
+            "                existing.append(r)\n"
             '                self.seen_urls.add(r["url"])\n'
             '        with open(self.output_file, "w") as f:\n'
-            '            json.dump(existing, f, indent=2, ensure_ascii=False)\n'
+            "            json.dump(existing, f, indent=2, ensure_ascii=False)\n"
         ),
     }
     content = files.get(path, f"# File: {path}\n# (empty)")
@@ -221,7 +222,9 @@ def build_realistic_session() -> ContextManager:
     # Q1 闲聊打断
     cm.set_active_tier(1)
     cm.add_user_message("好的谢谢")
-    cm.add_assistant_message("不客气！还有其他需要修改的吗？", model_used="deepseek/deepseek-v4-flash")
+    cm.add_assistant_message(
+        "不客气！还有其他需要修改的吗？", model_used="deepseek/deepseek-v4-flash"
+    )
 
     # === Phase 2: Q5 架构重构 (升级) ===
     cm.set_active_tier(5)
@@ -325,7 +328,9 @@ def run_stress_test(model_id="deepseek/deepseek-v4-pro"):
     ratio_before = cm2.usage_ratio()
     space = SpaceBudget.evaluate(ratio_before)
     print(f"\n压缩前: ratio={ratio_before:.0%}, space={space}")
-    print(f"策略: Q4 trigger={strategy4.trigger_threshold}, keep_recent={strategy4.keep_recent_rounds}")
+    print(
+        f"策略: Q4 trigger={strategy4.trigger_threshold}, keep_recent={strategy4.keep_recent_rounds}"
+    )
 
     # 压缩
     print("\n触发压缩...")
@@ -399,14 +404,20 @@ def run_stress_test(model_id="deepseek/deepseek-v4-pro"):
             "=== 上下文 ===\n"
         )
         for turn in ctx:
-            role_label = {"user": "用户", "assistant": "助手", "system": "系统"}.get(turn["role"], turn["role"])
+            role_label = {"user": "用户", "assistant": "助手", "system": "系统"}.get(
+                turn["role"], turn["role"]
+            )
             prompt += f"[{role_label}] {turn['content'][:800]}\n\n"  # 800 字符（原 400）防止截断丢失细节
         prompt += f"=== 问题 ===\n{q['query']}\n\n简洁回答。"
 
         try:
             t0 = time.time()
-            resp = chat_completion(model_id, [{"role": "user", "content": prompt}],
-                                   temperature=0.0, max_tokens=200)
+            resp = chat_completion(
+                model_id,
+                [{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=200,
+            )
             lat = (time.time() - t0) * 1000
             answer = resp.strip()[:300]
 
@@ -415,12 +426,14 @@ def run_stress_test(model_id="deepseek/deepseek-v4-pro"):
             all_scores.append(score)
 
             status = "✅" if score >= 0.75 else ("⚠️" if score >= 0.5 else "❌")
-            print(f"\n[{i+1}/{len(queries)}] {status} {q['context']}")
+            print(f"\n[{i + 1}/{len(queries)}] {status} {q['context']}")
             print(f"  Q: {q['query'][:80]}...")
             print(f"  A: {answer[:150]}")
-            print(f"  得分: {score:.0%} ({len(matched)}/{len(q['expected'])}) [{lat:.0f}ms]")
+            print(
+                f"  得分: {score:.0%} ({len(matched)}/{len(q['expected'])}) [{lat:.0f}ms]"
+            )
         except Exception as e:
-            print(f"\n[{i+1}/{len(queries)}] ❌ API 失败: {e}")
+            print(f"\n[{i + 1}/{len(queries)}] ❌ API 失败: {e}")
             all_scores.append(0.0)
 
     # ── 汇总 ──
@@ -429,12 +442,14 @@ def run_stress_test(model_id="deepseek/deepseek-v4-pro"):
     mid = sum(1 for s in all_scores if 0.5 <= s < 0.75)
     low = sum(1 for s in all_scores if s < 0.5)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("压力测试结果")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  压缩: {turns_before}→{turns_after} 轮, 耗时 {elapsed:.0f}ms")
     print(f"  查询: {len(queries)}, 综合得分: {avg:.0%}")
-    print(f"  高召回: {high}/{len(queries)} | 中: {mid}/{len(queries)} | 低: {low}/{len(queries)}")
+    print(
+        f"  高召回: {high}/{len(queries)} | 中: {mid}/{len(queries)} | 低: {low}/{len(queries)}"
+    )
 
     if avg >= 0.85:
         print("\n  ✅ 真实压力测试通过 — 压缩后上下文有效保留了关键信息。")
@@ -450,4 +465,5 @@ if __name__ == "__main__":
     model = sys.argv[1] if len(sys.argv) > 1 else "deepseek/deepseek-v4-pro"
     report = run_stress_test(model)
     Path("/tmp/xenon_stress_test.json").write_text(
-        json.dumps(report, indent=2, ensure_ascii=False, default=str))
+        json.dumps(report, indent=2, ensure_ascii=False, default=str)
+    )

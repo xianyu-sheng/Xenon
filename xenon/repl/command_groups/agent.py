@@ -18,10 +18,15 @@ if TYPE_CHECKING:
 
 # /run ─────────────────────────────────────────────────────
 
-register_command("/run", "执行当前配置的工作流", "/run [workflow.yaml] [--init key=value]")
+register_command(
+    "/run", "执行当前配置的工作流", "/run [workflow.yaml] [--init key=value]"
+)
+
 
 @command_handler("/run")
-def _cmd_run(*, args: str, session_state: dict, registry: ModelRegistry, **kwargs: Any) -> str:
+def _cmd_run(
+    *, args: str, session_state: dict, registry: ModelRegistry, **kwargs: Any
+) -> str:
     from xenon.engine.context import AgentContext
     from xenon.engine.scheduler import DAGScheduler
     from xenon.utils.config_parser import load_yaml, parse_workflow
@@ -90,8 +95,11 @@ register_command(
     "/ask <alias> <question>",
 )
 
+
 @command_handler("/ask")
-def _cmd_ask(*, args: str, registry: ModelRegistry, ctx_mgr: ContextManager, **kwargs: Any) -> str:
+def _cmd_ask(
+    *, args: str, registry: ModelRegistry, ctx_mgr: ContextManager, **kwargs: Any
+) -> str:
     from xenon.utils.llm_client import chat_completion
 
     parts = args.split(maxsplit=1)
@@ -131,8 +139,16 @@ register_command(
     "/code <任务描述> [--file path] [--run] [--lang python]",
 )
 
+
 @command_handler("/code")
-def _cmd_code(*, args: str, registry: ModelRegistry, ctx_mgr: ContextManager, session_state: dict, **kwargs: Any) -> str:
+def _cmd_code(
+    *,
+    args: str,
+    registry: ModelRegistry,
+    ctx_mgr: ContextManager,
+    session_state: dict,
+    **kwargs: Any,
+) -> str:
     import re
     import subprocess
     import sys
@@ -169,7 +185,9 @@ def _cmd_code(*, args: str, registry: ModelRegistry, ctx_mgr: ContextManager, se
         return "请提供任务描述"
 
     # 获取模型
-    model_ids = registry.get_role_priority("coder") or registry.get_role_priority("planner")
+    model_ids = registry.get_role_priority("coder") or registry.get_role_priority(
+        "planner"
+    )
     if not model_ids:
         return "❌ 未配置模型。请先 /set_model"
 
@@ -201,13 +219,18 @@ def _cmd_code(*, args: str, registry: ModelRegistry, ctx_mgr: ContextManager, se
         return f"❌ 代码生成失败: {e}"
 
     # 清理代码（移除可能的 markdown 标记）
-    code = re.sub(r'^```\w*\n?', '', code, flags=re.MULTILINE)
-    code = re.sub(r'\n?```$', '', code, flags=re.MULTILINE)
+    code = re.sub(r"^```\w*\n?", "", code, flags=re.MULTILINE)
+    code = re.sub(r"\n?```$", "", code, flags=re.MULTILINE)
     code = code.strip()
 
     # 确定文件路径
     if not file_path:
-        ext = {"python": ".py", "javascript": ".js", "typescript": ".ts", "bash": ".sh"}.get(lang, ".txt")
+        ext = {
+            "python": ".py",
+            "javascript": ".js",
+            "typescript": ".ts",
+            "bash": ".sh",
+        }.get(lang, ".txt")
         file_path = f"generated_code{ext}"
 
     # 写入文件
@@ -228,6 +251,7 @@ def _cmd_code(*, args: str, registry: ModelRegistry, ctx_mgr: ContextManager, se
         # A11: 执行 LLM 生成代码前人机确认，显示完整代码
         from rich.console import Console as _Console
         from rich.syntax import Syntax as _Syntax
+
         console = kwargs.get("console") or _Console()
         console.print("\n[bold]⚠️ 即将执行 LLM 生成的代码:[/bold]")
         console.print(_Syntax(code, "python", theme="monokai", line_numbers=True))
@@ -271,6 +295,7 @@ register_command(
     "/sub-agent <task> [--engine react|plan_execute|reflection|plan_react|plan_reflection|react_reflection|direct] [--timeout N] [--parallel task1|task2|...]",
 )
 
+
 @command_handler("/sub-agent")
 def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) -> str:
     """v0.6.1: 显式委派子 Agent 执行任务。
@@ -308,6 +333,7 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
 
     # 解析参数
     import shlex
+
     parts = shlex.split(args)
 
     engine_type = "react"
@@ -328,7 +354,9 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
             i += 2
         elif parts[i] == "--parallel":
             if i + 1 < len(parts):
-                parallel_tasks = [t.strip() for t in parts[i + 1].split("|") if t.strip()]
+                parallel_tasks = [
+                    t.strip() for t in parts[i + 1].split("|") if t.strip()
+                ]
             else:
                 return "❌ --parallel 需要任务列表（用 | 分隔）"
             i += 2
@@ -342,16 +370,19 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
     if repl is None:
         return "❌ 无法获取 REPL 实例"
 
-    model_ids = [e.model_id for e in (repl.model_pool.get_healthy() or repl.model_pool.list_all())]
+    model_ids = [
+        e.model_id
+        for e in (repl.model_pool.get_healthy() or repl.model_pool.list_all())
+    ]
     if not model_ids:
         return "❌ 模型池为空，请先运行 /setup 配置模型。"
-    model_configs = getattr(repl, '_model_configs', None) or {}
+    model_configs = getattr(repl, "_model_configs", None) or {}
 
     # 构建引擎
     engine = ReActEngine(
         model_ids,
         max_iterations=15,
-        callback=getattr(repl, '_engine_callback', None),
+        callback=getattr(repl, "_engine_callback", None),
         model_configs=model_configs,
         subagent_timeout=timeout,
     )
@@ -368,9 +399,7 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
     # 构建 action_input
     if parallel_tasks:
         action_input: dict[str, Any] = {
-            "task_list": [
-                {"task": t, "engine": "react"} for t in parallel_tasks
-            ]
+            "task_list": [{"task": t, "engine": "react"} for t in parallel_tasks]
         }
         display_task = f"并行 {len(parallel_tasks)} 个子任务"
     else:
@@ -382,6 +411,7 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
         display_task = task
 
     import logging
+
     logger = logging.getLogger(__name__)
     logger.info("用户 /sub-agent 委派: %s (引擎=%s)", display_task[:80], engine_type)
 
@@ -391,5 +421,3 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
     except Exception as e:
         logger.exception("/sub-agent 执行失败")
         return f"❌ 子 Agent 执行失败: {e}"
-
-

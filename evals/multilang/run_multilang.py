@@ -1,4 +1,5 @@
 """多语言 eval 运行器包装：把 RealAgent.run_task 包装为 run_real 接口。"""
+
 import sys
 from pathlib import Path
 
@@ -24,6 +25,7 @@ def run_real(task, *, model, max_turns=3, workdir=None):
     """
     # 注册 usage tracker 收集真实 token
     from xenon.utils.llm_client import UsageTracker
+
     tracker = UsageTracker()
     try:
         agent = RealAgent(model=model, max_turns=max_turns, workdir=workdir)

@@ -46,8 +46,10 @@ def temp_tool():
 class TestToolDefinitionSchema:
     def test_params_and_risk_are_carried(self):
         d = ToolDefinition(
-            name="x", handler=_handler,
-            params={"q": "查询词"}, risk="WRITE",
+            name="x",
+            handler=_handler,
+            params={"q": "查询词"},
+            risk="WRITE",
         )
         assert d.params == {"q": "查询词"}
         assert d.risk == "WRITE"
@@ -148,9 +150,7 @@ class TestPluginToolsAreVisibleToModel:
         from xenon.engine.react_engine import ReActEngine
 
         custom = {"only_this": {"name": "only_this", "description": "x", "params": {}}}
-        engine = ReActEngine(
-            model_priority=["deepseek/deepseek-v4-pro"], tools=custom
-        )
+        engine = ReActEngine(model_priority=["deepseek/deepseek-v4-pro"], tools=custom)
         assert "only_this" in engine.tools
         assert "my_plugin" in engine.tools
 

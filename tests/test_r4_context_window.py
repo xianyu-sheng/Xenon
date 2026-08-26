@@ -1,13 +1,16 @@
 """R4 验收：ContextManager.max_tokens 从激活模型的 context_window 注入，
 替代 128000 硬编码——8k 模型时 needs_compact 不再永不触发，1M 模型不再过早压缩。
 """
+
 from xenon.repl.context_manager import ContextManager
 from xenon.repl.model_registry import ModelConfig, ModelRegistry
 
 
 class TestModelConfigContextWindow:
     def test_default_is_128000(self):
-        assert ModelConfig(model_id="openai/gpt-4o", alias="gpt4").context_window == 128000
+        assert (
+            ModelConfig(model_id="openai/gpt-4o", alias="gpt4").context_window == 128000
+        )
 
     def test_add_model_accepts_context_window(self):
         reg = ModelRegistry()
@@ -77,11 +80,20 @@ class TestExportLoadRoundTrip:
     def test_legacy_config_without_context_window_defaults(self, tmp_path):
         """旧配置文件无 context_window 字段时回退默认 128000。"""
         import yaml
+
         p = tmp_path / "models.yaml"
-        p.write_text(yaml.dump({
-            "models": {"gpt4": {"model_id": "openai/gpt-4o", "max_tokens": 4096}},
-            "roles": {}, "mode": "direct",
-        }), encoding="utf-8")
+        p.write_text(
+            yaml.dump(
+                {
+                    "models": {
+                        "gpt4": {"model_id": "openai/gpt-4o", "max_tokens": 4096}
+                    },
+                    "roles": {},
+                    "mode": "direct",
+                }
+            ),
+            encoding="utf-8",
+        )
         reg = ModelRegistry()
         reg.load_from_file(p)
         assert reg.models["gpt4"].context_window == 128000

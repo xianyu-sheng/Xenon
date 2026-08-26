@@ -137,12 +137,17 @@ def test_skill_import_curl_keeps_saved_token_out_of_arguments(tmp_path, monkeypa
     skill_commands._github_curl_get("https://api.github.com/repos/owner/repo/contents")
 
     assert "saved-token" not in " ".join(captured["command"])
-    assert captured["command"][-2:] == ["@-", "https://api.github.com/repos/owner/repo/contents"]
+    assert captured["command"][-2:] == [
+        "@-",
+        "https://api.github.com/repos/owner/repo/contents",
+    ]
     assert captured["kwargs"]["input"] == "Authorization: Bearer saved-token\n"
 
 
 def test_auth_helper_does_not_report_token_on_invalid_config(
-    tmp_path, caplog, monkeypatch,
+    tmp_path,
+    caplog,
+    monkeypatch,
 ):
     credentials = tmp_path / "credentials.yaml"
     secret = "should-never-be-reported"

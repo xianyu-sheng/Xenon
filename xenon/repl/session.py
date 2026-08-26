@@ -30,19 +30,21 @@ AUTO_SESSION_NAME = "_auto"
 # 但仍受 access_count 加权影响，不会被硬编码钉死在末尾。
 _UNKNOWN_AGE_DAYS = 3650.0
 
-_SENSITIVE_SESSION_KEYS = frozenset({
-    "api_key",
-    "apikey",
-    "access_token",
-    "refresh_token",
-    "token",
-    "secret",
-    "client_secret",
-    "password",
-    "authorization",
-    "cookie",
-    "private_key",
-})
+_SENSITIVE_SESSION_KEYS = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "access_token",
+        "refresh_token",
+        "token",
+        "secret",
+        "client_secret",
+        "password",
+        "authorization",
+        "cookie",
+        "private_key",
+    }
+)
 
 
 def _is_sensitive_session_key(key: object) -> bool:
@@ -115,7 +117,11 @@ def _read_access_stats(filepath: Path) -> tuple[float | None, int]:
     if not isinstance(data, dict):
         return None, 0
     accessed = data.get("accessed_at_ts")
-    if not isinstance(accessed, (int, float)) or isinstance(accessed, bool) or accessed <= 0:
+    if (
+        not isinstance(accessed, (int, float))
+        or isinstance(accessed, bool)
+        or accessed <= 0
+    ):
         accessed = None
     count = data.get("access_count", 0)
     if not isinstance(count, int) or isinstance(count, bool) or count < 0:
@@ -164,9 +170,17 @@ def _session_relevance_score(session: dict[str, Any], *, now: float) -> float:
     两者都不可用则按 _UNKNOWN_AGE_DAYS 计年龄，access_count 缺失按 0。
     """
     accessed = session.get("accessed_at_ts")
-    if not isinstance(accessed, (int, float)) or isinstance(accessed, bool) or accessed <= 0:
+    if (
+        not isinstance(accessed, (int, float))
+        or isinstance(accessed, bool)
+        or accessed <= 0
+    ):
         accessed = session.get("saved_at_ts")
-    if not isinstance(accessed, (int, float)) or isinstance(accessed, bool) or accessed <= 0:
+    if (
+        not isinstance(accessed, (int, float))
+        or isinstance(accessed, bool)
+        or accessed <= 0
+    ):
         age_days = _UNKNOWN_AGE_DAYS
     else:
         age_days = max(0.0, (now - float(accessed)) / 86400.0)
@@ -312,7 +326,9 @@ def list_sessions() -> list[dict[str, Any]]:
             if not isinstance(saved_at, str):
                 saved_at = str(saved_at)
             saved_at_ts = data.get("saved_at_ts", 0)
-            if not isinstance(saved_at_ts, (int, float)) or isinstance(saved_at_ts, bool):
+            if not isinstance(saved_at_ts, (int, float)) or isinstance(
+                saved_at_ts, bool
+            ):
                 saved_at_ts = 0
             # 旧会话（v0.8.5 之前写盘）没有这两个字段，按 saved_at_ts / 0 降级。
             accessed_at_ts = data.get("accessed_at_ts")
@@ -323,19 +339,32 @@ def list_sessions() -> list[dict[str, Any]]:
             ):
                 accessed_at_ts = saved_at_ts
             access_count = data.get("access_count", 0)
-            if not isinstance(access_count, int) or isinstance(access_count, bool) or access_count < 0:
+            if (
+                not isinstance(access_count, int)
+                or isinstance(access_count, bool)
+                or access_count < 0
+            ):
                 access_count = 0
-            sessions.append({
-                "name": data.get("name", f.stem),
-                "saved_at": saved_at,
-                "saved_at_ts": saved_at_ts,
-                "accessed_at_ts": accessed_at_ts,
-                "access_count": access_count,
-                "path": str(f),
-                "messages": len(history),
-                "paradigm": extra.get("paradigm", ""),
-            })
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError, UnicodeError):
+            sessions.append(
+                {
+                    "name": data.get("name", f.stem),
+                    "saved_at": saved_at,
+                    "saved_at_ts": saved_at_ts,
+                    "accessed_at_ts": accessed_at_ts,
+                    "access_count": access_count,
+                    "path": str(f),
+                    "messages": len(history),
+                    "paradigm": extra.get("paradigm", ""),
+                }
+            )
+        except (
+            json.JSONDecodeError,
+            KeyError,
+            TypeError,
+            ValueError,
+            OSError,
+            UnicodeError,
+        ):
             continue
 
     # 单次调用内固定 now，避免逐个会话取时间导致排序键不自洽。
@@ -353,6 +382,7 @@ def delete_session(name: str) -> bool:
 
 
 # ── v0.4.0 Step 14: 自动保存/恢复 ──────────────────────
+
 
 def auto_save(
     history: list[dict[str, Any]],
@@ -411,7 +441,14 @@ def get_auto_session() -> dict[str, Any] | None:
             return None
 
         return data
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError, UnicodeError):
+    except (
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+        OSError,
+        UnicodeError,
+    ):
         return None
 
 
@@ -435,7 +472,14 @@ def cleanup_expired_sessions() -> int:
             if ts > 0 and ts < threshold:
                 f.unlink()
                 deleted += 1
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError, UnicodeError):
+        except (
+            json.JSONDecodeError,
+            KeyError,
+            TypeError,
+            ValueError,
+            OSError,
+            UnicodeError,
+        ):
             # 损坏的文件也清理
             try:
                 f.unlink()

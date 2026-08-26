@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from xenon.engine.combined_engines import (
-    PlanReactEngine, PlanReflectionEngine, ReactReflectionEngine, _isolated_ctx,
+    PlanReactEngine,
+    PlanReflectionEngine,
+    ReactReflectionEngine,
+    _isolated_ctx,
 )
 from xenon.engine.context import AgentContext
 from xenon.engine.tool_tracker import ToolExecutionTracker
 
 
 # --------------------------- _isolated_ctx ---------------------------
+
 
 def test_isolated_ctx_has_clean_store():
     ctx = AgentContext()
@@ -38,10 +42,14 @@ def test_isolated_ctx_independent_mutation():
 
 # --------------------------- PlanReactEngine 错误传播 ---------------------------
 
+
 def _plan_react_with_steps(steps_behavior):
     """构造 PlanReactEngine，planner._plan 返回固定步骤，reactor.run 按 steps_behavior。"""
     eng = PlanReactEngine(["m1"], max_steps=10, react_iterations=1)
-    eng.planner._plan = lambda user_input, ctx: {"steps": steps_behavior, "analysis": "分析"}
+    eng.planner._plan = lambda user_input, ctx: {
+        "steps": steps_behavior,
+        "analysis": "分析",
+    }
 
     def make_run(behavior):
         def fake_run(react_input, context=None, ctx_mgr=None):
@@ -51,7 +59,9 @@ def _plan_react_with_steps(steps_behavior):
                         raise RuntimeError(f"步骤{step_id}炸了")
                     return f"步骤{step_id}成功结果"
             return "ok"
+
         return fake_run
+
     eng.reactor.run = make_run([(s["id"], s["action"]) for s in steps_behavior])
     eng._summarize = lambda *a, **k: "summary"  # 跳过 LLM 汇总
     return eng
@@ -66,7 +76,9 @@ def test_plan_react_marks_failed_step_status():
     eng = _plan_react_with_steps(steps)
     # 捕获 results 需要访问内部——改用 _summarize 接收的 results 验证
     captured = []
-    eng._summarize = lambda user_input, results, analysis="": captured.append(results) or "summary"
+    eng._summarize = lambda user_input, results, analysis="": (
+        captured.append(results) or "summary"
+    )
     eng.run("任务")
     results = captured[0]
     statuses = {r["step_id"]: r["status"] for r in results}
@@ -88,6 +100,7 @@ def test_plan_react_failed_error_not_in_prev_context():
     def spy_run(react_input, context=None, ctx_mgr=None):
         reactor_inputs.append(react_input)
         return orig_run(react_input, context, ctx_mgr)
+
     eng.reactor.run = spy_run
     eng.run("任务")
     # 步骤2的输入不应含步骤1的失败错误串
@@ -103,7 +116,9 @@ def test_plan_react_failed_step_marked_in_summary():
     ]
     eng = _plan_react_with_steps(steps)
     captured = []
-    eng._summarize = lambda user_input, results, analysis="": captured.append(results) or "summary"
+    eng._summarize = lambda user_input, results, analysis="": (
+        captured.append(results) or "summary"
+    )
     eng.run("任务")
     results = captured[0]
     failed = [r for r in results if r["status"] == "failed"]
@@ -121,11 +136,17 @@ def test_plan_react_ctx_stores_status():
 
 # --------------------------- _summarize 区分成功/失败 ---------------------------
 
+
 def test_summarize_separates_failed_steps():
     eng = PlanReactEngine(["m1"])
     results = [
         {"step_id": 1, "task": "t1", "result": "成功结果A", "status": "ok"},
-        {"step_id": 2, "task": "t2", "result": "步骤执行失败: boom", "status": "failed"},
+        {
+            "step_id": 2,
+            "task": "t2",
+            "result": "步骤执行失败: boom",
+            "status": "failed",
+        },
     ]
     summary = eng._summarize("任务", results, analysis="分析")
     # 成功结果在"执行结果"段
@@ -155,6 +176,7 @@ def test_summarize_all_failed_shows_no_ok():
 
 
 # --------------------------- 反射引擎上下文隔离 ---------------------------
+
 
 def test_react_reflection_reflector_gets_isolated_ctx():
     """reflector 收到的 context 是隔离 ctx，不含 reactor 写入的 store。"""
@@ -216,23 +238,24 @@ def test_plan_react_skips_steps_covered_by_verified_change_and_test():
     def fake_run(user_input, context=None, ctx_mgr=None):
         calls.append(user_input)
         tracker = ToolExecutionTracker()
-        tracker.record(
-            "edit_file", {"file_path": "target.py"}, True, "edited"
-        )
+        tracker.record("edit_file", {"file_path": "target.py"}, True, "edited")
         tracker.record("command", {"action": "pytest -q"}, True, "1 passed")
         eng.reactor._last_tracker = tracker
         return "问题已修复并通过测试"
 
     eng.reactor.run = fake_run
     captured = []
-    eng._summarize = (
-        lambda user_input, results, analysis="": captured.extend(results) or "done"
+    eng._summarize = lambda user_input, results, analysis="": (
+        captured.extend(results) or "done"
     )
 
     assert eng.run("修复 target.py") == "done"
     assert len(calls) == 1
     assert [item["status"] for item in captured] == [
-        "ok", "skipped", "skipped", "skipped"
+        "ok",
+        "skipped",
+        "skipped",
+        "skipped",
     ]
     assert len(eng._last_tracker.calls) == 2
 
@@ -285,14 +308,14 @@ def test_failed_review_uses_tool_capable_repair_and_aggregates_trace():
 
     assert eng.run("修复 x.py") == "fixed and tested"
     assert [call.tool_name for call in eng._last_tracker.calls] == [
-        "read_file", "edit_file", "command"
+        "read_file",
+        "edit_file",
+        "command",
     ]
 
 
 def test_tool_task_repair_without_real_change_keeps_initial_output():
-    eng = ReactReflectionEngine(
-        ["openai/test"], react_iterations=1, review_rounds=1
-    )
+    eng = ReactReflectionEngine(["openai/test"], react_iterations=1, review_rounds=1)
     initial_tracker = ToolExecutionTracker()
 
     def initial(*args, **kwargs):
@@ -317,9 +340,7 @@ def test_tool_task_repair_without_real_change_keeps_initial_output():
 
 
 def test_high_review_score_cannot_pass_write_task_without_mutation():
-    eng = PlanReflectionEngine(
-        ["openai/test"], max_steps=1, review_rounds=1
-    )
+    eng = PlanReflectionEngine(["openai/test"], max_steps=1, review_rounds=1)
 
     def planner(*args, **kwargs):
         eng.planner._last_tracker = ToolExecutionTracker()
@@ -385,6 +406,7 @@ def test_reflection_repair_budget_matches_parent_execution_budget():
 
 
 # ------------------- verification_loop A/B 开关传播（issue #20） -------------------
+
 
 def test_plan_react_verification_flag_propagates():
     """verification_loop=False 必须传播到组合引擎自身与子引擎。

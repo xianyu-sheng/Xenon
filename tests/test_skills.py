@@ -45,9 +45,13 @@ class TestSkillManager:
         """测试创建和列出技能。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = SkillManager(Path(tmpdir) / "skills")
-            manager.create("test", "测试技能", [
-                {"type": "echo", "prompt": "hello"},
-            ])
+            manager.create(
+                "test",
+                "测试技能",
+                [
+                    {"type": "echo", "prompt": "hello"},
+                ],
+            )
 
             assert len(manager.skills) == 1
             assert "test" in manager.skills
@@ -82,9 +86,13 @@ class TestSkillManager:
         """测试执行 echo 步骤。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = SkillManager(Path(tmpdir) / "skills")
-            manager.create("hello", "打招呼", [
-                {"type": "echo", "prompt": "hello world"},
-            ])
+            manager.create(
+                "hello",
+                "打招呼",
+                [
+                    {"type": "echo", "prompt": "hello world"},
+                ],
+            )
 
             result = manager.execute("hello", "")
             assert "hello world" in result
@@ -93,9 +101,13 @@ class TestSkillManager:
         """测试执行 command 步骤。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = SkillManager(Path(tmpdir) / "skills")
-            manager.create("cmd", "命令测试", [
-                {"type": "command", "action": "echo test"},
-            ])
+            manager.create(
+                "cmd",
+                "命令测试",
+                [
+                    {"type": "command", "action": "echo test"},
+                ],
+            )
 
             result = manager.execute("cmd", "")
             assert "test" in result
@@ -104,9 +116,14 @@ class TestSkillManager:
         """测试带参数执行。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = SkillManager(Path(tmpdir) / "skills")
-            manager.create("greet", "问候", [
-                {"type": "echo", "prompt": "hello {name}"},
-            ], params=[{"name": "name", "default": "world"}])
+            manager.create(
+                "greet",
+                "问候",
+                [
+                    {"type": "echo", "prompt": "hello {name}"},
+                ],
+                params=[{"name": "name", "default": "world"}],
+            )
 
             result = manager.execute("greet", "Alice")
             assert "hello Alice" in result
@@ -122,10 +139,14 @@ class TestSkillManager:
         """测试多步骤执行。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = SkillManager(Path(tmpdir) / "skills")
-            manager.create("multi", "多步骤", [
-                {"type": "echo", "prompt": "step1", "output_var": "r1"},
-                {"type": "echo", "prompt": "step2"},
-            ])
+            manager.create(
+                "multi",
+                "多步骤",
+                [
+                    {"type": "echo", "prompt": "step1", "output_var": "r1"},
+                    {"type": "echo", "prompt": "step2"},
+                ],
+            )
 
             result = manager.execute("multi", "")
             assert "step1" in result
@@ -135,10 +156,14 @@ class TestSkillManager:
         """测试输出变量。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = SkillManager(Path(tmpdir) / "skills")
-            manager.create("vars", "变量测试", [
-                {"type": "echo", "prompt": "hello", "output_var": "greeting"},
-                {"type": "echo", "prompt": "result: {greeting}"},
-            ])
+            manager.create(
+                "vars",
+                "变量测试",
+                [
+                    {"type": "echo", "prompt": "hello", "output_var": "greeting"},
+                    {"type": "echo", "prompt": "result: {greeting}"},
+                ],
+            )
 
             result = manager.execute("vars", "")
             assert "result: hello" in result
@@ -149,11 +174,23 @@ class TestSkillManager:
             manager = SkillManager(Path(tmpdir) / "skills")
             test_file = Path(tmpdir) / "test.txt"
 
-            manager.create("filer", "文件操作", [
-                {"type": "write_file", "file_path": str(test_file), "content": "file content"},
-                {"type": "read_file", "file_path": str(test_file), "output_var": "data"},
-                {"type": "echo", "prompt": "read: {data}"},
-            ])
+            manager.create(
+                "filer",
+                "文件操作",
+                [
+                    {
+                        "type": "write_file",
+                        "file_path": str(test_file),
+                        "content": "file content",
+                    },
+                    {
+                        "type": "read_file",
+                        "file_path": str(test_file),
+                        "output_var": "data",
+                    },
+                    {"type": "echo", "prompt": "read: {data}"},
+                ],
+            )
 
             result = manager.execute("filer", "")
             assert "file content" in result
@@ -180,6 +217,7 @@ class TestSkillManager:
     def test_fuzzy_match_subcommand(self):
         """测试子命令模糊匹配。"""
         from xenon.repl.commands import _fuzzy_match_subcommand
+
         assert _fuzzy_match_subcommand("creat") == "create"
         assert _fuzzy_match_subcommand("crate") == "create"
         assert _fuzzy_match_subcommand("lst") == "list"
@@ -204,6 +242,7 @@ class TestSkillManager:
     def test_extract_skill_name_english(self):
         """测试从英文输入提取 skill 名称。"""
         from xenon.repl.commands import _extract_skill_name
+
         # sub_args 优先
         assert _extract_skill_name("creat", "frontend-design") == "frontend-design"
         # sub 是有效的英文名
@@ -215,6 +254,7 @@ class TestSkillManager:
     def test_extract_skill_name_chinese(self):
         """测试中文输入时生成稳定哈希名。"""
         from xenon.repl.commands import _extract_skill_name
+
         # 纯中文 → 应返回 skill-<hash> 而非 timestamp
         result = _extract_skill_name("创建", "帮我写一个自动化脚本")
         assert result.startswith("skill-")
@@ -225,6 +265,7 @@ class TestSkillManager:
     def test_extract_skill_name_known_typo(self):
         """测试已知 typo 不被当作 skill 名。"""
         from xenon.repl.commands import _extract_skill_name
+
         # 'creat' 是 typo，不是有效的 skill 名
         result = _extract_skill_name("creat", "")
         assert result.startswith("skill-")  # 应生成 hash 名
@@ -237,7 +278,9 @@ class TestSkillManager:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mgr = SkillManager(Path(tmpdir))
-            skill = mgr.create("test-handler", "test", [{"type": "echo", "prompt": "hi"}])
+            skill = mgr.create(
+                "test-handler", "test", [{"type": "echo", "prompt": "hi"}]
+            )
             cmd_name = f"/{skill.name}"
 
             _register_skill_handler(skill, mgr)
@@ -256,8 +299,11 @@ class TestSkillManager:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mgr = SkillManager(Path(tmpdir))
-            mgr.create("persist-test", "persistence check",
-                       [{"type": "echo", "prompt": "test"}])
+            mgr.create(
+                "persist-test",
+                "persistence check",
+                [{"type": "echo", "prompt": "test"}],
+            )
 
             # 验证磁盘文件存在
             yaml_path = Path(tmpdir) / "persist-test.yaml"
@@ -319,7 +365,9 @@ class TestSkillManager:
         project = tmp_path / "project"
         _write_agent_skill(shared, "same", description="shared user")
         _write_agent_skill(user, "same", description="xenon user")
-        _write_agent_skill(project / ".agents" / "skills", "same", description="shared project")
+        _write_agent_skill(
+            project / ".agents" / "skills", "same", description="shared project"
+        )
         winning = _write_agent_skill(
             project / ".xenon" / "skills", "same", description="xenon project"
         )

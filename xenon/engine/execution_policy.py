@@ -42,9 +42,7 @@ class ExecutionPolicy:
     min_request_interval: float = 0.0
     event_sink: EventSink | None = None
     _next_request_at: float = field(default=0.0, init=False, repr=False)
-    _request_lock: Any = field(
-        default_factory=threading.Lock, init=False, repr=False
-    )
+    _request_lock: Any = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.request_timeout <= 0:
@@ -95,9 +93,7 @@ class ExecutionPolicy:
         remaining = self.remaining()
         if remaining is not None and remaining <= 0:
             self.emit("deadline_exceeded", phase=phase)
-            raise EngineDeadlineExceeded(
-                f"engine deadline exceeded before {phase}"
-            )
+            raise EngineDeadlineExceeded(f"engine deadline exceeded before {phase}")
 
     def request_budget(self, phase: str = "provider_request") -> float:
         remaining = self.remaining()
@@ -105,9 +101,7 @@ class ExecutionPolicy:
             return self.request_timeout
         if remaining <= 0:
             self.emit("deadline_exceeded", phase=phase)
-            raise EngineDeadlineExceeded(
-                f"engine deadline exceeded before {phase}"
-            )
+            raise EngineDeadlineExceeded(f"engine deadline exceeded before {phase}")
         budget = min(self.request_timeout, remaining)
         # Avoid handing httpx a zero timeout due to clock granularity.
         return max(0.001, budget)
@@ -146,9 +140,7 @@ class ExecutionPolicy:
         remaining = self.remaining()
         if remaining is not None and remaining <= 0:
             self.emit("deadline_exceeded", phase=phase)
-            raise EngineDeadlineExceeded(
-                f"engine deadline exceeded before {phase}"
-            )
+            raise EngineDeadlineExceeded(f"engine deadline exceeded before {phase}")
         if remaining is not None and seconds >= remaining:
             self.emit("deadline_exceeded", phase=phase)
             raise EngineDeadlineExceeded(

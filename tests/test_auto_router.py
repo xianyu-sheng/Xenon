@@ -1,4 +1,5 @@
 """v0.4.0 Steps 3-5: DifficultyEstimator + AutoRouter tests."""
+
 from __future__ import annotations
 
 from xenon.repl.difficulty_estimator import (

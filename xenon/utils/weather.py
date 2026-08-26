@@ -27,19 +27,53 @@ logger = logging.getLogger(__name__)
 # 确保 wttr.in 能正确识别中国城市
 _CITY_PINYIN: dict[str, str] = {
     # 直辖市
-    "北京": "Beijing", "上海": "Shanghai", "天津": "Tianjin", "重庆": "Chongqing",
+    "北京": "Beijing",
+    "上海": "Shanghai",
+    "天津": "Tianjin",
+    "重庆": "Chongqing",
     # 省会/主要城市
-    "广州": "Guangzhou", "深圳": "Shenzhen", "成都": "Chengdu", "杭州": "Hangzhou",
-    "武汉": "Wuhan", "南京": "Nanjing", "西安": "Xian", "长沙": "Changsha",
-    "沈阳": "Shenyang", "哈尔滨": "Harbin", "济南": "Jinan", "郑州": "Zhengzhou",
-    "昆明": "Kunming", "福州": "Fuzhou", "厦门": "Xiamen", "合肥": "Hefei",
-    "南昌": "Nanchang", "贵阳": "Guiyang", "兰州": "Lanzhou", "太原": "Taiyuan",
-    "石家庄": "Shijiazhuang", "南宁": "Nanning", "海口": "Haikou", "呼和浩特": "Hohhot",
-    "乌鲁木齐": "Urumqi", "拉萨": "Lhasa", "银川": "Yinchuan", "西宁": "Xining",
-    "大连": "Dalian", "青岛": "Qingdao", "苏州": "Suzhou", "无锡": "Wuxi",
-    "宁波": "Ningbo", "温州": "Wenzhou", "东莞": "Dongguan", "佛山": "Foshan",
-    "珠海": "Zhuhai", "桂林": "Guilin", "三亚": "Sanya", "香港": "Hong Kong",
-    "澳门": "Macau", "台北": "Taipei",
+    "广州": "Guangzhou",
+    "深圳": "Shenzhen",
+    "成都": "Chengdu",
+    "杭州": "Hangzhou",
+    "武汉": "Wuhan",
+    "南京": "Nanjing",
+    "西安": "Xian",
+    "长沙": "Changsha",
+    "沈阳": "Shenyang",
+    "哈尔滨": "Harbin",
+    "济南": "Jinan",
+    "郑州": "Zhengzhou",
+    "昆明": "Kunming",
+    "福州": "Fuzhou",
+    "厦门": "Xiamen",
+    "合肥": "Hefei",
+    "南昌": "Nanchang",
+    "贵阳": "Guiyang",
+    "兰州": "Lanzhou",
+    "太原": "Taiyuan",
+    "石家庄": "Shijiazhuang",
+    "南宁": "Nanning",
+    "海口": "Haikou",
+    "呼和浩特": "Hohhot",
+    "乌鲁木齐": "Urumqi",
+    "拉萨": "Lhasa",
+    "银川": "Yinchuan",
+    "西宁": "Xining",
+    "大连": "Dalian",
+    "青岛": "Qingdao",
+    "苏州": "Suzhou",
+    "无锡": "Wuxi",
+    "宁波": "Ningbo",
+    "温州": "Wenzhou",
+    "东莞": "Dongguan",
+    "佛山": "Foshan",
+    "珠海": "Zhuhai",
+    "桂林": "Guilin",
+    "三亚": "Sanya",
+    "香港": "Hong Kong",
+    "澳门": "Macau",
+    "台北": "Taipei",
 }
 
 # ── 天气描述英文 → 中文映射 ──────────────────────────────────
@@ -86,15 +120,23 @@ _WEATHER_DESC_ZH: dict[str, str] = {
 
 # ── 穿衣建议配置 ──────────────────────────────────────────
 _CLOTHING_RULES: list[tuple[int, str, str]] = [
-    (35, "酷暑天气", "非常炎热！建议穿轻薄透气的短袖、短裤、裙子，注意防晒防暑，多补充水分。"),
+    (
+        35,
+        "酷暑天气",
+        "非常炎热！建议穿轻薄透气的短袖、短裤、裙子，注意防晒防暑，多补充水分。",
+    ),
     (30, "高温天气", "炎热天气，建议穿短袖、短裤、薄裙子等清凉透气的衣服，做好防晒。"),
     (25, "温暖天气", "温度适宜偏热，建议穿短袖、薄T恤、短裤或裙子。"),
     (20, "舒适天气", "温度舒适，建议穿长袖衬衫、薄外套、针织衫或轻薄卫衣。"),
     (15, "微凉天气", "天气微凉，建议穿薄毛衣、卫衣、夹克外套或薄风衣。"),
     (10, "凉爽天气", "天气凉爽，建议穿毛衣、厚外套、风衣或薄羽绒服。"),
-    (5,  "寒冷天气", "天气寒冷，建议穿厚毛衣、棉衣、羽绒服或大衣，注意保暖。"),
-    (0,  "严寒天气", "天气严寒，建议穿厚羽绒服、棉服，搭配帽子围巾手套等保暖装备。"),
-    (-999, "极寒天气", "极寒天气！建议穿加厚羽绒服、防寒服，做好全身保暖，尽量减少外出。"),
+    (5, "寒冷天气", "天气寒冷，建议穿厚毛衣、棉衣、羽绒服或大衣，注意保暖。"),
+    (0, "严寒天气", "天气严寒，建议穿厚羽绒服、棉服，搭配帽子围巾手套等保暖装备。"),
+    (
+        -999,
+        "极寒天气",
+        "极寒天气！建议穿加厚羽绒服、防寒服，做好全身保暖，尽量减少外出。",
+    ),
 ]
 
 
@@ -137,7 +179,16 @@ def _get_clothing_items(temp_c: int) -> list[str]:
     elif temp_c >= 0:
         items.extend(["保暖内衣", "厚羽绒服", "加绒裤", "帽子/围巾/手套"])
     else:
-        items.extend(["加厚保暖内衣", "超厚羽绒服", "防寒裤", "帽子/围巾/手套/耳罩", "保暖靴", "暖宝宝"])
+        items.extend(
+            [
+                "加厚保暖内衣",
+                "超厚羽绒服",
+                "防寒裤",
+                "帽子/围巾/手套/耳罩",
+                "保暖靴",
+                "暖宝宝",
+            ]
+        )
     return items
 
 
@@ -189,7 +240,9 @@ def _parse_wttr_json(data: dict, city: str, resolved: str, lang: str) -> dict[st
     }
 
 
-def _get_weather_via_curl(url: str, city: str, resolved: str, lang: str) -> dict[str, Any]:
+def _get_weather_via_curl(
+    url: str, city: str, resolved: str, lang: str
+) -> dict[str, Any]:
     """通过 curl 命令获取天气（降级方案，绕过 HTTP 客户端库限制）。
 
     当 Python httpx 客户端因代理/SSRF/证书等问题无法连接时，
@@ -201,7 +254,9 @@ def _get_weather_via_curl(url: str, city: str, resolved: str, lang: str) -> dict
     try:
         proc = subprocess.run(
             ["curl", "-s", "--max-time", "15", url],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
         if proc.returncode != 0:
             return {"error": f"curl 请求失败 (返回码 {proc.returncode})", "city": city}
@@ -240,10 +295,13 @@ def get_weather(city: str = "Beijing", lang: str = "zh") -> dict[str, Any]:
     # ── 主路径：Python httpx 客户端 ──
     try:
         with _create_http_client(timeout=15.0, follow_redirects=False) as client:
-            resp = client.get(url, headers={
-                "Accept-Language": "zh-CN,zh;q=0.9",
-                "User-Agent": "Mozilla/5.0",
-            })
+            resp = client.get(
+                url,
+                headers={
+                    "Accept-Language": "zh-CN,zh;q=0.9",
+                    "User-Agent": "Mozilla/5.0",
+                },
+            )
             resp.raise_for_status()
             data = resp.json()
         return _parse_wttr_json(data, city, resolved, lang)
@@ -251,7 +309,9 @@ def get_weather(city: str = "Beijing", lang: str = "zh") -> dict[str, Any]:
     except httpx.TimeoutException:
         logger.warning(f"天气查询超时，尝试 curl 降级: {city}")
     except httpx.HTTPStatusError as e:
-        logger.warning(f"天气查询 HTTP {e.response.status_code}，尝试 curl 降级: {city}")
+        logger.warning(
+            f"天气查询 HTTP {e.response.status_code}，尝试 curl 降级: {city}"
+        )
     except Exception as e:
         logger.warning(f"天气查询失败 ({e})，尝试 curl 降级: {city}")
 
@@ -293,10 +353,12 @@ def format_weather_report(info: dict[str, Any]) -> str:
     for item in info.get("clothing_items", []):
         lines.append(f"- {item}")
 
-    lines.extend([
-        "",
-        f"_查询时间: {info.get('query_time', 'N/A')}_",
-    ])
+    lines.extend(
+        [
+            "",
+            f"_查询时间: {info.get('query_time', 'N/A')}_",
+        ]
+    )
 
     return "\n".join(lines)
 

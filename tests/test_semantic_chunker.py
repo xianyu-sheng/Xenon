@@ -1,11 +1,16 @@
 """v0.5.0: 语义分块器测试。"""
+
 from xenon.repl.semantic_chunker import SemanticChunker, _extract_tool_name_from_turn
 from xenon.repl.context_manager import ConversationTurn
 
 
 def _make(role="user", content="", turn_type="general", tier=3, idx=0):
     return ConversationTurn(
-        role=role, content=content, turn_type=turn_type, task_tier=tier, turn_index=idx,
+        role=role,
+        content=content,
+        turn_type=turn_type,
+        task_tier=tier,
+        turn_index=idx,
     )
 
 

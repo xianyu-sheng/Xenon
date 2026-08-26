@@ -44,7 +44,14 @@ def _patch_fc(monkeypatch, eng, fn):
 class TestToolCallsToReactJson:
     def test_synthesizes_react_json(self):
         s = BaseEngine._tool_calls_to_react_json(
-            [{"id": "1", "name": "write_file", "arguments": {"file_path": "a.py", "content": "x"}}])
+            [
+                {
+                    "id": "1",
+                    "name": "write_file",
+                    "arguments": {"file_path": "a.py", "content": "x"},
+                }
+            ]
+        )
         parsed = json.loads(s)
         assert parsed["action"] == "write_file"
         assert parsed["action_input"] == {"file_path": "a.py", "content": "x"}
@@ -76,17 +83,33 @@ class TestCallLlmNative:
 
     def test_tier1_tool_calls_synthesized(self, monkeypatch):
         eng = _engine()
-        _patch_fc(monkeypatch, eng, lambda mid, msgs, **k: LLMResponse(
-            content="", tool_calls=[{"id": "1", "name": "write_file",
-                                     "arguments": {"file_path": "a.py"}}]))
+        _patch_fc(
+            monkeypatch,
+            eng,
+            lambda mid, msgs, **k: LLMResponse(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "1",
+                        "name": "write_file",
+                        "arguments": {"file_path": "a.py"},
+                    }
+                ],
+            ),
+        )
         out = eng._call_llm_native([], [{"type": "function"}], {"type": "json_object"})
         parsed = json.loads(out)
         assert parsed["action"] == "write_file"
 
     def test_tier1_content_returned(self, monkeypatch):
         eng = _engine()
-        _patch_fc(monkeypatch, eng, lambda mid, msgs, **k: LLMResponse(
-            content='{"thought":"t","final_answer":"done"}'))
+        _patch_fc(
+            monkeypatch,
+            eng,
+            lambda mid, msgs, **k: LLMResponse(
+                content='{"thought":"t","final_answer":"done"}'
+            ),
+        )
         out = eng._call_llm_native([], [{"type": "function"}], {"type": "json_object"})
         assert "final_answer" in out
 
@@ -100,8 +123,12 @@ class TestCallLlmNative:
             if tools and response_format:
                 raise _http_error(400)
             if tools:  # tier 2
-                return LLMResponse(content="", tool_calls=[
-                    {"id": "1", "name": "command", "arguments": {"action": "ls"}}])
+                return LLMResponse(
+                    content="",
+                    tool_calls=[
+                        {"id": "1", "name": "command", "arguments": {"action": "ls"}}
+                    ],
+                )
             return LLMResponse(content="")
 
         _patch_fc(monkeypatch, eng, fake)
@@ -121,15 +148,11 @@ class TestCallLlmNative:
             calls.append((bool(tools), bool(response_format)))
             if tools and response_format:
                 raise ResponseTruncatedError("cut structured JSON")
-            return LLMResponse(
-                content='{"thought":"t","final_answer":"complete"}'
-            )
+            return LLMResponse(content='{"thought":"t","final_answer":"complete"}')
 
         _patch_fc(monkeypatch, eng, fake)
 
-        out = eng._call_llm_native(
-            [], [{"type": "function"}], {"type": "json_object"}
-        )
+        out = eng._call_llm_native([], [{"type": "function"}], {"type": "json_object"})
 
         assert json.loads(out)["final_answer"] == "complete"
         assert calls[:2] == [(True, True), (True, False)]
@@ -143,15 +166,20 @@ class TestCallLlmNative:
             calls.append(shape)
             if shape == (True, True):
                 raise _http_error(400)
-            return LLMResponse(content="", tool_calls=[{
-                "id": "1", "name": "command", "arguments": {"action": "pwd"},
-            }])
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "1",
+                        "name": "command",
+                        "arguments": {"action": "pwd"},
+                    }
+                ],
+            )
 
         _patch_fc(monkeypatch, eng, fake)
         for _ in range(2):
-            eng._call_llm_native(
-                [], [{"type": "function"}], {"type": "json_object"}
-            )
+            eng._call_llm_native([], [{"type": "function"}], {"type": "json_object"})
 
         assert calls == [(True, True), (True, False), (True, False)]
 
@@ -177,7 +205,8 @@ class TestCallLlmNative:
         """三层全败 → 回退 _call_llm。"""
         eng = _engine()
         _patch_fc(
-            monkeypatch, eng,
+            monkeypatch,
+            eng,
             lambda *a, **k: (_ for _ in ()).throw(_http_error(400)),
         )
         eng._call_llm = lambda msgs, max_tokens=None: "fallback text"
@@ -258,9 +287,7 @@ class TestCallLlmNative:
 
         _patch_fc(monkeypatch, eng, fake)
         eng._call_llm = lambda msgs, max_tokens=None: "fallback"
-        out = eng._call_llm_native(
-            [], [{"type": "function"}], {"type": "json_object"}
-        )
+        out = eng._call_llm_native([], [{"type": "function"}], {"type": "json_object"})
         assert out == "fallback"
         assert eng._native_request_failed is True
         assert len(calls) == 1
@@ -270,14 +297,19 @@ class TestCallLlmNative:
 # ReAct native_fc 集成
 # ════════════════════════════════════════════════════════════
 class TestReActNativeFc:
-    def test_unparseable_action_retries_without_budget_attribute_error(self, monkeypatch):
+    def test_unparseable_action_retries_without_budget_attribute_error(
+        self, monkeypatch
+    ):
         """格式错误是可恢复的协议事件，不应因缺少 BudgetManager 方法崩溃。"""
         eng = ReActEngine(["m1"], max_iterations=2, native_fc=False)
-        responses = iter([
-            '{"action":"read_file","action_input":{"file_path":"a.py"}}' + " " * 60,
-            '{"final_answer":"已完成格式重试"}',
-        ])
+        responses = iter(
+            [
+                '{"action":"read_file","action_input":{"file_path":"a.py"}}' + " " * 60,
+                '{"final_answer":"已完成格式重试"}',
+            ]
+        )
         monkeypatch.setattr(eng, "_call_llm", lambda *a, **k: next(responses))
+
         def parse(raw):
             if "final_answer" in raw:
                 return {"thought": "", "action": "", "final_answer": "已完成格式重试"}
@@ -310,13 +342,21 @@ class TestReActNativeFc:
         def fake_fc(mid, msgs, *, tools=None, response_format=None, **kw):
             # 第一次返回 tool_call，第二次返回 final_answer
             if not executed:
-                return LLMResponse(content="", tool_calls=[
-                    {"id": "1", "name": "write_file",
-                     "arguments": {"file_path": "a.py", "content": "print(1)"}}])
+                return LLMResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "1",
+                            "name": "write_file",
+                            "arguments": {"file_path": "a.py", "content": "print(1)"},
+                        }
+                    ],
+                )
             return LLMResponse(content='{"thought":"t","final_answer":"已写入 a.py"}')
 
         _patch_fc(monkeypatch, eng, fake_fc)
         from xenon.utils.response_adapter import parse_react
+
         eng._parse_response = parse_react
         eng._input_requires_tools = lambda u: True
 
@@ -324,6 +364,7 @@ class TestReActNativeFc:
             executed.append((action, ai))
             tracker.record(action, ai, True, "obs")  # 记录以便 has_executions
             return "obs"
+
         eng._execute_tool = fake_execute
 
         result = eng.run("写 a.py", AgentContext())

@@ -16,9 +16,7 @@ from xenon.repl.model_pool import ModelPool
 def _status_error(status: int) -> httpx.HTTPStatusError:
     request = httpx.Request("POST", "https://example.test/v1/chat")
     response = httpx.Response(status, request=request)
-    return httpx.HTTPStatusError(
-        f"HTTP {status}", request=request, response=response
-    )
+    return httpx.HTTPStatusError(f"HTTP {status}", request=request, response=response)
 
 
 def _repl():

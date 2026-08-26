@@ -30,6 +30,7 @@ def register_command(name: str, description: str, usage: str = "") -> None:
 
 def command_handler(name: str):
     """Decorator registering a slash-command implementation."""
+
     def decorator(func: CommandHandler) -> CommandHandler:
         _HANDLERS[name] = func
         return func
@@ -60,4 +61,3 @@ def dispatch_command(
         raise
     except Exception as exc:
         return f"❌ 命令执行失败 ({name}): {exc}"
-

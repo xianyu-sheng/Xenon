@@ -1,4 +1,5 @@
 """v0.4.0 Step 1: 动态模型商注册测试."""
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -19,8 +20,10 @@ class TestCustomProviderRegistration:
             "xenon.repl.provider_registry._get_credentials_path",
             lambda: tmp_path / "creds.yaml",
         )
-        with patch("xenon.repl.provider_registry.fetch_provider_models",
-                   return_value=["model-a", "model-b"]):
+        with patch(
+            "xenon.repl.provider_registry.fetch_provider_models",
+            return_value=["model-a", "model-b"],
+        ):
             info = register_custom_provider(
                 "字节豆包", "https://ark.example.com/api/v3", "sk-test"
             )
@@ -34,8 +37,9 @@ class TestCustomProviderRegistration:
             "xenon.repl.provider_registry._get_credentials_path",
             lambda: tmp_path / "creds.yaml",
         )
-        with patch("xenon.repl.provider_registry.fetch_provider_models",
-                   return_value=["m1"]):
+        with patch(
+            "xenon.repl.provider_registry.fetch_provider_models", return_value=["m1"]
+        ):
             register_custom_provider("Test", "https://test.api/v1", "sk-abc")
 
         custom = _load_custom_providers()
@@ -50,8 +54,9 @@ class TestCustomProviderRegistration:
             "xenon.repl.provider_registry._get_credentials_path",
             lambda: tmp_path / "creds.yaml",
         )
-        with patch("xenon.repl.provider_registry.fetch_provider_models",
-                   return_value=["m1"]):
+        with patch(
+            "xenon.repl.provider_registry.fetch_provider_models", return_value=["m1"]
+        ):
             info = register_custom_provider("X", "https://x/v1", "sk")
 
         assert remove_custom_provider(info.key) is True

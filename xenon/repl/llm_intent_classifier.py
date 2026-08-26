@@ -44,6 +44,7 @@ INTENT_CATEGORIES = {
 @dataclass
 class ClassificationResult:
     """LLM 分类结果。"""
+
     intent: str | None
     confidence: float  # 0-1 之间
     reasoning: str = ""  # 分类理由（调试用）
@@ -77,7 +78,7 @@ class LLMIntentClassifier:
         if model is None:
             config = get_config()
             # 优先使用配置的分类器模型，否则使用默认的快速模型
-            self.model = getattr(config.intent_classifier, 'model', None)
+            self.model = getattr(config.intent_classifier, "model", None)
             if not self.model:
                 # 默认使用快速小模型
                 self.model = self._get_default_classifier_model()
@@ -204,8 +205,7 @@ class LLMIntentClassifier:
 
         # 构建意图类别列表
         categories_desc = "\n".join(
-            f"- {key}: {desc}"
-            for key, desc in INTENT_CATEGORIES.items()
+            f"- {key}: {desc}" for key, desc in INTENT_CATEGORIES.items()
         )
 
         return f"""你是一个意图分类专家。你的任务是分析用户输入，判断用户的真实意图。
@@ -271,7 +271,9 @@ class LLMIntentClassifier:
         # 添加上下文（如果有）
         if context_messages and len(context_messages) > 0:
             # 只取最近 2 轮对话作为上下文
-            recent_context = context_messages[-4:] if len(context_messages) > 4 else context_messages
+            recent_context = (
+                context_messages[-4:] if len(context_messages) > 4 else context_messages
+            )
             context_str = "\n".join(
                 f"{msg.get('role', 'user')}: {msg.get('content', '')[:100]}"
                 for msg in recent_context
@@ -340,7 +342,7 @@ def get_llm_classifier() -> LLMIntentClassifier:
             if _classifier_instance is None:
                 # 从配置读取是否启用
                 config = get_config()
-                enabled = getattr(config.intent_classifier, 'enabled', False)
+                enabled = getattr(config.intent_classifier, "enabled", False)
 
                 _classifier_instance = LLMIntentClassifier(enabled=enabled)
 

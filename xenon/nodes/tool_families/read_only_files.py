@@ -59,8 +59,8 @@ class ReadOnlyFileToolsMixin:
         logger.info(f"[{self.id}] 读取文件: {path}")
 
         # 分段读取：start_line（从 1 开始）和 max_lines
-        start_line = getattr(self, '_extra_start_line', None)
-        max_lines = getattr(self, '_extra_max_lines', None)
+        start_line = getattr(self, "_extra_start_line", None)
+        max_lines = getattr(self, "_extra_max_lines", None)
 
         if start_line is not None or max_lines is not None:
             # 按行分段读取
@@ -107,8 +107,11 @@ class ReadOnlyFileToolsMixin:
 
         if not path.exists():
             result = {
-                "action_type": "list_files", "path": str(path),
-                "files": [], "count": 0, "success": False,
+                "action_type": "list_files",
+                "path": str(path),
+                "files": [],
+                "count": 0,
+                "success": False,
                 "error": f"路径不存在: {path}",
             }
             self._write_output(context, f"路径不存在: {path}")
@@ -136,18 +139,25 @@ class ReadOnlyFileToolsMixin:
             limit = None
         if limit is not None:
             limit = max(1, min(limit, 1000))
-            page = files[offset:offset + limit]
-            next_cursor = str(offset + len(page)) if offset + len(page) < total else None
+            page = files[offset : offset + limit]
+            next_cursor = (
+                str(offset + len(page)) if offset + len(page) < total else None
+            )
         else:
             page = files
             next_cursor = None
 
         display = "\n".join(page) if page else "(空目录)"
         result = {
-            "action_type": "list_files", "path": str(path),
-            "pattern": pattern, "files": page, "count": total,
-            "returned_count": len(page), "offset": offset,
-            "limit": limit, "next_cursor": next_cursor,
+            "action_type": "list_files",
+            "path": str(path),
+            "pattern": pattern,
+            "files": page,
+            "count": total,
+            "returned_count": len(page),
+            "offset": offset,
+            "limit": limit,
+            "next_cursor": next_cursor,
             "truncated": next_cursor is not None,
             "success": True,
         }
@@ -164,7 +174,11 @@ class ReadOnlyFileToolsMixin:
         if recursive_mode:
             # "**/*.py" → file_pattern = "*.py"
             # "**/test_*.py" → file_pattern = "test_*.py"
-            file_pattern = pattern.split("**/")[-1] if "**/" in pattern else pattern.replace("**", "*")
+            file_pattern = (
+                pattern.split("**/")[-1]
+                if "**/" in pattern
+                else pattern.replace("**", "*")
+            )
         else:
             file_pattern = pattern
 
@@ -197,8 +211,11 @@ class ReadOnlyFileToolsMixin:
 
         if not path.exists():
             result = {
-                "action_type": "search_files", "path": str(path),
-                "matches": [], "match_count": 0, "success": False,
+                "action_type": "search_files",
+                "path": str(path),
+                "matches": [],
+                "match_count": 0,
+                "success": False,
                 "error": f"路径不存在: {path}",
             }
             self._write_output(context, f"路径不存在: {path}")
@@ -211,7 +228,11 @@ class ReadOnlyFileToolsMixin:
         except re.error:
             regex = re.compile(re.escape(search_pattern), re.IGNORECASE)
 
-        search_files = [path] if path.is_file() else self._walk_with_depth(path, file_filter or "*", self.max_depth)
+        search_files = (
+            [path]
+            if path.is_file()
+            else self._walk_with_depth(path, file_filter or "*", self.max_depth)
+        )
         try:
             offset = max(0, int(self.cursor or 0))
         except (TypeError, ValueError):
@@ -230,14 +251,19 @@ class ReadOnlyFileToolsMixin:
 
         for file_path in search_files:
             try:
-                text = Path(file_path).read_text(encoding=self.encoding, errors="ignore")
+                text = Path(file_path).read_text(
+                    encoding=self.encoding, errors="ignore"
+                )
                 files_scanned += 1
                 for i, line in enumerate(text.splitlines(), 1):
                     if regex.search(line):
-                        matches.append({
-                            "file": str(file_path), "line": i,
-                            "content": line.strip()[:200],
-                        })
+                        matches.append(
+                            {
+                                "file": str(file_path),
+                                "line": i,
+                                "content": line.strip()[:200],
+                            }
+                        )
                         if len(matches) >= scan_cap:
                             reached_cap = True
                             break
@@ -247,9 +273,7 @@ class ReadOnlyFileToolsMixin:
                 break
 
         page = (
-            matches[offset:offset + page_limit]
-            if page_limit is not None
-            else matches
+            matches[offset : offset + page_limit] if page_limit is not None else matches
         )
         has_more = page_limit is not None and (
             offset + len(page) < len(matches) or reached_cap
@@ -259,10 +283,15 @@ class ReadOnlyFileToolsMixin:
         display = "\n".join(lines) if lines else "(无匹配结果)"
 
         result = {
-            "action_type": "search_files", "path": str(path), "pattern": search_pattern,
-            "matches": page, "match_count": len(matches),
-            "returned_count": len(page), "offset": offset,
-            "limit": page_limit, "next_cursor": next_cursor,
+            "action_type": "search_files",
+            "path": str(path),
+            "pattern": search_pattern,
+            "matches": page,
+            "match_count": len(matches),
+            "returned_count": len(page),
+            "offset": offset,
+            "limit": page_limit,
+            "next_cursor": next_cursor,
             "truncated": next_cursor is not None,
             "files_scanned": files_scanned,
             "stdout": display,  # v0.5.3: 文本表示，LLM 可直接读取
@@ -271,4 +300,3 @@ class ReadOnlyFileToolsMixin:
         self._write_output(context, display)
         logger.info(f"[{self.id}] 搜索到 {len(matches)} 处匹配: {search_pattern}")
         return result
-

@@ -20,6 +20,7 @@ class _ShiftTabSignal(Exception):
     The REPL catches this to cycle reasoning paradigms without
     disturbing the current input buffer.
     """
+
     pass
 
 

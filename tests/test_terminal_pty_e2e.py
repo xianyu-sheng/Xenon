@@ -37,13 +37,15 @@ class _PtyProcess:
         )
         env = os.environ.copy()
         env.pop("XENON_ASSUME_YES", None)
-        env.update({
-            "HOME": str(home),
-            "TERM": "xterm-256color",
-            "COLUMNS": "120",
-            "LINES": "42",
-            "PYTHONUNBUFFERED": "1",
-        })
+        env.update(
+            {
+                "HOME": str(home),
+                "TERM": "xterm-256color",
+                "COLUMNS": "120",
+                "LINES": "42",
+                "PYTHONUNBUFFERED": "1",
+            }
+        )
         self.master = master
         self.output = bytearray()
         python = shutil.which("python3") or sys.executable

@@ -7,6 +7,7 @@
 4. evidence_mode 集成（仅验证配置传递，实际行为由 evidence_gate 负责）
 5. metrics 在真实执行流程中的记录
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -29,12 +30,14 @@ from xenon.nodes.tool_executor import ToolExecutor, ToolExecutionState
 @dataclass
 class MockValidationConfig:
     """模拟 ValidationConfig。"""
+
     strict: bool = False
 
 
 @dataclass
 class MockToolGateSectionConfig:
     """模拟 ToolGateSectionConfig。"""
+
     param_validation: str = "moderate"
     evidence_mode: str = "observe"
     tool_overrides: dict[str, Any] = field(default_factory=dict)
@@ -43,8 +46,11 @@ class MockToolGateSectionConfig:
 @dataclass
 class MockSystemConfig:
     """模拟 SystemConfig。"""
+
     validation: MockValidationConfig = field(default_factory=MockValidationConfig)
-    tool_gate: MockToolGateSectionConfig = field(default_factory=MockToolGateSectionConfig)
+    tool_gate: MockToolGateSectionConfig = field(
+        default_factory=MockToolGateSectionConfig
+    )
 
 
 class TestToolExecutorAutoCreatesToolGate:
@@ -94,9 +100,7 @@ class TestToolExecutorBlacklistIntegration:
 
     def test_disabled_tool_blocked_by_executor(self):
         """黑名单工具应在 Stage 0.5 被拦截，不执行实际逻辑。"""
-        gate = ToolGate(
-            tool_overrides={"command": ToolGateConfig(disabled=True)}
-        )
+        gate = ToolGate(tool_overrides={"command": ToolGateConfig(disabled=True)})
         executor = ToolExecutor(tool_gate=gate)
 
         context = AgentContext()
@@ -113,16 +117,14 @@ class TestToolExecutorBlacklistIntegration:
         assert result.success is False
         assert result.state == ToolExecutionState.FAILED
         assert result.error is not None
-        assert ("禁用" in result.error or "disabled" in result.error.lower())
+        assert "禁用" in result.error or "disabled" in result.error.lower()
 
         # metrics 应记录
         assert gate.metrics.denied_by_disabled == 1
 
     def test_disabled_tool_multiple_attempts(self):
         """多次尝试执行黑名单工具应累积 metrics。"""
-        gate = ToolGate(
-            tool_overrides={"write_file": ToolGateConfig(disabled=True)}
-        )
+        gate = ToolGate(tool_overrides={"write_file": ToolGateConfig(disabled=True)})
         executor = ToolExecutor(tool_gate=gate)
 
         context = AgentContext()
@@ -141,9 +143,7 @@ class TestToolExecutorBlacklistIntegration:
 
     def test_non_disabled_tool_passes_gate(self):
         """未被禁用的工具应通过黑名单检查。"""
-        gate = ToolGate(
-            tool_overrides={"command": ToolGateConfig(disabled=True)}
-        )
+        gate = ToolGate(tool_overrides={"command": ToolGateConfig(disabled=True)})
         executor = ToolExecutor(tool_gate=gate)
 
         context = AgentContext()
@@ -197,7 +197,7 @@ class TestToolExecutorParamValidationIntegration:
         # 应被参数校验拦截
         assert result.success is False
         assert result.error is not None
-        assert ("幻觉" in result.error or "可疑" in result.error)
+        assert "幻觉" in result.error or "可疑" in result.error
 
     def test_moderate_validation_allows_two_hits(self):
         """MODERATE 级别应允许 2 条命中（仅警告）。"""
@@ -249,8 +249,10 @@ class TestToolExecutorParamValidationIntegration:
         gate = ToolGate(
             param_validation=ParamValidationLevel.STRICT,
             tool_overrides={
-                "read_file": ToolGateConfig(param_validation=ParamValidationLevel.LENIENT),
-            }
+                "read_file": ToolGateConfig(
+                    param_validation=ParamValidationLevel.LENIENT
+                ),
+            },
         )
         executor = ToolExecutor(tool_gate=gate)
 
@@ -280,7 +282,7 @@ class TestToolExecutorParamValidationIntegration:
         )
         assert result2.success is False
         assert result2.error is not None
-        assert ("幻觉" in result2.error or "可疑" in result2.error)
+        assert "幻觉" in result2.error or "可疑" in result2.error
 
 
 class TestToolExecutorEvidenceModeIntegration:
@@ -292,7 +294,7 @@ class TestToolExecutorEvidenceModeIntegration:
             evidence_mode=EvidenceMode.ENFORCE,
             tool_overrides={
                 "read_file": ToolGateConfig(evidence_mode=EvidenceMode.DISABLED),
-            }
+            },
         )
 
         # 验证配置正确
@@ -305,9 +307,7 @@ class TestToolExecutorMetricsIntegration:
 
     def test_metrics_record_blacklist_denial(self):
         """黑名单拒绝应记录到 metrics。"""
-        gate = ToolGate(
-            tool_overrides={"command": ToolGateConfig(disabled=True)}
-        )
+        gate = ToolGate(tool_overrides={"command": ToolGateConfig(disabled=True)})
         executor = ToolExecutor(tool_gate=gate)
 
         context = AgentContext()
@@ -324,12 +324,8 @@ class TestToolExecutorMetricsIntegration:
 
     def test_metrics_not_shared_across_executors(self):
         """不同 ToolExecutor 实例的 metrics 应独立。"""
-        gate1 = ToolGate(
-            tool_overrides={"command": ToolGateConfig(disabled=True)}
-        )
-        gate2 = ToolGate(
-            tool_overrides={"command": ToolGateConfig(disabled=True)}
-        )
+        gate1 = ToolGate(tool_overrides={"command": ToolGateConfig(disabled=True)})
+        gate2 = ToolGate(tool_overrides={"command": ToolGateConfig(disabled=True)})
 
         executor1 = ToolExecutor(tool_gate=gate1)
         executor2 = ToolExecutor(tool_gate=gate2)
@@ -408,7 +404,7 @@ class TestToolExecutorBackwardCompatibility:
 
         assert result.success is False
         assert result.error is not None
-        assert ("禁用" in result.error or "disabled" in result.error.lower())
+        assert "禁用" in result.error or "disabled" in result.error.lower()
 
         # 全局校验级别应为 STRICT
         assert executor.tool_gate.param_validation == ParamValidationLevel.STRICT

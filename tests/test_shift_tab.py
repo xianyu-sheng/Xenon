@@ -1,4 +1,5 @@
 """v0.4.0 Step 12: Shift+Tab tests."""
+
 from __future__ import annotations
 
 from xenon.repl.repl import _ShiftTabSignal

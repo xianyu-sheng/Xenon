@@ -36,7 +36,7 @@ class CodeEditor:
 
         content = p.read_text(encoding="utf-8")
         lines = content.splitlines()
-        numbered = "\n".join(f"{i+1:4d} | {line}" for i, line in enumerate(lines))
+        numbered = "\n".join(f"{i + 1:4d} | {line}" for i, line in enumerate(lines))
         return numbered, len(lines)
 
     @staticmethod
@@ -85,12 +85,15 @@ class CodeEditor:
         new_content = content.replace(old_text, new_text, 1)
         new_lines = new_content.splitlines(keepends=True)
 
-        diff = list(difflib.unified_diff(
-            old_lines, new_lines,
-            fromfile=f"a/{p.name}",
-            tofile=f"b/{p.name}",
-            n=3,
-        ))
+        diff = list(
+            difflib.unified_diff(
+                old_lines,
+                new_lines,
+                fromfile=f"a/{p.name}",
+                tofile=f"b/{p.name}",
+                n=3,
+            )
+        )
 
         if confirm and diff:
             from rich.console import Console
@@ -116,7 +119,8 @@ class CodeEditor:
         old_lines = old_text.splitlines(keepends=True)
         new_lines = new_text.splitlines(keepends=True)
         diff = difflib.unified_diff(
-            old_lines, new_lines,
+            old_lines,
+            new_lines,
             fromfile=f"a/{filename}",
             tofile=f"b/{filename}",
             n=3,
@@ -161,7 +165,7 @@ class CodeEditor:
         prompt = f"""请根据以下指令修改代码文件。
 
 文件: {p.name}
-语言: {ext or 'unknown'}
+语言: {ext or "unknown"}
 
 修改指令: {instruction}
 
@@ -181,10 +185,18 @@ class CodeEditor:
             response = None
             for model_id in model_priority:
                 try:
-                    response = chat_completion(model_id, [
-                        {"role": "system", "content": "你是一个代码编辑专家。根据指令修改代码，返回修改后的完整文件。只返回代码。"},
-                        {"role": "user", "content": prompt},
-                    ], max_tokens=8000, temperature=0.2)
+                    response = chat_completion(
+                        model_id,
+                        [
+                            {
+                                "role": "system",
+                                "content": "你是一个代码编辑专家。根据指令修改代码，返回修改后的完整文件。只返回代码。",
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                        max_tokens=8000,
+                        temperature=0.2,
+                    )
                     break
                 except Exception:
                     continue
@@ -203,9 +215,11 @@ class CodeEditor:
             if not new_content.strip():
                 return "❌ LLM 返回空内容，已拒绝写入。"
             if orig_lines >= 20 and new_lines < orig_lines * 0.5:
-                return (f"❌ LLM 返回内容（{new_lines} 行）显著短于原文（{orig_lines} 行），"
-                        f"疑似被 max_tokens 截断，已拒绝写入以防数据丢失。"
-                        f"请改用 apply_edit（old_text/new_text）只传变更部分。")
+                return (
+                    f"❌ LLM 返回内容（{new_lines} 行）显著短于原文（{orig_lines} 行），"
+                    f"疑似被 max_tokens 截断，已拒绝写入以防数据丢失。"
+                    f"请改用 apply_edit（old_text/new_text）只传变更部分。"
+                )
 
             # 生成 diff
             diff = CodeEditor.generate_diff(content, new_content, p.name)
@@ -215,6 +229,7 @@ class CodeEditor:
 
             # 展示 diff
             from rich.syntax import Syntax
+
             console.print(f"\n[bold]📝 修改 {p.name}:[/bold]")
             console.print(Syntax(diff, "diff", theme="monokai"))
             console.print()

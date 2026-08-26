@@ -11,8 +11,20 @@ from xenon.engine.context import AgentContext
 _CLOCK_LINE_RE = re.compile(r"^\s*([01]?\d|2[0-3]):([0-5]\d)\s*$")
 _DURATION_RE = re.compile(r"\d+\s*(?:时|小时).{0,4}\d*\s*分|\d+\s*分")
 _TRAIN_CODE_RE = re.compile(r"[A-Z]{1,3}\d{1,6}", re.IGNORECASE)
-_CHINESE_NUMBER = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3,
-                   "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_CHINESE_NUMBER = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
 
 
 def _small_chinese_number(value: str) -> int | None:
@@ -101,7 +113,9 @@ def _prefilter_time_records(
 ) -> tuple[str, dict[str, Any]]:
     """Select schedule-like records by departure time before output truncation."""
     start_minutes = int(start_time[:2]) * 60 + int(start_time[3:]) if start_time else 0
-    end_minutes = int(end_time[:2]) * 60 + int(end_time[3:]) if end_time else 23 * 60 + 59
+    end_minutes = (
+        int(end_time[:2]) * 60 + int(end_time[3:]) if end_time else 23 * 60 + 59
+    )
 
     # Prefer preserving structured API/MCP responses when they contain a list
     # of objects with a recognizable departure-time field.
@@ -110,20 +124,37 @@ def _prefilter_time_records(
     except (TypeError, ValueError, json.JSONDecodeError):
         parsed_json = None
     time_keys = {
-        "departure_time", "depart_time", "start_time", "departuretime",
-        "departtime", "starttime", "出发时间", "发车时间", "开车时间",
+        "departure_time",
+        "depart_time",
+        "start_time",
+        "departuretime",
+        "departtime",
+        "starttime",
+        "出发时间",
+        "发车时间",
+        "开车时间",
     }
 
     def filter_json(value: Any) -> tuple[Any, int, int]:
-        if isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
+        if (
+            isinstance(value, list)
+            and value
+            and all(isinstance(item, dict) for item in value)
+        ):
             detected = 0
             selected_items: list[dict[str, Any]] = []
             for item in value:
                 raw_time = next(
-                    (field for key, field in item.items() if str(key).casefold() in time_keys),
+                    (
+                        field
+                        for key, field in item.items()
+                        if str(key).casefold() in time_keys
+                    ),
                     None,
                 )
-                match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", str(raw_time or ""))
+                match = re.search(
+                    r"\b([01]?\d|2[0-3]):([0-5]\d)\b", str(raw_time or "")
+                )
                 if not match:
                     continue
                 detected += 1
@@ -132,7 +163,11 @@ def _prefilter_time_records(
                     selected_items.append(item)
             if detected:
                 return selected_items, detected, len(selected_items)
-        if isinstance(value, list) and value and all(isinstance(item, str) for item in value):
+        if (
+            isinstance(value, list)
+            and value
+            and all(isinstance(item, str) for item in value)
+        ):
             detected_strings = 0
             selected_strings: list[str] = []
             for item in value:
@@ -184,17 +219,20 @@ def _prefilter_time_records(
             continue
         minutes = int(match.group(1)) * 60 + int(match.group(2))
         all_clock_lines.append((index, minutes))
-        lookahead = [item.strip() for item in lines[index + 1:index + 18] if item.strip()][:7]
-        if (
-            any(_DURATION_RE.search(item) for item in lookahead)
-            and any(_TRAIN_CODE_RE.fullmatch(item) for item in lookahead)
+        lookahead = [
+            item.strip() for item in lines[index + 1 : index + 18] if item.strip()
+        ][:7]
+        if any(_DURATION_RE.search(item) for item in lookahead) and any(
+            _TRAIN_CODE_RE.fullmatch(item) for item in lookahead
         ):
             candidates.append((index, minutes))
 
     # Structured departure rows are preferred.  A generic time-line fallback
     # still preserves useful tail context for unfamiliar list formats.
-    record_starts = candidates if candidates else (
-        all_clock_lines if len(all_clock_lines) >= 3 else []
+    record_starts = (
+        candidates
+        if candidates
+        else (all_clock_lines if len(all_clock_lines) >= 3 else [])
     )
     if not record_starts:
         return text, {}
@@ -214,11 +252,13 @@ def _prefilter_time_records(
         f"[已在截断前应用时间筛选：{label}；"
         f"识别 {len(record_starts)} 条记录，命中 {len(selected)} 条]\n"
     )
-    filtered = header + ("\n\n".join(selected) if selected else "未发现符合时间条件的记录。")
+    filtered = header + (
+        "\n\n".join(selected) if selected else "未发现符合时间条件的记录。"
+    )
     truncated = len(filtered) > max_chars
     if truncated:
         suffix = "\n\n... (筛选后的内容仍超出字符预算，已截断)"
-        filtered = filtered[:max(0, max_chars - len(suffix))] + suffix
+        filtered = filtered[: max(0, max_chars - len(suffix))] + suffix
     return filtered, {
         "prefilter_applied": True,
         "filter_type": "time_window",
@@ -240,13 +280,26 @@ def _prefilter_keyword_context(
 ) -> tuple[str, dict[str, Any]]:
     """Keep bounded line windows around selective keyword matches."""
     tokens = re.findall(r"[A-Za-z0-9_.-]{2,}|[\u3400-\u9fff]{2,}", query)
-    stopwords = {"查询", "结果", "数据", "内容", "信息", "筛选", "过滤", "search", "query"}
-    tokens = [token.casefold() for token in tokens if token.casefold() not in stopwords][:8]
+    stopwords = {
+        "查询",
+        "结果",
+        "数据",
+        "内容",
+        "信息",
+        "筛选",
+        "过滤",
+        "search",
+        "query",
+    }
+    tokens = [
+        token.casefold() for token in tokens if token.casefold() not in stopwords
+    ][:8]
     if not tokens:
         return text, {}
     lines = text.splitlines()
     matches = [
-        index for index, line in enumerate(lines)
+        index
+        for index, line in enumerate(lines)
         if any(token in line.casefold() for token in tokens)
     ]
     # A keyword present almost everywhere (for example a destination name in
@@ -260,12 +313,14 @@ def _prefilter_keyword_context(
     selected = "\n".join(
         line for index, line in enumerate(lines) if index in selected_indexes
     ).strip()
-    header = f"[已在截断前应用关键词筛选：{', '.join(tokens)}；命中 {len(matches)} 处]\n"
+    header = (
+        f"[已在截断前应用关键词筛选：{', '.join(tokens)}；命中 {len(matches)} 处]\n"
+    )
     filtered = header + selected
     truncated = len(filtered) > max_chars
     if truncated:
         suffix = "\n\n... (筛选后的内容仍超出字符预算，已截断)"
-        filtered = filtered[:max(0, max_chars - len(suffix))] + suffix
+        filtered = filtered[: max(0, max_chars - len(suffix))] + suffix
     return filtered, {
         "prefilter_applied": True,
         "filter_type": "keyword",
@@ -275,7 +330,6 @@ def _prefilter_keyword_context(
         "filtered_content_length": len(filtered),
         "filtered_content_truncated": truncated,
     }
-
 
 
 class ResultFilteringMixin:
@@ -323,4 +377,3 @@ class ResultFilteringMixin:
                 max_chars=max_chars,
             )
         return text, {}
-

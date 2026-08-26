@@ -48,9 +48,9 @@ from xenon.utils.cache_telemetry import (
 
 # 默认定价（当无法匹配具体模型时使用 V4-Pro 定价）
 _DEFAULT_PRICING = {
-    "input_cache_hit": 0.025,    # ¥0.025 / 1M tokens
-    "input_cache_miss": 3.0,     # ¥3 / 1M tokens
-    "output": 6.0,               # ¥6 / 1M tokens
+    "input_cache_hit": 0.025,  # ¥0.025 / 1M tokens
+    "input_cache_miss": 3.0,  # ¥3 / 1M tokens
+    "output": 6.0,  # ¥6 / 1M tokens
 }
 
 # 按模型细分的定价
@@ -105,18 +105,20 @@ def _match_pricing(model_id: str) -> dict[str, float]:
 @dataclass
 class CacheSnapshot:
     """单次 API 调用的缓存数据快照。"""
+
     timestamp: float
     model_id: str
     prompt_tokens: int
     completion_tokens: int
-    cache_hit_tokens: int        # 缓存放大的 prompt token
-    cache_miss_tokens: int       # 缓存未放大的 prompt token
-    system_hash: str             # 调用时的 system prompt hash
+    cache_hit_tokens: int  # 缓存放大的 prompt token
+    cache_miss_tokens: int  # 缓存未放大的 prompt token
+    system_hash: str  # 调用时的 system prompt hash
 
 
 @dataclass
 class _ModelTotals:
     """单模型累计统计。"""
+
     calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -141,8 +143,8 @@ class CacheTracker:
     """
 
     # 命中率骤降阈值
-    DROP_THRESHOLD = 0.40   # 相较近期平均值下降 40% 以上触发告警
-    MIN_WINDOW_SIZE = 5     # 滚动窗口至少 5 次调用才开始检测
+    DROP_THRESHOLD = 0.40  # 相较近期平均值下降 40% 以上触发告警
+    MIN_WINDOW_SIZE = 5  # 滚动窗口至少 5 次调用才开始检测
     NORMAL_HIT_RATE = 0.70  # "正常"命中率下限
     AFFINITY_MAX_AGE_SECONDS = 30 * 60
 
@@ -161,7 +163,8 @@ class CacheTracker:
         self._event_store = event_store or (CacheEventStore() if persist else None)
         self._settings_store = (
             CacheSettingsStore(self._event_store.directory)
-            if self._event_store is not None else None
+            if self._event_store is not None
+            else None
         )
         settings = self._settings_store.load() if self._settings_store else {}
         self._cache_affinity_enabled = bool(
@@ -177,7 +180,9 @@ class CacheTracker:
 
         # system prompt 变更跟踪
         self._system_hash: str = ""
-        self._system_hash_history: list[tuple[float, str]] = []  # [(timestamp, hash), ...]
+        self._system_hash_history: list[
+            tuple[float, str]
+        ] = []  # [(timestamp, hash), ...]
 
         # 全局定价覆盖（从 YAML 加载）
         self._custom_pricing: dict[str, dict[str, float]] = {}
@@ -189,6 +194,7 @@ class CacheTracker:
 
         # 订阅全局 API 响应回调——每次 LLM 调用后自动提取缓存数据
         from xenon.utils.llm_client import register_response_callback
+
         self._unsubscribe = register_response_callback(self._on_response)
 
     # ── 响应回调 ─────────────────────────────────────────
@@ -227,13 +233,17 @@ class CacheTracker:
 
     # ── 核心记录 ─────────────────────────────────────────
 
-    def record_response(self, model_id: str, response_data: dict[str, Any], system_prompt: str = "") -> None:
+    def record_response(
+        self, model_id: str, response_data: dict[str, Any], system_prompt: str = ""
+    ) -> None:
         """从 API 原始响应 JSON 中提取缓存 + token 数据并累计。
 
         应在每次 chat_completion / chat_completion_with_tokens 返回后立即调用。
         完全不上行任何网络请求——仅解析已返回的 JSON。
         """
-        usage_data = response_data.get("usage") if isinstance(response_data, dict) else None
+        usage_data = (
+            response_data.get("usage") if isinstance(response_data, dict) else None
+        )
         if not isinstance(usage_data, dict):
             return
 
@@ -259,22 +269,28 @@ class CacheTracker:
             if isinstance(prompt_details, dict)
             else 0
         )
-        cache_hit = int(usage_data.get("prompt_cache_hit_tokens", 0)
-                        or usage_data.get("cache_hit_tokens", 0)
-                        or nested_hit
-                        or 0)
+        cache_hit = int(
+            usage_data.get("prompt_cache_hit_tokens", 0)
+            or usage_data.get("cache_hit_tokens", 0)
+            or nested_hit
+            or 0
+        )
 
         # 基础 token 数
-        prompt = int(usage_data.get("prompt_tokens", 0)
-                     or usage_data.get("input_tokens", 0)
-                     or 0)
-        cache_miss = int(usage_data.get("prompt_cache_miss_tokens", 0)
-                         or usage_data.get("cache_miss_tokens", 0)
-                         or (max(0, prompt - cache_hit) if nested_cache_present else 0)
-                         or 0)
-        completion = int(usage_data.get("completion_tokens", 0)
-                         or usage_data.get("output_tokens", 0)
-                         or 0)
+        prompt = int(
+            usage_data.get("prompt_tokens", 0) or usage_data.get("input_tokens", 0) or 0
+        )
+        cache_miss = int(
+            usage_data.get("prompt_cache_miss_tokens", 0)
+            or usage_data.get("cache_miss_tokens", 0)
+            or (max(0, prompt - cache_hit) if nested_cache_present else 0)
+            or 0
+        )
+        completion = int(
+            usage_data.get("completion_tokens", 0)
+            or usage_data.get("output_tokens", 0)
+            or 0
+        )
         model_id = _canonical_model_id(model_id)
 
         manifest = response_data.get(MANIFEST_RESPONSE_KEY)
@@ -300,8 +316,12 @@ class CacheTracker:
 
             # 费用计算（纯本地乘法）
             pricing = self.get_pricing(model_id)
-            t.input_cache_hit_cost += (cache_hit / 1_000_000) * pricing["input_cache_hit"]
-            t.input_cache_miss_cost += (cache_miss / 1_000_000) * pricing["input_cache_miss"]
+            t.input_cache_hit_cost += (cache_hit / 1_000_000) * pricing[
+                "input_cache_hit"
+            ]
+            t.input_cache_miss_cost += (cache_miss / 1_000_000) * pricing[
+                "input_cache_miss"
+            ]
             t.output_cost += (completion / 1_000_000) * pricing["output"]
 
             # 记录快照到滚动窗口
@@ -372,7 +392,9 @@ class CacheTracker:
         with self._lock:
             total = 0.0
             for t in self._models.values():
-                total += t.input_cache_hit_cost + t.input_cache_miss_cost + t.output_cost
+                total += (
+                    t.input_cache_hit_cost + t.input_cache_miss_cost + t.output_cost
+                )
             return round(total, 4)
 
     @property
@@ -395,7 +417,9 @@ class CacheTracker:
             for model_id, t in self._models.items():
                 pricing = self.get_pricing(model_id)
                 # 实际费用
-                total_actual += t.input_cache_hit_cost + t.input_cache_miss_cost + t.output_cost
+                total_actual += (
+                    t.input_cache_hit_cost + t.input_cache_miss_cost + t.output_cost
+                )
                 # 假设全部 miss
                 all_prompt = t.cache_hit_tokens + t.cache_miss_tokens
                 if_miss = (all_prompt / 1_000_000) * pricing["input_cache_miss"]
@@ -417,9 +441,14 @@ class CacheTracker:
             t = self._models.get(model_id)
             if not t:
                 return {}
-            hit_rate = t.cache_hit_tokens / (t.cache_hit_tokens + t.cache_miss_tokens) \
-                       if (t.cache_hit_tokens + t.cache_miss_tokens) > 0 else 0.0
-            total_cost = t.input_cache_hit_cost + t.input_cache_miss_cost + t.output_cost
+            hit_rate = (
+                t.cache_hit_tokens / (t.cache_hit_tokens + t.cache_miss_tokens)
+                if (t.cache_hit_tokens + t.cache_miss_tokens) > 0
+                else 0.0
+            )
+            total_cost = (
+                t.input_cache_hit_cost + t.input_cache_miss_cost + t.output_cost
+            )
             all_prompt = t.cache_hit_tokens + t.cache_miss_tokens
             pricing = self.get_pricing(model_id)
             if_all_miss = (all_prompt / 1_000_000) * pricing["input_cache_miss"]
@@ -448,7 +477,7 @@ class CacheTracker:
     def recent_events(self, limit: int = 20) -> list[dict[str, Any]]:
         """Return recent privacy-safe per-request telemetry, newest last."""
         with self._lock:
-            return [event.as_dict() for event in list(self._events)[-max(0, limit):]]
+            return [event.as_dict() for event in list(self._events)[-max(0, limit) :]]
 
     def stored_events(self, limit: int = 50) -> list[dict[str, Any]]:
         """Load privacy-safe cross-session history when persistence is enabled."""
@@ -498,79 +527,97 @@ class CacheTracker:
         events = self.recent_events(20)
         checks: list[dict[str, str]] = []
         if not events:
-            return [{
-                "level": "info",
-                "name": "观测样本",
-                "detail": "尚无模型响应；当前是 cold，不代表 0% 命中。",
-            }]
+            return [
+                {
+                    "level": "info",
+                    "name": "观测样本",
+                    "detail": "尚无模型响应；当前是 cold，不代表 0% 命中。",
+                }
+            ]
         coverage = self.cache_field_coverage
-        checks.append({
-            "level": "ok" if coverage == 1.0 else "warn",
-            "name": "缓存字段",
-            "detail": f"厂商在 {self.cache_reported_calls}/{self.total_calls} 次响应中返回缓存字段（{coverage:.0%}）。",
-        })
+        checks.append(
+            {
+                "level": "ok" if coverage == 1.0 else "warn",
+                "name": "缓存字段",
+                "detail": f"厂商在 {self.cache_reported_calls}/{self.total_calls} 次响应中返回缓存字段（{coverage:.0%}）。",
+            }
+        )
         families = {event["cache_family"] for event in events[-10:]}
         churn = len(families) / min(10, len(events))
         if len(events) < 3:
             family_level = "info"
-            family_detail = (
-                f"当前仅 {len(events)} 个样本，至少 3 个样本后评估稳定性。"
-            )
+            family_detail = f"当前仅 {len(events)} 个样本，至少 3 个样本后评估稳定性。"
         else:
             family_level = "ok" if churn <= 0.4 else "warn"
             family_detail = (
                 f"最近 {min(10, len(events))} 次请求使用 {len(families)} 个缓存族。"
             )
-        checks.append({
-            "level": family_level,
-            "name": "缓存族稳定性",
-            "detail": family_detail,
-        })
+        checks.append(
+            {
+                "level": family_level,
+                "name": "缓存族稳定性",
+                "detail": family_detail,
+            }
+        )
         latest = events[-1]
         if not bool(latest.get("lane_append_only", True)):
-            checks.append({
-                "level": "warn",
-                "name": "追加式轨道",
-                "detail": (
-                    "最近请求改写了同轨道历史；Xenon 已分叉新代次，"
-                    "该次调用不能复用旧轨道的完整前缀。"
-                ),
-            })
+            checks.append(
+                {
+                    "level": "warn",
+                    "name": "追加式轨道",
+                    "detail": (
+                        "最近请求改写了同轨道历史；Xenon 已分叉新代次，"
+                        "该次调用不能复用旧轨道的完整前缀。"
+                    ),
+                }
+            )
         elif latest.get("cache_lane"):
-            checks.append({
-                "level": "ok",
-                "name": "追加式轨道",
-                "detail": (
-                    f"轨道 {str(latest['cache_lane'])[:12]} 保持精确前缀；"
-                    f"本次预计可复用 {int(latest.get('lane_reusable_tokens', 0)):,} tokens。"
-                ),
-            })
+            checks.append(
+                {
+                    "level": "ok",
+                    "name": "追加式轨道",
+                    "detail": (
+                        f"轨道 {str(latest['cache_lane'])[:12]} 保持精确前缀；"
+                        f"本次预计可复用 {int(latest.get('lane_reusable_tokens', 0)):,} tokens。"
+                    ),
+                }
+            )
         compiler_warnings = latest.get("compiler_warnings") or []
-        if any(str(item).startswith("dynamic_stable_system:") for item in compiler_warnings):
-            checks.append({
-                "level": "warn",
-                "name": "稳定前缀动态内容",
-                "detail": "固定 system 区检测到日期/时间等动态内容，建议移至当前请求层。",
-            })
+        if any(
+            str(item).startswith("dynamic_stable_system:") for item in compiler_warnings
+        ):
+            checks.append(
+                {
+                    "level": "warn",
+                    "name": "稳定前缀动态内容",
+                    "detail": "固定 system 区检测到日期/时间等动态内容，建议移至当前请求层。",
+                }
+            )
         efficiency = latest.get("prefix_efficiency")
         if efficiency is not None:
-            checks.append({
-                "level": "ok" if efficiency >= 0.5 else "warn",
-                "name": "前缀效率",
-                "detail": f"最近请求实际命中/预期可缓存 token 约为 {efficiency:.0%}。",
-            })
+            checks.append(
+                {
+                    "level": "ok" if efficiency >= 0.5 else "warn",
+                    "name": "前缀效率",
+                    "detail": f"最近请求实际命中/预期可缓存 token 约为 {efficiency:.0%}。",
+                }
+            )
         if self._event_store is not None:
-            checks.append({
-                "level": "ok",
-                "name": "本地历史",
-                "detail": f"仅保存哈希与计数：{self._event_store.path}",
-            })
+            checks.append(
+                {
+                    "level": "ok",
+                    "name": "本地历史",
+                    "detail": f"仅保存哈希与计数：{self._event_store.path}",
+                }
+            )
         return checks
 
     def family_snapshot(self, cache_family: str) -> dict[str, Any]:
         """Summarize the current session's observations for one cache family."""
         with self._lock:
-            events = [event for event in self._events if event.cache_family == cache_family]
+            events = [
+                event for event in self._events if event.cache_family == cache_family
+            ]
         if not events:
             return {}
         hit = sum(event.cache_hit_tokens for event in events)
@@ -596,7 +643,9 @@ class CacheTracker:
     def cache_settings_path(self) -> Path | None:
         return self._settings_store.path if self._settings_store else None
 
-    def set_cache_affinity_enabled(self, enabled: bool, *, persist: bool = True) -> bool:
+    def set_cache_affinity_enabled(
+        self, enabled: bool, *, persist: bool = True
+    ) -> bool:
         """Set the reversible local routing preference.
 
         Returns whether the preference was persisted.  In-memory trackers have
@@ -624,7 +673,8 @@ class CacheTracker:
         canonical = canonical_model_id(model_id)
         events = self.stored_events(200)
         relevant = [
-            event for event in events
+            event
+            for event in events
             if canonical_model_id(str(event.get("model_id", ""))) == canonical
             and bool(event.get("cache_fields_present"))
         ]
@@ -654,11 +704,16 @@ class CacheTracker:
 
         family = str(latest.get("cache_family", ""))
         family_events = [
-            event for event in relevant[-20:]
+            event
+            for event in relevant[-20:]
             if str(event.get("cache_family", "")) == family
         ][-8:]
-        hit = sum(max(0, int(event.get("cache_hit_tokens", 0))) for event in family_events)
-        miss = sum(max(0, int(event.get("cache_miss_tokens", 0))) for event in family_events)
+        hit = sum(
+            max(0, int(event.get("cache_hit_tokens", 0))) for event in family_events
+        )
+        miss = sum(
+            max(0, int(event.get("cache_miss_tokens", 0))) for event in family_events
+        )
         total = hit + miss
         hit_rate = hit / total if total else 0.0
         confidence = min(1.0, len(family_events) / 2.0)
@@ -748,7 +803,7 @@ class CacheTracker:
         return self._system_hash
 
     def close(self) -> None:
-        if hasattr(self, '_unsubscribe'):
+        if hasattr(self, "_unsubscribe"):
             self._unsubscribe()
 
 

@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class FunctionInfo:
     """函数详细信息。"""
+
     name: str
     args: list[str]
     defaults: list[str]
@@ -42,6 +43,7 @@ class FunctionInfo:
 @dataclass
 class ClassInfo:
     """类详细信息。"""
+
     name: str
     bases: list[str]
     methods: list[FunctionInfo]
@@ -55,6 +57,7 @@ class ClassInfo:
 @dataclass
 class AnalysisResult:
     """文件分析结果。"""
+
     file_path: str
     language: str
     encoding: str
@@ -119,14 +122,26 @@ class ASTAnalyzer:
     def _error_result(file_path: str, error: str) -> AnalysisResult:
         """生成错误结果。"""
         return AnalysisResult(
-            file_path=file_path, language="python", encoding="utf-8",
-            syntax_valid=False, syntax_errors=[error],
-            functions=[], classes=[], top_level_vars=[],
-            imports=[], unused_imports=[], complexity=0,
-            lines=0, blank_lines=0, comment_lines=0, docstring_lines=0,
+            file_path=file_path,
+            language="python",
+            encoding="utf-8",
+            syntax_valid=False,
+            syntax_errors=[error],
+            functions=[],
+            classes=[],
+            top_level_vars=[],
+            imports=[],
+            unused_imports=[],
+            complexity=0,
+            lines=0,
+            blank_lines=0,
+            comment_lines=0,
+            docstring_lines=0,
         )
 
-    def analyze_code(self, code: str, file_path: str = "<string>", encoding: str = "utf-8") -> AnalysisResult:
+    def analyze_code(
+        self, code: str, file_path: str = "<string>", encoding: str = "utf-8"
+    ) -> AnalysisResult:
         """分析代码字符串。"""
         lines = code.splitlines()
         total_lines = len(lines)
@@ -145,12 +160,21 @@ class ASTAnalyzer:
 
         if tree is None:
             return AnalysisResult(
-                file_path=file_path, language="python", encoding=encoding,
-                syntax_valid=False, syntax_errors=syntax_errors,
-                functions=[], classes=[], top_level_vars=[],
-                imports=[], unused_imports=[], complexity=0,
-                lines=total_lines, blank_lines=blank_lines,
-                comment_lines=comment_lines, docstring_lines=0,
+                file_path=file_path,
+                language="python",
+                encoding=encoding,
+                syntax_valid=False,
+                syntax_errors=syntax_errors,
+                functions=[],
+                classes=[],
+                top_level_vars=[],
+                imports=[],
+                unused_imports=[],
+                complexity=0,
+                lines=total_lines,
+                blank_lines=blank_lines,
+                comment_lines=comment_lines,
+                docstring_lines=0,
             )
 
         # 分析
@@ -163,12 +187,21 @@ class ASTAnalyzer:
         docstring_lines = self._count_docstring_lines(tree)
 
         return AnalysisResult(
-            file_path=file_path, language="python", encoding=encoding,
-            syntax_valid=syntax_valid, syntax_errors=syntax_errors,
-            functions=functions, classes=classes, top_level_vars=top_vars,
-            imports=imports, unused_imports=unused, complexity=complexity,
-            lines=total_lines, blank_lines=blank_lines,
-            comment_lines=comment_lines, docstring_lines=docstring_lines,
+            file_path=file_path,
+            language="python",
+            encoding=encoding,
+            syntax_valid=syntax_valid,
+            syntax_errors=syntax_errors,
+            functions=functions,
+            classes=classes,
+            top_level_vars=top_vars,
+            imports=imports,
+            unused_imports=unused,
+            complexity=complexity,
+            lines=total_lines,
+            blank_lines=blank_lines,
+            comment_lines=comment_lines,
+            docstring_lines=docstring_lines,
         )
 
     def check_syntax(self, code: str) -> list[str]:
@@ -192,7 +225,7 @@ class ASTAnalyzer:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 args = []
                 # positional-only
-                for arg in getattr(node.args, 'posonlyargs', []):
+                for arg in getattr(node.args, "posonlyargs", []):
                     if arg.arg not in ("self", "cls"):
                         a = arg.arg
                         if arg.annotation:
@@ -228,13 +261,15 @@ class ASTAnalyzer:
                 ret = ""
                 if node.returns:
                     ret = ast.unparse(node.returns)
-                sigs.append({
-                    "name": node.name,
-                    "args": ", ".join(args),
-                    "return": ret,
-                    "line": str(node.lineno),
-                    "async": isinstance(node, ast.AsyncFunctionDef),
-                })
+                sigs.append(
+                    {
+                        "name": node.name,
+                        "args": ", ".join(args),
+                        "return": ret,
+                        "line": str(node.lineno),
+                        "async": isinstance(node, ast.AsyncFunctionDef),
+                    }
+                )
         return sigs
 
     # ── 内部方法 ──────────────────────────────────────────
@@ -268,19 +303,23 @@ class ASTAnalyzer:
 
                 decorators = [ast.unparse(d) for d in node.decorator_list]
 
-                classes.append(ClassInfo(
-                    name=node.name,
-                    bases=bases,
-                    methods=methods,
-                    class_vars=class_vars,
-                    decorators=decorators,
-                    docstring=ast.get_docstring(node) or "",
-                    line=node.lineno,
-                    end_line=getattr(node, 'end_lineno', None),
-                ))
+                classes.append(
+                    ClassInfo(
+                        name=node.name,
+                        bases=bases,
+                        methods=methods,
+                        class_vars=class_vars,
+                        decorators=decorators,
+                        docstring=ast.get_docstring(node) or "",
+                        line=node.lineno,
+                        end_line=getattr(node, "end_lineno", None),
+                    )
+                )
         return classes
 
-    def _analyze_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef, is_method: bool) -> FunctionInfo:
+    def _analyze_function(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef, is_method: bool
+    ) -> FunctionInfo:
         """分析单个函数。"""
         args = []
         for arg in node.args.args:
@@ -320,7 +359,7 @@ class ASTAnalyzer:
             decorators=decorators,
             docstring=ast.get_docstring(node) or "",
             line=node.lineno,
-            end_line=getattr(node, 'end_lineno', None),
+            end_line=getattr(node, "end_lineno", None),
             is_async=isinstance(node, ast.AsyncFunctionDef),
             is_method=is_method,
             complexity=complexity,
@@ -344,21 +383,25 @@ class ASTAnalyzer:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    imports.append({
-                        "module": alias.name,
-                        "name": alias.asname or alias.name,
-                        "line": node.lineno,
-                        "from": False,
-                    })
+                    imports.append(
+                        {
+                            "module": alias.name,
+                            "name": alias.asname or alias.name,
+                            "line": node.lineno,
+                            "from": False,
+                        }
+                    )
             elif isinstance(node, ast.ImportFrom):
                 module = node.module or ""
                 for alias in node.names:
-                    imports.append({
-                        "module": module,
-                        "name": alias.asname or alias.name,
-                        "line": node.lineno,
-                        "from": True,
-                    })
+                    imports.append(
+                        {
+                            "module": module,
+                            "name": alias.asname or alias.name,
+                            "line": node.lineno,
+                            "from": True,
+                        }
+                    )
         return imports
 
     def _find_unused_imports(self, tree: ast.Module, code: str) -> list[str]:
@@ -376,7 +419,7 @@ class ASTAnalyzer:
         unused = []
         for name in imported_names:
             # 简单检查：导入名是否在代码中出现（排除导入行本身）
-            pattern = r'\b' + re.escape(name) + r'\b'
+            pattern = r"\b" + re.escape(name) + r"\b"
             matches = re.findall(pattern, code)
             if len(matches) <= 1:  # 只在 import 行出现一次
                 unused.append(name)
@@ -411,7 +454,9 @@ class ASTAnalyzer:
                 complexity += len(child.values) - 1
             elif isinstance(child, ast.Assert):
                 complexity += 1
-            elif isinstance(child, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            elif isinstance(
+                child, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+            ):
                 complexity += 1
         return complexity
 
@@ -419,7 +464,9 @@ class ASTAnalyzer:
         """统计文档字符串行数。"""
         count = 0
         for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)):
+            if isinstance(
+                node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)
+            ):
                 ds = ast.get_docstring(node)
                 if ds:
                     count += len(ds.splitlines())

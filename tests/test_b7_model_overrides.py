@@ -1,4 +1,5 @@
 """B7 验收：激活 ModelConfig 死字段 — base_url / api_key 覆盖。"""
+
 from types import SimpleNamespace
 
 import xenon.utils.llm_client as lc
@@ -7,7 +8,8 @@ import xenon.utils.llm_client as lc
 class TestBuildEndpointBaseUrlOverride:
     def test_base_url_override(self):
         ep = lc.build_endpoint(
-            "openai/gpt-4o", credentials={"openai": "sk-test"},
+            "openai/gpt-4o",
+            credentials={"openai": "sk-test"},
             base_url="https://custom.example.com/v1",
         )
         assert ep.base_url == "https://custom.example.com/v1"
@@ -29,7 +31,8 @@ class TestChatCompletionBaseUrlOverride:
 
         monkeypatch.setattr(lc, "_call_openai_compat", fake)
         lc.chat_completion(
-            "openai/gpt-4o", [{"role": "user", "content": "hi"}],
+            "openai/gpt-4o",
+            [{"role": "user", "content": "hi"}],
             credentials={"openai": "sk-test"},
             base_url="https://custom.example.com/v1",
         )
@@ -41,8 +44,11 @@ class TestEngineModelOverrides:
         import xenon.engine.base as re_mod
         from xenon.engine.react_engine import ReActEngine
 
-        mc = SimpleNamespace(max_tokens=2048, api_key="sk-per-model",
-                             base_url="https://mcp.example.com/v1")
+        mc = SimpleNamespace(
+            max_tokens=2048,
+            api_key="sk-per-model",
+            base_url="https://mcp.example.com/v1",
+        )
         engine = ReActEngine(["openai/gpt-4o"], model_configs={"openai/gpt-4o": mc})
         captured = {}
 
@@ -77,7 +83,9 @@ class TestEngineModelOverrides:
         import xenon.engine.base as re_mod
         from xenon.engine.react_engine import ReActEngine
 
-        mc = SimpleNamespace(max_tokens=2048, api_key="", base_url="https://mcp.example.com/v1")
+        mc = SimpleNamespace(
+            max_tokens=2048, api_key="", base_url="https://mcp.example.com/v1"
+        )
         engine = ReActEngine(["openai/gpt-4o"], model_configs={"openai/gpt-4o": mc})
         captured = {}
 

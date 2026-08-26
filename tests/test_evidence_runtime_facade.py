@@ -1,4 +1,5 @@
 """跨层 EvidenceRuntime 门面测试（REPL/Engine/ToolExecutor/Node/MCP/Session 统一入口）。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -52,8 +53,12 @@ class TestEvidenceRuntimeRecords:
         rt.start_task(engine="plan-execute", user_input="x")
         rt.record_claim(text="我读完了")
         rt.record_tool_request(tool="read_file", params={"file_path": "a.py"})
-        rt.record_tool_observation(tool="read_file", params={"file_path": "a.py"}, success=True, summary="ok")
-        rt.record_gate_verdict(gate="FactBindingGate", passed=True, reason="通过", phase="pre_tool")
+        rt.record_tool_observation(
+            tool="read_file", params={"file_path": "a.py"}, success=True, summary="ok"
+        )
+        rt.record_gate_verdict(
+            gate="FactBindingGate", passed=True, reason="通过", phase="pre_tool"
+        )
         rt.record_validation(kind="pytest", passed=True, detail="3 passed")
         kinds = [e.kind for e in rt.ledger.events]
         assert kinds == [
@@ -117,7 +122,9 @@ class TestEvidenceRuntimeFinalize:
     def test_persist_and_load_roundtrip(self, tmp_path: Path) -> None:
         rt = EvidenceRuntime()
         rt.start_task(engine="react", user_input="x")
-        rt.record_tool_observation(tool="read_file", params={}, success=True, summary="s")
+        rt.record_tool_observation(
+            tool="read_file", params={}, success=True, summary="s"
+        )
         path = tmp_path / "ev.jsonl"
         rt.persist(path)
         restored = EvidenceRuntime.load(path)
@@ -164,7 +171,9 @@ class TestMCPEvidence:
 
 
 class TestSessionEvidence:
-    def test_save_session_embeds_evidence_snapshot(self, tmp_path: Path, monkeypatch) -> None:
+    def test_save_session_embeds_evidence_snapshot(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
         import xenon.repl.session as session_mod
 
         monkeypatch.setattr(session_mod, "SESSIONS_DIR", tmp_path)

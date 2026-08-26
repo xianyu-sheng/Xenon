@@ -27,8 +27,9 @@ MAX_MEMORIES = 200
 @dataclass
 class Memory:
     """单条记忆。"""
+
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
-    type: str = "fact"          # fact | project | error | preference
+    type: str = "fact"  # fact | project | error | preference
     content: str = ""
     tags: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -95,7 +96,9 @@ class MemoryStore:
         logger.info(f"添加记忆: [{type}] {content[:50]}")
         return memory
 
-    def search(self, query: str, type_filter: str | None = None, limit: int = 10) -> list[Memory]:
+    def search(
+        self, query: str, type_filter: str | None = None, limit: int = 10
+    ) -> list[Memory]:
         """搜索记忆。"""
         query_lower = query.lower()
         results = []
@@ -132,11 +135,12 @@ class MemoryStore:
 
         # 中文 2-gram 提取（连续 2-4 个字符作为关键词）
         import re
-        chinese_chars = re.findall(r'[一-鿿]+', context_text)
+
+        chinese_chars = re.findall(r"[一-鿿]+", context_text)
         for segment in chinese_chars:
             for n in (2, 3, 4):
                 for i in range(len(segment) - n + 1):
-                    words.add(segment[i:i + n].lower())
+                    words.add(segment[i : i + n].lower())
 
         scored: list[tuple[int, Memory]] = []
         for m in self.memories:
@@ -205,6 +209,11 @@ class MemoryStore:
 
         lines = ["[记忆] 以下是你之前记住的信息:"]
         for m in items[:10]:
-            type_emoji = {"fact": "📌", "project": "📁", "error": "⚠️", "preference": "⭐"}.get(m.type, "📝")
+            type_emoji = {
+                "fact": "📌",
+                "project": "📁",
+                "error": "⚠️",
+                "preference": "⭐",
+            }.get(m.type, "📝")
             lines.append(f"  {type_emoji} [{m.type}] {m.content}")
         return "\n".join(lines)

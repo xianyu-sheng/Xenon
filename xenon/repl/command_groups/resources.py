@@ -19,7 +19,12 @@ if TYPE_CHECKING:
 
 # /mcp ──────────────────────────────────────────────────
 
-register_command("/mcp", "管理 MCP 服务器连接", "/mcp [add|list|tools|remove|discover|install|refresh] [args]")
+register_command(
+    "/mcp",
+    "管理 MCP 服务器连接",
+    "/mcp [add|list|tools|remove|discover|install|refresh] [args]",
+)
+
 
 @command_handler("/mcp")
 def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
@@ -37,7 +42,7 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
         return _MCP_USAGE
 
     # 确保注册表存在
-    if not hasattr(repl, '_mcp_registry') or repl._mcp_registry is None:
+    if not hasattr(repl, "_mcp_registry") or repl._mcp_registry is None:
         repl._mcp_registry = MCPRegistry()
         repl.agent_context.set("_mcp_registry", repl._mcp_registry)
 
@@ -50,7 +55,10 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
             resp = "用法: /mcp add <name> <command_or_url> [args...]"
             if any(p == "--" for p in parts):
                 resp += "\n💡 提示: -- 分隔符不是必需的，直接 /mcp add <name> <command> [args...] 即可"
-            return resp + "\n示例:\n  /mcp add fs npx -y @modelcontextprotocol/server-filesystem .\n  /mcp add web http://localhost:3000/sse"
+            return (
+                resp
+                + "\n示例:\n  /mcp add fs npx -y @modelcontextprotocol/server-filesystem .\n  /mcp add web http://localhost:3000/sse"
+            )
         name = clean_parts[1]
         target = clean_parts[2]
         extra_args = clean_parts[3:] if len(clean_parts) > 3 else []
@@ -60,11 +68,13 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
                 registry.add_server(name, url=target)
                 # v0.5.3: 持久化
                 from xenon.repl.provider_registry import save_mcp_server
+
                 save_mcp_server(name, url=target)
             else:
                 registry.add_server(name, command=target, args=extra_args)
                 # v0.5.3: 持久化
                 from xenon.repl.provider_registry import save_mcp_server
+
                 save_mcp_server(name, command=target, args=extra_args)
 
             # 发现工具
@@ -83,7 +93,9 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
         for name, client in registry.clients.items():
             info = client.server_info
             tool_count = len(client.tools)
-            lines.append(f"  {name}: {info.get('name', 'unknown')} v{info.get('version', '?')} ({tool_count} 工具)")
+            lines.append(
+                f"  {name}: {info.get('name', 'unknown')} v{info.get('version', '?')} ({tool_count} 工具)"
+            )
         if has_pending:
             for name in registry.get_pending_server_names():
                 lines.append(f"  {name}: [dim]惰性（首次调用时连接）[/dim]")
@@ -116,15 +128,19 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
             registry.discover_tools()
             # v0.5.3: 从持久化配置中移除
             from xenon.repl.provider_registry import remove_mcp_server
+
             remove_mcp_server(name)
             return f"✅ MCP 服务器 '{name}' 已移除"
         # v0.5.4: 也处理惰性服务器
         if name in registry.get_pending_server_names():
-            if not confirm_action(f"移除惰性 MCP 服务器 '{name}'（尚未连接）？", default=False):
+            if not confirm_action(
+                f"移除惰性 MCP 服务器 '{name}'（尚未连接）？", default=False
+            ):
                 return "已取消"
             # 从 pending_configs 中删除
             registry._pending_configs.pop(name, None)
             from xenon.repl.provider_registry import remove_mcp_server
+
             remove_mcp_server(name)
             return f"✅ MCP 服务器 '{name}' 已移除（惰性）"
         return f"❌ 未找到 MCP 服务器 '{name}'"
@@ -132,11 +148,16 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
     elif sub == "discover":
         keyword = " ".join(parts[1:]) if len(parts) > 1 else ""
         from xenon.repl.library import get_mcp_library
+
         lib = get_mcp_library()
         results = lib.discover(keyword)
         if not results:
-            return f"未找到匹配 '{keyword}' 的 MCP 服务器。\n输入 /mcp discover 浏览全部"
-        lines = [f"═══ MCP 库{' — 搜索: ' + keyword if keyword else ''} ═══ [dim]{lib.source_label}[/dim]\n"]
+            return (
+                f"未找到匹配 '{keyword}' 的 MCP 服务器。\n输入 /mcp discover 浏览全部"
+            )
+        lines = [
+            f"═══ MCP 库{' — 搜索: ' + keyword if keyword else ''} ═══ [dim]{lib.source_label}[/dim]\n"
+        ]
         for s in results:
             env_hint = ""
             if s.env:
@@ -164,6 +185,7 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
             return "用法: /mcp install <name>\n\n提示: 先用 /mcp discover 浏览可用 MCP 服务器"
         name = parts[1]
         from xenon.repl.library import get_mcp_library
+
         lib = get_mcp_library()
         entry = lib.get(name)
         if not entry:
@@ -179,13 +201,17 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
         for env_key, env_val in entry.env.items():
             if "<" in env_val or "你的" in env_val or "Token" in env_val:
                 import os as _os
+
                 if not _os.environ.get(env_key):
-                    env_warnings.append(f"  ⚠️ {env_key} 未设置；设置环境变量后使用 /mcp remove {entry.name} 再重新安装")
+                    env_warnings.append(
+                        f"  ⚠️ {env_key} 未设置；设置环境变量后使用 /mcp remove {entry.name} 再重新安装"
+                    )
 
         try:
             # 如果条目来自 Smithery 且没有 command/url，查详情接口获取连接信息
             if entry.source == "smithery" and not entry.command and not entry.url:
                 from xenon.repl.library import fetch_smithery_detail
+
                 ok, detail = fetch_smithery_detail(entry.name)
                 if ok and isinstance(detail, dict):
                     conns = detail.get("connections", [])
@@ -199,12 +225,16 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
 
             # v0.5.4: 惰性连接 — 仅持久化配置，首次调用时再启动子进程
             if entry.command:
-                registry.add_server_pending(entry.name, command=entry.command, args=entry.args)
+                registry.add_server_pending(
+                    entry.name, command=entry.command, args=entry.args
+                )
                 from xenon.repl.provider_registry import save_mcp_server
+
                 save_mcp_server(entry.name, command=entry.command, args=entry.args)
             elif entry.url:
                 registry.add_server_pending(entry.name, url=entry.url)
                 from xenon.repl.provider_registry import save_mcp_server
+
                 save_mcp_server(entry.name, url=entry.url)
             else:
                 return f"❌ '{entry.name}' 没有可执行的命令配置"
@@ -262,10 +292,10 @@ _MCP_USAGE = """\
   /mcp install vercel/grep    → 安装 Smithery 远程服务器"""
 
 
-
 # /library ───────────────────────────────────────────────
 
 register_command("/library", "刷新 MCP/Skill 库缓存", "/library refresh")
+
 
 @command_handler("/library")
 def _cmd_library(*, args: str, **kwargs: Any) -> str:
@@ -281,6 +311,7 @@ def _cmd_library(*, args: str, **kwargs: Any) -> str:
         # 删除缓存，强制重新拉取
         try:
             from xenon.repl.library import _CACHE_MCP, _CACHE_SKILL
+
             for p in [_CACHE_MCP, _CACHE_SKILL]:
                 if p.exists():
                     p.unlink()
@@ -304,7 +335,6 @@ def _cmd_library(*, args: str, **kwargs: Any) -> str:
         return "用法: /library refresh （清除缓存并从 GitHub 拉取最新库）"
 
 
-
 # /skill discover / install ──────────────────────────────
 
 register_command("/skill-discover", "浏览/搜索 Skill 库", "/skill-discover [keyword]")
@@ -315,11 +345,14 @@ register_command("/skill-install", "安装 Skill", "/skill-install <name>")
 def _cmd_skill_discover(*, args: str, **kwargs: Any) -> str:
     keyword = args.strip()
     from xenon.repl.library import get_skill_library
+
     lib = get_skill_library()
     results = lib.discover(keyword)
     if not results:
         return f"未找到匹配 '{keyword}' 的 Skill。\n输入 /skill-discover 浏览全部"
-    lines = [f"═══ Skill 库{' — 搜索: ' + keyword if keyword else ''} ═══ [dim]{lib.source_label}[/dim]\n"]
+    lines = [
+        f"═══ Skill 库{' — 搜索: ' + keyword if keyword else ''} ═══ [dim]{lib.source_label}[/dim]\n"
+    ]
     for s in results:
         cat = f"[{s.category}]" if s.category else ""
         step_count = len(s.steps) if s.steps else 0
@@ -327,7 +360,9 @@ def _cmd_skill_discover(*, args: str, **kwargs: Any) -> str:
         lines.append(f"    {s.description[:120]}")
         lines.append(f"    安装: /skill-install {s.name}")
     if not keyword:
-        lines.append("\n[dim]💡 想贡献你的 Skill？欢迎 PR → https://github.com/xianyu-sheng/Xenon[/dim]")
+        lines.append(
+            "\n[dim]💡 想贡献你的 Skill？欢迎 PR → https://github.com/xianyu-sheng/Xenon[/dim]"
+        )
     return "\n".join(lines)
 
 
@@ -335,8 +370,11 @@ def _cmd_skill_discover(*, args: str, **kwargs: Any) -> str:
 def _cmd_skill_install(*, args: str, **kwargs: Any) -> str:
     name = args.strip()
     if not name:
-        return "用法: /skill-install <name>\n\n提示: 先用 /skill-discover 浏览可用 Skill"
+        return (
+            "用法: /skill-install <name>\n\n提示: 先用 /skill-discover 浏览可用 Skill"
+        )
     from xenon.repl.library import get_skill_library
+
     lib = get_skill_library()
     ok, msg = lib.install(name)
     if not ok:
@@ -351,13 +389,19 @@ def _cmd_skill_install(*, args: str, **kwargs: Any) -> str:
     return msg + f"\n输入 /{name} 使用"
 
 
-
 # /status ──────────────────────────────────────────────────
 
 register_command("/status", "显示详细状态信息", "/status")
 
+
 @command_handler("/status")
-def _cmd_status(*, ctx_mgr: ContextManager, registry: ModelRegistry, session_state: dict, **kwargs: Any) -> str:
+def _cmd_status(
+    *,
+    ctx_mgr: ContextManager,
+    registry: ModelRegistry,
+    session_state: dict,
+    **kwargs: Any,
+) -> str:
 
     stats = ctx_mgr.stats()
     mode = registry.get_current_mode()
@@ -400,6 +444,7 @@ def _cmd_status(*, ctx_mgr: ContextManager, registry: ModelRegistry, session_sta
 
 register_command("/setup", "首次配置向导（配置 Key、选模型、选范式）", "/setup")
 
+
 @command_handler("/setup")
 def _cmd_setup(*, session_state: dict, **kwargs: Any) -> str:
     from xenon.repl.setup_wizard import interactive_setup
@@ -415,6 +460,7 @@ def _cmd_setup(*, session_state: dict, **kwargs: Any) -> str:
 
 register_command("/tools", "查看所有可用工具类型", "/tools")
 
+
 @command_handler("/tools")
 def _cmd_tools(**kwargs: Any) -> str:
     tools_info = [
@@ -427,15 +473,31 @@ def _cmd_tools(**kwargs: Any) -> str:
         ("search_files", "文件内容搜索", "file_path, search_pattern, file_filter"),
         ("git", "Git 操作", "git_command='status|diff|log|add|commit'"),
         ("web_fetch", "抓取网页内容", "url"),
-        ("docs_fetch", "llms.txt 优先的官方文档检索", "url, query, max_pages, max_chars"),
+        (
+            "docs_fetch",
+            "llms.txt 优先的官方文档检索",
+            "url, query, max_pages, max_chars",
+        ),
         ("batch_write", "批量写入多个文件", "files=[{path, content}, ...]"),
-        ("batch_edit", "批量编辑多个文件", "edits=[{file_path, old_text, new_text}, ...]"),
+        (
+            "batch_edit",
+            "批量编辑多个文件",
+            "edits=[{file_path, old_text, new_text}, ...]",
+        ),
         ("code_index", "代码符号搜索（AST 索引）", "search_pattern, file_path"),
         ("ast_analyze", "Python 代码结构分析", "file_path"),
-        ("refactor", "重构：重命名/清理导入/分析", "refactor_action, old_name, new_name"),
+        (
+            "refactor",
+            "重构：重命名/清理导入/分析",
+            "refactor_action, old_name, new_name",
+        ),
         ("diff_preview", "预览文件修改 diff", "file_path, old_text, new_text"),
         ("mcp_call", "调用 MCP 外部工具", "tool_name, tool_args"),
-        ("github_fetch", "GitHub 仓库操作（列出文件/获取内容/README）", "repo, github_action, github_path, branch"),
+        (
+            "github_fetch",
+            "GitHub 仓库操作（列出文件/获取内容/README）",
+            "repo, github_action, github_path, branch",
+        ),
         ("clone_repo", "克隆 GitHub 仓库到本地并分析代码结构", "repo, branch"),
         ("lsp_goto_def", "跳转到 Python 符号定义（跨文件）", "file_path, line, column"),
         ("lsp_find_refs", "查找 Python 符号的所有引用", "file_path, line, column"),
@@ -451,6 +513,3 @@ def _cmd_tools(**kwargs: Any) -> str:
         lines.append("")
     lines.append("工具可在 YAML 工作流中通过 action_type 字段使用。")
     return "\n".join(lines)
-
-
-

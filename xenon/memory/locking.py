@@ -66,9 +66,7 @@ class InterProcessFileLock:
             except FileExistsError:
                 self._reclaim_dead_owner()
                 if time.monotonic() >= deadline:
-                    raise MemoryLockTimeoutError(
-                        f"等待记忆锁超时: {self.path}"
-                    )
+                    raise MemoryLockTimeoutError(f"等待记忆锁超时: {self.path}")
                 time.sleep(self.poll_interval)
 
     def release(self) -> None:

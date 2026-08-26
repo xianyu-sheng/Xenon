@@ -43,11 +43,13 @@ def test_native_tool_protocol_messages_are_preserved() -> None:
             "role": "assistant",
             "content": "",
             "reasoning_content": "reason",
-            "tool_calls": [{
-                "id": "call-1",
-                "type": "function",
-                "function": {"name": "read_file", "arguments": '{"path":"x"}'},
-            }],
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path":"x"}'},
+                }
+            ],
         },
         {"role": "tool", "tool_call_id": "call-1", "content": "result"},
     ]
@@ -64,7 +66,10 @@ def test_tool_order_and_mapping_order_are_deterministic() -> None:
     }
     tool_a = {
         "type": "function",
-        "function": {"name": "alpha", "parameters": {"type": "object", "properties": {}}},
+        "function": {
+            "name": "alpha",
+            "parameters": {"type": "object", "properties": {}},
+        },
     }
 
     first = compile_tools([tool_b, tool_a])
@@ -74,7 +79,10 @@ def test_tool_order_and_mapping_order_are_deterministic() -> None:
 
 
 def test_tool_registry_order_does_not_split_manifest_family() -> None:
-    messages = [{"role": "system", "content": "fixed"}, {"role": "user", "content": "q"}]
+    messages = [
+        {"role": "system", "content": "fixed"},
+        {"role": "user", "content": "q"},
+    ]
     tools = [
         {"type": "function", "function": {"name": "zeta", "parameters": {}}},
         {"type": "function", "function": {"name": "alpha", "parameters": {}}},
@@ -134,7 +142,9 @@ def test_dynamic_leading_system_is_reported_but_not_rewritten() -> None:
 
 def test_public_text_client_runs_through_compiler(monkeypatch) -> None:
     captured: dict = {}
-    endpoint = ModelEndpoint("deepseek", "deepseek-v4-flash", "https://example.test", "key")
+    endpoint = ModelEndpoint(
+        "deepseek", "deepseek-v4-flash", "https://example.test", "key"
+    )
     monkeypatch.setattr(llm_client, "build_endpoint", lambda *args, **kwargs: endpoint)
 
     def fake_call(_endpoint, messages, max_tokens, temperature, timeout):
@@ -142,7 +152,10 @@ def test_public_text_client_runs_through_compiler(monkeypatch) -> None:
         return "ok"
 
     monkeypatch.setattr(llm_client, "_call_openai_compat", fake_call)
-    messages = [{"role": "system", "content": "fixed"}, {"role": "user", "content": "q"}]
+    messages = [
+        {"role": "system", "content": "fixed"},
+        {"role": "user", "content": "q"},
+    ]
     assert llm_client.chat_completion("deepseek-v4-flash", messages) == "ok"
     assert captured["messages"] == messages
     assert llm_client._usage_tl.cache_manifest["tier_token_estimates"]["static"] > 0
@@ -150,7 +163,9 @@ def test_public_text_client_runs_through_compiler(monkeypatch) -> None:
 
 def test_public_tool_client_sends_canonical_tool_order(monkeypatch) -> None:
     captured: dict = {}
-    endpoint = ModelEndpoint("deepseek", "deepseek-v4-flash", "https://example.test", "key")
+    endpoint = ModelEndpoint(
+        "deepseek", "deepseek-v4-flash", "https://example.test", "key"
+    )
     monkeypatch.setattr(llm_client, "build_endpoint", lambda *args, **kwargs: endpoint)
 
     def fake_call(

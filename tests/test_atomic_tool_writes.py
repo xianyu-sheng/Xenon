@@ -172,8 +172,11 @@ class TestNoOpEditDetection:
         target = tmp_path / "a.py"
         target.write_text("        value = 1\n", encoding="utf-8")
         tool = FileMutationTools(
-            "e1", action_type="edit_file", file_path=str(target),
-            old_text="value = 1", new_text="value = 1",
+            "e1",
+            action_type="edit_file",
+            file_path=str(target),
+            old_text="value = 1",
+            new_text="value = 1",
         )
         result = tool._edit_file(AgentContext())
         assert result["success"] is False
@@ -186,8 +189,11 @@ class TestNoOpEditDetection:
         target = tmp_path / "a.py"
         target.write_text("value = 1\n", encoding="utf-8")
         tool = FileMutationTools(
-            "e1", action_type="edit_file", file_path=str(target),
-            old_text="value = 1", new_text="value = 2",
+            "e1",
+            action_type="edit_file",
+            file_path=str(target),
+            old_text="value = 1",
+            new_text="value = 2",
         )
         result = tool._edit_file(AgentContext())
         assert result["success"] is True

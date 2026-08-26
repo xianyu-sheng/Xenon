@@ -41,9 +41,7 @@ def _largest_remainder(counts: dict[str, int], total: int) -> dict[str, int]:
     quota = {key: int(value) for key, value in exact.items()}
     shortfall = total - sum(quota.values())
     # Ties are broken by stratum name so the allocation is order-independent.
-    ranked = sorted(
-        counts, key=lambda key: (-(exact[key] - quota[key]), key)
-    )
+    ranked = sorted(counts, key=lambda key: (-(exact[key] - quota[key]), key))
     for key in ranked[:shortfall]:
         quota[key] += 1
     return quota
@@ -60,7 +58,9 @@ def select(
         by_repo[row["repo"]].append(row["instance_id"])
     counts = {repo: len(ids) for repo, ids in by_repo.items()}
     if size > sum(counts.values()):
-        raise ValueError(f"requested {size} instances, dataset has {sum(counts.values())}")
+        raise ValueError(
+            f"requested {size} instances, dataset has {sum(counts.values())}"
+        )
     quota = _largest_remainder(counts, size)
 
     chosen: list[str] = []
@@ -94,7 +94,12 @@ def select(
 
 def digest(dataset: str, split: str, seed: int, instance_ids: list[str]) -> str:
     payload = json.dumps(
-        {"dataset": dataset, "split": split, "seed": seed, "instance_ids": instance_ids},
+        {
+            "dataset": dataset,
+            "split": split,
+            "seed": seed,
+            "instance_ids": instance_ids,
+        },
         sort_keys=True,
         ensure_ascii=False,
     )
@@ -132,7 +137,9 @@ def main() -> int:
         "size": len(picked["instance_ids"]),
         "instance_ids": picked["instance_ids"],
         "calibration_ids": picked["calibration_ids"],
-        "population_repo_counts": dict(sorted(Counter(r["repo"] for r in instances).items())),
+        "population_repo_counts": dict(
+            sorted(Counter(r["repo"] for r in instances).items())
+        ),
         "selected_repo_counts": dict(
             sorted(Counter(repo_of[i] for i in picked["instance_ids"]).items())
         ),

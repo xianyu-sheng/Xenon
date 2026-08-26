@@ -47,7 +47,9 @@ def prefix(run_id: str | None, call_id: str | None = None) -> str:
     return f"[{r}]"
 
 
-def trace_logger(run_id: str | None, call_id: str | None = None) -> logging.LoggerAdapter:
+def trace_logger(
+    run_id: str | None, call_id: str | None = None
+) -> logging.LoggerAdapter:
     """返回带 ``[run_id/call_id]`` 前缀的 LoggerAdapter（前缀并入 message）。"""
     return _TraceAdapter(_LOGGER, {"trace": prefix(run_id, call_id)})
 

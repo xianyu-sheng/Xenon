@@ -27,9 +27,9 @@ class SemanticChunk:
 
     group_id: str
     turns: list = field(default_factory=list)
-    dominant_tier: int = 3           # 块内最高 tier
-    chunk_type: str = "general"      # single_turn | tool_chain | mixed | system
-    summary: str = ""                # 压缩后的摘要（压缩后填充）
+    dominant_tier: int = 3  # 块内最高 tier
+    chunk_type: str = "general"  # single_turn | tool_chain | mixed | system
+    summary: str = ""  # 压缩后的摘要（压缩后填充）
 
     @property
     def size(self) -> int:
@@ -263,6 +263,7 @@ def _extract_tool_name_from_turn(turn) -> str:
     content = getattr(turn, "content", "")
     # 尝试从 content 模式匹配
     import re
+
     # 匹配 "tool_name:" 或 "调用 tool_name" 等模式
     m = re.search(r"(?:调用|执行|使用)\s*(\w+)", content)
     if m:

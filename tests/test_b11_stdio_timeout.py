@@ -4,6 +4,7 @@
 关键场景：MCP 子进程挂起（不响应）时，request 必须在 ``timeout`` 内抛出
 RuntimeError，而不是被 ``readline()`` 永久阻塞。
 """
+
 import inspect
 import sys
 import time

@@ -35,15 +35,17 @@ DEFAULT_MAX_TOKENS = 32768
 class ModelConfig:
     """单个模型的运行时配置。"""
 
-    model_id: str           # "provider/model_name"
-    alias: str = ""         # 简短别名，如 "claude", "gpt4"
-    api_key: str = ""       # 可选，覆盖全局凭证
-    base_url: str = ""      # 可选，自定义端点
+    model_id: str  # "provider/model_name"
+    alias: str = ""  # 简短别名，如 "claude", "gpt4"
+    api_key: str = ""  # 可选，覆盖全局凭证
+    base_url: str = ""  # 可选，自定义端点
     max_tokens: int = DEFAULT_MAX_TOKENS  # 请求给上游的生成预算；Xenon 不再二次钳制
     temperature: float = 0.7
-    reasoning_effort: str = ""  # OpenAI-compatible reasoning level (low/medium/high/max)
+    reasoning_effort: str = (
+        ""  # OpenAI-compatible reasoning level (low/medium/high/max)
+    )
     context_window: int = 128000  # 上下文窗口（R4）
-    weight: float = 1.0            # v0.4.0: 模型池权重
+    weight: float = 1.0  # v0.4.0: 模型池权重
     # 来源标记：credentials.yaml 的 providers 段自动派生出的模型不写回
     # models.yaml，否则 save_to_file 会把它们固化成手工配置，下次启动时
     # 既无法随 credentials 变更而更新，也会把自动注册时的默认 max_tokens
@@ -55,7 +57,7 @@ class ModelConfig:
 class ThinkingMode:
     """思考范式配置。"""
 
-    name: str                    # "react", "plan-execute", "reflection"
+    name: str  # "react", "plan-execute", "reflection"
     description: str = ""
     workflow_template: str = ""  # 对应的 YAML 模板路径
 
@@ -111,16 +113,15 @@ class ModelRegistry:
             from xenon.repl.provider_registry import get_model_metadata
 
             metadata = get_model_metadata(model_id)
-            context_window = (
-                int(metadata.get("context_window", 0) or 0)
-                or ark_context_windows.get(normalized_model)
-            )
+            context_window = int(
+                metadata.get("context_window", 0) or 0
+            ) or ark_context_windows.get(normalized_model)
             if context_window:
                 kwargs["context_window"] = context_window
-        if (
-            "context_window" not in kwargs
-            and normalized_model in {"deepseek-v4-pro", "deepseek-v4-flash"}
-        ):
+        if "context_window" not in kwargs and normalized_model in {
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+        }:
             # DeepSeek 官方 V4 模型规格（核对日期 2026-07-21）。
             kwargs["context_window"] = 1_000_000
         if normalized_model == "deepseek-v4-pro" and not kwargs.get("reasoning_effort"):
@@ -173,7 +174,9 @@ class ModelRegistry:
             del self.models[alias]
             # 同时从角色分配中清理
             for role in self.role_priority:
-                self.role_priority[role] = [a for a in self.role_priority[role] if a != alias]
+                self.role_priority[role] = [
+                    a for a in self.role_priority[role] if a != alias
+                ]
             return True
         return False
 
@@ -240,7 +243,9 @@ class ModelRegistry:
         # 验证所有别名都存在
         for alias in aliases:
             if alias not in self.models:
-                raise ValueError(f"模型别名 '{alias}' 未注册。可用: {list(self.models.keys())}")
+                raise ValueError(
+                    f"模型别名 '{alias}' 未注册。可用: {list(self.models.keys())}"
+                )
         self.role_priority[role] = aliases
 
     def get_role_priority(self, role: str) -> list[str]:
@@ -384,7 +389,9 @@ class ModelRegistry:
                 temperature=mcfg.get("temperature", 0.7),
                 reasoning_effort=mcfg.get("reasoning_effort", ""),
                 context_window=mcfg.get("context_window", 128000),
-                weight=mcfg.get("weight", 1.0),  # P0: 修复有损往返(export 写了 weight,load 原未读回)
+                weight=mcfg.get(
+                    "weight", 1.0
+                ),  # P0: 修复有损往返(export 写了 weight,load 原未读回)
             )
 
         self._warn_on_persisted_derived_models(path, data.get("models", {}))

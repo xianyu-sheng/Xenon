@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 from xenon.engine.trace import TraceContextFilter  # noqa: E402
+
 logger.addFilter(TraceContextFilter())
 
 
@@ -70,10 +71,12 @@ class SteeringMixin:
         """任务运行中注入一条用户补充/修改要求（线程安全）。"""
         if not text or not text.strip():
             return False
-        self._steering_queue.put({
-            "text": text.strip(),
-            "ts": time.time(),
-        })
+        self._steering_queue.put(
+            {
+                "text": text.strip(),
+                "ts": time.time(),
+            }
+        )
         return True
 
     def _drain_steering(self) -> list[dict[str, Any]]:
@@ -101,7 +104,9 @@ class SteeringMixin:
     def steering_prompt(msgs: list[dict[str, Any]]) -> str:
         """渲染补充要求注入指令（语义与 BaseEngine.steering_prompt 一致）。"""
         from xenon.engine.base import BaseEngine
+
         return BaseEngine.steering_prompt(msgs)
+
 
 _TEST_STEP = re.compile(r"测试|验证|回归|test|verify|check|lint", re.IGNORECASE)
 _SUMMARY_STEP = re.compile(r"总结|汇总|报告|说明|summary|report", re.IGNORECASE)
@@ -138,7 +143,9 @@ def _isolated_ctx(ctx: AgentContext) -> AgentContext:
     return fresh
 
 
-def _merge_tracker(target: ToolExecutionTracker, source: ToolExecutionTracker | None) -> None:
+def _merge_tracker(
+    target: ToolExecutionTracker, source: ToolExecutionTracker | None
+) -> None:
     if source is not None:
         target.calls.extend(source.calls)
 
@@ -240,17 +247,23 @@ class PlanReactEngine(SteeringMixin):
             permission_gate=permission_gate,
         )
         self.planner = PlanExecuteEngine(
-            model_priority, max_steps=max_steps,
-            verification_loop=verification_loop, **common,
+            model_priority,
+            max_steps=max_steps,
+            verification_loop=verification_loop,
+            **common,
         )
         self.reactor = ReActEngine(
-            model_priority, max_iterations=react_iterations,
-            verification_loop=verification_loop, **common,
+            model_priority,
+            max_iterations=react_iterations,
+            verification_loop=verification_loop,
+            **common,
         )
         # v0.8.3: 引擎层跨轮次验证循环
         from xenon.engine.verification_loop import VerificationLoop
+
         self.verification_loop = VerificationLoop(
-            max_rounds=8, max_steps=self.max_steps,
+            max_rounds=8,
+            max_steps=self.max_steps,
         )
         self.verification_loop._engine = self
         self._last_tracker: ToolExecutionTracker | None = None
@@ -260,7 +273,9 @@ class PlanReactEngine(SteeringMixin):
         if ctx.get("_evidence_ledger") is None:
             self.planner._begin_run()
             self.planner._bind_evidence_ledger(ctx)
-        self.planner.finalize_evidence(context=ctx, output=output, tracker=self._last_tracker)
+        self.planner.finalize_evidence(
+            context=ctx, output=output, tracker=self._last_tracker
+        )
         return output
 
     def run(
@@ -305,13 +320,15 @@ class PlanReactEngine(SteeringMixin):
             )
             if reason:
                 result = f"步骤已跳过：{reason}"
-                results.append({
-                    "step_id": step_id,
-                    "task": task,
-                    "result": result,
-                    "status": "skipped",
-                    "evidence": evidence.render(max_diff_chars=2_000),
-                })
+                results.append(
+                    {
+                        "step_id": step_id,
+                        "task": task,
+                        "result": result,
+                        "status": "skipped",
+                        "evidence": evidence.render(max_diff_chars=2_000),
+                    }
+                )
                 ctx.set(f"step_{step_id}_result", result)
                 ctx.set(f"step_{step_id}_status", "skipped")
                 self.callback.on_step_done(step_id, True, result)
@@ -328,14 +345,17 @@ class PlanReactEngine(SteeringMixin):
                     f"已收到 {len(steering_msgs)} 条补充要求，正在调整当前步骤…"
                 )
             phase_ctx = _isolated_ctx(ctx)
-            phase_ctx.set("combined_completed_steps", [
-                {
-                    "step_id": item["step_id"],
-                    "task": item["task"],
-                    "status": item["status"],
-                }
-                for item in results
-            ])
+            phase_ctx.set(
+                "combined_completed_steps",
+                [
+                    {
+                        "step_id": item["step_id"],
+                        "task": item["task"],
+                        "status": item["status"],
+                    }
+                    for item in results
+                ],
+            )
             react_input = (
                 f"全局任务:\n{user_input}\n\n"
                 f"完整计划:\n{analysis}\n\n"
@@ -353,7 +373,11 @@ class PlanReactEngine(SteeringMixin):
                 result = self.reactor.run(
                     react_input, context=phase_ctx, ctx_mgr=ctx_mgr
                 )
-                result = result.strip() if result and result.strip() else "(步骤完成，无文本输出)"
+                result = (
+                    result.strip()
+                    if result and result.strip()
+                    else "(步骤完成，无文本输出)"
+                )
             except EngineDeadlineExceeded:
                 raise
             except Exception as exc:
@@ -365,13 +389,15 @@ class PlanReactEngine(SteeringMixin):
             if self.reactor.last_model_used:
                 self.last_model_used = self.reactor.last_model_used
             after = ExecutionEvidence.capture(aggregate, workspace_root)
-            results.append({
-                "step_id": step_id,
-                "task": task,
-                "result": result,
-                "status": status,
-                "evidence": after.render(max_diff_chars=2_000),
-            })
+            results.append(
+                {
+                    "step_id": step_id,
+                    "task": task,
+                    "result": result,
+                    "status": status,
+                    "evidence": after.render(max_diff_chars=2_000),
+                }
+            )
             ctx.set(f"step_{step_id}_result", result)
             ctx.set(f"step_{step_id}_status", status)
             self.callback.on_step_done(step_id, status == "ok", result[:200])
@@ -396,7 +422,9 @@ class PlanReactEngine(SteeringMixin):
             self.reactor._last_tracker = None
             try:
                 _ = self.reactor.run(
-                    repair_prompt, context=phase_ctx, ctx_mgr=ctx_mgr,
+                    repair_prompt,
+                    context=phase_ctx,
+                    ctx_mgr=ctx_mgr,
                 )
                 _merge_tracker(aggregate, self.reactor._last_tracker)
             except Exception as exc:
@@ -406,7 +434,9 @@ class PlanReactEngine(SteeringMixin):
             outcome_tag = "fixed" if evidence.successful_tests else "still_failing"
             self.verification_loop.record_outcome(evidence, outcome=outcome_tag)
 
-        return self._finalize_plan_react(ctx, self._summarize(user_input, results, analysis))
+        return self._finalize_plan_react(
+            ctx, self._summarize(user_input, results, analysis)
+        )
 
     def _summarize(
         self,
@@ -431,10 +461,13 @@ class PlanReactEngine(SteeringMixin):
                 )
             return answer
 
-        successful_text = "\n\n".join(
-            f"## 步骤 {item['step_id']}: {item['task']}\n{item['result']}"
-            for item in ok
-        ) or "(无成功完成的步骤)"
+        successful_text = (
+            "\n\n".join(
+                f"## 步骤 {item['step_id']}: {item['task']}\n{item['result']}"
+                for item in ok
+            )
+            or "(无成功完成的步骤)"
+        )
         failed_text = ""
         if failed:
             failed_text = "\n\n## 失败的步骤\n" + "\n".join(
@@ -485,6 +518,7 @@ class _ReflectionCombination(SteeringMixin):
         self._verification_enabled = verification_loop
         # v0.8.3: 引擎层跨轮次验证循环（组合层，在子引擎各自验证后聚合检查）
         from xenon.engine.verification_loop import VerificationLoop
+
         self.verification_loop = VerificationLoop(max_rounds=8)
         self.verification_loop._engine = self
 
@@ -496,7 +530,9 @@ class _ReflectionCombination(SteeringMixin):
         if ctx.get("_evidence_ledger") is None:
             finalizer._begin_run()
             finalizer._bind_evidence_ledger(ctx)
-        finalizer.finalize_evidence(context=ctx, output=output, tracker=self._last_tracker)
+        finalizer.finalize_evidence(
+            context=ctx, output=output, tracker=self._last_tracker
+        )
         return output
 
     def _review_and_repair(
@@ -533,15 +569,19 @@ class _ReflectionCombination(SteeringMixin):
         except EngineDeadlineExceeded:
             raise
         except Exception as exc:
-            logger.warning("Reflection review failed; preserving executed result: %s", exc)
+            logger.warning(
+                "Reflection review failed; preserving executed result: %s", exc
+            )
             self.callback.on_error(f"Reflection 审查失败: {exc}")
             return self._finalize_combined(ctx, initial_output)
 
         # A reviewer score cannot certify a write task when no mutating tool
         # actually succeeded.  This programmatic gate fixes the former
         # "read-only plan + self-score 10" false success mode.
-        if review.get("pass") and not steering_msgs and not (
-            state_change_required and initial_evidence.mutation_count == 0
+        if (
+            review.get("pass")
+            and not steering_msgs
+            and not (state_change_required and initial_evidence.mutation_count == 0)
         ):
             return self._finalize_combined(ctx, initial_output)
         if review.get("pass"):
@@ -585,7 +625,9 @@ class _ReflectionCombination(SteeringMixin):
         except EngineDeadlineExceeded:
             raise
         except Exception as exc:
-            logger.warning("Reflection repair failed; preserving executed result: %s", exc)
+            logger.warning(
+                "Reflection repair failed; preserving executed result: %s", exc
+            )
             self.callback.on_error(f"Reflection 修复失败: {exc}")
             return self._finalize_combined(ctx, initial_output)
 
@@ -644,7 +686,9 @@ class _ReflectionCombination(SteeringMixin):
             self.repairer._last_tracker = None
             try:
                 v_result = self.repairer.run(
-                    v_prompt, context=repair_ctx, ctx_mgr=ctx_mgr,
+                    v_prompt,
+                    context=repair_ctx,
+                    ctx_mgr=ctx_mgr,
                 )
                 _merge_tracker(aggregate, self.repairer._last_tracker)
                 repaired_output = v_result
@@ -692,8 +736,10 @@ class PlanReflectionEngine(_ReflectionCombination):
             permission_gate=permission_gate,
         )
         self.planner = PlanExecuteEngine(
-            model_priority, max_steps=max_steps,
-            verification_loop=verification_loop, **common,
+            model_priority,
+            max_steps=max_steps,
+            verification_loop=verification_loop,
+            **common,
         )
         self.reflector = ReflectionEngine(
             model_priority,
@@ -705,8 +751,10 @@ class PlanReflectionEngine(_ReflectionCombination):
             min(max_steps, 10) if repair_iterations is None else repair_iterations
         )
         self.repairer = ReActEngine(
-            model_priority, max_iterations=max(1, repair_budget),
-            verification_loop=verification_loop, **common,
+            model_priority,
+            max_iterations=max(1, repair_budget),
+            verification_loop=verification_loop,
+            **common,
         )
         self._last_tracker: ToolExecutionTracker | None = None
         self.last_model_used: str | None = None
@@ -764,15 +812,18 @@ class ReactReflectionEngine(_ReflectionCombination):
             permission_gate=permission_gate,
         )
         self.reactor = ReActEngine(
-            model_priority, max_iterations=react_iterations,
-            verification_loop=verification_loop, **common,
+            model_priority,
+            max_iterations=react_iterations,
+            verification_loop=verification_loop,
+            **common,
         )
         # A separate repairer prevents the initial ReAct tracker and loop state
         # from being reset before the combination has aggregated its evidence.
         self.repairer = ReActEngine(
             model_priority,
             max_iterations=max(1, min(react_iterations, 10)),
-            verification_loop=verification_loop, **common,
+            verification_loop=verification_loop,
+            **common,
         )
         self.reflector = ReflectionEngine(
             model_priority,

@@ -23,13 +23,41 @@ logger = logging.getLogger(__name__)
 
 
 # 常见大/无关目录，扫描时排除（含 glob 模式，fnmatch 匹配）。
-DEFAULT_EXCLUDE: frozenset[str] = frozenset({
-    ".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
-    "env", ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist",
-    "build", ".eggs", "*.egg-info", "vendor", "third_party", ".next",
-    ".nuxt", "target", ".gradle", ".idea", ".vscode", "bower_components",
-    ".pnpm-store", "logs", "tmp", "temp", ".cache", "site-packages",
-})
+DEFAULT_EXCLUDE: frozenset[str] = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "env",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "dist",
+        "build",
+        ".eggs",
+        "*.egg-info",
+        "vendor",
+        "third_party",
+        ".next",
+        ".nuxt",
+        "target",
+        ".gradle",
+        ".idea",
+        ".vscode",
+        "bower_components",
+        ".pnpm-store",
+        "logs",
+        "tmp",
+        "temp",
+        ".cache",
+        "site-packages",
+    }
+)
 
 # 文件路径启发式（用于 scout_from_history 提取）。
 _RE_PATH = re.compile(r"[\w\-./\\]+\.\w{1,6}")
@@ -56,7 +84,9 @@ class DirectoryScout:
         self.project_root = Path(project_root) if project_root else Path.cwd()
         self.max_depth = max_depth
         self.max_entries_per_dir = max_entries_per_dir
-        self.exclude_dirs = frozenset(exclude_dirs) if exclude_dirs is not None else DEFAULT_EXCLUDE
+        self.exclude_dirs = (
+            frozenset(exclude_dirs) if exclude_dirs is not None else DEFAULT_EXCLUDE
+        )
 
     def _excluded(self, name: str) -> bool:
         """fnmatch 匹配排除目录（支持 ``*.egg-info`` 等 glob 模式）。"""
@@ -74,7 +104,11 @@ class DirectoryScout:
         file_count = self._walk(root, 0, tree_lines)
         if file_count == 0 and not tree_lines:
             return None
-        return {"root": str(root), "tree": "\n".join(tree_lines), "file_count": file_count}
+        return {
+            "root": str(root),
+            "tree": "\n".join(tree_lines),
+            "file_count": file_count,
+        }
 
     def _walk(self, dir_path: Path, depth: int, out: list[str]) -> int:
         """递归遍历，返回文件数。目录优先排序，符号链接跳过。"""
@@ -118,14 +152,17 @@ class DirectoryScout:
             paths = [
                 ln.strip()
                 for ln in content.splitlines()
-                if ln.strip() and not ln.startswith("Observation")
+                if ln.strip()
+                and not ln.startswith("Observation")
                 and (_RE_PATH.search(ln) or "/" in ln or "\\" in ln)
             ]
             if paths:
                 return "\n".join(paths[:80])
         return None
 
-    def inject(self, user_input: str, messages: list[dict[str, str]] | None = None) -> str:
+    def inject(
+        self, user_input: str, messages: list[dict[str, str]] | None = None
+    ) -> str:
         """增强 ``user_input``：
 
         - 有扫描数据 → 前缀注入真实文件树；

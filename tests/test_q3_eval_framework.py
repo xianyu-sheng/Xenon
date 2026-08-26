@@ -25,7 +25,8 @@ from evals.runner import (
 class TestPromptNoLeak:
     def test_build_prompt_omits_expected_tools(self):
         task = {
-            "id": "t1", "category": "file_edit",
+            "id": "t1",
+            "category": "file_edit",
             "prompt": "Modify src/main.py greet function",
             "expected_tools": ["read_file", "edit_file"],
             "success_criteria": "signature updated, tests pass",
@@ -41,7 +42,9 @@ class TestPromptNoLeak:
     def test_build_prompt_without_criteria(self):
         """success_criteria 缺失时不崩，且不暴露 expected_tools。"""
         task = {
-            "id": "t1", "category": "c", "prompt": "do thing",
+            "id": "t1",
+            "category": "c",
+            "prompt": "do thing",
             "expected_tools": ["secret_tool"],
         }
         prompt = RealAgent._build_prompt(task)
@@ -68,8 +71,13 @@ class TestSchemaRelax:
         assert all("success_criteria" in t for t in tasks)
 
     def test_assertions_are_optional_but_validated(self):
-        task = {"id": "t", "category": "c", "prompt": "p", "expected_tools": [],
-                "assertions": {"answer_contains": ["done"]}}
+        task = {
+            "id": "t",
+            "category": "c",
+            "prompt": "p",
+            "expected_tools": [],
+            "assertions": {"answer_contains": ["done"]},
+        }
         validate_task(task)
         with pytest.raises(ValueError, match="assertions"):
             validate_task({**task, "assertions": ["done"]})
@@ -79,12 +87,14 @@ class TestResultAssertions:
     def test_file_and_answer_assertions_pass(self, tmp_path: Path):
         (tmp_path / "result.txt").write_text("verified output\n", encoding="utf-8")
         result = evaluate_assertions(
-            {"assertions": {
-                "files_exist": ["result.txt"],
-                "files_contain": {"result.txt": ["verified"]},
-                "answer_contains": ["done"],
-                "answer_not_contains": ["failed"],
-            }},
+            {
+                "assertions": {
+                    "files_exist": ["result.txt"],
+                    "files_contain": {"result.txt": ["verified"]},
+                    "answer_contains": ["done"],
+                    "answer_not_contains": ["failed"],
+                }
+            },
             "done and verified",
             workdir=tmp_path,
         )
@@ -94,10 +104,12 @@ class TestResultAssertions:
 
     def test_assertions_fail_for_missing_fact_or_escape(self, tmp_path: Path):
         result = evaluate_assertions(
-            {"assertions": {
-                "files_exist": ["missing.txt", "../outside.txt"],
-                "answer_contains": ["verified"],
-            }},
+            {
+                "assertions": {
+                    "files_exist": ["missing.txt", "../outside.txt"],
+                    "answer_contains": ["verified"],
+                }
+            },
             "not verified",
             workdir=tmp_path,
         )
@@ -107,7 +119,12 @@ class TestResultAssertions:
 
     def test_unconfigured_assertions_are_explicit(self):
         result = evaluate_assertions({}, "done")
-        assert result == {"configured": False, "passed": None, "checks": [], "failures": []}
+        assert result == {
+            "configured": False,
+            "passed": None,
+            "checks": [],
+            "failures": [],
+        }
 
 
 # ════════════════════════════════════════════════════════════
@@ -142,33 +159,50 @@ def _factory(fake_engine):
 
 class TestRealAgentScoring:
     def test_score_all_expected_executed(self):
-        task = {"id": "t", "category": "c", "prompt": "p",
-                "expected_tools": ["read_file", "edit_file"]}
+        task = {
+            "id": "t",
+            "category": "c",
+            "prompt": "p",
+            "expected_tools": ["read_file", "edit_file"],
+        }
         ok, reason = RealAgent._score(task, ["read_file", "edit_file"], "done")
         assert ok is True
         assert "executed all 2" in reason
 
     def test_score_missing_tool_fails(self):
-        task = {"id": "t", "category": "c", "prompt": "p",
-                "expected_tools": ["read_file", "edit_file"]}
+        task = {
+            "id": "t",
+            "category": "c",
+            "prompt": "p",
+            "expected_tools": ["read_file", "edit_file"],
+        }
         ok, reason = RealAgent._score(task, ["read_file"], "done")
         assert ok is False
         assert "edit_file" in reason
 
     def test_score_empty_answer_fails(self):
-        task = {"id": "t", "category": "c", "prompt": "p",
-                "expected_tools": ["read_file"]}
+        task = {
+            "id": "t",
+            "category": "c",
+            "prompt": "p",
+            "expected_tools": ["read_file"],
+        }
         ok, reason = RealAgent._score(task, ["read_file"], "   ")
         assert ok is False
         assert "empty" in reason
 
     def test_run_task_records_executed_tools(self):
         """注入假引擎，验证 run_task 记录实际执行的工具并评分。"""
-        fake = _FakeEngine([("read_file", {"file_path": "a.py"}),
-                            ("edit_file", {"file_path": "a.py"})])
+        fake = _FakeEngine(
+            [("read_file", {"file_path": "a.py"}), ("edit_file", {"file_path": "a.py"})]
+        )
         agent = RealAgent("m1", engine_factory=_factory(fake))
-        task = {"id": "t1", "category": "file_edit", "prompt": "edit a.py",
-                "expected_tools": ["read_file", "edit_file"]}
+        task = {
+            "id": "t1",
+            "category": "file_edit",
+            "prompt": "edit a.py",
+            "expected_tools": ["read_file", "edit_file"],
+        }
         result = agent.run_task(task)
         assert result["success"] is True
         assert result["tool_calls"] == 2
@@ -179,8 +213,12 @@ class TestRealAgentScoring:
     def test_run_task_missing_tool_fails(self):
         fake = _FakeEngine([("read_file", {})])
         agent = RealAgent("m1", engine_factory=_factory(fake))
-        task = {"id": "t1", "category": "file_edit", "prompt": "edit a.py",
-                "expected_tools": ["read_file", "edit_file"]}
+        task = {
+            "id": "t1",
+            "category": "file_edit",
+            "prompt": "edit a.py",
+            "expected_tools": ["read_file", "edit_file"],
+        }
         result = agent.run_task(task)
         assert result["success"] is False
         assert result["tool_failures"] == 1
@@ -188,13 +226,17 @@ class TestRealAgentScoring:
 
     def test_run_task_engine_exception_handled(self):
         """引擎抛异常时 run_task 不崩，记失败。"""
+
         class BoomEngine:
             def __call__(self, callback):
                 return self
+
             def _execute_tool(self, *a, **k):
                 return "obs"
+
             def run(self, p, c=None, ctx_mgr=None):
                 raise RuntimeError("API 挂了")
+
         agent = RealAgent("m1", engine_factory=BoomEngine())
         task = {"id": "t", "category": "c", "prompt": "p", "expected_tools": ["x"]}
         result = agent.run_task(task)
@@ -208,28 +250,38 @@ class TestRealAgentScoring:
         class SpyEngine:
             def __call__(self, callback):
                 return self
+
             def run(self, prompt, context=None, ctx_mgr=None):
                 captured["prompt"] = prompt
                 return "done"
+
             def _execute_tool(self, *a, **k):
                 return "obs"
 
         agent = RealAgent("m1", engine_factory=SpyEngine())
-        task = {"id": "t", "category": "c", "prompt": "do thing",
-                "expected_tools": ["secret_tool_name"]}
+        task = {
+            "id": "t",
+            "category": "c",
+            "prompt": "do thing",
+            "expected_tools": ["secret_tool_name"],
+        }
         agent.run_task(task)
         assert "secret_tool_name" not in captured["prompt"]
 
 
 class TestEvalCredentialIsolation:
-    def test_real_eval_redirects_persistence_to_workdir(self, tmp_path: Path, monkeypatch):
+    def test_real_eval_redirects_persistence_to_workdir(
+        self, tmp_path: Path, monkeypatch
+    ):
         source = tmp_path / "source-credentials.yaml"
         source.write_text("deepseek: test-only-value\n", encoding="utf-8")
         monkeypatch.delenv("XENON_CREDENTIALS_PATH", raising=False)
 
         with isolated_eval_credentials(tmp_path / "work", source) as target:
             assert os.environ["XENON_CREDENTIALS_PATH"] == str(target)
-            assert target.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+            assert target.read_text(encoding="utf-8") == source.read_text(
+                encoding="utf-8"
+            )
 
         assert "XENON_CREDENTIALS_PATH" not in os.environ
 
@@ -254,8 +306,12 @@ class TestMockSmokeTestLabel:
         tasks = load_tasks()
         results = run_eval(tasks, mode="mock")
         report_path = write_report(
-            results, tmp_path / "m.md", mode="mock", model="mock-agent",
-            run_date="2026-07-07 00:00:00 UTC")
+            results,
+            tmp_path / "m.md",
+            mode="mock",
+            model="mock-agent",
+            run_date="2026-07-07 00:00:00 UTC",
+        )
         report = report_path.read_text(encoding="utf-8")
         assert "smoke test" in report.lower() or "smoke" in report
         assert "NOT an agent capability" in report
@@ -271,28 +327,53 @@ class TestMockSmokeTestLabel:
         tasks = load_tasks()[:1]
         results = [agent.run_task(t) for t in tasks]
         report_path = write_report(
-            results, tmp_path / "r.md", mode="real", model="m1",
-            run_date="2026-07-07 00:00:00 UTC")
+            results,
+            tmp_path / "r.md",
+            mode="real",
+            model="m1",
+            run_date="2026-07-07 00:00:00 UTC",
+        )
         report = report_path.read_text(encoding="utf-8")
         assert "Scoring" in report or "实际执行" in report
 
 
 class TestXenonSpecificMetrics:
     def test_cache_and_cost_metrics_are_separate_from_success_rate(self):
-        results = [{"success": True, "task_id": "t", "token_count": 10,
-                    "tool_calls": 1, "tool_failures": 0}]
+        results = [
+            {
+                "success": True,
+                "task_id": "t",
+                "token_count": 10,
+                "tool_calls": 1,
+                "tool_failures": 0,
+            }
+        ]
         metrics = XenonMetrics.from_runtime(
             results,
-            usage={"deepseek/deepseek-v4-pro": {
-                "calls": 2, "prompt_tokens": 1000, "completion_tokens": 100,
-                "total_tokens": 1100, "latency_avg": 0.2,
-                "cache_hit_tokens": 800, "cache_miss_tokens": 200,
-            }},
+            usage={
+                "deepseek/deepseek-v4-pro": {
+                    "calls": 2,
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 100,
+                    "total_tokens": 1100,
+                    "latency_avg": 0.2,
+                    "cache_hit_tokens": 800,
+                    "cache_miss_tokens": 200,
+                }
+            },
             cache={
-                "total_calls": 2, "cache_field_coverage": 1.0,
-                "estimated_cost_yuan": 0.001, "savings_yuan": 0.005,
-                "events": [{"cache_lane": "rail-a", "cache_family": "family-a",
-                            "cache_hit_tokens": 800, "cause": "cache_hit"}],
+                "total_calls": 2,
+                "cache_field_coverage": 1.0,
+                "estimated_cost_yuan": 0.001,
+                "savings_yuan": 0.005,
+                "events": [
+                    {
+                        "cache_lane": "rail-a",
+                        "cache_family": "family-a",
+                        "cache_hit_tokens": 800,
+                        "cause": "cache_hit",
+                    }
+                ],
             },
             primary_model="deepseek/deepseek-v4-pro",
         )

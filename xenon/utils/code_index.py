@@ -25,9 +25,30 @@ logger = logging.getLogger(__name__)
 
 # 支持的文件类型
 _CODE_EXTENSIONS = {
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs",
-    ".c", ".cpp", ".h", ".hpp", ".cs", ".rb", ".php", ".swift",
-    ".kt", ".scala", ".sh", ".bash", ".ps1", ".lua", ".r", ".m",
+    ".py",
+    ".js",
+    ".ts",
+    ".jsx",
+    ".tsx",
+    ".java",
+    ".go",
+    ".rs",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".cs",
+    ".rb",
+    ".php",
+    ".swift",
+    ".kt",
+    ".scala",
+    ".sh",
+    ".bash",
+    ".ps1",
+    ".lua",
+    ".r",
+    ".m",
 }
 
 # 语言对应的符号提取正则
@@ -65,7 +86,10 @@ _LANG_PATTERNS: dict[str, list[tuple[str, str]]] = {
         (r"(?:pub\s+)?const\s+(\w+)", "variable"),
     ],
     "java": [
-        (r"(?:public|private|protected)?\s*(?:static\s+)?(?:\w+\s+)+(\w+)\s*\(", "method"),
+        (
+            r"(?:public|private|protected)?\s*(?:static\s+)?(?:\w+\s+)+(\w+)\s*\(",
+            "method",
+        ),
         (r"(?:public|private|protected)?\s*class\s+(\w+)", "class"),
         (r"(?:public|private|protected)?\s*interface\s+(\w+)", "interface"),
     ],
@@ -75,6 +99,7 @@ _LANG_PATTERNS: dict[str, list[tuple[str, str]]] = {
 @dataclass
 class Symbol:
     """代码符号。"""
+
     name: str
     kind: str  # function, class, method, variable, interface, enum, type, import
     file_path: str
@@ -116,6 +141,7 @@ class Symbol:
 @dataclass
 class Reference:
     """符号引用。"""
+
     name: str
     file_path: str
     line: int
@@ -125,7 +151,9 @@ class Reference:
 class CodeIndex:
     """项目级代码索引。"""
 
-    def __init__(self, root_dir: str | Path = ".", *, cache_dir: str | Path | None = None) -> None:
+    def __init__(
+        self, root_dir: str | Path = ".", *, cache_dir: str | Path | None = None
+    ) -> None:
         self.root = Path(root_dir).resolve()
         # symbol_name -> list[Symbol]
         self.symbols: dict[str, list[Symbol]] = {}
@@ -137,9 +165,22 @@ class CodeIndex:
         self.indexed_files: set[str] = set()
         # 排除目录
         self._exclude_dirs = {
-            "node_modules", "__pycache__", ".git", ".venv", "venv",
-            "env", ".env", "dist", "build", ".idea", ".vscode",
-            "target", "vendor", ".tox", ".mypy_cache", ".pytest_cache",
+            "node_modules",
+            "__pycache__",
+            ".git",
+            ".venv",
+            "venv",
+            "env",
+            ".env",
+            "dist",
+            "build",
+            ".idea",
+            ".vscode",
+            "target",
+            "vendor",
+            ".tox",
+            ".mypy_cache",
+            ".pytest_cache",
         }
         # §8.9.1：可选磁盘缓存目录。设置后 build() 会把符号索引持久化到磁盘，
         # 下次 build 对 mtime/size 未变的文件复用缓存、跳过 AST 重解析。
@@ -192,7 +233,9 @@ class CodeIndex:
             del cached_files[stale]
 
         if self._cache_dir is not None:
-            self._save_cache({"version": 1, "root": str(self.root), "files": cached_files})
+            self._save_cache(
+                {"version": 1, "root": str(self.root), "files": cached_files}
+            )
 
         logger.info(
             f"索引完成: {count} 个文件, {sum(len(v) for v in self.symbols.values())} 个符号"
@@ -226,8 +269,7 @@ class CodeIndex:
         for old_sym in old_symbols:
             if old_sym.name in self.symbols:
                 self.symbols[old_sym.name] = [
-                    s for s in self.symbols[old_sym.name]
-                    if s.file_path != str_path
+                    s for s in self.symbols[old_sym.name] if s.file_path != str_path
                 ]
                 if not self.symbols[old_sym.name]:
                     del self.symbols[old_sym.name]
@@ -238,7 +280,9 @@ class CodeIndex:
 
         return symbols
 
-    def search(self, query: str, *, kind: str | None = None, limit: int = 50) -> list[Symbol]:
+    def search(
+        self, query: str, *, kind: str | None = None, limit: int = 50
+    ) -> list[Symbol]:
         """搜索符号。支持模糊匹配。"""
         query_lower = query.lower()
         results = []
@@ -259,7 +303,7 @@ class CodeIndex:
     def find_references(self, name: str, *, limit: int = 100) -> list[Reference]:
         """查找符号的所有引用（使用正则搜索）。"""
         refs = []
-        pattern = re.compile(r'\b' + re.escape(name) + r'\b')
+        pattern = re.compile(r"\b" + re.escape(name) + r"\b")
         for file_path in self.indexed_files:
             try:
                 content = Path(file_path).read_text(encoding="utf-8", errors="replace")
@@ -267,12 +311,14 @@ class CodeIndex:
                 continue
             for i, line in enumerate(content.splitlines(), 1):
                 for match in pattern.finditer(line):
-                    refs.append(Reference(
-                        name=name,
-                        file_path=file_path,
-                        line=i,
-                        col=match.start(),
-                    ))
+                    refs.append(
+                        Reference(
+                            name=name,
+                            file_path=file_path,
+                            line=i,
+                            col=match.start(),
+                        )
+                    )
                     if len(refs) >= limit:
                         return refs
         return refs
@@ -361,8 +407,10 @@ class CodeIndex:
         """文件扩展名转语言名。"""
         mapping = {
             ".py": "python",
-            ".js": "javascript", ".jsx": "javascript",
-            ".ts": "typescript", ".tsx": "typescript",
+            ".js": "javascript",
+            ".jsx": "javascript",
+            ".ts": "typescript",
+            ".tsx": "typescript",
             ".go": "go",
             ".rs": "rust",
             ".java": "java",
@@ -382,22 +430,26 @@ class CodeIndex:
         parent_map = self._build_parent_map(tree)
 
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            if isinstance(node, ast.FunctionDef) or isinstance(
+                node, ast.AsyncFunctionDef
+            ):
                 parent = parent_map.get(id(node))
                 decorators = [self._get_decorator_name(d) for d in node.decorator_list]
                 sig = self._build_signature(node)
-                symbols.append(Symbol(
-                    name=node.name,
-                    kind="method" if parent else "function",
-                    file_path=file_path,
-                    line=node.lineno,
-                    col=node.col_offset,
-                    end_line=getattr(node, 'end_lineno', None),
-                    parent=parent,
-                    signature=sig,
-                    docstring=ast.get_docstring(node) or "",
-                    decorators=decorators,
-                ))
+                symbols.append(
+                    Symbol(
+                        name=node.name,
+                        kind="method" if parent else "function",
+                        file_path=file_path,
+                        line=node.lineno,
+                        col=node.col_offset,
+                        end_line=getattr(node, "end_lineno", None),
+                        parent=parent,
+                        signature=sig,
+                        docstring=ast.get_docstring(node) or "",
+                        decorators=decorators,
+                    )
+                )
 
             elif isinstance(node, ast.ClassDef):
                 decorators = [self._get_decorator_name(d) for d in node.decorator_list]
@@ -407,28 +459,32 @@ class CodeIndex:
                         bases.append(base.id)
                     elif isinstance(base, ast.Attribute):
                         bases.append(ast.unparse(base))
-                symbols.append(Symbol(
-                    name=node.name,
-                    kind="class",
-                    file_path=file_path,
-                    line=node.lineno,
-                    col=node.col_offset,
-                    end_line=getattr(node, 'end_lineno', None),
-                    docstring=ast.get_docstring(node) or "",
-                    decorators=decorators,
-                    signature=f"({', '.join(bases)})" if bases else "",
-                ))
+                symbols.append(
+                    Symbol(
+                        name=node.name,
+                        kind="class",
+                        file_path=file_path,
+                        line=node.lineno,
+                        col=node.col_offset,
+                        end_line=getattr(node, "end_lineno", None),
+                        docstring=ast.get_docstring(node) or "",
+                        decorators=decorators,
+                        signature=f"({', '.join(bases)})" if bases else "",
+                    )
+                )
 
             elif isinstance(node, ast.Assign):
                 for target in node.targets:
                     if isinstance(target, ast.Name):
-                        symbols.append(Symbol(
-                            name=target.id,
-                            kind="variable",
-                            file_path=file_path,
-                            line=node.lineno,
-                            col=node.col_offset,
-                        ))
+                        symbols.append(
+                            Symbol(
+                                name=target.id,
+                                kind="variable",
+                                file_path=file_path,
+                                line=node.lineno,
+                                col=node.col_offset,
+                            )
+                        )
 
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
                 self._record_imports(node, file_path)
@@ -446,13 +502,15 @@ class CodeIndex:
                 for match in re.finditer(pattern, line):
                     name = match.group(1)
                     if name and len(name) >= 1:
-                        symbols.append(Symbol(
-                            name=name,
-                            kind=kind,
-                            file_path=file_path,
-                            line=i,
-                            col=match.start(),
-                        ))
+                        symbols.append(
+                            Symbol(
+                                name=name,
+                                kind=kind,
+                                file_path=file_path,
+                                line=i,
+                                col=match.start(),
+                            )
+                        )
 
         return symbols
 
@@ -490,7 +548,7 @@ class CodeIndex:
             parts = []
 
             # positional-only args (Python 3.8+)
-            for arg in getattr(args, 'posonlyargs', []):
+            for arg in getattr(args, "posonlyargs", []):
                 if arg.arg not in ("self", "cls"):
                     parts.append(arg.arg)
 
@@ -533,16 +591,20 @@ class CodeIndex:
         imports = self.imports.setdefault(file_path, [])
         if isinstance(node, ast.Import):
             for alias in node.names:
-                imports.append({
-                    "module": alias.name,
-                    "name": alias.asname or alias.name,
-                    "line": node.lineno,
-                })
+                imports.append(
+                    {
+                        "module": alias.name,
+                        "name": alias.asname or alias.name,
+                        "line": node.lineno,
+                    }
+                )
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             for alias in node.names:
-                imports.append({
-                    "module": module,
-                    "name": alias.asname or alias.name,
-                    "line": node.lineno,
-                })
+                imports.append(
+                    {
+                        "module": module,
+                        "name": alias.asname or alias.name,
+                        "line": node.lineno,
+                    }
+                )

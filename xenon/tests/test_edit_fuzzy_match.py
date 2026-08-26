@@ -17,6 +17,7 @@ from xenon.nodes.tool_families.file_mutation import (
 
 # ── _normalized_match ───────────────────────────────────────────
 
+
 class TestNormalizedMatch:
     def test_exact_match_returns_same_text(self):
         content = "def foo():\n    return 1\n"
@@ -60,6 +61,7 @@ class TestNormalizedMatch:
 
 # ── _nearby_context ─────────────────────────────────────────────
 
+
 class TestNearbyContext:
     def test_returns_similar_snippet(self):
         content = "\n".join(f"line {i}" for i in range(10))
@@ -73,6 +75,7 @@ class TestNearbyContext:
 
 
 # ── _normalize_ws ───────────────────────────────────────────────
+
 
 class TestNormalizeWs:
     def test_collapses_whitespace(self):

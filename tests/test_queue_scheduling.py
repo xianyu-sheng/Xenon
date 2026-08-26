@@ -1,4 +1,5 @@
 """v0.4.0 Step 10: Multi-priority queue scheduling tests."""
+
 from __future__ import annotations
 
 from xenon.repl.model_pool import ModelPool
@@ -17,25 +18,27 @@ class TestTierAssignment:
         assert DifficultyEstimator.estimate_tier(profile) == 2
 
     def test_write_code_is_tier_3(self):
-        profile = TaskProfile(intent="write_code", complexity=0.45,
-                              requires_code_generation=True)
+        profile = TaskProfile(
+            intent="write_code", complexity=0.45, requires_code_generation=True
+        )
         # complexity 0.45 → tier 3; requires_code_generation 但 c ≤ 0.5，不提升
         assert DifficultyEstimator.estimate_tier(profile) == 3
 
     def test_refactor_is_tier_4(self):
-        profile = TaskProfile(intent="refactor", complexity=0.7,
-                              requires_reasoning=True,
-                              requires_code_generation=True)
+        profile = TaskProfile(
+            intent="refactor",
+            complexity=0.7,
+            requires_reasoning=True,
+            requires_code_generation=True,
+        )
         assert DifficultyEstimator.estimate_tier(profile) == 4
 
     def test_design_is_tier_5(self):
-        profile = TaskProfile(intent="design", complexity=0.9,
-                              requires_reasoning=True)
+        profile = TaskProfile(intent="design", complexity=0.9, requires_reasoning=True)
         assert DifficultyEstimator.estimate_tier(profile) == 5
 
     def test_reasoning_lifts_tier(self):
-        profile = TaskProfile(intent="explain", complexity=0.2,
-                              requires_reasoning=True)
+        profile = TaskProfile(intent="explain", complexity=0.2, requires_reasoning=True)
         # requires_reasoning → at least tier 3
         assert DifficultyEstimator.estimate_tier(profile) == 3
 

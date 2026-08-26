@@ -45,7 +45,8 @@ class _Client:
 
 
 def test_official_runtime_mounts_only_testbed_and_hides_grader(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path,
+    monkeypatch,
 ):
     source = tmp_path / "source"
     source.mkdir()
@@ -68,14 +69,15 @@ def test_official_runtime_mounts_only_testbed_and_hides_grader(
     )
 
     create_args = client.containers.kwargs
-    assert list(create_args["volumes"].values()) == [
-        {"bind": "/testbed", "mode": "rw"}
-    ]
+    assert list(create_args["volumes"].values()) == [{"bind": "/testbed", "mode": "rw"}]
     assert all("eval" not in path for path in create_args["volumes"])
     assert create_args["working_dir"] == "/testbed"
     assert (runtime.host_worktree / "module.py").exists()
     assert runtime.tool_runtime.command_prefix[:4] == (
-        "docker", "exec", "-w", "/testbed",
+        "docker",
+        "exec",
+        "-w",
+        "/testbed",
     )
 
     runtime.close()

@@ -11,4 +11,3 @@ def test_novel_is_not_a_mode_command_or_importable_engine():
     assert "/novel" not in COMMANDS
     assert importlib.util.find_spec("xenon.engine.novel_engine") is None
     assert importlib.util.find_spec("xenon.engine.novel_manager") is None
-

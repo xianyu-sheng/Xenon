@@ -157,20 +157,22 @@ def test_corrupt_resume_fails_closed_without_replacing_current_state(
 
 
 def test_malformed_active_key_is_migrated_and_removed():
-    context = AgentContext(initial={
-        "_tool_execution_active": {
-            "legacy-execution-key": {
+    context = AgentContext(
+        initial={
+            "_tool_execution_active": {
+                "legacy-execution-key": {
+                    "tool_name": "read_file",
+                    "tool_class": "INFO",
+                    "state": "running",
+                }
+            },
+            "_tool_execution_checkpoint": {
                 "tool_name": "read_file",
                 "tool_class": "INFO",
                 "state": "running",
-            }
-        },
-        "_tool_execution_checkpoint": {
-            "tool_name": "read_file",
-            "tool_class": "INFO",
-            "state": "running",
-        },
-    })
+            },
+        }
+    )
 
     notice = recover_tool_execution_checkpoint(context)
 
@@ -195,12 +197,14 @@ def test_session_listing_skips_wrong_field_types_without_hiding_good_sessions(
         model_config={},
     )
     (tmp_path / "bad.json").write_text(
-        json.dumps({
-            "name": "bad",
-            "history": [{"role": "user", "content": "bad"}],
-            "extra": "wrong-type",
-            "saved_at_ts": "not-a-number",
-        }),
+        json.dumps(
+            {
+                "name": "bad",
+                "history": [{"role": "user", "content": "bad"}],
+                "extra": "wrong-type",
+                "saved_at_ts": "not-a-number",
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -220,13 +224,15 @@ def test_invalid_message_shape_is_rejected_before_current_history_is_cleared(
 
     monkeypatch.setattr(session_module, "SESSIONS_DIR", tmp_path)
     (tmp_path / "invalid-message.json").write_text(
-        json.dumps({
-            "name": "invalid-message",
-            "history": ["not-a-message"],
-            "context": {},
-            "model_config": {},
-            "extra": {},
-        }),
+        json.dumps(
+            {
+                "name": "invalid-message",
+                "history": ["not-a-message"],
+                "context": {},
+                "model_config": {},
+                "extra": {},
+            }
+        ),
         encoding="utf-8",
     )
     ctx_mgr = ContextManager()

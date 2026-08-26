@@ -25,10 +25,11 @@ logger = logging.getLogger(__name__)
 
 class PermissionMode(Enum):
     """权限模式。"""
-    DEFAULT = "default"           # 危险操作确认
-    ACCEPT_EDITS = "accept_edits" # 自动批准编辑
-    BYPASS = "bypass"            # 跳过确认
-    PLAN = "plan"                # 只读模式
+
+    DEFAULT = "default"  # 危险操作确认
+    ACCEPT_EDITS = "accept_edits"  # 自动批准编辑
+    BYPASS = "bypass"  # 跳过确认
+    PLAN = "plan"  # 只读模式
 
 
 class PermissionState(Enum):
@@ -66,30 +67,64 @@ class PermissionRequest:
 
 # ── 工具分类 ────────────────────────────────────────────
 
-_CRITICAL_TOOLS: frozenset[str] = frozenset({
-    "command",
-    # MCP servers may expose arbitrary external side effects.  Until a server
-    # advertises a trustworthy read/write schema, require an explicit approval.
-    "mcp_call",
-})
+_CRITICAL_TOOLS: frozenset[str] = frozenset(
+    {
+        "command",
+        # MCP servers may expose arbitrary external side effects.  Until a server
+        # advertises a trustworthy read/write schema, require an explicit approval.
+        "mcp_call",
+    }
+)
 
-_WRITE_TOOLS: frozenset[str] = frozenset({
-    "write_file", "edit_file", "create_directory",
-    "batch_write", "batch_edit", "edit_with_llm", "append_file",
-    "refactor", "register_tool", "clone_repo",
-})
+_WRITE_TOOLS: frozenset[str] = frozenset(
+    {
+        "write_file",
+        "edit_file",
+        "create_directory",
+        "batch_write",
+        "batch_edit",
+        "edit_with_llm",
+        "append_file",
+        "refactor",
+        "register_tool",
+        "clone_repo",
+    }
+)
 
 # git 命令中的危险子命令
-_DANGEROUS_GIT_COMMANDS: frozenset[str] = frozenset({
-    "push", "reset", "clean", "checkout", "restore", "rebase", "merge",
-    "pull", "remote", "config", "branch -d", "branch -D", "tag -d",
-})
+_DANGEROUS_GIT_COMMANDS: frozenset[str] = frozenset(
+    {
+        "push",
+        "reset",
+        "clean",
+        "checkout",
+        "restore",
+        "rebase",
+        "merge",
+        "pull",
+        "remote",
+        "config",
+        "branch -d",
+        "branch -D",
+        "tag -d",
+    }
+)
 
-_SENSITIVE_DISPLAY_KEYS: frozenset[str] = frozenset({
-    "content", "token", "api_key", "apikey", "password", "secret",
-    "credential", "credentials", "authorization", "python_function",
-    "command_template",
-})
+_SENSITIVE_DISPLAY_KEYS: frozenset[str] = frozenset(
+    {
+        "content",
+        "token",
+        "api_key",
+        "apikey",
+        "password",
+        "secret",
+        "credential",
+        "credentials",
+        "authorization",
+        "python_function",
+        "command_template",
+    }
+)
 
 
 def _safe_display_value(key: str, value: Any) -> Any:
@@ -110,8 +145,7 @@ def _safe_display_value(key: str, value: Any) -> Any:
 
 def _safe_display_params(params: dict[str, Any]) -> dict[str, Any]:
     return {
-        str(key): _safe_display_value(str(key), value)
-        for key, value in params.items()
+        str(key): _safe_display_value(str(key), value) for key, value in params.items()
     }
 
 
@@ -173,11 +207,15 @@ class PermissionGate:
             return "WRITE"
         if tool_name == "git":
             # git 工具的子命令决定风险
-            git_command = str(
-                (params or {}).get("git_command")
-                or (params or {}).get("action")
-                or ""
-            ).strip().lower()
+            git_command = (
+                str(
+                    (params or {}).get("git_command")
+                    or (params or {}).get("action")
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
             if any(d.lower() in git_command for d in _DANGEROUS_GIT_COMMANDS):
                 return "CRITICAL"
             if git_command in {"status", "diff", "diff_full", "log", "branch", "show"}:
@@ -208,7 +246,8 @@ class PermissionGate:
         if risk not in _VALID_RISKS:
             logger.warning(
                 "权限闸门收到未知风险等级 %r（tool=%s），按 CRITICAL 处理",
-                risk, tool_name,
+                risk,
+                tool_name,
             )
             risk = "CRITICAL"
 
@@ -258,14 +297,15 @@ class PermissionGate:
             # suppresses duplicate prompts already queued by that wave.
             if (
                 tool_name in self._session_allow
-                or self._approval_key(tool_name, params)
-                in self._session_allow_exact
+                or self._approval_key(tool_name, params) in self._session_allow_exact
             ):
                 self._state = PermissionState.APPROVED
                 return True, ""
             return self._ask_unlocked(tool_name, params, risk)
 
-    def _ask_unlocked(self, tool_name: str, params: dict, risk: str) -> tuple[bool, str]:
+    def _ask_unlocked(
+        self, tool_name: str, params: dict, risk: str
+    ) -> tuple[bool, str]:
         """向用户确认。返回 (allowed, reason)。"""
         self._last_request = PermissionRequest(tool_name, dict(params), risk)
         self._state = PermissionState.PENDING
@@ -375,17 +415,26 @@ class PermissionGate:
         # bespoke one-line renderer (batch writes, refactors, dynamic tools,
         # and future MCP wrappers).  Sensitive values are summarized rather
         # than printed into terminal history.
-        if tool_name not in {
-            "command", "write_file", "edit_file", "git", "create_directory", "mcp_call",
-        } and params:
+        if (
+            tool_name
+            not in {
+                "command",
+                "write_file",
+                "edit_file",
+                "git",
+                "create_directory",
+                "mcp_call",
+            }
+            and params
+        ):
             safe = _safe_display_params(params)
             rendered = json.dumps(safe, ensure_ascii=False, sort_keys=True)
-            lines.append(
-                f"   参数: [bold white]{escape(rendered)}[/bold white]"
-            )
+            lines.append(f"   参数: [bold white]{escape(rendered)}[/bold white]")
 
         lines.append("")
-        always_label = "本会话总是允许此工具" if risk == "CRITICAL" else "本次会话总是允许"
+        always_label = (
+            "本会话总是允许此工具" if risk == "CRITICAL" else "本次会话总是允许"
+        )
         # This string is rendered as Rich markup by the REPL.  Bare ``[y]``
         # looks like a markup tag and is silently removed, so escape literal
         # key brackets while keeping the keys visually prominent.

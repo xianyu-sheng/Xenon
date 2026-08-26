@@ -42,7 +42,9 @@ class TestToolNodeFileOps:
         """测试带模板变量的文件写入。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             filepath = os.path.join(tmpdir, "{filename}.txt")
-            ctx = AgentContext(initial={"filename": "output", "data": "template content"})
+            ctx = AgentContext(
+                initial={"filename": "output", "data": "template content"}
+            )
             node = ToolNode(
                 "writer",
                 action_type="write_file",
@@ -246,8 +248,11 @@ class TestToolNodeNewActions:
 
             ctx = AgentContext()
             node = ToolNode(
-                "lister", action_type="list_files",
-                file_path=tmpdir, pattern="*.py", output_slot="files",
+                "lister",
+                action_type="list_files",
+                file_path=tmpdir,
+                pattern="*.py",
+                output_slot="files",
             )
             result = node.execute(ctx)
 
@@ -270,8 +275,11 @@ class TestToolNodeNewActions:
 
             ctx = AgentContext()
             node = ToolNode(
-                "searcher", action_type="search_files",
-                file_path=tmpdir, search_pattern="hello", file_filter="*.py",
+                "searcher",
+                action_type="search_files",
+                file_path=tmpdir,
+                search_pattern="hello",
+                file_filter="*.py",
                 output_slot="results",
             )
             result = node.execute(ctx)
@@ -291,8 +299,11 @@ class TestToolNodeNewActions:
         """测试 git status 命令。"""
         ctx = AgentContext()
         node = ToolNode(
-            "gitter", action_type="git", git_command="status",
-            cwd=".", output_slot="git_out",
+            "gitter",
+            action_type="git",
+            git_command="status",
+            cwd=".",
+            output_slot="git_out",
         )
         result = node.execute(ctx)
         # 可能不在 git 仓库中，但不应该崩溃
@@ -312,8 +323,15 @@ class TestToolNodeNewActions:
         config = {
             "models": {},
             "nodes": [
-                {"id": "list", "type": "tool", "action_type": "list_files",
-                 "file_path": ".", "pattern": "*.py", "max_depth": 3, "next": "end"},
+                {
+                    "id": "list",
+                    "type": "tool",
+                    "action_type": "list_files",
+                    "file_path": ".",
+                    "pattern": "*.py",
+                    "max_depth": 3,
+                    "next": "end",
+                },
                 {"id": "end", "type": "tool", "action": "echo done"},
             ],
         }
@@ -329,8 +347,15 @@ class TestToolNodeNewActions:
         config = {
             "models": {},
             "nodes": [
-                {"id": "search", "type": "tool", "action_type": "search_files",
-                 "file_path": ".", "search_pattern": "TODO", "file_filter": "*.py", "next": "end"},
+                {
+                    "id": "search",
+                    "type": "tool",
+                    "action_type": "search_files",
+                    "file_path": ".",
+                    "search_pattern": "TODO",
+                    "file_filter": "*.py",
+                    "next": "end",
+                },
                 {"id": "end", "type": "tool", "action": "echo done"},
             ],
         }
@@ -345,8 +370,13 @@ class TestToolNodeNewActions:
         config = {
             "models": {},
             "nodes": [
-                {"id": "g", "type": "tool", "action_type": "git",
-                 "git_command": "log", "next": "end"},
+                {
+                    "id": "g",
+                    "type": "tool",
+                    "action_type": "git",
+                    "git_command": "log",
+                    "next": "end",
+                },
                 {"id": "end", "type": "tool", "action": "echo done"},
             ],
         }
@@ -361,8 +391,13 @@ class TestToolNodeNewActions:
         config = {
             "models": {},
             "nodes": [
-                {"id": "fetch", "type": "tool", "action_type": "web_fetch",
-                 "url": "https://example.com", "next": "end"},
+                {
+                    "id": "fetch",
+                    "type": "tool",
+                    "action_type": "web_fetch",
+                    "url": "https://example.com",
+                    "next": "end",
+                },
                 {"id": "end", "type": "tool", "action": "echo done"},
             ],
         }
@@ -424,8 +459,14 @@ class TestToolNodeNewActions:
         config = {
             "workflow": {"name": "test", "start": "edit"},
             "nodes": [
-                {"id": "edit", "type": "tool", "action_type": "edit_file",
-                 "file_path": "{target_file}", "old_text": "old", "new_text": "new"},
+                {
+                    "id": "edit",
+                    "type": "tool",
+                    "action_type": "edit_file",
+                    "file_path": "{target_file}",
+                    "old_text": "old",
+                    "new_text": "new",
+                },
             ],
         }
         nodes, _ = parse_workflow(config)
@@ -458,7 +499,10 @@ class TestBatchOperations:
         """批量写入包含嵌套目录。"""
         files = [
             {"path": str(tmp_path / "src" / "main.py"), "content": "x=1"},
-            {"path": str(tmp_path / "tests" / "test_main.py"), "content": "assert True"},
+            {
+                "path": str(tmp_path / "tests" / "test_main.py"),
+                "content": "assert True",
+            },
         ]
         node = ToolNode("bw", action_type="batch_write", files=files)
         result = node.execute(AgentContext())
@@ -487,7 +531,11 @@ class TestBatchOperations:
 
         edits = [
             {"file_path": str(tmp_path / "a.py"), "old_text": "old", "new_text": "new"},
-            {"file_path": str(tmp_path / "b.py"), "old_text": "old", "new_text": "fresh"},
+            {
+                "file_path": str(tmp_path / "b.py"),
+                "old_text": "old",
+                "new_text": "fresh",
+            },
         ]
         node = ToolNode("be", action_type="batch_edit", edits=edits)
         result = node.execute(AgentContext())
@@ -502,7 +550,11 @@ class TestBatchOperations:
         # b.py 不存在
 
         edits = [
-            {"file_path": str(tmp_path / "a.py"), "old_text": "hello", "new_text": "world"},
+            {
+                "file_path": str(tmp_path / "a.py"),
+                "old_text": "hello",
+                "new_text": "world",
+            },
             {"file_path": str(tmp_path / "b.py"), "old_text": "x", "new_text": "y"},
         ]
         node = ToolNode("be", action_type="batch_edit", edits=edits)

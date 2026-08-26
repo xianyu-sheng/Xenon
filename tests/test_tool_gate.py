@@ -7,6 +7,7 @@
 4. get_evidence_mode 工具级覆盖
 5. metrics 记录
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -25,12 +26,14 @@ from xenon.engine.tool_gate import (
 @dataclass
 class MockValidationConfig:
     """模拟 ValidationConfig。"""
+
     strict: bool = False
 
 
 @dataclass
 class MockToolGateSectionConfig:
     """模拟 ToolGateSectionConfig。"""
+
     param_validation: str = "moderate"
     evidence_mode: str = "observe"
     tool_overrides: dict[str, Any] = field(default_factory=dict)
@@ -39,6 +42,7 @@ class MockToolGateSectionConfig:
 @dataclass
 class MockSystemConfig:
     """模拟 SystemConfig。"""
+
     validation: MockValidationConfig = field(default_factory=MockValidationConfig)
     tool_gate: MockToolGateSectionConfig | None = None
 
@@ -94,7 +98,7 @@ class TestToolGateFromConfig:
                 tool_overrides={
                     "command": {"disabled": True},
                     "read_file": {"param_validation": "lenient"},
-                }
+                },
             ),
         )
         gate = ToolGate.from_config(config)
@@ -107,8 +111,12 @@ class TestToolGateFromConfig:
         assert not gate.is_tool_disabled("read_file")
 
         # 工具级覆盖应生效
-        assert gate.get_param_validation_level("read_file") == ParamValidationLevel.LENIENT
-        assert gate.get_param_validation_level("write_file") == ParamValidationLevel.STRICT
+        assert (
+            gate.get_param_validation_level("read_file") == ParamValidationLevel.LENIENT
+        )
+        assert (
+            gate.get_param_validation_level("write_file") == ParamValidationLevel.STRICT
+        )
 
     def test_from_config_evidence_mode(self):
         """解析 evidence_mode 配置。"""
@@ -181,20 +189,30 @@ class TestToolGateParamValidation:
         """无覆盖时返回全局配置。"""
         gate = ToolGate(param_validation=ParamValidationLevel.STRICT)
 
-        assert gate.get_param_validation_level("read_file") == ParamValidationLevel.STRICT
-        assert gate.get_param_validation_level("write_file") == ParamValidationLevel.STRICT
+        assert (
+            gate.get_param_validation_level("read_file") == ParamValidationLevel.STRICT
+        )
+        assert (
+            gate.get_param_validation_level("write_file") == ParamValidationLevel.STRICT
+        )
 
     def test_param_validation_tool_override(self):
         """工具级覆盖应优先于全局配置。"""
         gate = ToolGate(
             param_validation=ParamValidationLevel.STRICT,
             tool_overrides={
-                "read_file": ToolGateConfig(param_validation=ParamValidationLevel.LENIENT),
-            }
+                "read_file": ToolGateConfig(
+                    param_validation=ParamValidationLevel.LENIENT
+                ),
+            },
         )
 
-        assert gate.get_param_validation_level("read_file") == ParamValidationLevel.LENIENT
-        assert gate.get_param_validation_level("write_file") == ParamValidationLevel.STRICT
+        assert (
+            gate.get_param_validation_level("read_file") == ParamValidationLevel.LENIENT
+        )
+        assert (
+            gate.get_param_validation_level("write_file") == ParamValidationLevel.STRICT
+        )
 
 
 class TestToolGateEvidenceMode:
@@ -213,7 +231,7 @@ class TestToolGateEvidenceMode:
             evidence_mode=EvidenceMode.ENFORCE,
             tool_overrides={
                 "read_file": ToolGateConfig(evidence_mode=EvidenceMode.DISABLED),
-            }
+            },
         )
 
         assert gate.get_evidence_mode("read_file") == EvidenceMode.DISABLED
@@ -260,12 +278,8 @@ class TestToolGateMetrics:
 
     def test_metrics_isolation(self):
         """不同 ToolGate 实例的 metrics 应独立。"""
-        gate1 = ToolGate(
-            tool_overrides={"command": ToolGateConfig(disabled=True)}
-        )
-        gate2 = ToolGate(
-            tool_overrides={"command": ToolGateConfig(disabled=True)}
-        )
+        gate1 = ToolGate(tool_overrides={"command": ToolGateConfig(disabled=True)})
+        gate2 = ToolGate(tool_overrides={"command": ToolGateConfig(disabled=True)})
 
         gate1.check_before("command", {})
         assert gate1.metrics.denied_by_disabled == 1
@@ -282,17 +296,13 @@ class TestToolGateIsToolDisabled:
 
     def test_is_tool_disabled_true(self):
         """被禁用的工具应返回 True。"""
-        gate = ToolGate(
-            tool_overrides={"command": ToolGateConfig(disabled=True)}
-        )
+        gate = ToolGate(tool_overrides={"command": ToolGateConfig(disabled=True)})
 
         assert gate.is_tool_disabled("command") is True
 
     def test_is_tool_disabled_false(self):
         """未被禁用的工具应返回 False。"""
-        gate = ToolGate(
-            tool_overrides={"command": ToolGateConfig(disabled=False)}
-        )
+        gate = ToolGate(tool_overrides={"command": ToolGateConfig(disabled=False)})
 
         assert gate.is_tool_disabled("command") is False
         assert gate.is_tool_disabled("read_file") is False

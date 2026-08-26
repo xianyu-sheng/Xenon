@@ -57,7 +57,7 @@ def _retry_delay(error: httpx.HTTPStatusError, attempt: int) -> float:
             return min(max(float(retry_after), 0.0), 30.0)
         except (TypeError, ValueError):
             pass
-    return min(float(2 ** attempt), 30.0)
+    return min(float(2**attempt), 30.0)
 
 
 def _normalize_reasoning_effort(value: str | None) -> str | None:
@@ -178,14 +178,18 @@ def _extract_usage(data: dict[str, Any] | None, provider: str) -> LLMUsage:
         or detail_hit
         or 0
     )
-    explicit_miss = u.get("prompt_cache_miss_tokens", 0) or u.get("cache_miss_tokens", 0)
+    explicit_miss = u.get("prompt_cache_miss_tokens", 0) or u.get(
+        "cache_miss_tokens", 0
+    )
     # OpenAI-compatible responses only report cached prompt tokens. In that
     # contract, the remaining prompt tokens are the cache miss portion.
     miss = int(explicit_miss or (max(0, p - hit) if isinstance(details, dict) else 0))
     return LLMUsage(
-        prompt_tokens=p, completion_tokens=c,
+        prompt_tokens=p,
+        completion_tokens=c,
         total_tokens=int(t) if t else (p + c),
-        cache_hit_tokens=hit, cache_miss_tokens=miss,
+        cache_hit_tokens=hit,
+        cache_miss_tokens=miss,
     )
 
 
@@ -214,6 +218,7 @@ def register_response_callback(cb) -> Any:
                 _RESPONSE_CALLBACKS.remove(cb)
             except ValueError:
                 pass
+
     return _unsubscribe
 
 
@@ -416,7 +421,9 @@ def _client_pool_key(endpoint: "ModelEndpoint") -> str:
     return f"{endpoint.provider}|{endpoint.base_url}"
 
 
-def _get_pooled_client(endpoint: "ModelEndpoint", timeout: float = 120.0) -> httpx.Client:
+def _get_pooled_client(
+    endpoint: "ModelEndpoint", timeout: float = 120.0
+) -> httpx.Client:
     """获取（或创建）per-provider 复用的长生命 httpx.Client。"""
     key = _client_pool_key(endpoint)
     with _CLIENT_LOCK:
@@ -439,6 +446,7 @@ def close_clients() -> None:
 
 
 # ── 安全代理处理 ────────────────────────────────────────────
+
 
 def _build_proxy_config() -> httpx.Proxy | None:
     """
@@ -489,9 +497,9 @@ _CREDENTIALS_PATH = Path.home() / ".xenon" / "credentials.yaml"
 class ModelEndpoint:
     """单个模型的调用元信息。"""
 
-    provider: str        # "openai" | "anthropic" | "deepseek"
-    model_name: str      # 厂商侧模型名，如 "claude-3-5-sonnet-20241022"
-    base_url: str        # API 基础地址
+    provider: str  # "openai" | "anthropic" | "deepseek"
+    model_name: str  # 厂商侧模型名，如 "claude-3-5-sonnet-20241022"
+    base_url: str  # API 基础地址
     api_key: str = field(repr=False, default="")
     max_tokens: int = 4096
 
@@ -574,7 +582,9 @@ def _load_credentials() -> dict[str, str]:
                     # build_endpoint while rejecting blank scalar secrets.
                     creds[normalized_key] = value
             else:
-                logger.warning("凭证文件不是 YAML 映射，忽略其内容: %s", _CREDENTIALS_PATH)
+                logger.warning(
+                    "凭证文件不是 YAML 映射，忽略其内容: %s", _CREDENTIALS_PATH
+                )
                 data = {}
             if not creds.get("ark"):
                 legacy_key = _legacy_ark_api_key(data)
@@ -606,11 +616,17 @@ def _legacy_ark_api_key(data: dict[str, Any]) -> str:
         if not isinstance(config, dict):
             continue
         try:
-            hostname = (urlparse(str(config.get("base_url", ""))).hostname or "").lower()
+            hostname = (
+                urlparse(str(config.get("base_url", ""))).hostname or ""
+            ).lower()
         except ValueError:
             continue
         api_key = config.get("api_key")
-        if hostname == "ark.cn-beijing.volces.com" and isinstance(api_key, str) and api_key.strip():
+        if (
+            hostname == "ark.cn-beijing.volces.com"
+            and isinstance(api_key, str)
+            and api_key.strip()
+        ):
             candidates.append(api_key.strip())
     unique = list(dict.fromkeys(candidates))
     return unique[0] if len(unique) == 1 else ""
@@ -629,7 +645,6 @@ def parse_model_id(model_id: str) -> tuple[str, str]:
     return provider.lower(), name
 
 
-
 def _load_custom_provider_config(provider_key: str) -> dict | None:
     """v0.4.0: 从 credentials.yaml 加载自定义模型商配置。
 
@@ -645,13 +660,16 @@ def _load_custom_provider_config(provider_key: str) -> dict | None:
     """
     try:
         import yaml as _yaml
+
         path = Path.home() / ".xenon" / "credentials.yaml"
         if not path.exists():
             return None
         with open(path, encoding="utf-8") as f:
             data = _yaml.safe_load(f) or {}
         custom_providers = data.get("_custom_providers")
-        custom_providers = custom_providers if isinstance(custom_providers, dict) else {}
+        custom_providers = (
+            custom_providers if isinstance(custom_providers, dict) else {}
+        )
         declared = data.get("providers")
         declared = declared if isinstance(declared, dict) else {}
         # v0.5.3: 兼容空 key 和修补后的 "custom" key
@@ -673,7 +691,11 @@ def _load_custom_provider_config(provider_key: str) -> dict | None:
         return None
 
 
-def build_endpoint(model_id: str, credentials: dict[str, str] | None = None, base_url: str | None = None) -> ModelEndpoint:
+def build_endpoint(
+    model_id: str,
+    credentials: dict[str, str] | None = None,
+    base_url: str | None = None,
+) -> ModelEndpoint:
     """根据 model_id 构建完整的调用端点信息。
 
     v0.4.0: 支持动态注册的自定义模型商。
@@ -688,8 +710,7 @@ def build_endpoint(model_id: str, credentials: dict[str, str] | None = None, bas
         # 尝试从自定义模型商加载
         custom_config = _load_custom_provider_config(provider)
         if custom_config:
-            defaults = {"base_url": custom_config["base_url"],
-                        "env_key": ""}
+            defaults = {"base_url": custom_config["base_url"], "env_key": ""}
         else:
             raise ValueError(
                 f"不支持的 provider: {provider}，内置: {list(_PROVIDER_DEFAULTS.keys())}。"
@@ -782,16 +803,26 @@ def chat_completion(
     for attempt in range(attempt_count):
         try:
             if endpoint.provider == "anthropic":
-                text = _call_anthropic(endpoint, messages, max_tokens, temperature, timeout)
+                text = _call_anthropic(
+                    endpoint, messages, max_tokens, temperature, timeout
+                )
             else:
                 if reasoning_effort:
                     text = _call_openai_compat(
-                        endpoint, messages, max_tokens, temperature, timeout,
+                        endpoint,
+                        messages,
+                        max_tokens,
+                        temperature,
+                        timeout,
                         reasoning_effort=reasoning_effort,
                     )
                 else:
                     text = _call_openai_compat(
-                        endpoint, messages, max_tokens, temperature, timeout,
+                        endpoint,
+                        messages,
+                        max_tokens,
+                        temperature,
+                        timeout,
                     )
             # 成功：发出 (model_id, 累计 usage, 延迟) 供 UsageTracker 等订阅
             latency = time.monotonic() - t0
@@ -806,7 +837,9 @@ def chat_completion(
                     break
                 # Prefer the provider's rolling-window guidance when present.
                 wait = _retry_delay(e, attempt)
-                logger.warning(f"[{model_id}] 429 限流，等待 {wait:g}s 后重试 (第 {attempt + 1}/{attempt_count} 次)")
+                logger.warning(
+                    f"[{model_id}] 429 限流，等待 {wait:g}s 后重试 (第 {attempt + 1}/{attempt_count} 次)"
+                )
                 time.sleep(wait)
             elif 500 <= status < 600:
                 last_error = e
@@ -814,7 +847,9 @@ def chat_completion(
                     break
                 # 服务端错误 — 指数退避重试
                 wait = _retry_delay(e, attempt)
-                logger.warning(f"[{model_id}] {status} 服务端错误，等待 {wait:g}s 后重试 (第 {attempt + 1}/{attempt_count} 次)")
+                logger.warning(
+                    f"[{model_id}] {status} 服务端错误，等待 {wait:g}s 后重试 (第 {attempt + 1}/{attempt_count} 次)"
+                )
                 time.sleep(wait)
             else:
                 # 其他 HTTP 错误 — 不重试
@@ -824,16 +859,18 @@ def chat_completion(
             httpx.ConnectError,
             httpx.ReadTimeout,
             httpx.ConnectTimeout,
-            httpx.RemoteProtocolError,   # "Server disconnected without sending a response"
-            httpx.WriteError,            # 写入连接失败
-            httpx.PoolTimeout,           # 连接池耗尽
+            httpx.RemoteProtocolError,  # "Server disconnected without sending a response"
+            httpx.WriteError,  # 写入连接失败
+            httpx.PoolTimeout,  # 连接池耗尽
         ) as e:
             # 网络/协议错误 — 指数退避重试
             last_error = e
             if attempt + 1 >= attempt_count:
                 break
-            wait = min(2 ** attempt, 8)
-            logger.warning(f"[{model_id}] 网络错误 ({type(e).__name__}): {e}，等待 {wait}s 后重试 (第 {attempt + 1}/{attempt_count} 次)")
+            wait = min(2**attempt, 8)
+            logger.warning(
+                f"[{model_id}] 网络错误 ({type(e).__name__}): {e}，等待 {wait}s 后重试 (第 {attempt + 1}/{attempt_count} 次)"
+            )
             time.sleep(wait)
 
     # 所有重试都失败
@@ -843,6 +880,7 @@ def chat_completion(
 # ══════════════════════════════════════════════════════════════
 # Provider: OpenAI-compatible (DeepSeek / Ark / OpenAI / ...)
 # ══════════════════════════════════════════════════════════════
+
 
 def _call_openai_compat(
     endpoint: ModelEndpoint,
@@ -868,12 +906,20 @@ def _call_openai_compat(
     while True:
         if reasoning_effort:
             content, finish = _call_openai_compat_once(
-                endpoint, msgs, current_max_tokens, temperature, timeout,
+                endpoint,
+                msgs,
+                current_max_tokens,
+                temperature,
+                timeout,
                 reasoning_effort=reasoning_effort,
             )
         else:
             content, finish = _call_openai_compat_once(
-                endpoint, msgs, current_max_tokens, temperature, timeout,
+                endpoint,
+                msgs,
+                current_max_tokens,
+                temperature,
+                timeout,
             )
         if content:
             parts.append(content)
@@ -911,9 +957,7 @@ def _call_openai_compat(
         if attempts >= MAX_CONTINUATIONS:
             repaired = _finalize_structured_text(combined)
             if repaired != combined and _structured_response_kind(combined) == "json":
-                logger.warning(
-                    "结构化 JSON 在续写次数耗尽后已修复，避免返回非法协议"
-                )
+                logger.warning("结构化 JSON 在续写次数耗尽后已修复，避免返回非法协议")
                 return repaired
             raise ResponseTruncatedError(
                 f"API 响应在 {MAX_CONTINUATIONS} 次续写后仍被截断 "
@@ -926,10 +970,12 @@ def _call_openai_compat(
             f"（{kind} 协议片段）" if kind else "",
         )
         msgs.append({"role": "assistant", "content": content or ""})
-        msgs.append({
-            "role": "user",
-            "content": _continuation_prompt(kind),
-        })
+        msgs.append(
+            {
+                "role": "user",
+                "content": _continuation_prompt(kind),
+            }
+        )
 
 
 def _structured_response_kind(text: str) -> str | None:
@@ -944,9 +990,14 @@ def _structured_response_kind(text: str) -> str | None:
         return "json"
     # DeepSeek sometimes emits full-width vertical bars in DSML markers.
     lowered = stripped.replace("｜", "|").lower()
-    if any(marker in lowered for marker in (
-        "<||dsml||tool_calls", "<uses_legacy_tools", "<tool_calls",
-    )):
+    if any(
+        marker in lowered
+        for marker in (
+            "<||dsml||tool_calls",
+            "<uses_legacy_tools",
+            "<tool_calls",
+        )
+    ):
         return "dsml"
     return None
 
@@ -1033,7 +1084,9 @@ def _call_openai_compat_once(
     elif reasoning:
         logger.debug(f"API 响应: content=空, reasoning_content={reasoning[:300]}")
     else:
-        logger.warning(f"API 响应: content 和 reasoning_content 均为空! finish_reason={finish}")
+        logger.warning(
+            f"API 响应: content 和 reasoning_content 均为空! finish_reason={finish}"
+        )
 
     # 推理模型在正常结束时偶尔只返回 reasoning_content；保留兼容兜底。
     # ``length`` 表示该推理本身尚未完成，绝不能把它冒充最终答案或协议正文。
@@ -1046,6 +1099,7 @@ def _call_openai_compat_once(
 # ═══════════════════════════════════════════════════════
 # Provider: Anthropic-native
 # ═══════════════════════════════════════════════════════
+
 
 def _call_anthropic(
     endpoint: ModelEndpoint,
@@ -1060,7 +1114,8 @@ def _call_anthropic(
     attempts = 0
     while True:
         content, stop_reason = _call_anthropic_once(
-            endpoint, msgs, max_tokens, temperature, timeout)
+            endpoint, msgs, max_tokens, temperature, timeout
+        )
         if content:
             parts.append(content)
         if stop_reason != "max_tokens":
@@ -1111,9 +1166,7 @@ def _call_anthropic_once(
     _acc_usage(endpoint.provider, data, f"{endpoint.provider}/{endpoint.model_name}")
     # content 是文本块列表；拼接所有 text 块（比仅取 [0] 更鲁棒）
     blocks = data.get("content", []) or []
-    text = "".join(
-        b.get("text", "") for b in blocks if isinstance(b, dict)
-    )
+    text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict))
     stop_reason = data.get("stop_reason", "")
     return text, stop_reason
 
@@ -1121,28 +1174,33 @@ def _call_anthropic_once(
 # ── R3: 原生 function-calling 能力（Q2 三层降级前置） ──────
 
 
-def _normalize_openai_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+def _normalize_openai_tools(
+    tools: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
     """OpenAI 兼容厂商直接透传 tools（已是 {type:function, function:{...}} 形态）。"""
     if not tools:
         return None
-    return [
-        t if t.get("type") else {"type": "function", "function": t}
-        for t in tools
-    ]
+    return [t if t.get("type") else {"type": "function", "function": t} for t in tools]
 
 
-def _openai_to_anthropic_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+def _openai_to_anthropic_tools(
+    tools: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
     """把 OpenAI 风格 tools 转为 Anthropic 原生格式 [{name, description, input_schema}]。"""
     if not tools:
         return None
     converted = []
     for t in tools:
         fn = t.get("function", t)  # 兼容裸函数定义
-        converted.append({
-            "name": fn.get("name", ""),
-            "description": fn.get("description", ""),
-            "input_schema": fn.get("parameters") or fn.get("input_schema") or {"type": "object", "properties": {}},
-        })
+        converted.append(
+            {
+                "name": fn.get("name", ""),
+                "description": fn.get("description", ""),
+                "input_schema": fn.get("parameters")
+                or fn.get("input_schema")
+                or {"type": "object", "properties": {}},
+            }
+        )
     return converted
 
 
@@ -1153,19 +1211,25 @@ def _parse_openai_tool_calls(msg: dict[str, Any]) -> list[dict[str, Any]]:
         fn = tc.get("function", {})
         args_raw = fn.get("arguments", "{}")
         try:
-            args = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
+            args = (
+                json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
+            )
         except (json.JSONDecodeError, TypeError):
             # 参数非合法 JSON — 保留原始字符串，调用方自行处理
             args = {"_raw": args_raw}
-        out.append({
-            "id": tc.get("id", ""),
-            "name": fn.get("name", ""),
-            "arguments": args,
-        })
+        out.append(
+            {
+                "id": tc.get("id", ""),
+                "name": fn.get("name", ""),
+                "arguments": args,
+            }
+        )
     return out
 
 
-def _parse_anthropic_tool_calls(blocks: list[Any]) -> tuple[str, list[dict[str, Any]], str]:
+def _parse_anthropic_tool_calls(
+    blocks: list[Any],
+) -> tuple[str, list[dict[str, Any]], str]:
     """解析 Anthropic content blocks，返回 (text, tool_calls, stop_reason)。
 
     text = 拼接所有 text 块；tool_calls 来自 tool_use 块。
@@ -1178,11 +1242,13 @@ def _parse_anthropic_tool_calls(blocks: list[Any]) -> tuple[str, list[dict[str, 
         if b.get("type") == "text":
             text_parts.append(b.get("text", ""))
         elif b.get("type") == "tool_use":
-            tool_calls.append({
-                "id": b.get("id", ""),
-                "name": b.get("name", ""),
-                "arguments": b.get("input") or {},
-            })
+            tool_calls.append(
+                {
+                    "id": b.get("id", ""),
+                    "name": b.get("name", ""),
+                    "arguments": b.get("input") or {},
+                }
+            )
     return "".join(text_parts), tool_calls, ""
 
 
@@ -1209,14 +1275,22 @@ def _messages_for_anthropic(
         content = message.get("content", "")
         if role == "system":
             flush_tool_results()
-            system_parts.append(content if isinstance(content, str) else json.dumps(content, ensure_ascii=False))
+            system_parts.append(
+                content
+                if isinstance(content, str)
+                else json.dumps(content, ensure_ascii=False)
+            )
             continue
         if role == "tool":
-            pending_results.append({
-                "type": "tool_result",
-                "tool_use_id": str(message.get("tool_call_id", "")),
-                "content": content if isinstance(content, str) else json.dumps(content, ensure_ascii=False),
-            })
+            pending_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": str(message.get("tool_call_id", "")),
+                    "content": content
+                    if isinstance(content, str)
+                    else json.dumps(content, ensure_ascii=False),
+                }
+            )
             continue
 
         flush_tool_results()
@@ -1225,19 +1299,23 @@ def _messages_for_anthropic(
             if content:
                 blocks.append({"type": "text", "text": str(content)})
             for tool_call in message.get("tool_calls", []):
-                function = tool_call.get("function", {}) if isinstance(tool_call, dict) else {}
+                function = (
+                    tool_call.get("function", {}) if isinstance(tool_call, dict) else {}
+                )
                 arguments = function.get("arguments", {})
                 if isinstance(arguments, str):
                     try:
                         arguments = json.loads(arguments)
                     except json.JSONDecodeError:
                         arguments = {"_raw": arguments}
-                blocks.append({
-                    "type": "tool_use",
-                    "id": str(tool_call.get("id", "")),
-                    "name": str(function.get("name", "")),
-                    "input": arguments if isinstance(arguments, dict) else {},
-                })
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": str(tool_call.get("id", "")),
+                        "name": str(function.get("name", "")),
+                        "input": arguments if isinstance(arguments, dict) else {},
+                    }
+                )
             chat_messages.append({"role": "assistant", "content": blocks})
             continue
 
@@ -1318,19 +1396,37 @@ def chat_completion_with_tools(
         try:
             if endpoint.provider == "anthropic":
                 response = _call_anthropic_with_tools(
-                    endpoint, messages, tools, response_format, tool_choice,
-                    max_tokens, temperature, timeout,
+                    endpoint,
+                    messages,
+                    tools,
+                    response_format,
+                    tool_choice,
+                    max_tokens,
+                    temperature,
+                    timeout,
                 )
             elif reasoning_effort:
                 response = _call_openai_compat_with_tools(
-                    endpoint, messages, tools, response_format, tool_choice,
-                    max_tokens, temperature, timeout,
+                    endpoint,
+                    messages,
+                    tools,
+                    response_format,
+                    tool_choice,
+                    max_tokens,
+                    temperature,
+                    timeout,
                     reasoning_effort=reasoning_effort,
                 )
             else:
                 response = _call_openai_compat_with_tools(
-                    endpoint, messages, tools, response_format, tool_choice,
-                    max_tokens, temperature, timeout,
+                    endpoint,
+                    messages,
+                    tools,
+                    response_format,
+                    tool_choice,
+                    max_tokens,
+                    temperature,
+                    timeout,
                 )
             accumulated = getattr(_usage_tl, "usage_acc", None)
             usage = accumulated if isinstance(accumulated, LLMUsage) else response.usage
@@ -1343,19 +1439,27 @@ def chat_completion_with_tools(
                 if attempt + 1 >= attempt_count:
                     break
                 wait = _retry_delay(e, attempt)
-                logger.warning(f"[{model_id}] {status} 失败，等待 {wait:g}s 重试 (第 {attempt + 1}/{attempt_count} 次)")
+                logger.warning(
+                    f"[{model_id}] {status} 失败，等待 {wait:g}s 重试 (第 {attempt + 1}/{attempt_count} 次)"
+                )
                 time.sleep(wait)
             else:
                 raise
         except (
-            httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout,
-            httpx.RemoteProtocolError, httpx.WriteError, httpx.PoolTimeout,
+            httpx.ConnectError,
+            httpx.ReadTimeout,
+            httpx.ConnectTimeout,
+            httpx.RemoteProtocolError,
+            httpx.WriteError,
+            httpx.PoolTimeout,
         ) as e:
             last_error = e
             if attempt + 1 >= attempt_count:
                 break
-            wait = min(2 ** attempt, 8)
-            logger.warning(f"[{model_id}] 网络错误 ({type(e).__name__}): {e}，等待 {wait}s 重试")
+            wait = min(2**attempt, 8)
+            logger.warning(
+                f"[{model_id}] 网络错误 ({type(e).__name__}): {e}，等待 {wait}s 重试"
+            )
             time.sleep(wait)
 
     raise last_error  # type: ignore[misc]
@@ -1468,7 +1572,9 @@ def _call_anthropic_with_tools(
     system_text, chat_messages = _messages_for_anthropic(messages)
 
     if response_format and "json" in json.dumps(response_format).lower():
-        system_text = (system_text + "\n\n" if system_text else "") + "请严格以合法 JSON 输出，不要包含多余文本。"
+        system_text = (
+            system_text + "\n\n" if system_text else ""
+        ) + "请严格以合法 JSON 输出，不要包含多余文本。"
 
     payload: dict[str, Any] = {
         "model": endpoint.model_name,
@@ -1492,7 +1598,10 @@ def _call_anthropic_with_tools(
             # Anthropic 无 none；不传 tools 即可，这里保留 tools 但不强制
             pass
         elif isinstance(tool_choice, dict):
-            payload["tool_choice"] = {"type": "tool", "name": tool_choice.get("function", {}).get("name", "")}
+            payload["tool_choice"] = {
+                "type": "tool",
+                "name": tool_choice.get("function", {}).get("name", ""),
+            }
         else:
             payload["tool_choice"] = {"type": "auto"}
 
@@ -1505,7 +1614,11 @@ def _call_anthropic_with_tools(
     text, tool_calls, _ = _parse_anthropic_tool_calls(blocks)
     # Anthropic stop_reason → OpenAI 风格 finish_reason
     stop = data.get("stop_reason", "")
-    finish = "tool_calls" if stop == "tool_use" else ("length" if stop == "max_tokens" else stop or "stop")
+    finish = (
+        "tool_calls"
+        if stop == "tool_use"
+        else ("length" if stop == "max_tokens" else stop or "stop")
+    )
     if finish == "length":
         raise ResponseTruncatedError(
             "Anthropic 原生工具调用响应因 stop_reason=max_tokens 被截断，"
@@ -1610,11 +1723,22 @@ def chat_completion_stream(
 
     if endpoint.provider == "anthropic":
         yield from _stream_anthropic(
-            endpoint, messages, max_tokens, temperature, timeout, model_id, manifest,
+            endpoint,
+            messages,
+            max_tokens,
+            temperature,
+            timeout,
+            model_id,
+            manifest,
         )
     else:
         yield from _stream_openai_compat(
-            endpoint, messages, max_tokens, temperature, timeout, model_id,
+            endpoint,
+            messages,
+            max_tokens,
+            temperature,
+            timeout,
+            model_id,
             reasoning_effort=reasoning_effort,
             manifest=manifest,
         )
@@ -1684,13 +1808,14 @@ def _stream_openai_compat(
                 if content:
                     yield content
     if usage_data is not None:
-        _emit_usage(model_id, _extract_usage(usage_data, endpoint.provider), time.time() - t0)
+        _emit_usage(
+            model_id, _extract_usage(usage_data, endpoint.provider), time.time() - t0
+        )
         # 发出响应回调（供 CacheTracker 等订阅原始 API 响应）
         _emit_response(model_id, _response_with_manifest(usage_data, manifest))
     if finish_reason == "length":
         raise ResponseTruncatedError(
-            "流式 API 响应因 finish_reason=length 被截断，"
-            "已拒绝把残缺内容当作完整回答"
+            "流式 API 响应因 finish_reason=length 被截断，已拒绝把残缺内容当作完整回答"
         )
 
 
@@ -1749,10 +1874,9 @@ def _stream_anthropic(
                     input_tokens = int(u.get("input_tokens", 0) or 0)
                     output_tokens = int(u.get("output_tokens", 0) or 0)
                 elif etype == "message_delta":
-                    stop_reason = (
-                        (event.get("delta") or {}).get("stop_reason")
-                        or stop_reason
-                    )
+                    stop_reason = (event.get("delta") or {}).get(
+                        "stop_reason"
+                    ) or stop_reason
                     u = event.get("usage") or {}
                     if "output_tokens" in u:
                         output_tokens = int(u.get("output_tokens", 0) or 0)
@@ -1770,10 +1894,12 @@ def _stream_anthropic(
         _emit_response(
             model_id,
             _response_with_manifest(
-                {"usage": {
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                }},
+                {
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                    }
+                },
                 manifest,
             ),
         )

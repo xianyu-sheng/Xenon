@@ -16,16 +16,18 @@ from typing import Any
 from xenon.engine.tool_tracker import ToolCall, ToolExecutionTracker
 
 
-MUTATING_TOOLS = frozenset({
-    "write_file",
-    "edit_file",
-    "append_file",
-    "batch_write",
-    "batch_edit",
-    "create_directory",
-    "refactor",
-    "edit_with_llm",
-})
+MUTATING_TOOLS = frozenset(
+    {
+        "write_file",
+        "edit_file",
+        "append_file",
+        "batch_write",
+        "batch_edit",
+        "create_directory",
+        "refactor",
+        "edit_with_llm",
+    }
+)
 # 注意：command 和 git 不在其中——它们可读可写（歧义），
 # 若纳入会导致 mutation_count 把 pytest/ls 等只读命令也计为"变更"。
 # command/git 写入由 workspace_status（git diff）检测，见 has_workspace_change。
@@ -133,7 +135,8 @@ class ExecutionEvidence:
     @property
     def mutation_count(self) -> int:
         return sum(
-            1 for call in self.calls
+            1
+            for call in self.calls
             if call.success and call.tool_name in MUTATING_TOOLS
         )
 
@@ -163,7 +166,8 @@ class ExecutionEvidence:
             f"工具调用: {successful}/{len(self.calls)} 成功",
             f"状态变更工具: {self.mutation_count}",
             "变更目标: " + (", ".join(sorted(self.changed_files)) or "(无已验证目标)"),
-            "成功测试: " + (
+            "成功测试: "
+            + (
                 "; ".join(command[:300] for command in self.successful_tests)
                 or "(无已验证测试)"
             ),
@@ -181,7 +185,10 @@ class ExecutionEvidence:
         if self.workspace_diff:
             diff = self.workspace_diff
             if len(diff) > max_diff_chars:
-                diff = diff[:max_diff_chars] + f"\n... [diff 截断，共 {len(self.workspace_diff)} 字符]"
+                diff = (
+                    diff[:max_diff_chars]
+                    + f"\n... [diff 截断，共 {len(self.workspace_diff)} 字符]"
+                )
             lines.append("工作区 diff（真实状态，只读证据）:\n" + diff)
         return "\n".join(lines)
 

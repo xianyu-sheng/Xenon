@@ -5,6 +5,7 @@
 - Anthropic：tools 转原生格式，解析 tool_use 块，tool_choice 映射，response_format 降级为 system 提示；
 - per-provider 长生命 httpx Client 池：同 endpoint 复用、close_clients 清空。
 """
+
 import pytest
 
 import xenon.utils.llm_client as llm
@@ -28,7 +29,14 @@ class _FakeResponse:
     def raise_for_status(self):
         if self.status_code >= 400:
             import httpx
-            raise httpx.HTTPStatusError(f"HTTP {self.status_code}", request=httpx.Request("POST", "http://x"), response=httpx.Response(self.status_code, request=httpx.Request("POST", "http://x")))
+
+            raise httpx.HTTPStatusError(
+                f"HTTP {self.status_code}",
+                request=httpx.Request("POST", "http://x"),
+                response=httpx.Response(
+                    self.status_code, request=httpx.Request("POST", "http://x")
+                ),
+            )
 
     def json(self):
         return self._payload
@@ -46,7 +54,9 @@ class _FakeClient:
         return _FakeResponse(self._next_payload())
 
     def _next_payload(self):
-        payload = self._payloads.pop(0) if getattr(self, "_payloads", None) else self._payload
+        payload = (
+            self._payloads.pop(0) if getattr(self, "_payloads", None) else self._payload
+        )
         return payload
 
     def set_payload(self, payload):
@@ -60,7 +70,9 @@ class _FakeClient:
 
 
 def _endpoint(provider, base_url="https://api.example.com/v1"):
-    return ModelEndpoint(provider=provider, model_name="m", base_url=base_url, api_key="k")
+    return ModelEndpoint(
+        provider=provider, model_name="m", base_url=base_url, api_key="k"
+    )
 
 
 # ── 纯函数：工具格式转换与解析 ──────────────────────────────
@@ -87,19 +99,41 @@ class TestToolConversion:
         assert norm[0]["function"]["name"] == "echo"
 
     def test_openai_to_anthropic_tools(self):
-        tools = [{"type": "function", "function": {"name": "echo", "description": "d", "parameters": {"type": "object"}}}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "echo",
+                    "description": "d",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
         conv = _openai_to_anthropic_tools(tools)
-        assert conv[0] == {"name": "echo", "description": "d", "input_schema": {"type": "object"}}
+        assert conv[0] == {
+            "name": "echo",
+            "description": "d",
+            "input_schema": {"type": "object"},
+        }
 
     def test_parse_openai_tool_calls_valid_json(self):
-        msg = {"tool_calls": [
-            {"id": "c1", "function": {"name": "echo", "arguments": '{"text":"hi"}'}},
-        ]}
+        msg = {
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "function": {"name": "echo", "arguments": '{"text":"hi"}'},
+                },
+            ]
+        }
         out = _parse_openai_tool_calls(msg)
         assert out == [{"id": "c1", "name": "echo", "arguments": {"text": "hi"}}]
 
     def test_parse_openai_tool_calls_invalid_json_fallback(self):
-        msg = {"tool_calls": [{"id": "c1", "function": {"name": "echo", "arguments": "not-json"}}]}
+        msg = {
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "echo", "arguments": "not-json"}}
+            ]
+        }
         out = _parse_openai_tool_calls(msg)
         assert out[0]["arguments"] == {"_raw": "not-json"}
 
@@ -117,16 +151,22 @@ class TestToolConversion:
 class TestOpenaiFCPath:
     def test_plain_length_does_not_expose_unfinished_reasoning(self, monkeypatch):
         fake = _FakeClient()
-        fake.set_payload({
-            "choices": [{
-                "message": {
-                    "content": "",
-                    "reasoning_content": "unfinished hidden reasoning",
-                },
-                "finish_reason": "length",
-            }],
-        })
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+        fake.set_payload(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "reasoning_content": "unfinished hidden reasoning",
+                        },
+                        "finish_reason": "length",
+                    }
+                ],
+            }
+        )
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
 
         content, finish = llm._call_openai_compat_once(
             _endpoint("deepseek"),
@@ -142,19 +182,30 @@ class TestOpenaiFCPath:
     def test_truncated_native_tool_call_is_rejected(self, monkeypatch):
         """A partial tool envelope must never reach the executor."""
         fake = _FakeClient()
-        fake.set_payload({
-            "choices": [{
-                "message": {
-                    "tool_calls": [{
-                        "id": "c1",
-                        "type": "function",
-                        "function": {"name": "echo", "arguments": '{"text":"x'},
-                    }],
-                },
-                "finish_reason": "length",
-            }],
-        })
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+        fake.set_payload(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "c1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "echo",
+                                        "arguments": '{"text":"x',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "length",
+                    }
+                ],
+            }
+        )
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
 
         with pytest.raises(ResponseTruncatedError):
             llm._call_openai_compat_with_tools(
@@ -170,22 +221,31 @@ class TestOpenaiFCPath:
 
     def test_native_tool_call_emits_usage_to_tracker(self, monkeypatch):
         fake = _FakeClient()
-        fake.set_payload({
-            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 2,
-                "total_tokens": 12,
-                "prompt_tokens_details": {"cached_tokens": 4},
-            },
-        })
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
-        monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai"))
+        fake.set_payload(
+            {
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 2,
+                    "total_tokens": 12,
+                    "prompt_tokens_details": {"cached_tokens": 4},
+                },
+            }
+        )
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
+        monkeypatch.setattr(
+            llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai")
+        )
         tracker = llm.UsageTracker()
         try:
             chat_completion_with_tools(
-                "openai/gpt-4o", [{"role": "user", "content": "x"}],
-                tools=[{"type": "function", "function": {"name": "echo", "parameters": {}}}],
+                "openai/gpt-4o",
+                [{"role": "user", "content": "x"}],
+                tools=[
+                    {"type": "function", "function": {"name": "echo", "parameters": {}}}
+                ],
             )
             usage = tracker.snapshot()["openai/gpt-4o"]
             assert usage.pop("latency_avg") >= 0
@@ -202,23 +262,42 @@ class TestOpenaiFCPath:
 
     def test_openai_returns_structured_tool_calls(self, monkeypatch):
         fake = _FakeClient()
-        fake.set_payload({
-            "choices": [{
-                "message": {
-                    "content": None,
-                    "reasoning_content": "I should call echo.",
-                    "tool_calls": [{"id": "c1", "type": "function",
-                                    "function": {"name": "echo", "arguments": '{"text":"hi"}'}}],
-                },
-                "finish_reason": "tool_calls",
-            }],
-        })
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
-        monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai"))
+        fake.set_payload(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "reasoning_content": "I should call echo.",
+                            "tool_calls": [
+                                {
+                                    "id": "c1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "echo",
+                                        "arguments": '{"text":"hi"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            }
+        )
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
+        monkeypatch.setattr(
+            llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai")
+        )
 
         resp = chat_completion_with_tools(
-            "openai/gpt-4o", [{"role": "user", "content": "echo hi"}],
-            tools=[{"type": "function", "function": {"name": "echo", "parameters": {}}}],
+            "openai/gpt-4o",
+            [{"role": "user", "content": "echo hi"}],
+            tools=[
+                {"type": "function", "function": {"name": "echo", "parameters": {}}}
+            ],
             tool_choice="auto",
             reasoning_effort="high",
         )
@@ -235,12 +314,19 @@ class TestOpenaiFCPath:
 
     def test_openai_response_format_passed_through(self, monkeypatch):
         fake = _FakeClient()
-        fake.set_payload({"choices": [{"message": {"content": '{"k":1}'}, "finish_reason": "stop"}]})
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
-        monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai"))
+        fake.set_payload(
+            {"choices": [{"message": {"content": '{"k":1}'}, "finish_reason": "stop"}]}
+        )
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
+        monkeypatch.setattr(
+            llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai")
+        )
 
         resp = chat_completion_with_tools(
-            "openai/gpt-4o", [{"role": "user", "content": "x"}],
+            "openai/gpt-4o",
+            [{"role": "user", "content": "x"}],
             response_format={"type": "json_object"},
         )
         assert resp.content == '{"k":1}'
@@ -248,11 +334,19 @@ class TestOpenaiFCPath:
 
     def test_configured_large_output_budget_is_not_clamped(self, monkeypatch):
         fake = _FakeClient()
-        fake.set_payload({
-            "choices": [{"message": {"content": '{"k":1}'}, "finish_reason": "stop"}],
-        })
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
-        monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai"))
+        fake.set_payload(
+            {
+                "choices": [
+                    {"message": {"content": '{"k":1}'}, "finish_reason": "stop"}
+                ],
+            }
+        )
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
+        monkeypatch.setattr(
+            llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai")
+        )
 
         chat_completion_with_tools(
             "openai/deepseek-v4-pro",
@@ -264,16 +358,23 @@ class TestOpenaiFCPath:
         assert fake.posts[0]["json"]["max_tokens"] == 256000
 
     def test_incomplete_json_final_answer_is_rejected_even_when_finish_is_stop(
-        self, monkeypatch,
+        self,
+        monkeypatch,
     ):
         fake = _FakeClient()
-        fake.set_payload({
-            "choices": [{
-                "message": {"content": '{"final_answer":"第一课其实是'},
-                "finish_reason": "stop",
-            }],
-        })
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+        fake.set_payload(
+            {
+                "choices": [
+                    {
+                        "message": {"content": '{"final_answer":"第一课其实是'},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        )
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
 
         with pytest.raises(ResponseTruncatedError, match="完整 JSON"):
             llm._call_openai_compat_with_tools(
@@ -289,15 +390,21 @@ class TestOpenaiFCPath:
 
     def test_trailing_text_after_complete_json_is_discarded(self, monkeypatch):
         fake = _FakeClient()
-        fake.set_payload({
-            "choices": [{
-                "message": {
-                    "content": '{"final_answer":"完整回答。[END]"}\n未经请求的额外文字',
-                },
-                "finish_reason": "stop",
-            }],
-        })
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+        fake.set_payload(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"final_answer":"完整回答。[END]"}\n未经请求的额外文字',
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        )
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
 
         response = llm._call_openai_compat_with_tools(
             _endpoint("openai"),
@@ -317,22 +424,28 @@ class TestOpenaiFCPath:
 
     def test_deepseek_v4_forced_tool_choice_disables_thinking(self, monkeypatch):
         fake = _FakeClient()
-        fake.set_payload({
-            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-        })
+        fake.set_payload(
+            {
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            }
+        )
         endpoint = ModelEndpoint(
             provider="deepseek",
             model_name="deepseek-v4-flash",
             base_url="https://api.deepseek.com/v1",
             api_key="k",
         )
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
         monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: endpoint)
 
         chat_completion_with_tools(
             "deepseek/deepseek-v4-flash",
             [{"role": "user", "content": "call echo"}],
-            tools=[{"type": "function", "function": {"name": "echo", "parameters": {}}}],
+            tools=[
+                {"type": "function", "function": {"name": "echo", "parameters": {}}}
+            ],
             tool_choice="required",
             reasoning_effort="max",
         )
@@ -348,22 +461,28 @@ class TestOpenaiFCPath:
     ):
         """Ark/legacy custom V4 endpoints must obey DeepSeek's same rule."""
         fake = _FakeClient()
-        fake.set_payload({
-            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-        })
+        fake.set_payload(
+            {
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            }
+        )
         endpoint = ModelEndpoint(
             provider=provider,
             model_name="deepseek-v4-flash-260425",
             base_url="https://ark.cn-beijing.volces.com/api/v3",
             api_key="k",
         )
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
         monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: endpoint)
 
         llm.chat_completion_with_tools(
             f"{provider}/deepseek-v4-flash-260425",
             [{"role": "user", "content": "call echo"}],
-            tools=[{"type": "function", "function": {"name": "echo", "parameters": {}}}],
+            tools=[
+                {"type": "function", "function": {"name": "echo", "parameters": {}}}
+            ],
             tool_choice="required",
             reasoning_effort="max",
         )
@@ -374,16 +493,20 @@ class TestOpenaiFCPath:
 
     def test_plain_deepseek_request_passes_reasoning_effort(self, monkeypatch):
         fake = _FakeClient()
-        fake.set_payload({
-            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-        })
+        fake.set_payload(
+            {
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            }
+        )
         endpoint = ModelEndpoint(
             provider="deepseek",
             model_name="deepseek-v4-pro",
             base_url="https://api.deepseek.com/v1",
             api_key="k",
         )
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
         monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: endpoint)
 
         result = llm.chat_completion(
@@ -412,11 +535,19 @@ class TestOpenaiFCPath:
 
     def test_no_tools_degrades_to_text(self, monkeypatch):
         fake = _FakeClient()
-        fake.set_payload({"choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}]})
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
-        monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai"))
+        fake.set_payload(
+            {"choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}]}
+        )
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
+        monkeypatch.setattr(
+            llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("openai")
+        )
 
-        resp = chat_completion_with_tools("openai/gpt-4o", [{"role": "user", "content": "hi"}])
+        resp = chat_completion_with_tools(
+            "openai/gpt-4o", [{"role": "user", "content": "hi"}]
+        )
         assert resp.content == "hello"
         assert resp.tool_calls == []
         assert "tools" not in fake.posts[0]["json"]
@@ -426,19 +557,37 @@ class TestOpenaiFCPath:
 class TestAnthropicFCPath:
     def test_anthropic_tool_use_parsed(self, monkeypatch):
         fake = _FakeClient()
-        fake.set_payload({
-            "content": [
-                {"type": "text", "text": "calling echo"},
-                {"type": "tool_use", "id": "t1", "name": "echo", "input": {"text": "hi"}},
-            ],
-            "stop_reason": "tool_use",
-        })
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
-        monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("anthropic", "https://api.anthropic.com"))
+        fake.set_payload(
+            {
+                "content": [
+                    {"type": "text", "text": "calling echo"},
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "echo",
+                        "input": {"text": "hi"},
+                    },
+                ],
+                "stop_reason": "tool_use",
+            }
+        )
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
+        monkeypatch.setattr(
+            llm,
+            "build_endpoint",
+            lambda mid, c=None, b=None: _endpoint(
+                "anthropic", "https://api.anthropic.com"
+            ),
+        )
 
         resp = chat_completion_with_tools(
-            "anthropic/claude", [{"role": "user", "content": "echo hi"}],
-            tools=[{"type": "function", "function": {"name": "echo", "parameters": {}}}],
+            "anthropic/claude",
+            [{"role": "user", "content": "echo hi"}],
+            tools=[
+                {"type": "function", "function": {"name": "echo", "parameters": {}}}
+            ],
             tool_choice="auto",
         )
         assert resp.has_tool_calls
@@ -450,12 +599,23 @@ class TestAnthropicFCPath:
 
     def test_anthropic_required_maps_to_any(self, monkeypatch):
         fake = _FakeClient()
-        fake.set_payload({"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"})
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
-        monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("anthropic", "https://api.anthropic.com"))
+        fake.set_payload(
+            {"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
+        )
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
+        monkeypatch.setattr(
+            llm,
+            "build_endpoint",
+            lambda mid, c=None, b=None: _endpoint(
+                "anthropic", "https://api.anthropic.com"
+            ),
+        )
 
         chat_completion_with_tools(
-            "anthropic/claude", [{"role": "user", "content": "x"}],
+            "anthropic/claude",
+            [{"role": "user", "content": "x"}],
             tools=[{"type": "function", "function": {"name": "echo"}}],
             tool_choice="required",
         )
@@ -463,13 +623,26 @@ class TestAnthropicFCPath:
 
     def test_anthropic_response_format_appends_json_hint(self, monkeypatch):
         fake = _FakeClient()
-        fake.set_payload({"content": [{"type": "text", "text": "{}"}], "stop_reason": "end_turn"})
-        monkeypatch.setattr(llm, "_get_pooled_client", lambda endpoint, timeout=120: fake)
-        monkeypatch.setattr(llm, "build_endpoint", lambda mid, c=None, b=None: _endpoint("anthropic", "https://api.anthropic.com"))
+        fake.set_payload(
+            {"content": [{"type": "text", "text": "{}"}], "stop_reason": "end_turn"}
+        )
+        monkeypatch.setattr(
+            llm, "_get_pooled_client", lambda endpoint, timeout=120: fake
+        )
+        monkeypatch.setattr(
+            llm,
+            "build_endpoint",
+            lambda mid, c=None, b=None: _endpoint(
+                "anthropic", "https://api.anthropic.com"
+            ),
+        )
 
         chat_completion_with_tools(
             "anthropic/claude",
-            [{"role": "system", "content": "你是助手"}, {"role": "user", "content": "x"}],
+            [
+                {"role": "system", "content": "你是助手"},
+                {"role": "user", "content": "x"},
+            ],
             response_format={"type": "json_object"},
         )
         sent = fake.posts[0]["json"]

@@ -18,36 +18,104 @@ logger = logging.getLogger(__name__)
 
 CATEGORY_KEYWORDS = {
     "write_file": [
-        "write", "edit", "create", "append", "insert", "save", "overwrite", "put",
-        "modify", "update", "patch", "replace"
+        "write",
+        "edit",
+        "create",
+        "append",
+        "insert",
+        "save",
+        "overwrite",
+        "put",
+        "modify",
+        "update",
+        "patch",
+        "replace",
     ],
     "read_file": [
-        "read", "get", "fetch", "load", "cat", "view", "show", "open",
-        "display", "print", "output"
+        "read",
+        "get",
+        "fetch",
+        "load",
+        "cat",
+        "view",
+        "show",
+        "open",
+        "display",
+        "print",
+        "output",
     ],
     "search": [
-        "search", "grep", "find", "query", "locate", "scan", "match",
-        "lookup", "filter", "detect"
+        "search",
+        "grep",
+        "find",
+        "query",
+        "locate",
+        "scan",
+        "match",
+        "lookup",
+        "filter",
+        "detect",
     ],
     "command": [
-        "command", "exec", "run", "shell", "bash", "terminal", "sh",
-        "execute", "spawn", "launch"
+        "command",
+        "exec",
+        "run",
+        "shell",
+        "bash",
+        "terminal",
+        "sh",
+        "execute",
+        "spawn",
+        "launch",
     ],
     "git": [
-        "git", "commit", "push", "pull", "clone", "branch", "checkout",
-        "merge", "rebase", "status", "diff", "log"
+        "git",
+        "commit",
+        "push",
+        "pull",
+        "clone",
+        "branch",
+        "checkout",
+        "merge",
+        "rebase",
+        "status",
+        "diff",
+        "log",
     ],
     "web": [
-        "web", "http", "fetch", "download", "browse", "request",
-        "get_url", "post", "scrape", "crawl"
+        "web",
+        "http",
+        "fetch",
+        "download",
+        "browse",
+        "request",
+        "get_url",
+        "post",
+        "scrape",
+        "crawl",
     ],
     "directory": [
-        "list", "ls", "dir", "directory", "mkdir", "rmdir", "tree",
-        "walk", "enumerate"
+        "list",
+        "ls",
+        "dir",
+        "directory",
+        "mkdir",
+        "rmdir",
+        "tree",
+        "walk",
+        "enumerate",
     ],
     "database": [
-        "db", "database", "sql", "query", "insert", "update", "delete",
-        "select", "table", "schema"
+        "db",
+        "database",
+        "sql",
+        "query",
+        "insert",
+        "update",
+        "delete",
+        "select",
+        "table",
+        "schema",
     ],
 }
 
@@ -95,9 +163,18 @@ _REDACT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # Bearer token（必须在 URL query 之前，避免 query 正则吃掉 Authorization 头）
     (re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE), r"\1<redacted>"),
     # 常见密钥/令牌键值对（json 风格或 query 参数）
-    (re.compile(r"(api[_-]?key|apikey|token|secret|password|passwd|authorization|credential)(\s*[:=]\s*)([^\s,}\"']+)", re.IGNORECASE), r"\1\2<redacted>"),
+    (
+        re.compile(
+            r"(api[_-]?key|apikey|token|secret|password|passwd|authorization|credential)(\s*[:=]\s*)([^\s,}\"']+)",
+            re.IGNORECASE,
+        ),
+        r"\1\2<redacted>",
+    ),
     # URL query 中的敏感参数值（仅匹配带 ? 的 query 片段）
-    (re.compile(r"(\?[^\s#]*(?:&|^)[^=#\s]+=)[^&#\s]+", re.IGNORECASE), r"\1<redacted>"),
+    (
+        re.compile(r"(\?[^\s#]*(?:&|^)[^=#\s]+=)[^&#\s]+", re.IGNORECASE),
+        r"\1<redacted>",
+    ),
 )
 
 
@@ -315,7 +392,9 @@ class MCPRegistry:
                         # 分类（供展示，见 infer_category docstring）
                         cat = infer_category(
                             tool_name,
-                            tool.get("description", "") if isinstance(tool, dict) else "",
+                            tool.get("description", "")
+                            if isinstance(tool, dict)
+                            else "",
                         )
                         self.tool_categories.setdefault(cat, []).append(global_name)
                     logger.info(f"MCP 服务器 '{server_name}': 发现 {len(tools)} 个工具")
@@ -325,7 +404,8 @@ class MCPRegistry:
             # 第二遍：短名若被多个 server 提供则判定为歧义，不注册短名；
             # 短名唯一时注册为便利别名（向后兼容：LLM 可能用短名调用）。
             self.ambiguous_short_names = {
-                short for short, owners in self._short_name_owners.items()
+                short
+                for short, owners in self._short_name_owners.items()
                 if len(owners) > 1
             }
             for short in self.ambiguous_short_names:
@@ -425,7 +505,9 @@ class MCPRegistry:
         try:
             # 防御：tool_info 可能缺 name（外部 MCP 服务数据不可信），
             # 用短名/全名做兜底，避免 KeyError 崩溃。
-            target_name = tool_info.get("name", tool_name.split(":")[-1] if ":" in tool_name else tool_name)
+            target_name = tool_info.get(
+                "name", tool_name.split(":")[-1] if ":" in tool_name else tool_name
+            )
             result = client.call_tool(target_name, arguments)
         except Exception as exc:
             if runtime is not None:

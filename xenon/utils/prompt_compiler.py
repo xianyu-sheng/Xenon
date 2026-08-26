@@ -134,12 +134,14 @@ def compile_prompt(
             tier = CacheTier.HISTORY
         if index < stable_prefix_messages and _DYNAMIC_SYSTEM_PATTERN.search(content):
             warnings.append(f"dynamic_stable_system:{index}")
-        segments.append(PromptSegment(
-            index=index,
-            role=role,
-            tier=tier,
-            estimated_tokens=_estimated_tokens(content),
-        ))
+        segments.append(
+            PromptSegment(
+                index=index,
+                role=role,
+                tier=tier,
+                estimated_tokens=_estimated_tokens(content),
+            )
+        )
 
     expected_cacheable = sum(
         segment.estimated_tokens

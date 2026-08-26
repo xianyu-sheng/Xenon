@@ -56,31 +56,59 @@ def clear_default_branch_cache():
         ("owner/repo", "repo", "owner/repo", "", "", None),
         (
             "https://github.com/owner/repo.git?tab=readme#top",
-            "repo", "owner/repo", "", "", None,
+            "repo",
+            "owner/repo",
+            "",
+            "",
+            None,
         ),
         (
             "https://github.com/owner/repo/blob/main/src/app.py?plain=1",
-            "blob", "owner/repo", "main", "src/app.py", None,
+            "blob",
+            "owner/repo",
+            "main",
+            "src/app.py",
+            None,
         ),
         (
             "https://github.com/owner/repo/tree/develop/src",
-            "tree", "owner/repo", "develop", "src", None,
+            "tree",
+            "owner/repo",
+            "develop",
+            "src",
+            None,
         ),
         (
             "https://github.com/owner/repo/issues/42",
-            "issue", "owner/repo", "", "", 42,
+            "issue",
+            "owner/repo",
+            "",
+            "",
+            42,
         ),
         (
             "https://github.com/owner/repo/pull/7/files",
-            "pull", "owner/repo", "", "", 7,
+            "pull",
+            "owner/repo",
+            "",
+            "",
+            7,
         ),
         (
             "https://raw.githubusercontent.com/owner/repo/main/README.md",
-            "blob", "owner/repo", "main", "README.md", None,
+            "blob",
+            "owner/repo",
+            "main",
+            "README.md",
+            None,
         ),
         (
             "git@github.com:owner/repo.git",
-            "repo", "owner/repo", "", "", None,
+            "repo",
+            "owner/repo",
+            "",
+            "",
+            None,
         ),
     ],
 )
@@ -117,13 +145,19 @@ def test_parser_rejects_non_repository_github_routes(url):
 
 
 def test_list_files_resolves_real_default_branch_and_uses_token(monkeypatch):
-    client = FakeClient([
-        FakeResponse({"default_branch": "trunk"}),
-        FakeResponse({"tree": [
-            {"type": "blob", "path": "src/app.py"},
-            {"type": "blob", "path": "README.md"},
-        ]}),
-    ])
+    client = FakeClient(
+        [
+            FakeResponse({"default_branch": "trunk"}),
+            FakeResponse(
+                {
+                    "tree": [
+                        {"type": "blob", "path": "src/app.py"},
+                        {"type": "blob", "path": "README.md"},
+                    ]
+                }
+            ),
+        ]
+    )
     monkeypatch.setattr(tool_module, "_create_http_client", lambda **kwargs: client)
     monkeypatch.setenv("GITHUB_TOKEN", "private-token")
 
@@ -234,28 +268,34 @@ def test_github_rate_limit_falls_back_to_public_html(monkeypatch):
 
 
 def test_repo_activity_returns_comparable_maintenance_signals(monkeypatch):
-    client = FakeClient([
-        FakeResponse({
-            "default_branch": "main",
-            "pushed_at": "2026-07-20T00:00:00Z",
-            "updated_at": "2026-07-21T00:00:00Z",
-            "open_issues_count": 12,
-        }),
-        FakeResponse([
-            {
-                "state": "closed",
-                "created_at": "2026-07-01T00:00:00Z",
-                "updated_at": "2026-07-03T00:00:00Z",
-                "merged_at": "2026-07-03T00:00:00Z",
-            },
-            {
-                "state": "open",
-                "created_at": "2026-07-10T00:00:00Z",
-                "updated_at": "2026-07-21T00:00:00Z",
-                "merged_at": None,
-            },
-        ]),
-    ])
+    client = FakeClient(
+        [
+            FakeResponse(
+                {
+                    "default_branch": "main",
+                    "pushed_at": "2026-07-20T00:00:00Z",
+                    "updated_at": "2026-07-21T00:00:00Z",
+                    "open_issues_count": 12,
+                }
+            ),
+            FakeResponse(
+                [
+                    {
+                        "state": "closed",
+                        "created_at": "2026-07-01T00:00:00Z",
+                        "updated_at": "2026-07-03T00:00:00Z",
+                        "merged_at": "2026-07-03T00:00:00Z",
+                    },
+                    {
+                        "state": "open",
+                        "created_at": "2026-07-10T00:00:00Z",
+                        "updated_at": "2026-07-21T00:00:00Z",
+                        "merged_at": None,
+                    },
+                ]
+            ),
+        ]
+    )
     monkeypatch.setattr(tool_module, "_create_http_client", lambda **kwargs: client)
 
     result = ToolNode(
@@ -274,10 +314,18 @@ def test_repo_activity_returns_comparable_maintenance_signals(monkeypatch):
 
 
 def test_tree_url_filters_to_requested_directory(monkeypatch):
-    client = FakeClient([FakeResponse({"tree": [
-        {"type": "blob", "path": "src/app.py"},
-        {"type": "blob", "path": "tests/test_app.py"},
-    ]})])
+    client = FakeClient(
+        [
+            FakeResponse(
+                {
+                    "tree": [
+                        {"type": "blob", "path": "src/app.py"},
+                        {"type": "blob", "path": "tests/test_app.py"},
+                    ]
+                }
+            )
+        ]
+    )
     monkeypatch.setattr(tool_module, "_create_http_client", lambda **kwargs: client)
 
     node = ToolNode(
@@ -299,15 +347,23 @@ def test_tree_url_filters_to_requested_directory(monkeypatch):
     ],
 )
 def test_issue_and_pull_urls_fetch_discussion(monkeypatch, url, endpoint, action):
-    client = FakeClient([FakeResponse({
-        "title": "Fix the bug",
-        "state": "open",
-        "user": {"login": "alice"},
-        "body": "Details",
-    })])
+    client = FakeClient(
+        [
+            FakeResponse(
+                {
+                    "title": "Fix the bug",
+                    "state": "open",
+                    "user": {"login": "alice"},
+                    "body": "Details",
+                }
+            )
+        ]
+    )
     monkeypatch.setattr(tool_module, "_create_http_client", lambda **kwargs: client)
 
-    result = ToolNode("gh", action_type="github_fetch", repo=url).execute(AgentContext())
+    result = ToolNode("gh", action_type="github_fetch", repo=url).execute(
+        AgentContext()
+    )
 
     assert result["success"] is True
     assert result["action"] == action
@@ -347,7 +403,9 @@ def test_clone_detects_default_branch_and_keeps_token_out_of_url(monkeypatch, tm
     clone_command, clone_kwargs = calls[1]
     assert clone_command[clone_command.index("-b") + 1] == "trunk"
     assert "clone-token" not in " ".join(clone_command)
-    assert clone_kwargs["env"]["GIT_CONFIG_VALUE_0"] == "Authorization: Bearer clone-token"
+    assert (
+        clone_kwargs["env"]["GIT_CONFIG_VALUE_0"] == "Authorization: Bearer clone-token"
+    )
 
 
 def test_cached_clone_fetches_and_fast_forwards(monkeypatch, tmp_path):
@@ -363,7 +421,10 @@ def test_cached_clone_fetches_and_fast_forwards(monkeypatch, tmp_path):
 
     monkeypatch.setattr(tool_module.subprocess, "run", fake_run)
     node = ToolNode(
-        "clone", action_type="clone_repo", repo="owner/repo", branch="main",
+        "clone",
+        action_type="clone_repo",
+        repo="owner/repo",
+        branch="main",
     )
     result = node.execute(AgentContext())
 

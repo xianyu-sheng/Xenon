@@ -14,6 +14,7 @@ from xenon.engine.scout import DirectoryScout, DEFAULT_EXCLUDE
 
 # --------------------------- scan() ---------------------------
 
+
 def test_scan_nonexistent_root_returns_none():
     scout = DirectoryScout(project_root="/nonexistent/path/xyz", max_depth=1)
     assert scout.scan() is None
@@ -164,11 +165,15 @@ def test_default_exclude_is_frozenset():
 
 # --------------------------- scout_from_history() ---------------------------
 
+
 def test_scout_from_history_extracts_paths():
     scout = DirectoryScout(project_root="/nonexistent")
     msgs = [
         {"role": "assistant", "content": "Thought: let me list"},
-        {"role": "user", "content": "Observation:\nsrc/main.py\nsrc/utils.py\nREADME.md"},
+        {
+            "role": "user",
+            "content": "Observation:\nsrc/main.py\nsrc/utils.py\nREADME.md",
+        },
     ]
     result = scout.scout_from_history(msgs)
     assert result is not None
@@ -200,6 +205,7 @@ def test_scout_from_history_uses_most_recent():
 
 
 # --------------------------- inject() ---------------------------
+
 
 def test_inject_prepends_tree_when_scan_has_data():
     with tempfile.TemporaryDirectory() as d:
@@ -267,6 +273,7 @@ def test_inject_custom_exclude_dirs():
 
 # --------------------------- ReAct 集成（opt-in project_root） ---------------------------
 
+
 class _RecordingLLM:
     """假 _call_llm：记录收到的消息，立即返回 Final Answer。"""
 
@@ -280,6 +287,7 @@ class _RecordingLLM:
 
 def _make_engine(project_root=None):
     from xenon.engine.react_engine import ReActEngine
+
     eng = ReActEngine(["m1"], project_root=project_root)
     return eng
 

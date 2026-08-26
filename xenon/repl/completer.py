@@ -4,7 +4,12 @@ prompt_toolkit 自定义补全器 — 支持斜杠命令、文件路径、模型
 
 from __future__ import annotations
 
-from prompt_toolkit.completion import Completer, Completion, PathCompleter, WordCompleter
+from prompt_toolkit.completion import (
+    Completer,
+    Completion,
+    PathCompleter,
+    WordCompleter,
+)
 from prompt_toolkit.document import Document
 
 
@@ -21,7 +26,7 @@ class OmniCompleter(Completer):
             command_names or [],
             ignore_case=True,
             sentence=True,
-            meta_dict={}  # 可选：添加命令描述
+            meta_dict={},  # 可选：添加命令描述
         )
         self._path_completer = PathCompleter(
             only_directories=False,
@@ -35,7 +40,9 @@ class OmniCompleter(Completer):
     def update_commands(self, command_names: list[str]) -> None:
         """更新可用命令列表（动态注册的命令变化时调用）。"""
         self._command_completer = WordCompleter(
-            command_names, ignore_case=True, sentence=True,
+            command_names,
+            ignore_case=True,
+            sentence=True,
         )
 
     def update_models(self, aliases: list[str]) -> None:

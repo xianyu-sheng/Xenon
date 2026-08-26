@@ -19,7 +19,9 @@ class TestStateSyncFixes:
 
         # trim_last_assistant 应该更新 cache_epoch
         ctx.trim_last_assistant()
-        assert ctx.cache_epoch > initial_epoch, "trim_last_assistant 应该更新 cache_epoch"
+        assert ctx.cache_epoch > initial_epoch, (
+            "trim_last_assistant 应该更新 cache_epoch"
+        )
 
         ctx.add_user_message("test user 2")
         epoch_before = ctx.cache_epoch
@@ -67,10 +69,14 @@ class TestStateSyncFixes:
         ctx.compact(summary="test summary")
 
         # 验证 prompt_lanes 是一个新对象（不是同一个引用）
-        assert ctx.prompt_lanes is not lanes_before, "compact 后 prompt_lanes 应该是新对象"
+        assert ctx.prompt_lanes is not lanes_before, (
+            "compact 后 prompt_lanes 应该是新对象"
+        )
 
         # 新的 prompt_lanes 应该是空的
-        assert len(ctx.prompt_lanes.snapshots()) == 0, "compact 后新的 prompt_lanes 应该为空"
+        assert len(ctx.prompt_lanes.snapshots()) == 0, (
+            "compact 后新的 prompt_lanes 应该为空"
+        )
 
     def test_fix4_context_manager_compact_cleans_event_log(self):
         """问题4: ContextManager压缩后event_log未清理 - 应清理旧事件。"""
@@ -85,13 +91,16 @@ class TestStateSyncFixes:
         ctx.compact(summary="test summary")
 
         events = ctx.event_log.snapshot()
-        assert len(events) <= 100, f"compact 后 event_log 应该只保留最近100个事件，实际: {len(events)}"
+        assert len(events) <= 100, (
+            f"compact 后 event_log 应该只保留最近100个事件，实际: {len(events)}"
+        )
 
     def test_fix5_status_bar_refresh_called_on_state_changes(self):
         """问题5: StatusBar.refresh时机不完整 - 所有状态变更点应调用refresh。"""
         ctx = ContextManager()
         console = Console()
         from xenon.repl.model_registry import ModelRegistry
+
         registry = ModelRegistry()
         status_bar = StatusBar(console, ctx, registry)
 

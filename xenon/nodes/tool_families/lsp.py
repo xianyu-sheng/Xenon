@@ -68,4 +68,3 @@ class LSPToolsMixin:
         if method == "get_hover":
             return LSPProvider.get_hover(file_path, line, column)
         return {"success": False, "error": f"未知 LSP 方法: {method}"}
-
