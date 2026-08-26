@@ -121,7 +121,9 @@ def test_print_status_stats_exception_does_not_raise():
 def test_render_needs_compact_warning_first():
     """needs_compact 时 ⚠需压缩 在状态行首位，窄屏截断不丢核心信号。"""
     cm = ContextManager()
-    cm.add_user_message("x" * 200000)  # 触发 needs_compact（~78%）
+    # 使用多样化文本确保足够的 token 数以触发 needs_compact (>= 60% of 128k = 76.8k tokens)
+    text = "The quick brown fox jumps over the lazy dog. " * 8000  # ~80k tokens
+    cm.add_user_message(text)
     bar = _make_bar(ctx_mgr=cm)
     panel = bar.render()
     content = str(panel.renderable)

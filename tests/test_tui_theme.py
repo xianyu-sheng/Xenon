@@ -86,7 +86,9 @@ def test_shift_tab_suspends_prompt_toolkit_before_printing(monkeypatch):
 
 def test_toolbar_promotes_compaction_warning():
     bar = _bar()
-    bar.ctx_mgr.add_user_message("x" * 200_000)
+    # 使用多样化文本确保足够的 token 数以触发 needs_compact (>= 60% of 128k = 76.8k tokens)
+    text = "The quick brown fox jumps over the lazy dog. " * 8000  # ~80k tokens
+    bar.ctx_mgr.add_user_message(text)
     fragments = bar.get_toolbar_fragments()
     assert ("class:toolbar.danger", "⚠ /compact") in fragments
 
