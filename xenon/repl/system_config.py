@@ -106,6 +106,19 @@ class DevelopmentConfig:
 
 
 @dataclass
+class IntentClassifierConfig:
+    """意图分类器配置。"""
+    # XENON_INTENT_CLASSIFIER_ENABLED: 启用 LLM 意图分类器
+    enabled: bool = False
+    # XENON_INTENT_CLASSIFIER_MODEL: LLM 分类器使用的模型
+    model: str = ""
+    # XENON_INTENT_CLASSIFIER_CONFIDENCE: 置信度阈值（0-1）
+    confidence_threshold: float = 0.7
+    # XENON_INTENT_CLASSIFIER_TIMEOUT: 单次调用超时（秒）
+    timeout: float = 5.0
+
+
+@dataclass
 class SystemConfig:
     """系统配置根对象。"""
     validation: ValidationConfig = field(default_factory=ValidationConfig)
@@ -115,6 +128,7 @@ class SystemConfig:
     paths: PathsConfig = field(default_factory=PathsConfig)
     interaction: InteractionConfig = field(default_factory=InteractionConfig)
     development: DevelopmentConfig = field(default_factory=DevelopmentConfig)
+    intent_classifier: IntentClassifierConfig = field(default_factory=IntentClassifierConfig)
 
 
 # 文件层缓存：只缓存 yaml 解析结果（按 路径+mtime 失效）。
@@ -234,6 +248,24 @@ def _coerce_str(value: Any, fallback: str, origin: str) -> str:
     return fallback
 
 
+def _coerce_float(value: Any, fallback: float, origin: str) -> float:
+    """把配置文件里的值强制成 float；无法识别时告警并回退。"""
+    if isinstance(value, bool):  # bool 是 int 子类，先挡掉
+        logger.warning("配置项 %s 应为浮点数，收到布尔值 %r，使用默认值 %r", origin, value, fallback)
+        return fallback
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return float(value.strip())
+        except ValueError:
+            pass
+    if value is None:
+        return fallback
+    logger.warning("配置项 %s 不是有效浮点数: %r，使用默认值 %r", origin, value, fallback)
+    return fallback
+
+
 def _get_bool_env(key: str, default: bool) -> bool:
     """环境变量 > 传入默认值。支持 1/0/true/false/yes/no/on/off（大小写不敏感）。
 
@@ -270,6 +302,18 @@ def _get_str_env(key: str, default: str) -> str:
     return raw if raw else default
 
 
+def _get_float_env(key: str, default: float) -> float:
+    """环境变量 > 传入默认值。解析失败时告警并回退。"""
+    raw = os.environ.get(key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError:
+        logger.warning("环境变量 %s 不是有效浮点数: %r，回退到 %r", key, raw, default)
+        return default
+
+
 def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
     """合并配置文件与环境变量。优先级：环境变量 > 文件 > 代码默认值。
 
@@ -283,6 +327,7 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
     paths_data = _section(file_data, "paths")
     interaction_data = _section(file_data, "interaction")
     development_data = _section(file_data, "development")
+    intent_classifier_data = _section(file_data, "intent_classifier")
 
     default_credentials = str(Path.home() / ".xenon" / "credentials.yaml")
 
@@ -389,6 +434,37 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
         ),
     )
 
+    intent_classifier = IntentClassifierConfig(
+        enabled=_get_bool_env(
+            "XENON_INTENT_CLASSIFIER_ENABLED",
+            _coerce_bool(
+                intent_classifier_data.get("enabled"), False,
+                "intent_classifier.enabled",
+            ),
+        ),
+        model=_get_str_env(
+            "XENON_INTENT_CLASSIFIER_MODEL",
+            _coerce_str(
+                intent_classifier_data.get("model"), "",
+                "intent_classifier.model",
+            ),
+        ),
+        confidence_threshold=_get_float_env(
+            "XENON_INTENT_CLASSIFIER_CONFIDENCE",
+            _coerce_float(
+                intent_classifier_data.get("confidence_threshold"), 0.7,
+                "intent_classifier.confidence_threshold",
+            ),
+        ),
+        timeout=_get_float_env(
+            "XENON_INTENT_CLASSIFIER_TIMEOUT",
+            _coerce_float(
+                intent_classifier_data.get("timeout"), 5.0,
+                "intent_classifier.timeout",
+            ),
+        ),
+    )
+
     return SystemConfig(
         validation=validation,
         engine=engine,
@@ -397,6 +473,7 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
         paths=paths,
         interaction=interaction,
         development=development,
+        intent_classifier=intent_classifier,
     )
 
 
@@ -520,6 +597,27 @@ development:
   # 禁用 PTY（测试用）
   # 环境变量: XENON_NO_PT
   no_pty: false
+
+# ========================================
+# LLM 意图分类器配置
+# ========================================
+intent_classifier:
+  # 启用 LLM 意图分类器（当正则无法识别时回退使用）
+  # 环境变量: XENON_INTENT_CLASSIFIER_ENABLED
+  enabled: false
+
+  # 分类器使用的模型（留空使用默认快速模型）
+  # 推荐: anthropic/claude-3-5-haiku-20241022 或 openai/gpt-4o-mini
+  # 环境变量: XENON_INTENT_CLASSIFIER_MODEL
+  model: ""
+
+  # 置信度阈值（0-1，低于此值返回 None）
+  # 环境变量: XENON_INTENT_CLASSIFIER_CONFIDENCE
+  confidence_threshold: 0.7
+
+  # 单次调用超时（秒）
+  # 环境变量: XENON_INTENT_CLASSIFIER_TIMEOUT
+  timeout: 5.0
 """
 
     with path.open("w", encoding="utf-8") as f:

@@ -73,7 +73,20 @@ class DifficultyEstimator:
     @staticmethod
     def _detect_intent(text: str) -> str | None:
         from xenon.repl.prompt_optimizer import detect_intent
-        return detect_intent(text)
+        intent = detect_intent(text)
+
+        # 如果正则分类器无法识别，尝试使用 LLM 分类器
+        if intent is None:
+            try:
+                from xenon.repl.llm_intent_classifier import classify_intent_with_llm
+                intent = classify_intent_with_llm(text)
+            except Exception as e:
+                # LLM 分类器失败时静默降级，不影响主流程
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.debug(f"LLM 意图分类失败，保持 None: {e}")
+
+        return intent
 
     @staticmethod
     def _measure_complexity(text: str, intent: str | None) -> float:
