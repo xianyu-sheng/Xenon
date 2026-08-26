@@ -37,7 +37,6 @@ class TestThreeTierStrategy:
         _add_rounds(cm, 4, big_user="some content")
 
         # 直接 mock usage_ratio 返回 0.7，确保进入 Tier 2
-        original_usage_ratio = cm.usage_ratio
         monkeypatch.setattr(cm, "usage_ratio", lambda: 0.7)
         assert 0.6 < cm.usage_ratio() < 0.85
 
