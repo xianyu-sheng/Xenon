@@ -148,7 +148,7 @@ class TestStats:
         cm = ContextManager()
         cm.add_user_message("hi")
         s = cm.stats()
-        assert s["token_source"] == "heuristic"
+        assert s["token_source"] == "estimated"
         assert s["real_usage"] is None
         assert s["estimated_tokens"] > 0
 
