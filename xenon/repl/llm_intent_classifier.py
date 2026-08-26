@@ -190,7 +190,7 @@ class LLMIntentClassifier:
                 model_id=self.model,  # 第一个参数是 model_id
                 messages=messages,
                 temperature=0.1,
-                max_tokens=200,  # 分类任务不需要长输出
+                max_tokens=1000,  # 推理模型需要更多 tokens（隐藏推理阶段消耗大量 tokens）
             )
         except Exception as e:
             raise RuntimeError(f"LLM 调用失败: {e}") from e
