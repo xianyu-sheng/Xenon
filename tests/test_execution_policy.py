@@ -370,3 +370,93 @@ def test_chinese_readonly_or_answer_requests_not_escalated(text):
     """防过冲：只读/问答/纯生成请求不得因新模式被误判成 WRITE。"""
     policy = classify_execution_policy(text, intent=detect_intent(text))
     assert policy.level in (ExecutionLevel.ANSWER_ONLY, ExecutionLevel.READ_ONLY)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "我需要一个 config.yaml",
+        "给我一份 README.md",
+        "帮我把这段代码存起来",
+        "把结果保存下来",
+        "搞定这个 bug",
+        "处理一下这个报错",
+        "解决这个崩溃问题",
+        "give me a config file",
+    ],
+)
+def test_implicit_write_requests_authorize_write(text):
+    """目标由句式承载、没有显式写入动词的请求也须授权写入。
+
+    这类请求此前全部落到 ANSWER_ONLY：LLM 拿不到写工具，只能把内容贴回
+    对话，用户看到的就是「明明让他写文件，他却只是聊天」。
+    """
+    policy = classify_execution_policy(text, intent=detect_intent(text))
+    assert policy.level >= ExecutionLevel.WRITE
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "看看这个项目的结构",
+        "了解一下这份代码",
+        "梳理下这个模块的逻辑",
+        "这个函数在哪里定义的",
+    ],
+)
+def test_implicit_read_requests_authorize_read(text):
+    """认知类动词 + 外部实体应至少授权只读工具。"""
+    policy = classify_execution_policy(text, intent=detect_intent(text))
+    assert policy.level >= ExecutionLevel.READ_ONLY
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # 显式禁令必须压过隐含写入句式（此前「不要写文件」里的「要写文件」
+        # 会被需求句式命中，把禁令读成授权）。
+        "不要写文件，只在对话里给我代码",
+        "别写文件",
+        "不用创建文件，直接告诉我",
+        "无需保存到磁盘",
+        "不要使用任何工具",
+        # 纯生成请求要的是代码本身，不是磁盘上的文件。
+        "我想写一个 Python 脚本查询天气",
+        "想写个模块",
+        "写个快排给我看看",
+    ],
+)
+def test_implicit_write_does_not_override_explicit_limits(text):
+    """防过冲：显式禁令与纯生成请求不得被隐含写入模式升级。"""
+    policy = classify_execution_policy(text, intent=detect_intent(text))
+    assert policy.level is ExecutionLevel.ANSWER_ONLY
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("先把 utils.py 里的重复代码抽成函数，然后更新所有调用点", "plan-execute"),
+        ("重构整个项目的日志模块", "plan-execute"),
+        ("把所有测试文件迁移到 pytest", "plan-execute"),
+        ("帮我写个函数，记得加上单元测试", "reflection"),
+        ("修复这个 bug，并确保不要遗漏边界情况", "reflection"),
+        ("重构所有模块，并确保每步都检查", "plan-reflection"),
+        # 质量诉求分支必须优先于复杂度分支，否则 reflection 会被 plan-react 遮蔽。
+        # 此用例验证：即使任务复杂度高（0.75+），只要有质量诉求+代码意图，
+        # 应优先推荐 reflection 而非 plan-react。
+        ("重构缓存模块的并发逻辑，记得加测试验证线程安全", "reflection"),
+    ],
+)
+def test_engine_recommendation_matches_task_shape(text, expected):
+    """范式推荐按任务结构选择，且置信度足以触发 REPL 自动切换。"""
+    profile = DifficultyEstimator().estimate(text, [])
+    assert profile.recommended_engine == expected
+    assert profile.engine_confidence >= 0.6
+
+
+@pytest.mark.parametrize("text", ["你好", "解释一下闭包", "什么是装饰器"])
+def test_no_tool_turns_stay_direct(text):
+    """无需工具的轮次不推荐范式——引擎循环的价值全在工具调用上。"""
+    profile = DifficultyEstimator().estimate(text, [])
+    assert profile.recommended_engine == "direct"
+    assert profile.engine_confidence == 0.0
