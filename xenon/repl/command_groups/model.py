@@ -367,7 +367,7 @@ register_command(
 )
 
 @command_handler("/mode")
-def _cmd_mode(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
+def _cmd_mode(*, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any) -> str:
     if not args:
         current = registry.get_current_mode()
         lines = [f"当前范式: {current.name} — {current.description}\n"]
@@ -379,6 +379,10 @@ def _cmd_mode(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
 
     try:
         mode = registry.set_mode(args.strip())
+        # P1-High: 更新状态栏显示
+        repl = session_state.get("_repl")
+        if repl and hasattr(repl, 'status_bar'):
+            repl.status_bar.refresh()
         return f"✅ 已切换到范式: {mode.name} — {mode.description}"
     except ValueError as e:
         return f"❌ {e}"
@@ -433,6 +437,11 @@ def _cmd_model(*, session_state: dict, registry: ModelRegistry, **kwargs: Any) -
         # 同步到 auto_router
         if hasattr(repl, 'auto_router') and repl.auto_router:
             repl.auto_router._preferred_model_ids = [selected.model_id]
+            # P1-High: 更新 _last_successful_model_id 和状态栏
+            repl.auto_router.record_model_success(selected.model_id)
+        # P1-High: 更新状态栏显示
+        if hasattr(repl, 'status_bar'):
+            repl.status_bar.set_last_model(selected.model_id)
         # v0.5.2: 清除该模型的失败标记，允许重新调用
         if hasattr(repl, "_failed_models"):
             repl._failed_models.discard(selected.model_id)

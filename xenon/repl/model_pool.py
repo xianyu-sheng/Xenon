@@ -91,6 +91,10 @@ class ModelPool:
         }
         self._lock = threading.Lock()
         self.perf_profile: str = "balanced"  # P2: fast|cost|balanced -> _score 权重向量
+        # Problem 6: 模型移除通知回调
+        self._on_model_removed_callbacks: list[Any] = []
+        # 成功调用回调（用于状态栏同步等）
+        self._success_callback: Any = None
 
     # ── 注册/注销 ──────────────────────────────────────
 
@@ -139,11 +143,14 @@ class ModelPool:
         with self._lock:
             if alias not in self._entries:
                 return False
+            entry = self._entries[alias]
             del self._entries[alias]
             for t in range(MIN_TIER, MAX_TIER + 1):
                 if alias in self._tier_queues[t]:
                     self._tier_queues[t].remove(alias)
-            return True
+        # Problem 6: 通知依赖方模型已移除（锁外调用回调）
+        self._notify_model_removed(entry.model_id, alias)
+        return True
 
     def evict_permanently(self, alias: str) -> bool:
         """Explicitly evict a model from this in-memory pool only.
@@ -151,13 +158,18 @@ class ModelPool:
         User credentials are configuration, not runtime health state, and are
         never deleted by a circuit breaker.
         """
+        model_id = None
         with self._lock:
             entry = self._find_entry(alias)
             if not entry:
                 return False
+            model_id = entry.model_id
             entry.health.permanently_evicted = True
             entry.health.circuit_open_until = float("inf")
-            return True
+        # Problem 6: 通知依赖方模型已驱逐（锁外调用回调）
+        if model_id:
+            self._notify_model_removed(model_id, alias)
+        return True
 
     def get(self, alias: str) -> PoolEntry | None:
         with self._lock:
@@ -212,6 +224,39 @@ class ModelPool:
             return True
         return False
 
+    def set_success_callback(self, callback: Any) -> None:
+        """设置模型成功调用时的回调（用于状态栏等UI同步）。
+
+        回调签名: callback(model_id: str) -> None
+        """
+        self._success_callback = callback
+
+    # ── Problem 6: 模型移除通知 ───────────────────────────
+
+    def register_on_model_removed(self, callback: Any) -> None:
+        """注册模型移除时的回调函数。
+
+        回调签名: callback(model_id: str, alias: str) -> None
+        """
+        if callback is not None and callback not in self._on_model_removed_callbacks:
+            self._on_model_removed_callbacks.append(callback)
+
+    def _notify_model_removed(self, model_id: str, alias: str) -> None:
+        """通知所有注册的回调：模型已被移除或驱逐。
+
+        P1: 迭代前复制回调列表，避免与 register_on_model_removed 并发时的竞态。
+        """
+        # P1: 复制列表避免迭代期间列表被修改
+        callbacks_snapshot = list(self._on_model_removed_callbacks)
+        for callback in callbacks_snapshot:
+            try:
+                callback(model_id, alias)
+            except Exception as e:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).debug(
+                    f"模型移除回调异常（已忽略）: {e}"
+                )
+
     # ── 健康更新 ───────────────────────────────────────
 
     def record_success(self, alias: str, latency: float = 0.0) -> None:
@@ -219,10 +264,12 @@ class ModelPool:
 
         v0.5.3: 成功后重置退避周期计数和断路器。
         """
+        model_id = None
         with self._lock:
             entry = self._find_entry(alias)
             if not entry:
                 return
+            model_id = entry.model_id
             h = entry.health
             h.total_calls += 1
             h.success_count += 1
@@ -236,6 +283,13 @@ class ModelPool:
                 if len(h.last_latencies) > 10:
                     h.last_latencies.pop(0)
                 h.avg_latency = sum(h.last_latencies) / len(h.last_latencies)
+
+        # 调用成功回调（锁外调用）
+        if model_id and self._success_callback:
+            try:
+                self._success_callback(model_id)
+            except Exception:  # noqa: BLE001
+                pass  # 回调失败不应影响健康记录
 
     def record_failure(self, alias: str, *, is_retry: bool = False) -> bool:
         """记录一次失败调用。alias 可以是 alias 或完整 model_id。
@@ -350,6 +404,7 @@ class ModelPool:
         v0.4.0 Step 10: 先确定任务 tier，从匹配队列中选模型，
         用 _score 细粒度排序。队列空时 fallback 到全局。
         v0.5.6: Tier 边界模糊，也考虑相邻 tier 的模型。
+        P2-Medium: 并发安全 — 使用锁保护 _resolve_tier_queue 读取。
 
         Args:
             profile: TaskProfile (from difficulty_estimator)

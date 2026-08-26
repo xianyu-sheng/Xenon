@@ -10,6 +10,7 @@ v0.4.0 Step 10: 添加任务 tier 估算，传给 ModelPool 的层级队列。
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any
 
@@ -48,6 +49,10 @@ class AutoRouter:
         self.session_lock = SessionLock()
         self.session_lock_enabled = True
         self.drift_threshold = 3  # 连续 N 次决策漂移才释放锁
+        # Problem 2: 追踪最近成功的模型，熔断时清空
+        self._last_successful_model_id: str | None = None
+        # P2-Medium: 并发安全 — 保护 _last_successful_model_id 访问
+        self._lock = threading.Lock()
 
     def route(
         self,
@@ -136,6 +141,12 @@ class AutoRouter:
             scores=scores,
         )
         self.history.record(record)
+
+        # Problem 2: 更新最近成功模型（在路由后，实际成功调用后才会被记录）
+        # P2-Medium: 并发安全 — 使用锁保护写入
+        if result_ids:
+            with self._lock:
+                self._last_successful_model_id = result_ids[0]
 
         return result_ids
 
@@ -295,6 +306,10 @@ class AutoRouter:
         if not entry or not self._is_healthy(entry):
             # 锁定模型失联或因 failover 不健康 -> 释放,下次 route 重选并重锁
             self.session_lock.release()
+            # Problem 2: 熔断时清空最近成功模型记录
+            # P2-Medium: 并发安全 — 使用锁保护写入
+            with self._lock:
+                self._last_successful_model_id = None
             return None
         # 决策漂移检测:任务 tier 与锁定 tier 差距 >=2 级则累计
         if abs(task_tier - self.session_lock.locked_tier) >= 2:
