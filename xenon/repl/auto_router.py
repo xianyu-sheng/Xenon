@@ -291,6 +291,9 @@ class AutoRouter:
     def reset_session_lock(self) -> None:
         """显式释放会话锁(新会话 / /reset / clear context 时调用)。"""
         self.session_lock.release()
+        # Problem 2: 清空最近成功模型记录，保持状态一致性
+        with self._lock:
+            self._last_successful_model_id = None
 
     def record_model_success(self, model_id: str) -> None:
         """记录模型调用成功（更新 _last_successful_model_id）。

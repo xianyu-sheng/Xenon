@@ -228,6 +228,10 @@ class ContextManager:
         if callback is not None and callback not in self._status_refresh_callbacks:
             self._status_refresh_callbacks.append(callback)
 
+    def add_state_change_callback(self, callback: Any) -> None:
+        """Problem 5: 注册状态变更回调（别名，用于测试兼容性）。"""
+        self.register_status_refresh_callback(callback)
+
     def _notify_status_change(self) -> None:
         """Problem 5: 通知所有注册的状态栏刷新回调。"""
         for callback in self._status_refresh_callbacks:
@@ -742,20 +746,25 @@ class ContextManager:
 
     # ── /undo 回退 ────────────────────────────────────────
 
-    def save_snapshot(self) -> None:
+    def save_snapshot(self, *, notify: bool = False) -> None:
         """保存当前历史快照（用于 undo）。
 
         P3-Q10 / §8.26.9：栈有 ``max_undo_snapshots`` 上限，超出时丢弃最旧快照，
         避免多次 /compact 全量 deepcopy 线性堆积累积内存。
         P2-Medium：线程安全保护。
+
+        Args:
+            notify: 是否触发状态变更通知（默认 False）。save_snapshot 只改变
+                   内部 undo 栈，不改变用户可见的对话历史，因此默认不通知。
         """
         with self._lock:
             self._undo_stack.append(copy.deepcopy(self.history))
             overflow = len(self._undo_stack) - self.max_undo_snapshots
             if overflow > 0:
                 del self._undo_stack[:overflow]
-        # Problem 5: save_snapshot 会改变 undo_available，通知状态栏刷新
-        self._notify_status_change()
+        # Problem 5: save_snapshot 只在需要时通知（例如从外部显式调用）
+        if notify:
+            self._notify_status_change()
 
     def undo(self) -> bool:
         """
@@ -902,7 +911,7 @@ class ContextManager:
                 f"低于 Q{self._active_tier} 阈值 {trigger:.0%}，无需压缩）"
             )
 
-        self.save_snapshot()
+        self.save_snapshot()  # Problem 5: save_snapshot 默认不通知，由 compact 结束时统一通知
 
         # 评估空间状态
         space_state = SpaceBudget.evaluate(ratio)
