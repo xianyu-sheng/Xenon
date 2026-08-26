@@ -204,20 +204,6 @@ class REPL:
             self._persist_tool_checkpoint
         )
 
-        # P2: 启动时清理孤儿会话文件（被回退的多槽位实现遗留）
-        self._cleanup_orphaned_sessions()
-
-    def _cleanup_orphaned_sessions(self) -> None:
-        """静默清理孤儿会话文件，不干扰用户体验。"""
-        try:
-            from xenon.repl.session import cleanup_orphaned_multislot_files
-            deleted = cleanup_orphaned_multislot_files()
-            if deleted > 0:
-                logger.debug(f"清理了 {deleted} 个孤儿会话文件")
-        except Exception:
-            # 清理失败不应该影响 REPL 启动
-            pass
-
     def _init_prompt_toolkit(self) -> None:
         if not _HAS_PROMPT_TOOLKIT:
             return

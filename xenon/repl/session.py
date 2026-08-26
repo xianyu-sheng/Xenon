@@ -460,37 +460,3 @@ def get_session_age(data: dict[str, Any]) -> str | None:
         return f"{int(elapsed / 3600)} 小时前"
     else:
         return f"{int(elapsed / 86400)} 天前"
-
-
-def cleanup_orphaned_multislot_files() -> int:
-    """清理被回退的多槽位实现留下的孤儿会话文件。
-
-    历史背景：
-    - commit 0e3a7ca 引入了多槽位会话（_auto_<timestamp>_<id>.json）
-    - commit 05096bb 回退该实现，恢复单一 _auto.json
-    - 但遗留了大量 _auto_*.json 孤儿文件无法通过 /resume 序号访问
-
-    此函数删除所有 _auto_<timestamp>_*.json 格式的孤儿文件，
-    保留主文件 _auto.json 和所有命名会话。
-
-    Returns:
-        删除的文件数量
-    """
-    sessions_dir = _ensure_sessions_dir()
-    deleted = 0
-
-    for f in sessions_dir.glob("_auto_*.json"):
-        # 只删除时间戳格式的孤儿文件：_auto_<digits>_<hex>.json
-        # 保护可能的命名会话（如 _auto_backup.json）
-        stem = f.stem  # "_auto_1787463448_2c28"
-        parts = stem.split("_")  # ["", "auto", "1787463448", "2c28"]
-
-        if len(parts) >= 4 and parts[1] == "auto" and parts[2].isdigit():
-            try:
-                f.unlink()
-                deleted += 1
-            except OSError:
-                pass
-
-    return deleted
-
