@@ -72,6 +72,8 @@ class LimitsConfig:
     # 两者约束的是不同的东西：上面决定真正注册多少个模型（影响路由和成本），
     # 这里只决定给用户看几行。向导历来显示 5 条，收口到一个键会让它悄悄变成 3。
     wizard_preview_models: int = 5
+    # P3-Low 问题3修复：XENON_MAX_UNDO_SNAPSHOTS: undo 栈深度上限
+    max_undo_snapshots: int = 10
 
 
 @dataclass
@@ -375,6 +377,16 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
                 ),
             ),
             5, "limits.wizard_preview_models",
+        ),
+        max_undo_snapshots=_at_least_one(
+            _get_int_env(
+                "XENON_MAX_UNDO_SNAPSHOTS",
+                _coerce_int(
+                    limits_data.get("max_undo_snapshots"), 10,
+                    "limits.max_undo_snapshots",
+                ),
+            ),
+            1, "limits.max_undo_snapshots",
         ),
     )
 

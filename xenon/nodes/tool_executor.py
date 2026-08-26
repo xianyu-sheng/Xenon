@@ -259,7 +259,11 @@ def _validate_param_value(name: str, value: Any) -> list[str]:
     return hits
 
 
-def validate_tool_params(params: dict[str, Any]) -> tuple[bool, str, str]:
+def validate_tool_params(
+    params: dict[str, Any],
+    tool_name: str | None = None,
+    tool_gate: Any = None,
+) -> tuple[bool, str, str]:
     """参数幻觉校验：三级判定，content 白名单豁免。
 
     合法的长 shell 命令 / heredoc / 含代码的参数容易命中 2 条结构性特征，
@@ -269,14 +273,40 @@ def validate_tool_params(params: dict[str, Any]) -> tuple[bool, str, str]:
     - 命中 ==2 条 → ``(True, reason, "warn")``   记日志但放行
     - 其余         → ``(True, "", "pass")``
 
-    配置 ``validation.strict=true`` 或环境变量 ``XENON_STRICT_VALIDATION=1``
-    可恢复旧的严格行为（≥2 条即 block）。
+    校验级别由 ToolGate 决定（优先级：工具级覆盖 > 全局配置 > validation.strict）：
+    - strict: ≥2 条命中即 block
+    - moderate: ≥3 条命中才 block（默认）
+    - lenient: 不拦截，仅 warn
+
+    Args:
+        params: 工具参数字典
+        tool_name: 工具名称（用于查询工具级配置）
+        tool_gate: ToolGate 实例（None 时自动创建）
 
     Returns:
         (ok, reason, level) — level ∈ {"pass", "warn", "block"}。
     """
-    strict = get_config().validation.strict
-    block_threshold = 2 if strict else 3
+    # 获取校验级别
+    if tool_gate is None:
+        from xenon.engine.tool_gate import ToolGate
+        tool_gate = ToolGate.from_config(get_config())
+
+    if tool_name:
+        level_enum = tool_gate.get_param_validation_level(tool_name)
+        level_str = level_enum.value
+    else:
+        # 兜底：从全局配置读取
+        strict = get_config().validation.strict
+        level_str = "strict" if strict else "moderate"
+
+    # 根据级别确定阈值
+    if level_str == "strict":
+        block_threshold = 2
+    elif level_str == "lenient":
+        block_threshold = 999  # 永不拦截
+    else:  # moderate
+        block_threshold = 3
+
     warn: tuple[bool, str, str] | None = None
     for name, value in params.items():
         if name in _TOOL_CONTENT_PARAMS:
@@ -686,6 +716,7 @@ class ToolExecutor:
         evidence_enforcement: str = "observe",
         evidence_gates: list[Any] | None = None,
         evidence_auto_read: bool = True,  # v0.8.3: 盲编辑自动补读
+        tool_gate: Any = None,  # 统一工具门控（黑名单+参数校验+证据链）
     ) -> None:
         if evidence_enforcement not in {"observe", "enforce"}:
             raise ValueError("evidence_enforcement must be 'observe' or 'enforce'")
@@ -704,6 +735,11 @@ class ToolExecutor:
         # 后 plan-execute 引擎直接放弃该步骤——自动补读让拦截成为
         # 一次可自我修复的瞬时事件，而不是永久失败。
         self.evidence_auto_read = evidence_auto_read
+        # 统一工具门控：自动创建实例（无需修改引擎）
+        if tool_gate is None:
+            from xenon.engine.tool_gate import ToolGate
+            tool_gate = ToolGate.from_config(get_config())
+        self.tool_gate = tool_gate
 
     def register_evidence_gate(self, gate: Any) -> None:
         """挂载一个在线工具边界 Gate；Gate 只判定，不直接执行补救。"""
@@ -1024,6 +1060,18 @@ class ToolExecutor:
 
         logger.debug(f"{trace_p}执行工具: {tool_name}, 参数: {mask_sensitive_params(params)}")
 
+        # ── Stage 0.5: 工具门控黑名单检查 ──
+        gate_passed, gate_reason = self.tool_gate.check_before(tool_name, params)
+        if not gate_passed:
+            logger.info(f"{trace_p}工具门控拒绝: {tool_name} — {gate_reason}")
+            return finish(
+                False,
+                f"⛔ {gate_reason}",
+                state=ToolExecutionState.FAILED,
+                error=gate_reason,
+                error_kind="gate_denied",
+            )
+
         # ── Stage 1.5: 本轮执行策略硬边界 ──
         policy_reason = execution_policy_denial(tool_name, params, context)
         if policy_reason:
@@ -1037,7 +1085,7 @@ class ToolExecutor:
             )
 
         # ── Stage 2: 参数幻觉校验 ──
-        _ok, reason, level = validate_tool_params(params)
+        _ok, reason, level = validate_tool_params(params, tool_name, self.tool_gate)
         if level == "warn":
             # 2 条命中：疑似但不足以拦截（长 shell / heredoc 常触发），仅记录。
             logger.warning(f"{trace_p}参数可疑但放行: {tool_name} — {reason}")
