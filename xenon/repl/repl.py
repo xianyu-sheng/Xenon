@@ -209,6 +209,13 @@ class REPL:
             self._persist_tool_checkpoint
         )
 
+        # 优雅重启管理器
+        from xenon.repl.graceful_restart import GracefulRestartManager
+        self._restart_manager = GracefulRestartManager(self)
+        signal_ok = self._restart_manager.install_signal_handlers()
+        if not signal_ok:
+            logger.info("信号驱动重启不可用，请使用 /restart 命令")
+
     def _init_prompt_toolkit(self) -> None:
         if not _HAS_PROMPT_TOOLKIT:
             return
@@ -1008,6 +1015,68 @@ class REPL:
             return actual
         return model_ids[0] if model_ids else None
 
+    def _process_restart_request(self, preserve_session: bool) -> Any:
+        """处理重启请求，包含三级异常兜底。
+
+        Args:
+            preserve_session: 是否保存会话
+
+        Returns:
+            RestartOutcome 对象
+        """
+        from pathlib import Path
+
+        try:
+            # 一级：正常执行
+            outcome = self._restart_manager.perform_restart(preserve_session)
+            if outcome.ok:
+                console.print(f"\n[bold green]{outcome.message}[/bold green]\n")
+            else:
+                console.print(f"\n[bold yellow]{outcome.message}[/bold yellow]\n")
+            return outcome
+
+        except Exception as e:
+            # 二级兜底：perform_restart 抛异常，尝试保存会话
+            logger.error("重启过程异常", exc_info=True)
+            console.print(f"\n[bold red]⚠ 重启失败: {e}[/bold red]\n")
+
+            saved_path = None
+            try:
+                # 尝试自动保存会话
+                saved_path = self._auto_save_session()
+            except Exception as save_error:
+                logger.error("二级兜底保存会话失败", exc_info=True)
+
+                # 三级兜底：auto_save 也失败，查找最新会话文件
+                try:
+                    session_dir = Path.home() / ".xenon" / "sessions"
+                    if session_dir.exists():
+                        candidates = sorted(
+                            session_dir.glob("*.json"),
+                            key=lambda p: p.stat().st_mtime,
+                            reverse=True,
+                        )
+                        if candidates and candidates[0].exists():
+                            saved_path = candidates[0]
+                except Exception:
+                    logger.error("三级兜底查找会话文件失败", exc_info=True)
+
+            # 构造提示消息
+            if saved_path and Path(saved_path).exists():
+                console.print(
+                    f"[yellow]会话已保存到 {saved_path}\n"
+                    f"REPL 将继续运行，可用 /resume 恢复会话[/yellow]\n"
+                )
+            else:
+                console.print(
+                    "[yellow]会话保存失败，请用 /sessions 查看可恢复的会话\n"
+                    "REPL 将继续运行[/yellow]\n"
+                )
+
+            # 返回失败结果，让 REPL 继续运行
+            from xenon.repl.graceful_restart import RestartOutcome
+            return RestartOutcome(ok=False, message=str(e))
+
     @staticmethod
     def _default_system_prompt() -> str:
         from datetime import datetime, timezone
@@ -1067,6 +1136,15 @@ class REPL:
             self._run_startup_resume()
 
             while True:
+                # 检查重启请求（信号或 /restart 命令触发）
+                should_restart, preserve = self._restart_manager.coordinator.should_restart()
+                if should_restart:
+                    self._restart_manager.coordinator.clear()
+                    outcome = self._process_restart_request(preserve)
+                    if not outcome.ok:
+                        # 重启失败，继续运行
+                        continue
+
                 # 显示状态栏（PT 模式由 bottom_toolbar 渲染，非 PT 模式才需单独打印）
                 if self._pt_session is None:
                     self.status_bar.print_status()
@@ -1109,6 +1187,9 @@ class REPL:
                     self._handle_chat(user_input)
                     self._auto_save_session()
         finally:
+            # 卸载信号处理器
+            if hasattr(self, "_restart_manager"):
+                self._restart_manager.uninstall_signal_handlers()
             # Stop the worker and restore the prior/best-effort shell title even
             # when setup, a command, or an engine raises unexpectedly.
             self._terminal_activity.close()
@@ -2057,7 +2138,8 @@ class REPL:
                             )
                     response_text = checked.content
 
-                self.status_bar.set_last_model(model_id)
+                # P1-High 问题1 修复: record_model_success 内部已更新 _last_successful_model_id，
+                # 状态栏通过 get_active_model_id() 自动获取，无需手动调用 set_last_model
                 self.auto_router.record_model_success(model_id)
                 self.model_pool.record_success(
                     model_id,
@@ -2275,8 +2357,8 @@ class REPL:
             model_used = self._engine_model_used(engine, model_ids)
             self.ctx_mgr.add_assistant_message(result, model_used=model_used)
             self._render_engine_result(callback, result, spec.result_title)
+            # P1-High 问题1 修复: 引擎模式统一通过 record_model_success 更新状态
             if model_used:
-                self.status_bar.set_last_model(model_used)
                 self.auto_router.record_model_success(model_used)
         except Exception as e:
             self._captured_log = self._stop_log_capture()
