@@ -163,6 +163,11 @@ class REPL:
         )
         self.status_bar._auto_router = self.auto_router  # for "auto" display
 
+        # P1-High: 注册状态栏同步回调
+        self.model_pool.set_success_callback(
+            lambda model_id: self.status_bar.set_last_model(model_id)
+        )
+
         # 会话状态，供命令处理器共享
         self._session_state: dict[str, Any] = {
             "agent_context": self.agent_context,
@@ -2053,6 +2058,7 @@ class REPL:
                     response_text = checked.content
 
                 self.status_bar.set_last_model(model_id)
+                self.auto_router.record_model_success(model_id)
                 self.model_pool.record_success(
                     model_id,
                     time.monotonic() - started_at,
@@ -2271,6 +2277,7 @@ class REPL:
             self._render_engine_result(callback, result, spec.result_title)
             if model_used:
                 self.status_bar.set_last_model(model_used)
+                self.auto_router.record_model_success(model_used)
         except Exception as e:
             self._captured_log = self._stop_log_capture()
             if spec.preserve_thinking_panel:
@@ -3232,40 +3239,6 @@ def _looks_like_external_query(text: str) -> bool:
     return False
 
 
-def _maybe_start_config_watcher(repl: "REPL", registry: ModelRegistry,
-                                config_path: str | None) -> Any:
-    """P3: 按需启动 inotify 配置热加载,返回 ConfigWatcher 或 None。
-
-    监听目标:优先 ``config_path``,否则回退默认 ``~/.xenon/models.yaml``(若存在)。
-    非 Linux / env 关闭 / 无候选文件 / start 失败时返回 None,静默降级不影响主流程。
-    回调复用 /reload_models 同款逻辑(registry.load_from_file + pool.from_config)。
-    """
-    from xenon.repl.config_watcher import (
-        ConfigWatcher, is_watch_enabled, is_watch_supported,
-    )
-    if not is_watch_enabled() or not is_watch_supported():
-        return None
-    default_models = Path.home() / ".xenon" / "models.yaml"
-    watch_path = config_path or (str(default_models) if default_models.exists() else None)
-    if not watch_path:
-        return None
-
-    def _on_reload() -> None:
-        try:
-            registry.load_from_file(watch_path)
-            # 与启动路径保持同一套配置源：只重载 models.yaml 会让
-            # credentials.yaml 声明的中转站模型在热加载后消失。
-            registry.load_from_credentials()
-            cfg = registry.export_config().get("models", {})
-            repl.model_pool.from_config(cfg)
-            logger.info("配置已热加载(inotify): %d 个模型", len(cfg))
-        except Exception as e:  # noqa: BLE001 -- 回调异常不应波及 watcher
-            logger.warning("配置热加载失败: %s", e)
-
-    watcher = ConfigWatcher(watch_path, on_reload=_on_reload)
-    return watcher if watcher.start() else None
-
-
 def start_repl(
     *,
     models: list[str] | None = None,
@@ -3340,11 +3313,4 @@ def start_repl(
     if models:
         repl._preferred_model_ids = list(models)
 
-    # P3: 配置热加载(inotify)。监听 config_path 或默认 ~/.xenon/models.yaml(若存在);
-    # 非 Linux / 关闭 / 无文件时静默降级。回调复用 /reload_models 同款逻辑。
-    watcher = _maybe_start_config_watcher(repl, registry, config_path)
-    try:
-        repl.run()
-    finally:
-        if watcher is not None:
-            watcher.stop()
+    repl.run()
