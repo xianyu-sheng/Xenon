@@ -241,6 +241,32 @@ class ModelPool:
         if callback is not None and callback not in self._on_model_removed_callbacks:
             self._on_model_removed_callbacks.append(callback)
 
+    def add_removal_callback(self, callback: Any) -> None:
+        """Problem 6: 注册模型移除回调（别名，用于测试兼容性）。
+
+        回调签名: callback(model_id: str) -> None (简化版，只传 model_id)
+        """
+        # 包装回调，只传 model_id
+        def wrapper(model_id: str, alias: str) -> None:
+            callback(model_id)
+
+        if callback is not None:
+            # 存储原始回调和包装器的映射，用于后续移除
+            if not hasattr(self, '_callback_wrappers'):
+                self._callback_wrappers = {}
+            self._callback_wrappers[id(callback)] = wrapper
+            self.register_on_model_removed(wrapper)
+
+    def remove_removal_callback(self, callback: Any) -> None:
+        """Problem 6: 移除模型移除回调。"""
+        if not hasattr(self, '_callback_wrappers'):
+            return
+
+        wrapper = self._callback_wrappers.get(id(callback))
+        if wrapper and wrapper in self._on_model_removed_callbacks:
+            self._on_model_removed_callbacks.remove(wrapper)
+            del self._callback_wrappers[id(callback)]
+
     def _notify_model_removed(self, model_id: str, alias: str) -> None:
         """通知所有注册的回调：模型已被移除或驱逐。
 
