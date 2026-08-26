@@ -13,25 +13,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 import yaml
 
 from xenon.repl.system_config import (
-    SystemConfig,
-    ValidationConfig,
-    EngineConfig,
-    WatchConfig,
-    LimitsConfig,
-    PathsConfig,
-    InteractionConfig,
-    DevelopmentConfig,
     load_config,
     get_config,
     reload_config,
     generate_default_config_file,
-    CONFIG_PATH,
 )
 
 
