@@ -488,6 +488,9 @@ def clear_model_cache(provider_key: str | None = None) -> None:
             del cache[provider_key]
             _save_model_cache(cache)
             logger.info("已清除 %s 的模型缓存", provider_key)
+    # 磁盘缓存清了，内存里的探测结果也必须一并作废，否则 /model refresh 之类的
+    # 操作会清掉磁盘却仍返回旧的内存结果，两层缓存不一致。
+    invalidate_provider_probe()
 
 
 def fetch_provider_models(
@@ -674,6 +677,11 @@ def save_credentials(creds: dict[str, Any], path: Path | None = None) -> Path:
     atomic_write_text(
         credentials_path, content, mode=0o600
     )  # A9 原子写 + A10 chmod 0600
+    # 懒加载契约：凭证一变，已探测结果立即作废。这里是所有凭证写入的唯一收口
+    # （set_provider_key / remove_provider_key / 自定义 provider 增删都走这条），
+    # 在此重置可覆盖全部路径，不必逐个调用方去补——避免漏一处就复现
+    # "换了好 key 仍被静默跳过" 的老问题。
+    invalidate_provider_probe()
     return credentials_path
 
 
@@ -709,6 +717,13 @@ def _is_official_ark_config(config: Any) -> bool:
     return hostname == "ark.cn-beijing.volces.com"
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 懒加载状态：启动时跳过 provider 探测，按需时才探测（用户调用 /model 等）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_providers_probed: bool = False
+_probed_providers: list[ProviderInfo] = []
+
+
 def get_configured_providers(
     *, refresh_models: bool = True, use_cache: bool = True
 ) -> list[ProviderInfo]:
@@ -727,11 +742,24 @@ def get_configured_providers(
     3) anthropic 厂商额外 fallback ANTHROPIC_AUTH_TOKEN（Claude Code / Anthropic SDK 标准）
 
     性能优化：支持 XENON_SKIP_MODEL_PROBE=1 环境变量完全跳过网络探测（CI/测试环境）
+
+    懒加载契约（v0.9.0+）：
+    - 首次调用 refresh_models=True 时触发网络探测并缓存结果到模块级 _probed_providers
+    - 后续调用直接返回缓存，避免重复探测
+    - 启动路径（repl.py:_check_first_run）现在**不再调用此函数**，只用 models.yaml
+      的静态配置填充池，将探测延后到用户主动触发 /model、/setup 等按需场景
     """
+    global _providers_probed, _probed_providers
+
     # 环境变量控制：完全跳过模型探测（CI/测试环境加速）
     if os.getenv("XENON_SKIP_MODEL_PROBE") == "1":
         refresh_models = False
         logger.debug("XENON_SKIP_MODEL_PROBE=1，跳过模型探测")
+
+    # 懒加载缓存：若已探测过且请求刷新，直接返回缓存结果
+    if _providers_probed and refresh_models:
+        logger.debug("返回已缓存的 provider 探测结果（%d 个）", len(_probed_providers))
+        return _probed_providers
 
     creds = load_credentials()
     configured = []
@@ -824,7 +852,27 @@ def get_configured_providers(
         )
         configured.append(info_copy)
 
+    # 懒加载：记录探测结果，后续调用直接复用（避免同一会话内重复付网络代价）
+    if refresh_models:
+        _probed_providers = configured
+        _providers_probed = True
+
     return configured
+
+
+def invalidate_provider_probe() -> None:
+    """清除 provider 探测缓存，下次调用重新探测。
+
+    这是懒加载契约的重置钩子。**任何修改凭证的操作都必须调用它**，否则用户
+    换了 key 之后仍会看到旧的探测结果——这正是历史上被否决的
+    "_failed_providers 模块级 dict + 1 小时冷却" 方案的致命缺陷：
+    set_provider_key() 不清理它，用户换上好 key 后 1 小时内该 provider
+    仍被静默跳过。这里通过显式重置钩子避免同一个坑。
+    """
+    global _providers_probed, _probed_providers
+    _providers_probed = False
+    _probed_providers = []
+    logger.debug("provider 探测缓存已失效，下次调用将重新探测")
 
 
 def _resolve_api_key(

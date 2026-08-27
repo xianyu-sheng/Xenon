@@ -16,6 +16,7 @@ from xenon.repl.provider_registry import (
     _save_model_cache,
     fetch_provider_models,
     get_configured_providers,
+    invalidate_provider_probe,
 )
 
 
@@ -527,3 +528,94 @@ class TestBatchRegisterSkipsBenchmark:
 
         assert pool.get("forced").capability.tier == 5
         assert spy_benchmark_fetcher.calls == []
+
+
+class TestLazyProviderProbe:
+    """懒加载契约：启动不探测 provider，按需才付网络代价。
+
+    这是启动 1.4s -> 0.6s 的根因修复。启动路径原先在 _check_first_run 里同步
+    调 get_configured_providers()，5 个 provider 约 1.9s（失效 key 每次都完整
+    走一遍 401/403），而池子真正需要的模型早已由 models.yaml 填好。
+    """
+
+    def test_probe_result_is_cached_within_session(
+        self, temp_cache_dir, mock_credentials
+    ):
+        """同一会话内重复调用不应重复付网络代价。"""
+        with patch(
+            "xenon.repl.provider_registry._fetch_provider_models_from_network"
+        ) as mock_fetch:
+            mock_fetch.return_value = ["m1", "m2"]
+
+            first = get_configured_providers(refresh_models=True)
+            calls_after_first = mock_fetch.call_count
+            second = get_configured_providers(refresh_models=True)
+
+            # 第二次完全走缓存，没有新增网络调用
+            assert mock_fetch.call_count == calls_after_first
+            assert second is first
+
+    def test_invalidate_forces_reevaluation(self, temp_cache_dir, mock_credentials):
+        """显式失效后必须重新走探测流程（而非返回同一个内存对象）。
+
+        注意这里断言的是"重新求值"，不是"重新发网络请求"——磁盘缓存
+        (provider_models.json) 是独立的第二层，失效内存缓存后磁盘仍可命中，
+        这是设计如此。两层的职责：内存层避免同会话重复求值，磁盘层避免跨进程
+        重复走网络。
+        """
+        with patch(
+            "xenon.repl.provider_registry._fetch_provider_models_from_network"
+        ) as mock_fetch:
+            mock_fetch.return_value = ["m1"]
+
+            first = get_configured_providers(refresh_models=True)
+            assert mock_fetch.call_count > 0
+
+            invalidate_provider_probe()
+            second = get_configured_providers(refresh_models=True)
+
+            # 失效后不再返回同一个缓存对象，说明确实重新求值了
+            assert second is not first
+            # 用集合比较：并行探测的完成顺序由 as_completed 决定，不保证稳定
+            assert {p.key for p in second} == {p.key for p in first}
+
+    def test_saving_credentials_invalidates_probe(self, tmp_path):
+        """换 key 后缓存必须自动作废——这是被否决的旧方案的致命缺陷所在。
+
+        历史上"401 冷却 1 小时"方案用模块级 _failed_providers dict，
+        set_provider_key() 不清理它，用户换上好 key 后 1 小时内该 provider
+        仍被静默跳过。懒加载缓存把重置钩子挂在 save_credentials()（所有凭证
+        写入的唯一收口），因此不会重现那个坑。
+        """
+        import xenon.repl.provider_registry as pr
+
+        pr._providers_probed = True
+        pr._probed_providers = [
+            ProviderInfo(
+                name="Stale",
+                key="stale",
+                base_url="https://example.invalid",
+                env_key="",
+                models=["old-model"],
+                api_key="old-key",
+                model_list_path="models",
+                model_error="",
+            )
+        ]
+
+        pr.save_credentials({"deepseek": "new-key"}, path=tmp_path / "credentials.yaml")
+
+        assert pr._providers_probed is False
+        assert pr._probed_providers == []
+
+    def test_clear_model_cache_invalidates_probe(self, temp_cache_dir):
+        """清磁盘缓存时内存探测结果也要作废，避免两层缓存不一致。"""
+        import xenon.repl.provider_registry as pr
+
+        pr._providers_probed = True
+        pr._probed_providers = ["sentinel"]
+
+        pr.clear_model_cache("deepseek")
+
+        assert pr._providers_probed is False
+        assert pr._probed_providers == []
