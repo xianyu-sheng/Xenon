@@ -45,8 +45,16 @@ def dispatch_command(
     registry: ModelRegistry,
     ctx_mgr: ContextManager,
     session_state: dict[str, Any],
+    repl: Any = None,
 ) -> str | None:
-    """Dispatch a command and convert handler failures to user-facing text."""
+    """Dispatch a command and convert handler failures to user-facing text.
+
+    Args:
+        repl: REPL 实例，可选。懒加载契约需要它——启动路径不再探测 provider，
+            /model 这类需要完整模型目录的命令通过它调用
+            ensure_providers_probed() 按需付网络代价。为 None 时（旧调用方、
+            测试）处理器应退化为不回填，保持向后兼容。
+    """
     handler = _HANDLERS.get(name)
     if not handler:
         return f"未知命令: {name}。输入 /help 查看可用命令。"
@@ -56,6 +64,7 @@ def dispatch_command(
             registry=registry,
             ctx_mgr=ctx_mgr,
             session_state=session_state,
+            repl=repl,
         )
     except ExitSignal:
         raise

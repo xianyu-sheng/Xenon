@@ -54,7 +54,11 @@ def test_provider_discovery_precedes_model_aware_welcome(monkeypatch):
     )
     repl = REPL(streaming=False)
 
-    summary = repl._check_first_run()
+    # v0.9.0 懒加载：启动路径（_check_first_run）不再探测 provider，探测逻辑
+    # 移到按需入口 ensure_providers_probed()（由 /model、/provider 触发）。
+    # 这个用例原本验证"探测结果先于欢迎卡渲染"，现在改为验证探测那条路径本身
+    # 仍然正确：模型进池、认证失败被如实报告、且原始错误体不泄露给用户。
+    summary = repl.ensure_providers_probed()
     repl._print_welcome()
     repl._render_startup_summary(summary)
 
@@ -67,6 +71,12 @@ def test_provider_discovery_precedes_model_aware_welcome(monkeypatch):
 
 
 def test_default_startup_suppresses_httpx_probe_info(monkeypatch):
+    """懒加载契约后探测发生在 ensure_providers_probed，默认路径仍须抑制 httpx 噪音。
+
+    启动路径不再探测，但 /model 之类触发探测时仍应抑制 httpx INFO（除非 --verbose），
+    否则首次 /model 就污染用户终端。v0.9.0 前该抑制发生在 _check_first_run，现在
+    在 ensure_providers_probed 里；覆盖不能丢。
+    """
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
     network_logger = logging.getLogger("httpx")
@@ -87,7 +97,7 @@ def test_default_startup_suppresses_httpx_probe_info(monkeypatch):
         fake_configured,
     )
     try:
-        REPL(streaming=False, verbose=False)._check_first_run()
+        REPL(streaming=False, verbose=False).ensure_providers_probed()
     finally:
         network_logger.removeHandler(handler)
         network_logger.setLevel(previous_level)
@@ -113,7 +123,9 @@ def test_verbose_startup_preserves_provider_probe_logs(monkeypatch):
         fake_configured,
     )
     try:
-        REPL(streaming=False, verbose=True)._check_first_run()
+        # 懒加载后探测发生在 ensure_providers_probed()，--verbose 仍须保留
+        # httpx 的诊断日志（默认路径才抑制），这条保证不因搬家而丢失。
+        REPL(streaming=False, verbose=True).ensure_providers_probed()
     finally:
         network_logger.removeHandler(handler)
         network_logger.setLevel(previous_level)

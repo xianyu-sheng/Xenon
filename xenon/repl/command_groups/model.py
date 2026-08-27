@@ -66,6 +66,13 @@ def _cmd_set_model(
     # 无参数 → 交互式选择
     from xenon.repl.provider_registry import get_configured_providers
 
+    # 懒加载契约：启动路径不再探测 provider，/model 是用户要看完整目录的入口，
+    # 由这里付一次网络代价，并把探测到的模型补进池/注册表（否则 AutoRouter 看不到）。
+    # repl 缺失时（旧调用方/测试）退化为只探测不回填，保持向后兼容。
+    _repl = kwargs.get("repl")
+    if _repl is not None and hasattr(_repl, "ensure_providers_probed"):
+        _repl.ensure_providers_probed()
+
     configured = get_configured_providers()
 
     # v0.8.5: 同时读取 models.yaml 中已注册的模型
@@ -537,6 +544,11 @@ register_command("/provider", "查看已配置的厂商和可用模型", "/provi
 @command_handler("/provider")
 def _cmd_provider(**kwargs: Any) -> str:
     from xenon.repl.provider_registry import get_configured_providers, PROVIDERS
+
+    # 懒加载契约：同 /model，这是用户要看厂商全貌的入口，按需探测并回填。
+    _repl = kwargs.get("repl")
+    if _repl is not None and hasattr(_repl, "ensure_providers_probed"):
+        _repl.ensure_providers_probed()
 
     configured = get_configured_providers()
     lines = ["已配置的厂商:\n"]

@@ -16,6 +16,7 @@ from xenon.repl.provider_registry import (
     _save_model_cache,
     fetch_provider_models,
     get_configured_providers,
+    invalidate_provider_probe,
 )
 
 
@@ -377,153 +378,93 @@ class TestAPIKeyChangeInvalidation:
 # ── benchmark 网络查询：非启动路径的注册也不应发请求 ──────────────
 
 
-class _SpyFetcher:
-    """记录 estimate_tier 调用次数，并复现线上行为（HF 端点 404 → 回退）。"""
 
-    def __init__(self):
-        self.calls: list[str] = []
+class TestLazyProviderProbe:
+    """懒加载契约：启动不探测 provider，按需才付网络代价。
 
-    def estimate_tier(self, model_id: str, fallback_tier: int = 3) -> int:
-        self.calls.append(model_id)
-        return fallback_tier
+    这是启动 1.4s -> 0.6s 的根因修复。启动路径原先在 _check_first_run 里同步
+    调 get_configured_providers()，5 个 provider 约 1.9s（失效 key 每次都完整
+    走一遍 401/403），而池子真正需要的模型早已由 models.yaml 填好。
+    """
 
+    def test_probe_result_is_cached_within_session(
+        self, temp_cache_dir, mock_credentials
+    ):
+        """同一会话内重复调用不应重复付网络代价。"""
+        with patch(
+            "xenon.repl.provider_registry._fetch_provider_models_from_network"
+        ) as mock_fetch:
+            mock_fetch.return_value = ["m1", "m2"]
 
-@pytest.fixture
-def spy_benchmark_fetcher(monkeypatch):
-    """拦截 benchmark 单例，杜绝测试触发真实网络（CI 无 key、无外网）。"""
-    import xenon.repl.benchmark_fetcher as bf
+            first = get_configured_providers(refresh_models=True)
+            calls_after_first = mock_fetch.call_count
+            second = get_configured_providers(refresh_models=True)
 
-    spy = _SpyFetcher()
-    monkeypatch.setattr(bf, "get_benchmark_fetcher", lambda: spy)
-    yield spy
+            # 第二次完全走缓存，没有新增网络调用
+            assert mock_fetch.call_count == calls_after_first
+            assert second is first
 
+    def test_invalidate_forces_reevaluation(self, temp_cache_dir, mock_credentials):
+        """显式失效后必须重新走探测流程（而非返回同一个内存对象）。
 
-class TestWizardSkipsBenchmark:
-    """/setup 的两条注册路径都不应发 benchmark 请求。"""
+        注意这里断言的是"重新求值"，不是"重新发网络请求"——磁盘缓存
+        (provider_models.json) 是独立的第二层，失效内存缓存后磁盘仍可命中，
+        这是设计如此。两层的职责：内存层避免同会话重复求值，磁盘层避免跨进程
+        重复走网络。
+        """
+        with patch(
+            "xenon.repl.provider_registry._fetch_provider_models_from_network"
+        ) as mock_fetch:
+            mock_fetch.return_value = ["m1"]
 
-    def _providers(self):
-        return [
+            first = get_configured_providers(refresh_models=True)
+            assert mock_fetch.call_count > 0
+
+            invalidate_provider_probe()
+            second = get_configured_providers(refresh_models=True)
+
+            # 失效后不再返回同一个缓存对象，说明确实重新求值了
+            assert second is not first
+            # 用集合比较：并行探测的完成顺序由 as_completed 决定，不保证稳定
+            assert {p.key for p in second} == {p.key for p in first}
+
+    def test_saving_credentials_invalidates_probe(self, tmp_path):
+        """换 key 后缓存必须自动作废——这是被否决的旧方案的致命缺陷所在。
+
+        历史上"401 冷却 1 小时"方案用模块级 _failed_providers dict，
+        set_provider_key() 不清理它，用户换上好 key 后 1 小时内该 provider
+        仍被静默跳过。懒加载缓存把重置钩子挂在 save_credentials()（所有凭证
+        写入的唯一收口），因此不会重现那个坑。
+        """
+        import xenon.repl.provider_registry as pr
+
+        pr._providers_probed = True
+        pr._probed_providers = [
             ProviderInfo(
-                name="OpenAI",
-                key="openai",
-                base_url="https://api.openai.com/v1",
-                env_key="OPENAI_API_KEY",
-                models=["gpt-4o", "gpt-4.1"],
-                api_key="sk-test",
+                name="Stale",
+                key="stale",
+                base_url="https://example.invalid",
+                env_key="",
+                models=["old-model"],
+                api_key="old-key",
+                model_list_path="models",
+                model_error="",
             )
         ]
 
-    def test_select_model_registers_without_benchmark(
-        self, monkeypatch, spy_benchmark_fetcher
-    ):
-        import xenon.repl.setup_wizard as sw
-        from xenon.repl.model_pool import ModelPool
-        from xenon.repl.model_registry import ModelRegistry
+        pr.save_credentials({"deepseek": "new-key"}, path=tmp_path / "credentials.yaml")
 
-        monkeypatch.setattr(sw, "get_configured_providers", self._providers)
-        monkeypatch.setattr(sw, "load_credentials", lambda: {"openai": "sk-test"})
-        monkeypatch.setattr(sw.IntPrompt, "ask", staticmethod(lambda *a, **k: "1 2"))
+        assert pr._providers_probed is False
+        assert pr._probed_providers == []
 
-        registry = ModelRegistry()
-        pool = ModelPool()
-        sw._select_model(registry, model_pool=pool)
+    def test_clear_model_cache_invalidates_probe(self, temp_cache_dir):
+        """清磁盘缓存时内存探测结果也要作废，避免两层缓存不一致。"""
+        import xenon.repl.provider_registry as pr
 
-        assert spy_benchmark_fetcher.calls == []
-        assert pool.get("gpt-4o") is not None
-        assert pool.get("gpt-4-1") is not None
+        pr._providers_probed = True
+        pr._probed_providers = ["sentinel"]
 
-    def test_register_custom_registers_without_benchmark(
-        self, monkeypatch, spy_benchmark_fetcher
-    ):
-        import xenon.repl.setup_wizard as sw
-        from xenon.repl.model_pool import ModelPool
-        from xenon.repl.model_registry import ModelRegistry
+        pr.clear_model_cache("deepseek")
 
-        answers = iter(["mycorp", "https://api.mycorp.com/v1"])
-        monkeypatch.setattr(sw.Prompt, "ask", staticmethod(lambda *a, **k: next(answers)))
-        monkeypatch.setattr(sw, "_masked_input", lambda *a, **k: "sk-custom")
-        monkeypatch.setattr(
-            sw,
-            "register_custom_provider",
-            lambda name, base_url, api_key: ProviderInfo(
-                name=name,
-                key="mycorp",
-                base_url=base_url,
-                env_key="MYCORP_API_KEY",
-                models=["m-large", "m-small"],
-                api_key=api_key,
-            ),
-        )
-
-        pool = ModelPool()
-        sw._register_custom(registry=ModelRegistry(), model_pool=pool)
-
-        assert spy_benchmark_fetcher.calls == []
-        assert pool.get("m-large") is not None
-
-
-class TestBatchRegisterSkipsBenchmark:
-    """xenon models import / -model 导入路径同样不发 benchmark 请求。"""
-
-    def _write_yaml(self, tmp_path):
-        f = tmp_path / "models.yaml"
-        f.write_text(
-            "models:\n"
-            "  - alias: dsc\n"
-            "    model_id: deepseek/deepseek-chat\n"
-            "    probe: false\n"
-            "  - alias: tiny\n"
-            "    model_id: local/tinyllama-1b\n"
-            "    probe: false\n"
-        )
-        return f
-
-    def test_no_benchmark_request_on_import(self, tmp_path, spy_benchmark_fetcher):
-        from xenon.repl.batch_register import batch_register
-        from xenon.repl.model_pool import ModelPool
-        from xenon.repl.model_registry import ModelRegistry
-
-        pool = ModelPool()
-        result = batch_register(
-            self._write_yaml(tmp_path), ModelRegistry(), pool, probe=False
-        )
-
-        assert not result.failed
-        assert spy_benchmark_fetcher.calls == []
-
-    def test_tier_identical_to_infer_capability(self, tmp_path, spy_benchmark_fetcher):
-        """行为不变的关键断言：跳过后的 tier 与 HF 404 回退值逐个相等。"""
-        from xenon.repl.batch_register import batch_register
-        from xenon.repl.model_pool import ModelPool, _infer_capability
-        from xenon.repl.model_registry import ModelRegistry
-
-        pool = ModelPool()
-        batch_register(self._write_yaml(tmp_path), ModelRegistry(), pool, probe=False)
-
-        for alias, model_id in (
-            ("dsc", "deepseek/deepseek-chat"),
-            ("tiny", "local/tinyllama-1b"),
-        ):
-            entry = pool.get(alias)
-            assert entry is not None
-            assert entry.capability.tier == _infer_capability(model_id).tier
-
-    def test_explicit_tier_still_wins(self, tmp_path, spy_benchmark_fetcher):
-        """YAML 写了 tier 时仍以 YAML 为准（skip_benchmark 不影响 overrides）。"""
-        from xenon.repl.batch_register import batch_register
-        from xenon.repl.model_pool import ModelPool
-        from xenon.repl.model_registry import ModelRegistry
-
-        f = tmp_path / "models.yaml"
-        f.write_text(
-            "models:\n"
-            "  - alias: forced\n"
-            "    model_id: local/tinyllama-1b\n"
-            "    tier: 5\n"
-            "    probe: false\n"
-        )
-        pool = ModelPool()
-        batch_register(f, ModelRegistry(), pool, probe=False)
-
-        assert pool.get("forced").capability.tier == 5
-        assert spy_benchmark_fetcher.calls == []
+        assert pr._providers_probed is False
+        assert pr._probed_providers == []

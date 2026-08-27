@@ -1361,13 +1361,68 @@ class REPL:
 
         v0.3.0+ 修复（C-2）：从纯 yaml 检查改为 get_configured_providers 检查，
         兼容 env 变量（Claude Code 内 ANTHROPIC_AUTH_TOKEN 也能触发自动加载）。
+
+        v0.9.0 懒加载：**启动路径不再探测 provider**。实测启动 73% 的时间花在
+        get_configured_providers() 的网络往返上（5 个 provider 约 1.9s，失效 key
+        每次都完整走一遍 401/403，尾部可打满 MODEL_LIST_TIMEOUT=8s），而池子真正
+        需要的模型早已由 models.yaml 经 from_config() 在 run() 之前填好（实测
+        0.0001s、零网络）。因此这里只做本地判断，把探测延后到用户真正需要完整
+        模型目录时（/model、/setup、vision 等入口自己会调）。
+
+        注意这与被否决的 refresh_models=False 方案不同：那个方案把**内置硬编码
+        兜底列表**（含 gpt-4o 等早已下线的型号）当作实时结果展示给用户；这里不
+        展示任何未经探测的列表，只如实报告"已加载 N 个配置模型"，并提示用 /model
+        查看完整目录。
+        """
+        from xenon.repl.provider_registry import load_credentials
+
+        creds = load_credentials()
+
+        # 启动只看本地事实：凭证文件 + models.yaml 填出来的池/注册表。
+        # 三者皆空才是真的没配过，需要进 /setup 向导。
+        needs_setup = (
+            not creds
+            and not self.registry.list_models()
+            and not self.model_pool.list_all()
+        )
+
+        # 未探测，故无法得知哪些 provider 的模型列表可用；failures 留空而不是
+        # 猜测。探测发生时（/model 等）由那条路径自己报告认证失败。
+        failures: list[tuple[str, str]] = []
+        return {
+            "needs_setup": needs_setup,
+            "probed": False,
+            "configured_providers": 0,
+            "available_providers": 0,
+            "loaded_models": len(self.model_pool.list_all()),
+            "failures": failures,
+        }
+
+    def ensure_providers_probed(self, *, force: bool = False) -> dict[str, Any]:
+        """按需探测 provider 并把发现的模型补进池/注册表。
+
+        这是懒加载契约的另一半：启动路径（_check_first_run）只用 models.yaml 的
+        静态配置，真正需要完整模型目录时才由此方法付网络代价。逻辑与 v0.8.x 的
+        启动探测完全一致（同样的 skip_benchmark、同样的"已在池里就不覆盖"），
+        只是触发时机从"每次启动"变成"用户真正需要时"。
+
+        get_configured_providers() 内部会缓存探测结果，因此同一会话内重复调用
+        不会重复付网络代价；凭证变更时 save_credentials() 会自动作废该缓存。
+
+        Args:
+            force: 忽略缓存强制重新探测（/model refresh 等场景）
+
+        Returns:
+            与 _check_first_run 同构的摘要 dict，供调用方渲染。
         """
         from xenon.repl.provider_registry import (
             get_configured_providers,
-            load_credentials,
+            invalidate_provider_probe,
         )
 
-        creds = load_credentials()
+        if force:
+            invalidate_provider_probe()
+
         # httpx INFO is valuable in Ctrl+O execution details but is startup
         # noise during a provider capability probe. Suppress it only for this
         # narrow scope; --verbose preserves the original diagnostic stream.
@@ -1394,50 +1449,42 @@ class REPL:
                     )
                 )
 
-        needs_setup = not creds and not configured and not self.registry.list_models()
-        if not needs_setup:
-            # v0.4.0: always populate model pool from ALL configured providers
-            _max_per_provider = get_config().limits.max_models_per_provider
-            for p in configured:
-                if not p.models or "(auto-fetch" in str(p.models[0]):
+        # v0.4.0: always populate model pool from ALL configured providers
+        _max_per_provider = get_config().limits.max_models_per_provider
+        for p in configured:
+            if not p.models or "(auto-fetch" in str(p.models[0]):
+                continue
+            if not p.key or not p.key.strip():
+                logger.warning(
+                    f"跳过空 key 的 provider（name={p.name!r}），model_id 会变成 /model_name 导致路由失败"
+                )
+                continue
+            for model_name in p.models[
+                :_max_per_provider
+            ]:  # top N per provider (P0: 可配置)
+                model_id = f"{p.key}/{model_name}"
+                alias = model_name.replace(".", "-")
+                # 探测出的模型如果已由 models.yaml 手工配置（在池里），跳过自动
+                # 注册——保留那份配置（可能带自定义 weight/tier）。
+                if self.model_pool.get(alias):
                     continue
-                if not p.key or not p.key.strip():
-                    logger.warning(
-                        f"跳过空 key 的 provider（name={p.name!r}），model_id 会变成 /model_name 导致路由失败"
-                    )
-                    continue
-                for model_name in p.models[
-                    :_max_per_provider
-                ]:  # top N per provider (P0: 可配置)
-                    model_id = f"{p.key}/{model_name}"
-                    alias = model_name.replace(".", "-")
-                    # v0.8.6: 探测出的模型如果已由 models.yaml 手工配置（在池里），
-                    # 跳过自动注册——保留那份配置（可能带自定义 weight/tier）。
-                    # v0.8.5 之前用 registry.get_model_by_id 判断，跳过后不进池，
-                    # 导致你越配好 models.yaml，AutoRouter 反而越没模型可选。
-                    # 现在 Registry 配置由上面 3343 行 from_config 统一填池，此
-                    # 分支只补探测到的、未在池里的。
-                    if self.model_pool.get(alias):
-                        continue
-                    # Register to pool
-                    self.model_pool.register(
-                        model_id,
-                        alias=alias,
-                        weight=3.0,
-                        api_key=p.api_key,
-                        base_url=p.base_url,
-                        # 启动路径跳过 benchmark 网络查询：每个模型一次 fetch，
-                        # N 个模型串行叠加会造成十几秒启动延迟。tier 由
-                        # _infer_capability 快速推断，需要精确 tier 时按需刷新。
-                        skip_benchmark=True,
-                    )
-                    # Also ensure registry has it (backward compat)
-                    if alias not in {m.alias for m in self.registry.list_models()}:
-                        self.registry.add_model(model_id, alias)
-                        if "planner" not in self.registry.role_priority:
-                            self.registry.role_priority["planner"] = []
-                        if alias not in self.registry.role_priority["planner"]:
-                            self.registry.role_priority["planner"].append(alias)
+                self.model_pool.register(
+                    model_id,
+                    alias=alias,
+                    weight=3.0,
+                    api_key=p.api_key,
+                    base_url=p.base_url,
+                    # benchmark 的 HF 端点已永久 404，tier 由 _infer_capability
+                    # 推断，发这个请求纯属白等。
+                    skip_benchmark=True,
+                )
+                # Also ensure registry has it (backward compat)
+                if alias not in {m.alias for m in self.registry.list_models()}:
+                    self.registry.add_model(model_id, alias)
+                    if "planner" not in self.registry.role_priority:
+                        self.registry.role_priority["planner"] = []
+                    if alias not in self.registry.role_priority["planner"]:
+                        self.registry.role_priority["planner"].append(alias)
 
         available_providers = sum(
             1
@@ -1445,7 +1492,8 @@ class REPL:
             if provider.models and not str(provider.models[0]).startswith("(auto-fetch")
         )
         return {
-            "needs_setup": needs_setup,
+            "needs_setup": False,
+            "probed": True,
             "configured_providers": len(configured),
             "available_providers": available_providers,
             "loaded_models": len(self.model_pool.list_all()),
@@ -1487,11 +1535,20 @@ class REPL:
         loaded = int(summary.get("loaded_models", 0))
         providers = int(summary.get("available_providers", 0))
         if loaded:
-            provider_text = f" · {providers} 个提供商" if providers else ""
-            console.print(
-                f"[dim]· 已准备 {loaded} 个模型{provider_text}"
-                " · auto 按任务难度选择[/dim]"
-            )
+            if summary.get("probed"):
+                provider_text = f" · {providers} 个提供商" if providers else ""
+                console.print(
+                    f"[dim]· 已准备 {loaded} 个模型{provider_text}"
+                    " · auto 按任务难度选择[/dim]"
+                )
+            else:
+                # 懒加载：未探测 provider，因此不能声称"N 个提供商"（没探测就不
+                # 知道哪些活着）。只如实报本地已加载的配置模型，并指出完整目录
+                # 需要一次网络探测。
+                console.print(
+                    f"[dim]· 已加载 {loaded} 个配置模型 · auto 按任务难度选择"
+                    " · [bold cyan]/model[/bold cyan] 查看完整目录[/dim]"
+                )
         for name, reason in summary.get("failures", []):
             console.print(
                 f"[dim yellow]· {name} 模型列表不可用：{reason}；已跳过[/dim yellow]"
@@ -1702,6 +1759,9 @@ class REPL:
                 registry=self.registry,
                 ctx_mgr=self.ctx_mgr,
                 session_state=self._session_state,
+                # 懒加载契约：命令处理器需要 repl 才能触发 ensure_providers_probed()
+                # （启动路径不再探测，/model 这类需要完整目录的命令自己按需付代价）
+                repl=self,
             )
         except ExitSignal:
             return True

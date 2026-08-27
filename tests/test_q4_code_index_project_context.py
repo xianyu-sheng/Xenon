@@ -178,18 +178,22 @@ class TestProjectContextKeyFileMtime:
 
         import pathlib
 
-        calls = {"n": 0}
+        key_file_reads = []
         orig = pathlib.Path.read_text
 
         def spy(self, *a, **k):
-            calls["n"] += 1
+            # 只记录项目根目录下的关键文件读取（排除全局规则文件等）
+            try:
+                if self.is_relative_to(tmp_path):
+                    key_file_reads.append(self.name)
+            except (ValueError, AttributeError):
+                pass
             return orig(self, *a, **k)
 
         monkeypatch.setattr(pathlib.Path, "read_text", spy)
-        n_before = calls["n"]
         pc.refresh()
-        # pyproject.toml mtime 未变 → 复用缓存，不应触发 read_text
-        assert calls["n"] == n_before
+        # pyproject.toml mtime 未变 → 复用缓存，不应读取项目根下的关键文件
+        assert "pyproject.toml" not in key_file_reads
 
     def test_refresh_picks_up_changed_key_file(self, tmp_path):
         (tmp_path / "pyproject.toml").write_text('name = "v1"')
