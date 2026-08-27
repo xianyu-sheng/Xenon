@@ -1426,6 +1426,10 @@ class REPL:
                         weight=3.0,
                         api_key=p.api_key,
                         base_url=p.base_url,
+                        # 启动路径跳过 benchmark 网络查询：每个模型一次 fetch，
+                        # N 个模型串行叠加会造成十几秒启动延迟。tier 由
+                        # _infer_capability 快速推断，需要精确 tier 时按需刷新。
+                        skip_benchmark=True,
                     )
                     # Also ensure registry has it (backward compat)
                     if alias not in {m.alias for m in self.registry.list_models()}:

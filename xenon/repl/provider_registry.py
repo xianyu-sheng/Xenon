@@ -725,7 +725,14 @@ def get_configured_providers(
     1) ~/.xenon/credentials.yaml（最高优先级）
     2) 环境变量 info.env_key
     3) anthropic 厂商额外 fallback ANTHROPIC_AUTH_TOKEN（Claude Code / Anthropic SDK 标准）
+
+    性能优化：支持 XENON_SKIP_MODEL_PROBE=1 环境变量完全跳过网络探测（CI/测试环境）
     """
+    # 环境变量控制：完全跳过模型探测（CI/测试环境加速）
+    if os.getenv("XENON_SKIP_MODEL_PROBE") == "1":
+        refresh_models = False
+        logger.debug("XENON_SKIP_MODEL_PROBE=1，跳过模型探测")
+
     creds = load_credentials()
     configured = []
 

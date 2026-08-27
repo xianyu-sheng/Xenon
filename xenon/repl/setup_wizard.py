@@ -421,6 +421,10 @@ def _select_model(registry: ModelRegistry, model_pool=None) -> None:
                     weight=3.0,
                     api_key=api_key,
                     base_url=base_url,
+                    # benchmark_fetcher 的 HF 排行榜端点已永久 404，estimate_tier
+                    # 必然回退到 _infer_capability 的 tier，这次请求只会让 /setup
+                    # 每个模型白等一个注定失败的往返。
+                    skip_benchmark=True,
                 )
 
     if selected_models:
@@ -619,6 +623,8 @@ def _register_custom(registry=None, model_pool=None) -> None:
                         weight=3.0,
                         api_key=api_key,
                         base_url=info.base_url,
+                        # 同上：HF 排行榜端点已永久 404，逐模型串行等待纯属浪费。
+                        skip_benchmark=True,
                     )
                 console.print(
                     f"[green]✓ 已自动注册 {min(len(info.models), _max_per_provider)} 个模型到调用池[/green]"
