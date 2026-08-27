@@ -108,14 +108,19 @@ class ModelPool:
         weight: float = 1.0,
         api_key: str = "",
         base_url: str = "",
+        skip_benchmark: bool = False,
         **overrides: Any,
     ) -> PoolEntry:
-        """注册或更新一个模型。"""
+        """注册或更新一个模型。
+
+        Args:
+            skip_benchmark: 跳过基准测试查询（用于启动时快速加载）
+        """
         alias = alias or model_id.split("/")[-1].replace(".", "-")
         capability = _infer_capability(model_id)
 
         # Step 11: 尝试从基准测试获取 tier（惰性导入，失败静默回退）
-        if "tier" not in overrides:
+        if not skip_benchmark and "tier" not in overrides:
             try:
                 from xenon.repl.benchmark_fetcher import get_benchmark_fetcher
 
@@ -595,8 +600,12 @@ class ModelPool:
                 for alias, e in self._entries.items()
             }
 
-    def from_config(self, data: dict[str, dict[str, Any]]) -> None:
-        """从配置恢复（会重建 tier 队列）."""
+    def from_config(self, data: dict[str, dict[str, Any]], skip_benchmark: bool = True) -> None:
+        """从配置恢复（会重建 tier 队列）.
+
+        Args:
+            skip_benchmark: 跳过基准测试查询（默认True，避免启动时的网络延迟）
+        """
         if not isinstance(data, dict):
             raise ValueError(
                 f"模型池配置格式错误，期望 dict，收到: {type(data).__name__}"
@@ -618,6 +627,7 @@ class ModelPool:
                 weight=_coerce_weight(cfg.get("weight", 1.0), alias),
                 api_key=str(cfg.get("api_key", "")),
                 base_url=str(cfg.get("base_url", "")),
+                skip_benchmark=skip_benchmark,
             )
 
 
