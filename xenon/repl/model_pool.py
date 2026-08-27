@@ -114,26 +114,12 @@ class ModelPool:
         """注册或更新一个模型。
 
         Args:
-            skip_benchmark: 跳过基准测试查询（用于启动时快速加载）
+            skip_benchmark: （已废弃，保留仅为向后兼容）
         """
         alias = alias or model_id.split("/")[-1].replace(".", "-")
         capability = _infer_capability(model_id)
 
-        # Step 11: 尝试从基准测试获取 tier（惰性导入，失败静默回退）
-        if not skip_benchmark and "tier" not in overrides:
-            try:
-                from xenon.repl.benchmark_fetcher import get_benchmark_fetcher
-
-                fetcher = get_benchmark_fetcher()
-                benchmark_tier = fetcher.estimate_tier(
-                    model_id, fallback_tier=capability.tier
-                )
-                if benchmark_tier != capability.tier:
-                    capability.tier = benchmark_tier
-            except Exception:
-                pass  # 基准获取失败，使用 _infer_capability 的 tier
-
-        # overrides（在基准测试之后应用，确保显式覆盖总是胜出）
+        # overrides
         for k, v in overrides.items():
             if hasattr(capability, k):
                 setattr(capability, k, v)
