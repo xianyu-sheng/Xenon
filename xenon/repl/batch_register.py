@@ -420,6 +420,10 @@ def batch_register(
                 weight=s.weight,
                 api_key=s.api_key,
                 base_url=s.base_url,
+                # YAML 未写 tier 时也不再发 benchmark 请求：HF 排行榜端点已永久
+                # 404，tier 必然等于 _infer_capability 的推断值。导入 N 个模型
+                # 会串行叠加 N 次注定失败的往返。
+                skip_benchmark=True,
                 **cap_overrides,
             )
 
