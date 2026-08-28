@@ -137,3 +137,60 @@ _confirm = confirm_action
 
 # Memory commands live in repl.command_groups.memory_cmd.
 # Shortcut commands live in repl.command_groups.shortcut.
+
+
+# ── 智能路由命令 (v0.6.0) ────────────────────────────────
+
+@command_handler("/auto-route")
+def cmd_auto_route(*, args: str, session_state: dict, **kwargs) -> str | None:
+    """切换智能路由开关
+
+    用法:
+        /auto-route on    - 启用智能路由
+        /auto-route off   - 禁用智能路由
+        /auto-route       - 查看当前状态
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    repl = session_state["_repl"]
+    arg = args.strip().lower()
+
+    if arg == "on":
+        repl.intelligent_router.enable()
+        console.print("\n[green]✓ 智能路由已启用[/green]")
+        console.print(
+            "[dim]系统将根据任务特征自动选择最合适的推理范式。\n"
+            "你仍可使用 /mode 命令手动切换。[/dim]"
+        )
+        return None
+    elif arg == "off":
+        repl.intelligent_router.disable()
+        console.print("\n[yellow]智能路由已禁用[/yellow]")
+        console.print("[dim]范式切换恢复为完全手动控制。[/dim]")
+        return None
+    else:
+        # 显示当前状态和统计
+        status = "启用" if repl.intelligent_router.enabled else "禁用"
+        stats = repl.intelligent_router.get_stats()
+
+        table = Table(title=f"智能路由状态: {status}", border_style="dim")
+        table.add_column("配置项", style="cyan")
+        table.add_column("值", style="white")
+
+        table.add_row("状态", "🟢 启用" if repl.intelligent_router.enabled else "⚫ 禁用")
+        table.add_row("置信度阈值", f"{repl.intelligent_router.confidence_threshold:.0%}")
+        table.add_row("用户通知", "是" if repl.intelligent_router.notify_user else "否")
+        table.add_row("防降级保护", "是" if repl.intelligent_router.switch_only_on_improvement else "否")
+        table.add_row("", "")
+        table.add_row("总路由次数", str(stats["total_routes"]))
+        table.add_row("成功决策次数", str(stats["successful_routes"]))
+        table.add_row("范式切换次数", str(stats["switches"]))
+
+        console.print()
+        console.print(table)
+        console.print(
+            "\n[dim]提示: /auto-route on 启用, /auto-route off 禁用[/dim]"
+        )
+        return None

@@ -146,6 +146,11 @@ def cli() -> None:
         help="恢复历史会话（不带参数列出可选会话，带序号或名称直接恢复）",
     )
     parser.add_argument(
+        "--auto-route",
+        action="store_true",
+        help="启用智能路由，自动选择推理范式（v0.6.0）",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__import__('xenon').__version__}",
@@ -316,6 +321,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         config_path=getattr(args, "config", None),
         verbose=getattr(args, "verbose", False),
         resume=getattr(args, "resume", None),
+        auto_route=getattr(args, "auto_route", False),
     )
 
 
