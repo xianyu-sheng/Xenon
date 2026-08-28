@@ -3711,9 +3711,30 @@ def start_repl(
     if models:
         repl._preferred_model_ids = list(models)
 
-    # v0.6.0: 根据 CLI 参数启用智能路由
-    if auto_route:
+    # v0.6.0: 智能路由启用逻辑
+    # 优先级: CLI 参数 > 环境变量 > 配置文件 > 默认关闭
+    import os
+    should_enable_auto_route = auto_route  # CLI 参数优先
+
+    if not should_enable_auto_route:
+        # 检查环境变量
+        env_auto_route = os.environ.get("XENON_AUTO_ROUTE", "").lower()
+        if env_auto_route in ("1", "true", "yes", "on"):
+            should_enable_auto_route = True
+        elif not env_auto_route:
+            # 检查配置文件
+            config_file = Path.home() / ".xenon" / "config.yaml"
+            if config_file.exists():
+                try:
+                    import yaml
+                    with open(config_file, "r", encoding="utf-8") as f:
+                        config = yaml.safe_load(f) or {}
+                    should_enable_auto_route = config.get("auto_route", {}).get("enabled", False)
+                except Exception:
+                    pass  # 配置文件读取失败，使用默认值
+
+    if should_enable_auto_route:
         repl.intelligent_router.enable()
-        console.print("[dim]智能路由已启用 (--auto-route)[/dim]")
+        console.print("[dim]智能路由已启用[/dim]")
 
     repl.run()

@@ -1,0 +1,21 @@
+# Xenon 配置文件示例
+# 复制此文件到: ~/.xenon/config.yaml
+
+# 智能路由配置 (v0.6.0)
+auto_route:
+  # 是否默认启用智能路由
+  enabled: true
+
+  # 置信度阈值 (0.0-1.0)
+  # 低于此值不会自动切换范式
+  confidence_threshold: 0.6
+
+  # 是否在切换时通知用户
+  notify_user: true
+
+  # 是否只在改进时切换（防止过度降级）
+  switch_only_on_improvement: true
+
+# 其他配置项...
+# models: ...
+# credentials: ...
