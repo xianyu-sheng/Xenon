@@ -173,6 +173,15 @@ class REPL:
             lambda model_id: self.status_bar.set_last_model(model_id)
         )
 
+        # v0.6.0: 智能路由器 (Intelligent Router)
+        from xenon.repl.intelligent_router import IntelligentRouter
+
+        self.intelligent_router = IntelligentRouter(
+            enabled=False,  # 默认关闭，通过 CLI 参数或命令启用
+            confidence_threshold=0.6,
+            notify_user=True,
+        )
+
         # 会话状态，供命令处理器共享
         self._session_state: dict[str, Any] = {
             "agent_context": self.agent_context,
@@ -1802,6 +1811,37 @@ class REPL:
         if not user_input or not user_input.strip():
             console.print("[dim]· 空输入已忽略[/dim]")
             return
+
+        # v0.6.0: 智能路由 - 根据用户输入自动选择推理范式
+        if self.intelligent_router.enabled:
+            routing_decision = self.intelligent_router.route(
+                user_input=user_input,
+                context=self.ctx_mgr,
+                current_mode=self.registry.current_mode
+            )
+
+            if routing_decision is not None:
+                # 建议切换范式
+                old_mode = self.registry.current_mode
+                try:
+                    self.registry.set_mode(routing_decision.paradigm)
+                    self.status_bar.set_mode_notification(routing_decision.paradigm)
+
+                    if self.intelligent_router.notify_user:
+                        console.print(
+                            f"\n[dim]┌─ 智能路由: {old_mode} → "
+                            f"[bold]{routing_decision.paradigm}[/bold][/dim]"
+                        )
+                        console.print(
+                            f"[dim]│  {routing_decision.reason}[/dim]"
+                        )
+                        console.print(
+                            f"[dim]│  [置信度: {routing_decision.confidence:.0%}, "
+                            f"规则: {routing_decision.matched_rule}][/dim]"
+                        )
+                except ValueError as e:
+                    logger.warning(f"智能路由切换范式失败: {e}")
+                    console.print(f"\n[yellow]⚠ 范式切换失败: {e}[/yellow]")
 
         # Side effects are authorized by the original request, never by the
         # optimizer's generated wording or by the selected reasoning mode.
@@ -3604,6 +3644,7 @@ def start_repl(
     optimize: bool = True,
     verbose: bool = False,
     resume: str | None = None,
+    auto_route: bool = False,
 ) -> None:
     """
     启动 REPL 的便捷入口。
@@ -3617,6 +3658,7 @@ def start_repl(
         verbose: 是否保留启动探测等详细诊断日志。
         resume: 非空时在进入主循环前恢复该会话（序号或名称），
             实现上直接派发一次 /resume，复用 REPL 内既有的恢复逻辑。
+        auto_route: 是否启用智能路由（v0.6.0）。
     """
     registry = ModelRegistry()
 
@@ -3668,5 +3710,10 @@ def start_repl(
     # v0.5.3: 用户显式指定的模型优先于 auto-router 的选择
     if models:
         repl._preferred_model_ids = list(models)
+
+    # v0.6.0: 根据 CLI 参数启用智能路由
+    if auto_route:
+        repl.intelligent_router.enable()
+        console.print("[dim]智能路由已启用 (--auto-route)[/dim]")
 
     repl.run()
