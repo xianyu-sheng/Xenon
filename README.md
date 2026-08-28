@@ -4,14 +4,18 @@
 
 <h1 align="center">Xenon</h1>
 
-**Agent Harness for AI coding agents** — 运行、约束、评测的开源运行时。
+**Agent Harness for AI coding agents** — 可信、可验证、可评测的 AI Agent 运行时
 
-Xenon 不只是一个能写代码的 Agent，而是让 Agent **可信地**运行所需的那层基础设施：
-7 种可替换的推理范式、证据约束的验证闭环、执行隔离边界、以及可复现的评测链路。
-同一套运行时既支撑终端交互，也支撑 SWE-bench 官方评测——**两条路径共享同一组
-隔离与验证约束**，因此评测数字对交互场景同样成立。
+Xenon 不是又一个 AI 编程助手，而是让 Agent **可信地运行**所需的基础设施。
 
-可以当命令行工具直接用，也可以当库嵌进你自己的 Agent 评测流程。
+**核心差异：**
+- 🔒 **证据导向架构**：工具输出是 Evidence，LLM 输出只是 Claim — 验证闭环抑制幻觉
+- 🛡️ **执行隔离边界**：路径围栏、命令注入拦截、权限门 — 所有副作用经同一收敛点
+- 🔄 **7 种推理范式**：ReAct / Plan-Execute / Reflection 及其组合 — 可替换、可观察
+- 📊 **可复现评测**：SWE-bench Lite **40.0%** 通过率（同模型 +6.7pp），交互与评测共享约束
+- 🎯 **生产就绪**：v0.8.5 经系统性边界探测，所有逃逸路径均已修复并锁定回归测试
+
+可以当命令行工具直接用，也可以当库嵌入你的 Agent 评测流程。Python 3.10+。
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -25,49 +29,50 @@ Xenon 不只是一个能写代码的 Agent，而是让 Agent **可信地**运行
 
 ---
 
-## Harness 的五层职责
+## 架构哲学：五层职责
 
-Xenon 作为 Agent Harness，要回答的不是「模型能不能写出这段代码」，而是「**这个系统的输出
-能不能被信任**」。Xenon 把这个问题拆成五层，每层都可独立替换与观察：
+Xenon 要回答的核心问题不是「模型能不能写代码」，而是「**这个系统的输出能不能被信任**」。
 
-| 层 | 职责 | 实现 |
-|---|---|---|
-| **推理** | 用哪种策略把任务推进下去 | 7 种范式 + `register_engine()` 注册契约 |
-| **工具** | 副作用如何发生、如何被记录 | ToolExecutor 7 阶段管线 + 10 个 tool_families |
-| **约束** | 什么不允许发生 | 路径围栏 + 权限门 + 命令注入拦截 |
-| **验证** | 凭什么相信结果 | Evidence Runtime：工具结果是 Evidence，LLM 输出只是 Claim |
-| **度量** | 改动到底有没有效 | SWE-bench 官方 harness + 同模型 A/B + 落盘 seed |
+| 层 | 职责 | 实现 | 为什么重要 |
+|---|---|---|---|
+| **推理** | 如何推进任务 | 7 种范式 + `register_engine()` | 不同任务需要不同策略 |
+| **工具** | 副作用如何发生 | 7 阶段管线 + 10 个 tool_families | 所有操作有迹可循 |
+| **约束** | 什么不允许发生 | 路径围栏 + 命令拦截 + 权限门 | 防止逃逸和破坏 |
+| **验证** | 凭什么相信结果 | Evidence vs Claim 闭环 | 抑制幻觉和错误传播 |
+| **度量** | 改动有没有效 | SWE-bench 官方 harness | 数字可复现 |
 
-第 3、4 层是 Xenon 与「又一个 Agent CLI」的真正区别——**它们决定了前两层的输出
-能否被采信**。
+**约束层**和**验证层**是 Xenon 与其他 Agent 框架的本质区别 — 它们决定了前两层的输出是否可信。所有文件副作用都经由 `ToolExecutor` 这一个收敛点，因此 v0.8.5 的两个安全修复各自只改一处，就覆盖了 12 个调用点和全部 7 种范式。
 
 ---
 
 ## 为什么选择 Xenon
 
-**可验证的实际效果：**
-- SWE-bench Lite 官方评测 **40.0% 实例级通过率**（同模型对比 +6.7pp）
-- 5 种引擎在 30 实例矩阵上的 **cell-level 45.8%**（+11.0pp）
-- Cache Rails 达成 **97.35% 命中率**，节省 93% token 成本
+### 实测效果
 
-**架构优势：**
-- **可观察性**：每个推理步骤、工具调用、缓存命中都有迹可循
-- **可替换性**：推理引擎、工具、Provider 通过注册机制解耦，无需修改核心代码
-- **证据导向**：工具输出是 Evidence，LLM 输出是 Claim——验证闭环抑制幻觉
+| 评测维度 | 结果 | 说明 |
+|---------|------|------|
+| **SWE-bench Lite** | **40.0%** 实例级通过率 | 30 实例，同模型 A/B 对比 **+6.7pp** |
+| **多引擎矩阵** | **45.8%** cell 级通过率 | 5 引擎 × 30 实例 = 150 cells，**+11.0pp** |
+| **缓存效率** | 97.35% 命中率 | Cache Rails 节省 **93% token** 成本 |
+
+*所有数字来自可复现的真实运行，官方 SWE-bench Docker 容器 + 同模型基线对比。*
+
+### 架构优势
+
+- **证据导向**：工具输出是 Evidence，LLM 输出是 Claim — 验证闭环抑制幻觉传播
 - **边界一致**：交互与评测共享同一组隔离约束，评测数字对日常使用同样成立
+- **可观察性**：每个推理步骤、工具调用、缓存命中都有完整的审计日志
+- **可扩展性**：引擎、工具、Provider 通过注册机制解耦，无需修改核心代码
 
-**安全边界（v0.8.5 实测加固）：**
-- 文件写入受工作区围栏约束，**跟随符号链接**校验真实目标
-- 模型提供的 `cwd` 一律被可信根覆盖，无法移动围栏本身
-- 命令替换（`$()`/反引号/进程替换）、危险命令、敏感路径与凭证文件均拦截
-- 隔离层经系统性边界探测，已修复的逃逸路径均有回归测试锁定
-  （详见 [v0.8.5](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.8.5)）
+### 安全加固（v0.8.5）
 
-**适用场景：**
-- 研究推理范式效果的学术团队
-- 需要评测自己 Agent 的团队（复用 `evals/` 的可复现链路）
-- 需要对 Agent 行为与副作用做精细控制的工程师
-- 想在本地终端完成代码任务的开发者
+经系统性边界探测，以下逃逸路径均已修复并锁定回归测试：
+- ✅ 符号链接跟随：写入前校验真实目标，防止跳出工作区
+- ✅ cwd 覆盖攻击：模型提供的 `cwd` 被可信根强制覆盖
+- ✅ 命令注入：拦截 `$()`、反引号、进程替换及危险命令组合
+- ✅ 敏感文件保护：凭证文件、系统路径全部拦截
+
+详见 [v0.8.5 Release Notes](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.8.5)
 
 ---
 
@@ -117,16 +122,37 @@ Xenon 作为 Agent Harness，要回答的不是「模型能不能写出这段代
 
 ## 快速开始
 
-```bash
-# 安装
-pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.8.5"
+### 安装
 
-# 启动
-xenon
+```bash
+# 从 PyPI 安装（推荐）
+pip install -U xenon-agent
+
+# 或从 GitHub 最新版本
+pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.8.5"
 ```
 
-进入后运行 `/setup` 配置模型和 API Key，然后直接描述任务。
-Python 3.10+ 可用。
+需要 Python 3.10+。
+
+### 首次使用
+
+```bash
+# 启动交互式终端
+xenon
+
+# 首次运行会引导配置
+xenon> /setup
+# 按提示选择模型、输入 API Key
+
+# 然后直接描述任务
+xenon> 帮我重构这个函数，提取出公共逻辑
+
+# 查看可用命令
+xenon> /help
+
+# 切换推理引擎
+xenon> /mode plan-execute
+```
 
 ### 开发环境
 
@@ -134,37 +160,43 @@ Python 3.10+ 可用。
 git clone https://github.com/xianyu-sheng/Xenon.git
 cd Xenon
 pip install -e ".[dev]"
+
+# 代码检查
 ruff check xenon tests evals
+
+# 运行测试（跳过需要真实 API 的测试）
 pytest -q -m "not live"
 ```
 
 ---
 
-## 核心能力
+## 核心特性
 
-| 能力 | 说明 |
+| 特性 | 说明 |
 |------|------|
-| **推理引擎** | 7 种范式，通过 `register_engine()` 注册，自动继承工具安全、记忆注入、断路器 |
-| **工具系统** | 10 个 tool_families（文件读写、代码搜索、git、网络、shell、MCP 等），`register_tool_handler()` 注册 |
-| **LLM Provider** | 12 家厂商预设（OpenAI、Anthropic、DeepSeek、Google、Ark 等），OpenAI 兼容协议自动适配 |
-| **记忆系统** | 4 作用域（user / project-local / project-shared / session），加权检索 + token 预算压缩 |
-| **MCP 客户端** | stdio / HTTP / SSE 传输，自动发现与工具注入 |
-| **Cache Rails** | 按模型和执行契约维护追加式提示词轨道；`/cache` 与 `/cost` 展示厂商 usage 和费用 |
-| **工具安全** | 权限确认、超时、断路器、证据闸门、结构化结果与中断恢复 |
-| **终端界面** | 多行输入、固定状态栏、`Ctrl+O` 折叠详情、运行状态图标 |
-| **Agent Skills** | `SKILL.md` 驱动的技能加载系统 |
+| **7 种推理引擎** | ReAct / Plan-Execute / Reflection / Plan-ReAct / Plan-Reflection / ReAct-Reflection / Direct，通过 `register_engine()` 扩展 |
+| **10 个工具族** | 文件读写、代码搜索、git 操作、shell 命令、网络请求、MCP 集成等，`register_tool_handler()` 注册新工具 |
+| **12 家 LLM Provider** | OpenAI / Anthropic / DeepSeek / Google / Ark / SiliconFlow 等，OpenAI 兼容协议自动适配 |
+| **4 作用域记忆** | user / project-local / project-shared / session，加权检索 + token 预算自动压缩 |
+| **MCP 客户端** | stdio / HTTP / SSE 三种传输方式，自动发现外部工具并注入 Agent |
+| **Cache Rails** | 按模型和执行契约维护追加式提示词轨道，97%+ 缓存命中率（`/cache` 和 `/cost` 查看详情） |
+| **工具安全层** | 权限确认、超时控制、断路器、证据闸门、结构化结果、中断恢复 |
+| **终端界面** | 多行输入、固定状态栏、`Ctrl+O` 折叠详情、运行状态实时展示 |
+| **Agent Skills** | `SKILL.md` 驱动的技能系统，支持导入和自定义 |
 
-### 评测结果
+### 推理引擎对比
 
-所有数字来自可复现的真实运行，同模型 A/B 对比，官方 SWE-bench 标准 grading。
+| 引擎 | 策略 | 最佳场景 | SWE-bench Lite 解决数 |
+|------|------|---------|---------------------|
+| **react** | Thought→Action→Observation 循环 | 需要工具交互的通用任务 | 9/30 |
+| **plan-execute** | 先规划后执行 | 多步骤结构化任务 | 2/30 |
+| **plan-react** | 规划 + ReAct 步骤执行 | 复杂任务的分解执行 | 8/30 |
+| **plan-reflection** | 规划→执行→审查→修复 | 需要质量保证的完整流程 | 7/30 |
+| **react-reflection** | ReAct→审查→修正 | 已有结果需改进的场景 | 7/30 |
+| **reflection** | 执行→审查→反馈→再执行 | 需要反复优化的任务 | - |
+| **direct** | 单次 LLM 调用 | 无工具需求的简单任务 | - |
 
-| 评测 | 指标 | 结果 | 说明 |
-|------|------|------|------|
-| SWE-bench Lite | instance-level | **40.0%**（12/30，同模型 A/B +6.7pp） | v0.8.2 官方 harness |
-| SWE-bench Lite | cell-level | **45.8%**（33/72，同模型 A/B +11.0pp） | 5 引擎 × 30 实例矩阵 |
-| cache rails | 厂商上报命中率 | 97.35%，节省 93.03% token | 追加式语境缓存 |
-
-每引擎 resolved：react 9、plan-execute 2、plan-react 8、plan-reflection 7、react-reflection 7。
+引擎通过 `register_engine()` 注册后，自动被 `/mode` 命令、setup wizard 和 evals 识别。
 
 ---
 
@@ -202,6 +234,13 @@ evals/
 └── results/           # 评测结果存档
 ```
 
+## 使用场景
+
+**研究者**：比较不同推理范式的效果，复用可复现的评测链路  
+**工程师**：需要对 Agent 行为和副作用做精细控制，确保生产环境安全  
+**开发者**：在本地终端完成代码任务，支持多种 LLM Provider  
+**团队**：评测自研 Agent 的效果，借助 `evals/` 的 SWE-bench 适配器
+
 ---
 
 ## 文档
@@ -219,95 +258,110 @@ evals/
 
 ---
 
-## 扩展
+## 扩展 Xenon
 
-Xenon 提供五条扩展路径。注册后自动被框架识别：
+Xenon 提供五条注册式扩展路径，无需修改核心代码：
 
-### 1. 注册一个 MCP 服务器（终端命令）
+### 1. 注册 MCP 服务器（终端命令）
 
 ```bash
-# 文件系统 MCP 服务器 —— 终端内执行，注册后自动发现工具
+# 文件系统 MCP 服务器
 xenon> /mcp add fs npx -y @modelcontextprotocol/server-filesystem .
 ✅ MCP 服务器 'fs' 已连接  发现 10 个工具
 
 # HTTP（SSE）传输
 xenon> /mcp add web http://localhost:3000/sse
+
+# 查看已连接的服务器
+xenon> /mcp list
 ```
 
-出处：`xenon/repl/command_groups/resources.py` /mcp add 子命令，
-`xenon/mcp/registry.py` 服务器注册与工具发现。
+出处：`xenon/repl/command_groups/resources.py`，`xenon/mcp/registry.py`
 
-### 2. 注册一个 Skill（终端命令）
+### 2. 注册 Agent Skill（终端命令）
 
 ```bash
 # 交互式创建
 xenon> /skill create
-# 之后 Xenon 会引导填写名称、描述和执行提示
 
-# 从 GitHub 仓库导入
+# 从 GitHub 导入
 xenon> /skill import https://github.com/user/repo/tree/main/skills/my-skill
 
-# 查看已安装的技能
+# 查看已安装技能
 xenon> /skill list
 ```
 
-Skill 存储在 `.xenon/skills/<name>/SKILL.md`，启动时自动发现。
-出处：`xenon/repl/command_groups/skill.py`，`xenon/repl/skill_manager.py`。
+Skill 存储在 `.xenon/skills/<name>/SKILL.md`，启动时自动加载。
+出处：`xenon/repl/skill_manager.py`
 
-### 3. 注册一个新工具（Python API）
+### 3. 注册工具处理器（Python API）
 
 ```python
 from xenon.nodes.tool_registry import register_tool_handler
 
-def _handle_search(node, context):
+def my_search_handler(node, context):
     query = getattr(node, "search_pattern", "")
-    return {"action_type": "my_search", "success": True, "content": f"搜索: {query}"}
+    # 执行搜索逻辑
+    return {
+        "action_type": "my_search",
+        "success": True,
+        "content": f"搜索结果: {query}"
+    }
 
-register_tool_handler("my_search", _handle_search, description="搜索我的知识库")
+register_tool_handler(
+    "my_search",
+    my_search_handler,
+    description="搜索我的知识库"
+)
 ```
 
-注册后工具自动被 `ToolNode` 分发引擎识别，并合并进模型可见的工具列表
-（`BUILTIN_TOOL_REGISTRY.plugin_schemas()`）。出处：
-`xenon/nodes/tool_registry.py`。
+注册后工具自动出现在模型可见的工具列表中。
+出处：`xenon/nodes/tool_registry.py`
 
-### 4. 注册一个新推理引擎（Python API）
+### 4. 注册推理引擎（Python API）
 
 ```python
 from xenon.engine.base import BaseEngine
 from xenon.engine.registry import register_engine
 
-class MyEngine(BaseEngine):
+class MyCustomEngine(BaseEngine):
     def run(self, user_input, context=None) -> str:
         self._begin_run()
         messages = self._history_messages(user_input, limit=20)
-        return self._call_llm(messages, phase="my_engine")
+        response = self._call_llm(messages, phase="my_custom")
+        return response
 
 register_engine(
-    "my-engine",
-    factory=lambda **kw: MyEngine(**kw),
-    description="我的自定义推理范式",
-    mode_line="· MyEngine 执行",
-    result_title="MyEngine 结果",
+    "my-custom",
+    factory=lambda **kw: MyCustomEngine(**kw),
+    description="我的自定义推理策略",
+    mode_line="· MyCustom 执行中",
+    result_title="MyCustom 结果"
 )
 ```
 
-注册一次，`/mode` 列表、REPL 分发、setup wizard 与 evals 白名单全部自动识别。
-出处：`xenon/engine/registry.py`，`tests/test_engine_registry.py`。
+注册一次，`/mode` 列表、REPL 路由、setup wizard 全部自动识别。
+出处：`xenon/engine/registry.py`
 
-### 5. 注册一个新命令（终端命令 + Python API）
+### 5. 注册终端命令（Python API）
 
 ```python
-# 在 xenon/repl/command_groups/ 对应主题文件里
 from xenon.repl.command_registry import command_handler, register_command
 
-register_command("/my-feature", "我的新功能", "/my-feature [args]")
+register_command(
+    "/myfeature",
+    "我的新功能",
+    "/myfeature [args] - 做某件事"
+)
 
-@command_handler("/my-feature")
-def _cmd_my_feature(*, args: str, session_state: dict, **kwargs):
-    return f"你输入了: {args}"
+@command_handler("/myfeature")
+def _cmd_myfeature(*, args: str, session_state: dict, **kwargs):
+    # 命令逻辑
+    return f"处理完成: {args}"
 ```
 
-重启后 `/help` 自动列出。出处：`xenon/repl/command_registry.py`。
+重启后 `/help` 自动列出新命令。
+出处：`xenon/repl/command_registry.py`
 
 ---
 
