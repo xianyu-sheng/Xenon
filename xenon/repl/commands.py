@@ -141,10 +141,9 @@ _confirm = confirm_action
 
 # ── 智能路由命令 (v0.6.0) ────────────────────────────────
 
-@command_handler("auto-route", "切换智能路由开关")
-def cmd_auto_route(repl, args: str) -> str | None:
-    """
-    切换智能路由开关
+@command_handler("/auto-route")
+def cmd_auto_route(*, args: str, session_state: dict, **kwargs) -> str | None:
+    """切换智能路由开关
 
     用法:
         /auto-route on    - 启用智能路由
@@ -155,6 +154,7 @@ def cmd_auto_route(repl, args: str) -> str | None:
     from rich.table import Table
 
     console = Console()
+    repl = session_state["_repl"]
     arg = args.strip().lower()
 
     if arg == "on":
