@@ -3,7 +3,7 @@
 """
 
 import pytest
-from xenon.repl.feature_extractor import FeatureExtractor, TaskFeatures
+from xenon.repl.feature_extractor import FeatureExtractor
 from xenon.repl.context_manager import ContextManager
 
 
