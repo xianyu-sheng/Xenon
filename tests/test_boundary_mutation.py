@@ -11,7 +11,6 @@ sys.path.insert(0, "/home/xianyu-sheng/Xenon")
 
 from xenon.utils.semantic_boundary import (
     BoundaryDetector,
-    BoundaryType,
     CodeBoundaryDetector,
     ContentType,
     MarkdownBoundaryDetector,
@@ -156,7 +155,7 @@ def test_mutation_unbalanced_braces():
 
     for name, code in unbalanced_cases:
         try:
-            result = detector.detect(code)
+            _ = detector.detect(code)
             # 应该返回结果或 None，但不应该崩溃
             results.add_pass(f"变异-不平衡括号-{name}")
         except Exception as e:
@@ -178,7 +177,7 @@ def test_mutation_incomplete_markdown():
 
     for name, text in incomplete_cases:
         try:
-            result = detector.detect(text)
+            _ = detector.detect(text)
             results.add_pass(f"变异-不完整Markdown-{name}")
         except Exception as e:
             results.add_fail(f"变异-不完整Markdown-{name}", f"抛出异常: {e}")
@@ -198,7 +197,7 @@ def test_mutation_malformed_code():
 
     for name, code in malformed_cases:
         try:
-            result = detector.detect(code)
+            _ = detector.detect(code)
             results.add_pass(f"变异-畸形代码-{name}")
         except Exception as e:
             results.add_fail(f"变异-畸形代码-{name}", f"抛出异常: {e}")
@@ -238,7 +237,7 @@ def test_mutation_nested_structures():
     nested_code = "def f():\n" + ("    " * 100 + "return\n")
 
     try:
-        result = detector.detect(nested_code)
+        _ = detector.detect(nested_code)
         results.add_pass("变异-100层嵌套代码")
     except Exception as e:
         results.add_fail("变异-100层嵌套代码", f"抛出异常: {e}")

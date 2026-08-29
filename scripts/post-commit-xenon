@@ -1,162 +1,115 @@
-#!/bin/bash
-# Xenon 自动安装 Hook (增强版)
+#!/usr/bin/env bash
 #
-# 功能：
-# 1. 每次提交后自动安装最新版本
-# 2. 跨会话复用项目级虚拟环境
-# 3. 智能缓存（仅在代码变更时重新安装）
-# 4. 并发安全（文件锁）
+# Git Post-Commit Hook - 检查 CI 状态
 #
-# 使用：
-#   安装: ln -s ../../scripts/post-commit-xenon .git/hooks/post-commit
-#   手动触发: .git/hooks/post-commit
-#   激活环境: source .xenon-venv/bin/activate
+# 在每次 commit 后自动检查 CI 测试是否通过。
+# 如果 CI 失败，显示错误并提供修复选项。
 
 set -e
 
-PROJECT_ROOT="$(git rev-parse --show-toplevel)"
-VENV_DIR="$PROJECT_ROOT/.xenon-venv"
-LOCK_FILE="$PROJECT_ROOT/.xenon-install.lock"
-VERSION_FILE="$VENV_DIR/.xenon-version"
-PYTHON="${PYTHON:-python3}"
-
-# 颜色输出
+# 颜色定义
+RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-RED='\033[0;31m'
 BLUE='\033[0;34m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 
-log_info() {
-    echo -e "${BLUE}[Xenon Hook]${NC} $1"
-}
+# 获取当前分支
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+COMMIT_SHA=$(git rev-parse HEAD)
 
-log_success() {
-    echo -e "${GREEN}[Xenon Hook] ✓${NC} $1"
-}
+echo -e "${BLUE}[CI Hook]${NC} 检测到新提交: ${COMMIT_SHA:0:8}"
 
-log_warn() {
-    echo -e "${YELLOW}[Xenon Hook] ⚠${NC} $1"
-}
+# 检查是否有远程仓库
+if ! git remote -v | grep -q "origin"; then
+    echo -e "${YELLOW}[CI Hook]${NC} 没有远程仓库，跳过 CI 检查"
+    exit 0
+fi
 
-log_error() {
-    echo -e "${RED}[Xenon Hook] ✗${NC} $1"
-}
+# 检查 gh CLI 是否可用
+if ! command -v gh &> /dev/null; then
+    echo -e "${YELLOW}[CI Hook]${NC} gh CLI 未安装，跳过 CI 检查"
+    exit 0
+fi
 
-# 获取当前 commit hash
-CURRENT_COMMIT=$(git rev-parse HEAD)
+# 检查是否推送到远程（通过检查最后一次推送的提交）
+LAST_PUSHED=$(git rev-parse origin/$BRANCH 2>/dev/null || echo "")
+if [ "$LAST_PUSHED" != "$COMMIT_SHA" ]; then
+    echo -e "${YELLOW}[CI Hook]${NC} 提交尚未推送，请先推送: git push"
+    exit 0
+fi
 
-# 检查是否需要安装
-need_install() {
-    # 虚拟环境不存在
-    if [ ! -d "$VENV_DIR" ]; then
-        return 0
+# 等待 CI 开始（最多 30 秒）
+echo -e "${BLUE}[CI Hook]${NC} 等待 CI 启动..."
+MAX_WAIT=30
+WAITED=0
+
+while [ $WAITED -lt $MAX_WAIT ]; do
+    # 获取最新的 CI 运行
+    LATEST_RUN=$(gh run list --branch "$BRANCH" --limit 1 --json databaseId,headSha,status,conclusion 2>/dev/null || echo "")
+
+    if [ -n "$LATEST_RUN" ]; then
+        RUN_SHA=$(echo "$LATEST_RUN" | jq -r '.[0].headSha' 2>/dev/null || echo "")
+
+        # 检查是否是当前提交的 CI
+        if [ "$RUN_SHA" = "$COMMIT_SHA" ]; then
+            RUN_ID=$(echo "$LATEST_RUN" | jq -r '.[0].databaseId')
+            echo -e "${GREEN}[CI Hook]${NC} CI 已启动 (Run ID: $RUN_ID)"
+            break
+        fi
     fi
 
-    # 版本文件不存在
-    if [ ! -f "$VERSION_FILE" ]; then
-        return 0
-    fi
+    sleep 2
+    WAITED=$((WAITED + 2))
+done
 
-    # 检查是否有 xenon/ 目录的变更
-    LAST_COMMIT=$(cat "$VERSION_FILE" 2>/dev/null || echo "")
-    if [ "$LAST_COMMIT" != "$CURRENT_COMMIT" ]; then
-        # 检查 xenon/ 或 pyproject.toml 是否有变更
-        if git diff --quiet "$LAST_COMMIT" "$CURRENT_COMMIT" -- xenon/ pyproject.toml setup.py 2>/dev/null; then
-            log_info "代码未变更，跳过安装"
-            return 1
+if [ $WAITED -ge $MAX_WAIT ]; then
+    echo -e "${YELLOW}[CI Hook]${NC} CI 未在 ${MAX_WAIT}s 内启动"
+    exit 0
+fi
+
+# 等待 CI 完成（最多 5 分钟）
+echo -e "${BLUE}[CI Hook]${NC} 等待 CI 完成（最多 5 分钟）..."
+MAX_WAIT=300
+WAITED=0
+
+while [ $WAITED -lt $MAX_WAIT ]; do
+    RUN_INFO=$(gh run view "$RUN_ID" --json status,conclusion 2>/dev/null || echo "{}")
+    STATUS=$(echo "$RUN_INFO" | jq -r '.status' 2>/dev/null || echo "unknown")
+    CONCLUSION=$(echo "$RUN_INFO" | jq -r '.conclusion' 2>/dev/null || echo "")
+
+    if [ "$STATUS" = "completed" ]; then
+        echo ""
+        if [ "$CONCLUSION" = "success" ]; then
+            echo -e "${GREEN}[CI Hook] ✓${NC} CI 测试通过！"
+            exit 0
         else
-            log_info "检测到代码变更，需要重新安装"
-            return 0
+            echo -e "${RED}[CI Hook] ✗${NC} CI 测试失败！"
+            echo ""
+
+            # 显示失败的作业
+            echo -e "${YELLOW}失败的测试：${NC}"
+            gh run view "$RUN_ID" --log-failed 2>&1 | head -50
+
+            echo ""
+            echo -e "${YELLOW}修复选项：${NC}"
+            echo "1. 查看完整日志: gh run view $RUN_ID --log-failed"
+            echo "2. 在浏览器中查看: gh run view $RUN_ID --web"
+            echo "3. 运行本地 Ruff: ruff check xenon tests evals --fix"
+            echo ""
+
+            exit 1
         fi
     fi
 
-    return 1
-}
+    # 显示进度
+    printf "\r${BLUE}[CI Hook]${NC} CI 运行中... ${WAITED}s / ${MAX_WAIT}s"
 
-# 文件锁（防止并发安装）
-acquire_lock() {
-    local timeout=30
-    local waited=0
+    sleep 10
+    WAITED=$((WAITED + 10))
+done
 
-    while [ $waited -lt $timeout ]; do
-        if mkdir "$LOCK_FILE" 2>/dev/null; then
-            trap "rm -rf '$LOCK_FILE'" EXIT
-            return 0
-        fi
-        log_warn "等待其他安装进程... ($waited/$timeout)"
-        sleep 1
-        waited=$((waited + 1))
-    done
-
-    log_error "获取锁超时，可能有其他安装进程挂起"
-    log_info "可以手动删除: rm -rf $LOCK_FILE"
-    return 1
-}
-
-# 主逻辑
-main() {
-    log_info "检测到新提交: ${CURRENT_COMMIT:0:8}"
-
-    # 检查是否需要安装
-    if ! need_install; then
-        log_success "Xenon 已是最新版本 (跨会话复用)"
-        if [ -d "$VENV_DIR" ]; then
-            log_info "激活: source $VENV_DIR/bin/activate"
-        fi
-        exit 0
-    fi
-
-    # 获取文件锁
-    if ! acquire_lock; then
-        exit 1
-    fi
-
-    # 创建虚拟环境
-    if [ ! -d "$VENV_DIR" ]; then
-        log_info "创建项目级虚拟环境: $VENV_DIR"
-        $PYTHON -m venv "$VENV_DIR"
-    fi
-
-    # 激活虚拟环境
-    source "$VENV_DIR/bin/activate"
-
-    # 升级 pip（静默）
-    pip install -q --upgrade pip 2>&1 | grep -v "already satisfied" || true
-
-    # 安装 Xenon（可编辑模式，支持开发）
-    log_info "安装 Xenon (可编辑模式)..."
-    if pip install -q -e "$PROJECT_ROOT" 2>&1 | tee /tmp/xenon-install.log | grep -E "ERROR|error:"; then
-        log_error "安装失败，查看日志: /tmp/xenon-install.log"
-        deactivate 2>/dev/null || true
-        exit 1
-    fi
-
-    # 验证安装
-    INSTALLED_VERSION=$(python -c "import xenon; print(xenon.__version__)" 2>/dev/null || echo "未知")
-
-    if [ "$INSTALLED_VERSION" != "未知" ]; then
-        # 记录当前 commit
-        echo "$CURRENT_COMMIT" > "$VERSION_FILE"
-
-        log_success "Xenon $INSTALLED_VERSION 已安装"
-        log_info "虚拟环境: $VENV_DIR"
-        log_info "激活命令: source $VENV_DIR/bin/activate"
-        log_info "运行命令: xenon"
-
-        # 显示安装位置
-        XENON_BIN=$(which xenon 2>/dev/null || echo "未找到")
-        if [ "$XENON_BIN" != "未找到" ]; then
-            log_info "可执行文件: $XENON_BIN"
-        fi
-    else
-        log_error "安装失败，无法导入 xenon 模块"
-        deactivate 2>/dev/null || true
-        exit 1
-    fi
-
-    deactivate 2>/dev/null || true
-}
-
-# 运行主逻辑
-main "$@"
+echo ""
+echo -e "${YELLOW}[CI Hook]${NC} CI 运行时间超过 5 分钟，请手动检查"
+echo "运行: gh run view $RUN_ID"
+exit 0
