@@ -35,6 +35,13 @@ from xenon.utils.prompt_compiler import (
     compile_prompt,
 )
 
+# Phase 3: 检查点管理器
+# 延迟导入，避免循环依赖
+def _get_checkpoint_manager():
+    """延迟导入检查点管理器"""
+    from xenon.engine.checkpoint_manager import CheckpointManager
+    return CheckpointManager
+
 logger = logging.getLogger(__name__)
 
 
