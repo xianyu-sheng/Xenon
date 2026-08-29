@@ -1220,7 +1220,7 @@ def _call_anthropic_once(
         httpx.RemoteProtocolError,
         httpx.WriteError,
         httpx.PoolTimeout,
-    ) as e:
+    ):
         # 网络错误：尝试从部分响应中提取内容
         # 同步请求在网络错误时通常无法获取部分响应体
         # 这里为后续流式实现预留接口

@@ -6,8 +6,6 @@ Phase 1 单元测试 - 部分响应和续写机制。
 
 import time
 
-import pytest
-
 from xenon.utils.partial_response import (
     ContinuationContext,
     PartialContent,

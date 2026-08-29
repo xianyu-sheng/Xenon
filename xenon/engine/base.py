@@ -38,7 +38,6 @@ from xenon.utils.llm_client import (
 )
 from xenon.utils.partial_response import (
     ContinuationContext,
-    PartialContent,
     PartialResponseError,
 )
 
