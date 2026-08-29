@@ -985,7 +985,7 @@ class BaseEngine(ABC):
                 last_error = e
                 logger.warning(tp(f"模型 {model_id} 响应截断: {e}，尝试下一个..."))
             except PartialResponseError as e:
-                # Phase 1: 智能续写 - 捕获部分响应
+                # Phase 1+2: 智能续写 - 捕获部分响应 + 语义边界检测
                 if self.model_pool:
                     self._record_model_failure(model_id)
                 last_error = e
@@ -1002,33 +1002,57 @@ class BaseEngine(ABC):
                         )
                     )
 
-                    # 构造续写 messages
+                    # Phase 2: 语义边界检测
+                    from xenon.utils.semantic_boundary import (
+                        BoundaryDetector,
+                        ContentType,
+                    )
+
+                    detector = BoundaryDetector()
+                    boundary_result = detector.find_last_boundary(
+                        partial.content, content_type=ContentType.AUTO
+                    )
+
+                    # 使用回滚后的完整部分
+                    complete_content = boundary_result.complete_part
+                    incomplete_part = boundary_result.incomplete_part
+
+                    logger.info(
+                        tp(
+                            f"🔍 语义边界: {boundary_result.boundary_type.value}, "
+                            f"完整: {len(complete_content)} 字符, "
+                            f"回滚: {len(incomplete_part)} 字符 "
+                            f"({boundary_result.rollback_ratio()*100:.1f}%)"
+                        )
+                    )
+
+                    # 构造智能续写 messages
+                    continuation_prompt = self._build_continuation_prompt(
+                        boundary_result, incomplete_part
+                    )
+
                     continuation_messages = list(original_messages) + [
-                        {"role": "assistant", "content": partial.content},
-                        {
-                            "role": "user",
-                            "content": (
-                                "[上一个模型因网络问题中断，已生成部分内容如上。"
-                                "请从上述内容继续完成剩余部分，保持语义连贯。]"
-                            ),
-                        },
+                        {"role": "assistant", "content": complete_content},
+                        {"role": "user", "content": continuation_prompt},
                     ]
 
                     # 创建续写上下文（用于统计）
                     continuation_ctx = ContinuationContext(
                         original_model=partial.model_id,
                         continuation_model="<next>",  # 稍后更新
-                        partial_length=len(partial),
+                        partial_length=len(complete_content),
                         partial_tokens=partial.estimate_tokens(),
-                        continuation_prompt="网络中断续写",
+                        continuation_prompt=continuation_prompt[:50] + "...",
                     )
+                    continuation_ctx.metadata = boundary_result.to_dict()
 
                     # 更新 messages 为续写版本
                     messages = continuation_messages
 
                     # 用户可见提示
                     self.callback.on_event(
-                        f"💡 检测到部分内容 ({len(partial)} 字符)，切换模型续写中..."
+                        f"💡 检测到 {boundary_result.boundary_type.value} 边界，"
+                        f"回滚 {len(incomplete_part)} 字符后续写..."
                     )
                 else:
                     # 部分内容太短，不值得续写
@@ -1109,6 +1133,81 @@ class BaseEngine(ABC):
             except Exception:
                 pass
         return default
+
+    def _build_continuation_prompt(
+        self, boundary_result, incomplete_part: str
+    ) -> str:
+        """
+        根据边界类型构造智能续写提示。
+
+        Phase 2: 根据语义边界类型生成更精确的续写指令。
+
+        Args:
+            boundary_result: 边界检测结果
+            incomplete_part: 不完整部分
+
+        Returns:
+            续写提示文本
+        """
+        from xenon.utils.semantic_boundary import BoundaryType
+
+        boundary_type = boundary_result.boundary_type
+
+        if boundary_type == BoundaryType.FUNCTION:
+            return (
+                f"上述代码在完整的函数定义后中断。"
+                f"不完整部分：```{incomplete_part}```。"
+                f"请继续完成代码，保持语义连贯。"
+            )
+
+        elif boundary_type == BoundaryType.CODE_BLOCK:
+            return (
+                f"上述代码在完整的代码块后中断。"
+                f"不完整部分：```{incomplete_part}```。"
+                f"请继续完成剩余代码。"
+            )
+
+        elif boundary_type == BoundaryType.STATEMENT:
+            return (
+                f"上述代码在完整的语句后中断。"
+                f"不完整部分：`{incomplete_part}`。"
+                f"请继续完成代码。"
+            )
+
+        elif boundary_type == BoundaryType.MARKDOWN_CODE:
+            return (
+                f"上述 Markdown 在完整的代码块后中断。"
+                f"不完整部分：{incomplete_part}。"
+                f"请继续完成文档。"
+            )
+
+        elif boundary_type == BoundaryType.PARAGRAPH:
+            return (
+                f"上述内容在完整的段落后中断。"
+                f"不完整部分：「{incomplete_part}」。"
+                f"请继续完成剩余内容。"
+            )
+
+        elif boundary_type == BoundaryType.SENTENCE:
+            return (
+                f"上述内容在完整的句子后中断。"
+                f"不完整部分：「{incomplete_part}」。"
+                f"请继续完成剩余内容。"
+            )
+
+        else:
+            # 通用提示
+            if incomplete_part:
+                return (
+                    f"[上一个模型因网络问题中断，已生成完整内容如上。"
+                    f"不完整部分：{incomplete_part}。"
+                    f"请从上述内容继续完成剩余部分，保持语义连贯。]"
+                )
+            else:
+                return (
+                    "[上一个模型因网络问题中断，已生成部分内容如上。"
+                    "请从上述内容继续完成剩余部分，保持语义连贯。]"
+                )
 
     # ── F5: 三层 LLM 降级 _call_llm_native ───────────────────
 

@@ -8,16 +8,12 @@
 
 import sys
 import time
-from typing import Any
-from unittest.mock import Mock, patch
 
 import httpx
 
 # 添加项目路径
 sys.path.insert(0, "/home/xianyu-sheng/Xenon")
 
-from xenon.engine.base import BaseEngine
-from xenon.engine.callbacks import EngineCallback
 from xenon.utils.partial_response import (
     ContinuationContext,
     PartialContent,
@@ -144,7 +140,7 @@ def test_boundary_huge_content():
     if len(partial_huge) == 1_000_000:
         results.add_pass("边界-超大内容长度正确")
     else:
-        results.add_fail("边界-超大内容长度正确", f"长度应为 1000000")
+        results.add_fail("边界-超大内容长度正确", "长度应为 1000000")
 
     if partial_huge.is_valid(min_length=100):
         results.add_pass("边界-超大内容可续写")
@@ -252,7 +248,7 @@ def test_mutation_special_strings():
 
     for name, value in special_cases:
         try:
-            partial = PartialContent(
+            _ = PartialContent(
                 content=value if "模型" not in name else "test",
                 tokens_generated=10,
                 model_id=value if "模型" in name else "test",
