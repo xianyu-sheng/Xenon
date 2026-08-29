@@ -1760,9 +1760,13 @@ def chat_completion_stream(
     cache_context: dict[str, Any] | None = None,
     cache_lane_registry: Any = None,
     timeout: float = 300.0,
+    checkpoint_manager: Any | None = None,
 ) -> Generator[str, None, None]:
     """
     流式 chat completion 调用。
+
+    Args:
+        checkpoint_manager: 可选的 CheckpointManager 实例，用于周期性保存检查点
 
     Yields:
         逐步生成的文本片段（delta）。
@@ -1793,6 +1797,7 @@ def chat_completion_stream(
             timeout,
             model_id,
             manifest,
+            checkpoint_manager=checkpoint_manager,
         )
     else:
         yield from _stream_openai_compat(
@@ -1804,6 +1809,7 @@ def chat_completion_stream(
             model_id,
             reasoning_effort=reasoning_effort,
             manifest=manifest,
+            checkpoint_manager=checkpoint_manager,
         )
 
 
@@ -1817,14 +1823,18 @@ def _stream_openai_compat(
     *,
     reasoning_effort: str | None = None,
     manifest: dict[str, Any] | None = None,
+    checkpoint_manager: Any | None = None,
 ) -> Generator[str, None, None]:
     """OpenAI 兼容格式流式调用。
 
     P3-Q1 续 / §8.8.1：机会性提取末尾 chunk 的 ``usage``（部分兼容厂商默认随
     末帧返回；OpenAI 官方需 ``stream_options.include_usage``，此处不强加以避免
     对不支持的厂商触发 400）。提取到则经 usage 回调发出真实 token 用量。
+
+    Phase 3: 支持检查点管理 - 周期性保存生成进度，网络中断时可从检查点恢复。
     """
     import time
+    from xenon.utils.token_estimator import estimate_tokens
 
     url = f"{endpoint.base_url}/chat/completions"
     headers = {
@@ -1846,6 +1856,11 @@ def _stream_openai_compat(
     t0 = time.time()
     usage_data: dict[str, Any] | None = None
     finish_reason = ""
+
+    # Phase 3: 检查点管理初始化
+    accumulated_content = ""
+    accumulated_tokens = 0
+
     with _create_http_client(timeout=timeout) as client:
         with client.stream("POST", url, json=payload, headers=headers) as resp:
             resp.raise_for_status()
@@ -1869,6 +1884,22 @@ def _stream_openai_compat(
                 delta = choice.get("delta", {})
                 content = delta.get("content")
                 if content:
+                    # Phase 3: 累积内容和 token 数
+                    accumulated_content += content
+                    accumulated_tokens += estimate_tokens(content)
+
+                    # Phase 3: 检查是否需要保存检查点
+                    if checkpoint_manager and checkpoint_manager.should_save(accumulated_tokens):
+                        checkpoint = checkpoint_manager.save_checkpoint(
+                            accumulated_content,
+                            accumulated_tokens,
+                            metadata={"model_id": model_id, "provider": endpoint.provider}
+                        )
+                        logger.debug(
+                            f"流式生成检查点 #{checkpoint.sequence} "
+                            f"(tokens={accumulated_tokens}, age={checkpoint.age():.1f}s)"
+                        )
+
                     yield content
     if usage_data is not None:
         _emit_usage(
@@ -1890,13 +1921,17 @@ def _stream_anthropic(
     timeout: float,
     model_id: str,
     manifest: dict[str, Any] | None = None,
+    checkpoint_manager: Any | None = None,
 ) -> Generator[str, None, None]:
     """Anthropic 原生格式流式调用。
 
     P3-Q1 续 / §8.8.1：从 ``message_start`` 取 input_tokens、``message_delta``
     取 output_tokens（末值为最终输出），结束后经 usage 回调发出真实用量。
+
+    Phase 3: 支持检查点管理 - 周期性保存生成进度，网络中断时可从检查点恢复。
     """
     import time
+    from xenon.utils.token_estimator import estimate_tokens
 
     url = f"{endpoint.base_url}/v1/messages"
     headers = {
@@ -1920,6 +1955,11 @@ def _stream_anthropic(
     input_tokens = 0
     output_tokens = 0
     stop_reason = ""
+
+    # Phase 3: 检查点管理初始化
+    accumulated_content = ""
+    accumulated_tokens = 0
+
     with _create_http_client(timeout=timeout) as client:
         with client.stream("POST", url, json=payload, headers=headers) as resp:
             resp.raise_for_status()
@@ -1947,6 +1987,22 @@ def _stream_anthropic(
                     delta = event.get("delta", {})
                     text = delta.get("text")
                     if text:
+                        # Phase 3: 累积内容和 token 数
+                        accumulated_content += text
+                        accumulated_tokens += estimate_tokens(text)
+
+                        # Phase 3: 检查是否需要保存检查点
+                        if checkpoint_manager and checkpoint_manager.should_save(accumulated_tokens):
+                            checkpoint = checkpoint_manager.save_checkpoint(
+                                accumulated_content,
+                                accumulated_tokens,
+                                metadata={"model_id": model_id, "provider": "anthropic"}
+                            )
+                            logger.debug(
+                                f"流式生成检查点 #{checkpoint.sequence} "
+                                f"(tokens={accumulated_tokens}, age={checkpoint.age():.1f}s)"
+                            )
+
                         yield text
     if input_tokens or output_tokens:
         _emit_usage(
