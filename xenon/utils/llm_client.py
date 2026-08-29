@@ -26,6 +26,10 @@ from xenon.utils.cache_telemetry import (
     MANIFEST_RESPONSE_KEY,
     build_prompt_manifest,
 )
+from xenon.utils.partial_response import (
+    PartialContent,
+    PartialResponseError,
+)
 from xenon.utils.prompt_compiler import (
     canonicalize_request_value,
     compile_prompt,
@@ -1054,7 +1058,10 @@ def _call_openai_compat_once(
     *,
     reasoning_effort: str | None = None,
 ) -> tuple[str, str]:
-    """单次 OpenAI 兼容调用，返回 (content, finish_reason)。"""
+    """单次 OpenAI 兼容调用，返回 (content, finish_reason)。
+
+    网络错误时会抛出 PartialResponseError，携带已接收的部分内容（如果有）。
+    """
     url = f"{endpoint.base_url}/chat/completions"
     headers = {
         "Authorization": f"Bearer {endpoint.api_key}",
@@ -1069,31 +1076,60 @@ def _call_openai_compat_once(
     _apply_reasoning_effort(payload, reasoning_effort)
     # R3: 复用 per-provider 长生命 Client（取代每次 with _create_http_client）
     client = _get_pooled_client(endpoint, timeout)
-    resp = client.post(url, json=payload, headers=headers, timeout=timeout)
-    resp.raise_for_status()
-    data = resp.json()
-    # §8.8.1：提取并累加真实 usage（不再丢弃），+ model_id 用于缓存追踪
-    _acc_usage(endpoint.provider, data, f"{endpoint.provider}/{endpoint.model_name}")
-    msg = data["choices"][0]["message"]
-    finish = data["choices"][0].get("finish_reason", "")
-    content = msg.get("content") or ""
-    reasoning = msg.get("reasoning_content") or msg.get("thinking") or ""
 
-    if content:
-        logger.debug(f"API 响应: content={content[:300]}")
-    elif reasoning:
-        logger.debug(f"API 响应: content=空, reasoning_content={reasoning[:300]}")
-    else:
-        logger.warning(
-            f"API 响应: content 和 reasoning_content 均为空! finish_reason={finish}"
-        )
+    # Phase 1: 捕获网络错误时的部分响应
+    partial_content = ""
+    partial_usage = None
+    model_id = f"{endpoint.provider}/{endpoint.model_name}"
 
-    # 推理模型在正常结束时偶尔只返回 reasoning_content；保留兼容兜底。
-    # ``length`` 表示该推理本身尚未完成，绝不能把它冒充最终答案或协议正文。
-    if not content and reasoning and finish != "length":
-        content = reasoning
+    try:
+        resp = client.post(url, json=payload, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        # §8.8.1：提取并累加真实 usage（不再丢弃），+ model_id 用于缓存追踪
+        _acc_usage(endpoint.provider, data, model_id)
+        msg = data["choices"][0]["message"]
+        finish = data["choices"][0].get("finish_reason", "")
+        content = msg.get("content") or ""
+        reasoning = msg.get("reasoning_content") or msg.get("thinking") or ""
 
-    return content, finish
+        if content:
+            logger.debug(f"API 响应: content={content[:300]}")
+        elif reasoning:
+            logger.debug(f"API 响应: content=空, reasoning_content={reasoning[:300]}")
+        else:
+            logger.warning(
+                f"API 响应: content 和 reasoning_content 均为空! finish_reason={finish}"
+            )
+
+        # 推理模型在正常结束时偶尔只返回 reasoning_content；保留兼容兜底。
+        # ``length`` 表示该推理本身尚未完成，绝不能把它冒充最终答案或协议正文。
+        if not content and reasoning and finish != "length":
+            content = reasoning
+
+        return content, finish
+
+    except (
+        httpx.ReadTimeout,
+        httpx.ConnectTimeout,
+        httpx.RemoteProtocolError,
+        httpx.WriteError,
+        httpx.PoolTimeout,
+    ) as e:
+        # 网络错误：尝试从部分响应中提取内容
+        # 注意：同步请求在网络错误时通常无法获取部分响应体
+        # 这里我们记录错误类型，为后续流式实现做准备
+        if partial_content:
+            partial = PartialContent(
+                content=partial_content,
+                tokens_generated=0,  # 同步请求无法准确估算
+                model_id=model_id,
+                finish_reason=type(e).__name__,
+                usage=partial_usage,
+            )
+            raise PartialResponseError(partial, e) from e
+        # 没有部分内容，直接抛出原始异常
+        raise
 
 
 # ═══════════════════════════════════════════════════════
@@ -1138,7 +1174,10 @@ def _call_anthropic_once(
     temperature: float,
     timeout: float,
 ) -> tuple[str, str]:
-    """单次 Anthropic 调用，返回 (text, stop_reason)。"""
+    """单次 Anthropic 调用，返回 (text, stop_reason)。
+
+    网络错误时会抛出 PartialResponseError，携带已接收的部分内容（如果有）。
+    """
     url = f"{endpoint.base_url}/v1/messages"
     headers = {
         "x-api-key": endpoint.api_key,
@@ -1159,16 +1198,33 @@ def _call_anthropic_once(
 
     # R3: 复用 per-provider 长生命 Client
     client = _get_pooled_client(endpoint, timeout)
-    resp = client.post(url, json=payload, headers=headers, timeout=timeout)
-    resp.raise_for_status()
-    data = resp.json()
-    # §8.8.1：提取并累加真实 usage（Anthropic 用 input/output_tokens）
-    _acc_usage(endpoint.provider, data, f"{endpoint.provider}/{endpoint.model_name}")
-    # content 是文本块列表；拼接所有 text 块（比仅取 [0] 更鲁棒）
-    blocks = data.get("content", []) or []
-    text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict))
-    stop_reason = data.get("stop_reason", "")
-    return text, stop_reason
+
+    # Phase 1: 捕获网络错误时的部分响应
+    model_id = f"{endpoint.provider}/{endpoint.model_name}"
+
+    try:
+        resp = client.post(url, json=payload, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        # §8.8.1：提取并累加真实 usage（Anthropic 用 input/output_tokens）
+        _acc_usage(endpoint.provider, data, model_id)
+        # content 是文本块列表；拼接所有 text 块（比仅取 [0] 更鲁棒）
+        blocks = data.get("content", []) or []
+        text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict))
+        stop_reason = data.get("stop_reason", "")
+        return text, stop_reason
+
+    except (
+        httpx.ReadTimeout,
+        httpx.ConnectTimeout,
+        httpx.RemoteProtocolError,
+        httpx.WriteError,
+        httpx.PoolTimeout,
+    ) as e:
+        # 网络错误：尝试从部分响应中提取内容
+        # 同步请求在网络错误时通常无法获取部分响应体
+        # 这里为后续流式实现预留接口
+        raise  # 暂时直接抛出，等 Phase 1.3 实现流式捕获
 
 
 # ── R3: 原生 function-calling 能力（Q2 三层降级前置） ──────

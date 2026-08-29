@@ -36,6 +36,11 @@ from xenon.utils.llm_client import (
     chat_completion,
     chat_completion_with_tools,
 )
+from xenon.utils.partial_response import (
+    ContinuationContext,
+    PartialContent,
+    PartialResponseError,
+)
 
 if TYPE_CHECKING:
     from xenon.engine.budget import BudgetManager
@@ -839,6 +844,9 @@ class BaseEngine(ABC):
           立即上抛并 ``callback.on_error``，避免用坏 Key 逐一慢试全部模型；
         - 429/5xx/网络错误/响应截断 = **瞬时错误**，切下一个模型；
         - 全部模型失败 → ``callback.on_error`` + 抛 RuntimeError。
+
+        Phase 1 智能检查点：
+        - PartialResponseError = 网络中断但有部分内容，构造续写 messages 切换模型。
         """
         from xenon.engine.trace import new_call_id, prefix
 
@@ -849,6 +857,10 @@ class BaseEngine(ABC):
             return f"{prefix(self.run_id, call_id)} {message}"
 
         last_error: Exception | None = None
+        # Phase 1: 续写上下文（跨模型切换时保留）
+        continuation_ctx: ContinuationContext | None = None
+        original_messages = messages  # 保存原始 messages
+
         for model_id in model_priority or self.model_priority:
             started_at = time.monotonic()
             request_started = False
@@ -900,6 +912,36 @@ class BaseEngine(ABC):
                     )
                 self.last_model_used = model_id
                 request_succeeded = True
+
+                # Phase 1: 如果是续写成功，合并结果并记录统计
+                if continuation_ctx is not None:
+                    continuation_ctx.continuation_model = model_id
+                    continuation_ctx.mark_completed(success=True)
+
+                    # 估算节省的 tokens（假设不续写需要重新生成全部）
+                    continuation_ctx.tokens_saved = continuation_ctx.partial_tokens
+
+                    # 获取原始部分内容
+                    partial_content = ""
+                    if len(messages) >= 2 and messages[-2].get("role") == "assistant":
+                        partial_content = messages[-2].get("content", "")
+
+                    # 合并部分内容和续写内容
+                    final_result = partial_content + result
+
+                    logger.info(
+                        tp(
+                            f"✓ 续写完成！原模型: {continuation_ctx.original_model}, "
+                            f"续写模型: {model_id}, 节省约 {continuation_ctx.tokens_saved} tokens"
+                        )
+                    )
+
+                    self.callback.on_event(
+                        f"✓ 续写完成，节省约 {continuation_ctx.tokens_saved} tokens"
+                    )
+
+                    return final_result
+
                 return result
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
@@ -943,6 +985,60 @@ class BaseEngine(ABC):
                     self._record_model_failure(model_id)
                 last_error = e
                 logger.warning(tp(f"模型 {model_id} 响应截断: {e}，尝试下一个..."))
+            except PartialResponseError as e:
+                # Phase 1: 智能续写 - 捕获部分响应
+                if self.model_pool:
+                    self._record_model_failure(model_id)
+                last_error = e
+
+                partial = e.partial
+                min_length = 100  # 最小有效续写长度
+
+                if partial.is_valid(min_length):
+                    # 部分内容足够长，值得续写
+                    logger.info(
+                        tp(
+                            f"⚡ 模型 {model_id} 网络中断，已生成 {len(partial)} 字符 "
+                            f"(约 {partial.estimate_tokens()} tokens)，准备续写..."
+                        )
+                    )
+
+                    # 构造续写 messages
+                    continuation_messages = list(original_messages) + [
+                        {"role": "assistant", "content": partial.content},
+                        {
+                            "role": "user",
+                            "content": (
+                                "[上一个模型因网络问题中断，已生成部分内容如上。"
+                                "请从上述内容继续完成剩余部分，保持语义连贯。]"
+                            ),
+                        },
+                    ]
+
+                    # 创建续写上下文（用于统计）
+                    continuation_ctx = ContinuationContext(
+                        original_model=partial.model_id,
+                        continuation_model="<next>",  # 稍后更新
+                        partial_length=len(partial),
+                        partial_tokens=partial.estimate_tokens(),
+                        continuation_prompt="网络中断续写",
+                    )
+
+                    # 更新 messages 为续写版本
+                    messages = continuation_messages
+
+                    # 用户可见提示
+                    self.callback.on_event(
+                        f"💡 检测到部分内容 ({len(partial)} 字符)，切换模型续写中..."
+                    )
+                else:
+                    # 部分内容太短，不值得续写
+                    logger.warning(
+                        tp(
+                            f"模型 {model_id} 部分内容过短 ({len(partial)} 字符)，"
+                            f"放弃续写，尝试下一个模型..."
+                        )
+                    )
             except EngineDeadlineExceeded:
                 raise
             except Exception as e:
