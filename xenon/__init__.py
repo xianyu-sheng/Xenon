@@ -39,7 +39,7 @@ if TYPE_CHECKING:  # 仅供类型检查器，运行时不导入（保持懒加�
     from xenon.engine.callbacks import EngineCallback, SilentCallback
     from xenon.engine.context import AgentContext
 
-__version__ = "0.8.5"
+__version__ = "0.9.1"
 
 __all__ = [
     "__version__",
