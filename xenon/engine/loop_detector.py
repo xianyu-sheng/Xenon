@@ -199,11 +199,14 @@ class LoopDetector:
                 if recent_hashes[j] == current:
                     similar_indices.append(j)
 
-            # 如果有 2 个或以上相同，认为循环
+            # 根据重复次数计算置信度
+            # 3次或以上相同 → 高置信度 0.9（可能真的陷入循环）
+            # 2次相同 → 中等置信度 0.7（可能只是巧合）
             if len(similar_indices) >= 2:
+                confidence = 0.9 if len(similar_indices) >= 3 else 0.7
                 return LoopDetectionResult(
                     is_loop=True,
-                    confidence=0.9,
+                    confidence=confidence,
                     loop_length=i - similar_indices[-1],
                     similar_turns=similar_indices + [i],
                     reason=f"{name}哈希重复（轮次 {similar_indices + [i]}）",

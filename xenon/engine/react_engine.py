@@ -17,6 +17,7 @@ from xenon.engine.budget import BudgetManager
 from xenon.engine.callbacks import EngineCallback, mask_sensitive_params
 from xenon.engine.context import AgentContext
 from xenon.engine.hollow_detector import HollowDetector
+from xenon.engine.loop_detector import LoopDetector
 from xenon.engine.react_prompts import BUILTIN_TOOLS, REACT_SYSTEM_PROMPT
 from xenon.engine.scout import DirectoryScout
 from xenon.engine.strategy_guide import get_strategy_advice
@@ -190,6 +191,12 @@ class ReActEngine(BaseEngine):
         self._verification_enabled = verification_loop
         # F2: 空洞回答检测器（无状态，实例共享）
         self._hollow = HollowDetector()
+        # v0.9.0: 循环检测器（智能终止，替代固定迭代限制）
+        # 使用更保守的阈值（similarity_threshold=0.85）避免误报，
+        # 与重复工具检测、纯读瘫痪检测等机制配合工作
+        self._loop_detector = LoopDetector(
+            window_size=5, similarity_threshold=0.85, enabled=True
+        )
         # F5: DeepSeek V4 的思考模式工具协议已经单元测试和真实 API
         # 闭环验证，因此在它作为主模型时自动开启原生 function calling。
         # 其他模型仍保持关闭，调用方也可显式传入 True/False 覆盖。
@@ -392,6 +399,7 @@ class ReActEngine(BaseEngine):
         self._bind_evidence_ledger(ctx)
         self._recent_calls.clear()  # v0.7.0: 每次 run 重置重复调用跟踪
         self._verification_active = False  # v0.8.3: 每次 run 重置验证循环状态
+        self._loop_detector.reset()  # v0.9.0: 每次 run 重置循环检测器
         active_level = ctx.get("_execution_level")
         original_user_input = user_input
         if active_level is not None:
@@ -1000,6 +1008,27 @@ class ReActEngine(BaseEngine):
                 logger.debug(f"ReAct 观察: {observation[:200]}")
                 no_tool_streak = 0
                 malformed_response_retries = 0
+
+                # v0.9.0: 循环检测 — 记录本轮输出和工具调用
+                thought_content = ""
+                if isinstance(parsed, dict):
+                    thought_content = parsed.get("thought", "")
+                tool_calls_list = None
+                if isinstance(parsed, list):
+                    tool_calls_list = [
+                        item.get("action") for item in parsed if isinstance(item, dict)
+                    ]
+                elif isinstance(parsed, dict) and parsed.get("action"):
+                    tool_calls_list = [parsed["action"]]
+
+                # 记录本轮数据（工具执行完成后）
+                self._loop_detector.add_turn(
+                    output=response,
+                    tool_calls=tool_calls_list,
+                    error=None,
+                    thought=thought_content,
+                )
+
                 consecutive_failures = tracker.consecutive_failures()
                 if consecutive_failures >= self._max_consecutive_tool_failures:
                     warning = (
@@ -1011,6 +1040,58 @@ class ReActEngine(BaseEngine):
                     result = self._mercy_compile(user_input, tracker, messages)
                     self.callback.on_finish(result)
                     return result
+
+                # v0.9.0: 循环检测 — 在其他检测机制之后检查循环
+                # 这样可以让纯读瘫痪检测、重复工具检测等优先触发
+                # 对于查询/研究任务，多轮只读是正常的，提高循环检测的触发阈值
+                loop_result = self._loop_detector.check()
+                if loop_result.is_loop:
+                    # 查询任务对循环更宽容：需要更高置信度（≥0.95）才终止
+                    confidence_threshold = 0.95 if requires_query_result else 0.9
+
+                    if loop_result.confidence >= confidence_threshold:
+                        loop_msg = (
+                            f"⚠️ **检测到 ReAct 引擎陷入循环** (置信度: {loop_result.confidence:.2f})\n\n"
+                            f"**循环原因**: {loop_result.reason}\n"
+                            f"**循环周期**: {loop_result.loop_length} 轮\n"
+                            f"**相似轮次**: {loop_result.similar_turns}\n\n"
+                            f"引擎已自动终止以避免无限循环。请尝试：\n"
+                            f"1. 重新表述任务，提供更明确的目标\n"
+                            f"2. 检查工具调用是否失败（如文件路径错误）\n"
+                            f"3. 简化任务范围\n\n"
+                            f"已执行工具: {len(tracker.calls)} 次\n"
+                            f"最后 {loop_result.loop_length} 轮输出高度相似，系统判断无法继续推进。"
+                        )
+                        logger.error(
+                            f"ReAct: 循环检测终止 (confidence={loop_result.confidence:.2f}, "
+                            f"reason={loop_result.reason}, loop_length={loop_result.loop_length})"
+                        )
+                        self.callback.on_warning(loop_msg)
+                        self.callback.on_finish(loop_msg)
+                        return loop_msg
+
+                    # 低置信度：注入提示，尝试打破循环（但不影响查询任务的正常探索）
+                    # 查询任务的低置信度循环（0.7-0.95）不注入提示，让其继续探索
+                    if not requires_query_result or loop_result.confidence < 0.8:
+                        loop_hint = (
+                            f"⚠️ **注意**: 检测到潜在循环模式 (置信度: {loop_result.confidence:.2f})\n\n"
+                            f"原因: {loop_result.reason}\n\n"
+                            f"请改变策略：\n"
+                            f"- 如果工具调用失败，尝试不同的参数或路径\n"
+                            f"- 如果已经获得足够信息，直接给出 final_answer\n"
+                            f"- 避免重复相同的操作\n"
+                            f"- 考虑从不同角度解决问题"
+                        )
+                        messages.append({"role": "user", "content": loop_hint})
+                        self.callback.on_warning(
+                            f"检测到潜在循环 (confidence={loop_result.confidence:.2f})，"
+                            f"已注入提示尝试打破循环"
+                        )
+                        logger.warning(
+                            f"ReAct: 循环检测提示 (confidence={loop_result.confidence:.2f}, "
+                            f"reason={loop_result.reason})"
+                        )
+                    # 继续执行，给 LLM 一次改变策略的机会
                 # F4: 每 5 轮压缩 in-run messages，抑制 O(n²) 增长；
                 # F2: 压缩成功时奖励预算（on_compression）
                 before_len = len(messages)

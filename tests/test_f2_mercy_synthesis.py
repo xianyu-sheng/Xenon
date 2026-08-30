@@ -374,6 +374,8 @@ class TestReActIntegration:
             max_iterations=8,
             model_configs={"m1": SimpleNamespace(context_window=1000)},
         )
+        # v0.9.0: 禁用循环检测器，避免测试用例的重复模式被拦截
+        eng._loop_detector.enabled = False
         # monkeypatch _maybe_compact_messages 使其在第 5 轮返回更短列表
         call_count = {"n": 0}
 
