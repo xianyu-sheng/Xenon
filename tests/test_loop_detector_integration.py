@@ -3,15 +3,11 @@
 v0.9.1: 验证 LoopDetector 在 Plan-Execute、Reflection、组合引擎中正常工作
 """
 
-import pytest
-
-from xenon.engine.callbacks import EngineCallback
 from xenon.engine.combined_engines import (
     PlanReactEngine,
     PlanReflectionEngine,
     ReactReflectionEngine,
 )
-from xenon.engine.context import AgentContext
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.reflection_engine import ReflectionEngine
 
@@ -41,7 +37,6 @@ class TestPlanExecuteLoopDetection:
     def test_loop_detector_reset_on_run(self):
         """验证每次 run 都重置循环检测器"""
         engine = PlanExecuteEngine(["mock"])
-        ctx = AgentContext()
 
         # 手动添加一些历史
         engine._loop_detector.add_turn("test", [], None, "thought")

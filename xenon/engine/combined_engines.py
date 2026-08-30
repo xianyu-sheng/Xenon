@@ -416,7 +416,7 @@ class PlanReactEngine(SteeringMixin):
             self._loop_detector.add_turn(
                 output=result,
                 tool_calls=[],  # 工具调用已在 tracker 中
-                error=None if status == "ok" else f"步骤执行失败",
+                error=None if status == "ok" else "步骤执行失败",
                 thought=task[:200],
             )
 
