@@ -216,6 +216,14 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         )
         self.verification_loop._engine = self
         self._verification_enabled = verification_loop
+        # v0.9.1: 循环检测器集成
+        from xenon.engine.loop_detector import LoopDetector
+
+        self._loop_detector = LoopDetector(
+            window_size=3,  # Plan-Execute 步骤数少，窗口更短
+            similarity_threshold=0.80,  # 每步输出差异大，阈值更宽松
+            enabled=True,
+        )
         if system_prompt:
             self.system_prompt = system_prompt
         else:
@@ -286,6 +294,8 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         self._reset_steering()  # mid-task steering：每轮 run 重置队列与消费记录
         self._begin_run()  # P3-Q2: 链路追踪
         self._bind_evidence_ledger(ctx)
+        # v0.9.1: 重置循环检测器
+        self._loop_detector.reset()
 
         # Phase 1: Planning
         logger.info("Plan-Execute Phase 1: 规划中...")
@@ -906,6 +916,44 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             ctx.set(f"step_{step_id}_status", "ok" if outcome.success else "failed")
             self.callback.on_step_done(step_id, outcome.success, outcome.content[:200])
             logger.debug(f"步骤 {step_id} 完成: {outcome.content[:100]}")
+
+            # v0.9.1: 循环检测 - 记录步骤执行状态
+            self._loop_detector.add_turn(
+                output=outcome.content,
+                tool_calls=[],  # Plan-Execute 工具调用已在 tracker 中
+                error=outcome.error if not outcome.success else None,
+                thought=step_task,  # 用步骤任务作为"思考"内容
+            )
+
+            # v0.9.1: 循环检测 - 检查是否陷入循环
+            loop_result = self._loop_detector.check()
+            if loop_result.is_loop:
+                if loop_result.confidence >= 0.9:
+                    # 高置信度：终止执行
+                    logger.warning(
+                        "Plan-Execute 循环检测: 步骤 %d 检测到循环 (置信度 %.2f)，终止执行",
+                        step_id,
+                        loop_result.confidence,
+                    )
+                    self.callback.on_warning(
+                        f"检测到步骤执行陷入循环（{loop_result.reason}），已终止"
+                    )
+                    break
+                elif loop_result.confidence >= 0.7:
+                    # 中等置信度：注入提示
+                    hint = (
+                        f"\n\n⚠️ 循环检测提示: {loop_result.reason}\n"
+                        f"请尝试不同的方法，避免重复相同的操作。"
+                    )
+                    # 注入到下一个 LLM 步骤的 feedback 中
+                    if i < len(steps) and not steps[i].get("tool"):
+                        logger.info(
+                            "Plan-Execute 循环检测: 注入提示到下一步骤 (置信度 %.2f)",
+                            loop_result.confidence,
+                        )
+                        # 修改下一步的任务描述
+                        steps[i] = {**steps[i], "task": steps[i].get("task", "") + hint}
+
             if ctx.get("_task_cancelled"):
                 self.callback.on_warning("用户取消任务，停止后续计划步骤")
                 break

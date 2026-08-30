@@ -113,6 +113,14 @@ class ReflectionEngine(BaseEngine):
             if reviewer_model_priority
             else list(model_priority)
         )
+        # v0.9.1: 循环检测器集成
+        from xenon.engine.loop_detector import LoopDetector
+
+        self._loop_detector = LoopDetector(
+            window_size=3,  # Reflection 轮数少，窗口更短
+            similarity_threshold=0.90,  # 同任务输出应相似，阈值更严格
+            enabled=True,
+        )
 
     def run(
         self,
@@ -140,6 +148,8 @@ class ReflectionEngine(BaseEngine):
         self._ctx_mgr = ctx_mgr  # F4
         self._begin_run()  # P3-Q2: 链路追踪
         self._bind_evidence_ledger(ctx)
+        # v0.9.1: 重置循环检测器
+        self._loop_detector.reset()
 
         # §8.23.4/10 / E4：版本回退——跟踪历史最佳（按 score）输出。
         # 若后续修正轮把输出改得更差（reviewer 误判越改越差，§8.23.10），
@@ -186,12 +196,53 @@ class ReflectionEngine(BaseEngine):
             # 误杀高分输出（{pass:false,score:9} 被否决）。改为仅看 score。
             passed = score >= self.pass_threshold
 
-            # 更新最佳版本
+            # Update 最佳版本
             if score > best_score:
                 best_score = score
                 best_output = output
 
             self.callback.on_review(score, passed, review.get("feedback", "")[:200])
+
+            # v0.9.1: 循环检测 - 记录执行-审查轮次
+            self._loop_detector.add_turn(
+                output=output,
+                tool_calls=[],  # Reflection 的 executor 不直接调用工具
+                error=None if passed else f"score={score}, feedback={feedback[:100]}",
+                thought=feedback[:200] if feedback else "",
+            )
+
+            # v0.9.1: 循环检测 - 检查是否陷入循环
+            loop_result = self._loop_detector.check()
+            if loop_result.is_loop:
+                if loop_result.confidence >= 0.9:
+                    # 高置信度：终止循环，返回最佳版本
+                    logger.warning(
+                        "Reflection 循环检测: 第 %d 轮检测到循环 (置信度 %.2f)，返回最佳版本",
+                        round_num,
+                        loop_result.confidence,
+                    )
+                    self.callback.on_warning(
+                        f"检测到修正陷入循环（{loop_result.reason}），返回最佳版本（评分 {best_score}）"
+                    )
+                    final = best_output if best_output is not None else output
+                    marked = (
+                        f"⚠️ 检测到循环（{loop_result.reason}），已终止修正并返回最佳版本"
+                        f"（评分 {best_score}/{self.pass_threshold}）\n\n{final}"
+                    )
+                    self.finalize_evidence(context=ctx, output=marked)
+                    self.callback.on_finish(final)
+                    return marked
+                elif loop_result.confidence >= 0.7:
+                    # 中等置信度：注入提示到反馈中
+                    hint = (
+                        f"\n\n⚠️ 循环检测提示: {loop_result.reason}\n"
+                        f"请尝试完全不同的方法或角度来改进，避免重复相同的修改。"
+                    )
+                    feedback = (feedback + hint) if feedback else hint
+                    logger.info(
+                        "Reflection 循环检测: 注入提示到反馈 (置信度 %.2f)",
+                        loop_result.confidence,
+                    )
 
             if passed:
                 logger.info(f"审查通过 (分数: {score})")

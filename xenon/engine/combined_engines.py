@@ -268,6 +268,14 @@ class PlanReactEngine(SteeringMixin):
         self.verification_loop._engine = self
         self._last_tracker: ToolExecutionTracker | None = None
         self.last_model_used: str | None = None
+        # v0.9.1: 循环检测器集成（组合层）
+        from xenon.engine.loop_detector import LoopDetector
+
+        self._loop_detector = LoopDetector(
+            window_size=5,  # 组合引擎步骤多，窗口稍大
+            similarity_threshold=0.85,
+            enabled=True,
+        )
 
     def _finalize_plan_react(self, ctx: AgentContext, output: str) -> str:
         if ctx.get("_evidence_ledger") is None:
@@ -290,6 +298,8 @@ class PlanReactEngine(SteeringMixin):
         aggregate = ToolExecutionTracker()
         self._last_tracker = aggregate
         self.planner._ctx_mgr = ctx_mgr
+        # v0.9.1: 重置循环检测器
+        self._loop_detector.reset()
 
         try:
             plan = self.planner._plan(user_input, ctx)
@@ -401,6 +411,27 @@ class PlanReactEngine(SteeringMixin):
             ctx.set(f"step_{step_id}_result", result)
             ctx.set(f"step_{step_id}_status", status)
             self.callback.on_step_done(step_id, status == "ok", result[:200])
+
+            # v0.9.1: 循环检测 - 记录步骤执行
+            self._loop_detector.add_turn(
+                output=result,
+                tool_calls=[],  # 工具调用已在 tracker 中
+                error=None if status == "ok" else f"步骤执行失败",
+                thought=task[:200],
+            )
+
+            # v0.9.1: 循环检测 - 检查步骤级循环
+            loop_result = self._loop_detector.check()
+            if loop_result.is_loop and loop_result.confidence >= 0.9:
+                logger.warning(
+                    "Plan-React 循环检测: 步骤 %d 检测到循环 (置信度 %.2f)，终止执行",
+                    step_id,
+                    loop_result.confidence,
+                )
+                self.callback.on_warning(
+                    f"检测到步骤执行陷入循环（{loop_result.reason}），已终止"
+                )
+                break
 
         # v0.8.3: 学习式验证循环——步骤执行完毕后，若需要验证则进入修复循环
         self.verification_loop.reset()
@@ -521,6 +552,14 @@ class _ReflectionCombination(SteeringMixin):
 
         self.verification_loop = VerificationLoop(max_rounds=8)
         self.verification_loop._engine = self
+        # v0.9.1: 循环检测器集成（组合层）
+        from xenon.engine.loop_detector import LoopDetector
+
+        self._loop_detector = LoopDetector(
+            window_size=4,  # Reflection 组合：审查-修复循环
+            similarity_threshold=0.85,
+            enabled=True,
+        )
 
     def _finalize_combined(self, ctx: AgentContext, output: str) -> str:
         """Close the composite lifecycle at one shared delivery boundary."""
@@ -648,6 +687,27 @@ class _ReflectionCombination(SteeringMixin):
         if self.repairer.last_model_used:
             self.last_model_used = self.repairer.last_model_used
 
+        # v0.9.1: 循环检测 - 记录修复轮次
+        self._loop_detector.add_turn(
+            output=repaired_output,
+            tool_calls=[],
+            error=None if repair_changed_state else "修复未产生状态变更",
+            thought=_review_feedback(review)[:200],
+        )
+
+        # v0.9.1: 循环检测 - 检查审查-修复循环
+        loop_result = self._loop_detector.check()
+        if loop_result.is_loop and loop_result.confidence >= 0.85:
+            logger.warning(
+                "Reflection组合 循环检测: 审查-修复检测到循环 (置信度 %.2f)，返回当前结果",
+                loop_result.confidence,
+            )
+            self.callback.on_warning(
+                f"检测到审查-修复陷入循环（{loop_result.reason}），已终止并返回当前结果"
+            )
+            # 直接返回修复结果，跳过后续审查和验证循环
+            return self._finalize_combined(ctx, repaired_output or initial_output)
+
         if self.review_rounds > 1:
             try:
                 post_review = self.reflector.review_existing(
@@ -769,6 +829,8 @@ class PlanReflectionEngine(_ReflectionCombination):
         ctx = context or AgentContext()
         self._reset_steering()  # mid-task steering：每轮 run 重置
         initial = self.planner.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
+        # v0.9.1: 重置循环检测器
+        self._loop_detector.reset()
         return self._review_and_repair(
             user_input,
             initial,
@@ -844,6 +906,8 @@ class ReactReflectionEngine(_ReflectionCombination):
         ctx = context or AgentContext()
         self._reset_steering()  # mid-task steering：每轮 run 重置
         initial = self.reactor.run(user_input, context=ctx, ctx_mgr=ctx_mgr)
+        # v0.9.1: 重置循环检测器
+        self._loop_detector.reset()
         return self._review_and_repair(
             user_input,
             initial,
