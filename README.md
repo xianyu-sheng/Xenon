@@ -13,7 +13,8 @@ Xenon 不是又一个 AI 编程助手，而是让 Agent **可信地运行**所�
 - 🛡️ **执行隔离边界**：路径围栏、命令注入拦截、权限门 — 所有副作用经同一收敛点
 - 🔄 **7 种推理范式**：ReAct / Plan-Execute / Reflection 及其组合 — 可替换、可观察
 - 📊 **可复现评测**：SWE-bench Lite **40.0%** 通过率（同模型 +6.7pp），交互与评测共享约束
-- 🎯 **生产就绪**：v0.8.5 经系统性边界探测，所有逃逸路径均已修复并锁定回归测试
+- 🧠 **运行韧性（v0.9.x）**：智能检查点 + 语义边界续写、全引擎循环检测、空洞回答识别
+- 🎯 **生产就绪**：v0.8.5 修复全部沙箱逃逸路径并锁定回归测试，v0.9.1 持续加固
 
 可以当命令行工具直接用，也可以当库嵌入你的 Agent 评测流程。Python 3.10+。
 
@@ -21,7 +22,7 @@ Xenon 不是又一个 AI 编程助手，而是让 Agent **可信地运行**所�
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml/badge.svg)](https://github.com/xianyu-sheng/Xenon/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/xianyu-sheng/Xenon/branch/main/graph/badge.svg)](https://codecov.io/gh/xianyu-sheng/Xenon)
-[![release v0.8.5](https://img.shields.io/badge/release-v0.8.5-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.8.5)
+[![release v0.9.1](https://img.shields.io/badge/release-v0.9.1-orange.svg)](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.9.1)
 
 代码托管：
 [GitHub](https://github.com/xianyu-sheng/Xenon) ·
@@ -74,6 +75,21 @@ Xenon 要回答的核心问题不是「模型能不能写代码」，而是「**
 
 详见 [v0.8.5 Release Notes](https://github.com/xianyu-sheng/Xenon/releases/tag/v0.8.5)
 
+### 运行韧性与感知（v0.9.x）
+
+- 🩹 **智能检查点与续写**：网络中断或切换模型时保留已生成内容，按语义边界
+  （函数 / 代码块 / 标题 / 句子）回滚到完整位置后续写，避免重复生成
+- 🔁 **全引擎循环检测**：6 个需要循环检测的引擎统一接入 LoopDetector，
+  基于滑动窗口与相似度阈值识别「一直出错一直出错」的重复循环并主动打断
+- 🕳️ **空洞回答检测**：识别「描述代替执行 / 套话堆砌 / 答非所问」，
+  配合 BudgetManager 给予补救轮次而非直接采信
+- 🗺️ **项目结构扫描（DirectoryScout）**：引擎启动前静默扫描项目根并注入
+  文件树，让模型基于真实结构而非凭空猜测路径（不跟随符号链接）
+- 👁️ **视觉桥与剪贴板监视**：`Ctrl+Alt+V` 抓取剪贴板截图，经模型池中的
+  多模态模型生成描述后注入对话，为纯文本模型补上「眼睛」；懒加载、自动降级
+- 🧭 **LSP 代码导航**：基于 Jedi 的定义 / 引用导航，以及 GitHub 仓库检索
+  与摘要分析工具
+
 ---
 
 ## 架构
@@ -87,10 +103,14 @@ Xenon 要回答的核心问题不是「模型能不能写代码」，而是「**
 │  (repl/)     11 个命令组（/mode /cache /mcp ...）│
 ├─────────────────────────────────────────────────┤
 │  引擎层  7 种推理范式（BaseEngine + registry）     │  ← 推理策略
-│  工具层  10 个 tool_families + 7 阶段管线         │  ← 文件/代码/网络/搜索/MCP...
+│  工具层  10 个 tool_families + 7 阶段管线         │  ← 文件/代码/网络/搜索/GitHub/LSP/MCP
 │  约束层  ToolRuntime 工作区绑定 + 路径围栏         │  ← 副作用边界（交互/评测同源）
 │           + 权限门 + 命令注入拦截                  │
 │  验证层  Evidence Runtime（Claim vs Evidence）    │  ← 结果凭什么可信
+│           + HollowDetector 空洞回答识别           │
+│  韧性层  Checkpoint 检查点 + 语义边界续写         │  ← 中断恢复、抑制重复循环
+│           + 全引擎 LoopDetector 循环检测          │
+│  感知层  VisionBridge 视觉桥 + 剪贴板图片监视      │  ← 多模态「眼睛」（截图→描述→推理）
 │  记忆层  4 作用域 (user/project-local/project-    │  ← 跨会话状态管理
 │           shared/session)                        │
 │  MCP 层  客户端（stdio/HTTP/SSE）                │  ← 外部工具协议
@@ -125,11 +145,13 @@ Xenon 要回答的核心问题不是「模型能不能写代码」，而是「**
 ### 安装
 
 ```bash
-# 从 PyPI 安装（推荐）
-pip install -U xenon-agent
+# 从 GitHub 安装指定版本
+pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.9.1"
 
-# 或从 GitHub 最新版本
-pip install -U "git+https://github.com/xianyu-sheng/Xenon.git@v0.8.5"
+# 或克隆源码后本地安装
+git clone https://github.com/xianyu-sheng/Xenon.git
+cd Xenon
+pip install -e .
 ```
 
 需要 Python 3.10+。
@@ -175,11 +197,14 @@ pytest -q -m "not live"
 | 特性 | 说明 |
 |------|------|
 | **7 种推理引擎** | ReAct / Plan-Execute / Reflection / Plan-ReAct / Plan-Reflection / ReAct-Reflection / Direct，通过 `register_engine()` 扩展 |
-| **10 个工具族** | 文件读写、代码搜索、git 操作、shell 命令、网络请求、MCP 集成等，`register_tool_handler()` 注册新工具 |
-| **12 家 LLM Provider** | OpenAI / Anthropic / DeepSeek / Google / Ark / SiliconFlow 等，OpenAI 兼容协议自动适配 |
+| **10 个工具族** | 文件读写、代码搜索、git/GitHub 操作、LSP 导航、shell 命令、网络请求、MCP 集成等，`register_tool_handler()` 注册新工具 |
+| **12 家 LLM Provider** | OpenAI / Anthropic / DeepSeek / 火山 Ark / Google / 智谱 / 通义 / Moonshot / 百川 / MiniMax / Ollama / 小米，OpenAI 兼容协议自动适配 |
 | **4 作用域记忆** | user / project-local / project-shared / session，加权检索 + token 预算自动压缩 |
 | **MCP 客户端** | stdio / HTTP / SSE 三种传输方式，自动发现外部工具并注入 Agent |
 | **Cache Rails** | 按模型和执行契约维护追加式提示词轨道，97%+ 缓存命中率（`/cache` 和 `/cost` 查看详情） |
+| **智能检查点** | 周期性快照 + 部分内容捕获，按语义边界续写，网络中断 / 切模型可恢复 |
+| **循环与空洞检测** | 全引擎 LoopDetector 打断重复循环；HollowDetector 识别空洞回答并触发补救 |
+| **视觉桥** | 剪贴板截图热键 `Ctrl+Alt+V`，多模态模型生成描述后注入对话 |
 | **工具安全层** | 权限确认、超时控制、断路器、证据闸门、结构化结果、中断恢复 |
 | **终端界面** | 多行输入、固定状态栏、`Ctrl+O` 折叠详情、运行状态实时展示 |
 | **Agent Skills** | `SKILL.md` 驱动的技能系统，支持导入和自定义 |
@@ -204,34 +229,46 @@ pytest -q -m "not live"
 
 ```
 xenon/
+├── main.py            # CLI 入口（xenon 命令）
 ├── engine/            # 推理引擎（7 种范式 + registry）
-│   ├── base.py       # BaseEngine ABC
-│   ├── registry.py   # EngineSpec + register_engine()
-│   ├── verification_loop.py  # 跨轮次验证循环（v0.8.3）
-│   ├── react_engine.py
-│   ├── plan_execute_engine.py
-│   ├── reflection_engine.py
-│   └── combined_engines.py
+│   ├── base.py        # BaseEngine ABC
+│   ├── registry.py    # EngineSpec + register_engine()
+│   ├── builtin_engines.py  # 内置 7 引擎的注册装配
+│   ├── react_engine.py / plan_execute_engine.py / reflection_engine.py
+│   ├── combined_engines.py  # plan-react / plan-reflection / react-reflection
+│   ├── plan_dag.py / plan_dag_executor.py  # Plan-Execute DAG 执行器
+│   ├── verification_loop.py  # 跨轮次验证循环
+│   ├── checkpoint_manager.py # 检查点快照
+│   ├── loop_detector.py      # 循环检测
+│   ├── hollow_detector.py    # 空洞回答检测
+│   ├── scout.py / scheduler.py / strategy_guide.py
+│   └── tool_runtime.py      # 工作区运行时（围栏绑定）
 ├── nodes/             # 工具层
-│   ├── tool_families/ # 10 个工具族（file_mutation / search / git / command / web / mcp...）
+│   ├── tool_families/ # 10 个工具族（file_mutation / read_only_files /
+│   │                  #   code_tools / git_tools / github_tools / lsp /
+│   │                  #   web_tools / mcp_tools / utility / result_filtering）
 │   ├── tool_registry.py
 │   ├── tool_executor.py
 │   └── tool_node.py
+├── tools/             # 感知桥接
+│   ├── vision_bridge.py      # 多模态视觉桥
+│   └── clipboard_monitor.py  # 剪贴板图片监视（Ctrl+Alt+V）
 ├── memory/            # 记忆系统
 │   ├── service.py    # 4 作用域 CRUD
 │   ├── retrieval.py  # 加权检索
 │   └── compiler.py   # token 预算压缩
 ├── mcp/               # MCP 客户端（transport / client / registry）
+├── llm_clients/       # Provider 包（当前实现位于 utils/llm_client.py）
 ├── repl/              # 终端交互层
 │   ├── command_groups/ # 11 个命令组
 │   ├── provider_registry.py
 │   └── model_pool.py
-├── utils/             # LLM 客户端、缓存、原子写入
-└── repl.py            # 入口
+└── utils/             # llm_client、缓存、语义边界、原子写入、LSP provider
 evals/
 ├── swebench_xenon.py  # SWE-bench 评测适配器
 ├── swebench_runtime.py # 官方运行时（Docker 容器）
-└── results/           # 评测结果存档
+├── results/           # 评测结果与报告存档
+└── reports/official/  # 官方 harness 运行报告
 ```
 
 ## 使用场景
@@ -250,9 +287,15 @@ evals/
 | [架构设计](docs/ARCHITECTURE.md) | 缓存、路由、工具、记忆与恢复机制 |
 | [快速上手](docs/GUIDE.md) | 安装、配置、模型与执行模式 |
 | [DeepSeek 缓存](docs/deepseek-guide.md) | Cache Rails、usage、费用与诊断 |
+| [Ark Provider](docs/ARK_PROVIDER.md) | 火山方舟接入与模型配置 |
 | [记忆系统](docs/MEMORY_SYSTEM_SPEC.md) | 作用域、用户确认、容量治理与回滚 |
 | [Agent Skills](docs/AGENT_SKILLS.md) | `SKILL.md` 发现、加载与安全边界 |
 | [TUI 操作](docs/TUI.md) | 输入区、状态栏与快捷键 |
+| [运维指南](docs/OPERATION_GUIDE.md) | 运行、检查点、故障恢复与诊断 |
+| [集成清单](docs/INTEGRATIONS.md) | 可接入的 Provider、工具与平台 |
+| [评测结果](docs/EVAL_RESULTS.md) | 真实跑测数据、缓存与成本证据 |
+| [评测协议](docs/XENON_EVAL_PROTOCOL.md) | 评测方法、基准目录与复现要求 |
+| [横向对比](docs/COMPARISON.md) | 与其他 Agent 框架 / 生态的对比 |
 | [贡献指南](CONTRIBUTING.md) | Issue / PR 流程、代码规范 |
 | [更新日志](CHANGELOG.md) | 各版本功能与验证结果 |
 
