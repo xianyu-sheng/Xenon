@@ -113,3 +113,28 @@ def _isolate_chat_completion_mock():
     _engine_base.chat_completion = _ORIG_ENGINE_CHAT
     _llm_client.chat_completion = _ORIG_UTIL_CHAT
     _llm_client.chat_completion_stream = _ORIG_UTIL_STREAM
+
+
+# ── CI 诊断：失败用例写入 Job Summary（无需 admin 权限翻日志）──────────
+_failed_tests: list[str] = []
+
+
+def pytest_runtest_logreport(report):
+    """Record failed tests so the GitHub Actions run page lists them."""
+    if report.failed:
+        entry = f"- `{report.nodeid}`"
+        if report.when != "call":
+            entry += f" ({report.when})"
+        if entry not in _failed_tests:
+            _failed_tests.append(entry)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    summary_path = _os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path or not _failed_tests:
+        return
+    try:
+        with open(summary_path, "a", encoding="utf-8") as handle:
+            handle.write("## Failed tests\n" + "\n".join(_failed_tests) + "\n")
+    except OSError:  # pragma: no cover - summary is best effort
+        pass
