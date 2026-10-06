@@ -186,8 +186,17 @@ class TestEndToEnd:
 
         _patch_chat(monkeypatch, responder)
         eng = ReActEngine(["m1"], max_iterations=4)
-        eng._input_requires_tools = lambda u: True
-        out = eng.run("帮我分析", AgentContext())
+        # 0.9.x：工具需求由本轮契约决定，直接在边界给出级别（spawn_agent 需 3）。
+        from xenon.repl.execution_policy import ExecutionLevel
+
+        ctx = AgentContext({})
+        ctx.update(
+            {
+                "_execution_level": int(ExecutionLevel.EXECUTE),
+                "_execution_reason": "测试：允许子 Agent 委派",
+            }
+        )
+        out = eng.run("帮我分析", ctx)
 
         # 父 tracker 记录了 spawn_agent
         assert any(c.tool_name == "spawn_agent" for c in eng._last_tracker.calls)

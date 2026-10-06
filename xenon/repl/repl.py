@@ -38,7 +38,6 @@ from xenon.repl.execution_policy import (
     ExecutionLevel,
     ExecutionPolicy,
     bind_execution_boundary,
-    classify_execution_policy,
 )
 from xenon.repl.turn_contract import TurnContract, build_turn_contract
 from xenon.repl.input_buffer import PastedTextStore, _ShiftTabSignal
@@ -2180,13 +2179,12 @@ class REPL:
         """
         policy = execution_policy
         if policy is None:
-            # 已迁移调用方（REPL）直接传策略；库/测试入口回退到本轮契约，
-            # 最后才重新分类——避免多层各算一份导致的结论不一致。
-            turn_contract = self.agent_context.get("_turn_contract")
-            if turn_contract is not None:
-                policy = turn_contract.to_execution_policy()
-        if policy is None:
-            policy = classify_execution_policy(user_input, intent=intent)
+            # 契约唯一化：入口惰性构建一次（缺失时正则回退），不再逐层重算。
+            from xenon.repl.turn_contract import ensure_turn_contract
+
+            policy = ensure_turn_contract(
+                self.agent_context, user_input, fallback_intent=intent
+            ).to_execution_policy()
         self.agent_context.update(
             {
                 "_execution_level": int(policy.level),
@@ -3006,7 +3004,7 @@ class REPL:
 
     # ── 工具需求检测 ──────────────────────────────────────────
     # Deprecated pattern inventory retained for compatibility and diagnostics.
-    # The authoritative decision is ``classify_execution_policy`` below.
+    # The authoritative decision is the turn contract below.
     _TOOL_PATTERNS: list[re.Pattern[str]] = [
         # 文件写入/创建/保存
         re.compile(r"(?:写入|创建|保存|新建|生成|输出).{0,20}(?:文件|到|至|为)", re.I),
@@ -3101,7 +3099,9 @@ class REPL:
         # Intent does not authorize side effects.  In particular, write_code
         # defaults to returning code in chat unless the user explicitly asks
         # Xenon to persist or execute it.
-        return classify_execution_policy(text, intent=intent).requires_tools
+        from xenon.repl.turn_contract import build_turn_contract
+
+        return build_turn_contract(text, fallback_intent=intent).requires_tools
 
     def _has_mcp_tools(self) -> bool:
         """检查是否有 MCP 服务器可用（含已连接和惰性）。"""

@@ -1428,10 +1428,10 @@ class ReActEngine(BaseEngine):
         # 防止权限提升：父 Agent 只有只读权限时，子 Agent 不应该能执行写操作
         execution_level = context.get("_execution_level")
         if execution_level is not None:
-            sub_ctx["_execution_level"] = execution_level
+            sub_ctx.set("_execution_level", execution_level)
         execution_reason = context.get("_execution_reason")
         if execution_reason is not None:
-            sub_ctx["_execution_reason"] = execution_reason
+            sub_ctx.set("_execution_reason", execution_reason)
 
         # 超时控制：在线程池中执行 sub.run()
         if timeout and timeout > 0:
@@ -1526,10 +1526,10 @@ class ReActEngine(BaseEngine):
             # P1 安全：继承父 Agent 的执行权限级别（批量并行任务）
             execution_level = context.get("_execution_level")
             if execution_level is not None:
-                sub_ctx["_execution_level"] = execution_level
+                sub_ctx.set("_execution_level", execution_level)
             execution_reason = context.get("_execution_reason")
             if execution_reason is not None:
-                sub_ctx["_execution_reason"] = execution_reason
+                sub_ctx.set("_execution_reason", execution_reason)
 
             try:
                 if timeout and timeout > 0:
@@ -1845,37 +1845,26 @@ class ReActEngine(BaseEngine):
         ctx: AgentContext,
         original_user_input: str,
     ) -> tuple[str | None, int]:
-        """Read intent/level from the single turn contract; legacy fallback only.
+        """Read the single turn contract; build it lazily at this boundary only.
 
-        已迁移的调用方（REPL）会在 ctx 里放 ``_turn_contract``；此时引擎
-        只读契约，不再重新分类——多层各自重算是历史 bug 的根因。
+        已迁移的调用方（REPL）会在 ctx 里放 ``_turn_contract``；没有时
+        ``ensure_turn_contract`` 在本边界构建一次（正则回退）并写回，
+        引擎内部不再重新分类。
         """
         from xenon.repl.prompt_optimizer import detect_intent
-        from xenon.repl.execution_policy import classify_execution_policy
+        from xenon.repl.turn_contract import ensure_turn_contract
 
-        turn_contract = ctx.get("_turn_contract")
+        contract = ensure_turn_contract(ctx, original_user_input)
+        intent = contract.intent or detect_intent(original_user_input)
         active_level = ctx.get("_execution_level")
-        contract_intent = getattr(turn_contract, "intent", None)
-        intent = contract_intent or detect_intent(original_user_input)
         if active_level is not None:
             return intent, int(active_level)
-        if turn_contract is not None:
-            return intent, int(turn_contract.level)
-        return intent, int(
-            classify_execution_policy(original_user_input, intent=intent).level
-        )
+        return intent, int(contract.level)
 
     @staticmethod
     def _input_requires_tools(text: str) -> bool:
-        """Use the same side-effect boundary as the REPL router."""
-        from xenon.repl.execution_policy import (
-            classify_execution_policy,
-            strip_execution_boundary,
-        )
-        from xenon.repl.prompt_optimizer import detect_intent
+        """Use the same side-effect boundary as the REPL router (legacy helper)."""
+        from xenon.repl.execution_policy import strip_execution_boundary
+        from xenon.repl.turn_contract import build_turn_contract
 
-        text = strip_execution_boundary(text)
-        return classify_execution_policy(
-            text,
-            intent=detect_intent(text),
-        ).requires_tools
+        return build_turn_contract(strip_execution_boundary(text)).requires_tools

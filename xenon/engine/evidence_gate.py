@@ -91,27 +91,20 @@ class EvidenceGate(ABC):
 
 # ── 纯校验函数（从 PlanExecuteEngine 提取，单一真相源）───────
 def task_requires_write(user_input: str, ctx: Any | None = None) -> bool:
-    """判断任务是否需要写操作（基于执行级别，非领域关键词枚举）。
+    """判断任务是否需要写操作（基于执行契约，非领域关键词枚举）。
 
     WRITE(2)/EXECUTE(3) 级别意味着用户要求文件变更或命令执行；
     ANSWER_ONLY(0)/READ_ONLY(1) 级别不需要落盘。
 
-    本轮已有执行契约（``ctx["_execution_level"]``，由 REPL 构建）时以契约
-    为准，不再用不同参数独立重算——多层重算是历史 bug 的根因之一。
+    契约是唯一来源：已有 ``ctx["_turn_contract"]`` 时直接读取；缺失时在
+    本边界惰性构建一次（正则回退）并写回 ctx，不再逐层用不同参数重算。
     """
     try:
-        from xenon.repl.execution_policy import (
-            ExecutionLevel,
-            classify_execution_policy,
-        )
+        from xenon.repl.turn_contract import ensure_turn_contract
 
-        if ctx is not None:
-            level = ctx.get("_execution_level")
-            if level is not None:
-                return int(level) >= int(ExecutionLevel.WRITE)
-        policy = classify_execution_policy(user_input)
-        return int(policy.level) >= int(ExecutionLevel.WRITE)
-    except Exception:  # 分类失败时保守视为需要写（SWE-bench 场景默认）
+        contract = ensure_turn_contract(ctx, user_input)
+        return bool(contract.requires_write)
+    except Exception:  # 契约构建失败时保守视为需要写（SWE-bench 场景默认）
         logger.warning("任务写操作判定失败，保守视为需要写")
         return True
 

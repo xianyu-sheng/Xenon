@@ -77,6 +77,10 @@ class TurnContract:
         return self.level >= ExecutionLevel.READ_ONLY
 
     @property
+    def requires_write(self) -> bool:
+        return self.level >= ExecutionLevel.WRITE
+
+    @property
     def allows_write(self) -> bool:
         return self.level >= ExecutionLevel.WRITE and not self.signals.no_write
 
@@ -187,6 +191,77 @@ def _constraint_contract(
         evidence=signals.negation_snippets,
         signals=signals,
     )
+
+
+def _contract_from_level(level_value: int, reason: str = "") -> TurnContract:
+    """Synthesize a minimal contract from a stored execution level.
+
+    用于兼容只设置了 ``_execution_level`` 的旧调用方：仍以该级别为准，
+    不再用 user_input 重新分类。
+    """
+
+    level = ExecutionLevel(int(level_value))
+    return TurnContract(
+        level=level,
+        intent=None,
+        operations=_operations_for_level(level),
+        proposed_level=level,
+        confidence=1.0,
+        degraded=True,
+        ask_required=False,
+        reason=reason or "由 _execution_level 合成（无完整契约）",
+        evidence=(),
+        signals=ExecutionSignals(),
+    )
+
+
+def ensure_turn_contract(
+    ctx: Any,
+    text: str,
+    *,
+    classifier: IntentClassifierLike | None = None,
+    fallback_intent: str | None = None,
+) -> TurnContract:
+    """Return the turn's contract, building it once at the given boundary.
+
+    This is the **only** lazy-build path: engines and gates called without a
+    contract get one built here (regex-only unless a classifier is supplied),
+    stored back into ``ctx`` so sibling layers reuse it, and never re-classify
+    independently.  When ``ctx`` already carries an ``_execution_level`` but no
+    contract, a minimal contract is synthesized from that level.
+    """
+
+    if ctx is not None:
+        existing = ctx.get("_turn_contract")
+        if existing is not None:
+            return existing
+        level = ctx.get("_execution_level")
+        if level is not None:
+            contract = _contract_from_level(
+                int(level), str(ctx.get("_execution_reason") or "")
+            )
+            ctx.update(
+                {
+                    "_turn_contract": contract,
+                    "_execution_reason": contract.reason,
+                }
+            )
+            return contract
+
+    contract = build_turn_contract(
+        text,
+        classifier=classifier,
+        fallback_intent=fallback_intent,
+    )
+    if ctx is not None:
+        ctx.update(
+            {
+                "_turn_contract": contract,
+                "_execution_level": int(contract.level),
+                "_execution_reason": contract.reason,
+            }
+        )
+    return contract
 
 
 def build_turn_contract(

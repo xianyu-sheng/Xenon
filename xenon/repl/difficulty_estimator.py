@@ -278,9 +278,9 @@ class DifficultyEstimator:
 
     @staticmethod
     def _needs_tools(text: str, intent: str | None) -> bool:
-        from xenon.repl.execution_policy import classify_execution_policy
+        from xenon.repl.turn_contract import build_turn_contract
 
-        return classify_execution_policy(text, intent=intent).requires_tools
+        return build_turn_contract(text, fallback_intent=intent).requires_tools
 
     @staticmethod
     def _estimate_tokens(

@@ -808,7 +808,6 @@ class TestToolDetection:
         assert REPL._detect_tool_need("什么是快速排序？") is False
         assert REPL._detect_tool_need("解释一下 Python 的装饰器") is False
         assert REPL._detect_tool_need("帮我分析这段代码的逻辑") is False
-        assert REPL._detect_tool_need("今天天气怎么样") is False
         assert REPL._detect_tool_need("how does machine learning work") is False
         assert REPL._detect_tool_need("你好") is False
 
@@ -897,8 +896,9 @@ class TestToolDetection:
         assert REPL._detect_tool_need("谢谢", intent="chat") is False
         # explain 意图 + 无工具关键词 → False
         assert REPL._detect_tool_need("解释一下装饰器", intent="explain") is False
-        # 无 intent 时，天气等实时查询不触发（无天气正则，避免误判）
-        assert REPL._detect_tool_need("今天天气怎么样", intent=None) is False
+        # 无 intent 时契约仍会推断 regex 意图：天气属于 query → 需要工具，
+        # 与 REPL 实际路由（自动切换到 ReAct）保持一致。
+        assert REPL._detect_tool_need("今天天气怎么样", intent=None) is True
 
     @pytest.mark.parametrize(
         "text",
