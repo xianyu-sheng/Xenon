@@ -286,18 +286,46 @@ class LLMIntentClassifier:
         ]
 
         # 调用 LLM（使用低 temperature 确保稳定输出）
+        # 推理模型需要更多 tokens（隐藏推理阶段会消耗预算）；1000 会导致
+        # JSON 被截断后在客户端反复修复，2048 让完整分类结果的占比更高。
         try:
             response_text = chat_completion(
                 model_id=self.model,  # 第一个参数是 model_id
                 messages=messages,
                 temperature=0.1,
-                max_tokens=1000,  # 推理模型需要更多 tokens（隐藏推理阶段消耗大量 tokens）
+                max_tokens=2048,
             )
         except Exception as e:
             raise RuntimeError(f"LLM 调用失败: {e}") from e
 
-        # 解析响应（期望 JSON 格式）
-        return self._parse_response(response_text)
+        # 解析（期望 JSON 格式）
+        try:
+            return self._parse_response(response_text)
+        except ValueError:
+            # 一次修复重试：把非法输出回传给模型，要求只输出 JSON。
+            logger.warning("意图分类响应非合法 JSON，发起一次修复重试")
+            retry_messages = [
+                *messages,
+                {"role": "assistant", "content": response_text[:600]},
+                {
+                    "role": "user",
+                    "content": (
+                        "上面的输出不是合法 JSON。请只输出一个 JSON 对象，字段为 "
+                        "intent / operations / chat_only / confidence / reasoning，"
+                        "不要任何解释、前后缀或多余字符。"
+                    ),
+                },
+            ]
+            try:
+                repaired_text = chat_completion(
+                    model_id=self.model,
+                    messages=retry_messages,
+                    temperature=0.0,
+                    max_tokens=512,
+                )
+            except Exception as e:
+                raise RuntimeError(f"LLM 修复重试失败: {e}") from e
+            return self._parse_response(repaired_text)
 
     @staticmethod
     def _build_system_prompt() -> str:
@@ -335,6 +363,10 @@ class LLMIntentClassifier:
    - 「写一个函数/脚本给我看看」「给我一段代码」不等于文件操作；
      只有用户指定了文件/路径/保存目标（写到 X、输出到 X、保存到 X、在 X 里加）
      才填 write/create。
+   - 删除已有内容用 delete，移动/复制/重命名用 move；修改已有文件用 write。
+   - **征询解释不是施工**：句中出现「处理/解决/修复/优化」等词，但用户在问
+     原因、思路、建议、方案或要求讲解时（如「告诉我原因」「思路是什么」
+     「有什么建议」「怎么解决」），operations 必须为空，intent 选 explain/debug/refactor。
    - 用户明确禁止某项操作（不要写文件/不要修改/不要运行）时，对应 operation
      不得出现，且 chat_only 置为 true。
    - query/research 通常需要 read 或 network；debug/refactor 通常需要 read，
@@ -343,8 +375,11 @@ class LLMIntentClassifier:
 4. **边界情况**：
    - "写一个函数" → intent=write_code, operations=[]
    - "把结果写到 output.txt" → intent=write_code，operations=["create"]
+   - "删除 /tmp/foo.txt" → intent=refactor，operations=["delete"]
    - "修复这个函数" → intent=debug, operations=["read","write"]
    - "解释这段代码" → intent=explain, operations=[]
+   - "处理一下这个问题，告诉我原因" → intent=explain, operations=[]（只要解释）
+   - "修复这个 bug 的思路是什么" → intent=debug, operations=[]（只要思路）
    - "今天天气" → intent=query, operations=["network"]
    - "调研最好的库" → intent=research, operations=["network"]
    - "不要修改任何文件，只解释" → intent=explain, operations=[], chat_only=true
@@ -417,6 +452,11 @@ class LLMIntentClassifier:
                 lines.append("\u2022 检测到显式禁令: " + "；".join(hints["negations"]))
             if hints.get("chat_only"):
                 lines.append("- 检测到 chat_only 约束")
+            if hints.get("advisory"):
+                lines.append(
+                    "- 检测到征询解释语义（问原因/思路/建议）：operations 应为空，"
+                    "不要因为句中出现'处理/修复/优化'就授权写入"
+                )
             if hints.get("no_tools"):
                 lines.append("- 检测到 no_tools 约束")
             if lines:

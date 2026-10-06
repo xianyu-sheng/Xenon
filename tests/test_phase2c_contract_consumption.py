@@ -98,10 +98,11 @@ def test_estimator_uses_provided_intent(monkeypatch) -> None:
         lambda text: detected.append(text) or "chat",
     )
 
-    profile = estimator.estimate("任意文本", intent="debug")
+    profile = estimator.estimate("任意文本", intent="debug", requires_tools=True)
 
     assert detected == []  # 不再触发（可能联网的）意图检测
     assert profile.intent == "debug"
+    assert profile.requires_tools is True  # 以本轮契约为准
 
     estimator.estimate("任意文本")
     assert detected == ["任意文本"]  # 未提供时保持旧行为
@@ -109,18 +110,24 @@ def test_estimator_uses_provided_intent(monkeypatch) -> None:
 
 def test_select_turn_mode_forwards_contract_intent(monkeypatch) -> None:
     repl = _make_repl()
-    captured: dict[str, str | None] = {}
+    captured: dict[str, object] = {}
 
-    def fake_estimate(user_input, context_messages=None, *, intent=None):
+    def fake_estimate(
+        user_input, context_messages=None, *, intent=None, requires_tools=None
+    ):
         captured["intent"] = intent
+        captured["requires_tools"] = requires_tools
         return SimpleNamespace(recommended_engine="direct", engine_confidence=0.0)
 
     monkeypatch.setattr(repl.auto_router.estimator, "estimate", fake_estimate)
     policy = classify_execution_policy("读取 src/main.py")
 
-    repl._select_turn_mode("读取 src/main.py", policy, "debug")
+    repl._select_turn_mode(
+        "读取 src/main.py", policy, "debug", requires_tools=True
+    )
 
     assert captured["intent"] == "debug"
+    assert captured["requires_tools"] is True
 
 
 def test_classifier_cache_prevents_duplicate_calls(monkeypatch) -> None:

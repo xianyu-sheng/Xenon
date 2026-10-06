@@ -123,6 +123,7 @@ def signals_to_hints(signals: ExecutionSignals) -> dict[str, Any]:
         "negations": list(signals.negation_snippets),
         "chat_only": signals.chat_only,
         "no_tools": signals.no_tools,
+        "advisory": signals.advisory,
     }
 
 
@@ -265,6 +266,13 @@ def build_turn_contract(
         operations -= _WRITE_OPERATIONS | {"execute"}
         if not signals.read_evidence:
             operations -= _READ_OPERATIONS
+
+    # 4b) 征询解释不是施工：问原因/思路/建议时，即使分类器给出 write/execute
+    # 也收回（显式写入/执行结构仍然优先）。
+    if signals.advisory and not (
+        signals.strong_write or signals.explicit_execute
+    ):
+        operations -= _WRITE_OPERATIONS | {"execute"}
 
     # 5) 低置信 + 无正则证据 + 想写/执行 → 询问而不是静默授权。
     threshold = float(getattr(classifier, "confidence_threshold", 0.7) or 0.7)

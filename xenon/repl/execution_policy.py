@@ -164,10 +164,9 @@ _WRITE = re.compile(
     r"|(?:写|编写)(?:一个|个)?\s*(?:[\w.-]+\.[A-Za-z0-9]+\s*)?(?:文件|目录|文件夹)"
     r"|(?:创建|新建|生成|修改|编辑|替换|删除).{0,24}(?:文件|目录|文件夹|项目|仓库|代码库|\w+\.[A-Za-z0-9]+)"
     r"|(?:\w+\.[A-Za-z0-9]+).{0,16}(?:修改|编辑|替换|删除|改一下|改下)"
+    # 语义模式保留在降级路径（无可用 provider / 分类失败时）：显式征询
+    # （问原因/思路/建议）由 _ADVISORY 在下方否决，不会变成施工。
     r"|(?:修复|重构|改造|升级|处理).{0,20}(?:bug|错误|问题|代码|项目|仓库|功能)"
-    # 中文修改类动词 + 代码实体（模块/函数/类/实现/逻辑/注释/文档），
-    # 此前漏判「帮我重构这个模块」「纠正这个错误」「更新文档」为 ANSWER_ONLY，
-    # 而对应英文 improve/refactor/correct the function 正确到 WRITE。
     r"|(?:修复|纠正|更正|重构|改进|优化|更新|修改|调整)(?:一下|下)?"
     r"(?:这|该|当前|上述|刚才|本次|下面)?(?:个|份|段|处)?"
     r"(?:模块|函数|方法|类|实现|逻辑|注释|文档|配置|脚本|算法|接口|测试|错误)"
@@ -302,11 +301,19 @@ _DIRECT_BARE_GIT_REQUEST = re.compile(
 )
 _PATH_REFERENCE = re.compile(
     r"(?:^|\s)(?:\./|\.\./|src/|tests?/|lib/|app/|[/~])\S+"
-    r"|(?:^|\s)[A-Za-z]:\\\S+"
-    r"|\b\w+\.(?:py|js|ts|jsx|tsx|java|c|cpp|h|go|rs|rb|php|html|css|json|yaml|yml|toml|xml|md|txt|pdf|tex|docx?|rtf|csv|sh|bat|ps1)\b",
+    r"|(?:^|\s)[A-Za-z]:[\\/]\S+"
+    r"|\b\w+\.(?:py|js|ts|jsx|tsx|java|c|cpp|h|go|rs|rb|php|html|css|json|"
+    r"yaml|yml|toml|xml|md|txt|pdf|tex|docx?|rtf|csv|xlsx?|xlsm|et|pptx?|epub|"
+    r"log|sh|bat|ps1)\b",
     re.IGNORECASE,
 )
 _URL_REFERENCE = re.compile(r"https?://|github\.com/", re.IGNORECASE)
+# 征询解释语义：用户要的是原因/思路/建议（提问式），而不是施工。
+# 只收录疑问/征询形式，避免「修复它并告诉我原因」这类命令式误伤。
+_ADVISORY = re.compile(
+    r"(?:思路|有什么建议|有什么看法|什么建议|为什么呢?|原因是什么|告诉我原因|"
+    r"怎么解决|如何解决|工作原理|是什么原理|做什么用的|怎么回事|哪个好)"
+)
 
 
 def _split_request_clause(source: str) -> str:
@@ -356,11 +363,23 @@ class ExecutionSignals:
     no_execute: bool = False
     no_tools: bool = False
     chat_only: bool = False
+    advisory: bool = False
     paths: tuple[str, ...] = ()
 
     @property
     def explicit_write(self) -> bool:
         return bool(self.write_patterns)
+
+    @property
+    def strong_write(self) -> bool:
+        """只有强结构（动词+目标、路径、git 操作）能压过征询语气。
+
+        ``write_verb``/``implicit_write`` 里的「修复/处理/优化」属于语义，
+        在用户问原因/思路时不应算作施工授权。
+        """
+        if "write_targeted" in self.write_patterns or "git_request" in self.write_patterns:
+            return True
+        return self.explicit_write and bool(self.paths)
 
     @property
     def explicit_execute(self) -> bool:
@@ -410,6 +429,7 @@ def extract_execution_signals(text: str) -> ExecutionSignals:
         no_execute=bool(_NO_EXECUTE.search(source)),
         no_tools=bool(_NO_TOOLS.search(source)),
         chat_only=bool(_CHAT_OUTPUT.search(source)),
+        advisory=bool(_ADVISORY.search(source)),
         paths=tuple(
             dict.fromkeys(
                 match.group(0).strip()
@@ -488,6 +508,11 @@ def classify_execution_policy(
     # 与隐含写盘句式（需求/处置/口语修复），否则「我需要一个 config.yaml」
     # 这类请求会掉到 ANSWER_ONLY。显式禁令拥有最终否决权。
     wants_write = signals.explicit_write and not no_write
+    # 征询解释（问原因/思路/建议）不是施工：没有显式写入/执行结构时，
+    # 不允许仅凭语境动词（修复/处理/优化）拿到写或执行权限。
+    if signals.advisory and not (signals.strong_write or signals.explicit_execute):
+        wants_write = False
+        wants_execute = False
     # Keep path/URL evidence from the complete user turn.  They are frequently
     # placed before “请你分析/学习…”, while request_source intentionally starts
     # after the last polite request cue.  Looking only at request_source used

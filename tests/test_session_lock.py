@@ -17,7 +17,7 @@ class _FakeEstimator:
     def __init__(self, profile: TaskProfile):
         self._p = profile
 
-    def estimate(self, user_input, context_messages=None, *, intent=None):
+    def estimate(self, user_input, context_messages=None, *, intent=None, requires_tools=None):
         return self._p
 
 

@@ -20,7 +20,7 @@ class _FixedEstimator:
     def __init__(self, profile: TaskProfile) -> None:
         self.profile = profile
 
-    def estimate(self, user_input, context_messages=None, *, intent=None):
+    def estimate(self, user_input, context_messages=None, *, intent=None, requires_tools=None):
         return self.profile
 
 

@@ -1,0 +1,51 @@
+{"text": "把结果写到 output.txt", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "输出到 config.yaml", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "把结果记录到 notes.md 里", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "写一份总结到 report.md", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "在这个文件里加一个函数", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "帮我在 utils.py 里补一个 helper", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "把上面的脚本追加到 setup.py 里", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "生成一份报告存起来", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "帮我更新 README 加上安装说明", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "write the result to output.txt", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "save the output as result.json", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "append the results to log.txt", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "我需要一个 config.yaml", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "把这段代码保存到 utils.py", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "删除 /tmp/foo.txt", "levels": ["WRITE"], "require": ["delete"], "forbid": ["execute"]}
+{"text": "把重复代码重构成函数", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "改完代码后运行测试", "levels": ["EXECUTE"], "require": ["execute"], "forbid": []}
+{"text": "跑一下 pytest", "levels": ["EXECUTE"], "require": ["execute"], "forbid": []}
+{"text": "run the tests", "levels": ["EXECUTE"], "require": ["execute"], "forbid": []}
+{"text": "读一下 output.txt", "levels": ["READ_ONLY"], "require": ["read"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "分析一下 resume.tex", "levels": ["READ_ONLY"], "require": ["read"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "看看这个项目的结构", "levels": ["READ_ONLY"], "require": ["read"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "读取 src/main.py 并解释接口", "levels": ["READ_ONLY"], "require": ["read"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "这个函数在哪里定义的", "levels": ["READ_ONLY"], "require": ["read"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "读一下 C:/Users/Administrator/Desktop/校招投递表1.et 并总结", "levels": ["READ_ONLY"], "require": ["read"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "帮我调研一下几个 Agent 框架的维护活跃度", "levels": ["READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "帮我写一个排序函数", "levels": ["ANSWER_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "写一个 Python 爬虫", "levels": ["ANSWER_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "把这段话翻译成英文", "levels": ["ANSWER_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "解释这段代码的逻辑", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "这个项目怎么改进比较好", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "处理一下这个问题，告诉我原因", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "修复这个 bug 的思路是什么", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "优化这段代码有什么建议", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "帮我看看这个报错怎么解决", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "什么是 ReAct", "levels": ["ANSWER_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "你觉得这两个方案哪个好", "levels": ["ANSWER_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "谢谢，辛苦了", "levels": ["ANSWER_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "不要修改任何文件，只在对话里回答", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "先别改任何文件，只讲解思路", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "不要动这个文件，给我解释一下", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "别删除任何文件", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "不要重写代码", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "不要改代码，只分析", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "don't modify any files", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "不要运行测试，只把代码贴出来", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "只在对话里输出一个排序函数", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "不要写文件，把上面的结果写到 notes.md 里", "levels": ["ANSWER_ONLY", "READ_ONLY"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "读一下 config.yaml，把里面的端口改成 8080", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "先分析一下这个模块，然后帮我重构它", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
+{"text": "帮我把桌面上的校招投递表1.et 读出来并整理成汇总", "levels": ["READ_ONLY"], "require": ["read"], "forbid": ["write", "create", "delete", "move", "execute"]}

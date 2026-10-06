@@ -1881,6 +1881,7 @@ class REPL:
                 user_input,
                 count=3,
                 intent=turn_contract_obj.intent,
+                requires_tools=turn_contract_obj.requires_tools,
             )
         )
         # 自动 compact 检查
@@ -2009,6 +2010,7 @@ class REPL:
                 cache_engine=route_engine,
                 cache_phase=route_phase,
                 intent=turn_contract_obj.intent,
+                requires_tools=turn_contract_obj.requires_tools,
             )
         if not model_ids:
             console.print(
@@ -2037,6 +2039,7 @@ class REPL:
             user_input,
             execution_policy,
             turn_contract_obj.intent,
+            turn_contract_obj.requires_tools,
         )
 
         try:
@@ -2112,6 +2115,7 @@ class REPL:
         user_input: str,
         execution_policy: ExecutionPolicy,
         intent: str | None = None,
+        requires_tools: bool | None = None,
     ) -> str:
         """为本轮选择范式：仅在用户停留在默认 direct 时才自动升级。
 
@@ -2136,6 +2140,7 @@ class REPL:
                 user_input,
                 self.ctx_mgr.get_messages(),
                 intent=intent,
+                requires_tools=requires_tools,
             )
         except Exception as exc:  # noqa: BLE001 — 推荐失败不该阻断对话
             logger.debug("范式推荐失败，保留当前范式: %s", exc)

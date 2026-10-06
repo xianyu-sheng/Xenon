@@ -353,7 +353,8 @@ def test_chinese_mutation_requests_authorize_write(text):
 
     该分类器是全引擎共享层（ReAct/PlanExecute/EvidenceGate 的
     task_requires_write 都走这里），漏判会让 Agent 把「重构这个模块」
-    当成闲聊回答，不调用任何工具。
+    当成闲聊回答，不调用任何工具。这是 LLM 不可用时的降级基线；
+    分类器可用时由契约主导（显式征询会被 _ADVISORY 否决）。
     """
     policy = classify_execution_policy(text, intent=detect_intent(text))
     assert policy.level >= ExecutionLevel.WRITE
@@ -452,8 +453,12 @@ def test_implicit_write_does_not_override_explicit_limits(text):
     ],
 )
 def test_engine_recommendation_matches_task_shape(text, expected):
-    """范式推荐按任务结构选择，且置信度足以触发 REPL 自动切换。"""
-    profile = DifficultyEstimator().estimate(text, [])
+    """范式推荐按任务结构选择，且置信度足以触发 REPL 自动切换。
+
+    requires_tools 由本轮契约提供（语义任务的正则由分类器兜底，不能用于
+    推荐），这里显式传入以模拟真实调用。
+    """
+    profile = DifficultyEstimator().estimate(text, [], requires_tools=True)
     assert profile.recommended_engine == expected
     assert profile.engine_confidence >= 0.6
 

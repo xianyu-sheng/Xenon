@@ -108,6 +108,7 @@ def test_pure_generation_stays_answer_only(text: str) -> None:
 
 STILL_READ_ONLY = [
     'C:\\Users\\Administrator\\Desktop\\校招投递表1.et 读一下这个文件，并总计一下这个文件是在做什么？',
+    "帮我把桌面上的校招投递表1.et 读出来并整理成汇总",
     "读一下 output.txt",
     "分析一下 resume.tex",
     "读取 src/main.py 并解释接口",
@@ -148,11 +149,12 @@ def test_task_requires_write_prefers_turn_contract() -> None:
     write_turn = AgentContext({"_execution_level": int(ExecutionLevel.WRITE)})
 
     # 文本本身像写任务，但本轮只授权只读 → 以本轮契约为准。
-    assert task_requires_write("修复 src/main.py 的 bug", ctx=read_turn) is False
+    assert task_requires_write("把结果写到 output.txt", ctx=read_turn) is False
     # 文本本身像问答，但本轮授权了写入 → 以本轮契约为准。
     assert task_requires_write("What does this code do?", ctx=write_turn) is True
-    # 没有契约时保持旧行为（向后兼容 library/direct 调用）。
-    assert task_requires_write("Fix the bug in src/main.py") is True
+    # 没有契约时保持旧行为（向后兼容 library/direct 调用）；语义任务由
+    # 分类器负责，正则只认显式写入结构。
+    assert task_requires_write("把结果写到 output.txt") is True
     assert task_requires_write("What does this code do?") is False
 
 

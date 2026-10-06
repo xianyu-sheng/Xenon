@@ -1,0 +1,60 @@
+{
+  "regex": {
+    "summary": {
+      "name": "regex",
+      "cases": 51,
+      "pass": 49,
+      "pass_rate": 0.961,
+      "level_accuracy": 0.98,
+      "safety_violations": 0,
+      "recall_misses": 2,
+      "p50_ms": null,
+      "p95_ms": null
+    },
+    "failures": [
+      {
+        "text": "删除 /tmp/foo.txt",
+        "level": "WRITE",
+        "expected_levels": [
+          "WRITE"
+        ],
+        "ops": [
+          "read",
+          "write"
+        ],
+        "level_ok": true,
+        "safety_ok": true,
+        "recall_ok": false,
+        "ask": false,
+        "degraded": true
+      },
+      {
+        "text": "先分析一下这个模块，然后帮我重构它",
+        "level": "ANSWER_ONLY",
+        "expected_levels": [
+          "WRITE"
+        ],
+        "ops": [],
+        "level_ok": false,
+        "safety_ok": true,
+        "recall_ok": false,
+        "ask": false,
+        "degraded": true
+      }
+    ]
+  },
+  "llm": {
+    "summary": {
+      "name": "llm:deepseek/deepseek-v4-flash",
+      "cases": 51,
+      "pass": 51,
+      "pass_rate": 1.0,
+      "level_accuracy": 1.0,
+      "safety_violations": 0,
+      "recall_misses": 0,
+      "p50_ms": 1592.1,
+      "p95_ms": 2397.1
+    },
+    "failures": []
+  }
+}
