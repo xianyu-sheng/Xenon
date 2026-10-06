@@ -7,6 +7,7 @@ made a standalone handler module without changing callers.
 """
 
 from xenon.nodes.tool_families.code_tools import CodeToolsMixin
+from xenon.nodes.tool_families.document_tools import DocumentToolsMixin
 from xenon.nodes.tool_families.file_mutation import FileMutationToolsMixin
 from xenon.nodes.tool_families.git_tools import GitToolsMixin
 from xenon.nodes.tool_families.lsp import LSPToolsMixin
@@ -17,6 +18,7 @@ from xenon.nodes.tool_families.utility import UtilityToolsMixin
 
 __all__ = [
     "CodeToolsMixin",
+    "DocumentToolsMixin",
     "FileMutationToolsMixin",
     "GitToolsMixin",
     "MCPToolsMixin",

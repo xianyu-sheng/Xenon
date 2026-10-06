@@ -115,12 +115,17 @@ BUILTIN_TOOLS = {
     },
     "read_file": {
         "name": "read_file",
-        "description": "读取本机文件内容并返回文本。支持分段读取（start_line 从 1 开始，max_lines 为行数）。仅限本地文件，不能读取 URL（请用 web_fetch）或 GitHub 仓库文件（请用 github_fetch）。",
+        "description": "读取本机文本文件内容并返回文本。支持分段读取（start_line 从 1 开始，max_lines 为行数）。二进制文档（xlsx/xls/et/docx/pdf）请用 read_document；不能读取 URL（请用 web_fetch）或 GitHub 仓库文件（请用 github_fetch）。",
         "params": {
             "file_path": "本地文件的绝对或相对路径",
             "start_line": "起始行号（可选，从 1 开始）",
             "max_lines": "读取行数（可选）",
         },
+    },
+    "read_document": {
+        "name": "read_document",
+        "description": "读取并解析文档/表格文件（只读）。支持 xlsx/xlsm、docx、xls/.et（BIFF8）、csv/tsv/json/markdown 文本；PDF 需可选的 pypdf。返回工作表/段落文本，内容已按行列截断。二进制文件不要用 read_file，直接用它。",
+        "params": {"file_path": "本地文档的绝对或相对路径，如 C:/Users/me/Desktop/表格.et"},
     },
     "write_file": {
         "name": "write_file",

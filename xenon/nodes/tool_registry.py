@@ -180,6 +180,7 @@ BUILTIN_TOOL_METHODS: dict[str, str] = {
     "command": "_exec_command",
     "write_file": "_write_file",
     "read_file": "_read_file",
+    "read_document": "_read_document",
     "list_files": "_list_files",
     "search_files": "_search_files",
     "git": "_git",
@@ -215,6 +216,7 @@ for _tool_name, _method_name in BUILTIN_TOOL_METHODS.items():
     _risk: ToolRisk = "SENSITIVE"
     if _tool_name in {
         "read_file",
+        "read_document",
         "list_files",
         "search_files",
         "code_index",

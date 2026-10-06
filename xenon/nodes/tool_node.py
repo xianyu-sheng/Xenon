@@ -44,6 +44,7 @@ from xenon.nodes.tool_families.github_tools import GitHubToolsMixin
 from xenon.nodes.tool_families.lsp import LSPToolsMixin
 from xenon.nodes.tool_families.mcp_tools import MCPToolsMixin
 from xenon.nodes.tool_families.web_tools import WebToolsMixin
+from xenon.nodes.tool_families.document_tools import DocumentToolsMixin
 from xenon.nodes.tool_families.read_only_files import (
     MAX_READ_SIZE,  # noqa: F401 - private compatibility export
     ReadOnlyFileToolsMixin,
@@ -272,6 +273,7 @@ class ToolNode(
     GitHubToolsMixin,
     MCPToolsMixin,
     ReadOnlyFileToolsMixin,
+    DocumentToolsMixin,
     LSPToolsMixin,
     ResultFilteringMixin,
     UtilityToolsMixin,
