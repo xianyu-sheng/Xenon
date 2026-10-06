@@ -478,7 +478,6 @@ def classify_execution_policy(
     becomes authorized when the user asks for that side effect explicitly.
     """
 
-    source = text.strip()
     signals = extract_execution_signals(text)
     no_tools = signals.no_tools
     chat_output = signals.chat_only

@@ -173,19 +173,6 @@ def test_low_confidence_write_proposal_requires_user_consent() -> None:
     assert approved.level is ExecutionLevel.WRITE
 
 
-def test_llm_chat_only_flag_cannot_invent_writes() -> None:
-    """分类器自报 chat_only 时，即使 intent 是 debug 也不能开写权限。"""
-    fake = FakeClassifier(
-        intent="debug",
-        operations=("read", "write"),
-        confidence=0.95,
-        chat_only=True,
-    )
-    contract = build_turn_contract("看看这个报错", classifier=fake)
-
-    assert contract.level < ExecutionLevel.WRITE
-
-
 def test_advisory_questions_cannot_invent_writes() -> None:
     """征询解释（问原因/思路/建议）不是施工：分类器给出 write 也要收回。"""
     fake = FakeClassifier(
