@@ -199,8 +199,8 @@ CacheTracker 缓存字段覆盖 100%，Cache Rails 命中率 **85.98%**，可复
 
 - [`evals/reports/real_report.md`](../evals/reports/real_report.md) — Real 模式 v2（本节生成，9/20 成功）
 - [`evals/reports/mock_report.md`](../evals/reports/mock_report.md) — Mock 模式（20/20 框架自检）
-- [`docs/reports/v0.2.2/REAL_TASK_TEST_REPORT.md`](reports/v0.2.2/REAL_TASK_TEST_REPORT.md) — REPL 端到端 84 用例（v0.2.2 发版证据）
-- [`docs/reports/v0.2.2/VERIFICATION_REPORT.md`](reports/v0.2.2/VERIFICATION_REPORT.md) — 独立验证报告（v0.2.2 发版证据）
+
+> v0.2.2 时期的旧版测试报告已从文档目录移除，需要时可从 git 历史中找回。
 
 ## 当前版本重跑基线
 

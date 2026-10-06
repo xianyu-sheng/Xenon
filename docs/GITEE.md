@@ -42,4 +42,4 @@ GitHub 的标签和 Release 是版本源头。每次 GitHub 发布后，在 Gite
 3. Gitee 和 GitHub 安装命令；
 4. `dist/` 中的 wheel 与 sdist（如该版本提供构建产物）。
 
-当前版本的 Gitee Release 文案见 [`GITEE_RELEASE_v0.7.3.md`](GITEE_RELEASE_v0.7.3.md)。
+各版本 Release 说明见 [GitHub Releases](https://github.com/xianyu-sheng/Xenon/releases)（同步发布到 Gitee）。
