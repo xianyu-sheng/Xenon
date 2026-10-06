@@ -34,8 +34,8 @@ class TestLLMIntentClassifier:
         assert "未启用" in result.reasoning
 
     def test_classifier_empty_input_returns_none(self):
-        """空输入应返回 None。"""
-        classifier = LLMIntentClassifier(enabled=True)
+        """空输入应返回 None（不依赖环境里是否有可用 provider）。"""
+        classifier = LLMIntentClassifier(enabled=True, model="test/model")
         result = classifier.classify("")
 
         assert result.intent is None
@@ -85,9 +85,14 @@ class TestLLMIntentClassifier:
             LLMIntentClassifier._parse_response(response)
 
     def test_confidence_threshold_filtering(self):
-        """测试置信度阈值过滤。"""
+        """测试置信度阈值过滤。
+
+        显式指定 model：否则在无凭据的 CI 环境下，构造器会因为找不到可用
+        provider 而硬禁用分类器，mock 永远不会被执行。
+        """
         classifier = LLMIntentClassifier(
             enabled=True,
+            model="test/model",
             confidence_threshold=0.8,
         )
 
