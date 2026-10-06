@@ -254,13 +254,9 @@ def ensure_turn_contract(
         fallback_intent=fallback_intent,
     )
     if ctx is not None:
-        ctx.update(
-            {
-                "_turn_contract": contract,
-                "_execution_level": int(contract.level),
-                "_execution_reason": contract.reason,
-            }
-        )
+        # 只存契约供同层只读；不写 ``_execution_level``——引擎/库调用方没有
+        # 显式级别时保持旧的“不拦截”语义，产品路径（REPL）会自己设置级别。
+        ctx.set("_turn_contract", contract)
     return contract
 
 
