@@ -100,7 +100,9 @@ class TestLLMIntentClassifier:
             )
 
         original_call = classifier._call_llm_classifier
-        classifier._call_llm_classifier = lambda t, c: mock_call(classifier, t, c)
+        classifier._call_llm_classifier = lambda t, c, **kw: mock_call(
+            classifier, t, c
+        )
 
         result = classifier.classify("some text")
 
@@ -136,16 +138,74 @@ class TestLLMIntentClassifier:
         assert "问题" in prompt
         assert "对话上下文" not in prompt
 
-    def test_default_model_selection(self):
-        """测试默认模型选择。"""
-        default_model = LLMIntentClassifier._get_default_classifier_model()
+    def test_default_model_selection_uses_configured_provider(self, monkeypatch):
+        """默认分类模型必须来自已配置 provider（不再盲选 Claude）。"""
+        from xenon.repl import provider_registry
 
-        # 应该返回一个快速小模型
-        assert default_model in [
-            "anthropic/claude-3-5-haiku-20241022",
-            "openai/gpt-4o-mini",
-            "deepseek/deepseek-v4-flash",
-        ]
+        class _Provider:
+            def __init__(self, key, models):
+                self.key = key
+                self.models = models
+
+        monkeypatch.setattr(
+            provider_registry,
+            "get_configured_providers",
+            lambda **kwargs: [
+                _Provider("deepseek", ["deepseek-v4-pro", "deepseek-v4-flash"])
+            ],
+        )
+
+        assert (
+            LLMIntentClassifier._select_configured_model()
+            == "deepseek/deepseek-v4-flash"
+        )
+
+    def test_default_model_selection_without_credentials(self, monkeypatch):
+        """没有已配置 provider 时返回空串（分类器禁用，回退正则）。"""
+        from xenon.repl import provider_registry
+
+        monkeypatch.setattr(
+            provider_registry,
+            "get_configured_providers",
+            lambda **kwargs: [],
+        )
+
+        assert LLMIntentClassifier._select_configured_model() == ""
+
+
+class TestIntentClassifierConfigDefaults:
+    """LLM 意图分类器默认开启（用户要求）；测试进程由根 conftest 关闭。"""
+
+    def test_dataclass_default_is_enabled(self):
+        from xenon.repl.system_config import IntentClassifierConfig
+
+        assert IntentClassifierConfig().enabled is True
+
+    def test_config_default_is_enabled_without_env_or_file(
+        self, monkeypatch, tmp_path
+    ):
+        from xenon.repl import system_config
+
+        monkeypatch.delenv("XENON_INTENT_CLASSIFIER_ENABLED", raising=False)
+        monkeypatch.setattr(
+            system_config, "CONFIG_PATH", tmp_path / "missing.yaml"
+        )
+        monkeypatch.setattr(system_config, "_file_cache", None)
+        monkeypatch.setattr(system_config, "_file_cache_key", None)
+
+        assert system_config.get_config().intent_classifier.enabled is True
+
+    def test_env_can_disable_the_classifier(self, monkeypatch, tmp_path):
+        from xenon.repl import system_config
+
+        monkeypatch.setenv("XENON_INTENT_CLASSIFIER_ENABLED", "0")
+        monkeypatch.setattr(
+            system_config, "CONFIG_PATH", tmp_path / "missing.yaml"
+        )
+        monkeypatch.setattr(system_config, "_file_cache", None)
+        monkeypatch.setattr(system_config, "_file_cache_key", None)
+
+        assert system_config.get_config().intent_classifier.enabled is False
 
 
 class TestIntentClassifierIntegration:

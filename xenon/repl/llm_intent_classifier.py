@@ -18,6 +18,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from xenon.utils.llm_client import chat_completion
 from xenon.repl.system_config import get_config
@@ -40,6 +41,18 @@ INTENT_CATEGORIES = {
     "chat": "闲聊、问候、致谢等日常对话",
 }
 
+# 操作原语：与“意图”分离的封闭词表，描述完成请求真正需要的副作用。
+# 两轮审计的核心结论：intent 描述“想要什么”，operations 才决定“授权与能力”。
+OPERATION_VOCABULARY = (
+    "read",  # 读取/查看/搜索/分析已有内容
+    "write",  # 修改/更新已有文件
+    "create",  # 新建文件/目录/保存新产物
+    "delete",  # 删除/移除
+    "move",  # 移动/复制/重命名
+    "execute",  # 运行命令/脚本/测试
+    "network",  # 联网抓取/下载/查询
+)
+
 
 @dataclass
 class ClassificationResult:
@@ -50,6 +63,8 @@ class ClassificationResult:
     reasoning: str = ""  # 分类理由（调试用）
     latency_ms: float = 0.0  # 分类耗时
     fallback: bool = False  # 是否是降级结果
+    operations: tuple[str, ...] = ()  # 完成请求需要的操作原语
+    chat_only: bool = False  # 用户明确要求只在对话中回答
 
 
 class LLMIntentClassifier:
@@ -73,40 +88,97 @@ class LLMIntentClassifier:
         self.enabled = enabled
         self.confidence_threshold = confidence_threshold
         self.timeout = timeout
+        # 同一轮内 REPL路由/难度估计/契约构建会对同一输入多次要分类结果，
+        # 小缓存直接消除重复的小模型调用（64 条上限，超出即清空）。
+        self._cache: dict[tuple, ClassificationResult] = {}
 
         # 从配置读取默认模型（用于分类的快速小模型）
         if model is None:
             config = get_config()
-            # 优先使用配置的分类器模型，否则使用默认的快速模型
-            self.model = getattr(config.intent_classifier, "model", None)
+            self.model = getattr(config.intent_classifier, "model", "") or ""
             if not self.model:
-                # 默认使用快速小模型
-                self.model = self._get_default_classifier_model()
+                # 从已配置 API Key 的 provider 中挑选，而不是盲选 Claude。
+                self.model = self._select_configured_model()
         else:
             self.model = model
 
-        logger.info(f"LLM 意图分类器初始化: model={self.model}, enabled={self.enabled}")
+        if not self.model:
+            # 没有可用模型时硬禁用，调用方自动回退正则层。
+            self.enabled = False
+            logger.info(
+                "LLM 意图分类器无可用模型（已配置 provider 为空），"
+                "已禁用并回退正则"
+            )
+        else:
+            logger.info(
+                f"LLM 意图分类器初始化: model={self.model}, enabled={self.enabled}"
+            )
 
-    @staticmethod
-    def _get_default_classifier_model() -> str:
-        """获取默认的分类器模型（优先选择快速、便宜的小模型）。"""
-        # 按优先级尝试：Claude Haiku > GPT-4o-mini > DeepSeek Flash
-        # 这些都是快速且成本低的模型
-        candidates = [
-            "anthropic/claude-3-5-haiku-20241022",
-            "openai/gpt-4o-mini",
-            "deepseek/deepseek-v4-flash",
-        ]
+    # 便宜/低延迟模型的名称特征，按 provider 已配置的模型列表匹配。
+    _FAST_MODEL_PATTERNS = (
+        "flash",
+        "mini",
+        "haiku",
+        "nano",
+        "lite",
+        "small",
+        "turbo",
+        "instant",
+    )
+    _PROVIDER_PRIORITY = (
+        "deepseek",
+        "openai",
+        "anthropic",
+        "ark",
+        "moonshot",
+        "zhipu",
+        "gemini",
+        "ollama",
+    )
 
-        # TODO: 可以检查哪个 API Key 可用，选择对应的模型
-        # 目前简单返回第一个
-        return candidates[0]
+    @classmethod
+    def _select_configured_model(cls) -> str:
+        """从已配置 API Key 的 provider 中挑选最快的分类器模型。
+
+        旧实现盲选 ``anthropic/claude-3-5-haiku``，未配置 Anthropic key 时每轮
+        调用都失败再静默降级。现在只读凭据层（refresh_models=False，不触发
+        网络探测）：优先匹配便宜模型的名称特征，否则退回优先级最高的
+        provider 的第一个模型；没有任何已配置 provider 时返回空串（禁用）。
+        """
+
+        try:
+            from xenon.repl.provider_registry import get_configured_providers
+
+            providers = get_configured_providers(
+                refresh_models=False, use_cache=True
+            )
+        except Exception as exc:  # noqa: BLE001 — 选型失败不能让流程崩溃
+            logger.debug("分类器模型选择失败: %s", exc)
+            return ""
+
+        def rank(provider: Any) -> int:
+            try:
+                return cls._PROVIDER_PRIORITY.index(provider.key)
+            except (ValueError, AttributeError):
+                return len(cls._PROVIDER_PRIORITY)
+
+        ordered = sorted(providers, key=rank)
+        for provider in ordered:
+            for name in provider.models or []:
+                lowered = str(name).lower()
+                if any(pat in lowered for pat in cls._FAST_MODEL_PATTERNS):
+                    return f"{provider.key}/{name}"
+        for provider in ordered:
+            if provider.models:
+                return f"{provider.key}/{provider.models[0]}"
+        return ""
 
     def classify(
         self,
         user_input: str,
         *,
         context_messages: list[dict] | None = None,
+        hints: dict[str, Any] | None = None,
     ) -> ClassificationResult:
         """
         使用 LLM 对用户输入进行意图分类。
@@ -114,10 +186,19 @@ class LLMIntentClassifier:
         Args:
             user_input: 用户输入文本
             context_messages: 可选的上下文消息（用于理解多轮对话）
+            hints: 正则层提取的确定性信号（写入/执行结构、禁令、路径），
+                作为提示喂给分类器，让它有据可依且两边冲突显式化。
 
         Returns:
-            ClassificationResult 包含意图、置信度和推理过程
+            ClassificationResult 包含意图、操作原语、置信度和推理过程
         """
+        if not user_input or not user_input.strip():
+            return ClassificationResult(
+                intent=None,
+                confidence=0.0,
+                reasoning="输入为空",
+            )
+
         if not self.enabled:
             return ClassificationResult(
                 intent=None,
@@ -126,17 +207,32 @@ class LLMIntentClassifier:
                 fallback=True,
             )
 
-        if not user_input or not user_input.strip():
-            return ClassificationResult(
-                intent=None,
-                confidence=0.0,
-                reasoning="输入为空",
-            )
+        cache_key = (
+            user_input,
+            tuple(
+                (str(m.get("role", "")), str(m.get("content", ""))[:80])
+                for m in (context_messages or [])[-2:]
+            ),
+        )
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            logger.debug("LLM 分类命中缓存: intent=%s", cached.intent)
+            return cached
+
+        def _remember(classified: ClassificationResult) -> ClassificationResult:
+            if len(self._cache) >= 64:
+                self._cache.clear()
+            self._cache[cache_key] = classified
+            return classified
 
         start_time = time.time()
 
         try:
-            result = self._call_llm_classifier(user_input, context_messages)
+            result = self._call_llm_classifier(
+                user_input,
+                context_messages,
+                hints=hints,
+            )
             result.latency_ms = (time.time() - start_time) * 1000
 
             # 置信度过低时返回 None
@@ -145,11 +241,13 @@ class LLMIntentClassifier:
                     f"LLM 分类置信度过低: {result.confidence:.2f} < {self.confidence_threshold}, "
                     f"intent={result.intent}"
                 )
-                return ClassificationResult(
-                    intent=None,
-                    confidence=result.confidence,
-                    reasoning=f"置信度过低: {result.reasoning}",
-                    latency_ms=result.latency_ms,
+                return _remember(
+                    ClassificationResult(
+                        intent=None,
+                        confidence=result.confidence,
+                        reasoning=f"置信度过低: {result.reasoning}",
+                        latency_ms=result.latency_ms,
+                    )
                 )
 
             logger.debug(
@@ -157,7 +255,7 @@ class LLMIntentClassifier:
                 f"confidence={result.confidence:.2f}, "
                 f"latency={result.latency_ms:.0f}ms"
             )
-            return result
+            return _remember(result)
 
         except Exception as e:
             logger.warning(f"LLM 意图分类失败: {e}", exc_info=True)
@@ -173,12 +271,14 @@ class LLMIntentClassifier:
         self,
         user_input: str,
         context_messages: list[dict] | None,
+        *,
+        hints: dict[str, Any] | None = None,
     ) -> ClassificationResult:
         """调用 LLM 进行分类（内部方法）。"""
 
         # 构建分类 prompt
         system_prompt = self._build_system_prompt()
-        user_prompt = self._build_user_prompt(user_input, context_messages)
+        user_prompt = self._build_user_prompt(user_input, context_messages, hints)
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -208,7 +308,8 @@ class LLMIntentClassifier:
             f"- {key}: {desc}" for key, desc in INTENT_CATEGORIES.items()
         )
 
-        return f"""你是一个意图分类专家。你的任务是分析用户输入，判断用户的真实意图。
+        ops_desc = ", ".join(OPERATION_VOCABULARY)
+        return f"""你是一个意图分类专家。你的任务是分析用户输入，判断用户的真实意图，以及完成该请求真正需要哪些操作。
 
 ## 意图类别
 
@@ -228,34 +329,50 @@ class LLMIntentClassifier:
    - 看**目标**：新建 vs 修改 vs 理解 vs 查询
    - 看**上下文**：是否有报错信息、是否需要外部数据
 
-3. **边界情况**：
-   - "写一个函数" → write_code（新建代码）
-   - "修复这个函数" → debug（修复问题）
-   - "优化这段代码" → refactor（改进现有代码）
-   - "解释这段代码" → explain（理解代码）
-   - "今天天气" → query（实时查询）
-   - "调研最好的库" → research（资料调研）
+3. **operations 与 intent 分离（最重要）**：
+   - operations 只描述完成请求真正需要的副作用，取值限于：{ops_desc}。
+   - 纯聊天、纯解释、纯设计、把代码/文本贴在对话里给用户看 → operations 为空数组。
+   - 「写一个函数/脚本给我看看」「给我一段代码」不等于文件操作；
+     只有用户指定了文件/路径/保存目标（写到 X、输出到 X、保存到 X、在 X 里加）
+     才填 write/create。
+   - 用户明确禁止某项操作（不要写文件/不要修改/不要运行）时，对应 operation
+     不得出现，且 chat_only 置为 true。
+   - query/research 通常需要 read 或 network；debug/refactor 通常需要 read，
+     write 仅在用户要求修改文件时出现。
 
-4. **无法判断时**：
+4. **边界情况**：
+   - "写一个函数" → intent=write_code, operations=[]
+   - "把结果写到 output.txt" → intent=write_code，operations=["create"]
+   - "修复这个函数" → intent=debug, operations=["read","write"]
+   - "解释这段代码" → intent=explain, operations=[]
+   - "今天天气" → intent=query, operations=["network"]
+   - "调研最好的库" → intent=research, operations=["network"]
+   - "不要修改任何文件，只解释" → intent=explain, operations=[], chat_only=true
+
+5. **无法判断时**：
    - 返回 null 而不是猜测
    - 置信度诚实反映不确定性
 
 ## 输出格式
 
-必须输出 JSON，包含三个字段：
+必须输出 JSON，包含五个字段：
 ```json
 {{
   "intent": "意图类别key或null",
+  "operations": ["read"],
+  "chat_only": false,
   "confidence": 0.95,
   "reasoning": "简短的分类理由（一句话）"
 }}
 ```
 
 例如：
-- 输入："帮我写一个排序函数" → {{"intent": "write_code", "confidence": 0.95, "reasoning": "明确要求编写新函数"}}
-- 输入："这段代码报错了" → {{"intent": "debug", "confidence": 0.9, "reasoning": "存在报错需要修复"}}
-- 输入："今天北京天气" → {{"intent": "query", "confidence": 0.95, "reasoning": "查询实时天气信息"}}
-- 输入："嗯" → {{"intent": null, "confidence": 0.0, "reasoning": "输入过于简短无法判断"}}
+- 输入："帮我写一个排序函数" → {{"intent": "write_code", "operations": [], "chat_only": false, "confidence": 0.95, "reasoning": "要求编写新函数，代码贴在对话中即可"}}
+- 输入："这段代码报错了" → {{"intent": "debug", "operations": ["read"], "chat_only": false, "confidence": 0.9, "reasoning": "要定位报错需要读取代码"}}
+- 输入："把结果写到 output.txt" → {{"intent": "write_code", "operations": ["create"], "chat_only": false, "confidence": 0.95, "reasoning": "明确要求写入文件"}}
+- 输入："今天北京天气" → {{"intent": "query", "operations": ["network"], "chat_only": false, "confidence": 0.95, "reasoning": "需要联网查询实时天气"}}
+- 输入："不要修改任何文件，只在对话里回答" → {{"intent": "explain", "operations": [], "chat_only": true, "confidence": 0.95, "reasoning": "用户明确禁止文件操作"}}
+- 输入："嗯" → {{"intent": null, "operations": [], "chat_only": false, "confidence": 0.0, "reasoning": "输入过于简短无法判断"}}
 
 只输出 JSON，不要额外解释。"""
 
@@ -263,6 +380,7 @@ class LLMIntentClassifier:
     def _build_user_prompt(
         user_input: str,
         context_messages: list[dict] | None,
+        hints: dict[str, Any] | None = None,
     ) -> str:
         """构建用户提示词。"""
 
@@ -279,6 +397,34 @@ class LLMIntentClassifier:
                 for msg in recent_context
             )
             prompt_parts.append(f"## 对话上下文\n\n{context_str}\n")
+
+        # 正则层的确定性信号：让 LLM 有据可依，冲突在合并层显式裁决。
+        if hints:
+            lines: list[str] = []
+            if hints.get("write_snippets"):
+                lines.append(
+                    "- 检测到显式写入结构: " + "；".join(hints["write_snippets"])
+                )
+            if hints.get("execute_snippets"):
+                lines.append(
+                    "- 检测到显式执行结构: " + "；".join(hints["execute_snippets"])
+                )
+            if hints.get("read_snippets"):
+                lines.append(
+                    "- 检测到读取/路径信号: " + "；".join(hints["read_snippets"])
+                )
+            if hints.get("negations"):
+                lines.append("\u2022 检测到显式禁令: " + "；".join(hints["negations"]))
+            if hints.get("chat_only"):
+                lines.append("- 检测到 chat_only 约束")
+            if hints.get("no_tools"):
+                lines.append("- 检测到 no_tools 约束")
+            if lines:
+                prompt_parts.append(
+                    "## 确定性信号（正则提取，必须纳入判断）\n\n"
+                    + "\n".join(lines)
+                    + "\n"
+                )
 
         # 添加待分类的用户输入
         prompt_parts.append(f"## 待分类的用户输入\n\n{user_input}\n")
@@ -313,6 +459,18 @@ class LLMIntentClassifier:
         confidence = float(data.get("confidence", 0.0))
         reasoning = data.get("reasoning", "")
 
+        # 操作原语：封闭词表校验，未知值丢弃并记录，防止模型发明能力。
+        raw_ops = data.get("operations") or []
+        operations: list[str] = []
+        if isinstance(raw_ops, list):
+            for op in raw_ops:
+                name = str(op).strip().lower()
+                if name in OPERATION_VOCABULARY and name not in operations:
+                    operations.append(name)
+                elif name:
+                    logger.debug("忽略无效操作原语: %s", name)
+        chat_only = bool(data.get("chat_only", False))
+
         # 验证 intent 是否在有效类别中
         if intent is not None and intent not in INTENT_CATEGORIES:
             logger.warning(f"LLM 返回了无效的意图类别: {intent}")
@@ -324,6 +482,8 @@ class LLMIntentClassifier:
             intent=intent,
             confidence=confidence,
             reasoning=reasoning,
+            operations=tuple(operations),
+            chat_only=chat_only,
         )
 
 

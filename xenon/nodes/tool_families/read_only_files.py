@@ -64,7 +64,12 @@ class ReadOnlyFileToolsMixin:
 
         if start_line is not None or max_lines is not None:
             # 按行分段读取
-            all_lines = path.read_text(encoding=self.encoding).splitlines(keepends=True)
+            try:
+                all_lines = path.read_text(encoding=self.encoding).splitlines(
+                    keepends=True
+                )
+            except UnicodeDecodeError:
+                return self._binary_read_result(path)
             total_lines = len(all_lines)
             s = max(1, int(start_line)) - 1 if start_line else 0  # 转为 0-based
             e = s + int(max_lines) if max_lines else total_lines
@@ -82,7 +87,10 @@ class ReadOnlyFileToolsMixin:
                 "success": True,
             }
         else:
-            content = path.read_text(encoding=self.encoding)
+            try:
+                content = path.read_text(encoding=self.encoding)
+            except UnicodeDecodeError:
+                return self._binary_read_result(path)
             result = {
                 "action_type": "read_file",
                 "file_path": str(path),
@@ -94,6 +102,37 @@ class ReadOnlyFileToolsMixin:
 
         self._write_output(context, content)
         return result
+
+    @staticmethod
+    def _binary_read_result(path: Path) -> dict[str, Any]:
+        """二进制文件无法按文本解码时，返回结构化提示而不是抛 UnicodeDecodeError。
+
+        读表格/文档需要文档解析能力；引导模型停止用 read_file 重试，并在
+        工具集不足时向用户说明，而不是报一堆栈。
+        """
+        kind = "二进制文件"
+        try:
+            head = path.read_bytes()[:8]
+            if head.startswith(b"PK\x03\x04"):
+                kind = "ZIP 容器（xlsx/docx/pptx 等）"
+            elif head.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+                kind = "OLE2 复合文档（xls/doc/et/ppt 等）"
+            elif head.startswith(b"%PDF"):
+                kind = "PDF 文档"
+        except OSError:
+            pass
+        return {
+            "action_type": "read_file",
+            "file_path": str(path),
+            "content": "",
+            "exists": True,
+            "success": False,
+            "error": (
+                f"{kind}，read_file 只能读取文本内容，请勿重复用 read_file 尝试。"
+                "请改用 read_document 解析表格/文档（xlsx/docx/csv 及 .et/.xls 均可），"
+                "是否需要其他能力请向用户说明并询问。"
+            ),
+        }
 
     # ── 目录遍历 ──────────────────────────────────────────
 

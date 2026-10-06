@@ -63,6 +63,7 @@ class AutoRouter:
         preferred_models: list[str] | None = None,
         cache_engine: str | None = None,
         cache_phase: str | None = None,
+        intent: str | None = None,
     ) -> list[str]:
         """Select best models for the given task.
 
@@ -72,10 +73,15 @@ class AutoRouter:
             count: Number of models to return for fallback.
             preferred_models: v0.5.3: User-specified models (via -m) that
                 should always be tried first, before auto-selected models.
+            intent: 本轮契约已解析的意图（避免重复调用 LLM 分类器）。
 
         Returns a list of model_ids for fallback (best first).
         """
-        profile = self.estimator.estimate(user_input, context_messages or [])
+        profile = self.estimator.estimate(
+            user_input,
+            context_messages or [],
+            intent=intent,
+        )
 
         # Step 10: 估算任务 tier，设置到 profile 上供 ModelPool 层级队列使用
         task_tier = DifficultyEstimator.estimate_tier(profile)

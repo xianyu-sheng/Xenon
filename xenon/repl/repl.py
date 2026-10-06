@@ -40,6 +40,7 @@ from xenon.repl.execution_policy import (
     bind_execution_boundary,
     classify_execution_policy,
 )
+from xenon.repl.turn_contract import TurnContract, build_turn_contract
 from xenon.repl.input_buffer import PastedTextStore, _ShiftTabSignal
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.project_context import ProjectContext
@@ -221,6 +222,13 @@ class REPL:
         self._permission_gate = PermissionGate(mode=PermissionMode.ACCEPT_EDITS)
         self._permission_gate.set_confirm_callback(self._confirm_tool)
         self.agent_context.set_tool_checkpoint_callback(self._persist_tool_checkpoint)
+        # 能力不足时的升级询问：工具被本轮执行级别拦截时问用户一次。
+        self._tool_escalations: set[str] = set()
+        self.agent_context.set_escalation_callback(self._confirm_tool_escalation)
+
+        # LLM 意图分类器按需初始化：未启用/无可用模型时为 None，正则层兜底。
+        self._intent_classifier: Any = None
+        self._intent_classifier_checked: bool = False
 
         # 优雅重启管理器
         from xenon.repl.graceful_restart import GracefulRestartManager
@@ -1845,12 +1853,14 @@ class REPL:
 
         # Side effects are authorized by the original request, never by the
         # optimizer's generated wording or by the selected reasoning mode.
-        intent, inherited_intent_source = self._resolve_turn_intent(user_input)
-        execution_policy = classify_execution_policy(user_input, intent=intent)
+        turn_contract_obj, execution_policy, intent, inherited_intent_source = (
+            self._resolve_turn_contract(user_input)
+        )
         self.agent_context.update(
             {
                 "_execution_level": int(execution_policy.level),
                 "_execution_reason": execution_policy.reason,
+                "_turn_contract": turn_contract_obj,
                 # Preserve filter constraints for terse continuations such as
                 # "结果呢" that do not repeat the original query.
                 "_query_constraint_source": inherited_intent_source or "",
@@ -1866,7 +1876,13 @@ class REPL:
             return
 
         # R4: 按激活模型上下文窗口校准 token 阈值（须在 needs_compact 之前）
-        self._sync_context_window(self.auto_router.route(user_input, count=3))
+        self._sync_context_window(
+            self.auto_router.route(
+                user_input,
+                count=3,
+                intent=turn_contract_obj.intent,
+            )
+        )
         # 自动 compact 检查
         if self.ctx_mgr.needs_compact():
             console.print(
@@ -1992,6 +2008,7 @@ class REPL:
                 preferred_models=self._preferred_model_ids or None,
                 cache_engine=route_engine,
                 cache_phase=route_phase,
+                intent=turn_contract_obj.intent,
             )
         if not model_ids:
             console.print(
@@ -2016,7 +2033,11 @@ class REPL:
         self.agent_context.set_conversation_messages(self.ctx_mgr.get_messages())
 
         # 根据当前思考范式选择执行方式
-        mode = self._select_turn_mode(user_input, execution_policy)
+        mode = self._select_turn_mode(
+            user_input,
+            execution_policy,
+            turn_contract_obj.intent,
+        )
 
         try:
             if skill_name is not None:
@@ -2090,6 +2111,7 @@ class REPL:
         self,
         user_input: str,
         execution_policy: ExecutionPolicy,
+        intent: str | None = None,
     ) -> str:
         """为本轮选择范式：仅在用户停留在默认 direct 时才自动升级。
 
@@ -2113,6 +2135,7 @@ class REPL:
             profile = self.auto_router.estimator.estimate(
                 user_input,
                 self.ctx_mgr.get_messages(),
+                intent=intent,
             )
         except Exception as exc:  # noqa: BLE001 — 推荐失败不该阻断对话
             logger.debug("范式推荐失败，保留当前范式: %s", exc)
@@ -2150,10 +2173,15 @@ class REPL:
            （通用语言结构判断，不枚举天气/高铁/酒店等具体领域）
         5. 其他 → direct 模式（纯对话/解释/闲聊）
         """
-        policy = execution_policy or classify_execution_policy(
-            user_input,
-            intent=intent,
-        )
+        policy = execution_policy
+        if policy is None:
+            # 已迁移调用方（REPL）直接传策略；库/测试入口回退到本轮契约，
+            # 最后才重新分类——避免多层各算一份导致的结论不一致。
+            turn_contract = self.agent_context.get("_turn_contract")
+            if turn_contract is not None:
+                policy = turn_contract.to_execution_policy()
+        if policy is None:
+            policy = classify_execution_policy(user_input, intent=intent)
         self.agent_context.update(
             {
                 "_execution_level": int(policy.level),
@@ -2837,6 +2865,139 @@ class REPL:
             if previous_intent not in {None, "debug", "chat"}:
                 break
         return raw_intent, None
+
+    def _resolve_turn_contract(
+        self, user_input: str
+    ) -> tuple[TurnContract, ExecutionPolicy, str | None, str | None]:
+        """本轮唯一一次分类：正则信号 +（可选）LLM 意图 → 不可变契约。
+
+        所有下游（引擎路由、工具 schema、证据门、策略提示）都应消费
+        ``self.agent_context["_turn_contract"]``，不得再重新分类。
+        """
+
+        intent, inherited_intent_source = self._resolve_turn_intent(user_input)
+        contract = build_turn_contract(
+            user_input,
+            classifier=self._get_intent_classifier(),
+            context_messages=self.ctx_mgr.get_messages()[-4:],
+            fallback_intent=intent,
+        )
+        if contract.ask_required:
+            contract = self._confirm_write_escalation(contract)
+        return (
+            contract,
+            contract.to_execution_policy(),
+            intent,
+            inherited_intent_source,
+        )
+
+    def _get_intent_classifier(self) -> Any:
+        """惰性获取 LLM 意图分类器；未启用/不可用时返回 None（正则兜底）。"""
+
+        if self._intent_classifier_checked:
+            return self._intent_classifier
+        self._intent_classifier_checked = True
+        try:
+            from xenon.repl.llm_intent_classifier import get_llm_classifier
+
+            classifier = get_llm_classifier()
+            if classifier.enabled:
+                self._intent_classifier = classifier
+                logger.info("LLM 意图分类器已启用: %s", classifier.model)
+            else:
+                logger.debug("LLM 意图分类器未启用，使用正则层")
+        except Exception as exc:  # noqa: BLE001 — 分类器不可用不能阻断 REPL
+            logger.warning("意图分类器初始化失败，回退正则层: %s", exc)
+        return self._intent_classifier
+
+    def _confirm_tool_escalation(
+        self,
+        tool_name: str,
+        required_level: int,
+        reason: str,
+    ) -> bool:
+        """工具超出本轮级别时的询问式升级（能力不足 → 问用户，不硬拒）。"""
+
+        if tool_name in self._tool_escalations:
+            return True
+        if get_config().interaction.assume_yes:
+            return True
+        if not sys.stdin.isatty():
+            logger.info("非交互环境：工具 %s 未获授权，保持当前级别", tool_name)
+            return False
+
+        level_label = {1: "只读", 2: "写入", 3: "执行"}.get(
+            int(required_level), str(required_level)
+        )
+        with self._permission_prompt_lock:
+            console.print()
+            console.print(
+                Panel(
+                    f"模型需要调用 [bold]{tool_name}[/bold]（{level_label}级），"
+                    "本轮当前级别不足。\n"
+                    f"原因：{reason}",
+                    title="需要授权",
+                    border_style="yellow",
+                    padding=(0, 1),
+                )
+            )
+            try:
+                choice = Prompt.ask(
+                    "是否授权",
+                    choices=["y", "n", "a"],
+                    default="n",
+                    show_choices=True,
+                    case_sensitive=False,
+                )
+            except (KeyboardInterrupt, EOFError):
+                return False
+        if choice == "a":
+            self._tool_escalations.add(tool_name)
+            console.print(f"[dim]· 本会话将自动授权 {tool_name}[/dim]")
+            return True
+        if choice == "y":
+            console.print("[dim]· 已授权本轮该级别[/dim]")
+            return True
+        console.print("[dim]· 未授权[/dim]")
+        return False
+
+    def _confirm_write_escalation(self, contract: TurnContract) -> TurnContract:
+        """低置信的写入/执行提议：问用户一次，而不是静默授权或拒绝。"""
+
+        if get_config().interaction.assume_yes:
+            return contract.approve()
+        if not sys.stdin.isatty():
+            logger.info("非交互环境：写入提议未获确认，保持只读")
+            return contract
+
+        ops = "、".join(sorted(contract.operations)) or "未知操作"
+        with self._permission_prompt_lock:
+            console.print()
+            console.print(
+                Panel(
+                    f"模型判断本轮可能需要：[bold]{ops}[/bold]"
+                    f"（置信度 {contract.confidence:.0%}）\n"
+                    f"依据：{contract.classifier_reasoning or '无'}",
+                    title="需要确认",
+                    border_style="yellow",
+                    padding=(0, 1),
+                )
+            )
+            try:
+                choice = Prompt.ask(
+                    "是否授权本轮操作",
+                    choices=["y", "n"],
+                    default="n",
+                    show_choices=True,
+                    case_sensitive=False,
+                )
+            except (KeyboardInterrupt, EOFError):
+                return contract
+        if choice == "y":
+            console.print("[dim]· 已授权本轮操作[/dim]")
+            return contract.approve()
+        console.print("[dim]· 未授权；本轮按只读/对话处理[/dim]")
+        return contract
 
     # ── 工具需求检测 ──────────────────────────────────────────
     # Deprecated pattern inventory retained for compatibility and diagnostics.

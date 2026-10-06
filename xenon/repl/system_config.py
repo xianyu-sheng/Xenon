@@ -117,10 +117,16 @@ class DevelopmentConfig:
 
 @dataclass
 class IntentClassifierConfig:
-    """意图分类器配置。"""
+    """意图分类器配置。
 
-    # XENON_INTENT_CLASSIFIER_ENABLED: 启用 LLM 意图分类器
-    enabled: bool = False
+    v0.9.x: LLM 意图分类器**默认开启**（有可用 provider 时从其中挑最快的小模型；
+    没有可用 provider 时自动禁用并回退正则层）。
+    需要恢复纯正则模式时：设置 ``XENON_INTENT_CLASSIFIER_ENABLED=0``
+    或 config.yaml 写 ``intent_classifier.enabled: false``。
+    """
+
+    # XENON_INTENT_CLASSIFIER_ENABLED: 启用/关闭 LLM 意图分类器（默认开启）
+    enabled: bool = True
     # XENON_INTENT_CLASSIFIER_MODEL: LLM 分类器使用的模型
     model: str = ""
     # XENON_INTENT_CLASSIFIER_CONFIDENCE: 置信度阈值（0-1）
@@ -486,7 +492,7 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
             "XENON_INTENT_CLASSIFIER_ENABLED",
             _coerce_bool(
                 intent_classifier_data.get("enabled"),
-                False,
+                True,
                 "intent_classifier.enabled",
             ),
         ),

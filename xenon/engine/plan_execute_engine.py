@@ -17,7 +17,11 @@ from xenon.engine.plan_dag import PlanDAGCycleError
 from xenon.engine.plan_dag_executor import PlanDAGExecutorMixin, StepOutcome
 from xenon.engine.strategy_guide import get_strategy_advice
 from xenon.engine.tool_tracker import ToolExecutionTracker
-from xenon.nodes.tool_executor import ToolExecuteResult, ToolExecutor
+from xenon.nodes.tool_executor import (
+    ToolExecuteResult,
+    ToolExecutor,
+    required_execution_level,
+)
 from xenon.nodes.tool_registry import BUILTIN_TOOL_REGISTRY
 from xenon.utils.response_adapter import parse_plan, parse_react
 
@@ -507,7 +511,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         steps = list(plan.get("steps", []) or [])
         if not steps:
             return steps
-        if not self._task_requires_write(user_input):
+        if not self._task_requires_write(user_input, context):
             return steps
         if self._plan_has_write_step(steps):
             return steps
@@ -575,7 +579,10 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         return has_successful_write(tracker)
 
     @staticmethod
-    def _task_requires_write(user_input: str) -> bool:
+    def _task_requires_write(
+        user_input: str,
+        context: AgentContext | None = None,
+    ) -> bool:
         """判断任务是否需要写操作（基于执行级别，非领域关键词枚举）。
 
         WRITE(2)/EXECUTE(3) 级别意味着用户要求文件变更或命令执行；
@@ -583,7 +590,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         """
         from xenon.engine.evidence_gate import task_requires_write
 
-        return task_requires_write(user_input)
+        return task_requires_write(user_input, ctx=context)
 
     def _ensure_task_completed(
         self,
@@ -601,7 +608,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         """
         if self._has_successful_write(tracker):
             return results
-        if not self._task_requires_write(user_input):
+        if not self._task_requires_write(user_input, ctx):
             return results
         if len(results) >= self.max_steps:
             # v0.8.3 修复：不再硬拦截。此前「侦察型计划吃满 max_steps →
@@ -1021,9 +1028,22 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         user_message = user_input
         from xenon.repl.prompt_optimizer import detect_intent
 
+        turn_contract = ctx.get("_turn_contract")
+        intent = getattr(turn_contract, "intent", None) or detect_intent(user_input)
+
+        # 工具视图与 schema 保持一致：只读轮次不得在 Tip 里推荐 command/write_file。
+        execution_level = ctx.get("_execution_level")
+        if execution_level is None:
+            available_tools = frozenset(BUILTIN_TOOL_REGISTRY.names())
+        else:
+            available_tools = frozenset(
+                name
+                for name in BUILTIN_TOOL_REGISTRY.names()
+                if required_execution_level(name, {}) <= int(execution_level)
+            )
         strategy = get_strategy_advice(
-            detect_intent(user_input),
-            frozenset(BUILTIN_TOOL_REGISTRY.names()),
+            intent,
+            available_tools,
             user_input,
         )
         if strategy.prompt:

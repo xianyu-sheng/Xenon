@@ -30,6 +30,7 @@ class AgentContext:
         # single-threaded contract of the rest of AgentContext.
         self._tool_checkpoint_lock = threading.RLock()
         self._tool_checkpoint_callback: Any = None
+        self._escalation_callback: Any = None
 
     # ── 读写 ──────────────────────────────────────────────
     def get(self, key: str, default: Any = None) -> Any:
@@ -97,6 +98,32 @@ class AgentContext:
         """
         with self._tool_checkpoint_lock:
             self._tool_checkpoint_callback = callback
+
+    def set_escalation_callback(self, callback: Any = None) -> None:
+        """Register a transient hook that may grant a higher turn level.
+
+        Called with ``(tool_name, required_level, reason)`` when a tool
+exceeds the current turn's ``_execution_level``.  Returning True lets the
+        caller raise the level and execute the tool; False keeps the denial.
+        Kept outside ``_store`` for the same reason as the checkpoint hook.
+        """
+        with self._tool_checkpoint_lock:
+            self._escalation_callback = callback
+
+    def request_escalation(
+        self,
+        tool_name: str,
+        required_level: int,
+        reason: str = "",
+    ) -> bool:
+        """Ask the registered callback for permission; False when absent."""
+        callback = self._escalation_callback
+        if callback is None:
+            return False
+        try:
+            return bool(callback(tool_name, required_level, reason))
+        except Exception:  # noqa: BLE001 — 授权回调异常按拒绝处理
+            return False
 
     def record_tool_checkpoint(
         self,

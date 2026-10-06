@@ -7,9 +7,12 @@ files or execute commands.  Explicit user constraints always win.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from enum import IntEnum
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionLevel(IntEnum):
@@ -27,20 +30,31 @@ _EXECUTION_BOUNDARY_MARKER = "## 本轮执行边界（最高优先级）"
 def execution_boundary_text(level: ExecutionLevel | int) -> str:
     """Render one deterministic, turn-local authorization boundary."""
     boundary = {
-        int(ExecutionLevel.ANSWER_ONLY): "本轮只能输出回答，禁止调用任何工具。",
+        int(ExecutionLevel.ANSWER_ONLY): (
+            "本轮未授权任何工具调用，请直接在回答中完成；"
+            "若完成任务确实需要读取、写入或执行外部内容，"
+            "请先向用户说明原因并询问是否授权，不要仅以权限为由放弃。"
+        ),
         int(
             ExecutionLevel.READ_ONLY
-        ): "本轮只允许只读工具，禁止写文件、修改状态或执行命令。",
+        ): (
+            "本轮只允许只读工具，禁止写文件、修改状态或执行命令；"
+            "若完成任务必须写入或运行命令，请先向用户说明原因并询问是否授权，"
+            "不要仅以权限为由放弃。"
+        ),
         int(
             ExecutionLevel.WRITE
-        ): "本轮允许读取和写入，但禁止 command、动态工具及任何命令执行。",
+        ): (
+            "本轮允许读取和写入，但禁止 command、动态工具及任何命令执行；"
+            "如需运行命令，请先向用户说明原因并询问是否授权。"
+        ),
         int(ExecutionLevel.EXECUTE): "本轮已授权按正常权限闸门使用执行类工具。",
     }.get(int(level), "")
     if not boundary:
         return ""
     return (
         f"{_EXECUTION_BOUNDARY_MARKER}\n{boundary}"
-        "即使此前提示要求使用工具，也绝不能越过这条边界。"
+        "该边界优先于其他提示；需要越界时先询问用户。"
     )
 
 
@@ -94,19 +108,42 @@ _NO_TOOLS = re.compile(
     re.IGNORECASE,
 )
 _CHAT_OUTPUT = re.compile(
-    r"(?:只|仅)?(?:在)?(?:对话|聊天)(?:框|区域|中|里)?(?:内)?(?:直接)?(?:输出|展示|给出)"
+    r"(?:只|仅)?(?:在)?(?:对话|聊天)(?:框|区域|中|里)?(?:内)?(?:直接)?"
+    r"(?:输出|展示|给出|回答|回复)"
     r"|(?:输出|展示|给出)(?:到|在|至)?(?:当前)?(?:对话|聊天)(?:框|区域|中|里)?"
     r"|(?:output|show|return|respond)(?:\s+it)?\s+(?:only\s+)?(?:in|to)\s+"
     r"(?:the\s+)?(?:chat|conversation)"
     r"|\b(?:chat|conversation)\s+only\b",
     re.IGNORECASE,
 )
+# 通用禁令词。裸「别」前不允许直接跟汉字，避免把「特别是修改方案」读成
+# 禁令；「先别/我别/可别/千万别」是真实口语，单独放行。
+_NEG_WORDS = (
+    r"(?:不要|不用|不需要|无需|请勿|切勿|严禁|禁止|不准|不许|不得|不可|勿|"
+    r"先别|我别|可别|千万别|(?<![\u4e00-\u9fff])别)"
+)
+# 变更类动词。裸「改」必须携带目标（改代码/改文件/改任何…），否则
+# 「改变/改善/改为」等词会被误伤。
+_MUTATION_VERBS = (
+    r"(?:修改|编辑|改动|变更|替换|删除|移除|覆盖|重写|重构|触碰|碰|乱改"
+    r"|动(?:这个|该|当前|任何|所有|它|其|代码|文件|脚本|模块|配置|项目|仓库|"
+    r"README|readme)"
+    r"|改(?:代码|文件|脚本|模块|配置|项目|仓库|README|readme|这个|该|当前|"
+    r"任何|所有|它|其))"
+)
 _NO_WRITE = re.compile(
-    r"(?:不要|不用|别|勿|无需|不需要|禁止|不)(?:再)?"
-    r"(?:写入|保存|创建|新建|落盘)(?:任何)?(?:到)?(?:文件|磁盘)?"
-    r"|(?:不要|不用|别|勿|无需|不)(?:再)?(?:写|存|建)(?:入|到)?(?:任何)?文件"
-    r"|(?:do\s+not|don't|without)\s+(?:write|save|create|modify)(?:\s+(?:any|a|the))?\s+files?"
-    r"|\bno\s+file\s+(?:write|changes?)\b",
+    "|".join(
+        [
+            r"(?:不要|不用|别|勿|无需|不需要|禁止|不)(?:再)?"
+            r"(?:写入|保存|创建|新建|落盘)(?:任何)?(?:到)?(?:文件|磁盘)?",
+            r"(?:不要|不用|别|勿|无需|不)(?:再)?(?:写|存|建)(?:入|到)?(?:任何)?文件",
+            _NEG_WORDS + r"(?:再)?[^，。！？,.!?\n]{0,4}?" + _MUTATION_VERBS,
+            r"(?:do\s+not|don't|without|must\s+not|may\s+not|not\s+allowed\s+to)\s+"
+            r"(?:write|save|create|modify|edit|delete|change|touch|update)"
+            r"(?:\s+(?:any|a|the))?\s+files?",
+            r"\bno\s+file\s+(?:write|changes?)\b",
+        ]
+    ),
     re.IGNORECASE,
 )
 _NO_EXECUTE = re.compile(
@@ -172,6 +209,39 @@ _READ_ONLY = re.compile(
     r"|https?://|github\.com/",
     re.IGNORECASE,
 )
+
+# 显式但此前漏判的写入结构：动词 + 方向补语 + 目标（写到/输出到/记录到/
+# 保存为…）、在某个文件里加/补内容、更新 README/说明、以及英文 to/into/as。
+# 这些句式在真实对话里比「写入 X 文件」常见得多，旧词表全部漏判为只读/闲聊。
+_WRITE_TARGETED = re.compile(
+    # 中文：动词 +（量词/内容）+ 到/至/进/为 + 目标
+    r"(?:写|写入|保存|记录|输出|导出|生成|整理|汇总|追加|另存)"
+    r"(?:一份|一个|个|些|一段|成|一下)?"
+    r"[^，。！？,.!?\n]{0,14}?"
+    r"(?:到|至|进|为)\s*"
+    r"(?:[`'\"]?[\w./\\~:+-]+\.[A-Za-z0-9]{1,8}|文件|目录|文件夹|磁盘|磁盘上|"
+    r"本地|路径|README|readme)"
+    # 中文：生成/写… + 存/保存/归档 + 补语（目标由上下文承载）
+    r"|(?:生成|写|整理|汇总|导出|记录|输出)[^，。！？,.!?\n]{0,14}?"
+    r"(?:存|保存|放|落|归档)(?:起来|下来|到|进|成)"
+    # 中文：在 <文件/模块/…> 里加/补/插入
+    r"|(?:在|往|向|给)[^，。！？,.!?\n]{0,16}?"
+    r"(?:文件|脚本|模块|配置|代码|项目|仓库|README|readme|[\w.-]+\.\w{1,8})"
+    r"[^，。！？,.!?\n]{0,10}?(?:加|添加|补上|补|新增|插入|追加)"
+    # 中文：加/补/插入 … 到/进 <文件/路径>
+    r"|(?:加|添加|补上|补|新增|插入|追加)[^，。！？,.!?\n]{0,12}?"
+    r"(?:到|进|在)[^，。！？,.!?\n]{0,12}?"
+    r"(?:文件|脚本|模块|配置|README|readme|[\w.-]+\.\w{1,8})"
+    # 中文：更新/修改/改 + README/说明/配置
+    r"|(?:更新|修改|改|编辑|修订|补充|完善)(?:一下|下)?\s*"
+    r"(?:README|readme|read\s*me|说明文档|安装说明|使用说明|配置(?:文件)?)"
+    # English: write/save/output/append … to/into/as <file-ish>
+    r"|(?:write|save|output|log|export|append|dump)\s+(?:\w+\s+){0,3}?"
+    r"(?:to|into|as)\s+"
+    r"(?:[`'\"]?(?:\S*[/\\]\S+|\S+\.\w{1,8})|the\s+file|a\s+file|file)\b",
+    re.IGNORECASE,
+)
+
 
 # ── 隐含意图（显式动词缺失时的兜底） ──────────────────────
 # 上面的 _WRITE / _READ_ONLY 要求用户说出「写入/保存/修改」这类显式动词。
@@ -239,6 +309,144 @@ _PATH_REFERENCE = re.compile(
 _URL_REFERENCE = re.compile(r"https?://|github\.com/", re.IGNORECASE)
 
 
+def _split_request_clause(source: str) -> str:
+    """Authorize side effects from the final explicit request clause."""
+
+    cues = list(_REQUEST_CUE.finditer(source))
+    if cues:
+        return source[cues[-1].end() :].strip() or source
+    return source
+
+
+def _snippets(
+    pattern: re.Pattern[str],
+    text: str,
+    *,
+    limit: int = 3,
+) -> tuple[str, ...]:
+    """Return deduplicated matched snippets (bounded, for prompts/logs)."""
+
+    out: list[str] = []
+    for match in pattern.finditer(text):
+        snippet = match.group(0).strip()
+        if snippet and snippet not in out:
+            out.append(snippet)
+        if len(out) >= limit:
+            break
+    return tuple(out)
+
+
+@dataclass(frozen=True)
+class ExecutionSignals:
+    """Deterministic signals extracted from one user turn.
+
+    This is the regex layer and it **never decides the final level**.  It
+    reports primitives (write/execute structures), constraints (negations,
+    chat-only) and evidence snippets.  ``classify_execution_policy`` and the
+    LLM merge layer both consume this object, so regexes live in one place
+    and cannot drift apart across layers.
+    """
+
+    write_patterns: tuple[str, ...] = ()
+    write_snippets: tuple[str, ...] = ()
+    execute_snippets: tuple[str, ...] = ()
+    read_snippets: tuple[str, ...] = ()
+    negation_snippets: tuple[str, ...] = ()
+    no_write: bool = False
+    no_execute: bool = False
+    no_tools: bool = False
+    chat_only: bool = False
+    paths: tuple[str, ...] = ()
+
+    @property
+    def explicit_write(self) -> bool:
+        return bool(self.write_patterns)
+
+    @property
+    def explicit_execute(self) -> bool:
+        return bool(self.execute_snippets)
+
+    @property
+    def read_evidence(self) -> bool:
+        return bool(self.read_snippets) or bool(self.paths)
+
+
+def extract_execution_signals(text: str) -> ExecutionSignals:
+    """Extract primitives/constraints/evidence from *text* (no final decision)."""
+
+    source = text.strip()
+    request_source = _split_request_clause(source)
+
+    write_patterns: list[str] = []
+    write_snippets: list[str] = []
+    for label, pattern, haystack in (
+        ("write_verb", _WRITE, request_source),
+        ("write_targeted", _WRITE_TARGETED, request_source),
+        ("git_request", _DIRECT_BARE_GIT_REQUEST, source),
+        ("implicit_write", _IMPLICIT_WRITE, request_source),
+    ):
+        hits = _snippets(pattern, haystack, limit=1)
+        if hits:
+            write_patterns.append(label)
+            write_snippets.extend(hits)
+
+    negation_snippets: list[str] = []
+    for pattern in (_NO_WRITE, _NO_EXECUTE, _NO_TOOLS, _CHAT_OUTPUT):
+        negation_snippets.extend(_snippets(pattern, source, limit=1))
+
+    read_snippets: list[str] = []
+    for pattern in (_READ_ONLY, _IMPLICIT_READ):
+        read_snippets.extend(_snippets(pattern, request_source, limit=1))
+    for pattern in (_PATH_REFERENCE, _URL_REFERENCE):
+        read_snippets.extend(_snippets(pattern, source, limit=2))
+
+    return ExecutionSignals(
+        write_patterns=tuple(write_patterns),
+        write_snippets=tuple(dict.fromkeys(write_snippets)),
+        execute_snippets=_snippets(_EXECUTE, request_source, limit=2),
+        read_snippets=tuple(dict.fromkeys(read_snippets))[:5],
+        negation_snippets=tuple(dict.fromkeys(negation_snippets))[:5],
+        no_write=bool(_NO_WRITE.search(source)),
+        no_execute=bool(_NO_EXECUTE.search(source)),
+        no_tools=bool(_NO_TOOLS.search(source)),
+        chat_only=bool(_CHAT_OUTPUT.search(source)),
+        paths=tuple(
+            dict.fromkeys(
+                match.group(0).strip()
+                for match in _PATH_REFERENCE.finditer(source)
+                if match.group(0).strip()
+            )
+        )[:5],
+    )
+
+
+def _decision(
+    level: ExecutionLevel,
+    reason: str,
+    *,
+    explicit_no_write: bool = False,
+    explicit_no_execute: bool = False,
+    evidence: tuple[str, ...] = (),
+) -> ExecutionPolicy:
+    """Build the per-turn policy and emit the decision chain to the log."""
+
+    policy = ExecutionPolicy(
+        level,
+        reason,
+        explicit_no_write=explicit_no_write,
+        explicit_no_execute=explicit_no_execute,
+    )
+    logger.debug(
+        "execution_policy level=%s reason=%s no_write=%s no_execute=%s evidence=%s",
+        level.name,
+        reason,
+        explicit_no_write,
+        explicit_no_execute,
+        ",".join(evidence) or "-",
+    )
+    return policy
+
+
 def classify_execution_policy(
     text: str,
     *,
@@ -251,13 +459,14 @@ def classify_execution_policy(
     """
 
     source = text.strip()
-    no_tools = bool(_NO_TOOLS.search(source))
-    chat_output = bool(_CHAT_OUTPUT.search(source))
-    no_write = bool(_NO_WRITE.search(source))
-    no_execute = bool(_NO_EXECUTE.search(source))
+    signals = extract_execution_signals(text)
+    no_tools = signals.no_tools
+    chat_output = signals.chat_only
+    no_write = signals.no_write
+    no_execute = signals.no_execute
 
     if no_tools:
-        return ExecutionPolicy(
+        return _decision(
             ExecutionLevel.ANSWER_ONLY,
             "用户明确要求不使用工具",
             explicit_no_write=True,
@@ -267,70 +476,50 @@ def classify_execution_policy(
     # An explicit chat destination is a hard boundary.  It must be evaluated
     # before broad action verbs such as "write" or "run".
     if chat_output or (no_write and no_execute):
-        return ExecutionPolicy(
+        return _decision(
             ExecutionLevel.ANSWER_ONLY,
             "用户明确要求只在对话中回答",
             explicit_no_write=True,
             explicit_no_execute=True,
         )
 
-    # Long conversational prompts often state background plans before the
-    # actual request: "我打算提交到某平台，请你查一下……".  Authorize side
-    # effects from the final explicit request clause, while constraints above
-    # still apply to the complete original turn.
-    request_source = source
-    cues = list(_REQUEST_CUE.finditer(source))
-    if cues:
-        request_source = source[cues[-1].end() :].strip() or source
-
-    wants_execute = bool(_EXECUTE.search(request_source)) and not no_execute
-    # 显式写入动词优先；缺失时再看隐含写盘句式（需求/处置/口语修复），
-    # 否则「我需要一个 config.yaml」这类请求会掉到 ANSWER_ONLY。
-    wants_write = (
-        bool(
-            _WRITE.search(request_source)
-            or _DIRECT_BARE_GIT_REQUEST.search(source)
-            or _IMPLICIT_WRITE.search(request_source)
-        )
-        and not no_write
-    )
+    wants_execute = signals.explicit_execute and not no_execute
+    # 显式写入动词优先；缺失时再看结构化的写入句式（写到/输出到/在…里加）
+    # 与隐含写盘句式（需求/处置/口语修复），否则「我需要一个 config.yaml」
+    # 这类请求会掉到 ANSWER_ONLY。显式禁令拥有最终否决权。
+    wants_write = signals.explicit_write and not no_write
     # Keep path/URL evidence from the complete user turn.  They are frequently
     # placed before “请你分析/学习…”, while request_source intentionally starts
     # after the last polite request cue.  Looking only at request_source used
     # to discard `/media/.../resume.tex` and GitHub repository URLs, routing
     # those turns to direct mode without a read-only tools schema.
-    wants_read = bool(
-        _READ_ONLY.search(request_source)
-        or _IMPLICIT_READ.search(request_source)
-        or _PATH_REFERENCE.search(request_source)
-        or _PATH_REFERENCE.search(source)
-        or _URL_REFERENCE.search(source)
-    )
+    wants_read = signals.read_evidence
 
     if wants_execute:
-        return ExecutionPolicy(
+        return _decision(
             ExecutionLevel.EXECUTE,
             "用户明确要求执行或验证",
             explicit_no_write=no_write,
             explicit_no_execute=False,
         )
     if wants_write:
-        return ExecutionPolicy(
+        return _decision(
             ExecutionLevel.WRITE,
             "用户明确要求修改持久化内容",
             explicit_no_write=False,
             explicit_no_execute=no_execute,
+            evidence=signals.write_patterns,
         )
 
     if intent in {"query", "research"}:
-        return ExecutionPolicy(
+        return _decision(
             ExecutionLevel.READ_ONLY,
             "信息查询或资料调研只允许只读工具",
             explicit_no_write=no_write,
             explicit_no_execute=no_execute,
         )
     if intent == "write_code":
-        return ExecutionPolicy(
+        return _decision(
             ExecutionLevel.ANSWER_ONLY,
             "代码生成默认仅返回对话内容；未授权写盘或执行",
             explicit_no_write=True,
@@ -338,14 +527,14 @@ def classify_execution_policy(
         )
 
     if wants_read:
-        return ExecutionPolicy(
+        return _decision(
             ExecutionLevel.READ_ONLY,
             "用户要求读取或检查外部信息",
             explicit_no_write=no_write,
             explicit_no_execute=no_execute,
         )
 
-    return ExecutionPolicy(
+    return _decision(
         ExecutionLevel.ANSWER_ONLY,
         "请求不需要外部操作",
         explicit_no_write=no_write,

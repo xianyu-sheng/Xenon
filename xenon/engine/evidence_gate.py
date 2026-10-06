@@ -90,11 +90,14 @@ class EvidenceGate(ABC):
 
 
 # ── 纯校验函数（从 PlanExecuteEngine 提取，单一真相源）───────
-def task_requires_write(user_input: str) -> bool:
+def task_requires_write(user_input: str, ctx: Any | None = None) -> bool:
     """判断任务是否需要写操作（基于执行级别，非领域关键词枚举）。
 
     WRITE(2)/EXECUTE(3) 级别意味着用户要求文件变更或命令执行；
     ANSWER_ONLY(0)/READ_ONLY(1) 级别不需要落盘。
+
+    本轮已有执行契约（``ctx["_execution_level"]``，由 REPL 构建）时以契约
+    为准，不再用不同参数独立重算——多层重算是历史 bug 的根因之一。
     """
     try:
         from xenon.repl.execution_policy import (
@@ -102,6 +105,10 @@ def task_requires_write(user_input: str) -> bool:
             classify_execution_policy,
         )
 
+        if ctx is not None:
+            level = ctx.get("_execution_level")
+            if level is not None:
+                return int(level) >= int(ExecutionLevel.WRITE)
         policy = classify_execution_policy(user_input)
         return int(policy.level) >= int(ExecutionLevel.WRITE)
     except Exception:  # 分类失败时保守视为需要写（SWE-bench 场景默认）
@@ -395,7 +402,7 @@ class PlanCompletenessGate(EvidenceGate):
         if not steps:
             # 空计划由调用方另行处理（不在此 Gate 判定）
             return GateVerdict(self.phase, True, "空计划由调用方处理", "info")
-        if not task_requires_write(user_input):
+        if not task_requires_write(user_input, ctx=ctx):
             return GateVerdict(self.phase, True, "任务不需要写操作", "info")
         if plan_has_write_step(steps):
             return GateVerdict(self.phase, True, "计划含写工具步骤", "info")
@@ -428,7 +435,7 @@ class TaskCompletionGate(EvidenceGate):
     ) -> GateVerdict:
         if has_successful_write(tracker):
             return GateVerdict(self.phase, True, "已有成功写类工具执行", "info")
-        if not task_requires_write(user_input):
+        if not task_requires_write(user_input, ctx=ctx):
             return GateVerdict(self.phase, True, "任务不需要写操作", "info")
         if results is not None and max_steps > 0 and len(results) >= max_steps + 8:
             # v0.8.3: 从「>= max_steps 拦截」放宽为「远超 max_steps 兜底」。

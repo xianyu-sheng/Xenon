@@ -38,9 +38,12 @@ class DifficultyEstimator:
         self,
         user_input: str,
         context_messages: list[dict] | None = None,
+        *,
+        intent: str | None = None,
     ) -> TaskProfile:
         context = context_messages or []
-        intent = self._detect_intent(user_input)
+        if intent is None:
+            intent = self._detect_intent(user_input)
         complexity = self._measure_complexity(user_input, intent)
         requires_tools = self._needs_tools(user_input, intent)
         requires_code = intent in (

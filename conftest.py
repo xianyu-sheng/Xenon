@@ -11,6 +11,12 @@
 
 import pytest
 
+# 测试进程绝不调用真实 LLM：LLM 意图分类器现已默认开启，但测试必须离线、
+# 确定性。需要验证“默认开启”的用例自行 monkeypatch.delenv 后再读配置。
+import os as _os
+
+_os.environ["XENON_INTENT_CLASSIFIER_ENABLED"] = "0"
+
 # 在 conftest 加载时（最早时刻，mock 还没发生）保存 chat_completion 的真实原始引用。
 # 后续无论哪个测试怎么 mock，autouse fixture 都能恢复到这个 orig。
 import xenon.engine.base as _engine_base

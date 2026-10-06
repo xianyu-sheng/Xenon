@@ -43,6 +43,7 @@ logger.addFilter(TraceContextFilter())
 _READ_ONLY_TOOL_NAMES = frozenset(
     {
         "read_file",
+        "read_document",
         "search_files",
         "list_files",
         "docs_fetch",
@@ -434,25 +435,19 @@ class ReActEngine(BaseEngine):
                 user_input, messages=messages[:-1]
             )
 
-        # 判断输入是否需要工具操作
-        requires_tools = self._input_requires_tools(user_input)
-        from xenon.repl.prompt_optimizer import detect_intent
+        # 判断输入是否需要工具操作。本轮已有契约（REPL 传入 _execution_level）
+        # 时直接消费契约结论，不再用不同输入参数重算——多层重算是历史 bug
+        # 的根因之一（同一条输入在不同层得到不同结论）。
+        intent, policy_level = self._resolve_intent_and_level(ctx, original_user_input)
+        from xenon.repl.execution_policy import ExecutionLevel
 
-        intent = detect_intent(user_input)
-        from xenon.repl.execution_policy import (
-            ExecutionLevel,
-            classify_execution_policy,
-        )
-
-        policy_level = (
-            int(active_level)
-            if active_level is not None
-            else int(
-                classify_execution_policy(original_user_input, intent=intent).level
-            )
-        )
+        requires_tools = policy_level >= int(ExecutionLevel.READ_ONLY)
         requires_mutation = policy_level >= int(ExecutionLevel.WRITE)
-        strategy = get_strategy_advice(intent, frozenset(self.tools), user_input)
+        strategy = get_strategy_advice(
+            intent,
+            self._allowed_tool_names(),
+            original_user_input,
+        )
         if strategy.prompt:
             messages[-1]["content"] = f"{messages[-1]['content']}\n\n{strategy.prompt}"
             # Combined engines may run several ReAct phases for one user task.
@@ -1245,6 +1240,23 @@ class ReActEngine(BaseEngine):
                             break
         return parsed
 
+    def _allowed_tool_names(self) -> frozenset[str]:
+        """本轮执行级别下真实可用的工具名。
+
+        工具 schema、策略提示（Tip）与权限闸门必须共用同一份工具视图；
+        此前 Tip 用未过滤的 self.tools，会在只读轮次推荐 command/write_file，
+        与同一条消息里的执行边界直接矛盾。
+        """
+
+        active_level = getattr(self, "_active_execution_level", None)
+        if active_level is None:
+            return frozenset(self.tools)
+        return frozenset(
+            name
+            for name in self.tools
+            if required_execution_level(name, {}) <= int(active_level)
+        )
+
     def _build_tools_schema(self) -> list[dict[str, Any]]:
         """F5: 从 ``self.tools`` 构建 OpenAI 风格 tools schema 供 native FC。
 
@@ -1258,11 +1270,9 @@ class ReActEngine(BaseEngine):
         参数统一标为 string（ReAct 工具参数本就是字符串/对象，由 ToolExecutor 再校验）。
         """
         schema: list[dict[str, Any]] = []
+        allowed = self._allowed_tool_names()
         for t in self.tools.values():
-            active_level = getattr(self, "_active_execution_level", None)
-            if active_level is not None and required_execution_level(
-                t["name"], {}
-            ) > int(active_level):
+            if t["name"] not in allowed:
                 continue
             params = t.get("params", {}) or {}
             properties = {
@@ -1828,6 +1838,32 @@ class ReActEngine(BaseEngine):
             return "\n".join(lines)
         except Exception as e:
             return f"❌ 列出技能失败: {e}"
+
+    @staticmethod
+    @staticmethod
+    def _resolve_intent_and_level(
+        ctx: AgentContext,
+        original_user_input: str,
+    ) -> tuple[str | None, int]:
+        """Read intent/level from the single turn contract; legacy fallback only.
+
+        已迁移的调用方（REPL）会在 ctx 里放 ``_turn_contract``；此时引擎
+        只读契约，不再重新分类——多层各自重算是历史 bug 的根因。
+        """
+        from xenon.repl.prompt_optimizer import detect_intent
+        from xenon.repl.execution_policy import classify_execution_policy
+
+        turn_contract = ctx.get("_turn_contract")
+        active_level = ctx.get("_execution_level")
+        contract_intent = getattr(turn_contract, "intent", None)
+        intent = contract_intent or detect_intent(original_user_input)
+        if active_level is not None:
+            return intent, int(active_level)
+        if turn_contract is not None:
+            return intent, int(turn_contract.level)
+        return intent, int(
+            classify_execution_policy(original_user_input, intent=intent).level
+        )
 
     @staticmethod
     def _input_requires_tools(text: str) -> bool:

@@ -1159,14 +1159,35 @@ class ToolExecutor:
         # ── Stage 1.5: 本轮执行策略硬边界 ──
         policy_reason = execution_policy_denial(tool_name, params, context)
         if policy_reason:
-            logger.info(f"{trace_p}执行策略拒绝: {tool_name} — {policy_reason}")
-            return finish(
-                False,
-                f"⛔ {policy_reason}",
-                state=ToolExecutionState.FAILED,
-                error=policy_reason,
-                error_kind="policy_denied",
-            )
+            # 能力不足时先询问用户（REPL 注入的 escalation 回调）：同意则提升
+            # 本轮级别并继续执行；拒绝/非交互则保持硬拒绝。同一轮同一工具只问一次。
+            required = required_execution_level(tool_name, params)
+            asked = dict(context.get("_escalation_asked") or {})
+            current = context.get("_execution_level")
+            approved = False
+            if (
+                current is not None
+                and int(required) > int(current)
+                and tool_name not in asked
+                and context.request_escalation(tool_name, int(required), policy_reason)
+            ):
+                approved = True
+            asked[tool_name] = bool(approved)
+            context.set("_escalation_asked", asked)
+            if approved:
+                context.set("_execution_level", int(required))
+                logger.info(
+                    f"{trace_p}执行权限已获用户授权: {tool_name} → level {required}"
+                )
+            else:
+                logger.info(f"{trace_p}执行策略拒绝: {tool_name} — {policy_reason}")
+                return finish(
+                    False,
+                    f"⛔ {policy_reason}",
+                    state=ToolExecutionState.FAILED,
+                    error=policy_reason,
+                    error_kind="policy_denied",
+                )
 
         # ── Stage 2: 参数幻觉校验 ──
         _ok, reason, level = validate_tool_params(params, tool_name, self.tool_gate)
