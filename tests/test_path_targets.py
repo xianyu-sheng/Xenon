@@ -17,8 +17,8 @@ from xenon.engine.context import AgentContext
 from xenon.nodes.path_targets import resolve_target_path
 from xenon.nodes.tool_node import SecurityError, ToolNode
 
-HOME = Path(r"C:\Users\Administrator")
-CWD = Path(r"D:\proj")
+HOME = Path.home() / "xenon-test-home"
+CWD = Path.home() / "xenon-test-cwd"
 
 
 # ── 解析层 ─────────────────────────────────────────────────
