@@ -34,16 +34,23 @@ def test_input_rule_spans_terminal_width(monkeypatch):
     assert fragments == [("class:input.rule", "─" * 47)]
 
 
-def test_prompt_keeps_rule_with_input_and_status_at_screen_bottom():
+def test_prompt_keeps_rule_and_status_with_the_input():
     repl = REPL()
     assert repl._pt_session is not None
-    assert repl._pt_session.bottom_toolbar == repl.status_bar.get_toolbar_fragments
+    # 状态栏是紧跟输入下边界的内联行，不再是屏幕底部的 bottom_toolbar
+    # （固定底部工具栏会把输入区与状态栏之间拉满空白）。
+    assert repl._pt_session.bottom_toolbar is None
 
     root = repl._pt_session.app.layout.container
     main = root.children[0]
     main_stack = main.alternative_content.content
     assert (
-        main_stack.children[-1].content.text == repl.status_bar.get_input_rule_fragments
+        main_stack.children[-2].content.text
+        == repl.status_bar.get_input_rule_fragments
+    )
+    assert (
+        main_stack.children[-1].content.text
+        == repl.status_bar.get_toolbar_fragments
     )
 
     buffer_window = main_stack.children[1].content

@@ -376,8 +376,10 @@ class REPL:
                     completer=self._completer,
                     key_bindings=kb,
                     style=style,
-                    bottom_toolbar=self.status_bar.get_toolbar_fragments,
                 )
+                # 状态栏不再用 bottom_toolbar：固定底部工具栏会把输入区与
+                # 状态栏之间的空白拉满整屏。它由 _install_input_lower_rule
+                # 作为内联行紧跟在输入下边界之后。
                 self._install_input_lower_rule()
             except Exception:
                 logger.debug("prompt_toolkit 初始化失败，回退自建输入", exc_info=True)
@@ -418,7 +420,7 @@ class REPL:
         console.print()
 
     def _install_input_lower_rule(self) -> None:
-        """让下边界紧贴输入区，同时保留固定在屏幕底端的状态栏。"""
+        """把下边界与状态栏都做成紧贴输入区的内联行。"""
         if self._pt_session is None:
             return
 
@@ -466,6 +468,15 @@ class REPL:
             dont_extend_height=True,
         )
         main_stack.children.append(lower_rule)
+
+        # 状态栏紧跟下边界：composer = 输入 + 下边界 + 状态栏。长会话时
+        # prompt_toolkit 自然把它带到屏幕底部；短会话也不会凭空拉出整屏空白。
+        status_window = Window(
+            FormattedTextControl(self.status_bar.get_toolbar_fragments),
+            height=1,
+            dont_extend_height=True,
+        )
+        main_stack.children.append(status_window)
 
     def _confirm_tool(
         self, tool_name: str, params: dict, risk: str
