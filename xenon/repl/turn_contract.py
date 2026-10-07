@@ -9,11 +9,17 @@ Design (confirmed with the maintainer):
 
   1. explicit negations always veto — no model may override them;
   2. explicit regex structures win over an LLM that missed them;
-  3. chat-only / code-in-chat intents cannot invent file operations;
-  4. low-confidence LLM write/execute proposals without regex evidence become
-     ``ask_required`` instead of silent grants;
-  5. if the classifier is disabled/failed/timed out, the previous regex-only
+  3. LLM proposals are adopted as-is: the merge never silently strips a
+     write/execute proposal just because the regex layer has no pattern
+     for that phrasing (the classifier's own ``chat_only`` flag still
+     clears proposals unless the text carries action/target evidence);
+  4. disagreement without any action/target evidence in the text becomes
+     ``ask_required`` instead of a silent chat-only downgrade;
+  5. if the classifier is disabled/failed/timed out, the regex-only
      policy is used verbatim (``degraded=True``).
+
+Merge overrides are logged (info for removals, debug for additions) so a
+silent misclassification can never hide again.
 
 Every layer (REPL routing, engines, evidence gates, strategy tips) must consume
 the contract instead of calling ``classify_execution_policy`` again.
@@ -38,7 +44,6 @@ logger = logging.getLogger(__name__)
 
 _WRITE_OPERATIONS = frozenset({"write", "create", "delete", "move"})
 _READ_OPERATIONS = frozenset({"read", "network"})
-_CHAT_ONLY_INTENTS = frozenset({"chat", "explain", "design", "novel"})
 _QUERY_INTENTS = frozenset({"query", "research"})
 
 # ── 跨回合承诺：用户回复“继续”时应续接上一轮的行动，而不是重新闲聊 ──
@@ -122,6 +127,18 @@ _PROMISE_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"waiting\s+for\s+your\s+(?:confirmation|approval|go-?ahead)",
         re.IGNORECASE,
     ),
+)
+# 承诺窗口里出现写入/授权/执行 → 这是索要写盘授权，登记为 approval 门；
+# 否则登记为 continuation。这样“可以 Windows”这类回话才能被消费。
+_GATE_APPROVAL_CONTEXT = re.compile(
+    r"(?:写入|写盘|保存|落盘|授权|批准|执行|创建文件|写文件|执行命令)",
+    re.IGNORECASE,
+)
+# “执行写入”的“执行”是“去做写”，不是运行命令；只有真正指向命令/运行时
+# 才把空能力承诺升级成 EXECUTE。
+_GATE_EXECUTE_UPGRADE = re.compile(
+    r"(?:运行|命令|跑|pytest|python|执行(?!写入|写盘|保存|落盘|写文件))",
+    re.IGNORECASE,
 )
 _PENDING_SCAN_WINDOW = 600
 
@@ -210,13 +227,31 @@ def detect_pending_action(
         snippet = " ".join(
             tail[max(0, match.start() - 40) : match.end() + 80].split()
         )
+        window = tail[max(0, match.start() - 60) : match.end() + 120]
+        kind = (
+            "approval"
+            if _GATE_APPROVAL_CONTEXT.search(window)
+            else "continuation"
+        )
+        ops = frozenset(operations)
+        promised_level = ExecutionLevel(int(level))
+        # 原回合没有写能力（如分类器被误剥成 ANSWER_ONLY）时，approval 门
+        # 从承诺上下文补出能力：带执行/命令 → EXECUTE，否则 WRITE。
+        if kind == "approval" and not ops:
+            if _GATE_EXECUTE_UPGRADE.search(window):
+                ops = frozenset({"write", "execute"})
+                promised_level = ExecutionLevel.EXECUTE
+            else:
+                ops = frozenset({"write"})
+                promised_level = ExecutionLevel.WRITE
         return PendingAction(
             engine=engine,
-            level=ExecutionLevel(int(level)),
+            level=promised_level,
             intent=intent,
-            operations=frozenset(operations),
+            operations=ops,
             reason=reason or "上一轮承诺在用户确认后继续执行",
             promise=snippet,
+            kind=kind,
         )
     return None
 
@@ -385,6 +420,7 @@ def signals_to_hints(signals: ExecutionSignals) -> dict[str, Any]:
         "advisory": signals.advisory,
         "deferred_write": signals.deferred_write,
         "write_imperative": signals.write_imperative,
+        "action_target_mentioned": signals.action_target_mentioned,
     }
 
 
@@ -645,17 +681,15 @@ def build_turn_contract(
     if signals.read_evidence:
         operations.add("read")
 
-    # 4) chat-only / 纯生成意图不得发明文件操作。
-    if result.chat_only and not (structural_write or signals.explicit_execute):
-        operations.clear()
-    if intent in _CHAT_ONLY_INTENTS and not (
-        structural_write or signals.explicit_execute
+    # 4) 分类器自报 chat_only 且文本没有动作/目标词时，清空提案。
+    # 旧版的 write_code/chat-only 意图剥离规则已删除：分类器 0.92 置信的
+    # create+execute 提案曾因正则未命中“写在…上”而被静默清空。
+    if result.chat_only and not (
+        structural_write
+        or signals.explicit_execute
+        or signals.action_target_mentioned
     ):
-        operations -= _WRITE_OPERATIONS | {"execute"}
-    if intent == "write_code" and not structural_write:
-        operations -= _WRITE_OPERATIONS | {"execute"}
-        if not signals.read_evidence:
-            operations -= _READ_OPERATIONS
+        operations.clear()
 
     # 4b) 征询解释不是施工：问原因/思路/建议时，即使分类器给出 write/execute
     # 也收回（显式写入/执行结构仍然优先）。
@@ -667,12 +701,17 @@ def build_turn_contract(
     # 4c) 延迟语句本身就是写意图的提案（“我让你写你再写”没有显式目标）。
     operations = _with_deferred_proposal(signals, operations)
 
-    # 5) 低置信 + 无正则证据 + 想写/执行 → 询问而不是静默授权。
+    # 5) 分歧处理：想写/执行但文本无任何动作/目标证据，且低置信 →
+    # 询问一次，而不是静默剥成聊天。
     threshold = float(getattr(classifier, "confidence_threshold", 0.7) or 0.7)
     ask_required = bool(
         result.confidence < threshold
         and operations & (_WRITE_OPERATIONS | {"execute"})
-        and not (structural_write or signals.explicit_execute)
+        and not (
+            structural_write
+            or signals.explicit_execute
+            or signals.action_target_mentioned
+        )
     )
     # 裸祈使句（“请写入”但没有目标/上下文）：先问一次，而不是静默授权。
     if (
@@ -685,6 +724,23 @@ def build_turn_contract(
     # 6) 查询/调研意图保持至少只读（与旧行为一致的下限）。
     if intent in _QUERY_INTENTS:
         operations.add("read")
+
+    # 6b) 合并覆盖审计：静默的增删从此可见。
+    classifier_ops = frozenset(result.operations)
+    final_ops = frozenset(operations)
+    if classifier_ops - final_ops:
+        logger.info(
+            "contract merge 移除分类器操作 %s -> %s（text=%r）",
+            sorted(classifier_ops),
+            sorted(final_ops),
+            text[:80],
+        )
+    elif final_ops - classifier_ops:
+        logger.debug(
+            "contract merge 补回操作 %s（text=%r）",
+            sorted(final_ops - classifier_ops),
+            text[:80],
+        )
 
     # 7) 操作 → 级别。
     if "execute" in operations:

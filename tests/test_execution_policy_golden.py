@@ -132,6 +132,8 @@ def test_answer_only_boundary_offers_asking_instead_of_flat_refusal() -> None:
     # 旧文案是"禁止调用任何工具……绝不能越过"，模型只能转述成"未获得许可"。
     assert "禁止调用任何工具" not in boundary
     assert "询问" in boundary
+    # 无工具轮次不得让模型输出 <function_calls> 式伪工具标记。
+    assert "不要输出任何工具调用" in boundary
 
 
 def test_read_only_boundary_keeps_scope_and_ask_path() -> None:

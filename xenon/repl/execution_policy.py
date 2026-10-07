@@ -34,6 +34,7 @@ def execution_boundary_text(level: ExecutionLevel | int) -> str:
             "本轮未授权任何工具调用，请直接在回答中完成；"
             "若完成任务确实需要读取、写入或执行外部内容，"
             "请先向用户说明原因并询问是否授权，不要仅以权限为由放弃。"
+            "不要输出任何工具调用/函数调用的占位文本，直接用自然语言回答。"
         ),
         int(
             ExecutionLevel.READ_ONLY
@@ -41,6 +42,7 @@ def execution_boundary_text(level: ExecutionLevel | int) -> str:
             "本轮只允许只读工具，禁止写文件、修改状态或执行命令；"
             "若完成任务必须写入或运行命令，请先向用户说明原因并询问是否授权，"
             "不要仅以权限为由放弃。"
+            "如需读写/执行，请用自然语言说明需要的操作，不要输出工具调用格式。"
         ),
         int(
             ExecutionLevel.WRITE
@@ -210,6 +212,16 @@ _WRITE_TARGETED = re.compile(
     r"本地|路径|README|readme|桌面|我的桌面|桌面目录|下载|下载目录|"
     r"文档|文档目录|我的文档|主目录|家目录|项目根|项目目录|当前目录|"
     r"工作目录|这里)"
+    # 中文：写在/保存在 …（桌面/文件…）上/里/中
+    r"|(?:写|写入|保存|生成|导出|输出|存|落盘)[^，。！？,.!?\n]{0,12}?"
+    r"在\s*[^，。！？,.!?\n]{0,8}?"
+    r"(?:桌面|我的桌面|桌面目录|下载|下载目录|文档|文档目录|主目录|家目录|"
+    r"项目根|项目目录|当前目录|工作目录|这里|磁盘|文件|目录|文件夹|路径|本地)"
+    r"(?:上|里|中|内)?"
+    # 中文：动词 +（可选方向）+ 语言级目标（写入桌面 / 写到桌面上 / 存到桌面）
+    r"|(?:写|写入|保存|落盘|输出|导出|生成|存)(?:到|至|进|为|入)?\s*"
+    r"(?:桌面|我的桌面|桌面目录|下载|下载目录|文档|文档目录|主目录|家目录|"
+    r"项目根|项目目录|当前目录|工作目录|这里|磁盘)(?:上|里|中|内)?"
     # 中文：生成/写… + 存/保存/归档 + 补语（目标由上下文承载）
     r"|(?:生成|写|整理|汇总|导出|记录|输出)[^，。！？,.!?\n]{0,14}?"
     r"(?:存|保存|放|落|归档)(?:起来|下来|到|进|成)"
@@ -253,6 +265,20 @@ _BARE_WRITE_IMPERATIVE = re.compile(
     r"(?:请|麻烦|帮我|给我|直接|现在|马上|立刻)?\s*(?<![别不勿没])"
     r"(?:写入|写吧|保存吧|存吧|落盘|落盘吧|写文件|保存文件|存一下|写一下|写入吧)"
     r"\s*(?:吧|了|一下|下来)?\s*[。！!，,]?\s*$",
+    re.IGNORECASE,
+)
+# 弱信号（分歧时用）：文本同时出现动作动词与落盘目标。它不决定级别，
+# 只用于“分类器说 chat_only / 低置信”时的覆盖与询问判断。
+_ACTION_VERBS = re.compile(
+    r"(?:写|写入|保存|落盘|存|输出|导出|生成|创建|新建|修改|编辑|删除|移除|"
+    r"追加|运行|执行|跑|测试|验证|提交|推送|部署)",
+    re.IGNORECASE,
+)
+_TARGET_NOUNS = re.compile(
+    r"(?:桌面|我的桌面|下载|下载目录|文档|文档目录|图片|主目录|家目录|"
+    r"项目根|项目目录|当前目录|工作目录|文件|目录|文件夹|磁盘|路径|"
+    r"脚本|模块|配置|README|readme|"
+    r"[A-Za-z]:[\\/]|[\w./\\~+-]+\.[A-Za-z0-9]{1,8})",
     re.IGNORECASE,
 )
 
@@ -323,7 +349,8 @@ _URL_REFERENCE = re.compile(r"https?://|github\.com/", re.IGNORECASE)
 # 只收录疑问/征询形式，避免「修复它并告诉我原因」这类命令式误伤。
 _ADVISORY = re.compile(
     r"(?:思路|有什么建议|有什么看法|什么建议|为什么呢?|原因是什么|告诉我原因|"
-    r"怎么解决|如何解决|工作原理|是什么原理|做什么用的|怎么回事|哪个好)"
+    r"怎么解决|如何解决|工作原理|是什么原理|做什么用的|怎么回事|哪个好|"
+    r"解释(?:一下|下)?)"
 )
 
 
@@ -377,6 +404,7 @@ class ExecutionSignals:
     advisory: bool = False
     deferred_write: bool = False
     write_imperative: bool = False
+    action_target_mentioned: bool = False
     paths: tuple[str, ...] = ()
 
     @property
@@ -452,6 +480,9 @@ def extract_execution_signals(text: str) -> ExecutionSignals:
         advisory=bool(_ADVISORY.search(source)),
         deferred_write=bool(_DEFER_WRITE.search(source)),
         write_imperative=bool(_BARE_WRITE_IMPERATIVE.search(request_source)),
+        action_target_mentioned=bool(
+            _ACTION_VERBS.search(source) and _TARGET_NOUNS.search(source)
+        ),
         paths=tuple(
             dict.fromkeys(
                 match.group(0).strip()

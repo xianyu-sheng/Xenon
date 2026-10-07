@@ -125,14 +125,52 @@ def test_explicit_execute_structure_is_kept() -> None:
 
 
 # ── 规则 3：纯生成/聊天不得发明文件操作 ─────────────────────
-def test_write_code_without_file_target_stays_chat() -> None:
+def test_write_code_proposal_is_adopted_when_text_has_action_words() -> None:
+    """LLM 提案不再因正则无结构而被静默剥除（旧 write_code 规则已删）。
+
+    分类器提议 create 时，文本含动作词（写）即采纳；真正的安全网是
+    工具边界审批与语料评测，而不是合并层的静默降级。
+    """
     fake = FakeClassifier(
         intent="write_code", operations=("create", "read"), confidence=0.9
     )
     contract = build_turn_contract("帮我写一个排序函数", classifier=fake)
 
-    assert contract.level is ExecutionLevel.ANSWER_ONLY
-    assert contract.operations == frozenset()
+    assert contract.level is ExecutionLevel.WRITE
+    assert "create" in contract.operations
+
+
+def test_classifier_proposal_survives_missing_regex_structure() -> None:
+    """“写在…上”句式此前正则零命中导致 0.92 置信提案被清空——锁定新原则。"""
+    fake = FakeClassifier(
+        intent="write_code",
+        operations=("create", "execute"),
+        confidence=0.92,
+    )
+    contract = build_turn_contract(
+        "将这个快排算法代码写在桌面上", classifier=fake
+    )
+
+    assert "create" in contract.operations
+    assert "execute" in contract.operations
+    assert contract.level is ExecutionLevel.EXECUTE
+    assert contract.ask_required is False
+
+
+def test_merge_removals_are_logged(caplog) -> None:
+    """合并层删除分类器操作必须留下 info 级审计日志。"""
+    import logging
+
+    fake = FakeClassifier(
+        intent="debug",
+        operations=("read", "write"),
+        confidence=0.95,
+        chat_only=True,
+    )
+    with caplog.at_level(logging.INFO, logger="xenon.repl.turn_contract"):
+        build_turn_contract("看看这个报错", classifier=fake)
+
+    assert any("移除分类器操作" in record.message for record in caplog.records)
 
 
 def test_explain_intent_cannot_invent_writes() -> None:
@@ -155,6 +193,33 @@ def test_llm_chat_only_flag_cannot_invent_writes() -> None:
     contract = build_turn_contract("看看这个报错", classifier=fake)
 
     assert contract.level < ExecutionLevel.WRITE
+
+
+def test_action_target_words_override_chat_only() -> None:
+    """弱信号：文本有动作+目标词时，chat_only 自报也不能清空提案。"""
+    fake = FakeClassifier(
+        intent="chat",
+        operations=("create",),
+        confidence=0.95,
+        chat_only=True,
+    )
+    contract = build_turn_contract("帮我写点东西放桌面上", classifier=fake)
+
+    assert contract.level is ExecutionLevel.WRITE
+    assert "create" in contract.operations
+
+
+def test_action_target_words_skip_the_ask() -> None:
+    """弱信号：低置信提案但文本有动作+目标词 → 直接采纳，不追问。"""
+    fake = FakeClassifier(
+        intent="debug",
+        operations=("create",),
+        confidence=0.5,
+    )
+    contract = build_turn_contract("帮我写点东西放桌面上", classifier=fake)
+
+    assert contract.ask_required is False
+    assert contract.level is ExecutionLevel.WRITE
 
 
 # ── 规则 4：低置信 + 无证据 → 询问而不是静默授权 ────────────

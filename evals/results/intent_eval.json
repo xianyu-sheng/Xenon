@@ -2,10 +2,10 @@
   "regex": {
     "summary": {
       "name": "regex",
-      "cases": 51,
-      "pass": 49,
-      "pass_rate": 0.961,
-      "level_accuracy": 0.98,
+      "cases": 55,
+      "pass": 53,
+      "pass_rate": 0.964,
+      "level_accuracy": 0.982,
       "safety_violations": 0,
       "recall_misses": 2,
       "p50_ms": null,
@@ -46,14 +46,14 @@
   "llm": {
     "summary": {
       "name": "llm:deepseek/deepseek-v4-flash",
-      "cases": 51,
-      "pass": 51,
+      "cases": 55,
+      "pass": 55,
       "pass_rate": 1.0,
       "level_accuracy": 1.0,
       "safety_violations": 0,
       "recall_misses": 0,
-      "p50_ms": 1088.0,
-      "p95_ms": 1983.5
+      "p50_ms": 1306.2,
+      "p95_ms": 1945.1
     },
     "failures": []
   }

@@ -20,6 +20,7 @@ from xenon.repl.turn_contract import (
     PendingAction,
     build_turn_contract,
     continuation_hint,
+    detect_pending_action,
     should_consume_pending,
 )
 
@@ -116,6 +117,61 @@ def test_bare_write_imperatives(text):
     assert signals.deferred_write is False
     # 必须进入 write_patterns，才能被契约当成显式结构（而非闲聊）。
     assert "write_imperative" in signals.write_patterns
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "写在桌面上",
+        "写入桌面",
+        "保存在桌面上",
+        "授权写入桌面",
+        "将这个快排算法代码写在桌面上",
+    ],
+)
+def test_more_write_target_phrasings(text):
+    """“写在…上 / 动词+目标直连”此前零命中，导致确认循环（用户实测）。"""
+    signals = extract_execution_signals(text)
+    assert signals.explicit_write is True, text
+    assert signals.action_target_mentioned is True, text
+
+
+def test_promise_about_writing_creates_an_approval_gate():
+    """索要写入授权的承诺 → approval 门；空能力回合也从承诺上下文补出 WRITE。"""
+    text = (
+        '要不要我执行写入？ 回复"可以"并告诉我你的操作系统'
+        "（Windows / macOS / Linux），我就把文件放到桌面。"
+    )
+    pending = detect_pending_action(
+        text,
+        engine="direct",
+        level=ExecutionLevel.ANSWER_ONLY,
+        intent="write_code",
+        operations=frozenset(),  # 原回合被误判为空能力
+    )
+    assert pending is not None
+    assert pending.kind == "approval"
+    assert pending.level is ExecutionLevel.WRITE
+    assert "write" in pending.operations
+
+
+def test_windows_confirmation_consumes_the_prose_approval_gate():
+    text = (
+        '要不要我执行写入？ 回复"可以"并告诉我你的操作系统'
+        "（Windows / macOS / Linux），我就把文件放到桌面。"
+    )
+    pending = detect_pending_action(
+        text,
+        engine="direct",
+        level=ExecutionLevel.ANSWER_ONLY,
+        intent="write_code",
+        operations=frozenset(),
+    )
+
+    assert should_consume_pending(pending, "可以 Windows") is True
+    contract = build_turn_contract("可以 Windows", pending=pending)
+    assert contract.continuation is True
+    assert contract.level is ExecutionLevel.WRITE
 
 
 # ── 契约层 ────────────────────────────────────────────────

@@ -49,3 +49,7 @@
 {"text": "读一下 config.yaml，把里面的端口改成 8080", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
 {"text": "先分析一下这个模块，然后帮我重构它", "levels": ["WRITE"], "require": ["write"], "forbid": ["execute"]}
 {"text": "帮我把桌面上的校招投递表1.et 读出来并整理成汇总", "levels": ["READ_ONLY"], "require": ["read"], "forbid": ["write", "create", "delete", "move", "execute"]}
+{"text": "将这个快排算法代码写在桌面上", "levels": ["WRITE", "EXECUTE"], "require": [], "forbid": []}
+{"text": "授权写入桌面", "levels": ["WRITE", "EXECUTE"], "require": [], "forbid": []}
+{"text": "把结果保存在桌面上", "levels": ["WRITE", "EXECUTE"], "require": [], "forbid": []}
+{"text": "写个快排算法给我看看", "levels": ["ANSWER_ONLY"], "require": [], "forbid": ["write", "execute"]}
