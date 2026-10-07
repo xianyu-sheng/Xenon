@@ -119,7 +119,12 @@ def resolve_target_path(
     if value == "~":
         value = str(base_home)
     elif value.startswith(("~/", "~\\")):
-        value = str(base_home / value[2:])
+        tail = value[2:]
+        if "\\" in tail:
+            # ``~\Desktop\x`` 是 Windows 风格引用；在 POSIX 上反斜杠不是
+            # 分隔符，统一转换，保证跨平台解析一致。
+            tail = tail.replace("\\", "/")
+        value = str(base_home / tail)
     else:
         match = _SPLIT_HEAD.search(value)
         if match:
