@@ -1189,6 +1189,33 @@ class ToolExecutor:
                     error_kind="policy_denied",
                 )
 
+        # ── Stage 1.6: 工具边界审批（工作区内写免问，越界写与命令要问）──
+        # 仅在用户交互通道存在时生效；库调用方没有回调时保持旧语义。
+        from xenon.nodes.approval_policy import needs_boundary_approval
+
+        already_approved = bool(
+            (context.get("_escalation_asked") or {}).get(tool_name)
+        )
+        if not already_approved and needs_boundary_approval(tool_name, params):
+            outcome = context.request_approval(
+                tool_name, params, policy_reason or "工具边界审批"
+            )
+            if outcome != "allowed-once":
+                logger.info(
+                    f"{trace_p}边界审批未通过: {tool_name} — {outcome}"
+                )
+                message = (
+                    f"⛔ 用户未授权 {tool_name}（{outcome}）。"
+                    "如需继续，请重新给出明确指令。"
+                )
+                return finish(
+                    False,
+                    message,
+                    state=ToolExecutionState.FAILED,
+                    error=message,
+                    error_kind="approval_denied",
+                )
+
         # ── Stage 2: 参数幻觉校验 ──
         _ok, reason, level = validate_tool_params(params, tool_name, self.tool_gate)
         if level == "warn":

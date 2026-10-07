@@ -31,6 +31,7 @@ class AgentContext:
         self._tool_checkpoint_lock = threading.RLock()
         self._tool_checkpoint_callback: Any = None
         self._escalation_callback: Any = None
+        self._approval_callback: Any = None
 
     # ── 读写 ──────────────────────────────────────────────
     def get(self, key: str, default: Any = None) -> Any:
@@ -124,6 +125,37 @@ exceeds the current turn's ``_execution_level``.  Returning True lets the
             return bool(callback(tool_name, required_level, reason))
         except Exception:  # noqa: BLE001 — 授权回调异常按拒绝处理
             return False
+
+    def set_approval_callback(self, callback: Any = None) -> None:
+        """Register the tool-boundary approval channel (REPL injects it)."""
+        with self._tool_checkpoint_lock:
+            self._approval_callback = callback
+
+    def request_approval(
+        self,
+        tool_name: str,
+        params: dict[str, Any] | None = None,
+        reason: str = "",
+    ) -> str:
+        """Ask the boundary policy about one concrete tool call.
+
+        Returns a closed outcome string.  When no channel is registered the
+        call is allowed, preserving the level-based semantics of library and
+        direct-engine users; the REPL always registers a channel, where the
+        real policy (workspace writes free, commands and out-of-workspace
+        writes ask) applies and every failure mode denies.
+        """
+
+        from xenon.nodes.approval_policy import APPROVAL_ALLOWED_ONCE, APPROVAL_OUTCOMES
+
+        callback = self._approval_callback
+        if callback is None:
+            return APPROVAL_ALLOWED_ONCE
+        try:
+            outcome = str(callback(tool_name, params or {}, reason) or "")
+        except Exception:  # noqa: BLE001 — 审批通道异常按不可用（拒绝）处理
+            return "unavailable"
+        return outcome if outcome in APPROVAL_OUTCOMES else "unavailable"
 
     def record_tool_checkpoint(
         self,

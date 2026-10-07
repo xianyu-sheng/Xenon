@@ -32,6 +32,14 @@ from rich.theme import Theme
 
 from xenon.engine.context import AgentContext
 from xenon.engine.registry import ENGINE_REGISTRY, EngineSpec
+from xenon.nodes.approval_policy import (
+    APPROVAL_ALLOWED_ONCE,
+    APPROVAL_CANCELLED,
+    APPROVAL_REJECTED,
+    APPROVAL_UNAVAILABLE,
+    SessionRuleStore,
+    targets_outside_workspace,
+)
 from xenon.repl.commands import COMMANDS, dispatch_command
 from xenon.repl.context_manager import ContextManager
 from xenon.repl.execution_policy import (
@@ -233,7 +241,11 @@ class REPL:
         self.agent_context.set_tool_checkpoint_callback(self._persist_tool_checkpoint)
         # 能力不足时的升级询问：工具被本轮执行级别拦截时问用户一次。
         self._tool_escalations: set[str] = set()
+        # “a=本会话总是允许”是带 TTL 的会话规则（用户决策），不是永久放行。
+        self._approval_rules = SessionRuleStore()
         self.agent_context.set_escalation_callback(self._confirm_tool_escalation)
+        # 工具边界审批：工作区内写免问；越界写与命令要问（可 y/n/a，a 带 TTL）。
+        self.agent_context.set_approval_callback(self._confirm_tool_approval)
 
         # LLM 意图分类器按需初始化：未启用/无可用模型时为 None，正则层兜底。
         self._intent_classifier: Any = None
@@ -3039,6 +3051,70 @@ class REPL:
             logger.warning("意图分类器初始化失败，回退正则层: %s", exc)
         return self._intent_classifier
 
+    def _workspace_root(self) -> Path:
+        """当前工作区根：优先项目根，否则进程 cwd。"""
+
+        root = getattr(self.project_ctx, "root", None)
+        return Path(root) if root else Path.cwd()
+
+    def _confirm_tool_approval(
+        self,
+        tool_name: str,
+        params: dict,
+        reason: str = "",
+    ) -> str:
+        """工具边界审批：工作区内写直接放行，越界写与命令询问。
+
+        返回值是封闭结果词表：allowed-once / rejected / cancelled /
+        unavailable；只有 allowed-once 是授权。非交互且无 assume_yes 时返回
+        unavailable（fail-closed）。“a”登记带 TTL 的会话规则。
+        """
+
+        if self._approval_rules.is_allowed(tool_name):
+            return APPROVAL_ALLOWED_ONCE
+        if get_config().interaction.assume_yes:
+            return APPROVAL_ALLOWED_ONCE
+        if not sys.stdin.isatty():
+            logger.info("非交互环境：%s 未获边界审批", tool_name)
+            return APPROVAL_UNAVAILABLE
+
+        # 写工具在工作区内免问（用户决策 1）。命令类没有目标路径，会走到询问。
+        if not targets_outside_workspace(tool_name, params, self._workspace_root()):
+            return APPROVAL_ALLOWED_ONCE
+
+        with self._permission_prompt_lock:
+            console.print()
+            console.print(
+                Panel(
+                    f"模型请求执行 [bold]{tool_name}[/bold]，超出工作区或属于命令执行。\n"
+                    f"原因：{reason or '工具边界策略'}",
+                    title="需要授权",
+                    border_style="yellow",
+                    padding=(0, 1),
+                )
+            )
+            try:
+                choice = Prompt.ask(
+                    "是否授权",
+                    choices=["y", "n", "a"],
+                    default="n",
+                    show_choices=True,
+                    case_sensitive=False,
+                )
+            except (KeyboardInterrupt, EOFError):
+                return APPROVAL_CANCELLED
+        if choice == "a":
+            ttl = self._approval_rules.allow(tool_name)
+            console.print(
+                f"[dim]· 本会话 {ttl / 60:.0f} 分钟内自动允许 {tool_name}"
+            )
+            return APPROVAL_ALLOWED_ONCE
+        if choice == "y":
+            console.print("[dim]· 已授权本次操作[/dim]")
+            return APPROVAL_ALLOWED_ONCE
+        console.print("[dim]· 未授权[/dim]")
+        return APPROVAL_REJECTED
+
     def _confirm_tool_escalation(
         self,
         tool_name: str,
@@ -3047,6 +3123,8 @@ class REPL:
     ) -> bool:
         """工具超出本轮级别时的询问式升级（能力不足 → 问用户，不硬拒）。"""
 
+        if self._approval_rules.is_allowed(tool_name):
+            return True
         if tool_name in self._tool_escalations:
             return True
         if get_config().interaction.assume_yes:
@@ -3081,8 +3159,11 @@ class REPL:
             except (KeyboardInterrupt, EOFError):
                 return False
         if choice == "a":
-            self._tool_escalations.add(tool_name)
-            console.print(f"[dim]· 本会话将自动授权 {tool_name}[/dim]")
+            ttl = self._approval_rules.allow(tool_name)
+            self._tool_escalations.add(tool_name)  # 旧接口兼容
+            console.print(
+                f"[dim]· 本会话 {ttl / 60:.0f} 分钟内自动授权 {tool_name}[/dim]"
+            )
             return True
         if choice == "y":
             console.print("[dim]· 已授权本轮该级别[/dim]")
