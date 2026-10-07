@@ -136,6 +136,7 @@ class PendingAction:
     operations: frozenset[str]
     reason: str
     promise: str
+    kind: str = "continuation"  # continuation | approval
 
 
 def _normalize_utterance(text: str) -> str:
@@ -146,6 +147,42 @@ def is_continuation_utterance(text: str) -> bool:
     """只认短确认语，防止把“继续优化 X”当成对旧承诺的授权。"""
 
     return _normalize_utterance(text) in _CONTINUATION_PHRASES
+
+
+_APPROVAL_VERB = re.compile(
+    r"(?:写入|写到|写了|写吧|保存|保存吧|存到|落盘|执行|执行吧|动手|"
+    r"授权|批准|同意|确认|可以写|去写|继续写)",
+    re.IGNORECASE,
+)
+_LEADING_APPROVAL = re.compile(
+    r"^(?:好|可以|行|嗯|请|授权|批准|同意|写入|写到|写吧|保存|落盘|执行|动手)",
+    re.IGNORECASE,
+)
+
+
+def is_approval_utterance(text: str) -> bool:
+    """用户对“被搁置的写入提案”的确认语。
+
+    比 continuation 更宽：只要句子短且包含写/执行意图，或本身就是以
+    写入动词开头的指令（“好写入到桌面”/“请写入”/“授权写入到 D 盘”）。
+    """
+
+    if is_continuation_utterance(text):
+        return True
+    normalized = _normalize_utterance(text)
+    if not normalized:
+        return False
+    if len(normalized) <= 40 and _APPROVAL_VERB.search(normalized):
+        return True
+    return bool(_LEADING_APPROVAL.match(normalized))
+
+
+def should_consume_pending(pending: PendingAction, text: str) -> bool:
+    """本轮输入是否在回应这个待批/待续动作。"""
+
+    if pending.kind == "approval":
+        return is_approval_utterance(text)
+    return is_continuation_utterance(text)
 
 
 def detect_pending_action(
@@ -192,6 +229,14 @@ def continuation_hint(pending: PendingAction) -> str:
         int(ExecutionLevel.WRITE): "读写文件",
         int(ExecutionLevel.EXECUTE): "读写文件 + 命令执行",
     }.get(int(pending.level), "只读工具")
+    if pending.kind == "approval":
+        return (
+            "## 用户已确认上一轮搁置的动作\n"
+            f"搁置原因：{pending.reason}\n"
+            "用户本轮明确确认执行。请直接完成写入/执行，不要重新询问授权，"
+            "也不要只复述计划。\n"
+            f"本轮授权范围：{scope}。"
+        )
     return (
         "## 延续上轮任务（用户已确认）\n"
         f"上一轮你结束时提出：{pending.promise}\n"
@@ -228,6 +273,11 @@ def _continuation_contract(
     else:
         level = ExecutionLevel.READ_ONLY
     level = ExecutionLevel(min(int(level), int(pending.level)))
+    reason = (
+        f"延续上一轮未完成的行动（{pending.reason}）"
+        if pending.kind != "approval"
+        else f"用户确认上一轮搁置的动作（{pending.reason}）"
+    )
     return TurnContract(
         level=level,
         intent=pending.intent,
@@ -236,7 +286,7 @@ def _continuation_contract(
         confidence=1.0,
         degraded=False,
         ask_required=False,
-        reason=f"延续上一轮未完成的行动（{pending.reason}）",
+        reason=reason,
         evidence=("continuation",) + signals.write_patterns,
         signals=signals,
         continuation=True,
@@ -274,6 +324,7 @@ class TurnContract:
     signals: ExecutionSignals
     classifier_reasoning: str = ""
     continuation: bool = False
+    deferred_write: bool = False
 
     @property
     def requires_tools(self) -> bool:
@@ -331,6 +382,8 @@ def signals_to_hints(signals: ExecutionSignals) -> dict[str, Any]:
         "chat_only": signals.chat_only,
         "no_tools": signals.no_tools,
         "advisory": signals.advisory,
+        "deferred_write": signals.deferred_write,
+        "write_imperative": signals.write_imperative,
     }
 
 
@@ -360,10 +413,24 @@ def _fallback_contract(
     """Regex-only degradation: keeps the pre-classifier behavior verbatim."""
 
     policy = classify_execution_policy(text, intent=intent)
+    operations = _operations_for_level(policy.level)
+    level = policy.level
+    # 条件式写入在降级路径同样生效：登记提案但不授予写权限。
+    deferred = bool(
+        signals.deferred_write
+        and not signals.no_write
+        and operations & (_WRITE_OPERATIONS | {"execute"})
+    )
+    if deferred:
+        level = (
+            ExecutionLevel.READ_ONLY
+            if operations & _READ_OPERATIONS
+            else ExecutionLevel.ANSWER_ONLY
+        )
     return TurnContract(
-        level=policy.level,
+        level=level,
         intent=intent,
-        operations=_operations_for_level(policy.level),
+        operations=operations,
         proposed_level=policy.level,
         confidence=1.0,
         degraded=True,
@@ -371,6 +438,7 @@ def _fallback_contract(
         reason=f"{reason}：{policy.reason}",
         evidence=signals.write_patterns + signals.negation_snippets,
         signals=signals,
+        deferred_write=deferred,
     )
 
 
@@ -497,7 +565,7 @@ def build_turn_contract(
 
     signals = extract_execution_signals(text)
 
-    if pending is not None and is_continuation_utterance(text):
+    if pending is not None and should_consume_pending(pending, text):
         inherited = _continuation_contract(text, signals, pending)
         if inherited is not None:
             logger.debug(
@@ -547,7 +615,8 @@ def build_turn_contract(
         operations.discard("execute")
 
     # 3) 显式结构优先：正则看到"写到 X/运行 X"，LLM 漏了也补回来。
-    if signals.explicit_write and not signals.no_write:
+    structural_write = signals.explicit_write or signals.write_imperative
+    if structural_write and not signals.no_write:
         operations.add("write")
     if signals.explicit_execute and not signals.no_execute:
         operations.add("execute")
@@ -555,15 +624,13 @@ def build_turn_contract(
         operations.add("read")
 
     # 4) chat-only / 纯生成意图不得发明文件操作。
-    if result.chat_only and not (
-        signals.explicit_write or signals.explicit_execute
-    ):
+    if result.chat_only and not (structural_write or signals.explicit_execute):
         operations.clear()
     if intent in _CHAT_ONLY_INTENTS and not (
-        signals.explicit_write or signals.explicit_execute
+        structural_write or signals.explicit_execute
     ):
         operations -= _WRITE_OPERATIONS | {"execute"}
-    if intent == "write_code" and not signals.explicit_write:
+    if intent == "write_code" and not structural_write:
         operations -= _WRITE_OPERATIONS | {"execute"}
         if not signals.read_evidence:
             operations -= _READ_OPERATIONS
@@ -580,8 +647,15 @@ def build_turn_contract(
     ask_required = bool(
         result.confidence < threshold
         and operations & (_WRITE_OPERATIONS | {"execute"})
-        and not (signals.explicit_write or signals.explicit_execute)
+        and not (structural_write or signals.explicit_execute)
     )
+    # 裸祈使句（“请写入”但没有目标/上下文）：先问一次，而不是静默授权。
+    if (
+        signals.write_imperative
+        and not signals.strong_write
+        and operations & (_WRITE_OPERATIONS | {"execute"})
+    ):
+        ask_required = True
 
     # 6) 查询/调研意图保持至少只读（与旧行为一致的下限）。
     if intent in _QUERY_INTENTS:
@@ -597,9 +671,24 @@ def build_turn_contract(
     else:
         proposed = ExecutionLevel.ANSWER_ONLY
 
+    # 7b) 条件式写入：“先给我代码，我让你写你再写”。本轮只登记提案，
+    # 不授予写权限；写操作保留在 operations 里供 REPL 建待批 Gate。
+    deferred = bool(
+        signals.deferred_write
+        and not signals.no_write
+        and operations & (_WRITE_OPERATIONS | {"execute"})
+    )
+
     # 需要询问时先只授权到只读，用户确认后 approve() 提升到 proposed。
     level = proposed
-    if ask_required and proposed >= ExecutionLevel.WRITE:
+    if deferred:
+        level = (
+            ExecutionLevel.READ_ONLY
+            if operations & _READ_OPERATIONS
+            else ExecutionLevel.ANSWER_ONLY
+        )
+        ask_required = False
+    elif ask_required and proposed >= ExecutionLevel.WRITE:
         level = ExecutionLevel.READ_ONLY
 
     reason = (
@@ -610,6 +699,8 @@ def build_turn_contract(
     )
     if ask_required:
         reason += "；低置信且无显式证据 → 需用户确认"
+    if deferred:
+        reason += "；检测到延迟写入（等待用户确认）"
     if signals.explicit_write and not result.operations:
         reason += "；显式结构覆盖了分类器遗漏"
 
@@ -627,6 +718,7 @@ def build_turn_contract(
         + signals.negation_snippets,
         signals=signals,
         classifier_reasoning=str(result.reasoning or ""),
+        deferred_write=deferred,
     )
     logger.debug(
         "turn_contract level=%s proposed=%s intent=%s ops=%s conf=%.2f ask=%s degraded=%s",

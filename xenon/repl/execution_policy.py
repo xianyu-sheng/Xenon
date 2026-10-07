@@ -207,7 +207,9 @@ _WRITE_TARGETED = re.compile(
     r"[^，。！？,.!?\n]{0,14}?"
     r"(?:到|至|进|为)\s*"
     r"(?:[`'\"]?[\w./\\~:+-]+\.[A-Za-z0-9]{1,8}|文件|目录|文件夹|磁盘|磁盘上|"
-    r"本地|路径|README|readme)"
+    r"本地|路径|README|readme|桌面|我的桌面|桌面目录|下载|下载目录|"
+    r"文档|文档目录|我的文档|主目录|家目录|项目根|项目目录|当前目录|"
+    r"工作目录|这里)"
     # 中文：生成/写… + 存/保存/归档 + 补语（目标由上下文承载）
     r"|(?:生成|写|整理|汇总|导出|记录|输出)[^，。！？,.!?\n]{0,14}?"
     r"(?:存|保存|放|落|归档)(?:起来|下来|到|进|成)"
@@ -226,6 +228,31 @@ _WRITE_TARGETED = re.compile(
     r"|(?:write|save|output|log|export|append|dump)\s+(?:\w+\s+){0,3}?"
     r"(?:to|into|as)\s+"
     r"(?:[`'\"]?(?:\S*[/\\]\S+|\S+\.\w{1,8})|the\s+file|a\s+file|file)\b",
+    re.IGNORECASE,
+)
+
+# 延迟/条件式写入：用户提到了写入，但要求“等确认/我说了再写”。
+# 这不是禁令（区别于 _NO_WRITE）：本轮不执行，但动作被登记为待批准。
+_DEFER_WRITE = re.compile(
+    r"(?:让|等|叫)(?:我|你)(?:说|回复|确认|同意|指示|发话)(?:了)?[^，。！？,.!?\n]{0,4}?(?:再|后|之后|才)?[^，。！？,.!?\n]{0,2}?(?:写|保存|落盘|创建|执行|动手)"
+    r"|(?:让|等|叫)(?:我|你)(?:写|做|动手|执行)[^，。！？,.!?\n]{0,8}?(?:再|然后|之后|才)?(?:写|保存|落盘|创建|执行|动手)"
+    r"|(?:我|你)(?:说|回复|发话|确认)(?:了)?(?:再|后|之后)(?:写|保存|落盘|创建|执行)"
+    r"|(?:先|暂时|暂且)(?:只|仅)?[^。！？.!?\n]{0,24}?(?:回复|展示|看看|给我|贴|发)"
+    r"[^。！？.!?\n]{0,16}?(?:再|然后|之后|才)[^。！？.!?\n]{0,6}?(?:写|保存|落盘)"
+    r"|(?:先|暂时|暂且)(?:别|不要|不用|不必|无需)(?:写|保存|落盘|创建|生成(?:文件)?|执行)"
+    r"|(?:不要急着?|别急)(?:写|保存|落盘|执行)"
+    r"|(?:wait|waiting)\s+(?:for|until)\s+(?:my|i|the user)(?:'s)?\s+(?:say|approval|confirmation|go)"
+    r"|(?:once|after|when)\s+i\s+(?:say|confirm|approve|tell\s+you)"
+    r"|(?:do\s+not|don't)\s+(?:write|save|create|execute)\s+(?:it\s+)?(?:yet|until|before)"
+    r"|(?:ask|check\s+with)\s+(?:me\s+)?(?:first|before\s+(?:writing|saving|creating|running))",
+    re.IGNORECASE,
+)
+# 裸祈使句：只有动词、没有目标（“请写入”）。它仍表达写盘请求，只是目标
+# 要靠上文/待批动作补全，不能当作闲聊。无上下文时会走一次性确认。
+_BARE_WRITE_IMPERATIVE = re.compile(
+    r"(?:请|麻烦|帮我|给我|直接|现在|马上|立刻)?\s*(?<![别不勿没])"
+    r"(?:写入|写吧|保存吧|存吧|落盘|落盘吧|写文件|保存文件|存一下|写一下|写入吧)"
+    r"\s*(?:吧|了|一下|下来)?\s*[。！!，,]?\s*$",
     re.IGNORECASE,
 )
 
@@ -348,6 +375,8 @@ class ExecutionSignals:
     no_tools: bool = False
     chat_only: bool = False
     advisory: bool = False
+    deferred_write: bool = False
+    write_imperative: bool = False
     paths: tuple[str, ...] = ()
 
     @property
@@ -393,6 +422,13 @@ def extract_execution_signals(text: str) -> ExecutionSignals:
             write_patterns.append(label)
             write_snippets.extend(hits)
 
+    # 裸祈使句（“请写入”）没有目标，但仍然是写盘请求，不能落入闲聊。
+    if _BARE_WRITE_IMPERATIVE.search(request_source):
+        write_patterns.append("write_imperative")
+        write_snippets.extend(
+            _snippets(_BARE_WRITE_IMPERATIVE, request_source, limit=1)
+        )
+
     negation_snippets: list[str] = []
     for pattern in (_NO_WRITE, _NO_EXECUTE, _NO_TOOLS, _CHAT_OUTPUT):
         negation_snippets.extend(_snippets(pattern, source, limit=1))
@@ -414,6 +450,8 @@ def extract_execution_signals(text: str) -> ExecutionSignals:
         no_tools=bool(_NO_TOOLS.search(source)),
         chat_only=bool(_CHAT_OUTPUT.search(source)),
         advisory=bool(_ADVISORY.search(source)),
+        deferred_write=bool(_DEFER_WRITE.search(source)),
+        write_imperative=bool(_BARE_WRITE_IMPERATIVE.search(request_source)),
         paths=tuple(
             dict.fromkeys(
                 match.group(0).strip()

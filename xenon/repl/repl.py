@@ -46,6 +46,7 @@ from xenon.repl.turn_contract import (
     continuation_hint,
     detect_pending_action,
     is_continuation_utterance,
+    should_consume_pending,
 )
 from xenon.repl.input_buffer import PastedTextStore, _ShiftTabSignal
 from xenon.repl.model_registry import ModelRegistry
@@ -1840,15 +1841,19 @@ class REPL:
             return
 
         # 跨回合续接：短确认语 + 未兑现承诺 = 继承上轮意图/级别/范式；
+        # 待批 Gate 则接受更宽的确认语（“好写入到桌面”/“请写入”）。
         # 没有承诺时明确澄清，不让模型把“继续”当新话题重新回答。
         bare_continuation = is_continuation_utterance(user_input)
-        pending = self._pending_action if bare_continuation else None
+        pending_reply = self._pending_action is not None and should_consume_pending(
+            self._pending_action, user_input
+        )
+        pending = self._pending_action if pending_reply else None
         if bare_continuation and pending is None:
             console.print(
                 "[dim]· 没有可继续的未完成任务。请直接说明你想让我继续做什么。[/dim]"
             )
             return
-        if self._pending_action is not None and not bare_continuation:
+        if self._pending_action is not None and not pending_reply:
             # 用户在承诺未兑现前切换了话题：旧承诺失效，避免过期授权。
             self._pending_action = None
 
@@ -2973,6 +2978,25 @@ class REPL:
         policy: ExecutionPolicy,
     ) -> None:
         """记录本轮结尾的“回复继续”承诺；无承诺则清除，避免过期授权。"""
+
+        # 条件式写入（“我让你写你再写”）：写入本轮未执行，登记为待批 Gate。
+        if contract.deferred_write:
+            pending_ops = frozenset(
+                op
+                for op in contract.operations
+                if op in {"write", "create", "delete", "move", "execute"}
+            )
+            if pending_ops:
+                self._pending_action = PendingAction(
+                    engine=mode,
+                    level=contract.proposed_level,
+                    intent=contract.intent,
+                    operations=pending_ops,
+                    reason="上一轮用户要求确认后再写入",
+                    promise="（待确认的写盘提案）",
+                    kind="approval",
+                )
+                return
 
         answer = ""
         for message in reversed(self.ctx_mgr.get_messages()[-8:]):
