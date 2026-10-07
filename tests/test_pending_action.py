@@ -205,3 +205,21 @@ def test_repl_new_topic_drops_stale_pending(monkeypatch):
     repl._handle_chat("今天天气怎么样")
 
     assert repl._pending_action is None
+
+
+def test_pending_derives_operations_from_policy_level(monkeypatch):
+    """契约 operations 为空但本轮实际授权了执行时，承诺不能降级。"""
+    repl = _make_repl()
+    repl.ctx_mgr.add_assistant_message("下一步：回复「继续」，我将继续跑安全测试。")
+    from xenon.repl.execution_policy import ExecutionPolicy
+    from xenon.repl.turn_contract import contract_for_level
+
+    repl._update_pending_action(
+        mode="plan-react",
+        contract=contract_for_level(ExecutionLevel.ANSWER_ONLY),
+        policy=ExecutionPolicy(ExecutionLevel.EXECUTE, "测试授权"),
+    )
+
+    assert repl._pending_action is not None
+    assert "execute" in repl._pending_action.operations
+    assert repl._pending_action.level is ExecutionLevel.EXECUTE

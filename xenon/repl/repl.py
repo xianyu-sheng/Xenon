@@ -2980,12 +2980,19 @@ class REPL:
                 answer = str(message.get("content") or "")
                 break
         level = max(int(policy.level), int(contract.proposed_level))
+        operations = contract.operations
+        if not operations:
+            # 引擎实际执行了工具、但契约层没记下操作（如分类器给了纯聊
+            # 天意图）时，用本轮实际授权级别补出操作，否则承诺续接会降级。
+            from xenon.repl.turn_contract import contract_for_level
+
+            operations = contract_for_level(level).operations
         self._pending_action = detect_pending_action(
             answer,
             engine=mode,
             level=level,
             intent=contract.intent,
-            operations=contract.operations,
+            operations=operations,
             reason="上一轮承诺在用户确认后继续执行",
         )
 
