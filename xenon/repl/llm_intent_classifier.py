@@ -65,6 +65,8 @@ class ClassificationResult:
     fallback: bool = False  # 是否是降级结果
     operations: tuple[str, ...] = ()  # 完成请求需要的操作原语
     chat_only: bool = False  # 用户明确要求只在对话中回答
+    bind_gate_id: str = ""  # 跨轮次：用户这句话在确认哪个待批门
+    await_confirmation: bool = False  # 用户明确要求稍后再执行（延迟）
 
 
 class LLMIntentClassifier:
@@ -179,6 +181,7 @@ class LLMIntentClassifier:
         *,
         context_messages: list[dict] | None = None,
         hints: dict[str, Any] | None = None,
+        task_state: str = "",
     ) -> ClassificationResult:
         """
         使用 LLM 对用户输入进行意图分类。
@@ -209,6 +212,7 @@ class LLMIntentClassifier:
 
         cache_key = (
             user_input,
+            task_state,
             tuple(
                 (str(m.get("role", "")), str(m.get("content", ""))[:80])
                 for m in (context_messages or [])[-2:]
@@ -232,6 +236,7 @@ class LLMIntentClassifier:
                 user_input,
                 context_messages,
                 hints=hints,
+                task_state=task_state,
             )
             result.latency_ms = (time.time() - start_time) * 1000
 
@@ -273,12 +278,15 @@ class LLMIntentClassifier:
         context_messages: list[dict] | None,
         *,
         hints: dict[str, Any] | None = None,
+        task_state: str = "",
     ) -> ClassificationResult:
         """调用 LLM 进行分类（内部方法）。"""
 
         # 构建分类 prompt
         system_prompt = self._build_system_prompt()
-        user_prompt = self._build_user_prompt(user_input, context_messages, hints)
+        user_prompt = self._build_user_prompt(
+            user_input, context_messages, hints, task_state=task_state
+        )
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -351,9 +359,13 @@ class LLMIntentClassifier:
    - 用户禁止某项操作（不要写文件/不要运行）→ 对应 operation 不出现，chat_only=true。
 2. query/research 通常用 read 或 network；debug/refactor 默认 read；用户要求修复/重构/改进某个具体对象（模块、函数、文件、脚本）时加 write。
 3. 无法判断时 intent=null，confidence 如实。
+4. 跨轮次（仅当输入中包含“任务状态”区块时）：
+   - 用户在确认某个“打开的门”（可以/好/授权/写吧/执行等）→ 输出 "continuation":{{"bind_gate_id":"门的id"}}，并把意图/operations 按该门的待授权操作给。
+   - 用户明确要求稍后再做（先给我代码、我让你写再写、等我确认、先别写）→ "continuation":{{"await_confirmation":true}}，operations 保留待办（如 write/create）。
+   - 普通新请求 → 不输出 continuation。
 
 ## 输出（只输出 JSON，无解释）
-{{"intent":"类别或null","operations":[],"chat_only":false,"confidence":0.0,"reasoning":"一句话"}}
+{{"intent":"类别或null","operations":[],"chat_only":false,"confidence":0.0,"reasoning":"一句话","continuation":{{"bind_gate_id":"","await_confirmation":false}}}}
 
 示例：
 "帮我写一个排序函数" → {{"intent":"write_code","operations":[],"chat_only":false,"confidence":0.95,"reasoning":"代码贴对话"}}
@@ -370,10 +382,16 @@ class LLMIntentClassifier:
         user_input: str,
         context_messages: list[dict] | None,
         hints: dict[str, Any] | None = None,
+        *,
+        task_state: str = "",
     ) -> str:
         """构建用户提示词。"""
 
         prompt_parts = []
+
+        # 跨轮次任务状态（结构化事实，不含授权）：目标/待批门/最近产物。
+        if task_state:
+            prompt_parts.append(task_state + "\n")
 
         # 添加上下文（如果有）
         if context_messages and len(context_messages) > 0:
@@ -465,6 +483,16 @@ class LLMIntentClassifier:
                     logger.debug("忽略无效操作原语: %s", name)
         chat_only = bool(data.get("chat_only", False))
 
+        # 跨轮次字段（可选）：绑定待批门 / 明确延迟。
+        continuation = data.get("continuation") or {}
+        bind_gate_id = ""
+        await_confirmation = False
+        if isinstance(continuation, dict):
+            raw_bind = continuation.get("bind_gate_id")
+            if isinstance(raw_bind, str):
+                bind_gate_id = raw_bind.strip()
+            await_confirmation = bool(continuation.get("await_confirmation"))
+
         # 验证 intent 是否在有效类别中
         if intent is not None and intent not in INTENT_CATEGORIES:
             logger.warning(f"LLM 返回了无效的意图类别: {intent}")
@@ -478,6 +506,8 @@ class LLMIntentClassifier:
             reasoning=reasoning,
             operations=tuple(operations),
             chat_only=chat_only,
+            bind_gate_id=bind_gate_id,
+            await_confirmation=await_confirmation,
         )
 
 

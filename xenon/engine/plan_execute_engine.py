@@ -1026,10 +1026,11 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
 
         # 关键：将当前用户输入加入消息列表
         user_message = user_input
-        from xenon.repl.prompt_optimizer import detect_intent
 
-        turn_contract = ctx.get("_turn_contract")
-        intent = getattr(turn_contract, "intent", None) or detect_intent(user_input)
+        from xenon.repl.turn_contract import ensure_turn_contract
+
+        turn_contract = ensure_turn_contract(ctx, user_input)
+        intent = getattr(turn_contract, "intent", None)
 
         # 工具视图与 schema 保持一致：只读轮次不得在 Tip 里推荐 command/write_file。
         execution_level = ctx.get("_execution_level")

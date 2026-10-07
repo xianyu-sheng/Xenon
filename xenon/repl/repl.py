@@ -2002,12 +2002,10 @@ class REPL:
         self._inject_memories(memory_query or skill_name or "")
 
         # ── Prompt 优化（按需） ──────────────────────────
-        # 意图检测始终执行（detect_intent 纯正则，开销可忽略）：供 direct 模式路由使用——
-        # query 意图（天气/价格/汇率/新闻等实时数据）必然需要工具，direct 模式不向 API
-        # 传工具，须路由到 ReAct（见 _detect_tool_need）。
-        intent_input = skill_args if skill_name is not None else user_input
+        # 单一语义通道：意图来自契约（LLM 或降级正则），这里不再另算。
         if skill_name is not None:
-            intent = self._detect_intent(intent_input)
+            # 技能流程同样使用契约意图，不再用正则另算。
+            intent = turn_contract_obj.intent
             inherited_intent_source = None
         system_hint: str | None = None
         if pending is not None:
@@ -2971,12 +2969,21 @@ class REPL:
         return detect_intent(text)
 
     def _resolve_turn_intent(self, text: str) -> tuple[str | None, str | None]:
-        """Resolve a contextual follow-up against the latest compatible turn.
+        """回退意图（仅降级模式）。
 
-        Only read-only query/research intent can be inherited.  This restores
-        access to retrieval tools without ever treating a conversational
-        reference as permission to write files or execute commands.
+        单一语义通道：LLM 分类器可用时，意图与跨轮次绑定全部由它负责
+        （配合任务状态块），这里不再用正则猜语义；分类器不可用时才走
+        旧的 query/research 继承逻辑作为保守回退。
         """
+
+        classifier = (
+            self._get_intent_classifier()
+            if getattr(self, "_intent_classifier_checked", False)
+            else None
+        )
+        if classifier is not None and classifier.enabled:
+            return None, None
+
         from xenon.repl.prompt_optimizer import is_contextual_followup
 
         raw_intent = self._detect_intent(text)
@@ -3005,6 +3012,27 @@ class REPL:
                 break
         return raw_intent, None
 
+    def _task_state_block(self) -> str:
+        """确定性生成跨轮次任务状态块（目标/门/产物/计划模式）。"""
+
+        try:
+            from xenon.repl.task_state import build_task_state_block
+            from xenon.session.projection import project
+
+            view = None
+            log = getattr(self, "_session_events", None)
+            if log is not None:
+                view = project(log.read())
+            return build_task_state_block(
+                active_goal=view.active_goal if view else None,
+                pending=self._pending_action,
+                artifacts=[a.path for a in (view.artifacts if view else [])],
+                plan_mode=self._plan_mode_active,
+            )
+        except Exception:  # noqa: BLE001 — 状态块失败不能阻断回合
+            logger.debug("任务状态块构建失败（已忽略）", exc_info=True)
+            return ""
+
     def _resolve_turn_contract(
         self, user_input: str, pending: PendingAction | None = None
     ) -> tuple[TurnContract, ExecutionPolicy, str | None, str | None]:
@@ -3017,8 +3045,11 @@ class REPL:
         """
 
         intent, inherited_intent_source = self._resolve_turn_intent(user_input)
+        task_state = self._task_state_block()
         if pending is not None:
-            inherited = build_turn_contract(user_input, pending=pending)
+            inherited = build_turn_contract(
+                user_input, pending=pending, task_state=task_state
+            )
             if inherited.continuation:
                 return (
                     inherited,
@@ -3031,13 +3062,14 @@ class REPL:
             classifier=self._get_intent_classifier(),
             context_messages=self.ctx_mgr.get_messages()[-4:],
             fallback_intent=intent,
+            task_state=task_state,
         )
         if contract.ask_required:
             contract = self._confirm_write_escalation(contract)
         return (
             contract,
             contract.to_execution_policy(),
-            intent,
+            contract.intent or intent,
             inherited_intent_source,
         )
 

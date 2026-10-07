@@ -29,7 +29,7 @@ class _FakeClassifier:
             operations=tuple(operations),
         )
 
-    def classify(self, text, *, context_messages=None, hints=None):
+    def classify(self, text, *, context_messages=None, hints=None, task_state=None):
         return self.result
 
 
@@ -134,7 +134,7 @@ def test_classifier_cache_prevents_duplicate_calls(monkeypatch) -> None:
     classifier = LLMIntentClassifier(enabled=True, model="test/model")
     calls: list[str] = []
 
-    def fake_call(text, ctx, *, hints=None):
+    def fake_call(text, ctx, *, hints=None, task_state=""):
         calls.append(text)
         return ClassificationResult(intent="chat", confidence=0.9)
 

@@ -367,7 +367,7 @@ class _WriteClassifier:
     enabled = True
     confidence_threshold = 0.7
 
-    def classify(self, text, *, context_messages=None, hints=None):
+    def classify(self, text, *, context_messages=None, hints=None, task_state=None):
         return ClassificationResult(
             intent="refactor",
             confidence=0.95,

@@ -245,30 +245,29 @@ class TestDifficultyEstimatorWithLLM:
     """测试 DifficultyEstimator 与 LLM 分类器的集成。"""
 
     def test_detect_intent_fallback_to_llm(self, monkeypatch):
-        """测试正则失败时回退到 LLM 分类器。"""
+        """单一语义通道后：路由启发不再回退调 LLM（分类器是唯一语义源）。"""
         from xenon.repl.difficulty_estimator import DifficultyEstimator
 
-        # Mock 正则分类器返回 None
-        def mock_regex_detect(text):
-            return None
-
-        # Mock LLM 分类器返回结果
-        def mock_llm_classify(text, context_messages=None):
-            return "write_code"
+        calls: list[str] = []
 
         monkeypatch.setattr(
-            "xenon.repl.prompt_optimizer.detect_intent",
-            mock_regex_detect,
+            "xenon.repl.prompt_optimizer.detect_intent", lambda text: None
         )
         monkeypatch.setattr(
             "xenon.repl.llm_intent_classifier.classify_intent_with_llm",
-            mock_llm_classify,
+            lambda text: calls.append(text) or "write_code",
         )
+
+        intent = DifficultyEstimator._detect_intent("某个输入")
+
+        assert intent is None
+        assert calls == []
 
         estimator = DifficultyEstimator()
         intent = estimator._detect_intent("一些正则无法识别的文本")
 
-        assert intent == "write_code"
+        assert intent is None
+        assert calls == []
 
     def test_detect_intent_llm_failure_returns_none(self, monkeypatch):
         """测试 LLM 分类器失败时返回 None。"""

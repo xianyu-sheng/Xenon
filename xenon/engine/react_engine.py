@@ -1851,11 +1851,10 @@ class ReActEngine(BaseEngine):
         ``ensure_turn_contract`` 在本边界构建一次（正则回退）并写回，
         引擎内部不再重新分类。
         """
-        from xenon.repl.prompt_optimizer import detect_intent
         from xenon.repl.turn_contract import ensure_turn_contract
 
         contract = ensure_turn_contract(ctx, original_user_input)
-        intent = contract.intent or detect_intent(original_user_input)
+        intent = contract.intent
         active_level = ctx.get("_execution_level")
         if active_level is not None:
             return intent, int(active_level)

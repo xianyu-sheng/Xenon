@@ -39,7 +39,7 @@ class FakeClassifier:
         self.calls: list[str] = []
         self.last_hints = None
 
-    def classify(self, text, *, context_messages=None, hints=None):
+    def classify(self, text, *, context_messages=None, hints=None, task_state=None):
         self.calls.append(text)
         self.last_hints = hints
         if self.exc is not None:

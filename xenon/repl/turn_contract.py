@@ -606,6 +606,7 @@ def build_turn_contract(
     context_messages: list[dict] | None = None,
     fallback_intent: str | None = None,
     pending: PendingAction | None = None,
+    task_state: str = "",
 ) -> TurnContract:
     """Build the single per-turn contract from regex signals + LLM intent.
 
@@ -655,12 +656,26 @@ def build_turn_contract(
             text,
             context_messages=context_messages,
             hints=signals_to_hints(signals),
+            task_state=task_state,
         )
     except Exception as exc:  # noqa: BLE001 — 分类失败必须优雅降级
         logger.warning("LLM 意图分类失败，回退正则层: %s", exc)
         return _fallback_contract(text, signals, resolved_intent, reason="分类器调用失败")
 
-    if result is None or (result.intent is None and not result.operations):
+    if result is None:
+        return _fallback_contract(text, signals, resolved_intent, reason="分类器无有效输出")
+
+    # 跨轮次：分类器把这句话绑定到某个打开的门（确定性执行，冻结参数）。
+    if (
+        pending is not None
+        and result.bind_gate_id
+        and result.bind_gate_id == pending.gate_id
+    ):
+        inherited = _continuation_contract(text, signals, pending)
+        if inherited is not None:
+            return inherited
+
+    if result.intent is None and not result.operations and not result.await_confirmation:
         return _fallback_contract(text, signals, resolved_intent, reason="分类器无有效输出")
 
     intent = result.intent or resolved_intent
@@ -754,8 +769,9 @@ def build_turn_contract(
 
     # 7b) 条件式写入：“先给我代码，我让你写你再写”。本轮只登记提案，
     # 不授予写权限；写操作保留在 operations 里供 REPL 建待批 Gate。
+    # 分类器的 await_confirmation 与正则的延迟句式等效。
     deferred = bool(
-        signals.deferred_write
+        (signals.deferred_write or bool(getattr(result, "await_confirmation", False)))
         and not signals.no_write
         and operations & (_WRITE_OPERATIONS | {"execute"})
     )
