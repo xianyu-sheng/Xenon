@@ -259,3 +259,54 @@ def test_executor_runs_when_boundary_allows(monkeypatch):
 
     assert result.success is True
     assert not _FakeNode.script
+
+
+def test_legacy_gate_skips_when_boundary_rule_allows(monkeypatch, tmp_path):
+    repl = _make_repl(tmp_path)
+    _quiet_config(monkeypatch)
+    monkeypatch.setattr(sys, "stdin", _Tty())
+    repl._approval_rules.allow("command")
+    monkeypatch.setattr(
+        "xenon.repl.repl.Prompt.ask", lambda *a, **k: pytest.fail("不应重复询问")
+    )
+
+    allowed, _reason = repl._confirm_tool(
+        "command", {"command": "echo hi"}, "CRITICAL"
+    )
+
+    assert allowed is True
+
+
+def test_legacy_gate_skips_when_boundary_approved_this_turn(monkeypatch, tmp_path):
+    repl = _make_repl(tmp_path)
+    _quiet_config(monkeypatch)
+    monkeypatch.setattr(sys, "stdin", _Tty())
+    repl._boundary_approved_once.add("command")
+    monkeypatch.setattr(
+        "xenon.repl.repl.Prompt.ask", lambda *a, **k: pytest.fail("不应重复询问")
+    )
+
+    allowed, _reason = repl._confirm_tool(
+        "command", {"command": "echo hi"}, "CRITICAL"
+    )
+
+    assert allowed is True
+
+
+def test_boundary_approval_records_allowed_once_and_uses_typed_prompt(
+    monkeypatch, tmp_path
+):
+    repl = _make_repl(tmp_path)
+    _quiet_config(monkeypatch)
+    monkeypatch.setattr(sys, "stdin", _Tty())
+    seen: dict = {}
+    monkeypatch.setattr(
+        "xenon.repl.repl.Prompt.ask",
+        lambda *a, **k: seen.update(kwargs=k, prompt=a[0]) or "y",
+    )
+
+    outcome = repl._confirm_tool_approval("command", {"command": "echo hi"})
+
+    assert outcome == APPROVAL_ALLOWED_ONCE
+    assert "command" in repl._boundary_approved_once
+    assert seen["prompt"] == "选择"

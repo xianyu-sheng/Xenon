@@ -253,6 +253,8 @@ class REPL:
         self._tool_escalations: set[str] = set()
         # “a=本会话总是允许”是带 TTL 的会话规则（用户决策），不是永久放行。
         self._approval_rules = SessionRuleStore()
+        # 本轮已被边界审批一次性放行的工具（防旧权限门重复询问）。
+        self._boundary_approved_once: set[str] = set()
         self.agent_context.set_escalation_callback(self._confirm_tool_escalation)
         # 工具边界审批：工作区内写免问；越界写与命令要问（可 y/n/a，a 带 TTL）。
         self.agent_context.set_approval_callback(self._confirm_tool_approval)
@@ -524,6 +526,12 @@ class REPL:
                 "非交互环境无法确认危险操作；请显式使用 "
                 "/permissions bypass 或设置 XENON_ASSUME_YES=1",
             )
+
+        # 旧权限门：边界审批已经处理过（TTL 规则或本轮 allowed-once）时不再重复询问。
+        if self._approval_rules.is_allowed(tool_name):
+            return True, ""
+        if tool_name in self._boundary_approved_once:
+            return True, ""
 
         # Permission callbacks can be reached by parallel engine workers.  A
         # single lock makes stdin ownership explicit and prevents two Rich
@@ -1898,6 +1906,8 @@ class REPL:
                     outcome="stale",
                 )
             self._pending_action = None
+        # 每轮重置：边界审批的 allowed-once 只对本轮有效。
+        self._boundary_approved_once.clear()
 
         # v0.6.0: 智能路由 - 根据用户输入自动选择推理范式
         if self.intelligent_router.enabled:
@@ -3311,36 +3321,48 @@ class REPL:
             return APPROVAL_ALLOWED_ONCE
 
         with self._permission_prompt_lock:
-            console.print()
-            console.print(
-                Panel(
-                    f"模型请求执行 [bold]{tool_name}[/bold]，超出工作区或属于命令执行。\n"
-                    f"原因：{reason or '工具边界策略'}",
-                    title="需要授权",
-                    border_style="yellow",
-                    padding=(0, 1),
+            callback = getattr(self, "_active_callback", None)
+            if hasattr(callback, "suspend_for_prompt"):
+                callback.suspend_for_prompt()
+            with self._terminal_waiting("等待工具授权"):
+                console.print()
+                console.print(
+                    Panel(
+                        f"模型请求执行 [bold]{tool_name}[/bold]，超出工作区或属于命令执行。\n"
+                        f"原因：{reason or '工具边界策略'}",
+                        title="需要授权",
+                        border_style="yellow",
+                        padding=(0, 1),
+                    )
                 )
-            )
-            try:
-                choice = Prompt.ask(
-                    "是否授权",
-                    choices=["y", "n", "a"],
-                    default="n",
-                    show_choices=True,
-                    case_sensitive=False,
-                )
-            except (KeyboardInterrupt, EOFError):
-                return APPROVAL_CANCELLED
+                try:
+                    choice = Prompt.ask(
+                        "选择",
+                        choices=["y", "n", "a"],
+                        default="n",
+                        show_choices=True,
+                        case_sensitive=False,
+                    )
+                except (KeyboardInterrupt, EOFError):
+                    return APPROVAL_CANCELLED
         if choice == "a":
             ttl = self._approval_rules.allow(tool_name)
+            self._boundary_approved_once.add(tool_name)
             console.print(
                 f"[dim]· 本会话 {ttl / 60:.0f} 分钟内自动允许 {tool_name}"
             )
+            if hasattr(callback, "resume_after_prompt"):
+                callback.resume_after_prompt(tool_name, params)
             return APPROVAL_ALLOWED_ONCE
         if choice == "y":
+            self._boundary_approved_once.add(tool_name)
             console.print("[dim]· 已授权本次操作[/dim]")
+            if hasattr(callback, "resume_after_prompt"):
+                callback.resume_after_prompt(tool_name, params)
             return APPROVAL_ALLOWED_ONCE
         console.print("[dim]· 未授权[/dim]")
+        if hasattr(callback, "resume_after_prompt"):
+            callback.resume_after_prompt(tool_name, params)
         return APPROVAL_REJECTED
 
     def _confirm_tool_escalation(
@@ -3365,38 +3387,48 @@ class REPL:
             int(required_level), str(required_level)
         )
         with self._permission_prompt_lock:
-            console.print()
-            console.print(
-                Panel(
-                    f"模型需要调用 [bold]{tool_name}[/bold]（{level_label}级），"
-                    "本轮当前级别不足。\n"
-                    f"原因：{reason}",
-                    title="需要授权",
-                    border_style="yellow",
-                    padding=(0, 1),
+            callback = getattr(self, "_active_callback", None)
+            if hasattr(callback, "suspend_for_prompt"):
+                callback.suspend_for_prompt()
+            with self._terminal_waiting("等待级别授权"):
+                console.print()
+                console.print(
+                    Panel(
+                        f"模型需要调用 [bold]{tool_name}[/bold]（{level_label}级），"
+                        "本轮当前级别不足。\n"
+                        f"原因：{reason}",
+                        title="需要授权",
+                        border_style="yellow",
+                        padding=(0, 1),
+                    )
                 )
-            )
-            try:
-                choice = Prompt.ask(
-                    "是否授权",
-                    choices=["y", "n", "a"],
-                    default="n",
-                    show_choices=True,
-                    case_sensitive=False,
-                )
-            except (KeyboardInterrupt, EOFError):
-                return False
+                try:
+                    choice = Prompt.ask(
+                        "选择",
+                        choices=["y", "n", "a"],
+                        default="n",
+                        show_choices=True,
+                        case_sensitive=False,
+                    )
+                except (KeyboardInterrupt, EOFError):
+                    return False
         if choice == "a":
             ttl = self._approval_rules.allow(tool_name)
             self._tool_escalations.add(tool_name)  # 旧接口兼容
             console.print(
                 f"[dim]· 本会话 {ttl / 60:.0f} 分钟内自动授权 {tool_name}[/dim]"
             )
+            if hasattr(callback, "resume_after_prompt"):
+                callback.resume_after_prompt(tool_name, None)
             return True
         if choice == "y":
             console.print("[dim]· 已授权本轮该级别[/dim]")
+            if hasattr(callback, "resume_after_prompt"):
+                callback.resume_after_prompt(tool_name, None)
             return True
         console.print("[dim]· 未授权[/dim]")
+        if hasattr(callback, "resume_after_prompt"):
+            callback.resume_after_prompt(tool_name, None)
         return False
 
     def _confirm_write_escalation(self, contract: TurnContract) -> TurnContract:
