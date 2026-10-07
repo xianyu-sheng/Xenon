@@ -137,6 +137,7 @@ class PendingAction:
     reason: str
     promise: str
     kind: str = "continuation"  # continuation | approval
+    gate_id: str = ""
 
 
 def _normalize_utterance(text: str) -> str:
@@ -403,6 +404,21 @@ def _operations_for_level(level: ExecutionLevel) -> frozenset[str]:
     return frozenset()
 
 
+def _with_deferred_proposal(
+    signals: ExecutionSignals, operations: set[str] | frozenset[str]
+) -> set[str]:
+    """延迟语句（“让你写再写”）本身就是写意图的提案。"""
+
+    ops = set(operations)
+    if (
+        signals.deferred_write
+        and not signals.no_write
+        and not (ops & (_WRITE_OPERATIONS | {"execute"}))
+    ):
+        ops.add("write")
+    return ops
+
+
 def _fallback_contract(
     text: str,
     signals: ExecutionSignals,
@@ -413,7 +429,7 @@ def _fallback_contract(
     """Regex-only degradation: keeps the pre-classifier behavior verbatim."""
 
     policy = classify_execution_policy(text, intent=intent)
-    operations = _operations_for_level(policy.level)
+    operations = _with_deferred_proposal(signals, _operations_for_level(policy.level))
     level = policy.level
     # 条件式写入在降级路径同样生效：登记提案但不授予写权限。
     deferred = bool(
@@ -421,7 +437,13 @@ def _fallback_contract(
         and not signals.no_write
         and operations & (_WRITE_OPERATIONS | {"execute"})
     )
+    proposed = policy.level
     if deferred:
+        proposed = (
+            ExecutionLevel.EXECUTE
+            if "execute" in operations
+            else ExecutionLevel.WRITE
+        )
         level = (
             ExecutionLevel.READ_ONLY
             if operations & _READ_OPERATIONS
@@ -430,8 +452,8 @@ def _fallback_contract(
     return TurnContract(
         level=level,
         intent=intent,
-        operations=operations,
-        proposed_level=policy.level,
+        operations=frozenset(operations),
+        proposed_level=proposed,
         confidence=1.0,
         degraded=True,
         ask_required=False,
@@ -641,6 +663,9 @@ def build_turn_contract(
         signals.strong_write or signals.explicit_execute
     ):
         operations -= _WRITE_OPERATIONS | {"execute"}
+
+    # 4c) 延迟语句本身就是写意图的提案（“我让你写你再写”没有显式目标）。
+    operations = _with_deferred_proposal(signals, operations)
 
     # 5) 低置信 + 无正则证据 + 想写/执行 → 询问而不是静默授权。
     threshold = float(getattr(classifier, "confidence_threshold", 0.7) or 0.7)

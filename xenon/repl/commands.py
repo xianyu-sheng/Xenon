@@ -61,6 +61,9 @@ from xenon.repl.command_groups.agent import (
     _cmd_run,  # noqa: F401 - compatibility export
     _cmd_sub_agent,  # noqa: F401 - compatibility export
 )
+from xenon.repl.command_groups.goal import (
+    _cmd_goal,  # noqa: F401 - compatibility export
+)
 from xenon.repl.command_groups.model import (
     _cmd_import_models,  # noqa: F401 - compatibility export
     _cmd_mode,  # noqa: F401 - compatibility export
@@ -79,6 +82,9 @@ from xenon.repl.command_groups.model import (
 from xenon.repl.command_groups.memory_cmd import (
     _cmd_memory,  # noqa: F401 - compatibility export
     _cmd_memory_v2,  # noqa: F401 - compatibility export
+)
+from xenon.repl.command_groups.plan import (
+    _cmd_plan,  # noqa: F401 - compatibility export
 )
 from xenon.repl.command_groups.shortcut import (
     _cmd_shortcut,  # noqa: F401 - compatibility export

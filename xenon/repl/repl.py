@@ -56,6 +56,7 @@ from xenon.repl.turn_contract import (
     is_continuation_utterance,
     should_consume_pending,
 )
+from xenon.session.query import needs_recall
 from xenon.repl.input_buffer import PastedTextStore, _ShiftTabSignal
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.project_context import ProjectContext
@@ -224,6 +225,15 @@ class REPL:
         self._preferred_model_ids: list[str] = []  # v0.5.3: 用户 -m 指定的模型
         # 跨回合“回复继续”承诺：上一轮模型提出、用户确认后本轮续接的状态机。
         self._pending_action: PendingAction | None = None
+        # 事件日志（附加事实层，失败无害）；投影/检索都从它重建。
+        self._session_events: Any = None
+        try:
+            from xenon.session.events import SessionEventLog
+
+            self._session_events = SessionEventLog()
+        except Exception:  # noqa: BLE001 — 事实层不可用不能阻断 REPL
+            logger.debug("会话事件日志初始化失败（已忽略）", exc_info=True)
+        self._plan_mode_active = self._load_plan_mode()
 
         # v0.5.3: 折叠思考过程 — 默认隐藏，Ctrl+O 展开
         self._show_thinking: bool = False
@@ -955,6 +965,13 @@ class REPL:
                     for f in files:
                         if isinstance(f, dict) and "path" in f:
                             paths.append(str(f["path"]))
+
+            self._record_event(
+                "tool/result",
+                tool=str(action),
+                success=True,
+                paths=[str(p) for p in paths[:20]],
+            )
 
             if not paths:
                 continue
@@ -1865,8 +1882,21 @@ class REPL:
                 "[dim]· 没有可继续的未完成任务。请直接说明你想让我继续做什么。[/dim]"
             )
             return
+        if pending_reply and self._pending_action is not None:
+            if self._pending_action.gate_id:
+                self._record_event(
+                    "gate/resolved",
+                    gate_id=self._pending_action.gate_id,
+                    outcome="consumed",
+                )
         if self._pending_action is not None and not pending_reply:
             # 用户在承诺未兑现前切换了话题：旧承诺失效，避免过期授权。
+            if self._pending_action.gate_id:
+                self._record_event(
+                    "gate/resolved",
+                    gate_id=self._pending_action.gate_id,
+                    outcome="stale",
+                )
             self._pending_action = None
 
         # v0.6.0: 智能路由 - 根据用户输入自动选择推理范式
@@ -1908,6 +1938,25 @@ class REPL:
         if pending is not None and not turn_contract_obj.continuation:
             # 契约层判定不能续接（如与约束矛盾）时退化为普通回合。
             pending = None
+        if self._plan_mode_active and turn_contract_obj.level >= ExecutionLevel.WRITE:
+            # 计划模式是软引导：不剥夺能力，但把写/执行转为待确认。
+            turn_contract_obj = self._plan_mode_contract(turn_contract_obj)
+            execution_policy = turn_contract_obj.to_execution_policy()
+            console.print(
+                "[dim cyan]📋 计划模式：本轮只产出方案，写/执行需用户确认[/dim cyan]"
+            )
+        self._record_event(
+            "turn/user",
+            text=user_input[:500],
+            intent=turn_contract_obj.intent,
+            level=int(execution_policy.level),
+            operations=sorted(turn_contract_obj.operations),
+            continuation=pending is not None,
+            deferred=bool(turn_contract_obj.deferred_write),
+        )
+        self._update_goal_projection(
+            user_input, turn_contract_obj, continuation=pending is not None
+        )
         self.agent_context.update(
             {
                 "_execution_level": int(execution_policy.level),
@@ -2025,6 +2074,16 @@ class REPL:
             )
         if pending is not None:
             turn_prompt = f"{turn_prompt}\n\n{continuation_hint(pending)}"
+        if self._plan_mode_active:
+            turn_prompt = (
+                f"{turn_prompt}\n\n## 计划模式（软引导）\n"
+                "先探索与设计，给出可执行的计划；本轮不要写盘或执行命令，"
+                "相关动作需等待用户确认。"
+            )
+        if needs_recall(user_input):
+            recall_text = self._recall_block(user_input)
+            if recall_text:
+                turn_prompt = f"{turn_prompt}\n\n{recall_text}"
 
         # Freeze authorization with this exact turn. ReAct must not mutate its
         # leading system prompt when the execution level changes.
@@ -2991,6 +3050,13 @@ class REPL:
     ) -> None:
         """记录本轮结尾的“回复继续”承诺；无承诺则清除，避免过期授权。"""
 
+        answer = ""
+        for message in reversed(self.ctx_mgr.get_messages()[-8:]):
+            if message.get("role") == "assistant":
+                answer = str(message.get("content") or "")
+                break
+        self._record_event("turn/assistant", preview=(answer or "")[:300])
+
         # 条件式写入（“我让你写你再写”）：写入本轮未执行，登记为待批 Gate。
         if contract.deferred_write:
             pending_ops = frozenset(
@@ -2999,6 +3065,16 @@ class REPL:
                 if op in {"write", "create", "delete", "move", "execute"}
             )
             if pending_ops:
+                gate_id = (
+                    self._record_event(
+                        "gate/opened",
+                        kind="approval",
+                        level=int(contract.proposed_level),
+                        operations=sorted(pending_ops),
+                        reason="上一轮用户要求确认后再写入",
+                    )
+                    or ""
+                )
                 self._pending_action = PendingAction(
                     engine=mode,
                     level=contract.proposed_level,
@@ -3007,14 +3083,10 @@ class REPL:
                     reason="上一轮用户要求确认后再写入",
                     promise="（待确认的写盘提案）",
                     kind="approval",
+                    gate_id=gate_id,
                 )
                 return
 
-        answer = ""
-        for message in reversed(self.ctx_mgr.get_messages()[-8:]):
-            if message.get("role") == "assistant":
-                answer = str(message.get("content") or "")
-                break
         level = max(int(policy.level), int(contract.proposed_level))
         operations = contract.operations
         if not operations:
@@ -3023,7 +3095,7 @@ class REPL:
             from xenon.repl.turn_contract import contract_for_level
 
             operations = contract_for_level(level).operations
-        self._pending_action = detect_pending_action(
+        detected = detect_pending_action(
             answer,
             engine=mode,
             level=level,
@@ -3031,6 +3103,130 @@ class REPL:
             operations=operations,
             reason="上一轮承诺在用户确认后继续执行",
         )
+        if detected is not None:
+            gate_id = (
+                self._record_event(
+                    "gate/opened",
+                    kind=detected.kind,
+                    level=int(detected.level),
+                    operations=sorted(detected.operations),
+                    reason=detected.reason,
+                )
+                or detected.gate_id
+            )
+            detected = PendingAction(
+                engine=detected.engine,
+                level=detected.level,
+                intent=detected.intent,
+                operations=detected.operations,
+                reason=detected.reason,
+                promise=detected.promise,
+                kind=detected.kind,
+                gate_id=gate_id,
+            )
+        self._pending_action = detected
+
+    def _record_event(self, event_type: str, **data: object) -> str | None:
+        """Best-effort append to the additive session fact log."""
+
+        log = getattr(self, "_session_events", None)
+        if log is None:
+            return None
+        try:
+            return log.append(event_type, **data)
+        except Exception:  # noqa: BLE001 — 事实层失败不能影响回合
+            logger.debug("会话事件记录失败（已忽略）", exc_info=True)
+            return None
+
+    def _recall_block(self, text: str) -> str:
+        """Bounded read-only recall over past fact events (never authority)."""
+
+        try:
+            from xenon.session.query import recall
+
+            directory = getattr(self._session_events, "directory", None)
+            return recall(text, directory=directory)
+        except Exception:  # noqa: BLE001 — 检索失败不能阻断回合
+            logger.debug("历史检索失败（已忽略）", exc_info=True)
+            return ""
+
+    def _load_plan_mode(self) -> bool:
+        """Last logged plan-mode state for this session (fail-safe: off)."""
+
+        log = getattr(self, "_session_events", None)
+        if log is None:
+            return False
+        try:
+            active = False
+            for event in log.read():
+                if event.get("type") == "plan_mode/set":
+                    active = bool(event.get("active"))
+            return active
+        except Exception:  # noqa: BLE001
+            return False
+
+    @staticmethod
+    def _plan_mode_contract(contract: TurnContract) -> TurnContract:
+        """计划模式转换：保留提案，但本轮不授予写/执行。"""
+
+        from dataclasses import replace
+
+        level = (
+            ExecutionLevel.READ_ONLY
+            if contract.operations & {"read", "network"}
+            else ExecutionLevel.ANSWER_ONLY
+        )
+        return replace(
+            contract,
+            level=level,
+            proposed_level=max(contract.level, contract.proposed_level),
+            deferred_write=True,
+            reason=f"{contract.reason}；计划模式：写/执行需用户确认",
+        )
+
+    def _update_goal_projection(
+        self,
+        user_input: str,
+        contract: TurnContract,
+        *,
+        continuation: bool,
+    ) -> None:
+        """Open/pause goals from durable turn facts (projection, not authority)."""
+
+        log = getattr(self, "_session_events", None)
+        if log is None:
+            return
+        try:
+            from xenon.session.projection import project
+
+            text = (user_input or "").strip()
+            substantive = len(text) >= 8 and (
+                contract.requires_tools
+                or (contract.intent or "") not in {"chat", "explain"}
+            )
+            if not substantive:
+                return
+            view = project(log.read())
+            active = view.active_goal
+            if active is None:
+                self._record_event("goal/opened", objective=text[:120])
+                return
+            if continuation or self._goal_related(text, active.objective):
+                return
+            self._record_event("goal/paused")
+            self._record_event("goal/opened", objective=text[:120])
+        except Exception:  # noqa: BLE001 — 投影失败不能影响回合
+            logger.debug("目标投影更新失败（已忽略）", exc_info=True)
+
+    @staticmethod
+    def _goal_related(text: str, objective: str) -> bool:
+        from xenon.session.query import extract_anchors
+
+        tokens, grams = extract_anchors(text)
+        _, objective_grams = extract_anchors(objective)
+        if any(len(token) >= 3 and token in objective.lower() for token in tokens):
+            return True
+        return len(grams & objective_grams) >= 2
 
     def _get_intent_classifier(self) -> Any:
         """惰性获取 LLM 意图分类器；未启用/不可用时返回 None（正则兜底）。"""
