@@ -131,6 +131,9 @@ REPL / CLI (repl/)          输入解析、会话、11 个命令组
   `deepseek/deepseek-v4-flash`）；无可用 Provider、超时或调用失败时自动降级
   为正则判定，不阻断对话。关闭方式：`XENON_INTENT_CLASSIFIER_ENABLED=0`
   或 `config.yaml` 写 `intent_classifier.enabled: false`。
+- 降级模式下正则只识别**显式操作结构**（写到 X、删除、运行、读取、git）；
+  语义任务（“修复这个 bug”“重构这个模块”）会保守回落到对话/只读——
+  写出目标路径或文件即可继续。
 - 评测：51 条标注语料（`evals/intent_eval.py`）上 LLM 分类 **51/51**，
   正则降级基线 49/51 且 **0 越权**；`tests/test_intent_eval_corpus.py`
   作为离线门禁（不联网）。

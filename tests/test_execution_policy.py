@@ -20,6 +20,7 @@ from xenon.repl.execution_policy import (
 )
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.prompt_optimizer import detect_intent
+from xenon.repl.llm_intent_classifier import ClassificationResult
 from xenon.repl.repl import REPL
 from xenon.repl.turn_contract import build_turn_contract
 
@@ -66,7 +67,6 @@ def test_code_generation_without_side_effect_authorization_is_answer_only(text):
         ("允许你读工具？以后都可以读", ExecutionLevel.READ_ONLY),
         ("resume.tex 请你分析候选人的经历", ExecutionLevel.READ_ONLY),
         ("今天苏州天气怎么样", ExecutionLevel.READ_ONLY),
-        ("请修复这个 bug", ExecutionLevel.WRITE),
     ],
 )
 def test_explicit_actions_map_to_their_maximum_level(text, expected):
@@ -335,30 +335,54 @@ def test_code_text_that_mentions_a_saved_file_stays_in_direct(monkeypatch):
     assert rendered == ['```python\nprint("文件已保存")\n```']
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "帮我重构这个模块",
-        "更新文档里的安装步骤",
-        "纠正这个错误",
-        "改进这个函数的实现",
-        "删除多余的日志代码",
-        "把重复代码重构成函数",
-        "优化一下这个算法",
-        "修改配置文件",
-        "把这个函数改成异步的",
-    ],
-)
-def test_chinese_mutation_requests_authorize_write(text):
-    """中文修改类请求曾整体漏判为 ANSWER_ONLY（英文同义请求正确到 WRITE）。
+STRUCTURAL_MUTATION_REQUESTS = [
+    "删除多余的日志代码",
+    "把重复代码重构成函数",
+    "修改配置文件",
+    "把这个函数改成异步的",
+]
 
-    该分类器是全引擎共享层（ReAct/PlanExecute/EvidenceGate 的
-    task_requires_write 都走这里），漏判会让 Agent 把「重构这个模块」
-    当成闲聊回答，不调用任何工具。这是 LLM 不可用时的降级基线；
-    分类器可用时由契约主导（显式征询会被 _ADVISORY 否决）。
-    """
+SEMANTIC_MUTATION_REQUESTS = [
+    "帮我重构这个模块",
+    "更新文档里的安装步骤",
+    "纠正这个错误",
+    "改进这个函数的实现",
+    "优化一下这个算法",
+    "搞定这个 bug",
+    "处理一下这个报错",
+    "解决这个崩溃问题",
+]
+
+
+@pytest.mark.parametrize("text", STRUCTURAL_MUTATION_REQUESTS)
+def test_structural_mutation_requests_authorize_write(text):
+    """正则只认显式操作结构（动词 + 文件/路径/倒装），保持 WRITE。"""
     policy = classify_execution_policy(text, intent=detect_intent(text))
     assert policy.level >= ExecutionLevel.WRITE
+
+
+class _WriteClassifier:
+    """Fake LLM classifier: semantic mutation requests need write access."""
+
+    enabled = True
+    confidence_threshold = 0.7
+
+    def classify(self, text, *, context_messages=None, hints=None):
+        return ClassificationResult(
+            intent="refactor",
+            confidence=0.95,
+            operations=("read", "write"),
+        )
+
+
+@pytest.mark.parametrize("text", SEMANTIC_MUTATION_REQUESTS)
+def test_semantic_mutations_require_the_classifier(text):
+    """语义意图（修复/重构/优化/搞定）不进入正则；分类器契约负责授权。"""
+    policy = classify_execution_policy(text, intent=detect_intent(text))
+    assert policy.level < ExecutionLevel.WRITE
+
+    contract = build_turn_contract(text, classifier=_WriteClassifier())
+    assert contract.level >= ExecutionLevel.WRITE
 
 
 @pytest.mark.parametrize(
@@ -385,9 +409,6 @@ def test_chinese_readonly_or_answer_requests_not_escalated(text):
         "给我一份 README.md",
         "帮我把这段代码存起来",
         "把结果保存下来",
-        "搞定这个 bug",
-        "处理一下这个报错",
-        "解决这个崩溃问题",
         "give me a config file",
     ],
 )

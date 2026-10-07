@@ -48,7 +48,7 @@ class TestPlanCompletenessGate:
         gate = PlanCompletenessGate()
         verdict = gate.check(
             None,
-            user_input="Fix the bug in src/main.py",
+            user_input="把结果写到 src/main.py",
             plan={
                 "steps": [
                     {"id": 1, "task": "读", "tool": "read_file"},
@@ -63,7 +63,7 @@ class TestPlanCompletenessGate:
         gate = PlanCompletenessGate()
         verdict = gate.check(
             None,
-            user_input="Fix the bug in src/main.py",
+            user_input="把结果写到 src/main.py",
             plan={
                 "steps": [
                     {"id": 1, "task": "读", "tool": "read_file"},
@@ -102,7 +102,7 @@ class TestTaskCompletionGate:
         )
         verdict = gate.check(
             None,
-            user_input="Fix the bug in src/main.py",
+            user_input="把结果写到 src/main.py",
             results=[{"step_id": 1}],
             tracker=tracker,
             max_steps=10,
@@ -118,7 +118,7 @@ class TestTaskCompletionGate:
         )
         verdict = gate.check(
             None,
-            user_input="Fix the bug in src/main.py",
+            user_input="把结果写到 src/main.py",
             results=[{"step_id": 1}],
             tracker=tracker,
             max_steps=10,
@@ -129,7 +129,7 @@ class TestTaskCompletionGate:
         gate = TaskCompletionGate()
         verdict = gate.check(
             None,
-            user_input="Fix the bug",
+            user_input="把结果写到 output.txt",
             results=[{"step_id": i} for i in range(10)],
             tracker=_make_tracker([]),
             max_steps=10,
@@ -143,7 +143,7 @@ class TestTaskCompletionGate:
         gate = TaskCompletionGate()
         verdict = gate.check(
             None,
-            user_input="Fix the bug",
+            user_input="把结果写到 output.txt",
             results=[{"step_id": i} for i in range(19)],
             tracker=_make_tracker([]),
             max_steps=10,
@@ -209,7 +209,7 @@ class TestPipelineOnPlanExecuteEngine:
         eng = PlanExecuteEngine(["mock/model"], max_steps=8)
         verdicts = eng.run_gates(
             "plan",
-            user_input="Fix the bug in src/main.py",
+            user_input="把结果写到 src/main.py",
             plan={"steps": [{"id": 1, "task": "读", "tool": "read_file"}]},
         )
         assert len(verdicts) == 1
@@ -219,7 +219,7 @@ class TestPipelineOnPlanExecuteEngine:
         eng = PlanExecuteEngine(["mock/model"], max_steps=8)
         verdict = eng.gate_failed(
             "plan",
-            user_input="Fix the bug",
+            user_input="把结果写到 output.txt",
             plan={"steps": [{"id": 1, "task": "读", "tool": "read_file"}]},
         )
         assert verdict is not None
@@ -229,7 +229,7 @@ class TestPipelineOnPlanExecuteEngine:
         eng = PlanExecuteEngine(["mock/model"], max_steps=8)
         verdict = eng.gate_failed(
             "plan",
-            user_input="Fix the bug",
+            user_input="把结果写到 output.txt",
             plan={
                 "steps": [
                     {"id": 1, "task": "读", "tool": "read_file"},
@@ -253,7 +253,19 @@ class TestPureHelpers:
         assert plan_has_write_step([{"tool": "command"}]) is False
 
     def test_task_requires_write(self) -> None:
-        assert task_requires_write("Fix the bug in src/main.py") is True
+        # 语义识别属于分类器：写权限由本轮契约决定；无契约时正则只认显式结构。
+        from xenon.repl.execution_policy import ExecutionLevel
+        from xenon.repl.turn_contract import contract_for_level
+
+        write_ctx = AgentContext(
+            {"_turn_contract": contract_for_level(ExecutionLevel.WRITE)}
+        )
+        read_ctx = AgentContext(
+            {"_turn_contract": contract_for_level(ExecutionLevel.READ_ONLY)}
+        )
+        assert task_requires_write("fix the bug", ctx=write_ctx) is True
+        assert task_requires_write("fix the bug", ctx=read_ctx) is False
+        assert task_requires_write("把结果写到 output.txt") is True
         assert task_requires_write("What does this code do?") is False
 
     def test_verify_file_claims(self) -> None:
@@ -270,7 +282,7 @@ class TestBackwardCompatibility:
         eng = PlanExecuteEngine(["mock/model"], max_steps=8)
         assert eng._plan_has_write_step([{"tool": "edit_file"}]) is True
         assert eng._plan_has_write_step([{"tool": "read_file"}]) is False
-        assert eng._task_requires_write("Fix the bug in main.py") is True
+        assert eng._task_requires_write("把结果写到 main.py") is True
         tracker = _make_tracker([_make_call("write_file", {"file_path": "a.py"}, True)])
         assert eng._has_successful_write(tracker) is True
         # 类属性向后兼容

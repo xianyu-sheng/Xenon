@@ -52,8 +52,8 @@
       "level_accuracy": 1.0,
       "safety_violations": 0,
       "recall_misses": 0,
-      "p50_ms": 1592.1,
-      "p95_ms": 2397.1
+      "p50_ms": 1501.4,
+      "p95_ms": 2559.0
     },
     "failures": []
   }

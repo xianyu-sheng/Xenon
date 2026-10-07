@@ -66,17 +66,28 @@ def _make_evidence(
     return ExecutionEvidence.capture(tracker, workspace_root=None)
 
 
+def _write_ctx():
+    """本轮是写任务的契约（写权限由分类器写进契约，循环只读契约）。"""
+    from xenon.engine.context import AgentContext
+    from xenon.repl.execution_policy import ExecutionLevel
+    from xenon.repl.turn_contract import contract_for_level
+
+    return AgentContext(
+        {"_turn_contract": contract_for_level(ExecutionLevel.WRITE)}
+    )
+
+
 # ── _should_verify ─────────────────────────────────────────────
 
 
 class TestShouldVerify:
     def test_write_with_failed_test(self):
         ev = _make_evidence(write=True, test_fail=True)
-        assert _should_verify(ev, "fix the bug") is True
+        assert _should_verify(ev, "fix the bug", _write_ctx()) is True
 
     def test_write_with_passing_test_skips(self):
         ev = _make_evidence(write=True, test_pass=True)
-        assert _should_verify(ev, "fix the bug") is False
+        assert _should_verify(ev, "fix the bug", _write_ctx()) is False
 
     def test_no_write_skips(self):
         # 只有 read_file 失败（无任何写类工具）→ 不触发验证
@@ -89,7 +100,7 @@ class TestShouldVerify:
             error="file not found",
         )
         ev = ExecutionEvidence.capture(tracker, workspace_root=None)
-        assert _should_verify(ev, "fix the bug") is False
+        assert _should_verify(ev, "fix the bug", _write_ctx()) is False
 
     def test_readonly_task_skips(self):
         ev = _make_evidence(write=True, test_fail=True)
@@ -97,7 +108,7 @@ class TestShouldVerify:
 
     def test_no_failed_test_skips(self):
         ev = _make_evidence(write=True, test_pass=False)
-        assert _should_verify(ev, "fix the bug") is False
+        assert _should_verify(ev, "fix the bug", _write_ctx()) is False
 
     def test_write_failure_still_triggers(self):
         """v0.8.3 回归：edit_file 失败（无成功写）也应触发验证循环。
@@ -124,7 +135,7 @@ class TestShouldVerify:
             error="AssertionError: assert 1 == 2",
         )
         ev = ExecutionEvidence.capture(tracker)
-        assert _should_verify(ev, "fix the bug") is True
+        assert _should_verify(ev, "fix the bug", _write_ctx()) is True
 
     def test_write_attempt_only_triggers(self):
         """写尝试存在（无论成败）+ 测试失败 → 触发验证。"""
@@ -143,7 +154,7 @@ class TestShouldVerify:
             result_summary="",
         )
         ev = ExecutionEvidence.capture(tracker)
-        assert _should_verify(ev, "fix the bug") is True
+        assert _should_verify(ev, "fix the bug", _write_ctx()) is True
 
 
 class TestWriteToolSet:
@@ -212,13 +223,13 @@ class TestVerificationLoop:
     def test_no_verify_when_inactive(self):
         loop = VerificationLoop(max_rounds=8)
         ev = _make_evidence(write=True, test_fail=True)
-        assert loop.feed(ev, "fix it") is None
+        assert loop.feed(ev, "fix it", _write_ctx()) is None
 
     def test_verify_returns_repair_prompt(self):
         loop = VerificationLoop(max_rounds=8)
         loop._active = True
         ev = _make_evidence(write=True, test_fail=True)
-        prompt = loop.feed(ev, "fix the bug")
+        prompt = loop.feed(ev, "fix the bug", _write_ctx())
         assert prompt is not None
         assert "验证闭环" in prompt
         assert "AssertionError" in prompt
@@ -227,7 +238,7 @@ class TestVerificationLoop:
         loop = VerificationLoop(max_rounds=8)
         loop._active = True
         ev = _make_evidence(write=True, test_pass=True)
-        assert loop.feed(ev, "fix it") is None
+        assert loop.feed(ev, "fix it", _write_ctx()) is None
 
     def test_verify_skips_readonly_task(self):
         loop = VerificationLoop(max_rounds=8)
@@ -240,16 +251,16 @@ class TestVerificationLoop:
         loop._active = True
         ev = _make_evidence(write=True, test_fail=True)
         # Round 1
-        p1 = loop.feed(ev, "fix it")
+        p1 = loop.feed(ev, "fix it", _write_ctx())
         assert p1 is not None
         loop.record_outcome(ev, "still_failing")
         assert loop.should_continue
         # Round 2
-        p2 = loop.feed(ev, "fix it")
+        p2 = loop.feed(ev, "fix it", _write_ctx())
         assert p2 is not None
         loop.record_outcome(ev, "still_failing")
         # Round 3 attempt → should return None (max_rounds=2)
-        p3 = loop.feed(ev, "fix it")
+        p3 = loop.feed(ev, "fix it", _write_ctx())
         assert p3 is None
         assert not loop.should_continue
 
@@ -257,7 +268,7 @@ class TestVerificationLoop:
         loop = VerificationLoop(max_rounds=8)
         loop._active = True
         ev = _make_evidence(write=True, test_fail=True)
-        p = loop.feed(ev, "fix it")
+        p = loop.feed(ev, "fix it", _write_ctx())
         assert p is not None
         # Record as fixed with passing tests
         fixed_ev = _make_evidence(write=True, test_pass=True)
@@ -270,15 +281,15 @@ class TestVerificationLoop:
         loop._active = True
         ev = _make_evidence(write=True, test_fail=True, fail_error="Error: same error")
         # R1: first feed → records baseline, no match yet
-        assert loop.feed(ev, "fix it") is not None
+        assert loop.feed(ev, "fix it", _write_ctx()) is not None
         loop.record_outcome(ev, "still_failing")
         assert not loop.is_stuck
         # R2: matches R1 → _stuck_rounds=1, still below threshold
-        assert loop.feed(ev, "fix it") is not None
+        assert loop.feed(ev, "fix it", _write_ctx()) is not None
         loop.record_outcome(ev, "still_failing")
         assert not loop.is_stuck
         # R3: matches again → _stuck_rounds=2 → stuck, feed returns None
-        assert loop.feed(ev, "fix it") is None
+        assert loop.feed(ev, "fix it", _write_ctx()) is None
         assert loop.is_stuck
         assert not loop.should_continue
 
@@ -289,12 +300,12 @@ class TestVerificationLoop:
         ev1 = _make_evidence(
             write=True, test_fail=True, fail_error="Error: assert 1 == 2"
         )
-        loop.feed(ev1, "fix it")
+        loop.feed(ev1, "fix it", _write_ctx())
         loop.record_outcome(ev1, "still_failing")
         ev2 = _make_evidence(
             write=True, test_fail=True, fail_error="Error: assert 2 == 3"
         )
-        result = loop.feed(ev2, "fix it")
+        result = loop.feed(ev2, "fix it", _write_ctx())
         assert result is not None  # different failure = progress
         assert not loop.is_stuck
 
@@ -302,7 +313,7 @@ class TestVerificationLoop:
         loop = VerificationLoop(max_rounds=8)
         loop._active = True
         ev = _make_evidence(write=True, test_fail=True)
-        loop.feed(ev, "fix it")
+        loop.feed(ev, "fix it", _write_ctx())
         # Record a successful round with passing test
         tracker = _make_tracker(write_success=True, test_success=True)
         fixed_ev = ExecutionEvidence.capture(tracker)
@@ -337,12 +348,12 @@ class TestVerificationLoop:
         ev = _make_evidence(
             write=True, test_fail=True, fail_error="Error: round 1 fail"
         )
-        loop.feed(ev, "fix it")
+        loop.feed(ev, "fix it", _write_ctx())
         loop.record_outcome(ev, "still_failing")
         ev2 = _make_evidence(
             write=True, test_fail=True, fail_error="Error: round 2 fail"
         )
-        loop.feed(ev2, "fix it")
+        loop.feed(ev2, "fix it", _write_ctx())
         loop.record_outcome(ev2, "still_failing")
         assert len(loop.failure_timeline) == 2
         context = loop.build_context_summary()
@@ -364,7 +375,7 @@ class TestVerificationLoop:
         loop = VerificationLoop(max_rounds=8)
         loop._active = True
         ev = _make_evidence(write=True, test_fail=True)
-        loop.feed(ev, "fix it")
+        loop.feed(ev, "fix it", _write_ctx())
         loop.record_outcome(ev, "still_failing")
         assert loop.round_count > 0
         loop.reset()

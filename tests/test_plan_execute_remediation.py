@@ -87,16 +87,17 @@ class _WriteTracker(ToolExecutionTracker):
         return ns
 
 
-def test_task_requires_write_detects_code_fix() -> None:
-    """SWE-bench 风格「fix the bug / modify」请求应判定为需要写。"""
+def test_task_requires_write_follows_contract() -> None:
+    """语义（fix/modify）由分类器写进契约；gate 只读契约，不再识别关键词。"""
+    from xenon.engine.context import AgentContext
+    from xenon.repl.execution_policy import ExecutionLevel
+    from xenon.repl.turn_contract import contract_for_level
+
     engine = PlanExecuteEngine(["mock/model"], max_steps=4)
-    assert (
-        engine._task_requires_write(
-            "You are fixing an official SWE-bench task. Implement the minimal "
-            "correct fix in the working tree."
-        )
-        is True
+    ctx = AgentContext(
+        {"_turn_contract": contract_for_level(ExecutionLevel.WRITE)}
     )
+    assert engine._task_requires_write("implement the minimal correct fix", ctx) is True
 
 
 def test_task_requires_write_allows_read_only() -> None:
@@ -133,7 +134,7 @@ def test_ensure_skipped_when_write_done(monkeypatch) -> None:
 
     results = [{"step_id": 1, "task": "t", "result": "r", "status": "ok"}]
     out = engine._ensure_task_completed(
-        "Fix the bug in src/main.py", results, ctx, tracker, total=2
+        "把结果写到 src/main.py", results, ctx, tracker, total=2
     )
     assert len(out) == 1  # 未追加
     assert out[0]["step_id"] == 1
@@ -158,7 +159,7 @@ def test_ensure_triggers_remediation_when_no_write(monkeypatch) -> None:
     )
 
     out = engine._ensure_task_completed(
-        "Fix the bug in src/main.py", results, ctx, tracker, total=2
+        "把结果写到 src/main.py", results, ctx, tracker, total=2
     )
     assert len(out) == 2  # 追加了补救步骤
     assert "强制补救" in out[-1]["task"]
@@ -224,7 +225,7 @@ def test_ensure_plan_keeps_plan_with_write(monkeypatch) -> None:
         "_call_llm_for_phase",
         lambda *a, **kw: called.__setitem__("n", called["n"] + 1) or "{}",
     )
-    out = engine._ensure_plan_has_write_step("Fix the bug in src/main.py", plan, ctx)
+    out = engine._ensure_plan_has_write_step("把结果写到 src/main.py", plan, ctx)
     assert len(out) == 2
     assert called["n"] == 0  # 未重新规划
 
@@ -245,7 +246,7 @@ def test_ensure_plan_replans_when_no_write(monkeypatch) -> None:
         '{"id":2,"task":"改","tool":"write_file","params":{"file_path":"src/main.py"}}]}'
     )
     monkeypatch.setattr(engine, "_call_llm_for_phase", lambda *a, **kw: retry_json)
-    out = engine._ensure_plan_has_write_step("Fix the bug in src/main.py", plan, ctx)
+    out = engine._ensure_plan_has_write_step("把结果写到 src/main.py", plan, ctx)
     assert len(out) == 2
     assert out[-1]["tool"] == "write_file"
 
@@ -269,7 +270,7 @@ def test_ensure_plan_aborts_when_replan_still_no_write(monkeypatch) -> None:
         '{"id":2,"task":"分析","tool":null}]}'
     )
     monkeypatch.setattr(engine, "_call_llm_for_phase", lambda *a, **kw: retry_json)
-    out = engine._ensure_plan_has_write_step("Fix the bug in src/main.py", plan, ctx)
+    out = engine._ensure_plan_has_write_step("把结果写到 src/main.py", plan, ctx)
     assert out == plan["steps"]  # 降级执行原计划而非放弃
 
 
@@ -308,7 +309,7 @@ def test_remediation_forces_write_tool(monkeypatch) -> None:
         2,
         "强制修改",
         "(无)",
-        "Fix the bug",
+        "把结果写到 output.txt",
         tracker=tracker,
         context=ctx,
         require_write_tool=True,

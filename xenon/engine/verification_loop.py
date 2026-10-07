@@ -89,7 +89,11 @@ def _extract_failure_summary(evidence: ExecutionEvidence) -> str:
     return " | ".join(parts[:5])  # cap at 5 failures
 
 
-def _should_verify(evidence: ExecutionEvidence, user_input: str) -> bool:
+def _should_verify(
+    evidence: ExecutionEvidence,
+    user_input: str,
+    context: Any | None = None,
+) -> bool:
     """Determine whether verification is needed.
 
     Conditions:
@@ -105,7 +109,7 @@ def _should_verify(evidence: ExecutionEvidence, user_input: str) -> bool:
     """
     from xenon.engine.evidence_gate import task_requires_write
 
-    if not task_requires_write(user_input):
+    if not task_requires_write(user_input, context):
         return False
     has_write_attempt = any(c.tool_name in _WRITE_TOOL_NAMES for c in evidence.calls)
     if not has_write_attempt:
@@ -154,6 +158,7 @@ class VerificationLoop:
         self,
         evidence: ExecutionEvidence,
         user_input: str,
+        context: Any | None = None,
     ) -> str | None:
         """Feed execution evidence into the verification loop.
 
@@ -167,7 +172,7 @@ class VerificationLoop:
             return None
 
         # Check if verification is needed at all
-        if not _should_verify(evidence, user_input):
+        if not _should_verify(evidence, user_input, context):
             self._active = False
             return None
 

@@ -235,7 +235,15 @@ class TestReadOnlyParalysisDetection:
         monkeypatch.setattr(engine._tool_executor, "execute", fake_execute)
         engine.callback.on_warning = lambda w: warnings.append(w)
 
-        engine.run("修复 a.py 里的 bug", AgentContext())
+        from xenon.repl.execution_policy import ExecutionLevel
+        from xenon.repl.turn_contract import contract_for_level
+
+        engine.run(
+            "修复 a.py 里的 bug",
+            AgentContext(
+                {"_turn_contract": contract_for_level(ExecutionLevel.WRITE)}
+            ),
+        )
         assert any("纯只读" in w for w in warnings), warnings
 
     def test_query_task_never_triggers(self, monkeypatch):

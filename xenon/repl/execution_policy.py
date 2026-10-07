@@ -164,24 +164,12 @@ _WRITE = re.compile(
     r"|(?:写|编写)(?:一个|个)?\s*(?:[\w.-]+\.[A-Za-z0-9]+\s*)?(?:文件|目录|文件夹)"
     r"|(?:创建|新建|生成|修改|编辑|替换|删除).{0,24}(?:文件|目录|文件夹|项目|仓库|代码库|\w+\.[A-Za-z0-9]+)"
     r"|(?:\w+\.[A-Za-z0-9]+).{0,16}(?:修改|编辑|替换|删除|改一下|改下)"
-    # 语义模式保留在降级路径（无可用 provider / 分类失败时）：显式征询
-    # （问原因/思路/建议）由 _ADVISORY 在下方否决，不会变成施工。
-    r"|(?:修复|重构|改造|升级|处理).{0,20}(?:bug|错误|问题|代码|项目|仓库|功能)"
-    r"|(?:修复|纠正|更正|重构|改进|优化|更新|修改|调整)(?:一下|下)?"
-    r"(?:这|该|当前|上述|刚才|本次|下面)?(?:个|份|段|处)?"
-    r"(?:模块|函数|方法|类|实现|逻辑|注释|文档|配置|脚本|算法|接口|测试|错误)"
+    # 语义意图（修复/重构/优化/更新 + 代码实体）不在此处判定：正则只负责
+    # 操作原语与显式结构，语义由 LLM 分类器主导（无分类器时保守回落）。
     r"|(?:删除|移除|去掉|清理).{0,16}(?:代码|注释|日志|文件|目录|依赖|引用|导入|import)"
     # 动宾倒装：「把重复代码重构成函数」「把 X 改成 Y」。
     r"|(?:把|将).{1,24}(?:重构|改写|修改|调整|改|变)(?:成|为|到|一下|下)"
     r"|(?:write|save|create|edit|modify|patch|replace|delete).{0,30}\b(?:file|directory|project|repo|disk)\b"
-    r"|(?:fix(?:ing|es|ed)?|repair(?:ing|s|ed)?|correct(?:ing|s|ed)?|implement(?:ing|s|ed)?|"
-    r"update(?:ing|s|ed)?|remov(?:e|ing|ed|es)|refactor(?:ing|s|ed)?|improve(?:ing|s|d)?|"
-    r"add(?:ing|s|ed)?|rename(?:ing|s|d)?|mov(?:e|ing|ed|es)|copy(?:ing|ies|ied)?)"
-    r".{0,40}\b(?:bug|bugfix|issue|error|defect|problem|function|method|class|test|testcase|"
-    r"task|workflow|feature|change|behavior|behaviour)\b"
-    r"|(?:a|the|this|that|minimal|correct|proper|fix|repair|implementation)?\s*"
-    r"(?:correct|proper|minimal|small|full|complete)?\s*(?:fix|repair|implementation|"
-    r"patch)\b"
     r"|(?:fix(?:ing|es|ed)?|repair(?:ing|s|ed)?|correct(?:ing|s|ed)?|implement(?:ing|s|ed)?|"
     r"update(?:ing|s|ed)?|remov(?:e|ing|ed|es)|refactor(?:ing|s|ed)?|improve(?:ing|s|d)?)"
     r".{0,40}\b(?:file|directory|project|repo|codebase)\b"
@@ -266,10 +254,6 @@ _IMPLICIT_WRITE = re.compile(
     # 处置句式：「把这段存起来」「将结果保存下来」（存/放/整理 + 趋向补语）
     r"|(?:把|将)[^，。！？,.!?\n]{0,24}(?:存|放|落|整理|归档|导出)"
     r"(?:起来|下来|到|进|成|好)"
-    # 口语完成动词 + 缺陷实体：「搞定这个 bug」「处理下这个报错」
-    r"|(?:搞定|解决|处理|收拾|干掉|消掉)(?:一下|下)?"
-    r"[^，。！？,.!?\n]{0,12}"
-    r"(?:bug|BUG|错误|报错|异常|问题|崩溃|失败|警告|warning)"
     # 英文需求句式
     r"|(?:need|want|give\s+me|make\s+me|create\s+me)\s+"
     r"(?:a|an|the|one)?\s*[^,.!?\n]{0,16}"

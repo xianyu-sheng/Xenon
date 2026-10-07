@@ -439,7 +439,7 @@ class PlanReactEngine(SteeringMixin):
             evidence = ExecutionEvidence.capture(aggregate, workspace_root)
             self.verification_loop._active = True
         while self.verification_loop.should_continue:
-            repair_prompt = self.verification_loop.feed(evidence, user_input)
+            repair_prompt = self.verification_loop.feed(evidence, user_input, ctx)
             if repair_prompt is None:
                 break
             logger.warning(
@@ -732,7 +732,7 @@ class _ReflectionCombination(SteeringMixin):
             evidence = ExecutionEvidence.capture(aggregate, root)
             self.verification_loop._active = True
         while self.verification_loop.should_continue:
-            v_prompt = self.verification_loop.feed(evidence, user_input)
+            v_prompt = self.verification_loop.feed(evidence, user_input, ctx)
             if v_prompt is None:
                 break
             logger.warning(
