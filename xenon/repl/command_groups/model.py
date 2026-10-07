@@ -17,6 +17,26 @@ if TYPE_CHECKING:
     from xenon.repl.model_registry import ModelRegistry
 
 
+def _activate_selected_model(repl: Any, model_id: str) -> None:
+    """统一「用户显式选择模型」的切换副作用。
+
+    /set_model 与 /model 必须走同一条路径：首选模型、auto_router 活跃记录、
+    状态栏显示、失败标记清理。缺任何一项都会让底栏与用户设置不一致。
+    """
+
+    repl._preferred_model_ids = [model_id]
+    router = getattr(repl, "auto_router", None)
+    if router:
+        router._preferred_model_ids = [model_id]
+        router.record_model_success(model_id)
+    bar = getattr(repl, "status_bar", None)
+    if bar is not None:
+        bar.set_last_model(model_id)
+    failed = getattr(repl, "_failed_models", None)
+    if failed is not None:
+        failed.discard(model_id)
+
+
 # /set_model ───────────────────────────────────────────────
 
 register_command(
@@ -151,14 +171,10 @@ def _cmd_set_model(
     try:
         config = registry.add_model(model_id, alias)
 
-        # v0.8.5: 自动切换到选中的模型
+        # v0.8.5: 自动切换到选中的模型（与 /model 共用同一套切换副作用）
         repl = session_state.get("_repl")
         if repl:
-            # 更新首选模型
-            repl._preferred_model_ids = [model_id]
-            # 更新 auto_router 的首选模型
-            if hasattr(repl, "auto_router") and repl.auto_router:
-                repl.auto_router._preferred_model_ids = [model_id]
+            _activate_selected_model(repl, model_id)
 
         return f"✅ 模型已设置并切换: {alias} -> {config.model_id}"
     except Exception as e:
@@ -520,18 +536,7 @@ def _cmd_model(*, session_state: dict, registry: ModelRegistry, **kwargs: Any) -
     # v0.8.5: 同时设置 _preferred_model_ids，确保模型真正切换
     repl = session_state.get("_repl")
     if repl:
-        repl._preferred_model_ids = [selected.model_id]
-        # 同步到 auto_router
-        if hasattr(repl, "auto_router") and repl.auto_router:
-            repl.auto_router._preferred_model_ids = [selected.model_id]
-            # P1-High: 更新 _last_successful_model_id 和状态栏
-            repl.auto_router.record_model_success(selected.model_id)
-        # P1-High: 更新状态栏显示
-        if hasattr(repl, "status_bar"):
-            repl.status_bar.set_last_model(selected.model_id)
-        # v0.5.2: 清除该模型的失败标记，允许重新调用
-        if hasattr(repl, "_failed_models"):
-            repl._failed_models.discard(selected.model_id)
+        _activate_selected_model(repl, selected.model_id)
 
     return f"✅ 已切换到: {selected.alias} ({selected.model_id})"
 

@@ -39,7 +39,14 @@ from xenon.repl.execution_policy import (
     ExecutionPolicy,
     bind_execution_boundary,
 )
-from xenon.repl.turn_contract import TurnContract, build_turn_contract
+from xenon.repl.turn_contract import (
+    PendingAction,
+    TurnContract,
+    build_turn_contract,
+    continuation_hint,
+    detect_pending_action,
+    is_continuation_utterance,
+)
 from xenon.repl.input_buffer import PastedTextStore, _ShiftTabSignal
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.project_context import ProjectContext
@@ -206,6 +213,8 @@ class REPL:
         # 瞬时错误交给 ModelPool 阈值熔断，不在这里永久拉黑。
         self._failed_models: set[str] = set()
         self._preferred_model_ids: list[str] = []  # v0.5.3: 用户 -m 指定的模型
+        # 跨回合“回复继续”承诺：上一轮模型提出、用户确认后本轮续接的状态机。
+        self._pending_action: PendingAction | None = None
 
         # v0.5.3: 折叠思考过程 — 默认隐藏，Ctrl+O 展开
         self._show_thinking: bool = False
@@ -1830,6 +1839,19 @@ class REPL:
             console.print("[dim]· 空输入已忽略[/dim]")
             return
 
+        # 跨回合续接：短确认语 + 未兑现承诺 = 继承上轮意图/级别/范式；
+        # 没有承诺时明确澄清，不让模型把“继续”当新话题重新回答。
+        bare_continuation = is_continuation_utterance(user_input)
+        pending = self._pending_action if bare_continuation else None
+        if bare_continuation and pending is None:
+            console.print(
+                "[dim]· 没有可继续的未完成任务。请直接说明你想让我继续做什么。[/dim]"
+            )
+            return
+        if self._pending_action is not None and not bare_continuation:
+            # 用户在承诺未兑现前切换了话题：旧承诺失效，避免过期授权。
+            self._pending_action = None
+
         # v0.6.0: 智能路由 - 根据用户输入自动选择推理范式
         if self.intelligent_router.enabled:
             routing_decision = self.intelligent_router.route(
@@ -1864,8 +1886,11 @@ class REPL:
         # Side effects are authorized by the original request, never by the
         # optimizer's generated wording or by the selected reasoning mode.
         turn_contract_obj, execution_policy, intent, inherited_intent_source = (
-            self._resolve_turn_contract(user_input)
+            self._resolve_turn_contract(user_input, pending=pending)
         )
+        if pending is not None and not turn_contract_obj.continuation:
+            # 契约层判定不能续接（如与约束矛盾）时退化为普通回合。
+            pending = None
         self.agent_context.update(
             {
                 "_execution_level": int(execution_policy.level),
@@ -1919,7 +1944,12 @@ class REPL:
             intent = self._detect_intent(intent_input)
             inherited_intent_source = None
         system_hint: str | None = None
-        if skill_name is not None:
+        if pending is not None:
+            optimized = user_input
+            console.print(
+                f"[dim cyan]⏩ 延续上轮任务 → 直接继续：{pending.reason}[/dim cyan]"
+            )
+        elif skill_name is not None:
             optimized = user_input
             console.print(
                 f"[dim cyan]🧩 Agent Skill: {skill_name}（正文与资源按需加载）[/dim cyan]"
@@ -1968,7 +1998,7 @@ class REPL:
         turn_prompt = optimized
         if system_hint and intent != "chat":
             turn_prompt = f"{optimized}\n\n## 本轮回答指导\n{system_hint}"
-        if inherited_intent_source:
+        if inherited_intent_source and pending is None:
             turn_prompt = (
                 f"{turn_prompt}\n\n"
                 "## 延续上轮任务\n"
@@ -1976,6 +2006,8 @@ class REPL:
                 "不要只返回查询 URL。\n"
                 f"{inherited_intent_source}"
             )
+        if pending is not None:
+            turn_prompt = f"{turn_prompt}\n\n{continuation_hint(pending)}"
 
         # Freeze authorization with this exact turn. ReAct must not mutate its
         # leading system prompt when the execution level changes.
@@ -1992,6 +2024,7 @@ class REPL:
                 "original_user_input": user_input,
                 "intent_source": intent_source,
                 "contextual_followup": bool(inherited_intent_source),
+                "continuation": pending is not None,
             },
         )
 
@@ -2051,6 +2084,14 @@ class REPL:
             turn_contract_obj.intent,
             turn_contract_obj.requires_tools,
         )
+        if pending is not None and pending.engine:
+            spec = ENGINE_REGISTRY.get(pending.engine)
+            if spec is not None and spec.runs_engine and mode != pending.engine:
+                mode = pending.engine
+                console.print(
+                    f"[dim cyan]⏩ 延续上轮任务 → 继续使用 "
+                    f"[bold]{mode}[/bold] 范式[/dim cyan]"
+                )
 
         try:
             if skill_name is not None:
@@ -2113,6 +2154,14 @@ class REPL:
         # A suggestion is shown after the answer, at most once per turn.  It is
         # deliberately independent from XENON_ASSUME_YES: test/automation flags
         # must never become consent for long-term memory.
+        # 本轮一旦以“回复继续即可”收尾，就登记为跨回合承诺；否则清除。
+        # 放在记忆建议之前：记忆确认可能与用户交互，不应影响承诺识别。
+        self._update_pending_action(
+            mode=mode,
+            contract=turn_contract_obj,
+            policy=execution_policy,
+        )
+
         if skill_name is None:
             self._maybe_suggest_memory(user_input)
 
@@ -2881,15 +2930,26 @@ class REPL:
         return raw_intent, None
 
     def _resolve_turn_contract(
-        self, user_input: str
+        self, user_input: str, pending: PendingAction | None = None
     ) -> tuple[TurnContract, ExecutionPolicy, str | None, str | None]:
         """本轮唯一一次分类：正则信号 +（可选）LLM 意图 → 不可变契约。
 
         所有下游（引擎路由、工具 schema、证据门、策略提示）都应消费
         ``self.agent_context["_turn_contract"]``，不得再重新分类。
+        续接承诺（``pending`` + 短确认语）时不做 LLM 分类：上一轮已经
+        决定了意图与级别，本轮只继承，避免“继续”被当成新闲聊。
         """
 
         intent, inherited_intent_source = self._resolve_turn_intent(user_input)
+        if pending is not None:
+            inherited = build_turn_contract(user_input, pending=pending)
+            if inherited.continuation:
+                return (
+                    inherited,
+                    inherited.to_execution_policy(),
+                    inherited.intent or intent,
+                    inherited_intent_source,
+                )
         contract = build_turn_contract(
             user_input,
             classifier=self._get_intent_classifier(),
@@ -2903,6 +2963,30 @@ class REPL:
             contract.to_execution_policy(),
             intent,
             inherited_intent_source,
+        )
+
+    def _update_pending_action(
+        self,
+        *,
+        mode: str,
+        contract: TurnContract,
+        policy: ExecutionPolicy,
+    ) -> None:
+        """记录本轮结尾的“回复继续”承诺；无承诺则清除，避免过期授权。"""
+
+        answer = ""
+        for message in reversed(self.ctx_mgr.get_messages()[-8:]):
+            if message.get("role") == "assistant":
+                answer = str(message.get("content") or "")
+                break
+        level = max(int(policy.level), int(contract.proposed_level))
+        self._pending_action = detect_pending_action(
+            answer,
+            engine=mode,
+            level=level,
+            intent=contract.intent,
+            operations=contract.operations,
+            reason="上一轮承诺在用户确认后继续执行",
         )
 
     def _get_intent_classifier(self) -> Any:

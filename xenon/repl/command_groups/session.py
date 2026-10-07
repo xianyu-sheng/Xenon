@@ -122,6 +122,10 @@ def _cmd_clear(*, ctx_mgr: ContextManager, **kwargs: Any) -> str:
     if not confirm_action("确认清空全部对话历史？", default=True):
         return "已取消"
     ctx_mgr.clear()
+    # 清空历史后旧的“回复继续”承诺失效，避免用过期上下文续接。
+    repl = (kwargs.get("session_state") or {}).get("_repl")
+    if repl is not None:
+        repl._pending_action = None
     return "✅ 对话历史已清空"
 
 
@@ -378,6 +382,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         if not isinstance(context_store, dict):
             context_store = {}
         repl.ctx_mgr.clear()
+        repl._pending_action = None  # 恢复新会话后不继承旧承诺
         if history:
             for msg in history:
                 repl.ctx_mgr.add_message(

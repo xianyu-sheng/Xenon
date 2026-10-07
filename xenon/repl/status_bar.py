@@ -97,6 +97,46 @@ class StatusBar:
         # 此方法主要作为状态变更的钩子点，便于调试和扩展
         pass
 
+    def _preferred_model_id(self) -> str | None:
+        """用户通过 /set_model、/model 或 -m 显式选择的模型。
+
+        优先于池序的 healthy[0]：否则用户切换后底栏仍显示旧模型。
+        """
+
+        router = self._auto_router
+        if router is None:
+            return None
+        try:
+            preferred = getattr(router, "_preferred_model_ids", None)
+        except Exception:  # noqa: BLE001 — 显示不能阻断
+            return None
+        if preferred:
+            return str(preferred[0])
+        return None
+
+    def _model_for_display(self) -> str:
+        """显示模型：用户选择 > auto 路由活动模型 > 最近成功模型 > 未设置。"""
+
+        preferred = self._preferred_model_id()
+        if preferred:
+            return preferred
+        if self._auto_router and not self._auto_router.is_empty():
+            active = self._auto_router.get_active_model_id()
+            if active:
+                return f"auto · {active}"
+        return self._last_model or "未设置"
+
+    @staticmethod
+    def _truncate_model(model: str, limit: int) -> str:
+        """截断模型名时保留 ``auto ·`` 前缀，否则字面量会先被切掉。"""
+
+        if len(model) <= limit:
+            return model
+        prefix = "auto · " if model.startswith("auto · ") else ""
+        body = model[len(prefix) :]
+        keep = max(1, limit - len(prefix) - 1)
+        return f"{prefix}…{body[-keep:]}"
+
     def _cache_badge(self) -> tuple[str, str] | None:
         if not self.cache_tracker:
             return None
@@ -143,13 +183,7 @@ class StatusBar:
         bar_color = "red" if pct_val > 80 else ("yellow" if pct_val > 50 else "green")
         bar = f"[{bar_color}]{'█' * filled}[/{bar_color}][dim]{'░' * (bar_width - filled)}[/dim]"
 
-        if self._auto_router and not self._auto_router.is_empty():
-            active = self._auto_router.get_active_model_id() or self._last_model
-            model_display = f"[bold green]auto[/bold green] {active or '—'}"
-        else:
-            model_display = self._last_model or "未设置"
-        if len(model_display) > 25:
-            model_display = "..." + model_display[-22:]
+        model_display = self._truncate_model(self._model_for_display(), 25)
 
         stream_icon = "⚡流式" if self._streaming else "⏸阻塞"
         status_parts: list[str] = []
@@ -218,19 +252,15 @@ class StatusBar:
             stats = self.ctx_mgr.stats()
             mode = self.registry.get_current_mode()
             pct = self._parse_pct(stats["usage_ratio"])
-            model = self._last_model or "未设置"
-            if self._auto_router and not self._auto_router.is_empty():
-                model = f"auto · {self._auto_router.get_active_model_id() or model}"
-            if len(model) > 28:
-                model = "…" + model[-27:]
+            model = self._truncate_model(self._model_for_display(), 28)
 
             term_width = shutil.get_terminal_size((80, 24)).columns
 
-            provider_model = self._last_model or ""
+            provider_model = self._preferred_model_id() or self._last_model or ""
             provider = (
                 provider_model.split("/", 1)[0] if "/" in provider_model else "API"
             )
-            if self._last_model:
+            if provider_model:
                 api_style, api_text = "class:toolbar.good", f"  ● {provider}"
             elif self.registry.list_models():
                 api_style, api_text = "class:toolbar.warning", "  ○ API configured"
@@ -324,13 +354,7 @@ class StatusBar:
         mode = self.registry.get_current_mode()
         pct_val = self._parse_pct(stats["usage_ratio"])
 
-        if self._auto_router and not self._auto_router.is_empty():
-            active = self._auto_router.get_active_model_id() or self._last_model
-            model_display = f"auto {active or '—'}"
-        else:
-            model_display = self._last_model or "—"
-        if len(model_display) > 35:
-            model_display = "…" + model_display[-34:]
+        model_display = self._truncate_model(self._model_for_display(), 35)
 
         bar_width = 8
         filled = min(int(pct_val / 100 * bar_width), bar_width)
@@ -407,13 +431,7 @@ class StatusBar:
         mode = self.registry.get_current_mode()
         pct_val = self._parse_pct(stats["usage_ratio"])
 
-        if self._auto_router and not self._auto_router.is_empty():
-            active = self._auto_router.get_active_model_id() or self._last_model
-            model_display = f"auto {active or '—'}"
-        else:
-            model_display = self._last_model or "—"
-        if len(model_display) > 30:
-            model_display = "..." + model_display[-27:]
+        model_display = self._truncate_model(self._model_for_display(), 30)
 
         token_color = "red" if pct_val > 80 else ("yellow" if pct_val > 50 else "green")
         stream = "⚡" if self._streaming else "⏸"

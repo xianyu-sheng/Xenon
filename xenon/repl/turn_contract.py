@@ -22,6 +22,7 @@ the contract instead of calling ``classify_execution_policy`` again.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
@@ -39,6 +40,207 @@ _WRITE_OPERATIONS = frozenset({"write", "create", "delete", "move"})
 _READ_OPERATIONS = frozenset({"read", "network"})
 _CHAT_ONLY_INTENTS = frozenset({"chat", "explain", "design", "novel"})
 _QUERY_INTENTS = frozenset({"query", "research"})
+
+# ── 跨回合承诺：用户回复“继续”时应续接上一轮的行动，而不是重新闲聊 ──
+
+_CONTINUATION_PHRASES = frozenset(
+    {
+        "继续",
+        "继续吧",
+        "继续下一步",
+        "继续执行",
+        "接着",
+        "接着来",
+        "好",
+        "好的",
+        "好呀",
+        "好的继续",
+        "可以",
+        "可以了",
+        "行",
+        "行吧",
+        "开始",
+        "开始吧",
+        "干吧",
+        "来吧",
+        "动手吧",
+        "下一步",
+        "确认",
+        "同意",
+        "批准",
+        "授权",
+        "嗯",
+        "嗯嗯",
+        "就这样",
+        "continue",
+        "goon",
+        "goahead",
+        "keepgoing",
+        "proceed",
+        "yes",
+        "y",
+        "ok",
+        "okay",
+        "a",
+    }
+)
+_UTTERANCE_NOISE = re.compile(
+    r"[\s，。！？、；：,.!?;:'\"“”‘’「」『』（）()\[\]【】…—\-]+"
+)
+_PROMISE_NEGATION = re.compile(
+    r"(?:无需|不用|不必|不需要)(?:我)?继续|no\s+need\s+to\s+continue",
+    re.IGNORECASE,
+)
+_PROMISE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"(?:回复|输入|回我|键入|发送|回答)\s*[「“\"'（(]?\s*(?:继续|yes|ok|好|可以|y)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"我(?:就|将|会|去)?(?:继续|接着)", re.IGNORECASE),
+    re.compile(
+        r"(?:授权|确认|同意|批准)(?:后|之后|以后|了)[^\n]{0,40}"
+        r"(?:我|就|会|将|继续)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:等|等待|期待)(?:你|您)[^\n]{0,20}(?:回复|确认|授权|同意|选择|命令)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"下一步[：:，,]?[^\n]{0,40}(?:回复|输入|确认|授权|执行)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:reply|say|type|send)\s+[\"'“]?(?:continue|yes|ok|go\s*ahead)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"I(?:'ll| will| am going to)\s+(?:continue|proceed)", re.IGNORECASE),
+    re.compile(
+        r"(?:once|after)\s+you\s+(?:confirm|approve|reply|say)", re.IGNORECASE
+    ),
+    re.compile(
+        r"waiting\s+for\s+your\s+(?:confirmation|approval|go-?ahead)",
+        re.IGNORECASE,
+    ),
+)
+_PENDING_SCAN_WINDOW = 600
+
+
+@dataclass(frozen=True)
+class PendingAction:
+    """A promise the assistant made that only the user's confirmation blocks."""
+
+    engine: str
+    level: ExecutionLevel
+    intent: str | None
+    operations: frozenset[str]
+    reason: str
+    promise: str
+
+
+def _normalize_utterance(text: str) -> str:
+    return _UTTERANCE_NOISE.sub("", text or "").lower()
+
+
+def is_continuation_utterance(text: str) -> bool:
+    """只认短确认语，防止把“继续优化 X”当成对旧承诺的授权。"""
+
+    return _normalize_utterance(text) in _CONTINUATION_PHRASES
+
+
+def detect_pending_action(
+    assistant_text: str,
+    *,
+    engine: str,
+    level: ExecutionLevel | int,
+    intent: str | None,
+    operations: frozenset[str] | set[str],
+    reason: str = "",
+) -> PendingAction | None:
+    """从本轮最终回答的结尾识别“回复继续即可”的承诺。"""
+
+    text = str(assistant_text or "")
+    if not text:
+        return None
+    tail = text[-_PENDING_SCAN_WINDOW:]
+    if _PROMISE_NEGATION.search(tail):
+        return None
+    for pattern in _PROMISE_PATTERNS:
+        match = pattern.search(tail)
+        if match is None:
+            continue
+        snippet = " ".join(
+            tail[max(0, match.start() - 40) : match.end() + 80].split()
+        )
+        return PendingAction(
+            engine=engine,
+            level=ExecutionLevel(int(level)),
+            intent=intent,
+            operations=frozenset(operations),
+            reason=reason or "上一轮承诺在用户确认后继续执行",
+            promise=snippet,
+        )
+    return None
+
+
+def continuation_hint(pending: PendingAction) -> str:
+    """本轮提示词：把“继续”明确解释为对上轮承诺的授权。"""
+
+    scope = {
+        int(ExecutionLevel.ANSWER_ONLY): "仅对话",
+        int(ExecutionLevel.READ_ONLY): "只读工具",
+        int(ExecutionLevel.WRITE): "读写文件",
+        int(ExecutionLevel.EXECUTE): "读写文件 + 命令执行",
+    }.get(int(pending.level), "只读工具")
+    return (
+        "## 延续上轮任务（用户已确认）\n"
+        f"上一轮你结束时提出：{pending.promise}\n"
+        "用户本轮回复确认继续，即视为对上述未完成动作的授权。\n"
+        f"本轮授权范围：{scope}。请直接继续完成未完成的动作，"
+        "不要重新询问授权，也不要只复述计划。"
+    )
+
+
+def _continuation_contract(
+    text: str,
+    signals: ExecutionSignals,
+    pending: PendingAction,
+) -> TurnContract | None:
+    """把上轮承诺与本轮约束合并；矛盾或退化时返回 None 走常规路径。"""
+
+    if signals.no_tools or signals.chat_only:
+        return None
+    operations = set(pending.operations)
+    if signals.no_write:
+        operations -= _WRITE_OPERATIONS
+    if signals.no_execute:
+        operations.discard("execute")
+    if signals.explicit_write and not signals.no_write:
+        operations.add("write")
+    if signals.explicit_execute and not signals.no_execute:
+        operations.add("execute")
+    if not operations:
+        return None
+    if "execute" in operations:
+        level = ExecutionLevel.EXECUTE
+    elif operations & _WRITE_OPERATIONS:
+        level = ExecutionLevel.WRITE
+    else:
+        level = ExecutionLevel.READ_ONLY
+    level = ExecutionLevel(min(int(level), int(pending.level)))
+    return TurnContract(
+        level=level,
+        intent=pending.intent,
+        operations=frozenset(operations),
+        proposed_level=level,
+        confidence=1.0,
+        degraded=False,
+        ask_required=False,
+        reason=f"延续上一轮未完成的行动（{pending.reason}）",
+        evidence=("continuation",) + signals.write_patterns,
+        signals=signals,
+        continuation=True,
+    )
 
 
 class IntentClassifierLike(Protocol):
@@ -71,6 +273,7 @@ class TurnContract:
     evidence: tuple[str, ...]
     signals: ExecutionSignals
     classifier_reasoning: str = ""
+    continuation: bool = False
 
     @property
     def requires_tools(self) -> bool:
@@ -276,12 +479,16 @@ def build_turn_contract(
     classifier: IntentClassifierLike | None = None,
     context_messages: list[dict] | None = None,
     fallback_intent: str | None = None,
+    pending: PendingAction | None = None,
 ) -> TurnContract:
     """Build the single per-turn contract from regex signals + LLM intent.
 
     The regex layer always runs (cheap).  The LLM classifier is skipped
     entirely for hard-constraint turns, saving one call on "不要写文件"
     style requests and guaranteeing constraints can never be model-overridden.
+    It is also skipped for a confirmed continuation (``pending`` + a short
+    affirmation): the previous turn already decided intent/level, so the
+    follow-up must inherit that decision instead of being re-chatted.
 
     ``fallback_intent`` lets the REPL pass its context-resolved intent (e.g.
     a terse follow-up inheriting ``query``) so degradation stays identical to
@@ -289,6 +496,19 @@ def build_turn_contract(
     """
 
     signals = extract_execution_signals(text)
+
+    if pending is not None and is_continuation_utterance(text):
+        inherited = _continuation_contract(text, signals, pending)
+        if inherited is not None:
+            logger.debug(
+                "turn_contract continuation level=%s intent=%s ops=%s engine=%s",
+                inherited.level.name,
+                inherited.intent,
+                sorted(inherited.operations),
+                pending.engine,
+            )
+            return inherited
+
     regex_intent = _regex_intent(text)
     resolved_intent = fallback_intent if fallback_intent is not None else regex_intent
 

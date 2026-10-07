@@ -127,6 +127,10 @@ REPL / CLI (repl/)          输入解析、会话、11 个命令组
   安全约束（否定、chat-only、no-tools）。**显式禁令永远一票否决**。
 - 低置信度的写入/执行提议、或工具超出本轮级别时，Xenon 会**询问用户**
   （`y` 本轮授权 / `n` 拒绝 / `a` 本会话总是允许），而不是让模型解释"没有权限"。
+- **跨回合承诺**：模型以“回复继续即可”收尾时，该承诺会登记为 pending
+  action；下一轮的短确认语（继续 / 好 / 开始吧 / go on…）会继承上一轮的
+  意图、权限级别与范式直接执行，不会再被当成闲聊。没有待续承诺时说“继续”
+  会得到一次澄清询问；中途换话题则承诺自动失效（避免过期授权）。
 - 分类器默认开启，自动从已配置 Provider 中挑选最快的模型（如
   `deepseek/deepseek-v4-flash`）；无可用 Provider、超时或调用失败时自动降级
   为正则判定，不阻断对话。关闭方式：`XENON_INTENT_CLASSIFIER_ENABLED=0`
@@ -140,7 +144,7 @@ REPL / CLI (repl/)          输入解析、会话、11 个命令组
 
 ## Windows 说明
 
-- 默认使用 prompt_toolkit 输入路径（多行编辑、历史、补全、固定状态栏）。
+- 默认使用 prompt_toolkit 输入路径（多行编辑、历史、补全、紧贴输入的内联状态栏）。
 - 如果你的环境里设置过 `XENON_NO_PT=1`，请删除该变量（它会退回旧的自建
   读取器）；`[Environment]::SetEnvironmentVariable('XENON_NO_PT',$null,'User')`。
 - `.et` / `.xls` 等二进制表格直接用 `read_document` 读取，无需转换。

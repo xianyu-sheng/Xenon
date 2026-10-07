@@ -293,3 +293,71 @@ def test_model_switch_maintains_other_state():
     assert "🔧" in after_content or "tools" in after_content.lower()
     # 验证消息数仍然存在
     assert "消息:" in after_content or "message" in after_content.lower()
+
+
+# ── /set_model 与底栏一致性（用户显式选择 > 池序 healthy[0]） ──
+
+
+def test_preferred_model_wins_over_pool_healthy_order():
+    """用户显式选择的模型必须压过 get_active_model_id 的池序结果。"""
+    pool = ModelPool()
+    pool.register("deepseek/deepseek-v4-pro", alias="pro", weight=1.0)
+    router = AutoRouter(model_pool=pool)
+    router._preferred_model_ids = ["deepseek/deepseek-flash"]
+
+    bar = _make_status_bar()
+    bar._auto_router = router
+    bar.set_last_model("deepseek/deepseek-v4-pro")
+
+    text = "".join(piece for _, piece in bar.get_toolbar_fragments())
+    assert "deepseek-flash" in text
+    assert "deepseek-v4-pro" not in text
+
+
+def test_toolbar_falls_back_to_auto_when_no_preference():
+    pool = ModelPool()
+    pool.register("deepseek/deepseek-v4-pro", alias="pro", weight=1.0)
+    router = AutoRouter(model_pool=pool)
+
+    bar = _make_status_bar()
+    bar._auto_router = router
+
+    text = "".join(piece for _, piece in bar.get_toolbar_fragments())
+    assert "auto" in text
+    assert "deepseek-v4-pro" in text
+
+
+def test_activate_selected_model_keeps_repl_and_status_in_sync():
+    """统一入口：_cmd_set_model 与 _cmd_model 必须共享全部切换副作用。"""
+    from xenon.repl.command_groups.model import _activate_selected_model
+
+    class _FakeRouter:
+        def __init__(self):
+            self._preferred_model_ids: list[str] = []
+            self.success: str | None = None
+
+        def record_model_success(self, model_id):
+            self.success = model_id
+
+    class _FakeBar:
+        def __init__(self):
+            self.last: str | None = None
+
+        def set_last_model(self, model_id):
+            self.last = model_id
+
+    class _FakeRepl:
+        def __init__(self):
+            self._preferred_model_ids: list[str] = []
+            self.auto_router = _FakeRouter()
+            self.status_bar = _FakeBar()
+            self._failed_models = {"deepseek/deepseek-flash"}
+
+    repl = _FakeRepl()
+    _activate_selected_model(repl, "deepseek/deepseek-flash")
+
+    assert repl._preferred_model_ids == ["deepseek/deepseek-flash"]
+    assert repl.auto_router._preferred_model_ids == ["deepseek/deepseek-flash"]
+    assert repl.auto_router.success == "deepseek/deepseek-flash"
+    assert repl.status_bar.last == "deepseek/deepseek-flash"
+    assert "deepseek/deepseek-flash" not in repl._failed_models
