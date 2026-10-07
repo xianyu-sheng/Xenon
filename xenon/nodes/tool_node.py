@@ -37,6 +37,7 @@ from xenon.nodes.network_security import (
     resolve_host_ips as _resolve_host_ips,  # noqa: F401 - private compatibility export
     ssrf_check_url as _ssrf_check_url,
 )
+from xenon.nodes.path_targets import resolve_target_path
 from xenon.nodes.tool_families.code_tools import CodeToolsMixin
 from xenon.nodes.tool_families.file_mutation import FileMutationToolsMixin
 from xenon.nodes.tool_families.git_tools import GitToolsMixin
@@ -639,9 +640,9 @@ class ToolNode(
         if not file_path:
             raise SecurityError("文件路径不能为空")
 
-        path = Path(file_path)
-        if self.cwd and not path.is_absolute():
-            path = Path(self.cwd) / path
+        # 先把模型输出里的 ~/、%VAR%、桌面/ 等解析成真实路径，再做围栏。
+        # 修复字面量 ~ 目录事故（见 path_targets 模块说明）。
+        path = resolve_target_path(file_path, cwd=self.cwd)
 
         # 安全检查可禁用（用于测试或受信任的调用方）
         if not self.security_enabled:
