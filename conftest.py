@@ -127,6 +127,12 @@ def pytest_runtest_logreport(report):
             entry += f" ({report.when})"
         if entry not in _failed_tests:
             _failed_tests.append(entry)
+        # GitHub workflow command → check-run annotations (visible through the
+        # API with a plain token, unlike the job log which needs admin rights).
+        message = report.nodeid.replace("%", "%25").replace("\r", "%0D").replace(
+            "\n", "%0A"
+        )
+        print(f"::error title=pytest::{report.when}: {message}", flush=True)
 
 
 def pytest_sessionfinish(session, exitstatus):
