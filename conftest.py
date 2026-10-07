@@ -117,6 +117,7 @@ def _isolate_chat_completion_mock():
 
 # ── CI 诊断：失败用例写入 Job Summary（无需 admin 权限翻日志）──────────
 _failed_tests: list[str] = []
+_failed_nodeids: list[str] = []
 
 
 def pytest_runtest_logreport(report):
@@ -127,15 +128,19 @@ def pytest_runtest_logreport(report):
             entry += f" ({report.when})"
         if entry not in _failed_tests:
             _failed_tests.append(entry)
-        # GitHub workflow command → check-run annotations (visible through the
-        # API with a plain token, unlike the job log which needs admin rights).
-        message = report.nodeid.replace("%", "%25").replace("\r", "%0D").replace(
-            "\n", "%0A"
-        )
-        print(f"::error title=pytest::{report.when}: {message}", flush=True)
+        if report.nodeid not in _failed_nodeids:
+            _failed_nodeids.append(report.nodeid)
 
 
 def pytest_sessionfinish(session, exitstatus):
+    # GitHub check-run annotations are readable through the API with a plain
+    # token (the raw job log needs admin rights).  Emit after capture ends.
+    for nodeid in _failed_nodeids:
+        message = nodeid.replace("%", "%25").replace("\r", "%0D").replace(
+            "\n", "%0A"
+        )
+        print(f"::error title=pytest::{message}", flush=True)
+
     summary_path = _os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path or not _failed_tests:
         return
