@@ -546,7 +546,10 @@ def test_concurrent_services_do_not_lose_json_updates(tmp_path):
     assert {item.id for item in records} == set(ids)
 
 
-def test_concurrent_processes_do_not_lose_json_updates(tmp_path):
+def test_concurrent_processes_do_not_lose_json_updates(tmp_path, monkeypatch):
+    # 并发冷启动下 5s 锁超时会偶发失败（本地 9/10）；测试放宽到 30s，
+    # 产品默认值不变（XENON_MEMORY_LOCK_TIMEOUT）。
+    monkeypatch.setenv("XENON_MEMORY_LOCK_TIMEOUT", "30")
     project = tmp_path / "project"
     project.mkdir()
     code = """
@@ -581,7 +584,7 @@ service.remember(f"跨进程写入的独立事实 {index.name}")
     ]
     failures = []
     for process in processes:
-        stdout, stderr = process.communicate(timeout=15)
+        stdout, stderr = process.communicate(timeout=60)
         if process.returncode:
             failures.append((process.returncode, stdout, stderr))
 
@@ -594,6 +597,17 @@ service.remember(f"跨进程写入的独立事实 {index.name}")
         )
     )
     assert len(service.list_records(scope=MemoryScope.PROJECT_LOCAL)) == 6
+
+
+def test_memory_lock_timeout_is_configurable(monkeypatch):
+    from xenon.memory.backend import _lock_timeout
+
+    monkeypatch.delenv("XENON_MEMORY_LOCK_TIMEOUT", raising=False)
+    assert _lock_timeout() == 5.0
+    monkeypatch.setenv("XENON_MEMORY_LOCK_TIMEOUT", "30")
+    assert _lock_timeout() == 30.0
+    monkeypatch.setenv("XENON_MEMORY_LOCK_TIMEOUT", "bogus")
+    assert _lock_timeout() == 5.0
 
 
 def test_doctor_reports_checksum_corruption_without_overwriting(tmp_path):

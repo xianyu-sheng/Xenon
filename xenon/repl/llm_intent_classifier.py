@@ -337,79 +337,33 @@ class LLMIntentClassifier:
         )
 
         ops_desc = ", ".join(OPERATION_VOCABULARY)
-        return f"""你是一个意图分类专家。你的任务是分析用户输入，判断用户的真实意图，以及完成该请求真正需要哪些操作。
+        return f"""你是意图分类专家。分析用户输入，只输出一个 JSON 对象。
 
 ## 意图类别
-
 {categories_desc}
 
-## 分类规则
+## 规则
+1. operations 与 intent 分离，取值只能是：{ops_desc}。
+   - 聊天/解释/设计/把代码或文本贴在对话里 → operations 为空。
+   - 「写一个函数给我看看」「给我一段代码」不是文件操作；只有用户指定文件/路径/保存目标（写到 X、输出到 X、在 X 里加）才给 write/create。
+   - 删除已有内容 → delete；移动/复制/重命名 → move；修改已有文件 → write。
+   - 问原因/思路/建议（告诉我原因、思路是什么、有什么建议、怎么解决）→ operations 为空，即使句中出现“处理/修复/优化”。
+   - 用户禁止某项操作（不要写文件/不要运行）→ 对应 operation 不出现，chat_only=true。
+2. query/research 通常用 read 或 network；debug/refactor 默认 read；用户要求修复/重构/改进某个具体对象（模块、函数、文件、脚本）时加 write。
+3. 无法判断时 intent=null，confidence 如实。
 
-1. **优先级顺序**：
-   - debug（调试修复）> write_test（测试）> write_doc（文档）> write_code（写代码）
-   - convert（转换）> refactor（重构）> write_code
-   - query（实时查询）> research（资料调研）
-   - 特定意图优先于通用意图
+## 输出（只输出 JSON，无解释）
+{{"intent":"类别或null","operations":[],"chat_only":false,"confidence":0.0,"reasoning":"一句话"}}
 
-2. **关键判据**：
-   - 看**动词**：写/实现/创建 vs 修复/调试 vs 解释/说明
-   - 看**对象**：代码/函数/测试/文档/架构
-   - 看**目标**：新建 vs 修改 vs 理解 vs 查询
-   - 看**上下文**：是否有报错信息、是否需要外部数据
-
-3. **operations 与 intent 分离（最重要）**：
-   - operations 只描述完成请求真正需要的副作用，取值限于：{ops_desc}。
-   - 纯聊天、纯解释、纯设计、把代码/文本贴在对话里给用户看 → operations 为空数组。
-   - 「写一个函数/脚本给我看看」「给我一段代码」不等于文件操作；
-     只有用户指定了文件/路径/保存目标（写到 X、输出到 X、保存到 X、在 X 里加）
-     才填 write/create。
-   - 删除已有内容用 delete，移动/复制/重命名用 move；修改已有文件用 write。
-   - **征询解释不是施工**：句中出现「处理/解决/修复/优化」等词，但用户在问
-     原因、思路、建议、方案或要求讲解时（如「告诉我原因」「思路是什么」
-     「有什么建议」「怎么解决」），operations 必须为空，intent 选 explain/debug/refactor。
-   - 用户明确禁止某项操作（不要写文件/不要修改/不要运行）时，对应 operation
-     不得出现，且 chat_only 置为 true。
-   - query/research 通常需要 read 或 network；debug/refactor 通常需要 read，
-     write 仅在用户要求修改文件时出现。
-
-4. **边界情况**：
-   - "写一个函数" → intent=write_code, operations=[]
-   - "把结果写到 output.txt" → intent=write_code，operations=["create"]
-   - "删除 /tmp/foo.txt" → intent=refactor，operations=["delete"]
-   - "修复这个函数" → intent=debug, operations=["read","write"]
-   - "解释这段代码" → intent=explain, operations=[]
-   - "处理一下这个问题，告诉我原因" → intent=explain, operations=[]（只要解释）
-   - "修复这个 bug 的思路是什么" → intent=debug, operations=[]（只要思路）
-   - "今天天气" → intent=query, operations=["network"]
-   - "调研最好的库" → intent=research, operations=["network"]
-   - "不要修改任何文件，只解释" → intent=explain, operations=[], chat_only=true
-
-5. **无法判断时**：
-   - 返回 null 而不是猜测
-   - 置信度诚实反映不确定性
-
-## 输出格式
-
-必须输出 JSON，包含五个字段：
-```json
-{{
-  "intent": "意图类别key或null",
-  "operations": ["read"],
-  "chat_only": false,
-  "confidence": 0.95,
-  "reasoning": "简短的分类理由（一句话）"
-}}
-```
-
-例如：
-- 输入："帮我写一个排序函数" → {{"intent": "write_code", "operations": [], "chat_only": false, "confidence": 0.95, "reasoning": "要求编写新函数，代码贴在对话中即可"}}
-- 输入："这段代码报错了" → {{"intent": "debug", "operations": ["read"], "chat_only": false, "confidence": 0.9, "reasoning": "要定位报错需要读取代码"}}
-- 输入："把结果写到 output.txt" → {{"intent": "write_code", "operations": ["create"], "chat_only": false, "confidence": 0.95, "reasoning": "明确要求写入文件"}}
-- 输入："今天北京天气" → {{"intent": "query", "operations": ["network"], "chat_only": false, "confidence": 0.95, "reasoning": "需要联网查询实时天气"}}
-- 输入："不要修改任何文件，只在对话里回答" → {{"intent": "explain", "operations": [], "chat_only": true, "confidence": 0.95, "reasoning": "用户明确禁止文件操作"}}
-- 输入："嗯" → {{"intent": null, "operations": [], "chat_only": false, "confidence": 0.0, "reasoning": "输入过于简短无法判断"}}
-
-只输出 JSON，不要额外解释。"""
+示例：
+"帮我写一个排序函数" → {{"intent":"write_code","operations":[],"chat_only":false,"confidence":0.95,"reasoning":"代码贴对话"}}
+"把结果写到 output.txt" → {{"intent":"write_code","operations":["create"],"chat_only":false,"confidence":0.95,"reasoning":"写入文件"}}
+"帮我重构这个模块" → {{"intent":"refactor","operations":["read","write"],"chat_only":false,"confidence":0.9,"reasoning":"重构模块需读写"}}
+"改完代码后运行测试" → {{"intent":"debug","operations":["execute"],"chat_only":false,"confidence":0.9,"reasoning":"要求运行测试"}}
+"你觉得这两个方案哪个好" → {{"intent":"chat","operations":[],"chat_only":false,"confidence":0.9,"reasoning":"征询观点"}}
+"删除 /tmp/foo.txt" → {{"intent":"refactor","operations":["delete"],"chat_only":false,"confidence":0.9,"reasoning":"删除文件"}}
+"修复这个 bug 的思路是什么" → {{"intent":"debug","operations":[],"chat_only":false,"confidence":0.9,"reasoning":"只要思路"}}
+"不要修改任何文件，只解释" → {{"intent":"explain","operations":[],"chat_only":true,"confidence":0.95,"reasoning":"禁止文件操作"}}"""
 
     @staticmethod
     def _build_user_prompt(

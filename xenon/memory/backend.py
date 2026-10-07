@@ -11,6 +11,26 @@ from xenon.memory.locking import InterProcessFileLock
 from xenon.memory.models import MemoryKind, MemoryRecord, MemoryScope, MemoryStatus
 from xenon.utils.atomic_write import atomic_write_text
 
+_MEMORY_LOCK_TIMEOUT_ENV = "XENON_MEMORY_LOCK_TIMEOUT"
+_DEFAULT_MEMORY_LOCK_TIMEOUT = 5.0
+
+
+def _lock_timeout() -> float:
+    """Inter-process memory lock timeout in seconds.
+
+    Configurable via ``XENON_MEMORY_LOCK_TIMEOUT`` so loaded machines (CI,
+    parallel test runs) can raise it without changing the 5s default.
+    """
+
+    raw = os.environ.get(_MEMORY_LOCK_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_MEMORY_LOCK_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_MEMORY_LOCK_TIMEOUT
+    return value if value > 0 else _DEFAULT_MEMORY_LOCK_TIMEOUT
+
 
 _T = TypeVar("_T")
 
@@ -117,7 +137,7 @@ class JsonMarkdownBackend:
 
     def save_records(self, records: list[MemoryRecord], *, render: bool = True) -> None:
         self._ensure_root()
-        with InterProcessFileLock(self.lock_path):
+        with InterProcessFileLock(self.lock_path, timeout=_lock_timeout()):
             self._save_records_unlocked(records, render=render)
 
     def mutate_records(
@@ -128,7 +148,7 @@ class JsonMarkdownBackend:
     ) -> _T:
         """Apply a complete read-modify-write transaction under one lock."""
         self._ensure_root()
-        with InterProcessFileLock(self.lock_path):
+        with InterProcessFileLock(self.lock_path, timeout=_lock_timeout()):
             records = self._read_records()
             result = mutator(records)
             self._save_records_unlocked(records, render=render)
@@ -154,7 +174,7 @@ class JsonMarkdownBackend:
         if not records:
             return
         self._ensure_root()
-        with InterProcessFileLock(self.lock_path):
+        with InterProcessFileLock(self.lock_path, timeout=_lock_timeout()):
             existing = ""
             if self.archive_path.exists():
                 existing = self.archive_path.read_text(encoding="utf-8")
