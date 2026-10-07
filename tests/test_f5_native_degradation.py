@@ -10,6 +10,8 @@ import pytest
 from xenon.engine.base import BaseEngine
 from xenon.engine.context import AgentContext
 from xenon.engine.react_engine import ReActEngine
+from xenon.repl.execution_policy import ExecutionLevel
+from xenon.repl.turn_contract import contract_for_level
 from xenon.utils.llm_client import LLMResponse, ResponseTruncatedError
 
 
@@ -358,7 +360,9 @@ class TestReActNativeFc:
         from xenon.utils.response_adapter import parse_react
 
         eng._parse_response = parse_react
-        eng._input_requires_tools = lambda u: True
+        run_ctx = AgentContext(
+            {"_turn_contract": contract_for_level(ExecutionLevel.READ_ONLY)}
+        )
 
         def fake_execute(action, ai, ctx, tracker):
             executed.append((action, ai))
@@ -367,7 +371,7 @@ class TestReActNativeFc:
 
         eng._execute_tool = fake_execute
 
-        result = eng.run("写 a.py", AgentContext())
+        result = eng.run("写 a.py", run_ctx)
         assert "已写入 a.py" in result
         assert len(executed) == 1
         assert executed[0][0] == "write_file"
@@ -385,7 +389,9 @@ class TestReActNativeFc:
         eng._call_llm = fake_llm
         _patch_fc(monkeypatch, eng, lambda *a, **k: pytest.fail("不应调用 FC"))
         eng._parse_response = lambda r: {"thought": "t", "final_answer": "done"}
-        eng._input_requires_tools = lambda u: False
-        result = eng.run("你好", AgentContext())
+        run_ctx = AgentContext(
+            {"_turn_contract": contract_for_level(ExecutionLevel.ANSWER_ONLY)}
+        )
+        result = eng.run("你好", run_ctx)
         assert result == "done"
         assert called_llm["n"] == 1

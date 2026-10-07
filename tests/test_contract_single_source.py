@@ -31,6 +31,19 @@ def test_classify_execution_policy_has_a_single_home() -> None:
     )
 
 
+def test_removed_side_channels_do_not_come_back() -> None:
+    """Phase 4b 删掉的旁路 hook 不允许恢复。"""
+    forbidden = ("_input_requires_tools", "_TOOL_PATTERNS")
+    offenders: list[str] = []
+    for path in (ROOT / "xenon").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            if token in source:
+                offenders.append(f"{path.relative_to(ROOT)}: {token}")
+
+    assert offenders == [], offenders
+
+
 def test_contract_is_built_through_the_shared_entry_points() -> None:
     """引擎与校验层必须经 ensure/build 构建或读取契约。"""
 

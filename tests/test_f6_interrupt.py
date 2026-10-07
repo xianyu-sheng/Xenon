@@ -12,6 +12,8 @@ from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.react_engine import ReActEngine
+from xenon.repl.execution_policy import ExecutionLevel
+from xenon.repl.turn_contract import contract_for_level
 
 
 class _RecordingCallback(EngineCallback):
@@ -111,9 +113,11 @@ class TestReActInterrupt:
             "action_input": {},
         }
         eng._execute_tool = lambda action, action_input, ctx, tracker: "obs"
-        eng._input_requires_tools = lambda u: True
+        run_ctx = AgentContext(
+            {"_turn_contract": contract_for_level(ExecutionLevel.READ_ONLY)}
+        )
 
-        result = eng.run("做点什么", AgentContext())
+        result = eng.run("做点什么", run_ctx)
         assert calls["n"] == 1  # 第 2 轮未再调用 LLM
         assert "引擎被用户中断" in result
         assert any("引擎被用户中断，停止迭代" in w for w in cb.warnings)
@@ -132,9 +136,11 @@ class TestReActInterrupt:
 
         eng._call_llm = fake_llm
         eng._parse_response = lambda resp: {"thought": "t", "final_answer": "done"}
-        eng._input_requires_tools = lambda u: False
+        run_ctx = AgentContext(
+            {"_turn_contract": contract_for_level(ExecutionLevel.ANSWER_ONLY)}
+        )
 
-        result = eng.run("你好", AgentContext())
+        result = eng.run("你好", run_ctx)
         assert seen["reset"] is False
         assert result == "done"
 

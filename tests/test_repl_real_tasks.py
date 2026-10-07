@@ -28,7 +28,7 @@ REPL 真实任务端到端测试（§9 验收 — 任务 A-N）。
 - 1: trim_last_assistant 后递归失败的状态污染
 - 2: mode 切换后 intent 路由（query 修复"无效"）
 - 3: mode plan-execute + query
-- 4: chat + _TOOL_PATTERNS 交叉误判
+- 4: chat + 正则信号层 交叉误判
 - 5: 空字符串 process_user_input
 - 6: prompt_optimizer 内部的 chat 模板
 - 7: detect_intent 顺序敏感
@@ -477,7 +477,7 @@ class TestMixedIntent:
 
     def test_query_with_file_path(self, monkeypatch):
         """ "帮我查天气并保存到 weather.json" — query + 文件路径。
-        _TOOL_PATTERNS 含 .json 扩展名 → 路由 ReAct。"""
+        正则信号层 含 .json 扩展名 → 路由 ReAct。"""
         text = "帮我查天气并保存到 weather.json"
         seen_in_engine: list[str] = []
 
@@ -495,14 +495,14 @@ class TestMixedIntent:
 
     def test_url_fetch(self, monkeypatch):
         """ "读取 https://example.com/api/weather 的数据" — 含 URL。
-        _TOOL_PATTERNS 不含 https? URL regex，但 intent='query' 仍会触发。
+        正则信号层 不含 https? URL regex，但 intent='query' 仍会触发。
         验证：传入正确 intent 时应路由。"""
         text = "读取 https://example.com/api/weather 的数据"
         from xenon.repl.prompt_optimizer import detect_intent as di
 
         intent = di(text)
         # 实际：intent='query'（"读取"不在 query trigger 里；可能 None）
-        # _TOOL_PATTERNS 不含 URL/URL 协议正则
+        # 正则信号层 不含 URL/URL 协议正则
         # 仅当 intent='query' 时才能路由
         result = REPL._detect_tool_need(text, intent=intent)
         assert result is True, (
@@ -628,7 +628,7 @@ class TestComplexQuery:
 
 
 class TestQueryVariants:
-    """检查 _TOOL_PATTERNS 是否也匹配 query 关键词（边界 case）。"""
+    """检查 正则信号层 是否也匹配 query 关键词（边界 case）。"""
 
     def test_stock_query(self, monkeypatch):
         """ "看下腾讯股价" — query 意图。"""
@@ -645,7 +645,7 @@ class TestQueryVariants:
         # 实际可能落到 None
         # 关键：即便 intent=None，路由决策应能识别
         print(f"  BTC query intent: {intent}")
-        # _TOOL_PATTERNS 中也没有 BTC/USD 正则
+        # 正则信号层 中也没有 BTC/USD 正则
         # 实际能否路由取决于 intent
         if intent == "query":
             assert REPL._detect_tool_need(text, intent="query") is True
@@ -685,9 +685,9 @@ class TestAdditionalConcerns:
 
     def test_concern_1b_file_claim_trim_then_recursive_failure(self, monkeypatch):
         """关注点 1（变体）：file_claim 触发 trim + 递归 ReAct → ReAct 抛异常。
-        构造：direct 模式命中 _TOOL_PATTERNS（git 操作）→ LLM 假装完成 → trim + 递归 → 抛错。
+        构造：direct 模式命中 正则信号层（git 操作）→ LLM 假装完成 → trim + 递归 → 抛错。
         """
-        # 关键观察：git commit 会触发 _TOOL_PATTERNS → _run_direct 走 ReAct
+        # 关键观察：git commit 会触发 正则信号层 → _run_direct 走 ReAct
         # 但 trim + recursive 路径只发生在 _run_direct 的 LLM 调用后
         # 我们的 _handle_chat → _run_direct → _detect_tool_need → True → _run_react_engine
         # _run_react_engine 不经过 _detect_denial
@@ -846,15 +846,12 @@ class TestKnownSuspicious:
         # 真正风险在 spawn_agent → 子 ReAct → 子子 ReAct（受 max_subagent_depth 限制）
         pass
 
-    def test_suspicious_3_tool_patterns_no_query_keyword(self):
-        """可疑点 3：_TOOL_PATTERNS 确实没有 query 关键词（天气/价格/汇率）。
-        这就是这次修改的原因——query 意图直接判 True。"""
-        for pattern in REPL._TOOL_PATTERNS:
-            for kw in ["天气", "价格", "汇率", "黄金", "金价", "BTC", "股价"]:
-                # 不强制断言 — 记录实际匹配情况
-                m = pattern.search(f"今天{kw}")
-                if m:
-                    print(f"  _TOOL_PATTERNS 匹配: {pattern.pattern} → {kw}")
+    def test_suspicious_3_query_keywords_need_tools(self):
+        """可疑点 3 已修复：天气/价格/汇率类查询由契约统一判定为需要工具。"""
+        from xenon.repl.turn_contract import build_turn_contract
+
+        for text in ["今天天气怎么样", "今天黄金价格", "现在美元兑人民币汇率多少"]:
+            assert build_turn_contract(text).requires_tools is True, text
 
     def test_suspicious_4_optimize_off_intent_passed(self, monkeypatch):
         """可疑点 4：optimize_prompts=False 时 line 718 intent 仍执行。

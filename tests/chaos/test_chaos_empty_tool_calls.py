@@ -45,7 +45,7 @@ def test_finish_without_tool_when_tools_required(monkeypatch):
         max_iterations=5,
         callback=callback,
     )
-    # "读取" 是 _input_requires_tools 触发的中文关键词
+    # "读取" 是契约 requires_tools 触发的中文关键词
     answer = eng.run("读取 /tmp/x.py 文件内容")
     # 引擎不应静默接受空 tool 的 final_answer；要么要求重试（warning），
     # 要么带警告返回

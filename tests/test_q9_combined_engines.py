@@ -295,7 +295,6 @@ def test_failed_review_uses_tool_capable_repair_and_aggregates_trace():
         "feedback": "implementation missing",
         "issues": ["file unchanged"],
     }
-    eng.repairer._input_requires_tools = lambda value: True
 
     def repair(*args, **kwargs):
         tracker = ToolExecutionTracker()
@@ -329,7 +328,6 @@ def test_tool_task_repair_without_real_change_keeps_initial_output():
         "feedback": "not applied",
         "issues": [],
     }
-    eng.repairer._input_requires_tools = lambda value: True
 
     def hollow_repair(*args, **kwargs):
         eng.repairer._last_tracker = ToolExecutionTracker()
@@ -384,7 +382,6 @@ def test_combined_engine_reports_model_that_produced_final_output():
         "feedback": "revise",
         "issues": [],
     }
-    eng.repairer._input_requires_tools = lambda value: False
 
     def repair(*args, **kwargs):
         eng.repairer.last_model_used = "provider/repair"

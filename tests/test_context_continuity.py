@@ -10,8 +10,10 @@ from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.react_engine import ReActEngine
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.repl.context_manager import ContextManager
+from xenon.repl.execution_policy import ExecutionLevel
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.repl import REPL
+from xenon.repl.turn_contract import contract_for_level
 
 
 def _repl() -> REPL:
@@ -107,13 +109,15 @@ def test_react_injects_memory_without_duplicating_current_user():
         return '{"thought":"done","final_answer":"ok"}'
 
     engine._call_llm = fake_llm
-    engine._input_requires_tools = lambda value: False
+    run_ctx = AgentContext(
+        {"_turn_contract": contract_for_level(ExecutionLevel.ANSWER_ONLY)}
+    )
     engine._parse_response = lambda value: {
         "thought": "done",
         "final_answer": "ok",
     }
 
-    assert engine.run("继续", AgentContext(), ctx_mgr=ctx) == "ok"
+    assert engine.run("继续", run_ctx, ctx_mgr=ctx) == "ok"
     messages = captured["messages"]
     assert (
         sum(

@@ -3003,90 +3003,6 @@ class REPL:
         return contract
 
     # ── 工具需求检测 ──────────────────────────────────────────
-    # Deprecated pattern inventory retained for compatibility and diagnostics.
-    # The authoritative decision is the turn contract below.
-    _TOOL_PATTERNS: list[re.Pattern[str]] = [
-        # 文件写入/创建/保存
-        re.compile(r"(?:写入|创建|保存|新建|生成|输出).{0,20}(?:文件|到|至|为)", re.I),
-        re.compile(r"(?:write|create|save|generate|output).{0,20}(?:file|to)", re.I),
-        re.compile(r"(?:文件|file).{0,10}(?:写入|创建|保存|新建)", re.I),
-        # 文件读取/查看
-        re.compile(r"(?:读取|查看|打开|读|看).{0,20}(?:文件|内容|代码|配置)", re.I),
-        re.compile(r"(?:read|open|show|cat|view).{0,20}(?:file|content)", re.I),
-        # 文件修改/编辑
-        re.compile(r"(?:修改|编辑|替换|改|更新).{0,20}(?:文件|代码)", re.I),
-        re.compile(r"(?:edit|modify|update|replace|patch).{0,20}(?:file|code)", re.I),
-        # 文件删除
-        re.compile(r"(?:删除|移除|清除).{0,20}(?:文件|目录)", re.I),
-        re.compile(r"(?:delete|remove).{0,20}(?:file|dir)", re.I),
-        # 命令执行（含代词：执行它/运行这个/跑一下）
-        re.compile(
-            r"(?:执行|运行|跑).{0,15}(?:命令|脚本|程序|命令行|测试|pytest|npm|pip|python|node)",
-            re.I,
-        ),
-        re.compile(
-            r"(?:执行|运行|跑|试试).{0,5}(?:它|他|她|这个|一下|看看|试试)", re.I
-        ),
-        re.compile(r"(?:试试|试下).{0,3}(?:执行|运行|跑)", re.I),
-        re.compile(
-            r"(?:run|execute|exec).{0,15}(?:command|script|cmd|test|pytest|npm|pip|python|node|it|this)",
-            re.I,
-        ),
-        re.compile(r"(?:run|execute|exec)\s+it", re.I),
-        # Git 操作
-        re.compile(
-            r"\bgit\b.{0,20}(?:commit|push|pull|add|clone|checkout|branch|merge|stash)",
-            re.I,
-        ),
-        re.compile(r"(?:提交|推送|拉取|克隆|分支|合并)", re.I),
-        # 搜索
-        re.compile(r"(?:搜索|查找|grep|find).{0,20}(?:文件|内容|代码|文本|字符)", re.I),
-        re.compile(r"(?:search|find|grep).{0,30}", re.I),
-        # 网页抓取
-        re.compile(r"(?:抓取|下载|获取|访问).{0,20}(?:网页|页面|url|网址)", re.I),
-        re.compile(r"(?:fetch|download|scrape|crawl).{0,20}(?:web|page|url)", re.I),
-        # GitHub / 仓库分析
-        # v0.6.1: 支持用户名和仓库名中的 . 和 -
-        re.compile(r"github\.com/[\w.-]+/[\w.-]+", re.I),
-        re.compile(
-            r"(?:分析|拉取|克隆|查看|学习|了解).{0,10}(?:仓库|项目|代码库|repo)", re.I
-        ),
-        re.compile(
-            r"(?:analyze|clone|pull|review).{0,10}(?:repo|project|codebase)", re.I
-        ),
-        # 文件路径模式（./xxx, src/xxx, C:\xxx, /home/xxx, ~/xxx, $HOME/xxx, .py, .js 等）
-        re.compile(
-            r"(?:^|\s)(?:\./|\.\./|src/|tests?/|lib/|app/|dist/|build/)\S+", re.I
-        ),
-        re.compile(r"(?:^|\s)[A-Z]:\\[\w\\/.]+", re.I),
-        # v0.6.1: Linux 绝对路径 + ~ 家目录 + $HOME
-        re.compile(r"(?:^|\s)/(?:home|tmp|etc|var|opt|usr|root|mnt)/\S+", re.I),
-        re.compile(r"(?:^|\s)~/\S+", re.I),
-        re.compile(r"\$HOME/\S+", re.I),
-        re.compile(
-            r"\b\w+\.(?:py|js|ts|jsx|tsx|java|c|cpp|h|go|rs|rb|php|html|css|json|yaml|yml|toml|xml|md|txt|sh|bat|ps1)\b",
-            re.I,
-        ),
-        # 列出文件
-        re.compile(r"(?:列出|显示|查看).{0,15}(?:文件|目录|文件夹|文件列表)", re.I),
-        re.compile(r"(?:list|ls|dir|tree).{0,15}(?:file|dir|folder)", re.I),
-        # 目录/文件夹操作
-        re.compile(r"(?:创建|新建|建|mkdir).{0,10}(?:目录|文件夹|folder|dir)", re.I),
-        re.compile(r"(?:create|make|mkdir).{0,10}(?:dir|folder|directory)", re.I),
-        # 通用编程任务（容易涉及文件操作）
-        re.compile(
-            r"(?:帮我|请|给).{0,5}(?:写|做|创建|实现|开发|搭|建).{0,20}(?:一个|个|项目|工程|脚本|程序|代码)",
-            re.I,
-        ),
-        re.compile(
-            r"(?:help\s+me|please).{0,10}(?:write|create|build|implement|develop|make).{0,20}(?:a|an|the|project|script|app|code)",
-            re.I,
-        ),
-        # 安装/包管理
-        re.compile(
-            r"(?:安装|install).{0,15}(?:包|库|依赖|package|pip|npm|yarn|cargo)", re.I
-        ),
-    ]
 
     @classmethod
     def _detect_tool_need(cls, text: str, intent: str | None = None) -> bool:
@@ -3760,7 +3676,7 @@ _RE_TIME_SENSITIVE = re.compile(
     r"|today|now|recently|this\s+week|next\s+week|tomorrow)",
     re.IGNORECASE,
 )
-# 排除：明确是关于代码/文件的查询（由 _TOOL_PATTERNS 处理）
+# 排除：明确是关于代码/文件的查询（由 正则信号层 处理）
 _RE_CODE_CONTEXT = re.compile(
     r"(?:文件|代码|项目|脚本|程序|函数|类|目录|文件夹|bug|错误|报错"
     r"|测试|配置|日志|commit|分支|仓库|git\b"
@@ -3782,7 +3698,7 @@ def _looks_like_external_query(text: str) -> bool:
     - 查询动词（查/搜/找/search/find）
     - 时间敏感框架（今天/明天/最近...）
 
-    排除：明确关于代码/文件的查询（由 _TOOL_PATTERNS 处理）。
+    排除：明确关于代码/文件的查询（由 正则信号层 处理）。
     """
     if not text or len(text) < 3:
         return False

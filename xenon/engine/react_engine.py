@@ -1860,11 +1860,3 @@ class ReActEngine(BaseEngine):
         if active_level is not None:
             return intent, int(active_level)
         return intent, int(contract.level)
-
-    @staticmethod
-    def _input_requires_tools(text: str) -> bool:
-        """Use the same side-effect boundary as the REPL router (legacy helper)."""
-        from xenon.repl.execution_policy import strip_execution_boundary
-        from xenon.repl.turn_contract import build_turn_contract
-
-        return build_turn_contract(strip_execution_boundary(text)).requires_tools

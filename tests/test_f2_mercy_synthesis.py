@@ -8,6 +8,15 @@ from xenon.engine.budget import BudgetManager
 from xenon.engine.context import AgentContext
 from xenon.engine.react_engine import ReActEngine
 from xenon.engine.tool_tracker import ToolExecutionTracker
+from xenon.repl.execution_policy import ExecutionLevel
+from xenon.repl.turn_contract import contract_for_level
+
+
+def _tools_ctx() -> AgentContext:
+    """Tests that need tools provide the turn contract at the boundary."""
+    return AgentContext(
+        {"_turn_contract": contract_for_level(ExecutionLevel.READ_ONLY)}
+    )
 
 
 # ── 测试辅助 ────────────────────────────────────────────────
@@ -230,7 +239,6 @@ class TestReActIntegration:
             "thought": "t",
             "final_answer": "综上所述，整体设计完善。",
         }
-        eng._input_requires_tools = lambda u: False
         # 模拟已有工具执行（进入收束阶段 + has_executions 触发空洞检测）
         eng._execute_tool = lambda action, ai, ctx, tracker: "obs"
         # 让第一次迭代先执行工具进入"有执行"状态，再进收束
@@ -249,12 +257,11 @@ class TestReActIntegration:
             ri.__setitem__("i", ri["i"] + 1)
             or responses[min(ri["i"], len(responses) - 1)]
         )
-        eng._input_requires_tools = lambda u: True
         eng._execute_tool = lambda action, ai, ctx, tracker: "obs"
 
         # max_iterations=4，spend 推进：要进入收束需 spent>=3 (75% of 4=3)
         # 第1轮 action(spend1) → 第2轮 空洞(spend2,EXECUTE,has_exec✓但EXECUTE非CONVERGE→空洞门要 has_executions✓→触发)
-        result = eng.run("实现功能", AgentContext())
+        result = eng.run("实现功能", _tools_ctx())
         # 第二次空洞应被接受（hollow_rejections 上限 1）
         assert "综上所述" in result
 
@@ -292,12 +299,11 @@ class TestReActIntegration:
             ri.__setitem__("i", ri["i"] + 1)
             or responses[min(ri["i"], len(responses) - 1)]
         )
-        eng._input_requires_tools = lambda u: True
         eng._execute_tool = lambda action, ai, ctx, tracker: (
             executed.append(action) or "obs"
         )
 
-        eng.run("做点事", AgentContext())
+        eng.run("做点事", _tools_ctx())
         # list_files 在收束阶段被拦截，不应出现在 executed
         assert "list_files" not in executed
         # 拦截应有 warning
@@ -358,11 +364,10 @@ class TestReActIntegration:
             "action": "write_file",
             "action_input": {},
         }
-        eng._input_requires_tools = lambda u: True
         eng._execute_tool = lambda action, ai, ctx, tracker: "obs"
         # mercy compile 的合成调用：_call_llm 会被同一 fake 调用 → 返回 "raw"
         # 但合成 prompt 检测：fake 返回 "raw"（非空）→ 作为合成结果
-        result = eng.run("做点事", AgentContext())
+        result = eng.run("做点事", _tools_ctx())
         # 应走 mercy compile（有工具执行 → 合成路径），返回 "raw" 或结构化报告
         assert result  # 非空
         assert "引擎被用户中断" not in result
@@ -395,9 +400,8 @@ class TestReActIntegration:
             ri.__setitem__("i", ri["i"] + 1)
             or responses[min(ri["i"], len(responses) - 1)]
         )
-        eng._input_requires_tools = lambda u: True
         eng._execute_tool = lambda action, ai, ctx, tracker: "obs"
 
-        eng.run("做点事", AgentContext())
+        eng.run("做点事", _tools_ctx())
         # 第 5 轮 fake_compact 返回更短 → 触发 on_compression（间接验证：无异常即通过）
         assert call_count["n"] >= 5

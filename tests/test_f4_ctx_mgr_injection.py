@@ -13,6 +13,8 @@ from xenon.engine.context import AgentContext
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.react_engine import ReActEngine
 from xenon.repl.context_manager import ContextManager, ConversationTurn
+from xenon.repl.execution_policy import ExecutionLevel
+from xenon.repl.turn_contract import contract_for_level
 
 
 def _ctx_mgr_with(n):
@@ -39,9 +41,11 @@ class TestCtxMgrInjection:
 
         eng._call_llm = fake_llm
         eng._parse_response = lambda resp: {"thought": "t", "final_answer": "done"}
-        eng._input_requires_tools = lambda u: False
+        run_ctx = AgentContext(
+            {"_turn_contract": contract_for_level(ExecutionLevel.ANSWER_ONLY)}
+        )
 
-        eng.run("继续", AgentContext(), ctx_mgr=cm)
+        eng.run("继续", run_ctx, ctx_mgr=cm)
         assert captured["history_count"] == 30  # 全量，非 10
 
     def test_react_without_ctx_mgr_caps_at_10(self):
@@ -62,7 +66,7 @@ class TestCtxMgrInjection:
 
         eng._call_llm = fake_llm
         eng._parse_response = lambda resp: {"thought": "t", "final_answer": "done"}
-        eng._input_requires_tools = lambda u: False
+        ctx.set("_turn_contract", contract_for_level(ExecutionLevel.ANSWER_ONLY))
 
         eng.run("继续", ctx)
         assert captured["history_count"] == 10  # [-10:] 截断

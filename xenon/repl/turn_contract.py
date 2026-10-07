@@ -215,6 +215,16 @@ def _contract_from_level(level_value: int, reason: str = "") -> TurnContract:
     )
 
 
+def contract_for_level(level: ExecutionLevel | int) -> TurnContract:
+    """Build a minimal contract with an explicit level.
+
+    供库调用方与测试在边界构造契约（例如“本轮已知需要写权限”），
+    避免依赖引擎内部的重新分类。
+    """
+
+    return _contract_from_level(int(level))
+
+
 def ensure_turn_contract(
     ctx: Any,
     text: str,

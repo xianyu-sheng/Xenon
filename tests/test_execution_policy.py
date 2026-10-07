@@ -21,6 +21,7 @@ from xenon.repl.execution_policy import (
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.prompt_optimizer import detect_intent
 from xenon.repl.repl import REPL
+from xenon.repl.turn_contract import build_turn_contract
 
 
 def test_turn_boundary_is_idempotent_and_ignored_by_intent_classification():
@@ -29,7 +30,7 @@ def test_turn_boundary_is_idempotent_and_ignored_by_intent_classification():
 
     assert bind_execution_boundary(bound, ExecutionLevel.ANSWER_ONLY) == bound
     assert strip_execution_boundary(bound) == original
-    assert ReActEngine._input_requires_tools(bound) is False
+    assert build_turn_contract(strip_execution_boundary(bound)).requires_tools is False
 
 
 @pytest.mark.parametrize(
@@ -50,7 +51,7 @@ def test_code_generation_without_side_effect_authorization_is_answer_only(text):
     assert policy.requires_tools is False
     assert REPL._detect_tool_need(text, intent=intent) is False
     assert DifficultyEstimator._needs_tools(text, intent) is False
-    assert ReActEngine._input_requires_tools(text) is False
+    assert build_turn_contract(text).requires_tools is False
 
 
 @pytest.mark.parametrize(
@@ -136,7 +137,7 @@ def test_document_paths_before_request_cue_still_authorize_read_only():
 
     assert policy.level is ExecutionLevel.READ_ONLY
     assert policy.requires_tools is True
-    assert ReActEngine._input_requires_tools(text) is True
+    assert build_turn_contract(text).requires_tools is True
 
 
 def test_repository_url_before_request_cue_still_authorizes_read_only():
