@@ -515,8 +515,12 @@ class REPL:
     def _confirm_tool(
         self, tool_name: str, params: dict, risk: str
     ) -> tuple[bool, str]:
-        from xenon.repl.permissions import PermissionGate
-        from xenon.repl.system_config import get_config
+        """旧权限门的确认回调：委托给统一的边界审批面板。
+
+        PermissionGate.check 仍负责模式语义（PLAN 只读 / BYPASS 全允许 /
+        风险路由），但所有需要询问的路径都走同一个面板（工作区策略 +
+        TTL 规则 + allowed-once），不再有自己的 CRITICAL 弹窗。
+        """
 
         if get_config().interaction.assume_yes:
             return True, ""
@@ -527,63 +531,20 @@ class REPL:
                 "/permissions bypass 或设置 XENON_ASSUME_YES=1",
             )
 
-        # 旧权限门：边界审批已经处理过（TTL 规则或本轮 allowed-once）时不再重复询问。
+        # 边界审批已经处理过（TTL 规则或本轮 allowed-once）时不再重复询问。
         if self._approval_rules.is_allowed(tool_name):
             return True, ""
         if tool_name in self._boundary_approved_once:
             return True, ""
 
-        # Permission callbacks can be reached by parallel engine workers.  A
-        # single lock makes stdin ownership explicit and prevents two Rich
-        # prompts from interleaving.  Stop the callback heartbeat *before*
-        # printing the panel; otherwise its carriage-return redraw erases the
-        # visible choices/input line while Prompt.ask is blocked.
-        with self._permission_prompt_lock:
-            callback = getattr(self, "_active_callback", None)
-            if hasattr(callback, "suspend_for_prompt"):
-                callback.suspend_for_prompt()
-
-            # Permission input is a genuine waiting state: freeze the tab
-            # starfield before rendering the prompt, then resume the parent
-            # task's activity only after an approval decision.
-            with self._terminal_waiting("等待命令确认"):
-                msg = PermissionGate.format_confirm_message(tool_name, params, risk)
-                console.print()
-                console.print(Panel(msg, border_style="yellow", padding=(0, 1)))
-
-                try:
-                    choice = Prompt.ask(
-                        "选择",
-                        choices=["y", "n", "a", "q"],
-                        default="n",
-                        show_choices=True,
-                        case_sensitive=False,
-                    )
-                except (KeyboardInterrupt, EOFError):
-                    return False, "用户取消"
-
-            if choice == "y":
-                allowed = True
-                reason = ""
-            elif choice == "a":
-                # [a] is an explicit session-level trust decision. Keep the
-                # narrow ``allow_exact`` API for programmatic callers, but do
-                # not prompt once per newly generated shell command in an
-                # interactive ReAct run.
-                self._permission_gate.allow_always(tool_name)
-                console.print("[dim]· 本会话将自动允许此工具的后续调用[/dim]")
-                allowed = True
-                reason = ""
-            elif choice == "q":
-                allowed = False
-                reason = "用户取消任务"
-            else:
-                allowed = False
-                reason = "用户拒绝"
-
-            if allowed and hasattr(callback, "resume_after_prompt"):
-                callback.resume_after_prompt(tool_name, params)
-            return allowed, reason
+        outcome = self._confirm_tool_approval(
+            tool_name, params or {}, reason=f"风险等级 {risk}"
+        )
+        if outcome == APPROVAL_ALLOWED_ONCE:
+            return True, ""
+        if outcome == APPROVAL_CANCELLED:
+            return False, "用户取消任务"
+        return False, "用户拒绝"
 
     def _terminal_waiting(self, detail: str):
         """Return a waiting context, with a no-op fallback for partial REPLs."""
@@ -3354,6 +3315,7 @@ class REPL:
         if not targets_outside_workspace(tool_name, params, self._workspace_root()):
             return APPROVAL_ALLOWED_ONCE
 
+        brief = str(params.get("command") or params.get("action") or "")[:120]
         with self._permission_prompt_lock:
             callback = getattr(self, "_active_callback", None)
             if hasattr(callback, "suspend_for_prompt"):
@@ -3363,7 +3325,8 @@ class REPL:
                 console.print(
                     Panel(
                         f"模型请求执行 [bold]{tool_name}[/bold]，超出工作区或属于命令执行。\n"
-                        f"原因：{reason or '工具边界策略'}",
+                        + (f"命令: {brief}\n" if brief else "")
+                        + f"原因：{reason or '工具边界策略'}",
                         title="需要授权",
                         border_style="yellow",
                         padding=(0, 1),
@@ -3372,7 +3335,7 @@ class REPL:
                 try:
                     choice = Prompt.ask(
                         "选择",
-                        choices=["y", "n", "a"],
+                        choices=["y", "n", "a", "q"],
                         default="n",
                         show_choices=True,
                         case_sensitive=False,
@@ -3394,6 +3357,11 @@ class REPL:
             if hasattr(callback, "resume_after_prompt"):
                 callback.resume_after_prompt(tool_name, params)
             return APPROVAL_ALLOWED_ONCE
+        if choice == "q":
+            console.print("[dim]· 已取消任务[/dim]")
+            if hasattr(callback, "resume_after_prompt"):
+                callback.resume_after_prompt(tool_name, params)
+            return APPROVAL_CANCELLED
         console.print("[dim]· 未授权[/dim]")
         if hasattr(callback, "resume_after_prompt"):
             callback.resume_after_prompt(tool_name, params)
