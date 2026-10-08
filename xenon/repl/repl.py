@@ -234,6 +234,21 @@ class REPL:
         except Exception:  # noqa: BLE001 — 事实层不可用不能阻断 REPL
             logger.debug("会话事件日志初始化失败（已忽略）", exc_info=True)
         self._plan_mode_active = self._load_plan_mode()
+        # 本地 hooks（用户级 + 项目级 .xenon/hooks.yaml；失败无影响）。
+        self._hook_runner: Any = None
+        try:
+            from xenon.hooks.runner import HookRunner, set_default_runner
+
+            self._hook_runner = HookRunner(
+                user_dir=Path.home() / ".xenon" / "hooks.yaml",
+                project_dir=self._workspace_root() / ".xenon" / "hooks.yaml",
+                session_id=self._session_events.session_id
+                if self._session_events is not None
+                else "",
+            )
+            set_default_runner(self._hook_runner)
+        except Exception:  # noqa: BLE001
+            logger.debug("hooks 初始化失败（已忽略）", exc_info=True)
 
         # v0.5.3: 折叠思考过程 — 默认隐藏，Ctrl+O 展开
         self._show_thinking: bool = False
@@ -1034,6 +1049,27 @@ class REPL:
                     else ""
                 ),
             )
+
+            # PostToolUse hook：exit 2 的 stderr 回传给用户/模型。
+            if self._hook_runner is not None:
+                try:
+                    outcome = self._hook_runner.run(
+                        "PostToolUse",
+                        str(action),
+                        dict(ai),
+                        extra={
+                            "success": not step.is_error,
+                            "observation": str(
+                                getattr(step, "observation", "") or ""
+                            )[:200],
+                        },
+                    )
+                    if outcome is not None and outcome.message:
+                        console.print(
+                            f"[dim]· hook 反馈: {outcome.message[:200]}[/dim]"
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
 
             if step.is_error or not paths:
                 continue
@@ -3151,6 +3187,22 @@ class REPL:
         policy: ExecutionPolicy,
     ) -> None:
         """记录本轮结尾的“回复继续”承诺；无承诺则清除，避免过期授权。"""
+
+        # Stop hook（回合尾）：exit 0 = 请求停止，记事实 + 提示。
+        if self._hook_runner is not None:
+            try:
+                outcome = self._hook_runner.run(
+                    "Stop", "", {}, extra={"last_user_text": getattr(self, "_last_user_text", "")}
+                )
+                if outcome is not None and outcome.stop:
+                    self._record_event("hook/stop")
+                    console.print("[dim]· hook 请求停止本轮[/dim]")
+                elif outcome is not None and outcome.message:
+                    console.print(
+                        f"[dim]· hook 反馈: {outcome.message[:200]}[/dim]"
+                    )
+            except Exception:  # noqa: BLE001
+                pass
 
         answer = ""
         for message in reversed(self.ctx_mgr.get_messages()[-8:]):

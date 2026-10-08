@@ -95,6 +95,8 @@ def _auto_confirm_destructive(monkeypatch):
     并 patch ``_confirm`` 即可。
     """
     monkeypatch.setenv("XENON_ASSUME_YES", "1")
+    # 测试环境不加载用户/项目的真实 hooks（用例需要时显式构造 HookRunner）。
+    monkeypatch.setenv("XENON_HOOKS", "0")
     yield
 
 

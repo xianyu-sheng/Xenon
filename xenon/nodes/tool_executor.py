@@ -733,6 +733,17 @@ def _extract_summary(
 
 
 # ── 门面 ───────────────────────────────────────────────────
+def _default_hooks():
+    """进程级默认 hook 运行器（REPL 启动时注册）。"""
+
+    try:
+        from xenon.hooks.runner import get_default_runner
+
+        return get_default_runner()
+    except Exception:  # noqa: BLE001 — hooks 不可用时按无 hooks 处理
+        return None
+
+
 class ToolExecutor:
     """7 阶段工具执行门面。"""
 
@@ -749,6 +760,7 @@ class ToolExecutor:
         evidence_gates: list[Any] | None = None,
         evidence_auto_read: bool = True,  # v0.8.3: 盲编辑自动补读
         tool_gate: Any = None,  # 统一工具门控（黑名单+参数校验+证据链）
+        hooks: Any = None,  # HookRunner（None 时读全局默认）
     ) -> None:
         if evidence_enforcement not in {"observe", "enforce"}:
             raise ValueError("evidence_enforcement must be 'observe' or 'enforce'")
@@ -756,6 +768,7 @@ class ToolExecutor:
         # 默认每引擎独立注册表（同引擎内跨 run 累积断路状态，且保证测试隔离）
         self.breakers = breakers or BreakerRegistry()
         self.permission_gate = permission_gate  # v0.5.0: 工具确认门控
+        self.hooks = hooks if hooks is not None else _default_hooks()
         self.runtime = runtime
         self.execution_policy = execution_policy
         self.evidence_ledger = evidence_ledger
@@ -1215,6 +1228,26 @@ class ToolExecutor:
                     error=message,
                     error_kind="approval_denied",
                 )
+
+        # ── Stage 1.7: 本地 hooks（PreToolUse：exit 2 = 阻断）──
+        if self.hooks is not None:
+            try:
+                outcome = self.hooks.run("PreToolUse", tool_name, params)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("hook 执行失败（忽略）: %s", exc)
+                outcome = None
+            if outcome is not None and outcome.blocked:
+                message = f"⛔ hook 阻断 {tool_name}: {outcome.message}".strip()
+                logger.info(f"{trace_p}{message}")
+                return finish(
+                    False,
+                    message,
+                    state=ToolExecutionState.FAILED,
+                    error=message,
+                    error_kind="hook_blocked",
+                )
+            if outcome is not None and outcome.message:
+                logger.warning(f"{trace_p}hook 警告: {outcome.message}")
 
         # ── Stage 2: 参数幻觉校验 ──
         _ok, reason, level = validate_tool_params(params, tool_name, self.tool_gate)
