@@ -1157,6 +1157,34 @@ class ToolExecutor:
             f"{trace_p}执行工具: {tool_name}, 参数: {mask_sensitive_params(params)}"
         )
 
+        # ── 计划审批（内联工具，无副作用；由 REPL 回调呈现计划面板）──
+        if tool_name == "submit_plan":
+            plan_text = str(params.get("plan") or params.get("content") or "")
+            if not plan_text.strip():
+                message = "submit_plan 需要 plan 参数"
+                return finish(
+                    False,
+                    message,
+                    state=ToolExecutionState.FAILED,
+                    error=message,
+                    error_kind="invalid_parameters",
+                )
+            plan_result = context.request_plan_approval(plan_text)
+            if bool(plan_result.get("approved")):
+                return finish(
+                    True,
+                    "计划已批准，可以开始执行。",
+                    state=ToolExecutionState.SUCCEEDED,
+                )
+            message = f"计划被驳回: {plan_result.get('feedback') or '请修改计划后重新提交'}"
+            return finish(
+                False,
+                message,
+                state=ToolExecutionState.FAILED,
+                error=message,
+                error_kind="plan_rejected",
+            )
+
         # ── Stage 0.5: 工具门控黑名单检查 ──
         gate_passed, gate_reason = self.tool_gate.check_before(tool_name, params)
         if not gate_passed:

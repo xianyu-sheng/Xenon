@@ -32,6 +32,7 @@ class AgentContext:
         self._tool_checkpoint_callback: Any = None
         self._escalation_callback: Any = None
         self._approval_callback: Any = None
+        self._plan_callback: Any = None
 
     # ── 读写 ──────────────────────────────────────────────
     def get(self, key: str, default: Any = None) -> Any:
@@ -156,6 +157,30 @@ exceeds the current turn's ``_execution_level``.  Returning True lets the
         except Exception:  # noqa: BLE001 — 审批通道异常按不可用（拒绝）处理
             return "unavailable"
         return outcome if outcome in APPROVAL_OUTCOMES else "unavailable"
+
+    def set_plan_callback(self, callback: Any = None) -> None:
+        """Register the plan-approval channel (REPL injects it)."""
+        with self._tool_checkpoint_lock:
+            self._plan_callback = callback
+
+    def request_plan_approval(self, plan_text: str) -> dict:
+        """Ask the registered channel to approve a submitted plan.
+
+        No channel (library/headless) fails closed: not approved.
+        """
+        callback = self._plan_callback
+        if callback is None:
+            return {"approved": False, "feedback": "无交互通道，无法批准计划"}
+        try:
+            result = callback(plan_text)
+            if isinstance(result, dict):
+                return {
+                    "approved": bool(result.get("approved")),
+                    "feedback": str(result.get("feedback") or ""),
+                }
+        except Exception:  # noqa: BLE001 — 审批通道异常按驳回
+            pass
+        return {"approved": False, "feedback": "审批通道异常"}
 
     def record_tool_checkpoint(
         self,

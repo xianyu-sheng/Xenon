@@ -108,6 +108,11 @@ REACT_SYSTEM_PROMPT = """你是一个 ReAct 模式的 AI 编程助手。你通�
 
 # 内置工具描述
 BUILTIN_TOOLS = {
+    "submit_plan": {
+        "name": "submit_plan",
+        "description": "把当前计划提交给用户审批（计划模式下使用）。用户批准后退出计划模式并开始执行；被驳回时根据反馈修改计划后重新提交。",
+        "params": {"plan": "完整计划文本（步骤、工具、目标路径）"},
+    },
     "command": {
         "name": "command",
         "description": "在本机终端执行 shell 命令（Windows 用 PowerShell，Linux/macOS 用 bash）。可用于运行脚本、安装依赖、查看系统信息等。不能用于读写文件（请用 read_file/write_file）。",

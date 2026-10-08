@@ -273,6 +273,8 @@ class REPL:
         self.agent_context.set_escalation_callback(self._confirm_tool_escalation)
         # 工具边界审批：工作区内写免问；越界写与命令要问（可 y/n/a，a 带 TTL）。
         self.agent_context.set_approval_callback(self._confirm_tool_approval)
+        # 计划审批通道：submit_plan 工具由这里呈现面板。
+        self.agent_context.set_plan_callback(self._confirm_plan)
 
         # LLM 意图分类器按需初始化：未启用/无可用模型时为 None，正则层兜底。
         self._intent_classifier: Any = None
@@ -584,6 +586,47 @@ class REPL:
         except Exception:  # noqa: BLE001 — 预览失败只影响展示
             return ""
         return ""
+
+    def _confirm_plan(self, plan_text: str) -> dict:
+        """计划审批面板：批准退出计划模式，驳回让模型修改后重提。"""
+
+        if not sys.stdin.isatty():
+            return {"approved": False, "feedback": "非交互环境无法批准计划"}
+        with self._permission_prompt_lock:
+            callback = getattr(self, "_active_callback", None)
+            if hasattr(callback, "suspend_for_prompt"):
+                callback.suspend_for_prompt()
+            with self._terminal_waiting("等待计划审批"):
+                console.print()
+                console.print(
+                    Panel(
+                        str(plan_text)[:1500],
+                        title="📋 计划待审批",
+                        border_style="cyan",
+                        padding=(0, 1),
+                    )
+                )
+                try:
+                    choice = Prompt.ask(
+                        "选择",
+                        choices=["y", "n"],
+                        default="n",
+                        show_choices=True,
+                        case_sensitive=False,
+                    )
+                except (KeyboardInterrupt, EOFError):
+                    return {"approved": False, "feedback": "用户取消"}
+        if choice == "y":
+            self._plan_mode_active = False
+            self._record_event("plan/approved", plan=str(plan_text)[:200])
+            console.print("[dim]· 计划已批准，退出计划模式开始执行[/dim]")
+            if hasattr(callback, "resume_after_prompt"):
+                callback.resume_after_prompt("submit_plan", {})
+            return {"approved": True, "feedback": ""}
+        console.print("[dim]· 计划被驳回[/dim]")
+        if hasattr(callback, "resume_after_prompt"):
+            callback.resume_after_prompt("submit_plan", {})
+        return {"approved": False, "feedback": "用户驳回，请修改计划后重新提交"}
 
     def _confirm_tool(
         self, tool_name: str, params: dict, risk: str

@@ -209,6 +209,13 @@ BUILTIN_TOOL_METHODS: dict[str, str] = {
 }
 
 BUILTIN_TOOL_REGISTRY = ToolRegistry()
+BUILTIN_TOOL_REGISTRY.register(
+    "submit_plan",
+    lambda *args, **kwargs: None,
+    description="提交计划供用户审批（计划模式）：批准后退出计划模式开始执行；驳回则修改后重新提交",
+    params={"plan": "完整计划文本（步骤、工具、目标）"},
+    risk="INFO",
+)
 for _tool_name, _method_name in BUILTIN_TOOL_METHODS.items():
     # 内置工具的风险级别在此声明。写操作工具用 WRITE，高危用 SENSITIVE，
     # 只读用 INFO。此前 tool_executor.py 里有两份硬编码集合；现在注册表是
