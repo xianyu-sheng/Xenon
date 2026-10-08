@@ -512,6 +512,64 @@ class REPL:
         )
         main_stack.children.append(status_window)
 
+    @staticmethod
+    def _diff_preview(tool_name: str, params: dict) -> str:
+        """审批面板里的 diff 预览（写入/编辑/批量），最多 30 行。"""
+
+        import difflib
+
+        try:
+            if tool_name in {"write_file"}:
+                path = params.get("file_path")
+                content = params.get("content")
+                if not path or content is None:
+                    return ""
+                old_lines: list[str] = []
+                if os.path.exists(str(path)):
+                    try:
+                        old_lines = Path(str(path)).read_text(
+                            encoding="utf-8", errors="replace"
+                        ).splitlines()
+                    except OSError:
+                        old_lines = []
+                return "\n".join(
+                    list(
+                        difflib.unified_diff(
+                            old_lines,
+                            str(content).splitlines(),
+                            fromfile=str(path),
+                            tofile=f"{path}（拟写入）",
+                            lineterm="",
+                        )
+                    )[:30]
+                )
+            if tool_name == "edit_file":
+                path = params.get("file_path")
+                if not path:
+                    return ""
+                return "\n".join(
+                    list(
+                        difflib.unified_diff(
+                            str(params.get("old_text") or "").splitlines(),
+                            str(params.get("new_text") or "").splitlines(),
+                            fromfile=str(path),
+                            tofile=f"{path}（修改后）",
+                            lineterm="",
+                        )
+                    )[:30]
+                )
+            if tool_name in {"batch_write", "batch_edit"}:
+                items = params.get("files") or params.get("edits") or []
+                lines = [
+                    f"  - {item.get('file_path') or item.get('path')}"
+                    for item in items[:10]
+                    if isinstance(item, dict)
+                ]
+                return "涉及文件:\n" + "\n".join(lines)
+        except Exception:  # noqa: BLE001 — 预览失败只影响展示
+            return ""
+        return ""
+
     def _confirm_tool(
         self, tool_name: str, params: dict, risk: str
     ) -> tuple[bool, str]:
@@ -3316,17 +3374,23 @@ class REPL:
             return APPROVAL_ALLOWED_ONCE
 
         brief = str(params.get("command") or params.get("action") or "")[:120]
+        diff_text = self._diff_preview(tool_name, params)
         with self._permission_prompt_lock:
             callback = getattr(self, "_active_callback", None)
             if hasattr(callback, "suspend_for_prompt"):
                 callback.suspend_for_prompt()
             with self._terminal_waiting("等待工具授权"):
                 console.print()
+                body = (
+                    f"模型请求执行 [bold]{tool_name}[/bold]，超出工作区或属于命令执行。\n"
+                    + (f"命令: {brief}\n" if brief else "")
+                    + f"原因：{reason or '工具边界策略'}"
+                )
+                if diff_text:
+                    body += f"\n\n{diff_text}"
                 console.print(
                     Panel(
-                        f"模型请求执行 [bold]{tool_name}[/bold]，超出工作区或属于命令执行。\n"
-                        + (f"命令: {brief}\n" if brief else "")
-                        + f"原因：{reason or '工具边界策略'}",
+                        body,
                         title="需要授权",
                         border_style="yellow",
                         padding=(0, 1),

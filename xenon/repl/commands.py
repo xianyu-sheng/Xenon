@@ -86,6 +86,9 @@ from xenon.repl.command_groups.memory_cmd import (
 from xenon.repl.command_groups.plan import (
     _cmd_plan,  # noqa: F401 - compatibility export
 )
+from xenon.repl.command_groups.review import (
+    _cmd_review,  # noqa: F401 - compatibility export
+)
 from xenon.repl.command_groups.shortcut import (
     _cmd_shortcut,  # noqa: F401 - compatibility export
     _generate_shortcut_steps,  # noqa: F401 - compatibility export
