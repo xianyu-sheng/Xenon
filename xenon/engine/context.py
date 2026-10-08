@@ -33,6 +33,8 @@ class AgentContext:
         self._escalation_callback: Any = None
         self._approval_callback: Any = None
         self._plan_callback: Any = None
+        self._fact_callback: Any = None
+        self._hook_callback: Any = None
 
     # ── 读写 ──────────────────────────────────────────────
     def get(self, key: str, default: Any = None) -> Any:
@@ -181,6 +183,34 @@ exceeds the current turn's ``_execution_level``.  Returning True lets the
         except Exception:  # noqa: BLE001 — 审批通道异常按驳回
             pass
         return {"approved": False, "feedback": "审批通道异常"}
+
+    def set_fact_callback(self, callback: Any = None) -> None:
+        """Register a best-effort fact recorder (REPL 事件日志)。"""
+        with self._tool_checkpoint_lock:
+            self._fact_callback = callback
+
+    def record_fact(self, event_type: str, **data: object) -> None:
+        """Append a durable fact; silently ignored when no recorder."""
+        callback = self._fact_callback
+        if callback is None:
+            return
+        try:
+            callback(event_type, **data)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def set_hook_callback(self, callback: Any = None) -> None:
+        with self._tool_checkpoint_lock:
+            self._hook_callback = callback
+
+    def run_hook(self, event: str, tool_name: str, tool_input: dict) -> Any:
+        callback = self._hook_callback
+        if callback is None:
+            return None
+        try:
+            return callback(event, tool_name, tool_input)
+        except Exception:  # noqa: BLE001
+            return None
 
     def record_tool_checkpoint(
         self,

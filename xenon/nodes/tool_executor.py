@@ -1157,6 +1157,29 @@ class ToolExecutor:
             f"{trace_p}执行工具: {tool_name}, 参数: {mask_sensitive_params(params)}"
         )
 
+        # ── 沙箱软件边界：只读模式 + 命令白名单（确定性拒绝）──
+        from xenon.sandbox import command_denial_reason, read_only_enabled
+
+        if read_only_enabled() and required_execution_level(tool_name, params) >= 2:
+            message = f"⛔ 只读模式：不允许 {tool_name}（写/执行已被 XENON_READ_ONLY=1 禁止）"
+            return finish(
+                False,
+                message,
+                state=ToolExecutionState.FAILED,
+                error=message,
+                error_kind="sandbox_read_only",
+            )
+        if tool_name == "command":
+            denial = command_denial_reason(str(params.get("command") or ""))
+            if denial:
+                return finish(
+                    False,
+                    f"⛔ {denial}",
+                    state=ToolExecutionState.FAILED,
+                    error=denial,
+                    error_kind="sandbox_allowlist",
+                )
+
         # ── 计划审批（内联工具，无副作用；由 REPL 回调呈现计划面板）──
         if tool_name == "submit_plan":
             plan_text = str(params.get("plan") or params.get("content") or "")

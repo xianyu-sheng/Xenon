@@ -1406,6 +1406,9 @@ class ReActEngine(BaseEngine):
             timeout = self.subagent_timeout
 
         task_id = f"sub-{engine_type}-d{self._subagent_depth + 1}-{len(self._subagent_history) + 1}"
+        context.record_fact(
+            "subagent/start", task=task[:80], engine=engine_type, task_id=task_id
+        )
         logger.info(
             "spawn_agent [%s] 委派子任务（引擎=%s, 深度=%d, 超时=%s）: %s",
             task_id,
@@ -1472,9 +1475,21 @@ class ReActEngine(BaseEngine):
                 answer = f"执行异常: {e}"
 
         # 格式化结果
+        note = ""
+        hook = context.run_hook("SubagentStop", "spawn_agent", {"task": task})
+        if hook is not None and getattr(hook, "stop", False):
+            note = "（hook 请求停止子代理）"
+        context.record_fact(
+            "subagent/result",
+            task=task[:80],
+            engine=engine_type,
+            task_id=task_id,
+            success="执行异常" not in answer and "超时" not in answer,
+            preview=str(answer)[:200],
+        )
         return self._format_sub_result(
             task_id, task, engine_type, answer, sub_engine, tracker
-        )
+        ) + note
 
     def _spawn_all_subagents(
         self,
