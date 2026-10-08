@@ -54,7 +54,30 @@ def test_clean_answer_passes():
     assert reasons == []
 
 
-def test_repl_verify_turn_prints_warning_and_records(monkeypatch, tmp_path):
+def test_repl_verify_turn_returns_failure_and_records(monkeypatch, tmp_path):
+    monkeypatch.setenv("XENON_SESSION_EVENTS_DIR", str(tmp_path))
+    registry = ModelRegistry()
+    registry.add_model("openai/test", "test")
+    repl = REPL(registry=registry, streaming=False)
+    repl._last_user_text = "修到 CI 通过"
+
+    class _Step:
+        action = "command"
+        is_error = True
+        observation = "pytest 失败: 1 failed"
+
+    class _Panel:
+        steps = [_Step()]
+
+    ok, reasons = repl._verify_turn(_Panel(), "已完成，全部通过 ✅")
+
+    assert ok is False
+    assert reasons
+    events = repl._session_events.read()
+    assert any(e["type"] == "verification/failed" for e in events)
+
+
+def test_render_gate_suppresses_success_when_verification_fails(monkeypatch, tmp_path):
     monkeypatch.setenv("XENON_SESSION_EVENTS_DIR", str(tmp_path))
     registry = ModelRegistry()
     registry.add_model("openai/test", "test")
@@ -65,17 +88,31 @@ def test_repl_verify_turn_prints_warning_and_records(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "xenon.repl.repl.console", Console(file=output, width=120, force_terminal=False)
     )
+    rendered: list[str] = []
+    monkeypatch.setattr(
+        repl, "_render_assistant_text", lambda content, **kw: rendered.append(content)
+    )
 
     class _Step:
         action = "command"
         is_error = True
-        observation = "pytest 失败: 1 failed"
+        action_input = {"command": "pytest"}
+        observation = "pytest 失败"
 
     class _Panel:
         steps = [_Step()]
+        errors: list = []
+        tool_call_count = 1
 
-    repl._verify_turn(_Panel(), "已完成，全部通过 ✅")
+    class _Callback:
+        def finish_activity(self):
+            pass
 
+        def get_thinking_panel(self):
+            return _Panel()
+
+    repl._render_engine_result(_Callback(), "已完成，全部通过 ✅", "ReAct 结果")
+
+    assert rendered == []  # 成功渲染被抑制
     assert "任务校验未通过" in output.getvalue()
-    events = repl._session_events.read()
-    assert any(e["type"] == "verification/failed" for e in events)
+    assert "草稿" in output.getvalue()

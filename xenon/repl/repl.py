@@ -877,8 +877,34 @@ class REPL:
             else:
                 console.print("[dim]  💭 无工具调用[/dim]")
 
-        # 最终答案始终显示；正文保持正常亮度，不再使用大边框。
-        self._render_assistant_text(result, title=title)
+        # 发布门 v2：校验未通过的答案不发布为成功结果（草稿在失败面板内展示）。
+        verification_ok, verification_reasons = (
+            self._verify_turn(panel, result) if panel is not None else (True, [])
+        )
+        if verification_ok:
+            # 最终答案始终显示；正文保持正常亮度，不再使用大边框。
+            self._render_assistant_text(result, title=title)
+        else:
+            self._render_verification_failure(result, verification_reasons)
+
+    @staticmethod
+    def _render_verification_failure(draft: str, reasons: list[str]) -> None:
+        """未通过发布门的答案：醒目标记 + 草稿内容，不渲染为成功结果。"""
+
+        console.print()
+        header = Text()
+        header.append("● ", style="bold red")
+        header.append("任务校验未通过", style="bold red")
+        console.print(header)
+        console.print(
+            Panel(
+                "\n".join(f"- {r}" for r in reasons)
+                + "\n\n以下回答未通过校验，按未完成处理（草稿）：\n\n"
+                + str(draft or ""),
+                border_style="red",
+                padding=(0, 1),
+            )
+        )
 
     @staticmethod
     def _render_assistant_text(
@@ -3228,8 +3254,8 @@ class REPL:
             logger.debug("自动压缩失败（已忽略）", exc_info=True)
             return False
 
-    def _verify_turn(self, panel, result: str) -> None:
-        """发布门 v1：校验失败打印醒目警告并记事实，不阻断输出。"""
+    def _verify_turn(self, panel, result: str) -> tuple[bool, list[str]]:
+        """发布门：校验失败记事实并返回原因；渲染由调用方决定。"""
 
         try:
             from xenon.engine.task_verifier import (
@@ -3256,16 +3282,10 @@ class REPL:
             )
             if not ok:
                 self._record_event("verification/failed", reasons=reasons)
-                console.print(
-                    Panel(
-                        "\n".join(f"- {r}" for r in reasons),
-                        title="⚠️ 任务校验未通过",
-                        border_style="red",
-                        padding=(0, 1),
-                    )
-                )
+            return ok, reasons
         except Exception:  # noqa: BLE001 — 校验失败不能阻断输出
             logger.debug("任务校验执行失败（已忽略）", exc_info=True)
+            return True, []
 
     def _record_event(self, event_type: str, **data: object) -> str | None:
         """Best-effort append to the additive session fact log."""
