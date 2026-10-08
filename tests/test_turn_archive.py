@@ -155,7 +155,7 @@ def test_failed_tools_are_recorded_as_facts(monkeypatch, tmp_path):
         action = "command"
         is_error = True
         action_input = {"command": "pytest"}
-        error = "pytest 失败: 2 failed"
+        observation = "pytest 失败: 2 failed"
 
     class _Panel:
         steps = [_Step()]

@@ -829,6 +829,8 @@ class REPL:
                 self.status_bar.add_tool_call()
             # v0.5.4: 从成功的工具调用中提取文件路径，更新工作记忆
             self._track_session_files(panel)
+            # 任务级校验：发布前用回执审计最终回答（CI/测试准则、成功宣称）。
+            self._verify_turn(panel, result)
         else:
             step_count = 0
             tool_count = 0
@@ -1000,7 +1002,11 @@ class REPL:
                 tool=str(action),
                 success=not step.is_error,
                 paths=[str(p) for p in paths[:20]],
-                error=(str(step.error or "")[:120] if step.is_error else ""),
+                error=(
+                    str(getattr(step, "observation", "") or "")[:120]
+                    if step.is_error
+                    else ""
+                ),
             )
 
             if step.is_error or not paths:
@@ -1898,6 +1904,7 @@ class REPL:
         if not user_input or not user_input.strip():
             console.print("[dim]· 空输入已忽略[/dim]")
             return
+        self._last_user_text = user_input
 
         # 跨回合续接：短确认语 + 未兑现承诺 = 继承上轮意图/级别/范式；
         # 待批 Gate 则接受更宽的确认语（“好写入到桌面”/“请写入”）。
@@ -3220,6 +3227,45 @@ class REPL:
         except Exception:  # noqa: BLE001 — 压缩失败不能阻断回合
             logger.debug("自动压缩失败（已忽略）", exc_info=True)
             return False
+
+    def _verify_turn(self, panel, result: str) -> None:
+        """发布门 v1：校验失败打印醒目警告并记事实，不阻断输出。"""
+
+        try:
+            from xenon.engine.task_verifier import (
+                extract_acceptance_criteria,
+                verify_final_answer,
+            )
+
+            tool_events = []
+            for step in panel.steps:
+                if not step.action:
+                    continue
+                tool_events.append(
+                    {
+                        "tool": str(step.action),
+                        "success": not step.is_error,
+                        "error": str(getattr(step, "observation", "") or "")[:120],
+                    }
+                )
+            criteria = extract_acceptance_criteria(
+                getattr(self, "_last_user_text", "") or ""
+            )
+            ok, reasons = verify_final_answer(
+                result or "", criteria=criteria, tool_events=tool_events
+            )
+            if not ok:
+                self._record_event("verification/failed", reasons=reasons)
+                console.print(
+                    Panel(
+                        "\n".join(f"- {r}" for r in reasons),
+                        title="⚠️ 任务校验未通过",
+                        border_style="red",
+                        padding=(0, 1),
+                    )
+                )
+        except Exception:  # noqa: BLE001 — 校验失败不能阻断输出
+            logger.debug("任务校验执行失败（已忽略）", exc_info=True)
 
     def _record_event(self, event_type: str, **data: object) -> str | None:
         """Best-effort append to the additive session fact log."""
