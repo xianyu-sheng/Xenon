@@ -147,6 +147,10 @@ REPL / CLI (repl/)          输入解析、会话、11 个命令组
 - 工具边界审批：工作区内写免问；越界写与命令询问；`a` 登记带 TTL 的会话
   规则（默认 30 分钟，`XENON_APPROVAL_TTL` 秒）。审批结果是封闭词表，
   只有 `allowed-once` 授权；通道异常/非交互按拒绝处理。
+- 任务校验发布门：完成准则 + 失败回执审计；校验未通过时自动同回合反馈
+  重试（上限 `XENON_VERIFY_RETRIES`，默认 2 次），仍不通过按未完成发布。
+  单次运行步数上限默认 40（组合引擎 24），`XENON_MAX_ITERATIONS` 可调；
+  触顶时结果会明确标注"步数上限，任务可能未完成"。
 - 分类器默认开启，自动从已配置 Provider 中挑选最快的模型（如
   `deepseek/deepseek-v4-flash`）；无可用 Provider、超时或调用失败时自动降级
   为正则判定，不阻断对话。关闭方式：`XENON_INTENT_CLASSIFIER_ENABLED=0`

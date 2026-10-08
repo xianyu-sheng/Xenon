@@ -761,10 +761,13 @@ class ReActEngine(BaseEngine):
 
                 if not budget.can_continue() or iteration >= self.max_iterations:
                     logger.warning("VerificationLoop (ReAct): 预算耗尽，终止验证循环")
+                    answer = self._mark_budget_exhausted(
+                        f"验证循环被终止，任务可能未完成。\n\n{answer}",
+                        extra="验证循环被终止，",
+                    )
                     self.finalize_evidence(context=ctx, output=answer, tracker=tracker)
                     self.callback.on_finish(answer)
                     return answer
-
                 self.callback.on_warning(
                     "检测到修改已落盘但测试未通过，正在读取失败输出并修复…"
                 )
@@ -1204,9 +1207,19 @@ class ReActEngine(BaseEngine):
             return msg
 
         # F2: 预算耗尽（非中断）→ mercy compile 优雅降级链
+        # 诚实披露：步数上限触顶是任务边界，不能伪装成正常完成。
         msg = self._mercy_compile(user_input, tracker, messages)
+        msg = self._mark_budget_exhausted(msg)
         self.callback.on_finish(msg)
         return msg
+
+    def _mark_budget_exhausted(self, msg: str, *, extra: str = "") -> str:
+        """预算触顶的统一标注：告知步数上限与未完成风险，不伪装正常完成。"""
+
+        return (
+            f"⚠️ 已达到步数上限（{self.max_iterations} 步），{extra}"
+            f"以下是停止时整理的结果（任务可能未完成）：\n\n{msg}"
+        )
 
     def _parse_response(self, response: str) -> dict[str, Any]:
         """解析 LLM 的 JSON 输出（委托给 response_adapter 中间件）。

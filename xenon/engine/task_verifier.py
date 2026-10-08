@@ -27,7 +27,9 @@ _ACCEPTANCE_RE = re.compile(
     re.IGNORECASE,
 )
 _SUCCESS_CLAIM = re.compile(
-    r"(已完成|全部通过|全绿|成功|通过验证|验证通过|All .* passed|✅)",
+    r"(已(?:经)?(?:成功)?完成|全部通过|全绿|任务完成|目标(?:已)?达成"
+    r"|通过验证|验证通过|修复完成|问题已解决|已修复|成功完成|成功修复"
+    r"|All\s+\S*\s*passed)",
     re.IGNORECASE,
 )
 _FAILURE_CLAIM = re.compile(

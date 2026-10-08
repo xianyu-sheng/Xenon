@@ -14,6 +14,20 @@ from typing import Any
 from xenon.engine.registry import register_engine
 
 
+def _step_budget(default: int) -> int:
+    """单次运行的步数上限：`XENON_MAX_ITERATIONS` 可调，默认不变。"""
+
+    import os
+
+    raw = os.environ.get("XENON_MAX_ITERATIONS", "").strip()
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
+
+
 # ── 引擎工厂 ──────────────────────────────────────────────
 # 每个 factory 只负责「这个范式独有的调参」；公共 kwargs（model_priority /
 # model_pool / auto_router / callback / model_configs / permission_gate）由
@@ -26,13 +40,13 @@ def _make_react(**kwargs: Any) -> Any:
     # 普通对话任务可能涉及若干次「读 / 改 / 验证」循环。保留引擎自身的单次运行
     # 上限，同时给交互路径留出中等长度任务的空间；协议重试与压缩仍受
     # BudgetManager 的 2× 上限约束。
-    return ReActEngine(max_iterations=40, **kwargs)
+    return ReActEngine(max_iterations=_step_budget(40), **kwargs)
 
 
 def _make_plan_execute(**kwargs: Any) -> Any:
     from xenon.engine.plan_execute_engine import PlanExecuteEngine
 
-    return PlanExecuteEngine(max_steps=40, **kwargs)
+    return PlanExecuteEngine(max_steps=_step_budget(40), **kwargs)
 
 
 def _make_reflection(**kwargs: Any) -> Any:
@@ -44,19 +58,23 @@ def _make_reflection(**kwargs: Any) -> Any:
 def _make_plan_react(**kwargs: Any) -> Any:
     from xenon.engine.combined_engines import PlanReactEngine
 
-    return PlanReactEngine(max_steps=24, react_iterations=24, **kwargs)
+    return PlanReactEngine(
+        max_steps=_step_budget(24), react_iterations=_step_budget(24), **kwargs
+    )
 
 
 def _make_plan_reflection(**kwargs: Any) -> Any:
     from xenon.engine.combined_engines import PlanReflectionEngine
 
-    return PlanReflectionEngine(max_steps=24, review_rounds=2, **kwargs)
+    return PlanReflectionEngine(max_steps=_step_budget(24), review_rounds=2, **kwargs)
 
 
 def _make_react_reflection(**kwargs: Any) -> Any:
     from xenon.engine.combined_engines import ReactReflectionEngine
 
-    return ReactReflectionEngine(react_iterations=24, review_rounds=2, **kwargs)
+    return ReactReflectionEngine(
+        react_iterations=_step_budget(24), review_rounds=2, **kwargs
+    )
 
 
 # ── 注册 ──────────────────────────────────────────────────

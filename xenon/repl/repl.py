@@ -71,6 +71,18 @@ from xenon.repl.repl_input import (  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+
+def _verify_retries_limit() -> int:
+    """发布门重试上限：默认 2，XENON_VERIFY_RETRIES 可调（无效值回退默认，下限 0）。"""
+
+    raw = os.environ.get("XENON_VERIFY_RETRIES", "").strip()
+    if not raw:
+        return 2
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 2
+
 # ── prompt_toolkit（可选依赖，不可用时回退自建输入）────────────
 try:
     from prompt_toolkit import PromptSession
@@ -2895,6 +2907,52 @@ class REPL:
             self._persist_engine_trace(engine)
             model_used = self._engine_model_used(engine, model_ids)
             self.ctx_mgr.add_assistant_message(result, model_used=model_used)
+
+            # ── 发布门 v3：校验未通过 → 同回合反馈重试（闭环上限 XENON_VERIFY_RETRIES）──
+            panel = callback.get_thinking_panel()
+            retries_left = _verify_retries_limit()
+            while panel is not None and retries_left > 0:
+                verification_ok, verification_reasons = self._verify_turn(
+                    panel, result
+                )
+                if verification_ok:
+                    break
+                retries_left -= 1
+                self._record_event(
+                    "verification/retry",
+                    reasons=verification_reasons,
+                    attempts_left=retries_left,
+                )
+                feedback = (
+                    "【任务校验未通过，请修复后重新总结】\n"
+                    + "\n".join(f"- {r}" for r in verification_reasons)
+                    + "\n要求：1) 重新执行失败的工具调用并修复；"
+                    "2) 若无法修复，必须在最终总结中如实列出失败项及其影响，不得宣称成功；"
+                    "3) 修复后再给出结论。"
+                )
+                self.ctx_mgr.add_user_message(feedback)
+                # 旧引擎为单次运行语义：重试轮新建引擎，复用同一会话历史。
+                callback = self._make_callback()
+                engine = spec.factory(
+                    model_priority=model_ids,
+                    model_pool=self.model_pool,
+                    auto_router=self.auto_router,
+                    callback=callback,
+                    model_configs=dict(self.registry.models),
+                    permission_gate=self._permission_gate,
+                )
+                self._inject_mcp_tools_into_engine(engine)
+                self._bind_interactive_tool_runtime(engine)
+                self._start_log_capture()
+                result = engine.run(
+                    feedback, context=self.agent_context, ctx_mgr=self.ctx_mgr
+                )
+                self._captured_log = self._stop_log_capture()
+                self._persist_engine_trace(engine)
+                model_used = self._engine_model_used(engine, model_ids) or model_used
+                self.ctx_mgr.add_assistant_message(result, model_used=model_used)
+                panel = callback.get_thinking_panel()
+
             self._render_engine_result(callback, result, spec.result_title)
             # P1-High 问题1 修复: 引擎模式统一通过 record_model_success 更新状态
             if model_used:
