@@ -3339,6 +3339,54 @@ class REPL:
             logger.debug("任务校验执行失败（已忽略）", exc_info=True)
             return True, []
 
+    def _rewind_to_turn(self, n: int) -> tuple[bool, list[str]]:
+        """截断上下文到第 n 个用户回合；返回其后的文件产物清单。"""
+
+        history = list(getattr(self.ctx_mgr, "history", []))
+        user_turns = [t for t in history if getattr(t, "role", "") == "user"]
+        if n < 1 or n > len(user_turns):
+            return False, []
+        target = user_turns[n - 1]
+        kept = history[: history.index(target) + 1]
+        self.ctx_mgr.clear()
+        for turn in kept:
+            self.ctx_mgr.add_message(
+                str(getattr(turn, "role", "user")),
+                str(getattr(turn, "content", "")),
+                model_used=getattr(turn, "model_used", None),
+                node_id=getattr(turn, "node_id", None),
+                metadata=getattr(turn, "metadata", {}) or {},
+                task_tier=int(getattr(turn, "task_tier", 3) or 3),
+                turn_type=getattr(turn, "turn_type", "general") or "general",
+                semantic_group_id=getattr(turn, "semantic_group_id", None),
+            )
+        self._pending_action = None
+        self._boundary_approved_once.clear()
+        self._record_event("rewind", turn=n)
+        return True, self._artifacts_since_turn(n)
+
+    def _artifacts_since_turn(self, n: int) -> list[str]:
+        """事件日志里第 n 个用户回合之后的成功产物（只读提示）。"""
+
+        log = getattr(self, "_session_events", None)
+        if log is None:
+            return []
+        out: list[str] = []
+        user_count = 0
+        for event in log.read():
+            if event.get("type") == "turn/user":
+                user_count += 1
+                continue
+            if (
+                event.get("type") == "tool/result"
+                and event.get("success")
+                and user_count > n
+            ):
+                for path in event.get("paths") or []:
+                    if path and str(path) not in out:
+                        out.append(str(path))
+        return out
+
     def _record_event(self, event_type: str, **data: object) -> str | None:
         """Best-effort append to the additive session fact log."""
 
