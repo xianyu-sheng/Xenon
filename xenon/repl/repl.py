@@ -952,7 +952,7 @@ class REPL:
         modified: list[str] = []
 
         for step in panel.steps:
-            if not step.action or step.is_error:
+            if not step.action:
                 continue
             action = step.action
             ai = step.action_input if isinstance(step.action_input, dict) else {}
@@ -974,14 +974,17 @@ class REPL:
                         if isinstance(f, dict) and "path" in f:
                             paths.append(str(f["path"]))
 
+            # 失败的工具也要进事实日志（回合归档需要失败日志）；
+            # 工作记忆仍只吸收成功结果。
             self._record_event(
                 "tool/result",
                 tool=str(action),
-                success=True,
+                success=not step.is_error,
                 paths=[str(p) for p in paths[:20]],
+                error=(str(step.error or "")[:120] if step.is_error else ""),
             )
 
-            if not paths:
+            if step.is_error or not paths:
                 continue
 
             for p in paths:
@@ -1995,11 +1998,16 @@ class REPL:
                 requires_tools=turn_contract_obj.requires_tools,
             )
         )
-        # 自动 compact 检查
+        # 自动 compact 检查：优先用事件日志的结构化回合归档（确定性、零 LLM）。
         if self.ctx_mgr.needs_compact():
-            console.print(
-                "[dim]· 对话较长，建议 [bold cyan]/compact[/bold cyan] 压缩[/dim]"
-            )
+            if self._auto_compact():
+                console.print(
+                    "[dim]· 已自动压缩早期对话（结构化回合归档，完整消息保留最近几轮）[/dim]"
+                )
+            else:
+                console.print(
+                    "[dim]· 对话较长，建议 [bold cyan]/compact[/bold cyan] 压缩[/dim]"
+                )
 
         # 保存 undo 快照
         self.ctx_mgr.save_snapshot()
@@ -3167,6 +3175,32 @@ class REPL:
                 gate_id=gate_id,
             )
         self._pending_action = detected
+
+    def _auto_compact(self) -> bool:
+        """用事件日志做确定性回合归档，替代 LLM 摘要压缩。"""
+
+        log = getattr(self, "_session_events", None)
+        if log is None:
+            return False
+        try:
+            from xenon.session.archive import (
+                build_turn_archives,
+                render_archive_block,
+            )
+
+            events = log.read()
+            archives = build_turn_archives(events)
+            if not archives:
+                return False
+            block = render_archive_block(archives)
+            if not block:
+                return False
+            self.ctx_mgr.compact(summary=block)
+            self._record_event("compaction", turns_archived=len(archives))
+            return True
+        except Exception:  # noqa: BLE001 — 压缩失败不能阻断回合
+            logger.debug("自动压缩失败（已忽略）", exc_info=True)
+            return False
 
     def _record_event(self, event_type: str, **data: object) -> str | None:
         """Best-effort append to the additive session fact log."""
