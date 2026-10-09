@@ -1304,6 +1304,17 @@ class ReActEngine(BaseEngine):
         execution_reason = context.get("_execution_reason")
         if execution_reason is not None:
             sub_ctx.set("_execution_reason", execution_reason)
+        # 决策 4：子代理默认只读（工具集封顶在 READ_ONLY，永不提升）。
+        # 父级可显式放行：task/task_dict 里 read_only=false。
+        if bool(action_input.get("read_only", True)):
+            from xenon.repl.execution_policy import ExecutionLevel
+
+            parent_level = int(execution_level or ExecutionLevel.READ_ONLY)
+            sub_ctx.set(
+                "_execution_level",
+                min(parent_level, int(ExecutionLevel.READ_ONLY)),
+            )
+            sub_ctx.set("_execution_reason", "子代理默认只读（read_only=true）")
 
         # 超时控制：在线程池中执行 sub.run()
         if timeout and timeout > 0:
@@ -1414,6 +1425,16 @@ class ReActEngine(BaseEngine):
             execution_reason = context.get("_execution_reason")
             if execution_reason is not None:
                 sub_ctx.set("_execution_reason", execution_reason)
+            # 决策 4：子代理默认只读（read_only=false 可显式放行）。
+            if bool(task_dict.get("read_only", True)):
+                from xenon.repl.execution_policy import ExecutionLevel
+
+                parent_level = int(execution_level or ExecutionLevel.READ_ONLY)
+                sub_ctx.set(
+                    "_execution_level",
+                    min(parent_level, int(ExecutionLevel.READ_ONLY)),
+                )
+                sub_ctx.set("_execution_reason", "子代理默认只读（read_only=true）")
 
             try:
                 if timeout and timeout > 0:

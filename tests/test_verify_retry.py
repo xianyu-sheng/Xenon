@@ -198,3 +198,81 @@ def test_run_engine_exhausts_retries_and_still_renders(monkeypatch, tmp_path):
     assert rendered == ["任务完成 ✅"]
     events = repl._session_events.read()
     assert sum(1 for e in events if e["type"] == "verification/retry") == 1
+
+
+def test_retry_budget_half_of_first_round_clamped(monkeypatch, tmp_path):
+    """决策 2：重试轮引擎预算 = 首轮实际步数的一半，clamp [10, 40]。"""
+
+    monkeypatch.setenv("XENON_SESSION_EVENTS_DIR", str(tmp_path))
+    monkeypatch.setenv("XENON_VERIFY_RETRIES", "1")
+    registry = ModelRegistry()
+    registry.add_model("openai/test", "test")
+    repl = REPL(registry=registry, streaming=False)
+    repl._last_user_text = "帮我看看这个项目"
+
+    engine_budgets: list[int] = []
+
+    class _BudgetEngine(_FakeEngine):
+        def __init__(self, answer: str):
+            super().__init__(answer)
+            self.max_iterations = 40
+
+    def factory(**kw):
+        engine = _BudgetEngine("任务完成 ✅")
+        engine_budgets.append(engine)
+        return engine
+
+    class _BigPanel:
+        steps = [_Step(True) for _ in range(30)]  # 首轮实际 30 步（含失败回执）
+        errors: list = []
+        tool_call_count = 30
+
+    callbacks = [_Callback(_BigPanel()), _Callback(_BigPanel())]
+    spec = EngineSpec(name="fake", mode_line="", factory=factory, result_title="")
+
+    monkeypatch.setattr(repl, "_make_callback", lambda: callbacks.pop(0))
+    monkeypatch.setattr(repl, "_start_log_capture", lambda: None)
+    monkeypatch.setattr(repl, "_stop_log_capture", lambda: "")
+    monkeypatch.setattr(repl, "_persist_engine_trace", lambda e: None)
+    monkeypatch.setattr(repl, "_inject_mcp_tools_into_engine", lambda e: None)
+    monkeypatch.setattr(repl, "_bind_interactive_tool_runtime", lambda e: None)
+    monkeypatch.setattr(repl, "_engine_model_used", lambda e, ids: None)
+    monkeypatch.setattr(repl, "_start_steering_listener", lambda e: None)
+    monkeypatch.setattr(repl, "_stop_steering_listener", lambda t: None)
+
+    class _Ctx:
+        def __init__(self):
+            self.user: list = []
+            self.assistant: list = []
+
+        def add_user_message(self, content, **kw):
+            self.user.append(content)
+
+        def add_assistant_message(self, content, **kw):
+            self.assistant.append(content)
+
+    monkeypatch.setattr(repl, "ctx_mgr", _Ctx())
+    monkeypatch.setattr(
+        repl, "_render_engine_result", lambda cb, res, title: None
+    )
+    monkeypatch.setattr(
+        repl,
+        "auto_router",
+        type("_R", (), {"record_model_success": lambda self, m: None})(),
+    )
+
+    repl._run_engine(spec, "帮我看看这个项目", ["openai/test"])
+
+    assert len(engine_budgets) == 2  # 首轮 + 一次重试
+    assert engine_budgets[0].max_iterations == 40  # 首轮不缩
+    assert engine_budgets[1].max_iterations == 15  # 30/2
+
+
+def test_retry_budget_helper_clamps(monkeypatch):
+    from xenon.repl.repl import _retry_budget_for
+
+    assert _retry_budget_for(0) == 10
+    assert _retry_budget_for(5) == 10
+    assert _retry_budget_for(30) == 15
+    assert _retry_budget_for(100) == 40
+    assert _retry_budget_for(19) == 10  # 19//2=9 → clamp 到 10

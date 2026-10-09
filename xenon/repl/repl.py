@@ -83,6 +83,16 @@ def _verify_retries_limit() -> int:
     except ValueError:
         return 2
 
+
+_RETRY_BUDGET_MIN = 10
+_RETRY_BUDGET_MAX = 40
+
+
+def _retry_budget_for(first_round_steps: int) -> int:
+    """重试轮步数预算：首轮实际步数的一半，clamp [10, 40]（决策 2）。"""
+
+    return max(_RETRY_BUDGET_MIN, min(_RETRY_BUDGET_MAX, max(1, first_round_steps) // 2))
+
 # ── prompt_toolkit（可选依赖，不可用时回退自建输入）────────────
 try:
     from prompt_toolkit import PromptSession
@@ -2932,6 +2942,7 @@ class REPL:
 
             # ── 发布门 v3：校验未通过 → 同回合反馈重试（闭环上限 XENON_VERIFY_RETRIES）──
             panel = callback.get_thinking_panel()
+            first_round_steps = len(getattr(panel, "steps", []) or []) if panel else 0
             retries_left = _verify_retries_limit()
             retries_spent = 0
             verification_ok, verification_reasons = True, []
@@ -2978,6 +2989,16 @@ class REPL:
                 )
                 self._inject_mcp_tools_into_engine(engine)
                 self._bind_interactive_tool_runtime(engine)
+                # 决策 2：重试轮预算 = 首轮实际步数的一半（clamp[10,40]）。
+                for _attr in ("max_iterations", "max_steps", "react_iterations", "max_rounds"):
+                    if hasattr(engine, _attr):
+                        try:
+                            setattr(
+                                engine, _attr, _retry_budget_for(first_round_steps)
+                            )
+                        except Exception:  # noqa: BLE001 — 属性只读则跳过
+                            pass
+                        break
                 self._start_log_capture()
                 result = engine.run(
                     feedback, context=self.agent_context, ctx_mgr=self.ctx_mgr
