@@ -6,6 +6,7 @@ Deterministic budget/continuation helpers with no REPL state.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 _RETRY_BUDGET_MIN = 10
@@ -85,3 +86,65 @@ def paths_from_panel(panel: Any) -> list[str]:
             if p not in found:
                 found.append(p)
     return found
+
+
+# ── 外部信息查询特征（通用语言结构，R1-2 从 repl.py 迁移）──
+
+_RE_QUESTION_STRUCTURE = re.compile(
+    r"[吗呢吧啊][？?]?$"  # 句末疑问语气词
+    r"|[？?]$"  # 问号结尾
+    r"|有没有|会不会|能不能|可不可以"  # 正反问结构
+    r"|怎么(?:走|去|办|样|回事)"  # 疑问代词 + 动作
+    r"|在哪里|在哪|什么时候|几点|多少"  # 疑问短语
+    r"|what|when|where|how|which|who",  # 英文疑问词
+    re.IGNORECASE,
+)
+_RE_QUERY_VERB = re.compile(
+    r"(?:帮|请|给).{0,3}(?:我)?(?:查|搜|找|查询|搜索|查找|看看|了解)"  # 委托查询
+    r"|^(?:查|搜|找|查询|搜索|查找|看看)"  # 句首查询动词
+    r"|(?:search|find|look\s*up|check|query)\s",  # 英文查询
+    re.IGNORECASE,
+)
+_RE_TIME_SENSITIVE = re.compile(
+    r"(?:今天|今日|现在|目前|最近|这周末|本周|下周|本月|这个月"
+    r"|明天|后天|昨天|周日|周一|周二|周三|周四|周五|周六"
+    r"|today|now|recently|this\s+week|next\s+week|tomorrow)",
+    re.IGNORECASE,
+)
+# 排除：明确是关于代码/文件的查询（由 正则信号层 处理）
+_RE_CODE_CONTEXT = re.compile(
+    r"(?:文件|代码|项目|脚本|程序|函数|类|目录|文件夹|bug|错误|报错"
+    r"|测试|配置|日志|commit|分支|仓库|git\b"
+    r"|\.(?:py|js|ts|java|go|rs|cpp|c|h|html|css|json|yaml|yml|toml|md|txt|sh)\b)",
+    re.IGNORECASE,
+)
+
+
+
+def _looks_like_external_query(text: str) -> bool:
+    """通用判断：输入是否具有"外部信息查询"特征。
+
+    基于语言结构而非领域关键词：
+    - 疑问结构（吗/呢/？/有没有/怎么走/在哪里/什么时候/几点/多少）
+    - 查询动词（查/搜/找/search/find）
+    - 时间敏感框架（今天/明天/最近...）
+
+    排除：明确关于代码/文件的查询（由 正则信号层 处理）。
+    """
+    if not text or len(text) < 3:
+        return False
+    # 代码相关 → 不归这里管
+    if _RE_CODE_CONTEXT.search(text):
+        return False
+    # 疑问结构 → 需要外部信息
+    if _RE_QUESTION_STRUCTURE.search(text):
+        return True
+    # 查询动词 → 在搜索/查找信息
+    if _RE_QUERY_VERB.search(text):
+        return True
+    # 时间敏感短语 → 大概率需要实时/外部数据
+    if _RE_TIME_SENSITIVE.search(text):
+        return True
+    return False
+
+
