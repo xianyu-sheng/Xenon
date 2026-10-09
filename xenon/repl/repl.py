@@ -22,9 +22,7 @@ from typing import Any
 
 from rich.console import Console
 from rich import box
-from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.padding import Padding
 from rich.table import Table
 from rich.text import Text
 from rich.prompt import Prompt
@@ -71,39 +69,12 @@ from xenon.repl.repl_input import (  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-
-def _verify_retries_limit() -> int:
-    """发布门重试上限：默认 2，XENON_VERIFY_RETRIES 可调（无效值回退默认，下限 0）。"""
-
-    raw = os.environ.get("XENON_VERIFY_RETRIES", "").strip()
-    if not raw:
-        return 2
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return 2
-
-
-_RETRY_BUDGET_MIN = 10
-_RETRY_BUDGET_MAX = 40
-
-
-def _retry_budget_for(first_round_steps: int) -> int:
-    """重试轮步数预算：首轮实际步数的一半，clamp 可配置（决策 2）。
-
-    XENON_RETRY_BUDGET_MIN / XENON_RETRY_BUDGET_MAX（默认 10/40，无效值回退）。"""
-
-    try:
-        lo = int(os.environ.get("XENON_RETRY_BUDGET_MIN", "10"))
-    except ValueError:
-        lo = _RETRY_BUDGET_MIN
-    try:
-        hi = int(os.environ.get("XENON_RETRY_BUDGET_MAX", "40"))
-    except ValueError:
-        hi = _RETRY_BUDGET_MAX
-    if hi < lo:
-        hi = lo
-    return max(lo, min(hi, max(1, first_round_steps) // 2))
+# R1: 纯函数已提取到具名模块；这里保留兼容导出（历史调用点/测试）。
+from xenon.repl.turn_helpers import (  # noqa: E402
+    resume_prompt as _resume_prompt_fn,
+    retry_budget_for as _retry_budget_for,
+    verify_retries_limit as _verify_retries_limit,
+)
 
 # ── prompt_toolkit（可选依赖，不可用时回退自建输入）────────────
 try:
@@ -574,61 +545,11 @@ class REPL:
 
     @staticmethod
     def _diff_preview(tool_name: str, params: dict) -> str:
-        """审批面板里的 diff 预览（写入/编辑/批量），最多 30 行。"""
+        """审批面板里的 diff 预览（实现见 xenon.repl.render）。"""
 
-        import difflib
+        from xenon.repl.render import diff_preview
 
-        try:
-            if tool_name in {"write_file"}:
-                path = params.get("file_path")
-                content = params.get("content")
-                if not path or content is None:
-                    return ""
-                old_lines: list[str] = []
-                if os.path.exists(str(path)):
-                    try:
-                        old_lines = Path(str(path)).read_text(
-                            encoding="utf-8", errors="replace"
-                        ).splitlines()
-                    except OSError:
-                        old_lines = []
-                return "\n".join(
-                    list(
-                        difflib.unified_diff(
-                            old_lines,
-                            str(content).splitlines(),
-                            fromfile=str(path),
-                            tofile=f"{path}（拟写入）",
-                            lineterm="",
-                        )
-                    )[:30]
-                )
-            if tool_name == "edit_file":
-                path = params.get("file_path")
-                if not path:
-                    return ""
-                return "\n".join(
-                    list(
-                        difflib.unified_diff(
-                            str(params.get("old_text") or "").splitlines(),
-                            str(params.get("new_text") or "").splitlines(),
-                            fromfile=str(path),
-                            tofile=f"{path}（修改后）",
-                            lineterm="",
-                        )
-                    )[:30]
-                )
-            if tool_name in {"batch_write", "batch_edit"}:
-                items = params.get("files") or params.get("edits") or []
-                lines = [
-                    f"  - {item.get('file_path') or item.get('path')}"
-                    for item in items[:10]
-                    if isinstance(item, dict)
-                ]
-                return "涉及文件:\n" + "\n".join(lines)
-        except Exception:  # noqa: BLE001 — 预览失败只影响展示
-            return ""
-        return ""
+        return diff_preview(tool_name, params)
 
     def _confirm_checkpoint(self, reason: str) -> str:
         """预算检查点续跑审批：y=继续下一窗口 / n=停止并交付进度草稿。fail-closed。"""
@@ -1034,42 +955,29 @@ class REPL:
 
     @staticmethod
     def _render_verification_failure(draft: str, reasons: list[str]) -> None:
-        """未通过发布门的答案：醒目标记 + 草稿内容，不渲染为成功结果。"""
+        """未通过发布门的答案（实现见 xenon.repl.render）。"""
 
-        console.print()
-        header = Text()
-        header.append("● ", style="bold red")
-        header.append("任务校验未通过", style="bold red")
-        console.print(header)
-        console.print(
-            Panel(
-                "\n".join(f"- {r}" for r in reasons)
-                + "\n\n以下回答未通过校验，按未完成处理（草稿）：\n\n"
-                + str(draft or ""),
-                border_style="red",
-                padding=(0, 1),
-            )
-        )
+        from xenon.repl.render import render_verification_failure
+
+        render_verification_failure(draft, reasons)
 
     @staticmethod
     def _render_assistant_text(
         content: str, *, title: str = "Assistant", model_id: str | None = None
     ) -> None:
-        """无边框渲染模型正文，让内容成为视觉焦点。"""
-        console.print()
-        header = Text()
-        header.append("● ", style="bold #67e8f9")
-        header.append(title, style="bold")
-        if model_id:
-            header.append(f"  {model_id}", style="dim")
-        console.print(header)
-        console.print(Padding(Markdown(content), (0, 0, 0, 2)))
+        """无边框渲染模型正文（实现见 xenon.repl.render）。"""
+
+        from xenon.repl.render import render_assistant_text
+
+        render_assistant_text(content, title=title, model_id=model_id)
 
     @staticmethod
     def _render_secondary_text(title: str, content: str) -> None:
-        """无边框渲染提示词等辅助信息，并整体降低视觉权重。"""
-        console.print(Text(f"  {title}", style="dim"))
-        console.print(Padding(Text(content, style="dim"), (0, 0, 0, 4)))
+        """无边框渲染辅助信息（实现见 xenon.repl.render）。"""
+
+        from xenon.repl.render import render_secondary_text
+
+        render_secondary_text(title, content)
 
     # v0.5.4: 从成功的工具调用中提取文件路径，更新工作记忆，
     # 使后续对话能知道"刚刚创建/修改了哪些文件"。
@@ -1078,63 +986,11 @@ class REPL:
 
     @staticmethod
     def _unwrap_json_result(result: str) -> str:
-        """安全网：如果 result 是裸 JSON 文本，提取 final_answer。
+        """安全网：如果 result 是裸 JSON 文本，提取 final_answer（实现见 xenon.repl.render）。"""
 
-        当 parse_react 因内嵌 JSON/特殊字符解析失败时，引擎可能返回
-        原始 JSON 字符串而非提取后的 final_answer。此方法做最终兜底。
-        """
-        if not result or not result.strip():
-            return result
-        text = result.strip()
-        # 检测是否为 JSON 对象或数组
-        if not (text.startswith("{") or text.startswith("[")):
-            return result
-        if '"final_answer"' not in text and '"answer"' not in text:
-            return result
-        try:
-            import json as _json
+        from xenon.repl.render import unwrap_json_result
 
-            data = _json.loads(text)
-            # 单对象
-            if isinstance(data, dict):
-                fa = (
-                    data.get("final_answer") or data.get("answer") or data.get("result")
-                )
-                if fa and isinstance(fa, str) and len(fa) > 20:
-                    logger.info("_unwrap_json_result: 从 JSON 提取 final_answer")
-                    return fa
-            # 数组：取首个含 final_answer 的对象
-            if isinstance(data, list):
-                for item in data:
-                    if isinstance(item, dict):
-                        fa = (
-                            item.get("final_answer")
-                            or item.get("answer")
-                            or item.get("result")
-                        )
-                        if fa and isinstance(fa, str) and len(fa) > 20:
-                            logger.info(
-                                "_unwrap_json_result: 从 JSON 数组提取 final_answer"
-                            )
-                            return fa
-        except Exception:
-            # JSON 解析失败，尝试正则提取
-            import re
-
-            for key in ("final_answer", "answer"):
-                m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
-                if m:
-                    val = m.group(1)
-                    # 还原转义
-                    val = (
-                        val.replace("\\n", "\n")
-                        .replace("\\t", "\t")
-                        .replace('\\"', '"')
-                    )
-                    if len(val) > 20:
-                        logger.info(f"_unwrap_json_result: 正则提取 {key}")
-                        return val
-        return result
+        return unwrap_json_result(result)
 
     def _track_session_files(self, panel) -> None:
         """从 ThinkingPanel 中提取文件路径，更新 ContextManager 工作记忆。"""
@@ -3366,13 +3222,9 @@ class REPL:
 
     @staticmethod
     def _resume_prompt(node: Any) -> str:
-        """续接提示：只陈述结构化事实（原因+指令），不猜测未记录内容。"""
+        """续接提示（实现见 xenon.repl.turn_helpers）。"""
 
-        reason = node.verdict_reasons[0][:80] if node.verdict_reasons else node.status
-        return (
-            f"（续接上一轮任务：上一轮因「{reason}」未完成。"
-            f"请先复核已完成的进度，再从中断处继续，最后给出结论。）\n"
-        )
+        return _resume_prompt_fn(node)
 
     def _ensure_turn_tree_rebuilt(self) -> None:
         """首次访问时从事件日志重建树（best effort，失败保留新树）。"""
