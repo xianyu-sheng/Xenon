@@ -43,3 +43,18 @@ def test_chat_completion_is_the_real_function(request):
         assert "fake" not in name.lower() and "mock" not in name.lower(), (
             f"{mod.__name__}.{attr} 残留 mock: {name}（fixture 未兜住泄漏）"
         )
+
+
+def test_cache_telemetry_is_redirected_away_from_home():
+    """``_isolate_cache_telemetry`` 生效时，缓存目录不得指向用户家目录。
+
+    cache 用例会写遥测；缺少该 fixture 时会污染真实的 ``~`` 目录。
+    """
+    import os
+    from pathlib import Path
+
+    cache_dir = os.environ.get("XENON_CACHE_DIR")
+    assert cache_dir, "XENON_CACHE_DIR 未设置，_isolate_cache_telemetry 未生效"
+    assert Path.home() not in Path(cache_dir).parents, (
+        f"缓存目录仍在家目录下: {cache_dir}"
+    )

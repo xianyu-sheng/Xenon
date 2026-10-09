@@ -207,3 +207,39 @@ def cmd_auto_route(*, args: str, session_state: dict, **kwargs) -> str | None:
             "\n[dim]提示: /auto-route on 启用, /auto-route off 禁用[/dim]"
         )
         return None
+
+
+# ── 命令组自动发现（注册完整性的唯一保障）─────────────────────────
+# 命令注册依赖模块导入副作用（@register_command 装饰器）。此前靠手写
+# import 清单，漏加时命令会静默消失（历史事故：/rewind /fork 丢失）。
+# 上面的 import 仅承担「兼容导出」职责；**注册完整性由本发现机制保证**：
+# 遍历 command_groups 包内所有模块，未导入的补导入——新增命令组文件
+# 无需再改任何清单。
+
+def _import_command_group_modules() -> None:
+    import importlib
+    import logging
+    import pkgutil
+    import sys
+
+    import xenon.repl.command_groups as pkg
+
+    logger = logging.getLogger(__name__)
+    prefix = pkg.__name__ + "."
+    imported = {
+        m.__name__
+        for m in list(sys.modules.values())
+        if m is not None and m.__name__.startswith(prefix)
+    }
+    for info in pkgutil.iter_modules(pkg.__path__):
+        if info.ispkg:
+            continue
+        full = prefix + info.name
+        if full not in imported:
+            try:
+                importlib.import_module(full)
+            except Exception as exc:  # noqa: BLE001 — 单模块失败不阻断其余命令
+                logger.warning("命令组模块导入失败 %s: %s", full, exc)
+
+
+_import_command_group_modules()

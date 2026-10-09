@@ -1,6 +1,6 @@
 """全量工具可用性审查 — 对每个工具做单元级冒烟测试。
 
-用法: python -m pytest xenon/tests/test_tool_audit.py -v
+用法: python -m pytest tests/test_tool_audit.py -v
 """
 
 from __future__ import annotations

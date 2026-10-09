@@ -68,7 +68,7 @@ target-version = "py310"
 
 [tool.coverage.run]
 source = ["xenon"]
-omit = ["xenon/tests/*"]
+omit = []
 
 [tool.coverage.report]
 fail_under = 55
