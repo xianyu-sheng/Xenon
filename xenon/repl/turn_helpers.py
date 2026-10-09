@@ -50,3 +50,38 @@ def resume_prompt(node: Any) -> str:
         f"（续接上一轮任务：上一轮因「{reason}」未完成。"
         f"请先复核已完成的进度，再从中断处继续，最后给出结论。）\n"
     )
+
+
+def panel_step_paths(step: Any) -> list[str]:
+    """从单个面板步骤提取文件路径（写/改/批量），供产物追踪复用。"""
+
+    ai = getattr(step, "action_input", {}) or {}
+    if not isinstance(ai, dict):
+        return []
+    paths: list[str] = []
+    for key in ("file_path", "file_paths", "path", "target_directory"):
+        val = ai.get(key)
+        if isinstance(val, str):
+            paths.append(val)
+        elif isinstance(val, list):
+            paths.extend([str(v) for v in val if isinstance(v, str)])
+    if getattr(step, "action", "") == "batch_write" and "files" in ai:
+        files = ai["files"]
+        if isinstance(files, list):
+            for f in files:
+                if isinstance(f, dict) and "path" in f:
+                    paths.append(str(f["path"]))
+    return paths
+
+
+def paths_from_panel(panel: Any) -> list[str]:
+    """回合内成功写入/修改的文件路径（去重保序，最新在前）。"""
+
+    found: list[str] = []
+    for step in getattr(panel, "steps", []) or []:
+        if getattr(step, "is_error", False) or not getattr(step, "action", None):
+            continue
+        for p in panel_step_paths(step):
+            if p not in found:
+                found.append(p)
+    return found

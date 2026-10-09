@@ -189,7 +189,6 @@ class BaseEngine(ABC):
 
         # v0.8.3: 引擎层跨轮次验证循环组件（可选，默认 None = 不启用）。
         # 子引擎在 __init__ 中创建并赋值，或由外部注入。
-        self.verification_loop: Any = None
 
     def register_gate(self, gate: Any) -> None:
         """挂载一个 EvidenceGate 到本引擎的会话级管线。"""

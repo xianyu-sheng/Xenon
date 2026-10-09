@@ -130,3 +130,45 @@ def test_task_state_block_includes_tail_status(monkeypatch, tmp_path):
     block = repl._task_state_block()
     assert "interrupted" in block
     assert "继续" in block
+
+
+def test_finish_turn_node_records_artifacts_from_panel(monkeypatch, tmp_path):
+    monkeypatch.setenv("XENON_SESSION_EVENTS_DIR", str(tmp_path))
+    registry = ModelRegistry()
+    registry.add_model("openai/test", "test")
+    repl = REPL(registry=registry, streaming=False)
+    repl._turn_tree_rebuilt = True
+
+    class _Step:
+        action = "write_file"
+        is_error = False
+        action_input = {"file_path": "out.py"}
+        observation = "ok"
+
+    class _Panel:
+        steps = [_Step()]
+        errors: list = []
+        tool_call_count = 1
+
+    node = repl._turn_tree.append_turn("写文件")
+    repl._finish_turn_node("passed", engine="react", panel=_Panel())
+    assert node.artifacts == ["out.py"]
+    # 状态块单一来源：产物来自树尾节点
+    block = repl._task_state_block()
+    assert "out.py" in block
+
+
+def test_paths_from_panel_skips_failures_and_dedups():
+    from xenon.repl.turn_helpers import paths_from_panel
+
+    class _S:
+        def __init__(self, action, path, ok=True):
+            self.action = action
+            self.action_input = {"file_path": path}
+            self.is_error = not ok
+            self.observation = ""
+
+    class _P:
+        steps = [_S("write_file", "a.py"), _S("write_file", "a.py"), _S("edit_file", "b.py", ok=False)]
+
+    assert paths_from_panel(_P()) == ["a.py"]

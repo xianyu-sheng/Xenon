@@ -224,7 +224,6 @@ class PlanReactEngine(SteeringMixin):
         *,
         max_steps: int = 24,
         react_iterations: int = 24,
-        verification_loop: bool = True,  # v0.8.3 A/B：验证循环开关
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
         model_pool: Any = None,
@@ -235,7 +234,6 @@ class PlanReactEngine(SteeringMixin):
         self.model_priority = model_priority
         self.max_steps = max_steps
         self.react_iterations = react_iterations
-        self._verification_enabled = verification_loop
         self.callback = callback or EngineCallback()
         self.model_pool = model_pool
         self.auto_router = auto_router
@@ -249,23 +247,13 @@ class PlanReactEngine(SteeringMixin):
         self.planner = PlanExecuteEngine(
             model_priority,
             max_steps=max_steps,
-            verification_loop=verification_loop,
             **common,
         )
         self.reactor = ReActEngine(
             model_priority,
             max_iterations=react_iterations,
-            verification_loop=verification_loop,
             **common,
         )
-        # v0.8.3: 引擎层跨轮次验证循环
-        from xenon.engine.verification_loop import VerificationLoop
-
-        self.verification_loop = VerificationLoop(
-            max_rounds=8,
-            max_steps=self.max_steps,
-        )
-        self.verification_loop._engine = self
         self._last_tracker: ToolExecutionTracker | None = None
         self.last_model_used: str | None = None
         # v0.9.1: 循环检测器集成（组合层）
@@ -433,37 +421,6 @@ class PlanReactEngine(SteeringMixin):
                 )
                 break
 
-        # v0.8.3: 学习式验证循环——步骤执行完毕后，若需要验证则进入修复循环
-        self.verification_loop.reset()
-        if getattr(self, "_verification_enabled", True):
-            evidence = ExecutionEvidence.capture(aggregate, workspace_root)
-            self.verification_loop._active = True
-        while self.verification_loop.should_continue:
-            repair_prompt = self.verification_loop.feed(evidence, user_input, ctx)
-            if repair_prompt is None:
-                break
-            logger.warning(
-                "PlanReact: 学习式验证循环 R%d——注入修复步骤",
-                self.verification_loop.round_count + 1,
-            )
-            self.callback.on_warning(
-                "检测到修改已落盘但测试未通过，正在读取失败输出并修复…"
-            )
-            phase_ctx = _isolated_ctx(ctx)
-            self.reactor._last_tracker = None
-            try:
-                _ = self.reactor.run(
-                    repair_prompt,
-                    context=phase_ctx,
-                    ctx_mgr=ctx_mgr,
-                )
-                _merge_tracker(aggregate, self.reactor._last_tracker)
-            except Exception as exc:
-                logger.warning("PlanReact 验证修复失败: %s", exc)
-                break
-            evidence = ExecutionEvidence.capture(aggregate, workspace_root)
-            outcome_tag = "fixed" if evidence.successful_tests else "still_failing"
-            self.verification_loop.record_outcome(evidence, outcome=outcome_tag)
 
         return self._finalize_plan_react(
             ctx, self._summarize(user_input, results, analysis)
@@ -544,14 +501,8 @@ class _ReflectionCombination(SteeringMixin):
     callback: EngineCallback
     _last_tracker: ToolExecutionTracker | None
 
-    def __init__(self, verification_loop: bool = True) -> None:
+    def __init__(self) -> None:
         SteeringMixin.__init__(self)
-        self._verification_enabled = verification_loop
-        # v0.8.3: 引擎层跨轮次验证循环（组合层，在子引擎各自验证后聚合检查）
-        from xenon.engine.verification_loop import VerificationLoop
-
-        self.verification_loop = VerificationLoop(max_rounds=8)
-        self.verification_loop._engine = self
         # v0.9.1: 循环检测器集成（组合层）
         from xenon.engine.loop_detector import LoopDetector
 
@@ -726,38 +677,6 @@ class _ReflectionCombination(SteeringMixin):
             except Exception as exc:
                 logger.warning("Post-repair review failed: %s", exc)
 
-        # v0.8.3: 学习式验证循环——修复后检查是否需要进一步验证
-        self.verification_loop.reset()
-        if getattr(self, "_verification_enabled", True):
-            evidence = ExecutionEvidence.capture(aggregate, root)
-            self.verification_loop._active = True
-        while self.verification_loop.should_continue:
-            v_prompt = self.verification_loop.feed(evidence, user_input, ctx)
-            if v_prompt is None:
-                break
-            logger.warning(
-                "Reflection组合: 学习式验证循环 R%d——注入修复",
-                self.verification_loop.round_count + 1,
-            )
-            self.callback.on_warning(
-                "检测到修改已落盘但测试未通过，正在读取失败输出并修复…"
-            )
-            repair_ctx = _isolated_ctx(ctx)
-            self.repairer._last_tracker = None
-            try:
-                v_result = self.repairer.run(
-                    v_prompt,
-                    context=repair_ctx,
-                    ctx_mgr=ctx_mgr,
-                )
-                _merge_tracker(aggregate, self.repairer._last_tracker)
-                repaired_output = v_result
-            except Exception as exc:
-                logger.warning("Reflection组合 验证修复失败: %s", exc)
-                break
-            evidence = ExecutionEvidence.capture(aggregate, root)
-            outcome_tag = "fixed" if evidence.successful_tests else "still_failing"
-            self.verification_loop.record_outcome(evidence, outcome=outcome_tag)
 
         return self._finalize_combined(ctx, repaired_output or initial_output)
 
@@ -773,14 +692,13 @@ class PlanReflectionEngine(_ReflectionCombination):
         review_rounds: int = 2,
         pass_threshold: int = 7,
         repair_iterations: int | None = None,
-        verification_loop: bool = True,  # v0.8.3 A/B：验证循环开关
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
         model_pool: Any = None,
         auto_router: Any = None,
         permission_gate: Any = None,
     ) -> None:
-        super().__init__(verification_loop=verification_loop)
+        super().__init__()
         self.model_priority = model_priority
         self.max_steps = max_steps
         self.review_rounds = review_rounds
@@ -798,7 +716,6 @@ class PlanReflectionEngine(_ReflectionCombination):
         self.planner = PlanExecuteEngine(
             model_priority,
             max_steps=max_steps,
-            verification_loop=verification_loop,
             **common,
         )
         self.reflector = ReflectionEngine(
@@ -813,7 +730,6 @@ class PlanReflectionEngine(_ReflectionCombination):
         self.repairer = ReActEngine(
             model_priority,
             max_iterations=max(1, repair_budget),
-            verification_loop=verification_loop,
             **common,
         )
         self._last_tracker: ToolExecutionTracker | None = None
@@ -851,14 +767,13 @@ class ReactReflectionEngine(_ReflectionCombination):
         react_iterations: int = 24,
         review_rounds: int = 2,
         pass_threshold: int = 7,
-        verification_loop: bool = True,  # v0.8.3 A/B：验证循环开关
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
         model_pool: Any = None,
         auto_router: Any = None,
         permission_gate: Any = None,
     ) -> None:
-        super().__init__(verification_loop=verification_loop)
+        super().__init__()
         self.model_priority = model_priority
         self.react_iterations = react_iterations
         self.review_rounds = review_rounds
@@ -876,7 +791,6 @@ class ReactReflectionEngine(_ReflectionCombination):
         self.reactor = ReActEngine(
             model_priority,
             max_iterations=react_iterations,
-            verification_loop=verification_loop,
             **common,
         )
         # A separate repairer prevents the initial ReAct tracker and loop state
@@ -884,7 +798,6 @@ class ReactReflectionEngine(_ReflectionCombination):
         self.repairer = ReActEngine(
             model_priority,
             max_iterations=max(1, min(react_iterations, 10)),
-            verification_loop=verification_loop,
             **common,
         )
         self.reflector = ReflectionEngine(

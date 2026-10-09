@@ -3261,6 +3261,10 @@ class REPL:
                 fields["errors"] = sum(
                     1 for s in (getattr(panel, "steps", []) or []) if s.is_error
                 ) + len(getattr(panel, "errors", []) or [])
+                # R4: 产物单一来源——树节点 artifacts（回合内成功写入路径）。
+                from xenon.repl.turn_helpers import paths_from_panel
+
+                fields["artifacts"] = paths_from_panel(panel)[-10:]
             if reasons:
                 fields["verdict_reasons"] = list(reasons)
             # 同因中断快速熔断（402 类基础设施错误）：连续两轮同因 → fused + 指引。
@@ -3316,7 +3320,8 @@ class REPL:
             block = build_task_state_block(
                 active_goal=view.active_goal if view else None,
                 pending=self._pending_action,
-                artifacts=[a.path for a in (view.artifacts if view else [])],
+                # R4: 产物来自树尾节点（单一来源）；目标仍由投影提供。
+                artifacts=self._turn_tree.tail().artifacts,
                 plan_mode=self._plan_mode_active,
             )
             suffix = self._turn_tree.status_suffix()

@@ -51,7 +51,6 @@ def test_react_rewrites_abrupt_final_answer_instead_of_displaying_it(monkeypatch
         ["test/model"],
         max_iterations=4,
         native_fc=False,
-        verification_loop=False,
     )
 
     def fake_call(phase, messages, *args, **kwargs):

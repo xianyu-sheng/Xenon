@@ -402,40 +402,20 @@ def test_reflection_repair_budget_matches_parent_execution_budget():
     assert react.repairer.max_iterations == 8
 
 
-# ------------------- verification_loop A/B 开关传播（issue #20） -------------------
+# ------------------- R3：验证循环已上移到回合级 TurnGate（issue #20 收尾） -------------------
 
 
-def test_plan_react_verification_flag_propagates():
-    """verification_loop=False 必须传播到组合引擎自身与子引擎。
+def test_verification_loop_flag_removed():
+    """R3：引擎不再接受 verification_loop A/B 开关（旧机制已删除）。
 
-    回归 issue #20：组合引擎此前忽略 _verification_enabled，
-    swebench_xenon.py 的 --no-verification-loop A/B 对照对组合引擎无效。
+    验证语义统一到 REPL 回合级 TurnGate；引擎层不存在第二套验证循环，
+    避免旧设计与新设计执行相同职责。
     """
-    off = PlanReactEngine(["m1"], verification_loop=False)
-    assert off._verification_enabled is False
-    assert off.planner._verification_enabled is False
-    assert off.reactor._verification_enabled is False
+    import pytest as _pytest
 
-
-def test_plan_reflection_verification_flag_propagates():
-    off = PlanReflectionEngine(["m1"], verification_loop=False)
-    assert off._verification_enabled is False
-    assert off.planner._verification_enabled is False
-    assert off.repairer._verification_enabled is False
-
-
-def test_react_reflection_verification_flag_propagates():
-    off = ReactReflectionEngine(["m1"], verification_loop=False)
-    assert off._verification_enabled is False
-    assert off.reactor._verification_enabled is False
-    assert off.repairer._verification_enabled is False
-
-
-def test_combined_engines_default_verification_on():
-    """默认 verification_loop=True（与 React/PlanExecute 一致）。"""
-    for eng in (
-        PlanReactEngine(["m1"]),
-        PlanReflectionEngine(["m1"]),
-        ReactReflectionEngine(["m1"]),
-    ):
-        assert eng._verification_enabled is True
+    for cls in (PlanReactEngine, PlanReflectionEngine, ReactReflectionEngine):
+        with _pytest.raises(TypeError):
+            cls(["m1"], verification_loop=False)
+        eng = cls(["m1"])
+        assert not hasattr(eng, "_verification_enabled")
+        assert not hasattr(eng, "verification_loop")

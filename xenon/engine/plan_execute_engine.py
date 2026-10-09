@@ -176,7 +176,6 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         model_pool: Any = None,  # v0.4.0
         auto_router: Any = None,  # v0.4.0 Step 13
         permission_gate: Any = None,  # v0.5.0
-        verification_loop: bool = True,  # v0.8.3
     ) -> None:
         # R2: 公共属性与 _call_llm 由 BaseEngine 提供。
         super().__init__(
@@ -211,15 +210,6 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         # 推理阶段，4096 会截断 plan JSON 直接打死实例，因此默认必须保守。
         # plan-react 915s 硬超时场景由显式调小该值缓解（评测方按模型调节）。
         self.plan_max_tokens = max(1024, plan_max_tokens)
-        # v0.8.3: 引擎层跨轮次验证循环
-        from xenon.engine.verification_loop import VerificationLoop
-
-        self.verification_loop = VerificationLoop(
-            max_rounds=8,
-            max_steps=self.max_steps,
-        )
-        self.verification_loop._engine = self
-        self._verification_enabled = verification_loop
         # v0.9.1: 循环检测器集成
         from xenon.engine.loop_detector import LoopDetector
 
@@ -380,17 +370,6 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         # 若任务需要写操作（执行级别 ≥ WRITE）但 tracker 无任何成功写类工具，
         # 强制追加一轮补救执行，让 LLM 真正落盘修改，而非只输出分析文本。
         results = self._ensure_task_completed(
-            user_input,
-            results,
-            ctx,
-            tracker,
-            total,
-        )
-        # Phase 2.6: 学习式验证循环（v0.8.3）——跨轮次状态传递。
-        # 在任务执行完毕后，捕获 ExecutionEvidence，若需要验证则进入
-        # 多轮循环（失败时间线累积 + 成功缓存复用），直到修复通过、
-        # 预算耗尽或无进展。
-        self._run_verification_loop(
             user_input,
             results,
             ctx,
@@ -680,107 +659,8 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         logger.debug(f"补救步骤 {step_id} 完成: {outcome.content[:100]}")
         return results
 
-    def _run_verification_loop(
-        self,
-        user_input: str,
-        results: list[dict[str, Any]],
-        ctx: AgentContext,
-        tracker: ToolExecutionTracker,
-        total: int,
-    ) -> None:
-        """学习式验证循环（v0.8.3）：跨轮次状态传递，多轮修复。
-
-        替代 v0.8.2 的单轮 ``_ensure_verification_loop``。
-
-        流程：
-        1. 捕获 ExecutionEvidence
-        2. ``VerificationLoop.feed()`` → 返回修复 prompt 或 None
-        3. 若返回 prompt，执行修复步骤
-        4. 重新捕获证据 → ``VerificationLoop.record_outcome()``
-        5. 若 ``should_continue`` 则回到 2
-
-        ``verification_loop=False``（A/B 对照组）时直接返回，保持
-        v0.8.2 单轮行为——用于同实例同模型开/关验证循环的对比评测。
-        """
-        if not getattr(self, "_verification_enabled", True):
-            return
-        from xenon.engine.execution_evidence import (
-            ExecutionEvidence,
-            workspace_root_for,
-        )
-
-        self.verification_loop.reset()
-        self.verification_loop._active = True
-        evidence = ExecutionEvidence.capture(tracker, workspace_root_for(self))
-
-        while self.verification_loop.should_continue:
-            repair_prompt = self.verification_loop.feed(evidence, user_input)
-            if repair_prompt is None:
-                break
-
-            if len(results) >= self.max_steps:
-                logger.warning("VerificationLoop: 步骤预算耗尽，终止验证循环")
-                break
-
-            logger.warning(
-                "Plan-Execute: 学习式验证循环 R%d——追加修复轮",
-                self.verification_loop.round_count + 1,
-            )
-            self.callback.on_warning(
-                "检测到修改已落盘但测试未通过，正在读取失败输出并修复…"
-            )
-
-            step_id = len(results) + 1
-            remediation_step = {
-                "id": step_id,
-                "task": repair_prompt,
-                "tool": None,
-                "params": {},
-                "depends_on": [],
-            }
-            prev_results = self._build_prev_results(results)
-            raw_result = self._execute_step_with_llm(
-                step_id,
-                total + 1,
-                remediation_step["task"],
-                prev_results,
-                user_input,
-                tracker,
-                context=ctx,
-                require_write_tool=True,
-            )
-            outcome = self._step_outcome(raw_result)
-            results.append(
-                {
-                    "step_id": step_id,
-                    "task": remediation_step["task"],
-                    "result": outcome.content,
-                    "status": "ok" if outcome.success else "failed",
-                    "error": outcome.error,
-                }
-            )
-            ctx.set(f"step_{step_id}_result", outcome.content)
-            ctx.set(f"step_{step_id}_status", "ok" if outcome.success else "failed")
-            self.callback.on_step_done(step_id, outcome.success, outcome.content[:200])
-
-            # 重新捕获证据并记录本轮结果
-            evidence = ExecutionEvidence.capture(tracker, workspace_root_for(self))
-            outcome_tag = (
-                "fixed"
-                if outcome.success and evidence.successful_tests
-                else "still_failing"
-            )
-            self.verification_loop.record_outcome(evidence, outcome=outcome_tag)
-
-        if self.verification_loop.total_rounds_used > 0:
-            logger.info(
-                "VerificationLoop: 完成 %d 轮验证循环",
-                self.verification_loop.total_rounds_used,
-            )
-
-    # ── Phase 2: 串行执行（原行为，向后兼容） ─────────────────
-    @staticmethod
     def _normalize_incomplete_edit_steps(
+        self,
         steps: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """edit_file/batch_edit 步骤参数不全 → 转为 LLM 步骤（迷你 ReAct 现场执行）。

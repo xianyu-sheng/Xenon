@@ -158,7 +158,6 @@ class ReActEngine(BaseEngine):
         model_pool: Any = None,  # v0.4.0
         auto_router: Any = None,  # v0.4.0 Step 13
         permission_gate: Any = None,  # v0.5.0: PermissionGate
-        verification_loop: bool = True,  # v0.8.3 A/B
     ) -> None:
         # R2: 公共属性（model_priority/callback/model_configs/temperature）与
         # _call_llm 由 BaseEngine 提供，消除四份复制与参数漂移。
@@ -197,9 +196,6 @@ class ReActEngine(BaseEngine):
             # 用户已明确授权的写操作（enforce 会误拦「直接写文件」这类指令）。
             evidence_enforcement="observe",
         )
-        # 已废弃（校验统一到回合级 TurnGate）：仅存 _verification_enabled 供
-        # 组合引擎 A/B 开关传播兼容；React 执行循环内不再有验证门。
-        self._verification_enabled = verification_loop
         # v0.9.0: 循环检测器（智能终止，替代固定迭代限制）
         # 使用更保守的阈值（similarity_threshold=0.85）避免误报，
         # 与重复工具检测、纯读瘫痪检测等机制配合工作
