@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
 import queue
 import time
 from abc import ABC, abstractmethod
@@ -46,6 +47,15 @@ if TYPE_CHECKING:
     from xenon.engine.tool_tracker import ToolExecutionTracker
 
 logger = logging.getLogger(__name__)
+
+
+def _default_max_tokens() -> int:
+    """单次 LLM 调用的输出上限：XENON_MAX_TOKENS 可调，默认 8192。"""
+
+    try:
+        return max(256, int(os.environ.get("XENON_MAX_TOKENS", "8192")))
+    except ValueError:
+        return 8192
 from xenon.engine.trace import TraceContextFilter  # noqa: E402
 
 logger.addFilter(TraceContextFilter())
@@ -868,7 +878,7 @@ class BaseEngine(ABC):
                 if self.model_pool:
                     self.model_pool.acquire(model_id)  # P2: 并发计数+1(资源感知)
                 mc = self._resolve_model_config(model_id)
-                mt = max_tokens or getattr(mc, "max_tokens", None) or 8192
+                mt = max_tokens or getattr(mc, "max_tokens", None) or _default_max_tokens()
                 creds = None
                 base = None
                 if mc:

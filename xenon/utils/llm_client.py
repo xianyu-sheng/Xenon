@@ -47,8 +47,32 @@ logger = logging.getLogger(__name__)
 
 # B12: finish_reason=length（OpenAI 兼容）/ stop_reason=max_tokens（Anthropic）
 # 时自动续写的最大次数；耗尽后抛 ResponseTruncatedError，而不是仅 logger.warning
-# 后静默返回被截断的内容。
-MAX_CONTINUATIONS = 3
+# 后静默返回被截断的内容。可配置：XENON_MAX_CONTINUATIONS（默认 3）。
+def _max_continuations() -> int:
+    try:
+        return max(1, int(os.environ.get("XENON_MAX_CONTINUATIONS", "3")))
+    except ValueError:
+        return 3
+
+
+MAX_CONTINUATIONS = _max_continuations()
+
+
+def _mark_truncated(text: str) -> str:
+    """截断修复后诚实标注：在 final_answer 尾部追加可见标记。
+
+    B12 续写次数耗尽后 JSON 被客户端修复——修复成功意味着内容被截断过，
+    不能再静默当作完整输出交给用户。"""
+
+    marker = "\n\n⚠️ [本回复因输出长度限制被截断，内容不完整，可要求继续或细化问题]"
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict) and isinstance(data.get("final_answer"), str):
+            data["final_answer"] = data["final_answer"] + marker
+            return json.dumps(data, ensure_ascii=False)
+    except Exception:  # noqa: BLE001 — 非 JSON 文本直接追加
+        pass
+    return text + marker
 _REASONING_EFFORTS = frozenset({"low", "medium", "high", "max", "off"})
 
 
@@ -969,7 +993,7 @@ def _call_openai_compat(
             repaired = _finalize_structured_text(combined)
             if repaired != combined and _structured_response_kind(combined) == "json":
                 logger.warning("结构化 JSON 在续写次数耗尽后已修复，避免返回非法协议")
-                return repaired
+                return _mark_truncated(repaired)
             raise ResponseTruncatedError(
                 f"API 响应在 {MAX_CONTINUATIONS} 次续写后仍被截断 "
                 f"(finish_reason=length)，内容可能不完整；请增大 max_tokens 或精简输入。"

@@ -67,7 +67,17 @@ class TurnGate:
     （原地打转检测，如“每次都宣称成功但有失败回执”）。
     """
 
-    def __init__(self, max_same_cause_failures: int = 2) -> None:
+    def __init__(self, max_same_cause_failures: int | None = None) -> None:
+        if max_same_cause_failures is None:
+            # XENON_GATE_FUSE_THRESHOLD 可调（默认 2，无效值回退）。
+            import os
+
+            try:
+                max_same_cause_failures = max(
+                    1, int(os.environ.get("XENON_GATE_FUSE_THRESHOLD", "2"))
+                )
+            except ValueError:
+                max_same_cause_failures = 2
         self.max_same_cause_failures = max_same_cause_failures
         self._rounds: list[_RetryRound] = []
 

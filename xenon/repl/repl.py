@@ -89,9 +89,21 @@ _RETRY_BUDGET_MAX = 40
 
 
 def _retry_budget_for(first_round_steps: int) -> int:
-    """重试轮步数预算：首轮实际步数的一半，clamp [10, 40]（决策 2）。"""
+    """重试轮步数预算：首轮实际步数的一半，clamp 可配置（决策 2）。
 
-    return max(_RETRY_BUDGET_MIN, min(_RETRY_BUDGET_MAX, max(1, first_round_steps) // 2))
+    XENON_RETRY_BUDGET_MIN / XENON_RETRY_BUDGET_MAX（默认 10/40，无效值回退）。"""
+
+    try:
+        lo = int(os.environ.get("XENON_RETRY_BUDGET_MIN", "10"))
+    except ValueError:
+        lo = _RETRY_BUDGET_MIN
+    try:
+        hi = int(os.environ.get("XENON_RETRY_BUDGET_MAX", "40"))
+    except ValueError:
+        hi = _RETRY_BUDGET_MAX
+    if hi < lo:
+        hi = lo
+    return max(lo, min(hi, max(1, first_round_steps) // 2))
 
 # ── prompt_toolkit（可选依赖，不可用时回退自建输入）────────────
 try:
