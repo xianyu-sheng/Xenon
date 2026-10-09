@@ -282,6 +282,14 @@ class REPL:
         self._approval_rules = SessionRuleStore()
         # 本轮已被边界审批一次性放行的工具（防旧权限门重复询问）。
         self._boundary_approved_once: set[str] = set()
+        # 结构层：会话树（回合节点=状态单一来源），可从事件日志重建。
+        from xenon.session.tree import TurnTree
+        from xenon.turn.gate import TurnGate
+
+        self._turn_tree: TurnTree = TurnTree()
+        self._turn_tree_rebuilt = False
+        self._turn_gate = TurnGate()
+        self._last_gate_verdict = None
         self.agent_context.set_escalation_callback(self._confirm_tool_escalation)
         # 工具边界审批：工作区内写免问；越界写与命令要问（可 y/n/a，a 带 TTL）。
         self.agent_context.set_approval_callback(self._confirm_tool_approval)
@@ -899,8 +907,6 @@ class REPL:
                 self.status_bar.add_tool_call()
             # v0.5.4: 从成功的工具调用中提取文件路径，更新工作记忆
             self._track_session_files(panel)
-            # 任务级校验：发布前用回执审计最终回答（CI/测试准则、成功宣称）。
-            self._verify_turn(panel, result)
         else:
             step_count = 0
             tool_count = 0
@@ -948,9 +954,18 @@ class REPL:
                 console.print("[dim]  💭 无工具调用[/dim]")
 
         # 发布门 v2：校验未通过的答案不发布为成功结果（草稿在失败面板内展示）。
-        verification_ok, verification_reasons = (
-            self._verify_turn(panel, result) if panel is not None else (True, [])
-        )
+        # 判定优先复用 TurnGate 缓存（回合内已判定过），避免重复评估。
+        if panel is None:
+            verification_ok, verification_reasons = True, []
+        else:
+            verdict = getattr(self, "_last_gate_verdict", None)
+            if verdict is not None:
+                verification_ok = verdict.outcome == "pass"
+                verification_reasons = verdict.reasons
+            else:
+                verification_ok, verification_reasons = self._verify_turn(
+                    panel, result
+                )
         if verification_ok:
             # 最终答案始终显示；正文保持正常亮度，不再使用大边框。
             self._render_assistant_text(result, title=title)
@@ -2022,6 +2037,7 @@ class REPL:
             console.print("[dim]· 空输入已忽略[/dim]")
             return
         self._last_user_text = user_input
+        self._ensure_turn_tree_rebuilt()
 
         # 跨回合续接：短确认语 + 未兑现承诺 = 继承上轮意图/级别/范式；
         # 待批 Gate 则接受更宽的确认语（“好写入到桌面”/“请写入”）。
@@ -2032,10 +2048,11 @@ class REPL:
         )
         pending = self._pending_action if pending_reply else None
         if bare_continuation and pending is None:
-            console.print(
-                "[dim]· 没有可继续的未完成任务。请直接说明你想让我继续做什么。[/dim]"
-            )
-            return
+            # 结构层唯一续接通道：树尾节点状态（中断/熔断/校验失败）。
+            notice, user_input = self._resolve_bare_continuation(user_input)
+            if notice is not None:
+                console.print(f"[dim]{notice}[/dim]")
+                return
         if pending_reply and self._pending_action is not None:
             if self._pending_action.gate_id:
                 self._record_event(
@@ -2052,8 +2069,9 @@ class REPL:
                     outcome="stale",
                 )
             self._pending_action = None
-        # 每轮重置：边界审批的 allowed-once 只对本轮有效。
+        # 每轮重置：边界审批的 allowed-once 只对本轮有效；TurnGate 状态机同样清零。
         self._boundary_approved_once.clear()
+        self._turn_gate.reset()
 
         # v0.6.0: 智能路由 - 根据用户输入自动选择推理范式
         if self.intelligent_router.enabled:
@@ -2101,8 +2119,11 @@ class REPL:
             console.print(
                 "[dim cyan]📋 计划模式：本轮只产出方案，写/执行需用户确认[/dim cyan]"
             )
+        # 结构层：本回合节点入树（turn/user 事件带同一 turn_id 供重建）。
+        self._turn_tree.append_turn(user_input[:200])
         self._record_event(
             "turn/user",
+            turn_id=self._turn_tree.tail().turn_id,
             text=user_input[:500],
             intent=turn_contract_obj.intent,
             level=int(execution_policy.level),
@@ -2384,6 +2405,7 @@ class REPL:
         # ``use_count`` means a memory reached a successfully completed answer,
         # not merely that retrieval considered it. This keeps retention metrics
         # honest and separate from ``retrieval_count``.
+        self._ensure_turn_node_finished()
         self._commit_memory_usage()
 
         # A suggestion is shown after the answer, at most once per turn.  It is
@@ -2911,6 +2933,8 @@ class REPL:
             # ── 发布门 v3：校验未通过 → 同回合反馈重试（闭环上限 XENON_VERIFY_RETRIES）──
             panel = callback.get_thinking_panel()
             retries_left = _verify_retries_limit()
+            retries_spent = 0
+            verification_ok, verification_reasons = True, []
             while panel is not None and retries_left > 0:
                 verification_ok, verification_reasons = self._verify_turn(
                     panel, result
@@ -2918,6 +2942,17 @@ class REPL:
                 if verification_ok:
                     break
                 retries_left -= 1
+                retries_spent += 1
+                fused = (
+                    getattr(self, "_last_gate_verdict", None) is not None
+                    and self._last_gate_verdict.outcome == "fuse"
+                )
+                if fused:
+                    # 同因失败熔断：不再盲目重试，按未完成发布。
+                    self._record_event(
+                        "verification/fused", reasons=verification_reasons
+                    )
+                    break
                 self._record_event(
                     "verification/retry",
                     reasons=verification_reasons,
@@ -2954,6 +2989,18 @@ class REPL:
                 panel = callback.get_thinking_panel()
 
             self._render_engine_result(callback, result, spec.result_title)
+            # 结构层：回合节点状态（TurnGate 单一来源）。
+            final_status = "passed" if verification_ok else "failed-retried"
+            verdict = getattr(self, "_last_gate_verdict", None)
+            if verdict is not None and verdict.outcome == "fuse":
+                final_status = "fused"
+            self._finish_turn_node(
+                final_status,
+                engine=spec.name,
+                reasons=None if verification_ok else verification_reasons,
+                retries_used=retries_spent,
+                panel=panel,
+            )
             # P1-High 问题1 修复: 引擎模式统一通过 record_model_success 更新状态
             if model_used:
                 self.auto_router.record_model_success(model_used)
@@ -2967,6 +3014,18 @@ class REPL:
                 except Exception:
                     self._last_thinking_panel = None
             self._persist_engine_trace(engine)
+            # 结构层：异常 → 回合节点 interrupted（“继续”续接的唯一依据）。
+            panel_exc = None
+            try:
+                panel_exc = callback.get_thinking_panel()
+            except Exception:  # noqa: BLE001 — 面板获取失败不影响状态写入
+                panel_exc = None
+            self._finish_turn_node(
+                "interrupted",
+                engine=spec.name,
+                reasons=[str(e)[:120]],
+                panel=panel_exc,
+            )
             # 异常时展开日志便于调试
             if self._last_mode_line:
                 console.print(f"[dim]{self._last_mode_line}[/dim]")
@@ -3219,6 +3278,92 @@ class REPL:
                 break
         return raw_intent, None
 
+    def _resolve_bare_continuation(self, user_input: str) -> tuple[str | None, str]:
+        """裸“继续”的确定性判定：树尾节点可续接 → (None, 续接输入)；否则 (提示, 原输入)。"""
+
+        tail = self._turn_tree.tail()
+        if tail is not self._turn_tree.root and tail.is_resumable:
+            resumed = self._resume_prompt(tail) + user_input
+            self._record_event(
+                "turn/resumed", turn_id=tail.turn_id, status=tail.status
+            )
+            return None, resumed
+        return (
+            "· 没有可继续的未完成任务。请直接说明你想让我继续做什么。",
+            user_input,
+        )
+
+    @staticmethod
+    def _resume_prompt(node: Any) -> str:
+        """续接提示：只陈述结构化事实（原因+指令），不猜测未记录内容。"""
+
+        reason = node.verdict_reasons[0][:80] if node.verdict_reasons else node.status
+        return (
+            f"（续接上一轮任务：上一轮因「{reason}」未完成。"
+            f"请先复核已完成的进度，再从中断处继续，最后给出结论。）\n"
+        )
+
+    def _ensure_turn_tree_rebuilt(self) -> None:
+        """首次访问时从事件日志重建树（best effort，失败保留新树）。"""
+
+        if getattr(self, "_turn_tree_rebuilt", False):
+            return
+        self._turn_tree_rebuilt = True
+        try:
+            log = getattr(self, "_session_events", None)
+            if log is not None:
+                from xenon.session.tree import TurnTree
+
+                self._turn_tree = TurnTree.rebuild_from_events(log.read())
+        except Exception:  # noqa: BLE001 — 重建失败不阻断会话
+            logger.debug("TurnTree 重建失败（已忽略）", exc_info=True)
+
+    def _finish_turn_node(
+        self,
+        status: str,
+        *,
+        engine: str = "",
+        reasons: list[str] | None = None,
+        retries_used: int = 0,
+        panel: Any = None,
+    ) -> None:
+        """回合收尾：写树节点状态 + turn/verdict 事实（状态单一来源）。"""
+
+        try:
+            node = self._turn_tree.tail()
+            fields: dict[str, Any] = {"engine": engine, "retries_used": retries_used}
+            if panel is not None:
+                fields["steps"] = len(getattr(panel, "steps", []) or [])
+                fields["tools"] = int(getattr(panel, "tool_call_count", 0) or 0)
+                fields["errors"] = sum(
+                    1 for s in (getattr(panel, "steps", []) or []) if s.is_error
+                ) + len(getattr(panel, "errors", []) or [])
+            if reasons:
+                fields["verdict_reasons"] = list(reasons)
+            self._turn_tree.finish(node, status, **fields)
+            self._record_event(
+                "turn/verdict",
+                turn_id=node.turn_id,
+                status=status,
+                reasons=list(reasons or []),
+                engine=engine,
+                steps=fields.get("steps", 0),
+                tools=fields.get("tools", 0),
+                errors=fields.get("errors", 0),
+            )
+        except Exception:  # noqa: BLE001 — 状态写入失败不阻断回合
+            logger.debug("回合节点状态写入失败（已忽略）", exc_info=True)
+
+    def _ensure_turn_node_finished(self) -> None:
+        """纯对话路径（direct 无引擎）收尾：running 节点 → passed。"""
+
+        try:
+            node = self._turn_tree.tail()
+            if node is not self._turn_tree.root and node.status == "running":
+                self._turn_tree.finish(node, "passed", engine="direct")
+        except Exception:  # noqa: BLE001
+            pass
+
     def _task_state_block(self) -> str:
         """确定性生成跨轮次任务状态块（目标/门/产物/计划模式）。"""
 
@@ -3230,12 +3375,20 @@ class REPL:
             log = getattr(self, "_session_events", None)
             if log is not None:
                 view = project(log.read())
-            return build_task_state_block(
+            block = build_task_state_block(
                 active_goal=view.active_goal if view else None,
                 pending=self._pending_action,
                 artifacts=[a.path for a in (view.artifacts if view else [])],
                 plan_mode=self._plan_mode_active,
             )
+            suffix = self._turn_tree.status_suffix()
+            if suffix:
+                block = (
+                    block + "\n- " + suffix
+                    if block
+                    else "## 任务状态（跨轮次）\n- " + suffix
+                )
+            return block
         except Exception:  # noqa: BLE001 — 状态块失败不能阻断回合
             logger.debug("任务状态块构建失败（已忽略）", exc_info=True)
             return ""
@@ -3408,34 +3561,23 @@ class REPL:
             return False
 
     def _verify_turn(self, panel, result: str) -> tuple[bool, list[str]]:
-        """发布门：校验失败记事实并返回原因；渲染由调用方决定。"""
+        """发布门：TurnGate 单一判定；失败记事实；判定缓存供渲染复用。"""
 
         try:
-            from xenon.engine.task_verifier import (
-                extract_acceptance_criteria,
-                verify_final_answer,
-            )
+            from xenon.engine.task_verifier import extract_acceptance_criteria
+            from xenon.turn.gate import tool_events_from_panel
 
-            tool_events = []
-            for step in panel.steps:
-                if not step.action:
-                    continue
-                tool_events.append(
-                    {
-                        "tool": str(step.action),
-                        "success": not step.is_error,
-                        "error": str(getattr(step, "observation", "") or "")[:120],
-                    }
-                )
+            tool_events = tool_events_from_panel(panel)
             criteria = extract_acceptance_criteria(
                 getattr(self, "_last_user_text", "") or ""
             )
-            ok, reasons = verify_final_answer(
-                result or "", criteria=criteria, tool_events=tool_events
+            verdict = self._turn_gate.evaluate(
+                result or "", tool_events=tool_events, criteria=criteria
             )
-            if not ok:
-                self._record_event("verification/failed", reasons=reasons)
-            return ok, reasons
+            self._last_gate_verdict = verdict
+            if verdict.outcome != "pass":
+                self._record_event("verification/failed", reasons=verdict.reasons)
+            return verdict.outcome == "pass", verdict.reasons
         except Exception:  # noqa: BLE001 — 校验失败不能阻断输出
             logger.debug("任务校验执行失败（已忽略）", exc_info=True)
             return True, []
@@ -3463,6 +3605,10 @@ class REPL:
             )
         self._pending_action = None
         self._boundary_approved_once.clear()
+        # 结构层：指针回退到第 n 个回合节点（原枝保留，供 /fork 复用）。
+        node = self._turn_tree.ancestor_at(n)
+        if node is not None:
+            self._turn_tree.move_to(node)
         self._record_event("rewind", turn=n)
         return True, self._artifacts_since_turn(n)
 
