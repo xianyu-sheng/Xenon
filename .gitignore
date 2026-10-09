@@ -82,3 +82,12 @@ docs/juejin/
 
 # 本地开源推广作战包（发布文案、渠道计划和账号操作说明，不随源码发布）
 docs/promotion/
+
+# 本地测试/工具产物
+.coverage
+.pytest-full.log
+.pytest_cache/
+.ruff_cache/
+FETCH_HEAD
+trunk/
+no_such_dir_xyz/
