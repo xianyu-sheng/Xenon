@@ -29,6 +29,20 @@ from xenon.nodes.tool_executor import (
 from xenon.nodes.tool_registry import BUILTIN_TOOL_REGISTRY
 from xenon.utils.response_adapter import parse_react
 
+
+def _env_checkpoint_steps(default: int) -> int:
+    """检查点窗口大小：XENON_CHECKPOINT_STEPS 可调，默认 = 引擎步数上限。"""
+
+    import os
+
+    raw = os.environ.get("XENON_CHECKPOINT_STEPS", "").strip()
+    if not raw:
+        return max(1, default)
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return max(1, default)
+
 if TYPE_CHECKING:
     from xenon.repl.context_manager import ContextManager
 
@@ -158,6 +172,9 @@ class ReActEngine(BaseEngine):
             permission_gate=permission_gate,
         )
         self.max_iterations = max_iterations
+        # P2: 预算检查点窗口（固定步数不再作为终止条件）。
+        # 窗口耗尽时：有进展 → 挂起审批续跑；无进展 → 熔断。
+        self.checkpoint_steps = _env_checkpoint_steps(max_iterations)
         # Merge plugin tool schemas so the model can actually see and call them.
         # BUILTIN_TOOLS is a static dict; plugin_schemas() returns only tools
         # registered via register_tool_handler(..., category="plugin").
@@ -467,6 +484,12 @@ class ReActEngine(BaseEngine):
 
         # F2: 三阶段软预算管理（每轮 run 新建，状态不跨 run 串扰）
         budget = BudgetManager(self.max_iterations)
+        # P2: 检查点窗口状态（窗口起点成功数/失败签名，判定进展）。
+        # 仅当注册了审批通道（REPL 交互路径）才启用：库/直连引擎保持旧预算语义。
+        checkpoint_enabled = ctx is not None and ctx.has_checkpoint_channel()
+        next_checkpoint = self.checkpoint_steps
+        win_success = 0
+        win_last_error = ""
         # 方案 C 根因 3 修复：no_tool_streak 重试上限自适应 max_iterations。
         # 旧逻辑固定 2 次后放弃，导致 LLM 容易"硬扛"过 2 次后文字声称完成。
         # 新逻辑：至少 2 次重试，最多是 max_iterations 的一半（保留一半预算给正常迭代）。
@@ -505,6 +528,39 @@ class ReActEngine(BaseEngine):
                 )
 
             logger.debug(f"ReAct 迭代 {iteration}/{budget.total}")
+
+            # P2: 预算检查点——窗口耗尽时的唯一终止仲裁（固定步数不终止）。
+            # 注意：条件用 > 而非 >= ——窗口含 N 步，第 N+1 步顶部才询问，
+            # 避免首轮（spent=1）在极小窗口（checkpoint_steps=1）下误触发。
+            if checkpoint_enabled and budget.spent > next_checkpoint:
+                outcome = self._budget_checkpoint(
+                    ctx, tracker, win_success, win_last_error
+                )
+                if outcome == "fuse":
+                    msg = self._mark_budget_exhausted(
+                        self._mercy_compile(user_input, tracker, messages),
+                        extra="检查点窗口内无进展（原地打转），熔断，",
+                    )
+                    self.callback.on_warning("预算检查点：窗口内无进展，熔断交付")
+                    self.finalize_evidence(context=ctx, output=msg, tracker=tracker)
+                    self.callback.on_finish(msg)
+                    return msg
+                if outcome == "stop":
+                    msg = (
+                        f"⏸ 已达到检查点（{self.checkpoint_steps} 步），用户选择停止。"
+                        f"以下为当前进度整理（任务未完成）：\n\n"
+                        f"{self._mercy_compile(user_input, tracker, messages)}"
+                    )
+                    self.finalize_evidence(context=ctx, output=msg, tracker=tracker)
+                    self.callback.on_finish(msg)
+                    return msg
+                # approved → 新窗口：记录新窗口起点，预算按窗口延长（3× 硬顶由 total 保证）
+                next_checkpoint += self.checkpoint_steps
+                budget.bonus += self.checkpoint_steps
+                win_success = sum(
+                    1 for c in tracker.calls if getattr(c, "success", False)
+                )
+                win_last_error = self._last_failure_signature(tracker)
 
             # F2: 合成提示注入（按预算/工具/阶段选择场景）
             # 首轮（iteration==1）跳过：user_input 刚注入，避免连续 user 消息堆叠
@@ -1076,6 +1132,46 @@ class ReActEngine(BaseEngine):
             f"⚠️ 已达到步数上限（{self.max_iterations} 步），{extra}"
             f"以下是停止时整理的结果（任务可能未完成）：\n\n{msg}"
         )
+
+    def _budget_checkpoint(
+        self,
+        ctx: Any,
+        tracker: Any,
+        win_success: int,
+        win_last_error: str,
+    ) -> str:
+        """检查点仲裁：返回 continue / stop / fuse（审批续跑，无进展熔断）。"""
+
+        successes = sum(
+            1 for c in getattr(tracker, "calls", []) or [] if getattr(c, "success", False)
+        )
+        last_error = self._last_failure_signature(tracker)
+        progress = successes > win_success or (
+            bool(last_error) and last_error != win_last_error
+        )
+        if not progress:
+            return "fuse"
+        reason = (
+            f"已达到预算检查点（{self.checkpoint_steps} 步窗口），窗口内有新进展"
+            f"（成功调用 {win_success}→{successes}）。是否继续执行下一窗口？"
+        )
+        outcome = (
+            ctx.request_checkpoint_continuation(reason)
+            if ctx is not None
+            else "approved"
+        )
+        return "continue" if outcome == "approved" else "stop"
+
+    @staticmethod
+    def _last_failure_signature(tracker: Any) -> str:
+        """最近一次失败调用的错误签名（用于同因失败/无进展判定）。"""
+
+        for c in reversed(getattr(tracker, "calls", []) or []):
+            if not getattr(c, "success", False):
+                return str(
+                    getattr(c, "error", "") or getattr(c, "result_summary", "") or ""
+                )[:40]
+        return ""
 
     def _parse_response(self, response: str) -> dict[str, Any]:
         """解析 LLM 的 JSON 输出（委托给 response_adapter 中间件）。

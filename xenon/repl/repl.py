@@ -305,6 +305,7 @@ class REPL:
         self.agent_context.set_approval_callback(self._confirm_tool_approval)
         # 计划审批通道：submit_plan 工具由这里呈现面板。
         self.agent_context.set_plan_callback(self._confirm_plan)
+        self.agent_context.set_checkpoint_callback(self._confirm_checkpoint)
 
         # LLM 意图分类器按需初始化：未启用/无可用模型时为 None，正则层兜底。
         self._intent_classifier: Any = None
@@ -616,6 +617,43 @@ class REPL:
         except Exception:  # noqa: BLE001 — 预览失败只影响展示
             return ""
         return ""
+
+    def _confirm_checkpoint(self, reason: str) -> str:
+        """预算检查点续跑审批：y=继续下一窗口 / n=停止并交付进度草稿。fail-closed。"""
+
+        if not sys.stdin.isatty():
+            return "declined"
+        with self._permission_prompt_lock:
+            callback = getattr(self, "_active_callback", None)
+            if hasattr(callback, "suspend_for_prompt"):
+                callback.suspend_for_prompt()
+            with self._terminal_waiting("等待续跑审批"):
+                console.print()
+                console.print(
+                    Panel(
+                        str(reason)[:800],
+                        title="⏳ 预算检查点",
+                        border_style="cyan",
+                        padding=(0, 1),
+                    )
+                )
+                try:
+                    choice = Prompt.ask(
+                        "是否继续执行下一窗口？",
+                        choices=["y", "n"],
+                        default="n",
+                        show_choices=True,
+                        case_sensitive=False,
+                    )
+                except (KeyboardInterrupt, EOFError):
+                    choice = "n"
+        if hasattr(callback, "resume_after_prompt"):
+            callback.resume_after_prompt("budget_checkpoint", {})
+        if choice == "y":
+            self._record_event("checkpoint/continued", reason=str(reason)[:200])
+            return "approved"
+        self._record_event("checkpoint/stopped", reason=str(reason)[:200])
+        return "declined"
 
     def _confirm_plan(self, plan_text: str) -> dict:
         """计划审批面板：批准退出计划模式，驳回让模型修改后重提。"""
@@ -3361,6 +3399,21 @@ class REPL:
                 ) + len(getattr(panel, "errors", []) or [])
             if reasons:
                 fields["verdict_reasons"] = list(reasons)
+            # 同因中断快速熔断（402 类基础设施错误）：连续两轮同因 → fused + 指引。
+            if status == "interrupted" and reasons:
+                parent = node.parent
+                if parent is not None and parent is not self._turn_tree.root:
+                    from xenon.session.tree import RESUMABLE_STATUSES
+
+                    if (
+                        parent.status in RESUMABLE_STATUSES
+                        and parent.verdict_reasons[:1] == list(reasons)[:1]
+                    ):
+                        status = "fused"
+                        fields["verdict_reasons"] = list(reasons) + [
+                            "连续两轮同因中断（可能是 API 余额/配置问题），请检查后再继续"
+                        ]
+                        reasons = fields["verdict_reasons"]
             self._turn_tree.finish(node, status, **fields)
             self._record_event(
                 "turn/verdict",

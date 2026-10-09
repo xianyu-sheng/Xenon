@@ -33,6 +33,7 @@ class AgentContext:
         self._escalation_callback: Any = None
         self._approval_callback: Any = None
         self._plan_callback: Any = None
+        self._checkpoint_callback: Any = None
         self._fact_callback: Any = None
         self._hook_callback: Any = None
 
@@ -164,6 +165,31 @@ exceeds the current turn's ``_execution_level``.  Returning True lets the
         """Register the plan-approval channel (REPL injects it)."""
         with self._tool_checkpoint_lock:
             self._plan_callback = callback
+
+    def set_checkpoint_callback(self, callback: Any = None) -> None:
+        """Register the budget-checkpoint continuation channel (REPL injects it)."""
+        with self._tool_checkpoint_lock:
+            self._checkpoint_callback = callback
+
+    def has_checkpoint_channel(self) -> bool:
+        """是否注册了检查点审批通道（无通道 → 旧预算语义，不询问）。"""
+        return self._checkpoint_callback is not None
+
+    def request_checkpoint_continuation(self, reason: str) -> str:
+        """Ask whether to continue past a budget checkpoint (closed outcome).
+
+        无通道（库/直连引擎用户）→ approved（预算语义不变）；
+        通道异常 → declined（续跑是授权类询问，fail-closed）。
+        """
+
+        callback = self._checkpoint_callback
+        if callback is None:
+            return "approved"
+        try:
+            outcome = str(callback(reason) or "").lower()
+        except Exception:  # noqa: BLE001 — 审批通道异常按拒绝处理
+            return "declined"
+        return outcome if outcome in ("approved", "declined") else "declined"
 
     def request_plan_approval(self, plan_text: str) -> dict:
         """Ask the registered channel to approve a submitted plan.
