@@ -72,6 +72,14 @@ def _cmd_fork(*, args: str, session_state: dict, **kwargs: Any) -> str:
         )
     new_log.append("fork", parent=log.session_id, turns=user_count)
     repl._session_events = new_log
+    # 结构层：分叉会话的树从复制的事件前缀重建。
+    try:
+        from xenon.session.tree import TurnTree
+
+        repl._turn_tree = TurnTree.rebuild_from_events(new_log.read())
+        repl._turn_tree_rebuilt = True
+    except Exception:  # noqa: BLE001 — 树重建失败不阻断分叉
+        pass
 
     artifacts: list[str] = []
     if n is not None:

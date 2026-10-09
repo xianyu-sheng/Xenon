@@ -17,7 +17,8 @@ from xenon.turn.gate import (
 def test_pass_on_clean_answer():
     gate = TurnGate()
     verdict = gate.evaluate(
-        "已完成", tool_events=[{"tool": "read_file", "success": True}]
+        "已完成读取并整理结果：共 3 个文件，内容摘要见下。",
+        tool_events=[{"tool": "read_file", "success": True}],
     )
     assert verdict.outcome == VERDICT_PASS
     assert verdict.reasons == []
@@ -29,7 +30,12 @@ def test_fail_then_pass_resets_rounds():
     assert gate.evaluate("已完成 ✅ 任务完成", tool_events=bad).outcome == VERDICT_FAIL
     assert gate.rounds_used == 1
     good = [{"tool": "command", "success": True}]
-    assert gate.evaluate("修复完成", tool_events=good).outcome == VERDICT_PASS
+    assert (
+        gate.evaluate(
+            "已完成读取并整理结果：共 3 个文件，内容摘要见下。", tool_events=good
+        ).outcome
+        == VERDICT_PASS
+    )
     assert gate.rounds_used == 0  # pass 后清零
 
 
@@ -69,7 +75,7 @@ def test_tool_events_from_panel():
 
     events = tool_events_from_panel(_Panel())
     assert events == [
-        {"tool": "command", "success": False, "error": "exit 1"},
+        {"tool": "command", "success": False, "error": "exit 1", "params": {}},
     ]
 
 

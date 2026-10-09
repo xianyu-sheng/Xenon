@@ -1,16 +1,17 @@
-"""v0.8.2 交付闸门补救循环回归测试。
+"""发布门规则回归测试。
 
 背景：SWE-bench 最大失分点「贴 diff 不落盘」——LLM 声称修改/创建了
-文件，但工具执行记录里没有对应写操作证据。FileClaimGate 此前在
-finalize_evidence 直接 raise，拦截了但没给补救机会（拦截 ≠ 修复）。
-v0.8.2 起：ReAct 增加第三纠偏循环（交付闸门预检 → 注入补救提示 →
-再迭代 → 再验证），PlanExecute 增加落盘补救步骤。
+文件，但工具执行记录里没有对应写操作证据。此前 FileClaimGate 在引擎内
+拦截（交付闸门补救循环），验证统一到回合级 TurnGate 后，该规则由
+TurnGate 的文件声称审计承接；写入后验证失败（原 VerificationLoop）与
+空洞回答（原 HollowDetector）同样上移。
 """
 
 from __future__ import annotations
 
 from xenon.engine.context import AgentContext
 from xenon.engine.react_engine import ReActEngine
+from xenon.turn.gate import VERDICT_FAIL, VERDICT_PASS, TurnGate
 
 
 class TestDeliveryRemediationPrompt:
@@ -29,95 +30,125 @@ class TestDeliveryRemediationPrompt:
         assert "不要只输出 diff" in prompt
 
 
-class TestReActDeliveryRemediation:
-    def test_gate_failure_injects_remediation_then_retries(self, monkeypatch, tmp_path):
-        """FileClaimGate 拦截 → 注入补救提示 → 再迭代 → 第二次成功交付。
+class TestTurnGateFileClaims:
+    """原引擎交付闸门语义 → 回合级 TurnGate 文件声称审计。"""
 
-        模拟：LLM 声称创建了 tmp/x.py 但只写过 a.py（闸门拦截），
-        补救后 LLM 真正写 x.py 再交付（通过）。工具走真实 ToolExecutor
-        （tracker 记录在 ToolExecutor 内部，mock _execute_tool 会绕过）。
-        """
-        engine = ReActEngine(
-            model_priority=["deepseek/deepseek-v4-flash"],
-            max_iterations=8,
-            native_fc=False,
-        )
+    def test_unverified_file_claim_fails_gate(self, tmp_path):
+        """声称创建 x.py 但只写过 a.py → TurnGate fail。"""
+
+        gate = TurnGate()
         target = tmp_path / "x.py"
-        calls = {"n": 0}
-        remediated = {"seen": False}
+        events = [
+            {
+                "tool": "write_file",
+                "success": True,
+                "params": {"file_path": str(tmp_path / "a.py")},
+            }
+        ]
+        verdict = gate.evaluate(f"已创建 {target}", tool_events=events)
+        assert verdict.outcome == VERDICT_FAIL
+        assert any("未经工具验证" in r for r in verdict.reasons)
 
-        def fake_call(phase, messages, **kwargs):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                # 先写 a.py（有工具执行，避免触发 no_tool_streak）
-                return (
-                    '{"thought": "先写 a", "action": "write_file", '
-                    '"action_input": {"file_path": "'
-                    + str(tmp_path / "a.py")
-                    + '", "content": "a = 1"}}'
-                )
-            if calls["n"] == 2:
-                # 声称创建了 x.py，但从未写过它 → 交付闸门应拦截
-                return (
-                    '{"thought": "完成了", "final_answer": "已创建 '
-                    + str(target)
-                    + '"}'
-                )
-            # 第三轮起：补救提示应已注入
-            joined = str(messages)
-            if "不要只输出 diff" in joined:
-                remediated["seen"] = True
-            # 补救后真正写 x.py
-            return (
-                '{"thought": "落盘", "action": "write_file", '
-                '"action_input": {"file_path": "'
-                + str(target)
-                + '", "content": "x = 1"}}'
-            )
-
-        monkeypatch.setattr(engine, "_call_llm_for_phase", fake_call)
-
-        engine.run(
-            f"创建 {target}",
-            context=AgentContext(),
-        )
-        assert remediated["seen"], "补救提示必须注入补救轮"
-        assert "x = 1" in open(target).read()
-
-    def test_retries_exhausted_still_finalizes(self, monkeypatch, tmp_path):
-        """补救次数用尽后照常 finalize（不无限循环，fail-closed 语义保留）。"""
-        engine = ReActEngine(
-            model_priority=["deepseek/deepseek-v4-flash"],
-            max_iterations=6,
-            native_fc=False,
-        )
+    def test_verified_claim_passes_gate(self, tmp_path):
         target = tmp_path / "x.py"
-        calls = {"n": 0}
+        gate = TurnGate()
+        events = [
+            {
+                "tool": "write_file",
+                "success": True,
+                "params": {"file_path": str(target)},
+            }
+        ]
+        verdict = gate.evaluate(f"已创建 {target}，内容已写入", tool_events=events)
+        assert verdict.outcome == VERDICT_PASS
 
-        def fake_call(phase, messages, **kwargs):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                return (
-                    '{"thought": "先写 a", "action": "write_file", '
-                    '"action_input": {"file_path": "'
-                    + str(tmp_path / "a.py")
-                    + '", "content": "a = 1"}}'
-                )
-            # 之后一直声称完成但从不写 x.py（闸门永远拦截）
-            return '{"thought": "t", "final_answer": "完成了"}'
+    def test_retries_do_not_loop_forever_fuse(self, tmp_path):
+        """同因失败熔断：不会无限重试（fail-closed）。"""
 
-        monkeypatch.setattr(engine, "_call_llm_for_phase", fake_call)
-        monkeypatch.setattr(
-            engine,
-            "delivery_gate_verdict",
-            lambda **k: type("V", (), {"reason": "声称创建但无证据"})(),
+        gate = TurnGate(max_same_cause_failures=2)
+        target = tmp_path / "x.py"
+        events = [
+            {
+                "tool": "write_file",
+                "success": True,
+                "params": {"file_path": str(tmp_path / "a.py")},
+            }
+        ]
+        first = gate.evaluate(f"已创建 {target}", tool_events=events)
+        second = gate.evaluate(f"已创建 {target}", tool_events=events)
+        assert first.outcome == VERDICT_FAIL
+        assert second.outcome == "fuse"
+
+
+class TestTurnGateWriteVerify:
+    """原引擎 VerificationLoop 语义 → 回合级写入后验证规则。"""
+
+    def test_write_then_failed_test_without_disclosure_fails(self):
+        gate = TurnGate()
+        events = [
+            {
+                "tool": "write_file",
+                "success": True,
+                "params": {"file_path": "x.py"},
+            },
+            {"tool": "command", "success": False, "error": "assert 失败"},
+        ]
+        verdict = gate.evaluate("修复完成", tool_events=events)
+        assert verdict.outcome == VERDICT_FAIL
+        assert any("写入后验证" in r for r in verdict.reasons)
+
+    def test_disclosed_failure_passes(self):
+        gate = TurnGate()
+        events = [
+            {
+                "tool": "write_file",
+                "success": True,
+                "params": {"file_path": "x.py"},
+            },
+            {"tool": "command", "success": False, "error": "assert 失败"},
+        ]
+        verdict = gate.evaluate(
+            "写入完成，但测试仍失败：assert 失败（需要进一步排查）",
+            tool_events=events,
         )
+        assert verdict.outcome == VERDICT_PASS
 
-        # 不应无限循环：补救 2 次后接受并 finalize（最终仍 raise 由
-        # finalize_evidence 的 fail-closed 语义保证，这里只验证不挂死）
-        result = engine.run(f"创建 {target}", context=AgentContext())
-        assert "完成" in result
-        assert calls["n"] <= 8, f"不应无限循环，实际调用 {calls['n']} 次"
+    def test_successful_test_passes(self):
+        gate = TurnGate()
+        events = [
+            {
+                "tool": "write_file",
+                "success": True,
+                "params": {"file_path": "x.py"},
+            },
+            {"tool": "command", "success": True, "error": ""},
+        ]
+        verdict = gate.evaluate("已修改 x.py 并运行测试，全部通过。", tool_events=events)
+        assert verdict.outcome == VERDICT_PASS
+
+
+class TestTurnGateHollow:
+    """原引擎空洞回答拦截 → 回合级空洞规则。"""
+
+    def test_hollow_after_tools_fails(self):
+        gate = TurnGate()
+        events = [{"tool": "read_file", "success": True}]
+        verdict = gate.evaluate("好的", tool_events=events)
+        assert verdict.outcome == VERDICT_FAIL
+        assert any("空洞" in r for r in verdict.reasons)
+
+    def test_short_chat_without_tools_passes(self):
+        gate = TurnGate()
+        verdict = gate.evaluate("好的", tool_events=[])
+        assert verdict.outcome == VERDICT_PASS
+
+    def test_completion_claim_without_tools_is_hollow(self):
+        """宣称完成但无任何工具与产物结构 → 空洞（即使无工具回执）。"""
+
+        gate = TurnGate()
+        verdict = gate.evaluate("已完成修复", tool_events=[])
+        assert verdict.outcome == VERDICT_FAIL
+        assert any("空洞" in r for r in verdict.reasons)
 
 
 class TestVerificationLoop:

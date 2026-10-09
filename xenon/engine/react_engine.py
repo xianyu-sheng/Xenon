@@ -16,7 +16,6 @@ from xenon.engine.base import BaseEngine
 from xenon.engine.budget import BudgetManager
 from xenon.engine.callbacks import EngineCallback, mask_sensitive_params
 from xenon.engine.context import AgentContext
-from xenon.engine.hollow_detector import HollowDetector
 from xenon.engine.loop_detector import LoopDetector
 from xenon.engine.react_prompts import BUILTIN_TOOLS, REACT_SYSTEM_PROMPT
 from xenon.engine.scout import DirectoryScout
@@ -181,17 +180,9 @@ class ReActEngine(BaseEngine):
             # 用户已明确授权的写操作（enforce 会误拦「直接写文件」这类指令）。
             evidence_enforcement="observe",
         )
-        # v0.8.3: 引擎层跨轮次验证循环
-        from xenon.engine.verification_loop import VerificationLoop
-
-        self.verification_loop = VerificationLoop(
-            max_rounds=8,
-            max_steps=self.max_iterations,
-        )
-        self.verification_loop._engine = self
+        # 已废弃（校验统一到回合级 TurnGate）：仅存 _verification_enabled 供
+        # 组合引擎 A/B 开关传播兼容；React 执行循环内不再有验证门。
         self._verification_enabled = verification_loop
-        # F2: 空洞回答检测器（无状态，实例共享）
-        self._hollow = HollowDetector()
         # v0.9.0: 循环检测器（智能终止，替代固定迭代限制）
         # 使用更保守的阈值（similarity_threshold=0.85）避免误报，
         # 与重复工具检测、纯读瘫痪检测等机制配合工作
@@ -476,14 +467,6 @@ class ReActEngine(BaseEngine):
 
         # F2: 三阶段软预算管理（每轮 run 新建，状态不跨 run 串扰）
         budget = BudgetManager(self.max_iterations)
-        # F2: 空洞回答补救上限（最多拒绝 1 次，第二次强制接受避免死循环）
-        MAX_HOLLOW_REJECTIONS = 1
-        hollow_rejections = 0
-        # v0.8.2: 交付闸门补救上限——「贴 diff 不落盘」的第三纠偏循环。
-        # FileClaimGate 拦截后注入补救提示再迭代（最多 2 次，超限接受结果
-        # 并在 finalize 时照常 raise，保持 fail-closed 语义）。
-        MAX_DELIVERY_REJECTIONS = 2
-        delivery_rejections = 0
         # 方案 C 根因 3 修复：no_tool_streak 重试上限自适应 max_iterations。
         # 旧逻辑固定 2 次后放弃，导致 LLM 容易"硬扛"过 2 次后文字声称完成。
         # 新逻辑：至少 2 次重试，最多是 max_iterations 的一半（保留一半预算给正常迭代）。
@@ -606,36 +589,6 @@ class ReActEngine(BaseEngine):
                         max_incomplete_answer_rejections,
                     )
                     continue
-                # ── F2: 空洞回答检测 ──
-                # 仅当"做过工或已进入收束阶段"且仍有预算且未超拒绝上限时拦截；
-                # 早鸟短回答（如"done"）在探索阶段无工具时不拦，避免误伤。
-                if (
-                    (
-                        tracker.has_executions()
-                        or budget.is_converge_phase()
-                        or requires_query_result
-                    )
-                    and budget.can_continue()
-                    and hollow_rejections < MAX_HOLLOW_REJECTIONS
-                ):
-                    hr = self._hollow.detect(
-                        final_answer,
-                        len(tracker.calls),
-                        require_query_result=requires_query_result,
-                    )
-                    if hr.is_hollow:
-                        hollow_rejections += 1
-                        budget.on_hollow_answer()
-                        messages.append({"role": "user", "content": hr.hint()})
-                        self.callback.on_warning(
-                            f"检测到空洞回答 (score={hr.score})，已奖励补救轮次并要求重写"
-                        )
-                        logger.warning(
-                            f"ReAct: 空洞回答 hits={hr.hits}，要求重写 "
-                            f"({hollow_rejections}/{MAX_HOLLOW_REJECTIONS})"
-                        )
-                        continue
-
                 # ── 关键验证：如果需要工具但未执行，拒绝接受 final_answer ──
                 if requires_tools and not tracker.has_executions():
                     no_tool_streak += 1
@@ -681,108 +634,11 @@ class ReActEngine(BaseEngine):
                 if tracker.has_executions():
                     summary = tracker.execution_summary()
                     logger.debug(f"ReAct 工具执行摘要: {summary}")
-                # ── v0.8.2: 交付闸门补救循环（第三纠偏）──
-                # 贴 diff 不落盘是 SWE-bench 最大失分点：LLM 声称改/建了文件
-                # 但工具记录无写证据。FileClaimGate 拦截后若还有预算与补救
-                # 次数，注入补救提示让 LLM 真正落盘再交付——拦截不是终点，
-                # 拦截结果要反馈回 LLM（与空洞回答/无工具声称同构的循环）。
-                verdict = self.delivery_gate_verdict(
-                    context=ctx,
-                    output=answer,
-                    tracker=tracker,
-                )
-                if (
-                    verdict is not None
-                    and budget.can_continue()
-                    and delivery_rejections < MAX_DELIVERY_REJECTIONS
-                ):
-                    delivery_rejections += 1
-                    budget.on_retry()
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": self.delivery_remediation_prompt(verdict),
-                        }
-                    )
-                    self.callback.on_warning(
-                        f"交付校验未通过（{verdict.reason[:80]}），"
-                        f"已要求重新落盘（{delivery_rejections}/{MAX_DELIVERY_REJECTIONS}）"
-                    )
-                    logger.warning(
-                        f"ReAct: 交付闸门拦截，注入补救提示 "
-                        f"({delivery_rejections}/{MAX_DELIVERY_REJECTIONS})"
-                    )
-                    continue
-
-                # ── v0.8.3: 学习式验证循环（跨轮次状态传递）──
-                # 在 React 交付闸门通过后，检查是否需要验证修复。
-                # 若需要，注入修复提示并继续主循环，让 LLM 修复后再交付。
-                # React 的「多轮」由主循环自然提供（每次跳转回主循环头，
-                # 下一轮迭代再回到此检查点）。
-                from xenon.engine.execution_evidence import (
-                    ExecutionEvidence,
-                    workspace_root_for,
-                )
-
-                # 首次进入时重置，后续由主循环自然迭代驱动
-                if not getattr(self, "_verification_enabled", True):
-                    evidence = ExecutionEvidence.capture(
-                        tracker, workspace_root_for(self)
-                    )
-                elif not getattr(self, "_verification_active", False):
-                    self.verification_loop.reset()
-                    self.verification_loop._active = True
-                    self._verification_active = True
-                    evidence = ExecutionEvidence.capture(
-                        tracker, workspace_root_for(self)
-                    )
-                else:
-                    # 非首次：记录上一轮修复结果后再继续
-                    evidence = ExecutionEvidence.capture(
-                        tracker, workspace_root_for(self)
-                    )
-                    outcome_tag = (
-                        "fixed" if evidence.successful_tests else "still_failing"
-                    )
-                    self.verification_loop.record_outcome(evidence, outcome=outcome_tag)
-
-                if not self.verification_loop.should_continue:
-                    # 验证条件不满足，直接交付
-                    self.finalize_evidence(context=ctx, output=answer, tracker=tracker)
-                    self.callback.on_finish(answer)
-                    return answer
-
-                repair_prompt = self.verification_loop.feed(evidence, user_input)
-                if repair_prompt is None:
-                    # 无修复提示（已验证通过/无失败测试），直接交付
-                    self.finalize_evidence(context=ctx, output=answer, tracker=tracker)
-                    self.callback.on_finish(answer)
-                    return answer
-
-                if not budget.can_continue() or iteration >= self.max_iterations:
-                    logger.warning("VerificationLoop (ReAct): 预算耗尽，终止验证循环")
-                    answer = self._mark_budget_exhausted(
-                        f"验证循环被终止，任务可能未完成。\n\n{answer}",
-                        extra="验证循环被终止，",
-                    )
-                    self.finalize_evidence(context=ctx, output=answer, tracker=tracker)
-                    self.callback.on_finish(answer)
-                    return answer
-                self.callback.on_warning(
-                    "检测到修改已落盘但测试未通过，正在读取失败输出并修复…"
-                )
-                logger.warning(
-                    "ReAct: 学习式验证循环 R%d——注入修复提示",
-                    self.verification_loop.round_count + 1,
-                )
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": repair_prompt,
-                    }
-                )
-                # 重新进入主循环（下一轮迭代会回到此检查点）
-                continue  # 回到 while budget.can_continue() 顶部
+                # 交付校验不再在引擎内（已上移到回合级 TurnGate：
+                # 文件声称审计/写入后验证/空洞回答由 REPL 发布门统一判定）。
+                self.finalize_evidence(context=ctx, output=answer, tracker=tracker)
+                self.callback.on_finish(answer)
+                return answer
 
             # v0.5.3: Python 的 "key" in list 检查的是值成员而非键存在，
             # 所以 list[dict] 永远返回 False，导致并行工具调用被静默跳过。
