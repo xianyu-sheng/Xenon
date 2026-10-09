@@ -175,13 +175,16 @@ class TestSingleSourceOfTruth:
         assert "direct" not in CODE_EDITING_ENGINES
 
     def test_repl_has_no_hardcoded_engine_dispatch(self):
-        """repl.py 不应再有按范式名硬编码的 elif 链。"""
+        """repl 主文件与 turn_flow 不应再有按范式名硬编码的 elif 链。"""
         import ast
         import pathlib
 
         import xenon.repl.repl as mod
 
         src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
+        import xenon.repl.turn_flow as tf
+
+        src += "\n" + pathlib.Path(tf.__file__).read_text(encoding="utf-8")
         tree = ast.parse(src)
         offenders = []
         for node in ast.walk(tree):
@@ -260,7 +263,7 @@ class TestUnknownModeDoesNotSilentlyFallBack:
         import ast
         import pathlib
 
-        import xenon.repl.repl as mod
+        import xenon.repl.turn_flow as mod
 
         src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
         # dispatch 分支里必须存在「未注册」提示，且必须调用 _record_engine_error

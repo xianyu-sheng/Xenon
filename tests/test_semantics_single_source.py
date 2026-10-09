@@ -31,7 +31,7 @@ def test_estimator_no_longer_falls_back_to_a_second_llm_call():
 
 
 def test_repl_uses_regex_intent_only_in_the_degraded_fallback():
-    source = _source("xenon/repl/repl.py")
+    source = _source("xenon/repl/turn_flow.py")
     # 唯一一处模块级 detect_intent 调用在 _detect_intent 帮助函数内部。
     assert source.count("return detect_intent(text)") == 1
     # 两处 self._detect_intent 调用都在 _resolve_turn_intent 的降级分支。
