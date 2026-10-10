@@ -17,7 +17,26 @@ from xenon.repl.turn_helpers import _looks_like_external_query
 logger = logging.getLogger(__name__)
 
 # 与 repl.py 共用同一 console 实例：由 repl.py 在 Console 创建后回填。
-console: Any = None
+class _ConsoleProxy:
+    """动态转发到 repl.console：测试 monkeypatch repl.console 时同步生效。"""
+
+    def __getattr__(self, name):
+        from xenon.repl.repl import console
+
+        return getattr(console, name)
+
+    def __enter__(self):
+        from xenon.repl.repl import console
+
+        return console.__enter__()
+
+    def __exit__(self, *exc):
+        from xenon.repl.repl import console
+
+        return console.__exit__(*exc)
+
+
+console: Any = _ConsoleProxy()
 
 
 class DirectChatMixin:
