@@ -1,9 +1,8 @@
 # Xenon 观测层（AgentOps）设计 — P0
 
-> **状态：草案（待评审）** · 关联 issue：[\#131](https://github.com/xianyu-sheng/Xenon/issues/131) · Schema 提案：`xenon.trace/v1`
+> **状态：已评审通过（P0 完成）** · 关联 issue：[\#131](https://github.com/xianyu-sheng/Xenon/issues/131) · Schema：`xenon.trace/v1`
 >
-> 本文档是 P1–P4 的实现依据。**在本文档评审通过并合并前，不得进入实现。**
-> 第 14 节列出必须由维护者裁决的开放问题（建议在 PR 评审中逐条拍板）。
+> 本文件是 P1–P4 的实现依据。第 14 节记录维护者裁决（2026-10-14）。
 
 ---
 
@@ -309,9 +308,9 @@ xenon replay       [SESSION] [--from-turn N] [--check]  # P4
 
 | 阶段 | 状态 | 认领方式 |
 |---|---|---|
-| P0 设计（本文档） | **评审中** | 维护者在 PR 中逐条裁决第 14 节 |
-| P1 导出（JSONL + OTLP） | 待 P0 合并 | 评论 #131 认领 |
-| P2 指标（`xenon stats`） | 待 P0 合并 | 同上 |
+| P0 设计（本文档） | **已完成**（裁决见第 14 节） | — |
+| P1 导出（JSONL + OTLP） | 可认领 | 评论 #131 说明认领 |
+| P2 指标（`xenon stats`） | 可认领 | 同上 |
 | P3 查看器（离线 HTML） | 待 P1 合并 | 同上 |
 | P4 回放（与 #126 共用 driver） | 待 P1/P2 合并 | 同上 |
 
@@ -319,17 +318,19 @@ xenon replay       [SESSION] [--from-turn N] [--check]  # P4
 
 ---
 
-## 14. 开放问题（需评审裁决）
+## 14. 裁决记录（维护者，2026-10-14）
 
-1. **`tool/result` 补字段 vs 新事件**：新增 `call_id/started_at/ended_at/duration_ms` 可选字段（推荐，少写一次）——还是发独立 `tool/call` 事件？
-2. **`turn/assistant` 是否补 `turn_id/outcome/duration_ms`**（影响回合时长与 gate 结果归因）——推荐补。
-3. **OTLP 传输**：JSON over HTTP（无新依赖，推荐）还是 protobuf（更标准，新增依赖）？
-4. **价目表**：内置默认表的维护口径与币种（CNY 为主？），未知模型策略（当前设计：null + 标记）。
-5. **归档/保留**：观测数据随会话增长；是否需要保留策略（后续独立 issue？）。
-6. **`xenon stats` 默认窗口**：最近会话（推荐）还是最近 7 天？
-7. **P3 查看器技术**：自包含 HTML + 内联 JS（推荐）还是纯静态 SVG（无 JS，但交互弱）？
-8. **命名**：`xenon trace/stats/replay` 子命令 vs REPL 斜杠命令（当前设计：CLI 主、REPL 后续便利项）。
+| # | 问题 | 裁决 |
+|---|---|---|
+| 1 | `tool/result` 补字段 vs 新事件 | ✅ 补可选字段（`call_id/started_at/ended_at/duration_ms`），不新发事件 |
+| 2 | `turn/assistant` 补充字段 | ✅ 补 `turn_id/outcome/duration_ms` |
+| 3 | OTLP 传输 | ✅ JSON over HTTP（零新依赖；protobuf 不在 P1 范围） |
+| 4 | 价目表 | ✅ 内置默认 + `~/.xenon/pricing.yaml` 用户覆盖；条目带 `currency`（默认 CNY）；未知模型 `cost=null` + `cost_unknown=true` |
+| 5 | 归档/保留 | ✅ 本设计不涉及，后续独立 issue |
+| 6 | `xenon stats` 默认窗口 | ✅ 最近会话；`--since` 扩展窗口 |
+| 7 | P3 查看器技术 | ✅ 自包含 HTML + 内联 JS |
+| 8 | 命名 | ✅ CLI 子命令为主（`xenon trace/stats/replay`）；REPL 斜杠命令为后续便利项 |
 
 ---
 
-*本文档由维护者评审后生效；未裁决项以维护者结论为准并回写本文件。*
+*本文件已生效。实现中发现新问题请在此追加“后续裁决”小节，不另开平行文档。*
