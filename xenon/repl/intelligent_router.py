@@ -8,12 +8,17 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import TYPE_CHECKING
 
 from xenon.repl.feature_extractor import FeatureExtractor
 from xenon.repl.paradigm_selector import ParadigmSelector, RoutingDecision
-from xenon.repl.routing_history import DecisionHistory, RoutingDecisionRecord
+from xenon.repl.routing_history import (
+    DecisionHistory,
+    OverrideRecord,
+    ParadigmPreferences,
+    RoutingDecisionRecord,
+)
 
 if TYPE_CHECKING:
     from xenon.repl.context_manager import ContextManager
@@ -36,6 +41,7 @@ class IntelligentRouter:
         notify_user: bool = True,
         switch_only_on_improvement: bool = True,
         decision_history: DecisionHistory | None = None,
+        preferences: ParadigmPreferences | None = None,
     ):
         """
         初始化智能路由器
@@ -51,6 +57,10 @@ class IntelligentRouter:
         self.notify_user = notify_user
         self.switch_only_on_improvement = switch_only_on_improvement
         self.decision_history = decision_history or DecisionHistory()
+        # In-memory by default (no persist path), so tests never touch disk.
+        self.preferences = preferences or ParadigmPreferences()
+        # (signature, recommended paradigm, input preview) of the latest route()
+        self._last_recommendation: tuple[str, str, str] | None = None
 
         self.extractor = FeatureExtractor()
         self.selector = ParadigmSelector()
@@ -95,6 +105,9 @@ class IntelligentRouter:
                 f"(置信度: {decision.confidence:.2f}, 规则: {decision.matched_rule})"
             )
 
+            # Step 2.5: 用户偏好加权（小幅、封顶 1.0；不绕过后续任何检查）
+            decision = self._apply_preference(decision, features, user_input)
+
             # Step 3: 判断是否需要切换
             if decision.paradigm == current_mode:
                 # 与当前模式一致，无需切换
@@ -138,6 +151,71 @@ class IntelligentRouter:
         except Exception as e:
             logger.error(f"路由决策失败: {e}", exc_info=True)
             return None
+
+    @staticmethod
+    def _signature(features: object) -> str:
+        """Coarse, low-cardinality task signature used to group overrides."""
+        bucket = min(2, int(getattr(features, "complexity_score", 0.0) * 3))
+        parts = [
+            "coding" if getattr(features, "is_coding", False) else "",
+            "query" if getattr(features, "is_query", False) else "",
+            "explore" if getattr(features, "is_exploratory", False) else "",
+            "quality" if getattr(features, "quality_critical", False) else "",
+            "files" if getattr(features, "has_file_operations", False) else "",
+            f"c{bucket}",
+        ]
+        return "+".join(p for p in parts if p)
+
+    def _apply_preference(
+        self, decision: RoutingDecision, features: object, user_input: str
+    ) -> RoutingDecision:
+        """Boost the recommended paradigm if the user historically prefers it.
+
+        Remembers the recommendation so a later manual /mode can be recorded.
+        Never raises: on any error the original decision is returned.
+        """
+        try:
+            signature = self._signature(features)
+            self._last_recommendation = (
+                signature,
+                decision.paradigm,
+                user_input[:120],
+            )
+            boosted = self.preferences.weight(
+                signature, decision.paradigm, decision.confidence
+            )
+            if boosted != decision.confidence:
+                logger.debug(f"偏好加权: {decision.confidence:.2f} -> {boosted:.2f}")
+                return replace(decision, confidence=boosted)
+        except Exception:
+            logger.debug("偏好加权失败（已忽略）", exc_info=True)
+        return decision
+
+    def record_override(self, chosen_mode: str) -> None:
+        """Record that the user manually switched to ``chosen_mode``.
+
+        Called from /mode. No-op without a pending recommendation or when the
+        user simply picked what the router recommended. Never raises.
+        """
+        try:
+            last = self._last_recommendation
+            if last is None:
+                return
+            signature, recommended, preview = last
+            self._last_recommendation = None
+            if chosen_mode == recommended:
+                return
+            self.preferences.record(
+                OverrideRecord(
+                    timestamp=time.time(),
+                    user_input_preview=preview,
+                    signature=signature,
+                    recommended=recommended,
+                    chosen=chosen_mode,
+                )
+            )
+        except Exception:
+            logger.debug("记录范式覆盖失败（已忽略）", exc_info=True)
 
     def _record_decision(
         self,

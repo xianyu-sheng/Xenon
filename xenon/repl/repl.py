@@ -212,7 +212,7 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
 
         # v0.6.0: 智能路由器 (Intelligent Router)
         from xenon.repl.intelligent_router import IntelligentRouter
-        from xenon.repl.routing_history import DecisionHistory
+        from xenon.repl.routing_history import DecisionHistory, ParadigmPreferences
 
         _auto_route_cfg = get_config().auto_route
         _decision_history = DecisionHistory(
@@ -228,6 +228,9 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             notify_user=_auto_route_cfg.notify_user,
             switch_only_on_improvement=_auto_route_cfg.switch_only_on_improvement,
             decision_history=_decision_history,
+            preferences=ParadigmPreferences(
+                persist_path=str(Path.home() / ".xenon" / "routing_preferences.json")
+            ),
         )
 
         # 会话状态，供命令处理器共享

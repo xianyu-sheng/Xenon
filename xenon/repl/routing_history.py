@@ -201,3 +201,78 @@ class DecisionHistory:
                     )
         except Exception:
             self._records.clear()
+
+
+@dataclass
+class OverrideRecord:
+    """One manual paradigm override: router recommended X, user chose Y."""
+
+    timestamp: float
+    user_input_preview: str
+    signature: str
+    recommended: str
+    chosen: str
+
+
+class ParadigmPreferences:
+    """Learn paradigm preferences from manual overrides (pure frequency count).
+
+    Thread-safe, bounded, with optional JSON persistence. Every I/O failure is
+    swallowed: a corrupt or unwritable file must never break the main loop.
+    """
+
+    MIN_SAMPLES = 3  # overrides needed before a preference is trusted
+    BOOST = 0.1  # small, fixed confidence bonus
+
+    def __init__(self, maxsize: int = 200, persist_path: str | None = None):
+        self._maxsize = maxsize
+        self._records: list[OverrideRecord] = []
+        self._persist_path = Path(persist_path) if persist_path else None
+        self._lock = threading.Lock()
+        self._load()
+
+    def record(self, record: OverrideRecord) -> None:
+        with self._lock:
+            if len(self._records) >= self._maxsize:
+                self._records.pop(0)
+            self._records.append(record)
+        self._save()
+
+    def all(self) -> list[OverrideRecord]:
+        with self._lock:
+            return list(self._records)
+
+    def preferred(self, signature: str) -> str | None:
+        """Most frequently chosen paradigm for this signature, if trusted."""
+        counts = Counter(r.chosen for r in self.all() if r.signature == signature)
+        if not counts:
+            return None
+        paradigm, n = counts.most_common(1)[0]
+        return paradigm if n >= self.MIN_SAMPLES else None
+
+    def weight(self, signature: str, paradigm: str, confidence: float) -> float:
+        """Add a small boost to the preferred paradigm; never exceeds 1.0."""
+        if self.preferred(signature) == paradigm:
+            return min(1.0, confidence + self.BOOST)
+        return confidence
+
+    def _save(self) -> None:
+        if not self._persist_path:
+            return
+        try:
+            self._persist_path.parent.mkdir(parents=True, exist_ok=True)
+            data = [asdict(r) for r in self.all()]
+            self._persist_path.write_text(
+                json.dumps(data, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception:
+            pass  # preference persistence must never affect the main loop
+
+    def _load(self) -> None:
+        if not self._persist_path or not self._persist_path.exists():
+            return
+        try:
+            data = json.loads(self._persist_path.read_text(encoding="utf-8"))
+            self._records = [OverrideRecord(**item) for item in data[-self._maxsize :]]
+        except Exception:
+            self._records.clear()  # corrupt file -> start empty

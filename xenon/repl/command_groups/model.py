@@ -479,6 +479,13 @@ def _cmd_mode(
 
     try:
         mode = registry.set_mode(args.strip())
+        # Learn from manual overrides of the intelligent router (never fatal).
+        router = session_state.get("intelligent_router")
+        if router is not None:
+            try:
+                router.record_override(mode.name)
+            except Exception:
+                pass
         # P1-High: 更新状态栏显示
         repl = session_state.get("_repl")
         if repl and hasattr(repl, "status_bar"):
