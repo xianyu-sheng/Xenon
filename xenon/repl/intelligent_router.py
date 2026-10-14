@@ -171,6 +171,12 @@ class IntelligentRouter:
     ) -> RoutingDecision:
         """Boost the recommended paradigm if the user historically prefers it.
 
+        Note: the boost can lift a below-threshold confidence over the
+        threshold (e.g. 0.55 -> 0.65), so learning can *cause* a switch that
+        would otherwise not happen. This is intended; the check order after
+        this step (same-mode, threshold, ``switch_only_on_improvement``) is
+        unchanged and the boosted confidence is clamped at 1.0.
+
         Remembers the recommendation so a later manual /mode can be recorded.
         Never raises: on any error the original decision is returned.
         """
@@ -202,6 +208,10 @@ class IntelligentRouter:
             if last is None:
                 return
             signature, recommended, preview = last
+            # The pending recommendation is consumed by the first /mode call
+            # (even when it equals the recommendation), so consecutive /mode
+            # switches within one turn are not recorded: only the first
+            # reaction to a recommendation counts as an override.
             self._last_recommendation = None
             if chosen_mode == recommended:
                 return

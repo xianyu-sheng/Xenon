@@ -14,6 +14,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
+from xenon.utils.atomic_write import atomic_write_text
+
 
 @dataclass
 class RoutingRecord:
@@ -262,9 +264,8 @@ class ParadigmPreferences:
         try:
             self._persist_path.parent.mkdir(parents=True, exist_ok=True)
             data = [asdict(r) for r in self.all()]
-            self._persist_path.write_text(
-                json.dumps(data, ensure_ascii=False), encoding="utf-8"
-            )
+            # atomic: a crash mid-write can never leave a torn preferences file
+            atomic_write_text(self._persist_path, json.dumps(data, ensure_ascii=False))
         except Exception:
             pass  # preference persistence must never affect the main loop
 

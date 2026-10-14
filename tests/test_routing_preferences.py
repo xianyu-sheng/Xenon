@@ -81,6 +81,15 @@ def test_choosing_the_recommended_mode_is_not_an_override():
     assert router.preferences.all() == []
 
 
+def test_only_the_first_mode_switch_after_a_recommendation_is_recorded():
+    router = _router("react", 0.9)
+    router.route("fix the bug", None, "direct")
+    router.record_override("plan-execute")
+    router.record_override("reflection")  # pending recommendation already consumed
+
+    assert [r.chosen for r in router.preferences.all()] == ["plan-execute"]
+
+
 def test_override_without_recommendation_is_ignored():
     router = _router("react", 0.9)
     router.record_override("plan-execute")
@@ -191,3 +200,38 @@ def test_boost_never_exceeds_one_through_route():
     decision = router.route("fix the bug", None, "direct")
     assert decision is not None
     assert decision.confidence == 1.0
+
+
+# ── 4. failure isolation & bounds ───────────────────────────
+
+
+def test_weighting_failure_returns_original_decision():
+    router = _router("react", 0.9)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("preferences exploded")
+
+    router.preferences.weight = boom
+    decision = router.route("fix the bug", None, "direct")
+
+    assert decision is not None  # routing still works
+    assert decision.paradigm == "react"
+    assert decision.confidence == pytest.approx(0.9)  # unboosted
+
+
+def test_record_override_swallows_storage_errors():
+    router = _router("react", 0.9)
+    router.route("fix the bug", None, "direct")
+
+    def boom(*args, **kwargs):
+        raise OSError("disk on fire")
+
+    router.preferences.record = boom
+    router.record_override("plan-execute")  # must not raise
+
+
+def test_preferences_are_bounded_and_drop_the_oldest():
+    prefs = ParadigmPreferences(maxsize=2)
+    for chosen in ("a", "b", "c"):
+        prefs.record(OverrideRecord(1.0, "x", "sig", "react", chosen))
+    assert [r.chosen for r in prefs.all()] == ["b", "c"]
