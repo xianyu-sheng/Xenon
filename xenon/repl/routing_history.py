@@ -264,8 +264,13 @@ class ParadigmPreferences:
         try:
             self._persist_path.parent.mkdir(parents=True, exist_ok=True)
             data = [asdict(r) for r in self.all()]
-            # atomic: a crash mid-write can never leave a torn preferences file
-            atomic_write_text(self._persist_path, json.dumps(data, ensure_ascii=False))
+            # atomic: a crash mid-write can never leave a torn preferences file;
+            # 0600 mirrors the session/credentials convention for user data.
+            atomic_write_text(
+                self._persist_path,
+                json.dumps(data, ensure_ascii=False),
+                mode=0o600,
+            )
         except Exception:
             pass  # preference persistence must never affect the main loop
 

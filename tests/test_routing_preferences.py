@@ -5,6 +5,9 @@ All offline and deterministic: the feature extractor and selector are stubbed.
 
 from __future__ import annotations
 
+import os
+import stat
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -235,3 +238,157 @@ def test_preferences_are_bounded_and_drop_the_oldest():
     for chosen in ("a", "b", "c"):
         prefs.record(OverrideRecord(1.0, "x", "sig", "react", chosen))
     assert [r.chosen for r in prefs.all()] == ["b", "c"]
+
+
+def test_concurrent_records_stay_bounded_and_consistent():
+    prefs = ParadigmPreferences(maxsize=100)
+
+    def worker(tag: str) -> None:
+        for _ in range(50):
+            prefs.record(OverrideRecord(1.0, tag, "sig", "react", "plan-execute"))
+
+    threads = [threading.Thread(target=worker, args=(f"t{n}",)) for n in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    records = prefs.all()
+    assert len(records) == 100  # 200 appends, capped at maxsize
+    assert all(r.chosen == "plan-execute" for r in records)
+
+
+# ── 5. signature semantics ───────────────────────────────────
+
+
+def test_signature_buckets_complexity_and_caps_at_two():
+    assert "c0" in IntelligentRouter._signature(_features(complexity_score=0.0))
+    assert "c1" in IntelligentRouter._signature(_features(complexity_score=0.5))
+    assert "c2" in IntelligentRouter._signature(_features(complexity_score=1.0))
+    # Values above 1.0 stay in the top bucket instead of overflowing it.
+    assert "c2" in IntelligentRouter._signature(_features(complexity_score=5.0))
+
+
+def test_signature_separates_task_classes():
+    coding = IntelligentRouter._signature(
+        _features(is_coding=True, is_query=False, is_exploratory=False)
+    )
+    query = IntelligentRouter._signature(
+        _features(is_coding=False, is_query=True, is_exploratory=False)
+    )
+    explore = IntelligentRouter._signature(
+        _features(is_coding=False, is_query=False, is_exploratory=True)
+    )
+    assert len({coding, query, explore}) == 3
+
+
+def test_signature_is_deterministic_and_flag_sensitive():
+    base = IntelligentRouter._signature(_features())
+    assert base == IntelligentRouter._signature(_features())  # deterministic
+    assert IntelligentRouter._signature(_features(quality_critical=True)) != base
+    assert IntelligentRouter._signature(_features(has_file_operations=False)) != base
+
+
+def test_boost_is_scoped_to_the_exact_signature_bucket():
+    # Learned under complexity 0.1 (bucket c0) ...
+    router = _router("react", 0.55)
+    low = IntelligentRouter._signature(_features(complexity_score=0.1))
+    for _ in range(ParadigmPreferences.MIN_SAMPLES):
+        router.preferences.record(
+            OverrideRecord(1.0, "x", low, "plan-execute", "react")
+        )
+    # ... but the live route sees complexity 0.5 (bucket c1): no boost, no switch.
+    assert router.route("fix the bug", None, "direct") is None
+
+
+def test_decision_history_records_the_boosted_confidence():
+    router = _router("react", 0.55)
+    for _ in range(ParadigmPreferences.MIN_SAMPLES):
+        router.preferences.record(
+            OverrideRecord(
+                1.0,
+                "x",
+                IntelligentRouter._signature(_features()),
+                "plan-execute",
+                "react",
+            )
+        )
+
+    decision = router.route("fix the bug", None, "direct")
+    assert decision is not None
+    assert decision.confidence == pytest.approx(0.65)
+    latest = router.decision_history.all()[-1]
+    assert latest.recommended_paradigm == "react"
+    assert latest.confidence == pytest.approx(0.65)  # the value actually used
+    assert latest.switched is True
+
+
+# ── 6. file contract, wiring and integration ─────────────────
+
+
+def test_override_preview_is_truncated_to_120_chars():
+    router = _router("react", 0.9)
+    router.route("y" * 500, None, "direct")
+    router.record_override("plan-execute")
+    (record,) = router.preferences.all()
+    assert record.user_input_preview == "y" * 120
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ['{"not": "a list"}', "null", "42", '[{"missing": "fields"}]'],
+)
+def test_wrong_shape_preferences_file_starts_empty(tmp_path, payload):
+    path = tmp_path / "routing_preferences.json"
+    path.write_text(payload, encoding="utf-8")
+    prefs = ParadigmPreferences(persist_path=str(path))
+    assert prefs.all() == []
+
+
+def test_reload_keeps_only_the_newest_maxsize_records(tmp_path):
+    path = tmp_path / "routing_preferences.json"
+    writer = ParadigmPreferences(persist_path=str(path))
+    for index in range(5):
+        writer.record(OverrideRecord(float(index), "x", "sig", "react", f"m{index}"))
+
+    reloaded = ParadigmPreferences(maxsize=2, persist_path=str(path))
+    assert [r.chosen for r in reloaded.all()] == ["m3", "m4"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_preferences_file_is_private(tmp_path):
+    path = tmp_path / "routing_preferences.json"
+    prefs = ParadigmPreferences(persist_path=str(path))
+    prefs.record(OverrideRecord(1.0, "x", "sig", "react", "plan-execute"))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_mode_command_survives_preference_storage_failure():
+    router = _router("react", 0.9)
+    router.route("fix the bug", None, "direct")
+
+    def boom(*args, **kwargs):
+        raise OSError("disk on fire")
+
+    router.preferences.record = boom
+    mode = SimpleNamespace(name="plan-execute", description="d")
+    registry = SimpleNamespace(set_mode=lambda name: mode)
+
+    out = _cmd_mode(
+        args="plan-execute",
+        registry=registry,
+        session_state={"intelligent_router": router},
+    )
+
+    assert out == "✅ 已切换到范式: plan-execute — d"
+
+
+def test_repl_wires_preferences_persistence(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    from xenon.repl.repl import REPL
+
+    repl = REPL(streaming=False)
+    persist = repl.intelligent_router.preferences._persist_path
+    assert persist is not None
+    assert persist.name == "routing_preferences.json"
