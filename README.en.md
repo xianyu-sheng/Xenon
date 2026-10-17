@@ -114,14 +114,61 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 
 ## Benchmark
 
-SWE-bench Lite — same model (`deepseek-v4-flash`), same official harness, react engine, 120-step budget, blind protocol (no test patch, no test-name hints), three runs per cell averaged:
+### Protocol (frozen point by point, reproducible)
+
+| Item | Value |
+|---|---|
+| Protocol | **Fully blind**: the official test patch is not applied during solving, and the prompt carries no FAIL_TO_PASS names (`XENON_EVAL_APPLY_TEST_PATCH=0`, `XENON_EVAL_FAIL_HINT=0`) |
+| Engine | **`react` only** — not a multi-engine union and not best-of-N. This is a **framework A/B**: the engine is held constant so any difference is attributable to the framework code |
+| Model | `deepseek-v4-flash` official API, `--reasoning-effort off` |
+| Budget | 120 steps (`STANDARD_STEP_BUDGET`), 900 s hard engine wall |
+| Judging | Official `swebench` harness: clean container + model patch + official test patch; an instance counts as resolved only when `FAIL_TO_PASS` all pass and `PASS_TO_PASS` does not regress |
+| Denominator | `resolved / submitted(=30)`; empty patches are reported separately but **still count as unresolved** (conservative) |
+| Repetition | **3 independent runs** per condition, averaged (every run is published; a single run can swing by 4 instances ≈ 13 pp) |
+
+### Two samples
+
+| Sample | Selection | Notes |
+|---|---|---|
+| Frozen 30 | `evals/swebench_select.py --size 30 --seed 20260729` | Historical baseline; 9 of its 30 instances are named in the commit history, i.e. in-sample tuning traces |
+| **Zero-overlap held-out** | same rule, `--seed 20261016 --exclude` the original sample (pool of 270) | **Primary evidence**; no instance is shared with the original sample |
+
+Both manifests (with digests) are committed, so anyone can reproduce instance by instance.
+
+### Results
 
 | Sample | Current framework | Previous generation (v0.8.5) |
 |---|---|---|
 | Frozen 30 instances (seed 20260729) | **62.2%** | 63.3% |
 | Zero-overlap held-out sample (seed 20261016) | **52.2%** | 46.7% |
 
-> The original sample carries in-sample tuning traces (9 of its 30 instances are named in the commit history), so the held-out sample is the evidence to trust; the relative gap flips sign between the two samples — the old generation's edge on the original sample came at least partly from tuning. Full protocol, per-run results, judging logs and sha256-checked archives: [EVAL_RESULTS](docs/EVAL_RESULTS.md).
+> Factor decomposition (same model / same instances / same harness): framework iteration **0 pp** (p=1.0) · budget 10→120 steps **+36.7–46.7 pp** · test visibility during solving **+16.7 pp** (non-standard, upper bound only). **The bottleneck is budget and model, not the scaffolding.**
+
+### Bring a stronger model and beat us
+
+One run (30 instances, flash) costs roughly **$0.5–1** in API usage; frontier models are ~$7–30 per run, and we only have the flash budget. If you have a stronger model, please reproduce on the same manifest and protocol:
+
+```bash
+git clone --depth 1 https://github.com/xianyu-sheng/Xenon.git && cd Xenon
+python -m venv .venv && .venv/bin/pip install -e . && .venv/bin/pip install "swebench==4.1.0" datasets docker
+
+IDS=$(python -c "import json;print(' '.join(json.load(open('evals/manifests/swebench-lite-30-heldout-seed20261016.json'))['instance_ids']))")
+ARGS=(); for i in $IDS; do ARGS+=(--instance-id "$i"); done
+
+XENON_EVAL_APPLY_TEST_PATCH=0 XENON_EVAL_FAIL_HINT=0 \
+.venv/bin/python evals/swebench_xenon.py "${ARGS[@]}" \
+  --prepared-root ./work --engines react --max-steps 120 \
+  --model <your-model> --reasoning-effort off \
+  --request-timeout 60 --engine-timeout 900 \
+  --predictions preds.jsonl --traces traces.jsonl
+
+python -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Lite --split test \
+  --predictions_path preds.jsonl --run_id my-run --max_workers 2 --cache_level env
+```
+
+Post the `run_id`, model name and official report in [Discussions](https://github.com/xianyu-sheng/Xenon/discussions) — **the protocol is frozen, so a model swap is directly comparable** — and we will add your number to the table above (with model and protocol noted).
+
+Full protocol, per-run results, judging logs and sha256-checked archives: [EVAL_RESULTS](docs/EVAL_RESULTS.md).
 
 ## Documentation
 
