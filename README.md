@@ -166,7 +166,7 @@ python -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Lit
   --predictions_path preds.jsonl --run_id my-run --max_workers 2 --cache_level env
 ```
 
-跑完把 `run_id`、模型名和官方报告贴到 [Discussions](https://github.com/xianyu-sheng/Xenon/discussions/161)——**协议已冻结，换模型就能直接比**；我们会把数字并排进上表（注明模型与协议）。
+跑完把 `run_id`、模型名和官方报告贴到 [Discussions](https://github.com/xianyu-sheng/Xenon/issues/162)——**协议已冻结，换模型就能直接比**；我们会把数字并排进上表（注明模型与协议）。
 
 完整协议、逐次结果、判定日志与 sha256 归档：[EVAL_RESULTS](docs/EVAL_RESULTS.md)。
 
