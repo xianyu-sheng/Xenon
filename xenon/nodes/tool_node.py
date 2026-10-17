@@ -374,6 +374,12 @@ class ToolNode(
         github_action: str = "list_files",  # list_files | fetch_file | fetch_readme | repo_activity
         github_path: str = "",
         branch: str = "",
+        # v0.9.5: clone_repo 显式目标目录（否则落到 ~/.xenon/repos 缓存）
+        target_dir: str = "",
+        # v0.9.5: create_pull_request 参数（branch 作为 head）
+        pr_title: str = "",
+        pr_body: str = "",
+        base_branch: str = "",
         # weather 参数
         city: str = "",
         lang: str = "zh",
@@ -432,6 +438,10 @@ class ToolNode(
         self.github_action = github_action
         self.github_path = github_path
         self.branch = branch
+        self.target_dir = target_dir
+        self.pr_title = pr_title
+        self.pr_body = pr_body
+        self.base_branch = base_branch
         self.city = city
         self.lang = lang
         self.description = description
@@ -568,6 +578,10 @@ class ToolNode(
         "github_action",
         "github_path",
         "branch",
+        "target_dir",
+        "pr_title",
+        "pr_body",
+        "base_branch",
         "city",
         "lang",
         "description",
@@ -632,10 +646,26 @@ class ToolNode(
     def _extra_allowed_roots() -> tuple[Path, ...]:
         """v0.5.3: 允许读写 /tmp 等临时目录。
 
+        v0.9.5: 额外支持 `XENON_EXTRA_ROOTS`（os.pathsep 分隔，Windows 用 `;`），
+        用于「仓库不在启动目录下」的场景（例如 D:\\repo、外接盘）。
+        这是显式 opt-in：默认行为不变，只有设置了环境变量才放行。
+
         提取为方法以便测试时可 monkeypatch 清空，否则基于 tmp_path 的测试
         无法验证符号链接逃逸防护——逃逸目标若落在 /tmp 会被此规则直接放行。
         """
-        return (Path("/tmp").resolve(), Path("/var/tmp").resolve())
+        roots = [Path("/tmp").resolve(), Path("/var/tmp").resolve()]
+        raw = os.environ.get("XENON_EXTRA_ROOTS", "")
+        for entry in raw.split(os.pathsep):
+            entry = entry.strip()
+            if not entry:
+                continue
+            try:
+                roots.append(Path(entry).expanduser().resolve())
+            except (OSError, RuntimeError):
+                logger.warning(
+                    "XENON_EXTRA_ROOTS 条目无法解析，已忽略: %s", entry
+                )
+        return tuple(roots)
 
     @staticmethod
     def _real_path_for_check(path: Path) -> Path:
@@ -714,7 +744,8 @@ class ToolNode(
         if not in_allowed_root:
             raise SecurityError(
                 f"路径越界: {resolved} 不在允许的目录 {root} 下。"
-                f"文件操作限制在项目目录内。"
+                f"文件操作限制在项目目录内（如需访问其他目录，"
+                f"请设置 XENON_EXTRA_ROOTS={os.pathsep}分隔的路径）。"
             )
 
         # 写入操作额外检查敏感路径

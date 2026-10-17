@@ -566,10 +566,33 @@ class GitHubToolsMixin:
             }
         repo = reference.slug
 
-        # ── 构建缓存路径 ──
-        cache_root = Path.home() / ".xenon" / "repos"
-        cache_root.mkdir(parents=True, exist_ok=True)
-        target_dir = cache_root / repo.replace("/", "_")
+        # ── 决定目标目录 ──
+        # 默认落缓存（~/.xenon/repos）；显式 target_dir 允许直接克隆到工作区，
+        # 用于「就在这个仓库里改代码 / 提 PR」的场景。
+        explicit_target = (
+            self._resolve_template(getattr(self, "target_dir", "") or "", context)
+            or ""
+        ).strip()
+        use_cache = not explicit_target
+        if explicit_target:
+            target_dir = self._validate_path(explicit_target, for_write=True)
+            # 先做目标目录检查（在探测分支/网络之前），失败快速返回。
+            if target_dir.exists() and any(target_dir.iterdir()) and not (
+                target_dir / ".git"
+            ).exists():
+                return {
+                    "action_type": "clone_repo",
+                    "repo": repo,
+                    "success": False,
+                    "error": (
+                        f"目标目录非空且不是 git 仓库: {target_dir}。"
+                        "请换一个空目录，或先手动处理现有内容。"
+                    ),
+                }
+        else:
+            cache_root = Path.home() / ".xenon" / "repos"
+            cache_root.mkdir(parents=True, exist_ok=True)
+            target_dir = cache_root / repo.replace("/", "_")
 
         # ── 决议分支（前置：无论命中缓存与否都需要，供给 _analyze_cloned_repo）──
         clone_url = f"https://github.com/{repo}.git"
@@ -638,54 +661,80 @@ class GitHubToolsMixin:
                     ),
                 }
         else:
-            logger.info(f"[{self.id}] 仓库已缓存: {target_dir}")
-            # Refresh Xenon's cache without discarding local edits. A dirty or
-            # diverged cache remains usable, but the caller sees a warning.
-            try:
-                fetch = subprocess.run(
-                    [
-                        "git",
-                        "-C",
-                        str(target_dir),
-                        "fetch",
-                        "--depth",
-                        "1",
-                        "origin",
-                        branch,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout,
-                    env=git_env,
-                )
-                if fetch.returncode == 0:
-                    merge = subprocess.run(
+            if use_cache:
+                logger.info(f"[{self.id}] 仓库已缓存: {target_dir}")
+                # Refresh Xenon's cache without discarding local edits. A dirty or
+                # diverged cache remains usable, but the caller sees a warning.
+                try:
+                    fetch = subprocess.run(
                         [
                             "git",
                             "-C",
                             str(target_dir),
-                            "merge",
-                            "--ff-only",
-                            "FETCH_HEAD",
+                            "fetch",
+                            "--depth",
+                            "1",
+                            "origin",
+                            branch,
                         ],
                         capture_output=True,
                         text=True,
                         timeout=self.timeout,
                         env=git_env,
                     )
-                    cache_updated = merge.returncode == 0
-                    if not cache_updated:
-                        cache_warning = (
-                            "缓存存在本地修改或分叉，未覆盖；继续分析现有缓存: "
-                            + _tool_node_module()._last_error_lines(merge.stderr)
+                    if fetch.returncode == 0:
+                        merge = subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(target_dir),
+                                "merge",
+                                "--ff-only",
+                                "FETCH_HEAD",
+                            ],
+                            capture_output=True,
+                            text=True,
+                            timeout=self.timeout,
+                            env=git_env,
                         )
-                else:
-                    cache_warning = (
-                        "无法更新远程仓库，继续分析现有缓存: "
-                        + _tool_node_module()._last_error_lines(fetch.stderr)
+                        cache_updated = merge.returncode == 0
+                        if not cache_updated:
+                            cache_warning = (
+                                "缓存存在本地修改或分叉，未覆盖；继续分析现有缓存: "
+                                + _tool_node_module()._last_error_lines(merge.stderr)
+                            )
+                    else:
+                        cache_warning = (
+                            "无法更新远程仓库，继续分析现有缓存: "
+                            + _tool_node_module()._last_error_lines(fetch.stderr)
+                        )
+                except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                    cache_warning = f"缓存更新失败，继续分析现有缓存: {exc}"
+            else:
+                # 显式目标目录已是 git 仓库：这是用户的 checkout，绝不 fetch/merge，
+                # 仅校验 origin 后按现有内容分析。
+                logger.info(
+                    "[%s] 目标目录已是 git 仓库，按现有内容分析: %s",
+                    self.id,
+                    target_dir,
+                )
+                try:
+                    remote = subprocess.run(
+                        ["git", "-C", str(target_dir), "remote", "get-url", "origin"],
+                        capture_output=True,
+                        text=True,
+                        timeout=self.timeout,
                     )
-            except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-                cache_warning = f"缓存更新失败，继续分析现有缓存: {exc}"
+                    if remote.returncode == 0:
+                        origin = remote.stdout.strip().lower()
+                        if repo.lower() not in origin:
+                            cache_warning = (
+                                "目标目录已有 git 仓库，但 origin "
+                                f"({remote.stdout.strip()}) 与 {repo} 不一致；"
+                                "按现有内容分析。"
+                            )
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
 
         # ── 分析克隆结果 ──
         analysis = self._analyze_cloned_repo(target_dir, repo, branch)
@@ -694,6 +743,104 @@ class GitHubToolsMixin:
             analysis["cache_warning"] = cache_warning
             analysis["content"] += f"\n\n- 缓存提示: {cache_warning}"
         return analysis
+
+    def _create_pull_request(self, context: AgentContext) -> dict[str, Any]:
+        """通过 GitHub API 创建 Pull Request。
+
+        参数：repo（owner/repo）、branch（head 分支，必须已 push）、
+        pr_title、pr_body（可选）、base_branch（可选，缺省探测默认分支）。
+        认证用 GITHUB_TOKEN / GH_TOKEN / credentials.yaml 的 github.token。
+        """
+        repo_input = self._resolve_template(self.repo, context)
+        if not repo_input:
+            return {
+                "action_type": "create_pull_request",
+                "success": False,
+                "error": "create_pull_request 需要 repo 参数（owner/repo）",
+            }
+        try:
+            repo = parse_github_reference(repo_input).slug
+        except ValueError as exc:
+            return {
+                "action_type": "create_pull_request",
+                "repo": repo_input,
+                "success": False,
+                "error": str(exc),
+            }
+
+        head = (self._resolve_template(self.branch, context) or "").strip()
+        base = (self._resolve_template(getattr(self, "base_branch", "") or "", context) or "").strip()
+        title = (self._resolve_template(getattr(self, "pr_title", "") or "", context) or "").strip()
+        body = self._resolve_template(getattr(self, "pr_body", "") or "", context) or ""
+        if not head or not title:
+            return {
+                "action_type": "create_pull_request",
+                "repo": repo,
+                "success": False,
+                "error": "create_pull_request 需要 branch（head）与 pr_title",
+            }
+
+        try:
+            import httpx
+        except ImportError:
+            return {
+                "action_type": "create_pull_request",
+                "repo": repo,
+                "success": False,
+                "error": "缺少 httpx 依赖，无法调用 GitHub API。请先 pip install httpx",
+            }
+
+        headers = self._github_headers()
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                if not base:
+                    base = self._github_default_branch(client, repo, headers)
+                resp = client.post(
+                    f"https://api.github.com/repos/{repo}/pulls",
+                    headers=headers,
+                    json={
+                        "title": title,
+                        "head": head,
+                        "base": base,
+                        "body": body,
+                    },
+                )
+        except Exception as exc:  # 网络/超时/默认分支探测失败
+            return {
+                "action_type": "create_pull_request",
+                "repo": repo,
+                "success": False,
+                "error": f"创建 PR 请求失败: {exc}",
+            }
+
+        if resp.status_code not in (200, 201):
+            hint = ""
+            if resp.status_code in (401, 403):
+                hint = (
+                    "（检查 GITHUB_TOKEN/GH_TOKEN 或 credentials.yaml 的 "
+                    "github.token 是否有 repo 权限）"
+                )
+            return {
+                "action_type": "create_pull_request",
+                "repo": repo,
+                "success": False,
+                "status_code": resp.status_code,
+                "error": f"GitHub API {resp.status_code}{hint}: {resp.text[:300]}",
+            }
+
+        data = resp.json()
+        url = data.get("html_url") or ""
+        number = data.get("number")
+        return {
+            "action_type": "create_pull_request",
+            "repo": repo,
+            "success": True,
+            "pr_url": url,
+            "pr_number": number,
+            "head": head,
+            "base": base,
+            "content": f"已创建 PR #{number}: {url}",
+        }
 
     # ── clone_repo 辅助方法 ───────────────────────────────────
 

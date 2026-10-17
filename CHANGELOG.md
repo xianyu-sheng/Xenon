@@ -7,7 +7,15 @@
 
 ### 引擎
 
+- 新增「改完代码必须验证」软提醒（#163）：ReAct 在 `final_answer` 前检查「最后一次成功写入之后没有任何测试/构建命令」，命中时注入一次提醒（不阻断、不重复）；系统提示规则 8 同步扩展为所有代码变更，要求先跑「能因改动而失败的测试」。
+- 修复拒绝检测误判：`_detect_denial` 旧实现整段子串匹配，会把「可以，但有几个前提……我无法直接访问 X」判成拒绝并触发备用模型切换；现在只看开头第一句且排除肯定性表态。
 - 统一标准步数预算为 **120 步**（与 Claude Code 类代理对齐）：`react` / `plan-execute` 由 40 步、`plan-react` / `plan-reflection` / `react-reflection` 由 24 步统一为 120；引擎类默认值与工厂默认值一致，`XENON_MAX_ITERATIONS` 仍可覆盖。SWE-bench 等评测运行冻结在 120 步（见 `docs/EVAL_RESULTS.md` 预注册），测试 `tests/test_step_budget.py` 锁定该常数。
+
+### 工具
+
+- `clone_repo` 新增 `target_dir`：可把仓库直接克隆到工作区指定目录；若目标已是 git checkout，只做只读校验、绝不 fetch/merge 用户仓库。
+- 新增 `create_pull_request` 工具（GitHub API 建 PR；REPL 中按 CRITICAL 审批）；`branch` 为 head，`base_branch` 省略时自动探测默认分支。
+- 新增 `XENON_EXTRA_ROOTS`：显式追加文件工具允许读写的根目录，解决「从 A 目录启动、仓库在 D 盘」的越界问题（默认行为不变，越界报错会提示该变量）。
 
 ### 评测
 

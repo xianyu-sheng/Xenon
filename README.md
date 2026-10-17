@@ -193,7 +193,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 ## 环境变量
 
 <details>
-<summary>共 13 项（点击展开）</summary>
+<summary>共 14 项（点击展开）</summary>
 
 | 变量 | 作用 | 默认 |
 |---|---|---|
@@ -207,6 +207,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 | `NO_COLOR` | 标准环境变量；关闭输出与输入提示的颜色 | 未设置 |
 | `XENON_READ_ONLY` | 只读模式（禁用一切写/执行工具） | 关 |
 | `XENON_COMMAND_ALLOWLIST` | 命令首词白名单（逗号分隔） | 空 = 不限 |
+| `XENON_EXTRA_ROOTS` | 启动目录之外额外允许文件工具读写的根目录（Windows 用 `;` 分隔） | 空 = 仅启动目录及其子目录 |
 | `XENON_SESSION_EVENTS(_DIR)` | 事件日志开关 / 目录 | 开 |
 | `XENON_HOOKS` | 本地 hooks 开关 | 开 |
 | `GITHUB_TOKEN` / `GH_TOKEN` | GitHub 工具认证（提升 API 限额） | 空 |

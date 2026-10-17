@@ -55,7 +55,7 @@ REACT_SYSTEM_PROMPT = """你是一个 ReAct 模式的 AI 编程助手。你通�
 5. **何时使用 final_answer**：只有当所有操作都通过工具实际执行完毕后，才能使用 final_answer
 6. **严禁发明工具**：只能使用下方列出的工具，不存在 get_content_from_url、get_github_repo_content 等工具
 7. **read_file 不支持 start_line 等分段参数**，它只能读取整个文件。如果文件太大，用 command 执行 {large_file_hint} 分段读取
-8. **实现功能的正确流程**：先 1-2 步了解结构 → 然后立即用 write_file 写代码 → 最后用 command 测试
+8. **任何代码变更都要自检**（实现功能 / 修 bug / 重构都适用）：先 1-2 步了解结构 → 立即写代码 → **先跑最小的、能因为你的改动而失败的测试**，再跑更广的验证（优先用仓库里已有的命令，如 pytest / npm test / go test / make）；在回答里贴出命令与真实结果。没有测试可跑时说明原因，并给出最小验证手段（如 `python -m compileall`）
 9. **长列表先筛选再返回**：当用户给出时间范围或关键词条件时，调用 web_fetch/mcp_call
    必须传入 start_time/end_time/query 等筛选参数。工具会在截断前筛选完整响应；不要先抓取
    整张按时间排序的长列表再让模型从被截断的前缀中查找尾部数据。
@@ -69,7 +69,7 @@ REACT_SYSTEM_PROMPT = """你是一个 ReAct 模式的 AI 编程助手。你通�
 当用户要求分析 GitHub 仓库时，按以下优先级选择方式：
 
 **方式 A（推荐）：本地克隆分析**
-1. 用 `clone_repo(repo="owner/repo")` 将仓库克隆到本地缓存
+1. 用 `clone_repo(repo="owner/repo")` 将仓库克隆到本地缓存（要在工作区里直接改代码/提 PR 时，加 `target_dir`）
 2. clone_repo 会自动返回目录结构、关键文件、代码统计摘要
 3. 根据摘要中的关键文件列表，用 `read_file` 读取核心文件进行分析
 4. 需要搜索特定内容时用 `search_files` 在克隆路径下搜索
@@ -160,9 +160,9 @@ BUILTIN_TOOLS = {
     },
     "git": {
         "name": "git",
-        "description": "在本机执行 Git 版本控制操作。只支持查看类命令（status/diff/log/branch）和基本操作（add/commit）。",
+        "description": "在本机执行 Git 版本控制操作。支持查看类命令（status/diff/log/branch）与基本操作（add/commit），以及 'push'（把分支推到 origin，之后可用 create_pull_request 建 PR）。push 需要审批。",
         "params": {
-            "git_command": "Git 子命令，如 'status'、'diff'、'log --oneline -10'、'add -A'、'commit -m msg'"
+            "git_command": "Git 子命令，如 'status'、'diff'、'log --oneline -10'、'add -A'、'commit -m msg'、'push -u origin <branch>'"
         },
     },
     "web_fetch": {
@@ -321,6 +321,24 @@ BUILTIN_TOOLS = {
         "params": {
             "repo": "GitHub 仓库 URL 或 owner/repo 格式，如 'https://github.com/user/repo' 或 'user/repo'",
             "branch": "分支名（可选；留空探测远程默认分支）",
+            "target_dir": "克隆到指定目录（可选；相对路径基于工作区，必须在允许目录内）。省略时落到 ~/.xenon/repos 缓存",
+        },
+    },
+    # v0.9.5: create_pull_request — 把已推送的分支创建为 PR（无内置 push，
+    # 需先用 git 工具 push）。风险级别 SENSITIVE，REPL 会要求审批。
+    "create_pull_request": {
+        "name": "create_pull_request",
+        "description": (
+            "把已 push 到 GitHub 的分支创建为 Pull Request。需要 repo、branch（head 分支）"
+            "与 pr_title；base_branch 省略时自动探测仓库默认分支。"
+            "认证读 GITHUB_TOKEN / GH_TOKEN / credentials.yaml 的 github.token。"
+        ),
+        "params": {
+            "repo": "owner/repo",
+            "branch": "head 分支名（必须已 push 到 GitHub）",
+            "pr_title": "PR 标题",
+            "pr_body": "PR 描述（可选）",
+            "base_branch": "目标分支（可选，默认仓库 default branch）",
         },
     },
     # v0.6.1: LSP 工具 — 基于 Jedi 的精确代码导航（Python）

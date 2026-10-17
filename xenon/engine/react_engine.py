@@ -21,6 +21,10 @@ from xenon.engine.react_prompts import BUILTIN_TOOLS, REACT_SYSTEM_PROMPT
 from xenon.engine.scout import DirectoryScout
 from xenon.engine.strategy_guide import get_strategy_advice
 from xenon.engine.tool_tracker import ToolExecutionTracker
+from xenon.engine.verification_nudge import (
+    VERIFICATION_REMINDER,
+    needs_verification,
+)
 from xenon.nodes.tool_executor import (
     ToolExecutor,
     execution_policy_denial,
@@ -498,6 +502,8 @@ class ReActEngine(BaseEngine):
         max_malformed_response_retries = 2
         incomplete_answer_rejections = 0
         max_incomplete_answer_rejections = 3
+        # v0.9.5 #163: 每个 run 只提醒一次「改完代码要验证」。
+        verification_nudged = False
 
         while budget.can_continue():
             budget.spend()
@@ -643,6 +649,23 @@ class ReActEngine(BaseEngine):
                         max_incomplete_answer_rejections,
                     )
                     continue
+                # ── v0.9.5 #163: 改完代码未验证 → 一次性软提醒（非阻断）──
+                # 仅在还有工具可用时提醒；收束阶段工具 schema 已收起，
+                # 此时提醒只会让模型无法执行，故跳过。
+                if (
+                    not verification_nudged
+                    and not budget.is_converge_phase()
+                    and needs_verification(tracker.calls)
+                ):
+                    verification_nudged = True
+                    budget.on_retry()
+                    messages.append(
+                        {"role": "user", "content": VERIFICATION_REMINDER}
+                    )
+                    self.callback.on_warning("检测到代码改动后未验证，要求先跑测试")
+                    logger.info("ReAct: 注入一次验证提醒（#163）")
+                    continue
+
                 # ── 关键验证：如果需要工具但未执行，拒绝接受 final_answer ──
                 if requires_tools and not tracker.has_executions():
                     no_tool_streak += 1

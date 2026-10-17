@@ -76,7 +76,8 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
 - web_fetch: {{"url": "完整URL"}} — HTTP GET 抓取任意 URL 内容（HTML 自动转文本）。不能列 GitHub 仓库文件。
 - docs_fetch: {{"url": "文档站点URL", "query": "主题", "max_pages": 4}} — 优先发现 llms.txt/llms-full.txt 并按主题读取官方文档；不存在时降级抓取原页面。
 - github_fetch: {{"repo": "owner/repo 或 GitHub 完整 URL", "github_action": "list_files|fetch_file|fetch_readme|fetch_issue|fetch_pull", "github_path": "文件/目录路径", "branch": "可选"}} — 支持仓库、blob、tree、issue、pull、raw URL；留空分支时自动读取默认分支。GITHUB_TOKEN、GH_TOKEN 或 credentials.yaml 的 github.token 可用于认证访问。
-- clone_repo: {{"repo": "owner/repo 或完整 URL", "branch": "可选"}} — 将 GitHub 仓库克隆到本地缓存（~/.xenon/repos/）并分析；留空分支时探测远程 HEAD，缓存命中时安全拉取更新且不覆盖本地修改。
+- clone_repo: {{"repo": "owner/repo 或完整 URL", "branch": "可选", "target_dir": "可选"}} — 将 GitHub 仓库克隆到本地缓存（~/.xenon/repos/），给了 target_dir 则克隆到工作区内指定目录（用于直接改代码/提 PR）；留空分支时探测远程 HEAD，缓存命中时安全拉取更新且不覆盖本地修改。
+- create_pull_request: {{"repo": "owner/repo", "branch": "head 分支(已 push)", "pr_title": "标题", "pr_body": "可选", "base_branch": "可选"}} — 通过 GitHub API 创建 Pull Request；base 省略时探测默认分支。认证读 GITHUB_TOKEN/GH_TOKEN/credentials.yaml。
 - lsp_goto_def: {{"file_path": "Python文件", "line": 行号, "column": 列号}} — 跳转到符号定义（跨文件跟踪 import）。
 - lsp_find_refs: {{"file_path": "Python文件", "line": 行号, "column": 列号}} — 查找符号的所有引用（跨文件）。
 - lsp_hover: {{"file_path": "Python文件", "line": 行号, "column": 列号}} — 获取符号类型、函数签名、文档字符串。
@@ -152,7 +153,7 @@ MINI_REACT_PROMPT = """你正在执行任务计划的第 {step_id} 步（共 {to
 - 需要工具时：{{"thought":"分析当前状态","action":"工具名","action_input":{{"参数名":"值"}}}}
 - 已得到结论时：{{"thought":"总结","final_answer":"本步骤的最终结果"}}
 
-可用工具与参数同规划阶段（command/read_file/write_file/list_files/search_files/git/web_fetch/docs_fetch/github_fetch/edit_file/create_directory/batch_write/batch_edit/code_index/ast_analyze/refactor/diff_preview/mcp_call）。本步骤规划为"无需工具"，但若执行中发现需要读取文件/查目录等，可在 {max_rounds} 轮内按需调用工具；无需工具时直接输出 final_answer。
+可用工具与参数同规划阶段（command/read_file/write_file/list_files/search_files/git/web_fetch/docs_fetch/github_fetch/edit_file/create_directory/batch_write/batch_edit/code_index/ast_analyze/refactor/diff_preview/create_pull_request/mcp_call）。本步骤规划为"无需工具"，但若执行中发现需要读取文件/查目录等，可在 {max_rounds} 轮内按需调用工具；无需工具时直接输出 final_answer。
 """
 
 

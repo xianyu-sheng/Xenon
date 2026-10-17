@@ -1955,6 +1955,29 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         "I'm not able",
     ]
 
+    # 肯定性开头 — 出现且早于拒绝关键词时，视为「可以，但有前提」，不是拒绝。
+    # 注意不要放单字「能」：它是「不能」的子串，会把拒绝误判成肯定。
+    _AFFIRMATIVE_MARKERS: tuple[str, ...] = (
+        "可以",
+        "好的",
+        "没问题",
+        "当然",
+        "我来",
+        "我会",
+        "我先",
+        "下面",
+        "以下是",
+    )
+    _AFFIRMATIVE_MARKERS_EN: tuple[str, ...] = (
+        "sure",
+        "yes",
+        "of course",
+        "i can do",
+        "i will",
+        "i'll",
+        "i can help",
+    )
+
     @classmethod
     def _detect_tool_call_json(cls, text: str) -> bool:
         """检测 LLM 响应中是否包含未执行的工具调用 JSON/XML/DSML。
@@ -2004,8 +2027,37 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
 
     @classmethod
     def _detect_denial(cls, text: str) -> bool:
-        """检测 LLM 是否回复了拒绝性内容（表示它无法完成任务）。"""
-        return any(kw in text for kw in cls._DENIAL_KEYWORDS)
+        """检测 LLM 是否**真的拒绝**了任务，而不是「可以，但有前提」。
+
+        旧实现是对整个回答做子串匹配，像
+            「可以，但有几个前提……我无法直接访问 D 盘」
+        这种正常回答会被判成拒绝，触发 direct_chat 的抛错与备用模型切换
+        （日志里那条「模型拒绝了无需工具即可完成的请求」）。
+
+        现在只在**开头的第一句**出现拒绝词、且句首没有肯定性表态时才判定。
+        """
+        if not text or not text.strip():
+            return False
+
+        head = re.split(r"[。！？!?\n]", text.strip(), maxsplit=1)[0][:200]
+        lowered = head.lower()
+
+        positions = [
+            lowered.find(kw.lower()) for kw in cls._DENIAL_KEYWORDS
+        ]
+        positions = [pos for pos in positions if pos >= 0]
+        if not positions:
+            return False
+
+        prefix = lowered[: min(positions)]
+        if any(marker in prefix for marker in cls._AFFIRMATIVE_MARKERS):
+            return False
+        if any(
+            re.search(rf"\b{re.escape(marker)}\b", prefix)
+            for marker in cls._AFFIRMATIVE_MARKERS_EN
+        ):
+            return False
+        return True
 
     def _inject_project_context(self) -> None:
         """首次对话时注入项目上下文（类型、文件树、规则）。"""

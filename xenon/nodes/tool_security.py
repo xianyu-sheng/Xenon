@@ -71,6 +71,7 @@ PROVENANCE_SOURCE_BY_ACTION: dict[str, SourceType] = {
     "mcp_call": "mcp",
     "github_fetch": "github",
     "clone_repo": "repo",
+    "create_pull_request": "github",
     "lsp_goto_def": "file",
     "lsp_find_refs": "file",
     "lsp_hover": "file",

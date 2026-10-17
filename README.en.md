@@ -193,7 +193,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 ## Environment variables
 
 <details>
-<summary>13 variables (click to expand)</summary>
+<summary>14 variables (click to expand)</summary>
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -207,6 +207,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 | `NO_COLOR` | Standard flag; disables color in output and prompt | unset |
 | `XENON_READ_ONLY` | Read-only mode (all write/exec tools disabled) | off |
 | `XENON_COMMAND_ALLOWLIST` | Command first-word allowlist (comma-separated) | empty = unrestricted |
+| `XENON_EXTRA_ROOTS` | Extra roots file tools may read/write outside the start directory (`;`-separated on Windows) | empty = start directory only |
 | `XENON_SESSION_EVENTS(_DIR)` | Event log toggle / directory | on |
 | `XENON_HOOKS` | Local hooks toggle | on |
 | `GITHUB_TOKEN` / `GH_TOKEN` | GitHub tool auth (raises API limits) | empty |

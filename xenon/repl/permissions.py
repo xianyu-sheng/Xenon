@@ -70,6 +70,9 @@ class PermissionRequest:
 _CRITICAL_TOOLS: frozenset[str] = frozenset(
     {
         "command",
+        # 创建 PR 是外部可见、难以撤回的副作用（且会用仓库凭据），
+        # 与 command 同级，必须显式审批。
+        "create_pull_request",
         # MCP servers may expose arbitrary external side effects.  Until a server
         # advertises a trustworthy read/write schema, require an explicit approval.
         "mcp_call",

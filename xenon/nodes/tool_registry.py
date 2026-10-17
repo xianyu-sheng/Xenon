@@ -196,6 +196,7 @@ BUILTIN_TOOL_METHODS: dict[str, str] = {
     "mcp_call": "_mcp_call",
     "github_fetch": "_github_fetch",
     "clone_repo": "_clone_repo",
+    "create_pull_request": "_create_pull_request",
     "lsp_goto_def": "_lsp_goto_def",
     "lsp_find_refs": "_lsp_find_refs",
     "lsp_hover": "_lsp_hover",
