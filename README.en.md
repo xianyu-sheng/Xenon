@@ -166,6 +166,8 @@ python -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Lit
   --predictions_path preds.jsonl --run_id my-run --max_workers 2 --cache_level env
 ```
 
+**Full step-by-step guide (acceptance checklist + the seven pitfalls we hit)**: [REPRODUCE_SWEBENCH](docs/REPRODUCE_SWEBENCH.md).
+
 Post the `run_id`, model name and official report in [Discussions](https://github.com/xianyu-sheng/Xenon/issues/162) — **the protocol is frozen, so a model swap is directly comparable** — and we will add your number to the table above (with model and protocol noted).
 
 Full protocol, per-run results, judging logs and sha256-checked archives: [EVAL_RESULTS](docs/EVAL_RESULTS.md).
