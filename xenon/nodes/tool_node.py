@@ -844,7 +844,7 @@ class ToolNode(
                             f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。命令: {cmd[:100]}"
                         )
         # 跨段管道模式：仅对真实 `|` 连接的相邻段对匹配。
-        for i, (left, right) in enumerate(zip(dequoted, dequoted[1:])):
+        for i, (left, right) in enumerate(zip(dequoted, dequoted[1:], strict=False)):
             if i >= len(separators) or "|" not in separators[i]:
                 continue
             candidate = f"{left} | {right}"

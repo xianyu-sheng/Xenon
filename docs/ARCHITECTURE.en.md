@@ -128,6 +128,6 @@ The engine registry is the sole source for paradigm metadata (`engine/builtin_en
 
 - Python 3.10 / 3.11 / 3.12 matrix + e2e + 3-platform (Ubuntu / Windows / macOS) install smoke tests.
 - Code coverage threshold **70%** (actual test ~74%, `omit = []`).
-- Ruff rules contract explicitly pinned (`select = E4/E7/E9/F/I`, where `I` is the isort phase of #127), tool versions can be freely upgraded.
+- Ruff rules contract explicitly pinned (`select = E4/E7/E9/F/I/B`, where `I` and `B` are the isort and bugbear phases of #127), tool versions can be freely upgraded.
 - Single source of truth for version: `xenon.__version__` (dynamically read by `pyproject.toml`).
 - Single source invariants tests (`test_semantics_single_source.py`, `test_contract_single_source.py`) regularly run in CI.

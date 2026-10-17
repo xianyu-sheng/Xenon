@@ -728,9 +728,12 @@ class MemoryService:
         for scope, selected_records in selected_by_scope.items():
             selected_map = {record.id: record for record in selected_records}
 
-            def mutate(records: list[MemoryRecord]) -> None:
+            def mutate(
+                records: list[MemoryRecord],
+                _selected_map: dict[str, MemoryRecord] = selected_map,
+            ) -> None:
                 for record in records:
-                    selected_record = selected_map.get(record.id)
+                    selected_record = _selected_map.get(record.id)
                     if selected_record is None or record.status != MemoryStatus.ACTIVE:
                         continue
                     record.retrieval_count += 1

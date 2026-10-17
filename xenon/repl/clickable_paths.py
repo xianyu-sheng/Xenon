@@ -122,7 +122,6 @@ _CODE_EXTS = frozenset(
         ".ini",
         ".conf",
         ".lock",
-        ".toml",
         ".gradle",
         ".sbt",
     }

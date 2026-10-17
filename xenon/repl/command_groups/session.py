@@ -91,7 +91,7 @@ def _cmd_history(*, args: str, session_state: dict, **kwargs: Any) -> str:
         if r.selected_models:
             model_strs = []
             for m, s in zip(
-                r.selected_models, r.scores or [0.0] * len(r.selected_models)
+                r.selected_models, r.scores or [0.0] * len(r.selected_models), strict=False
             ):
                 model_strs.append(f"{m}({s:.1f})")
             lines.append(f"     模型: {', '.join(model_strs)}")

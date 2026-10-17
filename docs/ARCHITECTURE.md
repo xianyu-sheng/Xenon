@@ -134,6 +134,6 @@ plan-execute / reflection + 3 个组合）为真实引擎实现。
 
 - Python 3.10/3.11/3.12 矩阵 + e2e + 三平台（Ubuntu/Windows/macOS）安装冒烟
 - 覆盖率门槛 **70%**（实测 ~74%，`omit = []`）
-- Ruff 规则合同显式钉死（`select = E4/E7/E9/F/I`，`I` 为 #127 phase 1 的 isort），工具版本可自由升级
+- Ruff 规则合同显式钉死（`select = E4/E7/E9/F/I/B`，`I`/`B` 分别为 #127 phase 1/2 的 isort 与 bugbear），工具版本可自由升级
 - 版本单一来源 `xenon.__version__`（pyproject dynamic 读取）
 - 单一真相源不变量测试（semantics / contract single source）随 CI 常跑

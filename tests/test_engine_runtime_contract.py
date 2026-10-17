@@ -144,7 +144,7 @@ def test_policy_reaches_planner_reactor_and_reflector(factory):
     bind_execution_policy(engine, policy)
 
     nodes = list(walk_engine_graph(engine))
-    assert getattr(engine, "reflector") in nodes
+    assert engine.reflector in nodes
     assert all(node.execution_policy is policy for node in nodes)
     tool_owner = getattr(engine, "reactor", None) or getattr(engine, "planner", None)
     assert tool_owner._tool_executor.execution_policy is policy

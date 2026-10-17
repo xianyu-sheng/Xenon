@@ -15,4 +15,4 @@ class TestShiftTabSignal:
         except _ShiftTabSignal:
             pass
         else:
-            assert False, "Should have raised _ShiftTabSignal"
+            raise AssertionError("Should have raised _ShiftTabSignal")

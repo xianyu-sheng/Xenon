@@ -25,8 +25,9 @@ from xenon.nodes.tool_node import ToolNode
 
 def test_symlink_escape_prevented(real_path_validation):
     """验证符号链接逃逸已被修复"""
-    # 保存原始函数
-    original_extra_roots = ToolNode._extra_allowed_roots
+    # 保存原始描述符（staticmethod 包装必须原样恢复，否则类属性会退化为
+    # 普通函数，后续用例的 ``self._extra_allowed_roots()`` 将按绑定方法调用）
+    original_extra_roots = ToolNode.__dict__["_extra_allowed_roots"]
 
     try:
         # 禁用 /tmp 等额外根目录
@@ -70,7 +71,7 @@ def test_symlink_escape_prevented(real_path_validation):
 
 def test_symlink_escape_in_batch_rollback(real_path_validation):
     """验证批量操作回滚时的符号链接逃逸"""
-    original_extra_roots = ToolNode._extra_allowed_roots
+    original_extra_roots = ToolNode.__dict__["_extra_allowed_roots"]
 
     try:
         ToolNode._extra_allowed_roots = staticmethod(lambda: ())
@@ -154,7 +155,7 @@ def test_symlink_inside_workspace_allowed(real_path_validation):
 
 def test_relative_path_escape_prevented(real_path_validation):
     """验证 ../ 路径逃逸被阻止"""
-    original_extra_roots = ToolNode._extra_allowed_roots
+    original_extra_roots = ToolNode.__dict__["_extra_allowed_roots"]
 
     try:
         ToolNode._extra_allowed_roots = staticmethod(lambda: ())

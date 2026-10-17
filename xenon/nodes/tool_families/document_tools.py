@@ -480,7 +480,7 @@ def _parse_biff8(
     # offset → record index
     offsets: dict[int, int] = {}
     off = 0
-    for idx, (rid, data) in enumerate(records):
+    for idx, (_rid, data) in enumerate(records):
         offsets[off] = idx
         off += 4 + len(data)
 

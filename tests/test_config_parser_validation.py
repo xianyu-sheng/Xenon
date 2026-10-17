@@ -99,7 +99,7 @@ class TestParseWorkflowValidation:
             ],
         }
         nodes, _ = parse_workflow(cfg)
-        assert getattr(nodes["t"], "timeout") == 5
+        assert nodes["t"].timeout == 5
 
     def test_valid_llm_node(self):
         nodes, models = parse_workflow({**_BASE, "nodes": [_LLM]})

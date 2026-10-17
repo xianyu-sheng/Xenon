@@ -152,7 +152,7 @@ class EngineHostMixin:
         """Move verified engine tool calls into cross-turn context and memory."""
         if getattr(engine, "_xenon_trace_persisted", False):
             return 0
-        setattr(engine, "_xenon_trace_persisted", True)
+        engine._xenon_trace_persisted = True
         tracker = getattr(engine, "_last_tracker", None)
         calls = list(getattr(tracker, "calls", []) or [])
         if not calls:

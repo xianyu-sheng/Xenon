@@ -107,7 +107,7 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
         if not registry.tool_map:
             return "无可用 MCP 工具"
         lines = ["═══ MCP 工具 ═══\n"]
-        for global_name, (server, tool) in sorted(registry.tool_map.items()):
+        for global_name, (_server, tool) in sorted(registry.tool_map.items()):
             if ":" in global_name:
                 desc = tool.get("description", "")[:60]
                 lines.append(f"  {global_name}: {desc}")

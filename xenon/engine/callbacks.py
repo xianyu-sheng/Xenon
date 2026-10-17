@@ -512,7 +512,7 @@ class ConsoleCallback(EngineCallback):
                     short = "…" + short[-(max_len - 1) :]
                 return short
         # 其他参数取第一个
-        for k, v in masked.items():
+        for _k, v in masked.items():
             s = str(v).replace("\n", " ").strip()
             if len(s) > 60:
                 s = s[:57] + "…"

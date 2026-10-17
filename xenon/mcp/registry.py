@@ -534,7 +534,7 @@ class MCPRegistry:
             self.discover_tools()
 
         lines = []
-        for global_name, (server_name, tool) in sorted(self.tool_map.items()):
+        for global_name, (_server_name, tool) in sorted(self.tool_map.items()):
             if ":" not in global_name:
                 continue  # 只显示带前缀的
             desc = tool.get("description", "")

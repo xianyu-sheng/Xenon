@@ -2,10 +2,11 @@
 
 CI runs ``ruff check``, but if a rule is silently dropped from
 ``[tool.ruff.lint] select`` the check still passes while the contract
-disappears.  #127 phase 1 pinned ``I`` (isort); this test keeps the pinned
-rules from being removed, while allowing later phases (B, S) to extend the
-set — the same "freeze the contract, not the tool version" pattern used by
-``tests/test_step_budget.py`` and the theme-token golden test.
+disappears.  #127 phase 1 pinned ``I`` (isort) and phase 2 pinned ``B``
+(bugbear); this test keeps the pinned rules from being removed, while
+allowing later phases (S) to extend the set — the same "freeze the contract,
+not the tool version" pattern used by ``tests/test_step_budget.py`` and the
+theme-token golden test.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from pathlib import Path
 
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
-PINNED_RULES = {"E4", "E7", "E9", "F", "I"}
+PINNED_RULES = {"E4", "E7", "E9", "F", "I", "B"}
 
 
 def _ruff_select() -> list[str]:

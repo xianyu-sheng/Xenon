@@ -386,7 +386,9 @@ class StatusBar:
         # 中段：模型名 + 范式 + 警告
         center_parts = [model_display, mode.name]
         if warn:
-            center_parts.insert(0, warn.rstrip(" · "))
+            while warn and warn[-1] in " ·":
+                warn = warn[:-1]
+            center_parts.insert(0, warn)
         center = " · ".join(center_parts)
 
         # 右段：Token 条 + 消息数 + 工具数 + 时长 + 流式状态

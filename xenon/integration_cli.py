@@ -693,7 +693,7 @@ def _validate_mcp_config(config: dict[str, Any]) -> dict[str, Any]:
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("HTTP MCP 需要有效的 http/https URL")
     try:
-        parsed.port
+        _ = parsed.port
     except ValueError as exc:
         raise ValueError("HTTP MCP URL 端口无效") from exc
     headers = config.get("headers", {})

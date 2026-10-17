@@ -73,10 +73,10 @@ class StdioTransport(MCPTransport):
                 text=True,
             )
             logger.info(f"MCP 子进程启动: {' '.join(cmd)} (PID: {self._proc.pid})")
-        except FileNotFoundError:
-            raise RuntimeError(f"MCP 命令不存在: {self.command}")
+        except FileNotFoundError as e:
+            raise RuntimeError(f"MCP 命令不存在: {self.command}") from e
         except Exception as e:
-            raise RuntimeError(f"MCP 子进程启动失败: {e}")
+            raise RuntimeError(f"MCP 子进程启动失败: {e}") from e
 
     def send(self, message: dict[str, Any]) -> None:
         """发送 JSON-RPC 消息。"""
@@ -89,7 +89,7 @@ class StdioTransport(MCPTransport):
                 self._proc.stdin.write(data)
                 self._proc.stdin.flush()
             except Exception as e:
-                raise RuntimeError(f"MCP 发送失败: {e}")
+                raise RuntimeError(f"MCP 发送失败: {e}") from e
 
     def receive(self, timeout: float = 30.0) -> dict[str, Any]:
         """接收 JSON-RPC 消息（带墙钟超时，避免 readline 无限阻塞）。"""
@@ -107,7 +107,7 @@ class StdioTransport(MCPTransport):
             try:
                 return json.loads(line)
             except json.JSONDecodeError as e:
-                raise RuntimeError(f"MCP 响应解析失败: {e}")
+                raise RuntimeError(f"MCP 响应解析失败: {e}") from e
 
     def _readline_with_timeout(self, deadline: float) -> str | None:
         """从 stdout 读取一行，带整体 deadline 墙钟超时。
@@ -202,7 +202,7 @@ class StdioTransport(MCPTransport):
                 self._proc.stdin.write(data)
                 self._proc.stdin.flush()
             except Exception as e:
-                raise RuntimeError(f"MCP 发送失败: {e}")
+                raise RuntimeError(f"MCP 发送失败: {e}") from e
 
             # 等待响应（匹配 id），带墙钟 deadline 与行数上限
             deadline = time.monotonic() + timeout
@@ -220,7 +220,7 @@ class StdioTransport(MCPTransport):
                 try:
                     response = json.loads(line)
                 except json.JSONDecodeError as e:
-                    raise RuntimeError(f"MCP 响应解析失败: {e}")
+                    raise RuntimeError(f"MCP 响应解析失败: {e}") from e
 
                 if response.get("id") == request_id:
                     return response
@@ -286,7 +286,7 @@ class SSETransport(MCPTransport):
             )
             resp.raise_for_status()
         except Exception as e:
-            raise RuntimeError(f"MCP SSE 发送失败: {e}")
+            raise RuntimeError(f"MCP SSE 发送失败: {e}") from e
 
     def receive(self) -> dict[str, Any]:
         """通过 SSE 接收消息。"""
@@ -300,7 +300,7 @@ class SSETransport(MCPTransport):
                             return json.loads(data)
             raise RuntimeError("SSE 连接关闭")
         except Exception as e:
-            raise RuntimeError(f"MCP SSE 接收失败: {e}")
+            raise RuntimeError(f"MCP SSE 接收失败: {e}") from e
 
     def request(
         self, method: str, params: dict[str, Any] | None = None
@@ -324,7 +324,7 @@ class SSETransport(MCPTransport):
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
-            raise RuntimeError(f"MCP SSE 请求失败: {e}")
+            raise RuntimeError(f"MCP SSE 请求失败: {e}") from e
 
     def close(self) -> None:
         self._client.close()

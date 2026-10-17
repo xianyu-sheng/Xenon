@@ -492,7 +492,7 @@ def _prepare_with_timeout(
             if not process.is_alive():
                 raise RuntimeError(
                     f"image preparation exited without a result ({process.exitcode})"
-                )
+                ) from None
             _append_event(
                 events_path,
                 "image_prepare_heartbeat",
@@ -575,7 +575,7 @@ def _run_with_hard_timeout(
             if not process.is_alive():
                 raise RuntimeError(
                     f"engine child exited without a result ({process.exitcode})"
-                )
+                ) from None
             _append_event(
                 events_path,
                 "heartbeat",

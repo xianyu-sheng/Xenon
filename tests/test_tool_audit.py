@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from xenon.engine.context import AgentContext
 from xenon.nodes.tool_node import (
+    SecurityError,
     ToolNode,
     _is_internal_ip,
     _is_rfc1918_private,
@@ -46,7 +47,7 @@ class TestNormalizeParams:
         # security_enabled 必须被排除在 _VALID_PARAMS 之外（否则模型一个
         # 键就能关掉路径围栏与危险命令黑名单）。
         MODEL_FORBIDDEN_PARAMS = frozenset({"security_enabled"})
-        for name, param in sig.parameters.items():
+        for name, _param in sig.parameters.items():
             if name in ("self", "node_id"):
                 continue
             if name in MODEL_FORBIDDEN_PARAMS:
@@ -347,7 +348,7 @@ class TestGitTool:
 
     def test_dangerous_git_blocked(self):
         node = ToolNode("g2", action_type="git", git_command="push --force origin main")
-        with pytest.raises(Exception):
+        with pytest.raises(SecurityError):
             node.execute(_ctx())
 
 
@@ -592,19 +593,19 @@ class TestSecurityBoundary:
 
     def test_path_traversal_blocked(self, real_path_validation):
         node = ToolNode("s1", action_type="read_file", file_path="/etc/passwd")
-        with pytest.raises(Exception):
+        with pytest.raises(SecurityError):
             node.execute(_ctx())
 
     def test_dangerous_command_blocked(self):
         node = ToolNode("s2", action_type="command", action="rm -rf /")
-        with pytest.raises(Exception):
+        with pytest.raises(SecurityError):
             node.execute(_ctx())
 
     def test_write_sensitive_path_blocked(self, real_path_validation):
         node = ToolNode(
             "s3", action_type="write_file", file_path="/etc/hosts", content="evil"
         )
-        with pytest.raises(Exception):
+        with pytest.raises(SecurityError):
             node.execute(_ctx())
 
 

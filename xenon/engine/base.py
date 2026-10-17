@@ -1668,7 +1668,7 @@ class BaseEngine(ABC):
             ]
 
         protocol_messages: list[dict[str, Any]] = [assistant]
-        for call, observation in zip(tool_calls, observations):
+        for call, observation in zip(tool_calls, observations, strict=False):
             protocol_messages.append(
                 {
                     "role": "tool",

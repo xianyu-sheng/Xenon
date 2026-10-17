@@ -111,7 +111,7 @@ def test_call_llm_logs_carry_run_call_prefix(caplog):
         caplog.set_level(logging.DEBUG, logger="xenon.engine.base")
         try:
             eng._call_llm([{"role": "user", "content": "hi"}])
-            assert False, "应抛 RuntimeError"
+            raise AssertionError("应抛 RuntimeError")
         except RuntimeError:
             pass
     finally:

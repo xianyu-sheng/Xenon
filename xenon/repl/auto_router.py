@@ -88,7 +88,7 @@ class AutoRouter:
 
         # Step 10: 估算任务 tier，设置到 profile 上供 ModelPool 层级队列使用
         task_tier = DifficultyEstimator.estimate_tier(profile)
-        setattr(profile, "_tier", task_tier)
+        profile._tier = task_tier
 
         # v0.5.0：同步任务 tier 到 ContextManager，用于分层上下文管理
         if self.ctx_mgr is not None:
@@ -280,7 +280,7 @@ class AutoRouter:
             reverse=True,
         )
         reordered = list(entries)
-        for index, entry in zip(peer_indexes, peers):
+        for index, entry in zip(peer_indexes, peers, strict=False):
             reordered[index] = entry
         after = [entry.model_id for entry in reordered]
         self.last_cache_affinity_decision = {

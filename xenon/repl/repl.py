@@ -1429,9 +1429,9 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         try:
             text = self._pt_session.prompt(message)
         except KeyboardInterrupt:
-            raise KeyboardInterrupt
+            raise
         except EOFError:
-            raise KeyboardInterrupt
+            raise KeyboardInterrupt from None
 
         # Strip only editor whitespace around the visible value, then restore
         # paste blocks.  Leading/trailing whitespace *inside* a pasted block is

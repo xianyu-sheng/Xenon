@@ -716,9 +716,16 @@ class RealAgent:
                         node is eng for node, _original in executor_hooks
                     )
 
-                    def _recording_execute(action, action_input, ctx, tracker=None):
+                    def _recording_execute(
+                        action,
+                        action_input,
+                        ctx,
+                        tracker=None,
+                        _has_top_executor=has_top_executor,
+                        _orig_execute=orig_execute,
+                    ):
                         executed.append(action)
-                        if not has_top_executor:
+                        if not _has_top_executor:
                             successful_tools.append(action)
                             tool_events.append(
                                 {
@@ -732,9 +739,9 @@ class RealAgent:
                                     "confirmation_outcome": "unknown_engine_result",
                                 }
                             )
-                        if orig_execute is None:
+                        if _orig_execute is None:
                             return ""
-                        return orig_execute(action, action_input, ctx, tracker)
+                        return _orig_execute(action, action_input, ctx, tracker)
 
                     if orig_execute is not None:
                         eng._execute_tool = _recording_execute

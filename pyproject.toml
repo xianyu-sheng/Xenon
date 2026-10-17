@@ -73,10 +73,10 @@ markers = [
 target-version = "py310"
 
 # 钉死的是规则合同而非工具版本：ruff 版本可自由升级，
-# 规则集固定为 E4/E7/E9/F + I（#127 phase 1：isort，仅排序、无运行时行为变化），
-# 避免上游默认集变动引发噪声。
+# 规则集固定为 E4/E7/E9/F + I + B（#127 phase 1：isort；phase 2：bugbear），
+# 避免上游默认集变动引发噪声；规则合同由 tests/test_lint_contract.py 冻结。
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["E4", "E7", "E9", "F", "I", "B"]
 
 [tool.coverage.run]
 source = ["xenon"]
