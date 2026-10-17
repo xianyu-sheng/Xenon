@@ -15,6 +15,8 @@
 
 <p align="center">Other agents say "done" and you take their word for it.<br/>Xenon splits the result in two: what the machine confirmed, and what you should check yourself.</p>
 
+<p align="center"><b>SWE-bench Lite, blind</b> (single <code>react</code> engine · 120 steps · official harness · mean of 3): <b>62.2%</b> on the frozen 30 · <b>52.2%</b> on the zero-overlap held-out set · <a href="#benchmark">protocol and every run</a></p>
+
 <p align="center">
   <a href="docs/GUIDE.md">Docs</a> ·
   <a href="#quick-start">Quick start</a> ·
@@ -43,6 +45,67 @@ xenon   # first run walks you through setup (API key, model, engine)
 > **Windows:** if you get `'xenon' is not recognized`, add the Scripts path pip printed to `PATH`, or use `python -m xenon` (available in release artifacts since v0.9.4). Mixing conda with a standalone Python? Use a dedicated venv: `python -m venv .venv`.
 
 More install options (source / uv / pipx) are in [Install](#install).
+
+## Benchmark
+
+### Protocol (frozen point by point, reproducible)
+
+| Item | Value |
+|---|---|
+| Protocol | **Fully blind**: the official test patch is not applied during solving, and the prompt carries no FAIL_TO_PASS names (`XENON_EVAL_APPLY_TEST_PATCH=0`, `XENON_EVAL_FAIL_HINT=0`) |
+| Engine | **`react` only** — not a multi-engine union and not best-of-N. This is a **framework A/B**: the engine is held constant so any difference is attributable to the framework code |
+| Model | `deepseek-v4-flash` official API, `--reasoning-effort off` |
+| Budget | 120 steps (`STANDARD_STEP_BUDGET`), 900 s hard engine wall |
+| Judging | Official `swebench` harness: clean container + model patch + official test patch; an instance counts as resolved only when `FAIL_TO_PASS` all pass and `PASS_TO_PASS` does not regress |
+| Denominator | `resolved / submitted(=30)`; empty patches are reported separately but **still count as unresolved** (conservative) |
+| Repetition | **3 independent runs** per condition, averaged (every run is published; a single run can swing by 4 instances ≈ 13 pp) |
+
+### Two samples
+
+| Sample | Selection | Notes |
+|---|---|---|
+| Frozen 30 | `evals/swebench_select.py --size 30 --seed 20260729` | Historical baseline; 9 of its 30 instances are named in the commit history, i.e. in-sample tuning traces |
+| **Zero-overlap held-out** | same rule, `--seed 20261016 --exclude` the original sample (pool of 270) | **Primary evidence**; no instance is shared with the original sample |
+
+Both manifests (with digests) are committed, so anyone can reproduce instance by instance.
+
+### Results
+
+| Sample | Current framework | Previous generation (v0.8.5) |
+|---|---|---|
+| Frozen 30 instances (seed 20260729) | **62.2%** | 63.3% |
+| Zero-overlap held-out sample (seed 20261016) | **52.2%** | 46.7% |
+
+> Factor decomposition (same model / same instances / same harness): framework iteration **0 pp** (p=1.0) · budget 10→120 steps **+36.7–46.7 pp** · test visibility during solving **+16.7 pp** (non-standard, upper bound only). **The bottleneck is budget and model, not the scaffolding.**
+
+### Bring a stronger model and beat us
+
+One run (30 instances, flash) costs roughly **$0.5–1** in API usage; frontier models are ~$7–30 per run, and we only have the flash budget. If you have a stronger model, please reproduce on the same manifest and protocol:
+
+```bash
+git clone --depth 1 https://github.com/xianyu-sheng/Xenon.git && cd Xenon
+python -m venv .venv && .venv/bin/pip install -e . && .venv/bin/pip install "swebench==4.1.0" datasets docker
+
+IDS=$(python -c "import json;print(' '.join(json.load(open('evals/manifests/swebench-lite-30-heldout-seed20261016.json'))['instance_ids']))")
+ARGS=(); for i in $IDS; do ARGS+=(--instance-id "$i"); done
+
+XENON_EVAL_APPLY_TEST_PATCH=0 XENON_EVAL_FAIL_HINT=0 \
+.venv/bin/python evals/swebench_xenon.py "${ARGS[@]}" \
+  --prepared-root ./work --engines react --max-steps 120 \
+  --model <your-model> --reasoning-effort off \
+  --request-timeout 60 --engine-timeout 900 \
+  --predictions preds.jsonl --traces traces.jsonl
+
+python -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Lite --split test \
+  --predictions_path preds.jsonl --run_id my-run --max_workers 2 --cache_level env
+```
+
+**Full step-by-step guide (acceptance checklist + the seven pitfalls we hit)**: [REPRODUCE_SWEBENCH](docs/REPRODUCE_SWEBENCH.md).
+
+Post the `run_id`, model name and official report in [Discussions](https://github.com/xianyu-sheng/Xenon/issues/162) — **the protocol is frozen, so a model swap is directly comparable** — and we will add your number to the table above (with model and protocol noted).
+
+Full protocol, per-run results, judging logs and sha256-checked archives: [EVAL_RESULTS](docs/EVAL_RESULTS.md).
+
 
 ## What it actually does
 
@@ -111,66 +174,6 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 ```
 
 `uv tool install <wheel URL>` and `pipx install <wheel URL>` work too and handle the entry point for you.
-
-## Benchmark
-
-### Protocol (frozen point by point, reproducible)
-
-| Item | Value |
-|---|---|
-| Protocol | **Fully blind**: the official test patch is not applied during solving, and the prompt carries no FAIL_TO_PASS names (`XENON_EVAL_APPLY_TEST_PATCH=0`, `XENON_EVAL_FAIL_HINT=0`) |
-| Engine | **`react` only** — not a multi-engine union and not best-of-N. This is a **framework A/B**: the engine is held constant so any difference is attributable to the framework code |
-| Model | `deepseek-v4-flash` official API, `--reasoning-effort off` |
-| Budget | 120 steps (`STANDARD_STEP_BUDGET`), 900 s hard engine wall |
-| Judging | Official `swebench` harness: clean container + model patch + official test patch; an instance counts as resolved only when `FAIL_TO_PASS` all pass and `PASS_TO_PASS` does not regress |
-| Denominator | `resolved / submitted(=30)`; empty patches are reported separately but **still count as unresolved** (conservative) |
-| Repetition | **3 independent runs** per condition, averaged (every run is published; a single run can swing by 4 instances ≈ 13 pp) |
-
-### Two samples
-
-| Sample | Selection | Notes |
-|---|---|---|
-| Frozen 30 | `evals/swebench_select.py --size 30 --seed 20260729` | Historical baseline; 9 of its 30 instances are named in the commit history, i.e. in-sample tuning traces |
-| **Zero-overlap held-out** | same rule, `--seed 20261016 --exclude` the original sample (pool of 270) | **Primary evidence**; no instance is shared with the original sample |
-
-Both manifests (with digests) are committed, so anyone can reproduce instance by instance.
-
-### Results
-
-| Sample | Current framework | Previous generation (v0.8.5) |
-|---|---|---|
-| Frozen 30 instances (seed 20260729) | **62.2%** | 63.3% |
-| Zero-overlap held-out sample (seed 20261016) | **52.2%** | 46.7% |
-
-> Factor decomposition (same model / same instances / same harness): framework iteration **0 pp** (p=1.0) · budget 10→120 steps **+36.7–46.7 pp** · test visibility during solving **+16.7 pp** (non-standard, upper bound only). **The bottleneck is budget and model, not the scaffolding.**
-
-### Bring a stronger model and beat us
-
-One run (30 instances, flash) costs roughly **$0.5–1** in API usage; frontier models are ~$7–30 per run, and we only have the flash budget. If you have a stronger model, please reproduce on the same manifest and protocol:
-
-```bash
-git clone --depth 1 https://github.com/xianyu-sheng/Xenon.git && cd Xenon
-python -m venv .venv && .venv/bin/pip install -e . && .venv/bin/pip install "swebench==4.1.0" datasets docker
-
-IDS=$(python -c "import json;print(' '.join(json.load(open('evals/manifests/swebench-lite-30-heldout-seed20261016.json'))['instance_ids']))")
-ARGS=(); for i in $IDS; do ARGS+=(--instance-id "$i"); done
-
-XENON_EVAL_APPLY_TEST_PATCH=0 XENON_EVAL_FAIL_HINT=0 \
-.venv/bin/python evals/swebench_xenon.py "${ARGS[@]}" \
-  --prepared-root ./work --engines react --max-steps 120 \
-  --model <your-model> --reasoning-effort off \
-  --request-timeout 60 --engine-timeout 900 \
-  --predictions preds.jsonl --traces traces.jsonl
-
-python -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Lite --split test \
-  --predictions_path preds.jsonl --run_id my-run --max_workers 2 --cache_level env
-```
-
-**Full step-by-step guide (acceptance checklist + the seven pitfalls we hit)**: [REPRODUCE_SWEBENCH](docs/REPRODUCE_SWEBENCH.md).
-
-Post the `run_id`, model name and official report in [Discussions](https://github.com/xianyu-sheng/Xenon/issues/162) — **the protocol is frozen, so a model swap is directly comparable** — and we will add your number to the table above (with model and protocol noted).
-
-Full protocol, per-run results, judging logs and sha256-checked archives: [EVAL_RESULTS](docs/EVAL_RESULTS.md).
 
 ## Documentation
 

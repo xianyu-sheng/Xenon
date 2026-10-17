@@ -15,6 +15,8 @@
 
 <p align="center">别的 agent 说"完成了"，你只能选择相信它。<br/>Xenon 把结果拆成两半说清楚：哪些是机器确认过的，哪些需要你自己看一眼。</p>
 
+<p align="center"><b>SWE-bench Lite 盲测</b>（单一 <code>react</code> 引擎 · 120 步 · 官方 harness · 3 次均值）：固定 30 例 <b>62.2%</b> · 零重叠留出集 <b>52.2%</b> · <a href="#评测">协议与全部逐次结果</a></p>
+
 <p align="center">
   <a href="docs/OPERATION_GUIDE.md">文档</a> ·
   <a href="#快速开始">快速开始</a> ·
@@ -43,6 +45,67 @@ xenon   # 首次运行会引导配置（API Key、模型、推理引擎）
 > **Windows：** 若提示 `'xenon' 不是内部或外部命令`，把 pip 打印的 Scripts 路径加进 PATH，或直接使用 `python -m xenon`（v0.9.4 起随发布产物提供）。混用 conda 与独立 Python 时建议用专用 venv：`python -m venv .venv`。
 
 更多安装方式（源码 / uv / pipx）见 [安装](#安装)。
+
+## 评测
+
+### 协议（逐项冻结，可复现）
+
+| 项 | 取值 |
+|---|---|
+| 协议 | **完全盲测**：解题阶段不应用官方 test patch，提示词不含 FAIL_TO_PASS 测试名（`XENON_EVAL_APPLY_TEST_PATCH=0`、`XENON_EVAL_FAIL_HINT=0`） |
+| 引擎 | **单一 `react`** —— 不是多引擎并集、不是 best-of-N。这是**框架 A/B**：引擎固定，差异才能归因到框架代码本身 |
+| 模型 | `deepseek-v4-flash` 官方 API，`--reasoning-effort off` |
+| 预算 | 120 步（`STANDARD_STEP_BUDGET`），引擎 900s 硬墙 |
+| 判定 | 官方 `swebench` harness：干净容器 + 模型补丁 + 官方 test patch；`FAIL_TO_PASS` 全过且 `PASS_TO_PASS` 无回归才算 resolved |
+| 分母 | `resolved / submitted(=30)`；空补丁单独统计但**仍算未解出**（保守口径） |
+| 重复 | 每条件 **3 次独立运行**取均值（逐次结果全部公开；单次极差可达 4 例 ≈ 13pp） |
+
+### 两套样本
+
+| 样本 | 抽样 | 说明 |
+|---|---|---|
+| 固定 30 例 | `evals/swebench_select.py --size 30 --seed 20260729` | 历史基线；提交历史点名其中 9/30 例 → 有样本内调优痕迹 |
+| **零重叠留出集** | 同规则 `--seed 20261016 --exclude` 原样本（池 270 例） | **主证据**，与原样本零重叠 |
+
+两份 manifest（含 digest）已提交，任何人可逐例复现。
+
+### 结果
+
+| 样本 | 本轮框架 | 上一代 v0.8.5 |
+|---|---|---|
+| 固定 30 例（seed 20260729） | **62.2%** | 63.3% |
+| 零重叠留出集（seed 20261016） | **52.2%** | 46.7% |
+
+> 因子分解（同模型 / 同实例 / 同 harness）：框架迭代 **0pp**（p=1.0）· 预算 10→120 步 **+36.7~46.7pp** · 解题时测试可见 **+16.7pp**（非标准协议，仅作上界）。→ **瓶颈在预算与模型，不在脚手架。**
+
+### 用更强的模型来打我们的脸
+
+单次运行（30 例、flash 模型）API 成本约 **¥3–5**，前沿模型约 ¥50–200/次；我们只有 flash 的预算。如果你有更强的模型，欢迎在同一 manifest、同一协议上复现：
+
+```bash
+git clone --depth 1 https://github.com/xianyu-sheng/Xenon.git && cd Xenon
+python -m venv .venv && .venv/bin/pip install -e . && .venv/bin/pip install "swebench==4.1.0" datasets docker
+
+IDS=$(python -c "import json;print(' '.join(json.load(open('evals/manifests/swebench-lite-30-heldout-seed20261016.json'))['instance_ids']))")
+ARGS=(); for i in $IDS; do ARGS+=(--instance-id "$i"); done
+
+XENON_EVAL_APPLY_TEST_PATCH=0 XENON_EVAL_FAIL_HINT=0 \
+.venv/bin/python evals/swebench_xenon.py "${ARGS[@]}" \
+  --prepared-root ./work --engines react --max-steps 120 \
+  --model <your-model> --reasoning-effort off \
+  --request-timeout 60 --engine-timeout 900 \
+  --predictions preds.jsonl --traces traces.jsonl
+
+python -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Lite --split test \
+  --predictions_path preds.jsonl --run_id my-run --max_workers 2 --cache_level env
+```
+
+**完整分步指南（含验收清单与我们踩过的 7 个坑）**：[REPRODUCE_SWEBENCH](docs/REPRODUCE_SWEBENCH.md)。
+
+跑完把 `run_id`、模型名和官方报告贴到 [#162](https://github.com/xianyu-sheng/Xenon/issues/162)——**协议已冻结，换模型就能直接比**；我们会把数字并排进上表（注明模型与协议）。
+
+完整协议、逐次结果、判定日志与 sha256 归档：[EVAL_RESULTS](docs/EVAL_RESULTS.md)。
+
 
 ## 它具体做什么
 
@@ -111,66 +174,6 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 ```
 
 也可以用 `uv tool install <wheel URL>` 或 `pipx install <wheel URL>`，入口会自动处理。
-
-## 评测
-
-### 协议（逐项冻结，可复现）
-
-| 项 | 取值 |
-|---|---|
-| 协议 | **完全盲测**：解题阶段不应用官方 test patch，提示词不含 FAIL_TO_PASS 测试名（`XENON_EVAL_APPLY_TEST_PATCH=0`、`XENON_EVAL_FAIL_HINT=0`） |
-| 引擎 | **单一 `react`** —— 不是多引擎并集、不是 best-of-N。这是**框架 A/B**：引擎固定，差异才能归因到框架代码本身 |
-| 模型 | `deepseek-v4-flash` 官方 API，`--reasoning-effort off` |
-| 预算 | 120 步（`STANDARD_STEP_BUDGET`），引擎 900s 硬墙 |
-| 判定 | 官方 `swebench` harness：干净容器 + 模型补丁 + 官方 test patch；`FAIL_TO_PASS` 全过且 `PASS_TO_PASS` 无回归才算 resolved |
-| 分母 | `resolved / submitted(=30)`；空补丁单独统计但**仍算未解出**（保守口径） |
-| 重复 | 每条件 **3 次独立运行**取均值（逐次结果全部公开；单次极差可达 4 例 ≈ 13pp） |
-
-### 两套样本
-
-| 样本 | 抽样 | 说明 |
-|---|---|---|
-| 固定 30 例 | `evals/swebench_select.py --size 30 --seed 20260729` | 历史基线；提交历史点名其中 9/30 例 → 有样本内调优痕迹 |
-| **零重叠留出集** | 同规则 `--seed 20261016 --exclude` 原样本（池 270 例） | **主证据**，与原样本零重叠 |
-
-两份 manifest（含 digest）已提交，任何人可逐例复现。
-
-### 结果
-
-| 样本 | 本轮框架 | 上一代 v0.8.5 |
-|---|---|---|
-| 固定 30 例（seed 20260729） | **62.2%** | 63.3% |
-| 零重叠留出集（seed 20261016） | **52.2%** | 46.7% |
-
-> 因子分解（同模型 / 同实例 / 同 harness）：框架迭代 **0pp**（p=1.0）· 预算 10→120 步 **+36.7~46.7pp** · 解题时测试可见 **+16.7pp**（非标准协议，仅作上界）。→ **瓶颈在预算与模型，不在脚手架。**
-
-### 用更强的模型来打我们的脸
-
-单次运行（30 例、flash 模型）API 成本约 **¥3–5**，前沿模型约 ¥50–200/次；我们只有 flash 的预算。如果你有更强的模型，欢迎在同一 manifest、同一协议上复现：
-
-```bash
-git clone --depth 1 https://github.com/xianyu-sheng/Xenon.git && cd Xenon
-python -m venv .venv && .venv/bin/pip install -e . && .venv/bin/pip install "swebench==4.1.0" datasets docker
-
-IDS=$(python -c "import json;print(' '.join(json.load(open('evals/manifests/swebench-lite-30-heldout-seed20261016.json'))['instance_ids']))")
-ARGS=(); for i in $IDS; do ARGS+=(--instance-id "$i"); done
-
-XENON_EVAL_APPLY_TEST_PATCH=0 XENON_EVAL_FAIL_HINT=0 \
-.venv/bin/python evals/swebench_xenon.py "${ARGS[@]}" \
-  --prepared-root ./work --engines react --max-steps 120 \
-  --model <your-model> --reasoning-effort off \
-  --request-timeout 60 --engine-timeout 900 \
-  --predictions preds.jsonl --traces traces.jsonl
-
-python -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Lite --split test \
-  --predictions_path preds.jsonl --run_id my-run --max_workers 2 --cache_level env
-```
-
-**完整分步指南（含验收清单与我们踩过的 7 个坑）**：[REPRODUCE_SWEBENCH](docs/REPRODUCE_SWEBENCH.md)。
-
-跑完把 `run_id`、模型名和官方报告贴到 [#162](https://github.com/xianyu-sheng/Xenon/issues/162)——**协议已冻结，换模型就能直接比**；我们会把数字并排进上表（注明模型与协议）。
-
-完整协议、逐次结果、判定日志与 sha256 归档：[EVAL_RESULTS](docs/EVAL_RESULTS.md)。
 
 ## 文档
 
