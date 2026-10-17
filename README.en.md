@@ -166,7 +166,7 @@ python -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Lit
   --predictions_path preds.jsonl --run_id my-run --max_workers 2 --cache_level env
 ```
 
-Post the `run_id`, model name and official report in [Discussions](https://github.com/xianyu-sheng/Xenon/discussions) — **the protocol is frozen, so a model swap is directly comparable** — and we will add your number to the table above (with model and protocol noted).
+Post the `run_id`, model name and official report in [Discussions](https://github.com/xianyu-sheng/Xenon/discussions/161) — **the protocol is frozen, so a model swap is directly comparable** — and we will add your number to the table above (with model and protocol noted).
 
 Full protocol, per-run results, judging logs and sha256-checked archives: [EVAL_RESULTS](docs/EVAL_RESULTS.md).
 
