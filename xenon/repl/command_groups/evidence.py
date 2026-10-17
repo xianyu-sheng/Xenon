@@ -21,7 +21,7 @@ register_command(
 
 _CHAIN_LABELS = {
     "ok": "✅ 完整（全部事件可验）",
-    "partial": "⚠️ 部分（可验区完整，另有旧格式事件）",
+    "partial": "⚠️ 部分（旧格式/混合模式/缺密钥的 keyed 事件）",
     "legacy": "⚠️ 旧格式（无哈希字段，无法自证）",
     "broken": "❌ 断裂（哈希链不连续，可能被修改）",
     "empty": "（空）",
@@ -45,10 +45,10 @@ def _fmt_head(hash_hex: str) -> str:
 
 
 def _chain_line(report: Any) -> str:
-    """一行链自证：状态 + 可验计数 + head。"""
+    """一行链自证：状态 + 可验计数 + head + 模式。"""
     label = _CHAIN_LABELS.get(report.status, report.status)
     head = _fmt_head(report.head_hash or "")
-    return f"链: {label} · {report.verified}/{report.total} 条可验 · head {head}"
+    return f"链: {label} · {report.verified}/{report.total} 条可验 · head {head} · {report.mode}"
 
 
 def _tool_line(tool_events: list[dict]) -> str:
@@ -66,9 +66,13 @@ def _tool_line(tool_events: list[dict]) -> str:
 
 def _human_view(events: list[dict], title: str, path: Any) -> str:
     """给人看：会话概览 + 每回合一段结构化摘要。"""
-    from xenon.session.events import verify_event_chain
+    from xenon.session.events import (
+        HMAC_KEY_ENV,
+        evidence_hmac_key,
+        verify_event_chain,
+    )
 
-    report = verify_event_chain(events)
+    report = verify_event_chain(events, key=evidence_hmac_key())
     lines = [
         f"🔗 L0 证据账本 · {title}",
         f"文件: {path}",
@@ -77,6 +81,11 @@ def _human_view(events: list[dict], title: str, path: Any) -> str:
     ]
     if report.broken_at is not None:
         lines.append(f"   ⚠️ 首次断裂: 第 {report.broken_at} 条（其后不可信）")
+    if report.keyed_pending:
+        lines.append(
+            f"   ⚠️ {report.keyed_pending} 条 keyed 事件待核验"
+            f"（设置 {HMAC_KEY_ENV} 后查看）"
+        )
 
     # 会话级目标（如有）
     goals = [e for e in events if e.get("type") == "goal/opened"]
@@ -142,9 +151,13 @@ def _human_view(events: list[dict], title: str, path: Any) -> str:
 
 def _machine_view(events: list[dict], title: str, path: Any) -> str:
     """给机器/审计员看：事件类型统计 + 逐条哈希。"""
-    from xenon.session.events import verify_event_chain
+    from xenon.session.events import (
+        HMAC_KEY_ENV,
+        evidence_hmac_key,
+        verify_event_chain,
+    )
 
-    report = verify_event_chain(events)
+    report = verify_event_chain(events, key=evidence_hmac_key())
     counts: dict[str, int] = {}
     for event in events:
         etype = str(event.get("type") or "?")
@@ -155,9 +168,14 @@ def _machine_view(events: list[dict], title: str, path: Any) -> str:
         "",
         f"事件总数 {report.total}",
         _CHAIN_LABELS.get(report.status, report.status),
+        f"链模式: {report.mode}",
     ]
     if report.verified:
         lines.append(f"可验事件 {report.verified}（head {_fmt_head(report.head_hash or '')}）")
+    if report.keyed_pending:
+        lines.append(
+            f"⚠️ {report.keyed_pending} 条 keyed 事件无法核验（缺 {HMAC_KEY_ENV}）"
+        )
     if report.legacy:
         lines.append(f"旧格式事件 {report.legacy}（在哈希链之前，不可自证）")
     if report.broken_at is not None:
@@ -180,6 +198,7 @@ def _machine_view(events: list[dict], title: str, path: Any) -> str:
 def _cmd_evidence(*, args: str, session_state: dict, **kwargs: Any) -> str:
     from xenon.session.events import (
         SessionEventLog,
+        evidence_hmac_key,
         session_events_dir,
         verify_event_chain,
     )
@@ -206,8 +225,8 @@ def _cmd_evidence(*, args: str, session_state: dict, **kwargs: Any) -> str:
         lines = [f"📒 全局证据账本（{directory}）", ""]
         for path in files[:20]:
             events = SessionEventLog(path.stem, directory=directory).read()
-            report = verify_event_chain(events)
-            icon = _CHAIN_ICONS[report.status]
+            report = verify_event_chain(events, key=evidence_hmac_key())
+            icon = "🔒" if (report.status == "ok" and report.keyed) else _CHAIN_ICONS[report.status]
             turns = sum(1 for e in events if e.get("type") == "turn/user")
             lines.append(
                 f"{icon} {path.stem}  ·  事件 {report.total} / 轮次 {turns} / "

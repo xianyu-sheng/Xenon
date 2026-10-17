@@ -23,6 +23,7 @@ Authority events (never indexed, never retrieved):
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -37,17 +38,37 @@ logger = logging.getLogger(__name__)
 HASH_FIELD = "h"
 PREV_FIELD = "prev"
 GENESIS = "genesis"
+# 可选密钥锚点（#106）：设置后链哈希改 HMAC-SHA256(key, prev ‖ 正文)。
+HMAC_KEY_ENV = "XENON_EVIDENCE_HMAC_KEY"
+KEY_FIELD = "hk"
+KEYED_VALUE = "hmac-sha256"
 
 
 def canonical_event_json(record: dict) -> str:
-    """事件正文的规范化 JSON（哈希字段本身不参与）。"""
-    body = {k: v for k, v in record.items() if k not in (HASH_FIELD, PREV_FIELD)}
+    """事件正文的规范化 JSON（哈希/前驱/模式字段不参与）。"""
+    body = {
+        k: v for k, v in record.items()
+        if k not in (HASH_FIELD, PREV_FIELD, KEY_FIELD)
+    }
     return json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def event_hash_hex(record: dict) -> str:
-    """事件内容哈希（sha256 全文十六进制）。"""
-    return hashlib.sha256(canonical_event_json(record).encode("utf-8")).hexdigest()
+def evidence_hmac_key() -> str | None:
+    """密钥锚点密钥（仅环境变量，绝不落盘）。"""
+    return os.environ.get(HMAC_KEY_ENV, "").strip() or None
+
+
+def event_hash_hex(record: dict, key: str | None = None) -> str:
+    """事件内容哈希。
+
+    默认 sha256(规范化正文) 十六进制；传入 key 时改 HMAC-SHA256(key, prev ‖ 正文)，
+    前驱链接一并纳入签名，缺密钥者无法重算通过。
+    """
+    body = canonical_event_json(record)
+    if key is None:
+        return hashlib.sha256(body.encode("utf-8")).hexdigest()
+    material = f"{record.get(PREV_FIELD, '')}\n{body}".encode("utf-8")
+    return hmac.new(key.encode("utf-8"), material, hashlib.sha256).hexdigest()
 
 
 @dataclass
@@ -59,6 +80,9 @@ class ChainReport:
     legacy: int = 0  # 旧格式事件（无哈希，无法自证）
     broken_at: int | None = None  # 首次断裂的索引（None=无断裂）
     head_hash: str | None = None  # 最新可验事件哈希
+    keyed: int = 0  # 带密钥锚点标记的事件数
+    keyed_pending: int = 0  # 因缺少密钥而无法核验的 keyed 事件数
+    unkeyed: int = 0  # 以明文摘要核验通过的无标记事件数
 
     @property
     def status(self) -> str:
@@ -67,15 +91,30 @@ class ChainReport:
             return "empty"
         if self.broken_at is not None:
             return "broken"
+        if self.verified == 0 and self.keyed_pending:
+            return "partial"  # 全是 keyed 事件但缺密钥：不可静默通过
         if self.verified == 0:
             return "legacy"  # 全部旧格式：无法自证
-        if self.legacy:
-            return "partial"  # 可验区完整，但有旧格式事件不在链上
+        if self.legacy or self.keyed_pending or (self.keyed and self.unkeyed):
+            return "partial"  # 旧格式 / 缺密钥 / 混合模式
         return "ok"
 
+    @property
+    def mode(self) -> str:
+        """keyed | unkeyed | mixed（供 /evidence 展示）。"""
+        if self.keyed and self.unkeyed:
+            return "mixed"
+        if self.keyed:
+            return "keyed"
+        return "unkeyed"
 
-def verify_event_chain(events: list[dict]) -> ChainReport:
-    """重新计算每条事件的哈希并检查前驱链接（append-only 自证）。"""
+
+def verify_event_chain(events: list[dict], *, key: str | None = None) -> ChainReport:
+    """重新计算每条事件的哈希并检查前驱链接（append-only 自证）。
+
+    key 与写入时一致才能核验 keyed 事件；缺密钥时 keyed 事件计入
+    keyed_pending 而不算通过（绝不静默放行）。
+    """
     report = ChainReport(total=len(events))
     prev_expected: str | None = None
     chain_started = False
@@ -84,7 +123,13 @@ def verify_event_chain(events: list[dict]) -> ChainReport:
         if not isinstance(stored, str) or not stored:
             report.legacy += 1
             continue
-        if event_hash_hex(event) != stored:
+        is_keyed = KEY_FIELD in event
+        if is_keyed:
+            report.keyed += 1
+            if key is None:
+                report.keyed_pending += 1
+                continue
+        if event_hash_hex(event, key=key if is_keyed else None) != stored:
             report.broken_at = idx
             return report
         expected = event.get(PREV_FIELD)
@@ -102,6 +147,8 @@ def verify_event_chain(events: list[dict]) -> ChainReport:
         prev_expected = stored
         report.head_hash = stored
         report.verified += 1
+        if not is_keyed:
+            report.unkeyed += 1
     return report
 
 FACT_EVENT_TYPES = frozenset(
@@ -193,8 +240,11 @@ class SessionEventLog:
             if self._tail_hash is not None
             else self._read_tail_hash()
         )
-        record[HASH_FIELD] = event_hash_hex(record)
         record[PREV_FIELD] = prev or GENESIS
+        key = evidence_hmac_key()
+        record[HASH_FIELD] = event_hash_hex(record, key=key)
+        if key is not None:
+            record[KEY_FIELD] = KEYED_VALUE
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
             with open(self.path, "a", encoding="utf-8") as handle:
