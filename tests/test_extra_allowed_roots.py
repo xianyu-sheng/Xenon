@@ -11,7 +11,20 @@ import os
 
 import pytest
 
+from xenon.nodes import tool_node as tool_node_module
 from xenon.nodes.tool_node import SecurityError, ToolNode
+
+
+@pytest.fixture(autouse=True)
+def _no_default_extra_roots(monkeypatch):
+    """Linux 上 pytest 的 tmp_path 位于 /tmp（默认允许根）下。
+
+    清空默认额外根，让「越界」用例在 Linux 与 Windows 上语义一致；
+    放行用例则只可能来自 XENON_EXTRA_ROOTS。
+    """
+
+    monkeypatch.setattr(tool_node_module, "_DEFAULT_EXTRA_ROOTS", ())
+
 
 
 def test_outside_path_denied_without_env(

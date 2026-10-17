@@ -303,6 +303,15 @@ _DANGEROUS_GIT_PATTERNS = [
 ]
 
 
+# 默认额外允许的根目录（/tmp、/var/tmp）。提成模块常量便于测试
+# monkeypatch 掉——Linux 上 pytest 的 tmp_path 本身就位于 /tmp 下，
+# 否则「越界拒绝」用例会被默认放行。
+_DEFAULT_EXTRA_ROOTS: tuple[Path, ...] = (
+    Path("/tmp").resolve(),
+    Path("/var/tmp").resolve(),
+)
+
+
 class ToolNode(
     CodeToolsMixin,
     FileMutationToolsMixin,
@@ -653,7 +662,7 @@ class ToolNode(
         提取为方法以便测试时可 monkeypatch 清空，否则基于 tmp_path 的测试
         无法验证符号链接逃逸防护——逃逸目标若落在 /tmp 会被此规则直接放行。
         """
-        roots = [Path("/tmp").resolve(), Path("/var/tmp").resolve()]
+        roots = list(_DEFAULT_EXTRA_ROOTS)
         raw = os.environ.get("XENON_EXTRA_ROOTS", "")
         for entry in raw.split(os.pathsep):
             entry = entry.strip()
