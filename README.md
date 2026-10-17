@@ -112,6 +112,17 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 
 也可以用 `uv tool install <wheel URL>` 或 `pipx install <wheel URL>`，入口会自动处理。
 
+## 评测
+
+SWE-bench Lite，同模型（`deepseek-v4-flash`）、同官方 harness、react 引擎、120 步、盲测（不应用 test patch、不注入测试名），每格 3 次重复取均值：
+
+| 样本 | 本轮框架 | 上一代 v0.8.5 |
+|---|---|---|
+| 固定 30 例（seed 20260729） | **62.2%** | 63.3% |
+| 零重叠留出集（seed 20261016） | **52.2%** | 46.7% |
+
+> 原样本存在样本内调优痕迹（提交历史点名其中 9/30 实例），留出集是主证据；两套的相对差值方向相反——原样本上的旧版优势至少部分来自调优。完整协议、逐次结果、判定日志与 sha256 归档见 [EVAL_RESULTS](docs/EVAL_RESULTS.md)。
+
 ## 文档
 
 | 主题 | 中文 | English |

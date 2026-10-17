@@ -112,6 +112,17 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 
 `uv tool install <wheel URL>` and `pipx install <wheel URL>` work too and handle the entry point for you.
 
+## Benchmark
+
+SWE-bench Lite — same model (`deepseek-v4-flash`), same official harness, react engine, 120-step budget, blind protocol (no test patch, no test-name hints), three runs per cell averaged:
+
+| Sample | Current framework | Previous generation (v0.8.5) |
+|---|---|---|
+| Frozen 30 instances (seed 20260729) | **62.2%** | 63.3% |
+| Zero-overlap held-out sample (seed 20261016) | **52.2%** | 46.7% |
+
+> The original sample carries in-sample tuning traces (9 of its 30 instances are named in the commit history), so the held-out sample is the evidence to trust; the relative gap flips sign between the two samples — the old generation's edge on the original sample came at least partly from tuning. Full protocol, per-run results, judging logs and sha256-checked archives: [EVAL_RESULTS](docs/EVAL_RESULTS.md).
+
 ## Documentation
 
 | Topic | 中文 | English |
