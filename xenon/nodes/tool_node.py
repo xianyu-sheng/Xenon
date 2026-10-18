@@ -968,7 +968,19 @@ class ToolNode(
         if self.command_prefix:
             shell_exec = [*self.command_prefix, "/bin/bash", "-lc", shell_command]
         elif sys.platform == "win32":
-            shell_exec = ["powershell", "-Command", resolved_cmd]
+            # PowerShell converts native-command stderr into error records when a
+            # command uses ``2>&1 | ...``, which makes ``powershell -Command``
+            # exit 1 even when the native command succeeded.  Git writes its
+            # progress to stderr, so a successful ``git push 2>&1 | Select-Object``
+            # used to be reported as a failure.  Append an explicit exit code:
+            # native commands report via ``$LASTEXITCODE``, pure cmdlets via ``$?``.
+            windows_cmd = (
+                f"{resolved_cmd}\n"
+                "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }\n"
+                "if (-not $?) { exit 1 }\n"
+                "exit 0"
+            )
+            shell_exec = ["powershell", "-Command", windows_cmd]
         else:
             shell_exec = ["/bin/bash", "-c", shell_command]
 

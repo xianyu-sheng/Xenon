@@ -210,7 +210,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 | `XENON_EXTRA_ROOTS` | 启动目录之外额外允许文件工具读写的根目录（Windows 用 `;` 分隔） | 空 = 仅启动目录及其子目录 |
 | `XENON_SESSION_EVENTS(_DIR)` | 事件日志开关 / 目录 | 开 |
 | `XENON_HOOKS` | 本地 hooks 开关 | 开 |
-| `GITHUB_TOKEN` / `GH_TOKEN` | GitHub 工具认证（提升 API 限额） | 空 |
+| `GITHUB_TOKEN` / `GH_TOKEN` | GitHub 工具认证（提升 API 限额；未设置时自动回退到已登录的 `gh auth token`） | 空 |
 
 </details>
 

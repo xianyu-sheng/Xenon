@@ -16,6 +16,7 @@ from typing import Any
 
 from rich.text import Text
 
+from xenon.engine.execution_policy import EngineDeadlineExceeded
 from xenon.engine.registry import ENGINE_REGISTRY, EngineSpec
 from xenon.repl.turn_helpers import (
     retry_budget_for as _retry_budget_for,
@@ -549,10 +550,23 @@ class EngineHostMixin:
                 import traceback
 
                 logger.error(f"{spec.label} 引擎异常:\n{traceback.format_exc()}")
-            console.print(f"[error]❌ {spec.label} 引擎执行失败: {e}[/error]")
-            self._record_engine_error(
-                f"[错误] {spec.label} 引擎执行失败: {e}", model_ids[0]
-            )
+            if isinstance(e, EngineDeadlineExceeded):
+                # Deadline is a budget stop, not a crash.  The work done so far
+                # is real and resumable; present it as a warning so the user does
+                # not read "failed" as "nothing happened".
+                console.print(
+                    f"[warning]⏱ {spec.label} 已达引擎时限：{e}[/warning]\n"
+                    "[dim]已完成的操作仍然有效；输入「继续」可接着做，"
+                    "或拆小任务后重试。[/dim]"
+                )
+                self._record_engine_error(
+                    f"[超时] {spec.label} 引擎时限已到：{e}", model_ids[0]
+                )
+            else:
+                console.print(f"[error]❌ {spec.label} 引擎执行失败: {e}[/error]")
+                self._record_engine_error(
+                    f"[错误] {spec.label} 引擎执行失败: {e}", model_ids[0]
+                )
         finally:
             # 停掉 steering 监听线程（engine.run 已返回，不再需要输入注入）
             self._stop_steering_listener(steering_thread)

@@ -7,6 +7,9 @@ Xenon processes can override the credentials file without reloading modules.
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +24,40 @@ def _normalize_token(value: Any) -> str:
     if not token or "\n" in token or "\r" in token:
         return ""
     return token
+
+
+@lru_cache(maxsize=1)
+def _gh_auth_token() -> str:
+    """Read the token from the logged-in ``gh`` CLI as a last resort.
+
+    The interactive user often has ``gh auth login`` done (keyring) while
+    neither ``GITHUB_TOKEN``/``GH_TOKEN`` nor ``credentials.yaml`` is set.
+    ``gh auth token`` prints the token to stdout; anything else (missing gh,
+    not logged in, timeout) degrades to an empty string so this fallback can
+    never break the normal credential path.  The result is cached per process.
+    """
+
+    gh = shutil.which("gh")
+    if not gh:
+        return ""
+    try:
+        proc = subprocess.run(
+            [gh, "auth", "token"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return _normalize_token(proc.stdout)
+
+
+def clear_github_token_cache() -> None:
+    """Drop the cached ``gh auth token`` result (tests, or after re-login)."""
+
+    _gh_auth_token.cache_clear()
 
 
 def github_credentials_path() -> Path:
@@ -40,7 +77,9 @@ def load_github_token(*, credentials_path: str | Path | None = None) -> str:
     """Load a GitHub token without exposing it in diagnostics.
 
     Precedence is ``GITHUB_TOKEN``, then ``GH_TOKEN``, then
-    ``credentials.yaml``'s ``github.token`` value.
+    ``credentials.yaml``'s ``github.token`` value, then the logged-in ``gh``
+    CLI (``gh auth token``).  The gh fallback is what makes tools usable on a
+    machine that already has ``gh`` authenticated but no Xenon token.
     """
     for env_name in ("GITHUB_TOKEN", "GH_TOKEN"):
         token = _normalize_token(os.environ.get(env_name))
@@ -59,9 +98,12 @@ def load_github_token(*, credentials_path: str | Path | None = None) -> str:
     if not isinstance(data, dict):
         return ""
     github = data.get("github")
-    if not isinstance(github, dict):
-        return ""
-    return _normalize_token(github.get("token"))
+    if isinstance(github, dict):
+        token = _normalize_token(github.get("token"))
+        if token:
+            return token
+
+    return _gh_auth_token()
 
 
 def github_auth_headers() -> dict[str, str]:

@@ -7,11 +7,16 @@
 
 ### 引擎
 
+- 引擎时限（默认 600s）不再整轮红错：组合引擎在超时时返回「已完成步骤 + 时限说明」，REPL 以警告而非错误展示；输入「继续」可接着做，已完成的操作保持有效。
+
 - 新增「改完代码必须验证」软提醒（#163）：ReAct 在 `final_answer` 前检查「最后一次成功写入之后没有任何测试/构建命令」，命中时注入一次提醒（不阻断、不重复）；系统提示规则 8 同步扩展为所有代码变更，要求先跑「能因改动而失败的测试」。
 - 修复拒绝检测误判：`_detect_denial` 旧实现整段子串匹配，会把「可以，但有几个前提……我无法直接访问 X」判成拒绝并触发备用模型切换；现在只看开头第一句且排除肯定性表态。
 - 统一标准步数预算为 **120 步**（与 Claude Code 类代理对齐）：`react` / `plan-execute` 由 40 步、`plan-react` / `plan-reflection` / `react-reflection` 由 24 步统一为 120；引擎类默认值与工厂默认值一致，`XENON_MAX_ITERATIONS` 仍可覆盖。SWE-bench 等评测运行冻结在 120 步（见 `docs/EVAL_RESULTS.md` 预注册），测试 `tests/test_step_budget.py` 锁定该常数。
 
 ### 工具
+
+- Windows 命令退出码修复：`2>&1 | Select-Object` 会把原生命令的 stderr 转成 PowerShell error record，导致成功的 `git push` 被误报为失败；`command` 工具现在追加 `$LASTEXITCODE`/`$?` 判定，成功即 0、真失败保留原码。
+- `create_pull_request` / `github_fetch` 的 token 解析新增 `gh auth token` 兜底：机器已用 `gh auth login` 登录但没配 `GITHUB_TOKEN` 时可直接建 PR（缓存，失败降级为空）。
 
 - `clone_repo` 新增 `target_dir`：可把仓库直接克隆到工作区指定目录；若目标已是 git checkout，只做只读校验、绝不 fetch/merge 用户仓库。
 - 新增 `create_pull_request` 工具（GitHub API 建 PR；REPL 中按 CRITICAL 审批）；`branch` 为 head，`base_branch` 省略时自动探测默认分支。

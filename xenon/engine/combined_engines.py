@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING, Any
 from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
 from xenon.engine.execution_evidence import ExecutionEvidence, workspace_root_for
-from xenon.engine.execution_policy import EngineDeadlineExceeded
+from xenon.engine.execution_policy import (
+    DEFAULT_ENGINE_TIMEOUT,
+    EngineDeadlineExceeded,
+)
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.react_engine import ReActEngine
 from xenon.engine.reflection_engine import ReflectionEngine
@@ -24,6 +27,40 @@ logger = logging.getLogger(__name__)
 from xenon.engine.trace import TraceContextFilter  # noqa: E402
 
 logger.addFilter(TraceContextFilter())
+
+
+def _deadline_note() -> str:
+    """User-facing tail for a run that stopped at the engine deadline."""
+
+    return (
+        f"\n\n⏱ 已达到引擎时限（{DEFAULT_ENGINE_TIMEOUT:.0f} 秒），本轮在此收束。"
+        "以上内容来自已完成步骤与真实工具结果；未完成的步骤没有执行。"
+        "如需继续，直接输入「继续」。"
+    )
+
+
+def _deadline_summary(results: list[dict[str, Any]], analysis: str = "") -> str:
+    """Deterministic summary used when the LLM summarizer has no budget left."""
+
+    lines: list[str] = []
+    if analysis:
+        lines.append(f"## 执行计划\n{analysis}")
+    lines.append("## 已完成步骤")
+    done = [item for item in results if item.get("status") == "ok"]
+    if done:
+        for item in done:
+            lines.append(f"- 步骤 {item.get('step_id')}: {item.get('task')}")
+            result = str(item.get("result") or "").strip()
+            if result:
+                lines.append(f"  {result[:600]}")
+    else:
+        lines.append("- （无成功完成的步骤）")
+    failed = [item for item in results if item.get("status") == "failed"]
+    if failed:
+        lines.append("## 失败/未完成的步骤")
+        for item in failed:
+            lines.append(f"- 步骤 {item.get('step_id')}: {item.get('task')}")
+    return "\n".join(lines)
 
 
 class SteeringMixin:
@@ -292,7 +329,14 @@ class PlanReactEngine(SteeringMixin):
         try:
             plan = self.planner._plan(user_input, ctx)
         except EngineDeadlineExceeded:
-            raise
+            logger.warning("Plan-ReAct planning hit the engine deadline")
+            self.callback.on_warning("引擎时限已到（规划阶段），返回部分说明")
+            return self._finalize_plan_react(
+                ctx,
+                "⏱ 引擎时限（"
+                f"{DEFAULT_ENGINE_TIMEOUT:.0f} 秒）在规划阶段耗尽，尚未执行任何步骤。"
+                "输入「继续」可接着做，或拆小任务后重试。",
+            )
         except Exception as exc:
             logger.exception("Plan-ReAct planning failed")
             return f"规划阶段失败: {exc}"
@@ -377,7 +421,23 @@ class PlanReactEngine(SteeringMixin):
                     else "(步骤完成，无文本输出)"
                 )
             except EngineDeadlineExceeded:
-                raise
+                logger.warning("Plan-ReAct step %r hit the engine deadline", step_id)
+                self.callback.on_warning("引擎时限已到，提前收束并返回已完成部分")
+                results.append(
+                    {
+                        "step_id": step_id,
+                        "task": task,
+                        "result": "（超出引擎时限，步骤未完成）",
+                        "status": "failed",
+                        "evidence": evidence.render(max_diff_chars=2_000),
+                    }
+                )
+                ctx.set(f"step_{step_id}_result", "（超出引擎时限，步骤未完成）")
+                ctx.set(f"step_{step_id}_status", "failed")
+                self.callback.on_step_done(step_id, False, "引擎时限已到")
+                return self._finalize_plan_react(
+                    ctx, _deadline_summary(results, analysis) + _deadline_note()
+                )
             except Exception as exc:
                 logger.exception("Plan-ReAct step %r failed", step_id)
                 status = "failed"
@@ -486,7 +546,7 @@ class PlanReactEngine(SteeringMixin):
                 self.last_model_used = self.planner.last_model_used
                 return output
         except EngineDeadlineExceeded:
-            raise
+            logger.warning("Plan-ReAct summarize hit the engine deadline; using fallback")
         except Exception:
             logger.warning("Plan-ReAct summary failed", exc_info=True)
         return f"## 执行计划\n{analysis}\n\n## 执行结果\n{successful_text}{failed_text}"
@@ -557,7 +617,11 @@ class _ReflectionCombination(SteeringMixin):
                 ctx_mgr=ctx_mgr,
             )
         except EngineDeadlineExceeded:
-            raise
+            logger.warning("Reflection review hit the engine deadline")
+            self.callback.on_warning("引擎时限已到（审查阶段），保留已执行结果")
+            return self._finalize_combined(
+                ctx, (initial_output or "（无输出）") + _deadline_note()
+            )
         except Exception as exc:
             logger.warning(
                 "Reflection review failed; preserving executed result: %s", exc
@@ -613,7 +677,11 @@ class _ReflectionCombination(SteeringMixin):
                 repair_prompt, context=repair_ctx, ctx_mgr=ctx_mgr
             )
         except EngineDeadlineExceeded:
-            raise
+            logger.warning("Reflection repair hit the engine deadline")
+            self.callback.on_warning("引擎时限已到（修复阶段），保留已执行结果")
+            return self._finalize_combined(
+                ctx, (initial_output or "（无输出）") + _deadline_note()
+            )
         except Exception as exc:
             logger.warning(
                 "Reflection repair failed; preserving executed result: %s", exc
@@ -673,9 +741,8 @@ class _ReflectionCombination(SteeringMixin):
                         "修复已落地，但复审仍未通过；保留真实工作区并报告当前结果"
                     )
             except EngineDeadlineExceeded:
-                raise
-            except Exception as exc:
-                logger.warning("Post-repair review failed: %s", exc)
+                logger.warning("Post-repair review hit the engine deadline")
+                self.callback.on_warning("引擎时限已到（复审阶段），保留修复结果")
 
 
         return self._finalize_combined(ctx, repaired_output or initial_output)

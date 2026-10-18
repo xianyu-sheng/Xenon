@@ -11,6 +11,7 @@ import xenon.nodes.tool_node as tool_module
 import xenon.repl.command_groups.skill as skill_commands
 from xenon.engine.context import AgentContext
 from xenon.nodes.tool_node import ToolNode
+import xenon.utils.github_auth as github_auth
 from xenon.utils.github_auth import github_auth_headers, load_github_token
 
 
@@ -19,6 +20,13 @@ def clear_github_auth_environment(monkeypatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.delenv("XENON_CREDENTIALS_PATH", raising=False)
+    # These cases test env/credentials precedence only; the gh CLI fallback is
+    # covered in test_github_auth_fallback.py.  Disable it so a developer
+    # machine with `gh auth login` cannot leak a token into the assertions.
+    monkeypatch.setattr(github_auth.shutil, "which", lambda name: None)
+    github_auth.clear_github_token_cache()
+    yield
+    github_auth.clear_github_token_cache()
 
 
 def test_github_token_environment_precedence(tmp_path, monkeypatch):
