@@ -131,10 +131,14 @@ def has_successful_write(tracker: Any | None) -> bool:
 
 
 # 文件声明校验正则（从 _verify_llm_file_claims 提取）
+# A claim requires completion/aspect: "已创建 X" or "创建了 X".  Bare verbs
+# ("创建 fixture", "写入计划") are plans/quotes, not claims — the research
+# answers that quote issue text used to be flagged with 18 unverified files.
 _CLAIM_PATTERNS = [
-    r"(?:已|已经|成功)?(?:创建|新建|生成|写入|保存)(?:了)?",
+    r"(?:已|已经|成功)(?:创建|新建|生成|写入|保存)(?:了)?",
+    r"(?:创建|新建|生成|写入|保存)(?:了|完成|完毕)",
+    r"(?:文件|目录|文件夹)(?:已|已经)(?:创建|新建|生成|写入|保存|建立)",
     r"(?:created|written|saved|generated|initialized|made)",
-    r"(?:文件|目录|文件夹)(?:已|已经)",
 ]
 # 路径类文件声称：必须包含路径分隔符（/ 或 \）。裸 `self.c`、`obj.config`
 # 这类代码/属性引用不带分隔符，绝不会被误判为文件。这修复了 SWE-bench
@@ -155,8 +159,10 @@ _CLAIMED_BARE_FILE_RE = re.compile(
     re.IGNORECASE,
 )
 _CLAIMED_FILE_PATTERN = re.compile(
-    r"(?:创建|新建|生成|写入|保存|写入到|created|written|saved|generated|"
-    r"initialized|made)\s*(?:了)?\s*[`'\"\[]?[\w.\-]+\.(?:py|js|ts|html|css|"
+    r"(?:(?:已|已经|成功)(?:创建|新建|生成|写入|保存)|"
+    r"(?:创建|新建|生成|写入|保存)(?:了|完成|完毕)|"
+    r"created|written|saved|generated|initialized|made)"
+    r"\s*(?:了)?\s*[`'\"\[]?[\w.\-]+\.(?:py|js|ts|html|css|"
     r"json|yaml|yml|toml|md|txt|sh|bat|ps1|go|rs|java|c|cpp|h)[`'\"]?"
     r"(?:\s*(?:、|，|,|和|与|及|以及|and|&)\s*[`'\"\[]?[\w.\-]+\.(?:py|js|ts|"
     r"html|css|json|yaml|yml|toml|md|txt|sh|bat|ps1|go|rs|java|c|cpp|h)[`'\"]?)*",
@@ -176,15 +182,34 @@ def _strip_diff_prefix(path: str) -> str:
     return path
 
 
-def _extract_claimed_files(llm_output: str) -> set[str]:
-    """提取 LLM 输出中声称涉及的文件（路径类 + 声明动词开头的裸名序列）。"""
+def _claim_windows(text: str) -> list[str]:
+    """Text around each completion claim; paths outside are not claims."""
+
+    windows: list[str] = []
+    for pattern in _CLAIM_PATTERNS:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            windows.append(text[max(0, match.start() - 80) : match.end() + 200])
+    return windows
+
+
+def _extract_claimed_files(
+    llm_output: str, windows: list[str] | None = None
+) -> set[str]:
+    """提取 LLM 输出中声称涉及的文件（路径类 + 声明动词开头的裸名序列）。
+
+    Path-like strings are only collected inside a claim window so a research
+    answer that quotes ``smartbench/frontends/python.py`` from an issue body is
+    not reported as "claimed but unverified".
+    """
+
     mentioned: set[str] = set()
-    for pattern in _FILE_PATTERNS:
-        for m in re.findall(pattern, llm_output):
-            m = _strip_diff_prefix(m)
-            if _VERSION_LIKE_PATH.match(m):
-                continue
-            mentioned.add(m)
+    for window in windows if windows is not None else [llm_output]:
+        for pattern in _FILE_PATTERNS:
+            for m in re.findall(pattern, window):
+                m = _strip_diff_prefix(m)
+                if _VERSION_LIKE_PATH.match(m):
+                    continue
+                mentioned.add(m)
     for m in _CLAIMED_FILE_PATTERN.finditer(llm_output):
         mentioned.update(_CLAIMED_BARE_FILE_RE.findall(m.group(0)))
     return mentioned
@@ -273,7 +298,9 @@ def verify_file_claims(
     if not has_claim:
         return True, []
 
-    mentioned_files = _extract_claimed_files(llm_output)
+    mentioned_files = _extract_claimed_files(
+        llm_output, _claim_windows(llm_output)
+    )
     if not mentioned_files:
         return True, []
 

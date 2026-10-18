@@ -178,6 +178,75 @@ def _normalize_step(step: Any, index: int) -> dict:
 # ── JSON 提取 ─────────────────────────────────────────────────
 
 
+def _repair_bare_keys(text: str) -> str:
+    """Quote object keys the model forgot to quote.
+
+    Handles both shapes seen in real output: ``{id:1}`` and the partial-quote
+    form ``{"id":26,task":"x"}`` (identifier followed by a stray closing quote
+    and a colon).  The scanner only touches identifiers that sit directly after
+    ``{`` or ``,`` outside strings, so values and message text are untouched.
+    """
+
+    out: list[str] = []
+    in_string = False
+    escape_next = False
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escape_next:
+                escape_next = False
+            elif ch == "\\":
+                escape_next = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch in "{,":
+            out.append(ch)
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                out.append(text[j])
+                j += 1
+            k = j
+            while k < n and (text[k].isalnum() or text[k] == "_"):
+                k += 1
+            if k > j:
+                m = k
+                while m < n and text[m] in " \t\r\n":
+                    m += 1
+                identifier = text[j:k]
+                if (
+                    m + 1 < n
+                    and text[m] == '"'
+                    and text[m + 1] == ":"
+                    and identifier not in {"true", "false", "null"}
+                ):
+                    out.append('"')
+                    out.append(identifier)
+                    out.append('":')
+                    i = m + 2
+                    continue
+                if m < n and text[m] == ":" and identifier not in {"true", "false", "null"}:
+                    out.append('"')
+                    out.append(identifier)
+                    out.append('":')
+                    i = m + 1
+                    continue
+            i = j
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _repair_json(text: str) -> str | None:
     """尝试修复被截断或格式不完整的 JSON。
 
@@ -217,6 +286,8 @@ def _repair_json(text: str) -> str | None:
     elif start > 0:
         # 有开头没闭合 → 截掉开头前的文字，保留不完整的 JSON 主体
         text = text[start:]
+
+    text = _repair_bare_keys(text)
 
     # 1. 分析引号状态，找到最后一个未闭合的字符串
     in_string = False

@@ -62,6 +62,11 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
    只是前置手段，不是交付物——不做实际修改的计划是不完整的。
 9. **完整闭环**：计划应覆盖 侦察 → 修改 → 验证 三个阶段；若任务明确要
    修复 bug，验证步骤（如运行测试）应放在修改步骤之后。
+10. **计划规模**：最多 12 步；整体控制在约 6KB 以内。步骤越少越可靠。
+11. **严禁在计划里粘贴文件内容/代码块**：JSON 里的多行代码是规划解析失败的
+    头号原因。修改已有文件时用 edit_file/batch_edit，但 `old_text`/`new_text`
+    留空（执行阶段会先读后改）；只有新建小文件才用 write_file，且只放最小
+    必要内容（超过约 10 行请改用 tool=null 让执行阶段生成）。
 
 ## ⚠️ 重要：可用工具列表（完整且唯一）
 
@@ -297,16 +302,33 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         plan = self._plan(user_input, ctx)
         steps = plan.get("steps", [])
 
-        if not steps:
-            self.callback.on_warning("未能生成有效的执行计划")
-            return plan.get("analysis", "未能生成有效的执行计划。")
+        # v0.9.6: 规划输出无法解析时，不再把原始 JSON 当最终答案返回。
+        # 降级为单个 LLM 步骤，由执行阶段的迷你 ReAct 继续完成任务。
+        fallback_used = False
+        if not steps and plan.get("parse_failed"):
+            logger.warning(
+                "计划解析失败（两次尝试均无步骤），降级为单步 ReAct 执行"
+            )
+            self.callback.on_warning(
+                "规划输出无法解析为执行步骤，已降级为单步 ReAct 执行"
+            )
+            plan = {
+                "analysis": "计划解析失败，降级为单步执行。",
+                "steps": self._fallback_steps(user_input),
+            }
+            steps = plan["steps"]
+            fallback_used = True
 
         # Phase 1.5: 计划完整性校验（根因修复，非事后补救）。
         # SWE-bench 发现：规划阶段的 prompt 未约束「修改类任务必须以写步骤
         # 收尾」，LLM 常生成只有侦察步骤（read/search）的计划，执行完
         # 「理解问题」就收工 → 空补丁。这里在执行前校验计划结构：
         # 若任务需要写操作但计划不含任何写工具步骤，让 LLM 重新规划一次。
-        steps = self._ensure_plan_has_write_step(user_input, plan, ctx)
+        steps = (
+            steps
+            if fallback_used
+            else self._ensure_plan_has_write_step(user_input, plan, ctx)
+        )
         # v0.8.3: edit 步骤参数不全（plan 阶段未读文件，old_text/new_text
         # 无法预知）→ 转为 LLM 步骤，执行时迷你 ReAct 现场先读后写。
         # SWE-bench 实测（django-16408）：plan 生成的 edit 步骤缺 old_text
@@ -405,6 +427,20 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         )
         self.finalize_evidence(context=ctx, output=summary, tracker=tracker)
         return summary
+
+    @staticmethod
+    def _fallback_steps(user_input: str) -> list[dict[str, Any]]:
+        """Single LLM step used when the planner output cannot be parsed."""
+
+        return [
+            {
+                "id": 1,
+                "task": user_input,
+                "tool": None,
+                "params": {},
+                "depends_on": [],
+            }
+        ]
 
     # ── Phase 1.5: 计划完整性校验 ────────────────────────────
     # 写类工具集合的单一真相源已迁移到 evidence_gate.WRITE_TOOL_NAMES；
@@ -897,7 +933,8 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                     "role": "user",
                     "content": (
                         "上一次规划响应无法解析为执行步骤。请重新输出且只能输出一个完整 JSON 对象，"
-                        "不要使用工具标记、Markdown 或解释文字。格式必须是："
+                        "最多 12 步，不要粘贴文件内容或代码块，修改已有文件时 "
+                        "old_text/new_text 留空。不要使用工具标记、Markdown 或解释文字。格式必须是："
                         '{"analysis":"...","steps":[{"id":1,"task":"...",'
                         '"tool":null,"params":{},"depends_on":[]}]}'
                     ),
@@ -916,6 +953,10 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 # Preserve the most recent provider evidence for diagnostics;
                 # the caller still fails closed when no executable plan exists.
                 result = retry_result
+        if not result.get("steps"):
+            # Distinguish "planner output could not be parsed" from a
+            # legitimate empty plan (some hosts return analysis only).
+            result["parse_failed"] = True
         logger.debug(
             f"解析后: steps={len(result.get('steps', []))}, analysis={result.get('analysis', '')[:100]}"
         )
