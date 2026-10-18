@@ -1,0 +1,143 @@
+[
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "create_file_and_test",
+    "passed": true,
+    "detail": "..........                                                               [100%] | 10 passed in 0.01s",
+    "elapsed_s": 22.8,
+    "llm_calls": 10,
+    "tool_calls": 9,
+    "failed_tools": 3,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "fix_existing_bug",
+    "passed": true,
+    "detail": ".                                                                        [100%] | 1 passed in 0.01s",
+    "elapsed_s": 10.9,
+    "llm_calls": 5,
+    "tool_calls": 6,
+    "failed_tools": 1,
+    "loop_hints": 0,
+    "warnings": []
+  },
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "multi_file_package",
+    "passed": true,
+    "detail": ".....................                                                    [100%] | 21 passed in 0.02s",
+    "elapsed_s": 22.5,
+    "llm_calls": 12,
+    "tool_calls": 11,
+    "failed_tools": 3,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "refactor_rename",
+    "passed": true,
+    "detail": ".                                                                        [100%] | 1 passed in 0.01s",
+    "elapsed_s": 16.6,
+    "llm_calls": 10,
+    "tool_calls": 15,
+    "failed_tools": 1,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "git_branch_commit",
+    "passed": true,
+    "detail": "branch=feat/agentic; commit=feat: add notes.txt with agentic-ok marker",
+    "elapsed_s": 47.7,
+    "llm_calls": 21,
+    "tool_calls": 19,
+    "failed_tools": 3,
+    "loop_hints": 2,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环",
+      "检测到代码改动后未验证，要求先跑测试",
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "create_file_and_test",
+    "passed": true,
+    "detail": "...                                                                      [100%] | 3 passed in 0.01s",
+    "elapsed_s": 13.7,
+    "llm_calls": 6,
+    "tool_calls": 5,
+    "failed_tools": 0,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "fix_existing_bug",
+    "passed": true,
+    "detail": ".                                                                        [100%] | 1 passed in 0.00s",
+    "elapsed_s": 17.6,
+    "llm_calls": 7,
+    "tool_calls": 7,
+    "failed_tools": 0,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "multi_file_package",
+    "passed": true,
+    "detail": "......                                                                   [100%] | 6 passed in 0.01s",
+    "elapsed_s": 22.4,
+    "llm_calls": 8,
+    "tool_calls": 7,
+    "failed_tools": 1,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "refactor_rename",
+    "passed": true,
+    "detail": ".                                                                        [100%] | 1 passed in 0.00s",
+    "elapsed_s": 48.7,
+    "llm_calls": 14,
+    "tool_calls": 21,
+    "failed_tools": 2,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "git_branch_commit",
+    "passed": true,
+    "detail": "branch=feat/agentic; commit=feat: add agentic-ok note",
+    "elapsed_s": 25.8,
+    "llm_calls": 11,
+    "tool_calls": 9,
+    "failed_tools": 1,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环",
+      "检测到代码改动后未验证，要求先跑测试"
+    ]
+  }
+]

@@ -52,17 +52,18 @@
 | C2 | SmartBench #21 长任务仍出现约 14 次循环提示（循环信号时有时无） | 执行/提示噪音 | ✅ 已加冷却 | 12 迭代冷却 + 签名去重；真实复跑从 14 次降到 6 次，仍无硬停门；如需更低可再调大冷却 |
 | C3 | 新文件“盲写”警告（新文件无法先读） | **证据层** | 🧊 单独决策 | 不混入执行层；评估在事实绑定中区分“新建文件”与“修改已有文件” |
 | C4 | `command` 安全策略拦截 `$()` / `python -c`，模型绕路浪费步数 | 执行/环境 | 🟡 工具+提示已补 | 错误文案给替代写法；新增 `github_fetch(list_issues/list_pulls, limit=...)`，issue 列表无需 gh/jq；真实任务仍出现 3 次 `$()`，但 C13 能恢复 |
-| C5 | `write_code` 仍默认 flash，长任务纪律弱于 pro | 执行/模型路由 | ⏳ | 用同一 SmartBench 任务对比 flash vs pro，再决定默认路由 |
+| C5 | `write_code` 仍默认 flash，长任务纪律弱于 pro | 执行/模型路由 | ⏳ 有初步数据 | v1 基准双方 5/5；pro 少 21% LLM、少 64% 失败工具，但无完成率差异；暂不改默认，等 v2/长任务数据 |
 | C6 | SmartBench #21 分支只在临时 clone：`D:/tmp/smartbench-rerun`，未 push / 未开 PR | 交付 | ✅ 已推送 | PR [#50](https://github.com/xianyu-sheng/SmartBench/pull/50) open、mergeable、CI 7/7 绿；等待维护者合并 |
 | C7 | SmartBench #21 验收缺口：TTY 单行、`--json` 无噪音、failing reporter 不中断 | 执行/验收 | 🟡 单元/CLI 已覆盖 | `--json` 已接 CLI 并有测试；TTY 单行用 forced-TTY 单测覆盖；仍建议在真实终端手测一次 |
 | C8 | 智能体在临时仓库使用 `git add -A` | 执行/工作区安全 | ⏳ | 提示词/工具层引导显式路径；无无关改动时不算错误，但应避免 |
 | C9 | 全量测试仍有 7 个 SmartBench Windows 既有失败（symlink/graph snapshot） | 上游既有 | 🧊 非本次引入 | 与基线对比确认；不顺手修无关测试 |
 | C10 | 发布节奏：v0.9.5 后未再发版 | 发布 | ⏳ | 等 C1/C6 与用户核验完成后再决定版本号 |
 | C11 | ReAct 缺少 Codex 式显式 todo/plan 状态（`update_plan`），复杂任务只能靠提示词自律 | 执行/状态 | ⏳ | 先做 C12 度量，再决定是否新增 `update_plan` 工具；不把它做成新校验门 |
-| C12 | 缺少多步任务“完成率”基准，容易凭感觉调提示词/循环 | 度量 | ⏳ | 建 5-10 个真实多步任务，记录完成率、工具数、耗时、成本；对比 flash/pro 与提示词版本 |
+| C12 | 缺少多步任务“完成率”基准，容易凭感觉调提示词/循环 | 度量 | 🟡 v1 完成 | 5 任务 × flash/pro 均为 5/5（任务偏易，无区分度）；pro 少 21% LLM、少 64% 失败工具；需 v2 更难任务验证完成率差异，见 `docs/AGENTIC_COMPLETION.md` |
 | C13 | 写/实现任务连续 3 次工具失败会直接 mercy 收束（C4 真实复跑 77s、0 实现） | 执行/失败恢复 | ✅ 已修复 | 写任务改为最多 2 次“换方法”提示，不提前收束；查询任务保留 3 次收敛；真实 #26 从 15 次失败恢复完成 |
 | C14 | DeepSeek 截断后输出 `<｜｜DSML｜｜ calls>`（带空格），旧解析器不认，整轮判格式错误 | 执行/协议 | ✅ 已修复 | 解析器接受 `calls/tool_calls` 及空白变体；`_structured_response_kind` 同步；单测覆盖 |
-| C15 | 只读任务写 `.xenon_tmp/*.ps1` 触发“改完代码要验证”，模型偏离任务去解释没有测试 | 执行/提醒 | 🟡 单测已覆盖 | `.xenon_tmp/` 写入不再触发验证提醒；仍需真实只读任务复跑确认 |
+| C16 | C12 v1 任务太易，flash/pro 均 5/5，无法区分完成率 | 度量 | ⏳ | 设计 v2：隐藏测试、跨文件 API 变更、长链路任务；再决定 C5/C11 |
+| C15 | 只读任务写 `.xenon_tmp/*.ps1` 触发“改完代码要验证”，模型偏离任务去解释没有测试 | 执行/提醒 | ✅ 已真实验证 | 只读 issue 列表任务：无验证提醒，最终正确列出 25 个 issue；仍会写临时脚本/尝试 `$()`（C4） |
 
 ---
 
@@ -75,4 +76,6 @@
 | 2026-10-18 | SmartBench #21 长任务复验 | 83 工具 / 73 LLM / 313s；分支 `feat/cli-progress-reporter`，提交 `c6f6046`；targeted 91 passed，全量对比基线无新增失败 |
 | 2026-10-18 | SmartBench #21 `--json` 接线 | 提交 `527c1ab`；CLI/progress 55 passed；全量 669 passed，与基线相同 7 个既有失败、无新增 |
 | 2026-10-18 | C2/C4/C13/C14/C15 执行层加固 | Xenon `1b3522a`；全量 3400 passed、无新增失败；真实 SmartBench 99 工具/86 LLM/272s，选 #26、分支 `fix/26-resource-leak-visibility`、提交 `fa7a50b`、91 tests |
+| 2026-10-18 | C15 真实只读复验 | 无验证提醒；`github_fetch(list_issues, limit=100)` 返回 27 条，最终正确列出 25 个 issue |
+| 2026-10-18 | C12 v1 完成率基准 | 5 任务 × flash/pro 均 5/5；pro LLM 46 vs 58、失败工具 4 vs 11；任务偏易，进入 C16 v2 |
 | 2026-10-18 | SmartBench PR #50 | 已推送 `feat/cli-progress-reporter`；PR open、mergeable、CI 7/7 绿；等待合并 |
