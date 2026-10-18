@@ -81,6 +81,7 @@ from xenon.nodes.tool_registry import (
 )
 from xenon.nodes.tool_result import enrich_tool_result
 from xenon.repl.system_config import get_config
+from xenon.utils.attribution import ensure_commit_attribution
 from xenon.utils.llm_client import (  # noqa: F401 - private compatibility export
     _create_http_client,
 )
@@ -963,6 +964,9 @@ class ToolNode(
 
         # 安全验证
         self._validate_command(resolved_cmd)
+
+        # v0.9.6: 强制署名——命令形式的 git commit 也带 Co-authored-by。
+        resolved_cmd = ensure_commit_attribution(resolved_cmd)
 
         shell_command = (
             f"{self.command_prelude}\n{resolved_cmd}"

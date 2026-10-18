@@ -193,7 +193,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 ## Environment variables
 
 <details>
-<summary>15 variables (click to expand)</summary>
+<summary>16 variables (click to expand)</summary>
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -211,6 +211,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 | `XENON_EXTRA_ROOTS` | Extra roots file tools may read/write outside the start directory (`;`-separated on Windows) | empty = start directory only |
 | `XENON_SESSION_EVENTS(_DIR)` | Event log toggle / directory | on |
 | `XENON_HOOKS` | Local hooks toggle | on |
+| `XENON_ATTRIBUTION` | Attach the Xenon attribution to commits and PRs (`0` disables) | on |
 | `GITHUB_TOKEN` / `GH_TOKEN` | GitHub tool auth (raises API limits; falls back to a logged-in `gh auth token`) | empty |
 
 </details>

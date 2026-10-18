@@ -5,7 +5,9 @@
 
 ## [Unreleased]
 
-_暂无_
+### 工具
+
+- 提交与 PR 强制署名（默认开启）：`git commit`（`git` 工具与 `command` 工具）自动追加 `Co-authored-by: Xenon <noreply@xenon.dev>`，`create_pull_request` 在正文追加 `🤖 Generated with [Xenon] vX`；`XENON_ATTRIBUTION=0` 可关闭。
 
 ## [0.9.5] — 2026-10-18
 

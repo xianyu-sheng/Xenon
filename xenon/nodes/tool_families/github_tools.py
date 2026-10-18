@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import quote
 
 from xenon.engine.context import AgentContext
+from xenon.utils.attribution import attribution_enabled, pr_footer
 from xenon.utils.github_auth import github_auth_headers, load_github_token
 from xenon.utils.github_reference import parse_github_reference
 
@@ -789,6 +790,8 @@ class GitHubToolsMixin:
         base = (self._resolve_template(getattr(self, "base_branch", "") or "", context) or "").strip()
         title = (self._resolve_template(getattr(self, "pr_title", "") or "", context) or "").strip()
         body = self._resolve_template(getattr(self, "pr_body", "") or "", context) or ""
+        if attribution_enabled() and "generated with [xenon]" not in body.lower():
+            body = (body.rstrip() + pr_footer()) if body.strip() else pr_footer().strip()
         if not head or not title:
             return {
                 "action_type": "create_pull_request",

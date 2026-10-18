@@ -331,7 +331,8 @@ BUILTIN_TOOLS = {
         "name": "create_pull_request",
         "description": (
             "把已 push 到 GitHub 的分支创建为 Pull Request。需要 repo、branch（head 分支）"
-            "与 pr_title；base_branch 省略时自动探测仓库默认分支。"
+            "与 pr_title；base_branch 省略时自动探测仓库默认分支。**优先用它而不是 `gh pr create`**："
+            "它会自动附带 Xenon 署名，并复用环境里的 gh/GitHub 凭据。"
             "认证读 GITHUB_TOKEN / GH_TOKEN / credentials.yaml 的 github.token。"
         ),
         "params": {

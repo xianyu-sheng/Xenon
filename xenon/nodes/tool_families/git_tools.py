@@ -7,6 +7,7 @@ import subprocess
 from typing import Any
 
 from xenon.engine.context import AgentContext
+from xenon.utils.attribution import TRAILER, attribution_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,10 @@ class GitToolsMixin:
             cmd = git_commands[git_cmd]
         elif git_cmd.startswith("commit"):
             msg = git_cmd.replace("commit", "").strip() or extra_args or "auto commit"
-            cmd = ["git", "commit", "-m", msg]
+            cmd = ["git", "commit"]
+            if attribution_enabled() and "co-authored-by: xenon" not in msg.lower():
+                cmd += ["--trailer", TRAILER]
+            cmd += ["-m", msg]
         elif git_cmd.startswith("add"):
             target = git_cmd.replace("add", "").strip() or extra_args or "."
             cmd = ["git", "add", target]

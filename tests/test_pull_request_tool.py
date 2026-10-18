@@ -54,6 +54,7 @@ def fake_httpx(monkeypatch):
 
     _FakeClient.last_post = None
     _FakeClient.last_get = None
+    monkeypatch.delenv("XENON_ATTRIBUTION", raising=False)
     _FakeClient.response = _FakeResponse(
         201, {"number": 7, "html_url": "https://github.com/o/r/pull/7"}
     )
@@ -73,12 +74,12 @@ def test_create_pr_success(fake_httpx) -> None:
     assert result["success"] is True
     assert result["pr_number"] == 7
     assert result["pr_url"].endswith("/pull/7")
-    assert fake_httpx.last_post["json"] == {
-        "title": "Fix X",
-        "head": "fix/x",
-        "base": "main",
-        "body": "body",
-    }
+    payload = fake_httpx.last_post["json"]
+    assert payload["title"] == "Fix X"
+    assert payload["head"] == "fix/x"
+    assert payload["base"] == "main"
+    assert payload["body"].startswith("body")
+    assert "Generated with [Xenon]" in payload["body"]
     assert fake_httpx.last_post["url"].endswith("/repos/o/r/pulls")
 
 
@@ -117,3 +118,27 @@ def test_pr_tool_is_registered_and_requires_approval() -> None:
     assert "create_pull_request" in BUILTIN_TOOL_REGISTRY.names()
     assert "create_pull_request" in _CRITICAL_TOOLS
     assert classify_tool("create_pull_request", {}) == "SENSITIVE"
+
+
+def test_pr_footer_is_not_duplicated(fake_httpx) -> None:
+    from xenon.utils.attribution import pr_footer
+
+    _node(
+        repo="o/r",
+        branch="fix/x",
+        pr_title="T",
+        base_branch="main",
+        pr_body="body" + pr_footer(),
+    ).execute(AgentContext({}))
+
+    body = fake_httpx.last_post["json"]["body"]
+    assert body.lower().count("generated with [xenon]") == 1
+
+
+def test_pr_footer_can_be_disabled(fake_httpx, monkeypatch) -> None:
+    monkeypatch.setenv("XENON_ATTRIBUTION", "0")
+    _node(
+        repo="o/r", branch="fix/x", pr_title="T", base_branch="main", pr_body="body"
+    ).execute(AgentContext({}))
+
+    assert fake_httpx.last_post["json"]["body"] == "body"
