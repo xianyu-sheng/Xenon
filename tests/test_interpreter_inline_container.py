@@ -77,3 +77,26 @@ class TestInterpreterInlineInContainer:
         assert node.allow_interpreter_inline is False
         with pytest.raises(SecurityError):
             node._validate_command('python -c "print(1)"')
+
+
+def test_host_python_c_message_offers_temp_script_alternative() -> None:
+    """C4: 拦截 python -c 时给出可执行的安全替代，而不是只报错。"""
+    node = _make_tool()
+    node.bind_command_runtime(())
+    with pytest.raises(SecurityError) as exc:
+        node._validate_command('python -c "print(1)"')
+    message = str(exc.value)
+    assert "write_file" in message
+    assert "临时" in message
+    assert "-c/-e" in message
+
+
+def test_shell_substitution_message_offers_safe_alternative() -> None:
+    """C4: $() 拦截时提示 PowerShell/临时脚本写法。"""
+    node = _make_tool()
+    node.bind_command_runtime(())
+    with pytest.raises(SecurityError) as exc:
+        node._validate_command("echo $(Get-Date)")
+    message = str(exc.value)
+    assert "PowerShell" in message
+    assert "临时脚本" in message

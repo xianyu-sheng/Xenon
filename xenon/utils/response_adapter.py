@@ -530,20 +530,22 @@ def _extract_tool_call_dsml(text: str) -> list[dict[str, Any]] | None:
     import re
 
     normalized = text.replace("｜", "|")
-    if not re.search(r"<\|\|DSML\|\|tool_calls\b", normalized, re.IGNORECASE):
+    # DeepSeek sometimes emits ``<||DSML|| calls>`` (with spaces) or other
+    # whitespace variants after a truncated native response.  Accept all of
+    # them, not only the canonical ``tool_calls`` tag.
+    dsml_open = r"<[|][|] *DSML *[|][|] *"
+    if not re.search(dsml_open + r"(?:tool_calls|calls)[ >]", normalized, re.I):
         return None
 
     invoke_pattern = re.compile(
-        r'<\|\|DSML\|\|invoke\s+name="([^"]+)"[^>]*>'
-        r"(.*?)"
-        r"</\|\|DSML\|\|invoke>",
-        re.IGNORECASE | re.DOTALL,
+        dsml_open
+        + r'invoke +name="([^"]+)"[^>]*>(.*?)</[|][|] *DSML *[|][|] *invoke>',
+        re.I | re.DOTALL,
     )
     parameter_pattern = re.compile(
-        r'<\|\|DSML\|\|parameter\s+name="([^"]+)"([^>]*)>'
-        r"(.*?)"
-        r"</\|\|DSML\|\|parameter>",
-        re.IGNORECASE | re.DOTALL,
+        dsml_open
+        + r'parameter +name="([^"]+)"([^>]*)>(.*?)</[|][|] *DSML *[|][|] *parameter>',
+        re.I | re.DOTALL,
     )
 
     actions: list[dict[str, Any]] = []

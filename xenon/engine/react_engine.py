@@ -207,6 +207,9 @@ class ReActEngine(BaseEngine):
         self._loop_detector = LoopDetector(
             window_size=5, similarity_threshold=0.85, enabled=True
         )
+        # C2: 低置信度循环提示的最小间隔（迭代数）。只控制提示噪音，
+        # 不改变终止语义；循环的硬终止仍只看高置信度分支。
+        self.loop_hint_cooldown = 12
         # F5: DeepSeek V4 的思考模式工具协议已经单元测试和真实 API
         # 闭环验证，因此在它作为主模型时自动开启原生 function calling。
         # 其他模型仍保持关闭，调用方也可显式传入 True/False 覆盖。
@@ -467,7 +470,12 @@ class ReActEngine(BaseEngine):
             if not ctx.get("_strategy_tip_emitted", False):
                 self.callback.on_tip(strategy.tip)
                 ctx.set("_strategy_tip_emitted", True)
-        requires_query_result = intent in {"query", "research"}
+        # 只读轮次即使意图分类缺失，也按查询/研究语义处理：外部来源连续
+        # 不可用时应收束报告，而不是无限重试；写任务则走恢复提示。
+        requires_query_result = (
+            intent in {"query", "research"}
+            or policy_level == int(ExecutionLevel.READ_ONLY)
+        )
         no_tool_streak = 0  # 连续未执行工具的轮次
         # v0.8.3: 纯读瘫痪检测（SWE-bench 实测 react-reflection 3 例：
         # 10-18 轮 read/search 从不 edit，反思环节导致行动不足）。
@@ -507,9 +515,13 @@ class ReActEngine(BaseEngine):
         max_incomplete_answer_rejections = 3
         # v0.9.5 #163: 每个 run 只提醒一次「改完代码要验证」。
         verification_nudged = False
-        # E-2: 低置信度循环提示按 (reason, loop_length) 去重；循环消失后重置。
-        # 只影响提示噪音，不改变终止语义，也不新增校验门。
+        # E-2/C2: 低置信度循环提示按 (reason, loop_length) 去重，并加跨间隔
+        # 冷却；循环消失后重置 key（冷却时间不重置）。只影响提示噪音，
+        # 不改变终止语义，也不新增校验门。
         last_loop_hint_key: tuple[str, int] | None = None
+        last_loop_hint_iteration = -10**6
+        # C13: 写/实现任务的连续工具失败只做恢复提示，不用 3 次失败直接收工。
+        consecutive_failure_hint_count = 0
 
         while budget.can_continue():
             budget.spend()
@@ -978,7 +990,13 @@ class ReActEngine(BaseEngine):
                 )
 
                 consecutive_failures = tracker.consecutive_failures()
-                if consecutive_failures >= self._max_consecutive_tool_failures:
+                if consecutive_failures == 0:
+                    consecutive_failure_hint_count = 0
+                elif (
+                    requires_query_result
+                    and consecutive_failures >= self._max_consecutive_tool_failures
+                ):
+                    # 查询/研究任务：外部来源连续不可用时，及时收束并报告证据不足。
                     warning = (
                         f"外部工具已连续失败 {consecutive_failures} 次，"
                         "停止继续探索并基于现有证据生成回答"
@@ -988,6 +1006,32 @@ class ReActEngine(BaseEngine):
                     result = self._mercy_compile(user_input, tracker, messages)
                     self.callback.on_finish(result)
                     return result
+                elif (
+                    not requires_query_result
+                    and consecutive_failures >= self._max_consecutive_tool_failures
+                    and consecutive_failures % self._max_consecutive_tool_failures == 0
+                    and consecutive_failure_hint_count < 2
+                ):
+                    # 写/实现任务：失败通常是过程，不是收工信号。注入一次
+                    # “换方法”提示；不新增硬停门，后续由循环检测/预算兜底。
+                    last_error = (
+                        tracker.calls[-1].error
+                        or tracker.calls[-1].result_summary
+                        or "unknown"
+                    )
+                    failure_hint = (
+                        f"⚠️ 最近连续 {consecutive_failures} 次工具调用失败。"
+                        f"最近错误：{str(last_error)[:200]}\n"
+                        "不要原样重试同一命令/参数；换工具、换参数，或先把"
+                        "脚本写入工作区再执行。如果命令被安全策略拦截，按错误"
+                        "里的替代写法做。"
+                    )
+                    messages.append({"role": "user", "content": failure_hint})
+                    self.callback.on_warning(
+                        f"连续 {consecutive_failures} 次工具失败，"
+                        "已注入恢复提示（写任务不提前收束）"
+                    )
+                    consecutive_failure_hint_count += 1
 
                 # v0.9.0: 循环检测 — 在其他检测机制之后检查循环
                 # 这样可以让纯读瘫痪检测、重复工具检测等优先触发
@@ -1038,7 +1082,11 @@ class ReActEngine(BaseEngine):
                             f"- 考虑从不同角度解决问题"
                         )
                         hint_key = (loop_result.reason, loop_result.loop_length)
-                        if hint_key != last_loop_hint_key:
+                        cooldown_elapsed = (
+                            iteration - last_loop_hint_iteration
+                            >= self.loop_hint_cooldown
+                        )
+                        if hint_key != last_loop_hint_key and cooldown_elapsed:
                             messages.append({"role": "user", "content": loop_hint})
                             self.callback.on_warning(
                                 f"检测到潜在循环 (confidence={loop_result.confidence:.2f})，"
@@ -1049,11 +1097,14 @@ class ReActEngine(BaseEngine):
                                 f"reason={loop_result.reason})"
                             )
                             last_loop_hint_key = hint_key
+                            last_loop_hint_iteration = iteration
                         else:
                             logger.debug(
-                                "ReAct: 跳过重复循环提示 (reason=%s, loop_length=%s)",
+                                "ReAct: 跳过循环提示 (reason=%s, loop_length=%s, "
+                                "cooldown_elapsed=%s)",
                                 loop_result.reason,
                                 loop_result.loop_length,
+                                cooldown_elapsed,
                             )
                     # 继续执行，给 LLM 一次改变策略的机会
                 # F4: 每 5 轮压缩 in-run messages，抑制 O(n²) 增长；

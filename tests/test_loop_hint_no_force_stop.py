@@ -62,3 +62,58 @@ def test_loop_hints_do_not_force_stop(tmp_path, monkeypatch) -> None:
     assert "步数上限" in result
     loop_warnings = [w for w in warnings if "潜在循环" in w]
     assert len(loop_warnings) == 1  # 同一 (reason, loop_length) 只提示一次
+
+
+def test_loop_hints_respect_cooldown_across_changing_signatures(tmp_path, monkeypatch) -> None:
+    """C2: 循环信号时有时无/签名变化时，提示也不能每轮刷屏。"""
+
+    target = tmp_path / "x.txt"
+    target.write_text("x", encoding="utf-8")
+    model = "fake/model"
+    engine = ReActEngine(
+        [model],
+        max_iterations=12,
+        model_configs={model: ModelConfig(model_id=model, alias="fake")},
+        native_fc=False,
+    )
+    engine.loop_hint_cooldown = 4
+    warnings: list[str] = []
+    engine.callback.on_warning = warnings.append
+    counter = {"n": 0}
+
+    def fake_llm(phase, messages, **kwargs):
+        return json.dumps(
+            {
+                "thought": "read again",
+                "action": "read_file",
+                "action_input": {"file_path": str(target)},
+            }
+        )
+
+    def check():
+        counter["n"] += 1
+        return SimpleNamespace(
+            is_loop=True,
+            confidence=0.5,
+            reason=f"loop-{counter['n']}",
+            loop_length=1,
+            similar_turns=2,
+        )
+
+    monkeypatch.setattr(engine, "_call_llm_for_phase", fake_llm)
+    monkeypatch.setattr(
+        engine,
+        "_loop_detector",
+        SimpleNamespace(
+            check=check,
+            reset=lambda: None,
+            add_turn=lambda **kwargs: None,
+        ),
+    )
+
+    result = engine.run("implement the feature")
+
+    loop_warnings = [w for w in warnings if "潜在循环" in w]
+    assert "强制收束" not in result
+    # 12 步 / 冷却 4：最多约 3-4 次，而不是每步一次。
+    assert 2 <= len(loop_warnings) <= 4

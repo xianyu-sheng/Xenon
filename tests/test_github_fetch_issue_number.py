@@ -117,3 +117,31 @@ def test_missing_number_still_lists_issues(fake_client) -> None:
     # 无编号时保持既有语义：列出 open issues 概览（而不是报错）。
     assert result["success"] is True
     assert fake_client.requested[-1].endswith("/issues?state=open&per_page=10&sort=created&direction=desc")
+
+
+def test_list_issues_action_uses_limit(fake_client) -> None:
+    result = ToolNode(
+        "t",
+        action_type="github_fetch",
+        repo="xianyu-sheng/SmartBench",
+        github_action="list_issues",
+        limit=100,
+    ).execute(AgentContext({}))
+
+    assert result["success"] is True
+    assert result["action"] == "fetch_issue"
+    assert fake_client.requested[-1].endswith(
+        "/issues?state=open&per_page=100&sort=created&direction=desc"
+    )
+
+
+def test_explicit_list_issues_needs_no_number(fake_client) -> None:
+    result = ToolNode(
+        "t",
+        action_type="github_fetch",
+        repo="xianyu-sheng/SmartBench",
+        github_action="list_issues",
+    ).execute(AgentContext({}))
+
+    assert result["success"] is True
+    assert result["action"] == "fetch_issue"

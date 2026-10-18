@@ -817,7 +817,9 @@ class ToolNode(
         if self._has_unquoted_shell_substitution(cmd_lower):
             raise SecurityError(
                 "命令包含未授权的 shell 命令替换（$()/反引号/进程替换），"
-                "为防止混淆执行已拦截。"
+                "为防止混淆执行已拦截。替代写法：PowerShell 用 `$name = ...` "
+                "赋值并用 `;` 串联；需要多步逻辑时，先用 write_file 写入工作区"
+                "临时脚本，再执行该脚本。"
             )
         # v0.3.0+ 修复（B-1）：匹配前先剥取引号内容（防止 echo "rm -rf /" 等
         # 字符串字面量触发误报）。通用机制，不针对特定任务加白名单。
@@ -845,8 +847,15 @@ class ToolNode(
                     continue
                 for candidate in candidates:
                     if re.match(pattern, candidate):
+                        hint = ""
+                        if pattern == r"\b(?:python\w*|perl|ruby|node)\s+-[ce]\s+":
+                            hint = (
+                                " 替代写法：先用 write_file 写入工作区临时 .py，"
+                                "再执行 `python path/to/temp.py`；宿主机会拦截 -c/-e。"
+                            )
                         raise SecurityError(
-                            f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。命令: {cmd[:100]}"
+                            f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。"
+                            f"命令: {cmd[:100]}{hint}"
                         )
         # 跨段管道模式：仅对真实 `|` 连接的相邻段对匹配。
         for i, (left, right) in enumerate(zip(dequoted, dequoted[1:], strict=False)):

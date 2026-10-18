@@ -68,6 +68,13 @@ class GitHubToolsMixin:
         repo = reference.slug
 
         action = self._resolve_template(self.github_action, context) or "list_files"
+        # Explicit list actions: no issue number, just an overview.  Keeping
+        # them as first-class actions avoids shell JSON/jq one-liners (and the
+        # ``$()``/quotes friction that comes with them).
+        if action == "list_issues":
+            action = "fetch_issue"
+        elif action == "list_pulls":
+            action = "fetch_pull"
         branch_value = (self._resolve_template(self.branch, context) or "").strip()
         path_value = (self._resolve_template(self.github_path, context) or "").strip(
             "/"
@@ -222,7 +229,12 @@ class GitHubToolsMixin:
                         # 无编号 URL（如 repo/issues）→ 列出 open issues/PR 概览，
                         # 而非无情报错；详情需再带编号调用。
                         return self._github_list_discussions(
-                            client, context, repo, headers, action
+                            client,
+                            context,
+                            repo,
+                            headers,
+                            action,
+                            limit=self.limit,
                         )
                     endpoint = "issues" if action == "fetch_issue" else "pulls"
                     api_url = f"https://api.github.com/repos/{repo}/{endpoint}/{number}"
@@ -259,7 +271,7 @@ class GitHubToolsMixin:
                     "error": (
                         f"不支持的 github_action: {action}（可选: list_files, "
                         "fetch_file, fetch_readme, fetch_issue, fetch_pull, "
-                        "repo_activity）"
+                        "list_issues, list_pulls, repo_activity）"
                     ),
                 }
 
@@ -315,12 +327,17 @@ class GitHubToolsMixin:
         repo: str,
         headers: dict[str, str],
         action: str,
+        limit: int | None = None,
     ) -> dict[str, Any]:
-        """无编号 issues/pull URL → 列最近 open 条目概览（详情再带编号调用）。"""
+        """无编号 issues/pull URL → 列 open 条目概览（详情再带编号调用）。"""
         kind = "PRs" if action == "fetch_pull" else "issues"
+        try:
+            per_page = min(max(int(limit or 10), 1), 100)
+        except (TypeError, ValueError):
+            per_page = 10
         api_url = (
             f"https://api.github.com/repos/{repo}/issues"
-            "?state=open&per_page=10&sort=created&direction=desc"
+            f"?state=open&per_page={per_page}&sort=created&direction=desc"
         )
         resp = client.get(api_url, headers=headers)
         resp.raise_for_status()

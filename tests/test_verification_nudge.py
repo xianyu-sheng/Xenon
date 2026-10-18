@@ -75,3 +75,16 @@ def test_read_every_verification_command_families() -> None:
 def test_read_only_commands_are_not_verification() -> None:
     for command in ("ls -la", "git status", "cat a.py", "python app.py"):
         assert not is_verification_command(_call("command", action=command)), command
+
+
+def test_temp_script_write_does_not_trigger_nudge() -> None:
+    calls = [
+        _call("write_file", file_path=".xenon_tmp/list_issues.ps1"),
+        _call("read_file", file_path="README.md"),
+    ]
+    assert needs_verification(calls) is False
+
+
+def test_repo_script_write_still_triggers_nudge() -> None:
+    calls = [_call("write_file", file_path="scripts/check.py")]
+    assert needs_verification(calls) is True

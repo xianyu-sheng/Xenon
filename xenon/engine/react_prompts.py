@@ -64,6 +64,9 @@ REACT_SYSTEM_PROMPT = """你是一个 ReAct 模式的 AI 编程助手。你通�
 9. **长列表先筛选再返回**：当用户给出时间范围或关键词条件时，调用 web_fetch/mcp_call
    必须传入 start_time/end_time/query 等筛选参数。工具会在截断前筛选完整响应；不要先抓取
    整张按时间排序的长列表再让模型从被截断的前缀中查找尾部数据。
+11. **不要使用内联解释器**：`python -c`、`perl -e`、`node -e` 在宿主机上会被安全策略
+   拦截。需要临时脚本时，先用 write_file 写到工作区（如 `.xenon_tmp/check.py`），再执行
+   `python .xenon_tmp/check.py`；需要多步 shell 时写成临时脚本，不要用 `$()`/反引号。
 
 ## 可用工具（完整且唯一，不存在其他工具）
 
@@ -84,6 +87,10 @@ REACT_SYSTEM_PROMPT = """你是一个 ReAct 模式的 AI 编程助手。你通�
 1. 用 `github_fetch(repo="owner/repo", github_action="list_files")` 列出文件树
 2. 用 `github_fetch(repo="owner/repo", github_action="fetch_readme")` 获取 README
 3. 用 `github_fetch` 的 `fetch_file` 逐个获取关键源码
+
+**读取 issue 列表**：优先用 `github_fetch(github_action="list_issues", limit=100)`；
+一次返回就够，直接整理回答，不要再用 web_fetch/gh 重复抓取。需要评论/状态详情时
+再用 `fetch_issue` 带编号。不要用 `gh issue list -q`、`--template` 或 `$()` 拼 JSON。
 
 **关键原则**：不要凭空猜测代码内容，所有分析必须基于实际读取的代码。
 
@@ -271,9 +278,10 @@ BUILTIN_TOOLS = {
         "description": "GitHub 专用只读工具。支持 owner/repo，以及仓库、blob、tree、issue、pull 和 raw 完整 URL；repo_activity 可直接获取最近 push、PR 抽样和合并耗时等维护信号，无需克隆仓库。fetch_issue/fetch_pull 可直接用 github_path 填编号（27 / #27 / issues/27）。API 限流时会尝试公开 HTML 降级。设置 GITHUB_TOKEN、GH_TOKEN 或 credentials.yaml 的 github.token 后支持认证访问。",
         "params": {
             "repo": "owner/repo 或完整 GitHub URL",
-            "github_action": "list_files | fetch_file | fetch_readme | fetch_issue | fetch_pull | repo_activity",
+            "github_action": "list_files | fetch_file | fetch_readme | fetch_issue | fetch_pull | list_issues | list_pulls | repo_activity",
             "github_path": "文件/目录路径；fetch_issue/fetch_pull 时填编号（如 27、#27、issues/27）",
             "branch": "分支名（可选；留空自动读取仓库默认分支）",
+            "limit": "list_issues/list_pulls 的条数（默认 10，最大 100）",
         },
     },
     "weather": {

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from collections.abc import Generator
 from typing import Any
 
@@ -396,16 +397,12 @@ def _structured_response_kind(text: str) -> str | None:
     stripped = (text or "").lstrip()
     if stripped.startswith(("{", "[")) or stripped.startswith("```json"):
         return "json"
-    # DeepSeek sometimes emits full-width vertical bars in DSML markers.
+    # DeepSeek sometimes emits full-width vertical bars in DSML markers, and
+    # post-truncation variants such as ``<||DSML|| calls>`` with spaces.
     lowered = stripped.replace("｜", "|").lower()
-    if any(
-        marker in lowered
-        for marker in (
-            "<||dsml||tool_calls",
-            "<uses_legacy_tools",
-            "<tool_calls",
-        )
-    ):
+    if re.search(r"<[|][|] *dsml *[|][|] *(?:tool_calls|calls)[ >]", lowered):
+        return "dsml"
+    if any(marker in lowered for marker in ("<uses_legacy_tools", "<tool_calls")):
         return "dsml"
     return None
 

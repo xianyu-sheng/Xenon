@@ -75,19 +75,38 @@ def is_verification_command(call: Any) -> bool:
     return bool(VERIFY_COMMAND_RE.search(_command_text(getattr(call, "params", {}))))
 
 
+# Scratch files used to run a one-off query are not repo code.  Without this,
+# a read-only task that writes ``.xenon_tmp/list.py`` gets a "run tests" nudge
+# and may spend its final answer explaining why no test applies.
+_TEMP_WRITE_MARKERS = (".xenon_tmp/", "/.xenon_tmp/", ".xenon/cache/")
+
+
+def _is_temporary_write(call: Any) -> bool:
+    params = getattr(call, "params", {})
+    if not isinstance(params, dict):
+        return False
+    raw = params.get("file_path") or params.get("path") or ""
+    normalized = str(raw).replace("\\", "/").lower()
+    return any(marker in normalized for marker in _TEMP_WRITE_MARKERS)
+
+
 def needs_verification(calls: Iterable[Any]) -> bool:
     """True when the newest successful write has no later verification command.
 
     Only successful writes count (a failed write needs no test run); any
     verification attempt counts, because a red test already gives the model the
-    feedback it needs.
+    feedback it needs.  Scratch scripts under ``.xenon_tmp`` are ignored.
     """
 
     last_write = -1
     last_verify = -1
     for index, call in enumerate(calls):
         name = getattr(call, "tool_name", "")
-        if name in WRITE_TOOLS and getattr(call, "success", False):
+        if (
+            name in WRITE_TOOLS
+            and getattr(call, "success", False)
+            and not _is_temporary_write(call)
+        ):
             last_write = index
         elif is_verification_command(call):
             # Any verification attempt counts (pass or fail): a red test already
