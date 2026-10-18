@@ -587,6 +587,9 @@ class GitHubToolsMixin:
         """
         import subprocess
 
+        # 浅克隆也可能被网络拖到分钟级；60s 的通用工具超时会误杀。
+        git_timeout = max(self.timeout, 300)
+
         repo_input = self._resolve_template(self.repo, context)
         if not repo_input:
             raise ValueError(
@@ -664,7 +667,7 @@ class GitHubToolsMixin:
                     ],
                     capture_output=True,
                     text=True,
-                    timeout=self.timeout,
+                    timeout=git_timeout,
                     env=git_env,
                 )
                 if result.returncode != 0:
@@ -717,7 +720,7 @@ class GitHubToolsMixin:
                         ],
                         capture_output=True,
                         text=True,
-                        timeout=self.timeout,
+                        timeout=git_timeout,
                         env=git_env,
                     )
                     if fetch.returncode == 0:
@@ -732,7 +735,7 @@ class GitHubToolsMixin:
                             ],
                             capture_output=True,
                             text=True,
-                            timeout=self.timeout,
+                            timeout=git_timeout,
                             env=git_env,
                         )
                         cache_updated = merge.returncode == 0
@@ -761,7 +764,7 @@ class GitHubToolsMixin:
                         ["git", "-C", str(target_dir), "remote", "get-url", "origin"],
                         capture_output=True,
                         text=True,
-                        timeout=self.timeout,
+                        timeout=git_timeout,
                     )
                     if remote.returncode == 0:
                         origin = remote.stdout.strip().lower()
@@ -967,7 +970,7 @@ class GitHubToolsMixin:
                 ["git", "ls-remote", "--symref", clone_url, "HEAD"],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=max(30, self.timeout),
                 env=self._git_auth_env(),
             )
             if result.returncode == 0:

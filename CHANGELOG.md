@@ -8,6 +8,7 @@
 ### 工具
 
 - `clone_repo` 的 git 认证头改为 Basic（`x-access-token`）：git smart HTTP 不接受 `Authorization: Bearer`，修复已登录 `gh` 仍报 `Authentication failed` 的问题。
+- `clone_repo` 的浅克隆/抓取超时提升到至少 300 秒（原 60s 在网络慢时会被误杀），`ls-remote` 探测至少 30 秒。
 - `clone_repo` 的默认缓存根 `~/.xenon/repos` 在工作区之外时（例如从 `D:/` 启动）自动回退到工作区 `.xenon/repos`，修复「克隆成功但读不了」的问题。
 - 系统提示新增 Windows 命令语法规则：`command` 由 PowerShell 执行，不要用 `&&`/`export`/`$()`，串联用 `;`、环境变量用 `$env:NAME`。
 - 提交与 PR 强制署名（默认开启）：`git commit`（`git` 工具与 `command` 工具）自动追加 `Co-authored-by: Xenon <noreply@xenon.dev>`，`create_pull_request` 在正文追加 `🤖 Generated with [Xenon] vX`；`XENON_ATTRIBUTION=0` 可关闭。

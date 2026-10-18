@@ -448,6 +448,7 @@ def test_clone_detects_default_branch_and_keeps_token_out_of_url(monkeypatch, tm
     clone_command, clone_kwargs = calls[1]
     assert clone_command[clone_command.index("-b") + 1] == "trunk"
     assert "clone-token" not in " ".join(clone_command)
+    assert clone_kwargs["timeout"] >= 300
     assert (
         clone_kwargs["env"]["GIT_CONFIG_VALUE_0"]
         == "Authorization: basic "
