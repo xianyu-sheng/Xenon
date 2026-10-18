@@ -34,11 +34,11 @@
 
 | ID | 事项 | 当前状态 | 复验方式 |
 |---|---|---|---|
-| B1 | Windows `command` 退出码（PowerShell `$LASTEXITCODE`） | 🟡 单测 + 真实 stderr/管道验证 | 真实跑一次失败命令 + 管道，确认 rc 正确 |
-| B2 | `gh auth token` 兜底 GitHub token | 🟡 单测 | 清空 env token，仅靠 `gh auth` 建一次 PR/读 issue |
-| B3 | 引擎超时降级（`EngineDeadlineExceeded` 不整轮红错） | 🟡 单测 | 真实长任务触发时限，确认返回已完成步骤 |
-| B4 | P1：`git repo_path` / issue 编号 / resume cwd / 循环升级 | 🟡 单测，循环升级已被 A7 取代 | 真实从上级目录 commit、`fetch_issue 27`、换目录 resume |
-| B5 | P2：`XENON_ENGINE_TIMEOUT` / 恢复会话路径重映射 | 🟡 单测 | 真实设置 env + 恢复旧会话 |
+| B1 | Windows `command` 退出码（PowerShell `$LASTEXITCODE`） | ✅ 已验证 | 真实 stderr+管道 rc=0；`sys.exit(3)` rc=3 |
+| B2 | `gh auth token` 兜底 GitHub token | ✅ 已验证 | 清空 env token、空 credentials，仅靠 `gh auth` 加载 token 并真实 fetch issue #21 |
+| B3 | 引擎超时降级（`EngineDeadlineExceeded` 不整轮红错） | ✅ 已验证 | `XENON_ENGINE_TIMEOUT=0.01` 的 PlanReact 返回“引擎时限”；非法值回退 600 |
+| B4 | P1：`git repo_path` / issue 编号 / resume cwd / 循环升级 | ✅ 已验证 | 父目录下 `repo_path` git status 成功；issue #21 拉取；cwd notice + 路径重映射 |
+| B5 | P2：`XENON_ENGINE_TIMEOUT` / 恢复会话路径重映射 | ✅ 已验证 | env=123 生效；旧/新目录同相对路径重映射成功 |
 | B6 | v0.9.5 wheel **不包含**署名 / clone 修复 / 执行层修复 | ⏳ 待下一次发布 | 发版前确认 wheel 含 post-0.9.5 提交 |
 | B7 | 全量测试基线中的 Windows 既有失败 + flaky MCP 并发用例 | 🟡 已记录 | 每次改动对比基线，新增失败必须归零 |
 
@@ -79,4 +79,5 @@
 | 2026-10-18 | C15 真实只读复验 | 无验证提醒；`github_fetch(list_issues, limit=100)` 返回 27 条，最终正确列出 25 个 issue |
 | 2026-10-18 | C12 v1 完成率基准 | 5 任务 × flash/pro 均 5/5；pro LLM 46 vs 58、失败工具 4 vs 11；任务偏易，进入 C16 v2 |
 | 2026-10-18 | C12 v2 完成率基准 | 修正浮点断言后 flash 5/5（58 LLM/69 tools/4 fail/121.7s）、pro 5/5（73/78/10/203.3s）；v2 仍偏易，pro 无优势 |
+| 2026-10-18 | B1–B5 真实复验 | 5/5：退出码 rc=0/3、gh token 兜底、deadline 降级、repo_path/issue/remap、env timeout |
 | 2026-10-18 | SmartBench PR #50 | 已推送 `feat/cli-progress-reporter`；PR open、mergeable、CI 7/7 绿；等待合并 |
