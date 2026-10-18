@@ -87,3 +87,20 @@ def test_run_script_native_schema_requires_code() -> None:
     params = item["function"]["parameters"]
     assert params["required"] == ["code"]
     assert params["properties"]["language"]["enum"] == ["python", "powershell"]
+
+
+@pytest.mark.skipif(
+    shutil.which("powershell") is None, reason="PowerShell not available"
+)
+def test_run_script_auto_detects_powershell_without_language(tmp_path) -> None:
+    result = ToolNode(
+        "t",
+        action_type="run_script",
+        language="python",  # model default when it omits language
+        code="$n = 6 * 7; Write-Output $n",
+        cwd=str(tmp_path),
+    ).execute(AgentContext({}))
+
+    assert result["success"] is True
+    assert result["language"] == "powershell"
+    assert "42" in result["stdout"]

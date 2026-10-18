@@ -150,7 +150,7 @@ BUILTIN_TOOLS = {
             "不要用 python -c、$() 或反引号。"
         ),
         "params": {
-            "language": "python | powershell（默认 python）",
+            "language": "python | powershell（可省略，PowerShell 语法会自动识别）",
             "code": "完整脚本内容（多行）",
         },
     },

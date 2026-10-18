@@ -21,12 +21,39 @@ from typing import Any
 _VALID_LANGUAGES = {"python", "powershell", "pwsh"}
 
 
+def _looks_like_powershell(code: str) -> bool:
+    """Best-effort detection for PowerShell snippets passed without language.
+
+    A ``$`` variable or a common cmdlet at line start is not valid Python, so
+    switching is safe. This matters because the model often sends
+    ``run_script(code=...)`` without the optional language field.
+    """
+    stripped = code.lstrip()
+    if stripped.startswith("$") or "$env:" in code:
+        return True
+    markers = (
+        "Write-Output",
+        "Write-Host",
+        "Join-Path",
+        "Set-Location",
+        "Get-ChildItem",
+        "New-Item",
+        "Remove-Item",
+        "Select-Object",
+        "Out-Null",
+        "ErrorActionPreference",
+    )
+    return any(marker in code for marker in markers)
+
+
 class ScriptToolsMixin:
     """Mixin providing the built-in ``run_script`` action."""
 
     def _run_script(self, context: Any) -> dict[str, Any]:
         language = str(getattr(self, "language", "python") or "python").strip().lower()
         code = str(getattr(self, "code", "") or "")
+        if language == "python" and _looks_like_powershell(code):
+            language = "powershell"
         if language not in _VALID_LANGUAGES:
             return {
                 "action_type": "run_script",
