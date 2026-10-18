@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from xenon.engine.base import BaseEngine
 from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
+from xenon.engine.execution_prompts import EXECUTION_CONTRACT
 from xenon.engine.plan_dag import PlanDAGCycleError
 from xenon.engine.plan_dag_executor import PlanDAGExecutorMixin, StepOutcome
 from xenon.engine.strategy_guide import get_strategy_advice
@@ -69,6 +70,8 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
     头号原因。修改已有文件时用 edit_file/batch_edit，但 `old_text`/`new_text`
     留空（执行阶段会先读后改）；只有新建小文件才用 write_file，且只放最小
     必要内容（超过约 10 行请改用 tool=null 让执行阶段生成）。
+
+{execution_contract}
 
 ## ⚠️ 重要：可用工具列表（完整且唯一）
 
@@ -313,6 +316,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 shell_name=shell_name,
                 shell_examples=shell_examples,
                 shell_avoid=shell_avoid,
+                execution_contract=EXECUTION_CONTRACT,
             )
             + STRATEGY_GUIDE
         )
@@ -1455,6 +1459,8 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                     "步骤描述成已完成。"
                     "如果某些步骤声称创建了文件但没有对应的工具执行记录，"
                     "请在总结中明确指出这些文件可能并未实际创建。"
+                    "工具记录中的 `<N chars>` / `<N items>` 表示参数已传入、"
+                    "仅省略原文用于展示；不要仅因未展示原文就断言参数缺失。"
                 ),
             },
             {

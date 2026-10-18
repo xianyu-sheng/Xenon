@@ -117,6 +117,21 @@ class ToolExecutionTracker:
 
         return "; ".join(parts)
 
+    # 写类工具的内容参数用长度展示，既证明参数真实传入，又不把整段代码
+    # 塞回总结上下文（这也是“总结误判内容没写”的直接修复点）。
+    _WRITE_PAYLOAD_KEYS = ("content", "old_text", "new_text")
+    _WRITE_COLLECTION_KEYS = ("files", "edits")
+
+    @classmethod
+    def _display_param(cls, key: str, value: Any) -> str:
+        """Render one parameter for ``detail_log`` without dumping payloads."""
+
+        if key in cls._WRITE_PAYLOAD_KEYS:
+            return f"<{len(str(value))} chars>"
+        if key in cls._WRITE_COLLECTION_KEYS and isinstance(value, list):
+            return f"<{len(value)} items>"
+        return str(value)[:80]
+
     def detail_log(self) -> str:
         """生成详细的执行日志，用于注入 LLM 上下文。"""
         if not self.calls:
@@ -129,11 +144,25 @@ class ToolExecutionTracker:
             if call.params:
                 # 只显示关键参数
                 key_params = {}
-                for k in ("file_path", "action", "url", "git_command"):
+                for k in (
+                    "file_path",
+                    "action",
+                    "url",
+                    "git_command",
+                    "repo",
+                    "branch",
+                    "target_dir",
+                ):
                     if k in call.params:
                         key_params[k] = str(call.params[k])[:80]
+                # 写类工具额外展示内容长度：证明 content/old_text 已传入，
+                # 同时避免把整段代码塞回总结上下文。
+                for k in (*self._WRITE_PAYLOAD_KEYS, *self._WRITE_COLLECTION_KEYS):
+                    if k in call.params:
+                        key_params[k] = self._display_param(k, call.params[k])
                 if key_params:
-                    line += f"({key_params})"
+                    rendered = ", ".join(f"{k}={v}" for k, v in key_params.items())
+                    line += f"({rendered})"
             if call.result_summary:
                 line += f" -> {call.result_summary[:150]}"
             if call.error:

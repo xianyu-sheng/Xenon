@@ -1,8 +1,8 @@
-"""P0：低置信度循环只提示，不再强制收束。
+"""P0/E-2：低置信度循环只提示、且同一循环只提示一次。
 
 v0.9.5 的「连续 3 次提示 → 强制收束」把正常的调研/实现多阶段任务在
 18/120 步掐断（真实 SmartBench 会话）。执行层应与证据层正交：循环的
-硬终止只保留高置信度分支，低置信度只注入提示，预算仍由 120 步兜底。
+硬终止只保留高置信度分支，低置信度只注入一次提示，预算仍由 120 步兜底。
 """
 
 from __future__ import annotations
@@ -60,5 +60,5 @@ def test_loop_hints_do_not_force_stop(tmp_path, monkeypatch) -> None:
     assert "强制收束" not in result
     assert "已连续 3 次检测到循环" not in result
     assert "步数上限" in result
-    assert any("潜在循环" in w for w in warnings)
-    assert len(warnings) >= 3  # 提示仍然生效，只是不再升级为终止
+    loop_warnings = [w for w in warnings if "潜在循环" in w]
+    assert len(loop_warnings) == 1  # 同一 (reason, loop_length) 只提示一次

@@ -16,6 +16,7 @@ from xenon.engine.base import BaseEngine
 from xenon.engine.budget import BudgetManager
 from xenon.engine.callbacks import EngineCallback, mask_sensitive_params
 from xenon.engine.context import AgentContext
+from xenon.engine.execution_prompts import EXECUTION_CONTRACT
 from xenon.engine.loop_detector import LoopDetector
 from xenon.engine.react_prompts import BUILTIN_TOOLS, REACT_SYSTEM_PROMPT
 from xenon.engine.scout import DirectoryScout
@@ -368,7 +369,9 @@ class ReActEngine(BaseEngine):
 
         return (
             REACT_SYSTEM_PROMPT.format(
-                tools_desc=tools_desc, large_file_hint=large_file_hint
+                tools_desc=tools_desc,
+                large_file_hint=large_file_hint,
+                execution_contract=EXECUTION_CONTRACT,
             )
             + env_info
             + STRATEGY_GUIDE
@@ -504,6 +507,9 @@ class ReActEngine(BaseEngine):
         max_incomplete_answer_rejections = 3
         # v0.9.5 #163: 每个 run 只提醒一次「改完代码要验证」。
         verification_nudged = False
+        # E-2: 低置信度循环提示按 (reason, loop_length) 去重；循环消失后重置。
+        # 只影响提示噪音，不改变终止语义，也不新增校验门。
+        last_loop_hint_key: tuple[str, int] | None = None
 
         while budget.can_continue():
             budget.spend()
@@ -987,6 +993,8 @@ class ReActEngine(BaseEngine):
                 # 这样可以让纯读瘫痪检测、重复工具检测等优先触发
                 # 对于查询/研究任务，多轮只读是正常的，提高循环检测的触发阈值
                 loop_result = self._loop_detector.check()
+                if not loop_result.is_loop:
+                    last_loop_hint_key = None
                 if loop_result.is_loop:
                     # 查询任务对循环更宽容：需要更高置信度（≥0.95）才终止
                     confidence_threshold = 0.95 if requires_query_result else 0.9
@@ -1029,15 +1037,24 @@ class ReActEngine(BaseEngine):
                             f"- 避免重复相同的操作\n"
                             f"- 考虑从不同角度解决问题"
                         )
-                        messages.append({"role": "user", "content": loop_hint})
-                        self.callback.on_warning(
-                            f"检测到潜在循环 (confidence={loop_result.confidence:.2f})，"
-                            f"已注入提示尝试打破循环"
-                        )
-                        logger.warning(
-                            f"ReAct: 循环检测提示 (confidence={loop_result.confidence:.2f}, "
-                            f"reason={loop_result.reason})"
-                        )
+                        hint_key = (loop_result.reason, loop_result.loop_length)
+                        if hint_key != last_loop_hint_key:
+                            messages.append({"role": "user", "content": loop_hint})
+                            self.callback.on_warning(
+                                f"检测到潜在循环 (confidence={loop_result.confidence:.2f})，"
+                                f"已注入提示尝试打破循环"
+                            )
+                            logger.warning(
+                                f"ReAct: 循环检测提示 (confidence={loop_result.confidence:.2f}, "
+                                f"reason={loop_result.reason})"
+                            )
+                            last_loop_hint_key = hint_key
+                        else:
+                            logger.debug(
+                                "ReAct: 跳过重复循环提示 (reason=%s, loop_length=%s)",
+                                loop_result.reason,
+                                loop_result.loop_length,
+                            )
                     # 继续执行，给 LLM 一次改变策略的机会
                 # F4: 每 5 轮压缩 in-run messages，抑制 O(n²) 增长；
                 # F2: 压缩成功时奖励预算（on_compression）
