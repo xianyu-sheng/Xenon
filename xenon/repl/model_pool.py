@@ -523,7 +523,7 @@ class ModelPool:
             # 写测试：代码能力 + 工具使用
             w_coding *= 1.3
             w_tools *= 1.2
-        elif intent in ("chat", "query", "explain"):
+        elif intent in ("chat", "query", "explain", "write_report"):
             # 简单对话/查询：工具使用更重要（快速响应）
             w_tools *= 1.2
 

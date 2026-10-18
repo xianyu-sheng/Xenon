@@ -1,0 +1,53 @@
+{
+  "xenon_head": "after-issue165",
+  "cases": [
+    {
+      "query": "查询一下天气，生成天气文档保存下来",
+      "intent": "write_report",
+      "contract_intent": "write_report",
+      "level": "WRITE",
+      "operations": [
+        "read",
+        "write"
+      ],
+      "template": "## 报告目标\n查询一下天气，生成天气文档保存下来\n\n## 内容边界\n- 这是数据/结论报告，不是项目或 API 技术文档。\n- 只写用户要求的数据、结论、时间与来源；不要写安装步骤、API 参数、返回值、代码实现或仓库结构，除非用户明确要求。\n- 数据必须来自真实工具结果；缺失就写缺失，不要编造。\n\n## 文档结构\n- 标题\n- 核心数据 / 结论\n- 来源与时间\n- 必要建议（简短）\n\n## 输出格式\n输出 Markdown；若用户要求保存，用 write_file 落盘。\n\n## 最终回答\n只写：报告路径、2-3 条关键数据/结论、数据时间与来源。\n不要粘贴全文，不要写代码验证、测试命令或实现说明。",
+      "system_hint": "你是一个数据报告撰写者。只呈现任务要求的数据和结论，不要扩展到项目实现、安装步骤或无关背景。最终回答只给报告路径和 2-3 条要点，不复述全文。",
+      "strategy": "[Xenon 本轮策略]\n任务类型：数据/报告任务\n建议能力链：weather → web_fetch → docs_fetch → github_fetch → read_file → write_file\n执行原则：先获取任务要求的数据或结论，只把数据、时间与来源写入报告；不要探索仓库代码，也不要把工具实现写成安装/API 文档。完成后只汇报报告路径和 2-3 条关键结论。\n这是按当前可用工具生成的建议；应根据 Observation 调整，不要机械调用每个工具。"
+    },
+    {
+      "query": "查询一下天气",
+      "intent": "query",
+      "contract_intent": "query",
+      "level": "READ_ONLY",
+      "operations": [
+        "read"
+      ],
+      "template": "## 查询需求\n查询一下天气\n\n## 要求\n1. 使用工具获取实时数据\n2. 给出准确的结果\n3. 如有需要，给出实用建议",
+      "system_hint": "你是一个信息查询助手。请使用工具获取实时数据，给出准确的回答。",
+      "strategy": ""
+    },
+    {
+      "query": "分析这个项目的代码，生成文档保留在当前文件夹",
+      "intent": "write_doc",
+      "contract_intent": "write_doc",
+      "level": "WRITE",
+      "operations": [
+        "read",
+        "write"
+      ],
+      "template": "## 文档目标\n分析这个项目的代码，生成文档保留在当前文件夹\n\n## 文档结构\n- 概述：用途与适用读者\n- 安装/前置条件\n- 用法：参数、示例、返回值\n- 注意事项与常见问题\n\n## 输出格式\n输出 Markdown 文档，标题层级清晰，代码示例用代码块包裹。",
+      "system_hint": "你是一个技术写作专家。输出的文档结构清晰、示例可复现、面向目标读者。",
+      "strategy": "[Xenon 本轮策略]\n任务类型：文档任务\n建议能力链：list_files → search_files → read_file → docs_fetch → write_file → edit_file\n执行原则：先核对真实接口、用法和项目约定，再编写可复现文档。\n这是按当前可用工具生成的建议；应根据 Observation 调整，不要机械调用每个工具。"
+    },
+    {
+      "query": "你是谁",
+      "intent": null,
+      "contract_intent": null,
+      "level": "ANSWER_ONLY",
+      "operations": [],
+      "template": "你是谁",
+      "system_hint": null,
+      "strategy": ""
+    }
+  ]
+}

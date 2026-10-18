@@ -88,3 +88,20 @@ def test_temp_script_write_does_not_trigger_nudge() -> None:
 def test_repo_script_write_still_triggers_nudge() -> None:
     calls = [_call("write_file", file_path="scripts/check.py")]
     assert needs_verification(calls) is True
+
+
+def test_markdown_report_does_not_require_code_verification() -> None:
+    from xenon.engine.verification_nudge import needs_verification
+
+    calls = [_call("write_file", success=True, file_path="WEATHER_GUIDE.md")]
+    assert needs_verification(calls) is False
+
+
+def test_doc_plus_code_still_requires_verification() -> None:
+    from xenon.engine.verification_nudge import needs_verification
+
+    calls = [
+        _call("write_file", success=True, file_path="WEATHER_GUIDE.md"),
+        _call("write_file", success=True, file_path="app.py"),
+    ]
+    assert needs_verification(calls) is True

@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 _WRITE_OPERATIONS = frozenset({"write", "create", "delete", "move"})
 _READ_OPERATIONS = frozenset({"read", "network"})
-_QUERY_INTENTS = frozenset({"query", "research"})
+_QUERY_INTENTS = frozenset({"query", "research", "write_report"})
 
 # ── 跨回合承诺：用户回复“继续”时应续接上一轮的行动，而不是重新闲聊 ──
 
@@ -637,6 +637,10 @@ def build_turn_contract(
             return inherited
 
     regex_intent = _regex_intent(text)
+    # 报告型文档是确定性的结构信号（外部数据/主题 + 文档词），不能被
+    # LLM 的泛化 write_doc 覆盖，否则天气报告会重新变成技术文档。
+    if regex_intent == "write_report":
+        fallback_intent = "write_report"
     resolved_intent = fallback_intent if fallback_intent is not None else regex_intent
 
     # 1) 硬约束：不调用 LLM，省一次调用且禁令不可被推翻。
@@ -679,6 +683,8 @@ def build_turn_contract(
         return _fallback_contract(text, signals, resolved_intent, reason="分类器无有效输出")
 
     intent = result.intent or resolved_intent
+    if regex_intent == "write_report":
+        intent = "write_report"
     operations = set(result.operations)
 
     # 2) 显式禁令一票否决（即使 LLM 忽略）。

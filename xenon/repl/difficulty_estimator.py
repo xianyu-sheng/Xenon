@@ -114,6 +114,7 @@ class DifficultyEstimator:
             "debug": 0.6,
             "refactor": 0.6,
             "write_doc": 0.4,
+            "write_report": 0.3,
             "design": 0.7,
             "novel": 0.6,
         }

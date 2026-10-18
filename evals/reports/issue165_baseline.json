@@ -1,0 +1,61 @@
+{
+  "xenon_head": "before-fix",
+  "cases": [
+    {
+      "query": "查询一下天气，生成天气文档保存下来",
+      "intent": "write_doc",
+      "contract_intent": "write_doc",
+      "level": "WRITE",
+      "operations": [
+        "read",
+        "write"
+      ],
+      "optimized_changed": true,
+      "template": "## 文档目标\n查询一下天气，生成天气文档保存下来\n\n## 文档结构\n- 概述：用途与适用读者\n- 安装/前置条件\n- 用法：参数、示例、返回值\n- 注意事项与常见问题\n\n## 输出格式\n输出 Markdown 文档，标题层级清晰，代码示例用代码块包裹。",
+      "system_hint": "你是一个技术写作专家。输出的文档结构清晰、示例可复现、面向目标读者。",
+      "strategy": "[Xenon 本轮策略]\n任务类型：文档任务\n建议能力链：list_files → search_files → read_file → docs_fetch → write_file → edit_file\n执行原则：先核对真实接口、用法和项目约定，再编写可复现文档。\n这是按当前可用工具生成的建议；应根据 Observation 调整，不要机械调用每个工具。",
+      "strategy_tools": "文档任务：优先采用 list_files → search_files → read_file → docs_fetch → write_file → edit_file 的证据闭环，并按实际反馈调整。"
+    },
+    {
+      "query": "查询一下天气",
+      "intent": "query",
+      "contract_intent": "query",
+      "level": "READ_ONLY",
+      "operations": [
+        "read"
+      ],
+      "optimized_changed": true,
+      "template": "## 查询需求\n查询一下天气\n\n## 要求\n1. 使用工具获取实时数据\n2. 给出准确的结果\n3. 如有需要，给出实用建议",
+      "system_hint": "你是一个信息查询助手。请使用工具获取实时数据，给出准确的回答。",
+      "strategy": "",
+      "strategy_tools": ""
+    },
+    {
+      "query": "分析这个项目的代码，生成文档保留在当前文件夹",
+      "intent": "write_doc",
+      "contract_intent": "write_doc",
+      "level": "WRITE",
+      "operations": [
+        "read",
+        "write"
+      ],
+      "optimized_changed": true,
+      "template": "## 文档目标\n分析这个项目的代码，生成文档保留在当前文件夹\n\n## 文档结构\n- 概述：用途与适用读者\n- 安装/前置条件\n- 用法：参数、示例、返回值\n- 注意事项与常见问题\n\n## 输出格式\n输出 Markdown 文档，标题层级清晰，代码示例用代码块包裹。",
+      "system_hint": "你是一个技术写作专家。输出的文档结构清晰、示例可复现、面向目标读者。",
+      "strategy": "[Xenon 本轮策略]\n任务类型：文档任务\n建议能力链：list_files → search_files → read_file → docs_fetch → write_file → edit_file\n执行原则：先核对真实接口、用法和项目约定，再编写可复现文档。\n这是按当前可用工具生成的建议；应根据 Observation 调整，不要机械调用每个工具。",
+      "strategy_tools": "文档任务：优先采用 list_files → search_files → read_file → docs_fetch → write_file → edit_file 的证据闭环，并按实际反馈调整。"
+    },
+    {
+      "query": "你是谁",
+      "intent": null,
+      "contract_intent": null,
+      "level": "ANSWER_ONLY",
+      "operations": [],
+      "optimized_changed": false,
+      "template": "你是谁",
+      "system_hint": null,
+      "strategy": "",
+      "strategy_tools": ""
+    }
+  ]
+}

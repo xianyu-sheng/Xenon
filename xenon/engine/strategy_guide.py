@@ -137,6 +137,22 @@ _SPECS: dict[str, _StrategySpec] = {
         ("code_index", "lsp_goto_def", "lsp_find_refs", "read_file", "ast_analyze"),
         "从入口、定义和调用关系解释，不凭文件名或局部片段猜测。",
     ),
+    "write_report": _StrategySpec(
+        "数据/报告任务",
+        (
+            "weather",
+            "web_fetch",
+            "docs_fetch",
+            "github_fetch",
+            "read_file",
+            "write_file",
+        ),
+        (
+            "先获取任务要求的数据或结论，只把数据、时间与来源写入报告；"
+            "不要探索仓库代码，也不要把工具实现写成安装/API 文档。"
+            "完成后只汇报报告路径和 2-3 条关键结论。"
+        ),
+    ),
     "write_doc": _StrategySpec(
         "文档任务",
         (

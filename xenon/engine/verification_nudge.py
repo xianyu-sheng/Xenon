@@ -80,6 +80,12 @@ def is_verification_command(call: Any) -> bool:
 # and may spend its final answer explaining why no test applies.
 _TEMP_WRITE_MARKERS = (".xenon_tmp/", "/.xenon_tmp/", ".xenon/cache/")
 
+# A data/report artifact is not code: requiring pytest after writing a weather
+# report produces exactly the irrelevant "why no test applies" closeout from
+# issue #165.  Keep this list conservative; if code is also written, the code
+# write still triggers the nudge.
+_DOC_WRITE_SUFFIXES = (".md", ".markdown", ".rst", ".txt", ".adoc")
+
 
 def _is_temporary_write(call: Any) -> bool:
     params = getattr(call, "params", {})
@@ -88,6 +94,16 @@ def _is_temporary_write(call: Any) -> bool:
     raw = params.get("file_path") or params.get("path") or ""
     normalized = str(raw).replace("\\", "/").lower()
     return any(marker in normalized for marker in _TEMP_WRITE_MARKERS)
+
+
+def _is_document_write(call: Any) -> bool:
+    """True for plain report/document artifacts (not executable code)."""
+
+    params = getattr(call, "params", {})
+    if not isinstance(params, dict):
+        return False
+    raw = str(params.get("file_path") or params.get("path") or "")
+    return raw.lower().replace("\\", "/").endswith(_DOC_WRITE_SUFFIXES)
 
 
 def needs_verification(calls: Iterable[Any]) -> bool:
@@ -106,6 +122,7 @@ def needs_verification(calls: Iterable[Any]) -> bool:
             name in WRITE_TOOLS
             and getattr(call, "success", False)
             and not _is_temporary_write(call)
+            and not _is_document_write(call)
         ):
             last_write = index
         elif is_verification_command(call):

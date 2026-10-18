@@ -38,6 +38,7 @@ INTENT_CATEGORIES = {
     "query": "查询实时信息（天气、时间、票务、价格等需要工具的查询）",
     "research": "调研、研究、对比技术方案、平台、项目、社区维护状态",
     "write_doc": "编写、整理技术文档、README、API 文档、说明书",
+    "write_report": "查询/整理实时数据或外部事实，并生成数据报告、简报、日报、周报（不是项目/API 技术文档）",
     "chat": "闲聊、问候、致谢等日常对话",
 }
 
@@ -374,6 +375,7 @@ class LLMIntentClassifier:
 "改完代码后运行测试" → {{"intent":"debug","operations":["execute"],"chat_only":false,"confidence":0.9,"reasoning":"要求运行测试"}}
 "你觉得这两个方案哪个好" → {{"intent":"chat","operations":[],"chat_only":false,"confidence":0.9,"reasoning":"征询观点"}}
 "删除 /tmp/foo.txt" → {{"intent":"refactor","operations":["delete"],"chat_only":false,"confidence":0.9,"reasoning":"删除文件"}}
+"查询天气并生成报告保存下来" → {{"intent":"write_report","operations":["network","create"],"chat_only":false,"confidence":0.95,"reasoning":"数据报告，不是API文档"}}
 "修复这个 bug 的思路是什么" → {{"intent":"debug","operations":[],"chat_only":false,"confidence":0.9,"reasoning":"只要思路"}}
 "不要修改任何文件，只解释" → {{"intent":"explain","operations":[],"chat_only":true,"confidence":0.95,"reasoning":"禁止文件操作"}}"""
 
