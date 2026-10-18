@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from types import SimpleNamespace
 
 import httpx
@@ -89,7 +90,8 @@ def test_github_headers_and_clone_auth_use_saved_token(tmp_path, monkeypatch):
 
     assert ToolNode._github_headers()["Authorization"] == "Bearer saved-token"
     git_env = ToolNode._git_auth_env()
-    assert git_env["GIT_CONFIG_VALUE_0"] == "Authorization: Bearer saved-token"
+    basic = base64.b64encode(b"x-access-token:saved-token").decode("ascii")
+    assert git_env["GIT_CONFIG_VALUE_0"] == f"Authorization: basic {basic}"
 
 
 def test_web_fetch_uses_saved_token_for_github_api(tmp_path, monkeypatch):

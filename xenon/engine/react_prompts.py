@@ -56,6 +56,7 @@ REACT_SYSTEM_PROMPT = """你是一个 ReAct 模式的 AI 编程助手。你通�
 6. **严禁发明工具**：只能使用下方列出的工具，不存在 get_content_from_url、get_github_repo_content 等工具
 7. **read_file 不支持 start_line 等分段参数**，它只能读取整个文件。如果文件太大，用 command 执行 {large_file_hint} 分段读取
 8. **任何代码变更都要自检**（实现功能 / 修 bug / 重构都适用）：先 1-2 步了解结构 → 立即写代码 → **先跑最小的、能因为你的改动而失败的测试**，再跑更广的验证（优先用仓库里已有的命令，如 pytest / npm test / go test / make）；在回答里贴出命令与真实结果。没有测试可跑时说明原因，并给出最小验证手段（如 `python -m compileall`）
+10. **Windows 命令语法**：在 Windows 上 command 由 PowerShell 执行——不要用 `&&`、`export`、`$(...)` 等 POSIX 语法；串联命令用 `;`，环境变量用 `$env:NAME`。
 9. **长列表先筛选再返回**：当用户给出时间范围或关键词条件时，调用 web_fetch/mcp_call
    必须传入 start_time/end_time/query 等筛选参数。工具会在截断前筛选完整响应；不要先抓取
    整张按时间排序的长列表再让模型从被截断的前缀中查找尾部数据。
@@ -314,7 +315,8 @@ BUILTIN_TOOLS = {
     "clone_repo": {
         "name": "clone_repo",
         "description": (
-            "将 GitHub 仓库克隆到本地缓存目录（~/.xenon/repos/），并自动分析："
+            "将 GitHub 仓库克隆到本地缓存（默认 ~/.xenon/repos/；若该目录在当前沙箱之外，"
+            "自动改用工作区内的 .xenon/repos/），并自动分析："
             "目录结构、关键文件（README/配置/入口点）、代码统计。"
             "命中本地缓存时会拉取远程更新，但不会覆盖缓存中的本地修改。"
             "克隆后可配合 list_files/read_file/search_files 深入分析代码。"

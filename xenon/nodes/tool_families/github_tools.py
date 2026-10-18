@@ -8,6 +8,7 @@ tests remain stable.
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import re
@@ -17,6 +18,7 @@ from typing import Any
 from urllib.parse import quote
 
 from xenon.engine.context import AgentContext
+from xenon.nodes.network_security import SecurityError
 from xenon.utils.attribution import attribution_enabled, pr_footer
 from xenon.utils.github_auth import github_auth_headers, load_github_token
 from xenon.utils.github_reference import parse_github_reference
@@ -558,6 +560,24 @@ class GitHubToolsMixin:
         _tool_node_module()._GITHUB_DEFAULT_BRANCH_CACHE[repo] = branch
         return branch
 
+    def _default_clone_root(self) -> Path:
+        """Pick a clone cache the file tools can actually read.
+
+        ``~/.xenon/repos`` is the historical cache, but when Xenon starts on a
+        different drive (e.g. ``D:/``) that directory sits outside the sandbox
+        root and every follow-up ``read_file``/``search_files`` fails.  Fall
+        back to a workspace-local cache in that case so ``clone_repo`` always
+        produces a readable checkout.
+        """
+
+        cache_root = Path.home() / ".xenon" / "repos"
+        try:
+            self._validate_path(str(cache_root / "_probe"), for_write=True)
+            return cache_root
+        except SecurityError:
+            workspace = Path(self.cwd or Path.cwd()).resolve()
+            return workspace / ".xenon" / "repos"
+
     def _clone_repo(self, context: AgentContext) -> dict[str, Any]:
         """将 GitHub 仓库克隆到本地缓存并返回结构化摘要。
 
@@ -608,7 +628,7 @@ class GitHubToolsMixin:
                     ),
                 }
         else:
-            cache_root = Path.home() / ".xenon" / "repos"
+            cache_root = self._default_clone_root()
             cache_root.mkdir(parents=True, exist_ok=True)
             target_dir = cache_root / repo.replace("/", "_")
 
@@ -887,7 +907,14 @@ class GitHubToolsMixin:
 
     @staticmethod
     def _git_auth_env() -> dict[str, str]:
-        """Pass GitHub auth to git without embedding a token in the clone URL."""
+        """Pass GitHub auth to git without embedding a token in the clone URL.
+
+        Git smart HTTP rejects ``Authorization: Bearer <token>`` (REST accepts
+        it, git does not), so the header must be Basic with the
+        ``x-access-token`` user.  ``GIT_TERMINAL_PROMPT=0`` keeps a bad token
+        from hanging the run on an interactive prompt.
+        """
+
         env = os.environ.copy()
         env["GIT_TERMINAL_PROMPT"] = "0"
         token = load_github_token()
@@ -896,11 +923,14 @@ class GitHubToolsMixin:
                 config_index = int(env.get("GIT_CONFIG_COUNT", "0"))
             except ValueError:
                 config_index = 0
+            basic = base64.b64encode(
+                f"x-access-token:{token}".encode("utf-8")
+            ).decode("ascii")
             env.update(
                 {
                     "GIT_CONFIG_COUNT": str(config_index + 1),
                     f"GIT_CONFIG_KEY_{config_index}": "http.extraHeader",
-                    f"GIT_CONFIG_VALUE_{config_index}": f"Authorization: Bearer {token}",
+                    f"GIT_CONFIG_VALUE_{config_index}": f"Authorization: basic {basic}",
                 }
             )
         return env
