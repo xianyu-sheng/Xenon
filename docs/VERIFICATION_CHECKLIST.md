@@ -53,8 +53,8 @@
 | C3 | 新文件“盲写”警告（新文件无法先读） | **证据层** | 🧊 单独决策 | 不混入执行层；评估在事实绑定中区分“新建文件”与“修改已有文件” |
 | C4 | `command` 安全策略拦截 `$()` / `python -c`，模型绕路浪费步数 | 执行/环境 | ⏳ | 评估放行只读 Python 片段或给替代写法提示，保持安全边界 |
 | C5 | `write_code` 仍默认 flash，长任务纪律弱于 pro | 执行/模型路由 | ⏳ | 用同一 SmartBench 任务对比 flash vs pro，再决定默认路由 |
-| C6 | SmartBench #21 分支只在临时 clone：`D:/tmp/smartbench-rerun`，未 push / 未开 PR | 交付 | ⏳ | C1 修完后 push + PR（需确认） |
-| C7 | SmartBench #21 验收缺口：TTY 单行、`--json` 无噪音、failing reporter 不中断 | 执行/验收 | 🟡 | 补真实 CLI 测试；C1 完成后跑一次 TTY/非 TTY/JSON |
+| C6 | SmartBench #21 分支只在临时 clone：`D:/tmp/smartbench-rerun`，未 push / 未开 PR | 交付 | ✅ 已推送 | PR [#50](https://github.com/xianyu-sheng/SmartBench/pull/50) open、mergeable、CI 7/7 绿；等待维护者合并 |
+| C7 | SmartBench #21 验收缺口：TTY 单行、`--json` 无噪音、failing reporter 不中断 | 执行/验收 | 🟡 单元/CLI 已覆盖 | `--json` 已接 CLI 并有测试；TTY 单行用 forced-TTY 单测覆盖；仍建议在真实终端手测一次 |
 | C8 | 智能体在临时仓库使用 `git add -A` | 执行/工作区安全 | ⏳ | 提示词/工具层引导显式路径；无无关改动时不算错误，但应避免 |
 | C9 | 全量测试仍有 7 个 SmartBench Windows 既有失败（symlink/graph snapshot） | 上游既有 | 🧊 非本次引入 | 与基线对比确认；不顺手修无关测试 |
 | C10 | 发布节奏：v0.9.5 后未再发版 | 发布 | ⏳ | 等 C1/C6 与用户核验完成后再决定版本号 |
@@ -69,3 +69,4 @@
 | 2026-10-18 | E-3/E-1/E-2：执行契约 + tracker 展示 + 循环提示去重 | 757c6db；3388 passed，CI 7/7 |
 | 2026-10-18 | SmartBench #21 长任务复验 | 83 工具 / 73 LLM / 313s；分支 `feat/cli-progress-reporter`，提交 `c6f6046`；targeted 91 passed，全量对比基线无新增失败 |
 | 2026-10-18 | SmartBench #21 `--json` 接线 | 提交 `527c1ab`；CLI/progress 55 passed；全量 669 passed，与基线相同 7 个既有失败、无新增 |
+| 2026-10-18 | SmartBench PR #50 | 已推送 `feat/cli-progress-reporter`；PR open、mergeable、CI 7/7 绿；等待合并 |
