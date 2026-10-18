@@ -51,6 +51,10 @@ class ScriptToolsMixin:
 
     def _run_script(self, context: Any) -> dict[str, Any]:
         language = str(getattr(self, "language", "python") or "python").strip().lower()
+        # Direct ToolNode construction may use the weather-style ``lang`` alias.
+        raw_lang = str(getattr(self, "lang", "") or "").strip().lower()
+        if language == "python" and raw_lang in _VALID_LANGUAGES:
+            language = raw_lang
         code = str(getattr(self, "code", "") or "")
         if language == "python" and _looks_like_powershell(code):
             language = "powershell"

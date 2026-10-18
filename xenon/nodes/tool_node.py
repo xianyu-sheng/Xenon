@@ -644,12 +644,22 @@ class ToolNode(
         """
         result = dict(params)
 
+        # run_script 与 weather 都使用语言字段，但语义不同：
+        # weather 的标准名是 lang，run_script 的标准名是 language。
+        # 先做 action 级转换，避免全局 "lang <- language" 别名把
+        # run_script 的 language 抢走（真实长任务已复现）。
+        if action_type == "run_script":
+            if "language" not in result and "lang" in result:
+                result["language"] = result.pop("lang")
+
         # 1. 别名映射
         if "limit" not in result and "max_results" in result:
             result["limit"] = result.pop("max_results")
         if "cursor" not in result and "next_cursor" in result:
             result["cursor"] = result.pop("next_cursor")
         for std_name, aliases in cls._PARAM_ALIASES.items():
+            if std_name == "lang" and action_type == "run_script":
+                continue  # run_script 用 language，不能被 "lang" 标准名反向吞掉
             if std_name == "search_pattern" and action_type in {
                 "docs_fetch",
                 "web_fetch",
@@ -838,11 +848,11 @@ class ToolNode(
         # constructs at the shell boundary.  Quoted literals remain allowed.
         if self._has_unquoted_shell_substitution(cmd_lower):
             raise SecurityError(
-                "命令包含未授权的 shell 命令替换（$()/反引号/进程替换），"
-                "为防止混淆执行已拦截。替代写法：PowerShell 用 `$name = ...` "
-                "赋值并用 `;` 串联；需要多步逻辑时优先用 `run_script("
-                "language=\"powershell\", code=...)`，或先 write_file 写入工作区"
-                "临时脚本再执行。"
+                "命令包含未授权的 shell 变量/替换（未加引号的 $变量、$()、"
+                "反引号、进程替换），为防止运行时拼装命令已拦截。"
+                "命令工具不接受未加引号的 $变量；需要 PowerShell 变量或多步"
+                "逻辑时用 `run_script(language=\"powershell\", code=...)`，"
+                "或先 write_file 写入 .ps1 临时脚本再执行。"
             )
         # v0.3.0+ 修复（B-1）：匹配前先剥取引号内容（防止 echo "rm -rf /" 等
         # 字符串字面量触发误报）。通用机制，不针对特定任务加白名单。

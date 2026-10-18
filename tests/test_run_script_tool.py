@@ -104,3 +104,37 @@ def test_run_script_auto_detects_powershell_without_language(tmp_path) -> None:
     assert result["success"] is True
     assert result["language"] == "powershell"
     assert "42" in result["stdout"]
+
+
+def test_run_script_language_alias_survives_normalization() -> None:
+    # The model often emits lang=..., and the global weather alias used to
+    # steal language from run_script (real #27 replay).
+    by_lang = ToolNode.normalize_params(
+        {"code": "Write-Output 1", "lang": "powershell"}, action_type="run_script"
+    )
+    assert by_lang["language"] == "powershell"
+    assert "lang" not in by_lang
+
+    by_language = ToolNode.normalize_params(
+        {"code": "Write-Output 1", "language": "powershell"}, action_type="run_script"
+    )
+    assert by_language["language"] == "powershell"
+
+    # Weather still uses lang as its standard field.
+    weather = ToolNode.normalize_params({"language": "en"}, action_type="weather")
+    assert weather["lang"] == "en"
+
+
+def test_shell_variable_error_points_to_run_script() -> None:
+    from xenon.nodes.tool_node import SecurityError
+
+    node = ToolNode("t", action_type="command", action="if ($LASTEXITCODE -eq 0) { 'ok' }")
+    try:
+        node.execute(AgentContext({}))
+    except SecurityError as exc:
+        message = str(exc)
+        assert "run_script" in message
+        assert "不接受未加引号的 $变量" in message
+        assert "赋值并用" not in message
+    else:
+        raise AssertionError("expected SecurityError")

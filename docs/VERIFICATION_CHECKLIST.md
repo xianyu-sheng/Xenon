@@ -51,18 +51,18 @@
 | C1 | SmartBench #21 `--json` 未真正接到 CLI（`json_mode` 参数存在但命令未传） | 执行/CLI | ✅ 已修复 | `quick` / 根 `--quick` / `diagnose` 已加 `--json`；进度走 stderr，stdout 只输出 JSON；CLI 测试 55 passed，全量 669 passed、无新增失败 |
 | C2 | SmartBench #21 长任务仍出现约 14 次循环提示（循环信号时有时无） | 执行/提示噪音 | ✅ 已加冷却 | 12 迭代冷却 + 签名去重；真实复跑从 14 次降到 6 次，仍无硬停门；如需更低可再调大冷却 |
 | C3 | 新文件“盲写”警告（新文件无法先读） | **证据层** | 🧊 单独决策 | 不混入执行层；评估在事实绑定中区分“新建文件”与“修改已有文件” |
-| C4 | `command` 安全策略拦截 `$()` / `python -c`，模型绕路浪费步数 | 执行/环境 | 🟡 已显著改善 | `run_script(python/powershell)` + PowerShell 自动识别 + `github_fetch(list_issues)`；两轮 SmartBench 长任务安全失败 1→0，耗时 217→147s、工具 85→50；自然任务仍可能写临时脚本（安全） |
+| C4 | `command` 安全策略拦截 `$()` / `python -c` / 未加引号 `$变量`，模型绕路浪费步数 | 执行/环境 | 🟡 已显著改善 | `run_script` + PowerShell 自动识别 + `lang` action 级别名；#26 长任务安全失败 1→0；#27 修复后 `run_script` 14/14 成功；仍有 1 次变量误拦截，错误文案已改为指向 run_script |
 | C5 | `write_code` 仍默认 flash，长任务纪律弱于 pro | 执行/模型路由 | ✅ 数据结论：保持 flash | v1 pro 略省工具，v2 pro 更慢/更多调用；两者完成率相同；不做全局 pro 路由，长任务按需使用 |
 | C6 | SmartBench #21 分支只在临时 clone：`D:/tmp/smartbench-rerun`，未 push / 未开 PR | 交付 | ✅ 已推送 | PR [#50](https://github.com/xianyu-sheng/SmartBench/pull/50) open、mergeable、CI 7/7 绿；等待维护者合并 |
 | C7 | SmartBench #21 验收缺口：TTY 单行、`--json` 无噪音、failing reporter 不中断 | 执行/验收 | 🟡 单元/CLI 已覆盖 | `--json` 已接 CLI 并有测试；TTY 单行用 forced-TTY 单测覆盖；仍建议在真实终端手测一次 |
 | C8 | 智能体在临时仓库使用 `git add -A` | 执行/工作区安全 | ⏳ | 提示词/工具层引导显式路径；无无关改动时不算错误，但应避免 |
 | C9 | 全量测试仍有 7 个 SmartBench Windows 既有失败（symlink/graph snapshot） | 上游既有 | 🧊 非本次引入 | 与基线对比确认；不顺手修无关测试 |
 | C10 | 发布节奏：v0.9.5 后未再发版 | 发布 | ⏳ | 等 C1/C6 与用户核验完成后再决定版本号 |
-| C11 | ReAct 缺少 Codex 式显式 todo/plan 状态（`update_plan`），复杂任务只能靠提示词自律 | 执行/状态 | ✅ 已实现 | 工具 + 原生数组 schema + 跨文件/长任务提示 + 收尾一致性提醒；真实跨文件任务 4 次；SmartBench 长任务 3 次全部 completed、50 工具、147s、0 安全失败；完整度见 `docs/EXECUTION_LAYER_GAPS.md` |
+| C11 | ReAct 缺少 Codex 式显式 todo/plan 状态（`update_plan`），复杂任务只能靠提示词自律 | 执行/状态 | ✅ 已实现 | 工具 + 原生数组 schema + 跨文件/长任务提示 + 收尾一致性提醒；#26 与 #27 长任务均持续更新到全部 completed（3 次）；完整度见 `docs/EXECUTION_LAYER_GAPS.md` |
 | C12 | 缺少多步任务“完成率”基准，容易凭感觉调提示词/循环 | 度量 | 🟡 v1/v2 完成 | v1、v2 均 5/5；v2 修正浮点断言后仍无区分度；已归档 v2 原始/修正数据；下一步真实长任务或 v3 |
 | C13 | 写/实现任务连续 3 次工具失败会直接 mercy 收束（C4 真实复跑 77s、0 实现） | 执行/失败恢复 | ✅ 已修复 | 写任务改为最多 2 次“换方法”提示，不提前收束；查询任务保留 3 次收敛；真实 #26 从 15 次失败恢复完成 |
 | C14 | DeepSeek 截断后输出 `<｜｜DSML｜｜ calls>`（带空格），旧解析器不认，整轮判格式错误 | 执行/协议 | ✅ 已修复 | 解析器接受 `calls/tool_calls` 及空白变体；`_structured_response_kind` 同步；单测覆盖 |
-| C16 | C12 v1/v2 任务偏易，flash/pro 均满分，无法区分完成率 | 度量 | 🟡 真实长任务有改善 | v2 仍 5/5；新增 SmartBench #26 两轮真实长任务（217s→147s、安全失败 1→0、均提交成功）；仍需更多 issue/PR 样本 |
+| C16 | C12 v1/v2 任务偏易，flash/pro 均满分，无法区分完成率 | 度量 | 🟡 真实长任务已有对照 | #26 两轮 217→147s、安全失败 1→0；#27 两轮均提交（331s/98 工具、478s/125 工具），第二轮暴露上下文截断；仍需更多 issue/PR 样本 |
 | C15 | 只读任务写 `.xenon_tmp/*.ps1` 触发“改完代码要验证”，模型偏离任务去解释没有测试 | 执行/提醒 | ✅ 已真实验证 | 只读 issue 列表任务：无验证提醒，最终正确列出 25 个 issue；仍会写临时脚本/尝试 `$()`（C4） |
 
 ---
@@ -84,4 +84,5 @@
 | 2026-10-18 | C4 run_script | 真实 JSON 任务 0 次安全失败，sum=10；`run_script` 原生 schema 要求 code；Xenon 全量 3412 passed、无新增失败 |
 | 2026-10-18 | C4 run_script 显式验证 | `run_script(language='python', code='print(123*456)')` 成功返回 56088；自然 JSON 任务 0 安全失败；Xenon 全量 3412 passed |
 | 2026-10-18 | C4+C11 SmartBench 长任务 | 首轮 217s/85 工具/4 plan 全 completed/1 安全失败；修复 PowerShell 自动识别后 147s/50 工具/3 plan 全 completed/0 安全失败；提交 `2ea99f9`，5 passed，全量 642 passed/7 既有失败；Xenon 全量 3413 passed、无新增失败 |
+| 2026-10-18 | #27 长任务两轮 | 均完成三项并提交：`e0f8988`（331s/98 工具/21 tests/2 安全失败）、`32d62a4`（478s/125 工具/14 tests/1 安全失败）；修复 `lang` 别名后 run_script 14/14；两轮全量均 7 个既有失败 |
 | 2026-10-18 | SmartBench PR #50 | 已推送 `feat/cli-progress-reporter`；PR open、mergeable、CI 7/7 绿；等待合并 |
