@@ -48,7 +48,7 @@
 
 | ID | 事项 | 层 | 状态 | 下一步 |
 |---|---|---|---|---|
-| C1 | SmartBench #21 `--json` 未真正接到 CLI（`json_mode` 参数存在但命令未传） | 执行/CLI | ❌ 修复中 | 给 `quick` / 根 `--quick` 加 `--json`，进度走 stderr，stdout 只输出 JSON，并加 CLI 测试 |
+| C1 | SmartBench #21 `--json` 未真正接到 CLI（`json_mode` 参数存在但命令未传） | 执行/CLI | ✅ 已修复 | `quick` / 根 `--quick` / `diagnose` 已加 `--json`；进度走 stderr，stdout 只输出 JSON；CLI 测试 55 passed，全量 669 passed、无新增失败 |
 | C2 | SmartBench #21 长任务仍出现约 14 次循环提示（循环信号时有时无） | 执行/提示噪音 | ⏳ | E-2 去重只覆盖连续同签名；后续加跨间隔冷却，仍不新增门 |
 | C3 | 新文件“盲写”警告（新文件无法先读） | **证据层** | 🧊 单独决策 | 不混入执行层；评估在事实绑定中区分“新建文件”与“修改已有文件” |
 | C4 | `command` 安全策略拦截 `$()` / `python -c`，模型绕路浪费步数 | 执行/环境 | ⏳ | 评估放行只读 Python 片段或给替代写法提示，保持安全边界 |
@@ -68,3 +68,4 @@
 | 2026-10-18 | 执行层 P0：撤销循环硬停 + 原生 `submit_plan` | 8b13ee3；真实复验通过 |
 | 2026-10-18 | E-3/E-1/E-2：执行契约 + tracker 展示 + 循环提示去重 | 757c6db；3388 passed，CI 7/7 |
 | 2026-10-18 | SmartBench #21 长任务复验 | 83 工具 / 73 LLM / 313s；分支 `feat/cli-progress-reporter`，提交 `c6f6046`；targeted 91 passed，全量对比基线无新增失败 |
+| 2026-10-18 | SmartBench #21 `--json` 接线 | 提交 `527c1ab`；CLI/progress 55 passed；全量 669 passed，与基线相同 7 个既有失败、无新增 |
