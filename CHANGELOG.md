@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+_暂无_
+
+## [0.9.5] — 2026-10-18
+
 ### 引擎
 
 - 统一标准步数预算为 **120 步**（与 Claude Code 类代理对齐）：`react` / `plan-execute` 由 40 步、`plan-react` / `plan-reflection` / `react-reflection` 由 24 步统一为 120；引擎类默认值与工厂默认值一致，`XENON_MAX_ITERATIONS` 仍可覆盖。SWE-bench 等评测运行冻结在 120 步（见 `docs/EVAL_RESULTS.md` 预注册），测试 `tests/test_step_budget.py` 锁定该常数。
