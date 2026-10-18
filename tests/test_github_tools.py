@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -415,6 +416,7 @@ def test_issue_and_pull_urls_fetch_discussion(monkeypatch, url, endpoint, action
 
 def test_clone_detects_default_branch_and_keeps_token_out_of_url(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     monkeypatch.setenv("GH_TOKEN", "clone-token")
     calls = []
 
@@ -437,6 +439,7 @@ def test_clone_detects_default_branch_and_keeps_token_out_of_url(monkeypatch, tm
         "clone",
         action_type="clone_repo",
         repo="https://github.com/owner/repo?tab=readme",
+        cwd=str(tmp_path),
     )
     result = node.execute(AgentContext())
 
@@ -446,12 +449,15 @@ def test_clone_detects_default_branch_and_keeps_token_out_of_url(monkeypatch, tm
     assert clone_command[clone_command.index("-b") + 1] == "trunk"
     assert "clone-token" not in " ".join(clone_command)
     assert (
-        clone_kwargs["env"]["GIT_CONFIG_VALUE_0"] == "Authorization: Bearer clone-token"
+        clone_kwargs["env"]["GIT_CONFIG_VALUE_0"]
+        == "Authorization: basic "
+        + base64.b64encode(b"x-access-token:clone-token").decode("ascii")
     )
 
 
 def test_cached_clone_fetches_and_fast_forwards(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     repo_dir = tmp_path / ".xenon" / "repos" / "owner_repo"
     (repo_dir / ".git").mkdir(parents=True)
     (repo_dir / "README.md").write_text("cached", encoding="utf-8")
@@ -467,6 +473,7 @@ def test_cached_clone_fetches_and_fast_forwards(monkeypatch, tmp_path):
         action_type="clone_repo",
         repo="owner/repo",
         branch="main",
+        cwd=str(tmp_path),
     )
     result = node.execute(AgentContext())
 

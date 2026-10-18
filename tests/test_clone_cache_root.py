@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from xenon.nodes import tool_node as tool_node_module
 from xenon.nodes.tool_node import ToolNode
+
+
+@pytest.fixture(autouse=True)
+def _no_default_extra_roots(monkeypatch):
+    # Linux 上 pytest 的 tmp_path 位于 /tmp（默认允许根）下；清空后「home
+    # 在工作区外」才真的越界，回退逻辑才能被断言。
+    monkeypatch.setattr(tool_node_module, "_DEFAULT_EXTRA_ROOTS", ())
 
 
 def _node(workspace: Path) -> ToolNode:
