@@ -504,9 +504,6 @@ class ReActEngine(BaseEngine):
         max_incomplete_answer_rejections = 3
         # v0.9.5 #163: 每个 run 只提醒一次「改完代码要验证」。
         verification_nudged = False
-        # v0.9.5: 循环提示连续 N 次后强制收束（避免 20+ 次重复警告空转）。
-        loop_hint_count = 0
-        max_loop_hints = 3
 
         while budget.can_continue():
             budget.spend()
@@ -1015,32 +1012,11 @@ class ReActEngine(BaseEngine):
                         self.callback.on_finish(loop_msg)
                         return loop_msg
 
-                    # v0.9.5: 低置信度循环不再无限提示；连续 N 次后强制收束。
-                    # 查询/研究任务对重复探索更宽容（高置信度阈值已是 0.95），
-                    # 这里不升级，避免把合法的长搜索提前掐断。
-                    if not requires_query_result:
-                        loop_hint_count += 1
-                    if not requires_query_result and loop_hint_count >= max_loop_hints:
-                        loop_msg = self._mercy_compile(user_input, tracker, messages)
-                        loop_msg += (
-                            f"\n\n⚠️ **已连续 {loop_hint_count} 次检测到循环**"
-                            f"（最近原因: {loop_result.reason}），已强制收束。"
-                            "如需继续，请把任务拆小或换一种描述。"
-                        )
-                        logger.warning(
-                            f"ReAct: 连续 {loop_hint_count} 次循环提示，强制收束 "
-                            f"(confidence={loop_result.confidence:.2f}, "
-                            f"reason={loop_result.reason})"
-                        )
-                        self.callback.on_warning(
-                            f"连续 {loop_hint_count} 次检测到循环，已强制收束并汇总当前结果"
-                        )
-                        self.finalize_evidence(
-                            context=ctx, output=loop_msg, tracker=tracker
-                        )
-                        self.callback.on_finish(loop_msg)
-                        return loop_msg
-
+                    # 低置信度：只注入提示，让模型自己改变策略。
+                    # v0.9.6: 撤销「连续 N 次强制收束」——它把正常的
+                    # 多阶段任务（调研 → 实现）在 18/120 步误杀。循环的
+                    # 硬终止只保留上面的高置信度分支，与证据层（L0/L1/L2）
+                    # 保持正交：这里不新增任何校验门。
                     # 低置信度：注入提示，尝试打破循环（但不影响查询任务的正常探索）
                     # 查询任务的低置信度循环（0.7-0.95）不注入提示，让其继续探索
                     if not requires_query_result or loop_result.confidence < 0.8:

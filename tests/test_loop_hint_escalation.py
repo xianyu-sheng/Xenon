@@ -1,4 +1,9 @@
-"""P1-4：连续低置信度循环提示达到上限后强制收束。"""
+"""P0：低置信度循环只提示，不再强制收束。
+
+v0.9.5 的「连续 3 次提示 → 强制收束」把正常的调研/实现多阶段任务在
+18/120 步掐断（真实 SmartBench 会话）。执行层应与证据层正交：循环的
+硬终止只保留高置信度分支，低置信度只注入提示，预算仍由 120 步兜底。
+"""
 
 from __future__ import annotations
 
@@ -9,17 +14,19 @@ from xenon.engine.react_engine import ReActEngine
 from xenon.repl.model_registry import ModelConfig
 
 
-def test_loop_hints_force_stop(tmp_path, monkeypatch) -> None:
+def test_loop_hints_do_not_force_stop(tmp_path, monkeypatch) -> None:
     target = tmp_path / "x.txt"
     target.write_text("x", encoding="utf-8")
 
     model = "fake/model"
     engine = ReActEngine(
         [model],
-        max_iterations=8,
+        max_iterations=6,
         model_configs={model: ModelConfig(model_id=model, alias="fake")},
         native_fc=False,
     )
+    warnings: list[str] = []
+    engine.callback.on_warning = warnings.append
 
     def fake_llm(phase, messages, **kwargs):
         return json.dumps(
@@ -47,7 +54,11 @@ def test_loop_hints_force_stop(tmp_path, monkeypatch) -> None:
         ),
     )
 
-    result = engine.run("keep reading the same file")
+    result = engine.run("implement the feature by reading the same file")
 
-    assert "连续 3 次检测到循环" in result
-    assert "强制收束" in result
+    # 低置信度循环不再提前结束：应该用满预算，由预算边界诚实收尾。
+    assert "强制收束" not in result
+    assert "已连续 3 次检测到循环" not in result
+    assert "步数上限" in result
+    assert any("潜在循环" in w for w in warnings)
+    assert len(warnings) >= 3  # 提示仍然生效，只是不再升级为终止

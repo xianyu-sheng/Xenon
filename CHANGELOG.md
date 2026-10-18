@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+### 引擎
+
+- **撤销** 0.9.5 的「连续 3 次低置信度循环 → 强制收束」：真实 SmartBench 会话中，它在 18/120 步把「调研完成、准备实现」的正常多阶段任务误杀。低置信度循环恢复为只注入提示，循环的硬终止只保留高置信度分支；执行层不新增校验门，与 L0/L1/L2 证据层保持正交。
+- 规划协议与 Claude Code / Codex 对齐：新增规划专用 `submit_plan` 原生 function calling，模型直接提交结构化计划，不再手写 13KB JSON；原生端点不支持时自动回退原有文本 JSON 协议。真实 DeepSeek 会话验证：规划 1 次 native 调用、0 次文本回退，文件正确落盘。
+- 规划提示移除含完整 Flask 代码的示例（与「禁止粘贴代码」规则冲突），只保留结构示例。
+
 ### 工具
 
 - `clone_repo` 的 git 认证头改为 Basic（`x-access-token`）：git smart HTTP 不接受 `Authorization: Bearer`，修复已登录 `gh` 仍报 `Authentication failed` 的问题。

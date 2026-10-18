@@ -53,7 +53,11 @@ def _make_react(**kwargs: Any) -> Any:
 def _make_plan_execute(**kwargs: Any) -> Any:
     from xenon.engine.plan_execute_engine import PlanExecuteEngine
 
-    return PlanExecuteEngine(max_steps=_step_budget(STANDARD_STEP_BUDGET), **kwargs)
+    return PlanExecuteEngine(
+        max_steps=_step_budget(STANDARD_STEP_BUDGET),
+        native_planning=True,
+        **kwargs,
+    )
 
 
 def _make_reflection(**kwargs: Any) -> Any:
@@ -68,6 +72,7 @@ def _make_plan_react(**kwargs: Any) -> Any:
     return PlanReactEngine(
         max_steps=_step_budget(STANDARD_STEP_BUDGET),
         react_iterations=_step_budget(STANDARD_STEP_BUDGET),
+        native_planning=True,
         **kwargs,
     )
 
@@ -75,7 +80,12 @@ def _make_plan_react(**kwargs: Any) -> Any:
 def _make_plan_reflection(**kwargs: Any) -> Any:
     from xenon.engine.combined_engines import PlanReflectionEngine
 
-    return PlanReflectionEngine(max_steps=_step_budget(STANDARD_STEP_BUDGET), review_rounds=2, **kwargs)
+    return PlanReflectionEngine(
+        max_steps=_step_budget(STANDARD_STEP_BUDGET),
+        review_rounds=2,
+        native_planning=True,
+        **kwargs,
+    )
 
 
 def _make_react_reflection(**kwargs: Any) -> Any:

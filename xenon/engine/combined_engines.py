@@ -261,6 +261,7 @@ class PlanReactEngine(SteeringMixin):
         *,
         max_steps: int = 120,
         react_iterations: int = 120,
+        native_planning: bool = False,
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
         model_pool: Any = None,
@@ -284,6 +285,7 @@ class PlanReactEngine(SteeringMixin):
         self.planner = PlanExecuteEngine(
             model_priority,
             max_steps=max_steps,
+            native_planning=native_planning,
             **common,
         )
         self.reactor = ReActEngine(
@@ -759,6 +761,7 @@ class PlanReflectionEngine(_ReflectionCombination):
         review_rounds: int = 2,
         pass_threshold: int = 7,
         repair_iterations: int | None = None,
+        native_planning: bool = False,
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
         model_pool: Any = None,
@@ -783,6 +786,7 @@ class PlanReflectionEngine(_ReflectionCombination):
         self.planner = PlanExecuteEngine(
             model_priority,
             max_steps=max_steps,
+            native_planning=native_planning,
             **common,
         )
         self.reflector = ReflectionEngine(

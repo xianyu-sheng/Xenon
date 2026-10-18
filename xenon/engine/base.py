@@ -1180,6 +1180,7 @@ class BaseEngine(ABC):
         response_format: dict[str, Any] | None,
         max_tokens: int | None = None,
         cache_phase: str | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> Any:
         """单层 native FC 调用，遍历 ``model_priority``。
 
@@ -1211,6 +1212,7 @@ class BaseEngine(ABC):
                 request_options: dict[str, Any] = {
                     "tools": tools,
                     "response_format": response_format,
+                    "tool_choice": tool_choice,
                     "credentials": creds,
                     "base_url": base,
                     "max_tokens": mt,
@@ -1452,6 +1454,7 @@ class BaseEngine(ABC):
         max_tokens: int | None = None,
         *,
         cache_phase: str | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> str:
         """F5: 三层 LLM 降级（依赖 R3 ``chat_completion_with_tools``）。
 
@@ -1502,11 +1505,18 @@ class BaseEngine(ABC):
                 continue
             self.execution_policy.check(tier_name)
             try:
+                # Keep the historical call shape when no tool is forced: a
+                # number of integrations (and tests) replace this seam with a
+                # four-argument callable.
+                call_kwargs: dict[str, Any] = {}
+                if tools and tool_choice is not None:
+                    call_kwargs["tool_choice"] = tool_choice
                 resp = self._call_with_tools_once(
                     messages,
                     tools,
                     fmt,
                     max_tokens,
+                    **call_kwargs,
                 )
             except ResponseTruncatedError as exc:
                 # ``ResponseTruncatedError`` subclasses ``RuntimeError``.
@@ -1596,6 +1606,8 @@ class BaseEngine(ABC):
         tools_schema: list[dict[str, Any]] | None = None,
         response_format: dict[str, Any] | None = None,
         max_tokens: int | None = None,
+        *,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> str:
         """Tag a native-tool phase while preserving its public test seam."""
         previous = self._active_cache_phase
@@ -1606,12 +1618,14 @@ class BaseEngine(ABC):
                     messages,
                     tools_schema,
                     response_format,
+                    tool_choice=tool_choice,
                 )
             return self._call_llm_native(
                 messages,
                 tools_schema,
                 response_format,
                 max_tokens,
+                tool_choice=tool_choice,
             )
         finally:
             self._active_cache_phase = previous

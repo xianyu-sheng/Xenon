@@ -7,6 +7,7 @@ Phase 2: Execution — 逐步执行，每步结果写入 context
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -38,7 +39,8 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
 
 ## 输出格式
 
-只输出一个 JSON，不要输出其他任何内容：
+优先调用 `submit_plan` 工具提交计划（原生 function calling）；只有当前端点不支持
+工具调用时，才直接输出一个 JSON，不要输出其他内容：
 ```json
 {{"analysis":"简要分析任务目标","steps":[{{"id":1,"task":"步骤描述","tool":"工具名或null","params":{{"参数名":"值"}},"depends_on":[]}}]}}
 ```
@@ -117,11 +119,6 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
 
 ## 示例
 
-用户: 创建一个 Flask hello world 项目
-```json
-{{"analysis":"创建一个最小的 Flask 应用","steps":[{{"id":1,"task":"创建 app.py 文件","tool":"write_file","params":{{"file_path":"app.py","content":"from flask import Flask\\napp = Flask(__name__)\\n\\n@app.route('/')\\ndef hello():\\n    return 'Hello World!'"}}}},{{"id":2,"task":"创建 requirements.txt","tool":"write_file","params":{{"file_path":"requirements.txt","content":"flask>=3.0"}}}},{{"id":3,"task":"验证文件是否创建成功","tool":"list_files","params":{{"file_path":"."}}}}]}}
-```
-
 用户: 分析 https://github.com/owner/repo 项目
 ```json
 {{"analysis":"分析 GitHub 项目的代码质量和结构","steps":[{{"id":1,"task":"克隆仓库到本地","tool":"clone_repo","params":{{"repo":"owner/repo"}}}},{{"id":2,"task":"获取 README 了解项目概述","tool":"github_fetch","params":{{"repo":"owner/repo","github_action":"fetch_readme"}}}},{{"id":3,"task":"读取主入口文件代码","tool":"read_file","params":{{"file_path":"~/.xenon/repos/owner_repo/main.py"}},"depends_on":[1]}},{{"id":4,"task":"读取核心模块代码","tool":"read_file","params":{{"file_path":"~/.xenon/repos/owner_repo/core.py"}},"depends_on":[1]}},{{"id":5,"task":"基于实际代码进行分析总结","tool":null,"params":{{}}}}]}}
@@ -162,6 +159,54 @@ MINI_REACT_PROMPT = """你正在执行任务计划的第 {step_id} 步（共 {to
 """
 
 
+SUBMIT_PLAN_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "submit_plan",
+        "description": (
+            "提交完整执行计划。规划阶段只调用此工具一次；不要在回答文本里"
+            "重复输出 JSON。步骤最多 12 个，每步只做一个原子操作。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "analysis": {
+                    "type": "string",
+                    "description": "简要分析任务目标与拆解思路",
+                },
+                "steps": {
+                    "type": "array",
+                    "description": "按执行顺序排列的步骤，最多 12 个",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer", "description": "从 1 开始"},
+                            "task": {"type": "string", "description": "本步要做什么"},
+                            "tool": {
+                                "type": "string",
+                                "description": "工具名；不需要工具时填空字符串",
+                            },
+                            "params": {
+                                "type": "object",
+                                "additionalProperties": True,
+                                "description": "工具参数；修改已有文件时 old_text/new_text 留空",
+                            },
+                            "depends_on": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                                "description": "依赖的前置步骤 id；无依赖留空数组",
+                            },
+                        },
+                        "required": ["id", "task", "tool", "params"],
+                    },
+                },
+            },
+            "required": ["analysis", "steps"],
+        },
+    },
+}
+
+
 class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
     """规划-执行两阶段引擎。"""
 
@@ -179,6 +224,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         max_mini_react_rounds: int = 3,
         tool_remediation_attempts: int = 1,
         plan_max_tokens: int = 8192,
+        native_planning: bool = False,
         model_pool: Any = None,  # v0.4.0
         auto_router: Any = None,  # v0.4.0 Step 13
         permission_gate: Any = None,  # v0.5.0
@@ -216,6 +262,10 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         # 推理阶段，4096 会截断 plan JSON 直接打死实例，因此默认必须保守。
         # plan-react 915s 硬超时场景由显式调小该值缓解（评测方按模型调节）。
         self.plan_max_tokens = max(1024, plan_max_tokens)
+        # v0.9.6: 规划协议与 Claude Code/Codex 对齐——优先走原生
+        # function calling（submit_plan），而不是让模型手写长 JSON。
+        # 默认关闭以保持库/测试的文本协议 seam；生产工厂显式开启。
+        self.native_planning = native_planning
         # v0.9.1: 循环检测器集成
         from xenon.engine.loop_detector import LoopDetector
 
@@ -913,14 +963,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 ctx.set("_strategy_tip_emitted", True)
         messages.append({"role": "user", "content": user_message})
 
-        response = self._call_llm_for_phase(
-            "plan", messages, max_tokens=self.plan_max_tokens
-        )
-        if not response or not response.strip():
-            logger.warning("LLM 返回了空响应！请检查 API 配置和模型是否支持。")
-        else:
-            logger.debug(f"LLM 原始响应 (前500字): {response[:500]}")
-        result = self._parse_json(response)
+        result = self._plan_once(messages)
 
         # A planner protocol error must not terminate a tool-capable engine
         # before execution starts.  Providers occasionally return native tool
@@ -941,15 +984,13 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 }
             )
             logger.warning("Planner 未生成可解析步骤，执行一次格式恢复重试")
-            retry_response = self._call_llm_for_phase(
-                "plan",
-                messages,
-                max_tokens=self.plan_max_tokens,
-            )
-            retry_result = self._parse_json(retry_response)
+            # Recovery is deliberately text-only: if native tool calling
+            # produced no executable plan, the strict JSON protocol is the
+            # most portable fallback across OpenAI-compatible endpoints.
+            retry_result = self._plan_once(messages, preferred="text")
             if retry_result.get("steps"):
                 result = retry_result
-            elif retry_response:
+            elif retry_result:
                 # Preserve the most recent provider evidence for diagnostics;
                 # the caller still fails closed when no executable plan exists.
                 result = retry_result
@@ -960,6 +1001,88 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         logger.debug(
             f"解析后: steps={len(result.get('steps', []))}, analysis={result.get('analysis', '')[:100]}"
         )
+        return result
+
+    def _plan_once(
+        self, messages: list[dict[str, str]], *, preferred: str = "native"
+    ) -> dict[str, Any]:
+        """One planning attempt: native ``submit_plan`` first, text as fallback.
+
+        Native function calling removes the 13KB-JSON failure class entirely:
+        the provider validates and returns structured arguments, so a missing
+        quote or a pasted code block cannot silently turn into "0 steps".
+        """
+
+        if preferred == "native" and self.native_planning:
+            try:
+                response = self._call_llm_native_for_phase(
+                    "plan",
+                    messages,
+                    tools_schema=[SUBMIT_PLAN_TOOL],
+                    max_tokens=self.plan_max_tokens,
+                    tool_choice={
+                        "type": "function",
+                        "function": {"name": "submit_plan"},
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001 - keep the text protocol alive
+                logger.warning("原生规划调用失败，回退文本协议: %s", exc)
+                response = self._call_llm_for_phase(
+                    "plan", messages, max_tokens=self.plan_max_tokens
+                )
+            finally:
+                # Planner tool calls are not conversation turns; never let
+                # them leak into the executor's native-message bookkeeping.
+                self._pending_native_response = None
+        else:
+            response = self._call_llm_for_phase(
+                "plan", messages, max_tokens=self.plan_max_tokens
+            )
+
+        if not response or not response.strip():
+            logger.warning("LLM 返回了空响应！请检查 API 配置和模型是否支持。")
+        else:
+            logger.debug(f"LLM 原始响应 (前500字): {response[:500]}")
+        return self._parse_plan_response(response)
+
+    def _parse_plan_response(self, raw: str) -> dict[str, Any]:
+        """Accept both text plans and native ``submit_plan`` tool calls."""
+
+        result = self._parse_json(raw)
+        if result.get("steps"):
+            return self._normalize_native_plan(result)
+
+        try:
+            parsed = parse_react(raw)
+        except Exception:  # noqa: BLE001 - malformed output is handled below
+            parsed = None
+        items = parsed if isinstance(parsed, list) else [parsed]
+        for item in items:
+            if not isinstance(item, dict) or item.get("action") != "submit_plan":
+                continue
+            payload = item.get("action_input")
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    payload = None
+            if not isinstance(payload, dict):
+                continue
+            native_result = parse_plan(json.dumps(payload, ensure_ascii=False))
+            if native_result.get("steps"):
+                return self._normalize_native_plan(native_result)
+        return result
+
+    @staticmethod
+    def _normalize_native_plan(result: dict[str, Any]) -> dict[str, Any]:
+        """Normalize the empty-string ``tool`` used by the native schema."""
+
+        for step in result.get("steps", []):
+            tool = step.get("tool")
+            if isinstance(tool, str) and tool.strip().lower() in {"", "none", "null"}:
+                step["tool"] = None
+            if not isinstance(step.get("params"), dict):
+                step["params"] = {}
         return result
 
     def _execute_tool_step(
