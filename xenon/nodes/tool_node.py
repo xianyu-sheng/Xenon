@@ -74,6 +74,7 @@ from xenon.nodes.tool_families.result_filtering import (
     _prefilter_keyword_context,  # noqa: F401 - private compatibility export
     _prefilter_time_records,  # noqa: F401 - private compatibility export
 )
+from xenon.nodes.tool_families.script_tools import ScriptToolsMixin
 from xenon.nodes.tool_families.utility import UtilityToolsMixin
 from xenon.nodes.tool_families.web_tools import WebToolsMixin
 from xenon.nodes.tool_registry import (
@@ -321,6 +322,7 @@ class ToolNode(
     GitHubToolsMixin,
     MCPToolsMixin,
     PlanToolsMixin,
+    ScriptToolsMixin,
     ReadOnlyFileToolsMixin,
     DocumentToolsMixin,
     LSPToolsMixin,
@@ -371,6 +373,9 @@ class ToolNode(
         # update_plan 参数
         steps: list[dict] | None = None,
         explanation: str = "",
+        # run_script 参数
+        language: str = "python",
+        code: str = "",
         # code_index / ast_analyze 参数
         symbol: str = "",
         query: str = "",
@@ -445,6 +450,8 @@ class ToolNode(
         self.edits = edits or []
         self.steps = steps or []
         self.explanation = explanation
+        self.language = language
+        self.code = code
         self.symbol = symbol
         self.query = query
         self.old_name = old_name
@@ -555,6 +562,8 @@ class ToolNode(
         "lang": ["language", "locale"],
         "steps": ["plan_steps", "todo"],
         "explanation": ["plan_explanation", "note"],
+        "language": ["script_language", "shell"],
+        "code": ["script", "source"],
         # v0.6.1: LSP 参数
         "line": ["row", "lineno", "line_number"],
         "column": ["col", "colno", "column_number", "cursor"],
@@ -590,6 +599,8 @@ class ToolNode(
         "edits",
         "steps",
         "explanation",
+        "language",
+        "code",
         "symbol",
         "query",
         "old_name",
@@ -829,8 +840,9 @@ class ToolNode(
             raise SecurityError(
                 "命令包含未授权的 shell 命令替换（$()/反引号/进程替换），"
                 "为防止混淆执行已拦截。替代写法：PowerShell 用 `$name = ...` "
-                "赋值并用 `;` 串联；需要多步逻辑时，先用 write_file 写入工作区"
-                "临时脚本，再执行该脚本。"
+                "赋值并用 `;` 串联；需要多步逻辑时优先用 `run_script("
+                "language=\"powershell\", code=...)`，或先 write_file 写入工作区"
+                "临时脚本再执行。"
             )
         # v0.3.0+ 修复（B-1）：匹配前先剥取引号内容（防止 echo "rm -rf /" 等
         # 字符串字面量触发误报）。通用机制，不针对特定任务加白名单。
@@ -861,8 +873,9 @@ class ToolNode(
                         hint = ""
                         if pattern == r"\b(?:python\w*|perl|ruby|node)\s+-[ce]\s+":
                             hint = (
-                                " 替代写法：先用 write_file 写入工作区临时 .py，"
-                                "再执行 `python path/to/temp.py`；宿主机会拦截 -c/-e。"
+                                " 替代写法：优先用 run_script(language=\"python\", "
+                                "code=...)；也可以先 write_file 写入工作区临时 .py，"
+                                "再执行 `python path/to/temp.py`。宿主机会拦截 -c/-e。"
                             )
                         raise SecurityError(
                             f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。"

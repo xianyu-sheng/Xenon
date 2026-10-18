@@ -1394,6 +1394,28 @@ class ReActEngine(BaseEngine):
         for t in self.tools.values():
             if t["name"] not in allowed:
                 continue
+            if t["name"] == "run_script":
+                schema.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "run_script",
+                            "description": t.get("description", ""),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "language": {
+                                        "type": "string",
+                                        "enum": ["python", "powershell"],
+                                    },
+                                    "code": {"type": "string"},
+                                },
+                                "required": ["code"],
+                            },
+                        },
+                    }
+                )
+                continue
             if t["name"] == "update_plan":
                 # Structured array param: the generic string-only schema would
                 # force the model to JSON-encode a list and lose native typing.

@@ -69,6 +69,9 @@ REACT_SYSTEM_PROMPT = """你是一个 ReAct 模式的 AI 编程助手。你通�
    `python .xenon_tmp/check.py`；需要多步 shell 时写成临时脚本，不要用 `$()`/反引号。
 12. **复杂任务维护计划**：非简单多步任务先用 `update_plan` 建 3-7 步短清单，每完成一步
    更新状态；始终最多一个 `in_progress`，全部完成后再收尾。简单任务不要用。
+13. **内联/多行脚本用 `run_script`**：需要 Python 片段或多行 PowerShell 时，调用
+   `run_script(language="python"|"powershell", code="...")`；它会写入工作区临时脚本
+   再执行。不要用 `python -c`、`$()` 或反引号，宿主机会拦截。
 
 ## 可用工具（完整且唯一，不存在其他工具）
 
@@ -137,6 +140,18 @@ BUILTIN_TOOLS = {
         "params": {
             "steps": "步骤数组：[{step: 描述, status: pending|in_progress|completed}]",
             "explanation": "可选：为什么调整计划",
+        },
+    },
+    "run_script": {
+        "name": "run_script",
+        "description": (
+            "把代码写入工作区 .xenon_tmp 临时脚本并直接执行，避开 shell 引号/"
+            "$() 限制。需要 Python 片段或多行 PowerShell 时优先用它；"
+            "不要用 python -c、$() 或反引号。"
+        ),
+        "params": {
+            "language": "python | powershell（默认 python）",
+            "code": "完整脚本内容（多行）",
         },
     },
     "command": {

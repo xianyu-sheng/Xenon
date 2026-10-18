@@ -207,6 +207,7 @@ BUILTIN_TOOL_METHODS: dict[str, str] = {
     "register_tool": "_register_tool",
     "spawn_agent": "_spawn_agent",  # 引擎层拦截，注册表仅声明 risk 分类
     "update_plan": "_update_plan",
+    "run_script": "_run_script",
 }
 
 BUILTIN_TOOL_REGISTRY = ToolRegistry()

@@ -83,6 +83,7 @@ PROVENANCE_SOURCE_BY_ACTION: dict[str, SourceType] = {
     "spawn_agent": "tool",
     "submit_plan": "tool",
     "update_plan": "tool",
+    "run_script": "tool",
     # Documented extension example. Other runtime plugins use the same
     # fail-safe ``tool`` fallback without requiring registration here.
     "sqlite_query": "tool",

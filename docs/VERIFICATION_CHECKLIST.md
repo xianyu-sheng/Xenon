@@ -51,7 +51,7 @@
 | C1 | SmartBench #21 `--json` 未真正接到 CLI（`json_mode` 参数存在但命令未传） | 执行/CLI | ✅ 已修复 | `quick` / 根 `--quick` / `diagnose` 已加 `--json`；进度走 stderr，stdout 只输出 JSON；CLI 测试 55 passed，全量 669 passed、无新增失败 |
 | C2 | SmartBench #21 长任务仍出现约 14 次循环提示（循环信号时有时无） | 执行/提示噪音 | ✅ 已加冷却 | 12 迭代冷却 + 签名去重；真实复跑从 14 次降到 6 次，仍无硬停门；如需更低可再调大冷却 |
 | C3 | 新文件“盲写”警告（新文件无法先读） | **证据层** | 🧊 单独决策 | 不混入执行层；评估在事实绑定中区分“新建文件”与“修改已有文件” |
-| C4 | `command` 安全策略拦截 `$()` / `python -c`，模型绕路浪费步数 | 执行/环境 | 🟡 工具+提示已补 | 错误文案给替代写法；新增 `github_fetch(list_issues/list_pulls, limit=...)`，issue 列表无需 gh/jq；真实任务仍出现 3 次 `$()`，但 C13 能恢复 |
+| C4 | `command` 安全策略拦截 `$()` / `python -c`，模型绕路浪费步数 | 执行/环境 | 🟡 已显著改善 | 错误文案给替代写法；`github_fetch(list_issues)` + 新 `run_script(python/powershell)` 工具；真实 JSON 任务 0 次安全失败；长任务待复跑 |
 | C5 | `write_code` 仍默认 flash，长任务纪律弱于 pro | 执行/模型路由 | ✅ 数据结论：保持 flash | v1 pro 略省工具，v2 pro 更慢/更多调用；两者完成率相同；不做全局 pro 路由，长任务按需使用 |
 | C6 | SmartBench #21 分支只在临时 clone：`D:/tmp/smartbench-rerun`，未 push / 未开 PR | 交付 | ✅ 已推送 | PR [#50](https://github.com/xianyu-sheng/SmartBench/pull/50) open、mergeable、CI 7/7 绿；等待维护者合并 |
 | C7 | SmartBench #21 验收缺口：TTY 单行、`--json` 无噪音、failing reporter 不中断 | 执行/验收 | 🟡 单元/CLI 已覆盖 | `--json` 已接 CLI 并有测试；TTY 单行用 forced-TTY 单测覆盖；仍建议在真实终端手测一次 |
@@ -81,4 +81,5 @@
 | 2026-10-18 | C12 v2 完成率基准 | 修正浮点断言后 flash 5/5（58 LLM/69 tools/4 fail/121.7s）、pro 5/5（73/78/10/203.3s）；v2 仍偏易，pro 无优势 |
 | 2026-10-18 | B1–B5 真实复验 | 5/5：退出码 rc=0/3、gh token 兜底、deadline 降级、repo_path/issue/remap、env timeout |
 | 2026-10-18 | C11 update_plan | 真实跨文件任务 4 次更新；SmartBench 长任务 3 次更新、计划全 completed、分支 `fix/issue-26-resource-leak-visibility`、提交 `9dbc648`、18 tests；Xenon 全量 3406 passed、无新增失败 |
+| 2026-10-18 | C4 run_script | 真实 JSON 任务 0 次安全失败，sum=10；`run_script` 原生 schema 要求 code；Xenon 全量 3412 passed、无新增失败 |
 | 2026-10-18 | SmartBench PR #50 | 已推送 `feat/cli-progress-reporter`；PR open、mergeable、CI 7/7 绿；等待合并 |

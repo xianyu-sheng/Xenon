@@ -15,6 +15,7 @@ from xenon.nodes.tool_families.mcp_tools import MCPToolsMixin
 from xenon.nodes.tool_families.plan_tools import PlanToolsMixin
 from xenon.nodes.tool_families.read_only_files import ReadOnlyFileToolsMixin
 from xenon.nodes.tool_families.result_filtering import ResultFilteringMixin
+from xenon.nodes.tool_families.script_tools import ScriptToolsMixin
 from xenon.nodes.tool_families.utility import UtilityToolsMixin
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "GitToolsMixin",
     "MCPToolsMixin",
     "PlanToolsMixin",
+    "ScriptToolsMixin",
     "LSPToolsMixin",
     "ReadOnlyFileToolsMixin",
     "ResultFilteringMixin",
