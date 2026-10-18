@@ -12,6 +12,7 @@ from xenon.nodes.tool_families.file_mutation import FileMutationToolsMixin
 from xenon.nodes.tool_families.git_tools import GitToolsMixin
 from xenon.nodes.tool_families.lsp import LSPToolsMixin
 from xenon.nodes.tool_families.mcp_tools import MCPToolsMixin
+from xenon.nodes.tool_families.plan_tools import PlanToolsMixin
 from xenon.nodes.tool_families.read_only_files import ReadOnlyFileToolsMixin
 from xenon.nodes.tool_families.result_filtering import ResultFilteringMixin
 from xenon.nodes.tool_families.utility import UtilityToolsMixin
@@ -22,6 +23,7 @@ __all__ = [
     "FileMutationToolsMixin",
     "GitToolsMixin",
     "MCPToolsMixin",
+    "PlanToolsMixin",
     "LSPToolsMixin",
     "ReadOnlyFileToolsMixin",
     "ResultFilteringMixin",

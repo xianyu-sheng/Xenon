@@ -67,6 +67,8 @@ REACT_SYSTEM_PROMPT = """你是一个 ReAct 模式的 AI 编程助手。你通�
 11. **不要使用内联解释器**：`python -c`、`perl -e`、`node -e` 在宿主机上会被安全策略
    拦截。需要临时脚本时，先用 write_file 写到工作区（如 `.xenon_tmp/check.py`），再执行
    `python .xenon_tmp/check.py`；需要多步 shell 时写成临时脚本，不要用 `$()`/反引号。
+12. **复杂任务维护计划**：非简单多步任务先用 `update_plan` 建 3-7 步短清单，每完成一步
+   更新状态；始终最多一个 `in_progress`，全部完成后再收尾。简单任务不要用。
 
 ## 可用工具（完整且唯一，不存在其他工具）
 
@@ -124,6 +126,18 @@ BUILTIN_TOOLS = {
         "name": "submit_plan",
         "description": "把当前计划提交给用户审批（计划模式下使用）。用户批准后退出计划模式并开始执行；被驳回时根据反馈修改计划后重新提交。",
         "params": {"plan": "完整计划文本（步骤、工具、目标路径）"},
+    },
+    "update_plan": {
+        "name": "update_plan",
+        "description": (
+            "维护当前任务的短计划（执行状态，不是审批）。复杂/多步任务先建 "
+            "3-7 步清单，每完成一步就更新；始终最多一个 in_progress；"
+            "简单任务不要用。"
+        ),
+        "params": {
+            "steps": "步骤数组：[{step: 描述, status: pending|in_progress|completed}]",
+            "explanation": "可选：为什么调整计划",
+        },
     },
     "command": {
         "name": "command",

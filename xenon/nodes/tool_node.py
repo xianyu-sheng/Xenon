@@ -63,6 +63,7 @@ from xenon.nodes.tool_families.git_tools import GitToolsMixin
 from xenon.nodes.tool_families.github_tools import GitHubToolsMixin
 from xenon.nodes.tool_families.lsp import LSPToolsMixin
 from xenon.nodes.tool_families.mcp_tools import MCPToolsMixin
+from xenon.nodes.tool_families.plan_tools import PlanToolsMixin
 from xenon.nodes.tool_families.read_only_files import (
     MAX_READ_SIZE,  # noqa: F401 - private compatibility export
     ReadOnlyFileToolsMixin,
@@ -319,6 +320,7 @@ class ToolNode(
     GitToolsMixin,
     GitHubToolsMixin,
     MCPToolsMixin,
+    PlanToolsMixin,
     ReadOnlyFileToolsMixin,
     DocumentToolsMixin,
     LSPToolsMixin,
@@ -366,6 +368,9 @@ class ToolNode(
         # 批量操作参数
         files: list[dict] | None = None,
         edits: list[dict] | None = None,
+        # update_plan 参数
+        steps: list[dict] | None = None,
+        explanation: str = "",
         # code_index / ast_analyze 参数
         symbol: str = "",
         query: str = "",
@@ -438,6 +443,8 @@ class ToolNode(
         self.new_text = new_text
         self.files = files or []
         self.edits = edits or []
+        self.steps = steps or []
+        self.explanation = explanation
         self.symbol = symbol
         self.query = query
         self.old_name = old_name
@@ -546,6 +553,8 @@ class ToolNode(
         "branch": ["ref", "git_branch"],
         "city": ["location", "place", "address"],
         "lang": ["language", "locale"],
+        "steps": ["plan_steps", "todo"],
+        "explanation": ["plan_explanation", "note"],
         # v0.6.1: LSP 参数
         "line": ["row", "lineno", "line_number"],
         "column": ["col", "colno", "column_number", "cursor"],
@@ -579,6 +588,8 @@ class ToolNode(
         "max_chars",
         "files",
         "edits",
+        "steps",
+        "explanation",
         "symbol",
         "query",
         "old_name",

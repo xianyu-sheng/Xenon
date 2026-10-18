@@ -20,7 +20,7 @@ from xenon.engine.execution_prompts import EXECUTION_CONTRACT
 from xenon.engine.loop_detector import LoopDetector
 from xenon.engine.react_prompts import BUILTIN_TOOLS, REACT_SYSTEM_PROMPT
 from xenon.engine.scout import DirectoryScout
-from xenon.engine.strategy_guide import get_strategy_advice
+from xenon.engine.strategy_guide import get_strategy_advice, infer_task_signals
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.engine.verification_nudge import (
     VERIFICATION_REMINDER,
@@ -470,6 +470,21 @@ class ReActEngine(BaseEngine):
             if not ctx.get("_strategy_tip_emitted", False):
                 self.callback.on_tip(strategy.tip)
                 ctx.set("_strategy_tip_emitted", True)
+        # Codex-style plan adoption: cross-file write tasks should plan first.
+        # This must run even when intent classification is unavailable; the
+        # nudge is a reminder, not a validation gate.
+        plan_signals = (
+            strategy.signals if strategy.intent else infer_task_signals(original_user_input)
+        )
+        if plan_signals.multi_file and "update_plan" in self.tools:
+            messages.append({
+                "role": "user",
+                "content": (
+                    "[执行要求] 这是跨文件/多步任务：开始修改前先调用 "
+                    "`update_plan` 建立 3-7 步清单（含实现、验证），之后每完成"
+                    "一步更新状态；不要跳过计划直接改文件。"
+                ),
+            })
         # 只读轮次即使意图分类缺失，也按查询/研究语义处理：外部来源连续
         # 不可用时应收束报告，而不是无限重试；写任务则走恢复提示。
         requires_query_result = (
@@ -1343,6 +1358,44 @@ class ReActEngine(BaseEngine):
         allowed = self._allowed_tool_names()
         for t in self.tools.values():
             if t["name"] not in allowed:
+                continue
+            if t["name"] == "update_plan":
+                # Structured array param: the generic string-only schema would
+                # force the model to JSON-encode a list and lose native typing.
+                schema.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "update_plan",
+                            "description": t.get("description", ""),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "steps": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "step": {"type": "string"},
+                                                "status": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "pending",
+                                                        "in_progress",
+                                                        "completed",
+                                                    ],
+                                                },
+                                            },
+                                            "required": ["step", "status"],
+                                        },
+                                    },
+                                    "explanation": {"type": "string"},
+                                },
+                                "required": ["steps"],
+                            },
+                        },
+                    }
+                )
                 continue
             params = t.get("params", {}) or {}
             properties = {

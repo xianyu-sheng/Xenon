@@ -206,6 +206,7 @@ BUILTIN_TOOL_METHODS: dict[str, str] = {
     "datetime": "_datetime",
     "register_tool": "_register_tool",
     "spawn_agent": "_spawn_agent",  # 引擎层拦截，注册表仅声明 risk 分类
+    "update_plan": "_update_plan",
 }
 
 BUILTIN_TOOL_REGISTRY = ToolRegistry()
@@ -239,6 +240,7 @@ for _tool_name, _method_name in BUILTIN_TOOL_METHODS.items():
         "lsp_find_refs",
         "lsp_diagnostics",
         "lsp_symbols",
+        "update_plan",
     }:
         _risk = "INFO"
     elif _tool_name in {
