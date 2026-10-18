@@ -158,7 +158,10 @@ def _cmd_save(
         history,
         ctx_store,
         registry.export_config(),
-        extra={"working_memory": ctx_mgr.get_working_memory()},
+        extra={
+            "working_memory": ctx_mgr.get_working_memory(),
+            "cwd": str(Path.cwd()),
+        },
     )
     return f"✅ 会话已保存: {path}"
 
@@ -250,9 +253,20 @@ def _cmd_load(
             if isinstance(mcfg, dict) and mcfg.get("model_id"):
                 registry.add_model(mcfg["model_id"], alias)
 
+    from xenon.repl.session import cwd_change_notice
+
+    cwd_notice = cwd_change_notice(extra)
+    if cwd_notice and repl is not None:
+        try:
+            repl.ctx_mgr.set_context_message("resume_cwd", cwd_notice, stable=True)
+        except Exception:  # noqa: BLE001 — 提示失败不影响加载
+            pass
+
     result = f"✅ 会话 '{name}' 已加载。消息数: {len(ctx_mgr.history)}"
     if recovery_notice:
         result += f"\n{recovery_notice}"
+    if cwd_notice:
+        result += f"\n{cwd_notice}"
     return result
 
 
@@ -417,12 +431,23 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         if mc and repl.model_pool.is_empty():
             repl.model_pool.from_config(mc)
 
+        from xenon.repl.session import cwd_change_notice
+
+        cwd_notice = cwd_change_notice(extra)
+        if cwd_notice:
+            try:
+                repl.ctx_mgr.set_context_message("resume_cwd", cwd_notice, stable=True)
+            except Exception:  # noqa: BLE001 — 提示失败不影响恢复
+                pass
+
         age = get_session_age(data) or "未知时间"
         msgs = len(history)
         _render_resumed_conversation(history, msgs)
         result = f"✅ 已恢复会话 ({age}) · {msgs} 条消息 · 范式: {paradigm or 'direct'}"
         if recovery_notice:
             result += f"\n{recovery_notice}"
+        if cwd_notice:
+            result += f"\n{cwd_notice}"
         return result
 
     except Exception as exc:

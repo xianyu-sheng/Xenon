@@ -589,6 +589,7 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
                 extra={
                     "paradigm": self.registry.current_mode,
                     "working_memory": self.ctx_mgr.get_working_memory(),
+                    "cwd": str(Path.cwd()),
                 },
             )
             if cleanup:

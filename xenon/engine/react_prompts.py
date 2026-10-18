@@ -160,9 +160,10 @@ BUILTIN_TOOLS = {
     },
     "git": {
         "name": "git",
-        "description": "在本机执行 Git 版本控制操作。支持查看类命令（status/diff/log/branch）与基本操作（add/commit），以及 'push'（把分支推到 origin，之后可用 create_pull_request 建 PR）。push 需要审批。",
+        "description": "在本机执行 Git 版本控制操作。支持查看类命令（status/diff/log/branch）与基本操作（add/commit），以及 'push'（把分支推到 origin，之后可用 create_pull_request 建 PR）。push 需要审批。默认在工作区根执行；仓库在子目录时用 repo_path 指定。",
         "params": {
-            "git_command": "Git 子命令，如 'status'、'diff'、'log --oneline -10'、'add -A'、'commit -m msg'、'push -u origin <branch>'"
+            "git_command": "Git 子命令，如 'status'、'diff'、'log --oneline -10'、'add -A'、'commit -m msg'、'push -u origin <branch>'",
+            "repo_path": "仓库目录（可选；工作区内的相对/绝对路径，默认工作区根）",
         },
     },
     "web_fetch": {
@@ -262,11 +263,11 @@ BUILTIN_TOOLS = {
     },
     "github_fetch": {
         "name": "github_fetch",
-        "description": "GitHub 专用只读工具。支持 owner/repo，以及仓库、blob、tree、issue、pull 和 raw 完整 URL；repo_activity 可直接获取最近 push、PR 抽样和合并耗时等维护信号，无需克隆仓库。API 限流时会尝试公开 HTML 降级。设置 GITHUB_TOKEN、GH_TOKEN 或 credentials.yaml 的 github.token 后支持认证访问。",
+        "description": "GitHub 专用只读工具。支持 owner/repo，以及仓库、blob、tree、issue、pull 和 raw 完整 URL；repo_activity 可直接获取最近 push、PR 抽样和合并耗时等维护信号，无需克隆仓库。fetch_issue/fetch_pull 可直接用 github_path 填编号（27 / #27 / issues/27）。API 限流时会尝试公开 HTML 降级。设置 GITHUB_TOKEN、GH_TOKEN 或 credentials.yaml 的 github.token 后支持认证访问。",
         "params": {
             "repo": "owner/repo 或完整 GitHub URL",
             "github_action": "list_files | fetch_file | fetch_readme | fetch_issue | fetch_pull | repo_activity",
-            "github_path": "文件或目录路径",
+            "github_path": "文件/目录路径；fetch_issue/fetch_pull 时填编号（如 27、#27、issues/27）",
             "branch": "分支名（可选；留空自动读取仓库默认分支）",
         },
     },

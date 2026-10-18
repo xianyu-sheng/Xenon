@@ -378,11 +378,13 @@ class ToolNode(
         tool_name: str = "",
         tool_args: dict | None = None,
         mcp_server: str = "",
-        # github_fetch / clone_repo 参数
+        # github_fetch / clone_repo / git 参数
         repo: str = "",
         github_action: str = "list_files",  # list_files | fetch_file | fetch_readme | repo_activity
         github_path: str = "",
         branch: str = "",
+        # v0.9.5: git 工具在指定仓库目录执行（默认工作区根）
+        repo_path: str = "",
         # v0.9.5: clone_repo 显式目标目录（否则落到 ~/.xenon/repos 缓存）
         target_dir: str = "",
         # v0.9.5: create_pull_request 参数（branch 作为 head）
@@ -447,6 +449,7 @@ class ToolNode(
         self.github_action = github_action
         self.github_path = github_path
         self.branch = branch
+        self.repo_path = repo_path
         self.target_dir = target_dir
         self.pr_title = pr_title
         self.pr_body = pr_body
@@ -587,6 +590,7 @@ class ToolNode(
         "github_action",
         "github_path",
         "branch",
+        "repo_path",
         "target_dir",
         "pr_title",
         "pr_body",

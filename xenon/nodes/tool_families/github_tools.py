@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,18 @@ from xenon.utils.github_auth import github_auth_headers, load_github_token
 from xenon.utils.github_reference import parse_github_reference
 
 logger = logging.getLogger(__name__)
+
+# v0.9.5: github_fetch(fetch_issue/fetch_pull) 允许把编号放在 github_path。
+# 支持 "27"、"#27"、"issues/27"、"pulls/27"、"pr/27"。
+_ISSUE_NUMBER_RE = re.compile(
+    r"^\s*(?:(?:issues?|pulls?|prs?)\s*/\s*)?#?\s*(\d{1,7})\s*$",
+    re.IGNORECASE,
+)
+
+
+def _issue_number_hint(path_value: str) -> int | None:
+    match = _ISSUE_NUMBER_RE.match(path_value or "")
+    return int(match.group(1)) if match else None
 
 
 def _tool_node_module():
@@ -198,6 +211,10 @@ class GitHubToolsMixin:
 
                 if action in {"fetch_issue", "fetch_pull"}:
                     number = reference.number
+                    if number is None:
+                        # 简写 owner/repo + github_path=27 时 reference 没有编号；
+                        # 从 github_path 里取，避免退化成「列出 open issues」。
+                        number = _issue_number_hint(path_value)
                     if number is None:
                         # 无编号 URL（如 repo/issues）→ 列出 open issues/PR 概览，
                         # 而非无情报错；详情需再带编号调用。

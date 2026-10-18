@@ -7,6 +7,9 @@
 
 ### 引擎
 
+- 循环检测的低置信度提示不再无限刷屏：连续 3 次检测到循环后强制收束并汇总当前结果。
+- 恢复会话时记录并校验工作目录：保存时写入 `cwd`，`/resume`、`/load` 在目录变化时提示「旧路径可能失效」，同时注入稳定上下文供模型参考。
+
 - 引擎时限（默认 600s）不再整轮红错：组合引擎在超时时返回「已完成步骤 + 时限说明」，REPL 以警告而非错误展示；输入「继续」可接着做，已完成的操作保持有效。
 
 - 新增「改完代码必须验证」软提醒（#163）：ReAct 在 `final_answer` 前检查「最后一次成功写入之后没有任何测试/构建命令」，命中时注入一次提醒（不阻断、不重复）；系统提示规则 8 同步扩展为所有代码变更，要求先跑「能因改动而失败的测试」。
@@ -14,6 +17,9 @@
 - 统一标准步数预算为 **120 步**（与 Claude Code 类代理对齐）：`react` / `plan-execute` 由 40 步、`plan-react` / `plan-reflection` / `react-reflection` 由 24 步统一为 120；引擎类默认值与工厂默认值一致，`XENON_MAX_ITERATIONS` 仍可覆盖。SWE-bench 等评测运行冻结在 120 步（见 `docs/EVAL_RESULTS.md` 预注册），测试 `tests/test_step_budget.py` 锁定该常数。
 
 ### 工具
+
+- `git` 工具新增 `repo_path`：从上级目录启动时也能在工作区内的具体仓库执行 `status/commit/push`（路径仍走沙箱校验）。
+- `github_fetch` 的 `fetch_issue`/`fetch_pull` 现在接受 `github_path` 作为编号（`27` / `#27` / `issues/27`），不再退化成「列出 open issues」。
 
 - Windows 命令退出码修复：`2>&1 | Select-Object` 会把原生命令的 stderr 转成 PowerShell error record，导致成功的 `git push` 被误报为失败；`command` 工具现在追加 `$LASTEXITCODE`/`$?` 判定，成功即 0、真失败保留原码。
 - `create_pull_request` / `github_fetch` 的 token 解析新增 `gh auth token` 兜底：机器已用 `gh auth login` 登录但没配 `GITHUB_TOKEN` 时可直接建 PR（缓存，失败降级为空）。

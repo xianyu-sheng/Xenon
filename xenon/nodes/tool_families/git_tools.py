@@ -47,6 +47,15 @@ class GitToolsMixin:
 
         logger.info(f"[{self.id}] git {' '.join(cmd[1:])}")
 
+        # v0.9.5: 默认在工作区根执行；repo_path 允许指向工作区内的具体仓库
+        # （例如从 D:\ 启动、仓库在 D:\SmartBench）。路径仍走同一套围栏校验。
+        cwd = self.cwd or "."
+        repo_path = (
+            self._resolve_template(getattr(self, "repo_path", "") or "", context) or ""
+        ).strip()
+        if repo_path:
+            cwd = str(self._validate_path(repo_path, for_write=False))
+
         try:
             exec_cmd = [*self.command_prefix, *cmd] if self.command_prefix else cmd
             proc = subprocess.run(
@@ -54,7 +63,7 @@ class GitToolsMixin:
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
-                cwd=self.cwd or ".",
+                cwd=cwd,
             )
             output = proc.stdout.strip() or proc.stderr.strip()
             result = {

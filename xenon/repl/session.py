@@ -197,6 +197,27 @@ def _ensure_sessions_dir() -> Path:
     return SESSIONS_DIR
 
 
+def cwd_change_notice(
+    extra: dict[str, Any], *, current: str | Path | None = None
+) -> str:
+    """Warn when a restored session was saved in a different working directory.
+
+    Sessions are saved with ``extra["cwd"]``.  Resuming from another directory
+    used to leave the model with stale absolute paths from the previous
+    checkout (the 2026-10-17 C: -> D: session), so the resume command now
+    surfaces a context note instead of silently mixing two workspaces.
+    """
+
+    saved = (extra or {}).get("cwd")
+    current_str = str(current) if current is not None else str(Path.cwd())
+    if isinstance(saved, str) and saved and saved != current_str:
+        return (
+            f"⚠ 会话保存于 {saved}，当前工作目录是 {current_str}。"
+            "对话中提到的旧路径可能已失效；请以当前目录为准，必要时重新确认路径。"
+        )
+    return ""
+
+
 def _session_path(name: str, sessions_dir: Path) -> Path:
     """把用户提供的会话名解析成 sessions 目录内的安全文件路径。
 

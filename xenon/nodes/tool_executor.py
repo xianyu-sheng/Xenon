@@ -709,7 +709,7 @@ class ToolExecutor:
         bound = {k: v for k, v in params.items() if k != "security_enabled"}
         if self.runtime is None:
             return bound
-        for key in ("file_path", "path", "directory"):
+        for key in ("file_path", "path", "directory", "repo_path"):
             if key in bound:
                 bound[key] = self.runtime.translate_path(bound[key])
         for collection in ("files", "edits"):
