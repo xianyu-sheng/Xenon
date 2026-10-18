@@ -9,9 +9,9 @@ import pytest
 
 import xenon.nodes.tool_node as tool_module
 import xenon.repl.command_groups.skill as skill_commands
+import xenon.utils.github_auth as github_auth
 from xenon.engine.context import AgentContext
 from xenon.nodes.tool_node import ToolNode
-import xenon.utils.github_auth as github_auth
 from xenon.utils.github_auth import github_auth_headers, load_github_token
 
 
