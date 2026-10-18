@@ -1,0 +1,139 @@
+[
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "hidden_edge_cases",
+    "passed": true,
+    "detail": "....                                                                     [100%] | 4 passed in 0.01s",
+    "elapsed_s": 35.0,
+    "llm_calls": 18,
+    "tool_calls": 18,
+    "failed_tools": 2,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "cross_file_api_change",
+    "passed": false,
+    "detail": "FAILED test_hidden_tax.py::test_cart_tax - assert 110.00000000000001 == 110 | FAILED test_hidden_tax.py::test_invoice_tax - assert 110.00000000000001 == 110 | 3 failed, 8 passed in 0.10s",
+    "elapsed_s": 15.3,
+    "llm_calls": 11,
+    "tool_calls": 15,
+    "failed_tools": 1,
+    "loop_hints": 0,
+    "warnings": []
+  },
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "multi_bug_diagnosis",
+    "passed": true,
+    "detail": "......                                                                   [100%] | 6 passed in 0.02s",
+    "elapsed_s": 34.8,
+    "llm_calls": 21,
+    "tool_calls": 20,
+    "failed_tools": 5,
+    "loop_hints": 2,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环",
+      "检测到 4 轮纯只读操作，注入强制转写提示 (1/2)",
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "git_partial_revert",
+    "passed": true,
+    "detail": "branch=fix/timeout; commit=fix: restore TIMEOUT to 30",
+    "elapsed_s": 31.4,
+    "llm_calls": 18,
+    "tool_calls": 16,
+    "failed_tools": 2,
+    "loop_hints": 0,
+    "warnings": [
+      "检测到代码改动后未验证，要求先跑测试"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "stats_chain",
+    "passed": true,
+    "detail": "...........                                                              [100%] | 11 passed in 0.02s",
+    "elapsed_s": 12.0,
+    "llm_calls": 6,
+    "tool_calls": 7,
+    "failed_tools": 0,
+    "loop_hints": 0,
+    "warnings": []
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "hidden_edge_cases",
+    "passed": true,
+    "detail": "....                                                                     [100%] | 4 passed in 0.01s",
+    "elapsed_s": 31.6,
+    "llm_calls": 13,
+    "tool_calls": 13,
+    "failed_tools": 2,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "cross_file_api_change",
+    "passed": false,
+    "detail": "FAILED test_hidden_tax.py::test_cart_tax - assert 110.00000000000001 == 110 | FAILED test_hidden_tax.py::test_invoice_tax - assert 110.00000000000001 == 110 | 3 failed, 6 passed in 0.09s",
+    "elapsed_s": 36.8,
+    "llm_calls": 12,
+    "tool_calls": 20,
+    "failed_tools": 3,
+    "loop_hints": 0,
+    "warnings": []
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "multi_bug_diagnosis",
+    "passed": true,
+    "detail": "......                                                                   [100%] | 6 passed in 0.01s",
+    "elapsed_s": 53.3,
+    "llm_calls": 17,
+    "tool_calls": 19,
+    "failed_tools": 3,
+    "loop_hints": 2,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环",
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "git_partial_revert",
+    "passed": true,
+    "detail": "branch=fix/timeout; commit=fix: restore TIMEOUT to 30",
+    "elapsed_s": 92.7,
+    "llm_calls": 27,
+    "tool_calls": 37,
+    "failed_tools": 3,
+    "loop_hints": 0,
+    "warnings": [
+      "检测到代码改动后未验证，要求先跑测试"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "stats_chain",
+    "passed": true,
+    "detail": "...........                                                              [100%] | 11 passed in 0.02s",
+    "elapsed_s": 18.7,
+    "llm_calls": 7,
+    "tool_calls": 7,
+    "failed_tools": 0,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  }
+]

@@ -1,0 +1,137 @@
+[
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "hidden_edge_cases",
+    "passed": true,
+    "detail": "....                                                                     [100%] | 4 passed in 0.01s",
+    "elapsed_s": 23.2,
+    "llm_calls": 9,
+    "tool_calls": 10,
+    "failed_tools": 0,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "cross_file_api_change",
+    "passed": true,
+    "detail": "..........                                                               [100%] | 10 passed in 0.03s",
+    "elapsed_s": 13.8,
+    "llm_calls": 6,
+    "tool_calls": 9,
+    "failed_tools": 0,
+    "loop_hints": 0,
+    "warnings": []
+  },
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "multi_bug_diagnosis",
+    "passed": true,
+    "detail": "......                                                                   [100%] | 6 passed in 0.02s",
+    "elapsed_s": 24.1,
+    "llm_calls": 11,
+    "tool_calls": 15,
+    "failed_tools": 2,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "git_partial_revert",
+    "passed": true,
+    "detail": "branch=fix/timeout; commit=fix: restore TIMEOUT to 30",
+    "elapsed_s": 45.8,
+    "llm_calls": 25,
+    "tool_calls": 28,
+    "failed_tools": 2,
+    "loop_hints": 0,
+    "warnings": []
+  },
+  {
+    "model": "deepseek/deepseek-v4-flash",
+    "task": "stats_chain",
+    "passed": true,
+    "detail": "..............                                                           [100%] | 14 passed in 0.02s",
+    "elapsed_s": 14.8,
+    "llm_calls": 7,
+    "tool_calls": 7,
+    "failed_tools": 0,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "hidden_edge_cases",
+    "passed": true,
+    "detail": "....                                                                     [100%] | 4 passed in 0.01s",
+    "elapsed_s": 64.9,
+    "llm_calls": 20,
+    "tool_calls": 20,
+    "failed_tools": 4,
+    "loop_hints": 2,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环",
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "cross_file_api_change",
+    "passed": true,
+    "detail": ".........                                                                [100%] | 9 passed in 0.02s",
+    "elapsed_s": 26.2,
+    "llm_calls": 9,
+    "tool_calls": 12,
+    "failed_tools": 1,
+    "loop_hints": 0,
+    "warnings": []
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "multi_bug_diagnosis",
+    "passed": true,
+    "detail": "......                                                                   [100%] | 6 passed in 0.01s",
+    "elapsed_s": 33.4,
+    "llm_calls": 12,
+    "tool_calls": 15,
+    "failed_tools": 3,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "git_partial_revert",
+    "passed": true,
+    "detail": "branch=fix/timeout; commit=fix: restore TIMEOUT to 30",
+    "elapsed_s": 55.6,
+    "llm_calls": 22,
+    "tool_calls": 21,
+    "failed_tools": 2,
+    "loop_hints": 0,
+    "warnings": [
+      "检测到代码改动后未验证，要求先跑测试"
+    ]
+  },
+  {
+    "model": "deepseek/deepseek-v4-pro",
+    "task": "stats_chain",
+    "passed": true,
+    "detail": "...........                                                              [100%] | 11 passed in 0.02s",
+    "elapsed_s": 23.2,
+    "llm_calls": 10,
+    "tool_calls": 10,
+    "failed_tools": 0,
+    "loop_hints": 1,
+    "warnings": [
+      "检测到潜在循环 (confidence=0.85)，已注入提示尝试打破循环"
+    ]
+  }
+]
