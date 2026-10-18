@@ -74,3 +74,9 @@ def test_simple_task_does_not_get_complexity_noise():
     advice = get_strategy_advice("debug", {"read_file", "edit_file"}, "修复 a.py")
     assert advice.signals.multi_file is False
     assert "复杂任务" not in advice.prompt
+
+
+def test_related_test_phrase_counts_as_verification() -> None:
+    """“运行相关测试/跑一下测试”也是验证信号，不能被严格短语漏掉。"""
+    assert infer_task_signals("实现后运行相关测试并提交").needs_verification is True
+    assert infer_task_signals("改完跑一下测试").needs_verification is True

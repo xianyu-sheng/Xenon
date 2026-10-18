@@ -95,3 +95,22 @@ def test_multifile_task_injects_plan_nudge(monkeypatch) -> None:
     blob = chr(10).join(str(m.get("content", "")) for m in seen)
     assert "`update_plan`" in blob
     assert "跨文件/多步任务" in blob
+
+
+def test_incomplete_plan_nudges_before_final(monkeypatch) -> None:
+    engine = ReActEngine(["fake/model"], native_fc=False)
+    ctx = AgentContext({})
+    ctx.set("_agent_plan", {"steps": [{"step": "run tests", "status": "pending"}]})
+    warnings: list[str] = []
+    engine.callback.on_warning = warnings.append
+    monkeypatch.setattr(
+        engine,
+        "_call_llm",
+        lambda *a, **k: '{"thought": "done", "final_answer": "ok"}',
+    )
+
+    result = engine.run("do the task", ctx)
+
+    assert result == "ok"
+    assert any("计划仍有未完成步骤" in w for w in warnings)
+    assert any("update_plan" in w for w in warnings)

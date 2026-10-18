@@ -476,7 +476,10 @@ class ReActEngine(BaseEngine):
         plan_signals = (
             strategy.signals if strategy.intent else infer_task_signals(original_user_input)
         )
-        if plan_signals.multi_file and "update_plan" in self.tools:
+        wants_plan = plan_signals.multi_file or (
+            plan_signals.needs_verification and len(original_user_input) >= 160
+        )
+        if wants_plan and "update_plan" in self.tools:
             messages.append({
                 "role": "user",
                 "content": (
@@ -530,6 +533,8 @@ class ReActEngine(BaseEngine):
         max_incomplete_answer_rejections = 3
         # v0.9.5 #163: 每个 run 只提醒一次「改完代码要验证」。
         verification_nudged = False
+        # C11: 计划有未完成步骤时，收尾前提醒一次更新计划（不阻断）。
+        plan_final_nudged = False
         # E-2/C2: 低置信度循环提示按 (reason, loop_length) 去重，并加跨间隔
         # 冷却；循环消失后重置 key（冷却时间不重置）。只影响提示噪音，
         # 不改变终止语义，也不新增校验门。
@@ -736,6 +741,36 @@ class ReActEngine(BaseEngine):
                         )
                         self.callback.on_finish(answer + warning)
                         return answer + warning
+
+                plan = ctx.get("_agent_plan")
+                if plan and not plan_final_nudged:
+                    incomplete = [
+                        step
+                        for step in plan.get("steps", [])
+                        if step.get("status") != "completed"
+                    ]
+                    if incomplete:
+                        plan_final_nudged = True
+                        budget.on_retry()
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "你的 update_plan 还有未完成步骤："
+                                    + "；".join(
+                                        str(s.get("step", "")) for s in incomplete[:5]
+                                    )
+                                    + "。请先调用 update_plan 更新状态：已完成的标为 "
+                                    "completed，确实未做的标为 pending 并在最终回答中说明；"
+                                    "然后再给出 final_answer。"
+                                ),
+                            }
+                        )
+                        self.callback.on_warning(
+                            "计划仍有未完成步骤，要求先更新 update_plan"
+                        )
+                        logger.info("ReAct: 注入一次计划收尾一致性提醒")
+                        continue
 
                 logger.info(
                     f"ReAct 完成，共 {iteration} 次迭代，工具调用 {len(tracker.calls)} 次"

@@ -58,7 +58,7 @@
 | C8 | 智能体在临时仓库使用 `git add -A` | 执行/工作区安全 | ⏳ | 提示词/工具层引导显式路径；无无关改动时不算错误，但应避免 |
 | C9 | 全量测试仍有 7 个 SmartBench Windows 既有失败（symlink/graph snapshot） | 上游既有 | 🧊 非本次引入 | 与基线对比确认；不顺手修无关测试 |
 | C10 | 发布节奏：v0.9.5 后未再发版 | 发布 | ⏳ | 等 C1/C6 与用户核验完成后再决定版本号 |
-| C11 | ReAct 缺少 Codex 式显式 todo/plan 状态（`update_plan`），复杂任务只能靠提示词自律 | 执行/状态 | ✅ 已实现 | 新增 `update_plan` 工具 + 原生数组 schema + 跨文件任务提示；真实跨文件任务 4 次更新，计划从 in_progress 到全部 completed，pytest 通过 |
+| C11 | ReAct 缺少 Codex 式显式 todo/plan 状态（`update_plan`），复杂任务只能靠提示词自律 | 执行/状态 | ✅ 已实现 | 工具 + 原生数组 schema + 跨文件/长任务提示 + 收尾一致性提醒；真实跨文件任务 4 次更新；SmartBench 长任务 3 次更新、计划全部 completed、选 #26、分支/提交、18 tests；完整度见 `docs/EXECUTION_LAYER_GAPS.md` |
 | C12 | 缺少多步任务“完成率”基准，容易凭感觉调提示词/循环 | 度量 | 🟡 v1/v2 完成 | v1、v2 均 5/5；v2 修正浮点断言后仍无区分度；已归档 v2 原始/修正数据；下一步真实长任务或 v3 |
 | C13 | 写/实现任务连续 3 次工具失败会直接 mercy 收束（C4 真实复跑 77s、0 实现） | 执行/失败恢复 | ✅ 已修复 | 写任务改为最多 2 次“换方法”提示，不提前收束；查询任务保留 3 次收敛；真实 #26 从 15 次失败恢复完成 |
 | C14 | DeepSeek 截断后输出 `<｜｜DSML｜｜ calls>`（带空格），旧解析器不认，整轮判格式错误 | 执行/协议 | ✅ 已修复 | 解析器接受 `calls/tool_calls` 及空白变体；`_structured_response_kind` 同步；单测覆盖 |
@@ -80,5 +80,5 @@
 | 2026-10-18 | C12 v1 完成率基准 | 5 任务 × flash/pro 均 5/5；pro LLM 46 vs 58、失败工具 4 vs 11；任务偏易，进入 C16 v2 |
 | 2026-10-18 | C12 v2 完成率基准 | 修正浮点断言后 flash 5/5（58 LLM/69 tools/4 fail/121.7s）、pro 5/5（73/78/10/203.3s）；v2 仍偏易，pro 无优势 |
 | 2026-10-18 | B1–B5 真实复验 | 5/5：退出码 rc=0/3、gh token 兜底、deadline 降级、repo_path/issue/remap、env timeout |
-| 2026-10-18 | C11 update_plan | 真实跨文件 API 任务调用 4 次，计划全部 completed；全量 3405 passed、无新增失败 |
+| 2026-10-18 | C11 update_plan | 真实跨文件任务 4 次更新；SmartBench 长任务 3 次更新、计划全 completed、分支 `fix/issue-26-resource-leak-visibility`、提交 `9dbc648`、18 tests；Xenon 全量 3406 passed、无新增失败 |
 | 2026-10-18 | SmartBench PR #50 | 已推送 `feat/cli-progress-reporter`；PR open、mergeable、CI 7/7 绿；等待合并 |

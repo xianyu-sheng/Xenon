@@ -165,7 +165,7 @@ def infer_task_signals(task_text: str) -> TaskSignals:
     )
     needs_verification = bool(
         re.search(
-            r"运行(?:全量|完整|回归)?测试|跑(?:全量|完整|回归)?测试|验证|回归|test(?:s|ing)?",
+            r"运行[^\s，。;；]{0,6}测试|跑[^\s，。;；]{0,6}测试|验证|回归|test(?:s|ing)?",
             text,
             re.I,
         )
