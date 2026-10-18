@@ -193,7 +193,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 ## 环境变量
 
 <details>
-<summary>共 14 项（点击展开）</summary>
+<summary>共 15 项（点击展开）</summary>
 
 | 变量 | 作用 | 默认 |
 |---|---|---|
@@ -202,6 +202,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 | `XENON_RETRY_BUDGET_MIN/MAX` | 重试轮的步数预算区间 | 10 / 40 |
 | `XENON_GATE_FUSE_THRESHOLD` | 同因结构失败的熔断阈值 | 2 |
 | `XENON_MAX_ITERATIONS` | 单次运行的步数上限（所有引擎统一 120） | 120 |
+| `XENON_ENGINE_TIMEOUT` | 单次运行的引擎绝对时限（秒）；超时返回已完成部分 | 600 |
 | `XENON_MAX_TOKENS` | 单次模型调用的输出上限 | 8192 |
 | `XENON_MAX_CONTINUATIONS` | 截断后的自动续写次数 | 3 |
 | `NO_COLOR` | 标准环境变量；关闭输出与输入提示的颜色 | 未设置 |

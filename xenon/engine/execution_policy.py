@@ -7,6 +7,7 @@ monotonic deadline instead of each receiving a fresh per-request timeout.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -25,6 +26,25 @@ EventSink = Callable[[str, dict[str, Any]], None]
 DEFAULT_ENGINE_TIMEOUT = 600.0
 
 
+def engine_timeout_from_env(default: float = DEFAULT_ENGINE_TIMEOUT) -> float:
+    """Resolve the per-run engine deadline, honoring ``XENON_ENGINE_TIMEOUT``.
+
+    One absolute deadline is shared by the whole engine graph.  600s fits the
+    120-step budget; slower machines, larger models or multi-phase runs can
+    raise it without touching code.  Invalid or non-positive values fall back
+    to the default instead of disabling the deadline.
+    """
+
+    raw = os.environ.get("XENON_ENGINE_TIMEOUT", "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 @dataclass(slots=True)
 class ExecutionPolicy:
     """One retry owner and one absolute deadline for an engine run.
@@ -36,6 +56,7 @@ class ExecutionPolicy:
     """
 
     deadline_at: float | None
+    timeout_seconds: float | None = None
     request_timeout: float = 120.0
     provider_attempts: int = 1
     chain_retries: int = 0
@@ -73,6 +94,7 @@ class ExecutionPolicy:
             raise ValueError("timeout must be positive")
         return cls(
             deadline_at=time.monotonic() + timeout,
+            timeout_seconds=timeout,
             request_timeout=request_timeout or timeout,
             provider_attempts=provider_attempts,
             chain_retries=chain_retries,

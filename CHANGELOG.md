@@ -7,23 +7,23 @@
 
 ### 引擎
 
-- 循环检测的低置信度提示不再无限刷屏：连续 3 次检测到循环后强制收束并汇总当前结果。
-- 恢复会话时记录并校验工作目录：保存时写入 `cwd`，`/resume`、`/load` 在目录变化时提示「旧路径可能失效」，同时注入稳定上下文供模型参考。
-
+- 统一标准步数预算为 **120 步**（与 Claude Code 类代理对齐）：`react` / `plan-execute` 由 40 步、`plan-react` / `plan-reflection` / `react-reflection` 由 24 步统一为 120；引擎类默认值与工厂默认值一致，`XENON_MAX_ITERATIONS` 仍可覆盖。SWE-bench 等评测运行冻结在 120 步（见 `docs/EVAL_RESULTS.md` 预注册），测试 `tests/test_step_budget.py` 锁定该常数。
+- 引擎时限支持 `XENON_ENGINE_TIMEOUT`（秒，默认 600）：超时说明与规划阶段提示使用配置值，不再写死 600。
 - 引擎时限（默认 600s）不再整轮红错：组合引擎在超时时返回「已完成步骤 + 时限说明」，REPL 以警告而非错误展示；输入「继续」可接着做，已完成的操作保持有效。
-
 - 新增「改完代码必须验证」软提醒（#163）：ReAct 在 `final_answer` 前检查「最后一次成功写入之后没有任何测试/构建命令」，命中时注入一次提醒（不阻断、不重复）；系统提示规则 8 同步扩展为所有代码变更，要求先跑「能因改动而失败的测试」。
 - 修复拒绝检测误判：`_detect_denial` 旧实现整段子串匹配，会把「可以，但有几个前提……我无法直接访问 X」判成拒绝并触发备用模型切换；现在只看开头第一句且排除肯定性表态。
-- 统一标准步数预算为 **120 步**（与 Claude Code 类代理对齐）：`react` / `plan-execute` 由 40 步、`plan-react` / `plan-reflection` / `react-reflection` 由 24 步统一为 120；引擎类默认值与工厂默认值一致，`XENON_MAX_ITERATIONS` 仍可覆盖。SWE-bench 等评测运行冻结在 120 步（见 `docs/EVAL_RESULTS.md` 预注册），测试 `tests/test_step_budget.py` 锁定该常数。
+- 循环检测的低置信度提示不再无限刷屏：连续 3 次检测到循环后强制收束并汇总当前结果（查询/研究任务保留原有宽容语义）。
+
+### 会话
+
+- 会话保存时记录工作目录；`/resume`、`/load` 在目录变化时提示旧路径可能失效，并自动重映射工作记忆中仍存在于新目录的路径（历史对话不改写）。
 
 ### 工具
 
-- `git` 工具新增 `repo_path`：从上级目录启动时也能在工作区内的具体仓库执行 `status/commit/push`（路径仍走沙箱校验）。
-- `github_fetch` 的 `fetch_issue`/`fetch_pull` 现在接受 `github_path` 作为编号（`27` / `#27` / `issues/27`），不再退化成「列出 open issues」。
-
 - Windows 命令退出码修复：`2>&1 | Select-Object` 会把原生命令的 stderr 转成 PowerShell error record，导致成功的 `git push` 被误报为失败；`command` 工具现在追加 `$LASTEXITCODE`/`$?` 判定，成功即 0、真失败保留原码。
 - `create_pull_request` / `github_fetch` 的 token 解析新增 `gh auth token` 兜底：机器已用 `gh auth login` 登录但没配 `GITHUB_TOKEN` 时可直接建 PR（缓存，失败降级为空）。
-
+- `git` 工具新增 `repo_path`：从上级目录启动时也能在工作区内的具体仓库执行 `status/commit/push`（路径仍走沙箱校验）。
+- `github_fetch` 的 `fetch_issue`/`fetch_pull` 现在接受 `github_path` 作为编号（`27` / `#27` / `issues/27`），不再退化成「列出 open issues」。
 - `clone_repo` 新增 `target_dir`：可把仓库直接克隆到工作区指定目录；若目标已是 git checkout，只做只读校验、绝不 fetch/merge 用户仓库。
 - 新增 `create_pull_request` 工具（GitHub API 建 PR；REPL 中按 CRITICAL 审批）；`branch` 为 head，`base_branch` 省略时自动探测默认分支。
 - 新增 `XENON_EXTRA_ROOTS`：显式追加文件工具允许读写的根目录，解决「从 A 目录启动、仓库在 D 盘」的越界问题（默认行为不变，越界报错会提示该变量）。
@@ -31,10 +31,11 @@
 ### 评测
 
 - SWE-bench 适配器新增 `XENON_EVAL_APPLY_TEST_PATCH` 开关（默认 `1` 保持现有行为）：设 `0` 时不在解题阶段向 agent 工作树应用官方 test patch，从而回到与官方协议、与旧盲测基准一致的「测试不可见」协议。
-- 首个 30 例官方判定结果录入 `docs/EVAL_RESULTS.md`（25 resolved / 3 unresolved / 2 empty_patch，测试可见变体）；同清单的盲测重跑（`9d43c7d` 源码、同配置）已启动。
+- 30 例盲测 3×2 结果与零重叠留出集的污染判定已录入 `docs/EVAL_RESULTS.md`（9.10–9.12）；复现步骤与验收标准见 `docs/REPRODUCE_SWEBENCH.md`。
 
 ### 文档
 
+- README 评测章节前移并补充首屏成绩摘要；新增 `docs/REPRODUCE_SWEBENCH.md`（协议、环境、验收清单、7 个坑与结果模板）。
 - README（中/英）结构优化：新增「快速开始 / 文档索引 / 平台支持 / 参与贡献」章节，文件、文档与安装链接统一到 v0.9.4；英文版补齐工具输出威胁模型边界说明（与中文版对齐）。
 - README 视觉升级：居中 Hero（跑者动画 + 终端交付示意 SVG，由 `scripts/brand` 管线生成）、核心承诺告警框、特性表格；环境变量改为折叠展示。
 

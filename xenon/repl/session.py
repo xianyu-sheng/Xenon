@@ -13,6 +13,7 @@ v0.4.0 Step 14: 新增 auto_save / get_auto_session / cleanup_expired_sessions�
 from __future__ import annotations
 
 import json
+import os
 import time as _time
 from datetime import datetime, timezone
 from functools import partial
@@ -195,6 +196,51 @@ def _session_relevance_score(session: dict[str, Any], *, now: float) -> float:
 def _ensure_sessions_dir() -> Path:
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     return SESSIONS_DIR
+
+
+def remap_workspace_paths(
+    memory: dict[str, Any], *, old_cwd: str, new_cwd: str
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Rewrite working-memory paths that still exist under the new workspace.
+
+    Resuming a session from another checkout used to leave the model with
+    dead absolute paths.  Instead of rewriting conversation history (which
+    may reference paths intentionally), only the structured working memory is
+    remapped, and only when the same relative path exists under the new root.
+    Returns (remapped memory, {old: new}) for the visible notice.
+    """
+
+    mapping: dict[str, str] = {}
+    old_norm = os.path.normcase(os.path.normpath(old_cwd))
+    new_root = Path(new_cwd)
+
+    def _remap_one(value: str) -> str:
+        try:
+            norm = os.path.normcase(os.path.normpath(value))
+        except (OSError, ValueError):
+            return value
+        if norm != old_norm and not norm.startswith(old_norm + os.sep):
+            return value
+        try:
+            relative = os.path.relpath(value, old_cwd)
+        except ValueError:
+            return value
+        candidate = new_root / relative
+        if candidate.exists():
+            mapping[value] = str(candidate)
+            return str(candidate)
+        return value
+
+    def _walk(value: Any) -> Any:
+        if isinstance(value, str):
+            return _remap_one(value)
+        if isinstance(value, list):
+            return [_walk(item) for item in value]
+        if isinstance(value, dict):
+            return {key: _walk(item) for key, item in value.items()}
+        return value
+
+    return _walk(dict(memory or {})), mapping
 
 
 def cwd_change_notice(

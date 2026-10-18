@@ -27,9 +27,9 @@ import httpx
 from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
 from xenon.engine.execution_policy import (
-    DEFAULT_ENGINE_TIMEOUT,
     EngineDeadlineExceeded,
     ExecutionPolicy,
+    engine_timeout_from_env,
 )
 from xenon.repl.model_pool import FAILURE_THRESHOLD  # v0.5.3
 from xenon.utils.llm_client import (
@@ -175,7 +175,7 @@ class BaseEngine(ABC):
         # replace this unbounded interactive policy with one absolute deadline
         # shared by the whole engine graph.
         self.execution_policy = ExecutionPolicy.from_timeout(
-            DEFAULT_ENGINE_TIMEOUT,
+            engine_timeout_from_env(),
             request_timeout=120.0,
             chain_retries=2,
             event_sink=_route_policy_events,

@@ -12,8 +12,8 @@ from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
 from xenon.engine.execution_evidence import ExecutionEvidence, workspace_root_for
 from xenon.engine.execution_policy import (
-    DEFAULT_ENGINE_TIMEOUT,
     EngineDeadlineExceeded,
+    engine_timeout_from_env,
 )
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.react_engine import ReActEngine
@@ -33,7 +33,7 @@ def _deadline_note() -> str:
     """User-facing tail for a run that stopped at the engine deadline."""
 
     return (
-        f"\n\n⏱ 已达到引擎时限（{DEFAULT_ENGINE_TIMEOUT:.0f} 秒），本轮在此收束。"
+        f"\n\n⏱ 已达到引擎时限（{engine_timeout_from_env():.0f} 秒），本轮在此收束。"
         "以上内容来自已完成步骤与真实工具结果；未完成的步骤没有执行。"
         "如需继续，直接输入「继续」。"
     )
@@ -334,7 +334,7 @@ class PlanReactEngine(SteeringMixin):
             return self._finalize_plan_react(
                 ctx,
                 "⏱ 引擎时限（"
-                f"{DEFAULT_ENGINE_TIMEOUT:.0f} 秒）在规划阶段耗尽，尚未执行任何步骤。"
+                f"{engine_timeout_from_env():.0f} 秒）在规划阶段耗尽，尚未执行任何步骤。"
                 "输入「继续」可接着做，或拆小任务后重试。",
             )
         except Exception as exc:

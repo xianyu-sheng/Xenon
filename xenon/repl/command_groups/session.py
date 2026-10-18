@@ -213,6 +213,16 @@ def _cmd_load(
     working_memory = extra.get("working_memory", {})
     if not isinstance(working_memory, dict):
         working_memory = {}
+    from xenon.repl.session import remap_workspace_paths
+
+    saved_cwd = extra.get("cwd")
+    remap_note = ""
+    if isinstance(saved_cwd, str) and saved_cwd and saved_cwd != str(Path.cwd()):
+        working_memory, remapped_paths = remap_workspace_paths(
+            working_memory, old_cwd=saved_cwd, new_cwd=str(Path.cwd())
+        )
+        if remapped_paths:
+            remap_note = f"\n  已自动映射 {len(remapped_paths)} 个仍存在的旧路径。"
     context_store = data.get("context", {})
     if not isinstance(context_store, dict):
         context_store = {}
@@ -255,7 +265,7 @@ def _cmd_load(
 
     from xenon.repl.session import cwd_change_notice
 
-    cwd_notice = cwd_change_notice(extra)
+    cwd_notice = cwd_change_notice(extra) + remap_note
     if cwd_notice and repl is not None:
         try:
             repl.ctx_mgr.set_context_message("resume_cwd", cwd_notice, stable=True)
@@ -389,6 +399,16 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         working_memory = extra.get("working_memory", {})
         if not isinstance(working_memory, dict):
             working_memory = {}
+        from xenon.repl.session import remap_workspace_paths
+
+        saved_cwd = extra.get("cwd")
+        remap_note = ""
+        if isinstance(saved_cwd, str) and saved_cwd and saved_cwd != str(Path.cwd()):
+            working_memory, remapped_paths = remap_workspace_paths(
+                working_memory, old_cwd=saved_cwd, new_cwd=str(Path.cwd())
+            )
+            if remapped_paths:
+                remap_note = f"\n  已自动映射 {len(remapped_paths)} 个仍存在的旧路径。"
         model_config = data.get("model_config", {})
         if not isinstance(model_config, dict):
             model_config = {}
@@ -433,7 +453,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
 
         from xenon.repl.session import cwd_change_notice
 
-        cwd_notice = cwd_change_notice(extra)
+        cwd_notice = cwd_change_notice(extra) + remap_note
         if cwd_notice:
             try:
                 repl.ctx_mgr.set_context_message("resume_cwd", cwd_notice, stable=True)
