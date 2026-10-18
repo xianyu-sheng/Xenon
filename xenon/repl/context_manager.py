@@ -575,7 +575,98 @@ class ContextManager:
         """
         with self._lock:
             history_copy = list(self.history)
+        return self._messages_from_turns(
+            history_copy,
+            include_working_memory=include_working_memory,
+            include_context_messages=include_context_messages,
+        )
 
+    # Lightweight turns must not inherit project/tool history from an unrelated
+    # previous task.  Report/query/chat turns get either no history (standalone)
+    # or only the recent conversational turns (explicit references such as
+    # "刚才/继续/那/再").
+    _LIGHTWEIGHT_HISTORY_INTENTS = frozenset({"chat", "query", "write_report"})
+    _CONTEXTUAL_REFERENCE_RE = re.compile(
+        r"(?:刚才|刚刚|上述|上面|前面|之前|上一个|上一条|上轮|继续|接着|"
+        r"结果|这个|那个|它|该|这些|那些|同样|那|再|还|换成|其他|另|"
+        r"刚才的|前面的)",
+        re.IGNORECASE,
+    )
+    _MAX_LIGHTWEIGHT_USER_TURNS = 2
+    _MAX_LIGHTWEIGHT_MESSAGES = 6
+    _MAX_LIGHTWEIGHT_ASSISTANT_CHARS = 1200
+
+    def get_prompt_messages(
+        self,
+        *,
+        intent: str | None = None,
+        current_user_input: str | None = None,
+        continuation: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Return the history view appropriate for the current intent.
+
+        Full history is retained for coding/project-document tasks.  Chat,
+        query and data-report turns use a projection: tool observations and
+        long prior artifacts are dropped; when the user did not explicitly
+        refer to previous work, even the conversational history is omitted.
+        This is a prompt projection, not a gate: the stored history and the
+        evidence layer remain untouched.
+        """
+        if intent not in self._LIGHTWEIGHT_HISTORY_INTENTS:
+            return self.get_messages()
+
+        text = current_user_input or ""
+        contextual = bool(
+            continuation
+            or (text and self._CONTEXTUAL_REFERENCE_RE.search(text))
+        )
+        if not contextual:
+            return []
+
+        with self._lock:
+            history_copy = list(self.history)
+        projected: list[ConversationTurn] = []
+        user_turns = 0
+        for turn in reversed(history_copy):
+            if turn.role not in {"user", "assistant"}:
+                continue
+            if turn.turn_type in {"tool_call", "tool_result"}:
+                continue
+            if (turn.metadata or {}).get("api_message"):
+                # Native provider tool-call/result payload; not needed for a
+                # lightweight follow-up and potentially enormous.
+                continue
+            if (
+                current_user_input
+                and turn.role == "user"
+                and turn.content == current_user_input
+            ):
+                continue
+            if turn.role == "user":
+                user_turns += 1
+                if user_turns > self._MAX_LIGHTWEIGHT_USER_TURNS:
+                    break
+            if (
+                turn.role == "assistant"
+                and len(turn.content) > self._MAX_LIGHTWEIGHT_ASSISTANT_CHARS
+            ):
+                # A long previous answer is usually a document; do not inject
+                # it into a new lightweight query.
+                continue
+            projected.append(turn)
+            if len(projected) >= self._MAX_LIGHTWEIGHT_MESSAGES:
+                break
+        projected.reverse()
+        return self._messages_from_turns(projected)
+
+    def _messages_from_turns(
+        self,
+        history_copy: list[ConversationTurn],
+        *,
+        include_working_memory: bool = False,
+        include_context_messages: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Convert a selected turn list to API-safe messages."""
         history_messages: list[dict[str, Any]] = []
         for turn in history_copy:
             api_message = (turn.metadata or {}).get("api_message")

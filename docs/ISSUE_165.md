@@ -40,7 +40,21 @@
 - `evals/reports/issue165_baseline.json`
 - `evals/reports/issue165_fixed.json`
 
-## 尚未完成
+## 多轮历史投影
 
-历史注入仍是无差别全量注入：上一轮项目文档/工具结果会进入天气轮。
-这属于下一步“上下文预算/历史投影”，不在本次文档语义修复范围内。
+多轮基线先塞入上一轮项目文档、`read_file xenon/utils/weather.py` 工具结果和
+`DEVELOPER_HANDOVER.md` 说明，再问天气报告。
+
+结果：
+
+- `write_report` 无上下文指代时，注入历史为 **0 条**；
+- 报告 742 字符，不含 `DEVELOPER_HANDOVER`、`安装`、`参数`、`weather.py`；
+- 最终回答 303 字符，不含验证段；
+- 报告写入不再触发代码测试提醒。
+
+证据：`evals/reports/issue165_multiturn.json`
+
+## 范围边界
+
+本次只对 `chat/query/write_report` 做轻历史投影；代码/调试/项目文档任务
+仍保留完整历史。工具输出预算、代码任务的上下文压缩是后续项。

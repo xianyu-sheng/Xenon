@@ -509,9 +509,24 @@ class BaseEngine(ABC):
         返回非 system 消息（system 由各引擎自行注入自己的 system_prompt）。
         """
         if self._ctx_mgr is not None:
-            messages = [
-                m for m in self._ctx_mgr.get_messages() if m.get("role") != "system"
-            ]
+            contract = context.get("_turn_contract") if context else None
+            intent = getattr(contract, "intent", None)
+            continuation = bool(getattr(contract, "continuation", False))
+            prompt_messages = getattr(self._ctx_mgr, "get_prompt_messages", None)
+            if callable(prompt_messages):
+                messages = [
+                    m
+                    for m in prompt_messages(
+                        intent=intent,
+                        current_user_input=current_user_input,
+                        continuation=continuation,
+                    )
+                    if m.get("role") != "system"
+                ]
+            else:
+                messages = [
+                    m for m in self._ctx_mgr.get_messages() if m.get("role") != "system"
+                ]
             # The REPL stores the current user turn before routing. Engines add
             # that input themselves, so remove only an exact trailing duplicate.
             if (
