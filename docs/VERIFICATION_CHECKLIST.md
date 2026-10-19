@@ -66,7 +66,7 @@
 | C17 | #165 简单查询/报告文档被当成技术文档，内容冗杂并触发无关验证说明 | 输出/上下文 | ✅ 已修复 | `write_report` + 报告模板/策略 + 文档写入不触发代码验证；多轮回放 `PROMPT_HISTORY=[]`，报告 742 字符无旧项目内容，最终回答 303 字符 |
 | C18 | 工具完整结果只在内存，会话/压缩无法回查；全局 max_chars 只能截断 | 执行/存储 | 🟡 真实 save/resume 待验 | 缓存/`result_id`/结构化视图/回查/哈希锚定；native、`/compact`、自动归档、非 native in-run 均 0-LLM；#27 0 次上下文截断；真实 `/save→/resume` 未手测 |
 | C19 | `/resume` 只能看到最近一次自动保存；启动新对话会覆盖旧 `_auto` | 会话/持久化 | ✅ 已修复 | `conversation_id` + `_auto` 轮转为 `auto-*.json`；旧会话成为普通可恢复会话；`/resume`/启动选择器显示 `[自动保存]`；单元测试覆盖轮转/同名不轮转/显示 |
-| C20 | “实现 #22”这类具体 issue 交付被当成 `write_code` 仅回答/只读，且不主动克隆目标仓库 | 执行/权限 | 🟡 路由已修，端到端待复验 | `task_delivery` 信号把 issue/#/PR 交付提升到 EXECUTE；write_code 策略含 `clone_repo` 并要求落地；真实 #22 已克隆、写文件、10 个 HTML 测试通过、103 passed；但计划仍过期、未提交 |
+| C20 | “实现 #22”这类具体 issue 交付被当成 `write_code` 仅回答/只读，且不主动克隆目标仓库 | 执行/权限 | ✅ 交付已合并，产品链路待复验 | `task_delivery` 提升 EXECUTE；write_code 含 clone 指引；PR [#51](https://github.com/xianyu-sheng/SmartBench/pull/51) 已合并、7/7 检查全绿、Issue #22 已关闭；真实 TaskState 自主收尾仍未复验 |
 | C21 | `继续` 只靠模型记忆，TaskState/交付要求跨回合丢失 | 执行/状态 | 🟡 已实现，真实长任务待验 | `xenon/engine/task_state.py`：目标/计划/产物/测试/commit/PR 持久化在 AgentContext；`继续` 恢复执行级别与交付要求；ReAct final 前对缺失 verify/commit/PR 最多两次真实推进提醒；单元测试覆盖状态折叠/交付检查/任务完成 |
 | C15 | 只读任务写 `.xenon_tmp/*.ps1` 触发“改完代码要验证”，模型偏离任务去解释没有测试 | 执行/提醒 | ✅ 已真实验证 | 只读 issue 列表任务：无验证提醒，最终正确列出 25 个 issue；仍会写临时脚本/尝试 `$()`（C4） |
 
@@ -101,5 +101,6 @@
 | 2026-10-19 | /resume 自动会话轮转 | `_auto` 按 `conversation_id` 归档为 `auto-*.json`；同名会话继续覆盖；`/resume` 列表显示 `[上次自动保存]`/`[自动保存]`；3 个新测试通过；Xenon 全量 3450 passed、无新增失败 |
 | 2026-10-19 | issue 交付任务路由 + #22 真实复验 | “实现#22”从 ANSWER_ONLY/只读提升为 EXECUTE；真实任务克隆 SmartBench、写 HTML 报告、`tests/test_html_report.py` 10 passed、相关 103 passed、ruff 通过；126 工具/11 失败/515s；计划仍 4 项未更新、未提交 |
 | 2026-10-19 | TaskState + 交付契约 | 新增持久 TaskState、`继续` 恢复、ReAct 交付提醒；Xenon 全量 3450 passed、无新增失败；REPL 集成测试覆盖 `继续` 恢复执行级别/交付要求；真实长任务验收待跑 |
+| 2026-10-19 | SmartBench PR #51 合并 | PR #51 合并提交 `02d9eb9`，7/7 checks 绿；Issue #22 关闭；本地 main 已拉齐，分支已清理 |
 | 2026-10-18 | C11 #27 计划复验 | 第一轮 2 次更新、结束仍有 pending（收尾提醒未促成更新）；第二轮 3 次更新、全部 completed；说明计划收尾仍依赖模型配合 |
 | 2026-10-18 | SmartBench PR #50 | 已推送 `feat/cli-progress-reporter`；PR open、mergeable、CI 7/7 绿；等待合并 |
