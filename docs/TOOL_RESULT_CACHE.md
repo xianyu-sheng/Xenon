@@ -55,9 +55,9 @@ Phase 1 先补基础设施：每次工具调用写一份**完整结果缓存**�
 
 ## 当前边界
 
-- 无自定义摘要的 `/compact`、自动归档、native tool block 已 0-LLM；
-  `BaseEngine._maybe_compact_messages` 在非 native 路径调用
-  `ContextManager.compact()` 时仍可能走原 LLM 摘要，需下一步彻底切换。
+- 无自定义摘要的 `/compact`、自动归档、native tool block、非 native
+  in-run 压缩均已 0-LLM；只有直接调用 `ContextManager.compact()` 且不传
+  summary 的外部 API 仍可能走原 LLM 摘要。
 - raw 文件保留完整输出，因此本地磁盘可能包含命令日志中的敏感信息；
   缓存是本机 0600 文件，不是可分享的会话导出。
 - 缓存不是证据：provenance、成功/失败状态、原始工具调用仍由证据层负责。
@@ -78,7 +78,17 @@ Phase 1 先补基础设施：每次工具调用写一份**完整结果缓存**�
 说明：工具调用下降部分来自模型随机性，不能单独归因于缓存；但
 “0 次上下文截断 + 完整结果可回查”是结构化缓存直接带来的可观察差异。
 
+## C11 真实复验
+
+`#27` 第三次复跑（`f86cbcf` + SmartBench `646c6c7`）：
+
+- 125 工具 / 4 失败 / 358s / 0 安全失败
+- `update_plan` 3 次，最终 **6/6 completed**
+- 无“计划未完成”警告；两次收尾提醒 + 周期性计划提醒生效
+- 与上一轮 109/8/249s（1 次计划后过期）相比，工具数上升，
+  但计划收尾稳定；两条样本都无上下文截断
+
 ## 下一步
 
-彻底切换 `_maybe_compact_messages` 的非 native 路径，并用更多任务验证
-截断/调用数/完成率；C11 的计划收尾仍未解决。
+用真实 `/save → /resume → tool_result_read` 手测恢复链路；再补更多
+长任务样本，避免用单条 #27 代表完成率。
