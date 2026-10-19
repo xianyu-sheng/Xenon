@@ -618,12 +618,91 @@ class BaseEngine(ABC):
             tmp = ContextManager(max_tokens=self._context_window())
             for m in preprocessed:
                 tmp.add_message(m.get("role", "user"), m.get("content", ""))
-            tmp.compact(model_priority=self.model_priority or None)
+            summary = self._structured_inrun_summary(preprocessed)
+            tmp.compact(summary=summary, model_priority=None)
             compacted = tmp.get_messages()
             return compacted if compacted else messages
         except Exception as e:  # noqa: BLE001 — 压缩绝不能中断主循环
             logger.warning(f"in-run 压缩失败（已忽略，沿用原 messages）: {e}")
             return messages
+
+    @staticmethod
+    def _structured_inrun_summary(
+        messages: list[dict[str, Any]],
+        *,
+        budget: int = 1600,
+    ) -> str:
+        """Deterministic summary for non-native in-run compaction.
+
+        This path has plain role/content messages, not native tool blocks.  It
+        still preserves tool result ids and status; it never calls an LLM.
+        """
+        from xenon.engine.structured_compactor import (
+            extract_result_id,
+            summarize_observation_text,
+        )
+
+        tool_names: dict[str, str] = {}
+        for message in messages:
+            for call in message.get("tool_calls") or []:
+                if isinstance(call, dict):
+                    call_id = str(call.get("id") or "")
+                    fn = call.get("function") or {}
+                    if call_id and isinstance(fn, dict):
+                        tool_names[call_id] = str(fn.get("name") or "tool")
+
+        goals: list[str] = []
+        tool_lines: list[str] = []
+        failures: list[str] = []
+        conclusions: list[str] = []
+        for message in messages:
+            role = message.get("role")
+            content = str(message.get("content") or "")
+            if role == "user":
+                if content.startswith("Observation:"):
+                    role = "tool"
+                else:
+                    if content.strip():
+                        goals.append(content.strip()[:180])
+                    continue
+            if role == "assistant":
+                if content.strip():
+                    conclusions.append(content.strip()[:260])
+                continue
+            if role != "tool":
+                continue
+            tool = tool_names.get(str(message.get("tool_call_id") or ""), "tool")
+            summary = summarize_observation_text(content, max_chars=260)
+            rid = extract_result_id(content)
+            failed = ("失败" in summary) or ("FAIL" in summary)
+            suffix = f" result_id={rid}" if rid else ""
+            line = f"- {tool}{' [FAIL]' if failed else ''}{suffix}: {summary[:340]}"
+            if failed:
+                failures.append(line)
+            elif len(tool_lines) < 24:
+                tool_lines.append(line)
+
+        lines = ["## 结构化上下文（0-LLM 压缩）"]
+        if goals:
+            chosen = goals[-3:]
+            if len(goals) > 3 and goals[0] not in chosen:
+                chosen = [goals[0]] + goals[-2:]
+            lines.append("### 用户目标（原始 + 最近）")
+            lines.extend(f"- {goal}" for goal in chosen)
+        if tool_lines:
+            lines.append("### 工具结果（可回查）")
+            lines.extend(tool_lines[-12:])
+        if failures:
+            lines.append("### 失败/未解决")
+            lines.extend(failures[-8:])
+        if conclusions:
+            lines.append("### 最近结论")
+            lines.extend(f"- {item}" for item in conclusions[-2:])
+
+        text = "\n".join(lines)
+        if len(text) > budget:
+            text = text[:budget] + "\n…（结构化摘要已按预算截断；详情按 result_id 回查）"
+        return text
 
     @staticmethod
     def _split_protocol_blocks(

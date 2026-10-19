@@ -1676,8 +1676,11 @@ class ContextManager:
 
         lines = ["## 结构化上下文（0-LLM 压缩）"]
         if goals:
-            lines.append("### 用户目标（最近）")
-            lines.extend(f"- {goal}" for goal in goals[-3:])
+            chosen = goals[-3:]
+            if len(goals) > 3 and goals[0] not in chosen:
+                chosen = [goals[0]] + goals[-2:]
+            lines.append("### 用户目标（原始 + 最近）")
+            lines.extend(f"- {goal}" for goal in chosen)
         if tool_lines:
             lines.append("### 工具结果（可回查）")
             lines.extend(tool_lines[-12:])

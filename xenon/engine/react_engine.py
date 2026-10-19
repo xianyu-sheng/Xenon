@@ -533,8 +533,12 @@ class ReActEngine(BaseEngine):
         max_incomplete_answer_rejections = 3
         # v0.9.5 #163: 每个 run 只提醒一次「改完代码要验证」。
         verification_nudged = False
-        # C11: 计划有未完成步骤时，收尾前提醒一次更新计划（不阻断）。
-        plan_final_nudged = False
+        # C11: 计划有未完成步骤时，收尾前最多提醒两次；仍不更新则
+        # 在最终回答后附上明确警告（不阻断，但不再静默接受过期计划）。
+        plan_final_nudges = 0
+        max_plan_final_nudges = 2
+        plan_reminder_count = 0
+        last_plan_reminder_iteration = 0
         # E-2/C2: 低置信度循环提示按 (reason, loop_length) 去重，并加跨间隔
         # 冷却；循环消失后重置 key（冷却时间不重置）。只影响提示噪音，
         # 不改变终止语义，也不新增校验门。
@@ -611,6 +615,40 @@ class ReActEngine(BaseEngine):
                 if synth is not None:
                     messages.append({"role": "user", "content": synth[1]})
                     logger.debug(f"ReAct 合成提示 [{synth[0]}]")
+
+            # C11: 计划已存在但长时间未更新时，给一次轻量状态提醒。
+            # 这只是 prompt，不是门；不改变终止语义。
+            plan = ctx.get("_agent_plan") if ctx is not None else None
+            if (
+                plan
+                and iteration > 1
+                and plan_reminder_count < 2
+                and iteration - last_plan_reminder_iteration >= 8
+                and not budget.is_converge_phase()
+            ):
+                incomplete = [
+                    step
+                    for step in plan.get("steps", [])
+                    if step.get("status") != "completed"
+                ]
+                if incomplete:
+                    last_plan_reminder_iteration = iteration
+                    plan_reminder_count += 1
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "计划状态提醒：以下步骤仍未完成："
+                                + "；".join(
+                                    f"{s.get('step', '')}({s.get('status', 'pending')})"
+                                    for s in incomplete[:6]
+                                )
+                                + "。若已完成请立即调用 update_plan 更新状态；"
+                                "不要等到最后才补记。"
+                            ),
+                        }
+                    )
+                    logger.info("ReAct: 注入计划状态提醒 (%s/2)", plan_reminder_count)
 
             # 收束阶段不再把工具 schema 交给模型。此前预算门控虽然会
             # 拦截探索工具，但模型仍能持续生成原生 tool_calls，形成
@@ -743,34 +781,62 @@ class ReActEngine(BaseEngine):
                         return answer + warning
 
                 plan = ctx.get("_agent_plan")
-                if plan and not plan_final_nudged:
-                    incomplete = [
-                        step
-                        for step in plan.get("steps", [])
-                        if step.get("status") != "completed"
-                    ]
-                    if incomplete:
-                        plan_final_nudged = True
-                        budget.on_retry()
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "你的 update_plan 还有未完成步骤："
-                                    + "；".join(
-                                        str(s.get("step", "")) for s in incomplete[:5]
-                                    )
-                                    + "。请先调用 update_plan 更新状态：已完成的标为 "
-                                    "completed，确实未做的标为 pending 并在最终回答中说明；"
-                                    "然后再给出 final_answer。"
-                                ),
-                            }
+                incomplete = [
+                    step
+                    for step in (plan or {}).get("steps", [])
+                    if step.get("status") != "completed"
+                ]
+                if plan and incomplete and plan_final_nudges < max_plan_final_nudges:
+                    plan_final_nudges += 1
+                    budget.on_retry()
+                    final_nudge = plan_final_nudges >= max_plan_final_nudges
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "你的 update_plan 还有未完成步骤："
+                                + "；".join(
+                                    f"{s.get('step', '')}({s.get('status', 'pending')})"
+                                    for s in incomplete[:6]
+                                )
+                                + "。请先调用 update_plan 更新状态：已完成的标为 "
+                                "completed；确实未做的保留 pending，并在最终回答中"
+                                "明确说明未完成原因。"
+                                + (
+                                    "这是最后一次计划收尾提醒；若不更新，最终回答会"
+                                    "附带未完成计划警告。"
+                                    if final_nudge
+                                    else "更新后再给出 final_answer。"
+                                )
+                            ),
+                        }
+                    )
+                    self.callback.on_warning(
+                        f"计划仍有未完成步骤，要求更新 update_plan "
+                        f"({plan_final_nudges}/{max_plan_final_nudges})"
+                    )
+                    logger.info(
+                        "ReAct: 注入计划收尾一致性提醒 (%s/%s)",
+                        plan_final_nudges,
+                        max_plan_final_nudges,
+                    )
+                    continue
+                if plan and incomplete:
+                    plan_warning = (
+                        "\n\n⚠️ **计划未完成**：update_plan 仍有 "
+                        f"{len(incomplete)} 个步骤未标记 completed："
+                        + "；".join(
+                            str(s.get("step", "")) for s in incomplete[:6]
                         )
-                        self.callback.on_warning(
-                            "计划仍有未完成步骤，要求先更新 update_plan"
-                        )
-                        logger.info("ReAct: 注入一次计划收尾一致性提醒")
-                        continue
+                        + "。模型未在收尾时更新计划；以上步骤不应视为已完成。"
+                    )
+                    final_answer += plan_warning
+                    self.callback.on_warning(
+                        "模型两次忽略计划收尾提醒；最终回答已附加未完成计划警告"
+                    )
+                    logger.warning(
+                        "ReAct: 计划收尾提醒用尽，最终回答附加未完成警告"
+                    )
 
                 logger.info(
                     f"ReAct 完成，共 {iteration} 次迭代，工具调用 {len(tracker.calls)} 次"

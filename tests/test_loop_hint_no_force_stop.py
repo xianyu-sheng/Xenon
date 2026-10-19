@@ -115,5 +115,6 @@ def test_loop_hints_respect_cooldown_across_changing_signatures(tmp_path, monkey
 
     loop_warnings = [w for w in warnings if "潜在循环" in w]
     assert "强制收束" not in result
-    # 12 步 / 冷却 4：最多约 3-4 次，而不是每步一次。
-    assert 2 <= len(loop_warnings) <= 4
+    # 12 步 / 冷却 4：基础约 3 次。结构化压缩现在会成功并为 F2 奖励
+    # +2 轮/次，最多再延 6 步，因此上限放宽到 5 次；仍远少于每步一次。
+    assert 2 <= len(loop_warnings) <= 5

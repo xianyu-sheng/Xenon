@@ -111,6 +111,8 @@ def test_incomplete_plan_nudges_before_final(monkeypatch) -> None:
 
     result = engine.run("do the task", ctx)
 
-    assert result == "ok"
+    assert result.startswith("ok")
+    assert "计划未完成" in result
     assert any("计划仍有未完成步骤" in w for w in warnings)
     assert any("update_plan" in w for w in warnings)
+    assert any("两次忽略" in w for w in warnings)
