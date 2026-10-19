@@ -116,3 +116,56 @@ def test_incomplete_plan_nudges_before_final(monkeypatch) -> None:
     assert any("计划仍有未完成步骤" in w for w in warnings)
     assert any("update_plan" in w for w in warnings)
     assert any("两次忽略" in w for w in warnings)
+
+
+def test_missing_delivery_nudges_before_accepting_final(monkeypatch) -> None:
+    """A write task cannot end silently without its required verification."""
+    from xenon.engine.task_state import TaskState
+
+    engine = ReActEngine(["fake/model"], native_fc=False)
+    ctx = AgentContext({})
+    state = TaskState(
+        objective="implement #22",
+        execution_level=3,
+        required=["verify"],
+    )
+    ctx.set("_task_state", state.to_dict())
+    warnings: list[str] = []
+    engine.callback.on_warning = warnings.append
+    monkeypatch.setattr(
+        engine,
+        "_call_llm",
+        lambda *a, **k: '{"thought": "done", "final_answer": "ok"}',
+    )
+
+    result = engine.run("do the task", ctx)
+
+    assert "任务交付未完成" in result
+    assert any("任务交付未完成" in w for w in warnings)
+    assert ctx.get("_task_state")["status"] == "active"
+
+
+def test_completed_delivery_marks_task_complete_without_nudge(monkeypatch) -> None:
+    from xenon.engine.task_state import TaskState
+
+    engine = ReActEngine(["fake/model"], native_fc=False)
+    ctx = AgentContext({})
+    state = TaskState(
+        objective="implement #22",
+        execution_level=3,
+        required=["verify", "commit"],
+        tests=["pytest -q"],
+        commit="abc1234",
+    )
+    ctx.set("_task_state", state.to_dict())
+    warnings: list[str] = []
+    engine.callback.on_warning = warnings.append
+    monkeypatch.setattr(
+        engine, "_call_llm", lambda *a, **k: '{"thought": "done", "final_answer": "ok"}'
+    )
+
+    result = engine.run("do the task", ctx)
+
+    assert result == "ok"
+    assert not any("任务交付未完成" in w for w in warnings)
+    assert ctx.get("_task_state")["status"] == "completed"

@@ -10,11 +10,17 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
+from dataclasses import replace
 from typing import Any
 
 from rich.prompt import Prompt
 
 from xenon.engine.registry import ENGINE_REGISTRY
+from xenon.engine.task_state import (
+    TaskState,
+    required_delivery_for,
+)
 from xenon.repl.execution_policy import (
     ExecutionLevel,
     ExecutionPolicy,
@@ -169,6 +175,72 @@ class TurnFlowMixin:
             console.print(
                 "[dim cyan]📋 计划模式：本轮只产出方案，写/执行需用户确认[/dim cyan]"
             )
+        # ── Durable task state: resume an active task, or start a new one ──
+        task_state = TaskState.from_context(self.agent_context)
+        continued = bool(
+            task_state is not None
+            and task_state.active
+            and self._is_task_continuation(user_input, pending)
+        )
+        if continued:
+            target_level = max(
+                int(execution_policy.level), int(task_state.execution_level)
+            )
+            if target_level > int(execution_policy.level):
+                operations = set(turn_contract_obj.operations)
+                if target_level >= int(ExecutionLevel.READ_ONLY):
+                    operations.add("read")
+                if target_level >= int(ExecutionLevel.WRITE):
+                    operations.add("write")
+                if target_level >= int(ExecutionLevel.EXECUTE):
+                    operations.add("execute")
+                turn_contract_obj = replace(
+                    turn_contract_obj,
+                    level=ExecutionLevel(target_level),
+                    proposed_level=ExecutionLevel(target_level),
+                    operations=frozenset(operations),
+                    reason=(
+                        turn_contract_obj.reason
+                        + "；延续未完成任务，恢复上轮执行级别"
+                    ),
+                )
+                execution_policy = turn_contract_obj.to_execution_policy()
+            task_state.execution_level = target_level
+            task_state.required = sorted(
+                set(task_state.required)
+                | set(
+                    required_delivery_for(
+                        f"{task_state.objective}\n{user_input}",
+                        level=target_level,
+                        write_patterns=turn_contract_obj.signals.write_patterns,
+                        intent=turn_contract_obj.intent,
+                    )
+                )
+            )
+            task_state.updated_at = time.time()
+            self.agent_context.set("_task_state", task_state.to_dict())
+            console.print(
+                "[dim cyan]⏩ 延续未完成任务："
+                f"{task_state.objective[:80]}[/dim cyan]"
+            )
+        else:
+            write_task = int(execution_policy.level) >= int(ExecutionLevel.WRITE) or (
+                "task_delivery" in turn_contract_obj.signals.write_patterns
+            )
+            if write_task:
+                task_state = TaskState(
+                    objective=user_input,
+                    intent=turn_contract_obj.intent,
+                    execution_level=int(execution_policy.level),
+                    required=required_delivery_for(
+                        user_input,
+                        level=int(execution_policy.level),
+                        write_patterns=turn_contract_obj.signals.write_patterns,
+                        intent=turn_contract_obj.intent,
+                    ),
+                )
+                self.agent_context.set("_task_state", task_state.to_dict())
+
         # 结构层：本回合节点入树（turn/user 事件带同一 turn_id 供重建）。
         self._turn_tree.append_turn(user_input[:200])
         self._record_event(
@@ -323,6 +395,12 @@ class TurnFlowMixin:
             recall_text = self._recall_block(user_input)
             if recall_text:
                 turn_prompt = f"{turn_prompt}\n\n{recall_text}"
+        if (
+            task_state is not None
+            and task_state.active
+            and (continued or execution_policy.level >= ExecutionLevel.WRITE)
+        ):
+            turn_prompt = f"{turn_prompt}\n\n{task_state.delivery_prompt()}"
 
         # Freeze authorization with this exact turn. ReAct must not mutate its
         # leading system prompt when the execution level changes.
@@ -536,6 +614,22 @@ class TurnFlowMixin:
             f"（/mode 可固定，config.yaml engine.disable_auto_routing 可关闭）[/dim cyan]"
         )
         return engine
+
+
+    @staticmethod
+    def _is_task_continuation(text: str, pending: PendingAction | None) -> bool:
+        """Continuation cue for an active task; not an intent classifier."""
+        if pending is not None:
+            return True
+        if is_continuation_utterance(text):
+            return True
+        normalized = text.strip().lower()
+        if not normalized:
+            return False
+        return any(
+            cue in normalized[:12]
+            for cue in ("继续", "接着", "往下", "还没", "没做完", "没有写")
+        )
 
 
     def _resolve_turn_intent(self, text: str) -> tuple[str | None, str | None]:

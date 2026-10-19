@@ -263,6 +263,19 @@ class EngineHostMixin:
             "recent_tool_activity",
             (previous_activity + recent_activity)[-12:],
         )
+
+        # Durable task state is folded from the same verified calls.  It is
+        # JSON-only and rides in AgentContext, so auto-save/resume keeps it.
+        try:
+            from xenon.engine.task_state import TaskState
+
+            task_state = TaskState.from_context(self.agent_context)
+            if task_state is not None and task_state.active:
+                task_state.update_from_calls(calls)
+                task_state.maybe_complete()
+                self.agent_context.set("_task_state", task_state.to_dict())
+        except Exception as exc:  # noqa: BLE001 — state must not break tracing
+            logger.debug("任务状态更新失败（已忽略）: %s", exc)
         return len(calls)
 
 

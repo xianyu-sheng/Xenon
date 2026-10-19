@@ -539,6 +539,10 @@ class ReActEngine(BaseEngine):
         max_plan_final_nudges = 2
         plan_reminder_count = 0
         last_plan_reminder_iteration = 0
+        # P1: do not accept a "done" answer while the durable task state still
+        # lacks required delivery work (tests/commit/PR).
+        task_final_nudges = 0
+        max_task_final_nudges = 2
         # E-2/C2: 低置信度循环提示按 (reason, loop_length) 去重，并加跨间隔
         # 冷却；循环消失后重置 key（冷却时间不重置）。只影响提示噪音，
         # 不改变终止语义，也不新增校验门。
@@ -839,6 +843,69 @@ class ReActEngine(BaseEngine):
                     logger.warning(
                         "ReAct: 计划收尾提醒用尽，最终回答附加未完成警告"
                     )
+
+                # Durable delivery contract: a final answer cannot silently
+                # omit required verification/commit/PR.  This is execution
+                # state, not an evidence gate; it only asks the model to do
+                # the remaining real work while budget exists.
+                try:
+                    from xenon.engine.task_state import TaskState
+
+                    task_state = TaskState.from_context(ctx)
+                    if task_state is not None and task_state.active:
+                        task_state.update_from_calls(tracker.calls)
+                        missing = task_state.missing_delivery()
+                        if missing and task_final_nudges < max_task_final_nudges:
+                            task_final_nudges += 1
+                            budget.on_retry()
+                            labels = {
+                                "verify": "运行相关测试并记录真实结果",
+                                "commit": "创建 git commit",
+                                "pr": "push 并创建 PR",
+                            }
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        "任务交付尚未完成：缺少 "
+                                        + "；".join(labels[m] for m in missing)
+                                        + "。请继续实际执行这些动作，"
+                                        "不要只贴代码、不要只更新计划；"
+                                        "完成后给出 final_answer。"
+                                    ),
+                                }
+                            )
+                            self.callback.on_warning(
+                                "任务交付未完成，要求先补齐 "
+                                + "、".join(missing)
+                                + f" ({task_final_nudges}/{max_task_final_nudges})"
+                            )
+                            logger.info(
+                                "ReAct: 注入任务交付提醒 (%s/%s): %s",
+                                task_final_nudges,
+                                max_task_final_nudges,
+                                missing,
+                            )
+                            continue
+                        if missing:
+                            labels = {
+                                "verify": "测试",
+                                "commit": "commit",
+                                "pr": "PR",
+                            }
+                            final_answer += (
+                                "\n\n⚠️ **任务交付未完成**：缺少 "
+                                + "、".join(labels[m] for m in missing)
+                                + "。以上工作不应视为已完成。"
+                            )
+                            self.callback.on_warning(
+                                "交付提醒用尽，最终回答附未完成交付警告"
+                            )
+                        else:
+                            task_state.maybe_complete()
+                        ctx.set("_task_state", task_state.to_dict())
+                except Exception as exc:  # noqa: BLE001 — state must not break run
+                    logger.debug("任务交付检查失败（已忽略）: %s", exc)
 
                 logger.info(
                     f"ReAct 完成，共 {iteration} 次迭代，工具调用 {len(tracker.calls)} 次"
