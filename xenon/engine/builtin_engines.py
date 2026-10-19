@@ -14,11 +14,10 @@ from typing import Any
 from xenon.engine.registry import register_engine
 
 # ── 标准步数预算 ────────────────────────────────────────
-# 所有 step-based 引擎的统一默认值：与 Claude Code 类代理对齐的 120 步。
-# `XENON_MAX_ITERATIONS` 仍是唯一的显式覆盖手段；评测运行冻结在 120
-# （见 docs/EVAL_RESULTS.md 的 30 例预注册）。组合引擎会嵌套「外层计划步骤 +
-# 内层 ReAct」，两层各自以 120 为上限，实际运行由绝对 deadline 兜底。
-STANDARD_STEP_BUDGET = 120
+# 所有 step-based 引擎默认不按步数终止。`XENON_MAX_ITERATIONS` 可显式
+# 设置安全上限；正常运行由 LoopDetector、无进展检查点、用户中断和墙钟
+# deadline 控制。组合引擎内外层共享同一策略。
+STANDARD_STEP_BUDGET = 0  # 0 = unlimited; LoopDetector/no-progress/deadline are the gates
 
 
 def _step_budget(default: int) -> int:
@@ -30,7 +29,7 @@ def _step_budget(default: int) -> int:
     if not raw:
         return default
     try:
-        return max(1, int(raw))
+        return max(0, int(raw))
     except ValueError:
         return default
 

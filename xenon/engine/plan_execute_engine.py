@@ -217,7 +217,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         self,
         model_priority: list[str],
         *,
-        max_steps: int = 120,
+        max_steps: int = 0,
         system_prompt: str | None = None,
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
@@ -394,8 +394,8 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             return "未能生成包含实际修改步骤的有效执行计划。"
 
         logger.info(f"计划生成 {len(steps)} 个步骤")
-        total = min(len(steps), self.max_steps)
-        capped = steps[: self.max_steps]
+        total = len(steps) if self.max_steps <= 0 else min(len(steps), self.max_steps)
+        capped = steps if self.max_steps <= 0 else steps[: self.max_steps]
         # v0.8.3: 截断不得砍掉写步骤——SWE-bench 实测（django-16408 官方 API）：
         # plan 共 12 步、写步骤在第 11 位，cap=10 后计划全是侦察步骤，
         # 10 步跑完 0 patch。若完整计划含写步骤但截断后丢失，把第一个写
@@ -622,7 +622,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             return results
         if not self._task_requires_write(user_input, ctx):
             return results
-        if len(results) >= self.max_steps:
+        if self.max_steps > 0 and len(results) >= self.max_steps:
             # v0.8.3 修复：不再硬拦截。此前「侦察型计划吃满 max_steps →
             # 补救被挡 → 0 patch」（SWE-bench 实测 django-16408）。补救是
             # 一次性动作（本方法只在 run() 调用一次，追加单个补救步骤），
@@ -1294,7 +1294,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         final_answer: str | None = None
         last_response = ""
         no_write_retries = 0
-        max_no_write_retries = 2
+        max_no_write_retries = 3
         for rnd in range(1, self.max_mini_react_rounds + 1):
             last_response = self._call_llm_for_phase(
                 "execute_step",

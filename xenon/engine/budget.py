@@ -92,8 +92,15 @@ class BudgetManager:
     # ── 基础查询 ──────────────────────────────────────────────
 
     @property
+    def unlimited(self) -> bool:
+        """``max_iterations <= 0`` means no step-count termination."""
+        return self.max_iterations <= 0
+
+    @property
     def total(self) -> int:
         """有效预算上限 = base + bonus，受 ``max_total_multiplier`` 封顶。"""
+        if self.unlimited:
+            return 2**31 - 1
         cap = int(self.max_iterations * self.max_total_multiplier)
         return min(self.max_iterations + self.bonus, cap)
 
@@ -105,8 +112,8 @@ class BudgetManager:
     @property
     def ratio(self) -> float:
         """已耗占 **base** 的比例（阶段判定基准，不受 bonus 影响）。"""
-        if self.max_iterations <= 0:
-            return 1.0
+        if self.unlimited:
+            return 0.0
         return self.spent / self.max_iterations
 
     @property
@@ -160,6 +167,10 @@ class BudgetManager:
     def _grant(self, kind: str, reward: int) -> int:
         """发放奖励，受 ``max_total_multiplier`` 封顶；超封顶则记 0。"""
         if reward <= 0:
+            return self.bonus
+        if self.unlimited:
+            self.bonus += reward
+            self.rewards.append((kind, reward))
             return self.bonus
         cap = int(self.max_iterations * self.max_total_multiplier)
         # 已达封顶：不再发放，但记录尝试（可观测）

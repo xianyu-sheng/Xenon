@@ -23,16 +23,16 @@ EventSink = Callable[[str, dict[str, Any]], None]
 # Standalone engines must have a finite safety budget even when an integration
 # forgets to bind a per-run policy.  Interactive callers can still replace it
 # with a shorter/longer shared policy through ``bind_execution_policy``.
-DEFAULT_ENGINE_TIMEOUT = 600.0
+DEFAULT_ENGINE_TIMEOUT = 1800.0
 
 
 def engine_timeout_from_env(default: float = DEFAULT_ENGINE_TIMEOUT) -> float:
     """Resolve the per-run engine deadline, honoring ``XENON_ENGINE_TIMEOUT``.
 
-    One absolute deadline is shared by the whole engine graph.  600s fits the
-    120-step budget; slower machines, larger models or multi-phase runs can
-    raise it without touching code.  Invalid or non-positive values fall back
-    to the default instead of disabling the deadline.
+    One absolute deadline is shared by the whole engine graph.  Step counts are
+    unlimited by default, so the wall-clock deadline is the final safety gate;
+    1800s gives long tasks room while still bounding a stuck run.  Invalid or
+    non-positive values fall back to the default instead of disabling it.
     """
 
     raw = os.environ.get("XENON_ENGINE_TIMEOUT", "").strip()

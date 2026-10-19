@@ -1,4 +1,4 @@
-"""步数预算：XENON_MAX_ITERATIONS 可调 + 触顶诚实标注 + 标准 120 步冻结。"""
+"""步数预算：默认不限步数；XENON_MAX_ITERATIONS 可显式设置安全上限。"""
 
 from __future__ import annotations
 
@@ -14,31 +14,31 @@ from xenon.engine.builtin_engines import (
 from xenon.engine.react_engine import ReActEngine
 
 
-def test_standard_step_budget_is_120():
-    """与 Claude Code 类代理对齐的固定值（评测冻结依赖它，不得随手改动）。"""
+def test_standard_step_budget_is_unlimited():
+    """0 means unlimited; LoopDetector/no-progress/deadline are the gates."""
 
-    assert STANDARD_STEP_BUDGET == 120
+    assert STANDARD_STEP_BUDGET == 0
 
 
-def test_all_step_based_factories_default_to_standard_budget(monkeypatch):
-    """react / plan-execute / plan-react / plan-reflection / react-reflection 全部默认 120。"""
+def test_all_step_based_factories_default_to_unlimited(monkeypatch):
+    """All step-based engines default to unlimited (0)."""
 
     monkeypatch.delenv("XENON_MAX_ITERATIONS", raising=False)
     kwargs = dict(
         model_priority=["m1"], model_pool=None, auto_router=None, callback=None
     )
-    assert _make_react(**kwargs).max_iterations == 120
-    assert _make_plan_execute(**kwargs).max_steps == 120
+    assert _make_react(**kwargs).max_iterations == 0
+    assert _make_plan_execute(**kwargs).max_steps == 0
     plan_react = _make_plan_react(**kwargs)
-    assert plan_react.max_steps == 120
-    assert plan_react.reactor.max_iterations == 120
-    assert _make_plan_reflection(**kwargs).max_steps == 120
-    assert _make_react_reflection(**kwargs).reactor.max_iterations == 120
+    assert plan_react.max_steps == 0
+    assert plan_react.reactor.max_iterations == 0
+    assert _make_plan_reflection(**kwargs).max_steps == 0
+    assert _make_react_reflection(**kwargs).reactor.max_iterations == 0
 
 
 def test_step_budget_default_and_env(monkeypatch):
     monkeypatch.delenv("XENON_MAX_ITERATIONS", raising=False)
-    assert _step_budget(STANDARD_STEP_BUDGET) == 120
+    assert _step_budget(STANDARD_STEP_BUDGET) == 0
     assert _step_budget(24) == 24
 
     monkeypatch.setenv("XENON_MAX_ITERATIONS", "120")
@@ -48,7 +48,7 @@ def test_step_budget_default_and_env(monkeypatch):
     assert _step_budget(40) == 40  # 无效值回退默认
 
     monkeypatch.setenv("XENON_MAX_ITERATIONS", "0")
-    assert _step_budget(40) == 1  # 下限 1
+    assert _step_budget(40) == 0  # explicit unlimited
 
 
 def test_factory_reads_env_budget(monkeypatch):
@@ -103,3 +103,16 @@ def test_budget_exhaustion_answer_is_marked(monkeypatch):
     assert out.startswith("⚠️ 已达到步数上限（5 步）")
     assert "整理结果" in out
     assert "任务可能未完成" in out
+
+
+def test_budget_manager_zero_means_unlimited_until_external_gate():
+    from xenon.engine.budget import BudgetManager
+
+    budget = BudgetManager(max_iterations=0)
+    assert budget.unlimited is True
+    assert budget.can_continue() is True
+    budget.spend(10_000)
+    assert budget.can_continue() is True
+    assert budget.phase.value == "explore"
+    budget.on_retry()
+    assert budget.bonus > 0

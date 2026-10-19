@@ -55,7 +55,7 @@ xenon   # 首次运行会引导配置（API Key、模型、推理引擎）
 | 协议 | **完全盲测**：解题阶段不应用官方 test patch，提示词不含 FAIL_TO_PASS 测试名（`XENON_EVAL_APPLY_TEST_PATCH=0`、`XENON_EVAL_FAIL_HINT=0`） |
 | 引擎 | **单一 `react`** —— 不是多引擎并集、不是 best-of-N。这是**框架 A/B**：引擎固定，差异才能归因到框架代码本身 |
 | 模型 | `deepseek-v4-flash` 官方 API，`--reasoning-effort off` |
-| 预算 | 120 步（`STANDARD_STEP_BUDGET`），引擎 900s 硬墙 |
+| 预算 | 默认不限步数；LoopDetector + 无进展检查点 + 1800s 墙钟兜底（`XENON_MAX_ITERATIONS` 可显式设上限） |
 | 判定 | 官方 `swebench` harness：干净容器 + 模型补丁 + 官方 test patch；`FAIL_TO_PASS` 全过且 `PASS_TO_PASS` 无回归才算 resolved |
 | 分母 | `resolved / submitted(=30)`；空补丁单独统计但**仍算未解出**（保守口径） |
 | 重复 | 每条件 **3 次独立运行**取均值（逐次结果全部公开；单次极差可达 4 例 ≈ 13pp） |
@@ -201,7 +201,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 | `XENON_VERIFY_RETRIES` | 结构层失败后的同回合重试次数 | 2 |
 | `XENON_RETRY_BUDGET_MIN/MAX` | 重试轮的步数预算区间 | 10 / 40 |
 | `XENON_GATE_FUSE_THRESHOLD` | 同因结构失败的熔断阈值 | 2 |
-| `XENON_MAX_ITERATIONS` | 单次运行的步数上限（所有引擎统一 120） | 120 |
+| `XENON_MAX_ITERATIONS` | 单次运行的步数上限；0=不按步数终止（默认） | 0 |
 | `XENON_ENGINE_TIMEOUT` | 单次运行的引擎绝对时限（秒）；超时返回已完成部分 | 600 |
 | `XENON_MAX_TOKENS` | 单次模型调用的输出上限 | 8192 |
 | `XENON_MAX_CONTINUATIONS` | 截断后的自动续写次数 | 3 |

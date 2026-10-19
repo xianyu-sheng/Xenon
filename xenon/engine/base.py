@@ -1959,7 +1959,7 @@ class BaseEngine(ABC):
         context: AgentContext | None = None,
         ctx_mgr: Any | None = None,
         *,
-        max_delivery_retries: int = 2,
+        max_delivery_retries: int = 3,
     ) -> str:
         """Single delivery exit; the concrete engine stays a black box."""
         from xenon.engine.task_runtime import run_with_delivery

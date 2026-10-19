@@ -3,7 +3,7 @@
 两件事：
 1. 收紧成功宣称规则：裸 ✅ / 表格里的"✅ 优秀"不再是任务成功宣称；
 2. 校验未通过时，`_run_engine` 在同一回合内把失败原因反馈给新引擎
-   重跑（上限 XENON_VERIFY_RETRIES，默认 2），仍失败才按草稿发布。
+   重跑（上限 XENON_VERIFY_RETRIES，默认 3），仍失败才按草稿发布。
 """
 
 from __future__ import annotations
@@ -16,13 +16,13 @@ from xenon.repl.repl import REPL, _verify_retries_limit
 
 def test_verify_retries_limit_default_and_env(monkeypatch):
     monkeypatch.delenv("XENON_VERIFY_RETRIES", raising=False)
-    assert _verify_retries_limit() == 2  # 默认 2 次
+    assert _verify_retries_limit() == 3  # 默认 3 次
 
     monkeypatch.setenv("XENON_VERIFY_RETRIES", "5")
     assert _verify_retries_limit() == 5
 
     monkeypatch.setenv("XENON_VERIFY_RETRIES", "garbage")
-    assert _verify_retries_limit() == 2  # 无效值回退默认
+    assert _verify_retries_limit() == 3  # 无效值回退默认
 
     monkeypatch.setenv("XENON_VERIFY_RETRIES", "-3")
     assert _verify_retries_limit() == 0  # 下限 0（关闭重试）

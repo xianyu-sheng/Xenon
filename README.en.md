@@ -55,7 +55,7 @@ More install options (source / uv / pipx) are in [Install](#install).
 | Protocol | **Fully blind**: the official test patch is not applied during solving, and the prompt carries no FAIL_TO_PASS names (`XENON_EVAL_APPLY_TEST_PATCH=0`, `XENON_EVAL_FAIL_HINT=0`) |
 | Engine | **`react` only** — not a multi-engine union and not best-of-N. This is a **framework A/B**: the engine is held constant so any difference is attributable to the framework code |
 | Model | `deepseek-v4-flash` official API, `--reasoning-effort off` |
-| Budget | 120 steps (`STANDARD_STEP_BUDGET`), 900 s hard engine wall |
+| Budget | Unlimited steps by default; LoopDetector + no-progress checkpoints + 1800 s wall-clock safety gate (`XENON_MAX_ITERATIONS` can set a cap) |
 | Judging | Official `swebench` harness: clean container + model patch + official test patch; an instance counts as resolved only when `FAIL_TO_PASS` all pass and `PASS_TO_PASS` does not regress |
 | Denominator | `resolved / submitted(=30)`; empty patches are reported separately but **still count as unresolved** (conservative) |
 | Repetition | **3 independent runs** per condition, averaged (every run is published; a single run can swing by 4 instances ≈ 13 pp) |

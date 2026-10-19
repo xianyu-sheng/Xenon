@@ -70,9 +70,10 @@ class TestPhases:
 
     def test_zero_max_iterations(self):
         b = BudgetManager(max_iterations=0)
-        assert b.ratio == 1.0
-        assert b.is_converge_phase() is True
-        assert b.can_continue() is False
+        assert b.unlimited is True
+        assert b.ratio == 0.0
+        assert b.is_converge_phase() is False
+        assert b.can_continue() is True
 
 
 class TestRewards:

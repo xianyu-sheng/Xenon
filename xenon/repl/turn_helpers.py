@@ -14,15 +14,15 @@ _RETRY_BUDGET_MAX = 40
 
 
 def verify_retries_limit() -> int:
-    """发布门重试上限：默认 2，XENON_VERIFY_RETRIES 可调（无效值回退默认，下限 0）。"""
+    """发布门重试上限：默认 3，XENON_VERIFY_RETRIES 可调（无效值回退默认，下限 0）。"""
 
     raw = os.environ.get("XENON_VERIFY_RETRIES", "").strip()
     if not raw:
-        return 2
+        return 3
     try:
         return max(0, int(raw))
     except ValueError:
-        return 2
+        return 3
 
 
 def retry_budget_for(first_round_steps: int) -> int:

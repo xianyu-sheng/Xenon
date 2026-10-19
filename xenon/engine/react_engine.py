@@ -42,7 +42,8 @@ def _env_checkpoint_steps(default: int) -> int:
 
     raw = os.environ.get("XENON_CHECKPOINT_STEPS", "").strip()
     if not raw:
-        return max(1, default)
+        # Unlimited step mode still needs a no-progress window.
+        return max(1, default if default > 0 else 20)
     try:
         return max(1, int(raw))
     except ValueError:
@@ -149,7 +150,7 @@ class ReActEngine(BaseEngine):
         self,
         model_priority: list[str],
         *,
-        max_iterations: int = 120,
+        max_iterations: int = 0,
         system_prompt: str | None = None,
         tools: dict[str, dict] | None = None,
         callback: EngineCallback | None = None,
@@ -523,12 +524,12 @@ class ReActEngine(BaseEngine):
         # 旧逻辑固定 2 次后放弃，导致 LLM 容易"硬扛"过 2 次后文字声称完成。
         # 新逻辑：至少 2 次重试，最多是 max_iterations 的一半（保留一半预算给正常迭代）。
         # 通用机制改进，不针对特定任务加白名单。
-        max_no_tool_retries = max(2, self.max_iterations // 2)
+        max_no_tool_retries = 3
         # A model occasionally emits a prose plan/status fragment instead of
         # the required ReAct JSON. Give it a small formatting recovery window
         # before accepting that fragment as the final answer.
         malformed_response_retries = 0
-        max_malformed_response_retries = 2
+        max_malformed_response_retries = 3
         incomplete_answer_rejections = 0
         max_incomplete_answer_rejections = 3
         # v0.9.5 #163: 每个 run 只提醒一次「改完代码要验证」。
@@ -536,7 +537,7 @@ class ReActEngine(BaseEngine):
         # C11: 计划有未完成步骤时，收尾前最多提醒两次；仍不更新则
         # 在最终回答后附上明确警告（不阻断，但不再静默接受过期计划）。
         plan_final_nudges = 0
-        max_plan_final_nudges = 2
+        max_plan_final_nudges = 3
         plan_reminder_count = 0
         last_plan_reminder_iteration = 0
         # E-2/C2: 低置信度循环提示按 (reason, loop_length) 去重，并加跨间隔
@@ -834,7 +835,7 @@ class ReActEngine(BaseEngine):
                     )
                     final_answer += plan_warning
                     self.callback.on_warning(
-                        "模型两次忽略计划收尾提醒；最终回答已附加未完成计划警告"
+                        "计划收尾提醒用尽；最终回答已附加未完成计划警告"
                     )
                     logger.warning(
                         "ReAct: 计划收尾提醒用尽，最终回答附加未完成警告"

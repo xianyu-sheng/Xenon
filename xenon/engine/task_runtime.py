@@ -20,7 +20,7 @@ def run_with_delivery(
     context: Any | None = None,
     ctx_mgr: Any | None = None,
     *,
-    max_delivery_retries: int = 2,
+    max_delivery_retries: int = 3,
 ) -> str:
     """Run an engine once, then enforce the durable delivery contract."""
     from xenon.engine.task_state import TaskState

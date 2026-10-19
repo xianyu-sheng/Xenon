@@ -110,7 +110,7 @@ class SteeringMixin:
         context: Any | None = None,
         ctx_mgr: Any | None = None,
         *,
-        max_delivery_retries: int = 2,
+        max_delivery_retries: int = 3,
     ) -> str:
         """Use the same delivery exit as BaseEngine; internals stay opaque."""
         from xenon.engine.task_runtime import run_with_delivery
@@ -278,8 +278,8 @@ class PlanReactEngine(SteeringMixin):
         self,
         model_priority: list[str],
         *,
-        max_steps: int = 120,
-        react_iterations: int = 120,
+        max_steps: int = 0,
+        react_iterations: int = 0,
         native_planning: bool = False,
         callback: EngineCallback | None = None,
         model_configs: dict[str, Any] | None = None,
@@ -362,7 +362,9 @@ class PlanReactEngine(SteeringMixin):
             logger.exception("Plan-ReAct planning failed")
             return f"规划阶段失败: {exc}"
 
-        steps = list(plan.get("steps") or [])[: self.max_steps]
+        steps = list(plan.get("steps") or [])
+        if self.max_steps > 0:
+            steps = steps[: self.max_steps]
         analysis = str(plan.get("analysis") or "")
         if not steps:
             self.callback.on_warning("未能生成有效的执行计划")
@@ -776,7 +778,7 @@ class PlanReflectionEngine(_ReflectionCombination):
         self,
         model_priority: list[str],
         *,
-        max_steps: int = 120,
+        max_steps: int = 0,
         review_rounds: int = 2,
         pass_threshold: int = 7,
         repair_iterations: int | None = None,
@@ -814,9 +816,12 @@ class PlanReflectionEngine(_ReflectionCombination):
             pass_threshold=pass_threshold,
             **common,
         )
-        repair_budget = (
-            min(max_steps, 10) if repair_iterations is None else repair_iterations
-        )
+        if repair_iterations is not None:
+            repair_budget = repair_iterations
+        elif max_steps <= 0:
+            repair_budget = 10
+        else:
+            repair_budget = min(max_steps, 10)
         self.repairer = ReActEngine(
             model_priority,
             max_iterations=max(1, repair_budget),
@@ -854,7 +859,7 @@ class ReactReflectionEngine(_ReflectionCombination):
         self,
         model_priority: list[str],
         *,
-        react_iterations: int = 120,
+        react_iterations: int = 0,
         review_rounds: int = 2,
         pass_threshold: int = 7,
         callback: EngineCallback | None = None,
@@ -887,7 +892,7 @@ class ReactReflectionEngine(_ReflectionCombination):
         # from being reset before the combination has aggregated its evidence.
         self.repairer = ReActEngine(
             model_priority,
-            max_iterations=max(1, min(react_iterations, 10)),
+            max_iterations=10 if react_iterations <= 0 else max(1, min(react_iterations, 10)),
             **common,
         )
         self.reflector = ReflectionEngine(

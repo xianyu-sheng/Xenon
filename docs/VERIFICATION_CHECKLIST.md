@@ -68,6 +68,7 @@
 | C19 | `/resume` 只能看到最近一次自动保存；启动新对话会覆盖旧 `_auto` | 会话/持久化 | ✅ 已修复 | `conversation_id` + `_auto` 轮转为 `auto-*.json`；旧会话成为普通可恢复会话；`/resume`/启动选择器显示 `[自动保存]`；单元测试覆盖轮转/同名不轮转/显示 |
 | C20 | “实现 #22”这类具体 issue 交付被当成 `write_code` 仅回答/只读，且不主动克隆目标仓库 | 执行/权限 | ✅ 交付已合并，产品链路待复验 | `task_delivery` 提升 EXECUTE；write_code 含 clone 指引；PR [#51](https://github.com/xianyu-sheng/SmartBench/pull/51) 已合并、7/7 检查全绿、Issue #22 已关闭；TaskState 真实 #26 收尾已验证 |
 | C21 | `继续` 只靠模型记忆，TaskState/交付要求跨回合丢失 | 执行/状态 | ✅ 统一引擎出口已验证 | `xenon/engine/task_runtime.py` 共享 `run_with_delivery`；BaseEngine 与组合引擎 SteeringMixin 都暴露 `run_task`；EngineHost 只调用这一个入口；真实 #26 72 工具/196s、8 文件、53 目标测试、commit `005ba58`、TaskState completed；全量 3453 passed；commit 门只认实际 commit 命令输出的哈希，忽略 git log 旧哈希 |
+| C22 | 固定 120 步会误杀长链路任务；重试上限 2 次过早放弃 | 执行/循环 | ✅ 已改 | 默认 `0`=不限步数，由 LoopDetector、无进展检查点、1800s deadline 控制；`XENON_MAX_ITERATIONS` 可显式设上限；交付/验证/格式/计划收尾/写恢复重试统一为 3 次；Xenon 全量 3454 passed |
 | C15 | 只读任务写 `.xenon_tmp/*.ps1` 触发“改完代码要验证”，模型偏离任务去解释没有测试 | 执行/提醒 | ✅ 已真实验证 | 只读 issue 列表任务：无验证提醒，最终正确列出 25 个 issue；仍会写临时脚本/尝试 `$()`（C4） |
 
 ---
@@ -103,6 +104,7 @@
 | 2026-10-19 | TaskState + 交付契约 | 新增持久 TaskState、`继续` 恢复、ReAct 交付提醒；Xenon 全量 3450 passed、无新增失败；REPL 集成测试覆盖 `继续` 恢复执行级别/交付要求；真实长任务验收待跑 |
 | 2026-10-19 | TaskState 真实 #26 | 干净 clone 调用 Xenon ReAct：72 工具/7 失败/196s；8 文件改动；53 targeted passed、全量 664 passed/7 既有 Windows 失败；commit `005ba58`；TaskState completed，无交付警告；未 push/PR |
 | 2026-10-19 | 统一引擎交付出口 + commit 识别修复 | 抽出 `task_runtime.run_with_delivery`；BaseEngine + SteeringMixin 共用；EngineHost `_run_engine` 改调 `run_task`；不再由 ReAct 单独实现；全量 3452 passed、无新增失败；新增测试防止旧 commit 假满足交付；EngineHost fallback 也走统一运行时 |
+| 2026-10-19 | 无限步数 + 3 次重试 | 默认步数上限改 0；墙钟默认 1800s；交付/verify/malformed/no-tool/plan/no-write 重试统一 3；全量 3454 passed、无新增失败 |
 | 2026-10-19 | SmartBench PR #51 合并 | PR #51 合并提交 `02d9eb9`，7/7 checks 绿；Issue #22 关闭；本地 main 已拉齐，分支已清理 |
 | 2026-10-18 | C11 #27 计划复验 | 第一轮 2 次更新、结束仍有 pending（收尾提醒未促成更新）；第二轮 3 次更新、全部 completed；说明计划收尾仍依赖模型配合 |
 | 2026-10-18 | SmartBench PR #50 | 已推送 `feat/cli-progress-reporter`；PR open、mergeable、CI 7/7 绿；等待合并 |

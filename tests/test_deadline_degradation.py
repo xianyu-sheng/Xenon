@@ -8,13 +8,16 @@ from xenon.engine.combined_engines import (
     _deadline_note,
     _deadline_summary,
 )
-from xenon.engine.execution_policy import EngineDeadlineExceeded
+from xenon.engine.execution_policy import (
+    EngineDeadlineExceeded,
+    engine_timeout_from_env,
+)
 
 
 def test_deadline_note_mentions_budget_stop() -> None:
     note = _deadline_note()
     assert "引擎时限" in note
-    assert "600" in note
+    assert str(int(engine_timeout_from_env())) in note
     assert "继续" in note
 
 
