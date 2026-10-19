@@ -903,6 +903,7 @@ class ToolExecutor:
                     provenance=provenance_dict,
                     security_advisories=advisory_dicts,
                     result_id=result_id,
+                    raw_sha256=raw_sha256,
                 )
             self.record_tool_observation(
                 tool_name, params, success, observation, tracker, context

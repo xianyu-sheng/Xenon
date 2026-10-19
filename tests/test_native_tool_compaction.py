@@ -152,6 +152,34 @@ class TestCompactNativeToolMessages:
         # 最近若干轮保留
         assert out[-1]["role"] == "tool"
 
+    def test_dropped_blocks_become_structured_summaries(self):
+        eng = _engine(window=1000)
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "task"},
+        ]
+        for i in range(12):
+            messages.extend(
+                _tool_round(
+                    f"c{i}",
+                    f"result_id=tr_test_{i}" + chr(10)
+                    + ("FAILED test_x" + chr(10) if i == 2 else "ok" + chr(10))
+                    + "x" * 200,
+                )
+            )
+
+        out = eng._compact_native_tool_messages(messages, keep_recent_blocks=2)
+        summary = next(
+            m["content"]
+            for m in out
+            if m["role"] == "user" and "历史已压缩" in m.get("content", "")
+        )
+        assert "result_id=tr_test_" in summary
+        assert "结构化摘要" in summary
+        assert "read_file" in summary
+        assert "FAIL" in summary
+        assert "§" not in summary
+
     def test_never_splits_a_tool_pair(self):
         eng = _engine(window=1000)
         messages: list[dict[str, Any]] = [{"role": "system", "content": "s"}]

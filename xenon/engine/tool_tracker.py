@@ -29,6 +29,7 @@ class ToolCall:
     provenance: dict[str, Any] | None = None
     security_advisories: list[dict[str, Any]] = field(default_factory=list)
     result_id: str = ""
+    raw_sha256: str = ""
 
 
 @dataclass
@@ -57,6 +58,7 @@ class ToolExecutionTracker:
         provenance: dict[str, Any] | None = None,
         security_advisories: list[dict[str, Any]] | None = None,
         result_id: str = "",
+        raw_sha256: str = "",
     ) -> None:
         """记录一次工具调用。"""
         call = ToolCall(
@@ -71,6 +73,7 @@ class ToolExecutionTracker:
             provenance=dict(provenance) if provenance else None,
             security_advisories=list(security_advisories or []),
             result_id=str(result_id or ""),
+            raw_sha256=str(raw_sha256 or ""),
         )
         self.calls.append(call)
         status = "成功" if success else "失败"
@@ -189,6 +192,7 @@ class ToolExecutionTracker:
                 "provenance": c.provenance,
                 "security_advisories": c.security_advisories,
                 "result_id": c.result_id,
+                "raw_sha256": c.raw_sha256,
             }
             for c in self.calls
         ]

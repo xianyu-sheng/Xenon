@@ -207,6 +207,10 @@ class ContextManager:
         self._turn_counter: int = 0  # 全局轮次计数器
         self._semantic_group_counter: int = 0  # 语义块 ID 计数器
         self._working_memory: dict[str, Any] = {}  # 跨压缩持久化的工作记忆
+        # Structured references to full tool results (result_id/hash/summary).
+        # Raw output stays in ToolResultStore; this manifest is what survives
+        # /save and /resume.
+        self._tool_result_manifest: dict[str, dict[str, Any]] = {}
         # 可替换的系统上下文层（项目规则、长期记忆检索、单轮指令等）。
         # 它们不属于聊天历史，避免每轮 append 后重复膨胀，也不会被 compact
         # 当成用户对话压缩掉。
@@ -348,6 +352,57 @@ class ContextManager:
         """Replace persistent working memory when loading a saved session."""
         self._working_memory = dict(memory or {})
 
+    def record_tool_result(
+        self,
+        *,
+        result_id: str,
+        tool: str,
+        success: bool,
+        summary: str = "",
+        raw_sha256: str = "",
+        raw_bytes: int = 0,
+        status: str = "",
+    ) -> None:
+        """Keep a bounded structured manifest entry for one tool result."""
+        if not result_id:
+            return
+        self._tool_result_manifest[str(result_id)] = {
+            "result_id": str(result_id),
+            "tool": str(tool),
+            "success": bool(success),
+            "status": str(status or ("succeeded" if success else "failed")),
+            "summary": str(summary or "")[:500],
+            "raw_sha256": str(raw_sha256 or ""),
+            "raw_bytes": int(raw_bytes or 0),
+        }
+        # Bound the manifest like the tracker; raw cache has its own TTL.
+        if len(self._tool_result_manifest) > 500:
+            for old_id in list(self._tool_result_manifest)[:100]:
+                self._tool_result_manifest.pop(old_id, None)
+
+    def export_tool_manifest(self) -> list[dict[str, Any]]:
+        return list(self._tool_result_manifest.values())
+
+    def restore_tool_manifest(self, entries: Any) -> None:
+        if not isinstance(entries, list):
+            return
+        self._tool_result_manifest = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            result_id = str(entry.get("result_id") or "")
+            if not result_id.startswith("tr_"):
+                continue
+            self._tool_result_manifest[result_id] = {
+                "result_id": result_id,
+                "tool": str(entry.get("tool") or ""),
+                "success": bool(entry.get("success")),
+                "status": str(entry.get("status") or ""),
+                "summary": str(entry.get("summary") or "")[:500],
+                "raw_sha256": str(entry.get("raw_sha256") or ""),
+                "raw_bytes": int(entry.get("raw_bytes") or 0),
+            }
+
     def set_context_message(
         self,
         key: str,
@@ -472,6 +527,8 @@ class ContextManager:
         error: str | None = None,
         provenance: dict[str, Any] | None = None,
         security_advisories: list[dict[str, Any]] | None = None,
+        result_id: str = "",
+        raw_sha256: str = "",
     ) -> None:
         """Persist a compact, redacted tool call/result pair across turns."""
         safe_params = self._safe_context_value(params or {})
@@ -494,8 +551,19 @@ class ContextManager:
             metadata={
                 "tool_name": tool_name,
                 "success": bool(success),
+                "result_id": result_id,
+                "raw_sha256": raw_sha256,
                 **({"provenance": provenance} if provenance else {}),
             },
+        )
+        self.record_tool_result(
+            result_id=result_id,
+            tool=tool_name,
+            success=bool(success),
+            summary=detail,
+            raw_sha256=raw_sha256,
+            raw_bytes=len(str(detail).encode("utf-8")),
+            status=status,
         )
         self.end_semantic_group(group_id)
 

@@ -160,6 +160,7 @@ def _cmd_save(
         registry.export_config(),
         extra={
             "working_memory": ctx_mgr.get_working_memory(),
+            "tool_results": ctx_mgr.export_tool_manifest(),
             "cwd": str(Path.cwd()),
         },
     )
@@ -240,6 +241,7 @@ def _cmd_load(
             semantic_group_id=msg.get("semantic_group_id"),
         )
     ctx_mgr.replace_working_memory(working_memory)
+    ctx_mgr.restore_tool_manifest(extra.get("tool_results"))
 
     restored_context = AgentContext(initial=context_store)
     session_state["agent_context"] = restored_context
@@ -430,6 +432,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
                     semantic_group_id=msg.get("semantic_group_id"),
                 )
         repl.ctx_mgr.replace_working_memory(working_memory)
+        repl.ctx_mgr.restore_tool_manifest(extra.get("tool_results"))
 
         from xenon.engine.context import AgentContext
         from xenon.nodes.tool_executor import recover_tool_execution_checkpoint

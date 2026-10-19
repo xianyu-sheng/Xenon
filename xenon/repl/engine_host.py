@@ -182,6 +182,8 @@ class EngineHostMixin:
             success = bool(getattr(call, "success", False))
             result = str(getattr(call, "result_summary", "") or "")
             error = getattr(call, "error", None)
+            result_id = str(getattr(call, "result_id", "") or "")
+            raw_sha256 = str(getattr(call, "raw_sha256", "") or "")
             if not protocol_covers_trace:
                 self.ctx_mgr.add_tool_trace(
                     tool_name,
@@ -191,6 +193,19 @@ class EngineHostMixin:
                     error=str(error) if error else None,
                     provenance=getattr(call, "provenance", None),
                     security_advisories=getattr(call, "security_advisories", None),
+                    result_id=result_id,
+                    raw_sha256=raw_sha256,
+                )
+            elif result_id:
+                # Native protocol messages do not go through add_tool_trace;
+                # still retain the structured manifest for /save and /resume.
+                self.ctx_mgr.record_tool_result(
+                    result_id=result_id,
+                    tool=tool_name,
+                    success=success,
+                    summary=result or str(error or ""),
+                    raw_sha256=raw_sha256,
+                    status="succeeded" if success else "failed",
                 )
             recent_activity.append(
                 {

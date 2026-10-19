@@ -34,16 +34,25 @@ Phase 1 先补基础设施：每次工具调用写一份**完整结果缓存**�
   `result_id` + `raw_sha256`，让事实链锚定完整缓存。
 - `tool_result_read` 自身不重复缓存，避免递归膨胀。
 
+## Phase 3：确定性压缩与 result manifest
+
+- `structured_compactor.py`：native tool block 的丢弃摘要改成
+  `工具名 + 状态 + result_id + 关键摘要`，纯正则/分类器，0 LLM。
+- `BaseEngine._compact_native_tool_messages` 与
+  `_preprocess_tool_observations` 使用该摘要。
+- `ContextManager` 维护 `tool_result_manifest`；`/save` 写入
+  `extra.tool_results`，`/load`、`/resume` 恢复。
+- `tool/result` 事件带 `result_id` / `raw_sha256`，事实链可锚定缓存。
+
 ## 当前边界
 
-- 模型视图仍由工具类型选择器生成，尚未接入 0-LLM `StructuredCompactor`。
-- 会话恢复还没有加载 result manifest；缓存路径/hash 已存在。
+- native tool block 已 0-LLM；`ContextManager.compact` 的通用自由文本摘要
+  仍保留原 LLM 路径，尚未整体替换。
 - raw 文件保留完整输出，因此本地磁盘可能包含命令日志中的敏感信息；
   缓存是本机 0600 文件，不是可分享的会话导出。
 - 缓存不是证据：provenance、成功/失败状态、原始工具调用仍由证据层负责。
 
 ## 下一步
 
-Phase 3：0-LLM `StructuredCompactor`。旧 observation 换成
-`结构化摘要 + result_id`，保留失败/计划/产物，丢弃旧 raw 文本；
-会话恢复加载 packet + result manifest；需要细节再读缓存。
+把 `ContextManager.compact` 的自由文本路径也切成
+`结构化摘要 + result_id`，并用 #27 复跑验证截断/调用数/完成率。

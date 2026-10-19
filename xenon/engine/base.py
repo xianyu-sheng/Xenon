@@ -31,6 +31,10 @@ from xenon.engine.execution_policy import (
     ExecutionPolicy,
     engine_timeout_from_env,
 )
+from xenon.engine.structured_compactor import (
+    summarize_dropped_blocks,
+    summarize_observation_text,
+)
 from xenon.repl.model_pool import FAILURE_THRESHOLD  # v0.5.3
 from xenon.utils.llm_client import (
     ResponseTruncatedError,
@@ -692,10 +696,10 @@ class BaseEngine(ABC):
             summary = {
                 "role": "user",
                 "content": (
-                    "[历史已压缩] 为控制上下文长度，已省略 "
-                    f"{len(dropped)} 轮较早的推理与 {dropped_tool_results} 条工具结果。"
-                    "上述任务目标与下面最近的执行记录仍然有效；"
-                    "如需早期结果请重新调用对应工具确认，不要凭记忆假设。"
+                    summarize_dropped_blocks(dropped)
+                    + "\n"
+                    + f"（共省略 {len(dropped)} 个工具块 / {dropped_tool_results} 条工具结果；"
+                    "任务目标与最近的执行记录仍然有效。）"
                 ),
             }
             compacted = [message for block in head for message in block]
@@ -724,14 +728,6 @@ class BaseEngine(ABC):
         """
         import re
 
-        # 尝试加载分类器（懒导入避免循环依赖）
-        try:
-            from xenon.repl.context_strategies import ToolOutputClassifier
-
-            classifier = ToolOutputClassifier()
-        except Exception:
-            return messages  # 分类器不可用时原样返回
-
         # 匹配 "Observation: tool_name" 或 "Observation: [tool_name]"
         obs_pattern = re.compile(r"^Observation:\s*(?:\[(\w+)\]\s*)?(.*)", re.DOTALL)
 
@@ -743,13 +739,13 @@ class BaseEngine(ABC):
                 tool_name = obs_match.group(1) or "unknown"
                 tool_output = obs_match.group(2)
                 try:
-                    compressed_output = classifier.compress(
-                        tool_name, tool_output, max_chars=500
+                    compressed_output = summarize_observation_text(
+                        f"Observation: [{tool_name}] {tool_output}"
                     )
                     result.append(
                         {
                             "role": m.get("role", "user"),
-                            "content": f"Observation: [{tool_name}] {compressed_output}",
+                            "content": compressed_output,
                         }
                     )
                 except Exception:
