@@ -32,7 +32,7 @@
 | 4 | Shell/沙箱摩擦 | 🟡 | C4：`run_script` + 自动识别 + `lang` 别名；#27 修复后 14/14 成功；仍有未加引号 `$变量` 被拦截，文案已指向 run_script |
 | 5 | 真实长任务完成率 | 🟡 | C16：已有 SmartBench #26 证据；需要更多任务/PR 闭环 |
 | 6 | 模型路由/质量 | 🟡 | C5：flash 默认；pro 未证明完成率优势 |
-| 7 | 上下文/压缩/子 agent | 🟡 | 轻量意图投影、缓存/模型视图/回查/哈希锚定、native 0-LLM、`/compact` 0-LLM、manifest 恢复已做；非 native in-run 压缩仍可能走 LLM |
+| 7 | 上下文/压缩/子 agent | 🟡 | 缓存/视图/回查/哈希锚定/native 0-LLM/`compact` 0-LLM/manifest 已做；#27 复验 0 截断；非 native in-run 压缩仍可能走 LLM |
 | 8 | 权限/沙箱自主性 | ⏳ | 审批可用，但非 Codex OS 沙箱 |
 | 9 | 原生协议/截断续写 | 🟡 | DSML 变体已修；仍有 finish_reason=length 边界 |
 | 10 | 验证闭环 | 🟡 | 非阻断提醒；C15 修了临时脚本误报 |
