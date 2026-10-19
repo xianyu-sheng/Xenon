@@ -100,6 +100,6 @@
 | 2026-10-18 | 非 native 0-LLM + C11 | 非 native in-run 改结构化摘要；C11 周期提醒 + 两次收尾提醒 + 未完成警告；#27 第三次 125 工具/4 失败/358s/0 安全失败/3 次计划全 completed；SmartBench targeted 35 passed，全量 642 passed/7 既有环境失败；Xenon 3445 passed |
 | 2026-10-19 | /resume 自动会话轮转 | `_auto` 按 `conversation_id` 归档为 `auto-*.json`；同名会话继续覆盖；`/resume` 列表显示 `[上次自动保存]`/`[自动保存]`；3 个新测试通过；Xenon 全量 3450 passed、无新增失败 |
 | 2026-10-19 | issue 交付任务路由 + #22 真实复验 | “实现#22”从 ANSWER_ONLY/只读提升为 EXECUTE；真实任务克隆 SmartBench、写 HTML 报告、`tests/test_html_report.py` 10 passed、相关 103 passed、ruff 通过；126 工具/11 失败/515s；计划仍 4 项未更新、未提交 |
-| 2026-10-19 | TaskState + 交付契约 | 新增持久 TaskState、`继续` 恢复、ReAct 交付提醒；Xenon 全量 3449 passed、无新增失败；真实长任务验收待跑 |
+| 2026-10-19 | TaskState + 交付契约 | 新增持久 TaskState、`继续` 恢复、ReAct 交付提醒；Xenon 全量 3450 passed、无新增失败；REPL 集成测试覆盖 `继续` 恢复执行级别/交付要求；真实长任务验收待跑 |
 | 2026-10-18 | C11 #27 计划复验 | 第一轮 2 次更新、结束仍有 pending（收尾提醒未促成更新）；第二轮 3 次更新、全部 completed；说明计划收尾仍依赖模型配合 |
 | 2026-10-18 | SmartBench PR #50 | 已推送 `feat/cli-progress-reporter`；PR open、mergeable、CI 7/7 绿；等待合并 |
