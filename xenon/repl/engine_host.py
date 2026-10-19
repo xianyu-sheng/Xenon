@@ -437,9 +437,16 @@ class EngineHostMixin:
         # LLM 自行判断如何调整后续步骤（不打断当前工具调用）。
         steering_thread = self._start_steering_listener(engine)
         try:
-            result = engine.run(
-                user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr
-            )
+            run_task = getattr(engine, "run_task", None)
+            if callable(run_task):
+                result = run_task(
+                    user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr
+                )
+            else:
+                # Test doubles / legacy plugins may expose only run().
+                result = engine.run(
+                    user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr
+                )
             if spec.log_result_diagnostics:
                 # 诊断日志 — 记录结果实际值，用于排查空白面板根因。
                 logger.info(

@@ -116,3 +116,11 @@ def test_calls_are_folded_from_tracker_objects() -> None:
     state.update_from_calls(calls)
     assert state.tests
     assert state.missing_delivery() == []
+
+
+def test_all_engine_families_share_the_same_delivery_exit() -> None:
+    from xenon.engine.base import BaseEngine
+    from xenon.engine.combined_engines import SteeringMixin
+
+    assert hasattr(BaseEngine, "run_task")
+    assert hasattr(SteeringMixin, "run_task")

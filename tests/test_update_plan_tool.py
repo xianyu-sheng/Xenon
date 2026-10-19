@@ -138,10 +138,10 @@ def test_missing_delivery_nudges_before_accepting_final(monkeypatch) -> None:
         lambda *a, **k: '{"thought": "done", "final_answer": "ok"}',
     )
 
-    result = engine.run("do the task", ctx)
+    result = engine.run_task("do the task", ctx)
 
     assert "任务交付未完成" in result
-    assert any("任务交付未完成" in w for w in warnings)
+    assert any("引擎交付" in w for w in warnings)
     assert ctx.get("_task_state")["status"] == "active"
 
 
@@ -164,7 +164,7 @@ def test_completed_delivery_marks_task_complete_without_nudge(monkeypatch) -> No
         engine, "_call_llm", lambda *a, **k: '{"thought": "done", "final_answer": "ok"}'
     )
 
-    result = engine.run("do the task", ctx)
+    result = engine.run_task("do the task", ctx)
 
     assert result == "ok"
     assert not any("任务交付未完成" in w for w in warnings)

@@ -35,7 +35,7 @@
 | 7 | 上下文/压缩/子 agent | 🟡 | 缓存/视图/回查/哈希锚定；native、`/compact`、自动归档、非 native in-run 均 0-LLM；#27 复验 0 截断；真实 save/resume 待验 |
 | 8 | 权限/沙箱自主性 | ⏳ | 审批可用，但非 Codex OS 沙箱 |
 | 9 | 原生协议/截断续写 | 🟡 | DSML 变体已修；仍有 finish_reason=length 边界 |
-| 10 | 验证闭环 | 🟡 | 非阻断提醒；C15 修了临时脚本误报 |
+| 10 | 验证闭环 | ✅ | TaskState + 引擎统一 `run_task` 出口；ReAct/组合引擎共用；真实 #26 verify+commit 已验证 |
 | 11 | 交付/commit/PR | 🟡 | TaskState 记录 verify/commit/PR 并在 ReAct 收尾提醒；真实 PR 闭环待验 |
 | 12 | TTY / 审批 UX | 🟡 | C7：TTY 单行待手测 |
 | 13 | `git add -A` 纪律 | ⏳ | C8：提示显式路径 |

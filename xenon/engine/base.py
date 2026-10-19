@@ -1953,6 +1953,25 @@ class BaseEngine(ABC):
             "且未执行任何工具调用。请尝试简化问题或使用更具体的指令。"
         )
 
+    def run_task(
+        self,
+        user_input: str,
+        context: AgentContext | None = None,
+        ctx_mgr: Any | None = None,
+        *,
+        max_delivery_retries: int = 2,
+    ) -> str:
+        """Single delivery exit; the concrete engine stays a black box."""
+        from xenon.engine.task_runtime import run_with_delivery
+
+        return run_with_delivery(
+            self,
+            user_input,
+            context,
+            ctx_mgr,
+            max_delivery_retries=max_delivery_retries,
+        )
+
     @abstractmethod
     def run(self, user_input: str, context: AgentContext | None = None) -> str:
         """子类实现主循环。"""

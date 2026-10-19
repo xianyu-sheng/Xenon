@@ -104,6 +104,25 @@ class SteeringMixin:
                 except Exception:  # pragma: no cover - 尽力转发
                     pass
 
+    def run_task(
+        self,
+        user_input: str,
+        context: Any | None = None,
+        ctx_mgr: Any | None = None,
+        *,
+        max_delivery_retries: int = 2,
+    ) -> str:
+        """Use the same delivery exit as BaseEngine; internals stay opaque."""
+        from xenon.engine.task_runtime import run_with_delivery
+
+        return run_with_delivery(
+            self,
+            user_input,
+            context,
+            ctx_mgr,
+            max_delivery_retries=max_delivery_retries,
+        )
+
     def steer(self, text: str) -> bool:
         """任务运行中注入一条用户补充/修改要求（线程安全）。"""
         if not text or not text.strip():
