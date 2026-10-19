@@ -443,9 +443,16 @@ class EngineHostMixin:
                     user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr
                 )
             else:
-                # Test doubles / legacy plugins may expose only run().
-                result = engine.run(
-                    user_input, context=self.agent_context, ctx_mgr=self.ctx_mgr
+                # Test doubles / legacy plugins may expose only run().  They
+                # still go through the shared delivery runtime, so a new engine
+                # family needs no per-engine finalization code.
+                from xenon.engine.task_runtime import run_with_delivery
+
+                result = run_with_delivery(
+                    engine,
+                    user_input,
+                    self.agent_context,
+                    self.ctx_mgr,
                 )
             if spec.log_result_diagnostics:
                 # 诊断日志 — 记录结果实际值，用于排查空白面板根因。
