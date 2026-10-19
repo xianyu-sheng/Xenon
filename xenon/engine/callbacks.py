@@ -187,6 +187,8 @@ class ThinkingStep:
     is_error: bool = False
     provenance: dict[str, Any] | None = None
     security_advisories: list[dict[str, Any]] = field(default_factory=list)
+    result_id: str = ""
+    raw_sha256: str = ""
 
 
 class ThinkingPanel:
@@ -266,6 +268,8 @@ class ThinkingPanel:
         step.security_advisories = list(
             getattr(observation, "security_advisories", []) or []
         )
+        step.result_id = str(getattr(observation, "result_id", "") or "")
+        step.raw_sha256 = str(getattr(observation, "raw_sha256", "") or "")
         if success is None and isinstance(observation, str) and hasattr(
             observation, "success"
         ):

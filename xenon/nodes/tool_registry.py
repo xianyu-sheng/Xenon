@@ -208,6 +208,7 @@ BUILTIN_TOOL_METHODS: dict[str, str] = {
     "spawn_agent": "_spawn_agent",  # 引擎层拦截，注册表仅声明 risk 分类
     "update_plan": "_update_plan",
     "run_script": "_run_script",
+    "tool_result_read": "_tool_result_read",
 }
 
 BUILTIN_TOOL_REGISTRY = ToolRegistry()
@@ -242,6 +243,7 @@ for _tool_name, _method_name in BUILTIN_TOOL_METHODS.items():
         "lsp_diagnostics",
         "lsp_symbols",
         "update_plan",
+        "tool_result_read",
     }:
         _risk = "INFO"
     elif _tool_name in {

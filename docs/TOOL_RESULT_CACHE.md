@@ -23,17 +23,27 @@ Phase 1 先补基础设施：每次工具调用写一份**完整结果缓存**�
 - `XENON_TOOL_RESULT_CACHE=0` 可关闭
 - `result_id` 只接受生成的 `tr_...` 标识，禁止路径
 
+## Phase 2：模型视图与按需读取
+
+- `ToolExecuteResult.model_observation`：command/read_file/search/list/git
+  等工具生成确定性的结构化视图，带 `result_id`；证据层继续使用原
+  `observation`，不改变 tracker/ledger。
+- `tool_result_read(result_id, mode, query, start_line, max_lines)`：
+  只读缓存，不执行命令；支持 summary/excerpt/range/search。
+- `ThinkingStep` / `tool/result` 会话事件新增
+  `result_id` + `raw_sha256`，让事实链锚定完整缓存。
+- `tool_result_read` 自身不重复缓存，避免递归膨胀。
+
 ## 当前边界
 
-- Phase 1 是**暗启动**：`result_id` 已写入 `ToolExecuteResult` / tracker，
-  但模型 prompt 和证据摘要仍是原行为。
+- 模型视图仍由工具类型选择器生成，尚未接入 0-LLM `StructuredCompactor`。
+- 会话恢复还没有加载 result manifest；缓存路径/hash 已存在。
 - raw 文件保留完整输出，因此本地磁盘可能包含命令日志中的敏感信息；
   缓存是本机 0600 文件，不是可分享的会话导出。
 - 缓存不是证据：provenance、成功/失败状态、原始工具调用仍由证据层负责。
 
 ## 下一步
 
-Phase 2 将新增 `model_observation`（结构化视图）和
-`tool_result_read(result_id, ...)`，让模型/前端默认只读结构化摘要，
-需要精确内容时再按需读取完整缓存。之后再把压缩改为
-`结构化摘要 + result_id`，不再调用 LLM 压缩工具结果。
+Phase 3：0-LLM `StructuredCompactor`。旧 observation 换成
+`结构化摘要 + result_id`，保留失败/计划/产物，丢弃旧 raw 文本；
+会话恢复加载 packet + result manifest；需要细节再读缓存。

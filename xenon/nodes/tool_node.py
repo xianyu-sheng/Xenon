@@ -75,6 +75,7 @@ from xenon.nodes.tool_families.result_filtering import (
     _prefilter_time_records,  # noqa: F401 - private compatibility export
 )
 from xenon.nodes.tool_families.script_tools import ScriptToolsMixin
+from xenon.nodes.tool_families.tool_result_tools import ToolResultToolsMixin
 from xenon.nodes.tool_families.utility import UtilityToolsMixin
 from xenon.nodes.tool_families.web_tools import WebToolsMixin
 from xenon.nodes.tool_registry import (
@@ -323,6 +324,7 @@ class ToolNode(
     MCPToolsMixin,
     PlanToolsMixin,
     ScriptToolsMixin,
+    ToolResultToolsMixin,
     ReadOnlyFileToolsMixin,
     DocumentToolsMixin,
     LSPToolsMixin,
@@ -376,6 +378,9 @@ class ToolNode(
         # run_script 参数
         language: str = "python",
         code: str = "",
+        # tool_result_read 参数
+        result_id: str = "",
+        mode: str = "summary",
         # code_index / ast_analyze 参数
         symbol: str = "",
         query: str = "",
@@ -452,6 +457,8 @@ class ToolNode(
         self.explanation = explanation
         self.language = language
         self.code = code
+        self.result_id = result_id
+        self.mode = mode
         self.symbol = symbol
         self.query = query
         self.old_name = old_name
@@ -562,6 +569,8 @@ class ToolNode(
         "lang": ["language", "locale"],
         "steps": ["plan_steps", "todo"],
         "explanation": ["plan_explanation", "note"],
+        "result_id": ["cache_id", "tool_result_id"],
+        "mode": ["read_mode", "result_mode"],
         "language": ["script_language", "shell"],
         "code": ["script", "source"],
         # v0.6.1: LSP 参数
@@ -601,6 +610,8 @@ class ToolNode(
         "explanation",
         "language",
         "code",
+        "result_id",
+        "mode",
         "symbol",
         "query",
         "old_name",

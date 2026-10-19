@@ -72,6 +72,8 @@ REACT_SYSTEM_PROMPT = """你是一个 ReAct 模式的 AI 编程助手。你通�
 13. **内联/多行脚本用 `run_script`**：需要 Python 片段或多行 PowerShell 时，调用
    `run_script(language="python"|"powershell", code="...")`；它会写入工作区临时脚本
    再执行。不要用 `python -c`、`$()` 或反引号，宿主机会拦截。
+14. **结果被摘要时按需回查**：结构化 observation 带 `result_id` 时，先看摘要；
+   只有确实需要精确日志/代码才调用 `tool_result_read(result_id=...)`，不要重复执行原工具。
 
 ## 可用工具（完整且唯一，不存在其他工具）
 
@@ -152,6 +154,21 @@ BUILTIN_TOOLS = {
         "params": {
             "language": "python | powershell（可省略，PowerShell 语法会自动识别）",
             "code": "完整脚本内容（多行）",
+        },
+    },
+    "tool_result_read": {
+        "name": "tool_result_read",
+        "description": (
+            "按 result_id 读取之前工具结果的完整缓存（只读，不执行命令）。"
+            "当结构化 observation 带 result_id 且你需要精确日志/代码时使用；"
+            "不要为了同一信息重复执行原工具。"
+        ),
+        "params": {
+            "result_id": "observation 中的 tr_... 标识",
+            "mode": "summary | excerpt | range | search（默认 summary）",
+            "query": "search 模式的正则/关键词",
+            "start_line": "range 模式起始行（1-based）",
+            "max_lines": "range 模式最大行数",
         },
     },
     "command": {

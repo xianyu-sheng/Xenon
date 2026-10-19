@@ -74,7 +74,10 @@ def test_tool_executor_writes_cache_and_result_id(tmp_path, monkeypatch) -> None
     assert meta["tool"] == "read_file"
     raw = store.read_raw(result.result_id)
     assert raw and "cached full content" in raw
-    assert result.observation  # model/evidence view unchanged
+    assert result.observation  # evidence/tracker view unchanged
+    assert result.model_observation is not None
+    assert result.result_id in result.model_observation
+    assert "[read_file]" in result.model_observation
 
 
 def test_store_is_opt_out(tmp_path) -> None:

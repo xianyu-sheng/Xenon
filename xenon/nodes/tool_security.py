@@ -84,6 +84,7 @@ PROVENANCE_SOURCE_BY_ACTION: dict[str, SourceType] = {
     "submit_plan": "tool",
     "update_plan": "tool",
     "run_script": "tool",
+    "tool_result_read": "tool",
     # Documented extension example. Other runtime plugins use the same
     # fail-safe ``tool`` fallback without requiring registration here.
     "sqlite_query": "tool",

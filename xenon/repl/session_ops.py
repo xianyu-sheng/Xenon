@@ -84,6 +84,8 @@ class SessionOpsMixin:
                 security_advisories=list(
                     getattr(step, "security_advisories", []) or []
                 ),
+                result_id=str(getattr(step, "result_id", "") or ""),
+                raw_sha256=str(getattr(step, "raw_sha256", "") or ""),
             )
 
             # PostToolUse hook：exit 2 的 stderr 回传给用户/模型。

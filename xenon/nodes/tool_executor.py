@@ -48,6 +48,7 @@ from xenon.nodes.tool_classify import (  # noqa: E402,F401 - 兼容导出
     required_execution_level,
 )
 from xenon.nodes.tool_node import _DYNAMIC_TOOLS, ToolNode
+from xenon.nodes.tool_output import build_model_observation
 from xenon.nodes.tool_registry import BUILTIN_TOOL_REGISTRY
 from xenon.nodes.tool_result import ToolResult, enrich_tool_result
 from xenon.nodes.tool_security import format_advisory_warning, model_visible_content
@@ -352,6 +353,8 @@ class _ToolObservation(str):
         degraded: bool = False,
         provenance: dict[str, Any] | None = None,
         security_advisories: list[dict[str, Any]] | None = None,
+        result_id: str = "",
+        raw_sha256: str = "",
     ) -> "_ToolObservation":
         # success/degraded 非 keyword-only：copy.deepcopy 的 __newobj__
         # 只传 (cls, text)，随后用 __dict__ 恢复真实标记。
@@ -360,6 +363,8 @@ class _ToolObservation(str):
         obj.degraded = degraded  # type: ignore[attr-defined]
         obj.provenance = provenance  # type: ignore[attr-defined]
         obj.security_advisories = security_advisories or []  # type: ignore[attr-defined]
+        obj.result_id = result_id  # type: ignore[attr-defined]
+        obj.raw_sha256 = raw_sha256  # type: ignore[attr-defined]
         return obj
 
 
@@ -383,6 +388,8 @@ class ToolExecuteResult:
     recoverable: bool = False
     execution_id: str = ""
     result_id: str = ""
+    raw_sha256: str = ""
+    model_observation: str | None = None
     lifecycle: tuple[dict[str, Any], ...] = field(default_factory=tuple, repr=False)
 
     def __post_init__(self) -> None:
@@ -767,6 +774,9 @@ class ToolExecutor:
         tools: dict[str, Any] | None = None,
     ) -> ToolExecuteResult:
         """执行工具，返回 ToolExecuteResult。"""
+        store = self._ensure_result_store(context)
+        if store is not None:
+            context.set("_tool_result_store", store)
         if self.execution_policy is not None:
             self.execution_policy.check(f"tool:{tool_name}")
             self.execution_policy.emit("tool_start", tool=tool_name)
@@ -829,8 +839,10 @@ class ToolExecutor:
                     "必须先核验实际状态，不得自动重试。"
                 )
             result_id = f"tr_{execution_id}"
+            raw_sha256 = ""
+            model_observation: str | None = None
             store = self._ensure_result_store(context)
-            if store is not None:
+            if store is not None and tool_name != "tool_result_read":
                 meta = store.record(
                     execution_id,
                     tool=tool_name,
@@ -848,6 +860,10 @@ class ToolExecutor:
                 )
                 if meta is not None:
                     result_id = meta.result_id
+                    raw_sha256 = meta.raw_sha256
+                    model_observation = build_model_observation(
+                        tool_name, raw, observation, result_id
+                    )
             execution_result = ToolExecuteResult(
                 tool_name=tool_name,
                 success=success,
@@ -864,6 +880,8 @@ class ToolExecutor:
                 recoverable=bool(checkpoint["recoverable"]),
                 execution_id=execution_id,
                 result_id=result_id,
+                raw_sha256=raw_sha256,
+                model_observation=model_observation,
                 lifecycle=tuple(lifecycle),
             )
             provenance = execution_result.structured.provenance
