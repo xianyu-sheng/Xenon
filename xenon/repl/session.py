@@ -198,6 +198,50 @@ def _ensure_sessions_dir() -> Path:
     return SESSIONS_DIR
 
 
+def session_display_name(session: dict[str, Any]) -> str:
+    """Human-readable label for the two automatic-save forms."""
+    name = str(session.get("name") or "")
+    if name.startswith("_auto"):
+        return "[上次自动保存]"
+    if name.startswith("auto-"):
+        saved = str(session.get("saved_at") or "")[:16].replace("T", " ")
+        return f"[自动保存] {saved}" if saved else "[自动保存]"
+    return name
+
+
+def archive_auto_session() -> Path | None:
+    """Preserve the current ``_auto`` conversation as a timestamped session.
+
+    ``_auto`` is a stable checkpoint slot: without this rotation, starting a
+    new conversation overwrites the previous one and ``/resume`` can only ever
+    show the latest conversation.  The archive keeps the original timestamps
+    and history; it is a normal session file, so list/load/resume all work.
+    """
+    src = SESSIONS_DIR / f"{AUTO_SESSION_NAME}.json"
+    if not src.exists():
+        return None
+    try:
+        data = _load_and_migrate(src)
+        history = data.get("history")
+        if not isinstance(history, list) or not history:
+            return None
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        base = f"auto-{stamp}"
+        dest = _session_path(base, _ensure_sessions_dir())
+        suffix = 2
+        while dest.exists():
+            dest = _session_path(f"{base}-{suffix}", _ensure_sessions_dir())
+            suffix += 1
+        data["name"] = dest.stem
+        data["archived_from"] = AUTO_SESSION_NAME
+        data["archived_at_ts"] = _time.time()
+        _write_session_payload(dest, data)
+        src.unlink()
+        return dest
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, UnicodeError):
+        return None
+
+
 def remap_workspace_paths(
     memory: dict[str, Any], *, old_cwd: str, new_cwd: str
 ) -> tuple[dict[str, Any], dict[str, str]]:
@@ -482,6 +526,36 @@ def auto_save(
                 return None
 
         now = _time.time()
+        # A new conversation must not overwrite the previous auto-save.  Use a
+        # stable conversation_id from the REPL; old files without one are
+        # archived once when the new format first saves.
+        current_conversation = str((extra or {}).get("conversation_id") or "")
+        if current_conversation and filepath.exists():
+            try:
+                existing = _load_and_migrate(filepath)
+                existing_extra = existing.get("extra") or {}
+                existing_id = ""
+                if isinstance(existing_extra, dict):
+                    existing_id = str(
+                        existing_extra.get("conversation_id") or ""
+                    )
+                existing_history = existing.get("history")
+                if (
+                    isinstance(existing_history, list)
+                    and existing_history
+                    and existing_id != current_conversation
+                ):
+                    archive_auto_session()
+            except (
+                OSError,
+                json.JSONDecodeError,
+                KeyError,
+                TypeError,
+                ValueError,
+                UnicodeError,
+            ):
+                pass
+
         # _auto 每轮对话都被覆盖写，热度必须延续，否则计数永远是 0。
         prev_accessed, prev_count = _read_access_stats(filepath)
 
@@ -546,7 +620,9 @@ def cleanup_expired_sessions() -> int:
     if not SESSIONS_DIR.exists():
         return 0
 
-    for f in SESSIONS_DIR.glob("_auto*.json"):
+    for f in list(SESSIONS_DIR.glob("_auto*.json")) + list(
+        SESSIONS_DIR.glob("auto-*.json")
+    ):
         try:
             with open(f, encoding="utf-8") as fp:
                 data = json.load(fp)

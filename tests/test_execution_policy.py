@@ -491,3 +491,24 @@ def test_no_tool_turns_stay_direct(text):
     profile = DifficultyEstimator().estimate(text, [])
     assert profile.recommended_engine == "direct"
     assert profile.engine_confidence == 0.0
+
+
+def test_issue_delivery_authorizes_write_and_execute() -> None:
+    """A concrete work item ("implement #22") is code work, not chat codegen."""
+
+    from xenon.repl.turn_contract import build_turn_contract
+
+    text = "好的 那么请你来实现#22吧"
+    policy = classify_execution_policy(text, intent="write_code")
+    contract = build_turn_contract(text, fallback_intent="write_code")
+
+    assert policy.level is ExecutionLevel.EXECUTE
+    assert policy.allows_write is True
+    assert policy.allows_execute is True
+    assert contract.level is ExecutionLevel.EXECUTE
+    assert contract.allows_write is True
+    assert "execute" in contract.operations
+
+    # Generic code generation remains answer-only.
+    generic = classify_execution_policy("实现一个排序函数", intent="write_code")
+    assert generic.level is ExecutionLevel.ANSWER_ONLY

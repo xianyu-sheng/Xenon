@@ -258,7 +258,11 @@ def _interactive_session_picker() -> str | None:
 
     from rich.prompt import IntPrompt
 
-    from xenon.repl.session import get_session_age, list_sessions
+    from xenon.repl.session import (
+        get_session_age,
+        list_sessions,
+        session_display_name,
+    )
 
     sessions = list_sessions()
     if not sessions:
@@ -267,7 +271,7 @@ def _interactive_session_picker() -> str | None:
     console.print("\n[bold]📂 恢复会话[/bold] [dim]（数字选择，Enter 确认）[/dim]")
     console.print("  [bold cyan]0[/bold cyan]  🆕 新对话")
     for i, s in enumerate(sessions[:9], 1):
-        name = "[上次自动保存]" if s["name"].startswith("_auto") else s["name"]
+        name = session_display_name(s)
         age = get_session_age(s) or str(s.get("saved_at", ""))[:16]
         console.print(
             f"  [bold cyan]{i}[/bold cyan]  {name} · {s['messages']} 条消息"
@@ -294,7 +298,11 @@ def _print_session_list() -> None:
     表格列与 /resume 无参数分支保持一致（# / 名称 / 时间 / 消息 / 范式），
     这样命令行和 REPL 里看到的是同一张表、同一套序号。
     """
-    from xenon.repl.session import get_session_age, list_sessions
+    from xenon.repl.session import (
+        get_session_age,
+        list_sessions,
+        session_display_name,
+    )
 
     sessions = list_sessions()
     if not sessions:
@@ -315,9 +323,7 @@ def _print_session_list() -> None:
     table.add_column("范式", style="dim", width=10)
 
     for i, s in enumerate(sessions, 1):
-        display_name = s["name"]
-        if display_name.startswith("_auto"):
-            display_name = "[上次自动保存]"
+        display_name = session_display_name(s)
         age = get_session_age(s) or str(s.get("saved_at", ""))[:16]
         table.add_row(
             str(i),

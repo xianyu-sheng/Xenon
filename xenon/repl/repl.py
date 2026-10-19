@@ -276,6 +276,16 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             # Stable id shared by the tool-result cache and /save-/resume.
             self.agent_context.set("_session_id", self._session_events.session_id)
             self.ctx_mgr.session_id = self._session_events.session_id
+        # Conversation identity is separate from the event-log id: it is the
+        # key that lets auto_save preserve the previous conversation when the
+        # user starts a new one instead of overwriting the only _auto slot.
+        self._conversation_id = (
+            getattr(self._session_events, "session_id", "") or ""
+        )
+        if not self._conversation_id:
+            import uuid
+
+            self._conversation_id = uuid.uuid4().hex
         self._plan_mode_active = self._load_plan_mode()
         # 本地 hooks（用户级 + 项目级 .xenon/hooks.yaml；失败无影响）。
         self._hook_runner: Any = None
@@ -594,6 +604,7 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
                     "paradigm": self.registry.current_mode,
                     "working_memory": self.ctx_mgr.get_working_memory(),
                     "cwd": str(Path.cwd()),
+                    "conversation_id": getattr(self, "_conversation_id", ""),
                 },
             )
             if cleanup:
@@ -610,7 +621,11 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         if getattr(self, "_startup_resume", None):
             return
         try:
-            from xenon.repl.session import get_session_age, list_sessions
+            from xenon.repl.session import (
+                get_session_age,
+                list_sessions,
+                session_display_name,
+            )
 
             sessions = list_sessions()
             if not sessions:
@@ -618,9 +633,7 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
 
             latest = sessions[0]
             age = get_session_age(latest) or latest.get("saved_at", "")[:16]
-            name = latest["name"]
-            if name.startswith("_auto"):
-                name = "上次自动保存"
+            name = session_display_name(latest)
             console.print(
                 f"\n[dim]┌─ {name} ({age}) · {latest['messages']} 条消息[/dim]"
             )

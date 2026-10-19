@@ -799,14 +799,16 @@ class ReActEngine(BaseEngine):
                                     f"{s.get('step', '')}({s.get('status', 'pending')})"
                                     for s in incomplete[:6]
                                 )
-                                + "。请先调用 update_plan 更新状态：已完成的标为 "
-                                "completed；确实未做的保留 pending，并在最终回答中"
-                                "明确说明未完成原因。"
+                                + "。不要只更新状态：先用剩余预算完成下一步的实际工作，"
+                                "优先处理："
+                                + str(incomplete[0].get("step", ""))[:120]
+                                + "；完成后再调用 update_plan 更新状态。确实无法完成的"
+                                "步骤保留 pending，并在最终回答中明确说明原因。"
                                 + (
-                                    "这是最后一次计划收尾提醒；若不更新，最终回答会"
+                                    "这是最后一次完成提醒；若仍未推进，最终回答会"
                                     "附带未完成计划警告。"
                                     if final_nudge
-                                    else "更新后再给出 final_answer。"
+                                    else "推进后再给出 final_answer。"
                                 )
                             ),
                         }

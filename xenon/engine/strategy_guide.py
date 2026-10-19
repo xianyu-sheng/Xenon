@@ -82,6 +82,7 @@ _SPECS: dict[str, _StrategySpec] = {
     "write_code": _StrategySpec(
         "实现任务",
         (
+            "clone_repo",
             "list_files",
             "search_files",
             "read_file",
@@ -92,7 +93,11 @@ _SPECS: dict[str, _StrategySpec] = {
             "edit_file",
             "command",
         ),
-        "先读取相邻实现和扩展接口，再落盘实现并用测试闭环。",
+        (
+            "先确认工作区是否就是目标仓库；若用户给了 GitHub URL/issue 而当前目录不是，"
+            "先用 clone_repo(target_dir=...) 克隆，再在克隆目录读写并跑测试；"
+            "不要把代码贴在回答里代替落盘。"
+        ),
     ),
     "refactor": _StrategySpec(
         "重构任务",

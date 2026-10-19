@@ -243,6 +243,20 @@ _WRITE_TARGETED = re.compile(
     re.IGNORECASE,
 )
 
+# Explicit work-item delivery: "实现 #22" / "修复 issue #22" is an
+# engineering task, not a request to paste code into chat.  It authorizes
+# both file writes and the command execution needed to verify the change.
+# Keep it tied to an issue/PR/task noun; bare "实现一个排序函数" remains
+# answer-only code generation.
+_TASK_DELIVERY = re.compile(
+    r"(?:实现|修复|解决|完成|落地|开发|处理|关闭|认领|做掉|搞定|"
+    r"implement|fix|resolve|complete|address|work\s+on)"
+    r"\s*(?:一下|下|掉)?\s*(?:这个|该|上述|当前|那个)?\s*"
+    r"(?:issue|Issue|ISSUE|#\d+|PR|pull\s+request)"
+    r"|(?:issue|Issue|#\d+|PR)\s*(?:的)?\s*(?:实现|修复|完成|解决)",
+    re.IGNORECASE,
+)
+
 # 延迟/条件式写入：用户提到了写入，但要求“等确认/我说了再写”。
 # 这不是禁令（区别于 _NO_WRITE）：本轮不执行，但动作被登记为待批准。
 _DEFER_WRITE = re.compile(
@@ -418,7 +432,11 @@ class ExecutionSignals:
         ``write_verb``/``implicit_write`` 里的「修复/处理/优化」属于语义，
         在用户问原因/思路时不应算作施工授权。
         """
-        if "write_targeted" in self.write_patterns or "git_request" in self.write_patterns:
+        if (
+            "write_targeted" in self.write_patterns
+            or "git_request" in self.write_patterns
+            or "task_delivery" in self.write_patterns
+        ):
             return True
         return self.explicit_write and bool(self.paths)
 
@@ -439,6 +457,10 @@ def extract_execution_signals(text: str) -> ExecutionSignals:
 
     write_patterns: list[str] = []
     write_snippets: list[str] = []
+    task_delivery = _TASK_DELIVERY.search(request_source)
+    if task_delivery is not None:
+        write_patterns.append("task_delivery")
+        write_snippets.append(task_delivery.group(0))
     for label, pattern, haystack in (
         ("write_verb", _WRITE, request_source),
         ("write_targeted", _WRITE_TARGETED, request_source),
@@ -467,10 +489,14 @@ def extract_execution_signals(text: str) -> ExecutionSignals:
     for pattern in (_PATH_REFERENCE, _URL_REFERENCE):
         read_snippets.extend(_snippets(pattern, source, limit=2))
 
+    execute_snippets = list(_snippets(_EXECUTE, request_source, limit=2))
+    if task_delivery is not None:
+        execute_snippets.append(task_delivery.group(0))
+
     return ExecutionSignals(
         write_patterns=tuple(write_patterns),
         write_snippets=tuple(dict.fromkeys(write_snippets)),
-        execute_snippets=_snippets(_EXECUTE, request_source, limit=2),
+        execute_snippets=tuple(dict.fromkeys(execute_snippets))[:2],
         read_snippets=tuple(dict.fromkeys(read_snippets))[:5],
         negation_snippets=tuple(dict.fromkeys(negation_snippets))[:5],
         no_write=bool(_NO_WRITE.search(source)),

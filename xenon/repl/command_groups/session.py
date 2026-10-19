@@ -7,6 +7,7 @@ context inspection, and configuration inspection.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -126,6 +127,9 @@ def _cmd_clear(*, ctx_mgr: ContextManager, **kwargs: Any) -> str:
     repl = (kwargs.get("session_state") or {}).get("_repl")
     if repl is not None:
         repl._pending_action = None
+        # A cleared conversation is a new identity; the next auto-save will
+        # archive the previous _auto slot instead of overwriting it.
+        repl._conversation_id = uuid.uuid4().hex
     return "✅ 对话历史已清空"
 
 
@@ -162,6 +166,9 @@ def _cmd_save(
             "working_memory": ctx_mgr.get_working_memory(),
             "tool_results": ctx_mgr.export_tool_manifest(),
             "cwd": str(Path.cwd()),
+            "conversation_id": getattr(
+                session_state.get("_repl"), "_conversation_id", ""
+            ),
         },
     )
     return f"✅ 会话已保存: {path}"
@@ -214,6 +221,9 @@ def _cmd_load(
     working_memory = extra.get("working_memory", {})
     if not isinstance(working_memory, dict):
         working_memory = {}
+    repl = session_state.get("_repl")
+    if repl is not None:
+        repl._conversation_id = str(extra.get("conversation_id") or uuid.uuid4().hex)
     from xenon.repl.session import remap_workspace_paths
 
     saved_cwd = extra.get("cwd")
@@ -316,6 +326,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         get_session_age,
         list_sessions,
         load_session,
+        session_display_name,
         touch_session,
     )
 
@@ -344,9 +355,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         table.add_column("范式", style="dim", width=10)
 
         for i, s in enumerate(sessions, 1):
-            display_name = s["name"]
-            if display_name.startswith("_auto"):
-                display_name = "[上次自动保存]"
+            display_name = session_display_name(s)
             age = get_session_age(s) or s["saved_at"][:16]
             paradigm = s.get("paradigm", "")
             table.add_row(
@@ -398,6 +407,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         extra = data.get("extra", {})
         if not isinstance(extra, dict):
             extra = {}
+        repl._conversation_id = str(extra.get("conversation_id") or uuid.uuid4().hex)
         working_memory = extra.get("working_memory", {})
         if not isinstance(working_memory, dict):
             working_memory = {}
