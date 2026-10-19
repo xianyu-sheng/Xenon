@@ -251,9 +251,18 @@ class TurnFlowMixin:
                 f"[dim cyan]🧩 Agent Skill: {skill_name}（正文与资源按需加载）[/dim cyan]"
             )
         elif self.optimize_prompts:
+            # A write/execute turn, or a turn carrying an active plan, is an
+            # agentic task.  Rewriting it into a code-only prompt is worse than
+            # leaving it alone: the model then answers with a code block instead
+            # of editing/testing the workspace.
+            agentic_turn = (
+                execution_policy.level >= ExecutionLevel.WRITE
+                or bool(self.agent_context.get("_agent_plan"))
+            )
             optimized, system_hint, was_optimized = optimize_prompt(
                 user_input,
                 intent=intent,
+                agentic=agentic_turn,
             )
             console.print(f"[dim]🎯 意图: {get_intent_display(intent)}[/dim]")
 
@@ -529,57 +538,37 @@ class TurnFlowMixin:
         return engine
 
 
-    @staticmethod
-    def _detect_intent(text: str) -> str | None:
-        """检测用户意图。"""
-        from xenon.repl.prompt_optimizer import detect_intent
-
-        return detect_intent(text)
-
-
     def _resolve_turn_intent(self, text: str) -> tuple[str | None, str | None]:
-        """回退意图（仅降级模式）。
+        """Inherit only an existing turn's intent, never classify by keywords.
 
-        单一语义通道：LLM 分类器可用时，意图与跨轮次绑定全部由它负责
-        （配合任务状态块），这里不再用正则猜语义；分类器不可用时才走
-        旧的 query/research 继承逻辑作为保守回退。
+        The LLM contract owns new intent routing.  For a terse follow-up
+        (``结果呢``) the previous user turn's stored intent is factual state,
+        so it can be inherited even when the classifier is unavailable; no
+        regex map is consulted to decide what the new turn means.
         """
-
-        classifier = (
-            self._get_intent_classifier()
-            if getattr(self, "_intent_classifier_checked", False)
-            else None
-        )
-        if classifier is not None and classifier.enabled:
-            return None, None
 
         from xenon.repl.prompt_optimizer import is_contextual_followup
 
-        raw_intent = self._detect_intent(text)
         if not is_contextual_followup(text):
-            return raw_intent, None
-
+            return None, None
         history = getattr(self.ctx_mgr, "history", [])
         for turn in reversed(history[-20:]):
             if getattr(turn, "role", "") != "user":
                 continue
             metadata = getattr(turn, "metadata", {}) or {}
             previous_intent = metadata.get("intent")
-            content = str(getattr(turn, "content", ""))
-            if previous_intent is None:
-                previous_intent = self._detect_intent(content)
             if previous_intent in {"query", "research"}:
                 source = str(
                     metadata.get("intent_source")
                     or metadata.get("original_user_input")
-                    or content
+                    or getattr(turn, "content", "")
                 ).strip()
                 return str(previous_intent), source[:2000] or None
-            # Legacy versions mislabeled retrieval follow-ups as debug.  Skip
-            # those, but do not jump across an unrelated substantive task.
+            # Legacy versions mislabeled retrieval follow-ups as debug; skip
+            # those labels but still stop at an unrelated substantive task.
             if previous_intent not in {None, "debug", "chat"}:
                 break
-        return raw_intent, None
+        return None, None
 
 
     def _task_state_block(self) -> str:

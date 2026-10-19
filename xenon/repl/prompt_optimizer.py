@@ -437,6 +437,8 @@ def optimize_prompt(
     lang: str = "Python",
     context_hints: dict[str, Any] | None = None,
     intent: str | None = None,
+    agentic: bool = False,
+    allow_regex: bool = True,
 ) -> tuple[str, str | None, bool]:
     """
     优化用户输入，返回 (优化后的 prompt, 补充的 system hint, 是否实际优化)。
@@ -451,9 +453,22 @@ def optimize_prompt(
     Returns:
         (optimized_prompt, system_hint, was_optimized) — was_optimized 表示是否实际做了优化。
     """
+    # Agentic turns must keep the user's actual instruction.  The code-only
+    # template is for standalone code generation, not for "implement issue X"
+    # or "continue the unfinished work": applying it makes the model paste a
+    # code block instead of using tools.
+    if agentic:
+        return user_input, None, False
+
     # The REPL may resolve a terse follow-up (for example ``结果呢``) against
-    # the preceding turn.  Preserve that contextual intent here.
-    intent = intent if intent is not None else detect_intent(user_input)
+    # the preceding turn.  Preserve that contextual intent here.  Direct
+    # API callers may omit intent; that legacy path still uses the regex map,
+    # but the REPL route always passes the LLM contract's intent.
+    intent = (
+        intent
+        if intent is not None
+        else (detect_intent(user_input) if allow_regex else None)
+    )
 
     if intent is None:
         return user_input, None, False

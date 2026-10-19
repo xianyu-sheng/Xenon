@@ -30,9 +30,9 @@ def test_estimator_no_longer_falls_back_to_a_second_llm_call():
     assert "classify_intent_with_llm" not in source
 
 
-def test_repl_uses_regex_intent_only_in_the_degraded_fallback():
+def test_repl_does_not_use_regex_intent_for_routing():
     source = _source("xenon/repl/turn_flow.py")
-    # 唯一一处模块级 detect_intent 调用在 _detect_intent 帮助函数内部。
-    assert source.count("return detect_intent(text)") == 1
-    # 两处 self._detect_intent 调用都在 _resolve_turn_intent 的降级分支。
-    assert source.count("self._detect_intent(") == 2
+    assert "detect_intent(" not in source
+    # Follow-up inheritance reads stored turn metadata; it must not classify
+    # the new utterance with keywords.
+    assert "self._detect_intent(" not in source

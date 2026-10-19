@@ -139,6 +139,15 @@ class TestOptimizePrompt:
         assert "## 需要解释的内容" in optimized
         assert hint is not None
 
+    def test_agentic_task_is_not_rewritten_into_code_only_prompt(self):
+        text = "继续你还没做完 没有写文件 没有测试 没有创建PR呢"
+        optimized, hint, was_opt = optimize_prompt(
+            text, intent="write_code", agentic=True
+        )
+        assert optimized == text
+        assert hint is None
+        assert was_opt is False
+
     def test_unknown_intent_passthrough(self):
         optimized, hint, was_opt = optimize_prompt("12345")
         assert optimized == "12345"

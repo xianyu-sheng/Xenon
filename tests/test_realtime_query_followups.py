@@ -238,10 +238,13 @@ def test_legacy_debug_labeled_followup_still_reaches_original_query():
     repl = REPL.__new__(REPL)
     repl.ctx_mgr = ContextManager()
     original = "查一下周五从昆山到常州的车票，晚上六点之后"
-    repl.ctx_mgr.add_user_message(original)
+    repl.ctx_mgr.add_user_message(
+        original, metadata={"intent": "query", "intent_source": original}
+    )
     repl.ctx_mgr.add_assistant_message("数据被截断")
     repl.ctx_mgr.add_user_message(
-        "## 问题描述\n为什么被截断了？能不能先筛选\n## 调试要求\n给出代码"
+        "## 问题描述\n为什么被截断了？能不能先筛选\n## 调试要求\n给出代码",
+        metadata={"intent": "debug"},
     )
     repl.ctx_mgr.add_assistant_message("https://example.com/search")
 
