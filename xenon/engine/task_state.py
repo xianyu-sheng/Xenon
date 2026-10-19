@@ -214,12 +214,9 @@ class TaskState:
                 label = command.strip().replace("\n", " ")[:240]
                 if label and label not in self.tests:
                     self.tests.append(label)
-            if _COMMIT_RE.search(text):
+            if _COMMIT_RE.search(command):
                 hashes = _COMMIT_HASH_RE.findall(result_text)
-                if hashes:
-                    self.commit = hashes[-1]
-                elif not self.commit:
-                    self.commit = "committed"
+                self.commit = hashes[-1] if hashes else "committed"
             if _PUSH_RE.search(text):
                 self.pushed = True
             if _PR_RE.search(text):

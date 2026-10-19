@@ -124,3 +124,22 @@ def test_all_engine_families_share_the_same_delivery_exit() -> None:
 
     assert hasattr(BaseEngine, "run_task")
     assert hasattr(SteeringMixin, "run_task")
+
+
+def test_commit_gate_ignores_old_hashes_from_log_output() -> None:
+    state = TaskState(objective="x", execution_level=3, required=["commit"])
+    state.record_tool(
+        "command",
+        {"command": "git log --oneline -3"},
+        success=True,
+        result="02d9eb9 Merge pull request #51\n005ba58 fix: old",
+    )
+    assert state.commit == ""
+
+    state.record_tool(
+        "command",
+        {"command": "git commit -m 'new work'"},
+        success=True,
+        result="[main 88ffd05] new work",
+    )
+    assert state.commit == "88ffd05"
