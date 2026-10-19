@@ -67,6 +67,10 @@ def _fold_turn(turn: list[dict]) -> dict:
             if paths:
                 entry["target"] = paths[0]
             entry["success"] = bool(event.get("success"))
+            if event.get("result_id"):
+                entry["result_id"] = str(event["result_id"])
+            if event.get("raw_sha256"):
+                entry["raw_sha256"] = str(event["raw_sha256"])
             if not entry["success"] and event.get("error"):
                 message = str(event["error"])[:100]
                 entry["error"] = message
@@ -122,7 +126,13 @@ def render_archive_block(records: list[dict], budget: int = 1200) -> str:
             mark = "✓" if tool.get("success") else "✗"
             name = tool.get("tool", "")
             target = tool.get("target", "")
-            tool_bits.append(f"{name}{mark}({target[:40]})" if target else f"{name}{mark}")
+            rid = str(tool.get("result_id") or "")
+            detail = f"{name}{mark}"
+            if target:
+                detail += f"({target[:40]})"
+            if rid:
+                detail += f"[{rid}]"
+            tool_bits.append(detail)
         if tool_bits:
             parts.append("工具:" + ",".join(tool_bits))
         if record.get("artifacts"):

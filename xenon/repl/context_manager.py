@@ -1618,6 +1618,86 @@ class ContextManager:
             logger.warning(f"工具输出预压缩失败: {e}，回退自动摘要")
             return self._auto_summary(messages=messages)
 
+    def structured_summary(
+        self,
+        *,
+        keep_rounds: int = 3,
+        budget: int = 1600,
+    ) -> str:
+        """Build a deterministic 0-LLM summary of older turns.
+
+        Tool entries keep their result_id and raw hash; they are references to
+        the full result cache, not copies of raw output.
+        """
+        from xenon.engine.structured_compactor import (
+            extract_result_id,
+            summarize_observation_text,
+        )
+
+        older, _recent = self._split_recent(keep_rounds=keep_rounds)
+        if not older:
+            return "（无可压缩的早期对话）"
+
+        goals: list[str] = []
+        tool_lines: list[str] = []
+        failures: list[str] = []
+        artifacts: set[str] = set()
+        for turn in older:
+            role = getattr(turn, "role", "")
+            content = str(getattr(turn, "content", "") or "")
+            if role == "user":
+                goals.append(content[:180])
+                continue
+            if getattr(turn, "turn_type", "") not in {
+                "tool_call",
+                "tool_result",
+            } and role != "tool":
+                continue
+            meta = getattr(turn, "metadata", {}) or {}
+            tool = str(meta.get("tool_name") or "tool")
+            summary = summarize_observation_text(content, max_chars=260)
+            rid = extract_result_id(content) or str(meta.get("result_id") or "")
+            failed = ("失败" in summary) or ("FAIL" in summary)
+            suffix = f" result_id={rid}" if rid else ""
+            line = f"- {tool}{' [FAIL]' if failed else ''}{suffix}: {summary[:340]}"
+            if failed:
+                failures.append(line)
+            elif len(tool_lines) < 24:
+                tool_lines.append(line)
+            for path in meta.get("paths") or []:
+                if isinstance(path, str):
+                    artifacts.add(path[:180])
+
+        memory = self._working_memory or {}
+        for key in ("session_created_files", "session_modified_files"):
+            for path in memory.get(key, []) or []:
+                if isinstance(path, str):
+                    artifacts.add(path[:180])
+
+        lines = ["## 结构化上下文（0-LLM 压缩）"]
+        if goals:
+            lines.append("### 用户目标（最近）")
+            lines.extend(f"- {goal}" for goal in goals[-3:])
+        if tool_lines:
+            lines.append("### 工具结果（可回查）")
+            lines.extend(tool_lines[-12:])
+        if failures:
+            lines.append("### 失败/未解决")
+            lines.extend(failures[-8:])
+        if artifacts:
+            lines.append("### 产物")
+            lines.extend(f"- {path}" for path in sorted(artifacts)[:10])
+        if memory:
+            plan = memory.get("_agent_plan_text") or memory.get("plan_text")
+            if plan:
+                lines.append("### 计划")
+                lines.append(str(plan)[:600])
+
+        text = "\n".join(lines)
+        if len(text) > budget:
+            text = text[:budget] + "\n…（结构化摘要已按预算截断；详情按 result_id 回查）"
+        return text
+
     def _auto_summary(self, messages: list | None = None) -> str:
         """智能自动摘要（保留关键信息）——6 段 LLM 失败时的正则兜底。"""
         target = messages or self.history

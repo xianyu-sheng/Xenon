@@ -44,15 +44,25 @@ Phase 1 先补基础设施：每次工具调用写一份**完整结果缓存**�
   `extra.tool_results`，`/load`、`/resume` 恢复。
 - `tool/result` 事件带 `result_id` / `raw_sha256`，事实链可锚定缓存。
 
+## Phase 4：通用压缩也走结构化摘要
+
+- `ContextManager.structured_summary()`：从用户目标、工具 trace、
+  manifest、失败、产物、计划生成确定性摘要，0 LLM。
+- `/compact` 无自定义摘要时使用该函数；不再调用 planner 模型。
+- 自动压缩仍使用事件归档；新增 `compaction` 事件：
+  `packet_hash` + `covers_result_ids`，可沿哈希链核对摘要覆盖范围。
+- 归档中的每个工具条目保留 `result_id` / `raw_sha256`。
+
 ## 当前边界
 
-- native tool block 已 0-LLM；`ContextManager.compact` 的通用自由文本摘要
-  仍保留原 LLM 路径，尚未整体替换。
+- 无自定义摘要的 `/compact`、自动归档、native tool block 已 0-LLM；
+  `BaseEngine._maybe_compact_messages` 在非 native 路径调用
+  `ContextManager.compact()` 时仍可能走原 LLM 摘要，需下一步彻底切换。
 - raw 文件保留完整输出，因此本地磁盘可能包含命令日志中的敏感信息；
   缓存是本机 0600 文件，不是可分享的会话导出。
 - 缓存不是证据：provenance、成功/失败状态、原始工具调用仍由证据层负责。
 
 ## 下一步
 
-把 `ContextManager.compact` 的自由文本路径也切成
-`结构化摘要 + result_id`，并用 #27 复跑验证截断/调用数/完成率。
+彻底切换 `_maybe_compact_messages` 的非 native 路径，并用 #27 复跑验证
+截断/调用数/完成率。

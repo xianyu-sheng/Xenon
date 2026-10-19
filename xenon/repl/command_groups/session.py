@@ -526,7 +526,10 @@ def _cmd_compact(
     **kwargs: Any,
 ) -> str:
     summary = args.strip() if args.strip() else None
-    model_ids = registry.get_role_priority("planner") if not summary else None
+    # No manual text -> deterministic structured summary, no LLM call.
+    if summary is None:
+        summary = ctx_mgr.structured_summary()
+    model_ids = None
     result = ctx_mgr.compact(summary, model_priority=model_ids)
     stats = ctx_mgr.stats()
 

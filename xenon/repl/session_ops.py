@@ -279,7 +279,20 @@ class SessionOpsMixin:
             if not block:
                 return False
             self.ctx_mgr.compact(summary=block)
-            self._record_event("compaction", turns_archived=len(archives))
+            import hashlib
+
+            result_ids = [
+                str(tool.get("result_id"))
+                for archive in archives
+                for tool in (archive.get("tools") or [])
+                if tool.get("result_id")
+            ]
+            self._record_event(
+                "compaction",
+                turns_archived=len(archives),
+                packet_hash=hashlib.sha256(block.encode("utf-8")).hexdigest(),
+                covers_result_ids=result_ids[:100],
+            )
             return True
         except Exception:  # noqa: BLE001 — 压缩失败不能阻断回合
             logger.debug("自动压缩失败（已忽略）", exc_info=True)
