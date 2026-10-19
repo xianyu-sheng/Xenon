@@ -272,6 +272,10 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             self._session_events = SessionEventLog()
         except Exception:  # noqa: BLE001 — 事实层不可用不能阻断 REPL
             logger.debug("会话事件日志初始化失败（已忽略）", exc_info=True)
+        if self._session_events is not None:
+            # Stable id shared by the tool-result cache and /save-/resume.
+            self.agent_context.set("_session_id", self._session_events.session_id)
+            self.ctx_mgr.session_id = self._session_events.session_id
         self._plan_mode_active = self._load_plan_mode()
         # 本地 hooks（用户级 + 项目级 .xenon/hooks.yaml；失败无影响）。
         self._hook_runner: Any = None

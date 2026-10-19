@@ -52,6 +52,7 @@ from xenon.nodes.tool_registry import BUILTIN_TOOL_REGISTRY
 from xenon.nodes.tool_result import ToolResult, enrich_tool_result
 from xenon.nodes.tool_security import format_advisory_warning, model_visible_content
 from xenon.repl.system_config import get_config
+from xenon.session.tool_results import ToolResultStore
 
 logger = logging.getLogger(__name__)
 from xenon.engine.trace import TraceContextFilter  # noqa: E402
@@ -381,6 +382,7 @@ class ToolExecuteResult:
     retryable: bool = False
     recoverable: bool = False
     execution_id: str = ""
+    result_id: str = ""
     lifecycle: tuple[dict[str, Any], ...] = field(default_factory=tuple, repr=False)
 
     def __post_init__(self) -> None:
@@ -489,6 +491,7 @@ class ToolExecutor:
         evidence_auto_read: bool = True,  # v0.8.3: 盲编辑自动补读
         tool_gate: Any = None,  # 统一工具门控（黑名单+参数校验+证据链）
         hooks: Any = None,  # HookRunner（None 时读全局默认）
+        result_store: ToolResultStore | None = None,  # 会话级完整结果缓存
     ) -> None:
         if evidence_enforcement not in {"observe", "enforce"}:
             raise ValueError("evidence_enforcement must be 'observe' or 'enforce'")
@@ -514,6 +517,21 @@ class ToolExecutor:
 
             tool_gate = ToolGate.from_config(get_config())
         self.tool_gate = tool_gate
+        self.result_store = result_store
+
+    def set_result_store(self, store: ToolResultStore | None) -> None:
+        """Bind the session-scoped result cache (optional, lazy when absent)."""
+        self.result_store = store
+
+    def _ensure_result_store(self, context: AgentContext) -> ToolResultStore | None:
+        """Create a session cache lazily from the REPL context when available."""
+        if self.result_store is None:
+            session_id = context.get("_session_id") or context.get("_repl_session_id")
+            if session_id:
+                self.result_store = ToolResultStore(str(session_id))
+                # TTL is best-effort and must never block a tool call.
+                self.result_store.cleanup()
+        return self.result_store
 
     def register_evidence_gate(self, gate: Any) -> None:
         """挂载一个在线工具边界 Gate；Gate 只判定，不直接执行补救。"""
@@ -810,6 +828,26 @@ class ToolExecutor:
                     "\n⚠️ 本次有副作用的操作状态未知，可能已部分生效；"
                     "必须先核验实际状态，不得自动重试。"
                 )
+            result_id = f"tr_{execution_id}"
+            store = self._ensure_result_store(context)
+            if store is not None:
+                meta = store.record(
+                    execution_id,
+                    tool=tool_name,
+                    params=params,
+                    success=success,
+                    observation=observation,
+                    raw=raw,
+                    error=error,
+                    status=state.value,
+                    metadata={
+                        "tool_class": tool_class,
+                        "attempts": attempts,
+                        "timed_out": state is ToolExecutionState.TIMED_OUT,
+                    },
+                )
+                if meta is not None:
+                    result_id = meta.result_id
             execution_result = ToolExecuteResult(
                 tool_name=tool_name,
                 success=success,
@@ -825,6 +863,7 @@ class ToolExecutor:
                 retryable=bool(checkpoint["retryable"]),
                 recoverable=bool(checkpoint["recoverable"]),
                 execution_id=execution_id,
+                result_id=result_id,
                 lifecycle=tuple(lifecycle),
             )
             provenance = execution_result.structured.provenance
@@ -845,6 +884,7 @@ class ToolExecutor:
                     elapsed_seconds=float(checkpoint["elapsed_seconds"]),
                     provenance=provenance_dict,
                     security_advisories=advisory_dicts,
+                    result_id=result_id,
                 )
             self.record_tool_observation(
                 tool_name, params, success, observation, tracker, context
