@@ -249,6 +249,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 - [awesome-opensource-ai](https://github.com/alvinreal/awesome-opensource-ai) — open-source AI project list (Agentic AI & Multi-Agent Systems → Autonomous Coding Agents)
 - [awesome-mcp-lists](https://github.com/collabnix/awesome-mcp-lists) — Collabnix community list of MCP servers, clients and toolkits (MCP Clients → Command Line Tools)
 - [awesome-ai-coding-tools](https://github.com/mahmoudsajjadi/awesome-ai-coding-tools) — 3-tier taxonomy of AI coding tools (CLI coding agents; special thanks to @xianyu-sheng)
+- [awesome-testing](https://github.com/TheJambo/awesome-testing) — curated testing resources (Static Analysis → SmartBench)
 
 ## License
 
