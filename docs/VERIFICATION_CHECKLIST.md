@@ -107,6 +107,7 @@
 | 2026-10-19 | 统一引擎交付出口 + commit 识别修复 | 抽出 `task_runtime.run_with_delivery`；BaseEngine + SteeringMixin 共用；EngineHost `_run_engine` 改调 `run_task`；不再由 ReAct 单独实现；全量 3452 passed、无新增失败；新增测试防止旧 commit 假满足交付；EngineHost fallback 也走统一运行时 |
 | 2026-10-19 | 无限步数 + 3 次重试 | 默认步数上限改 0；墙钟默认 1800s；交付/verify/malformed/no-tool/plan/no-write 重试统一 3；全量 3454 passed、无新增失败 |
 | 2026-10-20 | unlimited 真实 #27 | `max_iterations=0`；112 工具/327s；正常完成，非步数退出；TaskState completed；commit `0cdf950`（临时 clone，未 push）；首轮 99 工具时出现一次未复现 TypeError，第二轮干净 |
+| 2026-10-20 | 工具数值参数 + 循环退出 | `d73d385` 统一强转模型传入的数值参数，`ad9c8e6` 增加 unlimited 下 LoopDetector 终止测试；targeted 23 passed |
 | 2026-10-20 | PR #160 审查 | 发现可选 HMAC 证据链的无密钥降级攻击；已留可复现评论，暂不合并 |
 | 2026-10-19 | SmartBench PR #51 合并 | PR #51 合并提交 `02d9eb9`，7/7 checks 绿；Issue #22 关闭；本地 main 已拉齐，分支已清理 |
 | 2026-10-18 | C11 #27 计划复验 | 第一轮 2 次更新、结束仍有 pending（收尾提醒未促成更新）；第二轮 3 次更新、全部 completed；说明计划收尾仍依赖模型配合 |
