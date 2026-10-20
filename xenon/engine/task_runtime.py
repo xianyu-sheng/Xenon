@@ -26,7 +26,13 @@ def run_with_delivery(
     from xenon.engine.task_state import TaskState
     from xenon.engine.tool_tracker import ToolExecutionTracker
 
-    result = engine.run(user_input, context=context, ctx_mgr=ctx_mgr)
+    try:
+        result = engine.run(user_input, context=context, ctx_mgr=ctx_mgr)
+    except Exception:
+        # Preserve the stack for long-running tasks; callers otherwise only
+        # see a bare message after hundreds of tool calls.
+        logger.exception("engine.run failed before delivery finalization")
+        raise
     state = TaskState.from_context(context)
     if state is None or not state.active:
         return result

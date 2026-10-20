@@ -758,7 +758,10 @@ class ToolExecutor:
         bound["cwd"] = str(self.runtime.workspace_root)
         if self.execution_policy is not None:
             remaining = self.execution_policy.remaining()
-            configured = float(bound.get("timeout", 60))
+            try:
+                configured = float(bound.get("timeout", 60))
+            except (TypeError, ValueError):
+                configured = 60.0
             if remaining is not None:
                 configured = min(configured, remaining)
             bound["timeout"] = max(0.001, configured)

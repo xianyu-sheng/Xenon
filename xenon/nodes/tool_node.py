@@ -92,6 +92,25 @@ from xenon.utils.llm_client import (  # noqa: F401 - private compatibility expor
 logger = logging.getLogger(__name__)
 
 
+def _coerce_int(value: Any, default: int | None) -> int | None:
+    """Model tool args are JSON; integers occasionally arrive as strings."""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_float(value: Any, default: float) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _fetch_with_redirect_check(client, url: str, headers: dict | None = None):
     """Compatibility wrapper retaining the old patchable SSRF checker."""
     return _network_fetch_with_redirect_check(
@@ -434,12 +453,16 @@ class ToolNode(
         # _VALID_PARAMS, so model output cannot select a container or wrapper.
         self.command_prefix: tuple[str, ...] = ()
         self.command_prelude = ""
-        self.timeout = timeout
+        # Tool args are model-controlled JSON values.  Numeric fields can
+        # legitimately arrive as strings (``"60"``); coerce once here so a
+        # later ``current_depth > max_depth`` or ``min(timeout, ...)`` cannot
+        # raise ``TypeError`` halfway through a long task.
+        self.timeout = _coerce_float(timeout, 60.0)
         self.encoding = encoding
         self.append = append
         self.pattern = pattern
-        self.max_depth = max_depth
-        self.limit = limit
+        self.max_depth = _coerce_int(max_depth, 5)
+        self.limit = _coerce_int(limit, None)
         self.cursor = cursor
         self.search_pattern = search_pattern
         self.file_filter = file_filter
@@ -447,8 +470,8 @@ class ToolNode(
         self.url = url
         self.start_time = start_time
         self.end_time = end_time
-        self.max_pages = max_pages
-        self.max_chars = max_chars
+        self.max_pages = _coerce_int(max_pages, 4)
+        self.max_chars = _coerce_int(max_chars, 12000)
         self.old_text = old_text
         self.new_text = new_text
         self.files = files or []
@@ -487,11 +510,11 @@ class ToolNode(
         # 容器边界已吸收 RCE 风险——命令在一次性沙箱中执行，不影响宿主机。
         # 宿主机（无 command_prefix）保持拦截，行为不变。
         self.allow_interpreter_inline = False
-        self._extra_start_line = start_line
-        self._extra_max_lines = max_lines
+        self._extra_start_line = _coerce_int(start_line, None)
+        self._extra_max_lines = _coerce_int(max_lines, None)
         # v0.6.1: LSP 工具参数
-        self._lsp_line = line
-        self._lsp_column = column
+        self._lsp_line = _coerce_int(line, None)
+        self._lsp_column = _coerce_int(column, None)
 
     def bind_command_runtime(
         self,
