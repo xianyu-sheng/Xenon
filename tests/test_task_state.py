@@ -325,6 +325,7 @@ def test_source_write_after_verification_requires_rerun() -> None:
 
     state.record_tool("edit_file", {"file_path": "src/app.py"}, success=True)
     assert "verify" in state.missing_delivery()
+    assert "验证已过期" in state.delivery_prompt()
 
 
 def test_write_after_commit_requires_another_commit() -> None:

@@ -461,6 +461,11 @@ class TaskState:
             lines.append("- 已执行验证: " + ", ".join(self.tests[-3:]))
         if self.failed_tests:
             lines.append("- 最近失败验证: " + ", ".join(self.failed_tests[-3:]))
+        if self.tests and self.verified_revision < self.artifacts_revision:
+            lines.append(
+                "- 验证已过期：最近一次通过后又修改了源码，必须重跑验证命令: "
+                + self.tests[-1][:240]
+            )
         if self.commit:
             lines.append(f"- 已提交: {self.commit}")
         if self.pr_url:
