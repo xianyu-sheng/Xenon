@@ -76,6 +76,7 @@ class SteeringMixin:
     def __init__(self) -> None:
         self._steering_queue: "queue.Queue[dict[str, Any]]" = queue.Queue()
         self.steering_consumed: list[dict[str, Any]] = []
+        self._last_termination_reason: str | None = None
 
     @staticmethod
     def _validate_run_input(user_input: str) -> str:
@@ -350,6 +351,7 @@ class PlanReactEngine(SteeringMixin):
         try:
             plan = self.planner._plan(user_input, ctx)
         except EngineDeadlineExceeded:
+            self._last_termination_reason = "deadline"
             logger.warning("Plan-ReAct planning hit the engine deadline")
             self.callback.on_warning("引擎时限已到（规划阶段），返回部分说明")
             return self._finalize_plan_react(
@@ -444,6 +446,7 @@ class PlanReactEngine(SteeringMixin):
                     else "(步骤完成，无文本输出)"
                 )
             except EngineDeadlineExceeded:
+                self._last_termination_reason = "deadline"
                 logger.warning("Plan-ReAct step %r hit the engine deadline", step_id)
                 self.callback.on_warning("引擎时限已到，提前收束并返回已完成部分")
                 results.append(
@@ -569,6 +572,7 @@ class PlanReactEngine(SteeringMixin):
                 self.last_model_used = self.planner.last_model_used
                 return output
         except EngineDeadlineExceeded:
+            self._last_termination_reason = "deadline"
             logger.warning("Plan-ReAct summarize hit the engine deadline; using fallback")
         except Exception:
             logger.warning("Plan-ReAct summary failed", exc_info=True)
@@ -640,6 +644,7 @@ class _ReflectionCombination(SteeringMixin):
                 ctx_mgr=ctx_mgr,
             )
         except EngineDeadlineExceeded:
+            self._last_termination_reason = "deadline"
             logger.warning("Reflection review hit the engine deadline")
             self.callback.on_warning("引擎时限已到（审查阶段），保留已执行结果")
             return self._finalize_combined(
@@ -700,6 +705,7 @@ class _ReflectionCombination(SteeringMixin):
                 repair_prompt, context=repair_ctx, ctx_mgr=ctx_mgr
             )
         except EngineDeadlineExceeded:
+            self._last_termination_reason = "deadline"
             logger.warning("Reflection repair hit the engine deadline")
             self.callback.on_warning("引擎时限已到（修复阶段），保留已执行结果")
             return self._finalize_combined(
@@ -764,6 +770,7 @@ class _ReflectionCombination(SteeringMixin):
                         "修复已落地，但复审仍未通过；保留真实工作区并报告当前结果"
                     )
             except EngineDeadlineExceeded:
+                self._last_termination_reason = "deadline"
                 logger.warning("Post-repair review hit the engine deadline")
                 self.callback.on_warning("引擎时限已到（复审阶段），保留修复结果")
 

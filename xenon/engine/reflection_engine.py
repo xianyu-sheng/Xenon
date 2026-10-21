@@ -150,6 +150,7 @@ class ReflectionEngine(BaseEngine):
         self._bind_evidence_ledger(ctx)
         # v0.9.1: 重置循环检测器
         self._loop_detector.reset()
+        self._last_termination_reason = None
 
         # §8.23.4/10 / E4：版本回退——跟踪历史最佳（按 score）输出。
         # 若后续修正轮把输出改得更差（reviewer 误判越改越差，§8.23.10），
@@ -160,6 +161,7 @@ class ReflectionEngine(BaseEngine):
 
         for round_num in range(1, self.max_rounds + 1):
             if self._interrupted:
+                self._last_termination_reason = "user_interrupt"
                 self.callback.on_warning("引擎被用户中断，停止修正")
                 logger.info("Reflection 被中断，退出修正循环")
                 break
@@ -179,6 +181,7 @@ class ReflectionEngine(BaseEngine):
             try:
                 output = self._execute(user_input, feedback, ctx)
             except Exception as e:  # noqa: BLE001 — 生成失败不应炸掉整个 reflection
+                self._last_termination_reason = "error"
                 logger.warning(f"Reflection 执行阶段失败: {e}")
                 self.callback.on_warning(f"执行阶段失败: {e}")
                 if best_output is not None:
@@ -224,6 +227,7 @@ class ReflectionEngine(BaseEngine):
                     self.callback.on_warning(
                         f"检测到修正陷入循环（{loop_result.reason}），返回最佳版本（评分 {best_score}）"
                     )
+                    self._last_termination_reason = "loop"
                     final = best_output if best_output is not None else output
                     marked = (
                         f"⚠️ 检测到循环（{loop_result.reason}），已终止修正并返回最佳版本"
@@ -245,6 +249,7 @@ class ReflectionEngine(BaseEngine):
                     )
 
             if passed:
+                self._last_termination_reason = "final"
                 logger.info(f"审查通过 (分数: {score})")
                 self.finalize_evidence(context=ctx, output=output)
                 self.callback.on_finish(output)
@@ -259,6 +264,7 @@ class ReflectionEngine(BaseEngine):
                 feedback += "\n具体问题:\n" + "\n".join(f"- {i}" for i in issues)
 
         # §8.23.4：max_rounds 耗尽——返回最佳版本（非最后一轮），并标注未通过
+        self._last_termination_reason = "no_progress"
         final_output = best_output if best_output is not None else output
         logger.info(
             f"达到最大修正轮次 ({self.max_rounds})，返回最佳版本 (最高评分 {best_score})"
