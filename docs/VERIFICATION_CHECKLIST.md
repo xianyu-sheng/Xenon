@@ -68,7 +68,9 @@
 | C19 | `/resume` 只能看到最近一次自动保存；启动新对话会覆盖旧 `_auto` | 会话/持久化 | ✅ 已修复 | `conversation_id` + `_auto` 轮转为 `auto-*.json`；旧会话成为普通可恢复会话；`/resume`/启动选择器显示 `[自动保存]`；单元测试覆盖轮转/同名不轮转/显示 |
 | C20 | “实现 #22”这类具体 issue 交付被当成 `write_code` 仅回答/只读，且不主动克隆目标仓库 | 执行/权限 | ✅ 交付已合并，产品链路待复验 | `task_delivery` 提升 EXECUTE；write_code 含 clone 指引；PR [#51](https://github.com/xianyu-sheng/SmartBench/pull/51) 已合并、7/7 检查全绿、Issue #22 已关闭；TaskState 真实 #26 收尾已验证 |
 | C21 | `继续` 只靠模型记忆，TaskState/交付要求跨回合丢失 | 执行/状态 | ✅ 统一引擎出口已验证 | `xenon/engine/task_runtime.py` 共享 `run_with_delivery`；BaseEngine 与组合引擎 SteeringMixin 都暴露 `run_task`；EngineHost 只调用这一个入口；真实 #26 72 工具/196s、8 文件、53 目标测试、commit `005ba58`、TaskState completed；全量 3453 passed；commit 门只认实际 commit 命令输出的哈希，忽略 git log 旧哈希 |
-| C22 | 固定 120 步会误杀长链路任务；重试上限 2 次过早放弃 | 执行/循环 | ✅ 已改 | 默认 `0`=不限步数，由 LoopDetector、无进展检查点、1800s deadline 控制；`XENON_MAX_ITERATIONS` 可显式设上限；交付/验证/格式/计划收尾/写恢复重试统一为 3 次；Xenon 全量 3454 passed |
+| C22 | 固定 120 步会误杀长链路任务；重试上限 2 次过早放弃 | 执行/循环 | ✅ 已改 | 默认 `0`=不限步数，由 LoopDetector、无进展检查点、1800s deadline 控制；`XENON_MAX_ITERATIONS` 可显式设上限；交付/验证/格式/计划收尾/写恢复重试统一为 3 次；Xenon 全量 3454 passed；`tests/test_react_loop_exit.py` 证明 max_iterations=0 下高置信度循环由 LoopDetector 终止 |
+| C24 | Plan-Execute 真实回归仍会在空测试/未提交源码时误判完成 | 执行/计划 | 🟡 真实失败样本已收敛 | 2026-10-21 SmartBench #26 切片三轮：首轮 60 工具/18 失败/243s，仅提交空测试文件；第二轮 51 工具/20 失败/341s，只改 JSON 且测试为空；修正后第三轮 64 工具/15 失败/292s，TaskState `active`、缺 verify。已修：计划同步进 TaskState、失败步骤保持未完成、提交快照要求非测试源码、git 多路径/`commit -m`/action list 解析、`search_files pattern` 别名。仍未解决：规划器不生成有效写步骤、测试内容为空，不能判定 Plan-Execute 可用 |
+| C25 | `/compact` 后 TaskState 是否随会话恢复 | 执行/持久化 | ✅ 已验证 | `tests/test_compact_task_state_resume.py` 2 passed：compact 只改对话历史，不抹掉 TaskState；`_auto_save_session` → `load_session` 重建 `AgentContext` 后 objective/steps/artifacts/tests/commit/required 全部保留；测试-only commit 仍为 `active` |
 | C23 | 可选 HMAC 证据链锚点（PR #160）存在 keyed→unkeyed 降级攻击 | 证据层/安全 | 🟡 PR 未合并 | 删除 `hk` 后整链用 sha256 重算，`verify_event_chain(..., key=...)` 仍返回 `ok/unkeyed`；已在 PR #160 留可复现评论，要求“有 key 时全 unkeyed 不得 ok”；同分支 targeted 33 passed、CI 7/7，但不能合并 |
 | C15 | 只读任务写 `.xenon_tmp/*.ps1` 触发“改完代码要验证”，模型偏离任务去解释没有测试 | 执行/提醒 | ✅ 已真实验证 | 只读 issue 列表任务：无验证提醒，最终正确列出 25 个 issue；仍会写临时脚本/尝试 `$()`（C4） |
 
@@ -108,6 +110,8 @@
 | 2026-10-19 | 无限步数 + 3 次重试 | 默认步数上限改 0；墙钟默认 1800s；交付/verify/malformed/no-tool/plan/no-write 重试统一 3；全量 3454 passed、无新增失败 |
 | 2026-10-20 | unlimited 真实 #27 | `max_iterations=0`；112 工具/327s；正常完成，非步数退出；TaskState completed；commit `0cdf950`（临时 clone，未 push）；首轮 99 工具时出现一次未复现 TypeError，第二轮干净 |
 | 2026-10-20 | 工具数值参数 + 循环退出 | `d73d385` 统一强转模型传入的数值参数，`ad9c8e6` 增加 unlimited 下 LoopDetector 终止测试；targeted 23 passed |
+| 2026-10-21 | Plan-Execute 真实 #26 切片 | 三轮真实 DeepSeek 运行均未完成：首轮 60 工具/18 失败/243s、空测试提交；第二轮 51/20/341s、只改 JSON；修正后第三轮 64/15/292s，TaskState 保持 active、缺 verify。已加计划状态同步、提交快照源码门、失败测试不计验证、git 参数规范化；Plan-Execute 仍不可宣称完成 |
+| 2026-10-21 | compact 后 TaskState 恢复 | 新增 `test_compact_task_state_resume.py`：compact → auto-save → load 后状态字段完整；2 passed |
 | 2026-10-20 | PR #160 审查 | 发现可选 HMAC 证据链的无密钥降级攻击；已留可复现评论，暂不合并 |
 | 2026-10-19 | SmartBench PR #51 合并 | PR #51 合并提交 `02d9eb9`，7/7 checks 绿；Issue #22 关闭；本地 main 已拉齐，分支已清理 |
 | 2026-10-18 | C11 #27 计划复验 | 第一轮 2 次更新、结束仍有 pending（收尾提醒未促成更新）；第二轮 3 次更新、全部 completed；说明计划收尾仍依赖模型配合 |
