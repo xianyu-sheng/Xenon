@@ -239,7 +239,7 @@ class LoopDetector:
                     pattern1 = [p for p in pattern1 if p]
                     pattern2 = [p for p in pattern2 if p]
 
-                if pattern1 and pattern1 == pattern2:
+                if pattern1 and pattern1 == pattern2 and any(pattern1):
                     # Two cycles are a hint; three identical cycles are a
                     # high-confidence loop.  Previously every pattern repeat
                     # returned 0.85, while both ReAct and Plan-Execute stop at
