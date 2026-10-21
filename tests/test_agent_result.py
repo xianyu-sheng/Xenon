@@ -39,3 +39,22 @@ def test_missing_delivery_is_not_ok():
     assert result.reason is TerminationReason.DELIVERY_INCOMPLETE
     assert result.ok is False
     assert set(result.missing_delivery) == {"changes", "commit", "verify"}
+
+
+def test_reflection_exhaustion_is_not_a_final_success():
+    from xenon.engine.reflection_engine import ReflectionEngine
+
+    engine = ReflectionEngine(["fake/model"], max_rounds=1, pass_threshold=9)
+    engine._execute = lambda *args, **kwargs: "incomplete"  # type: ignore[method-assign]
+    engine._review = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "score": 2,
+        "pass": False,
+        "feedback": "still incomplete",
+        "issues": [],
+    }
+
+    result = engine.run_task("finish", context=AgentContext({}))
+
+    assert "仍未通过审查" in result
+    assert result.reason is TerminationReason.NO_PROGRESS
+    assert result.ok is False
