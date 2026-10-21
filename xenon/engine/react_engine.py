@@ -985,6 +985,10 @@ class ReActEngine(BaseEngine):
                         logger.warning(
                             f"ReAct: 纯读瘫痪提示 {read_only_hints}/{MAX_READ_ONLY_HINTS}"
                         )
+                        # The read-only detector just gave the model a
+                        # concrete recovery instruction.  Do not let the
+                        # previous repeated-read hash preempt that recovery.
+                        self._loop_detector.reset()
                     self.callback.on_observe(observation)
                     tool_observations = [observation]
                 else:
@@ -1174,7 +1178,10 @@ class ReActEngine(BaseEngine):
                     # 查询任务对循环更宽容：需要更高置信度（≥0.95）才终止
                     confidence_threshold = 0.95 if requires_query_result else 0.9
 
-                    if loop_result.confidence >= confidence_threshold:
+                    if (
+                        loop_result.confidence >= confidence_threshold
+                        and not (requires_mutation and read_only_streak >= 3)
+                    ):
                         loop_msg = (
                             f"⚠️ **检测到 ReAct 引擎陷入循环** (置信度: {loop_result.confidence:.2f})\n\n"
                             f"**循环原因**: {loop_result.reason}\n"
