@@ -78,5 +78,6 @@ def test_git_commit_message_is_not_literal_m_flag(tmp_path):
     result = node._git(AgentContext())
 
     assert result["success"] is True
+    assert result["committed_paths"] == ["a.txt"]
     assert _run_git(repo, "log", "-1", "--format=%s") == "feat: real subject"
     assert "Co-authored-by: Xenon" in _run_git(repo, "log", "-1", "--format=%B")

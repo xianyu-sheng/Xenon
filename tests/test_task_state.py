@@ -247,3 +247,24 @@ def test_dirty_worktree_after_commit_is_a_delivery_gap() -> None:
     state.record_tool("git", {"git_command": "status"}, success=True, result="")
     assert "dirty" not in state.missing_delivery()
     assert state.maybe_complete() is True
+
+
+def test_commit_metadata_limits_committed_artifacts_to_real_paths() -> None:
+    state = TaskState(
+        objective="implement",
+        intent="write_code",
+        execution_level=3,
+        artifacts=["src/app.py"],
+        required=["verify", "commit"],
+    )
+    state.record_tool(
+        "git",
+        {"git_command": "commit -m done"},
+        success=True,
+        result="[main abc1234] done",
+        metadata={"committed_paths": ["tests/test_done.py"]},
+    )
+
+    assert state.commit == "abc1234"
+    assert state.committed_artifacts == ["tests/test_done.py"]
+    assert "changes" in state.missing_delivery()

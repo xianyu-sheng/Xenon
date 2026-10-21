@@ -150,6 +150,36 @@ class GitToolsMixin:
                 "output": output,  # 保留兼容
                 "success": proc.returncode == 0,
             }
+            # A commit's subject line is not enough to prove which files were
+            # committed.  Expose the actual path set to ToolState/TaskState so
+            # a commit containing only a test cannot satisfy source delivery.
+            if proc.returncode == 0 and cmd[:2] == ["git", "commit"]:
+                try:
+                    show_cmd = [
+                        *(self.command_prefix or ()),
+                        "git",
+                        "show",
+                        "--pretty=format:",
+                        "--name-only",
+                        "HEAD",
+                    ]
+                    shown = subprocess.run(
+                        show_cmd,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=self.timeout,
+                        cwd=cwd,
+                    )
+                    if shown.returncode == 0:
+                        result["committed_paths"] = [
+                            line.strip()
+                            for line in shown.stdout.splitlines()
+                            if line.strip()
+                        ]
+                except Exception as exc:  # noqa: BLE001 — metadata is best effort
+                    logger.debug("git commit path metadata unavailable: %s", exc)
             self._write_output(context, output)
             return result
         except subprocess.TimeoutExpired:

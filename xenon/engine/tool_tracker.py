@@ -30,6 +30,7 @@ class ToolCall:
     security_advisories: list[dict[str, Any]] = field(default_factory=list)
     result_id: str = ""
     raw_sha256: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -59,6 +60,7 @@ class ToolExecutionTracker:
         security_advisories: list[dict[str, Any]] | None = None,
         result_id: str = "",
         raw_sha256: str = "",
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """记录一次工具调用。"""
         call = ToolCall(
@@ -74,6 +76,7 @@ class ToolExecutionTracker:
             security_advisories=list(security_advisories or []),
             result_id=str(result_id or ""),
             raw_sha256=str(raw_sha256 or ""),
+            metadata=dict(metadata or {}),
         )
         self.calls.append(call)
         status = "成功" if success else "失败"

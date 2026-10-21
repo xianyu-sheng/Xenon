@@ -254,12 +254,14 @@ class TaskState:
         success: bool,
         result: str = "",
         error: str = "",
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Update state from one actual tool call (failed calls don't count)."""
         self.updated_at = time.time()
         tool = _text(tool)
         if not success:
             return
+        metadata = metadata if isinstance(metadata, dict) else {}
         command = _tool_command(tool, params)
         result_text = _text(result)
 
@@ -290,7 +292,13 @@ class TaskState:
                 commit_hash = _commit_hash(result_text)
                 if commit_hash:
                     self.commit = commit_hash
-                    self.committed_artifacts = list(self.artifacts)
+                    committed_paths = metadata.get("committed_paths")
+                    if isinstance(committed_paths, list) and committed_paths:
+                        self.committed_artifacts = [
+                            str(path) for path in committed_paths if path
+                        ]
+                    else:
+                        self.committed_artifacts = list(self.artifacts)
                     self.dirty_after_commit = None
             if "git status" in command:
                 self.dirty_after_commit = _status_is_dirty(result_text)
@@ -315,7 +323,13 @@ class TaskState:
                 commit_hash = _commit_hash(result_text)
                 if commit_hash:
                     self.commit = commit_hash
-                    self.committed_artifacts = list(self.artifacts)
+                    committed_paths = metadata.get("committed_paths")
+                    if isinstance(committed_paths, list) and committed_paths:
+                        self.committed_artifacts = [
+                            str(path) for path in committed_paths if path
+                        ]
+                    else:
+                        self.committed_artifacts = list(self.artifacts)
                     self.dirty_after_commit = None
             if action.startswith("status"):
                 self.dirty_after_commit = _status_is_dirty(result_text)
@@ -333,6 +347,7 @@ class TaskState:
                 success=bool(getattr(call, "success", False)),
                 result=_text(getattr(call, "result_summary", "")),
                 error=_text(getattr(call, "error", "")),
+                metadata=getattr(call, "metadata", {}) or {},
             )
 
     def delivery_prompt(self) -> str:

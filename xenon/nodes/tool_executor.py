@@ -867,6 +867,18 @@ class ToolExecutor:
                     model_observation = build_model_observation(
                         tool_name, raw, observation, result_id
                     )
+            tracker_metadata: dict[str, Any] = {}
+            if isinstance(raw, dict):
+                for key in (
+                    "changed_paths",
+                    "committed_paths",
+                    "exit_code",
+                    "returncode",
+                    "file_path",
+                    "path",
+                ):
+                    if key in raw:
+                        tracker_metadata[key] = raw[key]
             execution_result = ToolExecuteResult(
                 tool_name=tool_name,
                 success=success,
@@ -907,6 +919,7 @@ class ToolExecutor:
                     security_advisories=advisory_dicts,
                     result_id=result_id,
                     raw_sha256=raw_sha256,
+                    metadata=tracker_metadata,
                 )
             self.record_tool_observation(
                 tool_name, params, success, observation, tracker, context
