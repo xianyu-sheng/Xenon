@@ -81,3 +81,18 @@ def test_git_commit_message_is_not_literal_m_flag(tmp_path):
     assert result["committed_paths"] == ["a.txt"]
     assert _run_git(repo, "log", "-1", "--format=%s") == "feat: real subject"
     assert "Co-authored-by: Xenon" in _run_git(repo, "log", "-1", "--format=%B")
+
+
+def test_command_commit_exposes_real_committed_paths(tmp_path):
+    repo = _repo(tmp_path)
+    node = ToolNode(
+        "c",
+        action_type="command",
+        action="git add a.txt; git commit -m 'feat: command commit'",
+        cwd=str(repo),
+    )
+
+    result = node._exec_command(AgentContext())
+
+    assert result["success"] is True
+    assert result["committed_paths"] == ["a.txt"]

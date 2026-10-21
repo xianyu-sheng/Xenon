@@ -1096,6 +1096,37 @@ class ToolNode(
                 "stderr": proc.stderr,
                 "success": proc.returncode == 0,
             }
+            # A commit through the raw command tool is still a real commit;
+            # expose its actual path set so TaskState does not have to infer it
+            # from the pre-commit artifact list.  Best effort: a failed git
+            # show leaves the key absent, and callers keep the old fallback.
+            if proc.returncode == 0 and re.search(
+                r"git\s+(?:-C\s+\S+\s+)?commit", resolved_cmd
+            ):
+                try:
+                    shown = subprocess.run(
+                        [
+                            "git",
+                            "show",
+                            "--pretty=format:",
+                            "--name-only",
+                            "HEAD",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=10,
+                        cwd=self.cwd,
+                    )
+                    if shown.returncode == 0:
+                        result["committed_paths"] = [
+                            line.strip()
+                            for line in shown.stdout.splitlines()
+                            if line.strip()
+                        ]
+                except (OSError, subprocess.SubprocessError) as exc:
+                    logger.debug("command commit path metadata unavailable: %s", exc)
             self._write_output(context, proc.stdout.strip())
             logger.info(f"[{self.id}] 命令完成，返回码: {proc.returncode}")
             return result
