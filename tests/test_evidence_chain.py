@@ -6,6 +6,10 @@ import json
 
 from xenon.session.events import (
     GENESIS,
+    HASH_FIELD,
+    KEY_FIELD,
+    KEYED_VALUE,
+    PREV_FIELD,
     ChainReport,
     SessionEventLog,
     event_hash_hex,
@@ -110,6 +114,10 @@ def test_chain_report_status_labels():
     assert ChainReport(total=2, verified=1, legacy=1).status == "partial"
     assert ChainReport(total=2, verified=2).status == "ok"
     assert ChainReport(total=2, verified=1, broken_at=1).status == "broken"
+    assert (
+        ChainReport(total=2, verified=2, unkeyed=2, key_expected=True).status
+        == "partial"
+    )
 
 
 def test_append_resumes_chain_after_reopen(tmp_path):
@@ -234,3 +242,223 @@ def test_evidence_command_detects_tampering(tmp_path, monkeypatch):
 
     out = _cmd_evidence(args="sess-t", session_state={})
     assert "断裂" in out
+
+
+def test_keyed_chain_verifies_with_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123")
+    log = SessionEventLog("s-k1", directory=tmp_path)
+    log.append("turn/user", text="hello")
+    log.append("tool/result", tool="read_file", success=True)
+    events = log.read()
+    assert events[0].get(KEY_FIELD) == KEYED_VALUE
+    report = verify_event_chain(events, key="test-key-123")
+    assert report.status == "ok"
+    assert report.mode == "keyed"
+    assert report.verified == 2 and report.keyed == 2 and report.unkeyed == 0
+    for event in events:
+        assert event["h"] == event_hash_hex(event, key="test-key-123")
+
+
+def test_keyed_chain_tamper_breaks_with_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123")
+    log = SessionEventLog("s-k2", directory=tmp_path)
+    log.append("turn/user", text="hello")
+    log.append("turn/user", text="second")
+    events = log.read()
+    tampered = json.loads(json.dumps(events))
+    tampered[1]["text"] = "篡改"
+    report = verify_event_chain(tampered, key="test-key-123")
+    assert report.status == "broken"
+    assert report.broken_at == 1
+
+
+def test_keyed_chain_reorder_breaks_with_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123")
+    log = SessionEventLog("s-k3", directory=tmp_path)
+    log.append("turn/user", text="first")
+    log.append("turn/user", text="second")
+    events = log.read()
+    report = verify_event_chain([events[1], events[0]], key="test-key-123")
+    assert report.status == "broken"
+
+
+def test_keyed_chain_recomputed_without_key_breaks(tmp_path, monkeypatch):
+    """攻击者无密钥整链重算（明文 sha256）→ 核验必失败。"""
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123")
+    log = SessionEventLog("s-k4", directory=tmp_path)
+    log.append("turn/user", text="first")
+    log.append("turn/user", text="second")
+    events = json.loads(json.dumps(log.read()))
+    for event in events:
+        event["h"] = event_hash_hex(event)  # 无密钥重算
+    report = verify_event_chain(events, key="test-key-123")
+    assert report.status == "broken"
+    assert report.broken_at == 0
+
+
+def test_keyed_chain_without_key_does_not_silently_pass(tmp_path, monkeypatch):
+    """缺密钥的核验者面对 keyed 链：不算通过，计入 keyed_pending。"""
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123")
+    log = SessionEventLog("s-k5", directory=tmp_path)
+    log.append("turn/user", text="first")
+    log.append("turn/user", text="second")
+    events = log.read()
+    report = verify_event_chain(events)
+    assert report.verified == 0
+    assert report.keyed == 2 and report.keyed_pending == 2
+    assert report.status == "partial"
+    assert report.mode == "keyed"
+
+
+def test_mixed_chain_reports_partial(tmp_path, monkeypatch):
+    """链先无密钥写入、后设密钥：混合模式 → partial，/evidence 会说明。"""
+    log = SessionEventLog("s-mix", directory=tmp_path)
+    log.append("turn/user", text="first")
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123")
+    log.append("turn/user", text="second")
+    events = log.read()
+    report = verify_event_chain(events, key="test-key-123")
+    assert report.status == "partial"
+    assert report.mode == "mixed"
+    assert report.verified == 2
+    assert report.keyed == 1 and report.unkeyed == 1
+    # 缺密钥时新事件不可验，但旧链接仍在
+    report2 = verify_event_chain(events)
+    assert report2.keyed_pending == 1
+    assert report2.status == "partial"
+
+
+def test_hmac_key_never_written_to_disk(tmp_path, monkeypatch):
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "super-secret-key")
+    log = SessionEventLog("s-disk", directory=tmp_path)
+    log.append("turn/user", text="hi")
+    content = log.path.read_text(encoding="utf-8")
+    assert "super-secret-key" not in content
+    assert "hmac-sha256" in content
+
+
+def test_keyed_chain_resumes_after_reopen(tmp_path, monkeypatch):
+    """设密钥后重开日志继续写：新事件 keyed，跨重启链仍连续。"""
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123")
+    log1 = SessionEventLog("s-resume", directory=tmp_path)
+    log1.append("turn/user", text="first")
+    log2 = SessionEventLog("s-resume", directory=tmp_path)
+    log2.append("turn/user", text="second")
+    events = log2.read()
+    report = verify_event_chain(events, key="test-key-123")
+    assert report.status == "ok"
+    assert events[1]["prev"] == events[0]["h"]
+
+
+def test_mixed_chain_keyed_then_unkeyed_reports_partial(tmp_path, monkeypatch):
+    """反向混合（先设密钥、后撤密钥）：缺密钥核验不得误报断裂。
+
+    keyed 事件缺密钥时存储哈希仍是后继的链接锚点，链接检查照常推进，
+    只跳过 MAC 核验 → partial（keyed_pending=1），broken_at 为空。
+    """
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123")
+    log = SessionEventLog("s-rev", directory=tmp_path)
+    log.append("turn/user", text="first")
+    monkeypatch.delenv("XENON_EVIDENCE_HMAC_KEY")
+    log.append("turn/user", text="second")
+    events = log.read()
+
+    report = verify_event_chain(events)
+    assert report.status == "partial"
+    assert report.broken_at is None
+    assert report.keyed == 1 and report.keyed_pending == 1
+    assert report.verified == 1 and report.unkeyed == 1
+
+    # 密钥在手时两条都可验，混合模式仍为 partial
+    report2 = verify_event_chain(events, key="test-key-123")
+    assert report2.status == "partial"
+    assert report2.broken_at is None
+    assert report2.verified == 2
+    assert report2.mode == "mixed"
+
+
+def test_keyed_marker_tamper_breaks_with_key(tmp_path, monkeypatch):
+    """hk 模式标记纳入签名：改写标记值即核验失败。"""
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123")
+    log = SessionEventLog("s-mark", directory=tmp_path)
+    log.append("turn/user", text="hello")
+    events = json.loads(json.dumps(log.read()))
+    events[0][KEY_FIELD] = "hmac-sha512"  # 改写模式标记，正文与 prev 不动
+    report = verify_event_chain(events, key="test-key-123")
+    assert report.status == "broken"
+    assert report.broken_at == 0
+
+
+def test_unkeyed_marker_addition_breaks_with_key(tmp_path):
+    """给无标记事件补 hk 标记：有密钥核验判为断裂。"""
+    log = SessionEventLog("s-mark2", directory=tmp_path)
+    log.append("turn/user", text="hello")
+    events = json.loads(json.dumps(log.read()))
+    events[0][KEY_FIELD] = KEYED_VALUE
+    report = verify_event_chain(events, key="test-key-123")
+    assert report.status == "broken"
+    assert report.broken_at == 0
+
+
+def test_weak_hmac_key_warns_once(monkeypatch, caplog):
+    """密钥短于 16 字节时告警一次，且不影响返回值。"""
+    import logging
+
+    from xenon.session import events as events_mod
+
+    monkeypatch.setattr(events_mod, "_weak_key_warned", False)
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "short")
+    with caplog.at_level(logging.WARNING, logger="xenon.session.events"):
+        first = events_mod.evidence_hmac_key()
+        second = events_mod.evidence_hmac_key()
+    assert first == "short" and second == "short"
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "16" in warnings[0].message
+
+
+def test_evidence_global_view_shows_lock_for_keyed_ok(tmp_path, monkeypatch):
+    """全局视图对完整 keyed 链显示 🔒（否则回退到状态图标）。"""
+    from xenon.repl.command_groups.evidence import _cmd_evidence
+    from xenon.session import events as events_mod
+
+    monkeypatch.setattr(
+        events_mod, "session_events_dir", lambda: __import__("pathlib").Path(tmp_path)
+    )
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123")
+    SessionEventLog("sess-lock", directory=tmp_path).append("turn/user", text="hi")
+
+    out = _cmd_evidence(args="all", session_state={})
+    assert "🔒" in out
+    assert "sess-lock" in out
+
+
+def test_unkeyed_downgrade_does_not_pass_when_key_is_supplied(tmp_path, monkeypatch):
+    """Stripping all hk markers and rebuilding a plain chain is a downgrade.
+
+    Without a key the chain is indistinguishable from an ordinary unkeyed
+    chain; with a key supplied the verifier must report partial, not ok.
+    """
+    monkeypatch.setenv("XENON_EVIDENCE_HMAC_KEY", "test-key-123456")
+    log = SessionEventLog("downgrade", directory=tmp_path)
+    log.append("turn/user", text="a")
+    log.append("turn/user", text="b")
+    events = log.read()
+
+    prev = GENESIS
+    for event in events:
+        event.pop(KEY_FIELD, None)
+        event[PREV_FIELD] = prev
+        event[HASH_FIELD] = event_hash_hex(event)
+        prev = event[HASH_FIELD]
+
+    report = verify_event_chain(events, key="test-key-123456")
+    assert report.status == "partial"
+    assert report.key_expected is True
+    assert report.keyed == 0
+    assert report.unkeyed == 2
+    assert report.broken_at is None
+
+    # This is the unavoidable boundary: without the key the plain chain is
+    # indistinguishable from a legitimate unkeyed chain.
+    assert verify_event_chain(events).status == "ok"

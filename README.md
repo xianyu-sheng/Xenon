@@ -210,6 +210,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 | `XENON_COMMAND_ALLOWLIST` | 命令首词白名单（逗号分隔） | 空 = 不限 |
 | `XENON_EXTRA_ROOTS` | 启动目录之外额外允许文件工具读写的根目录（Windows 用 `;` 分隔） | 空 = 仅启动目录及其子目录 |
 | `XENON_SESSION_EVENTS(_DIR)` | 事件日志开关 / 目录 | 开 |
+| `XENON_EVIDENCE_HMAC_KEY` | 可选密钥锚点：链哈希改 HMAC-SHA256(key, prev ‖ hk ‖ 事件正文)，密钥只从环境变量读取、永不落盘；缺密钥的核验者无法通过 keyed 链 | 关 |
 | `XENON_HOOKS` | 本地 hooks 开关 | 开 |
 | `XENON_ATTRIBUTION` | 提交与 PR 是否附带 Xenon 署名（`0` 关闭） | 开 |
 | `GITHUB_TOKEN` / `GH_TOKEN` | GitHub 工具认证（提升 API 限额；未设置时自动回退到已登录的 `gh auth token`） | 空 |
@@ -225,7 +226,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 
 - **机器不验证语义。** L2 命中时只提醒不阻断——内容真伪请对照「待人工核验清单」自行确认。
 - **哈希链证明的是过程，不是结论。** 它保证事件流未被篡改，不保证模型答对了。
-- **链本身是无密钥锚点的完整性检查。** 能发现偶然损坏、单点篡改和重排，防不住"有写权限的人整链重算"；需要强抗篡改请把事件目录放到受控存储。（可选 HMAC 锚点见 #106）
+- **链本身是无密钥锚点的完整性检查。** 能发现偶然损坏、单点篡改和重排，防不住"有写权限的人整链重算"——**除非启用可选的密钥锚点**（`XENON_EVIDENCE_HMAC_KEY`，见 #106）：此时链哈希改为 HMAC-SHA256(key, prev ‖ hk ‖ 事件正文)，前驱链接与 hk 模式标记一并纳入签名，密钥只从环境变量读取、永不落盘；不启用时行为与以前完全一致，未设密钥的核验者遇到 keyed 链会报"待核验"而不是放行。混合模式（先无密钥写入、后设密钥）核验为部分通过，`/evidence` 会说明链模式。
 - **沙箱是检测 + 软件边界，不是真隔离。** 不可信代码请在 WSL / Docker 容器里运行。
 - **工具输出的注入检测是启发式提醒，不是安全边界。** Xenon 会标记来源并提示常见注入模式，但不会阻断或改写内容；范围与限制见[工具输出威胁模型](docs/THREAT_MODEL.md)。
 - `/review` 的回退只覆盖有 `.bak` 备份的编辑；版本管理仍请交给 git。
