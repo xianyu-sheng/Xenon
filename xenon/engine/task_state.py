@@ -48,6 +48,17 @@ def _commit_hash(text: str) -> str:
     return match.group(1) if match else ""
 
 
+def _status_is_dirty(text: str) -> bool:
+    """Parse git status --short (or porcelain) output."""
+    for line in text.splitlines():
+        value = line.strip()
+        if not value:
+            continue
+        if value.startswith(("??", "M ", "A ", "D ", "R ", "C ", "U ", "AM", "MM", "AD", "AU")):
+            return True
+    return False
+
+
 def _verification_passed(text: str) -> bool:
     """Conservative evidence check for a successful test command."""
     if not text.strip():
@@ -104,6 +115,7 @@ class TaskState:
     tests: list[str] = field(default_factory=list)
     commit: str = ""
     committed_artifacts: list[str] = field(default_factory=list)
+    dirty_after_commit: bool | None = None
     pushed: bool = False
     pr_url: str = ""
     required: list[str] = field(default_factory=list)
@@ -138,6 +150,11 @@ class TaskState:
             committed_artifacts=[
                 str(p) for p in raw.get("committed_artifacts", []) if p
             ],
+            dirty_after_commit=(
+                bool(raw["dirty_after_commit"])
+                if "dirty_after_commit" in raw
+                else None
+            ),
             pushed=bool(raw.get("pushed")),
             pr_url=_text(raw.get("pr_url")),
             required=[str(x) for x in raw.get("required", []) if x],
@@ -157,6 +174,7 @@ class TaskState:
             "tests": self.tests[-20:],
             "commit": self.commit,
             "committed_artifacts": self.committed_artifacts[-30:],
+            "dirty_after_commit": self.dirty_after_commit,
             "pushed": self.pushed,
             "pr_url": self.pr_url,
             "required": self.required,
@@ -211,6 +229,8 @@ class TaskState:
             missing.append("changes")
         if "commit" in self.required and not self.commit:
             missing.append("commit")
+        if "commit" in self.required and self.dirty_after_commit is True:
+            missing.append("dirty")
         if "pr" in self.required and not self.pr_url:
             missing.append("pr")
         return missing
@@ -271,6 +291,9 @@ class TaskState:
                 if commit_hash:
                     self.commit = commit_hash
                     self.committed_artifacts = list(self.artifacts)
+                    self.dirty_after_commit = None
+            if "git status" in command:
+                self.dirty_after_commit = _status_is_dirty(result_text)
             if _PUSH_RE.search(text):
                 self.pushed = True
             if _PR_RE.search(text):
@@ -293,6 +316,9 @@ class TaskState:
                 if commit_hash:
                     self.commit = commit_hash
                     self.committed_artifacts = list(self.artifacts)
+                    self.dirty_after_commit = None
+            if action.startswith("status"):
+                self.dirty_after_commit = _status_is_dirty(result_text)
             if action.startswith("push") and "rejected" not in result_text.lower():
                 self.pushed = True
 
@@ -334,6 +360,7 @@ class TaskState:
                 "verify": "运行相关测试并记录真实结果",
                 "changes": "实际修改非测试源码文件（不能只提交空改动或测试）",
                 "commit": "创建 git commit",
+                "dirty": "确认 commit 后工作区干净（没有未提交改动）",
                 "pr": "push 并创建 PR",
             }
             lines.append("- 未完成交付: " + "；".join(labels[m] for m in missing))

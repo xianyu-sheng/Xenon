@@ -453,6 +453,40 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         else:
             results = self._run_serial(capped, user_input, ctx, tracker, total)
 
+        # DAG execution has its own scheduler and cannot use the serial
+        # failed-step replanner.  Apply the same bounded recovery after a
+        # failed wave; otherwise a dependency plan would silently continue
+        # with the stale remaining steps.
+        if (
+            use_dag
+            and any(item.get("status") == "failed" for item in results)
+            and self._replans_used < self.max_replans
+        ):
+            done_ids = {item.get("step_id") for item in results}
+            failure_note = (
+                "本轮 DAG 执行存在失败步骤，请基于已完成结果和失败原因"
+                "重新规划剩余步骤；不要重复已成功完成的工作。"
+            )
+            new_steps = self._replan_remaining(
+                user_input,
+                ctx,
+                [{"text": failure_note}],
+                done_ids,
+                failure=True,
+            )
+            if new_steps:
+                self._replans_used += 1
+                self.callback.on_warning(
+                    f"DAG 执行存在失败步骤，已重规划剩余 {len(new_steps)} 步 "
+                    f"({self._replans_used}/{self.max_replans})"
+                )
+                steps = new_steps
+                self._sync_task_plan(ctx, steps)
+                results.extend(
+                    self._run_serial(new_steps, user_input, ctx, tracker, total)
+                )
+                self._sync_task_results(ctx, results)
+
         # Phase 2.5: 任务完成度校验（SWE-bench 发现：计划可能只有侦察步骤，
         # 执行完「理解问题」就收工，从不实际修改文件）。
         # ReAct 有 `requires_tools and not tracker.has_executions()` 纠偏，

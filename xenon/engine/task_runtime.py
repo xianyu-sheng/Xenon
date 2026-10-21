@@ -63,6 +63,7 @@ def run_with_delivery(
                 "verify": "测试",
                 "changes": "实际源码修改",
                 "commit": "commit",
+                "dirty": "工作区未提交改动",
                 "pr": "PR",
             }
             result += (
@@ -80,6 +81,7 @@ def run_with_delivery(
             "verify": "运行相关测试并记录真实结果",
             "changes": "实际修改非测试源码文件，不能只提交空改动或测试",
             "commit": "创建 git commit",
+            "dirty": "确认 commit 后工作区干净，没有未提交改动",
             "pr": "push 并创建 PR",
         }
         continuation = (

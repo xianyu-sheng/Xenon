@@ -227,3 +227,23 @@ def test_source_written_after_empty_commit_does_not_satisfy_changes() -> None:
     assert state.committed_artifacts == ["tests/test_fix.py"]
     assert "changes" in state.missing_delivery()
     assert state.maybe_complete() is False
+
+
+def test_dirty_worktree_after_commit_is_a_delivery_gap() -> None:
+    state = TaskState(
+        objective="implement",
+        intent="write_code",
+        execution_level=3,
+        artifacts=["src/app.py"],
+        committed_artifacts=["src/app.py"],
+        commit="abc1234",
+        tests=["pytest -q"],
+        required=["verify", "commit"],
+    )
+    state.record_tool("git", {"git_command": "status"}, success=True, result=" M src/app.py")
+    assert "dirty" in state.missing_delivery()
+    assert state.maybe_complete() is False
+
+    state.record_tool("git", {"git_command": "status"}, success=True, result="")
+    assert "dirty" not in state.missing_delivery()
+    assert state.maybe_complete() is True
