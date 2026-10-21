@@ -117,6 +117,7 @@
 | 2026-10-21 | Plan-Execute 真实 #26 切片 | 三轮真实 DeepSeek 运行均未完成：首轮 60 工具/18 失败/243s、空测试提交；第二轮 51/20/341s、只改 JSON；修正后第三轮 64/15/292s，TaskState 保持 active、缺 verify；提交快照门重放显示空测试提交还缺 changes。已加计划状态同步、提交快照源码门、失败测试不计验证、git 参数规范化；Plan-Execute 仍不可宣称完成 |
 | 2026-10-21 | compact 后 TaskState 恢复 | 新增 `test_compact_task_state_resume.py`：compact → auto-save → load 后状态字段完整；2 passed |
 | 2026-10-21 | PR #160 HMAC 降级修复 | 复现 keyed→unkeyed 重算链；`8d123a5` 增加 key_expected/partial 与回归；PR #160 合并 `3d163d7`；evidence targeted 47 passed，CI 7/7 |
+| 2026-10-21 | 多 commit 源码交付 | `committed_source_paths` + `source_commit_tracking`：源码提交后再提交测试/清理文件不丢源码交付；源码重写会移出已提交集合；全量 3542 passed/98 skipped |
 | 2026-10-21 | final gate 驱动真实修复 | 同一 smoke reset 后复跑：28 工具/3 失败/211s（含 API ReadTimeout 重试）；dirty gate 连续 3 次要求清理，最终 `git status` 空、commit `fe6300a` 含 `calc.py`/`tests/test_calc.py`、`commit_paths_known=true`，测试 2 passed；TaskState completed |
 | 2026-10-21 | Plan-Execute 最小真实闭环成功 | `D:/tmp/xenon-planexec-smoke`：67→7 工具、0 失败、8.2s；`write_file` 建 `calc.py`/`tests/test_calc.py`，真实 `2 passed`，`git commit 09293c7`；TaskState completed，artifacts/verified/tests/commit 一致；证明执行层在简单任务上能闭合 |
 | 2026-10-21 | Plan-Execute #26 最新复跑 | `D:/tmp/xenon-planexec-26` reset 到 `02d9eb9`，67 工具/22 失败/346.6s；提交 `a1e9132` 后仍有一次源码 edit，专项测试 2 failed；TaskState `active`、artifacts_revision 10 > verified_revision 9、missing verify/dirty；最终回答明确“任务交付未完成”，最终门未假完成；Plan-Execute 本身仍不可用 |
