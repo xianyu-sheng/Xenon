@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import stat
 
 from xenon.engine.context import AgentContext
@@ -18,7 +19,11 @@ def test_atomic_write_preserves_mode_and_creates_exact_backup(tmp_path):
 
     assert target.read_text() == "new\n"
     assert (tmp_path / "script.sh.bak").read_text() == "old\n"
-    assert stat.S_IMODE(target.stat().st_mode) == 0o754
+    if os.name == "posix":
+        assert stat.S_IMODE(target.stat().st_mode) == 0o754
+    else:
+        # Windows 仅支持只读位，chmod 无法保留 POSIX 权限位（降级为 0o666）。
+        assert stat.S_IMODE(target.stat().st_mode) == 0o666
 
 
 def test_write_file_failure_keeps_original(monkeypatch, tmp_path):

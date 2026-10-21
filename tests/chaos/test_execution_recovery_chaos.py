@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -82,7 +83,7 @@ def test_sigkill_recovers_all_parallel_tools_without_replaying(tmp_path, monkeyp
     env = os.environ.copy()
     env["XENON_CHAOS_SESSIONS"] = str(sessions)
     env["HOME"] = str(tmp_path / "home")
-    python = shutil.which("python3") or "python3"
+    python = shutil.which("python3") or sys.executable
     process = subprocess.Popen(
         [python, "-c", script],
         cwd=Path(__file__).resolve().parents[2],
@@ -90,6 +91,8 @@ def test_sigkill_recovers_all_parallel_tools_without_replaying(tmp_path, monkeyp
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     try:
         assert process.stdout is not None
@@ -117,7 +120,9 @@ def test_sigkill_recovers_all_parallel_tools_without_replaying(tmp_path, monkeyp
     assert "read_file" in notice
     assert "write_file" in notice
     assert context.get("_tool_execution_active") == {}
-    assert process.returncode is not None and process.returncode < 0
+    # On Windows, Popen.kill() maps to TerminateProcess, which yields a
+    # positive exit code (typically 1) instead of a negative signal code.
+    assert process.returncode is not None and process.returncode != 0
 
 
 def test_corrupt_resume_fails_closed_without_replacing_current_state(

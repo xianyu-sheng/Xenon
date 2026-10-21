@@ -34,6 +34,8 @@ def _run_cli(*args: str, home: Path) -> subprocess.CompletedProcess[str]:
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
         check=False,
     )
