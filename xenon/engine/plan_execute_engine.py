@@ -15,7 +15,7 @@ from xenon.engine.base import BaseEngine
 from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
 from xenon.engine.execution_prompts import EXECUTION_CONTRACT
-from xenon.engine.plan_dag import PlanDAGCycleError
+from xenon.engine.plan_dag import PlanDAGCycleError, canonical_step_id
 from xenon.engine.plan_dag_executor import PlanDAGExecutorMixin, StepOutcome
 from xenon.engine.strategy_guide import get_strategy_advice
 from xenon.engine.tool_tracker import ToolExecutionTracker
@@ -441,7 +441,14 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         use_dag = self.enable_parallel or any(s.get("depends_on") for s in capped)
         if use_dag:
             try:
-                results = self._run_dag(capped, user_input, ctx, tracker, total)
+                results = self._run_dag(
+                    capped,
+                    user_input,
+                    ctx,
+                    tracker,
+                    total,
+                    replan_on_failure=True,
+                )
             except (PlanDAGCycleError, ValueError) as e:
                 logger.warning("DAG 构建失败 (%s)，回退串行执行", e)
                 self.callback.on_warning(f"计划依赖图无效，改用串行执行：{e}")
@@ -1013,11 +1020,15 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         if not new_steps:
             self.callback.on_warning("重规划未生成有效步骤，继续原计划")
             return []
-        # 过滤已完成步骤（按 step_id），避免重复执行
-        filtered = [s for s in new_steps if s.get("id") not in done_ids]
+        # 过滤已完成步骤（按规范化 id），避免重复执行。
+        done_keys = {canonical_step_id(sid) for sid in done_ids}
+        filtered = [
+            s for s in new_steps
+            if canonical_step_id(s.get("id")) not in done_keys
+        ]
         if not filtered:
-            # 新计划全是已完成步骤：接受原计划（可能 id 已复用）
-            return new_steps
+            self.callback.on_warning("重规划未产生新的剩余步骤，保留原计划")
+            return []
         return filtered
 
     # Phase 2 DAG 波次执行已拆分至 plan_dag_executor.PlanDAGExecutorMixin

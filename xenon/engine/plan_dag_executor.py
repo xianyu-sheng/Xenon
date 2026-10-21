@@ -43,11 +43,16 @@ class PlanDAGExecutorMixin:
         ctx: AgentContext,
         tracker: ToolExecutionTracker,
         total: int,
+        *,
+        replan_on_failure: bool = False,
     ) -> list[dict[str, Any]]:
         """拓扑波次执行：同 wave 并发（若 enable_parallel），波次间串行。
 
         依赖失败/跳过的步骤级联跳过（修复审核 §8.27.1：失败步骤的依赖项不再
         盲目继续）。所有 callback 调用都在主线程发出，避免并发渲染竞争。
+
+        ``replan_on_failure`` is opt-in so direct executors and tests can keep
+        pure skip-cascade semantics; the production ``run()`` enables it.
         """
         dag = PlanDAG(steps)  # 重复 id → ValueError；waves() → PlanDAGCycleError
         waves = dag.waves()
@@ -188,6 +193,7 @@ class PlanDAGExecutorMixin:
             _steer_pending = []
 
             # 合并（主线程，单线程，无竞争）：追加结果 + 合并隔离 tracker
+            wave_failures: list[tuple[Any, str, str]] = []
             for sid, step_task, outcome, sub_tracker in wave_results:
                 status = "ok" if outcome.success else "failed"
                 results.append(
@@ -205,8 +211,68 @@ class PlanDAGExecutorMixin:
                     tracker.calls.extend(sub_tracker.calls)
                 if not outcome.success:
                     failed_ids.add(sid)
+                    wave_failures.append(
+                        (sid, step_task, str(outcome.error or outcome.content))
+                    )
                 self.callback.on_step_done(sid, outcome.success, outcome.content[:200])
                 logger.debug(f"步骤 {sid} 完成: {outcome.content[:100]}")
+
+            # A failed wave is a stale plan boundary.  Replan the unfinished
+            # work before the old dependents become skipped; if replanning is
+            # unavailable, the existing skip cascade remains the fallback.
+            if (
+                replan_on_failure
+                and wave_failures
+                and not self._interrupted
+                and self._replans_used < self.max_replans
+            ):
+                done_ids = {
+                    r["step_id"]
+                    for r in results
+                    if r.get("status") == "ok"
+                }
+                notes = [
+                    f"步骤 {sid} 失败：{error[:400]}"
+                    for sid, _task, error in wave_failures
+                ]
+                new_steps = self._replan_remaining(
+                    user_input,
+                    ctx,
+                    [{"text": chr(10).join(notes) + chr(10) + "请重新规划未完成的工作。"}],
+                    done_ids,
+                    failure=True,
+                )
+                if new_steps:
+                    try:
+                        new_dag = PlanDAG(new_steps)
+                        new_waves = new_dag.waves()
+                    except (PlanDAGCycleError, ValueError) as exc:
+                        logger.warning(
+                            "失败后重规划 DAG 无效 (%s)，沿用原计划", exc
+                        )
+                        self.callback.on_warning(
+                            f"失败后重规划依赖图无效，沿用原计划：{exc}"
+                        )
+                    else:
+                        self._replans_used += 1
+                        steps = new_steps
+                        dag = new_dag
+                        waves = new_waves
+                        wave_index = 0
+                        # Successful results are durable facts; failed and
+                        # skipped rows are superseded by the new plan.
+                        results = [
+                            r for r in results if r.get("status") == "ok"
+                        ]
+                        failed_ids.clear()
+                        skipped_ids.clear()
+                        self._sync_task_plan(ctx, steps)
+                        self._sync_task_results(ctx, results)
+                        self.callback.on_warning(
+                            f"步骤失败，已重规划剩余 {len(new_steps)} 步 "
+                            f"({self._replans_used}/{self.max_replans})"
+                        )
+                        continue
 
             if ctx.get("_task_cancelled"):
                 self.callback.on_warning("用户取消任务，停止后续计划步骤")

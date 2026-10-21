@@ -51,6 +51,11 @@ def _canon(value: Any) -> Any:
     return value
 
 
+def canonical_step_id(value: Any) -> Any:
+    """Public alias for the id normalization used by PlanDAG and replanning."""
+    return _canon(value)
+
+
 class PlanDAG:
     """计划步骤的有向无环图。
 
