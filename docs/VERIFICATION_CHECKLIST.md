@@ -119,6 +119,7 @@
 | 2026-10-21 | PR #160 HMAC 降级修复 | 复现 keyed→unkeyed 重算链；`8d123a5` 增加 key_expected/partial 与回归；PR #160 合并 `3d163d7`；evidence targeted 47 passed，CI 7/7 |
 | 2026-10-21 | Plan-Execute 最小真实闭环成功 | `D:/tmp/xenon-planexec-smoke`：67→7 工具、0 失败、8.2s；`write_file` 建 `calc.py`/`tests/test_calc.py`，真实 `2 passed`，`git commit 09293c7`；TaskState completed，artifacts/verified/tests/commit 一致；证明执行层在简单任务上能闭合 |
 | 2026-10-21 | Plan-Execute #26 最新复跑 | `D:/tmp/xenon-planexec-26` reset 到 `02d9eb9`，67 工具/22 失败/346.6s；提交 `a1e9132` 后仍有一次源码 edit，专项测试 2 failed；TaskState `active`、artifacts_revision 10 > verified_revision 9、missing verify/dirty；最终回答明确“任务交付未完成”，最终门未假完成；Plan-Execute 本身仍不可用 |
+| 2026-10-21 | command commit 路径结构化 | `tool_node._exec_command` 在 `git commit` 成功后执行 `git show --name-only HEAD`，把真实 committed_paths 交给 ToolCall/TaskState；新增测试；全量 3540 passed/98 skipped |
 | 2026-10-21 | DAG 失败重规划 | `run()` 传入 `replan_on_failure`；失败波次在旧依赖变 skipped 前重规划，保留成功结果、清理失败/跳过行、重建 DAG；直接 `_run_dag` 默认仍保持原 skip-cascade 语义；新增测试 64 passed |
 | 2026-10-21 | final_answer_checks | TaskState 增加 artifacts/verified/committed revision、failed_tests、commit_paths_known；结构化 exit_code 与失败测试失效门；`tests/test_task_state_final_checks.py` 验证运行时重试；全量 3538 passed/98 skipped |
 | 2026-10-21 | 结构化 commit metadata | `3f185b9`；Git commit 结果携带真实 committed_paths，ToolCall/TaskState 消费；targeted 56 passed |
