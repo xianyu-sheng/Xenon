@@ -189,7 +189,11 @@ class TestDifficultyEstimatorBoundary:
         tier = DifficultyEstimator.estimate_tier(est.estimate(text, []))
         assert tier == 1
 
-    @pytest.mark.parametrize("text", ["x" * 100000, "🎉" * 20000, "aaaa" * 5000])
+    @pytest.mark.parametrize(
+        "text",
+        ["x" * 100000, "🎉" * 20000, "aaaa" * 5000],
+        ids=["x-100k", "emoji-20k", "aaaa-20k"],
+    )
     def test_repetitive_flood_not_hard(self, text):
         from xenon.repl.difficulty_estimator import DifficultyEstimator
 

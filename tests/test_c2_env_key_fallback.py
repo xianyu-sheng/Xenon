@@ -98,6 +98,7 @@ class TestGetConfiguredProvidersEnvFallback:
         env = {
             "ANTHROPIC_AUTH_TOKEN": "claude-code-token",
             "HOME": os.environ.get("HOME", "/tmp"),
+            "USERPROFILE": os.environ.get("USERPROFILE", "/tmp"),
         }
         with patch.dict(os.environ, env, clear=True):
             # 清 yaml：mock load_credentials 返回空
@@ -123,6 +124,7 @@ class TestGetConfiguredProvidersEnvFallback:
         env = {
             "DEEPSEEK_API_KEY": "env-key",
             "HOME": os.environ.get("HOME", "/tmp"),
+            "USERPROFILE": os.environ.get("USERPROFILE", "/tmp"),
         }
         with patch.dict(os.environ, env, clear=True):
             with patch(
@@ -142,6 +144,7 @@ class TestGetConfiguredProvidersEnvFallback:
         env = {
             "OLLAMA_API_KEY": "ollama-key",
             "HOME": os.environ.get("HOME", "/tmp"),
+            "USERPROFILE": os.environ.get("USERPROFILE", "/tmp"),
         }
         with patch.dict(os.environ, env, clear=True):
             with patch(

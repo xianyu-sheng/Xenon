@@ -70,7 +70,8 @@ class TestShortcutManager:
             )
 
             result = manager.execute("greet", "Alice")
-            assert "hello Alice" in result
+            # PowerShell's echo writes multiple arguments on separate lines.
+            assert "hello Alice" in " ".join(result.split())
 
     def test_execute_default_params(self):
         """测试默认参数。"""
@@ -84,7 +85,7 @@ class TestShortcutManager:
             )
 
             result = manager.execute("greet")
-            assert "hello world" in result
+            assert "hello world" in " ".join(result.split())
 
     def test_execute_nonexistent(self):
         """测试执行不存在的快捷指令。"""

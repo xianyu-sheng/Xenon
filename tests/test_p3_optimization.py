@@ -31,7 +31,7 @@ def test_parse_pct_string_with_percent_sign():
     assert result == 0.5, f"Expected 0.5, got {result}"
 
 
-def test_compact_persistence_failure_feedback():
+def test_compact_persistence_failure_feedback(tmp_path):
     """测试/compact持久化失败时用户收到提示。
 
     P3-Low 2.9：当压缩快照持久化失败时，_last_snapshot_error应被设置，
@@ -40,7 +40,9 @@ def test_compact_persistence_failure_feedback():
     状态：✓ 已实现（持久化失败时设置_last_snapshot_error）
     """
     cm = ContextManager()
-    cm.persist_dir = Path("/proc/invalid_path_that_cannot_be_written")
+    blocker = tmp_path / "not_a_directory"
+    blocker.write_text("x", encoding="utf-8")
+    cm.persist_dir = blocker
     cm.session_id = "test_session"
 
     for i in range(10):
@@ -52,10 +54,7 @@ def test_compact_persistence_failure_feedback():
     # P3-Low 问题2修复：持久化失败时_last_snapshot_error应被设置
     assert hasattr(cm, "_last_snapshot_error"), "应该有_last_snapshot_error属性"
     assert cm._last_snapshot_error is not None, "持久化失败时应设置错误信息"
-    assert (
-        "No such file or directory" in cm._last_snapshot_error
-        or "Permission denied" in cm._last_snapshot_error
-    )
+    assert cm._last_snapshot_error
 
 
 def test_max_undo_snapshots_configurable():

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import stat
 import sys
 import threading
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import yaml
 
+from tests.platform_utils import symlink_or_skip
 from xenon.engine.context import AgentContext
 from xenon.integration_cli import run_integration_cli
 from xenon.mcp.client import MCPClient
@@ -271,7 +273,7 @@ def test_skill_install_rejects_out_of_tree_symlink(tmp_path, capsys):
     source = _write_skill(tmp_path / "source")
     outside = tmp_path / "secret.txt"
     outside.write_text("secret", encoding="utf-8")
-    source.joinpath("references/escape.txt").symlink_to(outside)
+    symlink_or_skip(source.joinpath("references/escape.txt"), outside)
 
     code, stdout, _, home, _ = _run(
         ["skill", "install", str(source), "--json"], tmp_path, capsys
@@ -310,7 +312,8 @@ def test_mcp_stdio_config_from_stdin_persists_but_redacts_secrets(
     assert payload["server"]["env_keys"] == ["AGENTPLAN_API_KEY"]
     stored = yaml.safe_load(credentials.read_text(encoding="utf-8"))
     assert stored["_mcp_servers"][0]["env"]["AGENTPLAN_API_KEY"] == secret
-    assert stat.S_IMODE(credentials.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(credentials.stat().st_mode) == 0o600
 
     code, stdout, _, _, _ = _run(["mcp", "list", "--json"], tmp_path, capsys)
     assert code == 0

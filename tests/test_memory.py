@@ -4,10 +4,10 @@ Memory Store 跨会话记忆测试。
 
 from __future__ import annotations
 
-import stat
 import tempfile
 from pathlib import Path
 
+from tests.platform_utils import assert_posix_mode
 from xenon.repl.memory import Memory, MemoryStore
 
 
@@ -68,7 +68,7 @@ class TestMemoryStore:
         path = tmp_path / "memory.json"
         MemoryStore(path).add("个人偏好", type="preference")
 
-        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert_posix_mode(path, 0o600)
 
     def test_delete(self):
         """测试删除记忆。"""

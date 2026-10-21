@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.platform_utils import symlink_or_skip
 from xenon.engine.context import AgentContext
 from xenon.nodes.network_security import SecurityError
 from xenon.nodes.tool_node import ToolNode
@@ -45,7 +46,7 @@ def test_symlink_escape_prevented(real_path_validation):
 
             # 攻击者创建符号链接
             symlink = workspace / "malicious.txt"
-            symlink.symlink_to(target_file)
+            symlink_or_skip(symlink, target_file)
 
             # 创建工具节点
             context = AgentContext()
@@ -88,7 +89,7 @@ def test_symlink_escape_in_batch_rollback(real_path_validation):
 
             # 创建符号链接
             symlink = workspace / "malicious.txt"
-            symlink.symlink_to(target_file)
+            symlink_or_skip(symlink, target_file)
 
             # 创建正常文件
             normal_file = workspace / "normal.txt"
@@ -133,7 +134,7 @@ def test_symlink_inside_workspace_allowed(real_path_validation):
 
         # 创建工作区内的符号链接
         link = workspace / "link.txt"
-        link.symlink_to(target)
+        symlink_or_skip(link, target)
 
         context = AgentContext()
         node = ToolNode(

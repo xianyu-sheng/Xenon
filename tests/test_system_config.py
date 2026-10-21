@@ -377,7 +377,7 @@ def test_generate_default_config_file(tmp_path: Path):
     assert config_path.exists()
 
     # 验证生成的文件可以被 YAML 解析
-    with open(config_path) as f:
+    with open(config_path, encoding="utf-8") as f:
         content = f.read()
         assert "validation:" in content
         assert "engine:" in content

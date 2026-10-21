@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from evals import swebench_runtime
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="official SWE-bench runtime uses Linux uid/gid and Docker mounts",
+)
 
 
 class _Container:

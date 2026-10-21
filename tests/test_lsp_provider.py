@@ -148,6 +148,7 @@ class _SymbolsScript:
 
 def test_resolve_path_expands_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     target = _write(tmp_path, "home.py", "x = 1\n")
     assert LSPProvider._resolve_path("~/home.py") == target.resolve()
 

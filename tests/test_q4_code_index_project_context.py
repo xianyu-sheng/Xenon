@@ -15,6 +15,7 @@ import json
 import os
 import time
 
+from tests.platform_utils import symlink_or_skip
 from xenon.repl.project_context import ProjectContext, _is_excluded_dir
 from xenon.utils.code_index import CodeIndex
 
@@ -45,7 +46,7 @@ class TestSymlinkSkip:
         (tmp_path / "pyproject.toml").write_text("")
         (tmp_path / "real").mkdir()
         (tmp_path / "real" / "x.py").write_text("x = 1")
-        (tmp_path / "link").symlink_to(tmp_path / "real")
+        symlink_or_skip(tmp_path / "link", tmp_path / "real", target_is_directory=True)
 
         pc = ProjectContext()
         pc.detect(tmp_path)
@@ -55,7 +56,7 @@ class TestSymlinkSkip:
     def test_file_tree_symlink_cycle_no_hang(self, tmp_path):
         """指向根的循环符号链接不应导致无限递归。"""
         (tmp_path / "pyproject.toml").write_text("")
-        (tmp_path / "loop").symlink_to(tmp_path)  # 指向根 → 循环
+        symlink_or_skip(tmp_path / "loop", tmp_path, target_is_directory=True)  # 指向根 → 循环
 
         pc = ProjectContext()
         pc.detect(tmp_path)  # 不应挂起
@@ -64,7 +65,7 @@ class TestSymlinkSkip:
     def test_file_tree_skips_file_symlink(self, tmp_path):
         (tmp_path / "pyproject.toml").write_text("")
         (tmp_path / "real.py").write_text("x = 1")
-        (tmp_path / "link.py").symlink_to(tmp_path / "real.py")
+        symlink_or_skip(tmp_path / "link.py", tmp_path / "real.py")
 
         pc = ProjectContext()
         pc.detect(tmp_path)

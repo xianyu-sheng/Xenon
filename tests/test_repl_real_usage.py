@@ -194,7 +194,6 @@ class TestRealLLMSmoke:
             assert last_asst is not None, "缺 assistant 消息"
             assert len(last_asst.content) > 0, "assistant 消息为空"
             _record_reply("1-烟雾", "你好", last_asst.content)
-            print(f"\n[场景1] 真实 LLM 回复: {last_asst.content[:200]}")
 
     def test_real_llm_question(self):
         """真实 deepseek：问简单问题 → 应有合理回复。"""
@@ -638,6 +637,8 @@ class TestDryRunWorkflow:
             [sys.executable, "-m", "xenon.main", "run", str(workflow_src), "--dry-run"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             cwd=str(tmp_path),
         )
@@ -662,6 +663,8 @@ class TestCLISubcommands:
             [sys.executable, "-m", "xenon.main", "--help"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
         )
         output = result.stdout
@@ -672,18 +675,11 @@ class TestCLISubcommands:
         print(f"\n[场景11] xenon --help 输出前 200 字:\n{output[:200]}")
 
     def test_xenon_version_in_pyproject(self):
-        """pyproject.toml 的 version 应 >= 0.2.0。"""
-        pyproject = Path(__file__).parent.parent / "pyproject.toml"
-        content = pyproject.read_text(encoding="utf-8")
-        # 提取 version = "x.y.z"
-        import re
+        """包版本应 >= 0.2.0（版本唯一来源是 xenon.__version__）。"""
+        from xenon import __version__ as version
 
-        m = re.search(r'version\s*=\s*"([^"]+)"', content)
-        assert m, f"未找到 version: {content[:200]}"
-        version = m.group(1)
-        major, minor, _ = version.split(".")
+        major, minor, *_ = version.split(".")
         assert int(major) >= 0 and int(minor) >= 2, f"版本过低: {version}"
-        print(f"\n[场景11b] 当前版本: {version}")
 
     def test_xenon_actually_executable(self):
         """xenon 命令应在 PATH 中可执行。"""
@@ -695,6 +691,8 @@ class TestCLISubcommands:
                 [sys.executable, "-c", "from xenon.main import cli; print('OK')"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             assert result.returncode == 0

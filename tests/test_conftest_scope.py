@@ -53,6 +53,8 @@ def test_cache_telemetry_is_redirected_away_from_home():
 
     cache_dir = os.environ.get("XENON_CACHE_DIR")
     assert cache_dir, "XENON_CACHE_DIR 未设置，_isolate_cache_telemetry 未生效"
-    assert Path.home() not in Path(cache_dir).parents, (
-        f"缓存目录仍在家目录下: {cache_dir}"
+    # pytest's temp root can itself live under the user's home on Windows.
+    # The contract is "redirected to an explicit cache root", not "outside home".
+    assert Path(cache_dir).resolve() != Path.home().resolve(), (
+        f"缓存目录仍指向家目录: {cache_dir}"
     )

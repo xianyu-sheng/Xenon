@@ -7,6 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from tests.platform_utils import assert_posix_mode
 from xenon.repl.session import (
     AUTO_SESSION_NAME,
     SESSION_TTL_DAYS,
@@ -120,7 +121,7 @@ class TestAutoSave:
         rewritten = legacy.read_text(encoding="utf-8")
         assert "legacy-secret" not in rewritten
         assert "api_key" not in rewritten
-        assert legacy.stat().st_mode & 0o777 == 0o600
+        assert_posix_mode(legacy, 0o600)
 
 
 class TestSessionExpiry:

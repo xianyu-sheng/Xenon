@@ -9,6 +9,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from tests.platform_utils import symlink_or_skip
 from xenon.engine.scout import DEFAULT_EXCLUDE, DirectoryScout
 
 # --------------------------- scan() ---------------------------
@@ -108,7 +109,7 @@ def test_scan_does_not_follow_symlinks():
         (root / "real.py").write_text("x")
         # 指向自身的符号链接（循环）
         link = root / "loop"
-        link.symlink_to(root)
+        symlink_or_skip(link, root, target_is_directory=True)
         scout = DirectoryScout(project_root=d, max_depth=3)
         result = scout.scan()
         assert result is not None
@@ -120,7 +121,7 @@ def test_scan_does_not_follow_symlinks():
 def test_scan_symlink_root_returns_none():
     with tempfile.TemporaryDirectory() as d:
         link = Path(d).parent / ("scout_link_" + os.urandom(3).hex())
-        link.symlink_to(d)
+        symlink_or_skip(link, d, target_is_directory=True)
         try:
             scout = DirectoryScout(project_root=str(link), max_depth=1)
             assert scout.scan() is None

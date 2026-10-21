@@ -9,6 +9,7 @@ import sys
 
 import pytest
 
+from tests.platform_utils import assert_posix_mode
 from xenon.engine.base import BaseEngine
 from xenon.repl.context_manager import ContextManager
 from xenon.utils.cache_telemetry import (
@@ -220,7 +221,7 @@ def test_event_store_is_bounded_and_contains_no_prompts(tmp_path) -> None:
 
     assert len(store.load()) == 10
     assert "do-not-persist-this" not in store.path.read_text(encoding="utf-8")
-    assert store.path.stat().st_mode & 0o777 == 0o600
+    assert_posix_mode(store.path, 0o600)
 
 
 def test_persistent_hmac_keeps_family_stable_across_processes(tmp_path) -> None:
@@ -248,7 +249,7 @@ print(manifest.cache_family)
     ).strip()
 
     assert first == second
-    assert (tmp_path / "telemetry.key").stat().st_mode & 0o777 == 0o600
+    assert_posix_mode(tmp_path / "telemetry.key", 0o600)
 
 
 def test_tracker_distinguishes_missing_fields_from_explicit_zero() -> None:

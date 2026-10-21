@@ -1,5 +1,9 @@
 """Tests for ContextManager — 对话历史与压缩。"""
 
+import os
+
+import pytest
+
 from xenon.repl.context_manager import ContextManager
 
 
@@ -61,8 +65,8 @@ class TestLongSessionStability:
 
     def test_60_rounds_no_fd_leak_and_compact_stable(self):
         """60 轮对话：fd 不增长，compact 按需触发并保留摘要。"""
-        import os
-
+        if not os.path.isdir("/proc/self/fd"):
+            pytest.skip("fd accounting requires /proc/self/fd (Linux)")
         def count_fds():
             return len(os.listdir("/proc/self/fd"))
 

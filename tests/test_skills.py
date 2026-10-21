@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.platform_utils import symlink_or_skip
 from xenon.repl.skill_manager import SkillManager, SkillStep
 
 
@@ -407,7 +408,7 @@ class TestSkillManager:
         reference.write_text("safe guide", encoding="utf-8")
         outside = tmp_path / "outside.txt"
         outside.write_text("secret", encoding="utf-8")
-        (skills_root / "bounded" / "references" / "escape.txt").symlink_to(outside)
+        symlink_or_skip(skills_root / "bounded" / "references" / "escape.txt", outside)
 
         manager = SkillManager(skills_root)
 
