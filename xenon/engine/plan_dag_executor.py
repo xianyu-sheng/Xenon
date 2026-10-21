@@ -224,6 +224,7 @@ class PlanDAGExecutorMixin:
                 replan_on_failure
                 and wave_failures
                 and not self._interrupted
+                and not ctx.get("_task_cancelled")
                 and self._replans_used < self.max_replans
             ):
                 done_ids = {
