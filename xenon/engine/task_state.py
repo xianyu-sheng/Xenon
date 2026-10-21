@@ -131,6 +131,18 @@ def _paths_from_params(tool: str, params: dict[str, Any]) -> list[str]:
     return paths
 
 
+def _is_test_path(path: str) -> bool:
+    normalized = str(path).replace("\\", "/").lower()
+    parts = [part for part in normalized.split("/") if part]
+    if "tests" in parts or "test" in parts:
+        return True
+    return bool(parts and parts[-1].startswith("test_"))
+
+
+def _path_key(path: str) -> str:
+    return str(path).replace("\\", "/").strip().lower()
+
+
 @dataclass
 class TaskState:
     """One user task that may span several engine runs."""
@@ -148,6 +160,8 @@ class TaskState:
     failed_tests: list[str] = field(default_factory=list)
     commit: str = ""
     committed_artifacts: list[str] = field(default_factory=list)
+    committed_source_paths: list[str] = field(default_factory=list)
+    source_commit_tracking: bool = False
     commit_paths_known: bool = False
     committed_revision: int = 0
     dirty_after_commit: bool | None = None
@@ -188,6 +202,10 @@ class TaskState:
             committed_artifacts=[
                 str(p) for p in raw.get("committed_artifacts", []) if p
             ],
+            committed_source_paths=[
+                str(p) for p in raw.get("committed_source_paths", []) if p
+            ],
+            source_commit_tracking=bool(raw.get("source_commit_tracking")),
             commit_paths_known=bool(raw.get("commit_paths_known")),
             committed_revision=max(0, int(raw.get("committed_revision") or 0)),
             dirty_after_commit=(
@@ -217,6 +235,8 @@ class TaskState:
             "failed_tests": self.failed_tests[-10:],
             "commit": self.commit,
             "committed_artifacts": self.committed_artifacts[-30:],
+            "committed_source_paths": self.committed_source_paths[-30:],
+            "source_commit_tracking": self.source_commit_tracking,
             "commit_paths_known": self.commit_paths_known,
             "committed_revision": self.committed_revision,
             "dirty_after_commit": self.dirty_after_commit,
@@ -248,13 +268,8 @@ class TaskState:
     def has_source_artifact(self, paths: list[str] | None = None) -> bool:
         """Whether a successful write touched a non-test file."""
         for path in self.artifacts if paths is None else paths:
-            normalized = str(path).replace("\\", "/").lower()
-            parts = [part for part in normalized.split("/") if part]
-            if "tests" in parts or "test" in parts:
-                continue
-            if parts and parts[-1].startswith("test_"):
-                continue
-            return True
+            if not _is_test_path(path):
+                return True
         return False
 
     def required_delivery(self) -> list[str]:
@@ -274,10 +289,15 @@ class TaskState:
             if self.commit_paths_known
             else (self.committed_artifacts or self.artifacts)
         )
+        has_source = (
+            bool(self.committed_source_paths)
+            if self.source_commit_tracking
+            else self.has_source_artifact(committed)
+        )
         if (
             "commit" in self.required
             and self.intent not in {"write_doc", "write_report"}
-            and not self.has_source_artifact(committed)
+            and not has_source
         ):
             missing.append("changes")
         if "commit" in self.required and not self.commit:
@@ -322,6 +342,17 @@ class TaskState:
         else:
             self.committed_artifacts = list(self.artifacts)
             self.commit_paths_known = False
+        # Keep source paths from earlier commits: a later test/docs commit
+        # must not erase the fact that the current source was committed.
+        # A post-commit source write removes its path below, so a stale
+        # commit cannot satisfy the gate after new source changes.
+        for path in self.committed_artifacts:
+            if _is_test_path(path):
+                continue
+            key = _path_key(path)
+            if key not in {_path_key(p) for p in self.committed_source_paths}:
+                self.committed_source_paths.append(path)
+        self.source_commit_tracking = True
         self.committed_revision = self.artifacts_revision
         self.dirty_after_commit = None
 
@@ -381,6 +412,17 @@ class TaskState:
                 for path in paths:
                     if path not in self.artifacts:
                         self.artifacts.append(path)
+                    if not _is_test_path(path):
+                        # The committed source snapshot is stale as soon as
+                        # this path is rewritten; a later test-only commit
+                        # must not re-bless it.
+                        self.source_commit_tracking = True
+                        key = _path_key(path)
+                        self.committed_source_paths = [
+                            item
+                            for item in self.committed_source_paths
+                            if _path_key(item) != key
+                        ]
                 # Every successful write makes an earlier test result stale.
                 self.artifacts_revision += 1
 

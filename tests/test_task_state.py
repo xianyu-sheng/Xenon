@@ -383,3 +383,52 @@ def test_empty_commit_metadata_cannot_bless_precommit_source() -> None:
     assert state.commit == "abc1234"
     assert state.committed_artifacts == []
     assert "changes" in state.missing_delivery()
+
+
+def test_later_test_or_cleanup_commit_keeps_committed_source() -> None:
+    state = TaskState(
+        objective="implement",
+        intent="write_code",
+        execution_level=3,
+        required=["commit"],
+    )
+    state.record_tool("write_file", {"file_path": "src/app.py"}, success=True)
+    state.record_tool(
+        "git",
+        {"git_command": "commit -m feat"},
+        success=True,
+        result="[main abc1234] feat",
+        metadata={"committed_paths": ["src/app.py"]},
+    )
+    assert state.missing_delivery() == []
+
+    state.record_tool("write_file", {"file_path": "tests/test_app.py"}, success=True)
+    state.record_tool(
+        "git",
+        {"git_command": "commit -m tests"},
+        success=True,
+        result="[main def5678] tests",
+        metadata={"committed_paths": ["tests/test_app.py"]},
+    )
+    assert "changes" not in state.missing_delivery()
+
+
+def test_source_rewrite_after_commit_reopens_changes_gate() -> None:
+    state = TaskState(
+        objective="implement",
+        intent="write_code",
+        execution_level=3,
+        required=["commit"],
+    )
+    state.record_tool("write_file", {"file_path": "src/app.py"}, success=True)
+    state.record_tool(
+        "git",
+        {"git_command": "commit -m feat"},
+        success=True,
+        result="[main abc1234] feat",
+        metadata={"committed_paths": ["src/app.py"]},
+    )
+    state.record_tool("write_file", {"file_path": "src/app.py"}, success=True)
+
+    assert "changes" in state.missing_delivery()
+    assert "dirty" in state.missing_delivery()
