@@ -1097,12 +1097,20 @@ class ReActEngine(BaseEngine):
                 if isinstance(parsed, dict):
                     thought_content = parsed.get("thought", "")
                 tool_calls_list = None
+
+                def _loop_call_key(item: dict[str, Any]) -> str:
+                    action = str(item.get("action") or "")
+                    params = item.get("action_input") or {}
+                    if not isinstance(params, dict):
+                        params = {}
+                    return f"{action}({self._params_signature(params)})"
+
                 if isinstance(parsed, list):
                     tool_calls_list = [
-                        item.get("action") for item in parsed if isinstance(item, dict)
+                        _loop_call_key(item) for item in parsed if isinstance(item, dict)
                     ]
                 elif isinstance(parsed, dict) and parsed.get("action"):
-                    tool_calls_list = [parsed["action"]]
+                    tool_calls_list = [_loop_call_key(parsed)]
 
                 # 记录本轮数据（工具执行完成后）
                 self._loop_detector.add_turn(

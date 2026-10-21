@@ -394,10 +394,10 @@ Xenon 的 Plan-Execute 预生成 `params`，再靠 mini-ReAct 修复，属于结
 
 - `xenon/engine/result.py`：`AgentResult`（`str` 子类）+ `TerminationReason`；
   `run_with_delivery` 统一生成结果，`ok` 不再靠解析字符串。
-- `PlanExecuteEngine.max_replans=3`：失败步骤会带着已完成结果和失败 Observation
-  重新规划剩余步骤；失败结果会保持 `ERROR`，不会静默当完成。
+- `PlanExecuteEngine.max_replans=3`：**串行路径**的失败步骤会带着已完成结果和失败 Observation
+  重新规划剩余步骤；DAG 路径仍保留依赖级联 skip 语义，暂不在波次内重规划。失败结果会保持 `ERROR`，不会静默当完成。
 - `LoopDetector`：修正“3 次相同哈希仍只有 0.7”的 off-by-one；工具模式
-  三周期重复提升到 0.9，否则 0.85；解决“提示永远达不到硬终止阈值”。
+  三周期重复提升到 0.9，否则 0.85；ReAct 传入的参数签名避免“读不同文件”被误判为同一循环。
 - 新增 `tests/test_agent_result.py`、`tests/test_planexecute_replanner.py`，
   并保留真实失败样本作为后续回归依据。
 
