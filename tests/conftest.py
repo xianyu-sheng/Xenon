@@ -3,6 +3,31 @@
 import pytest
 
 
+def pytest_addoption(parser):
+    """注册 --run-live 开关。
+
+    真实 LLM 端到端测试（pytestmark = pytest.mark.live）会真的发起网络请求，
+    在无凭证/受限网络环境下会长时间阻塞甚至超时。默认跳过，只有显式传
+    --run-live 时才执行。
+    """
+    parser.addoption(
+        "--run-live",
+        action="store_true",
+        default=False,
+        help="运行标记为 live 的真实 LLM 端到端测试（默认跳过）。",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """未显式 --run-live 时，跳过所有 live 标记用例。"""
+    if config.getoption("--run-live"):
+        return
+    skip_live = pytest.mark.skip(reason="live 测试默认跳过，需 --run-live 显式开启")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip_live)
+
+
 @pytest.fixture(autouse=True)
 def _reset_provider_probe_cache():
     """每个用例前后清空 provider 探测缓存。

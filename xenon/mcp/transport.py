@@ -296,7 +296,10 @@ class StdioTransport(MCPTransport):
                     proc.wait(timeout=2)
                 except Exception:
                     pass
-            if self._reader_thread is not None:
+            if (
+                self._reader_thread is not None
+                and self._reader_thread is not threading.current_thread()
+            ):
                 self._reader_thread.join(timeout=2)
             for stream in (proc.stdout, proc.stderr):
                 try:
