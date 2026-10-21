@@ -59,11 +59,16 @@ def _status_is_dirty(text: str) -> bool:
     return False
 
 
+def _verification_text_failed(text: str) -> bool:
+    """Whether test output explicitly contains a failure marker."""
+    return bool(re.search(r"(?:\d+\s+)?failed|FAILED|ERROR", text, re.I))
+
+
 def _verification_passed(text: str) -> bool:
     """Conservative evidence check for a successful test command."""
     if not text.strip():
         return False
-    if re.search(r"(?:\d+\s+)?failed|FAILED|ERROR", text, re.I):
+    if _verification_text_failed(text):
         return False
     return bool(
         re.search(
@@ -72,6 +77,19 @@ def _verification_passed(text: str) -> bool:
             re.I,
         )
     )
+
+
+def _metadata_exit_code(metadata: dict[str, Any]) -> int | None:
+    """Read a real process exit code from structured tool metadata."""
+    for key in ("exit_code", "returncode"):
+        value = metadata.get(key)
+        if isinstance(value, bool) or value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _text(value: Any) -> str:
@@ -84,6 +102,18 @@ def _tool_command(tool: str, params: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value
     return ""
+
+
+def _paths_from_metadata(metadata: dict[str, Any]) -> list[str]:
+    """Paths reported by the tool itself, before falling back to params."""
+    paths: list[str] = []
+    for key in ("changed_paths", "file_path", "path"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value:
+            paths.append(value)
+        elif isinstance(value, list):
+            paths.extend(str(item) for item in value if isinstance(item, str) and item)
+    return paths
 
 
 def _paths_from_params(tool: str, params: dict[str, Any]) -> list[str]:
@@ -112,9 +142,14 @@ class TaskState:
     status: str = "active"  # active | completed | blocked
     steps: list[dict[str, str]] = field(default_factory=list)
     artifacts: list[str] = field(default_factory=list)
+    artifacts_revision: int = 0
+    verified_revision: int = 0
     tests: list[str] = field(default_factory=list)
+    failed_tests: list[str] = field(default_factory=list)
     commit: str = ""
     committed_artifacts: list[str] = field(default_factory=list)
+    commit_paths_known: bool = False
+    committed_revision: int = 0
     dirty_after_commit: bool | None = None
     pushed: bool = False
     pr_url: str = ""
@@ -145,11 +180,16 @@ class TaskState:
                 if isinstance(s, dict) and s.get("step")
             ],
             artifacts=[str(p) for p in raw.get("artifacts", []) if p],
+            artifacts_revision=max(0, int(raw.get("artifacts_revision") or 0)),
+            verified_revision=max(0, int(raw.get("verified_revision") or 0)),
             tests=[str(t) for t in raw.get("tests", []) if t],
+            failed_tests=[str(t) for t in raw.get("failed_tests", []) if t],
             commit=_text(raw.get("commit")),
             committed_artifacts=[
                 str(p) for p in raw.get("committed_artifacts", []) if p
             ],
+            commit_paths_known=bool(raw.get("commit_paths_known")),
+            committed_revision=max(0, int(raw.get("committed_revision") or 0)),
             dirty_after_commit=(
                 bool(raw["dirty_after_commit"])
                 if "dirty_after_commit" in raw
@@ -171,9 +211,14 @@ class TaskState:
             "status": self.status,
             "steps": self.steps,
             "artifacts": self.artifacts[-30:],
+            "artifacts_revision": self.artifacts_revision,
+            "verified_revision": self.verified_revision,
             "tests": self.tests[-20:],
+            "failed_tests": self.failed_tests[-10:],
             "commit": self.commit,
             "committed_artifacts": self.committed_artifacts[-30:],
+            "commit_paths_known": self.commit_paths_known,
+            "committed_revision": self.committed_revision,
             "dirty_after_commit": self.dirty_after_commit,
             "pushed": self.pushed,
             "pr_url": self.pr_url,
@@ -215,12 +260,20 @@ class TaskState:
     def required_delivery(self) -> list[str]:
         """Return the delivery gates that are still missing."""
         missing: list[str] = []
-        if "verify" in self.required and not self.tests:
+        if "verify" in self.required and (
+            not self.tests or self.verified_revision < self.artifacts_revision
+        ):
+            # Tests must be newer than the last write.  A passing test before
+            # a post-test edit is stale evidence, not verification.
             missing.append("verify")
         # A commit that only captures tests (or an empty change) must not
         # satisfy a code-delivery task.  This is execution state, not proof;
         # it only prevents ``maybe_complete`` from blessing a no-op commit.
-        committed = self.committed_artifacts or self.artifacts
+        committed = (
+            self.committed_artifacts
+            if self.commit_paths_known
+            else (self.committed_artifacts or self.artifacts)
+        )
         if (
             "commit" in self.required
             and self.intent not in {"write_doc", "write_report"}
@@ -229,7 +282,13 @@ class TaskState:
             missing.append("changes")
         if "commit" in self.required and not self.commit:
             missing.append("commit")
-        if "commit" in self.required and self.dirty_after_commit is True:
+        if "commit" in self.required and (
+            self.dirty_after_commit is True
+            or (
+                self.commit
+                and self.committed_revision < self.artifacts_revision
+            )
+        ):
             missing.append("dirty")
         if "pr" in self.required and not self.pr_url:
             missing.append("pr")
@@ -246,6 +305,26 @@ class TaskState:
         self.updated_at = time.time()
         return True
 
+    def _record_commit(
+        self, commit_hash: str, metadata: dict[str, Any]
+    ) -> None:
+        """Record a real commit and the paths captured in that commit."""
+        self.commit = commit_hash
+        committed_paths = metadata.get("committed_paths")
+        if "committed_paths" in metadata and isinstance(committed_paths, list):
+            # An explicit empty list means the commit captured no paths
+            # (e.g. --allow-empty); it must not fall back to the pre-commit
+            # artifact snapshot and bless a no-op commit.
+            self.committed_artifacts = [
+                str(path) for path in committed_paths if path
+            ]
+            self.commit_paths_known = True
+        else:
+            self.committed_artifacts = list(self.artifacts)
+            self.commit_paths_known = False
+        self.committed_revision = self.artifacts_revision
+        self.dirty_after_commit = None
+
     def record_tool(
         self,
         tool: str,
@@ -256,19 +335,54 @@ class TaskState:
         error: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Update state from one actual tool call (failed calls don't count)."""
+        """Update state from one actual tool call.
+
+        Failed verification commands still matter: they invalidate an earlier
+        pass.  Other failed calls must not create artifacts or commits.
+        """
         self.updated_at = time.time()
         tool = _text(tool)
-        if not success:
-            return
         metadata = metadata if isinstance(metadata, dict) else {}
         command = _tool_command(tool, params)
         result_text = _text(result)
 
+        # A test run is the one failed action that changes delivery state.
+        # A previous pass cannot survive a later failure or a code edit.
+        if tool in {"command", "run_script"} and _VERIFY_RE.search(command):
+            label = command.strip().replace(chr(10), " ")[:240]
+            exit_code = _metadata_exit_code(metadata)
+            if exit_code is not None:
+                passed = (
+                    success
+                    and exit_code == 0
+                    and not _verification_text_failed(result_text)
+                )
+            else:
+                passed = success and _verification_passed(result_text)
+            if passed:
+                if label and label not in self.tests:
+                    self.tests.append(label)
+                self.verified_revision = self.artifacts_revision
+                if label in self.failed_tests:
+                    self.failed_tests.remove(label)
+            else:
+                self.tests = []
+                self.verified_revision = 0
+                if label and label not in self.failed_tests:
+                    self.failed_tests.append(label)
+                    self.failed_tests = self.failed_tests[-10:]
+
+        if not success:
+            return
+
         if tool in _WRITE_TOOLS:
-            for path in _paths_from_params(tool, params):
-                if path not in self.artifacts:
-                    self.artifacts.append(path)
+            paths = _paths_from_metadata(metadata) or _paths_from_params(tool, params)
+            if paths:
+                for path in paths:
+                    if path not in self.artifacts:
+                        self.artifacts.append(path)
+                # Every successful write makes an earlier test result stale.
+                self.artifacts_revision += 1
 
         if tool == "update_plan":
             raw_steps = params.get("steps")
@@ -284,22 +398,10 @@ class TaskState:
 
         if tool in {"command", "run_script"}:
             text = f"{command}\n{result_text}"
-            if _VERIFY_RE.search(command) and _verification_passed(result_text):
-                label = command.strip().replace(chr(10), ' ')[:240]
-                if label and label not in self.tests:
-                    self.tests.append(label)
             if _COMMIT_RE.search(command):
                 commit_hash = _commit_hash(result_text)
                 if commit_hash:
-                    self.commit = commit_hash
-                    committed_paths = metadata.get("committed_paths")
-                    if isinstance(committed_paths, list) and committed_paths:
-                        self.committed_artifacts = [
-                            str(path) for path in committed_paths if path
-                        ]
-                    else:
-                        self.committed_artifacts = list(self.artifacts)
-                    self.dirty_after_commit = None
+                    self._record_commit(commit_hash, metadata)
             if "git status" in command:
                 self.dirty_after_commit = _status_is_dirty(result_text)
             if _PUSH_RE.search(text):
@@ -322,15 +424,7 @@ class TaskState:
             if action.startswith("commit"):
                 commit_hash = _commit_hash(result_text)
                 if commit_hash:
-                    self.commit = commit_hash
-                    committed_paths = metadata.get("committed_paths")
-                    if isinstance(committed_paths, list) and committed_paths:
-                        self.committed_artifacts = [
-                            str(path) for path in committed_paths if path
-                        ]
-                    else:
-                        self.committed_artifacts = list(self.artifacts)
-                    self.dirty_after_commit = None
+                    self._record_commit(commit_hash, metadata)
             if action.startswith("status"):
                 self.dirty_after_commit = _status_is_dirty(result_text)
             if action.startswith("push") and "rejected" not in result_text.lower():
@@ -365,6 +459,8 @@ class TaskState:
             lines.append("- 已修改产物: " + ", ".join(self.artifacts[-8:]))
         if self.tests:
             lines.append("- 已执行验证: " + ", ".join(self.tests[-3:]))
+        if self.failed_tests:
+            lines.append("- 最近失败验证: " + ", ".join(self.failed_tests[-3:]))
         if self.commit:
             lines.append(f"- 已提交: {self.commit}")
         if self.pr_url:

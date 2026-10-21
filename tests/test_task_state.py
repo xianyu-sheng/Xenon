@@ -268,3 +268,117 @@ def test_commit_metadata_limits_committed_artifacts_to_real_paths() -> None:
     assert state.commit == "abc1234"
     assert state.committed_artifacts == ["tests/test_done.py"]
     assert "changes" in state.missing_delivery()
+
+
+def test_structured_exit_code_verifies_without_passed_text() -> None:
+    state = TaskState(objective="x", execution_level=3, required=["verify"])
+    state.record_tool(
+        "command",
+        {"command": "python -m pytest tests -q"},
+        success=True,
+        result="",
+        metadata={"exit_code": 0},
+    )
+    assert state.tests
+    assert state.missing_delivery() == []
+
+
+def test_failed_verification_invalidates_earlier_pass() -> None:
+    state = TaskState(objective="x", execution_level=3, required=["verify"])
+    state.record_tool(
+        "command",
+        {"command": "python -m pytest tests -q"},
+        success=True,
+        result="10 passed",
+        metadata={"exit_code": 0},
+    )
+    assert state.tests
+
+    state.record_tool(
+        "command",
+        {"command": "python -m pytest tests -q"},
+        success=False,
+        result="1 failed, 9 passed",
+        metadata={"exit_code": 1},
+    )
+    assert state.tests == []
+    assert state.failed_tests == ["python -m pytest tests -q"]
+    assert "verify" in state.missing_delivery()
+
+
+def test_source_write_after_verification_requires_rerun() -> None:
+    state = TaskState(
+        objective="x",
+        intent="write_code",
+        execution_level=3,
+        required=["verify"],
+    )
+    state.record_tool("write_file", {"file_path": "src/app.py"}, success=True)
+    state.record_tool(
+        "command",
+        {"command": "pytest -q"},
+        success=True,
+        result="1 passed",
+        metadata={"exit_code": 0},
+    )
+    assert state.missing_delivery() == []
+
+    state.record_tool("edit_file", {"file_path": "src/app.py"}, success=True)
+    assert "verify" in state.missing_delivery()
+
+
+def test_write_after_commit_requires_another_commit() -> None:
+    state = TaskState(
+        objective="x",
+        intent="write_code",
+        execution_level=3,
+        required=["commit"],
+    )
+    state.record_tool("write_file", {"file_path": "src/app.py"}, success=True)
+    state.record_tool(
+        "command",
+        {"command": "git commit -m done"},
+        success=True,
+        result="[main abc1234] done",
+        metadata={"committed_paths": ["src/app.py"]},
+    )
+    assert state.missing_delivery() == []
+
+    state.record_tool("write_file", {"file_path": "src/app.py"}, success=True)
+    assert "dirty" in state.missing_delivery()
+
+
+def test_write_uses_paths_reported_by_tool_metadata() -> None:
+    state = TaskState(
+        objective="x",
+        intent="write_code",
+        execution_level=3,
+        required=["verify"],
+    )
+    state.record_tool(
+        "write_file",
+        {"file_path": "src/requested.py"},
+        success=True,
+        metadata={"changed_paths": ["src/actual.py"]},
+    )
+    assert state.artifacts == ["src/actual.py"]
+
+
+def test_empty_commit_metadata_cannot_bless_precommit_source() -> None:
+    state = TaskState(
+        objective="implement",
+        intent="write_code",
+        execution_level=3,
+        artifacts=["src/app.py"],
+        required=["commit"],
+    )
+    state.record_tool(
+        "git",
+        {"git_command": "commit -m empty"},
+        success=True,
+        result="[main abc1234] empty",
+        metadata={"committed_paths": []},
+    )
+    assert state.commit == "abc1234"
+    assert state.committed_artifacts == []
+    assert "changes" in state.missing_delivery()
