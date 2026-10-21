@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import queue
 import select
 import subprocess
 import threading
@@ -23,6 +25,22 @@ logger = logging.getLogger(__name__)
 
 class MCPTransport:
     """MCP 传输基类。"""
+
+    def _pump_stdout(self) -> None:
+        """Windows-compatible stdout pump: one queue item per complete line."""
+        try:
+            stream = self._proc.stdout if self._proc else None
+            if stream is None:
+                return
+            while True:
+                line = stream.buffer.readline()
+                if not line:
+                    break
+                self._line_queue.put(line)
+        except Exception:
+            logger.debug("MCP stdout pump stopped", exc_info=True)
+        finally:
+            self._line_queue.put(None)
 
     def send(self, message: dict[str, Any]) -> None:
         raise NotImplementedError
@@ -52,6 +70,8 @@ class StdioTransport(MCPTransport):
         # stdout 行缓冲：跨多次 _readline_with_timeout 调用保留未消费字节，
         # 避免与 BufferedReader 内部缓冲冲突。
         self._read_buf = bytearray()
+        self._line_queue: "queue.Queue[bytes | None]" = queue.Queue()
+        self._reader_thread: threading.Thread | None = None
         self._start()
 
     def _start(self) -> None:
@@ -73,6 +93,16 @@ class StdioTransport(MCPTransport):
                 text=True,
             )
             logger.info(f"MCP 子进程启动: {' '.join(cmd)} (PID: {self._proc.pid})")
+            if os.name == "nt" and self._proc.stdout is not None:
+                # Windows select() only supports sockets, not pipe handles.
+                # Pump stdout in a daemon thread so request deadlines still
+                # work and a hung child cannot block readline forever.
+                self._reader_thread = threading.Thread(
+                    target=self._pump_stdout,
+                    name=f"mcp-stdout-{self._proc.pid}",
+                    daemon=True,
+                )
+                self._reader_thread.start()
         except FileNotFoundError as e:
             raise RuntimeError(f"MCP 命令不存在: {self.command}") from e
         except Exception as e:
@@ -118,6 +148,14 @@ class StdioTransport(MCPTransport):
           - ``""``：遇到 EOF 且缓冲区无残留；
           - ``None``：deadline 超时，未读到完整行。
         """
+        if os.name == "nt":
+            try:
+                remaining = max(0.0, deadline - time.monotonic())
+                line = self._line_queue.get(timeout=remaining)
+            except queue.Empty:
+                return None
+            return "" if line is None else line.decode("utf-8", errors="replace")
+
         stream = self._proc.stdout
         try:
             fd = stream.fileno()
@@ -154,6 +192,11 @@ class StdioTransport(MCPTransport):
     def _read_stderr_safely(self) -> str:
         """非阻塞读取 stderr 当前可读内容（仅用于错误诊断）。"""
         if not self._proc or not self._proc.stderr:
+            return ""
+        if os.name == "nt":
+            # Pipe handles are not selectable on Windows; avoid blocking the
+            # error path.  The child stderr still flows to the pipe for later
+            # diagnostics if the caller captures it separately.
             return ""
         try:
             fd = self._proc.stderr.fileno()
@@ -234,25 +277,31 @@ class StdioTransport(MCPTransport):
 
     def close(self) -> None:
         """关闭子进程。"""
-        if self._proc:
+        proc = self._proc
+        if proc:
             try:
-                self._proc.stdin.close()
+                if proc.stdin:
+                    proc.stdin.close()
             except Exception:
                 pass
+            # Terminate before closing stdout.  On Windows the stdout reader
+            # thread may hold the pipe buffer lock; closing it first can block
+            # forever when a child is hung (hanging-MCP timeout path).
             try:
-                self._proc.stdout.close()
-            except Exception:
-                pass
-            try:
-                self._proc.stderr.close()
-            except Exception:
-                pass
-            try:
-                self._proc.terminate()
-                self._proc.wait(timeout=5)
+                proc.terminate()
+                proc.wait(timeout=5)
             except Exception:
                 try:
-                    self._proc.kill()
+                    proc.kill()
+                    proc.wait(timeout=2)
+                except Exception:
+                    pass
+            if self._reader_thread is not None:
+                self._reader_thread.join(timeout=2)
+            for stream in (proc.stdout, proc.stderr):
+                try:
+                    if stream:
+                        stream.close()
                 except Exception:
                     pass
             self._proc = None

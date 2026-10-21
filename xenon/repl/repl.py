@@ -75,6 +75,7 @@ try:
     from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.history import FileHistory
     from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.output import DummyOutput
     from prompt_toolkit.styles import Style
 
     _HISTORY_DIR = _Path.home() / ".xenon"
@@ -468,12 +469,19 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             self._pt_session = None
         else:
             try:
-                self._pt_session = PromptSession(
-                    history=_PasteAwareFileHistory(str(history_path)),
-                    completer=self._completer,
-                    key_bindings=kb,
-                    style=style,
-                )
+                session_kwargs = {
+                    "history": _PasteAwareFileHistory(str(history_path)),
+                    "completer": self._completer,
+                    "key_bindings": kb,
+                    "style": style,
+                }
+                # PromptSession needs a real output in an interactive TTY.
+                # Tests/headless runners have no TTY; use a dummy output only
+                # there so initialization is testable without hiding the prompt
+                # from real users.
+                if not sys.stdin.isatty():
+                    session_kwargs["output"] = DummyOutput()
+                self._pt_session = PromptSession(**session_kwargs)
                 # 状态栏不再用 bottom_toolbar：固定底部工具栏会把输入区与
                 # 状态栏之间的空白拉满整屏。它由 _install_input_lower_rule
                 # 作为内联行紧跟在输入下边界之后。

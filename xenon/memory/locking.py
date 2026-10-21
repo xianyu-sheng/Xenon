@@ -77,12 +77,25 @@ class InterProcessFileLock:
         try:
             owner = self._read_owner()
             if owner.get("token") == self._token:
-                self.path.unlink(missing_ok=True)
+                self._unlink_with_retry(self.path)
         except (OSError, ValueError, TypeError):
             # Never remove a lock whose ownership cannot be verified.
             pass
         finally:
             self._token = None
+
+    @staticmethod
+    def _unlink_with_retry(path: Path, *, timeout: float = 1.0) -> None:
+        """Windows can briefly reject unlink while another reader has it open."""
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                path.unlink(missing_ok=True)
+                return
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
 
     def _read_owner(self) -> dict[str, object]:
         return json.loads(self.path.read_text(encoding="utf-8"))
@@ -97,12 +110,12 @@ class InterProcessFileLock:
                 return
             # Re-read before unlinking to avoid deleting a newly acquired lock.
             if str(self._read_owner().get("token")) == token:
-                self.path.unlink(missing_ok=True)
+                self._unlink_with_retry(self.path)
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             # A partially written lock is reclaimable only after it is old.
             try:
                 if time.time() - self.path.stat().st_mtime >= self.stale_after:
-                    self.path.unlink(missing_ok=True)
+                    self._unlink_with_retry(self.path)
             except OSError:
                 pass
 

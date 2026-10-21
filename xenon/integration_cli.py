@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import shutil
 import stat
@@ -794,11 +795,15 @@ def _doctor_mcp(context: IntegrationContext) -> dict[str, Any]:
             if not available:
                 warnings.append(f"{label}: command 当前不可用: {command}")
     if context.credentials_path.exists():
-        mode = stat.S_IMODE(context.credentials_path.stat().st_mode)
-        if mode & 0o077:
-            errors.append(
-                f"凭证文件权限过宽: {oct(mode)}，应为 0o600: {context.credentials_path}"
-            )
+        # Windows does not expose POSIX group/world bits; chmod(0o600)
+        # surfaces as 0o666 there.  ACL ownership is handled by the platform,
+        # so only enforce the POSIX mode contract on POSIX.
+        if os.name != "nt":
+            mode = stat.S_IMODE(context.credentials_path.stat().st_mode)
+            if mode & 0o077:
+                errors.append(
+                    f"凭证文件权限过宽: {oct(mode)}，应为 0o600: {context.credentials_path}"
+                )
     return {
         "ok": not errors,
         "server_count": len(servers),
