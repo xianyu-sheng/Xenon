@@ -200,10 +200,10 @@ class LoopDetector:
                     similar_indices.append(j)
 
             # 根据重复次数计算置信度
-            # 3次或以上相同 → 高置信度 0.9（可能真的陷入循环）
-            # 2次相同 → 中等置信度 0.7（可能只是巧合）
-            if len(similar_indices) >= 2:
-                confidence = 0.9 if len(similar_indices) >= 3 else 0.7
+            # This hash appears now + ``similar_indices`` previous times.
+            # 3 total occurrences -> high confidence 0.9; 2 -> 0.7.
+            if len(similar_indices) >= 1:
+                confidence = 0.9 if len(similar_indices) >= 2 else 0.7
                 return LoopDetectionResult(
                     is_loop=True,
                     confidence=confidence,
@@ -240,9 +240,16 @@ class LoopDetector:
                     pattern2 = [p for p in pattern2 if p]
 
                 if pattern1 and pattern1 == pattern2:
+                    # Two cycles are a hint; three identical cycles are a
+                    # high-confidence loop.  Previously every pattern repeat
+                    # returned 0.85, while both ReAct and Plan-Execute stop at
+                    # >=0.9 -- so tool-pattern loops could never actually
+                    # terminate, only emit hints forever.
+                    cycles = len(recent_patterns) // length
+                    confidence = 0.9 if cycles >= 3 else 0.85
                     return LoopDetectionResult(
                         is_loop=True,
-                        confidence=0.85,
+                        confidence=confidence,
                         loop_length=length,
                         similar_turns=list(
                             range(len(recent_patterns) - 2 * length, len(recent_patterns))

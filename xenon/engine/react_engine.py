@@ -416,6 +416,8 @@ class ReActEngine(BaseEngine):
         self._recent_calls.clear()  # v0.7.0: 每次 run 重置重复调用跟踪
         self._verification_active = False  # v0.8.3: 每次 run 重置验证循环状态
         self._loop_detector.reset()  # v0.9.0: 每次 run 重置循环检测器
+        self._last_termination_reason = None
+        self._last_iterations = 0
         active_level = ctx.get("_execution_level")
         original_user_input = user_input
         if active_level is not None:
@@ -551,9 +553,11 @@ class ReActEngine(BaseEngine):
         while budget.can_continue():
             budget.spend()
             iteration = budget.spent
+            self._last_iterations = iteration
 
             # F6: 协作式中断检查
             if self._interrupted:
+                self._last_termination_reason = "user_interrupt"
                 self.callback.on_warning("引擎被用户中断，停止迭代")
                 logger.info("ReAct 被中断，退出迭代循环")
                 break
@@ -1175,6 +1179,7 @@ class ReActEngine(BaseEngine):
                             f"已执行工具: {len(tracker.calls)} 次\n"
                             f"最后 {loop_result.loop_length} 轮输出高度相似，系统判断无法继续推进。"
                         )
+                        self._last_termination_reason = "loop"
                         logger.error(
                             f"ReAct: 循环检测终止 (confidence={loop_result.confidence:.2f}, "
                             f"reason={loop_result.reason}, loop_length={loop_result.loop_length})"
@@ -1352,6 +1357,9 @@ class ReActEngine(BaseEngine):
     def _mark_budget_exhausted(self, msg: str, *, extra: str = "") -> str:
         """预算触顶的统一标注：告知步数上限与未完成风险，不伪装正常完成。"""
 
+        self._last_termination_reason = (
+            "no_progress" if "无进展" in extra else "max_steps"
+        )
         return (
             f"⚠️ 已达到步数上限（{self.max_iterations} 步），{extra}"
             f"以下是停止时整理的结果（任务可能未完成）：\n\n{msg}"

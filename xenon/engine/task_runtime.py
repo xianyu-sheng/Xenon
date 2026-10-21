@@ -23,6 +23,7 @@ def run_with_delivery(
     max_delivery_retries: int = 3,
 ) -> str:
     """Run an engine once, then enforce the durable delivery contract."""
+    from xenon.engine.result import TerminationReason, build_agent_result
     from xenon.engine.task_state import TaskState
     from xenon.engine.tool_tracker import ToolExecutionTracker
 
@@ -35,7 +36,9 @@ def run_with_delivery(
         raise
     state = TaskState.from_context(context)
     if state is None or not state.active:
-        return result
+        final_result = build_agent_result(engine, result, context)
+        engine.last_result = final_result
+        return final_result
 
     aggregate = ToolExecutionTracker()
     tracker = getattr(engine, "_last_tracker", None)
@@ -67,6 +70,7 @@ def run_with_delivery(
                 + "、".join(labels[m] for m in missing)
                 + "。以上工作不应视为已完成。"
             )
+            engine._last_termination_reason = TerminationReason.DELIVERY_INCOMPLETE
             engine.callback.on_warning(
                 "引擎交付重试上限已到，最终回答附未完成交付警告"
             )
@@ -100,4 +104,8 @@ def run_with_delivery(
             aggregate.calls.extend(list(getattr(tracker, "calls", []) or []))
 
     engine._last_tracker = aggregate
-    return result
+    if getattr(engine, "_last_termination_reason", None) is None:
+        engine._last_termination_reason = TerminationReason.FINAL
+    final_result = build_agent_result(engine, result, context)
+    engine.last_result = final_result
+    return final_result

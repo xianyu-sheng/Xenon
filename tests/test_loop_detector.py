@@ -185,3 +185,13 @@ class TestLoopDetector:
         result = detector.check()
         assert result.is_loop
         assert len(result.similar_turns) >= 2  # 至少记录 2 个相似轮次
+
+
+def test_tool_pattern_loop_reaches_hard_stop_confidence():
+    detector = LoopDetector(window_size=5)
+    for _ in range(3):
+        detector.add_turn(output="different", tool_calls=["read_file"])
+
+    result = detector.check()
+    assert result.is_loop
+    assert result.confidence >= 0.9

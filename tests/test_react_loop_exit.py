@@ -7,6 +7,7 @@ import json
 from xenon.engine.callbacks import EngineCallback
 from xenon.engine.context import AgentContext
 from xenon.engine.react_engine import ReActEngine
+from xenon.engine.result import TerminationReason
 
 
 class _Callback(EngineCallback):
@@ -38,7 +39,8 @@ def test_unlimited_react_terminates_on_loop_detector(tmp_path):
     engine._call_llm_for_phase = lambda *args, **kwargs: response  # type: ignore[method-assign]
 
     context = AgentContext({"_execution_level": 3})
-    result = engine.run("反复读取同一个文件", context=context)
+    result = engine.run_task("反复读取同一个文件", context=context)
 
     assert "检测到 ReAct 引擎陷入循环" in result
     assert engine.max_iterations == 0
+    assert result.reason is TerminationReason.LOOP

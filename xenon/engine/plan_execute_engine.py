@@ -228,6 +228,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         tool_remediation_attempts: int = 1,
         plan_max_tokens: int = 8192,
         native_planning: bool = False,
+        max_replans: int = 3,
         model_pool: Any = None,  # v0.4.0
         auto_router: Any = None,  # v0.4.0 Step 13
         permission_gate: Any = None,  # v0.5.0
@@ -243,6 +244,8 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             permission_gate=permission_gate,
         )
         self.max_steps = max_steps
+        self.max_replans = max(0, int(max_replans))
+        self._replans_used = 0
         # P2-E2 双模型：规划用 model_priority（默认），执行/总结用 executor_model_priority
         # （默认回退到规划模型列表，向后兼容）。
         self.executor_model_priority = (
@@ -350,6 +353,9 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         self._bind_evidence_ledger(ctx)
         # v0.9.1: 重置循环检测器
         self._loop_detector.reset()
+        self._last_termination_reason = None
+        self._last_iterations = 0
+        self._replans_used = 0
 
         # Phase 1: Planning
         logger.info("Plan-Execute Phase 1: 规划中...")
@@ -390,6 +396,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         steps = self._normalize_incomplete_edit_steps(steps)
 
         if not steps:
+            self._last_termination_reason = "error"
             self.callback.on_warning("计划完整性校验后仍无有效步骤")
             return "未能生成包含实际修改步骤的有效执行计划。"
 
@@ -460,6 +467,10 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             total,
         )
         self._sync_task_results(ctx, results)
+        if any(item.get("status") == "failed" for item in results):
+            self._last_termination_reason = (
+                self._last_termination_reason or "error"
+            )
 
         # Phase 2.7: 事实绑定校验——每个写入目标应先有读取证据。
         # 这是确定性审计，不阻断交付；引擎通过 callback 暴露 warning，
@@ -806,6 +817,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         i = 0
         while i < len(steps):
             if self._interrupted:
+                self._last_termination_reason = "user_interrupt"
                 self.callback.on_warning("引擎被用户中断，停止执行")
                 logger.info("Plan-Execute 被中断，退出步骤循环")
                 break
@@ -874,6 +886,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 outcome = self._step_outcome(raw_result)
                 _steer_pending = []
             i += 1
+            self._last_iterations = len(results) + 1
 
             results.append(
                 {
@@ -889,6 +902,41 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             ctx.set(f"step_{step_id}_status", "ok" if outcome.success else "failed")
             self.callback.on_step_done(step_id, outcome.success, outcome.content[:200])
             logger.debug(f"步骤 {step_id} 完成: {outcome.content[:100]}")
+
+            # A failed planned step is not a reason to blindly continue the
+            # stale remainder.  Replan the unfinished work once per failure,
+            # bounded by max_replans.  (LangChain classic PlanAndExecute
+            # simply continues; that is the behavior this fixes.)
+            if (
+                not outcome.success
+                and not self._interrupted
+                and self._replans_used < self.max_replans
+            ):
+                done_ids = {r.get("step_id") for r in results}
+                failure_note = (
+                    f"步骤 {step_id} 失败：{str(outcome.error or outcome.content)[:400]}"
+                    + chr(10)
+                    + "请基于已完成结果和失败原因重新规划剩余步骤；"
+                    + "不要重复已成功完成的工作。"
+                )
+                new_steps = self._replan_remaining(
+                    user_input,
+                    ctx,
+                    [{"text": failure_note}],
+                    done_ids,
+                    failure=True,
+                )
+                if new_steps:
+                    self._replans_used += 1
+                    self.callback.on_warning(
+                        f"步骤 {step_id} 失败，已重规划剩余 {len(new_steps)} 步 "
+                        f"({self._replans_used}/{self.max_replans})"
+                    )
+                    steps = new_steps
+                    i = 0
+                    self._sync_task_plan(ctx, steps)
+                    self._sync_task_results(ctx, results)
+                    continue
 
             # v0.9.1: 循环检测 - 记录步骤执行状态
             self._loop_detector.add_turn(
@@ -908,6 +956,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                         step_id,
                         loop_result.confidence,
                     )
+                    self._last_termination_reason = "loop"
                     self.callback.on_warning(
                         f"检测到步骤执行陷入循环（{loop_result.reason}），已终止"
                     )
@@ -938,26 +987,31 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         ctx: AgentContext,
         steering_msgs: list[dict[str, Any]],
         done_ids: set[Any],
+        *,
+        failure: bool = False,
     ) -> list[dict[str, Any]]:
-        """用户补充到达且剩余步骤无法承载时，把补充并入原任务重新规划。
+        """Replan remaining work after steering or a failed step.
 
-        Mid-task steering 的完整语义：工具步骤（read_file/write_file 等）
-        是确定性执行（tool+params 已定），无法承载「补充/修改要求」——
-        补充意味着任务目标变了，计划本身需要重做。此方法把补充要求
-        并入原 user_input 重新调用 _plan，并过滤掉已完成步骤（按 id），
-        返回新的剩余计划。失败/空计划时返回 []（调用方保留原计划）。
+        The old plan's deterministic params cannot absorb new user intent or a
+        failed observation. Re-run the planner with the original objective plus
+        the new information, then drop IDs that already have results.
+        Failure/empty plans return [] so the caller can keep the old plan.
         """
-        steer_text = self.steering_prompt(steering_msgs)
-        new_input = f"{user_input}\n\n[用户中途补充]\n{steer_text}"
+        if failure:
+            note = "\n".join(str(msg.get("text", "")) for msg in steering_msgs)
+            new_input = f"{user_input}\n\n[步骤执行失败，需要重新规划]\n{note}"
+        else:
+            steer_text = self.steering_prompt(steering_msgs)
+            new_input = f"{user_input}\n\n[用户中途补充]\n{steer_text}"
         try:
             plan = self._plan(new_input, ctx)
         except Exception as exc:  # noqa: BLE001 — 重规划失败不崩溃主流程
-            logger.warning("补充后重规划失败，保留原计划: %s", exc)
-            self.callback.on_warning(f"补充后重规划失败，继续原计划：{exc}")
+            logger.warning("重规划失败，保留原计划: %s", exc)
+            self.callback.on_warning(f"重规划失败，继续原计划：{exc}")
             return []
         new_steps = list(plan.get("steps") or [])
         if not new_steps:
-            self.callback.on_warning("补充后重规划未生成有效步骤，继续原计划")
+            self.callback.on_warning("重规划未生成有效步骤，继续原计划")
             return []
         # 过滤已完成步骤（按 step_id），避免重复执行
         filtered = [s for s in new_steps if s.get("id") not in done_ids]

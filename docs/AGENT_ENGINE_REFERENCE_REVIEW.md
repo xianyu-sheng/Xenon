@@ -190,14 +190,14 @@ Xenon 的 Plan-Execute 需要面对这个事实，而不是假设“计划模式
 
 | 维度 | 成熟实现 | Xenon 当前 | 真实观察 |
 |---|---|---|---|
-| 计划生成 | 一次或按 interval 更新 | `_plan()` 一次；仅“无写步骤”时重规划 | 真实 #26 切片三轮都没有生成有效测试/提交 |
+| 计划生成 | 一次或按 interval 更新 | 原先 `_plan()` 一次；现已加失败步骤重规划（`max_replans=3`） | 真实 #26 切片三轮都没有生成有效测试/提交；新 replanner 尚需真实复跑 |
 | 失败步骤 | 外层循环/reflection 继续修 | `_ensure_task_completed()` 事后补救；工具步骤失败才 mini-ReAct | 计划步骤失败后仍能走到“总结” |
 | 计划参数 | 执行期由模型生成 | 计划阶段预生成 params；`edit_file` 缺 old/new 时转 mini-ReAct | 预绑定参数经常错 |
 | 计划状态 | memory/step 状态 | 本轮新增 `TaskState` 同步 | 修正前空计划也能 completed |
 | 最终验收 | lint/test/final checks | 命令字符串 + TaskState 启发式 | 真实空测试文件 + 空提交曾被当成完成 |
 
-**结论**：Plan-Execute 目前是“规划一次 + 批量执行 + 事后补救”，不是闭环。  
-要么加 **replanner**（失败/无进展后重规划，最大 2-3 次），要么不要把 Plan-Execute 作为代码交付默认引擎。
+**结论**：原实现是“规划一次 + 批量执行 + 事后补救”，不是闭环。  
+现已加入**失败步骤重规划**（`max_replans=3`）；但这只是代码路径，仍需真实 #26 复跑证明能产出源码 + 测试 + commit。
 
 ### 2.3 TaskState / 交付
 
@@ -259,11 +259,32 @@ Xenon 最近修了：
 
 `compact` 后 TaskState 的恢复现在已有测试覆盖；下一步应验证压缩后 **native tool call 协议**仍完整。
 
+### 2.6 Reflection / 组合范式对照
+
+Reflection 的成熟做法不是“让模型自己说做得好不好”，而是**真实反馈驱动**：
+
+- Aider：`max_reflections=3`；lint/test 失败才进入 reflection；编辑后自动 lint/test/commit。
+- smolagents：`planning_interval` 周期性更新计划；`final_answer_checks` 在最终答案前跑可执行校验。
+- 组合范式（Plan-ReAct / ReAct-Reflection）：LangGraph 用显式图/handoff，OpenAI Agents SDK 用 handoff + tools + guardrails；每个阶段的状态和终止原因都是显式的，不是把多个字符串结果拼在一起。
+
+Xenon 的 `ReflectionEngine` 目前：
+
+- `max_rounds=8`，主要靠 reviewer LLM 打分；
+- reviewer 能看到执行证据，但最终“通过”仍是 LLM 评分；
+- 没有把 lint/test 的 exit code 作为一等的通过条件。
+
+建议：
+
+1. Reflection 默认轮数收紧到 3-4 次（对齐 Aider），失败反馈必须来自真实测试/lint；
+2. `review_existing` 的 pass 不能覆盖“没有成功测试/没有真实写盘”；
+3. 组合引擎每个阶段都返回带 `TerminationReason` 的结果，父层只决定是否继续；
+4. 每个阶段使用独立上下文是合理的（Xenon 已做 `_isolated_ctx`），但最终验收必须回到同一个 TaskState/EvidenceLedger。
+
 ---
 
 ## 3. 我们最可能错的地方（按优先级）
 
-### P0：Plan-Execute 没有 replanner
+### P0：Plan-Execute 原先没有 replanner（已补代码）
 
 真实证据：
 
@@ -275,7 +296,7 @@ Xenon 最近修了：
 
 参考实现中，Plan-and-Execute 本身也没有 replanner，所以不能拿 LangChain 当“成功案例”；  
 真正的编码 Agent（ReAct 主循环 + planning interval / reflection）会在失败后继续迭代。  
-**建议**：给 Plan-Execute 加 `max_replans=3`：某一步失败或连续无进展时，用已完成结果 + 失败 Observation 重新规划剩余步骤；不要把“事后补救”当唯一机制。
+**已落地**：`PlanExecuteEngine` 已加 `max_replans=3`；失败步骤会用已完成结果 + 失败 Observation 重新规划剩余步骤。**尚需真实复验**，不能因为加了 replanner 就判定 Plan-Execute 可用。
 
 ### P0：终止结果没有统一类型
 
@@ -359,13 +380,33 @@ Xenon 的 Plan-Execute 预生成 `params`，再靠 mini-ReAct 修复，属于结
 ## 4. 建议的改造顺序
 
 1. **先加 `AgentResult` / `TerminationReason`**，不改行为，只把现有退出路径标注清楚。
-2. **Plan-Execute 加 replanner**，用真实 #26 三轮失败做回归；要求“计划失败 -> 重规划 -> 实际写入/测试 -> 才允许 complete”。
+2. **Plan-Execute replanner**：代码已加；用真实 #26 三轮失败做回归，要求“计划失败 -> 重规划 -> 实际写入/测试 -> 才允许 complete”。
 3. **TaskState 改为消费结构化 ToolResult**，删掉命令正则推断。
 4. **LoopDetector 加状态指纹**，保留文本检测作为辅助。
 5. **final_answer_checks**：测试/文件/commit 三类硬校验。
 6. **再讨论默认预算**是否从 unlimited 改为有限软预算。
 
 ---
+
+## 4.1 已落地（2026-10-21）
+
+本轮先实现最小闭环，不重写引擎：
+
+- `xenon/engine/result.py`：`AgentResult`（`str` 子类）+ `TerminationReason`；
+  `run_with_delivery` 统一生成结果，`ok` 不再靠解析字符串。
+- `PlanExecuteEngine.max_replans=3`：失败步骤会带着已完成结果和失败 Observation
+  重新规划剩余步骤；失败结果会保持 `ERROR`，不会静默当完成。
+- `LoopDetector`：修正“3 次相同哈希仍只有 0.7”的 off-by-one；工具模式
+  三周期重复提升到 0.9，否则 0.85；解决“提示永远达不到硬终止阈值”。
+- 新增 `tests/test_agent_result.py`、`tests/test_planexecute_replanner.py`，
+  并保留真实失败样本作为后续回归依据。
+
+仍未完成：
+
+- `TaskState` 仍有一部分命令文本启发式，未完全切到结构化 ToolResult；
+- Reflection 仍以 LLM reviewer 为主，未把 lint/test 退出码作为一等条件；
+- 组合引擎的阶段结果尚未全部传播 `TerminationReason`；
+- Plan-Execute replanner 需要真实 #26 复跑，不能只靠单测。
 
 ## 5. 不要照搬的地方
 
@@ -382,3 +423,5 @@ Xenon 的 Plan-Execute 预生成 `params`，再靠 mini-ReAct 修复，属于结
 > **显式状态机、显式终止原因、基于真实工具结果的验收。**
 >
 > 先补这三样，再谈模型能力和提示词。
+>
+> 本日已落地第一层：`AgentResult` / `TerminationReason` 与失败步骤 replanner；真实效果仍以 #26 复跑为准。
