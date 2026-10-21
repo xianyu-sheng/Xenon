@@ -62,3 +62,14 @@ def test_invalid_numeric_tool_params_fall_back():
     assert node.max_depth == 5
     assert node.limit is None
     assert node._extra_start_line is None
+
+
+def test_search_files_accepts_pattern_alias():
+    from xenon.nodes.tool_node import ToolNode
+
+    normalized = ToolNode.normalize_params(
+        {"pattern": "needle", "file_pattern": "*.py", "file_path": "."},
+        action_type="search_files",
+    )
+    assert normalized["search_pattern"] == "needle"
+    assert normalized["file_filter"] == "*.py"

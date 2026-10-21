@@ -56,7 +56,12 @@ def run_with_delivery(
         if not missing:
             break
         if attempts >= max_delivery_retries:
-            labels = {"verify": "测试", "commit": "commit", "pr": "PR"}
+            labels = {
+                "verify": "测试",
+                "changes": "实际源码修改",
+                "commit": "commit",
+                "pr": "PR",
+            }
             result += (
                 "\n\n⚠️ **任务交付未完成**：缺少 "
                 + "、".join(labels[m] for m in missing)
@@ -69,6 +74,7 @@ def run_with_delivery(
         attempts += 1
         labels = {
             "verify": "运行相关测试并记录真实结果",
+            "changes": "实际修改非测试源码文件，不能只提交空改动或测试",
             "commit": "创建 git commit",
             "pr": "push 并创建 PR",
         }

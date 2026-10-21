@@ -685,6 +685,13 @@ class ToolNode(
         if action_type == "run_script":
             if "language" not in result and "lang" in result:
                 result["language"] = result.pop("lang")
+        if action_type == "search_files":
+            # ``pattern`` is canonical for list_files, but models routinely
+            # use it for grep.  Resolve it by action instead of dropping it.
+            if "search_pattern" not in result and "pattern" in result:
+                result["search_pattern"] = result.pop("pattern")
+            if "file_filter" not in result and "file_pattern" in result:
+                result["file_filter"] = result.pop("file_pattern")
 
         # 1. 别名映射
         if "limit" not in result and "max_results" in result:

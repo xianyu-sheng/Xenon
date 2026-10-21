@@ -419,6 +419,12 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 )
                 capped = capped[:-1] + [steps[write_idx]]
 
+        # Persist the actual plan in the durable TaskState.  Without this,
+        # a Plan-Execute task with no update_plan call had empty steps and
+        # could be marked completed after a commit even when planned work
+        # failed.  The plan is execution state, not evidence.
+        self._sync_task_plan(ctx, capped)
+
         # Phase 2: Execution
         logger.info("Plan-Execute Phase 2: 执行中...")
 
@@ -453,6 +459,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             tracker,
             total,
         )
+        self._sync_task_results(ctx, results)
 
         # Phase 2.7: 事实绑定校验——每个写入目标应先有读取证据。
         # 这是确定性审计，不阻断交付；引擎通过 callback 暴露 warning，
@@ -481,6 +488,52 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         )
         self.finalize_evidence(context=ctx, output=summary, tracker=tracker)
         return summary
+
+    @staticmethod
+    def _sync_task_plan(ctx: AgentContext, steps: list[dict[str, Any]]) -> None:
+        """Mirror the engine plan into TaskState for cross-turn truthfulness."""
+        from xenon.engine.task_state import TaskState
+
+        state = TaskState.from_context(ctx)
+        if state is None or not state.active:
+            return
+        state.set_plan(
+            [
+                {
+                    "step": str(step.get("task") or step.get("step") or ""),
+                    "status": "pending",
+                }
+                for step in steps
+                if isinstance(step, dict)
+                and (step.get("task") or step.get("step"))
+            ]
+        )
+        ctx.set("_task_state", state.to_dict())
+
+    @staticmethod
+    def _sync_task_results(
+        ctx: AgentContext, results: list[dict[str, Any]]
+    ) -> None:
+        """Mark TaskState steps completed only when their result is ok."""
+        from xenon.engine.task_state import TaskState
+
+        state = TaskState.from_context(ctx)
+        if state is None or not state.steps:
+            return
+        by_id = {
+            str(result.get("step_id")): result
+            for result in results
+            if isinstance(result, dict)
+        }
+        for index, step in enumerate(state.steps, start=1):
+            result = by_id.get(str(index))
+            if result is None:
+                continue
+            step["status"] = (
+                "completed" if result.get("status") == "ok" else "failed"
+            )
+        state.updated_at = __import__("time").time()
+        ctx.set("_task_state", state.to_dict())
 
     @staticmethod
     def _fallback_steps(user_input: str) -> list[dict[str, Any]]:

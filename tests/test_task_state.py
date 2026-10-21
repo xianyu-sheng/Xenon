@@ -71,6 +71,7 @@ def test_state_can_be_restored_from_context_and_renders_pending() -> None:
         objective="finish issue",
         execution_level=3,
         steps=[{"step": "run tests", "status": "pending"}],
+        artifacts=["src/task.py"],
         required=["verify", "commit"],
     )
     ctx = SimpleNamespace(get=lambda key: state.to_dict() if key == "_task_state" else None)
@@ -143,3 +144,60 @@ def test_commit_gate_ignores_old_hashes_from_log_output() -> None:
         result="[main 88ffd05] new work",
     )
     assert state.commit == "88ffd05"
+
+
+def test_test_only_commit_does_not_complete_code_task() -> None:
+    state = TaskState(
+        objective="implement the fix",
+        intent="write_code",
+        execution_level=3,
+        artifacts=["tests/test_fix.py"],
+        tests=["pytest -q"],
+        commit="abc1234",
+        required=["verify", "commit"],
+    )
+
+    assert "changes" in state.missing_delivery()
+    assert state.maybe_complete() is False
+    assert state.status == "active"
+
+
+def test_git_commit_gate_reads_git_command_and_requires_a_hash() -> None:
+    state = TaskState(objective="x", execution_level=3, required=["commit"])
+    state.record_tool(
+        "git",
+        {"action": "commit -m \"fake\""},
+        success=True,
+        result="",
+    )
+    assert state.commit == ""
+
+    state.record_tool(
+        "git",
+        {"git_command": "commit -m \"real\""},
+        success=True,
+        result="[main 88ffd05] real",
+    )
+    assert state.commit == "88ffd05"
+
+
+def test_commit_hash_uses_commit_summary_not_trailing_log() -> None:
+    state = TaskState(objective="x", execution_level=3, required=["commit"])
+    state.record_tool(
+        "command",
+        {"command": "git commit -m x; git log --oneline -3"},
+        success=True,
+        result="[main abc1234] x\nold 412543c docs",
+    )
+    assert state.commit == "abc1234"
+
+
+def test_failed_test_output_does_not_satisfy_verify() -> None:
+    state = TaskState(objective="x", execution_level=3, required=["verify"])
+    state.record_tool(
+        "command",
+        {"command": "python -m pytest tests -q"},
+        success=True,
+        result="1 failed, 2 passed",
+    )
+    assert state.tests == []

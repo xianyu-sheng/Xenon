@@ -36,6 +36,31 @@ _PUSH_RE = re.compile(r"\bgit\s+push\b", re.IGNORECASE)
 _PR_RE = re.compile(r"(?:\bgh\s+pr\s+create\b|create_pull_request)", re.IGNORECASE)
 _COMMIT_HASH_RE = re.compile(r"\b([0-9a-f]{7,40})\b", re.IGNORECASE)
 _PR_URL_RE = re.compile(r"https://github\.com/[^\s]+/pull/\d+")
+_COMMIT_OUTPUT_RE = re.compile(
+    r"\[[^]]*?([0-9a-f]{7,40})[^]]*?\]",
+    re.IGNORECASE,
+)
+
+
+def _commit_hash(text: str) -> str:
+    """Return the hash from a git commit summary line, not an old log hash."""
+    match = _COMMIT_OUTPUT_RE.search(text)
+    return match.group(1) if match else ""
+
+
+def _verification_passed(text: str) -> bool:
+    """Conservative evidence check for a successful test command."""
+    if not text.strip():
+        return False
+    if re.search(r"(?:\d+\s+)?failed|FAILED|ERROR", text, re.I):
+        return False
+    return bool(
+        re.search(
+            r"(?:\d+\s+)?passed|PASSED|OK|ok\s+\S+",
+            text,
+            re.I,
+        )
+    )
 
 
 def _text(value: Any) -> str:
@@ -152,11 +177,32 @@ class TaskState:
         ]
         self.updated_at = time.time()
 
+    def has_source_artifact(self) -> bool:
+        """Whether any successful write touched a non-test file."""
+        for path in self.artifacts:
+            normalized = str(path).replace("\\", "/").lower()
+            parts = [part for part in normalized.split("/") if part]
+            if "tests" in parts or "test" in parts:
+                continue
+            if parts and parts[-1].startswith("test_"):
+                continue
+            return True
+        return False
+
     def required_delivery(self) -> list[str]:
         """Return the delivery gates that are still missing."""
         missing: list[str] = []
         if "verify" in self.required and not self.tests:
             missing.append("verify")
+        # A commit that only captures tests (or an empty change) must not
+        # satisfy a code-delivery task.  This is execution state, not proof;
+        # it only prevents ``maybe_complete`` from blessing a no-op commit.
+        if (
+            "commit" in self.required
+            and self.intent not in {"write_doc", "write_report"}
+            and not self.has_source_artifact()
+        ):
+            missing.append("changes")
         if "commit" in self.required and not self.commit:
             missing.append("commit")
         if "pr" in self.required and not self.pr_url:
@@ -210,13 +256,14 @@ class TaskState:
 
         if tool in {"command", "run_script"}:
             text = f"{command}\n{result_text}"
-            if _VERIFY_RE.search(command):
-                label = command.strip().replace("\n", " ")[:240]
+            if _VERIFY_RE.search(command) and _verification_passed(result_text):
+                label = command.strip().replace(chr(10), ' ')[:240]
                 if label and label not in self.tests:
                     self.tests.append(label)
             if _COMMIT_RE.search(command):
-                hashes = _COMMIT_HASH_RE.findall(result_text)
-                self.commit = hashes[-1] if hashes else "committed"
+                commit_hash = _commit_hash(result_text)
+                if commit_hash:
+                    self.commit = commit_hash
             if _PUSH_RE.search(text):
                 self.pushed = True
             if _PR_RE.search(text):
@@ -225,12 +272,20 @@ class TaskState:
                     self.pr_url = match.group(0)
 
         if tool == "git":
-            action = _text(params.get("action")).lower()
-            text = f"{action} {result_text}"
-            if "commit" in action:
-                hashes = _COMMIT_HASH_RE.findall(result_text)
-                self.commit = hashes[-1] if hashes else "committed"
-            if "push" in action:
+            # The git tool may receive the command through either the
+            # canonical ``git_command`` field or the generic ``action`` field.
+            # A harmless ``git status`` must never satisfy a commit gate just
+            # because the word "commit" appeared in the model's action label.
+            action = _text(
+                params.get("git_command") or params.get("action")
+            ).lower()
+            if action.startswith("git "):
+                action = action[4:].strip()
+            if action.startswith("commit"):
+                commit_hash = _commit_hash(result_text)
+                if commit_hash:
+                    self.commit = commit_hash
+            if action.startswith("push") and "rejected" not in result_text.lower():
                 self.pushed = True
 
     def update_from_calls(self, calls: Iterable[Any]) -> None:
@@ -269,6 +324,7 @@ class TaskState:
         if missing:
             labels = {
                 "verify": "运行相关测试并记录真实结果",
+                "changes": "实际修改非测试源码文件（不能只提交空改动或测试）",
                 "commit": "创建 git commit",
                 "pr": "push 并创建 PR",
             }

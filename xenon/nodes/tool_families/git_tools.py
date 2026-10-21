@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shlex
 import subprocess
 from typing import Any
 
@@ -15,10 +16,51 @@ logger = logging.getLogger(__name__)
 class GitToolsMixin:
     """Execute allow-listed Git operations through the ToolNode contract."""
 
+    @staticmethod
+    def _git_text(value: Any) -> str:
+        """Normalize model-supplied git args (str or JSON list)."""
+        if isinstance(value, (list, tuple)):
+            return " ".join(str(item).strip() for item in value if str(item).strip())
+        return str(value or "")
+
+    @staticmethod
+    def _split_git_args(text: str) -> list[str]:
+        """Split git arguments without mangling Windows backslashes."""
+        try:
+            parts = shlex.split(text, posix=False)
+        except ValueError:
+            parts = text.split()
+        cleaned: list[str] = []
+        for part in parts:
+            if len(part) >= 2 and part[0] == part[-1] and part[0] in {"'", '"'}:
+                part = part[1:-1]
+            if part:
+                cleaned.append(part)
+        return cleaned
+
     def _git(self, context: AgentContext) -> dict[str, Any]:
         """执行 Git 操作。支持: status, diff, log, add, commit, branch。"""
-        git_cmd = self._resolve_template(self.git_command, context).strip()
-        extra_args = self._resolve_template(self.action, context).strip()
+        git_cmd = self._resolve_template(
+            self._git_text(self.git_command), context
+        ).strip()
+        extra_args = self._resolve_template(
+            self._git_text(self.action), context
+        ).strip()
+        if git_cmd.startswith("git "):
+            git_cmd = git_cmd[4:].strip()
+        if extra_args.startswith("git "):
+            extra_args = extra_args[4:].strip()
+        # Models commonly put the actual operation in the generic ``action``
+        # field while leaving ``git_command`` at its default ``status``.
+        # Do not silently run a harmless status and let TaskState call it a
+        # commit; promote a recognizable operation.
+        known_commands = {
+            "status", "diff", "diff_full", "log", "branch", "add", "stash",
+            "commit", "push", "clone", "checkout", "switch", "restore",
+        }
+        extra_first = extra_args.split(None, 1)[0].lower() if extra_args else ""
+        if git_cmd in {"", "status"} and extra_first in known_commands:
+            git_cmd, extra_args = extra_args, ""
 
         # 安全验证
         self._validate_git_command(git_cmd)
@@ -38,16 +80,46 @@ class GitToolsMixin:
         if git_cmd in git_commands:
             cmd = git_commands[git_cmd]
         elif git_cmd.startswith("commit"):
-            msg = git_cmd.replace("commit", "").strip() or extra_args or "auto commit"
-            cmd = ["git", "commit"]
+            rest = git_cmd[len("commit"):].strip() or extra_args
+            args = self._split_git_args(rest)
+            msg = ""
+            flags: list[str] = []
+            i = 0
+            while i < len(args):
+                arg = args[i]
+                if arg in {"-m", "--message"}:
+                    if i + 1 < len(args):
+                        msg = args[i + 1]
+                        i += 2
+                        continue
+                    i += 1
+                    continue
+                if arg.startswith("--message="):
+                    msg = arg.split("=", 1)[1]
+                else:
+                    flags.append(arg)
+                i += 1
+            if not msg:
+                # ``rest`` may be a bare message (``commit "msg"``) rather
+                # than an option list.
+                if rest and not rest.startswith("-") and not flags:
+                    msg = rest
+                else:
+                    msg = "auto commit"
+            cmd = ["git", "commit", *flags]
             if attribution_enabled() and "co-authored-by: xenon" not in msg.lower():
                 cmd += ["--trailer", TRAILER]
             cmd += ["-m", msg]
         elif git_cmd.startswith("add"):
-            target = git_cmd.replace("add", "").strip() or extra_args or "."
-            cmd = ["git", "add", target]
+            target = git_cmd[len("add"):].strip() or extra_args or "."
+            targets = self._split_git_args(target) or ["."]
+            cmd = ["git", "add", *targets]
         else:
-            cmd = ["git"] + git_cmd.split() + (extra_args.split() if extra_args else [])
+            cmd = [
+                "git",
+                *self._split_git_args(git_cmd),
+                *(self._split_git_args(extra_args) if extra_args else []),
+            ]
 
         logger.info(f"[{self.id}] git {' '.join(cmd[1:])}")
 
