@@ -155,6 +155,7 @@ def test_completed_delivery_marks_task_complete_without_nudge(monkeypatch) -> No
         execution_level=3,
         required=["verify", "commit"],
         artifacts=["src/feature.py"],
+        committed_artifacts=["src/feature.py"],
         tests=["pytest -q"],
         commit="abc1234",
     )

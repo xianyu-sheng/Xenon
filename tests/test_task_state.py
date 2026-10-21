@@ -201,3 +201,29 @@ def test_failed_test_output_does_not_satisfy_verify() -> None:
         result="1 failed, 2 passed",
     )
     assert state.tests == []
+
+
+def test_source_written_after_empty_commit_does_not_satisfy_changes() -> None:
+    state = TaskState(
+        objective="implement the fix",
+        intent="write_code",
+        execution_level=3,
+        required=["verify", "commit"],
+    )
+    state.record_tool(
+        "write_file", {"file_path": "tests/test_fix.py"}, success=True
+    )
+    state.record_tool(
+        "command",
+        {"command": "git commit -m empty"},
+        success=True,
+        result="[main abc1234] empty",
+    )
+    state.record_tool(
+        "write_file", {"file_path": "src/fix.py"}, success=True
+    )
+
+    assert state.commit == "abc1234"
+    assert state.committed_artifacts == ["tests/test_fix.py"]
+    assert "changes" in state.missing_delivery()
+    assert state.maybe_complete() is False

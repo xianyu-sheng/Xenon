@@ -103,6 +103,7 @@ class TaskState:
     artifacts: list[str] = field(default_factory=list)
     tests: list[str] = field(default_factory=list)
     commit: str = ""
+    committed_artifacts: list[str] = field(default_factory=list)
     pushed: bool = False
     pr_url: str = ""
     required: list[str] = field(default_factory=list)
@@ -134,6 +135,9 @@ class TaskState:
             artifacts=[str(p) for p in raw.get("artifacts", []) if p],
             tests=[str(t) for t in raw.get("tests", []) if t],
             commit=_text(raw.get("commit")),
+            committed_artifacts=[
+                str(p) for p in raw.get("committed_artifacts", []) if p
+            ],
             pushed=bool(raw.get("pushed")),
             pr_url=_text(raw.get("pr_url")),
             required=[str(x) for x in raw.get("required", []) if x],
@@ -152,6 +156,7 @@ class TaskState:
             "artifacts": self.artifacts[-30:],
             "tests": self.tests[-20:],
             "commit": self.commit,
+            "committed_artifacts": self.committed_artifacts[-30:],
             "pushed": self.pushed,
             "pr_url": self.pr_url,
             "required": self.required,
@@ -177,9 +182,9 @@ class TaskState:
         ]
         self.updated_at = time.time()
 
-    def has_source_artifact(self) -> bool:
-        """Whether any successful write touched a non-test file."""
-        for path in self.artifacts:
+    def has_source_artifact(self, paths: list[str] | None = None) -> bool:
+        """Whether a successful write touched a non-test file."""
+        for path in self.artifacts if paths is None else paths:
             normalized = str(path).replace("\\", "/").lower()
             parts = [part for part in normalized.split("/") if part]
             if "tests" in parts or "test" in parts:
@@ -197,10 +202,11 @@ class TaskState:
         # A commit that only captures tests (or an empty change) must not
         # satisfy a code-delivery task.  This is execution state, not proof;
         # it only prevents ``maybe_complete`` from blessing a no-op commit.
+        committed = self.committed_artifacts or self.artifacts
         if (
             "commit" in self.required
             and self.intent not in {"write_doc", "write_report"}
-            and not self.has_source_artifact()
+            and not self.has_source_artifact(committed)
         ):
             missing.append("changes")
         if "commit" in self.required and not self.commit:
@@ -264,6 +270,7 @@ class TaskState:
                 commit_hash = _commit_hash(result_text)
                 if commit_hash:
                     self.commit = commit_hash
+                    self.committed_artifacts = list(self.artifacts)
             if _PUSH_RE.search(text):
                 self.pushed = True
             if _PR_RE.search(text):
@@ -285,6 +292,7 @@ class TaskState:
                 commit_hash = _commit_hash(result_text)
                 if commit_hash:
                     self.commit = commit_hash
+                    self.committed_artifacts = list(self.artifacts)
             if action.startswith("push") and "rejected" not in result_text.lower():
                 self.pushed = True
 
