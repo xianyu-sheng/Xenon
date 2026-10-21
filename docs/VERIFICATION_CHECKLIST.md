@@ -71,6 +71,7 @@
 | C22 | 固定 120 步会误杀长链路任务；重试上限 2 次过早放弃 | 执行/循环 | ✅ 已改 | 默认 `0`=不限步数，由 LoopDetector、无进展检查点、1800s deadline 控制；`XENON_MAX_ITERATIONS` 可显式设上限；交付/验证/格式/计划收尾/写恢复重试统一为 3 次；Xenon 全量 3454 passed；`tests/test_react_loop_exit.py` 证明 max_iterations=0 下高置信度循环由 LoopDetector 终止 |
 | C24 | Plan-Execute 真实回归仍会在空测试/未提交源码时误判完成 | 执行/计划 | 🟡 串行 replanner 已加，DAG 未重规划，待真实复跑 | 2026-10-21 SmartBench #26 切片四轮：首轮 60 工具/18 失败/243s，仅提交空测试文件；第二轮 51/20/341s，只改 JSON；第三轮 64/15/292s，源码改动但测试不存在；最终代码再跑 73 工具/22 失败/383s，TaskState `active`、缺 verify，最终回答明确未完成。已修：计划同步进 TaskState、失败步骤保持未完成、提交快照要求非测试源码、git 多路径/`commit -m`/action list 解析、`search_files pattern` 别名。仍未解决：规划器不生成有效写步骤、测试内容为空，不能判定 Plan-Execute 可用 |
 | C25 | `/compact` 后 TaskState 是否随会话恢复 | 执行/持久化 | ✅ 已验证 | `tests/test_compact_task_state_resume.py` 2 passed：compact 只改对话历史，不抹掉 TaskState；`_auto_save_session` → `load_session` 重建 `AgentContext` 后 objective/steps/artifacts/tests/commit/required 全部保留；测试-only commit 仍为 `active` |
+| C27 | Windows 本地测试集有 42 个失败/错误（symlink 权限、POSIX mode、子进程 GBK、MCP pipe、锁释放竞态、live 网络阻塞） | 测试/跨平台 | ✅ 已清理 | 引入 `tests/platform_utils`、live 测试默认跳过、MCP Windows stdout pump、锁 unlink 重试、条件 DummyOutput；全量 `3516 passed, 98 skipped, 0 failed`；最新 CI 全绿 |
 | C26 | CI 连续两次失败：LoopDetector 3 次哈希硬终止抢在纯只读补救前 | 执行/CI | ✅ 已修复 | 根因是 `read_only_streak=3` 时哈希循环先触发；现在只读补救优先、注入后重置循环窗口；`1115f7c` 已推送，最新 CI run 39560491106 全绿；本地 Windows 测试修正 `285b56b` 一并提交 |
 | C23 | 可选 HMAC 证据链锚点（PR #160）存在 keyed→unkeyed 降级攻击 | 证据层/安全 | 🟡 PR 未合并 | 删除 `hk` 后整链用 sha256 重算，`verify_event_chain(..., key=...)` 仍返回 `ok/unkeyed`；已在 PR #160 留可复现评论，要求“有 key 时全 unkeyed 不得 ok”；同分支 targeted 33 passed、CI 7/7，但不能合并 |
 | C15 | 只读任务写 `.xenon_tmp/*.ps1` 触发“改完代码要验证”，模型偏离任务去解释没有测试 | 执行/提醒 | ✅ 已真实验证 | 只读 issue 列表任务：无验证提醒，最终正确列出 25 个 issue；仍会写临时脚本/尝试 `$()`（C4） |
@@ -113,6 +114,7 @@
 | 2026-10-20 | 工具数值参数 + 循环退出 | `d73d385` 统一强转模型传入的数值参数，`ad9c8e6` 增加 unlimited 下 LoopDetector 终止测试；targeted 23 passed |
 | 2026-10-21 | Plan-Execute 真实 #26 切片 | 三轮真实 DeepSeek 运行均未完成：首轮 60 工具/18 失败/243s、空测试提交；第二轮 51/20/341s、只改 JSON；修正后第三轮 64/15/292s，TaskState 保持 active、缺 verify；提交快照门重放显示空测试提交还缺 changes。已加计划状态同步、提交快照源码门、失败测试不计验证、git 参数规范化；Plan-Execute 仍不可宣称完成 |
 | 2026-10-21 | compact 后 TaskState 恢复 | 新增 `test_compact_task_state_resume.py`：compact → auto-save → load 后状态字段完整；2 passed |
+| 2026-10-21 | Windows 测试集清理 | 42 个失败/错误逐项处理：MCP Windows pipe 读取、锁文件 unlink 竞态、POSIX mode/symlink 断言、编码、live 网络测试 opt-in；全量 3516 passed/98 skipped，CI 39583834735 全绿 |
 | 2026-10-21 | CI 失败修复 | 两次 CI 均因 `TestReadOnlyParalysisDetection::test_injects_write_prompt_after_4_read_only_rounds` 失败；修复 `1115f7c`，最新 CI 全绿；提交 Windows-safe 测试修正 `285b56b`；丢弃 `repl.py` 的 DummyOutput 坏改动 |
 | 2026-10-21 | Plan-Execute 最终真实复跑 | 73 工具/22 失败/383s；源码有真实 edit，但专项测试不存在、无新 commit；TaskState 保持 active，最终回答警告“未完成”；未再假完成 |
 | 2026-10-21 | AgentResult + Plan-Execute replanner | 新增 `AgentResult`/`TerminationReason`、串行失败步骤重规划（`max_replans=3`）、DAG 依赖 skip 保持、LoopDetector 3 次哈希/三周期模式硬终止修正 + 参数签名；targeted 109 passed；真实 #26 仍需复跑 |
