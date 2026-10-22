@@ -11,14 +11,17 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from threading import RLock
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from xenon.engine.evidence_gate import GateVerdict
+
+logger = logging.getLogger(__name__)
 
 
 class _StringEnum(str, Enum):
@@ -172,8 +175,31 @@ class EvidenceEvent:
         return event
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceSubscription:
+    """A filtered listener on the durable evidence stream."""
+
+    handler: Callable[[EvidenceEvent], None]
+    phase: str | None = None
+    kind: str | None = None
+    source: str | None = None
+
+    def matches(self, event: EvidenceEvent) -> bool:
+        return (
+            (self.phase is None or event.phase == self.phase)
+            and (self.kind is None or event.kind == self.kind)
+            and (self.source is None or event.source == self.source)
+        )
+
+
 class EvidenceLedger:
-    """Hash-chained, session-scoped evidence stream."""
+    """Hash-chained, session-scoped evidence stream.
+
+    The ledger is the durable source of truth.  UI callbacks, TaskState and
+    other projections can subscribe to it instead of each maintaining a
+    separate interpretation of tool outcomes.  Subscribers receive already
+    appended events in sequence order; a failing subscriber is isolated.
+    """
 
     def __init__(
         self, session_id: str, events: Iterable[EvidenceEvent] | None = None
@@ -183,8 +209,67 @@ class EvidenceLedger:
         self.session_id = session_id
         self.events: list[EvidenceEvent] = []
         self._lock = RLock()
+        self._subscribers: list[EvidenceSubscription] = []
         for event in events or ():
             self.append_event(event)
+
+    def subscribe(
+        self,
+        handler: Callable[[EvidenceEvent], None],
+        *,
+        phase: str | LifecyclePhase | None = None,
+        kind: str | EventKind | None = None,
+        source: str | EvidenceSource | None = None,
+        replay: bool = False,
+    ) -> EvidenceSubscription:
+        """Attach a projection to the stream, optionally replaying history.
+
+        Filters are normalized to the same enum values stored on events.  The
+        subscription is registered before replay, so an event appended by a
+        replayed handler cannot be lost.
+        """
+        if not callable(handler):
+            raise TypeError("handler must be callable")
+        subscription = EvidenceSubscription(
+            handler=handler,
+            phase=_enum_value(phase, LifecyclePhase) if phase is not None else None,
+            kind=_enum_value(kind, EventKind) if kind is not None else None,
+            source=(
+                _enum_value(source, EvidenceSource)
+                if source is not None
+                else None
+            ),
+        )
+        with self._lock:
+            self._subscribers.append(subscription)
+            if replay:
+                for event in list(self.events):
+                    self._deliver(subscription, event)
+        return subscription
+
+    def unsubscribe(self, subscription: EvidenceSubscription) -> None:
+        with self._lock:
+            if subscription in self._subscribers:
+                self._subscribers.remove(subscription)
+
+    def _deliver(
+        self, subscription: EvidenceSubscription, event: EvidenceEvent
+    ) -> None:
+        if not subscription.matches(event):
+            return
+        try:
+            subscription.handler(event)
+        except Exception as exc:  # noqa: BLE001 — projections must not break the log
+            logger.warning(
+                "EvidenceLedger subscriber %s failed on %s: %s",
+                getattr(subscription.handler, "__name__", subscription.handler),
+                event.kind,
+                exc,
+            )
+
+    def _notify(self, event: EvidenceEvent) -> None:
+        for subscription in list(self._subscribers):
+            self._deliver(subscription, event)
 
     def append(
         self,
@@ -204,6 +289,7 @@ class EvidenceLedger:
                 predecessor_id=self.events[-1].event_id if self.events else None,
             )
             self.events.append(event)
+            self._notify(event)
             return event
 
     def append_event(self, event: EvidenceEvent) -> EvidenceEvent:
@@ -215,6 +301,7 @@ class EvidenceLedger:
             if event.sequence != expected or event.predecessor_id != predecessor:
                 raise ValueError("event does not continue ledger chain")
             self.events.append(event)
+            self._notify(event)
             return event
 
     def query(
@@ -359,6 +446,27 @@ class EvidenceRuntime:
     @property
     def session_id(self) -> str:
         return self._ledger.session_id
+
+    def subscribe(
+        self,
+        handler: Callable[[EvidenceEvent], None],
+        *,
+        phase: str | LifecyclePhase | None = None,
+        kind: str | EventKind | None = None,
+        source: str | EvidenceSource | None = None,
+        replay: bool = False,
+    ) -> EvidenceSubscription:
+        """Subscribe a projection to the durable event stream."""
+        return self._ledger.subscribe(
+            handler,
+            phase=phase,
+            kind=kind,
+            source=source,
+            replay=replay,
+        )
+
+    def unsubscribe(self, subscription: EvidenceSubscription) -> None:
+        self._ledger.unsubscribe(subscription)
 
     # ── Gate 注册与运行 ────────────────────────────────────
     def register_gate(self, gate: Any) -> None:

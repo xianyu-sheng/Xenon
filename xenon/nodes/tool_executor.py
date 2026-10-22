@@ -703,8 +703,14 @@ class ToolExecutor:
         observation: str,
         tracker: ToolExecutionTracker | None,
         context: AgentContext | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
-        """记录执行后证据；正文只保留摘要，敏感参数不进入 ledger。"""
+        """记录执行后证据；正文只保留摘要，敏感参数不进入 ledger。
+
+        ``metadata`` carries structured facts (exit code, changed/committed
+        paths, result id) so downstream projections can update state without
+        re-parsing the human-readable observation.
+        """
         context = context or AgentContext()
         if self.evidence_ledger is not None:
             context.set("_evidence_ledger", self.evidence_ledger)
@@ -718,6 +724,7 @@ class ToolExecutor:
                 "params": mask_sensitive_params(params),
                 "success": success,
                 "summary": observation[:500],
+                "metadata": dict(metadata or {}),
             },
         )
 
@@ -922,7 +929,13 @@ class ToolExecutor:
                     metadata=tracker_metadata,
                 )
             self.record_tool_observation(
-                tool_name, params, success, observation, tracker, context
+                tool_name,
+                params,
+                success,
+                observation,
+                tracker,
+                context,
+                metadata=tracker_metadata,
             )
             if self.execution_policy is not None:
                 self.execution_policy.emit(

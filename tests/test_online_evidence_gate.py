@@ -187,6 +187,24 @@ def test_observation_event_contains_sanitized_params() -> None:
     assert ledger.verify_integrity()
 
 
+def test_observation_event_carries_structured_metadata() -> None:
+    ledger = EvidenceLedger("run-1")
+    executor = _executor(ledger)
+    executor.record_tool_observation(
+        "command",
+        {"command": "pytest -q"},
+        True,
+        "2 passed",
+        ToolExecutionTracker(),
+        metadata={"exit_code": 0, "changed_paths": ["src/app.py"]},
+    )
+    event = ledger.query(kind=EventKind.TOOL_OBSERVATION)[0]
+    assert event.payload["metadata"] == {
+        "exit_code": 0,
+        "changed_paths": ["src/app.py"],
+    }
+
+
 def test_observe_mode_warns_but_does_not_block(tmp_path: Path) -> None:
     target = tmp_path / "module.py"
     target.write_text("value = 1\n", encoding="utf-8")

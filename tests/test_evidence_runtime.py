@@ -11,6 +11,7 @@ from xenon.engine.evidence_runtime import (
     EvidenceEvent,
     EvidenceLedger,
     EvidencePack,
+    EvidenceRuntime,
     EvidenceSource,
     LifecyclePhase,
 )
@@ -120,3 +121,85 @@ def test_event_kind_and_phase_are_closed_protocol_values() -> None:
             source=EvidenceSource.USER,
             payload={},
         )
+
+
+def test_ledger_subscription_receives_appended_events() -> None:
+    ledger = EvidenceLedger("run-sub")
+    received: list[EvidenceEvent] = []
+    ledger.subscribe(received.append)
+
+    event = ledger.append(
+        LifecyclePhase.POST_TOOL,
+        EventKind.TOOL_OBSERVATION,
+        EvidenceSource.TOOL,
+        {"tool": "command"},
+    )
+
+    assert received == [event]
+
+
+def test_ledger_subscription_filters_and_replays() -> None:
+    ledger = EvidenceLedger("run-filter")
+    ledger.append(
+        LifecyclePhase.TASK,
+        EventKind.TASK_FACT,
+        EvidenceSource.ENGINE,
+    )
+    observations: list[EvidenceEvent] = []
+    subscription = ledger.subscribe(
+        observations.append,
+        kind=EventKind.TOOL_OBSERVATION,
+        source="tool",
+        replay=True,
+    )
+    assert observations == []
+
+    ledger.append(
+        LifecyclePhase.POST_TOOL,
+        EventKind.TOOL_OBSERVATION,
+        EvidenceSource.TOOL,
+    )
+    ledger.append(
+        LifecyclePhase.VALIDATION,
+        EventKind.VALIDATION_RESULT,
+        EvidenceSource.TEST,
+    )
+    assert len(observations) == 1
+    assert observations[0].kind == EventKind.TOOL_OBSERVATION.value
+
+    ledger.unsubscribe(subscription)
+    ledger.append(
+        LifecyclePhase.POST_TOOL,
+        EventKind.TOOL_OBSERVATION,
+        EvidenceSource.TOOL,
+    )
+    assert len(observations) == 1
+
+
+def test_subscriber_failure_is_isolated(caplog) -> None:
+    ledger = EvidenceLedger("run-isolation")
+    received: list[EvidenceEvent] = []
+
+    def broken(_event: EvidenceEvent) -> None:
+        raise RuntimeError("projection failed")
+
+    ledger.subscribe(broken)
+    ledger.subscribe(received.append)
+    event = ledger.append(
+        LifecyclePhase.DELIVERY,
+        EventKind.DELIVERY,
+        EvidenceSource.ENGINE,
+    )
+
+    assert received == [event]
+    assert any("EvidenceLedger subscriber" in record.message for record in caplog.records)
+
+
+def test_runtime_subscription_facade() -> None:
+    runtime = EvidenceRuntime(EvidenceLedger("run-facade"))
+    received: list[EvidenceEvent] = []
+    runtime.subscribe(received.append, replay=True)
+    event = runtime.record_validation(kind="pytest", passed=True, detail="2 passed")
+
+    assert received == [event]
+    assert runtime.ledger.verify_integrity()
