@@ -609,7 +609,7 @@ class TaskState:
             "clean": self.dirty_after_commit is False,
         }
         for step in self.steps:
-            if step.get("status") != "failed":
+            if step.get("status") not in {"failed", "skipped"}:
                 continue
             if satisfied.get(_text(step.get("kind")).lower()):
                 step["status"] = "completed"
