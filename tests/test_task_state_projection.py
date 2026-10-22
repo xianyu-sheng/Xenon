@@ -227,3 +227,60 @@ def test_delivery_runtime_replays_ledger_into_task_state() -> None:
     assert result.reason is TerminationReason.FINAL
     assert context.get("_task_state")["status"] == "completed"
     assert context.get("_task_state")["commit"] == "abc1234"
+
+
+def test_projection_applies_plan_and_step_events() -> None:
+    state = _state()
+    ledger = EvidenceLedger("run-plan-projection")
+    ledger.append(
+        LifecyclePhase.TASK,
+        EventKind.TASK_FACT,
+        EvidenceSource.ENGINE,
+        {"engine": "plan", "task_id": state.task_id},
+    )
+    ledger.append(
+        LifecyclePhase.PLANNING,
+        EventKind.PLAN,
+        EvidenceSource.ENGINE,
+        {
+            "task_id": state.task_id,
+            "steps": [
+                {"id": 10, "task": "read", "tool": "read_file"},
+                {"id": 20, "task": "write", "tool": "write_file"},
+            ],
+        },
+    )
+    ledger.append(
+        LifecyclePhase.EXECUTION,
+        EventKind.PLAN_STEP_STARTED,
+        EvidenceSource.ENGINE,
+        {"task_id": state.task_id, "step_id": 10, "task": "read"},
+    )
+    ledger.append(
+        LifecyclePhase.EXECUTION,
+        EventKind.PLAN_STEP_FINISHED,
+        EvidenceSource.ENGINE,
+        {
+            "task_id": state.task_id,
+            "step_id": 10,
+            "success": True,
+            "status": "ok",
+        },
+    )
+    ledger.append(
+        LifecyclePhase.EXECUTION,
+        EventKind.PLAN_STEP_FINISHED,
+        EvidenceSource.ENGINE,
+        {
+            "task_id": state.task_id,
+            "step_id": 20,
+            "success": False,
+            "status": "failed",
+        },
+    )
+
+    TaskStateProjection(state).attach(ledger, replay=True).close()
+
+    assert [step["id"] for step in state.steps] == ["10", "20"]
+    assert [step["status"] for step in state.steps] == ["completed", "failed"]
+    assert state.maybe_complete() is False

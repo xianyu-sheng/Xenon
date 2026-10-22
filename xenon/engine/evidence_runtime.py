@@ -44,6 +44,8 @@ class EventKind(_StringEnum):
     TASK_FACT = "task_fact"
     CLAIM = "claim"
     PLAN = "plan"
+    PLAN_STEP_STARTED = "plan_step_started"
+    PLAN_STEP_FINISHED = "plan_step_finished"
     TOOL_REQUEST = "tool_request"
     TOOL_OBSERVATION = "tool_observation"
     STATE_SNAPSHOT = "state_snapshot"

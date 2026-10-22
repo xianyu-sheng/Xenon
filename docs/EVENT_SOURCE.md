@@ -1,6 +1,6 @@
 # Event source and projections
 
-Status: **EventLedger subscription + TaskState projection landed; plan projection pending**.
+Status: **EventLedger subscription + TaskState/plan projections landed; remaining ad-hoc fallbacks marked below**.
 
 ## Why
 
@@ -20,9 +20,11 @@ replayable projections.
   subscriber is isolated and cannot break the event log.
 - Tool observations now carry structured `metadata` (exit code, changed /
   committed paths, result id), so projections do not have to parse prose.
-- `TaskStateProjection` consumes `tool_observation` events, replays from a
-  `task_fact` boundary, and deduplicates by `result_id`.  `run_with_delivery`
-  uses it when a boundary exists and falls back to the tracker otherwise.
+- `TaskStateProjection` consumes `tool_observation`, `plan`,
+  `plan_step_started` and `plan_step_finished` events, replays from a
+  `task_fact` boundary, and deduplicates tool observations by `result_id`.
+  `run_with_delivery` uses it when a boundary exists and falls back to the
+  tracker otherwise.
 - `EngineCallback` / `EventBus` are **ephemeral UI channels**.  They must not be
   the source of durable task state.
 
@@ -38,15 +40,13 @@ replayable projections.
 
 ## Target migration
 
-1. Add explicit plan/step event kinds, so plan status is a projection instead
-   of a second mutable state machine.
-2. Make plan and delivery statuses derived from the same event stream.
-3. Let TUI/logging subscribe through `EventBus`; keep them out of state
+1. Remove the remaining ad-hoc `update_from_calls` / direct `_sync_task_*`
+   writes when a task boundary exists.
+2. Let TUI/logging subscribe through `EventBus`; keep them out of state
    transitions.
-4. Remove the remaining ad-hoc `update_from_calls` writes after the plan
-   projection is available.
-5. Keep the existing `ToolExecutionTracker` as an in-memory execution trace,
+3. Keep the existing `ToolExecutionTracker` as an in-memory execution trace,
    not as a second source of truth for delivery.
+4. Add replay tests for a resumed task and a re-planned task.
 
 ## Non-goals
 

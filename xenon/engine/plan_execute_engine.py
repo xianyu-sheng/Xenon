@@ -430,7 +430,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         # a Plan-Execute task with no update_plan call had empty steps and
         # could be marked completed after a commit even when planned work
         # failed.  The plan is execution state, not evidence.
-        self._sync_task_plan(ctx, capped)
+        self._record_plan_event(ctx, capped)
 
         # Phase 2: Execution
         logger.info("Plan-Execute Phase 2: 执行中...")
@@ -473,7 +473,8 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             tracker,
             total,
         )
-        self._sync_task_results(ctx, results)
+        if ctx.get("_evidence_ledger") is None:
+            self._sync_task_results(ctx, results)
         if any(item.get("status") == "failed" for item in results):
             self._last_termination_reason = (
                 self._last_termination_reason or "error"
@@ -563,6 +564,130 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             )
         state.updated_at = __import__("time").time()
         ctx.set("_task_state", state.to_dict())
+
+    @staticmethod
+    def _task_event_id(ctx: AgentContext) -> str:
+        raw = ctx.get("_task_state") if ctx is not None else None
+        return str(raw.get("task_id")) if isinstance(raw, dict) and raw.get("task_id") else ""
+
+    def _record_plan_event(
+        self, ctx: AgentContext, steps: list[dict[str, Any]]
+    ) -> None:
+        """Record the plan as a durable fact, falling back to direct state."""
+        from xenon.engine.evidence_runtime import (
+            EventKind,
+            EvidenceSource,
+            LifecyclePhase,
+        )
+
+        ledger = ctx.get("_evidence_ledger")
+        if ledger is None or not hasattr(ledger, "append"):
+            self._sync_task_plan(ctx, steps)
+            return
+        payload_steps = [
+            {
+                "id": step.get("id"),
+                "task": str(step.get("task") or step.get("step") or ""),
+                "tool": step.get("tool"),
+            }
+            for step in steps
+            if isinstance(step, dict)
+            and (step.get("task") or step.get("step"))
+        ]
+        payload: dict[str, Any] = {"steps": payload_steps}
+        task_id = self._task_event_id(ctx)
+        if task_id:
+            payload["task_id"] = task_id
+        ledger.append(
+            LifecyclePhase.PLANNING,
+            EventKind.PLAN,
+            EvidenceSource.ENGINE,
+            payload,
+        )
+
+    def _record_step_started(
+        self,
+        ctx: AgentContext,
+        step_id: Any,
+        task: str,
+        total: int,
+    ) -> None:
+        from xenon.engine.evidence_runtime import (
+            EventKind,
+            EvidenceSource,
+            LifecyclePhase,
+        )
+
+        ledger = ctx.get("_evidence_ledger")
+        if ledger is None or not hasattr(ledger, "append"):
+            from xenon.engine.task_state import TaskState
+
+            state = TaskState.from_context(ctx)
+            if state is not None:
+                state.set_step_status(step_id, "running")
+                ctx.set("_task_state", state.to_dict())
+            return
+        payload: dict[str, Any] = {
+            "step_id": step_id,
+            "task": task,
+            "total": total,
+        }
+        task_id = self._task_event_id(ctx)
+        if task_id:
+            payload["task_id"] = task_id
+        ledger.append(
+            LifecyclePhase.EXECUTION,
+            EventKind.PLAN_STEP_STARTED,
+            EvidenceSource.ENGINE,
+            payload,
+        )
+
+    def _record_step_finished(
+        self,
+        ctx: AgentContext,
+        step_id: Any,
+        *,
+        success: bool,
+        status: str,
+        summary: str = "",
+        error: str | None = None,
+        total: int = 0,
+    ) -> None:
+        from xenon.engine.evidence_runtime import (
+            EventKind,
+            EvidenceSource,
+            LifecyclePhase,
+        )
+
+        ledger = ctx.get("_evidence_ledger")
+        if ledger is None or not hasattr(ledger, "append"):
+            from xenon.engine.task_state import TaskState
+
+            state = TaskState.from_context(ctx)
+            if state is not None:
+                mapped = "skipped" if status == "skipped" else (
+                    "completed" if success else "failed"
+                )
+                state.set_step_status(step_id, mapped)
+                ctx.set("_task_state", state.to_dict())
+            return
+        payload: dict[str, Any] = {
+            "step_id": step_id,
+            "success": success,
+            "status": status,
+            "summary": summary[:500],
+            "error": (error or "")[:500],
+            "total": total,
+        }
+        task_id = self._task_event_id(ctx)
+        if task_id:
+            payload["task_id"] = task_id
+        ledger.append(
+            LifecyclePhase.EXECUTION,
+            EventKind.PLAN_STEP_FINISHED,
+            EvidenceSource.ENGINE,
+            payload,
+        )
 
     @staticmethod
     def _fallback_steps(user_input: str) -> list[dict[str, Any]]:
@@ -747,6 +872,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             "depends_on": [],
         }
         step_id = remediation_step["id"]
+        self._record_step_started(ctx, step_id, remediation_step["task"], total + 1)
         prev_results = self._build_prev_results(results)
         raw_result = self._execute_step_with_llm(
             step_id,
@@ -771,6 +897,15 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         ctx.set(f"step_{step_id}_result", outcome.content)
         ctx.set(f"step_{step_id}_status", "ok" if outcome.success else "failed")
         self.callback.on_step_done(step_id, outcome.success, outcome.content[:200])
+        self._record_step_finished(
+            ctx,
+            step_id,
+            success=outcome.success,
+            status="ok" if outcome.success else "failed",
+            summary=outcome.content,
+            error=outcome.error,
+            total=total + 1,
+        )
         logger.debug(f"补救步骤 {step_id} 完成: {outcome.content[:100]}")
         return results
 
@@ -873,6 +1008,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
 
             logger.debug(f"执行步骤 {step_id}: {step_task}")
             self.callback.on_step(step_id, total, step_task)
+            self._record_step_started(ctx, step_id, step_task, total)
 
             prev_results = self._build_prev_results(results)
 
@@ -919,6 +1055,15 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             ctx.set(f"step_{step_id}_result", outcome.content)
             ctx.set(f"step_{step_id}_status", "ok" if outcome.success else "failed")
             self.callback.on_step_done(step_id, outcome.success, outcome.content[:200])
+            self._record_step_finished(
+                ctx,
+                step_id,
+                success=outcome.success,
+                status="ok" if outcome.success else "failed",
+                summary=outcome.content,
+                error=outcome.error,
+                total=total,
+            )
             logger.debug(f"步骤 {step_id} 完成: {outcome.content[:100]}")
 
             # A failed planned step is not a reason to blindly continue the
@@ -952,8 +1097,9 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                     )
                     steps = new_steps
                     i = 0
-                    self._sync_task_plan(ctx, steps)
-                    self._sync_task_results(ctx, results)
+                    self._record_plan_event(ctx, steps)
+                    if ctx.get("_evidence_ledger") is None:
+                        self._sync_task_results(ctx, results)
                     continue
 
             # v0.9.1: 循环检测 - 记录步骤执行状态

@@ -283,6 +283,19 @@ class TaskState:
         ]
         self.updated_at = time.time()
 
+    def set_step_status(self, step_id: Any, status: str) -> bool:
+        """Update one step by stable id; return False when it is not present."""
+        key = _text(step_id)
+        if not key:
+            return False
+        for index, step in enumerate(self.steps, start=1):
+            step_id = _text(step.get("id"))
+            if step_id == key or (not step_id and str(index) == key):
+                step["status"] = _text(status) or "pending"
+                self.updated_at = time.time()
+                return True
+        return False
+
     def has_source_artifact(self, paths: list[str] | None = None) -> bool:
         """Whether a successful write touched a non-test file."""
         for path in self.artifacts if paths is None else paths:

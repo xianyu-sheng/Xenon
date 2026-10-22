@@ -61,3 +61,48 @@ def test_results_sync_by_real_step_id_not_list_position():
     assert [step["id"] for step in state.steps] == ["10", "20"]
     assert [step["status"] for step in state.steps] == ["completed", "failed"]
     assert state.maybe_complete() is False
+
+
+def test_plan_execute_emits_plan_and_step_events_for_projection():
+    from xenon.engine.evidence_runtime import (
+        EventKind,
+        EvidenceLedger,
+        EvidenceSource,
+        LifecyclePhase,
+    )
+    from xenon.engine.task_state_projection import TaskStateProjection
+    from xenon.engine.tool_tracker import ToolExecutionTracker
+
+    state = TaskState(
+        objective="implement the plan",
+        intent="write_code",
+        execution_level=3,
+        required=["verify", "commit"],
+    )
+    ledger = EvidenceLedger("run-plan-events")
+    ledger.append(
+        LifecyclePhase.TASK,
+        EventKind.TASK_FACT,
+        EvidenceSource.ENGINE,
+        {"engine": "plan", "task_id": state.task_id},
+    )
+    ctx = AgentContext(
+        {"_task_state": state.to_dict(), "_evidence_ledger": ledger}
+    )
+    engine = PlanExecuteEngine(["model"], max_steps=0)
+    engine._execute_step_with_llm = lambda *args, **kwargs: "ok"
+    steps = [
+        {"id": 10, "task": "read", "tool": None, "params": {}, "depends_on": []},
+        {"id": 20, "task": "write", "tool": None, "params": {}, "depends_on": []},
+    ]
+
+    engine._record_plan_event(ctx, steps)
+    engine._run_serial(steps, "task", ctx, ToolExecutionTracker(), 2)
+
+    kinds = [event.kind for event in ledger.events]
+    assert EventKind.PLAN.value in kinds
+    assert kinds.count(EventKind.PLAN_STEP_STARTED.value) == 2
+    assert kinds.count(EventKind.PLAN_STEP_FINISHED.value) == 2
+
+    TaskStateProjection(state).attach(ledger, replay=True).close()
+    assert [step["status"] for step in state.steps] == ["completed", "completed"]

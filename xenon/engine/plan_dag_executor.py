@@ -153,6 +153,15 @@ class PlanDAGExecutorMixin:
                 ctx.set(f"step_{sid}_status", "skipped")
                 skipped_ids.add(sid)
                 self.callback.on_step_done(sid, False, result[:200])
+                self._record_step_finished(
+                    ctx,
+                    sid,
+                    success=False,
+                    status="skipped",
+                    summary=result,
+                    error="前置依赖失败或被跳过",
+                    total=total,
+                )
 
             if not to_run:
                 wave_index += 1  # while 循环：波次全跳过也必须前进索引
@@ -160,7 +169,9 @@ class PlanDAGExecutorMixin:
 
             # 可执行步骤：先发 on_step（主线程，按波内顺序），再执行
             for sid in to_run:
-                self.callback.on_step(sid, total, dag.step(sid).get("task", ""))
+                step_task = dag.step(sid).get("task", "")
+                self.callback.on_step(sid, total, step_task)
+                self._record_step_started(ctx, sid, step_task, total)
 
             parallel_downgrade: str | None = None
             if self.enable_parallel and len(to_run) > 1:
@@ -215,6 +226,15 @@ class PlanDAGExecutorMixin:
                         (sid, step_task, str(outcome.error or outcome.content))
                     )
                 self.callback.on_step_done(sid, outcome.success, outcome.content[:200])
+                self._record_step_finished(
+                    ctx,
+                    sid,
+                    success=outcome.success,
+                    status=status,
+                    summary=outcome.content,
+                    error=outcome.error,
+                    total=total,
+                )
                 logger.debug(f"步骤 {sid} 完成: {outcome.content[:100]}")
 
             # A failed wave is a stale plan boundary.  Replan the unfinished
@@ -267,8 +287,9 @@ class PlanDAGExecutorMixin:
                         ]
                         failed_ids.clear()
                         skipped_ids.clear()
-                        self._sync_task_plan(ctx, steps)
-                        self._sync_task_results(ctx, results)
+                        self._record_plan_event(ctx, steps)
+                        if ctx.get("_evidence_ledger") is None:
+                            self._sync_task_results(ctx, results)
                         self.callback.on_warning(
                             f"步骤失败，已重规划剩余 {len(new_steps)} 步 "
                             f"({self._replans_used}/{self.max_replans})"

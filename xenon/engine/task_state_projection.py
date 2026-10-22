@@ -19,7 +19,7 @@ from xenon.engine.task_state import TaskState
 
 
 class TaskStateProjection:
-    """Apply ``tool_observation`` events to one TaskState."""
+    """Apply plan and tool events to one TaskState."""
 
     def __init__(
         self,
@@ -32,8 +32,6 @@ class TaskStateProjection:
         self.ledger: EvidenceLedger | None = None
 
     def __call__(self, event: EvidenceEvent) -> None:
-        if event.kind != EventKind.TOOL_OBSERVATION.value:
-            return
         if not self.state.active:
             return
         payload = event.payload or {}
@@ -41,6 +39,32 @@ class TaskStateProjection:
         if task_id and self.state.task_id and task_id != self.state.task_id:
             return
 
+        if event.kind == EventKind.PLAN.value:
+            steps = payload.get("steps")
+            if isinstance(steps, list):
+                self.state.set_plan(steps)
+                self._publish()
+            return
+
+        if event.kind == EventKind.PLAN_STEP_STARTED.value:
+            self.state.set_step_status(payload.get("step_id"), "running")
+            self._publish()
+            return
+
+        if event.kind == EventKind.PLAN_STEP_FINISHED.value:
+            raw_status = str(payload.get("status") or "")
+            if raw_status == "skipped":
+                status = "skipped"
+            elif payload.get("success") is True or raw_status == "ok":
+                status = "completed"
+            else:
+                status = "failed"
+            self.state.set_step_status(payload.get("step_id"), status)
+            self._publish()
+            return
+
+        if event.kind != EventKind.TOOL_OBSERVATION.value:
+            return
         metadata = payload.get("metadata")
         if not isinstance(metadata, dict):
             metadata = {}
@@ -68,11 +92,7 @@ class TaskStateProjection:
     ) -> "TaskStateProjection":
         """Attach to the ledger, optionally replaying from a task boundary."""
         self.ledger = ledger
-        self.subscription = ledger.subscribe(
-            self,
-            kind=EventKind.TOOL_OBSERVATION,
-            replay=False,
-        )
+        self.subscription = ledger.subscribe(self, replay=False)
         if replay:
             for event in list(ledger.events):
                 if event.sequence >= int(start_sequence):
