@@ -1,6 +1,6 @@
 # Event source and projections
 
-Status: **foundation landed; TaskState migration pending**.
+Status: **EventLedger subscription + TaskState projection landed; plan projection pending**.
 
 ## Why
 
@@ -20,6 +20,9 @@ replayable projections.
   subscriber is isolated and cannot break the event log.
 - Tool observations now carry structured `metadata` (exit code, changed /
   committed paths, result id), so projections do not have to parse prose.
+- `TaskStateProjection` consumes `tool_observation` events, replays from a
+  `task_fact` boundary, and deduplicates by `result_id`.  `run_with_delivery`
+  uses it when a boundary exists and falls back to the tracker otherwise.
 - `EngineCallback` / `EventBus` are **ephemeral UI channels**.  They must not be
   the source of durable task state.
 
@@ -35,13 +38,13 @@ replayable projections.
 
 ## Target migration
 
-1. Add a `TaskStateProjection` that consumes `tool_observation` events and
-   replaces ad-hoc `update_from_calls` calls.
-2. Add explicit plan/step event kinds, so plan status is a projection instead
+1. Add explicit plan/step event kinds, so plan status is a projection instead
    of a second mutable state machine.
-3. Make plan and delivery statuses derived from the same event stream.
-4. Let TUI/logging subscribe through `EventBus`; keep them out of state
+2. Make plan and delivery statuses derived from the same event stream.
+3. Let TUI/logging subscribe through `EventBus`; keep them out of state
    transitions.
+4. Remove the remaining ad-hoc `update_from_calls` writes after the plan
+   projection is available.
 5. Keep the existing `ToolExecutionTracker` as an in-memory execution trace,
    not as a second source of truth for delivery.
 

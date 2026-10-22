@@ -257,21 +257,47 @@ class BaseEngine(ABC):
             LifecyclePhase,
         )
 
+        raw_state = context.get("_task_state")
+        task_id = (
+            str(raw_state.get("task_id"))
+            if isinstance(raw_state, dict) and raw_state.get("task_id")
+            else ""
+        )
         existing = context.get_evidence_runtime()
         if existing is not None:
             ledger = existing.ledger
             self.evidence_ledger = ledger
             context.set("_evidence_session_id", ledger.session_id)
             context.set("_evidence_ledger", ledger)
+            # A reused context can carry a ledger from an earlier task.  Add
+            # one task marker so projections can find the replay boundary.
+            if task_id and not any(
+                event.kind == EventKind.TASK_FACT.value
+                and event.payload.get("task_id") == task_id
+                for event in ledger.events
+            ):
+                ledger.append(
+                    LifecyclePhase.TASK,
+                    EventKind.TASK_FACT,
+                    EvidenceSource.ENGINE,
+                    {
+                        "engine": type(self).__name__,
+                        "run_id": self.run_id,
+                        "task_id": task_id,
+                    },
+                )
             return ledger
         if self.run_id is None:
             self._begin_run()
         ledger = EvidenceLedger(self.run_id or "unknown")
+        task_payload = {"engine": type(self).__name__, "run_id": self.run_id}
+        if task_id:
+            task_payload["task_id"] = task_id
         ledger.append(
             LifecyclePhase.TASK,
             EventKind.TASK_FACT,
             EvidenceSource.ENGINE,
-            {"engine": type(self).__name__, "run_id": self.run_id},
+            task_payload,
         )
         context.set("_evidence_session_id", self.run_id)
         context.set("_evidence_ledger", ledger)

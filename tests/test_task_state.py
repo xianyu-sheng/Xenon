@@ -432,3 +432,21 @@ def test_source_rewrite_after_commit_reopens_changes_gate() -> None:
 
     assert "changes" in state.missing_delivery()
     assert "dirty" in state.missing_delivery()
+
+
+def test_same_tool_result_is_applied_once_across_projections() -> None:
+    state = TaskState(objective="x", execution_level=2, required=["verify"])
+    call = SimpleNamespace(
+        tool_name="write_file",
+        params={"file_path": "src/app.py"},
+        success=True,
+        result_summary="written",
+        error=None,
+        result_id="result-1",
+        metadata={},
+    )
+    state.update_from_calls([call])
+    state.update_from_calls([call])
+
+    assert state.artifacts == ["src/app.py"]
+    assert state.artifacts_revision == 1

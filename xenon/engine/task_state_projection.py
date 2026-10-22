@@ -1,0 +1,88 @@
+"""Replayable projection: durable tool observations -> TaskState.
+
+TaskState is execution state, not evidence.  This projector is the bridge from
+the hash-chained EvidenceLedger to TaskState: it applies each tool observation
+once, in ledger order, and writes the resulting snapshot back to AgentContext.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from xenon.engine.evidence_runtime import (
+    EventKind,
+    EvidenceEvent,
+    EvidenceLedger,
+    EvidenceSubscription,
+)
+from xenon.engine.task_state import TaskState
+
+
+class TaskStateProjection:
+    """Apply ``tool_observation`` events to one TaskState."""
+
+    def __init__(
+        self,
+        state: TaskState,
+        context: Any | None = None,
+    ) -> None:
+        self.state = state
+        self.context = context
+        self.subscription: EvidenceSubscription | None = None
+        self.ledger: EvidenceLedger | None = None
+
+    def __call__(self, event: EvidenceEvent) -> None:
+        if event.kind != EventKind.TOOL_OBSERVATION.value:
+            return
+        if not self.state.active:
+            return
+        payload = event.payload or {}
+        task_id = str(payload.get("task_id") or "")
+        if task_id and self.state.task_id and task_id != self.state.task_id:
+            return
+
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        call_id = str(metadata.get("result_id") or event.event_id)
+        self.state.record_tool(
+            str(payload.get("tool") or ""),
+            payload.get("params") if isinstance(payload.get("params"), dict) else {},
+            success=bool(payload.get("success")),
+            result=str(payload.get("summary") or ""),
+            metadata=metadata,
+            call_id=call_id,
+        )
+        self._publish()
+
+    def _publish(self) -> None:
+        if self.context is not None and hasattr(self.context, "set"):
+            self.context.set("_task_state", self.state.to_dict())
+
+    def attach(
+        self,
+        ledger: EvidenceLedger,
+        *,
+        start_sequence: int = 0,
+        replay: bool = True,
+    ) -> "TaskStateProjection":
+        """Attach to the ledger, optionally replaying from a task boundary."""
+        self.ledger = ledger
+        self.subscription = ledger.subscribe(
+            self,
+            kind=EventKind.TOOL_OBSERVATION,
+            replay=False,
+        )
+        if replay:
+            for event in list(ledger.events):
+                if event.sequence >= int(start_sequence):
+                    self(event)
+        return self
+
+    def close(self) -> None:
+        if self.subscription is not None:
+            ledger = self.ledger
+            if ledger is not None:
+                ledger.unsubscribe(self.subscription)
+        self.subscription = None
+        self.ledger = None

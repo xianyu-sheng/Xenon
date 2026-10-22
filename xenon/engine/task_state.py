@@ -158,6 +158,7 @@ class TaskState:
     verified_revision: int = 0
     tests: list[str] = field(default_factory=list)
     failed_tests: list[str] = field(default_factory=list)
+    processed_tool_ids: list[str] = field(default_factory=list)
     commit: str = ""
     committed_artifacts: list[str] = field(default_factory=list)
     committed_source_paths: list[str] = field(default_factory=list)
@@ -206,6 +207,9 @@ class TaskState:
             verified_revision=max(0, int(raw.get("verified_revision") or 0)),
             tests=[str(t) for t in raw.get("tests", []) if t],
             failed_tests=[str(t) for t in raw.get("failed_tests", []) if t],
+            processed_tool_ids=[
+                str(item) for item in raw.get("processed_tool_ids", []) if item
+            ],
             commit=_text(raw.get("commit")),
             committed_artifacts=[
                 str(p) for p in raw.get("committed_artifacts", []) if p
@@ -241,6 +245,7 @@ class TaskState:
             "verified_revision": self.verified_revision,
             "tests": self.tests[-20:],
             "failed_tests": self.failed_tests[-10:],
+            "processed_tool_ids": self.processed_tool_ids[-200:],
             "commit": self.commit,
             "committed_artifacts": self.committed_artifacts[-30:],
             "committed_source_paths": self.committed_source_paths[-30:],
@@ -378,6 +383,7 @@ class TaskState:
         result: str = "",
         error: str = "",
         metadata: dict[str, Any] | None = None,
+        call_id: str | None = None,
     ) -> None:
         """Update state from one actual tool call.
 
@@ -386,6 +392,12 @@ class TaskState:
         """
         self.updated_at = time.time()
         tool = _text(tool)
+        call_key = _text(call_id)
+        if call_key:
+            if call_key in self.processed_tool_ids:
+                return
+            self.processed_tool_ids.append(call_key)
+            self.processed_tool_ids = self.processed_tool_ids[-200:]
         metadata = metadata if isinstance(metadata, dict) else {}
         command = _tool_command(tool, params)
         result_text = _text(result)
@@ -497,6 +509,7 @@ class TaskState:
                 result=_text(getattr(call, "result_summary", "")),
                 error=_text(getattr(call, "error", "")),
                 metadata=getattr(call, "metadata", {}) or {},
+                call_id=_text(getattr(call, "result_id", "")),
             )
 
     def delivery_prompt(self) -> str:

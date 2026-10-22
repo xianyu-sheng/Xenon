@@ -714,18 +714,27 @@ class ToolExecutor:
         context = context or AgentContext()
         if self.evidence_ledger is not None:
             context.set("_evidence_ledger", self.evidence_ledger)
+        raw_state = context.get("_task_state")
+        task_id = (
+            str(raw_state.get("task_id"))
+            if isinstance(raw_state, dict) and raw_state.get("task_id")
+            else ""
+        )
+        payload: dict[str, Any] = {
+            "tool": tool_name,
+            "params": mask_sensitive_params(params),
+            "success": success,
+            "summary": observation[:500],
+            "metadata": dict(metadata or {}),
+        }
+        if task_id:
+            payload["task_id"] = task_id
         self._ledger_event(
             context,
             LifecyclePhase.POST_TOOL,
             EventKind.TOOL_OBSERVATION,
             EvidenceSource.TOOL,
-            {
-                "tool": tool_name,
-                "params": mask_sensitive_params(params),
-                "success": success,
-                "summary": observation[:500],
-                "metadata": dict(metadata or {}),
-            },
+            payload,
         )
 
     def set_runtime(self, runtime: Any) -> None:
@@ -886,6 +895,8 @@ class ToolExecutor:
                 ):
                     if key in raw:
                         tracker_metadata[key] = raw[key]
+            if result_id:
+                tracker_metadata["result_id"] = result_id
             execution_result = ToolExecuteResult(
                 tool_name=tool_name,
                 success=success,

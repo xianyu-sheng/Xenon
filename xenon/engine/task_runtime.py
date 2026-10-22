@@ -23,8 +23,10 @@ def run_with_delivery(
     max_delivery_retries: int = 3,
 ) -> str:
     """Run an engine once, then enforce the durable delivery contract."""
+    from xenon.engine.evidence_runtime import EventKind
     from xenon.engine.result import TerminationReason, build_agent_result
     from xenon.engine.task_state import TaskState
+    from xenon.engine.task_state_projection import TaskStateProjection
     from xenon.engine.tool_tracker import ToolExecutionTracker
 
     try:
@@ -45,8 +47,37 @@ def run_with_delivery(
     if tracker is not None:
         aggregate.calls.extend(list(getattr(tracker, "calls", []) or []))
 
+    # The evidence ledger is the durable source.  Replay its tool observations
+    # into TaskState when we can identify this task's boundary; keep the
+    # tracker path as a fallback for engines/contexts without a ledger.
+    projection: TaskStateProjection | None = None
+    use_projection = False
+    ledger = context.get("_evidence_ledger") if context is not None else None
+    if ledger is not None and hasattr(ledger, "events"):
+        start_sequence = 0
+        for event in getattr(ledger, "events", []):
+            if (
+                event.kind == EventKind.TASK_FACT.value
+                and event.payload.get("task_id") == state.task_id
+            ):
+                start_sequence = event.sequence
+                break
+        projection = TaskStateProjection(state, context)
+        if start_sequence:
+            projection.attach(
+                ledger,
+                start_sequence=start_sequence,
+                replay=True,
+            )
+            use_projection = True
+        else:
+            # No boundary marker: let the tracker fill the current run and
+            # project future events only (no historical cross-task replay).
+            projection.attach(ledger, replay=False)
+
     def _refresh() -> list[str]:
-        state.update_from_calls(aggregate.calls)
+        if not use_projection:
+            state.update_from_calls(aggregate.calls)
         missing = state.missing_delivery()
         if not missing:
             state.maybe_complete()
@@ -105,6 +136,8 @@ def run_with_delivery(
         if tracker is not None:
             aggregate.calls.extend(list(getattr(tracker, "calls", []) or []))
 
+    if projection is not None:
+        projection.close()
     engine._last_tracker = aggregate
     if getattr(engine, "_last_termination_reason", None) is None:
         engine._last_termination_reason = TerminationReason.FINAL
