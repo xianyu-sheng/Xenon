@@ -1052,6 +1052,16 @@ class ToolNode(
         # v0.9.6: 强制署名——命令形式的 git commit 也带 Co-authored-by。
         resolved_cmd = ensure_commit_attribution(resolved_cmd)
 
+        # Pytest through a shell is the single largest source of ambiguous
+        # "no tests ran"/exit-code failures.  Execute the narrow pytest grammar
+        # directly; all other commands keep the existing shell path.
+        if not self.command_prefix and not self.command_prelude:
+            from xenon.utils.test_command import plan_pytest
+
+            pytest_plan = plan_pytest(resolved_cmd, self.cwd or Path.cwd())
+            if pytest_plan is not None:
+                return self._exec_pytest_plan(resolved_cmd, pytest_plan, context)
+
         shell_command = (
             f"{self.command_prelude}\n{resolved_cmd}"
             if self.command_prelude
@@ -1143,6 +1153,70 @@ class ToolNode(
                 "success": False,
                 "error": error_msg,
             }
+
+    def _exec_pytest_plan(
+        self, command: str, plan: Any, context: AgentContext
+    ) -> dict[str, Any]:
+        """Execute a shell-free pytest plan and preserve real exit codes."""
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        returncode = 0
+        env = dict(os.environ)
+        env.update(plan.env)
+        # Prevent test bytecode from quietly making the worktree dirty after
+        # the commit step; it is not a deliverable and confused the final gate.
+        env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+        for args in plan.invocations:
+            try:
+                proc = subprocess.run(
+                    [sys.executable, "-m", "pytest", *args],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=self.timeout,
+                    cwd=plan.cwd,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired:
+                error_msg = f"测试执行超时 ({self.timeout}s): {command}"
+                logger.error("[%s] %s", self.id, error_msg)
+                return {
+                    "action_type": "command",
+                    "command": command,
+                    "returncode": -1,
+                    "stdout": "".join(stdout_parts),
+                    "stderr": "".join(stderr_parts) + error_msg,
+                    "success": False,
+                    "error": error_msg,
+                }
+            except OSError as exc:
+                error_msg = f"测试命令启动失败: {exc}"
+                return {
+                    "action_type": "command",
+                    "command": command,
+                    "returncode": -1,
+                    "stdout": "".join(stdout_parts),
+                    "stderr": "".join(stderr_parts) + error_msg,
+                    "success": False,
+                    "error": error_msg,
+                }
+            stdout_parts.append(proc.stdout)
+            stderr_parts.append(proc.stderr)
+            if proc.returncode != 0 and returncode == 0:
+                returncode = proc.returncode
+        output = ("".join(stdout_parts) + "".join(stderr_parts)).strip()
+        if output:
+            self._write_output(context, output)
+        logger.info("[%s] pytest 完成，返回码: %s", self.id, returncode)
+        return {
+            "action_type": "command",
+            "command": command,
+            "returncode": returncode,
+            "stdout": "".join(stdout_parts),
+            "stderr": "".join(stderr_parts),
+            "success": returncode == 0,
+        }
 
     # Web/document retrieval is implemented by WebToolsMixin.
 

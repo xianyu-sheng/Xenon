@@ -44,7 +44,7 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
 优先调用 `submit_plan` 工具提交计划（原生 function calling）；只有当前端点不支持
 工具调用时，才直接输出一个 JSON，不要输出其他内容：
 ```json
-{{"analysis":"简要分析任务目标","steps":[{{"id":1,"task":"步骤描述","tool":"工具名或null","params":{{"参数名":"值"}},"depends_on":[]}}]}}
+{{"analysis":"简要分析任务目标","steps":[{{"id":1,"task":"步骤描述","kind":"inspect|edit|verify|commit|clean|execute|think","tool":"工具名或null","params":{{"参数名":"值"}},"requires_write":false,"verify_cmd":"","target_paths":[],"depends_on":[]}}]}}
 ```
 
 ## 规划原则
@@ -71,6 +71,12 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
     头号原因。修改已有文件时用 edit_file/batch_edit，但 `old_text`/`new_text`
     留空（执行阶段会先读后改）；只有新建小文件才用 write_file，且只放最小
     必要内容（超过约 10 行请改用 tool=null 让执行阶段生成）。
+12. **步骤契约必须结构化**：每个步骤都要填 `kind`。代码交付计划必须包含
+    至少一个 `kind="verify"` 的验证步骤；验证步骤必须给出可直接执行的
+    `verify_cmd`（例如 `python -m pytest tests/test_x.py -q`），提交步骤填
+    `kind="commit"`，清理工作区填 `kind="clean"`。写文件步骤的
+    `requires_write=true`，并用 `target_paths` 列出预期修改的文件。
+    不要让执行器从中文描述里猜这些字段。
 
 {execution_contract}
 
@@ -200,6 +206,32 @@ SUBMIT_PLAN_TOOL: dict[str, Any] = {
                                 "items": {"type": "integer"},
                                 "description": "依赖的前置步骤 id；无依赖留空数组",
                             },
+                            "kind": {
+                                "type": "string",
+                                "enum": [
+                                    "inspect",
+                                    "edit",
+                                    "verify",
+                                    "commit",
+                                    "clean",
+                                    "execute",
+                                    "think",
+                                ],
+                                "description": "步骤类型；代码任务必须有 verify 步骤",
+                            },
+                            "requires_write": {
+                                "type": "boolean",
+                                "description": "本步是否必须产生真实写操作",
+                            },
+                            "verify_cmd": {
+                                "type": "string",
+                                "description": "verify 步骤可直接重跑的命令",
+                            },
+                            "target_paths": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "本步预期修改的文件路径",
+                            },
                         },
                         "required": ["id", "task", "tool", "params"],
                     },
@@ -246,6 +278,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         )
         self.max_steps = max_steps
         self.max_replans = max(0, int(max_replans))
+        self.step_repair_attempts = 3
         self._replans_used = 0
         # P2-E2 双模型：规划用 model_priority（默认），执行/总结用 executor_model_priority
         # （默认回退到规划模型列表，向后兼容）。
@@ -395,6 +428,9 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         # SWE-bench 实测（django-16408）：plan 生成的 edit 步骤缺 old_text
         # 确定性执行必然失败，补救轮 1-3 轮也难一次成功。
         steps = self._normalize_incomplete_edit_steps(steps)
+        from xenon.engine.plan_contract import normalize_plan_steps
+
+        steps = normalize_plan_steps(steps, plan_version=1, origin="plan")
 
         if not steps:
             self._last_termination_reason = "error"
@@ -431,7 +467,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         # a Plan-Execute task with no update_plan call had empty steps and
         # could be marked completed after a commit even when planned work
         # failed.  The plan is execution state, not evidence.
-        self._record_plan_event(ctx, capped)
+        self._record_plan_event(ctx, capped, reason="initial plan")
 
         # Phase 2: Execution
         logger.info("Plan-Execute Phase 2: 执行中...")
@@ -526,29 +562,20 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         return bool(cls._WRITE_STEP_RE.search(str(step.get("task") or "")))
 
     @staticmethod
-    def _sync_task_plan(ctx: AgentContext, steps: list[dict[str, Any]]) -> None:
+    def _sync_task_plan(
+        ctx: AgentContext,
+        steps: list[dict[str, Any]],
+        *,
+        version: int = 1,
+        reason: str = "",
+    ) -> None:
         """Mirror the engine plan into TaskState for cross-turn truthfulness."""
         from xenon.engine.task_state import TaskState
 
         state = TaskState.from_context(ctx)
         if state is None or not state.active:
             return
-        state.set_plan(
-            [
-                {
-                    "step": str(step.get("task") or step.get("step") or ""),
-                    "status": "pending",
-                    **(
-                        {"id": str(step["id"])}
-                        if step.get("id") not in (None, "")
-                        else {}
-                    ),
-                }
-                for step in steps
-                if isinstance(step, dict)
-                and (step.get("task") or step.get("step"))
-            ]
-        )
+        state.set_plan(steps, version=version, reason=reason)
         ctx.set("_task_state", state.to_dict())
 
     @staticmethod
@@ -588,30 +615,64 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         return str(raw.get("task_id")) if isinstance(raw, dict) and raw.get("task_id") else ""
 
     def _record_plan_event(
-        self, ctx: AgentContext, steps: list[dict[str, Any]]
+        self,
+        ctx: AgentContext,
+        steps: list[dict[str, Any]],
+        *,
+        reason: str = "",
     ) -> None:
-        """Record the plan as a durable fact, falling back to direct state."""
+        """Record a versioned plan snapshot and its structured contracts."""
         from xenon.engine.evidence_runtime import (
             EventKind,
             EvidenceSource,
             LifecyclePhase,
         )
+        from xenon.engine.plan_contract import normalize_plan_steps
+        from xenon.engine.task_state import TaskState
 
+        state = TaskState.from_context(ctx)
         ledger = ctx.get("_evidence_ledger")
+        task_id = self._task_event_id(ctx)
+        version = 1
+        if ledger is not None and hasattr(ledger, "events"):
+            prior_versions = [
+                int(event.payload.get("version") or 1)
+                for event in ledger.events
+                if event.kind == EventKind.PLAN.value
+                and (
+                    not task_id
+                    or str(event.payload.get("task_id") or "") == task_id
+                )
+            ]
+            version = max(prior_versions, default=0) + 1
+        elif state is not None:
+            version = state.plan_version + (1 if state.steps else 0)
+        steps = normalize_plan_steps(steps, plan_version=version, origin="replan")
         if ledger is None or not hasattr(ledger, "append"):
-            self._sync_task_plan(ctx, steps)
+            self._sync_task_plan(ctx, steps, version=version, reason=reason)
             return
         payload_steps = [
             {
                 "id": step.get("id"),
                 "task": str(step.get("task") or step.get("step") or ""),
                 "tool": step.get("tool"),
+                "kind": step.get("kind"),
+                "requires_write": bool(step.get("requires_write")),
+                "verify_cmd": step.get("verify_cmd") or "",
+                "target_paths": list(step.get("target_paths") or []),
+                "origin": step.get("origin") or "plan",
+                "parent_step_id": step.get("parent_step_id"),
+                "plan_version": version,
             }
             for step in steps
             if isinstance(step, dict)
             and (step.get("task") or step.get("step"))
         ]
-        payload: dict[str, Any] = {"steps": payload_steps}
+        payload: dict[str, Any] = {
+            "steps": payload_steps,
+            "version": version,
+            "reason": reason,
+        }
         task_id = self._task_event_id(ctx)
         if task_id:
             payload["task_id"] = task_id
@@ -628,6 +689,10 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         step_id: Any,
         task: str,
         total: int,
+        *,
+        step: dict[str, Any] | None = None,
+        parent_step_id: Any = None,
+        attempt: int = 1,
     ) -> None:
         from xenon.engine.evidence_runtime import (
             EventKind,
@@ -641,13 +706,31 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
 
             state = TaskState.from_context(ctx)
             if state is not None:
-                state.set_step_status(step_id, "running")
+                state.upsert_step(
+                    {
+                        "id": step_id,
+                        "task": task,
+                        "kind": (step or {}).get("kind"),
+                        "requires_write": (step or {}).get("requires_write"),
+                        "verify_cmd": (step or {}).get("verify_cmd"),
+                        "parent_step_id": parent_step_id,
+                        "origin": (step or {}).get("origin") or "plan",
+                        "attempt": attempt,
+                    },
+                    status="running",
+                )
                 ctx.set("_task_state", state.to_dict())
             return
         payload: dict[str, Any] = {
             "step_id": step_id,
             "task": task,
             "total": total,
+            "kind": (step or {}).get("kind"),
+            "requires_write": (step or {}).get("requires_write"),
+            "verify_cmd": (step or {}).get("verify_cmd"),
+            "parent_step_id": parent_step_id,
+            "origin": (step or {}).get("origin") or "plan",
+            "attempt": attempt,
         }
         task_id = self._task_event_id(ctx)
         if task_id:
@@ -669,6 +752,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         summary: str = "",
         error: str | None = None,
         total: int = 0,
+        attempts: int = 1,
     ) -> None:
         from xenon.engine.evidence_runtime import (
             EventKind,
@@ -695,6 +779,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             "summary": summary[:500],
             "error": (error or "")[:500],
             "total": total,
+            "attempts": attempts,
         }
         task_id = self._task_event_id(ctx)
         if task_id:
@@ -878,7 +963,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         )
 
         remediation_step = {
-            "id": len(results) + 1,
+            "id": f"remediation-{len(results) + 1}",
             "task": (
                 "【强制补救】前面步骤只完成了侦察/分析，尚未实际修改任何文件。"
                 "请立即使用 write_file / edit_file / batch_write 等工具真正修改"
@@ -887,9 +972,18 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             "tool": None,
             "params": {},
             "depends_on": [],
+            "kind": "edit",
+            "requires_write": True,
+            "origin": "remediation",
         }
         step_id = remediation_step["id"]
-        self._record_step_started(ctx, step_id, remediation_step["task"], total + 1)
+        self._record_step_started(
+            ctx,
+            step_id,
+            remediation_step["task"],
+            total + 1,
+            step=remediation_step,
+        )
         prev_results = self._build_prev_results(results)
         write_count_before = self._successful_write_count(tracker)
         raw_result = self._execute_step_with_llm(
@@ -980,6 +1074,136 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             normalized.append(step)
         return normalized
 
+    def _repair_failed_step(
+        self,
+        *,
+        step: dict[str, Any],
+        step_id: Any,
+        step_task: str,
+        total: int,
+        outcome: StepOutcome,
+        prev_results: str,
+        user_input: str,
+        tracker: ToolExecutionTracker,
+        ctx: AgentContext,
+        steering: list[dict[str, Any]] | None = None,
+    ) -> tuple[StepOutcome, int]:
+        """Repair one failed step in place before replanning the whole task.
+
+        The failed observation (including a real command exit/output tail) is
+        the repair input.  A second identical failure is not retried blindly;
+        after ``step_repair_attempts`` the caller may replan structurally.
+        """
+        from xenon.engine.plan_contract import (
+            infer_step_kind,
+            step_requires_write,
+            step_verify_cmd,
+        )
+
+        attempts = 1
+        if outcome.success:
+            return outcome, attempts
+        text = str(outcome.error or outcome.content or "")
+        if any(token in text for token in ("拒绝", "取消", "cancelled")):
+            return outcome, attempts
+        max_attempts = max(1, int(getattr(self, "step_repair_attempts", 3)))
+        if max_attempts <= 1:
+            return outcome, attempts
+        requires_write = step_requires_write(step)
+        verify_cmd = step_verify_cmd(step)
+        kind = infer_step_kind(step)
+        tool = str(step.get("tool") or "")
+        last_error = text[:600]
+        for _repair_index in range(1, max_attempts):
+            attempts += 1
+            repair_task = (
+                step_task
+                + chr(10) + chr(10)
+                + "⚠️ 本步骤上一次失败，必须先修复，不要重复原动作："
+                + chr(10)
+                + last_error
+                + chr(10)
+                + "请基于失败输出修改并重新执行；完成后给出 final_answer。"
+                + chr(10)
+                + (
+                    "本步骤必须真正产生写操作。" + chr(10)
+                    if requires_write
+                    else ""
+                )
+                + (
+                    "修复后必须重跑同一验证命令：" + verify_cmd + chr(10)
+                    if verify_cmd
+                    else ""
+                )
+            )
+            write_before = self._successful_write_count(tracker)
+            calls_before = len(getattr(tracker, "calls", []) or [])
+            try:
+                raw = self._execute_step_with_llm(
+                    step_id,
+                    total,
+                    repair_task,
+                    prev_results,
+                    user_input,
+                    tracker,
+                    context=ctx,
+                    steering=steering,
+                    require_write_tool=requires_write,
+                )
+            except Exception as exc:  # noqa: BLE001 — repair must not crash task
+                logger.warning("步骤 %s 修复轮异常: %s", step_id, exc)
+                return StepOutcome(
+                    str(outcome.content),
+                    False,
+                    "步骤修复异常: " + str(exc)[:400],
+                ), attempts
+            candidate = self._step_outcome(raw)
+            if candidate.success:
+                new_calls = list(getattr(tracker, "calls", []) or [])[calls_before:]
+                if requires_write and (
+                    self._successful_write_count(tracker) <= write_before
+                ):
+                    candidate = StepOutcome(
+                        candidate.content,
+                        False,
+                        "修复步骤声称完成，但没有新增写操作",
+                    )
+                elif kind == "verify" and verify_cmd:
+                    verified = any(
+                        call.success
+                        and call.tool_name in {"command", "run_script"}
+                        and verify_cmd in str(
+                            getattr(call, "params", {}).get("command")
+                            or getattr(call, "params", {}).get("action")
+                            or getattr(call, "params", {}).get("cmd")
+                            or ""
+                        )
+                        for call in new_calls
+                    )
+                    if not verified:
+                        candidate = StepOutcome(
+                            candidate.content,
+                            False,
+                            "修复步骤没有重跑同一验证命令",
+                        )
+                elif tool and tool != "null" and not requires_write:
+                    if not any(
+                        call.success and call.tool_name == tool for call in new_calls
+                    ):
+                        candidate = StepOutcome(
+                            candidate.content,
+                            False,
+                            f"修复步骤没有产生新的成功 {tool} 调用",
+                        )
+                if candidate.success:
+                    return candidate, attempts
+            last_error = str(candidate.error or candidate.content or last_error)[:600]
+        return StepOutcome(
+            str(outcome.content),
+            False,
+            "步骤修复未成功: " + last_error,
+        ), attempts
+
     def _run_serial(
         self,
         steps: list[dict[str, Any]],
@@ -1025,6 +1249,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                     ctx,
                     _steer_pending,
                     done_ids,
+                    tracker=tracker,
                 )
                 if new_steps:
                     steps = new_steps
@@ -1037,7 +1262,9 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
 
             logger.debug(f"执行步骤 {step_id}: {step_task}")
             self.callback.on_step(step_id, total, step_task)
-            self._record_step_started(ctx, step_id, step_task, total)
+            self._record_step_started(
+                ctx, step_id, step_task, total, step=step
+            )
 
             prev_results = self._build_prev_results(results)
             write_count_before = self._successful_write_count(tracker)
@@ -1080,6 +1307,18 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                     False,
                     "计划步骤要求写盘但未产生写操作",
                 )
+            outcome, step_attempts = self._repair_failed_step(
+                step=step,
+                step_id=step_id,
+                step_task=step_task,
+                total=total,
+                outcome=outcome,
+                prev_results=prev_results,
+                user_input=user_input,
+                tracker=tracker,
+                ctx=ctx,
+                steering=_steer_pending,
+            )
             i += 1
             self._last_iterations = len(results) + 1
 
@@ -1104,6 +1343,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 summary=outcome.content,
                 error=outcome.error,
                 total=total,
+                attempts=step_attempts,
             )
             logger.debug(f"步骤 {step_id} 完成: {outcome.content[:100]}")
 
@@ -1129,6 +1369,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                     [{"text": failure_note}],
                     done_ids,
                     failure=True,
+                    tracker=tracker,
                 )
                 if new_steps:
                     self._replans_used += 1
@@ -1138,7 +1379,11 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                     )
                     steps = new_steps
                     i = 0
-                    self._record_plan_event(ctx, steps)
+                    self._record_plan_event(
+                        ctx,
+                        steps,
+                        reason=f"step {step_id} failed: {failure_note[:240]}",
+                    )
                     if ctx.get("_evidence_ledger") is None:
                         self._sync_task_results(ctx, results)
                     continue
@@ -1194,6 +1439,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         done_ids: set[Any],
         *,
         failure: bool = False,
+        tracker: ToolExecutionTracker | None = None,
     ) -> list[dict[str, Any]]:
         """Replan remaining work after steering or a failed step.
 
@@ -1218,6 +1464,11 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         if not new_steps:
             self.callback.on_warning("重规划未生成有效步骤，继续原计划")
             return []
+        from xenon.engine.plan_contract import normalize_plan_steps
+
+        new_steps = normalize_plan_steps(
+            new_steps, plan_version=1, origin="replan"
+        )
         # 过滤已完成步骤（按规范化 id），避免重复执行。
         done_keys = {canonical_step_id(sid) for sid in done_ids}
         filtered = [
@@ -1226,6 +1477,18 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         ]
         if not filtered:
             self.callback.on_warning("重规划未产生新的剩余步骤，保留原计划")
+            return []
+        from xenon.engine.plan_contract import step_requires_write
+
+        if (
+            self._task_requires_write(user_input, ctx)
+            and not self._has_successful_write(tracker)
+            and not any(step_requires_write(step) for step in filtered)
+        ):
+            self.callback.on_warning(
+                "重规划丢失了写步骤；拒绝只读计划，保留原计划继续修复"
+            )
+            logger.warning("重规划结果缺少写步骤，已回退到原计划")
             return []
         return filtered
 

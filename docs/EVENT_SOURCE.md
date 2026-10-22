@@ -1,6 +1,6 @@
 # Event source and projections
 
-Status: **EventLedger subscription + TaskState/plan projections landed; remaining ad-hoc fallbacks marked below**.
+Status: **EventLedger subscription + versioned TaskState/plan projections landed; remaining ad-hoc fallbacks marked below**.
 
 ## Why
 
@@ -47,7 +47,9 @@ replayable projections.
 ## Target migration
 
 1. Remove the remaining ad-hoc `update_from_calls` / direct `_sync_task_*`
-   writes when a task boundary exists.
+   writes when a task boundary exists.  PLAN snapshots now carry
+   `version/reason`; TaskState keeps `plan_history`, and step events can
+   upsert remediation rows.  The remaining fallbacks are tracked below.
 2. Keep TUI/logging subscriptions on `EventBus` (now exposed by Base and
    combined engines) and out of state transitions; finish migrating remaining
    UI reads away from callback-owned state.

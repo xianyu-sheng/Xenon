@@ -541,6 +541,7 @@ class EngineHostMixin:
                 panel = callback.get_thinking_panel()
 
             self._render_engine_result(callback, result, spec.result_title)
+            self._render_plan_state(spec)
             # 结构层：回合节点状态（TurnGate 单一来源）。
             # pass/remind → passed（remind 附核验清单）；fail 重试耗尽 →
             # degraded（降级发布）；fuse → fused（未完成交付）。
@@ -621,6 +622,34 @@ class EngineHostMixin:
             self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
                 self._captured_log = self._stop_log_capture()
+
+    def _render_plan_state(self, spec: EngineSpec) -> None:
+        """Render the durable plan after a plan-family run.
+
+        Execution status comes from TaskState (the projection), not from a
+        callback-local summary.  Failed rows keep their real error text.
+        """
+        if not spec.name.startswith("plan"):
+            return
+        try:
+            from xenon.engine.task_state import TaskState
+
+            state = TaskState.from_context(self.agent_context)
+        except Exception as exc:  # noqa: BLE001 — display must not break a run
+            logger.debug("读取计划状态失败: %s", exc)
+            return
+        if state is None or not state.steps:
+            return
+        console.print()
+        console.print(Text(state.plan_summary(), style="dim"))
+        missing = state.missing_delivery()
+        if missing:
+            console.print(
+                Text(
+                    "交付缺口: " + "、".join(missing),
+                    style="yellow",
+                )
+            )
 
     # ── Mid-task steering 输入监听 ──────────────────────────
     # 引擎运行期间，用户可以在终端继续输入。这些输入通过 engine.steer()

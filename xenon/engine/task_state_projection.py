@@ -42,12 +42,32 @@ class TaskStateProjection:
         if event.kind == EventKind.PLAN.value:
             steps = payload.get("steps")
             if isinstance(steps, list):
-                self.state.set_plan(steps)
+                self.state.set_plan(
+                    steps,
+                    version=int(payload.get("version") or self.state.plan_version),
+                    reason=str(payload.get("reason") or ""),
+                )
                 self._publish()
             return
 
         if event.kind == EventKind.PLAN_STEP_STARTED.value:
-            self.state.set_step_status(payload.get("step_id"), "running")
+            step_id = payload.get("step_id")
+            self.state.upsert_step(
+                {
+                    "id": step_id,
+                    "task": payload.get("task"),
+                    "kind": payload.get("kind"),
+                    "requires_write": payload.get("requires_write"),
+                    "verify_cmd": payload.get("verify_cmd"),
+                    "parent_step_id": payload.get("parent_step_id"),
+                    "origin": payload.get("origin") or "plan",
+                    "plan_version": payload.get("plan_version"),
+                    "attempt": payload.get("attempt"),
+                    "status": "running",
+                },
+                status="running",
+            )
+            self.state.set_step_status(step_id, "running")
             self._publish()
             return
 
@@ -59,7 +79,28 @@ class TaskStateProjection:
                 status = "completed"
             else:
                 status = "failed"
-            self.state.set_step_status(payload.get("step_id"), status)
+            step_id = payload.get("step_id")
+            details = {
+                "attempts": payload.get("attempts"),
+                "last_error": payload.get("error"),
+                "last_summary": payload.get("summary"),
+            }
+            if not self.state.set_step_status(step_id, status, **details):
+                self.state.upsert_step(
+                    {
+                        "id": step_id,
+                        "task": payload.get("task"),
+                        "kind": payload.get("kind"),
+                        "requires_write": payload.get("requires_write"),
+                        "verify_cmd": payload.get("verify_cmd"),
+                        "parent_step_id": payload.get("parent_step_id"),
+                        "origin": payload.get("origin") or "remediation",
+                        "plan_version": payload.get("plan_version"),
+                        "status": status,
+                        **details,
+                    },
+                    status=status,
+                )
             self._publish()
             return
 

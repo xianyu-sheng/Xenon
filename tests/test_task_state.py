@@ -98,7 +98,10 @@ def test_update_plan_and_failed_calls_do_not_fake_progress() -> None:
         "write_file", {"file_path": "x.py"}, success=False, error="denied"
     )
 
-    assert state.incomplete_steps() == [{"step": "b", "status": "pending"}]
+    assert [
+        (step["step"], step["status"])
+        for step in state.incomplete_steps()
+    ] == [("b", "pending")]
     assert state.tests == []
     assert state.artifacts == []
 
@@ -505,3 +508,46 @@ def test_verification_failure_keeps_real_output_for_repair_prompt() -> None:
         result="1 passed",
     )
     assert state.verification_failures == []
+
+
+def test_reconcile_uses_structured_step_kind_not_text() -> None:
+    state = TaskState(
+        objective="implement",
+        intent="write_code",
+        execution_level=3,
+        steps=[
+            {
+                "id": "1",
+                "step": "do the work",
+                "kind": "edit",
+                "status": "completed",
+            },
+            {
+                "id": "2",
+                "step": "verify it",
+                "kind": "verify",
+                "status": "completed",
+            },
+        ],
+        required=["verify", "commit"],
+    )
+
+    state.reconcile_delivery_steps(["changes"])
+
+    assert state.steps[0]["status"] == "failed"
+    assert state.steps[1]["status"] == "completed"
+
+
+def test_plan_revision_archives_old_steps() -> None:
+    state = TaskState(objective="x", execution_level=3)
+    state.set_plan([{"id": "1", "step": "old", "status": "completed"}])
+    state.set_plan(
+        [{"id": "2", "step": "new", "status": "pending"}],
+        version=2,
+        reason="old step failed",
+    )
+
+    assert state.plan_version == 2
+    assert state.plan_history[0]["version"] == 1
+    assert state.plan_history[0]["steps"][0]["step"] == "old"
+    assert [step["step"] for step in state.steps] == ["new"]

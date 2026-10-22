@@ -8,6 +8,7 @@ therefore auto-save/resume) as plain JSON.
 
 from __future__ import annotations
 
+import copy
 import re
 import time
 import uuid
@@ -164,7 +165,9 @@ class TaskState:
     execution_level: int = 0
     task_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     status: str = "active"  # active | completed | blocked
-    steps: list[dict[str, str]] = field(default_factory=list)
+    steps: list[dict[str, Any]] = field(default_factory=list)
+    plan_version: int = 1
+    plan_history: list[dict[str, Any]] = field(default_factory=list)
     artifacts: list[str] = field(default_factory=list)
     artifacts_revision: int = 0
     verified_revision: int = 0
@@ -204,16 +207,40 @@ class TaskState:
             status=_text(raw.get("status")) or "active",
             steps=[
                 {
-                    "step": _text(s.get("step")),
-                    "status": _text(s.get("status")),
+                    "step": _text(s.get("step") or s.get("task")),
+                    "status": _text(s.get("status")) or "pending",
                     **(
                         {"id": str(s["id"])}
                         if s.get("id") not in (None, "")
                         else {}
                     ),
+                    **{
+                        key: copy.deepcopy(s[key])
+                        for key in (
+                            "kind",
+                            "requires_write",
+                            "verify_cmd",
+                            "target_paths",
+                            "origin",
+                            "parent_step_id",
+                            "plan_version",
+                            "attempt",
+                            "attempts",
+                            "last_error",
+                            "last_summary",
+                            "superseded_by",
+                        )
+                        if key in s
+                    },
                 }
                 for s in raw.get("steps", [])
-                if isinstance(s, dict) and s.get("step")
+                if isinstance(s, dict) and (s.get("step") or s.get("task"))
+            ],
+            plan_version=max(1, int(raw.get("plan_version") or 1)),
+            plan_history=[
+                item
+                for item in raw.get("plan_history", [])
+                if isinstance(item, dict)
             ],
             artifacts=[str(p) for p in raw.get("artifacts", []) if p],
             artifacts_revision=max(0, int(raw.get("artifacts_revision") or 0)),
@@ -258,6 +285,8 @@ class TaskState:
             "execution_level": self.execution_level,
             "status": self.status,
             "steps": self.steps,
+            "plan_version": self.plan_version,
+            "plan_history": self.plan_history[-10:],
             "artifacts": self.artifacts[-30:],
             "artifacts_revision": self.artifacts_revision,
             "verified_revision": self.verified_revision,
@@ -283,37 +312,219 @@ class TaskState:
     def active(self) -> bool:
         return self.status == "active"
 
-    def incomplete_steps(self) -> list[dict[str, str]]:
-        return [s for s in self.steps if s.get("status") != "completed"]
-
-    def set_plan(self, steps: Iterable[dict[str, Any]]) -> None:
-        self.steps = [
-            {
-                "step": _text(s.get("step") or s.get("task")),
-                "status": _text(s.get("status")) or "pending",
-                **(
-                    {"id": str(s["id"])}
-                    if s.get("id") not in (None, "")
-                    else {}
-                ),
-            }
-            for s in steps
-            if isinstance(s, dict) and (s.get("step") or s.get("task"))
+    def incomplete_steps(self) -> list[dict[str, Any]]:
+        return [
+            step
+            for step in self.steps
+            if step.get("status") != "completed"
+            and int(step.get("plan_version") or self.plan_version)
+            == self.plan_version
         ]
+
+    def set_plan(
+        self,
+        steps: Iterable[dict[str, Any]],
+        *,
+        version: int | None = None,
+        reason: str = "",
+    ) -> None:
+        """Replace the current plan while retaining a bounded revision log.
+
+        A revision keeps the prior plan visible for audit and display.  A
+        normal ``update_plan`` at the same version is an in-place refresh and
+        does not create a bogus revision.
+        """
+        new_version = max(1, int(version or self.plan_version))
+        if new_version > self.plan_version and self.steps:
+            self.plan_history.append(
+                {
+                    "version": self.plan_version,
+                    "reason": _text(reason)[:240],
+                    "steps": copy.deepcopy(self.steps),
+                }
+            )
+            self.plan_history = self.plan_history[-10:]
+        elif new_version < self.plan_version:
+            new_version = self.plan_version
+        existing = {
+            _text(step.get("id")): step
+            for step in self.steps
+            if _text(step.get("plan_version")) == str(new_version)
+            and _text(step.get("id"))
+        }
+        rows: list[dict[str, Any]] = []
+        for raw in steps:
+            if not isinstance(raw, dict):
+                continue
+            task = _text(raw.get("step") or raw.get("task"))
+            if not task:
+                continue
+            row: dict[str, Any] = {
+                "step": task,
+                "status": _text(raw.get("status")) or "pending",
+                "plan_version": new_version,
+            }
+            if raw.get("id") not in (None, ""):
+                row["id"] = str(raw["id"])
+                prior = existing.get(row["id"])
+                if prior and not raw.get("status"):
+                    row["status"] = _text(prior.get("status")) or "pending"
+            for key in (
+                "kind",
+                "requires_write",
+                "verify_cmd",
+                "target_paths",
+                "origin",
+                "parent_step_id",
+                "attempt",
+                "attempts",
+                "last_error",
+                "last_summary",
+                "superseded_by",
+            ):
+                if key in raw:
+                    row[key] = copy.deepcopy(raw[key])
+            rows.append(row)
+        self.steps = rows
+        self.plan_version = new_version
         self.updated_at = time.time()
 
-    def set_step_status(self, step_id: Any, status: str) -> bool:
+    def upsert_step(
+        self,
+        step: dict[str, Any],
+        *,
+        status: str | None = None,
+    ) -> bool:
+        """Add or update a step, including remediation steps absent from plan.
+
+        Remediation and replanned steps must be visible in the same execution
+        record.  Returning False used to make them disappear from the plan view
+        even though their tools ran and changed the workspace.
+        """
+        if not isinstance(step, dict):
+            return False
+        key = _text(step.get("id"))
+        task = _text(step.get("task") or step.get("step"))
+        if not key and not task:
+            return False
+        for row in self.steps:
+            row_key = _text(row.get("id"))
+            if key and row_key == key:
+                if task:
+                    row["step"] = task
+                if status is not None:
+                    row["status"] = _text(status) or "pending"
+                for field_name in (
+                    "kind",
+                    "requires_write",
+                    "verify_cmd",
+                    "target_paths",
+                    "origin",
+                    "parent_step_id",
+                    "attempt",
+                    "attempts",
+                    "last_error",
+                    "last_summary",
+                ):
+                    if field_name in step:
+                        row[field_name] = copy.deepcopy(step[field_name])
+                row.setdefault("plan_version", self.plan_version)
+                self.updated_at = time.time()
+                return True
+        row = {
+            "step": task,
+            "status": _text(status or step.get("status")) or "pending",
+            "plan_version": int(step.get("plan_version") or self.plan_version),
+            **{
+                k: copy.deepcopy(v)
+                for k, v in step.items()
+                if k not in {"step", "task", "status", "plan_version"}
+                and k
+                in {
+                    "id",
+                    "kind",
+                    "requires_write",
+                    "verify_cmd",
+                    "target_paths",
+                    "origin",
+                    "parent_step_id",
+                    "attempt",
+                    "attempts",
+                    "last_error",
+                    "last_summary",
+                }
+            },
+        }
+        if key:
+            row["id"] = key
+        self.steps.append(row)
+        self.updated_at = time.time()
+        return True
+
+    def set_step_status(
+        self,
+        step_id: Any,
+        status: str,
+        **details: Any,
+    ) -> bool:
         """Update one step by stable id; return False when it is not present."""
         key = _text(step_id)
         if not key:
             return False
         for index, step in enumerate(self.steps, start=1):
-            step_id = _text(step.get("id"))
-            if step_id == key or (not step_id and str(index) == key):
+            row_key = _text(step.get("id"))
+            if row_key == key or (not row_key and str(index) == key):
                 step["status"] = _text(status) or "pending"
+                for name, value in details.items():
+                    if name in {
+                        "attempt",
+                        "attempts",
+                        "last_error",
+                        "last_summary",
+                        "kind",
+                        "verify_cmd",
+                        "parent_step_id",
+                    }:
+                        step[name] = copy.deepcopy(value)
                 self.updated_at = time.time()
                 return True
         return False
+
+    def plan_summary(self) -> str:
+        """Stable text view used by CLI/REPL plan display and tests."""
+        icons = {
+            "completed": "OK",
+            "failed": "X",
+            "running": ">",
+            "skipped": "-",
+            "pending": ".",
+        }
+        revision_note = (
+            f" ({len(self.plan_history)} revisions)"
+            if self.plan_history
+            else ""
+        )
+        lines = [f"Plan v{self.plan_version}{revision_note}"]
+        for step in self.steps:
+            status = _text(step.get("status")) or "pending"
+            icon = icons.get(status, "?")
+            text = _text(step.get("step"))[:160]
+            attempts = step.get("attempts") or step.get("attempt")
+            suffix = (
+                f" (attempt {attempts})"
+                if attempts and int(attempts) > 1
+                else ""
+            )
+            lines.append(f"[{icon}] {text}{suffix}")
+            if status == "failed" and step.get("last_error"):
+                lines.append(f"    ! {_text(step['last_error'])[:200]}")
+        if self.required:
+            missing = self.missing_delivery()
+            if missing:
+                lines.append("Delivery: missing " + ", ".join(missing))
+            elif self.plan_version:
+                lines.append("Delivery: complete")
+        return chr(10).join(lines)
 
     def has_source_artifact(self, paths: list[str] | None = None) -> bool:
         """Whether a successful write touched a non-test file."""
@@ -393,8 +604,22 @@ class TaskState:
                 r"(?:write_file|edit_file|修改|写入|插入|补齐|落盘)", re.I
             ),
         }
+        kind_to_dimension = {
+            "verify": "verify",
+            "commit": "commit",
+            "clean": "dirty",
+            "edit": "changes",
+        }
         for step in self.steps:
             if step.get("status") != "completed":
+                continue
+            if int(step.get("plan_version") or self.plan_version) != self.plan_version:
+                continue
+            kind = _text(step.get("kind")).lower()
+            dimension = kind_to_dimension.get(kind)
+            if dimension:
+                if dimension in missing:
+                    step["status"] = "failed"
                 continue
             text = str(step.get("step") or "")
             if any(

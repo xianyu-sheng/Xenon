@@ -106,3 +106,83 @@ def test_plan_execute_emits_plan_and_step_events_for_projection():
 
     TaskStateProjection(state).attach(ledger, replay=True).close()
     assert [step["status"] for step in state.steps] == ["completed", "completed"]
+
+
+def test_replan_history_and_remediation_steps_are_visible():
+    from xenon.engine.evidence_runtime import (
+        EventKind,
+        EvidenceLedger,
+        EvidenceSource,
+        LifecyclePhase,
+    )
+    from xenon.engine.task_state_projection import TaskStateProjection
+
+    state = TaskState(
+        objective="implement",
+        intent="write_code",
+        execution_level=3,
+        required=["verify", "commit"],
+    )
+    ledger = EvidenceLedger("run-plan-revision")
+    ledger.append(
+        LifecyclePhase.TASK,
+        EventKind.TASK_FACT,
+        EvidenceSource.ENGINE,
+        {"engine": "plan", "task_id": state.task_id},
+    )
+    ctx = AgentContext(
+        {"_task_state": state.to_dict(), "_evidence_ledger": ledger}
+    )
+    engine = PlanExecuteEngine(["model"], max_steps=0)
+
+    first = [
+        {
+            "id": 1,
+            "task": "write source",
+            "tool": "write_file",
+            "params": {},
+            "kind": "edit",
+            "requires_write": True,
+        }
+    ]
+    second = [
+        {
+            "id": 2,
+            "task": "run tests",
+            "tool": "command",
+            "params": {"command": "pytest -q"},
+            "kind": "verify",
+            "verify_cmd": "pytest -q",
+        }
+    ]
+    engine._record_plan_event(ctx, first)
+    engine._record_plan_event(ctx, second, reason="write step failed")
+
+    remediation = {
+        "id": "remediation-2",
+        "task": "repair the missing write",
+        "kind": "edit",
+        "requires_write": True,
+        "origin": "remediation",
+    }
+    engine._record_step_started(
+        ctx, remediation["id"], remediation["task"], 2, step=remediation
+    )
+    engine._record_step_finished(
+        ctx,
+        remediation["id"],
+        success=True,
+        status="ok",
+        summary="written",
+        attempts=2,
+    )
+
+    TaskStateProjection(state).attach(ledger, replay=True).close()
+
+    assert state.plan_version == 2
+    assert state.plan_history[0]["version"] == 1
+    assert any(
+        step.get("id") == "remediation-2" and step.get("status") == "completed"
+        for step in state.steps
+    )
+    assert "Plan v2" in state.plan_summary()

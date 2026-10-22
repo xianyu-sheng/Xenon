@@ -97,6 +97,7 @@ class PlanDAGExecutorMixin:
                         ctx,
                         _steer_pending,
                         done_ids,
+                        tracker=tracker,
                     )
                     if new_steps:
                         steps = new_steps
@@ -169,9 +170,12 @@ class PlanDAGExecutorMixin:
 
             # 可执行步骤：先发 on_step（主线程，按波内顺序），再执行
             for sid in to_run:
-                step_task = dag.step(sid).get("task", "")
+                step = dag.step(sid)
+                step_task = step.get("task", "")
                 self.callback.on_step(sid, total, step_task)
-                self._record_step_started(ctx, sid, step_task, total)
+                self._record_step_started(
+                    ctx, sid, step_task, total, step=step
+                )
 
             parallel_downgrade: str | None = None
             if self.enable_parallel and len(to_run) > 1:
@@ -262,6 +266,7 @@ class PlanDAGExecutorMixin:
                     [{"text": chr(10).join(notes) + chr(10) + "请重新规划未完成的工作。"}],
                     done_ids,
                     failure=True,
+                    tracker=tracker,
                 )
                 if new_steps:
                     try:
@@ -287,7 +292,11 @@ class PlanDAGExecutorMixin:
                         ]
                         failed_ids.clear()
                         skipped_ids.clear()
-                        self._record_plan_event(ctx, steps)
+                        self._record_plan_event(
+                            ctx,
+                            steps,
+                            reason="DAG wave failure replan",
+                        )
                         if ctx.get("_evidence_ledger") is None:
                             self._sync_task_results(ctx, results)
                         self.callback.on_warning(
@@ -371,6 +380,18 @@ class PlanDAGExecutorMixin:
                     False,
                     "计划步骤要求写盘但未产生写操作",
                 )
+            outcome, _attempts = self._repair_failed_step(
+                step=step,
+                step_id=sid,
+                step_task=step_task,
+                total=total,
+                outcome=outcome,
+                prev_results=prev_results,
+                user_input=user_input,
+                tracker=tracker,
+                ctx=ctx,
+                steering=steering,
+            )
             out.append((sid, step_task, outcome, None))
         return out
 
