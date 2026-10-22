@@ -212,3 +212,46 @@ def test_react_engine_with_bridge_publishes_finish():
     assert len(finishes) == 1
     assert "done" in finishes[0]
     assert thinks  # 至少收到一次 think
+
+
+def test_bridge_broadcasts_and_forwards_to_delegate():
+    from xenon.engine.callbacks import SilentCallback
+
+    bus = EventBus()
+    bus_events = []
+    bus.subscribe("warning", bus_events.append)
+    delegate = SilentCallback()
+    bridge = CallbackBusBridge(bus, delegate=delegate)
+
+    bridge.on_warning("careful")
+
+    assert bus_events == ["careful"]
+    assert ("warning", "careful") in delegate.events
+
+
+def test_bridge_preserves_delegate_attributes_and_overrides():
+    from xenon.engine.callbacks import SilentCallback
+
+    delegate = SilentCallback()
+    bridge = CallbackBusBridge(EventBus(), delegate=delegate)
+    captured = []
+    bridge.on_warning = captured.append
+
+    assert bridge.events is delegate.events
+    bridge.on_warning("custom")
+    assert captured == ["custom"]
+
+
+def test_engine_callback_bus_forwards_to_delegate():
+    from xenon.engine.callbacks import SilentCallback
+    from xenon.engine.react_engine import ReActEngine
+
+    delegate = SilentCallback()
+    engine = ReActEngine(["fake/model"], callback=delegate, max_iterations=1)
+    received: list[str] = []
+    engine.event_bus.subscribe("warning", received.append)
+
+    engine.callback.on_warning("bus warning")
+
+    assert received == ["bus warning"]
+    assert ("warning", "bus warning") in delegate.events

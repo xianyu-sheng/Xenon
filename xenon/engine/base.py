@@ -99,7 +99,14 @@ class BaseEngine(ABC):
         permission_gate: Any = None,  # v0.5.0: PermissionGate for tool confirmation
     ) -> None:
         self.model_priority = list(model_priority)
-        self.callback = callback or EngineCallback()
+        # UI/logging subscribe to the bus; the delegate preserves all existing
+        # callback behavior (ConsoleCallback, SilentCallback, custom tests).
+        from xenon.engine.event_bus import CallbackBusBridge, EventBus
+
+        self.event_bus = EventBus()
+        self.callback = CallbackBusBridge(
+            self.event_bus, delegate=callback or EngineCallback()
+        )
 
         # 事件路由：ExecutionPolicy.emit() → EngineCallback.on_*()
         def _route_policy_events(event: str, fields: dict[str, Any]) -> None:

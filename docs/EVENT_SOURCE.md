@@ -29,6 +29,9 @@ replayable projections.
   `/resume` rebind it before execution, so replay survives a restart.
 - `EngineCallback` / `EventBus` are **ephemeral UI channels**.  They must not be
   the source of durable task state.
+- `BaseEngine` now exposes `event_bus`; `CallbackBusBridge` publishes to the
+  bus and forwards to the existing callback delegate, so TUI/log subscribers
+  can attach without changing engine code or callback behavior.
 
 ## Rules
 

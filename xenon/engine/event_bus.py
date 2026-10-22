@@ -35,6 +35,10 @@ EVENT_TYPES: frozenset[str] = frozenset(
         "error",
         "warning",
         "finish",
+        "tip",
+        "event",
+        "provider_request_start",
+        "provider_request_end",
         "start",
         "iteration",
     }
@@ -86,38 +90,84 @@ class EventBus:
 
 
 class CallbackBusBridge(EngineCallback):
-    """把 ``EngineCallback`` 钩子转发到 ``EventBus`` 的桥接回调。
+    """Publish callback events to an EventBus and forward them to a delegate.
 
-    引擎照常持有 ``self.callback``（本桥接实例），各 ``on_xxx`` 把事件 publish
-    到 bus，由 bus 分发给全部订阅者。未订阅的事件无副作用。引擎代码无需改动。
+    Engines keep ``self.callback`` (this bridge), so no engine changes are
+    needed.  A delegate preserves the existing ConsoleCallback / SilentCallback
+    behavior; arbitrary delegate attributes remain reachable through
+    ``__getattr__`` for backward compatibility.
     """
 
-    def __init__(self, bus: EventBus) -> None:
-        self._bus = bus
+    def __init__(
+        self, bus: EventBus, delegate: EngineCallback | None = None
+    ) -> None:
+        object.__setattr__(self, "_bus", bus)
+        object.__setattr__(self, "_delegate", delegate)
+
+    def __getattr__(self, name: str) -> Any:
+        delegate = object.__getattribute__(self, "_delegate")
+        if delegate is None:
+            raise AttributeError(name)
+        return getattr(delegate, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+        delegate = object.__getattribute__(self, "_delegate")
+        if delegate is not None:
+            setattr(delegate, name, value)
+        else:
+            object.__setattr__(self, name, value)
+
+    def _emit(self, event: str, *args: Any) -> None:
+        self._bus.publish(event, *args)
+        delegate = object.__getattribute__(self, "_delegate")
+        if delegate is None:
+            return
+        handler = getattr(delegate, f"on_{event}", None)
+        if callable(handler):
+            handler(*args)
 
     def on_think(self, thought: str) -> None:
-        self._bus.publish("think", thought)
+        self._emit("think", thought)
 
     def on_act(self, action: str, action_input: dict) -> None:
-        self._bus.publish("act", action, action_input)
+        self._emit("act", action, action_input)
 
     def on_observe(self, observation: str) -> None:
-        self._bus.publish("observe", observation)
+        self._emit("observe", observation)
 
     def on_step(self, step_id: int, total: int, task: str) -> None:
-        self._bus.publish("step", step_id, total, task)
+        self._emit("step", step_id, total, task)
 
     def on_step_done(self, step_id: int, success: bool, summary: str) -> None:
-        self._bus.publish("step_done", step_id, success, summary)
+        self._emit("step_done", step_id, success, summary)
 
     def on_review(self, score: int, passed: bool, feedback: str) -> None:
-        self._bus.publish("review", score, passed, feedback)
+        self._emit("review", score, passed, feedback)
 
     def on_error(self, error: str) -> None:
-        self._bus.publish("error", error)
+        self._emit("error", error)
 
     def on_warning(self, warning: str) -> None:
-        self._bus.publish("warning", warning)
+        self._emit("warning", warning)
+
+    def on_tip(self, tip: str) -> None:
+        self._emit("tip", tip)
 
     def on_finish(self, result: str) -> None:
-        self._bus.publish("finish", result)
+        self._emit("finish", result)
+
+    def on_provider_request_start(
+        self, phase: str, timeout: float, provider_attempts: int
+    ) -> None:
+        self._emit(
+            "provider_request_start", phase, timeout, provider_attempts
+        )
+
+    def on_provider_request_end(self, phase: str, success: bool) -> None:
+        self._emit("provider_request_end", phase, success)
+
+    def on_event(self, message: str) -> None:
+        self._emit("event", message)
