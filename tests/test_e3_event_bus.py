@@ -255,3 +255,18 @@ def test_engine_callback_bus_forwards_to_delegate():
 
     assert received == ["bus warning"]
     assert ("warning", "bus warning") in delegate.events
+
+
+def test_combined_engine_exposes_top_level_bus():
+    from xenon.engine.callbacks import SilentCallback
+    from xenon.engine.combined_engines import PlanReactEngine
+
+    delegate = SilentCallback()
+    engine = PlanReactEngine(["fake/model"], callback=delegate)
+    received: list[str] = []
+    engine.event_bus.subscribe("warning", received.append)
+
+    engine.callback.on_warning("combined warning")
+
+    assert received == ["combined warning"]
+    assert ("warning", "combined warning") in delegate.events

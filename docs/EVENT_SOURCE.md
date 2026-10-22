@@ -29,9 +29,10 @@ replayable projections.
   `/resume` rebind it before execution, so replay survives a restart.
 - `EngineCallback` / `EventBus` are **ephemeral UI channels**.  They must not be
   the source of durable task state.
-- `BaseEngine` now exposes `event_bus`; `CallbackBusBridge` publishes to the
-  bus and forwards to the existing callback delegate, so TUI/log subscribers
-  can attach without changing engine code or callback behavior.
+- `BaseEngine` and the combined engines expose a top-level `event_bus`;
+  `CallbackBusBridge` publishes to the bus and forwards to the existing
+  callback delegate, so TUI/log subscribers can attach without changing
+  engine code or callback behavior.
 
 ## Rules
 
@@ -47,8 +48,9 @@ replayable projections.
 
 1. Remove the remaining ad-hoc `update_from_calls` / direct `_sync_task_*`
    writes when a task boundary exists.
-2. Let TUI/logging subscribe through `EventBus`; keep them out of state
-   transitions.
+2. Keep TUI/logging subscriptions on `EventBus` (now exposed by Base and
+   combined engines) and out of state transitions; finish migrating remaining
+   UI reads away from callback-owned state.
 3. Keep the existing `ToolExecutionTracker` as an in-memory execution trace,
    not as a second source of truth for delivery.
 4. Add replay tests for a resumed task and a re-planned task.

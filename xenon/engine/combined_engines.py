@@ -29,6 +29,16 @@ from xenon.engine.trace import TraceContextFilter  # noqa: E402
 logger.addFilter(TraceContextFilter())
 
 
+def _callback_with_bus(
+    callback: EngineCallback | None,
+) -> tuple[Any, EngineCallback]:
+    """Build a top-level bus + delegate-preserving callback for combined engines."""
+    from xenon.engine.event_bus import CallbackBusBridge, EventBus
+
+    bus = EventBus()
+    return bus, CallbackBusBridge(bus, delegate=callback or EngineCallback())
+
+
 def _deadline_note() -> str:
     """User-facing tail for a run that stopped at the engine deadline."""
 
@@ -292,7 +302,7 @@ class PlanReactEngine(SteeringMixin):
         self.model_priority = model_priority
         self.max_steps = max_steps
         self.react_iterations = react_iterations
-        self.callback = callback or EngineCallback()
+        self.event_bus, self.callback = _callback_with_bus(callback)
         self.model_pool = model_pool
         self.auto_router = auto_router
         common = dict(
@@ -801,7 +811,7 @@ class PlanReflectionEngine(_ReflectionCombination):
         self.max_steps = max_steps
         self.review_rounds = review_rounds
         self.pass_threshold = pass_threshold
-        self.callback = callback or EngineCallback()
+        self.event_bus, self.callback = _callback_with_bus(callback)
         self.model_pool = model_pool
         self.auto_router = auto_router
         common = dict(
@@ -880,7 +890,7 @@ class ReactReflectionEngine(_ReflectionCombination):
         self.react_iterations = react_iterations
         self.review_rounds = review_rounds
         self.pass_threshold = pass_threshold
-        self.callback = callback or EngineCallback()
+        self.event_bus, self.callback = _callback_with_bus(callback)
         self.model_pool = model_pool
         self.auto_router = auto_router
         common = dict(
