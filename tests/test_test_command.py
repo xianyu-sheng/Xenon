@@ -15,15 +15,16 @@ def test_plain_pytest_command_becomes_argument_vector() -> None:
     assert plan.invocations == [["tests/test_app.py", "-q"]]
 
 
-def test_cd_and_powershell_pipeline_are_removed() -> None:
+def test_cd_and_powershell_pipeline_are_removed(tmp_path) -> None:
+    repo = tmp_path / "repo"
     plan = plan_pytest(
-        "cd D:/repo; python -m pytest tests -q -k coverage "
+        f"cd {repo}; python -m pytest tests -q -k coverage "
         "2>&1 | Select-Object -First 40",
-        "D:/workspace",
+        tmp_path / "workspace",
     )
 
     assert plan is not None
-    assert plan.cwd == str(Path("D:/repo"))
+    assert plan.cwd == str(repo)
     assert plan.invocations == [["tests", "-q", "-k", "coverage"]]
 
 
