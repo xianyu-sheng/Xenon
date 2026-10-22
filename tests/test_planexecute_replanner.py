@@ -79,3 +79,51 @@ def test_failed_dag_wave_replans_before_skip_cascade():
     # The old dependent step was never turned into a skipped row; its plan
     # was replaced before the next wave.
     assert ctx.get("step_2_status") is None
+
+
+def test_llm_step_that_requires_write_cannot_fake_completion():
+    engine = PlanExecuteEngine(["fake/model"], max_steps=0, max_replans=0)
+    tracker = ToolExecutionTracker()
+    steps = [
+        {
+            "id": 1,
+            "task": "实际插入覆盖摘要行到目标文件",
+            "tool": None,
+            "params": {},
+            "depends_on": [],
+        }
+    ]
+    engine._execute_step_with_llm = lambda *args, **kwargs: "done without writing"
+
+    results = engine._run_serial(steps, "implement", AgentContext(), tracker, 1)
+
+    assert results[0]["status"] == "failed"
+    assert "写操作" in results[0]["error"]
+
+
+def test_llm_step_with_real_write_passes():
+    engine = PlanExecuteEngine(["fake/model"], max_steps=0, max_replans=0)
+    tracker = ToolExecutionTracker()
+    steps = [
+        {
+            "id": 1,
+            "task": "实际插入覆盖摘要行到目标文件",
+            "tool": None,
+            "params": {},
+            "depends_on": [],
+        }
+    ]
+
+    def write_then_finish(*args, **kwargs):
+        tracker.record(
+            "write_file",
+            {"file_path": "src/app.py"},
+            True,
+            "written",
+        )
+        return "done"
+
+    engine._execute_step_with_llm = write_then_finish
+    results = engine._run_serial(steps, "implement", AgentContext(), tracker, 1)
+
+    assert results[0]["status"] == "ok"

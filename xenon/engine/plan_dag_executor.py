@@ -331,6 +331,7 @@ class PlanDAGExecutorMixin:
             tool = step.get("tool")
             params = step.get("params", {})
             prev_results = self._build_prev_results(results)
+            write_count_before = self._successful_write_count(tracker)
             try:
                 if tool and tool != "null":
                     outcome = self._execute_tool_step(
@@ -359,6 +360,17 @@ class PlanDAGExecutorMixin:
             except Exception as e:  # 单步异常不连坐整波
                 logger.exception("DAG 串行步骤 %r 执行异常", sid)
                 outcome = StepOutcome(f"执行异常: {e}", False, str(e))
+            if (
+                outcome.success
+                and self._step_requires_write(step)
+                and self._successful_write_count(tracker) <= write_count_before
+            ):
+                outcome = StepOutcome(
+                    f"{outcome.content}" + chr(10) + chr(10)
+                    + "⚠️ 本步骤要求写盘，但没有新增成功的写工具调用。",
+                    False,
+                    "计划步骤要求写盘但未产生写操作",
+                )
             out.append((sid, step_task, outcome, None))
         return out
 
@@ -508,6 +520,7 @@ class PlanDAGExecutorMixin:
             if hasattr(ctx, "record_tool_checkpoint"):
                 iso_ctx.set_tool_checkpoint_callback(ctx.record_tool_checkpoint)
             iso_tracker = ToolExecutionTracker()
+            write_count_before = self._successful_write_count(iso_tracker)
             try:
                 if tool and tool != "null":
                     outcome = self._execute_tool_step(
@@ -535,6 +548,17 @@ class PlanDAGExecutorMixin:
             except Exception as e:  # 单步异常不连坐整波
                 logger.exception("DAG 并发步骤 %r 执行异常", sid)
                 outcome = StepOutcome(f"执行异常: {e}", False, str(e))
+            if (
+                outcome.success
+                and self._step_requires_write(step)
+                and self._successful_write_count(iso_tracker) <= write_count_before
+            ):
+                outcome = StepOutcome(
+                    f"{outcome.content}" + chr(10) + chr(10)
+                    + "⚠️ 本步骤要求写盘，但没有新增成功的写工具调用。",
+                    False,
+                    "计划步骤要求写盘但未产生写操作",
+                )
             return (sid, step_task, outcome, iso_tracker)
 
         workers = min(len(to_run), self.max_parallel_workers)

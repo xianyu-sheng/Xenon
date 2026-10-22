@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from xenon.engine.base import BaseEngine
@@ -508,6 +509,22 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         self.finalize_evidence(context=ctx, output=summary, tracker=tracker)
         return summary
 
+    _WRITE_STEP_RE = re.compile(
+        r"(?:write_file|edit_file|batch_write|batch_edit|"
+        r"实际插入|插入覆盖|补齐|写入文件|落盘|创建文件)",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _step_requires_write(cls, step: dict[str, Any]) -> bool:
+        from xenon.engine.evidence_gate import WRITE_TOOL_NAMES
+
+        if step.get("requires_write"):
+            return True
+        if step.get("tool") in WRITE_TOOL_NAMES:
+            return True
+        return bool(cls._WRITE_STEP_RE.search(str(step.get("task") or "")))
+
     @staticmethod
     def _sync_task_plan(ctx: AgentContext, steps: list[dict[str, Any]]) -> None:
         """Mirror the engine plan into TaskState for cross-turn truthfulness."""
@@ -874,6 +891,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         step_id = remediation_step["id"]
         self._record_step_started(ctx, step_id, remediation_step["task"], total + 1)
         prev_results = self._build_prev_results(results)
+        write_count_before = self._successful_write_count(tracker)
         raw_result = self._execute_step_with_llm(
             step_id,
             total + 1,
@@ -885,6 +903,16 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             require_write_tool=True,
         )
         outcome = self._step_outcome(raw_result)
+        if (
+            outcome.success
+            and self._successful_write_count(tracker) <= write_count_before
+        ):
+            outcome = StepOutcome(
+                f"{outcome.content}" + chr(10) + chr(10)
+                + "⚠️ 补救步骤声称完成，但没有新增成功的写工具调用。",
+                False,
+                "补救步骤未产生写操作",
+            )
         results.append(
             {
                 "step_id": step_id,
@@ -942,6 +970,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                     step = dict(step)
                     step["tool"] = None
                     step["params"] = {}
+                    step["requires_write"] = True
                     step["task"] = (
                         f"{step.get('task', '编辑文件')}\n"
                         f"（目标文件: {target}。请先用 read_file 读取目标文件"
@@ -1011,6 +1040,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             self._record_step_started(ctx, step_id, step_task, total)
 
             prev_results = self._build_prev_results(results)
+            write_count_before = self._successful_write_count(tracker)
 
             if tool and tool != "null":
                 # 使用工具执行（失败自动降级迷你 ReAct 补救）
@@ -1039,6 +1069,17 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 )
                 outcome = self._step_outcome(raw_result)
                 _steer_pending = []
+            if (
+                outcome.success
+                and self._step_requires_write(step)
+                and self._successful_write_count(tracker) <= write_count_before
+            ):
+                outcome = StepOutcome(
+                    f"{outcome.content}" + chr(10) + chr(10)
+                    + "⚠️ 本步骤要求写盘，但没有新增成功的写工具调用。",
+                    False,
+                    "计划步骤要求写盘但未产生写操作",
+                )
             i += 1
             self._last_iterations = len(results) + 1
 

@@ -436,9 +436,9 @@ class TestPlanExecuteToolStepReplan:
         # 拦截 _replan_remaining 确认被调用
         orig_replan = engine._replan_remaining
 
-        def spy_replan(user_input, ctx, steering_msgs, done_ids):
+        def spy_replan(user_input, ctx, steering_msgs, done_ids, **kwargs):
             replanned["called"] = True
-            return orig_replan(user_input, ctx, steering_msgs, done_ids)
+            return orig_replan(user_input, ctx, steering_msgs, done_ids, **kwargs)
 
         monkeypatch.setattr(engine, "_replan_remaining", spy_replan)
 
