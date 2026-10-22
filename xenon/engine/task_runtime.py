@@ -9,9 +9,71 @@ same engine with a continuation prompt when required delivery work is missing.
 from __future__ import annotations
 
 import logging
+import re
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+_IGNORED_DIRTY_RE = re.compile(
+    r"^\?\? (?:.*/)?(?:__pycache__/|\.pytest_cache/)|^\?\? .*\.pyc$"
+)
+
+
+def _engine_workspace_root(
+    engine: Any, context: Any | None = None
+) -> "Path | None":
+    """Best-effort trusted worktree root for a deterministic git probe."""
+    if context is not None and hasattr(context, "get"):
+        explicit = context.get("_workspace_root")
+        if explicit:
+            return Path(str(explicit))
+    try:
+        from xenon.engine.execution_policy import walk_engine_graph
+
+        for node in walk_engine_graph(engine):
+            runtime = getattr(node, "tool_runtime", None)
+            root = getattr(runtime, "workspace_root", None)
+            if root:
+                return Path(root)
+    except Exception:  # noqa: BLE001 — probe is optional
+        logger.debug("workspace root probe failed", exc_info=True)
+    return None
+
+
+def _probe_git_dirty(engine: Any, context: Any | None = None) -> bool | None:
+    """Return the real worktree status, ignoring generated caches.
+
+    The model can claim ``git status`` is clean without running it after its
+    last write.  Delivery must check the worktree itself.  Unrelated caches
+    are ignored so the gate does not fail on pytest/bytecode noise; source or
+    backup files are not ignored.
+    """
+    import subprocess
+
+    root = _engine_workspace_root(engine, context)
+    if root is None:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain", "-uall"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    lines = [
+        line
+        for line in proc.stdout.splitlines()
+        if line.strip() and not _IGNORED_DIRTY_RE.search(line)
+    ]
+    return bool(lines)
 
 
 def run_with_delivery(
@@ -78,6 +140,10 @@ def run_with_delivery(
     def _refresh() -> list[str]:
         if not use_projection:
             state.update_from_calls(aggregate.calls)
+        if state.commit:
+            actual_dirty = _probe_git_dirty(engine, context)
+            if actual_dirty is not None:
+                state.dirty_after_commit = actual_dirty
         missing = state.missing_delivery()
         if missing:
             state.reconcile_delivery_steps(missing)

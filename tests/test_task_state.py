@@ -551,3 +551,34 @@ def test_plan_revision_archives_old_steps() -> None:
     assert state.plan_history[0]["version"] == 1
     assert state.plan_history[0]["steps"][0]["step"] == "old"
     assert [step["step"] for step in state.steps] == ["new"]
+
+
+def test_failed_remediation_row_is_retired_after_delivery_passes() -> None:
+    state = TaskState(
+        objective="fix",
+        intent="write_code",
+        execution_level=3,
+        steps=[
+            {
+                "id": "remediation-1",
+                "step": "clean backup file",
+                "kind": "clean",
+                "status": "failed",
+            }
+        ],
+        tests=["pytest -q"],
+        verified_revision=1,
+        artifacts=["src/app.py"],
+        artifacts_revision=1,
+        commit="abc1234",
+        committed_artifacts=["src/app.py"],
+        committed_source_paths=["src/app.py"],
+        source_commit_tracking=True,
+        committed_revision=1,
+        dirty_after_commit=False,
+        required=["verify", "commit"],
+    )
+
+    assert state.maybe_complete() is True
+    assert state.status == "completed"
+    assert state.steps[0]["status"] == "completed"

@@ -568,6 +568,10 @@ class TaskState:
             or (
                 self.commit
                 and self.committed_revision < self.artifacts_revision
+                # A real clean-worktree probe is stronger than the revision
+                # counter: rewriting a file with identical content is not a
+                # stale commit.  Without a probe, remain conservative.
+                and self.dirty_after_commit is not False
             )
         ):
             missing.append("dirty")
@@ -580,11 +584,37 @@ class TaskState:
 
     def maybe_complete(self) -> bool:
         """Mark completed only when plan and delivery are both finished."""
-        if self.incomplete_steps() or self.missing_delivery():
+        if self.missing_delivery():
+            return False
+        self.reconcile_satisfied_steps()
+        if self.incomplete_steps():
             return False
         self.status = "completed"
         self.updated_at = time.time()
         return True
+
+    def reconcile_satisfied_steps(self) -> None:
+        """Retire failed plan rows whose delivery dimension is now satisfied.
+
+        A remediation row may fail, then a later command cleans the worktree or
+        reruns the test.  The delivery facts are authoritative; the old failed
+        row must not keep an otherwise complete task active forever.
+        """
+        if self.missing_delivery():
+            return
+        satisfied = {
+            "edit": True,
+            "verify": bool(self.tests),
+            "commit": bool(self.commit),
+            "clean": self.dirty_after_commit is False,
+        }
+        for step in self.steps:
+            if step.get("status") != "failed":
+                continue
+            if satisfied.get(_text(step.get("kind")).lower()):
+                step["status"] = "completed"
+                step["last_summary"] = "reconciled by delivery facts"
+        self.updated_at = time.time()
 
     def reconcile_delivery_steps(self, missing: list[str]) -> None:
         """Fail plan rows that claim a missing delivery dimension.
