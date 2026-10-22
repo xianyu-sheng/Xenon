@@ -158,3 +158,76 @@ def test_planner_retries_once_after_unparseable_response(monkeypatch):
 
     assert len(result["steps"]) == 1
     assert result["steps"][0]["tool"] == "read_file"
+
+
+def test_tool_remediation_does_not_accept_unrelated_tool_success(monkeypatch):
+    """A successful read after a failed command is not command remediation."""
+    engine = PlanExecuteEngine(["model"], tool_remediation_attempts=1)
+    tracker = ToolExecutionTracker()
+    failed = ToolExecuteResult(
+        "command",
+        False,
+        "1 failed",
+        error="pytest failed",
+    )
+    monkeypatch.setattr(
+        engine, "_execute_step_with_tool", lambda *args, **kwargs: failed
+    )
+
+    def remedial_llm(*args, **kwargs):
+        tracker.record("read_file", {"file_path": "x.py"}, True, "read ok")
+        return "remedied"
+
+    monkeypatch.setattr(engine, "_execute_step_with_llm", remedial_llm)
+    outcome = engine._execute_tool_step(
+        1,
+        1,
+        "run tests",
+        "command",
+        {"command": "pytest -q"},
+        "task",
+        AgentContext(),
+        tracker,
+        "(无)",
+    )
+
+    assert outcome.success is False
+
+
+def test_tool_remediation_accepts_same_tool_success(monkeypatch):
+    engine = PlanExecuteEngine(["model"], tool_remediation_attempts=1)
+    tracker = ToolExecutionTracker()
+    failed = ToolExecuteResult(
+        "command",
+        False,
+        "1 failed",
+        error="pytest failed",
+    )
+    monkeypatch.setattr(
+        engine, "_execute_step_with_tool", lambda *args, **kwargs: failed
+    )
+
+    def remedial_llm(*args, **kwargs):
+        tracker.record(
+            "command",
+            {"command": "pytest -q"},
+            True,
+            "1 passed",
+            metadata={"exit_code": 0},
+        )
+        return "remedied"
+
+    monkeypatch.setattr(engine, "_execute_step_with_llm", remedial_llm)
+    outcome = engine._execute_tool_step(
+        1,
+        1,
+        "run tests",
+        "command",
+        {"command": "pytest -q"},
+        "task",
+        AgentContext(),
+        tracker,
+        "(无)",
+    )
+
+    assert outcome.success is True

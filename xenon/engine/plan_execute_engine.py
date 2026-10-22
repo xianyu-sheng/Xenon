@@ -1267,7 +1267,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
 
             target_write = tool in _W_NAMES
             write_count_before = self._successful_write_count(tracker)
-            ok_before = self._successful_call_count(tracker)
+            tool_calls_start = len(tracker.calls) if tracker is not None else 0
             raw = self._execute_step_with_llm(
                 step_id,
                 total,
@@ -1288,7 +1288,18 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 write_count_after = self._successful_write_count(tracker)
                 remediated = write_count_after > write_count_before
             else:
-                remediated = self._successful_call_count(tracker) > ok_before
+                # A read/status call after a failed command is not proof that
+                # the original command succeeded.  Require the same tool to
+                # produce a successful call in the remediation round.
+                new_calls = (
+                    tracker.calls[tool_calls_start:]
+                    if tracker is not None
+                    else []
+                )
+                remediated = any(
+                    call.success and call.tool_name == tool
+                    for call in new_calls
+                )
             if remediated:
                 return outcome
             logger.warning(
@@ -1303,13 +1314,6 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 "工具步骤补救后仍未执行成功: " + error_snippet,
             )
         return outcome
-
-    @staticmethod
-    def _successful_call_count(tracker: ToolExecutionTracker | None) -> int:
-        """tracker 中成功工具调用的数量（None 安全）。"""
-        if tracker is None:
-            return 0
-        return sum(1 for call in tracker.calls if call.success)
 
     @staticmethod
     def _successful_write_count(tracker: ToolExecutionTracker | None) -> int:
