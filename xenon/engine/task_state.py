@@ -356,6 +356,36 @@ class TaskState:
         self.updated_at = time.time()
         return True
 
+    def reconcile_delivery_steps(self, missing: list[str]) -> None:
+        """Fail plan rows that claim a missing delivery dimension.
+
+        Plan text is not evidence.  When the durable delivery ledger says a
+        dimension is missing, a step that explicitly claimed to run tests,
+        commit, clean the worktree or perform the source write must not remain
+        completed.
+        """
+        if not missing:
+            return
+        rules = {
+            "verify": re.compile(r"(?:pytest|测试|验证|verify|test)", re.I),
+            "dirty": re.compile(r"(?:工作区|干净|git\s+status|clean|dirty)", re.I),
+            "commit": re.compile(r"(?:commit|提交)", re.I),
+            "changes": re.compile(
+                r"(?:write_file|edit_file|修改|写入|插入|补齐|落盘)", re.I
+            ),
+        }
+        for step in self.steps:
+            if step.get("status") != "completed":
+                continue
+            text = str(step.get("step") or "")
+            if any(
+                dimension in missing
+                and rule.search(text)
+                for dimension, rule in rules.items()
+            ):
+                step["status"] = "failed"
+        self.updated_at = time.time()
+
     def _record_commit(
         self, commit_hash: str, metadata: dict[str, Any]
     ) -> None:

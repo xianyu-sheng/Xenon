@@ -450,3 +450,27 @@ def test_same_tool_result_is_applied_once_across_projections() -> None:
 
     assert state.artifacts == ["src/app.py"]
     assert state.artifacts_revision == 1
+
+
+def test_reconcile_delivery_fails_matching_completed_steps() -> None:
+    state = TaskState(
+        objective="implement",
+        intent="write_code",
+        execution_level=3,
+        steps=[
+            {"id": "1", "step": "修改源码", "status": "completed"},
+            {"id": "2", "step": "运行 pytest", "status": "completed"},
+            {"id": "3", "step": "确认工作区干净", "status": "completed"},
+            {"id": "4", "step": "查看文档", "status": "completed"},
+        ],
+        required=["verify", "commit"],
+    )
+
+    state.reconcile_delivery_steps(["changes", "verify", "dirty"])
+
+    assert [step["status"] for step in state.steps] == [
+        "failed",
+        "failed",
+        "failed",
+        "completed",
+    ]

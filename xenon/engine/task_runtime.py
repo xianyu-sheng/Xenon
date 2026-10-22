@@ -79,7 +79,9 @@ def run_with_delivery(
         if not use_projection:
             state.update_from_calls(aggregate.calls)
         missing = state.missing_delivery()
-        if not missing:
+        if missing:
+            state.reconcile_delivery_steps(missing)
+        else:
             state.maybe_complete()
         context.set("_task_state", state.to_dict())
         return missing
