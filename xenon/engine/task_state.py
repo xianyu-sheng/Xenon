@@ -189,7 +189,15 @@ class TaskState:
             task_id=_text(raw.get("task_id")) or uuid.uuid4().hex[:12],
             status=_text(raw.get("status")) or "active",
             steps=[
-                {"step": _text(s.get("step")), "status": _text(s.get("status"))}
+                {
+                    "step": _text(s.get("step")),
+                    "status": _text(s.get("status")),
+                    **(
+                        {"id": str(s["id"])}
+                        if s.get("id") not in (None, "")
+                        else {}
+                    ),
+                }
                 for s in raw.get("steps", [])
                 if isinstance(s, dict) and s.get("step")
             ],
@@ -259,6 +267,11 @@ class TaskState:
             {
                 "step": _text(s.get("step") or s.get("task")),
                 "status": _text(s.get("status")) or "pending",
+                **(
+                    {"id": str(s["id"])}
+                    if s.get("id") not in (None, "")
+                    else {}
+                ),
             }
             for s in steps
             if isinstance(s, dict) and (s.get("step") or s.get("task"))

@@ -38,3 +38,26 @@ def test_plan_and_failed_result_keep_task_incomplete():
     assert [step["status"] for step in state.steps] == ["completed", "failed"]
     assert state.maybe_complete() is False
     assert state.status == "active"
+
+
+def test_results_sync_by_real_step_id_not_list_position():
+    ctx = _ctx()
+    steps = [
+        {"id": 10, "task": "read", "tool": "read_file", "params": {}},
+        {"id": 20, "task": "write", "tool": "edit_file", "params": {}},
+    ]
+
+    PlanExecuteEngine._sync_task_plan(ctx, steps)
+    PlanExecuteEngine._sync_task_results(
+        ctx,
+        [
+            {"step_id": 10, "status": "ok"},
+            {"step_id": 20, "status": "failed"},
+        ],
+    )
+
+    state = TaskState.from_context(ctx)
+    assert state is not None
+    assert [step["id"] for step in state.steps] == ["10", "20"]
+    assert [step["status"] for step in state.steps] == ["completed", "failed"]
+    assert state.maybe_complete() is False

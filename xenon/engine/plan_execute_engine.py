@@ -520,6 +520,11 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 {
                     "step": str(step.get("task") or step.get("step") or ""),
                     "status": "pending",
+                    **(
+                        {"id": str(step["id"])}
+                        if step.get("id") not in (None, "")
+                        else {}
+                    ),
                 }
                 for step in steps
                 if isinstance(step, dict)
@@ -544,7 +549,13 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             if isinstance(result, dict)
         }
         for index, step in enumerate(state.steps, start=1):
-            result = by_id.get(str(index))
+            if step.get("id") not in (None, ""):
+                # A real id must match exactly; never fall back to positional
+                # matching for a re-planned plan with non-sequential ids.
+                result = by_id.get(str(step["id"]))
+            else:
+                # Backward compatibility for older rows without an id.
+                result = by_id.get(str(index))
             if result is None:
                 continue
             step["status"] = (

@@ -117,6 +117,7 @@
 | 2026-10-21 | Plan-Execute 真实 #26 切片 | 三轮真实 DeepSeek 运行均未完成：首轮 60 工具/18 失败/243s、空测试提交；第二轮 51/20/341s、只改 JSON；修正后第三轮 64/15/292s，TaskState 保持 active、缺 verify；提交快照门重放显示空测试提交还缺 changes。已加计划状态同步、提交快照源码门、失败测试不计验证、git 参数规范化；Plan-Execute 仍不可宣称完成 |
 | 2026-10-21 | compact 后 TaskState 恢复 | 新增 `test_compact_task_state_resume.py`：compact → auto-save → load 后状态字段完整；2 passed |
 | 2026-10-21 | PR #160 HMAC 降级修复 | 复现 keyed→unkeyed 重算链；`8d123a5` 增加 key_expected/partial 与回归；PR #160 合并 `3d163d7`；evidence targeted 47 passed，CI 7/7 |
+| 2026-10-22 | Plan-Execute 步骤状态按 id 同步 | TaskState steps 保存真实 step id；`_sync_task_results` 不再按列表下标贴结果；重规划后 id=10/20 也能正确标记 completed/failed；旧状态保留无 id 的下标回退；全量 3545 passed/98 skipped |
 | 2026-10-21 | Plan-Execute 假步骤成功修复 | 根因：工具步骤 `pytest` 失败后，补救轮只要新增任意成功工具调用（如 read_file）就判定步骤成功；改为原工具必须新增成功调用。`test_plan_structured_failures` 覆盖；全量 3544 passed/98 skipped |
 | 2026-10-21 | 多 commit 源码交付 | `committed_source_paths` + `source_commit_tracking`：源码提交后再提交测试/清理文件不丢源码交付；源码重写会移出已提交集合；全量 3542 passed/98 skipped |
 | 2026-10-21 | final gate 驱动真实修复 | 同一 smoke reset 后复跑：28 工具/3 失败/211s（含 API ReadTimeout 重试）；dirty gate 连续 3 次要求清理，最终 `git status` 空、commit `fe6300a` 含 `calc.py`/`tests/test_calc.py`、`commit_paths_known=true`，测试 2 passed；TaskState completed |
