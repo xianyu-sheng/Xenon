@@ -271,7 +271,11 @@ class EngineHostMixin:
 
             task_state = TaskState.from_context(self.agent_context)
             if task_state is not None and task_state.active:
-                task_state.update_from_calls(calls)
+                # With a durable ledger, TaskStateProjection already applied
+                # these calls (including the no-boundary tracker fallback).
+                # Keep the direct fold only for legacy contexts without one.
+                if self.agent_context.get("_evidence_ledger") is None:
+                    task_state.update_from_calls(calls)
                 task_state.maybe_complete()
                 self.agent_context.set("_task_state", task_state.to_dict())
         except Exception as exc:  # noqa: BLE001 — state must not break tracing

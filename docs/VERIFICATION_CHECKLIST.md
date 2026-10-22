@@ -118,6 +118,7 @@
 | 2026-10-21 | Plan-Execute 真实 #26 切片 | 三轮真实 DeepSeek 运行均未完成：首轮 60 工具/18 失败/243s、空测试提交；第二轮 51/20/341s、只改 JSON；修正后第三轮 64/15/292s，TaskState 保持 active、缺 verify；提交快照门重放显示空测试提交还缺 changes。已加计划状态同步、提交快照源码门、失败测试不计验证、git 参数规范化；Plan-Execute 仍不可宣称完成 |
 | 2026-10-21 | compact 后 TaskState 恢复 | 新增 `test_compact_task_state_resume.py`：compact → auto-save → load 后状态字段完整；2 passed |
 | 2026-10-21 | PR #160 HMAC 降级修复 | 复现 keyed→unkeyed 重算链；`8d123a5` 增加 key_expected/partial 与回归；PR #160 合并 `3d163d7`；evidence targeted 47 passed，CI 7/7 |
+| 2026-10-22 | 会话恢复事件源 | auto-save/`/save` 持久化 EvidenceLedger snapshot；`/load`/`/resume` 校验并重绑；TaskStateProjection 在恢复后可继续 replay；`tests/test_evidence_resume.py` 覆盖；全量 3559 passed/98 skipped |
 | 2026-10-22 | plan/step 事件投影真实 smoke | `D:/tmp/xenon-planexec-smoke`：7 工具/0 失败/8.7s；PLAN + 7 对 STEP_STARTED/FINISHED 事件恢复 7 步 completed；真实 pytest 2 passed、commit facc42a、TaskState completed；全量 3558 passed/98 skipped |
 | 2026-10-22 | 事件投影真实 smoke | `D:/tmp/xenon-planexec-smoke`：24 工具/6 失败/101.7s；TaskStateProjection replay 24 个 result_id；真实 pytest 2 passed、commit 875a23a、status completed；全量 3556 passed/98 skipped |
 | 2026-10-22 | 引擎层事件源基础 | `EvidenceSubscription` 支持 phase/kind/source 过滤、replay、异常隔离；Tool observation 事件携带 exit_code/changed_paths/committed_paths；新增 `docs/EVENT_SOURCE.md`；全量 3550 passed/98 skipped |

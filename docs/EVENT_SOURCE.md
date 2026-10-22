@@ -25,6 +25,8 @@ replayable projections.
   `task_fact` boundary, and deduplicates tool observations by `result_id`.
   `run_with_delivery` uses it when a boundary exists and falls back to the
   tracker otherwise.
+- REPL auto-save / `/save` persist a verified ledger snapshot; `/load` and
+  `/resume` rebind it before execution, so replay survives a restart.
 - `EngineCallback` / `EventBus` are **ephemeral UI channels**.  They must not be
   the source of durable task state.
 

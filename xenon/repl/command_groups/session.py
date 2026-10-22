@@ -25,6 +25,40 @@ if TYPE_CHECKING:
     from xenon.repl.model_registry import ModelRegistry
 
 
+def _evidence_snapshot(agent_ctx: Any) -> dict[str, Any] | None:
+    """Snapshot a non-empty durable ledger for session persistence."""
+    if agent_ctx is None:
+        return None
+    get_runtime = getattr(agent_ctx, "get_evidence_runtime", None)
+    runtime = get_runtime() if callable(get_runtime) else None
+    ledger = getattr(runtime, "ledger", None)
+    if ledger is None and hasattr(agent_ctx, "get"):
+        ledger = agent_ctx.get("_evidence_ledger")
+    if ledger is None or not getattr(ledger, "events", None):
+        return None
+    try:
+        return ledger.snapshot()
+    except Exception:  # noqa: BLE001 — session save must not fail a turn
+        return None
+
+
+def _restore_evidence(agent_ctx: Any, extra: dict[str, Any]) -> bool:
+    """Rebind a verified ledger snapshot after /load or /resume."""
+    snapshot = extra.get("evidence")
+    if not isinstance(snapshot, dict):
+        return False
+    from xenon.engine.evidence_runtime import EvidenceLedger
+
+    try:
+        ledger = EvidenceLedger.from_snapshot(snapshot)
+    except (TypeError, ValueError):
+        return False
+    agent_ctx.bind_evidence(ledger)
+    agent_ctx.set("_evidence_session_id", ledger.session_id)
+    agent_ctx.set("_evidence_ledger", ledger)
+    return True
+
+
 # /exit /quit /bye ─────────────────────────────────────────
 
 register_command("/exit", "退出 Xenon", "/exit")
@@ -169,6 +203,11 @@ def _cmd_save(
             "conversation_id": getattr(
                 session_state.get("_repl"), "_conversation_id", ""
             ),
+            **(
+                {"evidence": evidence}
+                if (evidence := _evidence_snapshot(agent_ctx)) is not None
+                else {}
+            ),
         },
     )
     return f"✅ 会话已保存: {path}"
@@ -255,6 +294,7 @@ def _cmd_load(
 
     restored_context = AgentContext(initial=context_store)
     session_state["agent_context"] = restored_context
+    _restore_evidence(restored_context, extra)
     repl = session_state.get("_repl")
     recovery_notice = ""
     if repl is not None:
@@ -450,6 +490,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         restored_context = AgentContext(initial=context_store)
         repl.agent_context = restored_context
         repl._session_state["agent_context"] = restored_context
+        _restore_evidence(restored_context, extra)
         restored_context.set_tool_checkpoint_callback(repl._persist_tool_checkpoint)
         recovery_notice = recover_tool_execution_checkpoint(restored_context)
 

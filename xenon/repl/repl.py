@@ -596,6 +596,20 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         """Durably save an in-flight tool transition without maintenance work."""
         self._auto_save_session(cleanup=False)
 
+    def _evidence_snapshot(self) -> dict[str, Any] | None:
+        """Snapshot the durable ledger without creating an empty one."""
+        runtime = self.agent_context.get_evidence_runtime()
+        ledger = getattr(runtime, "ledger", None)
+        if ledger is None:
+            ledger = self.agent_context.get("_evidence_ledger")
+        if ledger is None or not getattr(ledger, "events", None):
+            return None
+        try:
+            return ledger.snapshot()
+        except Exception as exc:  # noqa: BLE001 — saving must not block a turn
+            logger.debug("证据链快照失败（已忽略）: %s", exc)
+            return None
+
     def _auto_save_session(self, *, cleanup: bool = True) -> None:
         """Atomically checkpoint the active session during use and on exit."""
         try:
@@ -604,16 +618,20 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             history = self.ctx_mgr.export_history()
             context_store = self.agent_context.to_dict()
             model_config = self.model_pool.to_config()
+            extra = {
+                "paradigm": self.registry.current_mode,
+                "working_memory": self.ctx_mgr.get_working_memory(),
+                "cwd": str(Path.cwd()),
+                "conversation_id": getattr(self, "_conversation_id", ""),
+            }
+            evidence = self._evidence_snapshot()
+            if evidence is not None:
+                extra["evidence"] = evidence
             auto_save(
                 history=history,
                 context_store=context_store,
                 model_config=model_config,
-                extra={
-                    "paradigm": self.registry.current_mode,
-                    "working_memory": self.ctx_mgr.get_working_memory(),
-                    "cwd": str(Path.cwd()),
-                    "conversation_id": getattr(self, "_conversation_id", ""),
-                },
+                extra=extra,
             )
             if cleanup:
                 cleanup_expired_sessions()
