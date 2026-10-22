@@ -117,13 +117,20 @@ def run_with_delivery(
             "dirty": "确认 commit 后工作区干净，没有未提交改动",
             "pr": "push 并创建 PR",
         }
-        continuation = (
-            "继续完成当前任务的交付，不要重新做一遍已经完成的工作。\n"
-            "尚未完成："
-            + "；".join(labels[m] for m in missing)
-            + "。请实际执行这些动作，完成后给出最终回答。\n\n"
-            + state.delivery_prompt()
-        )
+        if "verify" in missing and state.verification_failures:
+            continuation = (
+                "验证失败。不要重新规划或重做已经成功的工作；先修复下面的真实"
+                "错误输出，然后重跑同一验证命令，并完成 commit/工作区清理。\n\n"
+                + state.delivery_prompt()
+            )
+        else:
+            continuation = (
+                "继续完成当前任务的交付，不要重新做一遍已经完成的工作。\n"
+                "尚未完成："
+                + "；".join(labels[m] for m in missing)
+                + "。请实际执行这些动作，完成后给出最终回答。\n\n"
+                + state.delivery_prompt()
+            )
         engine.callback.on_warning(
             "引擎交付未完成，重新进入同一执行器补齐 "
             + "、".join(missing)

@@ -16,16 +16,21 @@ class _EngineWithTestRuns:
         self._last_tracker = ToolExecutionTracker()
         self._last_termination_reason = None
         self.calls = 0
+        self.prompts: list[str] = []
 
     def run(self, user_input: str, context=None, ctx_mgr=None) -> str:
         self.calls += 1
+        self.prompts.append(user_input)
         if self.calls == 1:
             self._last_tracker.record(
                 "command",
                 {"command": "pytest -q"},
                 False,
                 "1 failed, 2 passed",
-                metadata={"exit_code": 1},
+                metadata={
+                    "exit_code": 1,
+                    "stdout_tail": "AssertionError: expected 5, got 4",
+                },
             )
         else:
             self._last_tracker.record(
@@ -60,3 +65,6 @@ def test_failed_test_invalidates_prior_pass_and_forces_retry() -> None:
     assert engine.calls == 2
     assert context.get("_task_state")["status"] == "completed"
     assert context.get("_task_state")["tests"] == ["pytest -q"]
+    assert "验证失败" in engine.prompts[1]
+    assert "AssertionError: expected 5, got 4" in engine.prompts[1]
+    assert "pytest -q" in engine.prompts[1]

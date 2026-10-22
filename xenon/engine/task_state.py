@@ -92,6 +92,18 @@ def _metadata_exit_code(metadata: dict[str, Any]) -> int | None:
     return None
 
 
+def _failure_output(metadata: dict[str, Any], result: str) -> str:
+    """Keep the actionable tail of a failed verification command."""
+    parts: list[str] = []
+    for key in ("stdout_tail", "stderr_tail"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    if not parts and result.strip():
+        parts.append(result.strip())
+    return chr(10).join(parts)[-2000:]
+
+
 def _text(value: Any) -> str:
     return str(value or "")
 
@@ -158,6 +170,7 @@ class TaskState:
     verified_revision: int = 0
     tests: list[str] = field(default_factory=list)
     failed_tests: list[str] = field(default_factory=list)
+    verification_failures: list[dict[str, Any]] = field(default_factory=list)
     processed_tool_ids: list[str] = field(default_factory=list)
     commit: str = ""
     committed_artifacts: list[str] = field(default_factory=list)
@@ -207,6 +220,11 @@ class TaskState:
             verified_revision=max(0, int(raw.get("verified_revision") or 0)),
             tests=[str(t) for t in raw.get("tests", []) if t],
             failed_tests=[str(t) for t in raw.get("failed_tests", []) if t],
+            verification_failures=[
+                item
+                for item in raw.get("verification_failures", [])
+                if isinstance(item, dict)
+            ],
             processed_tool_ids=[
                 str(item) for item in raw.get("processed_tool_ids", []) if item
             ],
@@ -245,6 +263,7 @@ class TaskState:
             "verified_revision": self.verified_revision,
             "tests": self.tests[-20:],
             "failed_tests": self.failed_tests[-10:],
+            "verification_failures": self.verification_failures[-3:],
             "processed_tool_ids": self.processed_tool_ids[-200:],
             "commit": self.commit,
             "committed_artifacts": self.committed_artifacts[-30:],
@@ -464,12 +483,21 @@ class TaskState:
                 self.verified_revision = self.artifacts_revision
                 if label in self.failed_tests:
                     self.failed_tests.remove(label)
+                self.verification_failures = []
             else:
                 self.tests = []
                 self.verified_revision = 0
                 if label and label not in self.failed_tests:
                     self.failed_tests.append(label)
                     self.failed_tests = self.failed_tests[-10:]
+                self.verification_failures.append(
+                    {
+                        "command": label,
+                        "exit_code": exit_code,
+                        "output": _failure_output(metadata, result_text),
+                    }
+                )
+                self.verification_failures = self.verification_failures[-3:]
 
         if not success:
             return
@@ -555,6 +583,23 @@ class TaskState:
                 call_id=_text(getattr(call, "result_id", "")),
             )
 
+    def verification_failure_prompt(self, limit: int = 2) -> str:
+        """Render real failing command output for the next repair turn."""
+        lines: list[str] = []
+        for failure in self.verification_failures[-limit:]:
+            command = _text(failure.get("command"))[:240]
+            exit_code = failure.get("exit_code")
+            output = _text(failure.get("output"))[:1200]
+            lines.append(f"- 命令: {command}")
+            if exit_code is not None:
+                lines.append(f"  exit_code: {exit_code}")
+            if output:
+                lines.append("  输出尾部:")
+                lines.append("```")
+                lines.append(output)
+                lines.append("```")
+        return chr(10).join(lines)
+
     def delivery_prompt(self) -> str:
         """Compact state block injected before an agentic turn."""
         lines = [
@@ -572,6 +617,10 @@ class TaskState:
             lines.append("- 已执行验证: " + ", ".join(self.tests[-3:]))
         if self.failed_tests:
             lines.append("- 最近失败验证: " + ", ".join(self.failed_tests[-3:]))
+        failure_block = self.verification_failure_prompt()
+        if failure_block:
+            lines.append("- 失败验证的真实输出（先修复，再重跑同一命令）:")
+            lines.append(failure_block)
         if self.tests and self.verified_revision < self.artifacts_revision:
             lines.append(
                 "- 验证已过期：最近一次通过后又修改了源码，必须重跑验证命令: "

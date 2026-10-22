@@ -474,3 +474,34 @@ def test_reconcile_delivery_fails_matching_completed_steps() -> None:
         "failed",
         "completed",
     ]
+
+
+def test_verification_failure_keeps_real_output_for_repair_prompt() -> None:
+    state = TaskState(objective="x", execution_level=3, required=["verify"])
+    state.record_tool(
+        "command",
+        {"command": "pytest tests/test_app.py -q"},
+        success=False,
+        result="1 failed",
+        metadata={
+            "exit_code": 1,
+            "stdout_tail": "AssertionError: expected 5, got 4",
+            "stderr_tail": "at test_app.py:42",
+        },
+    )
+
+    prompt = state.verification_failure_prompt()
+    assert "pytest tests/test_app.py -q" in prompt
+    assert "exit_code: 1" in prompt
+    assert "AssertionError: expected 5, got 4" in prompt
+    assert "at test_app.py:42" in prompt
+    assert "失败验证的真实输出" in state.delivery_prompt()
+
+    state.record_tool(
+        "command",
+        {"command": "pytest tests/test_app.py -q"},
+        success=True,
+        metadata={"exit_code": 0},
+        result="1 passed",
+    )
+    assert state.verification_failures == []

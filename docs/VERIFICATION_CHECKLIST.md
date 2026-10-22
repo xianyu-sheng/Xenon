@@ -120,6 +120,8 @@
 | 2026-10-21 | PR #160 HMAC 降级修复 | 复现 keyed→unkeyed 重算链；`8d123a5` 增加 key_expected/partial 与回归；PR #160 合并 `3d163d7`；evidence targeted 47 passed，CI 7/7 |
 | 2026-10-22 | Plan step 写操作强校验 | 计划步骤任务要求写盘（tool 或 write/edit/插入/补齐语义）时，执行后必须新增成功写工具调用；串行、DAG 串行/并行、补救步骤均覆盖。修复真实 #26 中“声称修改但 git diff 为空”的步骤 status；全量 3565 passed/98 skipped |
 | 2026-10-22 | Combined Engine EventBus | `PlanReactEngine`/`PlanReflectionEngine`/`ReactReflectionEngine` 也暴露顶层 `event_bus`，回调 delegate 保持；新增组合引擎测试；全量 3563 passed/98 skipped |
+| 2026-10-22 | 失败输出进入修复续跑 | ToolExecutor 记录 stdout/stderr tail；TaskState 保存 verification_failures（命令/exit_code/输出尾部）；`run_with_delivery` 在 verify 缺失时改用“先修复真实错误、重跑同一命令”的 continuation，而不是泛化重试；全量 3567 passed/98 skipped |
+| 2026-10-22 | 失败反馈真实 #26 复跑 | 60 工具/15 失败/278.3s；tests 为空、verification_failures 含 TypeError/assert 输出；步骤 3/4/5/7 failed、8 skipped，TaskState active；最终回答明确未完成，未再假 complete |
 | 2026-10-22 | 写操作门真实 #26 复跑 | 63 工具/18 失败/307.4s；真实 commit `48b0e02`，但回归测试仍失败且工作区有 `.bak`；TaskState `active`，缺 verify/dirty；steps 8/9 completed、step 10 经 reconciliation 改为 failed；最终回答明确未完成 |
 | 2026-10-22 | 计划步骤写操作强校验 | 写意图步骤（tool=write 或任务含写/插入/补齐语义）必须新增成功写调用；串行/DAG 串行并行/补救步骤均覆盖；新增步骤 delivery reconciliation；全量 3566 passed/98 skipped |
 | 2026-10-22 | EventBus 多订阅接线 | `BaseEngine.event_bus` + delegate-preserving `CallbackBusBridge`；UI/日志可独立订阅，原 Console/Silent 回调行为保持；新增桥接/引擎测试；全量 3562 passed/98 skipped |

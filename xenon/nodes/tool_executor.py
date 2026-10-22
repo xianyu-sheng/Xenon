@@ -895,6 +895,10 @@ class ToolExecutor:
                 ):
                     if key in raw:
                         tracker_metadata[key] = raw[key]
+                for key in ("stdout", "stderr"):
+                    value = raw.get(key)
+                    if isinstance(value, str) and value.strip():
+                        tracker_metadata[f"{key}_tail"] = value[-1200:]
             if result_id:
                 tracker_metadata["result_id"] = result_id
             execution_result = ToolExecuteResult(
