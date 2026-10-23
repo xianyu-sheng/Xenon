@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +25,7 @@ def test_run_python_script(tmp_path) -> None:
     assert result["returncode"] == 0
     assert "run-script-ok" in result["stdout"]
     assert result["script"].endswith(".py")
+    assert not Path(result["script"]).exists()
 
 
 def test_run_python_failure_keeps_exit_code_and_stderr(tmp_path) -> None:
@@ -138,3 +140,11 @@ def test_shell_variable_error_points_to_run_script() -> None:
         assert "赋值并用" not in message
     else:
         raise AssertionError("expected SecurityError")
+
+
+def test_plan_prompt_exposes_run_script_and_shell_alternative() -> None:
+    from xenon.engine.plan_execute_engine import PlanExecuteEngine
+
+    prompt = PlanExecuteEngine(["fake/model"]).system_prompt
+    assert "run_script" in prompt
+    assert "python -c" in prompt

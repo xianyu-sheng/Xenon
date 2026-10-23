@@ -903,6 +903,19 @@ class ToolExecutor:
                 content = params.get("content")
                 if isinstance(content, str):
                     tracker_metadata["content_chars"] = len(content)
+            elif tool_name == "batch_write":
+                files = params.get("files")
+                if isinstance(files, list):
+                    lengths: dict[str, int] = {}
+                    for spec in files:
+                        if not isinstance(spec, dict):
+                            continue
+                        path = spec.get("path") or spec.get("file_path")
+                        content = spec.get("content")
+                        if isinstance(path, str) and isinstance(content, str):
+                            lengths[path] = len(content)
+                    if lengths:
+                        tracker_metadata["content_chars_by_path"] = lengths
             if result_id:
                 tracker_metadata["result_id"] = result_id
             execution_result = ToolExecuteResult(

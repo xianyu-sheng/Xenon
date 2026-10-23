@@ -25,7 +25,6 @@ _CD_RE = re.compile(r"^cd(?:\s+/d)?\s+(.+?)\s*$", re.I)
 _ENV_RE = re.compile(
     r"^\$env:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(['\"]?)(.*?)\2\s*$"
 )
-_PIPE_RE = re.compile(r"\s*(?:2>&1\s*)?\|.*$")
 _REDIRECT_RE = re.compile(r"\s+[12]?>\s*\S+.*$")
 
 
@@ -73,8 +72,39 @@ def _split_segments(command: str) -> list[str]:
     return [part.strip() for part in parts if part.strip()]
 
 
+def _strip_unquoted_pipeline(raw: str) -> str:
+    """Remove shell pipes/redirects without touching quoted pytest args."""
+    out: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(raw):
+        char = raw[i]
+        if quote:
+            out.append(char)
+            if char == quote:
+                quote = ""
+            i += 1
+            continue
+        if char in ("'", '"'):
+            quote = char
+            out.append(char)
+            i += 1
+            continue
+        if char == "2" and raw.startswith("2>&1", i):
+            i += 4
+            continue
+        if char == "1" and raw.startswith("1>&2", i):
+            i += 4
+            continue
+        if char == "|" or char == ">":
+            break
+        out.append(char)
+        i += 1
+    return "".join(out)
+
+
 def _clean_args(raw: str) -> list[str]:
-    raw = _PIPE_RE.sub("", raw or "")
+    raw = _strip_unquoted_pipeline(raw or "")
     raw = _REDIRECT_RE.sub("", raw).strip()
     if not raw:
         return []

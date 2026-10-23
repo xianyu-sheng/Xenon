@@ -83,11 +83,21 @@ def test_command_tool_runs_pytest_without_shell(tmp_path) -> None:
 def test_quoted_node_id_and_k_expression_lose_shell_quotes() -> None:
     plan = plan_pytest(
         'python -m pytest "tests/test_a.py::TestA::test_one" '
-        '-k "one or two" -q',
+        '-k "one or two|three" -q',
         "D:/repo",
     )
 
     assert plan is not None
     assert plan.invocations == [
-        ["tests/test_a.py::TestA::test_one", "-k", "one or two", "-q"]
+        ["tests/test_a.py::TestA::test_one", "-k", "one or two|three", "-q"]
     ]
+
+
+def test_redirect_does_not_leave_a_stray_argument() -> None:
+    plan = plan_pytest(
+        "python -m pytest tests -q 2>&1 | Select-Object -First 20",
+        "D:/repo",
+    )
+
+    assert plan is not None
+    assert plan.invocations == [["tests", "-q"]]

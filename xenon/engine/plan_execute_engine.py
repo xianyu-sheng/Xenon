@@ -84,7 +84,9 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
 
 以下是所有可用工具，不存在其他工具。tool 字段必须是下列之一或 null：
 
-- command: {{"action": "终端命令"}} — 在本机终端执行 shell 命令（使用 {shell_name}）。不能用于读写文件。
+- command: {{"action": "终端命令"}} — 在本机终端执行 shell 命令（使用 {shell_name}）。不能用于读写文件；不要用 `python -c`、`$()` 或未加引号的 `$变量`，这些会被安全策略拦截。
+- run_script: {{"language": "python|powershell", "code": "完整脚本内容"}} — 把 Python 片段或多行 PowerShell 写入工作区临时脚本执行，避开 shell 引号/`$()`/`python -c` 限制；内联脚本优先用它。
+- tool_result_read: {{"result_id": "tr_...", "mode": "summary|excerpt|range|search", "query": "可选", "start_line": 0, "max_lines": 0}} — 按 result_id 回查之前工具结果的完整缓存，不重复执行原工具。
 - read_file: {{"file_path": "路径", "start_line": "起始行号(可选,从1开始)", "max_lines": "读取行数(可选)"}} — 读取本机文件内容，支持分段读取。仅限本地文件，不能读 URL 或 GitHub 文件。
 - write_file: {{"file_path": "路径", "content": "内容"}} — 将内容写入本机文件（覆盖）。自动创建父目录。
 - list_files: {{"file_path": "目录", "pattern": "*.py", "limit": 50, "cursor": "可选"}} — 列出本机目录文件。仅限本地，不能列 GitHub 仓库；结果带 total/next_cursor，可按游标继续读取。
@@ -165,7 +167,7 @@ MINI_REACT_PROMPT = """你正在执行任务计划的第 {step_id} 步（共 {to
 - 需要工具时：{{"thought":"分析当前状态","action":"工具名","action_input":{{"参数名":"值"}}}}
 - 已得到结论时：{{"thought":"总结","final_answer":"本步骤的最终结果"}}
 
-可用工具与参数同规划阶段（command/read_file/write_file/list_files/search_files/git/web_fetch/docs_fetch/github_fetch/edit_file/create_directory/batch_write/batch_edit/code_index/ast_analyze/refactor/diff_preview/create_pull_request/mcp_call）。本步骤规划为"无需工具"，但若执行中发现需要读取文件/查目录等，可在 {max_rounds} 轮内按需调用工具；无需工具时直接输出 final_answer。
+可用工具与参数同规划阶段（command/run_script/tool_result_read/read_file/write_file/list_files/search_files/git/web_fetch/docs_fetch/github_fetch/edit_file/create_directory/batch_write/batch_edit/code_index/ast_analyze/refactor/diff_preview/create_pull_request/mcp_call）。遇到 Python 片段、PowerShell 变量或多行脚本，优先 run_script，不要用 python -c 或未加引号的 $ 变量。本步骤规划为"无需工具"，但若执行中发现需要读取文件/查目录等，可在 {max_rounds} 轮内按需调用工具；无需工具时直接输出 final_answer。
 """
 
 
@@ -647,7 +649,11 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             version = max(prior_versions, default=0) + 1
         elif state is not None:
             version = state.plan_version + (1 if state.steps else 0)
-        steps = normalize_plan_steps(steps, plan_version=version, origin="replan")
+        steps = normalize_plan_steps(
+            steps,
+            plan_version=version,
+            origin="plan" if version == 1 else "replan",
+        )
         if ledger is None or not hasattr(ledger, "append"):
             self._sync_task_plan(ctx, steps, version=version, reason=reason)
             return

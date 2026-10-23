@@ -633,6 +633,16 @@ def test_new_test_task_rejects_an_empty_test_file() -> None:
     assert state.test_artifacts == ["tests/test_new.py"]
     assert "test" not in state.missing_delivery()
 
+    state.record_tool(
+        "write_file",
+        {"file_path": "tests/test_new.py", "content": ""},
+        success=True,
+        metadata={"changed_paths": ["tests/test_new.py"], "content_chars": 0},
+    )
+    assert state.test_artifacts == []
+    assert state.invalid_test_artifacts == ["tests/test_new.py"]
+    assert "test" in state.missing_delivery()
+
 
 def test_writing_hardcoded_value_does_not_create_a_test_requirement() -> None:
     state = TaskState(

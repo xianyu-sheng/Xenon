@@ -827,7 +827,12 @@ class TaskState:
                     if path not in self.artifacts:
                         self.artifacts.append(path)
                     if _is_test_path(path):
-                        chars = metadata.get("content_chars")
+                        by_path = metadata.get("content_chars_by_path")
+                        chars = (
+                            by_path.get(path)
+                            if isinstance(by_path, dict)
+                            else metadata.get("content_chars")
+                        )
                         if isinstance(chars, int) and not isinstance(chars, bool):
                             if chars > 0:
                                 if path not in self.test_artifacts:
@@ -837,8 +842,16 @@ class TaskState:
                                     for item in self.invalid_test_artifacts
                                     if _path_key(item) != _path_key(path)
                                 ]
-                            elif path not in self.invalid_test_artifacts:
-                                self.invalid_test_artifacts.append(path)
+                            else:
+                                # Rewriting a previously valid test as an
+                                # empty file must invalidate the old fact.
+                                self.test_artifacts = [
+                                    item
+                                    for item in self.test_artifacts
+                                    if _path_key(item) != _path_key(path)
+                                ]
+                                if path not in self.invalid_test_artifacts:
+                                    self.invalid_test_artifacts.append(path)
                     if not _is_test_path(path):
                         # The committed source snapshot is stale as soon as
                         # this path is rewritten; a later test-only commit

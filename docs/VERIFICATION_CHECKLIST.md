@@ -72,6 +72,9 @@
 | C39 | run 内部才创建 ledger 时，交付层仍使用启动前的 None 引用，计划事件没有回放 | 事件/投影 | ✅ 已修复 | run 后刷新 `_evidence_ledger`；真实 calc 计划 5 步全部进入 TaskState；新增“运行中创建 ledger”回归测试 |
 | C40 | 模型常写 `git add x && commit -m`（第二个段缺 git） | 执行/命令 | ✅ 窄兼容 | git 链中前一命令成功后，裸 `add/commit` 视为 git 子命令；不改变独立命令语义 |
 | C42 | 空测试文件也能被 pytest 的旧测试通过洗白，TaskState 假完成 | 执行/交付 | ✅ 已修复 | ToolExecutor 记录 `content_chars`；TaskState 对“新增/补测试”的任务要求非空 test artifact；空文件进入 `invalid_test_artifacts` 和修复提示；真实 #26 空测试场景会被判未完成，非空测试场景通过 |
+| C45 | Plan-Execute 的可用工具列表漏掉 `run_script`/`tool_result_read`，但安全错误仍要求模型改用 run_script | 工具/提示 | ✅ 已修复 | Planner prompt 与 mini-ReAct 工具说明补全；`command` 明确禁止 `python -c`/未加引号 `$`；run_script 执行后清理临时脚本；新增提示词/清理测试 |
+| C46 | pytest 归一化把 `2>&1` 留成参数 `2`，并可能截断带引号的 `-k "a|b"` | 工具/命令 | ✅ 已修复 | quote-aware 管道处理；`2>&1` 被剥离；`-k` 内管道保留；新增 parser 测试 |
+| C47 | 先写有效测试再覆盖为空时，旧 `test_artifacts` 仍保留，空测试门失效 | 交付/测试 | ✅ 已修复 | 空内容写会移除同名 valid test artifact 并加入 invalid；新增回归覆盖 |
 | C44 | 步骤修复连续失败仍使用同一执行模型 | 执行/模型 | ✅ 可配置轮换 | 首次修复保持当前模型；第二次修复轮换显式配置的 `executor_model_priority`；第三次且配置了 model_pool 时优先尝试更高 tier 模型；全量 3595 passed |
 | C43 | “不要写死”被误判为“需要新增测试”，导致 cli_summary 假缺口 | 判定/交付 | ✅ 已修复 | 测试创建正则排除“写死”；cli_summary/json_report 复跑 2/2；最终 10/10；全量 3594 passed |
 | C41 | 交付提示只知道 dirty，不告诉模型具体残留文件，模型反复空说“干净” | 执行/提示 | ✅ 已修复 | worktree 探测记录 `dirty_paths`；状态持久化；delivery continuation 直接列出 `.bak`/未提交路径，要求实际删除或提交；全量 3592 passed；10/10 基准 |
@@ -134,6 +137,7 @@
 | 2026-10-22 | Plan step 写操作强校验 | 计划步骤任务要求写盘（tool 或 write/edit/插入/补齐语义）时，执行后必须新增成功写工具调用；串行、DAG 串行/并行、补救步骤均覆盖。修复真实 #26 中“声称修改但 git diff 为空”的步骤 status；全量 3565 passed/98 skipped |
 | 2026-10-22 | Combined Engine EventBus | `PlanReactEngine`/`PlanReflectionEngine`/`ReactReflectionEngine` 也暴露顶层 `event_bus`，回调 delegate 保持；新增组合引擎测试；全量 3563 passed/98 skipped |
 | 2026-10-22 | 失败输出进入修复续跑 | ToolExecutor 记录 stdout/stderr tail；TaskState 保存 verification_failures（命令/exit_code/输出尾部）；`run_with_delivery` 在 verify 缺失时改用“先修复真实错误、重跑同一命令”的 continuation，而不是泛化重试；全量 3567 passed/98 skipped |
+| 2026-10-23 | 工具设计审查 | 全量 3597 passed/98 skipped；plan prompt 暴露 run_script；run_script 清理临时脚本；pytest 引号/重定向修复；空测试重写失效 |
 | 2026-10-23 | 修复模型轮换 | 全量 3595 passed/98 skipped；配置多执行模型时第二次修复开始轮换；单模型默认行为不变 |
 | 2026-10-23 | 10 用例最终基线 | 全量 3594 passed/98 skipped；10/10 本地真实任务；空测试门、dirty 路径、实时计划同轮验证 |
 | 2026-10-23 | 空测试门 + 真实 #26 复跑 | 全量 3593 passed/98 skipped；真实 #26 90 工具/16 失败/634s，非空回归测试、目标测试通过、commit、clean、TaskState completed；10/10 基准 |

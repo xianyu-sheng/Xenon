@@ -121,6 +121,13 @@ class ScriptToolsMixin:
                 "script": str(script),
                 "error": f"run_script 超时 ({getattr(self, 'timeout', 60)}s)",
             }
+        finally:
+            # The generated helper is not a deliverable.  Leaving it under
+            # .xenon_tmp was a recurring source of dirty worktrees.
+            try:
+                script.unlink(missing_ok=True)
+            except OSError:
+                pass
 
         output = (proc.stdout or "") + (proc.stderr or "")
         return {
