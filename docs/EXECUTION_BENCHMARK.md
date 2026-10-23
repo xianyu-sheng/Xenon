@@ -21,6 +21,8 @@ script returns non-zero when any case fails.
 | `calc` | create source + test, run target pytest, commit, clean tree |
 | `fix_bug` | fix a failing source assertion, rerun the same target test, commit |
 | `cli_summary` | implement deterministic formatting, test, commit |
+| `json_report` | expose top-level JSON fields from nested input, test, commit |
+| `multi_file` | fix a package module and commit only the source file |
 
 A case passes only when all of these are true:
 
@@ -36,10 +38,12 @@ A case passes only when all of these are true:
 Model: `deepseek/deepseek-v4-flash`
 
 ```text
-3/3 cases passed
-calc:        7.9s,  6 tools, 0 failures
-fix_bug:    85.5s, 22 tools, 3 failures
-cli_summary:33.1s, 14 tools, 1 failure
+5/5 cases passed
+calc:         9.2s,  5 tools, 0 failures
+fix_bug:     33.3s, 14 tools, 1 failure
+cli_summary: 41.0s, 14 tools, 1 failure
+json_report: 46.6s, 13 tools, 2 failures
+multi_file:  47.1s, 12 tools, 1 failure
 ```
 
 The real SmartBench #26 slice also finished with target tests `2 passed`, a

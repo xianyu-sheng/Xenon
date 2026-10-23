@@ -120,6 +120,21 @@ def _setup_cli_summary(repo: Path) -> None:
     )
 
 
+def _setup_json_report(repo: Path) -> None:
+    (repo / "report.py").write_text("def build_report(stats):\n    return {'stats': dict(stats)}\n", encoding="utf-8")
+    (repo / "test_report.py").write_text("from report import build_report\n\ndef test_report_fields():\n    data = build_report({'rules_total': 7, 'rules_full': 0})\n    assert data['rules_total'] == 7\n    assert data['rules_full'] == 0\n", encoding="utf-8")
+
+
+def _setup_multi_file(repo: Path) -> None:
+    package = repo / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "calc.py").write_text('def add(a, b):\n    return a - b\n', encoding="utf-8")
+    tests = repo / "tests"
+    tests.mkdir()
+    (tests / "test_calc.py").write_text('from pkg.calc import add\n\ndef test_add():\n    assert add(2, 3) == 5\n', encoding="utf-8")
+
+
 def _check_add(repo: Path) -> bool:
     result = subprocess.run(
         [sys.executable, "-c", "from math_utils import add; assert add(2,3)==5"],
@@ -143,6 +158,40 @@ def _check_summary(repo: Path) -> bool:
             "assert coverage_summary({'rules_total': 7, 'rules_full': 0}) "
             "== 'Coverage: 7 rules ran, 0 declared full coverage'",
         ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env=_py_env(),
+    )
+    return result.returncode == 0
+
+
+def _check_json_fields(repo: Path) -> bool:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from report import build_report; "
+            "d=build_report({'rules_total': 7, 'rules_full': 0}); "
+            "assert d['rules_total'] == 7 and d['rules_full'] == 0",
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env=_py_env(),
+    )
+    return result.returncode == 0
+
+
+def _check_package_add(repo: Path) -> bool:
+    result = subprocess.run(
+        [sys.executable, "-c", "from pkg.calc import add; assert add(2,3)==5"],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -192,6 +241,31 @@ CASES = {
         verify_cmd=[sys.executable, "-m", "pytest", "test_app.py", "-q"],
         setup=_setup_cli_summary,
         extra_check=_check_summary,
+    ),
+    "json_report": Case(
+        name="json_report",
+        objective=(
+            "当前仓库的 report.build_report 只把 stats 放在嵌套的 stats 字段里。请让 "
+            "build_report({'rules_total': 7, 'rules_full': 0}) 返回的字典同时包含"
+            "顶层 rules_total=7 和 rules_full=0，数字来自输入、不得写死；运行 "
+            "python -m pytest test_report.py -q；然后 git add report.py && "
+            "git commit -m 'feat: expose report coverage fields'；不要 push，不要创建 PR。"
+        ),
+        verify_cmd=[sys.executable, "-m", "pytest", "test_report.py", "-q"],
+        setup=_setup_json_report,
+        extra_check=_check_json_fields,
+    ),
+    "multi_file": Case(
+        name="multi_file",
+        objective=(
+            "当前仓库 pkg/calc.py 的 add 返回 a-b，tests/test_calc.py 期望 a+b。请修复"
+            "包内源码使测试真实通过，运行 python -m pytest tests/test_calc.py -q；"
+            "然后 git add pkg/calc.py && git commit -m 'fix: package add returns sum'；"
+            "不要改测试来绕过，不要 push，不要创建 PR。"
+        ),
+        verify_cmd=[sys.executable, "-m", "pytest", "tests/test_calc.py", "-q"],
+        setup=_setup_multi_file,
+        extra_check=_check_package_add,
     ),
 }
 
@@ -297,7 +371,15 @@ def _run_case(
             env=_py_env(),
         )
         test_returncode = test.returncode
-        status = _git(repo, "status", "--porcelain").stdout.strip()
+        status_lines = [
+            line
+            for line in _git(repo, "status", "--porcelain", "-uall").stdout.splitlines()
+            if line.strip()
+            and "__pycache__/" not in line
+            and ".pytest_cache/" not in line
+            and not line.rstrip().endswith(".pyc")
+        ]
+        status = chr(10).join(status_lines).strip()
         head = _git(repo, "rev-parse", "HEAD").stdout.strip()
         if test.returncode != 0:
             reason = "target tests failed: " + (test.stdout + test.stderr)[-800:]
@@ -335,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
         "--workdir",
         default=str(Path(os.environ.get("TEMP", "/tmp")) / "xenon-bench"),
     )
-    parser.add_argument("--cases", default=",".join(CASES))
+    parser.add_argument("--cases", default="calc,fix_bug,cli_summary,json_report,multi_file")
     parser.add_argument("--model", default="deepseek/deepseek-v4-flash")
     parser.add_argument("--base-url", default="https://api.deepseek.com")
     parser.add_argument("--json", default="")

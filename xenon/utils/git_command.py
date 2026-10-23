@@ -96,6 +96,15 @@ def plan_git(command: str, cwd: str | Path) -> GitPlan | None:
                 candidate if candidate.is_absolute() else workspace / candidate
             )
             continue
+        lowered = segment.lower()
+        if (
+            invocations
+            and lowered.startswith(("commit ", "add "))
+            and not lowered.startswith("git ")
+        ):
+            # Models commonly write ``git add x && commit -m ...``; the
+            # intent is still a git command, not a shell builtin.
+            segment = "git " + segment
         if not segment.lower().startswith("git "):
             return None
         try:

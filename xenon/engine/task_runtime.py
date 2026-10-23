@@ -135,6 +135,10 @@ def run_with_delivery(
         logger.exception("engine.run failed before delivery finalization")
         raise
     state = TaskState.from_context(context) or initial_state
+    # The engine may have created/bound the ledger during run().  Refresh the
+    # reference before deciding whether a post-run replay is needed.
+    if context is not None and hasattr(context, "get"):
+        ledger = context.get("_evidence_ledger")
     if state is None or not state.active:
         if live_projection and projection is not None:
             projection.close()

@@ -22,6 +22,16 @@ def test_git_chain_is_split_without_a_shell() -> None:
     ]
 
 
+def test_bare_commit_after_git_add_is_treated_as_git_commit() -> None:
+    plan = plan_git('git add report.py && commit -m "feat: report"', "D:/repo")
+
+    assert plan is not None
+    assert plan.invocations == [
+        ["git", "add", "report.py"],
+        ["git", "commit", "-m", "feat: report"],
+    ]
+
+
 def test_git_chain_with_other_program_is_not_rewritten() -> None:
     assert plan_git("git add -A; python -m pytest", "D:/repo") is None
     assert plan_git("git push origin main", "D:/repo") is None

@@ -367,3 +367,39 @@ def test_delivery_runtime_publishes_live_plan_state_on_engine_bus() -> None:
     assert seen and "Plan v1" in seen[0]
     assert context.get("_task_state")["steps"][0]["status"] == "pending"
     assert result.reason == TerminationReason.DELIVERY_INCOMPLETE
+
+
+def test_delivery_runtime_replays_ledger_created_during_run() -> None:
+    from xenon.engine.task_runtime import run_with_delivery
+
+    class _EngineCreatesLedger(_ProjectedEngine):
+        def run(self, user_input, context=None, ctx_mgr=None):
+            ledger = EvidenceLedger("created-during-run")
+            state = TaskState.from_context(context)
+            ledger.append(
+                LifecyclePhase.TASK,
+                EventKind.TASK_FACT,
+                EvidenceSource.ENGINE,
+                {"task_id": state.task_id},
+            )
+            ledger.append(
+                LifecyclePhase.PLANNING,
+                EventKind.PLAN,
+                EvidenceSource.ENGINE,
+                {
+                    "task_id": state.task_id,
+                    "version": 1,
+                    "steps": [{"id": 1, "task": "write", "status": "pending"}],
+                },
+            )
+            context.set("_evidence_ledger", ledger)
+            return "done"
+
+    state = _state()
+    context = AgentContext({"_task_state": state.to_dict()})
+
+    run_with_delivery(_EngineCreatesLedger(), "finish", context, max_delivery_retries=0)
+
+    projected = TaskState.from_context(context)
+    assert projected is not None
+    assert [step["step"] for step in projected.steps] == ["write"]
