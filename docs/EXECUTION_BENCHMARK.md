@@ -23,6 +23,11 @@ script returns non-zero when any case fails.
 | `cli_summary` | implement deterministic formatting, test, commit |
 | `json_report` | expose top-level JSON fields from nested input, test, commit |
 | `multi_file` | fix a package module and commit only the source file |
+| `rename_function` | add a requested API name while preserving compatibility |
+| `two_bugs` | fix two independent arithmetic bugs |
+| `format_price` | implement deterministic money formatting |
+| `safe_div` | fix a boundary condition without changing tests |
+| `config_default` | implement a missing default value |
 
 A case passes only when all of these are true:
 
@@ -38,12 +43,17 @@ A case passes only when all of these are true:
 Model: `deepseek/deepseek-v4-flash`
 
 ```text
-5/5 cases passed
-calc:         9.2s,  5 tools, 0 failures
-fix_bug:     33.3s, 14 tools, 1 failure
-cli_summary: 41.0s, 14 tools, 1 failure
-json_report: 46.6s, 13 tools, 2 failures
-multi_file:  47.1s, 12 tools, 1 failure
+10/10 cases passed
+calc:          8.9s,   6 tools, 0 failures
+fix_bug:      41.4s,  13 tools, 1 failure
+cli_summary: 223.8s,  29 tools, 9 failures
+json_report:  51.6s,  16 tools, 1 failure
+multi_file:   36.0s,  13 tools, 1 failure
+rename_function: 104.4s, 33 tools, 3 failures
+two_bugs:    138.1s,  36 tools, 4 failures
+format_price: 37.6s,  13 tools, 1 failure
+safe_div:     38.4s,  13 tools, 1 failure
+config_default: 40.0s, 13 tools, 1 failure
 ```
 
 The real SmartBench #26 slice also finished with target tests `2 passed`, a

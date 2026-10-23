@@ -135,6 +135,31 @@ def _setup_multi_file(repo: Path) -> None:
     (tests / "test_calc.py").write_text('from pkg.calc import add\n\ndef test_add():\n    assert add(2, 3) == 5\n', encoding="utf-8")
 
 
+def _setup_rename_function(repo: Path) -> None:
+    (repo / "utils.py").write_text('def add(a, b):\n    return a + b\n', encoding="utf-8")
+    (repo / "test_utils.py").write_text('from utils import sum_two\n\ndef test_sum_two():\n    assert sum_two(2, 3) == 5\n', encoding="utf-8")
+
+
+def _setup_two_bugs(repo: Path) -> None:
+    (repo / "ops.py").write_text('def add(a, b):\n    return a - b\n\ndef mul(a, b):\n    return a + b\n', encoding="utf-8")
+    (repo / "test_ops.py").write_text('from ops import add, mul\n\ndef test_ops():\n    assert add(2, 3) == 5\n    assert mul(2, 3) == 6\n', encoding="utf-8")
+
+
+def _setup_format_price(repo: Path) -> None:
+    (repo / "pricing.py").write_text('def format_price(cents):\n    return str(cents)\n', encoding="utf-8")
+    (repo / "test_pricing.py").write_text("from pricing import format_price\n\ndef test_price():\n    assert format_price(123) == '$1.23'\n    assert format_price(5) == '$0.05'\n", encoding="utf-8")
+
+
+def _setup_safe_div(repo: Path) -> None:
+    (repo / "mathx.py").write_text('def safe_div(a, b):\n    return a / b\n', encoding="utf-8")
+    (repo / "test_mathx.py").write_text('from mathx import safe_div\n\ndef test_div():\n    assert safe_div(4, 2) == 2\n    assert safe_div(1, 0) is None\n', encoding="utf-8")
+
+
+def _setup_config_default(repo: Path) -> None:
+    (repo / "config.py").write_text("def enabled(cfg):\n    return cfg.get('enabled')\n", encoding="utf-8")
+    (repo / "test_config.py").write_text("from config import enabled\n\ndef test_default():\n    assert enabled({}) is False\n    assert enabled({'enabled': True}) is True\n", encoding="utf-8")
+
+
 def _check_add(repo: Path) -> bool:
     result = subprocess.run(
         [sys.executable, "-c", "from math_utils import add; assert add(2,3)==5"],
@@ -203,6 +228,46 @@ def _check_package_add(repo: Path) -> bool:
     return result.returncode == 0
 
 
+def _check_rename(repo: Path) -> bool:
+    return subprocess.run(
+        [sys.executable, "-c", "from utils import sum_two; assert sum_two(2,3)==5"],
+        cwd=repo, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=False, env=_py_env(),
+    ).returncode == 0
+
+
+def _check_two_bugs(repo: Path) -> bool:
+    return subprocess.run(
+        [sys.executable, "-c", "from ops import add,mul; assert add(2,3)==5 and mul(2,3)==6"],
+        cwd=repo, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=False, env=_py_env(),
+    ).returncode == 0
+
+
+def _check_price(repo: Path) -> bool:
+    return subprocess.run(
+        [sys.executable, "-c", "from pricing import format_price; assert format_price(123)=='$1.23' and format_price(5)=='$0.05'"],
+        cwd=repo, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=False, env=_py_env(),
+    ).returncode == 0
+
+
+def _check_div(repo: Path) -> bool:
+    return subprocess.run(
+        [sys.executable, "-c", "from mathx import safe_div; assert safe_div(4,2)==2 and safe_div(1,0) is None"],
+        cwd=repo, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=False, env=_py_env(),
+    ).returncode == 0
+
+
+def _check_config(repo: Path) -> bool:
+    return subprocess.run(
+        [sys.executable, "-c", "from config import enabled; assert enabled({}) is False and enabled({'enabled': True}) is True"],
+        cwd=repo, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=False, env=_py_env(),
+    ).returncode == 0
+
+
 CASES = {
     "calc": Case(
         name="calc",
@@ -266,6 +331,66 @@ CASES = {
         verify_cmd=[sys.executable, "-m", "pytest", "tests/test_calc.py", "-q"],
         setup=_setup_multi_file,
         extra_check=_check_package_add,
+    ),
+    "rename_function": Case(
+        name="rename_function",
+        objective=(
+            "当前仓库 utils.py 只有 add 函数，tests/test_utils.py 期望导入 sum_two。"
+            "请新增 sum_two(a, b) 返回 a+b，并保留 add 兼容；运行 "
+            "python -m pytest test_utils.py -q；然后 git add utils.py && "
+            "git commit -m 'feat: add sum_two alias'；不要 push，不要创建 PR。"
+        ),
+        verify_cmd=[sys.executable, "-m", "pytest", "test_utils.py", "-q"],
+        setup=_setup_rename_function,
+        extra_check=_check_rename,
+    ),
+    "two_bugs": Case(
+        name="two_bugs",
+        objective=(
+            "ops.py 的 add 和 mul 都返回了错误结果，test_ops.py 描述正确行为。"
+            "请修复两个函数并运行 python -m pytest test_ops.py -q；然后 "
+            "git add ops.py && git commit -m 'fix: correct arithmetic ops'；"
+            "不要修改测试，不要 push，不要创建 PR。"
+        ),
+        verify_cmd=[sys.executable, "-m", "pytest", "test_ops.py", "-q"],
+        setup=_setup_two_bugs,
+        extra_check=_check_two_bugs,
+    ),
+    "format_price": Case(
+        name="format_price",
+        objective=(
+            "pricing.format_price 目前直接返回 cents 的字符串，test_pricing.py 期望 "
+            "123 -> '$1.23'、5 -> '$0.05'。请实现两位小数和美元符号，运行 "
+            "python -m pytest test_pricing.py -q；然后 git add pricing.py && "
+            "git commit -m 'feat: format prices'；不要 push，不要创建 PR。"
+        ),
+        verify_cmd=[sys.executable, "-m", "pytest", "test_pricing.py", "-q"],
+        setup=_setup_format_price,
+        extra_check=_check_price,
+    ),
+    "safe_div": Case(
+        name="safe_div",
+        objective=(
+            "mathx.safe_div 在除数为 0 时抛异常，test_mathx.py 期望返回 None。"
+            "请修复边界行为，保留正常除法；运行 python -m pytest test_mathx.py -q；"
+            "然后 git add mathx.py && git commit -m 'fix: safe division by zero'；"
+            "不要修改测试，不要 push，不要创建 PR。"
+        ),
+        verify_cmd=[sys.executable, "-m", "pytest", "test_mathx.py", "-q"],
+        setup=_setup_safe_div,
+        extra_check=_check_div,
+    ),
+    "config_default": Case(
+        name="config_default",
+        objective=(
+            "config.enabled 对缺失字段返回 None，test_config.py 期望默认 False。"
+            "请实现默认值，运行 python -m pytest test_config.py -q；然后 "
+            "git add config.py && git commit -m 'fix: enabled defaults to false'；"
+            "不要修改测试，不要 push，不要创建 PR。"
+        ),
+        verify_cmd=[sys.executable, "-m", "pytest", "test_config.py", "-q"],
+        setup=_setup_config_default,
+        extra_check=_check_config,
     ),
 }
 
@@ -417,7 +542,7 @@ def main(argv: list[str] | None = None) -> int:
         "--workdir",
         default=str(Path(os.environ.get("TEMP", "/tmp")) / "xenon-bench"),
     )
-    parser.add_argument("--cases", default="calc,fix_bug,cli_summary,json_report,multi_file")
+    parser.add_argument("--cases", default="calc,fix_bug,cli_summary,json_report,multi_file,rename_function,two_bugs,format_price,safe_div,config_default")
     parser.add_argument("--model", default="deepseek/deepseek-v4-flash")
     parser.add_argument("--base-url", default="https://api.deepseek.com")
     parser.add_argument("--json", default="")

@@ -60,6 +60,43 @@ def _status_is_dirty(text: str) -> bool:
     return False
 
 
+def _status_paths(text: str) -> list[str]:
+    """Extract changed paths from git status --short output."""
+    paths: list[str] = []
+    for line in text.splitlines():
+        value = line.rstrip()
+        if len(value) < 4:
+            continue
+        marker = value[:2]
+        if marker not in {
+            "??",
+            "M ",
+            " M",
+            "A ",
+            " A",
+            "D ",
+            " D",
+            "R ",
+            " R",
+            "C ",
+            " C",
+            "U ",
+            " U",
+            "AM",
+            "MM",
+            "AD",
+            "AU",
+        }:
+            continue
+        path = value[3:].strip()
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[-1]
+        path = path.strip('\"').strip("'")
+        if path and path not in paths:
+            paths.append(path)
+    return paths
+
+
 def _verification_text_failed(text: str) -> bool:
     """Whether test output explicitly contains a failure marker."""
     return bool(re.search(r"(?:\d+\s+)?failed|FAILED|ERROR", text, re.I))
@@ -182,6 +219,7 @@ class TaskState:
     commit_paths_known: bool = False
     committed_revision: int = 0
     dirty_after_commit: bool | None = None
+    dirty_paths: list[str] = field(default_factory=list)
     pushed: bool = False
     pr_url: str = ""
     required: list[str] = field(default_factory=list)
@@ -270,6 +308,9 @@ class TaskState:
                 if "dirty_after_commit" in raw
                 else None
             ),
+            dirty_paths=[
+                str(path) for path in raw.get("dirty_paths", []) if path
+            ],
             pushed=bool(raw.get("pushed")),
             pr_url=_text(raw.get("pr_url")),
             required=[str(x) for x in raw.get("required", []) if x],
@@ -301,6 +342,7 @@ class TaskState:
             "commit_paths_known": self.commit_paths_known,
             "committed_revision": self.committed_revision,
             "dirty_after_commit": self.dirty_after_commit,
+            "dirty_paths": self.dirty_paths[-20:],
             "pushed": self.pushed,
             "pr_url": self.pr_url,
             "required": self.required,
@@ -692,6 +734,7 @@ class TaskState:
         self.source_commit_tracking = True
         self.committed_revision = self.artifacts_revision
         self.dirty_after_commit = None
+        self.dirty_paths = []
 
     def record_tool(
         self,
@@ -799,6 +842,7 @@ class TaskState:
                     self._record_commit(commit_hash, metadata)
             if "git status" in command:
                 self.dirty_after_commit = _status_is_dirty(result_text)
+                self.dirty_paths = _status_paths(result_text)
             if _PUSH_RE.search(text):
                 self.pushed = True
             if _PR_RE.search(text):
@@ -822,6 +866,7 @@ class TaskState:
                     self._record_commit(commit_hash, metadata)
             if action.startswith("status"):
                 self.dirty_after_commit = _status_is_dirty(result_text)
+                self.dirty_paths = _status_paths(result_text)
             if action.startswith("push") and "rejected" not in result_text.lower():
                 self.pushed = True
 
@@ -872,6 +917,10 @@ class TaskState:
             lines.append("- 已修改产物: " + ", ".join(self.artifacts[-8:]))
         if self.tests:
             lines.append("- 已执行验证: " + ", ".join(self.tests[-3:]))
+        if self.dirty_after_commit:
+            paths = ", ".join(self.dirty_paths[:8])
+            if paths:
+                lines.append("- 工作区未清理路径: " + paths)
         if self.failed_tests:
             lines.append("- 最近失败验证: " + ", ".join(self.failed_tests[-3:]))
         failure_block = self.verification_failure_prompt()

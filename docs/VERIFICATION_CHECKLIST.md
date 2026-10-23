@@ -71,11 +71,12 @@
 | C22 | 固定 120 步会误杀长链路任务；重试上限 2 次过早放弃 | 执行/循环 | ✅ 已改 | 默认 `0`=不限步数，由 LoopDetector、无进展检查点、1800s deadline 控制；`XENON_MAX_ITERATIONS` 可显式设上限；交付/验证/格式/计划收尾/写恢复重试统一为 3 次；Xenon 全量 3454 passed；`tests/test_react_loop_exit.py` 证明 max_iterations=0 下高置信度循环由 LoopDetector 终止 |
 | C39 | run 内部才创建 ledger 时，交付层仍使用启动前的 None 引用，计划事件没有回放 | 事件/投影 | ✅ 已修复 | run 后刷新 `_evidence_ledger`；真实 calc 计划 5 步全部进入 TaskState；新增“运行中创建 ledger”回归测试 |
 | C40 | 模型常写 `git add x && commit -m`（第二个段缺 git） | 执行/命令 | ✅ 窄兼容 | git 链中前一命令成功后，裸 `add/commit` 视为 git 子命令；不改变独立命令语义 |
+| C41 | 交付提示只知道 dirty，不告诉模型具体残留文件，模型反复空说“干净” | 执行/提示 | ✅ 已修复 | worktree 探测记录 `dirty_paths`；状态持久化；delivery continuation 直接列出 `.bak`/未提交路径，要求实际删除或提交；全量 3592 passed；10/10 基准 |
 | C37 | `git add -A; git commit` 经 PowerShell 返回 129，造成无效重试 | 执行/命令 | ✅ 窄归一化 | `xenon/utils/git_command.py` 只拆分全由 `cd` + 白名单本地 git 子命令组成的链，直接 subprocess 执行并返回 committed_paths；真实 `git add -A; git commit` 集成测试通过 |
 | C38 | 同一步骤连续相同失败会反复走同一修复策略 | 执行/修复 | ✅ 已加短路 | 修复轮检测到相同错误文本即停止同策略重试，交给结构性重规划/后续回合；单测覆盖只调用一次修复 |
 | C36 | 计划只在引擎结束后渲染，执行中 UI 仍可能读 callback 状态 | 展示/事件 | ✅ 实时投影已接 | `run_with_delivery` 在 run 前订阅 ledger，TaskStateProjection 的 plan/step 变化发布 `plan_state` EventBus；REPL 订阅后按稳定签名输出执行行；旧版 PLAN 快照不能覆盖新版；全量 3585 passed |
 | C34 | 交付 dirty 只依赖模型跑过 `git status`，模型可能漏跑；pytest 后 bytecode 也会制造假 dirty | 执行/交付 | ✅ 真实基准验证 | `run_with_delivery` 在显式 workspace 下直接探测 `git status --porcelain -uall`，忽略 pycache；clean probe 可覆盖“同内容重写导致 revision 过期”的假 dirty；`fix_bug` 基准 3/3；真实 #26 `missing=[]` |
-| C35 | 缺少真实任务完成率基准 | 度量 | ✅ 本地 5 用例 | `evals/execution_benchmark.py`：calc/fix_bug/cli_summary/json_report/multi_file 5/5；记录目标测试、commit、干净树、TaskState 和计划步骤；真实 #26 同轮通过 |
+| C35 | 缺少真实任务完成率基准 | 度量 | ✅ 本地 10 用例 | `evals/execution_benchmark.py`：10/10；覆盖创建、失败修复、JSON、多文件、重命名、双 bug、格式化、边界值、默认配置；记录目标测试、commit、干净树、TaskState 和计划步骤；真实 #26 同轮通过 |
 | C32 | 计划步骤只是自由文本，重规划会替换旧计划，补救步骤无法进入最终计划 | 执行/计划 | ✅ 已结构化 | 新增 `plan_contract`：`kind/requires_write/verify_cmd/target_paths`；TaskState 保存 `plan_version/plan_history`；PLAN 事件携带版本，step started 可 upsert 缺失的补救步骤；计划面板从 TaskState 渲染 |
 | C33 | 失败步骤直接重规划整盘，且 pytest 经 PowerShell 容易产生 no tests/退出码歧义 | 执行/修复 | ✅ 真实 #26 通过 | 步骤内 repair（最多 3 次，带失败输出）；写步骤必须新增写调用；verify 必须重跑同一命令；重规划丢写步骤会被拒绝；pytest 窄语法改为无 shell 执行；真实 #26 81 工具/17 失败/334s，目标测试 2 passed、commit、工作区干净、TaskState completed |
 | C24 | Plan-Execute 真实回归仍会在空测试/未提交源码时误判完成 | 执行/计划 | 🟡 串行+DAG replanner 已加；same-tool 补救门已修；最小真实任务两次成功，复杂 #26 仍失败但不再假完成 | 2026-10-21 SmartBench #26 切片四轮：首轮 60 工具/18 失败/243s，仅提交空测试文件；第二轮 51/20/341s，只改 JSON；第三轮 64/15/292s，源码改动但测试不存在；最终代码再跑 73 工具/22 失败/383s，TaskState `active`、缺 verify，最终回答明确未完成。已修：计划同步进 TaskState、失败步骤保持未完成、提交快照要求非测试源码、git 多路径/`commit -m`/action list 解析、`search_files pattern` 别名。仍未解决：规划器不生成有效写步骤、测试内容为空，不能判定 Plan-Execute 可用 |
@@ -130,6 +131,7 @@
 | 2026-10-22 | Plan step 写操作强校验 | 计划步骤任务要求写盘（tool 或 write/edit/插入/补齐语义）时，执行后必须新增成功写工具调用；串行、DAG 串行/并行、补救步骤均覆盖。修复真实 #26 中“声称修改但 git diff 为空”的步骤 status；全量 3565 passed/98 skipped |
 | 2026-10-22 | Combined Engine EventBus | `PlanReactEngine`/`PlanReflectionEngine`/`ReactReflectionEngine` 也暴露顶层 `event_bus`，回调 delegate 保持；新增组合引擎测试；全量 3563 passed/98 skipped |
 | 2026-10-22 | 失败输出进入修复续跑 | ToolExecutor 记录 stdout/stderr tail；TaskState 保存 verification_failures（命令/exit_code/输出尾部）；`run_with_delivery` 在 verify 缺失时改用“先修复真实错误、重跑同一命令”的 continuation，而不是泛化重试；全量 3567 passed/98 skipped |
+| 2026-10-23 | 10 用例基准 | 全量 3592 passed/98 skipped；10/10 真实本地任务通过；真实 #26 同轮通过；dirty 路径进入修复提示 |
 | 2026-10-23 | 实时计划回放 + 5 用例基准 | 全量 3591 passed/98 skipped；calc/fix_bug/cli_summary/json_report/multi_file 5/5；TaskState 计划步骤完整；真实 #26 已通过 |
 | 2026-10-22 | 实时计划 + git 归一化 | 全量 3589 passed/98 skipped；plan_state EventBus 实时订阅；git add/commit 链无 shell 执行；同错误修复短路 |
 | 2026-10-22 | 执行基准 + 真实 worktree 探测 | 全量 3580 passed/98 skipped；`calc/fix_bug/cli_summary` 3/3；真实 #26 目标测试 2 passed、commit、clean、TaskState completed |

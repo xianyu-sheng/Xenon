@@ -588,3 +588,17 @@ def test_failed_remediation_row_is_retired_after_delivery_passes() -> None:
     assert state.maybe_complete() is True
     assert state.status == "completed"
     assert state.steps[0]["status"] == "completed"
+
+
+def test_dirty_status_paths_are_reported_in_repair_prompt() -> None:
+    state = TaskState(objective="fix", execution_level=3, required=["commit"])
+    state.record_tool(
+        "git",
+        {"git_command": "status --porcelain"},
+        success=True,
+        result="?? ops.py.bak\n M src/app.py",
+    )
+
+    assert state.dirty_after_commit is True
+    assert state.dirty_paths == ["ops.py.bak", "src/app.py"]
+    assert "ops.py.bak" in state.delivery_prompt()
