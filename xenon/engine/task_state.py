@@ -828,11 +828,12 @@ class TaskState:
                         self.artifacts.append(path)
                     if _is_test_path(path):
                         by_path = metadata.get("content_chars_by_path")
-                        chars = (
-                            by_path.get(path)
-                            if isinstance(by_path, dict)
-                            else metadata.get("content_chars")
-                        )
+                        if isinstance(by_path, dict):
+                            chars = {
+                                _path_key(str(k)): v for k, v in by_path.items()
+                            }.get(_path_key(path))
+                        else:
+                            chars = metadata.get("content_chars")
                         if isinstance(chars, int) and not isinstance(chars, bool):
                             if chars > 0:
                                 if path not in self.test_artifacts:
