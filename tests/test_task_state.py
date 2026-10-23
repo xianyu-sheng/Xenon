@@ -537,6 +537,17 @@ def test_reconcile_uses_structured_step_kind_not_text() -> None:
     assert state.steps[0]["status"] == "failed"
     assert state.steps[1]["status"] == "completed"
 
+    state.steps.append(
+        {
+            "id": "3",
+            "step": "确认工作区干净",
+            "kind": "commit",
+            "status": "completed",
+        }
+    )
+    state.reconcile_delivery_steps(["dirty"])
+    assert state.steps[2]["status"] == "failed"
+
 
 def test_plan_revision_archives_old_steps() -> None:
     state = TaskState(objective="x", execution_level=3)

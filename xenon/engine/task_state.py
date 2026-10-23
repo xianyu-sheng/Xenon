@@ -709,16 +709,18 @@ class TaskState:
                 continue
             kind = _text(step.get("kind")).lower()
             dimension = kind_to_dimension.get(kind)
-            if dimension:
-                if dimension in missing:
-                    step["status"] = "failed"
-                continue
-            text = str(step.get("step") or "")
-            if any(
-                dimension in missing
-                and rule.search(text)
-                for dimension, rule in rules.items()
-            ):
+            failed = bool(dimension and dimension in missing)
+            if not failed:
+                # An explicit planner kind can be wrong (a step described as
+                # "确认工作区干净" was labelled commit).  Keep the text as a
+                # fallback so the plan never claims a missing dimension.
+                text = str(step.get("step") or "")
+                failed = any(
+                    missing_dimension in missing
+                    and rule.search(text)
+                    for missing_dimension, rule in rules.items()
+                )
+            if failed:
                 step["status"] = "failed"
         self.updated_at = time.time()
 

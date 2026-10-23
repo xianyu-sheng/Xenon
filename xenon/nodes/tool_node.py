@@ -335,6 +335,15 @@ _DEFAULT_EXTRA_ROOTS: tuple[Path, ...] = (
 )
 
 
+def normalize_windows_cd(command: str) -> str:
+    """Translate cmd-style ``cd /d PATH`` for PowerShell.
+
+    The model frequently copies cmd syntax into the PowerShell host.  The
+    directory operation is identical; only the ``/d`` switch is invalid.
+    """
+    return re.sub(r"\bcd\s+/d\s+", "cd ", command, flags=re.IGNORECASE)
+
+
 class ToolNode(
     CodeToolsMixin,
     FileMutationToolsMixin,
@@ -1045,6 +1054,8 @@ class ToolNode(
     def _exec_command(self, context: AgentContext) -> dict[str, Any]:
         """执行终端命令。"""
         resolved_cmd = self._resolve_template(self.action, context)
+        if sys.platform == "win32":
+            resolved_cmd = normalize_windows_cd(resolved_cmd)
 
         # 安全验证
         self._validate_command(resolved_cmd)
