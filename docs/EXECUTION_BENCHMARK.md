@@ -43,17 +43,22 @@ A case passes only when all of these are true:
 Model: `deepseek/deepseek-v4-flash`
 
 ```text
-10/10 cases passed
-calc:           85.2s, 24 tools, 5 failures
-fix_bug:        42.6s, 14 tools, 1 failure
-cli_summary:    40.4s, 13 tools, 1 failure
-json_report:    45.4s, 13 tools, 1 failure
-multi_file:     49.2s, 12 tools, 0 failures
-rename_function:52.7s, 16 tools, 2 failures
-two_bugs:       38.3s, 12 tools, 1 failure
-format_price:  107.6s, 27 tools, 3 failures
-safe_div:       43.0s, 12 tools, 0 failures
-config_default: 37.4s, 13 tools, 1 failure
+Latest run: 9/10 cases passed
+calc:           49.8s, 18 tools, 0 failures  PASS
+fix_bug:        42.6s, 12 tools, 0 failures  PASS
+cli_summary:    40.6s, 12 tools, 0 failures  PASS
+json_report:    79.9s, 22 tools, 0 failures  PASS
+multi_file:     44.8s, 13 tools, 0 failures  PASS
+rename_function:29.3s, 11 tools, 1 failure   PASS
+two_bugs:       47.8s, 12 tools, 1 failure   PASS
+format_price:   46.0s, 13 tools, 0 failures  PASS
+safe_div:      103.8s, 32 tools, 0 failures  FAIL
+config_default: 86.5s, 19 tools, 2 failures  PASS
+
+safe_div failure: target tests passed and a commit existed, but the final
+worktree still had an uncommitted `mathx.py` change.  The delivery gate kept
+TaskState active instead of blessing it.  A previous run was 10/10; this is a
+real variance sample, not a stable guarantee.
 ```
 
 The real SmartBench #26 slice also finished with target tests `2 passed`, a

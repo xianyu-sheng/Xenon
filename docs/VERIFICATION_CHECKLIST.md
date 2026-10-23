@@ -74,6 +74,7 @@
 | C42 | 空测试文件也能被 pytest 的旧测试通过洗白，TaskState 假完成 | 执行/交付 | ✅ 已修复 | ToolExecutor 记录 `content_chars`；TaskState 对“新增/补测试”的任务要求非空 test artifact；空文件进入 `invalid_test_artifacts` 和修复提示；真实 #26 空测试场景会被判未完成，非空测试场景通过 |
 | C45 | Plan-Execute 的可用工具列表漏掉 `run_script`/`tool_result_read`，但安全错误仍要求模型改用 run_script | 工具/提示 | ✅ 已修复 | Planner prompt 与 mini-ReAct 工具说明补全；`command` 明确禁止 `python -c`/未加引号 `$`；run_script 执行后清理临时脚本；新增提示词/清理测试 |
 | C46 | pytest 归一化把 `2>&1` 留成参数 `2`，并可能截断带引号的 `-k "a|b"` | 工具/命令 | ✅ 已修复 | quote-aware 管道处理；`2>&1` 被剥离；`-k` 内管道保留；新增 parser 测试 |
+| C48 | 10 用例结果存在波动，不能把单轮 10/10 当成完成率承诺 | 度量/真实性 | 🟡 已记录 | 最新 9/10；失败样本为 commit 后源码未提交，交付门正确拦截；基准文档保留历史 10/10 与最新 9/10，不粉饰 |
 | C47 | 先写有效测试再覆盖为空时，旧 `test_artifacts` 仍保留，空测试门失效 | 交付/测试 | ✅ 已修复 | 空内容写会移除同名 valid test artifact 并加入 invalid；新增回归覆盖 |
 | C44 | 步骤修复连续失败仍使用同一执行模型 | 执行/模型 | ✅ 可配置轮换 | 首次修复保持当前模型；第二次修复轮换显式配置的 `executor_model_priority`；第三次且配置了 model_pool 时优先尝试更高 tier 模型；全量 3595 passed |
 | C43 | “不要写死”被误判为“需要新增测试”，导致 cli_summary 假缺口 | 判定/交付 | ✅ 已修复 | 测试创建正则排除“写死”；cli_summary/json_report 复跑 2/2；最终 10/10；全量 3594 passed |
@@ -82,7 +83,7 @@
 | C38 | 同一步骤连续相同失败会反复走同一修复策略 | 执行/修复 | ✅ 已加短路 | 修复轮检测到相同错误文本即停止同策略重试，交给结构性重规划/后续回合；单测覆盖只调用一次修复 |
 | C36 | 计划只在引擎结束后渲染，执行中 UI 仍可能读 callback 状态 | 展示/事件 | ✅ 实时投影已接 | `run_with_delivery` 在 run 前订阅 ledger，TaskStateProjection 的 plan/step 变化发布 `plan_state` EventBus；REPL 订阅后按稳定签名输出执行行；旧版 PLAN 快照不能覆盖新版；全量 3585 passed |
 | C34 | 交付 dirty 只依赖模型跑过 `git status`，模型可能漏跑；pytest 后 bytecode 也会制造假 dirty | 执行/交付 | ✅ 真实基准验证 | `run_with_delivery` 在显式 workspace 下直接探测 `git status --porcelain -uall`，忽略 pycache；clean probe 可覆盖“同内容重写导致 revision 过期”的假 dirty；`fix_bug` 基准 3/3；真实 #26 `missing=[]` |
-| C35 | 缺少真实任务完成率基准 | 度量 | ✅ 本地 10 用例 | `evals/execution_benchmark.py`：10/10；覆盖创建、失败修复、JSON、多文件、重命名、双 bug、格式化、边界值、默认配置；记录目标测试、commit、干净树、TaskState 和计划步骤；真实 #26 同轮通过 |
+| C35 | 缺少真实任务完成率基准 | 度量 | 🟡 最新 9/10 | `evals/execution_benchmark.py`：最新 9/10，`safe_div` 因 commit 后源码仍有未提交改动被判 active；此前一轮 10/10；覆盖创建、失败修复、JSON、多文件、重命名、双 bug、格式化、边界值、默认配置；真实 #26 同轮通过 |
 | C32 | 计划步骤只是自由文本，重规划会替换旧计划，补救步骤无法进入最终计划 | 执行/计划 | ✅ 已结构化 | 新增 `plan_contract`：`kind/requires_write/verify_cmd/target_paths`；TaskState 保存 `plan_version/plan_history`；PLAN 事件携带版本，step started 可 upsert 缺失的补救步骤；计划面板从 TaskState 渲染 |
 | C33 | 失败步骤直接重规划整盘，且 pytest 经 PowerShell 容易产生 no tests/退出码歧义 | 执行/修复 | ✅ 真实 #26 通过 | 步骤内 repair（最多 3 次，带失败输出）；写步骤必须新增写调用；verify 必须重跑同一命令；重规划丢写步骤会被拒绝；pytest 窄语法改为无 shell 执行；真实 #26 81 工具/17 失败/334s，目标测试 2 passed、commit、工作区干净、TaskState completed |
 | C24 | Plan-Execute 真实回归仍会在空测试/未提交源码时误判完成 | 执行/计划 | 🟡 串行+DAG replanner 已加；same-tool 补救门已修；最小真实任务两次成功，复杂 #26 仍失败但不再假完成 | 2026-10-21 SmartBench #26 切片四轮：首轮 60 工具/18 失败/243s，仅提交空测试文件；第二轮 51/20/341s，只改 JSON；第三轮 64/15/292s，源码改动但测试不存在；最终代码再跑 73 工具/22 失败/383s，TaskState `active`、缺 verify，最终回答明确未完成。已修：计划同步进 TaskState、失败步骤保持未完成、提交快照要求非测试源码、git 多路径/`commit -m`/action list 解析、`search_files pattern` 别名。仍未解决：规划器不生成有效写步骤、测试内容为空，不能判定 Plan-Execute 可用 |
@@ -137,6 +138,7 @@
 | 2026-10-22 | Plan step 写操作强校验 | 计划步骤任务要求写盘（tool 或 write/edit/插入/补齐语义）时，执行后必须新增成功写工具调用；串行、DAG 串行/并行、补救步骤均覆盖。修复真实 #26 中“声称修改但 git diff 为空”的步骤 status；全量 3565 passed/98 skipped |
 | 2026-10-22 | Combined Engine EventBus | `PlanReactEngine`/`PlanReflectionEngine`/`ReactReflectionEngine` 也暴露顶层 `event_bus`，回调 delegate 保持；新增组合引擎测试；全量 3563 passed/98 skipped |
 | 2026-10-22 | 失败输出进入修复续跑 | ToolExecutor 记录 stdout/stderr tail；TaskState 保存 verification_failures（命令/exit_code/输出尾部）；`run_with_delivery` 在 verify 缺失时改用“先修复真实错误、重跑同一命令”的 continuation，而不是泛化重试；全量 3567 passed/98 skipped |
+| 2026-10-23 | 10 用例复跑 | 最新 9/10；safe_div 测试/commit 成功但源码 dirty，TaskState active；交付门正确拒绝假完成 |
 | 2026-10-23 | 工具设计审查 | 全量 3597 passed/98 skipped；plan prompt 暴露 run_script；run_script 清理临时脚本；pytest 引号/重定向修复；空测试重写失效 |
 | 2026-10-23 | 修复模型轮换 | 全量 3595 passed/98 skipped；配置多执行模型时第二次修复开始轮换；单模型默认行为不变 |
 | 2026-10-23 | 10 用例最终基线 | 全量 3594 passed/98 skipped；10/10 本地真实任务；空测试门、dirty 路径、实时计划同轮验证 |
