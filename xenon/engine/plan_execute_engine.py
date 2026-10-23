@@ -797,6 +797,131 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             payload,
         )
 
+    def _claim_baseline(self, ctx: AgentContext, tracker: ToolExecutionTracker):
+        """Snapshot facts before a step so claims cannot reuse old work."""
+        from xenon.engine.claim_gate import ClaimBaseline
+        from xenon.engine.task_state import TaskState
+
+        state = TaskState.from_context(ctx)
+        return ClaimBaseline(
+            calls_start=len(getattr(tracker, "calls", []) or []),
+            commit_before=str(getattr(state, "commit", "") or "") if state else "",
+            artifacts_revision_before=(
+                int(getattr(state, "artifacts_revision", 0) or 0)
+                if state
+                else 0
+            ),
+        )
+
+    def _claim_workspace_root(self, ctx: AgentContext) -> Any:
+        from xenon.engine.task_runtime import _engine_workspace_root
+
+        return _engine_workspace_root(self, ctx)
+
+    def _check_step_claims(
+        self,
+        ctx: AgentContext,
+        step: dict[str, Any],
+        tracker: ToolExecutionTracker,
+        baseline: Any,
+        *,
+        attempt: int = 1,
+        record: bool = True,
+    ) -> list[Any]:
+        """Verify structured step claims against actual tool observations.
+
+        ``record=False`` is used by isolated parallel workers; the main DAG
+        thread records their verdicts after the wave barrier to keep TaskState
+        projection single-threaded.
+        """
+        from xenon.engine.claim_gate import (
+            REJECTED,
+            claims_for_step,
+            record_claim_verdicts,
+            verify_step_claims,
+        )
+        from xenon.engine.task_state import TaskState
+
+        state = TaskState.from_context(ctx)
+        if state is None or not state.active or baseline is None:
+            return []
+        claim_step = dict(step)
+        # Replanning normalizes steps before the durable plan version is
+        # assigned.  The current TaskState version is authoritative for the
+        # claim snapshot, otherwise fresh claims can look like old history.
+        claim_step["plan_version"] = state.plan_version
+        claims = claims_for_step(
+            claim_step,
+            requires_new_test=state.requires_new_test(),
+        )
+        if not claims:
+            return []
+        verdicts = verify_step_claims(
+            claims,
+            calls=getattr(tracker, "calls", []) or [],
+            state=state,
+            baseline=baseline,
+            workspace_root=self._claim_workspace_root(ctx),
+        )
+        if record:
+            ledger = ctx.get("_evidence_ledger")
+            if ledger is not None and hasattr(ledger, "append"):
+                record_claim_verdicts(
+                    ledger,
+                    verdicts,
+                    task_id=state.task_id,
+                    attempt=attempt,
+                )
+            else:
+                # Standalone engines/tests may not have bound a ledger; fold
+                # the same tracker observations into TaskState before claims.
+                state.update_from_calls(getattr(tracker, "calls", []) or [])
+                for verdict in verdicts:
+                    state.record_claim(verdict.to_dict())
+                ctx.set("_task_state", state.to_dict())
+            rejected = [v for v in verdicts if v.status == REJECTED]
+            if rejected:
+                self.callback.on_warning(
+                    "Claim gate 拒绝: "
+                    + "；".join(v.repair_hint for v in rejected[:3])
+                )
+        return verdicts
+
+    def _record_parallel_claims(
+        self, ctx: AgentContext, verdicts: Any, *, attempt: int = 0
+    ) -> None:
+        """Record isolated worker claim verdicts on the main DAG thread."""
+        rows = list(verdicts or [])
+        if not rows:
+            return
+        from xenon.engine.claim_gate import REJECTED, record_claim_verdicts
+        from xenon.engine.task_state import TaskState
+
+        ledger = ctx.get("_evidence_ledger")
+        state = TaskState.from_context(ctx)
+        if state is None:
+            return
+        if ledger is not None and hasattr(ledger, "append"):
+            record_claim_verdicts(
+                ledger, rows, task_id=state.task_id, attempt=attempt
+            )
+        else:
+            for verdict in rows:
+                state.record_claim(verdict.to_dict())
+            ctx.set("_task_state", state.to_dict())
+        rejected = [v for v in rows if v.status == REJECTED]
+        if rejected:
+            self.callback.on_warning(
+                "Claim gate 拒绝: "
+                + "；".join(v.repair_hint for v in rejected[:3])
+            )
+
+    @staticmethod
+    def _claim_failure_text(verdicts: list[Any]) -> str:
+        from xenon.engine.claim_gate import REJECTED, repair_prompt
+
+        return repair_prompt([v for v in verdicts if v.status == REJECTED])
+
     @staticmethod
     def _fallback_steps(user_input: str) -> list[dict[str, Any]]:
         """Single LLM step used when the planner output cannot be parsed."""
@@ -992,6 +1117,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         )
         prev_results = self._build_prev_results(results)
         write_count_before = self._successful_write_count(tracker)
+        claim_baseline = self._claim_baseline(ctx, tracker)
         raw_result = self._execute_step_with_llm(
             step_id,
             total + 1,
@@ -1013,6 +1139,18 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 False,
                 "补救步骤未产生写操作",
             )
+        if outcome.success:
+            claim_verdicts = self._check_step_claims(
+                ctx, remediation_step, tracker, claim_baseline
+            )
+            claim_error = self._claim_failure_text(claim_verdicts)
+            if claim_error:
+                outcome = StepOutcome(
+                    f"{outcome.content}" + chr(10) + chr(10)
+                    + "⚠️ Claim 校验未通过：" + claim_error,
+                    False,
+                    "Claim gate: " + claim_error,
+                )
         results.append(
             {
                 "step_id": step_id,
@@ -1133,6 +1271,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         tracker: ToolExecutionTracker,
         ctx: AgentContext,
         steering: list[dict[str, Any]] | None = None,
+        claim_baseline: Any = None,
     ) -> tuple[StepOutcome, int]:
         """Repair one failed step in place before replanning the whole task.
 
@@ -1242,6 +1381,21 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                             False,
                             f"修复步骤没有产生新的成功 {tool} 调用",
                         )
+                if candidate.success and claim_baseline is not None:
+                    claim_verdicts = self._check_step_claims(
+                        ctx,
+                        step,
+                        tracker,
+                        claim_baseline,
+                        attempt=attempts,
+                    )
+                    claim_error = self._claim_failure_text(claim_verdicts)
+                    if claim_error:
+                        candidate = StepOutcome(
+                            candidate.content,
+                            False,
+                            "Claim gate: " + claim_error,
+                        )
                 if candidate.success:
                     return candidate, attempts
             next_error = str(candidate.error or candidate.content or last_error)[:600]
@@ -1321,6 +1475,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
 
             prev_results = self._build_prev_results(results)
             write_count_before = self._successful_write_count(tracker)
+            claim_baseline = self._claim_baseline(ctx, tracker)
 
             if tool and tool != "null":
                 # 使用工具执行（失败自动降级迷你 ReAct 补救）
@@ -1360,6 +1515,19 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                     False,
                     "计划步骤要求写盘但未产生写操作",
                 )
+            claim_verdicts = []
+            if outcome.success:
+                claim_verdicts = self._check_step_claims(
+                    ctx, step, tracker, claim_baseline
+                )
+                claim_error = self._claim_failure_text(claim_verdicts)
+                if claim_error:
+                    outcome = StepOutcome(
+                        f"{outcome.content}" + chr(10) + chr(10)
+                        + "⚠️ Claim 校验未通过：" + claim_error,
+                        False,
+                        "Claim gate: " + claim_error,
+                    )
             outcome, step_attempts = self._repair_failed_step(
                 step=step,
                 step_id=step_id,
@@ -1371,6 +1539,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 tracker=tracker,
                 ctx=ctx,
                 steering=_steer_pending,
+                claim_baseline=claim_baseline,
             )
             i += 1
             self._last_iterations = len(results) + 1

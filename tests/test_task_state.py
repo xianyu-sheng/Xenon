@@ -682,3 +682,58 @@ def test_staged_and_unstaged_paths_are_distinguished() -> None:
     assert state.dirty_staged_paths == ["mathx.py"]
     assert state.dirty_unstaged_paths == ["src/app.py", "notes.txt"]
     assert "已暂存但未提交" in state.delivery_prompt()
+
+
+def test_stale_claim_rejection_from_old_plan_does_not_block_completion() -> None:
+    state = TaskState(
+        objective="finish",
+        execution_level=2,
+        plan_version=2,
+        steps=[
+            {
+                "id": "5",
+                "step": "write source",
+                "kind": "edit",
+                "status": "completed",
+                "plan_version": 2,
+            }
+        ],
+        claims=[
+            {
+                "claim_id": "step:5:commit_created:",
+                "step_id": "5",
+                "kind": "commit_created",
+                "status": "rejected",
+                "plan_version": 1,
+            }
+        ],
+    )
+
+    assert state.claim_failures() == []
+    assert state.maybe_complete() is True
+
+
+def test_skipped_inspection_step_does_not_mask_verified_delivery() -> None:
+    state = TaskState(
+        objective="finish",
+        execution_level=2,
+        steps=[
+            {
+                "id": "1",
+                "step": "inspect",
+                "kind": "inspect",
+                "status": "skipped",
+                "plan_version": 1,
+            },
+            {
+                "id": "2",
+                "step": "write",
+                "kind": "edit",
+                "status": "completed",
+                "plan_version": 1,
+            },
+        ],
+    )
+
+    assert state.incomplete_steps() == []
+    assert state.maybe_complete() is True

@@ -30,6 +30,7 @@ class StepOutcome:
     content: str
     success: bool
     error: str | None = None
+    claim_verdicts: tuple[Any, ...] = ()
 
 
 class PlanDAGExecutorMixin:
@@ -230,6 +231,9 @@ class PlanDAGExecutorMixin:
                         (sid, step_task, str(outcome.error or outcome.content))
                     )
                 self.callback.on_step_done(sid, outcome.success, outcome.content[:200])
+                self._record_parallel_claims(
+                    ctx, getattr(outcome, "claim_verdicts", ())
+                )
                 self._record_step_finished(
                     ctx,
                     sid,
@@ -341,6 +345,7 @@ class PlanDAGExecutorMixin:
             params = step.get("params", {})
             prev_results = self._build_prev_results(results)
             write_count_before = self._successful_write_count(tracker)
+            claim_baseline = self._claim_baseline(ctx, tracker)
             try:
                 if tool and tool != "null":
                     outcome = self._execute_tool_step(
@@ -380,6 +385,18 @@ class PlanDAGExecutorMixin:
                     False,
                     "计划步骤要求写盘但未产生写操作",
                 )
+            if outcome.success:
+                claim_verdicts = self._check_step_claims(
+                    ctx, step, tracker, claim_baseline
+                )
+                claim_error = self._claim_failure_text(claim_verdicts)
+                if claim_error:
+                    outcome = StepOutcome(
+                        f"{outcome.content}" + chr(10) + chr(10)
+                        + "⚠️ Claim 校验未通过：" + claim_error,
+                        False,
+                        "Claim gate: " + claim_error,
+                    )
             outcome, _attempts = self._repair_failed_step(
                 step=step,
                 step_id=sid,
@@ -391,6 +408,7 @@ class PlanDAGExecutorMixin:
                 tracker=tracker,
                 ctx=ctx,
                 steering=steering,
+                claim_baseline=claim_baseline,
             )
             out.append((sid, step_task, outcome, None))
         return out
@@ -542,6 +560,8 @@ class PlanDAGExecutorMixin:
                 iso_ctx.set_tool_checkpoint_callback(ctx.record_tool_checkpoint)
             iso_tracker = ToolExecutionTracker()
             write_count_before = self._successful_write_count(iso_tracker)
+            claim_baseline = self._claim_baseline(ctx, iso_tracker)
+            claim_verdicts: tuple[Any, ...] = ()
             try:
                 if tool and tool != "null":
                     outcome = self._execute_tool_step(
@@ -580,6 +600,25 @@ class PlanDAGExecutorMixin:
                     False,
                     "计划步骤要求写盘但未产生写操作",
                 )
+            if outcome.success:
+                verdicts = self._check_step_claims(
+                    ctx,
+                    step,
+                    iso_tracker,
+                    claim_baseline,
+                    record=False,
+                )
+                rejected = [v for v in verdicts if v.status == "rejected"]
+                if rejected:
+                    claim_verdicts = tuple(verdicts)
+                    outcome = StepOutcome(
+                        f"{outcome.content}" + chr(10) + chr(10)
+                        + "⚠️ Claim 校验未通过："
+                        + self._claim_failure_text(verdicts),
+                        False,
+                        "Claim gate: " + self._claim_failure_text(verdicts),
+                        claim_verdicts,
+                    )
             return (sid, step_task, outcome, iso_tracker)
 
         workers = min(len(to_run), self.max_parallel_workers)

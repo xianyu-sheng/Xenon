@@ -160,6 +160,34 @@ def run_with_delivery(
     if tracker is not None:
         aggregate.calls.extend(list(getattr(tracker, "calls", []) or []))
 
+    workspace_root = _engine_workspace_root(engine, context)
+
+    def _audit(attempt: int = 0) -> list[Any]:
+        """Run the criterion-level goal audit and persist its verdicts.
+
+        Only ``rejected`` criteria are hard failures; ``unverifiable`` is
+        recorded for honesty but does not force an endless repair loop when a
+        workspace probe is unavailable.
+        """
+        from xenon.engine.claim_gate import audit_goal, record_claim_verdicts
+
+        verdicts = audit_goal(state, workspace_root=workspace_root)
+        if not verdicts:
+            return []
+        if ledger is not None and hasattr(ledger, "append"):
+            record_claim_verdicts(
+                ledger,
+                verdicts,
+                task_id=state.task_id,
+                attempt=attempt,
+            )
+        else:
+            for verdict in verdicts:
+                state.record_criterion(verdict.to_dict())
+            if context is not None and hasattr(context, "set"):
+                context.set("_task_state", state.to_dict())
+        return [v for v in verdicts if v.status == "rejected"]
+
     # The evidence ledger is the durable source.  If we could not subscribe
     # before the run, replay its tool observations into TaskState when we can
     # identify this task's boundary; keep the tracker fallback otherwise.
@@ -186,7 +214,7 @@ def run_with_delivery(
             # project future events only (no historical cross-task replay).
             projection.attach(ledger, replay=False)
 
-    def _refresh() -> list[str]:
+    def _refresh() -> tuple[list[str], list[Any]]:
         if not use_projection:
             state.update_from_calls(aggregate.calls)
         if state.commit:
@@ -202,17 +230,22 @@ def run_with_delivery(
                 state.dirty_staged_paths = staged_paths
                 state.dirty_unstaged_paths = unstaged_paths
         missing = state.missing_delivery()
+        goal_failures: list[Any] = []
         if missing:
             state.reconcile_delivery_steps(missing)
         else:
-            state.maybe_complete()
+            # Delivery facts are complete.  Audit the actual task goal at
+            # criterion granularity instead of trusting the model's summary.
+            goal_failures = _audit(attempts)
+            if not goal_failures:
+                state.maybe_complete()
         context.set("_task_state", state.to_dict())
-        return missing
+        return missing, goal_failures
 
     attempts = 0
     while True:
-        missing = _refresh()
-        if not missing:
+        missing, goal_failures = _refresh()
+        if not missing and not goal_failures:
             break
         if attempts >= max_delivery_retries:
             labels = {
@@ -223,9 +256,21 @@ def run_with_delivery(
                 "dirty": "工作区未提交改动",
                 "pr": "PR",
             }
+            warning_parts = []
+            if missing:
+                warning_parts.append(
+                    "缺少 " + "、".join(labels[m] for m in missing)
+                )
+            if goal_failures:
+                from xenon.engine.claim_gate import goal_failure_prompt
+
+                warning_parts.append(
+                    "目标条件未通过：\n"
+                    + goal_failure_prompt(goal_failures)
+                )
             result += (
-                "\n\n⚠️ **任务交付未完成**：缺少 "
-                + "、".join(labels[m] for m in missing)
+                "\n\n⚠️ **任务交付未完成**："
+                + "；".join(warning_parts)
                 + "。以上工作不应视为已完成。"
             )
             engine._last_termination_reason = TerminationReason.DELIVERY_INCOMPLETE
@@ -242,7 +287,17 @@ def run_with_delivery(
             "dirty": "确认 commit 后工作区干净，没有未提交改动",
             "pr": "push 并创建 PR",
         }
-        if "verify" in missing and state.verification_failures:
+        if goal_failures:
+            from xenon.engine.claim_gate import goal_failure_prompt
+
+            continuation = (
+                "最终目标校验未通过。只修复下面这些具体条件，不要重做已经完成"
+                "的工作；修复后重新验证并完成交付。\n\n"
+                + goal_failure_prompt(goal_failures)
+                + "\n\n"
+                + state.delivery_prompt()
+            )
+        elif "verify" in missing and state.verification_failures:
             continuation = (
                 "验证失败。不要重新规划或重做已经成功的工作；先修复下面的真实"
                 "错误输出，然后重跑同一验证命令，并完成 commit/工作区清理。\n\n"
@@ -272,9 +327,15 @@ def run_with_delivery(
                 + "。请实际执行这些动作，完成后给出最终回答。\n\n"
                 + state.delivery_prompt()
             )
+        pending_labels = list(missing)
+        if goal_failures:
+            pending_labels.append(
+                "目标条件 "
+                + ", ".join(v.claim.claim_id for v in goal_failures[:3])
+            )
         engine.callback.on_warning(
             "引擎交付未完成，重新进入同一执行器补齐 "
-            + "、".join(missing)
+            + "、".join(pending_labels)
             + f" ({attempts}/{max_delivery_retries})"
         )
         try:

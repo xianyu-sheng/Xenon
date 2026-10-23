@@ -243,6 +243,11 @@ class TaskState:
     test_artifacts: list[str] = field(default_factory=list)
     invalid_test_artifacts: list[str] = field(default_factory=list)
     verification_failures: list[dict[str, Any]] = field(default_factory=list)
+    # Claim verdicts are a projection of the evidence ledger, not a second
+    # source of truth.  They make open/rejected step obligations visible to
+    # repair and goal-audit loops.
+    claims: list[dict[str, Any]] = field(default_factory=list)
+    criteria: list[dict[str, Any]] = field(default_factory=list)
     processed_tool_ids: list[str] = field(default_factory=list)
     evidence_sequence: int = 0
     evidence_session_id: str = ""
@@ -330,6 +335,14 @@ class TaskState:
                 for item in raw.get("verification_failures", [])
                 if isinstance(item, dict)
             ],
+            claims=[
+                item for item in raw.get("claims", []) if isinstance(item, dict)
+            ][-40:],
+            criteria=[
+                item
+                for item in raw.get("criteria", [])
+                if isinstance(item, dict)
+            ][-50:],
             processed_tool_ids=[
                 str(item) for item in raw.get("processed_tool_ids", []) if item
             ],
@@ -386,6 +399,8 @@ class TaskState:
             "test_artifacts": self.test_artifacts[-20:],
             "invalid_test_artifacts": self.invalid_test_artifacts[-20:],
             "verification_failures": self.verification_failures[-3:],
+            "claims": self.claims[-40:],
+            "criteria": self.criteria[-50:],
             "processed_tool_ids": self.processed_tool_ids[-200:],
             "evidence_sequence": self.evidence_sequence,
             "evidence_session_id": self.evidence_session_id,
@@ -410,14 +425,143 @@ class TaskState:
     def active(self) -> bool:
         return self.status == "active"
 
-    def incomplete_steps(self) -> list[dict[str, Any]]:
+    def record_claim(self, claim: dict[str, Any]) -> bool:
+        """Upsert one claim verdict from a ledger projection.
+
+        A later verified event replaces an earlier rejection for the same
+        claim id.  The list is bounded because it is persisted in context.
+        """
+        if not isinstance(claim, dict):
+            return False
+        claim_id = _text(claim.get("claim_id"))
+        if not claim_id:
+            return False
+        row = {
+            key: copy.deepcopy(claim[key])
+            for key in (
+                "claim_id",
+                "step_id",
+                "kind",
+                "subject",
+                "expected",
+                "origin",
+                "status",
+                "actual",
+                "reason",
+                "evidence_ids",
+                "attempt",
+                "plan_version",
+            )
+            if key in claim
+        }
+        for index, existing in enumerate(self.claims):
+            if _text(existing.get("claim_id")) == claim_id:
+                self.claims[index] = row
+                self.updated_at = time.time()
+                return True
+        self.claims.append(row)
+        self.claims = self.claims[-40:]
+        self.updated_at = time.time()
+        return True
+
+    def record_criterion(self, criterion: dict[str, Any]) -> bool:
+        """Upsert one goal-audit criterion for the final delivery loop."""
+        if not isinstance(criterion, dict):
+            return False
+        claim_id = _text(criterion.get("claim_id"))
+        if not claim_id:
+            return False
+        row = {
+            key: copy.deepcopy(criterion[key])
+            for key in (
+                "claim_id",
+                "step_id",
+                "kind",
+                "subject",
+                "expected",
+                "origin",
+                "status",
+                "actual",
+                "reason",
+                "evidence_ids",
+                "attempt",
+                "plan_version",
+            )
+            if key in criterion
+        }
+        for index, existing in enumerate(self.criteria):
+            if _text(existing.get("claim_id")) == claim_id:
+                self.criteria[index] = row
+                self.updated_at = time.time()
+                return True
+        self.criteria.append(row)
+        self.criteria = self.criteria[-50:]
+        self.updated_at = time.time()
+        return True
+
+    def _claim_in_current_plan(self, claim: dict[str, Any]) -> bool:
+        try:
+            version = int(claim.get("plan_version") or self.plan_version)
+        except (TypeError, ValueError):
+            version = self.plan_version
+        return version == self.plan_version
+
+    def claim_failures(self) -> list[dict[str, Any]]:
+        """Claims explicitly rejected by a deterministic gate.
+
+        Claims from an older plan revision are audit history.  A stale commit
+        rejection must not keep a later, replanned task active forever.
+        """
         return [
-            step
-            for step in self.steps
-            if step.get("status") != "completed"
-            and int(step.get("plan_version") or self.plan_version)
-            == self.plan_version
+            c
+            for c in self.claims
+            if c.get("status") == "rejected"
+            and self._claim_in_current_plan(c)
         ]
+
+    def criterion_failures(self) -> list[dict[str, Any]]:
+        """Goal criteria not proven by real evidence."""
+        return [
+            c
+            for c in self.criteria
+            if c.get("status") in {"rejected", "unverifiable"}
+            and self._claim_in_current_plan(c)
+        ]
+
+    def incomplete_steps(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        # When the criterion-level goal audit has actually passed, a skipped
+        # plan row is an obsolete ordering artifact, not evidence that the
+        # deliverable is missing.  Failed rows still block; skipped rows do
+        # not, because the goal criteria independently prove the required
+        # artifacts, verification, commit and clean worktree.
+        current_criteria = [
+            c for c in self.criteria if self._claim_in_current_plan(c)
+        ]
+        goal_verified = bool(current_criteria) and not any(
+            c.get("status") == "rejected" for c in current_criteria
+        )
+        for step in self.steps:
+            if int(step.get("plan_version") or self.plan_version) != self.plan_version:
+                continue
+            if step.get("status") == "completed":
+                continue
+            if step.get("status") == "skipped" and (
+                goal_verified
+                or _text(step.get("kind")).lower() in {"inspect", "think"}
+            ):
+                continue
+            if (
+                step.get("status") == "failed"
+                and goal_verified
+                and _text(step.get("kind")).lower()
+                in {"inspect", "think", "execute", "clean"}
+            ):
+                # A failed reconnaissance read is not a failed deliverable;
+                # goal criteria independently prove the actual outcome.
+                continue
+            rows.append(step)
+        return rows
 
     def set_plan(
         self,
@@ -618,6 +762,12 @@ class TaskState:
             lines.append(f"[{icon}] {text}{suffix}")
             if status == "failed" and step.get("last_error"):
                 lines.append(f"    ! {_text(step['last_error'])[:200]}")
+        rejected = self.claim_failures()
+        if rejected:
+            lines.append(
+                "Claims: rejected "
+                + ", ".join(_text(c.get("claim_id")) for c in rejected[:5])
+            )
         if self.required:
             missing = self.missing_delivery()
             if missing:
@@ -688,8 +838,16 @@ class TaskState:
         return self.required_delivery()
 
     def maybe_complete(self) -> bool:
-        """Mark completed only when plan and delivery are both finished."""
+        """Mark completed only when plan, claims and delivery are finished."""
         if self.missing_delivery():
+            return False
+        if self.claim_failures():
+            return False
+        if any(
+            c.get("status") == "rejected"
+            for c in self.criteria
+            if self._claim_in_current_plan(c)
+        ):
             return False
         self.reconcile_satisfied_steps()
         if self.incomplete_steps():
@@ -1038,6 +1196,22 @@ class TaskState:
                 )
         if self.failed_tests:
             lines.append("- 最近失败验证: " + ", ".join(self.failed_tests[-3:]))
+        rejected = self.claim_failures()
+        if rejected:
+            lines.append("- Claim 未通过:")
+            for claim in rejected[-5:]:
+                lines.append(
+                    "  - " + _text(claim.get("claim_id"))
+                    + ": " + _text(claim.get("reason") or claim.get("actual"))[:240]
+                )
+        unmet = self.criterion_failures()
+        if unmet:
+            lines.append("- 目标条件未通过:")
+            for criterion in unmet[-8:]:
+                lines.append(
+                    "  - " + _text(criterion.get("claim_id"))
+                    + ": " + _text(criterion.get("reason") or criterion.get("actual"))[:240]
+                )
         failure_block = self.verification_failure_prompt()
         if failure_block:
             lines.append("- 失败验证的真实输出（先修复，再重跑同一命令）:")

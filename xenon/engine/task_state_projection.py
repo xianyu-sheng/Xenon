@@ -112,6 +112,19 @@ class TaskStateProjection:
             self._publish(notify=True)
             return
 
+        if event.kind == EventKind.CLAIM.value:
+            # Claim verdicts are expectations checked against real evidence;
+            # they are projected for repair/UI, never treated as evidence
+            # themselves.  Goal-audit criteria use the same event shape.
+            if str(payload.get("origin") or "") == "goal_audit" or str(
+                payload.get("kind") or ""
+            ) == "goal_criterion":
+                self.state.record_criterion(payload)
+            else:
+                self.state.record_claim(payload)
+            self._publish(notify=True)
+            return
+
         if event.kind != EventKind.TOOL_OBSERVATION.value:
             return
         metadata = payload.get("metadata")
