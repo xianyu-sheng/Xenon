@@ -32,9 +32,15 @@ class TaskStateProjection:
         self.on_change = on_change
         self.subscription: EvidenceSubscription | None = None
         self.ledger: EvidenceLedger | None = None
+        self._current_sequence = 0
+        self._session_id = ""
 
     def __call__(self, event: EvidenceEvent) -> None:
         if not self.state.active:
+            return
+        sequence = int(getattr(event, "sequence", 0) or 0)
+        self._current_sequence = sequence
+        if sequence and sequence <= self.state.evidence_sequence:
             return
         payload = event.payload or {}
         task_id = str(payload.get("task_id") or "")
@@ -123,6 +129,10 @@ class TaskStateProjection:
         self._publish()
 
     def _publish(self, *, notify: bool = False) -> None:
+        if self._current_sequence:
+            self.state.evidence_sequence = self._current_sequence
+        if self._session_id:
+            self.state.evidence_session_id = self._session_id
         if self.context is not None and hasattr(self.context, "set"):
             self.context.set("_task_state", self.state.to_dict())
         if notify and self.on_change is not None:
@@ -140,6 +150,16 @@ class TaskStateProjection:
     ) -> "TaskStateProjection":
         """Attach to the ledger, optionally replaying from a task boundary."""
         self.ledger = ledger
+        self._session_id = str(getattr(ledger, "session_id", "") or "")
+        if (
+            self._session_id
+            and self.state.evidence_session_id
+            and self._session_id != self.state.evidence_session_id
+        ):
+            # Sequence numbers are stream-local; a new ledger must not be
+            # silently skipped because an older task had a larger cursor.
+            self.state.evidence_sequence = 0
+        self.state.evidence_session_id = self._session_id
         self.subscription = ledger.subscribe(self, replay=False)
         if replay:
             for event in list(ledger.events):

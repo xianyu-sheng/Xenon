@@ -219,6 +219,8 @@ class TaskState:
     invalid_test_artifacts: list[str] = field(default_factory=list)
     verification_failures: list[dict[str, Any]] = field(default_factory=list)
     processed_tool_ids: list[str] = field(default_factory=list)
+    evidence_sequence: int = 0
+    evidence_session_id: str = ""
     commit: str = ""
     committed_artifacts: list[str] = field(default_factory=list)
     committed_source_paths: list[str] = field(default_factory=list)
@@ -304,6 +306,8 @@ class TaskState:
             processed_tool_ids=[
                 str(item) for item in raw.get("processed_tool_ids", []) if item
             ],
+            evidence_sequence=max(0, int(raw.get("evidence_sequence") or 0)),
+            evidence_session_id=_text(raw.get("evidence_session_id")),
             commit=_text(raw.get("commit")),
             committed_artifacts=[
                 str(p) for p in raw.get("committed_artifacts", []) if p
@@ -348,6 +352,8 @@ class TaskState:
             "invalid_test_artifacts": self.invalid_test_artifacts[-20:],
             "verification_failures": self.verification_failures[-3:],
             "processed_tool_ids": self.processed_tool_ids[-200:],
+            "evidence_sequence": self.evidence_sequence,
+            "evidence_session_id": self.evidence_session_id,
             "commit": self.commit,
             "committed_artifacts": self.committed_artifacts[-30:],
             "committed_source_paths": self.committed_source_paths[-30:],

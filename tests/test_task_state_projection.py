@@ -109,10 +109,12 @@ def test_projection_is_idempotent_by_result_id() -> None:
     )
 
     event = ledger.events[-1]
+    state.processed_tool_ids.clear()
     projection(event)
 
     assert state.artifacts == ["src/app.py"]
     assert state.artifacts_revision == 1
+    assert state.evidence_sequence == event.sequence
     projection.close()
 
 
@@ -403,3 +405,26 @@ def test_delivery_runtime_replays_ledger_created_during_run() -> None:
     projected = TaskState.from_context(context)
     assert projected is not None
     assert [step["step"] for step in projected.steps] == ["write"]
+
+
+def test_new_ledger_session_resets_the_sequence_cursor() -> None:
+    state = _state()
+    state.evidence_sequence = 99
+    state.evidence_session_id = "old-session"
+    ledger = EvidenceLedger("new-session")
+    projection = TaskStateProjection(state).attach(ledger)
+
+    _append_observation(
+        ledger,
+        "write_file",
+        params={"file_path": "src/app.py"},
+        success=True,
+        summary="written",
+        task_id=state.task_id,
+        metadata={"result_id": "new-stream"},
+    )
+
+    assert state.artifacts == ["src/app.py"]
+    assert state.evidence_sequence == 1
+    assert state.evidence_session_id == "new-session"
+    projection.close()
