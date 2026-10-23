@@ -102,6 +102,31 @@ def _status_paths(text: str) -> list[str]:
     return paths
 
 
+def _status_breakdown(text: str) -> tuple[list[str], list[str], list[str]]:
+    """Return (all, staged, unstaged) paths from porcelain status."""
+    staged: list[str] = []
+    unstaged: list[str] = []
+    for line in text.splitlines():
+        value = line.rstrip()
+        if len(value) < 4:
+            continue
+        marker = value[:2]
+        path = value[3:].strip()
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[-1]
+        path = path.strip('"').strip("'")
+        if not path:
+            continue
+        if marker == "??":
+            unstaged.append(path)
+            continue
+        if marker[0] not in {" ", "?"}:
+            staged.append(path)
+        if marker[1] not in {" ", "?"}:
+            unstaged.append(path)
+    return _status_paths(text), staged, unstaged
+
+
 def _verification_text_failed(text: str) -> bool:
     """Whether test output explicitly contains a failure marker."""
     return bool(re.search(r"(?:\d+\s+)?failed|FAILED|ERROR", text, re.I))
@@ -229,6 +254,8 @@ class TaskState:
     committed_revision: int = 0
     dirty_after_commit: bool | None = None
     dirty_paths: list[str] = field(default_factory=list)
+    dirty_staged_paths: list[str] = field(default_factory=list)
+    dirty_unstaged_paths: list[str] = field(default_factory=list)
     pushed: bool = False
     pr_url: str = ""
     required: list[str] = field(default_factory=list)
@@ -326,6 +353,14 @@ class TaskState:
             dirty_paths=[
                 str(path) for path in raw.get("dirty_paths", []) if path
             ],
+            dirty_staged_paths=[
+                str(path) for path in raw.get("dirty_staged_paths", []) if path
+            ],
+            dirty_unstaged_paths=[
+                str(path)
+                for path in raw.get("dirty_unstaged_paths", [])
+                if path
+            ],
             pushed=bool(raw.get("pushed")),
             pr_url=_text(raw.get("pr_url")),
             required=[str(x) for x in raw.get("required", []) if x],
@@ -362,6 +397,8 @@ class TaskState:
             "committed_revision": self.committed_revision,
             "dirty_after_commit": self.dirty_after_commit,
             "dirty_paths": self.dirty_paths[-20:],
+            "dirty_staged_paths": self.dirty_staged_paths[-20:],
+            "dirty_unstaged_paths": self.dirty_unstaged_paths[-20:],
             "pushed": self.pushed,
             "pr_url": self.pr_url,
             "required": self.required,
@@ -761,6 +798,8 @@ class TaskState:
         self.committed_revision = self.artifacts_revision
         self.dirty_after_commit = None
         self.dirty_paths = []
+        self.dirty_staged_paths = []
+        self.dirty_unstaged_paths = []
 
     def record_tool(
         self,
@@ -895,7 +934,11 @@ class TaskState:
                     self._record_commit(commit_hash, metadata)
             if "git status" in command:
                 self.dirty_after_commit = _status_is_dirty(result_text)
-                self.dirty_paths = _status_paths(result_text)
+                (
+                    self.dirty_paths,
+                    self.dirty_staged_paths,
+                    self.dirty_unstaged_paths,
+                ) = _status_breakdown(result_text)
             if _PUSH_RE.search(text):
                 self.pushed = True
             if _PR_RE.search(text):
@@ -919,7 +962,11 @@ class TaskState:
                     self._record_commit(commit_hash, metadata)
             if action.startswith("status"):
                 self.dirty_after_commit = _status_is_dirty(result_text)
-                self.dirty_paths = _status_paths(result_text)
+                (
+                    self.dirty_paths,
+                    self.dirty_staged_paths,
+                    self.dirty_unstaged_paths,
+                ) = _status_breakdown(result_text)
             if action.startswith("push") and "rejected" not in result_text.lower():
                 self.pushed = True
 
@@ -979,6 +1026,16 @@ class TaskState:
             paths = ", ".join(self.dirty_paths[:8])
             if paths:
                 lines.append("- 工作区未清理路径: " + paths)
+            if self.dirty_staged_paths:
+                lines.append(
+                    "- 已暂存但未提交: "
+                    + ", ".join(self.dirty_staged_paths[:8])
+                )
+            if self.dirty_unstaged_paths:
+                lines.append(
+                    "- 未暂存修改: "
+                    + ", ".join(self.dirty_unstaged_paths[:8])
+                )
         if self.failed_tests:
             lines.append("- 最近失败验证: " + ", ".join(self.failed_tests[-3:]))
         failure_block = self.verification_failure_prompt()

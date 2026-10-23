@@ -12,7 +12,7 @@ import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_CD_RE = re.compile(r"^cd(?:\s+/d)?\s+(.+?)\s*$", re.I)
+_CD_RE = re.compile(r"^(?:cd(?:\s+/d)?|set-location|sl)\s+(.+?)\s*$", re.I)
 _SAFE_GIT = frozenset(
     {
         "status",

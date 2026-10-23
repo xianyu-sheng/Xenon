@@ -668,3 +668,17 @@ def test_writing_hardcoded_value_does_not_create_a_test_requirement() -> None:
 
     assert state.requires_new_test() is False
     assert "test" not in state.missing_delivery()
+
+
+def test_staged_and_unstaged_paths_are_distinguished() -> None:
+    state = TaskState(objective="fix", execution_level=3)
+    state.record_tool(
+        "git",
+        {"git_command": "status --porcelain"},
+        success=True,
+        result="M  mathx.py\n M src/app.py\n?? notes.txt",
+    )
+
+    assert state.dirty_staged_paths == ["mathx.py"]
+    assert state.dirty_unstaged_paths == ["src/app.py", "notes.txt"]
+    assert "已暂存但未提交" in state.delivery_prompt()

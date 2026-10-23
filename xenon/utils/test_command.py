@@ -21,7 +21,7 @@ _PYTEST_RE = re.compile(
     r"^(?:(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?\s+-m\s+)?pytest\b(.*)$",
     re.I,
 )
-_CD_RE = re.compile(r"^cd(?:\s+/d)?\s+(.+?)\s*$", re.I)
+_CD_RE = re.compile(r"^(?:cd(?:\s+/d)?|set-location|sl)\s+(.+?)\s*$", re.I)
 _ENV_RE = re.compile(
     r"^\$env:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(['\"]?)(.*?)\2\s*$"
 )

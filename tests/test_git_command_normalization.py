@@ -64,3 +64,16 @@ def test_tool_executes_git_add_and_commit_without_shell(tmp_path) -> None:
         check=True,
     ).stdout
     assert "feat: add a" in log
+
+
+def test_set_location_is_treated_as_cd(tmp_path) -> None:
+    plan = plan_git(
+        f"Set-Location '{tmp_path}'; git add -A; git commit -m done",
+        tmp_path,
+    )
+
+    assert plan is not None
+    assert plan.invocations == [
+        ["git", "add", "-A"],
+        ["git", "commit", "-m", "done"],
+    ]

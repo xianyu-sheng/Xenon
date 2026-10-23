@@ -101,3 +101,15 @@ def test_redirect_does_not_leave_a_stray_argument() -> None:
 
     assert plan is not None
     assert plan.invocations == [["tests", "-q"]]
+
+
+def test_set_location_is_treated_as_cd(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    plan = plan_pytest(
+        f"Set-Location '{repo}'; python -m pytest tests -q",
+        tmp_path,
+    )
+
+    assert plan is not None
+    assert plan.cwd == str(repo)
+    assert plan.invocations == [["tests", "-q"]]

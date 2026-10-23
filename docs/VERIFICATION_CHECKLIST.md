@@ -74,6 +74,8 @@
 | C42 | 空测试文件也能被 pytest 的旧测试通过洗白，TaskState 假完成 | 执行/交付 | ✅ 已修复 | ToolExecutor 记录 `content_chars`；TaskState 对“新增/补测试”的任务要求非空 test artifact；空文件进入 `invalid_test_artifacts` 和修复提示；真实 #26 空测试场景会被判未完成，非空测试场景通过 |
 | C45 | Plan-Execute 的可用工具列表漏掉 `run_script`/`tool_result_read`，但安全错误仍要求模型改用 run_script | 工具/提示 | ✅ 已修复 | Planner prompt 与 mini-ReAct 工具说明补全；`command` 明确禁止 `python -c`/未加引号 `$`；run_script 执行后清理临时脚本；新增提示词/清理测试 |
 | C46 | pytest 归一化把 `2>&1` 留成参数 `2`，并可能截断带引号的 `-k "a|b"` | 工具/命令 | ✅ 已修复 | quote-aware 管道处理；`2>&1` 被剥离；`-k` 内管道保留；新增 parser 测试 |
+| C50 | 交付只区分 dirty，不区分已暂存/未暂存，模型在“已 staged 未 commit”时容易空转 | 执行/交付 | ✅ 已修复 | worktree probe 与 TaskState 记录 staged/unstaged 路径；continuation 对“已暂存未提交”直接要求 commit；新增测试 |
+| C51 | `Set-Location` / `sl` 不被 pytest/git 命令归一路径识别 | 工具/命令 | ✅ 已修复 | 两个 parser 支持 `Set-Location`/`sl`；新增测试 |
 | C49 | 长任务 replay 仅靠 200 条 processed_tool_ids，旧事件可能重复应用 | 事件/幂等 | ✅ 已修复 | TaskState 持久化 `evidence_sequence` + `evidence_session_id`；投影跳过已应用序列，新 ledger 重置游标；新增 replay/cursor 测试；全量 3600 passed |
 | C48 | 10 用例结果存在波动，不能把单轮 10/10 当成完成率承诺 | 度量/真实性 | 🟡 已记录 | 最新 9/10；失败样本为 commit 后源码未提交，交付门正确拦截；基准文档保留历史 10/10 与最新 9/10，不粉饰 |
 | C47 | 先写有效测试再覆盖为空时，旧 `test_artifacts` 仍保留，空测试门失效 | 交付/测试 | ✅ 已修复 | 空内容写会移除同名 valid test artifact 并加入 invalid；新增回归覆盖 |
@@ -139,6 +141,7 @@
 | 2026-10-22 | Plan step 写操作强校验 | 计划步骤任务要求写盘（tool 或 write/edit/插入/补齐语义）时，执行后必须新增成功写工具调用；串行、DAG 串行/并行、补救步骤均覆盖。修复真实 #26 中“声称修改但 git diff 为空”的步骤 status；全量 3565 passed/98 skipped |
 | 2026-10-22 | Combined Engine EventBus | `PlanReactEngine`/`PlanReflectionEngine`/`ReactReflectionEngine` 也暴露顶层 `event_bus`，回调 delegate 保持；新增组合引擎测试；全量 3563 passed/98 skipped |
 | 2026-10-22 | 失败输出进入修复续跑 | ToolExecutor 记录 stdout/stderr tail；TaskState 保存 verification_failures（命令/exit_code/输出尾部）；`run_with_delivery` 在 verify 缺失时改用“先修复真实错误、重跑同一命令”的 continuation，而不是泛化重试；全量 3567 passed/98 skipped |
+| 2026-10-23 | 暂存区/Set-Location 审查 | 全量 3603 passed/98 skipped；staged 路径进入修复提示；pytest/git parser 支持 Set-Location；safe_div 单例复跑通过 |
 | 2026-10-23 | 事件游标审查 | 全量 3600 passed/98 skipped；新增序列游标防止长任务重复投影；cd /d 与计划文字对账已修 |
 | 2026-10-23 | 10 用例复跑 | 最新 9/10；safe_div 测试/commit 成功但源码 dirty，TaskState active；交付门正确拒绝假完成 |
 | 2026-10-23 | 工具设计审查 | 全量 3597 passed/98 skipped；plan prompt 暴露 run_script；run_script 清理临时脚本；pytest 引号/重定向修复；空测试重写失效 |

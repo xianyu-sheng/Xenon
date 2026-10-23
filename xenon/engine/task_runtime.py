@@ -44,7 +44,7 @@ def _engine_workspace_root(
 
 def _probe_git_dirty(
     engine: Any, context: Any | None = None
-) -> "tuple[bool | None, list[str]]":
+) -> "tuple[bool | None, list[str], list[str], list[str]]":
     """Return the real worktree status, ignoring generated caches.
 
     The model can claim ``git status`` is clean without running it after its
@@ -56,7 +56,7 @@ def _probe_git_dirty(
 
     root = _engine_workspace_root(engine, context)
     if root is None:
-        return None, []
+        return None, [], [], []
     try:
         proc = subprocess.run(
             ["git", "-C", str(root), "status", "--porcelain", "-uall"],
@@ -67,15 +67,18 @@ def _probe_git_dirty(
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
-        return None, []
+        return None, [], [], []
     if proc.returncode != 0:
-        return None, []
+        return None, [], [], []
     lines = [
         line
         for line in proc.stdout.splitlines()
         if line.strip() and not _IGNORED_DIRTY_RE.search(line)
     ]
-    return bool(lines), [line[3:].strip() for line in lines]
+    from xenon.engine.task_state import _status_breakdown
+
+    all_paths, staged, unstaged = _status_breakdown(chr(10).join(lines))
+    return bool(lines), all_paths, staged, unstaged
 
 
 def run_with_delivery(
@@ -187,10 +190,17 @@ def run_with_delivery(
         if not use_projection:
             state.update_from_calls(aggregate.calls)
         if state.commit:
-            actual_dirty, dirty_paths = _probe_git_dirty(engine, context)
+            (
+                actual_dirty,
+                dirty_paths,
+                staged_paths,
+                unstaged_paths,
+            ) = _probe_git_dirty(engine, context)
             if actual_dirty is not None:
                 state.dirty_after_commit = actual_dirty
                 state.dirty_paths = dirty_paths
+                state.dirty_staged_paths = staged_paths
+                state.dirty_unstaged_paths = unstaged_paths
         missing = state.missing_delivery()
         if missing:
             state.reconcile_delivery_steps(missing)
@@ -239,13 +249,21 @@ def run_with_delivery(
                 + state.delivery_prompt()
             )
         elif "dirty" in missing and state.dirty_paths:
-            continuation = (
-                "交付仍未完成：工作区还有未清理路径：\n- "
-                + "\n- ".join(state.dirty_paths[:20])
-                + "\n请先实际删除本轮产生的备份/临时文件，或把它们纳入提交；"
-                "不要只运行 git status 后声称干净。完成后再确认工作区为空。\n\n"
-                + state.delivery_prompt()
-            )
+            if state.dirty_staged_paths and not state.dirty_unstaged_paths:
+                continuation = (
+                    "交付仍未完成：以下修改已经暂存但还没有 commit：\n- "
+                    + "\n- ".join(state.dirty_staged_paths[:20])
+                    + "\n请直接创建 commit，然后确认工作区为空；不要再修改文件。\n\n"
+                    + state.delivery_prompt()
+                )
+            else:
+                continuation = (
+                    "交付仍未完成：工作区还有未清理路径：\n- "
+                    + "\n- ".join(state.dirty_paths[:20])
+                    + "\n请先实际删除本轮产生的备份/临时文件，或把它们纳入提交；"
+                    "不要只运行 git status 后声称干净。完成后再确认工作区为空。\n\n"
+                    + state.delivery_prompt()
+                )
         else:
             continuation = (
                 "继续完成当前任务的交付，不要重新做一遍已经完成的工作。\n"
