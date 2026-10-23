@@ -632,3 +632,18 @@ def test_new_test_task_rejects_an_empty_test_file() -> None:
     assert state.invalid_test_artifacts == []
     assert state.test_artifacts == ["tests/test_new.py"]
     assert "test" not in state.missing_delivery()
+
+
+def test_writing_hardcoded_value_does_not_create_a_test_requirement() -> None:
+    state = TaskState(
+        objective=(
+            "请实现 coverage_summary，数字不得写死；运行 python -m pytest test_app.py -q"
+        ),
+        execution_level=3,
+        tests=["python -m pytest test_app.py -q"],
+        verified_revision=0,
+        required=["verify"],
+    )
+
+    assert state.requires_new_test() is False
+    assert "test" not in state.missing_delivery()

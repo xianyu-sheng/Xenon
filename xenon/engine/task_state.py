@@ -27,7 +27,7 @@ _WRITE_TOOLS = {
     "clone_repo",
 }
 _TEST_CREATE_RE = re.compile(
-    r"(?:新增|添加|补(?:一个|充)?|写(?:一个|入)?|创建|加).{0,30}"
+    r"(?:新增|添加|补(?:一个|充)?|写(?:一个|入)?(?!死)|创建|加(?:一个)?).{0,30}"
     r"(?:pytest|测试|test)",
     re.IGNORECASE,
 )

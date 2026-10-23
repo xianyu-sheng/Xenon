@@ -44,16 +44,16 @@ Model: `deepseek/deepseek-v4-flash`
 
 ```text
 10/10 cases passed
-calc:          8.9s,   6 tools, 0 failures
-fix_bug:      41.4s,  13 tools, 1 failure
-cli_summary: 223.8s,  29 tools, 9 failures
-json_report:  51.6s,  16 tools, 1 failure
-multi_file:   36.0s,  13 tools, 1 failure
-rename_function: 104.4s, 33 tools, 3 failures
-two_bugs:    138.1s,  36 tools, 4 failures
-format_price: 37.6s,  13 tools, 1 failure
-safe_div:     38.4s,  13 tools, 1 failure
-config_default: 40.0s, 13 tools, 1 failure
+calc:           85.2s, 24 tools, 5 failures
+fix_bug:        42.6s, 14 tools, 1 failure
+cli_summary:    40.4s, 13 tools, 1 failure
+json_report:    45.4s, 13 tools, 1 failure
+multi_file:     49.2s, 12 tools, 0 failures
+rename_function:52.7s, 16 tools, 2 failures
+two_bugs:       38.3s, 12 tools, 1 failure
+format_price:  107.6s, 27 tools, 3 failures
+safe_div:       43.0s, 12 tools, 0 failures
+config_default: 37.4s, 13 tools, 1 failure
 ```
 
 The real SmartBench #26 slice also finished with target tests `2 passed`, a
