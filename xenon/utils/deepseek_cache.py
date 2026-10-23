@@ -132,6 +132,17 @@ class _ModelTotals:
     window: deque = field(default_factory=lambda: deque(maxlen=50))
 
 
+_PREFIX_CHANGE_CAUSES = frozenset(
+    {
+        "stable_prefix_changed",
+        "history_rewritten",
+        "context_compacted",
+        "toolset_changed",
+        "project_changed",
+    }
+)
+
+
 class CacheTracker:
     """DeepSeek 缓存命中率 + 本地费用追踪。
 
@@ -506,20 +517,29 @@ class CacheTracker:
 
     @property
     def cache_badge(self) -> tuple[str, str]:
-        """Return ``(text, semantic_style)`` without treating unknown as 0%."""
+        """Return ``(text, semantic_style)`` for the status bar.
+
+        The badge is normally the **cumulative** hit rate.  A new cache
+        family/model/phase is not enough to call the whole cache cold.  Only
+        an actual prefix/history/context change keeps the explicit ``cold``
+        warning; otherwise the last request is folded into the cumulative
+        rate.
+        """
         event = self.latest_event
         if event is None:
-            return "cache cold", "muted"
+            return "cache n/a", "muted"
         state = event["state"]
         if state == "unavailable":
             return "cache n/a", "muted"
-        if state == "cold":
+        if state == "cold" and event.get("cause") in _PREFIX_CHANGE_CAUSES:
             return "cache cold", "warning"
-        if state == "warming":
-            return "cache warming", "warning"
+        if self.cache_reported_calls == 0:
+            return "cache n/a", "muted"
+        rate = self.cache_hit_rate
+        style = "good" if rate >= 0.70 else ("warning" if rate >= 0.40 else "danger")
         if state == "miss" and self.cache_hits == 0:
             return "cache 0% ↓", "danger"
-        return f"cache {self.cache_hit_rate:.0%}", "good"
+        return f"cache {rate:.0%}", style
 
     def diagnostics(self) -> list[dict[str, str]]:
         """Return deterministic local cache checks for ``/cache doctor``."""

@@ -75,6 +75,7 @@
 | C45 | Plan-Execute 的可用工具列表漏掉 `run_script`/`tool_result_read`，但安全错误仍要求模型改用 run_script | 工具/提示 | ✅ 已修复 | Planner prompt 与 mini-ReAct 工具说明补全；`command` 明确禁止 `python -c`/未加引号 `$`；run_script 执行后清理临时脚本；新增提示词/清理测试 |
 | C46 | pytest 归一化把 `2>&1` 留成参数 `2`，并可能截断带引号的 `-k "a|b"` | 工具/命令 | ✅ 已修复 | quote-aware 管道处理；`2>&1` 被剥离；`-k` 内管道保留；新增 parser 测试 |
 | C52 | 10 用例重复运行结果有波动，单轮 10/10 不能外推 | 度量/真实性 | 🟡 已记录 | 最新 10/10，此前 9/10；staged 路径提示与 Set-Location 修复后复跑通过；保留失败历史，不把基准当稳定承诺 |
+| C53 | 状态栏把最近一次新缓存族的 cold 当成全局缓存命中状态 | UX/缓存展示 | ✅ 已修复 | 底栏改为展示累计命中率；仅 `stable_prefix_changed` / `history_rewritten` / `context_compacted` / `toolset_changed` / `project_changed` 显示 `cache cold`；无样本显示 n/a；新增缓存测试；全量 3604 passed |
 | C50 | 交付只区分 dirty，不区分已暂存/未暂存，模型在“已 staged 未 commit”时容易空转 | 执行/交付 | ✅ 已修复 | worktree probe 与 TaskState 记录 staged/unstaged 路径；continuation 对“已暂存未提交”直接要求 commit；新增测试 |
 | C51 | `Set-Location` / `sl` 不被 pytest/git 命令归一路径识别 | 工具/命令 | ✅ 已修复 | 两个 parser 支持 `Set-Location`/`sl`；新增测试 |
 | C49 | 长任务 replay 仅靠 200 条 processed_tool_ids，旧事件可能重复应用 | 事件/幂等 | ✅ 已修复 | TaskState 持久化 `evidence_sequence` + `evidence_session_id`；投影跳过已应用序列，新 ledger 重置游标；新增 replay/cursor 测试；全量 3600 passed |

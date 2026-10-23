@@ -169,13 +169,39 @@ def test_toolbar_shows_cold_na_and_actual_rate() -> None:
         ModelRegistry(),
         cache_tracker=tracker,
     )
-    assert "cache cold" in "".join(text for _style, text in bar.get_toolbar_fragments())
+    assert "cache n/a" in "".join(text for _style, text in bar.get_toolbar_fragments())
 
     tracker.record_response("openai/gpt", _response(cache_fields=False))
     assert "cache n/a" in "".join(text for _style, text in bar.get_toolbar_fragments())
 
     tracker.record_response("deepseek-v4-flash", _response(hit=80, miss=20))
     assert "cache 80%" in "".join(text for _style, text in bar.get_toolbar_fragments())
+    tracker.close()
+
+
+def test_cache_badge_uses_cumulative_rate_until_prefix_changes() -> None:
+    tracker = CacheTracker()
+    first = build_prompt_manifest(
+        "deepseek-v4-flash",
+        [{"role": "system", "content": "prefix-a"}, {"role": "user", "content": "q"}],
+        cache_context={"engine": "direct", "phase": "chat"},
+    ).as_dict()
+    tracker.record_response(
+        "deepseek-v4-flash",
+        _response(hit=80, miss=20, manifest=first),
+    )
+    assert tracker.cache_badge[0] == "cache 80%"
+
+    second = build_prompt_manifest(
+        "deepseek-v4-flash",
+        [{"role": "system", "content": "prefix-b"}, {"role": "user", "content": "q"}],
+        cache_context={"engine": "direct", "phase": "chat"},
+    ).as_dict()
+    tracker.record_response(
+        "deepseek-v4-flash",
+        _response(hit=0, miss=100, manifest=second),
+    )
+    assert tracker.cache_badge == ("cache cold", "warning")
     tracker.close()
 
 
