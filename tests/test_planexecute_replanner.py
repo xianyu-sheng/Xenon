@@ -215,3 +215,13 @@ def test_identical_repair_failure_does_not_retry_forever():
 
     assert results[0]["status"] == "failed"
     assert calls["n"] == 2
+
+
+def test_repair_rotates_configured_executor_models() -> None:
+    engine = PlanExecuteEngine(
+        ["planner/model"],
+        executor_model_priority=["first/model", "second/model"],
+    )
+
+    assert engine._repair_model_priority(1) == ["first/model", "second/model"]
+    assert engine._repair_model_priority(2) == ["second/model", "first/model"]

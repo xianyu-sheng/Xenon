@@ -1074,6 +1074,46 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             normalized.append(step)
         return normalized
 
+    def _repair_model_priority(self, attempts: int) -> list[str]:
+        """Choose a repair model without changing the normal routing.
+
+        The first repair keeps the current executor.  A second repair rotates
+        explicitly configured executor models.  On a third distinct failure,
+        an available higher-tier model from the pool may be tried before the
+        configured list.
+        """
+        configured = list(self.executor_model_priority)
+        if attempts <= 1 or not configured:
+            return configured
+        ordered = configured[1:] + configured[:1] if len(configured) > 1 else configured
+        if attempts < 3 or self.model_pool is None:
+            return ordered
+        try:
+            entries = list(self.model_pool.list_all())
+        except Exception:  # noqa: BLE001 — optional health-aware escalation
+            return ordered
+        current = next(
+            (entry for entry in entries if entry.model_id in configured),
+            None,
+        )
+        current_tier = getattr(getattr(current, "capability", None), "tier", 0)
+        candidates = sorted(
+            entries,
+            key=lambda entry: (
+                getattr(getattr(entry, "capability", None), "tier", 0),
+                getattr(getattr(entry, "capability", None), "reasoning_score", 0),
+            ),
+            reverse=True,
+        )
+        for entry in candidates:
+            tier = getattr(getattr(entry, "capability", None), "tier", 0)
+            if entry.model_id in ordered:
+                continue
+            if current_tier and tier <= current_tier:
+                continue
+            return [entry.model_id] + ordered
+        return ordered
+
     def _repair_failed_step(
         self,
         *,
@@ -1149,6 +1189,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                     context=ctx,
                     steering=steering,
                     require_write_tool=requires_write,
+                    model_priority=self._repair_model_priority(attempts),
                 )
             except Exception as exc:  # noqa: BLE001 — repair must not crash task
                 logger.warning("步骤 %s 修复轮异常: %s", step_id, exc)
@@ -1839,6 +1880,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         context: AgentContext | None = None,
         require_write_tool: bool = False,
         steering: list[dict[str, Any]] | None = None,
+        model_priority: list[str] | None = None,
     ) -> str:
         """使用 LLM 执行不需要工具的步骤（§Q4 迷你 ReAct：最多 N 轮 Thought→Action→Observation）。
 
@@ -1888,7 +1930,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             last_response = self._call_llm_for_phase(
                 "execute_step",
                 messages,
-                model_priority=self.executor_model_priority,
+                model_priority=model_priority or self.executor_model_priority,
             )
             parsed = parse_react(last_response)
             if not isinstance(parsed, dict):
