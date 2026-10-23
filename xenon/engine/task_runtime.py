@@ -206,6 +206,7 @@ def run_with_delivery(
             break
         if attempts >= max_delivery_retries:
             labels = {
+                "test": "真实回归测试",
                 "verify": "测试",
                 "changes": "实际源码修改",
                 "commit": "commit",
@@ -224,6 +225,7 @@ def run_with_delivery(
             break
         attempts += 1
         labels = {
+            "test": "新增非空回归测试文件并真实运行",
             "verify": "运行相关测试并记录真实结果",
             "changes": "实际修改非测试源码文件，不能只提交空改动或测试",
             "commit": "创建 git commit",

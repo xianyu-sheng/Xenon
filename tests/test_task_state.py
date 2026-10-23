@@ -602,3 +602,33 @@ def test_dirty_status_paths_are_reported_in_repair_prompt() -> None:
     assert state.dirty_after_commit is True
     assert state.dirty_paths == ["ops.py.bak", "src/app.py"]
     assert "ops.py.bak" in state.delivery_prompt()
+
+
+def test_new_test_task_rejects_an_empty_test_file() -> None:
+    state = TaskState(
+        objective="补一个 pytest 回归测试，验证输出格式",
+        intent="write_code",
+        execution_level=3,
+        required=["commit"],
+    )
+    state.record_tool(
+        "write_file",
+        {"file_path": "tests/test_new.py", "content": ""},
+        success=True,
+        metadata={"changed_paths": ["tests/test_new.py"], "content_chars": 0},
+    )
+
+    assert state.invalid_test_artifacts == ["tests/test_new.py"]
+    assert state.test_artifacts == []
+    assert "test" in state.missing_delivery()
+    assert "空测试文件" in state.delivery_prompt()
+
+    state.record_tool(
+        "write_file",
+        {"file_path": "tests/test_new.py", "content": "def test_x():\n    assert 1\n"},
+        success=True,
+        metadata={"changed_paths": ["tests/test_new.py"], "content_chars": 31},
+    )
+    assert state.invalid_test_artifacts == []
+    assert state.test_artifacts == ["tests/test_new.py"]
+    assert "test" not in state.missing_delivery()

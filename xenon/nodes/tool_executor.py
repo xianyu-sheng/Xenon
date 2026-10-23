@@ -899,6 +899,10 @@ class ToolExecutor:
                     value = raw.get(key)
                     if isinstance(value, str) and value.strip():
                         tracker_metadata[f"{key}_tail"] = value[-1200:]
+            if tool_name in {"write_file", "append_file"}:
+                content = params.get("content")
+                if isinstance(content, str):
+                    tracker_metadata["content_chars"] = len(content)
             if result_id:
                 tracker_metadata["result_id"] = result_id
             execution_result = ToolExecuteResult(

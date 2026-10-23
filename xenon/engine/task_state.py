@@ -26,6 +26,11 @@ _WRITE_TOOLS = {
     "edit_with_llm",
     "clone_repo",
 }
+_TEST_CREATE_RE = re.compile(
+    r"(?:新增|添加|补(?:一个|充)?|写(?:一个|入)?|创建|加).{0,30}"
+    r"(?:pytest|测试|test)",
+    re.IGNORECASE,
+)
 _VERIFY_RE = re.compile(
     r"(?:\bpytest\b|\bpython\s+-m\s+pytest\b|\bunittest\b|\btox\b|"
     r"\bnpm\s+test\b|\bpnpm\s+test\b|\bcargo\s+test\b|\bgo\s+test\b|"
@@ -210,6 +215,8 @@ class TaskState:
     verified_revision: int = 0
     tests: list[str] = field(default_factory=list)
     failed_tests: list[str] = field(default_factory=list)
+    test_artifacts: list[str] = field(default_factory=list)
+    invalid_test_artifacts: list[str] = field(default_factory=list)
     verification_failures: list[dict[str, Any]] = field(default_factory=list)
     processed_tool_ids: list[str] = field(default_factory=list)
     commit: str = ""
@@ -285,6 +292,10 @@ class TaskState:
             verified_revision=max(0, int(raw.get("verified_revision") or 0)),
             tests=[str(t) for t in raw.get("tests", []) if t],
             failed_tests=[str(t) for t in raw.get("failed_tests", []) if t],
+            test_artifacts=[str(p) for p in raw.get("test_artifacts", []) if p],
+            invalid_test_artifacts=[
+                str(p) for p in raw.get("invalid_test_artifacts", []) if p
+            ],
             verification_failures=[
                 item
                 for item in raw.get("verification_failures", [])
@@ -333,6 +344,8 @@ class TaskState:
             "verified_revision": self.verified_revision,
             "tests": self.tests[-20:],
             "failed_tests": self.failed_tests[-10:],
+            "test_artifacts": self.test_artifacts[-20:],
+            "invalid_test_artifacts": self.invalid_test_artifacts[-20:],
             "verification_failures": self.verification_failures[-3:],
             "processed_tool_ids": self.processed_tool_ids[-200:],
             "commit": self.commit,
@@ -570,6 +583,9 @@ class TaskState:
                 lines.append("Delivery: complete")
         return chr(10).join(lines)
 
+    def requires_new_test(self) -> bool:
+        return bool(_TEST_CREATE_RE.search(self.objective))
+
     def has_source_artifact(self, paths: list[str] | None = None) -> bool:
         """Whether a successful write touched a non-test file."""
         for path in self.artifacts if paths is None else paths:
@@ -580,6 +596,8 @@ class TaskState:
     def required_delivery(self) -> list[str]:
         """Return the delivery gates that are still missing."""
         missing: list[str] = []
+        if self.requires_new_test() and not self.test_artifacts:
+            missing.append("test")
         if "verify" in self.required and (
             not self.tests or self.verified_revision < self.artifacts_revision
         ):
@@ -808,6 +826,19 @@ class TaskState:
                 for path in paths:
                     if path not in self.artifacts:
                         self.artifacts.append(path)
+                    if _is_test_path(path):
+                        chars = metadata.get("content_chars")
+                        if isinstance(chars, int) and not isinstance(chars, bool):
+                            if chars > 0:
+                                if path not in self.test_artifacts:
+                                    self.test_artifacts.append(path)
+                                self.invalid_test_artifacts = [
+                                    item
+                                    for item in self.invalid_test_artifacts
+                                    if _path_key(item) != _path_key(path)
+                                ]
+                            elif path not in self.invalid_test_artifacts:
+                                self.invalid_test_artifacts.append(path)
                     if not _is_test_path(path):
                         # The committed source snapshot is stale as soon as
                         # this path is rewritten; a later test-only commit
@@ -917,6 +948,11 @@ class TaskState:
             lines.append("- 已修改产物: " + ", ".join(self.artifacts[-8:]))
         if self.tests:
             lines.append("- 已执行验证: " + ", ".join(self.tests[-3:]))
+        if self.invalid_test_artifacts:
+            lines.append(
+                "- 空测试文件（必须写入真实断言）: "
+                + ", ".join(self.invalid_test_artifacts[:8])
+            )
         if self.dirty_after_commit:
             paths = ", ".join(self.dirty_paths[:8])
             if paths:
@@ -939,6 +975,7 @@ class TaskState:
         missing = self.missing_delivery()
         if missing:
             labels = {
+                "test": "新增非空回归测试文件并真实运行",
                 "verify": "运行相关测试并记录真实结果",
                 "changes": "实际修改非测试源码文件（不能只提交空改动或测试）",
                 "commit": "创建 git commit",

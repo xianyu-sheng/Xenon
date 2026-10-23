@@ -71,6 +71,7 @@
 | C22 | 固定 120 步会误杀长链路任务；重试上限 2 次过早放弃 | 执行/循环 | ✅ 已改 | 默认 `0`=不限步数，由 LoopDetector、无进展检查点、1800s deadline 控制；`XENON_MAX_ITERATIONS` 可显式设上限；交付/验证/格式/计划收尾/写恢复重试统一为 3 次；Xenon 全量 3454 passed；`tests/test_react_loop_exit.py` 证明 max_iterations=0 下高置信度循环由 LoopDetector 终止 |
 | C39 | run 内部才创建 ledger 时，交付层仍使用启动前的 None 引用，计划事件没有回放 | 事件/投影 | ✅ 已修复 | run 后刷新 `_evidence_ledger`；真实 calc 计划 5 步全部进入 TaskState；新增“运行中创建 ledger”回归测试 |
 | C40 | 模型常写 `git add x && commit -m`（第二个段缺 git） | 执行/命令 | ✅ 窄兼容 | git 链中前一命令成功后，裸 `add/commit` 视为 git 子命令；不改变独立命令语义 |
+| C42 | 空测试文件也能被 pytest 的旧测试通过洗白，TaskState 假完成 | 执行/交付 | ✅ 已修复 | ToolExecutor 记录 `content_chars`；TaskState 对“新增/补测试”的任务要求非空 test artifact；空文件进入 `invalid_test_artifacts` 和修复提示；真实 #26 空测试场景会被判未完成，非空测试场景通过 |
 | C41 | 交付提示只知道 dirty，不告诉模型具体残留文件，模型反复空说“干净” | 执行/提示 | ✅ 已修复 | worktree 探测记录 `dirty_paths`；状态持久化；delivery continuation 直接列出 `.bak`/未提交路径，要求实际删除或提交；全量 3592 passed；10/10 基准 |
 | C37 | `git add -A; git commit` 经 PowerShell 返回 129，造成无效重试 | 执行/命令 | ✅ 窄归一化 | `xenon/utils/git_command.py` 只拆分全由 `cd` + 白名单本地 git 子命令组成的链，直接 subprocess 执行并返回 committed_paths；真实 `git add -A; git commit` 集成测试通过 |
 | C38 | 同一步骤连续相同失败会反复走同一修复策略 | 执行/修复 | ✅ 已加短路 | 修复轮检测到相同错误文本即停止同策略重试，交给结构性重规划/后续回合；单测覆盖只调用一次修复 |
@@ -131,6 +132,7 @@
 | 2026-10-22 | Plan step 写操作强校验 | 计划步骤任务要求写盘（tool 或 write/edit/插入/补齐语义）时，执行后必须新增成功写工具调用；串行、DAG 串行/并行、补救步骤均覆盖。修复真实 #26 中“声称修改但 git diff 为空”的步骤 status；全量 3565 passed/98 skipped |
 | 2026-10-22 | Combined Engine EventBus | `PlanReactEngine`/`PlanReflectionEngine`/`ReactReflectionEngine` 也暴露顶层 `event_bus`，回调 delegate 保持；新增组合引擎测试；全量 3563 passed/98 skipped |
 | 2026-10-22 | 失败输出进入修复续跑 | ToolExecutor 记录 stdout/stderr tail；TaskState 保存 verification_failures（命令/exit_code/输出尾部）；`run_with_delivery` 在 verify 缺失时改用“先修复真实错误、重跑同一命令”的 continuation，而不是泛化重试；全量 3567 passed/98 skipped |
+| 2026-10-23 | 空测试门 + 真实 #26 复跑 | 全量 3593 passed/98 skipped；真实 #26 90 工具/16 失败/634s，非空回归测试、目标测试通过、commit、clean、TaskState completed；10/10 基准 |
 | 2026-10-23 | 10 用例基准 | 全量 3592 passed/98 skipped；10/10 真实本地任务通过；真实 #26 同轮通过；dirty 路径进入修复提示 |
 | 2026-10-23 | 实时计划回放 + 5 用例基准 | 全量 3591 passed/98 skipped；calc/fix_bug/cli_summary/json_report/multi_file 5/5；TaskState 计划步骤完整；真实 #26 已通过 |
 | 2026-10-22 | 实时计划 + git 归一化 | 全量 3589 passed/98 skipped；plan_state EventBus 实时订阅；git add/commit 链无 shell 执行；同错误修复短路 |
