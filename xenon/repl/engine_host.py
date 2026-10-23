@@ -428,6 +428,7 @@ class EngineHostMixin:
         # 工作区绑定：与评测路径一致（见 _bind_interactive_tool_runtime）。
         # 必须在 run() 之前——绑定后模型提供的 cwd 才会被可信根覆盖。
         self._bind_interactive_tool_runtime(engine)
+        self._subscribe_plan_display(engine, spec)
         # 在线验证链：任务摄入——REPL 先创建任务证据，引擎复用同一条 ledger。
         try:
             self.agent_context.evidence.start_task(
@@ -520,6 +521,7 @@ class EngineHostMixin:
                 )
                 self._inject_mcp_tools_into_engine(engine)
                 self._bind_interactive_tool_runtime(engine)
+                self._subscribe_plan_display(engine, spec)
                 # 决策 2：重试轮预算 = 首轮实际步数的一半（clamp[10,40]）。
                 for _attr in ("max_iterations", "max_steps", "react_iterations", "max_rounds"):
                     if hasattr(engine, _attr):
@@ -622,6 +624,52 @@ class EngineHostMixin:
             self._persist_engine_trace(engine)
             if getattr(self, "_log_capture_active", False):
                 self._captured_log = self._stop_log_capture()
+
+    def _subscribe_plan_display(self, engine: Any, spec: EngineSpec) -> None:
+        """Render step transitions from the event-sourced plan projection.
+
+        The full plan is rendered once at the end; this live line gives the
+        user visible progress without reading callback-owned mutable state.
+        """
+        if not spec.name.startswith("plan"):
+            return
+        bus = getattr(engine, "event_bus", None)
+        if bus is None:
+            return
+        self._last_plan_signature = None
+
+        def _on_plan_state(summary: str, snapshot: dict[str, Any]) -> None:
+            steps = snapshot.get("steps") or []
+            signature = tuple(
+                (step.get("id"), step.get("status"))
+                for step in steps
+                if isinstance(step, dict)
+            )
+            if signature == getattr(self, "_last_plan_signature", None):
+                return
+            self._last_plan_signature = signature
+            version = snapshot.get("plan_version", 1)
+            running = next(
+                (
+                    step
+                    for step in steps
+                    if isinstance(step, dict)
+                    and step.get("status") == "running"
+                ),
+                None,
+            )
+            if running is not None:
+                label = str(running.get("step") or "")[:100]
+                console.print(
+                    Text(
+                        f"计划 v{version} · 执行: {label}",
+                        style="dim",
+                    )
+                )
+            else:
+                console.print(Text(f"计划 v{version} 已更新", style="dim"))
+
+        bus.subscribe("plan_state", _on_plan_state)
 
     def _render_plan_state(self, spec: EngineSpec) -> None:
         """Render the durable plan after a plan-family run.

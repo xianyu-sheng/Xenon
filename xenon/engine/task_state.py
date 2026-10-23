@@ -335,6 +335,10 @@ class TaskState:
         does not create a bogus revision.
         """
         new_version = max(1, int(version or self.plan_version))
+        if new_version < self.plan_version:
+            # A replay/retry must not overwrite a newer plan with an older
+            # ledger snapshot.
+            return
         if new_version > self.plan_version and self.steps:
             self.plan_history.append(
                 {
@@ -344,8 +348,6 @@ class TaskState:
                 }
             )
             self.plan_history = self.plan_history[-10:]
-        elif new_version < self.plan_version:
-            new_version = self.plan_version
         existing = {
             _text(step.get("id")): step
             for step in self.steps

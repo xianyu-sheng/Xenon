@@ -25,9 +25,11 @@ class TaskStateProjection:
         self,
         state: TaskState,
         context: Any | None = None,
+        on_change: Any | None = None,
     ) -> None:
         self.state = state
         self.context = context
+        self.on_change = on_change
         self.subscription: EvidenceSubscription | None = None
         self.ledger: EvidenceLedger | None = None
 
@@ -47,7 +49,7 @@ class TaskStateProjection:
                     version=int(payload.get("version") or self.state.plan_version),
                     reason=str(payload.get("reason") or ""),
                 )
-                self._publish()
+                self._publish(notify=True)
             return
 
         if event.kind == EventKind.PLAN_STEP_STARTED.value:
@@ -68,7 +70,7 @@ class TaskStateProjection:
                 status="running",
             )
             self.state.set_step_status(step_id, "running")
-            self._publish()
+            self._publish(notify=True)
             return
 
         if event.kind == EventKind.PLAN_STEP_FINISHED.value:
@@ -101,7 +103,7 @@ class TaskStateProjection:
                     },
                     status=status,
                 )
-            self._publish()
+            self._publish(notify=True)
             return
 
         if event.kind != EventKind.TOOL_OBSERVATION.value:
@@ -120,9 +122,14 @@ class TaskStateProjection:
         )
         self._publish()
 
-    def _publish(self) -> None:
+    def _publish(self, *, notify: bool = False) -> None:
         if self.context is not None and hasattr(self.context, "set"):
             self.context.set("_task_state", self.state.to_dict())
+        if notify and self.on_change is not None:
+            try:
+                self.on_change(self.state)
+            except Exception:  # noqa: BLE001 — projection must not break execution
+                pass
 
     def attach(
         self,

@@ -31,6 +31,7 @@ EVENT_TYPES: frozenset[str] = frozenset(
         "observe",
         "step",
         "step_done",
+        "plan_state",
         "review",
         "error",
         "warning",

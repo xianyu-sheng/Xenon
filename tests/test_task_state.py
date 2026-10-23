@@ -552,6 +552,12 @@ def test_plan_revision_archives_old_steps() -> None:
     assert state.plan_history[0]["steps"][0]["step"] == "old"
     assert [step["step"] for step in state.steps] == ["new"]
 
+    state.set_plan(
+        [{"id": "0", "step": "stale replay", "status": "pending"}],
+        version=1,
+    )
+    assert [step["step"] for step in state.steps] == ["new"]
+
 
 def test_failed_remediation_row_is_retired_after_delivery_passes() -> None:
     state = TaskState(

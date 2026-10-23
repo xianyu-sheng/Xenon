@@ -33,6 +33,9 @@ replayable projections.
   `CallbackBusBridge` publishes to the bus and forwards to the existing
   callback delegate, so TUI/log subscribers can attach without changing
   engine code or callback behavior.
+- `run_with_delivery` subscribes a `TaskStateProjection` **before** the engine
+  run when a ledger already exists.  Plan/step changes publish a `plan_state`
+  event (summary + snapshot) for live UI; tool-only changes do not spam it.
 
 ## Rules
 

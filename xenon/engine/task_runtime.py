@@ -91,15 +91,53 @@ def run_with_delivery(
     from xenon.engine.task_state_projection import TaskStateProjection
     from xenon.engine.tool_tracker import ToolExecutionTracker
 
+    initial_state = TaskState.from_context(context)
+    projection: TaskStateProjection | None = None
+    live_projection = False
+    ledger = context.get("_evidence_ledger") if context is not None else None
+    if (
+        initial_state is not None
+        and initial_state.active
+        and ledger is not None
+        and hasattr(ledger, "events")
+    ):
+        # Subscribe before the engine emits this run's plan/step events, so a
+        # UI subscriber can render the plan while work is happening instead of
+        # only after the final answer.
+        def _notify_plan_state(state: TaskState) -> None:
+            bus = getattr(engine, "event_bus", None)
+            if bus is None:
+                return
+            try:
+                bus.publish(
+                    "plan_state",
+                    state.plan_summary(),
+                    state.to_dict(),
+                )
+            except Exception:  # noqa: BLE001 — UI channel must not break work
+                logger.debug("plan_state publish failed", exc_info=True)
+
+        projection = TaskStateProjection(
+            initial_state, context, on_change=_notify_plan_state
+        )
+        # Replay any already-recorded events for this task (resume/retry),
+        # then stay subscribed for the new events emitted by this run.
+        projection.attach(ledger, replay=True)
+        live_projection = True
+
     try:
         result = engine.run(user_input, context=context, ctx_mgr=ctx_mgr)
     except Exception:
+        if projection is not None:
+            projection.close()
         # Preserve the stack for long-running tasks; callers otherwise only
         # see a bare message after hundreds of tool calls.
         logger.exception("engine.run failed before delivery finalization")
         raise
-    state = TaskState.from_context(context)
+    state = TaskState.from_context(context) or initial_state
     if state is None or not state.active:
+        if live_projection and projection is not None:
+            projection.close()
         final_result = build_agent_result(engine, result, context)
         engine.last_result = final_result
         return final_result
@@ -109,13 +147,11 @@ def run_with_delivery(
     if tracker is not None:
         aggregate.calls.extend(list(getattr(tracker, "calls", []) or []))
 
-    # The evidence ledger is the durable source.  Replay its tool observations
-    # into TaskState when we can identify this task's boundary; keep the
-    # tracker path as a fallback for engines/contexts without a ledger.
-    projection: TaskStateProjection | None = None
-    use_projection = False
-    ledger = context.get("_evidence_ledger") if context is not None else None
-    if ledger is not None and hasattr(ledger, "events"):
+    # The evidence ledger is the durable source.  If we could not subscribe
+    # before the run, replay its tool observations into TaskState when we can
+    # identify this task's boundary; keep the tracker fallback otherwise.
+    use_projection = live_projection
+    if not live_projection and ledger is not None and hasattr(ledger, "events"):
         start_sequence = 0
         for event in getattr(ledger, "events", []):
             if (

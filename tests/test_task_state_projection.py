@@ -284,3 +284,86 @@ def test_projection_applies_plan_and_step_events() -> None:
     assert [step["id"] for step in state.steps] == ["10", "20"]
     assert [step["status"] for step in state.steps] == ["completed", "failed"]
     assert state.maybe_complete() is False
+
+
+def test_projection_notifies_only_plan_or_step_changes() -> None:
+    state = _state()
+    ledger = EvidenceLedger("run-plan-change")
+    seen: list[str] = []
+    projection = TaskStateProjection(
+        state, on_change=lambda snapshot: seen.append(snapshot.plan_summary())
+    ).attach(ledger)
+
+    _append_observation(
+        ledger,
+        "write_file",
+        params={"file_path": "src/app.py"},
+        success=True,
+        summary="written",
+        task_id=state.task_id,
+        metadata={"result_id": "r-write"},
+    )
+    assert seen == []
+
+    ledger.append(
+        LifecyclePhase.PLANNING,
+        EventKind.PLAN,
+        EvidenceSource.ENGINE,
+        {
+            "task_id": state.task_id,
+            "version": 1,
+            "steps": [{"id": 1, "task": "write", "status": "pending"}],
+        },
+    )
+    assert seen
+    assert "Plan v1" in seen[-1]
+    projection.close()
+
+
+def test_delivery_runtime_publishes_live_plan_state_on_engine_bus() -> None:
+    from xenon.engine.event_bus import EventBus
+    from xenon.engine.result import TerminationReason
+    from xenon.engine.task_runtime import run_with_delivery
+
+    class _EngineWithPlan(_ProjectedEngine):
+        def __init__(self) -> None:
+            super().__init__()
+            self.event_bus = EventBus()
+
+        def run(self, user_input, context=None, ctx_mgr=None):
+            ledger = context.get("_evidence_ledger")
+            ledger.append(
+                LifecyclePhase.PLANNING,
+                EventKind.PLAN,
+                EvidenceSource.ENGINE,
+                {
+                    "task_id": context.get("_task_state")["task_id"],
+                    "version": 1,
+                    "steps": [{"id": 1, "task": "write", "status": "pending"}],
+                },
+            )
+            return "done"
+
+    state = _state()
+    ledger = EvidenceLedger("run-live-plan")
+    ledger.append(
+        LifecyclePhase.TASK,
+        EventKind.TASK_FACT,
+        EvidenceSource.ENGINE,
+        {"task_id": state.task_id},
+    )
+    context = AgentContext(
+        {"_task_state": state.to_dict(), "_evidence_ledger": ledger}
+    )
+    engine = _EngineWithPlan()
+    seen: list[str] = []
+    engine.event_bus.subscribe(
+        "plan_state", lambda summary, snapshot: seen.append(summary)
+    )
+
+    result = run_with_delivery(engine, "finish", context, max_delivery_retries=0)
+
+    assert isinstance(result, str)
+    assert seen and "Plan v1" in seen[0]
+    assert context.get("_task_state")["steps"][0]["status"] == "pending"
+    assert result.reason == TerminationReason.DELIVERY_INCOMPLETE
