@@ -43,27 +43,21 @@ A case passes only when all of these are true:
 Model: `deepseek/deepseek-v4-flash`
 
 ```text
-Latest run: 9/10 cases passed
-calc:           49.8s, 18 tools, 0 failures  PASS
-fix_bug:        42.6s, 12 tools, 0 failures  PASS
-cli_summary:    40.6s, 12 tools, 0 failures  PASS
-json_report:    79.9s, 22 tools, 0 failures  PASS
-multi_file:     44.8s, 13 tools, 0 failures  PASS
-rename_function:29.3s, 11 tools, 1 failure   PASS
-two_bugs:       47.8s, 12 tools, 1 failure   PASS
-format_price:   46.0s, 13 tools, 0 failures  PASS
-safe_div:      103.8s, 32 tools, 0 failures  FAIL
-config_default: 86.5s, 19 tools, 2 failures  PASS
+Latest run: 10/10 cases passed
+calc:            8.4s,  7 tools, 0 failures
+fix_bug:        44.0s, 13 tools, 0 failures
+cli_summary:    38.4s, 13 tools, 1 failure
+json_report:    45.0s, 13 tools, 1 failure
+multi_file:     44.5s, 13 tools, 1 failure
+rename_function:46.3s, 13 tools, 1 failure
+two_bugs:       52.0s, 12 tools, 1 failure
+format_price:   54.1s, 15 tools, 1 failure
+safe_div:       44.1s, 13 tools, 0 failures
+config_default: 38.1s, 14 tools, 0 failures
 
-safe_div failure: target tests passed and a commit existed, but the final
-worktree still had an uncommitted `mathx.py` change.  The delivery gate kept
-TaskState active instead of blessing it.  A previous run was 10/10; this is a
-real variance sample, not a stable guarantee.
-```
-
-The real SmartBench #26 slice also finished with target tests `2 passed`, a
-source commit, a clean worktree and `TaskState.completed` in the same run
-(81 tools, 17 failed tool calls, 334.4s).
+A previous run was 9/10: `safe_div` had staged-but-uncommitted source and the
+delivery gate kept TaskState active.  That failure is retained in the history;
+it is evidence that completion is variable, not a fixed guarantee.
 
 ## What this does not prove
 
