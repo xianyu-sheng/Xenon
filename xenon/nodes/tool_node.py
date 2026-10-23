@@ -1062,6 +1062,12 @@ class ToolNode(
             if pytest_plan is not None:
                 return self._exec_pytest_plan(resolved_cmd, pytest_plan, context)
 
+            from xenon.utils.git_command import plan_git
+
+            git_plan = plan_git(resolved_cmd, self.cwd or Path.cwd())
+            if git_plan is not None:
+                return self._exec_git_plan(resolved_cmd, git_plan, context)
+
         shell_command = (
             f"{self.command_prelude}\n{resolved_cmd}"
             if self.command_prelude
@@ -1153,6 +1159,84 @@ class ToolNode(
                 "success": False,
                 "error": error_msg,
             }
+
+    def _exec_git_plan(self, command: str, plan: Any, context: AgentContext) -> dict[str, Any]:
+        """Execute a narrow cd/git chain without a shell."""
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        returncode = 0
+        committed = False
+        for args in plan.invocations:
+            try:
+                proc = subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=self.timeout,
+                    cwd=plan.cwd,
+                )
+            except subprocess.TimeoutExpired:
+                error_msg = f"git 执行超时 ({self.timeout}s): {command}"
+                return {
+                    "action_type": "command",
+                    "command": command,
+                    "returncode": -1,
+                    "stdout": "".join(stdout_parts),
+                    "stderr": "".join(stderr_parts) + error_msg,
+                    "success": False,
+                    "error": error_msg,
+                }
+            except OSError as exc:
+                error_msg = f"git 命令启动失败: {exc}"
+                return {
+                    "action_type": "command",
+                    "command": command,
+                    "returncode": -1,
+                    "stdout": "".join(stdout_parts),
+                    "stderr": "".join(stderr_parts) + error_msg,
+                    "success": False,
+                    "error": error_msg,
+                }
+            stdout_parts.append(proc.stdout)
+            stderr_parts.append(proc.stderr)
+            if proc.returncode != 0:
+                returncode = proc.returncode
+                break
+            if len(args) >= 2 and args[1].lower() == "commit":
+                committed = True
+        output = ("".join(stdout_parts) + "".join(stderr_parts)).strip()
+        if output:
+            self._write_output(context, output)
+        result: dict[str, Any] = {
+            "action_type": "command",
+            "command": command,
+            "returncode": returncode,
+            "stdout": "".join(stdout_parts),
+            "stderr": "".join(stderr_parts),
+            "success": returncode == 0,
+        }
+        if committed and returncode == 0:
+            try:
+                shown = subprocess.run(
+                    ["git", "show", "--pretty=format:", "--name-only", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=10,
+                    cwd=plan.cwd,
+                )
+                if shown.returncode == 0:
+                    result["committed_paths"] = [
+                        line.strip()
+                        for line in shown.stdout.splitlines()
+                        if line.strip()
+                    ]
+            except (OSError, subprocess.SubprocessError):
+                pass
+        return result
 
     def _exec_pytest_plan(
         self, command: str, plan: Any, context: AgentContext

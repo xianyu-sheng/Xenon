@@ -187,3 +187,31 @@ def test_replan_that_drops_write_step_is_rejected():
     )
 
     assert new_steps == []
+
+
+def test_identical_repair_failure_does_not_retry_forever():
+    engine = PlanExecuteEngine(
+        ["fake/model"], max_steps=0, max_replans=0, tool_remediation_attempts=0
+    )
+    tracker = ToolExecutionTracker()
+    steps = [
+        {
+            "id": 1,
+            "task": "write the source",
+            "tool": None,
+            "params": {},
+            "kind": "edit",
+            "requires_write": True,
+        }
+    ]
+    calls = {"n": 0}
+
+    def execute(*args, **kwargs):
+        calls["n"] += 1
+        return "执行失败: same error"
+
+    engine._execute_step_with_llm = execute  # type: ignore[method-assign]
+    results = engine._run_serial(steps, "implement", AgentContext(), tracker, 1)
+
+    assert results[0]["status"] == "failed"
+    assert calls["n"] == 2

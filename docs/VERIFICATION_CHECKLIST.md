@@ -69,6 +69,8 @@
 | C20 | “实现 #22”这类具体 issue 交付被当成 `write_code` 仅回答/只读，且不主动克隆目标仓库 | 执行/权限 | ✅ 交付已合并，产品链路待复验 | `task_delivery` 提升 EXECUTE；write_code 含 clone 指引；PR [#51](https://github.com/xianyu-sheng/SmartBench/pull/51) 已合并、7/7 检查全绿、Issue #22 已关闭；TaskState 真实 #26 收尾已验证 |
 | C21 | `继续` 只靠模型记忆，TaskState/交付要求跨回合丢失 | 执行/状态 | ✅ 统一引擎出口已验证 | `xenon/engine/task_runtime.py` 共享 `run_with_delivery`；BaseEngine 与组合引擎 SteeringMixin 都暴露 `run_task`；EngineHost 只调用这一个入口；真实 #26 72 工具/196s、8 文件、53 目标测试、commit `005ba58`、TaskState completed；全量 3453 passed；commit 门只认实际 commit 命令输出的哈希，忽略 git log 旧哈希 |
 | C22 | 固定 120 步会误杀长链路任务；重试上限 2 次过早放弃 | 执行/循环 | ✅ 已改 | 默认 `0`=不限步数，由 LoopDetector、无进展检查点、1800s deadline 控制；`XENON_MAX_ITERATIONS` 可显式设上限；交付/验证/格式/计划收尾/写恢复重试统一为 3 次；Xenon 全量 3454 passed；`tests/test_react_loop_exit.py` 证明 max_iterations=0 下高置信度循环由 LoopDetector 终止 |
+| C37 | `git add -A; git commit` 经 PowerShell 返回 129，造成无效重试 | 执行/命令 | ✅ 窄归一化 | `xenon/utils/git_command.py` 只拆分全由 `cd` + 白名单本地 git 子命令组成的链，直接 subprocess 执行并返回 committed_paths；真实 `git add -A; git commit` 集成测试通过 |
+| C38 | 同一步骤连续相同失败会反复走同一修复策略 | 执行/修复 | ✅ 已加短路 | 修复轮检测到相同错误文本即停止同策略重试，交给结构性重规划/后续回合；单测覆盖只调用一次修复 |
 | C36 | 计划只在引擎结束后渲染，执行中 UI 仍可能读 callback 状态 | 展示/事件 | ✅ 实时投影已接 | `run_with_delivery` 在 run 前订阅 ledger，TaskStateProjection 的 plan/step 变化发布 `plan_state` EventBus；REPL 订阅后按稳定签名输出执行行；旧版 PLAN 快照不能覆盖新版；全量 3585 passed |
 | C34 | 交付 dirty 只依赖模型跑过 `git status`，模型可能漏跑；pytest 后 bytecode 也会制造假 dirty | 执行/交付 | ✅ 真实基准验证 | `run_with_delivery` 在显式 workspace 下直接探测 `git status --porcelain -uall`，忽略 pycache；clean probe 可覆盖“同内容重写导致 revision 过期”的假 dirty；`fix_bug` 基准 3/3；真实 #26 `missing=[]` |
 | C35 | 缺少真实任务完成率基准 | 度量 | ✅ 本地 3 用例 | `evals/execution_benchmark.py`：calc/fix_bug/cli_summary 全通过；记录目标测试、commit、干净树、TaskState；真实 #26 同轮通过 |
@@ -126,6 +128,7 @@
 | 2026-10-22 | Plan step 写操作强校验 | 计划步骤任务要求写盘（tool 或 write/edit/插入/补齐语义）时，执行后必须新增成功写工具调用；串行、DAG 串行/并行、补救步骤均覆盖。修复真实 #26 中“声称修改但 git diff 为空”的步骤 status；全量 3565 passed/98 skipped |
 | 2026-10-22 | Combined Engine EventBus | `PlanReactEngine`/`PlanReflectionEngine`/`ReactReflectionEngine` 也暴露顶层 `event_bus`，回调 delegate 保持；新增组合引擎测试；全量 3563 passed/98 skipped |
 | 2026-10-22 | 失败输出进入修复续跑 | ToolExecutor 记录 stdout/stderr tail；TaskState 保存 verification_failures（命令/exit_code/输出尾部）；`run_with_delivery` 在 verify 缺失时改用“先修复真实错误、重跑同一命令”的 continuation，而不是泛化重试；全量 3567 passed/98 skipped |
+| 2026-10-22 | 实时计划 + git 归一化 | 全量 3589 passed/98 skipped；plan_state EventBus 实时订阅；git add/commit 链无 shell 执行；同错误修复短路 |
 | 2026-10-22 | 执行基准 + 真实 worktree 探测 | 全量 3580 passed/98 skipped；`calc/fix_bug/cli_summary` 3/3；真实 #26 目标测试 2 passed、commit、clean、TaskState completed |
 | 2026-10-22 | 步骤契约 + 计划版本 + 原地修复 | 全量 3579 passed/98 skipped；真实 #26 目标测试 2 passed；7 个计划步骤全部 completed；TaskState `missing=[]`；源码/测试/commit 均已落地 |
 | 2026-10-22 | 失败反馈真实 #26 复跑 | 60 工具/15 失败/278.3s；tests 为空、verification_failures 含 TypeError/assert 输出；步骤 3/4/5/7 failed、8 skipped，TaskState active；最终回答明确未完成，未再假 complete |

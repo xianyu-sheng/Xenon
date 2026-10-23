@@ -1197,7 +1197,13 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                         )
                 if candidate.success:
                     return candidate, attempts
-            last_error = str(candidate.error or candidate.content or last_error)[:600]
+            next_error = str(candidate.error or candidate.content or last_error)[:600]
+            if next_error.strip() == last_error.strip():
+                self.callback.on_warning(
+                    f"步骤 {step_id} 重复相同失败，停止同一修复策略"
+                )
+                break
+            last_error = next_error
         return StepOutcome(
             str(outcome.content),
             False,
