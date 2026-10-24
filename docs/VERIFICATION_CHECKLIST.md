@@ -194,3 +194,5 @@
 | 2026-10-19 | SmartBench PR #51 合并 | PR #51 合并提交 `02d9eb9`，7/7 checks 绿；Issue #22 关闭；本地 main 已拉齐，分支已清理 |
 | 2026-10-18 | C11 #27 计划复验 | 第一轮 2 次更新、结束仍有 pending（收尾提醒未促成更新）；第二轮 3 次更新、全部 completed；说明计划收尾仍依赖模型配合 |
 | 2026-10-18 | SmartBench PR #50 | 已推送 `feat/cli-progress-reporter`；PR open、mergeable、CI 7/7 绿；等待合并 |
+
+| 2026-10-24 | Claim Gate 加固 + README 口径修正 | `5ab745e`：拒绝 `pytest --version`/`--collect-only`，要求 tests_run>0，goal 绑定目标测试，测试 artifact 要求断言，no-op 写入不满足 source_write；本地 3680 passed/98 skipped，ruff 绿，CI success，真实 3-case benchmark 3/3（单次重复，不外推）；README/English README/COMPARISON 同步修正 |
