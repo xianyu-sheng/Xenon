@@ -196,3 +196,5 @@
 | 2026-10-18 | SmartBench PR #50 | 已推送 `feat/cli-progress-reporter`；PR open、mergeable、CI 7/7 绿；等待合并 |
 
 | 2026-10-24 | Claim Gate 加固 + README 口径修正 | `5ab745e`：拒绝 `pytest --version`/`--collect-only`，要求 tests_run>0，goal 绑定目标测试，测试 artifact 要求断言，no-op 写入不满足 source_write；本地 3680 passed/98 skipped，ruff 绿，CI success，真实 3-case benchmark 3/3（单次重复，不外推）；README/English README/COMPARISON 同步修正 |
+
+| 2026-10-24 | 会话 runtime 修复 + GitHub MCP 验证 | `a61fbce`：git 输出固定 UTF-8、LoopDetector 只数末尾周期且结构化参数做哈希、direct→ReAct 重绑授权边界、非 FINAL `AgentResult` 不再写 passed；全量 3689 passed/98 skipped，ruff 绿；真实 GitHub MCP 46 tools、`get_me`/`search_repositories` 成功；已清理 `D:\.xenon_tmp` 下 11 个 `run_*` 临时文件；`199aa18` 为 reword 后的测试修复 |
