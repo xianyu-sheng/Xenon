@@ -74,6 +74,12 @@ def _result_text(result: Any, limit: int = 2000) -> str:
     return _redact_text("\n".join(parts))[:limit]
 
 
+def _mark_recipe(context: AgentContext, **fields: Any) -> None:
+    recipe = context.get("_task_recipe") if context is not None else None
+    if isinstance(recipe, dict):
+        recipe.update(fields)
+
+
 def _error(action: str, message: str, **extra: Any) -> dict[str, Any]:
     return {
         "action_type": action,
@@ -189,6 +195,7 @@ class MCPManagementToolsMixin:
             return _error("mcp_install", f"写入 MCP 配置失败: {exc}")
 
         if not verify:
+            _mark_recipe(context, installed=True, verified=False)
             return {
                 "action_type": "mcp_install",
                 "success": True,
@@ -244,6 +251,7 @@ class MCPManagementToolsMixin:
                 except Exception:  # noqa: BLE001
                     warnings.append("当前会话未登记；请重启 Xenon 或 /mcp refresh")
 
+            _mark_recipe(context, installed=True, verified=True)
             return {
                 "action_type": "mcp_install",
                 "success": True,
@@ -329,6 +337,8 @@ class MCPManagementToolsMixin:
             }
             if is_error:
                 payload["error"] = summary[:800]
+            else:
+                _mark_recipe(context, verified=True)
             return payload
         except Exception as exc:  # noqa: BLE001
             return _error("mcp_verify", str(exc), name=name, tool=tool)

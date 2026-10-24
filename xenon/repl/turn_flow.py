@@ -179,7 +179,37 @@ class TurnFlowMixin:
         # guard.  They must not inherit a previous coding TaskState, otherwise
         # run_with_delivery would demand verify/commit for an install/config
         # turn.
-        from xenon.engine.task_recipe import activate_recipe, recipe_prompt
+        from xenon.engine.task_recipe import (
+            activate_recipe,
+            recipe_for_request,
+            recipe_prompt,
+        )
+
+        # Explicit "install MCP" is an action, even when the LLM intent
+        # classifier calls it chat.  Do not let that classifier downgrade an
+        # authorized install into an answer-only turn; plan mode still wins.
+        # Repo-specific "不要改仓库/不要跑测试" constraints are scope guards
+        # applied by the recipe, not a blanket ban on writing the MCP config.
+        recipe_hint = recipe_for_request(user_input, level=3)
+        if (
+            recipe_hint is not None
+            and not self._plan_mode_active
+            and int(execution_policy.level) < int(ExecutionLevel.WRITE)
+        ):
+            operations = set(turn_contract_obj.operations)
+            operations.update({"write", "execute"})
+            turn_contract_obj = replace(
+                turn_contract_obj,
+                level=ExecutionLevel.EXECUTE,
+                proposed_level=ExecutionLevel.EXECUTE,
+                operations=frozenset(operations),
+                reason=turn_contract_obj.reason
+                + "；显式 MCP 安装请求提升为配置/验证任务",
+            )
+            execution_policy = turn_contract_obj.to_execution_policy()
+            console.print(
+                "[dim cyan]🧭 识别到显式 MCP 安装请求，按原子配置任务执行[/dim cyan]"
+            )
 
         recipe = activate_recipe(
             self.agent_context, user_input, level=int(execution_policy.level)

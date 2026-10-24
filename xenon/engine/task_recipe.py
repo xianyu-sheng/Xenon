@@ -33,15 +33,7 @@ MCP_INSTALL = TaskRecipe(
         "connect_and_discover",
         "verify_one_read_only_call",
     ),
-    allowed_tools=frozenset(
-        {
-            "mcp_install",
-            "mcp_verify",
-            # Plan bookkeeping is allowed; it has no side effects.
-            "update_plan",
-            "tool_result_read",
-        }
-    ),
+    allowed_tools=frozenset({"mcp_install", "mcp_verify"}),
     forbidden_effects=frozenset(
         {
             "repo_write",
@@ -51,7 +43,7 @@ MCP_INSTALL = TaskRecipe(
             "source_inspection",
         }
     ),
-    soft_tool_budget=8,
+    soft_tool_budget=4,
     prompt=(
         "## 原子任务配方：MCP 安装\n"
         "这轮只允许按固定步骤完成：用 `mcp_install` 写配置并发现工具，"
@@ -76,6 +68,11 @@ _ACTION_CUE = re.compile(
     r"(?:请你|帮我|给我|直接|进行|执行|开始|please|go\s+ahead|do\s+it)",
     re.IGNORECASE,
 )
+_NEGATED_INSTALL = re.compile(
+    r"(?:不要|别|无需|不需要|禁止|do\s+not|don't|without)\s*(?:真的)?"
+    r"(?:安装|装|install|add|setup)",
+    re.IGNORECASE,
+)
 
 
 def recipe_for_request(text: str, *, level: int = 0) -> TaskRecipe | None:
@@ -83,6 +80,8 @@ def recipe_for_request(text: str, *, level: int = 0) -> TaskRecipe | None:
 
     value = (text or "").strip()
     if not value or not _MCP_WORD.search(value) or not _INSTALL_VERB.search(value):
+        return None
+    if _NEGATED_INSTALL.search(value):
         return None
     # "怎么安装 / 给一条安装命令" is a question, not authorization to act.
     if _QUERY_ONLY.search(value) and not _ACTION_CUE.search(value):
@@ -150,9 +149,17 @@ def recipe_tool_guard(
     if tool_name not in allowed:
         return (
             f"原子任务 {recipe.get('id')} 不允许工具 {tool_name}。"
-            "请使用 mcp_install 写配置/发现工具，再用 mcp_verify 做只读验证；"
+            "只使用 mcp_install；仅当它返回 verified=false 时用一次 mcp_verify。"
             "不要读取源码、改仓库、跑项目测试或 git commit。"
         )
+    if tool_name == "mcp_install" and recipe.get("installed"):
+        return "MCP 已安装并验证；停止重复安装，直接给出最终结果。"
+    if tool_name == "mcp_verify":
+        if not recipe.get("installed"):
+            return "请先用 mcp_install 安装并发现工具；mcp_install 成功后再验证。"
+        if int(recipe.get("verify_calls", 0) or 0) >= 1:
+            return "MCP 已验证一次；停止重复验证，直接给出最终结果。"
+        recipe["verify_calls"] = int(recipe.get("verify_calls", 0) or 0) + 1
     budget = int(recipe.get("soft_tool_budget", 8) or 8)
     if calls > budget:
         return (

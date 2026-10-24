@@ -44,7 +44,15 @@ def test_recipe_guard_denies_repo_and_source_work():
     assert denied is not None
 
     assert recipe_tool_guard("mcp_install", {"mcp_name": "github"}, context) is None
+    state = active_recipe(context)
+    assert state is not None
+    state["installed"] = True
+    state["verified"] = False
     assert recipe_tool_guard("mcp_verify", {"mcp_name": "github"}, context) is None
+
+    # One explicit verification is allowed after install; a second is denied.
+    assert recipe_tool_guard("mcp_verify", {"mcp_name": "github"}, context) is not None
+    assert recipe_tool_guard("mcp_install", {"mcp_name": "github"}, context) is not None
 
 
 def test_recipe_guard_has_a_soft_budget():
@@ -52,9 +60,9 @@ def test_recipe_guard_has_a_soft_budget():
     assert activate_recipe(context, "install MCP", level=3) is not None
 
     for _ in range(MCP_INSTALL.soft_tool_budget):
-        assert recipe_tool_guard("update_plan", {}, context) is None
+        assert recipe_tool_guard("mcp_install", {"mcp_name": "github"}, context) is None
 
-    denied = recipe_tool_guard("update_plan", {}, context)
+    denied = recipe_tool_guard("mcp_install", {"mcp_name": "github"}, context)
     assert denied is not None
     assert "软预算" in denied
 
