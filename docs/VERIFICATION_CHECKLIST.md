@@ -201,4 +201,4 @@
 
 | 2026-10-24 | MCP 管理工具 | 新增 `mcp_install` / `mcp_verify`：只写 Xenon 配置、真实 stdio 子进程发现工具、失败回滚；不读源码/不改仓库/不跑测试/不 commit；真实 `github:get_me` 返回 46 tools 与账号；fake stdio MCP 6 passed；全量 3694 passed/98 skipped，ruff 绿；#188 基线 |
 
-| 2026-10-24 | 原子任务配方 / MCP scope guard | #189 基线：`mcp.install` recipe 固定 mcp_install→mcp_verify，ReAct schema 只暴露配方工具，ToolExecutor 拒绝 repo/test/git/source 操作，软预算 8；不创建 TaskState 交付门；recipe/guard 5 passed，全量待复跑 |
+| 2026-10-24 | 原子任务配方 / MCP scope guard | #189 基线：`mcp.install` recipe 固定 mcp_install→mcp_verify，ReAct schema 只暴露配方工具，ToolExecutor 拒绝 repo/test/git/source 操作，软预算 8；不创建 TaskState 交付门；recipe/guard 7 passed（含 ReAct+fake stdio 端到端、stale recipe 清理），全量 3702 passed/98 skipped，ruff 绿 |
