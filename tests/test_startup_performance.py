@@ -1,5 +1,6 @@
 """测试启动性能优化 - 缓存、并行请求、过期逻辑、API Key 变化。"""
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from unittest.mock import patch
@@ -112,13 +113,23 @@ def test_optimal_concurrency_level(mock_fetch, temp_cache_dir, mock_credentials)
 
     mock_fetch.side_effect = mock_network_delay
 
-    # 记录并发调用的时间点
-    call_times = []
+    # 记录并发度，而不是线程调度时间点。CI 上线程启动可能被抢占，
+    # 用“同时活跃的请求数”判断并行更稳定。
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
 
     def track_calls(*args, **kwargs):
-        call_times.append(time.time())
-        time.sleep(0.5)
-        return ["model1", "model2"]
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            time.sleep(0.5)
+            return ["model1", "model2"]
+        finally:
+            with lock:
+                active -= 1
 
     mock_fetch.side_effect = track_calls
 
@@ -129,11 +140,8 @@ def test_optimal_concurrency_level(mock_fetch, temp_cache_dir, mock_credentials)
     # 验证返回了正确数量的 providers
     assert len(providers) == 3, f"应该返回 3 个 providers，实际返回 {len(providers)}"
 
-    # 验证所有调用基本同时发生（并行）
-    if len(call_times) > 1:
-        time_spread = max(call_times) - min(call_times)
-        # 并行调用应该在很短时间内都启动（<0.1秒）
-        assert time_spread < 0.1, f"调用时间跨度 {time_spread:.3f}s，不够并行"
+    # 至少两个请求应该同时活跃；不依赖 OS 调度精度。
+    assert max_active >= 2, f"最大并发度 {max_active}，请求没有并行"
 
     # 总耗时应该接近单个请求时间（并行效果）
     assert elapsed < 1.0, f"并行请求耗时 {elapsed:.2f}s，应该 <1.0s"
