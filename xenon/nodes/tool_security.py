@@ -52,6 +52,10 @@ class SecurityAdvisory:
 # ``tool`` and remain untrusted instead of silently becoming trusted.
 PROVENANCE_SOURCE_BY_ACTION: dict[str, SourceType] = {
     "command": "command",
+    "bash": "command",
+    "read": "file",
+    "search": "file",
+    "apply_patch": "file",
     "write_file": "file",
     "read_file": "file",
     "read_document": "document",

@@ -188,9 +188,18 @@ class ReActEngine(BaseEngine):
         # registered via register_tool_handler(..., category="plugin").
         # If no plugin tools are registered yet, this is a no-op.
         plugin = BUILTIN_TOOL_REGISTRY.plugin_schemas()
-        self.tools = dict(tools or BUILTIN_TOOLS)
+        from xenon.engine.tool_profiles import (
+            filter_tools_for_profile,
+            resolve_tool_profile,
+        )
+
+        self._tool_profile = resolve_tool_profile()
+        self.tools = filter_tools_for_profile(
+            dict(tools or BUILTIN_TOOLS), self._tool_profile
+        )
         if plugin:
             self.tools.update(plugin)
+            self.tools = filter_tools_for_profile(self.tools, self._tool_profile)
         # v0.5.3: MCP 工具列表占位——_build_system_prompt 注入实际可用工具
         self._mcp_tools_list = ""
         self.system_prompt = system_prompt or self._build_system_prompt()

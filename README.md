@@ -193,7 +193,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 ## 环境变量
 
 <details>
-<summary>共 17 项（点击展开）</summary>
+<summary>共 18 项（点击展开）</summary>
 
 | 变量 | 作用 | 默认 |
 |---|---|---|
@@ -213,6 +213,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 | `XENON_EVIDENCE_HMAC_KEY` | 可选密钥锚点：链哈希改 HMAC-SHA256(key, prev ‖ hk ‖ 事件正文)，密钥只从环境变量读取、永不落盘；缺密钥的核验者无法通过 keyed 链 | 关 |
 | `XENON_HOOKS` | 本地 hooks 开关 | 开 |
 | `XENON_ATTRIBUTION` | 提交与 PR 是否附带 Xenon 署名（`0` 关闭） | 开 |
+| `XENON_TOOL_PROFILE` | 模型可见工具面：`legacy` 保留全部内置工具；`core` 只暴露 read/search/apply_patch/bash/mcp_* | legacy |
 | `GITHUB_TOKEN` / `GH_TOKEN` | GitHub 工具认证（提升 API 限额；未设置时自动回退到已登录的 `gh auth token`） | 空 |
 
 </details>

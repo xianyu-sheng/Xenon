@@ -15,12 +15,14 @@ from xenon.nodes.tool_registry import BUILTIN_TOOL_REGISTRY
 
 _SENSITIVE_TOOLS = {
     "command",
+    "bash",
     "spawn_agent",
     "mcp_install",
     "mcp_verify",
 }  # 任意 shell 执行 + 子 Agent 委派 + MCP 生命周期——最高风险
 _WRITE_TOOLS = {
     "write_file",
+    "apply_patch",
     "edit_file",
     "create_directory",
     "batch_write",

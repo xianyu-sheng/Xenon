@@ -17,6 +17,7 @@ from typing import Any
 WRITE_TOOL_NAMES = frozenset(
     {
         "write_file",
+        "apply_patch",
         "edit_file",
         "append_file",
         "batch_write",

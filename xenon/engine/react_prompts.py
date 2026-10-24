@@ -341,6 +341,42 @@ BUILTIN_TOOLS = {
             "max_chars": "筛选后返回的字符预算，1000-30000（可选，默认12000）",
         },
     },
+    "read": {
+        "name": "read",
+        "description": "读取本地文件（可分段）。核心文件读取入口；不要用 shell cat。",
+        "params": {
+            "file_path": "文件路径",
+            "start_line": "可选起始行（1-based）",
+            "max_lines": "可选最大行数",
+        },
+    },
+    "search": {
+        "name": "search",
+        "description": "搜索文件内容或列出目录/glob。内容搜索优先用 query；目录列举用 file_path/file_filter。",
+        "params": {
+            "query": "可选：内容搜索关键词/正则",
+            "file_path": "可选：文件或目录路径",
+            "file_filter": "可选：glob，例如 *.py",
+            "limit": "可选：最大结果数",
+        },
+    },
+    "apply_patch": {
+        "name": "apply_patch",
+        "description": "事务式修改一个或多个文件。edits 为精确查找替换；files 用于新建/整文件写入。二选一。",
+        "params": {
+            "edits": '编辑数组：[{"file_path": "...", "old_text": "...", "new_text": "..."}]',
+            "files": '新建/整写数组：[{"path": "...", "content": "..."}]',
+        },
+    },
+    "bash": {
+        "name": "bash",
+        "description": "在受信任工作区/沙箱执行命令；pytest 与 git 会走结构化适配器。优先用它替代自由 shell 文本。",
+        "params": {
+            "command": "要执行的命令",
+            "cwd": "可选工作目录（受工作区围栏约束）",
+            "timeout": "可选超时秒数",
+        },
+    },
     "mcp_install": {
         "name": "mcp_install",
         "description": (

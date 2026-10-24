@@ -617,10 +617,11 @@ class FactBindingGate(EvidenceGate):
 
     _READ_TOOLS = frozenset(
         {
+            "read",
             "read_file",
+            "search",
             "search_files",
             "interpreter",
-            "search",
             "grep",
             "find",
         }
@@ -654,7 +655,7 @@ class FactBindingGate(EvidenceGate):
             tool = call.tool_name
             params = call.params or {}
             if tool in self._READ_TOOLS or (
-                tool == "command" and self._command_reads(params)
+                tool in {"command", "bash"} and self._command_reads(params)
             ):
                 path = (
                     params.get("file_path")

@@ -208,10 +208,14 @@ def _paths_from_params(tool: str, params: dict[str, Any]) -> list[str]:
             paths.append(value)
         elif isinstance(value, list):
             paths.extend(str(item) for item in value if isinstance(item, str))
-    if tool == "batch_write":
+    if tool in {"batch_write", "apply_patch"}:
         for item in params.get("files", []):
             if isinstance(item, dict) and isinstance(item.get("path"), str):
                 paths.append(item["path"])
+    if tool == "apply_patch":
+        for item in params.get("edits", []):
+            if isinstance(item, dict) and isinstance(item.get("file_path"), str):
+                paths.append(item["file_path"])
     return paths
 
 
@@ -1035,7 +1039,7 @@ class TaskState:
         # A test run is the one failed action that changes delivery state.
         # A previous pass cannot survive a later failure or a code edit.
         is_test_run = bool(
-            tool in {"command", "run_script", "run_tests"}
+            tool in {"command", "bash", "run_script", "run_tests"}
             and (_VERIFY_RE.search(command) or command_is_test_like(command))
         )
         if is_test_run and is_non_test_invocation(command):
@@ -1162,7 +1166,7 @@ class TaskState:
                 self.pr_url = match.group(0)
             return
 
-        if tool in {"command", "run_script"}:
+        if tool in {"command", "bash", "run_script"}:
             text = f"{command}\n{result_text}"
             if _COMMIT_RE.search(command):
                 commit_hash = _commit_hash(result_text)

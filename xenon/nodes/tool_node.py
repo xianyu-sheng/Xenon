@@ -57,6 +57,7 @@ from xenon.nodes.network_security import (
 )
 from xenon.nodes.path_targets import resolve_target_path
 from xenon.nodes.tool_families.code_tools import CodeToolsMixin
+from xenon.nodes.tool_families.core_tools import CoreToolsMixin
 from xenon.nodes.tool_families.document_tools import DocumentToolsMixin
 from xenon.nodes.tool_families.file_mutation import FileMutationToolsMixin
 from xenon.nodes.tool_families.git_tools import GitToolsMixin
@@ -353,6 +354,7 @@ def normalize_windows_cd(command: str) -> str:
 
 class ToolNode(
     CodeToolsMixin,
+    CoreToolsMixin,
     FileMutationToolsMixin,
     GitToolsMixin,
     GitHubToolsMixin,
@@ -1373,6 +1375,9 @@ class ToolNode(
         if output:
             self._write_output(context, output)
         logger.info("[%s] pytest 完成，返回码: %s", self.id, returncode)
+        from xenon.engine.evidence_contracts import parse_test_counts
+
+        counts = parse_test_counts(output)
         return {
             "action_type": "command",
             "command": command,
@@ -1380,6 +1385,10 @@ class ToolNode(
             "stdout": "".join(stdout_parts),
             "stderr": "".join(stderr_parts),
             "success": returncode == 0,
+            "tests_run": counts["tests_run"],
+            "tests_passed": counts["passed"],
+            "tests_failed": counts["failed"],
+            "tests_errors": counts["errors"],
         }
 
     # Web/document retrieval is implemented by WebToolsMixin.

@@ -70,6 +70,7 @@ class PermissionRequest:
 _CRITICAL_TOOLS: frozenset[str] = frozenset(
     {
         "command",
+        "bash",
         # 创建 PR 是外部可见、难以撤回的副作用（且会用仓库凭据），
         # 与 command 同级，必须显式审批。
         "create_pull_request",
@@ -84,6 +85,7 @@ _CRITICAL_TOOLS: frozenset[str] = frozenset(
 _WRITE_TOOLS: frozenset[str] = frozenset(
     {
         "write_file",
+        "apply_patch",
         "edit_file",
         "create_directory",
         "batch_write",

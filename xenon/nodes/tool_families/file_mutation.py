@@ -558,10 +558,18 @@ class FileMutationToolsMixin:
             result["success"] = True
             result.pop("error", None)
             result["replacements"] = 1
+        changed_paths = [
+            str(path)
+            for path in path_order
+            if snapshots.get(path) is None
+            or snapshots[path][0] != staged_content[path].encode(self.encoding)
+        ]
         return {
             "action_type": "batch_edit",
             "total": len(self.edits),
             "success_count": len(self.edits),
             "success": True,
+            "changed": bool(changed_paths),
+            "changed_paths": changed_paths,
             "results": results,
         }

@@ -177,6 +177,11 @@ class ToolRegistry:
 # ``_BUILTIN_ACTION_TYPES`` constant.
 BUILTIN_TOOL_METHODS: dict[str, str] = {
     "command": "_exec_command",
+    # Core model-facing aliases (#190).  These dispatch to existing handlers.
+    "read": "_read",
+    "search": "_search_core",
+    "bash": "_bash",
+    "apply_patch": "_apply_patch",
     "write_file": "_write_file",
     "read_file": "_read_file",
     "read_document": "_read_document",
@@ -229,8 +234,10 @@ for _tool_name, _method_name in BUILTIN_TOOL_METHODS.items():
     _risk: ToolRisk = "SENSITIVE"
     if _tool_name in {
         "read_file",
+        "read",
         "read_document",
         "list_files",
+        "search",
         "search_files",
         "code_index",
         "ast_analyze",
@@ -251,6 +258,7 @@ for _tool_name, _method_name in BUILTIN_TOOL_METHODS.items():
         _risk = "INFO"
     elif _tool_name in {
         "write_file",
+        "apply_patch",
         "edit_file",
         "create_directory",
         "batch_write",

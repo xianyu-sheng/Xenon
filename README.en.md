@@ -193,7 +193,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 ## Environment variables
 
 <details>
-<summary>17 variables (click to expand)</summary>
+<summary>18 variables (click to expand)</summary>
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -213,6 +213,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 | `XENON_EVIDENCE_HMAC_KEY` | Optional keyed evidence-chain anchor; key is read only from the environment | off |
 | `XENON_HOOKS` | Local hooks toggle | on |
 | `XENON_ATTRIBUTION` | Attach the Xenon attribution to commits and PRs (`0` disables) | on |
+| `XENON_TOOL_PROFILE` | Model-facing tool surface: `legacy` keeps all built-ins; `core` exposes read/search/apply_patch/bash/mcp_* only | legacy |
 | `GITHUB_TOKEN` / `GH_TOKEN` | GitHub tool auth (raises API limits; falls back to a logged-in `gh auth token`) | empty |
 
 </details>
