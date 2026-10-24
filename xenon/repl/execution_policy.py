@@ -73,6 +73,19 @@ def strip_execution_boundary(text: str) -> str:
     return text.split(_EXECUTION_BOUNDARY_MARKER, 1)[0].rstrip()
 
 
+def rebind_execution_boundary(text: str, level: ExecutionLevel | int) -> str:
+    """Replace an existing boundary when a turn is escalated mid-flight.
+
+    ``bind_execution_boundary`` is intentionally idempotent for a frozen
+    history.  Direct mode can discover a real action claim *after* the
+    answer-only boundary was attached, then delegate to ReAct; without
+    rebinding, ReAct keeps reading the old answer-only boundary and accepts a
+    no-tool final answer such as ``["stdio"]``.  Rebind only at that explicit
+    escalation point.
+    """
+    return bind_execution_boundary(strip_execution_boundary(text), level)
+
+
 @dataclass(frozen=True)
 class ExecutionPolicy:
     """A small, inspectable authorization decision for one user turn."""

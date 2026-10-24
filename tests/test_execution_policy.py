@@ -16,6 +16,7 @@ from xenon.repl.execution_policy import (
     ExecutionLevel,
     bind_execution_boundary,
     classify_execution_policy,
+    rebind_execution_boundary,
     strip_execution_boundary,
 )
 from xenon.repl.llm_intent_classifier import ClassificationResult
@@ -512,3 +513,21 @@ def test_issue_delivery_authorizes_write_and_execute() -> None:
     # Generic code generation remains answer-only.
     generic = classify_execution_policy("实现一个排序函数", intent="write_code")
     assert generic.level is ExecutionLevel.ANSWER_ONLY
+
+
+def test_mid_turn_escalation_replaces_answer_only_boundary():
+    """Direct -> ReAct escalation must not keep the old no-tools boundary."""
+
+    original = "那现在 GitHub MCP 能不能用了？然后你将 3 清理了"
+    answer_only = bind_execution_boundary(original, ExecutionLevel.ANSWER_ONLY)
+
+    escalated = rebind_execution_boundary(
+        answer_only, ExecutionLevel.WRITE
+    )
+
+    assert strip_execution_boundary(escalated) == original
+    assert "本轮允许读取和写入" in escalated
+    assert "本轮未授权任何工具调用" not in escalated
+    assert bind_execution_boundary(
+        answer_only, ExecutionLevel.ANSWER_ONLY
+    ) == answer_only

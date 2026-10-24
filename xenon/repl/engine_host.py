@@ -22,6 +22,9 @@ from xenon.repl.turn_helpers import (
     retry_budget_for as _retry_budget_for,
 )
 from xenon.repl.turn_helpers import (
+    turn_status_from_result as _turn_status_from_result,
+)
+from xenon.repl.turn_helpers import (
     verify_retries_limit as _verify_retries_limit,
 )
 
@@ -414,6 +417,21 @@ class EngineHostMixin:
         """
         self._last_mode_line = spec.mode_line
 
+        # A direct-mode turn can be escalated to ReAct after the model claims
+        # an action.  The prompt already carries the old answer-only boundary;
+        # replace it with the current authorization before the engine freezes
+        # its prompt, otherwise the escalated run still cannot call tools.
+        try:
+            from xenon.repl.execution_policy import rebind_execution_boundary
+
+            active_level = self.agent_context.get("_execution_level")
+            if active_level is not None:
+                user_input = rebind_execution_boundary(
+                    user_input, int(active_level)
+                )
+        except (TypeError, ValueError):
+            logger.debug("执行边界重绑定失败，保留原始提示", exc_info=True)
+
         self._start_log_capture()
         callback = self._make_callback()
         engine = spec.factory(
@@ -558,6 +576,15 @@ class EngineHostMixin:
             node_reasons = None if outcome == "pass" else (
                 verdict.reasons if verdict is not None else verification_reasons
             )
+            # A gate pass does not erase an engine-level loop/deadline/delivery
+            # failure.  AgentResult.reason is the structured outcome; consume
+            # it here so turn/verdict and /evidence cannot report success after
+            # the engine terminated without a final answer.
+            final_status, engine_reasons = _turn_status_from_result(
+                result, final_status
+            )
+            if engine_reasons:
+                node_reasons = list(node_reasons or []) + engine_reasons
             self._finish_turn_node(
                 final_status,
                 engine=spec.name,

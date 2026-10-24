@@ -40,6 +40,31 @@ console: Any = _ConsoleProxy()
 
 
 class DirectChatMixin:
+    def _escalate_for_react(
+        self, level: ExecutionLevel, reason: str
+    ) -> None:
+        """Raise the turn boundary before delegating a claimed action to ReAct.
+
+        Direct mode starts as ANSWER_ONLY for many chat-shaped requests.  If the
+        answer claims a file operation, running ReAct under the old boundary
+        makes ``requires_tools`` false, so the engine happily accepts a
+        no-tool answer (observed: the literal ``["stdio"]``).  Escalation is
+        still bounded: ReAct's own permission gate and the user's explicit
+        no-tools lock continue to decide what can execute.
+        """
+        try:
+            current = int(self.agent_context.get("_execution_level", 0) or 0)
+        except (TypeError, ValueError):
+            current = 0
+        target = int(level)
+        if target > current:
+            self.agent_context.update(
+                {
+                    "_execution_level": target,
+                    "_execution_reason": reason,
+                }
+            )
+
     def _run_direct(
         self,
         user_input: str,
@@ -173,6 +198,10 @@ class DirectChatMixin:
                             "自动切换到 ReAct 模式执行...[/dim cyan]"
                         )
                         try:
+                            self._escalate_for_react(
+                                ExecutionLevel.READ_ONLY,
+                                "模型返回了未执行的工具协议，升级为只读重试",
+                            )
                             self._run_react_engine(user_input, model_ids)
                         except Exception as e:
                             console.print(f"[error]❌ ReAct 重试失败: {e}[/error]")
@@ -199,6 +228,10 @@ class DirectChatMixin:
                             # _run_react_engine 内部已加占位（修复5），但万一占位也失败
                             # （如 ctx_mgr 内部异常），这里再兜底一次防 user-only 序列。
                             try:
+                                self._escalate_for_react(
+                                    ExecutionLevel.WRITE,
+                                    "模型声称执行了文件操作，升级为可写重试",
+                                )
                                 self._run_react_engine(user_input, model_ids)
                             except Exception as e:
                                 console.print(f"[error]❌ ReAct 重试失败: {e}[/error]")
@@ -215,6 +248,10 @@ class DirectChatMixin:
                         console.print("[dim]· LLM 无法完成任务 → ReAct 模式重试[/dim]")
                         # P2-修复6 (观察项-1)：与 file_claim 同根问题，同样防御性 catch
                         try:
+                            self._escalate_for_react(
+                                ExecutionLevel.READ_ONLY,
+                                "模型拒绝后改用工具重试，升级为只读",
+                            )
                             self._run_react_engine(user_input, model_ids)
                         except Exception as e:
                             console.print(f"[error]❌ ReAct 重试失败: {e}[/error]")

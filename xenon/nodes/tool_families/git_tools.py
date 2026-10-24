@@ -138,10 +138,16 @@ class GitToolsMixin:
                 exec_cmd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=self.timeout,
                 cwd=cwd,
             )
-            output = proc.stdout.strip() or proc.stderr.strip()
+            # Git emits UTF-8.  On Windows the default text-mode locale is
+            # usually GBK, and a non-ASCII commit message used to raise inside
+            # subprocess's reader thread; stdout then became None and the tool
+            # reported a false failure after git had already succeeded.
+            output = (proc.stdout or "").strip() or (proc.stderr or "").strip()
             result = {
                 "action_type": "git",
                 "command": " ".join(cmd),

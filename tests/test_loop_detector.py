@@ -195,3 +195,42 @@ def test_tool_pattern_loop_reaches_hard_stop_confidence():
     result = detector.check()
     assert result.is_loop
     assert result.confidence >= 0.9
+
+
+def test_two_trailing_tool_cycles_are_only_a_hint():
+    """Regression: two identical calls at the window edge must not count as 5.
+
+    The old ``cycles = len(window) // length`` calculation turned
+    ``[status, log, command, run_tests, run_tests]`` into five cycles and
+    hard-stopped a progressing run at 0.90 confidence.
+    """
+
+    detector = LoopDetector(window_size=5)
+    for i, call in enumerate(
+        [
+            "git(status)",
+            "git(log)",
+            "command(status)",
+            "run_tests(tests/a.py)",
+            "run_tests(tests/a.py)",
+        ]
+    ):
+        detector.add_turn(output=f"unique output {i}", tool_calls=[call])
+
+    result = detector.check()
+    assert result.is_loop
+    assert result.confidence < 0.9
+    assert result.loop_length == 1
+
+
+def test_three_trailing_tool_cycles_reach_hard_stop():
+    detector = LoopDetector(window_size=5)
+    for i in range(3):
+        detector.add_turn(
+            output=f"unique output {i}",
+            tool_calls=["run_tests(tests/a.py)"],
+        )
+
+    result = detector.check()
+    assert result.is_loop
+    assert result.confidence >= 0.9

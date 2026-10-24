@@ -44,3 +44,26 @@ def test_unlimited_react_terminates_on_loop_detector(tmp_path):
     assert "检测到 ReAct 引擎陷入循环" in result
     assert engine.max_iterations == 0
     assert result.reason is TerminationReason.LOOP
+
+
+def test_different_test_paths_have_different_loop_signatures():
+    """The LLM's ``cwd`` is ignored, but path arguments must stay distinct."""
+
+    engine = ReActEngine(["fake/model"])
+    relative = engine._params_signature(
+        {
+            "cwd": r"D:\Xenon",
+            "test_paths": ["tests/test_mcp_registry_robustness.py"],
+            "test_framework": "pytest",
+            "test_args": ["-q"],
+        }
+    )
+    absolute = engine._params_signature(
+        {
+            "cwd": r"D:\Xenon",
+            "test_paths": [r"D:\Xenon\tests\test_mcp_registry_robustness.py"],
+            "test_framework": "pytest",
+            "test_args": ["-q"],
+        }
+    )
+    assert relative != absolute

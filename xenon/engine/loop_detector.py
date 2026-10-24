@@ -226,33 +226,44 @@ class LoopDetector:
             )
 
         recent_patterns = list(patterns)[-self.window_size :]
+        # Filtering empties before comparing blocks keeps the cycle boundary
+        # aligned; filtering each half separately used to turn [a, "", a]
+        # into an accidental two-cycle match.
+        candidate = (
+            [p for p in recent_patterns if p]
+            if ignore_empty
+            else recent_patterns
+        )
 
         # 检查连续重复的模式
-        for length in range(1, len(recent_patterns) // 2 + 1):
+        for length in range(1, len(candidate) // 2 + 1):
             # 检查最后 2*length 是否是重复模式
-            if len(recent_patterns) >= 2 * length:
-                pattern1 = recent_patterns[-2 * length : -length]
-                pattern2 = recent_patterns[-length:]
-
-                # 如果忽略空值，过滤掉
-                if ignore_empty:
-                    pattern1 = [p for p in pattern1 if p]
-                    pattern2 = [p for p in pattern2 if p]
+            if len(candidate) >= 2 * length:
+                pattern1 = candidate[-2 * length : -length]
+                pattern2 = candidate[-length:]
 
                 if pattern1 and pattern1 == pattern2 and any(pattern1):
-                    # Two cycles are a hint; three identical cycles are a
-                    # high-confidence loop.  Previously every pattern repeat
-                    # returned 0.85, while both ReAct and Plan-Execute stop at
-                    # >=0.9 -- so tool-pattern loops could never actually
-                    # terminate, only emit hints forever.
-                    cycles = len(recent_patterns) // length
+                    # Count only contiguous cycles ending at the window edge.
+                    # The old code used len(window)//length, which counted the
+                    # entire window: two identical calls at the end of a
+                    # five-entry window became five cycles and hard-stopped a
+                    # progressing run.  Two cycles are a low-confidence hint;
+                    # three are a high-confidence loop (ReAct stops at 0.9).
+                    cycles = 0
+                    start = len(candidate) - length
+                    while start >= 0 and candidate[start : start + length] == pattern2:
+                        cycles += 1
+                        start -= length
                     confidence = 0.9 if cycles >= 3 else 0.85
                     return LoopDetectionResult(
                         is_loop=True,
                         confidence=confidence,
                         loop_length=length,
                         similar_turns=list(
-                            range(len(recent_patterns) - 2 * length, len(recent_patterns))
+                            range(
+                                max(0, len(candidate) - cycles * length),
+                                len(candidate),
+                            )
                         ),
                         reason=f"{name}模式重复（周期长度 {length}）",
                     )

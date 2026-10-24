@@ -14,6 +14,8 @@ def _run_git(repo, *args: str) -> str:
         cwd=repo,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=True,
     )
     return completed.stdout.strip()
@@ -96,3 +98,22 @@ def test_command_commit_exposes_real_committed_paths(tmp_path):
 
     assert result["success"] is True
     assert result["committed_paths"] == ["a.txt"]
+
+
+def test_git_log_decodes_non_ascii_output(tmp_path):
+    """Git writes UTF-8; Windows' default GBK decoding used to crash the tool."""
+
+    repo = _repo(tmp_path)
+    _run_git(repo, "add", "a.txt")
+    _run_git(repo, "commit", "-m", "修复：中文提交信息")
+
+    node = ToolNode(
+        "g",
+        action_type="git",
+        git_command="log",
+        cwd=str(repo),
+    )
+    result = node._git(AgentContext())
+
+    assert result["success"] is True
+    assert "修复：中文提交信息" in result["stdout"]

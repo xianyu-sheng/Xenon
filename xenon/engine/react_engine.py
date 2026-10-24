@@ -9,6 +9,8 @@ ReAct 模式: Think → Act → Observe → 循环直到完成
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -243,33 +245,41 @@ class ReActEngine(BaseEngine):
         self._max_recent_calls: int = 8
         self._max_consecutive_tool_failures: int = 3
 
+    @staticmethod
+    def _value_digest(value: Any) -> str:
+        """Stable, non-reversible signature for a structured value."""
+
+        try:
+            raw = json.dumps(
+                value, sort_keys=True, ensure_ascii=False, default=str
+            )
+        except (TypeError, ValueError):
+            raw = repr(value)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
     def _params_signature(self, params: dict[str, Any]) -> str:
         """提取工具参数的特征签名，用于重复检测。
 
-        核心字段（路径/URL/repo/搜索词）保留原值，长文本只保留长度。
+        核心字段（路径/URL/repo/搜索词）保留原值；长文本和结构化参数
+        只保留长度 + 内容哈希，既避免日志泄漏，也能区分不同路径/参数。
+        旧实现把 list/dict 折叠成 `<list:1>`，导致两个不同的 ``run_tests``
+        路径看起来完全相同，进而触发错误的循环检测。
         """
         parts: list[str] = []
         for k in sorted(params):
             v = params[k]
             if isinstance(v, str):
                 if len(v) > 50:
-                    # 长文本（文件内容等）：只记录长度，不比较内容
-                    parts.append(f"{k}:<str:{len(v)}>")
-                elif k in (
-                    "file_path",
-                    "path",
-                    "url",
-                    "repo",
-                    "city",
-                    "search_pattern",
-                    "action",
-                    "name",
-                ):
-                    parts.append(f"{k}:{v}")
+                    parts.append(
+                        f"{k}:<str:{len(v)}:{self._value_digest(v)}>"
+                    )
                 else:
                     parts.append(f"{k}:{v}")
             elif isinstance(v, (list, dict)):
-                parts.append(f"{k}:<{type(v).__name__}:{len(v)}>")
+                parts.append(
+                    f"{k}:<{type(v).__name__}:{len(v)}:"
+                    f"{self._value_digest(v)}>"
+                )
             else:
                 parts.append(f"{k}:{v}")
         return "|".join(parts)

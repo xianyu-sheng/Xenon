@@ -25,6 +25,43 @@ def verify_retries_limit() -> int:
         return 3
 
 
+def turn_status_from_result(result: Any, gate_status: str) -> tuple[str, list[str]]:
+    """Propagate a non-final engine outcome into the published turn status.
+
+    ``TurnGate`` evaluates the answer and tool receipts; it historically did
+    not read ``AgentResult.reason``.  A loop-terminated run therefore still
+    wrote ``turn/verdict: passed`` and ``/evidence`` showed "发布成功".  Keep
+    the gate's stronger status, but never let a loop/deadline/delivery failure
+    be published as success.
+    """
+    from xenon.engine.result import TerminationReason
+
+    reason = getattr(result, "reason", None)
+    if not isinstance(reason, TerminationReason):
+        return gate_status, []
+    if reason is TerminationReason.FINAL:
+        return gate_status, []
+
+    status_map = {
+        TerminationReason.LOOP: "fused",
+        TerminationReason.NO_PROGRESS: "fused",
+        TerminationReason.ERROR: "fused",
+        TerminationReason.DELIVERY_INCOMPLETE: "degraded",
+        TerminationReason.MAX_STEPS: "degraded",
+        TerminationReason.DEADLINE: "degraded",
+        TerminationReason.USER_INTERRUPT: "interrupted",
+    }
+    target = status_map.get(reason, "degraded")
+    # Do not downgrade an explicit interruption/fuse from the gate.
+    if gate_status in {"fused", "interrupted"}:
+        target = gate_status
+    reasons = [f"引擎终止原因：{reason.value}"]
+    missing = list(getattr(result, "missing_delivery", ()) or ())
+    if missing:
+        reasons.append("未完成交付：" + "、".join(str(item) for item in missing))
+    return target, reasons
+
+
 def retry_budget_for(first_round_steps: int) -> int:
     """重试轮步数预算：首轮实际步数的一半，clamp 可配置（决策 2）。
 
