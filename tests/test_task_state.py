@@ -737,3 +737,44 @@ def test_skipped_inspection_step_does_not_mask_verified_delivery() -> None:
 
     assert state.incomplete_steps() == []
     assert state.maybe_complete() is True
+
+
+def test_later_success_clears_stale_failed_test_labels() -> None:
+    state = TaskState(objective="x", execution_level=3, required=["verify"])
+    state.record_tool(
+        "command",
+        {"command": "pytest old.py -q"},
+        success=False,
+        result="1 failed",
+        metadata={"exit_code": 1},
+    )
+    assert state.failed_tests
+
+    state.record_tool(
+        "command",
+        {"command": "pytest current.py -q"},
+        success=True,
+        result="1 passed",
+        metadata={"exit_code": 0},
+    )
+    assert state.failed_tests == []
+    assert state.verification_failures == []
+
+
+def test_react_tool_failure_is_diagnostic_not_a_completion_blocker() -> None:
+    state = TaskState(
+        objective="x",
+        execution_level=3,
+        claims=[
+            {
+                "claim_id": "tool:command:1:tool_succeeded:command",
+                "kind": "tool_succeeded",
+                "status": "rejected",
+                "origin": "react_tool",
+                "plan_version": 1,
+            }
+        ],
+    )
+    assert state.claim_failures() == []
+    assert state.claim_failures(include_tool=True)
+    assert state.maybe_complete() is True

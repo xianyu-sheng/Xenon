@@ -23,10 +23,18 @@ Gate 不调用 LLM，不产生额外模型费用。Claim 不是证据，不能�
 步骤开始时先写入 `status=pending` 的 claim 事件，明确本步预期；执行完成后
 同一 claim id 再由 Gate 更新为 `verified` / `rejected` / `unverifiable`。
 
+ReAct 的工具级 claim 来自结构化的 `action` / `action_input`，不是模型自由
+文本：每次调用生成 `tool_succeeded`，写工具生成 `file_written`，命令生成
+`command_passed`，commit 生成 `commit_created`，PR 生成 `pr_created`。
+失败时把具体 claim 差异追加到 observation，下一轮 ReAct 直接据此修正。
+ReAct tool claim 是过程诊断，不直接阻止最终完成；最终仍由 goal audit 和
+delivery gate 判断。
+
 `xenon/engine/claim_gate.py` 定义以下确定性 claim：
 
 | kind | 真实证据 |
 |---|---|
+| `tool_succeeded` | 对应工具调用在 tracker 中真实成功 |
 | `file_written` | 本步骤有匹配的成功写工具调用，且目标文件存在 |
 | `source_write` | 本步骤有成功的非测试源码写入 |
 | `command_passed` | 本步骤运行了匹配的验证命令，exit=0 且没有失败标记 |
@@ -55,6 +63,21 @@ payload:
 `TaskStateProjection` 将 claim 结果投影到 `TaskState.claims`。旧计划版本的
 claim 保留为审计历史，但不会阻塞新计划的完成判断。`TaskState.maybe_complete`
 只接受当前计划中没有 rejected claim、且当前 criterion 没有 rejected 的状态。
+
+## ReAct 工具级 Claim
+
+ReAct 的单个工具调用在 `_execute_tool` 外层统一处理：
+
+```text
+structured action/action_input
+  → pending claims
+  → tool execution
+  → tracker / TaskState / worktree 校验
+  → rejected 差异追加到 observation
+```
+
+覆盖 `tool_succeeded`、写文件、测试命令、commit、PR；并行只读工具也经过
+同一 wrapper，副作用工具仍由现有串行/隔离规则保护。
 
 ## 并行 DAG 的串行修复屏障
 

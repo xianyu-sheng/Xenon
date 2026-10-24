@@ -1584,7 +1584,105 @@ class ReActEngine(BaseEngine):
         context: AgentContext,
         tracker: ToolExecutionTracker | None = None,
     ) -> str:
-        """执行工具并返回观察字符串。
+        """Execute a tool and verify its structured claim against real receipts."""
+        from xenon.engine.claim_gate import (
+            REJECTED,
+            ClaimBaseline,
+            claims_for_tool,
+            record_claim_verdicts,
+            record_pending_claims,
+            repair_prompt,
+            verify_step_claims,
+        )
+        from xenon.engine.task_state import TaskState
+
+        state = TaskState.from_context(context)
+        if tracker is None:
+            # No receipt source means no deterministic claim evidence.
+            return self._execute_tool_unchecked(
+                action, action_input, context, tracker
+            )
+        claims = claims_for_tool(action, action_input)
+        if not claims:
+            return self._execute_tool_unchecked(
+                action, action_input, context, tracker
+            )
+        baseline = ClaimBaseline(
+            calls_start=len(getattr(tracker, "calls", []) or []) if tracker else 0,
+            commit_before=str(getattr(state, "commit", "") or "") if state else "",
+            artifacts_revision_before=(
+                int(getattr(state, "artifacts_revision", 0) or 0)
+                if state
+                else 0
+            ),
+        )
+        ledger = context.get("_evidence_ledger")
+        if ledger is not None and hasattr(ledger, "append") and state is not None:
+            record_pending_claims(
+                ledger,
+                claims,
+                task_id=state.task_id,
+            )
+        elif state is not None:
+            for claim in claims:
+                state.record_claim(
+                    {
+                        **claim.to_dict(),
+                        "status": "pending",
+                        "actual": "",
+                        "reason": "",
+                        "evidence_ids": [],
+                        "attempt": 0,
+                    }
+                )
+            context.set("_task_state", state.to_dict())
+
+        result = self._execute_tool_unchecked(
+            action, action_input, context, tracker
+        )
+        # ToolExecutor may have appended observations to the ledger; fold the
+        # tracker too so commit/file claims are not evaluated on a stale state.
+        verify_state = state or TaskState(objective="react tool call")
+        verify_state.update_from_calls(getattr(tracker, "calls", []) or [])
+        from xenon.engine.task_runtime import _engine_workspace_root
+
+        verdicts = verify_step_claims(
+            claims,
+            calls=getattr(tracker, "calls", []) or [],
+            state=verify_state,
+            baseline=baseline,
+            workspace_root=_engine_workspace_root(self, context),
+        )
+        if ledger is not None and hasattr(ledger, "append") and state is not None:
+            record_claim_verdicts(
+                ledger,
+                verdicts,
+                task_id=state.task_id,
+            )
+        elif state is not None:
+            for verdict in verdicts:
+                state.record_claim(verdict.to_dict())
+            context.set("_task_state", state.to_dict())
+        rejected = [verdict for verdict in verdicts if verdict.status == REJECTED]
+        if rejected:
+            self.callback.on_warning(
+                "工具 Claim 拒绝: "
+                + "；".join(verdict.repair_hint for verdict in rejected[:3])
+            )
+            result += (
+                "\n\n⚠️ 工具 Claim 校验未通过："
+                + repair_prompt(rejected)
+            )
+        return result
+
+    def _execute_tool_unchecked(
+        self,
+        action: str,
+        action_input: dict,
+        context: AgentContext,
+        tracker: ToolExecutionTracker | None = None,
+    ) -> str:
+        """原 _execute_tool 实现（instrumentation 在外层统一处理）。
 
         F1: 常规工具委托 ToolExecutor 7 阶段流水线。
         P2-E5: ``spawn_agent`` 是元工具——需创建子 ReActEngine 委派子任务（带隔离

@@ -576,3 +576,135 @@ def test_direct_engine_acceptance_criterion_gets_targeted_retry() -> None:
     assert final is not None and final.status == "completed"
     assert "用户验收条件" in engine.prompts[1]
     assert "CI 通过" in engine.prompts[1]
+
+
+def test_tool_claims_are_structured_and_checked_against_tracker() -> None:
+    from xenon.engine.claim_gate import (
+        CLAIM_TOOL_SUCCEEDED,
+        claims_for_tool,
+    )
+
+    claims = claims_for_tool(
+        "write_file",
+        {"file_path": "src/app.py", "content": "x = 1\n"},
+    )
+    kinds = [claim.kind for claim in claims]
+    assert CLAIM_TOOL_SUCCEEDED in kinds
+    assert CLAIM_FILE_WRITTEN in kinds
+    assert all(claim.origin == "react_tool" for claim in claims)
+
+    state = TaskState(objective="x")
+    call = _call(
+        "write_file",
+        {"file_path": "src/app.py"},
+        metadata={"content_chars": 6},
+        result_id="tool-write",
+    )
+    verdicts = verify_step_claims(
+        claims,
+        calls=[call],
+        state=state,
+        baseline=ClaimBaseline(),
+    )
+    assert all(
+        verdict.status == VERIFIED for verdict in verdicts
+    )
+
+
+def test_react_tool_failure_feeds_structured_claim_feedback() -> None:
+    from xenon.engine.context import AgentContext
+    from xenon.engine.evidence_runtime import (
+        EventKind,
+        EvidenceLedger,
+        EvidenceSource,
+        LifecyclePhase,
+    )
+    from xenon.engine.react_engine import ReActEngine
+
+    state = TaskState(objective="read source")
+    ledger = EvidenceLedger("react-tool-claims")
+    ledger.append(
+        LifecyclePhase.TASK,
+        EventKind.TASK_FACT,
+        EvidenceSource.ENGINE,
+        {"engine": "react", "task_id": state.task_id},
+    )
+    context = AgentContext(
+        {"_task_state": state.to_dict(), "_evidence_ledger": ledger}
+    )
+    engine = ReActEngine(["model"])
+    tracker = __import__("xenon.engine.tool_tracker", fromlist=["ToolExecutionTracker"]).ToolExecutionTracker()
+
+    def fake_unchecked(action, action_input, ctx, tr):
+        tr.record(
+            action,
+            action_input,
+            False,
+            "file missing",
+            error="file missing",
+            result_id="tool-read-failed",
+        )
+        return "执行失败: file missing"
+
+    engine._execute_tool_unchecked = fake_unchecked  # type: ignore[method-assign]
+    result = engine._execute_tool(
+        "read_file", {"file_path": "missing.py"}, context, tracker
+    )
+
+    assert "工具 Claim 校验未通过" in result
+    claim_events = [
+        event
+        for event in ledger.events
+        if event.kind == EventKind.CLAIM.value
+    ]
+    assert any(event.payload["status"] == "pending" for event in claim_events)
+    assert any(event.payload["status"] == REJECTED for event in claim_events)
+
+
+def test_react_successful_tool_claim_does_not_emit_failure_feedback() -> None:
+    from xenon.engine.context import AgentContext
+    from xenon.engine.evidence_runtime import (
+        EventKind,
+        EvidenceLedger,
+        EvidenceSource,
+        LifecyclePhase,
+    )
+    from xenon.engine.react_engine import ReActEngine
+
+    state = TaskState(objective="read source")
+    ledger = EvidenceLedger("react-tool-success")
+    ledger.append(
+        LifecyclePhase.TASK,
+        EventKind.TASK_FACT,
+        EvidenceSource.ENGINE,
+        {"engine": "react", "task_id": state.task_id},
+    )
+    context = AgentContext(
+        {"_task_state": state.to_dict(), "_evidence_ledger": ledger}
+    )
+    engine = ReActEngine(["model"])
+    tracker = __import__("xenon.engine.tool_tracker", fromlist=["ToolExecutionTracker"]).ToolExecutionTracker()
+
+    def fake_unchecked(action, action_input, ctx, tr):
+        tr.record(
+            action,
+            action_input,
+            True,
+            "1 passed",
+            metadata={"exit_code": 0},
+            result_id="tool-read-ok",
+        )
+        return "1 passed"
+
+    engine._execute_tool_unchecked = fake_unchecked  # type: ignore[method-assign]
+    result = engine._execute_tool("command", {"command": "pytest -q"}, context, tracker)
+
+    assert "工具 Claim 校验未通过" not in result
+    statuses = [
+        event.payload["status"]
+        for event in ledger.events
+        if event.kind == EventKind.CLAIM.value
+    ]
+    assert "pending" in statuses
+    assert VERIFIED in statuses
+    assert REJECTED not in statuses

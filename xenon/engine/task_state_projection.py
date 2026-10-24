@@ -7,6 +7,7 @@ once, in ledger order, and writes the resulting snapshot back to AgentContext.
 
 from __future__ import annotations
 
+from threading import RLock
 from typing import Any
 
 from xenon.engine.evidence_runtime import (
@@ -34,8 +35,16 @@ class TaskStateProjection:
         self.ledger: EvidenceLedger | None = None
         self._current_sequence = 0
         self._session_id = ""
+        # ReAct parallel read-only tools can append claim/tool events from
+        # multiple workers.  Serialize projection application while keeping
+        # the ledger itself as the ordered durable source.
+        self._lock = RLock()
 
     def __call__(self, event: EvidenceEvent) -> None:
+        with self._lock:
+            self._apply(event)
+
+    def _apply(self, event: EvidenceEvent) -> None:
         if not self.state.active:
             return
         sequence = int(getattr(event, "sequence", 0) or 0)

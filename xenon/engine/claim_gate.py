@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -28,6 +29,7 @@ from xenon.engine.evidence_contracts import (
     WRITE_TOOL_NAMES as WRITE_TOOLS,
 )
 
+CLAIM_TOOL_SUCCEEDED = "tool_succeeded"
 CLAIM_FILE_WRITTEN = "file_written"
 CLAIM_SOURCE_WRITE = "source_write"
 CLAIM_COMMAND_PASSED = "command_passed"
@@ -353,6 +355,66 @@ def claims_for_step(
     return claims
 
 
+class SimpleCall:
+    """Minimal adapter so tool params reuse the same path/command extractors."""
+
+    def __init__(self, tool_name: str, params: dict[str, Any]) -> None:
+        self.tool_name = tool_name
+        self.params = params
+        self.metadata: dict[str, Any] = {}
+
+
+def claims_for_tool(tool: str, params: dict[str, Any] | None = None) -> list[Claim]:
+    """Derive structured claims from one ReAct tool call.
+
+    Every call gets a ``tool_succeeded`` claim; side-effecting calls add their
+    concrete effects (file/command/commit/PR).  This is the ReAct analogue of
+    ``claims_for_step`` and deliberately uses only structured action data.
+    """
+    params = params if isinstance(params, dict) else {}
+    tool = _text(tool)
+    if not tool:
+        return []
+    claims: list[Claim] = []
+    suffix = uuid.uuid4().hex[:10]
+
+    def add(kind: str, subject: str = "", expected: str = "") -> None:
+        claims.append(
+            Claim(
+                claim_id=f"tool:{tool}:{suffix}:{kind}:{display_path(subject)}",
+                step_id="",
+                kind=kind,
+                subject=subject,
+                expected=expected,
+                origin="react_tool",
+                plan_version=1,
+            )
+        )
+
+    add(CLAIM_TOOL_SUCCEEDED, tool, f"工具 {tool} 必须真实执行成功")
+
+    paths = _call_paths(SimpleCall(tool, params))
+    if tool in WRITE_TOOLS:
+        for path in paths:
+            add(CLAIM_FILE_WRITTEN, path, f"工具 {tool} 必须真实写入 {path}")
+            if is_test_path(path) and tool in {"write_file", "batch_write"}:
+                add(CLAIM_TEST_ARTIFACT, path, "测试文件内容必须非空")
+
+    command = _call_command(SimpleCall(tool, params))
+    if tool in {"command", "run_script"} and command:
+        if re.search(r"(?:pytest|unittest|tox|\btest\b)", command, re.I):
+            add(CLAIM_COMMAND_PASSED, command, f"验证命令必须 exit=0：{command}")
+        if re.search(r"\bgit\s+commit\b", command, re.I):
+            add(CLAIM_COMMIT_CREATED, "", "command 必须产生新的真实 commit")
+    if tool == "git":
+        action = _text(params.get("git_command") or params.get("action"))
+        if action.lower().lstrip().startswith("commit"):
+            add(CLAIM_COMMIT_CREATED, "", "git 工具必须产生新的真实 commit")
+    if tool == "create_pull_request":
+        add(CLAIM_PR_CREATED, "", "必须返回真实 PR URL")
+    return claims
+
+
 def goal_claims(state: Any) -> list[Claim]:
     """Build criterion-level obligations from durable TaskState facts."""
     if state is None:
@@ -628,6 +690,39 @@ def _verify_step_claim(
             "验证命令未成功：exit code 非零或输出包含失败标记",
             "验证失败",
             [_result_id(call) for call in matching if _result_id(call)],
+        )
+
+    if claim.kind == CLAIM_TOOL_SUCCEEDED:
+        matching = [
+            call
+            for call in recent
+            if _text(getattr(call, "tool_name", "")) == claim.subject
+        ]
+        if not matching:
+            return ClaimVerdict(
+                claim,
+                UNVERIFIABLE,
+                "没有找到对应工具调用记录",
+                "无法确认工具执行",
+            )
+        succeeded = [call for call in matching if getattr(call, "success", False)]
+        if succeeded:
+            return ClaimVerdict(
+                claim,
+                VERIFIED,
+                f"工具 {claim.subject} 真实执行成功",
+                "工具调用成功",
+                [_result_id(call) for call in succeeded if _result_id(call)],
+            )
+        last = matching[-1]
+        return ClaimVerdict(
+            claim,
+            REJECTED,
+            _text(getattr(last, "error", ""))
+            or _text(getattr(last, "result_summary", ""))
+            or "工具执行失败",
+            "工具调用失败",
+            [_result_id(last)] if _result_id(last) else [],
         )
 
     if claim.kind == CLAIM_COMMIT_PRESENT:

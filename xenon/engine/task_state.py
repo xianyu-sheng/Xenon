@@ -488,17 +488,20 @@ class TaskState:
             version = self.plan_version
         return version == self.plan_version
 
-    def claim_failures(self) -> list[dict[str, Any]]:
+    def claim_failures(self, *, include_tool: bool = False) -> list[dict[str, Any]]:
         """Claims explicitly rejected by a deterministic gate.
 
         Claims from an older plan revision are audit history.  A stale commit
         rejection must not keep a later, replanned task active forever.
+        Per-tool ReAct failures are diagnostics: a later successful retry may
+        supersede them, and the criterion-level goal audit owns final delivery.
         """
         return [
             c
             for c in self.claims
             if c.get("status") == "rejected"
             and self._claim_in_current_plan(c)
+            and (include_tool or c.get("origin") != "react_tool")
         ]
 
     def criterion_failures(self) -> list[dict[str, Any]]:
@@ -986,8 +989,11 @@ class TaskState:
                 if label and label not in self.tests:
                     self.tests.append(label)
                 self.verified_revision = self.artifacts_revision
-                if label in self.failed_tests:
-                    self.failed_tests.remove(label)
+                # A later successful verification supersedes earlier failed
+                # attempts.  Keeping a failure from another equivalent command
+                # made the criterion audit reject a task whose current tests
+                # actually passed (observed in the real ReAct smoke).
+                self.failed_tests = []
                 self.verification_failures = []
             else:
                 self.tests = []
