@@ -873,8 +873,12 @@ class TaskState:
     def missing_delivery(self) -> list[str]:
         return self.required_delivery()
 
-    def maybe_complete(self) -> bool:
-        """Mark completed only when plan, claims and delivery are finished."""
+    def maybe_complete(self, *, mutate: bool = True) -> bool:
+        """Mark completed only when plan, claims and delivery are finished.
+
+        ``mutate=False`` is used when the caller will persist the completed
+        status as a delivery event and let the projection apply it.
+        """
         if self.missing_delivery():
             return False
         self.reconcile_satisfied_claims()
@@ -889,8 +893,9 @@ class TaskState:
         self.reconcile_satisfied_steps()
         if self.incomplete_steps():
             return False
-        self.status = "completed"
-        self.updated_at = time.time()
+        if mutate:
+            self.status = "completed"
+            self.updated_at = time.time()
         return True
 
     def reconcile_satisfied_steps(self) -> None:

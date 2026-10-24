@@ -471,3 +471,57 @@ def test_delivery_event_replays_missing_delivery_and_status() -> None:
     assert state.dirty_after_commit is False
     assert state.evidence_sequence == 2
     projection.close()
+
+
+def test_ledger_backed_delivery_does_not_call_tracker_fallback(monkeypatch) -> None:
+    from xenon.engine.task_runtime import run_with_delivery
+
+    state = _state()
+    ledger = EvidenceLedger("no-fallback")
+    ledger.append(
+        LifecyclePhase.TASK,
+        EventKind.TASK_FACT,
+        EvidenceSource.ENGINE,
+        {"task_id": state.task_id},
+    )
+    _append_observation(
+        ledger,
+        "write_file",
+        params={"file_path": "src/app.py"},
+        success=True,
+        summary="written",
+        task_id=state.task_id,
+        metadata={"result_id": "r-write", "changed_paths": ["src/app.py"]},
+    )
+    _append_observation(
+        ledger,
+        "command",
+        params={"command": "pytest -q"},
+        success=True,
+        summary="2 passed",
+        task_id=state.task_id,
+        metadata={"result_id": "r-test", "exit_code": 0},
+    )
+    _append_observation(
+        ledger,
+        "git",
+        params={"git_command": "commit -m done"},
+        success=True,
+        summary="[main abc1234] done",
+        task_id=state.task_id,
+        metadata={"result_id": "r-commit", "committed_paths": ["src/app.py"]},
+    )
+    context = AgentContext(
+        {"_task_state": state.to_dict(), "_evidence_ledger": ledger}
+    )
+    calls: list[object] = []
+    monkeypatch.setattr(
+        state,
+        "update_from_calls",
+        lambda calls: (_ for _ in ()).throw(AssertionError("fallback called")),
+    )
+
+    run_with_delivery(_ProjectedEngine(), "finish", context)
+
+    assert context.get("_task_state")["status"] == "completed"
+    assert calls == []

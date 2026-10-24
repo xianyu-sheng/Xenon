@@ -280,6 +280,11 @@ _USER_SENSITIVE = [
 
 # 危险命令黑名单模式
 _SHELL_SEGMENT_SPLIT = re.compile(r"(&&|\|\||[|;\n])")
+_POWERSHELL_CONTROL_RE = re.compile(
+    r"^\s*(?:if|elseif|foreach|for|while|switch)\s*\(",
+    re.IGNORECASE,
+)
+
 _DANGEROUS_CMD_PATTERNS = [
     # 删除根目录/系统目录
     r"rm\s+(-[rfR]+\s+)?/",
@@ -947,6 +952,14 @@ class ToolNode(
         dequoted = [" ".join(self._shell_segment_tokens(s)) for s in segments]
         for idx, segment in enumerate(segments):
             candidates = (segment, dequoted[idx])
+            for candidate in candidates:
+                if _POWERSHELL_CONTROL_RE.match(candidate):
+                    raise SecurityError(
+                        "不支持的 PowerShell 条件/循环命令。command 工具为避免"
+                        "部分执行，不会猜测或改写条件语义；请把整段逻辑写入"
+                        "`run_script(language=\"powershell\", code=...)`，"
+                        "或改用多条独立的安全命令。"
+                    )
             for pattern in _DANGEROUS_CMD_PATTERNS:
                 if "\\|" in pattern:
                     continue  # 跨段管道模式在段对循环里处理

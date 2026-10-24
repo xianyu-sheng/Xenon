@@ -65,10 +65,11 @@ payload:
   artifacts_revision / verified_revision / status
 ```
 
-The live runtime still owns the transaction that runs `git`, probes the
-worktree and marks completion; the event is the durable mirror used by
-projection and audit.  Full ledger-only delivery mutation remains tracked as
-#170/#172.
+Worktree probes are also emitted as `delivery` events (source `filesystem`),
+and on a ledger-backed path the completed status is applied by the projection
+via `maybe_complete(mutate=False)` + the delivery event.  The live runtime
+still owns the finalize transaction that runs `git` and the commit mutation;
+no-ledger callers keep the documented compatibility path (#172).
 
 ## Target migration
 

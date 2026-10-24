@@ -85,6 +85,7 @@ def record_delivery_fact(
     *,
     missing: list[str],
     attempt: int = 0,
+    status_override: str = "",
 ) -> Any:
     """Append the durable delivery snapshot used by replay/projection.
 
@@ -130,7 +131,8 @@ def record_delivery_fact(
         ],
         "artifacts_revision": int(getattr(state, "artifacts_revision", 0) or 0),
         "verified_revision": int(getattr(state, "verified_revision", 0) or 0),
-        "status": str(getattr(state, "status", "active") or "active"),
+        "status": status_override
+        or str(getattr(state, "status", "active") or "active"),
     }
     return ledger.append(
         LifecyclePhase.DELIVERY,
@@ -138,6 +140,43 @@ def record_delivery_fact(
         EvidenceSource.GATE,
         payload,
     )
+
+
+def record_delivery_probe(
+    ledger: Any,
+    state: Any,
+    *,
+    dirty: bool | None,
+    dirty_paths: list[str],
+    staged_paths: list[str],
+    unstaged_paths: list[str],
+) -> bool:
+    """Mirror a real worktree probe as an event, not a direct write.
+
+    The projection applies the same fields that the legacy no-ledger path
+    writes directly.  Returns ``False`` when there is no ledger to project.
+    """
+    if ledger is None or not hasattr(ledger, "append"):
+        return False
+    from xenon.engine.evidence_runtime import (
+        EventKind,
+        EvidenceSource,
+        LifecyclePhase,
+    )
+
+    ledger.append(
+        LifecyclePhase.DELIVERY,
+        EventKind.DELIVERY,
+        EvidenceSource.FILESYSTEM,
+        {
+            "task_id": getattr(state, "task_id", ""),
+            "dirty": dirty,
+            "dirty_paths": list(dirty_paths),
+            "dirty_staged_paths": list(staged_paths),
+            "dirty_unstaged_paths": list(unstaged_paths),
+        },
+    )
+    return True
 
 
 def _finalize_enabled() -> bool:
@@ -426,10 +465,19 @@ def run_with_delivery(
         if actual_dirty is not None and (
             state.commit or staged_paths or unstaged_paths
         ):
-            state.dirty_after_commit = actual_dirty
-            state.dirty_paths = dirty_paths
-            state.dirty_staged_paths = staged_paths
-            state.dirty_unstaged_paths = unstaged_paths
+            probed = use_projection and record_delivery_probe(
+                ledger,
+                state,
+                dirty=actual_dirty,
+                dirty_paths=dirty_paths,
+                staged_paths=staged_paths,
+                unstaged_paths=unstaged_paths,
+            )
+            if not probed:
+                state.dirty_after_commit = actual_dirty
+                state.dirty_paths = dirty_paths
+                state.dirty_staged_paths = staged_paths
+                state.dirty_unstaged_paths = unstaged_paths
         finalized = finalize_verified_work(state, workspace_root)
         if finalized.get("status") == "committed":
             logger.info(
@@ -446,10 +494,19 @@ def run_with_delivery(
                 unstaged_paths,
             ) = _probe_git_dirty(engine, context)
             if actual_dirty is not None:
-                state.dirty_after_commit = actual_dirty
-                state.dirty_paths = dirty_paths
-                state.dirty_staged_paths = staged_paths
-                state.dirty_unstaged_paths = unstaged_paths
+                probed = use_projection and record_delivery_probe(
+                    ledger,
+                    state,
+                    dirty=actual_dirty,
+                    dirty_paths=dirty_paths,
+                    staged_paths=staged_paths,
+                    unstaged_paths=unstaged_paths,
+                )
+                if not probed:
+                    state.dirty_after_commit = actual_dirty
+                    state.dirty_paths = dirty_paths
+                    state.dirty_staged_paths = staged_paths
+                    state.dirty_unstaged_paths = unstaged_paths
         elif finalized.get("status") in {"blocked", "error"}:
             logger.debug(
                 "deterministic finalize %s: %s",
@@ -458,6 +515,7 @@ def run_with_delivery(
             )
         missing = state.missing_delivery()
         goal_failures: list[Any] = []
+        completed = False
         if missing:
             state.reconcile_delivery_steps(missing)
         else:
@@ -465,12 +523,19 @@ def run_with_delivery(
             # criterion granularity instead of trusting the model's summary.
             goal_failures = _audit(attempts)
             if not goal_failures:
-                state.maybe_complete()
+                if use_projection:
+                    # The durable delivery event carries the completed status;
+                    # the projection applies it instead of a direct mutation.
+                    completed = state.maybe_complete(mutate=False)
+                else:
+                    state.maybe_complete()
+                    completed = state.status == "completed"
         record_delivery_fact(
             ledger,
             state,
             missing=missing,
             attempt=attempts,
+            status_override="completed" if completed else "",
         )
         context.set("_task_state", state.to_dict())
         return missing, goal_failures

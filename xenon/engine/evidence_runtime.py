@@ -344,6 +344,43 @@ class EvidenceLedger:
             "events": [e.to_dict() for e in self.events],
         }
 
+    def write_anchor(self, path: str | Path) -> str:
+        """Write an optional external anchor for the current chain head.
+
+        The anchor is a tiny JSON sidecar containing only the session id,
+        event count and head hash.  Keeping it outside the ledger lets an
+        operator/CI job detect a rewritten chain even when the ledger itself
+        is writable; it does not put secrets or payloads on disk.
+        """
+        head = self.events[-1].content_hash if self.events else ""
+        payload = {
+            "session_id": self.session_id,
+            "event_count": len(self.events),
+            "head_hash": head,
+        }
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        return head
+
+    def verify_anchor(self, path: str | Path) -> bool:
+        """Check an external anchor against this ledger (fail closed)."""
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        head = self.events[-1].content_hash if self.events else ""
+        return (
+            str(payload.get("session_id") or "") == self.session_id
+            and int(payload.get("event_count", -1)) == len(self.events)
+            and str(payload.get("head_hash") or "") == head
+        )
+
     @classmethod
     def from_snapshot(cls, snapshot: dict[str, Any]) -> "EvidenceLedger":
         if not isinstance(snapshot, dict) or not isinstance(
