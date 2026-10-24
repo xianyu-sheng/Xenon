@@ -687,6 +687,28 @@ class EngineHostMixin:
             logger.debug("读取计划状态失败: %s", exc)
             return
         if state is None or not state.steps:
+            # Read-only/general plan turns may not have a TaskState in
+            # AgentContext, but the engine still wrote durable PLAN events.
+            # Rebuild a display-only projection from that ledger; never fall
+            # back to callback-owned text.
+            try:
+                from xenon.engine.evidence_runtime import EvidenceLedger
+                from xenon.engine.task_state_projection import TaskStateProjection
+
+                ledger = self.agent_context.get("_evidence_ledger")
+                if isinstance(ledger, EvidenceLedger):
+                    display_state = TaskState(
+                        objective="",
+                        execution_level=0,
+                    )
+                    projection = TaskStateProjection(display_state)
+                    projection.attach(ledger, replay=True)
+                    projection.close()
+                    if display_state.steps:
+                        state = display_state
+            except Exception as exc:  # noqa: BLE001 — display must not break a run
+                logger.debug("从 ledger 重建计划面板失败: %s", exc)
+        if state is None or not state.steps:
             return
         console.print()
         console.print(Text(state.plan_summary(), style="dim"))

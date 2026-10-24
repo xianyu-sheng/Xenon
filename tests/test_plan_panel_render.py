@@ -92,3 +92,41 @@ def test_live_plan_lines_are_deduplicated_by_step_signature(monkeypatch) -> None
     assert len(console.lines) == 2
     assert "执行: write" in console.lines[0]
     assert "计划 v2 已更新" in console.lines[1]
+
+
+def test_final_panel_rebuilds_from_ledger_when_context_has_no_task_state(
+    monkeypatch,
+) -> None:
+    import xenon.repl.engine_host as engine_host
+    from xenon.engine.evidence_runtime import (
+        EventKind,
+        EvidenceLedger,
+        EvidenceSource,
+        LifecyclePhase,
+    )
+
+    console = _Console()
+    monkeypatch.setattr(engine_host, "console", console)
+    ledger = EvidenceLedger("readonly-plan")
+    ledger.append(
+        LifecyclePhase.PLANNING,
+        EventKind.PLAN,
+        EvidenceSource.ENGINE,
+        {
+            "version": 1,
+            "steps": [
+                {"id": 1, "task": "read README", "status": "completed"},
+                {"id": 2, "task": "summarize", "status": "completed"},
+            ],
+        },
+    )
+    host = EngineHostMixin()
+    host.agent_context = AgentContext({"_evidence_ledger": ledger})
+    host._last_plan_signature = None
+
+    host._render_plan_state(_spec())
+
+    rendered = "\n".join(console.lines)
+    assert "Plan v1" in rendered
+    assert "read README" in rendered
+    assert "summarize" in rendered

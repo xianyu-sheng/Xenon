@@ -2,7 +2,8 @@
 
 The live panel is driven by `TaskStateProjection -> EventBus(plan_state)`, not
 callback-owned text.  Automated coverage renders it deterministically:
-`tests/test_plan_panel_render.py`.
+`tests/test_plan_panel_render.py`.  The real ConPTY transcript for #174 is in
+`docs/TTY_TRANSCRIPT_174.md`.
 
 ## Manual check (real terminal)
 
