@@ -13,23 +13,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from xenon.engine.evidence_contracts import WRITE_TOOL_NAMES
 from xenon.engine.tool_tracker import ToolCall, ToolExecutionTracker
 
-MUTATING_TOOLS = frozenset(
-    {
-        "write_file",
-        "edit_file",
-        "append_file",
-        "batch_write",
-        "batch_edit",
-        "create_directory",
-        "refactor",
-        "edit_with_llm",
-    }
-)
-# 注意：command 和 git 不在其中——它们可读可写（歧义），
-# 若纳入会导致 mutation_count 把 pytest/ls 等只读命令也计为"变更"。
-# command/git 写入由 workspace_status（git diff）检测，见 has_workspace_change。
+# command/git are not mutations by themselves: pytest and git status are
+# read-only.  Their workspace effects are detected by workspace_status.
+MUTATING_TOOLS = WRITE_TOOL_NAMES
 
 _TEST_COMMAND = re.compile(
     r"(?:^|[;&|\s])(?:(?:python3?|py)\s+-m\s+|(?:[\w.-]+/)+)?"

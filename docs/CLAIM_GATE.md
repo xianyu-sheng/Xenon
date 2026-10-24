@@ -20,6 +20,9 @@ Gate 不调用 LLM，不产生额外模型费用。Claim 不是证据，不能�
 
 ## Claim 契约
 
+步骤开始时先写入 `status=pending` 的 claim 事件，明确本步预期；执行完成后
+同一 claim id 再由 Gate 更新为 `verified` / `rejected` / `unverifiable`。
+
 `xenon/engine/claim_gate.py` 定义以下确定性 claim：
 
 | kind | 真实证据 |
@@ -76,6 +79,8 @@ Plan-Execute 在每个步骤完成后立即运行 claim gate：
 - 干净 worktree
 - 计划中的 write / verify / commit / clean 条件
 - PR（如要求）
+- 用户输入中的验收条件（例如“CI 通过”“测试全部通过”）；这类条件从旧
+  `task_verifier.extract_acceptance_criteria` 对齐进入 goal audit，不再只做发布提醒
 
 失败的 criterion 会生成带 `claim_id`、预期、实际、证据的定向 continuation；
 下一轮只修这些条件，不重做已完成工作。仍不通过时保留原交付警告，并继续由
@@ -86,8 +91,9 @@ rejected criterion。
 
 ## 验证
 
-- `tests/test_claim_gate.py`：baseline 隔离、文件/命令/commit/空测试、goal
-  audit、投影回放、步骤内修复、delivery 定向修复。
+- `tests/test_claim_gate.py`：baseline 隔离、pending/verified claim、文件/命令/
+  commit/空测试、用户验收条件、goal audit、投影回放、步骤内修复、delivery
+  定向修复。
 - `tests/test_task_state.py`：旧计划 claim 不阻塞新计划；skipped 侦察/执行
   步骤在有已验证目标条件时不掩盖真实交付。
 - 全量测试通过后提交；真实基准用例需单独记录，不把单轮成绩外推。

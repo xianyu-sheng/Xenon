@@ -23,19 +23,8 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
-# Tools that change code on disk.  Kept in sync with the write-tool family
-# (file_mutation.py) without importing it, so this module stays dependency-free.
-WRITE_TOOLS: frozenset[str] = frozenset(
-    {
-        "write_file",
-        "edit_file",
-        "append_file",
-        "batch_write",
-        "batch_edit",
-        "refactor",
-        "edit_with_llm",
-        "create_directory",
-    }
+from xenon.engine.evidence_contracts import (
+    WRITE_TOOL_NAMES as WRITE_TOOLS,
 )
 
 # Common verification commands.  The alternative names are deliberately

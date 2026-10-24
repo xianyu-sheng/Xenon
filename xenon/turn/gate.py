@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from xenon.engine.evidence_contracts import WRITE_TOOL_NAMES
 from xenon.engine.hollow_detector import HollowDetector
 from xenon.engine.task_verifier import (
     _FAILURE_CLAIM,
@@ -43,9 +44,6 @@ class _RetryRound:
     signature: tuple[str, ...]
 
 
-_WRITE_TOOLS = frozenset(
-    {"write_file", "edit_file", "batch_write", "create_directory"}
-)
 
 
 class _EventTracker:
@@ -132,7 +130,7 @@ class TurnGate:
 
         # L2) 写入后验证失败且未披露。
         has_write = any(
-            e.get("tool") in _WRITE_TOOLS and e.get("success") for e in events
+            e.get("tool") in WRITE_TOOL_NAMES and e.get("success") for e in events
         )
         failed_cmd = any(
             e.get("tool") == "command" and not e.get("success") for e in events

@@ -9,16 +9,12 @@ same engine with a continuation prompt when required delivery work is missing.
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
+from xenon.engine.evidence_contracts import IGNORED_DIRTY_RE
+
 logger = logging.getLogger(__name__)
-
-
-_IGNORED_DIRTY_RE = re.compile(
-    r"^\?\? (?:.*/)?(?:__pycache__/|\.pytest_cache/)|^\?\? .*\.pyc$"
-)
 
 
 def _engine_workspace_root(
@@ -73,7 +69,7 @@ def _probe_git_dirty(
     lines = [
         line
         for line in proc.stdout.splitlines()
-        if line.strip() and not _IGNORED_DIRTY_RE.search(line)
+        if line.strip() and not IGNORED_DIRTY_RE.search(line)
     ]
     from xenon.engine.task_state import _status_breakdown
 

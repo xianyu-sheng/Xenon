@@ -26,23 +26,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from xenon.engine.evidence_contracts import WRITE_TOOL_NAMES
 
-# ── 写类工具集合（单一真相源）────────────────────────────
-# 与 tool_executor._WRITE_TOOLS 保持一致；command 也算——SWE-bench 场景中
-# 修改通常经 command 跑脚本，或直接 write/edit 落盘。
-WRITE_TOOL_NAMES = frozenset(
-    {
-        "write_file",
-        "edit_file",
-        "create_directory",
-        "batch_write",
-        "batch_edit",
-        "edit_with_llm",
-        "append_file",
-        "refactor",
-    }
-)
+logger = logging.getLogger(__name__)
 
 
 # ── 校验结果契约 ──────────────────────────────────────────

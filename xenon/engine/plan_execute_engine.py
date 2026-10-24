@@ -689,6 +689,47 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             payload,
         )
 
+    def _record_pending_claims(
+        self, ctx: AgentContext, step: dict[str, Any] | None
+    ) -> None:
+        """Register step expectations before the action starts."""
+        if not step:
+            return
+        from xenon.engine.claim_gate import claims_for_step, record_pending_claims
+        from xenon.engine.task_state import TaskState
+
+        state = TaskState.from_context(ctx)
+        if state is None or not state.active:
+            return
+        claim_step = dict(step)
+        claim_step["plan_version"] = state.plan_version
+        claims = claims_for_step(
+            claim_step,
+            requires_new_test=state.requires_new_test(),
+        )
+        if not claims:
+            return
+        ledger = ctx.get("_evidence_ledger")
+        if ledger is not None and hasattr(ledger, "append"):
+            record_pending_claims(
+                ledger,
+                claims,
+                task_id=state.task_id,
+            )
+        else:
+            for claim in claims:
+                state.record_claim(
+                    {
+                        **claim.to_dict(),
+                        "status": "pending",
+                        "actual": "",
+                        "reason": "",
+                        "evidence_ids": [],
+                        "attempt": 0,
+                    }
+                )
+            ctx.set("_task_state", state.to_dict())
+
     def _record_step_started(
         self,
         ctx: AgentContext,
@@ -726,6 +767,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                     status="running",
                 )
                 ctx.set("_task_state", state.to_dict())
+            self._record_pending_claims(ctx, step)
             return
         payload: dict[str, Any] = {
             "step_id": step_id,
@@ -747,6 +789,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             EvidenceSource.ENGINE,
             payload,
         )
+        self._record_pending_claims(ctx, step)
 
     def _record_step_finished(
         self,

@@ -15,17 +15,12 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-_WRITE_TOOLS = {
-    "write_file",
-    "edit_file",
-    "append_file",
-    "batch_write",
-    "batch_edit",
-    "create_directory",
-    "refactor",
-    "edit_with_llm",
-    "clone_repo",
-}
+from xenon.engine.evidence_contracts import (
+    WRITE_TOOL_NAMES,
+    is_test_path,
+    path_key,
+)
+
 _TEST_CREATE_RE = re.compile(
     r"(?:新增|添加|补(?:一个|充)?|写(?:一个|入)?(?!死)|创建|加(?:一个)?).{0,30}"
     r"(?:pytest|测试|test)",
@@ -40,7 +35,6 @@ _VERIFY_RE = re.compile(
 _COMMIT_RE = re.compile(r"\bgit\s+commit\b", re.IGNORECASE)
 _PUSH_RE = re.compile(r"\bgit\s+push\b", re.IGNORECASE)
 _PR_RE = re.compile(r"(?:\bgh\s+pr\s+create\b|create_pull_request)", re.IGNORECASE)
-_COMMIT_HASH_RE = re.compile(r"\b([0-9a-f]{7,40})\b", re.IGNORECASE)
 _PR_URL_RE = re.compile(r"https://github\.com/[^\s]+/pull/\d+")
 _COMMIT_OUTPUT_RE = re.compile(
     r"\[[^]]*?([0-9a-f]{7,40})[^]]*?\]",
@@ -209,18 +203,6 @@ def _paths_from_params(tool: str, params: dict[str, Any]) -> list[str]:
             if isinstance(item, dict) and isinstance(item.get("path"), str):
                 paths.append(item["path"])
     return paths
-
-
-def _is_test_path(path: str) -> bool:
-    normalized = str(path).replace("\\", "/").lower()
-    parts = [part for part in normalized.split("/") if part]
-    if "tests" in parts or "test" in parts:
-        return True
-    return bool(parts and parts[-1].startswith("test_"))
-
-
-def _path_key(path: str) -> str:
-    return str(path).replace("\\", "/").strip().lower()
 
 
 @dataclass
@@ -782,7 +764,7 @@ class TaskState:
     def has_source_artifact(self, paths: list[str] | None = None) -> bool:
         """Whether a successful write touched a non-test file."""
         for path in self.artifacts if paths is None else paths:
-            if not _is_test_path(path):
+            if not is_test_path(path):
                 return True
         return False
 
@@ -947,10 +929,10 @@ class TaskState:
         # A post-commit source write removes its path below, so a stale
         # commit cannot satisfy the gate after new source changes.
         for path in self.committed_artifacts:
-            if _is_test_path(path):
+            if is_test_path(path):
                 continue
-            key = _path_key(path)
-            if key not in {_path_key(p) for p in self.committed_source_paths}:
+            key = path_key(path)
+            if key not in {path_key(p) for p in self.committed_source_paths}:
                 self.committed_source_paths.append(path)
         self.source_commit_tracking = True
         self.committed_revision = self.artifacts_revision
@@ -1025,18 +1007,18 @@ class TaskState:
         if not success:
             return
 
-        if tool in _WRITE_TOOLS:
+        if tool in WRITE_TOOL_NAMES:
             paths = _paths_from_metadata(metadata) or _paths_from_params(tool, params)
             if paths:
                 for path in paths:
                     if path not in self.artifacts:
                         self.artifacts.append(path)
-                    if _is_test_path(path):
+                    if is_test_path(path):
                         by_path = metadata.get("content_chars_by_path")
                         if isinstance(by_path, dict):
                             chars = {
-                                _path_key(str(k)): v for k, v in by_path.items()
-                            }.get(_path_key(path))
+                                path_key(str(k)): v for k, v in by_path.items()
+                            }.get(path_key(path))
                         else:
                             chars = metadata.get("content_chars")
                         if isinstance(chars, int) and not isinstance(chars, bool):
@@ -1046,7 +1028,7 @@ class TaskState:
                                 self.invalid_test_artifacts = [
                                     item
                                     for item in self.invalid_test_artifacts
-                                    if _path_key(item) != _path_key(path)
+                                    if path_key(item) != path_key(path)
                                 ]
                             else:
                                 # Rewriting a previously valid test as an
@@ -1054,20 +1036,20 @@ class TaskState:
                                 self.test_artifacts = [
                                     item
                                     for item in self.test_artifacts
-                                    if _path_key(item) != _path_key(path)
+                                    if path_key(item) != path_key(path)
                                 ]
                                 if path not in self.invalid_test_artifacts:
                                     self.invalid_test_artifacts.append(path)
-                    if not _is_test_path(path):
+                    if not is_test_path(path):
                         # The committed source snapshot is stale as soon as
                         # this path is rewritten; a later test-only commit
                         # must not re-bless it.
                         self.source_commit_tracking = True
-                        key = _path_key(path)
+                        key = path_key(path)
                         self.committed_source_paths = [
                             item
                             for item in self.committed_source_paths
-                            if _path_key(item) != key
+                            if path_key(item) != key
                         ]
                 # Every successful write makes an earlier test result stale.
                 self.artifacts_revision += 1

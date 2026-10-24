@@ -18,17 +18,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-WRITE_TOOLS = frozenset(
-    {
-        "write_file",
-        "edit_file",
-        "append_file",
-        "batch_write",
-        "batch_edit",
-        "create_directory",
-        "refactor",
-        "edit_with_llm",
-    }
+from xenon.engine.evidence_contracts import (
+    IGNORED_DIRTY_RE,
+    display_path,
+    is_test_path,
+    paths_match,
+)
+from xenon.engine.evidence_contracts import (
+    WRITE_TOOL_NAMES as WRITE_TOOLS,
 )
 
 CLAIM_FILE_WRITTEN = "file_written"
@@ -39,16 +36,11 @@ CLAIM_COMMIT_PRESENT = "commit_present"
 CLAIM_WORKTREE_CLEAN = "worktree_clean"
 CLAIM_TEST_ARTIFACT = "test_artifact_nonempty"
 CLAIM_PR_CREATED = "pr_created"
-CLAIM_GOAL_CRITERION = "goal_criterion"
 
 VERIFIED = "verified"
 REJECTED = "rejected"
 UNVERIFIABLE = "unverifiable"
 
-_IGNORED_DIRTY = re.compile(
-    r"^\?\? (?:.*/)?(?:__pycache__/|\.pytest_cache/)|^\?\? .*\.pyc$"
-)
-_TEST_PATH = re.compile(r"(?:^|/)(?:tests?|test_[^/]*)(?:/|$)", re.I)
 _FAILURE_TEXT = re.compile(r"(?:\d+\s+)?failed|FAILED|ERROR|Traceback", re.I)
 _COMMIT_ACTION = re.compile(
     r"(?:git\s+(?:add|commit)|创建.{0,8}提交|提交.{0,8}(?:更改|修改|代码)|git\s+commit)",
@@ -150,32 +142,6 @@ class ClaimVerdict:
 
 def _text(value: Any) -> str:
     return str(value or "")
-
-
-def _norm_path(value: Any) -> str:
-    text = _text(value).replace("\\", "/").strip()
-    while text.startswith("./"):
-        text = text[2:]
-    return text.rstrip("/")
-
-
-def _path_matches(expected: str, actual: str) -> bool:
-    expected_norm = _norm_path(expected)
-    actual_norm = _norm_path(actual)
-    if not expected_norm or not actual_norm:
-        return False
-    return (
-        expected_norm == actual_norm
-        or actual_norm.endswith("/" + expected_norm)
-        or expected_norm.endswith("/" + actual_norm)
-    )
-
-
-def _is_test_path(path: str) -> bool:
-    normalized = _norm_path(path)
-    return bool(_TEST_PATH.search(normalized)) or normalized.endswith(
-        ("test.py", "tests.py")
-    )
 
 
 def _call_paths(call: Any) -> list[str]:
@@ -306,7 +272,7 @@ def probe_worktree(
     lines = [
         line
         for line in proc.stdout.splitlines()
-        if line.strip() and not _IGNORED_DIRTY.search(line)
+        if line.strip() and not IGNORED_DIRTY_RE.search(line)
     ]
     paths: list[str] = []
     for line in lines:
@@ -336,14 +302,14 @@ def claims_for_step(
     kind = _text(step.get("kind")).lower()
     task_text = _text(step.get("task") or step.get("step"))
     target_paths = [
-        _norm_path(path)
+        display_path(path)
         for path in step.get("target_paths") or []
-        if _norm_path(path)
+        if display_path(path)
     ]
     claims: list[Claim] = []
 
     def add(claim_kind: str, subject: str = "", expected: str = "") -> None:
-        key = f"step:{step_id}:{claim_kind}:{_norm_path(subject)}"
+        key = f"step:{step_id}:{claim_kind}:{display_path(subject)}"
         if any(c.claim_id == key for c in claims):
             return
         claims.append(
@@ -363,7 +329,7 @@ def claims_for_step(
         if target_paths:
             for path in target_paths:
                 add(CLAIM_FILE_WRITTEN, path, f"文件 {path} 由本步骤真实写入")
-                if requires_new_test and _is_test_path(path):
+                if requires_new_test and is_test_path(path):
                     add(CLAIM_TEST_ARTIFACT, path, "测试文件内容必须非空")
         else:
             add(
@@ -479,9 +445,9 @@ def goal_claims(state: Any) -> list[Claim]:
             )
         if bool(step.get("requires_write")) or kind == "edit":
             targets = [
-                _norm_path(path)
+                display_path(path)
                 for path in step.get("target_paths") or []
-                if _norm_path(path)
+                if display_path(path)
             ]
             if targets:
                 for path in targets:
@@ -500,6 +466,27 @@ def goal_claims(state: Any) -> list[Claim]:
                     "计划写步骤必须产生真实源码变更",
                     step_id,
                 )
+
+    # User-declared acceptance criteria (CI green, tests pass, build ok) were
+    # previously only a non-blocking TurnGate reminder.  Bring the
+    # test/CI-shaped ones into the same criterion audit so a targeted repair
+    # can actually satisfy them instead of merely reminding the user.
+    try:
+        from xenon.engine.task_verifier import extract_acceptance_criteria
+
+        acceptance = extract_acceptance_criteria(
+            _text(getattr(state, "objective", ""))
+        )
+    except Exception:  # noqa: BLE001 — optional legacy extractor
+        acceptance = []
+    if not any(c.kind == CLAIM_COMMAND_PASSED for c in claims):
+        for index, criterion in enumerate(acceptance):
+            add(
+                f"goal:acceptance:{index}",
+                CLAIM_COMMAND_PASSED,
+                "",
+                f"用户验收条件：{criterion}",
+            )
     return claims
 
 
@@ -519,7 +506,7 @@ def _verify_step_claim(
             call
             for call in writes
             for path in _call_paths(call)
-            if _path_matches(claim.subject, path)
+            if paths_match(claim.subject, path)
         ]
         if not matching:
             return ClaimVerdict(
@@ -532,7 +519,7 @@ def _verify_step_claim(
             path
             for call in matching
             for path in _call_paths(call)
-            if _path_matches(claim.subject, path)
+            if paths_match(claim.subject, path)
         ]
         if claim.kind == CLAIM_TEST_ARTIFACT:
             chars = 0
@@ -547,7 +534,7 @@ def _verify_step_claim(
                                 (
                                     value
                                     for key, value in by_path.items()
-                                    if _path_matches(claim.subject, str(key))
+                                    if paths_match(claim.subject, str(key))
                                 ),
                                 0,
                             )
@@ -589,7 +576,7 @@ def _verify_step_claim(
         source_calls = [
             call
             for call in writes
-            if any(not _is_test_path(path) for path in _call_paths(call))
+            if any(not is_test_path(path) for path in _call_paths(call))
         ]
         if not source_calls:
             return ClaimVerdict(
@@ -849,7 +836,7 @@ def _goal_verdict(
 
     if claim.kind == CLAIM_FILE_WRITTEN:
         artifacts = list(getattr(state, "artifacts", []) or [])
-        matched = [path for path in artifacts if _path_matches(claim.subject, path)]
+        matched = [path for path in artifacts if paths_match(claim.subject, path)]
         if not matched:
             return ClaimVerdict(
                 claim, REJECTED, "TaskState 没有该文件写入记录", "缺少文件证据"
@@ -883,6 +870,51 @@ def audit_goal(
         _goal_verdict(claim, state=state, workspace_root=workspace_root)
         for claim in goal_claims(state)
     ]
+
+
+def record_pending_claims(
+    ledger: Any,
+    claims: Iterable[Claim],
+    *,
+    task_id: str = "",
+    attempt: int = 0,
+) -> list[Any]:
+    """Register expectations before a step starts.
+
+    The pending event makes the claim auditable before the action.  The later
+    gate verdict reuses the same claim id and replaces the status.
+    """
+    if ledger is None or not hasattr(ledger, "append"):
+        return []
+    from xenon.engine.evidence_runtime import (
+        EventKind,
+        EvidenceSource,
+        LifecyclePhase,
+    )
+
+    events = []
+    for claim in claims:
+        payload = claim.to_dict()
+        payload.update(
+            {
+                "status": "pending",
+                "actual": "",
+                "reason": "",
+                "evidence_ids": [],
+                "attempt": int(attempt or 0),
+            }
+        )
+        if task_id:
+            payload["task_id"] = task_id
+        events.append(
+            ledger.append(
+                LifecyclePhase.VALIDATION,
+                EventKind.CLAIM,
+                EvidenceSource.ENGINE,
+                payload,
+            )
+        )
+    return events
 
 
 def record_claim_verdicts(

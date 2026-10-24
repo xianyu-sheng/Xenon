@@ -457,3 +457,84 @@ def test_confirmation_commit_step_does_not_require_a_new_commit() -> None:
     )
     assert verdicts[0].status == VERIFIED
     assert verdicts[1].status != REJECTED
+
+
+def test_user_acceptance_criteria_enter_goal_audit() -> None:
+    from xenon.engine.claim_gate import goal_claims
+
+    state = TaskState(
+        objective="修好这个 bug，直到 CI 通过",
+        execution_level=3,
+        artifacts=["src/app.py"],
+        artifacts_revision=1,
+        required=[],
+    )
+    claims = goal_claims(state)
+    assert any(c.claim_id.startswith("goal:acceptance:") for c in claims)
+
+    failures = audit_goal(state)
+    assert any(
+        c.claim.claim_id.startswith("goal:acceptance:")
+        and c.status == REJECTED
+        for c in failures
+    )
+
+    state.tests = ["pytest -q"]
+    state.verified_revision = state.artifacts_revision
+    passed = audit_goal(state)
+    assert all(
+        c.status == VERIFIED
+        for c in passed
+        if c.claim.claim_id.startswith("goal:acceptance:")
+    )
+
+
+def test_step_start_records_pending_claim_before_execution() -> None:
+    from xenon.engine.context import AgentContext
+    from xenon.engine.evidence_runtime import (
+        EventKind,
+        EvidenceLedger,
+        EvidenceSource,
+        LifecyclePhase,
+    )
+    from xenon.engine.plan_execute_engine import PlanExecuteEngine
+
+    state = TaskState(
+        objective="write",
+        execution_level=3,
+        steps=[],
+        plan_version=2,
+    )
+    ledger = EvidenceLedger("run-pending")
+    ledger.append(
+        LifecyclePhase.TASK,
+        EventKind.TASK_FACT,
+        EvidenceSource.ENGINE,
+        {"engine": "plan", "task_id": state.task_id},
+    )
+    ctx = AgentContext(
+        {"_task_state": state.to_dict(), "_evidence_ledger": ledger}
+    )
+    engine = PlanExecuteEngine(["model"], max_steps=0)
+
+    engine._record_step_started(
+        ctx,
+        "3",
+        "write source",
+        1,
+        step={
+            "id": "3",
+            "task": "write source",
+            "kind": "edit",
+            "requires_write": True,
+            "target_paths": ["src/app.py"],
+        },
+    )
+
+    claims = [
+        event for event in ledger.events if event.kind == EventKind.CLAIM.value
+    ]
+    assert len(claims) == 1
+    assert claims[0].payload["status"] == "pending"
+    assert claims[0].payload["plan_version"] == 2
+    assert claims[0].source == EvidenceSource.ENGINE.value
