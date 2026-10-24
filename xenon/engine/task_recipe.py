@@ -22,6 +22,7 @@ class TaskRecipe:
     forbidden_effects: frozenset[str]
     soft_tool_budget: int
     prompt: str
+    engine: str = "react"
 
 
 MCP_INSTALL = TaskRecipe(
@@ -99,6 +100,9 @@ def activate_recipe(
 
     recipe = recipe_for_request(text, level=level)
     if recipe is None:
+        # A recipe is turn-scoped.  Never let an install/configuration guard
+        # leak into the next unrelated coding turn.
+        context.set("_task_recipe", None)
         return None
     context.set("_task_recipe", {
         "id": recipe.id,

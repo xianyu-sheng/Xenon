@@ -503,11 +503,15 @@ class TurnFlowMixin:
                     f"[dim cyan]⏩ 延续上轮任务 → 继续使用 "
                     f"[bold]{mode}[/bold] 范式[/dim cyan]"
                 )
-        if recipe is not None and mode != "react":
-            mode = "react"
-            console.print(
-                "[dim cyan]🧭 原子任务固定使用 ReAct 配方，避免进入通用规划循环[/dim cyan]"
-            )
+        if recipe is not None:
+            recipe_spec = ENGINE_REGISTRY.get(recipe.engine)
+            if recipe_spec is not None and recipe_spec.runs_engine:
+                if mode != recipe_spec.name:
+                    mode = recipe_spec.name
+                    console.print(
+                        "[dim cyan]🧭 原子任务使用配方指定的引擎，"
+                        "避免进入通用规划循环[/dim cyan]"
+                    )
 
         try:
             if skill_name is not None:

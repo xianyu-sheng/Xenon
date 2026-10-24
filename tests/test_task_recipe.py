@@ -69,3 +69,81 @@ def test_recipe_metadata_and_prompt_are_ledger_friendly():
     assert recipe_allowed_tools(context) == MCP_INSTALL.allowed_tools
     assert "禁止" in recipe_prompt(context)
     assert "mcp_install" in recipe_prompt(context)
+
+
+def test_react_recipe_executes_mcp_install_without_repo_work(
+    tmp_path, monkeypatch
+):
+    """Recipe + ReAct + ToolExecutor + real fake stdio server, end to end."""
+
+    import json
+    import sys
+
+    from xenon.engine.react_engine import ReActEngine
+
+    config = tmp_path / "credentials.yaml"
+    config.write_text("deepseek: test-key\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "xenon.repl.provider_registry._get_credentials_path", lambda: config
+    )
+    server = tmp_path / "fake_server.py"
+    server.write_text(
+        """import json, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    method, rid = req.get("method"), req.get("id")
+    if method == "initialize":
+        print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": {
+            "protocolVersion": "2024-11-05", "capabilities": {},
+            "serverInfo": {"name": "fake", "version": "1"}}}), flush=True)
+    elif method == "notifications/initialized":
+        continue
+    elif method == "tools/list":
+        print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": {"tools": [
+            {"name": "echo", "description": "echo", "inputSchema": {"type": "object"}}
+        ]}}), flush=True)
+    elif method == "tools/call":
+        print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": {
+            "content": [{"type": "text", "text": "ok"}], "isError": False}}), flush=True)
+""",
+        encoding="utf-8",
+    )
+
+    context = AgentContext({"_execution_level": 3})
+    assert activate_recipe(context, "请你安装 MCP", level=3) is not None
+    engine = ReActEngine(["fake/model"], max_iterations=4, native_fc=False)
+    calls = {"n": 0}
+
+    def fake_llm(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return json.dumps(
+                {
+                    "thought": "install the fake MCP server",
+                    "action": "mcp_install",
+                    "action_input": {
+                        "mcp_name": "fake",
+                        "mcp_command": sys.executable,
+                        "mcp_args": [str(server)],
+                        "mcp_verify": True,
+                    },
+                }
+            )
+        return json.dumps({"final_answer": "installed fake with 1 tool"})
+
+    engine._call_llm_for_phase = fake_llm  # type: ignore[method-assign]
+    result = engine.run_task("请你安装 MCP", context=context)
+
+    assert "installed fake" in result
+    assert result.reason.value == "final"
+    assert "name: fake" in config.read_text(encoding="utf-8")
+    assert not (tmp_path / ".git").exists()
+
+
+def test_recipe_is_turn_scoped_and_cleared_on_next_non_recipe_turn():
+    context = AgentContext({})
+    assert activate_recipe(context, "请你安装 MCP", level=3) is not None
+    assert active_recipe(context) is not None
+
+    assert activate_recipe(context, "解释一下这个函数", level=1) is None
+    assert active_recipe(context) is None
