@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from xenon.engine.evidence_contracts import IGNORED_DIRTY_RE, paths_match
+from xenon.engine.evidence_contracts import IGNORED_DIRTY_RE, is_test_path, paths_match
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +142,44 @@ def record_delivery_fact(
     )
 
 
+def record_finalize_fact(
+    ledger: Any,
+    state: Any,
+    *,
+    commit: str,
+    committed_paths: list[str],
+) -> bool:
+    """Project a finalized commit through the durable delivery stream."""
+    if ledger is None or not hasattr(ledger, "append"):
+        return False
+    from xenon.engine.evidence_runtime import (
+        EventKind,
+        EvidenceSource,
+        LifecyclePhase,
+    )
+
+    source_paths = [path for path in committed_paths if not is_test_path(path)]
+    ledger.append(
+        LifecyclePhase.DELIVERY,
+        EventKind.DELIVERY,
+        EvidenceSource.FILESYSTEM,
+        {
+            "task_id": getattr(state, "task_id", ""),
+            "commit": commit,
+            "committed_paths": list(committed_paths),
+            "committed_source_paths": source_paths,
+            "committed_revision": int(
+                getattr(state, "artifacts_revision", 0) or 0
+            ),
+            "dirty": False,
+            "dirty_paths": [],
+            "dirty_staged_paths": [],
+            "dirty_unstaged_paths": [],
+        },
+    )
+    return True
+
+
 def record_delivery_probe(
     ledger: Any,
     state: Any,
@@ -188,6 +226,8 @@ def _finalize_enabled() -> bool:
 def finalize_verified_work(
     state: Any,
     workspace_root: Path | str | None,
+    *,
+    mutate: bool = True,
 ) -> dict[str, Any]:
     """Commit verified, task-owned staged paths without touching anything else.
 
@@ -300,24 +340,23 @@ def finalize_verified_work(
     except (OSError, subprocess.SubprocessError):
         pass
 
-    # Use the same durable ordering as a real git tool call: commit hash first,
-    # then the real path set, then clear the worktree facts.  A direct private
-    # helper is deliberate here: this is finalization of already-verified work,
-    # not a new model tool invocation.
-    state._record_commit(  # noqa: SLF001 — same package transaction
-        commit_hash, {"committed_paths": committed_paths}
-    )
-    state.dirty_after_commit = False
-    state.dirty_paths = []
-    state.dirty_staged_paths = []
-    state.dirty_unstaged_paths = []
-    state.updated_at = __import__("time").time()
-    return {
+    result = {
         "status": "committed",
         "commit": commit_hash,
         "paths": committed_paths,
         "message": (proc.stdout + proc.stderr).strip()[-800:],
     }
+    if mutate:
+        # Compatibility path for callers without a ledger boundary.
+        state._record_commit(  # noqa: SLF001 — same package transaction
+            commit_hash, {"committed_paths": committed_paths}
+        )
+        state.dirty_after_commit = False
+        state.dirty_paths = []
+        state.dirty_staged_paths = []
+        state.dirty_unstaged_paths = []
+        state.updated_at = __import__("time").time()
+    return result
 
 
 def run_with_delivery(
@@ -478,8 +517,17 @@ def run_with_delivery(
                 state.dirty_paths = dirty_paths
                 state.dirty_staged_paths = staged_paths
                 state.dirty_unstaged_paths = unstaged_paths
-        finalized = finalize_verified_work(state, workspace_root)
+        finalized = finalize_verified_work(
+            state, workspace_root, mutate=not use_projection
+        )
         if finalized.get("status") == "committed":
+            if use_projection:
+                record_finalize_fact(
+                    ledger,
+                    state,
+                    commit=str(finalized.get("commit") or ""),
+                    committed_paths=list(finalized.get("paths") or []),
+                )
             logger.info(
                 "deterministic finalize committed %s (%s paths)",
                 str(finalized.get("commit", ""))[:12],

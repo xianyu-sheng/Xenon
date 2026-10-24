@@ -167,3 +167,49 @@ def test_run_with_delivery_finalizes_without_extra_model_turn(
     assert completed.missing_delivery() == []
     assert _git(repo, "status", "--porcelain").stdout.strip() == ""
     assert context.get("_task_state")["status"] == "completed"
+
+
+def test_run_with_delivery_projects_finalize_commit_when_ledger_exists(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from xenon.engine.evidence_runtime import (
+        EventKind,
+        EvidenceLedger,
+        EvidenceSource,
+        LifecyclePhase,
+    )
+
+    monkeypatch.setenv("XENON_AUTO_FINALIZE", "1")
+    repo = _repo(tmp_path)
+    state = _verified_state(repo)
+    ledger = EvidenceLedger("finalize-projection")
+    ledger.append(
+        LifecyclePhase.TASK,
+        EventKind.TASK_FACT,
+        EvidenceSource.ENGINE,
+        {"task_id": state.task_id},
+    )
+    context = AgentContext(
+        {
+            "_task_state": state.to_dict(),
+            "_workspace_root": str(repo),
+            "_evidence_ledger": ledger,
+        }
+    )
+
+    answer = run_with_delivery(
+        _FakeEngine(), "finish", context, max_delivery_retries=0
+    )
+
+    completed = TaskState.from_context(context)
+    assert str(answer) == "done"
+    assert completed is not None
+    assert completed.status == "completed"
+    assert completed.commit
+    assert completed.missing_delivery() == []
+    assert _git(repo, "status", "--porcelain").stdout.strip() == ""
+    assert any(
+        event.kind == EventKind.DELIVERY.value
+        and event.payload.get("commit") == completed.commit
+        for event in ledger.events
+    )

@@ -65,11 +65,11 @@ payload:
   artifacts_revision / verified_revision / status
 ```
 
-Worktree probes are also emitted as `delivery` events (source `filesystem`),
-and on a ledger-backed path the completed status is applied by the projection
-via `maybe_complete(mutate=False)` + the delivery event.  The live runtime
-still owns the finalize transaction that runs `git` and the commit mutation;
-no-ledger callers keep the documented compatibility path (#172).
+Worktree probes and finalize commits are emitted as `delivery` events (source
+`filesystem`); on a ledger-backed path the projection applies dirty/staged,
+commit/path and completed-status facts.  The runtime still owns the `git`
+side effect, but it does not write those facts into TaskState directly.  A
+no-ledger caller keeps the documented compatibility path (#172).
 
 ## Target migration
 
