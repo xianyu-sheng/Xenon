@@ -168,7 +168,7 @@ MINI_REACT_PROMPT = """你正在执行任务计划的第 {step_id} 步（共 {to
 - 需要工具时：{{"thought":"分析当前状态","action":"工具名","action_input":{{"参数名":"值"}}}}
 - 已得到结论时：{{"thought":"总结","final_answer":"本步骤的最终结果"}}
 
-可用工具与参数同规划阶段（command/run_script/run_tests/tool_result_read/read_file/write_file/list_files/search_files/git/web_fetch/docs_fetch/github_fetch/edit_file/create_directory/batch_write/batch_edit/code_index/ast_analyze/refactor/diff_preview/create_pull_request/mcp_call）。遇到 Python 片段、PowerShell 变量或多行脚本，优先 run_script，不要用 python -c 或未加引号的 $ 变量。本步骤规划为"无需工具"，但若执行中发现需要读取文件/查目录等，可在 {max_rounds} 轮内按需调用工具；无需工具时直接输出 final_answer。
+可用工具与参数同规划阶段（command/run_script/run_tests/tool_result_read/read_file/write_file/list_files/search_files/git/web_fetch/docs_fetch/github_fetch/edit_file/create_directory/batch_write/batch_edit/code_index/ast_analyze/refactor/diff_preview/create_pull_request/mcp_call/mcp_install/mcp_verify）。遇到 Python 片段、PowerShell 变量或多行脚本，优先 run_script，不要用 python -c 或未加引号的 $ 变量。本步骤规划为"无需工具"，但若执行中发现需要读取文件/查目录等，可在 {max_rounds} 轮内按需调用工具；无需工具时直接输出 final_answer。
 """
 
 

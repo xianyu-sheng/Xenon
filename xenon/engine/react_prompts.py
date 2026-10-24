@@ -341,6 +341,34 @@ BUILTIN_TOOLS = {
             "max_chars": "筛选后返回的字符预算，1000-30000（可选，默认12000）",
         },
     },
+    "mcp_install": {
+        "name": "mcp_install",
+        "description": (
+            "安装/更新一个 MCP 服务器并验证工具发现。"
+            "只写 Xenon 配置、启动一次验证子进程；不要为了安装去读源码、"
+            "改仓库、跑项目测试或 git commit。"
+        ),
+        "params": {
+            "mcp_name": "服务器名，例如 github",
+            "mcp_command": "stdio 可执行文件路径或 PATH 命令（与 mcp_url 二选一）",
+            "mcp_args": '命令参数数组，例如 ["stdio"]',
+            "mcp_url": "HTTP/SSE MCP URL（与 mcp_command 二选一）",
+            "mcp_env_from": '环境变量名数组，例如 ["GITHUB_PERSONAL_ACCESS_TOKEN"]；只传名称，不传值',
+            "mcp_verify": "是否连接并发现工具，默认 true",
+        },
+    },
+    "mcp_verify": {
+        "name": "mcp_verify",
+        "description": (
+            "用已持久化的 MCP 配置连接服务器，并调用一个显式指定的只读工具做验证。"
+            "返回工具数量和有界/脱敏的结果摘要。"
+        ),
+        "params": {
+            "mcp_name": "已安装的服务器名，例如 github",
+            "tool_name": "工具全名或短名，例如 github:get_me",
+            "tool_args": "工具参数字典（可选）",
+        },
+    },
     "github_fetch": {
         "name": "github_fetch",
         "description": "GitHub 专用只读工具。支持 owner/repo，以及仓库、blob、tree、issue、pull 和 raw 完整 URL；repo_activity 可直接获取最近 push、PR 抽样和合并耗时等维护信号，无需克隆仓库。fetch_issue/fetch_pull 可直接用 github_path 填编号（27 / #27 / issues/27）。API 限流时会尝试公开 HTML 降级。设置 GITHUB_TOKEN、GH_TOKEN 或 credentials.yaml 的 github.token 后支持认证访问。",

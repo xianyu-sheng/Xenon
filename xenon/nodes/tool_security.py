@@ -69,6 +69,8 @@ PROVENANCE_SOURCE_BY_ACTION: dict[str, SourceType] = {
     "refactor": "file",
     "diff_preview": "file",
     "mcp_call": "mcp",
+    "mcp_install": "mcp",
+    "mcp_verify": "mcp",
     "github_fetch": "github",
     "clone_repo": "repo",
     "create_pull_request": "github",

@@ -76,6 +76,8 @@ _CRITICAL_TOOLS: frozenset[str] = frozenset(
         # MCP servers may expose arbitrary external side effects.  Until a server
         # advertises a trustworthy read/write schema, require an explicit approval.
         "mcp_call",
+        "mcp_install",
+        "mcp_verify",
     }
 )
 

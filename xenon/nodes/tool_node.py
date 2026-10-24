@@ -62,6 +62,7 @@ from xenon.nodes.tool_families.file_mutation import FileMutationToolsMixin
 from xenon.nodes.tool_families.git_tools import GitToolsMixin
 from xenon.nodes.tool_families.github_tools import GitHubToolsMixin
 from xenon.nodes.tool_families.lsp import LSPToolsMixin
+from xenon.nodes.tool_families.mcp_management import MCPManagementToolsMixin
 from xenon.nodes.tool_families.mcp_tools import MCPToolsMixin
 from xenon.nodes.tool_families.plan_tools import PlanToolsMixin
 from xenon.nodes.tool_families.read_only_files import (
@@ -356,6 +357,7 @@ class ToolNode(
     GitToolsMixin,
     GitHubToolsMixin,
     MCPToolsMixin,
+    MCPManagementToolsMixin,
     PlanToolsMixin,
     ScriptToolsMixin,
     TestToolsMixin,
@@ -435,6 +437,13 @@ class ToolNode(
         tool_name: str = "",
         tool_args: dict | None = None,
         mcp_server: str = "",
+        # mcp_install / mcp_verify 参数
+        mcp_name: str = "",
+        mcp_command: str = "",
+        mcp_args: list[str] | str | None = None,
+        mcp_url: str = "",
+        mcp_env_from: list[str] | str | None = None,
+        mcp_verify: bool = True,
         # github_fetch / clone_repo / git 参数
         repo: str = "",
         github_action: str = "list_files",  # list_files | fetch_file | fetch_readme | repo_activity
@@ -517,6 +526,12 @@ class ToolNode(
         self.tool_name = tool_name
         self.tool_args = tool_args or {}
         self.mcp_server = mcp_server
+        self.mcp_name = mcp_name
+        self.mcp_command = mcp_command
+        self.mcp_args = mcp_args or []
+        self.mcp_url = mcp_url
+        self.mcp_env_from = mcp_env_from or []
+        self.mcp_verify = mcp_verify
         self.repo = repo
         self.github_action = github_action
         self.github_path = github_path
@@ -631,6 +646,14 @@ class ToolNode(
         # v0.6.1: LSP 参数
         "line": ["row", "lineno", "line_number"],
         "column": ["col", "colno", "column_number", "cursor"],
+        # MCP management.  Avoid aliases that collide with action/test_args;
+        # the schema uses the mcp_* names directly.
+        "mcp_name": ["mcp_server_name", "server_name"],
+        "mcp_command": ["mcp_cmd", "server_command"],
+        "mcp_args": ["mcp_arguments", "server_args"],
+        "mcp_url": ["mcp_server_url", "server_url"],
+        "mcp_env_from": ["env_from", "env_keys", "environment"],
+        "mcp_verify": ["verify", "verify_after_install"],
     }
 
     # ToolNode.__init__ 接受的所有合法参数名（不含 node_id，它是位置参数）
@@ -680,6 +703,12 @@ class ToolNode(
         "tool_name",
         "tool_args",
         "mcp_server",
+        "mcp_name",
+        "mcp_command",
+        "mcp_args",
+        "mcp_url",
+        "mcp_env_from",
+        "mcp_verify",
         "repo",
         "github_action",
         "github_path",

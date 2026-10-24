@@ -16,7 +16,9 @@ from xenon.nodes.tool_registry import BUILTIN_TOOL_REGISTRY
 _SENSITIVE_TOOLS = {
     "command",
     "spawn_agent",
-}  # 任意 shell 执行 + 子 Agent 委派——最高风险
+    "mcp_install",
+    "mcp_verify",
+}  # 任意 shell 执行 + 子 Agent 委派 + MCP 生命周期——最高风险
 _WRITE_TOOLS = {
     "write_file",
     "edit_file",
@@ -70,7 +72,7 @@ def classify_tool(
         if _READ_ONLY_MCP_NAME.search(remote_name):
             return "INFO"
         return "SENSITIVE"
-    if tool_name == "mcp_call":
+    if tool_name in {"mcp_call", "mcp_install", "mcp_verify"}:
         return "SENSITIVE"
     # 优先查注册表 risk 字段
     defn = BUILTIN_TOOL_REGISTRY.get(tool_name)
@@ -114,6 +116,8 @@ def required_execution_level(tool_name: str, params: dict[str, Any]) -> int:
     package into the low-level executor: 1=read, 2=write, 3=execute.
     """
 
+    if tool_name in {"mcp_install", "mcp_verify"}:
+        return 3
     if tool_name == "mcp_call":
         remote_name = str(params.get("tool_name", ""))
         if not remote_name:

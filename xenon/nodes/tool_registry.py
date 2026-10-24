@@ -194,6 +194,8 @@ BUILTIN_TOOL_METHODS: dict[str, str] = {
     "refactor": "_refactor",
     "diff_preview": "_diff_preview",
     "mcp_call": "_mcp_call",
+    "mcp_install": "_mcp_install",
+    "mcp_verify": "_mcp_verify",
     "github_fetch": "_github_fetch",
     "clone_repo": "_clone_repo",
     "create_pull_request": "_create_pull_request",
