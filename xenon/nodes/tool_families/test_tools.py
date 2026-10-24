@@ -97,6 +97,14 @@ class TestToolsMixin:
             return self._run_tests_error(
                 "invalid_cwd", f"测试 cwd 不存在或不是目录: {workspace}"
             )
+        if getattr(self, "security_enabled", True):
+            try:
+                self._validate_path(str(workspace), for_write=False)
+            except Exception as exc:  # noqa: BLE001 — SecurityError
+                return self._run_tests_error(
+                    "security_error",
+                    f"测试 cwd 越界或被拒绝: {workspace} ({exc})",
+                )
 
         framework = str(
             getattr(self, "test_framework", "auto") or "auto"
