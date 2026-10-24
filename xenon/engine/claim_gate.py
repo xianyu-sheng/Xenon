@@ -21,9 +21,12 @@ from typing import Any, Iterable
 
 from xenon.engine.evidence_contracts import (
     IGNORED_DIRTY_RE,
+    command_is_test_like,
     display_path,
+    is_non_test_invocation,
     is_test_path,
     paths_match,
+    tests_run_from_metadata,
 )
 from xenon.engine.evidence_contracts import (
     WRITE_TOOL_NAMES as WRITE_TOOLS,
@@ -189,20 +192,41 @@ def _call_command(call: Any) -> str:
 
 
 def _normalize_command(value: str) -> str:
-    return re.sub(r"\s+", " ", value.strip().lower()).strip()
+    """Normalize executor prefixes without erasing test targets.
+
+    ``python -m pytest tests/a.py`` and ``pytest tests/a.py`` are equivalent
+    intents.  The target tokens stay in the string, so a plan targeting one
+    test file cannot be satisfied by a different file or by ``--version``.
+    """
+    text = re.sub(r"\s+", " ", value.strip().lower()).strip()
+    text = re.sub(
+        r"^(?:(?:python|py)(?:\.exe)?(?:\s+-m)?\s+)?(?:pytest|py\.test)\b",
+        "pytest",
+        text,
+    )
+    return text
 
 
 def _command_matches(expected: str, actual: str) -> bool:
     exp = _normalize_command(expected)
     act = _normalize_command(actual)
     if not exp:
-        return bool(re.search(r"(?:pytest|unittest|test|verify)", act))
-    if exp == act or exp in act or act in exp:
+        return command_is_test_like(act)
+    if not act or is_non_test_invocation(act):
+        return False
+    if exp == act or exp in act:
         return True
-    # ``pytest -q`` and ``python -m pytest -q`` are the same verification
-    # intent even though the executable prefix differs.
-    exp_tokens = set(re.findall(r"[a-z0-9_.-]+", exp))
-    act_tokens = set(re.findall(r"[a-z0-9_.-]+", act))
+    # A generic actual command must not satisfy a plan that named a specific
+    # test target.  ``act in exp`` is only safe for non-test commands.
+    if act in exp and not command_is_test_like(exp) and not command_is_test_like(
+        act
+    ):
+        return True
+    # Compare whole argument tokens.  This still allows ``pytest -q`` to match
+    # ``pytest -q tests/test_a.py``, but rejects a missing target (for example
+    # a plan for ``tests/test_a.py`` satisfied by ``pytest tests/test_b.py``).
+    exp_tokens = set(re.findall(r"[a-z0-9_./-]+", exp))
+    act_tokens = set(re.findall(r"[a-z0-9_./-]+", act))
     return bool(exp_tokens) and exp_tokens <= act_tokens
 
 
@@ -224,6 +248,93 @@ def _result_id(call: Any) -> str:
     return _text(getattr(call, "result_id", ""))
 
 
+def _call_tests_run(call: Any) -> int:
+    """Structured test count, or a parse of the receipt summary."""
+    metadata = getattr(call, "metadata", {}) or {}
+    return tests_run_from_metadata(
+        metadata if isinstance(metadata, dict) else {},
+        getattr(call, "result_summary", ""),
+    )
+
+
+def _test_claim_requires_execution(claim: Claim, call: Any) -> bool:
+    """Whether this claim is specifically about running tests."""
+    return bool(
+        claim.subject == "run_tests"
+        or _text(getattr(call, "tool_name", "")) == "run_tests"
+        or command_is_test_like(claim.subject)
+        or command_is_test_like(_call_command(call))
+    )
+
+
+def _test_content_for_call(call: Any, subject: str) -> str:
+    """Extract the written test text from a write tool's parameters."""
+    params = getattr(call, "params", {}) or {}
+    if not isinstance(params, dict):
+        return ""
+    if isinstance(params.get("content"), str):
+        return params["content"]
+    for key in ("files", "edits"):
+        items = params.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("file_path") or item.get("path")
+            content = item.get("content") or item.get("new_text")
+            if (
+                isinstance(path, str)
+                and isinstance(content, str)
+                and paths_match(subject, path)
+            ):
+                return content
+    return ""
+
+
+def _has_test_assertion(content: str, path: str) -> bool:
+    """Structural check that a test artifact contains an assertion.
+
+    This is not a semantic test-quality judge.  It rejects empty or
+    assertion-free files that used to satisfy "non-empty test file".
+    """
+    text = str(content or "")
+    if not text.strip():
+        return False
+    if not str(path).lower().endswith(".py"):
+        return bool(
+            re.search(r"\b(?:assert|expect|should)\b", text, re.IGNORECASE)
+        )
+    import ast
+
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return False
+    assertion_methods = {
+        "raises",
+        "warns",
+        "fail",
+        "failIf",
+        "assertEqual",
+        "assertTrue",
+        "assertFalse",
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assert):
+            return True
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = ""
+            if isinstance(func, ast.Name):
+                name = func.id
+            elif isinstance(func, ast.Attribute):
+                name = func.attr
+            if name.startswith("assert") or name in assertion_methods:
+                return True
+    return False
+
+
 def _calls_since(calls: Iterable[Any], start: int) -> list[Any]:
     rows = list(calls)
     return rows[max(0, int(start or 0)) :]
@@ -235,6 +346,10 @@ def _write_calls_after(calls: Iterable[Any], start: int) -> list[Any]:
         for call in _calls_since(calls, start)
         if getattr(call, "success", False)
         and getattr(call, "tool_name", "") in WRITE_TOOLS
+        and not (
+            isinstance(getattr(call, "metadata", None), dict)
+            and getattr(call, "metadata", {}).get("changed") is False
+        )
     ]
 
 
@@ -622,6 +737,29 @@ def _verify_step_claim(
                     "空测试不算验证",
                     [_result_id(call) for call in matching if _result_id(call)],
                 )
+            content = next(
+                (
+                    _test_content_for_call(call, claim.subject)
+                    for call in matching
+                    if _test_content_for_call(call, claim.subject)
+                ),
+                "",
+            )
+            if not content and workspace_root:
+                try:
+                    content = Path(
+                        _text(workspace_root), claim.subject
+                    ).read_text(encoding="utf-8", errors="replace")
+                except (OSError, ValueError):
+                    content = ""
+            if content and not _has_test_assertion(content, claim.subject):
+                return ClaimVerdict(
+                    claim,
+                    REJECTED,
+                    "测试文件没有可识别的断言",
+                    "测试文件只包含注释/空操作",
+                    [_result_id(call) for call in matching if _result_id(call)],
+                )
         if workspace_root and not _file_exists(workspace_root, claim.subject):
             return ClaimVerdict(
                 claim,
@@ -680,6 +818,10 @@ def _verify_step_claim(
             if code is not None and code != 0:
                 continue
             if _FAILURE_TEXT.search(summary):
+                continue
+            if _test_claim_requires_execution(claim, call) and _call_tests_run(
+                call
+            ) <= 0:
                 continue
             return ClaimVerdict(
                 claim,
@@ -850,6 +992,20 @@ def _goal_verdict(
                 return ClaimVerdict(
                     claim, REJECTED, "测试文件存在但为空/不可读", "测试文件无效"
                 )
+            for path in nonempty:
+                try:
+                    content = Path(_text(workspace_root), path).read_text(
+                        encoding="utf-8", errors="replace"
+                    )
+                except (OSError, ValueError):
+                    content = ""
+                if not _has_test_assertion(content, path):
+                    return ClaimVerdict(
+                        claim,
+                        REJECTED,
+                        f"测试文件没有可识别的断言: {path}",
+                        "测试文件只有空操作/注释",
+                    )
         return ClaimVerdict(
             claim, VERIFIED, "非空测试: " + ", ".join(paths[:8]), "测试证据存在"
         )
@@ -868,6 +1024,17 @@ def _goal_verdict(
                 "最近验证仍有失败: " + ", ".join(failures[:5]),
                 "验证失败",
             )
+        if claim.subject:
+            matching_tests = [
+                item for item in tests if _command_matches(claim.subject, item)
+            ]
+            if not matching_tests:
+                return ClaimVerdict(
+                    claim,
+                    REJECTED,
+                    "没有与目标匹配的验证记录: " + claim.subject,
+                    "验证目标未执行",
+                )
         if int(getattr(state, "verified_revision", 0)) < int(
             getattr(state, "artifacts_revision", 0)
         ):

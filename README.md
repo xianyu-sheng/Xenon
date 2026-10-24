@@ -15,7 +15,7 @@
 
 <p align="center">别的 agent 说"完成了"，你只能选择相信它。<br/>Xenon 把结果拆成两半说清楚：哪些是机器确认过的，哪些需要你自己看一眼。</p>
 
-<p align="center"><b>SWE-bench Lite 盲测</b>（单一 <code>react</code> 引擎 · 120 步 · 官方 harness · 3 次均值）：固定 30 例 <b>62.2%</b> · 零重叠留出集 <b>52.2%</b> · <a href="#评测">协议与全部逐次结果</a></p>
+<p align="center"><b>SWE-bench Lite 30 例子集盲测</b>（单一 <code>react</code> 引擎 · 评测预算 120 步 · 官方 harness · 3 次均值）：固定 30 例 <b>62.2%</b> · 零重叠留出集 <b>52.2%</b> · <a href="#评测">协议与全部逐次结果</a></p>
 
 <p align="center">
   <a href="docs/OPERATION_GUIDE.md">文档</a> ·
@@ -27,7 +27,7 @@
 </p>
 
 > [!TIP]
-> **机器只对过程负责，语义判断交还给你。** 每次工具调用都进证据链（L0）；全仓只有一个阻断类校验（L1）；语义问题不阻断交付，整理成「待人工核验清单」随答案一起交给你（L2）。
+> **机器只对过程负责，语义判断交还给你。** 工具调用进入执行账本（L0）；`/evidence` 当前展示会话审计链，claim/plan/delivery 的统一执行视图仍在收敛（见 #177）。回合级只有一个阻断类结构校验（L1）；语义问题不阻断交付，整理成「待人工核验清单」随答案一起交给你（L2）。
 
 <p align="center">
   <img src="docs/hero-terminal.svg" alt="Xenon 终端：一次交付里机器确认了什么、哪两项需要人工核验" width="860">
@@ -110,10 +110,10 @@ python -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Lit
 ## 它具体做什么
 
 <table>
-<tr><td><b>证据链，而不是日志</b></td><td>每一次工具调用写入 append-only 哈希链（内容哈希 + 前驱哈希）；<code>/evidence</code> 随时重算自证，能发现损坏、单点篡改与重排。</td></tr>
-<tr><td><b>只有一个阻断类校验</b></td><td>"空洞回答"（没干活、答非所问）是确定性的，命中就同回合反馈重试、同因熔断；语义类问题不阻断交付，整理成「待人工核验清单」随答案输出。</td></tr>
+<tr><td><b>证据链，而不是日志</b></td><td>工具执行写入执行账本，会话层另有一条 append-only 审计链；<code>/evidence</code> 随时重算会话链自证，能发现损坏、单点篡改与重排。执行 claim/plan/delivery 的统一视图见 #177。</td></tr>
+<tr><td><b>回合级只有一个阻断类结构校验</b></td><td>"空洞回答"（没干活、答非所问）是确定性的，命中就同回合反馈重试、同因熔断；语义类问题不阻断交付，整理成「待人工核验清单」随答案输出。</td></tr>
 <tr><td><b>每个回合是一棵树上的节点</b></td><td><code>/rewind</code> 回退、<code>/fork</code> 分叉；中断或熔断后，裸敲"继续"会自动从那个节点接上，不用重述上下文。</td></tr>
-<tr><td><b>越权操作要走审批</b></td><td>工作区内写文件不打扰你；越界写和命令会弹统一面板（带 diff 预览），授权可按目标与时长限定，子代理默认只读。</td></tr>
+<tr><td><b>越权操作要走审批</b></td><td>工作区内写文件不打扰你；越界写和命令会弹统一面板（带 diff 预览）。单次授权绑定目标；会话级 `a` 当前按工具和 TTL 放行，更细的目标/命令规则见 #181。子代理默认只读。</td></tr>
 <tr><td><b>不可信输出带来源标记</b></td><td>文件、网页、GitHub、MCP 与命令输出都标注来源与可信度；命中常见提示注入模式时给出可见告警，审批面板注明"该动作可能受不可信内容影响"。只提醒，不阻断，也不改写原内容。</td></tr>
 <tr><td><b>路由会从你的选择中学习</b></td><td>智能路由的推荐被 <code>/mode</code> 覆盖后，同类任务下偏好范式获得小幅置信度加权；偏好只留在本地，删 <code>~/.xenon/routing_preferences.json</code> 即重置。</td></tr>
 <tr><td><b>截断与上限如实标注</b></td><td>大文件截断、上下文超限都明确标出来，不伪装完整。</td></tr>
@@ -138,10 +138,10 @@ python -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Lit
 | 层 | 测的是什么 | 结果怎么呈现 |
 |---|---|---|
 | **L0 证据层** | 过程是否真实、可复核 | 哈希链事件日志；`/evidence` 随时重算 |
-| **L1 结构层** | 回答是不是"没干活" | 唯一的阻断类校验：反馈重试 / 同因熔断 |
+| **L1 结构层** | 回答是不是"没干活" | 回合级阻断校验：反馈重试 / 同因熔断 |
 | **L2 语义层** | 宣称、准则、文件声称是否站得住 | 不阻断；命中即附「待人工核验清单」，重试耗尽则降级交付 |
 
-语义判断全仓只有一处（`xenon/turn/gate.py`），引擎内部不做语义判定；工具成败只由工具回执决定，不靠关键词猜。
+`xenon/turn/gate.py` 负责回合级 L1/L2 校验；Reflection 引擎的 reviewer 评分是独立的输出质量审查，不作为工具事实或 Claim 的证明。工具成败只由工具回执决定，不靠关键词猜。
 
 `/evidence` 的输出（结构化回合摘要 + 一行链自证）：
 
@@ -193,7 +193,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 ## 环境变量
 
 <details>
-<summary>共 16 项（点击展开）</summary>
+<summary>共 17 项（点击展开）</summary>
 
 | 变量 | 作用 | 默认 |
 |---|---|---|
@@ -202,7 +202,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 | `XENON_RETRY_BUDGET_MIN/MAX` | 重试轮的步数预算区间 | 10 / 40 |
 | `XENON_GATE_FUSE_THRESHOLD` | 同因结构失败的熔断阈值 | 2 |
 | `XENON_MAX_ITERATIONS` | 单次运行的步数上限；0=不按步数终止（默认） | 0 |
-| `XENON_ENGINE_TIMEOUT` | 单次运行的引擎绝对时限（秒）；超时返回已完成部分 | 600 |
+| `XENON_ENGINE_TIMEOUT` | 单次运行的引擎绝对时限（秒）；超时返回已完成部分 | 1800 |
 | `XENON_MAX_TOKENS` | 单次模型调用的输出上限 | 8192 |
 | `XENON_MAX_CONTINUATIONS` | 截断后的自动续写次数 | 3 |
 | `NO_COLOR` | 标准环境变量；关闭输出与输入提示的颜色 | 未设置 |
@@ -239,7 +239,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 - 适合新人的任务：[good first issue](https://github.com/xianyu-sheng/Xenon/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 - 贡献者入口（任务清单与认领方式）：[#144](https://github.com/xianyu-sheng/Xenon/issues/144)
 - 功能建议 / 体验反馈 / 路线图讨论：[路线图与反馈收集](https://github.com/xianyu-sheng/Xenon/discussions/143)
-- 质量门禁：Linux 全量离线测试 + Windows/macOS 平台冒烟 + Codecov 覆盖率；离线套件 3,000+ 用例
+- 质量门禁：Linux 全量离线测试 + Windows/macOS 平台冒烟 + Codecov 覆盖率；离线套件 3,600+ 用例
 - 如果 Xenon 对你有帮助，欢迎点一个 ⭐
 
 ## 收录

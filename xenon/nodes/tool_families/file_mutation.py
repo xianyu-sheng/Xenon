@@ -167,12 +167,15 @@ class FileMutationToolsMixin:
                 "rollback_errors": rollback_errors,
             }
 
+        changed = snapshot is None or snapshot[0] != final_content.encode(self.encoding)
         result = {
             "action_type": "write_file",
             "file_path": str(path),
             "bytes_written": len(content.encode(self.encoding)),
             "append": self.append,
             "success": True,
+            "changed": changed,
+            "changed_paths": [str(path)] if changed else [],
         }
         self._write_output(context, str(path))
         return result
@@ -432,11 +435,19 @@ class FileMutationToolsMixin:
                 "error": f"批量写入失败: {exc}",
                 "results": results,
             }
+        changed_paths = [
+            str(path)
+            for _, path, content, _ in prepared
+            if snapshots.get(path) is None
+            or snapshots[path][0] != content.encode(self.encoding)
+        ]
         return {
             "action_type": "batch_write",
             "total": len(self.files),
             "success_count": len(prepared),
             "success": True,
+            "changed": bool(changed_paths),
+            "changed_paths": changed_paths,
             "results": results,
         }
 

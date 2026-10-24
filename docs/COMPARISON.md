@@ -32,7 +32,7 @@
 | **工具断路器** | ✅ 3 失败熔断 | ❌ | ❌ | ❌ | ❌ |
 | **上下文压缩** | ✅ 6 步 @ 80% | ❌ | ✅ | ❌ | ❌ |
 | **空洞回答检测** | ✅ 15 正则 | ❌ | ❌ | ❌ | ❌ |
-| **三阶段预算** | ✅ Explore/Execute/Converge | ❌ | ❌ | ❌ | ❌ |
+| **三阶段预算** | ⚠️ 有界预算时启用；默认 unlimited 时仅 EXPLORE | ❌ | ❌ | ❌ | ❌ |
 | **开源协议** | ✅ MIT | ✅ Apache 2.0 | ❌ 闭源 | ✅ MIT | ✅ FSL-1.1-MIT |
 | **实现语言** | Python 3.10+ | Python | TypeScript | Go | Go |
 
@@ -129,7 +129,7 @@
 
 | 项目 | 能力 |
 | --- | --- |
-| **Xenon** | `BudgetManager` 三阶段软预算：EXPLORE（25%，鼓励探索）→ EXECUTE（50%）→ CONVERGE（25%，禁用纯探索型工具强制收束）；奖励仅保留压缩奖励（空洞奖励 API 已删除，空洞判定收敛到回合级 TurnGate）。 |
+| **Xenon** | `BudgetManager` 三阶段软预算只在显式设置有界步数时生效；默认 `XENON_MAX_ITERATIONS=0`（unlimited）时 ratio 恒为 0，阶段保持 EXPLORE，CONVERGE 不启用。奖励仅保留压缩奖励。三阶段的 token/time 化或移除见 #184。 |
 | 其它 4 项 | ❌。 |
 
 **Xenon 优势**：**全表独有**。这是 Xenon 区别于"调 LLM API 的 CLI 工具"的核心——不只是问 LLM 答啥，而是**有节律地引导 LLM 走向最终答案**。

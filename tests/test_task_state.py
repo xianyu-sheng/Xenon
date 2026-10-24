@@ -273,7 +273,20 @@ def test_commit_metadata_limits_committed_artifacts_to_real_paths() -> None:
     assert "changes" in state.missing_delivery()
 
 
-def test_structured_exit_code_verifies_without_passed_text() -> None:
+def test_structured_exit_code_with_test_count_verifies_without_passed_text() -> None:
+    state = TaskState(objective="x", execution_level=3, required=["verify"])
+    state.record_tool(
+        "command",
+        {"command": "python -m pytest tests -q"},
+        success=True,
+        result="",
+        metadata={"exit_code": 0, "tests_run": 2},
+    )
+    assert state.tests
+    assert state.missing_delivery() == []
+
+
+def test_exit_zero_without_test_execution_is_not_verification() -> None:
     state = TaskState(objective="x", execution_level=3, required=["verify"])
     state.record_tool(
         "command",
@@ -282,8 +295,9 @@ def test_structured_exit_code_verifies_without_passed_text() -> None:
         result="",
         metadata={"exit_code": 0},
     )
-    assert state.tests
-    assert state.missing_delivery() == []
+    assert state.tests == []
+    assert "verify" in state.missing_delivery()
+    assert state.failed_tests
 
 
 def test_failed_verification_invalidates_earlier_pass() -> None:
@@ -812,3 +826,20 @@ def test_later_clean_and_commit_supersede_rejected_claims() -> None:
     assert state.maybe_complete() is True
     assert state.claim_failures() == []
     assert all(c["status"] == "superseded" for c in state.claims)
+
+
+def test_noop_write_does_not_satisfy_source_change() -> None:
+    state = TaskState(
+        objective="change source",
+        execution_level=3,
+        required=["commit"],
+    )
+    state.record_tool(
+        "write_file",
+        {"file_path": "src/app.py", "content": "same"},
+        success=True,
+        result="written",
+        metadata={"changed": False, "changed_paths": []},
+    )
+    assert state.artifacts == []
+    assert "changes" in state.missing_delivery()

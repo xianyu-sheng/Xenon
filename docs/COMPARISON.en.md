@@ -130,7 +130,7 @@ None of the other 4 projects support true multi-paradigm switching — Aider, Cl
 
 | Project | Capabilities |
 | --- | --- |
-| **Xenon** | `BudgetManager` three-stage soft budget: EXPLORE (25%, encourages discovery) → EXECUTE (50%) → CONVERGE (25%, disables purely exploratory tools to force convergence); retains only compaction rewards. |
+| **Xenon** | `BudgetManager`'s three-stage soft budget only activates when a bounded step limit is explicitly configured. With the default `XENON_MAX_ITERATIONS=0` (unlimited), ratio is always 0, phase stays EXPLORE and CONVERGE never fires. Token/time redesign or removal is tracked in #184. |
 | Other 4 | ❌. |
 
 **Xenon Advantages**: **Unique in the comparison table**. Rather than just asking an LLM for an answer, Xenon rhythmically guides the model toward the final resolution.

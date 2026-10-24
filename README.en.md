@@ -15,7 +15,7 @@
 
 <p align="center">Other agents say "done" and you take their word for it.<br/>Xenon splits the result in two: what the machine confirmed, and what you should check yourself.</p>
 
-<p align="center"><b>SWE-bench Lite, blind</b> (single <code>react</code> engine · 120 steps · official harness · mean of 3): <b>62.2%</b> on the frozen 30 · <b>52.2%</b> on the zero-overlap held-out set · <a href="#benchmark">protocol and every run</a></p>
+<p align="center"><b>SWE-bench Lite, 30-case subset, blind</b> (single <code>react</code> engine · benchmark budget 120 steps · official harness · mean of 3): <b>62.2%</b> on the frozen 30 · <b>52.2%</b> on the zero-overlap held-out set · <a href="#benchmark">protocol and every run</a></p>
 
 <p align="center">
   <a href="docs/GUIDE.md">Docs</a> ·
@@ -27,7 +27,7 @@
 </p>
 
 > [!TIP]
-> **The machine owns the process; semantic judgement stays with you.** Every tool call goes into the evidence chain (L0); the repository has exactly one blocking check (L1); semantic doubts never block delivery — they ship as a manual-verification checklist next to the answer (L2).
+> **The machine owns the process; semantic judgement stays with you.** Tool calls enter the execution ledger (L0); `/evidence` currently shows the session audit chain, while the unified claim/plan/delivery execution view is still converging (#177). There is exactly one blocking structural check at turn level (L1); semantic doubts never block delivery — they ship as a manual-verification checklist next to the answer (L2).
 
 <p align="center">
   <img src="docs/hero-terminal.en.svg" alt="Xenon terminal: what the machine confirmed in one delivery, and the two items it could not verify" width="860">
@@ -110,10 +110,10 @@ Full protocol, per-run results, judging logs and sha256-checked archives: [EVAL_
 ## What it actually does
 
 <table>
-<tr><td><b>An evidence chain, not just logs</b></td><td>Every tool call is written to an append-only hash chain (content hash + predecessor hash); <code>/evidence</code> recomputes and self-checks it at any time, catching corruption, single-point tampering and reordering.</td></tr>
-<tr><td><b>Exactly one blocking check</b></td><td>"Hollow answers" (no work done, non-answers) are deterministic — caught, fed back for a retry, and fused if the same cause repeats. Semantic doubts never block delivery; they ship as a manual-verification checklist next to the answer.</td></tr>
+<tr><td><b>An evidence chain, not just logs</b></td><td>Tool execution writes an execution ledger, while the session layer keeps an append-only audit chain; <code>/evidence</code> recomputes and self-checks the session chain at any time, catching corruption, single-point tampering and reordering. A unified claim/plan/delivery execution view is tracked in #177.</td></tr>
+<tr><td><b>Exactly one blocking structural check at turn level</b></td><td>"Hollow answers" (no work done, non-answers) are deterministic — caught, fed back for a retry, and fused if the same cause repeats. Semantic doubts never block delivery; they ship as a manual-verification checklist next to the answer.</td></tr>
 <tr><td><b>Every turn is a node in a tree</b></td><td><code>/rewind</code> goes back, <code>/fork</code> branches; after an interruption or fuse, typing "continue" resumes from that node without re-explaining context.</td></tr>
-<tr><td><b>Boundary actions ask first</b></td><td>In-workspace writes don't interrupt you; out-of-boundary writes and commands open a unified panel with a diff preview, and approvals can be scoped by target and TTL. Subagents are read-only by default.</td></tr>
+<tr><td><b>Boundary actions ask first</b></td><td>In-workspace writes don't interrupt you; out-of-boundary writes and commands open a unified panel with a diff preview. A one-shot approval binds its target; the session-level `a` rule is currently tool+TTL scoped, with finer target/command rules tracked in #181. Subagents are read-only by default.</td></tr>
 <tr><td><b>Untrusted output is tagged</b></td><td>File, web, GitHub, MCP and command output is tagged with its source and trust level; common prompt-injection patterns produce a visible warning, and the approval panel notes when an action may be driven by untrusted content. It only warns — nothing is blocked or rewritten.</td></tr>
 <tr><td><b>Routing learns from your choices</b></td><td>When you override the auto-router with <code>/mode</code>, the preferred paradigm gets a small confidence boost for similar tasks; preferences stay local — delete <code>~/.xenon/routing_preferences.json</code> to reset them.</td></tr>
 <tr><td><b>Limits are labeled honestly</b></td><td>Truncated files and exhausted context are marked as such instead of being papered over.</td></tr>
@@ -138,10 +138,10 @@ your input
 | Layer | What it checks | How it surfaces |
 |---|---|---|
 | **L0 Evidence** | Whether the process is real and replayable | Hash-chained event log; `/evidence` recomputes it |
-| **L1 Structural** | Whether the answer skipped the work | The only blocking check: retry / same-cause fuse |
+| **L1 Structural** | Whether the answer skipped the work | The blocking turn-level structural check: retry / same-cause fuse |
 | **L2 Semantic** | Whether claims, criteria and file references hold up | Never blocks; produces a "manual verification checklist", or a degraded delivery after retries run out |
 
-Semantic judgement lives in exactly one place (`xenon/turn/gate.py`); engines do no semantic evaluation. Tool success/failure comes only from the tool's own receipt — never from keyword guessing.
+`xenon/turn/gate.py` owns turn-level L1/L2 checks; a Reflection reviewer score is a separate output-quality review, not proof of a tool fact or a Claim. Tool success/failure comes only from the tool's own receipt — never from keyword guessing.
 
 `/evidence` output (structured turn summary + a one-line chain self-check):
 
@@ -193,7 +193,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 ## Environment variables
 
 <details>
-<summary>16 variables (click to expand)</summary>
+<summary>17 variables (click to expand)</summary>
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -201,8 +201,8 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 | `XENON_VERIFY_RETRIES` | Same-turn retries after a structural failure | 2 |
 | `XENON_RETRY_BUDGET_MIN/MAX` | Step-budget clamp for retry turns | 10 / 40 |
 | `XENON_GATE_FUSE_THRESHOLD` | Same-cause structural failure fuse threshold | 2 |
-| `XENON_MAX_ITERATIONS` | Steps per run (all engines, uniformly 120) | 120 |
-| `XENON_ENGINE_TIMEOUT` | Absolute engine deadline per run in seconds; on timeout the completed work is returned | 600 |
+| `XENON_MAX_ITERATIONS` | Steps per run; 0 means no step-count termination | 0 |
+| `XENON_ENGINE_TIMEOUT` | Absolute engine deadline per run in seconds; on timeout the completed work is returned | 1800 |
 | `XENON_MAX_TOKENS` | Output cap per model call | 8192 |
 | `XENON_MAX_CONTINUATIONS` | Auto-continuations after truncation | 3 |
 | `NO_COLOR` | Standard flag; disables color in output and prompt | unset |
@@ -210,6 +210,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 | `XENON_COMMAND_ALLOWLIST` | Command first-word allowlist (comma-separated) | empty = unrestricted |
 | `XENON_EXTRA_ROOTS` | Extra roots file tools may read/write outside the start directory (`;`-separated on Windows) | empty = start directory only |
 | `XENON_SESSION_EVENTS(_DIR)` | Event log toggle / directory | on |
+| `XENON_EVIDENCE_HMAC_KEY` | Optional keyed evidence-chain anchor; key is read only from the environment | off |
 | `XENON_HOOKS` | Local hooks toggle | on |
 | `XENON_ATTRIBUTION` | Attach the Xenon attribution to commits and PRs (`0` disables) | on |
 | `GITHUB_TOKEN` / `GH_TOKEN` | GitHub tool auth (raises API limits; falls back to a logged-in `gh auth token`) | empty |
@@ -238,7 +239,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 - Starter tasks: [good first issues](https://github.com/xianyu-sheng/Xenon/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 - Contributor entry point (task board and how to claim): [#144](https://github.com/xianyu-sheng/Xenon/issues/144)
 - Feature ideas / feedback / roadmap: [Roadmap & Feedback](https://github.com/xianyu-sheng/Xenon/discussions/143)
-- Quality gates: full offline suite on Linux + Windows/macOS platform smoke + Codecov coverage; 3,000+ offline test cases
+- Quality gates: full offline suite on Linux + Windows/macOS platform smoke + Codecov coverage; 3,600+ offline test cases
 - If Xenon is useful to you, a ⭐ helps more people find it
 
 ## Featured in

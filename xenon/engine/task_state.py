@@ -17,9 +17,12 @@ from typing import Any, Iterable
 
 from xenon.engine.evidence_contracts import (
     WRITE_TOOL_NAMES,
+    command_is_test_like,
+    is_non_test_invocation,
     is_test_path,
     path_key,
     paths_match,
+    tests_run_from_metadata,
 )
 
 _TEST_CREATE_RE = re.compile(
@@ -1031,17 +1034,32 @@ class TaskState:
 
         # A test run is the one failed action that changes delivery state.
         # A previous pass cannot survive a later failure or a code edit.
-        if tool in {"command", "run_script", "run_tests"} and _VERIFY_RE.search(command):
+        is_test_run = bool(
+            tool in {"command", "run_script", "run_tests"}
+            and (_VERIFY_RE.search(command) or command_is_test_like(command))
+        )
+        if is_test_run and is_non_test_invocation(command):
+            # ``pytest --version`` / ``--collect-only`` is a capability probe,
+            # not verification.  It must not clear a real failure or bless a
+            # task as tested.
+            return
+        if is_test_run:
             label = command.strip().replace(chr(10), " ")[:240]
             exit_code = _metadata_exit_code(metadata)
+            tests_run = tests_run_from_metadata(metadata, result_text)
             if exit_code is not None:
                 passed = (
                     success
                     and exit_code == 0
                     and not _verification_text_failed(result_text)
+                    and tests_run > 0
                 )
             else:
-                passed = success and _verification_passed(result_text)
+                passed = (
+                    success
+                    and _verification_passed(result_text)
+                    and tests_run > 0
+                )
             if passed:
                 if label and label not in self.tests:
                     self.tests.append(label)
@@ -1055,19 +1073,34 @@ class TaskState:
             else:
                 self.tests = []
                 self.verified_revision = 0
-                if label and label not in self.failed_tests:
-                    self.failed_tests.append(label)
+                failure_label = label
+                if success and tests_run <= 0:
+                    failure_label = (
+                        (label + " (no test execution evidence)").strip()
+                    )
+                if failure_label and failure_label not in self.failed_tests:
+                    self.failed_tests.append(failure_label)
                     self.failed_tests = self.failed_tests[-10:]
                 self.verification_failures.append(
                     {
                         "command": label,
                         "exit_code": exit_code,
-                        "output": _failure_output(metadata, result_text),
+                        "output": (
+                            "未观察到测试执行计数"
+                            if success and tests_run <= 0
+                            else _failure_output(metadata, result_text)
+                        ),
                     }
                 )
                 self.verification_failures = self.verification_failures[-3:]
 
         if not success:
+            return
+
+        if tool in WRITE_TOOL_NAMES and metadata.get("changed") is False:
+            # A successful rewrite with identical bytes is not a new artifact
+            # and must not make an earlier test result stale or satisfy a
+            # "source changed" obligation.
             return
 
         if tool in WRITE_TOOL_NAMES:

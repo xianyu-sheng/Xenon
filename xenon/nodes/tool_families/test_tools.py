@@ -18,6 +18,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from xenon.engine.evidence_contracts import parse_test_counts
+
 
 def _as_list(value: Any) -> list[str]:
     if value is None or value == "":
@@ -256,6 +258,7 @@ class TestToolsMixin:
 
         duration = round(time.monotonic() - started, 3)
         output = (proc.stdout or "") + (proc.stderr or "")
+        counts = parse_test_counts(output)
         if output.strip() and hasattr(self, "_write_output") and context is not None:
             self._write_output(context, proc.stdout.strip())
         result: dict[str, Any] = {
@@ -274,6 +277,12 @@ class TestToolsMixin:
             "stderr": proc.stderr,
             "content": output.strip(),
             "success": proc.returncode == 0,
+            **{
+                f"tests_{key}": value
+                for key, value in counts.items()
+                if key != "tests_run"
+            },
+            "tests_run": counts["tests_run"],
         }
         if proc.returncode != 0:
             result["error_kind"] = "test_failure"

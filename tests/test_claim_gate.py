@@ -735,3 +735,133 @@ def test_run_tests_tool_generates_verifiable_command_claim() -> None:
 
     assert command_claim.subject == "run_tests"
     assert verdicts[0].status == VERIFIED
+
+
+def test_command_claim_rejects_version_or_collect_only() -> None:
+    from xenon.engine.claim_gate import _command_matches
+
+    claim = claims_for_step(
+        {"id": "3", "kind": "verify", "verify_cmd": "pytest"}
+    )[0]
+    assert _command_matches("pytest", "pytest --version") is False
+    assert _command_matches("pytest tests/test_target.py", "pytest") is False
+    for command in (
+        "pytest --version",
+        "python -m pytest --collect-only",
+        "pytest --co",
+    ):
+        verdict = verify_step_claims(
+            [claim],
+            calls=[
+                _call(
+                    "command",
+                    {"command": command},
+                    success=True,
+                    summary="collected 2 items",
+                    metadata={"exit_code": 0},
+                )
+            ],
+            state=TaskState(objective="x"),
+            baseline=ClaimBaseline(),
+        )[0]
+        assert verdict.status == REJECTED, command
+
+
+def test_command_claim_requires_observed_test_execution() -> None:
+    claim = claims_for_step(
+        {"id": "3", "kind": "verify", "verify_cmd": "pytest"}
+    )[0]
+    verdict = verify_step_claims(
+        [claim],
+        calls=[
+            _call(
+                "command",
+                {"command": "pytest"},
+                success=True,
+                summary="",
+                metadata={"exit_code": 0},
+            )
+        ],
+        state=TaskState(objective="x"),
+        baseline=ClaimBaseline(),
+    )[0]
+    assert verdict.status == REJECTED
+    assert "验证" in verdict.reason or "命令" in verdict.reason
+
+
+def test_goal_verify_claim_binds_its_target_test() -> None:
+    state = TaskState(
+        objective="fix target",
+        steps=[
+            {
+                "id": "3",
+                "task": "verify target",
+                "status": "completed",
+                "kind": "verify",
+                "verify_cmd": "pytest tests/test_target.py",
+                "plan_version": 1,
+            }
+        ],
+        tests=["pytest tests/test_other.py"],
+        verified_revision=1,
+        artifacts_revision=1,
+        required=["verify"],
+    )
+    verdict = audit_goal(state)
+    target = next(v for v in verdict if v.claim.claim_id.startswith("goal:step"))
+    assert target.status == REJECTED
+    assert "目标" in target.actual or "target" in target.actual
+
+
+def test_test_artifact_claim_rejects_assertion_free_content(tmp_path) -> None:
+    claim = claims_for_step(
+        {
+            "id": "6",
+            "kind": "edit",
+            "requires_write": True,
+            "target_paths": ["tests/test_app.py"],
+        },
+        requires_new_test=True,
+    )[1]
+    path = tmp_path / "tests" / "test_app.py"
+    path.parent.mkdir(parents=True)
+    path.write_text("pass\n", encoding="utf-8")
+    verdict = verify_step_claims(
+        [claim],
+        calls=[
+            _call(
+                "write_file",
+                {"file_path": "tests/test_app.py", "content": "pass\n"},
+                metadata={"content_chars": 5},
+            )
+        ],
+        state=TaskState(objective="x"),
+        baseline=ClaimBaseline(),
+        workspace_root=tmp_path,
+    )[0]
+    assert verdict.status == REJECTED
+    assert "断言" in verdict.reason or "空操作" in verdict.reason
+
+
+def test_source_write_claim_rejects_noop_write() -> None:
+    claim = claims_for_step(
+        {
+            "id": "2",
+            "kind": "edit",
+            "requires_write": True,
+            "target_paths": ["src/app.py"],
+        }
+    )[0]
+    verdict = verify_step_claims(
+        [claim],
+        calls=[
+            _call(
+                "write_file",
+                {"file_path": "src/app.py", "content": "same"},
+                metadata={"changed": False, "changed_paths": []},
+            )
+        ],
+        state=TaskState(objective="x"),
+        baseline=ClaimBaseline(),
+    )[0]
+    assert verdict.status == REJECTED

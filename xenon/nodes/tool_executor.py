@@ -27,6 +27,7 @@ from typing import Any
 from xenon.engine.callbacks import mask_sensitive_params
 from xenon.engine.circuit_breaker import BreakerRegistry
 from xenon.engine.context import AgentContext
+from xenon.engine.evidence_contracts import parse_test_counts
 from xenon.engine.evidence_gate import GateVerdict
 from xenon.engine.evidence_runtime import (
     EventKind,
@@ -886,12 +887,17 @@ class ToolExecutor:
             tracker_metadata: dict[str, Any] = {}
             if isinstance(raw, dict):
                 for key in (
+                    "changed",
                     "changed_paths",
                     "committed_paths",
                     "exit_code",
                     "returncode",
                     "file_path",
                     "path",
+                    "tests_run",
+                    "tests_passed",
+                    "tests_failed",
+                    "tests_errors",
                 ):
                     if key in raw:
                         tracker_metadata[key] = raw[key]
@@ -899,6 +905,15 @@ class ToolExecutor:
                     value = raw.get(key)
                     if isinstance(value, str) and value.strip():
                         tracker_metadata[f"{key}_tail"] = value[-1200:]
+                if "tests_run" not in tracker_metadata:
+                    counts = parse_test_counts(
+                        (raw.get("stdout") or "") + (raw.get("stderr") or "")
+                    )
+                    if counts["tests_run"] > 0:
+                        tracker_metadata["tests_run"] = counts["tests_run"]
+                        tracker_metadata["tests_passed"] = counts["passed"]
+                        tracker_metadata["tests_failed"] = counts["failed"]
+                        tracker_metadata["tests_errors"] = counts["errors"]
             if tool_name in {"write_file", "append_file"}:
                 content = params.get("content")
                 if isinstance(content, str):
