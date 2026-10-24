@@ -257,8 +257,15 @@ def test_run_tests_feeds_real_test_artifact_and_commit_into_task_state(
 
 
 def test_test_path_outside_workspace_is_rejected(
-    tmp_path: Path, real_path_validation
+    tmp_path: Path, real_path_validation, monkeypatch
 ) -> None:
+    # CI's pytest tmp_path lives under /tmp, which is an explicit extra root by
+    # default.  Disable that exception so this test exercises the workspace
+    # fence itself on every platform.
+    import xenon.nodes.tool_node as tool_node_module
+
+    monkeypatch.setattr(tool_node_module, "_DEFAULT_EXTRA_ROOTS", ())
+    monkeypatch.delenv("XENON_EXTRA_ROOTS", raising=False)
     outside = tmp_path / "outside_test.py"
     outside.write_text("def test_ok():" + chr(10) + "    assert True" + chr(10), encoding="utf-8")
     workspace = tmp_path / "workspace"
