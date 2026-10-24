@@ -698,3 +698,131 @@ class TestDualModel:
         eng.run("做", AgentContext())
         exec_calls = [c for c in fake.calls if c[0] == "execute"]
         assert exec_calls and all(c[1] == ["only/m"] for c in exec_calls)
+
+
+class TestParallelRepairParity:
+    def test_parallel_failure_is_repaired_before_dependent_runs(self):
+        steps = [
+            {"id": 1, "task": "seed", "tool": "read_file", "params": {"file_path": "seed.py"}, "depends_on": []},
+            {"id": 2, "task": "a", "tool": "read_file", "params": {"file_path": "a.py"}, "depends_on": [1]},
+            {"id": 3, "task": "b", "tool": "read_file", "params": {"file_path": "b.py"}, "depends_on": [1]},
+            {"id": 4, "task": "dep", "tool": "read_file", "params": {"file_path": "dep.py"}, "depends_on": [2]},
+        ]
+        eng, _ = _engine({"analysis": "a", "steps": steps}, enable_parallel=True)
+        failed_once = {"a.py": False}
+
+        def fake_tool(tool, params, ctx, tracker):
+            path = str(params.get("file_path", ""))
+            if path == "a.py" and not failed_once["a.py"]:
+                failed_once["a.py"] = True
+                return "执行失败: simulated transient"
+            tracker.record(tool, params, True, "ok")
+            return f"read {path}"
+
+        def fake_llm(*args, **kwargs):
+            tracker = args[5]
+            tracker.record("read_file", {"file_path": "a.py"}, True, "repaired")
+            return "repaired"
+
+        eng._execute_step_with_tool = fake_tool
+        eng._execute_step_with_llm = fake_llm
+        warnings: list[str] = []
+        eng.callback.on_warning = warnings.append
+        ctx = AgentContext()
+        results = eng._run_dag(
+            steps,
+            "task",
+            ctx,
+            __import__("xenon.engine.tool_tracker", fromlist=["ToolExecutionTracker"]).ToolExecutionTracker(),
+            4,
+            replan_on_failure=True,
+        )
+        by_id = {r["step_id"]: r for r in results}
+        assert by_id[2]["status"] == "ok"
+        assert by_id[2]["result"] == "repaired"
+        assert by_id[4]["status"] == "ok"
+
+    def test_parallel_worker_observations_replay_into_parent_ledger(self):
+        from xenon.engine.evidence_runtime import (
+            EventKind,
+            EvidenceLedger,
+            EvidenceSource,
+            LifecyclePhase,
+        )
+
+        parent = EvidenceLedger("parent-ledger")
+        ctx = AgentContext(
+            {
+                "_task_state": {"task_id": "task-1"},
+                "_evidence_ledger": parent,
+            }
+        )
+        steps = [
+            {"id": 1, "task": "a", "tool": "read_file", "params": {"file_path": "a.py"}, "depends_on": []},
+            {"id": 2, "task": "b", "tool": "read_file", "params": {"file_path": "b.py"}, "depends_on": []},
+        ]
+        eng, _ = _engine({"analysis": "a", "steps": steps}, enable_parallel=True)
+
+        def fake_tool(tool, params, context, tracker):
+            ledger = context.get("_evidence_ledger")
+            assert ledger is not parent
+            ledger.append(
+                LifecyclePhase.POST_TOOL,
+                EventKind.TOOL_OBSERVATION,
+                EvidenceSource.TOOL,
+                {"task_id": "task-1", "tool": tool, "success": True},
+            )
+            return "ok"
+
+        eng._execute_step_with_tool = fake_tool
+        tracker = __import__("xenon.engine.tool_tracker", fromlist=["ToolExecutionTracker"]).ToolExecutionTracker()
+        wave = eng._exec_wave_parallel([1, 2], PlanDAG(steps), "task", [], ctx, 2)
+        eng._repair_parallel_wave(
+            wave,
+            PlanDAG(steps),
+            "task",
+            [],
+            ctx,
+            tracker,
+            2,
+        )
+        observations = [
+            event
+            for event in parent.events
+            if event.kind == EventKind.TOOL_OBSERVATION.value
+        ]
+        assert len(observations) == 2
+        assert all(event.payload["task_id"] == "task-1" for event in observations)
+
+
+    def test_parallel_repair_failure_keeps_skip_cascade(self):
+        steps = [
+            {"id": 1, "task": "seed", "tool": "read_file", "params": {"file_path": "seed.py"}, "depends_on": []},
+            {"id": 2, "task": "a", "tool": "read_file", "params": {"file_path": "a.py"}, "depends_on": [1]},
+            {"id": 3, "task": "b", "tool": "read_file", "params": {"file_path": "b.py"}, "depends_on": [1]},
+            {"id": 4, "task": "dep", "tool": "read_file", "params": {"file_path": "dep.py"}, "depends_on": [2]},
+        ]
+        eng, _ = _engine({"analysis": "a", "steps": steps}, enable_parallel=True)
+
+        def fake_tool(tool, params, ctx, tracker):
+            if params.get("file_path") == "a.py":
+                return "执行失败: persistent"
+            return "ok"
+
+        def fake_llm(*args, **kwargs):
+            return "执行失败: persistent"
+
+        eng._execute_step_with_tool = fake_tool
+        eng._execute_step_with_llm = fake_llm
+        ctx = AgentContext()
+        results = eng._run_dag(
+            steps,
+            "task",
+            ctx,
+            __import__("xenon.engine.tool_tracker", fromlist=["ToolExecutionTracker"]).ToolExecutionTracker(),
+            4,
+            replan_on_failure=False,
+        )
+        by_id = {r["step_id"]: r for r in results}
+        assert by_id[2]["status"] == "failed"
+        assert by_id[4]["status"] == "skipped"

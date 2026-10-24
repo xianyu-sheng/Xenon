@@ -56,6 +56,21 @@ payload:
 claim 保留为审计历史，但不会阻塞新计划的完成判断。`TaskState.maybe_complete`
 只接受当前计划中没有 rejected claim、且当前 criterion 没有 rejected 的状态。
 
+## 并行 DAG 的串行修复屏障
+
+并行 worker 不直接修改共享 TaskState，也不直接并发执行修复：
+
+| 行为 | 串行 / DAG 串行 | DAG 并行 |
+|---|---|---|
+| Claim 校验 | 步骤完成后立即 | worker 只校验，主线程记录 |
+| 失败修复 | 同一步骤内 | 波次汇合后串行修复 |
+| 依赖步骤 | 修复成功则继续 | 修复成功则依赖继续运行 |
+| 证据 | 父 ledger | worker 私有 ledger，屏障处 replay 到父 ledger |
+| 修复失败 | 重规划/兜底 | 保持原 skip-cascade / 有界重规划 |
+
+这样不会让两个 worker 同时写同一工作区，同时保持 serial 和 parallel 的
+failure → repair → verify 契约一致。
+
 ## 步骤内修复
 
 Plan-Execute 在每个步骤完成后立即运行 claim gate：
@@ -64,8 +79,8 @@ Plan-Execute 在每个步骤完成后立即运行 claim gate：
   `_repair_failed_step`；
 - 修复轮成功后再检查 claim；仍失败则继续同一步骤的有限修复；
 - 同一错误重复出现时短路，不无限重试；
-- 串行、DAG 串行和 DAG 并行 worker 都覆盖；并行 worker 的 claim 结果在
-  主线程波次屏障记录，避免并发修改 TaskState。
+- 串行、DAG 串行和 DAG 并行 worker 都覆盖；并行 worker 的 claim 结果和
+  工具 observation 在主线程波次屏障记录/replay，避免并发修改 TaskState。
 
 ## 最终 Goal Audit
 
@@ -94,6 +109,8 @@ rejected criterion。
 - `tests/test_claim_gate.py`：baseline 隔离、pending/verified claim、文件/命令/
   commit/空测试、用户验收条件、goal audit、投影回放、步骤内修复、delivery
   定向修复。
+- `tests/test_e2_plan_dag.py`：并行失败修复后依赖继续运行；修复失败保留
+  skip-cascade；worker observation 在屏障处进入父 ledger。
 - `tests/test_task_state.py`：旧计划 claim 不阻塞新计划；skipped 侦察/执行
   步骤在有已验证目标条件时不掩盖真实交付。
 - 全量测试通过后提交；真实基准用例需单独记录，不把单轮成绩外推。

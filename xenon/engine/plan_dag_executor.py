@@ -9,7 +9,9 @@ _declared_paths / _wave_parallel_blocker / _build_prev_results / _step_outcome
 
 from __future__ import annotations
 
+import copy
 import logging
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +25,7 @@ from xenon.nodes.tool_executor import ToolExecuteResult
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass
 class StepOutcome:
     """Structured execution state retained until dependency scheduling completes."""
 
@@ -31,10 +33,104 @@ class StepOutcome:
     success: bool
     error: str | None = None
     claim_verdicts: tuple[Any, ...] = ()
+    worker_ledger: Any = None
 
 
 class PlanDAGExecutorMixin:
     """DAG 波次执行原语。宿主须提供 BaseEngine 的共享属性/方法。"""
+
+    def _replay_worker_ledger(self, ctx: AgentContext, ledger: Any) -> None:
+        """Copy isolated worker evidence into the parent durable stream."""
+        parent = ctx.get("_evidence_ledger")
+        if parent is None or ledger is None or parent is ledger:
+            return
+        for event in list(getattr(ledger, "events", []) or []):
+            parent.append(
+                event.phase,
+                event.kind,
+                event.source,
+                copy.deepcopy(event.payload),
+            )
+
+    def _repair_parallel_wave(
+        self,
+        wave_results: list[tuple[Any, str, StepOutcome, ToolExecutionTracker]],
+        dag: PlanDAG,
+        user_input: str,
+        results: list[dict[str, Any]],
+        ctx: AgentContext,
+        tracker: ToolExecutionTracker,
+        total: int,
+        steering: list[dict[str, Any]] | None = None,
+    ) -> list[tuple[Any, str, StepOutcome, ToolExecutionTracker]]:
+        """Apply the serial repair policy after a parallel wave joins."""
+        if not any(sub is not None for _, _, _, sub in wave_results):
+            return wave_results
+        for _sid, _task, outcome, sub in wave_results:
+            if sub is not None:
+                tracker.calls.extend(sub.calls)
+            self._replay_worker_ledger(
+                ctx, getattr(outcome, "worker_ledger", None)
+            )
+            outcome.worker_ledger = None
+
+        base_results = list(results)
+        for sid, task, outcome, _sub in wave_results:
+            if outcome.success:
+                base_results.append(
+                    {
+                        "step_id": sid,
+                        "task": task,
+                        "result": outcome.content,
+                        "status": "ok",
+                    }
+                )
+
+        repaired: list[tuple[Any, str, StepOutcome, ToolExecutionTracker]] = []
+        for sid, task, outcome, _sub in wave_results:
+            if outcome.success:
+                repaired.append((sid, task, outcome, None))
+                continue
+            step = dag.step(sid)
+            try:
+                candidate, attempts = self._repair_failed_step(
+                    step=step,
+                    step_id=sid,
+                    step_task=task,
+                    total=total,
+                    outcome=outcome,
+                    prev_results=self._build_prev_results(base_results),
+                    user_input=user_input,
+                    tracker=tracker,
+                    ctx=ctx,
+                    steering=steering,
+                    claim_baseline=self._claim_baseline(ctx, tracker),
+                )
+            except Exception as exc:  # noqa: BLE001 — repair cannot crash wave
+                logger.warning("并行步骤 %s 波次后修复异常: %s", sid, exc)
+                candidate = StepOutcome(
+                    outcome.content,
+                    False,
+                    "波次后修复异常: " + str(exc)[:300],
+                )
+                attempts = 1
+            if candidate.success:
+                self.callback.on_warning(
+                    f"并行步骤 {sid} 已在波次后原地修复 ({attempts} 次尝试)"
+                )
+                base_results.append(
+                    {
+                        "step_id": sid,
+                        "task": task,
+                        "result": candidate.content,
+                        "status": "ok",
+                    }
+                )
+                candidate.claim_verdicts = ()
+            else:
+                candidate.claim_verdicts = outcome.claim_verdicts
+            repaired.append((sid, task, candidate, None))
+        return repaired
 
     # ── Phase 2: DAG 波次执行（P2-E2） ────────────────────────
     def _run_dag(
@@ -206,6 +302,18 @@ class PlanDAGExecutorMixin:
                     total,
                     steering=_steer_pending,
                 )
+            # Join worker evidence and apply the serial repair policy before
+            # dependent steps are marked skipped.
+            wave_results = self._repair_parallel_wave(
+                wave_results,
+                dag,
+                user_input,
+                results,
+                ctx,
+                tracker,
+                total,
+                steering=_steer_pending,
+            )
             _steer_pending = []
 
             # 合并（主线程，单线程，无竞争）：追加结果 + 合并隔离 tracker
@@ -552,12 +660,24 @@ class PlanDAGExecutorMixin:
             # 隔离 ctx/tracker：仅复制对话消息作历史兜底，store/tracker 独立
             iso_ctx = AgentContext()
             iso_ctx.set_conversation_messages(list(ctx.get_conversation_messages()))
-            # The worker owns an isolated store, but its durable lifecycle
-            # events must be published to the parent session.  Otherwise an
-            # explicitly enabled parallel Plan-Execute run disappears from
-            # crash recovery even though ReAct's shared-context path works.
+            # Workers use a private ledger so their tool observations cannot
+            # race the parent TaskState projection.  The main thread replays
+            # this ledger after the wave barrier.
             if hasattr(ctx, "record_tool_checkpoint"):
                 iso_ctx.set_tool_checkpoint_callback(ctx.record_tool_checkpoint)
+            from xenon.engine.evidence_runtime import EvidenceLedger
+
+            parent_ledger = ctx.get("_evidence_ledger")
+            parent_state = ctx.get("_task_state")
+            worker_session = (
+                f"{getattr(parent_ledger, 'session_id', 'parallel')}:"
+                f"{sid}:{uuid.uuid4().hex[:8]}"
+            )
+            worker_ledger = EvidenceLedger(worker_session)
+            iso_ctx.set("_evidence_session_id", worker_session)
+            iso_ctx.set("_evidence_ledger", worker_ledger)
+            if isinstance(parent_state, dict):
+                iso_ctx.set("_task_state", copy.deepcopy(parent_state))
             iso_tracker = ToolExecutionTracker()
             write_count_before = self._successful_write_count(iso_tracker)
             claim_baseline = self._claim_baseline(ctx, iso_tracker)
@@ -619,6 +739,7 @@ class PlanDAGExecutorMixin:
                         "Claim gate: " + self._claim_failure_text(verdicts),
                         claim_verdicts,
                     )
+            outcome.worker_ledger = worker_ledger
             return (sid, step_task, outcome, iso_tracker)
 
         workers = min(len(to_run), self.max_parallel_workers)

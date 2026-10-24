@@ -538,3 +538,41 @@ def test_step_start_records_pending_claim_before_execution() -> None:
     assert claims[0].payload["status"] == "pending"
     assert claims[0].payload["plan_version"] == 2
     assert claims[0].source == EvidenceSource.ENGINE.value
+
+
+def test_direct_engine_acceptance_criterion_gets_targeted_retry() -> None:
+    from xenon.engine.callbacks import EngineCallback
+    from xenon.engine.context import AgentContext
+    from xenon.engine.result import TerminationReason
+    from xenon.engine.task_runtime import run_with_delivery
+    from xenon.engine.tool_tracker import ToolExecutionTracker
+
+    class _Engine:
+        def __init__(self) -> None:
+            self.callback = EngineCallback()
+            self._last_tracker = ToolExecutionTracker()
+            self._last_termination_reason = None
+            self.prompts: list[str] = []
+
+        def run(self, user_input, context=None, ctx_mgr=None):
+            self.prompts.append(user_input)
+            if len(self.prompts) > 1:
+                self._last_tracker.record(
+                    "command",
+                    {"command": "pytest -q"},
+                    True,
+                    "1 passed",
+                    metadata={"exit_code": 0},
+                )
+            return "done"
+
+    state = TaskState(objective="修好这个 bug，直到 CI 通过", execution_level=3)
+    context = AgentContext({"_task_state": state.to_dict()})
+    engine = _Engine()
+    result = run_with_delivery(engine, "finish", context, max_delivery_retries=1)
+
+    final = TaskState.from_context(context)
+    assert result.reason is TerminationReason.FINAL
+    assert final is not None and final.status == "completed"
+    assert "用户验收条件" in engine.prompts[1]
+    assert "CI 通过" in engine.prompts[1]
