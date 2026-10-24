@@ -843,3 +843,14 @@ def test_noop_write_does_not_satisfy_source_change() -> None:
     )
     assert state.artifacts == []
     assert "changes" in state.missing_delivery()
+
+
+def test_negative_push_does_not_require_pr_delivery():
+    required = required_delivery_for(
+        "修复 bug，运行 pytest，然后 git commit；不要 push。",
+        level=2,
+        intent="write_code",
+    )
+
+    assert required == ["verify"]
+    assert "pr" not in required

@@ -1341,7 +1341,11 @@ def required_delivery_for(
         required.update({"verify", "commit"})
     if re.search(r"(?:\bPR\b|pull\s+request|创建\s*PR|开\s*PR|提\s*PR|push)", text, re.I):
         required.update({"verify", "commit", "pr"})
-    if re.search(r"(?:不要|无需|不用).{0,8}(?:提交|commit|PR)", text, re.I):
+    if re.search(
+        r"(?:不要|无需|不用|禁止|别).{0,8}(?:提交|commit|PR|push|推送)",
+        text,
+        re.I,
+    ):
         required.discard("commit")
         required.discard("pr")
     return sorted(required)

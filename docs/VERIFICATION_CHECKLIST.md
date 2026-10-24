@@ -204,3 +204,5 @@
 | 2026-10-24 | 原子任务配方 / MCP scope guard | #189 基线：`mcp.install` recipe 固定 mcp_install→mcp_verify，ReAct schema 只暴露配方工具，ToolExecutor 拒绝 repo/test/git/source 操作，软预算 8；不创建 TaskState 交付门；recipe/guard 7 passed（含 ReAct+fake stdio 端到端、stale recipe 清理）；真实 ConPTY：3 tools、0 workspace 文件，transcript `docs/TTY_TRANSCRIPT_189.md`；全量 3702 passed/98 skipped，ruff 绿 |
 
 | 2026-10-24 | 核心工具面 #190 基线 | 新增 `XENON_TOOL_PROFILE=core`：模型只看到 read/search/apply_patch/bash/mcp_*；新增 core aliases、`apply_patch` 事务编辑、bash 的 pytest 计数适配、TaskState/evidence 兼容；`legacy` 仍为默认；tool profile/core alias 5 passed，全量 3707 passed/98 skipped，ruff 绿 |
+
+| 2026-10-24 | core profile 真实 smoke | `XENON_TOOL_PROFILE=core`：7 个可见工具；真实 TTY 用 read→apply_patch→bash pytest→bash commit，目标测试 1 passed、commit、工作区干净；无 run_tests/git/write_file 暴露；负向“不要 push”不再要求 PR；transcript `docs/TTY_TRANSCRIPT_190_CORE.md`；全量 3708 passed/98 skipped，ruff 绿 |
