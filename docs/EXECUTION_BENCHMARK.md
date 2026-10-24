@@ -96,6 +96,23 @@ raw JSON and the denominator.  They do **not** validate the post-fix code, so
 this document does not claim 9/9.  Re-run after restoring credentials and
 publish the new raw JSON before making a stable-rate claim.
 
+## Run C — post-fix (2026-10-24)
+
+`D:/tmp/xenon-bench-repeat3/report.json`
+
+```text
+9/9 passed, completion_rate=1.0000
+false_completion_count=0
+repair_success_rate=1.0 (9/9 runs had tool failures)
+infrastructure_failure_count=0
+median 100.4s / 26 tools, p95 300.6s / 52 tools
+failure_categories: {}
+```
+
+This is the post-fix validation for the stale-claim and finalize/delivery
+changes.  It is still a three-case, nine-run sample, not a general completion
+rate or a 10-case guarantee.  The raw per-run JSON is retained.
+
 ## Historical baseline (2026-10-22)
 
 Model: `deepseek/deepseek-v4-flash`
