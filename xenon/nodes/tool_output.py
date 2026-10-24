@@ -108,7 +108,7 @@ def build_model_observation(
     if not result_id:
         return None
     payload = raw if isinstance(raw, dict) else {}
-    if tool in {"command", "run_script"}:
+    if tool in {"command", "run_script", "run_tests"}:
         view = _command_view(payload, evidence, result_id)
     elif tool == "read_file":
         view = _read_view(payload, evidence, result_id)

@@ -117,6 +117,8 @@ class ExecutionEvidence:
                 command = _command_text(call)
                 if _TEST_COMMAND.search(command):
                     tests.append(command)
+            elif call.tool_name == "run_tests":
+                tests.append("run_tests")
         status, diff = _workspace_snapshot(workspace_root)
         return cls(calls, changed_files, tests, failures, status, diff)
 

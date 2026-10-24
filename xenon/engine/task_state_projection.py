@@ -134,6 +134,47 @@ class TaskStateProjection:
             self._publish(notify=True)
             return
 
+        if event.kind == EventKind.DELIVERY.value:
+            # Delivery facts are the durable counterpart of the worktree probe
+            # and criterion audit.  Replaying them must reconstruct the same
+            # missing_delivery()/status without trusting a mutable live object.
+            for key in ("dirty_paths", "dirty_staged_paths", "dirty_unstaged_paths"):
+                if isinstance(payload.get(key), list):
+                    setattr(
+                        self.state,
+                        key,
+                        [str(item) for item in payload[key] if str(item)],
+                    )
+            if "dirty" in payload and payload["dirty"] in {True, False, None}:
+                self.state.dirty_after_commit = payload["dirty"]
+            for key in ("tests", "failed_tests", "verification_failures"):
+                if isinstance(payload.get(key), list):
+                    setattr(self.state, key, list(payload[key]))
+            for key in ("artifacts_revision", "verified_revision", "committed_revision"):
+                value = payload.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    setattr(self.state, key, value)
+            commit = str(payload.get("commit") or "")
+            if commit:
+                self.state.commit = commit
+            if isinstance(payload.get("committed_paths"), list):
+                self.state.committed_artifacts = [
+                    str(item) for item in payload["committed_paths"] if item
+                ]
+                self.state.commit_paths_known = True
+            if isinstance(payload.get("committed_source_paths"), list):
+                self.state.committed_source_paths = [
+                    str(item)
+                    for item in payload["committed_source_paths"]
+                    if item
+                ]
+                self.state.source_commit_tracking = True
+            status = str(payload.get("status") or "")
+            if status in {"completed", "blocked"}:
+                self.state.status = status
+            self._publish(notify=True)
+            return
+
         if event.kind != EventKind.TOOL_OBSERVATION.value:
             return
         metadata = payload.get("metadata")

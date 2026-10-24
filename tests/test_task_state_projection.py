@@ -428,3 +428,46 @@ def test_new_ledger_session_resets_the_sequence_cursor() -> None:
     assert state.evidence_sequence == 1
     assert state.evidence_session_id == "new-session"
     projection.close()
+
+
+def test_delivery_event_replays_missing_delivery_and_status() -> None:
+    state = _state()
+    ledger = EvidenceLedger("delivery-replay")
+    ledger.append(
+        LifecyclePhase.TASK,
+        EventKind.TASK_FACT,
+        EvidenceSource.ENGINE,
+        {"task_id": state.task_id},
+    )
+    ledger.append(
+        LifecyclePhase.DELIVERY,
+        EventKind.DELIVERY,
+        EvidenceSource.GATE,
+        {
+            "task_id": state.task_id,
+            "missing": [],
+            "dirty": False,
+            "dirty_paths": [],
+            "dirty_staged_paths": [],
+            "dirty_unstaged_paths": [],
+            "commit": "abc1234",
+            "committed_paths": ["src/app.py"],
+            "committed_source_paths": ["src/app.py"],
+            "committed_revision": 1,
+            "tests": ["run_tests pytest tests/test_app.py"],
+            "failed_tests": [],
+            "verification_failures": [],
+            "artifacts_revision": 1,
+            "verified_revision": 1,
+            "status": "completed",
+        },
+    )
+
+    projection = TaskStateProjection(state).attach(ledger, replay=True)
+
+    assert state.missing_delivery() == []
+    assert state.status == "completed"
+    assert state.commit == "abc1234"
+    assert state.dirty_after_commit is False
+    assert state.evidence_sequence == 2
+    projection.close()

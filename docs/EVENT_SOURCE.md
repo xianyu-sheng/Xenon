@@ -21,10 +21,15 @@ replayable projections.
 - Tool observations now carry structured `metadata` (exit code, changed /
   committed paths, result id), so projections do not have to parse prose.
 - `TaskStateProjection` consumes `tool_observation`, `plan`,
-  `plan_step_started` and `plan_step_finished` events, replays from a
-  `task_fact` boundary, and deduplicates tool observations by `result_id`.
-  `run_with_delivery` uses it when a boundary exists and falls back to the
-  tracker otherwise.
+  `plan_step_started`, `plan_step_finished`, `claim` and `delivery` events,
+  replays from a `task_fact` boundary, and deduplicates tool observations by
+  `result_id`.  `run_with_delivery` uses it when a boundary exists and falls
+  back to the tracker otherwise.
+- `run_with_delivery` appends a `delivery` event after every probe/audit with
+  dirty/staged/test/commit facts, missing dimensions and status.  Replaying the
+  event reconstructs `missing_delivery()` and the completed status without
+  relying on a mutable snapshot.  Payloads contain paths and booleans, not file
+  contents or secrets.
 - REPL auto-save / `/save` persist a verified ledger snapshot; `/load` and
   `/resume` rebind it before execution, so replay survives a restart.
 - `EngineCallback` / `EventBus` are **ephemeral UI channels**.  They must not be
@@ -46,6 +51,24 @@ replayable projections.
    event id.
 4. UI subscribers may drop events; durable projections may not.
 5. A failed subscriber is logged and isolated.
+
+## Delivery replay (partial #170)
+
+```text
+kind: delivery
+source: gate
+payload:
+  task_id / attempt / missing
+  dirty / dirty_paths / dirty_staged_paths / dirty_unstaged_paths
+  commit / committed_paths / committed_source_paths / committed_revision
+  tests / failed_tests / verification_failures
+  artifacts_revision / verified_revision / status
+```
+
+The live runtime still owns the transaction that runs `git`, probes the
+worktree and marks completion; the event is the durable mirror used by
+projection and audit.  Full ledger-only delivery mutation remains tracked as
+#170/#172.
 
 ## Target migration
 

@@ -75,6 +75,7 @@ from xenon.nodes.tool_families.result_filtering import (
     _prefilter_time_records,  # noqa: F401 - private compatibility export
 )
 from xenon.nodes.tool_families.script_tools import ScriptToolsMixin
+from xenon.nodes.tool_families.test_tools import TestToolsMixin
 from xenon.nodes.tool_families.tool_result_tools import ToolResultToolsMixin
 from xenon.nodes.tool_families.utility import UtilityToolsMixin
 from xenon.nodes.tool_families.web_tools import WebToolsMixin
@@ -352,6 +353,7 @@ class ToolNode(
     MCPToolsMixin,
     PlanToolsMixin,
     ScriptToolsMixin,
+    TestToolsMixin,
     ToolResultToolsMixin,
     ReadOnlyFileToolsMixin,
     DocumentToolsMixin,
@@ -406,6 +408,12 @@ class ToolNode(
         # run_script 参数
         language: str = "python",
         code: str = "",
+        # run_tests 参数（结构化测试执行，不经过 shell）
+        test_framework: str = "auto",
+        test_paths: list[str] | str | None = None,
+        test_args: list[str] | str | None = None,
+        test_command: list[str] | str | None = None,
+        interpreter: str = "",
         # tool_result_read 参数
         result_id: str = "",
         mode: str = "summary",
@@ -489,6 +497,11 @@ class ToolNode(
         self.explanation = explanation
         self.language = language
         self.code = code
+        self.test_framework = test_framework
+        self.test_paths = test_paths or []
+        self.test_args = test_args or []
+        self.test_command = test_command or []
+        self.interpreter = interpreter
         self.result_id = result_id
         self.mode = mode
         self.symbol = symbol
@@ -605,6 +618,11 @@ class ToolNode(
         "mode": ["read_mode", "result_mode"],
         "language": ["script_language", "shell"],
         "code": ["script", "source"],
+        "test_framework": ["framework", "runner", "test_runner"],
+        "test_paths": ["test_files", "test_file", "paths"],
+        "test_args": ["pytest_args", "test_options", "args"],
+        "test_command": ["test_argv", "custom_test_command"],
+        "interpreter": ["python_interpreter", "python_path"],
         # v0.6.1: LSP 参数
         "line": ["row", "lineno", "line_number"],
         "column": ["col", "colno", "column_number", "cursor"],
@@ -642,6 +660,11 @@ class ToolNode(
         "explanation",
         "language",
         "code",
+        "test_framework",
+        "test_paths",
+        "test_args",
+        "test_command",
+        "interpreter",
         "result_id",
         "mode",
         "symbol",
@@ -779,7 +802,11 @@ class ToolNode(
         try:
             return path.resolve(strict=False)
         except (OSError, RuntimeError):
-            return Path(os.path.normpath(str(path)))
+            # ``normpath`` is lexical but can leave ``..`` on some Windows
+            # short-path/long-path combinations.  ``abspath`` then collapses
+            # it, so a fallback can never turn a traversal into a false
+            # containment success.
+            return Path(os.path.abspath(str(path)))
 
     def _validate_path(self, file_path: str, *, for_write: bool = False) -> Path:
         """验证文件路径是否在安全范围内。

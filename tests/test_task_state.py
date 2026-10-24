@@ -778,3 +778,37 @@ def test_react_tool_failure_is_diagnostic_not_a_completion_blocker() -> None:
     assert state.claim_failures() == []
     assert state.claim_failures(include_tool=True)
     assert state.maybe_complete() is True
+
+
+def test_later_clean_and_commit_supersede_rejected_claims() -> None:
+    state = TaskState(
+        objective="x",
+        execution_level=3,
+        required=["verify", "commit"],
+        artifacts=["src/app.py"],
+        tests=["run_tests pytest tests/test_x.py"],
+        artifacts_revision=1,
+        verified_revision=1,
+        commit="abc1234",
+        dirty_after_commit=False,
+        claims=[
+            {
+                "claim_id": "step:2:commit_created:",
+                "kind": "commit_created",
+                "status": "rejected",
+                "origin": "plan_contract",
+                "plan_version": 1,
+            },
+            {
+                "claim_id": "step:3:worktree_clean:",
+                "kind": "worktree_clean",
+                "status": "rejected",
+                "origin": "plan_contract",
+                "plan_version": 1,
+            },
+        ],
+    )
+
+    assert state.maybe_complete() is True
+    assert state.claim_failures() == []
+    assert all(c["status"] == "superseded" for c in state.claims)

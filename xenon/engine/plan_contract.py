@@ -27,7 +27,7 @@ STEP_KINDS = frozenset(
 _VERIFY_RE = re.compile(
     r"(?:pytest|py\.test|unittest|tox|nox|ruff|mypy|pyright|"
     r"npm\s+(?:test|run\s+test)|pnpm\s+test|yarn\s+test|"
-    r"cargo\s+test|go\s+test|make\s+test)",
+    r"cargo\s+test|go\s+test|make\s+test|run_tests)",
     re.I,
 )
 _COMMIT_RE = re.compile(r"\bgit\s+commit\b|\bcommit\b|提交", re.I)
@@ -63,6 +63,8 @@ def _text(value: Any) -> str:
 
 
 def _command_from_step(step: dict[str, Any]) -> str:
+    if _text(step.get("tool")).strip() == "run_tests":
+        return "run_tests"
     params = step.get("params")
     if not isinstance(params, dict):
         return ""
@@ -87,6 +89,8 @@ def infer_step_kind(step: dict[str, Any]) -> str:
     command = _command_from_step(step)
     if tool in WRITE_TOOL_NAMES:
         return "edit"
+    if tool == "run_tests":
+        return "verify"
     if tool == "git":
         if _COMMIT_RE.search(task + " " + command):
             return "commit"

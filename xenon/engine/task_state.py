@@ -19,6 +19,7 @@ from xenon.engine.evidence_contracts import (
     WRITE_TOOL_NAMES,
     is_test_path,
     path_key,
+    paths_match,
 )
 
 _TEST_CREATE_RE = re.compile(
@@ -171,6 +172,12 @@ def _text(value: Any) -> str:
 
 
 def _tool_command(tool: str, params: dict[str, Any]) -> str:
+    if tool == "run_tests":
+        framework = _text(params.get("test_framework") or "auto")
+        paths = params.get("test_paths")
+        if isinstance(paths, (list, tuple)):
+            paths = " ".join(str(item) for item in paths)
+        return ("run_tests " + framework + " " + _text(paths)).strip()
     for key in ("action", "command", "code", "script", "cmd"):
         value = params.get(key)
         if isinstance(value, str) and value.strip():
@@ -487,6 +494,50 @@ class TaskState:
         except (TypeError, ValueError):
             version = self.plan_version
         return version == self.plan_version
+
+    def reconcile_satisfied_claims(self) -> None:
+        """Retire rejected claims whose delivery fact was later satisfied.
+
+        A clean/worktree or commit claim can fail during a repair turn, then a
+        later deterministic probe/commit can satisfy the same obligation.  The
+        old rejection is audit history, not a permanent blocker.  We mark it
+        superseded rather than silently deleting it.
+        """
+        current = [
+            claim
+            for claim in self.claims
+            if claim.get("status") == "rejected"
+            and self._claim_in_current_plan(claim)
+        ]
+        if not current:
+            return
+        for claim in current:
+            kind = _text(claim.get("kind"))
+            satisfied = False
+            reason = ""
+            if kind == "worktree_clean" and self.dirty_after_commit is False:
+                satisfied = True
+                reason = "later worktree probe is clean"
+            elif kind in {"commit_created", "commit_present"} and self.commit:
+                satisfied = True
+                reason = "later real commit exists"
+            elif kind == "command_passed" and (
+                self.tests and self.verified_revision >= self.artifacts_revision
+            ):
+                satisfied = True
+                reason = "later verification passed on the current revision"
+            elif kind in {"file_written", "source_write", "test_artifact_nonempty"}:
+                subject = _text(claim.get("subject"))
+                if subject and any(
+                    paths_match(subject, path) for path in self.artifacts
+                ):
+                    satisfied = True
+                    reason = "later artifact write exists"
+            if satisfied:
+                claim["status"] = "superseded"
+                claim["reason"] = reason
+                claim["actual"] = reason
+        self.updated_at = time.time()
 
     def claim_failures(self, *, include_tool: bool = False) -> list[dict[str, Any]]:
         """Claims explicitly rejected by a deterministic gate.
@@ -826,6 +877,7 @@ class TaskState:
         """Mark completed only when plan, claims and delivery are finished."""
         if self.missing_delivery():
             return False
+        self.reconcile_satisfied_claims()
         if self.claim_failures():
             return False
         if any(
@@ -974,7 +1026,7 @@ class TaskState:
 
         # A test run is the one failed action that changes delivery state.
         # A previous pass cannot survive a later failure or a code edit.
-        if tool in {"command", "run_script"} and _VERIFY_RE.search(command):
+        if tool in {"command", "run_script", "run_tests"} and _VERIFY_RE.search(command):
             label = command.strip().replace(chr(10), " ")[:240]
             exit_code = _metadata_exit_code(metadata)
             if exit_code is not None:

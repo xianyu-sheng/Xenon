@@ -225,3 +225,81 @@ def test_repair_rotates_configured_executor_models() -> None:
 
     assert engine._repair_model_priority(1) == ["first/model", "second/model"]
     assert engine._repair_model_priority(2) == ["second/model", "first/model"]
+
+
+def test_code_plan_without_verify_gets_deterministic_run_tests_step() -> None:
+    engine = PlanExecuteEngine(["fake/model"], max_steps=0, max_replans=2)
+    engine._task_requires_write = lambda *args, **kwargs: True  # type: ignore[method-assign]
+    engine._call_llm_for_phase = lambda *args, **kwargs: '{"steps": []}'  # type: ignore[method-assign]
+    steps = [
+        {"id": 1, "task": "read the source", "tool": "read_file", "params": {}},
+    ]
+
+    result = engine._ensure_plan_has_verify_step(
+        "implement the fix", {"steps": steps}, steps, AgentContext({})
+    )
+
+    assert result[-1]["tool"] == "run_tests"
+    assert result[-1]["kind"] == "verify"
+    assert result[-1]["origin"] == "remediation"
+    assert result[-1]["verify_cmd"] == "run_tests"
+    assert result[-1]["depends_on"] == [1]
+
+
+def test_valid_write_and_verify_plan_is_not_replanned() -> None:
+    engine = PlanExecuteEngine(["fake/model"], max_steps=0, max_replans=2)
+    engine._task_requires_write = lambda *args, **kwargs: True  # type: ignore[method-assign]
+    calls: list[object] = []
+    engine._call_llm_for_phase = lambda *args, **kwargs: calls.append(1) or "{}"  # type: ignore[method-assign]
+    steps = [
+        {"id": 1, "task": "write", "tool": "write_file", "params": {}},
+        {
+            "id": 2,
+            "task": "verify",
+            "tool": "run_tests",
+            "params": {"test_framework": "auto"},
+        },
+    ]
+
+    result = engine._ensure_plan_has_verify_step(
+        "implement the fix", {"steps": steps}, steps, AgentContext({})
+    )
+
+    assert result is steps
+    assert calls == []
+
+
+def test_replan_with_write_and_verify_is_accepted() -> None:
+    engine = PlanExecuteEngine(["fake/model"], max_steps=0, max_replans=2)
+    engine._task_requires_write = lambda *args, **kwargs: True  # type: ignore[method-assign]
+    engine._call_llm_for_phase = lambda *args, **kwargs: (  # type: ignore[method-assign]
+        '{"steps": ['
+        '{"id": 1, "task": "write", "tool": "write_file", "params": {}},'
+        '{"id": 2, "task": "verify", "tool": "command", '
+        '"params": {"command": "pytest -q"}}]}'
+    )
+    original = [{"id": 9, "task": "inspect", "tool": "read_file", "params": {}}]
+
+    result = engine._ensure_plan_has_verify_step(
+        "implement the fix", {"steps": original}, original, AgentContext({})
+    )
+
+    assert [step["tool"] for step in result] == ["write_file", "command"]
+
+
+def test_inserted_verify_runs_before_commit_and_commit_depends_on_it() -> None:
+    engine = PlanExecuteEngine(["fake/model"], max_steps=0, max_replans=2)
+    engine._task_requires_write = lambda *args, **kwargs: True  # type: ignore[method-assign]
+    engine._call_llm_for_phase = lambda *args, **kwargs: '{"steps": []}'  # type: ignore[method-assign]
+    steps = [
+        {"id": 1, "task": "write", "tool": "write_file", "params": {}},
+        {"id": 2, "task": "git commit", "tool": "git", "params": {}},
+    ]
+
+    result = engine._ensure_plan_has_verify_step(
+        "implement the fix", {"steps": steps}, steps, AgentContext({})
+    )
+
+    assert [step["id"] for step in result] == [1, 3, 2]
+    assert result[1]["tool"] == "run_tests"
+    assert result[2]["depends_on"] == [3]

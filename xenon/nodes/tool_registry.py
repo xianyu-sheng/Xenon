@@ -208,6 +208,7 @@ BUILTIN_TOOL_METHODS: dict[str, str] = {
     "spawn_agent": "_spawn_agent",  # 引擎层拦截，注册表仅声明 risk 分类
     "update_plan": "_update_plan",
     "run_script": "_run_script",
+    "run_tests": "_run_tests",
     "tool_result_read": "_tool_result_read",
 }
 

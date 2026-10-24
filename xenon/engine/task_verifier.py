@@ -74,13 +74,13 @@ def verify_final_answer(
             failed_commands = [
                 e
                 for e in failures
-                if str(e.get("tool", "")).lower() in {"command", "git", "pytest"}
+                if str(e.get("tool", "")).lower() in {"command", "git", "pytest", "run_tests"}
             ]
             ok_commands = [
                 e
                 for e in events
                 if e.get("success")
-                and str(e.get("tool", "")).lower() in {"command", "git", "pytest"}
+                and str(e.get("tool", "")).lower() in {"command", "git", "pytest", "run_tests"}
             ]
             if failed_commands or not ok_commands:
                 reasons.append(f"完成准则未满足: {criterion}")

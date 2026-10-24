@@ -9,10 +9,32 @@ repositories.
 ```bash
 python evals/execution_benchmark.py --workdir D:/tmp/xenon-bench
 python evals/execution_benchmark.py --cases calc,fix_bug,cli_summary
+python evals/execution_benchmark.py --cases calc,fix_bug --repeat 3
 ```
 
-Results are written to `<workdir>/benchmark.json` (or `--json PATH`).  The
-script returns non-zero when any case fails.
+Results are written to `<workdir>/benchmark.json` (or `--json PATH`).  Each
+repeat gets a fresh repository (`<case>-rN`); raw runs are never replaced by
+an aggregate.  The script returns non-zero when any run fails.
+
+## Metrics
+
+The JSON contains both raw runs and aggregate fields.  Failed and
+infrastructure-failed runs stay in the denominator:
+
+```text
+completion_rate
+false_completion_count       # TaskState completed but checks failed
+repair_success_rate          # failed-tool runs that still delivered
+median/p95 duration + tool calls
+failure_categories
+infrastructure_failure_count
+completion_rate_excluding_infrastructure
+```
+
+`api_or_credentials`, `timeout`, `test_failure`, `dirty_worktree`,
+`no_source_write`, `missing_commit`, `tool_security` and
+`task_state_incomplete` are stable failure categories.  A benchmark is not a
+guarantee; a single run is not a completion-rate claim.
 
 ## Cases
 
@@ -38,7 +60,43 @@ A case passes only when all of these are true:
 - `TaskState.status == "completed"`;
 - case-specific source behaviour is correct.
 
-## Baseline (2026-10-22)
+## Latest repeated runs (2026-10-24)
+
+Model: `deepseek/deepseek-v4-flash`; selected cases:
+`calc,fix_bug,cli_summary`; `--repeat 3`.
+
+### Run A — before stale-claim reconciliation
+
+`D:/tmp/xenon-bench-repeat/report.json`
+
+```text
+7/9 passed, completion_rate=0.7778, false_completion_count=0
+median 158.4s / 32 tools, p95 393.1s / 82 tools
+failures: 2 × task_state_incomplete
+```
+
+The two `cli_summary` failures were the same real issue: a rejected
+`worktree_clean`/`commit_created` claim remained after a later successful
+clean/commit.  The fix is `TaskState.reconcile_satisfied_claims()`: later
+delivery facts supersede old rejections while keeping them as audit history.
+
+### Run B — after the fix attempt
+
+`D:/tmp/xenon-bench-repeat2/report.json`
+
+```text
+4/9 passed, completion_rate=0.4444, false_completion_count=0
+5 runs failed with api_or_credentials (HTTP 402)
+infrastructure_failure_count=5
+completion_rate_excluding_infrastructure=1.0
+```
+
+The provider returned `402 Payment Required`; those runs are retained in the
+raw JSON and the denominator.  They do **not** validate the post-fix code, so
+this document does not claim 9/9.  Re-run after restoring credentials and
+publish the new raw JSON before making a stable-rate claim.
+
+## Historical baseline (2026-10-22)
 
 Model: `deepseek/deepseek-v4-flash`
 

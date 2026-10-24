@@ -37,7 +37,7 @@ delivery gate 判断。
 | `tool_succeeded` | 对应工具调用在 tracker 中真实成功 |
 | `file_written` | 本步骤有匹配的成功写工具调用，且目标文件存在 |
 | `source_write` | 本步骤有成功的非测试源码写入 |
-| `command_passed` | 本步骤运行了匹配的验证命令，exit=0 且没有失败标记 |
+| `command_passed` | 本步骤运行了匹配的验证命令，exit=0 且没有失败标记；`run_tests` 也走这条结构化路径 |
 | `commit_created` | TaskState 有真实 commit，且不是步骤开始前的旧 commit |
 | `worktree_clean` | 新 git status 探测干净（忽略生成缓存） |
 | `test_artifact_nonempty` | 测试文件由本步骤写入且内容非空 |
@@ -63,6 +63,8 @@ payload:
 `TaskStateProjection` 将 claim 结果投影到 `TaskState.claims`。旧计划版本的
 claim 保留为审计历史，但不会阻塞新计划的完成判断。`TaskState.maybe_complete`
 只接受当前计划中没有 rejected claim、且当前 criterion 没有 rejected 的状态。
+后来由真实交付事实满足的旧 rejection（例如先失败、之后 probe 干净的
+`worktree_clean`）会标记为 `superseded`，保留审计记录但不再永久阻塞。
 
 ## ReAct 工具级 Claim
 
@@ -77,7 +79,9 @@ structured action/action_input
 ```
 
 覆盖 `tool_succeeded`、写文件、测试命令、commit、PR；并行只读工具也经过
-同一 wrapper，副作用工具仍由现有串行/隔离规则保护。
+同一 wrapper，副作用工具仍由现有串行/隔离规则保护。ReAct 的推荐测试入口
+是 `run_tests`（结构化 argv、无 shell），其 claim subject 固定为
+`run_tests`，由 tracker 的真实成功/exit code 校验。
 
 ## 并行 DAG 的串行修复屏障
 
@@ -104,6 +108,18 @@ Plan-Execute 在每个步骤完成后立即运行 claim gate：
 - 同一错误重复出现时短路，不无限重试；
 - 串行、DAG 串行和 DAG 并行 worker 都覆盖；并行 worker 的 claim 结果和
   工具 observation 在主线程波次屏障记录/replay，避免并发修改 TaskState。
+
+## 确定性 Finalize（#167）
+
+验证通过后，如果源码/测试已经 staged、没有 unstaged 或无关路径，
+`task_runtime.finalize_verified_work()` 会直接创建带 Xenon 署名的 commit，然后
+重新探测工作区。它只接受本轮 `TaskState.artifacts` / `test_artifacts` 中的路径，
+不会 `git add -A`，不会提交用户的其他改动；有无关/未暂存路径时返回 blocked，
+交给正常交付续跑。默认开启，显式关闭：
+
+```bash
+XENON_AUTO_FINALIZE=0
+```
 
 ## 最终 Goal Audit
 

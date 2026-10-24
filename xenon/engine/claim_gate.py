@@ -176,6 +176,8 @@ def _call_paths(call: Any) -> list[str]:
 
 
 def _call_command(call: Any) -> str:
+    if _text(getattr(call, "tool_name", "")) == "run_tests":
+        return "run_tests"
     params = getattr(call, "params", {}) or {}
     if not isinstance(params, dict):
         return ""
@@ -401,6 +403,8 @@ def claims_for_tool(tool: str, params: dict[str, Any] | None = None) -> list[Cla
                 add(CLAIM_TEST_ARTIFACT, path, "测试文件内容必须非空")
 
     command = _call_command(SimpleCall(tool, params))
+    if tool == "run_tests":
+        add(CLAIM_COMMAND_PASSED, "run_tests", "run_tests 必须 exit=0")
     if tool in {"command", "run_script"} and command:
         if re.search(r"(?:pytest|unittest|tox|\btest\b)", command, re.I):
             add(CLAIM_COMMAND_PASSED, command, f"验证命令必须 exit=0：{command}")

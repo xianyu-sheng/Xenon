@@ -708,3 +708,30 @@ def test_react_successful_tool_claim_does_not_emit_failure_feedback() -> None:
     assert "pending" in statuses
     assert VERIFIED in statuses
     assert REJECTED not in statuses
+
+
+def test_run_tests_tool_generates_verifiable_command_claim() -> None:
+    from xenon.engine.claim_gate import claims_for_tool
+
+    claims = claims_for_tool(
+        "run_tests",
+        {"test_framework": "pytest", "test_paths": ["tests/test_app.py"]},
+    )
+    command_claim = next(c for c in claims if c.kind == CLAIM_COMMAND_PASSED)
+    call = _call(
+        "run_tests",
+        {"test_framework": "pytest", "test_paths": ["tests/test_app.py"]},
+        success=True,
+        summary="2 passed",
+        metadata={"returncode": 0},
+    )
+
+    verdicts = verify_step_claims(
+        [command_claim],
+        calls=[call],
+        state=TaskState(objective="x"),
+        baseline=ClaimBaseline(calls_start=0),
+    )
+
+    assert command_claim.subject == "run_tests"
+    assert verdicts[0].status == VERIFIED

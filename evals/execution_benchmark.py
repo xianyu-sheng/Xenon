@@ -17,13 +17,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
+import statistics
 import subprocess
 import sys
 import time
 import traceback
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -49,6 +52,7 @@ class Case:
 @dataclass
 class CaseResult:
     name: str
+    run: int
     ok: bool
     reason: str
     elapsed: float
@@ -61,6 +65,107 @@ class CaseResult:
     result_tail: str
     warnings: list[str]
     task_state: dict[str, Any]
+
+
+def classify_failure(reason: str) -> str:
+    """Map a benchmark failure reason to a stable, small taxonomy."""
+    text = (reason or "").lower()
+    if not text:
+        return "none"
+    if any(
+        marker in text
+        for marker in (
+            "402",
+            "payment required",
+            "401 unauthorized",
+            "403 forbidden",
+            "429 too many requests",
+            "api key",
+            "invalid api",
+            "all models failed",
+            "connection error",
+            "readtimeout",
+        )
+    ):
+        return "api_or_credentials"
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if "target tests failed" in text or "test" in text and "failed" in text:
+        return "test_failure"
+    if "worktree dirty" in text or "dirty" in text:
+        return "dirty_worktree"
+    if "no new commit" in text or "missing: commit" in text:
+        return "missing_commit"
+    if "missing: changes" in text or "no non-test" in text:
+        return "no_source_write"
+    if "malformed" in text or "plan" in text and "invalid" in text:
+        return "malformed_plan"
+    if "security" in text or "blocked" in text and "path" in text:
+        return "tool_security"
+    if "taskstate status" in text or "not completed" in text:
+        return "task_state_incomplete"
+    return "other"
+
+
+def _percentile(values: list[float], fraction: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, math.ceil(len(ordered) * fraction) - 1))
+    return float(ordered[index])
+
+
+def aggregate_results(results: list[CaseResult]) -> dict[str, Any]:
+    """Aggregate pass/fail metrics without hiding failed runs.
+
+    ``repair_success_rate`` is the fraction of runs that experienced at least
+    one failed tool call but still delivered successfully.  ``false_completion``
+    counts runs whose TaskState said ``completed`` while the deterministic
+    benchmark checks failed.
+    """
+    total = len(results)
+    passed = sum(1 for result in results if result.ok)
+    failed = [result for result in results if not result.ok]
+    durations = [float(result.elapsed) for result in results]
+    tools = [float(result.tools) for result in results]
+    with_failures = [result for result in results if result.failures > 0]
+    repaired = [result for result in with_failures if result.ok]
+    categories: dict[str, int] = {}
+    for result in failed:
+        category = classify_failure(result.reason)
+        categories[category] = categories.get(category, 0) + 1
+    infrastructure = categories.get("api_or_credentials", 0)
+    return {
+        "runs": total,
+        "passed": passed,
+        "failed": total - passed,
+        "completion_rate": round(passed / total, 4) if total else 0.0,
+        "infrastructure_failure_count": infrastructure,
+        "completion_rate_excluding_infrastructure": (
+            round(passed / (total - infrastructure), 4)
+            if total > infrastructure
+            else 0.0
+        ),
+        "false_completion_count": sum(
+            1
+            for result in results
+            if result.task_status == "completed" and not result.ok
+        ),
+        "runs_with_tool_failures": len(with_failures),
+        "repair_successes": len(repaired),
+        "repair_success_rate": (
+            round(len(repaired) / len(with_failures), 4)
+            if with_failures
+            else None
+        ),
+        "median_duration_sec": round(statistics.median(durations), 1)
+        if durations
+        else 0.0,
+        "p95_duration_sec": round(_percentile(durations, 0.95), 1),
+        "median_tool_calls": round(statistics.median(tools), 1) if tools else 0.0,
+        "p95_tool_calls": round(_percentile(tools, 0.95), 1),
+        "failure_categories": dict(sorted(categories.items())),
+    }
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -425,13 +530,16 @@ def _run_case(
     config: ModelConfig,
     *,
     model: str,
+    run: int = 1,
+    total_runs: int = 1,
 ) -> CaseResult:
-    repo = workdir / case.name
+    repo_name = case.name if total_runs == 1 else f"{case.name}-r{run}"
+    repo = workdir / repo_name
     if repo.exists():
         shutil.rmtree(repo, ignore_errors=True)
     if repo.exists():
         # Windows can keep .git object handles briefly after a previous run.
-        repo = workdir / f"{case.name}-{int(time.time())}"
+        repo = workdir / f"{repo_name}-{int(time.time())}"
     repo.mkdir(parents=True)
     _init_repo(repo)
     case.setup(repo)
@@ -521,6 +629,7 @@ def _run_case(
 
     return CaseResult(
         name=case.name,
+        run=run,
         ok=not reason,
         reason=reason,
         elapsed=elapsed,
@@ -546,7 +655,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default="deepseek/deepseek-v4-flash")
     parser.add_argument("--base-url", default="https://api.deepseek.com")
     parser.add_argument("--json", default="")
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="repeat the selected cases in fresh repositories (default: 1)",
+    )
     args = parser.parse_args(argv)
+    if args.repeat < 1:
+        parser.error("--repeat must be >= 1")
 
     names = [name.strip() for name in args.cases.split(",") if name.strip()]
     unknown = [name for name in names if name not in CASES]
@@ -557,29 +674,49 @@ def main(argv: list[str] | None = None) -> int:
     workdir = Path(args.workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     results: list[CaseResult] = []
-    for name in names:
-        print(f"\n=== {name} ===", flush=True)
-        result = _run_case(CASES[name], workdir, config, model=args.model)
-        results.append(result)
-        icon = "PASS" if result.ok else "FAIL"
-        print(
-            f"{icon} {name}: {result.reason or 'ok'} "
-            f"({result.elapsed}s, {result.tools} tools, "
-            f"{result.failures} failures)",
-            flush=True,
-        )
-        if not result.ok:
-            print(result.result_tail, flush=True)
+    for run in range(1, args.repeat + 1):
+        for name in names:
+            prefix = f"[run {run}/{args.repeat}] " if args.repeat > 1 else ""
+            print()
+            print(f"=== {prefix}{name} ===", flush=True)
+            result = _run_case(
+                CASES[name],
+                workdir,
+                config,
+                model=args.model,
+                run=run,
+                total_runs=args.repeat,
+            )
+            results.append(result)
+            icon = "PASS" if result.ok else "FAIL"
+            print(
+                f"{icon} {prefix}{name}: {result.reason or 'ok'} "
+                f"({result.elapsed}s, {result.tools} tools, "
+                f"{result.failures} failures)",
+                flush=True,
+            )
+            if not result.ok:
+                print(result.result_tail, flush=True)
 
     passed = sum(1 for result in results if result.ok)
-    print(f"\nRESULT {passed}/{len(results)} cases passed")
+    aggregate = aggregate_results(results)
+    print()
+    print(f"RESULT {passed}/{len(results)} runs passed")
+    print(
+        "METRICS "
+        + json.dumps(aggregate, ensure_ascii=False, sort_keys=True),
+        flush=True,
+    )
+    output = Path(args.json) if args.json else workdir / "benchmark.json"
     payload = {
         "model": args.model,
-        "passed": passed,
-        "total": len(results),
-        "cases": [vars(result) for result in results],
+        "date": datetime.now(timezone.utc).isoformat(),
+        "cases_requested": names,
+        "repeat": args.repeat,
+        **aggregate,
+        "raw_runs": [vars(result) for result in results],
+        "raw_json": str(output),
     }
-    output = Path(args.json) if args.json else workdir / "benchmark.json"
     output.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )

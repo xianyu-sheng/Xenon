@@ -74,6 +74,8 @@ REACT_SYSTEM_PROMPT = """你是一个 ReAct 模式的 AI 编程助手。你通�
    再执行。不要用 `python -c`、`$()` 或反引号，宿主机会拦截。
 14. **结果被摘要时按需回查**：结构化 observation 带 `result_id` 时，先看摘要；
    只有确实需要精确日志/代码才调用 `tool_result_read(result_id=...)`，不要重复执行原工具。
+16. **优先用 `run_tests` 跑测试**：传 `test_paths` + `test_args`，不要手写 pytest shell 命令；它会自动发现项目 `.venv`/`venv` 解释器并直接执行，避免引号、`$变量` 和退出码问题。
+
 15. **实现/修复任务必须落地**：用户要求实现或修复具体 issue/PR 时，若当前工作区
    不是目标仓库，先用 `clone_repo(repo=..., target_dir=...)` 克隆到工作区，再在
    克隆目录读写、测试和提交；不要把完整代码贴在最终回答里代替实际修改。
@@ -157,6 +159,23 @@ BUILTIN_TOOLS = {
         "params": {
             "language": "python | powershell（可省略，PowerShell 语法会自动识别）",
             "code": "完整脚本内容（多行）",
+        },
+    },
+    "run_tests": {
+        "name": "run_tests",
+        "description": (
+            "结构化执行测试，不经过 shell：自动优先使用项目 .venv/venv 解释器，"
+            "支持 pytest、unittest 或 explicit argv。路径和参数分开传，"
+            "避免 PowerShell/cmd 引号、$变量和退出码污染。"
+        ),
+        "params": {
+            "test_framework": "auto | pytest | unittest | custom（默认 auto）",
+            "test_paths": '测试文件/目录数组，例如 ["tests/test_x.py"]',
+            "test_args": '额外参数数组，例如 ["-q", "-k", "unit"]',
+            "interpreter": "可选 Python 解释器路径；默认发现项目 .venv/venv",
+            "test_command": '仅 framework=custom：argv 数组，例如 ["npm", "test"]',
+            "cwd": "可选工作目录，默认当前工作区",
+            "timeout": "超时秒数，默认 60",
         },
     },
     "tool_result_read": {

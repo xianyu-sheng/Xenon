@@ -1508,6 +1508,47 @@ class ReActEngine(BaseEngine):
                     }
                 )
                 continue
+            if t["name"] == "run_tests":
+                schema.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "run_tests",
+                            "description": t.get("description", ""),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "test_framework": {
+                                        "type": "string",
+                                        "enum": [
+                                            "auto",
+                                            "pytest",
+                                            "unittest",
+                                            "custom",
+                                        ],
+                                    },
+                                    "test_paths": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                    "test_args": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                    "test_command": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                    "interpreter": {"type": "string"},
+                                    "cwd": {"type": "string"},
+                                    "timeout": {"type": "number"},
+                                },
+                                "required": [],
+                            },
+                        },
+                    }
+                )
+                continue
             if t["name"] == "update_plan":
                 # Structured array param: the generic string-only schema would
                 # force the model to JSON-encode a list and lose native typing.

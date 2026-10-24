@@ -29,14 +29,14 @@
 | 1 | 循环不早停 | ✅ | 默认不限步数；高置信度 LoopDetector + 无进展检查点 + 1800s 墙钟；低置信度只提示 |
 | 2 | 连续失败恢复 | ✅ | 写任务最多两次换方法提示；查询任务收敛 |
 | 3 | 持久计划 `update_plan` | ✅ | TaskState 保存版本/历史/补救步骤；计划执行中由 `plan_state` EventBus 更新，结束后打印完整面板；真实 #26 7/7 步骤完成 |
-| 4 | Shell/沙箱摩擦 | 🟡 | C4：`run_script` + 自动识别 + `lang` 别名；#27 修复后 14/14 成功；仍有未加引号 `$变量` 被拦截，文案已指向 run_script |
-| 5 | 真实长任务完成率 | 🟡 可测 | `evals/execution_benchmark.py` 3/3；真实 #26 同轮通过；样本仍小，需扩到 10 任务 |
+| 4 | Shell/沙箱摩擦 | 🟡 | C4：`run_script` + 自动识别 + `lang` 别名；新增结构化 `run_tests`（pytest/unittest/custom argv、项目 venv 发现、无 shell、真实 exit code）；仍有未加引号 `$变量` 被拦截，复杂 PowerShell 条件仍未归一化（#176） |
+| 5 | 真实长任务完成率 | 🟡 可测，不可外推 | `evals/execution_benchmark.py` 已支持 `--repeat` + 聚合；最新 2026-10-24 两次 9-run 样本为 7/9（旧 claim 收尾 bug）与 4/9（其中 5 次 API 402，排除基础设施后 4/4）；false_completion=0；需恢复额度后重跑再发布稳定率 |
 | 6 | 模型路由/质量 | 🟡 | C5：flash 默认；pro 未证明完成率优势 |
 | 7 | 上下文/压缩/子 agent | 🟡 | 缓存/视图/回查/哈希锚定；native、`/compact`、自动归档、非 native in-run 均 0-LLM；#27 复验 0 截断；真实 save/resume 待验 |
 | 8 | 权限/沙箱自主性 | ⏳ | 审批可用，但非 Codex OS 沙箱 |
 | 9 | 原生协议/截断续写 | 🟡 | DSML 变体已修；仍有 finish_reason=length 边界 |
 | 10 | 验证闭环 | ✅ | TaskState + 统一出口；失败输出进入同一步骤修复；真实 #26 目标测试 2 passed + commit |
-| 11 | 交付/commit/PR | 🟡 | TaskState 记录 verify/commit/PR 并在 ReAct 收尾提醒；真实 PR 闭环待验 |
+| 11 | 交付/commit/PR | 🟡 | TaskState 记录 verify/commit/PR；#167 安全 finalize 只提交本轮已验证、全部暂存的 artifact，默认 `XENON_AUTO_FINALIZE=1` 可关闭；真实 PR 闭环待验 |
 | 12 | TTY / 审批 UX | 🟡 | C7：TTY 单行待手测 |
 | 13 | `git add -A` 纪律 | ⏳ | C8：提示显式路径 |
 | 14 | 证据层新文件“盲写” | 🧊 | C3：单独决策，不混入执行层 |

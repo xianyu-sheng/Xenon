@@ -86,6 +86,7 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
 
 - command: {{"action": "终端命令"}} — 在本机终端执行 shell 命令（使用 {shell_name}）。不能用于读写文件；不要用 `python -c`、`$()` 或未加引号的 `$变量`，这些会被安全策略拦截。
 - run_script: {{"language": "python|powershell", "code": "完整脚本内容"}} — 把 Python 片段或多行 PowerShell 写入工作区临时脚本执行，避开 shell 引号/`$()`/`python -c` 限制；内联脚本优先用它。
+- run_tests: {{"test_framework": "auto|pytest|unittest|custom", "test_paths": ["tests/test_x.py"], "test_args": ["-q"]}} — 结构化执行测试，不经过 shell；优先发现项目 .venv/venv 解释器，支持 pytest/unittest。优先用它，而不是手写 pytest shell 命令。
 - tool_result_read: {{"result_id": "tr_...", "mode": "summary|excerpt|range|search", "query": "可选", "start_line": 0, "max_lines": 0}} — 按 result_id 回查之前工具结果的完整缓存，不重复执行原工具。
 - read_file: {{"file_path": "路径", "start_line": "起始行号(可选,从1开始)", "max_lines": "读取行数(可选)"}} — 读取本机文件内容，支持分段读取。仅限本地文件，不能读 URL 或 GitHub 文件。
 - write_file: {{"file_path": "路径", "content": "内容"}} — 将内容写入本机文件（覆盖）。自动创建父目录。
@@ -167,7 +168,7 @@ MINI_REACT_PROMPT = """你正在执行任务计划的第 {step_id} 步（共 {to
 - 需要工具时：{{"thought":"分析当前状态","action":"工具名","action_input":{{"参数名":"值"}}}}
 - 已得到结论时：{{"thought":"总结","final_answer":"本步骤的最终结果"}}
 
-可用工具与参数同规划阶段（command/run_script/tool_result_read/read_file/write_file/list_files/search_files/git/web_fetch/docs_fetch/github_fetch/edit_file/create_directory/batch_write/batch_edit/code_index/ast_analyze/refactor/diff_preview/create_pull_request/mcp_call）。遇到 Python 片段、PowerShell 变量或多行脚本，优先 run_script，不要用 python -c 或未加引号的 $ 变量。本步骤规划为"无需工具"，但若执行中发现需要读取文件/查目录等，可在 {max_rounds} 轮内按需调用工具；无需工具时直接输出 final_answer。
+可用工具与参数同规划阶段（command/run_script/run_tests/tool_result_read/read_file/write_file/list_files/search_files/git/web_fetch/docs_fetch/github_fetch/edit_file/create_directory/batch_write/batch_edit/code_index/ast_analyze/refactor/diff_preview/create_pull_request/mcp_call）。遇到 Python 片段、PowerShell 变量或多行脚本，优先 run_script，不要用 python -c 或未加引号的 $ 变量。本步骤规划为"无需工具"，但若执行中发现需要读取文件/查目录等，可在 {max_rounds} 轮内按需调用工具；无需工具时直接输出 final_answer。
 """
 
 
@@ -425,6 +426,8 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             if fallback_used
             else self._ensure_plan_has_write_step(user_input, plan, ctx)
         )
+        if not fallback_used:
+            steps = self._ensure_plan_has_verify_step(user_input, plan, steps, ctx)
         # v0.8.3: edit 步骤参数不全（plan 阶段未读文件，old_text/new_text
         # 无法预知）→ 转为 LLM 步骤，执行时迷你 ReAct 现场先读后写。
         # SWE-bench 实测（django-16408）：plan 生成的 edit 步骤缺 old_text
@@ -1067,6 +1070,134 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         )
         return steps
 
+    @classmethod
+    def _plan_has_verify_step(cls, steps: list[dict[str, Any]]) -> bool:
+        """Whether the plan contains a verifiable step with a command label."""
+        from xenon.engine.plan_contract import step_verify_cmd
+
+        return any(step_verify_cmd(step) for step in steps if isinstance(step, dict))
+
+    def _ensure_plan_has_verify_step(
+        self,
+        user_input: str,
+        plan: dict[str, Any],
+        steps: list[dict[str, Any]],
+        context: AgentContext | None,
+    ) -> list[dict[str, Any]]:
+        """Reject a code plan with no real verification step, bounded to one retry.
+
+        The planner contract requires code tasks to include an executable
+        verification step.  If the planner ignores it, first ask for a bounded
+        replan; if that fails, append a deterministic structured ``run_tests``
+        remediation node so the visible plan describes the work that will run.
+        """
+        if not steps or not self._task_requires_verify(user_input, context):
+            return steps
+        if self._plan_has_verify_step(steps):
+            return steps
+
+        logger.warning(
+            "计划完整性校验: 代码任务没有可验证步骤，要求重新规划",
+        )
+        self.callback.on_warning(
+            "计划缺少真实验证步骤（pytest/run_tests），正在要求重新规划…"
+        )
+        messages = [{"role": "system", "content": self.system_prompt}]
+        history = self._history_messages(context, current_user_input=user_input)
+        if history:
+            messages.extend(self._cache_ordered_context(history))
+        messages.extend(
+            [
+                {"role": "user", "content": user_input},
+                {
+                    "role": "user",
+                    "content": (
+                        "你刚才的计划没有可执行的真实验证步骤。请重新规划，"
+                        "必须包含 kind=\"verify\" 且 verify_cmd 非空的步骤"
+                        "（优先 run_tests 或 python -m pytest ...）；"
+                        "不要只写‘检查/确认/读取’。只输出 JSON。"
+                    ),
+                },
+            ]
+        )
+        try:
+            retry_plan = self._parse_json(self._call_llm_for_phase("plan", messages))
+        except Exception as exc:  # noqa: BLE001 — fallback is deterministic
+            logger.warning("验证步骤重规划失败: %s", exc)
+            retry_plan = {}
+        retry_steps = list(retry_plan.get("steps", []) or [])
+        if (
+            retry_steps
+            and self._plan_has_write_step(retry_steps)
+            and self._plan_has_verify_step(retry_steps)
+        ):
+            logger.info("重新规划成功：计划包含写步骤和验证步骤")
+            return retry_steps
+
+        existing_ids = [
+            int(step.get("id"))
+            for step in steps
+            if isinstance(step, dict)
+            and str(step.get("id", "")).isdigit()
+        ]
+        next_id = max(existing_ids, default=0) + 1
+        from xenon.engine.plan_contract import infer_step_kind
+
+        def _verify_before_index(items: list[dict[str, Any]]) -> int:
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    continue
+                if infer_step_kind(item) in {"commit", "clean"}:
+                    return index
+            return len(items)
+
+        steps = list(steps)
+        insert_at = _verify_before_index(steps)
+        depends_on = [
+            step.get("id")
+            for step in steps[:insert_at]
+            if isinstance(step, dict) and step.get("id") is not None
+        ]
+        verify_step = {
+            "id": next_id,
+            "task": "运行真实测试并记录结果（结构化 run_tests）",
+            "tool": "run_tests",
+            "params": {"test_framework": "auto"},
+            "depends_on": depends_on,
+            "kind": "verify",
+            "requires_write": False,
+            "verify_cmd": "run_tests",
+            "origin": "remediation",
+        }
+        steps.insert(insert_at, verify_step)
+        # Commit/clean must depend on the inserted verification, even when the
+        # original plan did not declare dependencies explicitly.
+        for item in steps[insert_at + 1 :]:
+            if not isinstance(item, dict):
+                continue
+            if infer_step_kind(item) not in {"commit", "clean"}:
+                continue
+            deps = item.get("depends_on")
+            if not isinstance(deps, list):
+                deps = []
+            if next_id not in deps:
+                deps.append(next_id)
+            item["depends_on"] = deps
+        self.callback.on_warning(
+            "重新规划仍未给出验证步骤，已追加确定性 run_tests 补救步骤"
+        )
+        return steps
+
+    def _task_requires_verify(
+        self, user_input: str, context: AgentContext | None = None
+    ) -> bool:
+        if not self._task_requires_write(user_input, context):
+            return False
+        from xenon.engine.task_state import TaskState
+
+        state = TaskState.from_context(context)
+        return state is None or "verify" in (state.required or [])
+
     def _has_successful_write(self, tracker: ToolExecutionTracker | None) -> bool:
         """是否已有任何成功的写类工具执行（文件被真正修改）。"""
         from xenon.engine.evidence_gate import has_successful_write
@@ -1400,12 +1531,21 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 elif kind == "verify" and verify_cmd:
                     verified = any(
                         call.success
-                        and call.tool_name in {"command", "run_script"}
-                        and verify_cmd in str(
-                            getattr(call, "params", {}).get("command")
-                            or getattr(call, "params", {}).get("action")
-                            or getattr(call, "params", {}).get("cmd")
-                            or ""
+                        and (
+                            (
+                                call.tool_name in {"command", "run_script"}
+                                and verify_cmd
+                                in str(
+                                    getattr(call, "params", {}).get("command")
+                                    or getattr(call, "params", {}).get("action")
+                                    or getattr(call, "params", {}).get("cmd")
+                                    or ""
+                                )
+                            )
+                            or (
+                                call.tool_name == "run_tests"
+                                and bool(getattr(call, "success", False))
+                            )
                         )
                         for call in new_calls
                     )

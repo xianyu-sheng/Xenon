@@ -59,7 +59,10 @@ def _command_text(params: Any) -> str:
 def is_verification_command(call: Any) -> bool:
     """True when this call is a successful-or-attempted test/build command."""
 
-    if getattr(call, "tool_name", "") != "command":
+    tool = getattr(call, "tool_name", "")
+    if tool == "run_tests":
+        return True
+    if tool != "command":
         return False
     return bool(VERIFY_COMMAND_RE.search(_command_text(getattr(call, "params", {}))))
 
