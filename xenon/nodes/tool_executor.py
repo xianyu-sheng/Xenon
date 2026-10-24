@@ -918,7 +918,7 @@ class ToolExecutor:
                 content = params.get("content")
                 if isinstance(content, str):
                     tracker_metadata["content_chars"] = len(content)
-            elif tool_name == "batch_write":
+            elif tool_name in {"batch_write", "apply_patch"}:
                 files = params.get("files")
                 if isinstance(files, list):
                     lengths: dict[str, int] = {}
@@ -1084,6 +1084,20 @@ class ToolExecutor:
                 state=ToolExecutionState.FAILED,
                 error=message,
                 error_kind="plan_rejected",
+            )
+
+        # ── Stage 0.3: model-facing tool profile guard ──
+        from xenon.engine.tool_profiles import profile_tool_guard
+
+        profile_reason = profile_tool_guard(tool_name, context, params)
+        if profile_reason:
+            logger.info(f"{trace_p}工具面 profile 拒绝: {tool_name} — {profile_reason}")
+            return finish(
+                False,
+                f"⛔ {profile_reason}",
+                state=ToolExecutionState.FAILED,
+                error=profile_reason,
+                error_kind="tool_profile_denied",
             )
 
         # ── Stage 0.4: atomic recipe scope guard ──

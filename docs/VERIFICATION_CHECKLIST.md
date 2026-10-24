@@ -206,3 +206,5 @@
 | 2026-10-24 | 核心工具面 #190 基线 | 新增 `XENON_TOOL_PROFILE=core`：模型只看到 read/search/apply_patch/bash/mcp_*；新增 core aliases、`apply_patch` 事务编辑、bash 的 pytest 计数适配、TaskState/evidence 兼容；`legacy` 仍为默认；tool profile/core alias 5 passed，全量 3707 passed/98 skipped，ruff 绿 |
 
 | 2026-10-24 | core profile 真实 smoke | `XENON_TOOL_PROFILE=core`：7 个可见工具；真实 TTY 用 read→apply_patch→bash pytest→bash commit，目标测试 1 passed、commit、工作区干净；无 run_tests/git/write_file 暴露；负向“不要 push”不再要求 PR；transcript `docs/TTY_TRANSCRIPT_190_CORE.md`；全量 3708 passed/98 skipped，ruff 绿 |
+
+| 2026-10-24 | core profile / PlanExecute 实验 | ReAct core 单文件 smoke 7 tools 完成；ReAct core 多文件 smoke 实际生成 calc 包、6 passed、2 commits，但交付层因 apply_patch 测试 artifact 元数据缺失误报“缺回归测试”，已补 `content_chars_by_path`；Plan-Execute core prompt/guard 已加，但真实多文件仍被 legacy 计划/步骤 claim 卡住，默认继续 legacy；全量 3712 passed/98 skipped，ruff 绿；#190 未关闭 |

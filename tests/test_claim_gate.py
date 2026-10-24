@@ -865,3 +865,17 @@ def test_source_write_claim_rejects_noop_write() -> None:
         baseline=ClaimBaseline(),
     )[0]
     assert verdict.status == REJECTED
+
+
+def test_edit_step_infers_test_path_instead_of_source_write() -> None:
+    claims = claims_for_step(
+        {
+            "id": "5",
+            "kind": "edit",
+            "task": "创建 tests/test_calc.py，验证 add 和 mul",
+            "requires_write": True,
+        }
+    )
+
+    assert [claim.kind for claim in claims] == ["file_written"]
+    assert claims[0].subject == "tests/test_calc.py"

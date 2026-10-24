@@ -446,7 +446,9 @@ class ReActEngine(BaseEngine):
             user_input = bind_execution_boundary(user_input, int(active_level))
         self._active_execution_level = active_level
         from xenon.engine.task_recipe import recipe_allowed_tools
+        from xenon.engine.tool_profiles import set_tool_profile
 
+        set_tool_profile(ctx, self._tool_profile)
         self._recipe_allowed_tools = recipe_allowed_tools(ctx)
         messages = [{"role": "system", "content": self.system_prompt}]
         # F4: ctx_mgr 注入时消费其（已压缩）消息，不再自行 [-10:] 截断；

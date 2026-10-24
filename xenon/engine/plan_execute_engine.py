@@ -143,6 +143,26 @@ PLAN_SYSTEM_PROMPT = """你是一个任务规划专家。将用户任务分解�
 使用 {shell_name}（{shell_examples}），不要使用 {shell_avoid}。
 """
 
+CORE_PLAN_TOOL_SECTION = """## 可用工具（core profile，唯一）
+
+以下工具是唯一可用集合。`tool` 必须是其中之一或 null：
+
+- read: {"file_path": "路径", "start_line": 可选, "max_lines": 可选} — 读取本地文件。
+- search: {"query": "关键词", "file_path": "目录", "file_filter": "*.py"} — 搜索文件内容或列目录。
+- apply_patch: {"edits": [{"file_path": "a.py", "old_text": "原文", "new_text": "新文"}]} 或 {"files": [{"path": "a.py", "content": "..."}]} — 事务式修改/新建文件。修改已有文件用 edits；新建/整写用 files。
+- bash: {"command": "命令"} — 执行命令；Windows 下实际是 PowerShell，用 Get-ChildItem/Get-Content，不要用 ls/cat。测试和 git 都通过 bash 执行。
+- mcp_install / mcp_verify / mcp_call: MCP 生命周期与调用。
+
+禁止在计划中使用 write_file/edit_file/batch_write/batch_edit/run_tests/git/list_files/search_files/command/run_script 等 legacy 工具。
+
+## 执行要求
+
+- 修改代码必须规划 `apply_patch` 步骤，不能只做侦察。
+- 验证必须用 `bash` 执行 `python -m pytest ...`，并设置 kind="verify" 和 verify_cmd。
+- commit 也通过 `bash` 执行 `git add ...; git commit ...`。
+"""
+
+
 EXECUTE_PROMPT = """你正在执行一个任务计划的第 {step_id} 步（共 {total_steps} 步）。
 
 当前步骤: {step_task}
@@ -279,6 +299,9 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             auto_router=auto_router,
             permission_gate=permission_gate,
         )
+        from xenon.engine.tool_profiles import resolve_tool_profile
+
+        self.tool_profile = resolve_tool_profile()
         self.max_steps = max_steps
         self.max_replans = max(0, int(max_replans))
         self.step_repair_attempts = 3
@@ -335,8 +358,7 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         # EvidenceGate 默认管线由 BaseEngine 统一挂载；本引擎保留
         # register_gate 扩展点，校验与补救逻辑仍由本引擎负责。
 
-    @staticmethod
-    def _build_plan_prompt() -> str:
+    def _build_plan_prompt(self) -> str:
         """构建 OS 感知的规划系统提示词。"""
         import sys
 
@@ -349,17 +371,29 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             shell_examples = "如 ls, cat, mkdir -p, grep, find"
             shell_avoid = "PowerShell 命令（如 Get-ChildItem, Copy-Item）"
 
-        from xenon.engine.strategy_guide import STRATEGY_GUIDE
-
-        return (
-            PLAN_SYSTEM_PROMPT.format(
-                shell_name=shell_name,
-                shell_examples=shell_examples,
-                shell_avoid=shell_avoid,
-                execution_contract=EXECUTION_CONTRACT,
-            )
-            + STRATEGY_GUIDE
+        prompt = PLAN_SYSTEM_PROMPT.format(
+            shell_name=shell_name,
+            shell_examples=shell_examples,
+            shell_avoid=shell_avoid,
+            execution_contract=EXECUTION_CONTRACT,
         )
+        if self.tool_profile == "core":
+            start = prompt.find("## ⚠️ 重要：可用工具列表")
+            end = prompt.find("## 运行环境", start)
+            if start >= 0 and end > start:
+                prompt = (
+                    prompt[:start]
+                    + CORE_PLAN_TOOL_SECTION
+                    + "\n"
+                    + prompt[end:]
+                )
+            else:
+                prompt += "\n\n" + CORE_PLAN_TOOL_SECTION
+        else:
+            from xenon.engine.strategy_guide import STRATEGY_GUIDE
+
+            prompt += STRATEGY_GUIDE
+        return prompt
 
     def run(
         self,
@@ -388,6 +422,11 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         self._reset_steering()  # mid-task steering：每轮 run 重置队列与消费记录
         self._begin_run()  # P3-Q2: 链路追踪
         self._bind_evidence_ledger(ctx)
+        from xenon.engine.tool_profiles import resolve_tool_profile, set_tool_profile
+
+        set_tool_profile(
+            ctx, getattr(self, "tool_profile", resolve_tool_profile())
+        )
         # v0.9.1: 重置循环检测器
         self._loop_detector.reset()
         self._last_termination_reason = None
@@ -1050,6 +1089,17 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 },
             ]
         )
+        if self.tool_profile == "core":
+            for _msg in messages:
+                if _msg.get("role") == "user" and "只包含侦察/分析步骤" in str(_msg.get("content", "")):
+                    _msg["content"] = (
+                        str(_msg["content"])
+                        .replace("read_file/search_files", "read/search")
+                        .replace(
+                            "write_file / edit_file / batch_write / batch_edit",
+                            "apply_patch",
+                        )
+                    )
         retry_response = self._call_llm_for_phase("plan", messages)
         retry_plan = self._parse_json(retry_response)
         retry_steps = list(retry_plan.get("steps", []) or [])
@@ -1120,6 +1170,13 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 },
             ]
         )
+        if self.tool_profile == "core":
+            for _msg in messages:
+                if _msg.get("role") == "user" and "没有可执行的真实验证步骤" in str(_msg.get("content", "")):
+                    _msg["content"] = str(_msg["content"]).replace(
+                        "（优先 run_tests 或 python -m pytest ...）",
+                        "（用 bash 执行 python -m pytest ...）",
+                    )
         try:
             retry_plan = self._parse_json(self._call_llm_for_phase("plan", messages))
         except Exception as exc:  # noqa: BLE001 — fallback is deterministic
@@ -1158,17 +1215,30 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             for step in steps[:insert_at]
             if isinstance(step, dict) and step.get("id") is not None
         ]
-        verify_step = {
-            "id": next_id,
-            "task": "运行真实测试并记录结果（结构化 run_tests）",
-            "tool": "run_tests",
-            "params": {"test_framework": "auto"},
-            "depends_on": depends_on,
-            "kind": "verify",
-            "requires_write": False,
-            "verify_cmd": "run_tests",
-            "origin": "remediation",
-        }
+        if self.tool_profile == "core":
+            verify_step = {
+                "id": next_id,
+                "task": "用 bash 运行真实测试并记录结果",
+                "tool": "bash",
+                "params": {"command": "python -m pytest -q"},
+                "depends_on": depends_on,
+                "kind": "verify",
+                "requires_write": False,
+                "verify_cmd": "python -m pytest -q",
+                "origin": "remediation",
+            }
+        else:
+            verify_step = {
+                "id": next_id,
+                "task": "运行真实测试并记录结果（结构化 run_tests）",
+                "tool": "run_tests",
+                "params": {"test_framework": "auto"},
+                "depends_on": depends_on,
+                "kind": "verify",
+                "requires_write": False,
+                "verify_cmd": "run_tests",
+                "origin": "remediation",
+            }
         steps.insert(insert_at, verify_step)
         # Commit/clean must depend on the inserted verification, even when the
         # original plan did not declare dependencies explicitly.
@@ -1939,6 +2009,10 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
                 for name in BUILTIN_TOOL_REGISTRY.names()
                 if required_execution_level(name, {}) <= int(execution_level)
             )
+        if getattr(self, "tool_profile", "legacy") == "core":
+            from xenon.engine.tool_profiles import CORE_TOOL_NAMES
+
+            available_tools &= CORE_TOOL_NAMES
         strategy = get_strategy_advice(
             intent,
             available_tools,
@@ -2266,6 +2340,15 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
             step_task=task,
             previous_results=prev_results,
         )
+        if self.tool_profile == "core":
+            prompt = re.sub(
+                r"可用工具与参数同规划阶段（[^）]*）。",
+                "可用工具：read/search/apply_patch/bash/mcp_*。"
+                "Windows 下 bash 使用 PowerShell（Get-ChildItem/Get-Content），"
+                "不要用 ls/cat；测试与 git 通过 bash 执行。",
+                prompt,
+                count=1,
+            )
         if steering:
             prompt += "\n\n## 用户中途补充\n" + self.steering_prompt(steering)
         if require_write_tool:

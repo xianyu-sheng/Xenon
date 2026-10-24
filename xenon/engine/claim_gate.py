@@ -56,6 +56,10 @@ _COMMIT_CONFIRM = re.compile(
     re.I,
 )
 _CLEAN_WORDS = re.compile(r"(?:工作区|干净|clean|git\s+status)", re.I)
+_TASK_PATH = re.compile(
+    r"(?:[A-Za-z]:)?[A-Za-z0-9_./\-]+\.(?:py|js|ts|go|rs|java|md|json|yaml|yml|toml|sh|ps1)",
+    re.IGNORECASE,
+)
 
 
 def _commit_step_is_confirmation(task: str) -> bool:
@@ -426,6 +430,15 @@ def claims_for_step(
         if display_path(path)
     ]
     claims: list[Claim] = []
+
+    # Plans sometimes omit target_paths while naming the file in the task.
+    # Infer it so a test-file step is checked as file_written, not as an
+    # impossible non-test source_write obligation.
+    if not target_paths:
+        target_paths = [
+            display_path(match.group(0))
+            for match in _TASK_PATH.finditer(task_text)
+        ]
 
     def add(claim_kind: str, subject: str = "", expected: str = "") -> None:
         key = f"step:{step_id}:{claim_kind}:{display_path(subject)}"

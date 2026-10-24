@@ -108,3 +108,59 @@ def test_core_bash_preserves_test_counts(tmp_path):
     assert result["tests_run"] == 1
     assert result["tests_passed"] == 1
     assert result["tests_failed"] == 0
+
+
+def test_profile_guard_and_plan_prompt(monkeypatch):
+    from xenon.engine.plan_execute_engine import PlanExecuteEngine
+    from xenon.engine.tool_profiles import profile_tool_guard
+
+    context = AgentContext({"_tool_profile": "core"})
+    assert profile_tool_guard("read", context) is None
+    assert profile_tool_guard("bash", context) is None
+    assert profile_tool_guard("update_plan", context) is None
+    denied = profile_tool_guard("write_file", context)
+    assert denied is not None
+    assert "core" in denied
+
+    monkeypatch.setenv("XENON_TOOL_PROFILE", "core")
+    plan = PlanExecuteEngine(["fake/model"])
+    assert plan.tool_profile == "core"
+    assert "core profile" in plan.system_prompt
+    assert "apply_patch" in plan.system_prompt
+    assert "- run_tests:" not in plan.system_prompt
+    assert "- write_file:" not in plan.system_prompt
+
+
+def test_core_profile_tool_executor_denies_legacy_write(tmp_path):
+    from xenon.engine.tool_profiles import set_tool_profile
+    from xenon.nodes.tool_executor import ToolExecutor
+
+    context = AgentContext({})
+    set_tool_profile(context, "core")
+    target = tmp_path / "should-not-exist.txt"
+    result = ToolExecutor().execute(
+        "write_file",
+        {"file_path": str(target), "content": "x"},
+        context,
+    )
+
+    assert result.success is False
+    assert "core" in result.observation
+    assert not target.exists()
+
+
+def test_core_profile_denies_shell_file_writes():
+    from xenon.engine.tool_profiles import profile_tool_guard
+
+    context = AgentContext({"_tool_profile": "core"})
+    denied = profile_tool_guard(
+        "bash", context, {"command": "Set-Content calc/add.py 'x'"}
+    )
+    assert denied is not None
+    assert "apply_patch" in denied
+    assert profile_tool_guard(
+        "bash", context, {"command": "python -m pytest -q"}
+    ) is None
+    assert profile_tool_guard(
+        "bash", context, {"command": "git commit -m done"}
+    ) is None
