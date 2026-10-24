@@ -200,3 +200,5 @@
 | 2026-10-24 | 会话 runtime 修复 + GitHub MCP 验证 | `a61fbce`：git 输出固定 UTF-8、LoopDetector 只数末尾周期且结构化参数做哈希、direct→ReAct 重绑授权边界、非 FINAL `AgentResult` 不再写 passed；全量 3689 passed/98 skipped，ruff 绿；真实 GitHub MCP 46 tools、`get_me`/`search_repositories` 成功；已清理 `D:\.xenon_tmp` 下 11 个 `run_*` 临时文件；`199aa18` 为 reword 后的测试修复 |
 
 | 2026-10-24 | MCP 管理工具 | 新增 `mcp_install` / `mcp_verify`：只写 Xenon 配置、真实 stdio 子进程发现工具、失败回滚；不读源码/不改仓库/不跑测试/不 commit；真实 `github:get_me` 返回 46 tools 与账号；fake stdio MCP 6 passed；全量 3694 passed/98 skipped，ruff 绿；#188 基线 |
+
+| 2026-10-24 | 原子任务配方 / MCP scope guard | #189 基线：`mcp.install` recipe 固定 mcp_install→mcp_verify，ReAct schema 只暴露配方工具，ToolExecutor 拒绝 repo/test/git/source 操作，软预算 8；不创建 TaskState 交付门；recipe/guard 5 passed，全量待复跑 |

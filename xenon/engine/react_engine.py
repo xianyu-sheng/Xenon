@@ -179,6 +179,7 @@ class ReActEngine(BaseEngine):
             permission_gate=permission_gate,
         )
         self.max_iterations = max_iterations
+        self._recipe_allowed_tools: frozenset[str] | None = None
         # P2: 预算检查点窗口（固定步数不再作为终止条件）。
         # 窗口耗尽时：有进展 → 挂起审批续跑；无进展 → 熔断。
         self.checkpoint_steps = _env_checkpoint_steps(max_iterations)
@@ -435,6 +436,9 @@ class ReActEngine(BaseEngine):
 
             user_input = bind_execution_boundary(user_input, int(active_level))
         self._active_execution_level = active_level
+        from xenon.engine.task_recipe import recipe_allowed_tools
+
+        self._recipe_allowed_tools = recipe_allowed_tools(ctx)
         messages = [{"role": "system", "content": self.system_prompt}]
         # F4: ctx_mgr 注入时消费其（已压缩）消息，不再自行 [-10:] 截断；
         # 否则回退 AgentContext 的对话历史（保留 [-10:] 兜底）。
@@ -1471,13 +1475,16 @@ class ReActEngine(BaseEngine):
         """
 
         active_level = getattr(self, "_active_execution_level", None)
-        if active_level is None:
-            return frozenset(self.tools)
-        return frozenset(
-            name
-            for name in self.tools
-            if required_execution_level(name, {}) <= int(active_level)
-        )
+        names = set(self.tools)
+        if active_level is not None:
+            names = {
+                name
+                for name in names
+                if required_execution_level(name, {}) <= int(active_level)
+            }
+        if self._recipe_allowed_tools is not None:
+            names &= set(self._recipe_allowed_tools)
+        return frozenset(names)
 
     def _build_tools_schema(self) -> list[dict[str, Any]]:
         """F5: 从 ``self.tools`` 构建 OpenAI 风格 tools schema 供 native FC。

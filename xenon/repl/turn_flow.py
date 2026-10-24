@@ -175,6 +175,21 @@ class TurnFlowMixin:
             console.print(
                 "[dim cyan]📋 计划模式：本轮只产出方案，写/执行需用户确认[/dim cyan]"
             )
+        # Atomic tasks get a deterministic recipe and a side-effect scope
+        # guard.  They must not inherit a previous coding TaskState, otherwise
+        # run_with_delivery would demand verify/commit for an install/config
+        # turn.
+        from xenon.engine.task_recipe import activate_recipe, recipe_prompt
+
+        recipe = activate_recipe(
+            self.agent_context, user_input, level=int(execution_policy.level)
+        )
+        if recipe is not None:
+            self.agent_context.set("_task_state", None)
+            console.print(
+                f"[dim cyan]🧭 原子任务配方：{recipe.id} "
+                f"({len(recipe.stages)} 步，工具级范围约束)[/dim cyan]"
+            )
         # ── Durable task state: resume an active task, or start a new one ──
         task_state = TaskState.from_context(self.agent_context)
         continued = bool(
@@ -227,7 +242,7 @@ class TurnFlowMixin:
             write_task = int(execution_policy.level) >= int(ExecutionLevel.WRITE) or (
                 "task_delivery" in turn_contract_obj.signals.write_patterns
             )
-            if write_task:
+            if write_task and recipe is None:
                 task_state = TaskState(
                     objective=user_input,
                     intent=turn_contract_obj.intent,
@@ -401,6 +416,9 @@ class TurnFlowMixin:
             and (continued or execution_policy.level >= ExecutionLevel.WRITE)
         ):
             turn_prompt = f"{turn_prompt}\n\n{task_state.delivery_prompt()}"
+        recipe_note = recipe_prompt(self.agent_context)
+        if recipe_note:
+            turn_prompt = f"{turn_prompt}\n\n{recipe_note}"
 
         # Freeze authorization with this exact turn. ReAct must not mutate its
         # leading system prompt when the execution level changes.
@@ -485,6 +503,11 @@ class TurnFlowMixin:
                     f"[dim cyan]⏩ 延续上轮任务 → 继续使用 "
                     f"[bold]{mode}[/bold] 范式[/dim cyan]"
                 )
+        if recipe is not None and mode != "react":
+            mode = "react"
+            console.print(
+                "[dim cyan]🧭 原子任务固定使用 ReAct 配方，避免进入通用规划循环[/dim cyan]"
+            )
 
         try:
             if skill_name is not None:

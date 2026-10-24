@@ -1086,6 +1086,23 @@ class ToolExecutor:
                 error_kind="plan_rejected",
             )
 
+        # ── Stage 0.4: atomic recipe scope guard ──
+        # Recipes are attached by the REPL for bounded tasks such as MCP
+        # install.  Check before evidence/permission side effects so an
+        # out-of-scope write/test/commit is denied without consuming a retry.
+        from xenon.engine.task_recipe import recipe_tool_guard
+
+        recipe_reason = recipe_tool_guard(tool_name, params, context)
+        if recipe_reason:
+            logger.info(f"{trace_p}原子任务范围拒绝: {tool_name} — {recipe_reason}")
+            return finish(
+                False,
+                f"⛔ {recipe_reason}",
+                state=ToolExecutionState.FAILED,
+                error=recipe_reason,
+                error_kind="recipe_out_of_scope",
+            )
+
         # ── Stage 0.5: 工具门控黑名单检查 ──
         gate_passed, gate_reason = self.tool_gate.check_before(tool_name, params)
         if not gate_passed:
