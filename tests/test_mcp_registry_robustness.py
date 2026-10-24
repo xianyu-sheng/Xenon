@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 
 import pytest
@@ -240,8 +241,13 @@ class TestConcurrency:
         reg = MCPRegistry()
 
         def add(i: int) -> None:
+            # 用当前解释器代替 POSIX 的 ``echo``：Windows 上 echo 是 shell 内建命令，
+            # 没有对应的可执行文件，subprocess 会抛 FileNotFoundError（平台差异，
+            # 与本用例要验证的并发锁无关）。
             for _ in range(50):
-                reg.add_server(f"s{i % 4}", command="echo")
+                reg.add_server(
+                    f"s{i % 4}", command=sys.executable, args=["-c", "pass"]
+                )
 
         threads = [threading.Thread(target=add, args=(i,)) for i in range(4)]
         for t in threads:
