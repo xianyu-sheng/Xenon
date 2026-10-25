@@ -941,6 +941,13 @@ class PlanExecuteEngine(PlanDAGExecutorMixin, BaseEngine):
         )
         if not claims:
             return []
+        # The live TaskState is the source verification reads.  A ledger
+        # projection is not guaranteed to have applied the just-finished tool
+        # call yet (especially in standalone Plan-Execute runs), so fold the
+        # tracker into the live state first.  update_from_calls is idempotent
+        # by tool id; parallel workers pass record=False and stay isolated.
+        if record:
+            state.update_from_calls(getattr(tracker, "calls", []) or [])
         verdicts = verify_step_claims(
             claims,
             calls=getattr(tracker, "calls", []) or [],
