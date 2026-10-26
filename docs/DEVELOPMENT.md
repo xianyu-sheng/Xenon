@@ -47,6 +47,19 @@ python -m pytest tests \
   --timeout=120
 ```
 
+### A2. Kernel Contract Checks (单循环内核)
+The kernel (`xenon/kernel/`) is a semantic layer: it must not import the legacy
+engine, branch on concrete tool names, or perform direct side effects.  These
+checks are fast and should run before touching kernel code:
+```bash
+python scripts/check_kernel_purity.py
+python -m pytest tests/kernel -q
+python -m pytest -m kernel_contract --collect-only -q
+```
+`kernel_contract` tests are the north-star contract: arbitrary tool names, a
+lying model that must not deliver, and deterministic replay.  They xfail until
+the runtime lands in #196.
+
 ### B. Deterministic CLI End-to-End Suite
 Runs deterministic subprocess CLI integration tests:
 ```bash

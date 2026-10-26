@@ -16,6 +16,11 @@
 | **L1 结构层** | 空洞回答（确定性、无语义盲点）= 唯一阻断类校验；命中才重试（半预算）/同因熔断 | `turn/gate.py`、`engine/hollow_detector.py` | 拦截"没干活"的回答 |
 | **L2 语义层** | 宣称审计 / 完成准则 / 文件声称 / 写入后验证：不阻断发布，附「待人工核验清单」 | `turn/gate.py`、`repl/render.py` | 把核不到的醒目列给用户自核 |
 
+> 术语：上表的 **L0/L1/L2 是可信度层级**（证据 / 结构 / 语义）。
+> 执行内验证层级使用 **V0/V1/V2**（每次 receipt 的不变量 / 步骤后置条件 /
+> 任务级覆盖审计），两者不要混用。设计见 `docs/adr/0001-single-loop-kernel.md`
+> 与 #205。
+
 不变式：**回合级 L1/L2 语义/结构调整只有一处**（`turn/gate.py`），由
 `tests/test_semantics_single_source.py` / `test_contract_single_source.py`
 以全仓扫描断言锁定；**工具成败只由工具回执的 `success` 字段决定**（单一

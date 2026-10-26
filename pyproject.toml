@@ -67,6 +67,7 @@ norecursedirs = ["build", "evals/fixtures"]
 markers = [
     "live: requires external network access or real provider credentials",
     "e2e: deterministic end-to-end CLI workflow",
+    "kernel_contract: kernel north-star contracts; enabled as the runtime lands (#193)",
 ]
 
 [tool.ruff]
