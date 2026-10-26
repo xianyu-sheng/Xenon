@@ -69,7 +69,11 @@ def test_real_calc_task_is_delivered_with_facts(tmp_path: Path) -> None:
     ledger = Ledger.in_memory("t1")
     runtime = LoopRuntime(
         catalog=ToolCatalog(CORE_SPECS, "core"),
-        gateway=LegacyToolGateway(specs=CORE_SPECS, workspace=tmp_path),
+        gateway=LegacyToolGateway(
+            specs=CORE_SPECS,
+            workspace=tmp_path,
+            policy=PermissionPolicy(workspace=str(tmp_path)),
+        ),
         controller=VerificationController(),
         ledger=ledger,
         policies=(PermissionPolicy(workspace=str(tmp_path)),),

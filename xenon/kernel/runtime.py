@@ -27,6 +27,7 @@ from xenon.kernel.contracts import (
     ObligationSource,
     PolicyDecisionKind,
     PropositionKind,
+    ReceiptStatus,
     RequestVerification,
     Resolution,
     StepContract,
@@ -42,6 +43,7 @@ from xenon.kernel.contracts import (
     VerdictStatus,
     VerificationStage,
 )
+from xenon.kernel.finalize import FinalizeDecision, FinalizeGuard
 from xenon.kernel.phases import assert_transition
 from xenon.kernel.protocols import (
     EventSink,
@@ -97,6 +99,7 @@ class LoopRuntime:
         ledger: Ledger,
         sink: EventSink | None = None,
         policies: Sequence[Policy] = (),
+        finalize: FinalizeGuard | None = None,
     ) -> None:
         self._catalog = catalog
         self._gateway = gateway
@@ -105,6 +108,7 @@ class LoopRuntime:
         self._readonly = _readonly_view(ledger)
         self._sink = sink
         self._policies = tuple(policies)
+        self._finalize = finalize or FinalizeGuard()
         self._services = _RuntimeServices(self)
 
         self._spec: TaskSpec | None = None
@@ -122,6 +126,7 @@ class LoopRuntime:
         self._debt: list[Any] = []
         self._repair_attempts: dict[str, int] = {}
         self._replans = 0
+        self._finalize_decision: FinalizeDecision | None = None
         self._run_start_seq = 0
 
     # ── public surface ─────────────────────────────────────────────────
@@ -143,6 +148,7 @@ class LoopRuntime:
         self._debt = []
         self._repair_attempts = {}
         self._replans = 0
+        self._finalize_decision = None
         self._run_start_seq = 0
         self._plan = None
         self._plan_steps = ()
@@ -398,6 +404,17 @@ class LoopRuntime:
             receipt_event_payload(receipt),
             step_id=self._current_step_id(),
         )
+        if receipt.status is ReceiptStatus.DENIED:
+            self._append(
+                EventKind.POLICY_DECISION,
+                EventSource.GATE,
+                {
+                    "kind": PolicyDecisionKind.VETO.value,
+                    "reason": receipt.error or "permission denied",
+                    "scope": [receipt.tool],
+                },
+                step_id=self._current_step_id(),
+            )
         self._tool_calls += 1
         self._transition(TaskPhase.RECONCILING, "receipt recorded")
 
@@ -572,6 +589,7 @@ class LoopRuntime:
             )
 
         self._sync_debt(self._verdicts)
+        self._finalize_decision = self._run_finalize()
         self._append(
             EventKind.AUDIT_REPORTED,
             EventSource.GATE,
@@ -599,6 +617,9 @@ class LoopRuntime:
         )
 
         if decision.kind is ControlDecisionKind.DELIVER:
+            assert self._spec is not None
+            finalize = self._finalize_decision
+            assert finalize is not None and finalize.accepted
             self._transition(TaskPhase.DELIVERING, decision.reason)
             self._append(
                 EventKind.DELIVERED,
@@ -607,10 +628,14 @@ class LoopRuntime:
                     "answer": action.answer,
                     "claims": [_claim_payload(item) for item in claims],
                     "verdicts": [_verdict_payload(item) for item in checks],
+                    "finalize": {
+                        "commit": finalize.commit_sha,
+                        "verified_paths": list(finalize.verified_paths),
+                    },
                 },
             )
             self._transition(TaskPhase.DELIVERED, "accepted")
-            sha = self._last_commit_sha()
+            sha = finalize.commit_sha or self._last_commit_sha()
             evidence = self._evidence_status(checks)
             self._append(
                 EventKind.FINALIZED,
@@ -669,6 +694,36 @@ class LoopRuntime:
             claims=claims,
             resolutions=resolutions,
         )
+
+    def _run_finalize(self) -> FinalizeDecision:
+        assert self._spec is not None
+        finalize = self._finalize.check(
+            self._readonly,
+            since_seq=self._run_start_seq,
+            workspace=self._spec.workspace,
+            allow_push=self._spec.allow_push,
+        )
+        self._append(
+            EventKind.FINALIZE_STARTED,
+            EventSource.RUNTIME,
+            {
+                "commit": finalize.commit_sha,
+                "verified_paths": list(finalize.verified_paths),
+                "unverified_paths": list(finalize.unverified_paths),
+                "hash_mismatches": list(finalize.hash_mismatches),
+                "reason": finalize.reason,
+            },
+        )
+        if not finalize.accepted:
+            verdict = Verdict(
+                obligation_id="finalize",
+                stage=VerificationStage.V2,
+                status=VerdictStatus.VIOLATED,
+                reason=finalize.reason or "finalize rejected",
+            )
+            self._verdicts.append(verdict)
+            self._sync_debt((verdict,))
+        return finalize
 
     # ── policies and limits ────────────────────────────────────────────
 

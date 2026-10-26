@@ -439,6 +439,7 @@ def test_prior_commit_is_not_reused_for_a_later_task() -> None:
         ScriptedStrategy(
             [
                 CallTool(ToolIntent(capability=Capability.READ)),
+                CallTool(ToolIntent(capability=Capability.EDIT)),
                 CallTool(ToolIntent(capability=Capability.VCS)),
                 Finish("recorded"),
             ]

@@ -57,6 +57,7 @@ class ToolCatalog:
                 call=ToolCall(
                     spec_name=candidates[0].name,
                     params=dict(intent.params),
+                    capability=intent.capability,
                 ),
             )
 
@@ -72,7 +73,11 @@ class ToolCatalog:
         if score(top)[0] > score(second)[0]:
             return ToolBinding(
                 status=BindingStatus.BOUND,
-                call=ToolCall(spec_name=top.name, params=dict(intent.params)),
+                call=ToolCall(
+                    spec_name=top.name,
+                    params=dict(intent.params),
+                    capability=intent.capability,
+                ),
             )
         return ToolBinding(
             status=BindingStatus.AMBIGUOUS,
