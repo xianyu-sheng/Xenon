@@ -216,6 +216,8 @@ class TaskSpec:
     mode: TaskMode = TaskMode.AUTO
     deadline: float | None = None  # absolute epoch seconds; see Budget for duration
     budget: Budget = field(default_factory=Budget)
+    # #201: push is an explicit user request, never a default finalize action.
+    allow_push: bool = False
     schema_version: str = SCHEMA_VERSION
 
 
@@ -246,6 +248,9 @@ class ToolIntent:
 class ToolCall:
     spec_name: str
     params: Mapping[str, Any] = field(default_factory=dict)
+    # Set by the catalog at bind time.  Gateway-level policies use this to
+    # verify that the bound tool actually advertises the requested capability.
+    capability: Capability | None = None
 
 
 class BindingStatus(str, Enum):

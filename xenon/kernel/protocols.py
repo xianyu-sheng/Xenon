@@ -43,6 +43,15 @@ class Policy(Protocol):
 
 
 @runtime_checkable
+class BoundToolPolicy(Protocol):
+    """Gateway-side policy with the concrete spec and bound call."""
+
+    def check_bound(
+        self, spec: ToolSpec | None, call: ToolCall
+    ) -> PolicyDecision: ...
+
+
+@runtime_checkable
 class ToolCatalog(Protocol):
     """Capability-aware view of the tool surface."""
 

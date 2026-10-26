@@ -30,7 +30,10 @@ from xenon.kernel.contracts import (
     ModelView,
     PolicyDecision,
     PolicyDecisionKind,
+    Risk,
+    ToolCall,
     ToolIntent,
+    ToolSpec,
 )
 
 _CMD_KEY = "comm" + "and"
@@ -237,7 +240,79 @@ class PermissionPolicy:
             return PolicyDecision(
                 kind=PolicyDecisionKind.ALLOW, reason="not a tool call"
             )
-        intent = action.intent
+        return self.check_intent(action.intent)
+
+    def check_bound(self, spec: ToolSpec | None, call: ToolCall) -> PolicyDecision:
+        """Gateway-side check with the actual bound spec.
+
+        This closes the capability-only blind spot: a catalog cannot bind EDIT
+        to a tool that advertises NETWORK and still pass the guard.
+        """
+
+        if spec is None:
+            return self._deny(
+                call.capability or Capability.EDIT,
+                [],
+                f"unknown tool spec: {call.spec_name}",
+            )
+        capability = call.capability
+        if capability is None and len(spec.capabilities) == 1:
+            capability = next(iter(spec.capabilities))
+        if capability is None:
+            return self._deny(
+                Capability.SHELL,
+                [],
+                "ambiguous bound capability; catalog must set ToolCall.capability",
+            )
+        if capability not in spec.capabilities:
+            return self._deny(
+                capability,
+                [],
+                "catalog bound a tool that does not advertise this capability",
+            )
+        intent = ToolIntent(capability=capability, params=call.params)
+        if (
+            EffectKind.NETWORK in spec.effects
+            and capability is not Capability.REMOTE
+        ):
+            return self._deny(
+                capability, [], "network effect on a non-remote capability"
+            )
+        if EffectKind.FS_DELETE in spec.effects:
+            if (
+                capability not in {Capability.EDIT, Capability.SHELL}
+                or self._grant(capability, _targets(intent)) is None
+            ):
+                return self._deny(
+                    capability,
+                    _targets(intent),
+                    "delete effect requires a scoped grant",
+                )
+        if len(spec.capabilities) == 1:
+            if (
+                EffectKind.VCS_PUSH in spec.effects
+                and capability not in {Capability.VCS, Capability.SHELL}
+            ):
+                return self._deny(
+                    capability, [], "push effect on a non-vcs capability"
+                )
+            if (
+                spec.risk is Risk.SENSITIVE
+                and capability
+                in {
+                    Capability.READ,
+                    Capability.SEARCH,
+                    Capability.EDIT,
+                }
+            ):
+                return self._deny(
+                    capability,
+                    [],
+                    "sensitive tool bound to an informational capability",
+                )
+        return self.check_intent(intent)
+
+    def check_intent(self, intent: ToolIntent) -> PolicyDecision:
         capability = intent.capability
         targets = _targets(intent)
         grant = self._grant(capability, targets)

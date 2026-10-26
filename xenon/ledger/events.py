@@ -54,6 +54,7 @@ class EventKind(str, Enum):
     AUDIT_REPORTED = "audit_reported"
     DELIVERY_ATTEMPTED = "delivery_attempted"
     DELIVERED = "delivered"
+    FINALIZE_STARTED = "finalize_started"
     FINALIZED = "finalized"
     STATE_TRANSITION = "state_transition"
     CONTEXT_COMPACTED = "context_compacted"

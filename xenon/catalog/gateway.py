@@ -9,6 +9,7 @@ durable source.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import time
 import uuid
@@ -22,6 +23,7 @@ from xenon.kernel.contracts import (
     FsWrite,
     NetworkFact,
     Opaque,
+    PolicyDecisionKind,
     ReadFact,
     ReceiptStatus,
     TestRun,
@@ -31,6 +33,7 @@ from xenon.kernel.contracts import (
     VcsCommit,
     VcsPush,
 )
+from xenon.kernel.protocols import BoundToolPolicy
 from xenon.nodes.tool_executor import ToolExecuteResult, ToolExecutor
 
 _WRITE_TOOLS = frozenset(
@@ -143,12 +146,14 @@ class LegacyToolGateway:
         workspace: str | Path | None = None,
         context: AgentContext | None = None,
         tracker: ToolExecutionTracker | None = None,
+        policy: BoundToolPolicy | None = None,
     ) -> None:
         self._executor = executor or ToolExecutor(record_evidence=False)
         self._specs = {spec.name: spec for spec in specs}
         self._workspace = Path(workspace).resolve() if workspace else None
         self._context = context or AgentContext()
         self._tracker = tracker or ToolExecutionTracker()
+        self._policy = policy
         if self._workspace is not None and hasattr(self._executor, "set_runtime"):
             self._executor.set_runtime(
                 ToolRuntime(workspace_root=self._workspace)
@@ -169,6 +174,17 @@ class LegacyToolGateway:
         workspace = self._workspace or Path(
             getattr(services, "workspace", "") or "."
         ).resolve()
+        if self._policy is not None:
+            spec = self._specs.get(call.spec_name)
+            decision = self._policy.check_bound(spec, call)
+            if decision.kind is not PolicyDecisionKind.ALLOW:
+                return self._denied_receipt(
+                    call,
+                    services,
+                    spec,
+                    reason=decision.reason or "permission denied",
+                    started=started,
+                )
         before: dict[str, bool] = {}
         if call.spec_name in _WRITE_TOOLS:
             for path in _targets(call.params):
@@ -198,6 +214,43 @@ class LegacyToolGateway:
             ended=time.time(),
             workspace=workspace,
             before=before,
+        )
+
+    def _denied_receipt(
+        self,
+        call: ToolCall,
+        services: Any,
+        spec: ToolSpec | None,
+        *,
+        reason: str,
+        started: float,
+    ) -> ToolReceipt:
+        digest = hashlib.sha256(
+            json.dumps(
+                [call.spec_name, sorted(call.params.items(), key=str)],
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()[:12]
+        receipt_id = f"denied-{digest}"
+        declared = (
+            tuple(sorted(spec.effects, key=lambda item: item.value))
+            if spec is not None
+            else ()
+        )
+        return ToolReceipt(
+            receipt_id=receipt_id,
+            call_id=f"{call.spec_name}-{receipt_id}",
+            task_id=str(getattr(services, "task_id", "") or ""),
+            step_id=getattr(services, "current_step_id", None),
+            tool=call.spec_name,
+            status=ReceiptStatus.DENIED,
+            effects=(),
+            declared_effects=declared,
+            observed_effects=(),
+            error=reason,
+            started_at=started,
+            ended_at=time.time(),
         )
 
     def _receipt(

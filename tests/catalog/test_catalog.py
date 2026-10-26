@@ -31,6 +31,7 @@ def test_core_catalog_binds_each_capability_to_one_core_tool() -> None:
         assert binding.status is BindingStatus.BOUND
         assert binding.call is not None
         assert binding.call.spec_name == name
+        assert binding.call.capability is capability
 
 
 def test_core_catalog_has_no_remote_tool() -> None:

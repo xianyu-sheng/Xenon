@@ -15,9 +15,11 @@ from xenon.kernel.contracts import (
     Capability,
     ModelView,
     PolicyDecisionKind,
+    ReceiptStatus,
     TaskSpec,
     Think,
     ToolIntent,
+    ToolReceipt,
 )
 from xenon.kernel.controller import VerificationController
 from xenon.kernel.policies import (
@@ -156,6 +158,43 @@ def test_scoped_grant_expires(tmp_path) -> None:
     assert _decision(policy, action, str(tmp_path)).kind is PolicyDecisionKind.ALLOW
     now[0] = 200.0
     assert _decision(policy, action, str(tmp_path)).kind is PolicyDecisionKind.VETO
+
+
+class DeniedGateway:
+    def execute(self, call, services) -> ToolReceipt:
+        return ToolReceipt(
+            receipt_id="denied-1",
+            call_id="denied-call-1",
+            task_id="task-1",
+            tool=call.spec_name,
+            status=ReceiptStatus.DENIED,
+            error="policy denied at gateway",
+        )
+
+
+def test_gateway_denial_writes_receipt_and_policy_event(tmp_path) -> None:
+    ledger = Ledger.in_memory("task-1")
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=DeniedGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+    )
+
+    result = runtime.run(
+        _calc_spec(),
+        ScriptedStrategy(
+            [CallTool(ToolIntent(capability=Capability.EDIT)), Think("stop")]
+        ),
+    )
+
+    assert result.accepted is False
+    assert ledger.read(EventKind.TOOL_RECEIPT)
+    assert any(
+        event.kind is EventKind.POLICY_DECISION
+        and "policy denied" in str(event.payload.get("reason"))
+        for event in ledger.read()
+    )
 
 
 def test_veto_prevents_gateway_execution(tmp_path) -> None:
