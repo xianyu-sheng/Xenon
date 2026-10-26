@@ -21,6 +21,7 @@ from xenon.kernel.contracts import (
     ToolIntent,
 )
 from xenon.kernel.controller import VerificationController
+from xenon.kernel.policies import PermissionPolicy
 from xenon.kernel.runtime import LoopRuntime
 from xenon.ledger.events import EventKind
 from xenon.ledger.store import Ledger
@@ -71,6 +72,7 @@ def test_real_calc_task_is_delivered_with_facts(tmp_path: Path) -> None:
         gateway=LegacyToolGateway(specs=CORE_SPECS, workspace=tmp_path),
         controller=VerificationController(),
         ledger=ledger,
+        policies=(PermissionPolicy(workspace=str(tmp_path)),),
     )
     spec = TaskSpec(
         task_id="t1",
