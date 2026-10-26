@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from xenon.ledger.events import EventKind, EventSource
-from xenon.ledger.store import Ledger, LedgerError, ReadOnlyLedger
+from xenon.ledger.store import Ledger, LedgerError, ReadOnlyLedger, read_events
 
 TS = "2026-01-01T00:00:00.000+00:00"
 
@@ -170,3 +170,45 @@ def test_in_memory_ledger_works_without_files() -> None:
     assert ledger.path is None
     assert ledger.watermark() == 1
     assert ledger.verify().valid is True
+
+
+def test_projection_refuses_a_tampered_ledger(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    _append(ledger, 2)
+    path = tmp_path / "task.jsonl"
+    lines = _lines(path)
+    data = json.loads(lines[0])
+    data["payload"]["i"] = 99
+    lines[0] = json.dumps(data, sort_keys=True) + "\n"
+    path.write_text("".join(lines), encoding="utf-8")
+
+    opened = Ledger.open(path, task_id="t1")
+    with pytest.raises(LedgerError, match="invalid ledger"):
+        opened.project("task")
+    with pytest.raises(LedgerError, match="invalid ledger"):
+        read_events(path)
+
+
+def test_read_only_view_exposes_projection_hash(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    _append(ledger, 2)
+    view = ReadOnlyLedger(ledger)
+    assert view.projection_hash("task") == ledger.projection_hash("task")
+
+
+def test_malformed_anchor_is_invalid_not_a_crash(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    _append(ledger, 1)
+    (tmp_path / "task.jsonl.anchor").write_text('{"seq": "oops"}', encoding="utf-8")
+    report = Ledger.open(tmp_path / "task.jsonl", task_id="t1").verify()
+    assert report.valid is False
+    assert "anchor seq" in report.reason
+
+
+def test_anchor_json_array_is_invalid(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    _append(ledger, 1)
+    (tmp_path / "task.jsonl.anchor").write_text("[1, 2]", encoding="utf-8")
+    report = Ledger.open(tmp_path / "task.jsonl", task_id="t1").verify()
+    assert report.valid is False
+    assert "unreadable" in report.reason

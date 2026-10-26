@@ -184,6 +184,7 @@ def project_evidence(events: Sequence[Event]) -> dict[str, Any]:
             "audit": [],
             "deliveries": [],
             "finalized": None,
+            "legacy_events": [],
         }
     )
     for event in events:
@@ -220,6 +221,13 @@ def project_evidence(events: Sequence[Event]) -> dict[str, Any]:
             state["deliveries"].append(dict(payload))
         elif event.kind is EventKind.FINALIZED:
             state["finalized"] = dict(payload)
+        elif event.kind is EventKind.LEGACY_SESSION:
+            state["legacy_events"].append(
+                {
+                    "legacy_id": payload.get("legacy_id"),
+                    "legacy_type": payload.get("legacy_type"),
+                }
+            )
     return state
 
 

@@ -60,6 +60,7 @@ class EventKind(str, Enum):
     USER_INPUT = "user_input"
     USER_APPROVAL = "user_approval"
     INTERRUPT = "interrupt"
+    LEGACY_SESSION = "legacy_session"
 
 
 class EventSource(str, Enum):

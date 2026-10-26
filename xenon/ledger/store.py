@@ -250,7 +250,10 @@ class Ledger:
 
         anchor = self._read_anchor()
         if anchor is not None:
-            anchor_seq = int(anchor.get("seq") or 0)
+            try:
+                anchor_seq = int(anchor.get("seq") or 0)
+            except (TypeError, ValueError):
+                return self._invalid("anchor seq is invalid")
             anchor_hash = str(anchor.get("hash") or "")
             if anchor_seq < 0 or anchor_hash == "__broken__":
                 return self._invalid(
@@ -306,16 +309,34 @@ class Ledger:
     # ── projections ────────────────────────────────────────────────────
 
     def project(
-        self, name: str, up_to_seq: int | None = None
+        self,
+        name: str,
+        up_to_seq: int | None = None,
+        *,
+        verify: bool = True,
     ) -> dict[str, Any]:
         from xenon.ledger.projections import project
 
+        if verify:
+            report = self.verify()
+            if not report.valid:
+                raise LedgerError(
+                    f"cannot project from an invalid ledger: {report.reason}"
+                )
         return project(name, self.read(up_to_seq=up_to_seq))
 
-    def projection_hash(self, name: str, up_to_seq: int | None = None) -> str:
+    def projection_hash(
+        self,
+        name: str,
+        up_to_seq: int | None = None,
+        *,
+        verify: bool = True,
+    ) -> str:
         import hashlib
 
-        payload = canonical_json(self.project(name, up_to_seq=up_to_seq))
+        payload = canonical_json(
+            self.project(name, up_to_seq=up_to_seq, verify=verify)
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     # ── recovery ───────────────────────────────────────────────────────
@@ -408,9 +429,12 @@ class Ledger:
         if not anchor.exists():
             return None
         try:
-            return json.loads(anchor.read_text(encoding="utf-8"))
+            data = json.loads(anchor.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001 — a broken anchor is invalid, not absent
             return {"seq": -1, "hash": "__broken__"}
+        if not isinstance(data, dict):
+            return {"seq": -1, "hash": "__broken__"}
+        return data
 
 
 class ReadOnlyLedger:
@@ -433,13 +457,39 @@ class ReadOnlyLedger:
         return self._ledger.verify(hmac_key=hmac_key)
 
     def project(
-        self, name: str, up_to_seq: int | None = None
+        self,
+        name: str,
+        up_to_seq: int | None = None,
+        *,
+        verify: bool = True,
     ) -> dict[str, Any]:
-        return self._ledger.project(name, up_to_seq=up_to_seq)
+        return self._ledger.project(name, up_to_seq=up_to_seq, verify=verify)
+
+    def projection_hash(
+        self,
+        name: str,
+        up_to_seq: int | None = None,
+        *,
+        verify: bool = True,
+    ) -> str:
+        return self._ledger.projection_hash(
+            name, up_to_seq=up_to_seq, verify=verify
+        )
 
     def append(self, *_args: Any, **_kwargs: Any) -> None:
         raise TypeError("read-only ledger view cannot append")
 
 
-def read_events(path: Path | str) -> Sequence[Event]:
-    return Ledger.open(path).read()
+def read_events(
+    path: Path | str,
+    *,
+    task_id: str = "",
+    hmac_key: bytes | None = None,
+    verify: bool = True,
+) -> Sequence[Event]:
+    ledger = Ledger.open(path, task_id=task_id, hmac_key=hmac_key)
+    if verify:
+        report = ledger.verify()
+        if not report.valid:
+            raise LedgerError(f"cannot read an invalid ledger: {report.reason}")
+    return ledger.read()

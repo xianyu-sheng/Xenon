@@ -22,6 +22,7 @@ from xenon.ledger.events import (
     receipt_to_payload,
     utc_now,
 )
+from xenon.ledger.migrate import MigrationReport, migrate_session_jsonl
 from xenon.ledger.projections import (
     PROJECTIONS,
     project,
@@ -48,6 +49,7 @@ __all__ = [
     "IntegrityReport",
     "Ledger",
     "LedgerError",
+    "MigrationReport",
     "PROJECTIONS",
     "ReadOnlyLedger",
     "SCHEMA_VERSION",
@@ -57,6 +59,7 @@ __all__ = [
     "effect_to_payload",
     "fact_id",
     "hypothesis_id",
+    "migrate_session_jsonl",
     "project",
     "project_all",
     "project_audit",
