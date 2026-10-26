@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import replace
 from typing import Any, Sequence
 
 from xenon.kernel.contracts import (
@@ -27,6 +28,7 @@ from xenon.kernel.contracts import (
     PolicyDecisionKind,
     PropositionKind,
     RequestVerification,
+    Resolution,
     StepContract,
     SubmitPlan,
     TaskMode,
@@ -38,6 +40,7 @@ from xenon.kernel.contracts import (
     VcsCommit,
     Verdict,
     VerdictStatus,
+    VerificationStage,
 )
 from xenon.kernel.phases import assert_transition
 from xenon.kernel.protocols import (
@@ -111,7 +114,11 @@ class LoopRuntime:
         self._cancelled = False
         self._deadline: float | None = None
         self._plan: Any = None
+        self._plan_steps: tuple[StepContract, ...] = ()
+        self._step_index = 0
+        self._closed_steps: set[int] = set()
         self._active_step: StepContract | None = None
+        self._plan_since_seq = 0
         self._verdicts: list[Verdict] = []
         self._debt: list[Any] = []
         self._run_start_seq = 0
@@ -135,7 +142,11 @@ class LoopRuntime:
         self._debt = []
         self._run_start_seq = 0
         self._plan = None
+        self._plan_steps = ()
+        self._step_index = 0
+        self._closed_steps = set()
         self._active_step = None
+        self._plan_since_seq = 0
         self._deadline = self._compute_deadline(spec)
 
         self._append(
@@ -169,6 +180,8 @@ class LoopRuntime:
                 debt=tuple(self._debt),
                 budget=spec.budget,
                 phase=self._phase,
+                active_step=self._active_step,
+                steps=self._plan_steps,
             )
             self._transition(TaskPhase.THINKING, "propose action")
             try:
@@ -189,6 +202,12 @@ class LoopRuntime:
                     EventSource.LLM,
                     {"text": action.text},
                 )
+                if (
+                    self._active_step is not None
+                    and self._active_step.intent is None
+                ):
+                    closed = self._close_active_step()
+                    self._sync_debt(closed)
                 continue
 
             if isinstance(action, SubmitPlan):
@@ -196,7 +215,10 @@ class LoopRuntime:
                 continue
 
             if isinstance(action, UpdatePlan):
-                self._apply_plan(action.plan, updated=True)
+                try:
+                    self._apply_plan(action.plan, updated=True)
+                except ValueError as exc:
+                    self._reject_plan(exc)
                 continue
 
             if isinstance(action, RequestVerification):
@@ -245,18 +267,86 @@ class LoopRuntime:
     # ── action handlers ────────────────────────────────────────────────
 
     def _accept_plan(self, plan: Any) -> None:
-        self._apply_plan(plan, updated=False)
+        try:
+            self._apply_plan(plan, updated=False)
+        except ValueError as exc:
+            self._reject_plan(exc)
+
+    def _reject_plan(self, exc: ValueError) -> None:
+        self._append(
+            EventKind.BINDING_FAILED,
+            EventSource.GATE,
+            {
+                "status": "invalid_plan",
+                "candidates": [],
+                "reason": str(exc),
+            },
+        )
+        self._transition(TaskPhase.REPLANNING, "invalid plan")
+        self._transition(TaskPhase.RUNNING, "replan after invalid plan")
 
     def _apply_plan(self, plan: Any, *, updated: bool) -> None:
-        payload = {"plan": _plan_payload(plan)}
+        raw_steps = tuple(getattr(plan, "steps", ()))
+        self._validate_steps(raw_steps)
+        self._plan_since_seq = self._ledger.watermark()
+        steps = tuple(self._baseline_step(step) for step in raw_steps)
+        payload = {"plan": _plan_payload(plan, steps=steps)}
         if updated:
             self._append(EventKind.PLAN_UPDATED, EventSource.RUNTIME, payload)
         else:
             self._append(EventKind.PLAN_PROPOSED, EventSource.LLM, payload)
             self._append(EventKind.PLAN_ACCEPTED, EventSource.RUNTIME, payload)
         self._plan = plan
-        steps = getattr(plan, "steps", ())
+        self._plan_steps = steps
+        self._step_index = 0
+        self._closed_steps.clear()
         self._active_step = steps[0] if steps else None
+        if self._active_step is not None:
+            self._append(
+                EventKind.STEP_STARTED,
+                EventSource.RUNTIME,
+                self._step_payload(self._active_step),
+                step_id=self._current_step_id(),
+            )
+
+    @staticmethod
+    def _validate_steps(steps: Sequence[StepContract]) -> None:
+        ids = [step.id for step in steps]
+        if len(ids) != len(set(ids)):
+            raise ValueError("plan steps must have unique ids")
+        known = set(ids)
+        obligation_ids: list[str] = []
+        for step in steps:
+            for obligation in step.expects:
+                if not obligation.id:
+                    raise ValueError(
+                        f"step {step.id} has an expectation without an id"
+                    )
+                obligation_ids.append(obligation.id)
+            for dependency in step.depends_on:
+                if dependency == step.id:
+                    raise ValueError(
+                        f"step {step.id} cannot depend on itself"
+                    )
+                if dependency not in known:
+                    raise ValueError(
+                        f"step {step.id} depends on unknown step {dependency}"
+                    )
+        if len(obligation_ids) != len(set(obligation_ids)):
+            raise ValueError("plan expectations must have unique ids")
+
+    def _baseline_step(self, step: StepContract) -> StepContract:
+        expects = tuple(
+            self._baseline_obligation(item) for item in step.expects
+        )
+        if expects == step.expects:
+            return step
+        return replace(step, expects=expects)
+
+    def _baseline_obligation(self, obligation: Obligation) -> Obligation:
+        if obligation.since_seq:
+            return obligation
+        return replace(obligation, since_seq=self._plan_since_seq)
 
     def _call_tool(self, action: CallTool) -> None:
         binding = self._catalog.bind(action.intent)
@@ -287,16 +377,96 @@ class LoopRuntime:
         self._transition(TaskPhase.RECONCILING, "receipt recorded")
 
         verdict = self._controller.reconcile(self._active_step, receipt)
-        self._verdicts.append(verdict)
         self._append(
             EventKind.STEP_VERDICT,
             EventSource.GATE,
             _verdict_payload(verdict),
             step_id=self._current_step_id(),
         )
-        if verdict.status is VerdictStatus.VIOLATED:
+        # V0 is receipt-level.  It becomes an obligation only when the active
+        # step actually expects something; a failed exploratory read must not
+        # poison delivery forever.
+        obligation_receipt = bool(
+            self._active_step is not None and self._active_step.expects
+        )
+        step_verdicts: tuple[Verdict, ...] = ()
+        if obligation_receipt:
+            self._verdicts.append(verdict)
+            step_verdicts = (verdict,)
+        if verdict.status is not VerdictStatus.VIOLATED:
+            step_verdicts += self._close_active_step()
+        self._sync_debt(step_verdicts)
+        if any(
+            item.status is VerdictStatus.VIOLATED for item in step_verdicts
+        ):
             self._transition(TaskPhase.REPAIRING, verdict.reason or "violated")
         self._transition(TaskPhase.RUNNING, "next action")
+
+    def _close_active_step(self) -> tuple[Verdict, ...]:
+        step = self._active_step
+        if step is None or step.id in self._closed_steps:
+            return ()
+        verdicts = self._close_step(step)
+        if step.id in self._closed_steps:
+            self._advance_step()
+        return verdicts
+
+    def _close_step(self, step: StepContract) -> tuple[Verdict, ...]:
+        verdicts = self._controller.close_step(step, self._readonly)
+        for verdict in verdicts:
+            self._verdicts.append(verdict)
+            self._append(
+                EventKind.STEP_VERDICT,
+                EventSource.GATE,
+                _verdict_payload(verdict),
+                step_id=str(step.id),
+            )
+        satisfied = all(
+            item.status is VerdictStatus.SATISFIED for item in verdicts
+        )
+        if satisfied:
+            self._closed_steps.add(step.id)
+            self._append(
+                EventKind.STEP_CLOSED,
+                EventSource.GATE,
+                {
+                    "step_id": step.id,
+                    "status": "satisfied",
+                    "verdicts": [
+                        _verdict_payload(item) for item in verdicts
+                    ],
+                },
+                step_id=str(step.id),
+            )
+        return verdicts
+
+    def _advance_step(self) -> None:
+        self._step_index += 1
+        if self._step_index < len(self._plan_steps):
+            self._active_step = self._plan_steps[self._step_index]
+            self._append(
+                EventKind.STEP_STARTED,
+                EventSource.RUNTIME,
+                self._step_payload(self._active_step),
+                step_id=self._current_step_id(),
+            )
+        else:
+            self._active_step = None
+
+    def _close_remaining_steps(self) -> None:
+        for step in self._plan_steps:
+            if step.id in self._closed_steps:
+                continue
+            self._sync_debt(self._close_step(step))
+        if all(step.id in self._closed_steps for step in self._plan_steps):
+            self._active_step = None
+            self._step_index = len(self._plan_steps)
+
+    def _step_payload(self, step: StepContract) -> dict[str, Any]:
+        return _serialize_step(step, task_id=self._task_id())
+
+    def _task_id(self) -> str:
+        return self._spec.task_id if self._spec is not None else ""
 
     def _finish(self, action: Finish) -> TaskResult | None:
         claims = tuple(self._baseline_claim(item) for item in action.claims)
@@ -306,6 +476,33 @@ class LoopRuntime:
                 EventSource.LLM,
                 _claim_payload(claim),
             )
+
+        # A Finish is also the last chance to close a plan.  Unexecuted steps
+        # produce V1 violations, not an implicit "done".
+        self._close_remaining_steps()
+        self._sync_debt(self._verdicts)
+
+        if (
+            self._spec is not None
+            and self._spec.mode is not TaskMode.CHAT
+            and not claims
+            and not self._has_successful_receipt()
+        ):
+            no_evidence = Verdict(
+                obligation_id="task-evidence",
+                stage=VerificationStage.V2,
+                status=VerdictStatus.UNVERIFIABLE,
+                reason="no successful tool receipt for this task",
+            )
+            self._verdicts.append(no_evidence)
+            self._sync_debt((no_evidence,))
+            self._transition(TaskPhase.BLOCKED, no_evidence.reason)
+            return self._result(
+                accepted=False,
+                evidence=EvidenceStatus.UNVERIFIED,
+                claims=claims,
+            )
+
         self._transition(TaskPhase.AUDITING, "finish requested")
         checks: tuple[Verdict, ...]
         if claims:
@@ -318,19 +515,33 @@ class LoopRuntime:
                 self._controller.audit(None, self._readonly, tuple(self._debt)),
             )
         self._verdicts.extend(checks)
-        self._open_debt_from(self._verdicts)
+
+        resolutions = tuple(
+            self._controller.resolve(claim, self._readonly) for claim in claims
+        )
+        for resolution in resolutions:
+            self._append(
+                EventKind.CLAIM_RESOLVED,
+                EventSource.GATE,
+                _resolution_payload(resolution),
+            )
+
+        self._sync_debt(self._verdicts)
         self._append(
             EventKind.AUDIT_REPORTED,
             EventSource.GATE,
             {
                 "verdicts": [_verdict_payload(item) for item in checks],
                 "claims": [_claim_payload(item) for item in claims],
+                "resolutions": [
+                    _resolution_payload(item) for item in resolutions
+                ],
                 "debt": [item.obligation.id for item in self._debt],
             },
         )
 
         decision = self._controller.decide(
-            tuple(self._verdicts), tuple(self._debt)
+            _latest_verdicts(self._verdicts), tuple(self._debt)
         )
         self._append(
             EventKind.CONTROL_DECISION,
@@ -367,6 +578,7 @@ class LoopRuntime:
                 evidence=evidence,
                 answer=action.answer,
                 claims=claims,
+                resolutions=resolutions,
                 finalize_sha=sha,
             )
 
@@ -392,6 +604,8 @@ class LoopRuntime:
             return self._result(
                 accepted=False,
                 evidence=EvidenceStatus.ABSTAINED,
+                claims=claims,
+                resolutions=resolutions,
             )
 
         if decision.kind is ControlDecisionKind.ABORT:
@@ -399,12 +613,16 @@ class LoopRuntime:
             return self._result(
                 accepted=False,
                 evidence=EvidenceStatus.UNVERIFIED,
+                claims=claims,
+                resolutions=resolutions,
             )
 
         self._transition(TaskPhase.BLOCKED, decision.reason or "blocked")
         return self._result(
             accepted=False,
             evidence=EvidenceStatus.UNVERIFIED,
+            claims=claims,
+            resolutions=resolutions,
         )
 
     # ── policies and limits ────────────────────────────────────────────
@@ -464,6 +682,7 @@ class LoopRuntime:
         evidence: EvidenceStatus,
         answer: str = "",
         claims: Sequence[Claim] = (),
+        resolutions: Sequence[Resolution] = (),
         finalize_sha: str | None = None,
     ) -> TaskResult:
         assert self._spec is not None
@@ -473,6 +692,7 @@ class LoopRuntime:
             phase=self._phase,
             answer=answer,
             claims=tuple(claims),
+            resolutions=tuple(resolutions),
             verdicts=tuple(self._verdicts),
             debt=tuple(self._debt),
             finalize_sha=finalize_sha,
@@ -501,23 +721,52 @@ class LoopRuntime:
             return None
         return str(self._active_step.id)
 
-    def _open_debt_from(self, verdicts: Sequence[Verdict]) -> None:
-        existing = {item.obligation.id for item in self._debt}
-        for verdict in verdicts:
+    def _sync_debt(self, verdicts: Sequence[Verdict]) -> None:
+        latest = _latest_verdict_map(verdicts)
+        if not latest:
+            return
+        remaining: list[Debt] = []
+        existing: set[str] = set()
+        for debt in self._debt:
+            verdict = latest.get(debt.obligation.id)
+            if verdict is not None and verdict.status is VerdictStatus.SATISFIED:
+                self._append(
+                    EventKind.DEBT_CLOSED,
+                    EventSource.GATE,
+                    {
+                        "obligation_id": debt.obligation.id,
+                        "reason": "verified by a later fact",
+                        "stage": verdict.stage.value,
+                    },
+                    step_id=self._current_step_id(),
+                )
+                continue
+            remaining.append(debt)
+            existing.add(debt.obligation.id)
+        self._debt = remaining
+
+        for obligation_id, verdict in latest.items():
             if verdict.status is VerdictStatus.SATISFIED:
                 continue
-            obligation_id = verdict.obligation_id or (
-                f"obligation-{len(self._debt) + 1}"
-            )
+            if (
+                verdict.stage is VerificationStage.V0
+                and self._find_obligation(obligation_id, verdict) is None
+            ):
+                # A failed exploratory tool call is not an obligation.  It is
+                # still recorded as a receipt/verdict; only plan/claim
+                # obligations can block delivery permanently.
+                continue
             if obligation_id in existing:
                 continue
-            obligation = Obligation(
-                id=obligation_id,
-                kind=PropositionKind.REQUIREMENT_MET,
-                source=ObligationSource.USER,
-                required=True,
-                since_seq=self._run_start_seq,
-            )
+            obligation = self._find_obligation(obligation_id, verdict)
+            if obligation is None:
+                obligation = Obligation(
+                    id=obligation_id,
+                    kind=PropositionKind.REQUIREMENT_MET,
+                    source=ObligationSource.USER,
+                    required=True,
+                    since_seq=self._run_start_seq,
+                )
             debt = Debt(
                 obligation=obligation,
                 reason=verdict.reason or verdict.status.value,
@@ -529,11 +778,31 @@ class LoopRuntime:
                 EventSource.GATE,
                 {
                     "obligation_id": obligation_id,
+                    "kind": obligation.kind.value,
+                    "target": obligation.target,
                     "reason": debt.reason,
                     "stage": verdict.stage.value,
                 },
                 step_id=self._current_step_id(),
             )
+
+    def _find_obligation(
+        self, obligation_id: str, verdict: Verdict
+    ) -> Obligation | None:
+        for step in self._plan_steps:
+            for obligation in step.expects:
+                if obligation.id == obligation_id:
+                    return self._baseline_obligation(obligation)
+        return None
+
+    def _has_successful_receipt(self) -> bool:
+        for event in self._ledger.read(EventKind.TOOL_RECEIPT):
+            if event.seq <= self._run_start_seq:
+                continue
+            payload = event.payload.get("receipt")
+            if isinstance(payload, dict) and payload.get("status") == "ok":
+                return True
+        return False
 
     def _baseline_claim(self, claim: Claim) -> Claim:
         if claim.since_seq:
@@ -549,6 +818,8 @@ class LoopRuntime:
 
     def _last_commit_sha(self) -> str | None:
         for event in reversed(self._ledger.read(EventKind.TOOL_RECEIPT)):
+            if event.seq <= self._run_start_seq:
+                continue
             payload = event.payload.get("receipt")
             if not isinstance(payload, dict):
                 continue
@@ -609,23 +880,72 @@ def _readonly_view(ledger: Ledger) -> Any:
     return ReadOnlyLedger(ledger)  # type: ignore[arg-type]
 
 
-def _plan_payload(plan: Any) -> dict[str, Any]:
-    steps = getattr(plan, "steps", ())
+def _serialize_step(step: StepContract, *, task_id: str = "") -> dict[str, Any]:
+    intent = step.intent
+    return {
+        "step_id": step.id,
+        "task": task_id,
+        "kind": step.kind.value,
+        "targets": list(step.targets),
+        "depends_on": list(step.depends_on),
+        "prefer": step.prefer,
+        "intent": (
+            None
+            if intent is None
+            else {
+                "capability": intent.capability.value,
+                "params": dict(intent.params),
+                "targets": list(intent.targets),
+                "prefer": intent.prefer,
+            }
+        ),
+        "expects": [
+            {
+                "id": item.id,
+                "kind": item.kind.value,
+                "target": item.target,
+                "expect": dict(item.expect),
+                "since_seq": item.since_seq,
+            }
+            for item in step.expects
+        ],
+    }
+
+
+def _plan_payload(
+    plan: Any, *, steps: Sequence[StepContract] | None = None
+) -> dict[str, Any]:
+    selected = tuple(steps) if steps is not None else tuple(
+        getattr(plan, "steps", ())
+    )
     return {
         "analysis": getattr(plan, "analysis", ""),
-        "steps": [
-            {
-                "id": getattr(step, "id", 0),
-                "kind": getattr(getattr(step, "kind", None), "value", ""),
-                "targets": list(getattr(step, "targets", ())),
-                "depends_on": list(getattr(step, "depends_on", ())),
-                "expects": [
-                    getattr(item, "id", "")
-                    for item in getattr(step, "expects", ())
-                ],
-            }
-            for step in steps
-        ],
+        "steps": [_serialize_step(step) for step in selected],
+    }
+
+
+def _latest_verdict_map(
+    verdicts: Sequence[Verdict],
+) -> dict[str, Verdict]:
+    """One verdict per obligation; later verdicts replace earlier ones."""
+
+    latest: dict[str, Verdict] = {}
+    for verdict in verdicts:
+        latest[verdict.obligation_id] = verdict
+    return latest
+
+
+def _latest_verdicts(verdicts: Sequence[Verdict]) -> tuple[Verdict, ...]:
+    return tuple(_latest_verdict_map(verdicts).values())
+
+
+def _resolution_payload(resolution: Resolution) -> dict[str, Any]:
+    return {
+        "claim_id": resolution.claim_id,
+        "status": resolution.status.value,
+        "fact_ids": list(resolution.fact_ids),
+        "reason": resolution.reason,
+        "candidates": list(resolution.candidates),
     }
 
 

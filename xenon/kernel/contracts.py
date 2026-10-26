@@ -582,6 +582,8 @@ class ModelView:
     input_seq: int
     hash: str
     phase: TaskPhase = TaskPhase.RUNNING
+    active_step: StepContract | None = None
+    steps: tuple[StepContract, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
 

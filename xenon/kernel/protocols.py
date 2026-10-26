@@ -15,6 +15,7 @@ from xenon.kernel.contracts import (
     Debt,
     ModelView,
     PolicyDecision,
+    Resolution,
     StepContract,
     TaskResult,
     TaskSpec,
@@ -86,6 +87,8 @@ class VerificationController(Protocol):
     def close_step(
         self, step: StepContract, ledger: Ledger
     ) -> tuple[Verdict, ...]: ...
+
+    def resolve(self, claim: Claim, ledger: Ledger) -> Resolution: ...
 
     def audit(
         self, claim: Claim | None, ledger: Ledger, debt: Sequence[Debt]

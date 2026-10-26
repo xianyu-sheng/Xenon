@@ -194,6 +194,44 @@ def test_commit_claim_matches_real_sha() -> None:
     assert resolution.status.value == "bound"
 
 
+def test_multiple_distinct_paths_matching_a_suffix_are_ambiguous() -> None:
+    ledger = _ledger()
+    _append(ledger, (FsWrite(paths=("foo/a.py",)),))
+    _append(ledger, (FsWrite(paths=("bar/a.py",)),))
+    resolution = ClaimResolver().resolve(
+        _claim(PropositionKind.FILE_CHANGED, "a.py"), ledger
+    )
+    assert resolution.status.value == "ambiguous"
+
+
+def test_repeated_write_to_same_path_binds_latest_fact() -> None:
+    ledger = _ledger()
+    _append(ledger, (FsWrite(paths=("a.py",), hashes={"a.py": "one"}),))
+    _append(ledger, (FsWrite(paths=("a.py",), hashes={"a.py": "two"}),))
+    resolution = ClaimResolver().resolve(
+        _claim(PropositionKind.FILE_CHANGED, "a.py"), ledger
+    )
+    assert resolution.status.value == "bound"
+    assert len(resolution.fact_ids) == 1
+
+
+def test_exact_test_file_beats_a_node_specific_fact() -> None:
+    ledger = _ledger()
+    _append(
+        ledger,
+        (TestRun(target="tests/test_a.py::test_add", tests_run=1, passed=1),),
+    )
+    _append(
+        ledger,
+        (TestRun(target="tests/test_a.py", tests_run=3, passed=3),),
+    )
+    resolution = ClaimResolver().resolve(
+        _claim(PropositionKind.TEST_PASSED, "tests/test_a.py"), ledger
+    )
+    assert resolution.status.value == "bound"
+    assert len(resolution.fact_ids) == 1
+
+
 def test_ambiguous_without_target_is_explicit() -> None:
     ledger = _ledger()
     _append(ledger, (FsWrite(paths=("a.py",)),))

@@ -1,8 +1,8 @@
 """Xenon kernel contracts.
 
 The kernel is the single-loop, evidence-first harness described in
-``docs/adr/0001-single-loop-kernel.md``.  This package currently contains
-contracts only; runtime, strategies, policies and projections land in #196+.
+``docs/adr/0001-single-loop-kernel.md``.  It owns contracts, the ledger-backed
+runtime, verification and strategy seams; projections live in ``xenon.ledger``.
 """
 
 from xenon.kernel.contracts import (
