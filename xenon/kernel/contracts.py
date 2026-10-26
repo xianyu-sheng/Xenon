@@ -210,7 +210,7 @@ class TaskSpec:
     workspace: str
     constraints: tuple[str, ...] = ()
     mode: TaskMode = TaskMode.AUTO
-    deadline: float | None = None
+    deadline: float | None = None  # absolute epoch seconds; see Budget for duration
     budget: Budget = field(default_factory=Budget)
     schema_version: str = SCHEMA_VERSION
 

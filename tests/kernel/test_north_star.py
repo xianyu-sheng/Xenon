@@ -1,25 +1,24 @@
 """North-star contracts for the single-loop kernel.
 
-These tests are the target, not the current behavior.  They fail with
-``ImportError`` until the runtime lands in #196; after that they must pass
-without modification except for the ``xfail`` marker removal.
+The runtime (#196) must pass the arbitrary-name and replay contracts.  The
+lying-model contract needs the real claim resolver (#199), so it stays xfail
+with an explicit reason.
 
-The point is to keep the contract honest while the implementation is split into
-#193–#204.  If the kernel starts branching on concrete tool names, these tests
-and ``scripts/check_kernel_purity.py`` both fail.
+If the kernel starts branching on concrete tool names, these tests and
+``scripts/check_kernel_purity.py`` both fail.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any
 
 import pytest
 
 from xenon.kernel.contracts import (
     Abort,
+    AskUser,
     BindingStatus,
+    Budget,
     CallTool,
     Capability,
     Claim,
@@ -27,16 +26,22 @@ from xenon.kernel.contracts import (
     ControlDecision,
     ControlDecisionKind,
     EffectKind,
+    EvidenceStatus,
     Finish,
     FsWrite,
+    PolicyDecision,
+    PolicyDecisionKind,
     PropositionKind,
     ReadFact,
     ReceiptStatus,
     Risk,
     StepContract,
     StepKind,
+    TaskMode,
+    TaskPhase,
     TaskSpec,
     TestRun,
+    Think,
     ToolBinding,
     ToolCall,
     ToolIntent,
@@ -47,14 +52,10 @@ from xenon.kernel.contracts import (
     VerdictStatus,
     VerificationStage,
 )
+from xenon.ledger.events import EventKind
+from xenon.ledger.store import Ledger
 
 pytestmark = pytest.mark.kernel_contract
-
-XFAIL = pytest.mark.xfail(
-    raises=ImportError,
-    strict=False,
-    reason="LoopRuntime lands in #196; this test is the north-star contract",
-)
 
 SPECS = (
     ToolSpec(
@@ -137,49 +138,6 @@ class FakeGateway:
         )
 
 
-class FakeLedger:
-    def __init__(self) -> None:
-        self.events: list[Any] = []
-
-    def append(self, event: Any) -> int:
-        self.events.append(event)
-        return len(self.events)
-
-    def read(
-        self, kind: str | None = None, up_to_seq: int | None = None
-    ) -> tuple[Any, ...]:
-        limit = up_to_seq if up_to_seq is not None else len(self.events)
-        items = self.events[:limit]
-        if kind is None:
-            return tuple(items)
-        return tuple(item for item in items if getattr(item, "kind", None) == kind)
-
-    def watermark(self) -> int:
-        return len(self.events)
-
-    def projection(
-        self, name: str, up_to_seq: int | None = None
-    ) -> dict[str, Any]:
-        limit = up_to_seq if up_to_seq is not None else len(self.events)
-        payload = json.dumps(
-            [repr(item) for item in self.events[:limit]], sort_keys=True
-        )
-        return {
-            "name": name,
-            "hash": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
-            "events": limit,
-        }
-
-    def verify(self) -> bool:
-        return True
-
-    def effects(self) -> tuple[Any, ...]:
-        result: list[Any] = []
-        for event in self.events:
-            result.extend(getattr(event, "effects", ()) or ())
-        return tuple(result)
-
-
 class StrictFakeController:
     """A tiny stand-in: the real controller lands in #199."""
 
@@ -197,7 +155,7 @@ class StrictFakeController:
         )
 
     def close_step(
-        self, step: StepContract, ledger: FakeLedger
+        self, step: StepContract, ledger: Any
     ) -> tuple[Verdict, ...]:
         return tuple(
             Verdict(
@@ -209,7 +167,7 @@ class StrictFakeController:
         )
 
     def audit(
-        self, claim: Claim | None, ledger: FakeLedger, debt: Any
+        self, claim: Claim | None, ledger: Any, debt: Any
     ) -> Verdict:
         return Verdict(
             obligation_id=claim.id if claim else "audit",
@@ -233,7 +191,20 @@ class ScriptedStrategy:
         return self.actions.pop(0)
 
 
-def _runtime(ledger: FakeLedger):
+class VetoPolicy:
+    def check(self, view: Any, action: Any) -> PolicyDecision:
+        return PolicyDecision(PolicyDecisionKind.VETO, "not allowed")
+
+
+class RecordingSink:
+    def __init__(self) -> None:
+        self.events: list[Any] = []
+
+    def emit(self, event: Any) -> None:
+        self.events.append(event)
+
+
+def _runtime(ledger: Ledger, *, policies: Any = (), sink: Any = None):
     from xenon.kernel.runtime import LoopRuntime
 
     return LoopRuntime(
@@ -241,7 +212,8 @@ def _runtime(ledger: FakeLedger):
         gateway=FakeGateway(),
         controller=StrictFakeController(),
         ledger=ledger,
-        sink=None,
+        sink=sink,
+        policies=policies,
     )
 
 
@@ -249,9 +221,8 @@ def _calc_spec() -> TaskSpec:
     return TaskSpec(task_id="task-1", objective="fix add", workspace=".")
 
 
-@XFAIL
 def test_fake_catalog_arbitrary_names() -> None:
-    ledger = FakeLedger()
+    ledger = Ledger.in_memory("task-1")
     runtime = _runtime(ledger)
     strategy = ScriptedStrategy(
         [
@@ -268,14 +239,15 @@ def test_fake_catalog_arbitrary_names() -> None:
     assert result.accepted is True
     assert result.finalize_sha == "abc1234"
     tool_names = {
-        event.tool for event in ledger.events if hasattr(event, "tool")
+        event.payload["receipt"]["tool"]
+        for event in ledger.read(EventKind.TOOL_RECEIPT)
     }
     assert {"inspect", "mutate", "check", "record"} <= tool_names
 
 
-@XFAIL
+@pytest.mark.xfail(strict=False, reason="real claim resolver lands in #199")
 def test_lying_strategy_cannot_deliver() -> None:
-    ledger = FakeLedger()
+    ledger = Ledger.in_memory("task-1")
     runtime = _runtime(ledger)
     lie = Claim(
         id="claim-lie",
@@ -289,15 +261,12 @@ def test_lying_strategy_cannot_deliver() -> None:
 
     assert result.accepted is False
     assert result.debt, "a claim without a fact must become debt"
-    assert not any(
-        getattr(event, "tool", None) for event in ledger.events
-    ), "no tool should have run"
+    assert not ledger.read(EventKind.TOOL_RECEIPT), "no tool should have run"
 
 
-@XFAIL
 def test_replay_is_deterministic() -> None:
-    def run_once() -> dict[str, Any]:
-        ledger = FakeLedger()
+    def run_once() -> str:
+        ledger = Ledger.in_memory("task-1")
         runtime = _runtime(ledger)
         strategy = ScriptedStrategy(
             [
@@ -307,9 +276,9 @@ def test_replay_is_deterministic() -> None:
             ]
         )
         runtime.run(_calc_spec(), strategy)
-        return ledger.projection("evidence")
+        return ledger.projection_hash("evidence")
 
-    assert run_once()["hash"] == run_once()["hash"]
+    assert run_once() == run_once()
 
 
 def test_fake_catalog_binds_by_capability_not_name() -> None:
@@ -329,3 +298,76 @@ def test_step_contract_has_obligations_not_tool_names() -> None:
     )
     assert step.kind is StepKind.VERIFY
     assert step.targets == ("tests/test_calc.py",)
+
+
+def test_budget_stops_the_loop() -> None:
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    spec = TaskSpec(
+        task_id="task-1",
+        objective="x",
+        workspace=".",
+        budget=Budget(max_steps=1),
+    )
+    result = runtime.run(spec, ScriptedStrategy([Think("plan"), Finish("done")]))
+    assert result.accepted is False
+    assert result.phase is TaskPhase.BLOCKED
+    assert result.metrics["steps"] == 1
+
+
+def test_cancel_before_run_aborts() -> None:
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    runtime.request_cancel()
+    result = runtime.run(_calc_spec(), ScriptedStrategy([Finish("done")]))
+    assert result.accepted is False
+    assert result.phase is TaskPhase.ABORTED
+
+
+def test_policy_veto_blocks_before_execution() -> None:
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger, policies=[VetoPolicy()])
+    result = runtime.run(_calc_spec(), ScriptedStrategy([Finish("done")]))
+    assert result.accepted is False
+    assert result.phase is TaskPhase.BLOCKED
+    assert any(
+        event.kind is EventKind.POLICY_DECISION for event in ledger.read()
+    )
+
+
+def test_chat_is_accepted_but_never_verified() -> None:
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    spec = TaskSpec(
+        task_id="task-1",
+        objective="hello",
+        workspace=".",
+        mode=TaskMode.CHAT,
+    )
+    result = runtime.run(spec, ScriptedStrategy([Finish("hi")]))
+    assert result.accepted is True
+    assert result.evidence_status is EvidenceStatus.UNVERIFIED
+
+
+def test_ask_user_blocks_instead_of_guessing() -> None:
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    result = runtime.run(_calc_spec(), ScriptedStrategy([AskUser("which file?")]))
+    assert result.accepted is False
+    assert result.phase is TaskPhase.BLOCKED
+    assert result.evidence_status is EvidenceStatus.ABSTAINED
+    assert any(event.kind is EventKind.USER_QUESTION for event in ledger.read())
+
+
+def test_task_id_mismatch_is_rejected() -> None:
+    runtime = _runtime(Ledger.in_memory("other"))
+    with pytest.raises(ValueError, match="does not match"):
+        runtime.run(_calc_spec(), ScriptedStrategy([Finish("done")]))
+
+
+def test_event_sink_receives_events() -> None:
+    sink = RecordingSink()
+    runtime = _runtime(Ledger.in_memory("task-1"), sink=sink)
+    runtime.run(_calc_spec(), ScriptedStrategy([Finish("done")]))
+    assert sink.events
+    assert sink.events[0].kind is EventKind.TASK_STARTED
