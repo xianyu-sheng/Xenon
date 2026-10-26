@@ -108,6 +108,31 @@ def _test_matches(effect: TestRun, target: str) -> bool:
     return _normalized(target) in _normalized(effect.command)
 
 
+def _match_key(fact: Fact, claim: Claim) -> str:
+    """The concrete entity a fact matched, used to reject cross-target guesses."""
+
+    effect = fact.effect
+    paths: Iterable[str] = ()
+    if isinstance(effect, FsWrite):
+        paths = effect.paths
+        if claim.kind is PropositionKind.FILE_CREATED:
+            paths = effect.created_paths
+    for path in paths:
+        if _path_match((path,), claim.target):
+            return _normalized(path)
+    if isinstance(effect, TestRun):
+        if _normalized(effect.target) == _normalized(claim.target):
+            return _normalized(effect.target)
+        if effect.command:
+            return _normalized(effect.command)
+        return _normalized(effect.target)
+    if isinstance(effect, VcsCommit):
+        return effect.sha
+    if isinstance(effect, VcsPush):
+        return f"{effect.remote}:{effect.branch}"
+    return fact.fact_id
+
+
 def _unique_facts(matches: Sequence[Fact]) -> tuple[Fact, ...]:
     seen: set[str] = set()
     result: list[Fact] = []
@@ -257,7 +282,20 @@ class ClaimResolver:
                 reason="multiple facts and no target",
                 candidates=tuple(item.fact_id for item in matches),
             )
-        latest = max(matches, key=lambda item: item.seq)
+        wanted = _normalized(claim.target)
+        exact = [
+            item for item in matches if _match_key(item, claim) == wanted
+        ]
+        keys = {_match_key(item, claim) for item in matches}
+        if not exact and len(keys) > 1:
+            return Resolution(
+                claim_id=claim.id,
+                status=ResolutionStatus.AMBIGUOUS,
+                reason="multiple distinct entities match the target",
+                candidates=tuple(item.fact_id for item in matches),
+            )
+        pool = exact or list(matches)
+        latest = max(pool, key=lambda item: item.seq)
         return Resolution(
             claim_id=claim.id,
             status=ResolutionStatus.BOUND,
@@ -337,6 +375,11 @@ class VerificationController:
             verdicts.append(self._obligation_verdict(obligation, ledger))
         return tuple(verdicts)
 
+    def resolve(self, claim: Claim, ledger: Any) -> Resolution:
+        """Resolve one claim; callers use this to report resolutions honestly."""
+
+        return self._resolver.resolve(claim, ledger)
+
     def audit(
         self, claim: Claim | None, ledger: Any, debt: Sequence[Debt]
     ) -> Verdict:
@@ -353,7 +396,7 @@ class VerificationController:
                 stage=VerificationStage.V2,
                 status=VerdictStatus.SATISFIED,
             )
-        resolution = self._resolver.resolve(claim, ledger)
+        resolution = self.resolve(claim, ledger)
         return self._resolution_verdict(
             claim.id, resolution, VerificationStage.V2
         )

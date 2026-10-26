@@ -15,6 +15,7 @@ from xenon.kernel.contracts import (
     Budget,
     Debt,
     ModelView,
+    StepContract,
     TaskPhase,
     TaskSpec,
     ToolSpec,
@@ -40,6 +41,36 @@ def _tool_schema(spec: ToolSpec) -> dict[str, Any]:
     }
 
 
+def _step_schema(step: StepContract) -> dict[str, Any]:
+    intent = step.intent
+    return {
+        "id": step.id,
+        "kind": step.kind.value,
+        "targets": list(step.targets),
+        "depends_on": list(step.depends_on),
+        "expects": [
+            {
+                "id": item.id,
+                "kind": item.kind.value,
+                "target": item.target,
+                "expect": dict(item.expect),
+            }
+            for item in step.expects
+        ],
+        "intent": (
+            None
+            if intent is None
+            else {
+                "capability": intent.capability.value,
+                "params": dict(intent.params),
+                "targets": list(intent.targets),
+                "prefer": intent.prefer,
+            }
+        ),
+        "prefer": step.prefer,
+    }
+
+
 def _working_set(events: Sequence[Any], limit: int = 12) -> tuple[dict[str, Any], ...]:
     recent = events[-limit:]
     return tuple(
@@ -59,6 +90,8 @@ def build_model_view(
     debt: Sequence[Debt] = (),
     budget: Budget | None = None,
     phase: TaskPhase = TaskPhase.RUNNING,
+    active_step: StepContract | None = None,
+    steps: Sequence[StepContract] = (),
 ) -> ModelView:
     """Build the deterministic view a strategy is allowed to see."""
 
@@ -94,6 +127,10 @@ def build_model_view(
         },
         "input_seq": ledger.watermark(),
         "phase": phase.value,
+        "active_step": (
+            _step_schema(active_step) if active_step is not None else None
+        ),
+        "steps": [_step_schema(item) for item in steps],
     }
     digest = hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
     return ModelView(
@@ -106,4 +143,6 @@ def build_model_view(
         input_seq=ledger.watermark(),
         hash=digest,
         phase=phase,
+        active_step=active_step,
+        steps=tuple(steps),
     )
