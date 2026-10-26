@@ -23,8 +23,6 @@ from xenon.kernel.contracts import (
     Capability,
     Claim,
     ClaimSource,
-    ControlDecision,
-    ControlDecisionKind,
     EffectKind,
     EvidenceStatus,
     Finish,
@@ -48,10 +46,8 @@ from xenon.kernel.contracts import (
     ToolReceipt,
     ToolSpec,
     VcsCommit,
-    Verdict,
-    VerdictStatus,
-    VerificationStage,
 )
+from xenon.kernel.controller import VerificationController
 from xenon.ledger.events import EventKind
 from xenon.ledger.store import Ledger
 
@@ -138,49 +134,6 @@ class FakeGateway:
         )
 
 
-class StrictFakeController:
-    """A tiny stand-in: the real controller lands in #199."""
-
-    def reconcile(self, step: StepContract | None, receipt: ToolReceipt) -> Verdict:
-        obligation_id = step.expects[0].id if step and step.expects else "receipt"
-        status = (
-            VerdictStatus.SATISFIED
-            if receipt.status is ReceiptStatus.OK
-            else VerdictStatus.VIOLATED
-        )
-        return Verdict(
-            obligation_id=obligation_id,
-            stage=VerificationStage.V0,
-            status=status,
-        )
-
-    def close_step(
-        self, step: StepContract, ledger: Any
-    ) -> tuple[Verdict, ...]:
-        return tuple(
-            Verdict(
-                obligation_id=item.id,
-                stage=VerificationStage.V1,
-                status=VerdictStatus.SATISFIED,
-            )
-            for item in step.expects
-        )
-
-    def audit(
-        self, claim: Claim | None, ledger: Any, debt: Any
-    ) -> Verdict:
-        return Verdict(
-            obligation_id=claim.id if claim else "audit",
-            stage=VerificationStage.V2,
-            status=VerdictStatus.SATISFIED if not debt else VerdictStatus.VIOLATED,
-        )
-
-    def decide(self, verdicts: Any, debt: Any) -> ControlDecision:
-        if debt:
-            return ControlDecision(ControlDecisionKind.BLOCK, reason="debt")
-        return ControlDecision(ControlDecisionKind.DELIVER)
-
-
 class ScriptedStrategy:
     def __init__(self, actions: list[Any]) -> None:
         self.actions = list(actions)
@@ -210,7 +163,7 @@ def _runtime(ledger: Ledger, *, policies: Any = (), sink: Any = None):
     return LoopRuntime(
         catalog=FakeCatalog(),
         gateway=FakeGateway(),
-        controller=StrictFakeController(),
+        controller=VerificationController(),
         ledger=ledger,
         sink=sink,
         policies=policies,
@@ -245,7 +198,6 @@ def test_fake_catalog_arbitrary_names() -> None:
     assert {"inspect", "mutate", "check", "record"} <= tool_names
 
 
-@pytest.mark.xfail(strict=False, reason="real claim resolver lands in #199")
 def test_lying_strategy_cannot_deliver() -> None:
     ledger = Ledger.in_memory("task-1")
     runtime = _runtime(ledger)

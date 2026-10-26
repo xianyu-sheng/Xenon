@@ -322,6 +322,7 @@ class Obligation:
     expect: Mapping[str, Any] = field(default_factory=dict)
     source: ObligationSource = ObligationSource.USER
     required: bool = True
+    since_seq: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +332,7 @@ class Claim:
     target: str = ""
     expect: Mapping[str, Any] = field(default_factory=dict)
     source: ClaimSource = ClaimSource.LLM
+    since_seq: int = 0
 
 
 class ResolutionStatus(str, Enum):

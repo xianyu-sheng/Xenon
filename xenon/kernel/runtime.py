@@ -19,9 +19,13 @@ from xenon.kernel.contracts import (
     CallTool,
     Claim,
     ControlDecisionKind,
+    Debt,
     EvidenceStatus,
     Finish,
+    Obligation,
+    ObligationSource,
     PolicyDecisionKind,
+    PropositionKind,
     RequestVerification,
     StepContract,
     SubmitPlan,
@@ -106,6 +110,7 @@ class LoopRuntime:
         self._active_step: StepContract | None = None
         self._verdicts: list[Verdict] = []
         self._debt: list[Any] = []
+        self._run_start_seq = 0
 
     # ── public surface ─────────────────────────────────────────────────
 
@@ -124,6 +129,7 @@ class LoopRuntime:
         self._tool_calls = 0
         self._verdicts = []
         self._debt = []
+        self._run_start_seq = 0
         self._plan = None
         self._active_step = None
         self._deadline = self._compute_deadline(spec)
@@ -138,6 +144,7 @@ class LoopRuntime:
                 "constraints": list(spec.constraints),
             },
         )
+        self._run_start_seq = self._ledger.watermark()
         self._transition(TaskPhase.INTAKE, "task accepted")
         self._append(
             EventKind.INTAKE_RECORDED,
@@ -192,7 +199,7 @@ class LoopRuntime:
                 self._append(
                     EventKind.CLAIM_PROPOSED,
                     EventSource.LLM,
-                    _claim_payload(action.claim),
+                    _claim_payload(self._baseline_claim(action.claim)),
                 )
                 continue
 
@@ -288,7 +295,8 @@ class LoopRuntime:
         self._transition(TaskPhase.RUNNING, "next action")
 
     def _finish(self, action: Finish) -> TaskResult | None:
-        for claim in action.claims:
+        claims = tuple(self._baseline_claim(item) for item in action.claims)
+        for claim in claims:
             self._append(
                 EventKind.CLAIM_PROPOSED,
                 EventSource.LLM,
@@ -296,23 +304,24 @@ class LoopRuntime:
             )
         self._transition(TaskPhase.AUDITING, "finish requested")
         checks: tuple[Verdict, ...]
-        if action.claims:
+        if claims:
             checks = tuple(
                 self._controller.audit(claim, self._readonly, tuple(self._debt))
-                for claim in action.claims
+                for claim in claims
             )
         else:
             checks = (
                 self._controller.audit(None, self._readonly, tuple(self._debt)),
             )
         self._verdicts.extend(checks)
+        self._open_debt_from(self._verdicts)
         self._append(
             EventKind.AUDIT_REPORTED,
             EventSource.GATE,
             {
                 "verdicts": [_verdict_payload(item) for item in checks],
-                "claims": [_claim_payload(item) for item in action.claims],
-                "debt": [str(item) for item in self._debt],
+                "claims": [_claim_payload(item) for item in claims],
+                "debt": [item.obligation.id for item in self._debt],
             },
         )
 
@@ -336,7 +345,7 @@ class LoopRuntime:
                 EventSource.RUNTIME,
                 {
                     "answer": action.answer,
-                    "claims": [_claim_payload(item) for item in action.claims],
+                    "claims": [_claim_payload(item) for item in claims],
                     "verdicts": [_verdict_payload(item) for item in checks],
                 },
             )
@@ -353,7 +362,7 @@ class LoopRuntime:
                 accepted=True,
                 evidence=evidence,
                 answer=action.answer,
-                claims=action.claims,
+                claims=claims,
                 finalize_sha=sha,
             )
 
@@ -488,6 +497,52 @@ class LoopRuntime:
             return None
         return str(self._active_step.id)
 
+    def _open_debt_from(self, verdicts: Sequence[Verdict]) -> None:
+        existing = {item.obligation.id for item in self._debt}
+        for verdict in verdicts:
+            if verdict.status is VerdictStatus.SATISFIED:
+                continue
+            obligation_id = verdict.obligation_id or (
+                f"obligation-{len(self._debt) + 1}"
+            )
+            if obligation_id in existing:
+                continue
+            obligation = Obligation(
+                id=obligation_id,
+                kind=PropositionKind.REQUIREMENT_MET,
+                source=ObligationSource.USER,
+                required=True,
+                since_seq=self._run_start_seq,
+            )
+            debt = Debt(
+                obligation=obligation,
+                reason=verdict.reason or verdict.status.value,
+            )
+            self._debt.append(debt)
+            existing.add(obligation_id)
+            self._append(
+                EventKind.DEBT_OPENED,
+                EventSource.GATE,
+                {
+                    "obligation_id": obligation_id,
+                    "reason": debt.reason,
+                    "stage": verdict.stage.value,
+                },
+                step_id=self._current_step_id(),
+            )
+
+    def _baseline_claim(self, claim: Claim) -> Claim:
+        if claim.since_seq:
+            return claim
+        return Claim(
+            id=claim.id,
+            kind=claim.kind,
+            target=claim.target,
+            expect=dict(claim.expect),
+            source=claim.source,
+            since_seq=self._run_start_seq,
+        )
+
     def _last_commit_sha(self) -> str | None:
         for event in reversed(self._ledger.read(EventKind.TOOL_RECEIPT)):
             payload = event.payload.get("receipt")
@@ -577,6 +632,7 @@ def _claim_payload(claim: Claim) -> dict[str, Any]:
         "target": claim.target,
         "expect": dict(claim.expect),
         "source": claim.source.value,
+        "since_seq": claim.since_seq,
     }
 
 
