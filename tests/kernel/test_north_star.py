@@ -19,6 +19,7 @@ import pytest
 
 from xenon.kernel.contracts import (
     Abort,
+    BindingStatus,
     CallTool,
     Capability,
     Claim,
@@ -36,6 +37,7 @@ from xenon.kernel.contracts import (
     StepKind,
     TaskSpec,
     TestRun,
+    ToolBinding,
     ToolCall,
     ToolIntent,
     ToolReceipt,
@@ -90,11 +92,22 @@ class FakeCatalog:
     def specs(self, profile: str = "core") -> tuple[ToolSpec, ...]:
         return SPECS
 
-    def bind(self, intent: ToolIntent) -> ToolCall | None:
-        for spec in SPECS:
-            if intent.capability in spec.capabilities:
-                return ToolCall(spec_name=spec.name, params=dict(intent.params))
-        return None
+    def bind(self, intent: ToolIntent) -> ToolBinding:
+        matches = [spec for spec in SPECS if intent.capability in spec.capabilities]
+        if len(matches) == 1:
+            return ToolBinding(
+                status=BindingStatus.BOUND,
+                call=ToolCall(spec_name=matches[0].name, params=dict(intent.params)),
+            )
+        if not matches:
+            return ToolBinding(
+                status=BindingStatus.UNRESOLVED,
+                reason=f"no tool for {intent.capability.value}",
+            )
+        return ToolBinding(
+            status=BindingStatus.AMBIGUOUS,
+            candidates=tuple(spec.name for spec in matches),
+        )
 
 
 class FakeGateway:
@@ -301,8 +314,11 @@ def test_replay_is_deterministic() -> None:
 
 def test_fake_catalog_binds_by_capability_not_name() -> None:
     catalog = FakeCatalog()
-    assert catalog.bind(ToolIntent(capability=Capability.EDIT)) is not None
-    assert catalog.bind(ToolIntent(capability=Capability.EDIT)).spec_name == "mutate"
+    binding = catalog.bind(ToolIntent(capability=Capability.EDIT))
+    assert binding.status is BindingStatus.BOUND
+    assert binding.call is not None
+    assert binding.call.spec_name == "mutate"
+    assert catalog.bind(ToolIntent(capability=Capability.REMOTE)).status is BindingStatus.UNRESOLVED
 
 
 def test_step_contract_has_obligations_not_tool_names() -> None:

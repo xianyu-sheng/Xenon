@@ -10,18 +10,31 @@ import pytest
 
 from xenon.kernel.contracts import (
     ActionKind,
+    BindingStatus,
+    Budget,
     Capability,
     Claim,
     ClaimSource,
+    Effect,
     EffectKind,
+    EvidenceStatus,
+    FsDelete,
     FsWrite,
+    ModelView,
+    PolicyDecision,
+    PolicyDecisionKind,
     PropositionKind,
     ReceiptStatus,
+    Resolution,
+    ResolutionStatus,
     Risk,
     StepContract,
     StepKind,
     TaskPhase,
-    ToolCall,
+    TaskResult,
+    TaskSpec,
+    TestRun,
+    ToolBinding,
     ToolIntent,
     ToolReceipt,
     ToolSpec,
@@ -156,4 +169,83 @@ def test_claim_is_a_proposal_not_a_fact() -> None:
         source=ClaimSource.LLM,
     )
     assert claim.source is ClaimSource.LLM
-    assert isinstance(ToolCall(spec_name="mutate"), ToolCall)
+    assert not hasattr(claim, "fact_ids")
+
+
+def test_tool_binding_reports_ambiguity_explicitly() -> None:
+    ambiguous = ToolBinding(
+        status=BindingStatus.AMBIGUOUS,
+        candidates=("mutate", "rewrite"),
+    )
+    assert ambiguous.call is None
+    assert ambiguous.candidates == ("mutate", "rewrite")
+    assert BindingStatus.BOUND.value == "bound"
+
+
+def test_effect_union_is_runtime_checkable() -> None:
+    effect = FsWrite(paths=("a.py",))
+    assert isinstance(effect, Effect)
+
+
+def test_task_result_fails_closed_on_evidence_status() -> None:
+    result = TaskResult(task_id="t1", accepted=True, phase=TaskPhase.FINALIZED)
+    assert result.evidence_status is EvidenceStatus.UNVERIFIED
+    verified = TaskResult(
+        task_id="t2",
+        accepted=True,
+        phase=TaskPhase.FINALIZED,
+        evidence_status=EvidenceStatus.VERIFIED,
+    )
+    assert verified.evidence_status is EvidenceStatus.VERIFIED
+
+
+def test_fs_write_distinguishes_noop_and_created_paths() -> None:
+    write = FsWrite(paths=("a.py",), created_paths=("a.py",), changed=False)
+    assert write.changed is False
+    assert write.created_paths == ("a.py",)
+
+
+def test_test_run_reports_skipped_separately() -> None:
+    run = TestRun(target="tests/test_a.py", tests_run=3, passed=1, skipped=2)
+    assert run.skipped == 2
+    assert run.passed == 1
+
+
+def test_task_result_carries_claim_resolutions_and_view_phase() -> None:
+    resolution = Resolution(
+        claim_id="claim-1",
+        status=ResolutionStatus.BOUND,
+        fact_ids=("fact-1",),
+    )
+    result = TaskResult(
+        task_id="t1",
+        accepted=True,
+        phase=TaskPhase.FINALIZED,
+        resolutions=(resolution,),
+    )
+    assert result.resolutions[0].status is ResolutionStatus.BOUND
+
+    view = ModelView(
+        task=TaskSpec(task_id="t1", objective="x", workspace="."),
+        system="",
+        tools=(),
+        working_set=(),
+        debt=(),
+        budget=Budget(),
+        input_seq=1,
+        hash="h",
+    )
+    assert view.phase is TaskPhase.RUNNING
+
+
+def test_fs_delete_and_policy_decision_carry_explicit_scope() -> None:
+    delete = FsDelete(paths=("a.py",), changed=False)
+    assert delete.changed is False
+    decision = PolicyDecision(
+        kind=PolicyDecisionKind.REQUIRE_APPROVAL,
+        reason="write scope",
+        scope=("a.py",),
+        ttl_seconds=30.0,
+    )
+    assert decision.scope == ("a.py",)
+    assert decision.ttl_seconds == 30.0

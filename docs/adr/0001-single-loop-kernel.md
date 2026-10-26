@@ -95,6 +95,17 @@ TaskSpec
 | `Projection` | pure view over `ledger[0..seq]` | write, hold mutable state, re-infer facts |
 | LLM | plans, next actions, repairs, coverage hypotheses | write facts, mark pass, override V0/V1, choose retry counts |
 
+Capability binding is explicit about uncertainty:
+
+```text
+catalog.bind(intent) -> ToolBinding(status=bound | unresolved | ambiguous,
+                                    call=ToolCall | None,
+                                    candidates=(...), reason=...)
+```
+
+A zero match is `unresolved`, multiple matches without a deterministic preference
+are `ambiguous`; both open debt instead of silently choosing a tool.
+
 ### 3.2 Phase machine
 
 ```text
@@ -173,7 +184,7 @@ Direct chat enters the same loop as `TaskMode.CHAT` with `NoToolStrategy`:
 - no required delivery obligations;
 - the answer is a `claim-*` (`ANSWER_DELIVERED`), never a `fact-*`;
 - the task is ledgered and replayable;
-- it is marked `unverified_answer`, not "verified delivery";
+- `TaskResult.evidence_status = UNVERIFIED` (not "verified delivery");
 - no tool history is injected into the working set (#165).
 
 This gives every interaction an evidence trail without pretending that a chat

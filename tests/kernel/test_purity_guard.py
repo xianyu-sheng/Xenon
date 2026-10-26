@@ -48,11 +48,25 @@ def test_seeded_vocabulary_import_is_rejected(tmp_path: Path) -> None:
     assert {item.code for item in violations} == {"K001", "K002"}
 
 
+def test_seeded_from_xenon_import_is_rejected(tmp_path: Path) -> None:
+    target = tmp_path / "bad.py"
+    target.write_text("from xenon import engine\n", encoding="utf-8")
+    violations = guard.check_path(target)
+    assert [item.code for item in violations] == ["K001"]
+
+
 def test_seeded_context_key_is_rejected(tmp_path: Path) -> None:
     target = tmp_path / "bad.py"
     target.write_text('KEY = "_tool_profile"\n', encoding="utf-8")
     violations = guard.check_path(target)
     assert [item.code for item in violations] == ["K004"]
+
+
+def test_seeded_file_copy_is_rejected(tmp_path: Path) -> None:
+    target = tmp_path / "bad.py"
+    target.write_text('import shutil\nshutil.copy("a", "b")\n', encoding="utf-8")
+    violations = guard.check_path(target)
+    assert [item.code for item in violations] == ["K005"]
 
 
 def test_seeded_subprocess_is_rejected(tmp_path: Path) -> None:
@@ -65,5 +79,12 @@ def test_seeded_subprocess_is_rejected(tmp_path: Path) -> None:
 def test_seeded_open_write_is_rejected(tmp_path: Path) -> None:
     target = tmp_path / "bad.py"
     target.write_text('open("a.txt", "w").write("x")\n', encoding="utf-8")
+    violations = guard.check_path(target)
+    assert [item.code for item in violations] == ["K005"]
+
+
+def test_seeded_path_open_write_is_rejected(tmp_path: Path) -> None:
+    target = tmp_path / "bad.py"
+    target.write_text('from pathlib import Path\nPath("a").open("w")\n', encoding="utf-8")
     violations = guard.check_path(target)
     assert [item.code for item in violations] == ["K005"]

@@ -63,6 +63,7 @@ class FsWrite:
     paths: tuple[str, ...]
     hashes: Mapping[str, str] = field(default_factory=dict)
     changed: bool = True
+    created_paths: tuple[str, ...] = ()
 
     @property
     def kind(self) -> EffectKind:
@@ -72,6 +73,7 @@ class FsWrite:
 @dataclass(frozen=True, slots=True)
 class FsDelete:
     paths: tuple[str, ...]
+    changed: bool = True
 
     @property
     def kind(self) -> EffectKind:
@@ -91,6 +93,7 @@ class TestRun:
     passed: int = 0
     failed: int = 0
     errors: int = 0
+    skipped: int = 0
     exit_code: int = 0
     command: str = ""
 
@@ -241,6 +244,22 @@ class ToolCall:
     params: Mapping[str, Any] = field(default_factory=dict)
 
 
+class BindingStatus(str, Enum):
+    BOUND = "bound"
+    UNRESOLVED = "unresolved"
+    AMBIGUOUS = "ambiguous"
+
+
+@dataclass(frozen=True, slots=True)
+class ToolBinding:
+    """Capability -> tool resolution.  Ambiguity is explicit, never silent."""
+
+    status: BindingStatus
+    call: ToolCall | None = None
+    candidates: tuple[str, ...] = ()
+    reason: str = ""
+
+
 class ReceiptStatus(str, Enum):
     OK = "ok"
     FAILED = "failed"
@@ -360,6 +379,34 @@ class Debt:
     attempts: int = 0
     next_action: str = ""
     user_accepted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CoverageClaim:
+    """A V2 proposal: which artifacts/tests are believed to cover an obligation."""
+
+    obligation_id: str
+    artifact_paths: tuple[str, ...] = ()
+    test_targets: tuple[str, ...] = ()
+    rationale: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class GapProposal:
+    """A V2 proposal for what is still missing.  Never a pass/fail verdict."""
+
+    obligation_id: str
+    reason: str
+    next_action: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AuditProposal:
+    """LLM output for V2.  It is a hypothesis set, not a decision."""
+
+    coverage: tuple[CoverageClaim, ...] = ()
+    gaps: tuple[GapProposal, ...] = ()
+    rationale: str = ""
 
 
 # ── plan and actions ───────────────────────────────────────────────────────
@@ -501,6 +548,8 @@ class PolicyDecisionKind(str, Enum):
 class PolicyDecision:
     kind: PolicyDecisionKind
     reason: str = ""
+    scope: tuple[str, ...] = ()
+    ttl_seconds: float | None = None
 
 
 class ControlDecisionKind(str, Enum):
@@ -530,7 +579,15 @@ class ModelView:
     budget: Budget
     input_seq: int
     hash: str
+    phase: TaskPhase = TaskPhase.RUNNING
     schema_version: str = SCHEMA_VERSION
+
+
+class EvidenceStatus(str, Enum):
+    VERIFIED = "verified"
+    PARTIAL = "partial"
+    UNVERIFIED = "unverified"
+    ABSTAINED = "abstained"
 
 
 @dataclass(frozen=True, slots=True)
@@ -540,8 +597,10 @@ class TaskResult:
     phase: TaskPhase
     answer: str = ""
     claims: tuple[Claim, ...] = ()
+    resolutions: tuple[Resolution, ...] = ()
     verdicts: tuple[Verdict, ...] = ()
     debt: tuple[Debt, ...] = ()
     finalize_sha: str | None = None
+    evidence_status: EvidenceStatus = EvidenceStatus.UNVERIFIED
     metrics: Mapping[str, float] = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION

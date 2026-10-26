@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,7 +90,16 @@ FORBIDDEN_CALLS = frozenset(
         "os.remove",
         "os.unlink",
         "os.rmdir",
+        "os.mkdir",
+        "os.makedirs",
+        "os.rename",
+        "os.replace",
         "shutil.rmtree",
+        "shutil.copy",
+        "shutil.copy2",
+        "shutil.copyfile",
+        "shutil.move",
+        "io.open",
         "Path.write_text",
         "Path.write_bytes",
         "pathlib.Path.write_text",
@@ -99,7 +107,14 @@ FORBIDDEN_CALLS = frozenset(
     }
 )
 
-_WRITE_MODE = re.compile(r"[wax+]")
+_MODE_CHARS = frozenset("rwaxbt+")
+
+
+def _is_write_mode(value: str) -> bool:
+    lowered = value.lower()
+    return bool(lowered) and set(lowered) <= _MODE_CHARS and any(
+        char in lowered for char in "wax+"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,15 +155,17 @@ def _check_open_mode(node: ast.Call) -> bool:
     """Return True when this is an ``open``/``Path.open`` call in write mode."""
 
     name = _dotted_name(node.func)
-    if name not in {"open", "Path.open", "pathlib.Path.open"}:
+    if name != "open" and not name.endswith(".open"):
         return False
-    mode = ""
-    if len(node.args) >= 2:
-        mode = _constant_text(node.args[1]) or ""
+    for argument in node.args:
+        mode = _constant_text(argument)
+        if mode is not None and _is_write_mode(mode):
+            return True
     for keyword in node.keywords:
         if keyword.arg == "mode":
-            mode = _constant_text(keyword.value) or ""
-    return bool(_WRITE_MODE.search(mode))
+            mode = _constant_text(keyword.value)
+            return mode is not None and _is_write_mode(mode)
+    return False
 
 
 def check_path(path: Path) -> list[Violation]:
@@ -192,6 +209,17 @@ def check_path(path: Path) -> list[Violation]:
 
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
+            if module == "xenon" and any(
+                alias.name in {"engine", "nodes", "repl"} for alias in node.names
+            ):
+                violations.append(
+                    Violation(
+                        path,
+                        node.lineno,
+                        "K001",
+                        "forbidden legacy import: from xenon import engine/nodes/repl",
+                    )
+                )
             if module.startswith(FORBIDDEN_MODULE_PREFIXES):
                 violations.append(
                     Violation(

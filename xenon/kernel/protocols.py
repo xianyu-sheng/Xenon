@@ -16,7 +16,9 @@ from xenon.kernel.contracts import (
     ModelView,
     PolicyDecision,
     StepContract,
+    TaskResult,
     TaskSpec,
+    ToolBinding,
     ToolCall,
     ToolIntent,
     ToolReceipt,
@@ -45,8 +47,8 @@ class ToolCatalog(Protocol):
 
     def specs(self, profile: str = "core") -> Sequence[ToolSpec]: ...
 
-    def bind(self, intent: ToolIntent) -> ToolCall | None:
-        """Return exactly one deterministic binding, or ``None`` if unresolved."""
+    def bind(self, intent: ToolIntent) -> ToolBinding:
+        """Resolve capability -> tool, or return an explicit unresolved/ambiguous."""
         ...
 
 
@@ -56,6 +58,9 @@ class RuntimeServices(Protocol):
 
     @property
     def workspace(self) -> str: ...
+
+    @property
+    def current_step_id(self) -> str | None: ...
 
     def is_cancelled(self) -> bool: ...
 
@@ -118,4 +123,4 @@ class EventSink(Protocol):
 class Runtime(Protocol):
     """What the REPL and headless entry points depend on."""
 
-    def run(self, spec: TaskSpec, strategy: Strategy) -> Any: ...
+    def run(self, spec: TaskSpec, strategy: Strategy) -> TaskResult: ...
