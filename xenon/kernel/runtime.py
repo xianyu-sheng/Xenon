@@ -115,12 +115,13 @@ class LoopRuntime:
         self._deadline: float | None = None
         self._plan: Any = None
         self._plan_steps: tuple[StepContract, ...] = ()
-        self._step_index = 0
         self._closed_steps: set[int] = set()
         self._active_step: StepContract | None = None
         self._plan_since_seq = 0
         self._verdicts: list[Verdict] = []
         self._debt: list[Any] = []
+        self._repair_attempts: dict[str, int] = {}
+        self._replans = 0
         self._run_start_seq = 0
 
     # ── public surface ─────────────────────────────────────────────────
@@ -140,10 +141,11 @@ class LoopRuntime:
         self._tool_calls = 0
         self._verdicts = []
         self._debt = []
+        self._repair_attempts = {}
+        self._replans = 0
         self._run_start_seq = 0
         self._plan = None
         self._plan_steps = ()
-        self._step_index = 0
         self._closed_steps = set()
         self._active_step = None
         self._plan_since_seq = 0
@@ -207,18 +209,27 @@ class LoopRuntime:
                     and self._active_step.intent is None
                 ):
                     closed = self._close_active_step()
+                    exhausted = self._record_attempts(closed)
                     self._sync_debt(closed)
+                    if exhausted:
+                        return self._budget_block(
+                            "repair budget exhausted", exhausted
+                        )
                 continue
 
             if isinstance(action, SubmitPlan):
-                self._accept_plan(action.plan)
+                blocked = self._accept_plan(action.plan)
+                if blocked is not None:
+                    return blocked
                 continue
 
             if isinstance(action, UpdatePlan):
                 try:
                     self._apply_plan(action.plan, updated=True)
                 except ValueError as exc:
-                    self._reject_plan(exc)
+                    blocked = self._reject_plan(exc)
+                    if blocked is not None:
+                        return blocked
                 continue
 
             if isinstance(action, RequestVerification):
@@ -230,7 +241,9 @@ class LoopRuntime:
                 continue
 
             if isinstance(action, CallTool):
-                self._call_tool(action)
+                blocked = self._call_tool(action)
+                if blocked is not None:
+                    return blocked
                 continue
 
             if isinstance(action, Finish):
@@ -266,13 +279,15 @@ class LoopRuntime:
 
     # ── action handlers ────────────────────────────────────────────────
 
-    def _accept_plan(self, plan: Any) -> None:
+    def _accept_plan(self, plan: Any) -> TaskResult | None:
         try:
             self._apply_plan(plan, updated=False)
         except ValueError as exc:
-            self._reject_plan(exc)
+            return self._reject_plan(exc)
+        return None
 
-    def _reject_plan(self, exc: ValueError) -> None:
+    def _reject_plan(self, exc: ValueError) -> TaskResult | None:
+        self._replans += 1
         self._append(
             EventKind.BINDING_FAILED,
             EventSource.GATE,
@@ -282,8 +297,13 @@ class LoopRuntime:
                 "reason": str(exc),
             },
         )
+        if self._replans > self._max_replans():
+            return self._budget_block(
+                "replan budget exhausted", ("replan",)
+            )
         self._transition(TaskPhase.REPLANNING, "invalid plan")
         self._transition(TaskPhase.RUNNING, "replan after invalid plan")
+        return None
 
     def _apply_plan(self, plan: Any, *, updated: bool) -> None:
         raw_steps = tuple(getattr(plan, "steps", ()))
@@ -298,9 +318,8 @@ class LoopRuntime:
             self._append(EventKind.PLAN_ACCEPTED, EventSource.RUNTIME, payload)
         self._plan = plan
         self._plan_steps = steps
-        self._step_index = 0
         self._closed_steps.clear()
-        self._active_step = steps[0] if steps else None
+        self._active_step = self._select_ready_step()
         if self._active_step is not None:
             self._append(
                 EventKind.STEP_STARTED,
@@ -334,6 +353,7 @@ class LoopRuntime:
                     )
         if len(obligation_ids) != len(set(obligation_ids)):
             raise ValueError("plan expectations must have unique ids")
+        _assert_acyclic(steps)
 
     def _baseline_step(self, step: StepContract) -> StepContract:
         expects = tuple(
@@ -348,9 +368,10 @@ class LoopRuntime:
             return obligation
         return replace(obligation, since_seq=self._plan_since_seq)
 
-    def _call_tool(self, action: CallTool) -> None:
+    def _call_tool(self, action: CallTool) -> TaskResult | None:
         binding = self._catalog.bind(action.intent)
         if binding.status is not BindingStatus.BOUND or binding.call is None:
+            self._replans += 1
             self._append(
                 EventKind.BINDING_FAILED,
                 EventSource.GATE,
@@ -361,9 +382,13 @@ class LoopRuntime:
                 },
                 step_id=self._current_step_id(),
             )
+            if self._replans > self._max_replans():
+                return self._budget_block(
+                    "replan budget exhausted", ("replan",)
+                )
             self._transition(TaskPhase.REPLANNING, "no deterministic binding")
             self._transition(TaskPhase.RUNNING, "replan after binding failure")
-            return
+            return None
 
         self._transition(TaskPhase.TOOL_CALL, binding.call.spec_name)
         receipt = self._gateway.execute(binding.call, self._services)
@@ -395,12 +420,18 @@ class LoopRuntime:
             step_verdicts = (verdict,)
         if verdict.status is not VerdictStatus.VIOLATED:
             step_verdicts += self._close_active_step()
+        exhausted = self._record_attempts(step_verdicts)
         self._sync_debt(step_verdicts)
+        if exhausted:
+            return self._budget_block(
+                "repair budget exhausted", exhausted
+            )
         if any(
             item.status is VerdictStatus.VIOLATED for item in step_verdicts
         ):
             self._transition(TaskPhase.REPAIRING, verdict.reason or "violated")
         self._transition(TaskPhase.RUNNING, "next action")
+        return None
 
     def _close_active_step(self) -> tuple[Verdict, ...]:
         step = self._active_step
@@ -441,17 +472,32 @@ class LoopRuntime:
         return verdicts
 
     def _advance_step(self) -> None:
-        self._step_index += 1
-        if self._step_index < len(self._plan_steps):
-            self._active_step = self._plan_steps[self._step_index]
+        self._active_step = self._select_ready_step()
+        if self._active_step is not None:
             self._append(
                 EventKind.STEP_STARTED,
                 EventSource.RUNTIME,
                 self._step_payload(self._active_step),
                 step_id=self._current_step_id(),
             )
-        else:
-            self._active_step = None
+
+    def _select_ready_step(self) -> StepContract | None:
+        """Pick the first plan-ordered step whose dependencies are closed.
+
+        This is a deterministic serial scheduler.  True parallel execution is
+        a child-runtime concern (#204); it must not be faked by running two
+        steps against the same workspace in this loop.
+        """
+
+        for step in self._plan_steps:
+            if step.id in self._closed_steps:
+                continue
+            if all(
+                dependency in self._closed_steps
+                for dependency in step.depends_on
+            ):
+                return step
+        return None
 
     def _close_remaining_steps(self) -> None:
         for step in self._plan_steps:
@@ -460,7 +506,6 @@ class LoopRuntime:
             self._sync_debt(self._close_step(step))
         if all(step.id in self._closed_steps for step in self._plan_steps):
             self._active_step = None
-            self._step_index = len(self._plan_steps)
 
     def _step_payload(self, step: StepContract) -> dict[str, Any]:
         return _serialize_step(step, task_id=self._task_id())
@@ -701,6 +746,8 @@ class LoopRuntime:
                 "steps": float(self._steps),
                 "tool_calls": float(self._tool_calls),
                 "events": float(self._ledger.watermark()),
+                "repair_attempts": float(sum(self._repair_attempts.values())),
+                "replans": float(self._replans),
             },
         )
 
@@ -720,6 +767,50 @@ class LoopRuntime:
         if self._active_step is None:
             return None
         return str(self._active_step.id)
+
+    def _record_attempts(
+        self, verdicts: Sequence[Verdict]
+    ) -> tuple[str, ...]:
+        latest = _latest_verdict_map(verdicts)
+        exhausted: list[str] = []
+        for obligation_id, verdict in latest.items():
+            if verdict.status is VerdictStatus.SATISFIED:
+                continue
+            count = self._repair_attempts.get(obligation_id, 0) + 1
+            self._repair_attempts[obligation_id] = count
+            for index, debt in enumerate(self._debt):
+                if debt.obligation.id == obligation_id:
+                    self._debt[index] = replace(debt, attempts=count)
+            if count > self._max_repairs():
+                exhausted.append(obligation_id)
+        return tuple(exhausted)
+
+    def _max_repairs(self) -> int:
+        if self._spec is None:
+            return 0
+        return self._spec.budget.max_repair_attempts
+
+    def _max_replans(self) -> int:
+        if self._spec is None:
+            return 0
+        return self._spec.budget.max_replans
+
+    def _budget_block(
+        self, reason: str, scope: Sequence[str] = ()
+    ) -> TaskResult:
+        self._append(
+            EventKind.POLICY_DECISION,
+            EventSource.GATE,
+            {
+                "kind": PolicyDecisionKind.VETO.value,
+                "reason": reason,
+                "scope": list(scope),
+            },
+        )
+        self._transition(TaskPhase.BLOCKED, reason)
+        return self._result(
+            accepted=False, evidence=EvidenceStatus.UNVERIFIED
+        )
 
     def _sync_debt(self, verdicts: Sequence[Verdict]) -> None:
         latest = _latest_verdict_map(verdicts)
@@ -770,6 +861,7 @@ class LoopRuntime:
             debt = Debt(
                 obligation=obligation,
                 reason=verdict.reason or verdict.status.value,
+                attempts=self._repair_attempts.get(obligation_id, 0),
             )
             self._debt.append(debt)
             existing.add(obligation_id)
@@ -782,6 +874,7 @@ class LoopRuntime:
                     "target": obligation.target,
                     "reason": debt.reason,
                     "stage": verdict.stage.value,
+                    "attempts": debt.attempts,
                 },
                 step_id=self._current_step_id(),
             )
@@ -878,6 +971,22 @@ def _readonly_view(ledger: Ledger) -> Any:
     except ImportError:  # pragma: no cover — ledger is part of the package
         return ledger
     return ReadOnlyLedger(ledger)  # type: ignore[arg-type]
+
+
+def _assert_acyclic(steps: Sequence[StepContract]) -> None:
+    resolved: set[int] = set()
+    pending = list(steps)
+    while pending:
+        ready = [
+            step
+            for step in pending
+            if all(item in resolved for item in step.depends_on)
+        ]
+        if not ready:
+            raise ValueError("plan dependencies contain a cycle")
+        for step in ready:
+            resolved.add(step.id)
+            pending.remove(step)
 
 
 def _serialize_step(step: StepContract, *, task_id: str = "") -> dict[str, Any]:

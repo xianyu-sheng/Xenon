@@ -201,6 +201,10 @@ class Budget:
     max_tokens: int | None = None
     max_wall_seconds: float | None = None
     max_steps: int | None = None
+    # Repair/replan budgets are policy caps, not token budgets.  They are
+    # counted by the runtime so a strategy cannot retry forever.
+    max_repair_attempts: int = 2
+    max_replans: int = 3
 
 
 @dataclass(frozen=True, slots=True)

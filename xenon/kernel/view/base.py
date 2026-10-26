@@ -317,7 +317,9 @@ def _system_prompt(
         f"Mode: {spec.mode.value}",
         f"Phase: {phase.value}",
         f"Budget: max_steps={budget.max_steps} max_tokens={budget.max_tokens} "
-        f"max_wall_seconds={budget.max_wall_seconds}",
+        f"max_wall_seconds={budget.max_wall_seconds} "
+        f"max_repair_attempts={budget.max_repair_attempts} "
+        f"max_replans={budget.max_replans}",
     ]
     if constraints:
         lines.append(f"Constraints:\n{constraints}")
@@ -389,6 +391,8 @@ def build_model_view(
             "max_tokens": budget.max_tokens,
             "max_wall_seconds": budget.max_wall_seconds,
             "max_steps": budget.max_steps,
+            "max_repair_attempts": budget.max_repair_attempts,
+            "max_replans": budget.max_replans,
         },
         "input_seq": ledger.watermark(),
         "phase": phase.value,
