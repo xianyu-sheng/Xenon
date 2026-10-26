@@ -9,6 +9,7 @@ from tests.kernel.test_north_star import (
     _calc_spec,
 )
 from xenon.kernel.contracts import (
+    Budget,
     CallTool,
     Capability,
     Claim,
@@ -24,6 +25,7 @@ from xenon.kernel.contracts import (
     StepContract,
     StepKind,
     SubmitPlan,
+    TaskSpec,
     TestRun,
     ToolIntent,
     ToolReceipt,
@@ -42,6 +44,31 @@ def _runtime(ledger: Ledger) -> LoopRuntime:
         controller=VerificationController(),
         ledger=ledger,
     )
+
+
+class AlwaysFailingGateway:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def execute(self, call, services) -> ToolReceipt:
+        self.calls += 1
+        effect = TestRun(
+            target="tests/test_calc.py",
+            tests_run=1,
+            passed=0,
+            failed=1,
+            exit_code=1,
+        )
+        return ToolReceipt(
+            receipt_id=f"always-fail-{self.calls}",
+            call_id=f"always-fail-call-{self.calls}",
+            task_id="task-1",
+            tool=call.spec_name,
+            status=ReceiptStatus.OK,
+            effects=(effect,),
+            declared_effects=(EffectKind.TEST_RUN,),
+            observed_effects=(EffectKind.TEST_RUN,),
+        )
 
 
 class FlakyGateway:
@@ -118,6 +145,114 @@ def _plan() -> PlanProposal:
     )
 
 
+def _verify_plan() -> PlanProposal:
+    return PlanProposal(
+        steps=(
+            StepContract(
+                id=1,
+                kind=StepKind.VERIFY,
+                intent=ToolIntent(capability=Capability.VERIFY),
+                expects=(
+                    Obligation(
+                        id="bounded-test",
+                        kind=PropositionKind.TEST_PASSED,
+                        target="tests/test_calc.py",
+                        source=ObligationSource.PLAN,
+                    ),
+                ),
+            ),
+        )
+    )
+
+
+def test_repair_budget_blocks_after_configured_attempts() -> None:
+    ledger = Ledger.in_memory("task-1")
+    gateway = AlwaysFailingGateway()
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=gateway,
+        controller=VerificationController(),
+        ledger=ledger,
+    )
+    spec = TaskSpec(
+        task_id="task-1",
+        objective="fix",
+        workspace=".",
+        budget=Budget(max_steps=20, max_repair_attempts=2),
+    )
+
+    result = runtime.run(spec, PlanFirst(lambda view: _verify_plan()))
+
+    assert result.accepted is False
+    assert result.phase.value == "blocked"
+    assert gateway.calls == 3
+    assert result.debt[0].attempts == 3
+    assert any(
+        event.kind is EventKind.POLICY_DECISION
+        and "repair budget exhausted" in str(event.payload.get("reason"))
+        for event in ledger.read()
+    )
+    assert result.metrics["repair_attempts"] == 3.0
+
+
+def test_zero_repair_budget_blocks_on_first_failure() -> None:
+    ledger = Ledger.in_memory("task-1")
+    gateway = AlwaysFailingGateway()
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=gateway,
+        controller=VerificationController(),
+        ledger=ledger,
+    )
+    spec = TaskSpec(
+        task_id="task-1",
+        objective="fix",
+        workspace=".",
+        budget=Budget(max_steps=20, max_repair_attempts=0),
+    )
+
+    result = runtime.run(spec, PlanFirst(lambda view: _verify_plan()))
+
+    assert result.accepted is False
+    assert gateway.calls == 1
+
+
+def test_replan_budget_blocks_on_invalid_plan() -> None:
+    ledger = Ledger.in_memory("task-1")
+    first = StepContract(
+        id=1,
+        kind=StepKind.EDIT,
+        intent=ToolIntent(capability=Capability.EDIT),
+        depends_on=(2,),
+    )
+    second = StepContract(
+        id=2,
+        kind=StepKind.VERIFY,
+        intent=ToolIntent(capability=Capability.VERIFY),
+        depends_on=(1,),
+    )
+    spec = TaskSpec(
+        task_id="task-1",
+        objective="fix",
+        workspace=".",
+        budget=Budget(max_steps=20, max_replans=0),
+    )
+    result = _runtime(ledger).run(
+        spec,
+        ScriptedStrategy(
+            [SubmitPlan(PlanProposal(steps=(first, second))), Finish("done")]
+        ),
+    )
+
+    assert result.accepted is False
+    assert result.phase.value == "blocked"
+    assert any(
+        event.kind is EventKind.POLICY_DECISION
+        and "replan budget exhausted" in str(event.payload.get("reason"))
+        for event in ledger.read()
+    )
+
+
 def test_failed_step_can_be_repaired_and_closes_debt() -> None:
     ledger = Ledger.in_memory("task-1")
     plan = PlanProposal(
@@ -171,6 +306,77 @@ def test_invalid_plan_is_rejected_without_crashing() -> None:
     assert any(
         event.kind is EventKind.BINDING_FAILED
         and event.payload.get("status") == "invalid_plan"
+        for event in ledger.read()
+    )
+
+
+def test_dag_ready_step_is_selected_before_plan_order() -> None:
+    ledger = Ledger.in_memory("task-1")
+    step1 = StepContract(
+        id=1,
+        kind=StepKind.EDIT,
+        intent=ToolIntent(capability=Capability.EDIT),
+        expects=(
+            Obligation(
+                id="dag-edit",
+                kind=PropositionKind.FILE_CHANGED,
+                target="calc/add.py",
+                source=ObligationSource.PLAN,
+            ),
+        ),
+    )
+    step2 = StepContract(
+        id=2,
+        kind=StepKind.VERIFY,
+        intent=ToolIntent(capability=Capability.VERIFY),
+        depends_on=(1,),
+        expects=(
+            Obligation(
+                id="dag-test",
+                kind=PropositionKind.TEST_PASSED,
+                target="tests/test_calc.py",
+                source=ObligationSource.PLAN,
+            ),
+        ),
+    )
+    plan = PlanProposal(steps=(step2, step1))
+
+    result = _runtime(ledger).run(_calc_spec(), PlanFirst(lambda view: plan))
+
+    assert result.accepted is True
+    started = [
+        event.payload["step_id"]
+        for event in ledger.read(EventKind.STEP_STARTED)
+    ]
+    assert started == [1, 2]
+
+
+def test_cyclic_plan_is_rejected() -> None:
+    ledger = Ledger.in_memory("task-1")
+    first = StepContract(
+        id=1,
+        kind=StepKind.EDIT,
+        intent=ToolIntent(capability=Capability.EDIT),
+        depends_on=(2,),
+    )
+    second = StepContract(
+        id=2,
+        kind=StepKind.VERIFY,
+        intent=ToolIntent(capability=Capability.VERIFY),
+        depends_on=(1,),
+    )
+    result = _runtime(ledger).run(
+        _calc_spec(),
+        ScriptedStrategy(
+            [SubmitPlan(PlanProposal(steps=(first, second))), Finish("done")]
+        ),
+    )
+
+    assert result.accepted is False
+    assert any(
+        event.kind is EventKind.BINDING_FAILED
+        and event.payload.get("status") == "invalid_plan"
+        and "cycle" in str(event.payload.get("reason"))
         for event in ledger.read()
     )
 
