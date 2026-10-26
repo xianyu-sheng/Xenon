@@ -57,6 +57,9 @@ class RuntimeServices(Protocol):
     """Small runtime surface passed to the gateway (no global context bag)."""
 
     @property
+    def task_id(self) -> str: ...
+
+    @property
     def workspace(self) -> str: ...
 
     @property

@@ -100,6 +100,14 @@ def _path_match(paths: Iterable[str], target: str) -> bool:
     return False
 
 
+def _test_matches(effect: TestRun, target: str) -> bool:
+    if not target:
+        return True
+    if _path_match((effect.target,), target):
+        return True
+    return _normalized(target) in _normalized(effect.command)
+
+
 def _unique_facts(matches: Sequence[Fact]) -> tuple[Fact, ...]:
     seen: set[str] = set()
     result: list[Fact] = []
@@ -157,7 +165,7 @@ class ClaimResolver:
                     fact
                     for fact in facts
                     if isinstance(fact.effect, TestRun)
-                    and _path_match((fact.effect.target,), claim.target)
+                    and _test_matches(fact.effect, claim.target)
                     and fact.effect.tests_run > 0
                     and fact.effect.passed >= minimum
                     and fact.effect.failed == 0
@@ -278,12 +286,18 @@ class VerificationController:
                 status=VerdictStatus.VIOLATED,
                 reason=f"receipt status: {receipt.status.value}",
             )
-        if set(receipt.declared_effects) != set(receipt.observed_effects):
+        unexpected = set(receipt.observed_effects) - set(
+            receipt.declared_effects
+        )
+        if unexpected:
             return Verdict(
                 obligation_id=obligation_id,
                 stage=VerificationStage.V0,
                 status=VerdictStatus.UNVERIFIABLE,
-                reason="declared and observed effects disagree",
+                reason=(
+                    "observed effects not declared by the tool: "
+                    + ", ".join(sorted(item.value for item in unexpected))
+                ),
             )
         for effect in receipt.effects:
             if isinstance(effect, TestRun):

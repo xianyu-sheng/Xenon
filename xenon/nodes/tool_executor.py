@@ -500,6 +500,7 @@ class ToolExecutor:
         tool_gate: Any = None,  # 统一工具门控（黑名单+参数校验+证据链）
         hooks: Any = None,  # HookRunner（None 时读全局默认）
         result_store: ToolResultStore | None = None,  # 会话级完整结果缓存
+        record_evidence: bool = True,  # kernel gateway owns the ledger; legacy path defaults on
     ) -> None:
         if evidence_enforcement not in {"observe", "enforce"}:
             raise ValueError("evidence_enforcement must be 'observe' or 'enforce'")
@@ -526,6 +527,7 @@ class ToolExecutor:
             tool_gate = ToolGate.from_config(get_config())
         self.tool_gate = tool_gate
         self.result_store = result_store
+        self.record_evidence = record_evidence
 
     def set_result_store(self, store: ToolResultStore | None) -> None:
         """Bind the session-scoped result cache (optional, lazy when absent)."""
@@ -599,6 +601,8 @@ class ToolExecutor:
         source: EvidenceSource,
         payload: dict[str, Any],
     ) -> None:
+        if not self.record_evidence:
+            return
         self._resolve_ledger(context).append(phase, kind, source, payload)
 
     def _auto_read_missing_paths(
