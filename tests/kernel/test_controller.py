@@ -153,6 +153,26 @@ def test_pytest_node_id_matches_the_test_file_target() -> None:
     assert resolution.status.value == "bound"
 
 
+def test_bash_pytest_command_can_bind_a_test_target() -> None:
+    ledger = _ledger()
+    _append(
+        ledger,
+        (
+            TestRun(
+                target="python -m pytest tests/test_a.py -q",
+                tests_run=1,
+                passed=1,
+                exit_code=0,
+                command="python -m pytest tests/test_a.py -q",
+            ),
+        ),
+    )
+    resolution = ClaimResolver().resolve(
+        _claim(PropositionKind.TEST_PASSED, "tests/test_a.py"), ledger
+    )
+    assert resolution.status.value == "bound"
+
+
 def test_zero_tests_is_not_a_passing_test() -> None:
     ledger = _ledger()
     _append(
@@ -203,8 +223,8 @@ def test_reconcile_flags_failed_receipts_and_effect_drift() -> None:
         task_id="t1",
         tool="mutate",
         status=ReceiptStatus.OK,
-        declared_effects=(EffectKind.FS_WRITE,),
-        observed_effects=(),
+        declared_effects=(),
+        observed_effects=(EffectKind.FS_WRITE,),
     )
     assert (
         controller.reconcile(None, drift).status

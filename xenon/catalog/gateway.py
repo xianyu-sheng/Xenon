@@ -1,0 +1,397 @@
+"""Gateway adapter over the legacy seven-stage ToolExecutor.
+
+The adapter owns the translation from a tool result to typed effects.  Legacy
+handlers keep working; the kernel only sees ``ToolReceipt`` facts.  The gateway
+also turns off the legacy evidence ledger: the kernel ledger is the only
+durable source.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+import time
+import uuid
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+from xenon.engine.context import AgentContext
+from xenon.engine.tool_runtime import ToolRuntime
+from xenon.engine.tool_tracker import ToolExecutionTracker
+from xenon.kernel.contracts import (
+    FsWrite,
+    NetworkFact,
+    Opaque,
+    ReadFact,
+    ReceiptStatus,
+    TestRun,
+    ToolCall,
+    ToolReceipt,
+    ToolSpec,
+    VcsCommit,
+    VcsPush,
+)
+from xenon.nodes.tool_executor import ToolExecuteResult, ToolExecutor
+
+_WRITE_TOOLS = frozenset(
+    {
+        "write_file",
+        "edit_file",
+        "append_file",
+        "batch_write",
+        "batch_edit",
+        "apply_patch",
+        "refactor",
+        "edit_with_llm",
+    }
+)
+_READ_TOOLS = frozenset({"read", "read_file", "read_document"})
+_TEST_TOOLS = frozenset({"run_tests"})
+_SHELL_TOOLS = frozenset({"bash", "command", "run_script"})
+_NETWORK_TOOLS = frozenset(
+    {"web_fetch", "docs_fetch", "github_fetch", "mcp_call"}
+)
+_COMMIT_RE = re.compile(r"\[[^\]]*?([0-9a-f]{7,40})[^\]]*\]", re.IGNORECASE)
+
+def _as_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value if str(item)]
+    return []
+
+
+def _as_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _targets(params: Mapping[str, Any]) -> list[str]:
+    paths: list[str] = []
+    for key in ("file_path", "path"):
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            paths.append(value)
+    for key in ("files", "edits"):
+        values = params.get(key)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, Mapping):
+                continue
+            value = item.get("file_path") or item.get("path")
+            if isinstance(value, str) and value:
+                paths.append(value)
+    seen: set[str] = set()
+    result: list[str] = []
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        result.append(path)
+    return result
+
+
+def _sha256_file(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _test_target(
+    params: Mapping[str, Any], meta: Mapping[str, Any]
+) -> str:
+    explicit = (
+        meta.get("test_target")
+        or meta.get("test_paths")
+        or params.get("test_paths")
+        or params.get("file_path")
+    )
+    if isinstance(explicit, (list, tuple)):
+        explicit = ",".join(str(item) for item in explicit)
+    if explicit:
+        return str(explicit)
+    command = str(meta.get("command") or params.get("command") or "")
+    for token in command.replace("\\", "/").split():
+        candidate = token.strip("\"'")
+        if candidate.endswith(".py") and "test" in candidate.lower():
+            return candidate
+    return command
+
+
+def _commit_sha(*texts: Any) -> str:
+    for text in texts:
+        if not isinstance(text, str):
+            continue
+        match = _COMMIT_RE.search(text)
+        if match:
+            return match.group(1)
+    return ""
+
+
+class LegacyToolGateway:
+    """Translate ``ToolExecutor`` results into kernel receipts."""
+
+    def __init__(
+        self,
+        executor: ToolExecutor | None = None,
+        *,
+        specs: Sequence[ToolSpec] = (),
+        workspace: str | Path | None = None,
+        context: AgentContext | None = None,
+        tracker: ToolExecutionTracker | None = None,
+    ) -> None:
+        self._executor = executor or ToolExecutor(record_evidence=False)
+        self._specs = {spec.name: spec for spec in specs}
+        self._workspace = Path(workspace).resolve() if workspace else None
+        self._context = context or AgentContext()
+        self._tracker = tracker or ToolExecutionTracker()
+        if self._workspace is not None and hasattr(self._executor, "set_runtime"):
+            self._executor.set_runtime(
+                ToolRuntime(workspace_root=self._workspace)
+            )
+
+    def execute(self, call: ToolCall, services: Any) -> ToolReceipt:
+        started = time.time()
+        if self._workspace is None:
+            raw_workspace = str(getattr(services, "workspace", "") or "")
+            if raw_workspace:
+                candidate = Path(raw_workspace).resolve()
+                if candidate.is_dir():
+                    self._workspace = candidate
+                    if hasattr(self._executor, "set_runtime"):
+                        self._executor.set_runtime(
+                            ToolRuntime(workspace_root=candidate)
+                        )
+        workspace = self._workspace or Path(
+            getattr(services, "workspace", "") or "."
+        ).resolve()
+        before: dict[str, bool] = {}
+        if call.spec_name in _WRITE_TOOLS:
+            for path in _targets(call.params):
+                candidate = Path(path)
+                if not candidate.is_absolute():
+                    candidate = workspace / candidate
+                before[path] = candidate.exists()
+        try:
+            result = self._executor.execute(
+                call.spec_name,
+                dict(call.params),
+                self._context,
+                self._tracker,
+            )
+        except Exception as exc:  # noqa: BLE001 — a receipt must still exist
+            result = ToolExecuteResult(
+                tool_name=call.spec_name,
+                success=False,
+                observation="",
+                error=str(exc),
+            )
+        return self._receipt(
+            call,
+            result,
+            services,
+            started=started,
+            ended=time.time(),
+            workspace=workspace,
+            before=before,
+        )
+
+    def _receipt(
+        self,
+        call: ToolCall,
+        result: ToolExecuteResult,
+        services: Any,
+        *,
+        started: float,
+        ended: float,
+        workspace: Path,
+        before: Mapping[str, bool],
+    ) -> ToolReceipt:
+        meta = self._metadata(result)
+        effects = tuple(
+            self._effects(call, result, meta, workspace=workspace, before=before)
+        )
+        spec = self._specs.get(call.spec_name)
+        declared = (
+            tuple(sorted(spec.effects, key=lambda item: item.value))
+            if spec is not None
+            else tuple(effect.kind for effect in effects)
+        )
+        observed = tuple(effect.kind for effect in effects)
+        receipt_id = result.result_id or f"receipt-{uuid.uuid4().hex[:12]}"
+        status = (
+            ReceiptStatus.TIMEOUT
+            if result.timed_out
+            else (
+                ReceiptStatus.OK if result.success else ReceiptStatus.FAILED
+            )
+        )
+        exit_code = _as_int(meta.get("exit_code"))
+        if exit_code is None:
+            exit_code = _as_int(meta.get("returncode"))
+        return ToolReceipt(
+            receipt_id=receipt_id,
+            call_id=f"{call.spec_name}-{receipt_id}",
+            task_id=str(getattr(services, "task_id", "") or ""),
+            step_id=getattr(services, "current_step_id", None),
+            tool=call.spec_name,
+            status=status,
+            exit_code=exit_code,
+            effects=effects,
+            declared_effects=declared,
+            observed_effects=observed,
+            raw_ref=result.result_id,
+            error=result.error or "",
+            started_at=started,
+            ended_at=ended,
+        )
+
+    @staticmethod
+    def _metadata(result: ToolExecuteResult) -> dict[str, Any]:
+        raw = result.raw if isinstance(result.raw, dict) else {}
+        structured = (
+            result.structured.metadata
+            if result.structured is not None
+            else {}
+        )
+        meta: dict[str, Any] = dict(raw)
+        meta.update(structured)
+        return meta
+
+    def _effects(
+        self,
+        call: ToolCall,
+        result: ToolExecuteResult,
+        meta: Mapping[str, Any],
+        *,
+        workspace: Path,
+        before: Mapping[str, bool],
+    ) -> list[Any]:
+        params = call.params
+        effects: list[Any] = []
+        changed_paths = _as_list(meta.get("changed_paths"))
+        targets = _targets(params)
+        write_tool = call.spec_name in _WRITE_TOOLS
+        if changed_paths or (write_tool and targets):
+            paths = tuple(changed_paths or targets)
+            changed = bool(meta.get("changed", True))
+            created = [
+                path
+                for path in _as_list(meta.get("created_paths"))
+                if before.get(path, False) is False
+            ]
+            if write_tool and not created:
+                created = [path for path in paths if before.get(path) is False]
+            hashes = {}
+            for path in paths:
+                candidate = Path(path)
+                if not candidate.is_absolute():
+                    candidate = workspace / candidate
+                digest = _sha256_file(candidate)
+                if digest:
+                    hashes[path] = digest
+            effects.append(
+                FsWrite(
+                    paths=paths,
+                    hashes=hashes,
+                    changed=changed,
+                    created_paths=tuple(created),
+                )
+            )
+
+        tests_run = _as_int(meta.get("tests_run"))
+        if tests_run is not None or call.spec_name in _TEST_TOOLS:
+            target = _test_target(params, meta)
+            effects.append(
+                TestRun(
+                    target=target,
+                    framework=str(
+                        meta.get("framework")
+                        or params.get("test_framework")
+                        or "pytest"
+                    ),
+                    tests_run=int(tests_run or 0),
+                    passed=int(_as_int(meta.get("tests_passed")) or 0),
+                    failed=int(_as_int(meta.get("tests_failed")) or 0),
+                    errors=int(_as_int(meta.get("tests_errors")) or 0),
+                    skipped=int(_as_int(meta.get("tests_skipped")) or 0),
+                    exit_code=int(_as_int(meta.get("exit_code")) or 0),
+                    command=str(meta.get("command") or params.get("command") or ""),
+                )
+            )
+
+        command = str(meta.get("command") or params.get("command") or "")
+        committed_paths = _as_list(meta.get("committed_paths"))
+        commit_like = bool(
+            committed_paths or "commit" in command.lower()
+        )
+        if result.success and commit_like:
+            sha = _commit_sha(
+                meta.get("commit"),
+                meta.get("sha"),
+                meta.get("stdout"),
+                meta.get("content"),
+                meta.get("output"),
+            )
+            if sha or committed_paths:
+                effects.append(
+                    VcsCommit(
+                        sha=sha,
+                        files=tuple(committed_paths),
+                    )
+                )
+
+        if result.success and "git push" in command.lower():
+            effects.append(
+                VcsPush(
+                    remote=str(meta.get("remote") or "origin"),
+                    branch=str(meta.get("branch") or ""),
+                    sha=_commit_sha(meta.get("stdout"), meta.get("content")),
+                )
+            )
+
+        if call.spec_name in _READ_TOOLS and result.success:
+            path = str(
+                meta.get("file_path")
+                or meta.get("path")
+                or params.get("file_path")
+                or params.get("path")
+                or ""
+            )
+            if path:
+                content = result.raw.get("content") if isinstance(result.raw, dict) else None
+                digest = (
+                    hashlib.sha256(content.encode("utf-8")).hexdigest()
+                    if isinstance(content, str)
+                    else ""
+                )
+                effects.append(ReadFact(path=path, content_hash=digest))
+
+        if call.spec_name in _NETWORK_TOOLS:
+            url = str(
+                meta.get("url")
+                or meta.get("source")
+                or params.get("url")
+                or ""
+            )
+            if url:
+                effects.append(
+                    NetworkFact(
+                        url=url,
+                        status=int(_as_int(meta.get("status_code")) or 0),
+                    )
+                )
+
+        if call.spec_name in _SHELL_TOOLS and command:
+            effects.append(
+                Opaque(
+                    command=command,
+                    exit_code=int(_as_int(meta.get("exit_code")) or 0),
+                    workspace_delta=tuple(changed_paths),
+                )
+            )
+        return effects

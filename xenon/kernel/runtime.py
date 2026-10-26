@@ -67,6 +67,10 @@ class _RuntimeServices:
         self._runtime = runtime
 
     @property
+    def task_id(self) -> str:
+        return self._runtime._spec.task_id if self._runtime._spec else ""
+
+    @property
     def workspace(self) -> str:
         return self._runtime._spec.workspace if self._runtime._spec else ""
 
