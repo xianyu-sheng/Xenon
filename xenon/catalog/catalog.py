@@ -32,6 +32,10 @@ class ToolCatalog:
         selected = profile or self._profile
         if selected in {"all", "*"}:
             return self._all
+        if selected in {"core+mcp", "core_mcp"}:
+            return tuple(
+                item for item in self._all if item.pack in {"core", "mcp"}
+            )
         return tuple(item for item in self._all if item.pack == selected)
 
     def bind(self, intent: ToolIntent) -> ToolBinding:
@@ -94,6 +98,8 @@ def build_catalog(profile: str = "core") -> ToolCatalog:
         return ToolCatalog(ALL_SPECS, "all")
     if profile == "core":
         return ToolCatalog(CORE_SPECS, "core")
+    if profile in {"core+mcp", "core_mcp"}:
+        return ToolCatalog(CORE_SPECS + MCP_SPECS, "core+mcp")
     if profile == "legacy":
         return ToolCatalog(LEGACY_SPECS, "legacy")
     if profile == "mcp":

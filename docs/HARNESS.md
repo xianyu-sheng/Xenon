@@ -97,9 +97,11 @@ XENON_RUNTIME=kernel xenon
 ```
 
 Only turns that require tools and are not a skill, plan-mode turn, pending
-continuation, atomic recipe, or external query are routed to the kernel in this
-first slice. Plain chat, external/MCP queries, `/mode`, `/plan`, `/resume`,
-`/evidence`, skills, MCP, and the approval UI still use their existing paths.
+continuation, or atomic recipe are routed to the kernel in this first slice.
+External queries stay legacy unless an MCP registry is available; then the
+kernel uses the `core+mcp` profile and the remote call goes through approval.
+Plain chat, `/mode`, `/plan`, `/resume`, `/evidence`, and skills still use their
+existing paths.
 
 The REPL adapter:
 
@@ -137,3 +139,22 @@ injected:
 
 `READ_ONLY` never becomes an approval prompt. `WRITE` turns do not gain shell
 approval; only `EXECUTE` maps to the approval-capable policy.
+
+## MCP read-only slice
+
+When the REPL has an MCP registry (connected or lazily configured), the kernel
+runtime uses the `core+mcp` catalog profile:
+
+- the gateway receives the REPL `AgentContext`, so `mcp_call` can reach
+  `_mcp_registry`;
+- available MCP tool names are appended to the task constraints when already
+  discovered;
+- `mcp_call` uses `tool_name` + `tool_args`;
+- every remote call still requires approval;
+- the result is recorded as `NetworkFact(url="mcp://<tool>", content=...)` and
+  the bounded content is visible in the model working set.
+
+External queries are routed to the kernel only when an MCP registry is
+available; otherwise they stay on the legacy path. MCP servers are not sandboxed
+by Xenon's in-process sandbox; approval is the boundary. Dynamic per-tool
+`ToolSpec` discovery and real GitHub MCP transcripts are follow-ups.

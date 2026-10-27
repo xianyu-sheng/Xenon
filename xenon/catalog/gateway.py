@@ -572,11 +572,30 @@ class LegacyToolGateway:
                 or params.get("url")
                 or ""
             )
+            if call.spec_name == "mcp_call":
+                tool_name = str(
+                    params.get("tool_name")
+                    or params.get("tool")
+                    or ""
+                ).strip()
+                if not url or not url.startswith(
+                    ("http://", "https://", "mcp://")
+                ):
+                    # MCP metadata often calls the tool name "source"; keep a
+                    # stable remote URI instead of treating it as a web URL.
+                    url = f"mcp://{tool_name or url or 'call'}"
             if url:
+                content = meta.get("content")
+                if not isinstance(content, str):
+                    content = ""
                 effects.append(
                     NetworkFact(
                         url=url,
-                        status=int(_as_int(meta.get("status_code")) or 0),
+                        status=int(
+                            _as_int(meta.get("status_code"))
+                            or (200 if result.success else 0)
+                        ),
+                        content=content[:8000],
                     )
                 )
 

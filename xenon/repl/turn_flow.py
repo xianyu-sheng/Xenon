@@ -535,6 +535,7 @@ class TurnFlowMixin:
                 turn_contract_obj.intent in {"query", "research"}
                 or _looks_like_external_query(user_input)
             ),
+            mcp_available=self._has_mcp_tools(),
         )
 
         if kernel_turn:

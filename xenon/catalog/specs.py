@@ -143,8 +143,16 @@ MCP_SPECS: tuple[ToolSpec, ...] = (
         capabilities=frozenset({Capability.REMOTE}),
         effects=frozenset({EffectKind.NETWORK, EffectKind.OPAQUE}),
         risk=Risk.SENSITIVE,
-        params_schema={"server": "server name", "tool": "tool name", "arguments": "dict"},
-        description="Call an MCP server tool.",
+        params_schema={
+            "tool_name": "MCP tool name, e.g. server:tool",
+            "tool_args": "MCP tool argument object",
+            "query": "optional result filter keyword",
+            "max_chars": "optional result budget",
+        },
+        description=(
+            "Call a configured MCP tool. Use tool_name (server:tool) and "
+            "tool_args; approval is required."
+        ),
         preferences={"remote": 10},
     ),
 )
