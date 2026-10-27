@@ -13,6 +13,7 @@ from xenon.kernel.contracts import (
     Budget,
     CallTool,
     Capability,
+    Finish,
     ModelView,
     PolicyDecisionKind,
     ReceiptStatus,
@@ -98,6 +99,33 @@ def test_verify_allows_real_test_commands_only(tmp_path) -> None:
         str(tmp_path),
     )
     assert injected.kind is PolicyDecisionKind.VETO
+
+
+def test_verify_single_token_command_is_not_a_path(tmp_path) -> None:
+    action = _call(Capability.VERIFY, command="custom-verify")
+    default = PermissionPolicy(workspace=str(tmp_path))
+    assert _decision(default, action, str(tmp_path)).kind is PolicyDecisionKind.VETO
+
+    approving = PermissionPolicy(workspace=str(tmp_path), allow_approval=True)
+    assert (
+        _decision(approving, action, str(tmp_path)).kind
+        is PolicyDecisionKind.REQUIRE_APPROVAL
+    )
+
+
+def test_structured_test_paths_do_not_authorize_a_command(tmp_path) -> None:
+    action = _call(
+        Capability.VERIFY,
+        command="custom-verify",
+        test_paths=[str(tmp_path / "tests" / "test_a.py")],
+    )
+    default = PermissionPolicy(workspace=str(tmp_path))
+    assert _decision(default, action, str(tmp_path)).kind is PolicyDecisionKind.VETO
+    approving = PermissionPolicy(workspace=str(tmp_path), allow_approval=True)
+    assert (
+        _decision(approving, action, str(tmp_path)).kind
+        is PolicyDecisionKind.REQUIRE_APPROVAL
+    )
 
 
 def test_structured_test_paths_are_allowed_inside_workspace(tmp_path) -> None:
@@ -229,3 +257,204 @@ def test_veto_prevents_gateway_execution(tmp_path) -> None:
         and event.payload.get("kind") == "veto"
         for event in ledger.read()
     )
+
+
+def test_allow_approval_returns_require_approval_and_grants(tmp_path) -> None:
+    policy = PermissionPolicy(
+        workspace=str(tmp_path), allow_approval=True, approval_ttl_seconds=30
+    )
+    shell = _call(Capability.SHELL, command="echo hello")
+    decision = _decision(policy, shell, str(tmp_path))
+    assert decision.kind is PolicyDecisionKind.REQUIRE_APPROVAL
+    assert decision.ttl_seconds == 30
+    assert "echo hello" in decision.scope
+
+    grants = policy.approve(decision, shell)
+    assert grants
+    assert _decision(policy, shell, str(tmp_path)).kind is PolicyDecisionKind.ALLOW
+    policy.revoke(grants)
+    assert (
+        _decision(policy, shell, str(tmp_path)).kind
+        is PolicyDecisionKind.REQUIRE_APPROVAL
+    )
+
+    destructive = _call(Capability.SHELL, command="rm -rf build")
+    assert (
+        _decision(policy, destructive, str(tmp_path)).kind
+        is PolicyDecisionKind.VETO
+    )
+    remote = _call(Capability.REMOTE, server="docs")
+    remote_decision = _decision(policy, remote, str(tmp_path))
+    assert remote_decision.kind is PolicyDecisionKind.REQUIRE_APPROVAL
+    assert policy.approve(remote_decision, remote)
+
+
+def test_push_remains_veto_even_with_approval(tmp_path) -> None:
+    policy = PermissionPolicy(workspace=str(tmp_path), allow_approval=True)
+    for command in (
+        "git push origin main",
+        "git -C repo push origin main",
+        "bash -c 'git push origin main'",
+    ):
+        assert (
+            _decision(
+                policy,
+                _call(Capability.SHELL, command=command),
+                str(tmp_path),
+            ).kind
+            is PolicyDecisionKind.VETO
+        ), command
+    assert (
+        _decision(
+            policy,
+            _call(Capability.VCS, command="git push origin main"),
+            str(tmp_path),
+        ).kind
+        is PolicyDecisionKind.VETO
+    )
+    assert (
+        _decision(
+            policy,
+            _call(Capability.VERIFY, command="git push origin main"),
+            str(tmp_path),
+        ).kind
+        is PolicyDecisionKind.VETO
+    )
+
+
+def test_allow_approval_does_not_weaken_read_only(tmp_path) -> None:
+    policy = PermissionPolicy(
+        mode=PermissionMode.READ_ONLY,
+        workspace=str(tmp_path),
+        allow_approval=True,
+    )
+    action = _call(Capability.SHELL, command="echo hello")
+    assert (
+        _decision(policy, action, str(tmp_path)).kind
+        is PolicyDecisionKind.VETO
+    )
+
+
+class Approval:
+    def __init__(self, allowed: bool) -> None:
+        self.allowed = allowed
+        self.calls = []
+
+    def request(self, view, action, decision) -> bool:
+        self.calls.append((action, decision))
+        return self.allowed
+
+
+def _approval_runtime(tmp_path, approval):
+    ledger = Ledger.in_memory("task-1")
+    policy = PermissionPolicy(
+        workspace=str(tmp_path),
+        allow_approval=True,
+    )
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+        policies=(policy,),
+        approval=approval,
+    )
+    spec = TaskSpec(
+        task_id="task-1",
+        objective="run custom verification",
+        workspace=str(tmp_path),
+    )
+    action = CallTool(
+        ToolIntent(
+            capability=Capability.VERIFY,
+            params={"command": "custom-verify"},
+        )
+    )
+    result = runtime.run(
+        spec, ScriptedStrategy([action, Finish("done")])
+    )
+    return policy, ledger, result
+
+
+def test_runtime_approval_allows_once_and_revokes_grant(tmp_path) -> None:
+    approval = Approval(True)
+    policy, ledger, result = _approval_runtime(tmp_path, approval)
+
+    assert approval.calls
+    assert ledger.read(EventKind.USER_APPROVAL)
+    assert any(
+        event.kind is EventKind.POLICY_DECISION
+        and event.payload.get("kind") == "require_approval"
+        for event in ledger.read()
+    )
+    assert ledger.read(EventKind.TOOL_RECEIPT)
+    assert not policy.grants
+    assert result.phase.value in {"finalized", "delivered"}
+
+
+def test_runtime_approval_denial_blocks_before_gateway(tmp_path) -> None:
+    approval = Approval(False)
+    policy, ledger, result = _approval_runtime(tmp_path, approval)
+
+    assert ledger.read(EventKind.USER_APPROVAL)[0].payload["approved"] is False
+    assert not ledger.read(EventKind.TOOL_RECEIPT)
+    assert result.accepted is False
+    assert result.phase.value == "blocked"
+    assert not policy.grants
+
+
+def test_runtime_without_approver_fails_closed(tmp_path) -> None:
+    policy, ledger, result = _approval_runtime(tmp_path, None)
+
+    event = ledger.read(EventKind.USER_APPROVAL)[0]
+    assert event.payload["approved"] is False
+    assert "no approval provider" in event.payload["reason"]
+    assert not ledger.read(EventKind.TOOL_RECEIPT)
+    assert result.accepted is False
+    assert not policy.grants
+
+
+class ExplodingApproval:
+    def request(self, view, action, decision) -> bool:
+        raise RuntimeError("ui crashed")
+
+
+def test_approval_without_target_fails_closed(tmp_path) -> None:
+    ledger = Ledger.in_memory("task-1")
+    policy = PermissionPolicy(workspace=str(tmp_path), allow_approval=True)
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+        policies=(policy,),
+        approval=Approval(True),
+    )
+    result = runtime.run(
+        _calc_spec(),
+        ScriptedStrategy(
+            [
+                CallTool(ToolIntent(capability=Capability.REMOTE)),
+                Finish("done"),
+            ]
+        ),
+    )
+    assert result.accepted is False
+    assert result.phase.value == "blocked"
+    assert not ledger.read(EventKind.TOOL_RECEIPT)
+    assert "could not be scoped" in str(
+        ledger.read(EventKind.STATE_TRANSITION)[-1].payload.get("reason")
+    )
+    assert not policy.grants
+
+
+def test_approval_provider_exception_fails_closed(tmp_path) -> None:
+    policy, ledger, result = _approval_runtime(
+        tmp_path, ExplodingApproval()
+    )
+    event = ledger.read(EventKind.USER_APPROVAL)[0]
+    assert event.payload["approved"] is False
+    assert "approval provider failed" in event.payload["reason"]
+    assert not ledger.read(EventKind.TOOL_RECEIPT)
+    assert result.accepted is False
+    assert not policy.grants

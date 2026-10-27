@@ -422,3 +422,52 @@ def test_proposer_passes_transport_options() -> None:
 def test_cli_requires_plan_or_task() -> None:
     args = _parser().parse_args([])
     assert run_from_args(args) == 2
+
+
+class _Approval:
+    def __init__(self, allowed: bool) -> None:
+        self.allowed = allowed
+        self.calls = 0
+
+    def request(self, view, action, decision) -> bool:
+        self.calls += 1
+        return self.allowed
+
+
+class _TwoActions:
+    def __init__(self, actions) -> None:
+        self.actions = list(actions)
+
+    def propose(self, view):
+        return self.actions.pop(0)
+
+
+def test_run_task_approval_allows_shell_once(tmp_path: Path) -> None:
+    from xenon.kernel.contracts import CallTool, Capability, Finish, ToolIntent
+
+    approval = _Approval(True)
+    run = run_task(
+        "run a shell command",
+        strategy=_TwoActions(
+            [
+                CallTool(
+                    ToolIntent(
+                        capability=Capability.SHELL,
+                        params={"command": "echo approved"},
+                    )
+                ),
+                Finish("done"),
+            ]
+        ),
+        workspace=tmp_path,
+        ledger_dir=tmp_path.parent / f"{tmp_path.name}-ledger",
+        task_id="approval-shell",
+        finalize=False,
+        approval=approval,
+        allow_approval=True,
+    )
+    assert approval.calls == 1
+    assert run.result.accepted is True, run.result.debt
+    events = Ledger(run.ledger_path, "approval-shell").read()
+    assert any(event.kind.value == "user_approval" for event in events)
+    assert any(event.kind.value == "tool_receipt" for event in events)

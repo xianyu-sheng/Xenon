@@ -16,7 +16,12 @@ from typing import Any, Mapping
 
 from xenon.harness.llm import ModelConfig, build_llm_strategy
 from xenon.harness.runner import HarnessRun, result_json, run_task
-from xenon.kernel.contracts import TaskResult
+from xenon.kernel.contracts import (
+    CallTool,
+    Capability,
+    PolicyDecision,
+    TaskResult,
+)
 from xenon.kernel.policies import PermissionMode
 from xenon.repl.execution_policy import ExecutionLevel
 
@@ -146,6 +151,51 @@ class ReplEventSink:
             )
 
 
+_CAPABILITY_TOOL = {
+    Capability.READ: "read",
+    Capability.SEARCH: "search",
+    Capability.EDIT: "apply_patch",
+    Capability.VERIFY: "bash",
+    Capability.SHELL: "bash",
+    Capability.VCS: "git",
+    Capability.REMOTE: "mcp_call",
+}
+_CRITICAL_CAPABILITIES = frozenset(
+    {Capability.VERIFY, Capability.SHELL, Capability.VCS, Capability.REMOTE}
+)
+
+
+class KernelApprovalProvider:
+    """Bridge a kernel REQUIRE_APPROVAL decision to the REPL permission UI."""
+
+    def __init__(self, repl: Any) -> None:
+        self.repl = repl
+
+    def request(
+        self, view: Any, action: Any, decision: PolicyDecision
+    ) -> bool:
+        del view, decision
+        if not isinstance(action, CallTool):
+            return False
+        confirm = getattr(self.repl, "_confirm_tool", None)
+        if not callable(confirm):
+            return False
+        capability = action.intent.capability
+        tool = _CAPABILITY_TOOL.get(capability, capability.value)
+        risk = (
+            "CRITICAL"
+            if capability in _CRITICAL_CAPABILITIES
+            else "WRITE"
+        )
+        try:
+            result = confirm(tool, dict(action.intent.params), risk)
+        except Exception:  # noqa: BLE001 — UI failure must deny
+            return False
+        if isinstance(result, tuple):
+            return bool(result[0])
+        return bool(result)
+
+
 class RuntimeAdapter:
     """Build and execute one kernel task with REPL-owned configuration."""
 
@@ -159,6 +209,8 @@ class RuntimeAdapter:
         finalize: bool | None = None,
         max_steps: int = 24,
         client: Any = None,
+        approval: Any = None,
+        allow_approval: bool = False,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         if not self.workspace.is_dir():
@@ -179,6 +231,8 @@ class RuntimeAdapter:
         )
         self.max_steps = max(1, int(max_steps))
         self.client = client
+        self.approval = approval
+        self.allow_approval = bool(allow_approval)
 
     def run(
         self,
@@ -202,6 +256,8 @@ class RuntimeAdapter:
                 f"model:{self.model_config.model_id}",
             ),
             sink=sink,
+            approval=self.approval if self.allow_approval else None,
+            allow_approval=self.allow_approval,
         )
         try:
             result_path = run.ledger_path.with_suffix(".result.json")
@@ -233,6 +289,8 @@ class RuntimeAdapter:
             permission=permission_mode_for(level),
             ledger_dir=Path.home() / ".xenon" / "ledger" / "repl",
             client=client,
+            approval=KernelApprovalProvider(repl),
+            allow_approval=int(level) >= int(ExecutionLevel.EXECUTE),
         )
 
 
@@ -406,6 +464,7 @@ def run_kernel_turn(
 __all__ = [
     "KERNEL_RUNTIME_ENV",
     "KernelAdapterError",
+    "KernelApprovalProvider",
     "ReplEventSink",
     "RuntimeAdapter",
     "kernel_runtime_requested",

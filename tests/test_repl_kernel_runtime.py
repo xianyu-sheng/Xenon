@@ -13,10 +13,12 @@ from rich.console import Console
 from tests.harness.test_exec import _plan_dict, _repo
 from xenon.engine.callbacks import ConsoleCallback
 from xenon.harness.llm import ModelConfig
+from xenon.kernel.contracts import CallTool, Capability, ToolIntent
 from xenon.kernel.policies import PermissionMode
 from xenon.repl.execution_policy import ExecutionLevel
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.runtime_adapter import (
+    KernelApprovalProvider,
     ReplEventSink,
     RuntimeAdapter,
     model_config_for,
@@ -103,6 +105,11 @@ class FakeRepl:
         self.finished: list[tuple[str, str]] = []
         self.rendered: list[tuple[str, str]] = []
         self.events: list[tuple[str, dict]] = []
+        self.confirm_calls: list[tuple[str, dict, str]] = []
+
+    def _confirm_tool(self, tool, params, risk):
+        self.confirm_calls.append((tool, dict(params), risk))
+        return False, "denied by test"
 
     def _start_log_capture(self) -> None:
         pass
@@ -210,6 +217,52 @@ def test_event_sink_projects_receipts_without_content() -> None:
     assert panel is not None
     assert panel.tool_call_count == 1
     assert "SECRET" not in repr(panel)
+
+
+class ApprovalRepl:
+    def __init__(self, result=True) -> None:
+        self.result = result
+        self.calls = []
+
+    def _confirm_tool(self, tool, params, risk):
+        self.calls.append((tool, params, risk))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def test_kernel_approval_provider_maps_capability_to_repl_gate() -> None:
+    repl = ApprovalRepl((True, ""))
+    provider = KernelApprovalProvider(repl)
+    action = CallTool(
+        ToolIntent(
+            capability=Capability.SHELL,
+            params={"command": "echo hello"},
+        )
+    )
+    assert provider.request(None, action, None) is True
+    assert repl.calls == [("bash", {"command": "echo hello"}, "CRITICAL")]
+
+    repl.result = (False, "no")
+    assert provider.request(None, action, None) is False
+    repl.result = RuntimeError("ui")
+    assert provider.request(None, action, None) is False
+    assert provider.request(None, SimpleNamespace(), None) is False
+
+
+def test_runtime_adapter_approval_only_at_execute_level(tmp_path: Path) -> None:
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = FakeRepl(tmp_path, registry)
+    write = RuntimeAdapter.from_repl(
+        repl, model_ids=["test/fake"], level=ExecutionLevel.WRITE
+    )
+    execute = RuntimeAdapter.from_repl(
+        repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
+    )
+    assert write.allow_approval is False
+    assert execute.allow_approval is True
+    assert execute.approval is not None
 
 
 def test_runtime_adapter_runs_real_workspace(tmp_path: Path) -> None:
@@ -398,6 +451,40 @@ def test_result_summary_branches_and_blocked_rendering(tmp_path: Path) -> None:
     assert repl.rendered[-1][0] == "Kernel · blocked"
     assert repl.finished == [("degraded", "kernel")]
     assert repl.ctx_mgr.messages
+
+
+def test_run_kernel_turn_denies_shell_approval(tmp_path: Path) -> None:
+    _repo(tmp_path)
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = FakeRepl(tmp_path, registry)
+    client = FakeClient(
+        [
+            json.dumps(
+                {
+                    "action": "call_tool",
+                    "capability": "shell",
+                    "params": {"command": "echo hello"},
+                }
+            )
+        ]
+    )
+    run = run_kernel_turn(
+        repl,
+        objective="run echo",
+        user_input="run echo",
+        model_ids=["test/fake"],
+        execution_policy=SimpleNamespace(level=ExecutionLevel.EXECUTE),
+        callback=ConsoleCallback(verbose=False),
+        client=client,
+    )
+    assert run is not None
+    assert run.result.accepted is False
+    assert run.result.phase.value == "blocked"
+    assert repl.confirm_calls == [
+        ("bash", {"command": "echo hello"}, "CRITICAL")
+    ]
+    assert repl.finished == [("degraded", "kernel")]
 
 
 def test_run_kernel_turn_reports_adapter_exception(tmp_path: Path, monkeypatch) -> None:

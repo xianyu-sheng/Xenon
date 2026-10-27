@@ -82,7 +82,7 @@ def _normalize(value: str) -> str:
 def _targets(intent: ToolIntent) -> tuple[str, ...]:
     params = intent.params
     found: list[str] = []
-    for key in ("file_path", "path"):
+    for key in ("file_path", "path", "url", "server"):
         value = params.get(key)
         if isinstance(value, str) and value:
             found.append(value)
@@ -108,6 +108,23 @@ def _targets(intent: ToolIntent) -> tuple[str, ...]:
     if isinstance(git_command, str) and git_command:
         found.append(git_command)
     return tuple(dict.fromkeys(found))
+
+
+def _path_targets(intent: ToolIntent) -> list[str]:
+    """Targets that are paths, excluding the command string.
+
+    A one-token command such as ``custom-verify`` has no space and would
+    otherwise be mistaken for a workspace-relative path by
+    ``_looks_like_command``.  That false positive made arbitrary verify
+    commands pass the structured-test allowlist.
+    """
+
+    command = _command(intent)
+    return [
+        target
+        for target in _targets(intent)
+        if target != command and not _looks_like_command(target)
+    ]
 
 
 def _command(intent: ToolIntent) -> str:
@@ -189,6 +206,22 @@ def _is_commit(command: str) -> bool:
     return len(tokens) >= 2 and tokens[:2] == ["g" + "it", "commit"]
 
 
+def _is_push(command: str) -> bool:
+    """Detect git push, including ``git -C repo push`` and shell wrappers.
+
+    Delivery push is not approvable in the kernel yet: the finalizer rejects a
+    pushed task after the side effect has already happened.  Until there is an
+    explicit TaskSpec.allow_push pre-execution gate, push must stay a VETO.
+    """
+
+    lowered = command.casefold()
+    if ("g" + "it") not in lowered or "push" not in lowered:
+        return False
+    # Conservative: a shell wrapper may hide the tokens (bash -c 'git push'),
+    # and git options (`-C repo`, `--git-dir=...`) defeat a first-token check.
+    return True
+
+
 def _is_scope_safe_stage(command: str) -> bool:
     tokens = _tokens(command)
     if len(tokens) < 3 or tokens[:2] != ["g" + "it", "add"]:
@@ -233,6 +266,11 @@ class PermissionPolicy:
     workspace: str = "."
     grants: tuple[ScopedGrant, ...] = ()
     clock: Callable[[], float] = time.time
+    # When true, a non-destructive but unproven call becomes REQUIRE_APPROVAL
+    # instead of VETO.  Approval is only useful when an ApprovalProvider is
+    # injected into the runtime; without one the runtime still fails closed.
+    allow_approval: bool = False
+    approval_ttl_seconds: float = 60.0
 
     def check(self, view: ModelView, action: Action) -> PolicyDecision:
         del view  # the view is intentional context, not a policy input here
@@ -328,14 +366,14 @@ class PermissionPolicy:
             return PolicyDecision(
                 kind=PolicyDecisionKind.ALLOW, reason="bypass mode"
             )
+        if _is_push(_command(intent)):
+            return self._deny(
+                capability, targets, "push is not approvable in the kernel"
+            )
         if self.mode is PermissionMode.READ_ONLY:
             return self._deny(capability, targets, "read-only mode")
         if capability is Capability.EDIT:
-            path_targets = [
-                target
-                for target in targets
-                if not _looks_like_command(target)
-            ]
+            path_targets = _path_targets(intent)
             if path_targets and all(
                 _inside_workspace(target, Path(self.workspace))
                 for target in path_targets
@@ -350,22 +388,23 @@ class PermissionPolicy:
             )
         if capability is Capability.VERIFY:
             command = _command(intent)
-            path_targets = [
-                target
-                for target in targets
-                if not _looks_like_command(target)
-            ]
+            path_targets = _path_targets(intent)
             structured_tests = bool(path_targets) and all(
                 _inside_workspace(target, Path(self.workspace))
                 for target in path_targets
             )
             if self.mode is PermissionMode.AUTO_EDIT and (
-                _is_safe_test_command(command) or structured_tests
+                _is_safe_test_command(command)
+                or (structured_tests and not command)
             ):
                 return PolicyDecision(
                     kind=PolicyDecisionKind.ALLOW,
                     reason="workspace test command",
                     scope=(command or ", ".join(path_targets),),
+                )
+            if self.allow_approval and self.mode is not PermissionMode.READ_ONLY:
+                return self._approval(
+                    capability, targets, "verify requires approval"
                 )
             return self._deny(capability, targets, "verify requires a grant")
         if capability is Capability.VCS:
@@ -379,6 +418,10 @@ class PermissionPolicy:
                     kind=PolicyDecisionKind.ALLOW,
                     reason="commit/stage command",
                     scope=(command,),
+                )
+            if self.allow_approval and self.mode is not PermissionMode.READ_ONLY:
+                return self._approval(
+                    capability, targets, "VCS requires approval"
                 )
             return self._deny(capability, targets, "VCS requires a grant")
         if capability is Capability.SHELL:
@@ -399,10 +442,73 @@ class PermissionPolicy:
                     reason="commit/stage command",
                     scope=(command,),
                 )
+            if self.allow_approval and self.mode is not PermissionMode.READ_ONLY:
+                return self._approval(
+                    capability, targets, "shell requires approval"
+                )
             return self._deny(capability, targets, "shell requires a grant")
         if capability is Capability.REMOTE:
+            if self.allow_approval and self.mode is not PermissionMode.READ_ONLY:
+                return self._approval(
+                    capability, targets, "network requires approval"
+                )
             return self._deny(capability, targets, "network requires a grant")
         return self._deny(capability, targets, "unknown capability")
+
+    def _approval(
+        self,
+        capability: Capability,
+        targets: Sequence[str],
+        reason: str,
+    ) -> PolicyDecision:
+        return PolicyDecision(
+            kind=PolicyDecisionKind.REQUIRE_APPROVAL,
+            reason=reason,
+            scope=(capability.value, *targets),
+            ttl_seconds=self.approval_ttl_seconds,
+        )
+
+    def approve(
+        self, decision: PolicyDecision, action: Action
+    ) -> tuple[ScopedGrant, ...]:
+        """Create one-shot grants for an approved call.
+
+        The runtime revokes these grants after the gateway call.  A remote or
+        shell call without a concrete target gets no grant and therefore still
+        fails closed at the gateway.
+        """
+
+        if (
+            decision.kind is not PolicyDecisionKind.REQUIRE_APPROVAL
+            or not isinstance(action, CallTool)
+        ):
+            return ()
+        targets = _targets(action.intent)
+        if not targets:
+            return ()
+        expires_at = (
+            self.clock() + decision.ttl_seconds
+            if decision.ttl_seconds is not None
+            else None
+        )
+        grants = tuple(
+            ScopedGrant(
+                capability=action.intent.capability,
+                target=target,
+                expires_at=expires_at,
+            )
+            for target in targets
+        )
+        self.grants = tuple(self.grants) + grants
+        return grants
+
+    def revoke(self, grants: Sequence[ScopedGrant]) -> None:
+        revoked = set(grants)
+        if not revoked:
+            return
+        self.grants = tuple(
+            grant for grant in self.grants if grant not in revoked
+        )
 
     def _grant(
         self, capability: Capability, targets: Sequence[str]

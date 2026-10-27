@@ -71,6 +71,7 @@ from xenon.kernel.phases import (
     is_legal_transition,
 )
 from xenon.kernel.protocols import (
+    ApprovalProvider,
     EventSink,
     Ledger,
     Policy,
@@ -86,6 +87,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "Action",
     "ActionKind",
+    "ApprovalProvider",
     "AskUser",
     "AuditProposal",
     "BindingStatus",

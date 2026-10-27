@@ -52,6 +52,19 @@ class BoundToolPolicy(Protocol):
 
 
 @runtime_checkable
+class ApprovalProvider(Protocol):
+    """Human/front-end bridge for a REQUIRE_APPROVAL policy decision.
+
+    The kernel never prompts by itself.  An absent provider means "deny" so a
+    headless or non-interactive caller cannot silently acquire permission.
+    """
+
+    def request(
+        self, view: ModelView, action: Action, decision: PolicyDecision
+    ) -> bool: ...
+
+
+@runtime_checkable
 class Finalizer(Protocol):
     """Delivery-layer finalizer: stage only verified paths and commit."""
 
