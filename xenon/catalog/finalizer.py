@@ -8,10 +8,11 @@ git commands; the runtime receives a ``Finalizer`` protocol implementation.
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 _IGNORED_PARTS = frozenset(
     {
@@ -35,13 +36,22 @@ class FinalizeOutcome:
     commit_sha: str | None = None
     files: tuple[str, ...] = field(default_factory=tuple)
     created: bool = False
+    rolled_back: bool = False
     staged: tuple[str, ...] = field(default_factory=tuple)
 
 
 class GitFinalizer:
-    def __init__(self, workspace: str | Path, *, timeout: float = 60.0) -> None:
+    def __init__(
+        self,
+        workspace: str | Path,
+        *,
+        timeout: float = 60.0,
+        runner: Callable[..., subprocess.CompletedProcess[bytes]]
+        | None = None,
+    ) -> None:
         self.workspace = Path(workspace).resolve()
         self.timeout = timeout
+        self._runner = runner or subprocess.run
 
     def finalize(
         self,
@@ -97,6 +107,9 @@ class GitFinalizer:
                 return self._existing(existing_commit_sha, verified)
             return FinalizeOutcome(accepted=True)
 
+        before_hashes = {
+            path: self._hash(path) for path in sorted(verified)
+        }
         message = self._message(objective, task_id)
         committed = self._run("commit", "-m", message)
         if committed.returncode != 0:
@@ -112,11 +125,33 @@ class GitFinalizer:
         files = self._files_at(sha)
         unverified_files = sorted(set(files) - verified)
         if unverified_files:
-            return FinalizeOutcome(
-                accepted=False,
-                reason="new commit contains unverified paths: "
+            return self._reject_and_rollback(
+                sha,
+                "new commit contains unverified paths: "
                 + ", ".join(unverified_files),
-                commit_sha=sha,
+            )
+        post_changes = self._status_changes()
+        if post_changes is None:
+            return self._reject_and_rollback(
+                sha, "cannot verify worktree after commit"
+            )
+        dirty = sorted(
+            path for path in post_changes if not self._ignored(path)
+        )
+        if dirty:
+            return self._reject_and_rollback(
+                sha,
+                "commit hook left worktree dirty: " + ", ".join(dirty[:10]),
+            )
+        changed = sorted(
+            path
+            for path in verified
+            if self._hash(path) != before_hashes.get(path, "")
+        )
+        if changed:
+            return self._reject_and_rollback(
+                sha,
+                "commit hook changed verified files: " + ", ".join(changed[:10]),
             )
         return FinalizeOutcome(
             accepted=True,
@@ -125,6 +160,42 @@ class GitFinalizer:
             created=True,
             staged=tuple(staged),
         )
+
+    def _reject_and_rollback(
+        self, sha: str, reason: str
+    ) -> FinalizeOutcome:
+        rollback_error = self._rollback(sha)
+        if rollback_error:
+            return FinalizeOutcome(
+                accepted=False,
+                reason=reason + "; rollback failed: " + rollback_error,
+                commit_sha=sha,
+            )
+        return FinalizeOutcome(
+            accepted=False,
+            reason=reason + "; commit rolled back",
+            rolled_back=True,
+        )
+
+    def _rollback(self, sha: str) -> str:
+        if self._head() != sha:
+            return "HEAD moved after commit"
+        parent = self._run("rev-parse", "--verify", "HEAD~1")
+        if parent.returncode == 0:
+            result = self._run("reset", "--soft", "HEAD~1")
+        else:
+            result = self._run("update-ref", "-d", "HEAD")
+        if result.returncode != 0:
+            return self._output(result)
+        return ""
+
+    def _hash(self, path: str) -> str:
+        try:
+            return hashlib.sha256(
+                (self.workspace / path).read_bytes()
+            ).hexdigest()
+        except OSError:
+            return ""
 
     def _existing(
         self, sha: str, verified: set[str]
@@ -234,7 +305,7 @@ class GitFinalizer:
 
     def _run(self, *args: str) -> subprocess.CompletedProcess[bytes]:
         try:
-            return subprocess.run(
+            return self._runner(
                 ["git", *args],
                 cwd=self.workspace,
                 capture_output=True,

@@ -112,3 +112,57 @@ def test_finalizer_rejects_no_changes_without_commit(tmp_path: Path) -> None:
     assert outcome.accepted is True
     assert outcome.commit_sha is None
     assert outcome.created is False
+
+
+def test_finalizer_rolls_back_a_commit_when_hook_dirts_worktree(
+    tmp_path: Path,
+) -> None:
+    _repo(tmp_path)
+    (tmp_path / "a.py").write_text("print('a')" + chr(10), encoding="utf-8")
+
+    def runner(args, **kwargs):
+        result = subprocess.run(args, **kwargs)
+        if args[:2] == ["git", "commit"] and result.returncode == 0:
+            (tmp_path / "a.py").write_text("hacked" + chr(10), encoding="utf-8")
+        return result
+
+    outcome = GitFinalizer(tmp_path, runner=runner).finalize(
+        verified_paths=("a.py",),
+        objective="add a.py",
+        task_id="t1",
+    )
+
+    assert outcome.accepted is False
+    assert outcome.rolled_back is True
+    assert "dirty" in outcome.reason or "changed" in outcome.reason
+    assert subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"],
+        cwd=tmp_path,
+        capture_output=True,
+    ).returncode != 0
+
+
+def test_finalizer_rolls_back_to_the_previous_commit(tmp_path: Path) -> None:
+    _repo(tmp_path)
+    (tmp_path / "a.py").write_text("base" + chr(10), encoding="utf-8")
+    _git(tmp_path, "add", "a.py")
+    _git(tmp_path, "commit", "-m", "base")
+    base = _head(tmp_path)
+    (tmp_path / "a.py").write_text("changed" + chr(10), encoding="utf-8")
+
+    def runner(args, **kwargs):
+        result = subprocess.run(args, **kwargs)
+        if args[:2] == ["git", "commit"] and result.returncode == 0:
+            (tmp_path / "a.py").write_text("hook" + chr(10), encoding="utf-8")
+        return result
+
+    outcome = GitFinalizer(tmp_path, runner=runner).finalize(
+        verified_paths=("a.py",),
+        objective="change a.py",
+        task_id="t1",
+        existing_commit_sha=base,
+    )
+
+    assert outcome.accepted is False
+    assert outcome.rolled_back is True
+    assert _head(tmp_path) == base
