@@ -518,32 +518,74 @@ class TurnFlowMixin:
         # 每次引擎调用前手动同步。⚠️ 不可遗漏，否则引擎内部报 AttributeError。
         self.agent_context.set_conversation_messages(self.ctx_mgr.get_messages())
 
-        # 根据当前思考范式选择执行方式
-        mode = self._select_turn_mode(
-            user_input,
-            execution_policy,
-            turn_contract_obj.intent,
-            turn_contract_obj.requires_tools,
+        # Decide the execution path before the legacy mode selector runs.
+        # Otherwise XENON_RUNTIME=kernel still prints a plan-react recommendation
+        # that has no effect on the kernel turn.
+        from xenon.repl.runtime_adapter import should_route_to_kernel
+        from xenon.repl.turn_helpers import _looks_like_external_query
+
+        kernel_turn = should_route_to_kernel(
+            runtime_mode=getattr(self, "_runtime_mode", ""),
+            requires_tools=execution_policy.requires_tools,
+            skill_name=skill_name,
+            plan_mode=self._plan_mode_active,
+            pending=pending,
+            recipe=recipe,
+            external_query=(
+                turn_contract_obj.intent in {"query", "research"}
+                or _looks_like_external_query(user_input)
+            ),
         )
-        if pending is not None and pending.engine:
-            spec = ENGINE_REGISTRY.get(pending.engine)
-            if spec is not None and spec.runs_engine and mode != pending.engine:
-                mode = pending.engine
-                console.print(
-                    f"[dim cyan]⏩ 延续上轮任务 → 继续使用 "
-                    f"[bold]{mode}[/bold] 范式[/dim cyan]"
-                )
-        if recipe is not None:
-            recipe_spec = ENGINE_REGISTRY.get(recipe.engine)
-            if recipe_spec is not None and recipe_spec.runs_engine:
-                if mode != recipe_spec.name:
-                    mode = recipe_spec.name
+
+        if kernel_turn:
+            mode = "kernel"
+        else:
+            # 根据当前思考范式选择执行方式
+            mode = self._select_turn_mode(
+                user_input,
+                execution_policy,
+                turn_contract_obj.intent,
+                turn_contract_obj.requires_tools,
+            )
+            if pending is not None and pending.engine:
+                spec = ENGINE_REGISTRY.get(pending.engine)
+                if (
+                    spec is not None
+                    and spec.runs_engine
+                    and mode != pending.engine
+                ):
+                    mode = pending.engine
                     console.print(
-                        "[dim cyan]🧭 原子任务使用配方指定的引擎，"
-                        "避免进入通用规划循环[/dim cyan]"
+                        f"[dim cyan]⏩ 延续上轮任务 → 继续使用 "
+                        f"[bold]{mode}[/bold] 范式[/dim cyan]"
                     )
+            if recipe is not None:
+                recipe_spec = ENGINE_REGISTRY.get(recipe.engine)
+                if recipe_spec is not None and recipe_spec.runs_engine:
+                    if mode != recipe_spec.name:
+                        mode = recipe_spec.name
+                        console.print(
+                            "[dim cyan]🧭 原子任务使用配方指定的引擎，"
+                            "避免进入通用规划循环[/dim cyan]"
+                        )
 
         try:
+            if kernel_turn:
+                from xenon.repl.runtime_adapter import run_kernel_turn
+
+                console.print(
+                    "[dim cyan]🧠 Runtime: kernel "
+                    f"({model_ids[0]})[/dim cyan]"
+                )
+                run_kernel_turn(
+                    self,
+                    objective=turn_prompt,
+                    user_input=user_input,
+                    model_ids=model_ids,
+                    execution_policy=execution_policy,
+                )
+                self._commit_memory_usage()
+                return
             if skill_name is not None:
                 self._run_react_engine(turn_prompt, model_ids)
             elif (

@@ -1,0 +1,416 @@
+"""Opt-in kernel runtime adapter for the interactive REPL (#202 first slice).
+
+This is deliberately a dual-track migration, not a demolition: the legacy
+engine host remains the default until kernel parity is demonstrated.  When
+``XENON_RUNTIME=kernel`` and the turn requires tools, the REPL builds a
+TaskSpec, runs the kernel, projects events into the existing ConsoleCallback,
+and writes the assistant result back into the REPL's context/turn tree.
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from pathlib import Path
+from typing import Any, Mapping
+
+from xenon.harness.llm import ModelConfig, build_llm_strategy
+from xenon.harness.runner import HarnessRun, result_json, run_task
+from xenon.kernel.contracts import TaskResult
+from xenon.kernel.policies import PermissionMode
+from xenon.repl.execution_policy import ExecutionLevel
+
+KERNEL_RUNTIME_ENV = "XENON_RUNTIME"
+
+
+class KernelAdapterError(RuntimeError):
+    """The REPL cannot construct or run a kernel task."""
+
+
+def kernel_runtime_requested() -> bool:
+    return os.environ.get(KERNEL_RUNTIME_ENV, "").strip().lower() == "kernel"
+
+
+def should_route_to_kernel(
+    *,
+    runtime_mode: str,
+    requires_tools: bool,
+    skill_name: str | None,
+    plan_mode: bool,
+    pending: object | None,
+    recipe: object | None,
+    external_query: bool = False,
+) -> bool:
+    """Route only well-understood task turns in the first migration slice.
+
+    External queries are excluded until the MCP/remote catalog is wired into
+    the kernel.  Routing them to a core-only catalog would turn a working
+    legacy ReAct query into a blocked or hallucinated answer.
+    """
+
+    return (
+        runtime_mode == "kernel"
+        and requires_tools
+        and skill_name is None
+        and not plan_mode
+        and pending is None
+        and recipe is None
+        and not external_query
+    )
+
+
+def permission_mode_for(level: ExecutionLevel | int) -> PermissionMode:
+    """Map the REPL's authorization level onto the kernel's conservative modes.
+
+    EXECUTE deliberately maps to AUTO_EDIT, not BYPASS: the kernel policy still
+    permits workspace edits and safe test commands, but arbitrary shell needs a
+    scoped grant.  Approval UI/scoped grants are a later slice.
+    """
+
+    value = int(level)
+    if value <= int(ExecutionLevel.READ_ONLY):
+        return PermissionMode.READ_ONLY
+    return PermissionMode.AUTO_EDIT
+
+
+def model_config_for(registry: Any, model_ids: list[str]) -> ModelConfig:
+    if not model_ids:
+        raise KernelAdapterError("no model selected for kernel runtime")
+    model_id = model_ids[0]
+    configured = registry.get_model_by_id(model_id) if registry is not None else None
+    if configured is None:
+        return ModelConfig(model_id=model_id)
+    return ModelConfig(
+        model_id=configured.model_id,
+        base_url=configured.base_url,
+        api_key=configured.api_key,
+        max_tokens=max(256, int(configured.max_tokens or 8192)),
+        # Action selection benefits from determinism more than prose variety.
+        temperature=0.0,
+        reasoning_effort=configured.reasoning_effort,
+    )
+
+
+def _receipt_observation(receipt: Mapping[str, Any]) -> str:
+    """Short, content-free receipt summary for the existing ThinkingPanel."""
+
+    status = receipt.get("status") or "unknown"
+    effects = receipt.get("effects") or []
+    kinds = [
+        str(item.get("type") or item.get("kind") or "effect")
+        for item in effects
+        if isinstance(item, Mapping)
+    ]
+    error = str(receipt.get("error") or "")
+    text = f"{status}"
+    if kinds:
+        text += " · " + ", ".join(kinds)
+    if error:
+        text += f" · {error[:300]}"
+    return text
+
+
+class ReplEventSink:
+    """Project kernel ledger events into the REPL's existing callback/panel."""
+
+    def __init__(self, callback: Any) -> None:
+        self.callback = callback
+
+    def emit(self, event: Any) -> None:
+        kind = getattr(getattr(event, "kind", None), "value", "")
+        payload = getattr(event, "payload", {}) or {}
+        if kind == "thought":
+            self.callback.on_think(str(payload.get("text") or ""))
+        elif kind == "tool_receipt":
+            receipt = payload.get("receipt") or {}
+            if not isinstance(receipt, Mapping):
+                return
+            tool = str(receipt.get("tool") or "tool")
+            self.callback.on_act(tool, {})
+            self.callback.on_observe(_receipt_observation(receipt))
+        elif kind == "policy_decision":
+            decision = str(payload.get("kind") or "")
+            reason = str(payload.get("reason") or "")
+            if decision == "veto":
+                self.callback.on_error(f"policy veto: {reason}")
+            else:
+                self.callback.on_warning(f"policy: {decision} {reason}")
+        elif kind == "debt_opened":
+            self.callback.on_warning(
+                f"open obligation: {payload.get('kind') or ''} "
+                f"{payload.get('target') or ''} — {payload.get('reason') or ''}"
+            )
+        elif kind == "user_question":
+            self.callback.on_warning(
+                str(payload.get("question") or "user input required")
+            )
+
+
+class RuntimeAdapter:
+    """Build and execute one kernel task with REPL-owned configuration."""
+
+    def __init__(
+        self,
+        *,
+        workspace: str | Path,
+        model_config: ModelConfig,
+        permission: PermissionMode = PermissionMode.AUTO_EDIT,
+        ledger_dir: str | Path | None = None,
+        finalize: bool | None = None,
+        max_steps: int = 24,
+        client: Any = None,
+    ) -> None:
+        self.workspace = Path(workspace).resolve()
+        if not self.workspace.is_dir():
+            raise KernelAdapterError(
+                f"kernel workspace is not a directory: {self.workspace}"
+            )
+        self.model_config = model_config
+        self.permission = permission
+        self.ledger_dir = (
+            Path(ledger_dir).expanduser()
+            if ledger_dir is not None
+            else Path.home() / ".xenon" / "ledger" / "repl"
+        )
+        self.finalize = (
+            (self.workspace / ".git").exists()
+            if finalize is None
+            else bool(finalize)
+        )
+        self.max_steps = max(1, int(max_steps))
+        self.client = client
+
+    def run(
+        self,
+        objective: str,
+        *,
+        task_id: str | None = None,
+        sink: Any = None,
+    ) -> HarnessRun:
+        strategy = build_llm_strategy(self.model_config, client=self.client)
+        run = run_task(
+            objective,
+            strategy=strategy,
+            workspace=self.workspace,
+            ledger_dir=self.ledger_dir,
+            task_id=task_id or f"repl-{uuid.uuid4().hex[:12]}",
+            permission=self.permission,
+            finalize=self.finalize,
+            max_steps=self.max_steps,
+            constraints=(
+                "runtime:kernel",
+                f"model:{self.model_config.model_id}",
+            ),
+            sink=sink,
+        )
+        try:
+            result_path = run.ledger_path.with_suffix(".result.json")
+            result_path.write_text(
+                result_json(run.result) + "\n", encoding="utf-8"
+            )
+        except OSError:
+            pass
+        return run
+
+    @classmethod
+    def from_repl(
+        cls,
+        repl: Any,
+        *,
+        model_ids: list[str],
+        level: ExecutionLevel | int,
+        client: Any = None,
+    ) -> RuntimeAdapter:
+        project_ctx = getattr(repl, "project_ctx", None)
+        workspace = (
+            getattr(project_ctx, "root", None)
+            or getattr(project_ctx, "working_dir", None)
+            or Path.cwd()
+        )
+        return cls(
+            workspace=workspace,
+            model_config=model_config_for(repl.registry, model_ids),
+            permission=permission_mode_for(level),
+            ledger_dir=Path.home() / ".xenon" / "ledger" / "repl",
+            client=client,
+        )
+
+
+def _console_for(repl: Any) -> Any:
+    console = getattr(repl, "console", None)
+    if console is not None:
+        return console
+    from xenon.repl.repl import console as repl_console
+
+    return repl_console
+
+
+def _result_summary(result: TaskResult) -> str:
+    if result.answer.strip():
+        return result.answer
+    if result.accepted:
+        return "任务已完成并交付。"
+    if result.debt:
+        reasons = "; ".join(item.reason for item in result.debt[:3])
+        return f"任务被阻断，仍有未满足的证据：{reasons}"
+    return f"任务未交付（phase={result.phase.value}）。"
+
+
+def _render_kernel_result(
+    repl: Any,
+    run: HarnessRun,
+    callback: Any,
+    *,
+    model_id: str,
+) -> None:
+    result = run.result
+    console = _console_for(repl)
+    if hasattr(callback, "finish_activity"):
+        callback.finish_activity()
+    panel = (
+        callback.get_thinking_panel()
+        if hasattr(callback, "get_thinking_panel")
+        else None
+    )
+    if panel is not None:
+        repl._last_thinking_panel = panel
+        tool_count = int(getattr(panel, "tool_call_count", 0) or 0)
+        for _ in range(tool_count):
+            repl.status_bar.add_tool_call()
+        track = getattr(repl, "_track_session_files", None)
+        if callable(track):
+            track(panel)
+
+    answer = _result_summary(result)
+    accepted = bool(result.accepted)
+    if accepted and result.finalize_sha:
+        answer = (
+            answer.rstrip()
+            + "\n\n交付: commit "
+            + result.finalize_sha[:12]
+            + " · evidence: "
+            + result.evidence_status.value
+        )
+    status = "passed" if accepted else "degraded"
+    reasons = [item.reason for item in result.debt]
+    finish_node = getattr(repl, "_finish_turn_node", None)
+    if callable(finish_node):
+        finish_node(
+            status,
+            engine="kernel",
+            reasons=reasons,
+            panel=panel,
+        )
+
+    repl._last_mode_line = "· Kernel runtime"
+    if getattr(repl, "_show_thinking", False):
+        captured = getattr(repl, "_captured_log", "")
+        if captured:
+            console.print(captured.rstrip(), style="dim")
+        if panel is not None:
+            console.print(panel)
+    else:
+        metrics = result.metrics
+        console.print(
+            "[dim]  💭 kernel · "
+            f"{int(metrics.get('steps', 0))} steps · "
+            f"{int(metrics.get('tool_calls', 0))} tools · "
+            f"{result.evidence_status.value}"
+            "[/dim]"
+        )
+    render = repl._render_assistant_text
+    render(answer, title="Kernel" if accepted else "Kernel · blocked")
+    if not accepted:
+        for item in result.debt[:5]:
+            console.print(
+                f"[yellow]· {item.obligation.kind.value}: "
+                f"{item.reason or item.obligation.id}[/yellow]"
+            )
+        console.print(f"[dim]ledger: {run.ledger_path}[/dim]")
+
+    add_message = getattr(repl.ctx_mgr, "add_assistant_message", None)
+    if callable(add_message):
+        add_message(answer, model_used=model_id)
+    if accepted:
+        # The legacy task-state bag is not the kernel source of truth.  Clear
+        # the pre-turn "unfinished delivery" marker once the kernel accepted
+        # the turn, otherwise the next legacy turn repeats stale demands.
+        agent_context = getattr(repl, "agent_context", None)
+        setter = getattr(agent_context, "set", None)
+        if callable(setter):
+            setter("_task_state", None)
+    record = getattr(repl, "_record_event", None)
+    if callable(record):
+        record(
+            "runtime/kernel",
+            task_id=run.task_id,
+            accepted=accepted,
+            evidence=result.evidence_status.value,
+            ledger=str(run.ledger_path),
+        )
+
+
+def run_kernel_turn(
+    repl: Any,
+    *,
+    objective: str,
+    user_input: str,
+    model_ids: list[str],
+    execution_policy: Any,
+    callback: Any = None,
+    client: Any = None,
+) -> HarnessRun | None:
+    """Run one REPL task turn through the kernel and render its result."""
+
+    del user_input  # the caller already added the user message to ctx_mgr
+    if callback is None:
+        callback = repl._make_callback()
+    try:
+        adapter = RuntimeAdapter.from_repl(
+            repl,
+            model_ids=model_ids,
+            level=execution_policy.level,
+            client=client,
+        )
+        sink = ReplEventSink(callback)
+        start_capture = getattr(repl, "_start_log_capture", None)
+        if callable(start_capture):
+            start_capture()
+        try:
+            run = adapter.run(objective, sink=sink)
+        finally:
+            stop_capture = getattr(repl, "_stop_log_capture", None)
+            if callable(stop_capture):
+                repl._captured_log = stop_capture()
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:  # noqa: BLE001 — REPL must show an actionable error
+        finish_node = getattr(repl, "_finish_turn_node", None)
+        if callable(finish_node):
+            finish_node("interrupted", engine="kernel", reasons=[str(exc)[:200]])
+        _console_for(repl).print(f"[red]Kernel runtime error: {exc}[/red]")
+        add_message = getattr(repl.ctx_mgr, "add_assistant_message", None)
+        if callable(add_message):
+            add_message(f"[Kernel runtime error] {exc}")
+        return None
+
+    _render_kernel_result(
+        repl,
+        run,
+        callback,
+        model_id=adapter.model_config.model_id,
+    )
+    return run
+
+
+__all__ = [
+    "KERNEL_RUNTIME_ENV",
+    "KernelAdapterError",
+    "ReplEventSink",
+    "RuntimeAdapter",
+    "kernel_runtime_requested",
+    "model_config_for",
+    "permission_mode_for",
+    "run_kernel_turn",
+    "should_route_to_kernel",
+]
