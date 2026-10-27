@@ -125,6 +125,8 @@ def _effect_summary(effect: Mapping[str, Any]) -> dict[str, Any]:
             summary[key] = (
                 list(value) if isinstance(value, (list, tuple)) else value
             )
+    if "content" in effect:
+        summary["content"] = _clip(effect["content"], 8000)
     if _CMD_KEY in effect:
         summary[_CMD_KEY] = _clip(effect[_CMD_KEY], 300)
     return summary

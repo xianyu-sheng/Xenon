@@ -173,6 +173,7 @@ def effect_to_payload(effect: Effect) -> dict[str, Any]:
             "type": "read",
             "path": effect.path,
             "content_hash": effect.content_hash,
+            "content": effect.content,
         }
     if isinstance(effect, NetworkFact):
         return {"type": "network", "url": effect.url, "status": effect.status}
@@ -228,6 +229,7 @@ def effect_from_payload(data: Mapping[str, Any]) -> Effect:
         return ReadFact(
             path=str(data.get("path") or ""),
             content_hash=str(data.get("content_hash") or ""),
+            content=str(data.get("content") or ""),
         )
     if kind == "network":
         return NetworkFact(

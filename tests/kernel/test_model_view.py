@@ -201,6 +201,36 @@ def test_budget_keeps_debt_and_failed_receipts() -> None:
     assert view.debt == (debt,)
 
 
+def test_read_content_is_visible_but_not_raw_tool_output() -> None:
+    ledger = Ledger.in_memory("t1")
+    ledger.append_receipt(
+        ToolReceipt(
+            receipt_id="read-1",
+            call_id="call-read-1",
+            task_id="t1",
+            tool="inspect",
+            status=ReceiptStatus.OK,
+            effects=(
+                ReadFact(
+                    path="calc/add.py",
+                    content_hash="h",
+                    content="def add(a, b):\n    return a + b\n",
+                ),
+            ),
+        )
+    )
+    view = build_model_view(
+        spec=_spec(), catalog=FakeCatalog(), ledger=ledger
+    )
+    content = [
+        effect.get("content")
+        for item in view.working_set
+        for effect in item.get("effects", ())
+        if effect.get("type") == "read"
+    ]
+    assert content == ["def add(a, b):\n    return a + b\n"]
+
+
 def test_working_set_does_not_copy_raw_tool_output() -> None:
     ledger = Ledger.in_memory("t1")
     ledger.append(

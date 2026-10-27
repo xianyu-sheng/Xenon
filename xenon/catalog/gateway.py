@@ -547,13 +547,23 @@ class LegacyToolGateway:
                 or ""
             )
             if path:
-                content = result.raw.get("content") if isinstance(result.raw, dict) else None
+                content = (
+                    result.raw.get("content")
+                    if isinstance(result.raw, dict)
+                    else None
+                )
                 digest = (
                     hashlib.sha256(content.encode("utf-8")).hexdigest()
                     if isinstance(content, str)
                     else ""
                 )
-                effects.append(ReadFact(path=path, content_hash=digest))
+                effects.append(
+                    ReadFact(
+                        path=path,
+                        content_hash=digest,
+                        content=content if isinstance(content, str) else "",
+                    )
+                )
 
         if call.spec_name in _NETWORK_TOOLS:
             url = str(
