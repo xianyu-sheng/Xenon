@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
-from xenon.catalog.specs import mcp_tool_specs
+from xenon.catalog.specs import mcp_tool_specs, select_mcp_tool_specs
 from xenon.harness.llm import ModelConfig, build_llm_strategy
 from xenon.harness.runner import HarnessRun, result_json, run_task
 from xenon.kernel.contracts import (
@@ -27,6 +27,9 @@ from xenon.kernel.policies import PermissionMode
 from xenon.repl.execution_policy import ExecutionLevel
 
 KERNEL_RUNTIME_ENV = "XENON_RUNTIME"
+MCP_TOOL_LIMIT_ENV = "XENON_MCP_TOOL_LIMIT"
+MCP_TOOL_ALLOWLIST_ENV = "XENON_MCP_TOOLS"
+_DEFAULT_MCP_TOOL_LIMIT = 16
 
 
 class KernelAdapterError(RuntimeError):
@@ -35,6 +38,25 @@ class KernelAdapterError(RuntimeError):
 
 def kernel_runtime_requested() -> bool:
     return os.environ.get(KERNEL_RUNTIME_ENV, "").strip().lower() == "kernel"
+
+
+def _mcp_tool_limit() -> int:
+    raw = os.environ.get(MCP_TOOL_LIMIT_ENV, "").strip()
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return _DEFAULT_MCP_TOOL_LIMIT
+
+
+def _mcp_tool_allowlist() -> tuple[str, ...]:
+    raw = os.environ.get(MCP_TOOL_ALLOWLIST_ENV, "").strip()
+    if not raw:
+        return ()
+    return tuple(
+        part
+        for part in raw.replace(",", " ").replace(";", " ").split()
+        if part
+    )
 
 
 def should_route_to_kernel(
@@ -267,10 +289,13 @@ class RuntimeAdapter:
                     except Exception:
                         pass
             tool_map = getattr(self.mcp_registry, "tool_map", {}) or {}
-            extra_specs = mcp_tool_specs(tool_map)
-            names = sorted(
-                str(name) for name in tool_map if ":" in str(name)
+            extra_specs = select_mcp_tool_specs(
+                mcp_tool_specs(tool_map),
+                objective,
+                limit=_mcp_tool_limit(),
+                allowed=_mcp_tool_allowlist(),
             )
+            names = [spec.name for spec in extra_specs]
             if names:
                 constraints.append("mcp_tools: " + ", ".join(names))
         run = run_task(
