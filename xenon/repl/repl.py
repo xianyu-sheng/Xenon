@@ -166,6 +166,8 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         # Dual-track migration (#202/#224).  Legacy remains the default for
         # one release; ``XENON_RUNTIME=kernel`` routes tool turns to the kernel.
         self._runtime_mode = os.environ.get("XENON_RUNTIME", "").strip().lower()
+        self._last_kernel_ledger: Path | None = None
+        self._last_kernel_task_id: str = ""
 
         # 项目上下文
         self.project_ctx = ProjectContext()
@@ -630,6 +632,11 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             evidence = self._evidence_snapshot()
             if evidence is not None:
                 extra["evidence"] = evidence
+            from xenon.repl.kernel_evidence import snapshot_for_session
+
+            kernel_evidence = snapshot_for_session(self)
+            if kernel_evidence is not None:
+                extra["kernel_evidence"] = kernel_evidence
             auto_save(
                 history=history,
                 context_store=context_store,

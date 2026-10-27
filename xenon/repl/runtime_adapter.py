@@ -374,6 +374,8 @@ def _render_kernel_result(
     model_id: str,
 ) -> None:
     result = run.result
+    repl._last_kernel_ledger = run.ledger_path
+    repl._last_kernel_task_id = run.task_id
     console = _console_for(repl)
     if hasattr(callback, "finish_activity"):
         callback.finish_activity()

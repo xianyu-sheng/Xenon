@@ -158,3 +158,22 @@ External queries are routed to the kernel only when an MCP registry is
 available; otherwise they stay on the legacy path. MCP servers are not sandboxed
 by Xenon's in-process sandbox; approval is the boundary. Dynamic per-tool
 `ToolSpec` discovery and real GitHub MCP transcripts are follow-ups.
+
+## Kernel evidence in the REPL
+
+After a kernel turn, `/evidence` prefers the kernel ledger for the current
+session:
+
+- `/evidence` — human-readable kernel projection (phase, tools, tests,
+  artifacts, claims, debt, delivery);
+- `/evidence raw` — seq/kind/hash/prev ledger lines;
+- `/evidence kernel` — force the current kernel ledger;
+- `/evidence <task-id>` — read a specific ledger under
+  `~/.xenon/ledger/repl/`;
+- `/evidence all` — legacy session events plus kernel ledger files.
+
+`/save`, auto-save, `/load`, and `/resume` now persist only a pointer to the
+kernel ledger (task id + path), not a copy. Resume restores the pointer and
+never replays a task or resurrects an approval. If the ledger is missing or the
+chain is invalid, the view says so and does not turn the projection into a
+trusted delivery.
