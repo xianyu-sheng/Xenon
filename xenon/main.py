@@ -78,7 +78,7 @@ def cli() -> None:
         "command_or_workflow",
         nargs="?",
         default=None,
-        help="子命令 (chat/run/models/integrations/skill/mcp) 或 YAML 工作流文件路径",
+        help="子命令 (chat/run/exec/models/integrations/skill/mcp) 或 YAML 工作流文件路径",
     )
     parser.add_argument(
         "workflow_path",
@@ -138,6 +138,54 @@ def cli() -> None:
         help="显示详细日志",
     )
     parser.add_argument(
+        "--plan",
+        default=None,
+        help="exec: JSON capability plan path",
+    )
+    parser.add_argument(
+        "--workspace",
+        default=None,
+        help="exec: workspace root (default: current directory)",
+    )
+    parser.add_argument(
+        "--ledger-dir",
+        default=None,
+        help="exec: durable ledger directory",
+    )
+    parser.add_argument(
+        "--task-id",
+        default=None,
+        help="exec: task id (default: generated)",
+    )
+    parser.add_argument(
+        "--permission",
+        choices=["read-only", "auto-edit", "scoped", "bypass"],
+        default="auto-edit",
+        help="exec: permission mode",
+    )
+    parser.add_argument(
+        "--jsonl",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="exec: emit ledger events as JSONL on stdout",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="exec: write TaskResult JSON here",
+    )
+    parser.add_argument(
+        "--no-finalize",
+        action="store_true",
+        help="exec: do not run the deterministic finalizer",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=20,
+        help="exec: maximum loop steps",
+    )
+    parser.add_argument(
         "--resume",
         nargs="?",
         const="list",
@@ -189,6 +237,14 @@ def cli() -> None:
         args.resume = resume_arg
 
     # 路由
+    if cmd == "exec":
+        if not getattr(args, "plan", None):
+            console.print("[red]用法: xenon exec --plan <plan.json>[/red]")
+            sys.exit(2)
+        from xenon.harness.cli import run_from_args
+
+        raise SystemExit(run_from_args(args))
+
     if cmd == "run":
         workflow = args.workflow_path
         if not workflow:
