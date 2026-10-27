@@ -92,6 +92,10 @@ class TurnFlowMixin:
             console.print("[dim]· 空输入已忽略[/dim]")
             return
         self._last_user_text = user_input
+        # A new turn resets the "current evidence" pointer.  A kernel turn
+        # installs it again after the run; a legacy turn leaves it unset.
+        self._last_kernel_ledger = None
+        self._last_kernel_task_id = ""
         self._ensure_turn_tree_rebuilt()
 
         # 跨回合续接：短确认语 + 未兑现承诺 = 继承上轮意图/级别/范式；

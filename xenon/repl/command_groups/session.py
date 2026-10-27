@@ -191,24 +191,28 @@ def _cmd_save(
     agent_ctx = session_state.get("agent_context")
     ctx_store = agent_ctx.to_dict() if agent_ctx else {}
 
+    from xenon.repl.kernel_evidence import snapshot_for_session
+
+    repl = session_state.get("_repl")
+    kernel_evidence = snapshot_for_session(repl) if repl is not None else None
+    extra = {
+        "working_memory": ctx_mgr.get_working_memory(),
+        "tool_results": ctx_mgr.export_tool_manifest(),
+        "cwd": str(Path.cwd()),
+        "conversation_id": getattr(repl, "_conversation_id", ""),
+    }
+    evidence = _evidence_snapshot(agent_ctx)
+    if evidence is not None:
+        extra["evidence"] = evidence
+    if kernel_evidence is not None:
+        extra["kernel_evidence"] = kernel_evidence
+
     path = save_session(
         name,
         history,
         ctx_store,
         registry.export_config(),
-        extra={
-            "working_memory": ctx_mgr.get_working_memory(),
-            "tool_results": ctx_mgr.export_tool_manifest(),
-            "cwd": str(Path.cwd()),
-            "conversation_id": getattr(
-                session_state.get("_repl"), "_conversation_id", ""
-            ),
-            **(
-                {"evidence": evidence}
-                if (evidence := _evidence_snapshot(agent_ctx)) is not None
-                else {}
-            ),
-        },
+        extra=extra,
     )
     return f"✅ 会话已保存: {path}"
 
@@ -300,6 +304,9 @@ def _cmd_load(
     if repl is not None:
         repl.agent_context = restored_context
         restored_context.set_tool_checkpoint_callback(repl._persist_tool_checkpoint)
+        from xenon.repl.kernel_evidence import restore_session_pointer
+
+        restore_session_pointer(repl, extra)
         from xenon.nodes.tool_executor import recover_tool_execution_checkpoint
 
         recovery_notice = recover_tool_execution_checkpoint(restored_context)
@@ -491,6 +498,9 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         repl.agent_context = restored_context
         repl._session_state["agent_context"] = restored_context
         _restore_evidence(restored_context, extra)
+        from xenon.repl.kernel_evidence import restore_session_pointer
+
+        restore_session_pointer(repl, extra)
         restored_context.set_tool_checkpoint_callback(repl._persist_tool_checkpoint)
         recovery_notice = recover_tool_execution_checkpoint(restored_context)
 

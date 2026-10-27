@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from xenon.repl.command_registry import command_handler, register_command
@@ -16,7 +17,7 @@ from xenon.repl.command_registry import command_handler, register_command
 register_command(
     "/evidence",
     "查看 L0 证据账本（结构化会话摘要 + 哈希链自证）",
-    "/evidence [all|global|<会话ID>] [raw]",
+    "/evidence [kernel|all|global|<会话ID或task-id>] [raw]",
 )
 
 _CHAIN_LABELS = {
@@ -196,6 +197,12 @@ def _machine_view(events: list[dict], title: str, path: Any) -> str:
 
 @command_handler("/evidence")
 def _cmd_evidence(*, args: str, session_state: dict, **kwargs: Any) -> str:
+    from xenon.repl.kernel_evidence import (
+        find_kernel_evidence,
+        kernel_ledger_files,
+        load_kernel_evidence,
+        render_kernel_evidence,
+    )
     from xenon.session.events import (
         SessionEventLog,
         evidence_hmac_key,
@@ -210,18 +217,37 @@ def _cmd_evidence(*, args: str, session_state: dict, **kwargs: Any) -> str:
     if arg in {"raw", "--raw"}:
         arg, raw = "", True
 
+    # ── kernel ledger view ──
+    # Default current view prefers the kernel ledger of the latest kernel
+    # turn.  Legacy session events remain the fallback for legacy turns.
+    pointer = getattr(repl, "_last_kernel_ledger", None)
+    if arg == "kernel":
+        evidence = load_kernel_evidence(pointer) if pointer else None
+        if evidence is None:
+            return "（当前会话没有可读的 kernel ledger；kernel 回合后可用 /evidence kernel）"
+        return render_kernel_evidence(evidence, raw=raw)
+    if arg not in {"all", "global", "--global"} and not arg:
+        evidence = load_kernel_evidence(pointer) if pointer else None
+        if evidence is not None:
+            return render_kernel_evidence(evidence, raw=raw)
+    if arg and arg not in {"all", "global", "--global"}:
+        evidence = find_kernel_evidence(arg)
+        if evidence is not None:
+            return render_kernel_evidence(evidence, raw=raw)
+
     # ── 全局视图 ──
     if arg in {"all", "global", "--global"}:
         directory = session_events_dir()
-        if not directory.exists():
-            return "（会话事件目录不存在，暂无证据账本）"
-        files = sorted(
-            directory.glob("*.jsonl"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if not files:
-            return "（会话事件目录为空，暂无证据账本）"
+        files: list[Path] = []
+        if directory.exists():
+            files = sorted(
+                directory.glob("*.jsonl"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        kernel_files = kernel_ledger_files(20)
+        if not files and not kernel_files:
+            return "（暂无 legacy 会话事件或 kernel ledger）"
         lines = [f"📒 全局证据账本（{directory}）", ""]
         for path in files[:20]:
             events = SessionEventLog(path.stem, directory=directory).read()
@@ -236,6 +262,17 @@ def _cmd_evidence(*, args: str, session_state: dict, **kwargs: Any) -> str:
             lines.append(
                 f"\n… 另有 {len(files) - 20} 个会话；/evidence <会话ID> 查看详情"
             )
+        if kernel_files:
+            lines.append("")
+            lines.append("Kernel ledgers（/evidence kernel <task-id> 查看）:")
+            for path in kernel_files:
+                evidence = load_kernel_evidence(path)
+                if evidence is None:
+                    continue
+                status = "ok" if evidence.integrity.valid else "invalid"
+                lines.append(
+                    f"  {path.stem} · 事件 {len(evidence.events)} · {status}"
+                )
         lines.append("\n默认 /evidence 查看当前会话摘要；/evidence raw 看逐条哈希。")
         return "\n".join(lines)
 
