@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
+from xenon.catalog.specs import mcp_tool_specs
 from xenon.harness.llm import ModelConfig, build_llm_strategy
 from xenon.harness.runner import HarnessRun, result_json, run_task
 from xenon.kernel.contracts import (
@@ -253,6 +254,7 @@ class RuntimeAdapter:
             "runtime:kernel",
             f"model:{self.model_config.model_id}",
         ]
+        extra_specs = ()
         if self.mcp_registry is not None:
             # MCP servers may be lazy.  Discover once for a real MCP task so
             # the model sees actual tool names instead of a generic mcp_call
@@ -264,8 +266,10 @@ class RuntimeAdapter:
                         discover()
                     except Exception:
                         pass
+            tool_map = getattr(self.mcp_registry, "tool_map", {}) or {}
+            extra_specs = mcp_tool_specs(tool_map)
             names = sorted(
-                str(name) for name in getattr(self.mcp_registry, "tool_map", {})
+                str(name) for name in tool_map if ":" in str(name)
             )
             if names:
                 constraints.append("mcp_tools: " + ", ".join(names))
@@ -284,6 +288,7 @@ class RuntimeAdapter:
             allow_approval=self.allow_approval,
             catalog_profile=self.catalog_profile,
             gateway_context=self.gateway_context,
+            extra_specs=extra_specs,
         )
         try:
             result_path = run.ledger_path.with_suffix(".result.json")
