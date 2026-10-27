@@ -128,6 +128,10 @@ class VcsPush:
 class ReadFact:
     path: str
     content_hash: str = ""
+    # Bounded content explicitly returned by a read tool.  The ledger keeps it
+    # so the model can act on what it read; raw tool output is still never
+    # copied into the model view.
+    content: str = ""
 
     @property
     def kind(self) -> EffectKind:

@@ -164,6 +164,7 @@ def test_read_becomes_read_fact_with_content_hash(tmp_path: Path) -> None:
     assert len(reads) == 1
     assert reads[0].path == "a.py"
     assert reads[0].content_hash
+    assert reads[0].content == "hello"
 
 
 def test_executor_exception_becomes_a_failed_receipt(tmp_path: Path) -> None:

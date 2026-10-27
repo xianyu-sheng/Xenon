@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from xenon.kernel.contracts import (
     FsWrite,
+    ReadFact,
     ReceiptStatus,
     TestRun,
     ToolReceipt,
@@ -66,6 +67,13 @@ def test_effect_payload_roundtrip() -> None:
     payload = effect_to_payload(effect)
     assert payload["type"] == "fs_write"
     assert effect_from_payload(payload) == effect
+
+    read = ReadFact(
+        path="calc/add.py", content_hash="h", content="def add(): ...\n"
+    )
+    read_payload = effect_to_payload(read)
+    assert read_payload["content"] == read.content
+    assert effect_from_payload(read_payload) == read
 
 
 def test_receipt_payload_roundtrip_and_fact_ids() -> None:
