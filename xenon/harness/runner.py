@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TextIO
+from typing import Sequence, TextIO
 
 from xenon.catalog.catalog import build_catalog
 from xenon.catalog.finalizer import GitFinalizer
@@ -21,6 +21,7 @@ from xenon.harness.sink import JsonlSink
 from xenon.kernel.contracts import Budget, TaskResult, TaskSpec
 from xenon.kernel.controller import VerificationController
 from xenon.kernel.policies import PermissionMode, PermissionPolicy
+from xenon.kernel.protocols import Strategy
 from xenon.kernel.runtime import LoopRuntime
 from xenon.kernel.strategies import PlanFirst
 from xenon.ledger.events import canonical_json
@@ -34,21 +35,29 @@ class HarnessRun:
     ledger_path: Path
 
 
-def run_plan(
-    plan: HarnessPlan,
+def run_task(
+    objective: str,
     *,
+    strategy: Strategy,
     workspace: str | Path = ".",
     ledger_dir: str | Path | None = None,
     task_id: str | None = None,
     permission: PermissionMode = PermissionMode.AUTO_EDIT,
     finalize: bool = True,
     max_steps: int = 20,
+    constraints: Sequence[str] = (),
     sink: JsonlSink | None = None,
 ) -> HarnessRun:
+    """Run one objective through the kernel with an injected strategy.
+
+    Both the deterministic plan path and the LLM path share this function, so
+    ledger placement, policy, finalization and error handling cannot drift.
+    """
+
     root = Path(workspace).resolve()
     if not root.is_dir():
         raise ValueError(f"workspace is not a directory: {root}")
-    identifier = task_id or f"plan-{uuid.uuid4().hex[:12]}"
+    identifier = task_id or f"task-{uuid.uuid4().hex[:12]}"
     directory = (
         Path(ledger_dir).expanduser()
         if ledger_dir is not None
@@ -76,15 +85,40 @@ def run_plan(
     )
     spec = TaskSpec(
         task_id=identifier,
-        objective=plan.objective,
+        objective=objective,
         workspace=str(root),
+        constraints=tuple(constraints),
         budget=Budget(max_steps=max_steps),
     )
-    result = runtime.run(spec, PlanFirst(lambda view: plan.proposal))
+    result = runtime.run(spec, strategy)
     report = ledger.verify()
     if not report.valid:
         raise RuntimeError(f"ledger verification failed: {report.reason}")
     return HarnessRun(result=result, task_id=identifier, ledger_path=ledger_path)
+
+
+def run_plan(
+    plan: HarnessPlan,
+    *,
+    workspace: str | Path = ".",
+    ledger_dir: str | Path | None = None,
+    task_id: str | None = None,
+    permission: PermissionMode = PermissionMode.AUTO_EDIT,
+    finalize: bool = True,
+    max_steps: int = 20,
+    sink: JsonlSink | None = None,
+) -> HarnessRun:
+    return run_task(
+        plan.objective,
+        strategy=PlanFirst(lambda view: plan.proposal),
+        workspace=workspace,
+        ledger_dir=ledger_dir,
+        task_id=task_id,
+        permission=permission,
+        finalize=finalize,
+        max_steps=max_steps,
+        sink=sink,
+    )
 
 
 def result_json(result: TaskResult) -> str:
@@ -102,5 +136,6 @@ __all__ = [
     "JsonlSink",
     "result_json",
     "run_plan",
+    "run_task",
     "write_result",
 ]
