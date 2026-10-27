@@ -23,6 +23,8 @@ from xenon.kernel.contracts import (
     Debt,
     EvidenceStatus,
     Finish,
+    FsDelete,
+    FsWrite,
     Obligation,
     ObligationSource,
     PolicyDecisionKind,
@@ -43,6 +45,7 @@ from xenon.kernel.contracts import (
     VerdictStatus,
     VerificationStage,
 )
+from xenon.kernel.controller import index_facts
 from xenon.kernel.finalize import FinalizeDecision, FinalizeGuard
 from xenon.kernel.phases import assert_transition
 from xenon.kernel.protocols import (
@@ -82,6 +85,10 @@ class _RuntimeServices:
     @property
     def current_step_id(self) -> str | None:
         return self._runtime._current_step_id()
+
+    @property
+    def verified_paths(self) -> tuple[str, ...]:
+        return self._runtime._verified_paths()
 
     def is_cancelled(self) -> bool:
         return self._runtime._cancelled
@@ -529,6 +536,20 @@ class LoopRuntime:
 
     def _task_id(self) -> str:
         return self._spec.task_id if self._spec is not None else ""
+
+    def _verified_paths(self) -> tuple[str, ...]:
+        if self._spec is None:
+            return ()
+        paths: set[str] = set()
+        for fact in index_facts(self._ledger):
+            if fact.seq <= self._run_start_seq:
+                continue
+            effect = fact.effect
+            if isinstance(effect, FsWrite) and effect.changed:
+                paths.update(effect.paths)
+            elif isinstance(effect, FsDelete) and effect.changed:
+                paths.update(effect.paths)
+        return tuple(sorted(paths))
 
     def _finish(self, action: Finish) -> TaskResult | None:
         claims = tuple(self._baseline_claim(item) for item in action.claims)
