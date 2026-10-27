@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from xenon.catalog.catalog import ToolCatalog
+from xenon.catalog.finalizer import GitFinalizer
 from xenon.catalog.gateway import LegacyToolGateway
 from xenon.catalog.specs import CORE_SPECS
 from xenon.kernel.contracts import (
@@ -48,8 +49,8 @@ class Script:
         return self._actions.pop(0)
 
 
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         ["git", *args],
         cwd=root,
         check=True,
@@ -138,3 +139,76 @@ def test_real_calc_task_is_delivered_with_facts(tmp_path: Path) -> None:
     receipts = ledger.read(EventKind.TOOL_RECEIPT)
     assert receipts
     assert ledger.verify().valid
+
+
+@pytest.mark.e2e
+def test_true_finalizer_creates_the_verified_commit(tmp_path: Path) -> None:
+    (tmp_path / "calc").mkdir()
+    (tmp_path / "tests").mkdir()
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+
+    ledger = Ledger.in_memory("t1")
+    policy = PermissionPolicy(workspace=str(tmp_path))
+    runtime = LoopRuntime(
+        catalog=ToolCatalog(CORE_SPECS, "core"),
+        gateway=LegacyToolGateway(
+            specs=CORE_SPECS,
+            workspace=tmp_path,
+            policy=policy,
+        ),
+        controller=VerificationController(),
+        ledger=ledger,
+        policies=(policy,),
+        finalizer=GitFinalizer(tmp_path),
+    )
+    spec = TaskSpec(
+        task_id="t1",
+        objective="add a function and test it",
+        workspace=str(tmp_path),
+        budget=Budget(max_steps=10),
+    )
+    add_source = chr(10).join(
+        ["def add(a, b):", "    return a + b"]
+    ) + chr(10)
+    test_source = chr(10).join(
+        [
+            "from calc.add import add",
+            "",
+            "def test_add():",
+            "    assert add(1, 2) == 3",
+        ]
+    ) + chr(10)
+    script = Script(
+        [
+            CallTool(
+                ToolIntent(
+                    capability=Capability.EDIT,
+                    params={
+                        "files": [
+                            {"path": "calc/add.py", "content": add_source},
+                            {
+                                "path": "tests/test_add.py",
+                                "content": test_source,
+                            },
+                        ]
+                    },
+                )
+            ),
+            CallTool(
+                ToolIntent(
+                    capability=Capability.VERIFY,
+                    params={"command": "python -m pytest tests/test_add.py -q"},
+                )
+            ),
+            Finish("done"),
+        ]
+    )
+
+    result = runtime.run(spec, script)
+
+    assert result.accepted is True
+    assert result.finalize_sha
+    assert _git(tmp_path, "status", "--porcelain").stdout.strip() == ""
+    assert "xenon:" in _git(tmp_path, "log", "-1", "--pretty=%s").stdout

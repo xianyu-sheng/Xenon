@@ -21,6 +21,7 @@ from xenon.kernel.contracts import (
     Claim,
     ControlDecisionKind,
     Debt,
+    EffectKind,
     EvidenceStatus,
     Finish,
     FsDelete,
@@ -32,13 +33,16 @@ from xenon.kernel.contracts import (
     ReceiptStatus,
     RequestVerification,
     Resolution,
+    ResolutionStatus,
     StepContract,
+    StepKind,
     SubmitPlan,
     TaskMode,
     TaskPhase,
     TaskResult,
     TaskSpec,
     Think,
+    ToolReceipt,
     UpdatePlan,
     VcsCommit,
     Verdict,
@@ -50,6 +54,7 @@ from xenon.kernel.finalize import FinalizeDecision, FinalizeGuard
 from xenon.kernel.phases import assert_transition
 from xenon.kernel.protocols import (
     EventSink,
+    Finalizer,
     Ledger,
     Policy,
     Strategy,
@@ -107,6 +112,7 @@ class LoopRuntime:
         sink: EventSink | None = None,
         policies: Sequence[Policy] = (),
         finalize: FinalizeGuard | None = None,
+        finalizer: Finalizer | None = None,
     ) -> None:
         self._catalog = catalog
         self._gateway = gateway
@@ -116,6 +122,7 @@ class LoopRuntime:
         self._sink = sink
         self._policies = tuple(policies)
         self._finalize = finalize or FinalizeGuard()
+        self._finalizer = finalizer
         self._services = _RuntimeServices(self)
 
         self._spec: TaskSpec | None = None
@@ -523,9 +530,11 @@ class LoopRuntime:
                 return step
         return None
 
-    def _close_remaining_steps(self) -> None:
+    def _close_remaining_steps(self, *, skip_commit: bool = False) -> None:
         for step in self._plan_steps:
             if step.id in self._closed_steps:
+                continue
+            if skip_commit and _is_commit_step(step):
                 continue
             self._sync_debt(self._close_step(step))
         if all(step.id in self._closed_steps for step in self._plan_steps):
@@ -561,7 +570,11 @@ class LoopRuntime:
             )
 
         # A Finish is also the last chance to close a plan.  Unexecuted steps
-        # produce V1 violations, not an implicit "done".
+        # produce V1 violations, not an implicit "done".  Commit steps wait for
+        # the finalizer so the commit is created from verified paths.
+        self._close_remaining_steps(skip_commit=self._finalizer is not None)
+        if self._finalizer is not None:
+            self._invoke_finalizer(claims)
         self._close_remaining_steps()
         self._sync_debt(self._verdicts)
 
@@ -715,6 +728,80 @@ class LoopRuntime:
             claims=claims,
             resolutions=resolutions,
         )
+
+    def _invoke_finalizer(self, claims: Sequence[Claim]) -> None:
+        if self._spec is None or self._finalizer is None:
+            return
+        if self._spec.mode is TaskMode.CHAT:
+            return
+        latest = _latest_verdict_map(self._verdicts)
+        if self._debt or any(
+            item.status is not VerdictStatus.SATISFIED
+            for item in latest.values()
+        ):
+            return
+        existing = self._last_commit_sha()
+        # Do not create a commit for a model claim that is already false.
+        # A COMMIT_CREATED claim is the one claim the finalizer itself can
+        # satisfy, so defer only that one until after the commit exists.
+        for claim in claims:
+            if (
+                claim.kind is PropositionKind.COMMIT_CREATED
+                and not existing
+            ):
+                continue
+            resolution = self._controller.resolve(claim, self._readonly)
+            if resolution.status is not ResolutionStatus.BOUND:
+                return
+        verified = self._verified_paths()
+        if not verified and not existing:
+            return
+        try:
+            outcome = self._finalizer.finalize(
+                verified_paths=verified,
+                objective=self._spec.objective,
+                task_id=self._spec.task_id,
+                existing_commit_sha=existing,
+            )
+        except Exception as exc:  # noqa: BLE001 — finalizer failure is a block
+            verdict = Verdict(
+                obligation_id="finalizer",
+                stage=VerificationStage.V2,
+                status=VerdictStatus.VIOLATED,
+                reason=f"finalizer error: {exc}",
+            )
+            self._verdicts.append(verdict)
+            self._sync_debt((verdict,))
+            return
+        if not outcome.accepted:
+            verdict = Verdict(
+                obligation_id="finalizer",
+                stage=VerificationStage.V2,
+                status=VerdictStatus.VIOLATED,
+                reason=outcome.reason or "finalizer rejected",
+            )
+            self._verdicts.append(verdict)
+            self._sync_debt((verdict,))
+            return
+        if outcome.created and outcome.commit_sha:
+            files = tuple(outcome.files)
+            receipt = ToolReceipt(
+                receipt_id=f"finalizer-{outcome.commit_sha[:12]}",
+                call_id="finalizer",
+                task_id=self._spec.task_id,
+                tool="finalizer",
+                status=ReceiptStatus.OK,
+                step_id=self._current_step_id(),
+                effects=(VcsCommit(sha=outcome.commit_sha, files=files),),
+                declared_effects=(EffectKind.VCS_COMMIT,),
+                observed_effects=(EffectKind.VCS_COMMIT,),
+            )
+            self._append(
+                EventKind.TOOL_RECEIPT,
+                EventSource.TOOL,
+                receipt_event_payload(receipt),
+                step_id=self._current_step_id(),
+            )
 
     def _run_finalize(self) -> FinalizeDecision:
         assert self._spec is not None
@@ -1047,6 +1134,13 @@ def _readonly_view(ledger: Ledger) -> Any:
     except ImportError:  # pragma: no cover — ledger is part of the package
         return ledger
     return ReadOnlyLedger(ledger)  # type: ignore[arg-type]
+
+
+def _is_commit_step(step: StepContract) -> bool:
+    return step.kind is StepKind.COMMIT or any(
+        item.kind is PropositionKind.COMMIT_CREATED
+        for item in step.expects
+    )
 
 
 def _assert_acyclic(steps: Sequence[StepContract]) -> None:

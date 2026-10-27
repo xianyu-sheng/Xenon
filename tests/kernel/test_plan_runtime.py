@@ -46,6 +46,26 @@ def _runtime(ledger: Ledger) -> LoopRuntime:
     )
 
 
+class FakeFinalizer:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def finalize(self, **kwargs):
+        self.calls += 1
+        del kwargs
+        return type(
+            "Outcome",
+            (),
+            {
+                "accepted": True,
+                "created": True,
+                "commit_sha": "def5678",
+                "files": ("calc/add.py",),
+                "reason": "",
+            },
+        )()
+
+
 class AlwaysFailingGateway:
     def __init__(self) -> None:
         self.calls = 0
@@ -308,6 +328,64 @@ def test_invalid_plan_is_rejected_without_crashing() -> None:
         and event.payload.get("status") == "invalid_plan"
         for event in ledger.read()
     )
+
+
+def test_finalizer_does_not_commit_for_a_false_claim() -> None:
+    ledger = Ledger.in_memory("task-1")
+    finalizer = FakeFinalizer()
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+        finalizer=finalizer,
+    )
+    false_claim = Claim(
+        id="false",
+        kind=PropositionKind.FILE_CHANGED,
+        target="missing.py",
+        source=ClaimSource.LLM,
+    )
+
+    result = runtime.run(
+        _calc_spec(),
+        ScriptedStrategy(
+            [
+                CallTool(ToolIntent(capability=Capability.EDIT)),
+                Finish("fixed", claims=(false_claim,)),
+            ]
+        ),
+    )
+
+    assert result.accepted is False
+    assert finalizer.calls == 0
+    assert result.finalize_sha is None
+
+
+def test_finalizer_satisfies_a_commit_step_without_a_model_commit() -> None:
+    ledger = Ledger.in_memory("task-1")
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+        finalizer=FakeFinalizer(),
+    )
+    result = runtime.run(
+        _calc_spec(),
+        ScriptedStrategy(
+            [
+                SubmitPlan(_plan()),
+                CallTool(ToolIntent(capability=Capability.EDIT)),
+                CallTool(ToolIntent(capability=Capability.VERIFY)),
+                Finish("done"),
+            ]
+        ),
+    )
+
+    assert result.accepted is True
+    assert result.finalize_sha == "def5678"
+    assert len(ledger.read(EventKind.STEP_CLOSED)) == 3
 
 
 def test_dag_ready_step_is_selected_before_plan_order() -> None:
