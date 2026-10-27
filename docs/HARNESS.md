@@ -83,3 +83,36 @@ Example plan shape:
 
 Keep the ledger directory outside the workspace. The finalizer treats unknown
 worktree paths as unverified and will reject the run, which is intentional.
+
+## Interactive REPL (opt-in kernel runtime)
+
+For one release the REPL keeps both paths:
+
+```bash
+# legacy engine host (default)
+xenon
+
+# task turns enter the kernel runtime
+XENON_RUNTIME=kernel xenon
+```
+
+Only turns that require tools and are not a skill, plan-mode turn, pending
+continuation, atomic recipe, or external query are routed to the kernel in this
+first slice. Plain chat, external/MCP queries, `/mode`, `/plan`, `/resume`,
+`/evidence`, skills, MCP, and the approval UI still use their existing paths.
+
+The REPL adapter:
+
+- builds a `TaskSpec` from the turn prompt and the selected model;
+- uses the workspace root from `ProjectContext`;
+- writes its durable ledger and `result.json` sidecar under
+  `~/.xenon/ledger/repl/`;
+- maps `READ_ONLY` to `PermissionMode.READ_ONLY` and
+  `WRITE`/`EXECUTE` to `PermissionMode.AUTO_EDIT` (no automatic bypass);
+- runs `GitFinalizer` only when the workspace has `.git`;
+- projects kernel events into the existing ThinkingPanel and writes the answer
+  back to `ContextManager` and the turn tree.
+
+If the kernel blocks a turn, the REPL prints the open obligations and the
+ledger path. `XENON_RUNTIME` is a migration flag, not a second permanent
+runtime; it will be removed after parity (#202).

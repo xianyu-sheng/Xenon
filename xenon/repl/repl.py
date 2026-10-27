@@ -163,6 +163,9 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         self.streaming = streaming
         self.optimize_prompts = optimize_prompts
         self.verbose = verbose
+        # Dual-track migration (#202/#224).  Legacy remains the default for
+        # one release; ``XENON_RUNTIME=kernel`` routes tool turns to the kernel.
+        self._runtime_mode = os.environ.get("XENON_RUNTIME", "").strip().lower()
 
         # 项目上下文
         self.project_ctx = ProjectContext()

@@ -85,7 +85,8 @@ Rules:
 - ``edit`` params use full-file writes under ``files`` or exact replacements
   under ``edits``. ``verify`` is a shell command, usually pytest.
 - Do not run git commit or git push. The harness finalizer stages only verified
-  files and creates the delivery commit when you return finish.
+  files and decides whether to create the delivery commit after finish. Do not
+  claim that you committed, and do not claim that no commit exists.
 - A claim is a factual assertion, not a status message. Only claim file_changed,
   test_passed, commit_created, etc. when the recent receipts show that fact.
 - If a tool failed or a claim would be unverifiable, keep working or abort; do
