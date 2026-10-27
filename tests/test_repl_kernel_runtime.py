@@ -16,6 +16,7 @@ from xenon.engine.context import AgentContext
 from xenon.harness.llm import ModelConfig
 from xenon.kernel.contracts import CallTool, Capability, ToolIntent
 from xenon.kernel.policies import PermissionMode
+from xenon.ledger.store import Ledger
 from xenon.repl.execution_policy import ExecutionLevel
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.runtime_adapter import (
@@ -552,3 +553,91 @@ def test_run_kernel_turn_reports_adapter_exception(tmp_path: Path, monkeypatch) 
     assert result is None
     assert repl.finished == [("interrupted", "kernel")]
     assert "boom" in repl.ctx_mgr.messages[-1][0]
+
+
+class LazyMCPRegistry:
+    clients = {"github": object()}
+    tool_map: dict[str, tuple[str, dict]] = {}
+
+    def __init__(self) -> None:
+        self.discovered = False
+        self.calls: list[tuple[str, dict]] = []
+
+    def has_pending_servers(self) -> bool:
+        return True
+
+    def discover_tools(self) -> None:
+        self.discovered = True
+        self.tool_map = {
+            "github:search_repositories": (
+                "github",
+                {"name": "search_repositories"},
+            )
+        }
+
+    def call_tool(self, tool_name: str, arguments: dict) -> dict:
+        self.calls.append((tool_name, arguments))
+        return {
+            "content": [
+                {"type": "text", "text": "mode result: xianyu-sheng/Xenon"}
+            ]
+        }
+
+
+class AdapterApproval:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def request(self, view, action, decision) -> bool:
+        self.calls += 1
+        return True
+
+
+def test_runtime_adapter_discovers_mcp_tools_and_runs_remote(
+    tmp_path: Path,
+) -> None:
+    registry = LazyMCPRegistry()
+    context = AgentContext({"_mcp_registry": registry})
+    client = FakeClient(
+        [
+            json.dumps(
+                {
+                    "action": "call_tool",
+                    "capability": "remote",
+                    "params": {
+                        "tool_name": "github:search_repositories",
+                        "tool_args": {"query": "xenon"},
+                    },
+                }
+            ),
+            json.dumps({"action": "finish", "answer": "found"}),
+        ]
+    )
+    approval = AdapterApproval()
+    adapter = RuntimeAdapter(
+        workspace=tmp_path,
+        model_config=ModelConfig(model_id="test/fake"),
+        ledger_dir=tmp_path.parent / f"{tmp_path.name}-adapter-ledger",
+        finalize=False,
+        client=client,
+        approval=approval,
+        allow_approval=True,
+        catalog_profile="core+mcp",
+        gateway_context=context,
+        mcp_registry=registry,
+    )
+    run = adapter.run("query github", task_id="adapter-mcp")
+    assert registry.discovered is True
+    assert registry.calls == [
+        ("github:search_repositories", {"query": "xenon"})
+    ]
+    assert approval.calls == 1
+    assert run.result.accepted is True
+    assert "mode result" in json.dumps(
+        [
+            event.payload
+            for event in Ledger(run.ledger_path, "adapter-mcp").read()
+            if event.kind.value == "tool_receipt"
+        ],
+        ensure_ascii=False,
+    )
