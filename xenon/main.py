@@ -143,6 +143,11 @@ def cli() -> None:
         help="exec: JSON capability plan path",
     )
     parser.add_argument(
+        "--task",
+        default=None,
+        help="exec: natural-language task (or use a positional task)",
+    )
+    parser.add_argument(
         "--workspace",
         default=None,
         help="exec: workspace root (default: current directory)",
@@ -238,9 +243,19 @@ def cli() -> None:
 
     # 路由
     if cmd == "exec":
-        if not getattr(args, "plan", None):
-            console.print("[red]用法: xenon exec --plan <plan.json>[/red]")
+        task = getattr(args, "task", None) or args.workflow_path
+        if not getattr(args, "plan", None) and not task:
+            console.print(
+                "[red]用法: xenon exec --plan <plan.json> 或 "
+                'xenon exec "<task>" -m <provider/model>[/red]'
+            )
             sys.exit(2)
+        if getattr(args, "plan", None) and task:
+            console.print(
+                "[red]错误: --plan 与自然语言任务不能同时使用[/red]"
+            )
+            sys.exit(2)
+        args.task = task
         from xenon.harness.cli import run_from_args
 
         raise SystemExit(run_from_args(args))
