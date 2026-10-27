@@ -82,7 +82,14 @@ def _normalize(value: str) -> str:
 def _targets(intent: ToolIntent) -> tuple[str, ...]:
     params = intent.params
     found: list[str] = []
-    for key in ("file_path", "path", "url", "server"):
+    for key in (
+        "file_path",
+        "path",
+        "url",
+        "server",
+        "tool_name",
+        "mcp_server",
+    ):
         value = params.get(key)
         if isinstance(value, str) and value:
             found.append(value)

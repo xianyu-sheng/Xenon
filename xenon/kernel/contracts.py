@@ -142,6 +142,10 @@ class ReadFact:
 class NetworkFact:
     url: str
     status: int = 0
+    # Bounded textual payload returned by an external tool (for MCP/read-only
+    # remote calls).  Raw tool output is still not copied blindly; the gateway
+    # only stores the explicit content field.
+    content: str = ""
 
     @property
     def kind(self) -> EffectKind:

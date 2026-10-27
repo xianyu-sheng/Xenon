@@ -176,7 +176,12 @@ def effect_to_payload(effect: Effect) -> dict[str, Any]:
             "content": effect.content,
         }
     if isinstance(effect, NetworkFact):
-        return {"type": "network", "url": effect.url, "status": effect.status}
+        return {
+            "type": "network",
+            "url": effect.url,
+            "status": effect.status,
+            "content": effect.content,
+        }
     if isinstance(effect, Opaque):
         return {
             "type": "opaque",
@@ -235,6 +240,7 @@ def effect_from_payload(data: Mapping[str, Any]) -> Effect:
         return NetworkFact(
             url=str(data.get("url") or ""),
             status=int(data.get("status") or 0),
+            content=str(data.get("content") or ""),
         )
     if kind == "opaque":
         return Opaque(

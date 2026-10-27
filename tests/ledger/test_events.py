@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from xenon.kernel.contracts import (
     FsWrite,
+    NetworkFact,
     ReadFact,
     ReceiptStatus,
     TestRun,
@@ -74,6 +75,13 @@ def test_effect_payload_roundtrip() -> None:
     read_payload = effect_to_payload(read)
     assert read_payload["content"] == read.content
     assert effect_from_payload(read_payload) == read
+
+    network = NetworkFact(
+        url="mcp://github:search", status=200, content="remote result"
+    )
+    network_payload = effect_to_payload(network)
+    assert network_payload["content"] == "remote result"
+    assert effect_from_payload(network_payload) == network
 
 
 def test_receipt_payload_roundtrip_and_fact_ids() -> None:

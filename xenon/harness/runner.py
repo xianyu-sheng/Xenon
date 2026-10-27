@@ -10,12 +10,11 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence, TextIO
+from typing import Any, Sequence, TextIO
 
 from xenon.catalog.catalog import build_catalog
 from xenon.catalog.finalizer import GitFinalizer
 from xenon.catalog.gateway import LegacyToolGateway
-from xenon.catalog.specs import CORE_SPECS
 from xenon.harness.plan import HarnessPlan
 from xenon.harness.sink import JsonlSink
 from xenon.kernel.contracts import Budget, TaskResult, TaskSpec
@@ -50,6 +49,8 @@ def run_task(
     approval: ApprovalProvider | None = None,
     allow_approval: bool = False,
     approval_ttl_seconds: float = 60.0,
+    catalog_profile: str = "core",
+    gateway_context: Any = None,
 ) -> HarnessRun:
     """Run one objective through the kernel with an injected strategy.
 
@@ -76,13 +77,15 @@ def run_task(
         allow_approval=allow_approval,
         approval_ttl_seconds=approval_ttl_seconds,
     )
+    catalog = build_catalog(catalog_profile)
     gateway = LegacyToolGateway(
-        specs=CORE_SPECS,
+        specs=catalog.specs(),
         workspace=root,
         policy=policy,
+        context=gateway_context,
     )
     runtime = LoopRuntime(
-        catalog=build_catalog("core"),
+        catalog=catalog,
         gateway=gateway,
         controller=VerificationController(),
         ledger=ledger,

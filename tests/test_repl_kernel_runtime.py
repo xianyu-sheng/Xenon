@@ -12,6 +12,7 @@ from rich.console import Console
 
 from tests.harness.test_exec import _plan_dict, _repo
 from xenon.engine.callbacks import ConsoleCallback
+from xenon.engine.context import AgentContext
 from xenon.harness.llm import ModelConfig
 from xenon.kernel.contracts import CallTool, Capability, ToolIntent
 from xenon.kernel.policies import PermissionMode
@@ -172,6 +173,16 @@ def test_routing_and_permission_mapping() -> None:
         recipe=None,
         external_query=True,
     )
+    assert should_route_to_kernel(
+        runtime_mode="kernel",
+        requires_tools=True,
+        skill_name=None,
+        plan_mode=False,
+        pending=None,
+        recipe=None,
+        external_query=True,
+        mcp_available=True,
+    )
     assert permission_mode_for(ExecutionLevel.READ_ONLY) is PermissionMode.READ_ONLY
     assert permission_mode_for(ExecutionLevel.WRITE) is PermissionMode.AUTO_EDIT
     assert permission_mode_for(ExecutionLevel.EXECUTE) is PermissionMode.AUTO_EDIT
@@ -248,6 +259,30 @@ def test_kernel_approval_provider_maps_capability_to_repl_gate() -> None:
     repl.result = RuntimeError("ui")
     assert provider.request(None, action, None) is False
     assert provider.request(None, SimpleNamespace(), None) is False
+
+
+class FakeMCPRegistry:
+    clients = {"github": object()}
+    tool_map = {"github:search": ("github", {"name": "search"})}
+
+    def has_pending_servers(self) -> bool:
+        return False
+
+
+def test_runtime_adapter_selects_core_mcp_profile(tmp_path: Path) -> None:
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = FakeRepl(tmp_path, registry)
+    repl._mcp_registry = FakeMCPRegistry()
+    repl.agent_context = AgentContext(
+        {"_mcp_registry": repl._mcp_registry, "_task_state": None}
+    )
+    adapter = RuntimeAdapter.from_repl(
+        repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
+    )
+    assert adapter.catalog_profile == "core+mcp"
+    assert adapter.gateway_context is repl.agent_context
+    assert adapter.mcp_registry is repl._mcp_registry
 
 
 def test_runtime_adapter_approval_only_at_execute_level(tmp_path: Path) -> None:

@@ -45,6 +45,7 @@ def should_route_to_kernel(
     pending: object | None,
     recipe: object | None,
     external_query: bool = False,
+    mcp_available: bool = False,
 ) -> bool:
     """Route only well-understood task turns in the first migration slice.
 
@@ -60,7 +61,7 @@ def should_route_to_kernel(
         and not plan_mode
         and pending is None
         and recipe is None
-        and not external_query
+        and (not external_query or mcp_available)
     )
 
 
@@ -211,6 +212,9 @@ class RuntimeAdapter:
         client: Any = None,
         approval: Any = None,
         allow_approval: bool = False,
+        catalog_profile: str = "core",
+        gateway_context: Any = None,
+        mcp_registry: Any = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         if not self.workspace.is_dir():
@@ -233,6 +237,9 @@ class RuntimeAdapter:
         self.client = client
         self.approval = approval
         self.allow_approval = bool(allow_approval)
+        self.catalog_profile = catalog_profile
+        self.gateway_context = gateway_context
+        self.mcp_registry = mcp_registry
 
     def run(
         self,
@@ -242,6 +249,16 @@ class RuntimeAdapter:
         sink: Any = None,
     ) -> HarnessRun:
         strategy = build_llm_strategy(self.model_config, client=self.client)
+        constraints = [
+            "runtime:kernel",
+            f"model:{self.model_config.model_id}",
+        ]
+        if self.mcp_registry is not None:
+            names = sorted(
+                str(name) for name in getattr(self.mcp_registry, "tool_map", {})
+            )
+            if names:
+                constraints.append("mcp_tools: " + ", ".join(names[:20]))
         run = run_task(
             objective,
             strategy=strategy,
@@ -251,13 +268,12 @@ class RuntimeAdapter:
             permission=self.permission,
             finalize=self.finalize,
             max_steps=self.max_steps,
-            constraints=(
-                "runtime:kernel",
-                f"model:{self.model_config.model_id}",
-            ),
+            constraints=tuple(constraints),
             sink=sink,
             approval=self.approval if self.allow_approval else None,
             allow_approval=self.allow_approval,
+            catalog_profile=self.catalog_profile,
+            gateway_context=self.gateway_context,
         )
         try:
             result_path = run.ledger_path.with_suffix(".result.json")
@@ -283,6 +299,23 @@ class RuntimeAdapter:
             or getattr(project_ctx, "working_dir", None)
             or Path.cwd()
         )
+        gateway_context = getattr(repl, "agent_context", None)
+        if not hasattr(gateway_context, "get"):
+            # Test doubles / minimal hosts may not provide the full
+            # AgentContext surface.  MCP needs the real context; core tools do
+            # not, so fall back to the gateway's default context.
+            gateway_context = None
+        mcp_registry = getattr(repl, "_mcp_registry", None)
+        has_mcp = bool(
+            mcp_registry is not None
+            and (
+                getattr(mcp_registry, "clients", None)
+                or (
+                    hasattr(mcp_registry, "has_pending_servers")
+                    and mcp_registry.has_pending_servers()
+                )
+            )
+        )
         return cls(
             workspace=workspace,
             model_config=model_config_for(repl.registry, model_ids),
@@ -291,6 +324,9 @@ class RuntimeAdapter:
             client=client,
             approval=KernelApprovalProvider(repl),
             allow_approval=int(level) >= int(ExecutionLevel.EXECUTE),
+            catalog_profile="core+mcp" if has_mcp else "core",
+            gateway_context=gateway_context,
+            mcp_registry=mcp_registry if has_mcp else None,
         )
 
 
