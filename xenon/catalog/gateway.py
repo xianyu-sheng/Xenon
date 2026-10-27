@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -55,6 +57,8 @@ _NETWORK_TOOLS = frozenset(
     {"web_fetch", "docs_fetch", "github_fetch", "mcp_call"}
 )
 _COMMIT_RE = re.compile(r"\[[^\]]*?([0-9a-f]{7,40})[^\]]*\]", re.IGNORECASE)
+_COMMIT_META = (";", "&&", "||", "|", "`", "$(")
+
 
 def _as_list(value: Any) -> list[str]:
     if isinstance(value, str):
@@ -135,6 +139,51 @@ def _commit_sha(*texts: Any) -> str:
     return ""
 
 
+def _command_text(params: Mapping[str, Any]) -> str:
+    return str(
+        params.get("command")
+        or params.get("git_command")
+        or params.get("action")
+        or ""
+    ).strip()
+
+
+def _commit_tokens(command: str) -> list[str]:
+    if not command or any(marker in command for marker in _COMMIT_META):
+        return []
+    try:
+        return [
+            item.strip("\"'").casefold()
+            for item in shlex.split(command, posix=False)
+            if item.strip()
+        ]
+    except ValueError:
+        return []
+
+
+def _looks_like_commit(tokens: list[str]) -> bool:
+    if not tokens:
+        return False
+    if tokens[:2] == ["git", "commit"] or tokens[:1] == ["commit"]:
+        return True
+    return "commit" in tokens and "git" in tokens
+
+
+def _normalize_repo_path(value: str, workspace: Path) -> str:
+    candidate = Path(value)
+    if candidate.is_absolute():
+        try:
+            candidate = candidate.resolve(strict=False).relative_to(
+                workspace.resolve()
+            )
+        except (OSError, ValueError):
+            return candidate.as_posix()
+    text = candidate.as_posix()
+    while text.startswith("./"):
+        text = text[2:]
+    return text
+
+
 class LegacyToolGateway:
     """Translate ``ToolExecutor`` results into kernel receipts."""
 
@@ -174,8 +223,8 @@ class LegacyToolGateway:
         workspace = self._workspace or Path(
             getattr(services, "workspace", "") or "."
         ).resolve()
+        spec = self._specs.get(call.spec_name)
         if self._policy is not None:
-            spec = self._specs.get(call.spec_name)
             decision = self._policy.check_bound(spec, call)
             if decision.kind is not PolicyDecisionKind.ALLOW:
                 return self._denied_receipt(
@@ -185,6 +234,16 @@ class LegacyToolGateway:
                     reason=decision.reason or "permission denied",
                     started=started,
                 )
+        commit_denied = self._precommit_denial(call, services, workspace)
+        if commit_denied:
+            return self._denied_receipt(
+                call,
+                services,
+                spec,
+                reason=commit_denied,
+                started=started,
+            )
+
         before: dict[str, bool] = {}
         if call.spec_name in _WRITE_TOOLS:
             for path in _targets(call.params):
@@ -215,6 +274,78 @@ class LegacyToolGateway:
             workspace=workspace,
             before=before,
         )
+
+    def _precommit_denial(
+        self, call: ToolCall, services: Any, workspace: Path
+    ) -> str:
+        command = _command_text(call.params)
+        tokens = _commit_tokens(command)
+        if not _looks_like_commit(tokens):
+            if any(marker in command for marker in _COMMIT_META):
+                lowered = command.casefold()
+                if "commit" in lowered and "git" in lowered:
+                    return "unsafe commit command"
+            return ""
+        if any(
+            token
+            in {
+                "-c",
+                "--git-dir",
+                "--work-tree",
+                "--no-verify",
+            }
+            for token in tokens
+        ):
+            return "commit uses an alternate repository or worktree"
+        for key in ("repo_path", "cwd"):
+            raw = call.params.get(key)
+            if not raw:
+                continue
+            candidate = Path(str(raw))
+            if not candidate.is_absolute():
+                candidate = workspace / candidate
+            try:
+                if candidate.resolve(strict=False) != workspace.resolve():
+                    return "commit uses an alternate repository or worktree"
+            except OSError:
+                return "commit uses an alternate repository or worktree"
+        verified = getattr(services, "verified_paths", None)
+        if verified is None:
+            return ""
+        staged = self._staged_paths(workspace)
+        if staged is None:
+            return "cannot inspect staged paths; refusing commit"
+        if not staged:
+            return "staged diff is empty; refusing commit"
+        allowed = {
+            _normalize_repo_path(path, workspace) for path in verified
+        }
+        staged_set = {
+            _normalize_repo_path(path, workspace) for path in staged
+        }
+        unverified = sorted(staged_set - allowed)
+        if unverified:
+            return "commit contains unverified staged paths: " + ", ".join(
+                unverified[:10]
+            )
+        return ""
+
+    @staticmethod
+    def _staged_paths(workspace: Path) -> tuple[str, ...] | None:
+        try:
+            process = subprocess.run(
+                ["git", "diff", "--cached", "--name-only", "-z"],
+                cwd=workspace,
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if process.returncode != 0:
+            return None
+        payload = process.stdout.decode("utf-8", errors="replace")
+        return tuple(item for item in payload.split("\0") if item)
 
     def _denied_receipt(
         self,

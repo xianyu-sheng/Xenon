@@ -75,6 +75,9 @@ class RuntimeServices(Protocol):
     @property
     def current_step_id(self) -> str | None: ...
 
+    @property
+    def verified_paths(self) -> tuple[str, ...]: ...
+
     def is_cancelled(self) -> bool: ...
 
 
