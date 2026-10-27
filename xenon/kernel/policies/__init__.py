@@ -378,6 +378,10 @@ class PermissionPolicy:
                 capability, targets, "push is not approvable in the kernel"
             )
         if self.mode is PermissionMode.READ_ONLY:
+            if capability is Capability.REMOTE and self.allow_approval:
+                return self._approval(
+                    capability, targets, "remote read requires approval"
+                )
             return self._deny(capability, targets, "read-only mode")
         if capability is Capability.EDIT:
             path_targets = _path_targets(intent)

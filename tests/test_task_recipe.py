@@ -25,6 +25,15 @@ def test_action_request_activates_mcp_install_recipe():
     assert "git" not in recipe.allowed_tools
 
 
+def test_configured_server_reference_is_not_an_install_request():
+    assert recipe_for_request(
+        "Use the configured GitHub MCP server to search repositories", level=3
+    ) is None
+    assert recipe_for_request(
+        "使用已配置好的 GitHub MCP 搜索仓库", level=3
+    ) is None
+
+
 def test_question_request_does_not_activate_recipe():
     assert recipe_for_request("怎么安装 GitHub MCP？给一条命令", level=3) is None
     assert recipe_for_request("安装 MCP 需要哪些步骤？", level=3) is None

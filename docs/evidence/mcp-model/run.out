@@ -1,0 +1,18 @@
+· 1 个 MCP 服务器已登记（按需连接）
+MCP_PENDING True
+🧠 Runtime: kernel (deepseek/deepseek-v4-pro)
+  💭 kernel · 2 steps · 1 tools · verified
+
+● Kernel
+  Using the read-only GitHub MCP search_repositories call for                  
+  "xianyu-sheng/Xenon", I found exactly one repository: full_name =            
+  "xianyu-sheng/Xenon" (name "Xenon", owner "xianyu-sheng"), and it has 56     
+  stars (stargazers_count: 56). Other observed fields: language Python, 12     
+  forks, 45 open issues, default branch main, not a fork, not archived, created
+  2026-06-03. Nothing was modified; this was a read-only remote query.         
+MESSAGES 2
+TURN_STATUS passed
+TURN_ENGINE kernel
+TASK_STATE None
+LAST_ASSISTANT Using the read-only GitHub MCP search_repositories call for "xianyu-sheng/Xenon", I found exactly one repository: full_name = "xianyu-sheng/Xenon" (name "Xenon", owner "xianyu-sheng"), and it has 56 stars (stargazers_count: 56). Other observed fields: language Python, 12 forks, 45 open issues, default branch main, not a fork, not archived, created 2026-06-03. Nothing was modified; this was a read-only remote query.
+MCP_TOOLS_DISCOVERED 92

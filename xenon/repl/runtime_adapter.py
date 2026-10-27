@@ -254,11 +254,21 @@ class RuntimeAdapter:
             f"model:{self.model_config.model_id}",
         ]
         if self.mcp_registry is not None:
+            # MCP servers may be lazy.  Discover once for a real MCP task so
+            # the model sees actual tool names instead of a generic mcp_call
+            # description.  Discovery failures must not break core tasks.
+            if not getattr(self.mcp_registry, "tool_map", None):
+                discover = getattr(self.mcp_registry, "discover_tools", None)
+                if callable(discover):
+                    try:
+                        discover()
+                    except Exception:
+                        pass
             names = sorted(
                 str(name) for name in getattr(self.mcp_registry, "tool_map", {})
             )
             if names:
-                constraints.append("mcp_tools: " + ", ".join(names[:20]))
+                constraints.append("mcp_tools: " + ", ".join(names))
         run = run_task(
             objective,
             strategy=strategy,
@@ -323,7 +333,13 @@ class RuntimeAdapter:
             ledger_dir=Path.home() / ".xenon" / "ledger" / "repl",
             client=client,
             approval=KernelApprovalProvider(repl),
-            allow_approval=int(level) >= int(ExecutionLevel.EXECUTE),
+            allow_approval=(
+                int(level) >= int(ExecutionLevel.EXECUTE)
+                or (
+                    has_mcp
+                    and int(level) == int(ExecutionLevel.READ_ONLY)
+                )
+            ),
             catalog_profile="core+mcp" if has_mcp else "core",
             gateway_context=gateway_context,
             mcp_registry=mcp_registry if has_mcp else None,

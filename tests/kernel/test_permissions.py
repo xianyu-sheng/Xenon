@@ -322,6 +322,31 @@ def test_push_remains_veto_even_with_approval(tmp_path) -> None:
     )
 
 
+def test_read_only_allows_remote_only_with_approval(tmp_path) -> None:
+    read_only = PermissionPolicy(
+        mode=PermissionMode.READ_ONLY,
+        workspace=str(tmp_path),
+        allow_approval=True,
+    )
+    remote = _call(Capability.REMOTE, tool_name="github:search")
+    assert (
+        _decision(read_only, remote, str(tmp_path)).kind
+        is PolicyDecisionKind.REQUIRE_APPROVAL
+    )
+    shell = _call(Capability.SHELL, command="echo hi")
+    assert (
+        _decision(read_only, shell, str(tmp_path)).kind
+        is PolicyDecisionKind.VETO
+    )
+    without = PermissionPolicy(
+        mode=PermissionMode.READ_ONLY, workspace=str(tmp_path)
+    )
+    assert (
+        _decision(without, remote, str(tmp_path)).kind
+        is PolicyDecisionKind.VETO
+    )
+
+
 def test_allow_approval_does_not_weaken_read_only(tmp_path) -> None:
     policy = PermissionPolicy(
         mode=PermissionMode.READ_ONLY,

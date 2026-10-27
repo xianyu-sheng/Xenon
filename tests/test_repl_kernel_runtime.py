@@ -283,6 +283,14 @@ def test_runtime_adapter_selects_core_mcp_profile(tmp_path: Path) -> None:
     assert adapter.catalog_profile == "core+mcp"
     assert adapter.gateway_context is repl.agent_context
     assert adapter.mcp_registry is repl._mcp_registry
+    assert adapter.allow_approval is True
+
+    read_only = RuntimeAdapter.from_repl(
+        repl, model_ids=["test/fake"], level=ExecutionLevel.READ_ONLY
+    )
+    assert read_only.permission is PermissionMode.READ_ONLY
+    assert read_only.allow_approval is True
+    assert read_only.catalog_profile == "core+mcp"
 
 
 def test_runtime_adapter_approval_only_at_execute_level(tmp_path: Path) -> None:
