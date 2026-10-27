@@ -202,3 +202,19 @@ but the receipt and `NetworkFact` keep the real tool name.
 This is still a read-only MCP slice: the MCP server process is outside Xenon's
 filesystem sandbox, and approval is the security boundary. The generic
 `mcp_call` spec remains the fallback only when no per-tool specs are present.
+
+### MCP tool budget
+
+The REPL does not inject every discovered MCP tool into the model. It builds
+one spec per canonical `server:tool`, then selects a deterministic subset:
+
+- `XENON_MCP_TOOLS` (comma/space separated) is an explicit allowlist; it wins
+  over automatic selection;
+- otherwise tool-name tokens are weighted above description tokens and ties
+  sort by canonical name;
+- `XENON_MCP_TOOL_LIMIT` caps the injected set (default 16);
+- unselected tools are not in the prompt and cannot be exactly bound; this is
+  a budget boundary, not a sandbox.
+
+A real GitHub MCP run discovered 46 tools, injected 16, and still selected
+`github:search_repositories` correctly.

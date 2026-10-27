@@ -6,7 +6,8 @@ only place that maps a concrete tool name to those semantics.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from xenon.kernel.contracts import Capability, EffectKind, Risk, ToolSpec
@@ -161,6 +162,133 @@ MCP_SPECS: tuple[ToolSpec, ...] = (
 )
 
 ALL_SPECS: tuple[ToolSpec, ...] = CORE_SPECS + LEGACY_SPECS + MCP_SPECS
+
+
+_STOPWORDS = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "this",
+        "that",
+        "you",
+        "use",
+        "not",
+        "all",
+        "any",
+        "are",
+        "was",
+        "has",
+        "have",
+        "can",
+        "will",
+        "into",
+        "over",
+        "via",
+        "out",
+        "its",
+        "our",
+        "your",
+    }
+)
+
+_CJK_HINTS: tuple[tuple[str, str], ...] = (
+    ("搜索", "search"),
+    ("查询", "search"),
+    ("查找", "search"),
+    ("仓库", "repositor"),
+    ("代码", "code"),
+    ("问题", "issue"),
+    ("创建", "create"),
+    ("新建", "create"),
+    ("列表", "list"),
+    ("拉取", "pull"),
+    ("请求", "pull"),
+    ("用户", "user"),
+    ("文件", "file"),
+    ("提交", "commit"),
+    ("评论", "comment"),
+    ("分支", "branch"),
+    ("星标", "star"),
+)
+
+
+def _text_tokens(value: str) -> set[str]:
+    tokens = {
+        item
+        for item in re.findall(r"[a-z0-9]+", value.casefold())
+        if len(item) >= 3 and item not in _STOPWORDS
+    }
+    for marker, token in _CJK_HINTS:
+        if marker in value:
+            tokens.add(token)
+    return tokens
+
+
+def _tokens_match(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    # Small, deterministic stemming for query/tool pairs such as
+    # repository/repositories without pulling in a NLP dependency.
+    return bool(
+        len(left) >= 5
+        and len(right) >= 5
+        and (left.startswith(right[:5]) or right.startswith(left[:5]))
+    )
+
+
+def select_mcp_tool_specs(
+    specs: Sequence[ToolSpec],
+    objective: str,
+    *,
+    limit: int = 16,
+    allowed: Sequence[str] = (),
+) -> tuple[ToolSpec, ...]:
+    """Choose a bounded, deterministic subset of MCP tool specs.
+
+    An explicit allowlist wins.  Otherwise tool names are weighted more than
+    descriptions; ties break by canonical name so the same objective and
+    catalog always produce the same prompt.
+    """
+
+    cap = max(1, int(limit))
+    ordered = tuple(sorted(specs, key=lambda item: item.name))
+    allow = tuple(str(item).strip() for item in allowed if str(item).strip())
+    if allow:
+        by_name = {spec.name: spec for spec in ordered}
+        return tuple(
+            by_name[name]
+            for name in allow[:cap]
+            if name in by_name
+        )
+
+    objective_tokens = _text_tokens(objective)
+    scored: list[tuple[int, str, ToolSpec]] = []
+    for spec in ordered:
+        # The server prefix (``github``) is shared by every tool on that
+        # server and would otherwise give all candidates the same score.
+        short_name = spec.name.split(":", 1)[-1]
+        name_tokens = _text_tokens(short_name)
+        description_tokens = _text_tokens(spec.description)
+        score = 0
+        for token in objective_tokens:
+            if token in name_tokens:
+                score += 12
+            elif any(_tokens_match(token, item) for item in name_tokens):
+                score += 8
+            if token in description_tokens:
+                score += 2
+            elif any(_tokens_match(token, item) for item in description_tokens):
+                score += 1
+        scored.append((score, spec.name, spec))
+
+    ranked = sorted(scored, key=lambda item: (-item[0], item[1]))
+    selected = [spec for score, _name, spec in ranked if score > 0]
+    if not selected:
+        selected = [spec for _score, _name, spec in ranked]
+    return tuple(selected[:cap])
 
 
 def mcp_tool_specs(tools: Mapping[str, Any]) -> tuple[ToolSpec, ...]:

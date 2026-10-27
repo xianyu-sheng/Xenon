@@ -7,6 +7,7 @@ from xenon.catalog.specs import (
     LEGACY_SPECS,
     MCP_SPECS,
     mcp_tool_specs,
+    select_mcp_tool_specs,
 )
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "ToolCatalog",
     "build_catalog",
     "mcp_tool_specs",
+    "select_mcp_tool_specs",
 ]

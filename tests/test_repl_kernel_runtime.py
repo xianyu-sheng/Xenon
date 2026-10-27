@@ -641,3 +641,120 @@ def test_runtime_adapter_discovers_mcp_tools_and_runs_remote(
         ],
         ensure_ascii=False,
     )
+
+
+class SelectionMCPRegistry(LazyMCPRegistry):
+    def discover_tools(self) -> None:
+        self.discovered = True
+        self.tool_map = {
+            "github:search_repositories": (
+                "github",
+                {
+                    "name": "search_repositories",
+                    "description": "Search GitHub repositories.",
+                },
+            ),
+            "github:create_issue": (
+                "github",
+                {
+                    "name": "create_issue",
+                    "description": "Create an issue in a repository.",
+                },
+            ),
+            "weather:forecast": (
+                "weather",
+                {
+                    "name": "forecast",
+                    "description": "Get a weather forecast.",
+                },
+            ),
+        }
+
+
+def test_runtime_adapter_injects_only_selected_mcp_tools(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("XENON_MCP_TOOLS", raising=False)
+    monkeypatch.setenv("XENON_MCP_TOOL_LIMIT", "1")
+    registry = SelectionMCPRegistry()
+    context = AgentContext({"_mcp_registry": registry})
+    client = FakeClient(
+        [
+            json.dumps(
+                {
+                    "action": "call_tool",
+                    "capability": "remote",
+                    "params": {
+                        "tool_name": "github:search_repositories",
+                        "tool_args": {"query": "xenon"},
+                    },
+                }
+            ),
+            json.dumps({"action": "finish", "answer": "found"}),
+        ]
+    )
+    adapter = RuntimeAdapter(
+        workspace=tmp_path,
+        model_config=ModelConfig(model_id="test/fake"),
+        ledger_dir=tmp_path.parent / f"{tmp_path.name}-adapter-ledger",
+        finalize=False,
+        client=client,
+        approval=AdapterApproval(),
+        allow_approval=True,
+        catalog_profile="core+mcp",
+        gateway_context=context,
+        mcp_registry=registry,
+    )
+    adapter.run("search repositories for Xenon", task_id="adapter-selected")
+    events = Ledger(
+        tmp_path.parent / f"{tmp_path.name}-adapter-ledger" / "adapter-selected.jsonl",
+        "adapter-selected",
+    ).read()
+    started = next(event for event in events if event.kind.value == "task_started")
+    constraints = " ".join(started.payload.get("constraints") or ())
+    assert "github:search_repositories" in constraints
+    assert "github:create_issue" not in constraints
+    assert "weather:forecast" not in constraints
+
+
+def test_runtime_adapter_mcp_allowlist_overrides_selection(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XENON_MCP_TOOLS", "weather:forecast")
+    monkeypatch.setenv("XENON_MCP_TOOL_LIMIT", "16")
+    registry = SelectionMCPRegistry()
+    context = AgentContext({"_mcp_registry": registry})
+    client = FakeClient(
+        [
+            json.dumps(
+                {
+                    "action": "call_tool",
+                    "capability": "remote",
+                    "params": {
+                        "tool_name": "weather:forecast",
+                        "tool_args": {"city": "Shanghai"},
+                    },
+                }
+            ),
+            json.dumps({"action": "finish", "answer": "forecast"}),
+        ]
+    )
+    adapter = RuntimeAdapter(
+        workspace=tmp_path,
+        model_config=ModelConfig(model_id="test/fake"),
+        ledger_dir=tmp_path.parent / f"{tmp_path.name}-adapter-ledger",
+        finalize=False,
+        client=client,
+        approval=AdapterApproval(),
+        allow_approval=True,
+        catalog_profile="core+mcp",
+        gateway_context=context,
+        mcp_registry=registry,
+    )
+    run = adapter.run("search repositories", task_id="adapter-allowlist")
+    events = Ledger(run.ledger_path, "adapter-allowlist").read()
+    started = next(event for event in events if event.kind.value == "task_started")
+    constraints = " ".join(started.payload.get("constraints") or ())
+    assert "weather:forecast" in constraints
+    assert "github:search_repositories" not in constraints
+    assert registry.calls == [("weather:forecast", {"city": "Shanghai"})]
