@@ -1047,9 +1047,11 @@ class ToolExecutor:
                 error=message,
                 error_kind="sandbox_read_only",
             )
-        if tool_name == "command":
+        if tool_name in {"command", "bash"}:
             # C-2 修复：normalize 后命令文本在 action 键下（旧路径写 command）；
             # 两个键都读，避免白名单永远拿到 None 成为死代码。
+            # bash is the kernel's current shell tool; the allowlist must cover
+            # both names or the kernel path silently bypasses the sandbox seam.
             denial = command_denial_reason(
                 str(params.get("action") or params.get("command") or "")
             )

