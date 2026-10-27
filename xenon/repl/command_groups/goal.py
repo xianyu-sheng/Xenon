@@ -14,6 +14,23 @@ def _cmd_goal(*, session_state: dict, **kwargs: Any) -> str:
     repl = session_state.get("_repl")
     if repl is None:
         return "❌ /goal 需要交互会话"
+
+    from xenon.repl.kernel_evidence import current_kernel_evidence, goal_lines
+
+    pointer = getattr(repl, "_last_kernel_ledger", None)
+    evidence = current_kernel_evidence(repl)
+    if evidence is not None:
+        lines = goal_lines(evidence)
+        pending = getattr(repl, "_pending_action", None)
+        if pending is not None:
+            lines.append(f"⏸ 待确认动作：{pending.reason}")
+        return "\n".join(lines)
+    if pointer:
+        return (
+            "⚠️ 当前 kernel ledger 不可读（已删除、移出根目录或损坏）；"
+            "不退回 legacy 目标投影。"
+        )
+
     log = getattr(repl, "_session_events", None)
     if log is None:
         return "（无会话事件日志）"

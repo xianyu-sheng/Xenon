@@ -32,7 +32,22 @@ def _cmd_plan(*, args: str, session_state: dict, **kwargs: Any) -> str:
         repl._plan_mode_active = False
     elif arg in {"", "status", "状态"}:
         state = "开启" if repl._plan_mode_active else "关闭"
-        return f"📋 计划模式：{state}（/plan on|off 切换）"
+        lines = [f"📋 计划模式：{state}（/plan on|off 切换）"]
+        from xenon.repl.kernel_evidence import current_kernel_evidence, plan_lines
+
+        pointer = getattr(repl, "_last_kernel_ledger", None)
+        evidence = current_kernel_evidence(repl)
+        if evidence is not None:
+            lines.append("")
+            lines.extend(plan_lines(evidence))
+            if not evidence.integrity.valid:
+                lines.append("⚠️ 链无效：以上计划仅供取证，不可作为可信交付。")
+        elif pointer:
+            lines.append("")
+            lines.append(
+                "⚠️ 当前 kernel ledger 不可读；不退回 legacy 目标投影。"
+            )
+        return "\n".join(lines)
     else:
         return "用法: /plan [on|off|status]"
 
