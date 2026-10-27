@@ -92,6 +92,15 @@ def find_kernel_evidence(value: str) -> KernelEvidence | None:
     return load_kernel_evidence(kernel_ledger_dir() / f"{value}.jsonl")
 
 
+def current_kernel_evidence(repl: Any) -> KernelEvidence | None:
+    """Load the ledger pointed at by the REPL's latest kernel turn."""
+
+    pointer = getattr(repl, "_last_kernel_ledger", None)
+    if not pointer:
+        return None
+    return load_kernel_evidence(pointer)
+
+
 def kernel_ledger_files(limit: int = 20) -> list[Path]:
     root = kernel_ledger_dir()
     if not root.is_dir():
@@ -154,6 +163,77 @@ def _tool_summary(evidence: Mapping[str, Any]) -> str:
             failed += 1
     parts = " · ".join(f"{name} ×{count}" for name, count in sorted(names.items()))
     return f"🔧 {len(receipts)} 次（{parts}）· 失败 {failed}"
+
+
+def plan_lines(evidence: KernelEvidence, *, limit: int = 8) -> list[str]:
+    """Render the kernel plan without turning it into a new source of truth."""
+
+    state = evidence.task_state
+    plan = state.get("plan")
+    steps = list(plan.get("steps") or ()) if isinstance(plan, Mapping) else []
+    if not steps:
+        return ["🧭 Kernel 计划：（无）"]
+    statuses = state.get("steps") if isinstance(state.get("steps"), Mapping) else {}
+    lines = [f"🧭 Kernel 计划（{len(steps)} 步）"]
+    for step in steps[:limit]:
+        if not isinstance(step, Mapping):
+            continue
+        step_id = step.get("step_id")
+        status = "?"
+        if isinstance(statuses, Mapping):
+            item = statuses.get(str(step_id))
+            if isinstance(item, Mapping):
+                status = str(item.get("status") or "?")
+        kind = str(step.get("kind") or "?")
+        targets = [str(item) for item in step.get("targets") or () if item]
+        suffix = f" · {', '.join(targets[:3])}" if targets else ""
+        lines.append(f"  {step_id}. [{status}] {kind}{suffix}")
+    if len(steps) > limit:
+        lines.append(f"  … 另有 {len(steps) - limit} 步")
+    analysis = (
+        " ".join(str(plan.get("analysis") or "").split())
+        if isinstance(plan, Mapping)
+        else ""
+    )
+    if analysis:
+        lines.append(f"  {analysis[:160]}")
+    return lines
+
+
+def goal_lines(evidence: KernelEvidence) -> list[str]:
+    """Compact /goal projection sourced only from one kernel ledger."""
+
+    state = evidence.task_state
+    result = evidence.result or {}
+    objective = " ".join(str(state.get("objective") or "").split())
+    lines = [
+        f"🎯 Kernel 目标：{objective[:200] if objective else '（无）'}",
+        f"🧭 阶段：{state.get('phase', '—')} · "
+        f"accepted: {result.get('accepted', '?')} · "
+        f"evidence: {result.get('evidence_status', '—')}",
+    ]
+    lines.extend(plan_lines(evidence, limit=6))
+    debt = list(state.get("debt") or ())
+    if debt:
+        lines.append(f"⚠️ 未结债务 {len(debt)}:")
+        for item in debt[:5]:
+            if isinstance(item, Mapping):
+                lines.append(
+                    f"   {item.get('obligation_id') or '?'}: "
+                    f"{str(item.get('reason') or '')[:90]}"
+                )
+    artifacts = list(state.get("artifacts") or ())
+    if artifacts:
+        lines.append("📦 产物：" + ", ".join(str(item) for item in artifacts[:8]))
+    finalized = state.get("finalized")
+    if isinstance(finalized, Mapping):
+        lines.append(
+            f"🏁 finalized: commit={finalized.get('commit') or '-'} "
+            f"evidence={finalized.get('evidence_status') or '-'}"
+        )
+    if not evidence.integrity.valid:
+        lines.append("⚠️ 链无效：以上投影仅供取证，不可作为可信交付。")
+    return lines
 
 
 def _human_view(evidence: KernelEvidence) -> str:
@@ -249,10 +329,13 @@ def render_kernel_evidence(evidence: KernelEvidence, *, raw: bool = False) -> st
 
 __all__ = [
     "KernelEvidence",
+    "current_kernel_evidence",
     "find_kernel_evidence",
+    "goal_lines",
     "kernel_ledger_dir",
     "kernel_ledger_files",
     "load_kernel_evidence",
+    "plan_lines",
     "render_kernel_evidence",
     "restore_session_pointer",
     "snapshot_for_session",

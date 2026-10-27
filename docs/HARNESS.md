@@ -177,3 +177,16 @@ kernel ledger (task id + path), not a copy. Resume restores the pointer and
 never replays a task or resurrects an approval. If the ledger is missing or the
 chain is invalid, the view says so and does not turn the projection into a
 trusted delivery.
+
+### `/goal` and `/plan` after a kernel turn
+
+`/goal` reads the kernel ledger when the current turn has a kernel pointer.
+It shows the ledger objective, phase, plan steps, open debt, artifacts and the
+finalize commit. `/plan status` keeps showing the legacy plan-mode toggle and
+adds the read-only kernel plan below it. `/plan on|off` still controls only
+legacy soft guidance; it does not pretend to start a kernel plan.
+
+If the pointer exists but the ledger is missing or outside the kernel root,
+both commands fail closed and do not fall back to the legacy goal projection.
+`/mode` is intentionally not part of this view: it selects a model thinking
+mode, not task state, so it stays backed by `ModelRegistry`.
