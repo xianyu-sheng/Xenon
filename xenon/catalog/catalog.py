@@ -7,7 +7,7 @@ is explicitly ``ambiguous``.
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Sequence
 
 from xenon.catalog.specs import ALL_SPECS, CORE_SPECS, LEGACY_SPECS, MCP_SPECS
 from xenon.kernel.contracts import (
@@ -27,6 +27,10 @@ class ToolCatalog:
     ) -> None:
         self._all = tuple(specs)
         self._profile = profile
+        self._strict_remote = any(
+            spec.pack == "mcp" and spec.name != "mcp_call"
+            for spec in self._all
+        )
 
     def specs(self, profile: str | None = None) -> tuple[ToolSpec, ...]:
         selected = profile or self._profile
@@ -44,6 +48,28 @@ class ToolCatalog:
             for item in self.specs()
             if intent.capability in item.capabilities
         ]
+        if intent.capability.value == "remote":
+            tool_name = str(intent.params.get("tool_name") or "").strip()
+            if not tool_name:
+                return ToolBinding(
+                    status=BindingStatus.UNRESOLVED,
+                    reason="remote capability requires params.tool_name",
+                )
+            exact = [
+                item
+                for item in candidates
+                if item.name == tool_name and item.name != "mcp_call"
+            ]
+            if exact:
+                candidates = exact
+            elif self._strict_remote:
+                return ToolBinding(
+                    status=BindingStatus.UNRESOLVED,
+                    reason=(
+                        "unknown MCP tool; expected one of the discovered "
+                        "server:tool specs"
+                    ),
+                )
         if intent.prefer:
             preferred = [
                 item for item in candidates if item.name == intent.prefer
@@ -93,15 +119,26 @@ class ToolCatalog:
         )
 
 
-def build_catalog(profile: str = "core") -> ToolCatalog:
+def build_catalog(
+    profile: str = "core",
+    *,
+    extra_specs: Sequence[ToolSpec] = (),
+) -> ToolCatalog:
+    extra = tuple(extra_specs)
+
+    def combined(base: Sequence[ToolSpec]) -> tuple[ToolSpec, ...]:
+        merged = {spec.name: spec for spec in base}
+        merged.update({spec.name: spec for spec in extra})
+        return tuple(merged.values())
+
     if profile in {"all", "*"}:
-        return ToolCatalog(ALL_SPECS, "all")
+        return ToolCatalog(combined(ALL_SPECS), "all")
     if profile == "core":
-        return ToolCatalog(CORE_SPECS, "core")
+        return ToolCatalog(combined(CORE_SPECS), "core")
     if profile in {"core+mcp", "core_mcp"}:
-        return ToolCatalog(CORE_SPECS + MCP_SPECS, "core+mcp")
+        return ToolCatalog(combined(CORE_SPECS + MCP_SPECS), "core+mcp")
     if profile == "legacy":
-        return ToolCatalog(LEGACY_SPECS, "legacy")
+        return ToolCatalog(combined(LEGACY_SPECS), "legacy")
     if profile == "mcp":
-        return ToolCatalog(MCP_SPECS, "mcp")
+        return ToolCatalog(combined(MCP_SPECS), "mcp")
     raise ValueError(f"unknown tool profile: {profile!r}")

@@ -190,3 +190,15 @@ If the pointer exists but the ledger is missing or outside the kernel root,
 both commands fail closed and do not fall back to the legacy goal projection.
 `/mode` is intentionally not part of this view: it selects a model thinking
 mode, not task state, so it stays backed by `ModelRegistry`.
+
+### Per-tool MCP specs
+
+When the REPL has discovered MCP tools, the kernel builds one `ToolSpec` per
+canonical `server:tool` name. The model selects an exact name; the catalog
+rejects unknown names instead of silently binding the generic `mcp_call` spec.
+The gateway translates the exact call back to the internal `mcp_call` executor,
+but the receipt and `NetworkFact` keep the real tool name.
+
+This is still a read-only MCP slice: the MCP server process is outside Xenon's
+filesystem sandbox, and approval is the security boundary. The generic
+`mcp_call` spec remains the fallback only when no per-tool specs are present.

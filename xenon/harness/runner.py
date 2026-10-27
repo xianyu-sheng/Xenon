@@ -17,7 +17,7 @@ from xenon.catalog.finalizer import GitFinalizer
 from xenon.catalog.gateway import LegacyToolGateway
 from xenon.harness.plan import HarnessPlan
 from xenon.harness.sink import JsonlSink
-from xenon.kernel.contracts import Budget, TaskResult, TaskSpec
+from xenon.kernel.contracts import Budget, TaskResult, TaskSpec, ToolSpec
 from xenon.kernel.controller import VerificationController
 from xenon.kernel.policies import PermissionMode, PermissionPolicy
 from xenon.kernel.protocols import ApprovalProvider, Strategy
@@ -51,6 +51,7 @@ def run_task(
     approval_ttl_seconds: float = 60.0,
     catalog_profile: str = "core",
     gateway_context: Any = None,
+    extra_specs: Sequence[ToolSpec] = (),
 ) -> HarnessRun:
     """Run one objective through the kernel with an injected strategy.
 
@@ -77,7 +78,7 @@ def run_task(
         allow_approval=allow_approval,
         approval_ttl_seconds=approval_ttl_seconds,
     )
-    catalog = build_catalog(catalog_profile)
+    catalog = build_catalog(catalog_profile, extra_specs=extra_specs)
     gateway = LegacyToolGateway(
         specs=catalog.specs(),
         workspace=root,

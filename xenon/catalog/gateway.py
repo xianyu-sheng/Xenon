@@ -22,6 +22,7 @@ from xenon.engine.context import AgentContext
 from xenon.engine.tool_runtime import ToolRuntime
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.kernel.contracts import (
+    Capability,
     FsWrite,
     NetworkFact,
     Opaque,
@@ -244,6 +245,7 @@ class LegacyToolGateway:
                 started=started,
             )
 
+        execution_call = self._execution_call(call)
         before: dict[str, bool] = {}
         if call.spec_name in _WRITE_TOOLS:
             for path in _targets(call.params):
@@ -253,8 +255,8 @@ class LegacyToolGateway:
                 before[path] = candidate.exists()
         try:
             result = self._executor.execute(
-                call.spec_name,
-                dict(call.params),
+                execution_call.spec_name,
+                dict(execution_call.params),
                 self._context,
                 self._tracker,
             )
@@ -274,6 +276,20 @@ class LegacyToolGateway:
             workspace=workspace,
             before=before,
         )
+
+    @staticmethod
+    def _execution_call(call: ToolCall) -> ToolCall:
+        """Translate a per-tool MCP spec back to the one MCP executor entry."""
+
+        if call.capability is Capability.REMOTE and call.spec_name != "mcp_call":
+            params = dict(call.params)
+            params["tool_name"] = call.spec_name
+            return ToolCall(
+                spec_name="mcp_call",
+                params=params,
+                capability=Capability.REMOTE,
+            )
+        return call
 
     def _precommit_denial(
         self, call: ToolCall, services: Any, workspace: Path
@@ -565,17 +581,18 @@ class LegacyToolGateway:
                     )
                 )
 
-        if call.spec_name in _NETWORK_TOOLS:
+        if call.capability is Capability.REMOTE or call.spec_name in _NETWORK_TOOLS:
             url = str(
                 meta.get("url")
                 or meta.get("source")
                 or params.get("url")
                 or ""
             )
-            if call.spec_name == "mcp_call":
+            if call.spec_name == "mcp_call" or call.capability is Capability.REMOTE:
                 tool_name = str(
                     params.get("tool_name")
                     or params.get("tool")
+                    or call.spec_name
                     or ""
                 ).strip()
                 if not url or not url.startswith(

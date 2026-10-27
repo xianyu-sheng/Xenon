@@ -6,6 +6,9 @@ only place that maps a concrete tool name to those semantics.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from xenon.kernel.contracts import Capability, EffectKind, Risk, ToolSpec
 
 CORE_SPECS: tuple[ToolSpec, ...] = (
@@ -158,3 +161,46 @@ MCP_SPECS: tuple[ToolSpec, ...] = (
 )
 
 ALL_SPECS: tuple[ToolSpec, ...] = CORE_SPECS + LEGACY_SPECS + MCP_SPECS
+
+
+def mcp_tool_specs(tools: Mapping[str, Any]) -> tuple[ToolSpec, ...]:
+    """Build one catalog spec per discovered ``server:tool`` MCP name.
+
+    ``MCPRegistry.tool_map`` also contains unique short aliases; only the
+    canonical ``server:tool`` keys become specs.  The server process itself is
+    still outside Xenon's filesystem sandbox; approval remains the boundary.
+    """
+
+    specs: list[ToolSpec] = []
+    for global_name, entry in sorted(tools.items()):
+        name = str(global_name)
+        if ":" not in name:
+            continue
+        tool: Mapping[str, Any]
+        if (
+            isinstance(entry, tuple)
+            and len(entry) == 2
+            and isinstance(entry[1], Mapping)
+        ):
+            tool = entry[1]
+        elif isinstance(entry, Mapping):
+            tool = entry
+        else:
+            tool = {}
+        schema = tool.get("inputSchema") or tool.get("input_schema") or {}
+        if not isinstance(schema, Mapping):
+            schema = {}
+        description = str(tool.get("description") or "").strip()
+        specs.append(
+            ToolSpec(
+                name=name,
+                pack="mcp",
+                capabilities=frozenset({Capability.REMOTE}),
+                effects=frozenset({EffectKind.NETWORK, EffectKind.OPAQUE}),
+                risk=Risk.SENSITIVE,
+                params_schema=dict(schema),
+                description=description[:500] or f"MCP tool {name}.",
+                preferences={"remote": 100},
+            )
+        )
+    return tuple(specs)
