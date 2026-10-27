@@ -68,6 +68,10 @@ _ACTION_CUE = re.compile(
     r"(?:请你|帮我|给我|直接|进行|执行|开始|please|go\s+ahead|do\s+it)",
     re.IGNORECASE,
 )
+_CONFIGURED_REFERENCE = re.compile(
+    r"(?:已配置|配置好的?|configured|existing\s+configured|already\s+configured)",
+    re.IGNORECASE,
+)
 _NEGATED_INSTALL = re.compile(
     r"(?:不要|别|无需|不需要|禁止|do\s+not|don't|without)\s*(?:真的)?"
     r"(?:安装|装|install|add|setup)",
@@ -79,7 +83,10 @@ def recipe_for_request(text: str, *, level: int = 0) -> TaskRecipe | None:
     """Return an atomic recipe only for an authorized, action-shaped request."""
 
     value = (text or "").strip()
-    if not value or not _MCP_WORD.search(value) or not _INSTALL_VERB.search(value):
+    # "the configured MCP server" is a reference to an existing server, not
+    # an authorization to install/configure one.
+    probe = _CONFIGURED_REFERENCE.sub("", value)
+    if not probe or not _MCP_WORD.search(probe) or not _INSTALL_VERB.search(probe):
         return None
     if _NEGATED_INSTALL.search(value):
         return None
