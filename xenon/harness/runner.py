@@ -21,7 +21,7 @@ from xenon.harness.sink import JsonlSink
 from xenon.kernel.contracts import Budget, TaskResult, TaskSpec
 from xenon.kernel.controller import VerificationController
 from xenon.kernel.policies import PermissionMode, PermissionPolicy
-from xenon.kernel.protocols import Strategy
+from xenon.kernel.protocols import ApprovalProvider, Strategy
 from xenon.kernel.runtime import LoopRuntime
 from xenon.kernel.strategies import PlanFirst
 from xenon.ledger.events import canonical_json
@@ -47,6 +47,9 @@ def run_task(
     max_steps: int = 20,
     constraints: Sequence[str] = (),
     sink: JsonlSink | None = None,
+    approval: ApprovalProvider | None = None,
+    allow_approval: bool = False,
+    approval_ttl_seconds: float = 60.0,
 ) -> HarnessRun:
     """Run one objective through the kernel with an injected strategy.
 
@@ -67,7 +70,12 @@ def run_task(
     ledger_path = directory / f"{identifier}.jsonl"
     ledger = Ledger(ledger_path, identifier)
 
-    policy = PermissionPolicy(mode=permission, workspace=str(root))
+    policy = PermissionPolicy(
+        mode=permission,
+        workspace=str(root),
+        allow_approval=allow_approval,
+        approval_ttl_seconds=approval_ttl_seconds,
+    )
     gateway = LegacyToolGateway(
         specs=CORE_SPECS,
         workspace=root,
@@ -82,6 +90,7 @@ def run_task(
         finalize=None,
         finalizer=GitFinalizer(root) if finalize else None,
         sink=sink,
+        approval=approval,
     )
     spec = TaskSpec(
         task_id=identifier,

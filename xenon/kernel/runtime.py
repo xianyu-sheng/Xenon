@@ -53,6 +53,7 @@ from xenon.kernel.controller import index_facts
 from xenon.kernel.finalize import FinalizeDecision, FinalizeGuard
 from xenon.kernel.phases import assert_transition
 from xenon.kernel.protocols import (
+    ApprovalProvider,
     EventSink,
     Finalizer,
     Ledger,
@@ -113,6 +114,7 @@ class LoopRuntime:
         policies: Sequence[Policy] = (),
         finalize: FinalizeGuard | None = None,
         finalizer: Finalizer | None = None,
+        approval: ApprovalProvider | None = None,
     ) -> None:
         self._catalog = catalog
         self._gateway = gateway
@@ -123,6 +125,8 @@ class LoopRuntime:
         self._policies = tuple(policies)
         self._finalize = finalize or FinalizeGuard()
         self._finalizer = finalizer
+        self._approval = approval
+        self._approved_grants: list[Any] = []
         self._services = _RuntimeServices(self)
 
         self._spec: TaskSpec | None = None
@@ -164,6 +168,7 @@ class LoopRuntime:
         self._replans = 0
         self._finalize_decision = None
         self._run_start_seq = 0
+        self._revoke_grants()
         self._plan = None
         self._plan_steps = ()
         self._closed_steps = set()
@@ -389,6 +394,14 @@ class LoopRuntime:
         return replace(obligation, since_seq=self._plan_since_seq)
 
     def _call_tool(self, action: CallTool) -> TaskResult | None:
+        try:
+            return self._call_tool_once(action)
+        finally:
+            # A one-shot approval must never survive the call, including
+            # binding failures and gateway exceptions.
+            self._revoke_grants()
+
+    def _call_tool_once(self, action: CallTool) -> TaskResult | None:
         binding = self._catalog.bind(action.intent)
         if binding.status is not BindingStatus.BOUND or binding.call is None:
             self._replans += 1
@@ -847,8 +860,46 @@ class LoopRuntime:
                     "kind": decision.kind.value,
                     "reason": decision.reason,
                     "scope": list(decision.scope),
+                    "ttl_seconds": decision.ttl_seconds,
                 },
             )
+            if decision.kind is PolicyDecisionKind.REQUIRE_APPROVAL:
+                approved, approval_reason = self._request_approval(
+                    view, action, decision
+                )
+                self._append(
+                    EventKind.USER_APPROVAL,
+                    EventSource.USER,
+                    {
+                        "approved": approved,
+                        "reason": approval_reason,
+                        "scope": list(decision.scope),
+                        "tool": (
+                            action.intent.capability.value
+                            if isinstance(action, CallTool)
+                            else type(action).__name__
+                        ),
+                    },
+                )
+                if approved and self._grant_approval(
+                    policy, decision, action
+                ):
+                    continue
+                if approved:
+                    approval_reason = (
+                        "approval could not be scoped to a target; "
+                        "denied fail-closed"
+                    )
+                self._revoke_grants()
+                self._transition(
+                    TaskPhase.BLOCKED,
+                    approval_reason or "approval denied",
+                )
+                return self._result(
+                    accepted=False,
+                    evidence=EvidenceStatus.ABSTAINED,
+                )
+            self._revoke_grants()
             self._transition(
                 TaskPhase.BLOCKED, decision.reason or "policy blocked"
             )
@@ -857,6 +908,50 @@ class LoopRuntime:
                 evidence=EvidenceStatus.ABSTAINED,
             )
         return None
+
+    def _request_approval(
+        self, view: Any, action: Action, decision: Any
+    ) -> tuple[bool, str]:
+        if self._approval is None:
+            return False, "no approval provider; denied fail-closed"
+        try:
+            approved = bool(self._approval.request(view, action, decision))
+        except Exception as exc:  # noqa: BLE001 — approval UI must fail closed
+            logger.warning("approval provider failed", exc_info=True)
+            return False, f"approval provider failed: {exc}"
+        return approved, decision.reason or "user approval"
+
+    def _grant_approval(
+        self, policy: Any, decision: Any, action: Action
+    ) -> bool:
+        approve = getattr(policy, "approve", None)
+        if not callable(approve):
+            # A custom policy may authorize the action itself; no grant is
+            # needed.  PermissionPolicy always exposes approve().
+            return True
+        try:
+            grants = tuple(approve(decision, action))
+        except Exception:  # noqa: BLE001 — a broken grant must fail closed
+            logger.warning("policy grant failed", exc_info=True)
+            return False
+        if not grants:
+            return False
+        self._approved_grants.extend(grants)
+        return True
+
+    def _revoke_grants(self) -> None:
+        if not self._approved_grants:
+            return
+        grants = tuple(self._approved_grants)
+        self._approved_grants.clear()
+        for policy in self._policies:
+            revoke = getattr(policy, "revoke", None)
+            if not callable(revoke):
+                continue
+            try:
+                revoke(grants)
+            except Exception:  # noqa: BLE001 — best effort; grants have TTL too
+                logger.warning("policy revoke failed", exc_info=True)
 
     def _check_limits(self) -> TaskResult | None:
         if self._cancelled:

@@ -116,3 +116,24 @@ The REPL adapter:
 If the kernel blocks a turn, the REPL prints the open obligations and the
 ledger path. `XENON_RUNTIME` is a migration flag, not a second permanent
 runtime; it will be removed after parity (#202).
+
+## Approval and scoped grants
+
+The kernel can produce a `require_approval` policy decision, but it never
+prompts by itself. Approval is only active when an `ApprovalProvider` is
+injected:
+
+- REPL `XENON_RUNTIME=kernel` bridges the decision to the existing
+  `_confirm_tool`/approval panel for `EXECUTE` turns;
+- an approval is converted into a **one-shot `ScopedGrant`** for the exact
+  command/target and is revoked after the gateway call;
+- no provider, non-TTY, user denial, or a grant that cannot be scoped all fail
+  closed with a `USER_APPROVAL` ledger event;
+- destructive commands (`reset --hard`, force push, `rm -rf`, ...) and any
+  `git push` remain `VETO`, not approvable until an explicit pre-execution
+  `TaskSpec.allow_push` gate exists;
+- `xenon exec` does not inject an approval provider, so headless runs keep the
+  conservative veto behavior.
+
+`READ_ONLY` never becomes an approval prompt. `WRITE` turns do not gain shell
+approval; only `EXECUTE` maps to the approval-capable policy.
