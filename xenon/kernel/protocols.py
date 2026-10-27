@@ -52,6 +52,20 @@ class BoundToolPolicy(Protocol):
 
 
 @runtime_checkable
+class Finalizer(Protocol):
+    """Delivery-layer finalizer: stage only verified paths and commit."""
+
+    def finalize(
+        self,
+        *,
+        verified_paths: Sequence[str],
+        objective: str,
+        task_id: str,
+        existing_commit_sha: str | None = None,
+    ) -> Any: ...
+
+
+@runtime_checkable
 class ToolCatalog(Protocol):
     """Capability-aware view of the tool surface."""
 
