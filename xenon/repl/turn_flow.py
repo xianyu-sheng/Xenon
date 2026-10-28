@@ -535,6 +535,7 @@ class TurnFlowMixin:
             plan_mode=self._plan_mode_active,
             pending=pending,
             recipe=recipe,
+            mode_name=self.registry.current_mode,
             external_query=(
                 turn_contract_obj.intent in {"query", "research"}
                 or _looks_like_external_query(user_input)

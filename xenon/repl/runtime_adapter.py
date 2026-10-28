@@ -68,6 +68,7 @@ def should_route_to_kernel(
     plan_mode: bool,
     pending: object | None,
     recipe: object | None,
+    mode_name: str | None = None,
     external_query: bool = False,
     mcp_available: bool = False,
 ) -> bool:
@@ -85,6 +86,10 @@ def should_route_to_kernel(
         and not plan_mode
         and pending is None
         and recipe is None
+        # Plan-family modes still belong to the frozen legacy scheduler until
+        # PlanFirst has an equivalent LLM planner.  Do not silently switch
+        # them to ActFirst just because kernel is now the default.
+        and not (mode_name or "").strip().lower().startswith("plan-")
         and (not external_query or mcp_available)
     )
 

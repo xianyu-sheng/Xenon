@@ -165,6 +165,24 @@ def test_routing_and_permission_mapping() -> None:
         pending=None,
         recipe=None,
     )
+    assert should_route_to_kernel(
+        runtime_mode="kernel",
+        requires_tools=True,
+        skill_name=None,
+        plan_mode=False,
+        pending=None,
+        recipe=None,
+        mode_name="react",
+    )
+    assert not should_route_to_kernel(
+        runtime_mode="kernel",
+        requires_tools=True,
+        skill_name=None,
+        plan_mode=False,
+        pending=None,
+        recipe=None,
+        mode_name="plan-execute",
+    )
     assert not should_route_to_kernel(
         runtime_mode="kernel",
         requires_tools=True,
