@@ -213,6 +213,9 @@ class Budget:
     # counted by the runtime so a strategy cannot retry forever.
     max_repair_attempts: int = 2
     max_replans: int = 3
+    # V2 audit rounds across repeated Finish attempts.  The first audit is
+    # always allowed; a second unresolved round must block/abstain.
+    max_audit_rounds: int = 1
 
 
 @dataclass(frozen=True, slots=True)

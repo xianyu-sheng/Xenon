@@ -226,3 +226,167 @@ def test_preflight_audit_prevents_finalizer_commit() -> None:
     assert result.accepted is False
     assert Finalizer.calls == 0
     assert any(item.obligation.id == "mul-created" for item in result.debt)
+
+
+class FakeAuditProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def propose(self, obligations, ledger):
+        self.calls += 1
+        del ledger
+        return AuditProposal(
+            coverage=(
+                CoverageClaim(
+                    obligation_id="add-requirement",
+                    artifact_paths=("calc/add.py",),
+                    rationale="the write fact covers the requirement",
+                ),
+            )
+        )
+
+
+def test_audit_provider_is_only_a_proposal() -> None:
+    ledger = Ledger.in_memory("task-1")
+    provider = FakeAuditProvider()
+    spec = TaskSpec(
+        task_id="task-1",
+        objective="add",
+        workspace=".",
+        obligations=(
+            Obligation(
+                id="add-requirement",
+                kind=PropositionKind.REQUIREMENT_MET,
+                target="add",
+            ),
+        ),
+    )
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+        audit_provider=provider,
+    )
+    result = runtime.run(
+        spec,
+        ScriptedStrategy(
+            [
+                CallTool(ToolIntent(capability=Capability.EDIT)),
+                Finish("done"),
+            ]
+        ),
+    )
+
+    assert result.accepted is True
+    assert provider.calls == 1
+    assert result.metrics["audit_rounds"] == 1.0
+    proposed = next(
+        event for event in ledger.read(EventKind.AUDIT_PROPOSED)
+    )
+    assert proposed.payload["status"] == "proposed"
+    assert proposed.payload["coverage"][0]["obligation_id"] == "add-requirement"
+
+
+def test_audit_round_budget_blocks_before_a_second_audit() -> None:
+    from xenon.kernel.contracts import Budget
+
+    ledger = Ledger.in_memory("task-1")
+    spec = TaskSpec(
+        task_id="task-1",
+        objective="do work",
+        workspace=".",
+        budget=Budget(max_audit_rounds=0),
+    )
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+    )
+    result = runtime.run(
+        spec,
+        ScriptedStrategy([Finish("done")]),
+    )
+
+    assert result.accepted is False
+    assert result.phase.value == "blocked"
+    assert any(
+        event.kind is EventKind.POLICY_DECISION
+        and "audit budget exhausted" in str(event.payload.get("reason"))
+        for event in ledger.read()
+    )
+
+
+class RaisingAuditProvider:
+    def propose(self, obligations, ledger):
+        raise RuntimeError("provider failed")
+
+
+class NoneAuditProvider:
+    def propose(self, obligations, ledger):
+        return None
+
+
+class InvalidAuditProvider:
+    def propose(self, obligations, ledger):
+        return object()
+
+
+def _audit_provider_result(provider):
+    ledger = Ledger.in_memory("task-1")
+    spec = TaskSpec(
+        task_id="task-1",
+        objective="add multiply",
+        workspace=".",
+        obligations=(
+            Obligation(
+                id="mul-created",
+                kind=PropositionKind.FILE_CREATED,
+                target="calc/mul.py",
+            ),
+        ),
+    )
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+        audit_provider=provider,
+    )
+    result = runtime.run(
+        spec,
+        ScriptedStrategy(
+            [
+                CallTool(ToolIntent(capability=Capability.EDIT)),
+                Finish("done"),
+            ]
+        ),
+    )
+    return ledger, result
+
+
+def test_audit_provider_failure_is_recorded_not_a_verdict() -> None:
+    ledger, result = _audit_provider_result(RaisingAuditProvider())
+    assert result.accepted is False
+    assert any(
+        event.kind is EventKind.AUDIT_PROPOSED
+        and event.payload.get("status") == "error"
+        for event in ledger.read()
+    )
+    assert any(item.obligation.id == "mul-created" for item in result.debt)
+
+
+def test_audit_provider_none_is_not_an_audit() -> None:
+    ledger, result = _audit_provider_result(NoneAuditProvider())
+    assert result.accepted is False
+    assert not ledger.read(EventKind.AUDIT_PROPOSED)
+    assert any(item.obligation.id == "mul-created" for item in result.debt)
+
+
+def test_audit_provider_invalid_type_is_recorded() -> None:
+    ledger, result = _audit_provider_result(InvalidAuditProvider())
+    assert result.accepted is False
+    event = next(iter(ledger.read(EventKind.AUDIT_PROPOSED)))
+    assert event.payload.get("status") == "error"
+    assert "non-AuditProposal" in event.payload.get("reason", "")

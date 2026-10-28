@@ -259,3 +259,13 @@ the absence of push receipts and becomes unresolved as soon as a push exists.
 Unresolved/abstained rows open debt before the finalizer; `/evidence` prints the
 latest final coverage matrix. LLM-driven proposal generation, bounded audit
 rounds and user acceptance of debt remain follow-ups for #200.
+
+`LoopRuntime` accepts an optional `AuditProposalProvider`. The provider only
+returns an `AuditProposal`; it is recorded as `AUDIT_PROPOSED` and passed to the
+deterministic binder. A provider exception or malformed value is recorded and
+treated as "no proposal", never as evidence. `Budget.max_audit_rounds`
+(default 1) caps repeated `Finish` audits; exhausting it returns a blocked
+result with `audit budget exhausted`.
+
+A model-backed AuditProposalProvider is not wired yet; this slice defines the
+seam and tests it with a fake provider.
