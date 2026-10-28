@@ -98,7 +98,10 @@ XENON_RUNTIME=legacy xenon
 ```
 
 Only turns that require tools and are not a skill, plan-mode turn, pending
-continuation, or atomic recipe are routed to the kernel in this first slice.
+continuation, atomic recipe, or a plan-family `/mode` (`plan-execute`,
+`plan-react`, `plan-reflection`) are routed to the kernel.  Those plan modes
+remain on the frozen legacy scheduler until PlanFirst has an equivalent LLM
+planner; they must not silently fall through to ActFirst.
 External queries stay legacy unless an MCP registry is available; then the
 kernel uses the `core+mcp` profile and the remote call goes through approval.
 Plain chat, `/mode`, `/plan`, `/resume`, `/evidence`, and skills still use their
