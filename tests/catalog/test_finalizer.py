@@ -166,3 +166,26 @@ def test_finalizer_rolls_back_to_the_previous_commit(tmp_path: Path) -> None:
     assert outcome.accepted is False
     assert outcome.rolled_back is True
     assert _head(tmp_path) == base
+
+
+def test_public_rollback_undoes_a_finalizer_commit(tmp_path: Path) -> None:
+    _repo(tmp_path)
+    (tmp_path / "a.py").write_text("base" + chr(10), encoding="utf-8")
+    _git(tmp_path, "add", "a.py")
+    _git(tmp_path, "commit", "-m", "base")
+    base = _head(tmp_path)
+    (tmp_path / "a.py").write_text("changed" + chr(10), encoding="utf-8")
+    outcome = GitFinalizer(tmp_path).finalize(
+        verified_paths=("a.py",),
+        objective="change a.py",
+        task_id="t1",
+        existing_commit_sha=base,
+    )
+    assert outcome.accepted is True
+    assert outcome.created is True
+
+    ok, reason = GitFinalizer(tmp_path).rollback(outcome.commit_sha or "")
+
+    assert ok is True
+    assert reason == ""
+    assert _head(tmp_path) == base

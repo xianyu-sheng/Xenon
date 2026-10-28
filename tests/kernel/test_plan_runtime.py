@@ -378,7 +378,16 @@ def test_finalizer_satisfies_a_commit_step_without_a_model_commit() -> None:
                 SubmitPlan(_plan()),
                 CallTool(ToolIntent(capability=Capability.EDIT)),
                 CallTool(ToolIntent(capability=Capability.VERIFY)),
-                Finish("done"),
+                Finish(
+                    "done",
+                    claims=(
+                        Claim(
+                            id="commit-finalizer",
+                            kind=PropositionKind.COMMIT_CREATED,
+                            source=ClaimSource.LLM,
+                        ),
+                    ),
+                ),
             ]
         ),
     )
@@ -386,6 +395,93 @@ def test_finalizer_satisfies_a_commit_step_without_a_model_commit() -> None:
     assert result.accepted is True
     assert result.finalize_sha == "def5678"
     assert len(ledger.read(EventKind.STEP_CLOSED)) == 3
+
+    events = ledger.read()
+    preflight = next(
+        index
+        for index, event in enumerate(events)
+        if event.kind is EventKind.AUDIT_REPORTED
+        and event.payload.get("scope") == "preflight"
+    )
+    intent = next(
+        index
+        for index, event in enumerate(events)
+        if event.kind is EventKind.DELIVERY_ATTEMPTED
+        and event.payload.get("status") == "intent"
+    )
+    receipt = next(
+        index
+        for index, event in enumerate(events)
+        if event.kind is EventKind.TOOL_RECEIPT
+        and event.payload.get("receipt", {}).get("tool") == "finalizer"
+    )
+    assert preflight < intent < receipt
+
+
+class BadFinalizer(FakeFinalizer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rolled_back: list[str] = []
+
+    def finalize(self, **kwargs):
+        self.calls += 1
+        del kwargs
+        return type(
+            "Outcome",
+            (),
+            {
+                "accepted": True,
+                "created": True,
+                "commit_sha": "def5678",
+                "files": ("outside.py",),
+                "reason": "",
+            },
+        )()
+
+    def rollback(self, commit_sha: str) -> tuple[bool, str]:
+        self.rolled_back.append(commit_sha)
+        return True, ""
+
+
+def test_blocked_delivery_rolls_back_the_finalizer_commit() -> None:
+    ledger = Ledger.in_memory("task-1")
+    finalizer = BadFinalizer()
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+        finalizer=finalizer,
+    )
+
+    result = runtime.run(
+        _calc_spec(),
+        ScriptedStrategy(
+            [
+                SubmitPlan(_plan()),
+                CallTool(ToolIntent(capability=Capability.EDIT)),
+                CallTool(ToolIntent(capability=Capability.VERIFY)),
+                Finish("done"),
+            ]
+        ),
+    )
+
+    assert result.accepted is False
+    assert finalizer.rolled_back == ["def5678"]
+    from xenon.ledger.projections import project_task_state
+
+    state = project_task_state(ledger.read())
+    assert all(item.get("sha") != "def5678" for item in state["commits"])
+    assert any(
+        event.kind is EventKind.DELIVERY_ATTEMPTED
+        and event.payload.get("status") == "rolled_back"
+        for event in ledger.read()
+    )
+    assert any(
+        event.kind is EventKind.AUDIT_REPORTED
+        and event.payload.get("scope") == "preflight"
+        for event in ledger.read()
+    )
 
 
 def test_dag_ready_step_is_selected_before_plan_order() -> None:
@@ -553,3 +649,138 @@ def test_claim_resolution_is_reported_not_hidden() -> None:
     assert result.accepted is False
     assert result.resolutions
     assert result.resolutions[0].status is ResolutionStatus.UNRESOLVED
+
+
+class BadRollbackFinalizer(BadFinalizer):
+    def rollback(self, commit_sha: str) -> tuple[bool, str]:
+        self.rolled_back.append(commit_sha)
+        return False, "worktree is locked"
+
+
+def test_failed_delivery_rollback_blocks_with_debt() -> None:
+    ledger = Ledger.in_memory("task-1")
+    finalizer = BadRollbackFinalizer()
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+        finalizer=finalizer,
+    )
+
+    result = runtime.run(
+        _calc_spec(),
+        ScriptedStrategy(
+            [
+                SubmitPlan(_plan()),
+                CallTool(ToolIntent(capability=Capability.EDIT)),
+                CallTool(ToolIntent(capability=Capability.VERIFY)),
+                Finish("done"),
+            ]
+        ),
+    )
+
+    assert result.accepted is False
+    assert result.phase.value == "blocked"
+    assert any(item.obligation.id == "delivery-rollback" for item in result.debt)
+    assert any(
+        event.kind is EventKind.DELIVERY_ATTEMPTED
+        and event.payload.get("status") == "rollback_failed"
+        for event in ledger.read()
+    )
+
+
+class RaisingFinalizer(FakeFinalizer):
+    def finalize(self, **kwargs):
+        self.calls += 1
+        del kwargs
+        raise RuntimeError("finalizer exploded")
+
+
+class RejectedFinalizer(FakeFinalizer):
+    def finalize(self, **kwargs):
+        self.calls += 1
+        del kwargs
+        return type(
+            "Outcome",
+            (),
+            {
+                "accepted": False,
+                "created": False,
+                "commit_sha": None,
+                "files": (),
+                "reason": "rejected by test",
+            },
+        )()
+
+
+class NoRollbackFinalizer(BadFinalizer):
+    rollback = None
+
+
+class RaisingRollbackFinalizer(BadFinalizer):
+    def rollback(self, commit_sha: str) -> tuple[bool, str]:
+        raise RuntimeError("rollback exploded")
+
+
+def _run_finish(finalizer):
+    ledger = Ledger.in_memory("task-1")
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+        finalizer=finalizer,
+    )
+    result = runtime.run(
+        _calc_spec(),
+        ScriptedStrategy(
+            [
+                CallTool(ToolIntent(capability=Capability.EDIT)),
+                Finish("done"),
+            ]
+        ),
+    )
+    return ledger, result
+
+
+def test_finalizer_exception_opens_debt() -> None:
+    ledger, result = _run_finish(RaisingFinalizer())
+
+    assert result.accepted is False
+    assert any(item.obligation.id == "finalizer" for item in result.debt)
+    assert any(
+        event.kind is EventKind.DELIVERY_ATTEMPTED
+        and event.payload.get("status") == "intent"
+        for event in ledger.read()
+    )
+
+
+def test_finalizer_rejection_opens_debt() -> None:
+    ledger, result = _run_finish(RejectedFinalizer())
+
+    assert result.accepted is False
+    assert any(item.obligation.id == "finalizer" for item in result.debt)
+    assert any(
+        event.kind is EventKind.DELIVERY_ATTEMPTED
+        and event.payload.get("status") == "intent"
+        for event in ledger.read()
+    )
+
+
+def test_missing_rollback_capability_fails_closed() -> None:
+    _ledger, result = _run_finish(NoRollbackFinalizer())
+
+    assert result.accepted is False
+    assert any(
+        item.obligation.id == "delivery-rollback" for item in result.debt
+    )
+
+
+def test_rollback_exception_fails_closed() -> None:
+    _ledger, result = _run_finish(RaisingRollbackFinalizer())
+
+    assert result.accepted is False
+    assert any(
+        item.obligation.id == "delivery-rollback" for item in result.debt
+    )
