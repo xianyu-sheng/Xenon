@@ -12,6 +12,7 @@ import time
 from dataclasses import replace
 from typing import Any, Sequence
 
+from xenon.kernel.audit import AuditCoordinator
 from xenon.kernel.contracts import (
     Abort,
     Action,
@@ -115,6 +116,7 @@ class LoopRuntime:
         finalize: FinalizeGuard | None = None,
         finalizer: Finalizer | None = None,
         approval: ApprovalProvider | None = None,
+        audit: AuditCoordinator | None = None,
     ) -> None:
         self._catalog = catalog
         self._gateway = gateway
@@ -126,6 +128,7 @@ class LoopRuntime:
         self._finalize = finalize or FinalizeGuard()
         self._finalizer = finalizer
         self._approval = approval
+        self._audit = audit or AuditCoordinator()
         self._approved_grants: list[Any] = []
         self._services = _RuntimeServices(self)
 
@@ -587,9 +590,16 @@ class LoopRuntime:
         # produce V1 violations, not an implicit "done".  Commit steps wait for
         # the finalizer so the commit is created from verified paths.
         self._close_remaining_steps(skip_commit=self._finalizer is not None)
+        self._sync_debt(self._verdicts)
+        preflight_audit = self._audit.audit(
+            self._audit_obligations(), self._readonly, defer_commit=True
+        )
+        self._append_audit_report(preflight_audit, claims, scope="preflight")
+        self._verdicts.extend(preflight_audit.verdicts)
+        self._sync_debt(preflight_audit.verdicts)
+
         finalizer_outcome = None
         if self._finalizer is not None and self._preflight_delivery(claims):
-            self._append_preflight_audit(claims)
             finalizer_outcome = self._invoke_finalizer(claims)
         self._close_remaining_steps()
         self._sync_debt(self._verdicts)
@@ -639,16 +649,24 @@ class LoopRuntime:
             )
 
         self._sync_debt(self._verdicts)
+        final_audit = self._audit.audit(
+            self._audit_obligations(), self._readonly
+        )
+        self._verdicts.extend(final_audit.verdicts)
+        self._sync_debt(final_audit.verdicts)
         self._finalize_decision = self._run_finalize()
         self._append(
             EventKind.AUDIT_REPORTED,
             EventSource.GATE,
             {
+                "scope": "final",
                 "verdicts": [_verdict_payload(item) for item in checks],
                 "claims": [_claim_payload(item) for item in claims],
                 "resolutions": [
                     _resolution_payload(item) for item in resolutions
                 ],
+                "coverage": _coverage_payload(final_audit.coverage),
+                "gaps": _gaps_payload(final_audit.gaps),
                 "debt": [item.obligation.id for item in self._debt],
             },
         )
@@ -911,19 +929,45 @@ class LoopRuntime:
                 return False
         return True
 
-    def _append_preflight_audit(self, claims: Sequence[Claim]) -> None:
+    def _append_audit_report(
+        self, report: Any, claims: Sequence[Claim], *, scope: str
+    ) -> None:
         self._append(
             EventKind.AUDIT_REPORTED,
             EventSource.GATE,
             {
-                "scope": "preflight",
+                "scope": scope,
                 "claims": [_claim_payload(item) for item in claims],
                 "verdicts": [
-                    _verdict_payload(item) for item in self._verdicts
+                    _verdict_payload(item) for item in report.verdicts
                 ],
+                "coverage": _coverage_payload(report.coverage),
+                "gaps": _gaps_payload(report.gaps),
                 "debt": [item.obligation.id for item in self._debt],
             },
         )
+
+    def _audit_obligations(self) -> tuple[Obligation, ...]:
+        """All obligations V2 must cover, in deterministic order."""
+
+        found: list[Obligation] = []
+        seen: set[str] = set()
+
+        def add(obligation: Obligation) -> None:
+            if not obligation.id or obligation.id in seen:
+                return
+            seen.add(obligation.id)
+            found.append(self._baseline_obligation(obligation))
+
+        if self._spec is not None:
+            for obligation in self._spec.obligations:
+                add(obligation)
+        for step in self._plan_steps:
+            for obligation in step.expects:
+                add(obligation)
+        for debt in self._debt:
+            add(debt.obligation)
+        return tuple(found)
 
     def _run_finalize(self) -> FinalizeDecision:
         assert self._spec is not None
@@ -1249,6 +1293,10 @@ class LoopRuntime:
     def _find_obligation(
         self, obligation_id: str, verdict: Verdict
     ) -> Obligation | None:
+        if self._spec is not None:
+            for obligation in self._spec.obligations:
+                if obligation.id == obligation_id:
+                    return self._baseline_obligation(obligation)
         for step in self._plan_steps:
             for obligation in step.expects:
                 if obligation.id == obligation_id:
@@ -1451,3 +1499,30 @@ def _verdict_payload(verdict: Verdict) -> dict[str, Any]:
         "fact_ids": list(verdict.fact_ids),
         "reason": verdict.reason,
     }
+
+
+def _coverage_payload(rows: Sequence[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "obligation_id": row.obligation_id,
+            "kind": row.kind.value,
+            "target": row.target,
+            "status": row.status.value,
+            "fact_ids": list(row.fact_ids),
+            "reason": row.reason,
+            "next_action": row.next_action,
+            "source": row.source,
+        }
+        for row in rows
+    ]
+
+
+def _gaps_payload(gaps: Sequence[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "obligation_id": gap.obligation_id,
+            "reason": gap.reason,
+            "next_action": gap.next_action,
+        }
+        for gap in gaps
+    ]

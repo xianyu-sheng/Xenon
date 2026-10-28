@@ -5,6 +5,7 @@ The kernel is the single-loop, evidence-first harness described in
 runtime, verification and strategy seams; projections live in ``xenon.ledger``.
 """
 
+from xenon.kernel.audit import AuditCoordinator, CoverageBinder
 from xenon.kernel.contracts import (
     SCHEMA_VERSION,
     Action,
@@ -89,6 +90,7 @@ __all__ = [
     "ActionKind",
     "ApprovalProvider",
     "AskUser",
+    "AuditCoordinator",
     "AuditProposal",
     "BindingStatus",
     "Budget",
@@ -98,6 +100,7 @@ __all__ = [
     "ClaimSource",
     "ControlDecision",
     "ControlDecisionKind",
+    "CoverageBinder",
     "CoverageClaim",
     "Debt",
     "Effect",

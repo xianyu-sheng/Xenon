@@ -244,3 +244,18 @@ The finalizer is not called blindly at `Finish`. The runtime now:
 The commit is still a delivery-layer side effect, not a model tool call. The
 intent event makes the crash window between `git commit` and its receipt
 visible; full crash recovery remains a follow-up.
+
+### V2 coverage audit
+
+`AuditCoordinator` builds a deterministic coverage matrix for `TaskSpec`
+obligations, plan step expectations and open debt. Each row is `bound`,
+`unresolved`, `ambiguous` or `abstained`; only bound rows satisfy V2. An
+`AuditProposal` may fill a semantic `requirement_met` gap only when its artifact
+paths and test targets bind to real ledger facts; proposals never override
+deterministic kinds and never emit a pass verdict.
+
+Negative facts are explicit: `pushed` with `expect={"absent": true}` is bound by
+the absence of push receipts and becomes unresolved as soon as a push exists.
+Unresolved/abstained rows open debt before the finalizer; `/evidence` prints the
+latest final coverage matrix. LLM-driven proposal generation, bounded audit
+rounds and user acceptance of debt remain follow-ups for #200.

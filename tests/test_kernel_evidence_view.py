@@ -256,3 +256,42 @@ def test_save_and_load_preserve_kernel_pointer(
     resumed = REPL(registry=registry, streaming=False)
     _cmd_resume(args="kernel-save", session_state={"_repl": resumed})
     assert resumed._last_kernel_ledger == path
+
+
+def test_evidence_human_shows_v2_coverage(tmp_path: Path, monkeypatch) -> None:
+    import xenon.repl.kernel_evidence as module
+    from xenon.ledger.events import EventSource
+
+    monkeypatch.setattr(module, "kernel_ledger_dir", lambda: tmp_path)
+    path = _make_ledger(tmp_path, "kernel-audit")
+    ledger = Ledger(path, "kernel-audit")
+    ledger.append(
+        EventKind.AUDIT_REPORTED,
+        EventSource.GATE,
+        {
+            "scope": "final",
+            "coverage": [
+                {
+                    "obligation_id": "mul-created",
+                    "kind": "file_created",
+                    "target": "calc/mul.py",
+                    "status": "unresolved",
+                    "reason": "no created file fact",
+                    "next_action": "create calc/mul.py",
+                }
+            ],
+            "gaps": [
+                {
+                    "obligation_id": "mul-created",
+                    "reason": "no fact",
+                    "next_action": "create calc/mul.py",
+                }
+            ],
+        },
+    )
+    evidence = load_kernel_evidence(path)
+    assert evidence is not None
+    rendered = render_kernel_evidence(evidence)
+    assert "V2 覆盖" in rendered
+    assert "mul-created" in rendered
+    assert "create calc/mul.py" in rendered
