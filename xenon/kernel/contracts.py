@@ -230,6 +230,8 @@ class TaskSpec:
     # The user's own words, kept separate from the strategy-facing prompt.
     # Legacy callers may omit it; projections then fall back to ``objective``.
     user_objective: str = ""
+    # Explicit V2 obligations supplied by the caller/intake layer.
+    obligations: tuple[Obligation, ...] = ()
 
 
 # ── catalog and receipts ───────────────────────────────────────────────────
@@ -429,6 +431,34 @@ class AuditProposal:
     coverage: tuple[CoverageClaim, ...] = ()
     gaps: tuple[GapProposal, ...] = ()
     rationale: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class CoverageRow:
+    """One row of the deterministic V2 coverage matrix."""
+
+    obligation_id: str
+    kind: PropositionKind
+    target: str
+    status: ResolutionStatus
+    fact_ids: tuple[str, ...] = ()
+    reason: str = ""
+    next_action: str = ""
+    source: str = "binder"
+
+
+@dataclass(frozen=True, slots=True)
+class AuditReport:
+    """V2 output: coverage/gaps plus optional verdicts.
+
+    The report never closes debt by itself; the runtime/controller decides how
+    unresolved and abstained rows become debt.
+    """
+
+    coverage: tuple[CoverageRow, ...] = ()
+    gaps: tuple[GapProposal, ...] = ()
+    verdicts: tuple[Verdict, ...] = ()
+    proposal: AuditProposal | None = None
 
 
 # ── plan and actions ───────────────────────────────────────────────────────

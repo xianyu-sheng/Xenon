@@ -281,6 +281,40 @@ def _human_view(evidence: KernelEvidence) -> str:
             claim_id = str(resolution.get("claim_id") or "?")
             reason = str(resolution.get("reason") or "")
             lines.append(f"   {claim_id}: {status} {reason[:80]}")
+    audits = list(evidence.evidence.get("audit") or ())
+    if audits:
+        audit = next(
+            (
+                item
+                for item in reversed(audits)
+                if item.get("scope") == "final"
+            ),
+            audits[-1],
+        )
+        coverage = list(audit.get("coverage") or ())
+        if coverage:
+            counts: dict[str, int] = {}
+            for row in coverage:
+                status = str(row.get("status") or "?")
+                counts[status] = counts.get(status, 0) + 1
+            summary = " · ".join(
+                f"{name} {count}" for name, count in sorted(counts.items())
+            )
+            lines.append(f"🧮 V2 覆盖：{len(coverage)} 项（{summary}）")
+            for row in coverage:
+                if row.get("status") == "bound":
+                    continue
+                lines.append(
+                    f"   {row.get('obligation_id') or '?'}: "
+                    f"{row.get('status') or '?'} "
+                    f"{str(row.get('reason') or '')[:90]}"
+                )
+        gaps = list(audit.get("gaps") or ())
+        for gap in gaps[:5]:
+            lines.append(
+                f"   gap {gap.get('obligation_id') or '?'}: "
+                f"{str(gap.get('next_action') or gap.get('reason') or '')[:90]}"
+            )
     debt = list(evidence.evidence.get("debt") or ())
     if debt:
         lines.append(f"⚠️ 未满足证据 {len(debt)}:")
