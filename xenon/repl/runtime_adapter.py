@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from xenon.catalog.specs import mcp_tool_specs, select_mcp_tool_specs
-from xenon.harness.llm import ModelConfig, build_llm_strategy
+from xenon.harness.llm import (
+    ModelConfig,
+    build_llm_plan_strategy,
+    build_llm_strategy,
+)
 from xenon.harness.runner import HarnessRun, result_json, run_task
 from xenon.kernel.contracts import (
     CallTool,
@@ -86,10 +90,12 @@ def should_route_to_kernel(
         and not plan_mode
         and pending is None
         and recipe is None
-        # Plan-family modes still belong to the frozen legacy scheduler until
-        # PlanFirst has an equivalent LLM planner.  Do not silently switch
-        # them to ActFirst just because kernel is now the default.
-        and not (mode_name or "").strip().lower().startswith("plan-")
+        # PlanFirst now has an LLM planner for plan-execute.  The other
+        # plan-family modes still belong to the frozen legacy scheduler.
+        and not (
+            (mode_name or "").strip().lower().startswith("plan-")
+            and (mode_name or "").strip().lower() != "plan-execute"
+        )
         and (not external_query or mcp_available)
     )
 
@@ -244,6 +250,7 @@ class RuntimeAdapter:
         catalog_profile: str = "core",
         gateway_context: Any = None,
         mcp_registry: Any = None,
+        strategy_mode: str = "react",
     ) -> None:
         self.workspace = Path(workspace).resolve()
         if not self.workspace.is_dir():
@@ -269,6 +276,7 @@ class RuntimeAdapter:
         self.catalog_profile = catalog_profile
         self.gateway_context = gateway_context
         self.mcp_registry = mcp_registry
+        self.strategy_mode = strategy_mode
 
     def run(
         self,
@@ -278,7 +286,12 @@ class RuntimeAdapter:
         task_id: str | None = None,
         sink: Any = None,
     ) -> HarnessRun:
-        strategy = build_llm_strategy(self.model_config, client=self.client)
+        if self.strategy_mode == "plan-execute":
+            strategy = build_llm_plan_strategy(
+                self.model_config, client=self.client
+            )
+        else:
+            strategy = build_llm_strategy(self.model_config, client=self.client)
         constraints = [
             "runtime:kernel",
             f"model:{self.model_config.model_id}",
@@ -381,6 +394,7 @@ class RuntimeAdapter:
             catalog_profile="core+mcp" if has_mcp else "core",
             gateway_context=gateway_context,
             mcp_registry=mcp_registry if has_mcp else None,
+            strategy_mode=str(getattr(repl.registry, "current_mode", "react")),
         )
 
 
