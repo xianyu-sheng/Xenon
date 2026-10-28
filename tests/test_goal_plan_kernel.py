@@ -204,3 +204,25 @@ def test_goal_command_marks_tampered_chain(tmp_path: Path, monkeypatch) -> None:
     assert "仅供取证" in out
     plan = _cmd_plan(args="status", session_state={"_repl": repl})
     assert "链无效" in plan
+
+
+def test_goal_prefers_raw_user_objective(tmp_path: Path, monkeypatch) -> None:
+    import xenon.repl.kernel_evidence as module
+
+    monkeypatch.setattr(module, "kernel_ledger_dir", lambda: tmp_path)
+    path = tmp_path / "objective.jsonl"
+    ledger = Ledger(path, "objective")
+    ledger.append(
+        EventKind.TASK_STARTED,
+        EventSource.RUNTIME,
+        {
+            "objective": "## transformed prompt ##",
+            "user_objective": "fix the add function",
+            "workspace": str(tmp_path),
+        },
+    )
+    evidence = load_kernel_evidence(path)
+    assert evidence is not None
+    text = "\n".join(goal_lines(evidence))
+    assert "fix the add function" in text
+    assert "transformed prompt" not in text

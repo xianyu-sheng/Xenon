@@ -353,6 +353,30 @@ def test_run_kernel_turn_renders_and_updates_repl(tmp_path: Path) -> None:
     assert repl.agent_context.values["_task_state"] is None
 
 
+def test_run_kernel_turn_records_raw_user_objective(tmp_path: Path) -> None:
+    _repo(tmp_path)
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = FakeRepl(tmp_path, registry)
+    run = run_kernel_turn(
+        repl,
+        objective="## transformed prompt ##",
+        user_input="add a function and test it",
+        model_ids=["test/fake"],
+        execution_policy=SimpleNamespace(level=ExecutionLevel.WRITE),
+        callback=ConsoleCallback(verbose=False),
+        client=FakeClient(_responses()),
+    )
+    assert run is not None
+    started = next(
+        event
+        for event in Ledger(run.ledger_path, run.task_id).read()
+        if event.kind.value == "task_started"
+    )
+    assert started.payload["objective"] == "## transformed prompt ##"
+    assert started.payload["user_objective"] == "add a function and test it"
+
+
 def test_kernel_runtime_requested_reads_env(monkeypatch) -> None:
     import xenon.repl.runtime_adapter as adapter
 

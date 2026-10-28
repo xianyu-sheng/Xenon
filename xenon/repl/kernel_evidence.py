@@ -205,7 +205,8 @@ def goal_lines(evidence: KernelEvidence) -> list[str]:
 
     state = evidence.task_state
     result = evidence.result or {}
-    objective = " ".join(str(state.get("objective") or "").split())
+    raw_objective = state.get("user_objective") or state.get("objective")
+    objective = " ".join(str(raw_objective or "").split())
     lines = [
         f"🎯 Kernel 目标：{objective[:200] if objective else '（无）'}",
         f"🧭 阶段：{state.get('phase', '—')} · "
@@ -248,7 +249,8 @@ def _human_view(evidence: KernelEvidence) -> str:
         f"accepted: {result.get('accepted', '?')} · "
         f"evidence: {result.get('evidence_status', '—')}",
     ]
-    objective = str(state.get("objective") or "").strip()
+    raw_objective = state.get("user_objective") or state.get("objective")
+    objective = str(raw_objective or "").strip()
     if objective:
         lines.append(f"🎯 目标: {objective[:160]}")
     lines.append(f"   {_tool_summary(evidence.evidence)}")

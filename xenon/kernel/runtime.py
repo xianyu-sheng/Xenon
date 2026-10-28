@@ -181,6 +181,7 @@ class LoopRuntime:
             EventSource.RUNTIME,
             {
                 "objective": spec.objective,
+                "user_objective": spec.user_objective,
                 "workspace": spec.workspace,
                 "mode": spec.mode.value,
                 "constraints": list(spec.constraints),

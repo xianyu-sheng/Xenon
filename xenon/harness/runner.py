@@ -37,6 +37,7 @@ class HarnessRun:
 def run_task(
     objective: str,
     *,
+    user_objective: str = "",
     strategy: Strategy,
     workspace: str | Path = ".",
     ledger_dir: str | Path | None = None,
@@ -100,6 +101,7 @@ def run_task(
         task_id=identifier,
         objective=objective,
         workspace=str(root),
+        user_objective=user_objective,
         constraints=tuple(constraints),
         budget=Budget(max_steps=max_steps),
     )

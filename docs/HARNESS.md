@@ -218,3 +218,11 @@ one spec per canonical `server:tool`, then selects a deterministic subset:
 
 A real GitHub MCP run discovered 46 tools, injected 16, and still selected
 `github:search_repositories` correctly.
+
+### Objective vs strategy prompt
+
+A kernel task records both `objective` (the strategy-facing prompt) and
+`user_objective` (the user's own words). The REPL passes the raw turn input as
+`user_objective`; `/goal` and `/evidence` prefer it for display. Older ledgers
+without the field fall back to `objective`, so the projection remains
+backward-compatible. The model still sees only the strategy-facing `objective`.

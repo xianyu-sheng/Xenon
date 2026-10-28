@@ -40,6 +40,7 @@ def project_task_state(events: Sequence[Event]) -> dict[str, Any]:
     state.update(
         {
             "objective": "",
+            "user_objective": "",
             "phase": "created",
             "plan": None,
             "steps": {},
@@ -63,6 +64,9 @@ def project_task_state(events: Sequence[Event]) -> dict[str, Any]:
         payload = event.payload or {}
         if event.kind is EventKind.TASK_STARTED:
             state["objective"] = str(payload.get("objective") or "")
+            state["user_objective"] = str(
+                payload.get("user_objective") or ""
+            )
         elif event.kind is EventKind.STATE_TRANSITION:
             state["phase"] = str(payload.get("to") or state["phase"])
         elif event.kind in (EventKind.PLAN_ACCEPTED, EventKind.PLAN_UPDATED):
