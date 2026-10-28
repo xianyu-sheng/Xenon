@@ -227,6 +227,9 @@ class TaskSpec:
     # #201: push is an explicit user request, never a default finalize action.
     allow_push: bool = False
     schema_version: str = SCHEMA_VERSION
+    # The user's own words, kept separate from the strategy-facing prompt.
+    # Legacy callers may omit it; projections then fall back to ``objective``.
+    user_objective: str = ""
 
 
 # ── catalog and receipts ───────────────────────────────────────────────────

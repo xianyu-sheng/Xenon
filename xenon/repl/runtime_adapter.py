@@ -268,6 +268,7 @@ class RuntimeAdapter:
         self,
         objective: str,
         *,
+        user_objective: str = "",
         task_id: str | None = None,
         sink: Any = None,
     ) -> HarnessRun:
@@ -300,6 +301,7 @@ class RuntimeAdapter:
                 constraints.append("mcp_tools: " + ", ".join(names))
         run = run_task(
             objective,
+            user_objective=user_objective,
             strategy=strategy,
             workspace=self.workspace,
             ledger_dir=self.ledger_dir,
@@ -504,7 +506,6 @@ def run_kernel_turn(
 ) -> HarnessRun | None:
     """Run one REPL task turn through the kernel and render its result."""
 
-    del user_input  # the caller already added the user message to ctx_mgr
     if callback is None:
         callback = repl._make_callback()
     try:
@@ -519,7 +520,7 @@ def run_kernel_turn(
         if callable(start_capture):
             start_capture()
         try:
-            run = adapter.run(objective, sink=sink)
+            run = adapter.run(objective, user_objective=user_input, sink=sink)
         finally:
             stop_capture = getattr(repl, "_stop_log_capture", None)
             if callable(stop_capture):
