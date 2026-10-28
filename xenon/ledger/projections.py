@@ -139,6 +139,15 @@ def project_task_state(events: Sequence[Event]) -> dict[str, Any]:
             debt.pop(obligation_id, None)
         elif event.kind is EventKind.DELIVERED:
             state["delivered"] = dict(payload)
+        elif event.kind is EventKind.DELIVERY_ATTEMPTED:
+            if payload.get("status") == "rolled_back":
+                sha = str(payload.get("commit") or "")
+                if sha:
+                    state["commits"] = [
+                        item
+                        for item in state["commits"]
+                        if item.get("sha") != sha
+                    ]
         elif event.kind is EventKind.FINALIZED:
             state["finalized"] = dict(payload)
 

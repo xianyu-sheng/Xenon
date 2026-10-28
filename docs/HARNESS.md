@@ -226,3 +226,21 @@ A kernel task records both `objective` (the strategy-facing prompt) and
 `user_objective`; `/goal` and `/evidence` prefer it for display. Older ledgers
 without the field fall back to `objective`, so the projection remains
 backward-compatible. The model still sees only the strategy-facing `objective`.
+
+### Delivery transaction
+
+The finalizer is not called blindly at `Finish`. The runtime now:
+
+1. preflights every non-`commit_created` claim, open debt and current verdict;
+2. appends an `AUDIT_REPORTED` event with `scope=preflight`;
+3. appends a `DELIVERY_ATTEMPTED` intent event;
+4. lets the finalizer commit;
+5. appends the finalizer `TOOL_RECEIPT`;
+6. runs the final audit/finalize guard and control decision;
+7. if the decision is not `DELIVER`, rolls back the commit created by this
+   finalizer and records `DELIVERY_ATTEMPTED status=rolled_back`;
+8. if rollback fails, records a `delivery-rollback` debt and blocks.
+
+The commit is still a delivery-layer side effect, not a model tool call. The
+intent event makes the crash window between `git commit` and its receipt
+visible; full crash recovery remains a follow-up.

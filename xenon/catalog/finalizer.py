@@ -161,6 +161,16 @@ class GitFinalizer:
             staged=tuple(staged),
         )
 
+    def rollback(self, commit_sha: str) -> tuple[bool, str]:
+        """Undo a commit created by :meth:`finalize`.
+
+        Returns ``(ok, reason)``.  A failed rollback is a blocking condition;
+        the caller must keep the receipt and expose the residue.
+        """
+
+        error = self._rollback(commit_sha)
+        return (not error, error)
+
     def _reject_and_rollback(
         self, sha: str, reason: str
     ) -> FinalizeOutcome:

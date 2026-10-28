@@ -587,8 +587,10 @@ class LoopRuntime:
         # produce V1 violations, not an implicit "done".  Commit steps wait for
         # the finalizer so the commit is created from verified paths.
         self._close_remaining_steps(skip_commit=self._finalizer is not None)
-        if self._finalizer is not None:
-            self._invoke_finalizer(claims)
+        finalizer_outcome = None
+        if self._finalizer is not None and self._preflight_delivery(claims):
+            self._append_preflight_audit(claims)
+            finalizer_outcome = self._invoke_finalizer(claims)
         self._close_remaining_steps()
         self._sync_debt(self._verdicts)
 
@@ -663,6 +665,11 @@ class LoopRuntime:
                 "obligation_ids": list(decision.obligation_ids),
             },
         )
+
+        if decision.kind is not ControlDecisionKind.DELIVER:
+            rollback_block = self._rollback_delivery(finalizer_outcome)
+            if rollback_block is not None:
+                return rollback_block
 
         if decision.kind is ControlDecisionKind.DELIVER:
             assert self._spec is not None
@@ -743,17 +750,17 @@ class LoopRuntime:
             resolutions=resolutions,
         )
 
-    def _invoke_finalizer(self, claims: Sequence[Claim]) -> None:
+    def _invoke_finalizer(self, claims: Sequence[Claim]) -> Any:
         if self._spec is None or self._finalizer is None:
-            return
+            return None
         if self._spec.mode is TaskMode.CHAT:
-            return
+            return None
         latest = _latest_verdict_map(self._verdicts)
         if self._debt or any(
             item.status is not VerdictStatus.SATISFIED
             for item in latest.values()
         ):
-            return
+            return None
         existing = self._last_commit_sha()
         # Do not create a commit for a model claim that is already false.
         # A COMMIT_CREATED claim is the one claim the finalizer itself can
@@ -766,10 +773,20 @@ class LoopRuntime:
                 continue
             resolution = self._controller.resolve(claim, self._readonly)
             if resolution.status is not ResolutionStatus.BOUND:
-                return
+                return None
         verified = self._verified_paths()
         if not verified and not existing:
-            return
+            return None
+        self._append(
+            EventKind.DELIVERY_ATTEMPTED,
+            EventSource.RUNTIME,
+            {
+                "status": "intent",
+                "verified_paths": list(verified),
+                "existing_commit": existing,
+                "claims": [item.id for item in claims],
+            },
+        )
         try:
             outcome = self._finalizer.finalize(
                 verified_paths=verified,
@@ -786,7 +803,7 @@ class LoopRuntime:
             )
             self._verdicts.append(verdict)
             self._sync_debt((verdict,))
-            return
+            return None
         if not outcome.accepted:
             verdict = Verdict(
                 obligation_id="finalizer",
@@ -796,7 +813,7 @@ class LoopRuntime:
             )
             self._verdicts.append(verdict)
             self._sync_debt((verdict,))
-            return
+            return outcome
         if outcome.created and outcome.commit_sha:
             files = tuple(outcome.files)
             receipt = ToolReceipt(
@@ -816,6 +833,97 @@ class LoopRuntime:
                 receipt_event_payload(receipt),
                 step_id=self._current_step_id(),
             )
+        return outcome
+
+    def _rollback_delivery(self, outcome: Any) -> TaskResult | None:
+        if outcome is None:
+            return None
+        if not getattr(outcome, "created", False):
+            return None
+        sha = str(getattr(outcome, "commit_sha", "") or "")
+        if not sha:
+            return None
+        rollback = getattr(self._finalizer, "rollback", None)
+        if not callable(rollback):
+            return self._delivery_rollback_failed(
+                sha, "finalizer does not expose rollback"
+            )
+        try:
+            ok, reason = rollback(sha)
+        except Exception as exc:  # noqa: BLE001 — rollback failure is blocking
+            return self._delivery_rollback_failed(
+                sha, f"rollback raised: {exc}"
+            )
+        self._append(
+            EventKind.DELIVERY_ATTEMPTED,
+            EventSource.RUNTIME,
+            {
+                "status": "rolled_back" if ok else "rollback_failed",
+                "commit": sha,
+                "reason": reason,
+            },
+        )
+        if ok:
+            return None
+        return self._delivery_rollback_failed(sha, reason or "rollback failed")
+
+    def _delivery_rollback_failed(
+        self, sha: str, reason: str
+    ) -> TaskResult:
+        verdict = Verdict(
+            obligation_id="delivery-rollback",
+            stage=VerificationStage.V2,
+            status=VerdictStatus.VIOLATED,
+            reason=f"commit {sha} could not be rolled back: {reason}",
+        )
+        self._verdicts.append(verdict)
+        self._sync_debt((verdict,))
+        self._transition(TaskPhase.BLOCKED, verdict.reason)
+        return self._result(
+            accepted=False,
+            evidence=EvidenceStatus.UNVERIFIED,
+        )
+
+    def _preflight_delivery(self, claims: Sequence[Claim]) -> bool:
+        """Check everything that can be decided before the delivery commit.
+
+        ``COMMIT_CREATED`` is deferred: the finalizer is the only component
+        that can create that fact.  Every other claim, all open debt and every
+        current verdict must already be settled.
+        """
+
+        if self._spec is None or self._finalizer is None:
+            return False
+        if self._spec.mode is TaskMode.CHAT:
+            return False
+        latest = _latest_verdict_map(self._verdicts)
+        if self._debt or any(
+            item.status is not VerdictStatus.SATISFIED
+            for item in latest.values()
+        ):
+            return False
+        existing = self._last_commit_sha()
+        for claim in claims:
+            if claim.kind is PropositionKind.COMMIT_CREATED and not existing:
+                continue
+            resolution = self._controller.resolve(claim, self._readonly)
+            if resolution.status is not ResolutionStatus.BOUND:
+                return False
+        return True
+
+    def _append_preflight_audit(self, claims: Sequence[Claim]) -> None:
+        self._append(
+            EventKind.AUDIT_REPORTED,
+            EventSource.GATE,
+            {
+                "scope": "preflight",
+                "claims": [_claim_payload(item) for item in claims],
+                "verdicts": [
+                    _verdict_payload(item) for item in self._verdicts
+                ],
+                "debt": [item.obligation.id for item in self._debt],
+            },
+        )
 
     def _run_finalize(self) -> FinalizeDecision:
         assert self._spec is not None
