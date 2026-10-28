@@ -84,16 +84,17 @@ Example plan shape:
 Keep the ledger directory outside the workspace. The finalizer treats unknown
 worktree paths as unverified and will reject the run, which is intentional.
 
-## Interactive REPL (opt-in kernel runtime)
+## Interactive REPL (kernel default; legacy freeze)
 
-For one release the REPL keeps both paths:
+Tool-requiring turns use the kernel by default.  For one release the legacy
+host is available only as an explicit frozen fallback:
 
 ```bash
-# legacy engine host (default)
+# kernel default
 xenon
 
-# task turns enter the kernel runtime
-XENON_RUNTIME=kernel xenon
+# frozen legacy fallback (removal target: #202)
+XENON_RUNTIME=legacy xenon
 ```
 
 Only turns that require tools and are not a skill, plan-mode turn, pending
@@ -116,8 +117,8 @@ The REPL adapter:
   back to `ContextManager` and the turn tree.
 
 If the kernel blocks a turn, the REPL prints the open obligations and the
-ledger path. `XENON_RUNTIME` is a migration flag, not a second permanent
-runtime; it will be removed after parity (#202).
+ledger path. `XENON_RUNTIME=legacy` is a frozen fallback, not a second
+permanent runtime; it will be removed after parity (#202).
 
 ## Approval and scoped grants
 
@@ -125,7 +126,7 @@ The kernel can produce a `require_approval` policy decision, but it never
 prompts by itself. Approval is only active when an `ApprovalProvider` is
 injected:
 
-- REPL `XENON_RUNTIME=kernel` bridges the decision to the existing
+- the kernel-default REPL bridges the decision to the existing
   `_confirm_tool`/approval panel for `EXECUTE` turns;
 - an approval is converted into a **one-shot `ScopedGrant`** for the exact
   command/target and is revoked after the gateway call;

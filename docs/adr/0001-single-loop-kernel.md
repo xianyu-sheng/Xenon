@@ -214,8 +214,9 @@ answer was verified.
 Strangler, not big bang:
 
 1. New packages land beside the old engine (`kernel/`, `catalog/`, `ledger/`).
-2. `XENON_RUNTIME=kernel` selects the new runtime; legacy remains default until
-   parity.
+2. `XENON_RUNTIME=kernel` selected the new runtime during migration; as of #202
+   stage 1, kernel is the default for tool turns and `legacy` is the frozen
+   opt-out.
 3. Contract tests, replay, benchmark and real TTY tasks must pass on the kernel.
 4. Flip the default; keep legacy for one release.
 5. #202 deletes legacy engines, prompts, gates and vocabularies.

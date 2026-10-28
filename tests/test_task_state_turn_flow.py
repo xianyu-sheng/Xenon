@@ -43,6 +43,8 @@ def _repl(monkeypatch) -> tuple[REPL, list[str]]:
 
 
 def test_issue_task_creates_state_and_continue_restores_it(monkeypatch):
+    # #202 stage 1: this covers the frozen legacy turn pipeline.
+    monkeypatch.setenv("XENON_RUNTIME", "legacy")
     repl, captured = _repl(monkeypatch)
 
     repl._handle_chat("实现 #22")
