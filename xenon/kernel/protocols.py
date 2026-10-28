@@ -10,10 +10,12 @@ from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 from xenon.kernel.contracts import (
     Action,
+    AuditProposal,
     Claim,
     ControlDecision,
     Debt,
     ModelView,
+    Obligation,
     PolicyDecision,
     Resolution,
     StepContract,
@@ -62,6 +64,19 @@ class ApprovalProvider(Protocol):
     def request(
         self, view: ModelView, action: Action, decision: PolicyDecision
     ) -> bool: ...
+
+
+@runtime_checkable
+class AuditProposalProvider(Protocol):
+    """LLM/front-end bridge that only proposes V2 coverage or gaps.
+
+    Implementations must never emit pass/fail verdicts.  Returning ``None``
+    means "no proposal"; the deterministic binder is still authoritative.
+    """
+
+    def propose(
+        self, obligations: Sequence[Obligation], ledger: Any
+    ) -> AuditProposal | None: ...
 
 
 @runtime_checkable

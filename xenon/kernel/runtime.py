@@ -17,6 +17,7 @@ from xenon.kernel.contracts import (
     Abort,
     Action,
     AskUser,
+    AuditProposal,
     BindingStatus,
     CallTool,
     Claim,
@@ -55,6 +56,7 @@ from xenon.kernel.finalize import FinalizeDecision, FinalizeGuard
 from xenon.kernel.phases import assert_transition
 from xenon.kernel.protocols import (
     ApprovalProvider,
+    AuditProposalProvider,
     EventSink,
     Finalizer,
     Ledger,
@@ -117,6 +119,7 @@ class LoopRuntime:
         finalizer: Finalizer | None = None,
         approval: ApprovalProvider | None = None,
         audit: AuditCoordinator | None = None,
+        audit_provider: AuditProposalProvider | None = None,
     ) -> None:
         self._catalog = catalog
         self._gateway = gateway
@@ -129,6 +132,8 @@ class LoopRuntime:
         self._finalizer = finalizer
         self._approval = approval
         self._audit = audit or AuditCoordinator()
+        self._audit_provider = audit_provider
+        self._audit_rounds = 0
         self._approved_grants: list[Any] = []
         self._services = _RuntimeServices(self)
 
@@ -171,6 +176,7 @@ class LoopRuntime:
         self._replans = 0
         self._finalize_decision = None
         self._run_start_seq = 0
+        self._audit_rounds = 0
         self._revoke_grants()
         self._plan = None
         self._plan_steps = ()
@@ -578,6 +584,13 @@ class LoopRuntime:
         return tuple(sorted(paths))
 
     def _finish(self, action: Finish) -> TaskResult | None:
+        if self._spec is not None and (
+            self._audit_rounds >= self._max_audit_rounds()
+        ):
+            return self._budget_block(
+                "audit budget exhausted", ("audit",)
+            )
+        self._audit_rounds += 1
         claims = tuple(self._baseline_claim(item) for item in action.claims)
         for claim in claims:
             self._append(
@@ -591,8 +604,13 @@ class LoopRuntime:
         # the finalizer so the commit is created from verified paths.
         self._close_remaining_steps(skip_commit=self._finalizer is not None)
         self._sync_debt(self._verdicts)
+        obligations = self._audit_obligations()
+        proposal = self._collect_audit_proposal(obligations)
         preflight_audit = self._audit.audit(
-            self._audit_obligations(), self._readonly, defer_commit=True
+            obligations,
+            self._readonly,
+            proposal=proposal,
+            defer_commit=True,
         )
         self._append_audit_report(preflight_audit, claims, scope="preflight")
         self._verdicts.extend(preflight_audit.verdicts)
@@ -650,7 +668,7 @@ class LoopRuntime:
 
         self._sync_debt(self._verdicts)
         final_audit = self._audit.audit(
-            self._audit_obligations(), self._readonly
+            self._audit_obligations(), self._readonly, proposal=proposal
         )
         self._verdicts.extend(final_audit.verdicts)
         self._sync_debt(final_audit.verdicts)
@@ -929,6 +947,54 @@ class LoopRuntime:
                 return False
         return True
 
+    def _collect_audit_proposal(
+        self, obligations: Sequence[Obligation]
+    ) -> AuditProposal | None:
+        if self._audit_provider is None or not obligations:
+            return None
+        try:
+            proposal = self._audit_provider.propose(
+                tuple(obligations), self._readonly
+            )
+        except Exception as exc:  # noqa: BLE001 — proposal failure is not a pass
+            self._append(
+                EventKind.AUDIT_PROPOSED,
+                EventSource.LLM,
+                {"status": "error", "reason": str(exc)},
+            )
+            return None
+        if proposal is None:
+            return None
+        if not isinstance(proposal, AuditProposal):
+            self._append(
+                EventKind.AUDIT_PROPOSED,
+                EventSource.LLM,
+                {
+                    "status": "error",
+                    "reason": "provider returned a non-AuditProposal value",
+                },
+            )
+            return None
+        self._append(
+            EventKind.AUDIT_PROPOSED,
+            EventSource.LLM,
+            {
+                "status": "proposed",
+                "coverage": [
+                    {
+                        "obligation_id": item.obligation_id,
+                        "artifact_paths": list(item.artifact_paths),
+                        "test_targets": list(item.test_targets),
+                        "rationale": item.rationale,
+                    }
+                    for item in proposal.coverage
+                ],
+                "gaps": _gaps_payload(proposal.gaps),
+                "rationale": proposal.rationale,
+            },
+        )
+        return proposal
+
     def _append_audit_report(
         self, report: Any, claims: Sequence[Claim], *, scope: str
     ) -> None:
@@ -1159,6 +1225,7 @@ class LoopRuntime:
                 "events": float(self._ledger.watermark()),
                 "repair_attempts": float(sum(self._repair_attempts.values())),
                 "replans": float(self._replans),
+                "audit_rounds": float(self._audit_rounds),
             },
         )
 
@@ -1205,6 +1272,11 @@ class LoopRuntime:
         if self._spec is None:
             return 0
         return self._spec.budget.max_replans
+
+    def _max_audit_rounds(self) -> int:
+        if self._spec is None:
+            return 0
+        return max(0, self._spec.budget.max_audit_rounds)
 
     def _budget_block(
         self, reason: str, scope: Sequence[str] = ()
