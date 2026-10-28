@@ -17,6 +17,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import yaml
 
+from xenon.harness.plan import PlanError, parse_plan
 from xenon.kernel.contracts import (
     Abort,
     Action,
@@ -27,11 +28,12 @@ from xenon.kernel.contracts import (
     ClaimSource,
     Finish,
     ModelView,
+    PlanProposal,
     PropositionKind,
     Think,
     ToolIntent,
 )
-from xenon.kernel.strategies import ActFirst
+from xenon.kernel.strategies import ActFirst, PlanFirst
 from xenon.utils.llm_client import chat_completion
 
 
@@ -56,6 +58,35 @@ class ModelConfig:
 _DEFAULT_MAX_TOKENS = 8192
 _DEFAULT_MODELS_PATH = Path.home() / ".xenon" / "models.yaml"
 _DEFAULT_CREDENTIALS_PATH = Path.home() / ".xenon" / "credentials.yaml"
+
+_PLAN_PROTOCOL = """\
+PlanFirst planning protocol (overrides the generic protocol above):
+Return exactly one JSON object, with no markdown fence and no prose outside it.
+The object is a capability-based plan:
+{
+  "analysis": "short rationale",
+  "steps": [
+    {
+      "id": 1,
+      "kind": "inspect",
+      "capability": "read",
+      "params": {"file_path": "path"},
+      "targets": ["path"],
+      "expects": [],
+      "depends_on": []
+    }
+  ]
+}
+
+Rules:
+- Steps use capabilities, never concrete tool names.
+- Step ids are unique integers; depends_on refers to earlier ids.
+- Use expects only for claims a deterministic receipt can prove; otherwise leave
+  them empty and let V2 audit report the gap.
+- Do not name a commit or push step; the finalizer owns delivery commits.
+- Do not include prose outside the JSON object.
+"""
+
 
 _ACTION_PROTOCOL = """\
 ActFirst action protocol (overrides the generic protocol above):
@@ -416,6 +447,26 @@ def build_messages(view: ModelView) -> list[dict[str, str]]:
     ]
 
 
+def _call_model(
+    config: ModelConfig,
+    client: Callable[..., str] | None,
+    messages: list[dict[str, str]],
+) -> str:
+    caller = client or chat_completion
+    kwargs: dict[str, Any] = {
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+    }
+    if config.base_url:
+        kwargs["base_url"] = config.base_url
+    if config.reasoning_effort:
+        kwargs["reasoning_effort"] = config.reasoning_effort
+    if config.api_key:
+        provider = config.model_id.split("/", 1)[0].lower()
+        kwargs["credentials"] = {provider: config.api_key}
+    return caller(config.model_id, messages, **kwargs)
+
+
 class LLMActionProposer:
     """Call a model once per runtime turn and parse one capability action."""
 
@@ -429,19 +480,7 @@ class LLMActionProposer:
         self._client = client
 
     def _call(self, messages: list[dict[str, str]]) -> str:
-        client = self._client or chat_completion
-        kwargs: dict[str, Any] = {
-            "max_tokens": self.config.max_tokens,
-            "temperature": self.config.temperature,
-        }
-        if self.config.base_url:
-            kwargs["base_url"] = self.config.base_url
-        if self.config.reasoning_effort:
-            kwargs["reasoning_effort"] = self.config.reasoning_effort
-        if self.config.api_key:
-            provider = self.config.model_id.split("/", 1)[0].lower()
-            kwargs["credentials"] = {provider: self.config.api_key}
-        return client(self.config.model_id, messages, **kwargs)
+        return _call_model(self.config, self._client, messages)
 
     def __call__(self, view: ModelView) -> Action:
         try:
@@ -456,6 +495,62 @@ class LLMActionProposer:
             )
 
 
+def build_plan_messages(view: ModelView) -> list[dict[str, str]]:
+    state = {
+        "objective": view.task.objective,
+        "workspace": view.task.workspace,
+        "constraints": list(view.task.constraints),
+        "available_tools": list(view.tools),
+        "debt": [
+            {"id": item.obligation.id, "reason": item.reason}
+            for item in view.debt
+        ],
+    }
+    return [
+        {"role": "system", "content": view.system + "\\n" + _PLAN_PROTOCOL},
+        {
+            "role": "user",
+            "content": (
+                "Current deterministic state (ledger prefix, not chat memory):\\n"
+                + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+                + "\\nReturn exactly one JSON plan."
+            ),
+        },
+    ]
+
+
+class LLMPlanProposer:
+    """Call a model once to propose a capability plan; never execute it."""
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        client: Callable[..., str] | None = None,
+    ) -> None:
+        self.config = config
+        self._client = client
+
+    def __call__(self, view: ModelView) -> PlanProposal:
+        try:
+            payload = _extract_json(
+                _call_model(self.config, self._client, build_plan_messages(view))
+            )
+            if "plan" in payload:
+                payload = payload["plan"]
+            if not isinstance(payload, Mapping):
+                raise PlanError("plan must be an object")
+            data = dict(payload)
+            data.setdefault("objective", view.task.objective)
+            return parse_plan(data).proposal
+        except (ActionParseError, PlanError, TypeError, ValueError) as exc:
+            # Fail closed: an invalid plan must not silently turn into ActFirst.
+            return PlanProposal(
+                steps=(),
+                analysis=f"invalid plan proposal: {str(exc)[:300]}",
+            )
+
+
 def build_llm_strategy(
     config: ModelConfig,
     *,
@@ -464,13 +559,24 @@ def build_llm_strategy(
     return ActFirst(LLMActionProposer(config, client=client))
 
 
+def build_llm_plan_strategy(
+    config: ModelConfig,
+    *,
+    client: Callable[..., str] | None = None,
+) -> PlanFirst:
+    return PlanFirst(LLMPlanProposer(config, client=client))
+
+
 __all__ = [
     "ActionParseError",
     "LLMActionProposer",
+    "LLMPlanProposer",
     "ModelConfig",
     "ModelConfigError",
+    "build_llm_plan_strategy",
     "build_llm_strategy",
     "build_messages",
+    "build_plan_messages",
     "parse_action",
     "resolve_model_config",
 ]

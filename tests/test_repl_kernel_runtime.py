@@ -174,7 +174,7 @@ def test_routing_and_permission_mapping() -> None:
         recipe=None,
         mode_name="react",
     )
-    assert not should_route_to_kernel(
+    assert should_route_to_kernel(
         runtime_mode="kernel",
         requires_tools=True,
         skill_name=None,
@@ -182,6 +182,15 @@ def test_routing_and_permission_mapping() -> None:
         pending=None,
         recipe=None,
         mode_name="plan-execute",
+    )
+    assert not should_route_to_kernel(
+        runtime_mode="kernel",
+        requires_tools=True,
+        skill_name=None,
+        plan_mode=False,
+        pending=None,
+        recipe=None,
+        mode_name="plan-react",
     )
     assert not should_route_to_kernel(
         runtime_mode="kernel",
@@ -810,3 +819,25 @@ def test_runtime_adapter_mcp_allowlist_overrides_selection(
     assert "weather:forecast" in constraints
     assert "github:search_repositories" not in constraints
     assert registry.calls == [("weather:forecast", {"city": "Shanghai"})]
+
+
+def test_runtime_adapter_runs_plan_execute_with_llm_planner(
+    tmp_path: Path,
+) -> None:
+    _repo(tmp_path)
+    client = FakeClient([json.dumps(_plan_dict())])
+    adapter = RuntimeAdapter(
+        workspace=tmp_path,
+        model_config=ModelConfig(model_id="test/fake"),
+        ledger_dir=tmp_path.parent / f"{tmp_path.name}-adapter-ledger",
+        finalize=True,
+        client=client,
+        strategy_mode="plan-execute",
+    )
+    run = adapter.run("add a function and test it", task_id="adapter-plan")
+
+    assert run.result.accepted is True, run.result.debt
+    assert run.result.finalize_sha
+    events = Ledger(run.ledger_path, "adapter-plan").read()
+    assert any(event.kind.value == "plan_accepted" for event in events)
+    assert any(event.kind.value == "tool_receipt" for event in events)

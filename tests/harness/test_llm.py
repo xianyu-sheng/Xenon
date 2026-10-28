@@ -15,8 +15,10 @@ from xenon.harness.llm import (
     LLMActionProposer,
     ModelConfig,
     ModelConfigError,
+    build_llm_plan_strategy,
     build_llm_strategy,
     build_messages,
+    build_plan_messages,
     parse_action,
     resolve_model_config,
 )
@@ -471,3 +473,63 @@ def test_run_task_approval_allows_shell_once(tmp_path: Path) -> None:
     events = Ledger(run.ledger_path, "approval-shell").read()
     assert any(event.kind.value == "user_approval" for event in events)
     assert any(event.kind.value == "tool_receipt" for event in events)
+
+
+def test_llm_plan_strategy_executes_a_capability_plan(tmp_path: Path) -> None:
+    _repo(tmp_path)
+    client = FakeClient([json.dumps(_plan_dict())])
+    run = run_task(
+        "add a function and test it",
+        strategy=build_llm_plan_strategy(
+            ModelConfig(model_id="test/fake"), client=client
+        ),
+        workspace=tmp_path,
+        ledger_dir=tmp_path.parent / f"{tmp_path.name}-ledger",
+        task_id="plan-llm-1",
+        finalize=True,
+    )
+
+    assert run.result.accepted is True, run.result.debt
+    assert run.result.finalize_sha
+    assert len(client.calls) == 1
+    events = Ledger(run.ledger_path, "plan-llm-1").read()
+    assert any(event.kind.value == "plan_accepted" for event in events)
+    assert any(event.kind.value == "tool_receipt" for event in events)
+
+
+def test_llm_plan_invalid_json_fails_closed(tmp_path: Path) -> None:
+    _repo(tmp_path)
+    client = FakeClient(['{"steps":[]}'])
+    run = run_task(
+        "add a function and test it",
+        strategy=build_llm_plan_strategy(
+            ModelConfig(model_id="test/fake"), client=client
+        ),
+        workspace=tmp_path,
+        ledger_dir=tmp_path.parent / f"{tmp_path.name}-ledger",
+        task_id="plan-llm-bad",
+        finalize=False,
+    )
+
+    assert run.result.accepted is False
+    events = Ledger(run.ledger_path, "plan-llm-bad").read()
+    assert not any(event.kind.value == "step_started" for event in events)
+    assert not any(event.kind.value == "tool_receipt" for event in events)
+
+
+def test_build_plan_messages_includes_schema() -> None:
+    spec = TaskSpec(task_id="t", objective="fix it", workspace="/workspace")
+    view = ModelView(
+        task=spec,
+        system="RUNTIME SYSTEM",
+        tools=(),
+        working_set=(),
+        debt=(),
+        budget=spec.budget,
+        input_seq=0,
+        hash="h",
+    )
+    messages = build_plan_messages(view)
+    assert "RUNTIME SYSTEM" in messages[0]["content"]
+    assert "capability-based plan" in messages[0]["content"]
+    assert "fix it" in messages[1]["content"]
