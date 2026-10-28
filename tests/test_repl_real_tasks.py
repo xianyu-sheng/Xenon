@@ -319,6 +319,9 @@ class TestFilePathTriggers:
 
     @pytest.mark.parametrize("text", FILE_CASES)
     def test_file_path_routes_to_react(self, text, monkeypatch):
+        # #202 stage 1: kernel is the default; this legacy regression test
+        # keeps the frozen legacy fallback explicit.
+        monkeypatch.setenv("XENON_RUNTIME", "legacy")
         seen_in_engine: list[str] = []
 
         def responder(ctx):
@@ -348,6 +351,8 @@ class TestGitTriggers:
 
     @pytest.mark.parametrize("text", GIT_CASES)
     def test_git_routes_to_react(self, text, monkeypatch):
+        # #202 stage 1: legacy fallback is explicit.
+        monkeypatch.setenv("XENON_RUNTIME", "legacy")
         seen_in_engine: list[str] = []
 
         def responder(ctx):

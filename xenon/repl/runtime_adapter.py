@@ -1,10 +1,10 @@
-"""Opt-in kernel runtime adapter for the interactive REPL (#202 first slice).
+"""Kernel runtime adapter for the interactive REPL (#202 stage 1).
 
-This is deliberately a dual-track migration, not a demolition: the legacy
-engine host remains the default until kernel parity is demonstrated.  When
-``XENON_RUNTIME=kernel`` and the turn requires tools, the REPL builds a
-TaskSpec, runs the kernel, projects events into the existing ConsoleCallback,
-and writes the assistant result back into the REPL's context/turn tree.
+The kernel is the default entry for tool turns.  ``XENON_RUNTIME=legacy`` is a
+frozen fallback until demolition; it is not the product default.  The REPL
+builds a TaskSpec, runs the kernel, projects events into the existing
+ConsoleCallback, and writes the assistant result back into the REPL's context
+and turn tree.
 """
 
 from __future__ import annotations
@@ -37,7 +37,8 @@ class KernelAdapterError(RuntimeError):
 
 
 def kernel_runtime_requested() -> bool:
-    return os.environ.get(KERNEL_RUNTIME_ENV, "").strip().lower() == "kernel"
+    # #202 stage 1: kernel is the default; ``legacy`` is the temporary opt-out.
+    return os.environ.get(KERNEL_RUNTIME_ENV, "").strip().lower() != "legacy"
 
 
 def _mcp_tool_limit() -> int:

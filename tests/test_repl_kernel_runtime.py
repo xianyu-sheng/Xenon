@@ -140,6 +140,14 @@ def test_repl_reads_kernel_runtime_env(monkeypatch) -> None:
     assert repl._runtime_mode == "kernel"
 
 
+def test_repl_defaults_to_kernel(monkeypatch) -> None:
+    from xenon.repl.repl import REPL
+
+    monkeypatch.delenv("XENON_RUNTIME", raising=False)
+    repl = REPL(streaming=False)
+    assert repl._runtime_mode == "kernel"
+
+
 def test_routing_and_permission_mapping() -> None:
     assert should_route_to_kernel(
         runtime_mode="kernel",
@@ -380,6 +388,8 @@ def test_run_kernel_turn_records_raw_user_objective(tmp_path: Path) -> None:
 def test_kernel_runtime_requested_reads_env(monkeypatch) -> None:
     import xenon.repl.runtime_adapter as adapter
 
+    monkeypatch.delenv("XENON_RUNTIME", raising=False)
+    assert adapter.kernel_runtime_requested()
     monkeypatch.setenv("XENON_RUNTIME", "KERNEL")
     assert adapter.kernel_runtime_requested()
     monkeypatch.setenv("XENON_RUNTIME", "legacy")

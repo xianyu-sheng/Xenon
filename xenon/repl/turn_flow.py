@@ -523,7 +523,7 @@ class TurnFlowMixin:
         self.agent_context.set_conversation_messages(self.ctx_mgr.get_messages())
 
         # Decide the execution path before the legacy mode selector runs.
-        # Otherwise XENON_RUNTIME=kernel still prints a plan-react recommendation
+        # Decide before the legacy mode selector can print a recommendation
         # that has no effect on the kernel turn.
         from xenon.repl.runtime_adapter import should_route_to_kernel
         from xenon.repl.turn_helpers import _looks_like_external_query

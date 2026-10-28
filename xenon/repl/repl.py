@@ -163,9 +163,10 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         self.streaming = streaming
         self.optimize_prompts = optimize_prompts
         self.verbose = verbose
-        # Dual-track migration (#202/#224).  Legacy remains the default for
-        # one release; ``XENON_RUNTIME=kernel`` routes tool turns to the kernel.
-        self._runtime_mode = os.environ.get("XENON_RUNTIME", "").strip().lower()
+        # #202 stage 1: kernel is the default entry for tool turns.  The
+        # legacy escape hatch is frozen for one release only.
+        configured = os.environ.get("XENON_RUNTIME", "").strip().lower()
+        self._runtime_mode = "legacy" if configured == "legacy" else "kernel"
         self._last_kernel_ledger: Path | None = None
         self._last_kernel_task_id: str = ""
 
