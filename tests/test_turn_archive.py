@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from xenon.engine.callbacks import ThinkingPanel
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.repl import REPL
 from xenon.session.archive import build_turn_archives, render_archive_block
@@ -127,6 +128,19 @@ def _make_repl(tmp_path, monkeypatch) -> REPL:
     registry = ModelRegistry()
     registry.add_model("openai/test", "test")
     return REPL(registry=registry, streaming=False)
+
+
+def test_kernel_apply_patch_updates_session_modified_files(monkeypatch, tmp_path):
+    repl = _make_repl(tmp_path, monkeypatch)
+    target = str(tmp_path / "pkg" / "a.py")
+    panel = ThinkingPanel()
+    panel.add_action("apply_patch", {"file_paths": [target]})
+    panel.add_observation("ok")
+
+    repl._track_session_files(panel)
+
+    memory = repl.ctx_mgr.get_working_memory()
+    assert target in memory["session_modified_files"]
 
 
 def test_auto_compact_feeds_deterministic_archives(monkeypatch, tmp_path):
