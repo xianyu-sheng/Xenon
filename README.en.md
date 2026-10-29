@@ -11,246 +11,151 @@
   <img src="docs/logo-animated.gif" alt="Xenon — a pixel runner sprints along the middle line and dissolves into the blocky XENON wordmark" width="440">
 </p>
 
-<h3 align="center">A terminal AI coding agent that shows you exactly how much was actually verified</h3>
+<h3 align="center">One loop. One ledger. One replayable truth.</h3>
 
-<p align="center">Other agents say "done" and you take their word for it.<br/>Xenon splits the result in two: what the machine confirmed, and what you should check yourself.</p>
-
-<p align="center"><b>SWE-bench Lite, 30-case subset, blind</b> (single <code>react</code> engine · benchmark budget 120 steps · official harness · mean of 3): <b>62.2%</b> on the frozen 30 · <b>52.2%</b> on the zero-overlap held-out set · <a href="#benchmark">protocol and every run</a></p>
+<p align="center">The model proposes; it cannot turn an unverified effect into a delivery.<br/>Xenon records every tool call as a typed receipt, binds every claim to a fact, and makes unverifiable work explicit debt or abstention.</p>
 
 <p align="center">
-  <a href="docs/GUIDE.md">Docs</a> ·
+  <b>SWE-bench Lite (blind)</b>: <b>62.2%</b> frozen 30 · <b>52.2%</b> zero-overlap held-out · <b>4,000+</b> tests · <b>Python 3.10–3.12</b>
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick start</a> ·
-  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="#kernel-architecture">Architecture</a> ·
+  <a href="#evidence-and-failure-semantics">Evidence</a> ·
+  <a href="#benchmark">Benchmark</a> ·
+  <a href="docs/GUIDE.md">Docs</a> ·
   <a href="https://github.com/xianyu-sheng/Xenon/issues">Issues</a> ·
-  <a href="https://github.com/xianyu-sheng/Xenon/releases">Releases</a> ·
   <a href="README.md">简体中文</a>
 </p>
 
 > [!TIP]
-> **The machine owns the process; semantic judgement stays with you.** Tool calls enter the execution ledger (L0); `/evidence` currently shows the session audit chain, while the unified claim/plan/delivery execution view is still converging (#177). There is exactly one blocking structural check at turn level (L1); semantic doubts never block delivery — they ship as a manual-verification checklist next to the answer (L2).
-
-<p align="center">
-  <img src="docs/hero-terminal.en.svg" alt="Xenon terminal: what the machine confirmed in one delivery, and the two items it could not verify" width="860">
-</p>
+> **The model proposes; the harness proves.** Xenon does not use an LLM judge or seven isomorphic engines. It keeps one `LoopRuntime`: the model emits capability actions, the catalog binds tools, the gateway returns receipts, the controller decides repair/debt, and the finalizer owns delivery commits.
 
 ## Quick start
 
 ```bash
-# Install from GitHub Releases (no PyPI required)
-pip install https://github.com/xianyu-sheng/Xenon/releases/download/v0.9.4/xenon_harness-0.9.4-py3-none-any.whl
-
-xenon   # first run walks you through setup (API key, model, engine)
+pip install https://github.com/xianyu-sheng/Xenon/releases/download/v0.9.5/xenon_harness-0.9.5-py3-none-any.whl
+xenon
 ```
 
-> **Windows:** if you get `'xenon' is not recognized`, add the Scripts path pip printed to `PATH`, or use `python -m xenon` (available in release artifacts since v0.9.4). Mixing conda with a standalone Python? Use a dedicated venv: `python -m venv .venv`.
+Windows: add pip's Scripts directory to `PATH`, or use `python -m xenon`.
 
-More install options (source / uv / pipx) are in [Install](#install).
+## Kernel architecture
+
+```text
+TaskSpec
+  → LoopRuntime (single writer, explicit phase machine)
+      view      = Projection(ledger[0..seq], catalog, spec)
+      action    = Strategy.propose(view)        # model proposal only
+      decision  = Policy.check(view, action)    # deterministic veto / approval
+      receipt   = Gateway.execute(action)       # only side-effect entrance
+      verdict   = Controller.reconcile(...)     # V0 / V1 / V2
+      event     = Runtime.append(...)           # only durable write
+  → Finalizer (stage verified paths, create delivery commit)
+```
+
+### Seven invariants
+
+- **I1 single writer**: only `LoopRuntime` appends ledger events.
+- **I2 single entrance**: tool effects go through `ToolGateway`; delivery commits belong to `Finalizer`.
+- **I3 single source of truth**: the ledger is the only truth; everything else is a read-only projection with `input_seq`.
+- **I4 semantic interface**: the kernel sees capabilities / obligations / receipts; tool names live only in the catalog.
+- **I5 proposal/fact separation**: LLM output is `claim-*` / `hyp-*`; only a binder produces `fact-*`.
+- **I6 single decision authority**: `VerificationController` decides repair / replan / abstain / abort.
+- **I7 replayable**: the same ledger prefix produces byte-identical projections with zero network access.
+
+## A turn
+
+```text
+input
+  → TaskSpec (objective / obligations / budget / permission)
+  → model proposal (think / call_tool / submit_plan / update_plan / finish / abort)
+  → Catalog: capability → ToolSpec → ToolCall
+  → Policy: allow / veto / require_approval
+  → Gateway: seven-stage ToolExecutor → typed ToolReceipt
+  → Controller: V0 receipt invariants / V1 step postconditions / V2 coverage
+      bound       → continue
+      unresolved  → debt / repair / replan
+      ambiguous   → abstain, never guess
+      abstained   → ask the user or keep debt
+  → Finalizer: preflight audit → intent → commit → receipt → final decision
+      non-deliver → roll back this run's commit
+  → Projection: /evidence /goal /resume /plan read the same ledger
+```
+
+## Tools and MCP
+
+- `ToolCatalog` exposes **seven capabilities**: `read / search / edit / verify / vcs / shell / remote`.
+- MCP uses **per-tool ToolSpecs**; the model gets a deterministic budgeted subset, not every tool.
+- Unknown tools stay `unresolved`; approval is the remote-call boundary and one-shot grants expire.
+- `git push` remains vetoed until an explicit `TaskSpec.allow_push` gate.
+
+## Evidence and failure semantics
+
+| Tier | Check | Authority |
+|---|---|---|
+| **V0** | exit code, no-op write, target, real test target, commit sha, worktree delta | controller |
+| **V1** | whether a step's `expects` were closed by facts | controller |
+| **V2** | global obligation coverage, negative facts, semantic gaps | deterministic binder + user abstention |
+
+- Zero matches are `unresolved`; multiple matches are `ambiguous`; neither silently picks a fact.
+- Unverifiable semantic requirements are `abstained`, never promoted to pass.
+- Debt blocks delivery until a fact exists or the user explicitly accepts the gap.
+- The hash chain proves process integrity, not that the model's conclusion is correct.
 
 ## Benchmark
 
-### Protocol (frozen point by point, reproducible)
-
 | Item | Value |
 |---|---|
-| Protocol | **Fully blind**: the official test patch is not applied during solving, and the prompt carries no FAIL_TO_PASS names (`XENON_EVAL_APPLY_TEST_PATCH=0`, `XENON_EVAL_FAIL_HINT=0`) |
-| Engine | **`react` only** — not a multi-engine union and not best-of-N. This is a **framework A/B**: the engine is held constant so any difference is attributable to the framework code |
-| Model | `deepseek-v4-flash` official API, `--reasoning-effort off` |
-| Budget | Unlimited steps by default; LoopDetector + no-progress checkpoints + 1800 s wall-clock safety gate (`XENON_MAX_ITERATIONS` can set a cap) |
-| Judging | Official `swebench` harness: clean container + model patch + official test patch; an instance counts as resolved only when `FAIL_TO_PASS` all pass and `PASS_TO_PASS` does not regress |
-| Denominator | `resolved / submitted(=30)`; empty patches are reported separately but **still count as unresolved** (conservative) |
-| Repetition | **3 independent runs** per condition, averaged (every run is published; a single run can swing by 4 instances ≈ 13 pp) |
+| Protocol | Fully blind: no official test patch during solving, no FAIL_TO_PASS names in prompt |
+| Engine | Single `react` (not a multi-engine union / best-of-N) |
+| Model | `deepseek-v4-flash`, official API |
+| Judging | Official `swebench` harness |
+| Repetition | Three independent runs, mean reported; every run published |
 
-### Two samples
+| Sample | Current framework | Previous v0.8.5 |
+|---|---:|---:|
+| Frozen 30 (seed 20260729) | **62.2%** | 63.3% |
+| Zero-overlap held-out (seed 20261016) | **52.2%** | 46.7% |
 
-| Sample | Selection | Notes |
-|---|---|---|
-| Frozen 30 | `evals/swebench_select.py --size 30 --seed 20260729` | Historical baseline; 9 of its 30 instances are named in the commit history, i.e. in-sample tuning traces |
-| **Zero-overlap held-out** | same rule, `--seed 20261016 --exclude` the original sample (pool of 270) | **Primary evidence**; no instance is shared with the original sample |
-
-Both manifests (with digests) are committed, so anyone can reproduce instance by instance.
-
-### Results
-
-| Sample | Current framework | Previous generation (v0.8.5) |
-|---|---|---|
-| Frozen 30 instances (seed 20260729) | **62.2%** | 63.3% |
-| Zero-overlap held-out sample (seed 20261016) | **52.2%** | 46.7% |
-
-> Factor decomposition (same model / same instances / same harness): framework iteration **0 pp** (p=1.0) · budget 10→120 steps **+36.7–46.7 pp** · test visibility during solving **+16.7 pp** (non-standard, upper bound only). **The bottleneck is budget and model, not the scaffolding.**
-
-### Bring a stronger model and beat us
-
-One run (30 instances, flash) costs roughly **$0.5–1** in API usage; frontier models are ~$7–30 per run, and we only have the flash budget. If you have a stronger model, please reproduce on the same manifest and protocol:
-
-```bash
-git clone --depth 1 https://github.com/xianyu-sheng/Xenon.git && cd Xenon
-python -m venv .venv && .venv/bin/pip install -e . && .venv/bin/pip install "swebench==4.1.0" datasets docker
-
-IDS=$(python -c "import json;print(' '.join(json.load(open('evals/manifests/swebench-lite-30-heldout-seed20261016.json'))['instance_ids']))")
-ARGS=(); for i in $IDS; do ARGS+=(--instance-id "$i"); done
-
-XENON_EVAL_APPLY_TEST_PATCH=0 XENON_EVAL_FAIL_HINT=0 \
-.venv/bin/python evals/swebench_xenon.py "${ARGS[@]}" \
-  --prepared-root ./work --engines react --max-steps 120 \
-  --model <your-model> --reasoning-effort off \
-  --request-timeout 60 --engine-timeout 900 \
-  --predictions preds.jsonl --traces traces.jsonl
-
-python -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Lite --split test \
-  --predictions_path preds.jsonl --run_id my-run --max_workers 2 --cache_level env
-```
-
-**Full step-by-step guide (acceptance checklist + the seven pitfalls we hit)**: [REPRODUCE_SWEBENCH](docs/REPRODUCE_SWEBENCH.md).
-
-Post the `run_id`, model name and official report in [Discussions](https://github.com/xianyu-sheng/Xenon/issues/162) — **the protocol is frozen, so a model swap is directly comparable** — and we will add your number to the table above (with model and protocol noted).
-
-Full protocol, per-run results, judging logs and sha256-checked archives: [EVAL_RESULTS](docs/EVAL_RESULTS.md).
-
-
-## What it actually does
-
-<table>
-<tr><td><b>An evidence chain, not just logs</b></td><td>Tool execution writes an execution ledger, while the session layer keeps an append-only audit chain; <code>/evidence</code> recomputes and self-checks the session chain at any time, catching corruption, single-point tampering and reordering. A unified claim/plan/delivery execution view is tracked in #177.</td></tr>
-<tr><td><b>Exactly one blocking structural check at turn level</b></td><td>"Hollow answers" (no work done, non-answers) are deterministic — caught, fed back for a retry, and fused if the same cause repeats. Semantic doubts never block delivery; they ship as a manual-verification checklist next to the answer.</td></tr>
-<tr><td><b>Every turn is a node in a tree</b></td><td><code>/rewind</code> goes back, <code>/fork</code> branches; after an interruption or fuse, typing "continue" resumes from that node without re-explaining context.</td></tr>
-<tr><td><b>Boundary actions ask first</b></td><td>In-workspace writes don't interrupt you; out-of-boundary writes and commands open a unified panel with a diff preview. A one-shot approval binds its target; the session-level `a` rule is currently tool+TTL scoped, with finer target/command rules tracked in #181. Subagents are read-only by default.</td></tr>
-<tr><td><b>Untrusted output is tagged</b></td><td>File, web, GitHub, MCP and command output is tagged with its source and trust level; common prompt-injection patterns produce a visible warning, and the approval panel notes when an action may be driven by untrusted content. It only warns — nothing is blocked or rewritten.</td></tr>
-<tr><td><b>Routing learns from your choices</b></td><td>When you override the auto-router with <code>/mode</code>, the preferred paradigm gets a small confidence boost for similar tasks; preferences stay local — delete <code>~/.xenon/routing_preferences.json</code> to reset them.</td></tr>
-<tr><td><b>Limits are labeled honestly</b></td><td>Truncated files and exhausted context are marked as such instead of being papered over.</td></tr>
-</table>
-
-## How a turn runs
-
-```text
-your input
-  → intent contract (LLM classifier first, conservative regex fallback)
-  → engine execution (budget checkpoints / loop detection / circuit breaker)
-  → turn gate (the single verdict point)
-      pass    → deliver
-      remind  → deliver + manual-verification checklist (non-blocking)
-      fail    → retry in the same turn; budget exhausted → degraded delivery
-      fuse    → fuse on repeated same-cause structural failure
-  → turn tree persisted + hash chain appended + turn archived
-```
-
-## What is verified, and what is not
-
-| Layer | What it checks | How it surfaces |
-|---|---|---|
-| **L0 Evidence** | Whether the process is real and replayable | Hash-chained event log; `/evidence` recomputes it |
-| **L1 Structural** | Whether the answer skipped the work | The blocking turn-level structural check: retry / same-cause fuse |
-| **L2 Semantic** | Whether claims, criteria and file references hold up | Never blocks; produces a "manual verification checklist", or a degraded delivery after retries run out |
-
-`xenon/turn/gate.py` owns turn-level L1/L2 checks; a Reflection reviewer score is a separate output-quality review, not proof of a tool fact or a Claim. Tool success/failure comes only from the tool's own receipt — never from keyword guessing.
-
-`/evidence` output (structured turn summary + a one-line chain self-check):
-
-<img src="docs/evidence-chain.png" alt="/evidence output example" width="720">
-
-## Common commands
-
-```
-/evidence   evidence chain (current / all / one session)   /plan   plan mode
-/goal       set the goal for this session                  /review review edits with .bak revert
-/rewind     go back to an earlier turn                     /fork   branch from a turn
-/sessions   list sessions                                  /compact compact long conversations
-/permissions show current approvals                        /tools  list tools
-```
-
-On start, `xenon` shows a session picker first (pick a history entry by number, or a fresh session); `xenon resume` restores the most recent one and replays the conversation.
-
-## Install
-
-```bash
-# Option 1 — wheel from GitHub Releases (recommended, no PyPI required)
-pip install https://github.com/xianyu-sheng/Xenon/releases/download/v0.9.4/xenon_harness-0.9.4-py3-none-any.whl
-xenon --version   # verify the install
-
-# Option 2 — from source (editable; shallow clone saves bandwidth)
-git clone --depth 1 https://github.com/xianyu-sheng/Xenon.git
-cd Xenon && python -m venv .venv
-.venv/Scripts/python -m pip install -e .        # Windows
-source .venv/bin/activate && pip install -e .   # Linux / macOS
-```
-
-`uv tool install <wheel URL>` and `pipx install <wheel URL>` work too and handle the entry point for you.
-
-## Documentation
-
-| Topic | 中文 | English |
-|---|---|---|
-| Operation manual / quick start | [OPERATION_GUIDE](docs/OPERATION_GUIDE.md) | [GUIDE](docs/GUIDE.md) |
-| Architecture | [ARCHITECTURE](docs/ARCHITECTURE.md) | [ARCHITECTURE.en](docs/ARCHITECTURE.en.md) |
-| Extending (MCP / subagents / hooks / commands) | [EXTENDING](docs/EXTENDING.md) | [EXTENDING.en](docs/EXTENDING.en.md) |
-| Comparison vs Aider / Claude Code / OpenCode / Crush | [COMPARISON](docs/COMPARISON.md) | [COMPARISON.en](docs/COMPARISON.en.md) |
-| Tool-output threat model | [THREAT_MODEL](docs/THREAT_MODEL.md) | — |
-| Development guide (test recipes / platform notes / brand pipeline) | [DEVELOPMENT](docs/DEVELOPMENT.md) | — |
-| Observability (AgentOps) design, P0 | [OBSERVABILITY](docs/OBSERVABILITY.md) | — |
-| TUI design and usage | [TUI](docs/TUI.md) | — |
-| Eval protocol / eval results | [EVAL_PROTOCOL](docs/XENON_EVAL_PROTOCOL.md) · [EVAL_RESULTS](docs/EVAL_RESULTS.md) | — |
-| Changelog | [CHANGELOG](CHANGELOG.md) | — |
-
-## Environment variables
-
-<details>
-<summary>18 variables (click to expand)</summary>
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `XENON_APPROVAL_TTL` | TTL for session-level `a` approval rules (seconds) | 1800 |
-| `XENON_VERIFY_RETRIES` | Same-turn retries after a structural failure | 2 |
-| `XENON_RETRY_BUDGET_MIN/MAX` | Step-budget clamp for retry turns | 10 / 40 |
-| `XENON_GATE_FUSE_THRESHOLD` | Same-cause structural failure fuse threshold | 2 |
-| `XENON_MAX_ITERATIONS` | Steps per run; 0 means no step-count termination | 0 |
-| `XENON_ENGINE_TIMEOUT` | Absolute engine deadline per run in seconds; on timeout the completed work is returned | 1800 |
-| `XENON_MAX_TOKENS` | Output cap per model call | 8192 |
-| `XENON_MAX_CONTINUATIONS` | Auto-continuations after truncation | 3 |
-| `NO_COLOR` | Standard flag; disables color in output and prompt | unset |
-| `XENON_READ_ONLY` | Read-only mode (all write/exec tools disabled) | off |
-| `XENON_COMMAND_ALLOWLIST` | Command first-word allowlist (comma-separated) | empty = unrestricted |
-| `XENON_EXTRA_ROOTS` | Extra roots file tools may read/write outside the start directory (`;`-separated on Windows) | empty = start directory only |
-| `XENON_SESSION_EVENTS(_DIR)` | Event log toggle / directory | on |
-| `XENON_EVIDENCE_HMAC_KEY` | Optional keyed evidence-chain anchor; key is read only from the environment | off |
-| `XENON_HOOKS` | Local hooks toggle | on |
-| `XENON_ATTRIBUTION` | Attach the Xenon attribution to commits and PRs (`0` disables) | on |
-| `XENON_TOOL_PROFILE` | Model-facing tool surface: `legacy` keeps all built-ins; `core` exposes read/search/apply_patch/bash/mcp_* only | legacy |
-| `GITHUB_TOKEN` / `GH_TOKEN` | GitHub tool auth (raises API limits; falls back to a logged-in `gh auth token`) | empty |
-
-</details>
-
-## Platform support
-
-- **Windows**: full support on Windows Terminal (ConPTY) + PowerShell (paste, CJK IME, arrow keys); `python -m xenon` ships in release artifacts since v0.9.4.
-- **Linux / macOS**: any standard terminal; `XENON_TERMINAL_ANIMATION=0` disables the startup animation.
-
-## Honest boundaries
-
-- **The machine does not verify semantics.** When L2 hits it only warns — judge content correctness yourself with the checklist.
-- **The hash chain proves process, not conclusions.** It shows the event stream was not tampered with; it does not prove the model was right.
-- **The chain is an unkeyed integrity check.** It detects accidental corruption, single-point tampering and reordering; it cannot stop someone with write access from recomputing the whole chain. Put the event directory on controlled storage for stronger guarantees. (Optional HMAC anchor: see #106.)
-- **The sandbox is detection + a software boundary, not real isolation.** Run untrusted code inside WSL/Docker.
-- **Injection detection on tool output is a heuristic advisory, not a security boundary.** Xenon tags sources and warns about common injection patterns, but it never blocks or rewrites content. Scope and limitations: [tool-output threat model](docs/THREAT_MODEL.md).
-- `/review`'s revert only covers edits with `.bak` backups; git is still the version history.
-- The intent classifier uses the fastest model available (~1s); if unavailable it falls back to conservative regexes.
-
-## Contributing
-
-- Contribution flow and the PR "CI evidence" requirement: [CONTRIBUTING](CONTRIBUTING.md)
-- Local setup, test recipes and platform differences: [DEVELOPMENT](docs/DEVELOPMENT.md)
-- Starter tasks: [good first issues](https://github.com/xianyu-sheng/Xenon/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
-- Contributor entry point (task board and how to claim): [#144](https://github.com/xianyu-sheng/Xenon/issues/144)
-- Feature ideas / feedback / roadmap: [Roadmap & Feedback](https://github.com/xianyu-sheng/Xenon/discussions/143)
-- Quality gates: full offline suite on Linux + Windows/macOS platform smoke + Codecov coverage; 3,600+ offline test cases
-- If Xenon is useful to you, a ⭐ helps more people find it
+Full protocol, per-run results and sha256 archives: [EVAL_RESULTS](docs/EVAL_RESULTS.md).
 
 ## Featured in
 
-<!-- Ordered by list prominence; insert new entries in place once merged. -->
+- [Awesome-MCP-ZH](https://github.com/yzfly/Awesome-MCP-ZH)
+- [awesome-opensource-ai](https://github.com/alvinreal/awesome-opensource-ai)
+- [awesome-mcp-lists](https://github.com/collabnix/awesome-mcp-lists)
+- [awesome-ai-coding-tools](https://github.com/mahmoudsajjadi/awesome-ai-coding-tools)
 
-- [Awesome-MCP-ZH](https://github.com/yzfly/Awesome-MCP-ZH) — curated Chinese MCP resource list (MCP Clients → verifiable terminal coding agent)
-- [awesome-opensource-ai](https://github.com/alvinreal/awesome-opensource-ai) — open-source AI project list (Agentic AI & Multi-Agent Systems → Autonomous Coding Agents)
-- [awesome-mcp-lists](https://github.com/collabnix/awesome-mcp-lists) — Collabnix community list of MCP servers, clients and toolkits (MCP Clients → Command Line Tools)
-- [awesome-ai-coding-tools](https://github.com/mahmoudsajjadi/awesome-ai-coding-tools) — 3-tier taxonomy of AI coding tools (CLI coding agents; special thanks to @xianyu-sheng)
+## Common commands
+
+```text
+/evidence   ledger, V2 coverage, chain verification
+/goal       objective, phase, plan, debt
+/resume     restore the session and ledger pointer
+/plan       soft plan mode
+/mode       choose a reasoning mode
+/mcp        MCP servers and tools
+/rewind     rewind to a turn node
+/fork       fork from a turn node
+```
+
+## Documentation
+
+- [Operation guide](docs/GUIDE.md)
+- [Architecture](docs/ARCHITECTURE.en.md) · [ADR 0001](docs/adr/0001-single-loop-kernel.md)
+- [Harness](docs/HARNESS.md)
+- [Extending](docs/EXTENDING.en.md)
+- [Evaluation](docs/XENON_EVAL_PROTOCOL.md) · [Results](docs/EVAL_RESULTS.md)
+- [Changelog](CHANGELOG.md)
+
+## Honest boundaries
+
+- The hash chain proves process integrity, not conclusion truth.
+- Abstention is a product behavior, not a hidden failure.
+- Approval is not a sandbox; run external MCP servers in a controlled environment.
+- SWE-bench numbers are limited by sample and budget; read them with EVAL_RESULTS.
 
 ## License
 
