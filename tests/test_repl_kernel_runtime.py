@@ -529,7 +529,7 @@ class RecordingCallback:
         self.calls.append(("think", text))
 
     def on_act(self, action, params) -> None:
-        self.calls.append(("act", action))
+        self.calls.append(("act", (action, params)))
 
     def on_observe(self, observation) -> None:
         self.calls.append(("observe", observation))
@@ -543,6 +543,36 @@ class RecordingCallback:
 
 def _event(kind: str, payload: dict) -> SimpleNamespace:
     return SimpleNamespace(kind=SimpleNamespace(value=kind), payload=payload)
+
+
+def test_event_sink_projects_kernel_write_paths() -> None:
+    callback = RecordingCallback()
+    sink = ReplEventSink(callback)
+    sink.emit(
+        _event(
+            "tool_receipt",
+            {
+                "receipt": {
+                    "tool": "apply_patch",
+                    "status": "ok",
+                    "effects": [
+                        {
+                            "type": "fs_write",
+                            "paths": ["pkg/a.py"],
+                            "created_paths": ["pkg/a.py"],
+                        }
+                    ],
+                }
+            },
+        )
+    )
+
+    kind, payload = callback.calls[0]
+    assert kind == "act"
+    tool, params = payload
+    assert tool == "apply_patch"
+    assert params["file_paths"] == ["pkg/a.py"]
+    assert params["created_paths"] == ["pkg/a.py"]
 
 
 def test_event_sink_handles_all_event_kinds() -> None:

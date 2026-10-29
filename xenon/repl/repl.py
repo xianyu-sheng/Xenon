@@ -852,7 +852,7 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
     # v0.5.4: 从成功的工具调用中提取文件路径，更新工作记忆，
     # 使后续对话能知道"刚刚创建/修改了哪些文件"。
     _FILE_CREATE_TOOLS = {"write_file", "create_directory", "batch_write"}
-    _FILE_MODIFY_TOOLS = {"edit_file", "command"}
+    _FILE_MODIFY_TOOLS = {"edit_file", "apply_patch", "command"}
 
     @staticmethod
     def _unwrap_json_result(result: str) -> str:

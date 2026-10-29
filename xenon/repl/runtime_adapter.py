@@ -152,6 +152,44 @@ def _receipt_observation(receipt: Mapping[str, Any]) -> str:
     return text
 
 
+def _receipt_action_input(receipt: Mapping[str, Any]) -> dict[str, Any]:
+    """Recover file paths from typed receipt effects for the session panel.
+
+    The legacy panel infers paths from tool params; kernel receipts do not keep
+    those params.  Project the typed effects instead, so session working memory
+    and turn-node artifacts still see what the kernel actually wrote.
+    """
+
+    paths: list[str] = []
+    created: list[str] = []
+    for effect in receipt.get("effects") or ():
+        if not isinstance(effect, Mapping):
+            continue
+        for key in ("paths", "workspace_delta"):
+            value = effect.get(key)
+            if isinstance(value, (list, tuple)):
+                paths.extend(str(item) for item in value if item)
+        value = effect.get("created_paths")
+        if isinstance(value, (list, tuple)):
+            created.extend(str(item) for item in value if item)
+
+    unique_paths: list[str] = []
+    for path in paths:
+        if path not in unique_paths:
+            unique_paths.append(path)
+    unique_created: list[str] = []
+    for path in created:
+        if path not in unique_created:
+            unique_created.append(path)
+
+    params: dict[str, Any] = {}
+    if unique_paths:
+        params["file_paths"] = unique_paths
+    if unique_created:
+        params["created_paths"] = unique_created
+    return params
+
+
 class ReplEventSink:
     """Project kernel ledger events into the REPL's existing callback/panel."""
 
@@ -168,7 +206,7 @@ class ReplEventSink:
             if not isinstance(receipt, Mapping):
                 return
             tool = str(receipt.get("tool") or "tool")
-            self.callback.on_act(tool, {})
+            self.callback.on_act(tool, _receipt_action_input(receipt))
             self.callback.on_observe(_receipt_observation(receipt))
         elif kind == "policy_decision":
             decision = str(payload.get("kind") or "")
