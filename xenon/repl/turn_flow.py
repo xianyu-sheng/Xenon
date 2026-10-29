@@ -224,10 +224,35 @@ class TurnFlowMixin:
                 f"[dim cyan]🧭 原子任务配方：{recipe.id} "
                 f"({len(recipe.stages)} 步，工具级范围约束)[/dim cyan]"
             )
+
+        # Decide the kernel path before legacy durable state is materialized.
+        # A kernel turn must not create/continue a second task-state machine;
+        # any stale legacy bag is cleared and the ledger remains authoritative.
+        from xenon.repl.runtime_adapter import should_route_to_kernel
+        from xenon.repl.turn_helpers import _looks_like_external_query
+
+        kernel_turn = should_route_to_kernel(
+            runtime_mode=getattr(self, "_runtime_mode", ""),
+            requires_tools=execution_policy.requires_tools,
+            skill_name=skill_name,
+            plan_mode=self._plan_mode_active,
+            pending=pending,
+            recipe=recipe,
+            mode_name=self.registry.current_mode,
+            external_query=(
+                turn_contract_obj.intent in {"query", "research"}
+                or _looks_like_external_query(user_input)
+            ),
+            mcp_available=self._has_mcp_tools(),
+        )
+        if kernel_turn:
+            self.agent_context.set("_task_state", None)
+
         # ── Durable task state: resume an active task, or start a new one ──
         task_state = TaskState.from_context(self.agent_context)
         continued = bool(
-            task_state is not None
+            not kernel_turn
+            and task_state is not None
             and task_state.active
             and self._is_task_continuation(user_input, pending)
         )
@@ -276,7 +301,7 @@ class TurnFlowMixin:
             write_task = int(execution_policy.level) >= int(ExecutionLevel.WRITE) or (
                 "task_delivery" in turn_contract_obj.signals.write_patterns
             )
-            if write_task and recipe is None:
+            if write_task and recipe is None and not kernel_turn:
                 task_state = TaskState(
                     objective=user_input,
                     intent=turn_contract_obj.intent,
@@ -525,24 +550,6 @@ class TurnFlowMixin:
         # Decide the execution path before the legacy mode selector runs.
         # Decide before the legacy mode selector can print a recommendation
         # that has no effect on the kernel turn.
-        from xenon.repl.runtime_adapter import should_route_to_kernel
-        from xenon.repl.turn_helpers import _looks_like_external_query
-
-        kernel_turn = should_route_to_kernel(
-            runtime_mode=getattr(self, "_runtime_mode", ""),
-            requires_tools=execution_policy.requires_tools,
-            skill_name=skill_name,
-            plan_mode=self._plan_mode_active,
-            pending=pending,
-            recipe=recipe,
-            mode_name=self.registry.current_mode,
-            external_query=(
-                turn_contract_obj.intent in {"query", "research"}
-                or _looks_like_external_query(user_input)
-            ),
-            mcp_available=self._has_mcp_tools(),
-        )
-
         if kernel_turn:
             mode = "kernel"
         else:

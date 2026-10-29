@@ -9,7 +9,7 @@
 
 - `/mode` 改用中立的 `xenon/modes.py` 模式目录：名称、描述与 kernel 路由能力只有一份来源，`model_registry` 不再 import `xenon.engine`。修复 `reflection` / `react-reflection` / 未知模式被 kernel 静默降级为 ActFirst 的问题；只有 `direct` / `react` / `plan-execute` 进入 kernel，其余模式继续走 frozen legacy，未知模式 fail closed。legacy 引擎描述复用同一目录，避免 `/mode` 与 `ENGINE_REGISTRY` 漂移。
 - PlanFirst 修正 plan prompt 的字面量“反斜杠+n”（与 ActFirst 一样使用真实换行）；计划步骤结束后新增一次受约束的最终总结，基于 ledger 投影的 working set 返回 `Finish(answer)`，不再固定回答 `completed`。真实 TTY `/mode plan-execute` 读取随机 probe 并返回 token；ledger 有 `plan_accepted` / `tool_receipt` / `delivered`，证据在 `docs/evidence/tty-plan-execute/`。
-- kernel 回合（accepted / blocked / adapter exception）结束时统一清理 legacy `_task_state`，不再只在 accepted 清理；避免 kernel ledger 已裁决后下一轮仍被旧的“未完成交付”状态驱动。
+- kernel 回合（accepted / blocked / adapter exception）结束时统一清理 legacy `_task_state`，不再只在 accepted 清理；并在创建 legacy TaskState 之前决定 kernel 路由，kernel 回合不再物化/延续第二套任务状态。避免 kernel ledger 已裁决后下一轮仍被旧的“未完成交付”状态驱动。
 
 ### 证据层
 
