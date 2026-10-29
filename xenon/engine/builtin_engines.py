@@ -1,8 +1,8 @@
-"""七种内置推理范式的注册声明 —— 引擎元数据的唯一来源。
+"""七种内置推理范式的注册声明。
 
-这些 spec 此前散在四处：``repl.py`` 的 if/elif dispatch + 六个近乎一致的
-``_run_*_engine`` 方法、``model_registry.BUILTIN_MODES`` 的描述文案、
-``setup_wizard`` 的说明字典、``evals/runner.py`` 的引擎白名单。现在收敛到本文件。
+本文件只保留 legacy 引擎特有的元数据（factory、模式行、结果标题）。用户可见的
+名称/描述与 kernel 路由能力在 :mod:`xenon.modes`；下面复用同一份描述，避免
+``/mode``、setup wizard 与 engine registry 漂移。
 
 引擎类采用函数内 import，保持惰性加载（首次真正运行该范式时才导入模块）。
 """
@@ -12,12 +12,19 @@ from __future__ import annotations
 from typing import Any
 
 from xenon.engine.registry import register_engine
+from xenon.modes import MODE_CATALOG
 
 # ── 标准步数预算 ────────────────────────────────────────
 # 所有 step-based 引擎默认不按步数终止。`XENON_MAX_ITERATIONS` 可显式
 # 设置安全上限；正常运行由 LoopDetector、无进展检查点、用户中断和墙钟
 # deadline 控制。组合引擎内外层共享同一策略。
 STANDARD_STEP_BUDGET = 0  # 0 = unlimited; LoopDetector/no-progress/deadline are the gates
+
+
+def _description(name: str) -> str:
+    """Read the canonical user-facing description from the mode catalog."""
+
+    return MODE_CATALOG[name].description
 
 
 def _step_budget(default: int) -> int:
@@ -100,13 +107,13 @@ def _make_react_reflection(**kwargs: Any) -> Any:
 register_engine(
     "direct",
     factory=None,  # direct 不走引擎循环，REPL 单独分支处理
-    description="直接对话，不使用特殊引擎（默认模式）",
+    description=_description("direct"),
 )
 
 register_engine(
     "react",
     factory=_make_react,
-    description="思考-行动-观察循环，适合需要工具的探索性任务",
+    description=_description("react"),
     mode_line="· ReAct 思考 → 行动 → 观察",
     result_title="ReAct 结果",
     # 重试/LLM 报错后若不保留面板，Ctrl+O 只剩原始日志，工具时间线看起来丢了。
@@ -118,7 +125,7 @@ register_engine(
 register_engine(
     "plan-execute",
     factory=_make_plan_execute,
-    description="先用强模型规划，再逐步执行，适合复杂任务",
+    description=_description("plan-execute"),
     mode_line="· Plan-Execute 规划 → 逐步执行",
     result_title="Plan-Execute 结果",
 )
@@ -126,7 +133,7 @@ register_engine(
 register_engine(
     "reflection",
     factory=_make_reflection,
-    description="执行后自我审查并修正，适合高质量代码生成",
+    description=_description("reflection"),
     mode_line="· Reflection 执行 → 审查 → 修正",
     result_title="Reflection 结果",
 )
@@ -134,7 +141,7 @@ register_engine(
 register_engine(
     "plan-react",
     factory=_make_plan_react,
-    description="全局规划 + 每步 ReAct 执行，适合复杂多步骤任务",
+    description=_description("plan-react"),
     mode_line="· Plan+React 全局规划 → 每步 ReAct 执行",
     result_title="Plan+React 结果",
 )
@@ -142,7 +149,7 @@ register_engine(
 register_engine(
     "plan-reflection",
     factory=_make_plan_reflection,
-    description="规划执行 + 反思修正，适合需要高质量输出的任务",
+    description=_description("plan-reflection"),
     mode_line="· Plan+Reflection 规划执行 → 反思修正",
     result_title="Plan+Reflection 结果",
 )
@@ -150,7 +157,7 @@ register_engine(
 register_engine(
     "react-reflection",
     factory=_make_react_reflection,
-    description="ReAct 探索 + 反思审查，适合需要工具且要求高质量的任务",
+    description=_description("react-reflection"),
     mode_line="· React+Reflection 探索 → 反思审查",
     result_title="React+Reflection 结果",
 )

@@ -20,6 +20,7 @@ from xenon.ledger.store import Ledger
 from xenon.repl.execution_policy import ExecutionLevel
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.runtime_adapter import (
+    KernelAdapterError,
     KernelApprovalProvider,
     ReplEventSink,
     RuntimeAdapter,
@@ -192,6 +193,22 @@ def test_routing_and_permission_mapping() -> None:
         recipe=None,
         mode_name="plan-react",
     )
+    for legacy_mode in (
+        "reflection",
+        "plan-react",
+        "plan-reflection",
+        "react-reflection",
+        "not-a-mode",
+    ):
+        assert not should_route_to_kernel(
+            runtime_mode="kernel",
+            requires_tools=True,
+            skill_name=None,
+            plan_mode=False,
+            pending=None,
+            recipe=None,
+            mode_name=legacy_mode,
+        ), f"{legacy_mode} 没有 kernel parity，不能静默改跑 ActFirst"
     assert not should_route_to_kernel(
         runtime_mode="kernel",
         requires_tools=True,
@@ -342,6 +359,26 @@ def test_runtime_adapter_approval_only_at_execute_level(tmp_path: Path) -> None:
     assert write.allow_approval is False
     assert execute.allow_approval is True
     assert execute.approval is not None
+
+
+def test_runtime_adapter_maps_catalog_strategy_and_rejects_legacy(tmp_path: Path) -> None:
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = FakeRepl(tmp_path, registry)
+
+    registry.set_mode("plan-execute")
+    plan = RuntimeAdapter.from_repl(
+        repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
+    )
+    assert plan.strategy_mode == "plan"
+
+    registry.set_mode("reflection")
+    legacy = RuntimeAdapter.from_repl(
+        repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
+    )
+    assert legacy.strategy_mode == "legacy"
+    with pytest.raises(KernelAdapterError, match="legacy"):
+        legacy.run("read README.md", task_id="legacy-mode")
 
 
 def test_runtime_adapter_runs_real_workspace(tmp_path: Path) -> None:

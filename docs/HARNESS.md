@@ -98,15 +98,17 @@ XENON_RUNTIME=legacy xenon
 ```
 
 Only turns that require tools and are not a skill, plan-mode turn, pending
-continuation, atomic recipe, or an unsupported plan-family `/mode` are routed
-to the kernel. `plan-execute` now uses the kernel's LLM PlanFirst planner;
-`plan-react` and `plan-reflection` remain on the frozen legacy scheduler until
-they have equivalent strategies. They must not silently fall through to
-ActFirst.
+continuation, atomic recipe, or a mode without kernel parity are routed to the
+kernel. `direct`/`react` use ActFirst; `plan-execute` uses the kernel's LLM
+PlanFirst planner. `reflection`, `plan-react`, `plan-reflection` and
+`react-reflection` remain on the frozen legacy scheduler until they have
+equivalent strategies. They must not silently fall through to ActFirst, and an
+unknown mode name fails closed instead of being treated as the default.
 External queries stay legacy unless an MCP registry is available; then the
 kernel uses the `core+mcp` profile and the remote call goes through approval.
-Plain chat, `/mode`, `/plan`, `/resume`, `/evidence`, and skills still use their
-existing paths.
+Plain chat, `/plan`, `/resume`, `/evidence`, and skills still use their existing
+paths. `/mode` metadata comes from the neutral `xenon/modes.py` catalog and no
+longer imports the legacy engine registry.
 
 The REPL adapter:
 

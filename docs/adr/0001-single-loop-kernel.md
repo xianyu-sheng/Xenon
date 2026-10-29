@@ -216,7 +216,8 @@ Strangler, not big bang:
 1. New packages land beside the old engine (`kernel/`, `catalog/`, `ledger/`).
 2. `XENON_RUNTIME=kernel` selected the new runtime during migration; as of #202
    stage 1, kernel is the default for tool turns and `legacy` is the frozen
-   opt-out.
+   opt-out.  `/mode` metadata now lives in the neutral `xenon/modes.py` catalog;
+   only modes with an explicit `kernel_strategy` may enter the kernel.
 3. Contract tests, replay, benchmark and real TTY tasks must pass on the kernel.
 4. Flip the default; keep legacy for one release.
 5. #202 deletes legacy engines, prompts, gates and vocabularies.

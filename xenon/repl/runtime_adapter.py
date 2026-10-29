@@ -28,6 +28,7 @@ from xenon.kernel.contracts import (
     TaskResult,
 )
 from xenon.kernel.policies import PermissionMode
+from xenon.modes import MODE_CATALOG, kernel_strategy_for
 from xenon.repl.execution_policy import ExecutionLevel
 
 KERNEL_RUNTIME_ENV = "XENON_RUNTIME"
@@ -76,13 +77,17 @@ def should_route_to_kernel(
     external_query: bool = False,
     mcp_available: bool = False,
 ) -> bool:
-    """Route only well-understood task turns in the first migration slice.
+    """Route a tool turn through the kernel only when the mode has parity.
 
-    External queries are excluded until the MCP/remote catalog is wired into
-    the kernel.  Routing them to a core-only catalog would turn a working
-    legacy ReAct query into a blocked or hallucinated answer.
+    ``/mode`` is an explicit user choice.  A mode without a kernel strategy
+    (reflection, plan-react, plan-reflection, react-reflection) must stay on the
+    frozen legacy path until it has an equivalent strategy; it must never be
+    silently executed as ActFirst.  Unknown mode names fail closed for the same
+    reason.
     """
 
+    requested_mode = (mode_name or "direct").strip().lower()
+    mode = MODE_CATALOG.get(requested_mode)
     return (
         runtime_mode == "kernel"
         and requires_tools
@@ -90,12 +95,8 @@ def should_route_to_kernel(
         and not plan_mode
         and pending is None
         and recipe is None
-        # PlanFirst now has an LLM planner for plan-execute.  The other
-        # plan-family modes still belong to the frozen legacy scheduler.
-        and not (
-            (mode_name or "").strip().lower().startswith("plan-")
-            and (mode_name or "").strip().lower() != "plan-execute"
-        )
+        and mode is not None
+        and mode.kernel_strategy is not None
         and (not external_query or mcp_available)
     )
 
@@ -286,7 +287,11 @@ class RuntimeAdapter:
         task_id: str | None = None,
         sink: Any = None,
     ) -> HarnessRun:
-        if self.strategy_mode == "plan-execute":
+        if self.strategy_mode == "legacy":
+            raise KernelAdapterError(
+                "selected mode has no kernel strategy; it must stay on the legacy path"
+            )
+        if self.strategy_mode in {"plan", "plan-execute"}:
             strategy = build_llm_plan_strategy(
                 self.model_config, client=self.client
             )
@@ -394,7 +399,10 @@ class RuntimeAdapter:
             catalog_profile="core+mcp" if has_mcp else "core",
             gateway_context=gateway_context,
             mcp_registry=mcp_registry if has_mcp else None,
-            strategy_mode=str(getattr(repl.registry, "current_mode", "react")),
+            strategy_mode=kernel_strategy_for(
+                getattr(repl.registry, "current_mode", "react")
+            )
+            or "legacy",
         )
 
 

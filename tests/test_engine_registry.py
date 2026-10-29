@@ -16,6 +16,7 @@ from xenon.engine.registry import (
     EngineSpec,
     register_engine,
 )
+from xenon.modes import MODE_CATALOG
 
 
 @pytest.fixture
@@ -135,16 +136,21 @@ class TestBuiltinEnginesRegistered:
 
 
 class TestSingleSourceOfTruth:
-    """注册表必须是范式清单的唯一来源 —— 钉死此前的多处漂移。"""
+    """The mode catalog is the source; legacy registry must stay aligned."""
 
-    def test_builtin_modes_derived_from_registry(self):
+    def test_builtin_modes_match_catalog_and_legacy_registry(self):
         from xenon.repl.model_registry import BUILTIN_MODES
 
-        assert set(BUILTIN_MODES) == set(ENGINE_REGISTRY.names()), (
-            "BUILTIN_MODES 与 ENGINE_REGISTRY 不一致 —— 说明又出现了第二份清单"
+        assert set(BUILTIN_MODES) == set(MODE_CATALOG) == set(ENGINE_REGISTRY.names()), (
+            "BUILTIN_MODES、MODE_CATALOG 与 ENGINE_REGISTRY 不一致"
         )
         for name, mode in BUILTIN_MODES.items():
+            assert mode.description == MODE_CATALOG[name].description
             assert mode.description == ENGINE_REGISTRY.require(name).description
+
+    def test_engine_descriptions_reuse_mode_catalog(self):
+        for name, spec in ENGINE_REGISTRY.items():
+            assert spec.description == MODE_CATALOG[name].description
 
     def test_evals_whitelist_derived_from_registry(self):
         from evals.runner import SUPPORTED_ENGINE_TYPES
