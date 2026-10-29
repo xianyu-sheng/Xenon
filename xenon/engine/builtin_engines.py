@@ -1,9 +1,8 @@
 """七种内置推理范式的注册声明。
 
-This file only owns legacy engine-specific metadata (factory, mode line,
-result title).  User-facing names/descriptions and kernel routing capabilities
-live in :mod:`xenon.modes`; the descriptions are reused below so ``/mode``,
-the setup wizard and the engine registry cannot drift.
+本文件只保留 legacy 引擎特有的元数据（factory、模式行、结果标题）。用户可见的
+名称/描述与 kernel 路由能力在 :mod:`xenon.modes`；下面复用同一份描述，避免
+``/mode``、setup wizard 与 engine registry 漂移。
 
 引擎类采用函数内 import，保持惰性加载（首次真正运行该范式时才导入模块）。
 """
@@ -26,7 +25,6 @@ def _description(name: str) -> str:
     """Read the canonical user-facing description from the mode catalog."""
 
     return MODE_CATALOG[name].description
-
 
 
 def _step_budget(default: int) -> int:
