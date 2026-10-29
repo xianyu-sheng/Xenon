@@ -68,6 +68,8 @@ def _workspace_snapshot(workspace_root: Path | None) -> tuple[str, str]:
             cwd=workspace_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
             check=False,
         )
@@ -76,6 +78,8 @@ def _workspace_snapshot(workspace_root: Path | None) -> tuple[str, str]:
             cwd=workspace_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
             check=False,
         )
@@ -83,7 +87,9 @@ def _workspace_snapshot(workspace_root: Path | None) -> tuple[str, str]:
         return "", ""
     if status.returncode != 0:
         return "", ""
-    return status.stdout.strip(), diff.stdout.strip() if diff.returncode == 0 else ""
+    status_text = status.stdout or ""
+    diff_text = (diff.stdout or "") if diff.returncode == 0 else ""
+    return status_text.strip(), diff_text.strip()
 
 
 @dataclass(slots=True)
