@@ -15,6 +15,7 @@
 - kernel 回合的 `TaskResult.metrics` 进入 turn node / `turn/verdict`，覆盖 panel 推断的 steps/tools；`TurnTree.status_suffix()` 仅在 `is_resumable` 时提示“继续”，`degraded` 不再暗示可续接。
 - `/plan` 不再把所有计划模式回合强制切回 legacy：只读计划回合继续走 kernel（权限只读），deferred-write 计划仍走 legacy 计划审批门；`should_route_to_kernel` 新增 `plan_deferred_write` 事实，避免把“只规划”误当成“直接执行计划”。
 - kernel 新增 plan-only 原语：`TaskMode.PLAN` 接受计划后进入 `TaskPhase.PLANNED`，不启动步骤、不执行工具；plan-only 任务拒绝任何非 `SubmitPlan` 动作，避免策略把“只规划”变成执行。`run_task(mode=...)` 可显式选择该模式。
+- REPL adapter 新增 `plan_only=True`：强制 PlanFirst + `TaskMode.PLAN`；`PLANNED` 渲染为 `Kernel · plan`，turn node 记 `pending-approval`，不再误报 blocked/degraded，并保留 ledger 指针供后续审批。`/plan` 路由与批准后执行尚未迁移。
 
 ### 证据层
 

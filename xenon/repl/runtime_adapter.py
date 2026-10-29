@@ -25,6 +25,8 @@ from xenon.kernel.contracts import (
     CallTool,
     Capability,
     PolicyDecision,
+    TaskMode,
+    TaskPhase,
     TaskResult,
 )
 from xenon.kernel.policies import PermissionMode
@@ -296,6 +298,7 @@ class RuntimeAdapter:
         gateway_context: Any = None,
         mcp_registry: Any = None,
         strategy_mode: str = "react",
+        plan_only: bool = False,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         if not self.workspace.is_dir():
@@ -322,6 +325,7 @@ class RuntimeAdapter:
         self.gateway_context = gateway_context
         self.mcp_registry = mcp_registry
         self.strategy_mode = strategy_mode
+        self.plan_only = bool(plan_only)
 
     def run(
         self,
@@ -335,7 +339,11 @@ class RuntimeAdapter:
             raise KernelAdapterError(
                 "selected mode has no kernel strategy; it must stay on the legacy path"
             )
-        if self.strategy_mode in {"plan", "plan-execute"}:
+        if self.plan_only:
+            strategy = build_llm_plan_strategy(
+                self.model_config, client=self.client
+            )
+        elif self.strategy_mode in {"plan", "plan-execute"}:
             strategy = build_llm_plan_strategy(
                 self.model_config, client=self.client
             )
@@ -377,6 +385,7 @@ class RuntimeAdapter:
             permission=self.permission,
             finalize=self.finalize,
             max_steps=self.max_steps,
+            mode=TaskMode.PLAN if self.plan_only else TaskMode.AUTO,
             constraints=tuple(constraints),
             sink=sink,
             approval=self.approval if self.allow_approval else None,
@@ -402,6 +411,7 @@ class RuntimeAdapter:
         model_ids: list[str],
         level: ExecutionLevel | int,
         client: Any = None,
+        plan_only: bool = False,
     ) -> RuntimeAdapter:
         project_ctx = getattr(repl, "project_ctx", None)
         workspace = (
@@ -447,6 +457,7 @@ class RuntimeAdapter:
                 getattr(repl.registry, "current_mode", "react")
             )
             or "legacy",
+            plan_only=plan_only,
         )
 
 
@@ -508,6 +519,7 @@ def _render_kernel_result(
 
     answer = _result_summary(result)
     accepted = bool(result.accepted)
+    planned = result.phase is TaskPhase.PLANNED
     if accepted and result.finalize_sha:
         answer = (
             answer.rstrip()
@@ -516,8 +528,12 @@ def _render_kernel_result(
             + " · evidence: "
             + result.evidence_status.value
         )
-    status = "passed" if accepted else "degraded"
-    reasons = [item.reason for item in result.debt]
+    status = (
+        "pending-approval"
+        if planned
+        else ("passed" if accepted else "degraded")
+    )
+    reasons = [] if planned else [item.reason for item in result.debt]
     finish_node = getattr(repl, "_finish_turn_node", None)
     if callable(finish_node):
         finish_node(
@@ -545,8 +561,17 @@ def _render_kernel_result(
             "[/dim]"
         )
     render = repl._render_assistant_text
-    render(answer, title="Kernel" if accepted else "Kernel · blocked")
-    if not accepted:
+    if planned:
+        title = "Kernel · plan"
+    else:
+        title = "Kernel" if accepted else "Kernel · blocked"
+    render(answer, title=title)
+    if planned:
+        console.print(
+            "[dim]· 计划已接受，执行等待确认；本轮未写盘。[/dim]"
+        )
+        console.print(f"[dim]ledger: {run.ledger_path}[/dim]")
+    elif not accepted:
         for item in result.debt[:5]:
             console.print(
                 f"[yellow]· {item.obligation.kind.value}: "
@@ -581,6 +606,7 @@ def run_kernel_turn(
     execution_policy: Any,
     callback: Any = None,
     client: Any = None,
+    plan_only: bool = False,
 ) -> HarnessRun | None:
     """Run one REPL task turn through the kernel and render its result."""
 
@@ -592,6 +618,7 @@ def run_kernel_turn(
             model_ids=model_ids,
             level=execution_policy.level,
             client=client,
+            plan_only=plan_only,
         )
         sink = ReplEventSink(callback)
         start_capture = getattr(repl, "_start_log_capture", None)
