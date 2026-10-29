@@ -143,6 +143,31 @@ def test_kernel_apply_patch_updates_session_modified_files(monkeypatch, tmp_path
     assert target in memory["session_modified_files"]
 
 
+def test_kernel_apply_patch_distinguishes_created_and_modified(monkeypatch, tmp_path):
+    repl = _make_repl(tmp_path, monkeypatch)
+    created = str(tmp_path / "pkg" / "new.py")
+    modified = str(tmp_path / "pkg" / "old.py")
+    repl.ctx_mgr.update_working_memory(
+        "session_modified_files", [created]
+    )
+    panel = ThinkingPanel()
+    panel.add_action(
+        "apply_patch",
+        {
+            "file_paths": [created, modified],
+            "created_paths": [created],
+        },
+    )
+    panel.add_observation("ok")
+
+    repl._track_session_files(panel)
+
+    memory = repl.ctx_mgr.get_working_memory()
+    assert created in memory["session_created_files"]
+    assert modified in memory["session_modified_files"]
+    assert created not in memory["session_modified_files"]
+
+
 def test_auto_compact_feeds_deterministic_archives(monkeypatch, tmp_path):
     repl = _make_repl(tmp_path, monkeypatch)
     for event in _events_for_turns(8):
