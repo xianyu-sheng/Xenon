@@ -184,6 +184,9 @@ class TaskMode(str, Enum):
     TASK = "task"
     CHAT = "chat"
     AUTO = "auto"
+    # Stop after the plan is accepted; execution waits for an external
+    # approval.  This is a result mode, not a strategy shortcut.
+    PLAN = "plan"
 
 
 class TaskPhase(str, Enum):
@@ -196,6 +199,7 @@ class TaskPhase(str, Enum):
     REPAIRING = "repairing"
     REPLANNING = "replanning"
     AUDITING = "auditing"
+    PLANNED = "planned"
     DELIVERING = "delivering"
     DELIVERED = "delivered"
     FINALIZED = "finalized"

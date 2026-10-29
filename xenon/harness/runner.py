@@ -17,7 +17,7 @@ from xenon.catalog.finalizer import GitFinalizer
 from xenon.catalog.gateway import LegacyToolGateway
 from xenon.harness.plan import HarnessPlan
 from xenon.harness.sink import JsonlSink
-from xenon.kernel.contracts import Budget, TaskResult, TaskSpec, ToolSpec
+from xenon.kernel.contracts import Budget, TaskMode, TaskResult, TaskSpec, ToolSpec
 from xenon.kernel.controller import VerificationController
 from xenon.kernel.policies import PermissionMode, PermissionPolicy
 from xenon.kernel.protocols import ApprovalProvider, Strategy
@@ -50,6 +50,7 @@ def run_task(
     approval: ApprovalProvider | None = None,
     allow_approval: bool = False,
     approval_ttl_seconds: float = 60.0,
+    mode: TaskMode = TaskMode.AUTO,
     catalog_profile: str = "core",
     gateway_context: Any = None,
     extra_specs: Sequence[ToolSpec] = (),
@@ -103,6 +104,7 @@ def run_task(
         workspace=str(root),
         user_objective=user_objective,
         constraints=tuple(constraints),
+        mode=mode,
         budget=Budget(max_steps=max_steps),
     )
     result = runtime.run(spec, strategy)

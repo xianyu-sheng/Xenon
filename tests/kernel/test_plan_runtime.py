@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from tests.kernel.test_north_star import (
     FakeCatalog,
     FakeGateway,
@@ -25,6 +27,8 @@ from xenon.kernel.contracts import (
     StepContract,
     StepKind,
     SubmitPlan,
+    TaskMode,
+    TaskPhase,
     TaskSpec,
     TestRun,
     ToolIntent,
@@ -44,6 +48,15 @@ def _runtime(ledger: Ledger) -> LoopRuntime:
         controller=VerificationController(),
         ledger=ledger,
     )
+
+
+class CountingGateway(FakeGateway):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def execute(self, call, services) -> ToolReceipt:
+        self.calls += 1
+        return super().execute(call, services)
 
 
 class FakeFinalizer:
@@ -441,6 +454,81 @@ class BadFinalizer(FakeFinalizer):
     def rollback(self, commit_sha: str) -> tuple[bool, str]:
         self.rolled_back.append(commit_sha)
         return True, ""
+
+
+def test_plan_only_mode_stops_after_accepted_plan() -> None:
+    ledger = Ledger.in_memory("task-1")
+    gateway = CountingGateway()
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=gateway,
+        controller=VerificationController(),
+        ledger=ledger,
+    )
+
+    result = runtime.run(
+        replace(_calc_spec(), mode=TaskMode.PLAN),
+        ScriptedStrategy(
+            [
+                SubmitPlan(_plan()),
+                CallTool(ToolIntent(capability=Capability.EDIT)),
+            ]
+        ),
+    )
+
+    assert result.phase is TaskPhase.PLANNED
+    assert result.accepted is False
+    assert "edit, verify, record" in result.answer
+    assert "1. edit · calc/add.py" in result.answer
+    assert result.debt == ()
+    assert gateway.calls == 0
+    assert ledger.read(EventKind.TOOL_RECEIPT) == ()
+    assert ledger.read(EventKind.STEP_STARTED) == ()
+    assert len(ledger.read(EventKind.PLAN_ACCEPTED)) == 1
+
+
+def test_plan_only_renders_a_plan_without_analysis() -> None:
+    ledger = Ledger.in_memory("task-1")
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=CountingGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+    )
+    plan = PlanProposal(
+        steps=(StepContract(id=7, kind=StepKind.THINK),)
+    )
+
+    result = runtime.run(
+        replace(_calc_spec(), mode=TaskMode.PLAN),
+        ScriptedStrategy([SubmitPlan(plan)]),
+    )
+
+    assert result.phase is TaskPhase.PLANNED
+    assert result.answer == "7. think"
+
+
+def test_plan_only_mode_refuses_non_plan_actions() -> None:
+    ledger = Ledger.in_memory("task-1")
+    gateway = CountingGateway()
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=gateway,
+        controller=VerificationController(),
+        ledger=ledger,
+    )
+
+    result = runtime.run(
+        replace(_calc_spec(), mode=TaskMode.PLAN),
+        ScriptedStrategy(
+            [CallTool(ToolIntent(capability=Capability.EDIT))]
+        ),
+    )
+
+    assert result.phase is TaskPhase.BLOCKED
+    assert result.accepted is False
+    assert gateway.calls == 0
+    assert ledger.read(EventKind.TOOL_RECEIPT) == ()
 
 
 def test_blocked_delivery_rolls_back_the_finalizer_commit() -> None:
