@@ -88,6 +88,19 @@ Rules:
 """
 
 
+_FINISH_PROTOCOL = """\
+Plan execution is complete. Do not call any more tools.
+Return exactly one JSON object, with no markdown fence and no prose outside it:
+{"action":"finish","answer":"...","claims":[]}
+
+Rules:
+- Answer the user's objective from the deterministic working set below.
+- Do not claim file_changed/test_passed/commit_created unless a receipt proves it.
+- Never claim a commit or push; the finalizer owns delivery commits.
+- If the working set is insufficient, say what is missing instead of guessing.
+"""
+
+
 _ACTION_PROTOCOL = """\
 ActFirst action protocol (overrides the generic protocol above):
 Return exactly one JSON object, with no markdown fence and no prose outside it.
@@ -507,13 +520,38 @@ def build_plan_messages(view: ModelView) -> list[dict[str, str]]:
         ],
     }
     return [
-        {"role": "system", "content": view.system + "\\n" + _PLAN_PROTOCOL},
+        {"role": "system", "content": view.system + "\n" + _PLAN_PROTOCOL},
         {
             "role": "user",
             "content": (
-                "Current deterministic state (ledger prefix, not chat memory):\\n"
+                "Current deterministic state (ledger prefix, not chat memory):\n"
                 + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
-                + "\\nReturn exactly one JSON plan."
+                + "\nReturn exactly one JSON plan."
+            ),
+        },
+    ]
+
+
+def build_finish_messages(view: ModelView) -> list[dict[str, str]]:
+    """Prompt the final PlanFirst synthesis over step receipts."""
+
+    state = {
+        "objective": view.task.objective,
+        "constraints": list(view.task.constraints),
+        "working_set": list(view.working_set),
+        "debt": [
+            {"id": item.obligation.id, "reason": item.reason}
+            for item in view.debt
+        ],
+    }
+    return [
+        {"role": "system", "content": view.system + "\n" + _FINISH_PROTOCOL},
+        {
+            "role": "user",
+            "content": (
+                "Current deterministic state (ledger prefix, not chat memory):\n"
+                + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+                + "\nReturn exactly one JSON finish."
             ),
         },
     ]
@@ -551,6 +589,35 @@ class LLMPlanProposer:
             )
 
 
+class LLMPlanFinisher:
+    """Synthesize one Finish from the plan's deterministic working set."""
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        client: Callable[..., str] | None = None,
+    ) -> None:
+        self.config = config
+        self._client = client
+
+    def __call__(self, view: ModelView) -> Finish:
+        try:
+            action = parse_action(
+                _call_model(
+                    self.config,
+                    self._client,
+                    build_finish_messages(view),
+                )
+            )
+        except (ActionParseError, TypeError, ValueError):
+            return Finish("Plan execution completed; final summary unavailable.")
+        if not isinstance(action, Finish):
+            # The finisher must never trigger another tool turn.
+            return Finish("Plan execution completed; final summary unavailable.")
+        return action
+
+
 def build_llm_strategy(
     config: ModelConfig,
     *,
@@ -564,15 +631,20 @@ def build_llm_plan_strategy(
     *,
     client: Callable[..., str] | None = None,
 ) -> PlanFirst:
-    return PlanFirst(LLMPlanProposer(config, client=client))
+    return PlanFirst(
+        LLMPlanProposer(config, client=client),
+        finisher=LLMPlanFinisher(config, client=client),
+    )
 
 
 __all__ = [
     "ActionParseError",
     "LLMActionProposer",
+    "LLMPlanFinisher",
     "LLMPlanProposer",
     "ModelConfig",
     "ModelConfigError",
+    "build_finish_messages",
     "build_llm_plan_strategy",
     "build_llm_strategy",
     "build_messages",

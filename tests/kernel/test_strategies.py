@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from xenon.kernel.contracts import (
     Budget,
+    Capability,
     Claim,
     ClaimSource,
     Debt,
@@ -14,8 +15,12 @@ from xenon.kernel.contracts import (
     Obligation,
     PlanProposal,
     PropositionKind,
+    StepContract,
+    StepKind,
+    SubmitPlan,
     TaskSpec,
     Think,
+    ToolIntent,
 )
 from xenon.kernel.strategies import (
     ActFirst,
@@ -25,7 +30,11 @@ from xenon.kernel.strategies import (
 )
 
 
-def _view(*, debt: tuple[Debt, ...] = ()) -> ModelView:
+def _view(
+    *,
+    debt: tuple[Debt, ...] = (),
+    steps: tuple[StepContract, ...] = (),
+) -> ModelView:
     spec = TaskSpec(task_id="t1", objective="x", workspace=".")
     return ModelView(
         task=spec,
@@ -37,7 +46,7 @@ def _view(*, debt: tuple[Debt, ...] = ()) -> ModelView:
         input_seq=0,
         hash="h",
         active_step=None,
-        steps=(),
+        steps=steps,
     )
 
 
@@ -96,3 +105,22 @@ def test_plan_first_submits_once() -> None:
     # An empty plan closes immediately; the strategy must not resubmit.
     second = strategy.propose(_view())
     assert isinstance(second, Finish)
+
+
+def test_plan_first_finishes_with_the_working_set() -> None:
+    step = StepContract(
+        id=1,
+        kind=StepKind.INSPECT,
+        intent=ToolIntent(capability=Capability.READ),
+    )
+    view = _view(steps=(step,))
+    strategy = PlanFirst(
+        lambda _view: PlanProposal(steps=(step,)),
+        finisher=lambda _view: Finish("the answer"),
+    )
+
+    first = strategy.propose(view)
+    assert isinstance(first, SubmitPlan)
+    second = strategy.propose(view)
+    assert isinstance(second, Finish)
+    assert second.answer == "the answer"
