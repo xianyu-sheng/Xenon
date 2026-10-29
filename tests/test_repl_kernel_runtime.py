@@ -149,6 +149,47 @@ def test_repl_defaults_to_kernel(monkeypatch) -> None:
     assert repl._runtime_mode == "kernel"
 
 
+def test_kernel_turn_does_not_materialize_legacy_task_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from xenon.repl.repl import REPL
+    from xenon.repl.turn_contract import build_turn_contract
+
+    monkeypatch.chdir(tmp_path)
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    registry.assign_role("planner", ["fake"])
+    repl = REPL(registry=registry, streaming=False, optimize_prompts=False)
+    contract = build_turn_contract("写一个 hello.py 文件，内容是 print('hello')")
+    assert contract.requires_tools
+    monkeypatch.setattr(
+        repl,
+        "_resolve_turn_contract",
+        lambda *args, **kwargs: (
+            contract,
+            contract.to_execution_policy(),
+            contract.intent,
+            None,
+        ),
+    )
+    monkeypatch.setattr(repl, "_has_mcp_tools", lambda: False)
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.should_route_to_kernel",
+        lambda **kwargs: True,
+    )
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.run_kernel_turn",
+        lambda *args, **kwargs: calls.append(True),
+    )
+    repl.agent_context.set("_task_state", {"active": True, "objective": "stale"})
+
+    repl._handle_chat("写一个 hello.py 文件，内容是 print('hello')")
+
+    assert calls == [True]
+    assert repl.agent_context.get("_task_state") is None
+
+
 def test_routing_and_permission_mapping() -> None:
     assert should_route_to_kernel(
         runtime_mode="kernel",
