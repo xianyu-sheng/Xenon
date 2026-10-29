@@ -17,8 +17,7 @@ from typing import Any
 
 import yaml
 
-import xenon.engine.builtin_engines  # noqa: F401  # 触发内置范式注册
-from xenon.engine.registry import ENGINE_REGISTRY
+from xenon.modes import MODE_CATALOG, ModeSpec
 from xenon.utils.atomic_write import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -52,25 +51,15 @@ class ModelConfig:
     derived: bool = False
 
 
-@dataclass
-class ThinkingMode:
-    """思考范式配置。"""
-
-    name: str  # "react", "plan-execute", "reflection"
-    description: str = ""
-    workflow_template: str = ""  # 对应的 YAML 模板路径
+# 思考范式配置（兼容导出；实现由 :mod:`xenon.modes` 提供）。
+ThinkingMode = ModeSpec
 
 
 # ── 预置思考范式 ──────────────────────────────────────────
-# 由 ENGINE_REGISTRY 派生，避免范式清单出现第二份来源。此前这里是一份手工维护
-# 的字典，与 repl.py 的 dispatch 链、setup_wizard 的说明文案和 evals 的白名单
-# 各自独立，新增一种范式要四处同改，漏一处就静默不生效。
-#
-# 名称与描述的唯一来源是 xenon/engine/builtin_engines.py 的 register_engine()。
-BUILTIN_MODES: dict[str, ThinkingMode] = {
-    name: ThinkingMode(name=name, description=spec.description)
-    for name, spec in ENGINE_REGISTRY.items()
-}
+# 名称、描述与路由能力都来自 xenon/modes.py。这里刻意不再 import
+# ``xenon.engine``：/mode 是模型配置入口，不应该为了列七个名字而加载整个
+# legacy 引擎骨架。legacy 引擎的描述由 builtin_engines 复用同一份目录。
+BUILTIN_MODES: dict[str, ThinkingMode] = dict(MODE_CATALOG)
 
 
 class ModelRegistry:

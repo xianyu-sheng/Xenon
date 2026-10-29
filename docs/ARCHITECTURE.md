@@ -120,9 +120,10 @@ register_command("/name", desc, usage)    # command_groups 自动发现，无需
 # MCP：stdio server 注册后工具注入引擎（与 ToolExecutor 共用证据链）
 ```
 
-引擎注册表是范式元数据的唯一来源（`engine/builtin_engines.py`）：`direct`
-的 factory 为 None——它是 REPL 的纯对话分支，不是引擎；其余 6 个（react /
-plan-execute / reflection + 3 个组合）为真实引擎实现。
+`xenon/modes.py` 是 `/mode` 与 kernel 路由的元数据来源：`direct` / `react`
+使用 ActFirst，`plan-execute` 使用 PlanFirst；`reflection` / `plan-react` /
+`plan-reflection` / `react-reflection` 尚未有 kernel parity，继续由 legacy
+执行。legacy 引擎注册表只保留执行工厂与面板元数据，描述从模式目录复用。
 
 ## 7. 大文件拆分状态
 

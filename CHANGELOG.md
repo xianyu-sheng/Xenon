@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### 引擎
+
+- `/mode` 改用中立的 `xenon/modes.py` 模式目录：名称、描述与 kernel 路由能力只有一份来源，`model_registry` 不再 import `xenon.engine`。修复 `reflection` / `react-reflection` / 未知模式被 kernel 静默降级为 ActFirst 的问题；只有 `direct` / `react` / `plan-execute` 进入 kernel，其余模式继续走 frozen legacy，未知模式 fail closed。legacy 引擎描述复用同一目录，避免 `/mode` 与 `ENGINE_REGISTRY` 漂移。
+
 ### 证据层
 
 - 会话事件哈希链新增**可选密钥锚点**（#106）：设置 `XENON_EVIDENCE_HMAC_KEY` 后，链哈希从 sha256(正文) 改为 HMAC-SHA256(key, prev ‖ hk ‖ 事件正文)，前驱链接与 hk 模式标记一并纳入签名；密钥只从环境变量读取、永不落盘，事件文件仅带 `hk: "hmac-sha256"` 模式标记。缺密钥的核验者遇到 keyed 链计入"待核验"（状态 `partial`，绝不静默放行）；无密钥写入后再设密钥的混合模式核验为 `mixed/partial`，`/evidence` 新增链模式显示（keyed/unkeyed/mixed，keyed 完整链显示 🔒）。默认（不设密钥）行为与以前完全一致。
