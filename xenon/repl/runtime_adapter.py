@@ -71,7 +71,8 @@ def should_route_to_kernel(
     requires_tools: bool,
     skill_name: str | None,
     plan_mode: bool,
-    pending: object | None,
+    plan_deferred_write: bool = False,
+    pending: object | None = None,
     recipe: object | None,
     mode_name: str | None = None,
     external_query: bool = False,
@@ -84,6 +85,11 @@ def should_route_to_kernel(
     frozen legacy path until it has an equivalent strategy; it must never be
     silently executed as ActFirst.  Unknown mode names fail closed for the same
     reason.
+
+    ``/plan`` is a constraint, not a runtime switch.  A read-only plan turn is
+    safe for the kernel (the contract already removed write/execute).  A plan
+    that deferred a write still needs the legacy plan-approval gate, because
+    the kernel does not yet have a plan-only result that waits for approval.
     """
 
     requested_mode = (mode_name or "direct").strip().lower()
@@ -92,7 +98,7 @@ def should_route_to_kernel(
         runtime_mode == "kernel"
         and requires_tools
         and skill_name is None
-        and not plan_mode
+        and (not plan_mode or not plan_deferred_write)
         and pending is None
         and recipe is None
         and mode is not None
