@@ -415,6 +415,15 @@ def _console_for(repl: Any) -> Any:
     return repl_console
 
 
+def _clear_legacy_task_state(repl: Any) -> None:
+    """Drop the pre-kernel task-state bag; the ledger is authoritative."""
+
+    agent_context = getattr(repl, "agent_context", None)
+    setter = getattr(agent_context, "set", None)
+    if callable(setter):
+        setter("_task_state", None)
+
+
 def _result_summary(result: TaskResult) -> str:
     if result.answer.strip():
         return result.answer
@@ -503,14 +512,10 @@ def _render_kernel_result(
     add_message = getattr(repl.ctx_mgr, "add_assistant_message", None)
     if callable(add_message):
         add_message(answer, model_used=model_id)
-    if accepted:
-        # The legacy task-state bag is not the kernel source of truth.  Clear
-        # the pre-turn "unfinished delivery" marker once the kernel accepted
-        # the turn, otherwise the next legacy turn repeats stale demands.
-        agent_context = getattr(repl, "agent_context", None)
-        setter = getattr(agent_context, "set", None)
-        if callable(setter):
-            setter("_task_state", None)
+    # The kernel ledger is the source of truth for this turn, even when it
+    # blocks.  The legacy task-state bag must not survive and drive the next
+    # legacy/continuation turn with a second, stale explanation of the task.
+    _clear_legacy_task_state(repl)
     record = getattr(repl, "_record_event", None)
     if callable(record):
         record(
@@ -556,6 +561,8 @@ def run_kernel_turn(
     except KeyboardInterrupt:
         raise
     except Exception as exc:  # noqa: BLE001 — REPL must show an actionable error
+        # A failed kernel turn must not leave legacy task state behind either.
+        _clear_legacy_task_state(repl)
         finish_node = getattr(repl, "_finish_turn_node", None)
         if callable(finish_node):
             finish_node("interrupted", engine="kernel", reasons=[str(exc)[:200]])
