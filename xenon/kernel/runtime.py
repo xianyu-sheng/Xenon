@@ -103,6 +103,21 @@ class _RuntimeServices:
         return self._runtime._cancelled
 
 
+def _plan_text(plan: Any) -> str:
+    """Render an accepted plan without claiming execution evidence."""
+
+    analysis = str(getattr(plan, "analysis", "") or "").strip()
+    lines: list[str] = [analysis] if analysis else []
+    for step in tuple(getattr(plan, "steps", ()) or ()):
+        kind = getattr(step.kind, "value", str(step.kind))
+        targets = ", ".join(
+            str(item) for item in getattr(step, "targets", ()) or ()
+        )
+        suffix = f" · {targets}" if targets else ""
+        lines.append(f"{step.id}. {kind}{suffix}")
+    return chr(10).join(lines) or "计划已提交，等待确认。"
+
+
 class LoopRuntime:
     """One loop, one writer, explicit phase machine."""
 
@@ -229,6 +244,17 @@ class LoopRuntime:
             self._transition(TaskPhase.RUNNING, "action proposed")
             self._steps += 1
 
+            # A plan-only task must never execute a tool even if its strategy
+            # misbehaves.  The accepted plan is the whole result.
+            if self._plan_only() and not isinstance(action, SubmitPlan):
+                self._transition(
+                    TaskPhase.BLOCKED,
+                    "plan-only task requires a plan proposal",
+                )
+                return self._result(
+                    accepted=False, evidence=EvidenceStatus.UNVERIFIED
+                )
+
             veto = self._check_policies(view, action)
             if veto is not None:
                 return veto
@@ -260,7 +286,11 @@ class LoopRuntime:
 
             if isinstance(action, UpdatePlan):
                 try:
-                    self._apply_plan(action.plan, updated=True)
+                    self._apply_plan(
+                        action.plan,
+                        updated=True,
+                        start_active=not self._plan_only(),
+                    )
                 except ValueError as exc:
                     blocked = self._reject_plan(exc)
                     if blocked is not None:
@@ -315,11 +345,24 @@ class LoopRuntime:
     # ── action handlers ────────────────────────────────────────────────
 
     def _accept_plan(self, plan: Any) -> TaskResult | None:
+        plan_only = self._plan_only()
         try:
-            self._apply_plan(plan, updated=False)
+            self._apply_plan(plan, updated=False, start_active=not plan_only)
         except ValueError as exc:
             return self._reject_plan(exc)
+        if plan_only:
+            self._transition(
+                TaskPhase.PLANNED, "plan accepted; waiting for approval"
+            )
+            return self._result(
+                accepted=False,
+                evidence=EvidenceStatus.UNVERIFIED,
+                answer=_plan_text(plan),
+            )
         return None
+
+    def _plan_only(self) -> bool:
+        return self._spec is not None and self._spec.mode is TaskMode.PLAN
 
     def _reject_plan(self, exc: ValueError) -> TaskResult | None:
         self._replans += 1
@@ -340,7 +383,9 @@ class LoopRuntime:
         self._transition(TaskPhase.RUNNING, "replan after invalid plan")
         return None
 
-    def _apply_plan(self, plan: Any, *, updated: bool) -> None:
+    def _apply_plan(
+        self, plan: Any, *, updated: bool, start_active: bool = True
+    ) -> None:
         raw_steps = tuple(getattr(plan, "steps", ()))
         self._validate_steps(raw_steps)
         self._plan_since_seq = self._ledger.watermark()
@@ -354,6 +399,9 @@ class LoopRuntime:
         self._plan = plan
         self._plan_steps = steps
         self._closed_steps.clear()
+        if not start_active:
+            self._active_step = None
+            return
         self._active_step = self._select_ready_step()
         if self._active_step is not None:
             self._append(

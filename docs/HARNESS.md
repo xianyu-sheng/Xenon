@@ -205,6 +205,13 @@ read-only kernel plan below it. A read-only plan turn now stays on the kernel;
 a plan that deferred a write still uses the legacy planning gate, because the
 kernel does not yet return a plan-only result that waits for approval.
 
+The kernel now has a plan-only primitive for the remaining `/plan` migration:
+`TaskMode.PLAN` accepts one plan and stops in `TaskPhase.PLANNED` without
+starting a step or executing a tool. It refuses any non-`SubmitPlan` action,
+so a misbehaving strategy cannot turn plan-only into execution. This is a
+runtime result, not yet a REPL approval gate; wiring `/plan` to it is the next
+slice.
+
 If the pointer exists but the ledger is missing or outside the kernel root,
 both commands fail closed and do not fall back to the legacy goal projection.
 `/mode` is intentionally not part of this view: it selects a model thinking
