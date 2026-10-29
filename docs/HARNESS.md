@@ -122,7 +122,9 @@ The REPL adapter:
   `WRITE`/`EXECUTE` to `PermissionMode.AUTO_EDIT` (no automatic bypass);
 - runs `GitFinalizer` only when the workspace has `.git`;
 - projects kernel events into the existing ThinkingPanel and writes the answer
-  back to `ContextManager` and the turn tree.
+  back to `ContextManager` and the turn tree;
+- clears the legacy `_task_state` on every kernel exit, including blocked and
+  adapter-error turns, so the ledger remains the only task-state source.
 
 If the kernel blocks a turn, the REPL prints the open obligations and the
 ledger path. `XENON_RUNTIME=legacy` is a frozen fallback, not a second

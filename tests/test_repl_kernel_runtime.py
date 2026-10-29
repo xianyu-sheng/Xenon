@@ -593,6 +593,7 @@ def test_result_summary_branches_and_blocked_rendering(tmp_path: Path) -> None:
     assert repl.rendered[-1][0] == "Kernel · blocked"
     assert repl.finished == [("degraded", "kernel")]
     assert repl.ctx_mgr.messages
+    assert repl.agent_context.values["_task_state"] is None
 
 
 def test_run_kernel_turn_denies_shell_approval(tmp_path: Path) -> None:
@@ -627,6 +628,7 @@ def test_run_kernel_turn_denies_shell_approval(tmp_path: Path) -> None:
         ("bash", {"command": "echo hello"}, "CRITICAL")
     ]
     assert repl.finished == [("degraded", "kernel")]
+    assert repl.agent_context.values["_task_state"] is None
 
 
 def test_run_kernel_turn_reports_adapter_exception(tmp_path: Path, monkeypatch) -> None:
@@ -651,6 +653,7 @@ def test_run_kernel_turn_reports_adapter_exception(tmp_path: Path, monkeypatch) 
     assert result is None
     assert repl.finished == [("interrupted", "kernel")]
     assert "boom" in repl.ctx_mgr.messages[-1][0]
+    assert repl.agent_context.values["_task_state"] is None
 
 
 class LazyMCPRegistry:
