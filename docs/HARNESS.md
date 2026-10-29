@@ -97,9 +97,9 @@ xenon
 XENON_RUNTIME=legacy xenon
 ```
 
-Only turns that require tools and are not a skill, plan-mode turn, pending
-continuation, atomic recipe, or a mode without kernel parity are routed to the
-kernel. `direct`/`react` use ActFirst; `plan-execute` uses the kernel's LLM
+Only turns that require tools and are not a skill, a deferred-write plan turn,
+pending continuation, atomic recipe, or a mode without kernel parity are routed
+to the kernel. `direct`/`react` use ActFirst; `plan-execute` uses the kernel's LLM
 PlanFirst planner. After the last plan step, PlanFirst asks the model once for
 a final answer from the deterministic working set; the finisher only returns a
 `Finish` action and never executes a tool. `reflection`, `plan-react`, `plan-reflection` and
@@ -108,8 +108,10 @@ equivalent strategies. They must not silently fall through to ActFirst, and an
 unknown mode name fails closed instead of being treated as the default.
 External queries stay legacy unless an MCP registry is available; then the
 kernel uses the `core+mcp` profile and the remote call goes through approval.
-Plain chat, `/plan`, `/resume`, `/evidence`, and skills still use their existing
-paths. `/mode` metadata comes from the neutral `xenon/modes.py` catalog and no
+Plain chat, write-plan approval, `/resume`, `/evidence`, and skills still use
+their existing paths. `/plan` is a constraint, not a runtime switch: a read-only
+plan turn stays on the kernel; a plan that deferred a write still uses the legacy
+approval gate until the kernel has a plan-only result. `/mode` metadata comes from the neutral `xenon/modes.py` catalog and no
 longer imports the legacy engine registry.
 
 The REPL adapter:
@@ -198,9 +200,10 @@ trusted delivery.
 
 `/goal` reads the kernel ledger when the current turn has a kernel pointer.
 It shows the ledger objective, phase, plan steps, open debt, artifacts and the
-finalize commit. `/plan status` keeps showing the legacy plan-mode toggle and
-adds the read-only kernel plan below it. `/plan on|off` still controls only
-legacy soft guidance; it does not pretend to start a kernel plan.
+finalize commit. `/plan status` keeps showing the plan-mode toggle and adds the
+read-only kernel plan below it. A read-only plan turn now stays on the kernel;
+a plan that deferred a write still uses the legacy planning gate, because the
+kernel does not yet return a plan-only result that waits for approval.
 
 If the pointer exists but the ledger is missing or outside the kernel root,
 both commands fail closed and do not fall back to the legacy goal projection.

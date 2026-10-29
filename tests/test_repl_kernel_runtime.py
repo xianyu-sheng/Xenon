@@ -151,6 +151,42 @@ def test_repl_defaults_to_kernel(monkeypatch) -> None:
     assert repl._runtime_mode == "kernel"
 
 
+def test_plan_mode_read_only_routes_kernel(tmp_path: Path, monkeypatch) -> None:
+    from xenon.repl.repl import REPL
+    from xenon.repl.turn_contract import contract_for_level
+
+    monkeypatch.chdir(tmp_path)
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    registry.assign_role("planner", ["fake"])
+    repl = REPL(registry=registry, streaming=False, optimize_prompts=False)
+    contract = contract_for_level(ExecutionLevel.READ_ONLY)
+    monkeypatch.setattr(
+        repl,
+        "_resolve_turn_contract",
+        lambda *args, **kwargs: (
+            contract,
+            contract.to_execution_policy(),
+            contract.intent,
+            None,
+        ),
+    )
+    monkeypatch.setattr(repl, "_has_mcp_tools", lambda: False)
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.run_kernel_turn",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+    repl._plan_mode_active = True
+    repl.agent_context.set("_task_state", {"active": True})
+
+    repl._handle_chat("读一下 README 再给方案")
+
+    assert calls
+    assert calls[0]["execution_policy"].level == ExecutionLevel.READ_ONLY
+    assert repl.agent_context.get("_task_state") is None
+
+
 def test_kernel_turn_does_not_materialize_legacy_task_state(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -226,6 +262,25 @@ def test_routing_and_permission_mapping() -> None:
         pending=None,
         recipe=None,
         mode_name="plan-execute",
+    )
+    assert should_route_to_kernel(
+        runtime_mode="kernel",
+        requires_tools=True,
+        skill_name=None,
+        plan_mode=True,
+        pending=None,
+        recipe=None,
+        mode_name="react",
+    )
+    assert not should_route_to_kernel(
+        runtime_mode="kernel",
+        requires_tools=True,
+        skill_name=None,
+        plan_mode=True,
+        plan_deferred_write=True,
+        pending=None,
+        recipe=None,
+        mode_name="react",
     )
     assert not should_route_to_kernel(
         runtime_mode="kernel",

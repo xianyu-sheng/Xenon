@@ -236,6 +236,7 @@ class TurnFlowMixin:
             requires_tools=execution_policy.requires_tools,
             skill_name=skill_name,
             plan_mode=self._plan_mode_active,
+            plan_deferred_write=bool(turn_contract_obj.deferred_write),
             pending=pending,
             recipe=recipe,
             mode_name=self.registry.current_mode,
