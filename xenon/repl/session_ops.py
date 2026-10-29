@@ -68,6 +68,22 @@ class SessionOpsMixin:
                         if isinstance(f, dict) and "path" in f:
                             paths.append(str(f["path"]))
 
+            # kernel receipts carry created_paths separately from paths.  Use
+            # the explicit fact for created files; legacy tools may omit it.
+            created_hint: set[str] = set()
+            raw_created = ai.get("created_paths")
+            if isinstance(raw_created, str):
+                raw_created = [raw_created]
+            if isinstance(raw_created, list):
+                for item in raw_created:
+                    if isinstance(item, str) and item:
+                        created_hint.add(
+                            item if _os.path.isabs(item) else _os.path.abspath(item)
+                        )
+            for item in created_hint:
+                if item not in paths:
+                    paths.append(item)
+
             # 失败的工具也要进事实日志（回合归档需要失败日志）；
             # 工作记忆仍只吸收成功结果。
             self._record_event(
@@ -116,9 +132,11 @@ class SessionOpsMixin:
                 # 标准化为绝对路径
                 abs_path = p if _os.path.isabs(p) else _os.path.abspath(p)
 
-                if action in self._FILE_CREATE_TOOLS:
+                if action in self._FILE_CREATE_TOOLS or abs_path in created_hint:
                     if abs_path not in created:
                         created.append(abs_path)
+                    if abs_path in modified:
+                        modified.remove(abs_path)
                 elif action in self._FILE_MODIFY_TOOLS:
                     if abs_path not in modified:
                         modified.append(abs_path)
@@ -132,6 +150,8 @@ class SessionOpsMixin:
             for p in created:
                 if p not in all_created:
                     all_created.append(p)
+                if p in all_modified:
+                    all_modified.remove(p)
             for p in modified:
                 if p not in all_modified:
                     all_modified.append(p)

@@ -122,8 +122,8 @@ The REPL adapter:
   `WRITE`/`EXECUTE` to `PermissionMode.AUTO_EDIT` (no automatic bypass);
 - runs `GitFinalizer` only when the workspace has `.git`;
 - projects kernel events into the existing ThinkingPanel, including write
-  effect paths, and writes the answer back to `ContextManager` and the turn
-  tree;
+  effect paths and created-path facts, and writes the answer back to
+  `ContextManager` and the turn tree;
 - decides the kernel route before materializing legacy task state, and clears
   `_task_state` on every kernel exit (including blocked and adapter-error
   turns), so the ledger remains the only task-state source for kernel turns.
