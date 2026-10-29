@@ -120,7 +120,9 @@ class FakeRepl:
     def _stop_log_capture(self) -> str:
         return ""
 
-    def _finish_turn_node(self, status, *, engine="", reasons=None, panel=None):
+    def _finish_turn_node(
+        self, status, *, engine="", reasons=None, panel=None, metrics=None
+    ):
         self.finished.append((status, engine))
 
     def _track_session_files(self, panel) -> None:

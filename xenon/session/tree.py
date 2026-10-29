@@ -118,7 +118,10 @@ class TurnTree:
         if tail is self.root or tail.status in (PASSED, RUNNING):
             return ""
         reason = tail.verdict_reasons[0][:60] if tail.verdict_reasons else "未完成"
-        return f"上一轮: {tail.status}（{reason}；说“继续”可续接）"
+        suffix = f"上一轮: {tail.status}（{reason}）"
+        if tail.is_resumable:
+            suffix += "；说“继续”可续接"
+        return suffix
 
     # ── rebuild (best effort from the truth layer) ───────────
 
