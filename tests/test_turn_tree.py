@@ -104,6 +104,54 @@ def test_repl_resolve_bare_continuation_without_resumable_tail(monkeypatch, tmp_
     assert text == "继续"
 
 
+def test_status_suffix_only_promises_resume_for_resumable_statuses():
+    tree = TurnTree()
+    node = tree.append_turn("blocked")
+    tree.finish(node, "degraded", verdict_reasons=["missing evidence"])
+
+    suffix = tree.status_suffix()
+    assert "degraded" in suffix
+    assert "继续" not in suffix
+
+    tree.finish(node, FUSED, verdict_reasons=["loop"])
+    assert "继续" in tree.status_suffix()
+
+
+def test_finish_turn_node_prefers_kernel_metrics(monkeypatch, tmp_path):
+    monkeypatch.setenv("XENON_SESSION_EVENTS_DIR", str(tmp_path))
+    registry = ModelRegistry()
+    registry.add_model("openai/test", "test")
+    repl = REPL(registry=registry, streaming=False)
+    repl._turn_tree_rebuilt = True
+
+    class _Step:
+        action = "read"
+        is_error = False
+        action_input = {}
+        observation = "ok"
+
+    class _Panel:
+        steps = [_Step()]
+        errors: list = []
+        tool_call_count = 1
+
+    node = repl._turn_tree.append_turn("kernel task")
+    repl._finish_turn_node(
+        "passed",
+        engine="kernel",
+        panel=_Panel(),
+        metrics={"steps": 3, "tool_calls": 2},
+    )
+
+    assert node.steps == 3
+    assert node.tools == 2
+    verdict = [
+        item for item in repl._session_events.read() if item["type"] == "turn/verdict"
+    ][-1]
+    assert verdict["steps"] == 3
+    assert verdict["tools"] == 2
+
+
 def test_finish_turn_node_writes_verdict_event(monkeypatch, tmp_path):
     monkeypatch.setenv("XENON_SESSION_EVENTS_DIR", str(tmp_path))
     registry = ModelRegistry()

@@ -127,6 +127,9 @@ The REPL adapter:
 - decides the kernel route before materializing legacy task state, and clears
   `_task_state` on every kernel exit (including blocked and adapter-error
   turns), so the ledger remains the only task-state source for kernel turns.
+- writes kernel metric counts into the turn verdict instead of inferring them
+  from the rendering panel, and only advertises continuation for resumable
+  tree statuses.
 
 If the kernel blocks a turn, the REPL prints the open obligations and the
 ledger path. `XENON_RUNTIME=legacy` is a frozen fallback, not a second

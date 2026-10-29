@@ -12,6 +12,7 @@
 - kernel 回合（accepted / blocked / adapter exception）结束时统一清理 legacy `_task_state`，不再只在 accepted 清理；并在创建 legacy TaskState 之前决定 kernel 路由，kernel 回合不再物化/延续第二套任务状态。避免 kernel ledger 已裁决后下一轮仍被旧的“未完成交付”状态驱动。
 - kernel `ReplEventSink` 从 `tool_receipt.effects` 投影 `fs_write.paths` / `created_paths` 到 ThinkingPanel action input；`session_ops` 将 kernel 的 `apply_patch` 计入修改文件。kernel 编辑回合的 working memory、turn-node artifacts 不再因 legacy 参数缺失而为空。
 - `session_ops` 使用 `created_paths` 区分新建与修改：kernel `apply_patch` 新建文件进入 `session_created_files`，已有文件进入 `session_modified_files`；同一路径从 modified 中移除，避免 working memory 重复。
+- kernel 回合的 `TaskResult.metrics` 进入 turn node / `turn/verdict`，覆盖 panel 推断的 steps/tools；`TurnTree.status_suffix()` 仅在 `is_resumable` 时提示“继续”，`degraded` 不再暗示可续接。
 
 ### 证据层
 

@@ -519,6 +519,7 @@ def _render_kernel_result(
             engine="kernel",
             reasons=reasons,
             panel=panel,
+            metrics=dict(result.metrics),
         )
 
     repl._last_mode_line = "· Kernel runtime"

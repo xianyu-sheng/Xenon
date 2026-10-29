@@ -220,6 +220,7 @@ class SessionOpsMixin:
         reasons: list[str] | None = None,
         retries_used: int = 0,
         panel: Any = None,
+        metrics: dict[str, Any] | None = None,
     ) -> None:
         """回合收尾：写树节点状态 + turn/verdict 事实（状态单一来源）。"""
 
@@ -236,6 +237,13 @@ class SessionOpsMixin:
                 from xenon.repl.turn_helpers import paths_from_panel
 
                 fields["artifacts"] = paths_from_panel(panel)[-10:]
+            if metrics:
+                # Kernel metrics are authoritative for kernel turns; the panel
+                # is only a rendering projection and may count fewer actions.
+                if metrics.get("steps") is not None:
+                    fields["steps"] = int(metrics["steps"])
+                if metrics.get("tool_calls") is not None:
+                    fields["tools"] = int(metrics["tool_calls"])
             if reasons:
                 fields["verdict_reasons"] = list(reasons)
             # 同因中断快速熔断（402 类基础设施错误）：连续两轮同因 → fused + 指引。
