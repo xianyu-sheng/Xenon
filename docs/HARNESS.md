@@ -111,7 +111,7 @@ kernel uses the `core+mcp` profile and the remote call goes through approval.
 Plain chat, write-plan approval, `/resume`, `/evidence`, and skills still use
 their existing paths. `/plan` is a constraint, not a runtime switch: a read-only
 plan turn stays on the kernel; a plan that deferred a write still uses the legacy
-approval gate until the kernel has a plan-only result. `/mode` metadata comes from the neutral `xenon/modes.py` catalog and no
+approval gate until `/plan` routing is migrated. `/mode` metadata comes from the neutral `xenon/modes.py` catalog and no
 longer imports the legacy engine registry.
 
 The REPL adapter:
@@ -202,16 +202,19 @@ trusted delivery.
 It shows the ledger objective, phase, plan steps, open debt, artifacts and the
 finalize commit. `/plan status` keeps showing the plan-mode toggle and adds the
 read-only kernel plan below it. A read-only plan turn now stays on the kernel;
-a plan that deferred a write still uses the legacy planning gate, because the
-kernel does not yet return a plan-only result that waits for approval.
+a plan that deferred a write still uses the legacy planning gate until `/plan`
+routing is migrated.
 
 The kernel now has a plan-only primitive for the remaining `/plan` migration:
 `TaskMode.PLAN` accepts one plan and stops in `TaskPhase.PLANNED` without
 starting a step or executing a tool. It refuses any non-`SubmitPlan` action,
 so a misbehaving strategy cannot turn plan-only into execution. The REPL
 adapter exposes `plan_only=True`, renders the result as `Kernel · plan`, and
-marks the turn `pending-approval` instead of blocking it. The actual approve /
-reject / execute gate is still the next slice; `/plan` routing is unchanged.
+marks the turn `pending-approval` instead of blocking it. `/plan approve` and
+`/plan reject` bind a decision to the current planned ledger and record it in
+session events; the kernel ledger stays immutable. Approve exits plan mode,
+reject keeps it, and neither path executes the plan yet. `/plan` routing is
+unchanged.
 
 If the pointer exists but the ledger is missing or outside the kernel root,
 both commands fail closed and do not fall back to the legacy goal projection.
