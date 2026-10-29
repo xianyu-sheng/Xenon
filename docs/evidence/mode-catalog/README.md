@@ -82,7 +82,8 @@ unknown            fail closed
 
 While preparing this evidence, the legacy combined-engine
 `ExecutionEvidence._workspace_snapshot` hit a Windows locale decoding issue on
-an uncommitted Chinese diff (`diff.stdout` was `None`). This is unrelated to
-mode routing and is not changed in this slice; the TTY above was rerun from a
-clean code baseline. It is recorded here so it is not mistaken for a kernel
-regression.
+an uncommitted Chinese diff (`diff.stdout` was `None`). That issue was fixed
+separately in #257: the snapshot now decodes Git output as UTF-8 with
+replacement, and treats a missing `stdout` as an empty snapshot. This evidence
+itself was rerun from a clean code baseline before that fix, so it does not
+exercise the encoding path.

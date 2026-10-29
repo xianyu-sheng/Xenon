@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
+from types import SimpleNamespace
 
+from xenon.engine import execution_evidence
 from xenon.engine.execution_evidence import ExecutionEvidence
 from xenon.engine.tool_tracker import ToolExecutionTracker
 
@@ -49,3 +52,38 @@ def test_evidence_reads_real_worktree_diff(tmp_path):
     assert "value.txt" in evidence.workspace_status
     assert "-old" in evidence.workspace_diff
     assert "+new" in evidence.workspace_diff
+
+
+def test_evidence_reads_utf8_diff_with_chinese_content(tmp_path):
+    """Windows defaults to GBK; Git emits UTF-8.  The snapshot must not crash."""
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    target = tmp_path / "value.txt"
+    target.write_text("旧值\n", encoding="utf-8")
+    subprocess.run(["git", "add", "value.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=tmp_path, check=True)
+    target.write_text("新值\n", encoding="utf-8")
+
+    evidence = ExecutionEvidence.capture(ToolExecutionTracker(), tmp_path)
+
+    assert "value.txt" in evidence.workspace_status
+    assert "-旧值" in evidence.workspace_diff
+    assert "+新值" in evidence.workspace_diff
+
+
+def test_workspace_snapshot_treats_missing_stdout_as_empty(monkeypatch, tmp_path):
+    """A failed decoding thread can leave stdout=None; never call .strip() on it."""
+
+    monkeypatch.setattr(
+        execution_evidence.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=None),
+    )
+
+    assert execution_evidence._workspace_snapshot(Path(tmp_path)) == ("", "")
