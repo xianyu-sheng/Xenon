@@ -7,11 +7,22 @@ The session file stores a pointer to the ledger, not a copy of the ledger.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from xenon.kernel.contracts import (
+    Capability,
+    Obligation,
+    ObligationSource,
+    PlanProposal,
+    PropositionKind,
+    StepContract,
+    StepKind,
+    ToolIntent,
+)
 from xenon.ledger.events import Event
 from xenon.ledger.projections import project_evidence, project_task_state
 from xenon.ledger.store import IntegrityReport, Ledger
@@ -33,6 +44,16 @@ def _safe_ledger_path(value: str | Path) -> Path | None:
     if path.suffix != ".jsonl" or not path.is_file():
         return None
     return path
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractedPlan:
+    """A validated plan read from a planned kernel ledger."""
+
+    task_id: str
+    ledger_path: Path
+    plan: PlanProposal
+    digest: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +184,140 @@ def _tool_summary(evidence: Mapping[str, Any]) -> str:
             failed += 1
     parts = " · ".join(f"{name} ×{count}" for name, count in sorted(names.items()))
     return f"🔧 {len(receipts)} 次（{parts}）· 失败 {failed}"
+
+
+def plan_approval(events: Any, task_id: str) -> Mapping[str, Any] | None:
+    """Latest plan decision for one kernel task, or None.
+
+    Plan approval is a REPL decision, so it lives in session events rather
+    than the append-only kernel ledger.  Only events bound to this task_id
+    count; a decision for another task never leaks across turns.
+    """
+
+    latest: Mapping[str, Any] | None = None
+    for event in events or ():
+        if not isinstance(event, Mapping):
+            continue
+        kind = str(event.get("type") or "")
+        if kind not in {"plan/approved", "plan/rejected"}:
+            continue
+        if str(event.get("task_id") or "") != str(task_id):
+            continue
+        latest = {
+            "status": "approved" if kind == "plan/approved" else "rejected",
+            "plan_digest": str(event.get("plan_digest") or ""),
+            "at": event.get("at"),
+            "event_id": event.get("id"),
+        }
+    return latest
+
+
+def planned_plan(evidence: KernelEvidence) -> ExtractedPlan | None:
+    """Extract a validated plan only from a planned, intact ledger.
+
+    The kernel ledger is immutable after the plan-only run.  This function
+    never executes the plan or grants authority; it only turns the serialized
+    plan into the same contract the runtime accepted.
+    """
+
+    if not evidence.integrity.valid:
+        return None
+    result = evidence.result or {}
+    state = evidence.task_state
+    phase = str(result.get("phase") or state.get("phase") or "")
+    if phase != "planned":
+        return None
+    raw = state.get("plan")
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        proposal = _parse_plan(raw)
+    except (TypeError, ValueError, KeyError):
+        return None
+    digest = hashlib.sha256(
+        json.dumps(
+            raw,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return ExtractedPlan(
+        task_id=evidence.task_id,
+        ledger_path=evidence.ledger_path,
+        plan=proposal,
+        digest=digest,
+    )
+
+
+def _parse_plan(raw: Mapping[str, Any]) -> PlanProposal:
+    steps_raw = raw.get("steps")
+    if not isinstance(steps_raw, list) or not steps_raw:
+        raise ValueError("planned plan has no steps")
+    steps: list[StepContract] = []
+    seen: set[int] = set()
+    for item in steps_raw:
+        if not isinstance(item, Mapping):
+            raise ValueError("plan step is not an object")
+        step_id = item.get("step_id", item.get("id"))
+        if not isinstance(step_id, int) or isinstance(step_id, bool):
+            raise ValueError("plan step id must be an integer")
+        if step_id in seen:
+            raise ValueError("duplicate plan step id")
+        seen.add(step_id)
+        depends_on = tuple(int(value) for value in item.get("depends_on") or ())
+        if any(value not in seen or value == step_id for value in depends_on):
+            raise ValueError("plan dependency is not an earlier step")
+        intent_raw = item.get("intent")
+        intent = None
+        if intent_raw is not None:
+            if not isinstance(intent_raw, Mapping):
+                raise ValueError("plan intent is not an object")
+            intent = ToolIntent(
+                capability=Capability(str(intent_raw.get("capability") or "")),
+                params=dict(intent_raw.get("params") or {}),
+                targets=tuple(
+                    str(value) for value in intent_raw.get("targets") or ()
+                ),
+                prefer=intent_raw.get("prefer"),
+            )
+        expects_raw = item.get("expects")
+        if expects_raw is None:
+            expects_raw = []
+        if not isinstance(expects_raw, list):
+            raise ValueError("plan expects is not a list")
+        expects: list[Obligation] = []
+        for expect in expects_raw:
+            if not isinstance(expect, Mapping):
+                raise ValueError("plan expectation is not an object")
+            obligation_id = str(expect.get("id") or "")
+            if not obligation_id:
+                raise ValueError("plan expectation has no id")
+            expects.append(
+                Obligation(
+                    id=obligation_id,
+                    kind=PropositionKind(str(expect.get("kind") or "")),
+                    target=str(expect.get("target") or ""),
+                    expect=dict(expect.get("expect") or {}),
+                    source=ObligationSource.PLAN,
+                    since_seq=int(expect.get("since_seq") or 0),
+                )
+            )
+        steps.append(
+            StepContract(
+                id=step_id,
+                kind=StepKind(str(item.get("kind") or "")),
+                intent=intent,
+                targets=tuple(str(value) for value in item.get("targets") or ()),
+                expects=tuple(expects),
+                depends_on=depends_on,
+                prefer=item.get("prefer"),
+            )
+        )
+    return PlanProposal(
+        steps=tuple(steps),
+        analysis=str(raw.get("analysis") or ""),
+    )
 
 
 def plan_lines(evidence: KernelEvidence, *, limit: int = 8) -> list[str]:
@@ -364,6 +519,7 @@ def render_kernel_evidence(evidence: KernelEvidence, *, raw: bool = False) -> st
 
 
 __all__ = [
+    "ExtractedPlan",
     "KernelEvidence",
     "current_kernel_evidence",
     "find_kernel_evidence",
@@ -371,7 +527,9 @@ __all__ = [
     "kernel_ledger_dir",
     "kernel_ledger_files",
     "load_kernel_evidence",
+    "plan_approval",
     "plan_lines",
+    "planned_plan",
     "render_kernel_evidence",
     "restore_session_pointer",
     "snapshot_for_session",
