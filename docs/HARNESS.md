@@ -100,7 +100,9 @@ XENON_RUNTIME=legacy xenon
 Only turns that require tools and are not a skill, plan-mode turn, pending
 continuation, atomic recipe, or a mode without kernel parity are routed to the
 kernel. `direct`/`react` use ActFirst; `plan-execute` uses the kernel's LLM
-PlanFirst planner. `reflection`, `plan-react`, `plan-reflection` and
+PlanFirst planner. After the last plan step, PlanFirst asks the model once for
+a final answer from the deterministic working set; the finisher only returns a
+`Finish` action and never executes a tool. `reflection`, `plan-react`, `plan-reflection` and
 `react-reflection` remain on the frozen legacy scheduler until they have
 equivalent strategies. They must not silently fall through to ActFirst, and an
 unknown mode name fails closed instead of being treated as the default.

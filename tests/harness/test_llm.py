@@ -13,6 +13,7 @@ from xenon.harness.cli import _parser, run_from_args
 from xenon.harness.llm import (
     ActionParseError,
     LLMActionProposer,
+    LLMPlanFinisher,
     ModelConfig,
     ModelConfigError,
     build_llm_plan_strategy,
@@ -477,7 +478,10 @@ def test_run_task_approval_allows_shell_once(tmp_path: Path) -> None:
 
 def test_llm_plan_strategy_executes_a_capability_plan(tmp_path: Path) -> None:
     _repo(tmp_path)
-    client = FakeClient([json.dumps(_plan_dict())])
+    client = FakeClient([
+        json.dumps(_plan_dict()),
+        json.dumps({"action": "finish", "answer": "added add() and its test"}),
+    ])
     run = run_task(
         "add a function and test it",
         strategy=build_llm_plan_strategy(
@@ -491,7 +495,8 @@ def test_llm_plan_strategy_executes_a_capability_plan(tmp_path: Path) -> None:
 
     assert run.result.accepted is True, run.result.debt
     assert run.result.finalize_sha
-    assert len(client.calls) == 1
+    assert run.result.answer == "added add() and its test"
+    assert len(client.calls) == 2
     events = Ledger(run.ledger_path, "plan-llm-1").read()
     assert any(event.kind.value == "plan_accepted" for event in events)
     assert any(event.kind.value == "tool_receipt" for event in events)
@@ -533,3 +538,47 @@ def test_build_plan_messages_includes_schema() -> None:
     assert "RUNTIME SYSTEM" in messages[0]["content"]
     assert "capability-based plan" in messages[0]["content"]
     assert "fix it" in messages[1]["content"]
+
+
+def test_plan_finisher_rejects_non_finish_actions() -> None:
+    spec = TaskSpec(task_id="t", objective="read it", workspace="/workspace")
+    view = ModelView(
+        task=spec,
+        system="RUNTIME SYSTEM",
+        tools=(),
+        working_set=(),
+        debt=(),
+        budget=spec.budget,
+        input_seq=0,
+        hash="h",
+    )
+    client = FakeClient(
+        [json.dumps({"action": "call_tool", "capability": "read", "params": {}})]
+    )
+
+    action = LLMPlanFinisher(ModelConfig(model_id="test/fake"), client=client)(view)
+
+    assert isinstance(action, Finish)
+    assert "summary unavailable" in action.answer
+
+
+def test_build_plan_messages_uses_real_newlines() -> None:
+    spec = TaskSpec(task_id="t", objective="fix it", workspace="/workspace")
+    view = ModelView(
+        task=spec,
+        system="RUNTIME SYSTEM",
+        tools=(),
+        working_set=(),
+        debt=(),
+        budget=spec.budget,
+        input_seq=0,
+        hash="h",
+    )
+
+    system = build_plan_messages(view)[0]["content"]
+    user = build_plan_messages(view)[1]["content"]
+
+    assert "RUNTIME SYSTEM\nPlanFirst planning protocol" in system
+    assert "\n" in user
+    assert "\\n" not in system
+    assert "\\n" not in user

@@ -862,7 +862,10 @@ def test_runtime_adapter_runs_plan_execute_with_llm_planner(
     tmp_path: Path,
 ) -> None:
     _repo(tmp_path)
-    client = FakeClient([json.dumps(_plan_dict())])
+    client = FakeClient([
+        json.dumps(_plan_dict()),
+        json.dumps({"action": "finish", "answer": "added add() and its test"}),
+    ])
     adapter = RuntimeAdapter(
         workspace=tmp_path,
         model_config=ModelConfig(model_id="test/fake"),
@@ -874,6 +877,7 @@ def test_runtime_adapter_runs_plan_execute_with_llm_planner(
     run = adapter.run("add a function and test it", task_id="adapter-plan")
 
     assert run.result.accepted is True, run.result.debt
+    assert run.result.answer == "added add() and its test"
     assert run.result.finalize_sha
     events = Ledger(run.ledger_path, "adapter-plan").read()
     assert any(event.kind.value == "plan_accepted" for event in events)

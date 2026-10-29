@@ -46,8 +46,10 @@ class PlanFirst:
     """Submit one plan, then execute exactly one active step per proposal."""
 
     planner: PlanProvider
+    finisher: ActionProvider | None = None
     finish_text: str = "completed"
     _submitted: bool = False
+    _finished: bool = False
 
     def propose(self, view: ModelView) -> Action:
         if not self._submitted:
@@ -55,6 +57,12 @@ class PlanFirst:
             return SubmitPlan(self.planner(view))
         active = view.active_step
         if active is None:
+            # A real plan should end with a synthesis over the step receipts.
+            # Empty/invalid plans stay on the deterministic fallback so they
+            # do not trigger an extra model call.
+            if self.finisher is not None and view.steps and not self._finished:
+                self._finished = True
+                return self.finisher(view)
             return Finish(self.finish_text)
         if active.intent is None:
             return Think(f"step {active.id}: {active.kind.value}")
