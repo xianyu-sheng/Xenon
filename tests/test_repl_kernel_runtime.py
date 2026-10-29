@@ -724,6 +724,59 @@ def test_result_summary_branches_and_blocked_rendering(tmp_path: Path) -> None:
     assert repl.agent_context.values["_task_state"] is None
 
 
+def test_runtime_adapter_plan_only_stops_after_plan(tmp_path: Path) -> None:
+    _repo(tmp_path)
+    client = FakeClient([json.dumps(_plan_dict())])
+    adapter = RuntimeAdapter(
+        workspace=tmp_path,
+        model_config=ModelConfig(model_id="test/fake"),
+        ledger_dir=tmp_path.parent / f"{tmp_path.name}-plan-ledger",
+        finalize=False,
+        client=client,
+        strategy_mode="react",
+        plan_only=True,
+    )
+
+    run = adapter.run("add a function and test it", task_id="adapter-plan-only")
+
+    assert run.result.phase.value == "planned"
+    assert run.result.accepted is False
+    assert "edit, verify, finalize" in run.result.answer
+    events = Ledger(run.ledger_path, "adapter-plan-only").read()
+    assert any(event.kind.value == "plan_accepted" for event in events)
+    assert not any(event.kind.value == "tool_receipt" for event in events)
+    assert not any(event.kind.value == "step_started" for event in events)
+    assert client.responses == []
+
+
+def test_run_kernel_turn_renders_planned_as_pending_approval(
+    tmp_path: Path,
+) -> None:
+    _repo(tmp_path)
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = FakeRepl(tmp_path, registry)
+    client = FakeClient([json.dumps(_plan_dict())])
+
+    run = run_kernel_turn(
+        repl,
+        objective="add a function and test it",
+        user_input="add a function and test it",
+        model_ids=["test/fake"],
+        execution_policy=SimpleNamespace(level=ExecutionLevel.READ_ONLY),
+        callback=ConsoleCallback(verbose=False),
+        client=client,
+        plan_only=True,
+    )
+
+    assert run is not None
+    assert run.result.phase.value == "planned"
+    assert repl.finished == [("pending-approval", "kernel")]
+    assert repl.rendered[-1][0] == "Kernel · plan"
+    assert "Kernel · blocked" not in repl.rendered[-1][0]
+    assert repl.agent_context.values["_task_state"] is None
+
+
 def test_run_kernel_turn_denies_shell_approval(tmp_path: Path) -> None:
     _repo(tmp_path)
     registry = ModelRegistry()

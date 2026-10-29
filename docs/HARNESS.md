@@ -208,9 +208,10 @@ kernel does not yet return a plan-only result that waits for approval.
 The kernel now has a plan-only primitive for the remaining `/plan` migration:
 `TaskMode.PLAN` accepts one plan and stops in `TaskPhase.PLANNED` without
 starting a step or executing a tool. It refuses any non-`SubmitPlan` action,
-so a misbehaving strategy cannot turn plan-only into execution. This is a
-runtime result, not yet a REPL approval gate; wiring `/plan` to it is the next
-slice.
+so a misbehaving strategy cannot turn plan-only into execution. The REPL
+adapter exposes `plan_only=True`, renders the result as `Kernel · plan`, and
+marks the turn `pending-approval` instead of blocking it. The actual approve /
+reject / execute gate is still the next slice; `/plan` routing is unchanged.
 
 If the pointer exists but the ledger is missing or outside the kernel root,
 both commands fail closed and do not fall back to the legacy goal projection.
