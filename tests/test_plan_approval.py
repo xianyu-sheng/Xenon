@@ -16,6 +16,8 @@ from xenon.repl.kernel_evidence import (
     load_kernel_evidence,
     plan_approval,
     planned_plan,
+    restore_session_pointer,
+    snapshot_for_session,
 )
 
 
@@ -213,6 +215,85 @@ def test_plan_approve_reports_execution_start_failure(planned, monkeypatch) -> N
     assert "执行启动失败" in out
     assert "resume failed" in out
     assert plan_approval(repl.events, "planned")["status"] == "approved"
+
+
+def test_snapshot_persists_the_plan_approval(planned) -> None:
+    path, repl = planned
+    _cmd_plan(args="approve", session_state={"_repl": repl})
+
+    snapshot = snapshot_for_session(repl)
+
+    assert snapshot is not None
+    assert snapshot["task_id"] == "planned"
+    approval = snapshot["approval"]
+    assert approval["status"] == "approved"
+    assert approval["plan_digest"] == repl.events[0]["plan_digest"]
+    assert path.exists()
+
+
+def test_resume_restores_approved_state(planned) -> None:
+    _path, repl = planned
+    _cmd_plan(args="approve", session_state={"_repl": repl})
+    snapshot = snapshot_for_session(repl)
+
+    restored = ApprovalRepl(_path)
+    restored.events = []
+    assert restore_session_pointer(
+        restored, {"kernel_evidence": snapshot}
+    )
+    out = _cmd_plan(args="status", session_state={"_repl": restored})
+
+    assert "计划已批准" in out
+    assert "待确认" not in out
+
+
+def test_resume_ignores_approval_for_a_different_plan_digest(planned) -> None:
+    _path, repl = planned
+    _cmd_plan(args="approve", session_state={"_repl": repl})
+    snapshot = snapshot_for_session(repl)
+    snapshot["approval"]["plan_digest"] = "0" * 64
+
+    restored = ApprovalRepl(_path)
+    restored.events = []
+    assert restore_session_pointer(
+        restored, {"kernel_evidence": snapshot}
+    )
+    out = _cmd_plan(args="status", session_state={"_repl": restored})
+
+    assert "待确认" in out
+    assert "计划已批准" not in out
+
+
+def test_resume_without_approval_stays_pending(planned) -> None:
+    _path, repl = planned
+    snapshot = snapshot_for_session(repl)
+    assert snapshot is not None
+    assert "approval" not in snapshot
+
+    restored = ApprovalRepl(_path)
+    restored.events = []
+    assert restore_session_pointer(
+        restored, {"kernel_evidence": snapshot}
+    )
+    out = _cmd_plan(args="status", session_state={"_repl": restored})
+
+    assert "待确认" in out
+
+
+def test_resume_ignores_approval_for_another_task(planned) -> None:
+    _path, repl = planned
+    _cmd_plan(args="approve", session_state={"_repl": repl})
+    snapshot = snapshot_for_session(repl)
+    snapshot["approval"]["task_id"] = "someone-else"
+
+    restored = ApprovalRepl(_path)
+    restored.events = []
+    assert restore_session_pointer(
+        restored, {"kernel_evidence": snapshot}
+    )
+    out = _cmd_plan(args="status", session_state={"_repl": restored})
+
+    assert "待确认" in out
 
 
 def test_plan_reject_keeps_plan_mode(planned) -> None:
