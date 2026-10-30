@@ -216,6 +216,12 @@ session events; the kernel ledger stays immutable. Approve exits plan mode,
 reject keeps it, and neither path executes the plan yet. `/plan` routing is
 unchanged.
 
+The runtime also has a same-ledger resume primitive, `resume_planned()`: it
+requires the accepted plan digest and an approval id, appends `plan_approved`,
+moves `PLANNED -> RUNNING`, starts the accepted plan's first ready step, and
+never appends a second `task_started` or asks the strategy to replan. The REPL
+approve command is not wired to this primitive yet; that is the next slice.
+
 If the pointer exists but the ledger is missing or outside the kernel root,
 both commands fail closed and do not fall back to the legacy goal projection.
 `/mode` is intentionally not part of this view: it selects a model thinking

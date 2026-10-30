@@ -91,7 +91,7 @@ LEGAL_TRANSITIONS: Mapping[TaskPhase, frozenset[TaskPhase]] = {
     TaskPhase.DELIVERED: frozenset(
         {TaskPhase.FINALIZED, TaskPhase.ABORTED, TaskPhase.FAILED}
     ),
-    TaskPhase.PLANNED: frozenset(),
+    TaskPhase.PLANNED: frozenset({TaskPhase.RUNNING}),
     TaskPhase.FINALIZED: frozenset(),
     TaskPhase.BLOCKED: frozenset(),
     TaskPhase.ABORTED: frozenset(),
@@ -101,7 +101,6 @@ LEGAL_TRANSITIONS: Mapping[TaskPhase, frozenset[TaskPhase]] = {
 TERMINAL_PHASES = frozenset(
     {
         TaskPhase.FINALIZED,
-        TaskPhase.PLANNED,
         TaskPhase.BLOCKED,
         TaskPhase.ABORTED,
         TaskPhase.FAILED,

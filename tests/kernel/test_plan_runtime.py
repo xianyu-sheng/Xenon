@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
+
+import pytest
 
 from tests.kernel.test_north_star import (
     FakeCatalog,
@@ -37,7 +40,7 @@ from xenon.kernel.contracts import (
 from xenon.kernel.controller import VerificationController
 from xenon.kernel.runtime import LoopRuntime
 from xenon.kernel.strategies import PlanFirst
-from xenon.ledger.events import EventKind
+from xenon.ledger.events import EventKind, EventSource, canonical_json
 from xenon.ledger.store import Ledger
 
 
@@ -506,6 +509,177 @@ def test_plan_only_renders_a_plan_without_analysis() -> None:
 
     assert result.phase is TaskPhase.PLANNED
     assert result.answer == "7. think"
+
+
+def _ledger_plan_digest(ledger: Ledger) -> str:
+    accepted = ledger.read(EventKind.PLAN_ACCEPTED)[-1]
+    return hashlib.sha256(
+        canonical_json(accepted.payload["plan"]).encode("utf-8")
+    ).hexdigest()
+
+
+def test_resume_planned_executes_approved_plan_in_same_ledger() -> None:
+    ledger = Ledger.in_memory("task-1")
+    plan = PlanProposal(
+        analysis="edit then verify",
+        steps=_plan().steps[:2],
+    )
+    planned = _runtime(ledger).run(
+        replace(_calc_spec(), mode=TaskMode.PLAN),
+        ScriptedStrategy([SubmitPlan(plan)]),
+    )
+    assert planned.phase is TaskPhase.PLANNED
+
+    result = _runtime(ledger).resume_planned(
+        _calc_spec(),
+        ScriptedStrategy(
+            [
+                CallTool(ToolIntent(capability=Capability.EDIT)),
+                CallTool(ToolIntent(capability=Capability.VERIFY)),
+                Finish("done"),
+            ]
+        ),
+        plan,
+        plan_digest=_ledger_plan_digest(ledger),
+        approval_id="approval-1",
+    )
+
+    events = ledger.read()
+    assert result.phase is TaskPhase.FINALIZED
+    assert result.accepted is True
+    assert len(ledger.read(EventKind.TASK_STARTED)) == 1
+    assert len(ledger.read(EventKind.PLAN_ACCEPTED)) == 1
+    approved = ledger.read(EventKind.PLAN_APPROVED)
+    assert len(approved) == 1
+    assert approved[0].payload["approval_id"] == "approval-1"
+    assert approved[0].payload["approved"] is True
+    assert len(ledger.read(EventKind.STEP_STARTED)) == 2
+    assert events[-1].kind is not EventKind.TASK_STARTED
+
+
+def test_resume_planned_rejects_wrong_digest_and_missing_approval() -> None:
+    ledger = Ledger.in_memory("task-1")
+    plan = PlanProposal(analysis="edit then verify", steps=_plan().steps[:2])
+    _runtime(ledger).run(
+        replace(_calc_spec(), mode=TaskMode.PLAN),
+        ScriptedStrategy([SubmitPlan(plan)]),
+    )
+
+    with pytest.raises(ValueError, match="approval_id"):
+        _runtime(ledger).resume_planned(
+            _calc_spec(),
+            ScriptedStrategy([]),
+            plan,
+            plan_digest=_ledger_plan_digest(ledger),
+            approval_id="",
+        )
+    with pytest.raises(ValueError, match="plan_digest"):
+        _runtime(ledger).resume_planned(
+            _calc_spec(),
+            ScriptedStrategy([]),
+            plan,
+            plan_digest="",
+            approval_id="approval-1",
+        )
+    with pytest.raises(ValueError, match="digest"):
+        _runtime(ledger).resume_planned(
+            _calc_spec(),
+            ScriptedStrategy([]),
+            plan,
+            plan_digest="not-the-plan",
+            approval_id="approval-1",
+        )
+
+
+def test_resume_planned_rejects_plan_mode_and_missing_accepted_plan() -> None:
+    fresh = Ledger.in_memory("task-1")
+    plan = PlanProposal(analysis="edit", steps=_plan().steps[:1])
+    with pytest.raises(ValueError, match="execution TaskMode"):
+        _runtime(fresh).resume_planned(
+            replace(_calc_spec(), mode=TaskMode.PLAN),
+            ScriptedStrategy([]),
+            plan,
+            plan_digest="x",
+            approval_id="approval-1",
+        )
+    with pytest.raises(ValueError, match="no accepted plan"):
+        _runtime(fresh).resume_planned(
+            _calc_spec(),
+            ScriptedStrategy([]),
+            plan,
+            plan_digest="x",
+            approval_id="approval-1",
+        )
+
+
+def test_resume_planned_rejects_empty_plan_and_existing_execution_events() -> None:
+    ledger = Ledger.in_memory("task-1")
+    empty = PlanProposal(analysis="empty", steps=())
+    _runtime(ledger).run(
+        replace(_calc_spec(), mode=TaskMode.PLAN),
+        ScriptedStrategy([SubmitPlan(empty)]),
+    )
+    with pytest.raises(ValueError, match="no steps"):
+        _runtime(ledger).resume_planned(
+            _calc_spec(),
+            ScriptedStrategy([]),
+            empty,
+            plan_digest=_ledger_plan_digest(ledger),
+            approval_id="approval-1",
+        )
+
+    second = Ledger.in_memory("task-2")
+    plan = PlanProposal(analysis="edit", steps=_plan().steps[:1])
+    _runtime(second).run(
+        replace(_calc_spec(), task_id="task-2", mode=TaskMode.PLAN),
+        ScriptedStrategy([SubmitPlan(plan)]),
+    )
+    second.append(
+        EventKind.STEP_STARTED,
+        EventSource.RUNTIME,
+        {"step_id": 1, "task": "task-1", "kind": "edit"},
+        step_id="1",
+    )
+    with pytest.raises(ValueError, match="execution events"):
+        _runtime(second).resume_planned(
+            replace(_calc_spec(), task_id="task-2"),
+            ScriptedStrategy([]),
+            plan,
+            plan_digest=_ledger_plan_digest(second),
+            approval_id="approval-1",
+        )
+
+
+def test_resume_planned_rejects_a_second_resume() -> None:
+    ledger = Ledger.in_memory("task-1")
+    plan = PlanProposal(analysis="edit then verify", steps=_plan().steps[:2])
+    _runtime(ledger).run(
+        replace(_calc_spec(), mode=TaskMode.PLAN),
+        ScriptedStrategy([SubmitPlan(plan)]),
+    )
+    runtime = _runtime(ledger)
+    runtime.resume_planned(
+        _calc_spec(),
+        ScriptedStrategy(
+            [
+                CallTool(ToolIntent(capability=Capability.EDIT)),
+                CallTool(ToolIntent(capability=Capability.VERIFY)),
+                Finish("done"),
+            ]
+        ),
+        plan,
+        plan_digest=_ledger_plan_digest(ledger),
+        approval_id="approval-1",
+    )
+
+    with pytest.raises(ValueError, match="planned phase"):
+        runtime.resume_planned(
+            _calc_spec(),
+            ScriptedStrategy([]),
+            plan,
+            plan_digest=_ledger_plan_digest(ledger),
+            approval_id="approval-2",
+        )
 
 
 def test_plan_only_mode_refuses_non_plan_actions() -> None:
