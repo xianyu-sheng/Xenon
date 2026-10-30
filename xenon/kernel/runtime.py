@@ -7,10 +7,11 @@ second state machine and no direct tool dispatch in this module.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from dataclasses import replace
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from xenon.kernel.audit import AuditCoordinator
 from xenon.kernel.contracts import (
@@ -30,6 +31,7 @@ from xenon.kernel.contracts import (
     FsWrite,
     Obligation,
     ObligationSource,
+    PlanProposal,
     PolicyDecisionKind,
     PropositionKind,
     ReceiptStatus,
@@ -70,6 +72,7 @@ from xenon.kernel.view import build_model_view
 from xenon.ledger.events import (
     EventKind,
     EventSource,
+    canonical_json,
     receipt_event_payload,
     receipt_from_payload,
 )
@@ -101,6 +104,22 @@ class _RuntimeServices:
 
     def is_cancelled(self) -> bool:
         return self._runtime._cancelled
+
+
+def _payload_digest(value: Any) -> str:
+    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _ledger_phase(events: Sequence[Any]) -> TaskPhase:
+    phase = TaskPhase.CREATED
+    for event in events:
+        if event.kind is EventKind.STATE_TRANSITION:
+            target = str((event.payload or {}).get("to") or "")
+            try:
+                phase = TaskPhase(target)
+            except ValueError:
+                continue
+    return phase
 
 
 def _plan_text(plan: Any) -> str:
@@ -220,6 +239,107 @@ class LoopRuntime:
         )
         self._transition(TaskPhase.RUNNING, "intake complete")
 
+        return self._run_loop(spec, strategy)
+
+    def resume_planned(
+        self,
+        spec: TaskSpec,
+        strategy: Strategy,
+        plan: PlanProposal,
+        *,
+        plan_digest: str,
+        approval_id: str,
+    ) -> TaskResult:
+        """Resume one approved plan-only task in the same ledger.
+
+        The plan-only run already wrote ``plan_accepted`` and stopped at
+        ``PLANNED``.  This method appends the external approval fact, moves the
+        same task back to ``RUNNING`` and executes the accepted steps.  It does
+        not append a second ``task_started`` and never asks the strategy to
+        submit a new plan.
+
+        ``approval_id`` is required so the resumed execution is attributable.
+        When ``plan_digest`` is supplied it must match the accepted plan in the
+        ledger; a mismatch fails closed.
+        """
+
+        if not approval_id:
+            raise ValueError("resume_planned requires an approval_id")
+        if not plan_digest:
+            raise ValueError("resume_planned requires a plan_digest")
+        if spec.mode is TaskMode.PLAN:
+            raise ValueError("resume_planned requires an execution TaskMode")
+        ledger_task_id = getattr(self._ledger, "task_id", "")
+        if ledger_task_id and ledger_task_id != spec.task_id:
+            raise ValueError(
+                f"ledger task_id {ledger_task_id!r} does not match {spec.task_id!r}"
+            )
+        events = self._ledger.read()
+        accepted = [
+            event for event in events if event.kind is EventKind.PLAN_ACCEPTED
+        ]
+        if not accepted:
+            raise ValueError("ledger has no accepted plan to resume")
+        accepted_event = accepted[-1]
+        raw_plan = accepted_event.payload.get("plan")
+        if not isinstance(raw_plan, Mapping):
+            raise ValueError("accepted plan payload is not an object")
+        stored_digest = _payload_digest(raw_plan)
+        if plan_digest != stored_digest:
+            raise ValueError("approved plan digest does not match the ledger")
+        if _ledger_phase(events) is not TaskPhase.PLANNED:
+            raise ValueError("ledger is not in the planned phase")
+        if any(
+            event.kind in {EventKind.STEP_STARTED, EventKind.TOOL_RECEIPT}
+            and event.seq > accepted_event.seq
+            for event in events
+        ):
+            raise ValueError("planned ledger already has execution events")
+        if not plan.steps:
+            raise ValueError("approved plan has no steps")
+
+        self._spec = spec
+        self._phase = TaskPhase.PLANNED
+        self._steps = 0
+        self._tool_calls = 0
+        self._verdicts = []
+        self._debt = []
+        self._repair_attempts = {}
+        self._replans = 0
+        self._finalize_decision = None
+        self._audit_rounds = 0
+        self._revoke_grants()
+        self._plan = plan
+        self._plan_since_seq = accepted_event.seq
+        self._plan_steps = tuple(
+            self._baseline_step(step) for step in plan.steps
+        )
+        self._closed_steps = set()
+        self._deadline = self._compute_deadline(spec)
+        self._active_step = self._select_ready_step()
+        if self._active_step is None:
+            raise ValueError("approved plan has no ready step")
+
+        self._append(
+            EventKind.PLAN_APPROVED,
+            EventSource.USER,
+            {
+                "approved": True,
+                "approval_id": approval_id,
+                "plan_digest": stored_digest,
+            },
+        )
+        self._transition(TaskPhase.RUNNING, "approved plan resumed")
+        self._append(
+            EventKind.STEP_STARTED,
+            EventSource.RUNTIME,
+            self._step_payload(self._active_step),
+            step_id=self._current_step_id(),
+        )
+        self._run_start_seq = self._ledger.watermark()
+        return self._run_loop(spec, strategy)
+
+    def _run_loop(self, spec: TaskSpec, strategy: Strategy) -> TaskResult:
         while True:
             limited = self._check_limits()
             if limited is not None:
