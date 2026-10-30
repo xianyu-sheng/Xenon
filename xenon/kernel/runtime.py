@@ -185,6 +185,7 @@ class LoopRuntime:
         self._plan_since_seq = 0
         self._verdicts: list[Verdict] = []
         self._debt: list[Any] = []
+        self._step_verdicts: dict[int, list[Verdict]] = {}
         self._repair_attempts: dict[str, int] = {}
         self._replans = 0
         self._finalize_decision: FinalizeDecision | None = None
@@ -207,6 +208,7 @@ class LoopRuntime:
         self._tool_calls = 0
         self._verdicts = []
         self._debt = []
+        self._step_verdicts: dict[int, list[Verdict]] = {}
         self._repair_attempts = {}
         self._replans = 0
         self._finalize_decision = None
@@ -355,6 +357,7 @@ class LoopRuntime:
                 phase=self._phase,
                 active_step=self._active_step,
                 steps=self._plan_steps,
+                step_verdicts=self._active_step_verdicts(),
             )
             self._transition(TaskPhase.THINKING, "propose action")
             try:
@@ -662,6 +665,7 @@ class LoopRuntime:
             _verdict_payload(verdict),
             step_id=self._current_step_id(),
         )
+        self._note_step_verdict(self._current_step_id(), verdict)
         # V0 is receipt-level.  It becomes an obligation only when the active
         # step actually expects something; a failed exploratory read must not
         # poison delivery forever.
@@ -707,7 +711,9 @@ class LoopRuntime:
                 _verdict_payload(verdict),
                 step_id=str(step.id),
             )
+            self._note_step_verdict(step.id, verdict)
         self._closed_steps.add(step.id)
+        self._append_step_verified(step)
         self._append(
             EventKind.STEP_CLOSED,
             EventSource.GATE,
@@ -750,11 +756,13 @@ class LoopRuntime:
                 _verdict_payload(verdict),
                 step_id=str(step.id),
             )
+            self._note_step_verdict(step.id, verdict)
         satisfied = all(
             item.status is VerdictStatus.SATISFIED for item in verdicts
         )
         if satisfied:
             self._closed_steps.add(step.id)
+            self._append_step_verified(step)
             self._append(
                 EventKind.STEP_CLOSED,
                 EventSource.GATE,
@@ -1310,6 +1318,48 @@ class LoopRuntime:
         return finalize
 
     # ── policies and limits ────────────────────────────────────────────
+
+    def _append_step_verified(self, step: StepContract) -> None:
+        """One aggregated step-level verification record per step.
+
+        ``step_verdict`` carries individual decisions; this event is the summary
+        the turn tree and reflection read, so "what did step verification say"
+        is a single lookup instead of a fold over verdict events.
+        """
+
+        verdicts = tuple(
+            _latest_verdict_map(self._step_verdicts.get(int(step.id), ())).values()
+        )
+        satisfied = bool(verdicts) and all(
+            item.status is VerdictStatus.SATISFIED for item in verdicts
+        )
+        self._append(
+            EventKind.STEP_VERIFIED,
+            EventSource.GATE,
+            {
+                "step_id": step.id,
+                "status": "satisfied" if satisfied else "unmet",
+                "verdicts": [_verdict_payload(item) for item in verdicts],
+            },
+            step_id=str(step.id),
+        )
+
+    def _note_step_verdict(self, step_id: Any, verdict: Verdict) -> None:
+        """Remember a step-level verdict for the model view (#284+)."""
+
+        try:
+            key = int(step_id)
+        except (TypeError, ValueError):
+            return
+        self._step_verdicts.setdefault(key, []).append(verdict)
+
+    def _active_step_verdicts(self) -> tuple[Verdict, ...]:
+        if self._active_step is None:
+            return ()
+        latest = _latest_verdict_map(
+            self._step_verdicts.get(int(self._active_step.id), ())
+        )
+        return tuple(latest.values())
 
     def _record_strategy_notices(self, strategy: Any, action: Action) -> None:
         """Audit strategy-level proposals the runtime does not execute.

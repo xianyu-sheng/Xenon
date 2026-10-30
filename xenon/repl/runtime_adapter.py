@@ -224,6 +224,49 @@ class ReplEventSink:
             self.callback.on_warning(
                 str(payload.get("question") or "user input required")
             )
+        elif kind == "step_verified":
+            # Step-level verification is a first-class stage: the panel shows
+            # unmet verdicts so the turn tree reflects what reflection saw.
+            if str(payload.get("status") or "") != "satisfied":
+                unmet = [
+                    str(item.get("obligation_id") or "")
+                    for item in payload.get("verdicts") or ()
+                    if isinstance(item, Mapping)
+                    and str(item.get("status") or "") != "satisfied"
+                ]
+                self.callback.on_warning(
+                    f"step {payload.get('step_id')} verification unmet: "
+                    + (", ".join(item for item in unmet if item) or "no verdicts")
+                )
+        elif kind == "step_explored":
+            decision = str(payload.get("decision") or "")
+            step_id = payload.get("step_id")
+            if decision == "budget_exhausted":
+                self.callback.on_warning(
+                    f"step {step_id} 步内预算用尽（{payload.get('calls')} 次），交给校验决定"
+                )
+            elif decision == "step_correction":
+                self.callback.on_think(
+                    f"step {step_id} 审查后补一次修正：{payload.get('capability') or ''}"
+                )
+        elif kind == "plan_reviewed":
+            decision = str(payload.get("decision") or "")
+            if decision == "amended":
+                self.callback.on_think(
+                    f"计划审查补充了 {payload.get('added_steps')} 个步骤"
+                )
+            elif decision == "rejected":
+                self.callback.on_warning(
+                    f"计划审查被拒绝：{payload.get('reason') or ''}"
+                )
+        elif kind == "reflection_proposed":
+            decision = str(payload.get("decision") or "")
+            if decision == "correction":
+                self.callback.on_think(
+                    f"反思补一次修正：{payload.get('capability') or ''}"
+                )
+            elif decision in {"repeated", "declined"}:
+                self.callback.on_think("反思结束，交给确定性校验")
 
 
 _CAPABILITY_TOOL = {

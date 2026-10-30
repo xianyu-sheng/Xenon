@@ -658,6 +658,9 @@ class ModelView:
     phase: TaskPhase = TaskPhase.RUNNING
     active_step: StepContract | None = None
     steps: tuple[StepContract, ...] = ()
+    # Deterministic step-level verification for the active step.  Reflection
+    # sits on top of this: it reacts to verdicts, it never produces them.
+    step_verdicts: tuple[Verdict, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
 
