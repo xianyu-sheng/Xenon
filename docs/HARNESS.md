@@ -235,6 +235,23 @@ both commands fail closed and do not fall back to the legacy goal projection.
 `/mode` is intentionally not part of this view: it selects a model thinking
 mode, not task state, so it stays backed by `ModelRegistry`.
 
+### plan-reflection: review the plan, then each step
+
+`/mode plan-reflection` is `PlanReact` with two review seams:
+
+- **coverage review before execution** — the reviewer returns either a full
+  corrected plan or `null`. Enforcement is deterministic: a revision that drops
+  any original `expects` obligation is rejected and the original plan stands, so
+  a review can only add work;
+- **step review before release** — while a step is still open (violated receipt
+  or unmet expectations) the reviewer may add one corrective call inside that
+  step, so a mistake is fixed where it happened.
+
+A review is a proposal: it cannot close a step, close a debt or deliver. The
+plan decision is recorded as `plan_reviewed`
+(`accepted` / `amended` / `rejected` + obligation ids), and step decisions stay
+in `step_explored`.
+
 ### PlanReact and step release
 
 `/mode plan-react` submits one plan, then runs a bounded sub-loop on the active

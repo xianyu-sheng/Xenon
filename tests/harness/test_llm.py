@@ -15,7 +15,9 @@ from xenon.harness.llm import (
     ActionParseError,
     LLMActionProposer,
     LLMPlanFinisher,
+    LLMPlanReviewer,
     LLMReflector,
+    LLMStepReviewer,
     ModelConfig,
     ModelConfigError,
     build_llm_plan_strategy,
@@ -784,3 +786,145 @@ def test_reflection_strategy_wraps_the_act_strategy() -> None:
 
     assert isinstance(strategy, llm.ReflectFirst)
     assert strategy.max_reflections == 1
+
+
+def _plan_proposal():
+    from xenon.harness.plan import parse_plan
+
+    return parse_plan(
+        {
+            "objective": "fix it",
+            "analysis": "read then edit",
+            "steps": [
+                {
+                    "id": 1,
+                    "kind": "edit",
+                    "capability": "edit",
+                    "params": {"files": []},
+                    "targets": ["a.py"],
+                    "expects": [
+                        {"id": "e1", "kind": "file_changed", "target": "a.py"}
+                    ],
+                    "depends_on": [],
+                }
+            ],
+        }
+    ).proposal
+
+
+def test_plan_reviewer_returns_the_corrected_plan() -> None:
+    revised = {
+        "objective": "fix it",
+        "analysis": "read, edit, then verify",
+        "steps": [
+            {
+                "id": 1,
+                "kind": "edit",
+                "capability": "edit",
+                "params": {"files": []},
+                "targets": ["a.py"],
+                "expects": [{"id": "e1", "kind": "file_changed", "target": "a.py"}],
+                "depends_on": [],
+            },
+            {
+                "id": 2,
+                "kind": "verify",
+                "capability": "verify",
+                "params": {"command": "pytest -q"},
+                "targets": ["tests/test_a.py"],
+                "expects": [],
+                "depends_on": [1],
+            },
+        ],
+    }
+    client = FakeClient([json.dumps({"plan": revised})])
+
+    plan = LLMPlanReviewer(ModelConfig(model_id="test/fake"), client=client)(
+        _reflect_view(), _plan_proposal()
+    )
+
+    assert plan is not None
+    assert [step.id for step in plan.steps] == [1, 2]
+
+
+def test_plan_reviewer_declining_returns_none() -> None:
+    client = FakeClient([json.dumps({"plan": None})])
+
+    plan = LLMPlanReviewer(ModelConfig(model_id="test/fake"), client=client)(
+        _reflect_view(), _plan_proposal()
+    )
+
+    assert plan is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not json",
+        json.dumps({"plan": "add a verify step"}),
+        json.dumps({"plan": {"steps": "nope"}}),
+    ],
+)
+def test_plan_reviewer_rejects_unusable_output(payload: str) -> None:
+    client = FakeClient([payload])
+
+    assert (
+        LLMPlanReviewer(ModelConfig(model_id="test/fake"), client=client)(
+            _reflect_view(), _plan_proposal()
+        )
+        is None
+    )
+
+
+def test_step_reviewer_returns_one_corrective_call() -> None:
+    client = FakeClient(
+        [
+            json.dumps(
+                {
+                    "reflect": {
+                        "action": "call_tool",
+                        "capability": "verify",
+                        "params": {"command": "pytest -q"},
+                    }
+                }
+            )
+        ]
+    )
+    step = _plan_proposal().steps[0]
+
+    action = LLMStepReviewer(ModelConfig(model_id="test/fake"), client=client)(
+        _reflect_view(), step, Finish("step done")
+    )
+
+    assert isinstance(action, CallTool)
+    assert action.intent.capability is Capability.VERIFY
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        json.dumps({"reflect": None}),
+        json.dumps({"reflect": {"action": "finish", "answer": "ok"}}),
+        json.dumps({"reflect": "done"}),
+    ],
+)
+def test_step_reviewer_never_completes_or_judges(payload: str) -> None:
+    client = FakeClient([payload])
+    step = _plan_proposal().steps[0]
+
+    action = LLMStepReviewer(ModelConfig(model_id="test/fake"), client=client)(
+        _reflect_view(), step, Finish("step done")
+    )
+
+    assert action is None
+
+
+def test_plan_reflection_strategy_wires_both_reviewers() -> None:
+    strategy = llm.build_llm_plan_reflection_strategy(
+        ModelConfig(model_id="test/fake"), client=FakeClient([])
+    )
+
+    assert isinstance(strategy, llm.PlanReact)
+    assert strategy.plan_reviewer is not None
+    assert strategy.step_reviewer is not None
+    assert strategy.max_step_reviews == 1

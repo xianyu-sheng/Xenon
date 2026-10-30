@@ -1325,6 +1325,17 @@ class LoopRuntime:
             if not isinstance(notice, Mapping):
                 continue
             kind = str(notice.get("kind") or "reflection")
+            if kind == "plan":
+                self._append(
+                    EventKind.PLAN_REVIEWED,
+                    EventSource.LLM,
+                    {
+                        "decision": str(notice.get("decision") or ""),
+                        "added_steps": int(notice.get("added_steps") or 0),
+                        "reason": str(notice.get("reason") or ""),
+                    },
+                )
+                continue
             if kind == "step":
                 self._append(
                     EventKind.STEP_EXPLORED,

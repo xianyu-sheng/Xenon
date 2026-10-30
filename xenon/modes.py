@@ -17,6 +17,8 @@ already migrated:
   two calls per pass);
 * ``plan-react`` — tool turns use PlanReact: one plan, then a bounded
   sub-loop per step;
+* ``plan-reflect`` — PlanReact plus a plan coverage review and a review before
+  each step is released (``plan-reflection``);
 * ``None`` — no kernel parity yet; the mode stays on the frozen legacy path and
   must not silently fall through to ActFirst.
 
@@ -93,6 +95,9 @@ MODE_CATALOG: dict[str, ModeSpec] = {
     "plan-reflection": ModeSpec(
         name="plan-reflection",
         description="规划执行 + 反思修正，适合需要高质量输出的任务",
+        # PlanReact with a coverage review before execution and a per-step
+        # review before each step is released.
+        kernel_strategy="plan-reflect",
     ),
     "react-reflection": ModeSpec(
         name="react-reflection",
