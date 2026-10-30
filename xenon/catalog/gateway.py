@@ -254,10 +254,7 @@ class LegacyToolGateway:
                     candidate = workspace / candidate
                 exists = candidate.exists()
                 before[path] = exists
-                try:
-                    before[str(candidate.resolve())] = exists
-                except OSError:
-                    pass
+                before[str(candidate.resolve())] = exists
         try:
             result = self._executor.execute(
                 execution_call.spec_name,
@@ -490,10 +487,7 @@ class LegacyToolGateway:
                 candidate = Path(path)
                 if not candidate.is_absolute():
                     candidate = workspace / candidate
-                try:
-                    return before.get(str(candidate.resolve())) is False
-                except OSError:
-                    return False
+                return before.get(str(candidate.resolve())) is False
 
             created = [
                 path
