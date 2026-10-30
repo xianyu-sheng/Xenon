@@ -249,7 +249,7 @@ def test_reflection_cannot_launder_an_unverified_claim() -> None:
                 Finish("I fixed it", claims=(lie,)),
             )
         ),
-        lambda view: Finish("I reviewed it; the claim is fine."),
+        lambda view, finish: Finish("I reviewed it; the claim is fine."),
     )
 
     result = runtime.run(_calc_spec(), strategy)
@@ -270,7 +270,7 @@ def test_reflection_can_add_a_corrective_tool_call() -> None:
                 CallTool(ToolIntent(capability=Capability.READ)),
             )
         ),
-        lambda view: CallTool(ToolIntent(capability=Capability.EDIT)),
+        lambda view, finish: CallTool(ToolIntent(capability=Capability.EDIT)),
     )
 
     result = runtime.run(_calc_spec(), strategy)
@@ -288,7 +288,7 @@ def test_reflection_decision_is_auditable_but_powerless() -> None:
     runtime = _runtime(ledger)
     strategy = ReflectFirst(
         ActFirst(_repeating(CallTool(ToolIntent(capability=Capability.READ)))),
-        lambda view: Finish("I reviewed it; nothing else is needed."),
+        lambda view, finish: Finish("I reviewed it; nothing else is needed."),
     )
 
     result = runtime.run(_calc_spec(), strategy)
@@ -307,7 +307,7 @@ def test_reflection_correction_is_recorded_before_the_tool_call() -> None:
     runtime = _runtime(ledger)
     strategy = ReflectFirst(
         ActFirst(_repeating(CallTool(ToolIntent(capability=Capability.READ)))),
-        lambda view: CallTool(ToolIntent(capability=Capability.EDIT)),
+        lambda view, finish: CallTool(ToolIntent(capability=Capability.EDIT)),
     )
 
     runtime.run(_calc_spec(), strategy)
@@ -324,6 +324,71 @@ def test_reflection_correction_is_recorded_before_the_tool_call() -> None:
     assert notices[0].payload["decision"] == "correction"
     assert notices[0].payload["capability"] == "edit"
     assert tool_after, "修正调用必须发生在反思记录之后"
+
+
+def test_multi_round_reflection_stays_bounded_and_never_launders_claims() -> None:
+    """Rounds buy extra work, not extra authority."""
+
+    from xenon.kernel.strategies import ActFirst, ReflectFirst
+
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    lie = Claim(
+        id="claim-lie",
+        kind=PropositionKind.TEST_PASSED,
+        target="tests/test_calc.py",
+        source=ClaimSource.LLM,
+    )
+    rounds: list[int] = []
+
+    def reflector(view: Any, finish: Any):
+        rounds.append(1)
+        return CallTool(ToolIntent(capability=Capability.READ))
+
+    strategy = ReflectFirst(
+        ActFirst(_repeating(CallTool(ToolIntent(capability=Capability.READ)))),
+        reflector,
+        max_reflections=3,
+        max_calls_per_round=1,
+    )
+
+    result = runtime.run(_calc_spec(), strategy)
+
+    notices = ledger.read(EventKind.REFLECTION_PROPOSED)
+    assert [item.payload["decision"] for item in notices] == ["correction", "repeated"]
+    assert result.accepted is True, "没有 claim 时，反思结束后正常交付"
+    assert lie.id not in {item.id for item in result.claims}
+
+
+def test_multi_round_reflection_records_each_round() -> None:
+    from xenon.kernel.strategies import ActFirst, ReflectFirst
+
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    capabilities = [Capability.EDIT, Capability.VERIFY, Capability.SHELL]
+    used: list[int] = []
+
+    def reflector(view: Any, finish: Any):
+        capability = capabilities[len(used)]
+        used.append(1)
+        return CallTool(ToolIntent(capability=capability))
+
+    strategy = ReflectFirst(
+        ActFirst(_repeating(CallTool(ToolIntent(capability=Capability.READ)))),
+        reflector,
+        max_reflections=3,
+        max_calls_per_round=1,
+    )
+
+    runtime.run(_calc_spec(), strategy)
+
+    notices = ledger.read(EventKind.REFLECTION_PROPOSED)
+    assert [item.payload["round"] for item in notices] == [1, 2, 3]
+    assert [item.payload["capability"] for item in notices] == [
+        "edit",
+        "verify",
+        "shell",
+    ]
 
 
 def test_replay_is_deterministic() -> None:

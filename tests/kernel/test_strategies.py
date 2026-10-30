@@ -134,7 +134,7 @@ def test_plan_first_finishes_with_the_working_set() -> None:
 def test_reflect_first_asks_for_one_correction_before_finishing() -> None:
     strategy = ReflectFirst(
         _ActThenFinish(),
-        lambda view: CallTool(ToolIntent(capability=Capability.EDIT)),
+        lambda view, finish: CallTool(ToolIntent(capability=Capability.EDIT)),
     )
 
     assert isinstance(strategy.propose(_view()), CallTool)
@@ -144,9 +144,17 @@ def test_reflect_first_asks_for_one_correction_before_finishing() -> None:
 
 
 def test_reflect_first_is_bounded() -> None:
+    capabilities = [Capability.EDIT, Capability.VERIFY, Capability.SHELL]
+    seen = {"n": 0}
+
+    def reflector(view: ModelView, finish: Finish):
+        capability = capabilities[seen["n"]]
+        seen["n"] += 1
+        return CallTool(ToolIntent(capability=capability))
+
     strategy = ReflectFirst(
         _ActThenFinish(),
-        lambda view: CallTool(ToolIntent(capability=Capability.EDIT)),
+        reflector,
         max_reflections=2,
     )
 
@@ -159,7 +167,7 @@ def test_reflect_first_is_bounded() -> None:
 def test_reflect_first_never_runs_without_prior_action() -> None:
     calls = {"reflect": 0}
 
-    def reflector(view: ModelView):
+    def reflector(view: ModelView, finish: Finish):
         calls["reflect"] += 1
         return CallTool(ToolIntent(capability=Capability.EDIT))
 
@@ -172,13 +180,14 @@ def test_reflect_first_never_runs_without_prior_action() -> None:
 def test_reflect_first_cannot_finish_or_ask_on_its_own() -> None:
     strategy = ReflectFirst(
         _ActThenFinish(),
-        lambda view: Finish("I reviewed it and it is fine"),
+        lambda view, finish: Finish("I reviewed it and it is fine"),
     )
     assert isinstance(strategy.propose(_view()), CallTool)
     # A reflector that declares success is discarded; completion stays with
     # the delegate, and verification stays deterministic.
     assert isinstance(strategy.propose(_view()), Finish)
-    assert strategy._reflections == 1
+    assert strategy._round == 1
+    assert strategy.drain_notices()[0]["decision"] == "declined"
 
 
 class _ActThenFinish:
@@ -197,7 +206,7 @@ class _ActThenFinish:
 def test_reflect_first_reports_what_it_decided() -> None:
     strategy = ReflectFirst(
         _ActThenFinish(),
-        lambda view: CallTool(ToolIntent(capability=Capability.EDIT)),
+        lambda view, finish: CallTool(ToolIntent(capability=Capability.EDIT)),
     )
 
     strategy.propose(_view())
@@ -207,7 +216,13 @@ def test_reflect_first_reports_what_it_decided() -> None:
     notices = strategy.drain_notices()
 
     assert notices == (
-        {"kind": "reflection", "decision": "correction", "capability": "edit", "round": 1},
+        {
+            "kind": "reflection",
+            "decision": "correction",
+            "capability": "edit",
+            "round": 1,
+            "call_in_round": 1,
+        },
     )
     assert strategy.drain_notices() == (), "通知是排空的，不能重复上报"
 
@@ -215,7 +230,7 @@ def test_reflect_first_reports_what_it_decided() -> None:
 def test_reflect_first_records_a_declined_review() -> None:
     strategy = ReflectFirst(
         _ActThenFinish(),
-        lambda view: Finish("looks fine"),
+        lambda view, finish: Finish("looks fine"),
     )
 
     strategy.propose(_view())
@@ -318,3 +333,100 @@ def test_plan_react_keeps_legitimate_non_work_actions() -> None:
     strategy.propose(_two_step_view())
 
     assert isinstance(strategy.propose(_two_step_view()), AskUser)
+
+
+def test_multi_round_reflection_stops_at_the_round_budget() -> None:
+    rounds: list[int] = []
+
+    distinct = [Capability.EDIT, Capability.VERIFY, Capability.SHELL]
+
+    def reflector(view: ModelView, finish: Finish):
+        # A different capability per round so loop detection does not fire.
+        capability = distinct[len(rounds)]
+        rounds.append(1)
+        return CallTool(ToolIntent(capability=capability))
+
+    strategy = ReflectFirst(
+        _ActThenFinish(),
+        reflector,
+        max_reflections=3,
+        max_calls_per_round=1,
+    )
+
+    actions = [strategy.propose(_view()) for _ in range(10)]
+    calls = [item for item in actions if isinstance(item, CallTool)]
+
+    assert len(rounds) == 3, "三档反思，不能无限追加"
+    assert isinstance(actions[-1], Finish)
+    assert len(calls) == 4, "1 次基础动作 + 每轮 1 次修正"
+
+
+def test_per_round_budget_allows_several_calls_in_one_round() -> None:
+    capabilities = [Capability.EDIT, Capability.VERIFY, Capability.READ, Capability.SHELL]
+    seen: list[int] = []
+
+    def reflector(view: ModelView, finish: Finish):
+        seen.append(1)
+        return CallTool(ToolIntent(capability=capabilities[len(seen) - 1]))
+
+    strategy = ReflectFirst(
+        _ActThenFinish(),
+        reflector,
+        max_reflections=2,
+        max_calls_per_round=2,
+    )
+
+    actions = [strategy.propose(_view()) for _ in range(12)]
+    calls = [item for item in actions if isinstance(item, CallTool)]
+
+    assert len(seen) == 4, "2 轮 × 每轮 2 次"
+    assert len(calls) == 5, "1 次基础动作 + 4 次修正"
+    assert isinstance(actions[-1], Finish)
+
+
+def test_repeated_correction_ends_reflection_immediately() -> None:
+    strategy = ReflectFirst(
+        _ActThenFinish(),
+        lambda view, finish: CallTool(ToolIntent(capability=Capability.EDIT)),
+        max_reflections=5,
+        max_calls_per_round=1,
+    )
+
+    actions = [strategy.propose(_view()) for _ in range(6)]
+
+    notices = strategy.drain_notices()
+    assert [item["decision"] for item in notices] == ["correction", "repeated"]
+    assert isinstance(actions[-1], Finish), "重复修正必须停手，不能耗到轮次上限"
+
+
+def test_declined_review_stops_all_remaining_rounds() -> None:
+    reviews: list[int] = []
+
+    def reflector(view: ModelView, finish: Finish):
+        reviews.append(1)
+        return None
+
+    strategy = ReflectFirst(
+        _ActThenFinish(), reflector, max_reflections=3, max_calls_per_round=2
+    )
+
+    actions = [strategy.propose(_view()) for _ in range(6)]
+
+    assert len(reviews) == 1, "declined 表示没有剩余工作，不该再问第二次"
+    assert isinstance(actions[-1], Finish)
+    assert strategy.drain_notices()[0]["decision"] == "declined"
+
+
+def test_reflection_sees_the_proposed_answer_and_claims() -> None:
+    captured: dict[str, object] = {}
+
+    def reflector(view: ModelView, finish: Finish):
+        captured["answer"] = finish.answer
+        captured["claims"] = finish.claims
+        return None
+
+    strategy = ReflectFirst(_ActThenFinish(), reflector, max_reflections=1)
+    strategy.propose(_view())
+    strategy.propose(_view())
+
+    assert captured["answer"] == "done"

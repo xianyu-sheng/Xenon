@@ -1,0 +1,4 @@
+15b3597 xenon: In calc.py add a divide(a, b) function that raises ValueError when b is
+ calc.py      |  6 ++++++
+ test_calc.py | 13 ++++++++++++-
+ 2 files changed, 18 insertions(+), 1 deletion(-)

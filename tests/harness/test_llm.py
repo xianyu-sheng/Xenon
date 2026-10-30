@@ -673,7 +673,7 @@ def test_reflector_returns_one_corrective_call_tool() -> None:
     )
 
     action = LLMReflector(ModelConfig(model_id="test/fake"), client=client)(
-        _reflect_view()
+        _reflect_view(), Finish("done")
     )
 
     assert isinstance(action, CallTool)
@@ -685,7 +685,7 @@ def test_reflector_declining_returns_none() -> None:
 
     assert (
         LLMReflector(ModelConfig(model_id="test/fake"), client=client)(
-            _reflect_view()
+            _reflect_view(), Finish("done")
         )
         is None
     )
@@ -704,10 +704,13 @@ def test_reflector_never_claims_completion(payload: str) -> None:
     client = FakeClient([payload])
 
     action = LLMReflector(ModelConfig(model_id="test/fake"), client=client)(
-        _reflect_view()
+        _reflect_view(), Finish("done")
     )
 
     assert action is None
+    assert "proposed_claims" in llm.build_reflect_messages(
+        _reflect_view(), Finish("done")
+    )[1]["content"]
 
 
 def test_plan_protocol_enumerates_capabilities() -> None:
@@ -766,7 +769,7 @@ def test_plan_protocol_enumerates_capabilities() -> None:
 
 
 def test_reflect_messages_describe_the_receipts() -> None:
-    messages = llm.build_reflect_messages(_reflect_view())
+    messages = llm.build_reflect_messages(_reflect_view(), Finish("did the work"))
 
     assert "RUNTIME SYSTEM" in messages[0]["content"]
     assert "Reflection review" in messages[0]["content"]

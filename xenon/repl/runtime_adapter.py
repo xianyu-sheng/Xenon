@@ -358,6 +358,15 @@ class RuntimeAdapter:
             strategy = build_llm_reflection_strategy(
                 self.model_config, client=self.client
             )
+        elif self.strategy_mode == "react-reflect":
+            # Multi-round reflection: three reviews, at most two corrective
+            # calls per review, so extra work stays bounded.
+            strategy = build_llm_reflection_strategy(
+                self.model_config,
+                client=self.client,
+                max_reflections=3,
+                max_calls_per_round=2,
+            )
         else:
             # Unknown strategy names must not silently become ActFirst: a new
             # mode has to declare its parity explicitly.  "legacy" is covered

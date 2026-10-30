@@ -7,6 +7,7 @@ hold only its own proposal cursor.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
@@ -28,7 +29,7 @@ from xenon.kernel.contracts import (
 PlanProvider = Callable[[ModelView], PlanProposal]
 ActionProvider = Callable[[ModelView], Action]
 RepairProvider = Callable[[ModelView, tuple[Debt, ...]], Action]
-ReflectionProvider = Callable[[ModelView], Action | None]
+ReflectionProvider = Callable[[ModelView, Finish], Action | None]
 StepActor = Callable[[ModelView, Any, int], Action]
 
 
@@ -83,19 +84,29 @@ class PlanFirst:
 
 @dataclass(slots=True)
 class ReflectFirst:
-    """Act, then let a bounded reflector propose follow-up work.
+    """Act, then let a bounded reviewer propose follow-up work.
 
-    A reflector is a proposal source, not a judge.  It can only add one more
-    tool call; it can never mark a task complete, close debt, or turn an
-    unverified claim into evidence.  Completion stays with the delegate's
-    ``Finish`` and the controller's deterministic verification.
+    A reflector is a proposal source, not a judge.  It can only add tool calls;
+    it can never mark a task complete, close debt, or turn an unverified claim
+    into evidence.  Completion stays with the delegate's ``Finish`` and the
+    controller's deterministic verification.
+
+    Reflection is organised in rounds.  ``max_reflections`` bounds the number of
+    reviews and ``max_calls_per_round`` bounds how much work one review may add,
+    so ``max_reflections * max_calls_per_round`` is the hard ceiling of extra
+    tool calls.  A reviewer that declines, or that repeats a correction it has
+    already proposed, ends reflection immediately.
     """
 
     base: Any  # Strategy protocol; Any avoids a circular import
     reflector: ReflectionProvider
     max_reflections: int = 1
-    _reflections: int = 0
+    max_calls_per_round: int = 1
+    _round: int = 0
+    _round_calls: int = 0
     _acted: bool = False
+    _stopped: bool = False
+    _seen: set[str] = field(default_factory=set)
     _notices: list[dict[str, Any]] = field(default_factory=list)
 
     def propose(self, view: ModelView) -> Action:
@@ -105,34 +116,55 @@ class ReflectFirst:
             return action
         if not isinstance(action, Finish):
             return action
-        if not self._acted or self._reflections >= self.max_reflections:
+        if not self._acted or self._stopped:
             return action
-        self._reflections += 1
-        proposal = self.reflector(view)
-        # Only extra work is accepted.  A reflector that says "done" or asks a
-        # question cannot replace the delegate's finish, so it never owns the
-        # delivery decision.
+        if self._round == 0:
+            self._round = 1
+            self._round_calls = 0
+        elif self._round_calls >= self.max_calls_per_round:
+            # This round spent its budget; a new round may review again.
+            self._round += 1
+            self._round_calls = 0
+        if self._round > self.max_reflections:
+            return action
+        proposal = self.reflector(view, action)
         if isinstance(proposal, CallTool):
+            signature = _correction_signature(proposal)
+            if signature in self._seen:
+                # Repeating the same correction cannot make progress; stop
+                # spending rounds on it and let verification decide.
+                self._stopped = True
+                self._notices.append(
+                    {
+                        "kind": "reflection",
+                        "decision": "repeated",
+                        "capability": proposal.intent.capability.value,
+                        "round": self._round,
+                    }
+                )
+                return action
+            self._seen.add(signature)
+            self._round_calls += 1
             self._acted = True
             self._notices.append(
                 {
                     "kind": "reflection",
                     "decision": "correction",
                     "capability": proposal.intent.capability.value,
-                    "round": self._reflections,
+                    "round": self._round,
+                    "call_in_round": self._round_calls,
                 }
             )
             return proposal
+        # A reviewer that finds nothing left also ends reflection: more rounds
+        # would only re-read the same receipts.
+        self._stopped = True
         self._notices.append(
             {
                 "kind": "reflection",
                 "decision": "declined",
-                "capability": (
-                    proposal.intent.capability.value
-                    if isinstance(proposal, CallTool)
-                    else ""
-                ),
-                "round": self._reflections,
+                "capability": "",
+                "round": self._round,
             }
         )
         return action
@@ -148,6 +180,18 @@ class ReflectFirst:
         notices = tuple(self._notices)
         self._notices.clear()
         return notices
+
+
+def _correction_signature(action: CallTool) -> str:
+    """Stable identity of a proposed correction, for loop detection."""
+
+    intent = action.intent
+    return json.dumps(
+        [intent.capability.value, intent.params, list(intent.targets)],
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
 
 
 @dataclass(slots=True)
