@@ -56,6 +56,7 @@ def _runtime_bundle(
     catalog_profile: str,
     gateway_context: Any,
     extra_specs: Sequence[ToolSpec],
+    tool_runtime: Any = None,
 ) -> tuple[Path, Path, Ledger, LoopRuntime]:
     root = Path(workspace).resolve()
     if not root.is_dir():
@@ -80,6 +81,7 @@ def _runtime_bundle(
         workspace=root,
         policy=policy,
         context=gateway_context,
+        runtime=tool_runtime,
     )
     runtime = LoopRuntime(
         catalog=catalog,
@@ -115,6 +117,7 @@ def run_task(
     catalog_profile: str = "core",
     gateway_context: Any = None,
     extra_specs: Sequence[ToolSpec] = (),
+    tool_runtime: Any = None,
 ) -> HarnessRun:
     """Run one objective through the kernel with an injected strategy.
 
@@ -136,6 +139,7 @@ def run_task(
         catalog_profile=catalog_profile,
         gateway_context=gateway_context,
         extra_specs=extra_specs,
+        tool_runtime=tool_runtime,
     )
     spec = TaskSpec(
         task_id=identifier,

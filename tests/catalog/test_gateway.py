@@ -218,3 +218,48 @@ def test_legacy_run_tests_receipt_uses_structured_target(tmp_path: Path) -> None
     )
     run = [item for item in receipt.effects if isinstance(item, TestRun)][0]
     assert run.target == "tests/test_a.py"
+
+
+def test_injected_runtime_wins_over_the_host_default(tmp_path: Path) -> None:
+    """An eval sandbox must be able to say *where* tools run."""
+
+    from xenon.catalog.gateway import LegacyToolGateway
+
+    class RecordingExecutor:
+        def __init__(self) -> None:
+            self.runtime = None
+
+        def set_runtime(self, runtime) -> None:
+            self.runtime = runtime
+
+        def execute(self, name, params, context):  # pragma: no cover - unused
+            raise AssertionError("not executed")
+
+    executor = RecordingExecutor()
+    injected = object()
+
+    LegacyToolGateway(
+        executor=executor,  # type: ignore[arg-type]
+        workspace=tmp_path,
+        runtime=injected,
+    )
+
+    assert executor.runtime is injected, "注入的 runtime 必须覆盖宿主默认"
+
+
+def test_gateway_without_injection_binds_a_host_runtime(tmp_path: Path) -> None:
+    from xenon.catalog.gateway import LegacyToolGateway
+
+    class RecordingExecutor:
+        def __init__(self) -> None:
+            self.runtime = None
+
+        def set_runtime(self, runtime) -> None:
+            self.runtime = runtime
+
+    executor = RecordingExecutor()
+
+    LegacyToolGateway(executor=executor, workspace=tmp_path)  # type: ignore[arg-type]
+
+    assert executor.runtime is not None
+    assert getattr(executor.runtime, "workspace_root", None) == tmp_path.resolve()

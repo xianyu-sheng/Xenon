@@ -252,6 +252,26 @@ plan decision is recorded as `plan_reviewed`
 (`accepted` / `amended` / `rejected` + obligation ids), and step decisions stay
 in `step_explored`.
 
+### Evaluation runs on the same loop
+
+`evals/swebench_xenon.py` no longer constructs legacy engines. It calls
+`evals.kernel_runner.run_eval_task`, which runs the instance through `run_task`
+with a loop profile:
+
+| eval name | loop profile |
+|---|---|
+| `react` | bare react |
+| `plan-execute` | plan + follow intents |
+| `plan-react` | plan + per-step sub-loop |
+| `reflection` / `react-reflection` | react + 1×1 / 3×2 reflection |
+| `plan-reflection` | plan review + per-step review |
+| `kernel` | plan + per-step sub-loop (default) |
+
+The sandbox is injected, not re-implemented: `run_task(tool_runtime=...)` forwards
+a `ToolRuntime` to `LegacyToolGateway`, so tools run inside the eval container
+while the kernel keeps ownership of binding, verification and delivery.
+`finalize=False` keeps `git diff` as the graded patch.
+
 ### Engine-skeleton ratchet
 
 The legacy skeleton (seven engines, registry/base, prompts, DAG plan machinery) is

@@ -28,41 +28,25 @@ if str(_REPO_ROOT) not in sys.path:
 
 from datasets import load_dataset  # noqa: E402
 
+from evals.kernel_runner import (  # noqa: E402
+    CODE_EDITING_EVAL_NAMES,
+    run_eval_task,
+)
 from evals.swebench_runtime import (  # noqa: E402
     create_official_runtime,
     prepare_official_source,
 )
-from xenon.engine.builtin_engines import STANDARD_STEP_BUDGET  # noqa: E402
-from xenon.engine.callbacks import EngineCallback  # noqa: E402
-from xenon.engine.coding_contract import finalize_coding_run  # noqa: E402
-from xenon.engine.combined_engines import (  # noqa: E402
-    PlanReactEngine,
-    PlanReflectionEngine,
-    ReactReflectionEngine,
-)
-from xenon.engine.context import AgentContext  # noqa: E402
-from xenon.engine.execution_policy import (  # noqa: E402
-    ExecutionPolicy,
-    bind_execution_policy,
-)
-from xenon.engine.plan_execute_engine import PlanExecuteEngine  # noqa: E402
-from xenon.engine.react_engine import ReActEngine  # noqa: E402
-from xenon.engine.reflection_engine import ReflectionEngine  # noqa: E402
-from xenon.engine.tool_runtime import bind_tool_runtime  # noqa: E402
+
+# The kernel always verifies; 0 (the old "unlimited") becomes an explicit cap
+# so an eval run can never spin without a bound.
+STANDARD_STEP_BUDGET = 120  # noqa: E402
+from xenon.engine.execution_policy import ExecutionPolicy  # noqa: E402
+from xenon.harness.coding_contract import finalize_coding_run  # noqa: E402
+from xenon.kernel.policies import PermissionMode  # noqa: E402
 from xenon.repl.model_registry import ModelConfig  # noqa: E402
 from xenon.utils.llm_client import UsageTracker, chat_completion  # noqa: E402
 
-
-def _all_engines() -> tuple[str, ...]:
-    """从 ENGINE_REGISTRY 派生（单一真相源，不再硬编码）。"""
-    # 惰性导入：避免 evals 模块 import 时触发引擎注册表加载
-    import xenon.engine.builtin_engines  # noqa: F401  # 触发内置范式注册
-    from xenon.engine.registry import ENGINE_REGISTRY
-
-    return ENGINE_REGISTRY.names()
-
-
-ALL_ENGINES = _all_engines()
+ALL_ENGINES = CODE_EDITING_EVAL_NAMES
 
 # SWE-bench 是代码编辑评测：只有具备文件修改能力的引擎才有意义。
 # direct（裸 LLM 单轮调用）与 reflection（纯文本 Generate-Critique-Refine）
@@ -115,57 +99,6 @@ approximation of a patch.{fail_hint}
 Official issue statement:
 {instance["problem_statement"]}
 """
-
-
-def _engine(
-    name: str,
-    model: str,
-    config: ModelConfig,
-    max_steps: int,
-    verification_loop: bool = True,
-):
-    models = [model]
-    configs = {model: config}
-    callback = EngineCallback()
-    common = dict(model_configs=configs, callback=callback)
-    # 引擎构造仍用 if/elif 链——各引擎有独特 kwargs（native_fc、project_root、
-    # max_mini_react_rounds 等），不能直接调 EngineSpec.factory() 透传。
-    # 未来可在 EngineSpec 增加 swbench_kwargs 结构化元数据，届时收敛为查表。
-    if name == "react":
-        engine = ReActEngine(
-            models,
-            max_iterations=max_steps,
-            native_fc=True,
-            project_root=str(Path.cwd()),
-            **common,
-        )
-    elif name == "plan-execute":
-        # v0.8.3: 迷你 ReAct 轮次从 1 提到 3。SWE-bench 实测（django-16408）：
-        # 轮次=1 时补救轮 LLM 只能做一件事——先 read 就没轮次再 edit，
-        # 写步骤永远无法完成（0 patch）。3 轮足够 read+edit+verify。
-        engine = PlanExecuteEngine(
-            models, max_steps=max_steps, max_mini_react_rounds=3, **common
-        )
-    elif name == "reflection":
-        # 次级循环对齐生产默认：主循环步数 120 不应把审查轮次也拉到 120。
-        engine = ReflectionEngine(models, max_rounds=min(max_steps, 8), **common)
-    elif name == "plan-react":
-        engine = PlanReactEngine(
-            models, max_steps=max_steps, react_iterations=max_steps, **common
-        )
-    elif name == "plan-reflection":
-        engine = PlanReflectionEngine(
-            models, max_steps=max_steps, review_rounds=min(max_steps, 2), **common
-        )
-    elif name == "react-reflection":
-        engine = ReactReflectionEngine(
-            models, react_iterations=max_steps, review_rounds=min(max_steps, 2), **common
-        )
-    else:
-        return None
-    # v0.8.3 A/B: 开关验证循环（引擎维度的全局开关）
-    engine._verification_enabled = verification_loop
-    return engine
 
 
 def _append_event(path: Path | None, event: str, **fields: Any) -> None:
@@ -300,29 +233,31 @@ def run_one(
                 )
                 policy.emit("provider_request_end", phase="direct", success=True)
             else:
-                engine = _engine(
-                    engine_name,
-                    model,
-                    config,
-                    max_steps,
-                    verification_loop=verification_loop,
+                # The eval runs on the shipped loop: the sandbox runtime is
+                # injected, the ledger and verification are the kernel's.
+                kernel_run = run_eval_task(
+                    objective=_prompt(instance),
+                    worktree=worktree,
+                    model=config,
+                    name=engine_name,
+                    max_steps=max(1, max_steps or STANDARD_STEP_BUDGET),
+                    permission=PermissionMode.AUTO_EDIT,
+                    tool_runtime=runtime.tool_runtime,
+                    task_id=f"eval-{instance_id}-{engine_name}",
                 )
-                bind_execution_policy(engine, policy)
-                bind_tool_runtime(engine, runtime.tool_runtime)
-                output = engine.run(_prompt(instance), AgentContext()) or ""
-                tracker = getattr(engine, "_last_tracker", None)
-                for call in list(getattr(tracker, "calls", []) or []):
-                    trace.append(
-                        {
-                            "tool": getattr(call, "tool_name", "unknown"),
-                            "success": bool(getattr(call, "success", False)),
-                            "state": getattr(call, "state", None),
-                            "attempts": getattr(call, "attempts", None),
-                            "elapsed_seconds": getattr(call, "elapsed_seconds", None),
-                            "error": getattr(call, "error", None),
-                            "result": str(getattr(call, "result_summary", ""))[:500],
-                        }
-                    )
+                output = kernel_run.answer
+                trace.extend(dict(item) for item in kernel_run.tool_trace)
+                ledger_path = kernel_run.ledger_path
+                _append_event(
+                    events_path,
+                    "kernel_ledger",
+                    instance_id=instance_id,
+                    engine=engine_name,
+                    ledger=str(ledger_path),
+                    accepted=kernel_run.accepted,
+                    phase=kernel_run.phase,
+                    debt=list(kernel_run.debt),
+                )
             coding_result = finalize_coding_run(worktree, output, tool_trace=trace)
             _append_event(
                 events_path,

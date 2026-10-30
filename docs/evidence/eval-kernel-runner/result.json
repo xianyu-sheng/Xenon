@@ -1,0 +1,13 @@
+{
+  "accepted": true,
+  "phase": "finalized",
+  "debt": [],
+  "finalize_sha": null,
+  "tools": [
+    "read",
+    "read",
+    "apply_patch",
+    "apply_patch",
+    "bash"
+  ]
+}
