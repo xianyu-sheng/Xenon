@@ -252,6 +252,18 @@ plan decision is recorded as `plan_reviewed`
 (`accepted` / `amended` / `rejected` + obligation ids), and step decisions stay
 in `step_explored`.
 
+### Engine-skeleton ratchet
+
+The legacy skeleton (seven engines, registry/base, prompts, DAG plan machinery) is
+scheduled for deletion, but two product features and the eval harness still use
+it: `xenon run <workflow.yaml>` (DAG scheduler) and `/sub-agent` (child runtime,
+#204), plus `evals/*` (including the SWE-bench runner).
+
+`scripts/check_engine_imports.py` makes that coupling explicit: only the six
+files listed in its `ALLOWED` map may import the skeleton, the live turn path may
+not, and CI fails on any new importer. The allowlist only shrinks, so the deletion
+cannot regress silently while the remaining callers are migrated.
+
 ### Two verification levels
 
 Verification is decided in two places, and neither delegates upward:

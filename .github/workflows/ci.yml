@@ -46,6 +46,12 @@ jobs:
       - name: Ruff
         run: ruff check xenon tests evals
 
+      - name: Kernel purity guard
+        run: python scripts/check_kernel_purity.py
+
+      - name: Engine-skeleton ratchet
+        run: python scripts/check_engine_imports.py
+
       - name: Offline tests + coverage
         run: |
           python -m pytest tests \
