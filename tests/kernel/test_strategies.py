@@ -189,3 +189,33 @@ class _ActThenFinish:
             self._acted = True
             return CallTool(ToolIntent(capability=Capability.READ))
         return Finish("done")
+
+
+def test_reflect_first_reports_what_it_decided() -> None:
+    strategy = ReflectFirst(
+        _ActThenFinish(),
+        lambda view: CallTool(ToolIntent(capability=Capability.EDIT)),
+    )
+
+    strategy.propose(_view())
+    assert strategy.drain_notices() == ()
+
+    strategy.propose(_view())
+    notices = strategy.drain_notices()
+
+    assert notices == ({"decision": "correction", "capability": "edit", "round": 1},)
+    assert strategy.drain_notices() == (), "通知是排空的，不能重复上报"
+
+
+def test_reflect_first_records_a_declined_review() -> None:
+    strategy = ReflectFirst(
+        _ActThenFinish(),
+        lambda view: Finish("looks fine"),
+    )
+
+    strategy.propose(_view())
+    strategy.propose(_view())
+
+    assert strategy.drain_notices() == (
+        {"decision": "declined", "capability": "", "round": 1},
+    )

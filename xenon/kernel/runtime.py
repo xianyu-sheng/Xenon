@@ -363,6 +363,7 @@ class LoopRuntime:
                 raise
             self._transition(TaskPhase.RUNNING, "action proposed")
             self._steps += 1
+            self._record_strategy_notices(strategy, action)
 
             # A plan-only task must never execute a tool even if its strategy
             # misbehaves.  The accepted plan is the whole result.
@@ -1258,6 +1259,30 @@ class LoopRuntime:
         return finalize
 
     # ── policies and limits ────────────────────────────────────────────
+
+    def _record_strategy_notices(self, strategy: Any, action: Action) -> None:
+        """Audit strategy-level proposals the runtime does not execute.
+
+        Only reflection uses this today.  The record is informational: it can
+        never satisfy an obligation or close a debt.
+        """
+
+        drain = getattr(strategy, "drain_notices", None)
+        if not callable(drain):
+            return
+        for notice in drain() or ():
+            if not isinstance(notice, Mapping):
+                continue
+            self._append(
+                EventKind.REFLECTION_PROPOSED,
+                EventSource.LLM,
+                {
+                    "decision": str(notice.get("decision") or ""),
+                    "capability": str(notice.get("capability") or ""),
+                    "round": int(notice.get("round") or 0),
+                    "action": action.kind.value,
+                },
+            )
 
     def _check_policies(self, view: Any, action: Action) -> TaskResult | None:
         for policy in self._policies:

@@ -23,6 +23,7 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- 反思决策进入账本：新增 `reflection_proposed` 事件（`decision=correction|declined`、`capability`、`round`）。策略只做记录、运行时负责追加，反思仍然没有关账或交付权限。
 - `/mode reflection` 迁移到 kernel：新增 `ReflectFirst` 策略（ActFirst + 一档有界反思）。反思只能追加一次修正性工具调用，不能声明完成、不能关账、不能判断通过与否；未绑定的 claim 在反思后仍是 debt。未知 strategy 名称在适配器里 fail closed，不再静默回落到 ActFirst。
 - `/save` / `/resume` 的 kernel 指针现在同时保存计划审批事实（task_id + status + plan_digest）；恢复时仍需 ledger 的 task_id 与 accepted plan digest 一致才生效，否则视为待确认，不伪造已批准。
 

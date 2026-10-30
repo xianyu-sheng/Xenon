@@ -61,6 +61,7 @@ class EventKind(str, Enum):
     STATE_TRANSITION = "state_transition"
     CONTEXT_COMPACTED = "context_compacted"
     THOUGHT = "thought"
+    REFLECTION_PROPOSED = "reflection_proposed"
     POLICY_DECISION = "policy_decision"
     CONTROL_DECISION = "control_decision"
     BINDING_FAILED = "binding_failed"
