@@ -232,7 +232,7 @@ def test_lying_strategy_cannot_deliver() -> None:
 def test_reflection_cannot_launder_an_unverified_claim() -> None:
     """A reflector's "looks done" is a proposal, never a verdict."""
 
-    from xenon.kernel.strategies import ActFirst, ReflectFirst
+    from xenon.kernel.strategies import LoopProfile, LoopStrategy
 
     ledger = Ledger.in_memory("task-1")
     runtime = _runtime(ledger)
@@ -242,14 +242,13 @@ def test_reflection_cannot_launder_an_unverified_claim() -> None:
         target="calc/add.py",
         source=ClaimSource.LLM,
     )
-    strategy = ReflectFirst(
-        ActFirst(
-            _repeating(
-                CallTool(ToolIntent(capability=Capability.READ)),
-                Finish("I fixed it", claims=(lie,)),
-            )
+    strategy = LoopStrategy(
+        LoopProfile(reflect_rounds=1, reflect_calls=1),
+        actor=_repeating(
+            CallTool(ToolIntent(capability=Capability.READ)),
+            Finish("I fixed it", claims=(lie,)),
         ),
-        lambda view, finish: Finish("I reviewed it; the claim is fine."),
+        reflector=lambda view, finish: Finish("I reviewed it; the claim is fine."),
     )
 
     result = runtime.run(_calc_spec(), strategy)
@@ -260,17 +259,16 @@ def test_reflection_cannot_launder_an_unverified_claim() -> None:
 
 
 def test_reflection_can_add_a_corrective_tool_call() -> None:
-    from xenon.kernel.strategies import ActFirst, ReflectFirst
+    from xenon.kernel.strategies import LoopProfile, LoopStrategy
 
     ledger = Ledger.in_memory("task-1")
     runtime = _runtime(ledger)
-    strategy = ReflectFirst(
-        ActFirst(
-            _repeating(
-                CallTool(ToolIntent(capability=Capability.READ)),
-            )
+    strategy = LoopStrategy(
+        LoopProfile(reflect_rounds=1, reflect_calls=1),
+        actor=_repeating(CallTool(ToolIntent(capability=Capability.READ))),
+        reflector=lambda view, finish: CallTool(
+            ToolIntent(capability=Capability.EDIT)
         ),
-        lambda view, finish: CallTool(ToolIntent(capability=Capability.EDIT)),
     )
 
     result = runtime.run(_calc_spec(), strategy)
@@ -282,13 +280,16 @@ def test_reflection_can_add_a_corrective_tool_call() -> None:
 def test_reflection_decision_is_auditable_but_powerless() -> None:
     """The ledger records the review; it never records a shortcut."""
 
-    from xenon.kernel.strategies import ActFirst, ReflectFirst
+    from xenon.kernel.strategies import LoopProfile, LoopStrategy
 
     ledger = Ledger.in_memory("task-1")
     runtime = _runtime(ledger)
-    strategy = ReflectFirst(
-        ActFirst(_repeating(CallTool(ToolIntent(capability=Capability.READ)))),
-        lambda view, finish: Finish("I reviewed it; nothing else is needed."),
+    strategy = LoopStrategy(
+        LoopProfile(reflect_rounds=1, reflect_calls=1),
+        actor=_repeating(CallTool(ToolIntent(capability=Capability.READ))),
+        reflector=lambda view, finish: Finish(
+            "I reviewed it; nothing else is needed."
+        ),
     )
 
     result = runtime.run(_calc_spec(), strategy)
@@ -301,13 +302,16 @@ def test_reflection_decision_is_auditable_but_powerless() -> None:
 
 
 def test_reflection_correction_is_recorded_before_the_tool_call() -> None:
-    from xenon.kernel.strategies import ActFirst, ReflectFirst
+    from xenon.kernel.strategies import LoopProfile, LoopStrategy
 
     ledger = Ledger.in_memory("task-1")
     runtime = _runtime(ledger)
-    strategy = ReflectFirst(
-        ActFirst(_repeating(CallTool(ToolIntent(capability=Capability.READ)))),
-        lambda view, finish: CallTool(ToolIntent(capability=Capability.EDIT)),
+    strategy = LoopStrategy(
+        LoopProfile(reflect_rounds=1, reflect_calls=1),
+        actor=_repeating(CallTool(ToolIntent(capability=Capability.READ))),
+        reflector=lambda view, finish: CallTool(
+            ToolIntent(capability=Capability.EDIT)
+        ),
     )
 
     runtime.run(_calc_spec(), strategy)
@@ -329,7 +333,7 @@ def test_reflection_correction_is_recorded_before_the_tool_call() -> None:
 def test_multi_round_reflection_stays_bounded_and_never_launders_claims() -> None:
     """Rounds buy extra work, not extra authority."""
 
-    from xenon.kernel.strategies import ActFirst, ReflectFirst
+    from xenon.kernel.strategies import LoopProfile, LoopStrategy
 
     ledger = Ledger.in_memory("task-1")
     runtime = _runtime(ledger)
@@ -345,11 +349,10 @@ def test_multi_round_reflection_stays_bounded_and_never_launders_claims() -> Non
         rounds.append(1)
         return CallTool(ToolIntent(capability=Capability.READ))
 
-    strategy = ReflectFirst(
-        ActFirst(_repeating(CallTool(ToolIntent(capability=Capability.READ)))),
-        reflector,
-        max_reflections=3,
-        max_calls_per_round=1,
+    strategy = LoopStrategy(
+        LoopProfile(reflect_rounds=3, reflect_calls=1),
+        actor=_repeating(CallTool(ToolIntent(capability=Capability.READ))),
+        reflector=reflector,
     )
 
     result = runtime.run(_calc_spec(), strategy)
@@ -361,7 +364,7 @@ def test_multi_round_reflection_stays_bounded_and_never_launders_claims() -> Non
 
 
 def test_multi_round_reflection_records_each_round() -> None:
-    from xenon.kernel.strategies import ActFirst, ReflectFirst
+    from xenon.kernel.strategies import LoopProfile, LoopStrategy
 
     ledger = Ledger.in_memory("task-1")
     runtime = _runtime(ledger)
@@ -373,11 +376,10 @@ def test_multi_round_reflection_records_each_round() -> None:
         used.append(1)
         return CallTool(ToolIntent(capability=capability))
 
-    strategy = ReflectFirst(
-        ActFirst(_repeating(CallTool(ToolIntent(capability=Capability.READ)))),
-        reflector,
-        max_reflections=3,
-        max_calls_per_round=1,
+    strategy = LoopStrategy(
+        LoopProfile(reflect_rounds=3, reflect_calls=1),
+        actor=_repeating(CallTool(ToolIntent(capability=Capability.READ))),
+        reflector=reflector,
     )
 
     runtime.run(_calc_spec(), strategy)

@@ -1,15 +1,13 @@
-# plan-reflection parity — review the plan, review each step
+# plan-reflection parity — one loop, all three phases
 
-`/mode plan-reflection` is `PlanReact` plus two review seams:
+`/mode plan-reflection` is the single kernel loop with every phase enabled:
 
-1. **plan coverage review** before the plan is submitted — looks for work the
-   objective needs but the plan never does (missing verify step, untouched error
-   path);
-2. **per-step review** before a step is released — so a mistake is fixed where
-   it happened instead of after the whole plan has run.
+1. **plan** — propose one plan, and review its coverage before submitting;
+2. **react** — work the active step in a bounded sub-loop;
+3. **reflect** — review a step before it is released, and the proposed finish.
 
-Both reviewers are proposal sources only, and one invariant is enforced in code:
-a plan review may **add** steps and expects, never remove an obligation.
+There is no second strategy class for this mode. `LoopProfile` only says which
+phases run and how much they may spend.
 
 ## What was run
 
@@ -26,18 +24,22 @@ Task: *add `subtract(a, b)` and a matching test, then run the tests.*
 ```text
 accepted        true
 phase           finalized
-finalize_sha    cdadd0444db2d0deec32d04ba33de121cb6d9e41
+finalize_sha    44b16720a97ecf4d7c9652c12fe32e557597f0ae
 debt            (none)
-metrics         steps 7 · tool_calls 5 · events 71 · audit_rounds 1
+metrics         steps 8 · tool_calls 6 · events 82 · repair_attempts 1 · audit_rounds 1
 ```
 
 Delivery commit:
 
 ```text
-cdadd04 xenon: In calc.py add a subtract(a, b) function and a matching test ...
+44b1672 xenon: In calc.py add a subtract(a, b) function and a matching test ...
  calc.py      | 4 ++++
  test_calc.py | 6 +++++-
 ```
+
+`repair_attempts=1` is the per-step review path doing its job: one step produced
+work that did not satisfy its expectation, the step stayed open, and the
+correction happened inside that step instead of after the whole plan ran.
 
 ## The plan review is auditable
 
@@ -45,43 +47,40 @@ cdadd04 xenon: In calc.py add a subtract(a, b) function and a matching test ...
 {"kind":"plan_reviewed","payload":{"decision":"accepted","added_steps":0}}
 ```
 
-The reviewer read the proposed 5-step plan (read → read → edit → edit → verify)
-and found nothing missing, so the plan went through unchanged. A review that adds
-coverage shows up as `decision="amended"` with `added_steps`, and one that would
-drop an obligation is rejected with `decision="rejected"` and the obligation ids.
+The reviewer read the proposed plan and found nothing missing. A review that adds
+coverage records `decision="amended"` with `added_steps`; one that would drop an
+obligation is rejected with `decision="rejected"` and the obligation ids, and the
+original plan stands.
 
-`step_explored` is absent in this run: no step failed or ran out of budget, and
-the per-step review only has a window while a step is still open.
+## Invariants proven by tests, not by this run
 
-## Two real bugs this slice found
+The reviewer's windows are model-dependent, so these are covered
+deterministically:
+
+- `tests/kernel/test_strategies.py::test_plan_review_cannot_drop_an_obligation`
+  — a plan review may add steps and expects, never remove them;
+- `tests/kernel/test_plan_runtime.py::test_plan_review_added_step_actually_runs`
+  — an added step really executes;
+- `tests/kernel/test_plan_runtime.py::test_step_review_corrects_a_failing_step_before_release`
+  — a step that has not closed is corrected in place;
+- `tests/kernel/test_plan_runtime.py::test_step_review_cannot_bypass_an_unmet_expectation`
+  — a review that finds nothing still ends in debt, never delivery;
+- `tests/kernel/test_strategies.py::test_profile_rejects_incoherent_budgets`
+  — an incoherent profile is rejected at construction.
+
+## Two real bugs this slice found earlier
 
 1. **`verify` prefixed with `cd`** — `cd /d <path> && pytest` turned a plain
-   verify into a permission-gated shell command, so the run ended `BLOCKED`
-   (`"verify requires a grant"`). The workspace root is already the cwd, so the
-   prompts now forbid `cd` in verify commands.
+   verify into a permission-gated shell command, so the run ended `BLOCKED`.
+   The prompts now forbid `cd` in verify commands, since the workspace root is
+   already the cwd.
 2. **Plan review logged as reflection** — the first successful run recorded the
-   plan review as `reflection_proposed` with `round: 0`. That was semantically
-   wrong, so `plan_reviewed` is now its own event.
-
-Neither run was massaged: the blocked attempt is what forced the prompt fix, and
-the wrong event was replaced by a dedicated one.
-
-## What this run does not prove
-
-The per-step review window is model-dependent: it opens only while a step is
-still open (a violated receipt, or unmet expectations). Deterministic coverage:
-
-- `tests/kernel/test_plan_runtime.py::test_step_review_corrects_a_failing_step_before_release`
-  (a read in a verify step stays open, review injects the real `verify`, step
-  closes satisfied, no extra step started);
-- `tests/kernel/test_plan_runtime.py::test_step_review_cannot_bypass_an_unmet_expectation`
-  (review that finds nothing still ends in debt, not delivery);
-- `tests/kernel/test_plan_runtime.py::test_plan_review_added_step_actually_runs`;
-- `tests/kernel/test_strategies.py::test_plan_review_cannot_drop_an_obligation`.
+   plan review as `reflection_proposed` with `round: 0`; it is now its own
+   `plan_reviewed` event.
 
 ## Files
 
-- `ledger.jsonl` — 71 events, hash chain intact
+- `ledger.jsonl` — 82 events, hash chain intact
 - `ledger.jsonl.anchor` — head anchor
 - `result.json` — task result projection
 - `commit.txt` — the delivery commit the finalizer created

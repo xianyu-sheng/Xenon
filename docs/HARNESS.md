@@ -252,6 +252,31 @@ plan decision is recorded as `plan_reviewed`
 (`accepted` / `amended` / `rejected` + obligation ids), and step decisions stay
 in `step_explored`.
 
+### One loop, three phases
+
+The kernel has exactly one strategy: `LoopStrategy`. `LoopProfile` selects which
+phases run, so a thinking mode can no longer fork the execution model:
+
+```text
+plan    → propose a plan (optionally reviewed for coverage)
+react   → work the active step in a bounded sub-loop
+reflect → review the proposed finish and/or the proposed step release
+```
+
+| mode | plan | react | reflect |
+|---|---|---|---|
+| react / direct | — | bare | — |
+| plan-execute | yes (follow intents) | one call per step | — |
+| plan-react | yes | per-step sub-loop | — |
+| reflection | — | bare | 1 round × 1 call |
+| react-reflection | — | bare | 3 rounds × 2 calls |
+| plan-reflection | yes (reviewed) | per-step sub-loop | step + finish review |
+
+Modes carry the profile as data (`xenon/modes.py`), the adapter resolves it at run
+time, and `LoopProfile.__post_init__` rejects incoherent budgets (a reflect round
+without calls, `follow_plan` without a plan, `step_reflect` without steps, …).
+Adding a mode is therefore a table entry, not a new execution paradigm.
+
 ### PlanReact and step release
 
 `/mode plan-react` submits one plan, then runs a bounded sub-loop on the active

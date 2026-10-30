@@ -19,6 +19,7 @@ from xenon.harness.plan import HarnessPlan
 from xenon.harness.sink import JsonlSink
 from xenon.kernel.contracts import (
     Budget,
+    Finish,
     PlanProposal,
     TaskMode,
     TaskResult,
@@ -29,7 +30,7 @@ from xenon.kernel.controller import VerificationController
 from xenon.kernel.policies import PermissionMode, PermissionPolicy
 from xenon.kernel.protocols import ApprovalProvider, Strategy
 from xenon.kernel.runtime import LoopRuntime
-from xenon.kernel.strategies import PlanFirst
+from xenon.kernel.strategies import LoopProfile, LoopStrategy
 from xenon.ledger.events import canonical_json
 from xenon.ledger.store import Ledger
 
@@ -231,7 +232,11 @@ def run_plan(
 ) -> HarnessRun:
     return run_task(
         plan.objective,
-        strategy=PlanFirst(lambda view: plan.proposal),
+        strategy=LoopStrategy(
+            LoopProfile(plan=True, step_scope=True, follow_plan=True),
+            actor=lambda view: Finish("completed"),
+            planner=lambda view: plan.proposal,
+        ),
         workspace=workspace,
         ledger_dir=ledger_dir,
         task_id=task_id,

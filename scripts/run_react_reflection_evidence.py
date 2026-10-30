@@ -11,9 +11,10 @@ from pathlib import Path
 
 import yaml
 
-from xenon.harness.llm import ModelConfig, build_llm_reflection_strategy
+from xenon.harness.llm import ModelConfig, build_llm_loop_strategy
 from xenon.harness.runner import result_json, run_task
 from xenon.kernel.policies import PermissionMode
+from xenon.kernel.strategies import LoopProfile
 from xenon.repl.provider_registry import get_provider
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,8 +57,8 @@ def main() -> int:
         shutil.rmtree(OUT)
     run = run_task(
         TASK,
-        strategy=build_llm_reflection_strategy(
-            _model_config(), max_reflections=3, max_calls_per_round=2
+        strategy=build_llm_loop_strategy(
+            _model_config(), LoopProfile(reflect_rounds=3, reflect_calls=2)
         ),
         workspace=WS,
         ledger_dir=OUT / "ledger",
