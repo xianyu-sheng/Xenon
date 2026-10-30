@@ -23,6 +23,7 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- 新增 `scripts/check_engine_imports.py` 并接入 CI：把仍依赖引擎骨架的文件显式列为白名单（`/sub-agent`、`xenon run`、`xenon/__init__` 多引擎导出、`setup_wizard`、`direct_chat`、`engine_host`），任何新增引用直接失败。白名单只减不增。
 - **校验分为两级**：步骤级（`step_verdict` + 新的 `step_verified` 汇总事件，随 `ModelView.step_verdicts` 提供给反思）与回合级（V2 audit + finalizer）。步骤级校验先跑，reflection 在其结论之上提修正，不能反过来判定通过。
 - 反思/审查阶段接入事件流：`step_verified`、`step_explored`、`plan_reviewed`、`reflection_proposed` 都会投影到思考面板与回合树，不再只躺在账本里。
 - **移除 turn_flow 的引擎分发**：删除 `ENGINE_REGISTRY` 查表与自动范式切换（`_select_turn_mode`）。工具/技能轮次统一走 kernel loop；无法进入 kernel 时显式失败，不再换范式。
