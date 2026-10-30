@@ -33,7 +33,7 @@ from xenon.kernel.contracts import (
     Think,
     ToolIntent,
 )
-from xenon.kernel.strategies import ActFirst, PlanFirst
+from xenon.kernel.strategies import ActFirst, PlanFirst, ReflectFirst
 from xenon.utils.llm_client import chat_completion
 
 
@@ -153,6 +153,27 @@ Rules:
   not paper over it with a finish claim.
 """
 
+
+
+_REFLECT_PROTOCOL = """\nReflection review (overrides the generic protocol above).
+You are reviewing the work just performed, before the task is reported done.
+Return exactly one JSON object, with no markdown fence and no prose outside it:
+
+Option A, one corrective tool call:
+{"reflect":{"action":"call_tool","capability":"edit","params":{"files":[...]}}}
+
+Option B, no corrective work needed:
+{"reflect":null}
+
+Rules:
+- Review the receipts and working set, not the chat history.
+- Propose at most one corrective tool call, and only for a concrete gap you can
+  point at in the receipts.
+- You cannot declare the task done, cannot close a debt, and cannot decide
+  pass/fail. Verification stays deterministic.
+- If a earlier tool failed, prefer a corrective call; do not propose "finish".
+- Never propose git commit or git push.
+"""
 
 def _read_yaml(path: Path, *, required: bool = False) -> Mapping[str, Any]:
     if not path.exists():
@@ -625,6 +646,83 @@ class LLMPlanFinisher:
         return action
 
 
+class LLMReflector:
+    """Review one finished attempt and propose at most one correction.
+
+    The output is a hypothesis.  It is parsed into an action, and only a
+    ``CallTool`` survives; the strategy discards everything else so a review
+    can never shorten the verification path.
+    """
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        client: Callable[..., str] | None = None,
+    ) -> None:
+        self.config = config
+        self._client = client
+
+    def __call__(self, view: ModelView) -> Action | None:
+        try:
+            payload = _extract_json(
+                _call_model(
+                    self.config,
+                    self._client,
+                    build_reflect_messages(view),
+                )
+            )
+        except (ActionParseError, TypeError, ValueError):
+            return None
+        raw = payload.get("reflect") if isinstance(payload, Mapping) else None
+        if not isinstance(raw, Mapping):
+            return None
+        try:
+            action = parse_action(dict(raw))
+        except (ActionParseError, TypeError, ValueError):
+            return None
+        return action if isinstance(action, CallTool) else None
+
+
+def build_reflect_messages(view: ModelView) -> list[dict[str, str]]:
+    """Prompt a bounded reflection over the deterministic receipts."""
+
+    state = {
+        "objective": view.task.objective,
+        "constraints": list(view.task.constraints),
+        "receipts": [dict(item) for item in view.working_set],
+        "debt": [
+            {"id": item.obligation.id, "reason": item.reason}
+            for item in view.debt
+        ],
+        "available_tools": list(view.tools),
+    }
+    return [
+        {"role": "system", "content": view.system + "\n" + _REFLECT_PROTOCOL},
+        {
+            "role": "user",
+            "content": (
+                "Current deterministic state (ledger prefix, not chat memory):\n"
+                + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+                + "\nReturn exactly one JSON reflection."
+            ),
+        },
+    ]
+
+
+def build_llm_reflection_strategy(
+    config: ModelConfig,
+    *,
+    client: Callable[..., str] | None = None,
+    max_reflections: int = 1,
+) -> ReflectFirst:
+    return ReflectFirst(
+        ActFirst(LLMActionProposer(config, client=client)),
+        LLMReflector(config, client=client),
+        max_reflections=max_reflections,
+    )
+
+
 def build_llm_strategy(
     config: ModelConfig,
     *,
@@ -651,13 +749,16 @@ __all__ = [
     "LLMActionProposer",
     "LLMPlanFinisher",
     "LLMPlanProposer",
+    "LLMReflector",
     "ModelConfig",
     "ModelConfigError",
     "build_finish_messages",
     "build_llm_plan_strategy",
     "build_llm_strategy",
     "build_messages",
+    "build_llm_reflection_strategy",
     "build_plan_messages",
+    "build_reflect_messages",
     "parse_action",
     "resolve_model_config",
 ]

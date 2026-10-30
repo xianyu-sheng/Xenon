@@ -235,6 +235,19 @@ both commands fail closed and do not fall back to the legacy goal projection.
 `/mode` is intentionally not part of this view: it selects a model thinking
 mode, not task state, so it stays backed by `ModelRegistry`.
 
+### Reflection is a proposal source
+
+`/mode reflection` runs on the kernel as `ReflectFirst`: ActFirst executes, then
+one bounded reflection pass may add a single corrective tool call. The reflector
+receives the deterministic receipts, not the chat history, and its output is
+parsed into an action of which only `CallTool` survives. It cannot finish a
+task, close a debt, or decide pass/fail — an unverified claim stays debt after
+reflection, and the controller still owns delivery.
+
+`RuntimeAdapter` fail-closes on unknown strategy names instead of falling back to
+ActFirst, so a half-migrated mode cannot silently inherit another mode's
+semantics.
+
 ### Scoped write negations
 
 A negation that names a concrete path ("不要修改 probe.txt") protects only that

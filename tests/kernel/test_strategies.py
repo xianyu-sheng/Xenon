@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from xenon.kernel.contracts import (
     Budget,
+    CallTool,
     Capability,
     Claim,
     ClaimSource,
@@ -26,6 +27,7 @@ from xenon.kernel.strategies import (
     ActFirst,
     NoToolStrategy,
     PlanFirst,
+    ReflectFirst,
     RepairFirst,
 )
 
@@ -124,3 +126,66 @@ def test_plan_first_finishes_with_the_working_set() -> None:
     second = strategy.propose(view)
     assert isinstance(second, Finish)
     assert second.answer == "the answer"
+
+
+def test_reflect_first_asks_for_one_correction_before_finishing() -> None:
+    strategy = ReflectFirst(
+        _ActThenFinish(),
+        lambda view: CallTool(ToolIntent(capability=Capability.EDIT)),
+    )
+
+    assert isinstance(strategy.propose(_view()), CallTool)
+    # The finish attempt is intercepted once by the reflector.
+    assert isinstance(strategy.propose(_view()), CallTool)
+    assert isinstance(strategy.propose(_view()), Finish)
+
+
+def test_reflect_first_is_bounded() -> None:
+    strategy = ReflectFirst(
+        _ActThenFinish(),
+        lambda view: CallTool(ToolIntent(capability=Capability.EDIT)),
+        max_reflections=2,
+    )
+
+    assert isinstance(strategy.propose(_view()), CallTool)
+    assert isinstance(strategy.propose(_view()), CallTool)
+    assert isinstance(strategy.propose(_view()), CallTool)
+    assert isinstance(strategy.propose(_view()), Finish)
+
+
+def test_reflect_first_never_runs_without_prior_action() -> None:
+    calls = {"reflect": 0}
+
+    def reflector(view: ModelView):
+        calls["reflect"] += 1
+        return CallTool(ToolIntent(capability=Capability.EDIT))
+
+    strategy = ReflectFirst(ActFirst(lambda view: Finish("done")), reflector)
+
+    assert isinstance(strategy.propose(_view()), Finish)
+    assert calls["reflect"] == 0, "没有行动就不该反思"
+
+
+def test_reflect_first_cannot_finish_or_ask_on_its_own() -> None:
+    strategy = ReflectFirst(
+        _ActThenFinish(),
+        lambda view: Finish("I reviewed it and it is fine"),
+    )
+    assert isinstance(strategy.propose(_view()), CallTool)
+    # A reflector that declares success is discarded; completion stays with
+    # the delegate, and verification stays deterministic.
+    assert isinstance(strategy.propose(_view()), Finish)
+    assert strategy._reflections == 1
+
+
+class _ActThenFinish:
+    """Deterministic double: one tool call, then finish."""
+
+    def __init__(self) -> None:
+        self._acted = False
+
+    def propose(self, view: ModelView):
+        if not self._acted:
+            self._acted = True
+            return CallTool(ToolIntent(capability=Capability.READ))
+        return Finish("done")

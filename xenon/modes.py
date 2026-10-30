@@ -12,6 +12,8 @@ already migrated:
   default ``direct`` mode; direct chat itself is still a REPL branch);
 * ``plan`` — tool turns use the kernel's LLM PlanFirst strategy
   (``plan-execute``);
+* ``reflect`` — tool turns use ActFirst plus one bounded reflection pass
+  (``reflection``);
 * ``None`` — no kernel parity yet; the mode stays on the frozen legacy path and
   must not silently fall through to ActFirst.
 
@@ -34,7 +36,8 @@ class ModeSpec:
         name: Stable identifier used by ``/mode`` and session config.
         description: One-line explanation shown by ``/mode`` and setup.
         workflow_template: Optional legacy workflow YAML path.
-        kernel_strategy: ``act`` / ``plan`` when the kernel has parity; ``None``
+        kernel_strategy: ``act`` / ``plan`` / ``reflect`` when the kernel has
+            parity; ``None``
             means the mode remains on the frozen legacy path.
     """
 
@@ -73,6 +76,9 @@ MODE_CATALOG: dict[str, ModeSpec] = {
     "reflection": ModeSpec(
         name="reflection",
         description="执行后自我审查并修正，适合高质量代码生成",
+        # Reflection proposes at most one corrective tool call; the controller
+        # still owns verification and the delivery decision.
+        kernel_strategy="reflect",
     ),
     "plan-react": ModeSpec(
         name="plan-react",
