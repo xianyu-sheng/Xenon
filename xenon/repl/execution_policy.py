@@ -94,6 +94,9 @@ class ExecutionPolicy:
     reason: str
     explicit_no_write: bool = False
     explicit_no_execute: bool = False
+    # Targets named by a scoped negation, e.g. "不要修改 probe.txt".  The turn
+    # may still write elsewhere; the tool boundary rejects these paths.
+    protected_write_paths: tuple[str, ...] = ()
 
     @property
     def requires_tools(self) -> bool:
@@ -425,6 +428,9 @@ class ExecutionSignals:
     read_snippets: tuple[str, ...] = ()
     negation_snippets: tuple[str, ...] = ()
     no_write: bool = False
+    # A scoped negation ("不要修改 plan_probe.txt") must not become a global
+    # write ban.  Global no_write remains true only for untargeted negations.
+    no_write_targets: tuple[str, ...] = ()
     no_execute: bool = False
     no_tools: bool = False
     chat_only: bool = False
@@ -462,11 +468,61 @@ class ExecutionSignals:
         return bool(self.read_snippets) or bool(self.paths)
 
 
+_NO_WRITE_GLOBAL_WORDS = re.compile(
+    r"任何|所有|一切|多个|这些|那些|文件|磁盘|目录|folder|directories",
+    re.IGNORECASE,
+)
+_CLAUSE_BREAK = re.compile("[\u3001\u3002\uff1b\uff0c\uff01\uff1f\n]")
+
+
+def _clause_span(text: str, start: int, end: int) -> tuple[int, int]:
+    """Return the clause span containing [start, end)."""
+
+    left = 0
+    for match in _CLAUSE_BREAK.finditer(text, 0, start):
+        left = match.end()
+    right_match = _CLAUSE_BREAK.search(text, end)
+    right = right_match.start() if right_match else len(text)
+    return left, right
+
+
+def _no_write_scope(text: str) -> tuple[tuple[str, ...], bool]:
+    """Return (protected paths, has_global_negation).
+
+    Only a negation in a clause that names a concrete path is scoped.  A
+    negation about files in general ("不要写任何文件") stays global even when
+    another path appears in the same sentence.
+    """
+
+    targets: list[str] = []
+    global_negation = False
+    for match in _NO_WRITE.finditer(text):
+        left, right = _clause_span(text, match.start(), match.end())
+        clause = text[left:right]
+        if _NO_WRITE_GLOBAL_WORDS.search(clause):
+            global_negation = True
+            continue
+        found: list[str] = []
+        for segment in (text[match.end() : right], text[left : match.start()]):
+            for path in _PATH_REFERENCE.finditer(segment):
+                value = path.group(0).strip().rstrip("，。；,.!?;")
+                if value and value not in found:
+                    found.append(value)
+            if found:
+                break
+        if found:
+            targets.extend(found)
+        else:
+            global_negation = True
+    return tuple(dict.fromkeys(targets)), global_negation
+
+
 def extract_execution_signals(text: str) -> ExecutionSignals:
     """Extract primitives/constraints/evidence from *text* (no final decision)."""
 
     source = text.strip()
     request_source = _split_request_clause(source)
+    no_write_targets, no_write_global = _no_write_scope(source)
 
     write_patterns: list[str] = []
     write_snippets: list[str] = []
@@ -512,7 +568,8 @@ def extract_execution_signals(text: str) -> ExecutionSignals:
         execute_snippets=tuple(dict.fromkeys(execute_snippets))[:2],
         read_snippets=tuple(dict.fromkeys(read_snippets))[:5],
         negation_snippets=tuple(dict.fromkeys(negation_snippets))[:5],
-        no_write=bool(_NO_WRITE.search(source)),
+        no_write=no_write_global,
+        no_write_targets=no_write_targets,
         no_execute=bool(_NO_EXECUTE.search(source)),
         no_tools=bool(_NO_TOOLS.search(source)),
         chat_only=bool(_CHAT_OUTPUT.search(source)),

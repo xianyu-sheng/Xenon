@@ -233,6 +233,14 @@ both commands fail closed and do not fall back to the legacy goal projection.
 `/mode` is intentionally not part of this view: it selects a model thinking
 mode, not task state, so it stays backed by `ModelRegistry`.
 
+### Scoped write negations
+
+A negation that names a concrete path ("不要修改 probe.txt") protects only that
+path: the turn may still create other files, and the tool boundary rejects
+writes to the named path even at `EXECUTE` level. A general negation
+("不要写任何文件") remains a global write ban. The contract carries the protected
+paths, and `execution_policy_denial` enforces them before the tool runs.
+
 ### Per-tool MCP specs
 
 When the REPL has discovered MCP tools, the kernel builds one `ToolSpec` per

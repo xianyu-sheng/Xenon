@@ -152,8 +152,8 @@ def main() -> int:
             raise SystemExit(3)
         print("stage: plan mode on", file=sys.stderr, flush=True)
         prompt = (
-            "创建一个新文件 plan_out.txt，内容为 {token} 加一个换行。"
-            "只做这一件事，不要读取其他文件，不要 push。"
+            "创建一个新文件 plan_out.txt，内容为 {token} 加一个换行；"
+            "不要修改 plan_probe.txt，不要 push。"
         ).format(token=TOKEN)
         send(prompt + "\r")
         if not wait_for("Kernel · plan", 180):
