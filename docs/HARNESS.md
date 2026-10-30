@@ -252,6 +252,23 @@ plan decision is recorded as `plan_reviewed`
 (`accepted` / `amended` / `rejected` + obligation ids), and step decisions stay
 in `step_explored`.
 
+### Two verification levels
+
+Verification is decided in two places, and neither delegates upward:
+
+* **step level** — V0 reconciles each receipt, V1 closes the step's expectations.
+  Every decision is a `step_verdict` event, and each closed or released step also
+  records one `step_verified` summary (status + verdict list). The active step's
+  latest verdicts are exposed to strategies as `ModelView.step_verdicts`.
+* **turn level** — V2 audit plus the finalizer decide delivery for the whole
+  turn (`claim_resolved`, `control_decision`, `finalized`).
+
+Reflection sits **on top of** step verification: the step reviewer receives the
+deterministic verdicts (`satisfied` / `violated` / `unverifiable`) and may only
+propose the call that would satisfy an unmet one. It never produces a verdict and
+never upgrades a status, so a "looks fine" review still ends in debt when the
+step verification says otherwise.
+
 ### One runtime
 
 `turn_flow` has no engine table and no paradigm auto-switching. A tool or skill

@@ -356,6 +356,7 @@ def build_model_view(
     phase: TaskPhase = TaskPhase.RUNNING,
     active_step: StepContract | None = None,
     steps: Sequence[StepContract] = (),
+    step_verdicts: Sequence[Any] = (),
 ) -> ModelView:
     """Build the deterministic view a strategy is allowed to see."""
 
@@ -402,6 +403,15 @@ def build_model_view(
             _step_schema(active_step) if active_step is not None else None
         ),
         "steps": [_step_schema(item) for item in steps],
+        "step_verdicts": [
+            {
+                "obligation_id": item.obligation_id,
+                "stage": item.stage.value,
+                "status": item.status.value,
+                "reason": item.reason,
+            }
+            for item in step_verdicts
+        ],
     }
     digest = hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
     return ModelView(
@@ -416,4 +426,5 @@ def build_model_view(
         phase=phase,
         active_step=active_step,
         steps=tuple(steps),
+        step_verdicts=tuple(step_verdicts),
     )

@@ -395,6 +395,61 @@ def test_event_sink_projects_receipts_without_content() -> None:
     assert "SECRET" not in repr(panel)
 
 
+@pytest.mark.parametrize(
+    ("kind", "payload", "needle"),
+    [
+        (
+            "step_verified",
+            {
+                "step_id": 2,
+                "status": "unmet",
+                "verdicts": [
+                    {"obligation_id": "e1", "status": "violated"},
+                ],
+            },
+            "step 2 verification unmet: e1",
+        ),
+        (
+            "step_explored",
+            {
+                "step_id": 3,
+                "decision": "budget_exhausted",
+                "calls": 6,
+            },
+            "步内预算用尽",
+        ),
+        (
+            "plan_reviewed",
+            {"decision": "amended", "added_steps": 1},
+            "补充了 1 个步骤",
+        ),
+        (
+            "reflection_proposed",
+            {"decision": "correction", "capability": "verify"},
+            "反思补一次修正",
+        ),
+    ],
+)
+def test_event_sink_surfaces_verification_and_review_stages(
+    kind: str, payload: dict, needle: str
+) -> None:
+    """Verification and review stages must reach the panel, not only the ledger."""
+
+    callback = ConsoleCallback(verbose=False)
+    sink = ReplEventSink(callback)
+
+    sink.emit(
+        SimpleNamespace(kind=SimpleNamespace(value=kind), payload=payload)
+    )
+
+    panel = callback.get_thinking_panel()
+    assert panel is not None
+    rendered = " ".join(
+        [*panel.warnings, *(str(step) for step in panel.steps)]
+    )
+    assert needle in rendered, rendered
+
+
 class ApprovalRepl:
     def __init__(self, result=True) -> None:
         self.result = result

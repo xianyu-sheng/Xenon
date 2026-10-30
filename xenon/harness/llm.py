@@ -246,7 +246,11 @@ Option B, the step is genuinely done:
 {"reflect": null}
 
 Rules:
-- Judge the step only: its target, its expectations and the receipts so far.
+- Judge the step only: its target, its expectations, the step verification you
+  are given, and the receipts so far.
+- `step_verification` is already decided deterministically. Do not re-judge it
+  and do not claim it is satisfied; propose work only for a status that is not
+  satisfied, or for a gap you can name in the receipts.
 - Propose a call only for a concrete gap you can name (a test not run, an edit
   not verified, an error path untouched).
 - You cannot mark the step complete, close a debt or judge pass/fail.
@@ -993,6 +997,17 @@ def build_step_review_messages(
             "expects": [item.id for item in step.expects],
         },
         "step_completion_note": getattr(action, "answer", "") or "",
+        # Step-level verification is the input to reflection: the reviewer
+        # reacts to deterministically decided verdicts, it never decides them.
+        "step_verification": [
+            {
+                "obligation_id": verdict.obligation_id,
+                "stage": verdict.stage.value,
+                "status": verdict.status.value,
+                "reason": verdict.reason,
+            }
+            for verdict in view.step_verdicts
+        ],
         "receipts": [dict(item) for item in view.working_set],
         "debt": [
             {"id": item.obligation.id, "reason": item.reason}

@@ -45,6 +45,7 @@ class EventKind(str, Enum):
     PLAN_APPROVED = "plan_approved"
     STEP_STARTED = "step_started"
     STEP_VERDICT = "step_verdict"
+    STEP_VERIFIED = "step_verified"
     STEP_CLOSED = "step_closed"
     TOOL_REQUESTED = "tool_requested"
     TOOL_RECEIPT = "tool_receipt"

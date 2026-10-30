@@ -476,6 +476,71 @@ def test_plan_react_never_closes_a_step_without_its_expectation() -> None:
 
 
 
+def test_step_verification_reaches_the_step_reviewer() -> None:
+    """Reflection reads the deterministic verdicts; it never produces them."""
+
+    ledger = Ledger.in_memory("task-1")
+    seen: list[tuple[str, str]] = []
+    plan = PlanProposal(
+        steps=(
+            StepContract(
+                id=1,
+                kind=StepKind.VERIFY,
+                intent=ToolIntent(capability=Capability.VERIFY),
+                expects=(
+                    Obligation(
+                        id="needs-tests",
+                        kind=PropositionKind.TEST_PASSED,
+                        target="tests/test_calc.py",
+                        source=ObligationSource.PLAN,
+                    ),
+                ),
+            ),
+        )
+    )
+
+    def reviewer(view, step, action):
+        for verdict in view.step_verdicts:
+            seen.append((verdict.obligation_id, verdict.status.value))
+        return None
+
+    _runtime(ledger).run(
+        _calc_spec(),
+        _react(
+            plan,
+            lambda view, step, calls: (
+                CallTool(ToolIntent(capability=Capability.READ))
+                if calls == 1
+                else Finish("step done")
+            ),
+            step_reviewer=reviewer,
+        ),
+    )
+
+    assert seen, "步骤级校验必须喂给反思"
+    assert ("needs-tests", "violated") in seen
+
+
+def test_every_closed_step_records_one_step_verified_event() -> None:
+    ledger = Ledger.in_memory("task-1")
+
+    _runtime(ledger).run(
+        _calc_spec(),
+        _react(
+            _two_step_plan(),
+            lambda view, step, calls: CallTool(
+                step.intent or ToolIntent(capability=Capability.READ)
+            ),
+        ),
+    )
+
+    verified = ledger.read(EventKind.STEP_VERIFIED)
+    assert [event.payload["step_id"] for event in verified] == [1, 2]
+    assert all(event.payload["status"] == "satisfied" for event in verified)
+    # individual verdicts are still there: the summary does not replace them
+    assert ledger.read(EventKind.STEP_VERDICT)
+
+
 def test_plan_review_added_step_actually_runs() -> None:
     ledger = Ledger.in_memory("task-1")
     reviewed = PlanProposal(
