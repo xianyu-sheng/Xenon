@@ -20,6 +20,7 @@
 - kernel 新增同 ledger `resume_planned`：校验 `planned` phase、已接受计划摘要和必填 approval id，写 `plan_approved` 事实，`PLANNED -> RUNNING` 后执行 accepted steps；不追加第二个 `task_started`，不允许再次规划或重复恢复；plan digest 不一致 / 缺失 approval / 非 planned 均 fail closed。
 - `/plan approve` 已接到 `resume_kernel_plan()`：审批事件落 session 后，用同 ledger 执行 approved plan 并渲染 kernel 结果；执行启动失败只报错，不标记交付。`/plan` 写计划路由仍走 legacy，下一片迁移。
 - `/plan` 写计划路由已迁到 kernel：plan mode + deferred-write 回合走 `run_kernel_turn(plan_only=True)`，先得到 `PLANNED`，审批后由同 ledger 执行；不再打开 legacy 计划门。
+- `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 
 ### 证据层
 
