@@ -13,12 +13,13 @@
 - kernel `ReplEventSink` 从 `tool_receipt.effects` 投影 `fs_write.paths` / `created_paths` 到 ThinkingPanel action input；`session_ops` 将 kernel 的 `apply_patch` 计入修改文件。kernel 编辑回合的 working memory、turn-node artifacts 不再因 legacy 参数缺失而为空。
 - `session_ops` 使用 `created_paths` 区分新建与修改：kernel `apply_patch` 新建文件进入 `session_created_files`，已有文件进入 `session_modified_files`；同一路径从 modified 中移除，避免 working memory 重复。
 - kernel 回合的 `TaskResult.metrics` 进入 turn node / `turn/verdict`，覆盖 panel 推断的 steps/tools；`TurnTree.status_suffix()` 仅在 `is_resumable` 时提示“继续”，`degraded` 不再暗示可续接。
-- `/plan` 不再把所有计划模式回合强制切回 legacy：只读计划回合继续走 kernel（权限只读），deferred-write 计划仍走 legacy 计划审批门；`should_route_to_kernel` 新增 `plan_deferred_write` 事实，避免把“只规划”误当成“直接执行计划”。
+- `/plan` 不再把所有计划模式回合强制切回 legacy：只读计划回合继续走 kernel（权限只读），deferred-write 计划使用 kernel plan-only；`/plan approve` 接 `resume_planned()` 执行同一份计划。
 - kernel 新增 plan-only 原语：`TaskMode.PLAN` 接受计划后进入 `TaskPhase.PLANNED`，不启动步骤、不执行工具；plan-only 任务拒绝任何非 `SubmitPlan` 动作，避免策略把“只规划”变成执行。`run_task(mode=...)` 可显式选择该模式。
 - REPL adapter 新增 `plan_only=True`：强制 PlanFirst + `TaskMode.PLAN`；`PLANNED` 渲染为 `Kernel · plan`，turn node 记 `pending-approval`，不再误报 blocked/degraded，并保留 ledger 指针供后续审批。`/plan` 路由与批准后执行尚未迁移。
 - `/plan approve|reject` 可对当前 `planned` kernel ledger 做审批：校验链和 phase，解析计划并计算 digest，把 `plan/approved` / `plan/rejected` 写入 session 事件（不追加 kernel ledger）；approve 退出计划模式，reject 保持当前模式；重复审批幂等。批准后执行仍未实现。
 - kernel 新增同 ledger `resume_planned`：校验 `planned` phase、已接受计划摘要和必填 approval id，写 `plan_approved` 事实，`PLANNED -> RUNNING` 后执行 accepted steps；不追加第二个 `task_started`，不允许再次规划或重复恢复；plan digest 不一致 / 缺失 approval / 非 planned 均 fail closed。
 - `/plan approve` 已接到 `resume_kernel_plan()`：审批事件落 session 后，用同 ledger 执行 approved plan 并渲染 kernel 结果；执行启动失败只报错，不标记交付。`/plan` 写计划路由仍走 legacy，下一片迁移。
+- `/plan` 写计划路由已迁到 kernel：plan mode + deferred-write 回合走 `run_kernel_turn(plan_only=True)`，先得到 `PLANNED`，审批后由同 ledger 执行；不再打开 legacy 计划门。
 
 ### 证据层
 

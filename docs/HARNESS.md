@@ -97,9 +97,8 @@ xenon
 XENON_RUNTIME=legacy xenon
 ```
 
-Only turns that require tools and are not a skill, a deferred-write plan turn,
-pending continuation, atomic recipe, or a mode without kernel parity are routed
-to the kernel. `direct`/`react` use ActFirst; `plan-execute` uses the kernel's LLM
+Only turns that require tools and are not a skill, pending continuation, atomic
+recipe, or a mode without kernel parity are routed to the kernel. `direct`/`react` use ActFirst; `plan-execute` uses the kernel's LLM
 PlanFirst planner. After the last plan step, PlanFirst asks the model once for
 a final answer from the deterministic working set; the finisher only returns a
 `Finish` action and never executes a tool. `reflection`, `plan-react`, `plan-reflection` and
@@ -109,9 +108,9 @@ unknown mode name fails closed instead of being treated as the default.
 External queries stay legacy unless an MCP registry is available; then the
 kernel uses the `core+mcp` profile and the remote call goes through approval.
 Plain chat, write-plan approval, `/resume`, `/evidence`, and skills still use
-their existing paths. `/plan` is a constraint, not a runtime switch: a read-only
-plan turn stays on the kernel; a plan that deferred a write still uses the legacy
-approval gate until `/plan` routing is migrated. `/mode` metadata comes from the neutral `xenon/modes.py` catalog and no
+their existing paths. `/plan` is a constraint, not a runtime switch: read-only
+plan turns use ActFirst/PlanFirst; deferred-write plan turns use the kernel's
+plan-only mode, then wait for `/plan approve`. `/mode` metadata comes from the neutral `xenon/modes.py` catalog and no
 longer imports the legacy engine registry.
 
 The REPL adapter:
@@ -201,9 +200,8 @@ trusted delivery.
 `/goal` reads the kernel ledger when the current turn has a kernel pointer.
 It shows the ledger objective, phase, plan steps, open debt, artifacts and the
 finalize commit. `/plan status` keeps showing the plan-mode toggle and adds the
-read-only kernel plan below it. A read-only plan turn now stays on the kernel;
-a plan that deferred a write still uses the legacy planning gate until `/plan`
-routing is migrated.
+read-only kernel plan below it. Read-only plan turns stay on the kernel; a plan
+that deferred a write produces a `PLANNED` result and waits for `/plan approve`.
 
 The kernel now has a plan-only primitive for the remaining `/plan` migration:
 `TaskMode.PLAN` accepts one plan and stops in `TaskPhase.PLANNED` without
@@ -214,8 +212,8 @@ marks the turn `pending-approval` instead of blocking it. `/plan approve` and
 `/plan reject` bind a decision to the current planned ledger and record it in
 session events; the kernel ledger stays immutable. Approve exits plan mode and
 calls `resume_kernel_plan()` to execute the accepted plan in the same ledger;
-reject keeps plan mode and writes nothing. `/plan` write routing is still the
-next migration step.
+reject keeps plan mode and writes nothing. Deferred-write `/plan` now uses
+kernel plan-only; the remaining work is the real TTY acceptance path.
 
 The runtime also has a same-ledger resume primitive, `resume_planned()`: it
 requires the accepted plan digest and an approval id, appends `plan_approved`,

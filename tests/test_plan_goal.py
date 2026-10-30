@@ -60,20 +60,28 @@ def test_plan_mode_state_loads_from_events(tmp_path, monkeypatch):
     assert repl._load_plan_mode() is True
 
 
-def test_handle_chat_in_plan_mode_opens_a_gate(tmp_path, monkeypatch):
+def test_handle_chat_in_plan_mode_routes_kernel_plan_only(
+    tmp_path, monkeypatch
+):
     repl = _make_repl(tmp_path, monkeypatch)
     repl._plan_mode_active = True
     monkeypatch.setattr(repl, "_run_direct", lambda *a, **k: None)
     monkeypatch.setattr(repl, "_run_engine", lambda *a, **k: None)
-    repl.ctx_mgr.add_assistant_message("方案如下……")
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.run_kernel_turn",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
 
     repl._handle_chat("把结果写到 output.txt")
 
     contract = repl.agent_context.get("_turn_contract")
     assert contract.level < ExecutionLevel.WRITE
     assert contract.deferred_write is True
-    assert repl._pending_action is not None
-    assert repl._pending_action.kind == "approval"
+    assert calls
+    assert calls[0]["plan_only"] is True
+    assert calls[0]["execution_policy"].level == ExecutionLevel.READ_ONLY
+    assert repl._pending_action is None
 
 
 # ── 目标投影 ───────────────────────────────────────────────
