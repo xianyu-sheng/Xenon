@@ -18,6 +18,7 @@ from xenon.catalog.specs import mcp_tool_specs, select_mcp_tool_specs
 from xenon.harness.llm import (
     ModelConfig,
     build_llm_plan_react_strategy,
+    build_llm_plan_reflection_strategy,
     build_llm_plan_strategy,
     build_llm_reflection_strategy,
     build_llm_strategy,
@@ -352,6 +353,10 @@ class RuntimeAdapter:
             strategy = build_llm_strategy(self.model_config, client=self.client)
         elif self.strategy_mode == "plan-react":
             strategy = build_llm_plan_react_strategy(
+                self.model_config, client=self.client
+            )
+        elif self.strategy_mode == "plan-reflect":
+            strategy = build_llm_plan_reflection_strategy(
                 self.model_config, client=self.client
             )
         elif self.strategy_mode == "reflect":

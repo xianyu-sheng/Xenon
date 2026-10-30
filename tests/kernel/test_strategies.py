@@ -15,6 +15,7 @@ from xenon.kernel.contracts import (
     Finish,
     ModelView,
     Obligation,
+    ObligationSource,
     PlanProposal,
     PropositionKind,
     ReleaseStep,
@@ -430,3 +431,144 @@ def test_reflection_sees_the_proposed_answer_and_claims() -> None:
     strategy.propose(_view())
 
     assert captured["answer"] == "done"
+
+
+def _plan_with_expects() -> PlanProposal:
+    return PlanProposal(
+        steps=(
+            StepContract(
+                id=1,
+                kind=StepKind.EDIT,
+                targets=("a.py",),
+                expects=(
+                    Obligation(
+                        id="e1",
+                        kind=PropositionKind.FILE_CHANGED,
+                        target="a.py",
+                        source=ObligationSource.PLAN,
+                    ),
+                ),
+            ),
+        )
+    )
+
+
+def test_plan_review_can_add_coverage_before_execution() -> None:
+    added = PlanProposal(
+        steps=_plan_with_expects().steps
+        + (
+            StepContract(
+                id=2,
+                kind=StepKind.VERIFY,
+                targets=("tests/test_a.py",),
+            ),
+        )
+    )
+    strategy = PlanReact(
+        lambda view: _plan_with_expects(),
+        lambda view, step, calls: Finish("done"),
+        plan_reviewer=lambda view, plan: added,
+    )
+
+    action = strategy.propose(_two_step_view())
+
+    assert isinstance(action, SubmitPlan)
+    assert [step.id for step in action.plan.steps] == [1, 2]
+    assert strategy.drain_notices()[0] == {
+        "kind": "plan",
+        "decision": "amended",
+        "added_steps": 1,
+    }
+
+
+def test_plan_review_cannot_drop_an_obligation() -> None:
+    weaker = PlanProposal(
+        steps=(
+            StepContract(
+                id=1,
+                kind=StepKind.EDIT,
+                targets=("a.py",),
+                expects=(),
+            ),
+        )
+    )
+    strategy = PlanReact(
+        lambda view: _plan_with_expects(),
+        lambda view, step, calls: Finish("done"),
+        plan_reviewer=lambda view, plan: weaker,
+    )
+
+    action = strategy.propose(_two_step_view())
+
+    assert isinstance(action, SubmitPlan)
+    assert action.plan.steps[0].expects, "审查不能削掉义务"
+    notices = strategy.drain_notices()
+    assert notices[0]["decision"] == "rejected"
+    assert "e1" in notices[0]["reason"]
+
+
+def test_plan_review_declining_keeps_the_original_plan() -> None:
+    strategy = PlanReact(
+        lambda view: _plan_with_expects(),
+        lambda view, step, calls: Finish("done"),
+        plan_reviewer=lambda view, plan: None,
+    )
+
+    action = strategy.propose(_two_step_view())
+
+    assert isinstance(action, SubmitPlan)
+    assert strategy.drain_notices()[0]["decision"] == "accepted"
+
+
+def test_step_review_adds_one_call_before_release() -> None:
+    strategy = PlanReact(
+        lambda view: _plan_with_expects(),
+        lambda view, step, calls: Finish("step done"),
+        step_reviewer=lambda view, step, action: CallTool(
+            ToolIntent(capability=Capability.VERIFY)
+        ),
+    )
+    strategy.propose(_two_step_view())  # submit
+
+    first = strategy.propose(_two_step_view())
+    second = strategy.propose(_two_step_view())
+
+    assert isinstance(first, CallTool)
+    assert first.intent.capability is Capability.VERIFY
+    assert isinstance(second, ReleaseStep), "审查过一轮后必须释放步骤"
+    decisions = [item["decision"] for item in strategy.drain_notices()]
+    assert decisions == ["step_correction", "step_complete"]
+
+
+def test_step_review_is_bounded_per_step() -> None:
+    reviews: list[int] = []
+
+    def reviewer(view: ModelView, step: StepContract, action):
+        reviews.append(step.id)
+        return CallTool(ToolIntent(capability=Capability.VERIFY))
+
+    strategy = PlanReact(
+        lambda view: _plan_with_expects(),
+        lambda view, step, calls: Finish("step done"),
+        step_reviewer=reviewer,
+        max_step_reviews=1,
+    )
+    strategy.propose(_two_step_view())
+    for _ in range(4):
+        strategy.propose(_two_step_view())
+
+    assert reviews == [1], "每个步骤的审查次数有界"
+
+
+def test_step_review_declining_releases_immediately() -> None:
+    strategy = PlanReact(
+        lambda view: _plan_with_expects(),
+        lambda view, step, calls: Finish("step done"),
+        step_reviewer=lambda view, step, action: None,
+    )
+    strategy.propose(_two_step_view())
+
+    action = strategy.propose(_two_step_view())
+
+    assert isinstance(action, ReleaseStep)
+    assert strategy.drain_notices()[0]["decision"] == "step_review_declined"

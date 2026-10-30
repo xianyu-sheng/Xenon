@@ -438,6 +438,141 @@ def test_plan_react_never_closes_a_step_without_its_expectation() -> None:
 
 
 
+def test_plan_review_added_step_actually_runs() -> None:
+    ledger = Ledger.in_memory("task-1")
+    reviewed = PlanProposal(
+        steps=_two_step_plan().steps
+        + (
+            StepContract(
+                id=3,
+                kind=StepKind.VERIFY,
+                intent=ToolIntent(capability=Capability.VERIFY),
+            ),
+        )
+    )
+
+    result = _runtime(ledger).run(
+        _calc_spec(),
+        PlanReact(
+            lambda view: _two_step_plan(),
+            lambda view, step, calls: CallTool(
+                step.intent or ToolIntent(capability=Capability.READ)
+            ),
+            plan_reviewer=lambda view, plan: reviewed,
+        ),
+    )
+
+    assert result.accepted is True
+    started = [event.payload["step_id"] for event in ledger.read(EventKind.STEP_STARTED)]
+    assert started == [1, 2, 3], "计划审查补进来的步骤必须真的执行"
+    assert len(ledger.read(EventKind.TOOL_RECEIPT)) == 3
+
+
+def test_plan_review_decision_is_recorded_as_plan_reviewed() -> None:
+    ledger = Ledger.in_memory("task-1")
+
+    _runtime(ledger).run(
+        _calc_spec(),
+        PlanReact(
+            lambda view: _two_step_plan(),
+            lambda view, step, calls: CallTool(
+                step.intent or ToolIntent(capability=Capability.READ)
+            ),
+            plan_reviewer=lambda view, plan: None,
+        ),
+    )
+
+    reviewed = ledger.read(EventKind.PLAN_REVIEWED)
+    assert len(reviewed) == 1
+    assert reviewed[0].payload["decision"] == "accepted"
+    assert reviewed[0].payload["added_steps"] == 0
+    assert not ledger.read(EventKind.REFLECTION_PROPOSED)
+
+
+def test_step_review_corrects_a_failing_step_before_release() -> None:
+    ledger = Ledger.in_memory("task-1")
+    # The step must run pytest.  Its first action is a read, so the step stays
+    # open (violated) — that is exactly when a review can still fix it.
+    plan = PlanProposal(
+        steps=(
+            StepContract(
+                id=1,
+                kind=StepKind.VERIFY,
+                intent=ToolIntent(capability=Capability.VERIFY),
+                expects=(
+                    Obligation(
+                        id="needs-tests",
+                        kind=PropositionKind.TEST_PASSED,
+                        target="tests/test_calc.py",
+                        source=ObligationSource.PLAN,
+                    ),
+                ),
+            ),
+        )
+    )
+
+    result = _runtime(ledger).run(
+        _calc_spec(),
+        PlanReact(
+            lambda view: plan,
+            lambda view, step, calls: (
+                CallTool(ToolIntent(capability=Capability.READ))
+                if calls == 1
+                else Finish("step done")
+            ),
+            step_reviewer=lambda view, step, action: CallTool(
+                ToolIntent(capability=Capability.VERIFY)
+            ),
+        ),
+    )
+
+    assert result.accepted is True
+    receipts = [
+        event.payload["receipt"]["tool"] for event in ledger.read(EventKind.TOOL_RECEIPT)
+    ]
+    assert receipts == ["inspect", "check"], "审查在同一步骤内补上真正的验证"
+    started = [
+        event.payload["step_id"] for event in ledger.read(EventKind.STEP_STARTED)
+    ]
+    assert started == [1], "修正发生在同一步骤，没有越步"
+    assert not result.debt
+
+
+def test_step_review_cannot_bypass_an_unmet_expectation() -> None:
+    ledger = Ledger.in_memory("task-1")
+    plan = PlanProposal(
+        steps=(
+            StepContract(
+                id=1,
+                kind=StepKind.EDIT,
+                intent=ToolIntent(capability=Capability.READ),
+                expects=(
+                    Obligation(
+                        id="needs-edit",
+                        kind=PropositionKind.FILE_CHANGED,
+                        target="calc/add.py",
+                        source=ObligationSource.PLAN,
+                    ),
+                ),
+            ),
+        )
+    )
+
+    result = _runtime(ledger).run(
+        _calc_spec(),
+        PlanReact(
+            lambda view: plan,
+            lambda view, step, calls: Finish("looks done"),
+            step_reviewer=lambda view, step, action: None,
+        ),
+    )
+
+    assert result.accepted is False
+    assert result.debt
+
+
+
+
 def test_invalid_plan_is_rejected_without_crashing() -> None:
     ledger = Ledger.in_memory("task-1")
     bad = PlanProposal(

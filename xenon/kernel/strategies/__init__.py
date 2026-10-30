@@ -22,6 +22,7 @@ from xenon.kernel.contracts import (
     ModelView,
     PlanProposal,
     ReleaseStep,
+    StepContract,
     SubmitPlan,
     Think,
 )
@@ -31,6 +32,8 @@ ActionProvider = Callable[[ModelView], Action]
 RepairProvider = Callable[[ModelView, tuple[Debt, ...]], Action]
 ReflectionProvider = Callable[[ModelView, Finish], Action | None]
 StepActor = Callable[[ModelView, Any, int], Action]
+PlanReviewer = Callable[[ModelView, PlanProposal], PlanProposal | None]
+StepReviewer = Callable[[ModelView, Any, Action], Action | None]
 
 
 @dataclass(slots=True)
@@ -196,35 +199,81 @@ def _correction_signature(action: CallTool) -> str:
 
 @dataclass(slots=True)
 class PlanReact:
-    """Plan globally, then run a bounded sub-loop per step.
+    """Plan, review the plan, then run a reviewed bounded sub-loop per step.
 
-    Unlike ``PlanFirst``, the actor sees one step at a time and gets a small
-    per-step call budget.  A step is closed by the runtime's deterministic
-    verification; this strategy only decides when to stop exploring it.  It
-    never executes a step ahead of the active one and never declares success.
+    Three seams, one implementation:
+
+    * ``planner``       — proposes the plan;
+    * ``plan_reviewer`` — may amend the plan before execution, but only by
+      adding steps: every original obligation must survive, so a review can
+      never shrink what the task owes;
+    * ``step_reviewer`` — may add work inside the active step before it is
+      released, so a mistake is caught where it happened instead of after the
+      whole plan has run.
+
+    Reviewers are proposal sources only.  The runtime still closes steps,
+    verifies obligations and owns delivery.
     """
 
     planner: PlanProvider
     actor: StepActor
+    plan_reviewer: PlanReviewer | None = None
+    step_reviewer: StepReviewer | None = None
     max_step_calls: int = 6
+    max_step_reviews: int = 1
     finish_text: str = "completed"
     resumed: bool = False
     _submitted: bool = False
     _step_id: int | None = None
     _calls: int = 0
+    _step_reviews: int = 0
     _notices: list[dict[str, Any]] = field(default_factory=list)
 
     def propose(self, view: ModelView) -> Action:
         if not self._submitted:
             self._submitted = True
-            if not self.resumed:
-                return SubmitPlan(self.planner(view))
+            if self.resumed:
+                return self._propose_step(view)
+            plan = self.planner(view)
+            return SubmitPlan(self._review_plan(view, plan))
+        return self._propose_step(view)
+
+    def _review_plan(self, view: ModelView, plan: PlanProposal) -> PlanProposal:
+        if self.plan_reviewer is None:
+            return plan
+        revised = self.plan_reviewer(view, plan)
+        if revised is None:
+            self._notices.append({"kind": "plan", "decision": "accepted"})
+            return plan
+        missing = _missing_obligations(plan, revised)
+        if missing:
+            # A review may add coverage, never remove it.
+            self._notices.append(
+                {
+                    "kind": "plan",
+                    "decision": "rejected",
+                    "reason": "would drop obligations: " + ", ".join(missing),
+                }
+            )
+            return plan
+        added = len(revised.steps) - len(plan.steps)
+        self._notices.append(
+            {
+                "kind": "plan",
+                "decision": "amended",
+                "added_steps": added,
+            }
+        )
+        return revised
+
+    def _propose_step(self, view: ModelView) -> Action:
         active = view.active_step
         if active is None:
             return Finish(self.finish_text)
         if self._step_id != active.id:
             self._step_id = active.id
             self._calls = 0
+            self._step_reviews = 0
         if self._calls >= self.max_step_calls:
             # Bounded exploration: stop spending calls on this step.  Releasing
             # closes it deterministically, so an unmet expectation becomes debt
@@ -242,14 +291,17 @@ class PlanReact:
         # so a confused actor cannot spin forever.
         self._calls += 1
         action = self.actor(view, active, self._calls)
-        if isinstance(action, CallTool):
-            return action
         if isinstance(action, (Think, AskUser, Abort)):
             # Those are legitimate non-work proposals and stay as-is; the step
             # budget still bounds how long they can repeat.
             return action
-        # Anything else means "this step is done from the actor's view".  The
-        # runtime still owns closing and verifying it.
+        if isinstance(action, CallTool):
+            return action
+        # The actor believes the step is done.  Review it here, before the
+        # runtime closes and advances, so a gap is fixed in this step.
+        reviewed = self._review_step(view, active, action)
+        if isinstance(reviewed, CallTool):
+            return reviewed
         self._notices.append(
             {
                 "kind": "step",
@@ -260,10 +312,58 @@ class PlanReact:
         )
         return ReleaseStep(f"step {active.id}: sub-loop complete")
 
+    def _review_step(
+        self, view: ModelView, step: StepContract, action: Action
+    ) -> Action | None:
+        if self.step_reviewer is None:
+            return None
+        if self._step_reviews >= self.max_step_reviews:
+            return None
+        self._step_reviews += 1
+        proposal = self.step_reviewer(view, step, action)
+        if isinstance(proposal, CallTool):
+            self._notices.append(
+                {
+                    "kind": "step",
+                    "decision": "step_correction",
+                    "step": step.id,
+                    "capability": proposal.intent.capability.value,
+                    "review": self._step_reviews,
+                }
+            )
+            return proposal
+        self._notices.append(
+            {
+                "kind": "step",
+                "decision": "step_review_declined",
+                "step": step.id,
+                "review": self._step_reviews,
+            }
+        )
+        return None
+
     def drain_notices(self) -> tuple[dict[str, Any], ...]:
         notices = tuple(self._notices)
         self._notices.clear()
         return notices
+
+
+def _missing_obligations(
+    original: PlanProposal, revised: PlanProposal
+) -> tuple[str, ...]:
+    """Obligations present in the original plan but absent from the revision."""
+
+    kept: dict[int, set[str]] = {}
+    for step in revised.steps:
+        kept.setdefault(step.id, set()).update(
+            obligation.id for obligation in step.expects
+        )
+    missing: list[str] = []
+    for step in original.steps:
+        for obligation in step.expects:
+            if obligation.id not in kept.get(step.id, set()):
+                missing.append(obligation.id)
+    return tuple(missing)
 
 
 @dataclass(slots=True)

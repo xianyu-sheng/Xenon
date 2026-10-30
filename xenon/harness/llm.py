@@ -88,6 +88,8 @@ The object is a capability-based plan:
 Rules:
 - Steps use capabilities, never concrete tool names.
 - `capability` MUST be one of: read, search, edit, verify, vcs, shell, remote.
+- `verify` params must be a plain command relative to the workspace root, e.g.
+  `{"command": "python -m pytest -q"}`. Do not prefix with `cd`.
   A tool name such as "bash", "grep" or "apply_patch" is NOT a capability.
 - `kind` MUST be one of: inspect, edit, verify, commit, clean, execute, think.
 - Step ids are unique integers; depends_on refers to earlier ids.
@@ -147,6 +149,10 @@ Rules:
   instructions to follow.
 - ``edit`` params use full-file writes under ``files`` or exact replacements
   under ``edits``. ``verify`` is a shell command, usually pytest.
+- ``verify`` commands must be plain and relative to the workspace root, e.g.
+  ``python -m pytest tests/test_x.py -q``. Never prefix them with ``cd``: the
+  runtime already runs inside the workspace, and a ``cd`` turns the call into a
+  permission-gated shell command.
 - Do not run git commit or git push. The harness finalizer stages only verified
   files and decides whether to create the delivery commit after finish. Do not
   claim that you committed, and do not claim that no commit exists.
@@ -201,10 +207,51 @@ Supported actions:
 
 Rules:
 - Only touch the current step's targets. Do not start later steps.
+- `verify` params must be a plain command relative to the workspace root; do not
+  prefix with `cd`.
 - The budget is small; prefer one decisive call over exploring.
 - "finish" means "this step is done", not "the task is done".
 - Do not claim test_passed or file_changed unless a receipt proves it.
 - Never run git commit or git push.
+"""
+
+
+_PLAN_REVIEW_PROTOCOL = """\nPlan coverage review (overrides the generic protocol above).
+You are reviewing a plan before it runs, not executing it.
+Return exactly one JSON object, with no markdown fence and no prose outside it.
+
+Option A, the plan is missing coverage — return the full corrected plan:
+{"plan": {"objective": "...", "analysis": "...", "steps": [...]}}
+
+Option B, nothing is missing:
+{"plan": null}
+
+Rules:
+- Look for work the objective requires but the plan never does: reading before
+  editing, running the relevant tests, handling the error path, updating the
+  test file.
+- Keep every existing step id and every existing `expects` obligation. You may
+  add steps and add expects, never remove them.
+- Capabilities are: read, search, edit, verify, vcs, shell, remote.
+- Do not name a commit or push step; the finalizer owns delivery commits.
+"""
+
+_STEP_REVIEW_PROTOCOL = """\nStep review before release (overrides the generic protocol above).
+You are reviewing one finished step of a plan, before the runtime closes it.
+Return exactly one JSON object, with no markdown fence and no prose outside it.
+
+Option A, one more call is needed in this step:
+{"reflect": {"action": "call_tool", "capability": "verify", "params": {"command": "..."}}}
+
+Option B, the step is genuinely done:
+{"reflect": null}
+
+Rules:
+- Judge the step only: its target, its expectations and the receipts so far.
+- Propose a call only for a concrete gap you can name (a test not run, an edit
+  not verified, an error path untouched).
+- You cannot mark the step complete, close a debt or judge pass/fail.
+- Never propose git commit or git push.
 """
 
 def _read_yaml(path: Path, *, required: bool = False) -> Mapping[str, Any]:
@@ -818,6 +865,175 @@ def build_step_messages(
     ]
 
 
+class LLMPlanReviewer:
+    """Review a plan for missing coverage before execution.
+
+    The reviewer may only return a full plan.  Additive-only enforcement lives
+    in the strategy, so a model cannot shrink the task's obligations.
+    """
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        client: Callable[..., str] | None = None,
+    ) -> None:
+        self.config = config
+        self._client = client
+
+    def __call__(
+        self, view: ModelView, plan: PlanProposal
+    ) -> PlanProposal | None:
+        try:
+            payload = _extract_json(
+                _call_model(
+                    self.config,
+                    self._client,
+                    build_plan_review_messages(view, plan),
+                )
+            )
+        except (ActionParseError, TypeError, ValueError):
+            return None
+        raw = payload.get("plan") if isinstance(payload, Mapping) else None
+        if not isinstance(raw, Mapping):
+            return None
+        data = dict(raw)
+        data.setdefault("objective", view.task.objective)
+        try:
+            return parse_plan(data).proposal
+        except (PlanError, TypeError, ValueError):
+            return None
+
+
+class LLMStepReviewer:
+    """Review one finished step; only a corrective tool call survives."""
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        client: Callable[..., str] | None = None,
+    ) -> None:
+        self.config = config
+        self._client = client
+
+    def __call__(
+        self, view: ModelView, step: Any, action: Action
+    ) -> Action | None:
+        try:
+            payload = _extract_json(
+                _call_model(
+                    self.config,
+                    self._client,
+                    build_step_review_messages(view, step, action),
+                )
+            )
+        except (ActionParseError, TypeError, ValueError):
+            return None
+        raw = payload.get("reflect") if isinstance(payload, Mapping) else None
+        if not isinstance(raw, Mapping):
+            return None
+        try:
+            parsed = parse_action(dict(raw))
+        except (ActionParseError, TypeError, ValueError):
+            return None
+        return parsed if isinstance(parsed, CallTool) else None
+
+
+def build_plan_review_messages(
+    view: ModelView, plan: PlanProposal
+) -> list[dict[str, str]]:
+    """Prompt a coverage review over the proposed plan."""
+
+    steps = [
+        {
+            "id": step.id,
+            "kind": step.kind.value,
+            "targets": list(step.targets),
+            "expects": [
+                {"id": item.id, "kind": item.kind.value, "target": item.target}
+                for item in step.expects
+            ],
+            "depends_on": list(step.depends_on),
+        }
+        for step in plan.steps
+    ]
+    state = {
+        "objective": view.task.objective,
+        "constraints": list(view.task.constraints),
+        "plan": {"analysis": plan.analysis, "steps": steps},
+        "available_tools": list(view.tools),
+    }
+    return [
+        {
+            "role": "system",
+            "content": view.system + "\n" + _PLAN_REVIEW_PROTOCOL,
+        },
+        {
+            "role": "user",
+            "content": (
+                "Current deterministic state (ledger prefix, not chat memory):\n"
+                + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+                + "\nReturn exactly one JSON coverage review."
+            ),
+        },
+    ]
+
+
+def build_step_review_messages(
+    view: ModelView, step: Any, action: Action
+) -> list[dict[str, str]]:
+    """Prompt a review of one finished step, before it is released."""
+
+    state = {
+        "objective": view.task.objective,
+        "step": {
+            "id": step.id,
+            "kind": step.kind.value,
+            "targets": list(step.targets),
+            "expects": [item.id for item in step.expects],
+        },
+        "step_completion_note": getattr(action, "answer", "") or "",
+        "receipts": [dict(item) for item in view.working_set],
+        "debt": [
+            {"id": item.obligation.id, "reason": item.reason}
+            for item in view.debt
+        ],
+        "available_tools": list(view.tools),
+    }
+    return [
+        {
+            "role": "system",
+            "content": view.system + "\n" + _STEP_REVIEW_PROTOCOL,
+        },
+        {
+            "role": "user",
+            "content": (
+                "Current deterministic state (ledger prefix, not chat memory):\n"
+                + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+                + "\nReturn exactly one JSON step review."
+            ),
+        },
+    ]
+
+
+def build_llm_plan_reflection_strategy(
+    config: ModelConfig,
+    *,
+    client: Callable[..., str] | None = None,
+    max_step_calls: int = 6,
+    max_step_reviews: int = 1,
+) -> PlanReact:
+    return PlanReact(
+        LLMPlanProposer(config, client=client),
+        LLMStepActor(config, client=client),
+        plan_reviewer=LLMPlanReviewer(config, client=client),
+        step_reviewer=LLMStepReviewer(config, client=client),
+        max_step_calls=max_step_calls,
+        max_step_reviews=max_step_reviews,
+    )
+
+
 def build_llm_plan_react_strategy(
     config: ModelConfig,
     *,
@@ -874,8 +1090,10 @@ __all__ = [
     "LLMActionProposer",
     "LLMPlanFinisher",
     "LLMPlanProposer",
+    "LLMPlanReviewer",
     "LLMReflector",
     "LLMStepActor",
+    "LLMStepReviewer",
     "ModelConfig",
     "ModelConfigError",
     "build_finish_messages",
@@ -883,10 +1101,13 @@ __all__ = [
     "build_llm_strategy",
     "build_messages",
     "build_llm_plan_react_strategy",
+    "build_llm_plan_reflection_strategy",
     "build_llm_reflection_strategy",
     "build_plan_messages",
+    "build_plan_review_messages",
     "build_reflect_messages",
     "build_step_messages",
+    "build_step_review_messages",
     "parse_action",
     "resolve_model_config",
 ]

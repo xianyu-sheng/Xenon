@@ -19,7 +19,7 @@ EXPECTED = {
     "plan-execute": "plan",
     "reflection": "reflect",
     "plan-react": "plan-react",
-    "plan-reflection": None,
+    "plan-reflection": "plan-reflect",
     "react-reflection": "react-reflect",
 }
 
@@ -34,7 +34,7 @@ def test_mode_catalog_names_and_strategies_are_explicit():
 
 
 def test_catalog_marks_legacy_only_modes():
-    assert MODE_CATALOG["plan-reflection"].legacy_only is True
+    assert not any(spec.legacy_only for spec in MODE_CATALOG.values())
     for name in (
         "direct",
         "react",
@@ -42,6 +42,7 @@ def test_catalog_marks_legacy_only_modes():
         "reflection",
         "plan-react",
         "react-reflection",
+        "plan-reflection",
     ):
         assert MODE_CATALOG[name].legacy_only is False
 
