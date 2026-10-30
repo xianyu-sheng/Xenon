@@ -169,6 +169,9 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         self._runtime_mode = "legacy" if configured == "legacy" else "kernel"
         self._last_kernel_ledger: Path | None = None
         self._last_kernel_task_id: str = ""
+        # Approval fact restored from a session pointer; the resolver still
+        # validates it against the ledger before it is trusted.
+        self._kernel_plan_approval: dict[str, Any] | None = None
 
         # 项目上下文
         self.project_ctx = ProjectContext()

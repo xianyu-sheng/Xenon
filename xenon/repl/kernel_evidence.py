@@ -141,11 +141,36 @@ def snapshot_for_session(repl: Any) -> dict[str, Any] | None:
     path = _safe_ledger_path(getattr(repl, "_last_kernel_ledger", "") or "")
     if path is None:
         return None
-    return {
+    snapshot: dict[str, Any] = {
         "task_id": path.stem,
         "ledger": str(path),
         "result": str(path.with_suffix(".result.json")),
     }
+    approval = _current_approval_for_snapshot(repl, path.stem)
+    if approval is not None:
+        snapshot["approval"] = approval
+    return snapshot
+
+
+def _current_approval_for_snapshot(
+    repl: Any, task_id: str
+) -> dict[str, Any] | None:
+    """Approval fact to persist with the pointer (never authority by itself)."""
+
+    events = getattr(getattr(repl, "_session_events", None), "read", None)
+    live = plan_approval(events() if callable(events) else (), task_id)
+    if live is not None:
+        return {
+            "task_id": task_id,
+            "status": live["status"],
+            "plan_digest": live["plan_digest"],
+            "at": live.get("at"),
+            "event_id": live.get("event_id"),
+        }
+    snapshot = getattr(repl, "_kernel_plan_approval", None)
+    if isinstance(snapshot, Mapping) and str(snapshot.get("task_id") or "") == task_id:
+        return dict(snapshot)
+    return None
 
 
 def restore_session_pointer(repl: Any, extra: Mapping[str, Any]) -> bool:
@@ -155,9 +180,16 @@ def restore_session_pointer(repl: Any, extra: Mapping[str, Any]) -> bool:
     path = _safe_ledger_path(str(pointer.get("ledger") or ""))
     if path is None:
         repl._last_kernel_ledger = None
+        repl._kernel_plan_approval = None
         return False
     repl._last_kernel_ledger = path
     repl._last_kernel_task_id = path.stem
+    approval = pointer.get("approval")
+    # Store it without validating digest here: the resolver validates against
+    # the ledger at read time, so a stale snapshot cannot grant authority.
+    repl._kernel_plan_approval = (
+        dict(approval) if isinstance(approval, Mapping) else None
+    )
     return True
 
 
@@ -234,7 +266,17 @@ def planned_plan(evidence: KernelEvidence) -> ExtractedPlan | None:
         proposal = _parse_plan(raw)
     except (TypeError, ValueError, KeyError):
         return None
-    digest = hashlib.sha256(
+    digest = _plan_digest(raw)
+    return ExtractedPlan(
+        task_id=evidence.task_id,
+        ledger_path=evidence.ledger_path,
+        plan=proposal,
+        digest=digest,
+    )
+
+
+def _plan_digest(raw: Mapping[str, Any]) -> str:
+    return hashlib.sha256(
         json.dumps(
             raw,
             ensure_ascii=False,
@@ -242,12 +284,31 @@ def planned_plan(evidence: KernelEvidence) -> ExtractedPlan | None:
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    return ExtractedPlan(
-        task_id=evidence.task_id,
-        ledger_path=evidence.ledger_path,
-        plan=proposal,
-        digest=digest,
-    )
+
+
+def accepted_plan_digest(evidence: KernelEvidence) -> str:
+    """Digest of the plan this ledger accepted, regardless of current phase."""
+
+    if not evidence.integrity.valid:
+        return ""
+    raw = evidence.task_state.get("plan")
+    if not isinstance(raw, Mapping):
+        return ""
+    return _plan_digest(raw)
+
+
+@dataclass(frozen=True, slots=True)
+class SessionApproval:
+    """Approval fact persisted with a session pointer.
+
+    It is not authority by itself: restoring it requires the same task id and
+    the same accepted-plan digest in the ledger.
+    """
+
+    task_id: str
+    status: str
+    plan_digest: str
+    at: Any = None
 
 
 def _parse_plan(raw: Mapping[str, Any]) -> PlanProposal:
@@ -318,6 +379,39 @@ def _parse_plan(raw: Mapping[str, Any]) -> PlanProposal:
         steps=tuple(steps),
         analysis=str(raw.get("analysis") or ""),
     )
+
+
+def resolve_plan_approval(
+    repl: Any, evidence: KernelEvidence
+) -> Mapping[str, Any] | None:
+    """Approval for this ledger: live session events first, snapshot second.
+
+    A snapshot is only trusted when its task id and plan digest match the
+    ledger.  A decision for another task, or for a different plan revision,
+    never leaks into this view.
+    """
+
+    events = getattr(getattr(repl, "_session_events", None), "read", None)
+    live = plan_approval(events() if callable(events) else (), evidence.task_id)
+    if live is not None:
+        return live
+    snapshot = getattr(repl, "_kernel_plan_approval", None)
+    if not isinstance(snapshot, Mapping):
+        return None
+    if str(snapshot.get("task_id") or "") != evidence.task_id:
+        return None
+    digest = accepted_plan_digest(evidence)
+    if not digest or str(snapshot.get("plan_digest") or "") != digest:
+        return None
+    status = str(snapshot.get("status") or "")
+    if status not in {"approved", "rejected"}:
+        return None
+    return {
+        "status": status,
+        "plan_digest": digest,
+        "at": snapshot.get("at"),
+        "event_id": snapshot.get("event_id"),
+    }
 
 
 def plan_lines(evidence: KernelEvidence, *, limit: int = 8) -> list[str]:
@@ -527,10 +621,13 @@ __all__ = [
     "kernel_ledger_dir",
     "kernel_ledger_files",
     "load_kernel_evidence",
+    "SessionApproval",
+    "accepted_plan_digest",
     "plan_approval",
     "plan_lines",
     "planned_plan",
     "render_kernel_evidence",
+    "resolve_plan_approval",
     "restore_session_pointer",
     "snapshot_for_session",
 ]

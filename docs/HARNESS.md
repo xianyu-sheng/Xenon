@@ -189,11 +189,13 @@ session:
   `~/.xenon/ledger/repl/`;
 - `/evidence all` — legacy session events plus kernel ledger files.
 
-`/save`, auto-save, `/load`, and `/resume` now persist only a pointer to the
-kernel ledger (task id + path), not a copy. Resume restores the pointer and
-never replays a task or resurrects an approval. If the ledger is missing or the
-chain is invalid, the view says so and does not turn the projection into a
-trusted delivery.
+`/save`, auto-save, `/load`, and `/resume` persist only a pointer to the kernel
+ledger (task id + path) plus the plan decision for that task, never a copy of
+the ledger. The decision is not authority: restoring it requires the same task
+id and the same accepted-plan digest in the ledger, so a stale or hand-edited
+snapshot cannot make a plan look approved. Resume never replays a task. If the
+ledger is missing or the chain is invalid, the view says so and does not turn
+the projection into a trusted delivery.
 
 ### `/goal` and `/plan` after a kernel turn
 

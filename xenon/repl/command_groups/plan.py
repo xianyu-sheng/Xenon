@@ -48,23 +48,12 @@ def _cmd_plan(*, args: str, session_state: dict, **kwargs: Any) -> str:
     return f"✅ 计划模式已{state}"
 
 
-def _session_events(repl: Any) -> list[Any]:
-    log = getattr(repl, "_session_events", None)
-    reader = getattr(log, "read", None)
-    if not callable(reader):
-        return []
-    try:
-        return list(reader())
-    except Exception:  # noqa: BLE001 — approval UI must not crash on IO
-        return []
-
-
 def _plan_status(repl: Any) -> str:
     from xenon.repl.kernel_evidence import (
         current_kernel_evidence,
-        plan_approval,
         plan_lines,
         planned_plan,
+        resolve_plan_approval,
     )
 
     state = "开启" if repl._plan_mode_active else "关闭"
@@ -78,7 +67,7 @@ def _plan_status(repl: Any) -> str:
             lines.append("⚠️ 链无效：以上计划仅供取证，不可作为可信交付。")
             return "\n".join(lines)
         extracted = planned_plan(evidence)
-        decision = plan_approval(_session_events(repl), evidence.task_id)
+        decision = resolve_plan_approval(repl, evidence)
         phase = str(
             (evidence.result or {}).get("phase")
             or evidence.task_state.get("phase")
@@ -120,8 +109,8 @@ def _plan_status(repl: Any) -> str:
 def _decide_plan(repl: Any, *, approve: bool) -> str:
     from xenon.repl.kernel_evidence import (
         current_kernel_evidence,
-        plan_approval,
         planned_plan,
+        resolve_plan_approval,
     )
 
     evidence = current_kernel_evidence(repl)
@@ -137,7 +126,7 @@ def _decide_plan(repl: Any, *, approve: bool) -> str:
         phase = str((evidence.result or {}).get("phase") or "")
         return f"❌ 当前 kernel ledger 不是待确认计划（phase={phase or '未知'}）。"
 
-    decision = plan_approval(_session_events(repl), evidence.task_id)
+    decision = resolve_plan_approval(repl, evidence)
     if decision is not None:
         if decision["status"] == "approved":
             return "✅ 该计划已批准并绑定；无需重复审批。"
