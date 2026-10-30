@@ -88,10 +88,10 @@ def should_route_to_kernel(
     silently executed as ActFirst.  Unknown mode names fail closed for the same
     reason.
 
-    ``/plan`` is a constraint, not a runtime switch.  A read-only plan turn is
-    safe for the kernel (the contract already removed write/execute).  A plan
-    that deferred a write still needs the legacy plan-approval gate, because
-    the kernel does not yet have a plan-only result that waits for approval.
+    ``/plan`` is a constraint, not a runtime switch.  Both read-only and
+    deferred-write plan turns route to the kernel; turn_flow selects
+    ``plan_only=True`` for the deferred-write case, so the kernel produces a
+    ``PLANNED`` result and never executes before approval.
     """
 
     requested_mode = (mode_name or "direct").strip().lower()
@@ -100,7 +100,6 @@ def should_route_to_kernel(
         runtime_mode == "kernel"
         and requires_tools
         and skill_name is None
-        and (not plan_mode or not plan_deferred_write)
         and pending is None
         and recipe is None
         and mode is not None

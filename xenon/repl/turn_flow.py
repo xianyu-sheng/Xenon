@@ -248,6 +248,11 @@ class TurnFlowMixin:
         )
         if kernel_turn:
             self.agent_context.set("_task_state", None)
+        plan_only_turn = bool(
+            kernel_turn
+            and self._plan_mode_active
+            and turn_contract_obj.deferred_write
+        )
 
         # ── Durable task state: resume an active task, or start a new one ──
         task_state = TaskState.from_context(self.agent_context)
@@ -597,6 +602,7 @@ class TurnFlowMixin:
                     user_input=user_input,
                     model_ids=model_ids,
                     execution_policy=execution_policy,
+                    plan_only=plan_only_turn,
                 )
                 self._commit_memory_usage()
                 return

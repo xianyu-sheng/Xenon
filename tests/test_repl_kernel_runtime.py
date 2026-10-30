@@ -192,6 +192,7 @@ def test_plan_mode_read_only_routes_kernel(tmp_path: Path, monkeypatch) -> None:
 
     assert calls
     assert calls[0]["execution_policy"].level == ExecutionLevel.READ_ONLY
+    assert calls[0]["plan_only"] is False
     assert repl.agent_context.get("_task_state") is None
 
 
@@ -280,7 +281,7 @@ def test_routing_and_permission_mapping() -> None:
         recipe=None,
         mode_name="react",
     )
-    assert not should_route_to_kernel(
+    assert should_route_to_kernel(
         runtime_mode="kernel",
         requires_tools=True,
         skill_name=None,
