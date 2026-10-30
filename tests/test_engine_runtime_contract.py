@@ -8,7 +8,6 @@ import httpx
 import pytest
 
 from xenon.engine.base import BaseEngine
-from xenon.engine.coding_contract import finalize_coding_run
 from xenon.engine.combined_engines import PlanReflectionEngine, ReactReflectionEngine
 from xenon.engine.execution_policy import (
     EngineDeadlineExceeded,
@@ -19,6 +18,7 @@ from xenon.engine.execution_policy import (
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.react_engine import ReActEngine
 from xenon.engine.tool_runtime import ToolRuntime, bind_tool_runtime
+from xenon.harness.coding_contract import finalize_coding_run
 from xenon.nodes.tool_executor import ToolExecutor
 
 

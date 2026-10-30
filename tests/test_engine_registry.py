@@ -159,25 +159,24 @@ class TestSingleSourceOfTruth:
             "evals 白名单与注册表不一致 —— /mode 能切但 eval 会拒绝运行"
         )
 
-    def test_swebench_engine_list_derived_from_registry(self):
-        """swebench_xenon.ALL_ENGINES 现从注册表派生（issue #22 修复后）。"""
+    def test_swebench_engine_list_comes_from_kernel_profiles(self):
+        """SWE-bench names now map to loop profiles, not engine classes (#202)."""
         try:
-            from evals.swebench_xenon import _NON_CODE_EDITING, CODE_EDITING_ENGINES
-            from evals.swebench_xenon import ALL_ENGINES as SWE_ALL_ENGINES
+            from evals.kernel_runner import EVAL_PROFILES
+            from evals.swebench_xenon import (
+                _NON_CODE_EDITING,
+                CODE_EDITING_ENGINES,
+            )
         except ModuleNotFoundError as exc:
             if "datasets" in str(exc):
                 pytest.skip("requires datasets (SWE-bench harness)")
             raise
 
-        assert set(SWE_ALL_ENGINES) == set(ENGINE_REGISTRY.names()), (
-            "swebench ALL_ENGINES 与注册表不一致"
-        )
+        assert set(CODE_EDITING_ENGINES) <= set(EVAL_PROFILES)
         assert "direct" in _NON_CODE_EDITING
         assert "reflection" in _NON_CODE_EDITING
         assert "react" not in _NON_CODE_EDITING
-        assert "react" in CODE_EDITING_ENGINES
-        assert "plan-execute" in CODE_EDITING_ENGINES
-        assert "direct" not in CODE_EDITING_ENGINES
+        assert {"react", "plan-execute", "kernel"} <= set(CODE_EDITING_ENGINES)
 
     def test_repl_has_no_hardcoded_engine_dispatch(self):
         """repl 主文件与 turn_flow 不应再有按范式名硬编码的 elif 链。"""

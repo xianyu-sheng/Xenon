@@ -197,6 +197,7 @@ class LegacyToolGateway:
         context: AgentContext | None = None,
         tracker: ToolExecutionTracker | None = None,
         policy: BoundToolPolicy | None = None,
+        runtime: Any = None,
     ) -> None:
         self._executor = executor or ToolExecutor(record_evidence=False)
         self._specs = {spec.name: spec for spec in specs}
@@ -204,7 +205,16 @@ class LegacyToolGateway:
         self._context = context or AgentContext()
         self._tracker = tracker or ToolExecutionTracker()
         self._policy = policy
-        if self._workspace is not None and hasattr(self._executor, "set_runtime"):
+        self._runtime = runtime
+        if self._runtime is not None:
+            # An injected runtime (e.g. an eval sandbox / container) wins over
+            # the host default: the kernel still decides *what* runs, the
+            # injected runtime decides *where* it runs.
+            if hasattr(self._executor, "set_runtime"):
+                self._executor.set_runtime(self._runtime)
+        elif self._workspace is not None and hasattr(
+            self._executor, "set_runtime"
+        ):
             self._executor.set_runtime(
                 ToolRuntime(workspace_root=self._workspace)
             )

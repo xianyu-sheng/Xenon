@@ -1,0 +1,31 @@
+diff --git a/calc.py b/calc.py
+index 4693ad3..dd83ea9 100644
+--- a/calc.py
++++ b/calc.py
+@@ -1,2 +1,8 @@
+ def add(a, b):
+     return a + b
++
++
++def divide(a, b):
++    if b == 0:
++        raise ValueError("division by zero")
++    return a / b
+diff --git a/test_calc.py b/test_calc.py
+index d509f32..6a47731 100644
+--- a/test_calc.py
++++ b/test_calc.py
+@@ -1,5 +1,12 @@
+-from calc import add
++from calc import add, divide
++import pytest
+
+
+ def test_add():
+     assert add(2, 3) == 5
++
++
++def test_divide():
++    assert divide(10, 2) == 5
++    with pytest.raises(ValueError):
++        divide(10, 0)
