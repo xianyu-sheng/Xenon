@@ -14,13 +14,15 @@ from rich.console import Console
 from tests.harness.test_exec import _plan_dict, _repo
 from xenon.engine.callbacks import ConsoleCallback
 from xenon.engine.context import AgentContext
-from xenon.harness.llm import ModelConfig, build_llm_plan_strategy
+from xenon.harness.llm import ModelConfig, build_llm_loop_strategy
 from xenon.harness.plan import parse_plan
 from xenon.harness.runner import run_task
 from xenon.kernel.contracts import CallTool, Capability, TaskMode, ToolIntent
 from xenon.kernel.policies import PermissionMode
+from xenon.kernel.strategies import LoopProfile
 from xenon.ledger.events import EventKind, canonical_json
 from xenon.ledger.store import Ledger
+from xenon.modes import MODE_CATALOG
 from xenon.repl.execution_policy import ExecutionLevel
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.runtime_adapter import (
@@ -468,57 +470,42 @@ def test_runtime_adapter_approval_only_at_execute_level(tmp_path: Path) -> None:
     assert execute.approval is not None
 
 
-def test_runtime_adapter_maps_catalog_strategy_and_rejects_legacy(tmp_path: Path) -> None:
+def test_runtime_adapter_resolves_a_loop_profile_per_mode(tmp_path: Path) -> None:
     registry = ModelRegistry()
     registry.add_model("test/fake", "fake")
     repl = FakeRepl(tmp_path, registry)
 
+    # Every catalog mode now resolves to a loop profile; there is no per-mode
+    # strategy class and no legacy-only mode left.
+    for mode in MODE_CATALOG:
+        registry.set_mode(mode)
+        adapter = RuntimeAdapter.from_repl(
+            repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
+        )
+        profile = adapter.strategy_profile()
+        assert profile is not None, mode
+
     registry.set_mode("plan-execute")
     plan = RuntimeAdapter.from_repl(
         repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
-    )
-    assert plan.strategy_mode == "plan"
-
-    registry.set_mode("reflection")
-    reflect = RuntimeAdapter.from_repl(
-        repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
-    )
-    assert reflect.strategy_mode == "reflect"
-
-    registry.set_mode("plan-react")
-    plan_react = RuntimeAdapter.from_repl(
-        repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
-    )
-    assert plan_react.strategy_mode == "plan-react"
+    ).strategy_profile()
+    assert plan is not None and plan.plan and plan.follow_plan
 
     registry.set_mode("plan-reflection")
-    plan_reflect = RuntimeAdapter.from_repl(
+    reviewed = RuntimeAdapter.from_repl(
         repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
-    )
-    assert plan_reflect.strategy_mode == "plan-reflect"
+    ).strategy_profile()
+    assert reviewed is not None
+    assert reviewed.plan_review and reviewed.step_reflect
 
-    registry.set_mode("react-reflection")
-    react_reflect = RuntimeAdapter.from_repl(
-        repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
-    )
-    assert react_reflect.strategy_mode == "react-reflect"
-
-    # A legacy-only mode still fails closed instead of running ActFirst.
-    legacy = RuntimeAdapter(
-        workspace=tmp_path,
-        model_config=ModelConfig(model_id="test/fake"),
-        permission=PermissionMode.AUTO_EDIT,
-        strategy_mode="legacy",
-    )
-    with pytest.raises(KernelAdapterError, match="legacy"):
-        legacy.run("read README.md", task_id="legacy-mode")
-
+    # Unknown modes fail closed instead of falling back to the bare react phase.
     unknown = RuntimeAdapter(
         workspace=tmp_path,
         model_config=ModelConfig(model_id="test/fake"),
         permission=PermissionMode.AUTO_EDIT,
-        strategy_mode="no-such-strategy",
+        strategy_mode="no-such-mode",
     )
+    assert unknown.strategy_profile() is None
     with pytest.raises(KernelAdapterError, match="unknown kernel strategy"):
         unknown.run("read README.md", task_id="unknown-mode")
 
@@ -799,8 +786,9 @@ def test_runtime_adapter_resume_executes_approved_plan(tmp_path: Path) -> None:
     ledger_dir = tmp_path.parent / f"{tmp_path.name}-resume-adapter-ledger"
     planned = run_task(
         plan.objective,
-        strategy=build_llm_plan_strategy(
+        strategy=build_llm_loop_strategy(
             ModelConfig(model_id="test/fake"),
+            LoopProfile(plan=True, step_scope=True, follow_plan=True),
             client=FakeClient([json.dumps(_plan_dict())]),
         ),
         workspace=tmp_path,
@@ -848,8 +836,9 @@ def test_resume_kernel_plan_renders_execution_result(tmp_path: Path) -> None:
     ledger_dir = tmp_path.parent / f"{tmp_path.name}-resume-render-ledger"
     planned = run_task(
         plan.objective,
-        strategy=build_llm_plan_strategy(
+        strategy=build_llm_loop_strategy(
             ModelConfig(model_id="test/fake"),
+            LoopProfile(plan=True, step_scope=True, follow_plan=True),
             client=FakeClient([json.dumps(_plan_dict())]),
         ),
         workspace=tmp_path,

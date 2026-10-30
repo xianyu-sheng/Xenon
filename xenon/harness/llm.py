@@ -34,10 +34,9 @@ from xenon.kernel.contracts import (
     ToolIntent,
 )
 from xenon.kernel.strategies import (
-    ActFirst,
-    PlanFirst,
-    PlanReact,
-    ReflectFirst,
+    LoopProfile,
+    LoopStrategy,
+    PlanProvider,
 )
 from xenon.utils.llm_client import chat_completion
 
@@ -1017,70 +1016,45 @@ def build_step_review_messages(
     ]
 
 
-def build_llm_plan_reflection_strategy(
+def build_llm_loop_strategy(
     config: ModelConfig,
-    *,
-    client: Callable[..., str] | None = None,
-    max_step_calls: int = 6,
-    max_step_reviews: int = 1,
-) -> PlanReact:
-    return PlanReact(
-        LLMPlanProposer(config, client=client),
-        LLMStepActor(config, client=client),
-        plan_reviewer=LLMPlanReviewer(config, client=client),
-        step_reviewer=LLMStepReviewer(config, client=client),
-        max_step_calls=max_step_calls,
-        max_step_reviews=max_step_reviews,
-    )
-
-
-def build_llm_plan_react_strategy(
-    config: ModelConfig,
-    *,
-    client: Callable[..., str] | None = None,
-    max_step_calls: int = 6,
-    resumed: bool = False,
-) -> PlanReact:
-    return PlanReact(
-        LLMPlanProposer(config, client=client),
-        LLMStepActor(config, client=client),
-        max_step_calls=max_step_calls,
-        resumed=resumed,
-    )
-
-
-def build_llm_reflection_strategy(
-    config: ModelConfig,
-    *,
-    client: Callable[..., str] | None = None,
-    max_reflections: int = 1,
-    max_calls_per_round: int = 1,
-) -> ReflectFirst:
-    return ReflectFirst(
-        ActFirst(LLMActionProposer(config, client=client)),
-        LLMReflector(config, client=client),
-        max_reflections=max_reflections,
-        max_calls_per_round=max_calls_per_round,
-    )
-
-
-def build_llm_strategy(
-    config: ModelConfig,
-    *,
-    client: Callable[..., str] | None = None,
-) -> ActFirst:
-    return ActFirst(LLMActionProposer(config, client=client))
-
-
-def build_llm_plan_strategy(
-    config: ModelConfig,
+    profile: LoopProfile,
     *,
     client: Callable[..., str] | None = None,
     resumed: bool = False,
-) -> PlanFirst:
-    return PlanFirst(
-        LLMPlanProposer(config, client=client),
-        finisher=LLMPlanFinisher(config, client=client),
+    preset_plan: PlanProposal | None = None,
+) -> LoopStrategy:
+    """Wire the one loop's phases to model-backed providers.
+
+    The profile decides which providers exist; there is no per-mode class and no
+    per-mode builder, so a new mode cannot invent a second execution model.
+    """
+
+    actor = LLMActionProposer(config, client=client)
+    planner: PlanProvider | None = None
+    if preset_plan is not None:
+        planner = lambda view: preset_plan  # noqa: E731
+    elif profile.plan:
+        planner = LLMPlanProposer(config, client=client)
+    return LoopStrategy(
+        profile,
+        actor,
+        step_actor=(
+            LLMStepActor(config, client=client)
+            if profile.step_scope and not profile.follow_plan
+            else None
+        ),
+        planner=planner,
+        plan_reviewer=(
+            LLMPlanReviewer(config, client=client) if profile.plan_review else None
+        ),
+        reflector=(
+            LLMReflector(config, client=client) if profile.reflects else None
+        ),
+        step_reviewer=(
+            LLMStepReviewer(config, client=client) if profile.step_reflect else None
+        ),
+        finisher=(LLMPlanFinisher(config, client=client) if profile.plan else None),
         resumed=resumed,
     )
 
@@ -1097,12 +1071,8 @@ __all__ = [
     "ModelConfig",
     "ModelConfigError",
     "build_finish_messages",
-    "build_llm_plan_strategy",
-    "build_llm_strategy",
     "build_messages",
-    "build_llm_plan_react_strategy",
-    "build_llm_plan_reflection_strategy",
-    "build_llm_reflection_strategy",
+    "build_llm_loop_strategy",
     "build_plan_messages",
     "build_plan_review_messages",
     "build_reflect_messages",

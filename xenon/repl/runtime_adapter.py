@@ -17,11 +17,7 @@ from typing import Any, Mapping
 from xenon.catalog.specs import mcp_tool_specs, select_mcp_tool_specs
 from xenon.harness.llm import (
     ModelConfig,
-    build_llm_plan_react_strategy,
-    build_llm_plan_reflection_strategy,
-    build_llm_plan_strategy,
-    build_llm_reflection_strategy,
-    build_llm_strategy,
+    build_llm_loop_strategy,
 )
 from xenon.harness.runner import HarnessRun, result_json, resume_task, run_task
 from xenon.kernel.contracts import (
@@ -33,12 +29,9 @@ from xenon.kernel.contracts import (
     TaskResult,
 )
 from xenon.kernel.policies import PermissionMode
-from xenon.modes import MODE_CATALOG, kernel_strategy_for
+from xenon.kernel.strategies import LoopProfile
+from xenon.modes import MODE_CATALOG, loop_profile_for
 from xenon.repl.execution_policy import ExecutionLevel
-
-# Explicit strategy names.  Anything else fails closed in ``run``.
-_PLAN_STRATEGY_MODES = frozenset({"plan", "plan-execute"})
-_ACT_STRATEGY_MODES = frozenset({"act", "react", "direct"})
 
 KERNEL_RUNTIME_ENV = "XENON_RUNTIME"
 MCP_TOOL_LIMIT_ENV = "XENON_MCP_TOOL_LIMIT"
@@ -87,13 +80,12 @@ def should_route_to_kernel(
     external_query: bool = False,
     mcp_available: bool = False,
 ) -> bool:
-    """Route a tool turn through the kernel only when the mode has parity.
+    """Route a tool turn through the kernel when the mode declares a loop.
 
-    ``/mode`` is an explicit user choice.  A mode without a kernel strategy
-    (reflection, plan-react, plan-reflection, react-reflection) must stay on the
-    frozen legacy path until it has an equivalent strategy; it must never be
-    silently executed as ActFirst.  Unknown mode names fail closed for the same
-    reason.
+    ``/mode`` is an explicit user choice.  Every catalog mode now declares a
+    ``LoopProfile`` (plan / react / reflect phases), so a tool turn runs on the
+    kernel; an unknown mode name has no profile and fails closed rather than
+    being silently executed as the bare react phase.
 
     ``/plan`` is a constraint, not a runtime switch.  Both read-only and
     deferred-write plan turns route to the kernel; turn_flow selects
@@ -110,7 +102,7 @@ def should_route_to_kernel(
         and pending is None
         and recipe is None
         and mode is not None
-        and mode.kernel_strategy is not None
+        and mode.loop is not None
         and (not external_query or mcp_available)
     )
 
@@ -333,6 +325,11 @@ class RuntimeAdapter:
         self.strategy_mode = strategy_mode
         self.plan_only = bool(plan_only)
 
+    def strategy_profile(self) -> LoopProfile | None:
+        """Loop profile for the selected mode (``None`` fails closed)."""
+
+        return loop_profile_for(self.strategy_mode)
+
     def run(
         self,
         objective: str,
@@ -343,42 +340,22 @@ class RuntimeAdapter:
     ) -> HarnessRun:
         if self.strategy_mode == "legacy":
             raise KernelAdapterError(
-                "selected mode has no kernel strategy; it must stay on the legacy path"
+                "selected mode has no kernel loop; it must stay on the legacy path"
             )
-        if self.plan_only or self.strategy_mode in _PLAN_STRATEGY_MODES:
-            strategy = build_llm_plan_strategy(
-                self.model_config, client=self.client
-            )
-        elif self.strategy_mode in _ACT_STRATEGY_MODES:
-            strategy = build_llm_strategy(self.model_config, client=self.client)
-        elif self.strategy_mode == "plan-react":
-            strategy = build_llm_plan_react_strategy(
-                self.model_config, client=self.client
-            )
-        elif self.strategy_mode == "plan-reflect":
-            strategy = build_llm_plan_reflection_strategy(
-                self.model_config, client=self.client
-            )
-        elif self.strategy_mode == "reflect":
-            strategy = build_llm_reflection_strategy(
-                self.model_config, client=self.client
-            )
-        elif self.strategy_mode == "react-reflect":
-            # Multi-round reflection: three reviews, at most two corrective
-            # calls per review, so extra work stays bounded.
-            strategy = build_llm_reflection_strategy(
-                self.model_config,
-                client=self.client,
-                max_reflections=3,
-                max_calls_per_round=2,
-            )
-        else:
-            # Unknown strategy names must not silently become ActFirst: a new
-            # mode has to declare its parity explicitly.  "legacy" is covered
-            # by the guard above.
+        profile = self.strategy_profile()
+        if profile is None:
+            # Unknown modes must not silently become the bare react phase: a
+            # mode has to declare its loop profile explicitly.
             raise KernelAdapterError(
                 f"unknown kernel strategy: {self.strategy_mode}"
             )
+        if self.plan_only:
+            # Plan-only never executes a step; the profile only needs the plan
+            # phase.
+            profile = LoopProfile(plan=True)
+        strategy = build_llm_loop_strategy(
+            self.model_config, profile, client=self.client
+        )
         constraints = [
             "runtime:kernel",
             f"model:{self.model_config.model_id}",
@@ -448,8 +425,11 @@ class RuntimeAdapter:
 
         if self.plan_only:
             raise KernelAdapterError("plan-only adapters cannot resume execution")
-        strategy = build_llm_plan_strategy(
+        # An approved plan resumes in its own ledger: follow the plan's intents
+        # deterministically instead of asking the model what to do next.
+        strategy = build_llm_loop_strategy(
             self.model_config,
+            LoopProfile(plan=True, step_scope=True, follow_plan=True),
             client=self.client,
             resumed=True,
         )
@@ -541,10 +521,11 @@ class RuntimeAdapter:
             catalog_profile="core+mcp" if has_mcp else "core",
             gateway_context=gateway_context,
             mcp_registry=mcp_registry if has_mcp else None,
-            strategy_mode=kernel_strategy_for(
-                getattr(repl.registry, "current_mode", "react")
-            )
-            or "legacy",
+            # The adapter stores the mode name; the loop profile is resolved
+            # from the catalog at run time, so a mode cannot carry a hard-coded
+            # strategy.
+            strategy_mode=getattr(repl.registry, "current_mode", "react")
+            or "react",
             plan_only=plan_only,
         )
 

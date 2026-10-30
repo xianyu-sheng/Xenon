@@ -39,9 +39,47 @@ from xenon.kernel.contracts import (
 )
 from xenon.kernel.controller import VerificationController
 from xenon.kernel.runtime import LoopRuntime
-from xenon.kernel.strategies import PlanFirst, PlanReact
+from xenon.kernel.strategies import LoopProfile, LoopStrategy
 from xenon.ledger.events import EventKind, EventSource, canonical_json
 from xenon.ledger.store import Ledger
+
+
+def _follow(plan: PlanProposal) -> LoopStrategy:
+    """Plan plus deterministic step execution (the old PlanFirst shape)."""
+
+    return LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, follow_plan=True),
+        actor=lambda view: Finish("completed"),
+        planner=lambda view: plan,
+    )
+
+
+_PROFILE_FIELDS = frozenset(
+    {"step_calls", "step_reflect", "reflect_rounds", "reflect_calls"}
+)
+
+
+def _react(plan: PlanProposal, actor, **kwargs) -> LoopStrategy:
+    """Plan plus a bounded per-step sub-loop (the old PlanReact shape)."""
+
+    planner = plan if callable(plan) else (lambda view: plan)
+    profile_keys = {k: v for k, v in kwargs.items() if k in _PROFILE_FIELDS}
+    providers = {k: v for k, v in kwargs.items() if k not in _PROFILE_FIELDS}
+    plan_reviewer = providers.pop("plan_reviewer", None)
+    step_reviewer = providers.pop("step_reviewer", None)
+    if plan_reviewer is not None:
+        profile_keys["plan_review"] = True
+    if step_reviewer is not None:
+        profile_keys["step_reflect"] = True
+    return LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, **profile_keys),
+        actor=lambda view: Finish("completed"),
+        step_actor=actor,
+        planner=planner,
+        plan_reviewer=plan_reviewer,
+        step_reviewer=step_reviewer,
+        **providers,
+    )
 
 
 def _runtime(ledger: Ledger) -> LoopRuntime:
@@ -217,7 +255,7 @@ def test_repair_budget_blocks_after_configured_attempts() -> None:
         budget=Budget(max_steps=20, max_repair_attempts=2),
     )
 
-    result = runtime.run(spec, PlanFirst(lambda view: _verify_plan()))
+    result = runtime.run(spec, _follow(_verify_plan()))
 
     assert result.accepted is False
     assert result.phase.value == "blocked"
@@ -247,7 +285,7 @@ def test_zero_repair_budget_blocks_on_first_failure() -> None:
         budget=Budget(max_steps=20, max_repair_attempts=0),
     )
 
-    result = runtime.run(spec, PlanFirst(lambda view: _verify_plan()))
+    result = runtime.run(spec, _follow(_verify_plan()))
 
     assert result.accepted is False
     assert gateway.calls == 1
@@ -315,7 +353,7 @@ def test_failed_step_can_be_repaired_and_closes_debt() -> None:
         ledger=ledger,
     )
 
-    result = runtime.run(_calc_spec(), PlanFirst(lambda view: plan))
+    result = runtime.run(_calc_spec(), _follow(plan))
 
     assert result.accepted is True
     assert not result.debt
@@ -349,7 +387,7 @@ def test_plan_react_records_per_step_work_and_closes_in_order() -> None:
         return CallTool(step.intent or ToolIntent(capability=Capability.READ))
 
     result = _runtime(ledger).run(
-        _calc_spec(), PlanReact(lambda view: _two_step_plan(), actor)
+        _calc_spec(), _react(_two_step_plan(), actor)
     )
 
     assert result.accepted is True
@@ -372,7 +410,7 @@ def test_plan_react_step_budget_is_visible_in_the_ledger() -> None:
 
     result = _runtime(ledger).run(
         _calc_spec(),
-        PlanReact(
+        _react(
             lambda view: PlanProposal(
                 steps=(
                     StepContract(
@@ -393,7 +431,7 @@ def test_plan_react_step_budget_is_visible_in_the_ledger() -> None:
             lambda view, step, calls: CallTool(
                 ToolIntent(capability=Capability.READ)
             ),
-            max_step_calls=2,
+            step_calls=2,
         ),
     )
 
@@ -410,7 +448,7 @@ def test_plan_react_never_closes_a_step_without_its_expectation() -> None:
 
     result = _runtime(ledger).run(
         _calc_spec(),
-        PlanReact(
+        _react(
             lambda view: PlanProposal(
                 steps=(
                     StepContract(
@@ -453,7 +491,7 @@ def test_plan_review_added_step_actually_runs() -> None:
 
     result = _runtime(ledger).run(
         _calc_spec(),
-        PlanReact(
+        _react(
             lambda view: _two_step_plan(),
             lambda view, step, calls: CallTool(
                 step.intent or ToolIntent(capability=Capability.READ)
@@ -473,7 +511,7 @@ def test_plan_review_decision_is_recorded_as_plan_reviewed() -> None:
 
     _runtime(ledger).run(
         _calc_spec(),
-        PlanReact(
+        _react(
             lambda view: _two_step_plan(),
             lambda view, step, calls: CallTool(
                 step.intent or ToolIntent(capability=Capability.READ)
@@ -513,7 +551,7 @@ def test_step_review_corrects_a_failing_step_before_release() -> None:
 
     result = _runtime(ledger).run(
         _calc_spec(),
-        PlanReact(
+        _react(
             lambda view: plan,
             lambda view, step, calls: (
                 CallTool(ToolIntent(capability=Capability.READ))
@@ -560,7 +598,7 @@ def test_step_review_cannot_bypass_an_unmet_expectation() -> None:
 
     result = _runtime(ledger).run(
         _calc_spec(),
-        PlanReact(
+        _react(
             lambda view: plan,
             lambda view, step, calls: Finish("looks done"),
             step_reviewer=lambda view, step, action: None,
@@ -1044,7 +1082,7 @@ def test_dag_ready_step_is_selected_before_plan_order() -> None:
     )
     plan = PlanProposal(steps=(step2, step1))
 
-    result = _runtime(ledger).run(_calc_spec(), PlanFirst(lambda view: plan))
+    result = _runtime(ledger).run(_calc_spec(), _follow(plan))
 
     assert result.accepted is True
     started = [
@@ -1087,7 +1125,7 @@ def test_cyclic_plan_is_rejected() -> None:
 def test_plan_first_closes_each_step_and_advances() -> None:
     ledger = Ledger.in_memory("task-1")
     runtime = _runtime(ledger)
-    result = runtime.run(_calc_spec(), PlanFirst(lambda view: _plan()))
+    result = runtime.run(_calc_spec(), _follow(_plan()))
 
     assert result.accepted is True
     assert result.evidence_status.value == "verified"

@@ -16,12 +16,13 @@ from typing import Any, Sequence
 
 from xenon.harness.llm import (
     ModelConfigError,
-    build_llm_strategy,
+    build_llm_loop_strategy,
     resolve_model_config,
 )
 from xenon.harness.plan import PlanError, parse_plan
 from xenon.harness.runner import JsonlSink, run_plan, run_task, write_result
 from xenon.kernel.policies import PermissionMode
+from xenon.kernel.strategies import LoopProfile
 
 
 def _load_plan(path: str) -> Any:
@@ -124,7 +125,7 @@ def run_from_args(args: argparse.Namespace) -> int:
             assert task is not None and model_config is not None
             run = run_task(
                 task,
-                strategy=build_llm_strategy(model_config),
+                strategy=build_llm_loop_strategy(model_config, LoopProfile()),
                 workspace=args.workspace or ".",
                 ledger_dir=args.ledger_dir,
                 task_id=args.task_id,

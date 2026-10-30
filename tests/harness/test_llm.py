@@ -20,9 +20,7 @@ from xenon.harness.llm import (
     LLMStepReviewer,
     ModelConfig,
     ModelConfigError,
-    build_llm_plan_strategy,
-    build_llm_reflection_strategy,
-    build_llm_strategy,
+    build_llm_loop_strategy,
     build_messages,
     build_plan_messages,
     parse_action,
@@ -41,6 +39,7 @@ from xenon.kernel.contracts import (
     TaskSpec,
     Think,
 )
+from xenon.kernel.strategies import LoopProfile
 from xenon.ledger.events import EventKind, canonical_json
 from xenon.ledger.store import Ledger
 
@@ -176,7 +175,7 @@ def test_llm_strategy_runs_real_workspace_and_finalizer(tmp_path: Path) -> None:
     config = ModelConfig(model_id="test/fake", max_tokens=1234)
     run = run_task(
         "add a function and test it",
-        strategy=build_llm_strategy(config, client=client),
+        strategy=build_llm_loop_strategy(config, LoopProfile(), client=client),
         workspace=tmp_path,
         ledger_dir=tmp_path.parent / f"{tmp_path.name}-ledger",
         task_id="llm-1",
@@ -202,7 +201,7 @@ def test_invalid_model_turn_becomes_thought_and_retries(tmp_path: Path) -> None:
     config = ModelConfig(model_id="test/fake")
     run = run_task(
         "add a function and test it",
-        strategy=build_llm_strategy(config, client=client),
+        strategy=build_llm_loop_strategy(config, LoopProfile(), client=client),
         workspace=tmp_path,
         ledger_dir=tmp_path.parent / f"{tmp_path.name}-ledger",
         task_id="llm-retry",
@@ -493,8 +492,10 @@ def test_llm_plan_strategy_executes_a_capability_plan(tmp_path: Path) -> None:
     ])
     run = run_task(
         "add a function and test it",
-        strategy=build_llm_plan_strategy(
-            ModelConfig(model_id="test/fake"), client=client
+        strategy=build_llm_loop_strategy(
+            ModelConfig(model_id="test/fake"),
+            LoopProfile(plan=True, step_scope=True, follow_plan=True),
+            client=client,
         ),
         workspace=tmp_path,
         ledger_dir=tmp_path.parent / f"{tmp_path.name}-ledger",
@@ -519,8 +520,9 @@ def test_resume_task_executes_an_approved_plan_in_the_same_ledger(
     ledger_dir = tmp_path.parent / f"{tmp_path.name}-resume-ledger"
     planned = run_task(
         plan.objective,
-        strategy=build_llm_plan_strategy(
+        strategy=build_llm_loop_strategy(
             ModelConfig(model_id="test/fake"),
+            LoopProfile(plan=True, step_scope=True, follow_plan=True),
             client=FakeClient([json.dumps(_plan_dict())]),
         ),
         workspace=tmp_path,
@@ -542,8 +544,9 @@ def test_resume_task_executes_an_approved_plan_in_the_same_ledger(
         plan=plan.proposal,
         plan_digest=digest,
         approval_id="approval-1",
-        strategy=build_llm_plan_strategy(
+        strategy=build_llm_loop_strategy(
             ModelConfig(model_id="test/fake"),
+            LoopProfile(plan=True, step_scope=True, follow_plan=True),
             client=FakeClient(
                 [json.dumps({"action": "finish", "answer": "done"})]
             ),
@@ -568,8 +571,10 @@ def test_llm_plan_invalid_json_fails_closed(tmp_path: Path) -> None:
     client = FakeClient(['{"steps":[]}'])
     run = run_task(
         "add a function and test it",
-        strategy=build_llm_plan_strategy(
-            ModelConfig(model_id="test/fake"), client=client
+        strategy=build_llm_loop_strategy(
+            ModelConfig(model_id="test/fake"),
+            LoopProfile(plan=True, step_scope=True, follow_plan=True),
+            client=client,
         ),
         workspace=tmp_path,
         ledger_dir=tmp_path.parent / f"{tmp_path.name}-ledger",
@@ -780,12 +785,15 @@ def test_reflect_messages_describe_the_receipts() -> None:
 
 
 def test_reflection_strategy_wraps_the_act_strategy() -> None:
-    strategy = build_llm_reflection_strategy(
-        ModelConfig(model_id="test/fake"), client=FakeClient([])
+    strategy = build_llm_loop_strategy(
+        ModelConfig(model_id="test/fake"),
+        LoopProfile(reflect_rounds=1, reflect_calls=1),
+        client=FakeClient([]),
     )
 
-    assert isinstance(strategy, llm.ReflectFirst)
-    assert strategy.max_reflections == 1
+    assert isinstance(strategy, llm.LoopStrategy)
+    assert strategy.profile.reflect_rounds == 1
+    assert strategy.reflector is not None
 
 
 def _plan_proposal():
@@ -920,11 +928,19 @@ def test_step_reviewer_never_completes_or_judges(payload: str) -> None:
 
 
 def test_plan_reflection_strategy_wires_both_reviewers() -> None:
-    strategy = llm.build_llm_plan_reflection_strategy(
-        ModelConfig(model_id="test/fake"), client=FakeClient([])
+    strategy = build_llm_loop_strategy(
+        ModelConfig(model_id="test/fake"),
+        LoopProfile(
+            plan=True,
+            plan_review=True,
+            step_scope=True,
+            step_calls=6,
+            step_reflect=True,
+        ),
+        client=FakeClient([]),
     )
 
-    assert isinstance(strategy, llm.PlanReact)
+    assert isinstance(strategy, llm.LoopStrategy)
     assert strategy.plan_reviewer is not None
     assert strategy.step_reviewer is not None
-    assert strategy.max_step_reviews == 1
+    assert strategy.profile.step_reflect is True

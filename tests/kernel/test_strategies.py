@@ -1,12 +1,13 @@
-"""Strategy seam tests: propose only, never execute (#198)."""
+"""The loop seam: plan, react and reflect are phases, not classes (#198)."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from xenon.kernel.contracts import (
     AskUser,
-    Budget,
     CallTool,
     Capability,
     Claim,
@@ -27,11 +28,9 @@ from xenon.kernel.contracts import (
     ToolIntent,
 )
 from xenon.kernel.strategies import (
-    ActFirst,
+    LoopProfile,
+    LoopStrategy,
     NoToolStrategy,
-    PlanFirst,
-    PlanReact,
-    ReflectFirst,
     RepairFirst,
 )
 
@@ -40,159 +39,25 @@ def _view(
     *,
     debt: tuple[Debt, ...] = (),
     steps: tuple[StepContract, ...] = (),
+    active: StepContract | None = None,
 ) -> ModelView:
     spec = TaskSpec(task_id="t1", objective="x", workspace=".")
     return ModelView(
         task=spec,
-        system="",
+        system="s",
         tools=(),
         working_set=(),
         debt=debt,
-        budget=Budget(),
+        budget=spec.budget,
         input_seq=0,
         hash="h",
-        active_step=None,
+        active_step=active,
         steps=steps,
     )
 
 
-def test_act_first_delegates() -> None:
-    strategy = ActFirst(lambda view: Think("next"))
-    assert isinstance(strategy.propose(_view()), Think)
-
-
-def test_no_tool_strategy_returns_finish() -> None:
-    claim = Claim(
-        id="c1",
-        kind=PropositionKind.ANSWER_DELIVERED,
-        source=ClaimSource.LLM,
-    )
-    strategy = NoToolStrategy("hello", claims=(claim,))
-    action = strategy.propose(_view())
-    assert isinstance(action, Finish)
-    assert action.answer == "hello"
-    assert action.claims == (claim,)
-
-
-def test_repair_first_prefers_repair_while_debt_is_open() -> None:
-    debt = Debt(
-        obligation=Obligation(
-            id="o1", kind=PropositionKind.FILE_CHANGED, target="a.py"
-        ),
-        reason="missing",
-    )
-    fallback_called = False
-
-    def fallback(view: ModelView):
-        nonlocal fallback_called
-        fallback_called = True
-        return Think("fallback")
-
-    def repair(view: ModelView, debts: tuple[Debt, ...]):
-        assert debts
-        return Think("repair")
-
-    strategy = RepairFirst(
-        fallback=SimpleNamespace(propose=fallback), repairer=repair
-    )
-    action = strategy.propose(_view(debt=(debt,)))
-    assert isinstance(action, Think)
-    assert action.text == "repair"
-    assert fallback_called is False
-
-    strategy.propose(_view())
-    assert fallback_called is True
-
-
-def test_plan_first_submits_once() -> None:
-    strategy = PlanFirst(lambda view: PlanProposal(steps=()))
-    first = strategy.propose(_view())
-    assert hasattr(first, "plan")
-    # An empty plan closes immediately; the strategy must not resubmit.
-    second = strategy.propose(_view())
-    assert isinstance(second, Finish)
-
-
-def test_plan_first_finishes_with_the_working_set() -> None:
-    step = StepContract(
-        id=1,
-        kind=StepKind.INSPECT,
-        intent=ToolIntent(capability=Capability.READ),
-    )
-    view = _view(steps=(step,))
-    strategy = PlanFirst(
-        lambda _view: PlanProposal(steps=(step,)),
-        finisher=lambda _view: Finish("the answer"),
-    )
-
-    first = strategy.propose(view)
-    assert isinstance(first, SubmitPlan)
-    second = strategy.propose(view)
-    assert isinstance(second, Finish)
-    assert second.answer == "the answer"
-
-
-def test_reflect_first_asks_for_one_correction_before_finishing() -> None:
-    strategy = ReflectFirst(
-        _ActThenFinish(),
-        lambda view, finish: CallTool(ToolIntent(capability=Capability.EDIT)),
-    )
-
-    assert isinstance(strategy.propose(_view()), CallTool)
-    # The finish attempt is intercepted once by the reflector.
-    assert isinstance(strategy.propose(_view()), CallTool)
-    assert isinstance(strategy.propose(_view()), Finish)
-
-
-def test_reflect_first_is_bounded() -> None:
-    capabilities = [Capability.EDIT, Capability.VERIFY, Capability.SHELL]
-    seen = {"n": 0}
-
-    def reflector(view: ModelView, finish: Finish):
-        capability = capabilities[seen["n"]]
-        seen["n"] += 1
-        return CallTool(ToolIntent(capability=capability))
-
-    strategy = ReflectFirst(
-        _ActThenFinish(),
-        reflector,
-        max_reflections=2,
-    )
-
-    assert isinstance(strategy.propose(_view()), CallTool)
-    assert isinstance(strategy.propose(_view()), CallTool)
-    assert isinstance(strategy.propose(_view()), CallTool)
-    assert isinstance(strategy.propose(_view()), Finish)
-
-
-def test_reflect_first_never_runs_without_prior_action() -> None:
-    calls = {"reflect": 0}
-
-    def reflector(view: ModelView, finish: Finish):
-        calls["reflect"] += 1
-        return CallTool(ToolIntent(capability=Capability.EDIT))
-
-    strategy = ReflectFirst(ActFirst(lambda view: Finish("done")), reflector)
-
-    assert isinstance(strategy.propose(_view()), Finish)
-    assert calls["reflect"] == 0, "没有行动就不该反思"
-
-
-def test_reflect_first_cannot_finish_or_ask_on_its_own() -> None:
-    strategy = ReflectFirst(
-        _ActThenFinish(),
-        lambda view, finish: Finish("I reviewed it and it is fine"),
-    )
-    assert isinstance(strategy.propose(_view()), CallTool)
-    # A reflector that declares success is discarded; completion stays with
-    # the delegate, and verification stays deterministic.
-    assert isinstance(strategy.propose(_view()), Finish)
-    assert strategy._round == 1
-    assert strategy.drain_notices()[0]["decision"] == "declined"
-
-
 class _ActThenFinish:
-    """Deterministic double: one tool call, then finish."""
+    """One tool call, then finish."""
 
     def __init__(self) -> None:
         self._acted = False
@@ -204,273 +69,154 @@ class _ActThenFinish:
         return Finish("done")
 
 
-def test_reflect_first_reports_what_it_decided() -> None:
-    strategy = ReflectFirst(
-        _ActThenFinish(),
-        lambda view, finish: CallTool(ToolIntent(capability=Capability.EDIT)),
-    )
-
-    strategy.propose(_view())
-    assert strategy.drain_notices() == ()
-
-    strategy.propose(_view())
-    notices = strategy.drain_notices()
-
-    assert notices == (
-        {
-            "kind": "reflection",
-            "decision": "correction",
-            "capability": "edit",
-            "round": 1,
-            "call_in_round": 1,
-        },
-    )
-    assert strategy.drain_notices() == (), "通知是排空的，不能重复上报"
-
-
-def test_reflect_first_records_a_declined_review() -> None:
-    strategy = ReflectFirst(
-        _ActThenFinish(),
-        lambda view, finish: Finish("looks fine"),
-    )
-
-    strategy.propose(_view())
-    strategy.propose(_view())
-
-    assert strategy.drain_notices() == (
-        {"kind": "reflection", "decision": "declined", "capability": "", "round": 1},
+def _plan_step(step_id: int = 1, *, expects: tuple[Obligation, ...] = ()) -> StepContract:
+    return StepContract(
+        id=step_id,
+        kind=StepKind.EDIT,
+        intent=ToolIntent(capability=Capability.EDIT),
+        targets=("a.py",),
+        expects=expects,
     )
 
 
-def _two_step_view(active: int = 1) -> ModelView:
-    steps = (
-        StepContract(id=1, kind=StepKind.INSPECT, targets=("a.py",)),
-        StepContract(id=2, kind=StepKind.EDIT, targets=("a.py",)),
-    )
-    spec = TaskSpec(task_id="t1", objective="x", workspace=".")
-    return ModelView(
-        task=spec,
-        system="s",
-        tools=(),
-        working_set=(),
-        debt=(),
-        budget=spec.budget,
-        input_seq=0,
-        hash="h",
-        active_step=next(item for item in steps if item.id == active),
-        steps=steps,
+def _obligation(name: str = "e1") -> Obligation:
+    return Obligation(
+        id=name,
+        kind=PropositionKind.FILE_CHANGED,
+        target="a.py",
+        source=ObligationSource.PLAN,
     )
 
 
-def test_plan_react_submits_the_plan_first() -> None:
-    strategy = PlanReact(
-        lambda view: PlanProposal(
-            steps=_two_step_view().steps,
-        ),
-        lambda view, step, calls: Finish("done"),
+# ── profiles ───────────────────────────────────────────────────────────
+
+
+def test_profile_rejects_incoherent_budgets() -> None:
+    with pytest.raises(ValueError, match="step_calls"):
+        LoopProfile(step_calls=0)
+    with pytest.raises(ValueError, match="reflect_calls"):
+        LoopProfile(reflect_rounds=2)
+    with pytest.raises(ValueError, match="follow_plan"):
+        LoopProfile(follow_plan=True)
+    with pytest.raises(ValueError, match="step_reflect"):
+        LoopProfile(step_reflect=True)
+
+
+def test_profile_requires_the_providers_it_enables() -> None:
+    with pytest.raises(ValueError, match="planner"):
+        LoopStrategy(LoopProfile(plan=True), actor=lambda view: Finish("x"))
+    with pytest.raises(ValueError, match="step_actor"):
+        LoopStrategy(
+            LoopProfile(plan=True, step_scope=True),
+            actor=lambda view: Finish("x"),
+            planner=lambda view: PlanProposal(steps=()),
+        )
+    with pytest.raises(ValueError, match="reflector"):
+        LoopStrategy(
+            LoopProfile(reflect_rounds=1, reflect_calls=1),
+            actor=lambda view: Finish("x"),
+        )
+
+
+# ── react phase ────────────────────────────────────────────────────────
+
+
+def test_act_only_profile_is_the_bare_react_phase() -> None:
+    strategy = LoopStrategy(LoopProfile(), actor=lambda view: Finish("hi"))
+
+    assert isinstance(strategy.propose(_view()), Finish)
+
+
+def test_plan_examples_submit_once_then_follow_the_plan() -> None:
+    plan = PlanProposal(steps=(_plan_step(),))
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, follow_plan=True),
+        actor=lambda view: Finish("done"),
+        planner=lambda view: plan,
     )
+    step = _plan_step()
 
-    action = strategy.propose(_two_step_view())
+    assert isinstance(strategy.propose(_view()), SubmitPlan)
+    action = strategy.propose(_view(steps=(step,), active=step))
 
-    assert isinstance(action, SubmitPlan)
+    assert isinstance(action, CallTool)
+    assert action.intent.capability is Capability.EDIT
 
 
-def test_plan_react_only_works_on_the_active_step() -> None:
+def test_follow_plan_thinks_when_a_step_has_no_intent() -> None:
+    step = StepContract(id=1, kind=StepKind.INSPECT)
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, follow_plan=True),
+        actor=lambda view: Finish("done"),
+        planner=lambda view: PlanProposal(steps=(step,)),
+    )
+    strategy.propose(_view())  # submit
+
+    assert isinstance(strategy.propose(_view(steps=(step,), active=step)), Think)
+
+
+def test_step_react_uses_a_per_step_budget() -> None:
+    step = _plan_step()
     seen: list[int] = []
 
-    def actor(view: ModelView, step: StepContract, calls: int):
-        seen.append(step.id)
+    def actor(view: ModelView, active: StepContract, calls: int):
+        seen.append(active.id)
         return CallTool(ToolIntent(capability=Capability.READ))
 
-    strategy = PlanReact(
-        lambda view: PlanProposal(steps=_two_step_view().steps), actor
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, step_calls=2),
+        actor=lambda view: Finish("done"),
+        step_actor=actor,
+        planner=lambda view: PlanProposal(steps=(step,)),
     )
-    strategy.propose(_two_step_view())  # submit
-    strategy.propose(_two_step_view(active=1))
-    strategy.propose(_two_step_view(active=2))
+    strategy.propose(_view())  # submit
 
-    assert seen == [1, 2]
+    assert isinstance(strategy.propose(_view(steps=(step,), active=step)), CallTool)
+    assert isinstance(strategy.propose(_view(steps=(step,), active=step)), CallTool)
+    released = strategy.propose(_view(steps=(step,), active=step))
+
+    assert isinstance(released, ReleaseStep)
+    assert seen == [1, 1]
+    assert strategy.drain_notices()[0] == {
+        "kind": "step",
+        "decision": "budget_exhausted",
+        "step": 1,
+        "calls": 2,
+    }
 
 
-def test_plan_react_bounds_calls_per_step_and_resets_for_the_next_step() -> None:
-    strategy = PlanReact(
-        lambda view: PlanProposal(steps=_two_step_view().steps),
-        lambda view, step, calls: CallTool(ToolIntent(capability=Capability.READ)),
-        max_step_calls=2,
+def test_step_actor_finishing_releases_the_step_not_the_task() -> None:
+    step = _plan_step()
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True),
+        actor=lambda view: Finish("done"),
+        step_actor=lambda view, active, calls: Finish("step done"),
+        planner=lambda view: PlanProposal(steps=(step,)),
     )
-    strategy.propose(_two_step_view())  # submit
+    strategy.propose(_view())
 
-    assert isinstance(strategy.propose(_two_step_view()), CallTool)
-    assert isinstance(strategy.propose(_two_step_view()), CallTool)
-    third = strategy.propose(_two_step_view())
-    assert isinstance(third, ReleaseStep), "第 3 次应停手，而不是继续刷步内预算"
+    action = strategy.propose(_view(steps=(step,), active=step))
 
-    notices = strategy.drain_notices()
-    assert notices == (
-        {"kind": "step", "decision": "budget_exhausted", "step": 1, "calls": 2},
-    )
-    # 进入下一步后预算重置
-    assert isinstance(strategy.propose(_two_step_view(active=2)), CallTool)
-
-
-def test_plan_react_step_completion_is_not_task_completion() -> None:
-    strategy = PlanReact(
-        lambda view: PlanProposal(steps=_two_step_view().steps),
-        lambda view, step, calls: Finish("step looks done"),
-    )
-    strategy.propose(_two_step_view())
-
-    action = strategy.propose(_two_step_view())
-
-    assert isinstance(action, ReleaseStep), "步内完成只能是释放步骤，不能是 Finish"
+    assert isinstance(action, ReleaseStep)
     assert strategy.drain_notices()[0]["decision"] == "step_complete"
 
 
-def test_plan_react_keeps_legitimate_non_work_actions() -> None:
-    strategy = PlanReact(
-        lambda view: PlanProposal(steps=_two_step_view().steps),
-        lambda view, step, calls: AskUser("which file?"),
-    )
-    strategy.propose(_two_step_view())
-
-    assert isinstance(strategy.propose(_two_step_view()), AskUser)
+# ── plan review ────────────────────────────────────────────────────────
 
 
-def test_multi_round_reflection_stops_at_the_round_budget() -> None:
-    rounds: list[int] = []
-
-    distinct = [Capability.EDIT, Capability.VERIFY, Capability.SHELL]
-
-    def reflector(view: ModelView, finish: Finish):
-        # A different capability per round so loop detection does not fire.
-        capability = distinct[len(rounds)]
-        rounds.append(1)
-        return CallTool(ToolIntent(capability=capability))
-
-    strategy = ReflectFirst(
-        _ActThenFinish(),
-        reflector,
-        max_reflections=3,
-        max_calls_per_round=1,
+def test_plan_review_can_add_coverage() -> None:
+    original = PlanProposal(steps=(_plan_step(expects=(_obligation(),)),))
+    extra = StepContract(id=2, kind=StepKind.VERIFY, targets=("tests/a.py",))
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, plan_review=True, step_scope=True, follow_plan=True),
+        actor=lambda view: Finish("done"),
+        planner=lambda view: original,
+        plan_reviewer=lambda view, plan: PlanProposal(
+            steps=original.steps + (extra,)
+        ),
     )
 
-    actions = [strategy.propose(_view()) for _ in range(10)]
-    calls = [item for item in actions if isinstance(item, CallTool)]
-
-    assert len(rounds) == 3, "三档反思，不能无限追加"
-    assert isinstance(actions[-1], Finish)
-    assert len(calls) == 4, "1 次基础动作 + 每轮 1 次修正"
-
-
-def test_per_round_budget_allows_several_calls_in_one_round() -> None:
-    capabilities = [Capability.EDIT, Capability.VERIFY, Capability.READ, Capability.SHELL]
-    seen: list[int] = []
-
-    def reflector(view: ModelView, finish: Finish):
-        seen.append(1)
-        return CallTool(ToolIntent(capability=capabilities[len(seen) - 1]))
-
-    strategy = ReflectFirst(
-        _ActThenFinish(),
-        reflector,
-        max_reflections=2,
-        max_calls_per_round=2,
-    )
-
-    actions = [strategy.propose(_view()) for _ in range(12)]
-    calls = [item for item in actions if isinstance(item, CallTool)]
-
-    assert len(seen) == 4, "2 轮 × 每轮 2 次"
-    assert len(calls) == 5, "1 次基础动作 + 4 次修正"
-    assert isinstance(actions[-1], Finish)
-
-
-def test_repeated_correction_ends_reflection_immediately() -> None:
-    strategy = ReflectFirst(
-        _ActThenFinish(),
-        lambda view, finish: CallTool(ToolIntent(capability=Capability.EDIT)),
-        max_reflections=5,
-        max_calls_per_round=1,
-    )
-
-    actions = [strategy.propose(_view()) for _ in range(6)]
-
-    notices = strategy.drain_notices()
-    assert [item["decision"] for item in notices] == ["correction", "repeated"]
-    assert isinstance(actions[-1], Finish), "重复修正必须停手，不能耗到轮次上限"
-
-
-def test_declined_review_stops_all_remaining_rounds() -> None:
-    reviews: list[int] = []
-
-    def reflector(view: ModelView, finish: Finish):
-        reviews.append(1)
-        return None
-
-    strategy = ReflectFirst(
-        _ActThenFinish(), reflector, max_reflections=3, max_calls_per_round=2
-    )
-
-    actions = [strategy.propose(_view()) for _ in range(6)]
-
-    assert len(reviews) == 1, "declined 表示没有剩余工作，不该再问第二次"
-    assert isinstance(actions[-1], Finish)
-    assert strategy.drain_notices()[0]["decision"] == "declined"
-
-
-def test_reflection_sees_the_proposed_answer_and_claims() -> None:
-    captured: dict[str, object] = {}
-
-    def reflector(view: ModelView, finish: Finish):
-        captured["answer"] = finish.answer
-        captured["claims"] = finish.claims
-        return None
-
-    strategy = ReflectFirst(_ActThenFinish(), reflector, max_reflections=1)
-    strategy.propose(_view())
-    strategy.propose(_view())
-
-    assert captured["answer"] == "done"
-
-
-def _plan_with_expects() -> PlanProposal:
-    return PlanProposal(
-        steps=(
-            StepContract(
-                id=1,
-                kind=StepKind.EDIT,
-                targets=("a.py",),
-                expects=(
-                    Obligation(
-                        id="e1",
-                        kind=PropositionKind.FILE_CHANGED,
-                        target="a.py",
-                        source=ObligationSource.PLAN,
-                    ),
-                ),
-            ),
-        )
-    )
-
-
-def test_plan_review_can_add_coverage_before_execution() -> None:
-    added = PlanProposal(
-        steps=_plan_with_expects().steps
-        + (
-            StepContract(
-                id=2,
-                kind=StepKind.VERIFY,
-                targets=("tests/test_a.py",),
-            ),
-        )
-    )
-    strategy = PlanReact(
-        lambda view: _plan_with_expects(),
-        lambda view, step, calls: Finish("done"),
-        plan_reviewer=lambda view, plan: added,
-    )
-
-    action = strategy.propose(_two_step_view())
+    action = strategy.propose(_view())
 
     assert isinstance(action, SubmitPlan)
     assert [step.id for step in action.plan.steps] == [1, 2]
@@ -482,93 +228,275 @@ def test_plan_review_can_add_coverage_before_execution() -> None:
 
 
 def test_plan_review_cannot_drop_an_obligation() -> None:
-    weaker = PlanProposal(
-        steps=(
-            StepContract(
-                id=1,
-                kind=StepKind.EDIT,
-                targets=("a.py",),
-                expects=(),
-            ),
-        )
-    )
-    strategy = PlanReact(
-        lambda view: _plan_with_expects(),
-        lambda view, step, calls: Finish("done"),
+    original = PlanProposal(steps=(_plan_step(expects=(_obligation(),)),))
+    weaker = PlanProposal(steps=(_plan_step(expects=()),))
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, plan_review=True, step_scope=True, follow_plan=True),
+        actor=lambda view: Finish("done"),
+        planner=lambda view: original,
         plan_reviewer=lambda view, plan: weaker,
     )
 
-    action = strategy.propose(_two_step_view())
+    action = strategy.propose(_view())
 
     assert isinstance(action, SubmitPlan)
     assert action.plan.steps[0].expects, "审查不能削掉义务"
-    notices = strategy.drain_notices()
-    assert notices[0]["decision"] == "rejected"
-    assert "e1" in notices[0]["reason"]
+    notice = strategy.drain_notices()[0]
+    assert notice["decision"] == "rejected"
+    assert "e1" in notice["reason"]
 
 
-def test_plan_review_declining_keeps_the_original_plan() -> None:
-    strategy = PlanReact(
-        lambda view: _plan_with_expects(),
-        lambda view, step, calls: Finish("done"),
+def test_plan_review_declining_keeps_the_plan() -> None:
+    original = PlanProposal(steps=(_plan_step(),))
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, plan_review=True, step_scope=True, follow_plan=True),
+        actor=lambda view: Finish("done"),
+        planner=lambda view: original,
         plan_reviewer=lambda view, plan: None,
     )
 
-    action = strategy.propose(_two_step_view())
+    strategy.propose(_view())
 
-    assert isinstance(action, SubmitPlan)
-    assert strategy.drain_notices()[0]["decision"] == "accepted"
+    assert strategy.drain_notices()[0] == {"kind": "plan", "decision": "accepted"}
 
 
-def test_step_review_adds_one_call_before_release() -> None:
-    strategy = PlanReact(
-        lambda view: _plan_with_expects(),
-        lambda view, step, calls: Finish("step done"),
-        step_reviewer=lambda view, step, action: CallTool(
+# ── step review ────────────────────────────────────────────────────────
+
+
+def test_step_review_adds_one_correction_before_release() -> None:
+    step = _plan_step()
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, step_reflect=True),
+        actor=lambda view: Finish("done"),
+        step_actor=lambda view, active, calls: Finish("step done"),
+        planner=lambda view: PlanProposal(steps=(step,)),
+        step_reviewer=lambda view, active, action: CallTool(
             ToolIntent(capability=Capability.VERIFY)
         ),
     )
-    strategy.propose(_two_step_view())  # submit
+    strategy.propose(_view())
 
-    first = strategy.propose(_two_step_view())
-    second = strategy.propose(_two_step_view())
+    first = strategy.propose(_view(steps=(step,), active=step))
+    second = strategy.propose(_view(steps=(step,), active=step))
 
     assert isinstance(first, CallTool)
-    assert first.intent.capability is Capability.VERIFY
-    assert isinstance(second, ReleaseStep), "审查过一轮后必须释放步骤"
-    decisions = [item["decision"] for item in strategy.drain_notices()]
-    assert decisions == ["step_correction", "step_complete"]
+    assert isinstance(second, ReleaseStep)
+    assert [item["decision"] for item in strategy.drain_notices()] == [
+        "step_correction",
+        "step_complete",
+    ]
 
 
-def test_step_review_is_bounded_per_step() -> None:
+def test_step_review_declining_releases_the_step() -> None:
+    step = _plan_step()
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, step_reflect=True),
+        actor=lambda view: Finish("done"),
+        step_actor=lambda view, active, calls: Finish("step done"),
+        planner=lambda view: PlanProposal(steps=(step,)),
+        step_reviewer=lambda view, active, action: None,
+    )
+    strategy.propose(_view())
+
+    assert isinstance(
+        strategy.propose(_view(steps=(step,), active=step)), ReleaseStep
+    )
+    assert strategy.drain_notices()[0]["decision"] == "step_review_declined"
+
+
+# ── reflect phase ──────────────────────────────────────────────────────
+
+
+def test_reflection_runs_one_round_by_default() -> None:
+    strategy = LoopStrategy(
+        LoopProfile(reflect_rounds=1, reflect_calls=1),
+        actor=_ActThenFinish().propose,
+        reflector=lambda view, finish: CallTool(
+            ToolIntent(capability=Capability.EDIT)
+        ),
+    )
+
+    assert isinstance(strategy.propose(_view()), CallTool)  # act
+    assert isinstance(strategy.propose(_view()), CallTool)  # reviewed correction
+    assert isinstance(strategy.propose(_view()), Finish)
+    assert strategy.drain_notices()[0]["decision"] == "correction"
+
+
+def test_reflection_never_runs_without_prior_action() -> None:
+    calls: list[int] = []
+
+    def reflector(view: ModelView, finish: Finish):
+        calls.append(1)
+        return CallTool(ToolIntent(capability=Capability.EDIT))
+
+    strategy = LoopStrategy(
+        LoopProfile(reflect_rounds=2, reflect_calls=1),
+        actor=lambda view: Finish("nothing to do"),
+        reflector=reflector,
+    )
+
+    assert isinstance(strategy.propose(_view()), Finish)
+    assert calls == [], "没有行动就不该反思"
+
+
+def test_reflection_rounds_and_per_round_budget_are_bounded() -> None:
+    capabilities = [
+        Capability.EDIT,
+        Capability.VERIFY,
+        Capability.READ,
+        Capability.SHELL,
+        Capability.SEARCH,
+        Capability.VCS,
+    ]
+    used: list[int] = []
+
+    def reflector(view: ModelView, finish: Finish):
+        capability = capabilities[len(used)]
+        used.append(1)
+        return CallTool(ToolIntent(capability=capability))
+
+    strategy = LoopStrategy(
+        LoopProfile(reflect_rounds=2, reflect_calls=2),
+        actor=_ActThenFinish().propose,
+        reflector=reflector,
+    )
+
+    actions = [strategy.propose(_view()) for _ in range(10)]
+
+    assert len(used) == 4, "2 轮 × 每轮 2 次"
+    assert isinstance(actions[-1], Finish)
+    assert [item["round"] for item in strategy.drain_notices()] == [1, 1, 2, 2]
+
+
+def test_repeated_correction_stops_reflection() -> None:
+    strategy = LoopStrategy(
+        LoopProfile(reflect_rounds=5, reflect_calls=1),
+        actor=_ActThenFinish().propose,
+        reflector=lambda view, finish: CallTool(
+            ToolIntent(capability=Capability.EDIT)
+        ),
+    )
+
+    actions = [strategy.propose(_view()) for _ in range(6)]
+
+    assert [item["decision"] for item in strategy.drain_notices()] == [
+        "correction",
+        "repeated",
+    ]
+    assert isinstance(actions[-1], Finish)
+
+
+def test_declined_review_ends_all_remaining_rounds() -> None:
     reviews: list[int] = []
 
-    def reviewer(view: ModelView, step: StepContract, action):
-        reviews.append(step.id)
-        return CallTool(ToolIntent(capability=Capability.VERIFY))
+    def reflector(view: ModelView, finish: Finish):
+        reviews.append(1)
+        return None
 
-    strategy = PlanReact(
-        lambda view: _plan_with_expects(),
-        lambda view, step, calls: Finish("step done"),
-        step_reviewer=reviewer,
-        max_step_reviews=1,
+    strategy = LoopStrategy(
+        LoopProfile(reflect_rounds=3, reflect_calls=2),
+        actor=_ActThenFinish().propose,
+        reflector=reflector,
     )
-    strategy.propose(_two_step_view())
-    for _ in range(4):
-        strategy.propose(_two_step_view())
 
-    assert reviews == [1], "每个步骤的审查次数有界"
+    actions = [strategy.propose(_view()) for _ in range(5)]
+
+    assert len(reviews) == 1
+    assert isinstance(actions[-1], Finish)
+    assert strategy.drain_notices()[0]["decision"] == "declined"
 
 
-def test_step_review_declining_releases_immediately() -> None:
-    strategy = PlanReact(
-        lambda view: _plan_with_expects(),
-        lambda view, step, calls: Finish("step done"),
-        step_reviewer=lambda view, step, action: None,
+def test_reflection_sees_the_proposed_answer_and_claims() -> None:
+    captured: dict[str, object] = {}
+    claim = Claim(
+        id="c1",
+        kind=PropositionKind.FILE_CHANGED,
+        target="a.py",
+        source=ClaimSource.LLM,
     )
-    strategy.propose(_two_step_view())
 
-    action = strategy.propose(_two_step_view())
+    def reflector(view: ModelView, finish: Finish):
+        captured["answer"] = finish.answer
+        captured["claims"] = finish.claims
+        return None
 
-    assert isinstance(action, ReleaseStep)
-    assert strategy.drain_notices()[0]["decision"] == "step_review_declined"
+    actor = _ActThenFinishThenClaim(claim)
+    strategy = LoopStrategy(
+        LoopProfile(reflect_rounds=1, reflect_calls=1),
+        actor=actor.propose,
+        reflector=reflector,
+    )
+    strategy.propose(_view())
+    strategy.propose(_view())
+
+    assert captured["claims"] == (claim,)
+
+
+class _ActThenFinishThenClaim:
+    """One tool call, then a finish carrying a claim."""
+
+    def __init__(self, claim: Claim) -> None:
+        self.claim = claim
+        self._acted = False
+
+    def propose(self, view: ModelView):
+        if not self._acted:
+            self._acted = True
+            return CallTool(ToolIntent(capability=Capability.READ))
+        return Finish("done", claims=(self.claim,))
+
+
+# ── other strategies ───────────────────────────────────────────────────
+
+
+def test_no_tool_strategy_finishes_without_evidence() -> None:
+    claim = Claim(
+        id="c1",
+        kind=PropositionKind.FILE_CHANGED,
+        target="a.py",
+        source=ClaimSource.LLM,
+    )
+    strategy = NoToolStrategy("hello", claims=(claim,))
+
+    action = strategy.propose(_view())
+
+    assert isinstance(action, Finish)
+    assert action.claims == (claim,)
+
+
+def test_repair_first_only_acts_when_debt_is_open() -> None:
+    obligation = _obligation()
+    debt = Debt(obligation=obligation, reason="missing")
+    strategy = RepairFirst(
+        fallback=SimpleNamespace(propose=lambda view: Finish("fallback")),
+        repairer=lambda view, debts: CallTool(ToolIntent(capability=Capability.EDIT)),
+    )
+
+    assert isinstance(strategy.propose(_view()), Finish)
+    assert isinstance(strategy.propose(_view(debt=(debt,))), CallTool)
+
+
+def test_notices_are_drained_once() -> None:
+    strategy = LoopStrategy(
+        LoopProfile(reflect_rounds=1, reflect_calls=1),
+        actor=_ActThenFinish().propose,
+        reflector=lambda view, finish: None,
+    )
+    strategy.propose(_view())
+    strategy.propose(_view())
+
+    assert len(strategy.drain_notices()) == 1
+    assert strategy.drain_notices() == ()
+
+
+def test_ask_user_inside_a_step_is_preserved() -> None:
+    step = _plan_step()
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True),
+        actor=lambda view: Finish("done"),
+        step_actor=lambda view, active, calls: AskUser("which file?"),
+        planner=lambda view: PlanProposal(steps=(step,)),
+    )
+    strategy.propose(_view())
+
+    assert isinstance(strategy.propose(_view(steps=(step,), active=step)), AskUser)

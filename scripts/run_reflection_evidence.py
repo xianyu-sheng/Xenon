@@ -1,6 +1,6 @@
 """Run one real-model reflection turn and record the ledger as evidence.
 
-Not a test: it drives the real ActFirst + ReflectFirst strategy against a real
+Not a test: it drives the real react + reflect loop against a real
 provider so the reflection slice has a reproducible artifact.
 """
 
@@ -15,9 +15,10 @@ from pathlib import Path
 
 import yaml
 
-from xenon.harness.llm import ModelConfig, build_llm_reflection_strategy
+from xenon.harness.llm import ModelConfig, build_llm_loop_strategy
 from xenon.harness.runner import result_json, run_task
 from xenon.kernel.policies import PermissionMode
+from xenon.kernel.strategies import LoopProfile
 from xenon.repl.provider_registry import get_provider
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,7 +59,9 @@ def main() -> int:
         print(f"missing workspace: {WS}", file=sys.stderr)
         return 2
     config = _model_config()
-    strategy = build_llm_reflection_strategy(config)
+    strategy = build_llm_loop_strategy(
+        config, LoopProfile(reflect_rounds=1, reflect_calls=1)
+    )
     run = run_task(
         TASK,
         strategy=strategy,
