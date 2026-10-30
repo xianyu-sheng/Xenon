@@ -163,10 +163,9 @@ class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         self.streaming = streaming
         self.optimize_prompts = optimize_prompts
         self.verbose = verbose
-        # #202 stage 1: kernel is the default entry for tool turns.  The
-        # legacy escape hatch is frozen for one release only.
-        configured = os.environ.get("XENON_RUNTIME", "").strip().lower()
-        self._runtime_mode = "legacy" if configured == "legacy" else "kernel"
+        # Tool turns always run on the kernel loop; there is no second runtime
+        # and no escape hatch to the legacy engines (#202).
+        self._runtime_mode = "kernel"
         self._last_kernel_ledger: Path | None = None
         self._last_kernel_task_id: str = ""
         # Approval fact restored from a session pointer; the resolver still

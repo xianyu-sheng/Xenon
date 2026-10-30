@@ -117,20 +117,16 @@ def test_direct_captures_provider_logs_away_from_spinner(monkeypatch):
     assert rendered == ["clean answer"]
     assert "HTTP Request" in repl._captured_log
     assert repl._last_thinking_panel is None
-    assert repl._log_capture_active is False
+    assert getattr(repl, "_log_capture_active", False) is False
 
 
 def test_interrupted_engine_restores_all_logging_state(monkeypatch):
-    from xenon.engine import react_engine as react_module
+    def interrupting_kernel(owner, **kwargs):
+        raise KeyboardInterrupt
 
-    class InterruptingEngine:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def run(self, *args, **kwargs):
-            raise KeyboardInterrupt
-
-    monkeypatch.setattr(react_module, "ReActEngine", InterruptingEngine)
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.run_kernel_turn", interrupting_kernel
+    )
     repl = _repl()
     root = logging.getLogger()
     child = logging.getLogger("xenon.test_interrupt_cleanup")
@@ -144,7 +140,7 @@ def test_interrupted_engine_restores_all_logging_state(monkeypatch):
     assert list(root.handlers) == original_root_handlers
     assert list(child.handlers) == original_child_handlers
     assert child.propagate is original_child_propagate
-    assert repl._log_capture_active is False
+    assert getattr(repl, "_log_capture_active", False) is False
 
 
 def test_log_capture_records_propagated_message_once():

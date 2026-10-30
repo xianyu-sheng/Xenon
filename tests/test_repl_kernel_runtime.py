@@ -318,7 +318,8 @@ def test_routing_and_permission_mapping() -> None:
             recipe=None,
             mode_name=legacy_mode,
         ), f"{legacy_mode} 没有 kernel parity，不能静默改跑 ActFirst"
-    assert not should_route_to_kernel(
+    # A skill turn is a prompt variant, not another execution model.
+    assert should_route_to_kernel(
         runtime_mode="kernel",
         requires_tools=True,
         skill_name="skill",
@@ -326,7 +327,9 @@ def test_routing_and_permission_mapping() -> None:
         pending=None,
         recipe=None,
     )
-    assert not should_route_to_kernel(
+    # An external query is a task shape, not another runtime: with the engines
+    # gone it runs on the kernel whether or not MCP is available.
+    assert should_route_to_kernel(
         runtime_mode="kernel",
         requires_tools=True,
         skill_name=None,
@@ -576,17 +579,6 @@ def test_run_kernel_turn_records_raw_user_objective(tmp_path: Path) -> None:
     )
     assert started.payload["objective"] == "## transformed prompt ##"
     assert started.payload["user_objective"] == "add a function and test it"
-
-
-def test_kernel_runtime_requested_reads_env(monkeypatch) -> None:
-    import xenon.repl.runtime_adapter as adapter
-
-    monkeypatch.delenv("XENON_RUNTIME", raising=False)
-    assert adapter.kernel_runtime_requested()
-    monkeypatch.setenv("XENON_RUNTIME", "KERNEL")
-    assert adapter.kernel_runtime_requested()
-    monkeypatch.setenv("XENON_RUNTIME", "legacy")
-    assert not adapter.kernel_runtime_requested()
 
 
 def test_model_config_errors_and_defaults() -> None:

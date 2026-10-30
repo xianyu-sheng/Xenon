@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from xenon.engine.context import AgentContext
 from xenon.engine.react_engine import ReActEngine
 from xenon.nodes.tool_executor import ToolExecutor
@@ -108,26 +106,18 @@ def test_estimator_uses_provided_intent(monkeypatch) -> None:
     assert detected == ["任意文本"]  # 未提供时保持旧行为
 
 
-def test_select_turn_mode_forwards_contract_intent(monkeypatch) -> None:
+def test_turn_flow_does_not_auto_select_engines(monkeypatch) -> None:
+    """#290: no paradigm auto-switching; the turn contract still classifies."""
+
+    from xenon.repl import turn_flow
+
     repl = _make_repl()
-    captured: dict[str, object] = {}
+    assert not hasattr(repl, "_select_turn_mode")
+    assert "ENGINE_REGISTRY" not in turn_flow.__dict__
 
-    def fake_estimate(
-        user_input, context_messages=None, *, intent=None, requires_tools=None
-    ):
-        captured["intent"] = intent
-        captured["requires_tools"] = requires_tools
-        return SimpleNamespace(recommended_engine="direct", engine_confidence=0.0)
-
-    monkeypatch.setattr(repl.auto_router.estimator, "estimate", fake_estimate)
     policy = classify_execution_policy("读取 src/main.py")
 
-    repl._select_turn_mode(
-        "读取 src/main.py", policy, "debug", requires_tools=True
-    )
-
-    assert captured["intent"] == "debug"
-    assert captured["requires_tools"] is True
+    assert policy.requires_tools is True
 
 
 def test_classifier_cache_prevents_duplicate_calls(monkeypatch) -> None:

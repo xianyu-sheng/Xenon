@@ -252,6 +252,15 @@ plan decision is recorded as `plan_reviewed`
 (`accepted` / `amended` / `rejected` + obligation ids), and step decisions stay
 in `step_explored`.
 
+### One runtime
+
+`turn_flow` has no engine table and no paradigm auto-switching. A tool or skill
+turn runs on the kernel loop; a plain chat turn uses the direct branch; anything
+that needs tools but cannot reach the loop fails closed with an explicit message
+instead of silently running a different paradigm. `XENON_RUNTIME` no longer
+exists, and direct-chat escalation (the model asked for a tool, or claimed work it
+did not do) enters the same loop with the escalated execution level.
+
 ### One loop, three phases
 
 The kernel has exactly one strategy: `LoopStrategy`. `LoopProfile` selects which

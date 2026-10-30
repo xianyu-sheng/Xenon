@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import io
 
 import pytest
@@ -275,62 +274,30 @@ def test_dynamic_tools_are_classified_as_sensitive(monkeypatch):
     assert called == []
 
 
-@pytest.mark.parametrize(
-    ("module_name", "class_name", "runner_name"),
-    [
-        ("xenon.engine.react_engine", "ReActEngine", "_run_react_engine"),
-        (
-            "xenon.engine.plan_execute_engine",
-            "PlanExecuteEngine",
-            "_run_plan_execute_engine",
-        ),
-        (
-            "xenon.engine.reflection_engine",
-            "ReflectionEngine",
-            "_run_reflection_engine",
-        ),
-        (
-            "xenon.engine.combined_engines",
-            "PlanReactEngine",
-            "_run_plan_react_engine",
-        ),
-        (
-            "xenon.engine.combined_engines",
-            "PlanReflectionEngine",
-            "_run_plan_reflection_engine",
-        ),
-        (
-            "xenon.engine.combined_engines",
-            "ReactReflectionEngine",
-            "_run_react_reflection_engine",
-        ),
-    ],
-)
-def test_every_repl_engine_receives_the_live_permission_gate(
-    monkeypatch, module_name, class_name, runner_name
-):
+def test_escalation_runs_on_the_kernel_with_the_live_level(monkeypatch):
+    """Escalation is a tool turn: it runs on the loop with the live level."""
+
+    from xenon.repl.execution_policy import ExecutionLevel
     from xenon.repl.model_registry import ModelRegistry
     from xenon.repl.repl import REPL
-
-    captured = {}
-
-    class FakeEngine:
-        def __init__(self, *args, **kwargs):
-            captured.update(kwargs)
-
-        def run(self, *args, **kwargs):
-            return "ok"
-
-    module = importlib.import_module(module_name)
-    monkeypatch.setattr(module, class_name, FakeEngine)
 
     registry = ModelRegistry()
     registry.add_model("openai/gpt-4o", "gpt4")
     repl = REPL(registry=registry, streaming=False)
-    monkeypatch.setattr(repl, "_start_log_capture", lambda: None)
-    monkeypatch.setattr(repl, "_stop_log_capture", lambda: "")
-    monkeypatch.setattr(repl, "_render_engine_result", lambda *args, **kwargs: None)
+    captured: dict = {}
 
-    getattr(repl, runner_name)("test", ["openai/gpt-4o"])
+    def fake_kernel(owner, **kwargs):
+        captured.update(kwargs)
 
-    assert captured["permission_gate"] is repl._permission_gate
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.run_kernel_turn", fake_kernel
+    )
+    repl.agent_context.update({"_execution_level": int(ExecutionLevel.WRITE)})
+
+    repl._run_react_engine("帮我创建 hello.py", ["openai/gpt-4o"])
+
+    policy = captured["execution_policy"]
+    assert policy.level is ExecutionLevel.WRITE
+    assert captured["objective"].startswith("帮我创建 hello.py") or (
+        "帮我创建 hello.py" in captured["objective"]
+    )

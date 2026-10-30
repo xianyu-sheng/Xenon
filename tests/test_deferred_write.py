@@ -263,20 +263,21 @@ def test_repl_confirmation_consumes_the_gate_and_runs_tools(monkeypatch):
     repl._pending_action = _approval_pending()
     calls: dict = {}
 
-    def fake_engine(spec, user_input, model_ids):
-        calls["spec"] = spec
-        calls["contract"] = repl.agent_context.get("_turn_contract")
-        repl.ctx_mgr.add_assistant_message("已写入。")
+    def fake_kernel(owner, **kwargs):
+        calls["kernel"] = kwargs
+        calls["contract"] = owner.agent_context.get("_turn_contract")
+        owner.ctx_mgr.add_assistant_message("已写入。")
 
-    monkeypatch.setattr(repl, "_run_engine", fake_engine)
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.run_kernel_turn", fake_kernel
+    )
     monkeypatch.setattr(
         repl, "_run_direct", lambda *a, **k: calls.setdefault("direct", True)
     )
 
     repl._handle_chat("请写入")
 
-    assert calls.get("spec") is not None
-    assert calls["spec"].name == "plan-execute"
+    assert "kernel" in calls, "确认后的工具轮次必须走 kernel"
     assert calls["contract"].level is ExecutionLevel.WRITE
     assert "direct" not in calls
     # 动作完成且模型未再提出新承诺 → Gate 消费后清除

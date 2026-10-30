@@ -23,6 +23,8 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- **移除 turn_flow 的引擎分发**：删除 `ENGINE_REGISTRY` 查表与自动范式切换（`_select_turn_mode`）。工具/技能轮次统一走 kernel loop；无法进入 kernel 时显式失败，不再换范式。
+- 删除 `XENON_RUNTIME=legacy` 逃生口：kernel 是唯一运行时。直接对话中的工具升级（模型请求工具、声称已执行）也改走 kernel loop。
 - **策略层收缩为单一 loop**：删除 `ActFirst` / `PlanFirst` / `PlanReact` / `ReflectFirst` 四个类，改成一个 `LoopStrategy` + `LoopProfile`。plan / react / reflect 现在是同一 loop 的三个阶段，模式只声明阶段开关与预算，不再各自对应一个实现。
 - LLM 侧的五个 `build_llm_*_strategy` 收成一个 `build_llm_loop_strategy(config, profile)`；适配器按模式取 profile，未知模式 fail closed。
 - `/mode plan-reflection` 迁移到 kernel：`PlanReact` 增加两个审查钩子——执行前的计划覆盖审查（可加步骤，不能删义务，删义务直接拒绝）、以及步骤释放前审查（在出错的步骤内补一次修正）。审查结论写入 `plan_reviewed` / `step_explored`。
