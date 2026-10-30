@@ -300,8 +300,16 @@ def test_routing_and_permission_mapping() -> None:
         recipe=None,
         mode_name="plan-react",
     )
+    assert should_route_to_kernel(
+        runtime_mode="kernel",
+        requires_tools=True,
+        skill_name=None,
+        plan_mode=False,
+        pending=None,
+        recipe=None,
+        mode_name="reflection",
+    )
     for legacy_mode in (
-        "reflection",
         "plan-react",
         "plan-reflection",
         "react-reflection",
@@ -480,12 +488,29 @@ def test_runtime_adapter_maps_catalog_strategy_and_rejects_legacy(tmp_path: Path
     assert plan.strategy_mode == "plan"
 
     registry.set_mode("reflection")
-    legacy = RuntimeAdapter.from_repl(
+    reflect = RuntimeAdapter.from_repl(
         repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
     )
-    assert legacy.strategy_mode == "legacy"
+    assert reflect.strategy_mode == "reflect"
+
+    # A legacy-only mode still fails closed instead of running ActFirst.
+    legacy = RuntimeAdapter(
+        workspace=tmp_path,
+        model_config=ModelConfig(model_id="test/fake"),
+        permission=PermissionMode.AUTO_EDIT,
+        strategy_mode="legacy",
+    )
     with pytest.raises(KernelAdapterError, match="legacy"):
         legacy.run("read README.md", task_id="legacy-mode")
+
+    unknown = RuntimeAdapter(
+        workspace=tmp_path,
+        model_config=ModelConfig(model_id="test/fake"),
+        permission=PermissionMode.AUTO_EDIT,
+        strategy_mode="no-such-strategy",
+    )
+    with pytest.raises(KernelAdapterError, match="unknown kernel strategy"):
+        unknown.run("read README.md", task_id="unknown-mode")
 
 
 def test_runtime_adapter_runs_real_workspace(tmp_path: Path) -> None:

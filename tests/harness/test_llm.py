@@ -15,9 +15,11 @@ from xenon.harness.llm import (
     ActionParseError,
     LLMActionProposer,
     LLMPlanFinisher,
+    LLMReflector,
     ModelConfig,
     ModelConfigError,
     build_llm_plan_strategy,
+    build_llm_reflection_strategy,
     build_llm_strategy,
     build_messages,
     build_plan_messages,
@@ -30,6 +32,7 @@ from xenon.kernel.contracts import (
     Abort,
     AskUser,
     CallTool,
+    Capability,
     Finish,
     ModelView,
     TaskMode,
@@ -638,3 +641,88 @@ def test_build_plan_messages_uses_real_newlines() -> None:
     assert "\n" in user
     assert "\\n" not in system
     assert "\\n" not in user
+
+
+def _reflect_view() -> ModelView:
+    spec = TaskSpec(task_id="t", objective="fix it", workspace="/workspace")
+    return ModelView(
+        task=spec,
+        system="RUNTIME SYSTEM",
+        tools=(),
+        working_set=(),
+        debt=(),
+        budget=spec.budget,
+        input_seq=0,
+        hash="h",
+    )
+
+
+def test_reflector_returns_one_corrective_call_tool() -> None:
+    client = FakeClient(
+        [
+            json.dumps(
+                {
+                    "reflect": {
+                        "action": "call_tool",
+                        "capability": "edit",
+                        "params": {"files": [{"path": "a.py", "content": "x"}]},
+                    }
+                }
+            )
+        ]
+    )
+
+    action = LLMReflector(ModelConfig(model_id="test/fake"), client=client)(
+        _reflect_view()
+    )
+
+    assert isinstance(action, CallTool)
+    assert action.intent.capability is Capability.EDIT
+
+
+def test_reflector_declining_returns_none() -> None:
+    client = FakeClient([json.dumps({"reflect": None})])
+
+    assert (
+        LLMReflector(ModelConfig(model_id="test/fake"), client=client)(
+            _reflect_view()
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        json.dumps({"reflect": {"action": "finish", "answer": "all good"}}),
+        json.dumps({"reflect": {"action": "ask_user", "question": "?"}}),
+        json.dumps({"reflect": "done"}),
+        "not json at all",
+    ],
+)
+def test_reflector_never_claims_completion(payload: str) -> None:
+    client = FakeClient([payload])
+
+    action = LLMReflector(ModelConfig(model_id="test/fake"), client=client)(
+        _reflect_view()
+    )
+
+    assert action is None
+
+
+def test_reflect_messages_describe_the_receipts() -> None:
+    messages = llm.build_reflect_messages(_reflect_view())
+
+    assert "RUNTIME SYSTEM" in messages[0]["content"]
+    assert "Reflection review" in messages[0]["content"]
+    assert "cannot declare the task done" in messages[0]["content"]
+    assert "fix it" in messages[1]["content"]
+
+
+def test_reflection_strategy_wraps_the_act_strategy() -> None:
+    strategy = build_llm_reflection_strategy(
+        ModelConfig(model_id="test/fake"), client=FakeClient([])
+    )
+
+    assert isinstance(strategy, llm.ReflectFirst)
+    assert strategy.max_reflections == 1

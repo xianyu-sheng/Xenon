@@ -18,6 +18,7 @@ from xenon.catalog.specs import mcp_tool_specs, select_mcp_tool_specs
 from xenon.harness.llm import (
     ModelConfig,
     build_llm_plan_strategy,
+    build_llm_reflection_strategy,
     build_llm_strategy,
 )
 from xenon.harness.runner import HarnessRun, result_json, resume_task, run_task
@@ -32,6 +33,10 @@ from xenon.kernel.contracts import (
 from xenon.kernel.policies import PermissionMode
 from xenon.modes import MODE_CATALOG, kernel_strategy_for
 from xenon.repl.execution_policy import ExecutionLevel
+
+# Explicit strategy names.  Anything else fails closed in ``run``.
+_PLAN_STRATEGY_MODES = frozenset({"plan", "plan-execute"})
+_ACT_STRATEGY_MODES = frozenset({"act", "react", "direct"})
 
 KERNEL_RUNTIME_ENV = "XENON_RUNTIME"
 MCP_TOOL_LIMIT_ENV = "XENON_MCP_TOOL_LIMIT"
@@ -338,16 +343,23 @@ class RuntimeAdapter:
             raise KernelAdapterError(
                 "selected mode has no kernel strategy; it must stay on the legacy path"
             )
-        if self.plan_only:
+        if self.plan_only or self.strategy_mode in _PLAN_STRATEGY_MODES:
             strategy = build_llm_plan_strategy(
                 self.model_config, client=self.client
             )
-        elif self.strategy_mode in {"plan", "plan-execute"}:
-            strategy = build_llm_plan_strategy(
+        elif self.strategy_mode in _ACT_STRATEGY_MODES:
+            strategy = build_llm_strategy(self.model_config, client=self.client)
+        elif self.strategy_mode == "reflect":
+            strategy = build_llm_reflection_strategy(
                 self.model_config, client=self.client
             )
         else:
-            strategy = build_llm_strategy(self.model_config, client=self.client)
+            # Unknown strategy names must not silently become ActFirst: a new
+            # mode has to declare its parity explicitly.  "legacy" is covered
+            # by the guard above.
+            raise KernelAdapterError(
+                f"unknown kernel strategy: {self.strategy_mode}"
+            )
         constraints = [
             "runtime:kernel",
             f"model:{self.model_config.model_id}",

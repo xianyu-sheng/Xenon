@@ -144,6 +144,19 @@ class ScriptedStrategy:
         return self.actions.pop(0)
 
 
+def _repeating(*actions: Any) -> Any:
+    """Scripted double that keeps answering after the script runs out."""
+
+    remaining = list(actions)
+
+    def propose(view: Any) -> Any:
+        if remaining:
+            return remaining.pop(0)
+        return Finish("done")
+
+    return propose
+
+
 class VetoPolicy:
     def check(self, view: Any, action: Any) -> PolicyDecision:
         return PolicyDecision(PolicyDecisionKind.VETO, "not allowed")
@@ -214,6 +227,56 @@ def test_lying_strategy_cannot_deliver() -> None:
     assert result.accepted is False
     assert result.debt, "a claim without a fact must become debt"
     assert not ledger.read(EventKind.TOOL_RECEIPT), "no tool should have run"
+
+
+def test_reflection_cannot_launder_an_unverified_claim() -> None:
+    """A reflector's "looks done" is a proposal, never a verdict."""
+
+    from xenon.kernel.strategies import ActFirst, ReflectFirst
+
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    lie = Claim(
+        id="claim-lie",
+        kind=PropositionKind.FILE_CHANGED,
+        target="calc/add.py",
+        source=ClaimSource.LLM,
+    )
+    strategy = ReflectFirst(
+        ActFirst(
+            _repeating(
+                CallTool(ToolIntent(capability=Capability.READ)),
+                Finish("I fixed it", claims=(lie,)),
+            )
+        ),
+        lambda view: Finish("I reviewed it; the claim is fine."),
+    )
+
+    result = runtime.run(_calc_spec(), strategy)
+
+    assert result.accepted is False
+    assert result.debt, "反思不能关闭未绑定的义务"
+    assert result.phase is not TaskPhase.DELIVERED
+
+
+def test_reflection_can_add_a_corrective_tool_call() -> None:
+    from xenon.kernel.strategies import ActFirst, ReflectFirst
+
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    strategy = ReflectFirst(
+        ActFirst(
+            _repeating(
+                CallTool(ToolIntent(capability=Capability.READ)),
+            )
+        ),
+        lambda view: CallTool(ToolIntent(capability=Capability.EDIT)),
+    )
+
+    result = runtime.run(_calc_spec(), strategy)
+
+    assert len(ledger.read(EventKind.TOOL_RECEIPT)) == 2
+    assert result.accepted is True
 
 
 def test_replay_is_deterministic() -> None:
