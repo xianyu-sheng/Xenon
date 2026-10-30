@@ -11,13 +11,16 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from xenon.kernel.contracts import (
+    Abort,
     Action,
+    AskUser,
     CallTool,
     Claim,
     Debt,
     Finish,
     ModelView,
     PlanProposal,
+    ReleaseStep,
     SubmitPlan,
     Think,
 )
@@ -26,6 +29,7 @@ PlanProvider = Callable[[ModelView], PlanProposal]
 ActionProvider = Callable[[ModelView], Action]
 RepairProvider = Callable[[ModelView, tuple[Debt, ...]], Action]
 ReflectionProvider = Callable[[ModelView], Action | None]
+StepActor = Callable[[ModelView, Any, int], Action]
 
 
 @dataclass(slots=True)
@@ -112,6 +116,7 @@ class ReflectFirst:
             self._acted = True
             self._notices.append(
                 {
+                    "kind": "reflection",
                     "decision": "correction",
                     "capability": proposal.intent.capability.value,
                     "round": self._reflections,
@@ -120,6 +125,7 @@ class ReflectFirst:
             return proposal
         self._notices.append(
             {
+                "kind": "reflection",
                 "decision": "declined",
                 "capability": (
                     proposal.intent.capability.value
@@ -139,6 +145,78 @@ class ReflectFirst:
         observable without giving it any authority.
         """
 
+        notices = tuple(self._notices)
+        self._notices.clear()
+        return notices
+
+
+@dataclass(slots=True)
+class PlanReact:
+    """Plan globally, then run a bounded sub-loop per step.
+
+    Unlike ``PlanFirst``, the actor sees one step at a time and gets a small
+    per-step call budget.  A step is closed by the runtime's deterministic
+    verification; this strategy only decides when to stop exploring it.  It
+    never executes a step ahead of the active one and never declares success.
+    """
+
+    planner: PlanProvider
+    actor: StepActor
+    max_step_calls: int = 6
+    finish_text: str = "completed"
+    resumed: bool = False
+    _submitted: bool = False
+    _step_id: int | None = None
+    _calls: int = 0
+    _notices: list[dict[str, Any]] = field(default_factory=list)
+
+    def propose(self, view: ModelView) -> Action:
+        if not self._submitted:
+            self._submitted = True
+            if not self.resumed:
+                return SubmitPlan(self.planner(view))
+        active = view.active_step
+        if active is None:
+            return Finish(self.finish_text)
+        if self._step_id != active.id:
+            self._step_id = active.id
+            self._calls = 0
+        if self._calls >= self.max_step_calls:
+            # Bounded exploration: stop spending calls on this step.  Releasing
+            # closes it deterministically, so an unmet expectation becomes debt
+            # instead of a delivery.
+            self._notices.append(
+                {
+                    "kind": "step",
+                    "decision": "budget_exhausted",
+                    "step": active.id,
+                    "calls": self._calls,
+                }
+            )
+            return ReleaseStep(f"step {active.id}: step budget exhausted")
+        # Every iteration costs budget, including notes and invalid proposals,
+        # so a confused actor cannot spin forever.
+        self._calls += 1
+        action = self.actor(view, active, self._calls)
+        if isinstance(action, CallTool):
+            return action
+        if isinstance(action, (Think, AskUser, Abort)):
+            # Those are legitimate non-work proposals and stay as-is; the step
+            # budget still bounds how long they can repeat.
+            return action
+        # Anything else means "this step is done from the actor's view".  The
+        # runtime still owns closing and verifying it.
+        self._notices.append(
+            {
+                "kind": "step",
+                "decision": "step_complete",
+                "step": active.id,
+                "calls": self._calls,
+            }
+        )
+        return ReleaseStep(f"step {active.id}: sub-loop complete")
+
+    def drain_notices(self) -> tuple[dict[str, Any], ...]:
         notices = tuple(self._notices)
         self._notices.clear()
         return notices
@@ -172,6 +250,7 @@ __all__ = [
     "ActFirst",
     "NoToolStrategy",
     "PlanFirst",
+    "PlanReact",
     "ReflectFirst",
     "RepairFirst",
 ]

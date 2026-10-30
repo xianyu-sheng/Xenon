@@ -39,7 +39,7 @@ from xenon.kernel.contracts import (
 )
 from xenon.kernel.controller import VerificationController
 from xenon.kernel.runtime import LoopRuntime
-from xenon.kernel.strategies import PlanFirst
+from xenon.kernel.strategies import PlanFirst, PlanReact
 from xenon.ledger.events import EventKind, EventSource, canonical_json
 from xenon.ledger.store import Ledger
 
@@ -320,6 +320,122 @@ def test_failed_step_can_be_repaired_and_closes_debt() -> None:
     assert result.accepted is True
     assert not result.debt
     assert any(event.kind is EventKind.DEBT_CLOSED for event in ledger.read())
+
+
+def _two_step_plan() -> PlanProposal:
+    return PlanProposal(
+        steps=(
+            StepContract(
+                id=1,
+                kind=StepKind.INSPECT,
+                intent=ToolIntent(capability=Capability.READ),
+            ),
+            StepContract(
+                id=2,
+                kind=StepKind.EDIT,
+                intent=ToolIntent(capability=Capability.EDIT),
+                depends_on=(1,),
+            ),
+        )
+    )
+
+
+def test_plan_react_records_per_step_work_and_closes_in_order() -> None:
+    ledger = Ledger.in_memory("task-1")
+    seen: list[int] = []
+
+    def actor(view, step, calls):
+        seen.append(step.id)
+        return CallTool(step.intent or ToolIntent(capability=Capability.READ))
+
+    result = _runtime(ledger).run(
+        _calc_spec(), PlanReact(lambda view: _two_step_plan(), actor)
+    )
+
+    assert result.accepted is True
+    assert seen == [1, 2], "每次只推进一个激活步骤"
+    started = [
+        event.payload["step_id"]
+        for event in ledger.read(EventKind.STEP_STARTED)
+    ]
+    assert started == [1, 2]
+    assert [event.kind for event in ledger.read(EventKind.STEP_CLOSED)] == [
+        EventKind.STEP_CLOSED,
+        EventKind.STEP_CLOSED,
+    ]
+    receipts = ledger.read(EventKind.TOOL_RECEIPT)
+    assert len(receipts) == 2, "每一步都留下回执"
+
+
+def test_plan_react_step_budget_is_visible_in_the_ledger() -> None:
+    ledger = Ledger.in_memory("task-1")
+
+    result = _runtime(ledger).run(
+        _calc_spec(),
+        PlanReact(
+            lambda view: PlanProposal(
+                steps=(
+                    StepContract(
+                        id=1,
+                        kind=StepKind.INSPECT,
+                        intent=ToolIntent(capability=Capability.READ),
+                        expects=(
+                            Obligation(
+                                id="impossible",
+                                kind=PropositionKind.FILE_CHANGED,
+                                target="never.py",
+                                source=ObligationSource.PLAN,
+                            ),
+                        ),
+                    ),
+                )
+            ),
+            lambda view, step, calls: CallTool(
+                ToolIntent(capability=Capability.READ)
+            ),
+            max_step_calls=2,
+        ),
+    )
+
+    explored = ledger.read(EventKind.STEP_EXPLORED)
+    assert explored, "步内探索必须有账本记录"
+    assert explored[0].payload["decision"] == "budget_exhausted"
+    assert explored[0].payload["calls"] == 2
+    assert result.accepted is False, "步内预算耗尽不能变成交付"
+    assert result.debt
+
+
+def test_plan_react_never_closes_a_step_without_its_expectation() -> None:
+    ledger = Ledger.in_memory("task-1")
+
+    result = _runtime(ledger).run(
+        _calc_spec(),
+        PlanReact(
+            lambda view: PlanProposal(
+                steps=(
+                    StepContract(
+                        id=1,
+                        kind=StepKind.EDIT,
+                        intent=ToolIntent(capability=Capability.READ),
+                        expects=(
+                            Obligation(
+                                id="needs-edit",
+                                kind=PropositionKind.FILE_CHANGED,
+                                target="calc/add.py",
+                                source=ObligationSource.PLAN,
+                            ),
+                        ),
+                    ),
+                )
+            ),
+            lambda view, step, calls: Finish("step looks done"),
+        ),
+    )
+
+    assert result.accepted is False
+    assert result.debt
+
+
 
 
 def test_invalid_plan_is_rejected_without_crashing() -> None:

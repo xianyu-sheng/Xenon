@@ -235,6 +235,20 @@ both commands fail closed and do not fall back to the legacy goal projection.
 `/mode` is intentionally not part of this view: it selects a model thinking
 mode, not task state, so it stays backed by `ModelRegistry`.
 
+### PlanReact and step release
+
+`/mode plan-react` submits one plan, then runs a bounded sub-loop on the active
+step. Only the active step is ever targeted, and every iteration costs step
+budget, so a confused actor cannot spin.
+
+When a step's sub-loop is done — or its budget is spent — the strategy emits
+`ReleaseStep`. That action is a strategy signal only: `parse_action` cannot
+produce it, so no model can release a step. The runtime closes the step
+deterministically; unmet expectations become debt, exhaust the bounded repair
+budget and end as `BLOCKED`, never as a delivery. Each step keeps its own
+receipts, verdicts and obligation bindings, and `step_explored` records the
+budget decisions in the ledger.
+
 ### Reflection is a proposal source
 
 `/mode reflection` runs on the kernel as `ReflectFirst`: ActFirst executes, then

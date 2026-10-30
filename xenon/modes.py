@@ -14,6 +14,8 @@ already migrated:
   (``plan-execute``);
 * ``reflect`` — tool turns use ActFirst plus one bounded reflection pass
   (``reflection``);
+* ``plan-react`` — tool turns use PlanReact: one plan, then a bounded
+  sub-loop per step;
 * ``None`` — no kernel parity yet; the mode stays on the frozen legacy path and
   must not silently fall through to ActFirst.
 
@@ -83,6 +85,9 @@ MODE_CATALOG: dict[str, ModeSpec] = {
     "plan-react": ModeSpec(
         name="plan-react",
         description="全局规划 + 每步 ReAct 执行，适合复杂多步骤任务",
+        # PlanReact keeps one step active at a time and bounds the calls spent
+        # on it; the runtime still closes and verifies every step.
+        kernel_strategy="plan-react",
     ),
     "plan-reflection": ModeSpec(
         name="plan-reflection",

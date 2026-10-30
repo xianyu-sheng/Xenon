@@ -117,6 +117,7 @@ def test_action_kinds_are_stable() -> None:
         "ask_user",
         "finish",
         "abort",
+        "release_step",
     }
 
 

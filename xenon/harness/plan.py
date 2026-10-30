@@ -44,9 +44,38 @@ def _list(value: Any, where: str) -> list[Any]:
     return value
 
 
+_CAPABILITY_ALIASES = {
+    "bash": Capability.SHELL,
+    "sh": Capability.SHELL,
+    "terminal": Capability.SHELL,
+    "run": Capability.SHELL,
+    "exec": Capability.SHELL,
+    "grep": Capability.SEARCH,
+    "glob": Capability.SEARCH,
+    "find": Capability.SEARCH,
+    "cat": Capability.READ,
+    "view": Capability.READ,
+    "open": Capability.READ,
+    "write": Capability.EDIT,
+    "create": Capability.EDIT,
+    "patch": Capability.EDIT,
+    "apply_patch": Capability.EDIT,
+    "test": Capability.VERIFY,
+    "pytest": Capability.VERIFY,
+    "git": Capability.VCS,
+    "commit": Capability.VCS,
+    "mcp": Capability.REMOTE,
+    "remote_tool": Capability.REMOTE,
+}
+
+
 def _capability(value: Any) -> Capability:
+    text = str(value).strip().lower()
+    alias = _CAPABILITY_ALIASES.get(text)
+    if alias is not None:
+        return alias
     try:
-        return Capability(str(value))
+        return Capability(text)
     except ValueError as exc:
         raise PlanError(f"unknown capability: {value!r}") from exc
 
