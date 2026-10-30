@@ -148,12 +148,44 @@ def required_execution_level(tool_name: str, params: dict[str, Any]) -> int:
     return 3
 
 
+def _normalized_path(value: str) -> str:
+    return value.replace("\\", "/").strip().lower().lstrip("./").rstrip("/")
+
+
+def _path_is_protected(target: str, protected: tuple[str, ...]) -> bool:
+    actual = _normalized_path(target)
+    if not actual:
+        return False
+    for raw in protected:
+        wanted = _normalized_path(raw)
+        if not wanted:
+            continue
+        if (
+            actual == wanted
+            or actual.endswith("/" + wanted)
+            or wanted.endswith("/" + actual)
+        ):
+            return True
+    return False
+
+
 def execution_policy_denial(
     tool_name: str,
     params: dict[str, Any],
     context: AgentContext,
 ) -> str | None:
     """Return a hard-denial reason when a tool exceeds this turn's policy."""
+
+    protected = tuple(context.get("_protected_write_paths") or ())
+    if protected and required_execution_level(tool_name, params) >= 2:
+        from xenon.nodes.approval_policy import write_targets_for
+
+        for target in write_targets_for(tool_name, params):
+            if _path_is_protected(target, protected):
+                return (
+                    f"用户明确要求不要修改 {target}；"
+                    "本轮该路径受保护，如需修改请重新给出明确指令。"
+                )
 
     authorized = context.get("_execution_level")
     if authorized is None:

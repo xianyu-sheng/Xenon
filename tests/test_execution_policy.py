@@ -16,6 +16,7 @@ from xenon.repl.execution_policy import (
     ExecutionLevel,
     bind_execution_boundary,
     classify_execution_policy,
+    extract_execution_signals,
     rebind_execution_boundary,
     strip_execution_boundary,
 )
@@ -246,6 +247,161 @@ def test_tool_boundary_is_enforced_below_the_router(
     reason = execution_policy_denial(tool_name, params, context)
 
     assert (reason is not None) is blocked
+
+
+def test_scoped_no_write_keeps_unrelated_writes():
+    signals = extract_execution_signals(
+        "创建 plan_out.txt，不要修改 plan_probe.txt"
+    )
+
+    assert signals.no_write is False
+    assert signals.no_write_targets == ("plan_probe.txt",)
+    assert signals.explicit_write is True
+
+
+def test_untargeted_no_write_stays_global():
+    signals = extract_execution_signals("不要写任何文件")
+
+    assert signals.no_write is True
+    assert signals.no_write_targets == ()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "不要修改任何文件，看看 src/main.py 的报错",
+        "不要写文件，把上面的结果写到 notes.md 里",
+    ],
+)
+def test_general_no_write_wins_over_nearby_paths(text):
+    signals = extract_execution_signals(text)
+
+    assert signals.no_write is True
+    assert signals.no_write_targets == ()
+
+
+def test_contract_keeps_write_when_negation_is_scoped():
+    from xenon.repl.turn_contract import build_turn_contract
+
+    contract = build_turn_contract("创建 plan_out.txt，不要修改 plan_probe.txt")
+
+    assert "write" in contract.operations
+    assert contract.protected_write_paths == ("plan_probe.txt",)
+    assert contract.signals.no_write is False
+
+
+def test_contract_stays_answer_only_for_global_no_write():
+    from xenon.repl.turn_contract import build_turn_contract
+
+    contract = build_turn_contract("不要写任何文件，也不要执行命令")
+
+    assert contract.level is ExecutionLevel.ANSWER_ONLY
+    assert contract.protected_write_paths == ()
+
+
+def test_scoped_negation_allows_other_writes_and_keeps_target_intact(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("XENON_EXTRA_ROOTS", str(tmp_path))
+    probe = tmp_path / "plan_probe.txt"
+    out = tmp_path / "plan_out.txt"
+    probe.write_text("ORIGINAL" + chr(10), encoding="utf-8")
+
+    from xenon.repl.turn_contract import build_turn_contract
+
+    contract = build_turn_contract(
+        "创建一个新文件 plan_out.txt，不要修改 plan_probe.txt，不要 push。"
+    )
+    context = AgentContext(
+        {
+            "_execution_level": int(ExecutionLevel.EXECUTE),
+            "_protected_write_paths": contract.protected_write_paths,
+        }
+    )
+    executor = ToolExecutor(retry_attempts=1)
+
+    blocked = executor.execute(
+        "write_file",
+        {"file_path": str(probe), "content": "HIJACK" + chr(10)},
+        context,
+        tools={"write_file": {}},
+    )
+    allowed = executor.execute(
+        "write_file",
+        {"file_path": str(out), "content": "TOKEN" + chr(10)},
+        context,
+        tools={"write_file": {}},
+    )
+
+    assert blocked.success is False
+    assert "受保护" in (blocked.error or "")
+    assert allowed.success is True
+    assert probe.read_text(encoding="utf-8") == "ORIGINAL" + chr(10)
+    assert out.read_text(encoding="utf-8") == "TOKEN" + chr(10)
+
+
+def test_tool_executor_blocks_protected_path_before_toolnode(monkeypatch):
+    executed: list[str] = []
+
+    def fake_execute(self, context):
+        executed.append(self.action_type)
+        return {"success": True, "content": "unexpected"}
+
+    monkeypatch.setattr("xenon.nodes.tool_executor.ToolNode.execute", fake_execute)
+    context = AgentContext(
+        {
+            "_execution_level": 3,
+            "_protected_write_paths": ("plan_probe.txt",),
+        }
+    )
+    result = ToolExecutor(retry_attempts=1).execute(
+        "write_file",
+        {"file_path": "plan_probe.txt", "content": "x"},
+        context,
+        tools={"write_file": {}},
+    )
+
+    assert result.success is False
+    assert executed == []
+    assert "受保护" in (result.error or "")
+
+
+def test_protected_path_denies_the_named_target_only():
+    context = AgentContext(
+        {
+            "_execution_level": 3,
+            "_protected_write_paths": ("plan_probe.txt",),
+        }
+    )
+
+    assert execution_policy_denial(
+        "write_file",
+        {"file_path": "plan_probe.txt", "content": "x"},
+        context,
+    )
+    assert (
+        execution_policy_denial(
+            "write_file",
+            {"file_path": "plan_out.txt", "content": "x"},
+            context,
+        )
+        is None
+    )
+
+
+def test_protected_path_denies_apply_patch_touching_the_target():
+    context = AgentContext(
+        {
+            "_execution_level": 3,
+            "_protected_write_paths": ("plan_probe.txt",),
+        }
+    )
+
+    assert execution_policy_denial(
+        "apply_patch",
+        {"files": [{"path": "plan_probe.txt", "content": "x"}]},
+        context,
+    )
 
 
 def test_tool_executor_blocks_write_before_toolnode(monkeypatch):

@@ -371,6 +371,10 @@ class TurnContract:
         return self.level >= ExecutionLevel.WRITE
 
     @property
+    def protected_write_paths(self) -> tuple[str, ...]:
+        return self.signals.no_write_targets
+
+    @property
     def allows_write(self) -> bool:
         return self.level >= ExecutionLevel.WRITE and not self.signals.no_write
 
@@ -404,6 +408,7 @@ class TurnContract:
             self.reason,
             explicit_no_write=self.signals.no_write,
             explicit_no_execute=self.signals.no_execute,
+            protected_write_paths=self.signals.no_write_targets,
         )
 
 

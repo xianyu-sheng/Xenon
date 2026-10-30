@@ -341,6 +341,9 @@ class TurnFlowMixin:
                 "_execution_level": int(execution_policy.level),
                 "_execution_reason": execution_policy.reason,
                 "_turn_contract": turn_contract_obj,
+                "_protected_write_paths": tuple(
+                    execution_policy.protected_write_paths
+                ),
                 # Preserve filter constraints for terse continuations such as
                 # "结果呢" that do not repeat the original query.
                 "_query_constraint_source": inherited_intent_source or "",
