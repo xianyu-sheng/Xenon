@@ -16,13 +16,17 @@ from pathlib import Path
 import yaml
 
 from xenon.harness.llm import ModelConfig, build_llm_reflection_strategy
-from xenon.repl.provider_registry import get_provider
-from xenon.harness.runner import run_task, result_json
+from xenon.harness.runner import result_json, run_task
 from xenon.kernel.policies import PermissionMode
+from xenon.repl.provider_registry import get_provider
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "docs" / "evidence" / "reflection-parity"
 WS = ROOT / "build" / "tmp-reflect" / "ws"
+TASK = (
+    "In calc.py add a subtract(a, b) function that returns a - b. "
+    "Then add a test for it in test_calc.py and run the tests."
+)
 
 
 def _model_config() -> ModelConfig:
@@ -56,10 +60,7 @@ def main() -> int:
     config = _model_config()
     strategy = build_llm_reflection_strategy(config)
     run = run_task(
-        (
-            "In calc.py add a subtract(a, b) function that returns a - b. "
-            "Then add a test for it in test_calc.py and run the tests."
-        ),
+        TASK,
         strategy=strategy,
         workspace=WS,
         ledger_dir=OUT / "ledger",

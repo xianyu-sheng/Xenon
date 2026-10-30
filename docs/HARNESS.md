@@ -244,6 +244,12 @@ parsed into an action of which only `CallTool` survives. It cannot finish a
 task, close a debt, or decide pass/fail — an unverified claim stays debt after
 reflection, and the controller still owns delivery.
 
+Every review is appended to the ledger as `reflection_proposed`
+(`decision=correction|declined`, plus the capability and round), so "the
+reflector ran" is an auditable fact rather than a claim. The strategy only hands
+the runtime a short notice list; the runtime appends the event, and the event can
+never satisfy an obligation or close a debt.
+
 `RuntimeAdapter` fail-closes on unknown strategy names instead of falling back to
 ActFirst, so a half-migrated mode cannot silently inherit another mode's
 semantics.

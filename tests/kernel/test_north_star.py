@@ -279,6 +279,53 @@ def test_reflection_can_add_a_corrective_tool_call() -> None:
     assert result.accepted is True
 
 
+def test_reflection_decision_is_auditable_but_powerless() -> None:
+    """The ledger records the review; it never records a shortcut."""
+
+    from xenon.kernel.strategies import ActFirst, ReflectFirst
+
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    strategy = ReflectFirst(
+        ActFirst(_repeating(CallTool(ToolIntent(capability=Capability.READ)))),
+        lambda view: Finish("I reviewed it; nothing else is needed."),
+    )
+
+    result = runtime.run(_calc_spec(), strategy)
+
+    notices = ledger.read(EventKind.REFLECTION_PROPOSED)
+    assert len(notices) == 1
+    assert notices[0].payload["decision"] == "declined"
+    assert notices[0].payload["action"] == "finish"
+    assert result.accepted is True, "declining still delivers when work is verified"
+
+
+def test_reflection_correction_is_recorded_before_the_tool_call() -> None:
+    from xenon.kernel.strategies import ActFirst, ReflectFirst
+
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    strategy = ReflectFirst(
+        ActFirst(_repeating(CallTool(ToolIntent(capability=Capability.READ)))),
+        lambda view: CallTool(ToolIntent(capability=Capability.EDIT)),
+    )
+
+    runtime.run(_calc_spec(), strategy)
+
+    kinds = [event.kind for event in ledger.read()]
+    reflection_at = kinds.index(EventKind.REFLECTION_PROPOSED)
+    tool_after = [
+        event
+        for event in ledger.read()[reflection_at:]
+        if event.kind is EventKind.TOOL_RECEIPT
+    ]
+    notices = ledger.read(EventKind.REFLECTION_PROPOSED)
+    assert notices
+    assert notices[0].payload["decision"] == "correction"
+    assert notices[0].payload["capability"] == "edit"
+    assert tool_after, "修正调用必须发生在反思记录之后"
+
+
 def test_replay_is_deterministic() -> None:
     def run_once() -> str:
         ledger = Ledger.in_memory("task-1")
