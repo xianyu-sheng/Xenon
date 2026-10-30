@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from xenon.kernel.contracts import FsWrite, ReceiptStatus, ToolReceipt
 from xenon.ledger.events import (
     EventKind,
@@ -155,6 +157,89 @@ def test_plan_status_adds_kernel_plan(tmp_path: Path, monkeypatch) -> None:
     assert "计划模式：关闭" in out
     assert "Kernel 计划（1 步）" in out
     assert "[closed] inspect" in out
+
+
+def test_plan_status_after_execution_shows_phase_and_commit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import xenon.repl.kernel_evidence as module
+
+    monkeypatch.setattr(module, "kernel_ledger_dir", lambda: tmp_path)
+    path = _make_kernel_ledger(tmp_path, "plan-executed")
+    repl = _repl(path)
+    repl._session_events = SimpleNamespace(
+        read=lambda: [
+            {
+                "type": "plan/approved",
+                "task_id": "plan-executed",
+                "plan_digest": "digest",
+            }
+        ]
+    )
+
+    out = _cmd_plan(args="status", session_state={"_repl": repl})
+
+    assert "计划已批准并执行" in out
+    assert "phase=finalized" in out
+    assert "abc1234" in out
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected"),
+    [("blocked", "执行未交付"), ("running", "执行未结束")],
+)
+def test_plan_status_reports_unfinished_or_blocked_execution(
+    tmp_path: Path, monkeypatch, phase: str, expected: str
+) -> None:
+    import json
+
+    import xenon.repl.kernel_evidence as module
+
+    monkeypatch.setattr(module, "kernel_ledger_dir", lambda: tmp_path)
+    path = _make_kernel_ledger(tmp_path, f"plan-{phase}")
+    result = json.loads(path.with_suffix(".result.json").read_text("utf-8"))
+    result["phase"] = phase
+    path.with_suffix(".result.json").write_text(
+        json.dumps(result), encoding="utf-8"
+    )
+    repl = _repl(path)
+    repl._session_events = SimpleNamespace(
+        read=lambda: [
+            {
+                "type": "plan/approved",
+                "task_id": f"plan-{phase}",
+                "plan_digest": "digest",
+            }
+        ]
+    )
+
+    out = _cmd_plan(args="status", session_state={"_repl": repl})
+
+    assert expected in out
+
+
+def test_plan_status_after_rejection_does_not_claim_execution(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import xenon.repl.kernel_evidence as module
+
+    monkeypatch.setattr(module, "kernel_ledger_dir", lambda: tmp_path)
+    path = _make_kernel_ledger(tmp_path, "plan-rejected")
+    repl = _repl(path)
+    repl._session_events = SimpleNamespace(
+        read=lambda: [
+            {
+                "type": "plan/rejected",
+                "task_id": "plan-rejected",
+                "plan_digest": "digest",
+            }
+        ]
+    )
+
+    out = _cmd_plan(args="status", session_state={"_repl": repl})
+
+    assert "已驳回" in out
+    assert "已批准并执行" not in out
 
 
 def test_plan_lines_do_not_invent_steps(tmp_path: Path, monkeypatch) -> None:

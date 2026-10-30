@@ -202,6 +202,8 @@ It shows the ledger objective, phase, plan steps, open debt, artifacts and the
 finalize commit. `/plan status` keeps showing the plan-mode toggle and adds the
 read-only kernel plan below it. Read-only plan turns stay on the kernel; a plan
 that deferred a write produces a `PLANNED` result and waits for `/plan approve`.
+After execution, `/plan status` reports the execution phase and finalize commit;
+a rejected or blocked plan is never shown as delivered.
 
 The kernel now has a plan-only primitive for the remaining `/plan` migration:
 `TaskMode.PLAN` accepts one plan and stops in `TaskPhase.PLANNED` without

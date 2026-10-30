@@ -78,14 +78,37 @@ def _plan_status(repl: Any) -> str:
             lines.append("⚠️ 链无效：以上计划仅供取证，不可作为可信交付。")
             return "\n".join(lines)
         extracted = planned_plan(evidence)
+        decision = plan_approval(_session_events(repl), evidence.task_id)
+        phase = str(
+            (evidence.result or {}).get("phase")
+            or evidence.task_state.get("phase")
+            or "—"
+        )
+        finalized = evidence.task_state.get("finalized")
+        commit = "-"
+        if isinstance(finalized, dict):
+            commit = str(finalized.get("commit") or "-")
         if extracted is not None:
-            decision = plan_approval(_session_events(repl), evidence.task_id)
             if decision is None:
                 lines.append("⏸ 计划待确认：/plan approve 或 /plan reject")
             elif decision["status"] == "approved":
                 lines.append("✅ 计划已批准（尚未执行）")
             else:
                 lines.append("❌ 计划已驳回（未执行）")
+        elif decision is not None:
+            if decision["status"] == "rejected":
+                lines.append("❌ 计划已驳回（未执行）")
+            elif phase in {"finalized", "delivered"}:
+                lines.append(
+                    f"✅ 计划已批准并执行（phase={phase} · "
+                    f"commit={commit[:12]}）"
+                )
+            elif phase in {"failed", "blocked", "aborted"}:
+                lines.append(
+                    f"❌ 计划已批准，但执行未交付（phase={phase}）"
+                )
+            else:
+                lines.append(f"⏳ 计划已批准，执行未结束（phase={phase}）")
     elif pointer:
         lines.append("")
         lines.append(
