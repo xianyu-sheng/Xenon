@@ -291,7 +291,7 @@ def test_routing_and_permission_mapping() -> None:
         recipe=None,
         mode_name="react",
     )
-    for kernel_mode in ("plan-react", "reflection"):
+    for kernel_mode in ("plan-react", "reflection", "react-reflection"):
         assert should_route_to_kernel(
             runtime_mode="kernel",
             requires_tools=True,
@@ -303,7 +303,6 @@ def test_routing_and_permission_mapping() -> None:
         ), f"{kernel_mode} 已有 kernel parity"
     for legacy_mode in (
         "plan-reflection",
-        "react-reflection",
         "not-a-mode",
     ):
         assert not should_route_to_kernel(
@@ -489,6 +488,12 @@ def test_runtime_adapter_maps_catalog_strategy_and_rejects_legacy(tmp_path: Path
         repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
     )
     assert plan_react.strategy_mode == "plan-react"
+
+    registry.set_mode("react-reflection")
+    react_reflect = RuntimeAdapter.from_repl(
+        repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
+    )
+    assert react_reflect.strategy_mode == "react-reflect"
 
     # A legacy-only mode still fails closed instead of running ActFirst.
     legacy = RuntimeAdapter(

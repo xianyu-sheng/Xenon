@@ -23,6 +23,7 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- `/mode react-reflection` 迁移到 kernel，且不新增策略实现：`ReflectFirst` 现在支持多轮反思（`max_reflections` 轮，每轮 `max_calls_per_round` 次修正）。`reflection` = 1 轮 1 次，`react-reflection` = 3 轮 2 次。反思可以审查"拟提交的答案与 claims"；reviewer 说没问题或重复提出同一修正即停止。
 - `/mode plan-react` 迁移到 kernel：新增 `PlanReact`（提交一份计划，然后逐步执行有界子循环）与 `ReleaseStep` 动作。`ReleaseStep` 只能由策略发出、不能由模型生成；它强制关闭当前步骤，未满足的期望转成 debt，耗尽修复预算即 BLOCKED。步内探索记入 `step_explored` 事件。
 - 计划/步内协议现在显式列出允许的 capability（`read/search/edit/verify/vcs/shell/remote`），并把 `bash`/`grep`/`apply_patch` 等工具名映射为 capability，不再因一个工具名作废整份计划。
 - 反思决策进入账本：新增 `reflection_proposed` 事件（`decision=correction|declined`、`capability`、`round`）。策略只做记录、运行时负责追加，反思仍然没有关账或交付权限。

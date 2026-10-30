@@ -12,8 +12,9 @@ already migrated:
   default ``direct`` mode; direct chat itself is still a REPL branch);
 * ``plan`` — tool turns use the kernel's LLM PlanFirst strategy
   (``plan-execute``);
-* ``reflect`` — tool turns use ActFirst plus one bounded reflection pass
-  (``reflection``);
+* ``reflect`` — tool turns use ActFirst plus bounded reflection passes
+  (``reflection``: one pass, one call; ``react-reflection``: three passes,
+  two calls per pass);
 * ``plan-react`` — tool turns use PlanReact: one plan, then a bounded
   sub-loop per step;
 * ``None`` — no kernel parity yet; the mode stays on the frozen legacy path and
@@ -96,6 +97,9 @@ MODE_CATALOG: dict[str, ModeSpec] = {
     "react-reflection": ModeSpec(
         name="react-reflection",
         description="ReAct 探索 + 反思审查，适合需要工具且要求高质量的任务",
+        # Same strategy as "reflection" with more rounds and a per-round budget,
+        # so both modes stay one implementation instead of two variants.
+        kernel_strategy="react-reflect",
     ),
 }
 

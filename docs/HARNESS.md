@@ -251,12 +251,18 @@ budget decisions in the ledger.
 
 ### Reflection is a proposal source
 
-`/mode reflection` runs on the kernel as `ReflectFirst`: ActFirst executes, then
-one bounded reflection pass may add a single corrective tool call. The reflector
-receives the deterministic receipts, not the chat history, and its output is
-parsed into an action of which only `CallTool` survives. It cannot finish a
-task, close a debt, or decide pass/fail — an unverified claim stays debt after
-reflection, and the controller still owns delivery.
+`/mode reflection` and `/mode react-reflection` share one strategy,
+`ReflectFirst`. Only the budget differs: `reflection` is 1 round × 1 call,
+`react-reflection` is 3 rounds × 2 calls, so the ceiling of extra tool calls is
+`max_reflections * max_calls_per_round`.
+
+The reflector receives the deterministic receipts plus the proposed answer and
+its claims — not the chat history — and its output is parsed into an action of
+which only `CallTool` survives. It cannot finish a task, close a debt, or decide
+pass/fail: an unverified claim stays debt after reflection, and the controller
+still owns delivery. A reviewer that finds nothing left ends all remaining
+rounds, and a correction it already proposed is not repeated, so rounds cannot
+be spent re-reading the same receipts.
 
 Every review is appended to the ledger as `reflection_proposed`
 (`decision=correction|declined`, plus the capability and round), so "the

@@ -173,9 +173,11 @@ Option B, no corrective work needed:
 {"reflect":null}
 
 Rules:
-- Review the receipts and working set, not the chat history.
-- Propose at most one corrective tool call, and only for a concrete gap you can
-  point at in the receipts.
+- Review the receipts, the proposed answer and its claims, not the chat history.
+- Propose one corrective tool call at a time, and only for a concrete gap you can
+  point at in the receipts or in the proposed answer.
+- An answer that claims file_changed / test_passed without a matching receipt is
+  a gap; propose the call that would produce the evidence.
 - You cannot declare the task done, cannot close a debt, and cannot decide
   pass/fail. Verification stays deterministic.
 - If a earlier tool failed, prefer a corrective call; do not propose "finish".
@@ -693,13 +695,13 @@ class LLMReflector:
         self.config = config
         self._client = client
 
-    def __call__(self, view: ModelView) -> Action | None:
+    def __call__(self, view: ModelView, finish: Finish) -> Action | None:
         try:
             payload = _extract_json(
                 _call_model(
                     self.config,
                     self._client,
-                    build_reflect_messages(view),
+                    build_reflect_messages(view, finish),
                 )
             )
         except (ActionParseError, TypeError, ValueError):
@@ -714,13 +716,28 @@ class LLMReflector:
         return action if isinstance(action, CallTool) else None
 
 
-def build_reflect_messages(view: ModelView) -> list[dict[str, str]]:
-    """Prompt a bounded reflection over the deterministic receipts."""
+def build_reflect_messages(
+    view: ModelView, finish: Finish | None = None
+) -> list[dict[str, str]]:
+    """Prompt a bounded reflection over the deterministic receipts.
+
+    The proposed answer and its claims are included so the review can spot an
+    unsupported claim, not just a missing tool call.
+    """
 
     state = {
         "objective": view.task.objective,
         "constraints": list(view.task.constraints),
         "receipts": [dict(item) for item in view.working_set],
+        "proposed_answer": "" if finish is None else finish.answer,
+        "proposed_claims": (
+            []
+            if finish is None
+            else [
+                {"kind": claim.kind.value, "target": claim.target}
+                for claim in finish.claims
+            ]
+        ),
         "debt": [
             {"id": item.obligation.id, "reason": item.reason}
             for item in view.debt
@@ -821,11 +838,13 @@ def build_llm_reflection_strategy(
     *,
     client: Callable[..., str] | None = None,
     max_reflections: int = 1,
+    max_calls_per_round: int = 1,
 ) -> ReflectFirst:
     return ReflectFirst(
         ActFirst(LLMActionProposer(config, client=client)),
         LLMReflector(config, client=client),
         max_reflections=max_reflections,
+        max_calls_per_round=max_calls_per_round,
     )
 
 
