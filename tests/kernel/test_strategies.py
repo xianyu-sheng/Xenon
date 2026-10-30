@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from xenon.kernel.contracts import (
+    AskUser,
     Budget,
     CallTool,
     Capability,
@@ -16,6 +17,7 @@ from xenon.kernel.contracts import (
     Obligation,
     PlanProposal,
     PropositionKind,
+    ReleaseStep,
     StepContract,
     StepKind,
     SubmitPlan,
@@ -27,6 +29,7 @@ from xenon.kernel.strategies import (
     ActFirst,
     NoToolStrategy,
     PlanFirst,
+    PlanReact,
     ReflectFirst,
     RepairFirst,
 )
@@ -203,7 +206,9 @@ def test_reflect_first_reports_what_it_decided() -> None:
     strategy.propose(_view())
     notices = strategy.drain_notices()
 
-    assert notices == ({"decision": "correction", "capability": "edit", "round": 1},)
+    assert notices == (
+        {"kind": "reflection", "decision": "correction", "capability": "edit", "round": 1},
+    )
     assert strategy.drain_notices() == (), "通知是排空的，不能重复上报"
 
 
@@ -217,5 +222,99 @@ def test_reflect_first_records_a_declined_review() -> None:
     strategy.propose(_view())
 
     assert strategy.drain_notices() == (
-        {"decision": "declined", "capability": "", "round": 1},
+        {"kind": "reflection", "decision": "declined", "capability": "", "round": 1},
     )
+
+
+def _two_step_view(active: int = 1) -> ModelView:
+    steps = (
+        StepContract(id=1, kind=StepKind.INSPECT, targets=("a.py",)),
+        StepContract(id=2, kind=StepKind.EDIT, targets=("a.py",)),
+    )
+    spec = TaskSpec(task_id="t1", objective="x", workspace=".")
+    return ModelView(
+        task=spec,
+        system="s",
+        tools=(),
+        working_set=(),
+        debt=(),
+        budget=spec.budget,
+        input_seq=0,
+        hash="h",
+        active_step=next(item for item in steps if item.id == active),
+        steps=steps,
+    )
+
+
+def test_plan_react_submits_the_plan_first() -> None:
+    strategy = PlanReact(
+        lambda view: PlanProposal(
+            steps=_two_step_view().steps,
+        ),
+        lambda view, step, calls: Finish("done"),
+    )
+
+    action = strategy.propose(_two_step_view())
+
+    assert isinstance(action, SubmitPlan)
+
+
+def test_plan_react_only_works_on_the_active_step() -> None:
+    seen: list[int] = []
+
+    def actor(view: ModelView, step: StepContract, calls: int):
+        seen.append(step.id)
+        return CallTool(ToolIntent(capability=Capability.READ))
+
+    strategy = PlanReact(
+        lambda view: PlanProposal(steps=_two_step_view().steps), actor
+    )
+    strategy.propose(_two_step_view())  # submit
+    strategy.propose(_two_step_view(active=1))
+    strategy.propose(_two_step_view(active=2))
+
+    assert seen == [1, 2]
+
+
+def test_plan_react_bounds_calls_per_step_and_resets_for_the_next_step() -> None:
+    strategy = PlanReact(
+        lambda view: PlanProposal(steps=_two_step_view().steps),
+        lambda view, step, calls: CallTool(ToolIntent(capability=Capability.READ)),
+        max_step_calls=2,
+    )
+    strategy.propose(_two_step_view())  # submit
+
+    assert isinstance(strategy.propose(_two_step_view()), CallTool)
+    assert isinstance(strategy.propose(_two_step_view()), CallTool)
+    third = strategy.propose(_two_step_view())
+    assert isinstance(third, ReleaseStep), "第 3 次应停手，而不是继续刷步内预算"
+
+    notices = strategy.drain_notices()
+    assert notices == (
+        {"kind": "step", "decision": "budget_exhausted", "step": 1, "calls": 2},
+    )
+    # 进入下一步后预算重置
+    assert isinstance(strategy.propose(_two_step_view(active=2)), CallTool)
+
+
+def test_plan_react_step_completion_is_not_task_completion() -> None:
+    strategy = PlanReact(
+        lambda view: PlanProposal(steps=_two_step_view().steps),
+        lambda view, step, calls: Finish("step looks done"),
+    )
+    strategy.propose(_two_step_view())
+
+    action = strategy.propose(_two_step_view())
+
+    assert isinstance(action, ReleaseStep), "步内完成只能是释放步骤，不能是 Finish"
+    assert strategy.drain_notices()[0]["decision"] == "step_complete"
+
+
+def test_plan_react_keeps_legitimate_non_work_actions() -> None:
+    strategy = PlanReact(
+        lambda view: PlanProposal(steps=_two_step_view().steps),
+        lambda view, step, calls: AskUser("which file?"),
+    )
+    strategy.propose(_two_step_view())
+
+    assert isinstance(strategy.propose(_two_step_view()), AskUser)

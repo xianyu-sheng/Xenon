@@ -35,6 +35,7 @@ from xenon.kernel.contracts import (
     PolicyDecisionKind,
     PropositionKind,
     ReceiptStatus,
+    ReleaseStep,
     RequestVerification,
     Resolution,
     ResolutionStatus,
@@ -438,6 +439,12 @@ class LoopRuntime:
                     return result
                 continue
 
+            if isinstance(action, ReleaseStep):
+                result = self._release_active_step(action.reason)
+                if result is not None:
+                    return result
+                continue
+
             if isinstance(action, AskUser):
                 self._append(
                     EventKind.USER_QUESTION,
@@ -678,6 +685,50 @@ class LoopRuntime:
         ):
             self._transition(TaskPhase.REPAIRING, verdict.reason or "violated")
         self._transition(TaskPhase.RUNNING, "next action")
+        return None
+
+    def _release_active_step(self, reason: str) -> TaskResult | None:
+        """Close the active step even when its expectations are unmet.
+
+        Releasing ends exploration, not verification: unresolved expectations
+        become debt and exhaust the bounded repair budget, so a released step
+        can never turn into a delivery on its own.
+        """
+
+        step = self._active_step
+        if step is None:
+            return None
+        verdicts = self._controller.close_step(step, self._readonly)
+        for verdict in verdicts:
+            self._verdicts.append(verdict)
+            self._append(
+                EventKind.STEP_VERDICT,
+                EventSource.GATE,
+                _verdict_payload(verdict),
+                step_id=str(step.id),
+            )
+        self._closed_steps.add(step.id)
+        self._append(
+            EventKind.STEP_CLOSED,
+            EventSource.GATE,
+            {
+                "step_id": step.id,
+                "status": "released",
+                "reason": reason,
+                "verdicts": [_verdict_payload(item) for item in verdicts],
+            },
+            step_id=str(step.id),
+        )
+        self._advance_step()
+        exhausted = self._record_attempts(verdicts)
+        self._sync_debt(verdicts)
+        if exhausted:
+            return self._budget_block("repair budget exhausted", exhausted)
+        if any(
+            item.status is VerdictStatus.VIOLATED for item in verdicts
+        ):
+            self._transition(TaskPhase.REPAIRING, reason or "step released")
+        self._transition(TaskPhase.RUNNING, "step released")
         return None
 
     def _close_active_step(self) -> tuple[Verdict, ...]:
@@ -1272,6 +1323,23 @@ class LoopRuntime:
             return
         for notice in drain() or ():
             if not isinstance(notice, Mapping):
+                continue
+            kind = str(notice.get("kind") or "reflection")
+            if kind == "step":
+                self._append(
+                    EventKind.STEP_EXPLORED,
+                    EventSource.LLM,
+                    {
+                        "decision": str(notice.get("decision") or ""),
+                        "step_id": notice.get("step"),
+                        "calls": int(notice.get("calls") or 0),
+                    },
+                    step_id=(
+                        str(notice.get("step"))
+                        if notice.get("step") is not None
+                        else None
+                    ),
+                )
                 continue
             self._append(
                 EventKind.REFLECTION_PROPOSED,

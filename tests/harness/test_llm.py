@@ -710,6 +710,61 @@ def test_reflector_never_claims_completion(payload: str) -> None:
     assert action is None
 
 
+def test_plan_protocol_enumerates_capabilities() -> None:
+    """A tool name in ``capability`` must not invalidate a whole plan."""
+
+    from xenon.harness.plan import parse_plan
+
+    messages = llm.build_plan_messages(_reflect_view())
+    protocol = messages[0]["content"]
+
+    assert "capability` MUST be one of: read, search, edit, verify, vcs, shell, remote" in (
+        protocol
+    )
+
+    proposal = parse_plan(
+        {
+            "objective": "fix it",
+            "analysis": "x",
+            "steps": [
+                {
+                    "id": 1,
+                    "kind": "execute",
+                    "capability": "bash",
+                    "params": {"command": "pytest -q"},
+                    "targets": [],
+                    "expects": [],
+                    "depends_on": [],
+                },
+                {
+                    "id": 2,
+                    "kind": "execute",
+                    "capability": "grep",
+                    "params": {"pattern": "x"},
+                    "targets": [],
+                    "expects": [],
+                    "depends_on": [],
+                },
+                {
+                    "id": 3,
+                    "kind": "edit",
+                    "capability": "apply_patch",
+                    "params": {},
+                    "targets": [],
+                    "expects": [],
+                    "depends_on": [],
+                },
+            ],
+        }
+    ).proposal
+
+    assert [step.intent.capability for step in proposal.steps] == [
+        Capability.SHELL,
+        Capability.SEARCH,
+        Capability.EDIT,
+    ]
+
+
 def test_reflect_messages_describe_the_receipts() -> None:
     messages = llm.build_reflect_messages(_reflect_view())
 

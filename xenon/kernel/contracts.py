@@ -507,6 +507,7 @@ class ActionKind(str, Enum):
     ASK_USER = "ask_user"
     FINISH = "finish"
     ABORT = "abort"
+    RELEASE_STEP = "release_step"
 
 
 @dataclass(frozen=True, slots=True)
@@ -571,6 +572,22 @@ class Finish:
     @property
     def kind(self) -> ActionKind:
         return ActionKind.FINISH
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseStep:
+    """Stop exploring the active step; close it with the evidence so far.
+
+    This is a strategy signal, never a model action: ``parse_action`` cannot
+    produce it.  The runtime still closes the step deterministically, so an
+    unmet expectation becomes debt rather than a delivery.
+    """
+
+    reason: str = ""
+
+    @property
+    def kind(self) -> ActionKind:
+        return ActionKind.RELEASE_STEP
 
 
 @dataclass(frozen=True, slots=True)

@@ -33,7 +33,12 @@ from xenon.kernel.contracts import (
     Think,
     ToolIntent,
 )
-from xenon.kernel.strategies import ActFirst, PlanFirst, ReflectFirst
+from xenon.kernel.strategies import (
+    ActFirst,
+    PlanFirst,
+    PlanReact,
+    ReflectFirst,
+)
 from xenon.utils.llm_client import chat_completion
 
 
@@ -82,6 +87,8 @@ The object is a capability-based plan:
 
 Rules:
 - Steps use capabilities, never concrete tool names.
+- `capability` MUST be one of: read, search, edit, verify, vcs, shell, remote.
+  A tool name such as "bash", "grep" or "apply_patch" is NOT a capability.
 - `kind` MUST be one of: inspect, edit, verify, commit, clean, execute, think.
 - Step ids are unique integers; depends_on refers to earlier ids.
 - `expects` MUST be an array of objects with `id`, `kind`, and `target`.
@@ -173,6 +180,29 @@ Rules:
   pass/fail. Verification stays deterministic.
 - If a earlier tool failed, prefer a corrective call; do not propose "finish".
 - Never propose git commit or git push.
+"""
+
+
+_STEP_PROTOCOL = """\nPer-step action protocol (overrides the generic protocol above).
+You are working on exactly ONE step of an accepted plan.
+Return exactly one JSON object, with no markdown fence and no prose outside it.
+
+Allowed `capability` values: read, search, edit, verify, vcs, shell, remote.
+
+Supported actions:
+1. One tool call that makes progress on this step:
+   {"action":"call_tool","capability":"read","params":{"file_path":"path"}}
+2. A short note when you need to think:
+   {"action":"think","text":"what this step still needs"}
+3. This step is done:
+   {"action":"finish","answer":"step summary","claims":[]}
+
+Rules:
+- Only touch the current step's targets. Do not start later steps.
+- The budget is small; prefer one decisive call over exploring.
+- "finish" means "this step is done", not "the task is done".
+- Do not claim test_passed or file_changed unless a receipt proves it.
+- Never run git commit or git push.
 """
 
 def _read_yaml(path: Path, *, required: bool = False) -> Mapping[str, Any]:
@@ -710,6 +740,82 @@ def build_reflect_messages(view: ModelView) -> list[dict[str, str]]:
     ]
 
 
+class LLMStepActor:
+    """Propose one action for the active plan step only."""
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        client: Callable[..., str] | None = None,
+    ) -> None:
+        self.config = config
+        self._client = client
+
+    def __call__(self, view: ModelView, step: Any, calls: int) -> Action:
+        try:
+            return parse_action(
+                _call_model(
+                    self.config,
+                    self._client,
+                    build_step_messages(view, step, calls),
+                )
+            )
+        except (ActionParseError, TypeError, ValueError):
+            # An unparseable step proposal must not turn into a tool call or a
+            # success claim: fall back to a note and let the budget bound it.
+            return Think(f"step {getattr(step, 'id', '?')}: invalid step proposal")
+
+
+def build_step_messages(
+    view: ModelView, step: Any, calls: int
+) -> list[dict[str, str]]:
+    """Prompt one bounded step sub-loop."""
+
+    state = {
+        "objective": view.task.objective,
+        "step": {
+            "id": step.id,
+            "kind": step.kind.value,
+            "targets": list(step.targets),
+            "expects": [item.id for item in step.expects],
+        },
+        "calls_used_for_this_step": calls,
+        "receipts": [dict(item) for item in view.working_set],
+        "debt": [
+            {"id": item.obligation.id, "reason": item.reason}
+            for item in view.debt
+        ],
+        "available_tools": list(view.tools),
+    }
+    return [
+        {"role": "system", "content": view.system + "\n" + _STEP_PROTOCOL},
+        {
+            "role": "user",
+            "content": (
+                "Current deterministic state (ledger prefix, not chat memory):\n"
+                + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+                + "\nReturn exactly one JSON step action."
+            ),
+        },
+    ]
+
+
+def build_llm_plan_react_strategy(
+    config: ModelConfig,
+    *,
+    client: Callable[..., str] | None = None,
+    max_step_calls: int = 6,
+    resumed: bool = False,
+) -> PlanReact:
+    return PlanReact(
+        LLMPlanProposer(config, client=client),
+        LLMStepActor(config, client=client),
+        max_step_calls=max_step_calls,
+        resumed=resumed,
+    )
+
+
 def build_llm_reflection_strategy(
     config: ModelConfig,
     *,
@@ -750,15 +856,18 @@ __all__ = [
     "LLMPlanFinisher",
     "LLMPlanProposer",
     "LLMReflector",
+    "LLMStepActor",
     "ModelConfig",
     "ModelConfigError",
     "build_finish_messages",
     "build_llm_plan_strategy",
     "build_llm_strategy",
     "build_messages",
+    "build_llm_plan_react_strategy",
     "build_llm_reflection_strategy",
     "build_plan_messages",
     "build_reflect_messages",
+    "build_step_messages",
     "parse_action",
     "resolve_model_config",
 ]
