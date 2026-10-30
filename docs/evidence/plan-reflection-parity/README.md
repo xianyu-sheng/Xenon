@@ -1,13 +1,8 @@
 # plan-reflection parity — one loop, all three phases
 
-`/mode plan-reflection` is the single kernel loop with every phase enabled:
-
-1. **plan** — propose one plan, and review its coverage before submitting;
-2. **react** — work the active step in a bounded sub-loop;
-3. **reflect** — review a step before it is released, and the proposed finish.
-
-There is no second strategy class for this mode. `LoopProfile` only says which
-phases run and how much they may spend.
+`/mode plan-reflection` runs the single kernel loop with every phase enabled:
+plan (reviewed for coverage), react (bounded per-step sub-loop), reflect (review
+a step before release, and the proposed finish).
 
 ## What was run
 
@@ -24,63 +19,50 @@ Task: *add `subtract(a, b)` and a matching test, then run the tests.*
 ```text
 accepted        true
 phase           finalized
-finalize_sha    44b16720a97ecf4d7c9652c12fe32e557597f0ae
+finalize_sha    95e01b6b5f09ed6b0e5bb28f3119dcc0235ad2e6
 debt            (none)
-metrics         steps 8 · tool_calls 6 · events 82 · repair_attempts 1 · audit_rounds 1
+metrics         steps 7 · tool_calls 5 · events 71 · audit_rounds 1
 ```
 
 Delivery commit:
 
 ```text
-44b1672 xenon: In calc.py add a subtract(a, b) function and a matching test ...
+95e01b6 xenon: In calc.py add a subtract(a, b) function and a matching test ...
  calc.py      | 4 ++++
  test_calc.py | 6 +++++-
 ```
 
-`repair_attempts=1` is the per-step review path doing its job: one step produced
-work that did not satisfy its expectation, the step stayed open, and the
-correction happened inside that step instead of after the whole plan ran.
-
-## The plan review is auditable
+The plan review is auditable:
 
 ```json
 {"kind":"plan_reviewed","payload":{"decision":"accepted","added_steps":0}}
 ```
 
-The reviewer read the proposed plan and found nothing missing. A review that adds
-coverage records `decision="amended"` with `added_steps`; one that would drop an
-obligation is rejected with `decision="rejected"` and the obligation ids, and the
+A review that adds coverage records `decision="amended"` with `added_steps`; one
+that would drop an obligation is rejected with the obligation ids and the
 original plan stands.
 
-## Invariants proven by tests, not by this run
+## Why this run matters beyond the plan
 
-The reviewer's windows are model-dependent, so these are covered
-deterministically:
+This evidence was regenerated **after the legacy engines were removed from the
+turn path** (#290 / #202):
+`turn_flow` no longer consults `ENGINE_REGISTRY`, `XENON_RUNTIME=legacy` is gone,
+and direct-chat escalation runs the kernel loop. The same task still produces a
+verified delivery, so the demolition did not change observable behaviour.
+
+## Invariants covered deterministically
+
+The reviewer windows are model-dependent, so the guarantees live in tests:
 
 - `tests/kernel/test_strategies.py::test_plan_review_cannot_drop_an_obligation`
-  — a plan review may add steps and expects, never remove them;
 - `tests/kernel/test_plan_runtime.py::test_plan_review_added_step_actually_runs`
-  — an added step really executes;
 - `tests/kernel/test_plan_runtime.py::test_step_review_corrects_a_failing_step_before_release`
-  — a step that has not closed is corrected in place;
 - `tests/kernel/test_plan_runtime.py::test_step_review_cannot_bypass_an_unmet_expectation`
-  — a review that finds nothing still ends in debt, never delivery;
-- `tests/kernel/test_strategies.py::test_profile_rejects_incoherent_budgets`
-  — an incoherent profile is rejected at construction.
-
-## Two real bugs this slice found earlier
-
-1. **`verify` prefixed with `cd`** — `cd /d <path> && pytest` turned a plain
-   verify into a permission-gated shell command, so the run ended `BLOCKED`.
-   The prompts now forbid `cd` in verify commands, since the workspace root is
-   already the cwd.
-2. **Plan review logged as reflection** — the first successful run recorded the
-   plan review as `reflection_proposed` with `round: 0`; it is now its own
-   `plan_reviewed` event.
+- `tests/test_turn_routing.py` — no engine dispatch, no runtime escape hatch
 
 ## Files
 
-- `ledger.jsonl` — 82 events, hash chain intact
+- `ledger.jsonl` — 71 events, hash chain intact
 - `ledger.jsonl.anchor` — head anchor
 - `result.json` — task result projection
 - `commit.txt` — the delivery commit the finalizer created

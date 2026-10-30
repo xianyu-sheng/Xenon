@@ -256,31 +256,38 @@ class TestNewEngineNeedsNoExistingFileEdit:
             ENGINE_REGISTRY.unregister("test-kwargs")
 
 
-class TestUnknownModeDoesNotSilentlyFallBack:
-    """回归防护：未注册的 mode 必须显式报错，不能静默跑 direct。
+class TestTurnFlowDoesNotDispatchEngines:
+    """#290: the per-turn pipeline must not select a legacy engine.
 
-    此前 repl.py 的 if/elif 链以 ``else: self._run_direct(...)`` 收尾，
-    所以拼错范式名或漏注册时，用户以为在跑新范式，实际在跑 direct，
-    且没有任何提示。这是 issue #6 里最坏的失败模式。
+    Auto-switching between paradigms was the last place the old seven-engine
+    model leaked into the live turn path.  A tool turn now either runs on the
+    kernel loop or fails closed with an explicit message — it never silently
+    becomes a different paradigm.
     """
 
-    def test_dispatch_reports_unknown_mode(self):
+    def test_turn_flow_has_no_engine_registry_dispatch(self):
         import ast
         import pathlib
 
         import xenon.repl.turn_flow as mod
 
         src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
-        # dispatch 分支里必须存在「未注册」提示，且必须调用 _record_engine_error
-        # 收尾（否则历史里会留下孤立 user 消息）
-        assert "未注册的思考范式" in src, "dispatch 未对未注册范式给出显式错误提示"
         tree = ast.parse(src)
-        # 确认 ENGINE_REGISTRY.get 被用于 dispatch
         uses_registry = any(
-            isinstance(n, ast.Attribute)
-            and n.attr in {"get", "require"}
-            and isinstance(n.value, ast.Name)
-            and n.value.id == "ENGINE_REGISTRY"
-            for n in ast.walk(tree)
+            isinstance(node, ast.Attribute)
+            and node.attr in {"get", "require", "names"}
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "ENGINE_REGISTRY"
+            for node in ast.walk(tree)
         )
-        assert uses_registry, "repl.py 未通过 ENGINE_REGISTRY 分发"
+        assert not uses_registry, "turn_flow 仍在按 ENGINE_REGISTRY 分发"
+        assert "未注册的思考范式" not in src, "旧的范式分发表文案仍在"
+
+    def test_tool_turn_fails_closed_without_the_kernel(self):
+        import inspect
+
+        import xenon.repl.turn_flow as mod
+
+        src = inspect.getsource(mod)
+        assert "无法执行工具轮次" in src, "工具轮次无法走 kernel 时必须显式失败"
+        assert "_run_react_engine" not in src, "工具轮次不应再回落到 legacy ReAct"

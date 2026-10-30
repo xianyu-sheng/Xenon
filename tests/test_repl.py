@@ -1110,17 +1110,13 @@ class TestReactExceptionAssistantPlaceholder:
 
     def test_react_exception_adds_error_assistant(self, monkeypatch):
         """Mock ReActEngine.run 抛异常 → ctx_mgr 应有 user + [错误] assistant。"""
-        # Mock ReActEngine 让其抛 RuntimeError
-        from xenon.engine import react_engine as react_engine_mod
+        # A failing kernel turn must leave a placeholder, not an orphan user turn.
+        def failing_kernel(owner, **kwargs):
+            raise RuntimeError("simulated engine failure")
 
-        class FakeReactEngine:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def run(self, user_input, context=None, ctx_mgr=None):
-                raise RuntimeError("simulated engine failure")
-
-        monkeypatch.setattr(react_engine_mod, "ReActEngine", FakeReactEngine)
+        monkeypatch.setattr(
+            "xenon.repl.runtime_adapter.run_kernel_turn", failing_kernel
+        )
 
         repl = self._build_repl()
         # 直接调 _run_react_engine 路径（绕过 _handle_chat 整流程以减少 mock 面）
@@ -1143,16 +1139,13 @@ class TestReactExceptionAssistantPlaceholder:
 
     def test_react_exception_falls_back_to_trim_user(self, monkeypatch):
         """add_assistant_message 失败时回退到 trim_last_user，history 仍清空。"""
-        from xenon.engine import react_engine as react_engine_mod
 
-        class FakeReactEngine:
-            def __init__(self, *args, **kwargs):
-                pass
+        def failing_kernel(owner, **kwargs):
+            raise RuntimeError("simulated engine failure")
 
-            def run(self, user_input, context=None, ctx_mgr=None):
-                raise RuntimeError("simulated engine failure")
-
-        monkeypatch.setattr(react_engine_mod, "ReActEngine", FakeReactEngine)
+        monkeypatch.setattr(
+            "xenon.repl.runtime_adapter.run_kernel_turn", failing_kernel
+        )
 
         repl = self._build_repl()
         repl.ctx_mgr.add_user_message("user msg to be cleaned")
@@ -1239,16 +1232,13 @@ class TestFileClaimDenialRecursiveReact:
 
     def test_file_claim_react_engine_with_internal_placeholder(self, monkeypatch):
         """实际场景：_run_react_engine 自身 catch（修复5），无需触发外层 try。"""
-        from xenon.engine import react_engine as react_engine_mod
 
-        class FakeReactEngine:
-            def __init__(self, *args, **kwargs):
-                pass
+        def failing_kernel(owner, **kwargs):
+            raise RuntimeError("simulated engine failure")
 
-            def run(self, user_input, context=None, ctx_mgr=None):
-                raise RuntimeError("simulated engine failure")
-
-        monkeypatch.setattr(react_engine_mod, "ReActEngine", FakeReactEngine)
+        monkeypatch.setattr(
+            "xenon.repl.runtime_adapter.run_kernel_turn", failing_kernel
+        )
 
         repl = self._build_repl_with_history(monkeypatch)
         repl.ctx_mgr.trim_last_assistant()
@@ -1261,9 +1251,8 @@ class TestFileClaimDenialRecursiveReact:
         error_msgs = [
             m for m in history if m.role == "assistant" and "[错误]" in m.content
         ]
-        assert error_msgs, f"应有修复5 的 [错误] 占位: {history}"
-        # 是 ReAct 引擎执行失败，不是 ReAct 重试失败
-        assert "ReAct 引擎执行失败" in error_msgs[-1].content
+        assert error_msgs, f"kernel 失败必须留下占位消息: {history}"
+        assert "simulated engine failure" in error_msgs[-1].content
 
 
 def test_direct_failure_closes_turn_before_next_user_message(monkeypatch):

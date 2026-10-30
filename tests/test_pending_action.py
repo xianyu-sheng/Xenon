@@ -146,23 +146,24 @@ def test_continuation_hint_states_authorized_scope():
 # ── REPL 接线 ───────────────────────────────────────────────
 
 
-def test_repl_continuation_forces_pending_engine(monkeypatch):
+def test_repl_continuation_runs_on_the_kernel(monkeypatch):
     repl = _make_repl()
     repl._pending_action = _pending()
     calls: dict = {}
 
-    def fake_engine(spec, user_input, model_ids):
-        calls["spec"] = spec
-        repl.ctx_mgr.add_assistant_message("修复已完成。")
+    def fake_kernel(owner, **kwargs):
+        calls["kernel"] = kwargs
+        owner.ctx_mgr.add_assistant_message("修复已完成。")
 
-    monkeypatch.setattr(repl, "_run_engine", fake_engine)
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.run_kernel_turn", fake_kernel
+    )
     monkeypatch.setattr(
         repl, "_run_direct", lambda *a, **k: calls.setdefault("direct", True)
     )
     repl._handle_chat("继续")
 
-    assert calls.get("spec") is not None
-    assert calls["spec"].name == "plan-react"
+    assert "kernel" in calls, "延续任务不再指定 legacy 引擎，统一走 kernel"
     assert "direct" not in calls
     # 完成且模型未再提出新承诺 → 承诺消费后清除
     assert repl._pending_action is None
@@ -179,21 +180,24 @@ def test_repl_continuation_without_pending_clarifies(monkeypatch):
     assert called == []
 
 
-def test_repl_registers_new_promise_after_turn(monkeypatch):
+def test_kernel_turn_does_not_register_legacy_promises(monkeypatch):
+    """Continuation is the kernel's job (ledger + plan approval), not a promise."""
+
     repl = _make_repl()
     repl._pending_action = _pending()
 
-    def fake_engine(spec, user_input, model_ids):
-        repl.ctx_mgr.add_assistant_message(
+    def fake_kernel(owner, **kwargs):
+        owner.ctx_mgr.add_assistant_message(
             "已完成本地修复。下一步：回复「继续」，我将继续跑安全测试。"
         )
 
-    monkeypatch.setattr(repl, "_run_engine", fake_engine)
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.run_kernel_turn", fake_kernel
+    )
     monkeypatch.setattr(repl, "_run_direct", lambda *a, **k: None)
     repl._handle_chat("继续")
 
-    assert repl._pending_action is not None
-    assert repl._pending_action.engine == "plan-react"
+    assert repl._pending_action is None, "kernel 回合不依赖承诺续接"
 
 
 def test_repl_new_topic_drops_stale_pending(monkeypatch):

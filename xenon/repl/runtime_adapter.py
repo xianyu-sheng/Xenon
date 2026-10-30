@@ -1,10 +1,8 @@
 """Kernel runtime adapter for the interactive REPL (#202 stage 1).
 
-The kernel is the default entry for tool turns.  ``XENON_RUNTIME=legacy`` is a
-frozen fallback until demolition; it is not the product default.  The REPL
-builds a TaskSpec, runs the kernel, projects events into the existing
-ConsoleCallback, and writes the assistant result back into the REPL's context
-and turn tree.
+The kernel is the only entry for tool turns.  The REPL builds a TaskSpec, runs
+the loop, projects events into the existing ConsoleCallback, and writes the
+assistant result back into the REPL's context and turn tree.
 """
 
 from __future__ import annotations
@@ -33,7 +31,6 @@ from xenon.kernel.strategies import LoopProfile
 from xenon.modes import MODE_CATALOG, loop_profile_for
 from xenon.repl.execution_policy import ExecutionLevel
 
-KERNEL_RUNTIME_ENV = "XENON_RUNTIME"
 MCP_TOOL_LIMIT_ENV = "XENON_MCP_TOOL_LIMIT"
 MCP_TOOL_ALLOWLIST_ENV = "XENON_MCP_TOOLS"
 _DEFAULT_MCP_TOOL_LIMIT = 16
@@ -41,11 +38,6 @@ _DEFAULT_MCP_TOOL_LIMIT = 16
 
 class KernelAdapterError(RuntimeError):
     """The REPL cannot construct or run a kernel task."""
-
-
-def kernel_runtime_requested() -> bool:
-    # #202 stage 1: kernel is the default; ``legacy`` is the temporary opt-out.
-    return os.environ.get(KERNEL_RUNTIME_ENV, "").strip().lower() != "legacy"
 
 
 def _mcp_tool_limit() -> int:
@@ -95,15 +87,17 @@ def should_route_to_kernel(
 
     requested_mode = (mode_name or "direct").strip().lower()
     mode = MODE_CATALOG.get(requested_mode)
+    # A skill turn is just a different prompt, and an external query is just a
+    # task shape: both run on the same loop.  Whether the loop can answer is a
+    # runtime question (capability binding), not a reason to change runtimes.
+    del skill_name, external_query, mcp_available
     return (
         runtime_mode == "kernel"
         and requires_tools
-        and skill_name is None
         and pending is None
         and recipe is None
         and mode is not None
         and mode.loop is not None
-        and (not external_query or mcp_available)
     )
 
 
@@ -806,12 +800,10 @@ def run_kernel_turn(
 
 
 __all__ = [
-    "KERNEL_RUNTIME_ENV",
     "KernelAdapterError",
     "KernelApprovalProvider",
     "ReplEventSink",
     "RuntimeAdapter",
-    "kernel_runtime_requested",
     "model_config_for",
     "permission_mode_for",
     "resume_kernel_plan",

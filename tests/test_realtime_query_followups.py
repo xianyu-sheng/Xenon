@@ -221,14 +221,14 @@ def test_handle_chat_routes_result_followup_back_to_read_only_react(monkeypatch)
     monkeypatch.setattr(repl, "_commit_memory_usage", lambda: None)
     monkeypatch.setattr(repl, "_maybe_suggest_memory", lambda _text: None)
     monkeypatch.setattr(
-        repl,
-        "_run_react_engine",
-        lambda prompt, _models: captured.append(prompt),
+        "xenon.repl.runtime_adapter.run_kernel_turn",
+        lambda owner, **kwargs: captured.append(kwargs["objective"]),
     )
 
     repl._handle_chat("结果呢")
 
-    assert captured and "延续上轮任务" in captured[0]
+    assert captured, "追问必须继续在 kernel loop 上执行"
+    assert "延续上轮任务" in captured[0]
     assert original in captured[0]
     assert repl.agent_context.get("_execution_level") == int(ExecutionLevel.READ_ONLY)
     assert repl.ctx_mgr.history[-1].metadata["intent"] == "query"

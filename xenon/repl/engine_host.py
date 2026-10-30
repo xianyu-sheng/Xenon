@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from rich.text import Text
 
 from xenon.engine.execution_policy import EngineDeadlineExceeded
 from xenon.engine.registry import ENGINE_REGISTRY, EngineSpec
+from xenon.repl.execution_policy import rebind_execution_boundary
 from xenon.repl.turn_helpers import (
     retry_budget_for as _retry_budget_for,
 )
@@ -422,8 +424,6 @@ class EngineHostMixin:
         # replace it with the current authorization before the engine freezes
         # its prompt, otherwise the escalated run still cannot call tools.
         try:
-            from xenon.repl.execution_policy import rebind_execution_boundary
-
             active_level = self.agent_context.get("_execution_level")
             if active_level is not None:
                 user_input = rebind_execution_boundary(
@@ -813,8 +813,50 @@ class EngineHostMixin:
 
 
     def _run_react_engine(self, user_input: str, model_ids: list[str]) -> None:
-        """ReAct 引擎模式（兼容入口，实现见 _run_engine）。"""
-        self._run_engine(ENGINE_REGISTRY.require("react"), user_input, model_ids)
+        """Escalation entry: run the tool turn on the kernel loop.
+
+        Direct chat can escalate mid-turn (the model asked for a tool, or
+        claimed work it did not do).  That escalation is just a tool turn, so it
+        runs on the same loop as every other tool turn instead of waking a
+        legacy engine.
+        """
+
+        from xenon.repl.execution_policy import ExecutionLevel
+        from xenon.repl.runtime_adapter import run_kernel_turn
+        from xenon.repl.turn_contract import build_turn_contract
+
+        # Escalation raises the level in the agent context; rebuild the turn
+        # contract from that level so the kernel sees the escalated boundary
+        # instead of the original answer-only one.
+        contract = build_turn_contract(user_input)
+        level = self.agent_context.get("_execution_level")
+        if level is not None:
+            contract = replace(
+                contract,
+                level=ExecutionLevel(int(level)),
+                proposed_level=ExecutionLevel(int(level)),
+            )
+        try:
+            run_kernel_turn(
+                self,
+                objective=rebind_execution_boundary(
+                    user_input, int(contract.level)
+                ),
+                user_input=user_input,
+                model_ids=model_ids,
+                execution_policy=contract.to_execution_policy(),
+            )
+        except Exception as exc:  # noqa: BLE001 — history must stay paired
+            # The user message is already recorded.  Leave a placeholder so the
+            # turn history is not left with an orphan user message; if even that
+            # fails, drop the user message instead.
+            try:
+                self.ctx_mgr.add_assistant_message(
+                    f"[错误] {exc}",
+                    model_used=model_ids[0] if model_ids else None,
+                )
+            except Exception:  # noqa: BLE001
+                self.ctx_mgr.trim_last_user()
 
 
     def _run_plan_execute_engine(self, user_input: str, model_ids: list[str]) -> None:

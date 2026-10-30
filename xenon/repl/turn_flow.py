@@ -16,7 +16,6 @@ from typing import Any
 
 from rich.prompt import Prompt
 
-from xenon.engine.registry import ENGINE_REGISTRY
 from xenon.engine.task_state import (
     TaskState,
     required_delivery_for,
@@ -27,7 +26,6 @@ from xenon.repl.execution_policy import (
     bind_execution_boundary,
 )
 from xenon.repl.prompt_optimizer import get_intent_display, optimize_prompt
-from xenon.repl.system_config import get_config
 from xenon.repl.turn_contract import (
     PendingAction,
     TurnContract,
@@ -570,40 +568,34 @@ class TurnFlowMixin:
         # 每次引擎调用前手动同步。⚠️ 不可遗漏，否则引擎内部报 AttributeError。
         self.agent_context.set_conversation_messages(self.ctx_mgr.get_messages())
 
-        # Decide the execution path before the legacy mode selector runs.
-        # Decide before the legacy mode selector can print a recommendation
-        # that has no effect on the kernel turn.
+        # One execution path: tool turns run on the kernel loop.  There is no
+        # engine table and no runtime auto-switching between paradigms — the
+        # mode only declares loop phases (see ``xenon/modes.py``).
+        from xenon.repl.runtime_adapter import should_route_to_kernel
+        from xenon.repl.turn_helpers import _looks_like_external_query
+
+        kernel_turn = should_route_to_kernel(
+            runtime_mode=getattr(self, "_runtime_mode", ""),
+            requires_tools=execution_policy.requires_tools,
+            skill_name=skill_name,
+            plan_mode=self._plan_mode_active,
+            plan_deferred_write=bool(turn_contract_obj.deferred_write),
+            pending=None,
+            recipe=None,
+            mode_name=self.registry.current_mode,
+            external_query=(
+                turn_contract_obj.intent in {"query", "research"}
+                or _looks_like_external_query(user_input)
+            ),
+            mcp_available=self._has_mcp_tools(),
+        )
         if kernel_turn:
-            mode = "kernel"
-        else:
-            # 根据当前思考范式选择执行方式
-            mode = self._select_turn_mode(
-                user_input,
-                execution_policy,
-                turn_contract_obj.intent,
-                turn_contract_obj.requires_tools,
-            )
-            if pending is not None and pending.engine:
-                spec = ENGINE_REGISTRY.get(pending.engine)
-                if (
-                    spec is not None
-                    and spec.runs_engine
-                    and mode != pending.engine
-                ):
-                    mode = pending.engine
-                    console.print(
-                        f"[dim cyan]⏩ 延续上轮任务 → 继续使用 "
-                        f"[bold]{mode}[/bold] 范式[/dim cyan]"
-                    )
-            if recipe is not None:
-                recipe_spec = ENGINE_REGISTRY.get(recipe.engine)
-                if recipe_spec is not None and recipe_spec.runs_engine:
-                    if mode != recipe_spec.name:
-                        mode = recipe_spec.name
-                        console.print(
-                            "[dim cyan]🧭 原子任务使用配方指定的引擎，"
-                            "避免进入通用规划循环[/dim cyan]"
-                        )
+            self.agent_context.set("_task_state", None)
+        plan_only_turn = bool(
+            kernel_turn
+            and self._plan_mode_active
+            and turn_contract_obj.deferred_write
+        )
 
         try:
             if kernel_turn:
@@ -621,50 +613,24 @@ class TurnFlowMixin:
                     execution_policy=execution_policy,
                     plan_only=plan_only_turn,
                 )
+                # A kernel turn is a complete turn: the legacy continuation
+                # promise is consumed, not carried into the next turn.
+                self._pending_action = None
                 self._commit_memory_usage()
                 return
-            if skill_name is not None:
-                self._run_react_engine(turn_prompt, model_ids)
-            elif (
-                execution_policy.level is ExecutionLevel.ANSWER_ONLY
-                and intent == "write_code"
-            ):
-                if mode != "direct":
-                    console.print(
-                        "[dim cyan]💬 本轮未授权文件或命令操作，"
-                        "使用仅回答模式...[/dim cyan]"
-                    )
-                self._run_direct(
-                    turn_prompt,
-                    model_ids,
-                    intent=intent,
-                    execution_policy=execution_policy,
-                )
-            else:
-                # 由 ENGINE_REGISTRY 查表分发，替代原先的 if/elif 链。
-                # 未注册的 mode 显式报错，不静默回落到 direct —— 那种回落会让
-                # 用户以为在跑新范式，其实在跑 direct，且没有任何提示。
-                spec = ENGINE_REGISTRY.get(mode)
-                if spec is None:
-                    available = ", ".join(sorted(ENGINE_REGISTRY.names()))
-                    console.print(
-                        f"[error]❌ 未注册的思考范式: {mode}[/error]\n"
-                        f"[dim]可用: {available}[/dim]"
-                    )
-                    logger.error("未注册的思考范式: %s（可用: %s）", mode, available)
-                    self._record_engine_error(
-                        f"[错误] 未注册的思考范式: {mode}", model_ids[0]
-                    )
-                elif spec.runs_engine:
-                    self._run_engine(spec, turn_prompt, model_ids)
-                else:
-                    # direct 模式 — 直接调 LLM，不走引擎循环
-                    self._run_direct(
-                        turn_prompt,
-                        model_ids,
-                        intent=intent,
-                        execution_policy=execution_policy,
-                    )
+            if execution_policy.requires_tools or skill_name is not None:
+                # A tool/skill turn that cannot reach the kernel is a broken
+                # configuration, not a reason to fall back to another paradigm.
+                message = "该模式没有可用的 kernel loop，无法执行工具轮次"
+                console.print(f"[error]❌ {message}[/error]")
+                self._record_engine_error(f"[错误] {message}", model_ids[0])
+                return
+            self._run_direct(
+                turn_prompt,
+                model_ids,
+                intent=intent,
+                execution_policy=execution_policy,
+            )
         except KeyboardInterrupt:
             # B2: Ctrl+C 取消当前运行，返回提示符而非退出整个 REPL
             if getattr(self, "_log_capture_active", False):
@@ -687,70 +653,13 @@ class TurnFlowMixin:
         # 本轮一旦以“回复继续即可”收尾，就登记为跨回合承诺；否则清除。
         # 放在记忆建议之前：记忆确认可能与用户交互，不应影响承诺识别。
         self._update_pending_action(
-            mode=mode,
+            mode=self.registry.current_mode,
             contract=turn_contract_obj,
             policy=execution_policy,
         )
 
         if skill_name is None:
             self._maybe_suggest_memory(user_input)
-
-    # 自动切换范式的置信度门槛。低于此值保留当前范式——宁可少切，
-    # 也不要让用户觉得范式在背后乱跳。
-    _ENGINE_SWITCH_THRESHOLD = 0.6
-
-
-    def _select_turn_mode(
-        self,
-        user_input: str,
-        execution_policy: ExecutionPolicy,
-        intent: str | None = None,
-        requires_tools: bool | None = None,
-    ) -> str:
-        """为本轮选择范式：仅在用户停留在默认 direct 时才自动升级。
-
-        这里刻意**只返回本轮使用的范式，不写回 registry.current_mode**：
-        自动路由是一次性的判断，用户下一句话可能完全换个任务；把它固化成
-        会话状态会让 /mode 显示的内容与实际执行的范式长期不一致。
-
-        用户一旦显式 /mode 或 Shift+Tab 选过范式，就完全尊重该选择——
-        自动化不该覆盖人的明确意图。
-        """
-        current = self.registry.current_mode
-        if current != "direct":
-            return current
-        # 无需工具的轮次没有范式可选：引擎循环的价值全在工具调用上。
-        if not execution_policy.requires_tools:
-            return current
-        if get_config().engine.disable_auto_routing:
-            return current
-
-        try:
-            profile = self.auto_router.estimator.estimate(
-                user_input,
-                self.ctx_mgr.get_messages(),
-                intent=intent,
-                requires_tools=requires_tools,
-            )
-        except Exception as exc:  # noqa: BLE001 — 推荐失败不该阻断对话
-            logger.debug("范式推荐失败，保留当前范式: %s", exc)
-            return current
-
-        engine = getattr(profile, "recommended_engine", "direct")
-        confidence = float(getattr(profile, "engine_confidence", 0.0) or 0.0)
-        if engine == current or confidence < self._ENGINE_SWITCH_THRESHOLD:
-            return current
-        if ENGINE_REGISTRY.get(engine) is None:
-            logger.warning("推荐了未注册的范式 %r，保留 %s", engine, current)
-            return current
-
-        reason = getattr(profile, "engine_reason", "") or "任务结构更适合该范式"
-        console.print(
-            f"[dim cyan]🧭 {reason} → 本轮使用 [bold]{engine}[/bold] 范式"
-            f"（/mode 可固定，config.yaml engine.disable_auto_routing 可关闭）[/dim cyan]"
-        )
-        return engine
-
 
     @staticmethod
     def _is_task_continuation(text: str, pending: PendingAction | None) -> bool:
