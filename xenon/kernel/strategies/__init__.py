@@ -48,13 +48,17 @@ class PlanFirst:
     planner: PlanProvider
     finisher: ActionProvider | None = None
     finish_text: str = "completed"
+    # Resume an already-accepted plan: skip SubmitPlan and act on the active
+    # step the runtime reconstructed from the ledger.
+    resumed: bool = False
     _submitted: bool = False
     _finished: bool = False
 
     def propose(self, view: ModelView) -> Action:
         if not self._submitted:
             self._submitted = True
-            return SubmitPlan(self.planner(view))
+            if not self.resumed:
+                return SubmitPlan(self.planner(view))
         active = view.active_step
         if active is None:
             # A real plan should end with a synthesis over the step receipts.

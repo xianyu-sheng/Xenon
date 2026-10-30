@@ -165,6 +165,56 @@ def test_plan_approve_records_binding_and_exits_plan_mode(planned) -> None:
     assert len(repl.events) == 2
 
 
+def test_plan_approve_executes_through_resume_kernel_plan(
+    planned, monkeypatch
+) -> None:
+    _path, repl = planned
+    repl.registry = SimpleNamespace(get_role_priority=lambda _role: ["test/fake"])
+    repl._make_callback = lambda: object()
+    calls: list[dict] = []
+
+    def _resume(repl_arg, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            result=SimpleNamespace(
+                phase=SimpleNamespace(value="finalized"),
+                accepted=True,
+                finalize_sha="abc1234",
+            )
+        )
+
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.resume_kernel_plan", _resume
+    )
+
+    out = _cmd_plan(args="approve", session_state={"_repl": repl})
+
+    assert "计划已批准并执行" in out
+    assert "finalized" in out
+    assert calls[0]["task_id"] == "planned"
+    assert calls[0]["approval_id"] == repl.events[0]["id"]
+    assert calls[0]["plan_digest"] == repl.events[0]["plan_digest"]
+
+
+def test_plan_approve_reports_execution_start_failure(planned, monkeypatch) -> None:
+    _path, repl = planned
+    repl.registry = SimpleNamespace(get_role_priority=lambda _role: ["test/fake"])
+    repl._make_callback = lambda: object()
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("resume failed")
+
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.resume_kernel_plan", _boom
+    )
+
+    out = _cmd_plan(args="approve", session_state={"_repl": repl})
+
+    assert "执行启动失败" in out
+    assert "resume failed" in out
+    assert plan_approval(repl.events, "planned")["status"] == "approved"
+
+
 def test_plan_reject_keeps_plan_mode(planned) -> None:
     _path, repl = planned
 

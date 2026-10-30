@@ -212,15 +212,17 @@ so a misbehaving strategy cannot turn plan-only into execution. The REPL
 adapter exposes `plan_only=True`, renders the result as `Kernel · plan`, and
 marks the turn `pending-approval` instead of blocking it. `/plan approve` and
 `/plan reject` bind a decision to the current planned ledger and record it in
-session events; the kernel ledger stays immutable. Approve exits plan mode,
-reject keeps it, and neither path executes the plan yet. `/plan` routing is
-unchanged.
+session events; the kernel ledger stays immutable. Approve exits plan mode and
+calls `resume_kernel_plan()` to execute the accepted plan in the same ledger;
+reject keeps plan mode and writes nothing. `/plan` write routing is still the
+next migration step.
 
 The runtime also has a same-ledger resume primitive, `resume_planned()`: it
 requires the accepted plan digest and an approval id, appends `plan_approved`,
 moves `PLANNED -> RUNNING`, starts the accepted plan's first ready step, and
 never appends a second `task_started` or asks the strategy to replan. The REPL
-approve command is not wired to this primitive yet; that is the next slice.
+`/plan approve` command calls it through `resume_kernel_plan()`; a failed start
+is reported as a failure, not as a delivered task.
 
 If the pointer exists but the ledger is missing or outside the kernel root,
 both commands fail closed and do not fall back to the legacy goal projection.

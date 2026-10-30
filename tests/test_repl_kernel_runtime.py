@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -13,9 +14,12 @@ from rich.console import Console
 from tests.harness.test_exec import _plan_dict, _repo
 from xenon.engine.callbacks import ConsoleCallback
 from xenon.engine.context import AgentContext
-from xenon.harness.llm import ModelConfig
-from xenon.kernel.contracts import CallTool, Capability, ToolIntent
+from xenon.harness.llm import ModelConfig, build_llm_plan_strategy
+from xenon.harness.plan import parse_plan
+from xenon.harness.runner import run_task
+from xenon.kernel.contracts import CallTool, Capability, TaskMode, ToolIntent
 from xenon.kernel.policies import PermissionMode
+from xenon.ledger.events import EventKind, canonical_json
 from xenon.ledger.store import Ledger
 from xenon.repl.execution_policy import ExecutionLevel
 from xenon.repl.model_registry import ModelRegistry
@@ -26,6 +30,7 @@ from xenon.repl.runtime_adapter import (
     RuntimeAdapter,
     model_config_for,
     permission_mode_for,
+    resume_kernel_plan,
     run_kernel_turn,
     should_route_to_kernel,
 )
@@ -113,6 +118,9 @@ class FakeRepl:
     def _confirm_tool(self, tool, params, risk):
         self.confirm_calls.append((tool, dict(params), risk))
         return False, "denied by test"
+
+    def _make_callback(self):
+        return ConsoleCallback(verbose=False)
 
     def _start_log_capture(self) -> None:
         pass
@@ -747,6 +755,121 @@ def test_runtime_adapter_plan_only_stops_after_plan(tmp_path: Path) -> None:
     assert not any(event.kind.value == "tool_receipt" for event in events)
     assert not any(event.kind.value == "step_started" for event in events)
     assert client.responses == []
+
+
+def test_runtime_adapter_resume_executes_approved_plan(tmp_path: Path) -> None:
+    _repo(tmp_path)
+    plan = parse_plan(_plan_dict())
+    ledger_dir = tmp_path.parent / f"{tmp_path.name}-resume-adapter-ledger"
+    planned = run_task(
+        plan.objective,
+        strategy=build_llm_plan_strategy(
+            ModelConfig(model_id="test/fake"),
+            client=FakeClient([json.dumps(_plan_dict())]),
+        ),
+        workspace=tmp_path,
+        ledger_dir=ledger_dir,
+        task_id="resume-adapter",
+        finalize=False,
+        mode=TaskMode.PLAN,
+    )
+    assert planned.result.phase.value == "planned"
+    accepted = Ledger(planned.ledger_path, "resume-adapter").read(
+        EventKind.PLAN_ACCEPTED
+    )[-1]
+    digest = hashlib.sha256(
+        canonical_json(accepted.payload["plan"]).encode("utf-8")
+    ).hexdigest()
+    adapter = RuntimeAdapter(
+        workspace=tmp_path,
+        model_config=ModelConfig(model_id="test/fake"),
+        ledger_dir=ledger_dir,
+        finalize=False,
+        client=FakeClient(
+            [json.dumps({"action": "finish", "answer": "done"})]
+        ),
+    )
+
+    run = adapter.resume(
+        task_id="resume-adapter",
+        plan=plan.proposal,
+        plan_digest=digest,
+        approval_id="approval-1",
+        objective=plan.objective,
+    )
+
+    assert run.result.accepted is True, run.result.debt
+    events = Ledger(run.ledger_path, "resume-adapter").read()
+    assert len([e for e in events if e.kind is EventKind.TASK_STARTED]) == 1
+    assert len([e for e in events if e.kind is EventKind.PLAN_ACCEPTED]) == 1
+    assert any(e.kind is EventKind.PLAN_APPROVED for e in events)
+    assert any(e.kind is EventKind.TOOL_RECEIPT for e in events)
+
+
+def test_resume_kernel_plan_renders_execution_result(tmp_path: Path) -> None:
+    _repo(tmp_path)
+    plan = parse_plan(_plan_dict())
+    ledger_dir = tmp_path.parent / f"{tmp_path.name}-resume-render-ledger"
+    planned = run_task(
+        plan.objective,
+        strategy=build_llm_plan_strategy(
+            ModelConfig(model_id="test/fake"),
+            client=FakeClient([json.dumps(_plan_dict())]),
+        ),
+        workspace=tmp_path,
+        ledger_dir=ledger_dir,
+        task_id="resume-render",
+        finalize=False,
+        mode=TaskMode.PLAN,
+    )
+    accepted = Ledger(planned.ledger_path, "resume-render").read(
+        EventKind.PLAN_ACCEPTED
+    )[-1]
+    digest = hashlib.sha256(
+        canonical_json(accepted.payload["plan"]).encode("utf-8")
+    ).hexdigest()
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = FakeRepl(tmp_path, registry)
+
+    run = resume_kernel_plan(
+        repl,
+        task_id="resume-render",
+        plan=plan.proposal,
+        plan_digest=digest,
+        approval_id="approval-1",
+        objective=plan.objective,
+        client=FakeClient(
+            [json.dumps({"action": "finish", "answer": "done"})]
+        ),
+        ledger_dir=ledger_dir,
+    )
+
+    assert run is not None, repl.ctx_mgr.messages
+    assert run.result.accepted is True, run.result.debt
+    assert repl.rendered[-1][0] == "Kernel"
+    assert repl.finished == [("passed", "kernel")]
+
+
+def test_resume_kernel_plan_reports_invalid_digest(tmp_path: Path) -> None:
+    _repo(tmp_path)
+    plan = parse_plan(_plan_dict())
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = FakeRepl(tmp_path, registry)
+
+    run = resume_kernel_plan(
+        repl,
+        task_id="missing-plan",
+        plan=plan.proposal,
+        plan_digest="not-the-plan",
+        approval_id="approval-1",
+        objective=plan.objective,
+        client=FakeClient([]),
+    )
+
+    assert run is None
+    assert "Kernel plan execution error" in repl.ctx_mgr.messages[-1][0]
 
 
 def test_run_kernel_turn_renders_planned_as_pending_approval(
