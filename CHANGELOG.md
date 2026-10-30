@@ -21,6 +21,7 @@
 - `/plan approve` 已接到 `resume_kernel_plan()`：审批事件落 session 后，用同 ledger 执行 approved plan 并渲染 kernel 结果；执行启动失败只报错，不标记交付。`/plan` 写计划路由仍走 legacy，下一片迁移。
 - `/plan` 写计划路由已迁到 kernel：plan mode + deferred-write 回合走 `run_kernel_turn(plan_only=True)`，先得到 `PLANNED`，审批后由同 ledger 执行；不再打开 legacy 计划门。
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
+- 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 
 ### 证据层
 

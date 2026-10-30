@@ -466,9 +466,33 @@ class LoopRuntime:
 
     def _accept_plan(self, plan: Any) -> TaskResult | None:
         plan_only = self._plan_only()
+        if plan_only and not tuple(getattr(plan, "steps", ())):
+            reason = str(getattr(plan, "analysis", "") or "")[:300]
+            self._append(
+                EventKind.BINDING_FAILED,
+                EventSource.GATE,
+                {
+                    "status": "invalid_plan",
+                    "candidates": [],
+                    "reason": reason or "plan-only requires at least one step",
+                },
+            )
+            self._transition(TaskPhase.BLOCKED, "invalid empty plan")
+            return self._result(
+                accepted=False,
+                evidence=EvidenceStatus.UNVERIFIED,
+                answer=reason or "计划生成失败：没有可执行步骤。",
+            )
         try:
             self._apply_plan(plan, updated=False, start_active=not plan_only)
         except ValueError as exc:
+            if plan_only:
+                self._transition(TaskPhase.BLOCKED, "invalid plan")
+                return self._result(
+                    accepted=False,
+                    evidence=EvidenceStatus.UNVERIFIED,
+                    answer=f"计划生成失败：{exc}"[:300],
+                )
             return self._reject_plan(exc)
         if plan_only:
             self._transition(

@@ -466,11 +466,18 @@ class TurnFlowMixin:
         if pending is not None:
             turn_prompt = f"{turn_prompt}\n\n{continuation_hint(pending)}"
         if self._plan_mode_active:
-            turn_prompt = (
-                f"{turn_prompt}\n\n## 计划模式（软引导）\n"
-                "先探索与设计，给出可执行的计划；本轮不要写盘或执行命令，"
-                "相关动作需等待用户确认。"
-            )
+            if plan_only_turn:
+                turn_prompt = (
+                    f"{turn_prompt}\n\n## 计划模式（kernel plan-only）\n"
+                    "计划可以包含写/执行步骤；本轮只提交计划，不执行任何工具，"
+                    "批准后才执行。不要因为执行边界是只读就删掉计划中的写步骤。"
+                )
+            else:
+                turn_prompt = (
+                    f"{turn_prompt}\n\n## 计划模式（软引导）\n"
+                    "先探索与设计，给出可执行的计划；本轮不要写盘或执行命令，"
+                    "相关动作需等待用户确认。"
+                )
         if needs_recall(user_input):
             recall_text = self._recall_block(user_input)
             if recall_text:
@@ -486,8 +493,15 @@ class TurnFlowMixin:
             turn_prompt = f"{turn_prompt}\n\n{recipe_note}"
 
         # Freeze authorization with this exact turn. ReAct must not mutate its
-        # leading system prompt when the execution level changes.
-        turn_prompt = bind_execution_boundary(turn_prompt, execution_policy.level)
+        # leading system prompt when the execution level changes.  A plan-only
+        # turn may *plan* writes/execution even though the runtime is read-only;
+        # the approved resume uses the real execution level.
+        prompt_level = (
+            turn_contract_obj.proposed_level
+            if plan_only_turn
+            else execution_policy.level
+        )
+        turn_prompt = bind_execution_boundary(turn_prompt, prompt_level)
 
         # 添加用户消息
         intent_source = inherited_intent_source or (

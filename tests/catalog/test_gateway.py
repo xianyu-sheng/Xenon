@@ -81,6 +81,27 @@ def test_apply_patch_becomes_fs_write_with_created_path(tmp_path: Path) -> None:
     assert EffectKind.FS_WRITE in receipt.observed_effects
 
 
+def test_apply_patch_created_path_accepts_absolute_changed_path(
+    tmp_path: Path,
+) -> None:
+    target = str(tmp_path / "a.py")
+    gateway = _gateway(
+        tmp_path,
+        {"success": True, "changed": True, "changed_paths": [target]},
+    )
+    receipt = gateway.execute(
+        ToolCall(
+            spec_name="apply_patch",
+            params={"files": [{"path": "a.py", "content": "x"}]},
+        ),
+        Services(workspace=str(tmp_path)),
+    )
+
+    write = receipt.effects[0]
+    assert isinstance(write, FsWrite)
+    assert write.created_paths == (target,)
+
+
 def test_noop_write_stays_a_noop_fact(tmp_path: Path) -> None:
     gateway = _gateway(
         tmp_path,

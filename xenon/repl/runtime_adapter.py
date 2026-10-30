@@ -680,6 +680,20 @@ def resume_kernel_plan(
         ledger_dir=ledger_dir,
     )
     sink = ReplEventSink(callback)
+    agent_context = getattr(repl, "agent_context", None)
+    setter = getattr(agent_context, "set", None)
+    getter = getattr(agent_context, "get", None)
+    previous_level = (
+        getter("_execution_level") if callable(getter) else None
+    )
+    previous_reason = (
+        getter("_execution_reason") if callable(getter) else None
+    )
+    if callable(setter):
+        # The approved plan is executed at EXECUTE, not at the plan-only
+        # READ_ONLY level that the legacy ToolExecutor still reads.
+        setter("_execution_level", int(ExecutionLevel.EXECUTE))
+        setter("_execution_reason", "approved plan execution")
     start_capture = getattr(repl, "_start_log_capture", None)
     if callable(start_capture):
         start_capture()
@@ -705,6 +719,15 @@ def resume_kernel_plan(
         if callable(add_message):
             add_message(f"[Kernel plan execution error] {exc}")
         return None
+    finally:
+        if callable(setter):
+            setter(
+                "_execution_level",
+                previous_level
+                if previous_level is not None
+                else int(ExecutionLevel.READ_ONLY),
+            )
+            setter("_execution_reason", previous_reason or "")
     _render_kernel_result(
         repl,
         run,
