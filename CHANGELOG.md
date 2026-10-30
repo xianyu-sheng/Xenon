@@ -18,6 +18,7 @@
 - REPL adapter 新增 `plan_only=True`：强制 PlanFirst + `TaskMode.PLAN`；`PLANNED` 渲染为 `Kernel · plan`，turn node 记 `pending-approval`，不再误报 blocked/degraded，并保留 ledger 指针供后续审批。`/plan` 路由与批准后执行尚未迁移。
 - `/plan approve|reject` 可对当前 `planned` kernel ledger 做审批：校验链和 phase，解析计划并计算 digest，把 `plan/approved` / `plan/rejected` 写入 session 事件（不追加 kernel ledger）；approve 退出计划模式，reject 保持当前模式；重复审批幂等。批准后执行仍未实现。
 - kernel 新增同 ledger `resume_planned`：校验 `planned` phase、已接受计划摘要和必填 approval id，写 `plan_approved` 事实，`PLANNED -> RUNNING` 后执行 accepted steps；不追加第二个 `task_started`，不允许再次规划或重复恢复；plan digest 不一致 / 缺失 approval / 非 planned 均 fail closed。
+- `/plan approve` 已接到 `resume_kernel_plan()`：审批事件落 session 后，用同 ledger 执行 approved plan 并渲染 kernel 结果；执行启动失败只报错，不标记交付。`/plan` 写计划路由仍走 legacy，下一片迁移。
 
 ### 证据层
 

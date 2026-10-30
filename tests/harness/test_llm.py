@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -23,16 +24,19 @@ from xenon.harness.llm import (
     parse_action,
     resolve_model_config,
 )
-from xenon.harness.runner import run_task
+from xenon.harness.plan import parse_plan
+from xenon.harness.runner import resume_task, run_task
 from xenon.kernel.contracts import (
     Abort,
     AskUser,
     CallTool,
     Finish,
     ModelView,
+    TaskMode,
     TaskSpec,
     Think,
 )
+from xenon.ledger.events import EventKind, canonical_json
 from xenon.ledger.store import Ledger
 
 
@@ -500,6 +504,58 @@ def test_llm_plan_strategy_executes_a_capability_plan(tmp_path: Path) -> None:
     events = Ledger(run.ledger_path, "plan-llm-1").read()
     assert any(event.kind.value == "plan_accepted" for event in events)
     assert any(event.kind.value == "tool_receipt" for event in events)
+
+
+def test_resume_task_executes_an_approved_plan_in_the_same_ledger(
+    tmp_path: Path,
+) -> None:
+    _repo(tmp_path)
+    plan = parse_plan(_plan_dict())
+    ledger_dir = tmp_path.parent / f"{tmp_path.name}-resume-ledger"
+    planned = run_task(
+        plan.objective,
+        strategy=build_llm_plan_strategy(
+            ModelConfig(model_id="test/fake"),
+            client=FakeClient([json.dumps(_plan_dict())]),
+        ),
+        workspace=tmp_path,
+        ledger_dir=ledger_dir,
+        task_id="resume-plan-1",
+        finalize=False,
+        mode=TaskMode.PLAN,
+    )
+    assert planned.result.phase.value == "planned"
+    accepted = Ledger(planned.ledger_path, "resume-plan-1").read(
+        EventKind.PLAN_ACCEPTED
+    )[-1]
+    digest = hashlib.sha256(
+        canonical_json(accepted.payload["plan"]).encode("utf-8")
+    ).hexdigest()
+
+    resumed = resume_task(
+        task_id="resume-plan-1",
+        plan=plan.proposal,
+        plan_digest=digest,
+        approval_id="approval-1",
+        strategy=build_llm_plan_strategy(
+            ModelConfig(model_id="test/fake"),
+            client=FakeClient(
+                [json.dumps({"action": "finish", "answer": "done"})]
+            ),
+            resumed=True,
+        ),
+        objective=plan.objective,
+        workspace=tmp_path,
+        ledger_dir=ledger_dir,
+        finalize=False,
+    )
+
+    assert resumed.result.accepted is True, resumed.result.debt
+    events = Ledger(resumed.ledger_path, "resume-plan-1").read()
+    assert len([e for e in events if e.kind is EventKind.TASK_STARTED]) == 1
+    assert len([e for e in events if e.kind is EventKind.PLAN_ACCEPTED]) == 1
+    assert any(e.kind is EventKind.PLAN_APPROVED for e in events)
+    assert any(e.kind is EventKind.TOOL_RECEIPT for e in events)
 
 
 def test_llm_plan_invalid_json_fails_closed(tmp_path: Path) -> None:

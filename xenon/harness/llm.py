@@ -630,10 +630,12 @@ def build_llm_plan_strategy(
     config: ModelConfig,
     *,
     client: Callable[..., str] | None = None,
+    resumed: bool = False,
 ) -> PlanFirst:
     return PlanFirst(
         LLMPlanProposer(config, client=client),
         finisher=LLMPlanFinisher(config, client=client),
+        resumed=resumed,
     )
 
 

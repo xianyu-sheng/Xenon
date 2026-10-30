@@ -20,7 +20,7 @@ from xenon.harness.llm import (
     build_llm_plan_strategy,
     build_llm_strategy,
 )
-from xenon.harness.runner import HarnessRun, result_json, run_task
+from xenon.harness.runner import HarnessRun, result_json, resume_task, run_task
 from xenon.kernel.contracts import (
     CallTool,
     Capability,
@@ -403,6 +403,59 @@ class RuntimeAdapter:
             pass
         return run
 
+    def resume(
+        self,
+        *,
+        task_id: str,
+        plan: Any,
+        plan_digest: str,
+        approval_id: str,
+        objective: str = "",
+        user_objective: str = "",
+        sink: Any = None,
+    ) -> HarnessRun:
+        """Execute an approved plan in its existing kernel ledger."""
+
+        if self.plan_only:
+            raise KernelAdapterError("plan-only adapters cannot resume execution")
+        strategy = build_llm_plan_strategy(
+            self.model_config,
+            client=self.client,
+            resumed=True,
+        )
+        constraints = [
+            "runtime:kernel",
+            f"model:{self.model_config.model_id}",
+        ]
+        run = resume_task(
+            task_id=task_id,
+            plan=plan,
+            plan_digest=plan_digest,
+            approval_id=approval_id,
+            strategy=strategy,
+            objective=objective,
+            user_objective=user_objective,
+            workspace=self.workspace,
+            ledger_dir=self.ledger_dir,
+            permission=self.permission,
+            finalize=self.finalize,
+            max_steps=self.max_steps,
+            constraints=tuple(constraints),
+            sink=sink,
+            approval=self.approval if self.allow_approval else None,
+            allow_approval=self.allow_approval,
+            catalog_profile=self.catalog_profile,
+            gateway_context=self.gateway_context,
+        )
+        try:
+            result_path = run.ledger_path.with_suffix(".result.json")
+            result_path.write_text(
+                result_json(run.result) + chr(10), encoding="utf-8"
+            )
+        except OSError:
+            pass
+        return run
+
     @classmethod
     def from_repl(
         cls,
@@ -412,6 +465,7 @@ class RuntimeAdapter:
         level: ExecutionLevel | int,
         client: Any = None,
         plan_only: bool = False,
+        ledger_dir: str | Path | None = None,
     ) -> RuntimeAdapter:
         project_ctx = getattr(repl, "project_ctx", None)
         workspace = (
@@ -440,7 +494,11 @@ class RuntimeAdapter:
             workspace=workspace,
             model_config=model_config_for(repl.registry, model_ids),
             permission=permission_mode_for(level),
-            ledger_dir=Path.home() / ".xenon" / "ledger" / "repl",
+            ledger_dir=(
+                Path(ledger_dir)
+                if ledger_dir is not None
+                else Path.home() / ".xenon" / "ledger" / "repl"
+            ),
             client=client,
             approval=KernelApprovalProvider(repl),
             allow_approval=(
@@ -597,6 +655,66 @@ def _render_kernel_result(
         )
 
 
+def resume_kernel_plan(
+    repl: Any,
+    *,
+    task_id: str,
+    plan: Any,
+    plan_digest: str,
+    approval_id: str,
+    objective: str = "",
+    user_objective: str = "",
+    callback: Any = None,
+    client: Any = None,
+    ledger_dir: str | Path | None = None,
+) -> HarnessRun | None:
+    """Resume an approved kernel plan and render its execution result."""
+
+    if callback is None:
+        callback = repl._make_callback()
+    model_ids = list(repl.registry.get_role_priority("planner"))
+    adapter = RuntimeAdapter.from_repl(
+        repl,
+        model_ids=model_ids,
+        level=ExecutionLevel.EXECUTE,
+        client=client,
+        ledger_dir=ledger_dir,
+    )
+    sink = ReplEventSink(callback)
+    start_capture = getattr(repl, "_start_log_capture", None)
+    if callable(start_capture):
+        start_capture()
+    try:
+        try:
+            run = adapter.resume(
+                task_id=task_id,
+                plan=plan,
+                plan_digest=plan_digest,
+                approval_id=approval_id,
+                objective=objective,
+                user_objective=user_objective,
+                sink=sink,
+            )
+        finally:
+            stop_capture = getattr(repl, "_stop_log_capture", None)
+            if callable(stop_capture):
+                repl._captured_log = stop_capture()
+    except Exception as exc:  # noqa: BLE001 — approval command must report failure
+        _clear_legacy_task_state(repl)
+        _console_for(repl).print(f"[red]Kernel plan execution failed: {exc}[/red]")
+        add_message = getattr(repl.ctx_mgr, "add_assistant_message", None)
+        if callable(add_message):
+            add_message(f"[Kernel plan execution error] {exc}")
+        return None
+    _render_kernel_result(
+        repl,
+        run,
+        callback,
+        model_id=adapter.model_config.model_id,
+    )
+    return run
+
+
 def run_kernel_turn(
     repl: Any,
     *,
@@ -662,6 +780,7 @@ __all__ = [
     "kernel_runtime_requested",
     "model_config_for",
     "permission_mode_for",
+    "resume_kernel_plan",
     "run_kernel_turn",
     "should_route_to_kernel",
 ]

@@ -136,9 +136,43 @@ def _decide_plan(repl: Any, *, approve: bool) -> str:
     if approve:
         repl._plan_mode_active = False
         record("plan_mode/set", active=False)
-        return (
-            "✅ 计划已批准并绑定（尚未执行）。\n"
+        approved_text = (
+            "✅ 计划已批准并绑定（尚未执行）。" + chr(10) +
             f"   task: {evidence.task_id} · steps: {len(extracted.plan.steps)}"
+        )
+        make_callback = getattr(repl, "_make_callback", None)
+        registry = getattr(repl, "registry", None)
+        if not callable(make_callback) or registry is None:
+            return approved_text
+        from xenon.repl.runtime_adapter import resume_kernel_plan
+
+        state = evidence.task_state
+        objective = str(state.get("objective") or "")
+        user_objective = str(
+            state.get("user_objective") or state.get("objective") or ""
+        )
+        try:
+            run = resume_kernel_plan(
+                repl,
+                task_id=evidence.task_id,
+                plan=extracted.plan,
+                plan_digest=extracted.digest,
+                approval_id=event_id,
+                objective=objective,
+                user_objective=user_objective,
+            )
+        except Exception as exc:  # noqa: BLE001 — approval command must report
+            return (
+                "✅ 审批已记录，但计划执行启动失败：" + chr(10) +
+                f"   {str(exc)[:300]}"
+            )
+        if run is None:
+            return "✅ 审批已记录，但计划执行失败；未标记为已交付。"
+        return (
+            "✅ 计划已批准并执行。" + chr(10) +
+            f"   phase: {run.result.phase.value} · "
+            f"accepted: {run.result.accepted} · "
+            f"commit: {(run.result.finalize_sha or '-')[:12]}"
         )
     mode_state = "保持开启" if repl._plan_mode_active else "保持关闭"
     return f"❌ 计划已驳回；未执行，计划模式{mode_state}。"
