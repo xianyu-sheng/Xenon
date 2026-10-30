@@ -81,6 +81,8 @@ def test_handle_chat_in_plan_mode_routes_kernel_plan_only(
     assert calls
     assert calls[0]["plan_only"] is True
     assert calls[0]["execution_policy"].level == ExecutionLevel.READ_ONLY
+    assert "kernel plan-only" in calls[0]["objective"]
+    assert "计划可以包含写/执行步骤" in calls[0]["objective"]
     assert repl._pending_action is None
 
 

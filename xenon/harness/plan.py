@@ -51,16 +51,44 @@ def _capability(value: Any) -> Capability:
         raise PlanError(f"unknown capability: {value!r}") from exc
 
 
+_STEP_KIND_ALIASES = {
+    "write": StepKind.EDIT,
+    "create": StepKind.EDIT,
+    "modify": StepKind.EDIT,
+    "read": StepKind.INSPECT,
+    "test": StepKind.VERIFY,
+    "run": StepKind.EXECUTE,
+}
+
+
 def _step_kind(value: Any) -> StepKind:
+    raw = str(value)
+    alias = _STEP_KIND_ALIASES.get(raw.lower())
+    if alias is not None:
+        return alias
     try:
-        return StepKind(str(value))
+        return StepKind(raw)
     except ValueError as exc:
         raise PlanError(f"unknown step kind: {value!r}") from exc
 
 
+_PROPOSITION_ALIASES = {
+    "file_exists": PropositionKind.FILE_CREATED,
+    "file_written": PropositionKind.FILE_CHANGED,
+    "file_content_matches": PropositionKind.FILE_CHANGED,
+    "content_matches": PropositionKind.FILE_CHANGED,
+    "tests_passed": PropositionKind.TEST_PASSED,
+    "test_run": PropositionKind.TEST_PASSED,
+}
+
+
 def _proposition(value: Any) -> PropositionKind:
+    raw = str(value)
+    alias = _PROPOSITION_ALIASES.get(raw.lower())
+    if alias is not None:
+        return alias
     try:
-        return PropositionKind(str(value))
+        return PropositionKind(raw)
     except ValueError as exc:
         raise PlanError(f"unknown expectation kind: {value!r}") from exc
 

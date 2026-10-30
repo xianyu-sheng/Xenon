@@ -612,22 +612,38 @@ def test_resume_planned_rejects_plan_mode_and_missing_accepted_plan() -> None:
         )
 
 
-def test_resume_planned_rejects_empty_plan_and_existing_execution_events() -> None:
+def test_plan_only_invalid_plan_is_blocked_not_planned() -> None:
+    ledger = Ledger.in_memory("task-1")
+    invalid = PlanProposal(
+        analysis="duplicate step id",
+        steps=(_plan().steps[0], _plan().steps[0]),
+    )
+    result = _runtime(ledger).run(
+        replace(_calc_spec(), mode=TaskMode.PLAN),
+        ScriptedStrategy([SubmitPlan(invalid)]),
+    )
+
+    assert result.phase is TaskPhase.BLOCKED
+    assert "计划生成失败" in result.answer
+    assert ledger.read(EventKind.PLAN_ACCEPTED) == ()
+
+
+def test_plan_only_empty_plan_is_blocked_not_planned() -> None:
     ledger = Ledger.in_memory("task-1")
     empty = PlanProposal(analysis="empty", steps=())
-    _runtime(ledger).run(
+    result = _runtime(ledger).run(
         replace(_calc_spec(), mode=TaskMode.PLAN),
         ScriptedStrategy([SubmitPlan(empty)]),
     )
-    with pytest.raises(ValueError, match="no steps"):
-        _runtime(ledger).resume_planned(
-            _calc_spec(),
-            ScriptedStrategy([]),
-            empty,
-            plan_digest=_ledger_plan_digest(ledger),
-            approval_id="approval-1",
-        )
 
+    assert result.phase is TaskPhase.BLOCKED
+    assert result.accepted is False
+    assert result.answer
+    assert ledger.read(EventKind.PLAN_ACCEPTED) == ()
+    assert ledger.read(EventKind.STEP_STARTED) == ()
+
+
+def test_resume_planned_rejects_existing_execution_events() -> None:
     second = Ledger.in_memory("task-2")
     plan = PlanProposal(analysis="edit", steps=_plan().steps[:1])
     _runtime(second).run(

@@ -207,15 +207,19 @@ a rejected or blocked plan is never shown as delivered.
 
 The kernel now has a plan-only primitive for the remaining `/plan` migration:
 `TaskMode.PLAN` accepts one plan and stops in `TaskPhase.PLANNED` without
-starting a step or executing a tool. It refuses any non-`SubmitPlan` action,
-so a misbehaving strategy cannot turn plan-only into execution. The REPL
+starting a step or executing a tool. The plan may include write/execute steps
+(the planning prompt is not clamped to the read-only execution boundary), but
+empty or invalid plans fail closed instead of becoming pending approvals. It
+refuses any non-`SubmitPlan` action, so a misbehaving strategy cannot turn
+plan-only into execution. The REPL
 adapter exposes `plan_only=True`, renders the result as `Kernel · plan`, and
 marks the turn `pending-approval` instead of blocking it. `/plan approve` and
 `/plan reject` bind a decision to the current planned ledger and record it in
 session events; the kernel ledger stays immutable. Approve exits plan mode and
 calls `resume_kernel_plan()` to execute the accepted plan in the same ledger;
 reject keeps plan mode and writes nothing. Deferred-write `/plan` now uses
-kernel plan-only; the remaining work is the real TTY acceptance path.
+kernel plan-only; the real TTY transcript is in
+`docs/evidence/tty-plan-approval/`.
 
 The runtime also has a same-ledger resume primitive, `resume_planned()`: it
 requires the accepted plan digest and an approval id, appends `plan_approved`,

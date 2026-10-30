@@ -87,7 +87,7 @@ _WRITE_TARGET_KEYS = ("file_path", "dir_path", "path")
 def write_targets_for(tool_name: str, params: dict) -> list[str]:
     """Best-effort extraction of the paths a write tool will touch."""
 
-    if tool_name in {"batch_write", "batch_edit"}:
+    if tool_name in {"batch_write", "batch_edit", "apply_patch"}:
         items = params.get("files") or params.get("edits") or []
         targets: list[str] = []
         if isinstance(items, list):

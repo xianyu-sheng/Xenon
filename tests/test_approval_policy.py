@@ -61,6 +61,9 @@ def test_rule_ttl_env_override(monkeypatch):
 def test_write_targets_for_batch_and_single():
     assert write_targets_for("write_file", {"file_path": "a.txt"}) == ["a.txt"]
     assert write_targets_for(
+        "apply_patch", {"files": [{"path": "a.txt", "content": "x"}]}
+    ) == ["a.txt"]
+    assert write_targets_for(
         "batch_write", {"files": [{"file_path": "a"}, {"file_path": "b"}]}
     ) == ["a", "b"]
 

@@ -72,7 +72,9 @@ The object is a capability-based plan:
       "capability": "read",
       "params": {"file_path": "path"},
       "targets": ["path"],
-      "expects": [],
+      "expects": [
+        {"id": "e1", "kind": "file_created", "target": "path"}
+      ],
       "depends_on": []
     }
   ]
@@ -80,7 +82,12 @@ The object is a capability-based plan:
 
 Rules:
 - Steps use capabilities, never concrete tool names.
+- `kind` MUST be one of: inspect, edit, verify, commit, clean, execute, think.
 - Step ids are unique integers; depends_on refers to earlier ids.
+- `expects` MUST be an array of objects with `id`, `kind`, and `target`.
+  Allowed `kind` values: file_changed, file_created, test_passed, commit_created,
+  pushed, no_stray_changes. Never use strings, null, or a bare kind in this
+  array. If unsure, use `[]`.
 - Use expects only for claims a deterministic receipt can prove; otherwise leave
   them empty and let V2 audit report the gap.
 - Do not name a commit or push step; the finalizer owns delivery commits.

@@ -252,7 +252,9 @@ class LegacyToolGateway:
                 candidate = Path(path)
                 if not candidate.is_absolute():
                     candidate = workspace / candidate
-                before[path] = candidate.exists()
+                exists = candidate.exists()
+                before[path] = exists
+                before[str(candidate.resolve())] = exists
         try:
             result = self._executor.execute(
                 execution_call.spec_name,
@@ -479,13 +481,21 @@ class LegacyToolGateway:
         if changed_paths or (write_tool and targets):
             paths = tuple(changed_paths or targets)
             changed = bool(meta.get("changed", True))
+            def _absent(path: str) -> bool:
+                if path in before:
+                    return before[path] is False
+                candidate = Path(path)
+                if not candidate.is_absolute():
+                    candidate = workspace / candidate
+                return before.get(str(candidate.resolve())) is False
+
             created = [
                 path
                 for path in _as_list(meta.get("created_paths"))
-                if before.get(path, False) is False
+                if _absent(path)
             ]
             if write_tool and not created:
-                created = [path for path in paths if before.get(path) is False]
+                created = [path for path in paths if _absent(path)]
             hashes = {}
             for path in paths:
                 candidate = Path(path)

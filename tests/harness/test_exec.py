@@ -101,6 +101,49 @@ def test_run_plan_uses_real_workspace_ledger_and_finalizer(
     assert "xenon:" in _git(tmp_path, "log", "-1", "--pretty=%s").stdout
 
 
+def test_parse_plan_normalizes_common_step_kind_aliases() -> None:
+    plan = parse_plan(
+        {
+            "objective": "create a file",
+            "steps": [
+                {
+                    "id": 1,
+                    "kind": "write",
+                    "capability": "edit",
+                    "params": {},
+                }
+            ],
+        }
+    )
+
+    assert plan.proposal.steps[0].kind.value == "edit"
+
+
+def test_parse_plan_normalizes_common_expectation_aliases() -> None:
+    plan = parse_plan(
+        {
+            "objective": "create a file",
+            "steps": [
+                {
+                    "id": 1,
+                    "kind": "edit",
+                    "capability": "edit",
+                    "params": {},
+                    "expects": [
+                        {
+                            "id": "e1",
+                            "kind": "file_content_matches",
+                            "target": "a.txt",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert plan.proposal.steps[0].expects[0].kind.value == "file_changed"
+
+
 def test_xenon_exec_emits_jsonl_and_result(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
