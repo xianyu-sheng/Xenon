@@ -220,6 +220,11 @@ class Budget:
     # V2 audit rounds across repeated Finish attempts.  The first audit is
     # always allowed; a second unresolved round must block/abstain.
     max_audit_rounds: int = 1
+    # Total context window of the model doing the work, in tokens.  0 means
+    # "unknown", in which case the view falls back to a heuristic.  Knowing
+    # the real window is what makes compaction trigger at the right point:
+    # an 8k model and a 200k model should not share one magic multiplier.
+    context_window: int = 0
 
 
 @dataclass(frozen=True, slots=True)

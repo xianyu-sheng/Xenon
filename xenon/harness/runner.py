@@ -97,6 +97,19 @@ def _runtime_bundle(
     return root, ledger_path, ledger, runtime
 
 
+def _context_window(strategy: Strategy) -> int:
+    """The window the strategy's model actually has (0 when unknown)."""
+
+    provider = getattr(strategy, "actor", None) or getattr(
+        strategy, "planner", None
+    )
+    config = getattr(provider, "config", None)
+    try:
+        return int(getattr(config, "context_window", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def run_task(
     objective: str,
     *,
@@ -148,7 +161,10 @@ def run_task(
         user_objective=user_objective,
         constraints=tuple(constraints),
         mode=mode,
-        budget=Budget(max_steps=max_steps),
+        budget=Budget(
+            max_steps=max_steps,
+            context_window=_context_window(strategy),
+        ),
     )
     result = runtime.run(spec, strategy)
     report = ledger.verify()
@@ -208,7 +224,10 @@ def resume_task(
         user_objective=user_objective,
         constraints=tuple(constraints),
         mode=TaskMode.TASK,
-        budget=Budget(max_steps=max_steps),
+        budget=Budget(
+            max_steps=max_steps,
+            context_window=_context_window(strategy),
+        ),
     )
     result = runtime.resume_planned(
         spec,

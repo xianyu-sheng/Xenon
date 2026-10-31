@@ -39,6 +39,7 @@ from xenon.kernel.strategies import (
     PlanProvider,
 )
 from xenon.utils.llm_client import chat_completion
+from xenon.utils.llm_errors import ResponseTruncatedError
 
 
 class ActionParseError(ValueError):
@@ -57,6 +58,10 @@ class ModelConfig:
     max_tokens: int = 8192
     temperature: float = 0.0
     reasoning_effort: str = ""
+    # Total context window in tokens (0 = unknown).  It is a property of the
+    # model, so the loop can size its working set against it instead of
+    # guessing from the output budget alone.
+    context_window: int = 0
 
 
 _DEFAULT_MAX_TOKENS = 8192
@@ -590,6 +595,21 @@ def _call_model(
     return caller(config.model_id, messages, **kwargs)
 
 
+def truncation_thought() -> Think:
+    """What the loop says to itself (and the ledger) after a cut-off reply.
+
+    A truncated reply is not a protocol violation — the model simply ran out
+    of output room.  Retrying the identical ask burns a round; telling it to
+    emit one smaller action usually does not.
+    """
+
+    return Think(
+        "The previous model reply was cut off by the output limit, so it was "
+        "not a usable action. Return exactly one JSON action, keeping params "
+        "short (one tool call, no prose)."
+    )
+
+
 class LLMActionProposer:
     """Call a model once per runtime turn and parse one capability action."""
 
@@ -608,6 +628,8 @@ class LLMActionProposer:
     def __call__(self, view: ModelView) -> Action:
         try:
             return parse_action(self._call(build_messages(view)))
+        except ResponseTruncatedError:
+            return truncation_thought()
         except ActionParseError as exc:
             # Do not crash the task on a malformed model turn.  A thought is
             # ledger-visible, the model sees it in the next working set, and
@@ -828,6 +850,8 @@ class LLMStepActor:
                     build_step_messages(view, step, calls),
                 )
             )
+        except ResponseTruncatedError:
+            return truncation_thought()
         except (ActionParseError, TypeError, ValueError):
             # An unparseable step proposal must not turn into a tool call or a
             # success claim: fall back to a note and let the budget bound it.

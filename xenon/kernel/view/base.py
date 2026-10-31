@@ -39,6 +39,28 @@ _CHAT_EVENT_KINDS = frozenset(
 
 # Compaction digest sizing.  Reserved chars guarantee a record exists even
 # when priority events already consume the whole budget.
+# Rough characters-per-token used when the real window is unknown.  Mixed
+# CJK/ASCII traffic sits well under this, so the estimate stays conservative.
+_CHARS_PER_TOKEN = 2
+
+
+def _context_chars(budget: Budget) -> int:
+    """Characters of history the model can afford to see.
+
+    With a known window, reserve the output budget and a quarter of the
+    window for instructions/tool schemas, then convert to characters.  Without
+    one, fall back to the historical output-budget heuristic.
+    """
+
+    output = int(budget.max_tokens or _DEFAULT_MAX_TOKENS)
+    window = int(getattr(budget, "context_window", 0) or 0)
+    if window > 0:
+        reserve = output + window // 4
+        available = max(1024, window - reserve)
+        return max(512, available * _CHARS_PER_TOKEN)
+    return max(512, output * _CHARS_PER_TOKEN)
+
+
 def _canonical_len(value: Any) -> int:
     return len(_canonical(value))
 
@@ -270,9 +292,7 @@ def _working_set(
         if _priority(item):
             selected[item["seq"]] = item
 
-    max_chars = max(
-        512, int((budget.max_tokens or _DEFAULT_MAX_TOKENS) * 2)
-    )
+    max_chars = _context_chars(budget)
     used = sum(len(_canonical(item)) for item in selected.values())
     for item in reversed(summaries):
         if item["seq"] in selected:

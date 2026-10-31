@@ -230,3 +230,46 @@ def test_repeated_tool_call_blocks_the_run():
     # Three identical calls are allowed; the fourth is the one that trips it.
     receipts = [e for e in ledger.read() if e.kind is EventKind.TOOL_RECEIPT]
     assert len(receipts) == 3
+
+
+# ── 上下文窗口感知（#322 / docs/design/mechanism-fit.md）──────────────
+
+
+def test_context_window_sizes_the_working_set():
+    """A small window must fold earlier than a large one, at the same output
+    budget.  This is the whole point of knowing the real window."""
+
+    events = [_Event(i, f"tool_{i}") for i in range(1, 300)]
+
+    small, small_folded = _working_set(
+        events,
+        mode=TaskMode.TASK,
+        budget=Budget(max_tokens=2048, context_window=8192),
+    )
+    large, large_folded = _working_set(
+        events,
+        mode=TaskMode.TASK,
+        budget=Budget(max_tokens=2048, context_window=200000),
+    )
+
+    assert len(small_folded) > len(large_folded)
+    assert len(small) < len(large)
+
+
+def test_unknown_context_window_falls_back_to_the_heuristic():
+    from xenon.kernel.view.base import _context_chars
+
+    budget = Budget(max_tokens=4096)
+
+    assert _context_chars(budget) == 8192
+
+
+def test_context_window_reserves_room_for_output():
+    from xenon.kernel.view.base import _context_chars
+
+    narrow = _context_chars(Budget(max_tokens=4096, context_window=8192))
+    wide = _context_chars(Budget(max_tokens=4096, context_window=128000))
+
+    assert narrow < wide
+    # The reserve keeps the history from claiming the entire window.
+    assert narrow <= (8192 - 4096) * 2
