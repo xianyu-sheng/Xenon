@@ -252,6 +252,22 @@ plan decision is recorded as `plan_reviewed`
 (`accepted` / `amended` / `rejected` + obligation ids), and step decisions stay
 in `step_explored`.
 
+### Child tasks are the same loop
+
+`/sub-agent` runs `xenon.harness.child.run_child_task`, i.e. the same `run_task`
+loop with:
+
+- its **own ledger** (parent stays single-writer, no event copying);
+- **no delivery commit** (`finalize=False`) — the parent or the user owns delivery;
+- a child profile that selects phases (`react`, `plan-execute`, `plan-react`,
+  `kernel`, `reflection`) but never enables plan approval/review loops;
+- a timeout that is reported as data ("timeout after Ns"), never raised into the
+  parent turn.
+
+Depth is structurally 1: the loop has no spawn tool, so a child cannot recurse.
+The parent records `child_task` in the **session** event stream with a ledger
+pointer (`child_evidence`), which is what "parent evidence" means in this slice.
+
 ### Evaluation runs on the same loop
 
 `evals/swebench_xenon.py` no longer constructs legacy engines. It calls

@@ -6,6 +6,7 @@ code generation, and sub-agent delegation.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from xenon.repl.command_groups.common import confirm_action
@@ -307,9 +308,6 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
       /sub-agent <task> --timeout 30            # 30 秒超时
       /sub-agent --parallel taskA|taskB|taskC   # 并行 3 个子任务
     """
-    from xenon.engine.context import AgentContext
-    from xenon.engine.react_engine import ReActEngine
-
     if not args or not args.strip():
         return (
             "📋 /sub-agent — 委派子 Agent 执行任务\n\n"
@@ -371,54 +369,79 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
     if repl is None:
         return "❌ 无法获取 REPL 实例"
 
+    from xenon.harness.child import (
+        CHILD_PROFILES,
+        child_evidence,
+        run_child_task,
+        run_child_tasks,
+    )
+    from xenon.repl.runtime_adapter import model_config_for
+
+    profile = engine_type.replace("_", "-")
+    if profile not in CHILD_PROFILES:
+        return (
+            f"❌ 未知子任务 profile: {engine_type}"
+            f"（可用: {', '.join(sorted(CHILD_PROFILES))}）"
+        )
+
     model_ids = [
         e.model_id
         for e in (repl.model_pool.get_healthy() or repl.model_pool.list_all())
     ]
     if not model_ids:
         return "❌ 模型池为空，请先运行 /setup 配置模型。"
-    model_configs = getattr(repl, "_model_configs", None) or {}
 
-    # 构建引擎
-    engine = ReActEngine(
-        model_ids,
-        max_iterations=15,
-        callback=getattr(repl, "_engine_callback", None),
-        model_configs=model_configs,
-        subagent_timeout=timeout,
+    workspace = (
+        getattr(getattr(repl, "project_ctx", None), "root", None) or Path.cwd()
     )
+    parent_task_id = getattr(repl, "_last_kernel_task_id", "") or "repl"
+    ledger_dir = Path.home() / ".xenon" / "ledger" / "children"
+    model = model_config_for(repl.registry, model_ids)
 
-    # 构建上下文
-    ctx = AgentContext()
-    # 复制当前对话历史（最近 10 条）
-    try:
-        history = repl.ctx_mgr.get_messages()[-10:]
-        ctx.set_conversation_messages(list(history))
-    except Exception:
-        pass
-
-    # 构建 action_input
     if parallel_tasks:
-        action_input: dict[str, Any] = {
-            "task_list": [{"task": t, "engine": "react"} for t in parallel_tasks]
-        }
-        display_task = f"并行 {len(parallel_tasks)} 个子任务"
+        outcomes = run_child_tasks(
+            objectives=parallel_tasks,
+            workspace=workspace,
+            model=model,
+            profile=profile,
+            parent_task_id=parent_task_id,
+            ledger_dir=ledger_dir,
+            max_steps=15,
+            timeout=timeout,
+        )
     else:
         if not task:
             return "❌ 请提供任务描述"
-        action_input = {"task": task, "engine": engine_type}
-        if timeout:
-            action_input["timeout"] = timeout
-        display_task = task
+        outcomes = (
+            run_child_task(
+                objective=task,
+                workspace=workspace,
+                model=model,
+                profile=profile,
+                parent_task_id=parent_task_id,
+                ledger_dir=ledger_dir,
+                max_steps=15,
+                timeout=timeout,
+            ),
+        )
 
-    import logging
+    # The parent records a pointer to each child ledger; it never copies the
+    # child's events into its own ledger (single-writer stays intact).
+    log = getattr(repl, "_session_events", None)
+    if log is not None:
+        for outcome in outcomes:
+            try:
+                log.append(
+                    "child_task",
+                    role="tool",
+                    content=outcome.objective[:200],
+                    metadata=child_evidence(outcome),
+                )
+            except Exception:  # noqa: BLE001 — evidence must not break the run
+                pass
 
-    logger = logging.getLogger(__name__)
-    logger.info("用户 /sub-agent 委派: %s (引擎=%s)", display_task[:80], engine_type)
-
-    try:
-        result = engine._spawn_subagent(action_input, ctx, None)
-        return result
-    except Exception as e:
-        logger.exception("/sub-agent 执行失败")
-        return f"❌ 子 Agent 执行失败: {e}"
+    delivered = sum(1 for outcome in outcomes if outcome.delivered)
+    return (
+        f"🧬 子任务 {delivered}/{len(outcomes)} 已交付\n\n"
+        + "\n\n".join(outcome.summary() for outcome in outcomes)
+    )

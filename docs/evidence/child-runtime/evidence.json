@@ -1,0 +1,13 @@
+{
+  "child_id": "evidence-parent-sub1-26c941",
+  "objective": "Add multiply(a, b) to calc.py and a test_multiply in test_calc.py. Run: python -m pytest test_calc.py -q, and claim test_passed for target 'test_calc.py' only if it passes.",
+  "profile": "kernel",
+  "accepted": true,
+  "phase": "finalized",
+  "delivered": true,
+  "ledger": "docs\\evidence\\child-runtime\\ledger\\evidence-parent-sub1-26c941.jsonl",
+  "debt": [],
+  "tool_calls": 5,
+  "elapsed_seconds": 32.675,
+  "error": null
+}
