@@ -130,4 +130,5 @@ jobs:
       - name: Platform test subset
         run: >-
           python -m pytest tests/test_public_api.py tests/test_b1_command_quoted.py
-          tests/test_truncation_and_limits.py -q --timeout=120 -p no:cacheprovider
+          tests/test_turn_routing.py tests/test_child_runtime.py
+          -q --timeout=120 -p no:cacheprovider
