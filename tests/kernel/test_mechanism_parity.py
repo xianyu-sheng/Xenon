@@ -273,3 +273,77 @@ def test_context_window_reserves_room_for_output():
     assert narrow < wide
     # The reserve keeps the history from claiming the entire window.
     assert narrow <= (8192 - 4096) * 2
+
+
+# ── 窗口必须跟随模型（1M 模型就要 1M 的预算）────────────────────────
+
+
+def test_model_window_reaches_the_spec_budget():
+    """The agent is sized by the model it runs on, not by a constant."""
+
+    from xenon.harness.llm import ModelConfig, build_llm_loop_strategy
+    from xenon.harness.runner import _context_window
+    from xenon.kernel.strategies import LoopProfile
+
+    strategy = build_llm_loop_strategy(
+        ModelConfig(model_id="test/fake", context_window=1_000_000),
+        LoopProfile(),
+    )
+
+    assert _context_window(strategy) == 1_000_000
+
+
+def test_registry_window_flows_into_the_adapter():
+    """A 1M registry model and a 128K one must produce different windows."""
+
+    from xenon.repl.runtime_adapter import model_config_for
+
+    class _Model:
+        def __init__(self, window: int) -> None:
+            self.model_id = "test/fake"
+            self.base_url = ""
+            self.api_key = ""
+            self.max_tokens = 8192
+            self.reasoning_effort = ""
+            self.context_window = window
+
+    class _Registry:
+        def __init__(self, window: int) -> None:
+            self._window = window
+
+        def get_model_by_id(self, model_id: str) -> _Model:
+            return _Model(self._window)
+
+    big = model_config_for(_Registry(1_000_000), ["test/fake"])
+    small = model_config_for(_Registry(128_000), ["test/fake"])
+
+    assert big.context_window == 1_000_000
+    assert small.context_window == 128_000
+    # And the sizing follows: the big model may keep far more history.
+    from xenon.kernel.view.base import _context_chars
+
+    assert _context_chars(Budget(context_window=big.context_window)) > _context_chars(
+        Budget(context_window=small.context_window)
+    )
+
+
+def test_kernel_turn_syncs_the_repl_meter():
+    from xenon.repl.runtime_adapter import sync_context_window
+
+    class _Ctx:
+        max_tokens = 128000
+
+    class _Registry:
+        def context_window_for(self, aliases):
+            return 1_000_000
+
+        def get_model_by_id(self, model_id):
+            return None
+
+    class _Repl:
+        ctx_mgr = _Ctx()
+        registry = _Registry()
+
+    repl = _Repl()
+    assert sync_context_window(repl, ["deepseek/deepseek-v4-pro"]) == 1_000_000
+    assert repl.ctx_mgr.max_tokens == 1_000_000

@@ -23,6 +23,9 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- 窗口跟随模型：`runtime_adapter.model_config_for` / SDK 不再丢 `context_window`；kernel 轮次同步 REPL 计量（1M 模型不再按 128K 显示）；状态栏显示真实窗口。
+- 设计文档：`docs/design/steering.md`（注入时机 A/B/C 三方案与语义）、`docs/design/parallel-branching.md`（并行=事件流分叉/回流，不做 DAG）。
+- 遗漏审查登记：#326（token 用量计账）、#327（取消打断模型调用），kernel 流式与模型链 fallback 判定见文档。
 - 机制适配性审计 `docs/design/mechanism-fit.md`：逐条判定迁入/改造/放弃（放弃 deadline 降级、反思打分、LLM 自动切范式，理由写明）。
 - `Budget.context_window` + `ModelConfig.context_window`：view 按模型真实窗口折算输入预算，不再用 `max_tokens*2` 魔法系数。
 - 截断变为具体下一步：`ResponseTruncatedError` 不再打穿 loop，转为"输出被截断，请给出一个更短的 action"的 thought（附动作与步骤两处）。
