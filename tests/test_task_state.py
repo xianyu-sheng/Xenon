@@ -122,14 +122,6 @@ def test_calls_are_folded_from_tracker_objects() -> None:
     assert state.missing_delivery() == []
 
 
-def test_all_engine_families_share_the_same_delivery_exit() -> None:
-    from xenon.engine.base import BaseEngine
-    from xenon.engine.combined_engines import SteeringMixin
-
-    assert hasattr(BaseEngine, "run_task")
-    assert hasattr(SteeringMixin, "run_task")
-
-
 def test_commit_gate_ignores_old_hashes_from_log_output() -> None:
     state = TaskState(objective="x", execution_level=3, required=["commit"])
     state.record_tool(

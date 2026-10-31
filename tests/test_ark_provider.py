@@ -365,16 +365,16 @@ def test_ark_context_windows_reach_registry_and_pool() -> None:
 
 
 def test_ark_http_error_classification_matches_failover_contract() -> None:
-    from xenon.engine.base import BaseEngine
     from xenon.repl.repl import REPL
+    from xenon.repl.transient_errors import is_transient_error
 
     def error(status: int) -> httpx.HTTPStatusError:
         request = httpx.Request("POST", f"{providers.ARK_BASE_URL}/chat/completions")
         response = httpx.Response(status, request=request)
         return httpx.HTTPStatusError(str(status), request=request, response=response)
 
-    assert BaseEngine._is_transient_error(error(429)) is True
-    assert BaseEngine._is_transient_error(error(503)) is True
-    assert BaseEngine._is_transient_error(error(401)) is False
+    assert is_transient_error(error(429)) is True
+    assert is_transient_error(error(503)) is True
+    assert is_transient_error(error(401)) is False
     assert REPL._is_terminal_model_error(error(401)) is True
     assert REPL._is_terminal_model_error(error(404)) is True

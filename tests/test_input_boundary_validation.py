@@ -262,8 +262,3 @@ class TestEngineRunInputValidation:
             assert "_validate_run_input" in src, (
                 f"{cls.__name__}.run 未调用统一输入校验"
             )
-
-    def test_validation_in_base_engine(self):
-        from xenon.engine.base import BaseEngine
-
-        assert hasattr(BaseEngine, "_validate_run_input")
