@@ -173,7 +173,10 @@ def test_repl_continuation_without_pending_clarifies(monkeypatch):
     repl = _make_repl()
     called: list[str] = []
     monkeypatch.setattr(repl, "_run_direct", lambda *a, **k: called.append("direct"))
-    monkeypatch.setattr(repl, "_run_engine", lambda *a, **k: called.append("engine"))
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.run_kernel_turn",
+        lambda owner, **k: called.append("engine"),
+    )
 
     repl._handle_chat("继续")
 
@@ -204,7 +207,10 @@ def test_repl_new_topic_drops_stale_pending(monkeypatch):
     repl = _make_repl()
     repl._pending_action = _pending()
     monkeypatch.setattr(repl, "_run_direct", lambda *a, **k: None)
-    monkeypatch.setattr(repl, "_run_engine", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.run_kernel_turn",
+        lambda owner, **k: None,
+    )
 
     repl._handle_chat("今天天气怎么样")
 

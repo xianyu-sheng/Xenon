@@ -66,7 +66,10 @@ def test_handle_chat_in_plan_mode_routes_kernel_plan_only(
     repl = _make_repl(tmp_path, monkeypatch)
     repl._plan_mode_active = True
     monkeypatch.setattr(repl, "_run_direct", lambda *a, **k: None)
-    monkeypatch.setattr(repl, "_run_engine", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.run_kernel_turn",
+        lambda owner, **k: None,
+    )
     calls: list[dict] = []
     monkeypatch.setattr(
         "xenon.repl.runtime_adapter.run_kernel_turn",

@@ -193,20 +193,3 @@ def _setup_retry_harness(monkeypatch, tmp_path, answers):
         type("_R", (), {"record_model_success": lambda self, m: None})(),
     )
     return repl, spec, engines, ctx
-
-
-def test_run_engine_fuses_on_same_cause_instead_of_endless_retries(
-    monkeypatch, tmp_path
-):
-    """同因失败 → 第二轮判定即熔断：不再构造第三个引擎。"""
-
-    repl, spec, engines, ctx = _setup_retry_harness(
-        monkeypatch, tmp_path, ["好的", "好的", "好的"]
-    )
-    repl._run_engine(spec, "帮我看看这个项目", ["openai/test"])
-
-    assert len(engines) == 1  # 只消耗 2 个引擎（首轮 + 一次重试后熔断）
-    assert repl._turn_tree.tail().status == "fused"
-    events = repl._session_events.read()
-    assert any(e["type"] == "verification/fused" for e in events)
-    assert sum(1 for e in events if e["type"] == "verification/retry") == 1

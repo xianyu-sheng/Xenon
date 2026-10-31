@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import json
 
-from xenon.engine.combined_engines import ReactReflectionEngine
 from xenon.engine.context import AgentContext
 from xenon.engine.hollow_detector import HollowDetector
-from xenon.engine.react_engine import BUILTIN_TOOLS, ReActEngine
 from xenon.nodes.tool_executor import ToolExecutor
 from xenon.nodes.tool_node import (
     ToolNode,
@@ -286,27 +284,3 @@ def test_mcp_confirmation_never_displays_unknown_server_marker():
     assert "自动路由 / train_query" in auto
     assert "? / train_query" not in auto
     assert "rail / train_query" in qualified
-
-
-def test_mcp_tool_is_hidden_when_no_server_is_configured(monkeypatch):
-    repl = REPL.__new__(REPL)
-    engine = ReActEngine(["test/model"], tools=dict(BUILTIN_TOOLS), native_fc=False)
-    monkeypatch.setattr(repl, "_build_mcp_tools_list", lambda: "")
-
-    repl._inject_mcp_tools_into_engine(engine)
-
-    assert "mcp_call" not in engine.tools
-    assert "mcp_call" not in {
-        item["function"]["name"] for item in engine._build_tools_schema()
-    }
-
-
-def test_mcp_visibility_reaches_every_combined_engine_child(monkeypatch):
-    repl = REPL.__new__(REPL)
-    engine = ReactReflectionEngine(["test/model"])
-    monkeypatch.setattr(repl, "_build_mcp_tools_list", lambda: "")
-
-    repl._inject_mcp_tools_into_engine(engine)
-
-    assert "mcp_call" not in engine.reactor.tools
-    assert "mcp_call" not in engine.repairer.tools
