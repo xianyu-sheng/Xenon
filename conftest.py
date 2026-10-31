@@ -7,20 +7,18 @@
 将配置提到仓库根目录后，整个测试套件行为一致。
 """
 
-import pytest
-
 # 测试进程绝不调用真实 LLM：LLM 意图分类器现已默认开启，但测试必须离线、
 # 确定性。需要验证“默认开启”的用例自行 monkeypatch.delenv 后再读配置。
 import os as _os
+
+import pytest
 
 _os.environ["XENON_INTENT_CLASSIFIER_ENABLED"] = "0"
 
 # 在 conftest 加载时（最早时刻，mock 还没发生）保存 chat_completion 的真实原始引用。
 # 后续无论哪个测试怎么 mock，autouse fixture 都能恢复到这个 orig。
-import xenon.engine.base as _engine_base
 import xenon.utils.llm_client as _llm_client
 
-_ORIG_ENGINE_CHAT = _engine_base.chat_completion
 _ORIG_UTIL_CHAT = _llm_client.chat_completion
 _ORIG_UTIL_STREAM = _llm_client.chat_completion_stream
 
@@ -103,14 +101,13 @@ def _isolate_chat_completion_mock():
     """强制隔离 ``chat_completion`` mock 状态（防止跨测试文件泄漏）。
 
     背景：``tests/test_repl_real_usage.py`` 的 ``_make_repl_mock`` 用直接赋值
-    （``engine_base.chat_completion = fake``）改全局模块属性而非 ``monkeypatch.setattr``，
+    （``llm_client.chat_completion = fake``）改全局模块属性而非 ``monkeypatch.setattr``，
     当测试异常时 ``_restore_repl`` 不被调用，导致 mock 状态泄漏给后续测试文件。
     本 fixture 在每个测试后强制重置这些属性到 conftest 加载时保存的**真实原始**函数
     （而非当前 dict 值，因当前值可能已被 mock 污染）。
     """
     yield
     # 测试后强制恢复真实原始函数（无论中间被怎么 mock）
-    _engine_base.chat_completion = _ORIG_ENGINE_CHAT
     _llm_client.chat_completion = _ORIG_UTIL_CHAT
     _llm_client.chat_completion_stream = _ORIG_UTIL_STREAM
 

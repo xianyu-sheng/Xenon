@@ -23,6 +23,8 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- 删除 4 个引擎内部测试（trace 日志、perf profile、`_near_context_window`、provider 事件路由）；`conftest` 与 `test_repl_real_usage` 不再依赖 `engine.base` 的 mock 恢复。
+- 记录真实缺口 #320：`provider_request_start/end` 只由 legacy 层发出，kernel 轮次下 UI 拿不到请求阶段事件。
 - 删除 LLM 调用层（`BaseEngine`）专属测试 8 个：max_tokens 解析、model overrides、cache telemetry、prompt 稳定性、截断上限、两种 compaction、deepseek 协议、错误分类、trace 日志。等价行为改由 kernel 侧 `ModelConfig → llm_client` 透传测试与 `transient_errors` 覆盖。
 - 删除 35 个"主体即已移除架构"的测试文件（引擎循环、plan DAG、prompts/strategy guide、subagent 引擎路径、引擎 chaos）。保留覆盖器官的测试，逐个迁移后再删骨架文件。
 - **引擎宿主清零**：`xenon/repl/engine_host.py` 从 900+ 行降到 213 行，只保留日志捕获、回调工厂、历史配对收尾与 kernel 转接（`_run_react_engine`）。`_run_engine`、6 个 `_run_*_engine` 兼容壳、trace 持久化、MCP 注入、plan 面板订阅、steering 全部删除。

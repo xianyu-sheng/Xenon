@@ -27,11 +27,9 @@ def test_root_autouse_fixtures_apply_under_tests_tree(request):
 
 def test_chat_completion_is_the_real_function(request):
     """``_isolate_chat_completion_mock`` 生效时，进入用例前不应残留 mock。"""
-    import xenon.engine.base as engine_base
     import xenon.utils.llm_client as llm_client
 
     for mod, attr in (
-        (engine_base, "chat_completion"),
         (llm_client, "chat_completion"),
         (llm_client, "chat_completion_stream"),
     ):

@@ -28,7 +28,6 @@ from typing import Any, Callable
 
 import pytest
 
-import xenon.engine.base as engine_base
 import xenon.utils.llm_client as llm_client
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.provider_registry import load_credentials
@@ -107,7 +106,6 @@ def _make_repl_mock(
     optimize_prompts: bool = True,
 ) -> REPL:
     """构造一个用 mock chat_completion 的 REPL 实例。"""
-    import xenon.engine.base as engine_base
     import xenon.utils.llm_client as llm_client
 
     def fake_engine(model_id, messages, **kw):
@@ -121,10 +119,8 @@ def _make_repl_mock(
         yield text
 
     # 保存原函数，测试结束后恢复
-    orig_engine = engine_base.chat_completion
     orig_util = llm_client.chat_completion
     orig_util_stream = llm_client.chat_completion_stream
-    engine_base.chat_completion = fake_engine
     llm_client.chat_completion = fake_util
     llm_client.chat_completion_stream = fake_util_stream
 
@@ -140,14 +136,13 @@ def _make_repl_mock(
         streaming=False,
         optimize_prompts=optimize_prompts,
     )
-    repl._test_patches = (orig_engine, orig_util, orig_util_stream)
+    repl._test_patches = (orig_util, orig_util_stream)
     return repl
 
 
 def _restore_repl(repl: REPL) -> None:
     if hasattr(repl, "_test_patches"):
-        orig_engine, orig_util, orig_util_stream = repl._test_patches
-        engine_base.chat_completion = orig_engine
+        orig_util, orig_util_stream = repl._test_patches
         llm_client.chat_completion = orig_util
         llm_client.chat_completion_stream = orig_util_stream
 
