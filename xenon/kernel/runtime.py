@@ -56,6 +56,11 @@ from xenon.kernel.contracts import (
 )
 from xenon.kernel.controller import index_facts
 from xenon.kernel.finalize import FinalizeDecision, FinalizeGuard
+from xenon.kernel.guard import (
+    DEFAULT_MAX_IDENTICAL,
+    RepeatedCallGuard,
+    call_signature,
+)
 from xenon.kernel.phases import assert_transition
 from xenon.kernel.protocols import (
     ApprovalProvider,
@@ -79,6 +84,17 @@ from xenon.ledger.events import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _max_identical_calls(spec: TaskSpec) -> int:
+    """Identical-call budget: explicit spec wins, else the default."""
+
+    override = getattr(spec, "max_identical_calls", 0)
+    try:
+        value = int(override or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return value if value > 0 else DEFAULT_MAX_IDENTICAL
 
 
 class _RuntimeServices:
@@ -188,6 +204,8 @@ class LoopRuntime:
         self._step_verdicts: dict[int, list[Verdict]] = {}
         self._repair_attempts: dict[str, int] = {}
         self._replans = 0
+        self._call_guard = RepeatedCallGuard()
+        self._compaction_signature = ""
         self._finalize_decision: FinalizeDecision | None = None
         self._run_start_seq = 0
 
@@ -211,6 +229,8 @@ class LoopRuntime:
         self._step_verdicts: dict[int, list[Verdict]] = {}
         self._repair_attempts = {}
         self._replans = 0
+        self._call_guard = RepeatedCallGuard(_max_identical_calls(spec))
+        self._compaction_signature = ""
         self._finalize_decision = None
         self._run_start_seq = 0
         self._audit_rounds = 0
@@ -359,6 +379,7 @@ class LoopRuntime:
                 steps=self._plan_steps,
                 step_verdicts=self._active_step_verdicts(),
             )
+            self._note_compaction(view)
             self._transition(TaskPhase.THINKING, "propose action")
             try:
                 action = strategy.propose(view)
@@ -635,6 +656,22 @@ class LoopRuntime:
             self._transition(TaskPhase.REPLANNING, "no deterministic binding")
             self._transition(TaskPhase.RUNNING, "replan after binding failure")
             return None
+
+        if self._call_guard.register(
+            call_signature(binding.call.spec_name, binding.call.params)
+        ):
+            self._append(
+                EventKind.POLICY_DECISION,
+                EventSource.GATE,
+                {
+                    "kind": PolicyDecisionKind.VETO.value,
+                    "reason": "repeated identical tool call",
+                    "scope": [binding.call.spec_name],
+                },
+            )
+            return self._budget_block(
+                "repeated identical tool call", ("repetition",)
+            )
 
         self._transition(TaskPhase.TOOL_CALL, binding.call.spec_name)
         receipt = self._gateway.execute(binding.call, self._services)
@@ -1517,6 +1554,31 @@ class LoopRuntime:
                 revoke(grants)
             except Exception:  # noqa: BLE001 — best effort; grants have TTL too
                 logger.warning("policy revoke failed", exc_info=True)
+
+    def _note_compaction(self, view: Any) -> None:
+        """Record that the working set was folded, once per distinct fold.
+
+        Compaction is deterministic and silent from the model's point of
+        view (the digest entry is already in the view), so the ledger needs
+        its own trace or the history would look like it simply shrank.
+        """
+
+        compacted = tuple(getattr(view, "compacted", ()) or ())
+        if not compacted:
+            return
+        signature = f"{compacted[0]}:{compacted[-1]}:{len(compacted)}"
+        if signature == self._compaction_signature:
+            return
+        self._compaction_signature = signature
+        self._append(
+            EventKind.CONTEXT_COMPACTED,
+            EventSource.RUNTIME,
+            {
+                "seqs": list(compacted),
+                "count": len(compacted),
+                "input_seq": getattr(view, "input_seq", 0),
+            },
+        )
 
     def _check_limits(self) -> TaskResult | None:
         if self._cancelled:

@@ -36,6 +36,13 @@ _CHAT_EVENT_KINDS = frozenset(
 )
 
 
+# Compaction digest sizing.  Reserved chars guarantee a record exists even
+# when priority events already consume the whole budget.
+_ELIDED_MIN_CHARS = 240
+_ELIDED_MAX_LINES = 12
+_ELIDED_NOTE_SEQS = 6
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(
         value,
@@ -245,9 +252,27 @@ def _priority(item: Mapping[str, Any]) -> bool:
     return False
 
 
+def _elided_line(item: Mapping[str, Any]) -> str:
+    """One deterministic line standing in for a dropped event."""
+
+    parts = [str(item.get("kind") or "event")]
+    status = item.get("status")
+    if status:
+        parts.append(f"status={_clip(status, 60)}")
+    tool = item.get("tool")
+    if tool:
+        parts.append(f"tool={_clip(tool, 60)}")
+    step_id = item.get("step_id")
+    if step_id is not None:
+        parts.append(f"step={step_id}")
+    return f"seq={item.get('seq')} " + " ".join(parts)
+
+
 def _working_set(
     events: Sequence[Any], *, mode: TaskMode, budget: Budget
-) -> tuple[dict[str, Any], ...]:
+) -> tuple[tuple[dict[str, Any], ...], tuple[int, ...]]:
+    """Return the compacted working set plus the seqs folded away."""
+
     summaries = [
         _summary(event)
         for event in events
@@ -273,7 +298,45 @@ def _working_set(
             continue
         selected[item["seq"]] = item
         used += size
-    return tuple(selected[seq] for seq in sorted(selected))
+
+    dropped = [item for item in summaries if item["seq"] not in selected]
+    elided: tuple[int, ...] = ()
+    if dropped:
+        # Compaction never makes history vanish silently: the folded events
+        # survive as one digest entry so the model still knows a tool ran,
+        # with what status, at which seq.
+        # The digest gets a reserved slice: when priority events alone
+        # already exceed the budget, there is no "leftover room", and a
+        # compaction record must still exist.
+        reserved = max(_ELIDED_MIN_CHARS, max_chars // 6)
+        room = max(reserved, max_chars - used)
+        seqs = [item["seq"] for item in dropped]
+        lines = [_elided_line(item) for item in dropped][-_ELIDED_MAX_LINES:]
+        entry: dict[str, Any] = {
+            "seq": seqs[0],
+            "kind": "elided",
+            "count": len(dropped),
+            "seqs": seqs,
+            "lines": lines,
+        }
+        while lines and len(_canonical(entry)) > room:
+            lines = lines[1:]
+            entry["lines"] = lines
+        if not lines or len(_canonical(entry)) > room:
+            # Even one line does not fit: keep the fact, drop the detail.
+            entry = {
+                "seq": seqs[0],
+                "kind": "elided",
+                "count": len(dropped),
+                "seqs": seqs[-_ELIDED_NOTE_SEQS:],
+            }
+        selected[entry["seq"]] = entry
+        used += len(_canonical(entry))
+        elided = tuple(seqs)
+    return (
+        tuple(selected[seq] for seq in sorted(selected)),
+        elided,
+    )
 
 
 def _capability_directory(specs: Sequence[ToolSpec]) -> str:
@@ -365,7 +428,7 @@ def build_model_view(
         () if spec.mode is TaskMode.CHAT else tuple(catalog.specs())
     )
     tools = tuple(_tool_schema(item) for item in specs)
-    working_set = _working_set(
+    working_set, compacted = _working_set(
         tuple(ledger.read()), mode=spec.mode, budget=budget
     )
     system = _system_prompt(
@@ -427,4 +490,5 @@ def build_model_view(
         active_step=active_step,
         steps=tuple(steps),
         step_verdicts=tuple(step_verdicts),
+        compacted=compacted,
     )
