@@ -14,8 +14,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from xenon import create_engine
 from xenon.engine.callbacks import SilentCallback
+from xenon.engine.react_engine import ReActEngine
+
+
+def create_engine(name, models, *, callback=None):
+    """Local helper: the SDK factory is retired, the engine still exists today."""
+    assert name == "react"
+    return ReActEngine(models, callback=callback or SilentCallback())
 
 
 def test_event_sink_is_bound_to_execution_policy():
