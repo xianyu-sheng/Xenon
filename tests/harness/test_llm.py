@@ -17,6 +17,7 @@ from xenon.harness.llm import (
     LLMPlanFinisher,
     LLMPlanReviewer,
     LLMReflector,
+    LLMStepActor,
     LLMStepReviewer,
     ModelConfig,
     ModelConfigError,
@@ -35,6 +36,8 @@ from xenon.kernel.contracts import (
     Capability,
     Finish,
     ModelView,
+    StepContract,
+    StepKind,
     TaskMode,
     TaskSpec,
     Think,
@@ -944,3 +947,43 @@ def test_plan_reflection_strategy_wires_both_reviewers() -> None:
     assert strategy.plan_reviewer is not None
     assert strategy.step_reviewer is not None
     assert strategy.profile.step_reflect is True
+
+
+# ── 截断：变成具体下一步，而不是打穿 loop（#322）──────────────────────
+
+
+def test_truncated_reply_becomes_an_actionable_thought():
+    """A cut-off reply is a recoverable condition, not a crash."""
+
+    from xenon.utils.llm_errors import ResponseTruncatedError
+
+    def boom(*args, **kwargs):
+        raise ResponseTruncatedError("cut off after 3 continuations")
+
+    proposer = LLMActionProposer(ModelConfig(model_id="test/fake"), client=boom)
+    action = proposer(_reflect_view())
+
+    assert type(action).__name__ == "Think"
+    assert "output limit" in action.text
+    assert "one JSON action" in action.text
+    assert "short" in action.text
+
+
+def test_truncated_step_reply_does_not_abort_the_step():
+    from xenon.utils.llm_errors import ResponseTruncatedError
+
+    def boom(*args, **kwargs):
+        raise ResponseTruncatedError("cut off")
+
+    actor = LLMStepActor(ModelConfig(model_id="test/fake"), client=boom)
+    step = StepContract(
+        id="s1",
+        kind=StepKind.INSPECT,
+        intent="look",
+        targets=("a.py",),
+    )
+
+    action = actor(_reflect_view(), step, 1)
+
+    assert type(action).__name__ == "Think"
+    assert "output limit" in action.text
