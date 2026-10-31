@@ -943,14 +943,9 @@ class TestHandleChatEmptyInput:
 
     def test_empty_string_does_not_call_llm_or_pollute_history(self, monkeypatch):
         """_handle_chat("") → 立即 return，不调 LLM，history 不变。"""
-        import xenon.engine.base as engine_base
         import xenon.utils.llm_client as llm_client
 
         llm_called: list[bool] = []
-
-        def fake_engine(*a, **kw):
-            llm_called.append(True)
-            return "{}"
 
         def fake_util(*a, **kw):
             llm_called.append(True)
@@ -960,7 +955,6 @@ class TestHandleChatEmptyInput:
             llm_called.append(True)
             yield "ok"
 
-        monkeypatch.setattr(engine_base, "chat_completion", fake_engine)
         monkeypatch.setattr(llm_client, "chat_completion", fake_util)
         monkeypatch.setattr(llm_client, "chat_completion_stream", fake_util_stream)
 
@@ -976,14 +970,9 @@ class TestHandleChatEmptyInput:
 
     def test_pure_spaces_does_not_call_llm_or_pollute_history(self, monkeypatch):
         """_handle_chat("   ") → 立即 return（strip 后为空），同上行为。"""
-        import xenon.engine.base as engine_base
         import xenon.utils.llm_client as llm_client
 
         llm_called: list[bool] = []
-
-        def fake_engine(*a, **kw):
-            llm_called.append(True)
-            return "{}"
 
         def fake_util(*a, **kw):
             llm_called.append(True)
@@ -993,7 +982,6 @@ class TestHandleChatEmptyInput:
             llm_called.append(True)
             yield "ok"
 
-        monkeypatch.setattr(engine_base, "chat_completion", fake_engine)
         monkeypatch.setattr(llm_client, "chat_completion", fake_util)
         monkeypatch.setattr(llm_client, "chat_completion_stream", fake_util_stream)
 
