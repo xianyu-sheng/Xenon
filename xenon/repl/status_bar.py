@@ -25,6 +25,15 @@ if TYPE_CHECKING:
     from xenon.repl.model_registry import ModelRegistry
 
 
+def _format_window(tokens: int) -> str:
+    if tokens >= 1_000_000:
+        value = tokens / 1_000_000
+        return f"{value:.0f}M" if abs(value - round(value)) < 0.05 else f"{value:.1f}M"
+    if tokens >= 1000:
+        return f"{round(tokens / 1000)}K"
+    return str(tokens)
+
+
 class StatusBar:
     """轻量、自适应的输入区状态栏。"""
 
@@ -391,8 +400,13 @@ class StatusBar:
             center_parts.insert(0, warn)
         center = " · ".join(center_parts)
 
-        # 右段：Token 条 + 消息数 + 工具数 + 时长 + 流式状态
+        # 右段：Token 条 + 模型窗口 + 消息数 + 工具数 + 时长 + 流式状态
+        window = int(stats.get("max_tokens") or 0)
         right_parts = [f"{bar} {stats['usage_ratio']}"]
+        if window > 0:
+            # Show the window the agent is actually sized against, so a 1M
+            # model never reads as if it were 128K.
+            right_parts.append(_format_window(window))
         if self._tool_call_count > 0:
             right_parts.append(f"🔧{self._tool_call_count}")
         right_parts.append(f"{stats['total_messages']}m")

@@ -167,3 +167,62 @@ class TestToolRegistration:
         defn = BUILTIN_TOOL_REGISTRY.get("test_risky_tool")
         assert defn is not None
         assert defn.risk == "SENSITIVE"
+
+
+class TestSdkModelConfig:
+    """SDK 调用必须带上模型的真实窗口，否则 agent 只能靠猜。"""
+
+    def test_window_comes_from_the_registry(self, monkeypatch):
+        import xenon
+
+        class _Configured:
+            model_id = "test/fake"
+            base_url = ""
+            api_key = ""
+            max_tokens = 8192
+            reasoning_effort = ""
+            context_window = 1_000_000
+
+        class _Registry:
+            def get_model_by_id(self, model_id):
+                return _Configured()
+
+        import xenon.repl.model_registry as registry_mod
+
+        monkeypatch.setattr(registry_mod, "ModelRegistry", lambda: _Registry())
+
+        config = xenon._sdk_model_config("test/fake")
+
+        assert config.context_window == 1_000_000
+        assert config.max_tokens == 8192
+        assert config.temperature == 0.0
+
+    def test_unknown_model_falls_back_to_a_bare_config(self, monkeypatch):
+        import xenon
+
+        class _Registry:
+            def get_model_by_id(self, model_id):
+                return None
+
+        import xenon.repl.model_registry as registry_mod
+
+        monkeypatch.setattr(registry_mod, "ModelRegistry", lambda: _Registry())
+
+        config = xenon._sdk_model_config("test/fake")
+
+        assert config.model_id == "test/fake"
+        assert config.context_window == 0
+
+    def test_registry_failure_does_not_break_the_library_call(self, monkeypatch):
+        import xenon
+        import xenon.repl.model_registry as registry_mod
+
+        def boom():
+            raise RuntimeError("registry unavailable")
+
+        monkeypatch.setattr(registry_mod, "ModelRegistry", boom)
+
+        config = xenon._sdk_model_config("test/fake")
+
+        assert config.model_id == "test/fake"
+        assert config.context_window == 0

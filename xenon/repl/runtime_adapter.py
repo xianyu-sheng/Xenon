@@ -115,6 +115,41 @@ def permission_mode_for(level: ExecutionLevel | int) -> PermissionMode:
     return PermissionMode.AUTO_EDIT
 
 
+def sync_context_window(repl: Any, model_ids: list[str]) -> int:
+    """Point the REPL's context meter at the model that is actually running.
+
+    The chat path already does this from the router's aliases; kernel turns
+    bypassed it, so a 1M model kept showing 128K-based percentages.
+    """
+
+    window = 0
+    registry = getattr(repl, "registry", None)
+    if registry is not None:
+        try:
+            window = registry.context_window_for(
+                [str(item).rsplit("/", 1)[-1] for item in model_ids]
+            )
+        except Exception:  # noqa: BLE001 — a meter must never break a turn
+            window = 0
+    if window <= 0:
+        for model_id in model_ids:
+            try:
+                configured = (
+                    registry.get_model_by_id(model_id)
+                    if registry is not None
+                    else None
+                )
+                window = int(getattr(configured, "context_window", 0) or 0)
+            except Exception:  # noqa: BLE001 — same rule: never break a turn
+                window = 0
+            if window > 0:
+                break
+    ctx_mgr = getattr(repl, "ctx_mgr", None)
+    if window > 0 and ctx_mgr is not None:
+        ctx_mgr.max_tokens = window
+    return window
+
+
 def model_config_for(registry: Any, model_ids: list[str]) -> ModelConfig:
     if not model_ids:
         raise KernelAdapterError("no model selected for kernel runtime")
@@ -130,6 +165,9 @@ def model_config_for(registry: Any, model_ids: list[str]) -> ModelConfig:
         # Action selection benefits from determinism more than prose variety.
         temperature=0.0,
         reasoning_effort=configured.reasoning_effort,
+        # The agent's budget follows the model it actually runs on: a 1M
+        # model should get a 1M-sized working set, a 128K model 128K.
+        context_window=int(getattr(configured, "context_window", 0) or 0),
     )
 
 
@@ -801,6 +839,7 @@ def run_kernel_turn(
 
     if callback is None:
         callback = repl._make_callback()
+    sync_context_window(repl, model_ids)
     try:
         adapter = RuntimeAdapter.from_repl(
             repl,

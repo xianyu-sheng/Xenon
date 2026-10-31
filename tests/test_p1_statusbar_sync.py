@@ -361,3 +361,22 @@ def test_activate_selected_model_keeps_repl_and_status_in_sync():
     assert repl.auto_router.success == "deepseek/deepseek-flash"
     assert repl.status_bar.last == "deepseek/deepseek-flash"
     assert "deepseek/deepseek-flash" not in repl._failed_models
+
+
+def test_status_bar_shows_the_model_window():
+    """A 1M model must never read as 128K in the context meter."""
+
+    from xenon.repl.status_bar import _format_window
+
+    assert _format_window(1_048_576) == "1M"
+    assert _format_window(1_000_000) == "1M"
+    assert _format_window(128_000) == "128K"
+    assert _format_window(8192) == "8K"
+
+
+def test_window_formatting_covers_fractional_and_small_windows():
+    from xenon.repl.status_bar import _format_window
+
+    assert _format_window(1_500_000) == "1.5M"
+    assert _format_window(512_000) == "512K"
+    assert _format_window(512) == "512"

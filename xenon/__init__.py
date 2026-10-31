@@ -127,14 +127,14 @@ def _run_task(
             "请显式传入（如 ['deepseek/deepseek-chat']）或先运行 `xenon` 的 /setup。"
         )
 
-    from xenon.harness.llm import ModelConfig, build_llm_loop_strategy
+    from xenon.harness.llm import build_llm_loop_strategy
     from xenon.harness.runner import run_task as _kernel_run_task
     from xenon.kernel.strategies import LoopProfile
     from xenon.modes import loop_profile_for
 
     profile = loop_profile_for(engine) or LoopProfile()
     strategy = build_llm_loop_strategy(
-        ModelConfig(model_id=resolved_models[0]), profile
+        _sdk_model_config(resolved_models[0]), profile
     )
     run = _kernel_run_task(
         task,
@@ -149,6 +149,35 @@ def _run_task(
     )
     del engine_kwargs, callback
     return run.result.answer
+
+
+def _sdk_model_config(model_id: str) -> Any:
+    """Model config for a library call, carrying the model's real window.
+
+    The registry knows each model's context window (1M for DeepSeek V4, 128K
+    for a GLM-class model).  A library call must not fall back to an unknown
+    window, or the agent sizes its working set by guesswork.
+    """
+
+    from xenon.harness.llm import ModelConfig
+
+    try:
+        from xenon.repl.model_registry import ModelRegistry
+
+        configured = ModelRegistry().get_model_by_id(model_id)
+    except Exception:  # noqa: BLE001 — the registry is optional for library use
+        configured = None
+    if configured is None:
+        return ModelConfig(model_id=model_id)
+    return ModelConfig(
+        model_id=getattr(configured, "model_id", model_id),
+        base_url=getattr(configured, "base_url", ""),
+        api_key=getattr(configured, "api_key", ""),
+        max_tokens=max(256, int(getattr(configured, "max_tokens", 8192) or 8192)),
+        temperature=0.0,
+        reasoning_effort=getattr(configured, "reasoning_effort", ""),
+        context_window=int(getattr(configured, "context_window", 0) or 0),
+    )
 
 
 def _sdk_permission() -> Any:
