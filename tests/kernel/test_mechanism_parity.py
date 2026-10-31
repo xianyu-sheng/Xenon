@@ -347,3 +347,64 @@ def test_kernel_turn_syncs_the_repl_meter():
     repl = _Repl()
     assert sync_context_window(repl, ["deepseek/deepseek-v4-pro"]) == 1_000_000
     assert repl.ctx_mgr.max_tokens == 1_000_000
+
+
+def test_window_sync_falls_back_to_the_model_config():
+    """`context_window_for` may not know the alias; the model config must."""
+
+    from xenon.repl.runtime_adapter import sync_context_window
+
+    class _Model:
+        context_window = 262_144
+
+    class _Ctx:
+        max_tokens = 128000
+
+    class _Registry:
+        def context_window_for(self, aliases):
+            return 0
+
+        def get_model_by_id(self, model_id):
+            return _Model()
+
+    class _Repl:
+        ctx_mgr = _Ctx()
+        registry = _Registry()
+
+    repl = _Repl()
+    assert sync_context_window(repl, ["ark/doubao-seed-2-1-pro"]) == 262_144
+    assert repl.ctx_mgr.max_tokens == 262_144
+
+
+def test_window_sync_never_breaks_a_turn():
+    """A registry that raises must leave the meter alone, not fail the turn."""
+
+    from xenon.repl.runtime_adapter import sync_context_window
+
+    class _Ctx:
+        max_tokens = 128000
+
+    class _Registry:
+        def context_window_for(self, aliases):
+            raise RuntimeError("registry down")
+
+        def get_model_by_id(self, model_id):
+            raise RuntimeError("registry down")
+
+    class _Repl:
+        ctx_mgr = _Ctx()
+        registry = _Registry()
+
+    repl = _Repl()
+    assert sync_context_window(repl, ["x/y"]) == 0
+    assert repl.ctx_mgr.max_tokens == 128000
+
+
+def test_window_sync_without_a_meter_or_registry():
+    from xenon.repl.runtime_adapter import sync_context_window
+
+    class _Repl:
+        ctx_mgr = None
+        registry = None
+
+    assert sync_context_window(_Repl(), ["x/y"]) == 0

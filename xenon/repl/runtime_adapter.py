@@ -133,10 +133,15 @@ def sync_context_window(repl: Any, model_ids: list[str]) -> int:
             window = 0
     if window <= 0:
         for model_id in model_ids:
-            configured = (
-                registry.get_model_by_id(model_id) if registry is not None else None
-            )
-            window = int(getattr(configured, "context_window", 0) or 0)
+            try:
+                configured = (
+                    registry.get_model_by_id(model_id)
+                    if registry is not None
+                    else None
+                )
+                window = int(getattr(configured, "context_window", 0) or 0)
+            except Exception:  # noqa: BLE001 — same rule: never break a turn
+                window = 0
             if window > 0:
                 break
     ctx_mgr = getattr(repl, "ctx_mgr", None)

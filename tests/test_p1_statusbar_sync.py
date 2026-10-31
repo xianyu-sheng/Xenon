@@ -372,3 +372,11 @@ def test_status_bar_shows_the_model_window():
     assert _format_window(1_000_000) == "1M"
     assert _format_window(128_000) == "128K"
     assert _format_window(8192) == "8K"
+
+
+def test_window_formatting_covers_fractional_and_small_windows():
+    from xenon.repl.status_bar import _format_window
+
+    assert _format_window(1_500_000) == "1.5M"
+    assert _format_window(512_000) == "512K"
+    assert _format_window(512) == "512"
