@@ -674,7 +674,28 @@ class LoopRuntime:
             )
 
         self._transition(TaskPhase.TOOL_CALL, binding.call.spec_name)
-        receipt = self._gateway.execute(binding.call, self._services)
+        try:
+            receipt = self._gateway.execute(binding.call, self._services)
+        except Exception as exc:  # noqa: BLE001 — a loop must not die on a tool
+            # No receipt is fabricated: the failure is recorded as a policy
+            # veto with its reason, and the run stops unverified.  A silent
+            # traceback out of ``run()`` would leave the ledger with a
+            # ``tool_requested`` and nothing else.
+            message = f"{type(exc).__name__}: {exc}"
+            self._transition(TaskPhase.RECONCILING, "tool raised")
+            self._append(
+                EventKind.POLICY_DECISION,
+                EventSource.GATE,
+                {
+                    "kind": PolicyDecisionKind.VETO.value,
+                    "reason": f"tool execution failed: {message}",
+                    "scope": [binding.call.spec_name],
+                },
+                step_id=self._current_step_id(),
+            )
+            return self._budget_block(
+                "tool execution failed", (binding.call.spec_name,)
+            )
         self._append(
             EventKind.TOOL_RECEIPT,
             EventSource.TOOL,
