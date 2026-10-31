@@ -215,7 +215,6 @@ class TestSdkModelConfig:
 
     def test_registry_failure_does_not_break_the_library_call(self, monkeypatch):
         import xenon
-
         import xenon.repl.model_registry as registry_mod
 
         def boom():
