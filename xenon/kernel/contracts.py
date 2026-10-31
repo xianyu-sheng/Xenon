@@ -661,6 +661,10 @@ class ModelView:
     # Deterministic step-level verification for the active step.  Reflection
     # sits on top of this: it reacts to verdicts, it never produces them.
     step_verdicts: tuple[Verdict, ...] = ()
+    # Seqs folded into the ``elided`` digest entry to stay inside the
+    # context budget.  Runtime bookkeeping: it lets the ledger record that
+    # compaction happened without changing what the model is allowed to see.
+    compacted: tuple[int, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
 
