@@ -1,0 +1,26 @@
+diff --git a/calc.py b/calc.py
+index 4693ad3..3581473 100644
+--- a/calc.py
++++ b/calc.py
+@@ -1,2 +1,6 @@
+ def add(a, b):
+     return a + b
++
++
++def multiply(a, b):
++    return a * b
+diff --git a/test_calc.py b/test_calc.py
+index d509f32..91fe757 100644
+--- a/test_calc.py
++++ b/test_calc.py
+@@ -1,5 +1,9 @@
+-from calc import add
++from calc import add, multiply
+
+
+ def test_add():
+     assert add(2, 3) == 5
++
++
++def test_multiply():
++    assert multiply(2, 3) == 6

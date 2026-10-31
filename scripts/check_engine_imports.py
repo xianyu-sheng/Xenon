@@ -51,7 +51,7 @@ ALLOWED = {
     "xenon/__init__.py": "public lazy exports for the retired multi-engine API",
     "xenon/main.py": "workflow runner (`xenon run <file>`)",
     "xenon/repl/engine_host.py": "legacy engine host helpers pending #204",
-    "xenon/repl/command_groups/agent.py": "/sub-agent child runtime (#204)",
+    "xenon/repl/command_groups/agent.py": "workflow DAG command (legacy scheduler)",
     "xenon/repl/setup_wizard.py": "mode description fallback",
     "xenon/repl/direct_chat.py": "transient-error classifier helper",
 }
