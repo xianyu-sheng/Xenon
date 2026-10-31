@@ -564,8 +564,8 @@ def _mode_scene(mode_name: str) -> str:
     """返回范式的推荐场景。
 
     内置范式用这里的精简文案（比 spec.description 更短，适合向导表格）；
-    第三方通过 ``register_engine()`` 新增的范式回退到注册表里的 description，
-    这样向导不会出现空白行。
+    其它模式回退到 ``MODE_CATALOG`` 的描述，向导不会出现空白行——
+    引擎注册表已随引擎层退役。
     """
     scenes = {
         "plan-execute": "复杂任务、多步骤编程",
@@ -584,13 +584,10 @@ def _mode_scene(mode_name: str) -> str:
     if spec is not None:
         return spec.description
 
-    # Third-party engines registered through the legacy extension contract may
-    # not be in the catalog yet.  Import the registry only for that fallback;
-    # built-in modes and /mode never need it.
-    from xenon.engine.registry import ENGINE_REGISTRY
+    from xenon.modes import get_mode
 
-    engine_spec = ENGINE_REGISTRY.get(mode_name)
-    return engine_spec.description if engine_spec else ""
+    spec = get_mode(mode_name)
+    return spec.description if spec is not None else ""
 
 
 # ── v0.4.0: 自定义模型商注册 ──────────────────────────────

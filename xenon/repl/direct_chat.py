@@ -323,9 +323,9 @@ class DirectChatMixin:
                 return
             except Exception as e:
                 last_error = e
-                from xenon.engine.base import BaseEngine
+                from xenon.repl.transient_errors import is_transient_error
 
-                if BaseEngine._is_transient_error(e):
+                if is_transient_error(e):
                     self.model_pool.record_failure(
                         model_id,
                         is_retry=is_retry_probe,

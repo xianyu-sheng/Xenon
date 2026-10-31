@@ -252,6 +252,18 @@ plan decision is recorded as `plan_reviewed`
 (`accepted` / `amended` / `rejected` + obligation ids), and step decisions stay
 in `step_explored`.
 
+### SDK and workflow surfaces
+
+`xenon.run_task(...)` is the library entry point: it builds a `LoopProfile` from
+the mode name and calls `run_task` with `finalize=False`, so a library call never
+creates a commit. The engine-factory API (`create_engine`, `register_engine`,
+`bind_workspace`) went away with the engine layer; `list_engines()` now lists the
+thinking modes, because there is one loop.
+
+`xenon run <workflow.yaml>` is **kept**: it executes a workflow DAG over
+`xenon/nodes` with `engine/scheduler.py`, which is an organ, not part of the seven
+engines. That is why `scheduler` is not in the deletion set.
+
 ### Child tasks are the same loop
 
 `/sub-agent` runs `xenon.harness.child.run_child_task`, i.e. the same `run_task`

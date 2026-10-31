@@ -10,20 +10,15 @@
 
 底层构件（需要自己组装时用）
 ----------------------------
-- ``create_engine(name, model_priority, **kwargs)`` — 按范式名构造引擎实例
-- ``list_engines()`` — 列出全部已注册推理范式名
-- ``register_engine(...)`` — 注册自定义推理范式
+- ``list_engines()`` — 列出可选 thinking mode（原“引擎”名，现为同一 loop 的阶段配置）
 - ``register_tool(...)`` — 注册自定义工具（带风险等级，纳入权限门）
-- ``bind_workspace(engine, workspace)`` — 给引擎绑定工作区围栏
 - ``AgentContext`` — 单次运行的状态总线
 - ``SilentCallback`` / ``EngineCallback`` — 事件回调基类
 
 安全默认
 ========
-``run_task`` **默认绑定工作区围栏**（``ToolRuntime``），文件副作用被限制在
-``workspace`` 内，且模型提供的 ``cwd`` 会被可信根覆盖。直接用
-``create_engine`` 时不会自动绑定——那是底层构件，调用方需自行调用
-``bind_workspace``，否则围栏根退化为进程 CWD（见 v0.8.5 release notes）。
+``run_task`` **默认绑定工作区围栏**：文件副作用被限制在 ``workspace`` 内，
+模型提供的 ``cwd`` 会被可信根覆盖。库调用不产生交付提交——提交权在调用方。
 
 懒加载
 ======
@@ -45,14 +40,10 @@ __all__ = [
     "__version__",
     # 高层
     "run_task",
-    # 引擎
-    "create_engine",
+    # 模式（原“引擎”入口，现在是同一 loop 的 thinking modes）
     "list_engines",
-    "register_engine",
     # 工具
     "register_tool",
-    # 约束
-    "bind_workspace",
     # 类型
     "AgentContext",
     "EngineCallback",
@@ -64,59 +55,20 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "AgentContext": ("xenon.engine.context", "AgentContext"),
     "EngineCallback": ("xenon.engine.callbacks", "EngineCallback"),
     "SilentCallback": ("xenon.engine.callbacks", "SilentCallback"),
-    "register_engine": ("xenon.engine.registry", "register_engine"),
     "register_tool": ("xenon.nodes.tool_registry", "register_tool_handler"),
 }
 
 
-def _create_engine(name: str, model_priority: list[str], **kwargs: Any) -> Any:
-    """按范式名构造引擎实例。
+def _list_modes() -> tuple[str, ...]:
+    """List the selectable thinking modes (the retired "engines" surface).
 
-    这是**底层构件**：不绑定工作区围栏。需要围栏时调用 ``bind_workspace``，
-    或直接用 ``run_task``（默认已绑定）。
-
-    Args:
-        name: 范式标识（见 ``list_engines()``，如 "react"、"plan-execute"）。
-        model_priority: 模型优先级列表，元素为 "provider/model" 形式。
-        **kwargs: 透传给引擎工厂（如 callback、model_pool、temperature）。
-
-    Raises:
-        KeyError: 范式名未注册或该模式不走引擎循环（"direct"）。
+    Kept under the old name so existing callers keep working; the values are
+    modes now, because there is exactly one loop.
     """
-    from xenon.engine.registry import ENGINE_REGISTRY
 
-    spec = ENGINE_REGISTRY.require(name)
-    if spec.factory is None:
-        raise KeyError(f"范式 '{name}' 不走引擎循环（无 factory），无法创建实例")
-    return spec.factory(model_priority=model_priority, **kwargs)
+    from xenon.modes import MODE_CATALOG
 
-
-def _list_engines() -> tuple[str, ...]:
-    """列出全部已注册推理范式名（含内置 7 种与插件注册的）。"""
-    from xenon.engine.registry import ENGINE_REGISTRY
-
-    return ENGINE_REGISTRY.names()
-
-
-def _bind_workspace(engine: Any, workspace: str | Any) -> None:
-    """给引擎（及其子引擎）绑定工作区围栏。
-
-    绑定后，所有文件工具的副作用被限制在 ``workspace`` 内，且模型提供的
-    ``cwd`` 会被该可信根覆盖——模型无法通过参数移动围栏本身。子代理经
-    ``spawn_agent`` 派生时自动继承同一围栏。
-
-    Args:
-        engine: ``create_engine`` 返回的引擎实例。
-        workspace: 工作区根目录，必须已存在。
-
-    Raises:
-        ValueError: 目录不存在或不是目录。
-    """
-    from pathlib import Path
-
-    from xenon.engine.tool_runtime import ToolRuntime, bind_tool_runtime
-
-    bind_tool_runtime(engine, ToolRuntime(workspace_root=Path(workspace)))
+    return tuple(MODE_CATALOG)
 
 
 def _run_task(
@@ -160,11 +112,13 @@ def _run_task(
             engine="react",
         )
     """
-    from xenon.engine.callbacks import SilentCallback
-    from xenon.engine.context import AgentContext
+    from pathlib import Path as _Path
 
     if not isinstance(task, str) or not task.strip():
         raise ValueError("task 必须是非空字符串")
+    workspace_dir = _Path(str(workspace))
+    if not workspace_dir.is_dir():
+        raise ValueError(f"workspace 不是已存在的目录: {workspace_dir}")
 
     resolved_models = model_priority or _default_model_priority()
     if not resolved_models:
@@ -173,15 +127,36 @@ def _run_task(
             "请显式传入（如 ['deepseek/deepseek-chat']）或先运行 `xenon` 的 /setup。"
         )
 
-    built = _create_engine(
-        engine,
-        resolved_models,
-        callback=callback if callback is not None else SilentCallback(),
-        **engine_kwargs,
+    from xenon.harness.llm import ModelConfig, build_llm_loop_strategy
+    from xenon.harness.runner import run_task as _kernel_run_task
+    from xenon.kernel.strategies import LoopProfile
+    from xenon.modes import loop_profile_for
+
+    profile = loop_profile_for(engine) or LoopProfile()
+    strategy = build_llm_loop_strategy(
+        ModelConfig(model_id=resolved_models[0]), profile
     )
-    # 先绑定围栏再 run——晚于 run 则首个工具调用不受约束。
-    _bind_workspace(built, workspace)
-    return built.run(task, context if context is not None else AgentContext())
+    run = _kernel_run_task(
+        task,
+        user_objective=task,
+        strategy=strategy,
+        workspace=workspace_dir,
+        permission=_sdk_permission(),
+        # A library call must not create commits; the caller owns delivery.
+        finalize=False,
+        max_steps=int(engine_kwargs.get("max_steps", 24) or 24),
+        gateway_context=context,
+    )
+    del engine_kwargs, callback
+    return run.result.answer
+
+
+def _sdk_permission() -> Any:
+    """SDK permission: workspace edits allowed, shell needs an explicit grant."""
+
+    from xenon.kernel.policies import PermissionMode
+
+    return PermissionMode.AUTO_EDIT
 
 
 def _default_model_priority() -> list[str]:
@@ -208,9 +183,7 @@ def _default_model_priority() -> list[str]:
 
 _FACTORIES: dict[str, Any] = {
     "run_task": _run_task,
-    "create_engine": _create_engine,
-    "list_engines": _list_engines,
-    "bind_workspace": _bind_workspace,
+    "list_engines": _list_modes,
 }
 
 

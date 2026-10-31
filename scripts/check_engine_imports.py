@@ -8,10 +8,10 @@ are still used by nodes/REPL — ``context``, ``callbacks``, ``tool_tracker``,
 ``hollow_detector``, ``structured_compactor``, ``execution_evidence``,
 ``tool_runtime`` … — are **not** part of this guard.
 
-Two features still need the skeleton:
-
-* ``/sub-agent`` (child runtime, tracked by #204),
-* ``xenon run <workflow.yaml>`` (DAG workflow runner).
+What still needs the skeleton: the public multi-engine exports and the legacy
+engine host in the REPL.  ``xenon run <workflow.yaml>`` is **not** a skeleton
+consumer: it runs the workflow DAG scheduler over ``nodes/``, which is an organ
+that stays.
 
 This guard keeps that coupling explicit and non-growing. It only shrinks; never
 add a file here to make a new violation pass.
@@ -34,7 +34,6 @@ SKELETON = (
     "reflection_engine",
     "combined_engines",
     "event_bus",
-    "scheduler",
     "plan_dag",
     "plan_dag_executor",
     "plan_contract",
@@ -48,12 +47,7 @@ SKELETON = (
 
 # Files that may still touch the skeleton, and why.
 ALLOWED = {
-    "xenon/__init__.py": "public lazy exports for the retired multi-engine API",
-    "xenon/main.py": "workflow runner (`xenon run <file>`)",
-    "xenon/repl/engine_host.py": "legacy engine host helpers pending #204",
-    "xenon/repl/command_groups/agent.py": "workflow DAG command (legacy scheduler)",
-    "xenon/repl/setup_wizard.py": "mode description fallback",
-    "xenon/repl/direct_chat.py": "transient-error classifier helper",
+    "xenon/repl/engine_host.py": "legacy engine host helpers pending deletion",
 }
 
 # The live turn path must never reference the skeleton again.

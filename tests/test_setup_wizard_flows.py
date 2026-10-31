@@ -18,7 +18,7 @@ import yaml
 from rich.console import Console
 
 import xenon.repl.setup_wizard as sw
-from xenon.engine.registry import ENGINE_REGISTRY, register_engine
+from xenon.modes import MODE_CATALOG
 from xenon.repl import provider_registry, system_config
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.provider_registry import list_providers
@@ -74,32 +74,27 @@ def test_mode_scene_builtin_modes(mode_name, expected):
     assert _mode_scene(mode_name) == expected
 
 
-def test_mode_scene_short_text_wins_over_registry():
-    """For a built-in mode, the wizard's short text is used, not the registry's longer one."""
-    registry_description = ENGINE_REGISTRY.get("react").description
+def test_mode_scene_short_text_wins_over_catalog():
+    """For a built-in mode, the wizard's short text is used, not the catalog text."""
+    catalog_description = MODE_CATALOG["react"].description
     short_text = "探索性任务、试错调试"  # exploratory tasks, trial-and-error debugging
     # Precondition: the two texts really differ, otherwise this test proves nothing.
-    assert registry_description != short_text
+    assert catalog_description != short_text
 
     assert _mode_scene("react") == short_text
 
 
-def test_mode_scene_direct_falls_back_to_registry():
-    """The "direct" mode is not in the wizard's table, so its registry description is shown."""
-    expected = ENGINE_REGISTRY.get("direct").description
+def test_mode_scene_direct_falls_back_to_catalog():
+    """The "direct" mode is not in the wizard's table, so the catalog text is shown."""
+    expected = MODE_CATALOG["direct"].description
     assert expected  # the fallback must produce real text, not a blank row
 
     assert _mode_scene("direct") == expected
 
 
-def test_mode_scene_third_party_engine_uses_its_description():
-    """An engine added through register_engine() shows its own description."""
-    name = "test-wizard-fake"
-    register_engine(name, description="fake engine for the wizard test")
-    try:
-        assert _mode_scene(name) == "fake engine for the wizard test"
-    finally:
-        ENGINE_REGISTRY.unregister(name)  # keep the global registry clean for other tests
+def test_mode_scene_unknown_mode_is_blank():
+    """An unknown mode has no description; the catalog is the only source (#202)."""
+    assert _mode_scene("test-wizard-fake") == ""
 
 
 def test_mode_scene_unknown_mode_returns_empty():
