@@ -252,6 +252,19 @@ plan decision is recorded as `plan_reviewed`
 (`accepted` / `amended` / `rejected` + obligation ids), and step decisions stay
 in `step_explored`.
 
+### The engine host is gone
+
+`xenon/repl/engine_host.py` used to host the seven engines (run loop, per-engine
+shims, trace persistence, MCP injection, plan panel subscription, steering). With
+the turn path on the kernel, all of it was dead code, so only four things remain:
+log capture, the callback factory, the history-pairing error recorder, and
+`_run_react_engine` — direct-chat escalation, which runs the kernel loop.
+
+The CI guard's allowlist is now **empty**: no module under `xenon/` imports the
+engine skeleton. The ~100 legacy test modules that still use the engines as a
+harness are migrated or removed module by module; deletion of the skeleton files
+follows that migration so CI never goes red mid-way.
+
 ### SDK and workflow surfaces
 
 `xenon.run_task(...)` is the library entry point: it builds a `LoopProfile` from

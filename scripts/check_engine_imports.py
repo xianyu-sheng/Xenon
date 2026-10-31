@@ -8,10 +8,11 @@ are still used by nodes/REPL — ``context``, ``callbacks``, ``tool_tracker``,
 ``hollow_detector``, ``structured_compactor``, ``execution_evidence``,
 ``tool_runtime`` … — are **not** part of this guard.
 
-What still needs the skeleton: the public multi-engine exports and the legacy
-engine host in the REPL.  ``xenon run <workflow.yaml>`` is **not** a skeleton
-consumer: it runs the workflow DAG scheduler over ``nodes/``, which is an organ
-that stays.
+Production is fully decoupled: no module under ``xenon/`` imports the skeleton.
+The remaining ~100 test modules still use the engines as a harness; they are
+migrated or removed module-by-module while this guard keeps production clean.
+``xenon run <workflow.yaml>`` is **not** a skeleton consumer: it runs the
+workflow DAG scheduler over ``nodes/``, which is an organ that stays.
 
 This guard keeps that coupling explicit and non-growing. It only shrinks; never
 add a file here to make a new violation pass.
@@ -45,10 +46,9 @@ SKELETON = (
     "verification_nudge",
 )
 
-# Files that may still touch the skeleton, and why.
-ALLOWED = {
-    "xenon/repl/engine_host.py": "legacy engine host helpers pending deletion",
-}
+# Nothing in production may import the skeleton any more.  If this dict ever
+# grows again, the deletion has regressed.
+ALLOWED: dict[str, str] = {}
 
 # The live turn path must never reference the skeleton again.
 TURN_PATH = ("xenon/repl/turn_flow.py", "xenon/repl/runtime_adapter.py")

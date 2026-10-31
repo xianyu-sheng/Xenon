@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from xenon.engine.combined_engines import PlanReactEngine
 from xenon.engine.context import AgentContext
 from xenon.engine.plan_execute_engine import PlanExecuteEngine
@@ -167,31 +165,6 @@ def test_repl_binds_turn_hint_to_user_prompt_not_system_overlay(monkeypatch):
     )
     assert repl.ctx_mgr.history[-1].role == "user"
     assert repl.ctx_mgr.history[-1].content == captured[0]
-
-
-def test_repl_persists_tracker_and_file_memory_once(tmp_path):
-    repl = _repl()
-    repl.ctx_mgr.add_user_message("创建文件")
-    tracker = ToolExecutionTracker()
-    target = tmp_path / "hello.py"
-    tracker.record(
-        "write_file",
-        {"file_path": str(target), "content": "print('hello')"},
-        True,
-        "写入成功",
-    )
-    engine = SimpleNamespace(_last_tracker=tracker)
-
-    assert repl._persist_engine_trace(engine) == 1
-    assert repl._persist_engine_trace(engine) == 0
-    assert [turn.role for turn in repl.ctx_mgr.history] == [
-        "user",
-        "assistant",
-        "tool",
-    ]
-    memory = repl.ctx_mgr.get_working_memory()
-    assert str(target) in memory["session_created_files"]
-    assert memory["recent_tool_activity"][-1]["tool"] == "write_file"
 
 
 def test_plan_execute_exposes_its_verified_tracker(monkeypatch):
