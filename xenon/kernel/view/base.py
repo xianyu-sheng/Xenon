@@ -12,6 +12,7 @@ import hashlib
 import json
 from typing import Any, Mapping, Sequence
 
+from xenon.kernel.compaction import fold_dropped
 from xenon.kernel.contracts import (
     Budget,
     Debt,
@@ -38,9 +39,8 @@ _CHAT_EVENT_KINDS = frozenset(
 
 # Compaction digest sizing.  Reserved chars guarantee a record exists even
 # when priority events already consume the whole budget.
-_ELIDED_MIN_CHARS = 240
-_ELIDED_MAX_LINES = 12
-_ELIDED_NOTE_SEQS = 6
+def _canonical_len(value: Any) -> int:
+    return len(_canonical(value))
 
 
 def _canonical(value: Any) -> str:
@@ -252,22 +252,6 @@ def _priority(item: Mapping[str, Any]) -> bool:
     return False
 
 
-def _elided_line(item: Mapping[str, Any]) -> str:
-    """One deterministic line standing in for a dropped event."""
-
-    parts = [str(item.get("kind") or "event")]
-    status = item.get("status")
-    if status:
-        parts.append(f"status={_clip(status, 60)}")
-    tool = item.get("tool")
-    if tool:
-        parts.append(f"tool={_clip(tool, 60)}")
-    step_id = item.get("step_id")
-    if step_id is not None:
-        parts.append(f"step={step_id}")
-    return f"seq={item.get('seq')} " + " ".join(parts)
-
-
 def _working_set(
     events: Sequence[Any], *, mode: TaskMode, budget: Budget
 ) -> tuple[tuple[dict[str, Any], ...], tuple[int, ...]]:
@@ -300,39 +284,15 @@ def _working_set(
         used += size
 
     dropped = [item for item in summaries if item["seq"] not in selected]
+    entry = fold_dropped(
+        dropped, max_chars=max_chars, used=used, size_of=_canonical_len
+    )
     elided: tuple[int, ...] = ()
-    if dropped:
-        # Compaction never makes history vanish silently: the folded events
-        # survive as one digest entry so the model still knows a tool ran,
-        # with what status, at which seq.
-        # The digest gets a reserved slice: when priority events alone
-        # already exceed the budget, there is no "leftover room", and a
-        # compaction record must still exist.
-        reserved = max(_ELIDED_MIN_CHARS, max_chars // 6)
-        room = max(reserved, max_chars - used)
-        seqs = [item["seq"] for item in dropped]
-        lines = [_elided_line(item) for item in dropped][-_ELIDED_MAX_LINES:]
-        entry: dict[str, Any] = {
-            "seq": seqs[0],
-            "kind": "elided",
-            "count": len(dropped),
-            "seqs": seqs,
-            "lines": lines,
-        }
-        while lines and len(_canonical(entry)) > room:
-            lines = lines[1:]
-            entry["lines"] = lines
-        if not lines or len(_canonical(entry)) > room:
-            # Even one line does not fit: keep the fact, drop the detail.
-            entry = {
-                "seq": seqs[0],
-                "kind": "elided",
-                "count": len(dropped),
-                "seqs": seqs[-_ELIDED_NOTE_SEQS:],
-            }
+    if entry is not None:
+        # The folded events survive as one digest entry (see kernel/compaction).
         selected[entry["seq"]] = entry
-        used += len(_canonical(entry))
-        elided = tuple(seqs)
+        used += _canonical_len(entry)
+        elided = tuple(entry["seqs"])
     return (
         tuple(selected[seq] for seq in sorted(selected)),
         elided,
