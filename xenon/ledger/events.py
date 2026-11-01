@@ -61,6 +61,7 @@ class EventKind(str, Enum):
     FINALIZED = "finalized"
     STATE_TRANSITION = "state_transition"
     CONTEXT_COMPACTED = "context_compacted"
+    MODEL_USAGE = "model_usage"
     THOUGHT = "thought"
     REFLECTION_PROPOSED = "reflection_proposed"
     STEP_EXPLORED = "step_explored"

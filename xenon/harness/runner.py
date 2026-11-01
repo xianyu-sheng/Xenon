@@ -97,6 +97,14 @@ def _runtime_bundle(
     return root, ledger_path, ledger, runtime
 
 
+def _bind_accounting(strategy: Strategy, runtime: Any) -> None:
+    """Let the runtime own the token totals for the calls this strategy makes."""
+
+    from xenon.harness.llm import bind_usage_sink
+
+    bind_usage_sink(strategy, runtime.note_usage)
+
+
 def _context_window(strategy: Strategy) -> int:
     """The window the strategy's model actually has (0 when unknown)."""
 
@@ -166,6 +174,7 @@ def run_task(
             context_window=_context_window(strategy),
         ),
     )
+    _bind_accounting(strategy, runtime)
     result = runtime.run(spec, strategy)
     report = ledger.verify()
     if not report.valid:

@@ -400,6 +400,7 @@ def build_model_view(
     active_step: StepContract | None = None,
     steps: Sequence[StepContract] = (),
     step_verdicts: Sequence[Any] = (),
+    tokens_used: int = 0,
 ) -> ModelView:
     """Build the deterministic view a strategy is allowed to see."""
 
@@ -435,6 +436,12 @@ def build_model_view(
         ],
         "budget": {
             "max_tokens": budget.max_tokens,
+            "tokens_used": tokens_used,
+            "tokens_remaining": (
+                None
+                if not budget.max_tokens
+                else max(0, int(budget.max_tokens) - int(tokens_used))
+            ),
             "max_wall_seconds": budget.max_wall_seconds,
             "max_steps": budget.max_steps,
             "max_repair_attempts": budget.max_repair_attempts,
