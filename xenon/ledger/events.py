@@ -53,6 +53,7 @@ class EventKind(str, Enum):
     CLAIM_RESOLVED = "claim_resolved"
     DEBT_OPENED = "debt_opened"
     DEBT_CLOSED = "debt_closed"
+    DEBT_ACCEPTED = "debt_accepted"
     AUDIT_PROPOSED = "audit_proposed"
     AUDIT_REPORTED = "audit_reported"
     DELIVERY_ATTEMPTED = "delivery_attempted"

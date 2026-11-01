@@ -413,10 +413,18 @@ class VerificationController:
                 reason="; ".join(item.reason or item.obligation_id for item in violated),
                 obligation_ids=tuple(item.obligation_id for item in violated),
             )
+        # A gap the operator accepted stops blocking delivery, but it never
+        # stops being a gap: the evidence status stays PARTIAL.
+        accepted = {
+            item.obligation.id
+            for item in debt
+            if item.acceptable and item.user_accepted
+        }
         unverifiable = [
             item
             for item in verdicts
             if item.status is VerdictStatus.UNVERIFIABLE
+            and item.obligation_id not in accepted
         ]
         if unverifiable:
             return ControlDecision(
@@ -429,9 +437,28 @@ class VerificationController:
                 ),
             )
         if debt:
+            blocking = [
+                item
+                for item in debt
+                if not (item.acceptable and item.user_accepted)
+            ]
+            if blocking:
+                return ControlDecision(
+                    kind=ControlDecisionKind.BLOCK,
+                    reason="open debt",
+                    obligation_ids=tuple(
+                        item.obligation.id for item in blocking
+                    ),
+                )
+            # Every remaining gap is one the operator explicitly accepted and
+            # that carries no evidence of failure.  Delivering is allowed; the
+            # evidence status stays PARTIAL because nothing was verified.
             return ControlDecision(
-                kind=ControlDecisionKind.BLOCK,
-                reason="open debt",
+                kind=ControlDecisionKind.DELIVER,
+                reason=(
+                    f"user accepted {len(debt)} unverified gap(s): "
+                    + ", ".join(item.obligation.id for item in debt)
+                ),
                 obligation_ids=tuple(item.obligation.id for item in debt),
             )
         return ControlDecision(kind=ControlDecisionKind.DELIVER)
