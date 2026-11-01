@@ -23,6 +23,7 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- kernel 轮次进度可见（#327 续）：`ModelConfig.progress_sink` + 主线程轮询回调；真实传输走 `chat_completion_stream` 组装，注入 client 保持同步；REPL 仅对 >1s 调用提示"生成中 Ns · N 字符"，不打印协议 JSON。
 - 取消可打断在飞调用（#327）：`kernel/cancel.py` + `ModelConfig.should_cancel`；调用走工作线程+轮询，取消在 ~150ms 内生效；runtime 以 `ABORTED{reason:"model call cancelled"}` 结束，与 `BLOCKED`/`FAILED` 严格区分；REPL 用 SIGINT 触发。
 - steering 落地（#329）：`kernel/steering.py`（纯逻辑）+ `post_user_input` 写事件 + 动作边界消费；约束逐条附 seq 进视图；纠正以 `superseded` 标注而非删除；新增 `CONTROL_DECISION{kind:"steering"}` 记录消费；REPL 侧运输层（TTY 监听 → 队列 → runtime 单写者落账）。
 - token 计账落地（#326）：新增 `kernel/usage.py` 与 `MODEL_USAGE` 事件；`Budget.max_tokens` 真正生效（超限 → `policy_decision{VETO}` + `BLOCKED`）；用量经 per-call sink 注入，并发子任务不串账；provider 未报 usage 时退化为估算并标 `estimated`。
