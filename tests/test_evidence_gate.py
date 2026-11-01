@@ -3,8 +3,10 @@
 验证：
 1. 四个具体 Gate 的确定性校验行为（零 LLM）；
 2. 校验与补救分离：Gate 只判定，不触发 LLM 补救；
-3. PlanExecuteEngine 挂载默认管线后行为不变（向后兼容）；
-4. run_gates / gate_failed / register_gate 的管线语义。
+3. 纯函数判定（`task_requires_write` / `verify_file_claims`）的确定性行为。
+
+引擎私有的管线（`run_gates` / `gate_failed` / `finalize_evidence`）随引擎删除；
+kernel 侧等价判断由审计 + 债务覆盖（见 `tests/kernel/test_audit.py`）。
 """
 
 from __future__ import annotations
@@ -21,7 +23,6 @@ from xenon.engine.evidence_gate import (
     task_requires_write,
     verify_file_claims,
 )
-from xenon.engine.plan_execute_engine import PlanExecuteEngine
 
 
 def _make_call(tool: str, params: dict, success: bool):
@@ -199,53 +200,6 @@ class TestEvidenceCaptureGate:
         assert verdict.payload.mutation_count == 1
 
 
-class TestPipelineOnPlanExecuteEngine:
-    def test_default_gates_mounted(self) -> None:
-        eng = PlanExecuteEngine(["mock/model"], max_steps=8)
-        phases = {g.phase for g in eng._gates}
-        assert {"plan", "completion", "output"} <= phases
-
-    def test_run_gates_filters_by_phase(self) -> None:
-        eng = PlanExecuteEngine(["mock/model"], max_steps=8)
-        verdicts = eng.run_gates(
-            "plan",
-            user_input="把结果写到 src/main.py",
-            plan={"steps": [{"id": 1, "task": "读", "tool": "read_file"}]},
-        )
-        assert len(verdicts) == 1
-        assert verdicts[0].passed is False
-
-    def test_gate_failed_returns_first_rejection(self) -> None:
-        eng = PlanExecuteEngine(["mock/model"], max_steps=8)
-        verdict = eng.gate_failed(
-            "plan",
-            user_input="把结果写到 output.txt",
-            plan={"steps": [{"id": 1, "task": "读", "tool": "read_file"}]},
-        )
-        assert verdict is not None
-        assert verdict.passed is False
-
-    def test_gate_failed_none_when_all_pass(self) -> None:
-        eng = PlanExecuteEngine(["mock/model"], max_steps=8)
-        verdict = eng.gate_failed(
-            "plan",
-            user_input="把结果写到 output.txt",
-            plan={
-                "steps": [
-                    {"id": 1, "task": "读", "tool": "read_file"},
-                    {"id": 2, "task": "改", "tool": "edit_file"},
-                ]
-            },
-        )
-        assert verdict is None
-
-    def test_register_gate_appends(self) -> None:
-        eng = PlanExecuteEngine(["mock/model"], max_steps=8)
-        before = len(eng._gates)
-        eng.register_gate(PlanCompletenessGate())
-        assert len(eng._gates) == before + 1
-
-
 class TestPureHelpers:
     def test_plan_has_write_step(self) -> None:
         assert plan_has_write_step([{"tool": "read_file"}]) is False
@@ -274,91 +228,3 @@ class TestPureHelpers:
         assert "a.py" in unverified
         passed2, _ = verify_file_claims("分析完成", None)
         assert passed2 is True
-
-
-class TestBackwardCompatibility:
-    def test_engine_private_methods_delegate(self) -> None:
-        """引擎私有方法保留原语义（Gate 单一真相源）。"""
-        eng = PlanExecuteEngine(["mock/model"], max_steps=8)
-        assert eng._plan_has_write_step([{"tool": "edit_file"}]) is True
-        assert eng._plan_has_write_step([{"tool": "read_file"}]) is False
-        assert eng._task_requires_write("把结果写到 main.py") is True
-        tracker = _make_tracker([_make_call("write_file", {"file_path": "a.py"}, True)])
-        assert eng._has_successful_write(tracker) is True
-        # 类属性向后兼容
-        assert "edit_file" in eng._WRITE_TOOL_NAMES
-
-
-class TestFinalizeEvidenceLayeredDelivery:
-    """finalize_evidence 交付动作分层（SWE-bench 实测误杀回归）。
-
-    背景：修复已通过写工具真正落盘（patch 已产出），但 LLM 总结里声称的
-    辅助文件（复现脚本等）未经工具验证。此前 finalize_evidence 无条件
-    raise，把已完成的成果整体丢弃（sphinx-7738、plan-reflection 6 例、
-    react-reflection 3 例）。分层：已落盘 → 降级记录不 raise；从未落盘
-    → 维持 fail-closed（防「贴 diff 不落盘」）。
-    """
-
-    @staticmethod
-    def _make_engine():
-        from xenon.engine.react_engine import ReActEngine
-
-        engine = ReActEngine(
-            model_priority=["deepseek/deepseek-v4-flash"],
-            max_iterations=2,
-            native_fc=False,
-        )
-        engine._begin_run()
-        return engine
-
-    @staticmethod
-    def _bind(engine, ctx):
-        engine._bind_evidence_ledger(ctx)
-        return engine.evidence_ledger
-
-    def test_landed_claim_does_not_raise(self) -> None:
-        """已落盘 + 未验证声称 → 不 raise，成果保留（ledger 记 degraded）。"""
-        engine = self._make_engine()
-        ctx = AgentContext()
-        ledger = self._bind(engine, ctx)
-        tracker = _make_tracker(
-            [
-                _make_call("edit_file", {"file_path": "src/real_fix.py"}, True),
-            ]
-        )
-        output = "已修改 src/real_fix.py 完成修复；并创建了 tmp/repro.py 复现脚本。"
-        # 不应 raise
-        engine.finalize_evidence(context=ctx, output=output, tracker=tracker)
-        events = [
-            e
-            for e in ledger.events
-            if getattr(e.kind, "value", str(e.kind)) == "gate_verdict"
-        ]
-        degraded = [e for e in events if e.payload.get("degraded")]
-        assert degraded, "已落盘场景必须记录降级警告"
-
-    def test_no_write_records_and_does_not_raise(self) -> None:
-        """从未落盘 + 声称创建 → 引擎不阻断；失败记录进 ledger，
-        由回合级 TurnGate 接续判定（R 收敛：引擎是纯执行器）。"""
-        engine = self._make_engine()
-        ctx = AgentContext()
-        self._bind(engine, ctx)
-        tracker = _make_tracker(
-            [
-                _make_call("read_file", {"file_path": "src/real_fix.py"}, True),
-            ]
-        )
-        output = "我创建了 src/real_fix.py，修改完成。"
-        pack = engine.finalize_evidence(context=ctx, output=output, tracker=tracker)
-        assert pack.gate_failures >= 1  # 判定被记录（审计），不再 raise
-
-    def test_clean_output_passes(self) -> None:
-        engine = self._make_engine()
-        ctx = AgentContext()
-        self._bind(engine, ctx)
-        tracker = _make_tracker(
-            [
-                _make_call("edit_file", {"file_path": "src/real_fix.py"}, True),
-            ]
-        )
-        engine.finalize_evidence(context=ctx, output="修复完成。", tracker=tracker)
