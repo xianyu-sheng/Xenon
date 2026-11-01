@@ -262,13 +262,7 @@ class ApprovalUxMixin:
                     )
                 )
                 try:
-                    choice = Prompt.ask(
-                        "选择",
-                        choices=["y", "n", "a", "q"],
-                        default="n",
-                        show_choices=True,
-                        case_sensitive=False,
-                    )
+                    choice = self._ask_approval_choice()
                 except (KeyboardInterrupt, EOFError):
                     return APPROVAL_CANCELLED
         if choice == "a":
@@ -296,6 +290,41 @@ class ApprovalUxMixin:
             callback.resume_after_prompt(tool_name, params)
         return APPROVAL_REJECTED
 
+
+    def _ask_approval_choice(self, default: str = "n") -> str:
+        """Read y/n/a/q without fighting prompt_toolkit for stdin.
+
+        The REPL owns the terminal through prompt_toolkit.  Asking with
+        rich's ``Prompt.ask`` (builtin ``input()``) while that session is
+        alive makes both readers compete for the same handle: on Windows the
+        keystrokes get swallowed and the prompt appears to hang until Ctrl-C.
+        So when a prompt_toolkit session exists we ask through it — it owns
+        the reader either way — and only fall back to ``Prompt.ask`` when
+        there is none (headless, tests, exotic terminals).
+        """
+
+        question = "选择 [y/n/a/q] (n): "
+        session = getattr(self, "_pt_session", None)
+        # Only inside a kernel turn, where the REPL's prompt has already
+        # returned and the session is the live owner of the terminal.  Outside
+        # one (slash commands, tests, headless) ``input()`` is safe and
+        # cheaper, so we keep the historic path.
+        in_turn = getattr(self, "_active_runtime", None) is not None
+        if session is not None and in_turn:
+            while True:
+                answer = session.prompt(question, default=default).strip().lower()
+                if answer == "":
+                    answer = default
+                if answer in {"y", "n", "a", "q"}:
+                    return answer
+                console.print("[dim]· 请输入 y / n / a / q[/dim]")
+        return Prompt.ask(
+            "选择",
+            choices=["y", "n", "a", "q"],
+            default=default,
+            show_choices=True,
+            case_sensitive=False,
+        )
 
     def _terminal_waiting(self, detail: str):
         """Return a waiting context, with a no-op fallback for partial REPLs."""
