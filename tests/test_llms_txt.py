@@ -5,9 +5,9 @@ from __future__ import annotations
 import httpx
 
 from xenon.engine.context import AgentContext
-from xenon.engine.react_engine import BUILTIN_TOOLS
 from xenon.nodes.tool_executor import ToolExecutor, classify_tool
 from xenon.nodes.tool_node import ToolNode
+from xenon.nodes.tool_registry import BUILTIN_TOOL_METHODS
 from xenon.utils.llms_txt import (
     llms_candidate_urls,
     parse_llms_txt,
@@ -338,12 +338,12 @@ def test_tool_executor_accepts_query_alias_and_keeps_large_doc_observation(
     assert result.raw["strategy"] == "llms-full"
 
 
-def test_docs_fetch_is_read_only_and_published_to_react_schema() -> None:
+def test_docs_fetch_is_read_only_and_registered() -> None:
+    """The tool must stay read-only and dispatchable.
+
+    The prompt-schema copy this used to assert lived in the deleted engine
+    prompt module; the registry is the surviving source of truth.
+    """
+
     assert classify_tool("docs_fetch") == "INFO"
-    assert "docs_fetch" in BUILTIN_TOOLS
-    assert set(BUILTIN_TOOLS["docs_fetch"]["params"]) == {
-        "url",
-        "query",
-        "max_pages",
-        "max_chars",
-    }
+    assert "docs_fetch" in BUILTIN_TOOL_METHODS

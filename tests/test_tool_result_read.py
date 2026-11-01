@@ -86,13 +86,16 @@ def test_tool_result_read_rejects_unknown_or_path_like_id(tmp_path) -> None:
     assert "缓存不存在" in (result.error or "")
 
 
-def test_model_view_and_tool_result_read_are_exposed() -> None:
-    from xenon.engine.react_engine import ReActEngine
+def test_tool_result_read_is_registered() -> None:
+    """The tool must remain dispatchable by name.
 
-    engine = ReActEngine(["fake/model"], native_fc=True)
-    assert "tool_result_read" in engine.tools
-    assert "tool_result_read" in engine.system_prompt
-    assert "14. **结果被摘要时按需回查**" in engine.system_prompt
+    The engine's prompt copy is gone; the registry is the surviving source of
+    truth for what the runtime can call.
+    """
+
+    from xenon.nodes.tool_registry import BUILTIN_TOOL_METHODS
+
+    assert "tool_result_read" in BUILTIN_TOOL_METHODS
 
 
 def test_thinking_step_carries_result_hash_for_session_events() -> None:
