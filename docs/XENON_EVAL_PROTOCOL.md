@@ -59,7 +59,7 @@ python -m swebench.harness.run_evaluation \
   --run_id xenon-react-official
 ```
 
-多引擎预测必须写入不同文件。同一个 prediction 文件里重复 `instance_id` 会被
+不同 loop profile 的预测必须写入不同文件。同一个 prediction 文件里重复 `instance_id` 会被
 官方 harness 按键覆盖，所以适配器在 `--engines all` 时生成每引擎独立 JSONL。
 空 patch 会由官方 harness 标记为 `empty_patch` 且不执行实例；不能把它报告成
 `resolved = false`，也不能把 `0/0` 伪装成成功率。供应商 429、HTTP 超时、工具

@@ -92,7 +92,7 @@ register_engine(
 ```
 
 Register once, and the `/mode` list, REPL router, and setup wizard will all automatically recognize it.  
-Source: `xenon/engine/registry.py`
+Source: `xenon/modes.py` (`MODE_CATALOG` + `LoopProfile`)
 
 ## 5. Registering Terminal Commands (Python API)
 

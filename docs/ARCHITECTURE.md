@@ -111,7 +111,7 @@ xenon/
 ## 6. 扩展契约
 
 ```python
-register_engine(name, factory, ...)       # engine/registry.py（7 范式唯一来源）
+MODE_CATALOG[mode].loop                     # xenon/modes.py（7 个 profile 的唯一来源）
 register_tool(name, handler, params)      # 工具注册（含安全白名单）
 register_command("/name", desc, usage)    # command_groups 自动发现，无需中心文件
 # 本地 hooks：<user|project>/.xenon/hooks.yaml（PreToolUse / PostToolUse /

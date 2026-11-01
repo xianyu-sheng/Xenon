@@ -12,22 +12,22 @@
 
 | 已有能力 | 位置 | 性质 |
 |---|---|---|
-| 哈希链事件流（append-only，类型化） | `xenon/session/events.py` | 防篡改审计，唯一事实来源 |
-| `/evidence` 自证 | `xenon/session/projection.py`、`xenon/repl/command_groups/evidence.py` | 审计投影 |
-| run_id / call_id 链路 ID | `xenon/engine/trace.py` | 仅日志关联 |
-| EventBus 多订阅 | `xenon/engine/event_bus.py` | 扩展点 |
-| LLM usage 采集与回调 | `xenon/utils/llm_usage.py`（`LLMUsage`、`register_usage_callback`） | 有 token 明细，未入事件链 |
-| Token/成本统计 | `/cost`、`/debug-tokens`、`xenon/utils/deepseek_cache.py`（含缓存计价） | 会话内、聊天口径 |
-| 三阶段预算 | `xenon/engine/budget.py` | 限流，非观测 |
-| 评测 harness | `evals/` | 手动（离线回放见 #126） |
+| 只追加执行账本（哈希链、类型化） | `xenon/ledger/events.py`、`xenon/ledger/store.py` | 唯一事实来源，可离线校验 |
+| 事件投影（任务状态 / 计划 / 证据 / 审计） | `xenon/ledger/projections.py` | 纯折叠，无副作用 |
+| token 用量入账 | `xenon/kernel/usage.py`（`MODEL_USAGE` 事件） | 每次模型调用一条，含 `cumulative_total` |
+| 预算真正生效 | `Budget.max_tokens` → `policy_decision{VETO}` + `BLOCKED` | 超限即阻断，不再只是计数 |
+| 请求截止 / 节流 / 事件 | `xenon/harness/request_budget.py` | 一次 run 共享一个单调截止 |
+| 确定性回放 + 指标 | `xenon/replay.py`、`xenon replay` / `xenon metrics` | 零模型、零网络，输出可复现 |
+| 会话级自证 | `xenon/repl/kernel_evidence.py`、`/evidence` | 会计账本指针，不复制事实 |
+| 评测 harness | `evals/`（`evals/kernel_runner.py` 跑在真实循环上） | 离线回放见 #126 |
 
 ### 1.2 缺口
 
-1. **无 span 模型**：run → turn → tool/LLM 调用的层级、耗时、状态无结构化记录
-2. **无指标聚合**：按工具/模型的延迟分位、token/成本归属、重试/gate 统计
+1. **无 span 模型**：run → turn → tool/LLM 调用的层级与耗时没有结构化记录（账本有因果，没有时间线树）
+2. **无指标聚合**：`xenon metrics` 给的是单次任务的计数，没有跨任务的延迟分位 / 成本归属
 3. **无导出**：不能对接 OpenTelemetry / Jaeger / Grafana / Langfuse
-4. **无确定性回放**：复现失败必须重新付费执行
-5. **无时间线视图**：只能翻日志
+4. **provider 阶段事件缺失**：`provider_request_start/end` 在 kernel 路径上还没有出口（#320）
+5. **UI 只消费一部分事件**：`ReplEventSink` 投影了 plan/step/reflection/usage，其余仍只在账本里
 
 ### 1.3 目标 / 非目标
 

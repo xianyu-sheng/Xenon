@@ -95,7 +95,7 @@ register_engine(
 ```
 
 注册一次，`/mode` 列表、REPL 路由、setup wizard 全部自动识别。
-出处：`xenon/engine/registry.py`
+出处：`xenon/modes.py`（`MODE_CATALOG` + `LoopProfile`）
 
 ## 5. 注册终端命令（Python API）
 

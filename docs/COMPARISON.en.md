@@ -80,7 +80,7 @@
 **Xenon Advantages**: **This is the strongest differentiator in the entire table**. 7 paradigms enable:
 - Simple Q&A → `direct` (saves tokens)
 - Tool invocation → `react` classic loop
-- Multi-step tasks → `plan-execute` automatic decomposition (PlanDAG topological parallelism)
+- Multi-step tasks → `plan-execute` profile (plan first, per-step budget, same loop)
 - Quality-sensitive tasks → `reflection` with an independent reviewer model
 - Creative writing → handled by generic `direct` / `reflection` modes without maintaining specialized out-of-scope engines
 - Composite workflows → 3 combined engines (isolated context + reviewer model for multi-paradigm collaboration)
@@ -146,7 +146,7 @@ None of the other 4 projects support true multi-paradigm switching — Aider, Cl
 | Need 50+ providers with an attractive TUI | **OpenCode** |
 | Fast, lightweight Go binary with multiple local runtimes | **Crush** |
 | **Need multi-paradigm (7 modes) + 12 providers + MCP + engineering triple-pack** | **Xenon** |
-| Researching agent paradigms (PlanDAG / Reflection / combined engines) | **Xenon** (ideal experimental platform) |
+| Researching agent loops (one runtime, seven parameter profiles) | **Xenon** (ideal experimental platform) |
 | Chinese / local ecosystem focus | **Xenon** (DeepSeek / Qwen / Ollama suite) |
 
 ---

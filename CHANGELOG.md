@@ -23,6 +23,8 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- 文档真话化（#206/#294）：`COMPARISON`(zh/en)、`TUI`、`EVAL_PROTOCOL`、`ARCHITECTURE`(zh/en)、`EXTENDING`(zh/en)、`OBSERVABILITY` 不再宣称已删除的 7 引擎/PlanDAG/组合引擎；历史文档加归档标记。
+- 新增 `scripts/check_docs_refs.py` + CI：文档里引用的 `xenon/**.py` 必须存在（历史文档需显式标记）。
 - 授权输入不再和 prompt_toolkit 抢 stdin：kernel 轮次内改用 REPL 的 prompt_toolkit 会话读取 y/n/a/q（此前用 rich `Prompt.ask`，Windows 上按键被吞，表现为「输入后卡住」）。
 - 状态栏显示**正在执行的 loop**而非 `/mode` 配置（此前任务轮次里仍显示 `direct`）。
 - 审批可诊断（#202 收尾）：`KernelApprovalProvider.last_reason` 保留前端判定理由，runtime 用它写 `user_approval`；`_result_summary` 从账本取最后阻断理由，blocked 不再只显示 `phase=blocked`。
