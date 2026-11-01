@@ -181,12 +181,11 @@ def test_mcp_install_rejects_invalid_server_name(config_path, fake_server):
 
 
 def test_mcp_management_tools_are_registered_and_sensitive():
-    from xenon.engine.react_prompts import BUILTIN_TOOLS
     from xenon.nodes.tool_classify import classify_tool, required_execution_level
-    from xenon.nodes.tool_registry import BUILTIN_TOOL_REGISTRY
+    from xenon.nodes.tool_registry import BUILTIN_TOOL_METHODS, BUILTIN_TOOL_REGISTRY
 
     for name in ("mcp_install", "mcp_verify"):
-        assert name in BUILTIN_TOOLS
+        assert name in BUILTIN_TOOL_METHODS
         assert name in BUILTIN_TOOL_REGISTRY.names()
         assert classify_tool(name, {}) == "SENSITIVE"
         assert required_execution_level(name, {}) == 3

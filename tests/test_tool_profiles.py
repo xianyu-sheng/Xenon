@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from xenon.engine.context import AgentContext
-from xenon.engine.react_engine import ReActEngine
 from xenon.engine.tool_profiles import (
     CORE_TOOL_NAMES,
     filter_tools_for_profile,
@@ -14,25 +13,31 @@ from xenon.nodes.tool_node import ToolNode
 
 def test_core_profile_filters_react_schema(monkeypatch):
     monkeypatch.setenv("XENON_TOOL_PROFILE", "core")
-    engine = ReActEngine(["fake/model"])
+    profile = resolve_tool_profile()
+    schemas = {name: {} for name in set(CORE_TOOL_NAMES) | {"write_file", "run_tests"}}
+    tools = filter_tools_for_profile(schemas, profile)
 
-    assert engine._tool_profile == "core"
-    assert set(engine.tools) == set(CORE_TOOL_NAMES)
-    assert "read" in engine.tools
-    assert "search" in engine.tools
-    assert "apply_patch" in engine.tools
-    assert "bash" in engine.tools
-    assert "write_file" not in engine.tools
-    assert "run_tests" not in engine.tools
+    assert profile == "core"
+    assert set(tools) == set(CORE_TOOL_NAMES)
+    assert "read" in tools
+    assert "search" in tools
+    assert "apply_patch" in tools
+    assert "bash" in tools
+    assert "write_file" not in tools
+    assert "run_tests" not in tools
 
 
 def test_legacy_profile_is_default(monkeypatch):
     monkeypatch.delenv("XENON_TOOL_PROFILE", raising=False)
 
-    assert resolve_tool_profile() == "legacy"
-    engine = ReActEngine(["fake/model"])
-    assert "write_file" in engine.tools
-    assert "run_tests" in engine.tools
+    profile = resolve_tool_profile()
+    tools = filter_tools_for_profile(
+        {"read": {}, "write_file": {}, "run_tests": {}}, profile
+    )
+
+    assert profile == "legacy"
+    assert "write_file" in tools
+    assert "run_tests" in tools
 
 
 def test_profile_filter_does_not_mutate_source():

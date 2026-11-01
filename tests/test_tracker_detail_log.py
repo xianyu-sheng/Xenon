@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
-from xenon.engine.plan_execute_engine import PlanExecuteEngine
 from xenon.engine.tool_tracker import ToolExecutionTracker
 
 
@@ -61,26 +58,3 @@ def test_empty_content_is_still_visible() -> None:
     tracker = ToolExecutionTracker()
     tracker.record("write_file", {"file_path": "empty.txt", "content": ""}, True)
     assert "content=<0 chars>" in tracker.detail_log()
-
-
-def test_summary_prompt_explains_truncated_params(monkeypatch) -> None:
-    engine = PlanExecuteEngine(["fake/model"])
-    captured: dict = {}
-
-    def fake_summary(phase, messages, **kwargs):
-        captured["messages"] = messages
-        return "ok"
-
-    monkeypatch.setattr(engine, "_call_llm_for_phase", fake_summary)
-    tracker = ToolExecutionTracker()
-    tracker.record(
-        "write_file",
-        {"file_path": "x.py", "content": "x" * 20},
-        True,
-        "写入成功",
-    )
-    engine._summarize("task", "analysis", [], tracker)
-
-    text = json.dumps(captured["messages"], ensure_ascii=False)
-    assert "<N chars>" in text
-    assert "不要仅因未展示原文就断言参数缺失" in text
