@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from xenon.engine.context import AgentContext
-from xenon.engine.evidence_gate import FactBindingGate
+from xenon.engine.evidence_gate import GateVerdict
 from xenon.engine.evidence_runtime import EventKind, EvidenceLedger, LifecyclePhase
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes.tool_executor import ToolExecutor
@@ -212,7 +212,15 @@ def test_observe_mode_warns_but_does_not_block(tmp_path: Path) -> None:
 
 
 def test_executor_accepts_custom_gate() -> None:
+    """The executor takes *any* gate object; the engine-era gates are gone."""
+
+    class _StubGate:
+        phase = "pre_tool"
+
+        def check(self, ctx, **kwargs):
+            return GateVerdict("pre_tool", True, "ok", "info")
+
     ledger = EvidenceLedger("run-1")
     executor = _executor(ledger)
-    executor.register_evidence_gate(FactBindingGate())
+    executor.register_evidence_gate(_StubGate())
     assert executor.evidence_gates

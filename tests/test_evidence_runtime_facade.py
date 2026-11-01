@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from xenon.engine.context import AgentContext
-from xenon.engine.evidence_gate import FileClaimGate, GateVerdict
+from xenon.engine.evidence_gate import GateVerdict
 from xenon.engine.evidence_runtime import (
     EventKind,
     EvidenceLedger,
@@ -80,7 +80,17 @@ class TestEvidenceRuntimeRecords:
 class TestEvidenceRuntimeGates:
     def test_register_and_run_gates(self) -> None:
         rt = EvidenceRuntime()
-        rt.register_gate(FileClaimGate())
+
+        class _PassGate:
+            """Local stub: the facade only needs the gate protocol, not a
+            concrete engine-era gate (those were retired with #338)."""
+
+            phase = "output"
+
+            def check(self, ctx, **kwargs):
+                return GateVerdict("output", True, "ok", "info")
+
+        rt.register_gate(_PassGate())
         verdicts = rt.run_gates("output", None, output="已创建 a.py")
         assert isinstance(verdicts, list)
         assert all(isinstance(v, GateVerdict) for v in verdicts)
