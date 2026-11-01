@@ -227,6 +227,12 @@ class Budget:
     context_window: int = 0
 
 
+# Caps mirror the context manager: a project snapshot or retrieved memory must
+# never crowd out the working set or the action protocol.
+_MAX_CONTEXT_BLOCK_CHARS = 20_000
+_MAX_CONTEXT_TOTAL_CHARS = 40_000
+
+
 @dataclass(frozen=True, slots=True)
 class TaskSpec:
     task_id: str
@@ -248,6 +254,11 @@ class TaskSpec:
     user_objective: str = ""
     # Explicit V2 obligations supplied by the caller/intake layer.
     obligations: tuple[Obligation, ...] = ()
+    # Session-level reference material the front-end wants the model to see:
+    # project rules, retrieved memories, and similar.  It is **reference**,
+    # never instruction and never evidence, and it is part of the view hash so
+    # identical inputs produce an identical prompt.
+    context_blocks: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         """Reject a malformed task at the boundary, not three layers down.
@@ -257,6 +268,22 @@ class TaskSpec:
         objective is not a string".  The kernel keeps that lesson.
         """
 
+        total = 0
+        for label, text in self.context_blocks:
+            if not str(label).strip():
+                raise ValueError("context block label must not be empty")
+            if not isinstance(text, str):
+                raise ValueError("context block text must be a string")
+            total += len(text)
+            if len(text) > _MAX_CONTEXT_BLOCK_CHARS:
+                raise ValueError(
+                    f"context block {label!r} exceeds "
+                    f"{_MAX_CONTEXT_BLOCK_CHARS} chars"
+                )
+        if total > _MAX_CONTEXT_TOTAL_CHARS:
+            raise ValueError(
+                f"session context exceeds {_MAX_CONTEXT_TOTAL_CHARS} chars"
+            )
         for name, value in (
             ("task_id", self.task_id),
             ("objective", self.objective),

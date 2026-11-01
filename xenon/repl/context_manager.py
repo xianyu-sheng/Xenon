@@ -422,6 +422,19 @@ class ContextManager:
         else:
             self._context_messages.pop(str(key), None)
 
+    def context_layers(self) -> list[tuple[str, str, bool]]:
+        """Return ``(key, content, stable)`` for every replaceable layer.
+
+        Insertion order is preserved so a caller that turns these into prompt
+        blocks produces byte-identical text for identical state — the kernel
+        hashes the view, so "same inputs, same prompt" must actually hold.
+        """
+
+        return [
+            (str(key), str(content), bool(is_stable))
+            for key, (content, is_stable) in self._context_messages.items()
+        ]
+
     def get_context_messages(
         self, *, stable: bool | None = None
     ) -> list[dict[str, str]]:
