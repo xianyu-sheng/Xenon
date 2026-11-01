@@ -182,3 +182,81 @@ def test_a_blocked_run_explains_itself_from_the_ledger(tmp_path):
 
     assert "blocked" in summary
     assert "用户拒绝" in summary
+
+
+# ── blocked 的自解释渲染：各分支都要有确定性行为 ─────────────────────
+
+
+def _write_ledger(path, events):
+    from xenon.ledger.store import Ledger
+
+    ledger = Ledger(path, "t")
+    for kind, payload in events:
+        ledger.append(kind, __import__("xenon.ledger.events", fromlist=["EventSource"]).EventSource.GATE, payload)
+    return path
+
+
+def test_blocking_reason_reads_a_policy_decision_with_scope(tmp_path):
+    from xenon.ledger.events import EventKind, EventSource
+    from xenon.ledger.store import Ledger
+    from xenon.repl.runtime_adapter import _blocking_reason
+
+    ledger = Ledger(tmp_path / "t.jsonl", "t")
+    ledger.append(
+        EventKind.POLICY_DECISION,
+        EventSource.GATE,
+        {"kind": "veto", "reason": "shell requires a grant", "scope": ["shell", "ls"]},
+    )
+
+    reason = _blocking_reason(ledger.path, task_id="t")
+
+    assert "shell requires a grant" in reason
+    assert "ls" in reason
+
+
+def test_blocking_reason_skips_an_approved_approval(tmp_path):
+    from xenon.ledger.events import EventKind, EventSource
+    from xenon.ledger.store import Ledger
+    from xenon.repl.runtime_adapter import _blocking_reason
+
+    ledger = Ledger(tmp_path / "t.jsonl", "t")
+    ledger.append(
+        EventKind.USER_APPROVAL,
+        EventSource.USER,
+        {"approved": True, "reason": "fine"},
+    )
+
+    assert _blocking_reason(ledger.path, task_id="t") == ""
+
+
+def test_blocking_reason_names_a_rejected_approval(tmp_path):
+    from xenon.ledger.events import EventKind, EventSource
+    from xenon.ledger.store import Ledger
+    from xenon.repl.runtime_adapter import _blocking_reason
+
+    ledger = Ledger(tmp_path / "t.jsonl", "t")
+    ledger.append(
+        EventKind.USER_APPROVAL,
+        EventSource.USER,
+        {"approved": False, "reason": "用户取消任务"},
+    )
+
+    assert "审批未通过" in _blocking_reason(ledger.path, task_id="t")
+    assert "用户取消任务" in _blocking_reason(ledger.path, task_id="t")
+
+
+def test_blocking_reason_is_empty_when_the_ledger_is_unreadable(tmp_path):
+    from xenon.repl.runtime_adapter import _blocking_reason
+
+    assert _blocking_reason(tmp_path / "missing.jsonl", task_id="t") == ""
+
+
+def test_blocking_reason_is_empty_for_an_unexplained_run(tmp_path):
+    from xenon.ledger.events import EventKind, EventSource
+    from xenon.ledger.store import Ledger
+    from xenon.repl.runtime_adapter import _blocking_reason
+
+    ledger = Ledger(tmp_path / "t.jsonl", "t")
+    ledger.append(EventKind.TASK_STARTED, EventSource.RUNTIME, {"objective": "o"})
+
+    assert _blocking_reason(ledger.path, task_id="t") == ""
