@@ -27,7 +27,6 @@ from typing import Any, Callable
 import yaml
 
 from xenon.engine.callbacks import EngineCallback
-from xenon.engine.react_engine import ReActEngine
 from xenon.repl.model_registry import ModelConfig
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -277,32 +276,25 @@ def _run_task(
         max_tokens=4096,
         context_window=128000,
     )
-    trace = Trace()
     previous = Path.cwd()
     os.chdir(work)
     started = time.monotonic()
-    tracker = None
+    trace = Trace()
+    trace_data: list[dict[str, Any]] = []
+    llm_calls = 0
     try:
-        engine = ReActEngine(
-            [model],
-            max_iterations=task.max_iterations or max_iterations,
-            native_fc=True,
-            model_configs={model: config},
-            callback=trace,
+        from evals.kernel_runner import run_eval_task
+
+        outcome = run_eval_task(
+            objective=task.prompt,
+            worktree=work,
+            model=config,
+            name="react",
+            max_steps=max(1, task.max_iterations or max_iterations),
+            ledger_dir=None,
         )
-        for attr in ("_call_llm_native_for_phase", "_call_llm_for_phase"):
-            original = getattr(engine, attr)
-
-            def make_spy(fn):
-                def spy(*args, **kwargs):
-                    trace.llm_calls += 1
-                    return fn(*args, **kwargs)
-
-                return spy
-
-            setattr(engine, attr, make_spy(original))
-        engine.run(task.prompt)
-        tracker = engine._last_tracker
+        trace_data = [dict(item) for item in outcome.tool_trace]
+        llm_calls = len(outcome.tool_trace) + (1 if outcome.answer else 0)
     except Exception:  # noqa: BLE001 - benchmark records failures via checks
         pass
     finally:
@@ -312,16 +304,16 @@ def _run_task(
         passed, detail = task.check(work, meta)
     else:
         passed, detail = False, "task has no check"
-    calls = list(tracker.calls) if tracker else []
+    failed = sum(1 for item in trace_data if not item.get("success"))
     return RunResult(
         model=model,
         task=task.name,
         passed=passed,
         detail=detail,
         elapsed_s=round(time.monotonic() - started, 1),
-        llm_calls=trace.llm_calls,
-        tool_calls=len(calls),
-        failed_tools=sum(1 for call in calls if not call.success),
+        llm_calls=llm_calls,
+        tool_calls=len(trace_data),
+        failed_tools=failed,
         loop_hints=trace.loop_hints,
         warnings=trace.warnings,
     )

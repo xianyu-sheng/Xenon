@@ -9,9 +9,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The engine modules that used to appear here are deleted; the guard now
+# covers the modules that still make routing decisions.
 _BANNED_MODULES = [
-    "xenon/engine/react_engine.py",
-    "xenon/engine/plan_execute_engine.py",
+    "xenon/kernel/runtime.py",
+    "xenon/harness/llm.py",
+    "xenon/harness/runner.py",
     "xenon/repl/auto_router.py",
 ]
 
@@ -20,7 +23,7 @@ def _source(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
-def test_engines_and_router_never_call_detect_intent():
+def test_loop_and_router_never_call_detect_intent():
     for rel in _BANNED_MODULES:
         assert "detect_intent(" not in _source(rel), rel
 

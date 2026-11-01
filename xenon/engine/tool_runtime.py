@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from xenon.engine.execution_policy import walk_engine_graph
-
 
 @dataclass(frozen=True, slots=True)
 class ToolRuntime:
@@ -43,11 +41,6 @@ class ToolRuntime:
         return str(self.workspace_root / relative)
 
 
-def bind_tool_runtime(engine: Any, runtime: ToolRuntime) -> None:
-    """Bind one runtime to all current tool executors in an engine graph."""
-
-    for node in walk_engine_graph(engine):
-        node.tool_runtime = runtime
-        executor = getattr(node, "_tool_executor", None)
-        if executor is not None:
-            executor.set_runtime(runtime)
+# ``bind_tool_runtime`` walked the legacy engine graph to attach a runtime to
+# every node's executor.  The kernel binds one runtime per catalog gateway, so
+# the graph walk has no caller and went with the engines (#202).
