@@ -32,7 +32,7 @@ try:
     import winpty
 except ImportError:  # pragma: no cover - platform tool
     print("winpty is required on Windows: pip install pywinpty")
-    raise SystemExit(2)
+    raise SystemExit(2) from None
 
 ANSWER = os.environ.get("XENON_TTY_ANSWER", "y")
 MODEL = os.environ.get("XENON_TTY_MODEL", "deepseek/deepseek-v4-flash")
