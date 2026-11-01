@@ -23,8 +23,8 @@ def test_call_without_predicate_stays_synchronous():
         seen.append(model_id)
         return "ok"
 
-    assert _call_model(ModelConfig(model_id="m"), client, []) == "ok"
-    assert seen == ["m"]
+    assert _call_model(ModelConfig(model_id="test/fake"), client, []) == "ok"
+    assert seen == ["test/fake"]
 
 
 def test_cancel_interrupts_an_in_flight_call():
@@ -65,7 +65,7 @@ def test_call_errors_are_re_raised_unchanged():
         raise Boom("provider said no")
 
     with pytest.raises(Boom):
-        _call_model(ModelConfig(model_id="m", should_cancel=lambda: False), client, [])
+        _call_model(ModelConfig(model_id="test/fake", should_cancel=lambda: False), client, [])
 
 
 def test_cancel_ends_the_run_as_aborted_not_failed():
@@ -131,3 +131,108 @@ def test_cancel_is_not_a_budget_block():
     assert [
         e for e in ledger.read() if e.kind is EventKind.POLICY_DECISION
     ] == [], "a cancel must not masquerade as a policy veto"
+
+
+# ── 进度可见（kernel 流式）─────────────────────────────────────────
+
+
+def test_progress_hook_reports_elapsed_and_size():
+    """Kernel output is a protocol payload, so show progress, not prose."""
+
+    import time as _time
+
+    ticks: list[tuple[float, int]] = []
+
+    def slow_client(model_id, messages, **kwargs):
+        _time.sleep(0.5)
+        return '{"action":"think","text":"ok"}'
+
+    result = _call_model(
+        ModelConfig(model_id="test/fake", progress_sink=lambda s, n: ticks.append((s, n))),
+        slow_client,
+        [],
+    )
+
+    assert result.startswith('{"action"')
+    assert ticks, "the waiting thread must see progress"
+    assert ticks[0][0] >= 0.0
+
+
+def test_streaming_accumulates_chunks(monkeypatch):
+    """With a progress hook the reply is assembled from stream chunks."""
+
+    import xenon.harness.llm as llm_mod
+
+    def fake_stream(model_id, messages, **kwargs):
+        import time as _time
+
+        for part in ('{"action":', '"think",', '"text":"hi"}'):
+            # Slow enough that the waiting thread observes progress: the poll
+            # interval is 150ms, so each chunk must outlast one tick.
+            _time.sleep(0.25)
+            yield part
+
+    monkeypatch.setattr(
+        "xenon.utils.llm_client.chat_completion_stream", fake_stream
+    )
+    ticks: list[tuple[float, int]] = []
+
+    result = _call_model(
+        ModelConfig(model_id="test/fake", progress_sink=lambda s, n: ticks.append((s, n))),
+        None,
+        [{"role": "user", "content": "hi"}],
+    )
+
+    assert result == '{"action":"think","text":"hi"}'
+    assert ticks, "chunks must be visible while they arrive"
+    assert llm_mod  # module import stays exercised
+
+
+def test_no_hook_means_no_streaming_and_no_thread():
+    calls: list[str] = []
+
+    def client(model_id, messages, **kwargs):
+        calls.append("called")
+        return "ok"
+
+    assert _call_model(ModelConfig(model_id="test/fake"), client, []) == "ok"
+    assert calls == ["called"]
+
+
+def test_progress_failure_does_not_break_the_call():
+    def boom(seconds, chars):
+        raise RuntimeError("ui died")
+
+    def slow_client(model_id, messages, **kwargs):
+        import time as _time
+
+        _time.sleep(0.3)
+        return "ok"
+
+    assert (
+        _call_model(ModelConfig(model_id="test/fake", progress_sink=boom), slow_client, [])
+        == "ok"
+    )
+
+
+def test_progress_reporter_stays_quiet_for_fast_calls():
+    """Short calls need no narration; long ones do."""
+
+    from types import SimpleNamespace
+
+    from xenon.repl.runtime_adapter import kernel_progress_reporter
+
+    printed: list[str] = []
+
+    class _Console:
+        def print(self, message, **kwargs):
+            printed.append(str(message))
+
+    repl = SimpleNamespace(console=_Console())
+    report = kernel_progress_reporter(repl)
+
+    report(0.2, 40)
+    assert printed == [], "a fast call must not spam the transcript"
+
+    report(2.5, 900)
+    assert printed and "生成中" in printed[0]

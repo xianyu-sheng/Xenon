@@ -247,6 +247,29 @@ class CancelOnInterrupt:
                 pass
 
 
+def kernel_progress_reporter(repl: Any) -> Any:
+    """A progress hook that shows "still working" without printing raw JSON.
+
+    Kernel turns emit a protocol payload, so token-level output is noise.  What
+    the operator needs is: something is happening, how long, how much.
+    """
+
+    console = _console_for(repl)
+
+    def report(seconds: float, chars: int) -> None:
+        if seconds < 1.0:
+            return  # short calls need no narration
+        try:
+            console.print(
+                f"[dim]· 模型生成中 {seconds:.0f}s · {chars} 字符[/dim]",
+                highlight=False,
+            )
+        except Exception:  # noqa: BLE001 — progress is cosmetic
+            pass
+
+    return report
+
+
 def drain_steering(repl: Any) -> Any:
     """Pop one pending operator line, or ``None`` (never blocks).
 
@@ -494,6 +517,7 @@ class RuntimeAdapter:
         mcp_registry: Any = None,
         strategy_mode: str = "react",
         plan_only: bool = False,
+        progress_sink: Any = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         if not self.workspace.is_dir():
@@ -501,6 +525,7 @@ class RuntimeAdapter:
                 f"kernel workspace is not a directory: {self.workspace}"
             )
         self.model_config = model_config
+        self.progress_sink = progress_sink
         self.permission = permission
         self.ledger_dir = (
             Path(ledger_dir).expanduser()
@@ -554,6 +579,10 @@ class RuntimeAdapter:
         strategy = build_llm_loop_strategy(
             self.model_config, profile, client=self.client
         )
+        if self.progress_sink is not None:
+            from xenon.harness.llm import bind_progress_sink
+
+            bind_progress_sink(strategy, self.progress_sink)
         constraints = [
             "runtime:kernel",
             f"model:{self.model_config.model_id}",
@@ -982,6 +1011,7 @@ def run_kernel_turn(
         start_capture = getattr(repl, "_start_log_capture", None)
         if callable(start_capture):
             start_capture()
+        adapter.progress_sink = kernel_progress_reporter(repl)
         guard = CancelOnInterrupt(None)
 
         def _attach(runtime: Any) -> None:

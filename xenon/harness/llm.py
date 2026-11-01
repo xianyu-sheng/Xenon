@@ -67,6 +67,9 @@ class ModelConfig:
     usage_sink: Any = None
     # Cancellation predicate: "has the operator asked us to stop?".
     should_cancel: Any = None
+    # Progress hook: ``(elapsed_seconds, chars_generated)``.  Called from the
+    # waiting thread, i.e. the caller's own thread, so a UI can update safely.
+    progress_sink: Any = None
 
 
 _DEFAULT_MAX_TOKENS = 8192
@@ -599,15 +602,60 @@ def _call_model(
         kwargs["credentials"] = {provider: config.api_key}
     if config.usage_sink is not None:
         kwargs["usage_sink"] = config.usage_sink
-    if config.should_cancel is None:
+    if config.should_cancel is None and config.progress_sink is None:
         return caller(config.model_id, messages, **kwargs)
+    ticker: list[int] = [0]
+    # Only the real transport can stream; an injected client (tests, evals,
+    # front-ends) keeps its own call shape and still gets progress ticks.
+    can_stream = client is None
     return _call_with_cancel(
-        config.should_cancel,
-        lambda: caller(config.model_id, messages, **kwargs),
+        config.should_cancel or (lambda: False),
+        lambda: _call_streaming(config, caller, messages, kwargs, ticker, can_stream),
+        on_tick=config.progress_sink,
+        chars=ticker,
     )
 
 
-def _call_with_cancel(should_cancel: Callable[[], bool], call: Callable[[], str]) -> str:
+def _call_streaming(
+    config: ModelConfig,
+    caller: Callable[..., str],
+    messages: list[dict[str, str]],
+    kwargs: dict[str, Any],
+    ticker: list[int],
+    can_stream: bool = True,
+) -> str:
+    """Run the call, reporting how much text has arrived so far.
+
+    Kernel turns produce a protocol payload, not prose, so the useful signal
+    is "how far along is it", not the raw tokens.  Streaming is therefore
+    optional: without a progress hook the call is a plain request.
+    """
+
+    if config.progress_sink is None or not can_stream:
+        return str(caller(config.model_id, messages, **kwargs))
+    from xenon.utils.llm_client import chat_completion_stream
+
+    kwargs = {
+        key: value
+        for key, value in kwargs.items()
+        if key not in {"usage_sink", "progress_sink", "should_cancel"}
+    }
+    chunks: list[str] = []
+    total = 0
+    for chunk in chat_completion_stream(config.model_id, messages, **kwargs):
+        text = str(chunk or "")
+        chunks.append(text)
+        total += len(text)
+        ticker[0] = total
+    return "".join(chunks)
+
+
+def _call_with_cancel(
+    should_cancel: Callable[[], bool],
+    call: Callable[[], str],
+    on_tick: Any = None,
+    chars: list[int] | None = None,
+) -> str:
     """Run one model call so a cancel is noticed within a poll interval.
 
     httpx has no portable "abort this request from another thread", so the
@@ -621,6 +669,7 @@ def _call_with_cancel(should_cancel: Callable[[], bool], call: Callable[[], str]
     """
 
     import threading
+    import time
 
     from xenon.kernel.cancel import POLL_SECONDS, ModelCancelled
 
@@ -632,12 +681,21 @@ def _call_with_cancel(should_cancel: Callable[[], bool], call: Callable[[], str]
         except BaseException as exc:  # noqa: BLE001 — re-raised in the caller
             box["error"] = exc
 
+    ticker = chars if chars is not None else [0]
+    started = time.monotonic()
     worker = threading.Thread(target=_run, name="xenon-model-call", daemon=True)
     worker.start()
     while True:
         worker.join(POLL_SECONDS)
         if not worker.is_alive():
             break
+        if on_tick is not None:
+            try:
+                # Called from the waiting (UI) thread on purpose: no cross
+                # thread rendering, and a slow UI cannot stall the call.
+                on_tick(time.monotonic() - started, ticker[0])
+            except Exception:  # noqa: BLE001 — progress is cosmetic
+                pass
         if should_cancel():
             raise ModelCancelled("model call cancelled by the operator")
     if "error" in box:
@@ -1132,6 +1190,23 @@ def bind_runtime_hooks(strategy: Any, runtime: Any) -> Any:
             provider.config = replace(
                 config, usage_sink=sink, should_cancel=should_cancel
             )
+        except Exception:  # noqa: BLE001 — a frozen provider simply opts out
+            continue
+    return strategy
+
+
+def bind_progress_sink(strategy: Any, sink: Any) -> Any:
+    """Attach a progress hook to every provider of one strategy."""
+
+    from dataclasses import replace
+
+    for name in _SINKABLE_PROVIDERS:
+        provider = getattr(strategy, name, None)
+        config = getattr(provider, "config", None)
+        if config is None:
+            continue
+        try:
+            provider.config = replace(config, progress_sink=sink)
         except Exception:  # noqa: BLE001 — a frozen provider simply opts out
             continue
     return strategy
