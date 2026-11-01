@@ -23,6 +23,9 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- Batch 3 B 类第三批（#202）：证据门三件套去掉引擎私有管线用例，保留器官断言（`verify_file_claims`/`task_requires_write`/`PlanCompletenessGate` 等纯判定），`evidence_enforcement` 默认值改由 `ToolExecutor` 直测。
+- 登记 #338：4 个具体 Gate 类（`PlanCompletenessGate`/`TaskCompletionGate`/`FileClaimGate`/`EvidenceCaptureGate`）在引擎外零引用，能力已由 kernel 审计+债务覆盖，待确认后退役。
+- 仓库分支清理：38 条已合并/空差异分支全部删除，远程仅保留 `main`。
 - Batch 3 B 类第二批（#202）：`test_execution_policy`(99)、`test_permission_integration`(24)、`test_input_boundary_validation`(43) 去掉引擎夹具；并把旧引擎的**入口输入校验**真正搬到 kernel（`TaskSpec.__post_init__` 拒绝非字符串/空 objective/task_id）。
 - Batch 3 B 类第一批（#202）：`test_tool_profiles`、`test_tool_result_read`、`test_tracker_detail_log`、`test_llms_txt`、`test_pull_request_tool`、`test_mcp_management_tools` 去掉引擎夹具/骨架常量，改测器官（`tool_profiles` 过滤、`ToolExecutionTracker`、`BUILTIN_TOOL_METHODS`）。
 - Batch 3 A/C 类（#202）：删除 19 个"断言对象是引擎内部/引擎提示词"的测试文件（约 170 用例），`test_turn_gate` 去除死夹具与 `EngineSpec` 依赖，`test_contract_single_source` 守卫改为覆盖仍在的模块；判定表落盘 `docs/evidence/mechanism-audit/batch3-table.md`（A 删 18 / B 迁 17 / C 守卫 2）。
