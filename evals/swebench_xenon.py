@@ -40,8 +40,8 @@ from evals.swebench_runtime import (  # noqa: E402
 # The kernel always verifies; 0 (the old "unlimited") becomes an explicit cap
 # so an eval run can never spin without a bound.
 STANDARD_STEP_BUDGET = 120  # noqa: E402
-from xenon.engine.execution_policy import ExecutionPolicy  # noqa: E402
 from xenon.harness.coding_contract import finalize_coding_run  # noqa: E402
+from xenon.harness.request_budget import RequestBudget  # noqa: E402
 from xenon.kernel.policies import PermissionMode  # noqa: E402
 from xenon.repl.model_registry import ModelConfig  # noqa: E402
 from xenon.utils.llm_client import UsageTracker, chat_completion  # noqa: E402
@@ -184,7 +184,7 @@ def run_one(
     worktree = root / instance_id / engine_name
     runtime_metadata: dict[str, Any] = {}
     coding_result = None
-    policy = ExecutionPolicy.from_timeout(
+    policy = RequestBudget.from_timeout(
         engine_timeout,
         request_timeout=request_timeout,
         provider_attempts=provider_attempts,

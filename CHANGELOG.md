@@ -23,6 +23,10 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- **引擎骨架已删除**（#202）：`xenon/engine/` 从 43 个文件降到 25 个，18 个骨架文件移除（base/registry/builtin_engines/react/plan_execute/reflection/combined/event_bus/plan_dag*/plan_contract/prompts/strategy_guide/scout/verification_nudge/claim_gate/execution_policy）。
+- 守卫升级：`check_engine_imports.py` 改为「骨架文件不得存在 + xenon/tests/evals/scripts 四棵树禁止 import」，并用 import 语句匹配（不误报守卫测试里的字符串断言）。
+- 机制迁出：`ExecutionPolicy`（请求截止/节流/事件）从引擎包迁到 `xenon/harness/request_budget.py`（`RequestBudget`），swebench 适配器改用它。
+- evals 全面转 kernel：`runner.RealAgent` 默认走 `_KernelEvalAgent`（工具轨迹来自账本而非 monkey-patch），`execution_benchmark` 与 `agentic_completion` 改用 `run_eval_task`。
 - Batch 3 B 类收官（#202）：`test_document_tools`、`test_tool_schema_registry`、`test_tool_execution_lifecycle`、`test_run_script_tool`、`test_context_continuity`、`test_update_plan_tool` 全部去骨架化；**测试侧骨架引用清零**。
 - 机制回迁：插件工具进入 `build_catalog`（新增 `plugin_specs()`，`plugin` pack 在所有 profile 可见）——引擎删除后插件注册会静默失效，属真回归。
 - 登记 #340：kernel 轮次不注入 memory/project 上下文（chat 轮次注入），属真缺口，待实现。

@@ -392,3 +392,35 @@ def test_decide_is_single_authority() -> None:
         controller.decide((unverifiable,), ()).kind
         is ControlDecisionKind.ABSTAIN
     )
+
+
+def test_a_later_failing_test_overrides_an_earlier_pass():
+    """A pass must not survive a subsequent failure for the same obligation.
+
+    The legacy delivery runtime enforced this by re-reading its task state
+    after every retry; the kernel keeps it structural — the controller always
+    sees the *latest* verdict per obligation.
+    """
+
+    from xenon.kernel.runtime import _latest_verdicts
+
+    passed = Verdict(
+        obligation_id="task",
+        stage=VerificationStage.V0,
+        status=VerdictStatus.SATISFIED,
+        reason="pytest ok",
+    )
+    failed = Verdict(
+        obligation_id="task",
+        stage=VerificationStage.V0,
+        status=VerdictStatus.VIOLATED,
+        reason="AssertionError: expected 5, got 4",
+    )
+
+    latest = _latest_verdicts([passed, failed])
+
+    assert [(item.obligation_id, item.status) for item in latest] == [
+        ("task", VerdictStatus.VIOLATED)
+    ]
+    decision = VerificationController().decide(latest, ())
+    assert decision.kind is not ControlDecisionKind.DELIVER

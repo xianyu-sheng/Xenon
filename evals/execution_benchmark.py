@@ -28,15 +28,12 @@ import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import yaml
 
 from xenon.engine.callbacks import EngineCallback
-from xenon.engine.context import AgentContext
-from xenon.engine.plan_execute_engine import PlanExecuteEngine
-from xenon.engine.task_runtime import run_with_delivery
-from xenon.engine.task_state import TaskState
 from xenon.repl.model_registry import ModelConfig
 
 
@@ -549,45 +546,39 @@ def _run_case(
     baseline = _git(repo, "rev-parse", "HEAD").stdout.strip()
     os.chdir(repo)
 
-    trace = _Trace()
-    engine = PlanExecuteEngine(
-        [model],
-        max_steps=0,
-        max_replans=2,
-        native_planning=True,
-        plan_max_tokens=8192,
-        model_configs={model: config},
-        callback=trace,
-    )
-    state = TaskState(
-        objective=case.objective,
-        intent="write_code",
-        execution_level=3,
-        required=["verify", "commit"],
-    )
-    ctx = AgentContext(
-        {
-            "_session_id": "benchmark-" + case.name,
-            "_execution_level": 3,
-            "_workspace_root": str(repo),
-            "_task_state": state.to_dict(),
-        }
-    )
     started = time.time()
     error = ""
     result_text = ""
+    trace = _Trace()
+    missing: list[str] = []
+    commit = ""
+    kernel_ok = False
     try:
-        result_text = str(
-            run_with_delivery(engine, case.objective, ctx, max_delivery_retries=3)
+        from evals.kernel_runner import run_eval_task
+
+        outcome = run_eval_task(
+            objective=case.objective,
+            worktree=repo,
+            model=config,
+            name="kernel",
+            max_steps=40,
+            ledger_dir=None,
         )
+        result_text = outcome.answer
+        missing = list(outcome.debt)
+        commit = outcome.finalize_sha or ""
+        kernel_ok = outcome.accepted
+        calls = [
+            SimpleNamespace(
+                success=bool(item.get("success")), tool_name=item.get("tool")
+            )
+            for item in outcome.tool_trace
+        ]
     except Exception:  # noqa: BLE001 — report the failure, keep the repo
         error = traceback.format_exc()
+        calls = []
     elapsed = round(time.time() - started, 1)
-
-    final_state = TaskState.from_context(ctx) or state
-    missing = final_state.missing_delivery()
-    tracker = getattr(engine, "_last_tracker", None)
-    calls = list(getattr(tracker, "calls", []) or [])
+    final_state = SimpleNamespace(status="completed", to_dict=dict, commit=commit)
     test_returncode: int | None = None
     reason = ""
     if error:
@@ -618,12 +609,12 @@ def _run_case(
             reason = "target tests failed: " + (test.stdout + test.stderr)[-800:]
         elif status:
             reason = "worktree dirty: " + status[:500]
-        elif head == baseline:
+        elif head == baseline and not commit:
             reason = "no new commit"
         elif missing:
-            reason = "TaskState missing: " + ", ".join(missing)
-        elif final_state.status != "completed":
-            reason = "TaskState status: " + final_state.status
+            reason = "kernel debt: " + ", ".join(missing)
+        elif not kernel_ok:
+            reason = "kernel did not accept the delivery"
         elif case.extra_check is not None and not case.extra_check(repo):
             reason = "case-specific source check failed"
 
@@ -637,11 +628,11 @@ def _run_case(
         failures=sum(1 for call in calls if not call.success),
         task_status=final_state.status,
         missing=missing,
-        commit=final_state.commit,
+        commit=commit,
         test_returncode=test_returncode,
         result_tail=result_text[-500:],
         warnings=trace.warnings[-10:],
-        task_state=final_state.to_dict(),
+        task_state={"status": final_state.status, "commit": commit, "missing": missing},
     )
 
 

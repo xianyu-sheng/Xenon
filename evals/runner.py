@@ -28,15 +28,14 @@ DEFAULT_REPORT_PATH = Path(__file__).parent / "reports" / "mock_report.md"
 
 
 def _supported_engine_types() -> tuple[str, ...]:
-    """从 ENGINE_REGISTRY 派生受支持的引擎名，避免维护第二份白名单。
+    """受支持的范式名来自 kernel 的 profile 表，避免维护第二份白名单。
 
-    此前这里是一份硬编码元组，新增一种范式必须同步修改，漏改的表现是
-    「/mode 能切但 eval 拒绝运行」。
+    引擎注册表已删除；现在每种范式是一个 ``LoopProfile``，名字沿用旧的
+    eval 名，保证历史结果文件仍可比较。
     """
-    import xenon.engine.builtin_engines  # noqa: F401  # 触发内置范式注册
-    from xenon.engine.registry import ENGINE_REGISTRY
+    from evals.kernel_runner import EVAL_PROFILES
 
-    return ENGINE_REGISTRY.names()
+    return ("direct",) + tuple(EVAL_PROFILES)
 
 
 SUPPORTED_ENGINE_TYPES = _supported_engine_types()
@@ -363,6 +362,50 @@ def evaluate_assertions(
     }
 
 
+class _KernelEvalAgent:
+    """Adapter so the eval runs the shipped loop instead of a legacy engine.
+
+    The eval used to construct ``ReActEngine`` / ``PlanExecuteEngine`` objects
+    and monkey-patch their executors to observe tool calls.  Both the engines
+    and the patch points are gone; the kernel already records every receipt in
+    its ledger, so the observation comes from the record instead of from
+    instrumentation.  That is the whole point of an event-sourced harness.
+    """
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        profile_name: str,
+        max_steps: int = 40,
+        request_timeout: float = 30.0,
+    ) -> None:
+        self.model = model
+        self.profile_name = profile_name
+        self.max_steps = max_steps
+        self.request_timeout = request_timeout
+        self.last_trace: list[dict[str, Any]] = []
+
+    def run(
+        self, user_input: str, context: Any = None, ctx_mgr: Any = None
+    ) -> str:
+        from evals.kernel_runner import run_eval_task
+        from xenon.harness.llm import ModelConfig
+
+        result = run_eval_task(
+            objective=user_input,
+            worktree=Path.cwd(),
+            model=ModelConfig(
+                model_id=self.model, temperature=0.0
+            ),
+            name=self.profile_name,
+            max_steps=self.max_steps,
+            ledger_dir=None,
+        )
+        self.last_trace = [dict(item) for item in result.tool_trace]
+        return result.answer
+
+
 class RealAgent:
     """真实引擎 eval agent（§8.14.2 修复）：跑 ReAct 多轮闭环，按**实际执行**
     的工具评分，而非单轮裸 LLM 列工具名。
@@ -444,51 +487,20 @@ class RealAgent:
         return str(task_root)
 
     def _default_engine_factory(self, callback: Any) -> Any:
-        common = {"model_priority": [self.model], "callback": callback}
         if self.engine_type == "direct":
             return _DirectEvalEngine(self.model, callback)
-        if self.engine_type == "react":
-            from xenon.engine.react_engine import ReActEngine
+        from evals.kernel_runner import EVAL_PROFILES
 
-            return ReActEngine(
-                **common,
-                max_iterations=self.max_iterations,
+        if self.engine_type not in EVAL_PROFILES:
+            raise ValueError(
+                f"Unsupported engine_type {self.engine_type!r}; expected one of "
+                + ", ".join(SUPPORTED_ENGINE_TYPES)
             )
-        if self.engine_type == "plan-execute":
-            from xenon.engine.plan_execute_engine import PlanExecuteEngine
-
-            return PlanExecuteEngine(**common, max_steps=self.max_iterations)
-        if self.engine_type == "reflection":
-            from xenon.engine.reflection_engine import ReflectionEngine
-
-            return ReflectionEngine(**common, max_rounds=min(3, self.max_iterations))
-        if self.engine_type == "plan-react":
-            from xenon.engine.combined_engines import PlanReactEngine
-
-            return PlanReactEngine(
-                **common,
-                max_steps=self.max_iterations,
-                react_iterations=self.max_iterations,
-            )
-        if self.engine_type == "plan-reflection":
-            from xenon.engine.combined_engines import PlanReflectionEngine
-
-            return PlanReflectionEngine(
-                **common,
-                max_steps=self.max_iterations,
-                review_rounds=2,
-            )
-        if self.engine_type == "react-reflection":
-            from xenon.engine.combined_engines import ReactReflectionEngine
-
-            return ReactReflectionEngine(
-                **common,
-                react_iterations=self.max_iterations,
-                review_rounds=2,
-            )
-        raise ValueError(
-            f"Unsupported engine_type {self.engine_type!r}; expected one of "
-            + ", ".join(SUPPORTED_ENGINE_TYPES)
+        return _KernelEvalAgent(
+            model=self.model,
+            profile_name=self.engine_type,
+            max_steps=self.max_iterations,
+            request_timeout=self.request_timeout,
         )
 
     def _build_context(self) -> Any:
@@ -760,6 +772,33 @@ class RealAgent:
                             node._execute_tool = original
                         for executor, original in executor_hooks:
                             executor.execute = original
+                    # A kernel-backed agent reports its receipts directly, so
+                    # the evaluator no longer needs to instrument executors.
+                    trace = getattr(eng, "last_trace", None)
+                    if trace:
+                        for item in trace:
+                            tool = str(item.get("tool") or "")
+                            ok = bool(item.get("success"))
+                            if tool:
+                                executed.append(tool)
+                            if ok and tool:
+                                successful_tools.append(tool)
+                            tool_events.append(
+                                {
+                                    "tool": tool,
+                                    "success": ok,
+                                    "state": item.get("state") or "",
+                                    "error": item.get("error"),
+                                    "attempts": item.get("attempts"),
+                                    "state_changed": None,
+                                    "confirmation_required": None,
+                                    "confirmation_outcome": (
+                                        "approved_or_not_required"
+                                        if ok
+                                        else "not_executed"
+                                    ),
+                                }
+                            )
                     cm.add_assistant_message(answer)
 
                     # 早停：所有 expected_tools 都调过了（无需进入下一轮）
