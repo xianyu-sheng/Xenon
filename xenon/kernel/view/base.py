@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from xenon.kernel.compaction import fold_dropped
 from xenon.kernel.contracts import (
@@ -183,10 +183,16 @@ def _plan_summary(plan: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _summary(event: Any) -> dict[str, Any]:
+def _summary(
+    event: Any, *, superseded: frozenset[int] = frozenset()
+) -> dict[str, Any]:
     kind = event.kind.value
     payload = event.payload
     item: dict[str, Any] = {"seq": event.seq, "kind": kind}
+    if int(getattr(event, "seq", 0) or 0) in superseded:
+        # The event stays exactly as written; the view just says an operator
+        # has retracted its conclusion.  Nothing is deleted from the ledger.
+        item["superseded"] = True
     if kind == "tool_receipt":
         receipt = payload.get("receipt")
         if not isinstance(receipt, Mapping):
@@ -264,6 +270,11 @@ def _summary(event: Any) -> dict[str, Any]:
 
 
 def _priority(item: Mapping[str, Any]) -> bool:
+    if item.get("superseded"):
+        # A retraction is worthless if compaction folds the retracted event
+        # away: the model would keep acting on a conclusion the operator
+        # already withdrew.
+        return True
     kind = item.get("kind")
     if kind in {"debt_opened", "debt_closed", "binding_failed"}:
         return True
@@ -275,12 +286,16 @@ def _priority(item: Mapping[str, Any]) -> bool:
 
 
 def _working_set(
-    events: Sequence[Any], *, mode: TaskMode, budget: Budget
+    events: Sequence[Any],
+    *,
+    mode: TaskMode,
+    budget: Budget,
+    superseded: frozenset[int] = frozenset(),
 ) -> tuple[tuple[dict[str, Any], ...], tuple[int, ...]]:
     """Return the compacted working set plus the seqs folded away."""
 
     summaries = [
-        _summary(event)
+        _summary(event, superseded=superseded)
         for event in events
         if not (
             mode is TaskMode.CHAT
@@ -347,8 +362,14 @@ def _system_prompt(
     specs: Sequence[ToolSpec],
     budget: Budget,
     active_step: StepContract | None,
+    extra_constraints: Sequence[tuple[int, str]] = (),
+    strategy_hint: str = "",
 ) -> str:
-    constraints = "\n".join(f"- {item}" for item in spec.constraints)
+    constraint_lines = [f"- {item}" for item in spec.constraints]
+    constraint_lines.extend(
+        f"- {text}  [operator, seq {seq}]" for seq, text in extra_constraints
+    )
+    constraints = "\n".join(constraint_lines)
     debt_lines = "\n".join(
         f"- {item.obligation.id} ({item.obligation.kind.value}): {item.reason}"
         for item in debt
@@ -401,6 +422,9 @@ def build_model_view(
     steps: Sequence[StepContract] = (),
     step_verdicts: Sequence[Any] = (),
     tokens_used: int = 0,
+    extra_constraints: Sequence[tuple[int, str]] = (),
+    superseded: Iterable[int] = (),
+    strategy_hint: str = "",
 ) -> ModelView:
     """Build the deterministic view a strategy is allowed to see."""
 
@@ -410,7 +434,10 @@ def build_model_view(
     )
     tools = tuple(_tool_schema(item) for item in specs)
     working_set, compacted = _working_set(
-        tuple(ledger.read()), mode=spec.mode, budget=budget
+        tuple(ledger.read()),
+        mode=spec.mode,
+        budget=budget,
+        superseded=frozenset(int(seq) for seq in superseded),
     )
     system = _system_prompt(
         spec=spec,
@@ -419,6 +446,8 @@ def build_model_view(
         specs=specs,
         budget=budget,
         active_step=active_step,
+        extra_constraints=extra_constraints,
+        strategy_hint=strategy_hint,
     )
 
     payload = {

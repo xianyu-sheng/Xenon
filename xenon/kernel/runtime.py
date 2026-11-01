@@ -74,6 +74,7 @@ from xenon.kernel.protocols import (
     ToolGateway,
     VerificationController,
 )
+from xenon.kernel.steering import SteeringState, parse_steering
 from xenon.kernel.usage import UsageTotals, usage_payload
 from xenon.kernel.view import build_model_view
 from xenon.ledger.events import (
@@ -207,6 +208,8 @@ class LoopRuntime:
         self._replans = 0
         self._call_guard = RepeatedCallGuard()
         self._usage = UsageTotals()
+        self._steering = SteeringState()
+        self._steering_source: Any = None
         self._compaction_signature = ""
         self._finalize_decision: FinalizeDecision | None = None
         self._run_start_seq = 0
@@ -371,6 +374,7 @@ class LoopRuntime:
             if limited is not None:
                 return limited
 
+            self._consume_steering()
             view = build_model_view(
                 spec=spec,
                 catalog=self._catalog,
@@ -382,8 +386,10 @@ class LoopRuntime:
                 steps=self._plan_steps,
                 step_verdicts=self._active_step_verdicts(),
                 tokens_used=self._usage.total,
+                extra_constraints=self._steering.extra_constraints(),
+                superseded=self._steering.superseded(),
+                strategy_hint=self._steering.strategy_hint(),
             )
-            self._note_compaction(view)
             self._transition(TaskPhase.THINKING, "propose action")
             try:
                 action = strategy.propose(view)
@@ -1580,6 +1586,25 @@ class LoopRuntime:
             except Exception:  # noqa: BLE001 — best effort; grants have TTL too
                 logger.warning("policy revoke failed", exc_info=True)
 
+    def post_user_input(
+        self,
+        text: str,
+        *,
+        kind: str = "constraint",
+        scope: str = "task",
+        target_seq: int = 0,
+    ) -> int:
+        """Record one operator input; the loop consumes it at the next boundary.
+
+        This is a write to the ledger, not a mutation of runtime state, so a
+        front-end cannot change behaviour by holding a reference — it can only
+        add a fact.
+        """
+
+        payload = parse_steering(text, kind=kind, scope=scope, target_seq=target_seq)
+        event = self._append(EventKind.USER_INPUT, EventSource.USER, payload)
+        return int(getattr(event, "seq", 0) or 0)
+
     def note_usage(self, payload: Mapping[str, Any]) -> None:
         """Fold one provider usage report into the task's spend.
 
@@ -1600,6 +1625,70 @@ class LoopRuntime:
 
     def usage(self) -> dict[str, int]:
         return self._usage.as_dict()
+
+    def attach_steering_source(self, source: Any) -> None:
+        """Register a callable returning pending operator texts.
+
+        The source is a *transport* (a queue a front-end writes to), never the
+        record: whatever it yields is turned into ledger events here, by the
+        same single writer that owns every other event.  A front-end therefore
+        cannot change behaviour without leaving a trace.
+        """
+
+        self._steering_source = source
+
+    def _drain_steering_source(self) -> int:
+        source = self._steering_source
+        if source is None:
+            return 0
+        written = 0
+        while True:
+            try:
+                item = source()
+            except Exception:  # noqa: BLE001 — a broken UI must not stop a run
+                break
+            if item is None:
+                break
+            text = item if isinstance(item, str) else str(item.get("text") or "")
+            kind = "constraint" if isinstance(item, str) else str(
+                item.get("kind") or "constraint"
+            )
+            scope = "task" if isinstance(item, str) else str(
+                item.get("scope") or "task"
+            )
+            try:
+                self.post_user_input(text, kind=kind, scope=scope)
+            except Exception:  # noqa: BLE001 — skip malformed operator input
+                continue
+            written += 1
+        return written
+
+    def _consume_steering(self) -> int:
+        """Apply operator inputs written since the last action boundary.
+
+        Reading happens only here, so an input can never land inside a tool
+        call: it takes effect at the same place a model action would.
+        """
+
+        self._drain_steering_source()
+        applied = self._steering.consume(self._readonly.read())
+        if applied:
+            self._append(
+                EventKind.CONTROL_DECISION,
+                EventSource.RUNTIME,
+                {
+                    "kind": "steering",
+                    "consumed": applied,
+                    "up_to_seq": self._steering.consumed_up_to,
+                    "constraints": len(self._steering.constraints),
+                },
+            )
+        return applied
+
+    def steering_state(self) -> SteeringState:
+        """Read-only view of what the loop has been told (for UI and tests)."""
+
+        return self._steering
 
     def _note_compaction(self, view: Any) -> None:
         """Record that the working set was folded, once per distinct fold.

@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence, TextIO
+from typing import Any, Callable, Sequence, TextIO
 
 from xenon.catalog.catalog import build_catalog
 from xenon.catalog.finalizer import GitFinalizer
@@ -139,6 +139,7 @@ def run_task(
     gateway_context: Any = None,
     extra_specs: Sequence[ToolSpec] = (),
     tool_runtime: Any = None,
+    on_runtime: Callable[[Any], None] | None = None,
 ) -> HarnessRun:
     """Run one objective through the kernel with an injected strategy.
 
@@ -175,6 +176,10 @@ def run_task(
         ),
     )
     _bind_accounting(strategy, runtime)
+    if on_runtime is not None:
+        # A front-end needs the runtime to *write events* (steering), not to
+        # mutate it: everything it can do goes through the ledger.
+        on_runtime(runtime)
     result = runtime.run(spec, strategy)
     report = ledger.verify()
     if not report.valid:
