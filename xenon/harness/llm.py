@@ -65,6 +65,8 @@ class ModelConfig:
     # Per-call accounting hook.  Kept on the config so the sink travels with
     # the model that produced the spend, not with global process state.
     usage_sink: Any = None
+    # Cancellation predicate: "has the operator asked us to stop?".
+    should_cancel: Any = None
 
 
 _DEFAULT_MAX_TOKENS = 8192
@@ -597,7 +599,50 @@ def _call_model(
         kwargs["credentials"] = {provider: config.api_key}
     if config.usage_sink is not None:
         kwargs["usage_sink"] = config.usage_sink
-    return caller(config.model_id, messages, **kwargs)
+    if config.should_cancel is None:
+        return caller(config.model_id, messages, **kwargs)
+    return _call_with_cancel(
+        config.should_cancel,
+        lambda: caller(config.model_id, messages, **kwargs),
+    )
+
+
+def _call_with_cancel(should_cancel: Callable[[], bool], call: Callable[[], str]) -> str:
+    """Run one model call so a cancel is noticed within a poll interval.
+
+    httpx has no portable "abort this request from another thread", so the
+    call runs in a daemon worker and the caller abandons it.  The abandoned
+    thread finishes on its own and its result is dropped — acceptable for a
+    CLI, and it keeps the ledger clean because nothing is recorded for a call
+    the operator cancelled.
+
+    Without a cancel predicate the caller takes the plain synchronous path, so
+    tests, the SDK and evals never spawn a thread.
+    """
+
+    import threading
+
+    from xenon.kernel.cancel import POLL_SECONDS, ModelCancelled
+
+    box: dict[str, Any] = {}
+
+    def _run() -> None:
+        try:
+            box["value"] = call()
+        except BaseException as exc:  # noqa: BLE001 — re-raised in the caller
+            box["error"] = exc
+
+    worker = threading.Thread(target=_run, name="xenon-model-call", daemon=True)
+    worker.start()
+    while True:
+        worker.join(POLL_SECONDS)
+        if not worker.is_alive():
+            break
+        if should_cancel():
+            raise ModelCancelled("model call cancelled by the operator")
+    if "error" in box:
+        raise box["error"]
+    return str(box.get("value") or "")
 
 
 def truncation_thought() -> Think:
@@ -1069,6 +1114,27 @@ _SINKABLE_PROVIDERS = (
     "reflector",
     "finisher",
 )
+
+
+def bind_runtime_hooks(strategy: Any, runtime: Any) -> Any:
+    """Bind the runtime's per-call hooks (accounting, cancellation) to providers."""
+
+    from dataclasses import replace
+
+    sink = getattr(runtime, "note_usage", None)
+    should_cancel = getattr(runtime, "is_cancelled", None)
+    for name in _SINKABLE_PROVIDERS:
+        provider = getattr(strategy, name, None)
+        config = getattr(provider, "config", None)
+        if config is None:
+            continue
+        try:
+            provider.config = replace(
+                config, usage_sink=sink, should_cancel=should_cancel
+            )
+        except Exception:  # noqa: BLE001 — a frozen provider simply opts out
+            continue
+    return strategy
 
 
 def bind_usage_sink(strategy: Any, sink: Any) -> Any:

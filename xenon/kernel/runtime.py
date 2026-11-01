@@ -14,6 +14,7 @@ from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
 from xenon.kernel.audit import AuditCoordinator
+from xenon.kernel.cancel import ModelCancelled
 from xenon.kernel.contracts import (
     Abort,
     Action,
@@ -393,6 +394,13 @@ class LoopRuntime:
             self._transition(TaskPhase.THINKING, "propose action")
             try:
                 action = strategy.propose(view)
+            except ModelCancelled:
+                # The operator stopped us.  Not a failure and not a budget
+                # block: the ledger must keep the three apart.
+                self._transition(TaskPhase.ABORTED, "model call cancelled")
+                return self._result(
+                    accepted=False, evidence=EvidenceStatus.UNVERIFIED
+                )
             except Exception:
                 self._transition(TaskPhase.FAILED, "strategy error")
                 raise
