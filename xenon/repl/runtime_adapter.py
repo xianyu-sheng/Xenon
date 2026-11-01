@@ -471,15 +471,22 @@ class KernelApprovalProvider:
 
     def __init__(self, repl: Any) -> None:
         self.repl = repl
+        # Why the last request ended the way it did.  The protocol only
+        # carries a bool, but a blocked run that cannot say *who* denied and
+        # why is undebuggable — so the bridge keeps the reason for the ledger.
+        self.last_reason = ""
 
     def request(
         self, view: Any, action: Any, decision: PolicyDecision
     ) -> bool:
         del view, decision
+        self.last_reason = ""
         if not isinstance(action, CallTool):
+            self.last_reason = "approval only covers tool calls"
             return False
         confirm = getattr(self.repl, "_confirm_tool", None)
         if not callable(confirm):
+            self.last_reason = "front-end has no confirmation UI"
             return False
         capability = action.intent.capability
         tool = _CAPABILITY_TOOL.get(capability, capability.value)
@@ -490,11 +497,17 @@ class KernelApprovalProvider:
         )
         try:
             result = confirm(tool, dict(action.intent.params), risk)
-        except Exception:  # noqa: BLE001 — UI failure must deny
+        except Exception as exc:  # noqa: BLE001 — UI failure must deny
+            self.last_reason = f"confirmation UI failed: {exc}"
             return False
         if isinstance(result, tuple):
-            return bool(result[0])
-        return bool(result)
+            approved = bool(result[0])
+            self.last_reason = str(result[1] or "")
+        else:
+            approved = bool(result)
+        if not approved and not self.last_reason:
+            self.last_reason = "user rejected the request"
+        return approved
 
 
 class RuntimeAdapter:
@@ -776,7 +789,7 @@ def _clear_legacy_task_state(repl: Any) -> None:
         setter("_task_state", None)
 
 
-def _result_summary(result: TaskResult) -> str:
+def _result_summary(result: TaskResult, *, ledger_path: Any = None) -> str:
     if result.answer.strip():
         return result.answer
     if result.accepted:
@@ -784,7 +797,54 @@ def _result_summary(result: TaskResult) -> str:
     if result.debt:
         reasons = "; ".join(item.reason for item in result.debt[:3])
         return f"任务被阻断，仍有未满足的证据：{reasons}"
+    detail = (
+        _blocking_reason(ledger_path, task_id=result.task_id)
+        if ledger_path is not None
+        else ""
+    )
+    if detail:
+        return f"任务未交付（phase={result.phase.value}）：{detail}"
     return f"任务未交付（phase={result.phase.value}）。"
+
+
+# Events that explain *why* a run stopped.  The result object only carries the
+# phase, so without this a blocked run reads as an unexplained stop — which is
+# exactly how an approval denial used to look.
+_BLOCKING_EVENTS = (
+    "policy_decision",
+    "user_approval",
+    "control_decision",
+    "binding_failed",
+)
+
+
+def _blocking_reason(ledger_path: Any, *, task_id: str) -> str:
+    """Last human-readable reason from the ledger, or an empty string."""
+
+    try:
+        from xenon.ledger.store import Ledger
+
+        events = list(Ledger(ledger_path, task_id).read())
+    except Exception:  # noqa: BLE001 — rendering must not fail the turn
+        return ""
+    for event in reversed(events):
+        kind = getattr(getattr(event, "kind", None), "value", "")
+        if kind not in _BLOCKING_EVENTS:
+            continue
+        payload = dict(getattr(event, "payload", {}) or {})
+        if kind == "user_approval":
+            approved = payload.get("approved")
+            reason = str(payload.get("reason") or "")
+            if approved is False and reason:
+                return f"审批未通过：{reason}"
+            continue
+        reason = str(payload.get("reason") or "")
+        if reason:
+            scope = payload.get("scope") or ()
+            if scope:
+                return f"{reason}（范围：{', '.join(str(item) for item in scope)}）"
+            return reason
+    return ""
 
 
 def _render_kernel_result(
@@ -814,7 +874,7 @@ def _render_kernel_result(
         if callable(track):
             track(panel)
 
-    answer = _result_summary(result)
+    answer = _result_summary(result, ledger_path=run.ledger_path)
     accepted = bool(result.accepted)
     planned = result.phase is TaskPhase.PLANNED
     if accepted and result.finalize_sha:

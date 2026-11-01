@@ -1566,7 +1566,15 @@ class LoopRuntime:
         except Exception as exc:  # noqa: BLE001 — approval UI must fail closed
             logger.warning("approval provider failed", exc_info=True)
             return False, f"approval provider failed: {exc}"
-        return approved, decision.reason or "user approval"
+        if approved:
+            return True, decision.reason or "user approval"
+        # The provider knows *why* it said no (rejected / cancelled / no UI).
+        # Losing that turns a blocked run into a mystery.
+        return False, str(
+            getattr(self._approval, "last_reason", "")
+            or decision.reason
+            or "user denied approval"
+        )
 
     def _grant_approval(
         self, policy: Any, decision: Any, action: Action
