@@ -113,56 +113,68 @@ class TestRegisterToolHandlerFunctional:
 
 
 class TestPluginToolsAreVisibleToModel:
-    """核心断言 #1：注册的插件工具必须出现在引擎的工具集里。
+    """核心断言 #1：注册的插件工具必须进入模型的工具目录。
 
-    修复前 ``"sqlite_query" in engine.tools`` 为 False —— 工具注册成功但模型
-    永远不会调用它，因为引擎只读 BUILTIN_TOOLS。
+    修复前它注册成功但模型永远看不到——引擎只读 ``BUILTIN_TOOLS``。
+    引擎删除后这个合并搬到了 ``build_catalog``（catalog 是 kernel 的工具真相），
+    所以断言载体从 ``engine.tools`` 改成 catalog。
     """
 
-    def test_registered_tool_appears_in_engine_tools(self, temp_tool):
+    def test_registered_tool_appears_in_the_catalog(self, temp_tool):
         temp_tool(
             "sqlite_query",
             description="查询 SQLite",
             params={"sql": "SQL 语句"},
             risk="WRITE",
         )
-        from xenon.engine.react_engine import ReActEngine
+        from xenon.catalog.catalog import build_catalog
 
-        engine = ReActEngine(model_priority=["deepseek/deepseek-v4-pro"])
-        assert "sqlite_query" in engine.tools, (
-            "插件工具未进入 engine.tools —— 模型看不见它，注册等于无效"
+        names = {spec.name for spec in build_catalog("core").specs()}
+
+        assert "sqlite_query" in names, (
+            "插件工具未进入 catalog —— 模型看不见它，注册等于无效"
         )
-        assert engine.tools["sqlite_query"]["description"] == "查询 SQLite"
-        assert engine.tools["sqlite_query"]["params"] == {"sql": "SQL 语句"}
+
+    def test_the_spec_carries_the_plugin_schema(self, temp_tool):
+        temp_tool(
+            "sqlite_query",
+            description="查询 SQLite",
+            params={"sql": "SQL 语句"},
+            risk="WRITE",
+        )
+        from xenon.catalog.catalog import build_catalog
+
+        spec = next(
+            item for item in build_catalog("core").specs() if item.name == "sqlite_query"
+        )
+
+        assert spec.description == "查询 SQLite"
+        assert spec.params_schema == {"sql": "SQL 语句"}
+        assert spec.pack == "plugin"
 
     def test_builtin_tools_still_present(self, temp_tool):
-        """合并插件 schema 不能挤掉内置工具。"""
+        """合并插件不能挤掉内置工具。"""
         temp_tool("my_plugin", description="插件")
-        from xenon.engine.react_engine import ReActEngine
+        from xenon.catalog.catalog import build_catalog
 
-        engine = ReActEngine(model_priority=["deepseek/deepseek-v4-pro"])
-        for builtin in ("read_file", "write_file", "command", "list_files"):
-            assert builtin in engine.tools, f"内置工具 {builtin} 丢失"
+        names = {spec.name for spec in build_catalog("core").specs()}
+        core = {spec.name for spec in build_catalog("core", include_plugins=False).specs()}
 
-    def test_explicit_tools_arg_still_wins_but_gets_plugins(self, temp_tool):
-        """显式传 tools= 时仍应合并插件工具（否则插件在子 Agent 里又不可见）。"""
+        assert core, "the builtin catalog must not be empty"
+        assert core <= names
+
+    def test_explicit_extra_specs_keep_plugins(self, temp_tool):
+        """显式追加 spec 时插件仍应可见（否则插件在子任务里又消失）。"""
         temp_tool("my_plugin", description="插件")
-        from xenon.engine.react_engine import ReActEngine
+        from xenon.catalog.catalog import build_catalog
+        from xenon.catalog.specs import CORE_SPECS
 
-        custom = {"only_this": {"name": "only_this", "description": "x", "params": {}}}
-        engine = ReActEngine(model_priority=["deepseek/deepseek-v4-pro"], tools=custom)
-        assert "only_this" in engine.tools
-        assert "my_plugin" in engine.tools
+        names = {
+            spec.name
+            for spec in build_catalog("core", extra_specs=CORE_SPECS).specs()
+        }
 
-    def test_engine_tools_is_a_copy_not_the_global(self):
-        """engine.tools 必须是副本，否则合并会污染全局 BUILTIN_TOOLS。"""
-        from xenon.engine.react_engine import ReActEngine
-        from xenon.engine.react_prompts import BUILTIN_TOOLS
-
-        before = set(BUILTIN_TOOLS)
-        engine = ReActEngine(model_priority=["deepseek/deepseek-v4-pro"])
-        engine.tools["scratch_only"] = {"name": "x", "description": "", "params": {}}
-        assert set(BUILTIN_TOOLS) == before, "BUILTIN_TOOLS 被引擎实例污染了"
+        assert "my_plugin" in names
 
 
 class TestPluginToolRiskClassification:

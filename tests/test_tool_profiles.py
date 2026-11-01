@@ -115,8 +115,7 @@ def test_core_bash_preserves_test_counts(tmp_path):
     assert result["tests_failed"] == 0
 
 
-def test_profile_guard_and_plan_prompt(monkeypatch):
-    from xenon.engine.plan_execute_engine import PlanExecuteEngine
+def test_profile_guard_denies_out_of_profile_tools():
     from xenon.engine.tool_profiles import profile_tool_guard
 
     context = AgentContext({"_tool_profile": "core"})
@@ -126,14 +125,6 @@ def test_profile_guard_and_plan_prompt(monkeypatch):
     denied = profile_tool_guard("write_file", context)
     assert denied is not None
     assert "core" in denied
-
-    monkeypatch.setenv("XENON_TOOL_PROFILE", "core")
-    plan = PlanExecuteEngine(["fake/model"])
-    assert plan.tool_profile == "core"
-    assert "core profile" in plan.system_prompt
-    assert "apply_patch" in plan.system_prompt
-    assert "- run_tests:" not in plan.system_prompt
-    assert "- write_file:" not in plan.system_prompt
 
 
 def test_core_profile_tool_executor_denies_legacy_write(tmp_path):

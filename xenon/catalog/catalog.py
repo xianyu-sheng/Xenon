@@ -12,6 +12,7 @@ from typing import Iterable, Sequence
 from xenon.catalog.specs import ALL_SPECS, CORE_SPECS, LEGACY_SPECS, MCP_SPECS
 from xenon.kernel.contracts import (
     BindingStatus,
+    Risk,
     ToolBinding,
     ToolCall,
     ToolIntent,
@@ -37,10 +38,14 @@ class ToolCatalog:
         if selected in {"all", "*"}:
             return self._all
         if selected in {"core+mcp", "core_mcp"}:
-            return tuple(
-                item for item in self._all if item.pack in {"core", "mcp"}
-            )
-        return tuple(item for item in self._all if item.pack == selected)
+            packs = {"core", "mcp"}
+        else:
+            packs = {selected}
+        # Registering a plugin is an explicit user act, so it stays visible in
+        # every profile: a tool the model cannot see is a tool that does not
+        # exist.
+        packs.add("plugin")
+        return tuple(item for item in self._all if item.pack in packs)
 
     def bind(self, intent: ToolIntent) -> ToolBinding:
         candidates = [
@@ -119,12 +124,44 @@ class ToolCatalog:
         )
 
 
+def plugin_specs() -> tuple[ToolSpec, ...]:
+    """Turn user-registered plugin tools into catalog specs.
+
+    The legacy engine merged ``plugin_schemas()`` into its own tool dict, which
+    is how a registered plugin became visible to the model.  That merge lived
+    in the engine, so removing the engine silently hid every plugin.  Doing it
+    here keeps the promise: registering a tool makes it callable.
+    """
+
+    from xenon.nodes.tool_registry import BUILTIN_TOOL_REGISTRY
+
+    specs: list[ToolSpec] = []
+    for name, schema in BUILTIN_TOOL_REGISTRY.plugin_schemas().items():
+        specs.append(
+            ToolSpec(
+                name=name,
+                pack="plugin",
+                # A plugin's capability is unknown, so it is not advertised as
+                # one of the closed set.  The catalog still binds it by name.
+                capabilities=frozenset(),
+                effects=frozenset(),
+                risk=Risk.WRITE,
+                params_schema=dict(schema.get("params") or {}),
+                description=str(schema.get("description") or ""),
+            )
+        )
+    return tuple(specs)
+
+
 def build_catalog(
     profile: str = "core",
     *,
     extra_specs: Sequence[ToolSpec] = (),
+    include_plugins: bool = True,
 ) -> ToolCatalog:
     extra = tuple(extra_specs)
+    if include_plugins:
+        extra = extra + plugin_specs()
 
     def combined(base: Sequence[ToolSpec]) -> tuple[ToolSpec, ...]:
         merged = {spec.name: spec for spec in base}
