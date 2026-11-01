@@ -100,9 +100,9 @@ def _runtime_bundle(
 def _bind_accounting(strategy: Strategy, runtime: Any) -> None:
     """Let the runtime own the token totals for the calls this strategy makes."""
 
-    from xenon.harness.llm import bind_usage_sink
+    from xenon.harness.llm import bind_runtime_hooks
 
-    bind_usage_sink(strategy, runtime.note_usage)
+    bind_runtime_hooks(strategy, runtime)
 
 
 def _context_window(strategy: Strategy) -> int:

@@ -207,6 +207,46 @@ class SteeringListener:
         self._stop = True
 
 
+class CancelOnInterrupt:
+    """Map Ctrl-C during a kernel turn to ``runtime.request_cancel()``.
+
+    Restoring the previous handler matters: leaving a SIGINT handler installed
+    would change what Ctrl-C does at the prompt, which is a different (and
+    useful) behaviour.
+    """
+
+    def __init__(self, runtime: Any) -> None:
+        self._runtime = runtime
+        self._previous: Any = None
+        self._installed = False
+
+    def __enter__(self) -> "CancelOnInterrupt":
+        import signal
+        import threading
+
+        if threading.current_thread() is not threading.main_thread():
+            return self
+        try:
+            self._previous = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, self._handler)
+            self._installed = True
+        except (ValueError, OSError):  # pragma: no cover - exotic platforms
+            self._installed = False
+        return self
+
+    def _handler(self, signum: int, frame: Any) -> None:
+        self._runtime.request_cancel()
+
+    def __exit__(self, *exc: Any) -> None:
+        import signal
+
+        if self._installed:
+            try:
+                signal.signal(signal.SIGINT, self._previous)
+            except (ValueError, OSError):  # pragma: no cover - exotic platforms
+                pass
+
+
 def drain_steering(repl: Any) -> Any:
     """Pop one pending operator line, or ``None`` (never blocks).
 
@@ -870,6 +910,7 @@ def resume_kernel_plan(
         start_capture()
     listener = SteeringListener(repl)
     listener.start()
+    guard = CancelOnInterrupt(None)
     try:
         try:
             run = adapter.resume(
@@ -882,6 +923,7 @@ def resume_kernel_plan(
                 sink=sink,
             )
         finally:
+            guard.__exit__()
             listener.stop()
             repl._active_runtime = None
             stop_capture = getattr(repl, "_stop_log_capture", None)
@@ -940,9 +982,13 @@ def run_kernel_turn(
         start_capture = getattr(repl, "_start_log_capture", None)
         if callable(start_capture):
             start_capture()
+        guard = CancelOnInterrupt(None)
+
         def _attach(runtime: Any) -> None:
             repl._active_runtime = runtime
             runtime.attach_steering_source(lambda: drain_steering(repl))
+            guard._runtime = runtime
+            guard.__enter__()
 
         listener = SteeringListener(repl)
         listener.start()
