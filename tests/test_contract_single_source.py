@@ -48,13 +48,13 @@ def test_contract_is_built_through_the_shared_entry_points() -> None:
     """引擎与校验层必须经 ensure/build 构建或读取契约。"""
 
     import xenon.engine.evidence_gate as evidence_gate
-    import xenon.engine.react_engine as react_engine
     import xenon.repl.difficulty_estimator as difficulty_estimator
 
     # 这些模块的源码里必须出现契约入口（防止有人改回自行分类）。
+    # The engine that used to consume the contract is gone; the guard now
+    # covers the modules that still build or read it.
     source = (
-        Path(react_engine.__file__).read_text(encoding="utf-8")
-        + Path(evidence_gate.__file__).read_text(encoding="utf-8")
+        Path(evidence_gate.__file__).read_text(encoding="utf-8")
         + Path(difficulty_estimator.__file__).read_text(encoding="utf-8")
     )
     assert "ensure_turn_contract" in source

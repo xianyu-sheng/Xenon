@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from xenon.engine.registry import EngineSpec
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.repl import REPL
 from xenon.turn.gate import (
@@ -143,53 +142,3 @@ class _FakeEngine:
     def run(self, prompt, context=None, ctx_mgr=None):
         self.prompt = prompt
         return self.answer
-
-
-def _setup_retry_harness(monkeypatch, tmp_path, answers):
-    monkeypatch.setenv("XENON_SESSION_EVENTS_DIR", str(tmp_path))
-    monkeypatch.setenv("XENON_VERIFY_RETRIES", "3")
-    registry = ModelRegistry()
-    registry.add_model("openai/test", "test")
-    repl = REPL(registry=registry, streaming=False)
-    repl._last_user_text = "帮我看看这个项目"
-
-    engines = [_FakeEngine(a) for a in answers]
-    callbacks = [_Callback(_Panel(True)) for _ in answers]
-    spec = EngineSpec(
-        name="fake",
-        mode_line="",
-        factory=lambda **kw: engines.pop(0),
-        result_title="",
-    )
-    monkeypatch.setattr(repl, "_make_callback", lambda: callbacks.pop(0))
-    monkeypatch.setattr(repl, "_start_log_capture", lambda: None)
-    monkeypatch.setattr(repl, "_stop_log_capture", lambda: "")
-    monkeypatch.setattr(repl, "_persist_engine_trace", lambda e: None)
-    monkeypatch.setattr(repl, "_inject_mcp_tools_into_engine", lambda e: None)
-    monkeypatch.setattr(repl, "_bind_interactive_tool_runtime", lambda e: None)
-    monkeypatch.setattr(repl, "_engine_model_used", lambda e, ids: None)
-    monkeypatch.setattr(repl, "_start_steering_listener", lambda e: None)
-    monkeypatch.setattr(repl, "_stop_steering_listener", lambda t: None)
-
-    class _Ctx:
-        def __init__(self):
-            self.user: list = []
-            self.assistant: list = []
-
-        def add_user_message(self, content, **kw):
-            self.user.append(content)
-
-        def add_assistant_message(self, content, **kw):
-            self.assistant.append(content)
-
-    ctx = _Ctx()
-    monkeypatch.setattr(repl, "ctx_mgr", ctx)
-    monkeypatch.setattr(
-        repl, "_render_engine_result", lambda cb, res, title: None
-    )
-    monkeypatch.setattr(
-        repl,
-        "auto_router",
-        type("_R", (), {"record_model_success": lambda self, m: None})(),
-    )
-    return repl, spec, engines, ctx
