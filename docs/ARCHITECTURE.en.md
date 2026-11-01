@@ -102,7 +102,7 @@ xenon/
 ## 6. Extension Contracts
 
 ```python
-register_engine(name, factory, ...)       # engine/registry.py (sole source for 7 paradigms)
+MODE_CATALOG[mode].loop                     # xenon/modes.py (sole source for the 7 profiles)
 register_tool(name, handler, params)      # Tool registration (with security allowlist)
 register_command("/name", desc, usage)    # command_groups auto-discovery, no central file
 # Local hooks: <user|project>/.xenon/hooks.yaml (PreToolUse / PostToolUse /

@@ -1,5 +1,12 @@
 # Agent 引擎参考实现审计
 
+> **历史文档（归档）**：本文记录 Xenon 多引擎时期（v0.9 之前）的实现与实测。
+> 引擎骨架（`engine/base.py`、`react_engine.py`、`combined_engines.py`、`plan_dag*.py`、
+> `event_bus.py`、`claim_gate.py` 等）已于 #202 删除，产物现在是**单一循环 + 7 个 profile**。
+> 需要当前架构请读 `docs/ARCHITECTURE.md` 与 `docs/adr/0001-single-loop-kernel.md`；
+> 文中路径仅用于还原当时的证据，不对应当前代码。
+
+
 > 日期：2026-10-21
 > 范围：Xenon 自研 `ReActEngine` / `PlanExecuteEngine` / `TaskState`
 > 目的：对照成熟 Agent 框架的真实循环语义，找出我们“看起来能跑、实际会假完成/空转”的地方。

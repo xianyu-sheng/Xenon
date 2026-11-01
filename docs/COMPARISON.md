@@ -27,7 +27,8 @@
 | --- | :---: | :---: | :---: | :---: | :---: |
 | **MCP 协议** | ⚠️ stdio + SSE（简化实现，无 endpoint 发现/会话关联，见 #103） | ❌ | ✅ 一等公民 | ✅ | ✅ stdio/http/sse |
 | **多模型路由** | ✅ 12 家厂商 | ✅ ~10 | ❌ Claude only | ✅ 50+ | ✅ 18+ |
-| **多范式引擎** | ✅ **7 种** | ❌ | ❌ | ❌ | ⚠️ 可 mid-session 换 LLM |
+| **可验证执行** | ✅ **账本 + claim 绑定 + 失败即债务** | ❌ 只给 diff | ⚠️ 权限提示，无账本 | ❌ | ❌ |
+| **多范式** | ✅ 7 个 loop profile（同一个循环，参数不同） | ❌ | ❌ | ❌ | ⚠️ 可 mid-session 换 LLM |
 | **本地优先** | ✅ Ollama + 本地凭据 | ⚠️ CLI 本地，模型云 | ❌ | ✅ | ✅ Ollama / llama.cpp |
 | **工具断路器** | ✅ 3 失败熔断 | ❌ | ❌ | ❌ | ❌ |
 | **上下文压缩** | ✅ 6 步 @ 80% | ❌ | ✅ | ❌ | ❌ |
@@ -70,21 +71,20 @@
 
 | 项目 | 能力 |
 | --- | --- |
-| **Xenon** | **7 种推理范式**：`direct` / `react` / `plan-execute` / `reflection` + 3 个组合引擎 `plan-react` / `plan-reflection` / `react-reflection`；同一套 REPL 内 `/mode` 切换。 |
+| **Xenon** | **一个循环 + 7 个 profile**：`direct` / `react` / `plan-execute` / `reflection` / `plan-react` / `plan-reflection` / `react-reflection`。模式是**一张表里的参数**（要不要先计划、每步是否独立预算、收尾是否反思、反思几轮），不是 7 个引擎类。 |
 | Aider | 单范式：chat + 工具调用循环。 |
 | Claude Code | 单范式：单 agent loop。 |
 | OpenCode | 单范式。 |
 | Crush | "Flexible: switch LLMs mid-session preserving context" — 这是**换模型**（同范式内），不是换范式。 |
 
-**Xenon 优势**：**这是全表最强的差异化点**。7 种范式意味着：
-- 简单问答 → `direct` 省 token
-- 工具调用 → `react` 经典循环
-- 多步任务 → `plan-execute` 自动分解（PlanDAG 拓扑并行）
-- 质量敏感 → `reflection` 独立审查者模型
-- 创意写作 → 由通用 `direct` / `reflection` 模式处理，不再维护产品定位之外的专用引擎
-- 复合场景 → 3 个组合引擎（隔离 ctx + reviewer 模型实现多范式协同）
+**Xenon 的定位（v0.9 起）**：差异化不是「范式最多」，而是**执行可验证**：
 
-其他 4 个项目都**没有真正的多范式切换**——Aider / Claude Code / OpenCode 是单 agent loop，Crush 是 mid-session 换 LLM（**换模型不换范式**）。
+- 只追加的账本：每次工具调用留下带哈希链的回执，`xenon replay` 可离线复盘；
+- claim → fact 绑定：模型说「我改了 a.py」必须绑定到真实回执，绑定不上就是债务；
+- fail-closed：没有证据的收尾会被阻断，除非用户显式 `--accept-debt`（且**永不接受已证伪的结果**）；
+- 同一套循环：策略、验证、交付不随模式分叉，行为可统一验证。
+
+多范式仍然保留，但它是**同一循环的参数化**，不再是 7 份复制的循环。旧版把同一套循环复制 7 次，导致工具语义散落在 prompt、plan 校验、TaskState、ClaimGate、delivery 五处——这是被删掉的原因，不是被隐藏的原因。
 
 ### 4. 本地优先
 
@@ -144,8 +144,8 @@
 | 我只用 Claude 模型，要 MCP | Claude Code（官方、一等 MCP） |
 | 我要 50+ provider，TUI 美观 | OpenCode |
 | 我要 Go 写的快、轻、本地多运行时 | Crush |
-| **我要多范式（7 种）+ 12 家厂商 + MCP + 工程化三件套** | **Xenon** |
-| 我要研究 Agent 范式（PlanDAG / Reflection / 组合引擎实现） | **Xenon**（这是实验平台） |
+| **我要「跑完能复盘、结论要有证据」+ 12 家厂商 + MCP** | **Xenon** |
+| 我要研究 agent 循环的参数化（同一个 loop，7 组 profile） | **Xenon**（这是实验平台） |
 | 我要做国产 / 中文 / 本地化 | **Xenon**（DeepSeek / Qwen / Ollama 三件套） |
 
 ---
