@@ -140,6 +140,7 @@ def run_task(
     extra_specs: Sequence[ToolSpec] = (),
     tool_runtime: Any = None,
     on_runtime: Callable[[Any], None] | None = None,
+    accept_debt: bool = False,
 ) -> HarnessRun:
     """Run one objective through the kernel with an injected strategy.
 
@@ -174,6 +175,7 @@ def run_task(
             max_steps=max_steps,
             context_window=_context_window(strategy),
         ),
+        accept_debt=accept_debt,
     )
     _bind_accounting(strategy, runtime)
     if on_runtime is not None:
@@ -209,6 +211,7 @@ def resume_task(
     catalog_profile: str = "core",
     gateway_context: Any = None,
     extra_specs: Sequence[ToolSpec] = (),
+    accept_debt: bool = False,
 ) -> HarnessRun:
     """Resume an approved plan in its existing ledger.
 
@@ -242,6 +245,7 @@ def resume_task(
             max_steps=max_steps,
             context_window=_context_window(strategy),
         ),
+        accept_debt=accept_debt,
     )
     result = runtime.resume_planned(
         spec,

@@ -210,6 +210,7 @@ class LoopRuntime:
         self._call_guard = RepeatedCallGuard()
         self._usage = UsageTotals()
         self._steering = SteeringState()
+        self._accept_debt = False
         self._steering_source: Any = None
         self._compaction_signature = ""
         self._finalize_decision: FinalizeDecision | None = None
@@ -237,6 +238,7 @@ class LoopRuntime:
         self._replans = 0
         self._call_guard = RepeatedCallGuard(_max_identical_calls(spec))
         self._usage = UsageTotals()
+        self._accept_debt = bool(spec.accept_debt)
         self._compaction_signature = ""
         self._finalize_decision = None
         self._run_start_seq = 0
@@ -1172,7 +1174,11 @@ class LoopRuntime:
             verdict = Verdict(
                 obligation_id="finalizer",
                 stage=VerificationStage.V2,
-                status=VerdictStatus.VIOLATED,
+                status=(
+                    VerdictStatus.UNVERIFIABLE
+                    if getattr(outcome, "unavailable", False)
+                    else VerdictStatus.VIOLATED
+                ),
                 reason=outcome.reason or "finalizer rejected",
             )
             self._verdicts.append(verdict)
@@ -1909,13 +1915,30 @@ class LoopRuntime:
                     required=True,
                     since_seq=self._run_start_seq,
                 )
+            acceptable = verdict.status is not VerdictStatus.VIOLATED
             debt = Debt(
                 obligation=obligation,
                 reason=verdict.reason or verdict.status.value,
                 attempts=self._repair_attempts.get(obligation_id, 0),
+                acceptable=acceptable,
+                user_accepted=bool(self._accept_debt) and acceptable,
             )
             self._debt.append(debt)
             existing.add(obligation_id)
+            if debt.user_accepted:
+                self._append(
+                    EventKind.DEBT_ACCEPTED,
+                    EventSource.USER,
+                    {
+                        "obligation_id": obligation_id,
+                        "reason": (
+                            "operator opted in to deliver with an unverified gap"
+                        ),
+                        "accepted_by": "user",
+                        "obligation_kind": obligation.kind.value,
+                    },
+                    step_id=self._current_step_id(),
+                )
             self._append(
                 EventKind.DEBT_OPENED,
                 EventSource.GATE,

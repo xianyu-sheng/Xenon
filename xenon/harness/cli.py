@@ -54,6 +54,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", default=None, help="models.yaml path")
     parser.add_argument(
+        "--accept-debt",
+        action="store_true",
+        help="deliver despite unverified gaps (evidence stays PARTIAL)",
+    )
+    parser.add_argument(
         "--permission",
         choices=[item.value for item in PermissionMode],
         default=PermissionMode.AUTO_EDIT.value,
@@ -134,6 +139,7 @@ def run_from_args(args: argparse.Namespace) -> int:
                 max_steps=args.max_steps,
                 constraints=(f"model:{model_config.model_id}",),
                 sink=sink,
+                accept_debt=bool(getattr(args, "accept_debt", False)),
             )
     except Exception as exc:  # noqa: BLE001 — CLI must return a code
         print(f"harness error: {exc}", file=sys.stderr)

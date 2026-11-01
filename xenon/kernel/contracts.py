@@ -238,6 +238,10 @@ class TaskSpec:
     budget: Budget = field(default_factory=Budget)
     # #201: push is an explicit user request, never a default finalize action.
     allow_push: bool = False
+    # #287: deliver despite gaps the harness could not verify (evidence stays
+    # PARTIAL and the gap is recorded as user-accepted).  Never overrides a
+    # violated verdict.
+    accept_debt: bool = False
     schema_version: str = SCHEMA_VERSION
     # The user's own words, kept separate from the strategy-facing prompt.
     # Legacy callers may omit it; projections then fall back to ``objective``.
@@ -433,6 +437,10 @@ class Debt:
     attempts: int = 0
     next_action: str = ""
     user_accepted: bool = False
+    # Accepting a gap means "I have no evidence either way".  A gap that came
+    # from *positive* evidence of failure (a violated verdict) is never
+    # acceptable, or acceptance would become a way to ship broken work.
+    acceptable: bool = True
 
 
 @dataclass(frozen=True, slots=True)

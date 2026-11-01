@@ -179,6 +179,11 @@ def cli() -> None:
         help="exec: permission mode",
     )
     parser.add_argument(
+        "--accept-debt",
+        action="store_true",
+        help="exec: deliver despite unverified gaps (evidence stays PARTIAL)",
+    )
+    parser.add_argument(
         "--jsonl",
         action=argparse.BooleanOptionalAction,
         default=True,

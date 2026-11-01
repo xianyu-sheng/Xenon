@@ -23,6 +23,9 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- `user_accepted_debt`（#287 前半）：`TaskSpec.accept_debt` 显式声明 → 无证据的缺口记为 `debt_accepted` 事件并可交付，`evidence` 保持 `partial`；**`VIOLATED`（有失败证据）永不被接受**。
+- 分类修正：finalizer 无法读取 worktree（无 git/不可读）从 `VIOLATED` 改为 `UNVERIFIABLE`（`FinalizeOutcome.unavailable`），"无法验证"与"验证失败"不再混为一谈。
+- CLI/SDK：`xenon exec --accept-debt`、`run_task(accept_debt=)`。
 - **引擎骨架已删除**（#202）：`xenon/engine/` 从 43 个文件降到 25 个，18 个骨架文件移除（base/registry/builtin_engines/react/plan_execute/reflection/combined/event_bus/plan_dag*/plan_contract/prompts/strategy_guide/scout/verification_nudge/claim_gate/execution_policy）。
 - 守卫升级：`check_engine_imports.py` 改为「骨架文件不得存在 + xenon/tests/evals/scripts 四棵树禁止 import」，并用 import 语句匹配（不误报守卫测试里的字符串断言）。
 - 机制迁出：`ExecutionPolicy`（请求截止/节流/事件）从引擎包迁到 `xenon/harness/request_budget.py`（`RequestBudget`），swebench 适配器改用它。

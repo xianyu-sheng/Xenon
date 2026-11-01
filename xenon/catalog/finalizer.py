@@ -38,6 +38,10 @@ class FinalizeOutcome:
     created: bool = False
     rolled_back: bool = False
     staged: tuple[str, ...] = field(default_factory=tuple)
+    # ``True`` when the finalizer could not even look at the worktree (no git,
+    # unreadable repo).  That is "we could not verify", not "we found a
+    # problem", and the two must not collapse into one verdict.
+    unavailable: bool = False
 
 
 class GitFinalizer:
@@ -69,7 +73,9 @@ class GitFinalizer:
         changes = self._status_changes()
         if changes is None:
             return FinalizeOutcome(
-                accepted=False, reason="cannot read git status"
+                accepted=False,
+                reason="cannot read git status",
+                unavailable=True,
             )
         unverified = sorted(
             path
