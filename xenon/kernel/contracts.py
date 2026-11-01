@@ -245,6 +245,24 @@ class TaskSpec:
     # Explicit V2 obligations supplied by the caller/intake layer.
     obligations: tuple[Obligation, ...] = ()
 
+    def __post_init__(self) -> None:
+        """Reject a malformed task at the boundary, not three layers down.
+
+        The legacy engines learned this the hard way: ``run(None)`` used to
+        crash inside execution-policy text handling instead of saying "your
+        objective is not a string".  The kernel keeps that lesson.
+        """
+
+        for name, value in (
+            ("task_id", self.task_id),
+            ("objective", self.objective),
+            ("workspace", self.workspace),
+        ):
+            if not isinstance(value, str):
+                raise ValueError(f"{name} 必须为非空字符串")
+            if name != "workspace" and not value.strip():
+                raise ValueError(f"{name} 必须为非空字符串")
+
 
 # ── catalog and receipts ───────────────────────────────────────────────────
 

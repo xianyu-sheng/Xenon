@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from xenon.kernel.contracts import TaskSpec
 from xenon.mcp.registry import MCPRegistry
 
 
@@ -211,54 +212,29 @@ class TestDifficultyEstimatorBoundary:
         assert tier == 5
 
 
-class TestEngineRunInputValidation:
-    """引擎 run() 对 None/非字符串输入的统一防御。
+class TestTaskSpecRejectsMalformedInput:
+    """The kernel validates at the boundary, not three layers down.
 
-    Bug 背景：ReActEngine.run(None) 此前穿透到 execution_policy.strip_execution_boundary
-    的 text.split() 裸崩 AttributeError（react_engine.py:338 → execution_policy.py:53）。
-    根因是 base.py:1521 的 run(user_input: str) 契约无入口校验，各引擎假设上游
-    （REPL/工作流/会话重放）总传 str。根因级修复：BaseEngine 提供统一校验，
-    全部 6 个引擎 run() 首行调用。
+    The legacy engines learned this from a real crash: ``run(None)`` fell
+    through to execution-policy text handling instead of saying "your
+    objective is not a string".
     """
 
-    def _make_engine(self):
-        from xenon.engine.react_engine import ReActEngine
-
-        return ReActEngine(["prov/m1"])
-
     @pytest.mark.parametrize("bad_input", [None, 123, ["task"]])
-    def test_react_run_rejects_non_str(self, bad_input):
-        eng = self._make_engine()
-        with pytest.raises(ValueError, match="user_input 必须为非空字符串"):
-            eng.run(bad_input)
+    def test_objective_must_be_a_string(self, bad_input):
+        with pytest.raises(ValueError, match="非空字符串"):
+            TaskSpec(task_id="t", objective=bad_input, workspace=".")
 
-    def test_react_run_rejects_empty_string(self):
-        eng = self._make_engine()
-        with pytest.raises(ValueError, match="user_input 必须为非空字符串"):
-            eng.run("   ")
+    @pytest.mark.parametrize("bad_input", ["", "   "])
+    def test_objective_must_not_be_blank(self, bad_input):
+        with pytest.raises(ValueError, match="非空字符串"):
+            TaskSpec(task_id="t", objective=bad_input, workspace=".")
 
-    def test_all_engine_runs_validate(self):
-        """全部 6 个引擎 run() 首行都应调用统一校验。"""
-        import inspect
+    def test_task_id_must_not_be_blank(self):
+        with pytest.raises(ValueError, match="非空字符串"):
+            TaskSpec(task_id="  ", objective="do it", workspace=".")
 
-        from xenon.engine.combined_engines import (
-            PlanReactEngine,
-            PlanReflectionEngine,
-            ReactReflectionEngine,
-        )
-        from xenon.engine.plan_execute_engine import PlanExecuteEngine
-        from xenon.engine.react_engine import ReActEngine
-        from xenon.engine.reflection_engine import ReflectionEngine
+    def test_a_valid_spec_still_builds(self):
+        spec = TaskSpec(task_id="t", objective="do it", workspace=".")
 
-        for cls in (
-            ReActEngine,
-            PlanExecuteEngine,
-            ReflectionEngine,
-            PlanReactEngine,
-            PlanReflectionEngine,
-            ReactReflectionEngine,
-        ):
-            src = inspect.getsource(cls.run)
-            assert "_validate_run_input" in src, (
-                f"{cls.__name__}.run 未调用统一输入校验"
-            )
+        assert spec.objective == "do it"
