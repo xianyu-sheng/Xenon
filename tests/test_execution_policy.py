@@ -7,7 +7,6 @@ import ast
 import pytest
 
 from xenon.engine.context import AgentContext
-from xenon.engine.react_engine import ReActEngine
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes.tool_executor import ToolExecutor, execution_policy_denial
 from xenon.repl.code_response import validate_code_response
@@ -448,11 +447,18 @@ def test_read_only_research_hides_and_blocks_clone_repo(monkeypatch):
     assert "只读" in result.observation
     assert executed == []
 
-    engine = ReActEngine(["test/model"])
-    engine._active_execution_level = int(ExecutionLevel.READ_ONLY)
-    visible_tools = {item["function"]["name"] for item in engine._build_tools_schema()}
-    assert "github_fetch" in visible_tools
-    assert "clone_repo" not in visible_tools
+    # The engine's schema filter is gone; the same invariant now lives in the
+    # per-tool policy, which is what actually stops the call.
+    read_ok = execution_policy_denial(
+        "github_fetch", {}, AgentContext({"_execution_level": int(ExecutionLevel.READ_ONLY)})
+    )
+    write_denied = execution_policy_denial(
+        "clone_repo",
+        {"repo": "THUDM/AgentBench"},
+        AgentContext({"_execution_level": int(ExecutionLevel.READ_ONLY)}),
+    )
+    assert read_ok is None
+    assert write_denied and "只读" in write_denied
 
 
 def test_code_text_that_mentions_a_saved_file_stays_in_direct(monkeypatch):

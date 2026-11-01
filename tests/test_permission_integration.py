@@ -8,9 +8,7 @@ import pytest
 from rich.console import Console
 from rich.panel import Panel
 
-from xenon.engine.callbacks import SilentCallback
 from xenon.engine.context import AgentContext
-from xenon.engine.react_engine import BUILTIN_TOOLS, ReActEngine
 from xenon.nodes.tool_executor import ToolExecutor, classify_tool
 from xenon.repl.permissions import (
     PermissionDecision,
@@ -98,34 +96,33 @@ def test_cancel_decision_marks_context_and_tool_result_cancelled():
     assert gate.state is PermissionState.CANCELLED
 
 
-def test_react_stops_without_a_second_model_turn_after_cancel(monkeypatch):
-    gate = PermissionGate(PermissionMode.DEFAULT)
-    gate.set_confirm_callback(lambda *_args: (False, "用户取消任务"))
-    callback = SilentCallback()
-    engine = ReActEngine(
-        ["test/model"],
-        tools={"command": BUILTIN_TOOLS["command"]},
-        callback=callback,
-        native_fc=False,
-        permission_gate=gate,
+def test_cancel_stops_without_a_second_model_turn():
+    """A cancel must end the turn, not buy the model another call."""
+
+    from tests.kernel.test_north_star import (
+        ScriptedStrategy,
+        _calc_spec,
+        _runtime,
     )
-    responses = iter(
-        [
-            '{"thought":"execute","action":"command","action_input":{"action":"echo hi"}}',
-            '{"final_answer":"this must not be requested"}',
-        ]
-    )
-    calls = {"count": 0}
+    from xenon.kernel.contracts import CallTool, Capability, ToolIntent
+    from xenon.ledger.store import Ledger
 
-    def fake_llm(*_args, **_kwargs):
-        calls["count"] += 1
-        return next(responses)
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    calls = {"proposed": 0}
 
-    monkeypatch.setattr(engine, "_call_llm_for_phase", fake_llm)
-    result = engine.run("执行命令 echo hi", context=AgentContext())
+    class CancelAfterFirst(ScriptedStrategy):
+        def propose(self, view):
+            calls["proposed"] += 1
+            action = super().propose(view)
+            runtime.request_cancel()
+            return action
 
-    assert "用户取消任务" in result
-    assert calls["count"] == 1
+    strategy = CancelAfterFirst([CallTool(ToolIntent(capability=Capability.READ))])
+    result = runtime.run(_calc_spec(), strategy)
+
+    assert result.phase.value == "aborted"
+    assert calls["proposed"] == 1, "a cancelled turn must not ask the model again"
 
 
 def test_command_confirmation_displays_normalized_action_and_escapes_markup():
