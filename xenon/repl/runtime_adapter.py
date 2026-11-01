@@ -7,6 +7,7 @@ assistant result back into the REPL's context and turn tree.
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -30,6 +31,8 @@ from xenon.kernel.policies import PermissionMode
 from xenon.kernel.strategies import LoopProfile
 from xenon.modes import MODE_CATALOG, loop_profile_for
 from xenon.repl.execution_policy import ExecutionLevel
+
+logger = logging.getLogger(__name__)
 
 MCP_TOOL_LIMIT_ENV = "XENON_MCP_TOOL_LIMIT"
 MCP_TOOL_ALLOWLIST_ENV = "XENON_MCP_TOOLS"
@@ -573,6 +576,7 @@ class RuntimeAdapter:
         task_id: str | None = None,
         sink: Any = None,
         on_runtime: Any = None,
+        context_blocks: Any = (),
     ) -> HarnessRun:
         if self.strategy_mode == "legacy":
             raise KernelAdapterError(
@@ -636,6 +640,7 @@ class RuntimeAdapter:
             mode=TaskMode.PLAN if self.plan_only else TaskMode.AUTO,
             constraints=tuple(constraints),
             sink=sink,
+            context_blocks=tuple(context_blocks or ()),
             approval=self.approval if self.allow_approval else None,
             allow_approval=self.allow_approval,
             catalog_profile=self.catalog_profile,
@@ -661,6 +666,7 @@ class RuntimeAdapter:
         objective: str = "",
         user_objective: str = "",
         sink: Any = None,
+        context_blocks: Any = (),
     ) -> HarnessRun:
         """Execute an approved plan in its existing kernel ledger."""
 
@@ -769,6 +775,41 @@ class RuntimeAdapter:
             or "react",
             plan_only=plan_only,
         )
+
+
+def session_context_blocks(repl: Any, objective: str) -> tuple[tuple[str, str], ...]:
+    """Reference material for a kernel turn: project rules + retrieved memory.
+
+    The chat path has always injected these; kernel turns ignored them, so a
+    rule like "don't touch tests/" silently stopped applying the moment the
+    turn needed tools.  Labels come from the context manager's keys, and the
+    insertion order is preserved so the prompt (and its hash) is reproducible.
+    """
+
+    inject_project = getattr(repl, "_inject_project_context", None)
+    if callable(inject_project):
+        try:
+            inject_project()
+        except Exception:  # noqa: BLE001 — context is advisory, never fatal
+            logger.debug("project context injection failed", exc_info=True)
+    inject_memory = getattr(repl, "_inject_memories", None)
+    if callable(inject_memory):
+        try:
+            inject_memory(objective)
+        except Exception:  # noqa: BLE001 — memory is advisory, never fatal
+            logger.debug("memory injection failed", exc_info=True)
+    ctx_mgr = getattr(repl, "ctx_mgr", None)
+    layers = getattr(ctx_mgr, "context_layers", None)
+    if not callable(layers):
+        return ()
+    try:
+        return tuple(
+            (str(key), str(content))
+            for key, content, _stable in layers()
+            if str(content or "").strip()
+        )
+    except Exception:  # noqa: BLE001 — fall back to no context
+        return ()
 
 
 def _console_for(repl: Any) -> Any:
@@ -1088,6 +1129,7 @@ def run_kernel_turn(
 
         listener = SteeringListener(repl)
         listener.start()
+        blocks = session_context_blocks(repl, objective)
 
         try:
             run = adapter.run(
@@ -1095,6 +1137,7 @@ def run_kernel_turn(
                 user_objective=user_input,
                 sink=sink,
                 on_runtime=_attach,
+                context_blocks=blocks,
             )
         finally:
             if callable(loop_setter):

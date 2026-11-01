@@ -211,6 +211,7 @@ class LoopRuntime:
         self._usage = UsageTotals()
         self._steering = SteeringState()
         self._accept_debt = False
+        self._context_digest = ""
         self._steering_source: Any = None
         self._compaction_signature = ""
         self._finalize_decision: FinalizeDecision | None = None
@@ -378,6 +379,7 @@ class LoopRuntime:
                 return limited
 
             self._consume_steering()
+            self._note_session_context()
             view = build_model_view(
                 spec=spec,
                 catalog=self._catalog,
@@ -1711,6 +1713,37 @@ class LoopRuntime:
         """Read-only view of what the loop has been told (for UI and tests)."""
 
         return self._steering
+
+    def _note_session_context(self) -> None:
+        """Record what reference material the model was given (once per set).
+
+        The content itself is not copied into the ledger — a memory may be
+        private — but labels, sizes and a digest are enough to answer "did the
+        rules reach the model, and were they the rules I meant?" during replay.
+        """
+
+        blocks = tuple(getattr(self._spec, "context_blocks", ()) or ())
+        if not blocks:
+            return
+        digest = hashlib.sha256(
+            chr(0).join(f"{label}{chr(0)}{text}" for label, text in blocks).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        if digest == self._context_digest:
+            return
+        self._context_digest = digest
+        self._append(
+            EventKind.SESSION_CONTEXT,
+            EventSource.RUNTIME,
+            {
+                "blocks": [
+                    {"label": label, "chars": len(text)} for label, text in blocks
+                ],
+                "total_chars": sum(len(text) for _label, text in blocks),
+                "digest": digest[:16],
+            },
+        )
 
     def _note_compaction(self, view: Any) -> None:
         """Record that the working set was folded, once per distinct fold.
