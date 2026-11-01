@@ -402,19 +402,24 @@ def test_read_document_is_registered_as_read_only() -> None:
     assert definition.risk == "INFO"
     assert required_execution_level("read_document", {}) == 1
 
-    from xenon.engine.react_prompts import BUILTIN_TOOLS
+    from xenon.nodes.tool_registry import BUILTIN_TOOL_METHODS
 
-    assert "read_document" in BUILTIN_TOOLS
+    assert "read_document" in BUILTIN_TOOL_METHODS
 
 
-def test_read_document_visible_in_read_only_schema() -> None:
-    from xenon.engine.react_engine import ReActEngine
+def test_read_document_stays_read_only_under_policy() -> None:
+    """A read-only turn must allow the document reader and refuse shell.
 
-    engine = ReActEngine(["test/model"])
-    engine._active_execution_level = 1
-    names = {t["function"]["name"] for t in engine._build_tools_schema()}
-    assert "read_document" in names
-    assert "command" not in names
+    The engine's schema filter is gone; the policy check is what actually
+    decides, so that is what the test pins.
+    """
+
+    from xenon.nodes.tool_executor import execution_policy_denial
+
+    read_only = AgentContext({"_execution_level": 1})
+
+    assert execution_policy_denial("read_document", {"file_path": "a.xlsx"}, read_only) is None
+    assert execution_policy_denial("command", {"action": "ls"}, read_only)
 
 
 def test_read_document_tool_executes_on_xlsx(tmp_path) -> None:

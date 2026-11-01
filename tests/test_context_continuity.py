@@ -2,16 +2,9 @@
 
 from __future__ import annotations
 
-from xenon.engine.combined_engines import PlanReactEngine
-from xenon.engine.context import AgentContext
-from xenon.engine.plan_execute_engine import PlanExecuteEngine
-from xenon.engine.react_engine import ReActEngine
-from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.repl.context_manager import ContextManager
-from xenon.repl.execution_policy import ExecutionLevel
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.repl import REPL
-from xenon.repl.turn_contract import contract_for_level
 
 
 def _repl() -> REPL:
@@ -93,50 +86,6 @@ def test_cache_tiers_keep_volatile_context_after_reusable_history():
     assert contents[5:] == ["volatile retrieval", "current question"]
 
 
-def test_react_injects_memory_without_duplicating_current_user():
-    ctx = ContextManager()
-    ctx.update_working_memory("session_active_dirs", ["/work/project"])
-    ctx.set_context_message("project", "Follow XENON project rules", stable=True)
-    ctx.set_context_message("long_term_memory", "User prefers concise output")
-    ctx.add_user_message("继续")
-    engine = ReActEngine(["openai/a"], max_iterations=2)
-    captured: dict[str, list[dict[str, str]]] = {}
-
-    def fake_llm(messages, max_tokens=None):
-        captured["messages"] = messages
-        return '{"thought":"done","final_answer":"ok"}'
-
-    engine._call_llm = fake_llm
-    run_ctx = AgentContext(
-        {"_turn_contract": contract_for_level(ExecutionLevel.ANSWER_ONLY)}
-    )
-    engine._parse_response = lambda value: {
-        "thought": "done",
-        "final_answer": "ok",
-    }
-
-    assert engine.run("继续", run_ctx, ctx_mgr=ctx) == "ok"
-    messages = captured["messages"]
-    assert (
-        sum(
-            message["role"] == "user" and message["content"] == "继续"
-            for message in messages
-        )
-        == 1
-    )
-    assert any("/work/project" in message["content"] for message in messages)
-    assert any("XENON project rules" in message["content"] for message in messages)
-    assert any("prefers concise" in message["content"] for message in messages)
-    contents = [message["content"] for message in messages]
-    project_index = contents.index("Follow XENON project rules")
-    working_index = next(
-        index for index, content in enumerate(contents) if "/work/project" in content
-    )
-    retrieval_index = contents.index("User prefers concise output")
-    current_index = contents.index("继续")
-    assert project_index < working_index < retrieval_index < current_index
-
-
 def test_repl_binds_turn_hint_to_user_prompt_not_system_overlay(monkeypatch):
     repl = _repl()
     repl.registry.assign_role("planner", ["a"])
@@ -167,63 +116,6 @@ def test_repl_binds_turn_hint_to_user_prompt_not_system_overlay(monkeypatch):
     assert repl.ctx_mgr.history[-1].content == captured[0]
 
 
-def test_plan_execute_exposes_its_verified_tracker(monkeypatch):
-    engine = PlanExecuteEngine(["openai/a"])
-    monkeypatch.setattr(
-        engine,
-        "_plan",
-        lambda user_input, context=None: {
-            "analysis": "one step",
-            "steps": [{"id": 1, "task": "inspect", "tool": "read_file"}],
-        },
-    )
-
-    def execute(tool, params, context, tracker=None):
-        tracker.record(tool, params, True, "read ok")
-        return "read ok"
-
-    monkeypatch.setattr(engine, "_execute_step_with_tool", execute)
-    monkeypatch.setattr(engine, "_summarize", lambda *args: "done")
-
-    assert engine.run("inspect") == "done"
-    assert engine._last_tracker is not None
-    assert engine._last_tracker.successful_tools() == ["read_file"]
-
-
-def test_plan_react_aggregates_tool_traces_from_every_step(monkeypatch):
-    engine = PlanReactEngine(["openai/a"], max_steps=2)
-    monkeypatch.setattr(
-        engine.planner,
-        "_plan",
-        lambda user_input, context=None: {
-            "analysis": "two steps",
-            "steps": [
-                {"id": 1, "task": "first"},
-                {"id": 2, "task": "second"},
-            ],
-        },
-    )
-    counter = {"value": 0}
-
-    def reactor_run(user_input, context=None, ctx_mgr=None):
-        counter["value"] += 1
-        tracker = ToolExecutionTracker()
-        tracker.record(
-            "read_file",
-            {"file_path": f"file-{counter['value']}.py"},
-            True,
-            "ok",
-        )
-        engine.reactor._last_tracker = tracker
-        return "ok"
-
-    monkeypatch.setattr(engine.reactor, "run", reactor_run)
-
-    engine.run("inspect both")
-    assert engine._last_tracker is not None
-    assert len(engine._last_tracker.calls) == 2
-
-
 def test_runtime_checkpoint_preserves_tool_roles_and_memory(monkeypatch, tmp_path):
     import xenon.repl.session as session_module
 
@@ -243,3 +135,8 @@ def test_runtime_checkpoint_preserves_tool_roles_and_memory(monkeypatch, tmp_pat
     ]
     assert saved["history"][-1]["turn_type"] == "tool_result"
     assert saved["extra"]["working_memory"]["session_active_dirs"] == [str(tmp_path)]
+
+
+# The three assertions about "the engine injects memory into its messages"
+# were removed with the engine: the kernel has no such injection yet, and the
+# gap is tracked in #340 rather than silently forgotten.

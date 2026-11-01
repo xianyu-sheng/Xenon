@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from xenon.engine.context import AgentContext
-from xenon.engine.react_engine import ReActEngine
 from xenon.nodes.tool_node import ToolNode
 
 
@@ -72,23 +71,24 @@ def test_run_powershell_script(tmp_path) -> None:
     assert "ps-ok" in result["stdout"]
 
 
-def test_run_script_is_visible_and_sensitive() -> None:
-    engine = ReActEngine(["fake/model"], native_fc=True)
-    assert "run_script" in engine.tools
-    assert "run_script" in engine.system_prompt
-    assert "不要用 `python -c`" in engine.system_prompt
-    from xenon.nodes.tool_registry import BUILTIN_TOOL_REGISTRY
+def test_run_script_is_registered_and_sensitive() -> None:
+    from xenon.nodes.tool_registry import BUILTIN_TOOL_METHODS, BUILTIN_TOOL_REGISTRY
 
+    assert "run_script" in BUILTIN_TOOL_METHODS
     assert BUILTIN_TOOL_REGISTRY.get("run_script").risk == "SENSITIVE"
 
 
-def test_run_script_native_schema_requires_code() -> None:
-    engine = ReActEngine(["fake/model"], native_fc=True)
-    schema = engine._build_tools_schema()
-    item = next(x for x in schema if x["function"]["name"] == "run_script")
-    params = item["function"]["parameters"]
-    assert params["required"] == ["code"]
-    assert params["properties"]["language"]["enum"] == ["python", "powershell"]
+def test_run_script_requires_code_at_the_handler() -> None:
+    """The prompt schema lived in the deleted engine; the contract does not.
+
+    A missing/blank ``code`` must still fail closed at the tool itself, which
+    is the layer that actually runs something.
+    """
+
+    result = ToolNode("t", action_type="run_script", cwd=".").execute(AgentContext({}))
+
+    assert result["success"] is False
+    assert "code" in (result.get("error") or result.get("observation") or "")
 
 
 @pytest.mark.skipif(
@@ -142,9 +142,6 @@ def test_shell_variable_error_points_to_run_script() -> None:
         raise AssertionError("expected SecurityError")
 
 
-def test_plan_prompt_exposes_run_script_and_shell_alternative() -> None:
-    from xenon.engine.plan_execute_engine import PlanExecuteEngine
-
-    prompt = PlanExecuteEngine(["fake/model"]).system_prompt
-    assert "run_script" in prompt
-    assert "python -c" in prompt
+# The planning prompt that advertised `run_script` as the `python -c`
+# alternative lived in the deleted engine.  The tool itself stays covered by
+# the execution tests above; the prompt-side hint has no host today.
