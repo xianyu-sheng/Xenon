@@ -116,6 +116,16 @@ def cli() -> None:
         help="models import 子命令的配置文件路径",
     )
     parser.add_argument(
+        "--json",
+        action="store_true",
+        help="replay/metrics 输出 JSON",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="replay 显示全部事件（默认只显示关键节点）",
+    )
+    parser.add_argument(
         "--no-probe",
         action="store_true",
         help="models import 时跳过单 token 探针验活",
@@ -287,6 +297,15 @@ def cli() -> None:
         args.resume = resume_arg
         _cmd_chat(args)
 
+    elif cmd in ("replay", "metrics"):
+        target = getattr(args, "task", None) or args.workflow_path
+        if not target:
+            console.print(
+                f"[red]用法: xenon {cmd} <task-id 或 ledger.jsonl>[/red]"
+            )
+            sys.exit(2)
+        raise SystemExit(_cmd_replay(cmd, str(target), args))
+
     elif cmd == "models":
         sub = args.workflow_path
         if sub == "import":
@@ -453,6 +472,49 @@ def _validate_resume_target(target: str) -> str:
         )
         sys.exit(2)
     return arg
+
+
+def _cmd_replay(command: str, target: str, args: argparse.Namespace) -> int:
+    """Read-only report over a finished task ledger.
+
+    Deliberately model-free: a replay must work offline, after the worktree is
+    gone, and produce the same answer every time.
+    """
+
+    import json
+
+    from xenon.ledger.store import Ledger
+    from xenon.replay import (
+        metrics,
+        render_metrics,
+        render_timeline,
+        resolve_ledger,
+        timeline,
+    )
+
+    try:
+        path = resolve_ledger(target)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 2
+    ledger = Ledger(path, path.stem)
+    events = list(ledger.read())
+    if not events:
+        console.print(f"[red]账本为空: {path}[/red]")
+        return 2
+    if command == "metrics":
+        data = metrics(events)
+        if getattr(args, "json", False):
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+        else:
+            console.print(render_metrics(data))
+        return 0
+    rows = timeline(events, include_all=bool(getattr(args, "all", False)))
+    if getattr(args, "json", False):
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+    else:
+        console.print(render_timeline(rows))
+    return 0
 
 
 def _cmd_chat(args: argparse.Namespace) -> None:
