@@ -150,6 +150,88 @@ def sync_context_window(repl: Any, model_ids: list[str]) -> int:
     return window
 
 
+def _steering_queue(repl: Any) -> Any:
+    queue = getattr(repl, "_steering_queue", None)
+    if queue is None:
+        import queue as _queue
+
+        queue = _queue.Queue()
+        repl._steering_queue = queue
+    return queue
+
+
+class SteeringListener:
+    """Read typed lines while the kernel owns the main thread.
+
+    Only active on a real terminal: under tests or piped input there is no
+    "typing mid-run" to capture, and a stray reader would steal the next
+    prompt's line.  Lines are pushed into the transport queue; the runtime
+    turns them into events at the next action boundary.
+    """
+
+    def __init__(self, repl: Any, *, stream: Any = None) -> None:
+        self._repl = repl
+        self._stream = stream
+        self._stop = False
+        self._thread: Any = None
+
+    def start(self) -> bool:
+        import sys
+        import threading
+
+        stream = self._stream or sys.stdin
+        try:
+            interactive = bool(stream) and stream.isatty()
+        except Exception:  # noqa: BLE001 — exotic streams are not interactive
+            interactive = False
+        if not interactive:
+            return False
+        self._stream = stream
+        self._thread = threading.Thread(
+            target=self._loop, name="xenon-steering", daemon=True
+        )
+        self._thread.start()
+        return True
+
+    def _loop(self) -> None:
+        while not self._stop:
+            try:
+                line = self._stream.readline()
+            except Exception:  # noqa: BLE001 — a closed terminal ends the reader
+                return
+            if not line:
+                return
+            steer(self._repl, line)
+
+    def stop(self) -> None:
+        self._stop = True
+
+
+def drain_steering(repl: Any) -> Any:
+    """Pop one pending operator line, or ``None`` (never blocks).
+
+    This is a *transport*: whatever it yields becomes a ``user_input`` event
+    written by the runtime itself, so typing mid-run cannot change behaviour
+    without a trace.
+    """
+
+    queue = _steering_queue(repl)
+    try:
+        return queue.get_nowait()
+    except Exception:  # noqa: BLE001 — empty queue (or closed UI) means "nothing"
+        return None
+
+
+def steer(repl: Any, text: str, *, kind: str = "constraint", scope: str = "task") -> bool:
+    """Queue one operator line for the running turn (or the next one)."""
+
+    body = str(text or "").strip()
+    if not body:
+        return False
+    _steering_queue(repl).put({"text": body, "kind": kind, "scope": scope})
+    return True
+
+
 def model_config_for(registry: Any, model_ids: list[str]) -> ModelConfig:
     if not model_ids:
         raise KernelAdapterError("no model selected for kernel runtime")
@@ -412,6 +494,7 @@ class RuntimeAdapter:
         user_objective: str = "",
         task_id: str | None = None,
         sink: Any = None,
+        on_runtime: Any = None,
     ) -> HarnessRun:
         if self.strategy_mode == "legacy":
             raise KernelAdapterError(
@@ -461,6 +544,7 @@ class RuntimeAdapter:
             objective,
             user_objective=user_objective,
             strategy=strategy,
+            on_runtime=on_runtime,
             workspace=self.workspace,
             ledger_dir=self.ledger_dir,
             task_id=task_id or f"repl-{uuid.uuid4().hex[:12]}",
@@ -784,6 +868,8 @@ def resume_kernel_plan(
     start_capture = getattr(repl, "_start_log_capture", None)
     if callable(start_capture):
         start_capture()
+    listener = SteeringListener(repl)
+    listener.start()
     try:
         try:
             run = adapter.resume(
@@ -796,6 +882,8 @@ def resume_kernel_plan(
                 sink=sink,
             )
         finally:
+            listener.stop()
+            repl._active_runtime = None
             stop_capture = getattr(repl, "_stop_log_capture", None)
             if callable(stop_capture):
                 repl._captured_log = stop_capture()
@@ -852,8 +940,20 @@ def run_kernel_turn(
         start_capture = getattr(repl, "_start_log_capture", None)
         if callable(start_capture):
             start_capture()
+        def _attach(runtime: Any) -> None:
+            repl._active_runtime = runtime
+            runtime.attach_steering_source(lambda: drain_steering(repl))
+
+        listener = SteeringListener(repl)
+        listener.start()
+
         try:
-            run = adapter.run(objective, user_objective=user_input, sink=sink)
+            run = adapter.run(
+                objective,
+                user_objective=user_input,
+                sink=sink,
+                on_runtime=_attach,
+            )
         finally:
             stop_capture = getattr(repl, "_stop_log_capture", None)
             if callable(stop_capture):
