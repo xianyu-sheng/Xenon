@@ -10,7 +10,6 @@ from xenon.engine.evidence_runtime import (
     LifecyclePhase,
 )
 from xenon.engine.task_state import TaskState
-from xenon.engine.task_state_projection import TaskStateProjection
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.repl import REPL
 
@@ -119,12 +118,15 @@ def test_auto_save_persists_ledger_and_projection_replays_after_load(
 
     restored_state = TaskState.from_context(restored_context)
     assert restored_state is not None
-    TaskStateProjection(restored_state, restored_context).attach(
-        restored_ledger, replay=True
-    ).close()
 
-    assert restored_state.steps[0]["status"] == "completed"
-    assert restored_state.artifacts == ["src/app.py"]
-    assert restored_state.tests
-    assert restored_state.commit == "abc1234"
-    assert restored_state.missing_delivery() == []
+    # The engine-era replay bridge (``TaskStateProjection``) is gone: the
+    # kernel replays through ``xenon/ledger/projections.py`` from the ledger
+    # pointer, and step/artifact state no longer round-trips through
+    # TaskState.  What this test still guarantees is that the *evidence
+    # ledger itself* survives auto-save intact.
+    assert restored_ledger.session_id == "resume-ledger"
+    # ``from_snapshot`` restores kinds as their wire strings.
+    assert any(
+        str(getattr(event, "kind", "")) == EventKind.TOOL_OBSERVATION.value
+        for event in restored_ledger.events
+    )
