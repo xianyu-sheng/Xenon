@@ -53,6 +53,10 @@ class StatusBar:
         self.cache_tracker = cache_tracker
         self._streaming = True
         self._last_model: str | None = None
+        # The loop a kernel turn is executing.  ``/mode`` is chat
+        # configuration; showing it while a task runs would claim a mode the
+        # agent is not using (``direct`` was shown during react-style turns).
+        self._active_loop: str | None = None
         self._auto_router = None
         self._notification: str | None = None
         self._notification_expires: float = 0.0
@@ -61,6 +65,13 @@ class StatusBar:
 
     def set_last_model(self, model_id: str) -> None:
         self._last_model = model_id
+        # Problem 5: 状态变更时刷新
+        self.refresh()
+
+    def set_active_loop(self, name: str | None) -> None:
+        """Show the loop actually executing, or ``None`` to fall back to mode."""
+
+        self._active_loop = name or None
         # Problem 5: 状态变更时刷新
         self.refresh()
 
@@ -122,6 +133,14 @@ class StatusBar:
         if preferred:
             return str(preferred[0])
         return None
+
+    def _display_mode(self) -> Any:
+        """The loop actually running, else the configured chat mode."""
+
+        active = self._active_loop
+        if active:
+            return type("_Loop", (), {"name": active})()
+        return self.registry.get_current_mode()
 
     def _model_for_display(self) -> str:
         """显示模型：用户选择 > auto 路由活动模型 > 最近成功模型 > 未设置。"""
@@ -360,7 +379,7 @@ class StatusBar:
 
     def _toolbar_impl(self) -> str:
         stats = self.ctx_mgr.stats()
-        mode = self.registry.get_current_mode()
+        mode = self._display_mode()
         pct_val = self._parse_pct(stats["usage_ratio"])
 
         model_display = self._truncate_model(self._model_for_display(), 35)
@@ -444,7 +463,7 @@ class StatusBar:
 
     def _print_status_impl(self) -> None:
         stats = self.ctx_mgr.stats()
-        mode = self.registry.get_current_mode()
+        mode = self._display_mode()
         pct_val = self._parse_pct(stats["usage_ratio"])
 
         model_display = self._truncate_model(self._model_for_display(), 30)

@@ -1072,6 +1072,12 @@ def run_kernel_turn(
         if callable(start_capture):
             start_capture()
         adapter.progress_sink = kernel_progress_reporter(repl)
+        # The status bar shows the loop that is actually executing; ``/mode``
+        # is chat configuration and would claim a mode the agent is not using.
+        status_bar = getattr(repl, "status_bar", None)
+        loop_setter = getattr(status_bar, "set_active_loop", None)
+        if callable(loop_setter):
+            loop_setter(adapter.strategy_mode)
         guard = CancelOnInterrupt(None)
 
         def _attach(runtime: Any) -> None:
@@ -1091,6 +1097,11 @@ def run_kernel_turn(
                 on_runtime=_attach,
             )
         finally:
+            if callable(loop_setter):
+                loop_setter(None)
+            guard.__exit__()
+            listener.stop()
+            repl._active_runtime = None
             stop_capture = getattr(repl, "_stop_log_capture", None)
             if callable(stop_capture):
                 repl._captured_log = stop_capture()

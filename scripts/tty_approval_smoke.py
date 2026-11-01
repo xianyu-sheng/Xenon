@@ -8,6 +8,13 @@ recorded.
 This is an evidence tool, not part of the runtime.  One thread on purpose: the
 winpty socket deadlocks with concurrent readers/writers.
 
+**Best-effort.**  The ConPTY handshake with ``xenon chat`` is timing sensitive:
+the session picker, the splash banner and prompt_toolkit redraws all compete
+for the same byte stream, so this can miss the panel even when the REPL is
+healthy.  Treat a missing panel as "inconclusive", not as evidence of a bug —
+the unit tests in ``tests/kernel/test_approval_seam.py`` are the authority for
+the reader-routing logic.
+
 Usage (Windows, with winpty installed):
 
     XENON_TTY_WORKSPACE=C:/tmp/xenon-tty-approval \
@@ -61,6 +68,29 @@ def _drain(proc, deadline: float, sink: list[str]) -> bool:
         sink.append(text)
         seen.append(text)
         if "需要授权" in "".join(seen[-8:]):
+            return True
+    return False
+
+
+def _wait_for(proc, sink: list[str], marker: str, timeout: float) -> bool:
+    """Read until ``marker`` shows up; deterministic where sleeping is not."""
+
+    deadline = time.time() + timeout
+    window: list[str] = []
+    while time.time() < deadline:
+        ready, _, _ = select.select([proc.fileobj], [], [], 0.5)
+        if not ready:
+            continue
+        try:
+            chunk = proc.fileobj.recv(4096)
+        except (OSError, ValueError):
+            return False
+        if not chunk:
+            return False
+        text = chunk.decode("utf-8", "replace")
+        sink.append(text)
+        window.append(text)
+        if marker in "".join(window[-12:]):
             return True
     return False
 
