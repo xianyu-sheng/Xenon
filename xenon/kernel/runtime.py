@@ -74,6 +74,7 @@ from xenon.kernel.protocols import (
     ToolGateway,
     VerificationController,
 )
+from xenon.kernel.usage import UsageTotals, usage_payload
 from xenon.kernel.view import build_model_view
 from xenon.ledger.events import (
     EventKind,
@@ -205,6 +206,7 @@ class LoopRuntime:
         self._repair_attempts: dict[str, int] = {}
         self._replans = 0
         self._call_guard = RepeatedCallGuard()
+        self._usage = UsageTotals()
         self._compaction_signature = ""
         self._finalize_decision: FinalizeDecision | None = None
         self._run_start_seq = 0
@@ -230,6 +232,7 @@ class LoopRuntime:
         self._repair_attempts = {}
         self._replans = 0
         self._call_guard = RepeatedCallGuard(_max_identical_calls(spec))
+        self._usage = UsageTotals()
         self._compaction_signature = ""
         self._finalize_decision = None
         self._run_start_seq = 0
@@ -378,6 +381,7 @@ class LoopRuntime:
                 active_step=self._active_step,
                 steps=self._plan_steps,
                 step_verdicts=self._active_step_verdicts(),
+                tokens_used=self._usage.total,
             )
             self._note_compaction(view)
             self._transition(TaskPhase.THINKING, "propose action")
@@ -1576,6 +1580,27 @@ class LoopRuntime:
             except Exception:  # noqa: BLE001 — best effort; grants have TTL too
                 logger.warning("policy revoke failed", exc_info=True)
 
+    def note_usage(self, payload: Mapping[str, Any]) -> None:
+        """Fold one provider usage report into the task's spend.
+
+        Called by the harness bridge; also callable directly in tests so the
+        accounting path needs no live model.
+        """
+
+        normalised = usage_payload(payload)
+        self._usage.add(normalised)
+        self._append(
+            EventKind.MODEL_USAGE,
+            EventSource.LLM,
+            {
+                **normalised,
+                "cumulative_total": self._usage.total,
+            },
+        )
+
+    def usage(self) -> dict[str, int]:
+        return self._usage.as_dict()
+
     def _note_compaction(self, view: Any) -> None:
         """Record that the working set was folded, once per distinct fold.
 
@@ -1614,6 +1639,23 @@ class LoopRuntime:
             and self._steps >= self._spec.budget.max_steps
         ):
             self._transition(TaskPhase.BLOCKED, "step budget exhausted")
+            return self._result(
+                accepted=False, evidence=EvidenceStatus.UNVERIFIED
+            )
+        limit = self._spec.budget.max_tokens
+        if limit and self._usage.total >= int(limit):
+            self._transition(TaskPhase.BLOCKED, "token budget exhausted")
+            self._append(
+                EventKind.POLICY_DECISION,
+                EventSource.RUNTIME,
+                {
+                    "kind": PolicyDecisionKind.VETO.value,
+                    "reason": "token budget exhausted",
+                    "scope": ["token_budget"],
+                    "used": self._usage.total,
+                    "limit": int(limit),
+                },
+            )
             return self._result(
                 accepted=False, evidence=EvidenceStatus.UNVERIFIED
             )

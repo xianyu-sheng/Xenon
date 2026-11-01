@@ -62,6 +62,9 @@ class ModelConfig:
     # model, so the loop can size its working set against it instead of
     # guessing from the output budget alone.
     context_window: int = 0
+    # Per-call accounting hook.  Kept on the config so the sink travels with
+    # the model that produced the spend, not with global process state.
+    usage_sink: Any = None
 
 
 _DEFAULT_MAX_TOKENS = 8192
@@ -592,6 +595,8 @@ def _call_model(
     if config.api_key:
         provider = config.model_id.split("/", 1)[0].lower()
         kwargs["credentials"] = {provider: config.api_key}
+    if config.usage_sink is not None:
+        kwargs["usage_sink"] = config.usage_sink
     return caller(config.model_id, messages, **kwargs)
 
 
@@ -1053,6 +1058,39 @@ def build_step_review_messages(
             ),
         },
     ]
+
+
+_SINKABLE_PROVIDERS = (
+    "actor",
+    "planner",
+    "plan_reviewer",
+    "step_actor",
+    "step_reviewer",
+    "reflector",
+    "finisher",
+)
+
+
+def bind_usage_sink(strategy: Any, sink: Any) -> Any:
+    """Attach a per-call accounting sink to every provider of one strategy.
+
+    The runtime owns the totals, but the strategy owns the model calls, so the
+    sink is bound at the seam instead of through global state.  Returns the
+    same strategy (providers are mutated in place, their configs replaced).
+    """
+
+    from dataclasses import replace
+
+    for name in _SINKABLE_PROVIDERS:
+        provider = getattr(strategy, name, None)
+        config = getattr(provider, "config", None)
+        if config is None:
+            continue
+        try:
+            provider.config = replace(config, usage_sink=sink)
+        except Exception:  # noqa: BLE001 — a frozen provider simply opts out
+            continue
+    return strategy
 
 
 def build_llm_loop_strategy(

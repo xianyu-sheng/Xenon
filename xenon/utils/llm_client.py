@@ -165,6 +165,7 @@ def chat_completion(
     cache_lane_registry: Any = None,
     timeout: float = 120.0,
     max_retries: int = 3,
+    usage_sink: Any = None,
 ) -> str:
     """
     统一的 chat completion 调用（带重试）。
@@ -236,6 +237,14 @@ def chat_completion(
             # 成功：发出 (model_id, 累计 usage, 延迟) 供 UsageTracker 等订阅
             latency = time.monotonic() - t0
             _emit_usage(model_id, getattr(_usage_tl, "usage_acc", LLMUsage()), latency)
+            if usage_sink is not None:
+                # Per-call sink, so concurrent runs (parallel child tasks)
+                # cannot see each other's spend the way a global
+                # subscription would.
+                try:
+                    usage_sink(getattr(_usage_tl, "usage_acc", LLMUsage()))
+                except Exception:  # noqa: BLE001 — accounting never breaks a call
+                    pass
             return text
 
         except httpx.HTTPStatusError as e:
