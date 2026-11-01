@@ -23,6 +23,7 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- Batch 3 A/C 类（#202）：删除 19 个"断言对象是引擎内部/引擎提示词"的测试文件（约 170 用例），`test_turn_gate` 去除死夹具与 `EngineSpec` 依赖，`test_contract_single_source` 守卫改为覆盖仍在的模块；判定表落盘 `docs/evidence/mechanism-audit/batch3-table.md`（A 删 18 / B 迁 17 / C 守卫 2）。
 - `xenon replay` / `xenon metrics`（#289）：只读回放与指标，纯事件折叠、零模型依赖；`--json` 机器可读，`--all` 显示全部事件；支持 task-id 或账本路径。
 - kernel 轮次进度可见（#327 续）：`ModelConfig.progress_sink` + 主线程轮询回调；真实传输走 `chat_completion_stream` 组装，注入 client 保持同步；REPL 仅对 >1s 调用提示"生成中 Ns · N 字符"，不打印协议 JSON。
 - 取消可打断在飞调用（#327）：`kernel/cancel.py` + `ModelConfig.should_cancel`；调用走工作线程+轮询，取消在 ~150ms 内生效；runtime 以 `ABORTED{reason:"model call cancelled"}` 结束，与 `BLOCKED`/`FAILED` 严格区分；REPL 用 SIGINT 触发。
