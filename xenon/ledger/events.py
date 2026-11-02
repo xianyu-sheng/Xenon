@@ -76,6 +76,10 @@ class EventKind(str, Enum):
     USER_QUESTION = "user_question"
     USER_INPUT = "user_input"
     USER_APPROVAL = "user_approval"
+    # A granted permission the human chose to remember (#373).  Recorded, never
+    # evidence: it explains "why was this call not asked?", nothing more.
+    GRANT_ADDED = "grant_added"
+    GRANT_REVOKED = "grant_revoked"
     INTERRUPT = "interrupt"
     LEGACY_SESSION = "legacy_session"
 

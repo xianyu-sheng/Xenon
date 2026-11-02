@@ -65,6 +65,12 @@ class ApprovalProvider(Protocol):
         self, view: ModelView, action: Action, decision: PolicyDecision
     ) -> bool: ...
 
+    # Optional: the answer's *duration*.  ``"once"`` (default) authorizes this
+    # call; ``"session"`` / ``"scoped"`` ask the runtime to remember the
+    # decision as a grant (#373).  Declared as an attribute rather than a new
+    # protocol method so an existing provider keeps working unchanged.
+    last_scope: str
+
 
 @runtime_checkable
 class AuditProposalProvider(Protocol):

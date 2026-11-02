@@ -189,6 +189,7 @@ class LoopRuntime:
         self._probed_signature = ""
         self._audit_rounds = 0
         self._approved_grants: list[Any] = []
+        self.last_grant: Any = None
         self._services = _RuntimeServices(self)
 
         self._spec: TaskSpec | None = None
@@ -208,6 +209,8 @@ class LoopRuntime:
         self._repair_attempts: dict[str, int] = {}
         self._replans = 0
         self._stuck = StuckDetector()
+        self._clock: Any = time.time
+        self._last_progress_at = self._clock()
         self._usage = UsageTotals()
         self._steering = SteeringState()
         self._accept_debt = False
@@ -238,6 +241,7 @@ class LoopRuntime:
         self._repair_attempts = {}
         self._replans = 0
         self._stuck = StuckDetector(max_identical=_max_identical_calls(spec))
+        self._last_progress_at = self._clock()
         self._usage = UsageTotals()
         self._accept_debt = bool(spec.accept_debt)
         self._compaction_signature = ""
@@ -753,6 +757,10 @@ class LoopRuntime:
         # retrying the same wall with different arguments is stopped with a
         # *diagnosis* instead of being left to exhaust the step budget.
         signal = self._stuck.observe(receipt)
+        if self._stuck.no_progress_streak == 0:
+            # This receipt taught something new: the stall clock starts over.
+            # ``0`` is exactly the detector's way of saying "progress".
+            self._last_progress_at = self._clock()
         if signal is not None:
             self._append(
                 EventKind.POLICY_DECISION,
@@ -1648,6 +1656,9 @@ class LoopRuntime:
             logger.warning("approval provider failed", exc_info=True)
             return False, f"approval provider failed: {exc}"
         if approved:
+            scope = str(getattr(self._approval, "last_scope", "") or "")
+            if scope in {"session", "scoped"}:
+                self._remember_grant(action, decision, scope)
             return True, decision.reason or "user approval"
         # The provider knows *why* it said no (rejected / cancelled / no UI).
         # Losing that turns a blocked run into a mystery.
@@ -1656,6 +1667,62 @@ class LoopRuntime:
             or decision.reason
             or "user denied approval"
         )
+
+    def _remember_grant(
+        self, action: Action, decision: Any, scope: str
+    ) -> None:
+        """Record that the human chose to be asked once, not every time.
+
+        The event is the point: a session with fewer prompts must still be
+        explainable from its ledger, and the grant itself must be a *recorded
+        decision* rather than a hidden setting.  It is never evidence — it does
+        not touch claims, verdicts or the evidence status.
+        """
+
+        from xenon.kernel.session_grants import (
+            SCOPED,
+            SESSION,
+            grant_from_choice,
+        )
+
+        intent = getattr(action, "intent", None)
+        capability = getattr(intent, "capability", None)
+        if capability is None:
+            return
+        spec = self._spec
+        workspace = spec.workspace if spec is not None else ""
+        targets = tuple(str(item) for item in getattr(decision, "scope", ())[1:])
+        grant = grant_from_choice(
+            SESSION if scope == "session" else SCOPED,
+            capability=capability,
+            targets=targets,
+            workspace=workspace,
+            reason=str(getattr(decision, "reason", "") or ""),
+        )
+        self._append(
+            EventKind.GRANT_ADDED,
+            EventSource.USER,
+            {
+                "capability": capability.value,
+                "scope": grant.scope if grant is not None else "",
+                "workspace": workspace,
+                "answer": scope,
+                "accepted": grant is not None,
+            },
+        )
+        if grant is not None:
+            scoped = grant.as_scoped()
+            for policy in self._policies:
+                add = getattr(policy, "grant", None)
+                if callable(add):
+                    try:
+                        add((scoped,))
+                    except Exception:  # noqa: BLE001 — a grant must not break a run
+                        logger.warning("policy could not take the grant", exc_info=True)
+            # Handed to the front-end, which owns the durable book.  The runtime
+            # does not keep it: a kernel that stores permission state would make
+            # replay depend on something the ledger cannot show.
+            self.last_grant = grant
 
     def _grant_approval(
         self, policy: Any, decision: Any, action: Action
@@ -1887,7 +1954,44 @@ class LoopRuntime:
             return self._result(
                 accepted=False, evidence=EvidenceStatus.UNVERIFIED
             )
+        if self._stalled():
+            reason = self._stall_reason()
+            self._append(
+                EventKind.POLICY_DECISION,
+                EventSource.RUNTIME,
+                {
+                    "kind": PolicyDecisionKind.VETO.value,
+                    "reason": reason,
+                    "signal": "stalled",
+                },
+            )
+            self._transition(TaskPhase.BLOCKED, reason)
+            return self._result(
+                accepted=False, evidence=EvidenceStatus.UNVERIFIED
+            )
         return None
+
+    def _stalled(self) -> bool:
+        """Time is the gentle brake; steps are the crude one.
+
+        A long task that keeps learning new facts must not be stopped, so this
+        only counts *unproductive* time: the clock resets whenever the loop
+        detector sees a new fact.  ``max_stall_seconds=None`` disables it.
+        """
+
+        if self._spec is None:
+            return False
+        limit = self._spec.budget.max_stall_seconds
+        if limit is None or limit <= 0:
+            return False
+        return (self._clock() - self._last_progress_at) > float(limit)
+
+    def _stall_reason(self) -> str:
+        assert self._spec is not None
+        limit = float(self._spec.budget.max_stall_seconds or 0.0)
+        diagnosis = self._stuck.diagnosis
+        base = f"stalled: {limit:.0f}s without new information"
+        return f"{base} [{diagnosis}]" if diagnosis else base
 
     # ── results and persistence ────────────────────────────────────────
 

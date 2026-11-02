@@ -66,6 +66,12 @@ class ScopedGrant:
             return False
         if not self.target:
             return False
+        # ``*`` is the explicit "this whole capability, in this workspace"
+        # wildcard a session grant uses.  It is a literal decision the human made
+        # ("always allow verify"), not an implicit fallback, so it is spelled out
+        # here rather than inferred from an empty target.
+        if self.target == "*":
+            return True
         wanted = _normalize(self.target)
         actual = _normalize(target)
         return (
@@ -360,6 +366,13 @@ class PermissionPolicy:
     def check_intent(self, intent: ToolIntent) -> PolicyDecision:
         capability = intent.capability
         targets = _targets(intent)
+        # Hard safety rules are checked *before* any grant.  A grant is a human
+        # saying "stop asking me", not a suspension of the safety rules: a
+        # wildcard session grant used to authorize `rm -rf /` because the grant
+        # branch returned first (found by a test, not in production).
+        refusal = self._hard_denial(capability, intent, targets)
+        if refusal is not None:
+            return refusal
         grant = self._grant(capability, targets)
         if grant is not None:
             return PolicyDecision(
@@ -513,6 +526,15 @@ class PermissionPolicy:
         self.grants = tuple(self.grants) + grants
         return grants
 
+    def grant(self, grants: Sequence[ScopedGrant]) -> None:
+        """Add grants for the rest of this run.
+
+        Used when the human answers "always" *during* a task: the decision was
+        made now, so it applies now, not only to the next task.
+        """
+
+        self.grants = tuple(self.grants) + tuple(grants)
+
     def revoke(self, grants: Sequence[ScopedGrant]) -> None:
         revoked = set(grants)
         if not revoked:
@@ -520,6 +542,29 @@ class PermissionPolicy:
         self.grants = tuple(
             grant for grant in self.grants if grant not in revoked
         )
+
+    def _hard_denial(
+        self,
+        capability: Capability,
+        intent: ToolIntent,
+        targets: Sequence[str],
+    ) -> PolicyDecision | None:
+        """Safety rules a grant can never override.
+
+        Keeping this separate is the point: "the human said always" and "the
+        harness refuses" must not share a branch, or one of them silently wins.
+        """
+
+        command = _command(intent)
+        if capability is Capability.SHELL and _is_destructive(command):
+            return self._deny(capability, targets, "destructive shell command")
+        if capability is Capability.VCS and _is_destructive(command):
+            return self._deny(capability, targets, "destructive VCS command")
+        if _is_push(command):
+            return self._deny(
+                capability, targets, "push is not approvable in the kernel"
+            )
+        return None
 
     def _grant(
         self, capability: Capability, targets: Sequence[str]
