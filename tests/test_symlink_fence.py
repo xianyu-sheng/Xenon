@@ -68,14 +68,39 @@ class TestSymlinkFenceEscape:
         with pytest.raises(SecurityError, match="路径越界"):
             node._validate_path("escape/pwned.txt", for_write=True)
 
-    def test_read_through_symlink_is_blocked(self, fenced):
-        """读路径同样受围栏约束，否则凭证读取防护可被绕过。"""
+    def test_read_through_symlink_to_credentials_is_blocked(self, fenced):
+        """读越界放行（#378）后，凭证检查仍然位置无关：符号链接指向凭证
+        文件照样拦——这正是原来围栏要防的泄露，只是换到凭证检查来兜。"""
         workspace, outside = fenced
         _skip_if_no_symlink(outside, workspace / "escape")
 
         node = ToolNode("r", action_type="read_file", cwd=str(workspace))
-        with pytest.raises(SecurityError, match="路径越界"):
-            node._validate_path("escape/secret.txt", for_write=False)
+        with pytest.raises(SecurityError, match="凭证"):
+            node._validate_path(
+                "escape/credentials.yaml", for_write=False
+            )
+
+    def test_read_through_symlink_to_a_plain_outside_file_is_allowed(self, fenced):
+        """#378：读越界是允许的——读取不是修改，沙箱只管写。"""
+        workspace, outside = fenced
+        _skip_if_no_symlink(outside, workspace / "escape")
+        (outside / "notes.txt").write_text("hi", encoding="utf-8")
+
+        node = ToolNode("r", action_type="read_file", cwd=str(workspace))
+        resolved = node._validate_path("escape/notes.txt", for_write=False)
+
+        # 仍然返回 resolve 后的真实路径，调用方绝不拿模型给的原始路径。
+        assert resolved == (outside / "notes.txt").resolve()
+
+    def test_read_outside_without_a_symlink_is_allowed(self, fenced):
+        """#378：直接读工作区外的普通文件也放行。"""
+        workspace, outside = fenced
+        (outside / "plain.txt").write_text("hi", encoding="utf-8")
+
+        node = ToolNode("r", action_type="read_file", cwd=str(workspace))
+        resolved = node._validate_path(str(outside / "plain.txt"), for_write=False)
+
+        assert resolved == (outside / "plain.txt").resolve()
 
     def test_write_through_symlink_leaves_no_file_outside(self, fenced):
         """端到端：走完整 _write_file，确认围栏外磁盘上不产生文件。"""

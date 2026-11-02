@@ -157,7 +157,11 @@ class TestToolsMixin:
                     if not _looks_like_file_path(base):
                         continue
                     try:
-                        self._validate_path(base, for_write=False)
+                        # Running a test is *execution*, not a read: #378 made
+                        # reads location-free, but executing code from outside
+                        # the sandbox stays constrained.  The strict fence is
+                        # the right check here, not the read-side one.
+                        self._validate_path(base, for_write=True)
                     except Exception as exc:  # noqa: BLE001 — SecurityError
                         return self._run_tests_error(
                             "security_error",
