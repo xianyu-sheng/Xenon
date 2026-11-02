@@ -184,6 +184,19 @@ def check_path(path: Path) -> list[Violation]:
             Violation(path, exc.lineno or 0, "K000", f"cannot parse source: {exc.msg}"),
         ]
 
+    # Mark string literals that are attribute *names* (``getattr(x, "cmd")``),
+    # so the tool-name denylist below does not treat a field lookup as the
+    # kernel hard-coding a tool name.
+    attribute_names: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Name) or func.id not in {"getattr", "hasattr"}:
+            continue
+        if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+            attribute_names.add(id(node.args[1]))
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -242,7 +255,12 @@ def check_path(path: Path) -> list[Violation]:
 
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             value = node.value
-            if value in TOOL_NAME_DENYLIST:
+            # ``getattr(effect, "command")`` / ``hasattr(x, "bash")`` are
+            # attribute *lookups*, not the kernel naming a tool.  The guard is
+            # about vocabulary ("do not hard-code tool names"), and effect
+            # fields such as ``command`` legitimately share those words.
+            attribute_lookup = id(node) in attribute_names
+            if value in TOOL_NAME_DENYLIST and not attribute_lookup:
                 violations.append(
                     Violation(
                         path,

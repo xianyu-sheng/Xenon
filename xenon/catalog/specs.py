@@ -7,10 +7,40 @@ only place that maps a concrete tool name to those semantics.
 from __future__ import annotations
 
 import re
+import sys
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from xenon.kernel.contracts import Capability, EffectKind, Risk, ToolSpec
+
+
+def shell_description() -> str:
+    """What the shell actually is on this host.
+
+    A generic "run a shell command" told the model nothing, so on Windows it
+    emitted cmd syntax (``dir /b``, ``dir /s /b``) into a PowerShell prompt and
+    burned steps on guaranteed failures.  A real run spent 6 of 18 tool calls
+    that way before the step budget ran out.
+
+    Also states the two command shapes the host refuses, because a model that
+    only learns that from a failed receipt will try several variants first.
+    """
+
+    if sys.platform == "win32":
+        runtime = (
+            "Windows PowerShell (`powershell -Command`), NOT cmd.exe: "
+            "`dir /b` and `dir /s` are cmd syntax and will fail — use "
+            "Get-ChildItem, e.g. `Get-ChildItem -Recurse -File`."
+        )
+    else:
+        runtime = "`/bin/bash -c`, so POSIX shell syntax applies."
+    return (
+        f"Run a shell command and observe its effects. The shell is {runtime} "
+        "Inline interpreters (`python -c`, `perl -e`, `node -e`) and "
+        "`<shell> -c` wrappers are refused by policy: write a script file and "
+        "run it instead, or use the structured read/search/edit tools."
+    )
+
 
 CORE_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec(
@@ -62,7 +92,7 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
         ),
         risk=Risk.SENSITIVE,
         params_schema={"command": "shell command"},
-        description="Run a shell command and observe its effects.",
+        description=shell_description(),
         preferences={"shell": 20, "verify": 15, "vcs": 15},
     ),
 )

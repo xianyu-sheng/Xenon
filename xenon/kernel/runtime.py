@@ -57,11 +57,7 @@ from xenon.kernel.contracts import (
 )
 from xenon.kernel.controller import index_facts
 from xenon.kernel.finalize import FinalizeDecision, FinalizeGuard
-from xenon.kernel.guard import (
-    DEFAULT_MAX_IDENTICAL,
-    RepeatedCallGuard,
-    call_signature,
-)
+from xenon.kernel.loop_signals import DEFAULT_MAX_IDENTICAL, StuckDetector
 from xenon.kernel.phases import assert_transition
 from xenon.kernel.protocols import (
     ApprovalProvider,
@@ -211,7 +207,7 @@ class LoopRuntime:
         self._step_verdicts: dict[int, list[Verdict]] = {}
         self._repair_attempts: dict[str, int] = {}
         self._replans = 0
-        self._call_guard = RepeatedCallGuard()
+        self._stuck = StuckDetector()
         self._usage = UsageTotals()
         self._steering = SteeringState()
         self._accept_debt = False
@@ -241,7 +237,7 @@ class LoopRuntime:
         self._step_verdicts: dict[int, list[Verdict]] = {}
         self._repair_attempts = {}
         self._replans = 0
-        self._call_guard = RepeatedCallGuard(_max_identical_calls(spec))
+        self._stuck = StuckDetector(max_identical=_max_identical_calls(spec))
         self._usage = UsageTotals()
         self._accept_debt = bool(spec.accept_debt)
         self._compaction_signature = ""
@@ -690,21 +686,24 @@ class LoopRuntime:
             self._transition(TaskPhase.RUNNING, "replan after binding failure")
             return None
 
-        if self._call_guard.register(
-            call_signature(binding.call.spec_name, binding.call.params)
-        ):
+        # Identical repetition is knowable before the call, so it is refused
+        # before the call: there is nothing to learn from executing it again.
+        repeat = self._stuck.note_call(
+            binding.call.spec_name, binding.call.params
+        )
+        if repeat is not None:
             self._append(
                 EventKind.POLICY_DECISION,
                 EventSource.GATE,
                 {
                     "kind": PolicyDecisionKind.VETO.value,
-                    "reason": "repeated identical tool call",
+                    "reason": repeat.reason,
                     "scope": [binding.call.spec_name],
+                    "signal": repeat.kind,
                 },
+                step_id=self._current_step_id(),
             )
-            return self._budget_block(
-                "repeated identical tool call", ("repetition",)
-            )
+            return self._budget_block(repeat.reason, ("loop",))
 
         self._transition(TaskPhase.TOOL_CALL, binding.call.spec_name)
         try:
@@ -748,6 +747,25 @@ class LoopRuntime:
             )
         self._tool_calls += 1
         self._transition(TaskPhase.RECONCILING, "receipt recorded")
+
+        # Deterministic loop detection.  This runs on receipts only, so a run
+        # that keeps making progress is never stopped by it — but a run that is
+        # retrying the same wall with different arguments is stopped with a
+        # *diagnosis* instead of being left to exhaust the step budget.
+        signal = self._stuck.observe(receipt)
+        if signal is not None:
+            self._append(
+                EventKind.POLICY_DECISION,
+                EventSource.GATE,
+                {
+                    "kind": PolicyDecisionKind.VETO.value,
+                    "reason": signal.reason,
+                    "scope": [signal.tool or receipt.tool],
+                    "signal": signal.kind,
+                },
+                step_id=self._current_step_id(),
+            )
+            return self._budget_block(signal.reason, ("loop",))
 
         verdict = self._controller.reconcile(self._active_step, receipt)
         self._append(
@@ -871,6 +889,9 @@ class LoopRuntime:
     def _advance_step(self) -> None:
         self._active_step = self._select_ready_step()
         if self._active_step is not None:
+            # A new step is new work: the previous step's no-progress streak
+            # must not be charged against it.
+            self._stuck.reset()
             self._append(
                 EventKind.STEP_STARTED,
                 EventSource.RUNTIME,
@@ -1960,6 +1981,12 @@ class LoopRuntime:
     def _budget_block(
         self, reason: str, scope: Sequence[str] = ()
     ) -> TaskResult:
+        # Attach the loop detector's diagnosis so "step budget exhausted" says
+        # what the run was actually doing.  The budget still decides the stop;
+        # the detector only explains it.
+        diagnosis = self._stuck.diagnosis
+        if diagnosis and diagnosis not in reason:
+            reason = f"{reason} [{diagnosis}]"
         self._append(
             EventKind.POLICY_DECISION,
             EventSource.GATE,
