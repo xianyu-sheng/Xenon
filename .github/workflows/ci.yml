@@ -99,9 +99,11 @@ jobs:
       - name: Patch coverage gate (diff lines only)
         if: github.event_name == 'pull_request'
         run: |
-          # A PR checkout is shallow and has no local `origin/<base>` ref, so
-          # the merge base has to be fetched explicitly before diffing.
-          git fetch --no-tags --depth=200 origin             "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          # A PR checkout is shallow: there is no local `origin/<base>` ref *and*
+          # no shared ancestry, so `git merge-base` cannot work at all.  Unshallow
+          # first (small repo), then fetch the base branch explicitly.
+          git fetch --no-tags --unshallow origin 2>/dev/null || git fetch --no-tags --depth=2000 origin
+          git fetch --no-tags origin             "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           python scripts/patch_cov.py --from-xml --threshold 90             --base "origin/${{ github.base_ref }}"
 
       - name: Upload to Codecov

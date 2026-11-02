@@ -105,6 +105,7 @@ def _resolve_base(base: str, *, cwd: Path | None = None) -> str:
     """
 
     tried: list[str] = []
+    last_error = ""
     for candidate in (base, f"origin/{base}"):
         tried.append(candidate)
         merge_base = subprocess.run(
@@ -112,15 +113,21 @@ def _resolve_base(base: str, *, cwd: Path | None = None) -> str:
             cwd=str(cwd) if cwd else None,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if merge_base.returncode == 0 and merge_base.stdout.strip():
             return merge_base.stdout.strip()
+        last_error = (merge_base.stderr or "").strip().splitlines()[-1:] or [""]
+        last_error = last_error[0] if last_error else ""
     raise SystemExit(
         "cannot find a merge base for "
         + " / ".join(tried)
         + chr(10)
-        + "hint: `git fetch origin " + base + "` (CI does this explicitly)"
+        + "hint: `git fetch --unshallow origin` then "
+        + "`git fetch origin " + base + "` (a shallow clone has no merge base)"
+        + (chr(10) + "git said: " + last_error if last_error else "")
     )
 
 
