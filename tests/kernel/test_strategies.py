@@ -24,7 +24,6 @@ from xenon.kernel.contracts import (
     StepKind,
     SubmitPlan,
     TaskSpec,
-    Think,
     ToolIntent,
 )
 from xenon.kernel.strategies import (
