@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import fnmatch
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -184,7 +183,10 @@ class RuleSet:
             for rule in hits:
                 if rule.decision == decision:
                     return decision, rule
-        return None
+        # Unreachable by construction: ``matches`` rejects an unknown decision,
+        # so every hit has one of the three above.  Falling through returns None,
+        # which callers already treat as "no rule applies".
+
 
     def grants(self) -> tuple[ScopedGrant, ...]:
         """The ``allow`` rules, expressed as policy grants."""
@@ -239,7 +241,10 @@ def default_rule_paths(workspace: str | Path | None = None) -> list[tuple[str, P
     """
 
     paths: list[tuple[str, Path]] = []
-    home = Path(os.path.expanduser("~")) / ".xenon" / "permissions.yaml"
+    # ``Path.home()`` rather than ``expanduser("~")``: it is the one spellings a
+    # test can patch, and on Windows ``expanduser`` reads USERPROFILE while a
+    # test that sets HOME would silently write to the real user directory.
+    home = Path.home() / ".xenon" / "permissions.yaml"
     paths.append(("user", home))
     if workspace is not None:
         paths.append(
