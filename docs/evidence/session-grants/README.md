@@ -52,3 +52,47 @@ total prompts across 2 turns: 1 (expected 1)
 - `/permissions` 列出与撤销；
 - 会话授权写入 session `extra`，`/save` + `/resume` 后仍在；
 - 子任务继承父级 grant 但不新增。
+
+---
+
+# 规则层（对齐 Claude Code 的 settings）
+
+Claude Code 的模型（本实现跟进）：
+
+- 规则形状 `Tool(pattern)`，例如 `Bash(pytest:*)`、`Read(src/**)`；
+- 三个列表 `allow` / `ask` / `deny`，**deny > ask > allow** —— 宽的 allow 永远无法解开被 deny 的东西；
+- 规则分层（用户 / 项目），项目文件可以进 git 团队共享；
+- "don't ask again" 是**写一条规则**，不是翻一个看不见的开关。
+
+Xenon 保留自己的语义：规则名是**效果能力**（kernel 不认识工具名），匹配目标是路径或命令；规则是**记录在案的人类决定**，永远不是证据。
+
+## 优先级是安全性质（实测）
+
+```text
+git log            -> allow  scoped grant: *
+rm -rf /tmp/x      -> veto   denied by rule shell(rm *)
+```
+
+broad allow（`shell`）与 deny（`shell(rm *)`）同时存在时，deny 胜。
+
+三种优先级都有测试：
+- `deny` 胜 `allow`（上面这条）；
+- `ask` 胜 `allow`（grant 存在仍强制询问）；
+- 无匹配返回 `None`（走原逻辑）。
+
+## 四个选项（对齐 Claude 的流畅度）
+
+```
+y=只这次  a=本会话都允许  A=永远允许（写入规则文件）  s=只允许这条命令  n=拒绝  q=取消
+```
+
+- `a` → 会话级 grant（`GrantBook`，不落盘）；
+- `A` → 写 `~/.xenon/permissions.yaml` 的一条 `allow` 规则，**作用域是这条命令本身**（不是整个能力）；
+- `s` → 只覆盖该 target；
+- 每次授予都在账本里有 `grant_added`。
+
+`/permissions` 列出会话级 + 规则文件两类，`/permissions remove <selector>` 撤销并可写回文件。
+
+## 实现位置的约束
+
+`_TOOL_CAPABILITIES`（工具名 → capability）**不能放在 kernel**：`check_kernel_purity.py` 明确禁止内核出现具体工具名。它放在 `xenon/repl/permission_map.py`。这条被守卫抓到过一次，是我先放错了地方。

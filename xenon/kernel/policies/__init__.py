@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from xenon.kernel.contracts import (
     Action,
@@ -284,6 +284,11 @@ class PermissionPolicy:
     # injected into the runtime; without one the runtime still fails closed.
     allow_approval: bool = False
     approval_ttl_seconds: float = 60.0
+    # Layered settings (#373): ``deny`` beats everything, ``ask`` outranks a
+    # remembered grant.  Plain objects with ``matches(capability, targets)`` and
+    # ``selector()`` so the policy does not import the rules module.
+    deny_rules: tuple[Any, ...] = ()
+    ask_rules: tuple[Any, ...] = ()
 
     def check(self, view: ModelView, action: Action) -> PolicyDecision:
         del view  # the view is intentional context, not a policy input here
@@ -373,6 +378,16 @@ class PermissionPolicy:
         refusal = self._hard_denial(capability, intent, targets)
         if refusal is not None:
             return refusal
+        forced_ask = self._forced_ask(capability, targets)
+        if forced_ask is not None:
+            # An explicit "ask" rule outranks a remembered grant: the human said
+            # "always ask for this" about a narrower or wider scope, and widening
+            # silently is exactly the failure mode rules exist to prevent.
+            return self._approval(
+                capability,
+                targets,
+                f"ask rule {getattr(forced_ask, 'selector', lambda: '')()}",
+            )
         grant = self._grant(capability, targets)
         if grant is not None:
             return PolicyDecision(
@@ -543,6 +558,15 @@ class PermissionPolicy:
             grant for grant in self.grants if grant not in revoked
         )
 
+    def _forced_ask(
+        self, capability: Capability, targets: Sequence[str]
+    ) -> Any | None:
+        for rule in self.ask_rules:
+            matches = getattr(rule, "matches", None)
+            if callable(matches) and matches(capability, targets):
+                return rule
+        return None
+
     def _hard_denial(
         self,
         capability: Capability,
@@ -555,6 +579,14 @@ class PermissionPolicy:
         harness refuses" must not share a branch, or one of them silently wins.
         """
 
+        for rule in self.deny_rules:
+            matches = getattr(rule, "matches", None)
+            if callable(matches) and matches(capability, targets):
+                return self._deny(
+                    capability,
+                    targets,
+                    f"denied by rule {getattr(rule, 'selector', lambda: '')()}",
+                )
         command = _command(intent)
         if capability is Capability.SHELL and _is_destructive(command):
             return self._deny(capability, targets, "destructive shell command")

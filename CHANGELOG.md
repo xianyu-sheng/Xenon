@@ -23,6 +23,7 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- 权限规则层（#373，对齐 Claude Code settings）：`allow`/`ask`/`deny` 三档 + `capability(pattern)` glob，**deny > ask > allow**；分用户/项目两层文件；审批四选一（只这次／本会话／永远写规则／只这条命令），`/permissions` 列出与撤销。destructive 与 push 仍然不可授权。
 - 会话级授权（#373）：`GrantBook` + `ScopedGrant` 通配，一次弹窗后同一会话同类调用直接 ALLOW，`GRANT_ADDED` 写入账本；硬安全规则（destructive / push）先于 grant，wildcard 不能授权它们。两处真 bug：wildcard 绕过 destructive 检查、MSYS/Windows 同一路径不匹配导致 grant 失效。
 - 循环检测补齐（#366）：引擎层原有 4 个信号，迁 #322 时只留了最窄的「完全相同签名」，理由是"避免模糊匹配"——但原实现是精确哈希/精确模式比较，理由用错了对象。现在相同签名／同一错误 ×4／A→B→A→B ×3 是硬停，"连续 N 次无新信息"只做诊断（真实运行证明它会在成功前 4 步误杀），预算停机时附在原因上。
 - shell 工具描述改为平台感知（#366）：Windows 上明确是 PowerShell 而非 cmd，并说明 `python -c` 被策略拒绝。真实运行：同一任务工具调用 18→7、失败 6→1，默认 20 步即可交付。

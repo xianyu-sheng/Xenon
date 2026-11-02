@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+# Importing this module registers /permissions (#373).
+from xenon.repl.command_groups import permissions as _permissions  # noqa: F401
 from xenon.repl.command_groups.agent import (
     _cmd_ask,  # noqa: F401 - compatibility export
     _cmd_code,  # noqa: F401 - compatibility export

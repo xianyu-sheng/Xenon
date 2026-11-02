@@ -66,6 +66,8 @@ def _runtime_bundle(
     tool_runtime: Any = None,
     audit_provider: Any = None,
     session_grants: Sequence[Any] = (),
+    deny_rules: Sequence[Any] = (),
+    ask_rules: Sequence[Any] = (),
 ) -> tuple[Path, Path, Ledger, LoopRuntime]:
     root = Path(workspace).resolve()
     if not root.is_dir():
@@ -87,6 +89,8 @@ def _runtime_bundle(
         # passed in as plain values so the kernel stays a function of its inputs;
         # the front-end owns the book and the ledger records each addition.
         grants=tuple(session_grants),
+        deny_rules=tuple(deny_rules),
+        ask_rules=tuple(ask_rules),
     )
     catalog = build_catalog(catalog_profile, extra_specs=extra_specs)
     gateway = LegacyToolGateway(
@@ -164,6 +168,8 @@ def run_task(
     batch_id: str = "",
     max_stall_seconds: float | None = 180.0,
     session_grants: Sequence[Any] = (),
+    deny_rules: Sequence[Any] = (),
+    ask_rules: Sequence[Any] = (),
 ) -> HarnessRun:
     """Run one objective through the kernel with an injected strategy.
 
@@ -188,6 +194,8 @@ def run_task(
         tool_runtime=tool_runtime,
         audit_provider=audit_provider,
         session_grants=session_grants,
+        deny_rules=deny_rules,
+        ask_rules=ask_rules,
     )
     spec = TaskSpec(
         task_id=identifier,
