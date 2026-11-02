@@ -23,6 +23,9 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- 修复阻断理由失真：已被确证违反的义务（如「工作区有未验证改动 notes.txt」）不再被交给覆盖绑定器重审，避免把具体原因替换成通用的「semantic claim needs a coverage binder」。真实运行验证：理由现在直接点出路径。
+- 假完成基准相应收紧：`false_test_claim` 的证据等级从 `abstained` 更正为 `unverified`（claim 无法绑定 = 义务未满足，不是"无法判断"）。
+- 端到端冒烟新增 `stray-change-reported`：预置一处无关改动，断言被拒绝且理由点名该路径。
 - 真实端到端冒烟（`scripts/e2e_smoke.py`，9 场景）：跑用户入口（`xenon exec` + `xenon.run_task_result`）、真实模型与 git 仓库，覆盖改代码/提交、plan-execute、只读、不提交、接受缺口、无审批人 fail-closed、不可能任务；证据落盘 `docs/evidence/e2e-smoke/`。
 - 冒烟发现并修复：SDK 无授权通道（`verify` 一律 blocked，库调用无法跑测试）→ 新增 `permission=` / `allow_approval=`；`TaskOutcome` 增加 `reason`（`blocking_reason()` 提到 `xenon/replay.py` 供 REPL 与 SDK 共用）。
 - 新增 `xenon.run_task_result()` 返回 `TaskOutcome`（accepted/phase/evidence/debt/finalize_sha/ledger/reason），`run_task()` 仍返回字符串以保持兼容。

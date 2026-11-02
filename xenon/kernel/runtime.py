@@ -1367,7 +1367,19 @@ class LoopRuntime:
         for step in self._plan_steps:
             for obligation in step.expects:
                 add(obligation)
+        # A debt that already carries a *concrete* violated verdict is decided:
+        # re-auditing it can only replace the real reason ("worktree contains
+        # unverified paths: notes.txt") with a generic "semantic claim needs a
+        # coverage binder", which is exactly how a stray change used to be
+        # reported.  The verdict still blocks; only the wording improves.
+        violated = {
+            item.obligation_id
+            for item in _latest_verdicts(self._verdicts)
+            if item.status is VerdictStatus.VIOLATED
+        }
         for debt in self._debt:
+            if debt.obligation.id in violated:
+                continue
             add(debt.obligation)
         return tuple(found)
 

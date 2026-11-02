@@ -18,12 +18,14 @@ from xenon.kernel.contracts import (
     Obligation,
     ObligationSource,
     PropositionKind,
+    TaskPhase,
     TaskSpec,
     Verdict,
     VerdictStatus,
     VerificationStage,
 )
 from xenon.kernel.controller import VerificationController
+from xenon.kernel.runtime import LoopRuntime
 from xenon.ledger.events import EventKind
 from xenon.ledger.store import Ledger
 
@@ -260,3 +262,98 @@ def test_an_unaccepted_unverifiable_verdict_still_abstains():
     decision = VerificationController().decide((unverifiable,), (debt,))
 
     assert decision.kind is ControlDecisionKind.ABSTAIN
+
+
+# ── 阻断理由必须说真话（真实运行发现）────────────────────────────────
+#
+# 现场：工作区有一处未验证改动（notes.txt）时，账本里明明写着
+#   debt_opened finalizer: "worktree contains unverified paths: notes.txt"
+# 但控制决策的理由却是
+#   "semantic claim needs a coverage binder or user acceptance"
+# —— 因为 finalizer 的判断被包装成一个合成的 requirement_met 义务，又交给
+# 覆盖绑定器重新审计，把具体原因盖掉了。
+
+
+def test_a_concrete_violation_keeps_its_reason():
+    """A resolved failure must not be re-audited into a generic abstain."""
+
+    from tests.kernel.test_north_star import FakeCatalog, FakeGateway
+    from xenon.kernel.controller import VerificationController
+
+    ledger = Ledger.in_memory("task-1")
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+    )
+    runtime._spec = _spec()
+    runtime._phase = TaskPhase.RUNNING
+    runtime._verdicts.append(
+        Verdict(
+            obligation_id="finalizer",
+            stage=VerificationStage.V2,
+            status=VerdictStatus.VIOLATED,
+            reason="worktree contains unverified paths: notes.txt",
+        )
+    )
+    runtime._sync_debt(tuple(runtime._verdicts))
+
+    audited = {item.id for item in runtime._audit_obligations()}
+
+    assert "finalizer" not in audited, (
+        "an already-violated obligation must not be re-audited into abstain; "
+        "its concrete reason is the one the operator needs to see"
+    )
+
+
+def test_an_unverifiable_obligation_is_still_audited():
+    """Only *violated* ones are skipped; abstained coverage must still run."""
+
+    from tests.kernel.test_north_star import FakeCatalog, FakeGateway
+    from xenon.kernel.controller import VerificationController
+
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=Ledger.in_memory("task-1"),
+    )
+    runtime._spec = _spec()
+    runtime._verdicts.append(
+        Verdict(
+            obligation_id="semantic",
+            stage=VerificationStage.V2,
+            status=VerdictStatus.UNVERIFIABLE,
+            reason="needs a coverage binder",
+        )
+    )
+    runtime._sync_debt(tuple(runtime._verdicts))
+
+    assert "semantic" in {item.id for item in runtime._audit_obligations()}
+
+
+def test_a_declared_obligation_is_audited_even_when_violated():
+    """Task-declared obligations are always covered; only debt wrappers skip."""
+
+    from tests.kernel.test_north_star import FakeCatalog, FakeGateway
+    from xenon.kernel.controller import VerificationController
+
+    obligation = _obligation("task")
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=Ledger.in_memory("task-1"),
+    )
+    runtime._spec = _spec(obligations=(obligation,))
+    runtime._verdicts.append(
+        Verdict(
+            obligation_id="task",
+            stage=VerificationStage.V2,
+            status=VerdictStatus.VIOLATED,
+            reason="failed",
+        )
+    )
+
+    assert "task" in {item.id for item in runtime._audit_obligations()}
