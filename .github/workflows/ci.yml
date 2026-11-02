@@ -87,6 +87,11 @@ jobs:
             -q --tb=short --timeout=60 \
             --cov=xenon --cov-append --cov-report=xml
 
+      # The same component targets codecov.yml declares, checked in CI so they
+      # cannot silently drift while the dashboard stays green.
+      - name: Component coverage gate
+        run: python scripts/cov_components.py coverage.xml
+
       - name: Upload to Codecov
         uses: codecov/codecov-action@v7
         with:

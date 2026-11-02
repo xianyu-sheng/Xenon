@@ -1,21 +1,99 @@
 # Codecov configuration for xianyu-sheng/Xenon.
 #
-# Thresholds mirror the repository's own gate: pyproject.toml sets
-# `fail_under = 70`, so the project status must not be stricter than the
-# CI it accompanies. Patch coverage asks for a higher bar on new code
-# without blocking drive-by contributions on a few uncovered lines.
+# Why this is not one number
+# -------------------------
+# A single blended percentage hides what matters.  Measured on main (35,072
+# lines, 78.9% overall):
+#
+#   engine-core  (kernel + harness + catalog)   4,725 lines   92.4%
+#   legacy       (engine organs, nodes, tools) 13,863 lines   80.5%
+#   ui           (repl: TUI, command groups)   14,546 lines   72.7%
+#   other        (main.py and friends)          1,938 lines   80.2%
+#
+# The interactive terminal layer is the biggest block and the least unit-testable
+# (it needs a real TTY, and our TTY evidence is transcripts, not coverage).  The
+# architecture whose correctness *is* the product claim is engine-core, and it
+# sits at 92.4%.  So the gate is placed where it means something.
+#
+# Nothing here ignores code to raise a number: `repl/` is measured, it is simply
+# reported separately instead of being allowed to blur the core signal.
 
 coverage:
+  range: "70...95"
   status:
     project:
       default:
-        target: 70%
+        # Relative to the base commit: a PR may not quietly erode coverage.
+        # This is stricter than the previous absolute `70%` target, which the
+        # repository had already cleared by ~9 points and therefore never gated
+        # anything.
+        target: auto
         threshold: 2%
+        if_not_found: success
     patch:
       default:
+        # Unchanged, deliberately: new code carries a higher bar than old code.
         target: 80%
         threshold: 5%
+        if_not_found: success
+
+# Components turn one blended percentage into a signal that points at a place.
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: auto
+        threshold: 5%
+  individual_components:
+    - component_id: engine_core
+      name: engine-core
+      # The single-loop kernel, its strategies/projections, and the tool catalog.
+      # If this drops, the thing we claim about is no longer true.
+      paths:
+        - xenon/kernel/**
+        - xenon/harness/**
+        - xenon/catalog/**
+      statuses:
+        - type: project
+          target: 90%
+          threshold: 1%
+    - component_id: interactive_ui
+      name: ui-repl
+      # Terminal surfaces: verified by TTY evidence, not by unit coverage.
+      # Informational on purpose — a red status here would be noise, but the
+      # number should still be visible.
+      paths:
+        - xenon/repl/**
+      statuses:
+        - type: project
+          target: 70%
+          threshold: 5%
+          informational: true
+    - component_id: legacy_organs
+      name: legacy-organs
+      # Surviving pieces of the old engine layer (being retired, not extended).
+      paths:
+        - xenon/engine/**
+        - xenon/nodes/**
+        - xenon/tools/**
+        - xenon/utils/**
+        - xenon/mcp/**
+        - xenon/memory/**
+        - xenon/session/**
+      statuses:
+        - type: project
+          target: auto
+          threshold: 5%
+          informational: true
+
+ignore:
+  # Hand-run evidence probes and developer scripts are not shipped code paths.
+  - "docs/evidence/**"
+  - "scripts/**"
+  - "evals/**"
+  - "tests/**"
 
 comment:
-  layout: "condensed"
+  layout: "condensed, files"
   require_changes: false
+  behavior: default
