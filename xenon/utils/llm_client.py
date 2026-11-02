@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 
+from xenon.utils import provider_events
 from xenon.utils.partial_response import (
     PartialContent,
     PartialResponseError,
@@ -166,6 +167,7 @@ def chat_completion(
     timeout: float = 120.0,
     max_retries: int = 3,
     usage_sink: Any = None,
+    request_sink: Any = None,
 ) -> str:
     """
     统一的 chat completion 调用（带重试）。
@@ -211,6 +213,13 @@ def chat_completion(
     # zero requests followed by ``raise None``.
     attempt_count = max(1, max_retries)
     for attempt in range(attempt_count):
+        provider_events.request_start(
+            request_sink,
+            phase=model_id,
+            timeout=timeout,
+            provider_attempts=attempt_count,
+            attempt=attempt + 1,
+        )
         try:
             if endpoint.provider == "anthropic":
                 text = _call_anthropic(
@@ -234,6 +243,9 @@ def chat_completion(
                         temperature,
                         timeout,
                     )
+            provider_events.request_end(
+                request_sink, phase=model_id, success=True, attempt=attempt + 1
+            )
             # 成功：发出 (model_id, 累计 usage, 延迟) 供 UsageTracker 等订阅
             latency = time.monotonic() - t0
             _emit_usage(model_id, getattr(_usage_tl, "usage_acc", LLMUsage()), latency)
@@ -251,6 +263,14 @@ def chat_completion(
             status = e.response.status_code
             if status == 429:
                 last_error = e
+                provider_events.request_end(
+                    request_sink,
+                    phase=model_id,
+                    success=False,
+                    attempt=attempt + 1,
+                    retrying=attempt + 1 < attempt_count,
+                    reason="429 rate limited",
+                )
                 if attempt + 1 >= attempt_count:
                     break
                 # Prefer the provider's rolling-window guidance when present.
@@ -261,6 +281,14 @@ def chat_completion(
                 time.sleep(wait)
             elif 500 <= status < 600:
                 last_error = e
+                provider_events.request_end(
+                    request_sink,
+                    phase=model_id,
+                    success=False,
+                    attempt=attempt + 1,
+                    retrying=attempt + 1 < attempt_count,
+                    reason=f"{status} server error",
+                )
                 if attempt + 1 >= attempt_count:
                     break
                 # 服务端错误 — 指数退避重试
@@ -271,6 +299,13 @@ def chat_completion(
                 time.sleep(wait)
             else:
                 # 其他 HTTP 错误 — 不重试
+                provider_events.request_end(
+                    request_sink,
+                    phase=model_id,
+                    success=False,
+                    attempt=attempt + 1,
+                    reason=f"{status} http error",
+                )
                 raise
 
         except (
@@ -283,6 +318,14 @@ def chat_completion(
         ) as e:
             # 网络/协议错误 — 指数退避重试
             last_error = e
+            provider_events.request_end(
+                request_sink,
+                phase=model_id,
+                success=False,
+                attempt=attempt + 1,
+                retrying=attempt + 1 < attempt_count,
+                reason=f"{type(e).__name__}",
+            )
             if attempt + 1 >= attempt_count:
                 break
             wait = min(2**attempt, 8)
@@ -1164,6 +1207,7 @@ def chat_completion_stream(
     cache_lane_registry: Any = None,
     timeout: float = 300.0,
     checkpoint_manager: Any | None = None,
+    request_sink: Any = None,
 ) -> Generator[str, None, None]:
     """
     流式 chat completion 调用。
@@ -1190,6 +1234,56 @@ def chat_completion_stream(
         prompt_layout=compiled.layout(),
     )
     reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
+
+    # The streaming path has no retry loop, so it honestly reports one attempt.
+    # Saying "attempt 1 of 3" here would imply a retry that never happens.
+    provider_events.request_start(
+        request_sink,
+        phase=model_id,
+        timeout=timeout,
+        provider_attempts=1,
+        attempt=1,
+        streamed=True,
+    )
+    try:
+        yield from _stream_body(
+            endpoint=endpoint,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=timeout,
+            model_id=model_id,
+            reasoning_effort=reasoning_effort,
+            manifest=manifest,
+            checkpoint_manager=checkpoint_manager,
+        )
+    except Exception as exc:
+        provider_events.request_end(
+            request_sink,
+            phase=model_id,
+            success=False,
+            attempt=1,
+            reason=type(exc).__name__,
+        )
+        raise
+    provider_events.request_end(
+        request_sink, phase=model_id, success=True, attempt=1
+    )
+
+
+def _stream_body(
+    *,
+    endpoint: Any,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    temperature: float,
+    timeout: float,
+    model_id: str,
+    reasoning_effort: str | None,
+    manifest: Any,
+    checkpoint_manager: Any | None,
+) -> Generator[str, None, None]:
+    """The provider-specific half of the streaming call."""
 
     if endpoint.provider == "anthropic":
         yield from _stream_anthropic(

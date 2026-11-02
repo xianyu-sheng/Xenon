@@ -23,6 +23,7 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- 恢复 provider 阶段事件（#320）：`ModelConfig.request_sink` 在每次 HTTP 尝试前后报告 phase/超时/尝试次数/重试/失败原因，三种真实网络结果（成功、401 不重试、502 重试）都有证据；REPL 用 `kernel_request_reporter` 渲染。删除了 `EngineCallback` 上两个从未被调用、`ConsoleCallback` 也从未实现的死钩子。事件不进账本——账本记事实，不记每次尝试的遥测。
 - 修复 PlanFirst 结束语：`_FINISH_PROTOCOL` 只写了 `"claims":[]`，模型于是回 `"file_changed:calc.py"` 这种字符串，`parse_action` 判非法 → 整个回答被丢弃成 `Plan execution completed; final summary unavailable.`（真实 `--plan` 运行里就是这样）。现在协议写出 claim 结构、接受 `kind:target` 简写，并且只有 claims 非法时保留模型自己的 answer。
 - 子任务记录 `batch_id`（#361）：`TaskSpec.batch_id` → `TASK_STARTED`，一次派发一个批次，`xenon replay --children` 按批次分组；没有批次的旧账本显示为 `(no batch)`，不被悄悄并入。
 - 并行子任务默认跑在各自的 **git worktree** 里（#358）：真实运行里两个子任务改同一文件的不同函数，后写的把前一个整段覆盖，两边账本都以为成功。现在成果以 patch 回流（`apply_patch` 显式调用，`--3way` 真合并，冲突报冲突），`git worktree list` 无残留。

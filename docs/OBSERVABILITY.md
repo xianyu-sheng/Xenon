@@ -334,3 +334,21 @@ xenon replay       [SESSION] [--from-turn N] [--check]  # P4
 ---
 
 *本文件已生效。实现中发现新问题请在此追加“后续裁决”小节，不另开平行文档。*
+
+
+## Provider 阶段（#320）
+
+`ModelConfig.request_sink` 在每次 HTTP 尝试前后收到一个 dict：
+
+```json
+{"kind":"start","phase":"deepseek/x","timeout":120.0,
+ "provider_attempts":3,"attempt":2,"streamed":false}
+{"kind":"end","phase":"deepseek/x","success":false,"attempt":2,
+ "retrying":true,"reason":"429 rate limited"}
+```
+
+形状由 `xenon/utils/provider_events.py` 定义。它是**遥测**：不进账本，不参与任何
+判定，sink 抛异常会被吞掉（界面崩了不该赔上一个 run）。REPL 侧由
+`kernel_request_reporter` 渲染成「请求中（第 2/3 次）/ 失败将重试 / 已用尽 N 次」。
+
+流式路径（`chat_completion_stream`）没有重试循环，所以如实报 `provider_attempts=1`。
