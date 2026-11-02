@@ -69,6 +69,11 @@ jobs:
 
       # Coverage is merged (--cov-append) so the CLI entry paths exercised only
       # by the e2e suite land in the upload instead of being discarded.
+      # Nine adversarial cases: the harness must stop them.  Runs on a fake
+      # model by design (it tests the harness, not a provider).
+      - name: False-completion benchmark (9 cases)
+        run: python -m evals.false_completion
+
       # Replay/metrics read a committed ledger: no model, no network, same
       # output every run.  If this breaks, post-mortem capability is gone.
       - name: Replay + metrics smoke (deterministic)
