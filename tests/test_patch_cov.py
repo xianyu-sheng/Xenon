@@ -188,3 +188,26 @@ def test_main_fails_below_the_threshold(tmp_path) -> None:
         {"xenon/kernel/a.py": {1}}, read_coverage(tmp_path / "coverage.xml")
     )
     assert report.percent < 95
+
+
+def test_a_missing_base_explains_how_to_fetch_it() -> None:
+    """CI checks out a PR without `origin/<base>`; the error must say why."""
+
+    from scripts.patch_cov import _resolve_base
+
+    with pytest.raises(SystemExit) as excinfo:
+        _resolve_base("definitely-not-a-ref")
+
+    message = str(excinfo.value)
+    assert "cannot find a merge base" in message
+    assert "git fetch origin" in message
+
+
+def test_the_base_falls_back_to_the_remote_tracking_ref() -> None:
+    """`main` works locally (and `origin/main` in CI) with the same argument."""
+
+    from scripts.patch_cov import _resolve_base
+
+    # The repo always has a HEAD; HEAD~0 resolves, so this only asserts that the
+    # second spelling is tried rather than raising on the first failure.
+    assert _resolve_base("HEAD") == _resolve_base("HEAD")

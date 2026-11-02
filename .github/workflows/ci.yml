@@ -98,7 +98,11 @@ jobs:
       # blocking a PR over one uncovered branch.
       - name: Patch coverage gate (diff lines only)
         if: github.event_name == 'pull_request'
-        run: python scripts/patch_cov.py --from-xml --threshold 90 --base "origin/${{ github.base_ref }}"
+        run: |
+          # A PR checkout is shallow and has no local `origin/<base>` ref, so
+          # the merge base has to be fetched explicitly before diffing.
+          git fetch --no-tags --depth=200 origin             "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          python scripts/patch_cov.py --from-xml --threshold 90             --base "origin/${{ github.base_ref }}"
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v7

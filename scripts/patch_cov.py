@@ -95,17 +95,39 @@ def parse_added_lines(diff: str) -> dict[str, set[int]]:
     return added
 
 
+def _resolve_base(base: str, *, cwd: Path | None = None) -> str:
+    """Find the base ref, trying the remote-tracking form too.
+
+    CI checks out a PR head without `origin/<base>` as a local ref, so a plain
+    `--base main` dies with "bad revision".  Trying the two spellings keeps one
+    command working locally and in CI; guessing beyond that would be worse than
+    failing, so the error lists what was tried.
+    """
+
+    tried: list[str] = []
+    for candidate in (base, f"origin/{base}"):
+        tried.append(candidate)
+        merge_base = subprocess.run(
+            ["git", "merge-base", candidate, "HEAD"],
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if merge_base.returncode == 0 and merge_base.stdout.strip():
+            return merge_base.stdout.strip()
+    raise SystemExit(
+        "cannot find a merge base for "
+        + " / ".join(tried)
+        + chr(10)
+        + "hint: `git fetch origin " + base + "` (CI does this explicitly)"
+    )
+
+
 def git_diff(base: str, *, cwd: Path | None = None) -> str:
     """`git diff` against the merge base, so a stale base is not counted twice."""
 
-    merge_base = subprocess.run(
-        ["git", "merge-base", base, "HEAD"],
-        cwd=str(cwd) if cwd else None,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    target = merge_base.stdout.strip() or base
+    target = _resolve_base(base, cwd=cwd)
     diff = subprocess.run(
         [
             "git",
