@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 __all__ = [
+    "blocking_reason",
     "default_ledger_dir",
     "resolve_ledger",
     "timeline",
@@ -243,6 +244,46 @@ def metrics(events: Sequence[Any]) -> dict[str, Any]:
         "started_at": first_ts,
         "ended_at": last_ts,
     }
+
+
+# Events that explain *why* a run stopped.
+_BLOCKING_KINDS = (
+    "policy_decision",
+    "user_approval",
+    "control_decision",
+    "binding_failed",
+)
+
+
+def blocking_reason(ledger_path: Any, *, task_id: str = "") -> str:
+    """Last human-readable reason the run stopped, or an empty string.
+
+    A blocked result carries only the phase, so without this a caller sees
+    "blocked" and nothing else.  The ledger knows why; read it.
+    """
+
+    try:
+        from xenon.ledger.store import Ledger
+
+        events = list(Ledger(ledger_path, task_id or Path(str(ledger_path)).stem).read())
+    except Exception:  # noqa: BLE001 — reporting must never fail the caller
+        return ""
+    for event in reversed(events):
+        kind = getattr(getattr(event, "kind", None), "value", "")
+        if kind not in _BLOCKING_KINDS:
+            continue
+        payload = dict(getattr(event, "payload", {}) or {})
+        reason = str(payload.get("reason") or "")
+        if kind == "user_approval":
+            if payload.get("approved") is False and reason:
+                return f"审批未通过：{reason}"
+            continue
+        if reason:
+            scope = payload.get("scope") or ()
+            if scope:
+                return f"{reason}（范围：{', '.join(str(item) for item in scope)}）"
+            return reason
+    return ""
 
 
 def render_timeline(rows: Sequence[dict[str, Any]]) -> str:

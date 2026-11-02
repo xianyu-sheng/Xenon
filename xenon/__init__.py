@@ -28,6 +28,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # 仅供类型检查器，运行时不导入（保持懒加载）
@@ -56,6 +57,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "EngineCallback": ("xenon.engine.callbacks", "EngineCallback"),
     "SilentCallback": ("xenon.engine.callbacks", "SilentCallback"),
     "register_tool": ("xenon.nodes.tool_registry", "register_tool_handler"),
+    "TaskOutcome": ("xenon", "TaskOutcome"),
 }
 
 
@@ -71,6 +73,31 @@ def _list_modes() -> tuple[str, ...]:
     return tuple(MODE_CATALOG)
 
 
+@dataclass(frozen=True)
+class TaskOutcome:
+    """What a library run actually established, not just what it said.
+
+    ``str(outcome)`` is the answer, so call sites that only want text keep
+    working; everything else (did the harness accept it? what evidence level?
+    which ledger?) is available without scraping a ledger by hand.
+    """
+
+    task_id: str
+    answer: str
+    accepted: bool
+    phase: str
+    evidence: str
+    debt: tuple[str, ...]
+    finalize_sha: str | None
+    ledger_path: str
+    # Why it stopped, when it stopped without debt to explain it.  "blocked"
+    # alone is not an answer a caller can act on.
+    reason: str = ""
+
+    def __str__(self) -> str:
+        return self.answer
+
+
 def _run_task(
     task: str,
     *,
@@ -79,8 +106,11 @@ def _run_task(
     model_priority: list[str] | None = None,
     callback: Any = None,
     context: Any = None,
+    permission: Any = None,
+    allow_approval: bool = False,
+    _want_outcome: bool = False,
     **engine_kwargs: Any,
-) -> str:
+) -> Any:
     """在受约束的工作区里跑一个任务，返回结果文本。
 
     这是把 Xenon 当库用的推荐入口——它负责组装引擎、绑定工作区围栏、
@@ -141,14 +171,68 @@ def _run_task(
         user_objective=task,
         strategy=strategy,
         workspace=workspace_dir,
-        permission=_sdk_permission(),
+        permission=_sdk_permission(permission),
         # A library call must not create commits; the caller owns delivery.
         finalize=False,
         max_steps=int(engine_kwargs.get("max_steps", 24) or 24),
         gateway_context=context,
+        allow_approval=bool(allow_approval),
     )
     del engine_kwargs, callback
+    if _want_outcome:
+        return _outcome(run)  # type: ignore[return-value]
     return run.result.answer
+
+
+def run_task_result(
+    task: str,
+    *,
+    workspace: str | Any = ".",
+    engine: str = "react",
+    model_priority: list[str] | None = None,
+    permission: Any = None,
+    allow_approval: bool = False,
+    **engine_kwargs: Any,
+) -> Any:
+    """Like :func:`run_task`, but return the verdict instead of the prose.
+
+    A harness that can say "accepted" must expose it.  Returning only the
+    answer string forces callers to re-open the ledger to learn whether the
+    run actually delivered, which defeats the point of the ledger.
+    """
+
+    return _run_task(
+        task,
+        workspace=workspace,
+        engine=engine,
+        model_priority=model_priority,
+        permission=permission,
+        allow_approval=allow_approval,
+        _want_outcome=True,
+        **engine_kwargs,
+    )
+
+
+def _outcome(run: Any) -> Any:
+    result = run.result
+    reason = ""
+    if not result.accepted and not getattr(result, "debt", ()):
+        from xenon.replay import blocking_reason
+
+        reason = blocking_reason(run.ledger_path, task_id=str(run.task_id))
+    return TaskOutcome(
+        task_id=str(run.task_id),
+        answer=str(result.answer),
+        accepted=bool(result.accepted),
+        phase=getattr(getattr(result, "phase", None), "value", ""),
+        evidence=getattr(
+            getattr(result, "evidence_status", None), "value", ""
+        ),
+        debt=tuple(str(item.reason) for item in getattr(result, "debt", ())),
+        finalize_sha=getattr(result, "finalize_sha", None),
+        ledger_path=str(run.ledger_path),
+        reason=reason,
+    )
 
 
 def _sdk_model_config(model_id: str) -> Any:
@@ -180,12 +264,23 @@ def _sdk_model_config(model_id: str) -> Any:
     )
 
 
-def _sdk_permission() -> Any:
-    """SDK permission: workspace edits allowed, shell needs an explicit grant."""
+def _sdk_permission(value: Any = None) -> Any:
+    """Resolve the SDK permission mode.
+
+    Default is ``AUTO_EDIT``: worktree edits are allowed, but running tests or
+    a shell command needs an explicit grant.  A library caller has no UI to
+    approve anything, so the default makes ``verify`` fail closed — pass
+    ``permission="bypass"`` (or build an approval provider) when the task is
+    expected to run commands.
+    """
 
     from xenon.kernel.policies import PermissionMode
 
-    return PermissionMode.AUTO_EDIT
+    if value is None:
+        return PermissionMode.AUTO_EDIT
+    if isinstance(value, PermissionMode):
+        return value
+    return PermissionMode(str(value))
 
 
 def _default_model_priority() -> list[str]:
