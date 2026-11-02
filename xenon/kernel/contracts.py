@@ -47,6 +47,7 @@ class EffectKind(str, Enum):
     VCS_PUSH = "vcs_push"
     READ = "read"
     NETWORK = "network"
+    WORKSPACE_PROBE = "workspace_probe"
     OPAQUE = "opaque"
 
 
@@ -139,6 +140,20 @@ class ReadFact:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkspaceProbe:
+    """A deterministic look at the worktree, taken by the host (not the model).
+
+    ``dirty_paths`` is every path the VCS reports as changed; ``verified_paths``
+    is what the ledger can account for.  "No stray changes" therefore becomes a
+    question with an answer instead of a semantic guess.
+    """
+
+    dirty_paths: tuple[str, ...] = ()
+    verified_paths: tuple[str, ...] = ()
+    head: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class NetworkFact:
     url: str
     status: int = 0
@@ -173,6 +188,7 @@ Effect = (
     | VcsPush
     | ReadFact
     | NetworkFact
+    | WorkspaceProbe
     | Opaque
 )
 

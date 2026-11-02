@@ -31,6 +31,7 @@ from xenon.kernel.contracts import (
     ToolReceipt,
     VcsCommit,
     VcsPush,
+    WorkspaceProbe,
 )
 
 SCHEMA_VERSION = "ledger/v1"
@@ -63,6 +64,7 @@ class EventKind(str, Enum):
     STATE_TRANSITION = "state_transition"
     CONTEXT_COMPACTED = "context_compacted"
     SESSION_CONTEXT = "session_context"
+    WORKSPACE_PROBED = "workspace_probed"
     MODEL_USAGE = "model_usage"
     THOUGHT = "thought"
     REFLECTION_PROPOSED = "reflection_proposed"
@@ -144,6 +146,13 @@ def effect_to_payload(effect: Effect) -> dict[str, Any]:
             "changed": effect.changed,
             "created_paths": list(effect.created_paths),
         }
+    if isinstance(effect, WorkspaceProbe):
+        return {
+            "type": "workspace_probe",
+            "dirty_paths": list(effect.dirty_paths),
+            "verified_paths": list(effect.verified_paths),
+            "head": effect.head,
+        }
     if isinstance(effect, FsDelete):
         return {
             "type": "fs_delete",
@@ -209,6 +218,12 @@ def effect_from_payload(data: Mapping[str, Any]) -> Effect:
             hashes=dict(data.get("hashes") or {}),
             changed=bool(data.get("changed", True)),
             created_paths=tuple(data.get("created_paths") or ()),
+        )
+    if kind == "workspace_probe":
+        return WorkspaceProbe(
+            dirty_paths=tuple(data.get("dirty_paths") or ()),
+            verified_paths=tuple(data.get("verified_paths") or ()),
+            head=str(data.get("head") or ""),
         )
     if kind == "fs_delete":
         return FsDelete(

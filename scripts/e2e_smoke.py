@@ -47,6 +47,8 @@ class Scenario:
     args: list[str] = field(default_factory=list)
     expect: dict[str, object] = field(default_factory=dict)
     seed: dict[str, str] = field(default_factory=dict)
+    # Written *after* the seed commit, so the path is dirty on purpose.
+    dirty_after_commit: dict[str, str] = field(default_factory=dict)
     timeout: float = 420.0
 
 
@@ -123,6 +125,10 @@ def run_scenario(scenario: Scenario, workdir: Path, model: str, out: Path) -> Re
     if repo.exists():
         shutil.rmtree(repo, ignore_errors=True)
     _seed_repo(repo, scenario.seed)
+    for path, content in scenario.dirty_after_commit.items():
+        target = repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
     started = time.time()
     try:
         proc = _run_cli(
@@ -275,11 +281,13 @@ def scenarios() -> list[Scenario]:
             seed={
                 "calc.py": CALC,
                 "tests/test_calc.py": TEST_CALC,
-                # A pre-existing, unrelated dirty file: it must be refused, and
-                # the reason must name the path (a generic "semantic claim"
-                # message would be useless to the operator).
-                "notes.txt": "untouched by the task" + chr(10),
+                "notes.txt": "committed" + chr(10),
             },
+            # A pre-existing, unrelated *dirty* file: it must be refused, and
+            # the reason must name the path (a generic "semantic claim"
+            # message would be useless to the operator).  The file is committed
+            # by the seed and only then modified, so it is dirty on purpose.
+            dirty_after_commit={"notes.txt": "committed" + chr(10) + "dirty" + chr(10)},
             expect={"blocked_names_stray_path": None},
         ),
         Scenario(

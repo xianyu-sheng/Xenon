@@ -174,6 +174,7 @@ class LoopRuntime:
         approval: ApprovalProvider | None = None,
         audit: AuditCoordinator | None = None,
         audit_provider: AuditProposalProvider | None = None,
+        worktree_probe: Any = None,
     ) -> None:
         self._catalog = catalog
         self._gateway = gateway
@@ -187,6 +188,9 @@ class LoopRuntime:
         self._approval = approval
         self._audit = audit or AuditCoordinator()
         self._audit_provider = audit_provider
+        # Injected by the host: the kernel must not shell out to git.
+        self._worktree_probe = worktree_probe
+        self._probed_signature = ""
         self._audit_rounds = 0
         self._approved_grants: list[Any] = []
         self._services = _RuntimeServices(self)
@@ -379,6 +383,10 @@ class LoopRuntime:
                 return limited
 
             self._consume_steering()
+            # A step verdict may ask "are there stray changes?", so the
+            # observation has to exist before obligations are reconciled —
+            # not only on the Finish path.
+            self._probe_worktree()
             self._note_session_context()
             view = build_model_view(
                 spec=spec,
@@ -915,6 +923,39 @@ class LoopRuntime:
                 paths.update(effect.paths)
         return tuple(sorted(paths))
 
+    def _probe_worktree(self) -> None:
+        """Record one deterministic worktree observation, at most once per state.
+
+        Without it, ``no_stray_changes`` can only ever abstain — the harness
+        would be admitting it cannot tell even though the host can.  The probe
+        is injected (the kernel never runs git) and the result becomes a
+        receipt effect, so the answer is replayable from the ledger alone.
+        """
+
+        if self._worktree_probe is None or self._spec is None:
+            return
+        verified = tuple(self._verified_paths())
+        try:
+            probe = self._worktree_probe.probe(verified_paths=verified)
+        except Exception:  # noqa: BLE001 — a broken probe must not block a run
+            logger.warning("worktree probe failed", exc_info=True)
+            return
+        if probe is None:
+            # No VCS here: record nothing, so the resolver honestly abstains.
+            return
+        signature = f"{probe.head}:{probe.dirty_paths}:{probe.verified_paths}"
+        if signature == self._probed_signature:
+            return
+        self._probed_signature = signature
+        from xenon.ledger.events import effect_to_payload
+
+        self._append(
+            EventKind.WORKSPACE_PROBED,
+            EventSource.RUNTIME,
+            effect_to_payload(probe),
+            step_id=self._current_step_id(),
+        )
+
     def _finish(self, action: Finish) -> TaskResult | None:
         if self._spec is not None and (
             self._audit_rounds >= self._max_audit_rounds()
@@ -936,6 +977,7 @@ class LoopRuntime:
         # the finalizer so the commit is created from verified paths.
         self._close_remaining_steps(skip_commit=self._finalizer is not None)
         self._sync_debt(self._verdicts)
+        self._probe_worktree()
         obligations = self._audit_obligations()
         proposal = self._collect_audit_proposal(obligations)
         preflight_audit = self._audit.audit(
@@ -959,6 +1001,7 @@ class LoopRuntime:
             and self._spec.mode is not TaskMode.CHAT
             and not claims
             and not self._has_successful_receipt()
+            and not self._has_workspace_evidence()
         ):
             no_evidence = Verdict(
                 obligation_id="task-evidence",
@@ -2018,6 +2061,26 @@ class LoopRuntime:
                 if obligation.id == obligation_id:
                     return self._baseline_obligation(obligation)
         return None
+
+    def _has_workspace_evidence(self) -> bool:
+        """Did a recorded probe answer a declared "no stray changes" obligation?
+
+        A verification-only task ("confirm the worktree is clean") runs no
+        tool, so the "at least one successful receipt" rule would block it even
+        though the harness has exactly the evidence the task asked for.  The
+        probe only counts when the task actually declared that obligation —
+        otherwise it would weaken the rule for ordinary tasks.
+        """
+
+        if not self._probed_signature:
+            return False
+        declared = list(getattr(self._spec, "obligations", ()) or ())
+        for step in self._plan_steps:
+            declared.extend(step.expects)
+        return any(
+            obligation.kind is PropositionKind.NO_STRAY_CHANGES
+            for obligation in declared
+        )
 
     def _has_successful_receipt(self) -> bool:
         for event in self._ledger.read(EventKind.TOOL_RECEIPT):

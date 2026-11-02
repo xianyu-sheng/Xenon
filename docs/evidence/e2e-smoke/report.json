@@ -1,28 +1,28 @@
 {
   "model": "deepseek/deepseek-v4-flash",
-  "started_at": "2026-11-02T02:19:16Z",
-  "workdir": "C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\xenon-e2e-work-pav29c__",
+  "started_at": "2026-11-02T03:53:55Z",
+  "workdir": "C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\xenon-e2e-work-j2l08m5h",
   "results": [
     {
       "name": "sdk-default-blocks-shell",
       "status": "PASS",
       "detail": "3 checks",
-      "seconds": 3.7,
+      "seconds": 5.0,
       "checks": [
         {
           "name": "sdk ran",
           "ok": true,
-          "detail": "OUTCOME {\"accepted\": false, \"phase\": \"blocked\", \"evidence\": \"abstained\", \"debt\": [], \"reason\": \"verify requires a grant（范围：verify, python -c \\\"import calc; assert calc.e() == 5; print('e() =>', calc.e())\\\"）\", \"answer\": \"\"}\n"
+          "detail": "OUTCOME {\"accepted\": false, \"phase\": \"blocked\", \"evidence\": \"abstained\", \"debt\": [], \"reason\": \"verify requires a grant（范围：verify, python -c \\\"import calc; print(calc.e())\\\"）\", \"answer\": \"\"}\n"
         },
         {
           "name": "accepted=False",
           "ok": true,
-          "detail": "{'accepted': False, 'phase': 'blocked', 'evidence': 'abstained', 'debt': [], 'reason': 'verify requires a grant（范围：verify, python -c \"import calc; assert calc.e() == 5; print(\\'e() =>\\', calc.e())\"）',"
+          "detail": "{'accepted': False, 'phase': 'blocked', 'evidence': 'abstained', 'debt': [], 'reason': 'verify requires a grant（范围：verify, python -c \"import calc; print(calc.e())\"）', 'answer': ''}"
         },
         {
           "name": "blocked run explains itself",
           "ok": true,
-          "detail": "verify requires a grant（范围：verify, python -c \"import calc; assert calc.e() == 5; print('e() =>', calc.e())\"）"
+          "detail": "verify requires a grant（范围：verify, python -c \"import calc; print(calc.e())\"）"
         }
       ]
     },
@@ -30,17 +30,17 @@
       "name": "sdk-bypass-delivers",
       "status": "PASS",
       "detail": "3 checks",
-      "seconds": 7.0,
+      "seconds": 7.4,
       "checks": [
         {
           "name": "sdk ran",
           "ok": true,
-          "detail": "OUTCOME {\"accepted\": true, \"phase\": \"finalized\", \"evidence\": \"verified\", \"debt\": [], \"reason\": \"\", \"answer\": \"在 calc.py 中新增了 f() 返回 6，并在 tests/test_calc.py 中新增了 test_f 断言 f() == 6。运行 python -m pytest tests/test_calc.py -q 后 2 个测试全部通过（exit code 0）。\"}\n"
+          "detail": "OUTCOME {\"accepted\": true, \"phase\": \"finalized\", \"evidence\": \"verified\", \"debt\": [], \"reason\": \"\", \"answer\": \"在 calc.py 中新增了 f() 函数返回 6；在 tests/test_calc.py 中新增了 test_f() 测试。验证命令 python -m pytest tests/test_calc.py -q 运行 2 个测试全部通过（exit_code=0）。\"}\n"
         },
         {
           "name": "accepted=True",
           "ok": true,
-          "detail": "{'accepted': True, 'phase': 'finalized', 'evidence': 'verified', 'debt': [], 'reason': '', 'answer': '在 calc.py 中新增了 f() 返回 6，并在 tests/test_calc.py 中新增了 test_f 断言 f() == 6。运行 python -m pytest tests/te"
+          "detail": "{'accepted': True, 'phase': 'finalized', 'evidence': 'verified', 'debt': [], 'reason': '', 'answer': '在 calc.py 中新增了 f() 函数返回 6；在 tests/test_calc.py 中新增了 test_f() 测试。验证命令 python -m pytest tests/test_c"
         },
         {
           "name": "calc.py contains 'def f'",
@@ -53,7 +53,7 @@
       "name": "edit-commit",
       "status": "PASS",
       "detail": "5 checks",
-      "seconds": 7.9,
+      "seconds": 7.7,
       "checks": [
         {
           "name": "exit code",
@@ -86,7 +86,7 @@
       "name": "plan-execute",
       "status": "PASS",
       "detail": "4 checks",
-      "seconds": 13.2,
+      "seconds": 16.1,
       "checks": [
         {
           "name": "exit code",
@@ -106,7 +106,7 @@
         {
           "name": "pytest passes",
           "ok": true,
-          "detail": "....                                                                     [100%]\n4 passed in 0.01s\n"
+          "detail": ".....                                                                    [100%]\n5 passed in 0.01s\n"
         }
       ]
     },
@@ -114,7 +114,7 @@
       "name": "read-only-no-write",
       "status": "PASS",
       "detail": "3 checks",
-      "seconds": 4.1,
+      "seconds": 4.0,
       "checks": [
         {
           "name": "exit code",
@@ -137,7 +137,7 @@
       "name": "no-finalize",
       "status": "PASS",
       "detail": "3 checks",
-      "seconds": 14.0,
+      "seconds": 29.1,
       "checks": [
         {
           "name": "exit code",
@@ -160,7 +160,7 @@
       "name": "accept-debt",
       "status": "PASS",
       "detail": "2 checks",
-      "seconds": 21.8,
+      "seconds": 15.9,
       "checks": [
         {
           "name": "exit code",
@@ -175,10 +175,28 @@
       ]
     },
     {
+      "name": "stray-change-reported",
+      "status": "PASS",
+      "detail": "2 checks",
+      "seconds": 10.5,
+      "checks": [
+        {
+          "name": "exit code",
+          "ok": true,
+          "detail": "rc=1"
+        },
+        {
+          "name": "reason names the stray path",
+          "ok": true,
+          "detail": "                                                                 [100%]\n2 passed in 0.01s\n\n11:53:45 [httpx] INFO: HTTP Request: POST https://api.deepseek.com/v1/chat/completions \"HTTP/1.1 200 OK\"\nblocked accepted=False sha=- debt=1 ledger=C:\\Users\\Administrator\\.xenon\\ledger\\task-6c8a7af41e31.jsonl\n"
+        }
+      ]
+    },
+    {
       "name": "network-needs-approval",
       "status": "PASS",
       "detail": "2 checks",
-      "seconds": 3.3,
+      "seconds": 2.7,
       "checks": [
         {
           "name": "exit code",
@@ -188,7 +206,7 @@
         {
           "name": "blocked fail-closed with a reason",
           "ok": true,
-          "detail": "untime\",\"step_id\":null,\"task_id\":\"task-2a3775f73839\",\"ts\":\"2026-11-02T02:19:10.168+00:00\"}\n10:19:08 [httpx] INFO: HTTP Request: POST https://api.deepseek.com/v1/chat/completions \"HTTP/1.1 200 OK\"\nblocked accepted=False sha=- debt=0 ledger=C:\\Users\\Administrator\\.xenon\\ledger\\task-2a3775f73839.jsonl\n"
+          "detail": "untime\",\"step_id\":null,\"task_id\":\"task-21c2d0d3a1a1\",\"ts\":\"2026-11-02T03:53:49.768+00:00\"}\n11:53:48 [httpx] INFO: HTTP Request: POST https://api.deepseek.com/v1/chat/completions \"HTTP/1.1 200 OK\"\nblocked accepted=False sha=- debt=0 ledger=C:\\Users\\Administrator\\.xenon\\ledger\\task-21c2d0d3a1a1.jsonl\n"
         }
       ]
     },
@@ -196,7 +214,7 @@
       "name": "impossible-task",
       "status": "PASS",
       "detail": "1 checks",
-      "seconds": 5.7,
+      "seconds": 5.5,
       "checks": [
         {
           "name": "exit code",
