@@ -84,6 +84,32 @@ class ChildOutcome:
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 
+# Narrowest first: a child may only be *less* privileged than its parent.
+_PERMISSION_ORDER = (
+    PermissionMode.READ_ONLY,
+    PermissionMode.AUTO_EDIT,
+    PermissionMode.SCOPED,
+    PermissionMode.BYPASS,
+)
+
+
+def _check_permission_subset(
+    child: PermissionMode, parent: PermissionMode | None
+) -> None:
+    """A child must never be able to escalate.
+
+    Without this, ``run_child_task(permission=BYPASS)`` from a read-only session
+    would hand the child more authority than the human ever granted.
+    """
+
+    if parent is None:
+        return
+    if _PERMISSION_ORDER.index(child) > _PERMISSION_ORDER.index(parent):
+        raise ValueError(
+            f"child permission {child.value!r} exceeds parent "
+            f"{parent.value!r}; a child cannot escalate"
+        )
+
 
 def _child_spec(
     *,
@@ -95,6 +121,8 @@ def _child_spec(
     ledger_dir: Path,
     permission: PermissionMode,
     max_steps: int,
+    parent_task_id: str = "",
+    broker_dir: str = "",
 ) -> dict[str, Any]:
     from xenon.harness.child_worker import model_to_spec
 
@@ -107,6 +135,8 @@ def _child_spec(
         "max_steps": max_steps,
         "ledger_dir": str(ledger_dir),
         "model": model_to_spec(model),
+        "parent_task_id": parent_task_id,
+        "broker_dir": broker_dir,
     }
 
 
@@ -156,6 +186,8 @@ def _run_in_subprocess(
     ledger_dir: Path,
     timeout: float | None,
     child_id: str,
+    approval: Any = None,
+    broker_dir: Path | None = None,
 ) -> tuple[dict[str, Any] | None, str | None, int, bool]:
     """Run one child in its own process group.  Returns (payload, error, pid, killed)."""
 
@@ -187,12 +219,7 @@ def _run_in_subprocess(
             stdin=subprocess.DEVNULL,
             **kwargs,
         )
-        killed = False
-        try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _kill_tree(proc)
-            killed = True
+        killed = _wait_servicing(proc, timeout=timeout, approval=approval, broker_dir=broker_dir)
 
     payload, error = _read_outcome(out_path)
     if killed:
@@ -207,6 +234,44 @@ def _run_in_subprocess(
     return payload, error, proc.pid, killed
 
 
+def _wait_servicing(
+    proc: subprocess.Popen,
+    *,
+    timeout: float | None,
+    approval: Any,
+    broker_dir: Path | None,
+) -> bool:
+    """Wait for the child, answering its approval requests.  True if killed.
+
+    Polling instead of ``proc.wait(timeout)`` is not for precision: it is the
+    only way the parent can answer the child's requests while the child is still
+    running.  The answers come from the parent's own provider, on the parent's
+    own thread, so the terminal is never touched by two threads.
+    """
+
+    if broker_dir is None:
+        try:
+            proc.wait(timeout=timeout)
+            return False
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            return True
+
+    from xenon.harness.child_broker import serve_requests
+
+    handled: set[str] = set()
+    deadline = None if timeout is None else time.time() + timeout
+    while proc.poll() is None:
+        serve_requests(broker_dir, approval, seen=handled)
+        if deadline is not None and time.time() >= deadline:
+            _kill_tree(proc)
+            return True
+        time.sleep(0.05)
+    # One last sweep: a request written just before exit deserves an answer.
+    serve_requests(broker_dir, approval, seen=handled)
+    return False
+
+
 def run_child_task(
     *,
     objective: str,
@@ -216,10 +281,12 @@ def run_child_task(
     parent_task_id: str = "",
     ledger_dir: str | Path | None = None,
     permission: PermissionMode = PermissionMode.AUTO_EDIT,
+    parent_permission: PermissionMode | None = None,
     max_steps: int = 20,
     timeout: float | None = None,
     client: Any = None,
     gateway_context: Any = None,
+    approval: Any = None,
     index: int = 1,
 ) -> ChildOutcome:
     """Run one delegated task on the loop, in its own ledger.
@@ -228,10 +295,15 @@ def run_child_task(
     can actually kill it.  ``client``/``gateway_context`` are injection seams for
     tests: they cannot cross a process boundary, so passing either keeps the run
     in this process (and then a timeout can only abandon, not kill).
+
+    ``approval`` is the parent's provider.  It is never used to grant the child
+    more than the parent has: ``parent_permission`` (when given) bounds what the
+    child may run at all, and every individual request still goes to the parent.
     """
 
     if profile not in CHILD_PROFILES:
         raise KeyError(f"unknown child profile: {profile}")
+    _check_permission_subset(permission, parent_permission)
     child_id = f"{parent_task_id or 'child'}-sub{index}-{uuid.uuid4().hex[:6]}"
     directory = (
         Path(ledger_dir)
@@ -248,14 +320,20 @@ def run_child_task(
             model=model,
             profile=profile,
             child_id=child_id,
+            parent_task_id=parent_task_id,
             directory=directory,
             permission=permission,
             max_steps=max_steps,
             timeout=timeout,
             client=client,
             gateway_context=gateway_context,
+            approval=approval,
         )
     else:
+        directory.mkdir(parents=True, exist_ok=True)
+        broker_dir = Path(
+            tempfile.mkdtemp(prefix=f"{child_id}-broker-", dir=str(directory))
+        )
         payload, error, pid, killed = _run_in_subprocess(
             _child_spec(
                 child_id=child_id,
@@ -266,10 +344,14 @@ def run_child_task(
                 ledger_dir=directory,
                 permission=permission,
                 max_steps=max_steps,
+                parent_task_id=parent_task_id,
+                broker_dir=str(broker_dir),
             ),
             ledger_dir=directory,
             timeout=timeout,
             child_id=child_id,
+            approval=approval,
+            broker_dir=broker_dir,
         )
 
     elapsed = round(time.time() - started, 3)
@@ -313,12 +395,14 @@ def _run_in_process(
     model: ModelConfig,
     profile: str,
     child_id: str,
+    parent_task_id: str,
     directory: Path,
     permission: PermissionMode,
     max_steps: int,
     timeout: float | None,
     client: Any,
     gateway_context: Any,
+    approval: Any = None,
 ) -> tuple[dict[str, Any] | None, str | None, int, bool]:
     """Test seam: the same loop, in this process.  Cannot kill, only abandon."""
 
@@ -337,6 +421,11 @@ def _run_in_process(
             finalize=False,
             max_steps=max_steps,
             gateway_context=gateway_context,
+            # In-process: the parent's provider is directly reachable, so no
+            # file broker is needed.
+            approval=approval,
+            allow_approval=approval is not None,
+            parent_task_id=parent_task_id,
         )
 
     run = None
@@ -395,6 +484,8 @@ def run_child_tasks(
     max_steps: int = 20,
     timeout: float | None = None,
     client: Any = None,
+    approval: Any = None,
+    parent_permission: PermissionMode | None = None,
     max_workers: int = 4,
 ) -> tuple[ChildOutcome, ...]:
     """Run delegated tasks in parallel, preserving input order."""
@@ -417,6 +508,8 @@ def run_child_tasks(
                 max_steps=max_steps,
                 timeout=timeout,
                 client=client,
+                approval=approval,
+                parent_permission=parent_permission,
                 index=index,
             )
             for index, objective in enumerate(objectives, 1)

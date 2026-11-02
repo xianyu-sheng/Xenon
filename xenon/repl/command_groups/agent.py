@@ -375,7 +375,11 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
         run_child_task,
         run_child_tasks,
     )
-    from xenon.repl.runtime_adapter import model_config_for
+    from xenon.repl.runtime_adapter import (
+        KernelApprovalProvider,
+        model_config_for,
+        permission_mode_for,
+    )
 
     profile = engine_type.replace("_", "-")
     if profile not in CHILD_PROFILES:
@@ -397,6 +401,13 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
     parent_task_id = getattr(repl, "_last_kernel_task_id", "") or "repl"
     ledger_dir = Path.home() / ".xenon" / "ledger" / "children"
     model = model_config_for(repl.registry, model_ids)
+    # The parent's authority travels with the delegation: the child asks, the
+    # REPL answers using the same confirmation UI a kernel turn would use.  A
+    # child can therefore never obtain more than the session already allows.
+    approval = KernelApprovalProvider(repl)
+    parent_permission = permission_mode_for(
+        getattr(repl, "_execution_level", 0)
+    )
 
     if parallel_tasks:
         outcomes = run_child_tasks(
@@ -408,6 +419,8 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
             ledger_dir=ledger_dir,
             max_steps=15,
             timeout=timeout,
+            approval=approval,
+            parent_permission=parent_permission,
         )
     else:
         if not task:
@@ -422,6 +435,8 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
                 ledger_dir=ledger_dir,
                 max_steps=15,
                 timeout=timeout,
+                approval=approval,
+                parent_permission=parent_permission,
             ),
         )
 

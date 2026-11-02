@@ -169,3 +169,25 @@ def test_catalog_never_invents_a_tool_for_an_unknown_capability():
 
     assert binding.status is not BindingStatus.BOUND
     assert [spec.name for spec in SPECS] == ["inspect", "mutate", "check", "record"]
+
+
+def test_restating_the_current_phase_is_a_no_op(tmp_path) -> None:
+    """A redundant transition must not crash a run (#356).
+
+    Observed on a real run: a released step with no violation to repair left the
+    runtime already in RUNNING, and `_release_active_step` still asked for
+    RUNNING -> RUNNING.  The state machine rejected it and the whole task died.
+    """
+
+    from xenon.kernel.phases import TaskPhase
+
+    ledger = Ledger(tmp_path / "t.jsonl", "task-noop")
+    runtime = _runtime(ledger)
+    runtime._transition(TaskPhase.INTAKE, "accepted")
+    runtime._transition(TaskPhase.RUNNING, "start")
+    before = len(runtime._ledger.read())
+
+    runtime._transition(TaskPhase.RUNNING, "start again")
+
+    assert runtime._phase is TaskPhase.RUNNING
+    assert len(runtime._ledger.read()) == before, "a no-op must record nothing"

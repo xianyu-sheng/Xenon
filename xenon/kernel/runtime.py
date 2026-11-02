@@ -265,6 +265,8 @@ class LoopRuntime:
                 "workspace": spec.workspace,
                 "mode": spec.mode.value,
                 "constraints": list(spec.constraints),
+                # Empty for a top-level task; the call tree is derived from here.
+                "parent_task_id": spec.parent_task_id,
             },
         )
         self._run_start_seq = self._ledger.watermark()
@@ -2142,6 +2144,12 @@ class LoopRuntime:
 
     def _transition(self, target: TaskPhase, reason: str = "") -> None:
         source = self._phase
+        if source is target:
+            # Re-stating the current phase is redundant, not illegal.  Raising
+            # here turned a harmless no-op into a crash of the whole run
+            # (observed on a real run: ``running -> running`` after a released
+            # step that had no violation to repair).
+            return
         assert_transition(source, target)
         self._append(
             EventKind.STATE_TRANSITION,

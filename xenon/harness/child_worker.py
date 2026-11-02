@@ -88,6 +88,15 @@ def run_spec(spec: dict[str, Any], *, client: Any = None) -> dict[str, Any]:
     strategy = build_llm_loop_strategy(
         model_from_spec(spec["model"]), PROFILES[profile_name], client=client
     )
+    # A child has no terminal, so its only way to obtain a grant is to ask the
+    # parent.  Without a broker it would fail closed on every verify/shell.
+    broker = None
+    if spec.get("broker_dir"):
+        from xenon.harness.child_broker import BrokerApprovalProvider
+
+        broker = BrokerApprovalProvider(
+            spec["broker_dir"], wait_seconds=spec.get("approval_wait_seconds")
+        )
 
     run = run_task(
         str(spec["objective"]),
@@ -100,6 +109,9 @@ def run_spec(spec: dict[str, Any], *, client: Any = None) -> dict[str, Any]:
         # The parent (or the user) owns delivery; a child must not commit.
         finalize=False,
         max_steps=int(spec.get("max_steps") or 20),
+        approval=broker,
+        allow_approval=broker is not None,
+        parent_task_id=str(spec.get("parent_task_id") or ""),
     )
     result = run.result
     return {
