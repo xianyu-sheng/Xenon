@@ -1,0 +1,209 @@
+{
+  "model": "deepseek/deepseek-v4-flash",
+  "started_at": "2026-11-02T02:19:16Z",
+  "workdir": "C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\xenon-e2e-work-pav29c__",
+  "results": [
+    {
+      "name": "sdk-default-blocks-shell",
+      "status": "PASS",
+      "detail": "3 checks",
+      "seconds": 3.7,
+      "checks": [
+        {
+          "name": "sdk ran",
+          "ok": true,
+          "detail": "OUTCOME {\"accepted\": false, \"phase\": \"blocked\", \"evidence\": \"abstained\", \"debt\": [], \"reason\": \"verify requires a grant（范围：verify, python -c \\\"import calc; assert calc.e() == 5; print('e() =>', calc.e())\\\"）\", \"answer\": \"\"}\n"
+        },
+        {
+          "name": "accepted=False",
+          "ok": true,
+          "detail": "{'accepted': False, 'phase': 'blocked', 'evidence': 'abstained', 'debt': [], 'reason': 'verify requires a grant（范围：verify, python -c \"import calc; assert calc.e() == 5; print(\\'e() =>\\', calc.e())\"）',"
+        },
+        {
+          "name": "blocked run explains itself",
+          "ok": true,
+          "detail": "verify requires a grant（范围：verify, python -c \"import calc; assert calc.e() == 5; print('e() =>', calc.e())\"）"
+        }
+      ]
+    },
+    {
+      "name": "sdk-bypass-delivers",
+      "status": "PASS",
+      "detail": "3 checks",
+      "seconds": 7.0,
+      "checks": [
+        {
+          "name": "sdk ran",
+          "ok": true,
+          "detail": "OUTCOME {\"accepted\": true, \"phase\": \"finalized\", \"evidence\": \"verified\", \"debt\": [], \"reason\": \"\", \"answer\": \"在 calc.py 中新增了 f() 返回 6，并在 tests/test_calc.py 中新增了 test_f 断言 f() == 6。运行 python -m pytest tests/test_calc.py -q 后 2 个测试全部通过（exit code 0）。\"}\n"
+        },
+        {
+          "name": "accepted=True",
+          "ok": true,
+          "detail": "{'accepted': True, 'phase': 'finalized', 'evidence': 'verified', 'debt': [], 'reason': '', 'answer': '在 calc.py 中新增了 f() 返回 6，并在 tests/test_calc.py 中新增了 test_f 断言 f() == 6。运行 python -m pytest tests/te"
+        },
+        {
+          "name": "calc.py contains 'def f'",
+          "ok": true,
+          "detail": "def add(a, b):\n    return a + b\n\n\ndef f():\n    return 6\n"
+        }
+      ]
+    },
+    {
+      "name": "edit-commit",
+      "status": "PASS",
+      "detail": "5 checks",
+      "seconds": 7.9,
+      "checks": [
+        {
+          "name": "exit code",
+          "ok": true,
+          "detail": "rc=0"
+        },
+        {
+          "name": "phase=finalized",
+          "ok": true,
+          "detail": "{\"from\": \"delivered\", \"reason\": \"finalized\", \"to\": \"finalized\"}"
+        },
+        {
+          "name": "calc.py contains 'def sub'",
+          "ok": true,
+          "detail": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"
+        },
+        {
+          "name": "pytest passes",
+          "ok": true,
+          "detail": "..                                                                       [100%]\n2 passed in 0.01s\n"
+        },
+        {
+          "name": "a commit was created",
+          "ok": true,
+          "detail": "count=2"
+        }
+      ]
+    },
+    {
+      "name": "plan-execute",
+      "status": "PASS",
+      "detail": "4 checks",
+      "seconds": 13.2,
+      "checks": [
+        {
+          "name": "exit code",
+          "ok": true,
+          "detail": "rc=0"
+        },
+        {
+          "name": "phase=finalized",
+          "ok": true,
+          "detail": "{\"from\": \"delivered\", \"reason\": \"finalized\", \"to\": \"finalized\"}"
+        },
+        {
+          "name": "calc.py contains 'def mul'",
+          "ok": true,
+          "detail": "def add(a, b):\n    return a + b\n\n\ndef mul(a, b):\n    return a * b\n"
+        },
+        {
+          "name": "pytest passes",
+          "ok": true,
+          "detail": "....                                                                     [100%]\n4 passed in 0.01s\n"
+        }
+      ]
+    },
+    {
+      "name": "read-only-no-write",
+      "status": "PASS",
+      "detail": "3 checks",
+      "seconds": 4.1,
+      "checks": [
+        {
+          "name": "exit code",
+          "ok": true,
+          "detail": "rc=0"
+        },
+        {
+          "name": "calc.py contains 'def add'",
+          "ok": true,
+          "detail": "def add(a, b):\n    return a + b\n"
+        },
+        {
+          "name": "read-only turn wrote nothing",
+          "ok": true,
+          "detail": "[]"
+        }
+      ]
+    },
+    {
+      "name": "no-finalize",
+      "status": "PASS",
+      "detail": "3 checks",
+      "seconds": 14.0,
+      "checks": [
+        {
+          "name": "exit code",
+          "ok": true,
+          "detail": "rc=0"
+        },
+        {
+          "name": "calc.py contains 'def neg'",
+          "ok": true,
+          "detail": "def add(a, b):\n    return a + b\n\n\ndef neg(a):\n    return -a\n"
+        },
+        {
+          "name": "no commit was created",
+          "ok": true,
+          "detail": "count=1"
+        }
+      ]
+    },
+    {
+      "name": "accept-debt",
+      "status": "PASS",
+      "detail": "2 checks",
+      "seconds": 21.8,
+      "checks": [
+        {
+          "name": "exit code",
+          "ok": true,
+          "detail": "rc=0"
+        },
+        {
+          "name": "calc.py contains 'def zero'",
+          "ok": true,
+          "detail": "def add(a, b):\n    return a + b\n\n\ndef zero():\n    return 0\n"
+        }
+      ]
+    },
+    {
+      "name": "network-needs-approval",
+      "status": "PASS",
+      "detail": "2 checks",
+      "seconds": 3.3,
+      "checks": [
+        {
+          "name": "exit code",
+          "ok": true,
+          "detail": "rc=1"
+        },
+        {
+          "name": "blocked fail-closed with a reason",
+          "ok": true,
+          "detail": "untime\",\"step_id\":null,\"task_id\":\"task-2a3775f73839\",\"ts\":\"2026-11-02T02:19:10.168+00:00\"}\n10:19:08 [httpx] INFO: HTTP Request: POST https://api.deepseek.com/v1/chat/completions \"HTTP/1.1 200 OK\"\nblocked accepted=False sha=- debt=0 ledger=C:\\Users\\Administrator\\.xenon\\ledger\\task-2a3775f73839.jsonl\n"
+        }
+      ]
+    },
+    {
+      "name": "impossible-task",
+      "status": "PASS",
+      "detail": "1 checks",
+      "seconds": 5.7,
+      "checks": [
+        {
+          "name": "exit code",
+          "ok": true,
+          "detail": "rc=1"
+        }
+      ]
+    }
+  ]
+}

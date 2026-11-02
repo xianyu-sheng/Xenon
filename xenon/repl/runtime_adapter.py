@@ -838,6 +838,26 @@ def _result_summary(result: TaskResult, *, ledger_path: Any = None) -> str:
     if result.debt:
         reasons = "; ".join(item.reason for item in result.debt[:3])
         return f"任务被阻断，仍有未满足的证据：{reasons}"
+    from xenon.replay import blocking_reason
+
+    detail = (
+        blocking_reason(ledger_path, task_id=result.task_id)
+        if ledger_path is not None
+        else ""
+    )
+    if detail:
+        return f"任务未交付（phase={result.phase.value}）：{detail}"
+    return f"任务未交付（phase={result.phase.value}）。"
+
+
+def _result_summary(result: TaskResult, *, ledger_path: Any = None) -> str:
+    if result.answer.strip():
+        return result.answer
+    if result.accepted:
+        return "任务已完成并交付。"
+    if result.debt:
+        reasons = "; ".join(item.reason for item in result.debt[:3])
+        return f"任务被阻断，仍有未满足的证据：{reasons}"
     detail = (
         _blocking_reason(ledger_path, task_id=result.task_id)
         if ledger_path is not None
