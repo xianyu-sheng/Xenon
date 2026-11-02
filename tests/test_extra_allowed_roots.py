@@ -2,7 +2,10 @@
 
 真实事故（2026-10-17 的 Xenon 会话）：用户从 C:\\Users\\Administrator 启动，
 仓库在 D:\\SmartBench，所有文件工具都报「路径越界」。修复后可用
-XENON_EXTRA_ROOTS 显式追加允许目录（默认行为不变）。
+XENON_EXTRA_ROOTS 显式追加允许目录。
+
+#378 之后：**读**越界不再需要额外根（读放行、写拦截），额外根只对写路径
+仍然必要——本文件同时锁定这个不对称。
 """
 
 from __future__ import annotations
@@ -27,24 +30,45 @@ def _no_default_extra_roots(monkeypatch):
 
 
 
-def test_outside_path_denied_without_env(
+def test_read_outside_is_allowed_without_env(
     tmp_path, monkeypatch, real_path_validation
 ) -> None:
+    """#378：读越界默认放行，不需要 XENON_EXTRA_ROOTS。"""
     monkeypatch.delenv("XENON_EXTRA_ROOTS", raising=False)
     workspace = tmp_path / "ws"
     outside = tmp_path / "outside"
     workspace.mkdir()
     outside.mkdir()
-    (outside / "a.txt").write_text("x", encoding="utf-8")
+    target = outside / "a.txt"
+    target.write_text("x", encoding="utf-8")
 
     node = ToolNode(
         "t",
         action_type="read_file",
+        file_path=str(target),
+        cwd=str(workspace),
+    )
+    assert node._validate_path(str(target)) == target.resolve()
+
+
+def test_write_outside_is_still_denied_without_env(
+    tmp_path, monkeypatch, real_path_validation
+) -> None:
+    """#378：写越界照旧拦截——工作区/额外根是写的唯一合法域。"""
+    monkeypatch.delenv("XENON_EXTRA_ROOTS", raising=False)
+    workspace = tmp_path / "ws"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+
+    node = ToolNode(
+        "t",
+        action_type="write_file",
         file_path=str(outside / "a.txt"),
         cwd=str(workspace),
     )
     with pytest.raises(SecurityError, match="路径越界"):
-        node._validate_path(str(outside / "a.txt"))
+        node._validate_path(str(outside / "a.txt"), for_write=True)
 
 
 def test_env_extra_roots_allows_outside_path(

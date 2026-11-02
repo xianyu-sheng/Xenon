@@ -901,11 +901,17 @@ class ToolNode(
                     pass
 
         if not in_allowed_root:
-            raise SecurityError(
-                f"路径越界: {resolved} 不在允许的目录 {root} 下。"
-                f"文件操作限制在项目目录内（如需访问其他目录，"
-                f"请设置 XENON_EXTRA_ROOTS={os.pathsep}分隔的路径）。"
-            )
+            if for_write:
+                raise SecurityError(
+                    f"路径越界: {resolved} 不在允许的目录 {root} 下。"
+                    f"文件操作限制在项目目录内（如需访问其他目录，"
+                    f"请设置 XENON_EXTRA_ROOTS={os.pathsep}分隔的路径）。"
+                )
+            # Reads are safe anywhere (#378): the sandbox constrains writes,
+            # not reads.  The resolved path is still returned — never the raw
+            # model-supplied path — and the credential check below still runs
+            # regardless of location, so a symlink cannot smuggle a credential
+            # past the fence even though it can point outside the workspace.
 
         # 写入操作额外检查敏感路径
         if for_write:

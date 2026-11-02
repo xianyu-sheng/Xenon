@@ -591,10 +591,23 @@ class TestSecurityBoundary:
     拿到了真实校验。把 fixture 提到仓库根目录后，必须显式声明这一依赖。
     """
 
-    def test_path_traversal_blocked(self, real_path_validation):
-        node = ToolNode("s1", action_type="read_file", file_path="/etc/passwd")
-        with pytest.raises(SecurityError):
+    def test_read_credentials_outside_workspace_blocked(self, real_path_validation):
+        """#378 后读越界放行，但凭证路径仍然位置无关地拦截。"""
+        node = ToolNode("s1", action_type="read_file", file_path="/home/u/.ssh/id_rsa")
+        with pytest.raises(SecurityError, match="凭证"):
             node.execute(_ctx())
+
+    def test_read_plain_file_outside_workspace_allowed(
+        self, real_path_validation, tmp_path
+    ):
+        """#378：普通文件读越界放行。"""
+        outside = tmp_path / "outside.txt"
+        outside.write_text("plain", encoding="utf-8")
+        node = ToolNode(
+            "s1", action_type="read_file", file_path=str(outside)
+        )
+        result = node.execute(_ctx())
+        assert result["success"]
 
     def test_dangerous_command_blocked(self):
         node = ToolNode("s2", action_type="command", action="rm -rf /")
