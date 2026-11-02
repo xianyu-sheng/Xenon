@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from xenon.kernel.contracts import Budget, EvidenceStatus, TaskMode, TaskSpec
-from xenon.kernel.guard import RepeatedCallGuard, call_signature
+from xenon.kernel.loop_signals import StuckDetector
 from xenon.kernel.runtime import LoopRuntime
 from xenon.kernel.view.base import _working_set
 from xenon.ledger.events import EventKind, EventSource
@@ -146,29 +146,33 @@ def test_priority_events_survive_compaction():
 
 
 def test_guard_trips_after_the_limit():
-    guard = RepeatedCallGuard(max_identical=2)
-    signature = call_signature("shell", {"command": "pytest -q"})
+    """The third identical call trips a limit of 2; two are allowed."""
 
-    assert guard.register(signature) is False
-    assert guard.register(signature) is False
-    assert guard.register(signature) is True
-    assert guard.count(signature) == 3
+    guard = StuckDetector(max_identical=2)
+
+    assert guard.note_call("read", {"file_path": "a.py"}) is None
+    assert guard.note_call("read", {"file_path": "a.py"}) is None
+    signal = guard.note_call("read", {"file_path": "a.py"})
+    assert signal is not None and signal.kind == "identical_call"
 
 
 def test_guard_distinguishes_arguments():
-    guard = RepeatedCallGuard(max_identical=1)
-    first = call_signature("shell", {"command": "pytest -q"})
-    second = call_signature("shell", {"command": "pytest -q tests/kernel"})
+    """Different targets are different calls, even under one capability."""
 
-    assert first != second
-    assert guard.register(first) is False
-    assert guard.register(second) is False
-    assert guard.register(first) is True
+    guard = StuckDetector(max_identical=1)
+
+    assert guard.note_call("read", {"file_path": "a.py"}) is None
+    assert guard.note_call("read", {"file_path": "b.py"}) is None
+    # Repeating the *first* one is what trips it, not the shared capability.
+    signal = guard.note_call("read", {"file_path": "a.py"})
+    assert signal is not None and signal.kind == "identical_call"
+
+
 
 
 def test_guard_rejects_a_nonsense_limit():
     with pytest.raises(ValueError):
-        RepeatedCallGuard(max_identical=0)
+        StuckDetector(max_identical=0)
 
 
 def test_compaction_is_recorded_in_the_ledger(tmp_path):
@@ -224,7 +228,7 @@ def test_repeated_tool_call_blocks_the_run():
         event
         for event in ledger.read()
         if event.kind is EventKind.POLICY_DECISION
-        and event.payload.get("reason") == "repeated identical tool call"
+        and event.payload.get("signal") == "identical_call"
     ]
     assert vetoes, "the veto must be in the ledger, not only in the result"
     # Three identical calls are allowed; the fourth is the one that trips it.
