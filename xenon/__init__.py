@@ -41,6 +41,9 @@ __all__ = [
     "__version__",
     # 高层
     "run_task",
+    # 高层（带判定）：accepted / evidence / debt / ledger 指针
+    "run_task_result",
+    "TaskOutcome",
     # 模式（原“引擎”入口，现在是同一 loop 的 thinking modes）
     "list_engines",
     # 工具

@@ -218,3 +218,99 @@ def test_allow_approval_is_forwarded_by_default_false(tmp_path):
 
     assert captured["allow_approval"] is False
     assert captured["permission"].value == "auto-edit"
+
+
+def test_run_task_result_forwards_every_keyword(tmp_path):
+    """The public wrapper must not silently drop an argument."""
+
+    from unittest.mock import patch
+
+    import xenon
+
+    captured: dict = {}
+    ledger = tmp_path / "t.jsonl"
+    ledger.write_text("", encoding="utf-8")
+
+    def fake_run(objective, **kwargs):
+        captured.update(kwargs)
+        captured["objective"] = objective
+        return _FakeHarnessRun(ledger)
+
+    with patch("xenon.harness.runner.run_task", fake_run):
+        xenon.run_task_result(
+            "do it",
+            workspace=str(tmp_path),
+            engine="plan-execute",
+            model_priority=["x/y"],
+            permission="bypass",
+            max_steps=7,
+        )
+
+    assert captured["objective"] == "do it"
+    assert captured["workspace"] == tmp_path
+    assert captured["permission"].value == "bypass"
+    assert captured["max_steps"] == 7
+
+
+def test_default_model_priority_is_empty_without_a_config(tmp_path, monkeypatch):
+    """No ~/.xenon/models.yaml is a normal state, not an error."""
+
+    import xenon
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+    assert xenon._default_model_priority() == []
+
+
+def test_an_unknown_attribute_raises_attributeerror():
+    import xenon
+
+    resolved = None
+    with pytest.raises(AttributeError, match="has no attribute"):
+        resolved = xenon.definitely_not_a_real_name
+    assert resolved is None
+
+
+def test_dir_lists_the_public_surface():
+    import xenon
+
+    assert "run_task" in dir(xenon)
+    assert "run_task_result" in dir(xenon)
+
+
+def test_a_broken_model_config_falls_back_to_empty(tmp_path, monkeypatch):
+    """A corrupt models.yaml must not break a library call."""
+
+    import xenon
+
+    home = tmp_path / "home"
+    (home / ".xenon").mkdir(parents=True)
+    (home / ".xenon" / "models.yaml").write_text("{{{ not yaml", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    assert xenon._default_model_priority() == []
+
+
+def test_a_readable_model_config_yields_the_priority_list(tmp_path, monkeypatch):
+    """The happy path: reuse whatever /setup already configured."""
+
+    import xenon
+
+    home = tmp_path / "home"
+    (home / ".xenon").mkdir(parents=True)
+    (home / ".xenon" / "models.yaml").write_text(
+        """
+models:
+  - id: test/fake
+    alias: fake
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    result = xenon._default_model_priority()
+
+    assert isinstance(result, list)

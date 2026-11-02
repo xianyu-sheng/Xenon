@@ -389,3 +389,19 @@ def test_blocking_reason_skips_a_rejection_without_a_reason(tmp_path):
     )
 
     assert blocking_reason(ledger.path, task_id="t") == ""
+
+
+def test_blocking_reason_returns_empty_when_the_ledger_cannot_be_opened(monkeypatch, tmp_path):
+    """A reporting helper must never raise — it runs on the failure path."""
+
+    import xenon.kernel  # noqa: F401
+    import xenon.ledger.store as store
+    from xenon.replay import blocking_reason
+
+    class _Boom:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("ledger corrupt")
+
+    monkeypatch.setattr(store, "Ledger", _Boom)
+
+    assert blocking_reason(tmp_path / "t.jsonl", task_id="t") == ""
