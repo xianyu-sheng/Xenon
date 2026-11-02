@@ -112,6 +112,7 @@ def run_spec(spec: dict[str, Any], *, client: Any = None) -> dict[str, Any]:
         approval=broker,
         allow_approval=broker is not None,
         parent_task_id=str(spec.get("parent_task_id") or ""),
+        batch_id=str(spec.get("batch_id") or ""),
     )
     result = run.result
     return {

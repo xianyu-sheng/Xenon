@@ -76,6 +76,7 @@ class ChildOutcome:
     killed: bool = False
     # Isolation: a child in its own worktree returns its work as a patch, and
     # never touches the shared workspace.
+    batch_id: str = ""
     isolated: bool = False
     isolation_note: str = ""
     patch_path: str = ""
@@ -136,6 +137,7 @@ def _child_spec(
     permission: PermissionMode,
     max_steps: int,
     parent_task_id: str = "",
+    batch_id: str = "",
     broker_dir: str = "",
 ) -> dict[str, Any]:
     from xenon.harness.child_worker import model_to_spec
@@ -150,6 +152,7 @@ def _child_spec(
         "ledger_dir": str(ledger_dir),
         "model": model_to_spec(model),
         "parent_task_id": parent_task_id,
+        "batch_id": batch_id,
         "broker_dir": broker_dir,
     }
 
@@ -341,6 +344,7 @@ def run_child_task(
     model: ModelConfig,
     profile: str = "kernel",
     parent_task_id: str = "",
+    batch_id: str = "",
     ledger_dir: str | Path | None = None,
     permission: PermissionMode = PermissionMode.AUTO_EDIT,
     parent_permission: PermissionMode | None = None,
@@ -373,6 +377,9 @@ def run_child_task(
         raise KeyError(f"unknown child profile: {profile}")
     _check_permission_subset(permission, parent_permission)
     child_id = f"{parent_task_id or 'child'}-sub{index}-{uuid.uuid4().hex[:6]}"
+    # A lone child is still a batch of one: without it, "three dispatched
+    # together" and "three dispatched separately" look identical in the ledger.
+    batch_id = batch_id or f"{parent_task_id or 'child'}-batch-{uuid.uuid4().hex[:6]}"
     directory = (
         Path(ledger_dir)
         if ledger_dir is not None
@@ -392,6 +399,7 @@ def run_child_task(
                 profile=profile,
                 child_id=child_id,
                 parent_task_id=parent_task_id,
+                batch_id=batch_id,
                 directory=directory,
                 permission=permission,
                 max_steps=max_steps,
@@ -412,6 +420,7 @@ def run_child_task(
                     permission=permission,
                     max_steps=max_steps,
                     parent_task_id=parent_task_id,
+                    batch_id=batch_id,
                     broker_dir=str(_broker_dir(directory, child_id)),
                 ),
                 ledger_dir=directory,
@@ -442,6 +451,7 @@ def run_child_task(
             error=error or "child did not run",
             pid=pid,
             killed=killed,
+            batch_id=batch_id,
             isolated=tree is not None,
             isolation_note=isolation_note,
             patch_path=patch_path,
@@ -461,6 +471,7 @@ def run_child_task(
         error=error,
         pid=pid,
         killed=killed,
+        batch_id=batch_id,
         isolated=tree is not None,
         isolation_note=isolation_note,
         patch_path=patch_path,
@@ -476,6 +487,7 @@ def _run_in_process(
     profile: str,
     child_id: str,
     parent_task_id: str,
+    batch_id: str,
     directory: Path,
     permission: PermissionMode,
     max_steps: int,
@@ -506,6 +518,7 @@ def _run_in_process(
             approval=approval,
             allow_approval=approval is not None,
             parent_task_id=parent_task_id,
+            batch_id=batch_id,
         )
 
     run = None
@@ -567,6 +580,7 @@ def run_child_tasks(
     approval: Any = None,
     parent_permission: PermissionMode | None = None,
     isolate: bool | None = True,
+    batch_id: str = "",
     max_workers: int = 4,
 ) -> tuple[ChildOutcome, ...]:
     """Run delegated tasks in parallel, preserving input order.
@@ -580,6 +594,9 @@ def run_child_tasks(
     objectives = tuple(objective for objective in objectives if objective.strip())
     if not objectives:
         return ()
+    # One dispatch, one batch id: this is what distinguishes "three tasks sent
+    # together" from "three tasks sent one after another".
+    batch_id = batch_id or f"{parent_task_id or 'child'}-batch-{uuid.uuid4().hex[:6]}"
     workers = max(1, min(max_workers, len(objectives)))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [
@@ -590,6 +607,7 @@ def run_child_tasks(
                 model=model,
                 profile=profile,
                 parent_task_id=parent_task_id,
+                batch_id=batch_id,
                 ledger_dir=ledger_dir,
                 permission=permission,
                 max_steps=max_steps,
@@ -622,6 +640,7 @@ def child_evidence(outcome: ChildOutcome) -> dict[str, Any]:
         "error": outcome.error,
         "pid": outcome.pid,
         "killed": outcome.killed,
+        "batch_id": outcome.batch_id,
         "isolated": outcome.isolated,
         "isolation_note": outcome.isolation_note,
         "patch": outcome.patch_path,

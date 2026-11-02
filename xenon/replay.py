@@ -150,6 +150,7 @@ def children_of(
             {
                 "child_id": str(started.get("task_id") or path.stem),
                 "parent_task_id": parent_task_id,
+                "batch_id": str(started.get("batch_id") or ""),
                 "objective": str(started.get("objective") or "")[:120],
                 "phase": phases[-1] if phases else "unknown",
                 "debt": len(counted.get("open_debt") or ()),
@@ -165,27 +166,44 @@ def children_of(
 
 
 def render_children(rows: Sequence[dict[str, Any]], *, parent: str = "") -> str:
-    """Human-readable tree of one parent's delegated work."""
+    """Human-readable tree of one parent's delegated work, grouped by dispatch.
+
+    Grouping is the point of ``batch_id``: three children sent together must not
+    look the same as three children sent one at a time.  Rows without a batch
+    (older ledgers) are shown under a clearly-labelled group rather than being
+    silently merged into one.
+    """
 
     head = f"children of {parent}" if parent else "children"
     if not rows:
         return f"{head}: (none)"
     lines = [f"{head}: {len(rows)}"]
+    groups: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        if row.get("error"):
-            lines.append(f"- {row['child_id']}  unreadable: {row['error']}")
-            continue
-        bits = [
-            f"phase={row['phase']}",
-            f"tools={row['tool_calls']}",
-            f"debt={row['debt']}",
-        ]
-        if row.get("tokens"):
-            bits.append(f"tokens={row['tokens']}")
-        lines.append(f"- {row['child_id']}  {' '.join(bits)}")
-        if row.get("objective"):
-            lines.append(f"    {row['objective']}")
-        lines.append(f"    ledger: {row['ledger']}")
+        groups.setdefault(str(row.get("batch_id") or "(no batch)"), []).append(row)
+    for batch, members in groups.items():
+        delivered = sum(
+            1
+            for row in members
+            if str(row.get("phase")) == "finalized" and not row.get("error")
+        )
+        lines.append("")
+        lines.append(f"[batch {batch}] {len(members)} child(ren), {delivered} delivered")
+        for row in members:
+            if row.get("error"):
+                lines.append(f"- {row['child_id']}  unreadable: {row['error']}")
+                continue
+            bits = [
+                f"phase={row['phase']}",
+                f"tools={row['tool_calls']}",
+                f"debt={row['debt']}",
+            ]
+            if row.get("tokens"):
+                bits.append(f"tokens={row['tokens']}")
+            lines.append(f"- {row['child_id']}  {' '.join(bits)}")
+            if row.get("objective"):
+                lines.append(f"    {row['objective']}")
+            lines.append(f"    ledger: {row['ledger']}")
     return chr(10).join(lines)
 
 
