@@ -101,7 +101,10 @@ def test_a_retry_reports_both_attempts(monkeypatch) -> None:
     monkeypatch.setattr(time, "sleep", lambda *_: None)
 
     text = llm_client.chat_completion(
-        "deepseek/x", [{"role": "user", "content": "hi"}], request_sink=sink
+        "deepseek/x",
+        [{"role": "user", "content": "hi"}],
+        credentials={"deepseek": "sk-test"},
+        request_sink=sink,
     )
 
     assert text == "ok"
@@ -125,6 +128,7 @@ def test_exhausting_the_attempts_says_so(monkeypatch) -> None:
         llm_client.chat_completion(
             "deepseek/x",
             [{"role": "user", "content": "hi"}],
+            credentials={"deepseek": "sk-test"},
             max_retries=2,
             request_sink=sink,
         )
@@ -149,6 +153,7 @@ def test_a_timeout_is_reported_with_its_exception_name(monkeypatch) -> None:
         llm_client.chat_completion(
             "deepseek/x",
             [{"role": "user", "content": "hi"}],
+            credentials={"deepseek": "sk-test"},
             max_retries=1,
             request_sink=sink,
         )
@@ -168,7 +173,10 @@ def test_a_non_retryable_http_error_is_reported_once(monkeypatch) -> None:
 
     with pytest.raises(httpx.HTTPStatusError):
         llm_client.chat_completion(
-            "deepseek/x", [{"role": "user", "content": "hi"}], request_sink=sink
+            "deepseek/x",
+            [{"role": "user", "content": "hi"}],
+            credentials={"deepseek": "sk-test"},
+            request_sink=sink,
         )
 
     starts = [e for e in events if e["kind"] == START]
@@ -337,7 +345,10 @@ def test_streaming_has_no_retry_so_it_reports_one_attempt(monkeypatch) -> None:
 
     text = "".join(
         llm_client.chat_completion_stream(
-            "deepseek/x", [{"role": "user", "content": "hi"}], request_sink=sink
+            "deepseek/x",
+            [{"role": "user", "content": "hi"}],
+            credentials={"deepseek": "sk-test"},
+            request_sink=sink,
         )
     )
 
@@ -361,7 +372,10 @@ def test_a_streaming_failure_is_reported_then_raised(monkeypatch) -> None:
     with pytest.raises(httpx.RemoteProtocolError):
         list(
             llm_client.chat_completion_stream(
-                "deepseek/x", [{"role": "user", "content": "hi"}], request_sink=sink
+                "deepseek/x",
+                [{"role": "user", "content": "hi"}],
+                credentials={"deepseek": "sk-test"},
+                request_sink=sink,
             )
         )
 
