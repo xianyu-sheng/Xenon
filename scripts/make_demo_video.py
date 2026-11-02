@@ -133,7 +133,6 @@ def scene_title_card(draw, t):
 
 
 def scene_naive_terminal(draw, t):
-    tt = t - 8
     lines = [
         ("$ agent run --task fix-parser", TEXT, MONO_B, 8 + 0.2),
         ("> analyzing repository ...", DIM, MONO, 8 + 1.4),
