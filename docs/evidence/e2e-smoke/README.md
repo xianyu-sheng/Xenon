@@ -21,12 +21,13 @@
 | `no-finalize` | CLI `--no-finalize` | 改动落盘但**不产生提交** |
 | `accept-debt` | CLI `--accept-debt` | 文件已改（缺口被接受时可交付） |
 | `network-needs-approval` | CLI，默认权限 | 无审批人时必须 fail-closed 且给原因，而不是挂住 |
+| `stray-change-reported` | CLI，提交后再弄脏 `notes.txt` | 必须拒绝，**且理由点名该路径** |
 | `impossible-task` | CLI，不存在的路径 | 有界失败（`--max-steps 3`），不崩 |
 
 ## 结果（本次运行）
 
 ```text
-9/9 scenarios passed
+10/10 scenarios passed
 model: deepseek/deepseek-v4-flash
 ```
 
@@ -41,9 +42,12 @@ python scripts/e2e_smoke.py --only edit-commit
 
 不进 CI：需要真实 provider，会花 token。
 
-## 这轮冒烟发现的两个真问题（已修）
+## 这轮冒烟发现的四个真问题（已修）
 
 1. **SDK 无法交付任何需要跑命令的任务**：`_sdk_permission()` 固定 `AUTO_EDIT`，`verify`/`shell` 一律 `requires a grant` → blocked，而调用方没有任何授权入口。已加 `permission=` / `allow_approval=` 参数。
 2. **blocked 结果不给原因**：`TaskOutcome` 当初只有 `accepted/phase/evidence`，`blocked` 且 `debt` 为空时调用方什么也看不到。已加 `reason`（从账本读最后一条阻断理由），并把 `blocking_reason()` 提到 `xenon/replay.py` 供 REPL 与 SDK 共用。
 
 一次"假失败"也被纠正：某次 `plan-execute` 报 pytest 失败，实际是模型自建了 `tests/test_calc.py` 与种子里的根目录 `test_calc.py` 同名冲突——**是我的种子仓库不合理**，不是产品缺陷；顺带说明 Xenon 的答复是诚实的（它明确写了只跑了 `tests/test_calc.py`，claim 也只覆盖该文件）。
+
+3. **`no_stray_changes` 永远 abstain**：`worktree contains unverified paths` 明明可判，却报「语义声明需要覆盖绑定器」，白耗 3 轮修复预算。已改为宿主观测 → 账本事实 → 确定性绑定。
+4. **整套测试通过绑不上具体目标**：跑 `python -m pytest -q` 时 `TestRun.target` 被记成命令串本身，于是「某文件测试通过」永远无法证明。已改为「无路径 = 整套」，整套通过覆盖任意具体 target。

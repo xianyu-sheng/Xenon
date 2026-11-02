@@ -15,6 +15,7 @@ from typing import Any, Callable, Sequence, TextIO
 from xenon.catalog.catalog import build_catalog
 from xenon.catalog.finalizer import GitFinalizer
 from xenon.catalog.gateway import LegacyToolGateway
+from xenon.catalog.worktree import GitWorktreeProbe
 from xenon.harness.plan import HarnessPlan
 from xenon.harness.sink import JsonlSink
 from xenon.kernel.contracts import (
@@ -93,6 +94,9 @@ def _runtime_bundle(
         finalizer=GitFinalizer(root) if finalize else None,
         sink=sink,
         approval=approval,
+        # Even without a finalizer we always want the worktree observation:
+        # "no stray changes" is a question the host can answer deterministically.
+        worktree_probe=GitWorktreeProbe(root),
     )
     return root, ledger_path, ledger, runtime
 

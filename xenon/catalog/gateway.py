@@ -127,7 +127,10 @@ def _test_target(
         candidate = token.strip("\"'")
         if candidate.endswith(".py") and "test" in candidate.lower():
             return candidate
-    return command
+    # Nothing specific was named: this ran *the whole suite*.  Returning the
+    # command string here would produce a "target" that no obligation can ever
+    # match, so "the tests I care about passed" could never be proven.
+    return ""
 
 
 def _commit_sha(*texts: Any) -> str:

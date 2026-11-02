@@ -32,9 +32,11 @@ from xenon.kernel.contracts import (
     Verdict,
     VerdictStatus,
     VerificationStage,
+    WorkspaceProbe,
 )
 from xenon.ledger.events import (
     EventKind,
+    effect_from_payload,
     effect_to_payload,
     fact_id,
     receipt_from_payload,
@@ -53,6 +55,22 @@ def index_facts(ledger: Any, up_to_seq: int | None = None) -> tuple[Fact, ...]:
     """Flatten receipt effects into facts in ledger order."""
 
     facts: list[Fact] = []
+    # A workspace probe is an observation, not a tool call: it gets its own
+    # event so that "plan-only runs execute no tools" stays literally true and
+    # tool counts are not inflated by host bookkeeping.
+    for event in ledger.read(EventKind.WORKSPACE_PROBED, up_to_seq=up_to_seq):
+        payload = dict(event.payload or {})
+        if payload.get("type") != "workspace_probe":
+            continue
+        facts.append(
+            Fact(
+                fact_id=f"fact-{event.seq}-workspace",
+                effect=effect_from_payload(payload),
+                seq=event.seq,
+                receipt_id="workspace_probe",
+            )
+        )
+
     for event in ledger.read(EventKind.TOOL_RECEIPT, up_to_seq=up_to_seq):
         payload = event.payload or {}
         receipt_payload = payload.get("receipt")
@@ -102,6 +120,9 @@ def _path_match(paths: Iterable[str], target: str) -> bool:
 
 def _test_matches(effect: TestRun, target: str) -> bool:
     if not target:
+        return True
+    if not effect.target:
+        # The recorded run was the whole suite: it covers any specific target.
         return True
     if _path_match((effect.target,), target):
         return True
@@ -154,8 +175,11 @@ class ClaimResolver:
         up_to_seq: int | None = None,
     ) -> Resolution:
         facts = index_facts(ledger, up_to_seq=up_to_seq)
-        if claim.since_seq:
+        if claim.since_seq and claim.kind is not PropositionKind.NO_STRAY_CHANGES:
             facts = tuple(item for item in facts if item.seq > claim.since_seq)
+        # ``no_stray_changes`` is a *state* predicate: what matters is the
+        # newest observation of the worktree, not only observations made after
+        # the obligation was declared (the probe usually predates the plan).
         return self._resolve(claim, facts)
 
     def _resolve(self, claim: Claim, facts: Sequence[Fact]) -> Resolution:
@@ -230,11 +254,7 @@ class ClaimResolver:
             return self._latest(claim, matches, "no push fact")
 
         if kind is PropositionKind.NO_STRAY_CHANGES:
-            return Resolution(
-                claim_id=claim.id,
-                status=ResolutionStatus.ABSTAINED,
-                reason="no deterministic worktree-clean fact yet",
-            )
+            return self._resolve_workspace_clean(claim, facts)
 
         if kind is PropositionKind.TOOL_SUCCEEDED:
             return Resolution(
@@ -257,6 +277,47 @@ class ClaimResolver:
             claim_id=claim.id,
             status=ResolutionStatus.ABSTAINED,
             reason=f"unsupported claim kind: {kind.value}",
+        )
+
+    def _resolve_workspace_clean(
+        self, claim: Claim, facts: Sequence[Fact]
+    ) -> Resolution:
+        """Bind "no stray changes" to the host's worktree probe.
+
+        The probe is taken by the host (the kernel never shells out) and
+        recorded as a receipt effect, so this stays a ledger fact: the same
+        ledger always answers the same way.  No probe in the ledger means the
+        honest answer is still "cannot tell".
+        """
+
+        probes = [
+            fact for fact in facts if isinstance(fact.effect, WorkspaceProbe)
+        ]
+        if not probes:
+            return Resolution(
+                claim_id=claim.id,
+                status=ResolutionStatus.ABSTAINED,
+                reason="no workspace probe in the ledger yet",
+            )
+        probe = probes[-1].effect
+        verified = {_normalized(item) for item in probe.verified_paths}
+        stray = [
+            path for path in probe.dirty_paths if _normalized(path) not in verified
+        ]
+        if stray:
+            return Resolution(
+                claim_id=claim.id,
+                status=ResolutionStatus.UNRESOLVED,
+                reason=(
+                    "worktree contains unverified paths: "
+                    + ", ".join(sorted(stray))
+                ),
+                fact_ids=(probes[-1].fact_id,),
+            )
+        return Resolution(
+            claim_id=claim.id,
+            status=ResolutionStatus.BOUND,
+            fact_ids=(probes[-1].fact_id,),
         )
 
     @staticmethod

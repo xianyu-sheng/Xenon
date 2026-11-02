@@ -69,6 +69,9 @@ def test_effect_kinds_are_stable() -> None:
         "vcs_push",
         "read",
         "network",
+        # The host's deterministic worktree observation (#287): without it,
+        # "no stray changes" could only ever abstain.
+        "workspace_probe",
         "opaque",
     }
 
