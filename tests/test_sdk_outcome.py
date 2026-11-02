@@ -126,3 +126,95 @@ def test_an_unknown_permission_fails_closed():
 def test_the_public_surface_exports_the_outcome_type():
     assert xenon.TaskOutcome is TaskOutcome
     assert callable(xenon.run_task_result)
+
+
+# ── 公共入口：run_task_result 必须真的走 kernel 并返回 verdict ──
+
+
+class _FakeHarnessRun:
+    def __init__(self, ledger_path):
+        self.task_id = "task-1"
+        self.ledger_path = ledger_path
+        self.result = _FakeResult()
+
+
+def test_run_task_result_returns_an_outcome(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    import xenon
+
+    ledger = tmp_path / "t.jsonl"
+    ledger.write_text("", encoding="utf-8")
+
+    with patch("xenon.harness.runner.run_task", lambda *a, **k: _FakeHarnessRun(ledger)):
+        outcome = xenon.run_task_result(
+            "do it",
+            workspace=str(tmp_path),
+            model_priority=["x/y"],
+        )
+
+    assert isinstance(outcome, TaskOutcome)
+    assert outcome.accepted is True
+    assert str(outcome) == "done"
+
+
+def test_run_task_result_forwards_the_permission(tmp_path):
+    from unittest.mock import patch
+
+    import xenon
+
+    captured: dict = {}
+    ledger = tmp_path / "t.jsonl"
+    ledger.write_text("", encoding="utf-8")
+
+    def fake_run(objective, **kwargs):
+        captured.update(kwargs)
+        return _FakeHarnessRun(ledger)
+
+    with patch("xenon.harness.runner.run_task", fake_run):
+        xenon.run_task_result(
+            "do it",
+            workspace=str(tmp_path),
+            model_priority=["x/y"],
+            permission="bypass",
+            allow_approval=True,
+        )
+
+    assert captured["permission"].value == "bypass"
+    assert captured["allow_approval"] is True
+    assert captured["finalize"] is False
+
+
+def test_run_task_still_returns_a_string(tmp_path):
+    from unittest.mock import patch
+
+    import xenon
+
+    ledger = tmp_path / "t.jsonl"
+    ledger.write_text("", encoding="utf-8")
+
+    with patch("xenon.harness.runner.run_task", lambda *a, **k: _FakeHarnessRun(ledger)):
+        answer = xenon.run_task("do it", workspace=str(tmp_path), model_priority=["x/y"])
+
+    assert isinstance(answer, str)
+    assert answer == "done"
+
+
+def test_allow_approval_is_forwarded_by_default_false(tmp_path):
+    from unittest.mock import patch
+
+    import xenon
+
+    captured: dict = {}
+    ledger = tmp_path / "t.jsonl"
+    ledger.write_text("", encoding="utf-8")
+
+    def fake_run(objective, **kwargs):
+        captured.update(kwargs)
+        return _FakeHarnessRun(ledger)
+
+    with patch("xenon.harness.runner.run_task", fake_run):
+        xenon.run_task("x", workspace=str(tmp_path), model_priority=["x/y"])
+
+    assert captured["allow_approval"] is False
+    assert captured["permission"].value == "auto-edit"
