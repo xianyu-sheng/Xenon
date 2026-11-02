@@ -279,6 +279,9 @@ class TaskSpec:
     # TASK_STARTED so the call tree is derivable from ledgers alone — a child
     # used to be traceable only through the naming convention in its task_id.
     parent_task_id: str = ""
+    # Which dispatch this task belongs to.  A label, not a scheduler: it says
+    # "these ran as one batch", never in what order or with what dependencies.
+    batch_id: str = ""
 
     def __post_init__(self) -> None:
         """Reject a malformed task at the boundary, not three layers down.
@@ -290,6 +293,8 @@ class TaskSpec:
 
         if not isinstance(self.parent_task_id, str):
             raise ValueError("parent_task_id must be a string")
+        if not isinstance(self.batch_id, str):
+            raise ValueError("batch_id must be a string")
         total = 0
         for label, text in self.context_blocks:
             if not str(label).strip():

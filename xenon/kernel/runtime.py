@@ -267,6 +267,7 @@ class LoopRuntime:
                 "constraints": list(spec.constraints),
                 # Empty for a top-level task; the call tree is derived from here.
                 "parent_task_id": spec.parent_task_id,
+                "batch_id": spec.batch_id,
             },
         )
         self._run_start_seq = self._ledger.watermark()
