@@ -471,6 +471,11 @@ class Verdict:
     status: VerdictStatus
     fact_ids: tuple[str, ...] = ()
     reason: str = ""
+    # True when the binding came from a *proposal* that pointed at real facts
+    # rather than from a deterministic rule.  The facts exist, but "these facts
+    # prove this requirement" is still a judgement — so such a verdict may
+    # support delivery but must never upgrade evidence to VERIFIED.
+    from_proposal: bool = False
 
 
 @dataclass(frozen=True, slots=True)

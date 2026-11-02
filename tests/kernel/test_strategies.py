@@ -143,7 +143,14 @@ def test_plan_examples_submit_once_then_follow_the_plan() -> None:
     assert action.intent.capability is Capability.EDIT
 
 
-def test_follow_plan_thinks_when_a_step_has_no_intent() -> None:
+def test_follow_plan_releases_a_step_with_no_intent() -> None:
+    """A follow-plan step is executed by its bound capability.
+
+    Without one there is nothing to run.  Emitting a thought (the old
+    behaviour) burned the repair budget on a step that could never make
+    progress, so the step is released with a reason instead.
+    """
+
     step = StepContract(id=1, kind=StepKind.INSPECT)
     strategy = LoopStrategy(
         LoopProfile(plan=True, step_scope=True, follow_plan=True),
@@ -152,7 +159,10 @@ def test_follow_plan_thinks_when_a_step_has_no_intent() -> None:
     )
     strategy.propose(_view())  # submit
 
-    assert isinstance(strategy.propose(_view(steps=(step,), active=step)), Think)
+    action = strategy.propose(_view(steps=(step,), active=step))
+
+    assert isinstance(action, ReleaseStep)
+    assert "no bound capability" in action.reason
 
 
 def test_step_react_uses_a_per_step_budget() -> None:

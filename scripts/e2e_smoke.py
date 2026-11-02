@@ -49,6 +49,8 @@ class Scenario:
     seed: dict[str, str] = field(default_factory=dict)
     # Written *after* the seed commit, so the path is dirty on purpose.
     dirty_after_commit: dict[str, str] = field(default_factory=dict)
+    # A capability plan written next to the repo, for scenarios that run one.
+    plan: dict = field(default_factory=dict)
     timeout: float = 420.0
 
 
@@ -120,23 +122,33 @@ def _ledger_for(stdout: str, stderr: str) -> str:
     return ""
 
 
-def run_scenario(scenario: Scenario, workdir: Path, model: str, out: Path) -> Result:
+def run_scenario(
+    scenario: Scenario, workdir: Path, model: str, out: Path
+) -> Result:
+    """One scenario.  A plan-file scenario passes no positional objective: the
+    CLI rejects `--plan` together with a natural-language task."""
     repo = workdir / scenario.name
     if repo.exists():
         shutil.rmtree(repo, ignore_errors=True)
     _seed_repo(repo, scenario.seed)
+    plan_arg: list[str] = []
+    if scenario.plan:
+        plan_path = workdir / f"{scenario.name}-plan.json"
+        plan_path.write_text(
+            json.dumps(scenario.plan, ensure_ascii=False), encoding="utf-8"
+        )
+        plan_arg = ["--plan", str(plan_path)]
     for path, content in scenario.dirty_after_commit.items():
         target = repo / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
     started = time.time()
     try:
-        proc = _run_cli(
-            ["exec", scenario.objective, "-m", model, "--workspace", str(repo)]
-            + scenario.args,
-            cwd=ROOT,
-            timeout=scenario.timeout,
-        )
+        argv = ["exec"]
+        if scenario.objective:
+            argv.append(scenario.objective)
+        argv += ["-m", model, "--workspace", str(repo)] + plan_arg + scenario.args
+        proc = _run_cli(argv, cwd=ROOT, timeout=scenario.timeout)
     except subprocess.TimeoutExpired:
         return Result(
             scenario.name, FAIL, f"timeout after {scenario.timeout}s", time.time() - started
@@ -273,6 +285,43 @@ def scenarios() -> list[Scenario]:
             args=["--permission", "bypass", "--accept-debt"],
             seed={"calc.py": CALC},
             expect={"file_contains": ("calc.py", "def zero")},
+        ),
+        Scenario(
+            name="plan-file-executes",
+            objective="",  # the plan file carries the objective
+            # A plan *file* with free-form steps: before this worked, the run
+            # had a planner but no actor, so every step was marked violated.
+            args=["--permission", "bypass"],
+            plan={
+                "objective": "add sub(a,b) to calc.py and verify the tests pass",
+                "steps": [
+                    {
+                        "id": 1,
+                        "kind": "edit",
+                        "targets": ["calc.py"],
+                        "expects": [
+                            {"id": "e1", "kind": "file_changed", "target": "calc.py"}
+                        ],
+                    },
+                    {
+                        "id": 2,
+                        "kind": "verify",
+                        "expects": [
+                            {
+                                "id": "e2",
+                                "kind": "test_passed",
+                                "target": "tests/test_calc.py",
+                            }
+                        ],
+                    },
+                ],
+            },
+            seed={"calc.py": CALC, "tests/test_calc.py": TEST_CALC},
+            expect={
+                "phase": "finalized",
+                "file_contains": ("calc.py", "def sub"),
+                "tests_pass": None,
+            },
         ),
         Scenario(
             name="stray-change-reported",

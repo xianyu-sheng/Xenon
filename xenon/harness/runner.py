@@ -20,7 +20,6 @@ from xenon.harness.plan import HarnessPlan
 from xenon.harness.sink import JsonlSink
 from xenon.kernel.contracts import (
     Budget,
-    Finish,
     PlanProposal,
     TaskMode,
     TaskResult,
@@ -31,7 +30,7 @@ from xenon.kernel.controller import VerificationController
 from xenon.kernel.policies import PermissionMode, PermissionPolicy
 from xenon.kernel.protocols import ApprovalProvider, Strategy
 from xenon.kernel.runtime import LoopRuntime
-from xenon.kernel.strategies import LoopProfile, LoopStrategy
+from xenon.kernel.strategies import LoopProfile
 from xenon.ledger.events import canonical_json
 from xenon.ledger.store import Ledger
 
@@ -58,6 +57,7 @@ def _runtime_bundle(
     gateway_context: Any,
     extra_specs: Sequence[ToolSpec],
     tool_runtime: Any = None,
+    audit_provider: Any = None,
 ) -> tuple[Path, Path, Ledger, LoopRuntime]:
     root = Path(workspace).resolve()
     if not root.is_dir():
@@ -97,6 +97,7 @@ def _runtime_bundle(
         # Even without a finalizer we always want the worktree observation:
         # "no stray changes" is a question the host can answer deterministically.
         worktree_probe=GitWorktreeProbe(root),
+        audit_provider=audit_provider,
     )
     return root, ledger_path, ledger, runtime
 
@@ -146,6 +147,7 @@ def run_task(
     on_runtime: Callable[[Any], None] | None = None,
     accept_debt: bool = False,
     context_blocks: Sequence[tuple[str, str]] = (),
+    audit_provider: Any = None,
 ) -> HarnessRun:
     """Run one objective through the kernel with an injected strategy.
 
@@ -168,6 +170,7 @@ def run_task(
         gateway_context=gateway_context,
         extra_specs=extra_specs,
         tool_runtime=tool_runtime,
+        audit_provider=audit_provider,
     )
     spec = TaskSpec(
         task_id=identifier,
@@ -278,14 +281,65 @@ def run_plan(
     finalize: bool = True,
     max_steps: int = 20,
     sink: JsonlSink | None = None,
+    model_config: Any = None,
 ) -> HarnessRun:
-    return run_task(
-        plan.objective,
-        strategy=LoopStrategy(
+    """Execute an approved plan.
+
+    With a ``model_config`` the strategy is the real loop, so the steps have an
+    actor that can actually call tools.  Without one, the run has a planner but
+    nobody to execute — every step would emit an empty thought and be marked
+    violated, which is what ``xenon exec --plan`` used to do.
+    """
+
+    if not Path(workspace).is_dir():
+        # Basic preconditions first: a missing workspace is not an "actor"
+        # problem, and reporting it as one would be misleading.
+        raise ValueError(f"workspace is not a directory: {workspace}")
+
+    # Two legitimate shapes for a given plan:
+    #   * every step is capability-bound -> deterministic follow-plan, no model
+    #     per step (the runtime executes the bound tool itself);
+    #   * some step is free-form -> the step actor has to decide what to do, so
+    #     the profile must not follow the plan blindly and a model is required.
+    free_steps = [
+        step.id
+        for step in plan.proposal.steps
+        if getattr(step, "intent", None) is None
+    ]
+    if model_config is not None:
+        from dataclasses import replace
+
+        from xenon.harness.llm import build_llm_loop_strategy
+
+        profile = LoopProfile(
+            plan=True,
+            step_scope=True,
+            follow_plan=not free_steps,
+        )
+        strategy: Any = replace(
+            build_llm_loop_strategy(model_config, profile),
+            # The plan is *given*: the model's job is to execute its steps,
+            # not to invent a different one.
+            planner=lambda view: plan.proposal,
+        )
+    else:
+        if free_steps:
+            raise ValueError(
+                "run_plan requires model_config when steps are not "
+                f"capability-bound (free-form steps: {free_steps}); without "
+                "an actor they cannot be executed"
+            )
+        from xenon.kernel.contracts import Finish
+        from xenon.kernel.strategies import LoopStrategy
+
+        strategy = LoopStrategy(
             LoopProfile(plan=True, step_scope=True, follow_plan=True),
             actor=lambda view: Finish("completed"),
             planner=lambda view: plan.proposal,
-        ),
+        )
+    return run_task(
+        plan.objective,
+        strategy=strategy,
         workspace=workspace,
         ledger_dir=ledger_dir,
         task_id=task_id,

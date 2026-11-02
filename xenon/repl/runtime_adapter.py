@@ -534,6 +534,7 @@ class RuntimeAdapter:
         strategy_mode: str = "react",
         plan_only: bool = False,
         progress_sink: Any = None,
+        audit_provider: Any = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         if not self.workspace.is_dir():
@@ -542,6 +543,7 @@ class RuntimeAdapter:
             )
         self.model_config = model_config
         self.progress_sink = progress_sink
+        self.audit_provider = audit_provider
         self.permission = permission
         self.ledger_dir = (
             Path(ledger_dir).expanduser()
@@ -641,6 +643,7 @@ class RuntimeAdapter:
             constraints=tuple(constraints),
             sink=sink,
             context_blocks=tuple(context_blocks or ()),
+            audit_provider=self.audit_provider,
             approval=self.approval if self.allow_approval else None,
             allow_approval=self.allow_approval,
             catalog_profile=self.catalog_profile,
@@ -810,6 +813,17 @@ def session_context_blocks(repl: Any, objective: str) -> tuple[tuple[str, str], 
         )
     except Exception:  # noqa: BLE001 — fall back to no context
         return ()
+
+
+def _audit_proposer(config: Any) -> Any:
+    """Build the V2 audit proposer for a kernel turn (fail-closed on error)."""
+
+    try:
+        from xenon.harness.llm import LLMAuditProposer
+
+        return LLMAuditProposer(config)
+    except Exception:  # noqa: BLE001 — no proposer means "abstain", not "pass"
+        return None
 
 
 def _console_for(repl: Any) -> Any:
@@ -1133,6 +1147,10 @@ def run_kernel_turn(
         if callable(start_capture):
             start_capture()
         adapter.progress_sink = kernel_progress_reporter(repl)
+        # V2 coverage needs a proposer: without one, every semantic obligation
+        # can only ever abstain (#286).  The proposer only points at receipts;
+        # the binder still decides, and proposal-backed verdicts stay PARTIAL.
+        adapter.audit_provider = _audit_proposer(adapter.model_config)
         # The status bar shows the loop that is actually executing; ``/mode``
         # is chat configuration and would claim a mode the agent is not using.
         status_bar = getattr(repl, "status_bar", None)

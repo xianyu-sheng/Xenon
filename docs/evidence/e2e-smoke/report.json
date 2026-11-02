@@ -1,13 +1,13 @@
 {
   "model": "deepseek/deepseek-v4-flash",
-  "started_at": "2026-11-02T03:53:55Z",
-  "workdir": "C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\xenon-e2e-work-j2l08m5h",
+  "started_at": "2026-11-02T04:56:15Z",
+  "workdir": "C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\xenon-e2e-work-ek1u3w7o",
   "results": [
     {
       "name": "sdk-default-blocks-shell",
       "status": "PASS",
       "detail": "3 checks",
-      "seconds": 5.0,
+      "seconds": 3.9,
       "checks": [
         {
           "name": "sdk ran",
@@ -30,17 +30,17 @@
       "name": "sdk-bypass-delivers",
       "status": "PASS",
       "detail": "3 checks",
-      "seconds": 7.4,
+      "seconds": 6.9,
       "checks": [
         {
           "name": "sdk ran",
           "ok": true,
-          "detail": "OUTCOME {\"accepted\": true, \"phase\": \"finalized\", \"evidence\": \"verified\", \"debt\": [], \"reason\": \"\", \"answer\": \"在 calc.py 中新增了 f() 函数返回 6；在 tests/test_calc.py 中新增了 test_f() 测试。验证命令 python -m pytest tests/test_calc.py -q 运行 2 个测试全部通过（exit_code=0）。\"}\n"
+          "detail": "OUTCOME {\"accepted\": true, \"phase\": \"finalized\", \"evidence\": \"verified\", \"debt\": [], \"reason\": \"\", \"answer\": \"在 calc.py 中添加了 f() 函数（返回 6），并在 tests/test_calc.py 中新增了 test_f 测试。已运行 python -m pytest tests/test_calc.py -q，2 个测试全部通过。\"}\n"
         },
         {
           "name": "accepted=True",
           "ok": true,
-          "detail": "{'accepted': True, 'phase': 'finalized', 'evidence': 'verified', 'debt': [], 'reason': '', 'answer': '在 calc.py 中新增了 f() 函数返回 6；在 tests/test_calc.py 中新增了 test_f() 测试。验证命令 python -m pytest tests/test_c"
+          "detail": "{'accepted': True, 'phase': 'finalized', 'evidence': 'verified', 'debt': [], 'reason': '', 'answer': '在 calc.py 中添加了 f() 函数（返回 6），并在 tests/test_calc.py 中新增了 test_f 测试。已运行 python -m pytest tests/test_c"
         },
         {
           "name": "calc.py contains 'def f'",
@@ -86,7 +86,7 @@
       "name": "plan-execute",
       "status": "PASS",
       "detail": "4 checks",
-      "seconds": 16.1,
+      "seconds": 22.3,
       "checks": [
         {
           "name": "exit code",
@@ -106,7 +106,7 @@
         {
           "name": "pytest passes",
           "ok": true,
-          "detail": ".....                                                                    [100%]\n5 passed in 0.01s\n"
+          "detail": ".......                                                                  [100%]\n7 passed in 0.01s\n"
         }
       ]
     },
@@ -114,7 +114,7 @@
       "name": "read-only-no-write",
       "status": "PASS",
       "detail": "3 checks",
-      "seconds": 4.0,
+      "seconds": 4.5,
       "checks": [
         {
           "name": "exit code",
@@ -137,7 +137,7 @@
       "name": "no-finalize",
       "status": "PASS",
       "detail": "3 checks",
-      "seconds": 29.1,
+      "seconds": 17.1,
       "checks": [
         {
           "name": "exit code",
@@ -160,7 +160,7 @@
       "name": "accept-debt",
       "status": "PASS",
       "detail": "2 checks",
-      "seconds": 15.9,
+      "seconds": 19.2,
       "checks": [
         {
           "name": "exit code",
@@ -175,10 +175,38 @@
       ]
     },
     {
+      "name": "plan-file-executes",
+      "status": "PASS",
+      "detail": "4 checks",
+      "seconds": 7.5,
+      "checks": [
+        {
+          "name": "exit code",
+          "ok": true,
+          "detail": "rc=0"
+        },
+        {
+          "name": "phase=finalized",
+          "ok": true,
+          "detail": "{\"from\": \"delivered\", \"reason\": \"finalized\", \"to\": \"finalized\"}"
+        },
+        {
+          "name": "calc.py contains 'def sub'",
+          "ok": true,
+          "detail": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"
+        },
+        {
+          "name": "pytest passes",
+          "ok": true,
+          "detail": ".                                                                        [100%]\n1 passed in 0.01s\n"
+        }
+      ]
+    },
+    {
       "name": "stray-change-reported",
       "status": "PASS",
       "detail": "2 checks",
-      "seconds": 10.5,
+      "seconds": 29.8,
       "checks": [
         {
           "name": "exit code",
@@ -188,7 +216,7 @@
         {
           "name": "reason names the stray path",
           "ok": true,
-          "detail": "                                                                 [100%]\n2 passed in 0.01s\n\n11:53:45 [httpx] INFO: HTTP Request: POST https://api.deepseek.com/v1/chat/completions \"HTTP/1.1 200 OK\"\nblocked accepted=False sha=- debt=1 ledger=C:\\Users\\Administrator\\.xenon\\ledger\\task-6c8a7af41e31.jsonl\n"
+          "detail": "                                                                 [100%]\n2 passed in 0.01s\n\n12:56:05 [httpx] INFO: HTTP Request: POST https://api.deepseek.com/v1/chat/completions \"HTTP/1.1 200 OK\"\nblocked accepted=False sha=- debt=1 ledger=C:\\Users\\Administrator\\.xenon\\ledger\\task-58f44ac4afff.jsonl\n"
         }
       ]
     },
@@ -196,7 +224,7 @@
       "name": "network-needs-approval",
       "status": "PASS",
       "detail": "2 checks",
-      "seconds": 2.7,
+      "seconds": 2.5,
       "checks": [
         {
           "name": "exit code",
@@ -206,7 +234,7 @@
         {
           "name": "blocked fail-closed with a reason",
           "ok": true,
-          "detail": "untime\",\"step_id\":null,\"task_id\":\"task-21c2d0d3a1a1\",\"ts\":\"2026-11-02T03:53:49.768+00:00\"}\n11:53:48 [httpx] INFO: HTTP Request: POST https://api.deepseek.com/v1/chat/completions \"HTTP/1.1 200 OK\"\nblocked accepted=False sha=- debt=0 ledger=C:\\Users\\Administrator\\.xenon\\ledger\\task-21c2d0d3a1a1.jsonl\n"
+          "detail": "untime\",\"step_id\":null,\"task_id\":\"task-113326b70410\",\"ts\":\"2026-11-02T04:56:09.991+00:00\"}\n12:56:08 [httpx] INFO: HTTP Request: POST https://api.deepseek.com/v1/chat/completions \"HTTP/1.1 200 OK\"\nblocked accepted=False sha=- debt=0 ledger=C:\\Users\\Administrator\\.xenon\\ledger\\task-113326b70410.jsonl\n"
         }
       ]
     },
@@ -214,7 +242,7 @@
       "name": "impossible-task",
       "status": "PASS",
       "detail": "1 checks",
-      "seconds": 5.5,
+      "seconds": 4.6,
       "checks": [
         {
           "name": "exit code",

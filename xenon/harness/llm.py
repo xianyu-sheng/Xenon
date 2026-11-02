@@ -1299,3 +1299,164 @@ __all__ = [
     "parse_action",
     "resolve_model_config",
 ]
+
+
+_AUDIT_PROTOCOL = """\
+You are Xenon's V2 coverage proposer. You do NOT decide pass or fail.
+
+Return exactly one JSON object with no fence and no prose outside it:
+{"coverage":[{"obligation_id":"...","artifact_paths":["..."],"test_targets":["..."],"rationale":"..."}],
+ "gaps":[{"obligation_id":"...","reason":"...","next_action":"..."}],
+ "rationale":"..."}
+
+Rules:
+- Only name artifacts and test targets that appear in the receipt summary below.
+- A coverage entry claims "these receipts cover this obligation". The harness
+  will check each named path/target against the ledger; naming something that
+  does not exist gains nothing.
+- If you cannot name real receipts, put the obligation in "gaps" instead.
+- Never emit a verdict, a score, or the word "passed" as a decision.
+"""
+
+
+class LLMAuditProposer:
+    """Ask the model to *propose* coverage; the binder still decides (#286).
+
+    The model can only point at receipts it was shown.  Even when the binder
+    accepts the pointers, the resulting verdict is marked ``from_proposal`` so
+    the evidence level stays PARTIAL: the facts exist, but "these facts prove
+    this requirement" is still a judgement, not a proof.
+    """
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        client: Callable[..., str] | None = None,
+    ) -> None:
+        self.config = config
+        self._client = client
+
+    def propose(
+        self, obligations: Sequence[Any], ledger: Any
+    ) -> Any:
+
+        if not obligations:
+            return None
+        try:
+            payload = _extract_json(
+                _call_model(
+                    self.config,
+                    self._client,
+                    build_audit_messages(obligations, ledger),
+                )
+            )
+        except Exception:  # noqa: BLE001 — a failed proposal is not a pass
+            return None
+        if not isinstance(payload, Mapping):
+            return None
+        return _audit_proposal(payload)
+
+
+def build_audit_messages(
+    obligations: Sequence[Any], ledger: Any
+) -> list[dict[str, str]]:
+    """Show the model the obligations and the receipts it may point at."""
+
+    receipts: list[dict[str, Any]] = []
+    try:
+        from xenon.ledger.events import EventKind
+
+        for event in ledger.read(EventKind.TOOL_RECEIPT):
+            receipt = (event.payload or {}).get("receipt") or {}
+            if not isinstance(receipt, Mapping):
+                continue
+            if str(receipt.get("status") or "") != "ok":
+                continue
+            receipts.append(
+                {
+                    "seq": event.seq,
+                    "tool": receipt.get("tool"),
+                    "effects": [
+                        item
+                        for item in (receipt.get("effects") or ())
+                        if isinstance(item, Mapping)
+                    ],
+                }
+            )
+    except Exception:  # noqa: BLE001 — an unreadable ledger yields no receipts
+        receipts = []
+    state = {
+        "obligations": [
+            {
+                "id": item.id,
+                "kind": item.kind.value,
+                "target": item.target,
+            }
+            for item in obligations
+        ],
+        "receipts": receipts[-40:],
+    }
+    return [
+        {"role": "system", "content": _AUDIT_PROTOCOL},
+        {
+            "role": "user",
+            "content": (
+                "Deterministic state (ledger receipts only):\n"
+                + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+                + "\nReturn exactly one JSON object."
+            ),
+        },
+    ]
+
+
+def _audit_proposal(payload: Mapping[str, Any]) -> Any:
+    """Turn model output into an AuditProposal; anything odd is dropped."""
+
+    from xenon.kernel.contracts import AuditProposal, CoverageClaim, GapProposal
+
+    def _strings(value: Any) -> tuple[str, ...]:
+        if not isinstance(value, (list, tuple)):
+            return ()
+        return tuple(str(item) for item in value if isinstance(item, str) and item)
+
+    coverage: list[CoverageClaim] = []
+    for item in payload.get("coverage") or ():
+        if not isinstance(item, Mapping):
+            continue
+        obligation_id = str(item.get("obligation_id") or "").strip()
+        if not obligation_id:
+            continue
+        artifacts = _strings(item.get("artifact_paths"))
+        tests = _strings(item.get("test_targets"))
+        if not artifacts and not tests:
+            continue
+        coverage.append(
+            CoverageClaim(
+                obligation_id=obligation_id,
+                artifact_paths=artifacts,
+                test_targets=tests,
+                rationale=str(item.get("rationale") or "")[:400],
+            )
+        )
+    gaps: list[GapProposal] = []
+    for item in payload.get("gaps") or ():
+        if not isinstance(item, Mapping):
+            continue
+        obligation_id = str(item.get("obligation_id") or "").strip()
+        if not obligation_id:
+            continue
+        gaps.append(
+            GapProposal(
+                obligation_id=obligation_id,
+                reason=str(item.get("reason") or "no coverage proposed")[:400],
+                next_action=str(item.get("next_action") or "")[:400],
+            )
+        )
+    if not coverage and not gaps:
+        return None
+    return AuditProposal(
+        coverage=tuple(coverage),
+        gaps=tuple(gaps),
+        rationale=str(payload.get("rationale") or "")[:400],
+    )
