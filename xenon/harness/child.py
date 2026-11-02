@@ -132,8 +132,22 @@ def _kill_tree(proc: subprocess.Popen) -> None:
             pass
     try:
         proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:  # pragma: no cover — hostile system
+    except subprocess.TimeoutExpired:
         proc.kill()
+
+
+def _read_outcome(out_path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    """Read a child's outcome file.  A corrupt file is an error, never a pass."""
+
+    if not out_path.exists():
+        return None, None
+    try:
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return None, f"unreadable child outcome: {exc}"
+    if not isinstance(payload, dict):
+        return None, "child outcome is not an object"
+    return payload, None
 
 
 def _run_in_subprocess(
@@ -155,7 +169,7 @@ def _run_in_subprocess(
     kwargs: dict[str, Any] = {}
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:  # pragma: no cover — POSIX-only flag
+    else:
         kwargs["start_new_session"] = True
 
     with open(err_path, "wb") as err:
@@ -180,13 +194,7 @@ def _run_in_subprocess(
             _kill_tree(proc)
             killed = True
 
-    error: str | None = None
-    payload: dict[str, Any] | None = None
-    if out_path.exists():
-        try:
-            payload = json.loads(out_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            error = f"unreadable child outcome: {exc}"
+    payload, error = _read_outcome(out_path)
     if killed:
         error = f"timeout after {timeout:.0f}s; process group killed"
     elif payload is None and error is None:

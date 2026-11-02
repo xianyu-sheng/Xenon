@@ -72,15 +72,22 @@ def model_to_spec(config: ModelConfig) -> dict[str, Any]:
     }
 
 
-def run_spec(spec: dict[str, Any]) -> dict[str, Any]:
-    """Execute one spec in this process and return the outcome payload."""
+def run_spec(spec: dict[str, Any], *, client: Any = None) -> dict[str, Any]:
+    """Execute one spec in this process and return the outcome payload.
+
+    ``client`` is a testing seam: a fake transport lets the payload shape be
+    exercised here rather than only inside a spawned process, where the parent's
+    coverage cannot see it.
+    """
 
     from xenon.harness.llm import build_llm_loop_strategy
 
     profile_name = str(spec.get("profile") or "kernel")
     if profile_name not in PROFILES:
         raise KeyError(f"unknown child profile: {profile_name}")
-    strategy = build_llm_loop_strategy(model_from_spec(spec["model"]), PROFILES[profile_name])
+    strategy = build_llm_loop_strategy(
+        model_from_spec(spec["model"]), PROFILES[profile_name], client=client
+    )
 
     run = run_task(
         str(spec["objective"]),
@@ -121,5 +128,5 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":  # pragma: no cover — exercised as a subprocess
+if __name__ == "__main__":
     raise SystemExit(main())
