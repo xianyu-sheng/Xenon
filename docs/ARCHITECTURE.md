@@ -8,6 +8,101 @@
 > 「内容正确性」做分级透明披露，把语义判断还给用户。这是 Xenon 与
 > "直接相信模型输出"的 Agent 运行时最大的分野。
 
+## 0. 单循环内核（v0.9 当前控制流）
+
+> 本节是内核**控制流**的权威视图，从 README 迁移而来；下文第 1 节起是
+> 可信度分层与工程模块的**实现视角**。两者描述同一系统的不同切面。
+
+### 0.1 为什么是单循环
+
+旧版 Xenon 有 7 个“推理引擎”。`engine/registry.py` 自己承认：七种内置范式
+**运行流程完全同构**，差异只有引擎类、少量参数、模式行和面板标题。结果是
+同一套循环被复制 7 次，工具语义散落在 prompt、plan 校验、TaskState、
+ClaimGate、delivery 五处。现在只剩一条控制流：
+
+```text
+TaskSpec
+  → LoopRuntime（唯一 writer，显式 phase machine）
+      view      = Projection(ledger[0..seq], catalog, spec)
+      action    = Strategy.propose(view)        # 模型只提案
+      decision  = Policy.check(view, action)    # 确定性 veto / approval
+      receipt   = Gateway.execute(action)       # 唯一副作用入口
+      verdict   = Controller.reconcile(...)     # V0 / V1 / V2
+      event     = Runtime.append(...)           # 唯一 durable write
+  → Finalizer（只 stage 已验证路径，生成交付提交）
+```
+
+### 0.2 内核总览
+
+```text
+                    ┌──────────── LoopRuntime（唯一 writer）────────────┐
+ TaskSpec ─────────▶│ intake → running → tool_call → reconciling      │
+                    │        → auditing → delivering → finalized      │
+                    │ view      = Projection(ledger, catalog, spec)   │
+                    │ action    = Strategy.propose(view)               │
+                    │ decision  = Policy.check(action)                 │
+                    │ receipt   = Gateway.execute(action)              │
+                    │ verdict   = Controller.reconcile(...)            │
+                    │ event     = Ledger.append(...)                   │
+                    └─────────────────────────────────────────────────┘
+          ▲                       │                        │
+     Projections              ToolCatalog               EventSink
+  ModelView / TaskState     core + MCP pack          TUI / JSONL / SDK
+  PlanView / EvidenceView
+```
+
+### 0.3 七条不变量（I1–I7）
+
+- **I1 单 writer**：只有 `LoopRuntime` 能 append ledger。
+- **I2 单入口**：所有工具副作用经过 `ToolGateway`；交付提交由 `Finalizer` 独占。
+- **I3 单事实源**：ledger 是唯一真相；其他都是带 `input_seq` 的只读投影。
+- **I4 语义接口**：kernel 只认 capability / obligation / receipt；工具名只活在 catalog。
+- **I5 提案/事实分离**：LLM 输出是 `claim-*` / `hyp-*`；只有 binder 能产生 `fact-*`。
+- **I6 单一决策权**：`VerificationController` 决定 repair / replan / abstain / abort。
+- **I7 可回放**：同一 ledger 前缀产生逐字节一致的投影，回放过程零网络。
+
+### 0.4 一个回合怎么走
+
+```text
+输入
+  → TaskSpec：objective / user_objective / obligations / budget / permission
+  → 模型提案：think / call_tool / submit_plan / update_plan / finish / abort
+  → Catalog：capability → ToolSpec → ToolCall
+  → Policy：allow / veto / require_approval
+  → Gateway：七阶段 ToolExecutor → typed ToolReceipt
+  → Controller：V0 receipt 不变量 / V1 step 后置条件 / V2 coverage
+      bound         → 继续
+      unresolved    → debt / repair / replan
+      ambiguous     → abstain，不猜
+      abstained     → 询问用户或保留 debt
+  → Finalizer：preflight audit → intent → commit → receipt → final decision
+      non-deliver   → 回滚本次 commit
+  → Projection：/evidence /goal /resume /plan 读取同一 ledger
+```
+
+### 0.5 验证层级（V0 / V1 / V2）
+
+| 层级 | 检查 | 权威 |
+|---|---|---|
+| **V0** | exit code、no-op write、target 匹配、真实 test target、commit sha、worktree delta | controller |
+| **V1** | step 的 `expects` 是否被 fact 关闭 | controller |
+| **V2** | 全局 obligation coverage、负事实、semantic gap | deterministic binder + user abstention |
+
+- 工具失败不会被关键词猜成成功；
+- 零匹配是 `unresolved`，多匹配是 `ambiguous`，两者都不会静默取一个；
+- 无法确定性验证的语义要求是 `abstained`，不是 pass；
+- debt 会阻止交付，直到有 fact 或用户明确接受；
+- 哈希链能证明过程未被篡改，但不证明模型结论正确。
+
+### 0.6 工具与 MCP
+
+- `ToolCatalog` 用 **7 类 capability** 表达工具语义：`read / search / edit / verify / vcs / shell / remote`；
+- 工具名只在 catalog/spec 出现，kernel 不分支具体工具名；
+- MCP 使用 **per-tool ToolSpec**，不是把所有工具都塞给模型；
+- 工具预算按 objective 做确定性选择（例如 46 个 GitHub 工具只注入 16 个），未知工具 `unresolved`；
+- approval 是外部 MCP 调用的边界；每次授权绑定目标并带 TTL，调用后立即撤销；
+- `git push` 在显式 `TaskSpec.allow_push` 前保持 veto。
+
 ## 1. 三层可信度模型
 
 | 层 | 机制 | 位置 | 机器职责 |
