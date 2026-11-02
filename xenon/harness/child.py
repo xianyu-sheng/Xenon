@@ -4,15 +4,26 @@ A child task is not a second execution model.  It is the same ``run_task`` loop
 with its own ledger, its own objective and no delivery commit — so a parent can
 delegate work without sharing mutable task state.
 
+Isolation is a *process*, not a thread.  A thread cannot be killed: it was
+observed writing files after the parent had already recorded a timeout, which
+makes the parent's delivery claim unreliable.  A process group can be killed,
+and the kill is observable in the outcome.
+
 What this slice deliberately does **not** do: kernel-level spawning (a `spawn`
-capability), streaming the child's events into the parent ledger, or nested
-children.  Depth is structurally 1: the child runs the same loop, and the loop has
-no spawn tool.
+capability), streaming the child's events into the parent ledger, projecting the
+child's facts into the parent's audit, or nested children.  Depth is structurally
+1: the child runs the same loop, and the loop has no spawn tool.
 """
 
 from __future__ import annotations
 
 import concurrent.futures
+import json
+import os
+import signal
+import subprocess
+import sys
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass
@@ -52,6 +63,9 @@ class ChildOutcome:
     tool_calls: int
     elapsed_seconds: float
     error: str | None = None
+    # Process identity, so a caller can prove the child is gone (or kill it).
+    pid: int = 0
+    killed: bool = False
 
     @property
     def delivered(self) -> bool:
@@ -66,6 +80,123 @@ class ChildOutcome:
         body = self.answer.strip()[:limit] or "（无最终回答）"
         tail = f" · debt: {'; '.join(self.debt)}" if self.debt else ""
         return f"{head}{tail}\n{body}\nledger: {self.ledger_path}"
+
+
+_PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _child_spec(
+    *,
+    child_id: str,
+    objective: str,
+    workspace: str | Path,
+    model: ModelConfig,
+    profile: str,
+    ledger_dir: Path,
+    permission: PermissionMode,
+    max_steps: int,
+) -> dict[str, Any]:
+    from xenon.harness.child_worker import model_to_spec
+
+    return {
+        "child_id": child_id,
+        "objective": objective,
+        "workspace": str(workspace),
+        "profile": profile,
+        "permission": permission.value,
+        "max_steps": max_steps,
+        "ledger_dir": str(ledger_dir),
+        "model": model_to_spec(model),
+    }
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill the child *and anything it spawned*.
+
+    A child that started its own commands must not outlive the kill: those
+    grandchildren are exactly the ones that would keep writing to the workspace.
+    """
+
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            capture_output=True,
+            check=False,
+        )
+    else:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:  # pragma: no cover — hostile system
+        proc.kill()
+
+
+def _run_in_subprocess(
+    spec: dict[str, Any],
+    *,
+    ledger_dir: Path,
+    timeout: float | None,
+    child_id: str,
+) -> tuple[dict[str, Any] | None, str | None, int, bool]:
+    """Run one child in its own process group.  Returns (payload, error, pid, killed)."""
+
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.mkdtemp(prefix=f"{child_id}-", dir=str(ledger_dir))
+    spec_path = Path(handle) / "spec.json"
+    out_path = Path(handle) / "outcome.json"
+    err_path = Path(handle) / "stderr.log"
+    spec_path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+
+    kwargs: dict[str, Any] = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:  # pragma: no cover — POSIX-only flag
+        kwargs["start_new_session"] = True
+
+    with open(err_path, "wb") as err:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "xenon.harness.child_worker",
+                str(spec_path),
+                str(out_path),
+            ],
+            cwd=str(_PACKAGE_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=err,
+            stdin=subprocess.DEVNULL,
+            **kwargs,
+        )
+        killed = False
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            killed = True
+
+    error: str | None = None
+    payload: dict[str, Any] | None = None
+    if out_path.exists():
+        try:
+            payload = json.loads(out_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            error = f"unreadable child outcome: {exc}"
+    if killed:
+        error = f"timeout after {timeout:.0f}s; process group killed"
+    elif payload is None and error is None:
+        tail = ""
+        if err_path.exists():
+            tail = err_path.read_text(encoding="utf-8", errors="replace")[-400:].strip()
+        error = f"child exited {proc.returncode} without an outcome"
+        if tail:
+            error = f"{error}: {tail}"
+    return payload, error, proc.pid, killed
 
 
 def run_child_task(
@@ -83,22 +214,107 @@ def run_child_task(
     gateway_context: Any = None,
     index: int = 1,
 ) -> ChildOutcome:
-    """Run one delegated task on the loop, in its own ledger."""
+    """Run one delegated task on the loop, in its own ledger.
+
+    Default path is a child **process** in its own process group, so a timeout
+    can actually kill it.  ``client``/``gateway_context`` are injection seams for
+    tests: they cannot cross a process boundary, so passing either keeps the run
+    in this process (and then a timeout can only abandon, not kill).
+    """
 
     if profile not in CHILD_PROFILES:
         raise KeyError(f"unknown child profile: {profile}")
-    child_id = (
-        f"{parent_task_id or 'child'}-sub{index}-{uuid.uuid4().hex[:6]}"
-    )
+    child_id = f"{parent_task_id or 'child'}-sub{index}-{uuid.uuid4().hex[:6]}"
     directory = (
         Path(ledger_dir)
         if ledger_dir is not None
         else Path.home() / ".xenon" / "ledger" / "children"
     )
     started = time.time()
-    strategy = build_llm_loop_strategy(
-        model, CHILD_PROFILES[profile], client=client
+    in_process = client is not None or gateway_context is not None
+
+    if in_process:
+        payload, error, pid, killed = _run_in_process(
+            objective=objective,
+            workspace=workspace,
+            model=model,
+            profile=profile,
+            child_id=child_id,
+            directory=directory,
+            permission=permission,
+            max_steps=max_steps,
+            timeout=timeout,
+            client=client,
+            gateway_context=gateway_context,
+        )
+    else:
+        payload, error, pid, killed = _run_in_subprocess(
+            _child_spec(
+                child_id=child_id,
+                objective=objective,
+                workspace=workspace,
+                model=model,
+                profile=profile,
+                ledger_dir=directory,
+                permission=permission,
+                max_steps=max_steps,
+            ),
+            ledger_dir=directory,
+            timeout=timeout,
+            child_id=child_id,
+        )
+
+    elapsed = round(time.time() - started, 3)
+    if payload is None:
+        return ChildOutcome(
+            child_id=child_id,
+            objective=objective,
+            profile=profile,
+            accepted=False,
+            phase="killed" if killed else "failed",
+            answer="",
+            ledger_path=str(directory / f"{child_id}.jsonl"),
+            debt=(),
+            tool_calls=0,
+            elapsed_seconds=elapsed,
+            error=error or "child did not run",
+            pid=pid,
+            killed=killed,
+        )
+    return ChildOutcome(
+        child_id=child_id,
+        objective=objective,
+        profile=profile,
+        accepted=bool(payload.get("accepted")),
+        phase=str(payload.get("phase") or "failed"),
+        answer=str(payload.get("answer") or ""),
+        ledger_path=str(payload.get("ledger_path") or directory / f"{child_id}.jsonl"),
+        debt=tuple(payload.get("debt") or ()),
+        tool_calls=int(payload.get("tool_calls") or 0),
+        elapsed_seconds=elapsed,
+        error=error,
+        pid=pid,
+        killed=killed,
     )
+
+
+def _run_in_process(
+    *,
+    objective: str,
+    workspace: str | Path,
+    model: ModelConfig,
+    profile: str,
+    child_id: str,
+    directory: Path,
+    permission: PermissionMode,
+    max_steps: int,
+    timeout: float | None,
+    client: Any,
+    gateway_context: Any,
+) -> tuple[dict[str, Any] | None, str | None, int, bool]:
+    """Test seam: the same loop, in this process.  Cannot kill, only abandon."""
+
+    strategy = build_llm_loop_strategy(model, CHILD_PROFILES[profile], client=client)
 
     def _run() -> Any:
         return run_task(
@@ -115,56 +331,47 @@ def run_child_task(
             gateway_context=gateway_context,
         )
 
-    error: str | None = None
     run = None
+    error: str | None = None
+    killed = False
     if timeout is None:
         try:
             run = _run()
         except Exception as exc:  # noqa: BLE001 — a child failure is data
             error = f"{type(exc).__name__}: {exc}"
     else:
-        # A thread cannot be cancelled safely; the child is marked timed out and
-        # its ledger remains the record of whatever it managed to do.
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = pool.submit(_run)
         try:
             run = future.result(timeout=timeout)
         except concurrent.futures.TimeoutError:
-            error = f"timeout after {timeout:.0f}s"
+            # Honest wording: an in-process child cannot be killed, only
+            # abandoned, and it may still be writing.  ``killed`` stays False so
+            # a caller cannot mistake this for the isolated path.
+            error = (
+                f"timeout after {timeout:.0f}s "
+                "(in-process seam: thread abandoned, not killed)"
+            )
         except Exception as exc:  # noqa: BLE001
             error = f"{type(exc).__name__}: {exc}"
         finally:
             pool.shutdown(wait=False)
-
-    elapsed = round(time.time() - started, 3)
-    ledger_path = directory / f"{child_id}.jsonl"
     if run is None:
-        return ChildOutcome(
-            child_id=child_id,
-            objective=objective,
-            profile=profile,
-            accepted=False,
-            phase="failed",
-            answer="",
-            ledger_path=str(ledger_path),
-            debt=(),
-            tool_calls=0,
-            elapsed_seconds=elapsed,
-            error=error or "child did not run",
-        )
+        return None, error or "child did not run", 0, killed
     result = run.result
-    return ChildOutcome(
-        child_id=child_id,
-        objective=objective,
-        profile=profile,
-        accepted=result.accepted,
-        phase=result.phase.value,
-        answer=result.answer,
-        ledger_path=str(run.ledger_path),
-        debt=tuple(item.reason for item in result.debt),
-        tool_calls=int(result.metrics.get("tool_calls", 0.0)),
-        elapsed_seconds=elapsed,
-        error=error,
+    return (
+        {
+            "child_id": child_id,
+            "accepted": result.accepted,
+            "phase": result.phase.value,
+            "answer": result.answer,
+            "ledger_path": str(run.ledger_path),
+            "debt": [item.reason for item in result.debt],
+            "tool_calls": int(result.metrics.get("tool_calls", 0.0)),
+        },
+        error,
+        0,
+        killed,
     )
 
 
@@ -224,6 +431,8 @@ def child_evidence(outcome: ChildOutcome) -> dict[str, Any]:
         "tool_calls": outcome.tool_calls,
         "elapsed_seconds": outcome.elapsed_seconds,
         "error": outcome.error,
+        "pid": outcome.pid,
+        "killed": outcome.killed,
     }
 
 

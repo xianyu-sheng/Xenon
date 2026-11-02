@@ -252,3 +252,144 @@ def test_sub_agent_records_a_pointer_event(tmp_path: Path, monkeypatch) -> None:
     assert captured, "命令必须调用子运行时"
     assert events and events[0][0] == "child_task"
     assert events[0][1]["ledger"].endswith("child.jsonl")
+
+
+# ── process isolation (#354) ─────────────────────────────────────────
+#
+# The bug these tests exist for: an abandoned child thread kept writing to the
+# workspace after the parent recorded a timeout.  A process group can be killed,
+# and the kill is observable.
+
+
+def test_a_default_child_runs_in_its_own_process(tmp_path: Path, monkeypatch) -> None:
+    """No injection seam -> a real subprocess, and the outcome carries its pid."""
+
+    import xenon.harness.child as child_mod
+
+    seen: dict = {}
+
+    def spy(spec, **kwargs):
+        seen["spec"] = spec
+        return (
+            {
+                "child_id": spec["child_id"],
+                "accepted": True,
+                "phase": "finalized",
+                "answer": "done",
+                "ledger_path": str(tmp_path / "c.jsonl"),
+                "debt": [],
+                "tool_calls": 2,
+            },
+            None,
+            4242,
+            False,
+        )
+
+    monkeypatch.setattr(child_mod, "_run_in_subprocess", spy)
+    outcome = run_child_task(
+        objective="x",
+        workspace=_worktree(tmp_path),
+        model=ModelConfig(model_id="test/fake"),
+        profile="react",
+    )
+
+    assert "spec" in seen, "the default path must not be in-process"
+    assert outcome.pid == 4242 and outcome.killed is False
+    assert outcome.accepted is True and outcome.tool_calls == 2
+
+
+def test_a_timeout_kills_the_process_group(tmp_path: Path) -> None:
+    """The child is killed, not abandoned: nothing survives to write later."""
+
+    import time
+
+    ws = _worktree(tmp_path)
+    started = time.time()
+    outcome = run_child_task(
+        objective="spend a long time thinking about nothing",
+        workspace=ws,
+        model=ModelConfig(model_id="test/missing-model"),  # fails fast if reached
+        profile="react",
+        ledger_dir=tmp_path / "children",
+        timeout=0.4,
+    )
+    elapsed = time.time() - started
+
+    assert outcome.killed is True
+    assert outcome.phase == "killed"
+    assert outcome.delivered is False
+    assert "killed" in (outcome.error or "")
+    assert outcome.pid > 0
+    # Killed children must not linger: the whole group is gone.
+    assert elapsed < 30
+
+
+def test_an_unknown_profile_is_rejected_before_spawning(tmp_path: Path) -> None:
+    """Parent validates first: a bad name must not start a process."""
+
+    with pytest.raises(KeyError):
+        run_child_task(
+            objective="x",
+            workspace=_worktree(tmp_path),
+            model=ModelConfig(model_id="test/fake"),
+            profile="not-a-real-profile",
+            ledger_dir=tmp_path / "children",
+        )
+
+
+def test_child_evidence_reports_process_identity(tmp_path: Path) -> None:
+    from xenon.harness.child import ChildOutcome
+
+    outcome = ChildOutcome(
+        child_id="p-sub1-abc",
+        objective="x",
+        profile="react",
+        accepted=False,
+        phase="killed",
+        answer="",
+        ledger_path=str(tmp_path / "c.jsonl"),
+        debt=(),
+        tool_calls=1,
+        elapsed_seconds=0.5,
+        error="timeout",
+        pid=999,
+        killed=True,
+    )
+    payload = child_evidence(outcome)
+
+    assert payload["pid"] == 999 and payload["killed"] is True
+    assert payload["delivered"] is False
+
+
+def test_a_killed_child_leaves_no_process_behind(tmp_path: Path) -> None:
+    """`ps` shows nothing: the pid is gone once the call returns."""
+
+    import os
+    import subprocess
+    import sys
+
+    outcome = run_child_task(
+        objective="x",
+        workspace=_worktree(tmp_path),
+        model=ModelConfig(model_id="test/fake"),
+        profile="react",
+        ledger_dir=tmp_path / "children",
+        timeout=0.4,
+    )
+
+    pid = outcome.pid
+    assert pid > 0
+    if sys.platform == "win32":
+        listing = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        assert str(pid) not in listing, f"child pid {pid} is still alive"
+    else:  # pragma: no cover — POSIX-only branch
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        raise AssertionError(f"child pid {pid} is still alive")
