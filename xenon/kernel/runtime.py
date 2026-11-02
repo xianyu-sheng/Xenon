@@ -1588,6 +1588,22 @@ class LoopRuntime:
         for policy in self._policies:
             decision = policy.check(view, action)
             if decision.kind is PolicyDecisionKind.ALLOW:
+                # A grant answering is a recorded decision, not silence (#373):
+                # a replay must explain "why this was not asked".  Routine
+                # allows (workspace edits, safe tests) stay quiet as before.
+                if str(decision.reason).startswith(
+                    ("session grant:", "scoped grant:")
+                ):
+                    self._append(
+                        EventKind.POLICY_DECISION,
+                        EventSource.GATE,
+                        {
+                            "kind": PolicyDecisionKind.ALLOW.value,
+                            "reason": decision.reason,
+                            "scope": list(decision.scope),
+                            "ttl_seconds": decision.ttl_seconds,
+                        },
+                    )
                 continue
             self._append(
                 EventKind.POLICY_DECISION,

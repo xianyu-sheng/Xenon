@@ -63,6 +63,7 @@ class SessionGrant:
             target=self.scope,
             expires_at=_NEVER,
             effects=frozenset[EffectKind](),
+            reason=self.reason,
         )
 
     def matches_workspace(self, workspace: str) -> bool:
@@ -212,6 +213,11 @@ def grant_from_choice(
     exactly what was asked for — which is the same thing when a single target was
     requested, so a scoped answer with several targets is refused rather than
     silently widened to "all of them".
+
+    The reason is *generated*, not borrowed: a grant's reason must say what the
+    human allowed ("session grant: shell"), not why the policy asked
+    ("verify requires approval").  A ledger replay answers "why was this not
+    asked" with the former.
     """
 
     if choice == SESSION:
@@ -219,7 +225,7 @@ def grant_from_choice(
             capability=capability,
             scope="*",
             workspace=workspace,
-            reason=reason or f"session grant: {capability.value}",
+            reason=f"session grant: {capability.value}",
         )
     if choice == SCOPED:
         if len(set(targets)) != 1:
@@ -228,6 +234,6 @@ def grant_from_choice(
             capability=capability,
             scope=str(targets[0]),
             workspace=workspace,
-            reason=reason or f"scoped grant: {targets[0]}",
+            reason=f"scoped grant: {targets[0]}",
         )
     return None

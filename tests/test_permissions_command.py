@@ -19,6 +19,7 @@ import xenon.kernel  # noqa: F401 — ledger<->kernel import cycle
 from xenon.kernel.contracts import Capability
 from xenon.kernel.permission_rules import ALLOW, ASK, DENY, RuleSet, parse_rule
 from xenon.kernel.session_grants import SESSION, GrantBook, grant_from_choice
+from xenon.repl.approval_ux import APPROVAL_ALLOWED_ONCE, APPROVAL_REJECTED
 from xenon.repl.command_groups.permissions import _cmd_permissions
 
 
@@ -162,7 +163,7 @@ def _prompt_repl(choice: str, *, workspace=None, console=None):
         _active_callback=None,
         _approval_key=lambda name, params: f"{name}:{params}",
         _diff_preview=lambda name, params: "",
-        _ask_approval_choice=lambda default="n": choice,
+        _ask_approval_choice=lambda default="n", *, from_child=False: choice,
         agent_context=types.SimpleNamespace(get_security_advisories=lambda: []),
         _permission_rules=rules,
     )
@@ -325,7 +326,7 @@ def test_every_answer_resumes_the_live_render(tmp_path, choice) -> None:
 def test_a_keyboard_interrupt_at_the_prompt_cancels(tmp_path) -> None:
     repl = _prompt_repl("y", workspace=tmp_path)
 
-    def boom(default="n"):
+    def boom(default="n", *, from_child=False):
         raise KeyboardInterrupt
 
     repl._ask_approval_choice = boom
@@ -403,3 +404,69 @@ def test_rules_of_with_a_ruleset_missing_rules_is_empty() -> None:
     adapter.permission_rules = types.SimpleNamespace()
 
     assert adapter._rules_of("ask") == ()
+
+
+# ── child-mediated requests degrade to one-shot (no memory) ────────
+
+
+def test_a_child_request_only_offers_ynq_and_remembers_nothing(tmp_path) -> None:
+    """#373: answering a child's brokered request must not write any memory —
+    no TTL rule, no allowed-once, no scope — even when the human says yes."""
+
+    repl = _prompt_repl("y", workspace=tmp_path)
+    ttl_rule: list[str] = []
+
+    def record_allow(name: str) -> int:
+        ttl_rule.append(name)
+        return 600
+
+    repl._approval_rules.allow = record_allow
+    before = set(repl._boundary_approved_once)
+
+    outcome = repl._confirm_tool_approval(
+        "command", {"command": "echo hi"}, from_child=True
+    )
+
+    assert outcome == APPROVAL_ALLOWED_ONCE
+    assert ttl_rule == [], "a child answer must not create a TTL rule"
+    assert set(repl._boundary_approved_once) == before, (
+        "a child answer must not create an allowed-once entry"
+    )
+    assert repl._last_approval_scope == ""
+
+
+def test_a_child_request_cannot_invent_a_session_grant(tmp_path) -> None:
+    """Even if the prompt were somehow answered 'a', a child request degrades
+    to a deny — the human was never shown the remember choices."""
+
+    repl = _prompt_repl("a", workspace=tmp_path)
+    ttl_rule: list[str] = []
+
+    def record_allow(name: str) -> int:
+        ttl_rule.append(name)
+        return 600
+
+    repl._approval_rules.allow = record_allow
+
+    outcome = repl._confirm_tool_approval(
+        "command", {"command": "echo hi"}, from_child=True
+    )
+
+    assert outcome == APPROVAL_REJECTED
+    assert ttl_rule == []
+
+
+def test_a_child_request_still_inherits_the_parents_session_rule(tmp_path) -> None:
+    """Inheritance is the *parent's* memory working for the child: a TTL rule
+    the human already made answers the child's call without a new prompt."""
+
+    repl = _prompt_repl("n", workspace=tmp_path)
+    repl._approval_rules = types.SimpleNamespace(
+        is_allowed=lambda name: True, allow=lambda name: 600
+    )
+
+    outcome = repl._confirm_tool_approval(
+        "command", {"command": "echo hi"}, from_child=True
+    )
+
+    assert outcome == APPROVAL_ALLOWED_ONCE

@@ -19,6 +19,8 @@ from xenon.kernel.session_grants import (
     GrantBook,
     grant_from_choice,
 )
+from xenon.ledger.events import EventKind
+from xenon.ledger.store import Ledger
 
 
 def _policy(workspace: str = "/repo", **kwargs) -> PermissionPolicy:
@@ -101,7 +103,9 @@ def test_a_session_grant_turns_prompts_into_allows() -> None:
     policy.grant((grant.as_scoped(),))
     decision = policy.check_intent(_shell("git log -n 2"))
 
-    assert decision.reason.startswith("scoped grant:")
+    # A session grant is a recorded decision: the reason says where it came
+    # from, so a replay can explain why this call was not asked (#373).
+    assert decision.reason.startswith("session grant:")
 
 
 def test_a_scoped_grant_covers_only_its_target() -> None:
@@ -292,3 +296,129 @@ def test_the_runtime_records_grant_added_and_hands_it_back(tmp_path) -> None:
     assert events, "the human's decision must be in the ledger"
     assert events[0].payload["answer"] == SESSION
     assert runtime.last_grant is not None
+
+
+# ── inheritance and no-creation (children) ─────────────────────────
+
+
+def test_a_child_run_uses_inherited_grants_without_asking(tmp_path) -> None:
+    """The parent's grant answers the child's call; no approval is invoked."""
+
+    from tests.kernel.test_north_star import ScriptedStrategy, _runtime
+    from xenon.kernel.contracts import CallTool, TaskSpec
+
+    grant = grant_from_choice(
+        SESSION, capability=Capability.SHELL, targets=("git log",), workspace=str(tmp_path)
+    )
+    assert grant is not None
+    ledger = Ledger.in_memory("child-inherit")
+    # A policy seeded with the parent's grant, exactly what the child runner
+    # does with ``session_grants``.
+    policy = _policy(str(tmp_path), grants=(grant.as_scoped(),))
+    runtime = _runtime(ledger, policies=(policy,))
+    approver = _ScriptedApprover()
+    runtime._approval = approver
+
+    action = CallTool(
+        xenon.kernel.contracts.ToolIntent(
+            capability=Capability.SHELL, params={"command": "git log"}
+        )
+    )
+    runtime.run(
+        TaskSpec(task_id="child-inherit", objective="o", workspace=str(tmp_path)),
+        ScriptedStrategy([action]),
+    )
+
+    assert approver.calls == 0, "an inherited grant must answer without asking"
+    events = [
+        event
+        for event in ledger.read()
+        if event.kind.value == "policy_decision"
+    ]
+    assert events and str(events[-1].payload.get("reason") or "").startswith(
+        "session grant"
+    )
+
+
+def test_a_child_approval_answer_never_remembers(tmp_path) -> None:
+    """The broker's answer is one-shot: no last_scope, so no GRANT_ADDED."""
+
+    from tests.kernel.test_north_star import ScriptedStrategy, _runtime
+    from xenon.kernel.contracts import CallTool, TaskSpec
+
+    ledger = Ledger.in_memory("child-noremember")
+    policy = _policy(str(tmp_path))
+    runtime = _runtime(ledger, policies=(policy,))
+    # The child-side broker has no ``last_scope`` attribute at all — the
+    # kernel's ``_request_approval`` reads it and finds nothing.
+    runtime._approval = _ScriptedApprover()
+    runtime._approval.last_scope = None
+
+    action = CallTool(
+        xenon.kernel.contracts.ToolIntent(
+            capability=Capability.SHELL, params={"command": "git log"}
+        )
+    )
+    runtime.run(
+        TaskSpec(task_id="child-noremember", objective="o", workspace=str(tmp_path)),
+        ScriptedStrategy([action]),
+    )
+
+    events = [
+        event for event in ledger.read() if event.kind is EventKind.GRANT_ADDED
+    ]
+    assert not events, "a child's approval must never write a grant"
+    assert runtime.last_grant is None
+
+
+def test_the_book_drops_grants_when_the_workspace_changes(tmp_path) -> None:
+    """A grant made in repo A is inert in repo B (#373 acceptance)."""
+
+    other = tmp_path / "other-repo"
+    other.mkdir()
+    book = GrantBook(workspace=str(tmp_path))
+    grant = grant_from_choice(
+        SESSION, capability=Capability.SHELL, targets=("x",), workspace=str(tmp_path)
+    )
+    assert grant is not None
+    book.add(grant)
+
+    assert book.active(str(tmp_path)) == (grant.as_scoped(),)
+    assert book.active(str(other)) == ()
+
+
+def test_the_child_spec_round_trips_grants(tmp_path) -> None:
+    """A grant serialized into the child spec is restored by the worker."""
+
+    from xenon.harness.child import _child_spec
+    from xenon.harness.llm import ModelConfig
+
+    grant = grant_from_choice(
+        SCOPED, capability=Capability.VERIFY, targets=("pytest",), workspace=str(tmp_path)
+    )
+    assert grant is not None
+    spec = _child_spec(
+        child_id="child-spec",
+        objective="o",
+        workspace=str(tmp_path),
+        model=ModelConfig(model_id="test/fake"),
+        profile="kernel",
+        ledger_dir=tmp_path / "ledger",
+        permission=PermissionMode.AUTO_EDIT,
+        max_steps=5,
+        parent_task_id="parent",
+        broker_dir=str(tmp_path / "broker"),
+        session_grants=(grant,),
+    )
+
+    from xenon.harness.child import _grant_from_payload
+
+    restored = [
+        restored
+        for raw in spec["session_grants"]
+        if (restored := _grant_from_payload(raw)) is not None
+    ]
+    assert len(restored) == 1
+    assert restored[0].capability is Capability.VERIFY
+    assert restored[0].target == "pytest"
+    assert restored[0].reason.startswith("scoped grant:")

@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from xenon.harness.child import _grant_from_payload
 from xenon.harness.llm import ModelConfig
 from xenon.harness.runner import run_task
 from xenon.kernel.policies import PermissionMode
@@ -113,6 +114,14 @@ def run_spec(spec: dict[str, Any], *, client: Any = None) -> dict[str, Any]:
         allow_approval=broker is not None,
         parent_task_id=str(spec.get("parent_task_id") or ""),
         batch_id=str(spec.get("batch_id") or ""),
+        # The parent's remembered decisions travel with the spec (#373).  The
+        # child may use them (inheritance) but never create new ones: its
+        # broker has no ``last_scope``, so ``_remember_grant`` stays inert.
+        session_grants=tuple(
+            grant
+            for raw in (spec.get("session_grants") or [])
+            if (grant := _grant_from_payload(raw)) is not None
+        ),
     )
     result = run.result
     return {

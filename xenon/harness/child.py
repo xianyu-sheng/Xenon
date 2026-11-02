@@ -139,6 +139,7 @@ def _child_spec(
     parent_task_id: str = "",
     batch_id: str = "",
     broker_dir: str = "",
+    session_grants: Sequence[Any] = (),
 ) -> dict[str, Any]:
     from xenon.harness.child_worker import model_to_spec
 
@@ -154,6 +155,11 @@ def _child_spec(
         "parent_task_id": parent_task_id,
         "batch_id": batch_id,
         "broker_dir": broker_dir,
+        "session_grants": [
+            _grant_to_payload(grant)
+            for grant in session_grants
+            if grant is not None
+        ],
     }
 
 
@@ -337,6 +343,67 @@ def _collect_patch(
     return patch, str(path)
 
 
+def _to_scoped(grant: Any) -> Any:
+    """Normalize a grant to the kernel's ``ScopedGrant`` shape.
+
+    The session book hands out ``SessionGrant``; callers may hand out raw
+    ``ScopedGrant``.  The kernel policy only understands the latter, so the
+    normalization happens once, at the child entry, instead of at every call
+    site.
+    """
+
+    as_scoped = getattr(grant, "as_scoped", None)
+    if callable(as_scoped):
+        return as_scoped()
+    return grant
+
+
+def _grant_to_payload(grant: Any) -> dict[str, Any]:
+    """Serialize one grant for the child spec (kernel shape, not session shape)."""
+
+    capability = getattr(grant, "capability", None)
+    return {
+        "capability": getattr(capability, "value", str(capability)),
+        "target": str(
+            getattr(grant, "target", None) or getattr(grant, "scope", None) or ""
+        ),
+        "expires_at": getattr(grant, "expires_at", None),
+        "effects": sorted(
+            getattr(effect, "value", str(effect))
+            for effect in (getattr(grant, "effects", None) or ())
+        ),
+        "reason": getattr(grant, "reason", "") or "",
+    }
+
+
+def _grant_from_payload(raw: dict[str, Any]) -> Any | None:
+    """Rebuild a grant from the spec, dropping anything unusable (fail-closed)."""
+
+    from xenon.kernel.contracts import Capability, EffectKind
+    from xenon.kernel.policies import ScopedGrant
+
+    try:
+        capability = Capability(str(raw["capability"]))
+    except (KeyError, ValueError):
+        return None
+    target = str(raw.get("target") or "")
+    if not target:
+        return None
+    effects: set[EffectKind] = set()
+    for value in raw.get("effects") or ():
+        try:
+            effects.add(EffectKind(str(value)))
+        except ValueError:
+            continue
+    return ScopedGrant(
+        capability=capability,
+        target=target,
+        expires_at=raw.get("expires_at"),
+        effects=frozenset(effects),
+        reason=str(raw.get("reason") or ""),
+    )
+
+
 def run_child_task(
     *,
     objective: str,
@@ -355,6 +422,7 @@ def run_child_task(
     approval: Any = None,
     isolate: bool | None = None,
     index: int = 1,
+    session_grants: Sequence[Any] = (),
 ) -> ChildOutcome:
     """Run one delegated task on the loop, in its own ledger.
 
@@ -371,11 +439,20 @@ def run_child_task(
     patch instead of mutating the shared workspace.  Two children editing the
     same file used to erase each other's work; there is no static target set to
     compare for a natural-language objective, so only isolation is honest.
+
+    ``session_grants`` (#373) are the parent's remembered decisions, already
+    filtered to the parent's workspace.  They let the child inherit what the
+    human already allowed without a round trip through the broker — the child
+    still cannot create new grants, because its approval path never writes to
+    the parent's book.
     """
 
     if profile not in CHILD_PROFILES:
         raise KeyError(f"unknown child profile: {profile}")
     _check_permission_subset(permission, parent_permission)
+    # One shape downstream: the kernel policy only reads ScopedGrant, so any
+    # SessionGrant the parent handed in becomes ScopedGrant here (#373).
+    session_grants = tuple(_to_scoped(grant) for grant in session_grants)
     child_id = f"{parent_task_id or 'child'}-sub{index}-{uuid.uuid4().hex[:6]}"
     # A lone child is still a batch of one: without it, "three dispatched
     # together" and "three dispatched separately" look identical in the ledger.
@@ -407,6 +484,7 @@ def run_child_task(
                 client=client,
                 gateway_context=gateway_context,
                 approval=approval,
+                session_grants=session_grants,
             )
             if in_process
             else _run_in_subprocess(
@@ -422,6 +500,7 @@ def run_child_task(
                     parent_task_id=parent_task_id,
                     batch_id=batch_id,
                     broker_dir=str(_broker_dir(directory, child_id)),
+                    session_grants=session_grants,
                 ),
                 ledger_dir=directory,
                 timeout=timeout,
@@ -495,6 +574,7 @@ def _run_in_process(
     client: Any,
     gateway_context: Any,
     approval: Any = None,
+    session_grants: Sequence[Any] = (),
 ) -> tuple[dict[str, Any] | None, str | None, int, bool]:
     """Test seam: the same loop, in this process.  Cannot kill, only abandon."""
 
@@ -519,6 +599,7 @@ def _run_in_process(
             allow_approval=approval is not None,
             parent_task_id=parent_task_id,
             batch_id=batch_id,
+            session_grants=tuple(session_grants),
         )
 
     run = None
@@ -582,6 +663,7 @@ def run_child_tasks(
     isolate: bool | None = True,
     batch_id: str = "",
     max_workers: int = 4,
+    session_grants: Sequence[Any] = (),
 ) -> tuple[ChildOutcome, ...]:
     """Run delegated tasks in parallel, preserving input order.
 
@@ -617,6 +699,7 @@ def run_child_tasks(
                 parent_permission=parent_permission,
                 isolate=isolate,
                 index=index,
+                session_grants=session_grants,
             )
             for index, objective in enumerate(objectives, 1)
         ]

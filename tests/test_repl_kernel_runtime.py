@@ -7,6 +7,7 @@ import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from rich.console import Console
@@ -117,7 +118,7 @@ class FakeRepl:
         self.events: list[tuple[str, dict]] = []
         self.confirm_calls: list[tuple[str, dict, str]] = []
 
-    def _confirm_tool(self, tool, params, risk):
+    def _confirm_tool(self, tool, params, risk, *, from_child=False):
         self.confirm_calls.append((tool, dict(params), risk))
         return False, "denied by test"
 
@@ -455,7 +456,7 @@ class ApprovalRepl:
         self.result = result
         self.calls = []
 
-    def _confirm_tool(self, tool, params, risk):
+    def _confirm_tool(self, tool, params, risk, *, from_child=False):
         self.calls.append((tool, params, risk))
         if isinstance(self.result, Exception):
             raise self.result
@@ -479,6 +480,57 @@ def test_kernel_approval_provider_maps_capability_to_repl_gate() -> None:
     repl.result = RuntimeError("ui")
     assert provider.request(None, action, None) is False
     assert provider.request(None, SimpleNamespace(), None) is False
+
+
+def test_a_child_approval_never_remembers_a_scope() -> None:
+    """#373: a child's brokered answer is one-shot — even a full "always"
+    answer cannot create a session grant, a rule or an allowed-once entry.
+
+    The parent UI may *see* the answer choices; the provider must not pass the
+    scope back, because the child's kernel reads ``last_scope`` and would
+    otherwise remember on the child's behalf.
+    """
+
+    repl = ApprovalRepl((True, ""))
+    provider = KernelApprovalProvider(repl)
+    # The human (in a real session) chose "session" — but this answer came
+    # from a child's brokered request, so the scope must stay empty.
+    repl._last_approval_scope = "session"
+    request = {
+        "capability": "shell",
+        "params": {"command": "git log"},
+        "risk": "approval",
+    }
+    approved, reason = provider.approve_request(request)
+
+    assert approved is True
+    assert provider.last_scope == ""
+    assert provider.last_reason == ""
+    assert repl.calls == [("bash", {"command": "git log"}, "CRITICAL")]
+
+
+def test_a_child_approval_restores_the_provider_scope_afterwards() -> None:
+    """Answering a child must not leak ``from_child`` into the next parent
+    turn: after ``approve_request`` returns, a normal request remembers again.
+    """
+
+    repl = ApprovalRepl((True, ""))
+    repl._last_approval_scope = "scoped"
+    provider = KernelApprovalProvider(repl)
+    request = {
+        "capability": "shell",
+        "params": {"command": "git log"},
+    }
+    provider.approve_request(request)
+
+    action = CallTool(
+        ToolIntent(
+            capability=Capability.SHELL,
+            params={"command": "git log"},
+        )
+    )
+    provider.request(None, action, None)
+    assert provider.last_scope == "scoped"
 
 
 class FakeMCPRegistry:
@@ -1261,3 +1313,175 @@ def test_runtime_adapter_runs_plan_execute_with_llm_planner(
     events = Ledger(run.ledger_path, "adapter-plan").read()
     assert any(event.kind.value == "plan_accepted" for event in events)
     assert any(event.kind.value == "tool_receipt" for event in events)
+
+
+class GrantingApproval(AdapterApproval):
+    """Approves, and claims the human chose "session" — like the real UI."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_scope = "session"
+        self.last_reason = "session grant: shell"
+
+
+def _shell_turn(responses: list[str], tmp_path: Path, name: str) -> tuple[Any, GrantingApproval]:
+    client = FakeClient(responses)
+    approval = GrantingApproval()
+    adapter = RuntimeAdapter(
+        workspace=tmp_path,
+        model_config=ModelConfig(model_id="test/fake"),
+        ledger_dir=tmp_path.parent / f"{name}-ledger",
+        finalize=False,
+        client=client,
+        approval=approval,
+        allow_approval=True,
+    )
+    return adapter, approval
+
+
+def test_session_grants_flow_across_two_adapter_runs(tmp_path: Path) -> None:
+    """#373 ask-once: turn 1 approves and remembers; turn 2 never asks.
+
+    Mirrors what ``run_kernel_turn`` wires: the front-end book feeds the next
+    task's ``session_grants`` and harvests ``runtime.last_grant`` afterwards.
+    """
+
+    from xenon.kernel.session_grants import GrantBook
+    from xenon.ledger.events import EventKind
+
+    book = GrantBook(workspace=str(tmp_path))
+    script = [
+        json.dumps(
+            {
+                "action": "call_tool",
+                "capability": "shell",
+                "params": {"command": "git log"},
+            }
+        ),
+        json.dumps({"action": "finish", "answer": "done"}),
+    ]
+
+    # Turn 1: the call needs approval; the human answers "session".
+    adapter1, approval1 = _shell_turn(script, tmp_path, "t1")
+    adapter1.session_grants = tuple(book.active(str(tmp_path)))
+    captured: list[Any] = []
+    run1 = adapter1.run("do it", task_id="grant-turn-1", on_runtime=captured.append)
+    assert approval1.calls == 1
+    assert captured and captured[0].last_grant is not None
+    book.add(captured[0].last_grant)
+
+    # The kernel wrote the decision into turn 1's ledger.
+    events = [
+        event
+        for event in Ledger(run1.ledger_path, "grant-turn-1").read()
+        if event.kind is EventKind.GRANT_ADDED
+    ]
+    assert events
+
+    # Turn 2: the same call must be answered by the grant, not by a prompt.
+    adapter2, approval2 = _shell_turn(script, tmp_path, "t2")
+    adapter2.session_grants = tuple(book.active(str(tmp_path)))
+    run2 = adapter2.run("do it again", task_id="grant-turn-2")
+    assert approval2.calls == 0, "the session grant must answer the second call"
+
+    # And the ledger explains why: a policy_decision with a session-grant reason.
+    decisions = [
+        event
+        for event in Ledger(run2.ledger_path, "grant-turn-2").read()
+        if event.kind is EventKind.POLICY_DECISION
+    ]
+    assert decisions
+    assert str(decisions[-1].payload.get("reason") or "").startswith("session grant:")
+
+
+def test_a_grant_in_another_workspace_does_not_answer(tmp_path: Path) -> None:
+    """#373 acceptance: switching repositories invalidates session grants."""
+
+    from xenon.kernel.contracts import Capability
+    from xenon.kernel.session_grants import SESSION, GrantBook, grant_from_choice
+
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    book = GrantBook(workspace=str(tmp_path))
+    grant = grant_from_choice(
+        SESSION,
+        capability=Capability.SHELL,
+        targets=("git log",),
+        workspace=str(tmp_path),
+    )
+    assert grant is not None
+    book.add(grant)
+
+    adapter, approval = _shell_turn(script := [
+        json.dumps(
+            {
+                "action": "call_tool",
+                "capability": "shell",
+                "params": {"command": "git log"},
+            }
+        ),
+        json.dumps({"action": "finish", "answer": "done"}),
+    ], other, "elsewhere")
+    adapter.session_grants = tuple(book.active(str(other)))
+    adapter.run("do it", task_id="elsewhere-1")
+    assert approval.calls == 1, "the other repo must ask again"
+
+
+class _GrantingRepl(FakeRepl):
+    """A FakeRepl whose confirmation answers "session" — the real UI's a key."""
+
+    def _confirm_tool(self, tool, params, risk, *, from_child=False):
+        self.confirm_calls.append((tool, dict(params), risk))
+        self._last_approval_scope = "session"
+        return True, ""
+
+
+def _run_turn(repl, tmp_path: Path, name: str):
+    client = FakeClient(
+        [
+            json.dumps(
+                {
+                    "action": "call_tool",
+                    "capability": "shell",
+                    "params": {"command": "echo hello"},
+                }
+            ),
+            json.dumps({"action": "finish", "answer": "done"}),
+        ]
+    )
+    return run_kernel_turn(
+        repl,
+        objective="run echo hello",
+        user_input="run echo hello",
+        model_ids=["test/fake"],
+        execution_policy=SimpleNamespace(level=ExecutionLevel.EXECUTE),
+        callback=ConsoleCallback(verbose=False),
+        client=client,
+    )
+
+
+def test_run_kernel_turn_asks_once_across_two_tasks(tmp_path: Path) -> None:
+    """#373 acceptance, product path: two REPL tasks, one prompt.
+
+    The real wiring (``run_kernel_turn``): turn 1 answers "session", the book
+    harvests the grant; turn 2 feeds ``session_grants`` from the book, so the
+    same call is answered by the ledger-visible grant instead of the TTY.
+    """
+
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = _GrantingRepl(tmp_path, registry)
+
+    run1 = _run_turn(repl, tmp_path, "ask-once-1")
+    assert run1 is not None and run1.result.accepted is True
+    assert len(repl.confirm_calls) == 1
+
+    # The front-end book now holds the decision (wired inside run_kernel_turn).
+    book = getattr(repl, "_grant_book", None)
+    assert book is not None and len(book) == 1
+
+    run2 = _run_turn(repl, tmp_path, "ask-once-2")
+    assert run2 is not None and run2.result.accepted is True
+    assert len(repl.confirm_calls) == 1, (
+        "the second task must be answered by the session grant, not the TTY"
+    )

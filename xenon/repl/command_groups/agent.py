@@ -408,6 +408,16 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
     parent_permission = permission_mode_for(
         getattr(repl, "_execution_level", 0)
     )
+    # The child inherits the session's remembered decisions, filtered to this
+    # workspace (#373).  It still cannot create new ones: the broker forwards
+    # the request, and the parent answers with a degraded y/n/q prompt.
+    from xenon.kernel.session_grants import GrantBook
+
+    book = getattr(repl, "_grant_book", None)
+    if book is None:
+        book = GrantBook(workspace=str(workspace))
+        repl._grant_book = book
+    inherited = tuple(book.active(str(workspace)))
 
     if parallel_tasks:
         outcomes = run_child_tasks(
@@ -421,6 +431,7 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
             timeout=timeout,
             approval=approval,
             parent_permission=parent_permission,
+            session_grants=inherited,
         )
     else:
         if not task:
@@ -437,6 +448,7 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
                 timeout=timeout,
                 approval=approval,
                 parent_permission=parent_permission,
+                session_grants=inherited,
             ),
         )
 
