@@ -160,6 +160,7 @@ class ApprovalUxMixin:
         TTL 规则 + allowed-once），不再有自己的 CRITICAL 弹窗。
         """
 
+        self._last_approval_scope = ""
         if _config().interaction.assume_yes:
             return True, ""
         if not sys.stdin.isatty():
@@ -179,6 +180,8 @@ class ApprovalUxMixin:
             tool_name, params or {}, reason=f"风险等级 {risk}"
         )
         if outcome == APPROVAL_ALLOWED_ONCE:
+            # What the human chose to remember: "" (once), "session", "always"
+            # (a rule file) or "scoped" (just this command).
             return True, ""
         if outcome == APPROVAL_CANCELLED:
             return False, "用户取消任务"
@@ -198,6 +201,7 @@ class ApprovalUxMixin:
         unavailable（fail-closed）。“a”登记带 TTL 的会话规则。
         """
 
+        self._last_approval_scope = ""
         if self._approval_rules.is_allowed(tool_name):
             return APPROVAL_ALLOWED_ONCE
         if _config().interaction.assume_yes:
@@ -255,7 +259,11 @@ class ApprovalUxMixin:
                     body += f"\n\n{diff_text}"
                 console.print(
                     Panel(
-                        body,
+                        body
+                        + chr(10) + chr(10)
+                        + "[dim]y=只这次  a=本会话都允许  "
+                        "A=永远允许（写入规则文件）  s=只允许这条命令  "
+                        "n=拒绝  q=取消任务[/dim]",
                         title="需要授权",
                         border_style="yellow",
                         padding=(0, 1),
@@ -273,6 +281,25 @@ class ApprovalUxMixin:
             )
             if hasattr(callback, "resume_after_prompt"):
                 callback.resume_after_prompt(tool_name, params)
+            self._last_approval_scope = "session"
+            return APPROVAL_ALLOWED_ONCE
+        if choice == "A":
+            # "Always" writes a rule, exactly like Claude Code's "don't ask
+            # again": the decision becomes a file the human can read, review and
+            # commit — not an invisible flag.
+            selector = self._persist_permission_rule(tool_name, params)
+            self._boundary_approved_once.add(self._approval_key(tool_name, params))
+            if hasattr(callback, "resume_after_prompt"):
+                callback.resume_after_prompt(tool_name, params)
+            console.print(f"[dim]· 已写入规则 {selector}")
+            self._last_approval_scope = "always"
+            return APPROVAL_ALLOWED_ONCE
+        if choice == "s":
+            self._boundary_approved_once.add(self._approval_key(tool_name, params))
+            if hasattr(callback, "resume_after_prompt"):
+                callback.resume_after_prompt(tool_name, params)
+            console.print("[dim]· 已只允许这条命令（本会话）[/dim]")
+            self._last_approval_scope = "scoped"
             return APPROVAL_ALLOWED_ONCE
         if choice == "y":
             self._boundary_approved_once.add(self._approval_key(tool_name, params))
@@ -290,6 +317,48 @@ class ApprovalUxMixin:
             callback.resume_after_prompt(tool_name, params)
         return APPROVAL_REJECTED
 
+    def _persist_permission_rule(self, tool_name: str, params: dict) -> str:
+        """Write an ``allow`` rule for exactly what was asked, and return it.
+
+        Scope is the literal target (the command, or the path), never the whole
+        capability: "always allow this command" is what the human saw.  A broader
+        rule is a deliberate act of editing the file.
+        """
+
+        from xenon.kernel.permission_rules import (
+            ALLOW,
+            PermissionRule,
+            default_rule_paths,
+            save_rule,
+        )
+        from xenon.repl.permission_map import capability_for_tool
+
+        capability = capability_for_tool(tool_name)
+        target = str(
+            params.get("command")
+            or params.get("file_path")
+            or params.get("path")
+            or ""
+        ).strip()
+        if capability is None or not target:
+            # Nothing to scope to: refuse to invent a rule that authorizes more
+            # than the human was shown.
+            return "(unsupported: no capability or target to scope)"
+        rule = PermissionRule(
+            decision=ALLOW,
+            capability=capability,
+            pattern=target,
+            source="user",
+            reason=f"approved via {tool_name}",
+        )
+        paths = dict(default_rule_paths(self._workspace_root()))
+        path = paths["user"]
+        try:
+            save_rule(rule, path)
+        except OSError as exc:
+            return f"(could not write {path}: {exc})"
+        return rule.selector()
+
 
     def _ask_approval_choice(self, default: str = "n") -> str:
         """Read y/n/a/q without fighting prompt_toolkit for stdin.
@@ -303,7 +372,7 @@ class ApprovalUxMixin:
         there is none (headless, tests, exotic terminals).
         """
 
-        question = "选择 [y/n/a/q] (n): "
+        question = "选择 [y/n/a/A/s/q] (n): "
         session = getattr(self, "_pt_session", None)
         # Only inside a kernel turn, where the REPL's prompt has already
         # returned and the session is the live owner of the terminal.  Outside
@@ -315,12 +384,12 @@ class ApprovalUxMixin:
                 answer = session.prompt(question, default=default).strip().lower()
                 if answer == "":
                     answer = default
-                if answer in {"y", "n", "a", "q"}:
+                if answer in {"y", "n", "a", "A", "s", "q"}:
                     return answer
-                console.print("[dim]· 请输入 y / n / a / q[/dim]")
+                console.print("[dim]· 请输入 y / n / a / A / s / q[/dim]")
         return Prompt.ask(
             "选择",
-            choices=["y", "n", "a", "q"],
+            choices=["y", "n", "a", "A", "s", "q"],
             default=default,
             show_choices=True,
             case_sensitive=False,

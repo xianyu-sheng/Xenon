@@ -526,6 +526,7 @@ class KernelApprovalProvider:
         # carries a bool, but a blocked run that cannot say *who* denied and
         # why is undebuggable — so the bridge keeps the reason for the ledger.
         self.last_reason = ""
+        self.last_scope = ""
 
     def request(
         self, view: Any, action: Any, decision: PolicyDecision
@@ -556,6 +557,10 @@ class KernelApprovalProvider:
             self.last_reason = str(result[1] or "")
         else:
             approved = bool(result)
+        # What the human chose to remember: "" (once) / "session" / "always" /
+        # "scoped".  Read from the front-end so the closed 2-tuple result
+        # vocabulary of ``_confirm_tool`` stays intact.
+        self.last_scope = str(getattr(self.repl, "_last_approval_scope", "") or "")
         if not approved and not self.last_reason:
             self.last_reason = "user rejected the request"
         return approved
@@ -606,6 +611,7 @@ class RuntimeAdapter:
         progress_sink: Any = None,
         request_sink: Any = None,
         audit_provider: Any = None,
+        permission_rules: Any = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         if not self.workspace.is_dir():
@@ -615,6 +621,10 @@ class RuntimeAdapter:
         self.model_config = model_config
         self.progress_sink = progress_sink
         self.request_sink = request_sink
+        self.permission_rules = permission_rules
+        # Session grants are remembered decisions (#373); the front-end owns the
+        # book, so the adapter only forwards what is currently active.
+        self.session_grants: tuple[Any, ...] = ()
         self.audit_provider = audit_provider
         self.permission = permission
         self.ledger_dir = (
@@ -636,6 +646,19 @@ class RuntimeAdapter:
         self.mcp_registry = mcp_registry
         self.strategy_mode = strategy_mode
         self.plan_only = bool(plan_only)
+
+    def _rules_of(self, decision: str) -> tuple[Any, ...]:
+        """Rules of one decision from the layered settings, if any."""
+
+        rules = self.permission_rules
+        if rules is None:
+            return ()
+        rows = getattr(rules, "rules", ()) or ()
+        return tuple(
+            rule
+            for rule in rows
+            if getattr(rule, "decision", "") == decision
+        )
 
     def strategy_profile(self) -> LoopProfile | None:
         """Loop profile for the selected mode (``None`` fails closed)."""
@@ -725,7 +748,11 @@ class RuntimeAdapter:
             catalog_profile=self.catalog_profile,
             gateway_context=self.gateway_context,
             extra_specs=extra_specs,
+            session_grants=self.session_grants,
+            deny_rules=self._rules_of("deny"),
+            ask_rules=self._rules_of("ask"),
         )
+
         try:
             result_path = run.ledger_path.with_suffix(".result.json")
             result_path.write_text(

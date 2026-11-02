@@ -221,7 +221,8 @@ def test_repl_permission_prompt_freezes_and_resumes_activity(monkeypatch):
     assert (allowed, reason) == (True, "")
     assert prompt_options["show_choices"] is True
     assert prompt_options["case_sensitive"] is False
-    assert prompt_options["choices"] == ["y", "n", "a", "q"]
+    # Four answers now: once / session / always (write a rule) / scoped-by-target.
+    assert prompt_options["choices"] == ["y", "n", "a", "A", "s", "q"]
     assert "☆ Xenon · 等待工具授权" in titles
     assert titles[-1] == "█·· Xenon"
     indicator.close()
