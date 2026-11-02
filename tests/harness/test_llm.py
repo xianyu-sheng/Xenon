@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import types
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,7 @@ from xenon.kernel.contracts import (
     Capability,
     Finish,
     ModelView,
+    PropositionKind,
     StepContract,
     StepKind,
     TaskMode,
@@ -987,3 +989,100 @@ def test_truncated_step_reply_does_not_abort_the_step():
 
     assert type(action).__name__ == "Think"
     assert "output limit" in action.text
+
+
+# ── PlanFirst finisher: the answer must survive a malformed claim (#363) ──
+
+
+def test_a_claim_may_use_the_documented_kind_target_shorthand() -> None:
+    """Models emit this; the protocol documents it instead of the parser guessing."""
+
+    action = parse_action(
+        {
+            "action": "finish",
+            "answer": "done",
+            "claims": [
+                "file_changed:calc.py",
+                "test_passed:tests/test_calc.py",
+            ],
+        }
+    )
+
+    assert isinstance(action, Finish)
+    assert [claim.kind for claim in action.claims] == [
+        PropositionKind.FILE_CHANGED,
+        PropositionKind.TEST_PASSED,
+    ]
+    assert action.claims[1].target == "tests/test_calc.py"
+
+
+def test_a_shorthand_with_more_than_one_colon_fails_closed() -> None:
+    with pytest.raises(ActionParseError):
+        parse_action(
+            {
+                "action": "finish",
+                "answer": "x",
+                "claims": ["file_changed:a.py:b.py"],
+            }
+        )
+
+
+def test_a_bare_string_claim_without_a_target_fails_closed() -> None:
+    with pytest.raises(ActionParseError):
+        parse_action({"action": "finish", "answer": "x", "claims": ["file_changed"]})
+
+
+def test_the_finisher_keeps_the_answer_when_only_claims_are_malformed() -> None:
+    """A delivered run must not lose its summary over one bad claim field."""
+
+    from xenon.harness.llm import _FINISH_PLACEHOLDER, LLMPlanFinisher
+
+    view = types.SimpleNamespace(
+        task=types.SimpleNamespace(objective="o", constraints=()),
+        working_set=[],
+        debt=[],
+        system="sys",
+    )
+    reply = json.dumps(
+        {
+            "action": "finish",
+            "answer": "Added sub() and the tests pass.",
+            "claims": ["file_changed"],  # not parseable: no target
+        }
+    )
+    finisher = LLMPlanFinisher(
+        ModelConfig(model_id="test/fake"), client=lambda *a, **k: reply
+    )
+
+    action = finisher(view)
+
+    assert isinstance(action, Finish)
+    assert action.answer == "Added sub() and the tests pass."
+    assert action.claims == ()
+    assert _FINISH_PLACEHOLDER not in action.answer
+
+
+def test_the_finisher_salvages_an_unparseable_reply_to_the_placeholder() -> None:
+    from xenon.harness.llm import _FINISH_PLACEHOLDER, LLMPlanFinisher
+
+    view = types.SimpleNamespace(
+        task=types.SimpleNamespace(objective="o", constraints=()),
+        working_set=[],
+        debt=[],
+        system="sys",
+    )
+    finisher = LLMPlanFinisher(
+        ModelConfig(model_id="test/fake"), client=lambda *a, **k: "I did the thing!"
+    )
+
+    assert finisher(view).answer == _FINISH_PLACEHOLDER
+
+
+def test_the_finish_protocol_documents_the_claim_shape() -> None:
+    """The prompt must show the shape, or the model will invent one."""
+
+    from xenon.harness.llm import _FINISH_PROTOCOL
+
+    assert '"kind":"file_changed"' in _FINISH_PROTOCOL
+    assert "file_changed:path" in _FINISH_PROTOCOL
+    assert "test_passed:tests/test_x.py" in _FINISH_PROTOCOL

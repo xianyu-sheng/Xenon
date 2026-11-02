@@ -116,10 +116,19 @@ Rules:
 """
 
 
+_FINISH_PLACEHOLDER = "Plan execution completed; final summary unavailable."
+
 _FINISH_PROTOCOL = """\
 Plan execution is complete. Do not call any more tools.
 Return exactly one JSON object, with no markdown fence and no prose outside it:
-{"action":"finish","answer":"...","claims":[]}
+{"action":"finish","answer":"...","claims":[
+  {"id":"c1","kind":"file_changed","target":"path"},
+  {"id":"c2","kind":"test_passed","target":"tests/test_x.py"}
+]}
+
+A claim is always an object with `kind` and `target`.  The shorthand strings
+"file_changed:path" and "test_passed:tests/test_x.py" are accepted, but the
+object form is preferred.  Use `claims: []` when nothing was proven.
 
 Rules:
 - Answer the user's objective from the deterministic working set below.
@@ -215,7 +224,13 @@ Supported actions:
 2. A short note when you need to think:
    {"action":"think","text":"what this step still needs"}
 3. This step is done:
-   {"action":"finish","answer":"step summary","claims":[]}
+   {"action":"finish","answer":"step summary","claims":[
+     {"id":"c1","kind":"file_changed","target":"path"}
+   ]}
+
+A claim is always an object with `kind` and `target` (the strings
+"file_changed:path" / "test_passed:tests/test_x.py" are accepted).  Use
+`claims: []` when the step proved nothing.
 
 Rules:
 - Only touch the current step's targets. Do not start later steps.
@@ -471,6 +486,16 @@ def _strings(value: Any, where: str) -> tuple[str, ...]:
 
 
 def _claim(value: Any, index: int) -> Claim:
+    """Parse one claim.
+
+    The object form is the contract.  The ``"kind:target"`` shorthand is
+    accepted because models emit it — the protocol documents it rather than
+    leaving the parser to guess, and anything less mechanical than one colon
+    still fails closed.
+    """
+
+    if isinstance(value, str):
+        value = _claim_from_shorthand(value, index)
     data = _mapping(value, f"claims[{index}]")
     kind = data.get("kind")
     if not kind:
@@ -486,6 +511,19 @@ def _claim(value: Any, index: int) -> Claim:
         expect=dict(_mapping(data.get("expect"), f"claims[{index}].expect")),
         source=ClaimSource.LLM,
     )
+
+
+def _claim_from_shorthand(value: str, index: int) -> dict[str, Any]:
+    """Turn ``"kind:target"`` into the object form, or fail closed."""
+
+    text = value.strip()
+    kind, sep, target = text.partition(":")
+    if not sep or ":" in target or not kind.strip() or not target.strip():
+        raise ActionParseError(
+            f"claims[{index}] must be an object with kind and target, "
+            f"or a single 'kind:target' string (got {value!r})"
+        )
+    return {"id": f"claim-{index + 1}", "kind": kind.strip(), "target": target.strip()}
 
 
 def parse_action(payload: str | Mapping[str, Any]) -> Action:
@@ -842,20 +880,36 @@ class LLMPlanFinisher:
         self._client = client
 
     def __call__(self, view: ModelView) -> Finish:
+        raw = _call_model(
+            self.config,
+            self._client,
+            build_finish_messages(view),
+        )
         try:
-            action = parse_action(
-                _call_model(
-                    self.config,
-                    self._client,
-                    build_finish_messages(view),
-                )
-            )
+            action = parse_action(raw)
         except (ActionParseError, TypeError, ValueError):
-            return Finish("Plan execution completed; final summary unavailable.")
+            return self._salvage(raw)
         if not isinstance(action, Finish):
             # The finisher must never trigger another tool turn.
-            return Finish("Plan execution completed; final summary unavailable.")
+            return self._salvage(raw)
         return action
+
+    @staticmethod
+    def _salvage(raw: str) -> Finish:
+        """Keep the model's own words when only the claims were malformed.
+
+        The answer is the part a human reads; replacing it with a placeholder
+        because one claim field was wrong is a worse failure than having no
+        claims at all — and with no claims the kernel simply proves nothing.
+        """
+
+        try:
+            data = _extract_json(raw)
+        except ActionParseError:
+            return Finish(_FINISH_PLACEHOLDER)
+        answer = data.get("answer") if isinstance(data, dict) else None
+        text = str(answer or "").strip()
+        return Finish(text) if text else Finish(_FINISH_PLACEHOLDER)
 
 
 class LLMReflector:
