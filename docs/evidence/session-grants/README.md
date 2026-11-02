@@ -96,3 +96,41 @@ y=只这次  a=本会话都允许  A=永远允许（写入规则文件）  s=只
 ## 实现位置的约束
 
 `_TOOL_CAPABILITIES`（工具名 → capability）**不能放在 kernel**：`check_kernel_purity.py` 明确禁止内核出现具体工具名。它放在 `xenon/repl/permission_map.py`。这条被守卫抓到过一次，是我先放错了地方。
+
+
+---
+
+# 提交前自查 patch 覆盖（避免 Codecov 邮件）
+
+## 为什么
+
+Codecov 的 patch 门是真门，但它**只在 push 之后说话**。上一轮我先跑了 `pytest tests -q`（3659 全绿）就推了，结果 patch 只有 58.9% —— 因为新代码全在 REPL/命令层，正是全量测试覆盖最少的地方。
+
+## 用法
+
+```bash
+python scripts/patch_cov.py                      # 跑测试 + 生成报告 + 判定
+python scripts/patch_cov.py --base 3338a0b~1     # 对比指定基线
+python scripts/patch_cov.py --from-xml           # 复用已有 coverage.xml（会警告过期）
+```
+
+真实输出（本轮）：
+
+```text
+patch coverage: 99.35% (305/307 executable added lines, threshold 95%)
+  repl/runtime_adapter.py: 2 missing -> 656, 657
+```
+
+与 Codecov 的 99.34% 基本一致（差一行是 merge-base 范围差异）。
+
+## 语义对齐
+
+| 关注点 | 做法 |
+|---|---|
+| 哪些行是"新增" | `git diff --unified=0` 的 hunk 头，先取 `merge-base` 避免把基线漂移算进来 |
+| 哪些行"可覆盖" | 只算 coverage.xml 里存在的行（空行/注释不计，Codecov 同样） |
+| 路径归一化 | coverage 是 source 相对（`kernel/a.py`），diff 是仓库相对（`xenon/kernel/a.py`） |
+| 过期报告 | 有 `xenon/**` 比 xml 新就警告——复用旧报告会让"缺失行"变成假话 |
+| 退出码 | 低于阈值 1，无可测行 0（并说明），参数错 2 |
+
+CI 里也加了同一道（`--threshold 90`，只对 PR 生效）：比 Codecov 的 ~80% 更严，但不至于因为一个未覆盖分支卡住 PR。
