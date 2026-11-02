@@ -9,6 +9,11 @@ observed writing files after the parent had already recorded a timeout, which
 makes the parent's delivery claim unreliable.  A process group can be killed,
 and the kill is observable in the outcome.
 
+Isolation is available (``isolate=True``, on by default for parallel batches):
+two children sharing one workspace erased each other's edits on a real run, so
+each child gets its own git worktree and returns its work as a patch the parent
+applies deliberately.
+
 What this slice deliberately does **not** do: kernel-level spawning (a `spawn`
 capability), streaming the child's events into the parent ledger, projecting the
 child's facts into the parent's audit, or nested children.  Depth is structurally
@@ -19,6 +24,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -34,6 +40,8 @@ from xenon.harness.llm import ModelConfig, build_llm_loop_strategy
 from xenon.harness.runner import run_task
 from xenon.kernel.policies import PermissionMode
 from xenon.kernel.strategies import LoopProfile
+
+logger = logging.getLogger(__name__)
 
 # Child profiles are a subset of the mode catalog: a child works on one
 # delegated objective, so it never enables plan approval or review loops.
@@ -66,6 +74,12 @@ class ChildOutcome:
     # Process identity, so a caller can prove the child is gone (or kill it).
     pid: int = 0
     killed: bool = False
+    # Isolation: a child in its own worktree returns its work as a patch, and
+    # never touches the shared workspace.
+    isolated: bool = False
+    isolation_note: str = ""
+    patch_path: str = ""
+    patch_bytes: int = 0
 
     @property
     def delivered(self) -> bool:
@@ -272,6 +286,54 @@ def _wait_servicing(
     return False
 
 
+def _broker_dir(directory: Path, child_id: str) -> Path:
+    """A stable per-child exchange directory (created on demand)."""
+
+    path = directory / f"{child_id}.broker"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _prepare_isolation(
+    isolate: bool | None, workspace: str | Path, child_id: str
+) -> tuple[Any, str]:
+    """Decide whether this child gets its own worktree.
+
+    ``None`` means "caller did not ask": isolation stays off so a single
+    sequential child keeps today's behaviour.  When isolation *is* asked for and
+    cannot be provided, the run still happens — but the outcome says so, because
+    silently running unisolated would be the exact lie this issue is about.
+    """
+
+    if not isolate:
+        return None, ""
+    from xenon.harness.child_worktree import ChildWorktree, WorktreeUnavailable
+
+    try:
+        return ChildWorktree.create(workspace, child_id), ""
+    except WorktreeUnavailable as exc:
+        return None, f"not isolated: {exc}"
+
+
+def _collect_patch(
+    tree: Any, directory: Path, child_id: str
+) -> tuple[str, str]:
+    """Write the child's work as a patch next to its ledger."""
+
+    if tree is None:
+        return "", ""
+    try:
+        patch = tree.patch()
+    except Exception as exc:  # noqa: BLE001 — a lost patch must be reported
+        logger.warning("could not collect child patch", exc_info=True)
+        return "", f"patch failed: {exc}"
+    if not patch.strip():
+        return "", ""
+    path = directory / f"{child_id}.patch"
+    path.write_text(patch, encoding="utf-8")
+    return patch, str(path)
+
+
 def run_child_task(
     *,
     objective: str,
@@ -287,6 +349,7 @@ def run_child_task(
     client: Any = None,
     gateway_context: Any = None,
     approval: Any = None,
+    isolate: bool | None = None,
     index: int = 1,
 ) -> ChildOutcome:
     """Run one delegated task on the loop, in its own ledger.
@@ -299,6 +362,11 @@ def run_child_task(
     ``approval`` is the parent's provider.  It is never used to grant the child
     more than the parent has: ``parent_permission`` (when given) bounds what the
     child may run at all, and every individual request still goes to the parent.
+
+    ``isolate`` puts the child in its own git worktree and returns its work as a
+    patch instead of mutating the shared workspace.  Two children editing the
+    same file used to erase each other's work; there is no static target set to
+    compare for a natural-language objective, so only isolation is honest.
     """
 
     if profile not in CHILD_PROFILES:
@@ -313,46 +381,50 @@ def run_child_task(
     started = time.time()
     in_process = client is not None or gateway_context is not None
 
-    if in_process:
-        payload, error, pid, killed = _run_in_process(
-            objective=objective,
-            workspace=workspace,
-            model=model,
-            profile=profile,
-            child_id=child_id,
-            parent_task_id=parent_task_id,
-            directory=directory,
-            permission=permission,
-            max_steps=max_steps,
-            timeout=timeout,
-            client=client,
-            gateway_context=gateway_context,
-            approval=approval,
-        )
-    else:
-        directory.mkdir(parents=True, exist_ok=True)
-        broker_dir = Path(
-            tempfile.mkdtemp(prefix=f"{child_id}-broker-", dir=str(directory))
-        )
-        payload, error, pid, killed = _run_in_subprocess(
-            _child_spec(
-                child_id=child_id,
+    tree, isolation_note = _prepare_isolation(isolate, workspace, child_id)
+    run_workspace = tree.path if tree is not None else workspace
+    try:
+        payload, error, pid, killed = (
+            _run_in_process(
                 objective=objective,
-                workspace=workspace,
+                workspace=run_workspace,
                 model=model,
                 profile=profile,
-                ledger_dir=directory,
+                child_id=child_id,
+                parent_task_id=parent_task_id,
+                directory=directory,
                 permission=permission,
                 max_steps=max_steps,
-                parent_task_id=parent_task_id,
-                broker_dir=str(broker_dir),
-            ),
-            ledger_dir=directory,
-            timeout=timeout,
-            child_id=child_id,
-            approval=approval,
-            broker_dir=broker_dir,
+                timeout=timeout,
+                client=client,
+                gateway_context=gateway_context,
+                approval=approval,
+            )
+            if in_process
+            else _run_in_subprocess(
+                _child_spec(
+                    child_id=child_id,
+                    objective=objective,
+                    workspace=run_workspace,
+                    model=model,
+                    profile=profile,
+                    ledger_dir=directory,
+                    permission=permission,
+                    max_steps=max_steps,
+                    parent_task_id=parent_task_id,
+                    broker_dir=str(_broker_dir(directory, child_id)),
+                ),
+                ledger_dir=directory,
+                timeout=timeout,
+                child_id=child_id,
+                approval=approval,
+                broker_dir=_broker_dir(directory, child_id),
+            )
         )
+        patch, patch_path = _collect_patch(tree, directory, child_id)
+    finally:
+        if tree is not None:
+            tree.cleanup()
 
     elapsed = round(time.time() - started, 3)
     if payload is None:
@@ -370,6 +442,10 @@ def run_child_task(
             error=error or "child did not run",
             pid=pid,
             killed=killed,
+            isolated=tree is not None,
+            isolation_note=isolation_note,
+            patch_path=patch_path,
+            patch_bytes=len(patch.encode("utf-8")),
         )
     return ChildOutcome(
         child_id=child_id,
@@ -385,6 +461,10 @@ def run_child_task(
         error=error,
         pid=pid,
         killed=killed,
+        isolated=tree is not None,
+        isolation_note=isolation_note,
+        patch_path=patch_path,
+        patch_bytes=len(patch.encode("utf-8")),
     )
 
 
@@ -486,9 +566,16 @@ def run_child_tasks(
     client: Any = None,
     approval: Any = None,
     parent_permission: PermissionMode | None = None,
+    isolate: bool | None = True,
     max_workers: int = 4,
 ) -> tuple[ChildOutcome, ...]:
-    """Run delegated tasks in parallel, preserving input order."""
+    """Run delegated tasks in parallel, preserving input order.
+
+    Isolation defaults to **on** here: parallel children share a workspace
+    otherwise, and a real run showed two of them silently erasing each other's
+    edits.  A caller that wants the old shared-workspace behaviour passes
+    ``isolate=False`` explicitly.
+    """
 
     objectives = tuple(objective for objective in objectives if objective.strip())
     if not objectives:
@@ -510,6 +597,7 @@ def run_child_tasks(
                 client=client,
                 approval=approval,
                 parent_permission=parent_permission,
+                isolate=isolate,
                 index=index,
             )
             for index, objective in enumerate(objectives, 1)
@@ -534,6 +622,10 @@ def child_evidence(outcome: ChildOutcome) -> dict[str, Any]:
         "error": outcome.error,
         "pid": outcome.pid,
         "killed": outcome.killed,
+        "isolated": outcome.isolated,
+        "isolation_note": outcome.isolation_note,
+        "patch": outcome.patch_path,
+        "patch_bytes": outcome.patch_bytes,
     }
 
 

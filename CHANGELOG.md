@@ -23,6 +23,7 @@
 - `/plan status` 在计划执行后显示 phase / finalize commit；已批准但 blocked/failed 的计划不会显示成已交付。
 - 真实 TTY 跑通 `/plan on` → plan-only → `/plan approve` → 同 ledger 执行 → finalize commit；证据在 `docs/evidence/tty-plan-approval/`。本轮修复 plan-only prompt 允许计划写步骤、空/非法计划 fail closed、plan 词汇别名、`apply_patch` 边界路径、审批执行级别、绝对 `changed_paths` 的 `created_paths`。
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
+- 并行子任务默认跑在各自的 **git worktree** 里（#358）：真实运行里两个子任务改同一文件的不同函数，后写的把前一个整段覆盖，两边账本都以为成功。现在成果以 patch 回流（`apply_patch` 显式调用，`--3way` 真合并，冲突报冲突），`git worktree list` 无残留。
 - 父级可见子级（#356）：`TaskSpec.parent_task_id` 落进子任务账本的 `task_started`，`xenon replay --children <parent>` 从账本重建调用树（零模型零网络）；子任务的授权请求由父级 provider 代办（文件请求/应答，父级无 provider 即拒绝），子级权限必须是父级子集。
 - 修复 `_transition` 对「已在目标态」抛错：真实运行里 `running -> running` 把整个任务打挂（释放的步骤没有违规可修时发生）。
 - 子任务改为**独立进程组**（#354）：线程杀不掉，被放弃的子任务会在父级记下 `timeout` 之后继续写工作区（实测到 +60s）；现在超时杀整个进程组，`phase="killed"` + `pid` 落进父级证据，返回后工作区不再变化。真实并行实测 1.95x 重叠、无残留进程。
