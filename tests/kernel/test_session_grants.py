@@ -422,3 +422,64 @@ def test_the_child_spec_round_trips_grants(tmp_path) -> None:
     assert restored[0].capability is Capability.VERIFY
     assert restored[0].target == "pytest"
     assert restored[0].reason.startswith("scoped grant:")
+# ── wire-format edge cases (fail-closed) ───────────────────────────
+
+def test_spec_payload_falls_back_to_the_raw_scoped_grant() -> None:
+    """_to_scoped passes a raw ScopedGrant through unchanged."""
+
+    from xenon.harness.child import _to_scoped
+    from xenon.kernel.policies import ScopedGrant
+
+    scoped = ScopedGrant(capability=Capability.SHELL, target="git log", reason="x")
+    assert _to_scoped(scoped) is scoped
+
+
+def test_spec_payload_drops_malformed_grants() -> None:
+    """A bad capability or empty target is dropped, never guessed."""
+
+    from xenon.harness.child import _grant_from_payload
+
+    assert _grant_from_payload({"capability": "not-a-cap", "target": "x"}) is None
+    assert _grant_from_payload({"capability": "shell", "target": ""}) is None
+    assert _grant_from_payload({"capability": "shell"}) is None
+    assert _grant_from_payload("nonsense") is None
+
+
+def test_spec_payload_skips_unrecognised_effects() -> None:
+    """An unknown effect kind does not fail the whole grant."""
+
+    from xenon.harness.child import _grant_from_payload
+    from xenon.kernel.contracts import EffectKind
+    from xenon.kernel.policies import ScopedGrant
+
+    restored = _grant_from_payload(
+        {
+            "capability": "shell",
+            "target": "git log",
+            "effects": ["fs_delete", "not-a-kind"],
+            "reason": "session grant: shell",
+        }
+    )
+    assert restored is not None
+    assert isinstance(restored, ScopedGrant)
+    assert EffectKind.FS_DELETE in restored.effects
+    assert len(restored.effects) == 1
+
+
+def test_spec_payload_carries_effects_and_reason() -> None:
+    """The happy path keeps effects and the recorded reason."""
+
+    from xenon.harness.child import _grant_from_payload
+    from xenon.kernel.contracts import EffectKind
+
+    restored = _grant_from_payload(
+        {
+            "capability": "edit",
+            "target": "calc.py",
+            "effects": ["fs_delete"],
+            "reason": "scoped grant: calc.py",
+        }
+    )
+    assert restored is not None
+    assert EffectKind.FS_DELETE in restored.effects
+    assert restored.reason == "scoped grant: calc.py"

@@ -376,9 +376,11 @@ def _grant_to_payload(grant: Any) -> dict[str, Any]:
     }
 
 
-def _grant_from_payload(raw: dict[str, Any]) -> Any | None:
+def _grant_from_payload(raw: Any) -> Any | None:
     """Rebuild a grant from the spec, dropping anything unusable (fail-closed)."""
 
+    if not isinstance(raw, dict):
+        return None
     from xenon.kernel.contracts import Capability, EffectKind
     from xenon.kernel.policies import ScopedGrant
 

@@ -470,3 +470,51 @@ def test_a_child_request_still_inherits_the_parents_session_rule(tmp_path) -> No
     )
 
     assert outcome == APPROVAL_ALLOWED_ONCE
+
+
+def test_a_child_request_defensively_rejects_an_always_answer(tmp_path) -> None:
+    """The A/s guards are unreachable through the real prompt (y/n/q only),
+    so this drives them directly: no memory may be written regardless."""
+
+    repl = _prompt_repl("A", workspace=tmp_path)
+    repl._ask_approval_choice = lambda default="n", *, from_child=False: "A"
+
+    assert (
+        repl._confirm_tool_approval("command", {"command": "echo hi"}, from_child=True)
+        == APPROVAL_REJECTED
+    )
+
+    repl = _prompt_repl("s", workspace=tmp_path)
+    repl._ask_approval_choice = lambda default="n", *, from_child=False: "s"
+    assert (
+        repl._confirm_tool_approval("command", {"command": "echo hi"}, from_child=True)
+        == APPROVAL_REJECTED
+    )
+
+
+def test_the_child_prompt_offers_only_ynq(monkeypatch, tmp_path) -> None:
+    """_ask_approval_choice(from_child=True) narrows the answer set to y/n/q."""
+
+    from xenon.repl.approval_ux import ApprovalUxMixin
+
+    repl = types.SimpleNamespace(
+        _pt_session=None,
+        _active_runtime=object(),  # in_turn, so the session branch runs
+        _permission_prompt_lock=None,
+        _terminal_waiting=lambda detail: nullcontext(),
+    )
+    seen: dict = {}
+
+    def ask(*args, **kwargs):
+        seen.update(kwargs)
+        return "y"
+
+    monkeypatch.setattr("xenon.repl.approval_ux.Prompt.ask", ask)
+    # _active_runtime non-None and _pt_session None → Prompt.ask branch.
+    repl._pt_session = None
+
+    from contextlib import nullcontext
+
+    assert ApprovalUxMixin._ask_approval_choice(repl, from_child=True) == "y"
+    assert seen["choices"] == ["y", "n", "q"]
+
