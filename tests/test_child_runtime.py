@@ -252,3 +252,481 @@ def test_sub_agent_records_a_pointer_event(tmp_path: Path, monkeypatch) -> None:
     assert captured, "命令必须调用子运行时"
     assert events and events[0][0] == "child_task"
     assert events[0][1]["ledger"].endswith("child.jsonl")
+
+
+# ── process isolation (#354) ─────────────────────────────────────────
+#
+# The bug these tests exist for: an abandoned child thread kept writing to the
+# workspace after the parent recorded a timeout.  A process group can be killed,
+# and the kill is observable.
+
+
+def test_a_default_child_runs_in_its_own_process(tmp_path: Path, monkeypatch) -> None:
+    """No injection seam -> a real subprocess, and the outcome carries its pid."""
+
+    import xenon.harness.child as child_mod
+
+    seen: dict = {}
+
+    def spy(spec, **kwargs):
+        seen["spec"] = spec
+        return (
+            {
+                "child_id": spec["child_id"],
+                "accepted": True,
+                "phase": "finalized",
+                "answer": "done",
+                "ledger_path": str(tmp_path / "c.jsonl"),
+                "debt": [],
+                "tool_calls": 2,
+            },
+            None,
+            4242,
+            False,
+        )
+
+    monkeypatch.setattr(child_mod, "_run_in_subprocess", spy)
+    outcome = run_child_task(
+        objective="x",
+        workspace=_worktree(tmp_path),
+        model=ModelConfig(model_id="test/fake"),
+        profile="react",
+    )
+
+    assert "spec" in seen, "the default path must not be in-process"
+    assert outcome.pid == 4242 and outcome.killed is False
+    assert outcome.accepted is True and outcome.tool_calls == 2
+
+
+def _blocking_base_url() -> tuple[str, object]:
+    """A local socket that accepts the request and never answers.
+
+    A timeout test must not depend on the child being slow: on a fast machine
+    the child may finish before the deadline and then nothing is killed.  Making
+    the *model call* block removes the race entirely — the child is guaranteed to
+    still be running when the deadline fires.
+    """
+
+    import socket
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(4)
+    port = server.getsockname()[1]
+    return f"http://127.0.0.1:{port}/v1", server
+
+
+def test_a_timeout_kills_the_process_group(tmp_path: Path) -> None:
+    """The child is killed, not abandoned: nothing survives to write later."""
+
+    import time
+
+    base_url, server = _blocking_base_url()
+    try:
+        ws = _worktree(tmp_path)
+        started = time.time()
+        outcome = run_child_task(
+            objective="read calc.py and report its function",
+            workspace=ws,
+            model=ModelConfig(
+                model_id="deepseek/test", base_url=base_url, api_key="sk-test"
+            ),
+            profile="react",
+            ledger_dir=tmp_path / "children",
+            timeout=3.0,
+        )
+        elapsed = time.time() - started
+    finally:
+        server.close()
+
+    assert outcome.killed is True, f"child was not killed: {outcome.error!r}"
+    assert outcome.phase == "killed"
+    assert outcome.delivered is False
+    assert "killed" in (outcome.error or "")
+    assert outcome.pid > 0
+    assert elapsed < 60
+
+
+def test_an_unknown_profile_is_rejected_before_spawning(tmp_path: Path) -> None:
+    """Parent validates first: a bad name must not start a process."""
+
+    with pytest.raises(KeyError):
+        run_child_task(
+            objective="x",
+            workspace=_worktree(tmp_path),
+            model=ModelConfig(model_id="test/fake"),
+            profile="not-a-real-profile",
+            ledger_dir=tmp_path / "children",
+        )
+
+
+def test_child_evidence_reports_process_identity(tmp_path: Path) -> None:
+    from xenon.harness.child import ChildOutcome
+
+    outcome = ChildOutcome(
+        child_id="p-sub1-abc",
+        objective="x",
+        profile="react",
+        accepted=False,
+        phase="killed",
+        answer="",
+        ledger_path=str(tmp_path / "c.jsonl"),
+        debt=(),
+        tool_calls=1,
+        elapsed_seconds=0.5,
+        error="timeout",
+        pid=999,
+        killed=True,
+    )
+    payload = child_evidence(outcome)
+
+    assert payload["pid"] == 999 and payload["killed"] is True
+    assert payload["delivered"] is False
+
+
+def test_a_killed_child_leaves_no_process_behind(tmp_path: Path) -> None:
+    """`ps` shows nothing: the pid is gone once the call returns."""
+
+    import os
+    import subprocess
+    import sys
+
+    base_url, server = _blocking_base_url()
+    try:
+        outcome = run_child_task(
+            objective="read calc.py",
+            workspace=_worktree(tmp_path),
+            model=ModelConfig(
+                model_id="deepseek/test", base_url=base_url, api_key="sk-test"
+            ),
+            profile="react",
+            ledger_dir=tmp_path / "children",
+            timeout=3.0,
+        )
+    finally:
+        server.close()
+
+    assert outcome.killed is True, f"child was not killed: {outcome.error!r}"
+    pid = outcome.pid
+    assert pid > 0
+    if sys.platform == "win32":
+        listing = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        assert str(pid) not in listing, f"child pid {pid} is still alive"
+    else:  # pragma: no cover — POSIX-only branch
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        raise AssertionError(f"child pid {pid} is still alive")
+
+
+# ── worker contract (#354) ───────────────────────────────────────────
+
+
+def _spec(tmp_path: Path, **overrides) -> dict:
+    workspace = _worktree(tmp_path)
+    from xenon.harness.child_worker import model_to_spec
+
+    spec = {
+        "child_id": "p-sub1-abc",
+        "objective": "add a marker to calc.py",
+        "workspace": str(workspace),
+        "profile": "react",
+        "permission": "auto-edit",
+        "max_steps": 4,
+        "ledger_dir": str(tmp_path / "children"),
+        "model": model_to_spec(ModelConfig(model_id="test/fake")),
+    }
+    spec.update(overrides)
+    return spec
+
+
+def test_the_worker_payload_is_what_the_parent_reads(tmp_path: Path) -> None:
+    """Run the real worker body in-process and check it reports the same shape
+    the subprocess path parses."""
+
+    from xenon.harness.child_worker import run_spec
+
+    client = _edit_then_finish()
+    payload = run_spec(_spec(tmp_path), client=client)
+
+    assert payload["child_id"] == "p-sub1-abc"
+    assert payload["phase"] in {"finalized", "blocked", "failed"}
+    assert isinstance(payload["debt"], list)
+    assert isinstance(payload["tool_calls"], int)
+    assert Path(payload["ledger_path"]).name.startswith("p-sub1-abc")
+
+
+def test_the_worker_rejects_an_unknown_profile(tmp_path: Path) -> None:
+    from xenon.harness.child_worker import PROFILES, run_spec
+
+    assert "not-a-profile" not in PROFILES
+    with pytest.raises(KeyError):
+        run_spec(_spec(tmp_path, profile="not-a-profile"))
+
+
+def test_the_worker_main_writes_the_outcome_atomically(tmp_path: Path) -> None:
+    """`main` is only plumbing: read spec -> run -> rename into place."""
+
+    from xenon.harness import child_worker
+
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(_spec(tmp_path)), encoding="utf-8")
+    out_path = tmp_path / "outcome.json"
+
+    payload = {"child_id": "p-sub1-abc", "accepted": True, "phase": "finalized"}
+    original = child_worker.run_spec
+    child_worker.run_spec = lambda spec, **kwargs: payload
+    try:
+        assert child_worker.main([str(spec_path), str(out_path)]) == 0
+    finally:
+        child_worker.run_spec = original
+
+    assert json.loads(out_path.read_text(encoding="utf-8")) == payload
+    assert not (tmp_path / "outcome.json.tmp").exists()
+
+
+def test_the_worker_main_rejects_bad_arguments(tmp_path: Path) -> None:
+    from xenon.harness import child_worker
+
+    assert child_worker.main([]) == 2
+    assert child_worker.main([str(tmp_path / "only-one")]) == 2
+
+
+def test_a_model_config_round_trips_through_the_spec() -> None:
+    from xenon.harness.child_worker import model_from_spec, model_to_spec
+
+    original = ModelConfig(
+        model_id="deepseek/x",
+        base_url="http://h/v1",
+        api_key="sk-1",
+        max_tokens=123,
+        temperature=0.5,
+        reasoning_effort="high",
+        context_window=64000,
+        # Hooks are parent-process callbacks: they must not survive the boundary.
+        usage_sink=lambda *a: None,
+        should_cancel=lambda: False,
+        progress_sink=lambda *a: None,
+    )
+    restored = model_from_spec(model_to_spec(original))
+
+    assert restored.model_id == original.model_id
+    assert restored.context_window == 64000
+    assert restored.usage_sink is None
+    assert restored.should_cancel is None
+    assert restored.progress_sink is None
+
+
+def test_a_failed_child_summary_shows_the_error_not_a_fake_answer(tmp_path: Path) -> None:
+    from xenon.harness.child import ChildOutcome
+
+    outcome = ChildOutcome(
+        child_id="p-sub1-x",
+        objective="x",
+        profile="react",
+        accepted=False,
+        phase="failed",
+        answer="",
+        ledger_path=str(tmp_path / "c.jsonl"),
+        debt=(),
+        tool_calls=0,
+        elapsed_seconds=0.1,
+        error="boom",
+    )
+
+    text = outcome.summary()
+
+    assert "boom" in text
+    assert "失败" in text
+
+
+def test_a_delivered_child_summary_names_its_ledger(tmp_path: Path) -> None:
+    from xenon.harness.child import ChildOutcome
+
+    outcome = ChildOutcome(
+        child_id="p-sub1-x",
+        objective="x",
+        profile="react",
+        accepted=True,
+        phase="finalized",
+        answer="did the thing",
+        ledger_path=str(tmp_path / "c.jsonl"),
+        debt=("one gap",),
+        tool_calls=2,
+        elapsed_seconds=0.1,
+    )
+
+    text = outcome.summary()
+
+    assert "did the thing" in text
+    assert "one gap" in text and "ledger:" in text
+
+
+def test_parallel_with_nothing_to_do_returns_nothing(tmp_path: Path) -> None:
+    assert run_child_tasks(
+        objectives=["", "   "],
+        workspace=_worktree(tmp_path),
+        model=ModelConfig(model_id="test/fake"),
+    ) == ()
+
+
+def test_an_exception_inside_a_child_is_an_outcome_not_a_crash(tmp_path: Path) -> None:
+    """The in-process seam must swallow model/loop exceptions into data."""
+
+    def exploding(*args, **kwargs):
+        raise RuntimeError("model exploded")
+
+    outcome = run_child_task(
+        objective="x",
+        workspace=_worktree(tmp_path),
+        model=ModelConfig(model_id="test/fake"),
+        profile="react",
+        ledger_dir=tmp_path / "children",
+        client=exploding,
+    )
+
+    assert outcome.phase == "failed"
+    assert "model exploded" in (outcome.error or "")
+    assert outcome.delivered is False
+
+
+def test_a_child_that_crashes_becomes_an_error_not_an_exception(tmp_path: Path) -> None:
+    """A worker that dies before writing an outcome is data, with a reason.
+
+    The spec is missing ``model``, so the worker raises before it can write —
+    exactly the shape of a crash, without patching anything in-process (a patch
+    cannot reach a spawned process).
+    """
+
+    from xenon.harness import child as child_mod
+
+    payload, error, pid, killed = child_mod._run_in_subprocess(
+        {"child_id": "p-sub1-die", "profile": "react", "objective": "x"},
+        ledger_dir=tmp_path / "children",
+        timeout=90,
+        child_id="p-sub1-die",
+    )
+
+    assert payload is None
+    assert killed is False
+    assert pid > 0
+    assert "without an outcome" in (error or "")
+
+
+def test_a_corrupt_outcome_is_an_error_not_a_silent_pass(tmp_path: Path) -> None:
+    from xenon.harness.child import _read_outcome
+
+    out = tmp_path / "outcome.json"
+    out.write_text("{not json", encoding="utf-8")
+
+    payload, error = _read_outcome(out)
+
+    assert payload is None
+    assert "unreadable child outcome" in (error or "")
+
+
+def test_a_non_object_outcome_is_rejected(tmp_path: Path) -> None:
+    """JSON is not enough: the parent expects an object, not a list or a scalar."""
+
+    from xenon.harness.child import _read_outcome
+
+    out = tmp_path / "outcome.json"
+    out.write_text("[1, 2, 3]", encoding="utf-8")
+
+    payload, error = _read_outcome(out)
+
+    assert payload is None
+    assert error == "child outcome is not an object"
+
+
+def test_a_missing_outcome_file_is_merely_absent(tmp_path: Path) -> None:
+    from xenon.harness.child import _read_outcome
+
+    payload, error = _read_outcome(tmp_path / "nope.json")
+
+    assert payload is None and error is None
+
+
+def test_an_exception_under_a_deadline_is_still_an_outcome(tmp_path: Path) -> None:
+    """The timeout branch must not leak an exception either."""
+
+    def exploding(*args, **kwargs):
+        raise RuntimeError("model exploded")
+
+    outcome = run_child_task(
+        objective="x",
+        workspace=_worktree(tmp_path),
+        model=ModelConfig(model_id="test/fake"),
+        profile="react",
+        ledger_dir=tmp_path / "children",
+        client=exploding,
+        timeout=60,
+    )
+
+    assert outcome.phase == "failed"
+    assert "model exploded" in (outcome.error or "")
+
+
+def test_killing_a_process_that_already_exited_is_a_no_op() -> None:
+    """A child may finish between the deadline firing and the kill."""
+
+    import subprocess
+    import sys
+
+    from xenon.harness.child import _kill_tree
+
+    proc = subprocess.Popen([sys.executable, "-m", "site"])  # exits immediately
+    proc.wait()
+    _kill_tree(proc)  # must not raise
+
+    assert proc.poll() == 0
+
+
+def test_kill_tree_forces_a_kill_when_the_group_ignores_the_first_one() -> None:
+    """If the group refuses to die, the child handle is killed directly."""
+
+    from xenon.harness.child import _kill_tree
+
+    class Stubborn:
+        pid = 123456  # not a real process: every kill below is a no-op stub
+
+        def __init__(self) -> None:
+            self.killed = 0
+
+        def poll(self):
+            return None  # still "alive" as far as the caller knows
+
+        def wait(self, timeout=None):
+            raise __import__("subprocess").TimeoutExpired("x", timeout)
+
+        def kill(self):
+            self.killed += 1
+
+    proc = Stubborn()
+    _kill_tree(proc)
+
+    assert proc.killed == 1
+
+
+def test_the_module_entry_point_is_reachable_as_main() -> None:
+    """`python -m xenon.harness.child_worker` is the real entry point."""
+
+    import runpy
+    import sys
+
+    saved = sys.argv
+    sys.argv = ["prog"]  # no spec/outcome -> usage error, exit 2
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            runpy.run_module("xenon.harness.child_worker", run_name="__main__")
+    finally:
+        sys.argv = saved
+
+    assert excinfo.value.code == 2
