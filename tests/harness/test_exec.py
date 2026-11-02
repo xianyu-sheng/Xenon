@@ -187,3 +187,69 @@ def test_xenon_exec_emits_jsonl_and_result(tmp_path: Path) -> None:
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["accepted"] is True
     assert (ledger_dir / "cli-task.jsonl").exists()
+
+
+def test_run_plan_requires_a_model_for_free_form_steps(tmp_path) -> None:
+    """A free-form step needs an actor; running it silently would be a lie."""
+
+    import pytest
+
+    from xenon.harness.plan import parse_plan
+
+    _repo(tmp_path)
+    plan = parse_plan(
+        {
+            "objective": "x",
+            "steps": [{"id": 1, "kind": "edit", "targets": ["calc.py"]}],
+        }
+    )
+
+    with pytest.raises(ValueError, match="model_config"):
+        run_plan(plan, workspace=tmp_path)
+
+
+def test_run_plan_uses_the_model_for_free_form_steps(tmp_path) -> None:
+    """With a model the plan is submitted *and* its free steps have an actor."""
+
+    from unittest.mock import patch
+
+    from xenon.harness.llm import ModelConfig
+    from xenon.harness.plan import parse_plan
+
+    _repo(tmp_path)
+    plan = parse_plan(
+        {
+            "objective": "x",
+            "steps": [{"id": 1, "kind": "edit", "targets": ["calc.py"]}],
+        }
+    )
+    captured: dict = {}
+
+    def fake_run(objective, **kwargs):
+        captured.update(kwargs)
+
+        class _Run:
+            class result:
+                accepted = True
+                answer = "ok"
+                finalize_sha = None
+                debt = ()
+                phase = type("P", (), {"value": "finalized"})()
+
+            ledger_path = tmp_path / "l.jsonl"
+            task_id = "t"
+
+        return _Run()
+
+    with patch("xenon.harness.runner.run_task", fake_run):
+        run_plan(
+            plan,
+            workspace=tmp_path,
+            model_config=ModelConfig(model_id="test/fake"),
+        )
+
+    strategy = captured["strategy"]
+    assert strategy.profile.follow_plan is False, (
+        "a free-form step cannot be executed by blindly following the plan"
+    )
+    assert strategy.step_actor is not None

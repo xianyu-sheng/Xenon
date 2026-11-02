@@ -211,7 +211,13 @@ class LoopStrategy:
 
     def _follow_plan(self, step: StepContract) -> Action:
         if step.intent is None:
-            return Think(f"step {step.id}: {step.kind.value}")
+            # A follow-plan step is executed by its bound capability.  Without
+            # one there is nothing to run, and emitting a thought would burn
+            # the repair budget on a step that can never make progress.
+            return ReleaseStep(
+                f"step {step.id} has no bound capability; "
+                "a follow-plan profile cannot act on it"
+            )
         intent = step.intent
         if step.prefer and intent.prefer is None:
             intent = replace(intent, prefer=step.prefer)

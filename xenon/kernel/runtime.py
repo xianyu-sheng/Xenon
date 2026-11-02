@@ -1908,6 +1908,12 @@ class LoopRuntime:
         if checks and all(
             item.status is VerdictStatus.SATISFIED for item in checks
         ):
+            if any(getattr(item, "from_proposal", False) for item in checks):
+                # A proposal pointed at real facts; whether those facts *prove*
+                # the requirement is a judgement, so this stays PARTIAL.  This
+                # is the difference between "the harness verified it" and "the
+                # model said these receipts cover it".
+                return EvidenceStatus.PARTIAL
             return EvidenceStatus.VERIFIED
         return EvidenceStatus.PARTIAL
 

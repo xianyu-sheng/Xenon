@@ -96,22 +96,25 @@ def run_from_args(args: argparse.Namespace) -> int:
         return 2
 
     plan = None
-    model_config = None
     if plan_path:
         try:
             plan = _load_plan(plan_path)
         except (OSError, ValueError, PlanError) as exc:
             print(f"plan error: {exc}", file=sys.stderr)
             return 2
-    else:
-        try:
-            model_config = resolve_model_config(
-                getattr(args, "model", None),
-                config_path=getattr(args, "config", None),
-            )
-        except ModelConfigError as exc:
+    # A *deterministic* plan (every step capability-bound) runs without a
+    # model; a free-form plan needs one for its step actor.  So resolve
+    # lazily: failing to find a model is only fatal when something needs it.
+    try:
+        model_config = resolve_model_config(
+            getattr(args, "model", None),
+            config_path=getattr(args, "config", None),
+        )
+    except ModelConfigError as exc:
+        if plan is None:
             print(f"model error: {exc}", file=sys.stderr)
             return 2
+        model_config = None
 
     sink = JsonlSink(sys.stdout) if args.jsonl else None
     try:
@@ -125,6 +128,7 @@ def run_from_args(args: argparse.Namespace) -> int:
                 finalize=not args.no_finalize,
                 max_steps=args.max_steps,
                 sink=sink,
+                model_config=model_config,
             )
         else:
             assert task is not None and model_config is not None

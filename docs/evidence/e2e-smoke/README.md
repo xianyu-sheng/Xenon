@@ -21,13 +21,14 @@
 | `no-finalize` | CLI `--no-finalize` | 改动落盘但**不产生提交** |
 | `accept-debt` | CLI `--accept-debt` | 文件已改（缺口被接受时可交付） |
 | `network-needs-approval` | CLI，默认权限 | 无审批人时必须 fail-closed 且给原因，而不是挂住 |
+| `plan-file-executes` | CLI `--plan <file>` | 计划文件必须真的执行（此前无 actor，每步都违规） |
 | `stray-change-reported` | CLI，提交后再弄脏 `notes.txt` | 必须拒绝，**且理由点名该路径** |
 | `impossible-task` | CLI，不存在的路径 | 有界失败（`--max-steps 3`），不崩 |
 
 ## 结果（本次运行）
 
 ```text
-10/10 scenarios passed
+11/11 scenarios passed
 model: deepseek/deepseek-v4-flash
 ```
 
@@ -51,3 +52,5 @@ python scripts/e2e_smoke.py --only edit-commit
 
 3. **`no_stray_changes` 永远 abstain**：`worktree contains unverified paths` 明明可判，却报「语义声明需要覆盖绑定器」，白耗 3 轮修复预算。已改为宿主观测 → 账本事实 → 确定性绑定。
 4. **整套测试通过绑不上具体目标**：跑 `python -m pytest -q` 时 `TestRun.target` 被记成命令串本身，于是「某文件测试通过」永远无法证明。已改为「无路径 = 整套」，整套通过覆盖任意具体 target。
+
+5. **`xenon exec --plan <file>` 根本执行不了**：`run_plan` 构造的策略没有 step actor，且「跟随计划」模式只能跑带 `capability` 的步骤；自由步骤只会产出 `Think("step 1: edit")`，白耗修复预算后 blocked。已按计划形态选择 profile（全 capability → 确定性跟随；含自由步骤 → step actor），并在缺 capability 时明确 `ReleaseStep` 说明原因，而不是空转。

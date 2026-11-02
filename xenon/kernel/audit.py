@@ -270,6 +270,8 @@ def _verdict(row: CoverageRow) -> Verdict:
             stage=VerificationStage.V2,
             status=VerdictStatus.SATISFIED,
             fact_ids=row.fact_ids,
+            reason=row.reason,
+            from_proposal=getattr(row, "source", "") == "proposal",
         )
     if row.status is ResolutionStatus.UNRESOLVED:
         return Verdict(
