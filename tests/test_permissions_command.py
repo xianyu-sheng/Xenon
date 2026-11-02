@@ -17,7 +17,7 @@ import pytest
 
 import xenon.kernel  # noqa: F401 — ledger<->kernel import cycle
 from xenon.kernel.contracts import Capability
-from xenon.kernel.permission_rules import ALLOW, DENY, RuleSet, parse_rule
+from xenon.kernel.permission_rules import ALLOW, ASK, DENY, RuleSet, parse_rule
 from xenon.kernel.session_grants import SESSION, GrantBook, grant_from_choice
 from xenon.repl.command_groups.permissions import _cmd_permissions
 
@@ -369,3 +369,37 @@ def test_a_failed_rule_write_does_not_break_the_command(tmp_path) -> None:
     # The removal still succeeds in memory; only persisting is best effort.
     assert "已撤销" in text
     assert rules.rules == []
+
+
+# ── the adapter forwards the layered rules to the policy ────────────
+
+
+def test_rules_of_separates_deny_from_ask() -> None:
+    from xenon.repl.runtime_adapter import RuntimeAdapter
+
+    rules = RuleSet()
+    rules.add(parse_rule("shell(rm *)", decision=DENY))
+    rules.add(parse_rule("shell(npm i*)", decision=ASK))
+    adapter = object.__new__(RuntimeAdapter)
+    adapter.permission_rules = rules
+
+    assert [rule.pattern for rule in adapter._rules_of("deny")] == ["rm *"]
+    assert [rule.pattern for rule in adapter._rules_of("ask")] == ["npm i*"]
+
+
+def test_rules_of_without_a_ruleset_is_empty() -> None:
+    from xenon.repl.runtime_adapter import RuntimeAdapter
+
+    adapter = object.__new__(RuntimeAdapter)
+    adapter.permission_rules = None
+
+    assert adapter._rules_of("deny") == ()
+
+
+def test_rules_of_with_a_ruleset_missing_rules_is_empty() -> None:
+    from xenon.repl.runtime_adapter import RuntimeAdapter
+
+    adapter = object.__new__(RuntimeAdapter)
+    adapter.permission_rules = types.SimpleNamespace()
+
+    assert adapter._rules_of("ask") == ()

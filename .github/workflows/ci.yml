@@ -92,6 +92,14 @@ jobs:
       - name: Component coverage gate
         run: python scripts/cov_components.py coverage.xml
 
+      # Codecov's patch status only speaks after a push.  This asks the same
+      # question locally: which *added* lines did this diff execute?  Kept at 90%
+      # (Codecov's own target is ~80) so it tightens rather than weakens, without
+      # blocking a PR over one uncovered branch.
+      - name: Patch coverage gate (diff lines only)
+        if: github.event_name == 'pull_request'
+        run: python scripts/patch_cov.py --from-xml --threshold 90 --base "origin/${{ github.base_ref }}"
+
       - name: Upload to Codecov
         uses: codecov/codecov-action@v7
         with:
