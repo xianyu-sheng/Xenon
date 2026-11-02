@@ -274,6 +274,53 @@ def kernel_progress_reporter(repl: Any) -> Any:
     return report
 
 
+def kernel_request_reporter(repl: Any) -> Any:
+    """Render provider phase (attempt / retry / timeout) for the operator.
+
+    The progress hook says "still generating"; this says *why it is slow* —
+    a retry after a 429 is a different story from a first attempt, and the
+    operator cannot tell them apart from a character count.
+    """
+
+    console = _console_for(repl)
+
+    def report(event: dict[str, Any]) -> None:
+        kind = str(event.get("kind") or "")
+        phase = str(event.get("phase") or "model")
+        attempt = int(event.get("attempt") or 1)
+        attempts = int(event.get("provider_attempts") or 1)
+        try:
+            if kind == "start":
+                if attempts > 1:
+                    console.print(
+                        f"[dim]· {phase} 请求中（第 {attempt}/{attempts} 次，"
+                        f"超时 {float(event.get('timeout') or 0):.0f}s）[/dim]",
+                        highlight=False,
+                    )
+                else:
+                    console.print(
+                        f"[dim]· {phase} 请求中[/dim]", highlight=False
+                    )
+            elif kind == "end":
+                if event.get("success"):
+                    return  # a normal completion needs no extra line
+                reason = str(event.get("reason") or "failed")
+                if event.get("retrying"):
+                    console.print(
+                        f"[yellow]· {phase} 失败（{reason}），将重试[/yellow]",
+                        highlight=False,
+                    )
+                else:
+                    console.print(
+                        f"[red]· {phase} 失败（{reason}），已用尽 {attempt} 次[/red]",
+                        highlight=False,
+                    )
+        except Exception:  # noqa: BLE001 — telemetry is cosmetic
+            pass
+
+    return report
+
+
 def drain_steering(repl: Any) -> Any:
     """Pop one pending operator line, or ``None`` (never blocks).
 
@@ -557,6 +604,7 @@ class RuntimeAdapter:
         strategy_mode: str = "react",
         plan_only: bool = False,
         progress_sink: Any = None,
+        request_sink: Any = None,
         audit_provider: Any = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
@@ -566,6 +614,7 @@ class RuntimeAdapter:
             )
         self.model_config = model_config
         self.progress_sink = progress_sink
+        self.request_sink = request_sink
         self.audit_provider = audit_provider
         self.permission = permission
         self.ledger_dir = (
@@ -625,6 +674,10 @@ class RuntimeAdapter:
             from xenon.harness.llm import bind_progress_sink
 
             bind_progress_sink(strategy, self.progress_sink)
+        if self.request_sink is not None:
+            from xenon.harness.llm import bind_request_sink
+
+            bind_request_sink(strategy, self.request_sink)
         constraints = [
             "runtime:kernel",
             f"model:{self.model_config.model_id}",
@@ -1170,6 +1223,7 @@ def run_kernel_turn(
         if callable(start_capture):
             start_capture()
         adapter.progress_sink = kernel_progress_reporter(repl)
+        adapter.request_sink = kernel_request_reporter(repl)
         # V2 coverage needs a proposer: without one, every semantic obligation
         # can only ever abstain (#286).  The proposer only points at receipts;
         # the binder still decides, and proposal-backed verdicts stay PARTIAL.
@@ -1237,6 +1291,8 @@ __all__ = [
     "KernelApprovalProvider",
     "ReplEventSink",
     "RuntimeAdapter",
+    "kernel_progress_reporter",
+    "kernel_request_reporter",
     "model_config_for",
     "permission_mode_for",
     "resume_kernel_plan",

@@ -70,6 +70,10 @@ class ModelConfig:
     # Progress hook: ``(elapsed_seconds, chars_generated)``.  Called from the
     # waiting thread, i.e. the caller's own thread, so a UI can update safely.
     progress_sink: Any = None
+    # Provider-phase hook: called once per *attempt* with a dict describing the
+    # request (see ``xenon.kernel.provider_events``).  Telemetry only — it never
+    # influences the call, and a broken sink cannot fail a run.
+    request_sink: Any = None
 
 
 _DEFAULT_MAX_TOKENS = 8192
@@ -640,7 +644,15 @@ def _call_model(
         kwargs["credentials"] = {provider: config.api_key}
     if config.usage_sink is not None:
         kwargs["usage_sink"] = config.usage_sink
-    if config.should_cancel is None and config.progress_sink is None:
+    if config.request_sink is not None:
+        # Provider phase is telemetry for the operator, so it must travel with
+        # the model that produces it — a global subscription would mix parallel
+        # child tasks into one spinner.
+        kwargs["request_sink"] = config.request_sink
+    if (
+        config.should_cancel is None
+        and config.progress_sink is None
+    ):
         return caller(config.model_id, messages, **kwargs)
     ticker: list[int] = [0]
     # Only the real transport can stream; an injected client (tests, evals,
@@ -676,10 +688,12 @@ def _call_streaming(
     kwargs = {
         key: value
         for key, value in kwargs.items()
-        if key not in {"usage_sink", "progress_sink", "should_cancel"}
+        if key not in {"usage_sink", "progress_sink", "should_cancel", "request_sink"}
     }
     chunks: list[str] = []
     total = 0
+    if config.request_sink is not None:
+        kwargs["request_sink"] = config.request_sink
     for chunk in chat_completion_stream(config.model_id, messages, **kwargs):
         text = str(chunk or "")
         chunks.append(text)
@@ -1244,6 +1258,30 @@ def bind_runtime_hooks(strategy: Any, runtime: Any) -> Any:
             provider.config = replace(
                 config, usage_sink=sink, should_cancel=should_cancel
             )
+        except Exception:  # noqa: BLE001 — a frozen provider simply opts out
+            continue
+    return strategy
+
+
+def bind_request_sink(strategy: Any, sink: Any) -> Any:
+    """Attach a provider-phase sink to every model provider in a strategy.
+
+    Kept separate from :func:`bind_runtime_hooks` because it is front-end
+    telemetry, not runtime accounting: an eval or a child task simply never calls
+    this and therefore pays nothing.
+    """
+
+    from dataclasses import replace
+
+    if sink is None:
+        return strategy
+    for name in _SINKABLE_PROVIDERS:
+        provider = getattr(strategy, name, None)
+        config = getattr(provider, "config", None)
+        if config is None:
+            continue
+        try:
+            provider.config = replace(config, request_sink=sink)
         except Exception:  # noqa: BLE001 — a frozen provider simply opts out
             continue
     return strategy
