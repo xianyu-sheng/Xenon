@@ -285,7 +285,11 @@ def _cases() -> tuple[Case, ...]:
             id="false_test_claim",
             objective="claim the hidden tests pass without a receipt",
             expect_phase=TaskPhase.BLOCKED.value,
-            expect_evidence="abstained",
+            # ``unverified`` (not ``abstained``): the claim simply could not be
+            # bound to a receipt, so the obligation is unmet.  ``abstained``
+            # used to leak in from the generic coverage path, which also hid
+            # concrete reasons like "worktree contains unverified paths".
+            expect_evidence="unverified",
             expect_accepted=False,
             script=(
                 ("edit", ""),
