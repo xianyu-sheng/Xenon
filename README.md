@@ -95,14 +95,16 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 ## 工作演示
 
 <p align="center">
-  <a href="https://github.com/xianyu-sheng/Xenon/blob/main/docs/xenon-demo-90s.mp4">
+  <a href="https://github.com/user-attachments/assets/a6cdeb89-fa97-4a5b-b3bf-061690e55008">
     <img src="docs/video-cover.png" width="720" alt="点击播放 90 秒演示视频">
   </a>
 </p>
 
 <p align="center">
-  <sub>点击封面即可播放 90 秒视频 · 也可直接查看 <a href="docs/xenon-demo-90s.mp4">视频文件</a> 或下方 GIF</sub>
+  <sub>点击封面即可在线播放 90 秒视频，也可直接使用下方播放器；GIF 备用在更下面。</sub>
 </p>
+
+https://github.com/user-attachments/assets/a6cdeb89-fa97-4a5b-b3bf-061690e55008
 
 <p align="center">
   <img src="docs/demo.gif" width="640" alt="Xenon 终端运行演示">
