@@ -34,6 +34,13 @@ from xenon.kernel.strategies import LoopProfile
 from xenon.ledger.events import canonical_json
 from xenon.ledger.store import Ledger
 
+# Steps are the last-resort brake, not the primary one: the deterministic loop
+# detector stops a stuck run, and a stalled run is stopped by time.  A complex
+# task legitimately needs many steps, and a small cap turns "hard task" into
+# "partial result".  1024 is large enough never to be the reason a real task
+# fails, and still finite so a runaway cannot go forever.  ``0`` means no limit.
+DEFAULT_MAX_STEPS = 1024
+
 
 @dataclass(frozen=True, slots=True)
 class HarnessRun:
@@ -58,6 +65,7 @@ def _runtime_bundle(
     extra_specs: Sequence[ToolSpec],
     tool_runtime: Any = None,
     audit_provider: Any = None,
+    session_grants: Sequence[Any] = (),
 ) -> tuple[Path, Path, Ledger, LoopRuntime]:
     root = Path(workspace).resolve()
     if not root.is_dir():
@@ -75,6 +83,10 @@ def _runtime_bundle(
         workspace=str(root),
         allow_approval=allow_approval,
         approval_ttl_seconds=approval_ttl_seconds,
+        # Session grants are the human's remembered decisions (#373).  They are
+        # passed in as plain values so the kernel stays a function of its inputs;
+        # the front-end owns the book and the ledger records each addition.
+        grants=tuple(session_grants),
     )
     catalog = build_catalog(catalog_profile, extra_specs=extra_specs)
     gateway = LegacyToolGateway(
@@ -133,7 +145,7 @@ def run_task(
     task_id: str | None = None,
     permission: PermissionMode = PermissionMode.AUTO_EDIT,
     finalize: bool = True,
-    max_steps: int = 20,
+    max_steps: int = DEFAULT_MAX_STEPS,
     constraints: Sequence[str] = (),
     sink: JsonlSink | None = None,
     approval: ApprovalProvider | None = None,
@@ -150,6 +162,8 @@ def run_task(
     audit_provider: Any = None,
     parent_task_id: str = "",
     batch_id: str = "",
+    max_stall_seconds: float | None = 180.0,
+    session_grants: Sequence[Any] = (),
 ) -> HarnessRun:
     """Run one objective through the kernel with an injected strategy.
 
@@ -173,6 +187,7 @@ def run_task(
         extra_specs=extra_specs,
         tool_runtime=tool_runtime,
         audit_provider=audit_provider,
+        session_grants=session_grants,
     )
     spec = TaskSpec(
         task_id=identifier,
@@ -182,8 +197,9 @@ def run_task(
         constraints=tuple(constraints),
         mode=mode,
         budget=Budget(
-            max_steps=max_steps,
+            max_steps=max_steps if max_steps > 0 else None,
             context_window=_context_window(strategy),
+            max_stall_seconds=max_stall_seconds,
         ),
         accept_debt=accept_debt,
         context_blocks=tuple(context_blocks),
@@ -215,7 +231,7 @@ def resume_task(
     ledger_dir: str | Path | None = None,
     permission: PermissionMode = PermissionMode.AUTO_EDIT,
     finalize: bool = True,
-    max_steps: int = 20,
+    max_steps: int = DEFAULT_MAX_STEPS,
     constraints: Sequence[str] = (),
     sink: JsonlSink | None = None,
     approval: ApprovalProvider | None = None,
@@ -283,7 +299,7 @@ def run_plan(
     task_id: str | None = None,
     permission: PermissionMode = PermissionMode.AUTO_EDIT,
     finalize: bool = True,
-    max_steps: int = 20,
+    max_steps: int = DEFAULT_MAX_STEPS,
     sink: JsonlSink | None = None,
     model_config: Any = None,
 ) -> HarnessRun:

@@ -228,7 +228,14 @@ class TaskPhase(str, Enum):
 class Budget:
     max_tokens: int | None = None
     max_wall_seconds: float | None = None
+    # Steps are a *last resort*, not the primary loop brake: the deterministic
+    # loop detector is.  A complex task legitimately takes many steps, and a
+    # small cap forces a partial result.  ``None`` means no limit at all.
     max_steps: int | None = None
+    # The gentle brake.  A run that stops learning anything for this long is
+    # stalled; a run that keeps learning new facts is never stopped by time
+    # alone.  ``None`` disables it.
+    max_stall_seconds: float | None = 180.0
     # Repair/replan budgets are policy caps, not token budgets.  They are
     # counted by the runtime so a strategy cannot retry forever.
     max_repair_attempts: int = 2

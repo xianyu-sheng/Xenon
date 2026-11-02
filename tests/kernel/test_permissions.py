@@ -175,17 +175,34 @@ def test_scoped_grant_expires(tmp_path) -> None:
     now = [100.0]
     grant = ScopedGrant(
         capability=Capability.VCS,
-        target="git push",
+        target="git fetch",
         expires_at=200.0,
     )
     policy = PermissionPolicy(
         workspace=str(tmp_path), grants=(grant,), clock=lambda: now[0]
     )
-    action = _call(Capability.VCS, command="git push origin main")
+    action = _call(Capability.VCS, command="git fetch origin")
 
     assert _decision(policy, action, str(tmp_path)).kind is PolicyDecisionKind.ALLOW
     now[0] = 200.0
     assert _decision(policy, action, str(tmp_path)).kind is PolicyDecisionKind.VETO
+
+
+def test_a_grant_cannot_authorize_a_push(tmp_path) -> None:
+    """`documents/design` principle: push needs an explicit TaskSpec.allow_push.
+
+    A grant means "stop asking me"; it must not become a way to authorize the one
+    action the design keeps out of the approvable set.
+    """
+
+    grant = ScopedGrant(capability=Capability.VCS, target="*")
+    policy = PermissionPolicy(workspace=str(tmp_path), grants=(grant,))
+    action = _call(Capability.VCS, command="git push origin main")
+
+    decision = _decision(policy, action, str(tmp_path))
+
+    assert decision.kind is PolicyDecisionKind.VETO
+    assert "push" in decision.reason
 
 
 class DeniedGateway:
