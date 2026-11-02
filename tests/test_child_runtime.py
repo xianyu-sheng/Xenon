@@ -298,30 +298,54 @@ def test_a_default_child_runs_in_its_own_process(tmp_path: Path, monkeypatch) ->
     assert outcome.accepted is True and outcome.tool_calls == 2
 
 
+def _blocking_base_url() -> tuple[str, object]:
+    """A local socket that accepts the request and never answers.
+
+    A timeout test must not depend on the child being slow: on a fast machine
+    the child may finish before the deadline and then nothing is killed.  Making
+    the *model call* block removes the race entirely — the child is guaranteed to
+    still be running when the deadline fires.
+    """
+
+    import socket
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(4)
+    port = server.getsockname()[1]
+    return f"http://127.0.0.1:{port}/v1", server
+
+
 def test_a_timeout_kills_the_process_group(tmp_path: Path) -> None:
     """The child is killed, not abandoned: nothing survives to write later."""
 
     import time
 
-    ws = _worktree(tmp_path)
-    started = time.time()
-    outcome = run_child_task(
-        objective="spend a long time thinking about nothing",
-        workspace=ws,
-        model=ModelConfig(model_id="test/missing-model"),  # fails fast if reached
-        profile="react",
-        ledger_dir=tmp_path / "children",
-        timeout=0.4,
-    )
-    elapsed = time.time() - started
+    base_url, server = _blocking_base_url()
+    try:
+        ws = _worktree(tmp_path)
+        started = time.time()
+        outcome = run_child_task(
+            objective="read calc.py and report its function",
+            workspace=ws,
+            model=ModelConfig(
+                model_id="deepseek/test", base_url=base_url, api_key="sk-test"
+            ),
+            profile="react",
+            ledger_dir=tmp_path / "children",
+            timeout=3.0,
+        )
+        elapsed = time.time() - started
+    finally:
+        server.close()
 
-    assert outcome.killed is True
+    assert outcome.killed is True, f"child was not killed: {outcome.error!r}"
     assert outcome.phase == "killed"
     assert outcome.delivered is False
     assert "killed" in (outcome.error or "")
     assert outcome.pid > 0
-    # Killed children must not linger: the whole group is gone.
-    assert elapsed < 30
+    assert elapsed < 60
 
 
 def test_an_unknown_profile_is_rejected_before_spawning(tmp_path: Path) -> None:
@@ -368,15 +392,22 @@ def test_a_killed_child_leaves_no_process_behind(tmp_path: Path) -> None:
     import subprocess
     import sys
 
-    outcome = run_child_task(
-        objective="x",
-        workspace=_worktree(tmp_path),
-        model=ModelConfig(model_id="test/fake"),
-        profile="react",
-        ledger_dir=tmp_path / "children",
-        timeout=0.4,
-    )
+    base_url, server = _blocking_base_url()
+    try:
+        outcome = run_child_task(
+            objective="read calc.py",
+            workspace=_worktree(tmp_path),
+            model=ModelConfig(
+                model_id="deepseek/test", base_url=base_url, api_key="sk-test"
+            ),
+            profile="react",
+            ledger_dir=tmp_path / "children",
+            timeout=3.0,
+        )
+    finally:
+        server.close()
 
+    assert outcome.killed is True, f"child was not killed: {outcome.error!r}"
     pid = outcome.pid
     assert pid > 0
     if sys.platform == "win32":
