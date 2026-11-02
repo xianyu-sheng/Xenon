@@ -527,6 +527,11 @@ class KernelApprovalProvider:
         # why is undebuggable — so the bridge keeps the reason for the ledger.
         self.last_reason = ""
         self.last_scope = ""
+        # True while answering a *child's* brokered request (#373).  A child may
+        # only ask; it must never create a grant, a TTL rule or an allowed-once
+        # entry from its own request, because then a delegated model could
+        # accumulate authority one prompt at a time.
+        self.from_child = False
 
     def request(
         self, view: Any, action: Any, decision: PolicyDecision
@@ -548,7 +553,7 @@ class KernelApprovalProvider:
             else "WRITE"
         )
         try:
-            result = confirm(tool, dict(action.intent.params), risk)
+            result = confirm(tool, dict(action.intent.params), risk, from_child=self.from_child)
         except Exception as exc:  # noqa: BLE001 — UI failure must deny
             self.last_reason = f"confirmation UI failed: {exc}"
             return False
@@ -559,8 +564,13 @@ class KernelApprovalProvider:
             approved = bool(result)
         # What the human chose to remember: "" (once) / "session" / "always" /
         # "scoped".  Read from the front-end so the closed 2-tuple result
-        # vocabulary of ``_confirm_tool`` stays intact.
-        self.last_scope = str(getattr(self.repl, "_last_approval_scope", "") or "")
+        # vocabulary of ``_confirm_tool`` stays intact.  A child's answer is
+        # one-shot by construction, so the scope is always empty for it.
+        self.last_scope = (
+            ""
+            if self.from_child
+            else str(getattr(self.repl, "_last_approval_scope", "") or "")
+        )
         if not approved and not self.last_reason:
             self.last_reason = "user rejected the request"
         return approved
@@ -584,7 +594,11 @@ class KernelApprovalProvider:
                 params=dict(request.get("params") or {}),
             )
         )
-        approved = self.request(None, action, None)
+        self.from_child = True
+        try:
+            approved = self.request(None, action, None)
+        finally:
+            self.from_child = False
         return approved, self.last_reason
 
 
@@ -1245,6 +1259,18 @@ def run_kernel_turn(
             client=client,
             plan_only=plan_only,
         )
+        # #373: the front-end owns the session's remembered decisions.  A grant
+        # made in an earlier task must apply to this one, and this task's answer
+        # must be remembered for the next.  Without this the kernel records
+        # GRANT_ADDED and still asks again on the next task — the earlier probe
+        # wired the book by hand; the product must not.
+        from xenon.kernel.session_grants import GrantBook
+
+        book = getattr(repl, "_grant_book", None)
+        if book is None:
+            book = GrantBook(workspace=str(adapter.workspace))
+            repl._grant_book = book
+        adapter.session_grants = tuple(book.active(str(adapter.workspace)))
         sink = ReplEventSink(callback)
         start_capture = getattr(repl, "_start_log_capture", None)
         if callable(start_capture):
@@ -1281,6 +1307,13 @@ def run_kernel_turn(
                 on_runtime=_attach,
                 context_blocks=blocks,
             )
+            # Remember the human's decision so the next task in this session
+            # does not ask again.  The kernel already wrote GRANT_ADDED; this is
+            # where the grant outlives the task it was made in.
+            runtime = getattr(repl, "_active_runtime", None)
+            grant = getattr(runtime, "last_grant", None)
+            if grant is not None:
+                book.add(grant)
         finally:
             if callable(loop_setter):
                 loop_setter(None)

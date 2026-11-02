@@ -151,13 +151,17 @@ class ApprovalUxMixin:
         return (tool_name, targets)
 
     def _confirm_tool(
-        self, tool_name: str, params: dict, risk: str
+        self, tool_name: str, params: dict, risk: str, *, from_child: bool = False
     ) -> tuple[bool, str]:
         """旧权限门的确认回调：委托给统一的边界审批面板。
 
         PermissionGate.check 仍负责模式语义（PLAN 只读 / BYPASS 全允许 /
         风险路由），但所有需要询问的路径都走同一个面板（工作区策略 +
         TTL 规则 + allowed-once），不再有自己的 CRITICAL 弹窗。
+
+        ``from_child``（#373）：回答子任务经 broker 转发的请求时，本次回答
+        只作用于这一次调用——不写 TTL 规则、不登记 allowed-once、不产生
+        会话授权。子任务只能继承父级已有的授权，不能自己积累。
         """
 
         self._last_approval_scope = ""
@@ -177,7 +181,7 @@ class ApprovalUxMixin:
             return True, ""
 
         outcome = self._confirm_tool_approval(
-            tool_name, params or {}, reason=f"风险等级 {risk}"
+            tool_name, params or {}, reason=f"风险等级 {risk}", from_child=from_child
         )
         if outcome == APPROVAL_ALLOWED_ONCE:
             # What the human chose to remember: "" (once), "session", "always"
@@ -193,12 +197,19 @@ class ApprovalUxMixin:
         tool_name: str,
         params: dict,
         reason: str = "",
+        *,
+        from_child: bool = False,
     ) -> str:
         """工具边界审批：工作区内写直接放行，越界写与命令询问。
 
         返回值是封闭结果词表：allowed-once / rejected / cancelled /
         unavailable；只有 allowed-once 是授权。非交互且无 assume_yes 时返回
         unavailable（fail-closed）。“a”登记带 TTL 的会话规则。
+
+        ``from_child``（#373）：子任务经 broker 转发的请求只给 y/n/q 三个
+        选择，任何“允许”都只作用于当前这一次调用，不写入任何记忆（TTL
+        规则、allowed-once、会话授权）。父级已有的授权仍然先命中上面的
+        短路径——那就是“继承”。
         """
 
         self._last_approval_scope = ""
@@ -270,10 +281,13 @@ class ApprovalUxMixin:
                     )
                 )
                 try:
-                    choice = self._ask_approval_choice()
+                    choice = self._ask_approval_choice(from_child=from_child)
                 except (KeyboardInterrupt, EOFError):
                     return APPROVAL_CANCELLED
         if choice == "a":
+            if from_child:
+                # A child request has no y/a/A/s/q prompt; defensive only.
+                return APPROVAL_REJECTED
             ttl = self._approval_rules.allow(tool_name)
             self._boundary_approved_once.add(self._approval_key(tool_name, params))
             console.print(
@@ -284,6 +298,8 @@ class ApprovalUxMixin:
             self._last_approval_scope = "session"
             return APPROVAL_ALLOWED_ONCE
         if choice == "A":
+            if from_child:
+                return APPROVAL_REJECTED
             # "Always" writes a rule, exactly like Claude Code's "don't ask
             # again": the decision becomes a file the human can read, review and
             # commit — not an invisible flag.
@@ -295,6 +311,8 @@ class ApprovalUxMixin:
             self._last_approval_scope = "always"
             return APPROVAL_ALLOWED_ONCE
         if choice == "s":
+            if from_child:
+                return APPROVAL_REJECTED
             self._boundary_approved_once.add(self._approval_key(tool_name, params))
             if hasattr(callback, "resume_after_prompt"):
                 callback.resume_after_prompt(tool_name, params)
@@ -302,7 +320,10 @@ class ApprovalUxMixin:
             self._last_approval_scope = "scoped"
             return APPROVAL_ALLOWED_ONCE
         if choice == "y":
-            self._boundary_approved_once.add(self._approval_key(tool_name, params))
+            if not from_child:
+                # One-shot within this round.  A child's answer must not even
+                # do that: it applies to this call only, nothing more.
+                self._boundary_approved_once.add(self._approval_key(tool_name, params))
             console.print("[dim]· 已授权本次操作[/dim]")
             if hasattr(callback, "resume_after_prompt"):
                 callback.resume_after_prompt(tool_name, params)
@@ -360,7 +381,7 @@ class ApprovalUxMixin:
         return rule.selector()
 
 
-    def _ask_approval_choice(self, default: str = "n") -> str:
+    def _ask_approval_choice(self, default: str = "n", *, from_child: bool = False) -> str:
         """Read y/n/a/q without fighting prompt_toolkit for stdin.
 
         The REPL owns the terminal through prompt_toolkit.  Asking with
@@ -370,9 +391,15 @@ class ApprovalUxMixin:
         So when a prompt_toolkit session exists we ask through it — it owns
         the reader either way — and only fall back to ``Prompt.ask`` when
         there is none (headless, tests, exotic terminals).
+
+        ``from_child`` (a brokered child request) narrows the answer set to
+        y/n/q: a delegated model may only ask, it may not be remembered.
         """
 
-        question = "选择 [y/n/a/A/s/q] (n): "
+        allowed = {"y", "n", "a", "A", "s", "q"}
+        if from_child:
+            allowed = {"y", "n", "q"}
+        question = "选择 [y/n/a/A/s/q] (n): " if not from_child else "选择 [y/n/q] (n): "
         session = getattr(self, "_pt_session", None)
         # Only inside a kernel turn, where the REPL's prompt has already
         # returned and the session is the live owner of the terminal.  Outside
@@ -384,12 +411,13 @@ class ApprovalUxMixin:
                 answer = session.prompt(question, default=default).strip().lower()
                 if answer == "":
                     answer = default
-                if answer in {"y", "n", "a", "A", "s", "q"}:
+                if answer in allowed:
                     return answer
-                console.print("[dim]· 请输入 y / n / a / A / s / q[/dim]")
+                hint = "y / n / q" if from_child else "y / n / a / A / s / q"
+                console.print(f"[dim]· 请输入 {hint}[/dim]")
         return Prompt.ask(
             "选择",
-            choices=["y", "n", "a", "A", "s", "q"],
+            choices=["y", "n", "q"] if from_child else ["y", "n", "a", "A", "s", "q"],
             default=default,
             show_choices=True,
             case_sensitive=False,

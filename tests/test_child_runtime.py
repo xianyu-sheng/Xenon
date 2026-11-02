@@ -730,3 +730,105 @@ def test_the_module_entry_point_is_reachable_as_main() -> None:
         sys.argv = saved
 
     assert excinfo.value.code == 2
+
+
+class _CountingApproval:
+    """Parent-side provider: counts asks, answers yes (one-shot)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.last_reason = ""
+        self.last_scope = ""
+
+    def request(self, view, action, decision):
+        self.calls += 1
+        self.last_reason = "user approval"
+        return True
+
+
+def _shell_then_finish() -> FakeClient:
+    return FakeClient(
+        [
+            json.dumps(
+                {
+                    "action": "call_tool",
+                    "capability": "shell",
+                    "params": {"command": "echo hello"},
+                }
+            ),
+            json.dumps(
+                {
+                    "action": "finish",
+                    "answer": "ran echo hello",
+                    "claims": [
+                        {"id": "c1", "kind": "tool_succeeded", "target": "echo hello"}
+                    ],
+                }
+            ),
+        ]
+    )
+
+
+def test_a_child_with_an_inherited_grant_never_asks(tmp_path: Path) -> None:
+    """#373: the parent's session grant travels with the spec; the child's
+    kernel answers the call itself and the broker is never invoked.
+
+    Delivery (claims/verdicts) is the controller's business and covered by the
+    edit-based tests; this test pins the *authorization* behaviour: who answered.
+    """
+
+    from xenon.kernel.contracts import Capability
+    from xenon.kernel.session_grants import SESSION, grant_from_choice
+
+    workspace = _worktree(tmp_path)
+    grant = grant_from_choice(
+        SESSION,
+        capability=Capability.SHELL,
+        targets=("echo hello",),
+        workspace=str(workspace),
+    )
+    assert grant is not None
+    approval = _CountingApproval()
+
+    outcome = run_child_task(
+        objective="run echo hello",
+        workspace=workspace,
+        model=ModelConfig(model_id="test/fake"),
+        profile="react",
+        parent_task_id="parent-1",
+        ledger_dir=tmp_path / "children",
+        permission=PermissionMode.AUTO_EDIT,
+        client=_shell_then_finish(),
+        approval=approval,
+        session_grants=(grant,),
+    )
+
+    assert approval.calls == 0, "the inherited grant must answer without the broker"
+    # The call still ran: the ledger has the tool receipt.
+    from xenon.ledger.store import Ledger
+
+    events = Ledger(Path(outcome.ledger_path), outcome.child_id).read()
+    assert any(event.kind.value == "tool_receipt" for event in events)
+
+
+def test_a_child_without_a_grant_asks_the_parent(tmp_path: Path) -> None:
+    """#373: without an inherited grant the child's shell call is brokered."""
+
+    approval = _CountingApproval()
+    outcome = run_child_task(
+        objective="run echo hello",
+        workspace=_worktree(tmp_path),
+        model=ModelConfig(model_id="test/fake"),
+        profile="react",
+        parent_task_id="parent-1",
+        ledger_dir=tmp_path / "children",
+        permission=PermissionMode.AUTO_EDIT,
+        client=_shell_then_finish(),
+        approval=approval,
+    )
+
+    assert approval.calls == 1, "without a grant the child must ask the parent"
+    from xenon.ledger.store import Ledger
+
+    events = Ledger(Path(outcome.ledger_path), outcome.child_id).read()
+    assert any(event.kind.value == "tool_receipt" for event in events)

@@ -46,12 +46,44 @@ total prompts across 2 turns: 1 (expected 1)
 
 另外一个既有测试（`test_scoped_grant_expires`）原本断言 scoped grant 可以授权 `git push` —— 这与 #201 的原则冲突。已改为 `git fetch`，并新增"grant 不能授权 push"的测试。
 
-## 还没做（下一步）
+## REPL 接线（本轮收尾，真实模型验证）
 
-- REPL 的四选一交互（`y` 一次 / `a` 本会话 / `s` 只这条 / `n` 拒绝）；
-- `/permissions` 列出与撤销；
+`run_kernel_turn` 现在把「跨任务记忆」接进产品：前端持有 `GrantBook`，
+每轮开跑前喂 `session_grants`、跑完后收割 `runtime.last_grant` 进账本。
+
+```text
+$ python docs/evidence/session-grants/adapter_probe.py deepseek/deepseek-v4-flash
+  prompt#1 for capability=shell
+turn 1: phase=finalized prompts=1 grant=yes
+  remembered: shell scope=* reason='session grant: shell'
+  grant_added in ledger: True
+turn 2: phase=finalized prompts=0 grant=no
+  turn 2 policy_decision reasons: ['session grant: shell', ...] ×4
+
+total prompts across 2 turns: 1 (expected 1)
+PASS: one prompt, two tasks, grant carried by the book.
+```
+
+关键点：第二轮 `policy_decision.reason` 全部是 `session grant: shell`
+——回放时能解释「为什么这次没问」。
+
+### 子任务：继承而不新增（#373 验收）
+
+- **继承**：父级授权随 child spec 序列化（ScopedGrant 形状），子内核策略直接
+  命中，broker 完全不介入。`run_child_task(session_grants=...)` →
+  `_child_spec` → `child_worker` 还原。
+- **不新增**：子任务经 broker 的请求只给 `y/n/q` 三选（`_ask_approval_choice
+  from_child=True`），任何“允许”都不写 TTL 规则、allowed-once、会话授权
+  （`KernelApprovalProvider.from_child` 强制 `last_scope=""`）。
+- 测试：`tests/test_child_runtime.py`（继承零弹窗 / 无授权走 broker）、
+  `tests/test_permissions_command.py`（子请求不写记忆）、
+  `tests/kernel/test_session_grants.py`（spec 往返、工作区失效）。
+
+### 还没做
+
 - 会话授权写入 session `extra`，`/save` + `/resume` 后仍在；
-- 子任务继承父级 grant 但不新增。
+- 真实 TTY transcript（`a` 一次、随后三任务不弹窗）——adapter 层已用真实模型
+  验证，TTY 全链路仍待录；
 
 ---
 

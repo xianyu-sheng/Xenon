@@ -51,12 +51,19 @@ class PermissionMode(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class ScopedGrant:
-    """A bounded authorization: capability + target + expiry."""
+    """A bounded authorization: capability + target + expiry.
+
+    ``reason`` travels with the grant so a ledger replay can say *why* this call
+    was not asked — the session answer was "session grant: shell", not a
+    featureless "scoped grant: *".  It is descriptive only; the policy decides
+    by capability and target, never by reason.
+    """
 
     capability: Capability
     target: str
     expires_at: float | None = None
     effects: frozenset[EffectKind] = field(default_factory=frozenset)
+    reason: str = ""
 
     def active(self, now: float) -> bool:
         return self.expires_at is None or now < self.expires_at
@@ -392,7 +399,7 @@ class PermissionPolicy:
         if grant is not None:
             return PolicyDecision(
                 kind=PolicyDecisionKind.ALLOW,
-                reason=f"scoped grant: {grant.target}",
+                reason=grant.reason or f"scoped grant: {grant.target}",
                 scope=(capability.value, grant.target),
             )
         if capability in _READ_CAPABILITIES:

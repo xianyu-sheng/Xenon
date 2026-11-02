@@ -39,7 +39,7 @@ class _Repl:
         self.reason = reason
         self.seen: list[tuple[str, dict, str]] = []
 
-    def _confirm_tool(self, tool: str, params: dict, risk: str):
+    def _confirm_tool(self, tool: str, params: dict, risk: str, *, from_child=False):
         self.seen.append((tool, params, risk))
         return (self.answer, self.reason)
 
@@ -110,7 +110,7 @@ def test_a_front_end_without_a_confirmation_ui_denies_with_a_reason():
 
 def test_a_broken_confirmation_ui_denies_with_a_reason():
     class _Boom:
-        def _confirm_tool(self, tool, params, risk):
+        def _confirm_tool(self, tool, params, risk, *, from_child=False):
             raise RuntimeError("tty died")
 
     provider = KernelApprovalProvider(_Boom())
