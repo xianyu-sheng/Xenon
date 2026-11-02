@@ -18,6 +18,8 @@ from typing import Any, Iterable, Sequence
 
 __all__ = [
     "blocking_reason",
+    "children_of",
+    "render_children",
     "default_ledger_dir",
     "resolve_ledger",
     "timeline",
@@ -80,6 +82,111 @@ def resolve_ledger(target: str | Path, *, root: Path | None = None) -> Path:
     raise FileNotFoundError(
         f"no ledger for {target!r}: looked for {candidate} and {by_id}"
     )
+
+
+def _started(event: Any) -> dict[str, Any]:
+    """The ``task_started`` payload, or ``{}`` for any other event."""
+
+    kind = getattr(getattr(event, "kind", None), "value", "")
+    return _payload(event) if kind == "task_started" else {}
+
+
+def children_of(
+    parent_task_id: str,
+    *,
+    root: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Every child ledger that names ``parent_task_id`` as its parent.
+
+    The link is recorded in the child's own ``task_started`` event, so the call
+    tree is derivable from ledgers alone — no index, no session state, nothing
+    to keep in sync.  A child that cannot be read is reported, not skipped: a
+    silently missing child would make the tree lie.
+    """
+
+    from xenon.ledger.store import read_events
+
+    directory = (root or default_ledger_dir()).expanduser()
+    # Default layout keeps children under ``children/``; a caller that points at
+    # its own ledger directory may keep them side by side with everything else.
+    paths: list[Path] = []
+    nested = directory / "children"
+    for candidate in (nested, directory):
+        if candidate.is_dir():
+            paths.extend(sorted(candidate.glob("*.jsonl")))
+    if not paths:
+        return []
+    found: list[dict[str, Any]] = []
+    for path in dict.fromkeys(paths):
+        try:
+            events = read_events(path)
+        except Exception as error:  # noqa: BLE001 — an unreadable ledger is data
+            found.append(
+                {
+                    "child_id": path.stem,
+                    "parent_task_id": "",
+                    "phase": "unreadable",
+                    "debt": 0,
+                    "tool_calls": 0,
+                    "pid": 0,
+                    "killed": False,
+                    "ledger": str(path),
+                    "error": f"{type(error).__name__}: {error}",
+                }
+            )
+            continue
+        started = next(
+            (payload for payload in map(_started, events) if payload), {}
+        )
+        if str(started.get("parent_task_id") or "") != parent_task_id:
+            continue
+        counted = metrics(events)
+        phases = [
+            str(_payload(event).get("to") or "")
+            for event in events
+            if getattr(getattr(event, "kind", None), "value", "") == "state_transition"
+        ]
+        found.append(
+            {
+                "child_id": str(started.get("task_id") or path.stem),
+                "parent_task_id": parent_task_id,
+                "objective": str(started.get("objective") or "")[:120],
+                "phase": phases[-1] if phases else "unknown",
+                "debt": len(counted.get("open_debt") or ()),
+                "tool_calls": int(counted.get("tool_calls", 0) or 0),
+                "tokens": int(counted.get("total_tokens", 0) or 0),
+                "pid": 0,
+                "killed": False,
+                "ledger": str(path),
+                "error": "",
+            }
+        )
+    return found
+
+
+def render_children(rows: Sequence[dict[str, Any]], *, parent: str = "") -> str:
+    """Human-readable tree of one parent's delegated work."""
+
+    head = f"children of {parent}" if parent else "children"
+    if not rows:
+        return f"{head}: (none)"
+    lines = [f"{head}: {len(rows)}"]
+    for row in rows:
+        if row.get("error"):
+            lines.append(f"- {row['child_id']}  unreadable: {row['error']}")
+            continue
+        bits = [
+            f"phase={row['phase']}",
+            f"tools={row['tool_calls']}",
+            f"debt={row['debt']}",
+        ]
+        if row.get("tokens"):
+            bits.append(f"tokens={row['tokens']}")
+        lines.append(f"- {row['child_id']}  {' '.join(bits)}")
+        if row.get("objective"):
+            lines.append(f"    {row['objective']}")
+        lines.append(f"    ledger: {row['ledger']}")
+    return chr(10).join(lines)
 
 
 def _payload(event: Any) -> dict[str, Any]:

@@ -126,6 +126,12 @@ def cli() -> None:
         help="replay 显示全部事件（默认只显示关键节点）",
     )
     parser.add_argument(
+        "--children",
+        default=None,
+        metavar="PARENT_TASK_ID",
+        help="replay 列出该父任务派发的所有子任务（零模型零网络）",
+    )
+    parser.add_argument(
         "--no-probe",
         action="store_true",
         help="models import 时跳过单 token 探针验活",
@@ -303,6 +309,9 @@ def cli() -> None:
         _cmd_chat(args)
 
     elif cmd in ("replay", "metrics"):
+        parent = getattr(args, "children", None)
+        if parent:
+            raise SystemExit(_cmd_children(str(parent), args))
         target = getattr(args, "task", None) or args.workflow_path
         if not target:
             console.print(
@@ -477,6 +486,21 @@ def _validate_resume_target(target: str) -> str:
         )
         sys.exit(2)
     return arg
+
+
+def _cmd_children(parent: str, args: argparse.Namespace) -> int:
+    """List the children a task delegated, derived from child ledgers alone."""
+
+    import json
+
+    from xenon.replay import children_of, render_children
+
+    rows = children_of(parent)
+    if getattr(args, "json", False):
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+    else:
+        console.print(render_children(rows, parent=parent))
+    return 0
 
 
 def _cmd_replay(command: str, target: str, args: argparse.Namespace) -> int:

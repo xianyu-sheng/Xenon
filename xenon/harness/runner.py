@@ -148,6 +148,7 @@ def run_task(
     accept_debt: bool = False,
     context_blocks: Sequence[tuple[str, str]] = (),
     audit_provider: Any = None,
+    parent_task_id: str = "",
 ) -> HarnessRun:
     """Run one objective through the kernel with an injected strategy.
 
@@ -185,6 +186,7 @@ def run_task(
         ),
         accept_debt=accept_debt,
         context_blocks=tuple(context_blocks),
+        parent_task_id=parent_task_id,
     )
     _bind_accounting(strategy, runtime)
     if on_runtime is not None:

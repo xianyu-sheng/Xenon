@@ -26,6 +26,7 @@ from xenon.kernel.contracts import (
     TaskMode,
     TaskPhase,
     TaskResult,
+    ToolIntent,
 )
 from xenon.kernel.policies import PermissionMode
 from xenon.kernel.strategies import LoopProfile
@@ -511,6 +512,28 @@ class KernelApprovalProvider:
         if not approved and not self.last_reason:
             self.last_reason = "user rejected the request"
         return approved
+
+    def approve_request(self, request: dict[str, Any]) -> tuple[bool, str]:
+        """Answer a *child's* brokered request with the same confirmation UI.
+
+        A child process has no terminal, so it asks its parent; the parent asks
+        the human through exactly the path a kernel turn would use.  The child
+        therefore never gets authority the parent could not obtain itself.
+        """
+
+        raw = request.get("capability")
+        try:
+            capability = Capability(str(raw))
+        except ValueError:
+            return False, f"unknown capability {raw!r} in the child request"
+        action = CallTool(
+            ToolIntent(
+                capability=capability,
+                params=dict(request.get("params") or {}),
+            )
+        )
+        approved = self.request(None, action, None)
+        return approved, self.last_reason
 
 
 class RuntimeAdapter:
