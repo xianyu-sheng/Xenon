@@ -154,3 +154,81 @@ def test_load_skill_body_enters_reference_context(tmp_path: Path, monkeypatch) -
     # A skill that does not exist leaves the body unset.
     flow._load_skill_body("does-not-exist")
     assert flow._active_skill_body is None
+
+
+def test_load_skill_body_without_a_name_is_a_noop() -> None:
+    from xenon.repl.turn_flow import TurnFlowMixin
+
+    flow = object.__new__(TurnFlowMixin)
+    flow._active_skill_body = "stale"
+    flow._load_skill_body(None)
+    assert flow._active_skill_body is None
+
+
+def test_load_skill_body_survives_a_broken_skill_manager(tmp_path: Path, monkeypatch) -> None:
+    from xenon.repl.turn_flow import TurnFlowMixin
+
+    def boom(*args, **kwargs):
+        raise OSError("skill dir unreadable")
+
+    monkeypatch.setattr(
+        "xenon.repl.skill_manager.SkillManager", boom
+    )
+    flow = object.__new__(TurnFlowMixin)
+    flow._active_skill_body = None
+    flow._load_skill_body("any")
+    assert flow._active_skill_body is None
+
+
+def test_the_skill_index_survives_a_broken_skill_manager(monkeypatch) -> None:
+    from xenon.repl.runtime_adapter import _skill_index
+
+    def boom(*args, **kwargs):
+        raise OSError("skill dir unreadable")
+
+    monkeypatch.setattr(
+        "xenon.repl.skill_manager.SkillManager", boom
+    )
+    assert _skill_index(None) == ""
+
+
+def test_a_skill_turn_runs_the_kernel_with_a_lazy_body(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The real turn_flow skill branch: objective stays short, the body goes
+    into reference context, and the turn runs on the kernel (#370)."""
+
+    from xenon.repl.model_registry import ModelRegistry
+    from xenon.repl.repl import REPL
+    from xenon.repl.turn_contract import build_turn_contract
+
+    monkeypatch.chdir(tmp_path)
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    registry.assign_role("planner", ["fake"])
+    repl = REPL(registry=registry, streaming=False, optimize_prompts=False)
+    contract = build_turn_contract("用 code-review 技能审查")
+    monkeypatch.setattr(
+        repl,
+        "_resolve_turn_contract",
+        lambda *args, **kwargs: (
+            contract,
+            contract.to_execution_policy(),
+            contract.intent,
+            None,
+        ),
+    )
+    monkeypatch.setattr(repl, "_has_mcp_tools", lambda: False)
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.run_kernel_turn",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+
+    repl._handle_chat("用 code-review 技能审查", skill_name="code-review")
+
+    assert calls, "a skill turn must run on the kernel"
+    objective = calls[0].get("objective") or ""
+    assert "code-review" in objective
+    assert "## 步骤" not in objective, "the body must not be inlined"
+    assert "SKILL.md" not in objective
