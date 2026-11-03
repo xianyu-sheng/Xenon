@@ -904,6 +904,11 @@ def session_context_blocks(repl: Any, objective: str) -> tuple[tuple[str, str], 
     rule like "don't touch tests/" silently stopped applying the moment the
     turn needed tools.  Labels come from the context manager's keys, and the
     insertion order is preserved so the prompt (and its hash) is reproducible.
+
+    #370 adds two progressive-loading layers:
+    - the skill index (name — one-liner) so every task knows what skills exist
+      without paying their bodies in tokens;
+    - the active skill's body, only when this turn actually runs that skill.
     """
 
     inject_project = getattr(repl, "_inject_project_context", None)
@@ -918,18 +923,56 @@ def session_context_blocks(repl: Any, objective: str) -> tuple[tuple[str, str], 
             inject_memory(objective)
         except Exception:  # noqa: BLE001 — memory is advisory, never fatal
             logger.debug("memory injection failed", exc_info=True)
+    blocks: list[tuple[str, str]] = []
     ctx_mgr = getattr(repl, "ctx_mgr", None)
     layers = getattr(ctx_mgr, "context_layers", None)
-    if not callable(layers):
-        return ()
+    if callable(layers):
+        try:
+            blocks.extend(
+                (str(key), str(content))
+                for key, content, _stable in layers()
+                if str(content or "").strip()
+            )
+        except Exception:  # noqa: BLE001 — fall back to no context
+            pass
+    skill_index = _skill_index(repl)
+    if skill_index:
+        blocks.append(("skills", skill_index))
+    active = getattr(repl, "_active_skill_body", None)
+    if active:
+        blocks.append(("active_skill", active))
+    return tuple(blocks)
+
+
+def _skill_index(repl: Any, limit: int = 40) -> str:
+    """One-line index of installed skills, truncated with a visible count.
+
+    ``SkillManager.list_all`` never loads bodies, so this is cheap.  The path
+    is included so a model that wants a skill's full text can ``read`` its
+    SKILL.md — the progressive channel (#370) instead of a new tool.
+    """
+
     try:
-        return tuple(
-            (str(key), str(content))
-            for key, content, _stable in layers()
-            if str(content or "").strip()
+        from xenon.repl.skill_manager import SkillManager
+
+        skills = SkillManager().list_all()
+    except Exception:  # noqa: BLE001 — no skills is not an error
+        return ""
+    if not skills:
+        return ""
+    lines = []
+    for skill in skills[:limit]:
+        root = getattr(skill, "root", None)
+        path = (str(Path(root) / "SKILL.md") if root else "")
+        description = " ".join(str(skill.description or "").split())[:120]
+        lines.append(f"- {skill.name}: {description or 'no description'}")
+        if path:
+            lines[-1] += f"  (read {path} for the full text)"
+    if len(skills) > limit:
+        lines.append(
+            f"… {len(skills) - limit} more skills; list them with /skills"
         )
-    except Exception:  # noqa: BLE001 — fall back to no context
-        return ()
+    return "\n".join(lines)
 
 
 def _audit_proposer(config: Any) -> Any:

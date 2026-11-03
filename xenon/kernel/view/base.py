@@ -23,6 +23,7 @@ from xenon.kernel.contracts import (
     TaskSpec,
     ToolSpec,
 )
+from xenon.ledger.events import EventKind
 
 _DEFAULT_MAX_TOKENS = 8000
 _CMD_KEY = "comm" + "and"
@@ -82,7 +83,25 @@ def _clip(value: Any, limit: int = 500) -> str:
     return text[:limit] + "..."
 
 
-def _tool_schema(spec: ToolSpec) -> dict[str, Any]:
+def _tool_schema(spec: ToolSpec, *, expanded: bool = False) -> dict[str, Any]:
+    """One tool's view schema.
+
+    Core tools stay full (they are the coding surface and few in number).
+    MCP tools start as a one-line index ("name — description", no parameters,
+    #370): the model sees the name so it can request ``tool_schema``, and the
+    schema is expanded once the tool has actually been executed in this task.
+    A tool whose parameters were never shown cannot be guessed.
+    """
+
+    if spec.pack == "mcp" and not expanded:
+        return {
+            "name": spec.name,
+            "description": _one_liner(spec.description),
+            "capabilities": sorted(item.value for item in spec.capabilities),
+            "effects": sorted(item.value for item in spec.effects),
+            "risk": spec.risk.value,
+            "index": True,
+        }
     return {
         "name": spec.name,
         "description": spec.description,
@@ -91,6 +110,13 @@ def _tool_schema(spec: ToolSpec) -> dict[str, Any]:
         "effects": sorted(item.value for item in spec.effects),
         "risk": spec.risk.value,
     }
+
+
+def _one_liner(text: str, limit: int = 120) -> str:
+    """Collapse a tool description to one line for the index (#370)."""
+
+    flat = " ".join(str(text or "").split())
+    return flat[:limit] + ("…" if len(flat) > limit else "")
 
 
 def _step_schema(step: StepContract) -> dict[str, Any]:
@@ -334,7 +360,15 @@ def _working_set(
     )
 
 
-def _capability_directory(specs: Sequence[ToolSpec]) -> str:
+def _capability_directory(specs: Sequence[ToolSpec], *, limit: int = 40) -> str:
+    """Catalog index, truncated for large MCP surfaces (#370).
+
+    Core tools are listed in full.  MCP/plugin tools beyond ``limit`` are
+    summarized per capability with a visible count — silently dropping them
+    would make a tool unknowable, so the count and the ``tool_schema`` channel
+    are both explicit.
+    """
+
     if not specs:
         return "No tools are available in this mode.\n"
     groups: dict[str, list[ToolSpec]] = {}
@@ -346,11 +380,17 @@ def _capability_directory(specs: Sequence[ToolSpec]) -> str:
     lines = ["Capability catalog (tool names are catalog-owned):"]
     for capability in sorted(groups):
         tools = groups[capability]
-        described = "; ".join(
-            f"{spec.name}: {spec.description or 'no description'}"
+        described = [
+            f"{spec.name}: {_one_liner(spec.description)}"
             for spec in tools
-        )
-        lines.append(f"- {capability}: {described}")
+        ]
+        shown = described[:limit]
+        lines.append(f"- {capability}: {'; '.join(shown)}")
+        if len(described) > limit:
+            lines.append(
+                f"  … {len(described) - limit} more tools in {capability}: "
+                "call tool_schema with a tool name to expand it"
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -462,7 +502,22 @@ def build_model_view(
     specs = (
         () if spec.mode is TaskMode.CHAT else tuple(catalog.specs())
     )
-    tools = tuple(_tool_schema(item) for item in specs)
+    # #370: an MCP tool expands once it has actually run.  The ledger is the
+    # state: a ``tool_receipt`` names the tool, and the projection is pure, so
+    # a replay answers "why was this schema shown" the same way every time.
+    expanded_mcp = {
+        str(event.payload.get("receipt", {}).get("tool") or "")
+        for event in ledger.read()
+        if event.kind is EventKind.TOOL_RECEIPT
+        and str(event.payload.get("receipt", {}).get("tool") or "").strip()
+    }
+    tools = tuple(
+        _tool_schema(
+            item,
+            expanded=(item.name in expanded_mcp or item.pack != "mcp"),
+        )
+        for item in specs
+    )
     working_set, compacted = _working_set(
         tuple(ledger.read()),
         mode=spec.mode,

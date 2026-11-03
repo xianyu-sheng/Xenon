@@ -4,7 +4,21 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from xenon.repl.runtime_adapter import session_context_blocks
+
+
+@pytest.fixture(autouse=True)
+def _no_real_skills(monkeypatch):
+    """These tests pin the *context-layer* behaviour; the skill index (#370)
+    is covered by its own test file, so the real skill directory is stubbed
+    empty here to keep the assertions exact.
+    """
+
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter._skill_index", lambda repl, limit=40: ""
+    )
 
 
 class _Ctx:
