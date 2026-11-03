@@ -162,3 +162,20 @@ def test_a_broken_proposer_never_fails_the_task(tmp_path) -> None:
 
     assert calls == [1], "the broken proposer must actually be invoked"
     # The task ran (blocked by the denial); the broken proposer never raised.
+
+
+def test_a_non_lesson_event_writes_no_proposal(tmp_path) -> None:
+    """The defensive `proposal is None` path: an event the proposer does not
+    recognise (e.g. tool_receipt) must write nothing."""
+
+    from tests.kernel.test_north_star import _runtime
+    from tests.kernel.test_session_grants import _policy
+    from xenon.ledger.store import Ledger
+
+    ledger = Ledger.in_memory("lesson-none")
+    runtime = _runtime(ledger, policies=(_policy(str(tmp_path)),))
+
+    runtime._propose_lesson("tool_receipt", {"status": "ok"})
+
+    kinds = [event.kind.value for event in ledger.read()]
+    assert "lesson_proposed" not in kinds
