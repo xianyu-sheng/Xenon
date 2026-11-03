@@ -44,3 +44,12 @@ debt/deny 挂接）。
 
 应用器：`run_task` 构建 `TaskSpec.constraints` 时查库、注入 + `LESSON_APPLIED`；
 任务结束复发计数。产物：`/lessons` 命令 + `<repo>/.xenon/PITFALLS.md` 投影。
+
+## 切片 3+4（教训注入 + 产物）
+
+- **切片 3**：`run_task` 注入教训为 constraints（上限 3、最近优先、排除
+  retired/parameter），模型在 system prompt 必见（`- [lesson L-0001] …`）；
+  `LESSON_APPLIED` 事件；任务结束复用 proposer 规范化指纹做复发计数 →
+  达阈值 `LESSON_RETIRED`。真实模型探针：1 条教训 → 恰好 1 条约束。
+- **切片 4**：`/lessons`（列出活动/退休/计数）、`/lessons write`（显式生成
+  `<repo>/.xenon/PITFALLS.md`，pitfall 教训投影，绝不自动写）。
