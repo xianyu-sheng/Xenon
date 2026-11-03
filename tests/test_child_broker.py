@@ -153,7 +153,7 @@ def test_a_child_without_an_answer_denies_after_its_wait(tmp_path: Path) -> None
     child = BrokerApprovalProvider(tmp_path / "broker", wait_seconds=0.3)
 
     assert child.request(None, _Action(), None) is False
-    assert "no answer from the parent" in child.last_reason
+    assert "approval timed out after" in child.last_reason
 
 
 def test_a_non_tool_action_is_never_approved(tmp_path: Path) -> None:

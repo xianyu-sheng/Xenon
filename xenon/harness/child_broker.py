@@ -86,9 +86,9 @@ class BrokerApprovalProvider:
         )
         answer = self._await(request_id)
         if answer is None:
-            self.last_reason = (
-                f"no answer from the parent within {self.wait_seconds:.0f}s"
-            )
+            # #371: a timeout is a deny with a readable ledger reason, never a
+            # hang.  The child's kernel writes this into USER_APPROVAL.
+            self.last_reason = f"approval timed out after {self.wait_seconds:.0f}s"
             return False
         approved = bool(answer.get("approved"))
         if not approved:
