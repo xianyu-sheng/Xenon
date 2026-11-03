@@ -174,7 +174,7 @@
 ## 附：本清单没覆盖、但我查到的其它问题
 
 - `engine/task_state.py` 死方法（`reconcile_satisfied_claims` 等）零外部调用，目录名仍误导；
-- `xenon/repl/engine_host.py` 名字是 legacy，身体已经是 kernel（`_run_react_engine` → `run_kernel_turn`）；
+- `xenon/repl/kernel_host.py` 名字是 legacy，身体已经是 kernel（`_run_react_engine` → `run_kernel_turn`）；
 - `turn_flow.py` 里 `pending`/`recipe` 两条 shim 仍走旧 `TaskState` 路径。
 ---
 

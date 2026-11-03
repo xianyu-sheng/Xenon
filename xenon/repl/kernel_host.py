@@ -8,7 +8,8 @@ left is the part the REPL still uses:
 * log capture around a turn,
 * the ``ConsoleCallback`` factory,
 * the "history must stay paired" error recorder,
-* ``_run_react_engine`` — direct-chat escalation, which now runs the kernel.
+* ``_run_react_engine`` — direct-chat escalation, which now runs the kernel
+  (the name is a legacy label; the body is run_kernel_turn).
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ class _ConsoleProxy:
 console: Any = _ConsoleProxy()
 
 
-class EngineHostMixin:
+class KernelHostMixin:
     def _start_log_capture(self) -> None:
         """v0.5.3: 拦截引擎执行期间的日志输出。
 
