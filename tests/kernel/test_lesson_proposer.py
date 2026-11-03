@@ -131,7 +131,7 @@ class _DenyApproval:
 
 
 def test_a_broken_proposer_never_fails_the_task(tmp_path) -> None:
-    import xenon.kernel.runtime as runtime_module
+    import xenon.kernel.lesson_proposer as proposer_module
     from tests.kernel.test_north_star import ScriptedStrategy, _runtime
     from tests.kernel.test_session_grants import _policy
     from xenon.kernel.contracts import CallTool, Capability, TaskSpec, ToolIntent
@@ -141,18 +141,24 @@ def test_a_broken_proposer_never_fails_the_task(tmp_path) -> None:
     runtime = _runtime(ledger, policies=(_policy(str(tmp_path)),))
     runtime._approval = _DenyApproval()
 
+    calls: list[int] = []
+
     def boom(*args, **kwargs):
+        calls.append(1)
         raise RuntimeError("proposer broke")
 
-    runtime_module.propose_lesson = boom
-    action = CallTool(
-        ToolIntent(capability=Capability.SHELL, params={"command": "git log"})
-    )
-    runtime.run(
-        TaskSpec(task_id="lesson-broken", objective="o", workspace=str(tmp_path)),
-        ScriptedStrategy([action]),
-    )
+    original = proposer_module.propose_lesson
+    proposer_module.propose_lesson = boom
+    try:
+        action = CallTool(
+            ToolIntent(capability=Capability.SHELL, params={"command": "git log"})
+        )
+        runtime.run(
+            TaskSpec(task_id="lesson-broken", objective="o", workspace=str(tmp_path)),
+            ScriptedStrategy([action]),
+        )
+    finally:
+        proposer_module.propose_lesson = original
 
-    # The task ran (blocked by the denial), and the broken proposer did not
-    # turn it into an exception.
-    assert runtime_module.propose_lesson is boom
+    assert calls == [1], "the broken proposer must actually be invoked"
+    # The task ran (blocked by the denial); the broken proposer never raised.
