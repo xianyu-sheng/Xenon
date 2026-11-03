@@ -219,3 +219,31 @@ def test_a_negative_max_loop_corrections_is_rejected_at_the_boundary() -> None:
 
     with pytest.raises(ValueError):
         _spec("bad", max_loop_corrections=-1)
+
+
+def test_loop_notes_stay_bounded_under_repeated_teaching() -> None:
+    """#369 review: a run that keeps changing walls must not blow the Notes."""
+    from tests.kernel.test_north_star import _runtime
+    from xenon.kernel.contracts import Abort
+
+    ledger = Ledger.in_memory("notes-bounded")
+    runtime = _runtime(ledger)
+    runtime._gateway = _Wall()
+
+    class Cycle:
+        def __init__(self):
+            self.proposals = 0
+
+        def propose(self, view):
+            self.proposals += 1
+            if self.proposals > 12:
+                return Abort("done testing")
+            return _read(f"{self.proposals}.py")
+
+    result = runtime.run(_spec("notes-bounded"), Cycle())
+
+    # 12 proposals teach up to 12 loop notes; the view must stay bounded.
+    assert len(runtime._loop_notes) <= 5
+    assert result.accepted is False or result.phase.value in {
+        "blocked", "aborted"
+    }

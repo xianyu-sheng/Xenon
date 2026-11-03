@@ -658,3 +658,12 @@ def test_a_broken_application_counter_does_not_fail_the_task(tmp_path: Path) -> 
         if e.kind is EventKind.LESSON_APPLIED
     ]
     assert len(applied) == 1
+
+
+def test_match_for_task_zero_limit_disables(tmp_path: Path) -> None:
+    """#369 review: limit=0 means no lessons, not a minimum of one."""
+    store = LessonStore(tmp_path / "lessons.yaml")
+    store.add(_lesson(id="L-0001", kind="pitfall", fingerprint="fp-1"))
+
+    assert store.match_for_task(limit=0) == ()
+    assert store.match_for_task(limit=-1) == ()

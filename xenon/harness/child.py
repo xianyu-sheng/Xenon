@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from xenon.harness.llm import ModelConfig, build_llm_loop_strategy
-from xenon.harness.runner import run_task
+from xenon.harness.runner import DEFAULT_MAX_STEPS, run_task
 from xenon.kernel.policies import PermissionMode
 from xenon.kernel.strategies import LoopProfile
 
@@ -417,7 +417,7 @@ def run_child_task(
     ledger_dir: str | Path | None = None,
     permission: PermissionMode = PermissionMode.AUTO_EDIT,
     parent_permission: PermissionMode | None = None,
-    max_steps: int = 20,
+    max_steps: int = DEFAULT_MAX_STEPS,
     timeout: float | None = None,
     client: Any = None,
     gateway_context: Any = None,
@@ -657,7 +657,7 @@ def run_child_tasks(
     parent_task_id: str = "",
     ledger_dir: str | Path | None = None,
     permission: PermissionMode = PermissionMode.AUTO_EDIT,
-    max_steps: int = 20,
+    max_steps: int = DEFAULT_MAX_STEPS,
     timeout: float | None = None,
     client: Any = None,
     approval: Any = None,

@@ -169,6 +169,9 @@ class LessonStore:
         decision the caller makes with profile knowledge.
         """
 
+        if int(limit) <= 0:
+            # 0 means "no lessons": an explicit disable, not a minimum of one.
+            return ()
         candidates = sorted(
             (
                 lesson
@@ -178,7 +181,7 @@ class LessonStore:
             key=lambda item: item.last_applied_at,
             reverse=True,
         )
-        return tuple(candidates[: max(1, int(limit))])
+        return tuple(candidates[: int(limit)])
 
 
 def record_recurrences(ledger: Any, store: LessonStore) -> list[str]:
