@@ -247,3 +247,17 @@ def test_rewind_onto_an_ancestor_with_children_is_a_branch():
     assert path
     assert path[-1].startswith("turn-")
     assert "first objective" in path[-1]
+
+
+def test_rejects_non_string_turn_path_items():
+    import pytest
+
+    from xenon.kernel.contracts import TaskSpec
+
+    with pytest.raises(ValueError):
+        TaskSpec(
+            task_id="t",
+            objective="o",
+            workspace=".",
+            turn_path=("ok", 42),
+        )

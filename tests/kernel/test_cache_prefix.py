@@ -117,3 +117,22 @@ def test_turn_path_renders_only_when_non_empty() -> None:
     )
     assert "Turn path (you are on a side branch): turn-1: first -> turn-2: second" in branched.system
     assert branched.turn_path == ("turn-1: first", "turn-2: second")
+
+
+def test_status_snapshot_comes_from_runtime_facts() -> None:
+    """#372 E1: the snapshot is the runtime's own counters, not guesses."""
+    from tests.kernel.test_north_star import ScriptedStrategy, _runtime
+    from xenon.kernel.contracts import CallTool, Capability, TaskSpec, ToolIntent
+
+    ledger = Ledger.in_memory("snap")
+    runtime = _runtime(ledger)
+    runtime.run(
+        TaskSpec(task_id="snap", objective="o", workspace="."),
+        ScriptedStrategy([CallTool(ToolIntent(capability=Capability.READ))]),
+    )
+
+    snap = runtime.status_snapshot()
+    assert snap["steps"] >= 1
+    assert snap["phase"] in {"running", "blocked", "aborted", "delivered"}
+    assert snap["stalled_seconds"] >= 0
+    assert snap["tool_calls"] >= 1

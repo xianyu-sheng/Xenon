@@ -81,9 +81,13 @@ def _responses() -> list[str]:
 class FakeStatus:
     def __init__(self) -> None:
         self.tools = 0
+        self.kernel_snapshots: list[dict | None] = []
 
     def add_tool_call(self) -> None:
         self.tools += 1
+
+    def set_kernel_status(self, snapshot: dict | None) -> None:
+        self.kernel_snapshots.append(snapshot)
 
 
 class FakeCtx:
@@ -117,6 +121,7 @@ class FakeRepl:
         self.rendered: list[tuple[str, str]] = []
         self.events: list[tuple[str, dict]] = []
         self.confirm_calls: list[tuple[str, dict, str]] = []
+        self._turn_tree: Any = None
 
     def _confirm_tool(self, tool, params, risk, *, from_child=False):
         self.confirm_calls.append((tool, dict(params), risk))
@@ -1485,3 +1490,157 @@ def test_run_kernel_turn_asks_once_across_two_tasks(tmp_path: Path) -> None:
     assert len(repl.confirm_calls) == 1, (
         "the second task must be answered by the session grant, not the TTY"
     )
+
+
+def test_kernel_status_bar_snapshot_and_cleanup(tmp_path: Path) -> None:
+    """#372 E1: the progress hook pushes runtime facts; the finally clears them."""
+    from xenon.repl.runtime_adapter import kernel_progress_reporter
+
+    _repo(tmp_path)
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = FakeRepl(tmp_path, registry)
+
+    runtime = SimpleNamespace(
+        status_snapshot=lambda: {
+            "phase": "tool_call",
+            "steps": 3,
+            "tokens": 500,
+            "stalled_seconds": 9.0,
+            "tool_calls": 2,
+        }
+    )
+    repl._active_runtime = runtime
+    reporter = kernel_progress_reporter(repl)
+    reporter(2.0, 120)
+
+    assert repl.status_bar.kernel_snapshots[-1]["phase"] == "tool_call"
+    assert repl.status_bar.kernel_snapshots[-1]["steps"] == 3
+
+    # The turn's finally clears the snapshot so the bar falls back to /mode.
+    client = FakeClient([json.dumps({"action": "finish", "answer": "ok"})])
+    run = run_kernel_turn(
+        repl,
+        objective="do it",
+        user_input="do it",
+        model_ids=["test/fake"],
+        execution_policy=SimpleNamespace(level=ExecutionLevel.EXECUTE),
+        callback=ConsoleCallback(verbose=False),
+        client=client,
+    )
+    assert run is not None
+    assert repl.status_bar.kernel_snapshots[-1] is None
+
+
+def test_turn_path_from_the_tree_reaches_the_adapter(tmp_path: Path, monkeypatch) -> None:
+    """#372 B3: a rewound tree's branch path flows into the adapter run."""
+    from xenon.session.tree import TurnTree
+
+    _repo(tmp_path)
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = FakeRepl(tmp_path, registry)
+    tree = TurnTree()
+    a = tree.append_turn("objective one")
+    tree.finish(a, "passed")
+    tree.append_turn("objective two")
+    tree.move_to(a)  # rewind -> on a side branch
+    repl._turn_tree = tree
+
+    seen: dict = {}
+
+    from xenon.kernel.contracts import TaskPhase, TaskResult
+
+    def capture_turn_path(self, *args, **kwargs):
+        seen["turn_path"] = tuple(kwargs.get("turn_path") or ())
+        return SimpleNamespace(
+            ledger_path=tmp_path / "x.ledger",
+            task_id="captured",
+            result=TaskResult(
+                task_id="captured",
+                accepted=False,
+                phase=TaskPhase.BLOCKED,
+                answer="blocked by test",
+            ),
+        )
+
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.RuntimeAdapter.run",
+        capture_turn_path,
+    )
+    run_kernel_turn(
+        repl,
+        objective="branch task",
+        user_input="branch task",
+        model_ids=["test/fake"],
+        execution_policy=SimpleNamespace(level=ExecutionLevel.EXECUTE),
+        callback=ConsoleCallback(verbose=False),
+        client=FakeClient([json.dumps({"action": "finish", "answer": "ok"})]),
+    )
+    assert seen["turn_path"], "a rewound tree must produce a turn path"
+    assert any("objective one" in item for item in seen["turn_path"])
+
+
+def test_progress_hook_tolerates_a_broken_snapshot(tmp_path: Path, monkeypatch) -> None:
+    """#372 E1: progress is cosmetic — a bad snapshot must not break the turn."""
+    from xenon.repl.runtime_adapter import kernel_progress_reporter
+
+    _repo(tmp_path)
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = FakeRepl(tmp_path, registry)
+
+    def boom():
+        raise RuntimeError("snapshot exploded")
+
+    repl._active_runtime = SimpleNamespace(status_snapshot=boom)
+    reporter = kernel_progress_reporter(repl)
+    reporter(2.0, 100)  # must not raise
+
+    assert repl.status_bar.kernel_snapshots == []
+
+
+def test_turn_path_tolerates_a_broken_tree(tmp_path: Path, monkeypatch) -> None:
+    """#372 B3: a broken tree must not break the turn (cosmetic)."""
+    _repo(tmp_path)
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = FakeRepl(tmp_path, registry)
+
+    class BrokenTree:
+        def turn_path(self):
+            raise RuntimeError("tree exploded")
+
+    repl._turn_tree = BrokenTree()
+
+    seen: dict = {}
+
+    def capture_turn_path(self, *args, **kwargs):
+        seen["turn_path"] = tuple(kwargs.get("turn_path") or ())
+        from xenon.kernel.contracts import TaskPhase, TaskResult
+
+        return SimpleNamespace(
+            ledger_path=tmp_path / "x.ledger",
+            task_id="captured",
+            result=TaskResult(
+                task_id="captured",
+                accepted=False,
+                phase=TaskPhase.BLOCKED,
+                answer="blocked by test",
+            ),
+        )
+
+    monkeypatch.setattr(
+        "xenon.repl.runtime_adapter.RuntimeAdapter.run",
+        capture_turn_path,
+    )
+    run_kernel_turn(
+        repl,
+        objective="branch task",
+        user_input="branch task",
+        model_ids=["test/fake"],
+        execution_policy=SimpleNamespace(level=ExecutionLevel.EXECUTE),
+        callback=ConsoleCallback(verbose=False),
+        client=FakeClient([json.dumps({"action": "finish", "answer": "ok"})]),
+    )
+    assert seen["turn_path"] == ()
