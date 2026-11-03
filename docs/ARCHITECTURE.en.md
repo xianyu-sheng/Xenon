@@ -66,7 +66,7 @@ Node states have five values: `passed / degraded / fused / interrupted / pending
 
 ```text
 xenon/
-├── repl/        Interaction layer: REPL main loop · engine_host (turn orchestration) ·
+├── repl/        Interaction layer: REPL main loop · kernel_host (turn orchestration) ·
 │                turn_flow · direct_chat · render · approval_ux · session_ops ·
 │                turn_contract · task_state · command_groups (auto-discovery)
 ├── turn/        Turn validation: gate.py (L1 blocking / L2 reminder / same-cause fuse)

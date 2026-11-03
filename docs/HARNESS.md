@@ -254,7 +254,7 @@ in `step_explored`.
 
 ### The engine host is gone
 
-`xenon/repl/engine_host.py` used to host the seven engines (run loop, per-engine
+`xenon/repl/kernel_host.py` used to host the seven engines (run loop, per-engine
 shims, trace persistence, MCP injection, plan panel subscription, steering). With
 the turn path on the kernel, all of it was dead code, so only four things remain:
 log capture, the callback factory, the history-pairing error recorder, and

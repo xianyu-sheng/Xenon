@@ -129,7 +129,7 @@ TaskSpec
                     │        REPL / CLI（repl/）                │
                     │  输入渲染 · 命令组 · 审批面板 · 会话操作    │
                     └───────────────┬──────────────────────────┘
-                                    │ 回合编排（engine_host / turn_flow）
+                                    │ 回合编排（kernel_host / turn_flow）
               ┌─────────────────────┼───────────────────────┐
               ▼                     ▼                       ▼
       TurnContract              Engine（engine/）        Session（session/）

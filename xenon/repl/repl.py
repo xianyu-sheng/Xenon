@@ -35,11 +35,11 @@ from xenon.repl.approval_ux import ApprovalUxMixin
 from xenon.repl.commands import COMMANDS, dispatch_command
 from xenon.repl.context_manager import ContextManager
 from xenon.repl.direct_chat import DirectChatMixin
-from xenon.repl.engine_host import EngineHostMixin
 from xenon.repl.execution_policy import (
     ExecutionLevel,
 )
 from xenon.repl.input_buffer import PastedTextStore, _ShiftTabSignal
+from xenon.repl.kernel_host import KernelHostMixin
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.project_context import ProjectContext
 from xenon.repl.repl_input import _read_input_unix, _read_input_windows
@@ -132,7 +132,7 @@ def _build_pt_style() -> dict[str, str]:
     return _PROMPT_STYLE.copy()
 
 
-class REPL(EngineHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, SessionOpsMixin):
+class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, SessionOpsMixin):
     """
     交互式 REPL 主循环。
 

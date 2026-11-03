@@ -1,4 +1,4 @@
-"""Direct chat path (R1-3: extracted from engine_host).
+"""Direct chat path (R1-3: extracted from the kernel host mixin).
 
 Direct-mode LLM conversation: _run_direct with its tool-need routing,
 streaming/blocking responses and terminal-error classification.
