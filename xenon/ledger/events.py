@@ -90,6 +90,11 @@ class EventKind(str, Enum):
     LESSON_RETIRED = "lesson_retired"
     INTERRUPT = "interrupt"
     LEGACY_SESSION = "legacy_session"
+    # A deterministic loop signal with its diagnosis (#369).  Unlike
+    # POLICY_DECISION it is *educational*: the harness wrote it so the model
+    # can see why the run is stuck and change its approach before the run is
+    # killed.  The block, when it comes, is still a POLICY_DECISION.
+    LOOP_DETECTED = "loop_detected"
 
 
 class EventSource(str, Enum):

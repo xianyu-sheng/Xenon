@@ -289,6 +289,11 @@ class TaskSpec:
     # Which dispatch this task belongs to.  A label, not a scheduler: it says
     # "these ran as one batch", never in what order or with what dependencies.
     batch_id: str = ""
+    # #369: how many times the loop detector may *teach* one signal before it
+    # kills the run.  0 restores the old behaviour (detect -> block, no
+    # corrective turn).  Teaching is a hint into the next view, never a
+    # permission: evidence, approval and delivery rules are unchanged.
+    max_loop_corrections: int = 1
 
     def __post_init__(self) -> None:
         """Reject a malformed task at the boundary, not three layers down.
@@ -302,6 +307,8 @@ class TaskSpec:
             raise ValueError("parent_task_id must be a string")
         if not isinstance(self.batch_id, str):
             raise ValueError("batch_id must be a string")
+        if not isinstance(self.max_loop_corrections, int) or self.max_loop_corrections < 0:
+            raise ValueError("max_loop_corrections must be an int >= 0")
         total = 0
         for label, text in self.context_blocks:
             if not str(label).strip():
@@ -762,6 +769,10 @@ class ModelView:
     # context budget.  Runtime bookkeeping: it lets the ledger record that
     # compaction happened without changing what the model is allowed to see.
     compacted: tuple[int, ...] = ()
+    # #369: harness-generated loop diagnoses shown to the model (rendered as
+    # the ``Notes:`` system-prompt section).  A note is a hint, never a
+    # constraint or a permission.
+    notes: tuple[str, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
 

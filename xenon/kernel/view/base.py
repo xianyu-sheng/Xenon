@@ -446,6 +446,7 @@ def _system_prompt(
     active_step: StepContract | None,
     extra_constraints: Sequence[tuple[int, str]] = (),
     strategy_hint: str = "",
+    notes: Sequence[str] = (),
 ) -> str:
     constraint_lines = [f"- {item}" for item in spec.constraints]
     constraint_lines.extend(
@@ -471,6 +472,13 @@ def _system_prompt(
     ]
     if constraints:
         lines.append(f"Constraints:\n{constraints}")
+    if notes:
+        # #369: harness-generated loop diagnoses.  A note is a hint the model
+        # must read but is free to act on differently; it is not a constraint
+        # and never a permission.
+        lines.append("Notes (read before your next proposal):\n" + "\n".join(
+            f"- {text}" for text in notes
+        ))
     if debt_lines:
         lines.append(f"Open obligations (never silently drop):\n{debt_lines}")
     if active_step is not None:
@@ -510,6 +518,7 @@ def build_model_view(
     extra_constraints: Sequence[tuple[int, str]] = (),
     superseded: Iterable[int] = (),
     strategy_hint: str = "",
+    notes: Sequence[str] = (),
 ) -> ModelView:
     """Build the deterministic view a strategy is allowed to see."""
 
@@ -548,6 +557,7 @@ def build_model_view(
         active_step=active_step,
         extra_constraints=extra_constraints,
         strategy_hint=strategy_hint,
+        notes=notes,
     )
 
     payload = {
@@ -591,6 +601,7 @@ def build_model_view(
             }
             for item in step_verdicts
         ],
+        "notes": list(notes),
     }
     digest = hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
     return ModelView(
@@ -607,4 +618,5 @@ def build_model_view(
         steps=tuple(steps),
         step_verdicts=tuple(step_verdicts),
         compacted=compacted,
+        notes=tuple(notes),
     )

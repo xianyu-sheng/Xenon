@@ -231,9 +231,11 @@ def test_repeated_tool_call_blocks_the_run():
         and event.payload.get("signal") == "identical_call"
     ]
     assert vetoes, "the veto must be in the ledger, not only in the result"
-    # Three identical calls are allowed; the fourth is the one that trips it.
+    # #369: the fourth identical call is *taught* (it executes, with the
+    # diagnosis in the next view's Notes); the fifth, same signal again, is
+    # the one that blocks — the veto is still in the ledger.
     receipts = [e for e in ledger.read() if e.kind is EventKind.TOOL_RECEIPT]
-    assert len(receipts) == 3
+    assert len(receipts) == 4
 
 
 # ── 上下文窗口感知（#322 / docs/design/mechanism-fit.md）──────────────
