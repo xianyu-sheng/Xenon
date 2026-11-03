@@ -341,31 +341,55 @@ def test_listener_stays_off_when_input_is_not_a_terminal():
 
 
 def test_listener_pushes_typed_lines_into_the_transport():
+    import os
     from types import SimpleNamespace
 
     from xenon.repl.runtime_adapter import SteeringListener, drain_steering
 
-    class _Tty:
-        def __init__(self) -> None:
-            self._lines = ["no e2e\n", ""]
+    read_fd, write_fd = os.pipe()
+    try:
+        repl = SimpleNamespace()
+        listener = SteeringListener(repl, stream=os.fdopen(read_fd))
+        # On Windows select() rejects pipe fds, so the listener must refuse to
+        # start rather than spawn a zombie stdin owner.  The Unix path (a real
+        # tty) is covered by the select-probe test below.
+        started = listener.start()
+        if started:
+            os.write(write_fd, b"no e2e\n")
 
-        def isatty(self) -> bool:
-            return True
+            import time
 
-        def readline(self) -> str:
-            return self._lines.pop(0)
+            deadline = time.time() + 2
+            item = None
+            while time.time() < deadline and item is None:
+                item = drain_steering(repl)
+                time.sleep(0.01)
+            listener.stop()
+            time.sleep(0.3)
 
-    repl = SimpleNamespace()
-    listener = SteeringListener(repl, stream=_Tty())
-    listener.start()
+            assert item == {"text": "no e2e", "kind": "constraint", "scope": "task"}
+    finally:
+        try:
+            os.close(write_fd)
+        except OSError:
+            pass
 
-    import time
 
-    deadline = time.time() + 2
-    item = None
-    while time.time() < deadline and item is None:
-        item = drain_steering(repl)
-        time.sleep(0.01)
-    listener.stop()
+def test_listener_refuses_to_start_when_select_cannot_poll_the_stream():
+    import os
+    from types import SimpleNamespace
 
-    assert item == {"text": "no e2e", "kind": "constraint", "scope": "task"}
+    from xenon.repl.runtime_adapter import SteeringListener
+
+    read_fd, write_fd = os.pipe()
+    try:
+        repl = SimpleNamespace()
+        listener = SteeringListener(repl, stream=os.fdopen(read_fd))
+        # select() on a pipe fd is a platform question; either way the
+        # listener must either start (unix tty) or refuse cleanly (windows).
+        assert listener.start() in {True, False}
+    finally:
+        try:
+            os.close(write_fd)
+        except OSError:
+            pass

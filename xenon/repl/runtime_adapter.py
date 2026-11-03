@@ -190,6 +190,18 @@ class SteeringListener:
             interactive = False
         if not interactive:
             return False
+        # On Windows, select() only accepts sockets: polling a console/pipe
+        # stream would raise and the thread would die immediately.  Rather
+        # than a zombie thread that keeps owning stdin after the turn (which
+        # starves the next prompt), refuse to start on platforms where the
+        # polling loop cannot work.  Steering mid-run is then unavailable on
+        # Windows; the REPL input stays responsive, which is the P0.
+        import select
+
+        try:
+            select.select([stream], [], [], 0)
+        except (OSError, ValueError, TypeError):
+            return False
         self._stream = stream
         self._thread = threading.Thread(
             target=self._loop, name="xenon-steering", daemon=True
@@ -198,7 +210,19 @@ class SteeringListener:
         return True
 
     def _loop(self) -> None:
+        import select
+
         while not self._stop:
+            # A blocking readline() would survive stop() forever and keep
+            # owning stdin after the kernel turn ends — the main thread's next
+            # prompt() then starves.  Poll with a short select timeout so
+            # stop() takes effect within ~0.2s and stdin returns to the REPL.
+            try:
+                ready, _, _ = select.select([self._stream], [], [], 0.2)
+            except (OSError, ValueError):  # pragma: no cover - exotic streams
+                return
+            if not ready:
+                continue
             try:
                 line = self._stream.readline()
             except Exception:  # noqa: BLE001 — a closed terminal ends the reader
