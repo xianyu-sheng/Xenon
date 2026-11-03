@@ -183,3 +183,10 @@ def test_a_non_lesson_event_writes_no_proposal(tmp_path) -> None:
 
     kinds = [event.kind.value for event in ledger.read()]
     assert "lesson_proposed" not in kinds
+
+
+def test_canonical_payload_passes_unknown_events_through() -> None:
+    from xenon.kernel.lesson_proposer import _canonical_payload
+
+    payload = {"a": 1, "b": "x"}
+    assert _canonical_payload("tool_receipt", payload) == payload

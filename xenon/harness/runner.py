@@ -8,7 +8,7 @@ does not import the REPL or legacy engines; the REPL migration is a later step.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence, TextIO
 
@@ -16,6 +16,7 @@ from xenon.catalog.catalog import build_catalog
 from xenon.catalog.finalizer import GitFinalizer
 from xenon.catalog.gateway import LegacyToolGateway
 from xenon.catalog.worktree import GitWorktreeProbe
+from xenon.harness.lessons import record_recurrences
 from xenon.harness.plan import HarnessPlan
 from xenon.harness.sink import JsonlSink
 from xenon.kernel.contracts import (
@@ -31,7 +32,7 @@ from xenon.kernel.policies import PermissionMode, PermissionPolicy
 from xenon.kernel.protocols import ApprovalProvider, Strategy
 from xenon.kernel.runtime import LoopRuntime
 from xenon.kernel.strategies import LoopProfile
-from xenon.ledger.events import canonical_json
+from xenon.ledger.events import EventKind, EventSource, canonical_json
 from xenon.ledger.store import Ledger
 
 # Steps are the last-resort brake, not the primary one: the deterministic loop
@@ -170,6 +171,7 @@ def run_task(
     session_grants: Sequence[Any] = (),
     deny_rules: Sequence[Any] = (),
     ask_rules: Sequence[Any] = (),
+    lesson_store: Any = None,
 ) -> HarnessRun:
     """Run one objective through the kernel with an injected strategy.
 
@@ -214,6 +216,40 @@ def run_task(
         parent_task_id=parent_task_id,
         batch_id=batch_id,
     )
+    # Self-evolution slice 3 (docs/design/self-evolution.md): a bounded set of
+    # active lessons rides as constraints — the model *must* see them in the
+    # system prompt — and every applied lesson is recorded in this task's
+    # ledger.  Empty store, or a store that cannot load, means no lesson noise.
+    if lesson_store is not None:
+        try:
+            applied = lesson_store.match_for_task()
+        except Exception:  # noqa: BLE001 — a broken store must not fail the task
+            applied = ()
+        if applied:
+            spec = replace(
+                spec,
+                constraints=spec.constraints
+                + tuple(
+                    f"[lesson {lesson.id}] {lesson.action_text}"
+                    for lesson in applied
+                ),
+            )
+            for lesson in applied:
+                ledger.append(
+                    EventKind.LESSON_APPLIED,
+                    EventSource.GATE,
+                    {
+                        "lesson_id": lesson.id,
+                        "action": lesson.action_text,
+                        "kind": lesson.kind,
+                    },
+                )
+            if callable(lesson_store.record_application):
+                for lesson in applied:
+                    try:
+                        lesson_store.record_application(lesson.id)
+                    except Exception:  # noqa: BLE001 — counters are advisory
+                        pass
     _bind_accounting(strategy, runtime)
     if on_runtime is not None:
         # A front-end needs the runtime to *write events* (steering), not to
@@ -223,6 +259,19 @@ def run_task(
     report = ledger.verify()
     if not report.valid:
         raise RuntimeError(f"ledger verification failed: {report.reason}")
+    # Slice 3: count recurrences of applied lessons and retire the ones that
+    # keep failing.  Best-effort: a broken counter must not fail the task.
+    if lesson_store is not None:
+        try:
+            retired = record_recurrences(ledger, lesson_store)
+        except Exception:  # noqa: BLE001
+            retired = ()
+        for lesson_id in retired:
+            ledger.append(
+                EventKind.LESSON_RETIRED,
+                EventSource.GATE,
+                {"lesson_id": lesson_id, "reason": "recurrence threshold reached"},
+            )
     return HarnessRun(result=result, task_id=identifier, ledger_path=ledger_path)
 
 

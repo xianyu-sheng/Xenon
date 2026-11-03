@@ -23,7 +23,7 @@ from xenon.kernel.lessons import (
     lesson_fingerprint,
 )
 
-__all__ = ["LessonStore"]
+__all__ = ["LessonStore", "record_recurrences"]
 
 _LESSONS_FILE = ".xenon/lessons.yaml"
 
@@ -156,3 +156,67 @@ class LessonStore:
 
     def rows(self) -> list[dict[str, Any]]:
         return [lesson.to_payload() for lesson in self._lessons]
+
+    # ── task application (slice 3) ─────────────────────────────────
+
+    def match_for_task(self, limit: int = 3) -> tuple[Lesson, ...]:
+        """The lessons a *new* task should carry, bounded.
+
+        Guardrail 3 in the other direction: injecting every lesson would blow
+        up the constraints section and dilute attention, so only a bounded set
+        of active, recently-applied lessons is offered.  ``parameter`` lessons
+        are excluded here — they adjust a profile, which is a build-time
+        decision the caller makes with profile knowledge.
+        """
+
+        candidates = sorted(
+            (
+                lesson
+                for lesson in self._lessons
+                if not lesson.retired and lesson.kind != "parameter"
+            ),
+            key=lambda item: item.last_applied_at,
+            reverse=True,
+        )
+        return tuple(candidates[: max(1, int(limit))])
+
+
+def record_recurrences(ledger: Any, store: LessonStore) -> list[str]:
+    """After a task, count how many applied lessons recurred.
+
+    A recurrence is the same deterministic failure (same fingerprint) after a
+    lesson applied.  Lessons that pass the retirement threshold are marked
+    retired and reported; the caller writes the LESSON_RETIRED event.
+    """
+
+    retired: list[str] = []
+    if not isinstance(store, LessonStore):
+        return retired
+    for event in ledger.read():
+        kind = getattr(event, "kind", None)
+        kind_value = str(getattr(kind, "value", kind) or "")
+        if kind_value not in {
+            "debt_opened",
+            "loop_detected",
+            "policy_decision",
+            "user_approval",
+        }:
+            continue
+        # Reuse the proposer: it applies the canonical subset, so a lesson
+        # proposed at failure time and a failure observed after the task
+        # compute the *same* fingerprint (the full event payload carries
+        # obligation_id/stage/attempts… that must not change the identity).
+        try:
+            from xenon.kernel.lesson_proposer import propose_lesson
+
+            proposal = propose_lesson(kind_value, dict(getattr(event, "payload", {}) or {}))
+        except Exception:  # noqa: BLE001 — counting is advisory
+            continue
+        if proposal is None:
+            continue
+        for lesson in store:
+            if lesson.retired or lesson.fingerprint != proposal.fingerprint:
+                continue
+            if store.record_recurrence(lesson.id):
+                retired.append(lesson.id)
+    return retired
