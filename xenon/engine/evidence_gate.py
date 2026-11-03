@@ -129,8 +129,11 @@ _CLAIM_PATTERNS = [
 # 路径类文件声称：必须包含路径分隔符（/ 或 \）。裸 `self.c`、`obj.config`
 # 这类代码/属性引用不带分隔符，绝不会被误判为文件。这修复了 SWE-bench
 # 实测 40% 误杀（django 实例 final output 含 ORM 字段引用 self.c 被当文件）。
+# ``~``（Windows 8.3 短路径，如 ADMINI~1）与盘符冒号都在字符类里：本机实测
+# tempfile.gettempdir() 返回 `C:\Users\ADMINI~1\AppData\...` 短路径，旧正则把
+# 路径从 `~1` 处截断成 `1\AppData\...`，声称与已验证路径永远匹配不上。
 _FILE_PATTERNS = [
-    r"[\w.\-]+[/\\][\w./\\\-]+\.[A-Za-z0-9]+",
+    r"(?:[A-Za-z]:[\\/])?[\w.\-~]+[/\\][\w./\\\-~]+\.[A-Za-z0-9]+",
 ]
 # 版本号不是文件：3.10/3.11/3.12 这类纯数字点分段序列（Python 版本矩阵
 # 等）不应被视为路径声称。
@@ -202,13 +205,26 @@ def _extract_claimed_files(
 
 
 def _path_matches_verified(claimed: str, verified: set[str]) -> bool:
-    """声称路径与已验证路径做后缀匹配（相对/绝对、./ 前缀兼容）。"""
+    """声称路径与已验证路径做后缀匹配（相对/绝对、./ 前缀兼容）。
+
+    An extra containment rule tolerates claim-window truncation: a sentence
+    like "内容已写入" is itself a completion claim, so ``_claim_windows``
+    opens a second window that can start mid-path (``strator/AppData/...``
+    instead of ``C:/Users/Administrator/AppData/...`` on 8.3 short paths or
+    long usernames).  A *path-shaped* claimed fragment that is a substring of
+    a verified path names the same file, so it counts as verified.  Bare
+    filenames (``foo.py``) never get this: ``foo.py in bar/foo.py`` would
+    silently clear a claim for a file that was never written.
+    """
+
     claimed_norm = Path(claimed).as_posix().lstrip("./")
     for v in verified:
         v_norm = Path(v).as_posix().lstrip("./")
         if claimed_norm == v_norm:
             return True
         if claimed_norm.endswith("/" + v_norm) or v_norm.endswith("/" + claimed_norm):
+            return True
+        if "/" in claimed_norm and claimed_norm in v_norm:
             return True
     return False
 

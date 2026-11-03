@@ -526,7 +526,11 @@ class TestSkillManager:
 
         assert result == ""
         assert len(repl.prompts) == 1
-        assert "Use read_file when needed." in repl.prompts[0]
+        # #370: the objective names the skill; the body travels as a context
+        # block, so it must NOT be inlined into the prompt.
+        assert "tool-aware" in repl.prompts[0]
+        assert "Use read_file when needed." not in repl.prompts[0]
+        assert repl.invocations[0]["skill_name"] == "tool-aware"
         assert "inspect pyproject.toml" in repl.prompts[0]
         assert repl.invocations == [
             {"skill_name": "tool-aware", "skill_args": "inspect pyproject.toml"}

@@ -516,8 +516,17 @@ def _execute_installed_skill(
     if skill.is_agent_skill and session_state:
         repl = session_state.get("_repl")
         if repl is not None:
+            # #370: the skill body goes into the kernel's reference context, not
+            # into the objective.  Previously ``build_agent_prompt`` inlined the
+            # full SKILL.md into the user message, so every skill turn paid the
+            # full body in tokens up front.  The objective now names the skill;
+            # turn_flow loads the body as a context block ("reference, not
+            # instruction"), and the model can re-read SKILL.md via ``read``.
             repl._handle_chat(
-                manager.build_agent_prompt(skill.name, args),
+                (
+                    f"按照已安装技能 {skill.name} 的说明完成："
+                    f"{(args or '').strip() or '按技能工作流执行当前任务'}"
+                ),
                 skill_name=skill.name,
                 skill_args=args,
             )
