@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from xenon.kernel.decision_chain import decision_lines
+
 __all__ = [
     "ELIDED_KIND",
     "fold_dropped",
@@ -79,9 +81,18 @@ def fold_dropped(
         "seqs": seqs,
         "lines": lines,
     }
+    # The decision chain survives the fold: plan/control/debt reasons are
+    # kept as ``why`` lines so a compacted view still answers "why did the
+    # task end up this way" (decision_chain.py, zero LLM).
+    why = decision_lines(dropped)
+    if why:
+        entry["why"] = why
     while lines and size_of(entry) > room:
         lines = lines[1:]
         entry["lines"] = lines
+    while why and size_of(entry) > room:
+        why = why[1:]
+        entry["why"] = why
     if not lines or size_of(entry) > room:
         # Even one line does not fit: keep the fact, drop the detail.
         entry = {
@@ -90,6 +101,10 @@ def fold_dropped(
             "count": len(dropped),
             "seqs": seqs[-ELIDED_NOTE_SEQS:],
         }
+        # ``why`` was already trimmed by the loop above; the minimal entry is
+        # strictly smaller, so whatever fit there still fits here.
+        if why:
+            entry["why"] = why
     return entry
 
 
