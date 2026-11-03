@@ -127,10 +127,11 @@ def test_stale_lessons_do_not_match(tmp_path: Path) -> None:
     store = LessonStore(tmp_path / "lessons.yaml")
     store.add(_lesson(last_applied_at=1.0))
 
+    # Same fingerprint as _lesson, applied 31 days ago: stale → no match.
     assert (
         store.match(
             "debt_opened",
-            {"kind": "requirement_met"},
+            {"kind": "requirement_met", "target": "x"},
             clock=lambda: 1.0 + 31 * 86400,
         )
         is None
