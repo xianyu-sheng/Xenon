@@ -559,3 +559,102 @@ def test_recurrence_retires_and_runner_writes_the_event(tmp_path: Path) -> None:
     kinds = [event.kind.value for event in events]
     assert "lesson_retired" in kinds, kinds
     assert lesson.retired is True
+
+
+def test_a_broken_proposer_in_recurrence_scan_is_skipped(tmp_path: Path) -> None:
+    from xenon.harness.lessons import record_recurrences
+    from xenon.ledger.events import EventKind
+    from xenon.ledger.store import Ledger
+
+    store = LessonStore(tmp_path / "lessons.yaml")
+    ledger = Ledger.in_memory("t3")
+    ledger.append(
+        EventKind.DEBT_OPENED, EventSource.GATE, {"kind": "requirement_met"}
+    )
+    import xenon.kernel.lesson_proposer as proposer_module
+
+    original = proposer_module.propose_lesson
+    proposer_module.propose_lesson = lambda *a, **k: (_ for _ in ()).throw(
+        RuntimeError("proposer broke")
+    )
+    try:
+        assert record_recurrences(ledger, store) == []
+    finally:
+        proposer_module.propose_lesson = original
+
+
+def test_a_broken_recurrence_counter_does_not_fail_the_task(tmp_path: Path) -> None:
+    import xenon.harness.runner as runner_module
+    from tests.harness.test_exec import _repo
+    from xenon.harness.llm import ModelConfig, build_llm_loop_strategy
+    from xenon.harness.runner import run_task
+    from xenon.kernel.strategies import LoopProfile
+
+    _repo(tmp_path)
+    store = LessonStore(tmp_path / "lessons.yaml")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("counter broke")
+
+    original = runner_module.record_recurrences
+    runner_module.record_recurrences = boom
+    try:
+        strategy = build_llm_loop_strategy(
+            ModelConfig(model_id="deepseek/deepseek-v4-flash"),
+            LoopProfile(),
+            client=_fake_client(),
+        )
+        run = run_task(
+            "read README and report",
+            strategy=strategy,
+            workspace=tmp_path,
+            ledger_dir=tmp_path / "ledger",
+            task_id="lesson-broken-counter",
+            max_steps=3,
+            lesson_store=store,
+        )
+    finally:
+        runner_module.record_recurrences = original
+
+    assert run.result is not None
+
+
+def test_a_broken_application_counter_does_not_fail_the_task(tmp_path: Path) -> None:
+    from tests.harness.test_exec import _repo
+    from xenon.harness.llm import ModelConfig, build_llm_loop_strategy
+    from xenon.harness.runner import run_task
+    from xenon.kernel.strategies import LoopProfile
+
+    _repo(tmp_path)
+    store = LessonStore(tmp_path / "lessons.yaml")
+    store.add(_lesson(id="L-0001", fingerprint="fp-1"))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("counter broke")
+
+    store.record_application = boom
+    strategy = build_llm_loop_strategy(
+        ModelConfig(model_id="deepseek/deepseek-v4-flash"),
+        LoopProfile(),
+        client=_fake_client(),
+    )
+    run = run_task(
+        "read README and report",
+        strategy=strategy,
+        workspace=tmp_path,
+        ledger_dir=tmp_path / "ledger",
+        task_id="lesson-broken-app-counter",
+        max_steps=3,
+        lesson_store=store,
+    )
+
+    assert run.result is not None
+    # The constraint was still injected even though the counter broke.
+    from xenon.ledger.events import EventKind
+    from xenon.ledger.store import Ledger
+
+    applied = [
+        e for e in Ledger(run.ledger_path, "lesson-broken-app-counter").read()
+        if e.kind is EventKind.LESSON_APPLIED
+    ]
+    assert len(applied) == 1
