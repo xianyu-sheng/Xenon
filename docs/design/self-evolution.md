@@ -123,5 +123,8 @@ lessons:
    任务结束复发计数。
 4. **产物**：`/lessons` 命令 + PITFALLS.md 投影 + `LESSON_RETIRED` 阈值。
 5. **真实验证**：探针（同一失败任务两次，第二次带教训）。
+6. **产物**（切片 4，已落地）：`/lessons` 列出活动/退休/计数；
+   `/lessons write` 显式生成 `<repo>/.xenon/PITFALLS.md`（pitfall 教训的
+   确定性投影，**绝不自动写**）。
 
 每条分片独立可合并、独立测试、独立证据。

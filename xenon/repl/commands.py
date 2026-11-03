@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+# Importing this module registers /lessons (self-evolution slice 4).
+from xenon.repl.command_groups import lessons as _lessons  # noqa: F401
+
 # Importing this module registers /permissions (#373).
 from xenon.repl.command_groups import permissions as _permissions  # noqa: F401
 from xenon.repl.command_groups.agent import (
