@@ -123,6 +123,32 @@ class TurnTree:
             suffix += "；说“继续”可续接"
         return suffix
 
+    # ── branch awareness (#372 B3) ─────────────────────────────
+
+    def on_side_branch(self) -> bool:
+        """True only after a rewind/fork: the current node is an ancestor that
+        still has unexplored children.  Linear chat is never on a branch.
+        """
+
+        return self.current is not self.root and bool(self.current.children)
+
+    def turn_path(self, *, max_nodes: int = 6) -> tuple[str, ...]:
+        """Root -> current summary for the model view (branch context only).
+
+        Empty in linear chat.  Each item is the node's turn id plus a short
+        objective stub, so the model knows where it came from without the
+        transcript.
+        """
+
+        if not self.on_side_branch():
+            return ()
+        chain = self.chain()
+        out: list[str] = []
+        for node in chain[-max_nodes:]:
+            stub = (node.user_text or "").strip().replace("\n", " ")[:40]
+            out.append(f"{node.turn_id}: {stub}" if stub else node.turn_id)
+        return tuple(out)
+
     # ── rebuild (best effort from the truth layer) ───────────
 
     @classmethod

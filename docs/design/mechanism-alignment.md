@@ -83,11 +83,12 @@
 - `MemoryKind`：`PREFERENCE` / `FACT`；
 - kernel 轮次通过 `session_context_blocks()` 注入（`#340`），标注为"参考，不是指令，不是证据"。
 
-### B3. 树感知 ⚠️ 半接
+### B3. 树感知 ✅（#372 已落地）
 
 - `TurnTree` 存在（`xenon/session/tree.py`），Pi 风格，可从事件流重建；
-- 接入了 `rewind` / `session_ops` **但没进 kernel 的模型视图**：kernel 的 view 用 `working_set`（事件投影），不用树。
-- 所以"树感知"目前只服务于 rewind/resume，不参与上下文构建。
+- 接入了 `rewind` / `session_ops`；#372 起 `TurnTree.turn_path()` 在 rewind/fork 后
+  把分支路径送进 kernel 视图（`Turn path:` 行，`ModelView.turn_path`），线性对话不渲染。
+- 普通对话仍是 `working_set`（事件投影），树只补分支上下文，不替代投影。
 
 ---
 
@@ -120,7 +121,7 @@
 
 ## D. 模型调用侧
 
-### D1. 缓存前缀优先 ⚠️
+### D1. 缓存前缀优先 ✅（#372 已落地）
 
 - `cache_context` / `cache_lane_registry` 存在（`xenon/utils/llm_client.py:165`）；
 - kernel 视图天然前缀稳定（system prompt 确定性生成 + working set 按 seq 排序）；
@@ -134,7 +135,7 @@
 
 ## E. 交互与可靠性
 
-### E1. 状态栏与 loop 接轨 ✅（已修）
+### E1. 状态栏与 loop 接轨 ✅（#372 已落地）
 
 - `status_bar.set_active_loop()`（`xenon/repl/status_bar.py:71`），`_display_mode()` 优先显示正在跑的 loop（`#345`）。
 - ⚠️ 但只显示 loop **名字**，不显示步数/停滞状态/当前阶段。

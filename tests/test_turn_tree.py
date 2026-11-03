@@ -220,3 +220,30 @@ def test_paths_from_panel_skips_failures_and_dedups():
         steps = [_S("write_file", "a.py"), _S("write_file", "a.py"), _S("edit_file", "b.py", ok=False)]
 
     assert paths_from_panel(_P()) == ["a.py"]
+
+
+def test_linear_chat_is_never_on_a_branch():
+    """#372 B3: turn_path stays empty on the trunk; only a rewind/fork grows it."""
+    tree = TurnTree()
+    a = tree.append_turn("first")
+    tree.finish(a, "passed")
+    b = tree.append_turn("second")
+    tree.finish(b, "failed-retried")
+
+    assert tree.on_side_branch() is False
+    assert tree.turn_path() == ()
+
+
+def test_rewind_onto_an_ancestor_with_children_is_a_branch():
+    tree = TurnTree()
+    a = tree.append_turn("first objective")
+    tree.finish(a, "passed")
+    b = tree.append_turn("second")
+    tree.finish(b, "failed-retried")
+    tree.move_to(a)  # rewind: a still has child b -> side branch
+
+    assert tree.on_side_branch() is True
+    path = tree.turn_path()
+    assert path
+    assert path[-1].startswith("turn-")
+    assert "first objective" in path[-1]

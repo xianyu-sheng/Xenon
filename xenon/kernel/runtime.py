@@ -227,6 +227,26 @@ class LoopRuntime:
     def request_cancel(self) -> None:
         self._cancelled = True
 
+    def status_snapshot(self) -> dict[str, Any]:
+        """#372 E1: the live kernel state, all of it from runtime facts.
+
+        The REPL renders this verbatim — it never guesses phase, steps or
+        stall from its own counters.  Stalled seconds are "no new information
+        since" wall-clock, which is the loop detector's own definition.
+        """
+
+        now = float(self._clock())
+        stalled = 0.0
+        if self._last_progress_at:
+            stalled = max(0.0, now - float(self._last_progress_at))
+        return {
+            "phase": self._phase.value if self._phase else "",
+            "steps": int(self._steps or 0),
+            "tokens": int(getattr(self._usage, "total", 0) or 0),
+            "stalled_seconds": stalled,
+            "tool_calls": int(self._tool_calls or 0),
+        }
+
     def run(self, spec: TaskSpec, strategy: Strategy) -> TaskResult:
         ledger_task_id = getattr(self._ledger, "task_id", "")
         if ledger_task_id and ledger_task_id != spec.task_id:

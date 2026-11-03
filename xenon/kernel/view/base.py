@@ -447,6 +447,7 @@ def _system_prompt(
     extra_constraints: Sequence[tuple[int, str]] = (),
     strategy_hint: str = "",
     notes: Sequence[str] = (),
+    turn_path: Sequence[str] = (),
 ) -> str:
     constraint_lines = [f"- {item}" for item in spec.constraints]
     constraint_lines.extend(
@@ -479,6 +480,12 @@ def _system_prompt(
         lines.append("Notes (read before your next proposal):\n" + "\n".join(
             f"- {text}" for text in notes
         ))
+    if turn_path:
+        # #372 B3: only rendered after a rewind/fork — a side-branch task must
+        # know where it came from.  Linear chat never grows this line.
+        lines.append(
+            "Turn path (you are on a side branch): " + " -> ".join(turn_path)
+        )
     if debt_lines:
         lines.append(f"Open obligations (never silently drop):\n{debt_lines}")
     if active_step is not None:
@@ -519,6 +526,7 @@ def build_model_view(
     superseded: Iterable[int] = (),
     strategy_hint: str = "",
     notes: Sequence[str] = (),
+    turn_path: Sequence[str] = (),
 ) -> ModelView:
     """Build the deterministic view a strategy is allowed to see."""
 
@@ -558,6 +566,7 @@ def build_model_view(
         extra_constraints=extra_constraints,
         strategy_hint=strategy_hint,
         notes=notes,
+        turn_path=turn_path,
     )
 
     payload = {
@@ -604,6 +613,15 @@ def build_model_view(
         "notes": list(notes),
     }
     digest = hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
+    # #372 D1: the cache prefix is system + tools — the bytes every request
+    # starts with.  Working-set growth must NOT change it (that is the whole
+    # point of prefix caching); a change to any prefix field MUST.  This
+    # digest is the guard rail: tests assert both directions, so a view edit
+    # can never silently kill the cache hit rate.
+    prefix_digest = hashlib.sha256(
+        _canonical({"system": system, "tools": list(tools)}).encode("utf-8")
+    ).hexdigest()
+    payload["prefix_digest"] = prefix_digest
     return ModelView(
         task=spec,
         system=system,
@@ -613,10 +631,12 @@ def build_model_view(
         budget=budget,
         input_seq=ledger.watermark(),
         hash=digest,
+        prefix_digest=prefix_digest,
         phase=phase,
         active_step=active_step,
         steps=tuple(steps),
         step_verdicts=tuple(step_verdicts),
         compacted=compacted,
         notes=tuple(notes),
+        turn_path=tuple(turn_path),
     )

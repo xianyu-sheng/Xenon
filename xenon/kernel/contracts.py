@@ -294,6 +294,11 @@ class TaskSpec:
     # corrective turn).  Teaching is a hint into the next view, never a
     # permission: evidence, approval and delivery rules are unchanged.
     max_loop_corrections: int = 1
+    # #372 B3: the turn path this task was reached from (root -> current, the
+    # branch summary).  Non-empty only after a rewind/fork: a model on a side
+    # branch must know where it came from.  Rendered as a ``Turn path:``
+    # system-prompt line when present; linear chat never grows it.
+    turn_path: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Reject a malformed task at the boundary, not three layers down.
@@ -309,6 +314,8 @@ class TaskSpec:
             raise ValueError("batch_id must be a string")
         if not isinstance(self.max_loop_corrections, int) or self.max_loop_corrections < 0:
             raise ValueError("max_loop_corrections must be an int >= 0")
+        if not all(isinstance(item, str) for item in self.turn_path):
+            raise ValueError("turn_path items must be strings")
         total = 0
         for label, text in self.context_blocks:
             if not str(label).strip():
@@ -759,6 +766,13 @@ class ModelView:
     budget: Budget
     input_seq: int
     hash: str
+    # #372 D1: sha256 of system + tools only — the stable cache prefix.  Two
+    # views with the same prefix share the provider's prompt-cache prefix; a
+    # prefix-field edit changes this digest (and therefore the whole hash).
+    prefix_digest: str = ""
+    # #372 B3: the branch path this task was reached from; empty in linear
+    # chat.
+    turn_path: tuple[str, ...] = ()
     phase: TaskPhase = TaskPhase.RUNNING
     active_step: StepContract | None = None
     steps: tuple[StepContract, ...] = ()
