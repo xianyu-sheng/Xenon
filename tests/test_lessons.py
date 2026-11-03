@@ -177,12 +177,21 @@ def test_a_non_list_document_is_ignored(tmp_path: Path) -> None:
 def test_non_mapping_rows_are_skipped(tmp_path: Path) -> None:
     path = tmp_path / "lessons.yaml"
     path.write_text(
-        json.dumps({"lessons": [{"id": "ok", "kind": "pitfall", "trigger_event": "x",
-                                 "fingerprint": "f", "action_text": "a"}]}),
+        json.dumps(
+            {
+                "lessons": [
+                    "not-a-mapping",
+                    {"id": "ok", "kind": "pitfall", "trigger_event": "x",
+                     "fingerprint": "f", "action_text": "a"},
+                ]
+            }
+        ),
         encoding="utf-8",
     )
 
-    assert len(LessonStore(path)) == 1
+    store = LessonStore(path)
+    assert len(store) == 1
+    assert next(iter(store)).id == "ok"
 
 
 def test_adding_replaces_the_same_fingerprint(tmp_path: Path) -> None:
@@ -204,6 +213,24 @@ def test_operations_on_an_unknown_lesson_are_noops(tmp_path: Path) -> None:
     assert store.retire("nope") is False
     assert store.match("debt_opened", {"kind": "x"}) is None
     assert store.active() == ()
+
+
+def test_operations_on_a_non_first_lesson(tmp_path: Path) -> None:
+    """record_application / record_recurrence / retire skip the *other* lesson
+    before finding the target (the continue branches)."""
+
+    store = LessonStore(tmp_path / "lessons.yaml")
+    first = _lesson(id="L-0001", fingerprint="fp-1")
+    second = _lesson(id="L-0002", fingerprint="fp-2")
+    store.add(first)
+    store.add(second)
+
+    assert store.record_application("L-0002") is True
+    assert second.applied == 1 and first.applied == 0
+    assert store.record_recurrence("L-0002", retire_after=3) is False
+    assert second.recurrences == 1
+    assert store.retire("L-0002") is True
+    assert second.retired is True and first.retired is False
 
 
 def test_retire_and_rows_expose_state(tmp_path: Path) -> None:

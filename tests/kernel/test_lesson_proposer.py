@@ -170,10 +170,14 @@ def test_a_non_lesson_event_writes_no_proposal(tmp_path) -> None:
 
     from tests.kernel.test_north_star import _runtime
     from tests.kernel.test_session_grants import _policy
+    from xenon.kernel.contracts import TaskSpec
     from xenon.ledger.store import Ledger
 
     ledger = Ledger.in_memory("lesson-none")
     runtime = _runtime(ledger, policies=(_policy(str(tmp_path)),))
+    runtime._spec = TaskSpec(
+        task_id="lesson-none", objective="o", workspace=str(tmp_path)
+    )
 
     runtime._propose_lesson("tool_receipt", {"status": "ok"})
 

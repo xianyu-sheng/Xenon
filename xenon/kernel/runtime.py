@@ -2249,7 +2249,11 @@ class LoopRuntime:
             from xenon.kernel.lesson_proposer import propose_lesson
 
             proposal = propose_lesson(
-                event_kind, payload, source_task=self._spec.task_id
+                event_kind,
+                payload,
+                source_task=(
+                    self._spec.task_id if self._spec is not None else ""
+                ),
             )
         except Exception:  # noqa: BLE001 — telemetry never fails a task
             return
