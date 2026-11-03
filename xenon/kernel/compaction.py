@@ -101,8 +101,8 @@ def fold_dropped(
             "count": len(dropped),
             "seqs": seqs[-ELIDED_NOTE_SEQS:],
         }
-        while why and size_of({**entry, "why": why}) > room:
-            why = why[1:]
+        # ``why`` was already trimmed by the loop above; the minimal entry is
+        # strictly smaller, so whatever fit there still fits here.
         if why:
             entry["why"] = why
     return entry
