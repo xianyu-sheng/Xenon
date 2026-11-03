@@ -122,5 +122,3 @@ class Lesson:
             # A malformed lesson is dropped, not guessed: applying a guessed
             # lesson could constrain future tasks for no reason.
             return None
-
-
