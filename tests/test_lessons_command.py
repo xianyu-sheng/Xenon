@@ -81,3 +81,24 @@ def test_lessons_without_any_lesson_is_informative(tmp_path: Path) -> None:
     text = _cmd_lessons(args="", session_state={})
 
     assert "当前没有教训" in text
+
+
+def test_lessons_stale_state_and_clear_message(tmp_path: Path) -> None:
+    from xenon.harness.lessons import LessonStore
+    from xenon.kernel.lessons import Lesson
+    from xenon.repl.command_groups.lessons import _cmd_lessons
+
+    store = LessonStore(tmp_path / ".xenon" / "lessons.yaml")
+    store.add(
+        Lesson(
+            id="L-STALE", kind="pitfall", trigger_event="debt_opened",
+            fingerprint="fs", action_text="x", last_applied_at=1.0,
+        )
+    )
+    store.save()
+
+    text = _cmd_lessons(args="", session_state={})
+    assert "stale" in text
+
+    cleared = _cmd_lessons(args="clear", session_state={})
+    assert "lessons.yaml" in cleared
