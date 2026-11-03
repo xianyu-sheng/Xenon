@@ -773,6 +773,10 @@ class LoopRuntime:
                 },
                 step_id=self._current_step_id(),
             )
+            self._propose_lesson(
+                "loop_detected",
+                {"signal": signal.kind, "reason": signal.reason},
+            )
             return self._budget_block(signal.reason, ("loop",))
 
         verdict = self._controller.reconcile(self._active_step, receipt)
@@ -1633,6 +1637,22 @@ class LoopRuntime:
                         ),
                     },
                 )
+                if not approved:
+                    # Self-evolution (slice 2): a human refusal is a preference
+                    # signal.  Propose, do not store — the model never writes
+                    # its own lesson.
+                    self._propose_lesson(
+                        "user_approval",
+                        {
+                            "approved": False,
+                            "tool": (
+                                action.intent.capability.value
+                                if isinstance(action, CallTool)
+                                else type(action).__name__
+                            ),
+                            "reason": approval_reason,
+                        },
+                    )
                 if approved and self._grant_approval(
                     policy, decision, action
                 ):
@@ -2204,6 +2224,49 @@ class LoopRuntime:
                 },
                 step_id=self._current_step_id(),
             )
+            # Self-evolution (design/self-evolution.md, slice 2): a debt the
+            # harness itself opened is a lesson source.  The proposal is
+            # written here, visible in this task's ledger; storage and
+            # application are later slices.
+            self._propose_lesson(
+                "debt_opened",
+                {
+                    "kind": obligation.kind.value,
+                    "target": obligation.target,
+                    "reason": debt.reason,
+                },
+            )
+
+    def _propose_lesson(self, event_kind: str, payload: dict[str, Any]) -> None:
+        """Write a LESSON_PROPOSED event from a harness-judged failure (slice 2).
+
+        The proposal is a deterministic template over the payload; it never
+        invents a reason and never uses the model's prose.  Best-effort: a
+        broken proposer must not fail the task.
+        """
+
+        try:
+            from xenon.kernel.lesson_proposer import propose_lesson
+
+            proposal = propose_lesson(
+                event_kind, payload, source_task=self._spec.task_id
+            )
+        except Exception:  # noqa: BLE001 — telemetry never fails a task
+            return
+        if proposal is None:
+            return
+        self._append(
+            EventKind.LESSON_PROPOSED,
+            EventSource.GATE,
+            {
+                "kind": proposal.kind,
+                "trigger_event": proposal.trigger_event,
+                "fingerprint": proposal.fingerprint,
+                "action_text": proposal.action_text,
+                "counterfactual": proposal.counterfactual,
+                "source_task": proposal.source_task,
+            },
+        )
 
     def _find_obligation(
         self, obligation_id: str, verdict: Verdict
