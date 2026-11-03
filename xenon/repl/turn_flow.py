@@ -75,6 +75,30 @@ class TurnFlowMixin:
             self.ctx_mgr.max_tokens = window
 
 
+    def _load_skill_body(self, skill_name: str | None) -> None:
+        """#370: load the active skill's body into reference context, lazily.
+
+        A missing or malformed skill is not a crash: the turn continues with
+        just the one-line index, and the body stays out of the prompt.
+        """
+
+        self._active_skill_body = None
+        if not skill_name:
+            return
+        try:
+            from xenon.repl.skill_manager import SkillManager
+
+            manager = SkillManager()
+            skill = manager.get(skill_name)
+            if skill is not None and skill.is_agent_skill:
+                instructions = manager.load_instructions(skill_name)
+                self._active_skill_body = (
+                    f"[{skill.name}] "
+                    f"目录: {skill.root.resolve()}\n\n{instructions}"
+                )
+        except Exception:  # noqa: BLE001 — a missing skill is not a crash
+            self._active_skill_body = None
+
     def _handle_chat(
         self,
         user_input: str,
@@ -400,22 +424,7 @@ class TurnFlowMixin:
             )
         elif skill_name is not None:
             optimized = user_input
-            # #370: the skill body is reference context, loaded lazily into the
-            # kernel's context_blocks — not an objective.  The model still sees
-            # the one-line index every turn; the full SKILL.md only enters the
-            # working set when this turn actually runs the skill.
-            try:
-                from xenon.repl.skill_manager import SkillManager
-
-                skill = SkillManager().get(skill_name)
-                if skill is not None and skill.is_agent_skill:
-                    instructions = SkillManager().load_instructions(skill_name)
-                    self._active_skill_body = (
-                        f"[{skill.name}] "
-                        f"目录: {skill.root.resolve()}\n\n{instructions}"
-                    )
-            except Exception:  # noqa: BLE001 — a missing skill is not a crash
-                self._active_skill_body = None
+            self._load_skill_body(skill_name)
             console.print(
                 f"[dim cyan]🧩 Agent Skill: {skill_name}（正文与资源按需加载）[/dim cyan]"
             )

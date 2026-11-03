@@ -95,3 +95,62 @@ def test_skill_trigger_no_longer_inlines_the_body(tmp_path: Path, monkeypatch) -
     assert "SKILL.md" not in user_input
     assert "## 步骤" not in user_input
     assert "code-review" in user_input
+
+
+def test_the_skill_index_truncates_with_a_count(tmp_path: Path, monkeypatch) -> None:
+    from xenon.repl import skill_manager as sm
+    from xenon.repl.runtime_adapter import _skill_index
+
+    skills = tmp_path / "skills"
+    for i in range(45):
+        root = skills / f"skill-{i:02d}"
+        root.mkdir(parents=True)
+        (root / "SKILL.md").write_text(
+            f"---\nname: skill-{i:02d}\ndescription: 技能 {i} 的说明\n---\n\n正文\n",
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(sm, "_SKILLS_DIR", skills)
+
+    index = _skill_index(None, limit=40)
+
+    assert "skill-00" in index
+    assert "skill-44" not in index
+    assert "5 more skills" in index
+    assert "SKILL.md" in index  # every row names its progressive read path
+
+
+def test_the_skill_index_without_skills_is_empty(tmp_path: Path, monkeypatch) -> None:
+    from xenon.repl import skill_manager as sm
+    from xenon.repl.runtime_adapter import _skill_index
+
+    skills = tmp_path / "empty-skills"
+    skills.mkdir()
+    # Both roots must be empty: the shared ~/.agents/skills is a real one.
+    monkeypatch.setattr(sm, "_SKILLS_DIR", skills)
+    monkeypatch.setattr(sm, "_SHARED_SKILLS_DIR", skills)
+
+    assert _skill_index(None) == ""
+
+
+def test_load_skill_body_enters_reference_context(tmp_path: Path, monkeypatch) -> None:
+    """turn_flow's skill branch loads the body lazily, and a missing skill
+    is a no-op rather than a crash (#370)."""
+
+    from xenon.repl import skill_manager as sm
+    from xenon.repl.turn_flow import TurnFlowMixin
+
+    skills = _skill_dir(tmp_path)
+    monkeypatch.setattr(sm, "_SKILLS_DIR", skills)
+    monkeypatch.setattr(sm, "_SHARED_SKILLS_DIR", skills)
+
+    flow = object.__new__(TurnFlowMixin)
+    flow._active_skill_body = None
+    flow._load_skill_body("code-review")
+
+    assert flow._active_skill_body is not None
+    assert "## 步骤" in flow._active_skill_body
+    assert "[code-review]" in flow._active_skill_body
+
+    # A skill that does not exist leaves the body unset.
+    flow._load_skill_body("does-not-exist")
+    assert flow._active_skill_body is None
