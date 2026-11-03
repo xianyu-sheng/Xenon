@@ -212,3 +212,10 @@ def test_max_loop_corrections_zero_blocks_immediately() -> None:
     assert len(hits) == 1
     assert len(notes) == 1
     assert "0 correction attempt" not in notes[0]["reason"]
+
+
+def test_a_negative_max_loop_corrections_is_rejected_at_the_boundary() -> None:
+    import pytest
+
+    with pytest.raises(ValueError):
+        _spec("bad", max_loop_corrections=-1)
