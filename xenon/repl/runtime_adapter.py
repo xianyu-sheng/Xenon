@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import select
 import uuid
 from pathlib import Path
 from typing import Any, Mapping
@@ -196,8 +197,6 @@ class SteeringListener:
         # starves the next prompt), refuse to start on platforms where the
         # polling loop cannot work.  Steering mid-run is then unavailable on
         # Windows; the REPL input stays responsive, which is the P0.
-        import select
-
         try:
             select.select([stream], [], [], 0)
         except (OSError, ValueError, TypeError):
@@ -210,8 +209,6 @@ class SteeringListener:
         return True
 
     def _loop(self) -> None:
-        import select
-
         while not self._stop:
             # A blocking readline() would survive stop() forever and keep
             # owning stdin after the kernel turn ends — the main thread's next

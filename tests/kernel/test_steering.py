@@ -393,3 +393,110 @@ def test_listener_refuses_to_start_when_select_cannot_poll_the_stream():
             os.close(write_fd)
         except OSError:
             pass
+
+
+def test_loop_polls_select_and_stops_within_a_tick(monkeypatch) -> None:
+    """#291 dogfood fix: _loop must yield to stop() instead of blocking on
+    readline; select-not-ready and select-error paths both terminate it."""
+    from types import SimpleNamespace
+
+    import xenon.repl.runtime_adapter as adapter
+
+    calls: list[float] = []
+    state = {"tick": 0}
+
+    def fake_select(streams, r, w, timeout):
+        calls.append(timeout or 0)
+        state["tick"] += 1
+        if state["tick"] >= 2:
+            raise OSError("poll interrupted")
+        return ([], [], [])  # not ready: continue
+
+    monkeypatch.setattr(adapter.select, "select", fake_select)
+
+    repl = SimpleNamespace()
+    listener = adapter.SteeringListener(repl, stream=SimpleNamespace())
+    listener._stop = False
+    listener._loop()
+    assert len(calls) == 2, "poll -> not-ready continue -> error exit"
+
+
+def test_start_succeeds_when_select_can_poll(monkeypatch) -> None:
+    """start() reaches the thread-launch path when select() accepts the
+    stream (unix-style tty); the loop exits on the next stop tick."""
+    from types import SimpleNamespace
+
+    import xenon.repl.runtime_adapter as adapter
+
+    def fake_select(streams, r, w, timeout):
+        state = getattr(fake_select, "n", 0)
+        fake_select.n = state + 1
+        if state == 0:
+            return ([], [], [])  # start() probe succeeds
+        raise OSError("stop the poll")  # the spawned thread exits
+
+    monkeypatch.setattr(adapter.select, "select", fake_select)
+
+    class _Tty:
+        def isatty(self):
+            return True
+
+    repl = SimpleNamespace()
+    listener = adapter.SteeringListener(repl, stream=_Tty())
+    listener._stop = True
+    assert listener.start() is True
+    import time
+
+    time.sleep(0.4)  # the thread polls once, hits the error, and exits
+
+
+def test_loop_reads_a_line_and_steers(monkeypatch) -> None:
+    """The ready path: a typed line lands in the steering queue."""
+    from types import SimpleNamespace
+
+    import xenon.repl.runtime_adapter as adapter
+
+    def fake_select(streams, r, w, timeout):
+        return ([streams[0]], [], [])
+
+    monkeypatch.setattr(adapter.select, "select", fake_select)
+
+    class _Line:
+        def __init__(self):
+            self._left = 1
+
+        def readline(self):
+            if self._left:
+                self._left -= 1
+                return "steer me\n"
+            return ""
+
+    repl = SimpleNamespace()
+    listener = adapter.SteeringListener(repl, stream=_Line())
+    listener._stop = False
+    listener._loop()
+    listener._loop()  # second call: readline returns '' -> loop exits
+
+    item = adapter.drain_steering(repl)
+    assert item == {"text": "steer me", "kind": "constraint", "scope": "task"}
+
+
+def test_loop_returns_when_readline_raises(monkeypatch) -> None:
+    """A closed/broken stream ends the steering reader cleanly."""
+    from types import SimpleNamespace
+
+    import xenon.repl.runtime_adapter as adapter
+
+    def fake_select(streams, r, w, timeout):
+        return ([streams[0]], [], [])
+
+    monkeypatch.setattr(adapter.select, "select", fake_select)
+
+    class _Broken:
+        def readline(self):
+            raise OSError("closed")
+
+    repl = SimpleNamespace()
+    listener = adapter.SteeringListener(repl, stream=_Broken())
+    listener._stop = False
+    listener._loop()  # must return without raising
