@@ -80,6 +80,14 @@ class EventKind(str, Enum):
     # evidence: it explains "why was this call not asked?", nothing more.
     GRANT_ADDED = "grant_added"
     GRANT_REVOKED = "grant_revoked"
+    # Evidence-gated lessons (docs/design/self-evolution.md).  A lesson is
+    # proposed by a harness judgment, stored as a visible artifact, applied to
+    # the next same-fingerprint task, and retired when recurrences prove it
+    # wrong.  Events make the whole chain replayable.
+    LESSON_PROPOSED = "lesson_proposed"
+    LESSON_STORED = "lesson_stored"
+    LESSON_APPLIED = "lesson_applied"
+    LESSON_RETIRED = "lesson_retired"
     INTERRUPT = "interrupt"
     LEGACY_SESSION = "legacy_session"
 
