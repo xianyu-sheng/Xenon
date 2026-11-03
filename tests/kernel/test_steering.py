@@ -375,19 +375,26 @@ def test_listener_pushes_typed_lines_into_the_transport():
             pass
 
 
-def test_listener_refuses_to_start_when_select_cannot_poll_the_stream():
+def test_listener_refuses_to_start_when_select_cannot_poll_the_stream(
+    monkeypatch,
+) -> None:
+    """When select() rejects the stream (Windows console/pipe), the listener
+    refuses to start instead of spawning a zombie stdin owner."""
     import os
     from types import SimpleNamespace
 
-    from xenon.repl.runtime_adapter import SteeringListener
+    import xenon.repl.runtime_adapter as adapter
+
+    def no_select(streams, r, w, timeout):
+        raise ValueError("select() only supports sockets here")
+
+    monkeypatch.setattr(adapter.select, "select", no_select)
 
     read_fd, write_fd = os.pipe()
     try:
         repl = SimpleNamespace()
-        listener = SteeringListener(repl, stream=os.fdopen(read_fd))
-        # select() on a pipe fd is a platform question; either way the
-        # listener must either start (unix tty) or refuse cleanly (windows).
-        assert listener.start() in {True, False}
+        listener = adapter.SteeringListener(repl, stream=os.fdopen(read_fd))
+        assert listener.start() is False
     finally:
         try:
             os.close(write_fd)
