@@ -415,3 +415,147 @@ def test_retired_lessons_are_not_applied(tmp_path: Path) -> None:
         if event.kind is EventKind.LESSON_APPLIED
     ]
     assert "L-0002" not in applied
+
+
+# ── slice 3: failure-path guards ─────────────────────────────────
+
+
+def test_record_recurrences_ignores_non_lesson_stores() -> None:
+    from xenon.harness.lessons import record_recurrences
+    from xenon.ledger.store import Ledger
+
+    ledger = Ledger.in_memory("t1")
+    assert record_recurrences(ledger, "not-a-store") == []
+
+
+def test_record_recurrences_skips_non_veto_policy_and_approved() -> None:
+    from xenon.harness.lessons import record_recurrences
+    from xenon.ledger.events import EventKind
+    from xenon.ledger.store import Ledger
+
+    store = LessonStore(Path("nonexistent.yaml"))
+    store._lessons = []
+    ledger = Ledger.in_memory("t2")
+    ledger.append(EventKind.POLICY_DECISION, EventSource.GATE, {"kind": "allow"})
+    ledger.append(EventKind.USER_APPROVAL, EventSource.USER, {"approved": True})
+
+    assert record_recurrences(ledger, store) == []
+
+
+def test_a_broken_lesson_store_does_not_fail_the_task(tmp_path: Path) -> None:
+    from tests.harness.test_exec import _repo
+    from xenon.harness.llm import ModelConfig, build_llm_loop_strategy
+    from xenon.harness.runner import run_task
+    from xenon.kernel.strategies import LoopProfile
+
+    _repo(tmp_path)
+    store = LessonStore(tmp_path / "lessons.yaml")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("store broke")
+
+    store.match_for_task = boom
+    store.record_application = boom
+    strategy = build_llm_loop_strategy(
+        ModelConfig(model_id="deepseek/deepseek-v4-flash"),
+        LoopProfile(),
+        client=_fake_client(),
+    )
+    run = run_task(
+        "read README and report",
+        strategy=strategy,
+        workspace=tmp_path,
+        ledger_dir=tmp_path / "ledger",
+        task_id="lesson-broken-store",
+        max_steps=3,
+        lesson_store=store,
+    )
+
+    assert run.result is not None
+
+
+def test_recurrence_retires_and_runner_writes_the_event(tmp_path: Path) -> None:
+    """Full loop: a lesson applied, the same failure recurs, the lesson is
+    retired and LESSON_RETIRED lands in the task's ledger."""
+
+    from tests.harness.test_exec import _repo
+    from xenon.harness.llm import ModelConfig, build_llm_loop_strategy
+    from xenon.harness.runner import run_task
+    from xenon.kernel.strategies import LoopProfile
+    from xenon.ledger.store import Ledger
+
+    _repo(tmp_path)
+    # A task that edits then claims an unverifiable effect opens a debt with a
+    # deterministic shape; the lesson's fingerprint is that same shape.
+    class DebtClient:
+        """First call edits, second call finishes with an unverifiable claim."""
+
+        def __init__(self):
+            self.i = 0
+
+        def __call__(self, model_id, messages, **kwargs):
+            self.i += 1
+            if self.i == 1:
+                return json.dumps(
+                    {
+                        "action": "call_tool",
+                        "capability": "edit",
+                        "params": {
+                            "files": [
+                                {"path": "calc/add.py",
+                                 "content": "def add(a, b):" + chr(10) + "    return a + b" + chr(10)}
+                            ]
+                        },
+                    }
+                )
+            return json.dumps(
+                {
+                    "action": "finish",
+                    "answer": "done",
+                    "claims": [
+                        {"id": "c1", "kind": "tool_succeeded", "target": "echo hi"}
+                    ],
+                }
+            )
+
+    client = DebtClient()
+    # First run the task without a store to learn the exact debt shape, then
+    # store the matching lesson.
+    from xenon.kernel.lesson_proposer import propose_lesson
+
+    store = LessonStore(tmp_path / "lessons.yaml")
+    # Pre-seed a lesson whose fingerprint matches the canonical debt shape of
+    # an unverifiable claim, at recurrence count 2 (one more recurs → retire).
+    lesson = _lesson(id="L-0001", fingerprint="fp-x", recurrences=2, retired=False)
+    # The canonical debt shape an unverifiable claim actually produces:
+    # obligation kind is requirement_met, target is empty, reason is the
+    # controller's fixed string.
+    lesson.fingerprint = propose_lesson(
+        "debt_opened",
+        {
+            "kind": "requirement_met",
+            "target": "",
+            "reason": "receipt status is not indexed as a claim fact",
+        },
+    ).fingerprint
+    store.add(lesson)
+
+    strategy = build_llm_loop_strategy(
+        ModelConfig(model_id="deepseek/deepseek-v4-flash"),
+        LoopProfile(),
+        client=client,
+    )
+    run = run_task(
+        "edit calc/add.py then run a test",
+        strategy=strategy,
+        workspace=tmp_path,
+        ledger_dir=tmp_path / "ledger",
+        task_id="lesson-retire",
+        max_steps=4,
+        lesson_store=store,
+    )
+
+    events = Ledger(run.ledger_path, "lesson-retire").read()
+    kinds = [event.kind.value for event in events]
+    assert "lesson_retired" in kinds, kinds
+    assert lesson.retired is True

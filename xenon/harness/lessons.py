@@ -202,14 +202,20 @@ def record_recurrences(ledger: Any, store: LessonStore) -> list[str]:
             "user_approval",
         }:
             continue
-        payload = dict(getattr(event, "payload", {}) or {})
-        if kind_value == "policy_decision" and payload.get("kind") != "veto":
+        # Reuse the proposer: it applies the canonical subset, so a lesson
+        # proposed at failure time and a failure observed after the task
+        # compute the *same* fingerprint (the full event payload carries
+        # obligation_id/stage/attempts… that must not change the identity).
+        try:
+            from xenon.kernel.lesson_proposer import propose_lesson
+
+            proposal = propose_lesson(kind_value, dict(getattr(event, "payload", {}) or {}))
+        except Exception:  # noqa: BLE001 — counting is advisory
             continue
-        if kind_value == "user_approval" and payload.get("approved"):
+        if proposal is None:
             continue
-        fingerprint = lesson_fingerprint(kind_value, payload)
         for lesson in store:
-            if lesson.retired or lesson.fingerprint != fingerprint:
+            if lesson.retired or lesson.fingerprint != proposal.fingerprint:
                 continue
             if store.record_recurrence(lesson.id):
                 retired.append(lesson.id)
