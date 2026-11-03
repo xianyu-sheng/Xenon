@@ -261,6 +261,17 @@ def kernel_progress_reporter(repl: Any) -> Any:
     console = _console_for(repl)
 
     def report(seconds: float, chars: int) -> None:
+        # #372 E1: push the live kernel snapshot into the status bar on every
+        # model call — data comes from the runtime, never guessed by the REPL.
+        status_bar = getattr(repl, "status_bar", None)
+        runtime = getattr(repl, "_active_runtime", None)
+        if status_bar is not None and runtime is not None:
+            snapshot = getattr(runtime, "status_snapshot", None)
+            if callable(snapshot):
+                try:
+                    status_bar.set_kernel_status(snapshot())
+                except Exception:  # noqa: BLE001 — progress is cosmetic
+                    pass
         if seconds < 1.0:
             return  # short calls need no narration
         try:
@@ -688,6 +699,7 @@ class RuntimeAdapter:
         sink: Any = None,
         on_runtime: Any = None,
         context_blocks: Any = (),
+        turn_path: Any = (),
     ) -> HarnessRun:
         if self.strategy_mode == "legacy":
             raise KernelAdapterError(
@@ -756,6 +768,7 @@ class RuntimeAdapter:
             constraints=tuple(constraints),
             sink=sink,
             context_blocks=tuple(context_blocks or ()),
+            turn_path=tuple(turn_path or ()),
             audit_provider=self.audit_provider,
             approval=self.approval if self.allow_approval else None,
             allow_approval=self.allow_approval,
@@ -1341,6 +1354,18 @@ def run_kernel_turn(
         listener = SteeringListener(repl)
         listener.start()
         blocks = session_context_blocks(repl, objective)
+        # #372 B3: a task reached through a rewind/fork carries the branch path
+        # into the kernel view (Turn path: line).  Linear chat passes (); the
+        # tree decides, never the REPL guessing.
+        tree = getattr(repl, "_turn_tree", None)
+        turn_path = ()
+        if tree is not None:
+            branch = getattr(tree, "turn_path", None)
+            if callable(branch):
+                try:
+                    turn_path = branch()
+                except Exception:  # noqa: BLE001 — cosmetic
+                    turn_path = ()
 
         try:
             run = adapter.run(
@@ -1349,6 +1374,7 @@ def run_kernel_turn(
                 sink=sink,
                 on_runtime=_attach,
                 context_blocks=blocks,
+                turn_path=turn_path,
             )
             # Remember the human's decision so the next task in this session
             # does not ask again.  The kernel already wrote GRANT_ADDED; this is
@@ -1360,6 +1386,11 @@ def run_kernel_turn(
         finally:
             if callable(loop_setter):
                 loop_setter(None)
+            status_setter = getattr(status_bar, "set_kernel_status", None)
+            if callable(status_setter):
+                # #372 E1: no kernel turn is running; the bar must fall back
+                # to /mode config instead of showing a stale "last loop".
+                status_setter(None)
             guard.__exit__()
             listener.stop()
             repl._active_runtime = None

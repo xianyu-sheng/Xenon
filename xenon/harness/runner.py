@@ -172,6 +172,7 @@ def run_task(
     deny_rules: Sequence[Any] = (),
     ask_rules: Sequence[Any] = (),
     lesson_store: Any = None,
+    turn_path: Sequence[str] = (),
 ) -> HarnessRun:
     """Run one objective through the kernel with an injected strategy.
 
@@ -215,6 +216,7 @@ def run_task(
         context_blocks=tuple(context_blocks),
         parent_task_id=parent_task_id,
         batch_id=batch_id,
+        turn_path=tuple(turn_path),
     )
     # Self-evolution slice 3 (docs/design/self-evolution.md): a bounded set of
     # active lessons rides as constraints — the model *must* see them in the

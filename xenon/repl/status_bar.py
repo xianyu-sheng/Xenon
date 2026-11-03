@@ -62,6 +62,10 @@ class StatusBar:
         self._notification_expires: float = 0.0
         self._session_start: float = _time.monotonic()
         self._tool_call_count: int = 0
+        # #372 E1: the live kernel snapshot (phase/steps/tokens/stalled), set
+        # by the runtime's own progress hook.  None means no kernel turn is
+        # running — the bar then shows /mode config, never stale "last loop".
+        self._kernel_snapshot: dict[str, Any] | None = None
 
     def set_last_model(self, model_id: str) -> None:
         self._last_model = model_id
@@ -73,6 +77,12 @@ class StatusBar:
 
         self._active_loop = name or None
         # Problem 5: 状态变更时刷新
+        self.refresh()
+
+    def set_kernel_status(self, snapshot: dict[str, Any] | None) -> None:
+        """#372 E1: live kernel state from the runtime, verbatim."""
+
+        self._kernel_snapshot = snapshot
         self.refresh()
 
     def set_streaming(self, enabled: bool) -> None:
@@ -226,6 +236,18 @@ class StatusBar:
         )
         if self._tool_call_count > 0:
             status_parts.append(f"[bold cyan]🔧[/bold cyan] {self._tool_call_count}")
+        if self._kernel_snapshot is not None:
+            # #372 E1: live kernel facts, rendered verbatim from the runtime.
+            snap = self._kernel_snapshot
+            kernel_text = (
+                f"step {int(snap.get('steps') or 0)} · "
+                f"{snap.get('phase') or '?'} · "
+                f"tool {int(snap.get('tool_calls') or 0)}"
+            )
+            stalled = float(snap.get("stalled_seconds") or 0)
+            if stalled > 0:
+                kernel_text += f" · 停滞 {stalled:.0f}s"
+            status_parts.append(f"[bold cyan]内核[/bold cyan] {kernel_text}")
         cache_badge = self._cache_badge()
         if cache_badge:
             cache_text, cache_style = cache_badge

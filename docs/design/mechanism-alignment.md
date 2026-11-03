@@ -83,11 +83,12 @@
 - `MemoryKind`：`PREFERENCE` / `FACT`；
 - kernel 轮次通过 `session_context_blocks()` 注入（`#340`），标注为"参考，不是指令，不是证据"。
 
-### B3. 树感知 ⚠️ 半接
+### B3. 树感知 ✅（#372 已落地）
 
 - `TurnTree` 存在（`xenon/session/tree.py`），Pi 风格，可从事件流重建；
-- 接入了 `rewind` / `session_ops` **但没进 kernel 的模型视图**：kernel 的 view 用 `working_set`（事件投影），不用树。
-- 所以"树感知"目前只服务于 rewind/resume，不参与上下文构建。
+- 接入了 `rewind` / `session_ops`；#372 起 `TurnTree.turn_path()` 在 rewind/fork 后
+  把分支路径送进 kernel 视图（`Turn path:` 行，`ModelView.turn_path`），线性对话不渲染。
+- 普通对话仍是 `working_set`（事件投影），树只补分支上下文，不替代投影。
 
 ---
 
@@ -120,7 +121,7 @@
 
 ## D. 模型调用侧
 
-### D1. 缓存前缀优先 ⚠️
+### D1. 缓存前缀优先 ✅（#372 已落地）
 
 - `cache_context` / `cache_lane_registry` 存在（`xenon/utils/llm_client.py:165`）；
 - kernel 视图天然前缀稳定（system prompt 确定性生成 + working set 按 seq 排序）；
@@ -134,7 +135,7 @@
 
 ## E. 交互与可靠性
 
-### E1. 状态栏与 loop 接轨 ✅（已修）
+### E1. 状态栏与 loop 接轨 ✅（#372 已落地）
 
 - `status_bar.set_active_loop()`（`xenon/repl/status_bar.py:71`），`_display_mode()` 优先显示正在跑的 loop（`#345`）。
 - ⚠️ 但只显示 loop **名字**，不显示步数/停滞状态/当前阶段。
@@ -175,3 +176,29 @@
 - `engine/task_state.py` 死方法（`reconcile_satisfied_claims` 等）零外部调用，目录名仍误导；
 - `xenon/repl/engine_host.py` 名字是 legacy，身体已经是 kernel（`_run_react_engine` → `run_kernel_turn`）；
 - `turn_flow.py` 里 `pending`/`recipe` 两条 shim 仍走旧 `TaskState` 路径。
+---
+
+## 职责边界表（防重复添加：每个机制只管一件事）
+
+| 机制 | 生命周期 | 注入时机 | 匹配维度 | 视图通道 | 一句话职责 |
+|---|---|---|---|---|---|
+| 自进化 lessons | 跨任务/跨会话 | 任务开始（预置） | 指纹（事件 payload） | `Constraints: - [lesson L-x]` | 从历史学：上次同指纹任务失败 → 这次带上教训 |
+| 循环验证 loop notes | 单任务内 | 信号命中后下一轮 | 信号（kind+window） | `Notes:` 区段 | 当场教：本次陷入循环 → 诊断给一次纠偏 |
+| steering / operator | 单任务内 | 实时 USER_INPUT | seq | `Constraints: - … [operator, seq N]` | 人在环里：operator 实时指令/纠正 |
+| memory context_blocks | 跨任务会话 | 会话注入 | label | context blocks | 参考材料：检索/设置的背景，非指令非证据 |
+| session grants | 跨任务会话 | 授权后 | capability+target | （不写视图） | 权限记忆：为什么不再问（可撤销） |
+| debt/obligations | 单任务内 | 未验证即记 | verdict | `Open obligations` | 未验义务：不可静默丢弃 |
+| reflection | 单任务内 | 每次 action 前 | 上轮 verdict | （策略内） | 模型自省：对校验结果反思，防自环（`_seen`） |
+| audit proposer | 单任务内 | finalize 阶段 | 语义义务 | （提案） | 收敛保证：提案封顶 PARTIAL，轮数上限 |
+
+**防环三保险（同原则、不同对象，不是重复）**：loop detector 防**模型**循环
+（#369 教一次再杀）；reflection `_seen` 防**反思**循环；finalizer
+`_audit_rounds` 防**审计**循环。若未来某处需要重复实现"循环计数"，应提取
+共享组件而不是再写一份。
+
+**已知的重叠风险（已记录）**：
+- A2 `no_progress` 信号与 E3 停滞超时是同一个洞的两种填法——停滞超时应做
+  **no_progress 的 wall-clock 触发器**（同一 StuckDetector），继承"教一次"
+  逻辑，不新增机制。
+- B1 两套 compaction（chat history vs kernel working set）：数据不同可接受，
+  但用户可见的"压缩"概念要文档说清。

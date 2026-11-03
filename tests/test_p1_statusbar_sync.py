@@ -380,3 +380,29 @@ def test_window_formatting_covers_fractional_and_small_windows():
     assert _format_window(1_500_000) == "1.5M"
     assert _format_window(512_000) == "512K"
     assert _format_window(512) == "512"
+
+
+def test_kernel_snapshot_renders_step_phase_tool_and_stall() -> None:
+    """#372 E1: live kernel facts render verbatim; no kernel turn -> /mode."""
+    bar = _make_status_bar()
+
+    bar.set_kernel_status(
+        {
+            "phase": "tool_call",
+            "steps": 7,
+            "tokens": 1200,
+            "stalled_seconds": 42.0,
+            "tool_calls": 5,
+        }
+    )
+    text = str(bar.render().renderable)
+    assert "内核" in text
+    assert "step 7" in text
+    assert "tool_call" in text
+    assert "tool 5" in text
+    assert "停滞 42s" in text
+
+    # No kernel turn: the bar falls back to mode config, no stale facts.
+    bar.set_kernel_status(None)
+    text = str(bar.render().renderable)
+    assert "内核" not in text
