@@ -130,3 +130,16 @@ def test_why_lines_preserve_ledger_order() -> None:
         "debt requirement_met x: b",
         "plan_accepted: 0 step(s)",
     ]
+
+
+def test_why_lines_yield_entirely_under_an_extreme_budget() -> None:
+    """room < minimal-entry + one why line: every why yields, but the fact
+    (seqs) survives — nothing is silently dropped."""
+    dropped = [
+        _summary(1, "control_decision", decision="deliver", reason="y" * 300),
+    ]
+    entry = fold_dropped(dropped, max_chars=100, used=0, size_of=_size)
+
+    assert entry is not None
+    assert "why" not in entry
+    assert entry["seqs"] == [1]
