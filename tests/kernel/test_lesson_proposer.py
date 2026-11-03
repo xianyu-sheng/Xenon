@@ -128,3 +128,31 @@ class _DenyApproval:
 
     def request(self, view, action, decision) -> bool:
         return False
+
+
+def test_a_broken_proposer_never_fails_the_task(tmp_path) -> None:
+    import xenon.kernel.runtime as runtime_module
+    from tests.kernel.test_north_star import ScriptedStrategy, _runtime
+    from tests.kernel.test_session_grants import _policy
+    from xenon.kernel.contracts import CallTool, Capability, TaskSpec, ToolIntent
+    from xenon.ledger.store import Ledger
+
+    ledger = Ledger.in_memory("lesson-broken")
+    runtime = _runtime(ledger, policies=(_policy(str(tmp_path)),))
+    runtime._approval = _DenyApproval()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("proposer broke")
+
+    runtime_module.propose_lesson = boom
+    action = CallTool(
+        ToolIntent(capability=Capability.SHELL, params={"command": "git log"})
+    )
+    runtime.run(
+        TaskSpec(task_id="lesson-broken", objective="o", workspace=str(tmp_path)),
+        ScriptedStrategy([action]),
+    )
+
+    # The task ran (blocked by the denial), and the broken proposer did not
+    # turn it into an exception.
+    assert runtime_module.propose_lesson is boom

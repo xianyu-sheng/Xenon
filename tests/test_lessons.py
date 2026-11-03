@@ -162,3 +162,68 @@ def test_application_counting(tmp_path: Path) -> None:
 
     assert lesson.applied == 1
     assert lesson.last_applied_at == 42.0
+
+
+# ── store edge cases the first batch missed ───────────────────────
+
+
+def test_a_non_list_document_is_ignored(tmp_path: Path) -> None:
+    path = tmp_path / "lessons.yaml"
+    path.write_text(json.dumps({"lessons": "not-a-list"}), encoding="utf-8")
+
+    assert len(LessonStore(path)) == 0
+
+
+def test_non_mapping_rows_are_skipped(tmp_path: Path) -> None:
+    path = tmp_path / "lessons.yaml"
+    path.write_text(
+        json.dumps({"lessons": [{"id": "ok", "kind": "pitfall", "trigger_event": "x",
+                                 "fingerprint": "f", "action_text": "a"}]}),
+        encoding="utf-8",
+    )
+
+    assert len(LessonStore(path)) == 1
+
+
+def test_adding_replaces_the_same_fingerprint(tmp_path: Path) -> None:
+    store = LessonStore(tmp_path / "lessons.yaml")
+    first = _lesson(action_text="old")
+    second = _lesson(action_text="new")
+    store.add(first)
+    store.add(second)
+
+    assert len(store) == 1
+    assert next(iter(store)).action_text == "new"
+
+
+def test_operations_on_an_unknown_lesson_are_noops(tmp_path: Path) -> None:
+    store = LessonStore(tmp_path / "lessons.yaml")
+
+    assert store.record_application("nope") is False
+    assert store.record_recurrence("nope") is False
+    assert store.retire("nope") is False
+    assert store.match("debt_opened", {"kind": "x"}) is None
+    assert store.active() == ()
+
+
+def test_retire_and_rows_expose_state(tmp_path: Path) -> None:
+    store = LessonStore(tmp_path / "lessons.yaml")
+    lesson = _lesson()
+    store.add(lesson)
+
+    assert store.retire(lesson.id) is True
+    assert store.active() == ()
+    assert store.rows()[0]["retired"] is True
+
+
+def test_application_then_save_then_reload(tmp_path: Path) -> None:
+    path = tmp_path / "lessons.yaml"
+    store = LessonStore(path)
+    lesson = _lesson()
+    store.add(lesson)
+    store.record_application(lesson.id)
+    store.save()
+
+    reloaded = LessonStore(path)
+
+    assert next(iter(reloaded)).applied == 1
