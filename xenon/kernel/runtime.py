@@ -213,6 +213,8 @@ class LoopRuntime:
         self._last_progress_at = self._clock()
         self._usage = UsageTotals()
         self._steering = SteeringState()
+        self._loop_taught: dict[str, int] = {}
+        self._loop_notes: list[str] = []
         self._accept_debt = False
         self._context_digest = ""
         self._steering_source: Any = None
@@ -243,6 +245,9 @@ class LoopRuntime:
         self._stuck = StuckDetector(max_identical=_max_identical_calls(spec))
         self._last_progress_at = self._clock()
         self._usage = UsageTotals()
+        self._steering = SteeringState()
+        self._loop_taught = {}
+        self._loop_notes = []
         self._accept_debt = bool(spec.accept_debt)
         self._compaction_signature = ""
         self._finalize_decision = None
@@ -405,6 +410,7 @@ class LoopRuntime:
                 extra_constraints=self._steering.extra_constraints(),
                 superseded=self._steering.superseded(),
                 strategy_hint=self._steering.strategy_hint(),
+                notes=tuple(self._loop_notes),
             )
             self._transition(TaskPhase.THINKING, "propose action")
             try:
@@ -696,18 +702,15 @@ class LoopRuntime:
             binding.call.spec_name, binding.call.params
         )
         if repeat is not None:
-            self._append(
-                EventKind.POLICY_DECISION,
-                EventSource.GATE,
-                {
-                    "kind": PolicyDecisionKind.VETO.value,
-                    "reason": repeat.reason,
-                    "scope": [binding.call.spec_name],
-                    "signal": repeat.kind,
-                },
-                step_id=self._current_step_id(),
+            result = self._on_loop_signal(
+                repeat.kind,
+                repeat.detail,
+                binding.call.spec_name,
+                repeat.reason,
+                repeat,
             )
-            return self._budget_block(repeat.reason, ("loop",))
+            if result is not None:
+                return result
 
         self._transition(TaskPhase.TOOL_CALL, binding.call.spec_name)
         try:
@@ -757,27 +760,26 @@ class LoopRuntime:
         # retrying the same wall with different arguments is stopped with a
         # *diagnosis* instead of being left to exhaust the step budget.
         signal = self._stuck.observe(receipt)
-        if self._stuck.no_progress_streak == 0:
-            # This receipt taught something new: the stall clock starts over.
-            # ``0`` is exactly the detector's way of saying "progress".
-            self._last_progress_at = self._clock()
         if signal is not None:
-            self._append(
-                EventKind.POLICY_DECISION,
-                EventSource.GATE,
-                {
-                    "kind": PolicyDecisionKind.VETO.value,
-                    "reason": signal.reason,
-                    "scope": [signal.tool or receipt.tool],
-                    "signal": signal.kind,
-                },
-                step_id=self._current_step_id(),
+            result = self._on_loop_signal(
+                signal.kind,
+                signal.detail,
+                signal.tool or receipt.tool,
+                signal.reason,
+                signal,
             )
-            self._propose_lesson(
-                "loop_detected",
-                {"signal": signal.kind, "reason": signal.reason},
-            )
-            return self._budget_block(signal.reason, ("loop",))
+            if result is not None:
+                return result
+        elif self._stuck.no_progress_streak == 0:
+            # No signal and this receipt taught something new: the run left
+            # the loop (or never was in one).  The loop-teaching identity
+            # resets, so a *later* loop is a fresh loop (#369).  Inside a
+            # loop the identity is not reset — a same-signature repeat must
+            # still kill the run after it was taught once.
+            self._last_progress_at = self._clock()
+            self._loop_taught.clear()
+
+        verdict = self._controller.reconcile(self._active_step, receipt)
 
         verdict = self._controller.reconcile(self._active_step, receipt)
         self._append(
@@ -2119,7 +2121,7 @@ class LoopRuntime:
         return max(0, self._spec.budget.max_audit_rounds)
 
     def _budget_block(
-        self, reason: str, scope: Sequence[str] = ()
+        self, reason: str, scope: Sequence[str] = (), *, signal: str = ""
     ) -> TaskResult:
         # Attach the loop detector's diagnosis so "step budget exhausted" says
         # what the run was actually doing.  The budget still decides the stop;
@@ -2127,19 +2129,93 @@ class LoopRuntime:
         diagnosis = self._stuck.diagnosis
         if diagnosis and diagnosis not in reason:
             reason = f"{reason} [{diagnosis}]"
+        payload: dict[str, Any] = {
+            "kind": PolicyDecisionKind.VETO.value,
+            "reason": reason,
+            "scope": list(scope),
+        }
+        if signal:
+            payload["signal"] = signal
         self._append(
             EventKind.POLICY_DECISION,
             EventSource.GATE,
-            {
-                "kind": PolicyDecisionKind.VETO.value,
-                "reason": reason,
-                "scope": list(scope),
-            },
+            payload,
         )
         self._transition(TaskPhase.BLOCKED, reason)
         return self._result(
             accepted=False, evidence=EvidenceStatus.UNVERIFIED
         )
+
+    def _on_loop_signal(
+        self,
+        kind: str,
+        detail: str,
+        tool: str,
+        reason: str,
+        signal: Any = None,
+    ) -> TaskResult | None:
+        """Teach the model once, then kill the run (#369).
+
+        Every hit writes ``LOOP_DETECTED`` with the structured facts (kind,
+        detail, tool) so the ledger can answer "what was the loop doing".  The
+        first ``max_loop_corrections`` hits for *this signal* instead inject a
+        diagnosis into the next view's ``Notes`` and let the model take a
+        corrective turn — evidence, approval and delivery rules are untouched.
+        A repeat of the same signal after teaching kills the run with the
+        correction count in the reason, so teaching can never become an
+        infinite retry.  ``max_loop_corrections=0`` restores the pre-#369
+        behaviour exactly.
+
+        Returns ``None`` when the model may continue, or the blocking result.
+        """
+
+        # Identity of the loop is kind + window, not the detail text: the
+        # detail embeds a counter ("4 times") that would make every hit look
+        # like a fresh signal and teaching would never end.
+        window = tuple(sorted(signal.window)) if signal is not None else ()
+        key = hashlib.sha256(
+            f"{kind}|{window}".encode("utf-8")
+        ).hexdigest()[:16]
+        attempts = self._loop_taught.get(key, 0)
+        max_corrections = (
+            self._spec.max_loop_corrections
+            if self._spec is not None
+            else 1
+        )
+        self._append(
+            EventKind.LOOP_DETECTED,
+            EventSource.GATE,
+            {
+                "kind": kind,
+                "detail": detail,
+                "tool": tool,
+                "reason": reason,
+                "correction_attempt": attempts,
+            },
+            step_id=self._current_step_id(),
+        )
+        self._propose_lesson(
+            "loop_detected",
+            {"signal": kind, "reason": reason},
+        )
+        if attempts >= max_corrections:
+            # Taught already (or max_loop_corrections=0): same signal again
+            # means the model did not change its approach.  The reason states
+            # how many corrective turns were offered, per the acceptance.
+            if attempts:
+                suffix = (
+                    f"after {attempts} correction attempt"
+                    + ("s" if attempts != 1 else "")
+                )
+                reason = f"{reason} {suffix}"
+            return self._budget_block(reason, ("loop", tool), signal=kind)
+        self._loop_taught[key] = attempts + 1
+        self._loop_notes.append(
+            f"Loop detected ({kind}, attempt {attempts + 1}/"
+            f"{max_corrections}): {detail}. "
+            "Change the approach; the same signal is taught only once."
+        )
+        return None
 
     def _sync_debt(self, verdicts: Sequence[Verdict]) -> None:
         latest = _latest_verdict_map(verdicts)

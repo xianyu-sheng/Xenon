@@ -63,6 +63,12 @@
 
 ---
 
+**状态（#369，已落地）**：检测命中时不再直接 `BLOCKED`。写 `LOOP_DETECTED`
+事件（kind/detail/tool 结构化事实），并把诊断注入下一轮视图的 `Notes:`
+区段；给模型 `max_loop_corrections`（默认 1）次纠偏机会。同一信号重复命中
+→ 终止，理由含 "after N correction attempt(s)"；模型换做法（无信号且产生
+新信息）→ 计数重置。`max_loop_corrections=0` 完全恢复旧行为。纠偏只是提示，
+证据/权限/交付判定不变。
 ## B. 上下文
 
 ### B1. 上下文压缩零 LLM ✅
