@@ -269,9 +269,15 @@ def _summary(
             if key in payload:
                 item[key] = payload[key]
     elif kind in {"debt_opened", "debt_closed"}:
-        for key in ("obligation_id", "kind", "target", "reason", "stage"):
+        # Same rule as control_decision: ``item["kind"]`` is the event type;
+        # the payload's obligation kind (requirement_met / …) goes to
+        # ``debt_kind``.  Without this the event type was overwritten and
+        # ``_priority`` could never pin debt — the reason compaction dropped.
+        for key in ("obligation_id", "target", "reason", "stage"):
             if key in payload:
                 item[key] = _clip(payload[key], 400)
+        if "kind" in payload:
+            item["debt_kind"] = _clip(payload["kind"], 400)
     elif kind == "thought":
         item["text"] = _clip(payload.get("text") or "", 400)
     elif kind == "state_transition":
@@ -282,7 +288,16 @@ def _summary(
         for key in ("objective", "mode", "workspace"):
             if key in payload:
                 item[key] = _clip(payload[key], 400)
-    elif kind in {"audit_reported", "control_decision", "delivered", "finalized"}:
+    elif kind == "control_decision":
+        # ``item["kind"]`` is the *event* type; the payload's own ``kind``
+        # (deliver / steering / …) goes to ``decision`` so the event type is
+        # not overwritten (the decision-chain extractor relies on it).
+        for key in ("reason", "obligation_ids"):
+            if key in payload:
+                item[key] = _clip(payload[key], 300)
+        if "kind" in payload:
+            item["decision"] = _clip(payload["kind"], 300)
+    elif kind in {"audit_reported", "delivered", "finalized"}:
         for key in ("kind", "reason", "commit", "evidence_status"):
             if key in payload:
                 item[key] = _clip(payload[key], 300)
