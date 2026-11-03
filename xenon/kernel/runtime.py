@@ -2235,6 +2235,10 @@ class LoopRuntime:
             f"{max_corrections}): {detail}. "
             "Change the approach; the same signal is taught only once."
         )
+        # The Notes section must stay bounded: a run that keeps changing walls
+        # could otherwise accumulate one note per step and blow the prompt.
+        # Only the most recent notes survive; the ledger keeps the full chain.
+        del self._loop_notes[:-5]
         return None
 
     def _sync_debt(self, verdicts: Sequence[Verdict]) -> None:
