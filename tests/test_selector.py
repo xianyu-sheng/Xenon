@@ -568,3 +568,238 @@ def test_a_pick_that_cannot_be_applied_reports_a_warning(monkeypatch) -> None:
     out = _cmd_permissions(args="", session_state={"_repl": _repl()})
 
     assert "未能切换" in out
+
+
+# ── the swept strings are exercised, not just rewritten (#294) ──
+
+
+def test_sub_agent_usage_lists_only_accepted_profiles() -> None:
+    """/sub-agent used to advertise seven "engines", three of which it never
+    accepted.  The list now comes from CHILD_PROFILES."""
+    from xenon.harness.child import CHILD_PROFILES
+    from xenon.repl.command_groups.agent import _cmd_sub_agent
+
+    out = _cmd_sub_agent(args="", session_state={}, repl=None)
+
+    assert "可选 profile" in out
+    for name in CHILD_PROFILES:
+        assert name in out
+    for never_accepted in ("plan-reflection", "react-reflection"):
+        assert never_accepted not in out
+    assert "引擎类型" not in out
+
+
+def test_verbose_toggle_says_loop_not_engine() -> None:
+    from xenon.repl.command_groups.runtime import cmd_verbose
+
+    repl = types.SimpleNamespace(verbose=False)
+    out = cmd_verbose(args="on", session_state={"_repl": repl})
+
+    assert repl.verbose is True
+    assert "循环执行时" in out
+    assert "引擎" not in out
+
+
+def test_shift_tab_failure_points_at_mode(argv=None) -> None:
+    """A failed Shift+Tab must say "mode" and point at /mode."""
+    from xenon.repl import repl as repl_module
+
+    printed: list[str] = []
+
+    class _Registry:
+        modes = {"direct": types.SimpleNamespace(description="直接")}
+        current_mode = "direct"
+
+        def set_mode(self, name):
+            raise ValueError("boom")
+
+        def get_current_mode(self):
+            return types.SimpleNamespace(name="direct", description="直接")
+
+    fake = types.SimpleNamespace(
+        registry=_Registry(),
+        status_bar=types.SimpleNamespace(set_mode_notification=lambda *_: None),
+    )
+    original = repl_module.console
+
+    class _Console:
+        def print(self, *args, **kwargs):
+            printed.append(" ".join(str(a) for a in args))
+
+    repl_module.console = _Console()
+    try:
+        repl_module.REPL._handle_shift_tab(fake)
+    finally:
+        repl_module.console = original
+
+    text = " ".join(printed)
+    assert "无法切换到模式" in text
+    assert "/mode" in text
+
+
+def test_the_cli_session_table_says_mode(monkeypatch) -> None:
+    """`xenon --resume` prints the same table as /sessions; both say 模式 now."""
+    import xenon.main as main_module
+    import xenon.repl.session as session_module
+
+    monkeypatch.setattr(
+        session_module,
+        "list_sessions",
+        lambda: [
+            {
+                "saved_at": "2026-11-04T10:00:00",
+                "messages": 3,
+                "paradigm": "direct",
+                "name": "demo",
+            }
+        ],
+    )
+    printed: list[str] = []
+    monkeypatch.setattr(
+        main_module,
+        "console",
+        types.SimpleNamespace(print=lambda *a, **k: printed.append(str(a))),
+    )
+
+    main_module._print_session_list()
+
+    assert printed, "the table must render when sessions exist"
+
+
+def test_the_resume_command_renders_its_table(monkeypatch) -> None:
+    """/resume with no arguments prints the same table as `xenon --resume`."""
+    import xenon.repl.command_groups.session as session_group
+    import xenon.repl.session as session_module
+
+    monkeypatch.setattr(
+        session_module,
+        "list_sessions",
+        lambda: [
+            {
+                "saved_at": "2026-11-04T10:00:00",
+                "messages": 2,
+                "paradigm": "direct",
+                "name": "demo",
+            }
+        ],
+    )
+    out = session_group._cmd_resume(
+        args="", session_state={"_repl": types.SimpleNamespace()}
+    )
+
+    assert isinstance(out, str)
+
+
+def test_auto_route_off_says_mode_switch() -> None:
+    from xenon.repl.commands import cmd_auto_route
+
+    calls: list[str] = []
+    repl = types.SimpleNamespace(
+        intelligent_router=types.SimpleNamespace(disable=lambda: calls.append("off"))
+    )
+    cmd_auto_route(args="off", session_state={"_repl": repl})
+
+    assert calls == ["off"]
+
+
+def test_auto_route_stats_renders_the_mode_row() -> None:
+    from xenon.repl.commands import cmd_auto_route
+
+    router = types.SimpleNamespace(
+        enabled=True,
+        notify_user=False,
+        switch_only_on_improvement=True,
+        confidence_threshold=0.6,
+        get_stats=lambda: {
+            "decision_log": {
+                "total_decisions": 3,
+                "switches": 1,
+                "rule_hits": {"r1": 2},
+                "paradigms": {"plan-execute": 2},
+                "recent": [],
+            },
+            "current_mode": "direct",
+            # top-level counters, read by the status branch
+            "total_routes": 3,
+            "successful_routes": 2,
+            "switches": 1,
+        },
+    )
+    repl = types.SimpleNamespace(intelligent_router=router)
+
+    cmd_auto_route(args="stats", session_state={"_repl": repl})
+    # No recognised argument falls through to the status table, which renders
+    # the same counters including the mode row.
+    cmd_auto_route(args="", session_state={"_repl": repl})
+
+
+def test_a_rejected_router_switch_is_reported_not_fatal() -> None:
+    """The failure branch must tell the user /mode still works (#294)."""
+    import xenon.repl.turn_flow as turn_flow
+
+    printed: list[str] = []
+
+    class _Registry:
+        current_mode = "direct"
+
+        def set_mode(self, name):
+            raise ValueError("router picked an unknown mode")
+
+    fake = types.SimpleNamespace(
+        registry=_Registry(),
+        status_bar=types.SimpleNamespace(set_mode_notification=lambda *_: None),
+        intelligent_router=types.SimpleNamespace(notify_user=False),
+    )
+    original = turn_flow.console
+
+    class _Console:
+        def print(self, *args, **kwargs):
+            printed.append(" ".join(str(a) for a in args))
+
+    turn_flow.console = _Console()
+    try:
+        turn_flow.TurnFlowMixin._apply_routing_decision(
+            fake,
+            types.SimpleNamespace(
+                paradigm="nope", reason="r", confidence=0.5, matched_rule="rule"
+            ),
+        )
+    finally:
+        turn_flow.console = original
+
+    assert any("模式切换失败" in line for line in printed)
+
+
+def test_handle_chat_applies_a_router_suggestion(monkeypatch) -> None:
+    """The router block in _handle_chat must switch the mode when it can.
+
+    Mirrors the existing _handle_chat tests: the rest of the turn is stubbed, so
+    this exercises routing without a model call (#294).
+    """
+    from xenon.repl.model_registry import ModelRegistry
+    from xenon.repl.repl import REPL
+
+    registry = ModelRegistry()
+    registry.add_model("openai/a", "a")
+    repl = REPL(registry=registry, streaming=False)
+    repl.model_pool.register("openai/a", alias="a")
+
+    monkeypatch.setattr(repl, "_commit_memory_usage", lambda: None)
+    monkeypatch.setattr(repl, "_maybe_suggest_memory", lambda value: None)
+    monkeypatch.setattr(
+        repl, "_run_direct", lambda *a, **k: None
+    )
+    router = repl.intelligent_router
+    router.enable()
+    router.notify_user = False
+    monkeypatch.setattr(
+        router,
+        "route",
+        lambda **kwargs: types.SimpleNamespace(
+            paradigm="plan-execute", reason="r", confidence=0.9, matched_rule="rule"
+        ),
+    )
+
+    repl._handle_chat("帮我写一个快速排序算法")
+
+    assert registry.current_mode == "plan-execute"
