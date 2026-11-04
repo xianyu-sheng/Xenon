@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING
 # Importing this module registers /lessons (self-evolution slice 4).
 from xenon.repl.command_groups import lessons as _lessons  # noqa: F401
 
-# Importing this module registers /permissions (#373).
+# Importing this module registers /permissions (#373, #183): mode switching plus
+# the remembered grants — one command, one owner.
 from xenon.repl.command_groups import permissions as _permissions  # noqa: F401
 from xenon.repl.command_groups.agent import (
     _cmd_ask,  # noqa: F401 - compatibility export
@@ -54,6 +55,9 @@ from xenon.repl.command_groups.model import (
     _cmd_set_profile,  # noqa: F401 - compatibility export
     _cmd_set_role,  # noqa: F401 - compatibility export
     _model_hint_local,  # noqa: F401 - compatibility export
+)
+from xenon.repl.command_groups.permissions import (
+    _cmd_permissions,  # noqa: F401 - compatibility export (the one owner)
 )
 from xenon.repl.command_groups.plan import (
     _cmd_plan,  # noqa: F401 - compatibility export
@@ -128,7 +132,8 @@ from xenon.repl.command_groups.skill import (
 )
 from xenon.repl.command_groups.workspace import (
     _cmd_edit,  # noqa: F401 - compatibility export
-    _cmd_permissions,  # noqa: F401 - compatibility export
+    # /permissions is *not* here: it belongs to command_groups/permissions.py
+    # (#183).  Registering it in two modules made the later import silently win.
     _cmd_project,  # noqa: F401 - compatibility export
     _cmd_vision,  # noqa: F401 - compatibility export
 )

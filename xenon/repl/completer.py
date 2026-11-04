@@ -11,6 +11,8 @@ and Esc for free, and it degrades to nothing when there is no PTY.
 
 from __future__ import annotations
 
+import re
+
 from prompt_toolkit.completion import (
     Completer,
     Completion,
@@ -24,6 +26,9 @@ from xenon.repl.command_catalog import (
     build_catalog,
     rank,
 )
+
+# ``@path`` at the end of the input: a file reference the palette can insert.
+_AT_REFERENCE = re.compile(r"(?:^|\s)@([^\s@]*)$")
 
 
 class OmniCompleter(Completer):
@@ -121,6 +126,25 @@ class OmniCompleter(Completer):
                     start_position=-len(head),
                     display=entry.name,
                     display_meta=entry.palette_meta(),
+                )
+            return
+
+        # ── @file 引用（#183）：选中的路径直接插入，不用手打 ──
+        reference = _AT_REFERENCE.search(text)
+        if reference is not None:
+            prefix = reference.group(1)
+            sub = Document(prefix, cursor_position=len(prefix))
+            # PathCompleter emits only the *differing* suffix with
+            # ``start_position=0`` (it strips the typed directory), so the
+            # cursor-relative insert is what completes ``@xenon/ma`` →
+            # ``@xenon/main.py``.  Recomputing the offset would eat real path
+            # characters.
+            for item in self._path_completer.get_completions(sub, complete_event):
+                yield Completion(
+                    item.text,
+                    start_position=item.start_position,
+                    display=item.text,
+                    display_meta="文件引用",
                 )
             return
 

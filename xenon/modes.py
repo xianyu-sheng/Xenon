@@ -42,6 +42,12 @@ class ModeSpec:
     description: str = ""
     workflow_template: str = ""
     loop: LoopProfile | None = None
+    # Set when this name is kept only for compatibility and resolves to the
+    # same loop profile as another mode.  ``react`` is the case: the seven
+    # engines are gone, and ``react`` now declares exactly what ``direct``
+    # declares.  Keeping the name keeps `--mode react` working; advertising it
+    # as a separate paradigm would claim a difference that no longer exists.
+    alias_of: str = ""
 
     @property
     def kernel_only(self) -> bool:
@@ -59,27 +65,28 @@ MODE_CATALOG: dict[str, ModeSpec] = {
     ),
     "react": ModeSpec(
         name="react",
-        description="思考-行动-观察循环，适合需要工具的探索性任务",
+        description="（别名）与 direct 同一套阶段：单循环、每步一次动作",
         loop=_ACT_ONLY,
+        alias_of="direct",
     ),
     "plan-execute": ModeSpec(
         name="plan-execute",
-        description="先用强模型规划，再按计划逐步执行，适合复杂任务",
+        description="规划阶段 + 按计划逐步执行（follow_plan）",
         loop=_PLAN_THEN_EXECUTE,
     ),
     "reflection": ModeSpec(
         name="reflection",
-        description="执行后自我审查并修正，适合高质量代码生成",
+        description="执行 + 一轮反思审查（reflect_rounds=1）",
         loop=_REFLECT_ONCE,
     ),
     "plan-react": ModeSpec(
         name="plan-react",
-        description="全局规划 + 每步 ReAct 执行，适合复杂多步骤任务",
+        description="全局规划 + 每步限定调用次数的执行（step_calls=6）",
         loop=_PLAN_THEN_REACT,
     ),
     "plan-reflection": ModeSpec(
         name="plan-reflection",
-        description="规划 + 每步执行 + 计划与步骤审查，适合需要高质量输出的任务",
+        description="规划 + 计划审查 + 每步执行 + 步骤反思",
         loop=LoopProfile(
             plan=True,
             plan_review=True,
@@ -92,10 +99,34 @@ MODE_CATALOG: dict[str, ModeSpec] = {
     ),
     "react-reflection": ModeSpec(
         name="react-reflection",
-        description="ReAct 探索 + 多轮反思审查，适合需要工具且要求高质量的任务",
+        description="执行 + 三轮反思审查（reflect_rounds=3）",
         loop=_REFLECT_MULTI,
     ),
 }
+
+
+def distinct_modes() -> tuple[ModeSpec, ...]:
+    """One entry per *distinct* loop profile, for menus and pickers.
+
+    Aliases stay resolvable but are not offered as if they were alternatives:
+    offering two rows that do exactly the same thing is how the old seven-engine
+    catalog lied about itself.
+    """
+
+    canonical: dict[str, ModeSpec] = {}
+    for spec in MODE_CATALOG.values():
+        if spec.alias_of:
+            continue
+        canonical.setdefault(repr(spec.loop), spec)
+    return tuple(canonical.values())
+
+
+def aliases_of(name: str) -> tuple[str, ...]:
+    """Names that resolve to the same mode, excluding the mode itself."""
+
+    return tuple(
+        alias for alias, spec in MODE_CATALOG.items() if spec.alias_of == name
+    )
 
 
 def get_mode(name: str | None) -> ModeSpec | None:
@@ -119,6 +150,8 @@ def loop_profile_for(name: str | None) -> LoopProfile | None:
 __all__ = [
     "DEFAULT_MODE",
     "MODE_CATALOG",
+    "aliases_of",
+    "distinct_modes",
     "ModeSpec",
     "get_mode",
     "loop_profile_for",
