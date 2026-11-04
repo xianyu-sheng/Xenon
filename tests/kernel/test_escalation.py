@@ -317,3 +317,106 @@ def test_the_grant_is_consumed_by_exactly_one_call(tmp_path) -> None:
     reasons = " ".join(str(item.get("reason")) for item in _decisions(ledger))
     assert "read-only mode" in reasons
     assert result.phase is TaskPhase.BLOCKED
+
+
+# ── parser + failure paths (each one fail-closed) ────────────────
+
+
+def test_the_action_kind_is_exposed() -> None:
+    from xenon.kernel.contracts import ActionKind
+
+    assert _escalate("curl x").kind is ActionKind.REQUEST_ESCALATION
+
+
+def test_parser_accepts_request_escalation() -> None:
+    from xenon.harness.llm import parse_action
+
+    action = parse_action(
+        {
+            "action": "request_escalation",
+            "capability": "shell",
+            "params": {"command": "curl -s wttr.in"},
+            "reason": "live weather",
+        }
+    )
+    assert isinstance(action, RequestEscalation)
+    assert action.intent.capability is Capability.SHELL
+    assert action.reason == "live weather"
+
+
+def test_parser_rejects_an_unknown_capability() -> None:
+    import pytest
+
+    from xenon.harness.llm import ActionParseError, parse_action
+
+    with pytest.raises(ActionParseError):
+        parse_action(
+            {"action": "request_escalation", "capability": "telepathy", "reason": "r"}
+        )
+
+
+def test_parser_requires_a_reason() -> None:
+    import pytest
+
+    from xenon.harness.llm import ActionParseError, parse_action
+
+    with pytest.raises(ActionParseError, match="reason is required"):
+        parse_action({"action": "request_escalation", "capability": "shell"})
+
+
+def test_a_policy_that_cannot_evaluate_fails_closed(tmp_path) -> None:
+    ledger = Ledger.in_memory("esc-broken")
+    approver = _Yes(True)
+
+    class Broken(PermissionPolicy):
+        def refuse_escalation(self, intent):
+            raise RuntimeError("boom")
+
+    policy = Broken(
+        mode=PermissionMode.READ_ONLY, workspace=str(tmp_path), allow_approval=True
+    )
+    runtime = _shell_runtime(ledger, policy, approver)
+
+    result = runtime.run(_spec("esc-broken"), ScriptedStrategy([_escalate("curl x")]))
+
+    assert result.accepted is False
+    assert approver.asked == [], "a broken policy must not reach the human"
+    reasons = " ".join(str(item.get("reason")) for item in _decisions(ledger))
+    assert "could not evaluate" in reasons
+
+
+def test_a_policy_without_the_hook_is_skipped(tmp_path) -> None:
+    """Custom policies predate #392; they simply have nothing to hard-refuse."""
+    ledger = Ledger.in_memory("esc-plain")
+    approver = _Yes(False)
+
+    class Plain:
+        def check(self, view, action):
+            from xenon.kernel.contracts import PolicyDecision, PolicyDecisionKind
+
+            return PolicyDecision(PolicyDecisionKind.ALLOW)
+
+    runtime = _shell_runtime(ledger, Plain(), approver)
+
+    result = runtime.run(_spec("esc-plain"), ScriptedStrategy([_escalate("curl x")]))
+
+    assert approver.asked, "the human must still be asked"
+    assert result.accepted is False
+
+
+def test_an_approval_without_a_target_fails_closed(tmp_path) -> None:
+    """No target means no grant: the human's yes must not become a blank cheque."""
+    ledger = Ledger.in_memory("esc-notarget")
+    approver = _Yes(True)
+    runtime = _shell_runtime(ledger, _read_only(tmp_path), approver)
+
+    result = runtime.run(
+        _spec("esc-notarget"),
+        ScriptedStrategy(
+            [RequestEscalation(ToolIntent(capability=Capability.SHELL), "no params")]
+        ),
+    )
+
+    assert result.accepted is False
+    reasons = " ".join(str(item.get("reason")) for item in _decisions(ledger))
+    assert "could not be scoped" in reasons

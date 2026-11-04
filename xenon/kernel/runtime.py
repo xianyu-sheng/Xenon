@@ -1744,16 +1744,15 @@ class LoopRuntime:
             *tuple(str(item) for item in action.intent.targets),
         )
 
-        def _refuse(reason: str, *, signal: str = "") -> TaskResult:
-            payload: dict[str, Any] = {
-                "kind": PolicyDecisionKind.VETO.value,
-                "reason": reason,
-                "scope": list(scope),
-            }
-            if signal:
-                payload["signal"] = signal
+        def _refuse(reason: str) -> TaskResult:
             self._append(
-                EventKind.POLICY_DECISION, EventSource.GATE, payload
+                EventKind.POLICY_DECISION,
+                EventSource.GATE,
+                {
+                    "kind": PolicyDecisionKind.VETO.value,
+                    "reason": reason,
+                    "scope": list(scope),
+                },
             )
             self._transition(TaskPhase.BLOCKED, reason)
             return self._result(
