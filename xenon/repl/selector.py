@@ -80,21 +80,26 @@ def _key_bindings():
 
     @bindings.add("enter", eager=True)
     def _(event):
-        buffer = event.current_buffer
-        state = buffer.complete_state
-        if state is not None and state.completions:
-            index = state.complete_index
-            chosen = (
-                state.completions[index]
-                if index is not None and 0 <= index < len(state.completions)
-                else state.completions[0]
-            )
-            if not buffer.document.text_before_cursor.strip():
-                buffer.text = chosen.text
-                buffer.cursor_position = len(chosen.text)
-        buffer.validate_and_handle()
+        accept_choice(event.current_buffer)
 
     return bindings
+
+
+def accept_choice(buffer: Any) -> None:
+    """Enter: take the highlighted row when the buffer is still empty."""
+
+    state = getattr(buffer, "complete_state", None)
+    if state is not None and getattr(state, "completions", None):
+        index = getattr(state, "complete_index", None)
+        chosen = (
+            state.completions[index]
+            if index is not None and 0 <= index < len(state.completions)
+            else state.completions[0]
+        )
+        if not buffer.document.text_before_cursor.strip():
+            buffer.text = chosen.text
+            buffer.cursor_position = len(chosen.text)
+    buffer.validate_and_handle()
 
 
 def _open_menu(session: Any):
@@ -173,6 +178,10 @@ def ask_choice(
                 completer=_completer(choices),
                 key_bindings=_key_bindings(),
                 complete_while_typing=True,
+                # The list is in the question, but an open menu is still the
+                # shortest path for someone who wants to arrow down and type
+                # nothing.
+                pre_run=_open_menu(session),
             )
         except (KeyboardInterrupt, EOFError):
             return None

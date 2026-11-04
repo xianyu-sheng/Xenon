@@ -338,3 +338,176 @@ def test_the_current_mode_is_always_shown() -> None:
     choices = mode_choices(registry)
 
     assert [item.value for item in choices if item.current] == ["react"]
+
+
+# ── selector internals (menu, pre_run, retry) ───────────────────
+
+
+def test_the_choice_menu_lists_and_filters(monkeypatch) -> None:
+    import sys
+    import types as _types
+
+    import xenon.repl.selector as selector
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    seen: dict = {}
+
+    class _Session:
+        def prompt(self, question, **kwargs):
+            seen["kwargs"] = kwargs
+            from prompt_toolkit.document import Document
+
+            items = list(kwargs["completer"].get_completions(Document(""), None))
+            filtered = list(
+                kwargs["completer"].get_completions(Document("byp"), None)
+            )
+            seen["all"] = [(item.text, item.display_meta_text) for item in items]
+            seen["filtered"] = [item.text for item in filtered]
+            return "bypass"
+
+    repl = _types.SimpleNamespace(_pt_session=_Session())
+    value = selector.ask_choice(
+        repl, title="t", choices=permission_choices("default")
+    )
+
+    assert value == "bypass"
+    assert len(seen["all"]) == 4
+    assert all(meta for _, meta in seen["all"])
+    assert seen["filtered"] == ["bypass"]
+    assert callable(seen["kwargs"]["pre_run"])
+
+
+def test_pre_run_opens_the_menu() -> None:
+    import types as _types
+
+    from xenon.repl.selector import _open_menu
+
+    calls: list[str] = []
+    buffer = _types.SimpleNamespace(start_completion=lambda: calls.append("start"))
+    session = _types.SimpleNamespace(default_buffer=buffer)
+
+    _open_menu(session)()
+
+    assert calls == ["start"]
+
+
+def test_pre_run_tolerates_a_session_without_a_buffer() -> None:
+    import types as _types
+
+    from xenon.repl.selector import _open_menu
+
+    _open_menu(_types.SimpleNamespace())()  # must not raise
+
+
+class _SelBuffer:
+    def __init__(self, text: str = "", completions=None, index=None) -> None:
+        self.document = type("D", (), {"text_before_cursor": text})()
+        self.complete_state = (
+            None
+            if completions is None
+            else type(
+                "S",
+                (),
+                {
+                    "completions": [type("C", (), {"text": c})() for c in completions],
+                    "complete_index": index,
+                },
+            )()
+        )
+        self.text = text
+        self.cursor_position = len(text)
+        self.submitted = False
+
+    def validate_and_handle(self) -> None:
+        self.submitted = True
+
+
+def test_enter_takes_the_highlighted_row_when_empty() -> None:
+    from xenon.repl.selector import accept_choice
+
+    buffer = _SelBuffer("", ["direct", "react"], 1)
+    accept_choice(buffer)
+
+    assert buffer.text == "react"
+    assert buffer.submitted is True
+
+
+def test_enter_keeps_typed_text() -> None:
+    from xenon.repl.selector import accept_choice
+
+    buffer = _SelBuffer("byp", ["bypass"], 0)
+    accept_choice(buffer)
+
+    assert buffer.text == "byp"
+    assert buffer.submitted is True
+
+
+def test_enter_without_a_menu_still_submits() -> None:
+    from xenon.repl.selector import accept_choice
+
+    buffer = _SelBuffer("2")
+    accept_choice(buffer)
+
+    assert buffer.text == "2"
+    assert buffer.submitted is True
+
+
+def test_a_bad_answer_gives_up_after_the_attempts(monkeypatch) -> None:
+    import sys
+    import types as _types
+
+    import xenon.repl.selector as selector
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    answers = ["nope", "still-nope"]
+
+    class _Session:
+        def prompt(self, question, **kwargs):
+            return answers.pop(0)
+
+    repl = _types.SimpleNamespace(_pt_session=_Session())
+    assert selector.ask_choice(
+        repl, title="t", choices=permission_choices(), attempts=2
+    ) is None
+
+
+def test_ctrl_c_means_cancel(monkeypatch) -> None:
+    import sys
+    import types as _types
+
+    import xenon.repl.selector as selector
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+
+    class _Session:
+        def prompt(self, question, **kwargs):
+            raise KeyboardInterrupt
+
+    repl = _types.SimpleNamespace(_pt_session=_Session())
+    assert selector.ask_choice(
+        repl, title="t", choices=permission_choices()
+    ) is None
+
+
+def test_model_command_uses_the_picker(monkeypatch) -> None:
+    import xenon.repl.selector as selector
+    from xenon.repl.command_groups.model import _cmd_model
+
+    monkeypatch.setattr(selector, "ask_choice", lambda *a, **k: "second")
+    registry = _Registry(
+        models=[_model("first", "provider/a"), _model("second", "provider/b")]
+    )
+    seen: list[str] = []
+    repl = _repl()
+    repl._preferred_model_ids = []
+    repl.status_bar = types.SimpleNamespace(set_last_model=lambda m: None)
+    repl.auto_router = None
+    repl._failed_models = set()
+    repl._activate = lambda model_id: seen.append(model_id)
+
+    out = _cmd_model(
+        session_state={"_repl": repl}, registry=registry, console=types.SimpleNamespace(print=lambda *a, **k: None)
+    )
+
+    assert "second" in out
+    assert registry.role_priority["planner"] == ["second"]
