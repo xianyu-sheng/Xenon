@@ -20,9 +20,37 @@ from xenon.repl.command_registry import command_handler, register_command
 
 register_command(
     "/permissions",
-    "查看/撤销记住的授权（会话级 + 规则文件）",
-    "/permissions [remove <selector> | clear]",
+    "权限模式 + 记住的授权（查看/切换/撤销）",
+    "/permissions [default|accept_edits|bypass|plan] [remove <selector> | clear]",
 )
+
+# The mode names this command accepts.  Kept here, next to the handler, because
+# this command is now the *only* owner of /permissions (#183): ``workspace.py``
+# used to register the same name later in ``commands.py`` and silently shadow
+# this module, so the grants view added in #373 never reached a user.
+MODE_MAP: dict[str, str] = {
+    "default": "DEFAULT",
+    "accept_edits": "ACCEPT_EDITS",
+    "bypass": "BYPASS",
+    "plan": "PLAN",
+}
+
+
+def _switch_mode(repl: Any, mode_name: str) -> str | None:
+    """Switch the legacy permission gate; ``None`` means "not a mode name"."""
+
+    key = MODE_MAP.get(mode_name)
+    if key is None:
+        return None
+    gate = getattr(repl, "_permission_gate", None)
+    if gate is None:
+        return "权限系统未初始化"
+    from xenon.repl.permissions import PermissionMode
+
+    new_mode = getattr(PermissionMode, key)
+    gate.set_mode(new_mode)
+    gate.reset_session()
+    return f"✅ 权限模式已切换为: [bold cyan]{new_mode.value}[/bold cyan]"
 
 
 def _format_rule(row: dict[str, Any]) -> str:
@@ -44,6 +72,24 @@ def _cmd_permissions(*, args: str = "", session_state: dict, **kwargs: Any) -> s
     command = (args or "").strip()
     head, _, rest = command.partition(" ")
     head = head.casefold()
+
+    # #183: no arguments → arrow-key picker (permission mode).  Without a
+    # terminal the text summary below is still the answer.
+    if not command:
+        from xenon.repl.selector import ask_choice, permission_choices
+
+        gate = getattr(repl, "_permission_gate", None)
+        current = getattr(getattr(gate, "mode", None), "value", "")
+        picked = ask_choice(
+            repl, title="选择权限模式", choices=permission_choices(current)
+        )
+        if picked is not None:
+            return _switch_mode(repl, picked) or f"⚠️ 未能切换为 {picked}"
+
+    # A bare mode name switches the mode; `remove`/`clear` below manage grants.
+    switched = _switch_mode(repl, head) if head in MODE_MAP else None
+    if switched is not None:
+        return switched
 
     if head == "clear":
         if book is None:
@@ -82,10 +128,15 @@ def _cmd_permissions(*, args: str = "", session_state: dict, **kwargs: Any) -> s
         rows.append("规则文件（持久化）：")
         rows.extend(_format_rule(row) for row in rules.rows())
     if not rows:
+        # Always answer "what mode am I in": this is the only door to it now.
+        gate = getattr(repl, "_permission_gate", None)
+        mode = getattr(getattr(gate, "mode", None), "value", "") or "未初始化"
         return (
+            f"权限模式: {mode}\n"
             "当前没有记住的授权。\n"
             "· 审批时按 a = 本会话都允许，A = 永远允许（写入规则文件），"
-            "s = 只允许这条命令。"
+            "s = 只允许这条命令。\n"
+            "· 切换模式：/permissions default|accept_edits|bypass|plan"
         )
     return "\n".join(rows) + "\n\n撤销：/permissions remove <selector>；清空会话：/permissions clear"
 

@@ -90,62 +90,10 @@ def _cmd_edit(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
 
 # ── /permissions — v0.5.0 权限模式管理 ─────────────────────
 
-register_command(
-    "/permissions",
-    "查看/切换工具执行权限模式",
-    "/permissions [default|accept_edits|bypass|plan]",
-)
-
-
-@command_handler("/permissions")
-def _cmd_permissions(
-    *, args: str, session_state: dict[str, Any] | None = None, **kwargs: Any
-) -> str:
-    repl = session_state.get("_repl") if session_state else None
-    if not repl or not hasattr(repl, "_permission_gate"):
-        return "权限系统未初始化"
-
-    gate = repl._permission_gate
-    current_mode = gate.mode.value
-
-    if not args:
-        lines = [
-            f"当前权限模式: [bold cyan]{current_mode}[/bold cyan]",
-            "",
-            "可用模式:",
-            "  [bold]default[/bold]      — 统一策略：工作区内写免问；越界写与命令需确认",
-            "  [bold]accept_edits[/bold] — 同 default（历史兼容）",
-            "  [bold]bypass[/bold]       — 跳过所有确认（CI/自动化场景）",
-            "  [bold]plan[/bold]         — 只读模式，拒绝所有写入",
-            "",
-            "用法: /permissions <模式名>",
-            f"最近确认状态: {gate.state.value}",
-            "已记忆允许的工具: "
-            + (
-                ", ".join(gate.session_allowed_tools)
-                if gate.session_allowed_tools
-                else "(无)"
-            ),
-        ]
-        return "\n".join(lines)
-
-    mode_map = {
-        "default": "DEFAULT",
-        "accept_edits": "ACCEPT_EDITS",
-        "bypass": "BYPASS",
-        "plan": "PLAN",
-    }
-    mode_key = mode_map.get(args.strip().lower())
-    if not mode_key:
-        return f"未知模式: {args}。可用: default, accept_edits, bypass, plan"
-
-    from xenon.repl.permissions import PermissionMode
-
-    new_mode = getattr(PermissionMode, mode_key)
-    gate.set_mode(new_mode)
-    gate.reset_session()
-    return f"✅ 权限模式已切换为: [bold cyan]{new_mode.value}[/bold cyan]"
-
+# /permissions lives in ``command_groups/permissions.py`` (#183): two modules
+# registering the same name meant the later import silently won, and #373's
+# "grants you can see and revoke" never reached a user.  Mode switching is part
+# of that one command now; nothing here re-registers it.
 
 # ══════════════════════════════════════════════════════════════
 # /vision — 多模态视觉模式

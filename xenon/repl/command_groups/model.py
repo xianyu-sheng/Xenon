@@ -469,13 +469,25 @@ def _cmd_mode(
     *, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any
 ) -> str:
     if not args:
-        current = registry.get_current_mode()
-        lines = [f"当前范式: {current.name} — {current.description}\n"]
-        lines.append("可用范式:")
-        for name, mode in registry.modes.items():
-            marker = " <-- 当前" if name == current.name else ""
-            lines.append(f"  {name:<16} {mode.description}{marker}")
-        return "\n".join(lines)
+        # #183: arrow-key picker when a terminal is attached; without one the
+        # text list below is still the answer, so nothing is lost.
+        from xenon.repl.selector import ask_choice, mode_choices
+
+        repl = session_state.get("_repl")
+        picked = (
+            ask_choice(repl, title="选择思考范式", choices=mode_choices(registry))
+            if repl is not None
+            else None
+        )
+        if picked is None:
+            current = registry.get_current_mode()
+            lines = [f"当前范式: {current.name} — {current.description}\n"]
+            lines.append("可用范式（单循环的阶段配置，不是不同的引擎）:")
+            for row in mode_choices(registry):
+                marker = " <-- 当前" if row.current else ""
+                lines.append(f"  {row.label:<18} {row.detail}{marker}")
+            return "\n".join(lines)
+        args = picked
 
     try:
         mode = registry.set_mode(args.strip())
@@ -510,6 +522,22 @@ def _cmd_model(*, session_state: dict, registry: ModelRegistry, **kwargs: Any) -
 
     console = kwargs.get("console") or _Console()
     current_aliases = registry.role_priority.get("planner", [])
+
+    # #183: pick with the arrow keys when a terminal is attached.  Without one
+    # the numbered table below stays exactly as it was.
+    repl = session_state.get("_repl")
+    if repl is not None:
+        from xenon.repl.selector import ask_choice, model_choices
+
+        picked = ask_choice(repl, title="选择模型", choices=model_choices(registry))
+        if picked is not None:
+            chosen = next(
+                (item for item in models if item.alias == picked), None
+            )
+            if chosen is not None:
+                registry.role_priority["planner"] = [chosen.alias]
+                _activate_selected_model(repl, chosen.model_id)
+                return f"✅ 已切换到: {chosen.alias} ({chosen.model_id})"
 
     table = _Table(show_header=True, header_style="bold")
     table.add_column("#", style="cyan", width=4)

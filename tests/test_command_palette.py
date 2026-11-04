@@ -360,3 +360,41 @@ def test_an_empty_name_is_not_recorded() -> None:
     recents = CommandRecents(None)
     recents.record("")
     assert recents.names == ()
+
+
+# ── @file reference (#183) ──────────────────────────────────────
+
+
+def test_at_reference_completes_a_path(tmp_path, monkeypatch) -> None:
+    (tmp_path / "alpha.py").write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    completer = OmniCompleter([])
+
+    items = list(completer.get_completions(Document("看看 @alp"), None))
+
+    assert [item.text for item in items] == ["ha.py"]
+    assert items[0].start_position == 0
+    assert items[0].display_meta_text == "文件引用"
+
+
+def test_at_reference_inserts_the_whole_path(tmp_path, monkeypatch) -> None:
+    """The suffix + a cursor insert must reconstruct the real path."""
+    (tmp_path / "alpha.py").write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    completer = OmniCompleter([])
+
+    text = "看看 @alp"
+    item = next(iter(completer.get_completions(Document(text), None)))
+    applied = text[: item.start_position or None] + item.text
+
+    assert applied == "看看 @alpha.py"
+
+
+def test_a_plain_path_still_completes_without_at(tmp_path, monkeypatch) -> None:
+    (tmp_path / "beta.py").write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    completer = OmniCompleter([])
+
+    items = list(completer.get_completions(Document("bet"), None))
+
+    assert any("beta.py" in item.text or item.text.endswith("a.py") for item in items)
