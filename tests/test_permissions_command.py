@@ -518,3 +518,72 @@ def test_the_child_prompt_offers_only_ynq(monkeypatch, tmp_path) -> None:
     assert ApprovalUxMixin._ask_approval_choice(repl, from_child=True) == "y"
     assert seen["choices"] == ["y", "n", "q"]
 
+
+
+# ── #395: the pt prompt must not prefill the edit buffer ──────────
+
+
+def _real_choice_repl(choice, *, workspace=None, session=None, in_turn=True):
+    """A REPL whose ``_ask_approval_choice`` is the *real* implementation.
+
+    ``_prompt_repl`` stubs it out (most tests only care about the decision
+    table), but #395 is about how the prompt is *read*, so these tests bind the
+    real method and hand it a scripted session.
+    """
+
+    import types as _types
+
+    from xenon.repl.approval_ux import ApprovalUxMixin
+
+    repl = _prompt_repl(choice, workspace=workspace)
+    repl._ask_approval_choice = _types.MethodType(
+        ApprovalUxMixin._ask_approval_choice, repl
+    )
+    repl._pt_session = session
+    repl._active_runtime = object() if in_turn else None
+    return repl
+
+
+class _ScriptedSession:
+    """A PromptSession stand-in that records how it was called."""
+
+    def __init__(self, answers: list[str]) -> None:
+        self.answers = list(answers)
+        self.calls: list[dict] = []
+
+    def prompt(self, *args, **kwargs):
+        self.calls.append({"args": args, "kwargs": dict(kwargs)})
+        return self.answers.pop(0)
+
+
+def test_pt_prompt_does_not_prefill_the_default(tmp_path) -> None:
+    """prompt_toolkit's ``default=`` fills the buffer: typing "y" would become
+    "ny" and every answer would re-prompt (the #395 hang)."""
+    session = _ScriptedSession(["y"])
+    repl = _real_choice_repl("y", workspace=tmp_path, session=session)
+
+    assert repl._ask_approval_choice() == "y"
+    assert "default" not in session.calls[0]["kwargs"]
+
+
+def test_pt_prompt_empty_input_means_the_default(tmp_path) -> None:
+    repl = _real_choice_repl("y", workspace=tmp_path, session=_ScriptedSession([""]))
+
+    assert repl._ask_approval_choice(default="n") == "n"
+
+
+def test_an_invalid_pt_answer_re_prompts(tmp_path) -> None:
+    session = _ScriptedSession(["ny", "q"])
+    repl = _real_choice_repl("y", workspace=tmp_path, session=session)
+
+    assert repl._ask_approval_choice() == "q"
+    assert len(session.calls) == 2
+
+
+def test_a_pty_prefilled_answer_would_never_leave_the_panel(tmp_path) -> None:
+    """The regression itself: "ny" (default + typed y) must not be accepted."""
+    session = _ScriptedSession(["ny", "nn", "y"])
+    repl = _real_choice_repl("y", workspace=tmp_path, session=session)
+
+    assert repl._ask_approval_choice() == "y"
+    assert len(session.calls) == 3
