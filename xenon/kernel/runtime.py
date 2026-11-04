@@ -98,6 +98,12 @@ def _max_identical_calls(spec: TaskSpec) -> int:
     return value if value > 0 else DEFAULT_MAX_IDENTICAL
 
 
+#: "Do not execute this action; let the model propose again."  Returning
+#: ``None`` from a loop-signal handler means "the action is still fine", which
+#: is not what a forced finish means (#407).
+_SKIP_ACTION = object()
+
+
 class _RuntimeServices:
     """Small gateway-facing surface; never exposes the mutable ledger."""
 
@@ -217,6 +223,10 @@ class LoopRuntime:
         self._steering = SteeringState()
         self._loop_taught: dict[str, int] = {}
         self._loop_notes: list[str] = []
+        # Set once a loop is stopped: the run must answer with what it has
+        # instead of returning "no delivery" after doing real work (#407).
+        self._forced_finish = False
+        self._ok_receipts = 0
         self._accept_debt = False
         self._context_digest = ""
         self._steering_source: Any = None
@@ -281,6 +291,8 @@ class LoopRuntime:
         self._steering = SteeringState()
         self._loop_taught = {}
         self._loop_notes = []
+        self._forced_finish = False
+        self._ok_receipts = 0
         self._accept_debt = bool(spec.accept_debt)
         self._compaction_signature = ""
         self._finalize_decision = None
@@ -477,6 +489,26 @@ class LoopRuntime:
             veto = self._check_policies(view, action)
             if veto is not None:
                 return veto
+
+            if self._forced_finish and isinstance(action, CallTool):
+                # The forced-finish note is an instruction, not a suggestion:
+                # a loop that keeps proposing tools is how a turn dies with its
+                # evidence unread (#407).
+                reason = (
+                    "tools are closed after a detected loop; answer with the "
+                    f"{self._ok_receipts} receipt(s) already recorded"
+                )
+                self._append(
+                    EventKind.POLICY_DECISION,
+                    EventSource.GATE,
+                    {
+                        "kind": PolicyDecisionKind.VETO.value,
+                        "reason": reason,
+                        "scope": ["loop", "forced_finish"],
+                    },
+                    step_id=self._current_step_id(),
+                )
+                return self._budget_block(reason, ("loop", "forced_finish"))
 
             if isinstance(action, Think):
                 self._append(
@@ -749,6 +781,8 @@ class LoopRuntime:
                 repeat.reason,
                 repeat,
             )
+            if result is _SKIP_ACTION:
+                return None  # do not execute: the model must answer instead
             if result is not None:
                 return result
 
@@ -781,6 +815,8 @@ class LoopRuntime:
             receipt_event_payload(receipt),
             step_id=self._current_step_id(),
         )
+        if receipt.status is ReceiptStatus.OK:
+            self._ok_receipts += 1
         if receipt.status is ReceiptStatus.DENIED:
             self._append(
                 EventKind.POLICY_DECISION,
@@ -808,6 +844,8 @@ class LoopRuntime:
                 signal.reason,
                 signal,
             )
+            if result is _SKIP_ACTION:
+                return None  # the receipt is already recorded; stop here
             if result is not None:
                 return result
         elif self._stuck.no_progress_streak == 0:
@@ -2372,6 +2410,31 @@ class LoopRuntime:
                     + ("s" if attempts != 1 else "")
                 )
                 reason = f"{reason} {suffix}"
+            if not self._forced_finish and self._ok_receipts:
+                # The run already did real work: killing it here returned
+                # "任务未交付" after twelve successful tool calls and threw the
+                # evidence away (#407).  Stop the tools, ask for an answer.
+                self._forced_finish = True
+                self._append(
+                    EventKind.CONTROL_DECISION,
+                    EventSource.GATE,
+                    {
+                        "decision": "force_finish",
+                        "reason": reason,
+                        "scope": ["loop", tool],
+                        "receipts": self._ok_receipts,
+                    },
+                    step_id=self._current_step_id(),
+                )
+                self._loop_notes.append(
+                    f"Tools are now closed ({reason}). You have "
+                    f"{self._ok_receipts} successful receipt(s) in this run: "
+                    "answer with what they support and submit `finish`. Do not "
+                    "call another tool; unsupported statements will be "
+                    "reported as unverified, not silently accepted."
+                )
+                del self._loop_notes[:-5]
+                return _SKIP_ACTION
             return self._budget_block(reason, ("loop", tool), signal=kind)
         self._loop_taught[key] = attempts + 1
         self._loop_notes.append(

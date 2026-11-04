@@ -203,8 +203,14 @@ def test_compaction_absent_is_not_recorded(tmp_path):
     assert [e for e in ledger.read() if e.kind is EventKind.CONTEXT_COMPACTED] == []
 
 
-def test_repeated_tool_call_blocks_the_run():
-    """The guard must stop a looping model and say why."""
+def test_repeated_tool_call_stops_tools_before_it_blocks():
+    """#407: a detected loop must not throw the collected evidence away.
+
+    The old contract killed the run on the fifth identical call, so a turn that
+    had already collected twelve receipts returned "任务未交付" and nothing else
+    (real dogfood: ``repl-125425ecc94f``).  Now the fifth call closes the tools
+    and calls for an answer; a call *after* that is what blocks the run.
+    """
 
     from tests.kernel.test_north_star import (  # noqa: PLC0415
         ScriptedStrategy,
@@ -219,23 +225,35 @@ def test_repeated_tool_call_blocks_the_run():
 
     result = runtime.run(
         TaskSpec(task_id="task-repeat", objective="inspect", workspace="."),
-        ScriptedStrategy([action, action, action, action, action]),
+        ScriptedStrategy([action, action, action, action, action, action, action]),
     )
 
     assert result.accepted is False
     assert result.evidence_status is EvidenceStatus.UNVERIFIED
-    vetoes = [
-        event
-        for event in ledger.read()
-        if event.kind is EventKind.POLICY_DECISION
-        and event.payload.get("signal") == "identical_call"
-    ]
-    assert vetoes, "the veto must be in the ledger, not only in the result"
-    # #369: the fourth identical call is *taught* (it executes, with the
-    # diagnosis in the next view's Notes); the fifth, same signal again, is
-    # the one that blocks — the veto is still in the ledger.
-    receipts = [e for e in ledger.read() if e.kind is EventKind.TOOL_RECEIPT]
+    events = list(ledger.read())
+    # #369: the fourth identical call is *taught* (it still executes, with the
+    # diagnosis in the next view's Notes).  The fifth is not executed at all:
+    # the run closes the tools instead of repeating the same wall.
+    receipts = [e for e in events if e.kind is EventKind.TOOL_RECEIPT]
     assert len(receipts) == 4
+
+    forced = [
+        e
+        for e in events
+        if e.kind is EventKind.CONTROL_DECISION
+        and e.payload.get("decision") == "force_finish"
+    ]
+    assert forced, "closing the tools must be a recorded decision"
+    assert forced[0].payload["receipts"] == 4
+
+    vetoes = [
+        e
+        for e in events
+        if e.kind is EventKind.POLICY_DECISION
+        and e.payload.get("scope") == ["loop", "forced_finish"]
+    ]
+    assert vetoes, "a tool call after the forced finish must be vetoed"
+    assert "tools are closed" in vetoes[0].payload["reason"]
 
 
 # ── 上下文窗口感知（#322 / docs/design/mechanism-fit.md）──────────────

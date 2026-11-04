@@ -26,8 +26,19 @@ def test_core_catalog_binds_each_capability_to_one_core_tool() -> None:
         Capability.VCS: "bash",
         Capability.SHELL: "bash",
     }
+    # A target-requiring capability needs a named target to bind at all (#405);
+    # this test is about the capability→tool mapping, so name one.
+    _TARGET = {"file_path": "a.py", "files": ["a.py"], "command": "true",
+               "pattern": "x", "test_paths": ["tests"]}
+
     for capability, name in expected.items():
-        binding = catalog.bind(ToolIntent(capability=capability))
+        binding = catalog.bind(
+            ToolIntent(
+                capability=capability,
+                params={k: v for k, v in _TARGET.items()},
+                targets=("a.py",),
+            )
+        )
         assert binding.status is BindingStatus.BOUND
         assert binding.call is not None
         assert binding.call.spec_name == name
@@ -44,13 +55,23 @@ def test_core_catalog_has_no_remote_tool() -> None:
 def test_prefer_is_a_non_binding_hint() -> None:
     catalog = build_catalog("core")
     binding = catalog.bind(
-        ToolIntent(capability=Capability.EDIT, prefer="apply_patch")
+        ToolIntent(
+            capability=Capability.EDIT,
+            params={"files": ["a.py"]},
+            targets=("a.py",),
+            prefer="apply_patch",
+        )
     )
     assert binding.call is not None
     assert binding.call.spec_name == "apply_patch"
     # An unavailable preference falls back to the capability binding.
     fallback = catalog.bind(
-        ToolIntent(capability=Capability.EDIT, prefer="no-such-tool")
+        ToolIntent(
+            capability=Capability.EDIT,
+            params={"files": ["a.py"]},
+            targets=("a.py",),
+            prefer="no-such-tool",
+        )
     )
     assert fallback.call is not None
     assert fallback.call.spec_name == "apply_patch"
@@ -110,3 +131,41 @@ def test_core_specs_are_small_and_capability_complete() -> None:
         Capability.VCS,
         Capability.SHELL,
     } <= covered
+
+
+def test_a_targetless_read_is_refused_before_it_executes() -> None:
+    """#405: dogfood `repl-125425ecc94f` sent ``read`` with only a note.
+
+    It executed four times, each failing with "read_file 需要 file_path", the
+    loop detector then killed the turn and eight steps of evidence went with
+    it.  The proposal was malformed: it wanted to answer, not to read.
+    """
+
+    catalog = build_catalog("core")
+    binding = catalog.bind(
+        ToolIntent(
+            capability=Capability.READ,
+            params={"note": "汇总步骤1-8的证据并给出建议"},
+            targets=(),
+        )
+    )
+
+    assert binding.status is BindingStatus.UNRESOLVED
+    assert binding.call is None, "a malformed call must never reach a tool"
+    assert "must be named" in binding.reason
+    assert "file_path" in binding.reason, "name the parameter the spec declares"
+    assert "finish" in binding.reason, "offer the action that fits the intent"
+
+
+def test_a_named_read_still_binds() -> None:
+    catalog = build_catalog("core")
+    binding = catalog.bind(
+        ToolIntent(
+            capability=Capability.READ,
+            params={"file_path": "package.json"},
+            targets=("package.json",),
+        )
+    )
+
+    assert binding.status is BindingStatus.BOUND
+    assert binding.call is not None

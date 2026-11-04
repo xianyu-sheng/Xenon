@@ -356,6 +356,10 @@ class ToolSpec:
     params_schema: Mapping[str, Any] = field(default_factory=dict)
     description: str = ""
     preferences: Mapping[str, int] = field(default_factory=dict)
+    #: The tool can only act on something that was named.  A call with no
+    #: target is a malformed proposal, not a tool failure: binding must refuse
+    #: it before anything executes (#405).
+    requires_target: bool = False
 
 
 @dataclass(frozen=True, slots=True)
