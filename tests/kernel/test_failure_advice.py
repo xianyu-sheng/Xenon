@@ -152,3 +152,79 @@ def test_refusals_are_counted_for_the_protocol_report() -> None:
     assert result.metrics["refusals"] >= 1
     assert runtime.status_snapshot()["refusal_total"] >= 1
     assert runtime.status_snapshot()["refusals"]
+
+
+def test_a_write_without_a_verified_path_is_not_delivered(tmp_path):
+    """#418: found by a real 11-receipt task on a repo with no commits.
+
+    The tool reported ``fs_write`` with two paths and ``changed=false`` (the
+    files were new, so there was nothing to diff against).  The finalizer only
+    counted ``changed`` writes, saw zero paths, and delivered the run as
+    ``verified`` — a claim with nothing behind it, which is the exact failure
+    Xenon exists to catch.
+    """
+    from xenon.kernel.finalize import FinalizeGuard
+    from xenon.ledger.events import EventKind, EventSource, effect_to_payload
+    from xenon.ledger.store import Ledger
+
+    ledger = Ledger.in_memory("declared")
+    from xenon.kernel.contracts import FsWrite
+
+    effect = FsWrite(
+        paths=("calc.py", "test_calc.py"),
+        hashes={"calc.py": "a", "test_calc.py": "b"},
+        changed=False,
+    )
+    ledger.append(
+        EventKind.TOOL_RECEIPT,
+        EventSource.TOOL,
+        {
+            "receipt": {
+                "receipt_id": "r1",
+                "tool": "apply_patch",
+                "status": "ok",
+                "effects": [effect_to_payload(effect)],
+            }
+        },
+    )
+
+    decision = FinalizeGuard().check(
+        ledger, workspace=tmp_path, since_seq=0
+    )
+
+    assert decision.accepted is False
+    assert "reported as written" in decision.reason
+
+
+def test_a_changed_write_is_still_delivered(tmp_path):
+    from xenon.kernel.contracts import FsWrite
+    from xenon.kernel.finalize import FinalizeGuard
+    from xenon.ledger.events import EventKind, EventSource, effect_to_payload
+    from xenon.ledger.store import Ledger
+
+    ledger = Ledger.in_memory("changed")
+    ledger.append(
+        EventKind.TOOL_RECEIPT,
+        EventSource.TOOL,
+        {
+            "receipt": {
+                "receipt_id": "r2",
+                "tool": "apply_patch",
+                "status": "ok",
+                "effects": [
+                    effect_to_payload(
+                        FsWrite(
+                            paths=("calc.py",),
+                            hashes={"calc.py": "a"},
+                            changed=True,
+                        )
+                    )
+                ],
+            }
+        },
+    )
+
+    decision = FinalizeGuard().check(ledger, workspace=tmp_path, since_seq=0)
+
+    assert decision.accepted is True
+    assert decision.verified_paths == ("calc.py",)
