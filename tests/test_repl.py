@@ -247,7 +247,7 @@ class TestModelRegistry:
 
     def test_set_mode_invalid(self):
         reg = ModelRegistry()
-        with pytest.raises(ValueError, match="未知范式"):
+        with pytest.raises(ValueError, match="未知模式"):
             reg.set_mode("nonexistent")
 
     def test_get_current_mode(self):

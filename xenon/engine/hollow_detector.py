@@ -115,7 +115,7 @@ class HollowResult:
     hits: list[str] = field(default_factory=list)  # 命中的正则名
 
     def hint(self) -> str:
-        """生成补救提示，供引擎注入 messages 强制 LLM 产出具体内容。"""
+        """生成补救提示，供循环注入 messages 强制 LLM 产出具体内容。"""
         if not self.is_hollow:
             return ""
         parts = ["⚠️ 你的回答被判为空洞，请重新给出**具体内容**："]

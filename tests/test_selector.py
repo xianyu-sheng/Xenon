@@ -51,7 +51,7 @@ class _Registry:
 
     def set_mode(self, name: str):
         if name not in self.modes:
-            raise ValueError(f"未知范式: {name}")
+            raise ValueError(f"未知模式: {name}")
         self._current = name
         self.set_mode_calls.append(name)
         return self.get_current_mode()
@@ -180,7 +180,7 @@ def test_mode_without_a_pick_still_lists_every_mode(monkeypatch) -> None:
 
     out = _cmd_mode(args="", registry=registry, session_state={"_repl": _repl()})
 
-    assert "当前范式" in out
+    assert "当前模式" in out
     assert "plan-execute" in out
     assert registry.set_mode_calls == []
 

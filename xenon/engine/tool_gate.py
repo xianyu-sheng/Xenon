@@ -13,7 +13,7 @@
 集成方式：
 - ToolExecutor 在 __init__ 时自动创建 ToolGate 实例（tool_gate=None 时）
 - validate_tool_params() 函数接收 tool_gate 参数并查询校验级别
-- 引擎无需修改，门控系统自动生效
+- 循环无需修改，门控系统自动生效
 
 会话隔离：
 每个 ToolGate 实例持有独立的 metrics，多会话互不干扰。

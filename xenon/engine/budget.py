@@ -195,7 +195,7 @@ class BudgetManager:
     def allow_tool(self, tool_name: str) -> tuple[bool, str]:
         """收束阶段禁用纯探索型工具；其余放行。
 
-        返回 ``(allow, reason)``。被禁用时 ``reason`` 供引擎注入 observation 提示。
+        返回 ``(allow, reason)``。被禁用时 ``reason`` 供循环注入 observation 提示。
         """
         if self.is_converge_phase() and tool_name in self.blocked_in_converge:
             return (

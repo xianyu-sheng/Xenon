@@ -222,7 +222,7 @@ def interactive_setup(registry: ModelRegistry, model_pool=None) -> None:
         console.print("  [cyan]1[/cyan]. 配置 API Key")
         console.print("  [cyan]2[/cyan]. 查看已配置的厂商")
         console.print("  [cyan]3[/cyan]. 选择/切换模型")
-        console.print("  [cyan]4[/cyan]. 选择思考范式")
+        console.print("  [cyan]4[/cyan]. 选择模式")
         console.print("  [cyan]5[/cyan]. 删除 API Key")
         console.print("  [cyan]6[/cyan]. 注册自定义模型商 [dim](v0.4.0)[/dim]")
         console.print("  [cyan]0[/cyan]. 退出配置\n")
@@ -460,15 +460,15 @@ def _select_model(registry: ModelRegistry, model_pool=None) -> None:
 
 
 def _select_mode(registry: ModelRegistry) -> None:
-    """交互式选择思考范式。"""
+    """交互式选择模式。"""
     modes = registry.modes
     current = registry.current_mode
 
-    console.print("\n[bold]选择思考范式:[/bold]\n")
+    console.print("\n[bold]选择模式:[/bold]\n")
 
     table = Table(show_header=True, header_style="bold")
     table.add_column("#", style="cyan", width=3)
-    table.add_column("范式", style="bold")
+    table.add_column("模式", style="bold")
     table.add_column("说明")
     table.add_column("推荐场景")
     table.add_column("状态")
@@ -483,7 +483,7 @@ def _select_mode(registry: ModelRegistry) -> None:
     console.print()
 
     choice = IntPrompt.ask(
-        "输入范式编号",
+        "输入模式编号",
         choices=[str(i) for i in range(1, len(mode_list) + 1)],
     )
 

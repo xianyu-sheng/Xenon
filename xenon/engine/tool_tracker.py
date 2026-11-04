@@ -2,7 +2,7 @@
 ToolExecutionTracker — 工具执行追踪器。
 
 解决核心问题：LLM 声称执行了操作但实际没有。
-追踪每次工具调用，提供验证能力，让引擎可以确认工具是否真的被调用过。
+追踪每次工具调用，提供验证能力，让循环可以确认工具是否真的被调用过。
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ class ToolCall:
 
 @dataclass
 class ToolExecutionTracker:
-    """追踪工具执行状态，供引擎验证。
+    """追踪工具执行状态，供循环验证。
 
     用法:
         tracker = ToolExecutionTracker()

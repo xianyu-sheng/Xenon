@@ -62,7 +62,7 @@ class _TraceAdapter(logging.LoggerAdapter):
 
 
 # ── v0.8.3: 模块级日志自动带 [run_id] 前缀 ─────────────────
-# 引擎模块 logger 挂 TraceContextFilter 后，所有日志自动带当前 run_id，
+# 工具层 logger 挂 TraceContextFilter 后，所有日志自动带当前 run_id，
 # 无需改每个调用点。run_id 由 _begin_run() 写入 contextvar（线程隔离），
 # 工具执行层（ToolExecutor）日志也随之贯通——排查时整条链可关联。
 

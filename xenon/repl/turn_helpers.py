@@ -55,7 +55,7 @@ def turn_status_from_result(result: Any, gate_status: str) -> tuple[str, list[st
     # Do not downgrade an explicit interruption/fuse from the gate.
     if gate_status in {"fused", "interrupted"}:
         target = gate_status
-    reasons = [f"引擎终止原因：{reason.value}"]
+    reasons = [f"回合终止原因：{reason.value}"]
     missing = list(getattr(result, "missing_delivery", ()) or ())
     if missing:
         reasons.append("未完成交付：" + "、".join(str(item) for item in missing))

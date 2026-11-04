@@ -102,7 +102,7 @@ _theme = Theme(
 )
 
 console = Console(theme=_theme)
-# R1-2: 引擎宿主 mixin 与 REPL 共用同一 console 实例（测试 monkeypatch 依赖同一对象）。
+# R1-2: 循环宿主 mixin 与 REPL 共用同一 console 实例（测试 monkeypatch 依赖同一对象）。
 import xenon.repl.approval_ux as _approval_ux  # noqa: E402
 
 _approval_ux.logger = logger
@@ -724,7 +724,7 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             console.print(f"\n[warning]⚠ 恢复会话 '{target}' 失败：{exc}[/warning]")
 
     def _handle_shift_tab(self) -> None:
-        """Shift+Tab 按下：循环切换到下一个可用思维范式。"""
+        """Shift+Tab 按下：循环切换到下一个可用模式。"""
         mode_names = list(self.registry.modes.keys())
         current = self.registry.current_mode
         try:
@@ -737,16 +737,16 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             mode = self.registry.set_mode(next_mode_name)
             self.status_bar.set_mode_notification(mode.name)
             console.print(
-                f"\n[dim]┌─ Shift+Tab 切换范式 → [bold]{mode.name}[/bold]"
+                f"\n[dim]┌─ Shift+Tab 切换模式 → [bold]{mode.name}[/bold]"
                 f" — {mode.description}[/dim]"
             )
         except ValueError as exc:
             # 静默失败会让用户以为 Shift+Tab 这个键坏了。切换失败必须给反馈，
             # 并指向可用的替代路径。
-            logger.warning("Shift+Tab 切换范式到 %r 失败: %s", next_mode_name, exc)
+            logger.warning("Shift+Tab 切换模式到 %r 失败: %s", next_mode_name, exc)
             console.print(
-                f"\n[warning]⚠ 无法切换到范式 {next_mode_name}：{exc}[/warning]\n"
-                "[dim]│  用 [bold]/mode[/bold] 查看并手动选择可用范式[/dim]"
+                f"\n[warning]⚠ 无法切换到模式 {next_mode_name}：{exc}[/warning]\n"
+                "[dim]│  用 [bold]/mode[/bold] 查看并手动选择可用模式[/dim]"
             )
 
     def _render_engine_result(
@@ -777,7 +777,7 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         # v0.5.3: 诊断日志 — 记录结果长度，便于排查空结果问题
         if not result or not result.strip():
             logger.warning(
-                f"_render_engine_result: 引擎返回空结果 "
+                f"_render_engine_result: 循环返回空结果 "
                 f"(result={result!r}, steps={step_count}, tools={tool_count}, "
                 f"title={title!r})"
             )
@@ -976,7 +976,7 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             "- /mcp add <name> <command> [args...] —— 添加 MCP 服务器（如 /mcp add 12306 npx -y 12306-mcp）\n"
             "- /mcp list —— 列出已连接的 MCP 服务器\n"
             "- /mcp tools —— 列出所有 MCP 工具\n"
-            "- /mode —— 切换思考范式（ReAct/Plan-Execute/Reflection 等）\n"
+            "- /mode —— 切换模式（单循环的阶段配置：direct / plan-execute / ...）\n"
             "- /tools —— 查看可用工具列表\n"
             "- /help —— 查看所有命令\n\n"
             "请用中文回答，代码部分用英文。"
@@ -1416,7 +1416,7 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
 
         # ── 随机提示 ──
         tips = [
-            "[bold cyan]/help[/bold cyan] 查看命令  [dim]·[/dim]  [bold cyan]/mode[/bold cyan] 切换范式",
+            "[bold cyan]/help[/bold cyan] 查看命令  [dim]·[/dim]  [bold cyan]/mode[/bold cyan] 切换模式",
             "Shift+Enter / Alt+Enter 多行输入  [dim]·[/dim]  Enter 发送  [dim]·[/dim]  Ctrl+C 退出",
             "[bold cyan]/setup[/bold cyan] 配置向导  [dim]·[/dim]  [bold cyan]/tools[/bold cyan] 查看工具  [dim]·[/dim]  [bold cyan]/mcp[/bold cyan] 扩展",
         ]

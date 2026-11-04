@@ -53,7 +53,7 @@ def _cmd_run(
     if not workflow_path:
         workflow_path = registry.get_current_mode().workflow_template
         if not workflow_path:
-            return "❌ 未指定工作流文件且当前范式无默认模板"
+            return "❌ 未指定工作流文件且当前模式无默认模板"
 
     try:
         config = load_yaml(workflow_path)
@@ -293,9 +293,50 @@ def _cmd_code(
 
 register_command(
     "/sub-agent",
-    "委派子 Agent 执行任务（支持多引擎和并行）",
-    "/sub-agent <task> [--engine react|plan_execute|reflection|plan_react|plan_reflection|react_reflection|direct] [--timeout N] [--parallel task1|task2|...]",
+    "委派子 Agent 执行任务（单循环的阶段配置 + 并行）",
+    "/sub-agent <task> [--profile react|plan-execute|reflection|plan-react] [--timeout N] [--parallel task1|task2|...]",
 )
+
+
+def _sub_agent_usage() -> str:
+    """Usage text derived from the *accepted* profiles, never a second list.
+
+    The old text advertised seven "engines", three of which this command has
+    never accepted (``direct``, ``plan-reflection``, ``react-reflection``) — a
+    menu that lies about what it can do (#294).
+    """
+
+    from xenon.harness.child import CHILD_PROFILES
+
+    labels = {
+        "kernel": "默认 kernel 循环（无额外阶段）",
+        "react": "执行（react 阶段），适合多步工具任务",
+        "plan-execute": "规划 + 按计划执行（follow_plan）",
+        "plan-react": "规划 + 每步限定调用次数的执行",
+        "reflection": "执行 + 一轮反思审查",
+    }
+    lines = [
+        "",
+        "用法:",
+        "  /sub-agent <task>                        默认 profile（react）",
+        "  /sub-agent <task> --profile plan-execute 指定阶段配置",
+        "  /sub-agent <task> --timeout 30           设置超时（秒）",
+        "  /sub-agent --parallel taskA|taskB|taskC  并行执行（最多 10 个）",
+        "",
+        "可选 profile（同一个循环的阶段配置）:",
+    ]
+    for name in sorted(CHILD_PROFILES):
+        lines.append(f"  {name:<16} {labels.get(name, name)}")
+    lines.extend(
+        [
+            "",
+            "示例:",
+            "  /sub-agent 分析 xenon/nodes/tool_node.py 的代码质量",
+            "  /sub-agent 给 lsp_provider.py 写单元测试 --profile plan-execute",
+            '  /sub-agent --parallel "审查repl.py"|"审查commands.py"',
+        ]
+    )
+    return chr(10).join(lines) + chr(10)
 
 
 @command_handler("/sub-agent")
@@ -303,32 +344,15 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
     """v0.6.1: 显式委派子 Agent 执行任务。
 
     用法:
-      /sub-agent <task>                         # 默认 ReAct 引擎
-      /sub-agent <task> --engine plan_execute   # 指定引擎
+      /sub-agent <task>                         # 默认 profile（react）
+      /sub-agent <task> --profile plan-execute  # 指定阶段配置
       /sub-agent <task> --timeout 30            # 30 秒超时
       /sub-agent --parallel taskA|taskB|taskC   # 并行 3 个子任务
+
+    ``--engine`` 仍然接受（旧脚本），但语义一直是「单循环的阶段配置」。
     """
     if not args or not args.strip():
-        return (
-            "📋 /sub-agent — 委派子 Agent 执行任务\n\n"
-            "用法:\n"
-            "  /sub-agent <task>                        默认 ReAct 引擎\n"
-            "  /sub-agent <task> --engine plan_execute  指定引擎类型\n"
-            "  /sub-agent <task> --timeout 30           设置超时（秒）\n"
-            "  /sub-agent --parallel taskA|taskB|taskC  并行执行（最多 10 个）\n\n"
-            "引擎类型:\n"
-            "  react              思考-行动循环（默认，适合复杂多步任务）\n"
-            "  plan_execute       规划-执行（适合多步骤结构化任务）\n"
-            "  reflection         反思-修正（适合需要自我审查的任务）\n"
-            "  plan_react         规划+ReAct 组合（先规划再逐步执行）\n"
-            "  plan_reflection    规划+反思组合（规划执行后自我审查）\n"
-            "  react_reflection   ReAct+反思组合（探索后自我审查）\n"
-            "  direct             直答（无工具，适合简单问答）\n\n"
-            "示例:\n"
-            "  /sub-agent 分析 xenon/nodes/tool_node.py 的代码质量\n"
-            "  /sub-agent 给 lsp_provider.py 写单元测试 --engine plan_execute\n"
-            '  /sub-agent --parallel "审查repl.py"|"审查commands.py"|"审查react_engine.py"\n'
-        )
+        return "📋 /sub-agent — 委派子 Agent 执行任务" + chr(10) + chr(10) + _sub_agent_usage()
 
     # 解析参数
     import shlex
@@ -342,7 +366,7 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
     i = 0
     task_parts = []
     while i < len(parts):
-        if parts[i] == "--engine" and i + 1 < len(parts):
+        if parts[i] in {"--engine", "--profile"} and i + 1 < len(parts):
             engine_type = parts[i + 1].lower()
             i += 2
         elif parts[i] == "--timeout" and i + 1 < len(parts):

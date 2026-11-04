@@ -153,7 +153,7 @@ TaskSpec
 | 项 | 取值 |
 |---|---|
 | 协议 | 完全盲测：解题阶段不应用官方 test patch，prompt 不含 FAIL_TO_PASS 名称 |
-| 引擎 | 单一 `react`（不是多引擎并集 / best-of-N） |
+| 循环 | 单一 `LoopRuntime`；模式只是它的阶段配置（不是多引擎并集 / best-of-N） |
 | 模型 | `deepseek-v4-flash`，官方 API |
 | 判定 | 官方 `swebench` harness；FAIL_TO_PASS 全过且 PASS_TO_PASS 无回归 |
 | 重复 | 3 次独立运行取均值；逐次结果公开 |
@@ -179,7 +179,7 @@ TaskSpec
 /goal       目标、阶段、计划、债务
 /resume     恢复会话与 ledger pointer
 /plan       计划模式（软引导）
-/mode       选择推理范式（react / plan-execute / ...）
+/mode       选择模式（单循环的阶段配置：direct / plan-execute / ...）
 /mcp        MCP server 与工具管理
 /rewind     回退到回合节点
 /fork       从回合节点分叉

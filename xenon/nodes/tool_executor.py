@@ -420,7 +420,7 @@ class ToolExecuteResult:
             self.structured = ToolResult.from_raw(self.tool_name, raw)
 
     def format_observation(self) -> str:
-        """供引擎回填给 LLM 的观察文本（携带结构化 success/degraded）。"""
+        """供循环回填给 LLM 的观察文本（携带结构化 success/degraded）。"""
         provenance = self.structured.provenance if self.structured else None
         advisories = self.structured.security_advisories if self.structured else []
         warning = format_advisory_warning(provenance, advisories)

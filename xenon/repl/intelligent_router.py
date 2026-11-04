@@ -111,7 +111,7 @@ class IntelligentRouter:
             # Step 3: 判断是否需要切换
             if decision.paradigm == current_mode:
                 # 与当前模式一致，无需切换
-                logger.debug(f"推荐范式与当前一致: {current_mode}")
+                logger.debug(f"推荐模式与当前一致: {current_mode}")
                 self._record_decision(
                     user_input, features, decision, current_mode, switched=False
                 )
@@ -133,7 +133,7 @@ class IntelligentRouter:
                 if not self._is_improvement(current_mode, decision.paradigm):
                     logger.info(
                         f"不建议从 {current_mode} 切换到 {decision.paradigm}，"
-                        f"保持当前范式"
+                        f"保持当前模式"
                     )
                     self._record_decision(
                         user_input, features, decision, current_mode, switched=False
@@ -225,7 +225,7 @@ class IntelligentRouter:
                 )
             )
         except Exception:
-            logger.debug("记录范式覆盖失败（已忽略）", exc_info=True)
+            logger.debug("记录模式覆盖失败（已忽略）", exc_info=True)
 
     def _record_decision(
         self,

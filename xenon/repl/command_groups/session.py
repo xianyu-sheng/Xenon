@@ -399,7 +399,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         table.add_column("名称", style="#67e8f9", max_width=32)
         table.add_column("时间", style="dim #94a3b8", width=12)
         table.add_column("消息", justify="right", width=6)
-        table.add_column("范式", style="dim", width=10)
+        table.add_column("模式", style="dim", width=10)
 
         for i, s in enumerate(sessions, 1):
             display_name = session_display_name(s)
@@ -527,7 +527,7 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         age = get_session_age(data) or "未知时间"
         msgs = len(history)
         _render_resumed_conversation(history, msgs)
-        result = f"✅ 已恢复会话 ({age}) · {msgs} 条消息 · 范式: {paradigm or 'direct'}"
+        result = f"✅ 已恢复会话 ({age}) · {msgs} 条消息 · 模式: {paradigm or 'direct'}"
         if recovery_notice:
             result += f"\n{recovery_notice}"
         if cwd_notice:

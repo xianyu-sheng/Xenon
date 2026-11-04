@@ -11,7 +11,7 @@
 |---|---|---|
 | 数据集 | `SWE-bench/SWE-bench_Lite`，`test` split | 官方数据 |
 | 样本 | 下列 manifest 之一（**不得改动、不得换样本**） | 见 §2 |
-| 引擎 | **单一 `react`** | 不是多引擎并集、不是 best-of-N |
+| 循环 | **单一 `LoopRuntime`** | 不是多引擎并集、不是 best-of-N；模式只切阶段配置 |
 | 模型参数 | `--reasoning-effort off` | 官方 API 必须关闭思考模式 |
 | 预算 | `--max-steps 120` | 与所有历史数字一致 |
 | 超时 | `--request-timeout 60 --engine-timeout 900` | 同上 |
@@ -147,7 +147,7 @@ rate     = resolved / submitted        # submitted 恒为 30
 
 | 错误 | 后果 | 正确做法 |
 |---|---|---|
-| 多引擎/并集/best-of-N | 不可比（旧版"40%"就是这个坑） | 只用 `react` 单引擎 |
+| 多引擎/并集/best-of-N | 不可比（旧版"40%"就是这个坑） | 只有一个循环，参数固定 |
 | 应用 test patch（测试可见） | 虚高（实测 **+16.7pp**） | `XENON_EVAL_APPLY_TEST_PATCH=0` |
 | 注入 FAIL_TO_PASS 测试名 | 泄题（v0.8.3+ 曾默认注入） | `XENON_EVAL_FAIL_HINT=0` |
 | 自算分 / 剔除空补丁 | 口径不一致，数字不可信 | 官方 harness + resolved/30 |

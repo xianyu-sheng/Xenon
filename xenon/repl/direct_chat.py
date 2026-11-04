@@ -72,7 +72,7 @@ class DirectChatMixin:
         intent: str | None = None,
         execution_policy: ExecutionPolicy | None = None,
     ) -> None:
-        """直接对话模式。自动检测工具需求并委派给 ReAct 引擎。
+        """直接对话模式。检测到工具需求时委派给 kernel 循环。
 
         路由决策优先级（通用设计，不枚举具体领域）：
         1. 用户明确要求只回答/不写入/不执行 → direct

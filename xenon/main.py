@@ -97,7 +97,7 @@ def cli() -> None:
         "--mode",
         choices=list(BUILTIN_MODES.keys()),
         default=None,
-        help="初始思考范式",
+        help="初始模式（单循环的阶段配置）",
     )
     parser.add_argument(
         "--system-prompt",
@@ -222,7 +222,7 @@ def cli() -> None:
     parser.add_argument(
         "--auto-route",
         action="store_true",
-        help="启用智能路由，自动选择推理范式（v0.6.0）",
+        help="启用智能路由，自动选择模式（v0.6.0）",
     )
     parser.add_argument(
         "--version",
@@ -424,7 +424,7 @@ def _print_session_list() -> None:
     table.add_column("名称", style="#67e8f9", max_width=32)
     table.add_column("时间", style="dim #94a3b8", width=12)
     table.add_column("消息", justify="right", width=6)
-    table.add_column("范式", style="dim", width=10)
+    table.add_column("模式", style="dim", width=10)
 
     for i, s in enumerate(sessions, 1):
         display_name = session_display_name(s)

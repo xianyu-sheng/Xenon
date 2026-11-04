@@ -459,7 +459,7 @@ def _cmd_set_role(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
 
 register_command(
     "/mode",
-    "切换或查看当前思考范式",
+    "切换或查看当前模式（单循环的阶段配置）",
     "/mode [mode_name]\n可用: " + ", ".join(BUILTIN_MODES.keys()),
 )
 
@@ -475,14 +475,14 @@ def _cmd_mode(
 
         repl = session_state.get("_repl")
         picked = (
-            ask_choice(repl, title="选择思考范式", choices=mode_choices(registry))
+            ask_choice(repl, title="选择模式", choices=mode_choices(registry))
             if repl is not None
             else None
         )
         if picked is None:
             current = registry.get_current_mode()
-            lines = [f"当前范式: {current.name} — {current.description}\n"]
-            lines.append("可用范式（单循环的阶段配置，不是不同的引擎）:")
+            lines = [f"当前模式: {current.name} — {current.description}\n"]
+            lines.append("可用模式（单循环的阶段配置）:")
             for row in mode_choices(registry):
                 marker = " <-- 当前" if row.current else ""
                 lines.append(f"  {row.label:<18} {row.detail}{marker}")
@@ -500,7 +500,7 @@ def _cmd_mode(
         repl = session_state.get("_repl")
         if repl and hasattr(repl, "status_bar"):
             repl.status_bar.refresh()
-        return f"✅ 已切换到范式: {mode.name} — {mode.description}"
+        return f"✅ 已切换到模式: {mode.name} — {mode.description}"
     except ValueError as e:
         return f"❌ {e}"
 

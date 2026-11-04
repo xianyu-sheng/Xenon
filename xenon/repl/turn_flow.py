@@ -106,7 +106,7 @@ class TurnFlowMixin:
         skill_name: str | None = None,
         skill_args: str = "",
     ) -> None:
-        """处理多轮对话，支持 prompt 优化和多种思考范式。"""
+        """处理多轮对话，支持 prompt 优化和多种模式。"""
         # P2-修复2: 空输入防护 — 避免空 user 消息污染 history + 浪费 LLM token
         # run() 主循环 line 165 也有防护，但 _handle_chat 是独立可调用的方法，
         # 直接调（如测试或 API 入口）时无防护会 add_user_message("") 进入完整流程
@@ -183,8 +183,8 @@ class TurnFlowMixin:
                             f"规则: {routing_decision.matched_rule}][/dim]"
                         )
                 except ValueError as e:
-                    logger.warning(f"智能路由切换范式失败: {e}")
-                    console.print(f"\n[yellow]⚠ 范式切换失败: {e}[/yellow]")
+                    logger.warning(f"智能路由切换模式失败: {e}")
+                    console.print(f"\n[yellow]⚠ 模式切换失败: {e}[/yellow]")
 
         # Side effects are authorized by the original request, never by the
         # optimizer's generated wording or by the selected reasoning mode.

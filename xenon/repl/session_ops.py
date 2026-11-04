@@ -277,7 +277,7 @@ class SessionOpsMixin:
 
 
     def _ensure_turn_node_finished(self) -> None:
-        """纯对话路径（direct 无引擎）收尾：running 节点 → passed。"""
+        """纯对话路径（direct 不跑阶段）收尾：running 节点 → passed。"""
 
         try:
             node = self._turn_tree.tail()

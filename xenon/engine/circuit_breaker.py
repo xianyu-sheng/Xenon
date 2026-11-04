@@ -15,7 +15,7 @@ from typing import Callable
 
 
 class CircuitBreaker:
-    """单工具断路器。线程不安全（引擎单线程内调用）。"""
+    """单工具断路器。线程不安全（循环单线程内调用）。"""
 
     CLOSED = "closed"
     OPEN = "open"

@@ -58,7 +58,7 @@ ThinkingMode = ModeSpec
 # ── 预置思考范式 ──────────────────────────────────────────
 # 名称、描述与路由能力都来自 xenon/modes.py。这里刻意不再 import
 # ``xenon.engine``：/mode 是模型配置入口，不应该为了列七个名字而加载整个
-# legacy 引擎骨架。legacy 引擎的描述由 builtin_engines 复用同一份目录。
+# 模式目录的唯一来源：xenon/modes.py。这里只做引用，不复制描述。
 BUILTIN_MODES: dict[str, ThinkingMode] = dict(MODE_CATALOG)
 
 
@@ -250,10 +250,10 @@ class ModelRegistry:
     # ── 思考范式 ──────────────────────────────────────────
 
     def set_mode(self, mode_name: str) -> ThinkingMode:
-        """切换思考范式。"""
+        """切换模式。"""
         if mode_name not in self.modes:
             available = ", ".join(self.modes.keys())
-            raise ValueError(f"未知范式: {mode_name}。可用: {available}")
+            raise ValueError(f"未知模式: {mode_name}。可用: {available}")
         self.current_mode = mode_name
         return self.modes[mode_name]
 
