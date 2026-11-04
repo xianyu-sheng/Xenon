@@ -511,3 +511,60 @@ def test_model_command_uses_the_picker(monkeypatch) -> None:
 
     assert "second" in out
     assert registry.role_priority["planner"] == ["second"]
+
+
+def test_an_uppercase_label_still_matches() -> None:
+    assert resolve_answer(permission_choices(), "BYPASS") == "bypass"
+
+
+def test_a_raising_isatty_means_no_picker(monkeypatch) -> None:
+    import sys
+    import types as _types
+
+    import xenon.repl.selector as selector
+
+    def boom():
+        raise OSError("no terminal here")
+
+    monkeypatch.setattr(sys.stdin, "isatty", boom, raising=False)
+    session = _types.SimpleNamespace(prompt=lambda *a, **k: "plan")
+    assert (
+        selector.ask_choice(
+            _repl(session=session), title="t", choices=permission_choices()
+        )
+        is None
+    )
+
+
+def test_an_alias_of_a_listed_mode_gets_no_row() -> None:
+    registry = _Registry(
+        modes={
+            "direct": types.SimpleNamespace(description="直接", alias_of="", loop="L1"),
+            "react": types.SimpleNamespace(
+                description="别名", alias_of="direct", loop="L1"
+            ),
+        }
+    )
+    assert [item.value for item in mode_choices(registry)] == ["direct"]
+
+
+def test_switching_to_an_unknown_mode_name_is_not_a_switch() -> None:
+    from xenon.repl.command_groups.permissions import _switch_mode
+
+    assert _switch_mode(_repl(), "nonsense") is None
+
+
+def test_switching_without_a_gate_reports_it() -> None:
+    from xenon.repl.command_groups.permissions import _switch_mode
+
+    assert _switch_mode(_repl(), "plan") == "权限系统未初始化"
+
+
+def test_a_pick_that_cannot_be_applied_reports_a_warning(monkeypatch) -> None:
+    import xenon.repl.selector as selector
+
+    monkeypatch.setattr(selector, "ask_choice", lambda *a, **k: "not-a-mode")
+
+    out = _cmd_permissions(args="", session_state={"_repl": _repl()})
+
+    assert "未能切换" in out
