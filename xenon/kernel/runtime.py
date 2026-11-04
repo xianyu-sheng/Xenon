@@ -266,6 +266,9 @@ class LoopRuntime:
             "phase": self._phase.value if self._phase else "",
             "steps": int(self._steps or 0),
             "tokens": int(getattr(self._usage, "total", 0) or 0),
+            # Context depth for the last request; a cumulative total cannot
+            # tell an operator whether the window is filling up (#408).
+            "context_tokens": int(getattr(self._usage, "last_prompt", 0) or 0),
             "stalled_seconds": stalled,
             "tool_calls": int(self._tool_calls or 0),
         }
@@ -738,7 +741,38 @@ class LoopRuntime:
             return obligation
         return replace(obligation, since_seq=self._plan_since_seq)
 
+    def _reasoning_step_guard(self, action: CallTool) -> bool:
+        """Refuse a tool call aimed at a step that only asks for reasoning.
+
+        Returns True when the call was refused (the run continues so the model
+        can submit `think`/`finish` instead of dying on a malformed plan step).
+        """
+
+        step = self._active_step
+        if step is None or step.kind.value != "think":
+            return False
+        reason = (
+            f"step {step.id} is a reasoning step (kind=think): submit `think` "
+            "with the conclusion, then `finish` when the task is done. "
+            "Tool calls belong to inspect/edit/verify steps."
+        )
+        self._append(
+            EventKind.POLICY_DECISION,
+            EventSource.GATE,
+            {
+                "kind": PolicyDecisionKind.VETO.value,
+                "reason": reason,
+                "scope": [action.intent.capability.value, "think_step"],
+            },
+            step_id=self._current_step_id(),
+        )
+        self._loop_notes.append(reason)
+        del self._loop_notes[:-5]
+        return True
+
     def _call_tool(self, action: CallTool) -> TaskResult | None:
+        if self._reasoning_step_guard(action):
+            return None
         try:
             return self._call_tool_once(action)
         finally:

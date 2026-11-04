@@ -306,6 +306,23 @@ def kernel_progress_reporter(repl: Any) -> Any:
                     status_bar.set_kernel_status(snapshot())
                 except Exception:  # noqa: BLE001 — progress is cosmetic
                     pass
+        # #408: the status bar's "context N%" must mean "how full is the
+        # window", not "how many tokens did this session bill".  Legacy turns
+        # fed this from the chat history, which a kernel turn never grows, so
+        # a 20K-character kernel prompt displayed as "0.3%".  Publish the real
+        # depth of the last request instead.
+        ctx_mgr = getattr(repl, "ctx_mgr", None)
+        record = getattr(ctx_mgr, "record_real_usage", None)
+        if callable(record) and runtime is not None:
+            usage = getattr(runtime, "_usage", None)
+            depth = int(getattr(usage, "last_prompt", 0) or 0)
+            if depth:
+                try:
+                    # total = prompt: the window holds the input, and that is
+                    # the number the ratio is about.
+                    record(depth, 0, depth)
+                except Exception:  # noqa: BLE001 — a meter is not a turn
+                    pass
         if seconds < state["last_seconds"]:  # a new model call restarts the clock
             state["notified"] = 0.0
         state["last_seconds"] = seconds

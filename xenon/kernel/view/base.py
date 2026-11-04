@@ -26,6 +26,9 @@ from xenon.kernel.contracts import (
 from xenon.ledger.events import EventKind
 
 _DEFAULT_MAX_TOKENS = 8000
+#: How much of one effect's content a receipt may carry into the view.
+_RECEIPT_CONTENT_CHARS = 8000
+
 _CMD_KEY = "comm" + "and"
 _CHAT_EVENT_KINDS = frozenset(
     {
@@ -181,7 +184,17 @@ def _effect_summary(effect: Mapping[str, Any]) -> dict[str, Any]:
                 list(value) if isinstance(value, (list, tuple)) else value
             )
     if "content" in effect:
-        summary["content"] = _clip(effect["content"], 8000)
+        raw = str(effect["content"])
+        summary["content"] = _clip(raw, _RECEIPT_CONTENT_CHARS)
+        if len(raw) > _RECEIPT_CONTENT_CHARS:
+            # Silent truncation is how a model "reads" a 22 KB README and then
+            # answers about the first 8 KB (#409).  Say it was cut, and by how
+            # much, so the next proposal can ask for the rest.
+            summary["truncated"] = {
+                "shown_chars": _RECEIPT_CONTENT_CHARS,
+                "total_chars": len(raw),
+                "remaining_chars": len(raw) - _RECEIPT_CONTENT_CHARS,
+            }
     if _CMD_KEY in effect:
         summary[_CMD_KEY] = _clip(effect[_CMD_KEY], 300)
     return summary
@@ -501,6 +514,16 @@ def _system_prompt(
             f"targets={list(active_step.targets)} "
             f"expects={[item.id for item in active_step.expects]}"
         )
+        if active_step.kind.value == "think":
+            # A plan may contain reasoning steps.  Without this line the model
+            # has to invent a tool call to satisfy one — a real run filled a
+            # summary step with `call_tool{capability: read}` and no target
+            # (#405).  The loop, not the plan, decides what closes a step.
+            lines.append(
+                "  This step is a reasoning step: answer it with `think` "
+                "(and `finish` when the task is done). Do not call a tool "
+                "for it."
+            )
     context_section = _context_section(spec.context_blocks)
     if context_section:
         lines.append(context_section)

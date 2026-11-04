@@ -39,7 +39,15 @@ _CHARS_PER_TOKEN_ESTIMATE = 3
 class UsageTotals:
     """Running totals for one task."""
 
-    __slots__ = ("prompt", "completion", "cache_hit", "calls", "estimated")
+    __slots__ = (
+        "prompt",
+        "completion",
+        "cache_hit",
+        "calls",
+        "estimated",
+        "last_prompt",
+        "last_completion",
+    )
 
     def __init__(self) -> None:
         self.prompt = 0
@@ -47,6 +55,11 @@ class UsageTotals:
         self.cache_hit = 0
         self.calls = 0
         self.estimated = 0
+        #: The *last* call's prompt size.  This is the context depth — what the
+        #: model actually had in front of it — as opposed to ``prompt``, which
+        #: is the cumulative bill (#408).
+        self.last_prompt = 0
+        self.last_completion = 0
 
     @property
     def total(self) -> int:
@@ -54,7 +67,9 @@ class UsageTotals:
 
     def add(self, payload: Mapping[str, Any]) -> None:
         self.calls += 1
-        self.prompt += int(payload.get("prompt_tokens") or 0)
+        self.last_prompt = int(payload.get("prompt_tokens") or 0)
+        self.last_completion = int(payload.get("completion_tokens") or 0)
+        self.prompt += self.last_prompt
         self.completion += int(payload.get("completion_tokens") or 0)
         self.cache_hit += int(payload.get("cache_hit_tokens") or 0)
         if payload.get("estimated"):
