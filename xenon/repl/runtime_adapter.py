@@ -791,7 +791,11 @@ class RuntimeAdapter:
             context_blocks=tuple(context_blocks or ()),
             turn_path=tuple(turn_path or ()),
             audit_provider=self.audit_provider,
-            approval=self.approval if self.allow_approval else None,
+            # #392: the approver reaches the runtime whenever the front-end can
+            # ask.  ``allow_approval`` still decides whether the *policy* may
+            # auto-prompt; an explicit ``request_escalation`` is a separate,
+            # human-driven path that only exists because this bridge is wired.
+            approval=self.approval,
             allow_approval=self.allow_approval,
             catalog_profile=self.catalog_profile,
             gateway_context=self.gateway_context,
@@ -853,7 +857,11 @@ class RuntimeAdapter:
             max_steps=self.max_steps,
             constraints=tuple(constraints),
             sink=sink,
-            approval=self.approval if self.allow_approval else None,
+            # #392: the approver reaches the runtime whenever the front-end can
+            # ask.  ``allow_approval`` still decides whether the *policy* may
+            # auto-prompt; an explicit ``request_escalation`` is a separate,
+            # human-driven path that only exists because this bridge is wired.
+            approval=self.approval,
             allow_approval=self.allow_approval,
             catalog_profile=self.catalog_profile,
             gateway_context=self.gateway_context,
@@ -911,6 +919,12 @@ class RuntimeAdapter:
                 else Path.home() / ".xenon" / "ledger" / "repl"
             ),
             client=client,
+            # #392: the bridge is wired whenever the front-end *can* ask — it
+            # re-checks isatty and fails closed with a readable reason.  It is
+            # what ``request_escalation`` talks to.  ``allow_approval`` still
+            # gates the policy's own auto-prompt path, so a read-level turn's
+            # default permissions are unchanged: only an explicit escalation
+            # (a human decision, recorded) can widen them.
             approval=KernelApprovalProvider(repl),
             allow_approval=(
                 int(level) >= int(ExecutionLevel.EXECUTE)

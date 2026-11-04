@@ -616,6 +616,7 @@ class ActionKind(str, Enum):
     UPDATE_PLAN = "update_plan"
     REQUEST_VERIFICATION = "request_verification"
     ASK_USER = "ask_user"
+    REQUEST_ESCALATION = "request_escalation"
     FINISH = "finish"
     ABORT = "abort"
     RELEASE_STEP = "release_step"
@@ -676,6 +677,31 @@ class AskUser:
 
 
 @dataclass(frozen=True, slots=True)
+class RequestEscalation:
+    """Ask the human to authorize one call this turn would otherwise refuse.
+
+    #392: the model used to have no way to say "I need to run this".  A
+    read-level turn maps to a read-only policy, so a task that genuinely needs
+    the network simply blocked, and the model had to invent a boundary to
+    explain why (see #165).  This action is the formal request: the harness
+    asks the human through the *existing* approval panel, and an approval
+    becomes a one-shot ``ScopedGrant`` — recorded, revocable, consumed by
+    exactly one call.
+
+    It is a request, never a permission: the policy still decides, hard rules
+    (push, destructive commands, plan mode) are refused *without* prompting,
+    and a refusal blocks the task instead of asking again.
+    """
+
+    intent: ToolIntent
+    reason: str
+
+    @property
+    def kind(self) -> ActionKind:
+        return ActionKind.REQUEST_ESCALATION
+
+
+@dataclass(frozen=True, slots=True)
 class Finish:
     answer: str
     claims: tuple[Claim, ...] = ()
@@ -713,6 +739,7 @@ class Abort:
 Action = (
     Think
     | CallTool
+    | RequestEscalation
     | SubmitPlan
     | UpdatePlan
     | RequestVerification

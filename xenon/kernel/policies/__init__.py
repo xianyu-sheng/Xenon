@@ -504,6 +504,22 @@ class PermissionPolicy:
             return self._deny(capability, targets, "network requires a grant")
         return self._deny(capability, targets, "unknown capability")
 
+    def refuse_escalation(self, intent: ToolIntent) -> str:
+        """Hard rules that no human approval may override (#392).
+
+        A request to escalate is still a request: the human decides.  These
+        three are the exceptions — they are refused *before* anyone is asked,
+        because prompting would imply they are negotiable.  Pure: no clock, no
+        I/O, derived from the intent alone.
+        """
+
+        command = _command(intent)
+        if _is_push(command):
+            return "push is never approvable"
+        if _is_destructive(command):
+            return f"destructive command is never approvable: {command[:80]}"
+        return ""
+
     def describe_boundary(self) -> str:
         """One deterministic line describing what this policy will do.
 
