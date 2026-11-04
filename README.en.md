@@ -16,7 +16,7 @@
 <p align="center">The model proposes; it cannot turn an unverified effect into a delivery.<br/>Xenon records every tool call as a typed receipt, binds every claim to a fact, and makes unverifiable work explicit debt or abstention.</p>
 
 <p align="center">
-  <b>SWE-bench Lite (blind)</b>: <b>62.2%</b> frozen 30 · <b>52.2%</b> zero-overlap held-out · <b>4,000+</b> tests · <b>Python 3.10–3.12</b>
+  <b>SWE-bench Lite</b>: <b>62.2%</b> frozen 30 · <b>52.2%</b> zero-overlap held-out (recorded 2026-10-16 — see the scope note under Benchmark) · <b>3,900+</b> tests · <b>Python 3.10–3.12</b> · current <b>0.9.6</b>
 </p>
 
 <p align="center">
@@ -32,10 +32,27 @@
 > [!TIP]
 > **The model proposes; the harness proves.** Xenon does not use an LLM judge or seven isomorphic engines. It keeps one `LoopRuntime`: the model emits capability actions, the catalog binds tools, the gateway returns receipts, the controller decides repair/debt, and the finalizer owns delivery commits.
 
+## How is this different from Claude Code
+
+Capability-wise the two are close: a terminal agent, multi-turn, tool calls, MCP, plan mode, approvals. If you want a **polished coding agent today**, use Claude Code.
+
+Xenon targets a different question — **what entitles it to say "done"**:
+
+- **Delivery has a physical boundary.** Only the `Finalizer` commits; if the preflight audit fails, that commit is rolled back instead of returning a paragraph claiming success.
+- **Claims must bind to facts.** If the model says "created 3 files", those paths must appear in ledger receipts, or the gap becomes debt that blocks delivery.
+- **Unverifiable stays abstained.** Semantic requirements that cannot be checked deterministically are reported as unverified, never dressed up as a pass.
+- **Every step replays.** One append-only ledger means `/evidence` shows the same truth the harness acted on, not the model's self-report.
+- **Hard rules are never negotiated.** `git push` and destructive commands are refused *without* asking; anything beyond the current policy goes through a one-shot grant that is revoked after a single call.
+
+One line: **Claude Code makes you faster; Xenon tries to make "done" checkable.**
+
+> This is a **research beta**: mechanisms are in place and exercised on a limited set of real tasks (`docs/evidence/`), but the kernel path has not been re-benchmarked. Do not run it in production.
+
 ## Quick start
 
 ```bash
 pip install https://github.com/xianyu-sheng/Xenon/releases/download/v0.9.6/xenon_harness-0.9.6-py3-none-any.whl
+xenon --version   # 0.9.6
 xenon
 ```
 
@@ -113,6 +130,7 @@ input
 | Model | `deepseek-v4-flash`, official API |
 | Judging | Official `swebench` harness |
 | Repetition | Three independent runs, mean reported; every run published |
+| Recorded | 2026-10-16 (the v0.9.4-era framework) |
 
 | Sample | Current framework | Previous v0.8.5 |
 |---|---:|---:|
@@ -120,6 +138,11 @@ input
 | Zero-overlap held-out (seed 20261016) | **52.2%** | 46.7% |
 
 Full protocol, per-run results and sha256 archives: [EVAL_RESULTS](docs/EVAL_RESULTS.md).
+
+> **Scope:** these numbers measure the framework as of 2026-10-16, **not the 0.9.6 single-loop
+> kernel**. The kernel has not been re-run under the same protocol since it became the default
+> path — until it is, read these as "the previous generation's level", not as a current score.
+> The re-run will use the same pre-registered protocol and will be published whatever it shows.
 
 ## Featured in
 
@@ -130,15 +153,23 @@ Full protocol, per-run results and sha256 archives: [EVAL_RESULTS](docs/EVAL_RES
 
 ## Common commands
 
+Type `/` for the **command palette** (prefix or abbreviation filtering, Enter runs the highlighted row); type `@` for file-path completion; `Shift+Tab` cycles modes.
+
 ```text
-/evidence   ledger, V2 coverage, chain verification
-/goal       objective, phase, plan, debt
-/resume     restore the session and ledger pointer
-/plan       soft plan mode
-/mode       choose a reasoning mode
-/mcp        MCP servers and tools
-/rewind     rewind to a turn node
-/fork       fork from a turn node
+/evidence     ledger, V2 coverage, chain verification
+/goal         objective, phase, plan, debt
+/resume       restore the session and ledger pointer
+/plan         soft plan mode
+/mode         choose a mode (a phase profile of the one loop)
+/permissions  approval policy + session grants (revocable one by one)
+/lessons      cross-session lessons: applied/recurrence counts, export to PITFALLS.md
+/model        switch the active model
+/sessions     list and resume sessions
+/mcp          MCP servers and tools
+/rewind       rewind to a turn node
+/fork         fork from a turn node
+/compact      compact a long conversation
+/tools        tools and capabilities
 ```
 
 ## Documentation
@@ -152,6 +183,7 @@ Full protocol, per-run results and sha256 archives: [EVAL_RESULTS](docs/EVAL_RES
 
 ## Honest boundaries
 
+- **This is a research beta.** Mechanisms are in place with real TTY and real-task evidence, but coverage is narrow; the kernel path has not been re-benchmarked, and there is no multi-user or long-horizon validation. Use mature tools in production.
 - The hash chain proves process integrity, not conclusion truth.
 - Abstention is a product behavior, not a hidden failure.
 - Approval is not a sandbox; run external MCP servers in a controlled environment.
