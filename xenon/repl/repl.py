@@ -378,9 +378,37 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         ANSI_SEQUENCES["\x1b[27;2;13~"] = shift_enter
 
         cmd_names = list(COMMANDS.keys())
-        self._completer = OmniCompleter(cmd_names)
+        # #183: the palette ranks by what this user actually runs.  The MRU
+        # file is a hint, never state: a missing or unreadable file just means
+        # alphabetical order.
+        from xenon.repl.command_catalog import CommandRecents
+
+        self._command_recents = getattr(self, "_command_recents", None) or (
+            CommandRecents(Path.home() / ".xenon" / "command_recents.json")
+        )
+        self._completer = OmniCompleter(cmd_names, recents=self._command_recents)
 
         kb = KeyBindings()
+
+        @kb.add("enter", eager=True)
+        def _(event):
+            # #183: Enter runs the highlighted palette row.  Without this the
+            # menu is decorative: typing "/perm" + Enter would run a command
+            # that does not exist.  Scoped to a bare "/prefix" in
+            # ``enter_applies`` so file completion keeps normal Enter.
+            from xenon.repl.command_catalog import enter_applies
+
+            buffer = event.current_buffer
+            state = buffer.complete_state
+            if state is not None:
+                names = [item.text for item in state.completions]
+                target = enter_applies(
+                    buffer.document.text_before_cursor, names, state.complete_index
+                )
+                if target is not None and state.complete_index is None:
+                    buffer.text = target
+                    buffer.cursor_position = len(target)
+            buffer.validate_and_handle()
 
         @kb.add("s-tab")
         def _(event):
@@ -1563,6 +1591,14 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         if self._classify_slash_input(raw) == "chat":
             self._handle_chat(raw)
             return False
+
+        # #183: remember what ran so the palette puts it on top next time.
+        record_use = getattr(self._completer, "record_use", None)
+        if callable(record_use):
+            try:
+                record_use(cmd_name)
+            except Exception:  # noqa: BLE001 — ordering is cosmetic
+                pass
 
         try:
             output = dispatch_command(
