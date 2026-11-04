@@ -35,7 +35,7 @@ if TYPE_CHECKING:  # 仅供类型检查器，运行时不导入（保持懒加�
     from xenon.engine.callbacks import EngineCallback, SilentCallback
     from xenon.engine.context import AgentContext
 
-__version__ = "0.9.5"
+__version__ = "0.9.6"
 
 __all__ = [
     "__version__",
@@ -122,7 +122,7 @@ def _run_task(
     Args:
         task: 自然语言任务描述。
         workspace: 工作区根目录（默认当前目录）。文件副作用限制在此目录内。
-        engine: 推理范式名（默认 "react"，见 ``list_engines()``）。
+        mode: 模式名（默认 "react"，见 ``list_engines()``）；同一循环的阶段配置。
         model_priority: 模型优先级列表；``None`` 时从本地配置读取。
         callback: 事件回调；``None`` 时用 ``SilentCallback``（不输出到终端）。
         context: 可选的 ``AgentContext``；``None`` 时新建一个。
@@ -133,7 +133,7 @@ def _run_task(
 
     Raises:
         ValueError: ``workspace`` 不是已存在的目录，或 ``task`` 为空。
-        KeyError: ``engine`` 范式名未注册。
+        KeyError: ``engine`` 模式名未注册。
         RuntimeError: 所有模型均调用失败。
 
     Example::

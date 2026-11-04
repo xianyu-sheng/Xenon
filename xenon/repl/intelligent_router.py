@@ -1,7 +1,7 @@
 """
-智能路由器 - Xenon 推理范式自动选择
+智能路由器 - Xenon 模式自动选择
 
-根据用户输入和上下文自动选择最合适的推理范式。
+根据用户输入和上下文自动选择最合适的模式。
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ class IntelligentRouter:
     """
     智能路由器主类
 
-    协调特征提取和范式选择，提供统一的路由接口。
+    协调特征提取和模式选择，提供统一的路由接口。
     """
 
     def __init__(
@@ -50,7 +50,7 @@ class IntelligentRouter:
             enabled: 是否启用智能路由
             confidence_threshold: 置信度阈值，低于此值不自动切换
             notify_user: 是否通知用户切换原因
-            switch_only_on_improvement: 只在新范式"更好"时切换（避免频繁切换）
+            switch_only_on_improvement: 只在新模式"更好"时切换（避免频繁切换）
         """
         self.enabled = enabled
         self.confidence_threshold = confidence_threshold
@@ -82,11 +82,11 @@ class IntelligentRouter:
         Args:
             user_input: 用户输入
             context: 对话上下文
-            current_mode: 当前范式
+            current_mode: 当前模式
 
         Returns:
-            RoutingDecision: 如果建议切换范式
-            None: 保持当前范式
+            RoutingDecision: 如果建议切换模式
+            None: 保持当前模式
         """
         if not self.enabled:
             return None
@@ -98,7 +98,7 @@ class IntelligentRouter:
             features = self.extractor.extract(user_input, context)
             logger.debug(f"任务特征: {features}")
 
-            # Step 2: 选择范式
+            # Step 2: 选择模式
             decision = self.selector.select(features)
             logger.info(
                 f"路由决策: {decision.paradigm} "
@@ -128,7 +128,7 @@ class IntelligentRouter:
                 )
                 return None
 
-            # Step 5: 优先级检查（避免从强范式降级到弱范式）
+            # Step 5: 优先级检查（避免从强模式降级到弱模式）
             if self.switch_only_on_improvement:
                 if not self._is_improvement(current_mode, decision.paradigm):
                     logger.info(
@@ -255,11 +255,11 @@ class IntelligentRouter:
 
     def _is_improvement(self, current: str, proposed: str) -> bool:
         """
-        判断新范式是否比当前范式"更好"
+        判断新模式是否比当前模式"更好"
 
-        避免频繁在相近范式间切换，以及从复杂范式降级到简单范式。
+        避免频繁在相近模式间切换，以及从复杂模式降级到简单模式。
 
-        范式强度排序（主观）:
+        模式强度排序（主观）:
         - direct < react < plan-execute ≈ reflection < plan-react ≈ react-reflection < plan-reflection
         """
         strength_order = {

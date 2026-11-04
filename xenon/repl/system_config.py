@@ -55,7 +55,7 @@ class ValidationConfig:
 class EngineConfig:
     """运行行为配置。"""
 
-    # XENON_NO_AUTO_ENGINE: 禁用范式自动路由
+    # XENON_NO_AUTO_ENGINE: 禁用模式自动路由
     disable_auto_routing: bool = False
 
 
@@ -149,7 +149,7 @@ class AutoRouteConfig:
     confidence_threshold: float = 0.6
     # XENON_AUTO_ROUTE_NOTIFY_USER: 切换时打印通知
     notify_user: bool = True
-    # XENON_AUTO_ROUTE_SWITCH_ONLY_ON_IMPROVEMENT: 只在新范式更好时切换（防降级）
+    # XENON_AUTO_ROUTE_SWITCH_ONLY_ON_IMPROVEMENT: 只在新模式更好时切换（防降级）
     switch_only_on_improvement: bool = True
     # XENON_AUTO_ROUTE_LOG_DECISIONS: 是否持久化决策日志（JSONL）
     log_decisions: bool = False
@@ -647,7 +647,7 @@ validation:
 # 引擎行为配置
 # ========================================
 engine:
-  # 禁用范式自动路由
+  # 禁用模式自动路由
   # 环境变量: XENON_NO_AUTO_ENGINE
   disable_auto_routing: false
 
@@ -752,7 +752,7 @@ auto_route:
   # 环境变量: XENON_AUTO_ROUTE_NOTIFY_USER
   notify_user: true
 
-  # 只在新范式更好时切换（避免降级）
+  # 只在新模式更好时切换（避免降级）
   # 环境变量: XENON_AUTO_ROUTE_SWITCH_ONLY_ON_IMPROVEMENT
   switch_only_on_improvement: true
 

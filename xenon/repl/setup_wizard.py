@@ -1,7 +1,7 @@
 """
 Setup Wizard — 交互式配置引导。
 
-提供菜单式的 API Key 配置、模型选择、范式选择，
+提供菜单式的 API Key 配置、模型选择、模式选择，
 用户不需要记任何命令，全程跟着菜单走。
 """
 
@@ -561,9 +561,9 @@ def _model_hint(model_name: str) -> str:
 
 
 def _mode_scene(mode_name: str) -> str:
-    """返回范式的推荐场景。
+    """返回模式的推荐场景。
 
-    内置范式用这里的精简文案（比 spec.description 更短，适合向导表格）；
+    内置模式用这里的精简文案（比 spec.description 更短，适合向导表格）；
     其它模式回退到 ``MODE_CATALOG`` 的描述，向导不会出现空白行——
     引擎注册表已随引擎层退役。
     """

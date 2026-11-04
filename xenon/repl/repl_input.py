@@ -485,7 +485,7 @@ def _read_input_unix(self) -> str:
                     seq_buffer = ""
                     continue
 
-                # Shift+Tab: \x1b[Z → 切换思考范式
+                # Shift+Tab: \x1b[Z → 切换模式
                 if seq_buffer == "\x1b[Z":
                     seq_buffer = ""
                     raise _ShiftTabSignal()

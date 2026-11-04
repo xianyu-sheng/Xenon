@@ -4,7 +4,7 @@ REPL — 交互式命令行主循环。
 提供类似 Claude Code 的交互体验：
 - 直接输入文本进入多轮对话
 - /command 执行斜杠命令
-- 支持模型切换、范式切换、会话管理
+- 支持模型切换、模式切换、会话管理
 - 底部状态栏实时显示上下文用量
 - 输入指令自动重构为结构化 prompt
 """
@@ -1385,7 +1385,7 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         """打印简洁的欢迎界面。
 
         设计原则：信息密度高、视觉噪音低。只展示关键状态——
-        版本、范式、模型、一个实用提示。用 Unicode 细线框替代 ASCII 艺术。
+        版本、模式、模型、一个实用提示。用 Unicode 细线框替代 ASCII 艺术。
         """
         import random
 
@@ -2472,7 +2472,7 @@ def start_repl(
 
     Args:
         models: 初始模型列表。
-        mode: 初始思考范式。
+        mode: 初始模式。
         system_prompt: 自定义系统提示词。
         config_path: 配置文件路径。
         optimize: 是否启用 prompt 自动优化。

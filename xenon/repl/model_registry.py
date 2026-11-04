@@ -4,7 +4,7 @@ Model Registry — 运行时模型管理。
 支持：
 - /set_model 添加/修改模型配置
 - /models 查看当前模型列表
-- /mode 切换思考范式
+- /mode 切换模式
 - 运行时动态修改模型优先级
 """
 
@@ -51,11 +51,11 @@ class ModelConfig:
     derived: bool = False
 
 
-# 思考范式配置（兼容导出；实现由 :mod:`xenon.modes` 提供）。
+# 模式配置（兼容导出；实现由 :mod:`xenon.modes` 提供）。
 ThinkingMode = ModeSpec
 
 
-# ── 预置思考范式 ──────────────────────────────────────────
+# ── 预置模式 ──────────────────────────────────────────
 # 名称、描述与路由能力都来自 xenon/modes.py。这里刻意不再 import
 # ``xenon.engine``：/mode 是模型配置入口，不应该为了列七个名字而加载整个
 # 模式目录的唯一来源：xenon/modes.py。这里只做引用，不复制描述。
@@ -66,7 +66,7 @@ class ModelRegistry:
     """
     运行时模型注册表。
 
-    管理当前可用的模型、角色分配和思考范式。
+    管理当前可用的模型、角色分配和模式。
     """
 
     def __init__(self) -> None:
@@ -74,7 +74,7 @@ class ModelRegistry:
         self.models: dict[str, ModelConfig] = {}
         # 角色分配 {role_name: [alias, ...]}，如 {"planner": ["claude", "gpt4"]}
         self.role_priority: dict[str, list[str]] = {}
-        # 当前思考范式
+        # 当前模式
         self.current_mode: str = "direct"
         self.modes: dict[str, ThinkingMode] = dict(BUILTIN_MODES)
 
@@ -247,7 +247,7 @@ class ModelRegistry:
         # 默认返回所有模型
         return [m.model_id for m in self.models.values()]
 
-    # ── 思考范式 ──────────────────────────────────────────
+    # ── 模式 ──────────────────────────────────────────
 
     def set_mode(self, mode_name: str) -> ThinkingMode:
         """切换模式。"""
@@ -391,7 +391,7 @@ class ModelRegistry:
             except ValueError:
                 pass
 
-        # 加载范式
+        # 加载模式
         if "mode" in data:
             try:
                 self.set_mode(data["mode"])

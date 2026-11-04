@@ -399,7 +399,7 @@ def _interactive_session_picker() -> str | None:
 def _print_session_list() -> None:
     """`xenon --resume`（无参数）：打印可恢复的会话表，不进入 REPL。
 
-    表格列与 /resume 无参数分支保持一致（# / 名称 / 时间 / 消息 / 范式），
+    表格列与 /resume 无参数分支保持一致（# / 名称 / 时间 / 消息 / 模式），
     这样命令行和 REPL 里看到的是同一张表、同一套序号。
     """
     from xenon.repl.session import (

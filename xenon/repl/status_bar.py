@@ -4,7 +4,7 @@ Status Bar — 输入区底部状态栏。
 在终端底部实时显示：
 - 当前模型 / auto-routing
 - Token 使用量（进度条）
-- 思考范式
+- 模式
 - 工具调用计数
 - 会话时长
 - 缓存命中率 / 费用（需 UsageTracker）
@@ -414,7 +414,7 @@ class StatusBar:
         warn = "⚠ /compact · " if stats["needs_compact"] else ""
         stream = "⚡" if self._streaming else "⏸"
 
-        # ── 三段式布局：左(缓存) · 中(模型/范式) · 右(Token/消息/时长) ──
+        # ── 三段式布局：左(缓存) · 中(模型/模式) · 右(Token/消息/时长) ──
         term_width = shutil.get_terminal_size().columns
 
         # 左段：缓存数据（最重要）
@@ -433,7 +433,7 @@ class StatusBar:
         else:
             left = " ".join(left_parts)
 
-        # 中段：模型名 + 范式 + 警告
+        # 中段：模型名 + 模式 + 警告
         center_parts = [model_display, mode.name]
         if warn:
             while warn and warn[-1] in " ·":

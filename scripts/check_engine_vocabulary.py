@@ -13,7 +13,7 @@ Usage:
 
 from __future__ import annotations
 
-import re
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +33,29 @@ ALLOW: tuple[str, ...] = (
 # are internal, and the guard should not block a legitimate mention there.
 INTERNAL_PREFIXES = ("xenon/engine/",)
 
-STRING = re.compile(r'"[^"]{2,}"|f"[^"]{2,}"')
+def _strings(path: Path) -> list[tuple[int, str]]:
+    """Every string constant in the file, with the line the match sits on.
+
+    Reading the source with a regex missed multi-line docstrings — the banned
+    word sat on a line that carried no quote marks, so the old check passed
+    while four docstrings still said 推理范式.  The AST knows where a string
+    starts and ends; the line offset is counted from there.
+    """
+
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except SyntaxError:  # a file we cannot read is not this guard's business
+        return []
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            found.append((node.lineno, node.value))
+    return found
+
+
+def _line_of(text: str, needle: str, first_line: int) -> int:
+    before = text[: text.index(needle)]
+    return first_line + before.count("\n")
 
 
 def violations(root: Path = PACKAGE) -> list[tuple[str, int, str]]:
@@ -47,21 +69,23 @@ def violations(root: Path = PACKAGE) -> list[tuple[str, int, str]]:
             rel = path.as_posix()
         if any(rel.startswith(prefix) for prefix in INTERNAL_PREFIXES):
             continue
-        for lineno, line in enumerate(
-            path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
-        ):
-            literals = STRING.findall(line)
-            if not literals:
+        for first_line, literal in _strings(path):
+            if any(allowed in literal for allowed in ALLOW):
                 continue
-            for literal in literals:
-                if any(allowed in literal for allowed in ALLOW):
-                    continue
-                hit = any(word in literal for word in BANNED) or any(
-                    phrase in literal for phrase in BANNED_CONTEXT
-                )
-                if hit:
-                    found.append((rel, lineno, literal.strip()[:120]))
-                    break
+            hit = next(
+                (
+                    word
+                    for word in (*BANNED, *BANNED_CONTEXT)
+                    if word in literal
+                ),
+                None,
+            )
+            if hit is None:
+                continue
+            offset = _line_of(literal, hit, first_line)
+            line = literal.splitlines()[offset - first_line].strip()
+            found.append((rel, offset, line[:120]))
+            break
     return found
 
 

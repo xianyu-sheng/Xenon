@@ -5,7 +5,15 @@
 
 ## [Unreleased]
 
-### 引擎
+## [0.9.6] — 2026-11-04
+
+> 主题：**一个循环**。0.9.5 之前是七套引擎并存的形态；本版把执行收敛成单循环内核
+> （`LoopRuntime` + 阶段配置），把「谁说了算」从提示词挪进 ledger：模型提议、
+> 内核裁决、证据成链。旧的七套执行路径保留为 frozen legacy 兼容层，不再是主路径。
+>
+> 仍是 **research beta**：机制齐备，但只在有限真实任务上验证过（见 `docs/evidence/`）。
+
+### 内核（单循环）
 
 - `/mode` 改用中立的 `xenon/modes.py` 模式目录：名称、描述与 kernel 路由能力只有一份来源，`model_registry` 不再 import `xenon.engine`。修复 `reflection` / `react-reflection` / 未知模式被 kernel 静默降级为 ActFirst 的问题；只有 `direct` / `react` / `plan-execute` 进入 kernel，其余模式继续走 frozen legacy，未知模式 fail closed。legacy 引擎描述复用同一目录，避免 `/mode` 与 `ENGINE_REGISTRY` 漂移。
 - PlanFirst 修正 plan prompt 的字面量“反斜杠+n”（与 ActFirst 一样使用真实换行）；计划步骤结束后新增一次受约束的最终总结，基于 ledger 投影的 working set 返回 `Finish(answer)`，不再固定回答 `completed`。真实 TTY `/mode plan-execute` 读取随机 probe 并返回 token；ledger 有 `plan_accepted` / `tool_receipt` / `delivered`，证据在 `docs/evidence/tty-plan-execute/`。
@@ -119,7 +127,7 @@
 - 会话事件哈希链新增**可选密钥锚点**（#106）：设置 `XENON_EVIDENCE_HMAC_KEY` 后，链哈希从 sha256(正文) 改为 HMAC-SHA256(key, prev ‖ hk ‖ 事件正文)，前驱链接与 hk 模式标记一并纳入签名；密钥只从环境变量读取、永不落盘，事件文件仅带 `hk: "hmac-sha256"` 模式标记。缺密钥的核验者遇到 keyed 链计入"待核验"（状态 `partial`，绝不静默放行）；无密钥写入后再设密钥的混合模式核验为 `mixed/partial`，`/evidence` 新增链模式显示（keyed/unkeyed/mixed，keyed 完整链显示 🔒）。默认（不设密钥）行为与以前完全一致。
 - legacy `ExecutionEvidence` 的 Git 快照显式按 UTF-8 解码（`errors="replace"`），并在 `stdout is None` 时按空快照处理；修复 Windows 下未提交中文 diff 导致 `plan-react` / `plan-reflection` / `react-reflection` 崩溃的问题。原英文 diff 行为不变。
 
-### 引擎
+### 旧执行层（legacy）
 
 - **撤销** 0.9.5 的「连续 3 次低置信度循环 → 强制收束」：真实 SmartBench 会话中，它在 18/120 步把「调研完成、准备实现」的正常多阶段任务误杀。低置信度循环恢复为只注入提示，循环的硬终止只保留高置信度分支；执行层不新增校验门，与 L0/L1/L2 证据层保持正交。
 - 规划协议与 Claude Code / Codex 对齐：新增规划专用 `submit_plan` 原生 function calling，模型直接提交结构化计划，不再手写 13KB JSON；原生端点不支持时自动回退原有文本 JSON 协议。真实 DeepSeek 会话验证：规划 1 次 native 调用、0 次文本回退，文件正确落盘。
