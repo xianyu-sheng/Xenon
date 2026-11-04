@@ -449,3 +449,44 @@ def test_a_granted_escalation_tells_the_model_the_exact_scope(tmp_path) -> None:
 
     assert any("Escalation approved for exactly this call" in " ".join(notes) for notes in seen)
     assert any("curl -s wttr.in" in " ".join(notes) for notes in seen)
+
+
+def test_escalation_scope_falls_back_to_targets(tmp_path) -> None:
+    """A non-shell request has no command; the scope names its targets."""
+    policy = _read_only(tmp_path)
+    intent = ToolIntent(
+        capability=Capability.REMOTE,
+        params={"tool_name": "weather:forecast", "tool_args": {}},
+    )
+    assert policy.escalation_scope(intent) == "weather:forecast"
+
+
+def test_escalation_scope_prefers_the_command(tmp_path) -> None:
+    policy = _read_only(tmp_path)
+    intent = ToolIntent(
+        capability=Capability.SHELL,
+        params={"command": "curl -s wttr.in", "file_path": "ignored.txt"},
+    )
+    assert policy.escalation_scope(intent) == "curl -s wttr.in"
+
+
+def test_a_broken_scope_description_does_not_fail_the_grant(tmp_path) -> None:
+    """The note is cosmetic: a policy that cannot describe still grants."""
+    ledger = Ledger.in_memory("esc-scope")
+    approver = _Yes(True)
+    gateway = _Gateway()
+
+    class BadScope(PermissionPolicy):
+        def escalation_scope(self, intent):
+            raise RuntimeError("boom")
+
+    policy = BadScope(
+        mode=PermissionMode.READ_ONLY, workspace=str(tmp_path), allow_approval=True
+    )
+    runtime = _shell_runtime(ledger, policy, approver, gateway)
+
+    runtime.run(
+        _spec("esc-scope"), ScriptedStrategy([_escalate("curl x"), _shell("curl x")])
+    )
+
+    assert gateway.calls, "the grant must still be issued"
