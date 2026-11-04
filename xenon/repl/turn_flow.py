@@ -434,6 +434,15 @@ class TurnFlowMixin:
             console.print(
                 f"[dim cyan]🧩 Agent Skill: {skill_name}（正文与资源按需加载）[/dim cyan]"
             )
+        elif getattr(self, "_awaiting_user_answer", False):
+            # The previous turn ended by asking the user a question; this
+            # message is the answer.  Passing it through unchanged is the whole
+            # point: a path is a path, not a research brief (#413).
+            optimized = user_input
+            self._awaiting_user_answer = False
+            console.print(
+                "[dim cyan]↩ 上轮在等你补充信息，本句原样交给模型[/dim cyan]"
+            )
         elif self.optimize_prompts:
             # A write/execute turn, or a turn carrying an active plan, is an
             # agentic task.  Rewriting it into a code-only prompt is worse than

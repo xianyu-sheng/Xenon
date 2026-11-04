@@ -168,6 +168,9 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         self._runtime_mode = "kernel"
         self._last_kernel_ledger: Path | None = None
         self._last_kernel_task_id: str = ""
+        #: Set when a kernel turn ended by asking the user something (#413).
+        #: The next input is an answer to that question, not a fresh task.
+        self._awaiting_user_answer: bool = False
         # Approval fact restored from a session pointer; the resolver still
         # validates it against the ledger before it is trusted.
         self._kernel_plan_approval: dict[str, Any] | None = None

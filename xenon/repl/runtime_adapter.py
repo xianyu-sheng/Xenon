@@ -1101,6 +1101,7 @@ def _result_summary(result: TaskResult, *, ledger_path: Any = None) -> str:
     )
     if detail.startswith("等待你的回答："):
         # The run did not fail — it is waiting on the operator.  Saying
+        # The run did not fail — it is waiting on the operator.  Saying
         # "未交付" first made a clarifying question look like a crash (#402).
         return detail
     if detail:
@@ -1136,6 +1137,11 @@ def _render_kernel_result(
             track(panel)
 
     answer = _result_summary(result, ledger_path=run.ledger_path)
+    # #413: remember that the floor is now the user's.  The next message is an
+    # answer to the question this turn just asked, and must reach the model
+    # verbatim — a mis-classified "here is the path" became a research brief
+    # once, and the real request never happened.
+    repl._awaiting_user_answer = answer.startswith("等待你的回答：")
     accepted = bool(result.accepted)
     planned = result.phase is TaskPhase.PLANNED
     if accepted and result.finalize_sha:
