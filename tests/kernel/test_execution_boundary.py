@@ -69,3 +69,41 @@ def test_boundary_changes_the_prefix_digest(tmp_path) -> None:
         boundary=PermissionPolicy(mode=PermissionMode.AUTO_EDIT).describe_boundary(),
     )
     assert a.prefix_digest != b.prefix_digest
+
+
+def test_a_broken_boundary_description_never_fails_the_run() -> None:
+    """A note is cosmetic: a policy that cannot describe itself yields ''."""
+    from tests.kernel.test_north_star import _runtime
+
+    class Exploding:
+        def describe_boundary(self):
+            raise RuntimeError("boom")
+
+    ledger = Ledger.in_memory("x")
+    runtime = _runtime(ledger, policies=(Exploding(),))
+    assert runtime._boundary_note() == ""
+
+
+def test_the_runtime_puts_the_boundary_into_every_view(tmp_path) -> None:
+    """The boundary reaches the model view, not just the policy object."""
+    from tests.kernel.test_north_star import _runtime
+    from xenon.kernel.contracts import CallTool, Capability, ToolIntent
+
+    seen: list[str] = []
+
+    class Spy:
+        def propose(self, view):
+            seen.append(view.system)
+            return CallTool(ToolIntent(capability=Capability.READ))
+
+    ledger = Ledger.in_memory("b2")
+    policy = PermissionPolicy(
+        mode=PermissionMode.AUTO_EDIT, workspace=str(tmp_path), allow_approval=True
+    )
+    runtime = _runtime(ledger, policies=(policy,))
+    runtime.run(
+        TaskSpec(task_id="b2", objective="o", workspace=str(tmp_path)), Spy()
+    )
+    assert seen
+    assert "Execution boundary:" in seen[0]
+    assert "push is never approvable" in seen[0]
