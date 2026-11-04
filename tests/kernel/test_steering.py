@@ -380,7 +380,6 @@ def test_listener_refuses_to_start_when_select_cannot_poll_the_stream(
 ) -> None:
     """When select() rejects the stream (Windows console/pipe), the listener
     refuses to start instead of spawning a zombie stdin owner."""
-    import os
     from types import SimpleNamespace
 
     import xenon.repl.runtime_adapter as adapter
@@ -390,16 +389,16 @@ def test_listener_refuses_to_start_when_select_cannot_poll_the_stream(
 
     monkeypatch.setattr(adapter.select, "select", no_select)
 
-    read_fd, write_fd = os.pipe()
-    try:
-        repl = SimpleNamespace()
-        listener = adapter.SteeringListener(repl, stream=os.fdopen(read_fd))
-        assert listener.start() is False
-    finally:
-        try:
-            os.close(write_fd)
-        except OSError:
-            pass
+    class _Tty:
+        """Interactive-looking stream: the select probe MUST be reached."""
+
+        def isatty(self):
+            return True
+
+    repl = SimpleNamespace()
+    listener = adapter.SteeringListener(repl, stream=_Tty())
+    assert listener.start() is False
+    assert listener._thread is None, "no zombie reader thread may be spawned"
 
 
 def test_loop_polls_select_and_stops_within_a_tick(monkeypatch) -> None:
