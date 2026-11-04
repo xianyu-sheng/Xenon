@@ -420,3 +420,32 @@ def test_an_approval_without_a_target_fails_closed(tmp_path) -> None:
     assert result.accepted is False
     reasons = " ".join(str(item.get("reason")) for item in _decisions(ledger))
     assert "could not be scoped" in reasons
+
+
+def test_a_granted_escalation_tells_the_model_the_exact_scope(tmp_path) -> None:
+    """The granted call is bounded by its command; the model must see that."""
+    from xenon.kernel.contracts import Abort
+
+    ledger = Ledger.in_memory("esc-note")
+    approver = _Yes(True)
+    gateway = _Gateway()
+    runtime = _shell_runtime(ledger, _read_only(tmp_path), approver, gateway)
+    seen: list[tuple[str, ...]] = []
+
+    class Spy:
+        def __init__(self):
+            self.step = 0
+
+        def propose(self, view):
+            seen.append(tuple(getattr(view, "notes", ()) or ()))
+            self.step += 1
+            if self.step == 1:
+                return _escalate("curl -s wttr.in")
+            if self.step == 2:
+                return _shell("curl -s wttr.in")
+            return Abort("done")
+
+    runtime.run(_spec("esc-note"), Spy())
+
+    assert any("Escalation approved for exactly this call" in " ".join(notes) for notes in seen)
+    assert any("curl -s wttr.in" in " ".join(notes) for notes in seen)

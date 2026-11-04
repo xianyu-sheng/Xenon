@@ -1817,6 +1817,26 @@ class LoopRuntime:
             )
         # The call itself happens on the *next* action, so the model sees the
         # granted boundary in a fresh view instead of us executing implicitly.
+        # A grant is bounded to the exact call: say so, or the model refines the
+        # command (real run: it added `$ProgressPreference=...`) and the grant
+        # no longer matches — a correct refusal that reads as a mystery.
+        detail = ""
+        for policy in self._policies:
+            describe = getattr(policy, "escalation_scope", None)
+            if callable(describe):
+                try:
+                    detail = str(describe(action.intent) or "")
+                except Exception:  # noqa: BLE001 — a note must not fail a run
+                    detail = ""
+                if detail:
+                    break
+        self._loop_notes.append(
+            f"Escalation approved for exactly this call: "
+            f"{capability.value}"
+            + (f" `{detail[:160]}`" if detail else "")
+            + ". Propose that exact call next; any other command is refused."
+        )
+        del self._loop_notes[:-5]
         self._transition(TaskPhase.RUNNING, f"escalation granted: {capability.value}")
         return None
 

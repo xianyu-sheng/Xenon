@@ -408,20 +408,26 @@ class ApprovalUxMixin:
         in_turn = getattr(self, "_active_runtime", None) is not None
         if session is not None and in_turn:
             while True:
-                answer = session.prompt(question, default=default).strip().lower()
+                # ``default=`` in prompt_toolkit *prefills the edit buffer*, it
+                # is not a placeholder: a buffer pre-filled with "n" turns a
+                # typed "y" into "ny", which is invalid, so every answer
+                # re-prompts and the panel looks hung (#395).  The "(n)" hint is
+                # already in the question; empty input means the default.
+                answer = session.prompt(question).strip().lower()
                 if answer == "":
                     answer = default
                 if answer in allowed:
                     return answer
                 hint = "y / n / q" if from_child else "y / n / a / A / s / q"
                 console.print(f"[dim]· 请输入 {hint}[/dim]")
-        return Prompt.ask(
+        answer = Prompt.ask(
             "选择",
             choices=["y", "n", "q"] if from_child else ["y", "n", "a", "A", "s", "q"],
             default=default,
             show_choices=True,
             case_sensitive=False,
         )
+        return answer
 
     def _terminal_waiting(self, detail: str):
         """Return a waiting context, with a no-op fallback for partial REPLs."""

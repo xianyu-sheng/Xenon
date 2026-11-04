@@ -504,6 +504,22 @@ class PermissionPolicy:
             return self._deny(capability, targets, "network requires a grant")
         return self._deny(capability, targets, "unknown capability")
 
+    def escalation_scope(self, intent: ToolIntent) -> str:
+        """A short, human-readable description of what an approval covers.
+
+        #392/#395: a granted escalation is bounded to the exact call, so the
+        model must be told the bound — a real run refined the command (added
+        `$ProgressPreference=...`) and the grant no longer matched.  Param names
+        live here, next to the rules that read them, so the kernel stays free of
+        tool vocabulary (K003).
+        """
+
+        command = _command(intent)
+        if command:
+            return command.strip()[:160]
+        targets = _targets(intent)
+        return ", ".join(targets)[:160]
+
     def refuse_escalation(self, intent: ToolIntent) -> str:
         """Hard rules that no human approval may override (#392).
 

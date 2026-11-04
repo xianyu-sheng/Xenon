@@ -17,7 +17,7 @@
 一次性 grant、入 ledger（`GRANT_ADDED` / `USER_APPROVAL{escalation:true}`）、
 调用后由 `_call_tool` 的 finally 撤销。
 
-## 真实 TTY：模型行为正确，但审批面板收不到按键
+## 真实 TTY：现已端到端通过（#395 修复后）
 
 真实 ConPTY + deepseek-v4-flash，prompt `查询一下北京天气，生成天气文档保存下来`：
 
@@ -31,5 +31,18 @@
 3. **答 `y` 或 `n` 都不生效**：面板停在原地，ledger 停在 `state_transition(action proposed)`，
    没有 `USER_APPROVAL`；Ctrl-C 也不被处理；状态栏会重绘（说明 pt 会话仍在跑）。
 
-这是 pre-existing 的路径（`_ask_approval_choice` 在 kernel 轮次内复用 `_pt_session`），
-#392 只是第一个真正走到它的功能。已开 #395 跟踪，含复现与已排除的假设。
+**根因是 pre-existing 的**（`_ask_approval_choice` 在 kernel 轮次内复用
+`_pt_session`，`default=` 预填缓冲区，任何应答都变成 `ny`/`nn` → 非法 → 重新提示），
+#392 只是第一个真正走到它的功能。已在 #395 修掉并全量验证：
+
+| 应答 | 结果 |
+|---|---|
+| `y` | 6.7s 完成：`user_approval{approved:true, escalation:true}` → `policy_decision{allow, "scoped grant: curl …"}` → `to: tool_call`（授权的那条命令真的执行） |
+| `n` | 2.5s，`blocked`：`用户拒绝` |
+| `q` | 2.6s，`blocked`：`用户取消任务` |
+| `Ctrl-C` | 立即 `blocked`：`用户取消任务` |
+
+transcript：`docs/evidence/tty-approval-panel/`。
+
+另修掉第二个真 bug：审批通过后模型改写了命令，grant 精确绑定原命令 → 被拒。
+现在授权成功会写一条确定性 note，明确「只覆盖这一条」，模型随后发的就是被授权的那条。
