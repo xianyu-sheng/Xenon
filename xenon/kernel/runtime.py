@@ -920,6 +920,19 @@ class LoopRuntime:
             if advice:
                 self._loop_notes.append(f"{receipt.tool}: {advice}")
                 del self._loop_notes[:-5]
+                # #421: an unobservable mechanism is a claim, not a feature.
+                # The advice is recorded so an audit can answer "did a failure
+                # actually teach the next step?" from the ledger alone.
+                self._append(
+                    EventKind.CONTROL_DECISION,
+                    EventSource.GATE,
+                    {
+                        "decision": "teach_next_step",
+                        "reason": advice,
+                        "scope": [str(receipt.tool)],
+                    },
+                    step_id=self._current_step_id(),
+                )
         if receipt.status is ReceiptStatus.DENIED:
             self._append(
                 EventKind.POLICY_DECISION,
