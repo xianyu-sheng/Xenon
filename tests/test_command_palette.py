@@ -261,3 +261,102 @@ def test_enter_without_completions_submits_as_typed() -> None:
     from xenon.repl.command_catalog import enter_applies
 
     assert enter_applies("/nope", [], None) is None
+
+
+# ── the extracted seams (so the key binding is one line) ─────────
+
+
+class _FakeState:
+    def __init__(self, texts: list[str], index: int | None = None) -> None:
+        self.completions = [type("C", (), {"text": text})() for text in texts]
+        self.complete_index = index
+
+
+class _FakeBuffer:
+    def __init__(self, text: str, state=None) -> None:
+        self.document = type("D", (), {"text_before_cursor": text})()
+        self.complete_state = state
+        self.text = text
+        self.cursor_position = len(text)
+        self.submitted = False
+
+    def validate_and_handle(self) -> None:
+        self.submitted = True
+
+
+def test_apply_enter_fills_the_row_then_submits() -> None:
+    from xenon.repl.command_catalog import apply_palette_enter
+
+    buffer = _FakeBuffer("/perm", _FakeState(["/permissions"]))
+    apply_palette_enter(buffer)
+
+    assert buffer.text == "/permissions"
+    assert buffer.submitted is True
+
+
+def test_apply_enter_keeps_the_typed_text_when_the_palette_is_closed() -> None:
+    from xenon.repl.command_catalog import apply_palette_enter
+
+    buffer = _FakeBuffer("/plan on", _FakeState(["/plan"]))
+    apply_palette_enter(buffer)
+
+    assert buffer.text == "/plan on"
+    assert buffer.submitted is True
+
+
+def test_record_use_never_raises() -> None:
+    from xenon.repl.command_catalog import record_use
+
+    class Boom:
+        def record_use(self, name):
+            raise RuntimeError("boom")
+
+    record_use(Boom(), "/plan")   # must not raise
+    record_use(None, "/plan")     # no completer at all
+    record_use(object(), "/plan")  # no hook
+
+
+# ── edge cases that the palette hits in real use ────────────────
+
+
+def test_a_usage_without_brackets_has_no_hint() -> None:
+    entry = CommandEntry(name="/x", description="d", usage="/x --flag", group="其他")
+    assert entry.param_hint == ""
+
+
+def test_an_unclosed_bracket_is_still_shown() -> None:
+    entry = CommandEntry(name="/x", description="d", usage="/x [a|b", group="其他")
+    assert entry.param_hint == "[a|b"
+
+
+def test_an_exact_name_scores_highest() -> None:
+    entry = CommandEntry(name="/plan", description="", group="规划")
+    assert score(entry, "plan") == 1000
+
+
+def test_an_empty_query_scores_everything() -> None:
+    entry = CommandEntry(name="/plan", description="", group="规划")
+    assert score(entry, "   ") == 1
+
+
+def test_ranking_orders_multiple_matches_by_score() -> None:
+    rows = rank(build_catalog(), "p")
+    assert len(rows) > 1
+    assert rows[0].name.casefold().lstrip("/").startswith("p")
+
+
+def test_a_completer_without_arguments_uses_the_registry() -> None:
+    completer = OmniCompleter()
+    assert {entry.name for entry in completer.catalog} == set(COMMANDS)
+
+
+def test_recents_without_a_path_are_in_memory_only() -> None:
+    recents = CommandRecents(None)
+    recents.record("/plan")
+    assert recents.names == ("/plan",)
+
+
+def test_an_empty_name_is_not_recorded() -> None:
+    recents = CommandRecents(None)
+    recents.record("")
+    assert recents.names == ()

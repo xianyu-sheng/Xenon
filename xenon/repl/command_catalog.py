@@ -234,6 +234,38 @@ def enter_applies(
     return str(target) or None
 
 
+def apply_palette_enter(buffer: Any) -> None:
+    """Enter on an open palette: fill in the row, then submit.
+
+    Extracted from the key binding so the behaviour is testable without a
+    terminal: the binding is then a one-line call.
+    """
+
+    state = getattr(buffer, "complete_state", None)
+    if state is not None:
+        names = [str(item.text) for item in getattr(state, "completions", ())]
+        index = getattr(state, "complete_index", None)
+        target = enter_applies(
+            buffer.document.text_before_cursor, names, index
+        )
+        if target is not None:
+            buffer.text = target
+            buffer.cursor_position = len(target)
+    buffer.validate_and_handle()
+
+
+def record_use(completer: Any, name: str) -> None:
+    """Best-effort MRU bookkeeping: palette ordering must never break a command."""
+
+    record = getattr(completer, "record_use", None)
+    if not callable(record):
+        return
+    try:
+        record(name)
+    except Exception:  # noqa: BLE001 — ordering is cosmetic
+        pass
+
+
 class CommandRecents:
     """A tiny persistent MRU list for the palette (best effort, capped)."""
 
