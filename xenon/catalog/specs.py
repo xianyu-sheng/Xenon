@@ -49,8 +49,16 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
         capabilities=frozenset({Capability.READ}),
         effects=frozenset({EffectKind.READ}),
         risk=Risk.INFO,
-        params_schema={"file_path": "path to read"},
-        description="Read a file from the workspace.",
+        params_schema={
+            "file_path": "path to read",
+            "start_line": "1-based first line; use to page through a long file",
+            "max_lines": "how many lines to return from start_line",
+        },
+        description=(
+            "Read a file from the workspace. Long files are returned in one "
+            "page; the result says when content was cut so you can continue "
+            "from `start_line` instead of assuming you saw the whole file."
+        ),
         preferences={"read": 20},
         requires_target=True,
     ),
@@ -107,7 +115,11 @@ LEGACY_SPECS: tuple[ToolSpec, ...] = (
         capabilities=frozenset({Capability.READ}),
         effects=frozenset({EffectKind.READ}),
         risk=Risk.INFO,
-        params_schema={"file_path": "path to read"},
+        params_schema={
+            "file_path": "path to read",
+            "start_line": "1-based first line",
+            "max_lines": "how many lines to return",
+        },
         description="Legacy file read adapter.",
         preferences={"read": 10},
         requires_target=True,
