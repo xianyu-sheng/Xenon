@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
 from xenon.kernel.contracts import (
+    Capability,
     Claim,
     ClaimSource,
     ControlDecision,
@@ -364,6 +365,37 @@ class ClaimResolver:
         )
 
 
+def _implied_obligations(
+    step: StepContract, *, since_seq: int | None = None
+) -> tuple[Obligation, ...]:
+    """What a step's own action promises, when the plan did not say (#419).
+
+    Only ``edit`` is derived here.  It is the one action whose promise is
+    unambiguous — "this step changes a file" — and the one that real plans
+    never declared, which is why V1 never ran.  Reads are free (a read step
+    that produced no new fact is a repeat, not a lie), verify steps are judged
+    by the finish claim, and shell/remote steps by their receipt.
+
+    Names of tools and parameters stay out of the kernel (K003): the decision
+    is made from the capability alone.
+    """
+
+    intent = getattr(step, "intent", None)
+    if intent is None:
+        return ()
+    if getattr(intent, "capability", None) is not Capability.EDIT:
+        return ()
+    targets = tuple(getattr(intent, "targets", ()) or ())
+    return (
+        Obligation(
+            id=f"step-{step.id}-file-changed",
+            kind=PropositionKind.FILE_CHANGED,
+            target=targets[0] if targets else "",
+            since_seq=int(since_seq or 0),
+        ),
+    )
+
+
 class VerificationController:
     """The single verification authority for V0/V1/V2."""
 
@@ -429,10 +461,27 @@ class VerificationController:
         )
 
     def close_step(
-        self, step: StepContract, ledger: Any
+        self, step: StepContract, ledger: Any, *, since_seq: int | None = None
     ) -> tuple[Verdict, ...]:
+        """V1: did this step produce what its own action implies?
+
+        ``step.expects`` is the explicit form, but a model-authored plan almost
+        never fills it (a real 6-receipt task declared ``expects: []`` on every
+        step), which left V1 as code that never ran.  So when the plan is
+        silent, the *action the step was executed with* supplies the
+        expectation: an edit that writes nothing is a step that did not happen.
+
+        This is a matching check, not a judgement about correctness: it asks
+        "is there a fact for what you just did", never "was it the right thing".
+        """
+
         verdicts: list[Verdict] = []
         for obligation in step.expects:
+            verdicts.append(self._obligation_verdict(obligation, ledger))
+        if verdicts:
+            return tuple(verdicts)
+        derived = _implied_obligations(step, since_seq=since_seq)
+        for obligation in derived:
             verdicts.append(self._obligation_verdict(obligation, ledger))
         return tuple(verdicts)
 
