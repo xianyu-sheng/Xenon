@@ -16,7 +16,7 @@
 <p align="center">模型可以提案，但不能把未验证的效果说成交付。<br/>Xenon 把每一步工具执行变成 typed receipt，把每个 claim 绑定到 fact，把不能验证的部分显式变成 debt 或 abstain。</p>
 
 <p align="center">
-  <b>SWE-bench Lite 盲测</b>：固定 30 例 <b>62.2%</b> · 零重叠留出集 <b>52.2%</b> · <b>4,000+</b> 测试 · <b>Python 3.10–3.12</b>
+  <b>SWE-bench Lite</b>：固定 30 例 <b>62.2%</b> · 零重叠留出集 <b>52.2%</b>（2026-10-16 记录，见「评测」的适用范围）· <b>3,900+</b> 测试 · <b>Python 3.10–3.12</b> · 当前版本 <b>0.9.6</b>
 </p>
 
 <p align="center">
@@ -32,13 +32,30 @@
 > [!TIP]
 > **The model proposes; the harness proves.** Xenon 不把 LLM 当裁判，也不让多个同构引擎各自解释工具。它只保留一个 `LoopRuntime`：模型输出 capability action，catalog 绑定工具，gateway 返回 receipt，controller 决定 repair/debt，`Finalizer` 独占交付提交。
 
+## 它和 Claude Code 有什么不同
+
+能力面上两者接近：终端里跑、多轮、工具调用、MCP、计划模式、审批。如果你要的是一个**已经很好用的编码代理**，先用 Claude Code。
+
+Xenon 想解决的是另一件事——**它凭什么说「做完了」**：
+
+- **交付有物理边界**：只有 `Finalizer` 能提交；preflight 审计不过就回滚本次 commit，而不是返回一段“已完成”的文字。
+- **claim 必须绑到 fact**：模型说「已创建 3 个文件」，这三个路径必须出现在 ledger 的 receipt 里，否则算 debt，挡住交付。
+- **验证不了就 abstain**：语义类要求无法确定性验证时如实说「无法验证」，不包装成 pass。
+- **每一步可回放**：一条 append-only ledger，`/evidence` 看到的是同一份真相，不是模型的自述。
+- **能拦住的硬规则**：`git push`、破坏性命令**不经询问直接拒绝**；需要越权时走一次性授权，用完即撤销。
+
+一句话：**Claude Code 让你更快地完成工作；Xenon 试图让「完成」这件事可以被检查。**
+
+> 目前是 **research beta**：机制齐备、有限真实任务验证过（`docs/evidence/`），但内核路径尚未重跑 SWE-bench。别把它当生产工具用。
+
 ## 快速开始
 
 ```bash
 # 从 GitHub Releases 安装（不依赖 PyPI）
 pip install https://github.com/xianyu-sheng/Xenon/releases/download/v0.9.6/xenon_harness-0.9.6-py3-none-any.whl
 
-xenon   # 首次运行会引导配置 API Key、模型与运行入口
+xenon --version   # 0.9.6
+xenon             # 首次运行会引导配置 API Key、模型与运行入口
 ```
 
 Windows 若提示 `'xenon' 不是内部或外部命令`，把 pip 输出的 Scripts 路径加入 `PATH`，或直接使用 `python -m xenon`。
@@ -53,7 +70,7 @@ source .venv/bin/activate && pip install -e .   # Linux / macOS
 
 ## 为什么是单循环
 
-旧版 Xenon 有 7 个“推理引擎”。`engine/registry.py` 自己承认：七种内置范式**运行流程完全同构**，差异只有引擎类、少量参数、模式行和面板标题。结果是同一套循环被复制 7 次，工具语义散落在 prompt、plan 校验、TaskState、ClaimGate、delivery 五处。
+旧版 Xenon 有 7 个“推理引擎”。`engine/registry.py` 自己承认：七种内置模式**运行流程完全同构**，差异只有引擎类、少量参数、模式行和面板标题。结果是同一套循环被复制 7 次，工具语义散落在 prompt、plan 校验、TaskState、ClaimGate、delivery 五处。
 
 现在只剩一条控制流：
 
@@ -157,11 +174,16 @@ TaskSpec
 | 模型 | `deepseek-v4-flash`，官方 API |
 | 判定 | 官方 `swebench` harness；FAIL_TO_PASS 全过且 PASS_TO_PASS 无回归 |
 | 重复 | 3 次独立运行取均值；逐次结果公开 |
+| 记录时间 | 2026-10-16（v0.9.4 阶段） |
 
 | 样本 | 本轮框架 | 上一代 v0.8.5 |
 |---|---:|---:|
 | 固定 30 例（seed 20260729） | **62.2%** | 63.3% |
 | 零重叠留出集（seed 20261016） | **52.2%** | 46.7% |
+
+> **适用范围**：这两个数字测的是 2026-10-16 的框架，**不是 0.9.6 的单循环内核**。
+> 内核成为默认路径后还没用同一协议重跑；在那之前，请把它们当作「上一代框架的水平」，
+> 而不是当前版本的指标。重跑会按同一预注册协议进行，结果无论好坏都会公开。
 
 完整协议、逐次结果、判定日志与 sha256 归档见 [EVAL_RESULTS](docs/EVAL_RESULTS.md)。
 
@@ -174,17 +196,23 @@ TaskSpec
 
 ## 常用命令
 
+输入 `/` 直接弹出**命令面板**（支持 `perm` 这类前缀/缩写过滤，回车即执行）；输入 `@` 触发文件路径补全；`Shift+Tab` 在模式间循环。
+
 ```text
-/evidence   证据链 / kernel ledger / V2 coverage
-/goal       目标、阶段、计划、债务
-/resume     恢复会话与 ledger pointer
-/plan       计划模式（软引导）
-/mode       选择模式（单循环的阶段配置：direct / plan-execute / ...）
-/mcp        MCP server 与工具管理
-/rewind     回退到回合节点
-/fork       从回合节点分叉
-/compact    压缩长对话
-/tools      查看工具与 capability
+/evidence     证据链 / kernel ledger / V2 coverage
+/goal         目标、阶段、计划、债务
+/resume       恢复会话与 ledger pointer
+/plan         计划模式（软引导）
+/mode         选择模式（单循环的阶段配置：direct / plan-execute / …）
+/permissions  审批策略 + 当前会话授权（可逐条撤销）
+/lessons      跨会话教训：已应用/复发计数，可导出 PITFALLS.md
+/model        切换模型池里的当前模型
+/sessions     会话列表与恢复
+/mcp          MCP server 与工具管理
+/rewind       回退到回合节点
+/fork         从回合节点分叉
+/compact      压缩长对话
+/tools        查看工具与 capability
 ```
 
 ## 文档
@@ -201,6 +229,8 @@ TaskSpec
 
 ## 诚实边界
 
+- **这是 research beta。** 机制齐备、有真实 TTY 与真实任务的证据，但覆盖面仍窄；
+  内核路径没重跑 SWE-bench，也没有多用户/长周期验证。生产环境请用成熟工具。
 - **哈希链证明过程，不证明结论。** 它能发现损坏、单点篡改与重排；防不住有写权限的人整链重算，除非启用可选的 HMAC 锚点。
 - **abstain 是产品行为。** 无法确定性验证的语义要求不会被包装成 pass。
 - **审批不是 sandbox。** 外部 MCP server 仍需在受控环境运行；approval 只是调用边界。
