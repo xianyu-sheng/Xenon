@@ -41,6 +41,37 @@ class ReadOnlyFileToolsMixin:
             logger.warning(f"[{self.id}] 文件不存在: {path}")
             return result
 
+        if path.is_dir():
+            # Opening a directory with read_text() raises
+            # ``PermissionError [Errno 13]`` on Windows, which reads as "you
+            # are not allowed" — a dogfood run concluded the sandbox had
+            # denied it (#411).  A directory is not a file: say so, and hand
+            # back the entries so the next proposal can pick one.
+            try:
+                entries = sorted(item.name for item in path.iterdir())[:50]
+            except OSError as exc:
+                entries = []
+                listing_error = str(exc)
+            else:
+                listing_error = ""
+            result = {
+                "action_type": "read_file",
+                "file_path": str(path),
+                "content": "",
+                "exists": True,
+                "is_directory": True,
+                "success": False,
+                "entries": entries,
+                "error": (
+                    f"这是一个目录，不是文件: {path}。"
+                    + (f" 列出失败: {listing_error}" if listing_error else "")
+                    + " 读取目录请用 search，或读取目录内的具体文件。"
+                ),
+            }
+            self._write_output(context, "")
+            logger.info(f"[{self.id}] 目标是目录: {path}")
+            return result
+
         # 文件大小检查
         try:
             file_size = path.stat().st_size

@@ -140,3 +140,71 @@ def _cmd_vision(
         "用法: /vision on 开启 | /vision off 关闭\n"
         "开启后按 Ctrl+Alt+V 粘贴剪贴板图片"
     )
+
+# /workspace ────────────────────────────────────────────────
+
+register_command(
+    "/workspace",
+    "查看/扩展文件沙箱可写的目录（进程内有效）",
+    "/workspace [add <路径> | remove <路径> | clear]",
+)
+
+
+@command_handler("/workspace")
+def _cmd_workspace(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> str:
+    """Show and widen the write fence without restarting (#412).
+
+    The fence is a feature: reads are free, writes are confined.  What was
+    missing is a way to answer "the repo is one directory over" besides
+    relaunching with an environment variable the user cannot discover.
+    """
+
+    from xenon.nodes import sandbox_roots
+    from xenon.nodes.tool_node import _DEFAULT_EXTRA_ROOTS
+
+    repl = session_state.get("_repl")
+    root = Path(getattr(repl, "_workspace_root", lambda: Path.cwd())()) if repl else Path.cwd()
+    tokens = args.strip().split(maxsplit=1)
+    action = tokens[0].lower() if tokens else ""
+    target = tokens[1].strip() if len(tokens) > 1 else ""
+
+    if action == "add":
+        if not target:
+            return "用法：/workspace add <目录>"
+        try:
+            added = sandbox_roots.add_root(target)
+        except (ValueError, OSError) as exc:
+            return f"❌ 无法添加：{exc}"
+        return (
+            f"✅ 已加入可写目录（仅本进程有效）：{added}\n"
+            f"工作区仍是 {root}；读写都会在下列根目录内放行。"
+        )
+
+    if action == "remove":
+        if not target:
+            return "用法：/workspace remove <目录>"
+        removed = sandbox_roots.remove_root(target)
+        return "✅ 已移除。" if removed else "⚠ 该目录不在本会话添加的列表里。"
+
+    if action == "clear":
+        sandbox_roots.clear_session_roots()
+        return "✅ 已清空本会话添加的目录。"
+
+    if action and action not in {"list", "status"}:
+        return "用法：/workspace [add <目录> | remove <目录> | clear]"
+
+    env = sandbox_roots.env_roots()
+    session = sandbox_roots.session_roots()
+    lines = [f"工作区（写入围栏的根）：{root}", "", "额外可写目录："]
+    lines.append("  默认临时目录：")
+    for item in _DEFAULT_EXTRA_ROOTS:
+        lines.append(f"    · {item}")
+    lines.append("  环境变量 XENON_EXTRA_ROOTS：" if env else "  环境变量 XENON_EXTRA_ROOTS：未设置")
+    for item in env:
+        lines.append(f"    · {item}")
+    lines.append("  本会话添加（/workspace add）：" if session else "  本会话添加：无")
+    for item in session:
+        lines.append(f"    · {item}")
+    lines.append("")
+    lines.append("读取不受限（#378）；只有写和命令执行受上面的围栏约束。")
+    return chr(10).join(lines)
