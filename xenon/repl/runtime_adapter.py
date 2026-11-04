@@ -34,6 +34,11 @@ from xenon.kernel.strategies import LoopProfile
 from xenon.modes import MODE_CATALOG, loop_profile_for
 from xenon.repl.execution_policy import ExecutionLevel
 
+# One explanation for a stopped run, shared by the REPL panel and the replay
+# tool; a second copy in this module is how `user_question` stayed invisible
+# (#402).
+from xenon.replay import blocking_reason
+
 logger = logging.getLogger(__name__)
 
 MCP_TOOL_LIMIT_ENV = "XENON_MCP_TOOL_LIMIT"
@@ -277,9 +282,17 @@ def kernel_progress_reporter(repl: Any) -> Any:
 
     Kernel turns emit a protocol payload, so token-level output is noise.  What
     the operator needs is: something is happening, how long, how much.
+
+    Per-second narration was that idea taken too far: a 19-step turn printed
+    the line hundreds of times and pushed the real answer off screen (#403).
+    The status bar already carries the live counter, so console output here is
+    limited to one "still generating" notice per model call, and only once the
+    call is slow enough to look stuck.
     """
 
     console = _console_for(repl)
+    slow_notice_after = 15.0
+    state: dict[str, float] = {"last_seconds": 0.0, "notified": 0.0}
 
     def report(seconds: float, chars: int) -> None:
         # #372 E1: push the live kernel snapshot into the status bar on every
@@ -293,11 +306,15 @@ def kernel_progress_reporter(repl: Any) -> Any:
                     status_bar.set_kernel_status(snapshot())
                 except Exception:  # noqa: BLE001 — progress is cosmetic
                     pass
-        if seconds < 1.0:
-            return  # short calls need no narration
+        if seconds < state["last_seconds"]:  # a new model call restarts the clock
+            state["notified"] = 0.0
+        state["last_seconds"] = seconds
+        if seconds < slow_notice_after or state["notified"]:
+            return
+        state["notified"] = 1.0
         try:
             console.print(
-                f"[dim]· 模型生成中 {seconds:.0f}s · {chars} 字符[/dim]",
+                f"[dim]· 仍在生成 {seconds:.0f}s · {chars} 字符（Ctrl-C 可中断）[/dim]",
                 highlight=False,
             )
         except Exception:  # noqa: BLE001 — progress is cosmetic
@@ -1060,74 +1077,18 @@ def _result_summary(result: TaskResult, *, ledger_path: Any = None) -> str:
     if result.debt:
         reasons = "; ".join(item.reason for item in result.debt[:3])
         return f"任务被阻断，仍有未满足的证据：{reasons}"
-    from xenon.replay import blocking_reason
-
     detail = (
         blocking_reason(ledger_path, task_id=result.task_id)
         if ledger_path is not None
         else ""
     )
+    if detail.startswith("等待你的回答："):
+        # The run did not fail — it is waiting on the operator.  Saying
+        # "未交付" first made a clarifying question look like a crash (#402).
+        return detail
     if detail:
         return f"任务未交付（phase={result.phase.value}）：{detail}"
     return f"任务未交付（phase={result.phase.value}）。"
-
-
-def _result_summary(result: TaskResult, *, ledger_path: Any = None) -> str:
-    if result.answer.strip():
-        return result.answer
-    if result.accepted:
-        return "任务已完成并交付。"
-    if result.debt:
-        reasons = "; ".join(item.reason for item in result.debt[:3])
-        return f"任务被阻断，仍有未满足的证据：{reasons}"
-    detail = (
-        _blocking_reason(ledger_path, task_id=result.task_id)
-        if ledger_path is not None
-        else ""
-    )
-    if detail:
-        return f"任务未交付（phase={result.phase.value}）：{detail}"
-    return f"任务未交付（phase={result.phase.value}）。"
-
-
-# Events that explain *why* a run stopped.  The result object only carries the
-# phase, so without this a blocked run reads as an unexplained stop — which is
-# exactly how an approval denial used to look.
-_BLOCKING_EVENTS = (
-    "policy_decision",
-    "user_approval",
-    "control_decision",
-    "binding_failed",
-)
-
-
-def _blocking_reason(ledger_path: Any, *, task_id: str) -> str:
-    """Last human-readable reason from the ledger, or an empty string."""
-
-    try:
-        from xenon.ledger.store import Ledger
-
-        events = list(Ledger(ledger_path, task_id).read())
-    except Exception:  # noqa: BLE001 — rendering must not fail the turn
-        return ""
-    for event in reversed(events):
-        kind = getattr(getattr(event, "kind", None), "value", "")
-        if kind not in _BLOCKING_EVENTS:
-            continue
-        payload = dict(getattr(event, "payload", {}) or {})
-        if kind == "user_approval":
-            approved = payload.get("approved")
-            reason = str(payload.get("reason") or "")
-            if approved is False and reason:
-                return f"审批未通过：{reason}"
-            continue
-        reason = str(payload.get("reason") or "")
-        if reason:
-            scope = payload.get("scope") or ()
-            if scope:
-                return f"{reason}（范围：{', '.join(str(item) for item in scope)}）"
-            return reason
-    return ""
 
 
 def _render_kernel_result(
@@ -1203,6 +1164,8 @@ def _render_kernel_result(
     render = repl._render_assistant_text
     if planned:
         title = "Kernel · plan"
+    elif answer.startswith("等待你的回答："):
+        title = "Kernel · 等待回答"
     else:
         title = "Kernel" if accepted else "Kernel · blocked"
     render(answer, title=title)
