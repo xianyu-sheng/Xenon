@@ -84,6 +84,12 @@ class FinalizeGuard:
     ) -> FinalizeDecision:
         root = Path(workspace).resolve()
         writes: dict[str, str] = {}
+        #: Every path a receipt *declared* as written, whether or not the tool
+        #: also reported ``changed``.  A tool that creates files can report
+        #: ``changed=False`` (nothing existed to diff against), and the old
+        #: filter then delivered "verified" while verifying zero paths — a
+        #: claim/delta mismatch (#418, found by a real 11-receipt task).
+        declared: dict[str, str] = {}
         deletes: set[str] = set()
         commits: list[VcsCommit] = []
         pushes: list[VcsPush] = []
@@ -92,16 +98,19 @@ class FinalizeGuard:
             if fact.seq <= since_seq:
                 continue
             effect = fact.effect
-            if isinstance(effect, FsWrite) and effect.changed:
+            if isinstance(effect, FsWrite):
                 for path in effect.paths:
                     normalized = _normalize(path, root)
                     if not _within_workspace(normalized):
                         continue
-                    writes[normalized] = str(
+                    digest = str(
                         effect.hashes.get(path)
                         or effect.hashes.get(normalized)
                         or ""
                     )
+                    declared[normalized] = digest
+                    if effect.changed:
+                        writes[normalized] = digest
             elif isinstance(effect, FsDelete) and effect.changed:
                 for path in effect.paths:
                     normalized = _normalize(path, root)
@@ -111,6 +120,18 @@ class FinalizeGuard:
                 commits.append(effect)
             elif isinstance(effect, VcsPush):
                 pushes.append(effect)
+
+        if declared and not writes and not deletes:
+            # The receipts say files were written; the verified set is empty.
+            # Delivering this as "verified" would be exactly the failure this
+            # project exists to catch: a claim with nothing behind it.
+            return FinalizeDecision(
+                accepted=False,
+                reason=(
+                    f"{len(declared)} file(s) were reported as written but none "
+                    "could be verified in the workspace"
+                ),
+            )
 
         if pushes and not allow_push:
             return FinalizeDecision(

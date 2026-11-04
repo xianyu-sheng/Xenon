@@ -228,6 +228,10 @@ class LoopRuntime:
         self._forced_finish = False
         self._forced_finish_allowance = 0
         self._ok_receipts = 0
+        #: Refusals that happened *before* dispatch (#417).  A high count is a
+        #: protocol problem, not a model problem: the agent keeps proposing
+        #: calls the catalog cannot bind.
+        self._refusals: dict[str, int] = {}
         self._accept_debt = False
         self._context_digest = ""
         self._steering_source: Any = None
@@ -272,6 +276,8 @@ class LoopRuntime:
             "context_tokens": int(getattr(self._usage, "last_prompt", 0) or 0),
             "stalled_seconds": stalled,
             "tool_calls": int(self._tool_calls or 0),
+            "refusals": dict(self._refusals),
+            "refusal_total": sum(self._refusals.values()),
         }
 
     def run(self, spec: TaskSpec, strategy: Strategy) -> TaskResult:
@@ -298,6 +304,10 @@ class LoopRuntime:
         self._forced_finish = False
         self._forced_finish_allowance = 0
         self._ok_receipts = 0
+        #: Refusals that happened *before* dispatch (#417).  A high count is a
+        #: protocol problem, not a model problem: the agent keeps proposing
+        #: calls the catalog cannot bind.
+        self._refusals: dict[str, int] = {}
         self._accept_debt = bool(spec.accept_debt)
         self._compaction_signature = ""
         self._finalize_decision = None
@@ -775,9 +785,19 @@ class LoopRuntime:
             # binding failures and gateway exceptions.
             self._revoke_grants()
 
+    def _note_refusal(self, reason: str, capability: str) -> None:
+        """Count a pre-dispatch refusal so it can be reported, not just logged."""
+
+        key = f"{capability}:{reason.split(':')[0][:60]}"
+        self._refusals[key] = self._refusals.get(key, 0) + 1
+
     def _call_tool_once(self, action: CallTool) -> TaskResult | None:
         binding = self._catalog.bind(action.intent)
         if binding.status is not BindingStatus.BOUND or binding.call is None:
+            self._note_refusal(
+                str(binding.reason or binding.status.value),
+                action.intent.capability.value,
+            )
             self._replans += 1
             self._append(
                 EventKind.BINDING_FAILED,
@@ -846,6 +866,16 @@ class LoopRuntime:
         )
         if receipt.status is ReceiptStatus.OK:
             self._ok_receipts += 1
+        else:
+            # #417: a failure is evidence, not a stop.  Put one actionable line
+            # in the next view so the model changes something instead of
+            # repeating the same call (which is how a turn used to die).
+            from xenon.kernel.failure_advice import advice_for_failure
+
+            advice = advice_for_failure(receipt_event_payload(receipt)["receipt"])
+            if advice:
+                self._loop_notes.append(f"{receipt.tool}: {advice}")
+                del self._loop_notes[:-5]
         if receipt.status is ReceiptStatus.DENIED:
             self._append(
                 EventKind.POLICY_DECISION,
@@ -2296,6 +2326,10 @@ class LoopRuntime:
                 "repair_attempts": float(sum(self._repair_attempts.values())),
                 "replans": float(self._replans),
                 "audit_rounds": float(self._audit_rounds),
+                # Refusals are a *protocol* signal: one is normal, a pile of
+                # them means the catalog and the model disagree about how to
+                # call things (#417).
+                "refusals": float(sum(self._refusals.values())),
             },
         )
 
