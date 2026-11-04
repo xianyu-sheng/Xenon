@@ -46,7 +46,7 @@
 | B3 | 引擎超时降级（`EngineDeadlineExceeded` 不整轮红错） | ✅ 已验证 | `XENON_ENGINE_TIMEOUT=0.01` 的 PlanReact 返回“引擎时限”；非法值回退 600 |
 | B4 | P1：`git repo_path` / issue 编号 / resume cwd / 循环升级 | ✅ 已验证 | 父目录下 `repo_path` git status 成功；issue #21 拉取；cwd notice + 路径重映射 |
 | B5 | P2：`XENON_ENGINE_TIMEOUT` / 恢复会话路径重映射 | ✅ 已验证 | env=123 生效；旧/新目录同相对路径重映射成功 |
-| B6 | v0.9.5 wheel **不包含**署名 / clone 修复 / 执行层修复 | ⏳ 待下一次发布 | 发版前确认 wheel 含 post-0.9.5 提交 |
+| B6 | v0.9.5 wheel **不包含**署名 / clone 修复 / 执行层修复 | ✅ v0.9.6 已含 | 干净 venv 装 v0.9.6 wheel 复核：署名、clone Basic auth、palette/selector/kernel_host 均在包内 |
 | B7 | 全量测试基线中的 Windows 既有失败 + flaky MCP 并发用例 | 🟡 已记录 | 每次改动对比基线，新增失败必须归零 |
 
 ---
@@ -64,7 +64,7 @@
 | C7 | SmartBench #21 验收缺口：TTY 单行、`--json` 无噪音、failing reporter 不中断 | 执行/验收 | 🟡 单元/CLI 已覆盖 | `--json` 已接 CLI 并有测试；TTY 单行用 forced-TTY 单测覆盖；仍建议在真实终端手测一次 |
 | C8 | 智能体在临时仓库使用 `git add -A` | 执行/工作区安全 | ⏳ | 提示词/工具层引导显式路径；无无关改动时不算错误，但应避免 |
 | C9 | 全量测试仍有 7 个 SmartBench Windows 既有失败（symlink/graph snapshot） | 上游既有 | 🧊 非本次引入 | 与基线对比确认；不顺手修无关测试 |
-| C10 | 发布节奏：v0.9.5 后未再发版 | 发布 | ⏳ | 等 C1/C6 与用户核验完成后再决定版本号 |
+| C10 | 发布节奏：v0.9.5 后未再发版 | 发布 | ✅ v0.9.6（2026-11-04） | tag + GitHub Release 挂 wheel/sdist；README 安装链接同步更新 |
 | C11 | ReAct 缺少 Codex 式显式 todo/plan 状态（`update_plan`），复杂任务只能靠提示词自律 | 执行/状态 | 🟡 收尾仍会过期 | 原生 schema + 周期/两次收尾提醒；#27 第三次 6/6 completed；但 #22 真实 126 工具任务实际完成代码/测试后，计划仍 4 项未更新，最终只能附警告 |
 | C12 | 缺少多步任务“完成率”基准，容易凭感觉调提示词/循环 | 度量 | 🟡 v1/v2 完成 | v1、v2 均 5/5；v2 修正浮点断言后仍无区分度；已归档 v2 原始/修正数据；下一步真实长任务或 v3 |
 | C13 | 写/实现任务连续 3 次工具失败会直接 mercy 收束（C4 真实复跑 77s、0 实现） | 执行/失败恢复 | ✅ 已修复 | 写任务改为最多 2 次“换方法”提示，不提前收束；查询任务保留 3 次收敛；真实 #26 从 15 次失败恢复完成 |
