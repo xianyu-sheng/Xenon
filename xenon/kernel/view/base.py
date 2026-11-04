@@ -448,6 +448,7 @@ def _system_prompt(
     strategy_hint: str = "",
     notes: Sequence[str] = (),
     turn_path: Sequence[str] = (),
+    boundary: str = "",
 ) -> str:
     constraint_lines = [f"- {item}" for item in spec.constraints]
     constraint_lines.extend(
@@ -480,6 +481,11 @@ def _system_prompt(
         lines.append("Notes (read before your next proposal):\n" + "\n".join(
             f"- {text}" for text in notes
         ))
+    if boundary:
+        # #165 dogfood: the execution boundary is a runtime fact, not something
+        # the model should infer.  Stating it stops the "I am not allowed to
+        # run anything this turn" self-limitation that blocked a real task.
+        lines.append(f"Execution boundary: {boundary}")
     if turn_path:
         # #372 B3: only rendered after a rewind/fork — a side-branch task must
         # know where it came from.  Linear chat never grows this line.
@@ -527,6 +533,7 @@ def build_model_view(
     strategy_hint: str = "",
     notes: Sequence[str] = (),
     turn_path: Sequence[str] = (),
+    boundary: str = "",
 ) -> ModelView:
     """Build the deterministic view a strategy is allowed to see."""
 
@@ -567,6 +574,7 @@ def build_model_view(
         strategy_hint=strategy_hint,
         notes=notes,
         turn_path=turn_path,
+        boundary=boundary,
     )
 
     payload = {
