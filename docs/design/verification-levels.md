@@ -1,8 +1,31 @@
-# 三级校验：实际跑在哪、缺什么（审计，#419）
+# 三级校验：实际跑在哪（审计 #419 / 补完 #420）
 
 > 审计方式：不看注释，看**真实复杂任务**（11 次 receipt，三处关联改造）产生的 verdict 事件。
 
-## 结论：三级只跑了一级
+## 修复后（#420）：三级都在跑，并且是同一形状的事件
+
+`react` 模式、同一个硬任务（`calc.py` 三处改造，7 次 receipt）的真实账本：
+
+```text
+三级 verdict 数: {'v0': 6, 'v1': 2, 'v2': 3}
+  v1 implicit-step-1 -> satisfied
+  v1 implicit-step-2 -> satisfied
+  v2 v2-file_changed-1 -> satisfied      (calc.py)
+  v2 v2-file_changed-2 -> satisfied      (test_calc.py)
+  v2 v2-test_passed-3 -> satisfied       (test_calc.py)
+```
+
+三条都是 `stage=v1/v2` 的 `step_verdict` 事件，`/evidence` 与回放都能直接数出来。
+`intake_recorded` 里也能看到派生出来的 obligations。
+
+## 还有过的一次假阴性（值得记）
+
+第一版把 V1 建在 action 的 `targets` 上，但 `apply_patch` 的路径在**效果**里，`targets` 是空
+→ 两条 `unverifiable`，直接把一次真的成功（7 passed）判成 blocked。
+改成从 receipt 的 `FsWrite.paths` 派生后恢复正常。**校验层的假阴性比漏检更伤**：它会让
+人误以为工具坏了。
+
+## 修复前：三级只跑了一级
 
 | 级别 | 代码位置 | 真实任务里跑了吗 | 说明 |
 |---|---|---|---|
@@ -43,3 +66,23 @@ plan-execute 模式：   stages = {'v0': 5, 'v1': 6}        DEBT: file_changed t
    要么让每个 tool call 成为一个 step。当前选择是前者，需要在文档里写明。
 3. **V2 未落成 verdict 事件**：finalize 的判定在 `finalize_started` 里，
    而不是一条 `stage=v2` 的 verdict，所以 `/evidence` 里看不到三级齐备的样子。
+
+## #420 做了什么
+
+1. **V2 有了输入**：`xenon/harness/intake.py::derive_obligations()` 从任务文本确定性地派生
+   `file_changed(路径)` 与 `test_passed(测试文件)`，写入 `TaskSpec.obligations`，
+   并在 `intake_recorded` 里记账。
+   - **不**把散文要求（"不要删测试"）伪造成覆盖：无法确定性绑定，伪造覆盖比没有更糟。
+   - 忽略 README/LICENSE 这类文档；同一文件只计一次；上限 12 条。
+2. **三级同形事件**：audit 的 V2 verdict 也写成 `STEP_VERDICT` 事件，`/evidence`、回放、
+   审计脚本都不必再钻 `audit_reported` 的 payload。
+3. **无计划的回合也有 V1**：`direct`/`react` 没有步骤，就把这一轮当作一个隐式步骤，
+   从 receipt 的 `FsWrite.paths` 派生 `file_changed`，交付前结算。
+4. **差异进入自我进化**：V2 verdict 为 VIOLATED 时调用 `_propose_lesson("claim_fact_mismatch")`
+   ——"声称与实际不一致"正是可进化层该学的模式，而**不是**拦截。
+
+## 原则（用户定的，代码里现在是这样）
+
+- 校验只回答"对得上吗"，不判断"对不对"；
+- 对不上 → 教学/补一轮/披露给人，**不阻断执行**；
+- 交付不强制 commit（无提交仓库也可以交付），但必须列出 `verified_paths` 与缺口。
