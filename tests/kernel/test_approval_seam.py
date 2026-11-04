@@ -199,7 +199,7 @@ def _write_ledger(path, events):
 def test_blocking_reason_reads_a_policy_decision_with_scope(tmp_path):
     from xenon.ledger.events import EventKind, EventSource
     from xenon.ledger.store import Ledger
-    from xenon.repl.runtime_adapter import _blocking_reason
+    from xenon.replay import blocking_reason
 
     ledger = Ledger(tmp_path / "t.jsonl", "t")
     ledger.append(
@@ -208,7 +208,7 @@ def test_blocking_reason_reads_a_policy_decision_with_scope(tmp_path):
         {"kind": "veto", "reason": "shell requires a grant", "scope": ["shell", "ls"]},
     )
 
-    reason = _blocking_reason(ledger.path, task_id="t")
+    reason = blocking_reason(ledger.path, task_id="t")
 
     assert "shell requires a grant" in reason
     assert "ls" in reason
@@ -217,7 +217,7 @@ def test_blocking_reason_reads_a_policy_decision_with_scope(tmp_path):
 def test_blocking_reason_skips_an_approved_approval(tmp_path):
     from xenon.ledger.events import EventKind, EventSource
     from xenon.ledger.store import Ledger
-    from xenon.repl.runtime_adapter import _blocking_reason
+    from xenon.replay import blocking_reason
 
     ledger = Ledger(tmp_path / "t.jsonl", "t")
     ledger.append(
@@ -226,13 +226,13 @@ def test_blocking_reason_skips_an_approved_approval(tmp_path):
         {"approved": True, "reason": "fine"},
     )
 
-    assert _blocking_reason(ledger.path, task_id="t") == ""
+    assert blocking_reason(ledger.path, task_id="t") == ""
 
 
 def test_blocking_reason_names_a_rejected_approval(tmp_path):
     from xenon.ledger.events import EventKind, EventSource
     from xenon.ledger.store import Ledger
-    from xenon.repl.runtime_adapter import _blocking_reason
+    from xenon.replay import blocking_reason
 
     ledger = Ledger(tmp_path / "t.jsonl", "t")
     ledger.append(
@@ -241,25 +241,25 @@ def test_blocking_reason_names_a_rejected_approval(tmp_path):
         {"approved": False, "reason": "用户取消任务"},
     )
 
-    assert "审批未通过" in _blocking_reason(ledger.path, task_id="t")
-    assert "用户取消任务" in _blocking_reason(ledger.path, task_id="t")
+    assert "审批未通过" in blocking_reason(ledger.path, task_id="t")
+    assert "用户取消任务" in blocking_reason(ledger.path, task_id="t")
 
 
 def test_blocking_reason_is_empty_when_the_ledger_is_unreadable(tmp_path):
-    from xenon.repl.runtime_adapter import _blocking_reason
+    from xenon.replay import blocking_reason
 
-    assert _blocking_reason(tmp_path / "missing.jsonl", task_id="t") == ""
+    assert blocking_reason(tmp_path / "missing.jsonl", task_id="t") == ""
 
 
 def test_blocking_reason_is_empty_for_an_unexplained_run(tmp_path):
     from xenon.ledger.events import EventKind, EventSource
     from xenon.ledger.store import Ledger
-    from xenon.repl.runtime_adapter import _blocking_reason
+    from xenon.replay import blocking_reason
 
     ledger = Ledger(tmp_path / "t.jsonl", "t")
     ledger.append(EventKind.TASK_STARTED, EventSource.RUNTIME, {"objective": "o"})
 
-    assert _blocking_reason(ledger.path, task_id="t") == ""
+    assert blocking_reason(ledger.path, task_id="t") == ""
 
 
 # ── 输入所有权：pt 会话存在时必须走它，否则会和 input() 抢 stdin ──
@@ -357,3 +357,66 @@ def test_the_reader_uses_the_session_inside_a_turn():
 
     assert ApprovalUxMixin._ask_approval_choice(ux) == "a"
     assert session.asked, "inside a turn the session owns the terminal"
+
+
+def test_blocking_reason_surfaces_an_unanswered_user_question(tmp_path):
+    """#402: a run that asked the user something is *waiting*, not failed.
+
+    The payload carries ``question`` rather than ``reason``; the old kind
+    whitelist ignored the event entirely, so a blocked turn rendered as
+    "任务未交付（phase=blocked）。" with the question nowhere on screen.
+    """
+    from xenon.kernel.contracts import TaskPhase, TaskResult
+    from xenon.ledger.events import EventKind, EventSource
+    from xenon.ledger.store import Ledger
+    from xenon.repl.runtime_adapter import _result_summary
+    from xenon.replay import blocking_reason
+
+    ledger = Ledger(tmp_path / "q.jsonl", "q")
+    ledger.append(
+        EventKind.USER_QUESTION,
+        EventSource.LLM,
+        {"question": "请提供 P0 对应的 issue 或文件"},
+    )
+    ledger.append(
+        EventKind.STATE_TRANSITION,
+        EventSource.RUNTIME,
+        {"from": "running", "to": "blocked", "reason": "user input required"},
+    )
+
+    reason = blocking_reason(ledger.path, task_id="q")
+
+    assert "等待你的回答" in reason
+    assert "请提供 P0 对应的 issue 或文件" in reason
+
+    summary = _result_summary(
+        TaskResult(
+            task_id="q",
+            phase=TaskPhase.BLOCKED,
+            answer="",
+            accepted=False,
+        ),
+        ledger_path=ledger.path,
+    )
+    assert "请提供 P0 对应的 issue" in summary
+
+
+def test_a_waiting_turn_is_titled_waiting_not_blocked(tmp_path):
+    """#402: "Kernel · blocked" for a turn that simply asked a question."""
+    from xenon.kernel.contracts import TaskPhase, TaskResult
+    from xenon.ledger.events import EventKind, EventSource
+    from xenon.ledger.store import Ledger
+    from xenon.repl.runtime_adapter import _result_summary
+    from xenon.replay import blocking_reason
+
+    ledger = Ledger(tmp_path / "w.jsonl", "w")
+    ledger.append(EventKind.USER_QUESTION, EventSource.LLM, {"question": "哪个仓库？"})
+
+    summary = _result_summary(
+        TaskResult(task_id="w", accepted=False, phase=TaskPhase.BLOCKED, answer=""),
+        ledger_path=ledger.path,
+    )
+
+    assert summary == "等待你的回答：哪个仓库？"
+    assert "未交付" not in summary
+    assert blocking_reason(ledger.path, task_id="w") == "等待你的回答：哪个仓库？"

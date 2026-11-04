@@ -377,6 +377,7 @@ _BLOCKING_KINDS = (
     "user_approval",
     "control_decision",
     "binding_failed",
+    "user_question",
 )
 
 
@@ -402,6 +403,15 @@ def blocking_reason(ledger_path: Any, *, task_id: str = "") -> str:
         if kind == "user_approval":
             if payload.get("approved") is False and reason:
                 return f"审批未通过：{reason}"
+            continue
+        if kind == "user_question":
+            # A blocked turn that asked the user something is not a failed
+            # delivery: the run is *waiting*.  The payload carries `question`,
+            # not `reason`, which is why this used to render as "未交付" with
+            # no explanation at all (#402).
+            question = str(payload.get("question") or "").strip()
+            if question:
+                return f"等待你的回答：{question}"
             continue
         if reason:
             scope = payload.get("scope") or ()

@@ -215,8 +215,14 @@ def test_progress_failure_does_not_break_the_call():
     )
 
 
-def test_progress_reporter_stays_quiet_for_fast_calls():
-    """Short calls need no narration; long ones do."""
+def test_progress_reporter_stays_quiet_until_a_call_looks_stuck():
+    """#403: per-second narration pushed the real answer off screen.
+
+    A 19-step turn printed "模型生成中 Ns · M 字符" hundreds of times.  The
+    status bar already carries the live counter, so the console gets at most
+    one notice per model call, and only after the call is slow enough that
+    silence would read as a hang.
+    """
 
     from types import SimpleNamespace
 
@@ -231,8 +237,18 @@ def test_progress_reporter_stays_quiet_for_fast_calls():
     repl = SimpleNamespace(console=_Console())
     report = kernel_progress_reporter(repl)
 
-    report(0.2, 40)
-    assert printed == [], "a fast call must not spam the transcript"
+    for seconds in (0.2, 1.0, 2.5, 9.0, 14.9):
+        report(seconds, 900)
+    assert printed == [], "a call under the threshold must not narrate"
 
-    report(2.5, 900)
-    assert printed and "生成中" in printed[0]
+    report(15.0, 1200)
+    assert len(printed) == 1 and "仍在生成" in printed[0]
+
+    for seconds in (16.0, 17.0, 25.0):
+        report(seconds, 3000)
+    assert len(printed) == 1, "one notice per call, not one per tick"
+
+    # The clock restarts on a new model call: a slow call still gets one line.
+    report(1.0, 10)
+    report(15.5, 800)
+    assert len(printed) == 2
