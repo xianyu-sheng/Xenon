@@ -424,3 +424,94 @@ def test_a_later_failing_test_overrides_an_earlier_pass():
     ]
     decision = VerificationController().decide(latest, ())
     assert decision.kind is not ControlDecisionKind.DELIVER
+
+
+def test_v1_is_derived_from_the_step_action_when_the_plan_says_nothing() -> None:
+    """#419: a real plan declared ``expects: []`` on every step, so V1 never ran.
+
+    The step's own action supplies the expectation: "this step edits a file"
+    means "there must be a file-change fact after it".  It is a matching check,
+    not a judgement about whether the edit was the right one.
+    """
+    from xenon.kernel.contracts import (
+        Capability,
+        PropositionKind,
+        StepContract,
+        StepKind,
+        ToolIntent,
+    )
+    from xenon.kernel.controller import _implied_obligations
+
+    step = StepContract(
+        id=4,
+        kind=StepKind.EDIT,
+        targets=("calc.py",),
+        intent=ToolIntent(
+            capability=Capability.EDIT, params={}, targets=("calc.py",)
+        ),
+    )
+
+    obligations = _implied_obligations(step, since_seq=7)
+
+    assert len(obligations) == 1
+    assert obligations[0].kind is PropositionKind.FILE_CHANGED
+    assert obligations[0].target == "calc.py"
+    assert obligations[0].since_seq == 7
+
+
+def test_v1_derives_nothing_for_read_or_unbound_steps() -> None:
+    from xenon.kernel.contracts import (
+        Capability,
+        StepContract,
+        StepKind,
+        ToolIntent,
+    )
+    from xenon.kernel.controller import _implied_obligations
+
+    read_step = StepContract(
+        id=2,
+        kind=StepKind.INSPECT,
+        targets=("calc.py",),
+        intent=ToolIntent(capability=Capability.READ, targets=("calc.py",)),
+    )
+    think_step = StepContract(id=3, kind=StepKind.THINK, targets=(), intent=None)
+
+    assert _implied_obligations(read_step) == ()
+    assert _implied_obligations(think_step) == ()
+
+
+def test_an_edit_step_with_no_change_fact_is_violated(monkeypatch) -> None:
+    """The derived obligation runs through the same resolver as a planned one."""
+    from xenon.kernel.contracts import (
+        Capability,
+        Resolution,
+        ResolutionStatus,
+        StepContract,
+        StepKind,
+        ToolIntent,
+        VerdictStatus,
+    )
+    from xenon.kernel.controller import VerificationController
+
+    controller = VerificationController()
+
+    class _Resolver:
+        def resolve(self, claim, ledger):
+            return Resolution(
+                claim_id=claim.id,
+                status=ResolutionStatus.UNRESOLVED,
+                reason="no changed file fact",
+            )
+
+    controller._resolver = _Resolver()
+    step = StepContract(
+        id=5,
+        kind=StepKind.EDIT,
+        targets=("calc.py",),
+        intent=ToolIntent(capability=Capability.EDIT, targets=("calc.py",)),
+    )
+
+    verdicts = controller.close_step(step, ledger=None)
+
+    assert verdicts and verdicts[0].status is VerdictStatus.VIOLATED
+    assert "no changed file fact" in verdicts[0].reason

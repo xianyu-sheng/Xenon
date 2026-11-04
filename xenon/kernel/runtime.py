@@ -1007,7 +1007,9 @@ class LoopRuntime:
         return verdicts
 
     def _close_step(self, step: StepContract) -> tuple[Verdict, ...]:
-        verdicts = self._controller.close_step(step, self._readonly)
+        verdicts = self._controller.close_step(
+            step, self._readonly, since_seq=self._plan_since_seq
+        )
         for verdict in verdicts:
             self._verdicts.append(verdict)
             self._append(
