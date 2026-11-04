@@ -508,9 +508,13 @@ def _system_prompt(
         [
             _capability_directory(specs).rstrip(),
             "Action protocol: return one of think, call_tool, submit_plan, "
-            "update_plan, request_verification, ask_user, finish, abort. "
+            "update_plan, request_verification, request_escalation, ask_user, "
+            "finish, abort. "
             "Plan steps use kind/intent/expects/depends_on; prefer is a "
-            "non-binding hint, not a tool dispatch.",
+            "non-binding hint, not a tool dispatch. "
+            "If the task needs a call the boundary above refuses, return "
+            "request_escalation with capability/params/reason: the harness "
+            "asks the human, and never executes it for you.",
         ]
     )
     return "\n".join(lines) + "\n"

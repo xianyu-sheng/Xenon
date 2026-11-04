@@ -33,10 +33,12 @@ from xenon.kernel.contracts import (
     Obligation,
     ObligationSource,
     PlanProposal,
+    PolicyDecision,
     PolicyDecisionKind,
     PropositionKind,
     ReceiptStatus,
     ReleaseStep,
+    RequestEscalation,
     RequestVerification,
     Resolution,
     ResolutionStatus,
@@ -538,6 +540,12 @@ class LoopRuntime:
                 result = self._release_active_step(action.reason)
                 if result is not None:
                     return result
+                continue
+
+            if isinstance(action, RequestEscalation):
+                blocked = self._request_escalation(view, action)
+                if blocked is not None:
+                    return blocked
                 continue
 
             if isinstance(action, AskUser):
@@ -1714,6 +1722,110 @@ class LoopRuntime:
                 evidence=EvidenceStatus.ABSTAINED,
             )
         return None
+
+    def _request_escalation(
+        self, view: Any, action: RequestEscalation
+    ) -> TaskResult | None:
+        """A model's formal request for one call this turn would refuse (#392).
+
+        Order matters: hard rules first (never prompt for the un-approvable),
+        then plan mode (a plan-only turn must have no side effects, so asking
+        there would break the contract), then the terminal check, and only then
+        the human.  An approval becomes a one-shot ``ScopedGrant`` that the
+        next ``call_tool`` consumes and the gateway call's ``finally`` revokes.
+        """
+
+        capability = action.intent.capability
+        # The policy owns the authoritative target set (``approve()`` re-derives
+        # it); this copies the model's own declaration only so the ledger can
+        # show *what* was requested alongside *why*.
+        scope = (
+            capability.value,
+            *tuple(str(item) for item in action.intent.targets),
+        )
+
+        def _refuse(reason: str) -> TaskResult:
+            self._append(
+                EventKind.POLICY_DECISION,
+                EventSource.GATE,
+                {
+                    "kind": PolicyDecisionKind.VETO.value,
+                    "reason": reason,
+                    "scope": list(scope),
+                },
+            )
+            self._transition(TaskPhase.BLOCKED, reason)
+            return self._result(
+                accepted=False, evidence=EvidenceStatus.ABSTAINED
+            )
+
+        # Plan mode never reaches this handler: the loop refuses any non-plan
+        # action in a plan-only task *before* dispatch, so there is nothing to
+        # escalate and no one is asked.  Kept out of here on purpose — a second
+        # check would be unreachable code pretending to be a guard.
+        for policy in self._policies:
+            refuse = getattr(policy, "refuse_escalation", None)
+            if not callable(refuse):
+                continue
+            try:
+                hard = str(refuse(action.intent) or "")
+            except Exception:  # noqa: BLE001 — a broken policy fails closed
+                hard = "policy could not evaluate the escalation"
+            if hard:
+                return _refuse(hard)
+        if self._approval is None:
+            return _refuse(
+                "escalation needs an approver: no interactive terminal; "
+                "re-run with --permission bypass or from a TTY"
+            )
+
+        call = CallTool(action.intent)
+        decision = PolicyDecision(
+            kind=PolicyDecisionKind.REQUIRE_APPROVAL,
+            reason=f"escalation requested: {action.reason}",
+            scope=scope,
+            ttl_seconds=None,
+        )
+        approved, approval_reason = self._request_approval(view, call, decision)
+        self._append(
+            EventKind.USER_APPROVAL,
+            EventSource.USER,
+            {
+                "approved": approved,
+                "reason": approval_reason,
+                "scope": list(scope),
+                "tool": capability.value,
+                "escalation": True,
+            },
+        )
+        if not approved:
+            self._propose_lesson(
+                "user_approval",
+                {
+                    "approved": False,
+                    "tool": capability.value,
+                    "reason": approval_reason,
+                },
+            )
+            return _refuse(
+                f"escalation denied ({capability.value}): {approval_reason}"
+            )
+        if not self._grant_for_escalation(decision, call):
+            return _refuse(
+                "escalation approved but could not be scoped to a target; "
+                "denied fail-closed"
+            )
+        # The call itself happens on the *next* action, so the model sees the
+        # granted boundary in a fresh view instead of us executing implicitly.
+        self._transition(TaskPhase.RUNNING, f"escalation granted: {capability.value}")
+        return None
+
+    def _grant_for_escalation(self, decision: Any, action: Action) -> bool:
+        granted = False
+        for policy in self._policies:
+            if self._grant_approval(policy, decision, action):
+                granted = True
+        return granted
 
     def _request_approval(
         self, view: Any, action: Action, decision: Any

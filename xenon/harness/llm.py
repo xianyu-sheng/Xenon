@@ -30,6 +30,7 @@ from xenon.kernel.contracts import (
     ModelView,
     PlanProposal,
     PropositionKind,
+    RequestEscalation,
     Think,
     ToolIntent,
 )
@@ -158,6 +159,9 @@ Supported actions:
    {"action":"think","text":"what you learned and what you will do next"}
 3. Ask the user because the task is genuinely ambiguous:
    {"action":"ask_user","question":"one concrete question"}
+3b. Request one call the execution boundary refuses (the harness asks the human;
+   do NOT pretend the boundary away, do NOT fabricate a result):
+   {"action":"request_escalation","capability":"shell","params":{"command":"curl -s wttr.in/Beijing?format=j1"},"reason":"live weather needs the network"}
 4. Finish:
    {"action":"finish","answer":"what changed and how it was verified","claims":[
      {"id":"c1","kind":"file_changed","target":"path"},
@@ -566,6 +570,25 @@ def parse_action(payload: str | Mapping[str, Any]) -> Action:
                 params=params,
                 targets=_strings(data.get("targets"), "targets"),
             )
+        )
+    if action == "request_escalation":
+        raw_capability = data.get("capability")
+        try:
+            capability = Capability(str(raw_capability))
+        except ValueError as exc:
+            raise ActionParseError(
+                f"unknown capability: {raw_capability!r}"
+            ) from exc
+        reason = str(data.get("reason") or "").strip()
+        if not reason:
+            raise ActionParseError("request_escalation.reason is required")
+        return RequestEscalation(
+            ToolIntent(
+                capability=capability,
+                params=dict(_mapping(data.get("params"), "params")),
+                targets=_strings(data.get("targets"), "targets"),
+            ),
+            reason,
         )
     if action == "ask_user":
         question = str(data.get("question") or "").strip()

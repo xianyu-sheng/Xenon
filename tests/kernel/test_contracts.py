@@ -118,6 +118,8 @@ def test_action_kinds_are_stable() -> None:
         "update_plan",
         "request_verification",
         "ask_user",
+        # #392: the model's formal request for one call the turn would refuse.
+        "request_escalation",
         "finish",
         "abort",
         "release_step",
