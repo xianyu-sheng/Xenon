@@ -212,21 +212,21 @@ def mode_choices(registry: Any) -> tuple[Choice, ...]:
     # respected, and drop aliases: they resolve to an identical loop profile.
     known = getattr(registry, "modes", {}) or {}
     rows: list[Choice] = []
-    seen: set[str] = set()
+    offered: set[str] = set()
     for name, spec in known.items():
-        if name in seen:
-            continue
-        canonical = getattr(spec, "alias_of", "") or name
+        if getattr(spec, "alias_of", ""):
+            continue  # an alias never gets its own row
         profile = getattr(spec, "loop", None)
-        if profile is not None and canonical in {row.value for row in rows}:
-            continue  # same profile as a row we already offer
-        if canonical != name:
-            continue  # the alias itself never gets its own row
+        if profile is not None and any(
+            repr(getattr(known.get(row), "loop", None)) == repr(profile)
+            for row in offered
+        ):
+            continue  # two names, one loop profile: do not pretend otherwise
         detail = getattr(spec, "description", "") or ""
         aliases = aliases_of(name) if name in MODE_CATALOG else ()
         if aliases:
             detail = f"{detail}（别名：{'/'.join(aliases)}）"
-        seen.add(name)
+        offered.add(name)
         rows.append(
             Choice(
                 value=name,
