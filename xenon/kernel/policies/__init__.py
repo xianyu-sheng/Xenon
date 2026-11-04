@@ -409,8 +409,19 @@ class PermissionPolicy:
                 kind=PolicyDecisionKind.ALLOW, reason="bypass mode"
             )
         if _is_push(_command(intent)):
-            return self._deny(
-                capability, targets, "push is not approvable in the kernel"
+            # A1 (#414): Xenon does not decide this for the human.  Pushing is
+            # an effect a person may authorize; refusing it outright made the
+            # product stricter than the agent it wraps.  The decision is asked
+            # for, recorded, and then obeyed.
+            if not self.allow_approval:
+                return self._deny(
+                    capability,
+                    targets,
+                    "push needs a human decision, and this turn has no "
+                    "approval channel (use a TTY or --permission bypass)",
+                )
+            return self._approval(
+                capability, targets, "push requires explicit approval"
             )
         if self.mode is PermissionMode.READ_ONLY:
             # Asking is not writing, but execution is: a read-only turn may
@@ -520,20 +531,42 @@ class PermissionPolicy:
         targets = _targets(intent)
         return ", ".join(targets)[:160]
 
-    def refuse_escalation(self, intent: ToolIntent) -> str:
-        """Hard rules that no human approval may override (#392).
+    def refuses_push(self, intent: ToolIntent) -> bool:
+        """Does this intent push?  The runtime needs it to open delivery."""
 
-        A request to escalate is still a request: the human decides.  These
-        three are the exceptions — they are refused *before* anyone is asked,
-        because prompting would imply they are negotiable.  Pure: no clock, no
-        I/O, derived from the intent alone.
+        return _is_push(_command(intent))
+
+    def _ask_destructive(
+        self,
+        capability: Capability,
+        targets: Sequence[str],
+        what: str,
+    ) -> PolicyDecision:
+        """Ask before a destructive or remote-writing command (#414).
+
+        These used to be refused outright with "never approvable".  That made
+        Xenon the strictest part of the pipeline and, in practice, meant the
+        agent could not finish work a human had already asked for.  The human
+        decides; the kernel records the decision and enforces it afterwards.
         """
 
-        command = _command(intent)
-        if _is_push(command):
-            return "push is never approvable"
-        if _is_destructive(command):
-            return f"destructive command is never approvable: {command[:80]}"
+        if not self.allow_approval:
+            return self._deny(
+                capability,
+                targets,
+                f"{what} needs a human decision, and this turn has no "
+                "approval channel (use a TTY or --permission bypass)",
+            )
+        return self._approval(capability, targets, f"{what} requires approval")
+
+    def refuse_escalation(self, intent: ToolIntent) -> str:
+        """No built-in hard rules any more (#414).
+
+        Kept as an extension hook: a deployment may still declare something
+        un-approvable.  The built-in policy returns nothing, because "the
+        kernel decides for you" is exactly what Xenon is not supposed to be.
+        """
+
         return ""
 
     def describe_boundary(self) -> str:
@@ -675,13 +708,15 @@ class PermissionPolicy:
                 )
         command = _command(intent)
         if capability is Capability.SHELL and _is_destructive(command):
-            return self._deny(capability, targets, "destructive shell command")
-        if capability is Capability.VCS and _is_destructive(command):
-            return self._deny(capability, targets, "destructive VCS command")
-        if _is_push(command):
-            return self._deny(
-                capability, targets, "push is not approvable in the kernel"
+            return self._ask_destructive(
+                capability, targets, "destructive shell command"
             )
+        if capability is Capability.VCS and _is_destructive(command):
+            return self._ask_destructive(
+                capability, targets, "destructive VCS command"
+            )
+        if _is_push(command):
+            return self._ask_destructive(capability, targets, "push")
         return None
 
     def _grant(

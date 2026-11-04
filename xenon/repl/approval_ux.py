@@ -9,6 +9,7 @@ panel and the terminal waiting spinner. Mixed into REPL as
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import Any
 
 from rich.markup import escape
@@ -52,6 +53,28 @@ def _config():
     from xenon.repl.repl import get_config
 
     return get_config()
+
+
+def grant_targets_once(workspace: Path, tool_name: str, params: dict) -> None:
+    """Let the tool's fence accept exactly what the human just approved (#413).
+
+    The approval panel runs before the tool; the tool's path fence runs inside
+    it.  Without this hand-off the fence overruled the human's answer, and the
+    only way forward was an environment variable plus a restart.
+
+    Scope is the literal target the human saw, and it is single-use: approving
+    one file does not open its directory, and a second write asks again.
+    """
+
+    from xenon.nodes.approval_policy import write_targets_for
+    from xenon.nodes.path_targets import resolve_target_path
+    from xenon.nodes.sandbox_roots import grant_once
+
+    for raw in write_targets_for(tool_name, params):
+        try:
+            grant_once(resolve_target_path(raw, cwd=workspace))
+        except Exception:  # noqa: BLE001 — an unparsable target is simply not granted
+            continue
 
 
 class ApprovalUxMixin:
@@ -297,6 +320,12 @@ class ApprovalUxMixin:
                 callback.resume_after_prompt(tool_name, params)
             self._last_approval_scope = "session"
             return APPROVAL_ALLOWED_ONCE
+        if choice in {"y", "s", "A"} and not from_child:
+            # The panel already decided; the tool's own fence has to agree.
+            # A child's answer never creates a grant (children inherit, they do
+            # not widen), which is why this is gated on `from_child` too.
+            grant_targets_once(self._workspace_root(), tool_name, params)
+
         if choice == "A":
             if from_child:
                 return APPROVAL_REJECTED

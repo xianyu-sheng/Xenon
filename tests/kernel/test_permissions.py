@@ -296,9 +296,11 @@ def test_allow_approval_returns_require_approval_and_grants(tmp_path) -> None:
     )
 
     destructive = _call(Capability.SHELL, command="rm -rf build")
+    # #414: destructive asks too — a human may authorize it, and a remembered
+    # grant does not silently cover it.
     assert (
         _decision(policy, destructive, str(tmp_path)).kind
-        is PolicyDecisionKind.VETO
+        is PolicyDecisionKind.REQUIRE_APPROVAL
     )
     remote = _call(Capability.REMOTE, server="docs")
     remote_decision = _decision(policy, remote, str(tmp_path))
@@ -306,37 +308,38 @@ def test_allow_approval_returns_require_approval_and_grants(tmp_path) -> None:
     assert policy.approve(remote_decision, remote)
 
 
-def test_push_remains_veto_even_with_approval(tmp_path) -> None:
+def test_push_asks_for_approval_when_the_turn_has_a_channel(tmp_path) -> None:
+    """#414: push used to be vetoed even with a human present.
+
+    Refusing outright meant the person who asked for the push could never
+    authorize it — the kernel decided for them.  Now it asks; the veto only
+    exists when there is no approval channel to ask through.
+    """
     policy = PermissionPolicy(workspace=str(tmp_path), allow_approval=True)
     for command in (
         "git push origin main",
         "git -C repo push origin main",
         "bash -c 'git push origin main'",
     ):
-        assert (
-            _decision(
-                policy,
-                _call(Capability.SHELL, command=command),
-                str(tmp_path),
-            ).kind
-            is PolicyDecisionKind.VETO
-        ), command
-    assert (
-        _decision(
-            policy,
-            _call(Capability.VCS, command="git push origin main"),
-            str(tmp_path),
-        ).kind
-        is PolicyDecisionKind.VETO
+        decision = _decision(
+            policy, _call(Capability.SHELL, command=command), str(tmp_path)
+        )
+        assert decision.kind is PolicyDecisionKind.REQUIRE_APPROVAL, command
+        assert "approval" in decision.reason
+
+
+def test_push_without_a_channel_is_denied_not_silently_run(tmp_path) -> None:
+    """No TTY, no approver: fail closed, and say why."""
+    policy = PermissionPolicy(workspace=str(tmp_path), allow_approval=False)
+
+    decision = _decision(
+        policy,
+        _call(Capability.SHELL, command="git push origin main"),
+        str(tmp_path),
     )
-    assert (
-        _decision(
-            policy,
-            _call(Capability.VERIFY, command="git push origin main"),
-            str(tmp_path),
-        ).kind
-        is PolicyDecisionKind.VETO
-    )
+
+    assert decision.kind is PolicyDecisionKind.VETO
+    assert "human decision" in decision.reason
 
 
 def test_read_only_allows_remote_only_with_approval(tmp_path) -> None:

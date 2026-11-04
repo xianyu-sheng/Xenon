@@ -278,3 +278,60 @@ def test_the_listing_shows_a_default_root(tmp_path, monkeypatch):
 
     assert "默认临时目录" in text
     assert "·" in text, "each configured root is listed"
+
+
+def test_an_approved_write_is_allowed_once(tmp_path, real_path_validation):
+    """#413: the approval panel asks *before* the tool runs.
+
+    Without a one-shot grant the fence refused anyway, so answering "yes" in
+    the panel had no effect — the only way forward was an env var and a
+    restart, which is what made Xenon feel far more restricted than Claude
+    Code or pi.
+    """
+    from xenon.nodes.tool_node import SecurityError
+
+    workspace = tmp_path / "repo"
+    sibling = tmp_path / "product"
+    workspace.mkdir()
+    sibling.mkdir()
+    node = _node(workspace)
+    target = sibling / "ci.yml"
+
+    sandbox_roots.grant_once(target)
+
+    assert node._validate_path(str(target), for_write=True) == target.resolve()
+    # One approval, one write.
+    with pytest.raises(SecurityError):
+        node._validate_path(str(target), for_write=True)
+
+
+def test_an_approval_for_one_path_does_not_open_the_directory(
+    tmp_path, real_path_validation
+):
+    from xenon.nodes.tool_node import SecurityError
+
+    workspace = tmp_path / "repo"
+    sibling = tmp_path / "product"
+    workspace.mkdir()
+    sibling.mkdir()
+    node = _node(workspace)
+
+    sandbox_roots.grant_once(sibling / "ci.yml")
+
+    with pytest.raises(SecurityError):
+        node._validate_path(str(sibling / "other.yml"), for_write=True)
+
+
+def test_a_grant_is_never_used_for_reads(tmp_path, real_path_validation):
+    """Reads are free anyway; a grant must not be silently consumed by one."""
+    workspace = tmp_path / "repo"
+    sibling = tmp_path / "product"
+    workspace.mkdir()
+    sibling.mkdir()
+    node = _node(workspace)
+    target = sibling / "ci.yml"
+
+    sandbox_roots.grant_once(target)
+    node._validate_path(str(target))  # a read
+
+    assert sandbox_roots.pending_grants() == (target.resolve(),)

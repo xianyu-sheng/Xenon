@@ -226,6 +226,7 @@ class LoopRuntime:
         # Set once a loop is stopped: the run must answer with what it has
         # instead of returning "no delivery" after doing real work (#407).
         self._forced_finish = False
+        self._forced_finish_allowance = 0
         self._ok_receipts = 0
         self._accept_debt = False
         self._context_digest = ""
@@ -295,6 +296,7 @@ class LoopRuntime:
         self._loop_taught = {}
         self._loop_notes = []
         self._forced_finish = False
+        self._forced_finish_allowance = 0
         self._ok_receipts = 0
         self._accept_debt = bool(spec.accept_debt)
         self._compaction_signature = ""
@@ -493,7 +495,31 @@ class LoopRuntime:
             if veto is not None:
                 return veto
 
-            if self._forced_finish and isinstance(action, CallTool):
+            allowed_once = False
+            if (
+                self._forced_finish
+                and self._forced_finish_allowance > 0
+                and isinstance(action, CallTool)
+            ):
+                self._forced_finish_allowance -= 1
+                allowed_once = True
+                self._append(
+                    EventKind.CONTROL_DECISION,
+                    EventSource.GATE,
+                    {
+                        "decision": "force_finish_allow_once",
+                        "reason": "the wrap-up needs one more call",
+                        "scope": [action.intent.capability.value],
+                        "remaining": self._forced_finish_allowance,
+                    },
+                    step_id=self._current_step_id(),
+                )
+            if (
+                self._forced_finish
+                and self._forced_finish_allowance <= 0
+                and not allowed_once
+                and isinstance(action, CallTool)
+            ):
                 # The forced-finish note is an instruction, not a suggestion:
                 # a loop that keeps proposing tools is how a turn dies with its
                 # evidence unread (#407).
@@ -741,38 +767,7 @@ class LoopRuntime:
             return obligation
         return replace(obligation, since_seq=self._plan_since_seq)
 
-    def _reasoning_step_guard(self, action: CallTool) -> bool:
-        """Refuse a tool call aimed at a step that only asks for reasoning.
-
-        Returns True when the call was refused (the run continues so the model
-        can submit `think`/`finish` instead of dying on a malformed plan step).
-        """
-
-        step = self._active_step
-        if step is None or step.kind.value != "think":
-            return False
-        reason = (
-            f"step {step.id} is a reasoning step (kind=think): submit `think` "
-            "with the conclusion, then `finish` when the task is done. "
-            "Tool calls belong to inspect/edit/verify steps."
-        )
-        self._append(
-            EventKind.POLICY_DECISION,
-            EventSource.GATE,
-            {
-                "kind": PolicyDecisionKind.VETO.value,
-                "reason": reason,
-                "scope": [action.intent.capability.value, "think_step"],
-            },
-            step_id=self._current_step_id(),
-        )
-        self._loop_notes.append(reason)
-        del self._loop_notes[:-5]
-        return True
-
     def _call_tool(self, action: CallTool) -> TaskResult | None:
-        if self._reasoning_step_guard(action):
-            return None
         try:
             return self._call_tool_once(action)
         finally:
@@ -2202,9 +2197,12 @@ class LoopRuntime:
             self._spec.budget.max_steps is not None
             and self._steps >= self._spec.budget.max_steps
         ):
-            self._transition(TaskPhase.BLOCKED, "step budget exhausted")
-            return self._result(
-                accepted=False, evidence=EvidenceStatus.UNVERIFIED
+            # Same shape as the token budget below: a blocked run must say why
+            # in the ledger.  This branch used to transition without writing a
+            # decision, so "step budget exhausted" existed only in the result
+            # object and never in the record (#414).
+            return self._budget_block(
+                "step budget exhausted", ("step_budget",), signal="step_budget"
             )
         limit = self._spec.budget.max_tokens
         if limit and self._usage.total >= int(limit):
@@ -2365,6 +2363,14 @@ class LoopRuntime:
         diagnosis = self._stuck.diagnosis
         if diagnosis and diagnosis not in reason:
             reason = f"{reason} [{diagnosis}]"
+        # Since #414 a detected loop no longer blocks the run by itself; it
+        # closes the tools and asks for an answer.  If the budget is what
+        # finally stops the run, the loop is still the explanation the
+        # operator needs, so carry the last teaching note with it.
+        if self._forced_finish and self._loop_notes:
+            note = self._loop_notes[-1]
+            if "loop" not in reason.lower():
+                reason = f"{reason} [loop: {note[:200]}]"
         payload: dict[str, Any] = {
             "kind": PolicyDecisionKind.VETO.value,
             "reason": reason,
@@ -2444,11 +2450,20 @@ class LoopRuntime:
                     + ("s" if attempts != 1 else "")
                 )
                 reason = f"{reason} {suffix}"
-            if not self._forced_finish and self._ok_receipts:
+            if self._forced_finish:
+                # The tools are already closed; the *call gate* decides whether
+                # this particular action gets the one allowance (#414).  A
+                # second block here would veto the call the gate just allowed.
+                return None
+            if self._ok_receipts:
                 # The run already did real work: killing it here returned
                 # "任务未交付" after twelve successful tool calls and threw the
                 # evidence away (#407).  Stop the tools, ask for an answer.
                 self._forced_finish = True
+                # #414: closing the tools once is a remedy, not a sentence.
+                # If the wrap-up genuinely needs one more call, allow exactly
+                # one — recorded — instead of blocking the agent's own answer.
+                self._forced_finish_allowance = 1
                 self._append(
                     EventKind.CONTROL_DECISION,
                     EventSource.GATE,

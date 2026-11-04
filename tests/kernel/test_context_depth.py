@@ -103,67 +103,23 @@ def _think_step_runtime():
     return _runtime(Ledger.in_memory("think-step")), Ledger
 
 
-def test_a_reasoning_step_refuses_a_tool_call_without_killing_the_run() -> None:
-    """#405 root cause: a plan may contain a reasoning step.
+def test_a_reasoning_step_does_not_block_a_tool_call() -> None:
+    """#413: verification runs *after* the work, so nothing may pre-empt it.
 
-    The dogfood run's step 9 was `kind=think` ("summarise steps 1-8"), and the
-    model filled it with `call_tool{capability: read}`.  Nothing said the step
-    wanted reasoning, so it executed `read_file` with no path four times and the
-    loop detector killed the turn.
+    The first fix for #405 refused a tool call aimed at a `kind=think` step.
+    That inverted the design: Xenon exists to check what the agent did, and an
+    agent that cannot act produces nothing to check.  The plan's step kind is a
+    hint for the view (see the next test); it is never a gate.
     """
-    from xenon.kernel.contracts import (
-        CallTool,
-        Capability,
-        StepContract,
-        StepKind,
-        ToolIntent,
+    import inspect
+
+    from xenon.kernel import runtime as runtime_module
+
+    assert not hasattr(runtime_module.LoopRuntime, "_reasoning_step_guard"), (
+        "the dispatch path must not consult the plan's step kind"
     )
-
-    runtime, ledger_mod = _think_step_runtime()
-    ledger = runtime._ledger
-    runtime._active_step = StepContract(id=9, kind=StepKind.THINK, targets=())
-    runtime._current_step_id = lambda: 9
-
-    refused = runtime._reasoning_step_guard(
-        CallTool(ToolIntent(capability=Capability.READ, params={}, targets=()))
-    )
-
-    assert refused is True
-    events = [
-        e
-        for e in ledger.read()
-        if e.kind.value == "policy_decision" and e.payload.get("scope")
-        == ["read", "think_step"]
-    ]
-    assert events, "the refusal must be in the ledger"
-    assert "reasoning step" in events[0].payload["reason"]
-    assert "think" in runtime._loop_notes[-1]
-
-
-def test_an_inspect_step_still_accepts_a_tool_call() -> None:
-    from xenon.kernel.contracts import (
-        CallTool,
-        Capability,
-        StepContract,
-        StepKind,
-        ToolIntent,
-    )
-
-    runtime, _ = _think_step_runtime()
-    runtime._active_step = StepContract(id=3, kind=StepKind.INSPECT, targets=("README.md",))
-
-    assert (
-        runtime._reasoning_step_guard(
-            CallTool(
-                ToolIntent(
-                    capability=Capability.READ,
-                    params={"file_path": "README.md"},
-                    targets=("README.md",),
-                )
-            )
-        )
-        is False
-    )
+    source = inspect.getsource(runtime_module.LoopRuntime._call_tool)
+    assert "think" not in source
 
 
 def test_the_view_tells_the_model_what_a_reasoning_step_expects() -> None:

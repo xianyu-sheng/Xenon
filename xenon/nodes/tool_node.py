@@ -887,6 +887,17 @@ class ToolNode(
         except ValueError:
             pass
 
+        if not in_allowed_root and for_write:
+            # A human may have just approved this exact target in the approval
+            # panel (#413).  The panel runs *before* the tool, so without this
+            # check the fence overruled the answer and the only way forward was
+            # `XENON_EXTRA_ROOTS` plus a restart.
+            from xenon.nodes.sandbox_roots import consume_grant
+
+            if consume_grant(resolved):
+                logger.info("写入已获一次性授权: %s", resolved)
+                in_allowed_root = True
+
         if not in_allowed_root:
             for extra in self._extra_allowed_roots():
                 try:

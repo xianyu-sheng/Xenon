@@ -9,7 +9,7 @@ The rules under test are all about *what a grant is not*:
 from __future__ import annotations
 
 import xenon.kernel  # noqa: F401 — ledger<->kernel import cycle
-from xenon.kernel.contracts import Capability, ToolIntent
+from xenon.kernel.contracts import Capability, PolicyDecisionKind, ToolIntent
 from xenon.kernel.policies import PermissionMode, PermissionPolicy
 from xenon.kernel.session_grants import (
     DENIED,
@@ -123,7 +123,12 @@ def test_a_scoped_grant_covers_only_its_target() -> None:
 
 
 def test_a_session_grant_cannot_authorize_a_destructive_command() -> None:
-    """The safety rule outranks the human's "always": destructive stays vetoed."""
+    """A remembered "always" does not cover a destructive command (#414).
+
+    The grant must not execute it silently; the human is asked each time.  The
+    old contract went further and vetoed outright, which meant the same human
+    could never authorize it at all.
+    """
 
     grant = grant_from_choice(
         SESSION, capability=Capability.SHELL, targets=("x",), workspace="/repo"
@@ -133,7 +138,8 @@ def test_a_session_grant_cannot_authorize_a_destructive_command() -> None:
 
     decision = policy.check_intent(_shell("rm -rf /"))
 
-    assert decision.reason == "destructive shell command"
+    assert decision.kind is PolicyDecisionKind.REQUIRE_APPROVAL
+    assert "destructive shell command" in decision.reason
 
 
 def test_a_grant_does_not_cross_capabilities() -> None:

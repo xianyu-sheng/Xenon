@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 _LOCK = Lock()
 _SESSION_ROOTS: list[Path] = []
+#: Exact paths a human just approved for one write (#413).  The approval seam
+#: asks *before* the tool runs; without this the tool then refused on its own,
+#: so "yes" in the panel had no effect and the only way forward was a restart.
+_ONESHOT_GRANTS: set[Path] = set()
 
 
 def _normalise(path: str | Path) -> Path:
@@ -96,8 +100,31 @@ def env_roots(raw: str | None = None) -> tuple[Path, ...]:
     return tuple(roots)
 
 
+def grant_once(path: str | Path) -> None:
+    """Allow exactly one write to *path*, because a human approved it."""
+
+    with _LOCK:
+        _ONESHOT_GRANTS.add(_normalise(path))
+
+
+def consume_grant(path: Path) -> bool:
+    """True when *path* was approved and this call uses the approval up."""
+
+    with _LOCK:
+        if path in _ONESHOT_GRANTS:
+            _ONESHOT_GRANTS.discard(path)
+            return True
+    return False
+
+
+def pending_grants() -> tuple[Path, ...]:
+    with _LOCK:
+        return tuple(_ONESHOT_GRANTS)
+
+
 def clear_session_roots() -> None:
     """Forget every session root (tests and `/workspace clear`)."""
 
     with _LOCK:
         _SESSION_ROOTS.clear()
+        _ONESHOT_GRANTS.clear()
