@@ -413,6 +413,9 @@ class PermissionPolicy:
                 capability, targets, "push is not approvable in the kernel"
             )
         if self.mode is PermissionMode.READ_ONLY:
+            # Asking is not writing, but execution is: a read-only turn may
+            # request an unproven *read* (never an edit, never a command).
+            # `test_allow_approval_does_not_weaken_read_only` owns this rule.
             if capability is Capability.REMOTE and self.allow_approval:
                 return self._approval(
                     capability, targets, "remote read requires approval"
@@ -500,6 +503,50 @@ class PermissionPolicy:
                 )
             return self._deny(capability, targets, "network requires a grant")
         return self._deny(capability, targets, "unknown capability")
+
+    def describe_boundary(self) -> str:
+        """One deterministic line describing what this policy will do.
+
+        #165 dogfood: the model used to *guess* its execution boundary and
+        then invent one ("command is forbidden this turn") — a real weather
+        request was blocked because the model did not know that a shell call
+        simply triggers a human approval.  The boundary is a fact the runtime
+        owns, so the view states it instead of leaving it to inference.
+
+        Pure: derived from the policy's own rules, no clock, no I/O.
+        """
+
+        if self.mode is PermissionMode.BYPASS:
+            return (
+                "bypass — every non-destructive call is allowed without "
+                "asking; push is still refused"
+            )
+        parts = [
+            "reads anywhere are free (credential files excepted)",
+            "edits are limited to the workspace",
+        ]
+        if self.mode is PermissionMode.READ_ONLY:
+            parts.append(
+                "read-only turn: no edits, no execution; network reads need a "
+                "human approval"
+                if self.allow_approval
+                else "read-only: no edits, no network, no execution"
+            )
+        else:
+            parts.append("safe test commands, commits and scoped stages run freely")
+            if self.allow_approval:
+                parts.append(
+                    "other shell, network and verification calls trigger a "
+                    "human approval prompt — proposing them is allowed and "
+                    "expected; the harness asks"
+                )
+            else:
+                parts.append(
+                    "other shell, network and verification calls are refused "
+                    "in this non-interactive run"
+                )
+        parts.append("push is never approvable")
+        return "; ".join(parts)
 
     def _approval(
         self,

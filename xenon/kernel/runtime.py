@@ -227,6 +227,17 @@ class LoopRuntime:
     def request_cancel(self) -> None:
         self._cancelled = True
 
+    def _boundary_note(self) -> str:
+        """The execution boundary the policies actually enforce (#165)."""
+        for policy in self._policies:
+            describe = getattr(policy, "describe_boundary", None)
+            if callable(describe):
+                try:
+                    return str(describe())
+                except Exception:  # noqa: BLE001 — a note must not fail a run
+                    return ""
+        return ""
+
     def status_snapshot(self) -> dict[str, Any]:
         """#372 E1: the live kernel state, all of it from runtime facts.
 
@@ -431,6 +442,7 @@ class LoopRuntime:
                 superseded=self._steering.superseded(),
                 strategy_hint=self._steering.strategy_hint(),
                 notes=tuple(self._loop_notes),
+                boundary=self._boundary_note(),
             )
             self._transition(TaskPhase.THINKING, "propose action")
             try:
