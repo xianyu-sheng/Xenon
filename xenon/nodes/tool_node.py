@@ -799,28 +799,24 @@ class ToolNode(
 
     @staticmethod
     def _extra_allowed_roots() -> tuple[Path, ...]:
-        """v0.5.3: 允许读写 /tmp 等临时目录。
+        """Directories the sandbox may touch beyond the workspace root.
 
-        v0.9.5: 额外支持 `XENON_EXTRA_ROOTS`（os.pathsep 分隔，Windows 用 `;`），
-        用于「仓库不在启动目录下」的场景（例如 D:\\repo、外接盘）。
-        这是显式 opt-in：默认行为不变，只有设置了环境变量才放行。
+        Three sources, in this order:
+
+        * ``_DEFAULT_EXTRA_ROOTS`` — /tmp style scratch space;
+        * ``XENON_EXTRA_ROOTS`` — an explicit opt-in at launch;
+        * session roots — added with ``/workspace add`` (#412), process-scoped.
+
+        The last one exists because a refusal used to be a dead end: the user
+        had to restart the process with an environment variable they could not
+        discover from the error message.
 
         提取为方法以便测试时可 monkeypatch 清空，否则基于 tmp_path 的测试
         无法验证符号链接逃逸防护——逃逸目标若落在 /tmp 会被此规则直接放行。
         """
-        roots = list(_DEFAULT_EXTRA_ROOTS)
-        raw = os.environ.get("XENON_EXTRA_ROOTS", "")
-        for entry in raw.split(os.pathsep):
-            entry = entry.strip()
-            if not entry:
-                continue
-            try:
-                roots.append(Path(entry).expanduser().resolve())
-            except (OSError, RuntimeError):
-                logger.warning(
-                    "XENON_EXTRA_ROOTS 条目无法解析，已忽略: %s", entry
-                )
-        return tuple(roots)
+        from xenon.nodes.sandbox_roots import env_roots, session_roots
+
+        return (*_DEFAULT_EXTRA_ROOTS, *env_roots(), *session_roots())
 
     @staticmethod
     def _real_path_for_check(path: Path) -> Path:
@@ -904,8 +900,9 @@ class ToolNode(
             if for_write:
                 raise SecurityError(
                     f"路径越界: {resolved} 不在允许的目录 {root} 下。"
-                    f"文件操作限制在项目目录内（如需访问其他目录，"
-                    f"请设置 XENON_EXTRA_ROOTS={os.pathsep}分隔的路径）。"
+                    "写入限制在工作区内。放行另一个目录：在提示符输入 "
+                    f"`/workspace add {resolved.parent}`（仅本进程有效），"
+                    f"或在启动前设置 XENON_EXTRA_ROOTS={os.pathsep}分隔的路径。"
                 )
             # Reads are safe anywhere (#378): the sandbox constrains writes,
             # not reads.  The resolved path is still returned — never the raw
