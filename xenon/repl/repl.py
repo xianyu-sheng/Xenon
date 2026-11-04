@@ -378,9 +378,25 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         ANSI_SEQUENCES["\x1b[27;2;13~"] = shift_enter
 
         cmd_names = list(COMMANDS.keys())
-        self._completer = OmniCompleter(cmd_names)
+        # #183: the palette ranks by what this user actually runs.  The MRU
+        # file is a hint, never state: a missing or unreadable file just means
+        # alphabetical order.
+        from xenon.repl.command_catalog import CommandRecents
+
+        self._command_recents = getattr(self, "_command_recents", None) or (
+            CommandRecents(Path.home() / ".xenon" / "command_recents.json")
+        )
+        self._completer = OmniCompleter(cmd_names, recents=self._command_recents)
 
         kb = KeyBindings()
+
+        @kb.add("enter", eager=True)
+        def _(event):
+            # #183: Enter runs the highlighted palette row (see
+            # ``apply_palette_enter`` for the scoping rules).
+            from xenon.repl.command_catalog import apply_palette_enter
+
+            apply_palette_enter(event.current_buffer)
 
         @kb.add("s-tab")
         def _(event):
@@ -1563,6 +1579,11 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         if self._classify_slash_input(raw) == "chat":
             self._handle_chat(raw)
             return False
+
+        # #183: remember what ran so the palette puts it on top next time.
+        from xenon.repl.command_catalog import record_use as _record_use
+
+        _record_use(getattr(self, "_completer", None), cmd_name)
 
         try:
             output = dispatch_command(
