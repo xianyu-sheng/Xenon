@@ -36,7 +36,7 @@
 
 ```bash
 # 从 GitHub Releases 安装（不依赖 PyPI）
-pip install https://github.com/xianyu-sheng/Xenon/releases/download/v0.9.5/xenon_harness-0.9.5-py3-none-any.whl
+pip install https://github.com/xianyu-sheng/Xenon/releases/download/v0.9.6/xenon_harness-0.9.6-py3-none-any.whl
 
 xenon   # 首次运行会引导配置 API Key、模型与运行入口
 ```

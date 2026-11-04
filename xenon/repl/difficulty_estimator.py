@@ -23,7 +23,7 @@ class TaskProfile:
     requires_long_context: bool = False
     estimated_tokens: int = 0
     expects_streaming: bool = True
-    # 推荐范式与置信度。此前范式只能由用户 /mode 手动切换，导致多步骤任务
+    # 推荐模式与置信度。此前模式只能由用户 /mode 手动切换，导致多步骤任务
     # 也跑在 direct/react 上——plan-execute、reflection 等引擎几乎从未被用到。
     # confidence 低于 REPL 的阈值时不自动切换，保留用户的显式选择。
     recommended_engine: str = "direct"
@@ -191,14 +191,14 @@ class DifficultyEstimator:
         requires_reasoning: bool,
         context_messages: list[dict],
     ) -> tuple[str, float, str]:
-        """按任务结构特征推荐范式，返回 (engine, confidence, reason)。
+        """按任务结构特征推荐模式，返回 (mode, confidence, reason)。
 
         判据是**语言结构与任务规模**，不枚举业务领域：多阶段连接词说明任务
         可分解（plan-execute 的强项），质量诉求说明需要自审（reflection），
         多轮 + 需要工具说明是探索式修改（react）。置信度表达"有多确定该换"，
         由 REPL 决定是否越过用户的显式 /mode 选择。
 
-        不需要工具的任务一律留在 direct：范式引擎的价值全在工具循环上，
+        不需要工具的任务一律留在 direct：模式的价值全在工具循环上，
         纯问答套上 plan/reflect 只是白烧 token。
         """
         if not text or not text.strip():

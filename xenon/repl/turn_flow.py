@@ -148,7 +148,7 @@ class TurnFlowMixin:
         self._last_kernel_task_id = ""
         self._ensure_turn_tree_rebuilt()
 
-        # 跨回合续接：短确认语 + 未兑现承诺 = 继承上轮意图/级别/范式；
+        # 跨回合续接：短确认语 + 未兑现承诺 = 继承上轮意图/级别/模式；
         # 待批 Gate 则接受更宽的确认语（“好写入到桌面”/“请写入”）。
         # 没有承诺时明确澄清，不让模型把“继续”当新话题重新回答。
         bare_continuation = is_continuation_utterance(user_input)
