@@ -431,6 +431,34 @@ def assess_quality(user_input: str) -> tuple[bool, str]:
     return True, "口语化输入，建议结构化"
 
 
+_PATH_LIKE = re.compile(
+    r"[A-Za-z]:[\/]"
+    r"|(?:^|\s)(?:/|\./|\.\./|~[\/])"
+    r"|\\\S+"
+)
+
+
+def is_value_like(text: str) -> bool:
+    """True when the message is a datum (path/URL/id), not an instruction."""
+
+    stripped = text.strip()
+    if not stripped or len(stripped) > 120:
+        return False
+    if chr(10) in stripped:
+        return False
+    if re.search(r"https?://|www\.", stripped, re.IGNORECASE):
+        return True
+    if _PATH_LIKE.search(stripped):
+        return True
+    # A bare ASCII datum ("v0.9.8", "README.md", "issue-413") carries a value,
+    # not an instruction.  CJK text is never treated this way: "写一个快速排序"
+    # is a real (short) task, and skipping it would quietly disable the
+    # optimizer for most Chinese requests.
+    if not re.fullmatch(r"[A-Za-z0-9._\-/:\@+]{1,60}", stripped):
+        return False
+    # A bare word is a greeting, not a datum: "hi" must keep its chat hint.
+    return bool(re.search(r"[0-9._/\:@+\-]", stripped))
+
 def optimize_prompt(
     user_input: str,
     *,
@@ -470,7 +498,10 @@ def optimize_prompt(
         else (detect_intent(user_input) if allow_regex else None)
     )
 
-    if intent is None:
+    if intent is None or is_value_like(user_input):
+        # A path or a bare value is information, not a task: templating it is
+        # what turned "D:\mybook-repo 具体产物在这个路径" into a research brief
+        # with requirements the user never asked for (#413).
         return user_input, None, False
 
     template = next((t for t in TEMPLATES if t.intent == intent), None)
