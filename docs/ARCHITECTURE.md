@@ -119,8 +119,8 @@ TaskSpec
 不变式：**回合级 L1/L2 语义/结构调整只有一处**（`turn/gate.py`），由
 `tests/test_semantics_single_source.py` / `test_contract_single_source.py`
 以全仓扫描断言锁定；**工具成败只由工具回执的 `success` 字段决定**（单一
-语义通道），面板/事件/渲染不用关键词猜。Reflection 引擎另有 reviewer
-评分，属于输出质量审查，不是工具事实或 Claim 的证明。
+语义通道），面板/事件/渲染不用关键词猜。反思阶段另有 reviewer 评分，
+属于输出质量审查，不是工具事实或 Claim 的证明。
 
 ## 2. 系统总览
 
@@ -132,9 +132,9 @@ TaskSpec
                                     │ 回合编排（kernel_host / turn_flow）
               ┌─────────────────────┼───────────────────────┐
               ▼                     ▼                       ▼
-      TurnContract              Engine（engine/）        Session（session/）
-      意图分类 + 正则护栏         7 范式执行器              tree / events(哈希链)
-      → 执行策略                 预算检查点 / 循环检测      / archive / projection
+      TurnContract           Kernel（kernel/，单循环）   Session（session/）
+      意图分类 + 正则护栏      LoopRuntime + 阶段配置      tree / events(哈希链)
+      → 执行策略               预算检查点 / 循环检测      / archive / projection
               │                     │                       │
               └──────────┬──────────┴───────────┬───────────┘
                          ▼                      ▼
@@ -150,7 +150,7 @@ TaskSpec
 ```
 用户输入
   → TurnContract：LLM 意图分类器主导 + 正则护栏约束（fail-closed 降级）
-  → 引擎执行：预算检查点（有进展→审批续跑；无进展→熔断）、LoopDetector、
+  → 循环执行：预算检查点（有进展→审批续跑；无进展→熔断）、LoopDetector、
     断路器、截断诚实标注 + 续写
   → TurnGate 判定（唯一判定点）：
       pass   → 发布
@@ -175,10 +175,10 @@ xenon/
 ├── turn/        回合校验层：gate.py（L1 阻断 / L2 提醒 / 同因熔断）
 ├── session/     结构层：tree（会话树）· events（哈希链事件日志）·
 │                archive（回合归档）· projection（目标投影）· query
-├── engine/      执行层：registry + builtin_engines（7 范式，direct 非引擎）；
-│                react / plan_execute / reflection / combined；base（协议）；
-│                evidence_runtime（L0 账本）· evidence_gate · task_verifier ·
-│                hollow_detector · loop_detector · circuit_breaker · budget
+├── kernel/      单循环：runtime · controller（唯一判定点）· policies · view
+├── engine/      工具执行层（历史目录名）：callbacks · context · evidence_runtime
+│                （L0 账本）· evidence_gate · task_verifier · hollow_detector ·
+│                circuit_breaker · budget · tool_runtime · task_recipe
 ├── nodes/       工具层：tool_executor（7 阶段：分类→校验→审批→执行→
 │                重试→审计）· tool_node（路径围栏/命令黑名单）·
 │                tool_registry · tool_families ×9 · approval_policy ·
@@ -198,7 +198,7 @@ xenon/
 | 路径围栏 | 解析符号链接与 junction 取真实路径；UNC / `\\?\` / 8.3 拒绝；环与超长路径回退 | `nodes/tool_node.py` `_validate_path` |
 | 危险命令 | 引号感知 + 段锚定黑名单；shell 替换/变量拼接拒绝 | `tool_node._validate_command` |
 | 边界审批 | 工作区内写免问；执行级工具（command/spawn_agent/执行型 mcp_call）一律询问；`y` 授权绑定 `(工具, 目标路径)`，`a` 记会话 TTL 规则；非交互 fail-closed | `repl/approval_ux.py`、`nodes/approval_policy.py` |
-| 子代理 | 默认只读（min(父级, READ_ONLY)）；审批通道继承父上下文 | `engine/react_engine.py` |
+| 子代理 | 默认只读（min(父级, READ_ONLY)）；审批通道继承父上下文；子任务只能继承授权、不能创建授权 | `harness/child.py`、`harness/child_worker.py` |
 | register_tool | 模块白名单 + 危险模块拒绝 + 凭证/配置模块点名拒绝 | `tool_node._validate_register_module` |
 | hooks | 用户级始终信任；项目级需指纹信任（`/trust-hooks`）；PreToolUse 超时/崩溃 fail-closed | `hooks/runner.py` |
 | 沙箱 | 只读模式 + 命令白名单（链感知）的确定性拒绝；诚实声明"检测 + 软件边界，非真隔离" | `sandbox/__init__.py` |
@@ -212,13 +212,13 @@ register_command("/name", desc, usage)    # command_groups 自动发现，无需
 # 本地 hooks：<user|project>/.xenon/hooks.yaml（PreToolUse / PostToolUse /
 #           Stop / SubagentStop，JSON stdin，exit 2 阻断 PreToolUse）
 # 自定义 provider：register_custom_provider → credentials.yaml _custom_providers
-# MCP：stdio server 注册后工具注入引擎（与 ToolExecutor 共用证据链）
+# MCP：stdio server 注册后工具注入循环（与 ToolExecutor 共用证据链）
 ```
 
-`xenon/modes.py` 是 `/mode` 与 kernel 路由的元数据来源：`direct` / `react`
-使用 ActFirst，`plan-execute` 使用 PlanFirst；`reflection` / `plan-react` /
-`plan-reflection` / `react-reflection` 尚未有 kernel parity，继续由 legacy
-执行。legacy 引擎注册表只保留执行工厂与面板元数据，描述从模式目录复用。
+`xenon/modes.py` 是 `/mode` 与 kernel 路由的**唯一**元数据来源。每个模式只是一个
+`LoopProfile`（跑哪些阶段、每步多少调用、反思几轮），不存在第二个执行器：
+`react` 与 `direct` 的 profile 完全相同，因此 `react` 只是 `direct` 的别名
+（保留名字以兼容 `--mode react`）。
 
 ## 7. 大文件拆分状态
 
@@ -228,7 +228,7 @@ register_command("/name", desc, usage)    # command_groups 自动发现，无需
 | B | REPL 输入提取（repl_input） | ✅ |
 | C | Slash commands 按主题拆分（command_groups 自动发现） | ✅ |
 | R | REPL 拆分（repl 2376 行 → 8 模块 + Mixin 组合） | ✅ |
-| D | ReAct/Base 引擎拆协议解析/工具循环/子代理 | ⏳ 待定（react_engine 1872 行 / base 1857 行） |
+| D | 旧多引擎类拆分 | ✅ 已不需要：引擎已删除，只剩 `LoopRuntime` 与阶段配置 |
 | E | LLM client 按传输拆分（已拆 llm_transport/llm_usage，主文件 1423 行） | ⏳ 部分 |
 
 ## 8. 质量门禁（CI）

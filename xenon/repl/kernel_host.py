@@ -48,7 +48,7 @@ console: Any = _ConsoleProxy()
 
 class KernelHostMixin:
     def _start_log_capture(self) -> None:
-        """v0.5.3: 拦截引擎执行期间的日志输出。
+        """v0.5.3: 拦截循环执行期间的日志输出。
 
         保存并移除目标 logger 的所有现有 handler，替换为写入内存缓冲区的
         StringIO handler。这样日志不会输出到 stderr，而是被收集供折叠/展开使用。
@@ -142,7 +142,7 @@ class KernelHostMixin:
     def _record_engine_error(self, message: str, model_used: str | None) -> None:
         """记录一轮错误到对话历史，并保证历史不残留 user-only 序列。
 
-        引擎抛异常时 user 消息已入 history 但没有对应的 assistant 响应。这种
+        循环抛异常时 user 消息已入 history 但没有对应的 assistant 响应。这种
         user-only 序列会污染下一轮的上下文与缓存前缀，所以必须二选一收尾：
 
         1. 优先写入 assistant 占位错误消息（保留失败信息，用户可见）；

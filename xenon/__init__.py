@@ -22,7 +22,7 @@
 
 懒加载
 ======
-``import xenon`` 不触发引擎/REPL 子模块导入，保持 CLI 启动路径零开销；
+``import xenon`` 不触发循环/REPL 子模块导入，保持 CLI 启动路径零开销；
 首次访问某个名字时才解析对应实现。
 """
 
@@ -116,7 +116,7 @@ def _run_task(
 ) -> Any:
     """在受约束的工作区里跑一个任务，返回结果文本。
 
-    这是把 Xenon 当库用的推荐入口——它负责组装引擎、绑定工作区围栏、
+    这是把 Xenon 当库用的推荐入口——它负责组装循环、绑定工作区围栏、
     准备运行上下文，等价于 REPL 交互路径的约束强度。
 
     Args:
@@ -126,10 +126,10 @@ def _run_task(
         model_priority: 模型优先级列表；``None`` 时从本地配置读取。
         callback: 事件回调；``None`` 时用 ``SilentCallback``（不输出到终端）。
         context: 可选的 ``AgentContext``；``None`` 时新建一个。
-        **engine_kwargs: 其余参数透传给引擎工厂（如 temperature、max_iterations）。
+        **engine_kwargs: 其余参数透传给循环工厂（如 temperature、max_iterations）。
 
     Returns:
-        引擎的最终回答文本。
+        循环的最终回答文本。
 
     Raises:
         ValueError: ``workspace`` 不是已存在的目录，或 ``task`` 为空。

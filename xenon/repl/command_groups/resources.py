@@ -409,7 +409,7 @@ def _cmd_status(
 
     lines = [
         "═══ 系统状态 ═══\n",
-        f"  范式: {mode.name} — {mode.description}",
+        f"  模式: {mode.name} — {mode.description}",
         f"  流式输出: {'开启' if repl and repl.streaming else '关闭'}",
         f"  输入优化: {'开启' if repl and repl.optimize_prompts else '关闭'}",
         f"  详细模式: {'开启' if repl and repl.verbose else '关闭'}",
@@ -442,7 +442,7 @@ def _cmd_status(
 
 # /setup ───────────────────────────────────────────────────
 
-register_command("/setup", "首次配置向导（配置 Key、选模型、选范式）", "/setup")
+register_command("/setup", "首次配置向导（配置 Key、选模型、选模式）", "/setup")
 
 
 @command_handler("/setup")

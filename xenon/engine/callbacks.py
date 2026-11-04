@@ -1,4 +1,4 @@
-"""引擎回调接口 — 让引擎通知外部（REPL/测试）关键事件。"""
+"""工具执行层的回调接口 — 让循环通知外部（REPL/测试）关键事件。"""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def mask_sensitive_params(params: Any) -> Any:
 
 
 class EngineCallback:
-    """引擎回调基类。所有方法默认空实现，子类按需覆写。"""
+    """回调基类。所有方法默认空实现，子类按需覆写。"""
 
     def on_think(self, thought: str) -> None:
         """LLM 思考过程。"""
@@ -92,7 +92,7 @@ class EngineCallback:
         pass
 
     def on_finish(self, result: str) -> None:
-        """引擎执行完成。"""
+        """一次循环执行完成。"""
         pass
 
 
@@ -157,7 +157,7 @@ class ThinkingPanel:
     """
     思考过程折叠面板 — 自定义 Rich 可渲染组件。
 
-    将 ReAct 引擎的思考步骤收集起来，渲染为一个简洁的面板：
+    将循环的思考步骤收集起来，渲染为一个简洁的面板：
     - 标题显示摘要（如 "深度思考 · 3 次工具调用"）
     - 内部展示每一步的思考、工具调用和观察结果
     - 使用 dim 边框，与最终答案面板形成视觉层次
@@ -214,7 +214,7 @@ class ThinkingPanel:
         """记录一次观察结果，并完成当前步骤。
 
         成功与否优先取调用方给出的结构化标记（单一语义通道，来自工具回执）；
-        只有合成观察文本（引擎自制提示）才用关键词探测兜底。
+        只有合成观察文本（循环自制提示）才用关键词探测兜底。
         """
         if self._awaiting_observations:
             step = self._awaiting_observations.popleft()

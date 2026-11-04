@@ -79,7 +79,7 @@ def cmd_verbose(*, args: str, session_state: dict, **kwargs: Any) -> str:
     if repl:
         if args.strip().lower() == "on":
             repl.verbose = True
-            return "✅ 详细模式已开启\n引擎执行时将显示思考过程、工具调用和观察结果"
+            return "✅ 详细模式已开启\n循环执行时将显示思考过程、工具调用和观察结果"
         if args.strip().lower() == "off":
             repl.verbose = False
             return "✅ 详细模式已关闭"

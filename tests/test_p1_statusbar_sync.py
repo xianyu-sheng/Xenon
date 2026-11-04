@@ -153,7 +153,7 @@ def test_scenario_5_mode_command_updates_statusbar():
     # 初始范式（默认direct）
     initial = bar.render()
     initial_content = str(initial.renderable)
-    assert "范式:" in initial_content
+    assert "模式:" in initial_content
     assert "direct" in initial_content.lower()
 
     # 切换范式到 react
@@ -162,7 +162,7 @@ def test_scenario_5_mode_command_updates_statusbar():
     after_content = str(after.renderable)
 
     # 验证状态栏显示新范式
-    assert "范式:" in after_content
+    assert "模式:" in after_content
     assert "react" in after_content.lower()
 
     # 再切换到 plan-execute

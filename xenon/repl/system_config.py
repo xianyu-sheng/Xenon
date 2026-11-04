@@ -53,7 +53,7 @@ class ValidationConfig:
 
 @dataclass
 class EngineConfig:
-    """引擎行为配置。"""
+    """运行行为配置。"""
 
     # XENON_NO_AUTO_ENGINE: 禁用范式自动路由
     disable_auto_routing: bool = False

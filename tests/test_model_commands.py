@@ -92,7 +92,7 @@ def test_mode_no_args():
 
     reg = ModelRegistry()
     result = _cmd_mode(args="", registry=reg, session_state={})
-    assert "当前范式" in result
+    assert "当前模式" in result
 
 
 def test_mode_list_shows_builtin():
@@ -100,7 +100,7 @@ def test_mode_list_shows_builtin():
 
     reg = ModelRegistry()
     result = _cmd_mode(args="", registry=reg, session_state={})
-    assert "可用范式" in result
+    assert "可用模式" in result
 
 
 def test_set_role_needs_args():

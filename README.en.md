@@ -109,7 +109,7 @@ input
 | Item | Value |
 |---|---|
 | Protocol | Fully blind: no official test patch during solving, no FAIL_TO_PASS names in prompt |
-| Engine | Single `react` (not a multi-engine union / best-of-N) |
+| Loop | Single `LoopRuntime`; a mode only picks its phase profile (not a multi-engine union / best-of-N) |
 | Model | `deepseek-v4-flash`, official API |
 | Judging | Official `swebench` harness |
 | Repetition | Three independent runs, mean reported; every run published |

@@ -13,7 +13,7 @@
 
 | 项目 | 一句话 |
 | --- | --- |
-| **Xenon** | **MCP + 多模型 + 多范式三合一**，开源 terminal coding agent |
+| **Xenon** | **MCP + 多模型 + 单循环多阶段**，开源 terminal coding agent |
 | [Aider](https://aider.chat) | 多模型 + git commit 循环，专注 repo 级编辑 |
 | [Claude Code](https://claude.com/claude-code) | Claude + MCP 官方 terminal，闭源 |
 | [OpenCode](https://opencode.ai) | 多模型 + 50+ provider，TUI，Go 写的 |
@@ -28,7 +28,7 @@
 | **MCP 协议** | ⚠️ stdio + SSE（简化实现，无 endpoint 发现/会话关联，见 #103） | ❌ | ✅ 一等公民 | ✅ | ✅ stdio/http/sse |
 | **多模型路由** | ✅ 12 家厂商 | ✅ ~10 | ❌ Claude only | ✅ 50+ | ✅ 18+ |
 | **可验证执行** | ✅ **账本 + claim 绑定 + 失败即债务** | ❌ 只给 diff | ⚠️ 权限提示，无账本 | ❌ | ❌ |
-| **多范式** | ✅ 7 个 loop profile（同一个循环，参数不同） | ❌ | ❌ | ❌ | ⚠️ 可 mid-session 换 LLM |
+| **多阶段配置** | ✅ 6 个 loop profile（同一个循环，参数不同；`react` 只是 `direct` 的别名） | ❌ | ❌ | ❌ | ⚠️ 可 mid-session 换 LLM |
 | **本地优先** | ✅ Ollama + 本地凭据 | ⚠️ CLI 本地，模型云 | ❌ | ✅ | ✅ Ollama / llama.cpp |
 | **工具断路器** | ✅ 3 失败熔断 | ❌ | ❌ | ❌ | ❌ |
 | **上下文压缩** | ✅ 6 步 @ 80% | ❌ | ✅ | ❌ | ❌ |
@@ -67,24 +67,24 @@
 **Xenon 优势**：和 Aider / Crush 同级（多 provider 接入），但有**断路器自动降级**——3 连续失败自动冷却，比 Crush 多了这个生产级特性。
 **Xenon 劣势**：provider 数量不如 OpenCode（50+）和 Crush（18+），但 12 个覆盖了主流 + 本地。
 
-### 3. 多范式引擎（**核心差异化**）
+### 3. 一个循环 + 多阶段配置（**核心差异化**）
 
 | 项目 | 能力 |
 | --- | --- |
-| **Xenon** | **一个循环 + 7 个 profile**：`direct` / `react` / `plan-execute` / `reflection` / `plan-react` / `plan-reflection` / `react-reflection`。模式是**一张表里的参数**（要不要先计划、每步是否独立预算、收尾是否反思、反思几轮），不是 7 个引擎类。 |
-| Aider | 单范式：chat + 工具调用循环。 |
-| Claude Code | 单范式：单 agent loop。 |
-| OpenCode | 单范式。 |
-| Crush | "Flexible: switch LLMs mid-session preserving context" — 这是**换模型**（同范式内），不是换范式。 |
+| **Xenon** | **一个循环 + 6 个 profile**：`direct` / `plan-execute` / `reflection` / `plan-react` / `plan-reflection` / `react-reflection`。模式是**一张表里的参数**（要不要先计划、每步是否独立预算、收尾是否反思、反思几轮）。`react` 与 `direct` 的 profile 完全相同，因此只是别名——7 个引擎类已经删掉了。 |
+| Aider | 单一 chat + 工具调用循环。 |
+| Claude Code | 单一 agent loop（可切模式预设）。 |
+| OpenCode | 单循环。 |
+| Crush | "Flexible: switch LLMs mid-session preserving context" — 这是**换模型**（同一循环内），不是换阶段配置。 |
 
-**Xenon 的定位（v0.9 起）**：差异化不是「范式最多」，而是**执行可验证**：
+**Xenon 的定位（v0.9 起）**：差异化不是「模式最多」，而是**执行可验证**：
 
 - 只追加的账本：每次工具调用留下带哈希链的回执，`xenon replay` 可离线复盘；
 - claim → fact 绑定：模型说「我改了 a.py」必须绑定到真实回执，绑定不上就是债务；
 - fail-closed：没有证据的收尾会被阻断，除非用户显式 `--accept-debt`（且**永不接受已证伪的结果**）；
 - 同一套循环：策略、验证、交付不随模式分叉，行为可统一验证。
 
-多范式仍然保留，但它是**同一循环的参数化**，不再是 7 份复制的循环。旧版把同一套循环复制 7 次，导致工具语义散落在 prompt、plan 校验、TaskState、ClaimGate、delivery 五处——这是被删掉的原因，不是被隐藏的原因。
+多阶段配置仍然保留，但它是**同一循环的参数化**，不再是 7 份复制的循环。旧版把同一套循环复制 7 次，导致工具语义散落在 prompt、plan 校验、TaskState、ClaimGate、delivery 五处——这是被删掉的原因，不是被隐藏的原因。
 
 ### 4. 本地优先
 
@@ -103,7 +103,7 @@
 
 | 项目 | 能力 |
 | --- | --- |
-| **Xenon** | `CircuitBreaker` 每工具独立断路器，`failure_threshold=3`（默认 3 连续失败）→ `OPEN` 状态熔断，`cooldown=30s` 冷却（half_open 失败翻倍，max 600s）；每 ToolExecutor 实例独立注册表（同一引擎内跨 run 累积断路状态，保证测试隔离）。 |
+| **Xenon** | `CircuitBreaker` 每工具独立断路器，`failure_threshold=3`（默认 3 连续失败）→ `OPEN` 状态熔断，`cooldown=30s` 冷却（half_open 失败翻倍，max 600s）；每 ToolExecutor 实例独立注册表（同一循环内跨 run 累积断路状态，保证测试隔离）。 |
 | 其它 4 项 | ❌ 都不做。 |
 
 **Xenon 优势**：**这是全表独有的生产级特性**。其他 4 个项目在 tool 失败时只重试或不重试，**没有熔断 + 指数退避**机制。Xenon 在工具反复失败时会进入 OPEN 状态直接拒绝请求，保护 LLM token 不被空转消耗。
@@ -112,7 +112,7 @@
 
 | 项目 | 能力 |
 | --- | --- |
-| **Xenon** | `Compactor` 6 步结构化压缩器，在 Token 窗口达 80% 触发；引擎内每 5 轮自动压缩抑制 O(n²) 增长（v0.2.0 F4 修复）；持久化到 `~/.xenon/compact/`。 |
+| **Xenon** | `Compactor` 6 步结构化压缩器，在 Token 窗口达 80% 触发；循环内每 5 轮自动压缩抑制 O(n²) 增长（v0.2.0 F4 修复）；持久化到 `~/.xenon/compact/`。 |
 | Claude Code | ✅（实现细节未公开）。 |
 | 其它 3 项 | ❌。 |
 

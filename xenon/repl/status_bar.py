@@ -230,7 +230,7 @@ class StatusBar:
         status_parts.extend(
             [
                 f"[bold cyan]模型:[/bold cyan] {escape(model_display)}",
-                f"[bold cyan]范式:[/bold cyan] {mode.name}",
+                f"[bold cyan]模式:[/bold cyan] {mode.name}",
                 f"[bold cyan]Token:[/bold cyan] {bar} {used:,}/{max_tok:,} ({stats['usage_ratio']})",
             ]
         )

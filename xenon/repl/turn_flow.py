@@ -99,6 +99,34 @@ class TurnFlowMixin:
         except Exception:  # noqa: BLE001 — a missing skill is not a crash
             self._active_skill_body = None
 
+    def _apply_routing_decision(self, decision: Any) -> None:
+        """Apply a router suggestion; a rejected switch must not break the turn.
+
+        Extracted from ``_handle_chat`` so the failure branch — the one that
+        tells the user /mode still works — is covered by a test instead of a
+        full chat turn (#294).
+        """
+
+        if decision is None:
+            return
+        old_mode = self.registry.current_mode
+        try:
+            self.registry.set_mode(decision.paradigm)
+            self.status_bar.set_mode_notification(decision.paradigm)
+            if self.intelligent_router.notify_user:
+                console.print(
+                    f"[dim]┌─ 智能路由: {old_mode} → "
+                    f"[bold]{decision.paradigm}[/bold][/dim]"
+                )
+                console.print(f"[dim]│  {decision.reason}[/dim]")
+                console.print(
+                    f"[dim]│  [置信度: {decision.confidence:.0%}, "
+                    f"规则: {decision.matched_rule}][/dim]"
+                )
+        except ValueError as e:
+            logger.warning(f"智能路由切换模式失败: {e}")
+            console.print(f"[yellow]⚠ 模式切换失败: {e}[/yellow]")
+
     def _handle_chat(
         self,
         user_input: str,
@@ -106,7 +134,7 @@ class TurnFlowMixin:
         skill_name: str | None = None,
         skill_args: str = "",
     ) -> None:
-        """处理多轮对话，支持 prompt 优化和多种思考范式。"""
+        """处理多轮对话，支持 prompt 优化和多种模式。"""
         # P2-修复2: 空输入防护 — 避免空 user 消息污染 history + 浪费 LLM token
         # run() 主循环 line 165 也有防护，但 _handle_chat 是独立可调用的方法，
         # 直接调（如测试或 API 入口）时无防护会 add_user_message("") 进入完整流程
@@ -155,36 +183,14 @@ class TurnFlowMixin:
         self._turn_gate.reset()
         self.agent_context.clear_security_advisories()
 
-        # v0.6.0: 智能路由 - 根据用户输入自动选择推理范式
+        # v0.6.0: 智能路由 - 根据用户输入自动选择模式
         if self.intelligent_router.enabled:
             routing_decision = self.intelligent_router.route(
                 user_input=user_input,
                 context=self.ctx_mgr,
                 current_mode=self.registry.current_mode
             )
-
-            if routing_decision is not None:
-                # 建议切换范式
-                old_mode = self.registry.current_mode
-                try:
-                    self.registry.set_mode(routing_decision.paradigm)
-                    self.status_bar.set_mode_notification(routing_decision.paradigm)
-
-                    if self.intelligent_router.notify_user:
-                        console.print(
-                            f"\n[dim]┌─ 智能路由: {old_mode} → "
-                            f"[bold]{routing_decision.paradigm}[/bold][/dim]"
-                        )
-                        console.print(
-                            f"[dim]│  {routing_decision.reason}[/dim]"
-                        )
-                        console.print(
-                            f"[dim]│  [置信度: {routing_decision.confidence:.0%}, "
-                            f"规则: {routing_decision.matched_rule}][/dim]"
-                        )
-                except ValueError as e:
-                    logger.warning(f"智能路由切换范式失败: {e}")
-                    console.print(f"\n[yellow]⚠ 范式切换失败: {e}[/yellow]")
+            self._apply_routing_decision(routing_decision)
 
         # Side effects are authorized by the original request, never by the
         # optimizer's generated wording or by the selected reasoning mode.

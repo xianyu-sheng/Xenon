@@ -111,7 +111,7 @@ def test_mode_command_records_override():
         session_state={"intelligent_router": router},
     )
 
-    assert out == "✅ 已切换到范式: plan-execute — d"  # user-visible text unchanged
+    assert out == "✅ 已切换到模式: plan-execute — d"  # user-visible text unchanged
     assert [r.chosen for r in router.preferences.all()] == ["plan-execute"]
 
 
@@ -380,7 +380,7 @@ def test_mode_command_survives_preference_storage_failure():
         session_state={"intelligent_router": router},
     )
 
-    assert out == "✅ 已切换到范式: plan-execute — d"
+    assert out == "✅ 已切换到模式: plan-execute — d"
 
 
 def test_repl_wires_preferences_persistence(tmp_path, monkeypatch):

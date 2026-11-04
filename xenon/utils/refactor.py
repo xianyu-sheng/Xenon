@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class RefactorEngine:
-    """重构引擎。"""
+    """重构工具。"""
 
     def __init__(self, root_dir: str | Path = ".") -> None:
         self.root = Path(root_dir).resolve()

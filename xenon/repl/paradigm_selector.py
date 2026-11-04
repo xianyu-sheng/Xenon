@@ -1,7 +1,7 @@
 """
-范式选择器 - 基于规则引擎选择最优推理范式
+模式选择器 - 基于规则引擎选择最优推理模式
 
-根据任务特征，通过优先级规则匹配选择最合适的推理范式。
+根据任务特征，通过优先级规则匹配选择最合适的推理模式。
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RoutingDecision:
     """路由决策结果"""
-    paradigm: str               # 选择的范式名称
+    paradigm: str               # 选择的模式名称
     confidence: float           # 置信度 (0-1)
     reason: str                 # 选择原因（用户可见）
     matched_rule: str | None = None  # 命中的规则ID
@@ -38,7 +38,7 @@ class RoutingRule:
 
 class ParadigmSelector:
     """
-    范式选择器 - 基于规则引擎
+    模式选择器 - 确定性规则
 
     维护一组优先级规则，按优先级顺序匹配，返回第一个命中的规则。
     """
@@ -184,7 +184,7 @@ class ParadigmSelector:
 
     def select(self, features: TaskFeatures) -> RoutingDecision:
         """
-        基于特征选择范式
+        基于特征选择模式
 
         返回第一个匹配的规则，如果没有匹配则返回 direct（兜底）
         """

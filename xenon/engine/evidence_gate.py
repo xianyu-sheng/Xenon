@@ -1,20 +1,20 @@
 """EvidenceGate — 会话级确定性验证门（横切贯穿层）。
 
 设计背景（用户主导的架构决策，2026-08-05）：
-  不做「工具层/引擎层接缝处的单一挂钩」，而是竖着贯穿整个会话生命周期的
+  不做「工具层/循环层接缝处的单一挂钩」，而是竖着贯穿整个会话生命周期的
   横切关注点（cross-cutting concern）：规划 / 执行 / 收尾每个阶段边界各挂
   一个确定性 Gate，层层过滤——前一层放过的错误由后一层兜底。
 
 每个 Gate 满足：
   - 零 LLM：纯确定性校验，不烧 token（成本纪律）；
-  - 校验与补救分离：Gate 只回答「通过/拒绝 + 原因」，如何补救由引擎决定
+  - 校验与补救分离：Gate 只回答「通过/拒绝 + 原因」，如何补救由循环决定
     （重新规划 / 追加补救步骤 / 追加警告），保证行为向后兼容；
-  - 可观测：每次校验产出 GateVerdict，由引擎发 EventBus / callback 事件。
+  - 可观测：每次校验产出 GateVerdict，由循环发 EventBus / callback 事件。
 
 Step 1 范围（本文件）：把散落在 PlanExecuteEngine 的 4 个私有检查
 （_ensure_plan_has_write_step / _ensure_task_completed /
 _verify_llm_file_claims / ExecutionEvidence.capture 的校验部分）
-提取为统一 Gate 契约，引擎侧保留补救逻辑。行为零变化。
+提取为统一 Gate 契约，循环侧保留补救逻辑。行为零变化。
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 class GateVerdict:
     """单个 Gate 的确定性校验结果。
 
-    passed=False 时由引擎决定补救动作；reason 是人类可读原因，
+    passed=False 时由循环决定补救动作；reason 是人类可读原因，
     payload 携带可选的补救素材（如需要追加到 LLM 输出的警告文本）。
     """
 

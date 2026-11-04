@@ -80,7 +80,7 @@ class AgentContext:
         """把现有 EvidenceLedger 绑定到本任务的 EvidenceRuntime。
 
         Args:
-            ledger: EvidenceLedger 实例（通常由引擎在任务起点创建）。
+            ledger: EvidenceLedger 实例（通常由循环在任务起点创建）。
         """
         runtime = self.evidence
         runtime._ledger = ledger  # noqa: SLF001 — 门面内部状态，统一契约
@@ -247,7 +247,7 @@ exceeds the current turn's ``_execution_level``.  Returning True lets the
     def request_checkpoint_continuation(self, reason: str) -> str:
         """Ask whether to continue past a budget checkpoint (closed outcome).
 
-        无通道（库/直连引擎用户）→ approved（预算语义不变）；
+        无通道（库/直连调用方）→ approved（预算语义不变）；
         通道异常 → declined（续跑是授权类询问，fail-closed）。
         """
 

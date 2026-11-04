@@ -469,7 +469,7 @@ class EvidenceRuntime:
        - finalize 构建交付 EvidencePack（幂等）
        - persist / load JSONL 持久化
 
-    本门面是 EvidenceLedger 的运行时包装；引擎与工具层通过同一 ledger 共享
+    本门面是 EvidenceLedger 的运行时包装；循环与工具层通过同一 ledger 共享
     一条哈希链，任何模块写入的事件都进入同一任务证据流。
     """
 

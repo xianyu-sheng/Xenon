@@ -196,14 +196,14 @@ def cmd_auto_route(*, args: str, session_state: dict, **kwargs) -> str | None:
         repl.intelligent_router.enable()
         console.print("\n[green]✓ 智能路由已启用[/green]")
         console.print(
-            "[dim]系统将根据任务特征自动选择最合适的推理范式。\n"
+            "[dim]系统将根据任务特征自动选择最合适的模式。\n"
             "你仍可使用 /mode 命令手动切换。[/dim]"
         )
         return None
     elif arg == "off":
         repl.intelligent_router.disable()
         console.print("\n[yellow]智能路由已禁用[/yellow]")
-        console.print("[dim]范式切换恢复为完全手动控制。[/dim]")
+        console.print("[dim]模式切换恢复为完全手动控制。[/dim]")
         return None
     elif arg == "stats":
         log_stats = repl.intelligent_router.get_stats()["decision_log"]
@@ -214,7 +214,7 @@ def cmd_auto_route(*, args: str, session_state: dict, **kwargs) -> str | None:
         switches = log_stats["switches"]
         rate = switches / total if total else 0
         table.add_row("决策总数", str(total))
-        table.add_row("范式切换", str(switches))
+        table.add_row("模式切换", str(switches))
         table.add_row("切换率", f"{rate:.0%}")
         table.add_row(
             "规则命中",
@@ -224,7 +224,7 @@ def cmd_auto_route(*, args: str, session_state: dict, **kwargs) -> str | None:
             ) or "—",
         )
         table.add_row(
-            "推荐范式",
+            "推荐模式",
             ", ".join(
                 f"{key}: {value}"
                 for key, value in sorted(log_stats["paradigms"].items())
@@ -322,7 +322,7 @@ def cmd_auto_route(*, args: str, session_state: dict, **kwargs) -> str | None:
         table.add_row("", "")
         table.add_row("总路由次数", str(stats["total_routes"]))
         table.add_row("成功决策次数", str(stats["successful_routes"]))
-        table.add_row("范式切换次数", str(stats["switches"]))
+        table.add_row("模式切换次数", str(stats["switches"]))
 
         console.print()
         console.print(table)
