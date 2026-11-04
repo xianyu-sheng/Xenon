@@ -232,6 +232,9 @@ class LoopRuntime:
         #: protocol problem, not a model problem: the agent keeps proposing
         #: calls the catalog cannot bind.
         self._refusals: dict[str, int] = {}
+        #: (step ordinal, obligation) for every edit this turn performed, so a
+        #: plan-less turn still has a V1 to close over (#420).
+        self._edit_steps: list[tuple[int, Obligation]] = []
         self._accept_debt = False
         self._context_digest = ""
         self._steering_source: Any = None
@@ -336,11 +339,32 @@ class LoopRuntime:
             },
         )
         self._run_start_seq = self._ledger.watermark()
+        # #420: V2 had nothing to verify because nothing ever filled
+        # `TaskSpec.obligations`.  Derive them from the task text here, in the
+        # harness layer, and record them: coverage that is not derived is
+        # coverage that cannot exist.
+        if not spec.obligations:
+            from xenon.harness.intake import derive_obligations
+
+            derived = derive_obligations(
+                spec.user_objective or spec.objective,
+                since_seq=self._run_start_seq,
+            )
+            if derived:
+                spec = replace(spec, obligations=derived)
+                self._spec = spec
         self._transition(TaskPhase.INTAKE, "task accepted")
         self._append(
             EventKind.INTAKE_RECORDED,
             EventSource.RUNTIME,
-            {"mode": spec.mode.value, "constraints": list(spec.constraints)},
+            {
+                "mode": spec.mode.value,
+                "constraints": list(spec.constraints),
+                "obligations": [
+                    {"id": item.id, "kind": item.kind.value, "target": item.target}
+                    for item in spec.obligations
+                ],
+            },
         )
         self._transition(TaskPhase.RUNNING, "intake complete")
 
@@ -866,6 +890,26 @@ class LoopRuntime:
         )
         if receipt.status is ReceiptStatus.OK:
             self._ok_receipts += 1
+            # #420: the implicit V1 step is derived from what the receipt says
+            # it wrote, not from the action's `targets` — an `apply_patch`
+            # carries its paths inside the effect, and using the (empty) intent
+            # targets produced "unverifiable" verdicts that blocked a delivery
+            # which had actually succeeded.
+            for effect in receipt.effects:
+                if not isinstance(effect, FsWrite) or not effect.changed:
+                    continue
+                for path in effect.paths:
+                    self._edit_steps.append(
+                        (
+                            len(self._edit_steps) + 1,
+                            Obligation(
+                                id=f"implicit-step-{len(self._edit_steps) + 1}",
+                                kind=PropositionKind.FILE_CHANGED,
+                                target=str(path),
+                                since_seq=self._run_start_seq,
+                            ),
+                        )
+                    )
         else:
             # #417: a failure is evidence, not a stop.  Put one actionable line
             # in the next view so the model changes something instead of
@@ -996,6 +1040,31 @@ class LoopRuntime:
             self._transition(TaskPhase.REPAIRING, reason or "step released")
         self._transition(TaskPhase.RUNNING, "step released")
         return None
+
+    def _close_implicit_step(self) -> tuple[Verdict, ...]:
+        """V1 for turns without a plan (#420).
+
+        `direct`/`react` have no plan steps, so step-level verification had no
+        home and never ran.  The turn itself is the step: every edit it made
+        must have produced a file-change fact.  Same resolver, same event shape,
+        same "matching, never judging" rule.
+        """
+
+        if self._plan_steps or not self._edit_steps:
+            return ()
+        verdicts: list[Verdict] = []
+        for step_id, obligation in self._edit_steps:
+            verdict = self._controller._obligation_verdict(obligation, self._readonly)
+            self._verdicts.append(verdict)
+            self._append(
+                EventKind.STEP_VERDICT,
+                EventSource.GATE,
+                _verdict_payload(verdict),
+                step_id=str(step_id),
+            )
+            verdicts.append(verdict)
+        self._sync_debt(verdicts)
+        return tuple(verdicts)
 
     def _close_active_step(self) -> tuple[Verdict, ...]:
         step = self._active_step
@@ -1149,6 +1218,7 @@ class LoopRuntime:
                 _claim_payload(claim),
             )
 
+        self._close_implicit_step()
         # A Finish is also the last chance to close a plan.  Unexecuted steps
         # produce V1 violations, not an implicit "done".  Commit steps wait for
         # the finalizer so the commit is created from verified paths.
@@ -1165,7 +1235,27 @@ class LoopRuntime:
         )
         self._append_audit_report(preflight_audit, claims, scope="preflight")
         self._verdicts.extend(preflight_audit.verdicts)
+        for verdict in preflight_audit.verdicts:
+            # Every level writes the same event shape, so `/evidence` and a
+            # replay can answer "were all three levels run?" without digging
+            # into audit payloads (#420).
+            self._append(
+                EventKind.STEP_VERDICT,
+                EventSource.GATE,
+                _verdict_payload(verdict),
+            )
         self._sync_debt(preflight_audit.verdicts)
+        # #420: a task-level gap is the discrepancy the self-evolution layer
+        # exists for — record it as a lesson candidate, never as a block.
+        for verdict in preflight_audit.verdicts:
+            if verdict.status is VerdictStatus.VIOLATED:
+                self._propose_lesson(
+                    "claim_fact_mismatch",
+                    {
+                        "obligation_id": verdict.obligation_id,
+                        "reason": verdict.reason or "no matching fact",
+                    },
+                )
 
         finalizer_outcome = None
         if self._finalizer is not None and self._preflight_delivery(claims):
