@@ -21,7 +21,7 @@ from xenon.harness.runner import run_task
 from xenon.kernel.contracts import CallTool, Capability, TaskMode, ToolIntent
 from xenon.kernel.policies import PermissionMode
 from xenon.kernel.strategies import LoopProfile
-from xenon.ledger.events import EventKind, canonical_json
+from xenon.ledger.events import EventKind, EventSource, canonical_json
 from xenon.ledger.store import Ledger
 from xenon.modes import MODE_CATALOG
 from xenon.repl.execution_policy import ExecutionLevel
@@ -1644,3 +1644,39 @@ def test_turn_path_tolerates_a_broken_tree(tmp_path: Path, monkeypatch) -> None:
         client=FakeClient([json.dumps({"action": "finish", "answer": "ok"})]),
     )
     assert seen["turn_path"] == ()
+
+
+def test_a_blocked_turn_that_asked_a_question_says_so(tmp_path: Path) -> None:
+    """#402: the panel said "blocked" and swallowed the question.
+
+    Reproduces the dogfood ledger: the model asked for the P0 context, the
+    runtime moved to ``blocked``, and the operator saw "任务未交付" with the
+    question nowhere on screen.
+    """
+    from xenon.kernel.contracts import EvidenceStatus, TaskPhase, TaskResult
+    from xenon.repl import runtime_adapter as adapter
+
+    ledger = tmp_path / "q.jsonl"
+    store = Ledger(ledger, "q")
+    store.append(
+        EventKind.USER_QUESTION, EventSource.LLM, {"question": "哪个仓库？"}
+    )
+
+    waiting = TaskResult(
+        task_id="q",
+        accepted=False,
+        phase=TaskPhase.BLOCKED,
+        answer="",
+        evidence_status=EvidenceStatus.UNVERIFIED,
+    )
+    repl = FakeRepl(tmp_path, ModelRegistry())
+    adapter._render_kernel_result(
+        repl,
+        adapter.HarnessRun(result=waiting, task_id="q", ledger_path=ledger),
+        ConsoleCallback(verbose=False),
+        model_id="test/fake",
+    )
+
+    title, text = repl.rendered[-1]
+    assert title == "Kernel · 等待回答"
+    assert text.strip() == "等待你的回答：哪个仓库？"

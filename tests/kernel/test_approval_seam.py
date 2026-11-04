@@ -420,3 +420,20 @@ def test_a_waiting_turn_is_titled_waiting_not_blocked(tmp_path):
     assert summary == "等待你的回答：哪个仓库？"
     assert "未交付" not in summary
     assert blocking_reason(ledger.path, task_id="w") == "等待你的回答：哪个仓库？"
+
+
+def test_an_empty_question_does_not_hide_a_real_reason(tmp_path):
+    """A user_question with no text must not shadow an earlier explanation."""
+    from xenon.ledger.events import EventKind, EventSource
+    from xenon.ledger.store import Ledger
+    from xenon.replay import blocking_reason
+
+    ledger = Ledger(tmp_path / "e.jsonl", "e")
+    ledger.append(
+        EventKind.POLICY_DECISION,
+        EventSource.GATE,
+        {"kind": "veto", "reason": "shell requires a grant"},
+    )
+    ledger.append(EventKind.USER_QUESTION, EventSource.LLM, {"question": "  "})
+
+    assert blocking_reason(ledger.path, task_id="e") == "shell requires a grant"
