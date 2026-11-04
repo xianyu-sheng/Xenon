@@ -87,14 +87,7 @@ class ToolCatalog:
                 reason=f"no tool exposes capability {intent.capability.value}",
             )
         if len(candidates) == 1:
-            return ToolBinding(
-                status=BindingStatus.BOUND,
-                call=ToolCall(
-                    spec_name=candidates[0].name,
-                    params=dict(intent.params),
-                    capability=intent.capability,
-                ),
-            )
+            return self._bound_or_targetless(candidates[0], intent)
 
         def score(spec: ToolSpec) -> tuple[int, str]:
             return (
@@ -106,14 +99,7 @@ class ToolCatalog:
         top = ranked[0]
         second = ranked[1]
         if score(top)[0] > score(second)[0]:
-            return ToolBinding(
-                status=BindingStatus.BOUND,
-                call=ToolCall(
-                    spec_name=top.name,
-                    params=dict(intent.params),
-                    capability=intent.capability,
-                ),
-            )
+            return self._bound_or_targetless(top, intent)
         return ToolBinding(
             status=BindingStatus.AMBIGUOUS,
             candidates=tuple(item.name for item in ranked),
@@ -122,6 +108,56 @@ class ToolCatalog:
                 "with the same preference"
             ),
         )
+
+    def _bound_or_targetless(
+        self, spec: ToolSpec, intent: ToolIntent
+    ) -> ToolBinding:
+        """Bind, unless the tool needs a named target and got none (#405).
+
+        A dogfood run asked for ``read`` with only a note ("summarise steps
+        1-8") and no path.  Executing it produced ``read_file 需要 file_path``
+        four times, the loop detector killed the turn, and eight steps of
+        collected evidence were thrown away.  The call was malformed from the
+        start: the model wanted to *answer*, not to read.
+
+        Refusing at binding turns that into one teaching reason — and the
+        reason names the parameters the spec declares, so the model can either
+        fix the call or submit ``finish``.
+        """
+
+        if spec.requires_target and not self._named_target(spec, intent):
+            required = ", ".join(spec.params_schema) or "a target"
+            return ToolBinding(
+                status=BindingStatus.UNRESOLVED,
+                reason=(
+                    f"{intent.capability.value} acts on something that must be "
+                    f"named; this proposal named nothing (expected: {required}). "
+                    "If you already collected what you need, submit `finish` "
+                    "with the answer instead of calling another tool."
+                ),
+            )
+        return ToolBinding(
+            status=BindingStatus.BOUND,
+            call=ToolCall(
+                spec_name=spec.name,
+                params=dict(intent.params),
+                capability=intent.capability,
+            ),
+        )
+
+    @staticmethod
+    def _named_target(spec: ToolSpec, intent: ToolIntent) -> bool:
+        """Did the proposal name anything the spec can act on?"""
+
+        if intent.targets:
+            return True
+        for key in spec.params_schema:
+            value = intent.params.get(key)
+            if isinstance(value, str) and value.strip():
+                return True
+            if isinstance(value, (list, tuple)) and value:
+                return True
+        return False
 
 
 def plugin_specs() -> tuple[ToolSpec, ...]:

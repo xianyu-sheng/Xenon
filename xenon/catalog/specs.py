@@ -52,6 +52,7 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
         params_schema={"file_path": "path to read"},
         description="Read a file from the workspace.",
         preferences={"read": 20},
+        requires_target=True,
     ),
     ToolSpec(
         name="search",
@@ -62,6 +63,7 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
         params_schema={"pattern": "text or regex", "path": "optional root"},
         description="Search the workspace for a pattern.",
         preferences={"search": 20},
+        requires_target=True,
     ),
     ToolSpec(
         name="apply_patch",
@@ -75,6 +77,7 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
         },
         description="Apply a transactional file patch.",
         preferences={"edit": 20},
+        requires_target=True,
     ),
     ToolSpec(
         name="bash",
@@ -107,6 +110,7 @@ LEGACY_SPECS: tuple[ToolSpec, ...] = (
         params_schema={"file_path": "path to read"},
         description="Legacy file read adapter.",
         preferences={"read": 10},
+        requires_target=True,
     ),
     ToolSpec(
         name="search_files",
@@ -117,6 +121,7 @@ LEGACY_SPECS: tuple[ToolSpec, ...] = (
         params_schema={"pattern": "text or regex"},
         description="Legacy search adapter.",
         preferences={"search": 10},
+        requires_target=True,
     ),
     ToolSpec(
         name="write_file",
@@ -127,6 +132,7 @@ LEGACY_SPECS: tuple[ToolSpec, ...] = (
         params_schema={"file_path": "path", "content": "text"},
         description="Legacy whole-file write adapter.",
         preferences={"edit": 5},
+        requires_target=True,
     ),
     ToolSpec(
         name="edit_file",
@@ -137,6 +143,7 @@ LEGACY_SPECS: tuple[ToolSpec, ...] = (
         params_schema={"file_path": "path", "old_text": "text", "new_text": "text"},
         description="Legacy string-edit adapter.",
         preferences={"edit": 4},
+        requires_target=True,
     ),
     ToolSpec(
         name="run_tests",
