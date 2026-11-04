@@ -230,36 +230,50 @@ def test_no_approver_fails_closed_with_an_actionable_reason(tmp_path) -> None:
 # ── 4. hard rules are refused without prompting ──────────────────
 
 
-def test_push_escalation_is_refused_without_prompting(tmp_path) -> None:
+def test_push_escalation_asks_the_human(tmp_path) -> None:
+    """#414: push is a human decision, not a kernel veto.
+
+    The old contract refused a push *without asking*, on the theory that the
+    finalizer owns delivery.  In practice that made Xenon stricter than the
+    agent it wraps: a person asking for a push could never get one, and the
+    refusal could not be overridden by the very human who wanted it.
+    """
     ledger = Ledger.in_memory("esc-push")
     approver = _Yes(True)
     runtime = _runtime(ledger, policies=(_read_only(tmp_path),))
     runtime._approval = approver
 
-    result = runtime.run(
+    runtime.run(
         _spec("esc-push"), ScriptedStrategy([_escalate("git push origin main")])
     )
 
-    assert result.accepted is False
-    assert approver.asked == [], "push must never reach the human"
-    reasons = " ".join(str(item.get("reason")) for item in _decisions(ledger))
-    assert "push is never approvable" in reasons
+    assert approver.asked, "a push must reach the human"
+    recorded = [
+        event.payload
+        for event in ledger.read()
+        if event.kind is EventKind.USER_APPROVAL
+    ]
+    assert recorded and recorded[0]["approved"] is True
+    everything = " ".join(str(event.payload) for event in ledger.read())
+    assert "never approvable" not in everything, (
+        "the kernel must not overrule the human's answer"
+    )
 
 
-def test_destructive_escalation_is_refused_without_prompting(tmp_path) -> None:
+def test_destructive_escalation_asks_the_human(tmp_path) -> None:
+    """#414: same rule for destructive commands — ask, then obey."""
     ledger = Ledger.in_memory("esc-rm")
     approver = _Yes(True)
     runtime = _runtime(ledger, policies=(_read_only(tmp_path),))
     runtime._approval = approver
 
-    result = runtime.run(
+    runtime.run(
         _spec("esc-rm"), ScriptedStrategy([_escalate("rm -rf /tmp/x")])
     )
 
-    assert result.accepted is False
-    assert approver.asked == []
-    reasons = " ".join(str(item.get("reason")) for item in _decisions(ledger))
-    assert "destructive command is never approvable" in reasons
+    assert approver.asked, "a destructive command must reach the human"
+    everything = " ".join(str(event.payload) for event in ledger.read())
+    assert "never approvable" not in everything
 
 
 def test_plan_only_never_asks(tmp_path) -> None:

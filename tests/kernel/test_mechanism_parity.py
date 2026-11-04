@@ -233,9 +233,11 @@ def test_repeated_tool_call_stops_tools_before_it_blocks():
     events = list(ledger.read())
     # #369: the fourth identical call is *taught* (it still executes, with the
     # diagnosis in the next view's Notes).  The fifth is not executed at all:
-    # the run closes the tools instead of repeating the same wall.
+    # the run closes the tools instead of repeating the same wall.  #414 then
+    # allows exactly one more call so the wrap-up can make progress, so the
+    # sixth *does* run and the seventh is what blocks.
     receipts = [e for e in events if e.kind is EventKind.TOOL_RECEIPT]
-    assert len(receipts) == 4
+    assert len(receipts) == 5
 
     forced = [
         e
@@ -432,3 +434,48 @@ def test_window_sync_without_a_meter_or_registry():
         registry = None
 
     assert sync_context_window(_Repl(), ["x/y"]) == 0
+
+
+def test_a_forced_finish_allows_exactly_one_more_tool_call():
+    """#414: closing the tools is a remedy, not a sentence.
+
+    The agent is told to answer with what it has; if the wrap-up genuinely
+    needs one more call, that call is allowed — once, recorded — instead of the
+    run dying because the kernel changed the rules mid-thought.
+    """
+    from tests.kernel.test_north_star import ScriptedStrategy, _runtime
+    from xenon.kernel.contracts import (
+        CallTool,
+        Capability,
+        Finish,
+        ToolIntent,
+    )
+    from xenon.ledger.store import Ledger
+
+    ledger = Ledger.in_memory("task-allow")
+    runtime = _runtime(ledger)
+    action = CallTool(ToolIntent(capability=Capability.READ))
+
+    # The sixth call is a *different* action: the point of the allowance is
+    # that the wrap-up can make progress, not that it can repeat itself.
+    edit = CallTool(ToolIntent(capability=Capability.EDIT))
+    result = runtime.run(
+        TaskSpec(task_id="task-allow", objective="inspect", workspace="."),
+        ScriptedStrategy(
+            [action, action, action, action, action, edit, Finish("done")]
+        ),
+    )
+
+    events = list(ledger.read())
+    allowances = [
+        e
+        for e in events
+        if e.kind is EventKind.CONTROL_DECISION
+        and e.payload.get("decision") == "force_finish_allow_once"
+    ]
+    assert len(allowances) == 1, "one extra call, no more"
+    assert allowances[0].payload["remaining"] == 0
+
+    receipts = [e for e in events if e.kind is EventKind.TOOL_RECEIPT]
+    assert len(receipts) == 5, "four before the loop, one after the allowance"
+    assert result.phase.value != "blocked", "the allowance must let it finish"
