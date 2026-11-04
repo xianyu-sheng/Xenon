@@ -9,6 +9,7 @@ run ended in "waiting for your answer" with no way forward.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -136,3 +137,144 @@ def test_a_directory_read_says_it_is_a_directory(tmp_path):
     assert result["is_directory"] is True
     assert result["entries"] == ["inside.txt"]
     assert "这是一个目录" in result["error"]
+
+
+def _repl(root: Path):
+    return SimpleNamespace(_workspace_root=lambda: root)
+
+
+def test_the_workspace_command_lists_every_root_source(tmp_path, monkeypatch):
+    from xenon.repl.command_groups.workspace import _cmd_workspace
+
+    env_root = tmp_path / "env"
+    env_root.mkdir()
+    monkeypatch.setenv("XENON_EXTRA_ROOTS", str(env_root))
+    session_root = tmp_path / "session"
+    session_root.mkdir()
+    sandbox_roots.add_root(session_root)
+
+    text = _cmd_workspace(
+        args="", session_state={"_repl": _repl(tmp_path / "ws")}
+    )
+
+    assert "工作区（写入围栏的根）" in text
+    assert str(env_root) in text
+    assert str(session_root) in text
+    assert "读取不受限" in text
+
+
+def test_the_workspace_command_adds_and_removes(tmp_path):
+    from xenon.repl.command_groups.workspace import _cmd_workspace
+
+    target = tmp_path / "repo"
+    target.mkdir()
+    state = {"_repl": _repl(tmp_path)}
+
+    added = _cmd_workspace(args=f"add {target}", session_state=state)
+    assert "已加入可写目录" in added
+    assert sandbox_roots.session_roots() == (target.resolve(),)
+
+    removed = _cmd_workspace(args=f"remove {target}", session_state=state)
+    assert "已移除" in removed
+    assert sandbox_roots.session_roots() == ()
+
+
+def test_the_workspace_command_reports_bad_input(tmp_path):
+    from xenon.repl.command_groups.workspace import _cmd_workspace
+
+    state = {"_repl": _repl(tmp_path)}
+
+    assert "用法" in _cmd_workspace(args="add", session_state=state)
+    assert "用法" in _cmd_workspace(args="remove", session_state=state)
+    assert "用法" in _cmd_workspace(args="dance", session_state=state)
+    assert "无法添加" in _cmd_workspace(
+        args=f"add {tmp_path / 'missing'}", session_state=state
+    )
+    assert "不在本会话" in _cmd_workspace(
+        args=f"remove {tmp_path}", session_state=state
+    )
+
+
+def test_the_workspace_command_clears(tmp_path):
+    from xenon.repl.command_groups.workspace import _cmd_workspace
+
+    target = tmp_path / "one"
+    target.mkdir()
+    sandbox_roots.add_root(target)
+
+    assert "已清空" in _cmd_workspace(
+        args="clear", session_state={"_repl": _repl(tmp_path)}
+    )
+    assert sandbox_roots.session_roots() == ()
+
+
+def test_an_unlistable_directory_is_reported_not_raised(tmp_path, monkeypatch):
+    """A directory we may not list must still answer, not explode."""
+    from xenon.nodes.tool_families.read_only_files import ReadOnlyFileToolsMixin
+
+    holder = tmp_path / "locked"
+    holder.mkdir()
+
+    class _Tools(ReadOnlyFileToolsMixin):
+        id = "exec_read"
+
+        def __init__(self, target):
+            self.file_path = str(target)
+
+        def _resolve_template(self, value, context):
+            return value
+
+        def _validate_path(self, value, *, for_write=False):
+            return Path(value)
+
+        def _write_output(self, context, text):
+            return None
+
+    def _boom(self):
+        raise OSError("access denied")
+
+    monkeypatch.setattr(Path, "iterdir", _boom)
+    result = _Tools(holder)._read_file(None)
+
+    assert result["is_directory"] is True
+    assert result["entries"] == []
+    assert "列出失败" in result["error"]
+
+
+def test_an_unparseable_env_root_is_skipped():
+    # A NUL byte makes Path() raise ValueError before any filesystem call.
+    # Letting it escape would break every tool call in the process, so the
+    # parser (which takes the raw value, not just the environment) skips it.
+    assert sandbox_roots.env_roots("bad" + chr(0) + "entry") == ()
+
+
+def test_the_listing_survives_an_empty_default_root_set(tmp_path, monkeypatch):
+    import xenon.nodes.tool_node as tool_node
+    from xenon.repl.command_groups.workspace import _cmd_workspace
+
+    monkeypatch.setattr(tool_node, "_DEFAULT_EXTRA_ROOTS", ())
+    text = _cmd_workspace(args="", session_state={"_repl": _repl(tmp_path)})
+
+    assert "额外可写目录" in text
+    assert "默认临时目录" in text
+
+
+def test_a_root_that_cannot_be_read_is_skipped(monkeypatch):
+    """``is_dir()`` can raise (bad encoding, NUL byte); parsing must survive."""
+    def _boom(_path):
+        raise ValueError("embedded null character")
+
+    monkeypatch.setattr(Path, "is_dir", _boom)
+
+    assert sandbox_roots.env_roots("anything") == ()
+
+
+def test_the_listing_shows_a_default_root(tmp_path, monkeypatch):
+    import xenon.nodes.tool_node as tool_node
+    from xenon.repl.command_groups.workspace import _cmd_workspace
+
+    monkeypatch.setattr(tool_node, "_DEFAULT_EXTRA_ROOTS", (tmp_path / "scratch",))
+    text = _cmd_workspace(args="list", session_state={"_repl": _repl(tmp_path)})
+
+    assert "默认临时目录" in text
+    assert "·" in text, "each configured root is listed"

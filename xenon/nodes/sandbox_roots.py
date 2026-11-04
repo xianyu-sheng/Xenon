@@ -79,9 +79,20 @@ def env_roots(raw: str | None = None) -> tuple[Path, ...]:
         if not entry:
             continue
         try:
-            roots.append(_normalise(entry))
-        except (OSError, RuntimeError):
+            candidate = _normalise(entry)
+            # Same rule as `add_root`: a root that is not an existing
+            # directory can never match a real path, so it would sit in the
+            # fence looking like protection it does not provide.
+            if not candidate.is_dir():
+                logger.warning("XENON_EXTRA_ROOTS 条目不是目录，已忽略: %s", entry)
+                continue
+        except (OSError, RuntimeError, ValueError):
+            # ValueError covers a NUL byte: Path() raises before any
+            # filesystem call, and an exception here would take down every
+            # tool call in the process.
             logger.warning("XENON_EXTRA_ROOTS 条目无法解析，已忽略: %s", entry)
+            continue
+        roots.append(candidate)
     return tuple(roots)
 
 
