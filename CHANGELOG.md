@@ -5,6 +5,41 @@
 
 ## [Unreleased]
 
+## [0.9.7] — 2026-11-04
+
+> 现实检验版：0.9.6 发布后连续 5 轮 dogfood 抓出 7 个缺陷，全部是**机制之间的翻译层**
+> 问题——模型想做的事与内核理解成的事不一致。本版修的是根因，不是表面症状。
+
+### 内核
+
+- **`kind=think` 不再被忽略**（#410）：`StepKind.THINK` 此前从未被任何代码使用。计划里
+  的推理步骤（"汇总前 8 步的证据"）没有任何地方说明「这一步要的是推理」，模型只能硬凑一个
+  工具调用，内核照单执行 → 连续失败 → 循环判死。现在视图直接写明该步骤的期望，
+  `_reasoning_step_guard()` 对 think 步骤的工具调用记 veto 并继续回合（模型可改用
+  `think`/`finish`），不再判死。
+- **无 target 的调用在绑定阶段被拒**（#405）：`ToolSpec.requires_target` 覆盖
+  `read`/`search`/`apply_patch`/`read_file`/`search_files`/`write_file`/`edit_file`。
+  拒绝理由里写出 spec 声明的参数名，并提示「要总结就用 `finish`」。具体参数名来自
+  `params_schema`，kernel 内仍无工具名/参数名（K005）。
+- **判死前先收尾**（#407）：循环信号达阈值且已有成功 receipt 时不再直接结束，而是记
+  `control_decision {decision: "force_finish", receipts: N}`、关闭工具、要求用现有证据
+  作答；当次动作不执行；仍要调工具才 veto 结束。claim→fact 绑定不变。
+
+### 上下文
+
+- **`context %` 不再是假的**（#408）：内核回合不写 legacy history，`ContextManager` 的
+  比率退化到「几条消息的 token 数」，20K 字符的 prompt 显示成 `0.3%`。现在
+  `UsageTotals.last_prompt` 记录**窗口深度**，`status_snapshot()` 暴露 `context_tokens`，
+  进度钩子写回 `record_real_usage`。
+- **截断可见且可分页**（#409）：effect 的 `content` 此前被静默砍到 8000 字符；现在带
+  `truncated {shown_chars, total_chars, remaining_chars}`，`read` 的 schema 与描述声明
+  `start_line`/`max_lines`（工具一直支持，模型从来没被告知）。
+- **等待用户的回合不再显示成失败**（#402）：`blocking_reason` 认 `user_question`，
+  返回「等待你的回答：<问题>」，面板标题为 `Kernel · 等待回答`；顺带删掉 40 行重复实现
+  与一份从未执行的 `_result_summary`。
+- **生成进度不再刷屏**（#403）：`模型生成中 Ns · M 字符` 每次回调一行（一轮刷 200+ 行）。
+  现在只在单次调用超过 15s 时提示一次，其余交给状态栏。
+
 ## [0.9.6] — 2026-11-04
 
 > 主题：**一个循环**。0.9.5 之前是七套引擎并存的形态；本版把执行收敛成单循环内核
