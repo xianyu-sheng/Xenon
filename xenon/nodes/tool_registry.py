@@ -181,6 +181,7 @@ BUILTIN_TOOL_METHODS: dict[str, str] = {
     "read": "_read",
     "search": "_search_core",
     "bash": "_bash",
+    "test": "_run_tests",
     "apply_patch": "_apply_patch",
     "write_file": "_write_file",
     "read_file": "_read_file",
@@ -254,6 +255,7 @@ for _tool_name, _method_name in BUILTIN_TOOL_METHODS.items():
         "lsp_symbols",
         "update_plan",
         "tool_result_read",
+        "test",
     }:
         _risk = "INFO"
     elif _tool_name in {

@@ -119,7 +119,45 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
         risk=Risk.SENSITIVE,
         params_schema={"command": "shell command"},
         description=shell_description(),
-        preferences={"shell": 20, "verify": 15, "vcs": 15},
+        preferences={"shell": 20, "verify": 5, "vcs": 5},
+    ),
+    ToolSpec(
+        name="test",
+        pack="core",
+        capabilities=frozenset({Capability.VERIFY}),
+        effects=frozenset({EffectKind.TEST_RUN}),
+        risk=Risk.INFO,
+        params_schema={
+            "test_paths": "files or directories to run (e.g. tests/test_x.py)",
+            "test_args": "extra runner args, e.g. ['-k', 'name']",
+            "test_framework": "auto | pytest | unittest | custom",
+            "timeout": "seconds; raise it for a slow suite (default 60)",
+        },
+        description=(
+            "Run the project's tests and return structured counts (passed / "
+            "failed / exit code). Prefer this over a shell pytest call: the "
+            "same run also records the test fact the task audit needs."
+        ),
+        preferences={"verify": 20},
+    ),
+    ToolSpec(
+        name="git",
+        pack="core",
+        capabilities=frozenset({Capability.VCS}),
+        effects=frozenset(
+            {EffectKind.OPAQUE, EffectKind.VCS_COMMIT, EffectKind.VCS_PUSH}
+        ),
+        risk=Risk.SENSITIVE,
+        params_schema={
+            "git_command": "status | diff | diff_full | log | branch | show",
+            "action": "extra arguments for the command",
+        },
+        description=(
+            "Read repository state (status, diff, log, branch, show). Commit "
+            "and push are owned by the harness finalizer and by the user; "
+            "read-only commands here need no approval."
+        ),
+        preferences={"vcs": 20},
     ),
 )
 

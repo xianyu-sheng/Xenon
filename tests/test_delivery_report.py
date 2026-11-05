@@ -118,9 +118,9 @@ def test_report_separates_receipt_evidence_from_answer_evidence(
     assert report["status"]["evidence_status"] == "partial"
     assert report["status"]["answer_verified"] is False
     assert report["claims"][0]["status"] == "unresolved"
+    # A violated verdict is unfinished work, not a contradiction.
     assert {item["kind"] for item in report["contradictions"]} == {
-        "claim_not_bound",
-        "verdict_violated",
+        "claim_not_bound"
     }
     assert report["gaps"][0]["id"] == "o1"
     assert report["tools"]["tests"][0]["passed"] == 2
@@ -154,6 +154,38 @@ def test_report_is_deterministic_for_the_same_ledger(tmp_path: Path) -> None:
     first = json.dumps(build_report(path), sort_keys=True, ensure_ascii=False)
     second = json.dumps(build_report(path), sort_keys=True, ensure_ascii=False)
     assert first == second
+
+
+def test_comment_form_leads_with_a_verdict() -> None:
+    from xenon.report import render_comment
+
+    report = {
+        "task": {"id": "t1", "model": "m", "objective": "o"},
+        "status": {
+            "evidence_status": "partial",
+            "answer_verified": False,
+            "delivered": False,
+            "commit": "",
+        },
+        "integrity": {"valid": True, "events": 3, "last_hash": "abc"},
+        "tools": {"calls": 2, "failures": 1, "tests": [
+            {"passed": 1, "failed": 0, "command": "pytest", "exit_code": 0}
+        ]},
+        "delivery": {},
+        "claims": [
+            {"kind": "file_changed", "target": "a.py", "status": "unresolved"},
+        ],
+        "contradictions": [],
+        "gaps": [{"id": "o1", "reason": "no changed file fact"}],
+        "replay": {"ledger": "x.jsonl", "command": "xenon replay t1"},
+        "limits": {"note": "n"},
+    }
+    text = render_comment(report)
+    assert text.startswith("### ⚠️")
+    assert "绑定失败 1 条" in text
+    assert "1 passed" in text
+    assert "no changed file fact" in text
+    assert "<details>" in text
 
 
 def test_cli_report_writes_the_artifact(tmp_path: Path) -> None:

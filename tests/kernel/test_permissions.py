@@ -528,3 +528,33 @@ def test_approval_provider_exception_fails_closed(tmp_path) -> None:
     assert result.answer == "done"
     assert result.accepted is False
     assert not policy.grants
+
+
+def test_read_only_git_queries_need_no_grant() -> None:
+    """`git status` is how the model learns what it changed, not a side effect."""
+
+    policy = PermissionPolicy(workspace=".")
+    for command in (
+        "status",
+        "diff",
+        "log",
+        "show",
+        "git status",
+        "git diff --stat",
+        "branch",
+    ):
+        decision = _decision(policy, _call(Capability.VCS, git_command=command))
+        assert decision.kind is PolicyDecisionKind.ALLOW, command
+
+
+def test_git_writes_and_chains_still_need_a_grant() -> None:
+    policy = PermissionPolicy(workspace=".")
+    for command in (
+        "commit -m x",
+        "push origin main",
+        "branch -D old",
+        "status && rm -rf build",
+        "reset --hard",
+    ):
+        decision = _decision(policy, _call(Capability.VCS, git_command=command))
+        assert decision.kind is not PolicyDecisionKind.ALLOW, command

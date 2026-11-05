@@ -22,8 +22,10 @@ def test_core_catalog_binds_each_capability_to_one_core_tool() -> None:
         Capability.READ: "read",
         Capability.SEARCH: "search",
         Capability.EDIT: "apply_patch",
-        Capability.VERIFY: "bash",
-        Capability.VCS: "bash",
+        # The structured adapters win their capability so a test run or a git
+        # read records a real fact instead of an opaque shell receipt.
+        Capability.VERIFY: "test",
+        Capability.VCS: "git",
         Capability.SHELL: "bash",
     }
     # A target-requiring capability needs a named target to bind at all (#405);

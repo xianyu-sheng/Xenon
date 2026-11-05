@@ -190,21 +190,11 @@ def build_report(ledger_path: Path, *, result_path: Path | None = None) -> dict[
                 }
             )
 
+    # A violated verdict is *unfinished work*, not a contradiction: the agent
+    # did not claim it and the receipts never said it happened.  Contradiction
+    # is reserved for a claim that facts refuse, or content that changed after
+    # verification.  Mixing the two made every blocked run read as deceptive.
     verdicts = _all(events, "step_verdict")
-    for verdict in verdicts:
-        if str(verdict.get("status") or "") != "violated":
-            continue
-        contradictions.append(
-            {
-                "kind": "verdict_violated",
-                "claim": {
-                    "id": str(verdict.get("obligation_id") or ""),
-                    "kind": "obligation",
-                    "target": "",
-                },
-                "detail": str(verdict.get("reason") or "obligation violated"),
-            }
-        )
 
     for mismatch in list(finalize_started.get("hash_mismatches") or ()):
         contradictions.append(
@@ -329,6 +319,98 @@ def _truncate(text: str, limit: int = 4000) -> str:
     return text[:limit] + f"\n\n… ({len(text) - limit} chars omitted)"
 
 
+def render_comment(report: Mapping[str, Any]) -> str:
+    """A compact form for a PR comment: verdict first, noise last.
+
+    A reviewer decides in the first three lines; the full report belongs in an
+    artifact or a collapsed block, not in the comment body.
+    """
+
+    task = report.get("task", {})
+    status = report.get("status", {})
+    integrity = report.get("integrity", {})
+    tools = report.get("tools", {})
+    delivery = report.get("delivery", {})
+    contradictions = list(report.get("contradictions") or ())
+    gaps = list(report.get("gaps") or ())
+    claims = list(report.get("claims") or ())
+    unbound = [item for item in claims if item.get("status") != "bound"]
+    tests = list(tools.get("tests") or ())
+
+    if contradictions:
+        verdict = "❌ 交付与事实冲突"
+    elif status.get("answer_verified"):
+        verdict = "✅ 交付与事实一致"
+    elif status.get("delivered"):
+        verdict = "⚠️ 已交付，但结论未经验证"
+    else:
+        verdict = "⚠️ 未交付（缺口已披露）"
+
+    lines = [
+        f"### {verdict}",
+        "",
+        f"`{task.get('id', '')}` · 模型 `{task.get('model', '') or 'unknown'}` · "
+        f"工具调用 {tools.get('calls', 0)} 次"
+        f"（失败 {tools.get('failures', 0)}）· "
+        f"commit `{(status.get('commit') or 'none')[:12]}`",
+        "",
+    ]
+
+    if claims:
+        lines.append(
+            f"**声明 {len(claims)} 条，绑定失败 {len(unbound)} 条**"
+        )
+        for claim in unbound[:5]:
+            lines.append(
+                f"- `{claim.get('kind')}` `{claim.get('target')}` → "
+                f"**{claim.get('status')}**"
+            )
+    else:
+        lines.append("**没有可核验的声明**（答案按未验证披露）")
+
+    if tests:
+        passed = sum(int(item.get("passed") or 0) for item in tests)
+        failed = sum(int(item.get("failed") or 0) for item in tests)
+        lines.append(f"\n**测试**：{passed} passed / {failed} failed")
+
+    if contradictions:
+        lines.append(f"\n**矛盾 {len(contradictions)} 条**")
+        for item in contradictions[:5]:
+            claim = item.get("claim", {})
+            lines.append(
+                f"- {item.get('kind')}: `{claim.get('kind')}` "
+                f"`{claim.get('target')}` — {item.get('detail')}"
+            )
+
+    if gaps:
+        lines.append(f"\n**未完成 {len(gaps)} 项**")
+        for gap in gaps[:5]:
+            lines.append(f"- `{gap.get('id')}`: {gap.get('reason')}")
+
+    if delivery.get("unverified_paths"):
+        lines.append(
+            "\n**未验证路径**："
+            + ", ".join(f"`{p}`" for p in delivery["unverified_paths"][:8])
+        )
+
+    lines += [
+        "",
+        "<details><summary>如何复现</summary>",
+        "",
+        f"- 账本：`{report.get('replay', {}).get('ledger', '')}`",
+        f"- 命令：`{report.get('replay', {}).get('command', '')}`",
+        f"- 链完整性：**{integrity.get('valid')}** "
+        f"（{integrity.get('events')} 事件，head "
+        f"`{str(integrity.get('last_hash', ''))[:12]}…`）",
+        "",
+        "</details>",
+        "",
+        f"> {report.get('limits', {}).get('note', '')}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def render_markdown(report: Mapping[str, Any]) -> str:
     task = report.get("task", {})
     status = report.get("status", {})
@@ -449,6 +531,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--json", action="store_true", help="print JSON instead of Markdown"
     )
+    parser.add_argument(
+        "--comment",
+        action="store_true",
+        help="compact PR-comment form (verdict first, reproduce steps collapsed)",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit 1 unless the answer is verified (for a CI gate)",
+    )
     args = parser.parse_args(argv)
 
     path = resolve_ledger(args.ledger)
@@ -456,6 +548,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.json:
         text = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
         suffix = ".report.json"
+    elif args.comment:
+        text = render_comment(report)
+        suffix = ".comment.md"
     else:
         text = render_markdown(report)
         suffix = ".report.md"
@@ -467,7 +562,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(target)
     else:
         print(text)
-    return 0 if report["integrity"]["valid"] else 1
+
+    if not report["integrity"]["valid"]:
+        return 1
+    if args.strict and not report["status"].get("answer_verified"):
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

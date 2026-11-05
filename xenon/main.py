@@ -217,6 +217,16 @@ def cli() -> None:
         help="report: output directory (writes .report.md or .report.json)",
     )
     parser.add_argument(
+        "--comment",
+        action="store_true",
+        help="report: compact PR-comment form",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="report: exit 1 unless the answer is verified (CI gate)",
+    )
+    parser.add_argument(
         "--resume",
         nargs="?",
         const="list",
@@ -524,7 +534,7 @@ def _cmd_report(target: str, args: argparse.Namespace) -> int:
     import json
 
     from xenon.replay import resolve_ledger
-    from xenon.report import build_report, render_markdown
+    from xenon.report import build_report, render_comment, render_markdown
 
     try:
         path = resolve_ledger(target)
@@ -536,6 +546,9 @@ def _cmd_report(target: str, args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         text = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
         suffix = ".report.json"
+    elif getattr(args, "comment", False):
+        text = render_comment(report)
+        suffix = ".comment.md"
     else:
         text = render_markdown(report)
         suffix = ".report.md"
@@ -549,7 +562,13 @@ def _cmd_report(target: str, args: argparse.Namespace) -> int:
         print(destination)
     else:
         print(text)
-    return 0 if report["integrity"]["valid"] else 1
+    if not report["integrity"]["valid"]:
+        return 1
+    if getattr(args, "strict", False) and not report["status"].get(
+        "answer_verified"
+    ):
+        return 1
+    return 0
 
 
 def _cmd_replay(command: str, target: str, args: argparse.Namespace) -> int:

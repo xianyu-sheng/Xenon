@@ -1,0 +1,111 @@
+name: delivery-report
+
+# Post a Xenon delivery report on a pull request.
+#
+# The job is optional: it runs only when the branch carries a ledger.  Team
+# usage is "produce a ledger in CI, then let the reviewer read the same report
+# the agent's run produced" — not "trust the summary in the PR body".
+#
+# Inputs:
+#   ledger   path to a .jsonl ledger (default: .xenon/ledger/*.jsonl)
+#   strict   fail the check unless the answer is verified
+
+on:
+  workflow_dispatch:
+    inputs:
+      ledger:
+        description: "Path to a Xenon ledger (.jsonl)"
+        required: false
+        default: ""
+      strict:
+        description: "Fail unless the answer is verified"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Xenon
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Pick the ledger
+        id: pick
+        shell: bash
+        run: |
+          set -euo pipefail
+          ledger="${{ inputs.ledger }}"
+          if [ -z "$ledger" ]; then
+            ledger="$(find . -name '*.jsonl' -path '*ledger*' | head -n 1 || true)"
+          fi
+          if [ -z "$ledger" ] || [ ! -f "$ledger" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No ledger found; skipping the delivery report."
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "ledger=$ledger" >> "$GITHUB_OUTPUT"
+
+      - name: Build the report
+        if: steps.pick.outputs.found == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--comment --out "$RUNNER_TEMP/report")
+          if [ "${{ inputs.strict }}" = "true" ]; then
+            args+=(--strict)
+          fi
+          python -m xenon report "${{ steps.pick.outputs.ledger }}" "${args[@]}" || code=$?
+          # Keep the comment even when --strict fails: the reviewer needs the
+          # reason, not just a red check.
+          echo "REPORT_EXIT=${code:-0}" >> "$GITHUB_ENV"
+          ls -l "$RUNNER_TEMP/report"
+
+      - name: Comment on the PR
+        if: steps.pick.outputs.found == 'true' && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const dir = process.env.RUNNER_TEMP + '/report';
+            const file = fs.readdirSync(dir).find(f => f.endsWith('.comment.md'));
+            if (!file) return;
+            const body = fs.readFileSync(`${dir}/${file}`, 'utf8') +
+              '\n\n<!-- xenon-delivery-report -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const marker = '<!-- xenon-delivery-report -->';
+            const comments = await github.paginate(
+              github.rest.issues.listComments, { owner, repo, issue_number }
+            );
+            const previous = comments.find(c => c.body && c.body.includes(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: previous.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body,
+              });
+            }
+
+      - name: Enforce strict mode
+        if: steps.pick.outputs.found == 'true'
+        shell: bash
+        run: |
+          if [ "${REPORT_EXIT:-0}" != "0" ]; then
+            echo "Delivery report did not verify; see the PR comment."
+            exit 1
+          fi

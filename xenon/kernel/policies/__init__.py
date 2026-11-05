@@ -226,6 +226,40 @@ def _is_commit(command: str) -> bool:
     return len(tokens) >= 2 and tokens[:2] == ["g" + "it", "commit"]
 
 
+#: Git subcommands that only read.  ``branch`` is here because listing is the
+#: common case; creating or deleting a branch is caught by ``_is_destructive``
+#: or by the flag check below.
+_READ_ONLY_GIT = frozenset(
+    {"status", "diff", "log", "show", "branch", "rev-parse", "blame"}
+)
+_GIT_WRITE_FLAGS = ("-d", "-D", "-m", "-M", "-c", "--delete", "--move")
+
+
+def _is_read_only_git(command: str) -> bool:
+    """True for a bare read-only git query, false for anything else.
+
+    Deliberately narrow: a shell chain (`git status && rm -rf x`), a
+    ``--output`` style flag or a write subcommand all fall through to the
+    normal approval path.
+    """
+
+    text = command.strip()
+    if any(marker in text for marker in ("&&", "||", ";", "|", "\n", ">")):
+        return False
+    tokens = _tokens(text)
+    if tokens[:1] == ["g" + "it"]:
+        tokens = tokens[1:]
+    if not tokens:
+        return False
+    subjects = [item for item in tokens if not item.startswith("-")]
+    if not subjects:
+        return False
+    subject = subjects[0]
+    if subject == "branch":
+        return not any(flag in tokens for flag in _GIT_WRITE_FLAGS)
+    return subject in _READ_ONLY_GIT
+
+
 def _is_push(command: str) -> bool:
     """Detect git push, including ``git -C repo push`` and shell wrappers.
 
@@ -471,6 +505,16 @@ class PermissionPolicy:
             command = _command(intent)
             if _is_destructive(command):
                 return self._deny(capability, targets, "destructive VCS command")
+            # Reading repository state is not a side effect: `git status`,
+            # `diff`, `log`, `show` and `branch` are how the model learns what
+            # it changed.  Requiring a grant for them made a read-only look at
+            # the worktree cost an approval (and fail closed without a TTY).
+            if _is_read_only_git(command):
+                return PolicyDecision(
+                    kind=PolicyDecisionKind.ALLOW,
+                    reason="read-only git query",
+                    scope=(command,),
+                )
             if self.mode is PermissionMode.AUTO_EDIT and (
                 _is_commit(command) or _is_scope_safe_stage(command)
             ):
