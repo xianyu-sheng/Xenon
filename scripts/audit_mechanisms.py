@@ -87,6 +87,16 @@ def _check_levels(events: Sequence[Event]) -> str:
     missing = {"v0", "v1", "v2"} - stages
     if not missing:
         return ("三级齐备: " + ", ".join(sorted(stages)), "ok")
+    writes = [
+        item
+        for item in _payloads(events, "tool_receipt")
+        if any(
+            str((effect or {}).get("type")) in {"fs_write", "fs_delete"}
+            for effect in ((item.get("receipt") or {}).get("effects") or ())
+        )
+    ]
+    if "v1" in missing and not writes:
+        return ("缺 v1：本次没有写入类动作，步骤级不适用", "n/a")
     return ("缺: " + ", ".join(sorted(missing)), "miss")
 
 
@@ -158,9 +168,18 @@ def _check_approvals(events: Sequence[Event]) -> str:
     return (f"{len(approvals)} 次审批，最后 approved={approvals[-1].get('approved')}", "ok")
 
 
-def _check_usage(events: Sequence[Event]) -> str:
+def _is_scripted(events: Sequence[Event]) -> bool:
+    for item in _payloads(events, "intake_recorded"):
+        if "probe:scripted" in (item.get("constraints") or ()):
+            return True
+    return False
+
+
+def _check_usage(events: Sequence[Event]) -> tuple[str, str]:
     usage = _payloads(events, "model_usage")
     if not usage:
+        if _is_scripted(events):
+            return ("确定性脚本运行，没有模型调用（不适用）", "n/a")
         return ("没有 model_usage（账本无法解释成本）", "miss")
     last = usage[-1]
     return (
