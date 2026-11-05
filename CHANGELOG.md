@@ -5,6 +5,53 @@
 
 ## [Unreleased]
 
+## [0.9.8] — 2026-11-04
+
+> 原则版：**内核不替人决定「能不能做」，只决定「做完了算不算数」。**
+> 0.9.7 之后连续 6 轮真实 dogfood（全部用复杂任务）把这条原则落成了代码，
+> 同时补上了三级校验里实际没跑的那两级。
+
+### 执行（对齐成熟 agent 的行为）
+
+- **push / 破坏性命令改为问人**（#414）：`PermissionPolicy` 里三处硬拒与
+  `refuse_escalation` 全部改为审批；无审批通道时仍 fail-closed，但理由是
+  「需要人决定，本回合没有审批通道」。内置策略不再声明任何「永不可批准」项。
+- **批准必须被下游服从**（#411）：新增 `sandbox_roots.grant_once/consume_grant`，
+  审批面板说 y/s/A 时把被批准的**确切路径**登记为一次性授权，`ToolNode` 的写围栏先查它。
+  子代理的批准不产生授权。
+- **循环判死后允许一次收尾工具**（#414）：`force_finish_allow_once`，让收尾真能补一件事。
+- 删除 `kind=think` 步骤禁止调工具的守卫（把 B 类当成 A 类）。
+- 步数预算耗尽此前不写 `policy_decision`，现统一走 `_budget_block` 并附循环诊断。
+
+### 校验（三级真正都跑）
+
+- **V2 有输入了**（#420）：`xenon/harness/intake.py` 从任务文本确定性派生
+  `file_changed(路径)` / `test_passed(测试文件)`，写入 `TaskSpec.obligations` 并记入
+  `intake_recorded`。散文要求不伪造覆盖。
+- **V1 覆盖无计划回合**（#420）：`direct`/`react` 没有步骤，就把这一轮当隐式步骤，
+  从 receipt 的 `FsWrite.paths` 派生。
+- **三级同形事件**：audit 的 V2 verdict 也写成 `step_verdict`，`/evidence` 与回放可直接数。
+- **声明了写入却零验证 → 不交付**（#418）：`changed=false` 的新建文件曾被 finalize 忽略，
+  交付 `verified` 却 `verified_paths=[]`。真实复杂任务抓到的。
+- **失败即教学**（#417）：失败 receipt 产生一条可执行的下一步，并记入
+  `control_decision{teach_next_step}`（否则无法审计）。
+- **A 类拒绝计数**：`result.metrics["refusals"]` 与 `status_snapshot()["refusal_total"]`。
+
+### 上下文 / 意图
+
+- **`context %` 说真话**（#408）：记录窗口深度（`last_prompt`），不再读 legacy history。
+- **截断可见且可分页**（#409）：`truncated{shown,total,remaining}`，`read` 声明
+  `start_line`/`max_lines`。
+- **对上一问的回答原样传入**（#413）：内核以「等待你的回答」收尾时置 `_awaiting_user_answer`，
+  下一句不分类、不套模板；路径/URL/标识不再被当成调研任务。
+- **目录不是文件**（#410）：`read` 命中目录返回 `is_directory` + 条目，不再泄漏 OS 的
+  `PermissionError`（曾被误读成"没有权限"）。
+
+### 工程
+
+- 新增 `scripts/audit_mechanisms.py`：用**真实账本**核对 13 项机制是否真的跑过
+  （`OK` / `MISS` / `n/a` 三态）。它第一次运行就抓出"失败即教学"完全不可观测。
+
 ## [0.9.7] — 2026-11-04
 
 > 现实检验版：0.9.6 发布后连续 5 轮 dogfood 抓出 7 个缺陷，全部是**机制之间的翻译层**

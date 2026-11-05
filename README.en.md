@@ -51,7 +51,7 @@ One line: **Claude Code makes you faster; Xenon tries to make "done" checkable.*
 ## Quick start
 
 ```bash
-pip install https://github.com/xianyu-sheng/Xenon/releases/download/v0.9.7/xenon_harness-0.9.7-py3-none-any.whl
+pip install https://github.com/xianyu-sheng/Xenon/releases/download/v0.9.8/xenon_harness-0.9.8-py3-none-any.whl
 xenon --version   # 0.9.6
 xenon
 ```
