@@ -42,7 +42,17 @@ def test_a_ledger_with_only_v0_reports_the_missing_levels(tmp_path: Path) -> Non
     ledger = _ledger(
         tmp_path / "only-v0.jsonl",
         [
-            {"kind": "tool_receipt", "payload": {"receipt": {"status": "ok"}}},
+            {
+                "kind": "tool_receipt",
+                "payload": {
+                    "receipt": {
+                        "status": "ok",
+                        "effects": [
+                            {"type": "fs_write", "paths": ["calc.py"], "changed": True}
+                        ],
+                    }
+                },
+            },
             _verdict("v0"),
             {"kind": "audit_reported", "payload": {"verdicts": []}},
         ],
