@@ -122,7 +122,7 @@ def build_model_observation(
         # Unknown tools keep the original observation; the cache is still
         # available through tool_result_read.
         return None
-    suffix = "\n\n完整结果可按需读取：tool_result_read(result_id=...)"
+    suffix = f"\n\n完整结果可按需读取：tool_result_read(result_id={result_id})"
     if len(view) > MAX_MODEL_CHARS:
         view = view[:MAX_MODEL_CHARS] + "\n…（模型视图已截断，完整内容在缓存）"
     return view + suffix

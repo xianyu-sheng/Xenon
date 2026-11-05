@@ -122,7 +122,22 @@ def test_tool_schema_and_system_prompt_come_from_catalog() -> None:
     ]
     assert "inspect" in view.system
     assert "Capability catalog" in view.system
-    assert "tool dispatch" in view.system
+    assert "Action protocol" in view.system
+
+
+def test_generic_prompt_does_not_advertise_actions_the_parser_rejects() -> None:
+    """The phase protocol is appended after this prompt; it owns the list.
+
+    The generic prompt used to name submit_plan/update_plan/request_verification,
+    none of which parse_action accepts for an actor.  A model that followed the
+    prompt got ``unsupported action`` (#202 translation-layer class).
+    """
+
+    view = build_model_view(
+        spec=_spec(), catalog=FakeCatalog(), ledger=Ledger.in_memory("t1")
+    )
+    for action in ("submit_plan", "update_plan", "request_verification"):
+        assert action not in view.system
 
 
 def test_catalog_swap_changes_prompt_and_hash() -> None:

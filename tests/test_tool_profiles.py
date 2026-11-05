@@ -48,6 +48,37 @@ def test_profile_filter_does_not_mutate_source():
     assert set(source) == {"read", "write_file"}
 
 
+def test_core_search_maps_pattern_to_search_pattern():
+    """The core alias ``search`` must grep, not treat the query as a glob."""
+
+    params = ToolNode.normalize_params(
+        {"pattern": "resource_leak", "path": "smartbench"},
+        action_type="search",
+    )
+    assert params["search_pattern"] == "resource_leak"
+    assert params["file_path"] == "smartbench"
+
+
+def test_search_without_a_pattern_lists_the_directory(tmp_path):
+    """A path-only search is the listing action; empty glob must mean '*'."""
+
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b.py").write_text("y = 2\n", encoding="utf-8")
+
+    node = ToolNode(
+        "s",
+        action_type="search",
+        file_path=str(tmp_path),
+        cwd=str(tmp_path),
+    )
+    result = node._search_core(AgentContext({}))
+
+    assert result["success"] is True
+    assert result["count"] >= 2
+    assert any(str(item).endswith("b.py") for item in result["files"])
+
+
 def test_read_search_and_apply_patch_aliases_work(tmp_path):
     target = tmp_path / "a.txt"
     target.write_text("hello\nworld\n", encoding="utf-8")

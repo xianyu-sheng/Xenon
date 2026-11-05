@@ -753,9 +753,11 @@ class ToolNode(
         if action_type == "run_script":
             if "language" not in result and "lang" in result:
                 result["language"] = result.pop("lang")
-        if action_type == "search_files":
+        if action_type in {"search", "search_files"}:
             # ``pattern`` is canonical for list_files, but models routinely
             # use it for grep.  Resolve it by action instead of dropping it.
+            # The core alias is ``search`` (not ``search_files``); missing it
+            # put the query into the filename glob and listed 0 files.
             if "search_pattern" not in result and "pattern" in result:
                 result["search_pattern"] = result.pop("pattern")
             if "file_filter" not in result and "file_pattern" in result:

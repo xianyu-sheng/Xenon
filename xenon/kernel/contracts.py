@@ -243,6 +243,10 @@ class Budget:
     # V2 audit rounds across repeated Finish attempts.  The first audit is
     # always allowed; a second unresolved round must block/abstain.
     max_audit_rounds: int = 1
+    # Plan rounds for one turn.  An unmet task-level audit starts another
+    # round with the gaps as input; after the cap the answer is still returned
+    # with its gaps disclosed (#423).  The cap is the brake, not a gate.
+    max_plan_rounds: int = 3
     # Total context window of the model doing the work, in tokens.  0 means
     # "unknown", in which case the view falls back to a heuristic.  Knowing
     # the real window is what makes compaction trigger at the right point:

@@ -330,7 +330,13 @@ def test_the_grant_is_consumed_by_exactly_one_call(tmp_path) -> None:
     assert len(approver.asked) == 1, "and it must not silently re-prompt"
     reasons = " ".join(str(item.get("reason")) for item in _decisions(ledger))
     assert "read-only mode" in reasons
-    assert result.phase is TaskPhase.BLOCKED
+    # The refused second call no longer kills the run; the script runs out and
+    # the strategy aborts.  What matters is that it never reached the gateway.
+    assert result.phase is TaskPhase.ABORTED
+    assert any(
+        event.payload.get("decision") == "refuse"
+        for event in ledger.read(EventKind.CONTROL_DECISION)
+    )
 
 
 # ── parser + failure paths (each one fail-closed) ────────────────

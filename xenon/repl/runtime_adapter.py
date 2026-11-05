@@ -111,6 +111,27 @@ def should_route_to_kernel(
     )
 
 
+def resolve_max_steps(value: int | None = None) -> int:
+    """Resolve the global step cap; ``0`` means no global cap.
+
+    The single-loop design brakes on three things instead of one global step
+    count: the per-step call budget (``LoopProfile.step_calls``), the plan-round
+    budget, and the stall/wall clock.  A fixed 24-call turn cap made a
+    multi-file task die halfway through for no evidence reason (#190).
+
+    ``XENON_MAX_STEPS`` is the operator override; ``0`` (the default) keeps the
+    global cap off.  Existing callers that pass a positive value keep it.
+    """
+
+    if value is None:
+        raw = os.environ.get("XENON_MAX_STEPS", "0").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 0
+    return max(0, int(value))
+
+
 def permission_mode_for(level: ExecutionLevel | int) -> PermissionMode:
     """Map the REPL's authorization level onto the kernel's conservative modes.
 
@@ -679,7 +700,7 @@ class RuntimeAdapter:
         permission: PermissionMode = PermissionMode.AUTO_EDIT,
         ledger_dir: str | Path | None = None,
         finalize: bool | None = None,
-        max_steps: int = 24,
+        max_steps: int | None = None,
         client: Any = None,
         approval: Any = None,
         allow_approval: bool = False,
@@ -717,7 +738,7 @@ class RuntimeAdapter:
             if finalize is None
             else bool(finalize)
         )
-        self.max_steps = max(1, int(max_steps))
+        self.max_steps = resolve_max_steps(max_steps)
         self.client = client
         self.approval = approval
         self.allow_approval = bool(allow_approval)
@@ -976,6 +997,9 @@ class RuntimeAdapter:
             strategy_mode=getattr(repl.registry, "current_mode", "react")
             or "react",
             plan_only=plan_only,
+            # /max-steps sets the per-session override; None falls back to the
+            # environment/default (no global cap).
+            max_steps=getattr(repl, "_max_steps", None),
         )
 
 

@@ -89,6 +89,49 @@ def cmd_verbose(*, args: str, session_state: dict, **kwargs: Any) -> str:
 
 
 register_command(
+    "/max-steps",
+    "设置单回合全局步数上限（off = 不限）",
+    "/max-steps [N|off]",
+)
+
+
+@command_handler("/max-steps")
+def cmd_max_steps(*, args: str, session_state: dict, **kwargs: Any) -> str:
+    """The single loop brakes per step and per round; this is the optional
+    operator override for one turn, not the default brake."""
+
+    repl = session_state.get("_repl")
+    if not repl:
+        return "❌ 无法获取 REPL 状态"
+
+    text = args.strip().lower()
+    current = getattr(repl, "_max_steps", None)
+    if not text or text in {"status", "show"}:
+        effective = str(current) if current else "不限（0）"
+        return (
+            f"当前全局步数上限: {effective}\n"
+            "单循环仍受每步调用预算、最多 3 个计划轮次和墙钟/停滞检测约束。\n"
+            "用法: /max-steps 40 或 /max-steps off"
+        )
+
+    if text in {"off", "0", "unlimited", "none"}:
+        repl._max_steps = 0
+        return (
+            "✅ 全局步数上限已关闭（0 = 不限）；"
+            "仍受每步预算、计划轮次和墙钟约束"
+        )
+
+    try:
+        value = int(text)
+    except ValueError:
+        return "❌ 用法: /max-steps <正整数|off>"
+    if value < 0:
+        return "❌ 步数必须 >= 0（0 = 不限）"
+    repl._max_steps = value
+    return f"✅ 全局步数上限设为 {value}（下一回合生效）"
+
+
+register_command(
     "/restart", "优雅重启 REPL（重载配置、可选保存会话）", "/restart [--fresh]"
 )
 

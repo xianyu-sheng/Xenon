@@ -104,6 +104,16 @@ def _max_identical_calls(spec: TaskSpec) -> int:
 _SKIP_ACTION = object()
 
 
+_POLICY_REFUSED = object()
+_MAX_POLICY_REFUSALS = 3
+"""Policy said no to *this action*; the loop must continue without it.
+
+``None`` still means "allowed" (the historical contract), so a refusal needs a
+distinct value.  Returning ``None`` here would fall through to dispatch and run
+the very action the policy denied.
+"""
+
+
 class _RuntimeServices:
     """Small gateway-facing surface; never exposes the mutable ledger."""
 
@@ -216,6 +226,9 @@ class LoopRuntime:
         self._step_verdicts: dict[int, list[Verdict]] = {}
         self._repair_attempts: dict[str, int] = {}
         self._replans = 0
+        #: Plan rounds started in this turn (1-based).  A task-level audit with
+        #: gaps starts the next round until ``max_plan_rounds``.
+        self._plan_rounds = 0
         self._stuck = StuckDetector()
         self._clock: Any = time.time
         self._last_progress_at = self._clock()
@@ -526,6 +539,8 @@ class LoopRuntime:
                 )
 
             veto = self._check_policies(view, action)
+            if veto is _POLICY_REFUSED:
+                continue
             if veto is not None:
                 return veto
 
@@ -587,8 +602,8 @@ class LoopRuntime:
                     exhausted = self._record_attempts(closed)
                     self._sync_debt(closed)
                     if exhausted:
-                        return self._budget_block(
-                            "repair budget exhausted", exhausted
+                        self._release_step_with_gaps(
+                            exhausted, "repair budget exhausted"
                         )
                 continue
 
@@ -626,7 +641,7 @@ class LoopRuntime:
                 continue
 
             if isinstance(action, Finish):
-                result = self._finish(action)
+                result = self._finish(action, strategy)
                 if result is not None:
                     return result
                 continue
@@ -700,6 +715,7 @@ class LoopRuntime:
                     answer=f"计划生成失败：{exc}"[:300],
                 )
             return self._reject_plan(exc)
+        self._plan_rounds += 1
         if plan_only:
             self._transition(
                 TaskPhase.PLANNED, "plan accepted; waiting for approval"
@@ -726,12 +742,35 @@ class LoopRuntime:
             },
         )
         if self._replans > self._max_replans():
-            return self._budget_block(
-                "replan budget exhausted", ("replan",)
-            )
+            self._note_replan_cap("invalid plan")
         self._transition(TaskPhase.REPLANNING, "invalid plan")
         self._transition(TaskPhase.RUNNING, "replan after invalid plan")
         return None
+
+    def _note_replan_cap(self, reason: str) -> None:
+        """Stop *nagging* about replans; do not end the turn for it.
+
+        The hard stop here used to fire before the plan-round budget, so a
+        third round could be killed by an invalid-plan counter rather than by
+        the round cap.  The wall clock/stall detector is the real brake.
+        """
+
+        self._append(
+            EventKind.CONTROL_DECISION,
+            EventSource.GATE,
+            {
+                "decision": "replan_cap_reached",
+                "reason": reason,
+                "continued": True,
+                "replans": self._replans,
+            },
+        )
+        self._loop_notes.append(
+            "Planning has failed repeatedly. Submit a much smaller plan "
+            "(one target), or finish with what you have; the remaining gaps "
+            "will be disclosed rather than hidden."
+        )
+        del self._loop_notes[:-5]
 
     def _apply_plan(
         self, plan: Any, *, updated: bool, start_active: bool = True
@@ -834,9 +873,7 @@ class LoopRuntime:
                 step_id=self._current_step_id(),
             )
             if self._replans > self._max_replans():
-                return self._budget_block(
-                    "replan budget exhausted", ("replan",)
-                )
+                self._note_replan_cap("no deterministic binding")
             self._transition(TaskPhase.REPLANNING, "no deterministic binding")
             self._transition(TaskPhase.RUNNING, "replan after binding failure")
             return None
@@ -998,9 +1035,10 @@ class LoopRuntime:
         exhausted = self._record_attempts(step_verdicts)
         self._sync_debt(step_verdicts)
         if exhausted:
-            return self._budget_block(
-                "repair budget exhausted", exhausted
+            self._release_step_with_gaps(
+                exhausted, "repair budget exhausted"
             )
+            return None
         if any(
             item.status is VerdictStatus.VIOLATED for item in step_verdicts
         ):
@@ -1046,13 +1084,52 @@ class LoopRuntime:
         exhausted = self._record_attempts(verdicts)
         self._sync_debt(verdicts)
         if exhausted:
-            return self._budget_block("repair budget exhausted", exhausted)
+            self._release_step_with_gaps(
+                exhausted, "repair budget exhausted"
+            )
+            return None
         if any(
             item.status is VerdictStatus.VIOLATED for item in verdicts
         ):
             self._transition(TaskPhase.REPAIRING, reason or "step released")
         self._transition(TaskPhase.RUNNING, "step released")
         return None
+
+    def _release_step_with_gaps(
+        self, gaps: Sequence[str], reason: str
+    ) -> None:
+        """Retire a step whose repair budget ran out and keep the loop moving.
+
+        The gap is not erased: the verdicts already opened debt and the next
+        step (or the next plan round) sees it.  Killing the whole turn here is
+        what made one stubborn step end a run that had real work behind it.
+        """
+
+        step = self._active_step
+        payload = {
+            "decision": "release_step_with_gaps",
+            "gaps": list(gaps),
+            "reason": reason,
+        }
+        self._append(
+            EventKind.CONTROL_DECISION,
+            EventSource.GATE,
+            payload,
+            step_id=self._current_step_id(),
+        )
+        if step is not None:
+            # Scheduling must treat a released step as done; the ledger still
+            # records that it was released with gaps, not satisfied.
+            self._closed_steps.add(step.id)
+        self._loop_notes.append(
+            "A step was released with gaps: "
+            f"{', '.join(gaps[:6]) or reason}. Address these in the next step; "
+            "the task audit will re-open a plan round if they remain."
+        )
+        del self._loop_notes[:-5]
+        if step is not None:
+            self._advance_step()
+        self._transition(TaskPhase.RUNNING, "step released with gaps")
 
     def _close_implicit_step(self) -> tuple[Verdict, ...]:
         """V1 for turns without a plan (#420).
@@ -1215,7 +1292,48 @@ class LoopRuntime:
             step_id=self._current_step_id(),
         )
 
-    def _finish(self, action: Finish) -> TaskResult | None:
+    def _start_next_round(
+        self, strategy: Strategy, gaps: Sequence[str], reason: str
+    ) -> None:
+        """Begin another plan round with the previous round's gaps as input."""
+
+        self._transition(TaskPhase.REPLANNING, reason or "plan round gaps")
+        self._append(
+            EventKind.CONTROL_DECISION,
+            EventSource.GATE,
+            {
+                "decision": "start_next_plan_round",
+                "round": self._plan_rounds + 1,
+                "gaps": list(gaps),
+                "reason": reason,
+            },
+        )
+        # Round-scoped state only.  The ledger keeps every prior verdict; the
+        # in-memory latest map must not let a superseded violation decide the
+        # new round.
+        self._closed_steps.clear()
+        self._plan = None
+        self._plan_steps = ()
+        self._active_step = None
+        self._verdicts.clear()
+        self._step_verdicts.clear()
+        self._repair_attempts.clear()
+        self._audit_rounds = 0
+        self._forced_finish = False
+        self._forced_finish_allowance = 0
+        self._stuck.reset()
+        self._loop_notes.append(
+            f"Plan round {self._plan_rounds + 1}: the previous round left "
+            f"these gaps: {', '.join(gaps[:8]) or 'unverified work'}. "
+            "Plan to close them; do not repeat actions that produced no fact."
+        )
+        del self._loop_notes[:-5]
+        reset = getattr(strategy, "reset_for_round", None)
+        if callable(reset):
+            reset()
+        self._transition(TaskPhase.RUNNING, "plan round started")
+
+    def _finish(self, action: Finish, strategy: Strategy) -> TaskResult | None:
         if self._spec is not None and (
             self._audit_rounds >= self._max_audit_rounds()
         ):
@@ -1295,6 +1413,9 @@ class LoopRuntime:
             return self._result(
                 accepted=False,
                 evidence=EvidenceStatus.UNVERIFIED,
+                # The answer is still shown; the missing receipt is the
+                # disclosure.  An empty screen was the old "block" (#423).
+                answer=action.answer,
                 claims=claims,
             )
 
@@ -1357,10 +1478,39 @@ class LoopRuntime:
             },
         )
 
+        gaps = list(decision.obligation_ids) or [
+            item.obligation.id for item in self._debt
+        ]
+        if (
+            decision.kind in (
+                ControlDecisionKind.BLOCK,
+                ControlDecisionKind.ABSTAIN,
+            )
+            and gaps
+            and self._plan is not None
+            and self._plan_rounds < self._max_plan_rounds()
+            and getattr(strategy, "planner", None) is not None
+            and callable(getattr(strategy, "reset_for_round", None))
+        ):
+            # The audit is feedback, not a verdict on the turn: spend another
+            # plan round on the gaps.  After the cap the answer is returned
+            # with the gaps disclosed (below).
+            self._start_next_round(strategy, gaps, decision.reason)
+            return None
+
         if decision.kind is not ControlDecisionKind.DELIVER:
-            rollback_block = self._rollback_delivery(finalizer_outcome)
-            if rollback_block is not None:
-                return rollback_block
+            finalize = self._finalize_decision
+            # Roll back only for *integrity*: a commit containing a path that
+            # was never verified, or content that changed after verification.
+            # An incomplete obligation is disclosed, not used to erase work.
+            integrity_failure = bool(
+                getattr(finalize, "hash_mismatches", ())
+                or getattr(finalize, "unverified_paths", ())
+            )
+            if integrity_failure:
+                rollback_block = self._rollback_delivery(finalizer_outcome)
+                if rollback_block is not None:
+                    return rollback_block
 
         if decision.kind is ControlDecisionKind.DELIVER:
             assert self._spec is not None
@@ -1420,6 +1570,10 @@ class LoopRuntime:
             return self._result(
                 accepted=False,
                 evidence=EvidenceStatus.ABSTAINED,
+                # The model's answer is still the answer.  A gap in evidence
+                # must be disclosed next to it, never replace it with an empty
+                # screen doing to be a delivery (#423).
+                answer=action.answer,
                 claims=claims,
                 resolutions=resolutions,
             )
@@ -1429,6 +1583,7 @@ class LoopRuntime:
             return self._result(
                 accepted=False,
                 evidence=EvidenceStatus.UNVERIFIED,
+                answer=action.answer,
                 claims=claims,
                 resolutions=resolutions,
             )
@@ -1437,6 +1592,7 @@ class LoopRuntime:
         return self._result(
             accepted=False,
             evidence=EvidenceStatus.UNVERIFIED,
+            answer=action.answer,
             claims=claims,
             resolutions=resolutions,
         )
@@ -1832,7 +1988,7 @@ class LoopRuntime:
                 },
             )
 
-    def _check_policies(self, view: Any, action: Action) -> TaskResult | None:
+    def _check_policies(self, view: Any, action: Action) -> Any:
         for policy in self._policies:
             decision = policy.check(view, action)
             if decision.kind is PolicyDecisionKind.ALLOW:
@@ -1907,23 +2063,72 @@ class LoopRuntime:
                         "denied fail-closed"
                     )
                 self._revoke_grants()
-                self._transition(
-                    TaskPhase.BLOCKED,
+                # A refusal is an outcome of *this action*, not of the task.
+                # Returning a blocked result here is what made a single denied
+                # shell call kill a multi-step run (#423).  The action still
+                # never executes; the loop just gets a chance to choose another
+                # route (search/read/edit, or ask the user).
+                blocked = self._refuse_and_continue(
+                    action,
                     approval_reason or "approval denied",
+                    EventSource.USER,
                 )
-                return self._result(
-                    accepted=False,
-                    evidence=EvidenceStatus.ABSTAINED,
-                )
+                return _POLICY_REFUSED if blocked is None else blocked
             self._revoke_grants()
-            self._transition(
-                TaskPhase.BLOCKED, decision.reason or "policy blocked"
+            blocked = self._refuse_and_continue(
+                action,
+                decision.reason or "policy blocked",
+                EventSource.GATE,
             )
-            return self._result(
-                accepted=False,
-                evidence=EvidenceStatus.ABSTAINED,
-            )
+            return _POLICY_REFUSED if blocked is None else blocked
         return None
+
+    def _refuse_and_continue(
+        self, action: Action, reason: str, source: EventSource
+    ) -> TaskResult | None:
+        """Record a refused action and let the loop try a different one.
+
+        A refusal is not a task failure, but a run that only ever hits the same
+        wall must still stop: the cap keeps "continue, don't block" from
+        becoming an infinite loop.
+        """
+
+        capability = (
+            action.intent.capability.value
+            if isinstance(action, CallTool)
+            else type(action).__name__
+        )
+        self._note_refusal(reason, capability)
+        key = f"{capability}:{reason.split(':')[0][:60]}"
+        count = self._refusals.get(key, 0)
+        self._loop_notes.append(
+            f"{capability}: refused by policy ({reason}). This action did not "
+            "run. Do not repeat it; choose a different capability/target or "
+            "ask the user."
+        )
+        del self._loop_notes[:-5]
+        self._append(
+            EventKind.CONTROL_DECISION,
+            source,
+            {
+                "decision": "refuse",
+                "reason": reason,
+                "scope": [capability],
+                "continued": count < _MAX_POLICY_REFUSALS,
+                "refusal_count": count,
+            },
+            step_id=self._current_step_id(),
+        )
+        if count < _MAX_POLICY_REFUSALS:
+            return None
+        self._transition(
+            TaskPhase.BLOCKED,
+            f"policy refused {capability} {count} times: {reason}",
+        )
+        return self._result(
+            accepted=False,
+            evidence=EvidenceStatus.ABSTAINED,
+        )
 
     def _request_escalation(
         self, view: Any, action: RequestEscalation
@@ -2430,6 +2635,7 @@ class LoopRuntime:
                 "events": float(self._ledger.watermark()),
                 "repair_attempts": float(sum(self._repair_attempts.values())),
                 "replans": float(self._replans),
+                "plan_rounds": float(self._plan_rounds),
                 "audit_rounds": float(self._audit_rounds),
                 # Refusals are a *protocol* signal: one is normal, a pile of
                 # them means the catalog and the model disagree about how to
@@ -2492,6 +2698,11 @@ class LoopRuntime:
         if self._spec is None:
             return 0
         return max(0, self._spec.budget.max_audit_rounds)
+
+    def _max_plan_rounds(self) -> int:
+        if self._spec is None:
+            return 1
+        return max(1, int(self._spec.budget.max_plan_rounds))
 
     def _budget_block(
         self, reason: str, scope: Sequence[str] = (), *, signal: str = ""

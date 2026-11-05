@@ -122,6 +122,39 @@ def _check_delivery(events: Sequence[Event]) -> str:
     )
 
 
+def _check_plan_rounds(events: Sequence[Event]) -> str:
+    started = [
+        item
+        for item in _payloads(events, "control_decision")
+        if item.get("decision") == "start_next_plan_round"
+    ]
+    if not started:
+        return ("本次没有进入第二轮计划（未触发）", "n/a")
+    accepted = len(_payloads(events, "plan_accepted"))
+    if accepted < len(started) + 1:
+        return (
+            f"{len(started)} 次续轮，但只有 {accepted} 次 plan_accepted",
+            "miss",
+        )
+    rounds = [int(item.get("round") or 0) for item in started]
+    return (f"{len(started)} 次续轮, rounds={rounds}", "ok")
+
+
+def _check_refusals(events: Sequence[Event]) -> str:
+    refused = [
+        item
+        for item in _payloads(events, "control_decision")
+        if item.get("decision") == "refuse"
+    ]
+    if not refused:
+        return ("本次没有策略拒绝（未触发）", "n/a")
+    continued = [item for item in refused if item.get("continued")]
+    return (
+        f"{len(refused)} 次拒绝, {len(continued)} 次继续循环",
+        "ok" if len(continued) == len(refused) else "miss",
+    )
+
+
 def _check_loops(events: Sequence[Event]) -> str:
     loops = _payloads(events, "loop_detected")
     forced = [
@@ -193,9 +226,8 @@ def _check_chain(events: Sequence[Event], path: Path) -> tuple[str, str]:
     """A ledger that cannot prove its own integrity is not evidence."""
 
     try:
-        # Known ordering quirk: the kernel contracts must be imported before
-        # the ledger store, or `xenon.ledger.events` is left half-initialised.
-        import xenon.kernel.contracts  # noqa: F401
+        # The ledger package is importable on its own now; the old
+        # "import kernel.contracts first" workaround was hiding a real cycle.
         from xenon.ledger.store import Ledger
 
         report = Ledger(path, path.stem).verify()
@@ -247,6 +279,8 @@ CHECKS: tuple[Check, ...] = (
     Check("claim → fact 绑定", ("claim_proposed", "claim_resolved"), _check_claims),
     Check("交付（finalizer）", ("finalize_started", "delivered"), _check_delivery),
     Check("循环检测 + 收尾", ("loop_detected",), _check_loops),
+    Check("计划轮次续跑", ("control_decision",), _check_plan_rounds),
+    Check("策略拒绝后继续", ("control_decision",), _check_refusals),
     Check("失败即教学（可观测）", ("control_decision",), _check_teaching),
     Check("自我进化（lesson）", ("lesson_proposed",), _check_lessons),
     Check("审批边界", ("user_approval",), _check_approvals),
@@ -275,6 +309,12 @@ def audit(path: Path) -> list[tuple[str, str, str]]:
 
 
 def main(argv: list[str]) -> int:
+    import sys
+
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
     paths = [Path(item) for item in argv[1:]]
     if not paths:
         print(__doc__)

@@ -145,5 +145,30 @@ class TestCommandList:
         print("=" * 70)
 
 
+def test_max_steps_command_sets_the_session_override():
+    from xenon.repl.command_groups.runtime import cmd_max_steps
+
+    class Repl:
+        _max_steps = None
+
+    repl = Repl()
+    assert "40" in cmd_max_steps(
+        args="40", session_state={"_repl": repl}
+    )
+    assert repl._max_steps == 40
+
+    assert "关闭" in cmd_max_steps(
+        args="off", session_state={"_repl": repl}
+    )
+    assert repl._max_steps == 0
+
+    assert "用法" in cmd_max_steps(
+        args="nope", session_state={"_repl": repl}
+    )
+    assert "当前全局步数上限" in cmd_max_steps(
+        args="", session_state={"_repl": repl}
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

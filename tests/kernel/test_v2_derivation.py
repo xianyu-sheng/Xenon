@@ -48,6 +48,30 @@ def test_the_same_file_is_only_counted_once() -> None:
     assert len(files) == 1
 
 
+def test_a_bare_basename_is_not_a_second_obligation() -> None:
+    """SmartBench #26 named the full path once, then ``common.py:188``.
+
+    Deriving a third, bare ``common.py`` obligation made the run blocked on a
+    file the task never asked anyone to change.
+    """
+
+    task = (
+        "Fix smartbench/core/rules/common.py:188 and "
+        "smartbench/cli/unified.py, then update tests/test_common.py."
+    )
+
+    files = [
+        item.target
+        for item in derive_obligations(task)
+        if item.kind is PropositionKind.FILE_CHANGED
+    ]
+    assert files == [
+        "smartbench/core/rules/common.py",
+        "smartbench/cli/unified.py",
+        "tests/test_common.py",
+    ]
+
+
 def test_obligations_are_bounded() -> None:
     task = " ".join(f"file{i}.py" for i in range(40))
 

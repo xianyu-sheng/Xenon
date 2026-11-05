@@ -70,12 +70,29 @@ def derive_obligations(objective: str, *, since_seq: int = 0) -> tuple[Obligatio
             )
         )
 
-    files: list[str] = []
+    raw_files: list[str] = []
     for match in _FILE.finditer(objective):
         path = _normalise(match.group(1))
         if not path or _NON_SOURCE.match(path):
             continue
+        raw_files.append(path)
+
+    # A task often names a full path once and then refers to the same file by
+    # basename ("common.py:188").  Treating the basename as a second target
+    # invented an obligation nobody could satisfy: the run dogfooded on
+    # SmartBench #26 finished blocked on a third "common.py" no one was asked
+    # to change.  When a longer path already ends with the bare name, the
+    # longer path wins.
+    files: list[str] = []
+    for path in raw_files:
+        if any(
+            other != path and other.endswith("/" + path)
+            for other in raw_files
+        ):
+            continue
         files.append(path)
+
+    for path in files:
         add(PropositionKind.FILE_CHANGED, path)
 
     runner = _TEST_RUNNER.search(objective)

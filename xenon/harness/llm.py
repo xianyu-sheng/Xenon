@@ -155,6 +155,9 @@ Supported actions:
    {"action":"call_tool","capability":"verify","params":{"command":"python -m pytest tests/test_x.py -q"}}
    {"action":"call_tool","capability":"shell","params":{"command":"safe shell command"}}
    {"action":"call_tool","capability":"remote","params":{"tool_name":"server:tool","tool_args":{"query":"..."}}}
+   To expand a truncated tool result instead of re-running the tool:
+   {"action":"call_tool","capability":"read","prefer":"tool_result_read","params":{"result_id":"...","mode":"raw"}}
+   Use `mode":"range"` with `start_line`/`max_lines` to page a long raw result.
 2. Spend a turn reasoning without a tool:
    {"action":"think","text":"what you learned and what you will do next"}
 3. Ask the user because the task is genuinely ambiguous:
@@ -569,6 +572,7 @@ def parse_action(payload: str | Mapping[str, Any]) -> Action:
                 capability=capability,
                 params=params,
                 targets=_strings(data.get("targets"), "targets"),
+                prefer=str(data.get("prefer") or "").strip() or None,
             )
         )
     if action == "request_escalation":

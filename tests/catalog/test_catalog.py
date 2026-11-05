@@ -45,6 +45,27 @@ def test_core_catalog_binds_each_capability_to_one_core_tool() -> None:
         assert binding.call.capability is capability
 
 
+def test_core_catalog_can_reach_the_result_reader_by_preference() -> None:
+    """A truncated result is read by result_id, not by re-running the tool."""
+
+    catalog = build_catalog("core")
+    general = catalog.bind(
+        ToolIntent(capability=Capability.READ, params={"file_path": "a.py"})
+    )
+    assert general.call is not None and general.call.spec_name == "read"
+
+    expanded = catalog.bind(
+        ToolIntent(
+            capability=Capability.READ,
+            params={"result_id": "r-1"},
+            prefer="tool_result_read",
+        )
+    )
+    assert expanded.status is BindingStatus.BOUND
+    assert expanded.call is not None
+    assert expanded.call.spec_name == "tool_result_read"
+
+
 def test_core_catalog_has_no_remote_tool() -> None:
     binding = build_catalog("core").bind(
         ToolIntent(capability=Capability.REMOTE)

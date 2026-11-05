@@ -252,7 +252,9 @@ def test_repair_budget_blocks_after_configured_attempts() -> None:
         task_id="task-1",
         objective="fix",
         workspace=".",
-        budget=Budget(max_steps=20, max_repair_attempts=2),
+        budget=Budget(
+            max_steps=20, max_repair_attempts=2, max_plan_rounds=1
+        ),
     )
 
     result = runtime.run(spec, _follow(_verify_plan()))
@@ -262,7 +264,8 @@ def test_repair_budget_blocks_after_configured_attempts() -> None:
     assert gateway.calls == 3
     assert result.debt[0].attempts == 3
     assert any(
-        event.kind is EventKind.POLICY_DECISION
+        event.kind is EventKind.CONTROL_DECISION
+        and event.payload.get("decision") == "release_step_with_gaps"
         and "repair budget exhausted" in str(event.payload.get("reason"))
         for event in ledger.read()
     )
@@ -282,7 +285,7 @@ def test_zero_repair_budget_blocks_on_first_failure() -> None:
         task_id="task-1",
         objective="fix",
         workspace=".",
-        budget=Budget(max_steps=20, max_repair_attempts=0),
+        budget=Budget(max_steps=20, max_repair_attempts=0, max_plan_rounds=1),
     )
 
     result = runtime.run(spec, _follow(_verify_plan()))
@@ -321,8 +324,9 @@ def test_replan_budget_blocks_on_invalid_plan() -> None:
     assert result.accepted is False
     assert result.phase.value == "blocked"
     assert any(
-        event.kind is EventKind.POLICY_DECISION
-        and "replan budget exhausted" in str(event.payload.get("reason"))
+        event.kind is EventKind.CONTROL_DECISION
+        and event.payload.get("decision") == "replan_cap_reached"
+        and event.payload.get("continued") is True
         for event in ledger.read()
     )
 
@@ -1235,6 +1239,8 @@ def test_finish_without_any_evidence_does_not_deliver() -> None:
     assert result.accepted is False
     assert result.phase.value == "blocked"
     assert result.debt
+    # The answer is disclosed with the gap instead of being thrown away.
+    assert result.answer == "all done"
     assert result.evidence_status.value == "unverified"
 
 

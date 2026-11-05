@@ -267,11 +267,16 @@ def test_veto_prevents_gateway_execution(tmp_path) -> None:
     )
 
     assert result.accepted is False
-    assert result.phase.value == "blocked"
+    assert result.phase.value == "aborted"
     assert not ledger.read(EventKind.TOOL_RECEIPT)
     assert any(
         event.kind is EventKind.POLICY_DECISION
         and event.payload.get("kind") == "veto"
+        for event in ledger.read()
+    )
+    assert any(
+        event.kind is EventKind.CONTROL_DECISION
+        and event.payload.get("decision") == "refuse"
         for event in ledger.read()
     )
 
@@ -437,24 +442,42 @@ def test_runtime_approval_allows_once_and_revokes_grant(tmp_path) -> None:
     assert result.phase.value in {"finalized", "delivered"}
 
 
-def test_runtime_approval_denial_blocks_before_gateway(tmp_path) -> None:
+def test_runtime_approval_denial_does_not_execute_and_the_loop_continues(
+    tmp_path,
+) -> None:
+    """A refusal is about one action, not the whole task (#423).
+
+    The denied call must not reach the gateway; the run must get the chance to
+    finish or choose another route instead of dying with an empty answer.
+    """
+
     approval = Approval(False)
     policy, ledger, result = _approval_runtime(tmp_path, approval)
 
     assert ledger.read(EventKind.USER_APPROVAL)[0].payload["approved"] is False
     assert not ledger.read(EventKind.TOOL_RECEIPT)
+    # No receipt means no verified delivery, but the answer is still shown and
+    # the gap is disclosed instead of returning an empty blocked screen.
+    assert result.answer == "done"
     assert result.accepted is False
-    assert result.phase.value == "blocked"
+    assert result.evidence_status.value in {"partial", "unverified"}
     assert not policy.grants
+    assert any(
+        event.kind is EventKind.CONTROL_DECISION
+        and event.payload.get("decision") == "refuse"
+        and event.payload.get("continued")
+        for event in ledger.read()
+    )
 
 
-def test_runtime_without_approver_fails_closed(tmp_path) -> None:
+def test_runtime_without_approver_does_not_execute(tmp_path) -> None:
     policy, ledger, result = _approval_runtime(tmp_path, None)
 
     event = ledger.read(EventKind.USER_APPROVAL)[0]
     assert event.payload["approved"] is False
     assert "no approval provider" in event.payload["reason"]
     assert not ledger.read(EventKind.TOOL_RECEIPT)
+    assert result.answer == "done"
     assert result.accepted is False
     assert not policy.grants
 
@@ -484,11 +507,12 @@ def test_approval_without_target_fails_closed(tmp_path) -> None:
             ]
         ),
     )
+    assert result.answer == "done"
     assert result.accepted is False
-    assert result.phase.value == "blocked"
     assert not ledger.read(EventKind.TOOL_RECEIPT)
-    assert "could not be scoped" in str(
-        ledger.read(EventKind.STATE_TRANSITION)[-1].payload.get("reason")
+    assert any(
+        "could not be scoped" in str(event.payload.get("reason"))
+        for event in ledger.read()
     )
     assert not policy.grants
 
@@ -501,5 +525,6 @@ def test_approval_provider_exception_fails_closed(tmp_path) -> None:
     assert event.payload["approved"] is False
     assert "approval provider failed" in event.payload["reason"]
     assert not ledger.read(EventKind.TOOL_RECEIPT)
+    assert result.answer == "done"
     assert result.accepted is False
     assert not policy.grants

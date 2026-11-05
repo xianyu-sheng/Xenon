@@ -76,11 +76,19 @@ def resolve_ledger(target: str | Path, *, root: Path | None = None) -> Path:
     if candidate.is_file():
         return candidate
     directory = (root or default_ledger_dir()).expanduser()
-    by_id = directory / f"{target}.jsonl"
-    if by_id.is_file():
-        return by_id
+    # REPL turns write under ``<root>/repl``; headless runs use the root.
+    # Looking only at the root made ``xenon replay <task-id>`` fail for every
+    # interactive ledger, which is the common case.
+    candidates = [
+        directory / f"{target}.jsonl",
+        directory / "repl" / f"{target}.jsonl",
+    ]
+    for by_id in candidates:
+        if by_id.is_file():
+            return by_id
     raise FileNotFoundError(
-        f"no ledger for {target!r}: looked for {candidate} and {by_id}"
+        f"no ledger for {target!r}: looked for {candidate} and "
+        + " / ".join(str(item) for item in candidates)
     )
 
 

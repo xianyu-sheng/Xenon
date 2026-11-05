@@ -111,6 +111,13 @@ def test_parse_action_supports_capability_protocol() -> None:
     assert action.intent.params == {"file_path": "a.py"}
     assert action.intent.targets == ("a.py",)
 
+    expanded = parse_action(
+        '{"action":"call_tool","capability":"read",'
+        '"prefer":"tool_result_read","params":{"result_id":"r-1"}}'
+    )
+    assert isinstance(expanded, CallTool)
+    assert expanded.intent.prefer == "tool_result_read"
+
     assert isinstance(parse_action('{"action":"think","text":"hmm"}'), Think)
     assert isinstance(
         parse_action('{"action":"ask_user","question":"which branch?"}'),
@@ -274,7 +281,7 @@ def test_cli_natural_language_path(tmp_path: Path, monkeypatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     _repo(repo)
-    client = FakeClient(_responses())
+    client = FakeClient([json.dumps(_plan_dict())] + _responses())
     monkeypatch.setattr(llm, "chat_completion", client)
     output = tmp_path / "out" / "result.json"
     args = _parser().parse_args(
@@ -297,6 +304,9 @@ def test_cli_natural_language_path(tmp_path: Path, monkeypatch) -> None:
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["accepted"] is True
     assert payload["finalize_sha"]
+    # The report reads this sibling for blocked runs, which never write a
+    # `delivered` event.
+    assert (tmp_path / "ledger" / "cli-llm.result.json").is_file()
 
 
 def test_cli_requires_model_configuration(tmp_path: Path, monkeypatch) -> None:

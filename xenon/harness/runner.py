@@ -101,6 +101,14 @@ def _runtime_bundle(
         context=gateway_context,
         runtime=tool_runtime,
     )
+    # Bind the per-task result cache.  Without it ``tool_result_read`` failed
+    # with "no result cache (session not bound)" in headless runs — the model
+    # was told to page a truncated result and the tool could not find it.
+    executor = getattr(gateway, "_executor", None)
+    if executor is not None and hasattr(executor, "set_result_store"):
+        from xenon.session.tool_results import ToolResultStore
+
+        executor.set_result_store(ToolResultStore(task_id))
     runtime = LoopRuntime(
         catalog=catalog,
         gateway=gateway,
@@ -331,7 +339,7 @@ def resume_task(
         constraints=tuple(constraints),
         mode=TaskMode.TASK,
         budget=Budget(
-            max_steps=max_steps,
+            max_steps=max_steps if max_steps > 0 else None,
             context_window=_context_window(strategy),
         ),
         accept_debt=accept_debt,

@@ -33,6 +33,7 @@ from xenon.repl.runtime_adapter import (
     RuntimeAdapter,
     model_config_for,
     permission_mode_for,
+    resolve_max_steps,
     resume_kernel_plan,
     run_kernel_turn,
     should_route_to_kernel,
@@ -585,6 +586,41 @@ def test_runtime_adapter_approval_only_at_execute_level(tmp_path: Path) -> None:
     assert execute.approval is not None
 
 
+def test_runtime_adapter_defaults_to_no_global_step_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The single loop brakes per step and per round, not with a 24-call wall."""
+
+    monkeypatch.delenv("XENON_MAX_STEPS", raising=False)
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+    repl = FakeRepl(tmp_path, registry)
+
+    adapter = RuntimeAdapter.from_repl(
+        repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
+    )
+    assert adapter.max_steps == 0
+    assert resolve_max_steps(None) == 0
+    assert resolve_max_steps(12) == 12
+
+    monkeypatch.setenv("XENON_MAX_STEPS", "40")
+    assert resolve_max_steps(None) == 40
+    capped = RuntimeAdapter.from_repl(
+        repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
+    )
+    assert capped.max_steps == 40
+
+    monkeypatch.setenv("XENON_MAX_STEPS", "not-a-number")
+    assert resolve_max_steps(None) == 0
+
+    # /max-steps is a per-session override that wins over the environment.
+    repl._max_steps = 7
+    overridden = RuntimeAdapter.from_repl(
+        repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
+    )
+    assert overridden.max_steps == 7
+
+
 def test_runtime_adapter_resolves_a_loop_profile_per_mode(tmp_path: Path) -> None:
     registry = ModelRegistry()
     registry.add_model("test/fake", "fake")
@@ -1042,7 +1078,14 @@ def test_run_kernel_turn_denies_shell_approval(tmp_path: Path) -> None:
                     "capability": "shell",
                     "params": {"command": "echo hello"},
                 }
-            )
+            ),
+            json.dumps(
+                {
+                    "action": "finish",
+                    "answer": "echo was not run",
+                    "claims": [],
+                }
+            ),
         ]
     )
     run = run_kernel_turn(
@@ -1056,6 +1099,7 @@ def test_run_kernel_turn_denies_shell_approval(tmp_path: Path) -> None:
     )
     assert run is not None
     assert run.result.accepted is False
+    assert run.result.answer == "echo was not run"
     assert run.result.phase.value == "blocked"
     assert repl.confirm_calls == [
         ("bash", {"command": "echo hello"}, "CRITICAL")

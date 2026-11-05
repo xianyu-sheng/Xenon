@@ -157,9 +157,9 @@ def test_a_blocked_run_explains_itself_from_the_ledger(tmp_path):
 
     from xenon.catalog.gateway import LegacyToolGateway
     from xenon.kernel.controller import VerificationController
-    from xenon.kernel.runtime import LoopRuntime
+    from xenon.kernel.runtime import _POLICY_REFUSED, LoopRuntime
+    from xenon.ledger.events import EventKind
     from xenon.ledger.store import Ledger
-    from xenon.repl.runtime_adapter import _result_summary
 
     ledger = Ledger(tmp_path / "t.jsonl", "t")
     runtime = LoopRuntime(
@@ -177,11 +177,13 @@ def test_a_blocked_run_explains_itself_from_the_ledger(tmp_path):
     action = _action(Capability.SHELL, {"command": "ls"})
     result = runtime._check_policies(_view(), action)
 
-    assert result is not None, "a denied approval must stop the action"
-    summary = _result_summary(result, ledger_path=ledger.path)
-
-    assert "blocked" in summary
-    assert "用户拒绝" in summary
+    # A denial refuses *this action* and tells the loop to continue; it is not
+    # a blocked result any more (#423).
+    assert result is _POLICY_REFUSED
+    decisions = ledger.read(EventKind.CONTROL_DECISION)
+    assert decisions, "the refusal must be in the ledger, not only in memory"
+    assert "用户拒绝" in str(decisions[-1].payload.get("reason"))
+    assert decisions[-1].payload.get("continued") is True
 
 
 # ── blocked 的自解释渲染：各分支都要有确定性行为 ─────────────────────

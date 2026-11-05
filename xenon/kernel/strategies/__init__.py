@@ -87,6 +87,17 @@ class LoopProfile:
         return bool(self.reflect_rounds and self.reflect_calls)
 
 
+#: The default coding loop: plan, execute one step at a time, check the step's
+#: facts, then let the next step (or the next plan round) close the gaps.
+#: Modes are internal presets now; a user does not have to choose a paradigm.
+DEFAULT_PROFILE = LoopProfile(
+    plan=True,
+    step_scope=True,
+    step_calls=8,
+    step_reflect=True,
+)
+
+
 @dataclass(slots=True)
 class LoopStrategy:
     """The only kernel strategy.  ``profile`` decides which phases run."""
@@ -130,6 +141,26 @@ class LoopStrategy:
             raise ValueError("a step-scoped profile needs a step_actor")
 
     # ── proposal ────────────────────────────────────────────────────────
+
+    def reset_for_round(self) -> None:
+        """Forget round-scoped proposal state so the next plan can be submitted.
+
+        The runtime owns the round decision; the strategy only has to become
+        willing to propose a new plan again.  Durable facts stay in the ledger.
+        """
+
+        self.resumed = False
+        self._submitted = False
+        self._finished = False
+        self._step_id = None
+        self._step_calls = 0
+        self._step_reviews = 0
+        self._round = 0
+        self._round_calls = 0
+        self._acted = False
+        self._stopped = False
+        self._seen.clear()
+        self._notices.clear()
 
     def propose(self, view: ModelView) -> Action:
         if self.profile.plan and not self._submitted and not self.resumed:

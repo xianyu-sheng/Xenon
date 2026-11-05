@@ -22,7 +22,7 @@ from xenon.harness.llm import (
 from xenon.harness.plan import PlanError, parse_plan
 from xenon.harness.runner import JsonlSink, run_plan, run_task, write_result
 from xenon.kernel.policies import PermissionMode
-from xenon.kernel.strategies import LoopProfile
+from xenon.kernel.strategies import DEFAULT_PROFILE
 
 
 def _load_plan(path: str) -> Any:
@@ -134,7 +134,7 @@ def run_from_args(args: argparse.Namespace) -> int:
             assert task is not None and model_config is not None
             run = run_task(
                 task,
-                strategy=build_llm_loop_strategy(model_config, LoopProfile()),
+                strategy=build_llm_loop_strategy(model_config, DEFAULT_PROFILE),
                 workspace=args.workspace or ".",
                 ledger_dir=args.ledger_dir,
                 task_id=args.task_id,
@@ -154,6 +154,16 @@ def run_from_args(args: argparse.Namespace) -> int:
         with output.open("w", encoding="utf-8") as stream:
             write_result(run.result, stream)
     result = run.result
+    # Every run leaves a reportable pair next to its ledger.  `xenon report`
+    # reads this sibling when the answer lives outside a `delivered` event
+    # (blocked runs never append one), so a CI job does not need to guess the
+    # --output path.
+    try:
+        sibling = run.ledger_path.with_suffix(".result.json")
+        with sibling.open("w", encoding="utf-8") as stream:
+            write_result(result, stream)
+    except OSError:
+        pass
     print(
         f"{result.phase.value} accepted={result.accepted} "
         f"sha={result.finalize_sha or '-'} debt={len(result.debt)} "

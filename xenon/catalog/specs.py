@@ -63,6 +63,21 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
         requires_target=True,
     ),
     ToolSpec(
+        name="tool_result_read",
+        pack="core",
+        capabilities=frozenset({Capability.READ}),
+        effects=frozenset(),
+        risk=Risk.INFO,
+        params_schema={"result_id": "id shown on a truncated tool result"},
+        description=(
+            "Read the full cached output of an earlier tool call. Use the "
+            "result_id from the truncation notice instead of re-running the "
+            "tool."
+        ),
+        preferences={"read": 5},
+        requires_target=True,
+    ),
+    ToolSpec(
         name="search",
         pack="core",
         capabilities=frozenset({Capability.SEARCH}),

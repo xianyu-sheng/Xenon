@@ -78,7 +78,7 @@ def cli() -> None:
         "command_or_workflow",
         nargs="?",
         default=None,
-        help="子命令 (chat/run/exec/models/integrations/skill/mcp) 或 YAML 工作流文件路径",
+        help="子命令 (chat/run/exec/report/replay/models/integrations/skill/mcp) 或 YAML 工作流文件路径",
     )
     parser.add_argument(
         "workflow_path",
@@ -208,8 +208,13 @@ def cli() -> None:
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=20,
-        help="exec: maximum loop steps",
+        default=0,
+        help="exec: global step cap (0 = no cap; per-step and round budgets apply)",
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="report: output directory (writes .report.md or .report.json)",
     )
     parser.add_argument(
         "--resume",
@@ -319,6 +324,16 @@ def cli() -> None:
             )
             sys.exit(2)
         raise SystemExit(_cmd_replay(cmd, str(target), args))
+
+    elif cmd == "report":
+        target = getattr(args, "task", None) or args.workflow_path
+        if not target:
+            console.print(
+                "[red]用法: xenon report <task-id 或 ledger.jsonl> "
+                "[--json] [--out DIR][/red]"
+            )
+            sys.exit(2)
+        raise SystemExit(_cmd_report(str(target), args))
 
     elif cmd == "models":
         sub = args.workflow_path
@@ -501,6 +516,40 @@ def _cmd_children(parent: str, args: argparse.Namespace) -> int:
     else:
         console.print(render_children(rows, parent=parent))
     return 0
+
+
+def _cmd_report(target: str, args: argparse.Namespace) -> int:
+    """Turn one ledger into the reviewer-facing delivery report."""
+
+    import json
+
+    from xenon.replay import resolve_ledger
+    from xenon.report import build_report, render_markdown
+
+    try:
+        path = resolve_ledger(target)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 2
+
+    report = build_report(path)
+    if getattr(args, "json", False):
+        text = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
+        suffix = ".report.json"
+    else:
+        text = render_markdown(report)
+        suffix = ".report.md"
+
+    out = getattr(args, "out", None)
+    if out:
+        directory = Path(out)
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = directory / (path.stem + suffix)
+        destination.write_text(text + "\n", encoding="utf-8")
+        print(destination)
+    else:
+        print(text)
+    return 0 if report["integrity"]["valid"] else 1
 
 
 def _cmd_replay(command: str, target: str, args: argparse.Namespace) -> int:

@@ -62,6 +62,7 @@ _GROUPS: tuple[tuple[str, str], ...] = (
     ("/skill", "工具"),
     ("/mcp", "工具"),
     ("/theme", "配置"),
+    ("/max-steps", "配置"),
     ("/cache", "配置"),
     ("/fix-cache", "配置"),
     ("/cost", "配置"),

@@ -170,7 +170,10 @@ class ReadOnlyFileToolsMixin:
     def _list_files(self, context: AgentContext) -> dict[str, Any]:
         """遍历目录，支持 glob 模式和递归深度限制。"""
         base_path = self._resolve_template(self.file_path or ".", context)
-        pattern = self._resolve_template(self.pattern, context)
+        # ``search`` with a path and no pattern is the directory-listing action.
+        # An empty glob matched nothing, so the model saw "0 files" and fell
+        # back to shell (which is approval-gated) just to list a directory.
+        pattern = self._resolve_template(self.pattern, context) or "*"
 
         # 安全验证
         path = self._validate_path(base_path, for_write=False)

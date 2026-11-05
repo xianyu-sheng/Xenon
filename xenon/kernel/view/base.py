@@ -246,6 +246,10 @@ def _summary(
                 "tool": receipt.get("tool") or "",
                 "status": receipt.get("status") or "unknown",
                 "receipt_id": receipt.get("receipt_id") or "",
+                # The stable id of the cached full result.  Without it the
+                # truncation hint ("call tool_result_read with result_id")
+                # named nothing the model could actually use (#409/#423).
+                "result_id": receipt.get("raw_ref") or "",
                 "fact_ids": list(payload.get("fact_ids") or ()),
                 "effects": effects,
             }
@@ -530,14 +534,9 @@ def _system_prompt(
     lines.extend(
         [
             _capability_directory(specs).rstrip(),
-            "Action protocol: return one of think, call_tool, submit_plan, "
-            "update_plan, request_verification, request_escalation, ask_user, "
-            "finish, abort. "
-            "Plan steps use kind/intent/expects/depends_on; prefer is a "
-            "non-binding hint, not a tool dispatch. "
-            "If the task needs a call the boundary above refuses, return "
-            "request_escalation with capability/params/reason: the harness "
-            "asks the human, and never executes it for you.",
+            "Action protocol: the phase-specific protocol appended after this "
+            "system prompt is authoritative. It lists the only actions this "
+            "phase accepts; do not infer extra action names from this catalog.",
         ]
     )
     return "\n".join(lines) + "\n"
