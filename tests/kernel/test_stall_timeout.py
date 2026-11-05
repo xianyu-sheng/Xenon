@@ -224,3 +224,24 @@ def test_the_stall_reason_includes_the_loop_diagnosis() -> None:
 
     assert reason.startswith("stalled:")
     assert "no new information" in reason
+
+
+def test_a_slow_model_answer_counts_as_progress() -> None:
+    """v4-pro spent ~50k completion tokens on one plan and was then killed as
+    "stalled: 180s without new information" before the plan ran.  A model
+    answer is progress; only silence (no model output, no new fact) is a
+    stall."""
+
+    runtime = _runtime(Ledger.in_memory("task-stall"))
+    runtime._spec = _spec(max_stall_seconds=1)
+    now = [100.0]
+    runtime._clock = lambda: now[0]
+    runtime._last_progress_at = 100.0
+
+    now[0] = 102.0
+    assert runtime._stalled() is True
+
+    runtime.note_usage(
+        {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+    )
+    assert runtime._stalled() is False

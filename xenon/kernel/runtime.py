@@ -716,6 +716,9 @@ class LoopRuntime:
                 )
             return self._reject_plan(exc)
         self._plan_rounds += 1
+        # Accepting a plan is progress; without this a slow planner could be
+        # killed by the stall brake before its first step runs.
+        self._last_progress_at = self._clock()
         if plan_only:
             self._transition(
                 TaskPhase.PLANNED, "plan accepted; waiting for approval"
@@ -838,7 +841,13 @@ class LoopRuntime:
     def _baseline_obligation(self, obligation: Obligation) -> Obligation:
         if obligation.since_seq:
             return obligation
-        return replace(obligation, since_seq=self._plan_since_seq)
+        # Task scope, not round scope.  A fact produced in an earlier plan
+        # round still belongs to this task: a later round that re-declares
+        # ``file_changed(common.py)`` must see the write round 1 already
+        # recorded, instead of reporting "no changed file fact" and pushing the
+        # model to edit the same file again (observed on SmartBench #26 with
+        # v4-pro: one bound V2 row and two unresolved V1 rows for one write).
+        return replace(obligation, since_seq=self._run_start_seq)
 
     def _call_tool(self, action: CallTool) -> TaskResult | None:
         try:
@@ -2393,6 +2402,11 @@ class LoopRuntime:
 
         normalised = usage_payload(payload)
         self._usage.add(normalised)
+        # A model answer is progress even when it takes minutes (v4-pro
+        # produced a 50k-token plan and was then mistaken for a stalled run).
+        # The stall brake measures "no model output and no new fact", not raw
+        # wall time.
+        self._last_progress_at = self._clock()
         self._append(
             EventKind.MODEL_USAGE,
             EventSource.LLM,
