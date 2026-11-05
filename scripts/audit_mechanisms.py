@@ -28,7 +28,7 @@ class Check:
     name: str
     #: Events this mechanism is responsible for writing.
     expects: tuple[str, ...]
-    predicate: Callable[[Sequence[Event]], tuple[str, str]]
+    predicate: Callable[..., tuple[str, str]]
     #: Predicates decide `n/a` themselves, so a mechanism that *should* have
     #: run and did not is always reported as a finding.
 
@@ -170,14 +170,56 @@ def _check_usage(events: Sequence[Event]) -> str:
     )
 
 
-def _check_chain(events: Sequence[Event]) -> str:
+def _check_chain(events: Sequence[Event], path: Path) -> tuple[str, str]:
     """A ledger that cannot prove its own integrity is not evidence."""
 
     try:
+        # Known ordering quirk: the kernel contracts must be imported before
+        # the ledger store, or `xenon.ledger.events` is left half-initialised.
+        import xenon.kernel.contracts  # noqa: F401
+        from xenon.ledger.store import Ledger
 
-        return "链核验见 /evidence（此处只数事件）"
-    except Exception:  # noqa: BLE001
-        return "无法核验"
+        report = Ledger(path, path.stem).verify()
+    except Exception as exc:  # noqa: BLE001 — an unreadable chain is a finding
+        return (f"无法核验: {type(exc).__name__}: {exc}", "miss")
+
+    detail = (
+        f"valid={report.valid} events={report.events} "
+        f"tail={'truncated' if report.truncated_tail else 'intact'} "
+        f"keyed={report.keyed}"
+    )
+    return (detail, "ok" if report.valid else "miss")
+
+
+def _check_compaction(events: Sequence[Event]) -> tuple[str, str]:
+    compacted = _payloads(events, "context_compacted")
+    if not compacted:
+        return ("本次未压缩（未触发）", "n/a")
+    kept = sum(len(item.get("kept") or ()) for item in compacted)
+    return (f"{len(compacted)} 次压缩, 保留 {kept} 条决策", "ok")
+
+
+def _check_children(events: Sequence[Event]) -> tuple[str, str]:
+    started = _payloads(events, "task_started")
+    if not started:
+        return ("没有 task_started", "miss")
+    child = [item for item in started if item.get("parent_task_id")]
+    if not child:
+        return ("本次没有子任务（未触发）", "n/a")
+    with_batch = sum(1 for item in child if item.get("batch_id"))
+    return (f"{len(child)} 个子任务, {with_batch} 个带 batch_id", "ok")
+
+
+def _check_prefix_cache(events: Sequence[Event]) -> tuple[str, str]:
+    usage = _payloads(events, "model_usage")
+    if not usage:
+        return ("没有用量记录（未触发）", "n/a")
+    reported = [item for item in usage if item.get("cache_hit_tokens")]
+    if not reported:
+        return ("提供方未报告缓存命中（未触发）", "n/a")
+    hits = sum(int(item.get("cache_hit_tokens") or 0) for item in reported)
+    prompts = sum(int(item.get("prompt_tokens") or 0) for item in reported) or 1
+    return (f"{len(reported)} 次命中, 约 {hits * 100 // prompts}% 前缀复用", "ok")
 
 
 CHECKS: tuple[Check, ...] = (
@@ -190,6 +232,10 @@ CHECKS: tuple[Check, ...] = (
     Check("自我进化（lesson）", ("lesson_proposed",), _check_lessons),
     Check("审批边界", ("user_approval",), _check_approvals),
     Check("用量记账", ("model_usage",), _check_usage),
+    Check("账本链完整性", ("ledger",), _check_chain),
+    Check("上下文压缩", ("context_compacted",), _check_compaction),
+    Check("子任务隔离", ("task_started",), _check_children),
+    Check("前缀缓存复用", ("model_usage",), _check_prefix_cache),
 )
 
 
@@ -201,7 +247,10 @@ def audit(path: Path) -> list[tuple[str, str, str]]:
     ]
     rows: list[tuple[str, str, str]] = []
     for check in CHECKS:
-        detail, state = check.predicate(events)
+        if check.name == "账本链完整性":
+            detail, state = check.predicate(events, path)
+        else:
+            detail, state = check.predicate(events)
         rows.append((check.name, detail, state))
     return rows
 
