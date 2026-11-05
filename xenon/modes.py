@@ -14,12 +14,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from xenon.kernel.strategies import LoopProfile
+from xenon.kernel.strategies import DEFAULT_PROFILE, LoopProfile
 
 DEFAULT_MODE = "direct"
 
 # Shared shapes, named once so modes cannot drift apart silently.
-_ACT_ONLY = LoopProfile()
+# ``direct`` is the default coding loop: plan → execute one step at a time →
+# check the step's facts → re-plan from the gaps (up to three rounds).  A user
+# no longer picks a paradigm; the other names stay as internal presets.
+_DEFAULT_LOOP = DEFAULT_PROFILE
 _PLAN_THEN_EXECUTE = LoopProfile(plan=True, step_scope=True, follow_plan=True)
 _PLAN_THEN_REACT = LoopProfile(plan=True, step_scope=True, step_calls=6)
 _REFLECT_ONCE = LoopProfile(reflect_rounds=1, reflect_calls=1)
@@ -58,15 +61,13 @@ class ModeSpec:
 MODE_CATALOG: dict[str, ModeSpec] = {
     "direct": ModeSpec(
         name="direct",
-        description="直接对话，不使用特殊阶段（默认模式）",
-        # Direct chat is still a REPL branch; a direct tool turn runs the bare
-        # react phase.
-        loop=_ACT_ONLY,
+        description="默认单循环：先计划，再逐步执行并按事实校验",
+        loop=_DEFAULT_LOOP,
     ),
     "react": ModeSpec(
         name="react",
-        description="（别名）与 direct 同一套阶段：单循环、每步一次动作",
-        loop=_ACT_ONLY,
+        description="（别名）与 direct 同一套单循环",
+        loop=_DEFAULT_LOOP,
         alias_of="direct",
     ),
     "plan-execute": ModeSpec(

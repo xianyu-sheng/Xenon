@@ -41,11 +41,49 @@ from xenon.repl.runtime_adapter import (
 
 
 class FakeClient:
+    """Scripted model.
+
+    The default loop is plan-first, so a plan call now precedes every tool
+    script.  Answering it here keeps each test's script about the behaviour it
+    is actually testing, instead of prepending a plan to eight lists.
+    """
+
     def __init__(self, responses: list[str]) -> None:
         self.responses = list(responses)
+        self.last_answer = ""
 
     def __call__(self, model_id, messages, **kwargs):
-        return self.responses.pop(0)
+        texts = [
+            str(item.get("content") or "")
+            for item in messages
+            if isinstance(item, dict)
+        ]
+        if any("Return exactly one JSON plan." in text for text in texts):
+            if self.responses and '"steps"' in self.responses[0]:
+                return self.responses.pop(0)
+            return _plan_for_actions(max(1, len(self.responses)))
+        if any("JSON step review" in text for text in texts):
+            # A reviewer that finds nothing to fix.
+            return json.dumps({"review": None})
+        if any("Return exactly one JSON reflection" in text for text in texts):
+            return json.dumps({"reflect": None})
+        if self.responses:
+            item = self.responses.pop(0)
+            try:
+                self.last_answer = str(json.loads(item).get("answer") or "")
+            except (ValueError, AttributeError):
+                pass
+            return item
+        # A step close and the finisher may both ask once more than the test
+        # scripted.  The finisher synthesizes from the working set, so it
+        # repeats the last step answer rather than inventing a new one.
+        return json.dumps(
+            {
+                "action": "finish",
+                "answer": self.last_answer or "done",
+                "claims": [],
+            }
+        )
 
 
 def _responses() -> list[str]:
@@ -77,6 +115,26 @@ def _responses() -> list[str]:
             }
         ),
     ]
+
+
+def _plan_for_actions(count: int) -> str:
+    """A plan with one free-form step per scripted action.
+
+    The default loop is plan-first, so a scripted model must answer the plan
+    call before it gets to the actions a test cares about.  One step per action
+    keeps the script order and lets each step close on its own receipt.
+    """
+
+    return json.dumps(
+        {
+            "objective": "scripted",
+            "analysis": "scripted",
+            "steps": [
+                {"id": index + 1, "kind": "execute", "expects": []}
+                for index in range(max(1, count))
+            ],
+        }
+    )
 
 
 class FakeStatus:
@@ -1079,13 +1137,10 @@ def test_run_kernel_turn_denies_shell_approval(tmp_path: Path) -> None:
                     "params": {"command": "echo hello"},
                 }
             ),
-            json.dumps(
-                {
-                    "action": "finish",
-                    "answer": "echo was not run",
-                    "claims": [],
-                }
-            ),
+            # Shell proposal, step close, then the finisher's answer: the
+            # denied shell does not prove the step, so closing it asks once.
+            json.dumps({"action": "think", "text": "the shell was refused"}),
+            json.dumps({"action": "finish", "answer": "echo was not run", "claims": []}),
         ]
     )
     run = run_kernel_turn(

@@ -16,8 +16,8 @@ from xenon.modes import (
 
 # name -> (plan, plan_review, step_scope, follow_plan, reflect_rounds)
 EXPECTED = {
-    "direct": (False, False, False, False, 0),
-    "react": (False, False, False, False, 0),
+    "direct": (True, False, True, False, 0),
+    "react": (True, False, True, False, 0),
     "plan-execute": (True, False, True, True, 0),
     "reflection": (False, False, False, False, 1),
     "plan-react": (True, False, True, False, 0),
