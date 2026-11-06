@@ -21,10 +21,14 @@ class TestLLMClientAuthTokenFallback:
         env = {
             "ANTHROPIC_AUTH_TOKEN": "claude-code-token",
         }
-        with patch.dict(os.environ, env, clear=True):
-            os.environ.pop("ANTHROPIC_API_KEY", None)
-            creds = _load_credentials()
-            assert creds.get("anthropic") == "claude-code-token"
+        # The developer's real credentials.yaml must not leak into this test:
+        # it is exactly the file this assertion is about.
+        with patch("xenon.utils.llm_client._CREDENTIALS_PATH") as mp:
+            mp.exists.return_value = False
+            with patch.dict(os.environ, env, clear=True):
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+                creds = _load_credentials()
+                assert creds.get("anthropic") == "claude-code-token"
 
     def test_anthropic_api_key_still_priority(self):
         """ANTHROPIC_API_KEY 仍优先于 ANTHROPIC_AUTH_TOKEN。"""
@@ -32,9 +36,11 @@ class TestLLMClientAuthTokenFallback:
             "ANTHROPIC_API_KEY": "primary",
             "ANTHROPIC_AUTH_TOKEN": "fallback",
         }
-        with patch.dict(os.environ, env, clear=True):
-            creds = _load_credentials()
-            assert creds.get("anthropic") == "primary"
+        with patch("xenon.utils.llm_client._CREDENTIALS_PATH") as mp:
+            mp.exists.return_value = False
+            with patch.dict(os.environ, env, clear=True):
+                creds = _load_credentials()
+                assert creds.get("anthropic") == "primary"
 
     def test_auth_token_does_not_pollute_other_providers(self):
         """ANTHROPIC_AUTH_TOKEN 只影响 anthropic，不污染其他厂商。
@@ -72,6 +78,19 @@ class TestLLMClientAuthTokenFallback:
                 loaded = _load_credentials()
                 assert loaded["openai"] == "yaml-key"
                 assert loaded["deepseek"] == "env-key"
+
+    @pytest.fixture(autouse=True)
+    def _no_real_credentials(self):
+        """Never read the developer's ~/.xenon/credentials.yaml here.
+
+        These tests are about env fallbacks; a real file would answer first and
+        make a missing-key assertion pass for the wrong reason.
+        """
+        with patch("xenon.utils.llm_client._CREDENTIALS_PATH") as mp:
+            mp.exists.return_value = False
+            with patch("xenon.utils.llm_transport._CREDENTIALS_PATH") as mp2:
+                mp2.exists.return_value = False
+                yield
 
     def test_build_endpoint_uses_anthropic_base_url_env(self):
         """build_endpoint 优先用 ANTHROPIC_BASE_URL env 而非 defaults。"""

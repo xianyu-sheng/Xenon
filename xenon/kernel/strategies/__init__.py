@@ -165,11 +165,20 @@ class LoopStrategy:
     def propose(self, view: ModelView) -> Action:
         if self.profile.plan and not self._submitted and not self.resumed:
             self._submitted = True
+            # Submit even an empty plan: the ledger has to record that the
+            # planner said "no tool work", otherwise the runtime cannot tell a
+            # conversation from a run that did nothing.
             return SubmitPlan(self._review_plan(view, self.planner(view)))
         if self.profile.step_scope and view.active_step is not None:
             return self._step_turn(view)
         if self.profile.plan and view.active_step is None and not view.steps:
-            # An empty/invalid plan must not trigger a model call.
+            # No plan and no steps: the task needed no tool, so the answer is
+            # the whole deliverable.  Asking the finisher once is what turns
+            # "empty plan" into an answer instead of an empty turn.  When it
+            # already answered (the empty-plan path above), this is a no-op.
+            if self.finisher is not None and not self._finished:
+                self._finished = True
+                return self.finisher(view)
             return Finish(self.finish_text)
         return self._reflect_or_finish(view, self._task_action(view))
 

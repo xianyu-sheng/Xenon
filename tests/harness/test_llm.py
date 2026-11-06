@@ -582,8 +582,16 @@ def test_resume_task_executes_an_approved_plan_in_the_same_ledger(
 
 
 def test_llm_plan_invalid_json_fails_closed(tmp_path: Path) -> None:
+    """An empty plan is recorded, never executed.
+
+    The planner's answer is submitted to the ledger (so the run can explain
+    why nothing ran), and the follow-up asks for a plain answer instead of
+    starting a step.  What must never happen is a tool call or a plan step.
+    """
     _repo(tmp_path)
-    client = FakeClient(['{"steps":[]}'])
+    client = FakeClient(
+        ['{"steps":[]}', '{"action":"finish","answer":"no tool work","claims":[]}']
+    )
     run = run_task(
         "add a function and test it",
         strategy=build_llm_loop_strategy(
@@ -597,10 +605,11 @@ def test_llm_plan_invalid_json_fails_closed(tmp_path: Path) -> None:
         finalize=False,
     )
 
-    assert run.result.accepted is False
     events = Ledger(run.ledger_path, "plan-llm-bad").read()
     assert not any(event.kind.value == "step_started" for event in events)
     assert not any(event.kind.value == "tool_receipt" for event in events)
+    assert any(event.kind.value == "plan_proposed" for event in events)
+    assert run.result.answer == "no tool work"
 
 
 def test_build_plan_messages_includes_schema() -> None:

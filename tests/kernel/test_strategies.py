@@ -509,3 +509,29 @@ def test_ask_user_inside_a_step_is_preserved() -> None:
     strategy.propose(_view())
 
     assert isinstance(strategy.propose(_view(steps=(step,), active=step)), AskUser)
+
+
+def test_an_empty_plan_answers_instead_of_failing_the_turn() -> None:
+    """A conversational task legitimately gets an empty plan.
+
+    A real provider returned `steps: []` for "reply with ok" about one call in
+    three; the turn then died with "no successful tool receipt" instead of
+    answering.  The answer is still unverified — only the turn survives.
+    """
+
+    strategy = LoopStrategy(
+        LoopProfile(plan=True),
+        actor=lambda view: Finish("unused"),
+        planner=lambda view: PlanProposal(steps=(), analysis="nothing to do"),
+        finisher=lambda view: Finish("ok"),
+    )
+
+    action = strategy.propose(_view())
+    # The empty plan is recorded (the ledger must show why nothing ran), and
+    # the follow-up turn asks for the answer instead of ending the run.
+    assert isinstance(action, SubmitPlan)
+    assert action.plan.steps == ()
+
+    answer = strategy.propose(_view())
+    assert isinstance(answer, Finish)
+    assert answer.answer == "ok"

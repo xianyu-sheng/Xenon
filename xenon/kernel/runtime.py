@@ -229,6 +229,9 @@ class LoopRuntime:
         #: Plan rounds started in this turn (1-based).  A task-level audit with
         #: gaps starts the next round until ``max_plan_rounds``.
         self._plan_rounds = 0
+        #: The last Finish answer, so a turn that never needed a tool can be
+        #: told apart from a turn that did nothing.
+        self._last_answer = ""
         self._stuck = StuckDetector()
         self._clock: Any = time.time
         self._last_progress_at = self._clock()
@@ -641,6 +644,7 @@ class LoopRuntime:
                 continue
 
             if isinstance(action, Finish):
+                self._last_answer = action.answer
                 result = self._finish(action, strategy)
                 if result is not None:
                     return result
@@ -1409,6 +1413,10 @@ class LoopRuntime:
             and not claims
             and not self._has_successful_receipt()
             and not self._has_workspace_evidence()
+            # A task that never needed a tool is a conversation, not a failed
+            # delivery: the plan came back empty and the model answered.  The
+            # answer is still UNVERIFIED; there is simply no receipt to demand.
+            and not self._answered_without_actions()
         ):
             no_evidence = Verdict(
                 obligation_id="task-evidence",
@@ -1424,6 +1432,51 @@ class LoopRuntime:
                 evidence=EvidenceStatus.UNVERIFIED,
                 # The answer is still shown; the missing receipt is the
                 # disclosure.  An empty screen was the old "block" (#423).
+                answer=action.answer,
+                claims=claims,
+            )
+
+        conversational = self._answered_without_actions() and bool(action.answer)
+        if conversational:
+            # Nothing to verify because nothing was asked to happen.  Deliver
+            # the answer with UNVERIFIED evidence: the conversation happened,
+            # and no receipt is missing because none was ever needed.
+            self._transition(TaskPhase.AUDITING, "conversational answer")
+            self._append(
+                EventKind.AUDIT_REPORTED,
+                EventSource.GATE,
+                {
+                    "scope": "final",
+                    "verdicts": [],
+                    "claims": [],
+                    "resolutions": [],
+                    "coverage": [],
+                    "gaps": [],
+                    "debt": [],
+                    "reason": "no tool work was required",
+                },
+            )
+            self._append(
+                EventKind.DELIVERED,
+                EventSource.RUNTIME,
+                {
+                    "answer": action.answer,
+                    "claims": [],
+                    "verdicts": [],
+                    "finalize": {"commit": None, "verified_paths": []},
+                },
+            )
+            self._transition(TaskPhase.DELIVERING, "conversational answer")
+            self._transition(TaskPhase.DELIVERED, "conversational answer")
+            self._append(
+                EventKind.FINALIZED,
+                EventSource.RUNTIME,
+                {"commit": None, "evidence_status": "unverified"},
+            )
+            self._transition(TaskPhase.FINALIZED, "finalized")
+            return self._result(
+                accepted=True,
+                evidence=EvidenceStatus.UNVERIFIED,
                 answer=action.answer,
                 claims=claims,
             )
@@ -3033,6 +3086,40 @@ class LoopRuntime:
             if isinstance(payload, dict) and payload.get("status") == "ok":
                 return True
         return False
+
+    def _answered_without_actions(self) -> bool:
+        """The plan came back empty and the model still answered.
+
+        Only an explicit empty plan means "this task needs no tool".  A run
+        that proposed steps but executed nothing is a failed delivery and must
+        stay one; the difference is recorded, not inferred from the answer.
+        """
+
+        if any(
+            event.seq > self._run_start_seq
+            for event in self._ledger.read(EventKind.TOOL_RECEIPT)
+        ):
+            return False
+        if not self._last_answer.strip():
+            return False
+        proposed = [
+            event
+            for event in self._ledger.read(EventKind.PLAN_PROPOSED)
+            if event.seq > self._run_start_seq
+        ]
+        if not proposed:
+            return False
+        # Empty, or reasoning-only: both are the planner saying "no tool work".
+        # A step may still carry a capability (models like to attach `read`
+        # with no target); what matters is that it declares nothing to change
+        # and expects nothing to be proven.
+        for event in proposed:
+            for step in (event.payload.get("plan") or {}).get("steps") or []:
+                if str(step.get("kind") or "") not in {"think", ""}:
+                    return False
+                if step.get("expects"):
+                    return False
+        return True
 
     def _baseline_claim(self, claim: Claim) -> Claim:
         if claim.since_seq:
