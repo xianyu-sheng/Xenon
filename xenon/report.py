@@ -430,6 +430,13 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"**Phase:** `{status.get('phase', '')}` · "
         f"**Commit:** `{status.get('commit') or 'none'}`",
         "",
+        (
+            "> `Receipts` describes the tool calls that ran. `Answer` describes "
+            "whether the result is tied to a claim the ledger can bind — a run "
+            "with verified receipts and no claim still has an unverified "
+            "answer."
+        ),
+        "",
         "## Task",
         "",
         f"- Objective: {task.get('objective', '')}",
