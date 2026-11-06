@@ -1523,9 +1523,13 @@ class LoopRuntime:
                 for claim in claims
             )
         else:
-            checks = (
-                self._controller.audit(None, self._readonly, tuple(self._debt)),
-            )
+            # No claim means the model asserted nothing beyond "done".  Do not
+            # synthesise a task verdict here: V2 coverage below is what says
+            # whether the task's obligations were met, and the per-step V1
+            # verdicts already record whether the work happened.  A made-up
+            # verdict used to both block the commit and, in the zero-obligation
+            # case, report the run as verified.
+            checks = ()
         self._verdicts.extend(checks)
 
         resolutions = tuple(
@@ -1635,7 +1639,7 @@ class LoopRuntime:
             )
             self._transition(TaskPhase.DELIVERED, "accepted")
             sha = finalize.commit_sha or self._last_commit_sha()
-            evidence = self._evidence_status(checks)
+            evidence = self._evidence_status(self._evidence_verdicts(checks))
             self._append(
                 EventKind.FINALIZED,
                 EventSource.RUNTIME,
@@ -1699,7 +1703,7 @@ class LoopRuntime:
             },
         )
         self._transition(TaskPhase.DELIVERING, reason)
-        evidence = self._evidence_status(checks)
+        evidence = self._evidence_status(self._evidence_verdicts(checks))
         self._transition(TaskPhase.DELIVERED, "delivered with gaps")
         self._append(
             EventKind.FINALIZED,
@@ -2773,6 +2777,18 @@ class LoopRuntime:
             },
         )
 
+    def _evidence_verdicts(self, checks: Sequence[Verdict]) -> tuple[Verdict, ...]:
+        """Every verdict that speaks to this run's evidence.
+
+        The finish claim's checks are not the whole picture: a plan can be
+        carried entirely by the per-step V1 verdicts with no claim at all.
+        Reading only `checks` meant a run with real, fact-bound steps and an
+        empty claim list was labelled from an empty set.
+        """
+
+        latest = _latest_verdict_map(self._verdicts)
+        return tuple(latest.values()) or tuple(checks)
+
     def _evidence_status(self, checks: Sequence[Verdict]) -> EvidenceStatus:
         assert self._spec is not None
         if self._spec.mode is TaskMode.CHAT:
@@ -2783,15 +2799,17 @@ class LoopRuntime:
             return EvidenceStatus.CONTRADICTED
         if self._debt:
             return EvidenceStatus.PARTIAL
+        # Evidence comes from every verdict this run recorded, not only the
+        # finish claim's: a run whose only confirmation is "the model said
+        # done" has not established anything, while one where each step
+        # resolved against real facts has.  An empty set must never count as
+        # satisfied — zero coverage is not full coverage.
         if checks and all(
-            item.status is VerdictStatus.SATISFIED for item in checks
+            item.status is VerdictStatus.SATISFIED
+            and item.fact_ids
+            and not getattr(item, "from_proposal", False)
+            for item in checks
         ):
-            if any(getattr(item, "from_proposal", False) for item in checks):
-                # A proposal pointed at real facts; whether those facts *prove*
-                # the requirement is a judgement, so this stays PARTIAL.  This
-                # is the difference between "the harness verified it" and "the
-                # model said these receipts cover it".
-                return EvidenceStatus.PARTIAL
             return EvidenceStatus.VERIFIED
         return EvidenceStatus.PARTIAL
 

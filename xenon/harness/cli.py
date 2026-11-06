@@ -81,9 +81,12 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _task_text(args: argparse.Namespace) -> str | None:
+    # `--task` is the explicit form, so it wins.  Reading the positional first
+    # meant `xenon ... cli exec --task "real work"` ran the literal word
+    # "exec" as the objective, and the model dutifully planned around it.
     value = (
-        getattr(args, "task", None)
-        or getattr(args, "task_option", None)
+        getattr(args, "task_option", None)
+        or getattr(args, "task", None)
         or getattr(args, "workflow_path", None)
     )
     text = str(value).strip() if value is not None else ""

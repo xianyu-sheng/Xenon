@@ -494,17 +494,18 @@ class VerificationController:
         self, claim: Claim | None, ledger: Any, debt: Sequence[Debt]
     ) -> Verdict:
         if claim is None:
-            if debt:
-                return Verdict(
-                    obligation_id="task",
-                    stage=VerificationStage.V2,
-                    status=VerdictStatus.UNVERIFIABLE,
-                    reason="open debt",
-                )
+            # No claim means nothing was asserted, so there is nothing to
+            # confirm.  This used to return SATISFIED, which made a task that
+            # could not express a single verifiable obligation report itself as
+            # verified: an unknown objective ("exec"), a prose-only ask, or an
+            # intake that derived zero obligations.  Satisfaction with no
+            # proposition is not evidence — an empty set trivially satisfies
+            # "all are satisfied".
             return Verdict(
                 obligation_id="task",
                 stage=VerificationStage.V2,
-                status=VerdictStatus.SATISFIED,
+                status=VerdictStatus.UNVERIFIABLE,
+                reason="open debt" if debt else "no verifiable claim",
             )
         resolution = self.resolve(claim, ledger)
         return self._resolution_verdict(
