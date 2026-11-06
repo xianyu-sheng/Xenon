@@ -1101,6 +1101,24 @@ def _console_for(repl: Any) -> Any:
     return repl_console
 
 
+_EVIDENCE_LABELS = {
+    "verified": "已验证",
+    "partial": "部分验证",
+    "unverified": "未验证",
+    "abstained": "无法验证",
+    "contradicted": "与事实冲突",
+}
+
+
+def _evidence_label(status: str, accepted: bool) -> str:
+    """The short label shown next to the kernel answer."""
+
+    if not accepted:
+        # Only execution brakes leave accepted=False now.
+        return "已停止"
+    return _EVIDENCE_LABELS.get(status, status or "未验证")
+
+
 def _clear_legacy_task_state(repl: Any) -> None:
     """Drop the pre-kernel task-state bag; the ledger is authoritative."""
 
@@ -1214,17 +1232,20 @@ def _render_kernel_result(
     elif answer.startswith("等待你的回答："):
         title = "Kernel · 等待回答"
     else:
-        title = "Kernel" if accepted else "Kernel · blocked"
+        # Evidence is a label, not a verdict on the run.  The answer is shown
+        # with how much of it the ledger can stand behind; only an execution
+        # brake (loop, timeout, cancel) still reads as "stopped".
+        title = f"Kernel · {_evidence_label(result.evidence_status.value, accepted)}"
     render(answer, title=title)
     if planned:
         console.print(
             "[dim]· 计划已接受，执行等待确认；本轮未写盘。[/dim]"
         )
         console.print(f"[dim]ledger: {run.ledger_path}[/dim]")
-    elif not accepted:
+    elif result.debt:
         for item in result.debt[:5]:
             console.print(
-                f"[yellow]· {item.obligation.kind.value}: "
+                f"[yellow]· 未完成 {item.obligation.kind.value}: "
                 f"{item.reason or item.obligation.id}[/yellow]"
             )
         console.print(f"[dim]ledger: {run.ledger_path}[/dim]")

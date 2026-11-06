@@ -59,6 +59,11 @@ def _parser() -> argparse.ArgumentParser:
         help="deliver despite unverified gaps (evidence stays PARTIAL)",
     )
     parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit 1 unless the answer is verified (CI gate)",
+    )
+    parser.add_argument(
         "--permission",
         choices=[item.value for item in PermissionMode],
         default=PermissionMode.AUTO_EDIT.value,
@@ -165,12 +170,17 @@ def run_from_args(args: argparse.Namespace) -> int:
     except OSError:
         pass
     print(
-        f"{result.phase.value} accepted={result.accepted} "
-        f"sha={result.finalize_sha or '-'} debt={len(result.debt)} "
+        f"{result.phase.value} evidence={result.evidence_status.value} "
+        f"sha={result.finalize_sha or '-'} gaps={len(result.debt)} "
         f"ledger={run.ledger_path}",
         file=sys.stderr,
     )
-    return 0 if result.accepted else 1
+    # Evidence is a label, not a gate: a completed run exits 0 even with gaps.
+    # `--strict` restores the gate for CI, where a non-verified answer should
+    # fail the job.
+    if getattr(args, "strict", False) and result.evidence_status.value != "verified":
+        return 1
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

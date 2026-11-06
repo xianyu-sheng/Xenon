@@ -826,10 +826,20 @@ class ModelView:
 
 
 class EvidenceStatus(str, Enum):
+    """How much of the answer the ledger can stand behind.
+
+    This is a label, not a verdict on the run: a run that produced an answer
+    with gaps is still a run that produced an answer.
+    """
+
     VERIFIED = "verified"
     PARTIAL = "partial"
     UNVERIFIED = "unverified"
     ABSTAINED = "abstained"
+    #: The model asserted something the facts refuse (a claim with no matching
+    #: receipt, or content that changed after verification).  This is the only
+    #: status worth raising a voice about, and it is still a label.
+    CONTRADICTED = "contradicted"
 
 
 @dataclass(frozen=True, slots=True)

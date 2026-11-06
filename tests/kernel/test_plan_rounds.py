@@ -100,7 +100,9 @@ def test_three_rounds_then_deliver_with_gaps(tmp_path: Path) -> None:
 
     assert rounds["planner"] == 3, "the runtime must re-plan, not finish early"
     assert result.metrics["plan_rounds"] == 3.0
-    assert result.phase is TaskPhase.BLOCKED
+    # The turn ends normally; the gaps are the label, not a stop.
+    assert result.phase is TaskPhase.FINALIZED
+    assert result.evidence_status.value == "partial"
     # The answer survives; the unmet b.py gap is disclosed next to it.
     assert result.answer == "done"
     assert any(item.obligation.id == "o-b" for item in result.debt)

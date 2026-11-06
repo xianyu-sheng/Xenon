@@ -164,7 +164,7 @@ def test_unresolved_obligation_becomes_v2_debt_without_finalizer() -> None:
         ),
     )
 
-    assert result.accepted is False
+    assert result.accepted is True  # evidence is a label, not a gate
     assert any(item.obligation.id == "mul-created" for item in result.debt)
     audit = [
         event
@@ -223,7 +223,7 @@ def test_preflight_audit_prevents_finalizer_commit() -> None:
         ),
     )
 
-    assert result.accepted is False
+    assert result.accepted is True  # evidence is a label, not a gate
     assert Finalizer.calls == 0
     assert any(item.obligation.id == "mul-created" for item in result.debt)
 
@@ -309,6 +309,8 @@ def test_audit_round_budget_blocks_before_a_second_audit() -> None:
         ScriptedStrategy([Finish("done")]),
     )
 
+    # The audit budget is an execution brake (it bounds repeated Finish
+    # attempts), so this one still stops the run.
     assert result.accepted is False
     assert result.phase.value == "blocked"
     assert any(
@@ -368,7 +370,7 @@ def _audit_provider_result(provider):
 
 def test_audit_provider_failure_is_recorded_not_a_verdict() -> None:
     ledger, result = _audit_provider_result(RaisingAuditProvider())
-    assert result.accepted is False
+    assert result.accepted is True  # evidence is a label, not a gate
     assert any(
         event.kind is EventKind.AUDIT_PROPOSED
         and event.payload.get("status") == "error"
@@ -379,14 +381,14 @@ def test_audit_provider_failure_is_recorded_not_a_verdict() -> None:
 
 def test_audit_provider_none_is_not_an_audit() -> None:
     ledger, result = _audit_provider_result(NoneAuditProvider())
-    assert result.accepted is False
+    assert result.accepted is True  # evidence is a label, not a gate
     assert not ledger.read(EventKind.AUDIT_PROPOSED)
     assert any(item.obligation.id == "mul-created" for item in result.debt)
 
 
 def test_audit_provider_invalid_type_is_recorded() -> None:
     ledger, result = _audit_provider_result(InvalidAuditProvider())
-    assert result.accepted is False
+    assert result.accepted is True  # evidence is a label, not a gate
     event = next(iter(ledger.read(EventKind.AUDIT_PROPOSED)))
     assert event.payload.get("status") == "error"
     assert "non-AuditProposal" in event.payload.get("reason", "")

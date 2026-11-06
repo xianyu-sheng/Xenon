@@ -224,7 +224,11 @@ def test_lying_strategy_cannot_deliver() -> None:
 
     result = runtime.run(_calc_spec(), strategy)
 
-    assert result.accepted is False
+    # The run completes and the answer comes back — evidence never stops a run.
+    assert result.accepted is True
+    assert result.answer == "I fixed it"
+    # But the claim is refuted, so the label says so.
+    assert result.evidence_status is EvidenceStatus.CONTRADICTED
     assert result.debt, "a claim without a fact must become debt"
     assert not ledger.read(EventKind.TOOL_RECEIPT), "no tool should have run"
 
@@ -253,9 +257,9 @@ def test_reflection_cannot_launder_an_unverified_claim() -> None:
 
     result = runtime.run(_calc_spec(), strategy)
 
-    assert result.accepted is False
+    # Reflection cannot turn an unbound claim into a verified one.
+    assert result.evidence_status is EvidenceStatus.CONTRADICTED
     assert result.debt, "反思不能关闭未绑定的义务"
-    assert result.phase is not TaskPhase.DELIVERED
 
 
 def test_reflection_can_add_a_corrective_tool_call() -> None:

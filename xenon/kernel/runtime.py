@@ -23,6 +23,7 @@ from xenon.kernel.contracts import (
     BindingStatus,
     CallTool,
     Claim,
+    ControlDecision,
     ControlDecisionKind,
     Debt,
     EffectKind,
@@ -1426,12 +1427,45 @@ class LoopRuntime:
             )
             self._verdicts.append(no_evidence)
             self._sync_debt((no_evidence,))
-            self._transition(TaskPhase.BLOCKED, no_evidence.reason)
+            # A run that did nothing has nothing to stand behind: finish
+            # normally with an UNVERIFIED label.  "No evidence" is a finding,
+            # not a reason to leave the turn half-finished.
+            self._transition(TaskPhase.AUDITING, no_evidence.reason)
+            self._append(
+                EventKind.AUDIT_REPORTED,
+                EventSource.GATE,
+                {
+                    "scope": "final",
+                    "verdicts": [_verdict_payload(no_evidence)],
+                    "claims": [_claim_payload(item) for item in claims],
+                    "resolutions": [],
+                    "coverage": [],
+                    "gaps": [],
+                    "debt": [item.obligation.id for item in self._debt],
+                },
+            )
+            self._append(
+                EventKind.DELIVERED,
+                EventSource.RUNTIME,
+                {
+                    "answer": action.answer,
+                    "claims": [_claim_payload(item) for item in claims],
+                    "verdicts": [_verdict_payload(no_evidence)],
+                    "finalize": {"commit": None, "verified_paths": []},
+                    "reason": no_evidence.reason,
+                },
+            )
+            self._transition(TaskPhase.DELIVERING, no_evidence.reason)
+            self._transition(TaskPhase.DELIVERED, "finished without evidence")
+            self._append(
+                EventKind.FINALIZED,
+                EventSource.RUNTIME,
+                {"commit": None, "evidence_status": "unverified"},
+            )
+            self._transition(TaskPhase.FINALIZED, "finalized")
             return self._result(
-                accepted=False,
+                accepted=True,
                 evidence=EvidenceStatus.UNVERIFIED,
-                # The answer is still shown; the missing receipt is the
-                # disclosure.  An empty screen was the old "block" (#423).
                 answer=action.answer,
                 claims=claims,
             )
@@ -1574,6 +1608,13 @@ class LoopRuntime:
                 if rollback_block is not None:
                     return rollback_block
 
+        if decision.kind is not ControlDecisionKind.DELIVER:
+            # Evidence is a label, not a gate.  The run produced an answer and
+            # the gaps are recorded; the turn ends normally and the answer is
+            # returned with its evidence status.  Only execution brakes (loop,
+            # timeout, cancel) stop a run below.
+            return self._deliver_with_gaps(action, claims, resolutions, checks, decision)
+
         if decision.kind is ControlDecisionKind.DELIVER:
             assert self._spec is not None
             finalize = self._finalize_decision
@@ -1627,33 +1668,52 @@ class LoopRuntime:
             self._transition(TaskPhase.RUNNING, "audit requested more work")
             return None
 
-        if decision.kind is ControlDecisionKind.ABSTAIN:
-            self._transition(TaskPhase.BLOCKED, decision.reason or "abstained")
-            return self._result(
-                accepted=False,
-                evidence=EvidenceStatus.ABSTAINED,
-                # The model's answer is still the answer.  A gap in evidence
-                # must be disclosed next to it, never replace it with an empty
-                # screen doing to be a delivery (#423).
-                answer=action.answer,
-                claims=claims,
-                resolutions=resolutions,
-            )
+        return self._deliver_with_gaps(action, claims, resolutions, checks, decision)
 
-        if decision.kind is ControlDecisionKind.ABORT:
-            self._transition(TaskPhase.ABORTED, decision.reason or "aborted")
-            return self._result(
-                accepted=False,
-                evidence=EvidenceStatus.UNVERIFIED,
-                answer=action.answer,
-                claims=claims,
-                resolutions=resolutions,
-            )
+    def _deliver_with_gaps(
+        self,
+        action: Finish,
+        claims: Sequence[Claim],
+        resolutions: Sequence[Resolution],
+        checks: Sequence[Verdict],
+        decision: ControlDecision,
+    ) -> TaskResult:
+        """End the turn normally and label the answer's evidence.
 
-        self._transition(TaskPhase.BLOCKED, decision.reason or "blocked")
+        The answer is the deliverable; gaps are recorded next to it.  This is
+        the difference between "the agent could not run" (an execution brake)
+        and "the agent ran, and some of what it says is unproven".
+        """
+
+        reason = decision.reason or decision.kind.value
+        self._append(
+            EventKind.DELIVERED,
+            EventSource.RUNTIME,
+            {
+                "answer": action.answer,
+                "claims": [_claim_payload(item) for item in claims],
+                "verdicts": [_verdict_payload(item) for item in checks],
+                "finalize": {"commit": None, "verified_paths": []},
+                "gaps": list(decision.obligation_ids),
+                "reason": reason,
+            },
+        )
+        self._transition(TaskPhase.DELIVERING, reason)
+        evidence = self._evidence_status(checks)
+        self._transition(TaskPhase.DELIVERED, "delivered with gaps")
+        self._append(
+            EventKind.FINALIZED,
+            EventSource.RUNTIME,
+            {
+                "commit": None,
+                "evidence_status": evidence.value,
+                "gaps": list(decision.obligation_ids),
+            },
+        )
+        self._transition(TaskPhase.FINALIZED, "finalized")
         return self._result(
-            accepted=False,
-            evidence=EvidenceStatus.UNVERIFIED,
+            accepted=True,
+            evidence=evidence,
             answer=action.answer,
             claims=claims,
             resolutions=resolutions,
@@ -1791,10 +1851,12 @@ class LoopRuntime:
         )
         self._verdicts.append(verdict)
         self._sync_debt((verdict,))
+        # A failed rollback is serious, but it is still a finding: the turn
+        # finishes and the residue is disclosed with a CONTRADICTED label.
         self._transition(TaskPhase.BLOCKED, verdict.reason)
         return self._result(
-            accepted=False,
-            evidence=EvidenceStatus.UNVERIFIED,
+            accepted=True,
+            evidence=EvidenceStatus.CONTRADICTED,
         )
 
     def _preflight_delivery(self, claims: Sequence[Claim]) -> bool:
@@ -2715,6 +2777,10 @@ class LoopRuntime:
         assert self._spec is not None
         if self._spec.mode is TaskMode.CHAT:
             return EvidenceStatus.UNVERIFIED
+        # A claim the facts actively refuse is different from a gap: the answer
+        # asserts something untrue, rather than being incomplete.
+        if self._contradicted_claims():
+            return EvidenceStatus.CONTRADICTED
         if self._debt:
             return EvidenceStatus.PARTIAL
         if checks and all(
@@ -2728,6 +2794,22 @@ class LoopRuntime:
                 return EvidenceStatus.PARTIAL
             return EvidenceStatus.VERIFIED
         return EvidenceStatus.PARTIAL
+
+    def _contradicted_claims(self) -> tuple[str, ...]:
+        """Claims this run asserted that the ledger could not bind."""
+
+        ledger = getattr(self, "_ledger", None)
+        if ledger is None:
+            return ()
+        out: list[str] = []
+        for event in ledger.read(EventKind.CLAIM_RESOLVED):
+            if event.seq <= self._run_start_seq:
+                continue
+            if str(event.payload.get("status") or "") == "unresolved":
+                claim_id = str(event.payload.get("claim_id") or "")
+                if claim_id:
+                    out.append(claim_id)
+        return tuple(out)
 
     def _current_step_id(self) -> str | None:
         if self._active_step is None:

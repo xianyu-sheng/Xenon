@@ -233,6 +233,7 @@ def test_gateway_denial_writes_receipt_and_policy_event(tmp_path) -> None:
         ),
     )
 
+    # The strategy ends with a Think (no Finish), so the script aborts.
     assert result.accepted is False
     assert ledger.read(EventKind.TOOL_RECEIPT)
     assert any(
@@ -266,6 +267,7 @@ def test_veto_prevents_gateway_execution(tmp_path) -> None:
         ),
     )
 
+    # A strategy that runs out of actions aborts: that IS an execution stop.
     assert result.accepted is False
     assert result.phase.value == "aborted"
     assert not ledger.read(EventKind.TOOL_RECEIPT)
@@ -459,7 +461,7 @@ def test_runtime_approval_denial_does_not_execute_and_the_loop_continues(
     # No receipt means no verified delivery, but the answer is still shown and
     # the gap is disclosed instead of returning an empty blocked screen.
     assert result.answer == "done"
-    assert result.accepted is False
+    assert result.accepted is True
     assert result.evidence_status.value in {"partial", "unverified"}
     assert not policy.grants
     assert any(
@@ -478,7 +480,7 @@ def test_runtime_without_approver_does_not_execute(tmp_path) -> None:
     assert "no approval provider" in event.payload["reason"]
     assert not ledger.read(EventKind.TOOL_RECEIPT)
     assert result.answer == "done"
-    assert result.accepted is False
+    assert result.accepted is True
     assert not policy.grants
 
 
@@ -508,7 +510,8 @@ def test_approval_without_target_fails_closed(tmp_path) -> None:
         ),
     )
     assert result.answer == "done"
-    assert result.accepted is False
+    # The refused call never ran; the answer still comes back with a label.
+    assert result.accepted is True
     assert not ledger.read(EventKind.TOOL_RECEIPT)
     assert any(
         "could not be scoped" in str(event.payload.get("reason"))
@@ -526,7 +529,7 @@ def test_approval_provider_exception_fails_closed(tmp_path) -> None:
     assert "approval provider failed" in event.payload["reason"]
     assert not ledger.read(EventKind.TOOL_RECEIPT)
     assert result.answer == "done"
-    assert result.accepted is False
+    assert result.accepted is True
     assert not policy.grants
 
 

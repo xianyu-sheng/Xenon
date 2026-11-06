@@ -753,7 +753,8 @@ def test_run_kernel_turn_renders_and_updates_repl(tmp_path: Path) -> None:
     assert run.result.accepted is True
     assert repl.finished == [("passed", "kernel")]
     assert repl.rendered
-    assert repl.rendered[-1][0] == "Kernel"
+    # The title now carries the evidence label, not a bare "Kernel".
+    assert repl.rendered[-1][0].startswith("Kernel · ")
     assert "交付: commit" in repl.rendered[-1][1]
     assert repl.ctx_mgr.messages
     assert "交付: commit" in repl.ctx_mgr.messages[-1][0]
@@ -947,7 +948,8 @@ def test_result_summary_branches_and_blocked_rendering(tmp_path: Path) -> None:
         ConsoleCallback(verbose=False),
         model_id="test/fake",
     )
-    assert repl.rendered[-1][0] == "Kernel · blocked"
+    # A stopped run is an execution brake; a run with gaps is labelled.
+    assert repl.rendered[-1][0] == "Kernel · 已停止"
     assert repl.finished == [("degraded", "kernel")]
     assert repl.ctx_mgr.messages
     assert repl.agent_context.values["_task_state"] is None
@@ -1070,7 +1072,7 @@ def test_resume_kernel_plan_renders_execution_result(tmp_path: Path) -> None:
 
     assert run is not None, repl.ctx_mgr.messages
     assert run.result.accepted is True, run.result.debt
-    assert repl.rendered[-1][0] == "Kernel"
+    assert repl.rendered[-1][0].startswith("Kernel · ")
     assert repl.finished == [("passed", "kernel")]
 
 
@@ -1153,13 +1155,16 @@ def test_run_kernel_turn_denies_shell_approval(tmp_path: Path) -> None:
         client=client,
     )
     assert run is not None
-    assert run.result.accepted is False
+    # The refused shell never ran, but the turn completes with its answer;
+    # the gap is the label, not a stop.
+    assert run.result.accepted is True
     assert run.result.answer == "echo was not run"
-    assert run.result.phase.value == "blocked"
+    assert run.result.phase.value == "finalized"
+    assert run.result.evidence_status.value in {"partial", "unverified"}
     assert repl.confirm_calls == [
         ("bash", {"command": "echo hello"}, "CRITICAL")
     ]
-    assert repl.finished == [("degraded", "kernel")]
+    assert repl.finished == [("passed", "kernel")]
     assert repl.agent_context.values["_task_state"] is None
 
 

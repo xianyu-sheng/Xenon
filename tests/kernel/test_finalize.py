@@ -167,8 +167,9 @@ def test_runtime_blocks_delivery_when_commit_has_unverified_path() -> None:
         ),
     )
 
-    assert result.accepted is False
-    assert result.phase.value == "blocked"
+    # The commit is refused; the turn still ends with its answer and a label.
+    assert result.accepted is True
+    assert result.evidence_status.value == "partial"
     assert any(item.obligation.id == "finalize" for item in result.debt)
     assert any(
         event.kind is EventKind.FINALIZE_STARTED for event in ledger.read()

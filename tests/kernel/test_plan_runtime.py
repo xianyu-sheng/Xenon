@@ -259,8 +259,9 @@ def test_repair_budget_blocks_after_configured_attempts() -> None:
 
     result = runtime.run(spec, _follow(_verify_plan()))
 
-    assert result.accepted is False
-    assert result.phase.value == "blocked"
+    # A stuck step is released and the turn ends normally; the gap is a label.
+    assert result.accepted is True
+    assert result.evidence_status.value == "partial"
     assert gateway.calls == 3
     assert result.debt[0].attempts == 3
     assert any(
@@ -290,7 +291,8 @@ def test_zero_repair_budget_blocks_on_first_failure() -> None:
 
     result = runtime.run(spec, _follow(_verify_plan()))
 
-    assert result.accepted is False
+    assert result.accepted is True
+    assert result.evidence_status.value == "partial"
     assert gateway.calls == 1
 
 
@@ -321,8 +323,9 @@ def test_replan_budget_blocks_on_invalid_plan() -> None:
         ),
     )
 
-    assert result.accepted is False
-    assert result.phase.value == "blocked"
+    # Replan cap is advice, not a brake: the turn finishes with its gaps.
+    assert result.accepted is True
+    assert result.evidence_status.value in {"partial", "unverified"}
     assert any(
         event.kind is EventKind.CONTROL_DECISION
         and event.payload.get("decision") == "replan_cap_reached"
@@ -443,7 +446,9 @@ def test_plan_react_step_budget_is_visible_in_the_ledger() -> None:
     assert explored, "步内探索必须有账本记录"
     assert explored[0].payload["decision"] == "budget_exhausted"
     assert explored[0].payload["calls"] == 2
-    assert result.accepted is False, "步内预算耗尽不能变成交付"
+    # Budget exhaustion is a label: the turn ends with its gaps recorded.
+    assert result.accepted is True, "预算耗尽是标签，不是运行失败"
+    assert result.evidence_status.value == "partial"
     assert result.debt
 
 
@@ -474,7 +479,7 @@ def test_plan_react_never_closes_a_step_without_its_expectation() -> None:
         ),
     )
 
-    assert result.accepted is False
+    assert result.accepted is True
     assert result.debt
 
 
@@ -674,7 +679,7 @@ def test_step_review_cannot_bypass_an_unmet_expectation() -> None:
         ),
     )
 
-    assert result.accepted is False
+    assert result.accepted is True
     assert result.debt
 
 
@@ -696,7 +701,7 @@ def test_invalid_plan_is_rejected_without_crashing() -> None:
         _calc_spec(), ScriptedStrategy([SubmitPlan(bad), Finish("done")])
     )
 
-    assert result.accepted is False
+    assert result.accepted is True
     assert any(
         event.kind is EventKind.BINDING_FAILED
         and event.payload.get("status") == "invalid_plan"
@@ -731,7 +736,8 @@ def test_finalizer_does_not_commit_for_a_false_claim() -> None:
         ),
     )
 
-    assert result.accepted is False
+    assert result.accepted is True
+    assert result.evidence_status.value == "contradicted"
     assert finalizer.calls == 0
     assert result.finalize_sha is None
 
@@ -838,6 +844,7 @@ def test_plan_only_mode_stops_after_accepted_plan() -> None:
     )
 
     assert result.phase is TaskPhase.PLANNED
+    # plan-only is a deliberate stop: no execution was requested.
     assert result.accepted is False
     assert "edit, verify, record" in result.answer
     assert "1. edit · calc/add.py" in result.answer
@@ -1102,7 +1109,8 @@ def test_blocked_delivery_rolls_back_the_finalizer_commit() -> None:
         ),
     )
 
-    assert result.accepted is False
+    # The bad commit is rolled back; the turn itself still completes.
+    assert result.accepted is True
     assert finalizer.rolled_back == ["def5678"]
     from xenon.ledger.projections import project_task_state
 
@@ -1182,7 +1190,7 @@ def test_cyclic_plan_is_rejected() -> None:
         ),
     )
 
-    assert result.accepted is False
+    assert result.accepted is True
     assert any(
         event.kind is EventKind.BINDING_FAILED
         and event.payload.get("status") == "invalid_plan"
@@ -1220,8 +1228,8 @@ def test_finishing_before_a_plan_step_blocks_delivery() -> None:
 
     result = runtime.run(_calc_spec(), script)
 
-    assert result.accepted is False
-    assert result.phase.value == "blocked"
+    assert result.accepted is True
+    assert result.evidence_status.value == "partial"
     assert any(item.obligation.id == "test-1" for item in result.debt)
     assert any(
         event.kind is EventKind.DEBT_OPENED
@@ -1236,10 +1244,10 @@ def test_finish_without_any_evidence_does_not_deliver() -> None:
         _calc_spec(), ScriptedStrategy([Finish("all done")])
     )
 
-    assert result.accepted is False
-    assert result.phase.value == "blocked"
+    # A run with no evidence finishes with an UNVERIFIED label, not a block.
+    assert result.accepted is True
+    assert result.phase.value == "finalized"
     assert result.debt
-    # The answer is disclosed with the gap instead of being thrown away.
     assert result.answer == "all done"
     assert result.evidence_status.value == "unverified"
 
@@ -1284,7 +1292,8 @@ def test_claim_resolution_is_reported_not_hidden() -> None:
         _calc_spec(), ScriptedStrategy([Finish("fixed", claims=(lie,))])
     )
 
-    assert result.accepted is False
+    assert result.accepted is True
+    assert result.evidence_status.value == "contradicted"
     assert result.resolutions
     assert result.resolutions[0].status is ResolutionStatus.UNRESOLVED
 
@@ -1318,8 +1327,9 @@ def test_failed_delivery_rollback_blocks_with_debt() -> None:
         ),
     )
 
-    assert result.accepted is False
-    assert result.phase.value == "blocked"
+    # The residue is disclosed with a CONTRADICTED label; the turn completes.
+    assert result.accepted is True
+    assert result.evidence_status.value == "contradicted"
     assert any(item.obligation.id == "delivery-rollback" for item in result.debt)
     assert any(
         event.kind is EventKind.DELIVERY_ATTEMPTED
@@ -1385,7 +1395,7 @@ def _run_finish(finalizer):
 def test_finalizer_exception_opens_debt() -> None:
     ledger, result = _run_finish(RaisingFinalizer())
 
-    assert result.accepted is False
+    assert result.accepted is True
     assert any(item.obligation.id == "finalizer" for item in result.debt)
     assert any(
         event.kind is EventKind.DELIVERY_ATTEMPTED
@@ -1397,7 +1407,7 @@ def test_finalizer_exception_opens_debt() -> None:
 def test_finalizer_rejection_opens_debt() -> None:
     ledger, result = _run_finish(RejectedFinalizer())
 
-    assert result.accepted is False
+    assert result.accepted is True
     assert any(item.obligation.id == "finalizer" for item in result.debt)
     assert any(
         event.kind is EventKind.DELIVERY_ATTEMPTED
@@ -1409,7 +1419,7 @@ def test_finalizer_rejection_opens_debt() -> None:
 def test_missing_rollback_capability_fails_closed() -> None:
     _ledger, result = _run_finish(NoRollbackFinalizer())
 
-    assert result.accepted is False
+    assert result.accepted is True
     assert any(
         item.obligation.id == "delivery-rollback" for item in result.debt
     )
@@ -1418,7 +1428,7 @@ def test_missing_rollback_capability_fails_closed() -> None:
 def test_rollback_exception_fails_closed() -> None:
     _ledger, result = _run_finish(RaisingRollbackFinalizer())
 
-    assert result.accepted is False
+    assert result.accepted is True
     assert any(
         item.obligation.id == "delivery-rollback" for item in result.debt
     )
