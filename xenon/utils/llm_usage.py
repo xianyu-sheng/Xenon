@@ -74,9 +74,25 @@ def _extract_usage(data: dict[str, Any] | None, provider: str) -> LLMUsage:
     if not isinstance(u, dict):
         return LLMUsage()
     if provider == "anthropic":
-        p = int(u.get("input_tokens", 0) or 0)
+        # Anthropic reports cache reads and writes as *separate* counters, not
+        # as a subset of input_tokens.  The old branch dropped both, so a run
+        # with a warm cache reported 0% hits no matter how the prompt was
+        # ordered -- the metric was blind, not the cache.
+        cached = int(u.get("cache_read_input_tokens", 0) or 0)
+        written = int(u.get("cache_creation_input_tokens", 0) or 0)
+        input_tokens = int(u.get("input_tokens", 0) or 0)
         c = int(u.get("output_tokens", 0) or 0)
-        return LLMUsage(prompt_tokens=p, completion_tokens=c, total_tokens=p + c)
+        # Anthropic's input_tokens excludes the cached portion; the true prompt
+        # is all three summed.  Reporting input_tokens alone under-counts every
+        # cached call and makes hit rate meaningless.
+        p = input_tokens + cached + written
+        return LLMUsage(
+            prompt_tokens=p,
+            completion_tokens=c,
+            total_tokens=p + c,
+            cache_hit_tokens=cached,
+            cache_miss_tokens=input_tokens + written,
+        )
     p = int(u.get("prompt_tokens", 0) or 0)
     c = int(u.get("completion_tokens", 0) or 0)
     t = u.get("total_tokens")

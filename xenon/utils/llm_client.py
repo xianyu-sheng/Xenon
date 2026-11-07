@@ -590,8 +590,29 @@ def _call_openai_compat_once(
 # ═══════════════════════════════════════════════════════
 
 
-def _call_anthropic(
-    endpoint: ModelEndpoint,
+def _anthropic_system_blocks(system_text: str) -> list[dict[str, Any]]:
+    """Mark the system prompt as a cache breakpoint.
+
+    Anthropic caches nothing unless a block carries ``cache_control``, so a
+    perfectly stable system prompt still costs full price on every call.  A
+    kernel run measured 0% cache hits over 70 calls for this reason alone:
+    the prompt was ordered correctly and never marked.
+
+    A 1h TTL rather than the 5m default, because a coding task routinely
+    spends longer than five minutes inside tool work between model turns, and
+    an expired entry is a full miss.
+    """
+
+    return [
+        {
+            "type": "text",
+            "text": system_text,
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
+    ]
+
+
+def _call_anthropic(    endpoint: ModelEndpoint,
     messages: list[dict[str, str]],
     max_tokens: int,
     temperature: float,
@@ -647,7 +668,7 @@ def _call_anthropic_once(
         "temperature": temperature,
     }
     if system_text:
-        payload["system"] = system_text
+        payload["system"] = _anthropic_system_blocks(system_text)
 
     # R3: 复用 per-provider 长生命 Client
     client = _get_pooled_client(endpoint, timeout)
@@ -1092,9 +1113,15 @@ def _call_anthropic_with_tools(
         "temperature": temperature,
     }
     if system_text:
-        payload["system"] = system_text
+        payload["system"] = _anthropic_system_blocks(system_text)
     anthropic_tools = _openai_to_anthropic_tools(tools)
     if anthropic_tools:
+        # Anthropic caches in the order tools -> system -> messages, so one
+        # breakpoint on the last tool covers the whole tool block *and* the
+        # system prompt behind it.  Marking only `system` left the ~1.5k-token
+        # tool schemas billed at full price on every call.
+        anthropic_tools = [dict(item) for item in anthropic_tools]
+        anthropic_tools[-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
         payload["tools"] = anthropic_tools
     if tool_choice is not None:
         # OpenAI: "auto"|"none"|"required"|{type:function,name}
@@ -1448,7 +1475,7 @@ def _stream_anthropic(
         "stream": True,
     }
     if system_text:
-        payload["system"] = system_text
+        payload["system"] = _anthropic_system_blocks(system_text)
 
     t0 = time.time()
     input_tokens = 0

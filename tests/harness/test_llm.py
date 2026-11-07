@@ -1105,3 +1105,95 @@ def test_the_finish_protocol_documents_the_claim_shape() -> None:
     assert '"kind":"file_changed"' in _FINISH_PROTOCOL
     assert "file_changed:path" in _FINISH_PROTOCOL
     assert "test_passed:tests/test_x.py" in _FINISH_PROTOCOL
+
+
+def _native_view() -> ModelView:
+    from xenon.catalog.specs import CORE_SPECS
+    from xenon.kernel.view.base import _tool_schema
+
+    spec = TaskSpec(task_id="t", objective="fix it", workspace="/workspace")
+    return ModelView(
+        task=spec,
+        system="SYSTEM",
+        tools=tuple(_tool_schema(item, expanded=True) for item in CORE_SPECS),
+        working_set=(),
+        debt=(),
+        budget=spec.budget,
+        input_seq=0,
+        hash="h",
+    )
+
+
+def test_native_tools_carry_real_json_schema() -> None:
+    """Prose parameter names let a model invent them.
+
+    ``{"file_path": "path to read"}`` is not a schema: it has no type and no
+    required list, so nothing stops a call that says ``files``.
+    """
+    from xenon.harness.llm import _native_tools
+
+    tools = {item["name"]: item for item in _native_tools(_native_view())}
+    read = tools["read"]["input_schema"]
+
+    assert read["type"] == "object"
+    assert read["properties"]["file_path"]["type"] == "string"
+    assert read["required"] == ["file_path"]
+
+
+def test_terminal_actions_are_offered_as_tools() -> None:
+    from xenon.harness.llm import _native_tools
+
+    names = {item["name"] for item in _native_tools(_native_view())}
+
+    assert {"finish", "think", "abort", "ask_user"} <= names
+
+
+def test_a_tool_call_maps_onto_a_capability() -> None:
+    from xenon.harness.llm import action_from_tool_call
+
+    action = action_from_tool_call(
+        _native_view(), "read", {"file_path": "calc.py"}
+    )
+
+    assert isinstance(action, CallTool)
+    assert action.intent.capability is Capability.READ
+    assert action.intent.params == {"file_path": "calc.py"}
+    assert action.intent.targets == ("calc.py",)
+
+
+def test_a_new_file_write_is_a_write_not_a_guess() -> None:
+    from xenon.harness.llm import action_from_tool_call
+
+    action = action_from_tool_call(
+        _native_view(),
+        "apply_patch",
+        {"files": [{"path": "tests/test_new.py", "content": "x"}]},
+    )
+
+    assert isinstance(action, CallTool)
+    assert action.intent.capability is Capability.EDIT
+    assert action.intent.targets == ("tests/test_new.py",)
+
+
+def test_finish_claims_are_typed_from_the_tool_call() -> None:
+    from xenon.harness.llm import action_from_tool_call
+
+    action = action_from_tool_call(
+        _native_view(),
+        "finish",
+        {
+            "answer": "done",
+            "claims": [{"kind": "file_changed", "target": "calc.py"}],
+        },
+    )
+
+    assert isinstance(action, Finish)
+    assert action.claims[0].kind is PropositionKind.FILE_CHANGED
+    assert action.claims[0].target == "calc.py"
+
+
+def test_an_unknown_tool_name_fails_closed() -> None:
+    from xenon.harness.llm import ActionParseError, action_from_tool_call
+
+    with pytest.raises(ActionParseError, match="unknown tool"):
+        action_from_tool_call(_native_view(), "make_it_so", {})

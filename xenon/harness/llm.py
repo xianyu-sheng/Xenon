@@ -42,6 +42,185 @@ from xenon.kernel.strategies import (
 from xenon.utils.llm_client import chat_completion
 from xenon.utils.llm_errors import ResponseTruncatedError
 
+_TERMINAL_TOOLS = {
+    "finish": (
+        "Report the task as complete. Only call this when the work is done "
+        "and the receipts show it.",
+        {
+            "type": "object",
+            "properties": {
+                "answer": {
+                    "type": "string",
+                    "description": "What changed and how it was verified.",
+                },
+                "claims": {
+                    "type": "array",
+                    "description": (
+                        "Facts the receipts support. Omit when nothing was "
+                        "proven rather than guessing."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "kind": {
+                                "type": "string",
+                                "enum": [
+                                    "file_changed",
+                                    "file_created",
+                                    "test_passed",
+                                    "commit_created",
+                                ],
+                            },
+                            "target": {"type": "string"},
+                        },
+                        "required": ["kind", "target"],
+                    },
+                },
+            },
+            "required": ["answer"],
+        },
+    ),
+    "think": (
+        "Reason without touching the workspace, when the next move is unclear.",
+        {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "What you learned and what you will do next.",
+                }
+            },
+            "required": ["text"],
+        },
+    ),
+    "ask_user": (
+        "Ask the user, only when the task is genuinely ambiguous.",
+        {
+            "type": "object",
+            "properties": {"question": {"type": "string"}},
+            "required": ["question"],
+        },
+    ),
+    "abort": (
+        "Stop because the task cannot be completed safely.",
+        {
+            "type": "object",
+            "properties": {"reason": {"type": "string"}},
+            "required": ["reason"],
+        },
+    ),
+}
+
+
+def _native_tools(view: ModelView) -> list[dict[str, Any]]:
+    """The view's tools as native function declarations, plus terminal actions.
+
+    The schemas are real JSON Schema (types, ``required``, enums) taken from the
+    catalog, so the decoder is constrained to names that actually exist.  Under
+    the text-JSON protocol a model had to copy parameter names out of prose and
+    invented plausible ones -- ``files`` for a call that wanted ``file_path``.
+    """
+
+    tools: list[dict[str, Any]] = []
+    for item in view.tools:
+        name = str(item.get("name") or "")
+        if not name:
+            continue
+        schema = item.get("json_schema")
+        parameters = (
+            dict(schema)
+            if isinstance(schema, Mapping) and schema
+            else {"type": "object", "properties": {}}
+        )
+        tools.append(
+            {
+                "name": name,
+                "description": str(item.get("description") or ""),
+                "input_schema": parameters,
+                # Xenon binds capabilities, so the model names a tool and the
+                # intent carries the capability the catalog declared for it.
+                "capabilities": list(item.get("capabilities") or ()),
+            }
+        )
+    for name, (description, parameters) in _TERMINAL_TOOLS.items():
+        tools.append(
+            {"name": name, "description": description, "input_schema": parameters}
+        )
+    return tools
+
+
+#: Native tool name -> capability, taken from what the catalog declared.  Kept
+#: here so a call binds by the same rule the text protocol used; the kernel
+#: still owns binding, execution and verification.
+def _tool_capability(view: ModelView, name: str) -> Capability | None:
+    for item in view.tools:
+        if str(item.get("name") or "") != name:
+            continue
+        capabilities = list(item.get("capabilities") or ())
+        if not capabilities:
+            return None
+        try:
+            return Capability(str(capabilities[0]))
+        except ValueError:
+            return None
+    return None
+
+
+def action_from_tool_call(
+    view: ModelView, name: str, arguments: Mapping[str, Any]
+) -> Action:
+    """Map one native ``tool_call`` onto the kernel's action vocabulary."""
+
+    if name == "finish":
+        claims: list[Claim] = []
+        for index, raw in enumerate(arguments.get("claims") or ()):
+            if not isinstance(raw, Mapping):
+                continue
+            try:
+                kind = PropositionKind(str(raw.get("kind") or ""))
+            except ValueError:
+                continue
+            claims.append(
+                Claim(
+                    id=str(raw.get("id") or f"c{index + 1}"),
+                    kind=kind,
+                    target=str(raw.get("target") or ""),
+                    source=ClaimSource.LLM,
+                )
+            )
+        return Finish(str(arguments.get("answer") or ""), tuple(claims))
+    if name == "think":
+        return Think(str(arguments.get("text") or ""))
+    if name == "ask_user":
+        return AskUser(str(arguments.get("question") or ""))
+    if name == "abort":
+        return Abort(str(arguments.get("reason") or ""))
+
+    capability = _tool_capability(view, name)
+    if capability is None:
+        raise ActionParseError(f"unknown tool: {name!r}")
+    params = {str(k): v for k, v in arguments.items()}
+    targets: list[str] = []
+    for key in ("file_path", "path", "pattern"):
+        value = params.get(key)
+        if isinstance(value, str) and value.strip():
+            targets.append(value.strip())
+    for item in params.get("files") or ():
+        if isinstance(item, Mapping) and item.get("path"):
+            targets.append(str(item["path"]))
+    return CallTool(
+        ToolIntent(
+            capability=capability,
+            params=params,
+            targets=tuple(targets),
+            prefer=name if name not in _CORE_TOOL_NAMES else None,
+        )
+    )
+
+
+_CORE_TOOL_NAMES = frozenset({"read", "search", "apply_patch", "bash", "test", "git", "tool_result_read"})
+
 
 class ActionParseError(ValueError):
     """The model did not return one valid capability action."""
@@ -617,11 +796,21 @@ def parse_action(payload: str | Mapping[str, Any]) -> Action:
 
 
 def build_messages(view: ModelView) -> list[dict[str, str]]:
-    """Render one deterministic state snapshot plus the ActFirst protocol."""
+    """Render one deterministic state snapshot plus the ActFirst protocol.
+
+    Field order is a cache decision, not a style one.  A provider caches an
+    exact byte prefix, so the stable head of this JSON is what makes turn N+1
+    cheaper than turn N.  Objective, workspace and the tool list never change
+    within a task; they go first.  The working set grows after them.  Phase,
+    budget and debt change constantly and go last, where a change costs the
+    tail of one message instead of everything after it.
+    """
 
     state = {
         "objective": view.task.objective,
         "workspace": view.task.workspace,
+        "available_tools": list(view.tools),
+        "recent_events": list(view.working_set),
         "phase": view.phase.value,
         "budget": {
             "max_steps": view.budget.max_steps,
@@ -636,8 +825,6 @@ def build_messages(view: ModelView) -> list[dict[str, str]]:
             }
             for item in view.debt
         ],
-        "recent_events": list(view.working_set),
-        "available_tools": list(view.tools),
     }
     return [
         {"role": "system", "content": view.system + "\n" + _ACTION_PROTOCOL},
@@ -805,14 +992,71 @@ class LLMActionProposer:
         config: ModelConfig,
         *,
         client: Callable[..., str] | None = None,
+        native_tools: bool = True,
     ) -> None:
         self.config = config
         self._client = client
+        # A native call needs the real transport (it returns a structured
+        # response, not a string), so an injected text client keeps the JSON
+        # protocol.  Same for an eval that wants a fixed transcript.
+        self._native = native_tools and client is None
 
     def _call(self, messages: list[dict[str, str]]) -> str:
         return _call_model(self.config, self._client, messages)
 
+    def _call_native(self, view: ModelView) -> Action:
+        from xenon.utils.llm_client import chat_completion_with_tools
+
+        messages = build_messages(view)
+        kwargs: dict[str, Any] = {
+            "max_tokens": self.config.max_tokens,
+            "temperature": self.config.temperature,
+            "tools": _native_tools(view),
+            "tool_choice": "required",
+        }
+        if self.config.base_url:
+            kwargs["base_url"] = self.config.base_url
+        if self.config.api_key:
+            provider = self.config.model_id.split("/", 1)[0].lower()
+            kwargs["credentials"] = {provider: self.config.api_key}
+        response = chat_completion_with_tools(self.config.model_id, messages, **kwargs)
+        # ``chat_completion_with_tools`` reports usage on the response rather
+        # than through a sink, so forward it here to keep accounting identical
+        # to the text path.
+        if self.config.usage_sink is not None:
+            try:
+                self.config.usage_sink(response.usage)
+            except Exception:  # noqa: BLE001 — accounting never breaks a call
+                pass
+        if not response.tool_calls:
+            # A model that answers in prose instead of calling a tool has not
+            # proposed an action; say so rather than inventing one.
+            text = (response.content or "").strip()
+            if text:
+                return Think(text[:2000])
+            raise ActionParseError("model returned neither a tool call nor text")
+        call = response.tool_calls[0]
+        arguments = call.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments or "{}")
+            except ValueError as exc:
+                raise ActionParseError(f"tool arguments are not JSON: {exc}") from exc
+        if not isinstance(arguments, Mapping):
+            arguments = {}
+        return action_from_tool_call(view, str(call.get("name") or ""), arguments)
+
     def __call__(self, view: ModelView) -> Action:
+        if self._native:
+            try:
+                return self._call_native(view)
+            except ResponseTruncatedError:
+                return truncation_thought()
+            except ActionParseError as exc:
+                return Think(
+                    f"Invalid action: {str(exc)[:500]}. "
+                    "Call one tool from the provided list."
+                )
         try:
             return parse_action(self._call(build_messages(view)))
         except ResponseTruncatedError:

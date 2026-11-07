@@ -54,6 +54,24 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
             "start_line": "1-based first line; use to page through a long file",
             "max_lines": "how many lines to return from start_line",
         },
+        json_schema={
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Workspace-relative path to read.",
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "1-based first line, for paging a long file.",
+                },
+                "max_lines": {
+                    "type": "integer",
+                    "description": "How many lines to return from start_line.",
+                },
+            },
+            "required": ["file_path"],
+        },
         description=(
             "Read a file from the workspace. Long files are returned in one "
             "page; the result says when content was cut so you can continue "
@@ -69,6 +87,23 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
         effects=frozenset(),
         risk=Risk.INFO,
         params_schema={"result_id": "id shown on a truncated tool result"},
+        json_schema={
+            "type": "object",
+            "properties": {
+                "result_id": {
+                    "type": "string",
+                    "description": "The result_id from a truncation notice.",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["raw", "range"],
+                    "description": "raw returns everything; range pages it.",
+                },
+                "start_line": {"type": "integer"},
+                "max_lines": {"type": "integer"},
+            },
+            "required": ["result_id"],
+        },
         description=(
             "Read the full cached output of an earlier tool call. Use the "
             "result_id from the truncation notice instead of re-running the "
@@ -84,6 +119,20 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
         effects=frozenset(),
         risk=Risk.INFO,
         params_schema={"pattern": "text or regex", "path": "optional root"},
+        json_schema={
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Text or regular expression to find.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Optional workspace-relative root; default is the workspace.",
+                },
+            },
+            "required": ["pattern"],
+        },
         description="Search the workspace for a pattern.",
         preferences={"search": 20},
         requires_target=True,
@@ -98,7 +147,46 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
             "files": "list of {path, content} for full writes",
             "edits": "list of {file_path, old_text, new_text}",
         },
-        description="Apply a transactional file patch.",
+        json_schema={
+            "type": "object",
+            "properties": {
+                "files": {
+                    "type": "array",
+                    "description": (
+                        "Create or overwrite whole files. A path that does not "
+                        "exist yet is created, which is how a new test file is "
+                        "added."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+                "edits": {
+                    "type": "array",
+                    "description": "Exact string replacements in existing files.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {"type": "string"},
+                            "old_text": {"type": "string"},
+                            "new_text": {"type": "string"},
+                        },
+                        "required": ["file_path", "old_text", "new_text"],
+                    },
+                },
+            },
+        },
+        description=(
+            "Create, overwrite or edit files. Use `files` with {path, content} "
+            "to write a whole file -- this creates it when it does not exist, "
+            "so it is how you add a new file. Use `edits` for exact "
+            "replacements inside an existing file."
+        ),
         preferences={"edit": 20},
         requires_target=True,
     ),
@@ -118,6 +206,16 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
         ),
         risk=Risk.SENSITIVE,
         params_schema={"command": "shell command"},
+        json_schema={
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "One shell command, in this host's shell syntax.",
+                }
+            },
+            "required": ["command"],
+        },
         description=shell_description(),
         preferences={"shell": 20, "verify": 5, "vcs": 5},
     ),
@@ -132,6 +230,29 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
             "test_args": "extra runner args, e.g. ['-k', 'name']",
             "test_framework": "auto | pytest | unittest | custom",
             "timeout": "seconds; raise it for a slow suite (default 60)",
+        },
+        json_schema={
+            "type": "object",
+            "properties": {
+                "test_paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Files or directories that already exist. Omit to run "
+                        "the whole suite."
+                    ),
+                },
+                "test_args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Extra runner arguments, e.g. ['-k','name'].",
+                },
+                "test_framework": {
+                    "type": "string",
+                    "enum": ["auto", "pytest", "unittest", "custom"],
+                },
+                "timeout": {"type": "integer"},
+            },
         },
         description=(
             "Run the project's tests and return structured counts (passed / "
@@ -151,6 +272,27 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
         params_schema={
             "git_command": "status | diff | diff_full | log | branch | show",
             "action": "extra arguments for the command",
+        },
+        json_schema={
+            "type": "object",
+            "properties": {
+                "git_command": {
+                    "type": "string",
+                    "enum": [
+                        "status",
+                        "diff",
+                        "diff_full",
+                        "log",
+                        "branch",
+                        "show",
+                    ],
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Extra arguments, e.g. a commit hash for show.",
+                },
+            },
+            "required": ["git_command"],
         },
         description=(
             "Read repository state (status, diff, log, branch, show). Commit "

@@ -230,6 +230,11 @@ class LoopRuntime:
         #: Plan rounds started in this turn (1-based).  A task-level audit with
         #: gaps starts the next round until ``max_plan_rounds``.
         self._plan_rounds = 0
+        #: Set once when a round begins.  Compaction is allowed only here,
+        #: because folding rewrites the prompt tail and so destroys the
+        #: provider's cached prefix.  Doing it the moment the token estimate
+        #: crosses a threshold turned cheap appends into full rebuilds.
+        self._compact_arm = False
         #: The last Finish answer, so a turn that never needed a tool can be
         #: told apart from a turn that did nothing.
         self._last_answer = ""
@@ -371,6 +376,7 @@ class LoopRuntime:
                 spec = replace(spec, obligations=derived)
                 self._spec = spec
         self._transition(TaskPhase.INTAKE, "task accepted")
+        self._record_workspace_layout(spec)
         self._append(
             EventKind.INTAKE_RECORDED,
             EventSource.RUNTIME,
@@ -513,7 +519,11 @@ class LoopRuntime:
                 strategy_hint=self._steering.strategy_hint(),
                 notes=tuple(self._loop_notes),
                 boundary=self._boundary_note(),
+                may_compact=self._compact_arm,
             )
+            # One fold per round: once it has happened, later views in this
+            # round must not fold again and churn the prompt.
+            self._compact_arm = False
             self._transition(TaskPhase.THINKING, "propose action")
             try:
                 action = strategy.propose(view)
@@ -721,6 +731,9 @@ class LoopRuntime:
                 )
             return self._reject_plan(exc)
         self._plan_rounds += 1
+        # A new round is the one moment a prompt rewrite is already expected,
+        # so the fold is allowed to happen here and nowhere else.
+        self._compact_arm = True
         # Accepting a plan is progress; without this a slow planner could be
         # killed by the stall brake before its first step runs.
         self._last_progress_at = self._clock()
@@ -2601,6 +2614,48 @@ class LoopRuntime:
         """Read-only view of what the loop has been told (for UI and tests)."""
 
         return self._steering
+
+    def _record_workspace_layout(self, spec: TaskSpec) -> None:
+        """Record the tree once, so the model navigates instead of guessing.
+
+        This is the difference between "here is your workspace path" and "here
+        is what is in it".  A real run wrote a test path that did not exist,
+        got ``path does not exist`` twice, and abandoned the step; the answer
+        was in the directory listing the whole time.
+
+        Only a chat task is skipped: it is not about a workspace at all.
+        """
+
+        if spec.mode is TaskMode.CHAT:
+            return
+        from xenon.kernel.workspace import describe_workspace
+
+        focus = tuple(
+            obligation.target
+            for obligation in spec.obligations
+            if obligation.target
+        )
+        try:
+            layout = describe_workspace(spec.workspace, focus_paths=focus)
+        except Exception:  # noqa: BLE001 — a broken listing must not stop a run
+            logger.warning("workspace layout probe failed", exc_info=True)
+            return
+        rendered = layout.render()
+        if not rendered:
+            return
+        self._append(
+            EventKind.WORKSPACE_LAYOUT,
+            EventSource.RUNTIME,
+            {
+                "root": layout.root,
+                "rendered": rendered,
+                "dirs": [entry.path for entry in layout.entries],
+                "test_dirs": list(layout.test_dirs),
+                "test_files": list(layout.test_files),
+                "manifests": list(layout.manifests),
+                "truncated": layout.truncated,
+            },
+        )
 
     def _note_session_context(self) -> None:
         """Record what reference material the model was given (once per set).

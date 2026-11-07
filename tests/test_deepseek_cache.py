@@ -110,13 +110,38 @@ class TestLLMUsageCache:
         u = _extract_usage({"choices": []}, "deepseek")
         assert u.prompt_tokens == 0
 
-    def test_extract_usage_anthropic_no_cache(self):
+    def test_extract_usage_anthropic_without_cache_fields(self):
+        """No cache counters means the whole prompt was a miss.
+
+        Anthropic reports ``input_tokens`` separately from the cache counters,
+        so ``input_tokens`` *is* the uncached portion.  Reporting 0 misses made
+        every uncached call look free.
+        """
         u = _extract_usage(
             {"usage": {"input_tokens": 100, "output_tokens": 50}}, "anthropic"
         )
         assert u.cache_hit_tokens == 0
-        assert u.cache_miss_tokens == 0
+        assert u.cache_miss_tokens == 100
+        assert u.prompt_tokens == 100
         assert u.total_tokens == 150
+
+    def test_extract_usage_anthropic_counts_cache_reads(self):
+        u = _extract_usage(
+            {
+                "usage": {
+                    "input_tokens": 162,
+                    "output_tokens": 13,
+                    "cache_read_input_tokens": 3072,
+                    "cache_creation_input_tokens": 0,
+                }
+            },
+            "anthropic",
+        )
+        # input_tokens excludes the cached portion, so the real prompt is the
+        # sum.  Counting only input_tokens made hit rate meaningless.
+        assert u.cache_hit_tokens == 3072
+        assert u.prompt_tokens == 3234
+        assert u.cache_miss_tokens == 162
 
 
 class TestResponseCallback:

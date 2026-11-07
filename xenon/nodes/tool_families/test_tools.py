@@ -57,7 +57,32 @@ def _python_candidates(workspace: Path) -> list[Path]:
     return [workspace / name for name in names]
 
 
-def _resolve_interpreter(workspace: Path, explicit: str) -> tuple[Path, str]:
+def _has_module(interpreter: Path, module: str, workspace: Path) -> bool:
+    """Can this interpreter import ``module`` from this workspace?
+
+    A project venv is the right default, but a venv alone proves nothing about
+    what is installed in it.  A real run picked ``.venv/Scripts/python.exe``
+    and got ``No module named pytest`` on every attempt while a working
+    interpreter sat one PATH lookup away, so the run could never show a passing
+    test no matter what it changed.
+    """
+
+    try:
+        completed = subprocess.run(
+            [str(interpreter), "-c", f"import {module}"],
+            cwd=str(workspace),
+            capture_output=True,
+            shell=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
+def _resolve_interpreter(
+    workspace: Path, explicit: str, *, framework: str = ""
+) -> tuple[Path, str]:
     if explicit:
         candidate = Path(explicit).expanduser()
         if not candidate.is_absolute():
@@ -67,13 +92,20 @@ def _resolve_interpreter(workspace: Path, explicit: str) -> tuple[Path, str]:
             raise FileNotFoundError(f"指定的解释器不存在: {explicit}")
         return candidate, "explicit"
 
-    for candidate in _python_candidates(workspace):
-        if candidate.is_file():
-            return candidate, "project"
-
+    module = {"pytest": "pytest", "unittest": "unittest"}.get(framework, "")
+    candidates = [item for item in _python_candidates(workspace) if item.is_file()]
     # sys.executable is the safe fallback.  It may not contain the project's
     # dependencies, but silently guessing another global interpreter is worse.
-    return Path(sys.executable), "runtime"
+    runtime = Path(sys.executable)
+    if module:
+        for candidate in candidates:
+            if _has_module(candidate, module, workspace):
+                return candidate, "project"
+        if _has_module(runtime, module, workspace):
+            return runtime, "runtime"
+    elif candidates:
+        return candidates[0], "project"
+    return runtime, "runtime"
 
 
 def _strip_node_suffix(path: str) -> str:
@@ -172,7 +204,9 @@ class TestToolsMixin:
 
         try:
             interpreter, interpreter_source = _resolve_interpreter(
-                workspace, str(getattr(self, "interpreter", "") or "").strip()
+                workspace,
+                str(getattr(self, "interpreter", "") or "").strip(),
+                framework=framework,
             )
         except FileNotFoundError as exc:
             return self._run_tests_error(

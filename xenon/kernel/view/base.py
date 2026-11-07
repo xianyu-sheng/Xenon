@@ -43,8 +43,9 @@ _CHAT_EVENT_KINDS = frozenset(
 
 # Compaction digest sizing.  Reserved chars guarantee a record exists even
 # when priority events already consume the whole budget.
-# Rough characters-per-token used when the real window is unknown.  Mixed
-# CJK/ASCII traffic sits well under this, so the estimate stays conservative.
+# Rough characters-per-token used only where no tokenizer can run.  Real
+# sizing goes through ``xenon.kernel.tokens``: ``len(text)/2`` mis-sized CJK
+# by ~2x and English by ~2x in the other direction.
 _CHARS_PER_TOKEN = 2
 
 
@@ -54,6 +55,9 @@ def _context_chars(budget: Budget) -> int:
     With a known window, reserve the output budget and a quarter of the
     window for instructions/tool schemas, then convert to characters.  Without
     one, fall back to the historical output-budget heuristic.
+
+    Kept as a character budget because the working-set selector measures
+    candidate entries as canonical JSON strings.
     """
 
     output = int(budget.max_tokens or _DEFAULT_MAX_TOKENS)
@@ -63,6 +67,44 @@ def _context_chars(budget: Budget) -> int:
         available = max(1024, window - reserve)
         return max(512, available * _CHARS_PER_TOKEN)
     return max(512, output * _CHARS_PER_TOKEN)
+
+
+#: Fraction of the history budget at which compaction becomes *eligible*.
+#: Eligible is not the same as performed: a fold rewrites the prompt tail and
+#: therefore destroys the provider's cached prefix, so it waits for a plan
+#: round to end.  Folding mid-round every time the estimate wobbles was
+#: making the cache pay a full rebuild for a few hundred tokens of relief.
+COMPACT_AT = 0.70
+
+
+def _working_set_tokens(
+    working_set: Sequence[Mapping[str, Any]], budget: Budget
+) -> int:
+    """Exact token size of the working set, for the compaction trigger."""
+
+    if not working_set:
+        return 0
+    from xenon.kernel.tokens import count_tokens
+
+    return count_tokens(_canonical(list(working_set)))
+
+
+def compaction_due(
+    working_set: Sequence[Mapping[str, Any]], budget: Budget
+) -> bool:
+    """Is the history over the compaction threshold?
+
+    Uses the exact tokenizer against the real window.  Without a known window
+    there is nothing to be a fraction *of*, so this never fires and the
+    character budget alone governs — which is the honest answer rather than a
+    made-up percentage.
+    """
+
+    window = int(getattr(budget, "context_window", 0) or 0)
+    if window <= 0:
+        return False
+    used = _working_set_tokens(working_set, budget)
+    return used >= int(window * COMPACT_AT)
 
 
 def _canonical_len(value: Any) -> int:
@@ -109,6 +151,10 @@ def _tool_schema(spec: ToolSpec, *, expanded: bool = False) -> dict[str, Any]:
         "name": spec.name,
         "description": spec.description,
         "parameters": dict(spec.params_schema),
+        # The machine-readable form.  Native function calling sends this to the
+        # provider so the decoder is constrained; the prose `parameters` above
+        # stays for prompts and for humans reading a ledger.
+        "json_schema": dict(spec.json_schema) if spec.json_schema else {},
         "capabilities": sorted(item.value for item in spec.capabilities),
         "effects": sorted(item.value for item in spec.effects),
         "risk": spec.risk.value,
@@ -349,8 +395,24 @@ def _working_set(
     mode: TaskMode,
     budget: Budget,
     superseded: frozenset[int] = frozenset(),
+    may_compact: bool | None = None,
 ) -> tuple[tuple[dict[str, Any], ...], tuple[int, ...]]:
-    """Return the compacted working set plus the seqs folded away."""
+    """Return the working set plus the seqs folded away.
+
+    Two separate conditions govern folding:
+
+    * **Budget pressure** — when history exceeds what the character budget
+      allows, the over-budget entries have to fold or the prompt does not fit.
+      That is not optional and it is not deferrable.
+    * **The 70% token trigger** — folding early, before the prompt is actually
+      in trouble, is a cost decision.  It rewrites the prompt tail and so
+      destroys the provider's cached prefix, which is why the runtime only
+      allows it at a plan-round boundary (``may_compact``).
+
+    ``may_compact=None`` means "the caller has no round concept" — a direct
+    ``_working_set`` call in a test or an SDK path — and the token trigger is
+    honoured immediately.
+    """
 
     summaries = [
         _summary(event, superseded=superseded)
@@ -367,16 +429,29 @@ def _working_set(
 
     max_chars = _context_chars(budget)
     used = sum(len(_canonical(item)) for item in selected.values())
-    for item in reversed(summaries):
-        if item["seq"] in selected:
-            continue
+    entries = [item for item in summaries if item["seq"] not in selected]
+    for item in reversed(entries):
         size = len(_canonical(item))
         if used + size > max_chars:
             continue
         selected[item["seq"]] = item
         used += size
 
-    dropped = [item for item in summaries if item["seq"] not in selected]
+    # Anything that never fit is *dropped*, not "unselected".  Measuring
+    # pressure before the fill loop asked "is what I already had too big",
+    # which is always false on a fresh selection, so a prompt that overflowed
+    # folded nothing and silently lost history instead of leaving a digest.
+    dropped = [item for item in entries if item["seq"] not in selected]
+    over_budget = bool(dropped) or used > max_chars
+    token_trigger = compaction_due(
+        tuple(selected[seq] for seq in sorted(selected)), budget
+    )
+    fold_allowed = over_budget or token_trigger
+    if may_compact is False:
+        fold_allowed = over_budget
+    if not dropped or not fold_allowed:
+        return (tuple(selected[seq] for seq in sorted(selected)), ())
+
     entry = fold_dropped(
         dropped, max_chars=max_chars, used=used, size_of=_canonical_len
     )
@@ -426,6 +501,24 @@ def _capability_directory(specs: Sequence[ToolSpec], *, limit: int = 40) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _latest_workspace_layout(ledger: Any) -> str:
+    """The rendered layout this run recorded, or "" when none was taken.
+
+    Width-only here: the decision to probe belongs to the runtime, and a view
+    built from an older ledger must not start probing on its own.
+    """
+
+    try:
+        events = ledger.read(EventKind.WORKSPACE_LAYOUT)
+    except (AttributeError, TypeError):
+        return ""
+    if not events:
+        return ""
+    payload = events[-1].payload or {}
+    text = payload.get("rendered")
+    return str(text) if isinstance(text, str) else ""
+
+
 def _context_section(blocks: Sequence[tuple[str, str]]) -> str:
     """Render session reference material, clearly marked as non-instructions.
 
@@ -466,6 +559,7 @@ def _system_prompt(
     notes: Sequence[str] = (),
     turn_path: Sequence[str] = (),
     boundary: str = "",
+    layout: str = "",
 ) -> str:
     constraint_lines = [f"- {item}" for item in spec.constraints]
     constraint_lines.extend(
@@ -483,51 +577,22 @@ def _system_prompt(
         f"Objective: {spec.objective}",
         f"Workspace: {spec.workspace}",
         f"Mode: {spec.mode.value}",
-        f"Phase: {phase.value}",
-        f"Budget: max_steps={budget.max_steps} max_tokens={budget.max_tokens} "
-        f"max_wall_seconds={budget.max_wall_seconds} "
-        f"max_repair_attempts={budget.max_repair_attempts} "
-        f"max_replans={budget.max_replans}",
     ]
+    # Everything above this point is stable for the whole task, so it is a
+    # provider prompt-cache prefix.  Everything below changes as the run
+    # proceeds, and must never be inserted *before* a stable block: a cached
+    # prefix ends at the first differing byte, so one changing line ahead of
+    # the capability catalog invalidates the entire catalog on every call.
+    # A real kernel run measured 0% cache hits over 70 calls for exactly this
+    # reason -- `Phase:` sat fourth, ahead of the catalog and the protocols.
+    if layout:
+        # A real run burned two tool calls guessing where the tests lived, then
+        # gave up.  The tree was on disk the whole time; Claude Code and Pi put
+        # a listing in context and Xenon did not.  This is an observation, so
+        # it is stated before the model proposes anything.
+        lines.append(layout.rstrip())
     if constraints:
         lines.append(f"Constraints:\n{constraints}")
-    if notes:
-        # #369: harness-generated loop diagnoses.  A note is a hint the model
-        # must read but is free to act on differently; it is not a constraint
-        # and never a permission.
-        lines.append("Notes (read before your next proposal):\n" + "\n".join(
-            f"- {text}" for text in notes
-        ))
-    if boundary:
-        # #165 dogfood: the execution boundary is a runtime fact, not something
-        # the model should infer.  Stating it stops the "I am not allowed to
-        # run anything this turn" self-limitation that blocked a real task.
-        lines.append(f"Execution boundary: {boundary}")
-    if turn_path:
-        # #372 B3: only rendered after a rewind/fork — a side-branch task must
-        # know where it came from.  Linear chat never grows this line.
-        lines.append(
-            "Turn path (you are on a side branch): " + " -> ".join(turn_path)
-        )
-    if debt_lines:
-        lines.append(f"Open obligations (never silently drop):\n{debt_lines}")
-    if active_step is not None:
-        lines.append(
-            "Active step: "
-            f"{active_step.id} ({active_step.kind.value}) "
-            f"targets={list(active_step.targets)} "
-            f"expects={[item.id for item in active_step.expects]}"
-        )
-        if active_step.kind.value == "think":
-            # A plan may contain reasoning steps.  Without this line the model
-            # has to invent a tool call to satisfy one — a real run filled a
-            # summary step with `call_tool{capability: read}` and no target
-            # (#405).  The loop, not the plan, decides what closes a step.
-            lines.append(
-                "  This step is a reasoning step: answer it with `think` "
-                "(and `finish` when the task is done). Do not call a tool "
-                "for it."
-            )
     context_section = _context_section(spec.context_blocks)
     if context_section:
         lines.append(context_section)
@@ -539,6 +604,56 @@ def _system_prompt(
             "phase accepts; do not infer extra action names from this catalog.",
         ]
     )
+    # ---- volatile from here on -------------------------------------------
+    # Every line below can change within one task.  Keeping it after the
+    # catalog and the action protocols means a change costs only the tail of
+    # the prefix, not the whole system prompt.
+    volatile = [
+        f"Phase: {phase.value}",
+        f"Budget: max_steps={budget.max_steps} max_tokens={budget.max_tokens} "
+        f"max_wall_seconds={budget.max_wall_seconds} "
+        f"max_repair_attempts={budget.max_repair_attempts} "
+        f"max_replans={budget.max_replans}",
+    ]
+    if notes:
+        # #369: harness-generated loop diagnoses.  A note is a hint the model
+        # must read but is free to act on differently; it is not a constraint
+        # and never a permission.
+        volatile.append(
+            "Notes (read before your next proposal):\n"
+            + "\n".join(f"- {text}" for text in notes)
+        )
+    if boundary:
+        # #165 dogfood: the execution boundary is a runtime fact, not something
+        # the model should infer.  Stating it stops the "I am not allowed to
+        # run anything this turn" self-limitation that blocked a real task.
+        volatile.append(f"Execution boundary: {boundary}")
+    if turn_path:
+        # #372 B3: only rendered after a rewind/fork — a side-branch task must
+        # know where it came from.  Linear chat never grows this line.
+        volatile.append(
+            "Turn path (you are on a side branch): " + " -> ".join(turn_path)
+        )
+    if debt_lines:
+        volatile.append(f"Open obligations (never silently drop):\n{debt_lines}")
+    if active_step is not None:
+        volatile.append(
+            "Active step: "
+            f"{active_step.id} ({active_step.kind.value}) "
+            f"targets={list(active_step.targets)} "
+            f"expects={[item.id for item in active_step.expects]}"
+        )
+        if active_step.kind.value == "think":
+            # A plan may contain reasoning steps.  Without this line the model
+            # has to invent a tool call to satisfy one — a real run filled a
+            # summary step with `call_tool{capability: read}` and no target
+            # (#405).  The loop, not the plan, decides what closes a step.
+            volatile.append(
+                "  This step is a reasoning step: answer it with `think` "
+                "(and `finish` when the task is done). Do not call a tool "
+                "for it."
+            )
+    lines.extend(volatile)
     return "\n".join(lines) + "\n"
 
 
@@ -560,9 +675,9 @@ def build_model_view(
     notes: Sequence[str] = (),
     turn_path: Sequence[str] = (),
     boundary: str = "",
+    may_compact: bool | None = None,
 ) -> ModelView:
     """Build the deterministic view a strategy is allowed to see."""
-
     budget = budget or spec.budget
     specs = (
         () if spec.mode is TaskMode.CHAT else tuple(catalog.specs())
@@ -588,7 +703,12 @@ def build_model_view(
         mode=spec.mode,
         budget=budget,
         superseded=frozenset(int(seq) for seq in superseded),
+        may_compact=may_compact,
     )
+    # The layout is read back from the ledger rather than probed here: a view
+    # must be reproducible from the record alone, so what the model saw is a
+    # fact about the run, not about the disk at replay time.
+    layout_text = _latest_workspace_layout(ledger)
     system = _system_prompt(
         spec=spec,
         phase=phase,
@@ -601,6 +721,7 @@ def build_model_view(
         notes=notes,
         turn_path=turn_path,
         boundary=boundary,
+        layout=layout_text,
     )
 
     payload = {

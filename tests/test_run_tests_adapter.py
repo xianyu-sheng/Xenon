@@ -276,3 +276,53 @@ def test_test_path_outside_workspace_is_rejected(
     assert result["success"] is False
     assert result["error_kind"] == "security_error"
     assert "越界" in result["error"]
+
+
+def test_a_venv_without_the_test_framework_is_not_used(tmp_path: Path, monkeypatch) -> None:
+    """The venv is the right default only when it can actually run the tests.
+
+    SmartBench's ``.venv`` had no pytest.  Xenon picked it anyway, so every
+    ``test`` call returned "No module named pytest" and the run had no way to
+    prove a passing test -- while a working interpreter was one PATH away.
+    """
+    from xenon.nodes.tool_families import test_tools
+
+    scripts = tmp_path / ".venv" / (
+        "Scripts" if test_tools.sys.platform == "win32" else "bin"
+    )
+    scripts.mkdir(parents=True)
+    executable = scripts / (
+        "python.exe" if test_tools.sys.platform == "win32" else "python"
+    )
+    executable.write_text("", encoding="utf-8")  # a venv that cannot import anything
+
+    monkeypatch.setattr(
+        test_tools, "_has_module", lambda interp, module, ws: Path(interp) != executable
+    )
+    resolved, source = test_tools._resolve_interpreter(
+        tmp_path, "", framework="pytest"
+    )
+
+    assert resolved != executable
+    assert source == "runtime"
+
+
+def test_a_venv_that_can_run_the_framework_still_wins(tmp_path: Path, monkeypatch) -> None:
+    from xenon.nodes.tool_families import test_tools
+
+    scripts = tmp_path / ".venv" / (
+        "Scripts" if test_tools.sys.platform == "win32" else "bin"
+    )
+    scripts.mkdir(parents=True)
+    executable = scripts / (
+        "python.exe" if test_tools.sys.platform == "win32" else "python"
+    )
+    executable.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(test_tools, "_has_module", lambda *args: True)
+    resolved, source = test_tools._resolve_interpreter(
+        tmp_path, "", framework="pytest"
+    )
+
+    assert resolved == executable
+    assert source == "project"

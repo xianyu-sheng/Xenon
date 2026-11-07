@@ -65,6 +65,9 @@ class EventKind(str, Enum):
     CONTEXT_COMPACTED = "context_compacted"
     SESSION_CONTEXT = "session_context"
     WORKSPACE_PROBED = "workspace_probed"
+    # The tree the task runs against, recorded once so a replay can answer
+    # "what did the model see?" without reading the current disk.
+    WORKSPACE_LAYOUT = "workspace_layout"
     MODEL_USAGE = "model_usage"
     THOUGHT = "thought"
     REFLECTION_PROPOSED = "reflection_proposed"

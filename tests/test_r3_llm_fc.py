@@ -646,8 +646,13 @@ class TestAnthropicFCPath:
             response_format={"type": "json_object"},
         )
         sent = fake.posts[0]["json"]
-        assert "JSON" in sent["system"]
-        assert "你是助手" in sent["system"]
+        # `system` is a block list now so it can carry a cache breakpoint;
+        # Anthropic caches nothing that is not explicitly marked.
+        blocks = sent["system"]
+        text = blocks[0]["text"] if isinstance(blocks, list) else blocks
+        assert "JSON" in text
+        assert "你是助手" in text
+        assert blocks[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
 
 
 # ── per-provider Client 池 ─────────────────────────────────

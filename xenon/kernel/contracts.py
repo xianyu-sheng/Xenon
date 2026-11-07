@@ -358,6 +358,13 @@ class ToolSpec:
     effects: frozenset[EffectKind]
     risk: Risk
     params_schema: Mapping[str, Any] = field(default_factory=dict)
+    #: A real JSON Schema (``{"type":"object","properties":{...},"required":[...]}``)
+    #: for native function calling.  ``params_schema`` stays as the human-
+    #: readable hint rendered in prompts; this is the machine-readable one that
+    #: constrains decoding.  Prose descriptions let a model invent parameter
+    #: names -- ``files`` where the tool takes ``file_path`` -- because nothing
+    #: ever told the decoder what was legal.
+    json_schema: Mapping[str, Any] = field(default_factory=dict)
     description: str = ""
     preferences: Mapping[str, int] = field(default_factory=dict)
     #: The tool can only act on something that was named.  A call with no
