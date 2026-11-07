@@ -489,6 +489,32 @@ def _read_yaml(path: Path, *, required: bool = False) -> Mapping[str, Any]:
     return data
 
 
+#: Context windows for models this project actually talks to, worst case.
+#: A wrong-but-large number is safe here (it only makes the working set
+#: generous); a *zero* is not, because zero disables the window entirely and
+#: every downstream budget falls back to a tiny constant.  That happened on a
+#: real run: ``context_window=0`` shrank the history budget to 16k characters,
+#: the working set was re-selected on every call, and the provider cache was
+#: destroyed each turn -- measured 0% hits over 70 calls.
+_KNOWN_WINDOWS = {
+    "deepseek": 128_000,
+    "claude": 200_000,
+    "gpt-4": 128_000,
+    "gpt-5": 200_000,
+    "kimi": 128_000,
+    "glm": 128_000,
+    "qwen": 128_000,
+}
+
+
+def _default_window(model_id: str) -> int:
+    name = model_id.split("/", 1)[-1].lower()
+    for prefix, window in _KNOWN_WINDOWS.items():
+        if name.startswith(prefix) or prefix in name:
+            return window
+    return 0
+
+
 def _model_from_entry(model_id: str, raw: Mapping[str, Any]) -> ModelConfig:
     max_tokens = raw.get("max_tokens", _DEFAULT_MAX_TOKENS)
     try:
@@ -499,6 +525,12 @@ def _model_from_entry(model_id: str, raw: Mapping[str, Any]) -> ModelConfig:
         temperature = float(raw.get("temperature", 0.0))
     except (TypeError, ValueError):
         temperature = 0.0
+    try:
+        context_window = max(0, int(raw.get("context_window") or 0))
+    except (TypeError, ValueError):
+        context_window = 0
+    if context_window <= 0:
+        context_window = _default_window(str(model_id))
     return ModelConfig(
         model_id=str(model_id),
         base_url=str(raw.get("base_url") or ""),
@@ -506,6 +538,7 @@ def _model_from_entry(model_id: str, raw: Mapping[str, Any]) -> ModelConfig:
         max_tokens=max_tokens,
         temperature=temperature,
         reasoning_effort=str(raw.get("reasoning_effort") or ""),
+        context_window=context_window,
     )
 
 
@@ -796,7 +829,7 @@ def parse_action(payload: str | Mapping[str, Any]) -> Action:
 
 
 def build_messages(view: ModelView) -> list[dict[str, str]]:
-    """Render one deterministic state snapshot plus the ActFirst protocol.
+    """One deterministic state snapshot plus the ActFirst protocol.
 
     Field order is a cache decision, not a style one.  A provider caches an
     exact byte prefix, so the stable head of this JSON is what makes turn N+1

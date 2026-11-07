@@ -40,6 +40,19 @@ _CHAT_EVENT_KINDS = frozenset(
     }
 )
 
+#: Events the model never needs, in any mode.  A real run carried 56
+#: ``state_transition`` records (5.4k characters) into the working set; they
+#: say nothing about the work and they grow every turn, so they dominated the
+#: prompt and moved the cache prefix on each call.  ``model_usage`` is
+#: accounting, not state.  The ledger keeps both; the view does not show them.
+_INTERNAL_EVENT_KINDS = frozenset(
+    {
+        "state_transition",
+        "model_usage",
+        "context_compacted",
+    }
+)
+
 
 # Compaction digest sizing.  Reserved chars guarantee a record exists even
 # when priority events already consume the whole budget.
@@ -52,18 +65,19 @@ _CHARS_PER_TOKEN = 2
 def _context_chars(budget: Budget) -> int:
     """Characters of history the model can afford to see.
 
-    With a known window, reserve the output budget and a quarter of the
-    window for instructions/tool schemas, then convert to characters.  Without
-    one, fall back to the historical output-budget heuristic.
-
-    Kept as a character budget because the working-set selector measures
-    candidate entries as canonical JSON strings.
+    Reserves the output budget and a slice for instructions/tool schemas, then
+    converts what is left to characters.  The reserve is deliberately modest:
+    reserving a quarter of the window for instructions made the history budget
+    smaller than the history it was supposed to hold, so the working set was
+    re-selected on every call and the provider cache never had a stable prefix.
     """
 
     output = int(budget.max_tokens or _DEFAULT_MAX_TOKENS)
     window = int(getattr(budget, "context_window", 0) or 0)
     if window > 0:
-        reserve = output + window // 4
+        # Instructions and tool schemas are a fixed few thousand tokens; scale
+        # with the window but never take more than a tenth of it.
+        reserve = output + max(8_192, window // 10)
         available = max(1024, window - reserve)
         return max(512, available * _CHARS_PER_TOKEN)
     return max(512, output * _CHARS_PER_TOKEN)
@@ -389,6 +403,35 @@ def _priority(item: Mapping[str, Any]) -> bool:
     return False
 
 
+def _drop_duplicate_plans(
+    summaries: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Remove a ``plan_proposed`` that the following events supersede.
+
+    A plan reaches the view twice -- once proposed, once accepted -- and each
+    copy carries the full analysis and every step.  Only the accepted copy took
+    effect, so the proposal is redundant.  Matching on the plan content rather
+    than on adjacent seqs keeps this correct when other events land between the
+    two.
+    """
+
+    accepted = {
+        _canonical(item.get("plan") or {})
+        for item in summaries
+        if item.get("kind") == "plan_accepted"
+    }
+    if not accepted:
+        return list(summaries)
+    return [
+        item
+        for item in summaries
+        if not (
+            item.get("kind") == "plan_proposed"
+            and _canonical(item.get("plan") or {}) in accepted
+        )
+    ]
+
+
 def _working_set(
     events: Sequence[Any],
     *,
@@ -417,11 +460,18 @@ def _working_set(
     summaries = [
         _summary(event, superseded=superseded)
         for event in events
-        if not (
+        if event.kind.value not in _INTERNAL_EVENT_KINDS
+        and not (
             mode is TaskMode.CHAT
             and event.kind.value in _CHAT_EVENT_KINDS
         )
     ]
+    # A plan is stated twice -- proposed, then accepted -- and each copy
+    # carries the full analysis and every step.  Keeping both doubled the
+    # prompt for no information, and a replan added another pair.  The accepted
+    # copy is the one that took effect, so a proposal immediately followed by
+    # its acceptance is dropped.
+    summaries = _drop_duplicate_plans(summaries)
     selected: dict[int, dict[str, Any]] = {}
     for item in summaries:
         if _priority(item):
