@@ -15,18 +15,43 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Sequence
 
 from xenon.kernel.contracts import WorkspaceProbe
 
 __all__ = ["GitWorktreeProbe"]
 
 
+def _filtered(paths: Sequence[str]) -> tuple[str, ...]:
+    """Cache and VCS bookkeeping are not "stray source changes"."""
+
+    return tuple(
+        path
+        for path in paths
+        if "__pycache__/" not in path
+        and ".pytest_cache/" not in path
+        and not path.endswith((".pyc", ".pyo"))
+        and not path.startswith(".xenon/")
+    )
+
+
 class GitWorktreeProbe:
     """Read ``git status`` and the current head for one workspace."""
 
-    def __init__(self, workspace: str | Path, *, timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        workspace: str | Path,
+        *,
+        timeout: float = 30.0,
+        base: str | None = None,
+    ) -> None:
         self.workspace = Path(workspace).resolve()
         self.timeout = timeout
+        # ``base`` anchors what counts as "different from where this session
+        # started".  Reviewing a finished session against a bare worktree asks
+        # the wrong question: work the agent already committed is not dirty, so
+        # every committed file would read as an unmet claim.
+        self.base = base
 
     def probe(self, *, verified_paths: tuple[str, ...] = ()) -> WorkspaceProbe | None:
         changes = self._status_changes()
@@ -37,6 +62,42 @@ class GitWorktreeProbe:
             verified_paths=tuple(verified_paths),
             head=self._head(),
         )
+
+    def changed_since(self, base: str) -> tuple[str, ...] | None:
+        """Paths differing between ``base`` and the worktree.  None = cannot tell."""
+
+        if not base:
+            return self._status_changes()
+        committed = self._run("diff", "--name-only", "-z", base, "HEAD")
+        if committed is None or committed.returncode != 0:
+            return None
+        uncommitted = self._status_changes()
+        if uncommitted is None:
+            return None
+        paths = {
+            item
+            for item in committed.stdout.decode("utf-8", errors="replace").split("\0")
+            if item
+        }
+        return _filtered(sorted(paths | set(uncommitted)))
+
+    def commit_before(self, when: float) -> str:
+        """Newest commit at or before ``when`` (a UNIX timestamp).
+
+        Used to anchor an audit at the state the reviewed session started
+        from.  An empty result means "cannot tell", which the caller must
+        treat as such rather than as "no changes".
+        """
+
+        result = self._run(
+            "rev-list", "-1", f"--before={int(when)}", "HEAD"
+        )
+        if result is None or result.returncode != 0:
+            return ""
+        return result.stdout.decode("utf-8", errors="replace").strip()
+
+    def head(self) -> str:
+        return self._head()
 
     def _run(self, *args: str) -> subprocess.CompletedProcess[bytes] | None:
         try:
@@ -67,15 +128,7 @@ class GitWorktreeProbe:
             if code[0] in {"R", "C"} and index < len(entries):
                 # A rename/copy carries the original path in the next entry.
                 index += 1
-        # Cache and VCS bookkeeping are not "stray source changes".
-        return tuple(
-            path
-            for path in paths
-            if "__pycache__/" not in path
-            and ".pytest_cache/" not in path
-            and not path.endswith((".pyc", ".pyo"))
-            and not path.startswith(".xenon/")
-        )
+        return _filtered(paths)
 
     def _head(self) -> str:
         result = self._run("rev-parse", "HEAD")

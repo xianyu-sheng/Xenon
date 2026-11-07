@@ -166,7 +166,14 @@ def cli() -> None:
     parser.add_argument(
         "--workspace",
         default=None,
-        help="exec: workspace root (default: current directory)",
+        help="exec: workspace root (default: current directory); "
+        "audit-external: the repo being reviewed",
+    )
+    parser.add_argument(
+        "--base",
+        default=None,
+        help="audit-external: commit the reviewed session started from "
+        "(default: newest commit at or before its first event)",
     )
     parser.add_argument(
         "--ledger-dir",
@@ -344,6 +351,16 @@ def cli() -> None:
             )
             sys.exit(2)
         raise SystemExit(_cmd_report(str(target), args))
+
+    elif cmd == "audit-external":
+        target = getattr(args, "task", None) or args.workflow_path
+        if not target:
+            console.print(
+                "[red]用法: xenon audit-external <transcript.jsonl> "
+                "[--workspace DIR] [--json][/red]"
+            )
+            sys.exit(2)
+        raise SystemExit(_cmd_audit_external(str(target), args))
 
     elif cmd == "models":
         sub = args.workflow_path
@@ -567,6 +584,55 @@ def _cmd_report(target: str, args: argparse.Namespace) -> int:
     if getattr(args, "strict", False) and not report["status"].get(
         "answer_verified"
     ):
+        return 1
+    return 0
+
+
+def _cmd_audit_external(target: str, args: argparse.Namespace) -> int:
+    """Review another agent's session: its log claims, the worktree decides."""
+
+    import json as _json
+
+    from xenon.external import audit, render_audit, to_report
+
+    transcript = Path(target).expanduser()
+    if not transcript.is_file():
+        console.print(f"[red]找不到会话日志: {transcript}[/red]")
+        return 2
+    workspace = Path(getattr(args, "workspace", None) or ".").expanduser()
+    if not workspace.is_dir():
+        console.print(f"[red]工作区不存在: {workspace}[/red]")
+        return 2
+
+    result = audit(
+        transcript,
+        workspace=workspace,
+        base=getattr(args, "base", None) or None,
+    )
+    report = to_report(result)
+
+    if getattr(args, "json", False):
+        text = _json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
+        suffix = ".audit.json"
+    elif getattr(args, "comment", False):
+        text = render_audit(result, comment=True)
+        suffix = ".comment.md"
+    else:
+        text = render_audit(result)
+        suffix = ".audit.md"
+
+    out = getattr(args, "out", None)
+    if out:
+        directory = Path(out)
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = directory / (transcript.stem + suffix)
+        destination.write_text(text + "\n", encoding="utf-8")
+        print(destination)
+    else:
+        print(text)
+    # Evidence is a label here too: the audit report is the deliverable, so a
+    # "contradicted" verdict is a successful audit, not a failed command.
+    if getattr(args, "strict", False) and result.evidence_status == "contradicted":
         return 1
     return 0
 
