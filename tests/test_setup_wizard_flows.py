@@ -14,7 +14,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import yaml
 from rich.console import Console
 
 import xenon.repl.setup_wizard as sw
@@ -23,6 +22,7 @@ from xenon.repl import provider_registry, system_config
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.provider_registry import list_providers
 from xenon.repl.setup_wizard import _mode_scene, _model_hint
+from xenon.utils.credentials_io import load_document
 
 # --------------------------- _model_hint ---------------------------
 
@@ -427,13 +427,13 @@ def cancel_path(wizard_env, monkeypatch):
 @pytest.mark.parametrize("typed_key", ["", "   "], ids=["empty", "spaces"])
 def test_setup_api_key_empty_key_cancels(cancel_path, monkeypatch, typed_key):
     """An empty key cancels: nothing is tested or saved and the credentials file is untouched."""
-    before = cancel_path.creds_path.read_bytes()
+    before = load_document(cancel_path.creds_path)
     monkeypatch.setattr(sw, "_masked_input", lambda prompt: typed_key)
     cancel_path.inputs.append(_provider_number("openai"))
 
     sw._setup_api_key(model_pool=None)
 
-    assert cancel_path.creds_path.read_bytes() == before
+    assert load_document(cancel_path.creds_path) == before
     assert cancel_path.inputs == []
     output = cancel_path.out.getvalue()
     # 已取消 = "cancelled"
@@ -448,14 +448,14 @@ def test_setup_api_key_empty_key_cancels(cancel_path, monkeypatch, typed_key):
 
 def test_setup_api_key_reasks_invalid_number_then_cancels(cancel_path, monkeypatch):
     """Numbers outside the provider list are asked again; the flow still cancels cleanly."""
-    before = cancel_path.creds_path.read_bytes()
+    before = load_document(cancel_path.creds_path)
     monkeypatch.setattr(sw, "_masked_input", lambda prompt: "")
     past_the_end = str(len(list_providers()) + 2)  # one past the "custom provider" row
     cancel_path.inputs.extend(["0", past_the_end, _provider_number("openai")])
 
     sw._setup_api_key(model_pool=None)
 
-    assert cancel_path.creds_path.read_bytes() == before
+    assert load_document(cancel_path.creds_path) == before
     assert cancel_path.inputs == []
 
 
@@ -500,7 +500,7 @@ def test_setup_api_key_saves_key_after_successful_check(save_path, monkeypatch, 
 
     sw._setup_api_key(model_pool=None)
 
-    saved = yaml.safe_load(save_path.creds_path.read_text(encoding="utf-8"))
+    saved = load_document(save_path.creds_path)
     assert saved == {"deepseek": _OTHER_FAKE_KEY, "openai": _FAKE_KEY}
     # The atomic write left no temporary file behind.
     assert [p.name for p in save_path.creds_path.parent.iterdir()] == [save_path.creds_path.name]
@@ -511,14 +511,14 @@ def test_setup_api_key_saves_key_after_successful_check(save_path, monkeypatch, 
 @pytest.mark.parametrize("answer", ["", "n"], ids=["enter-default-no", "n"])
 def test_setup_api_key_failed_check_declined_saves_nothing(save_path, monkeypatch, answer):
     """If the check fails and the user does not say yes, the file is left untouched."""
-    before = save_path.creds_path.read_bytes()
+    before = load_document(save_path.creds_path)
     monkeypatch.setattr(sw, "_test_key_connectivity", _connectivity(False))
     monkeypatch.setattr(sw, "set_provider_key", _must_not_be_called("set_provider_key"))
     save_path.inputs.extend([_provider_number("openai"), answer])
 
     sw._setup_api_key(model_pool=None)
 
-    assert save_path.creds_path.read_bytes() == before
+    assert load_document(save_path.creds_path) == before
     assert save_path.inputs == []
 
 
@@ -529,7 +529,7 @@ def test_setup_api_key_failed_check_accepted_saves_key(save_path, monkeypatch):
 
     sw._setup_api_key(model_pool=None)
 
-    saved = yaml.safe_load(save_path.creds_path.read_text(encoding="utf-8"))
+    saved = load_document(save_path.creds_path)
     assert saved["openai"] == _FAKE_KEY
 
 
@@ -583,27 +583,27 @@ def custom_env(wizard_env, monkeypatch):
 @pytest.mark.parametrize("name", ["", "   "], ids=["empty", "spaces"])
 def test_register_custom_blank_name_cancels(custom_env, monkeypatch, name):
     """A blank provider name cancels before anything else is asked or saved."""
-    before = custom_env.creds_path.read_bytes()
+    before = load_document(custom_env.creds_path)
     monkeypatch.setattr(sw, "register_custom_provider", _must_not_be_called("register_custom_provider"))
     monkeypatch.setattr(sw, "_masked_input", _must_not_be_called("_masked_input"))
     custom_env.inputs.append(name)
 
     sw._register_custom()
 
-    assert custom_env.creds_path.read_bytes() == before
+    assert load_document(custom_env.creds_path) == before
     assert custom_env.inputs == []
 
 
 def test_register_custom_blank_key_cancels(custom_env, monkeypatch):
     """A blank API key cancels without registering anything."""
-    before = custom_env.creds_path.read_bytes()
+    before = load_document(custom_env.creds_path)
     monkeypatch.setattr(sw, "register_custom_provider", _must_not_be_called("register_custom_provider"))
     monkeypatch.setattr(sw, "_masked_input", lambda prompt: "")
     custom_env.inputs.extend(["FakeCorp", _CUSTOM_URL])
 
     sw._register_custom()
 
-    assert custom_env.creds_path.read_bytes() == before
+    assert load_document(custom_env.creds_path) == before
 
 
 def test_register_custom_registers_models_in_pool(custom_env, monkeypatch, capsys):

@@ -1,0 +1,48 @@
+# Example: audit another agent's session on every pull request.
+#
+# Copy this file into .github/workflows/ of the repository where your agent
+# runs.  The agent must publish its transcript (a JSONL/JSON session log) as an
+# artifact called `agent-transcript`; everything else is Xenon.
+#
+# Pin the action to a release tag, not `main`, once you depend on it:
+#   uses: xianyu-sheng/Xenon/.github/actions/xenon-audit@v1.0.0
+
+name: external-agent-audit
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The audit aligns the baseline to the session start, which needs the
+          # real commit history.  A shallow clone cannot answer "what did the
+          # tree look like when the agent began?".
+          fetch-depth: 0
+
+      - name: Fetch the agent transcript
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-transcript
+          path: .agent
+
+      - name: Audit what the agent claimed against the worktree
+        id: audit
+        uses: xianyu-sheng/Xenon/.github/actions/xenon-audit@v1.0.0
+        with:
+          transcript: .agent/session.jsonl
+          workspace: .
+          strict: "true"
+          pr-number: ${{ github.event.pull_request.number }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Show the verdict
+        run: echo "verdict=${{ steps.audit.outputs.verdict }}"

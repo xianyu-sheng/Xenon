@@ -1181,43 +1181,6 @@ class TestFileClaimDenialRecursiveReact:
         repl.ctx_mgr.add_assistant_message("我帮你创建了 hello.py。")
         return repl
 
-    def test_file_claim_recursive_react_exception_placeholder(self, monkeypatch):
-        """file_claim 触发后 _run_react_engine 抛异常 → 仍应有 user + [错误] assistant。
-
-        模拟最坏情况：_run_react_engine 自身抛异常未 catch（绕过修复5 的内部 catch），
-        验证修复6 的外层 try/except 兜底机制生效。
-        """
-        repl = self._build_repl_with_history(monkeypatch)
-
-        # Mock _run_react_engine 让其抛异常（绕过修复5 的内部 catch）
-        def failing_react(user_input, model_ids):
-            raise RuntimeError("simulated recursive failure")
-
-        monkeypatch.setattr(repl, "_run_react_engine", failing_react)
-
-        # 模拟 file_claim 路径：trim_last_assistant + _run_react_engine（外层 try catch）
-        repl.ctx_mgr.trim_last_assistant()
-        # 模拟 line 822 那个外层 try 的 catch 逻辑
-        try:
-            repl._run_react_engine("帮我创建 hello.py", ["gpt4"])
-        except Exception as e:
-            repl.ctx_mgr.add_assistant_message(
-                f"[错误] ReAct 重试失败: {e}",
-                model_used="gpt4",
-            )
-
-        # 验证：history 有 user + [错误] assistant 成对
-        history = repl.ctx_mgr.history
-        assert len(history) >= 2, f"应至少有 user + error 两条: {history}"
-        assert history[0].role == "user"
-        assert history[0].content == "帮我创建 hello.py"
-        # 找到 [错误] 标记的 assistant 消息
-        error_msgs = [
-            m for m in history if m.role == "assistant" and "[错误]" in m.content
-        ]
-        assert error_msgs, f"应有 [错误] 占位 assistant 消息: {history}"
-        assert "ReAct 重试失败" in error_msgs[-1].content
-
     def test_file_claim_react_engine_with_internal_placeholder(self, monkeypatch):
         """实际场景：_run_react_engine 自身 catch（修复5），无需触发外层 try。"""
 

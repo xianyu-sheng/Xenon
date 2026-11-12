@@ -59,6 +59,21 @@ def _gateway(
     )
 
 
+def test_the_gateway_honours_a_runtime_minted_call_id(tmp_path: Path) -> None:
+    """The receipt must carry the id ``tool_started`` already recorded."""
+
+    gateway = _gateway(tmp_path, {"success": True})
+    call = ToolCall(
+        spec_name="read",
+        params={"file_path": str(tmp_path / "x.txt")},
+        call_id="call-abc",
+    )
+
+    receipt = gateway.execute(call, Services(workspace=str(tmp_path)))
+
+    assert receipt.call_id == "call-abc"
+
+
 def test_apply_patch_becomes_fs_write_with_created_path(tmp_path: Path) -> None:
     gateway = _gateway(
         tmp_path,

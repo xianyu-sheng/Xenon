@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 from xenon.engine.context import AgentContext
-from xenon.engine.hollow_detector import HollowDetector
 from xenon.nodes.tool_executor import ToolExecutor
 from xenon.nodes.tool_node import (
     ToolNode,
@@ -15,7 +14,6 @@ from xenon.nodes.tool_node import (
 from xenon.repl.context_manager import ContextManager
 from xenon.repl.execution_policy import ExecutionLevel, classify_execution_policy
 from xenon.repl.model_registry import ModelRegistry
-from xenon.repl.permissions import PermissionGate
 from xenon.repl.prompt_optimizer import (
     is_contextual_followup,
     optimize_prompt,
@@ -252,35 +250,3 @@ def test_legacy_debug_labeled_followup_still_reaches_original_query():
     assert source is not None and "昆山" in source
 
 
-def test_query_url_only_and_placeholder_answers_are_hollow():
-    detector = HollowDetector()
-    url_only = detector.detect(
-        "https://example.com/search?from=昆山&to=常州",
-        require_query_result=True,
-    )
-    placeholder = detector.detect(
-        "https://example.com/query?from={昆山电报码}&to={常州电报码}",
-        require_query_result=True,
-    )
-    actual = detector.detect(
-        "查询结果：G7201，18:35 从昆山南出发，19:18 到达常州。详情见 https://example.com",
-        require_query_result=True,
-    )
-
-    assert url_only.is_hollow is True
-    assert placeholder.is_hollow is True
-    assert actual.is_hollow is False
-    assert "链接或接口地址不是查询结果" in url_only.hint()
-
-
-def test_mcp_confirmation_never_displays_unknown_server_marker():
-    auto = PermissionGate.format_confirm_message(
-        "mcp_call", {"tool_name": "train_query"}, "CRITICAL"
-    )
-    qualified = PermissionGate.format_confirm_message(
-        "mcp_call", {"tool_name": "rail:train_query"}, "CRITICAL"
-    )
-
-    assert "自动路由 / train_query" in auto
-    assert "? / train_query" not in auto
-    assert "rail / train_query" in qualified

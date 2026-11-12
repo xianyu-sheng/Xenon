@@ -11,8 +11,6 @@ import threading
 import time
 from pathlib import Path
 
-import yaml
-
 from tests.platform_utils import symlink_or_skip
 from xenon.engine.context import AgentContext
 from xenon.integration_cli import run_integration_cli
@@ -310,7 +308,9 @@ def test_mcp_stdio_config_from_stdin_persists_but_redacts_secrets(
     assert stderr == ""
     assert secret not in stdout
     assert payload["server"]["env_keys"] == ["AGENTPLAN_API_KEY"]
-    stored = yaml.safe_load(credentials.read_text(encoding="utf-8"))
+    from xenon.utils.credentials_io import load_document
+
+    stored = load_document(credentials)
     assert stored["_mcp_servers"][0]["env"]["AGENTPLAN_API_KEY"] == secret
     if os.name != "nt":
         assert stat.S_IMODE(credentials.stat().st_mode) == 0o600

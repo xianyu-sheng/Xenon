@@ -207,13 +207,10 @@ def test_ctrl_o_long_output_redraws_prompt_and_ctrl_c_remains_responsive(
     assert "Traceback" not in output
 
 
-def test_ctrl_o_works_in_raw_input_fallback_when_prompt_toolkit_disabled(
-    pty_child,
-):
-    """Ctrl+O must not depend on prompt_toolkit being available."""
+def test_ctrl_o_opens_the_execution_details(pty_child):
+    """Ctrl+O toggles the last execution trace in the built-in editor."""
     child = pty_child(
         "import os\n"
-        "os.environ['XENON_NO_PT'] = '1'\n"
         "from xenon.repl.repl import REPL\n"
         "repl = REPL(streaming=False)\n"
         "repl._last_mode_line = 'RAW-MODE-SENTINEL'\n"
@@ -284,7 +281,6 @@ def test_prompt_toolkit_long_paste_is_folded_but_returns_full_text(pty_child):
 def test_unix_fallback_long_paste_and_xterm_shift_enter(pty_child):
     child = pty_child(
         "import hashlib, os\n"
-        "os.environ['XENON_NO_PT'] = '1'\n"
         "from xenon.repl.repl import REPL\n"
         "value = REPL(streaming=False)._read_input()\n"
         "digest = hashlib.sha256(value.encode()).hexdigest()\n"

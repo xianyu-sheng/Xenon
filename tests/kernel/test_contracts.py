@@ -52,6 +52,7 @@ def test_capability_set_is_closed() -> None:
     assert {item.value for item in Capability} == {
         "read",
         "search",
+        "discover",
         "edit",
         "verify",
         "vcs",
@@ -73,6 +74,8 @@ def test_effect_kinds_are_stable() -> None:
         # "no stray changes" could only ever abstain.
         "workspace_probe",
         "opaque",
+        # Read-only tool discovery (defect 6).
+        "tool_discovery",
     }
 
 
@@ -113,6 +116,10 @@ def test_illegal_transition_is_rejected() -> None:
 def test_action_kinds_are_stable() -> None:
     assert {item.value for item in ActionKind} == {
         "think",
+        # The model asking the harness for state it is not shipped every turn.
+        # Distinct from `think` on purpose: the answer rides beside the turn
+        # instead of becoming it, so a receipt is never pushed out of view.
+        "state_read",
         "call_tool",
         "submit_plan",
         "update_plan",

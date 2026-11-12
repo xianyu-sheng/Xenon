@@ -11,6 +11,7 @@ concerns never leak into the kernel purity boundary.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -31,6 +32,8 @@ from xenon.kernel.contracts import (
     PlanProposal,
     PropositionKind,
     RequestEscalation,
+    StateRead,
+    SubmitPlan,
     Think,
     ToolIntent,
 )
@@ -39,10 +42,92 @@ from xenon.kernel.strategies import (
     LoopStrategy,
     PlanProvider,
 )
+from xenon.kernel.view.base import (
+    latest_fold_narrative,
+    latest_respondable,
+    step_preamble,
+    trailing_state_reads,
+    turn_context,
+)
 from xenon.utils.llm_client import chat_completion
 from xenon.utils.llm_errors import ResponseTruncatedError
 
 _TERMINAL_TOOLS = {
+    "make_plan": (
+        "Write down the steps you intend to take before doing them. Calling "
+        "this is optional: for a small task you may act directly. When you do "
+        "plan, the plan becomes the contract the harness verifies each step "
+        "against, so name real targets.",
+        {
+            "type": "object",
+            "properties": {
+                "analysis": {
+                    "type": "string",
+                    "description": "Why these steps, in one or two sentences.",
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "kind": {
+                                "type": "string",
+                                "enum": [
+                                    "inspect",
+                                    "edit",
+                                    "verify",
+                                    "commit",
+                                    "think",
+                                ],
+                            },
+                            "task": {"type": "string"},
+                            "targets": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "depends_on": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                            },
+                        },
+                        "required": ["id", "kind"],
+                    },
+                },
+            },
+            "required": ["steps"],
+        },
+    ),
+    "get_state": (
+        "Check whether the task is done yet, and what is left. Returns which "
+        "obligations are already proven, which are still unproven, open debt, "
+        "the active step and the plan. Call this when you are unsure whether "
+        "to keep working or to finish — an empty `debt` does NOT mean the work "
+        "is done; it only means nothing is outstanding.",
+        {
+            "type": "object",
+            "properties": {
+                "what": {
+                    "type": "string",
+                    "enum": ["state", "events", "plan", "session"],
+                    "description": (
+                        "state: whether each obligation is proven, plus phase, "
+                        "open debt and the active step -- use this to decide "
+                        "whether to finish. "
+                        "events: earlier events of this task, newest first. "
+                        "plan: the submitted plan and its steps. "
+                        "session: earlier tasks of this session, one line each "
+                        "-- use it when the request refers back to earlier work."
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "events only: how many to return (default 20).",
+                },
+            },
+            "required": ["what"],
+        },
+    ),
     "finish": (
         "Report the task as complete. Only call this when the work is done "
         "and the receipts show it.",
@@ -113,8 +198,98 @@ _TERMINAL_TOOLS = {
 }
 
 
+def render_state(view: ModelView, what: str, arguments: Mapping[str, Any]) -> str:
+    """Render one slice of the loop's state for the ``get_state`` tool."""
+
+    if what == "events":
+        try:
+            limit = int(arguments.get("limit") or 20)
+        except (TypeError, ValueError):
+            limit = 20
+        events = list(view.working_set)[-max(1, min(limit, 200)):]
+        return json.dumps(
+            {"events": events}, ensure_ascii=False, separators=(",", ":")
+        )
+    if what == "summary":
+        # The LLM narrative of the most recent fold (design doc §13 decision
+        # 1), as prose.  The deterministic ``elided`` digest stays the fact
+        # backbone; this is the connective context for continuing.
+        for item in reversed(list(view.working_set)):
+            if item.get("kind") == "context_summary":
+                note = item.get("summary_note")
+                if note:
+                    return str(note)
+        return "No earlier events have been compacted yet."
+    if what == "session":
+        # Earlier tasks of this session, pulled on demand (doc §3.2).  Each
+        # line is projected from that task's own ledger, so this is a view of
+        # the record -- never a second copy of it.
+        if not view.session_history:
+            return "No earlier tasks in this session."
+        return json.dumps(
+            {"earlier_tasks": list(view.session_history)},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    if what == "plan":
+        active = view.active_step
+        return json.dumps(
+            {
+                "active_step": None if active is None else active.id,
+                "steps": [
+                    {
+                        "id": step.id,
+                        "kind": step.kind.value,
+                        "targets": list(step.targets),
+                        "expects": [item.id for item in step.expects],
+                        "status": getattr(step.status, "value", str(step.status)),
+                    }
+                    for step in view.steps
+                ],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    active = view.active_step
+    obligations = list(getattr(view, "obligations_status", ()) or ())
+    unmet = [item for item in obligations if not item.get("met")]
+    return json.dumps(
+        {
+            "phase": view.phase.value,
+            "budget": {
+                "max_steps": view.budget.max_steps,
+                "max_tokens": view.budget.max_tokens,
+            },
+            "active_step": None if active is None else active.id,
+            # Stated explicitly, because `debt: []` reads like "finished" when
+            # it only means "nothing outstanding".  This is the answer to "am I
+            # done?": when every row is met, calling `finish` is the next move.
+            "obligations": obligations,
+            "all_obligations_met": bool(obligations) and not unmet,
+            "debt": [
+                {
+                    "id": item.obligation.id,
+                    "kind": item.obligation.kind.value,
+                    "target": item.obligation.target,
+                    "reason": item.reason,
+                }
+                for item in view.debt
+            ],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 def _native_tools(view: ModelView) -> list[dict[str, Any]]:
     """The view's tools as native function declarations, plus terminal actions.
+
+    Emitted in the OpenAI-compatible shape (``name/description/parameters``),
+    which is what every tool-calling provider dialect understands -- the
+    Anthropic converter accepts ``parameters`` as well.  The earlier
+    ``input_schema`` spelling was silently dropped by OpenAI-compatible
+    endpoints (the main channel), so functions arrived with no parameter
+    schema at all and the decoder was unconstrained.
 
     The schemas are real JSON Schema (types, ``required``, enums) taken from the
     catalog, so the decoder is constrained to names that actually exist.  Under
@@ -131,23 +306,37 @@ def _native_tools(view: ModelView) -> list[dict[str, Any]]:
         parameters = (
             dict(schema)
             if isinstance(schema, Mapping) and schema
-            else {"type": "object", "properties": {}}
+            else _parameters_from_prose(item.get("parameters") or {})
         )
         tools.append(
             {
                 "name": name,
                 "description": str(item.get("description") or ""),
-                "input_schema": parameters,
-                # Xenon binds capabilities, so the model names a tool and the
-                # intent carries the capability the catalog declared for it.
-                "capabilities": list(item.get("capabilities") or ()),
+                "parameters": parameters,
             }
         )
     for name, (description, parameters) in _TERMINAL_TOOLS.items():
         tools.append(
-            {"name": name, "description": description, "input_schema": parameters}
+            {"name": name, "description": description, "parameters": parameters}
         )
     return tools
+
+
+def _parameters_from_prose(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """A permissive JSON Schema when the catalog only carries prose params.
+
+    MCP/plugin specs describe parameters as ``{name: "description"}``; without
+    this fallback the tool would ship with an empty schema and the model could
+    not see which arguments exist at all.
+    """
+
+    properties = {
+        str(key): {"type": "string", "description": str(value)}
+        for key, value in schema.items()
+    }
+    if not properties:
+        return {"type": "object", "properties": {}}
+    return {"type": "object", "properties": properties}
 
 
 #: Native tool name -> capability, taken from what the catalog declared.  Kept
@@ -171,6 +360,29 @@ def action_from_tool_call(
     view: ModelView, name: str, arguments: Mapping[str, Any]
 ) -> Action:
     """Map one native ``tool_call`` onto the kernel's action vocabulary."""
+
+    if name == "get_state":
+        # State is a view, not a message.  The request ships only the fixed
+        # prefix and this turn's event precisely so that per-turn state cannot
+        # rewrite the cached bytes -- which means the model has to be able to
+        # ask for state instead of receiving it uninvited.  The answer goes
+        # back as a tool result, so it costs one turn and then is history.
+        return StateRead(render_state(view, str(arguments.get("what") or "state"), arguments))
+
+    if name == "make_plan":
+        # Planning as a tool, not a role.  A separate planner turn meant a
+        # second system prompt, which broke the provider's cached prefix at
+        # every role switch; a tool call keeps one identity for the whole run
+        # and still produces the same PlanProposal the verifier expects.
+        from xenon.harness.plan import PlanError, parse_plan
+
+        payload = dict(arguments)
+        payload.setdefault("objective", view.task.objective)
+        payload = _demote_terminal_steps(payload)
+        try:
+            return SubmitPlan(parse_plan(payload).proposal)
+        except (PlanError, TypeError, ValueError) as exc:
+            raise ActionParseError(f"invalid plan: {str(exc)[:300]}") from exc
 
     if name == "finish":
         claims: list[Claim] = []
@@ -201,6 +413,14 @@ def action_from_tool_call(
     if capability is None:
         raise ActionParseError(f"unknown tool: {name!r}")
     params = {str(k): v for k, v in arguments.items()}
+    if capability is Capability.REMOTE and name != "mcp_call":
+        # A per-tool MCP spec is called by its own function name; the executor
+        # entry (``mcp_call``) reads the remote tool name and its business
+        # arguments from ``tool_name`` / ``tool_args``.  Flattening the
+        # arguments instead lost them (ToolNode swallowed known kwargs, and
+        # unknown ones raised TypeError) — a measured run could not make a
+        # single real MCP call even though binding succeeded.
+        params = {"tool_name": name, "tool_args": dict(arguments)}
     targets: list[str] = []
     for key in ("file_path", "path", "pattern"):
         value = params.get(key)
@@ -219,11 +439,45 @@ def action_from_tool_call(
     )
 
 
-_CORE_TOOL_NAMES = frozenset({"read", "search", "apply_patch", "bash", "test", "git", "tool_result_read"})
+_CORE_TOOL_NAMES = frozenset({"read", "find_tools", "search", "apply_patch", "bash", "test", "git", "tool_result_read"})
 
 
 class ActionParseError(ValueError):
     """The model did not return one valid capability action."""
+
+
+def _compact_parse(arguments: Any) -> dict[str, Any]:
+    """A tool call's arguments as a mapping, or ``{}`` when they are not one."""
+
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments or "{}")
+        except ValueError:
+            return {}
+    if not isinstance(arguments, Mapping):
+        return {}
+    return {str(key): value for key, value in arguments.items()}
+
+
+def _compact_args(arguments: Any) -> str:
+    """One tool call's arguments as a short, single-line hint.
+
+    This is only ever read back by the model that sent it, so it has to stay
+    recognisable without re-shipping a large payload into the turn.
+    """
+
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments or "{}")
+        except ValueError:
+            return arguments[:120]
+    if not isinstance(arguments, Mapping):
+        return ""
+    try:
+        rendered = json.dumps(dict(arguments), ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        rendered = str(dict(arguments))
+    return rendered[:200]
 
 
 class ModelConfigError(ValueError):
@@ -351,6 +605,12 @@ Supported actions:
    ]}
 5. Abort when the task cannot be completed safely:
    {"action":"abort","reason":"why"}
+6. Check whether the task is done yet, and what is left. Call this when you are
+   unsure whether to keep working or to finish — an empty `debt` only means
+   nothing is outstanding, NOT that the work is done:
+   {"action":"get_state","what":"state"}
+   {"action":"get_state","what":"plan"}
+   {"action":"get_state","what":"events","limit":20}
 
 Rules:
 - Use capabilities, never concrete tool names. The catalog chooses the tool.
@@ -595,7 +855,14 @@ def _credentials_fallback() -> ModelConfig | None:
     list into models.yaml.
     """
 
-    data = _read_yaml(_DEFAULT_CREDENTIALS_PATH)
+    from xenon.utils.credentials_io import load_document
+
+    # ``XENON_CREDENTIALS_PATH`` redirects the whole product (evals, sandboxes);
+    # without it, the module constant is the default (tests patch it).
+    override = os.environ.get("XENON_CREDENTIALS_PATH", "").strip()
+    data = load_document(
+        Path(override).expanduser() if override else _DEFAULT_CREDENTIALS_PATH
+    )
     providers = data.get("providers")
     if not isinstance(providers, Mapping):
         return None
@@ -828,48 +1095,218 @@ def parse_action(payload: str | Mapping[str, Any]) -> Action:
     raise ActionParseError(f"unsupported action: {action!r}")
 
 
-def build_messages(view: ModelView) -> list[dict[str, str]]:
-    """One deterministic state snapshot plus the ActFirst protocol.
+_NATIVE_PROTOCOL = """\
+You work by calling tools. Every turn you call exactly one tool from the
+provided list; its result comes back as the next message.
 
-    Field order is a cache decision, not a style one.  A provider caches an
-    exact byte prefix, so the stable head of this JSON is what makes turn N+1
-    cheaper than turn N.  Objective, workspace and the tool list never change
-    within a task; they go first.  The working set grows after them.  Phase,
-    budget and debt change constantly and go last, where a change costs the
-    tail of one message instead of everything after it.
+How the loop works:
+- The tools you see are the whole surface. There is no other way to act.
+- A tool result is the only evidence that something happened. Never state an
+  effect you did not observe in a result.
+- `make_plan` is optional but recommended for any task with more than one
+  step: the plan becomes the contract each step is later verified against.
+  For a single-step task, act directly.
+- `finish` ends the task. Call it only when the work is done and the results
+  support what you say. If you could not do something, say so in the answer
+  and call `finish` with no claim for it -- do not stay silent and do not
+  invent a result.
+- `think` exists for reasoning between calls. Use it sparingly.
+- You are not sent the loop's state or its earlier events: the request is the
+  fixed prefix plus this turn. When you need phase, budget, open debt, the
+  active step, the plan, or what happened earlier, call `get_state`.
+- The workspace layout you were shown may already be stale if you have edited
+  files since. Re-read a path rather than trusting a listing.
+
+Do not describe the action in prose. Call the tool.
+"""
+
+
+def build_messages(
+    view: ModelView, *, native: bool = False
+) -> list[dict[str, str]]:
+    """The fixed prefix plus this turn's ask -- nothing else.
+
+    A provider's cache is an exact byte prefix, so the only way a call can be
+    reliably cheap is for its leading bytes never to change.  Any per-turn
+    text placed in the message list breaks that by construction: a working set
+    that grows shrinks the shrunken prefix and a "Current state" block that is
+    rewritten each round rewrites the bytes where the previous one ended.
+
+    So the request carries exactly two things:
+
+    * a **fixed prefix** -- persona, objective, workspace, capability catalog,
+      action protocol.  Identical bytes for the whole task, marked for caching;
+    * **this turn's message** -- the event the loop is reacting to, and the ask.
+
+    Everything else (phase, budget, open debt, what earlier turns did) is
+    *state*, not conversation.  It is not shipped; the model reads what it
+    needs with the ``get_state`` tool.  That keeps the prompt small -- no
+    attention diluted across a transcript nobody re-reads -- and the prefix
+    byte-identical from the first call to the last.
+
+    ``native`` selects the protocol: under native function calling the model
+    calls tools directly, and the JSON-instruction protocol is not merely
+    redundant but contradictory -- a real run told to "return one JSON action"
+    while holding tool schemas chose neither and finished with an empty
+    answer.
     """
 
-    state = {
-        "objective": view.task.objective,
-        "workspace": view.task.workspace,
-        "available_tools": list(view.tools),
-        "recent_events": list(view.working_set),
-        "phase": view.phase.value,
-        "budget": {
-            "max_steps": view.budget.max_steps,
-            "max_tokens": view.budget.max_tokens,
-        },
-        "debt": [
-            {
-                "id": item.obligation.id,
-                "kind": item.obligation.kind.value,
-                "target": item.obligation.target,
-                "reason": item.reason,
-            }
-            for item in view.debt
-        ],
-    }
+    protocol = _NATIVE_PROTOCOL if native else _ACTION_PROTOCOL
+    instruction = (
+        "Call one tool for the next move."
+        if native
+        else "Return exactly one JSON action."
+    )
     return [
-        {"role": "system", "content": view.system + "\n" + _ACTION_PROTOCOL},
+        {
+            "role": "system",
+            "content": view.system.rstrip() + chr(10) + chr(10) + protocol.lstrip(chr(10)),
+        },
         {
             "role": "user",
-            "content": (
-                "Current deterministic state (ledger prefix, not chat memory):\n"
-                + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
-                + "\nReturn exactly one JSON action."
+            "content": current_turn(
+                view, instruction=instruction, step=view.active_step
             ),
         },
     ]
+
+
+def current_turn(
+    view: ModelView, *, instruction: str, step: Any = None
+) -> str:
+    """This turn's message: the event being reacted to, and the ask.
+
+    The event is written as a delta, not as a transcript.  A model that wants
+    the older history asks for it through ``get_state``; a model that does not
+    pays for none of it.
+
+    The event is the most recent one a model can *act on*
+    (``latest_respondable``), not simply the last row in the ledger.  Those
+    differ exactly when the harness has written bookkeeping since the model's
+    last action, and shipping the bookkeeping instead of the receipt it
+    followed left a real run with nothing to answer -- it re-read files until
+    the loop detector stopped it.
+
+    When there is nothing to answer -- the opening turn, before any tool has
+    run -- the turn says so plainly.  A model that is told the task has started
+    and what the objective is has a first move; a model handed
+    ``{"kind":"intake_recorded"}`` does not.
+
+    Everything here is either this turn's event or a fact that does not change
+    within the task, because the leading bytes of a request are what the
+    provider caches.
+    """
+
+    lines: list[str] = []
+    stable = turn_context(notes=view.notes, turn_path=view.turn_path)
+    if stable:
+        lines.append(stable)
+    if step is not None and (note := step_preamble(step)):
+        lines.append(note)
+    event = latest_respondable(view.working_set)
+    if event is not None:
+        lines.append(
+            "Latest event:\n"
+            + json.dumps({"event": event}, ensure_ascii=False, separators=(",", ":"))
+        )
+    else:
+        lines.append(
+            "The task has started and nothing has run yet."
+            + chr(10)
+            + f"Objective: {view.task.objective}"
+        )
+    lines.extend(_tail_context(view))
+    lines.append(instruction)
+    return "\n\n".join(lines)
+
+
+def _tail_context(view: ModelView) -> list[str]:
+    """The context every strategy's turn message has to carry.
+
+    These lines ride after the event and at the tail, so the cached prefix is
+    untouched.  They live in one place because the strategy that plans first
+    has its own turn builder -- and that builder silently dropped both the
+    compaction brief and the session pointer, which meant a step-driven run
+    never learned that earlier tasks existed and went looking through ledger
+    files on disk instead.
+    """
+
+    lines: list[str] = []
+    narrative = latest_fold_narrative(view.working_set)
+    if narrative:
+        lines.append("Earlier events compacted — continuation brief:\n" + narrative)
+    # A pointer, not the content (doc §3.2): the model decides whether the
+    # request refers back to earlier work.
+    if view.session_history:
+        lines.append(
+            f"Earlier tasks this session: {len(view.session_history)}. "
+            'To use them, call get_state with what "session" before acting: '
+            "it is a built-in action -- not a catalog tool (find_tools does not "
+            "list it) and not a plan step."
+        )
+    # State the model asked for on a previous turn of this same event.  It
+    # rides beside the turn rather than replacing it: the model needs both the
+    # receipt it earned and the answer it requested.
+    for read in trailing_state_reads(view.working_set):
+        text = str(read.get("text") or "")
+        if text:
+            lines.append("State you asked for:\n" + text)
+    return lines
+
+
+def action_or_state(view: ModelView, raw: str) -> Action:
+    """Parse one text-protocol reply, resolving ``get_state`` against the view.
+
+    ``parse_action`` is deliberately view-free: it turns a payload into the
+    kernel's closed action vocabulary and nothing else.  A state read is not
+    an action -- it is a question about the view -- so it is resolved here,
+    where the view exists, and handed back as a thought carrying the answer.
+    """
+
+    try:
+        data = _extract_json(raw)
+    except ActionParseError:
+        return parse_action(raw)
+    if str(data.get("action") or "").strip() != "get_state":
+        if _state_read_spelled_as_a_call(data):
+            return StateRead(
+                render_state(view, _state_what(data), data)
+            )
+        return parse_action(data)
+    return StateRead(render_state(view, str(data.get("what") or "state"), data))
+
+
+def _state_read_spelled_as_a_call(data: Mapping[str, Any]) -> bool:
+    """Did the model ask for state through a tool-shaped call?
+
+    Measured in a real run: a model that plans first wrote
+    ``{"action":"call_tool","capability":"remote","params":{"tool":"get_state",
+    "what":"session"}}``.  Nothing exposes that "remote" capability, so binding
+    failed twice and the task answered "I could not get the session history" --
+    the state was one call away, spelled wrong.
+
+    A terminal action is not a tool.  Recognizing the spelling keeps the
+    decision in the harness, which owns the terminal vocabulary; the kernel
+    never learns a tool name.
+    """
+
+    if str(data.get("action") or "").strip() not in {"call_tool", "call"}:
+        return False
+    params = data.get("params")
+    params = params if isinstance(params, Mapping) else {}
+    for key in ("tool", "tool_name", "name"):
+        for source in (data, params):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip() == "get_state":
+                return True
+    return False
+
+
+def _state_what(data: Mapping[str, Any]) -> str:
+    params = data.get("params")
+    params = params if isinstance(params, Mapping) else {}
+    value = data.get("what") or params.get("what")
+    return str(value or "state")
 
 
 def _call_model(
@@ -1033,6 +1470,8 @@ class LLMActionProposer:
         # response, not a string), so an injected text client keeps the JSON
         # protocol.  Same for an eval that wants a fixed transcript.
         self._native = native_tools and client is None
+        self._skipped: list[str] = []
+        self._answered: list[str] = []
 
     def _call(self, messages: list[dict[str, str]]) -> str:
         return _call_model(self.config, self._client, messages)
@@ -1040,7 +1479,13 @@ class LLMActionProposer:
     def _call_native(self, view: ModelView) -> Action:
         from xenon.utils.llm_client import chat_completion_with_tools
 
-        messages = build_messages(view)
+        # Cleared per *call*: a reply with no tool calls returns below without
+        # consulting ``_note_parallel``, and the previous reply's dropped calls
+        # then resurfaced as if this reply had made them (duplicate state
+        # answers and a false "you asked for N calls" note).
+        self._skipped = []
+        self._answered = []
+        messages = build_messages(view, native=True)
         kwargs: dict[str, Any] = {
             "max_tokens": self.config.max_tokens,
             "temperature": self.config.temperature,
@@ -1068,6 +1513,7 @@ class LLMActionProposer:
             if text:
                 return Think(text[:2000])
             raise ActionParseError("model returned neither a tool call nor text")
+        self._note_parallel(view, response.tool_calls)
         call = response.tool_calls[0]
         arguments = call.get("arguments")
         if isinstance(arguments, str):
@@ -1078,6 +1524,53 @@ class LLMActionProposer:
         if not isinstance(arguments, Mapping):
             arguments = {}
         return action_from_tool_call(view, str(call.get("name") or ""), arguments)
+
+    def _note_parallel(
+        self,
+        view: ModelView,
+        calls: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Record what a parallel reply asked for but this turn cannot run.
+
+        The loop executes one action per turn, and the loop protocol says so.
+        The provider does not agree: ``tool_choice`` maps to Anthropic's
+        ``{"type": "any"}`` -- "at least one tool" -- and a measured reply to
+        "inspect calc.py and util.py" came back with **two** ``tool_use``
+        blocks.  ``disable_parallel_tool_use`` is documented for the first-party
+        API and was ignored by the router, so it cannot be relied on either.
+
+        Taking only the first call and dropping the rest is what turned a
+        read-then-write task into twelve reads and zero writes: the model
+        answered both halves of its plan in one turn, saw only one result, and
+        re-asked for the other half on the strength of prose rather than a
+        receipt, so the stuck detector never fired.
+
+        Dropped calls are therefore split by *what answering them costs*, not
+        by their names.  A call that maps to a ``StateRead`` is answered here:
+        it is rendered from the view this proposer already holds, so deferring
+        it buys nothing -- and losing it leaves the model asking "am I done?"
+        with no answer.  A measured run did exactly that: the dropped
+        ``get_state`` was never answered, so it re-read the same two files
+        until the budget ran out.  Everything else needs the runtime, so it is
+        *named back* to the model instead of vanishing.
+        """
+
+        # The caller clears these per call; this method only appends.
+        if len(calls) < 2:
+            return
+        for call in calls[1:]:
+            name = str(call.get("name") or "")
+            parsed = _compact_parse(call.get("arguments"))
+            try:
+                action = action_from_tool_call(view, name, parsed)
+            except ActionParseError:
+                action = None
+            if isinstance(action, StateRead):
+                self._answered.append(action.text)
+                continue
+            self._skipped.append(
+                f"{name or '?'}({_compact_args(call.get('arguments'))})"
+            )
 
     def __call__(self, view: ModelView) -> Action:
         if self._native:
@@ -1091,7 +1584,7 @@ class LLMActionProposer:
                     "Call one tool from the provided list."
                 )
         try:
-            return parse_action(self._call(build_messages(view)))
+            return action_or_state(view, self._call(build_messages(view)))
         except ResponseTruncatedError:
             return truncation_thought()
         except ActionParseError as exc:
@@ -1103,45 +1596,75 @@ class LLMActionProposer:
                 "Return exactly one JSON action with a supported action field."
             )
 
+    @property
+    def skipped_calls(self) -> tuple[str, ...]:
+        """Calls the last reply asked for that this turn did not execute.
+
+        Empty except right after a reply that carried more than one tool call;
+        the strategy reads it once and turns it into a note the model sees.
+        """
+
+        return tuple(self._skipped)
+
+    @property
+    def answered_alongside(self) -> tuple[str, ...]:
+        """State answers rendered for calls the reply made beside its action.
+
+        A dropped ``get_state`` is answered here rather than deferred, so these
+        are already-computed texts the strategy hands to the turn.
+        """
+
+        return tuple(self._answered)
+
 
 def build_plan_messages(view: ModelView) -> list[dict[str, str]]:
-    state = {
-        "objective": view.task.objective,
-        "workspace": view.task.workspace,
-        "constraints": list(view.task.constraints),
-        "available_tools": list(view.tools),
-        "debt": [
-            {"id": item.obligation.id, "reason": item.reason}
-            for item in view.debt
-        ],
-    }
+    """The fixed prefix plus one ask: write the plan.
+
+    This role used to be handed a JSON blob naming the objective, workspace and
+    tool list -- all three already in the system prompt, all three identical to
+    what every other role got.  Repeating them made each role's request a
+    different length and therefore a different cached prefix, so a run paid
+    full price for the first call of every role.
+
+    The role is selected by the *protocol appended to the one shared system
+    prompt*, not by a second system prompt.  One task, one prefix.
+    """
+
     return [
-        {"role": "system", "content": view.system + "\n" + _PLAN_PROTOCOL},
         {
-            "role": "user",
-            "content": (
-                "Current deterministic state (ledger prefix, not chat memory):\n"
-                + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
-                + "\nReturn exactly one JSON plan."
-            ),
+            "role": "system",
+            "content": view.system.rstrip() + chr(10) + chr(10) + _PLAN_PROTOCOL.lstrip(chr(10)),
         },
+        {"role": "user", "content": "Return exactly one JSON plan."},
     ]
 
 
 def build_finish_messages(view: ModelView) -> list[dict[str, str]]:
-    """Prompt the final PlanFirst synthesis over step receipts."""
+    """The fixed prefix plus the deterministic state: synthesise and claim.
+
+    The finisher is terminal and cannot call tools, so the evidence it writes
+    claims about has to travel in this one message.  Shipping only the fixpoint
+    prefix (as an earlier revision did) let the finisher invent claims from
+    nothing — V2 then either abstained across the board or reported
+    CONTRADICTED.  The working set here is already fold-bounded by the view,
+    so this is one bounded call, not a growing transcript.
+    """
 
     state = {
         "objective": view.task.objective,
         "constraints": list(view.task.constraints),
         "working_set": list(view.working_set),
+        "obligations": list(getattr(view, "obligations_status", ()) or ()),
         "debt": [
             {"id": item.obligation.id, "reason": item.reason}
             for item in view.debt
         ],
     }
     return [
-        {"role": "system", "content": view.system + "\n" + _FINISH_PROTOCOL},
+        {
+            "role": "system",
+            "content": view.system.rstrip() + chr(10) + chr(10) + _FINISH_PROTOCOL.lstrip(chr(10)),
+        },
         {
             "role": "user",
             "content": (
@@ -1153,159 +1676,51 @@ def build_finish_messages(view: ModelView) -> list[dict[str, str]]:
     ]
 
 
-class LLMPlanProposer:
-    """Call a model once to propose a capability plan; never execute it."""
-
-    def __init__(
-        self,
-        config: ModelConfig,
-        *,
-        client: Callable[..., str] | None = None,
-    ) -> None:
-        self.config = config
-        self._client = client
-
-    def __call__(self, view: ModelView) -> PlanProposal:
-        try:
-            payload = _extract_json(
-                _call_model(self.config, self._client, build_plan_messages(view))
-            )
-            if "plan" in payload:
-                payload = payload["plan"]
-            if not isinstance(payload, Mapping):
-                raise PlanError("plan must be an object")
-            data = dict(payload)
-            data.setdefault("objective", view.task.objective)
-            return parse_plan(data).proposal
-        except (ActionParseError, PlanError, TypeError, ValueError) as exc:
-            # Fail closed: an invalid plan must not silently turn into ActFirst.
-            return PlanProposal(
-                steps=(),
-                analysis=f"invalid plan proposal: {str(exc)[:300]}",
-            )
-
-
-class LLMPlanFinisher:
-    """Synthesize one Finish from the plan's deterministic working set."""
-
-    def __init__(
-        self,
-        config: ModelConfig,
-        *,
-        client: Callable[..., str] | None = None,
-    ) -> None:
-        self.config = config
-        self._client = client
-
-    def __call__(self, view: ModelView) -> Finish:
-        raw = _call_model(
-            self.config,
-            self._client,
-            build_finish_messages(view),
-        )
-        try:
-            action = parse_action(raw)
-        except (ActionParseError, TypeError, ValueError):
-            return self._salvage(raw)
-        if not isinstance(action, Finish):
-            # The finisher must never trigger another tool turn.
-            return self._salvage(raw)
-        return action
-
-    @staticmethod
-    def _salvage(raw: str) -> Finish:
-        """Keep the model's own words when only the claims were malformed.
-
-        The answer is the part a human reads; replacing it with a placeholder
-        because one claim field was wrong is a worse failure than having no
-        claims at all — and with no claims the kernel simply proves nothing.
-        """
-
-        try:
-            data = _extract_json(raw)
-        except ActionParseError:
-            return Finish(_FINISH_PLACEHOLDER)
-        answer = data.get("answer") if isinstance(data, dict) else None
-        text = str(answer or "").strip()
-        return Finish(text) if text else Finish(_FINISH_PLACEHOLDER)
-
-
-class LLMReflector:
-    """Review one finished attempt and propose at most one correction.
-
-    The output is a hypothesis.  It is parsed into an action, and only a
-    ``CallTool`` survives; the strategy discards everything else so a review
-    can never shorten the verification path.
-    """
-
-    def __init__(
-        self,
-        config: ModelConfig,
-        *,
-        client: Callable[..., str] | None = None,
-    ) -> None:
-        self.config = config
-        self._client = client
-
-    def __call__(self, view: ModelView, finish: Finish) -> Action | None:
-        try:
-            payload = _extract_json(
-                _call_model(
-                    self.config,
-                    self._client,
-                    build_reflect_messages(view, finish),
-                )
-            )
-        except (ActionParseError, TypeError, ValueError):
-            return None
-        raw = payload.get("reflect") if isinstance(payload, Mapping) else None
-        if not isinstance(raw, Mapping):
-            return None
-        try:
-            action = parse_action(dict(raw))
-        except (ActionParseError, TypeError, ValueError):
-            return None
-        return action if isinstance(action, CallTool) else None
-
-
 def build_reflect_messages(
     view: ModelView, finish: Finish | None = None
 ) -> list[dict[str, str]]:
-    """Prompt a bounded reflection over the deterministic receipts.
+    """The fixed prefix plus the proposed answer and the receipts to check it.
 
-    The proposed answer and its claims are included so the review can spot an
-    unsupported claim, not just a missing tool call.
+    The reviewer parses a single reply into an action; it cannot call
+    ``get_state`` (that resolution only exists on the actor's text path), so a
+    claim would otherwise be reviewed against nothing.  The receipts are the
+    fold-bounded working set, not a growing transcript.
     """
 
+    if finish is None:
+        proposed: str = "{}"
+    else:
+        proposed = json.dumps(
+            {
+                "proposed_answer": finish.answer,
+                "proposed_claims": [
+                    {"kind": claim.kind.value, "target": claim.target}
+                    for claim in finish.claims
+                ],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
     state = {
         "objective": view.task.objective,
-        "constraints": list(view.task.constraints),
         "receipts": [dict(item) for item in view.working_set],
-        "proposed_answer": "" if finish is None else finish.answer,
-        "proposed_claims": (
-            []
-            if finish is None
-            else [
-                {"kind": claim.kind.value, "target": claim.target}
-                for claim in finish.claims
-            ]
-        ),
         "debt": [
             {"id": item.obligation.id, "reason": item.reason}
             for item in view.debt
         ],
-        "available_tools": list(view.tools),
     }
+    lines = [turn_context(notes=view.notes, turn_path=view.turn_path)]
+    lines.append(
+        "Current deterministic state:\n"
+        + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+    )
+    lines.append("Proposed finish under review:\n" + proposed)
     return [
-        {"role": "system", "content": view.system + "\n" + _REFLECT_PROTOCOL},
         {
-            "role": "user",
-            "content": (
-                "Current deterministic state (ledger prefix, not chat memory):\n"
-                + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
-                + "\nReturn exactly one JSON reflection."
-            ),
+            "role": "system",
+            "content": view.system.rstrip() + chr(10) + chr(10) + _REFLECT_PROTOCOL.lstrip(chr(10)),
         },
+        {"role": "user", "content": "\n\n".join(x for x in lines if x)},
     ]
 
 
@@ -1323,12 +1738,13 @@ class LLMStepActor:
 
     def __call__(self, view: ModelView, step: Any, calls: int) -> Action:
         try:
-            return parse_action(
+            return action_or_state(
+                view,
                 _call_model(
                     self.config,
                     self._client,
                     build_step_messages(view, step, calls),
-                )
+                ),
             )
         except ResponseTruncatedError:
             return truncation_thought()
@@ -1341,34 +1757,50 @@ class LLMStepActor:
 def build_step_messages(
     view: ModelView, step: Any, calls: int
 ) -> list[dict[str, str]]:
-    """Prompt one bounded step sub-loop."""
+    """Prompt one bounded step sub-loop: fixed prefix, this turn only.
+
+    The step note used to be appended to the system prompt.  It names a step
+    id that changes on every transition, so each transition invalidated the
+    protocol the model was about to read -- the fix at the time was to put it
+    *after* the protocol, which still left it inside the cached prefix.  It is
+    in this turn's message now, where a change costs one message instead of
+    the whole system block.
+    """
 
     state = {
-        "objective": view.task.objective,
         "step": {
             "id": step.id,
             "kind": step.kind.value,
             "targets": list(step.targets),
             "expects": [item.id for item in step.expects],
         },
-        "calls_used_for_this_step": calls,
-        "receipts": [dict(item) for item in view.working_set],
-        "debt": [
-            {"id": item.obligation.id, "reason": item.reason}
-            for item in view.debt
-        ],
-        "available_tools": list(view.tools),
     }
+    lines: list[str] = []
+    stable = turn_context(notes=view.notes, turn_path=view.turn_path)
+    if stable:
+        lines.append(stable)
+    lines.append(
+        "Working on step:\n"
+        + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+    )
+    event = latest_respondable(view.working_set)
+    if event is not None:
+        lines.append(
+            "Latest event:\n"
+            + json.dumps({"event": event}, ensure_ascii=False, separators=(",", ":"))
+        )
+    lines.extend(_tail_context(view))
+    lines.append("Return exactly one JSON step action.")
     return [
-        {"role": "system", "content": view.system + "\n" + _STEP_PROTOCOL},
         {
-            "role": "user",
+            "role": "system",
             "content": (
-                "Current deterministic state (ledger prefix, not chat memory):\n"
-                + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
-                + "\nReturn exactly one JSON step action."
+                view.system.rstrip()
+                + "\n\n"
+                + _STEP_PROTOCOL.lstrip("\n")
             ),
         },
+        {"role": "user", "content": "\n\n".join(lines)},
     ]
 
 
@@ -1474,7 +1906,7 @@ def build_plan_review_messages(
     return [
         {
             "role": "system",
-            "content": view.system + "\n" + _PLAN_REVIEW_PROTOCOL,
+            "content": view.system.rstrip() + chr(10)+chr(10) + _PLAN_REVIEW_PROTOCOL.lstrip(chr(10)),
         },
         {
             "role": "user",
@@ -1490,17 +1922,11 @@ def build_plan_review_messages(
 def build_step_review_messages(
     view: ModelView, step: Any, action: Action
 ) -> list[dict[str, str]]:
-    """Prompt a review of one finished step, before it is released."""
+    """The fixed prefix plus the step under review and its completion note."""
 
     state = {
-        "objective": view.task.objective,
-        "step": {
-            "id": step.id,
-            "kind": step.kind.value,
-            "targets": list(step.targets),
-            "expects": [item.id for item in step.expects],
-        },
-        "step_completion_note": getattr(action, "answer", "") or "",
+        "step": step.id,
+        "kind": step.kind.value,
         # Step-level verification is the input to reflection: the reviewer
         # reacts to deterministically decided verdicts, it never decides them.
         "step_verification": [
@@ -1512,22 +1938,17 @@ def build_step_review_messages(
             }
             for verdict in view.step_verdicts
         ],
-        "receipts": [dict(item) for item in view.working_set],
-        "debt": [
-            {"id": item.obligation.id, "reason": item.reason}
-            for item in view.debt
-        ],
-        "available_tools": list(view.tools),
+        "completion_note": getattr(action, "answer", "") or "",
     }
     return [
         {
             "role": "system",
-            "content": view.system + "\n" + _STEP_REVIEW_PROTOCOL,
+            "content": view.system.rstrip() + chr(10) + chr(10) + _STEP_REVIEW_PROTOCOL.lstrip(chr(10)),
         },
         {
             "role": "user",
             "content": (
-                "Current deterministic state (ledger prefix, not chat memory):\n"
+                "Step under review:\n"
                 + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
                 + "\nReturn exactly one JSON step review."
             ),
@@ -1544,6 +1965,164 @@ _SINKABLE_PROVIDERS = (
     "reflector",
     "finisher",
 )
+
+
+def _demote_terminal_steps(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Turn "plan a state read" into "a step the actor will act on".
+
+    A plan step binds to a catalog tool; a terminal action is not a tool, so a
+    step naming one can only fail to bind.  Measured: a model that plans first
+    wrote ``{"capability":"read","params":{"tool":"get_state"}}`` as its only
+    step -- with binding it answered "I could not get the session history",
+    and with the plan rejected it finished without ever asking.
+
+    The step is kept, stripped of its intent: the runtime starts it and asks
+    the actor, which is exactly who *can* call ``get_state``.  A plan is a
+    sequence of steps that need work; "ask the harness a question" is one of
+    them, just not a tool call.
+    """
+
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return dict(payload)
+    cleaned: list[Any] = []
+    for item in steps:
+        if isinstance(item, Mapping) and _terminal_step_name(item):
+            item = {
+                key: value
+                for key, value in item.items()
+                if key not in ("capability", "params", "prefer")
+            }
+        cleaned.append(item)
+    result = dict(payload)
+    result["steps"] = cleaned
+    return result
+
+
+def _terminal_step_name(step: Mapping[str, Any]) -> str:
+    params = step.get("params")
+    params = params if isinstance(params, Mapping) else {}
+    for key in ("tool", "tool_name", "name"):
+        value = params.get(key)
+        if isinstance(value, str) and value.strip() in _TERMINAL_TOOLS:
+            return value.strip()
+    return ""
+
+
+class LLMPlanProposer:
+    """Call a model once to propose a capability plan; never execute it."""
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        client: Callable[..., str] | None = None,
+    ) -> None:
+        self.config = config
+        self._client = client
+
+    def __call__(self, view: ModelView) -> PlanProposal:
+        try:
+            payload = _extract_json(
+                _call_model(self.config, self._client, build_plan_messages(view))
+            )
+            if "plan" in payload:
+                payload = payload["plan"]
+            if not isinstance(payload, Mapping):
+                raise PlanError("plan must be an object")
+            data = dict(payload)
+            data.setdefault("objective", view.task.objective)
+            data = _demote_terminal_steps(data)
+            return parse_plan(data).proposal
+        except (ActionParseError, PlanError, TypeError, ValueError) as exc:
+            # Fail closed: an invalid plan must not silently turn into ActFirst.
+            return PlanProposal(
+                steps=(),
+                analysis=f"invalid plan proposal: {str(exc)[:300]}",
+            )
+
+
+class LLMPlanFinisher:
+    """Synthesize one Finish from the plan's deterministic working set."""
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        client: Callable[..., str] | None = None,
+    ) -> None:
+        self.config = config
+        self._client = client
+
+    def __call__(self, view: ModelView) -> Finish:
+        raw = _call_model(
+            self.config,
+            self._client,
+            build_finish_messages(view),
+        )
+        try:
+            action = parse_action(raw)
+        except (ActionParseError, TypeError, ValueError):
+            return self._salvage(raw)
+        if not isinstance(action, Finish):
+            # The finisher must never trigger another tool turn.
+            return self._salvage(raw)
+        return action
+
+    @staticmethod
+    def _salvage(raw: str) -> Finish:
+        """Keep the model's own words when only the claims were malformed.
+
+        The answer is the part a human reads; replacing it with a placeholder
+        because one claim field was wrong is a worse failure than having no
+        claims at all — and with no claims the kernel simply proves nothing.
+        """
+
+        try:
+            data = _extract_json(raw)
+        except ActionParseError:
+            return Finish(_FINISH_PLACEHOLDER)
+        answer = data.get("answer") if isinstance(data, dict) else None
+        text = str(answer or "").strip()
+        return Finish(text) if text else Finish(_FINISH_PLACEHOLDER)
+
+
+class LLMReflector:
+    """Review one finished attempt and propose at most one correction.
+
+    The output is a hypothesis.  It is parsed into an action, and only a
+    ``CallTool`` survives; the strategy discards everything else so a review
+    can never shorten the verification path.
+    """
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        client: Callable[..., str] | None = None,
+    ) -> None:
+        self.config = config
+        self._client = client
+
+    def __call__(self, view: ModelView, finish: Finish) -> Action | None:
+        try:
+            payload = _extract_json(
+                _call_model(
+                    self.config,
+                    self._client,
+                    build_reflect_messages(view, finish),
+                )
+            )
+        except (ActionParseError, TypeError, ValueError):
+            return None
+        raw = payload.get("reflect") if isinstance(payload, Mapping) else None
+        if not isinstance(raw, Mapping):
+            return None
+        try:
+            action = parse_action(dict(raw))
+        except (ActionParseError, TypeError, ValueError):
+            return None
+        return action if isinstance(action, CallTool) else None
 
 
 def bind_runtime_hooks(strategy: Any, runtime: Any) -> Any:
@@ -1648,7 +2227,7 @@ def build_llm_loop_strategy(
     planner: PlanProvider | None = None
     if preset_plan is not None:
         planner = lambda view: preset_plan  # noqa: E731
-    elif profile.plan:
+    elif profile.plan and not profile.actor_plans:
         planner = LLMPlanProposer(config, client=client)
     return LoopStrategy(
         profile,

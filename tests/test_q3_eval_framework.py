@@ -279,9 +279,9 @@ class TestEvalCredentialIsolation:
 
         with isolated_eval_credentials(tmp_path / "work", source) as target:
             assert os.environ["XENON_CREDENTIALS_PATH"] == str(target)
-            assert target.read_text(encoding="utf-8") == source.read_text(
-                encoding="utf-8"
-            )
+            from xenon.utils.credentials_io import load_document
+
+            assert load_document(target) == load_document(source)
 
         assert "XENON_CREDENTIALS_PATH" not in os.environ
 

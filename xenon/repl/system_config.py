@@ -111,8 +111,6 @@ class DevelopmentConfig:
     register_module_allow: str = ""
     # XENON_ALLOW_HOME_PROJECT: 允许在 home 目录使用项目
     allow_home_project: bool = False
-    # XENON_NO_PT: 禁用 PTY（测试用）
-    no_pty: bool = False
 
 
 @dataclass
@@ -156,6 +154,38 @@ class AutoRouteConfig:
 
 
 @dataclass
+class RetentionConfig:
+    """账本保留策略配置。
+
+    默认关闭：全新安装不会移动任何文件。开启后只把 ``ledger/children/`` 里
+    过期且没有被分支封存引用的子账本移到 ``ledger/archive/<date>/``，
+    任务账本永不自动清理。
+    """
+
+    # XENON_RETENTION_ENABLED: 开启子账本归档（默认关闭）
+    enabled: bool = False
+    # XENON_CHILDREN_DAYS: 子账本多少天后可归档
+    children_days: int = 30
+    # XENON_LEDGER_MAX_MB: 账本总大小上限（0 = 不限制）
+    max_total_mb: float = 0.0
+
+
+@dataclass
+class SandboxConfig:
+    """Where model-issued commands run.
+
+    ``process`` (default) uses only the in-process fences and is **not** a
+    security boundary.  ``docker`` / ``wsl`` wrap the command in an external
+    runtime; if the executable is missing, execution fails closed.
+    """
+
+    backend: str = "process"
+    image: str = "debian:stable-slim"
+    network: bool = False
+    workdir: str = "/workspace"
+
+
+@dataclass
 class SystemConfig:
     """系统配置根对象。"""
 
@@ -170,6 +200,8 @@ class SystemConfig:
         default_factory=IntentClassifierConfig
     )
     auto_route: AutoRouteConfig = field(default_factory=AutoRouteConfig)
+    retention: RetentionConfig = field(default_factory=RetentionConfig)
+    sandbox: SandboxConfig = field(default_factory=SandboxConfig)
 
 
 # 文件层缓存：只缓存 yaml 解析结果（按 路径+mtime 失效）。
@@ -178,39 +210,134 @@ class SystemConfig:
 #   2. CI/Docker 运行中改 env、以及测试里 monkeypatch.setenv 立即生效；
 #   3. 不同测试之间不会通过单例互相污染（如 strict 模式泄漏）。
 _file_cache: dict[str, Any] | None = None
-_file_cache_key: tuple[str, float] | None = None
+_file_cache_key: tuple[Any, ...] | None = None
+
+#: Sections a project-level config may override.  Security-sensitive settings
+#: (paths, sandbox, validation, development) stay user-level: a cloned repo is
+#: not a trust boundary, and hooks are the precedent (project hooks need an
+#: explicit trust fingerprint).
+_PROJECT_SECTIONS = frozenset(
+    {
+        "intent_classifier",
+        "auto_route",
+        "limits",
+        "interaction",
+        "retention",
+    }
+)
+
+
+def _read_config_file(path: Path) -> dict[str, Any]:
+    """Parse one YAML file; missing or malformed means empty, never a crash."""
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return {}
+    except yaml.YAMLError as e:
+        logger.warning("配置文件 YAML 解析失败，使用默认值: %s (%s)", path, e)
+        return {}
+    except OSError as e:
+        logger.warning("配置文件读取失败，使用默认值: %s (%s)", path, e)
+        return {}
+    if not isinstance(data, dict):
+        logger.warning("配置文件格式错误（应为字典/映射）: %s", path)
+        return {}
+    return data
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Mapping-aware merge: nested sections keep both sides' other keys."""
+
+    merged = dict(base)
+    for key, value in override.items():
+        current = merged.get(key)
+        if isinstance(value, dict) and isinstance(current, dict):
+            merged[key] = _deep_merge(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _project_config_path() -> Path | None:
+    """``<project>/.xenon/config.yaml``, when a project layer applies.
+
+    An explicit ``XENON_CONFIG_PATH`` (or a patched ``CONFIG_PATH`` in tests)
+    means exactly that file: layering is off, so a test can never be influenced
+    by the repository it happens to run in.
+    """
+
+    if os.environ.get("XENON_CONFIG_PATH", "").strip():
+        return None
+    if Path(CONFIG_PATH) != _DEFAULT_CONFIG_PATH:
+        return None
+    try:
+        from xenon.utils.project_root import find_project_root
+
+        root = find_project_root()
+    except Exception:  # noqa: BLE001 — a config lookup must never fail config
+        return None
+    if root is None:
+        return None
+    candidate = root / ".xenon" / "config.yaml"
+    try:
+        if candidate.resolve() == Path(CONFIG_PATH).resolve():
+            return None  # HOME-as-project would read the user file twice
+    except OSError:
+        pass
+    return candidate
+
+
+def _mtime(path: Path | None) -> float | None:
+    if path is None:
+        return None
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
 
 
 def _load_from_file() -> dict[str, Any]:
-    """从 config.yaml 加载配置。文件不存在时返回空字典（不报错）。
+    """User config, then the project config on top (project wins).
 
-    解析结果按 (路径, mtime) 缓存，文件被改动后自动失效重读。
+    Precedence: defaults < user < project < environment < CLI.  The project
+    layer is the one that was missing; it is resolved by a config-free finder
+    so this loader never calls ``get_config()`` recursively.
     """
+
     global _file_cache, _file_cache_key
 
-    try:
-        stat = CONFIG_PATH.stat()
-    except OSError:
-        # 文件不存在/不可读 → 用默认值，不报错
-        _file_cache, _file_cache_key = {}, None
-        return {}
-
-    key = (str(CONFIG_PATH), stat.st_mtime)
+    project = _project_config_path()
+    key = (
+        str(CONFIG_PATH),
+        _mtime(Path(CONFIG_PATH)),
+        str(project or ""),
+        _mtime(project),
+    )
     if _file_cache is not None and _file_cache_key == key:
         return _file_cache
 
-    try:
-        with CONFIG_PATH.open("r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        if not isinstance(data, dict):
-            logger.warning("配置文件格式错误（应为字典/映射）: %s", CONFIG_PATH)
-            data = {}
-    except yaml.YAMLError as e:
-        logger.warning("配置文件 YAML 解析失败，使用默认值: %s (%s)", CONFIG_PATH, e)
-        data = {}
-    except OSError as e:
-        logger.warning("配置文件读取失败，使用默认值: %s (%s)", CONFIG_PATH, e)
-        data = {}
+    data = _read_config_file(Path(CONFIG_PATH))
+    if project is not None:
+        # Project overrides user, but only for sections a repository may
+        # legitimately own.  A cloned repo must not be able to redirect
+        # credentials (``paths``), weaken the sandbox or validation
+        # (``sandbox`` / ``validation``), or widen home-directory access.
+        project_data = _read_config_file(project)
+        rejected = sorted(set(project_data) - _PROJECT_SECTIONS)
+        if rejected:
+            logger.warning(
+                "项目配置试图设置受保护的分组，已忽略: %s (%s)",
+                ", ".join(rejected),
+                project,
+            )
+        allowed = {
+            key: value
+            for key, value in project_data.items()
+            if key in _PROJECT_SECTIONS
+        }
+        data = _deep_merge(data, allowed)
 
     _file_cache, _file_cache_key = data, key
     return data
@@ -381,6 +508,8 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
     development_data = _section(file_data, "development")
     intent_classifier_data = _section(file_data, "intent_classifier")
     auto_route_data = _section(file_data, "auto_route")
+    retention_data = _section(file_data, "retention")
+    sandbox_data = _section(file_data, "sandbox")
 
     default_credentials = str(Path.home() / ".xenon" / "credentials.yaml")
 
@@ -503,10 +632,6 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
                 "development.allow_home_project",
             ),
         ),
-        no_pty=_get_bool_env(
-            "XENON_NO_PT",
-            _coerce_bool(development_data.get("no_pty"), False, "development.no_pty"),
-        ),
     )
 
     intent_classifier = IntentClassifierConfig(
@@ -581,6 +706,58 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
         ),
     )
 
+    retention = RetentionConfig(
+        enabled=_get_bool_env(
+            "XENON_RETENTION_ENABLED",
+            _coerce_bool(retention_data.get("enabled"), False, "retention.enabled"),
+        ),
+        children_days=max(
+            1,
+            _get_int_env(
+                "XENON_CHILDREN_DAYS",
+                _coerce_int(
+                    retention_data.get("children_days"),
+                    30,
+                    "retention.children_days",
+                ),
+            ),
+        ),
+        max_total_mb=max(
+            0.0,
+            _get_float_env(
+                "XENON_LEDGER_MAX_MB",
+                _coerce_float(
+                    retention_data.get("max_total_mb"),
+                    0.0,
+                    "retention.max_total_mb",
+                ),
+            ),
+        ),
+    )
+
+    sandbox = SandboxConfig(
+        backend=_get_str_env(
+            "XENON_SANDBOX",
+            _coerce_str(sandbox_data.get("backend"), "process", "sandbox.backend"),
+        ).strip().lower()
+        or "process",
+        image=_get_str_env(
+            "XENON_SANDBOX_IMAGE",
+            _coerce_str(
+                sandbox_data.get("image"), "debian:stable-slim", "sandbox.image"
+            ),
+        ),
+        network=_get_bool_env(
+            "XENON_SANDBOX_NETWORK",
+            _coerce_bool(sandbox_data.get("network"), False, "sandbox.network"),
+        ),
+        workdir=_get_str_env(
+            "XENON_SANDBOX_WORKDIR",
+            _coerce_str(sandbox_data.get("workdir"), "/workspace", "sandbox.workdir"),
+        )
+        or "/workspace",
+    )
+
     return SystemConfig(
         validation=validation,
         engine=engine,
@@ -591,6 +768,8 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
         development=development,
         intent_classifier=intent_classifier,
         auto_route=auto_route,
+        retention=retention,
+        sandbox=sandbox,
     )
 
 
@@ -711,10 +890,6 @@ development:
   # 环境变量: XENON_ALLOW_HOME_PROJECT
   allow_home_project: false
 
-  # 禁用 PTY（测试用）
-  # 环境变量: XENON_NO_PT
-  no_pty: false
-
 # ========================================
 # LLM 意图分类器配置
 # ========================================
@@ -759,6 +934,44 @@ auto_route:
   # 是否将最近的决策持久化到 ~/.xenon/auto_route_decisions.jsonl
   # 环境变量: XENON_AUTO_ROUTE_LOG_DECISIONS
   log_decisions: false
+
+# ========================================
+# 账本保留策略（默认关闭）
+# ========================================
+# 开启后只把 ledger/children/ 里过期、且没有被分支封存引用的子账本
+# 移到 ledger/archive/<date>/；任务账本永不自动清理，也不会删除任何证据。
+retention:
+  # 环境变量: XENON_RETENTION_ENABLED
+  enabled: false
+
+  # 子账本多少天后可归档
+  # 环境变量: XENON_CHILDREN_DAYS
+  children_days: 30
+
+  # 账本总大小上限（MB，0 = 不限制）
+  # 环境变量: XENON_LEDGER_MAX_MB
+  max_total_mb: 0
+
+# ========================================
+# 命令沙箱（默认 process：不是安全边界）
+# ========================================
+# process 只在进程内做路径/命令检查；docker / wsl 才提供外部隔离。
+# 配置的后端不可用时会 fail closed（直接报错，不静默降级）。
+sandbox:
+  # 环境变量: XENON_SANDBOX
+  backend: process
+
+  # docker 镜像（仅 backend: docker 时使用）
+  # 环境变量: XENON_SANDBOX_IMAGE
+  image: "debian:stable-slim"
+
+  # 允许沙箱内访问网络（默认关闭）
+  # 环境变量: XENON_SANDBOX_NETWORK
+  network: false
+
+  # 容器内的工作目录（映射到项目根）
+  # 环境变量: XENON_SANDBOX_WORKDIR
+  workdir: "/workspace"
 """
 
     with path.open("w", encoding="utf-8") as f:

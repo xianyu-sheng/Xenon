@@ -44,15 +44,6 @@ def _shell_quote(value) -> str:
 
 _SKILLS_DIR = Path.home() / ".xenon" / "skills"
 _SHARED_SKILLS_DIR = Path.home() / ".agents" / "skills"
-_PROJECT_MARKERS = (
-    ".git",
-    "pyproject.toml",
-    "package.json",
-    "Cargo.toml",
-    "go.mod",
-    "pom.xml",
-    "CMakeLists.txt",
-)
 _SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _LEGACY_SKILL_NAME_RE = re.compile(r"^[\w-]{1,64}$", re.UNICODE)
 _FRONTMATTER_BYTES = 64 * 1024
@@ -153,20 +144,11 @@ class SkillManager:
             candidate = Path(configured).expanduser().resolve()
             return candidate if candidate.is_dir() else None
 
-        current = (start or Path.cwd()).resolve()
-        home = Path.home().resolve()
-        if current in {home, Path(current.anchor)}:
-            return None
+        # One finder for the whole product (config layering uses the same one),
+        # so "where is this project" cannot drift between skills and config.
+        from xenon.utils.project_root import find_project_root
 
-        fallback = current
-        for _ in range(6):
-            if any((current / marker).exists() for marker in _PROJECT_MARKERS):
-                return current
-            parent = current.parent
-            if parent == current or parent == home:
-                break
-            current = parent
-        return fallback
+        return find_project_root(start, allow_home=False, fallback=True)
 
     def _build_roots(self) -> list[tuple[str, Path]]:
         roots: list[tuple[str, Path]] = []

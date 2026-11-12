@@ -81,6 +81,51 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
         requires_target=True,
     ),
     ToolSpec(
+        name="find_tools",
+        pack="core",
+        capabilities=frozenset({Capability.DISCOVER}),
+        effects=frozenset({EffectKind.TOOL_DISCOVERY}),
+        risk=Risk.INFO,
+        params_schema={
+            "query": "what you want to accomplish, or an exact tool name",
+            "capability": "optional filter: read|search|edit|verify|vcs|shell|remote",
+            "limit": "max candidates (default 5)",
+        },
+        json_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Describe the intent in a few words, or give an exact "
+                        "tool name to preview its parameters."
+                    ),
+                },
+                "capability": {
+                    "type": "string",
+                    "enum": [
+                        "read", "search", "edit", "verify", "vcs",
+                        "shell", "remote",
+                    ],
+                    "description": "Optional: restrict to one capability.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max candidates, default 5.",
+                },
+            },
+            "required": ["query"],
+        },
+        description=(
+            "Search the tool catalog before committing a call. Returns "
+            "matching tools with their full parameters but does not execute "
+            "them — use this when the index line is not enough to pick a tool, "
+            "then call the matched tool directly."
+        ),
+        preferences={"discover": 5},
+        requires_target=False,
+    ),
+    ToolSpec(
         name="tool_result_read",
         pack="core",
         capabilities=frozenset({Capability.READ}),

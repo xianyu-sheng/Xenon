@@ -37,11 +37,20 @@ from xenon.kernel.contracts import (
 )
 
 _CMD_KEY = "comm" + "and"
-_READ_CAPABILITIES = frozenset({Capability.READ, Capability.SEARCH})
+#: DISCOVER is read-only catalog discovery (defect 6): it has no side effects
+#: and is free in every mode, including read-only.
+_READ_CAPABILITIES = frozenset(
+    {Capability.READ, Capability.SEARCH, Capability.DISCOVER}
+)
 
 
 class PermissionMode(str, Enum):
-    """Permission modes from #201.  Approval prompts are not wired yet."""
+    """Permission modes from #201 (approval panel wired since #392).
+
+    READ_ONLY: reads only; AUTO_EDIT: workspace writes run freely; SCOPED:
+    workspace writes need a human answer ("default" in /permissions); BYPASS:
+    everything except hard-destructive commands and push.
+    """
 
     READ_ONLY = "read-only"
     AUTO_EDIT = "auto-edit"
@@ -71,6 +80,14 @@ class ScopedGrant:
     def allows(self, capability: Capability, target: str) -> bool:
         if capability is not self.capability:
             return False
+        actual = _normalize(target)
+        # A shell target that chains, backgrounds or redirects is never covered
+        # by a grant — not even the ``*`` wildcard a turn answer uses:
+        # ``sleep 1 & rm -rf x`` and ``echo hi > /etc/passwd`` start with the
+        # granted command but do something the human never saw.  §9: 链式命令
+        # 属提权，绝不合并。
+        if self.capability is Capability.SHELL and _chains_commands(actual):
+            return False
         if not self.target:
             return False
         # ``*`` is the explicit "this whole capability, in this workspace"
@@ -80,12 +97,89 @@ class ScopedGrant:
         if self.target == "*":
             return True
         wanted = _normalize(self.target)
-        actual = _normalize(target)
-        return (
+        if (
             actual == wanted
             or actual.startswith(wanted + " ")
             or actual.startswith(wanted.rstrip("/*") + "/")
-        )
+        ):
+            return True
+        # A command is authorized by the program it runs and the shape of its
+        # arguments, not by its exact spelling.  Measured on a real task: the
+        # model rewrote `python -c "print(123)"` four times — as
+        # ``'print(123)' | python -``, ``python "-c" ...`` and the reverse pipe —
+        # so literal matching asked four times for one intent.  Shape matching
+        # keeps the program fixed (a grant for `python` never releases `rm`) and
+        # ignores the spelling noise a model varies on.
+        if self.capability is Capability.SHELL:
+            return _same_command_shape(wanted, actual)
+        return False
+
+
+# Tokens whose exact text carries no meaning for "what does this command do".
+_SHAPE_IGNORED_TOKENS = frozenset({"'", '"', "`", "|", "||", "&&", ";", "\\"})
+
+# Markers that put a second program (or a write the human never saw) on the
+# same line.  A grant for one command must never cover these: the human
+# approved `a`, not `a && b`, not `a & b`, and not `a > /etc/passwd`.
+_CHAIN_MARKERS = (
+    "|",
+    "&&",
+    "||",
+    ";",
+    "`",
+    "$(",
+    "&",  # background separator: `sleep 1 & rm -rf x`
+    ">",  # redirection: writes a file the human never approved
+    "<",
+    "\n",
+    "\r",
+)
+
+
+def _chains_commands(text: str) -> bool:
+    return any(marker in text for marker in _CHAIN_MARKERS)
+
+
+def _command_shape(text: str) -> tuple[str, tuple[str, ...]] | None:
+    """Reduce a single command to (program, argument tokens without quoting noise).
+
+    Only spelling is dropped: quoting style, redundant separators, empty
+    tokens, and a trailing shell comment.  Word order and every meaningful
+    argument survive, so a grant for ``git status`` does not cover ``git push``.
+
+    A line that chains or pipes several programs has no shape of its own — it
+    is not one command — so it returns ``None`` and can never shape-match.
+    """
+
+    stripped = text.strip()
+    # A newline is a second command, not whitespace: `a #x\nb` would otherwise
+    # shape-match `a` after the comment is cut, while the shell runs both.
+    if not stripped or "\n" in stripped or "\r" in stripped:
+        return None
+    if _chains_commands(stripped):
+        return None
+    # A trailing comment is not part of the command the human saw.
+    if "#" in stripped:
+        stripped = stripped.split("#", 1)[0]
+    tokens = [
+        token
+        for token in stripped.replace("'", " ").replace('"', " ").split()
+        if token
+    ]
+    if not tokens:
+        return None
+    program = tokens[0].rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    return program, tuple(tokens[1:])
+
+
+def _same_command_shape(granted: str, actual: str) -> bool:
+    left = _command_shape(granted)
+    right = _command_shape(actual)
+    if left is None or right is None:
+        return False
+    if left[0] != right[0]:
+        return False
+    return left[1] == right[1]
 
 
 def _normalize(value: str) -> str:
@@ -173,34 +267,6 @@ def _tokens(command: str) -> list[str]:
         ]
     except ValueError:
         return []
-
-
-def _is_safe_test_command(command: str) -> bool:
-    tokens = _tokens(command)
-    if not tokens:
-        return False
-    if tokens[0] in {"pytest", "tox", "nox"}:
-        return True
-    if tokens[:3] in (
-        ["python", "-m", "pytest"],
-        ["python3", "-m", "pytest"],
-        ["py", "-m", "pytest"],
-        ["python", "-m", "unittest"],
-        ["python3", "-m", "unittest"],
-        ["uv", "run", "pytest"],
-    ):
-        return True
-    if tokens[:2] in (
-        ["npm", "test"],
-        ["pnpm", "test"],
-        ["yarn", "test"],
-        ["go", "test"],
-        ["cargo", "test"],
-        ["mvn", "test"],
-        ["gradle", "test"],
-    ):
-        return True
-    return False
 
 
 def _is_destructive(command: str) -> bool:
@@ -438,15 +504,16 @@ class PermissionPolicy:
             )
         if capability in _READ_CAPABILITIES:
             return PolicyDecision(kind=PolicyDecisionKind.ALLOW)
-        if self.mode is PermissionMode.BYPASS:
-            return PolicyDecision(
-                kind=PolicyDecisionKind.ALLOW, reason="bypass mode"
-            )
         if _is_push(_command(intent)):
             # A1 (#414): Xenon does not decide this for the human.  Pushing is
             # an effect a person may authorize; refusing it outright made the
             # product stricter than the agent it wraps.  The decision is asked
             # for, recorded, and then obeyed.
+            #
+            # This sits *before* the bypass shortcut on purpose (§9: "push 的
+            # 硬规则先于任何授权"): bypass is the user telling us not to ask,
+            # and a push is exactly the effect the front-end still promises to
+            # intercept.
             if not self.allow_approval:
                 return self._deny(
                     capability,
@@ -456,6 +523,10 @@ class PermissionPolicy:
                 )
             return self._approval(
                 capability, targets, "push requires explicit approval"
+            )
+        if self.mode is PermissionMode.BYPASS:
+            return PolicyDecision(
+                kind=PolicyDecisionKind.ALLOW, reason="bypass mode"
             )
         if self.mode is PermissionMode.READ_ONLY:
             # Asking is not writing, but execution is: a read-only turn may
@@ -468,6 +539,17 @@ class PermissionPolicy:
             return self._deny(capability, targets, "read-only mode")
         if capability is Capability.EDIT:
             path_targets = _path_targets(intent)
+            if self.mode is PermissionMode.SCOPED:
+                # SCOPED is the front-end's "default" mode: writes inside the
+                # workspace still need a human answer, which is what separates
+                # it from accept_edits.
+                if self.allow_approval:
+                    return self._approval(
+                        capability, targets, "write requires approval"
+                    )
+                return self._deny(
+                    capability, targets, "scoped mode: write requires approval"
+                )
             if path_targets and all(
                 _inside_workspace(target, Path(self.workspace))
                 for target in path_targets
@@ -487,10 +569,12 @@ class PermissionPolicy:
                 _inside_workspace(target, Path(self.workspace))
                 for target in path_targets
             )
-            if self.mode is PermissionMode.AUTO_EDIT and (
-                _is_safe_test_command(command)
-                or (structured_tests and not command)
-            ):
+            # Structural, not a vocabulary: a verify call that names only
+            # workspace paths and runs no external program is the read-shaped
+            # case and needs no prompt.  Whether a *command* looks like a test
+            # runner is a closed enumeration that always drifts, so commands go
+            # through approval like every other execution.
+            if self.mode is PermissionMode.AUTO_EDIT and structured_tests and not command:
                 return PolicyDecision(
                     kind=PolicyDecisionKind.ALLOW,
                     reason="workspace test command",
@@ -533,12 +617,6 @@ class PermissionPolicy:
             if _is_destructive(command):
                 return self._deny(
                     capability, targets, "destructive shell command"
-                )
-            if _is_safe_test_command(command):
-                return PolicyDecision(
-                    kind=PolicyDecisionKind.ALLOW,
-                    reason="test command",
-                    scope=(command,),
                 )
             if _is_commit(command) or _is_scope_safe_stage(command):
                 return PolicyDecision(
@@ -751,7 +829,12 @@ class PermissionPolicy:
                     f"denied by rule {getattr(rule, 'selector', lambda: '')()}",
                 )
         command = _command(intent)
-        if capability is Capability.SHELL and _is_destructive(command):
+        if capability in (Capability.SHELL, Capability.VERIFY) and _is_destructive(
+            command
+        ):
+            # A "verify" call is a shell command in practice.  Leaving VERIFY
+            # out of this rule meant `pytest …; rm -rf .` was merely asked
+            # about instead of refused.
             return self._ask_destructive(
                 capability, targets, "destructive shell command"
             )

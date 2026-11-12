@@ -80,7 +80,7 @@ def test_compaction_keeps_a_digest_instead_of_dropping_history():
     events = [_Event(i, f"tool_{i}", "ok" if i % 2 else "failed") for i in range(1, 60)]
     budget = Budget(max_tokens=600)
 
-    working_set, compacted = _working_set(events, mode=TaskMode.TASK, budget=budget)
+    working_set, compacted, _ = _working_set(events, mode=TaskMode.TASK, budget=budget)
 
     assert compacted, "budget pressure must fold something"
     digest = [item for item in working_set if item.get("kind") == "elided"]
@@ -95,7 +95,7 @@ def test_compaction_keeps_a_digest_instead_of_dropping_history():
 def test_digest_keeps_status_and_seq_when_there_is_room():
     events = [_Event(i, "pytest", "failed" if i == 2 else "ok") for i in range(1, 14)]
 
-    working_set, compacted = _working_set(
+    working_set, compacted, _ = _working_set(
         events, mode=TaskMode.TASK, budget=Budget(max_tokens=560)
     )
 
@@ -116,7 +116,7 @@ def test_digest_keeps_status_and_seq_when_there_is_room():
 def test_compaction_leaves_small_histories_untouched():
     events = [_Event(i, "read") for i in range(1, 3)]
 
-    working_set, compacted = _working_set(
+    working_set, compacted, _ = _working_set(
         events, mode=TaskMode.TASK, budget=Budget(max_tokens=8192)
     )
 
@@ -138,7 +138,7 @@ def test_priority_events_survive_compaction():
         )()
     )
 
-    working_set, _ = _working_set(
+    working_set, _, _ = _working_set(
         events, mode=TaskMode.TASK, budget=Budget(max_tokens=600)
     )
 
@@ -184,8 +184,11 @@ def test_compaction_is_recorded_in_the_ledger(tmp_path):
         (),
         {"compacted": (3, 4, 5), "input_seq": 9},
     )()
-    runtime._note_compaction(view)
-    runtime._note_compaction(view)  # same fold, must not duplicate
+    spec = TaskSpec(
+        task_id="t-compact", objective="x", workspace=".", budget=Budget()
+    )
+    runtime._record_fold(view, spec)
+    runtime._record_fold(view, spec)  # same fold, must not duplicate
 
     events = [e for e in ledger.read() if e.kind is EventKind.CONTEXT_COMPACTED]
     assert len(events) == 1
@@ -198,7 +201,12 @@ def test_compaction_absent_is_not_recorded(tmp_path):
     ledger = Ledger.in_memory("t-compact")
     runtime = LoopRuntime(ledger=ledger, **_fakes())
 
-    runtime._note_compaction(type("V", (), {"compacted": (), "input_seq": 1})())
+    spec = TaskSpec(
+        task_id="t-compact", objective="x", workspace=".", budget=Budget()
+    )
+    runtime._record_fold(
+        type("V", (), {"compacted": (), "input_seq": 1})(), spec
+    )
 
     assert [e for e in ledger.read() if e.kind is EventKind.CONTEXT_COMPACTED] == []
 
@@ -224,7 +232,15 @@ def test_repeated_tool_call_stops_tools_before_it_blocks():
     action = CallTool(ToolIntent(capability=Capability.READ))
 
     result = runtime.run(
-        TaskSpec(task_id="task-repeat", objective="inspect", workspace="."),
+        # Pinned to 1: this test describes one exact sequence (teach on the
+        # fourth call, close the tools on the fifth).  The default budget is a
+        # separate policy choice and must not silently rewrite the scenario.
+        TaskSpec(
+            task_id="task-repeat",
+            objective="inspect",
+            workspace=".",
+            max_loop_corrections=1,
+        ),
         ScriptedStrategy([action, action, action, action, action, action, action]),
     )
 
@@ -267,12 +283,12 @@ def test_context_window_sizes_the_working_set():
 
     events = [_Event(i, f"tool_{i}") for i in range(1, 300)]
 
-    small, small_folded = _working_set(
+    small, small_folded, _ = _working_set(
         events,
         mode=TaskMode.TASK,
         budget=Budget(max_tokens=2048, context_window=8192),
     )
-    large, large_folded = _working_set(
+    large, large_folded, _ = _working_set(
         events,
         mode=TaskMode.TASK,
         budget=Budget(max_tokens=2048, context_window=200000),
@@ -460,7 +476,12 @@ def test_a_forced_finish_allows_exactly_one_more_tool_call():
     # that the wrap-up can make progress, not that it can repeat itself.
     edit = CallTool(ToolIntent(capability=Capability.EDIT))
     result = runtime.run(
-        TaskSpec(task_id="task-allow", objective="inspect", workspace="."),
+        TaskSpec(
+            task_id="task-allow",
+            objective="inspect",
+            workspace=".",
+            max_loop_corrections=1,
+        ),
         ScriptedStrategy(
             [action, action, action, action, action, edit, Finish("done")]
         ),

@@ -84,3 +84,22 @@ class TestConsoleCallbackOnActMasking:
         assert out == ""
         assert "SECRET_PASSWORD" not in out
         assert "abc123xyz" not in out  # API key 值不应暴露
+
+
+def test_credentials_are_masked_by_one_shared_key_set() -> None:
+    """The engine logger and the tool-result store must agree on the keys.
+
+    They used to carry separate lists: ``refresh_token`` / ``client_secret`` /
+    ``cookie`` / ``private_key`` were masked by the store but printed by the
+    logger, and ``credential`` the other way round.
+    """
+
+    from xenon.session.tool_results import _redacted_params
+
+    keys = ("refresh_token", "client_secret", "cookie", "private_key", "credential")
+    logged = mask_sensitive_params({key: "value" for key in keys})
+    stored = _redacted_params({key: "value" for key in keys})
+
+    for key in keys:
+        assert logged[key] != "value", key
+        assert stored[key] != "value", key

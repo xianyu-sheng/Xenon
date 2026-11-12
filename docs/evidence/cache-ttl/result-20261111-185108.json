@@ -1,0 +1,37 @@
+{
+  "endpoint": "https://api.deepseek.com/chat/completions",
+  "model": "deepseek-chat",
+  "gap_seconds": 300,
+  "long_gap_seconds": 0,
+  "calls": [
+    {
+      "at": "2026-11-11T18:46:03",
+      "latency_ms": 716,
+      "prompt_tokens": 752,
+      "cache_hit_tokens": 0,
+      "cache_miss_tokens": 752,
+      "completion_tokens": 1
+    },
+    {
+      "at": "2026-11-11T18:46:07",
+      "latency_ms": 903,
+      "prompt_tokens": 752,
+      "cache_hit_tokens": 512,
+      "cache_miss_tokens": 240,
+      "completion_tokens": 1
+    },
+    {
+      "at": "2026-11-11T18:51:08",
+      "latency_ms": 747,
+      "prompt_tokens": 752,
+      "cache_hit_tokens": 512,
+      "cache_miss_tokens": 240,
+      "completion_tokens": 1
+    }
+  ],
+  "interpretation": {
+    "short_gap_hit": true,
+    "after_gap_hit": true,
+    "ttl_extended_by_hits": true
+  }
+}

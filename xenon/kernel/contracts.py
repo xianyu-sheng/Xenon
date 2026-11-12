@@ -32,6 +32,7 @@ class Capability(str, Enum):
 
     READ = "read"
     SEARCH = "search"
+    DISCOVER = "discover"
     EDIT = "edit"
     VERIFY = "verify"
     VCS = "vcs"
@@ -49,6 +50,7 @@ class EffectKind(str, Enum):
     NETWORK = "network"
     WORKSPACE_PROBE = "workspace_probe"
     OPAQUE = "opaque"
+    TOOL_DISCOVERY = "tool_discovery"
 
 
 class Risk(str, Enum):
@@ -180,6 +182,27 @@ class Opaque:
         return EffectKind.OPAQUE
 
 
+@dataclass(frozen=True, slots=True)
+class ToolDiscovery:
+    """Result of a read-only tool search (defect 6 / Capability.DISCOVER).
+
+    Each matched tool is projected with its full parameters so the model can
+    bind it correctly on the next call, but nothing was executed.  These are
+    catalog facts, deterministic — not model output.  ``note`` carries the
+    harness's own caveat (for example "no intent match; showing tools by
+    name") so a fallback listing is never mistaken for a relevant answer.
+    """
+
+    matches: tuple[Mapping[str, Any], ...]
+    count: int = 0
+    truncated: bool = False
+    note: str = ""
+
+    @property
+    def kind(self) -> EffectKind:
+        return EffectKind.TOOL_DISCOVERY
+
+
 Effect = (
     FsWrite
     | FsDelete
@@ -190,6 +213,7 @@ Effect = (
     | NetworkFact
     | WorkspaceProbe
     | Opaque
+    | ToolDiscovery
 )
 
 
@@ -279,6 +303,15 @@ class TaskSpec:
     # The user's own words, kept separate from the strategy-facing prompt.
     # Legacy callers may omit it; projections then fall back to ``objective``.
     user_objective: str = ""
+    # The front-end conversation this task belongs to (empty outside the REPL).
+    # Recorded so "earlier tasks in this session" means the same conversation,
+    # not every task that happens to share a ledger directory.
+    session_id: str = ""
+    # The lightweight intent classification that chose this turn's shape and
+    # level (design doc §13.3).  Recorded at intake so a replay can answer
+    # "why did this run as a task/chat at this level" from the ledger alone.
+    intent: str = ""
+    intent_source: str = ""
     # Explicit V2 obligations supplied by the caller/intake layer.
     obligations: tuple[Obligation, ...] = ()
     # Session-level reference material the front-end wants the model to see:
@@ -297,7 +330,13 @@ class TaskSpec:
     # kills the run.  0 restores the old behaviour (detect -> block, no
     # corrective turn).  Teaching is a hint into the next view, never a
     # permission: evidence, approval and delivery rules are unchanged.
-    max_loop_corrections: int = 1
+    #
+    # 3, not 1: a measured run spent its single corrective turn, kept reading
+    # the same two files, and was killed before it ever tried an edit — the
+    # model was never given a second chance to act on the advice.  Three turns
+    # costs nothing when the run is already stuck and is the difference between
+    # "retried once" and "had a chance to change course".
+    max_loop_corrections: int = 3
     # #372 B3: the turn path this task was reached from (root -> current, the
     # branch summary).  Non-empty only after a rewind/fork: a model on a side
     # branch must know where it came from.  Rendered as a ``Turn path:``
@@ -388,6 +427,10 @@ class ToolCall:
     # Set by the catalog at bind time.  Gateway-level policies use this to
     # verify that the bound tool actually advertises the requested capability.
     capability: Capability | None = None
+    # Minted by the runtime before dispatch so ``tool_started`` and the receipt
+    # share one id.  Empty means "let the gateway mint one" (callers that do not
+    # go through the kernel loop).
+    call_id: str = ""
 
 
 class BindingStatus(str, Enum):
@@ -626,6 +669,7 @@ class PlanProposal:
 
 class ActionKind(str, Enum):
     THINK = "think"
+    STATE_READ = "state_read"
     CALL_TOOL = "call_tool"
     SUBMIT_PLAN = "submit_plan"
     UPDATE_PLAN = "update_plan"
@@ -644,6 +688,23 @@ class Think:
     @property
     def kind(self) -> ActionKind:
         return ActionKind.THINK
+
+
+@dataclass(frozen=True, slots=True)
+class StateRead:
+    """The model asked for state the harness does not ship every turn.
+
+    Not a turn of its own: the loop answers it beside the real turn instead of
+    replacing it.  Keeping it a distinct action (rather than reusing ``Think``)
+    is what stops the reply from being mistaken for the model's own reasoning
+    and pushing the tool receipt out of view.
+    """
+
+    text: str
+
+    @property
+    def kind(self) -> ActionKind:
+        return ActionKind.STATE_READ
 
 
 @dataclass(frozen=True, slots=True)
@@ -821,14 +882,34 @@ class ModelView:
     # Deterministic step-level verification for the active step.  Reflection
     # sits on top of this: it reacts to verdicts, it never produces them.
     step_verdicts: tuple[Verdict, ...] = ()
+    # Task-level progress, one row per obligation: what the run still owes and
+    # whether it has been proven.  `debt` alone cannot answer "am I done?" --
+    # an empty debt means "nothing outstanding", not "everything satisfied".
+    # A measured run passed its test, asked for state, read `debt: []`, and
+    # then spent five more calls re-running the same test until the step
+    # budget killed it: it could not tell that the only obligation it had was
+    # already met.
+    obligations_status: tuple[Mapping[str, Any], ...] = ()
     # Seqs folded into the ``elided`` digest entry to stay inside the
     # context budget.  Runtime bookkeeping: it lets the ledger record that
     # compaction happened without changing what the model is allowed to see.
     compacted: tuple[int, ...] = ()
+    # The summary items actually folded (the dropped working-set entries),
+    # not just their seqs.  The SummaryProvider renders these into the LLM
+    # continuation narrative; absent, the fold stays purely deterministic.
+    folded_items: tuple[Mapping[str, Any], ...] = ()
     # #369: harness-generated loop diagnoses shown to the model (rendered as
     # the ``Notes:`` system-prompt section).  A note is a hint, never a
     # constraint or a permission.
     notes: tuple[str, ...] = ()
+    # #165: the runtime's execution boundary, stated rather than inferred.
+    # It is stable for a whole task, so it travels with the prefix rather than
+    # in per-turn state.
+    boundary: str = ""
+    # Earlier tasks of this session, one line each, newest first (doc §3.2).
+    # Deliberately *not* part of the view hash: it is context from outside this
+    # task's record, so the same ledger must still hash the same on replay.
+    session_history: tuple[str, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
 
@@ -861,5 +942,10 @@ class TaskResult:
     debt: tuple[Debt, ...] = ()
     finalize_sha: str | None = None
     evidence_status: EvidenceStatus = EvidenceStatus.UNVERIFIED
+    #: Why this round stopped, when it did not finish normally.  The phase is
+    #: too coarse for this (BLOCKED covers "waiting for approval", "step budget
+    #: exhausted" and "stalled", which have different retry rights); the outer
+    #: loop classifies by this signal.  "" = normal finish.
+    stop_signal: str = ""
     metrics: Mapping[str, float] = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION

@@ -31,6 +31,9 @@ if sys.platform == "win32":
 
 import argparse
 import logging
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 from rich.console import Console
@@ -58,6 +61,100 @@ class _DimNetworkFormatter(logging.Formatter):
         return rendered
 
 
+def _ts_frontend_script() -> Path | None:
+    """The built Ink front-end: packaged bundle first, then a source checkout."""
+
+    package_dir = Path(__file__).resolve().parent
+    root = package_dir.parent
+    for directory in (
+        # A wheel ships the self-contained bundle inside the package
+        # (scripts/build_frontend_assets.py); a checkout has tsc output.
+        package_dir / "frontend" / "assets",
+        root / "frontend" / "dist",
+        Path.cwd() / "frontend" / "dist",
+    ):
+        for name in ("xenon-ui.js", "cli.js"):
+            candidate = directory / name
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def _launch_ts(args: argparse.Namespace) -> int | None:
+    """Run the TS front-end; None means "the caller explicitly chose Python".
+
+    There is no automatic fallback: the TypeScript front-end is the product's
+    interactive surface, and starting a reduced editor instead would hand the
+    user a different UI without saying so.  A missing build is an error with
+    instructions; ``--ui python`` stays as an explicit opt-in for development.
+    """
+
+    requested = str(
+        getattr(args, "ui", None) or os.environ.get("XENON_UI", "")
+    ).strip().lower()
+    if requested == "python":
+        return None
+    script = _ts_frontend_script()
+    node = shutil.which("node")
+    if script is None or node is None:
+        missing = []
+        if node is None:
+            missing.append("node")
+        if script is None:
+            missing.append("前端构建产物（xenon/frontend/assets/xenon-ui.js 或 frontend/dist/cli.js）")
+        console.print(
+            "[red]Xenon 的交互界面需要 TypeScript 前端，但缺少："
+            + "、".join(missing)
+            + "[/red]"
+        )
+        console.print(
+            "\n构建前端：\n"
+            "  cd frontend\n"
+            "  npm install\n"
+            "  npm run build\n"
+            "\n无编辑器环境可用 [bold]xenon --ui python[/bold]（内置编辑器，功能较少），"
+            "无头执行用 [bold]xenon exec \"<task>\"[/bold]。"
+        )
+        return 1
+    if requested != "ts":
+        # Auto mode is for a person at a terminal.  Ink has no screen to draw
+        # on for piped input; silently degrading to the editor here is the
+        # behaviour this gate exists to remove.
+        try:
+            interactive = bool(sys.stdin) and sys.stdin.isatty() and sys.stdout.isatty()
+        except Exception:  # noqa: BLE001 — exotic streams are not interactive
+            interactive = False
+        if not interactive:
+            console.print(
+                "[red]标准输入不是终端，交互界面无法启动。[/red]\n"
+                "无头执行请用 [bold]xenon exec \"<task>\"[/bold]，"
+                "或显式使用 [bold]--ui python[/bold]。"
+            )
+            return 1
+    command = [
+        node,
+        str(script),
+        "--python",
+        sys.executable,
+        "--cwd",
+        str(Path.cwd()),
+    ]
+    resume = getattr(args, "resume", None)
+    if resume:
+        command += ["--resume", str(resume)]
+    for model in list(getattr(args, "model", None) or []):
+        command += ["--model", str(model)]
+    console.print(f"[dim]· 交互界面：TS（{script}）[/dim]")
+    try:
+        return subprocess.call(command)
+    except OSError as exc:
+        console.print(
+            f"[red]TS 前端启动失败：{exc}[/red]\n"
+            "修复构建后可重试；无编辑器环境可用 --ui python。"
+        )
+        return 1
+
+
 def cli() -> None:
     """CLI 入口函数。直接 xenon 启动 REPL。"""
     if len(sys.argv) > 1 and sys.argv[1] in {"integrations", "skill", "mcp"}:
@@ -78,7 +175,7 @@ def cli() -> None:
         "command_or_workflow",
         nargs="?",
         default=None,
-        help="子命令 (chat/run/exec/report/replay/models/integrations/skill/mcp) 或 YAML 工作流文件路径",
+        help="子命令 (chat/run/exec/report/replay/models/import-legacy/integrations/skill/mcp/mcp-serve) 或 YAML 工作流文件路径",
     )
     parser.add_argument(
         "workflow_path",
@@ -176,6 +273,12 @@ def cli() -> None:
         "(default: newest commit at or before its first event)",
     )
     parser.add_argument(
+        "--agent",
+        default=None,
+        help="audit-external: transcript format adapter "
+        "(default: detect from the file; e.g. claude-code)",
+    )
+    parser.add_argument(
         "--ledger-dir",
         default=None,
         help="exec: durable ledger directory",
@@ -188,8 +291,14 @@ def cli() -> None:
     parser.add_argument(
         "--permission",
         choices=["read-only", "auto-edit", "scoped", "bypass"],
-        default="auto-edit",
-        help="exec: permission mode",
+        default=None,
+        help="exec: permission mode (default: auto-edit); "
+        "mcp-serve: (default: read-only)",
+    )
+    parser.add_argument(
+        "--allow-any-workspace",
+        action="store_true",
+        help="mcp-serve: let tool calls run outside the server's workspace",
     )
     parser.add_argument(
         "--accept-debt",
@@ -247,6 +356,15 @@ def cli() -> None:
         help="启用智能路由，自动选择模式（v0.6.0）",
     )
     parser.add_argument(
+        "--ui",
+        choices=["auto", "ts", "python"],
+        default=None,
+        help=(
+            "交互界面：ts（Ink 前端）/ python（内置编辑器）/ auto（有构建产物就用 ts）。"
+            "也可用 XENON_UI 设置"
+        ),
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__import__('xenon').__version__}",
@@ -284,7 +402,40 @@ def cli() -> None:
         resume_arg = _validate_resume_target(resume_arg)
         args.resume = resume_arg
 
+    # ``xenon resume [序号|名称]`` is the positional spelling of --resume;
+    # resolve it here so both spellings take the same interactive route.
+    if cmd == "resume":
+        target = args.workflow_path
+        if target is not None and str(target).lower() == "list":
+            _print_session_list()
+            return
+        args.resume = _validate_resume_target(
+            str(target) if target is not None else "1"
+        )
+        cmd = "chat"
+
     # 路由
+    # The interactive entry is the TS front-end.  Explicit subcommands
+    # (exec/report/...) stay on the Python side; a missing front-end is an
+    # error, not a quiet downgrade to a different UI.
+    if cmd in (None, "chat"):
+        frontend_code = _launch_ts(args)
+        if frontend_code is not None:
+            raise SystemExit(frontend_code)
+    if cmd == "mcp-serve":
+        # Speak MCP over stdio: stdout is the protocol channel from here on.
+        from xenon.mcp.server import serve
+
+        raise SystemExit(
+            serve(
+                workspace=str(args.workspace or Path.cwd()),
+                permission=str(args.permission or "read-only"),
+                models=list(args.model or []),
+                ledger_dir=args.ledger_dir,
+                allow_any_workspace=bool(args.allow_any_workspace),
+            )
+        )
+
     if cmd == "exec":
         task = getattr(args, "task", None) or args.workflow_path
         if not getattr(args, "plan", None) and not task:
@@ -299,6 +450,12 @@ def cli() -> None:
             )
             sys.exit(2)
         args.task = task
+        # The composition root resolves the sandbox once; the harness stays
+        # config-agnostic (it only sees a SandboxSpec).
+        from xenon.repl.system_config import get_config
+        from xenon.sandbox.backends import spec_from_config
+
+        args.sandbox = spec_from_config(get_config().sandbox)
         from xenon.harness.cli import run_from_args
 
         raise SystemExit(run_from_args(args))
@@ -314,20 +471,6 @@ def cli() -> None:
     elif cmd == "chat":
         if args.resume is None:
             args.resume = _interactive_session_picker()
-        _cmd_chat(args)
-
-    elif cmd == "resume":
-        # 位置参数形态：xenon resume → 恢复最近一次自动保存；
-        # xenon resume <序号|名称> → 恢复指定；xenon resume list → 列表。
-        target = args.workflow_path
-        if target is not None and str(target).lower() == "list":
-            _print_session_list()
-            return
-        if target is not None:
-            resume_arg = _validate_resume_target(str(target))
-        else:
-            resume_arg = _validate_resume_target("1")  # 列表第一个=最近
-        args.resume = resume_arg
         _cmd_chat(args)
 
     elif cmd in ("replay", "metrics"):
@@ -351,6 +494,34 @@ def cli() -> None:
             )
             sys.exit(2)
         raise SystemExit(_cmd_report(str(target), args))
+
+    elif cmd == "import-legacy":
+        # One-shot, explicit: the legacy session log is still the live store
+        # behind /resume, /evidence and /rewind.  Importing it on every start
+        # would copy live data forever (one ledger per session, minutes of
+        # I/O); this command exists for when that store is finally retired.
+        from xenon.ledger.migrate import migrate_legacy_sessions
+
+        root = Path.home() / ".xenon"
+        logs = root / "sessions" / "events"
+        pending = len(list(logs.glob("*.jsonl"))) if logs.is_dir() else 0
+        if pending:
+            # The sweep opens one ledger per legacy log; on a real install this
+            # is minutes, so say so before it starts rather than after.
+            console.print(f"[dim]扫描 {pending} 个 legacy 会话日志（可能需要几分钟）…[/dim]")
+        summary = migrate_legacy_sessions(root / "sessions", root / "ledger")
+        if not summary.logs:
+            console.print("[dim]没有找到 legacy 会话日志[/dim]")
+            raise SystemExit(0)
+        console.print(
+            f"导入 {summary.logs} 个 legacy 会话日志：新增 {summary.imported} 条，"
+            f"跳过 {summary.skipped} 条 → {root / 'ledger' / 'legacy'}"
+        )
+        for error in summary.errors[:5]:
+            console.print(f"[yellow]· {error}[/yellow]")
+        if len(summary.errors) > 5:
+            console.print(f"[yellow]· 另有 {len(summary.errors) - 5} 个错误[/yellow]")
+        raise SystemExit(0 if not summary.errors else 1)
 
     elif cmd == "audit-external":
         target = getattr(args, "task", None) or args.workflow_path
@@ -608,6 +779,7 @@ def _cmd_audit_external(target: str, args: argparse.Namespace) -> int:
         transcript,
         workspace=workspace,
         base=getattr(args, "base", None) or None,
+        agent=getattr(args, "agent", None) or "",
     )
     report = to_report(result)
 

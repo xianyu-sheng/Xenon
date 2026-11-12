@@ -14,7 +14,7 @@ edit.
 from __future__ import annotations
 
 from xenon.catalog.specs import CORE_SPECS
-from xenon.harness.llm import build_messages
+from xenon.harness.llm import build_messages, render_state
 from xenon.kernel.contracts import (
     Debt,
     Obligation,
@@ -110,13 +110,74 @@ def test_the_stable_head_is_shared_across_a_whole_task() -> None:
     assert shared / len(first.system) > 0.85
 
 
-def test_the_state_message_keeps_volatile_fields_last() -> None:
-    """The working set is the bulk of the prompt; it must not sit behind phase."""
+def test_the_prefix_is_byte_identical_when_only_the_turn_changes() -> None:
+    """The whole point: turn N+1 must not move a single byte of the prefix."""
+
+    first = _view(TaskPhase.RUNNING)
+    later = _view(TaskPhase.THINKING, notes=("n",), debt=(
+        Debt(
+            obligation=Obligation(
+                id="o1", kind=PropositionKind.FILE_CHANGED, target="a.py"
+            ),
+            reason="no fact",
+        ),
+    ))
+
+    assert build_messages(first)[0] == build_messages(later)[0]
+
+
+def test_state_is_not_shipped_it_is_asked_for() -> None:
+    """Phase, budget and debt never appear in a request.
+
+    They change every turn, so shipping them would rewrite the bytes where
+    the previous copy ended and truncate the cached prefix there.  The model
+    reads them through ``get_state`` instead.
+    """
 
     view = _view(TaskPhase.RUNNING)
-    payload = build_messages(view)[1]["content"]
-    body = payload.split("Current deterministic state", 1)[1]
+    messages = build_messages(view)
 
-    assert body.index("available_tools") < body.index("recent_events")
-    assert body.index("recent_events") < body.index('"phase"')
-    assert body.index('"phase"') < body.index('"debt"')
+    assert len(messages) == 2
+    body = messages[0]["content"] + messages[1]["content"]
+    assert '"phase"' not in body
+    assert '"debt"' not in body
+
+    state = render_state(view, "state", {})
+    assert '"phase":"running"' in state
+    assert '"debt":[]' in state
+
+
+def test_each_request_is_the_prefix_plus_one_turn() -> None:
+    """No history is replayed, so there is nothing to grow and nothing to break.
+
+    The previous shape replayed one message per event: correct for caching but
+    the history still grew without bound, and the per-turn state message that
+    followed it was rewritten each round.  Both are gone.
+    """
+
+    from xenon.kernel.contracts import ModelView
+
+    plain = _view(TaskPhase.RUNNING)
+    grown = ModelView(
+        task=plain.task,
+        system=plain.system,
+        tools=plain.tools,
+        working_set=(
+            {"seq": 1, "kind": "thought", "text": "look"},
+            {"seq": 2, "kind": "tool_receipt", "tool": "read", "status": "ok"},
+        ),
+        debt=(),
+        budget=plain.budget,
+        input_seq=2,
+        hash="h2",
+        phase=TaskPhase.RUNNING,
+    )
+
+    base = build_messages(plain)
+    later = build_messages(grown)
+
+    assert base[0] == later[0]
+    assert len(base) == len(later) == 2
+    # Only the newest event travels; earlier ones are reachable via get_state.
+    assert '"seq":2' in later[1]["content"]
+    assert '"seq":1' not in later[1]["content"]

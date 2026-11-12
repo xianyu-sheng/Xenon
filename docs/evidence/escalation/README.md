@@ -14,8 +14,9 @@
 | grant 一次性：下一次同调用被拒，且不偷偷重问 | ✅ |
 
 安全语义未动：`allow_approval` 仍控制策略自动询问；升级是**人**的显式决定，
-一次性 grant、入 ledger（`GRANT_ADDED` / `USER_APPROVAL{escalation:true}`）、
-调用后由 `_call_tool` 的 finally 撤销。
+一次性 grant 入 ledger（`USER_APPROVAL{escalation:true}`），调用后由
+`_call_tool` 的 finally 撤销。会话级「记住」的授权按技术文档 §9 只存内存、
+不写账本，所以这里不再有 `GRANT_ADDED`。
 
 ## 真实 TTY：现已端到端通过（#395 修复后）
 

@@ -1432,3 +1432,25 @@ def test_rollback_exception_fails_closed() -> None:
     assert any(
         item.obligation.id == "delivery-rollback" for item in result.debt
     )
+
+
+def test_each_tool_call_records_a_start_that_its_receipt_closes() -> None:
+    """``tool_started`` and ``tool_receipt`` must share one call id."""
+
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    spec = TaskSpec(task_id="task-1", objective="verify", workspace=".")
+
+    runtime.run(spec, _follow(_verify_plan()))
+
+    events = ledger.read()
+    starts = [item for item in events if item.kind is EventKind.TOOL_STARTED]
+    receipts = [item for item in events if item.kind is EventKind.TOOL_RECEIPT]
+    assert starts and receipts
+    assert starts[0].payload["call_id"].startswith("call-")
+    assert (
+        starts[0].payload["call_id"]
+        == receipts[0].payload["receipt"]["call_id"]
+    )
+    # A call that produced a receipt is not "interrupted".
+    assert not [item for item in events if item.kind is EventKind.TOOL_INTERRUPTED]

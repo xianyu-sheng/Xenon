@@ -2,7 +2,7 @@
 
 > **历史文档（归档）**：本文记录 Xenon 多引擎时期（v0.9 之前）的实现与实测。
 > 引擎骨架（`engine/base.py`、`react_engine.py`、`combined_engines.py`、`plan_dag*.py`、
-> `event_bus.py`、`claim_gate.py` 等）已于 #202 删除，产物现在是**单一循环 + 7 个 profile**。
+> `event_bus.py`、`claim_gate.py` 等）已于 #202 删除，产物现在是**单一循环 + 7 个模式名**（6 个 `LoopProfile`；`react` 是 `direct` 的别名）。
 > 需要当前架构请读 `docs/ARCHITECTURE.md` 与 `docs/adr/0001-single-loop-kernel.md`；
 > 文中路径仅用于还原当时的证据，不对应当前代码。
 

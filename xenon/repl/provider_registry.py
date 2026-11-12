@@ -21,7 +21,6 @@ from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import httpx
-import yaml
 
 from xenon.repl.system_config import get_config
 from xenon.utils.atomic_write import atomic_write_text
@@ -38,8 +37,6 @@ def _get_credentials_path() -> Path:
     return Path(get_config().paths.credentials).expanduser()
 
 
-# 向后兼容别名：导入时求值一次的快照。新代码请调用 ``_get_credentials_path()``。
-CREDENTIALS_PATH = _get_credentials_path()
 MODEL_LIST_TIMEOUT = 8.0
 MODEL_CACHE_TTL = 3600  # 1 hour cache TTL
 
@@ -621,11 +618,10 @@ def load_credentials(path: Path | None = None) -> dict[str, Any]:
 
 def _read_credentials(path: Path | None = None) -> dict[str, Any]:
     """Read the exact on-disk mapping without compatibility projections."""
+    from xenon.utils.credentials_io import load_document
+
     credentials_path = path or _get_credentials_path()
-    if not credentials_path.exists():
-        return {}
-    with open(credentials_path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    data = load_document(credentials_path)
     if not isinstance(data, dict):
         logger.warning("凭证文件不是 YAML 映射，忽略其内容: %s", credentials_path)
         return {}
@@ -673,10 +669,9 @@ def save_credentials(creds: dict[str, Any], path: Path | None = None) -> Path:
     """保存凭证到文件。"""
     credentials_path = path or _get_credentials_path()
     credentials_path.parent.mkdir(parents=True, exist_ok=True)
-    content = yaml.dump(creds, allow_unicode=True, default_flow_style=False)
-    atomic_write_text(
-        credentials_path, content, mode=0o600
-    )  # A9 原子写 + A10 chmod 0600
+    from xenon.utils.credentials_io import save_document
+
+    save_document(credentials_path, creds)
     # 懒加载契约：凭证一变，已探测结果立即作废。这里是所有凭证写入的唯一收口
     # （set_provider_key / remove_provider_key / 自定义 provider 增删都走这条），
     # 在此重置可覆盖全部路径，不必逐个调用方去补——避免漏一处就复现
@@ -968,11 +963,10 @@ def remove_custom_provider(key: str) -> bool:
 
 def _load_custom_providers() -> dict:
     """从 credentials.yaml 加载自定义模型商。"""
+    from xenon.utils.credentials_io import load_document
+
     credentials_path = _get_credentials_path()
-    if not credentials_path.exists():
-        return {}
-    with open(credentials_path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    data = load_document(credentials_path)
     return data.get(_CUSTOM_PROVIDERS_KEY, {}) or {}
 
 
@@ -1006,10 +1000,9 @@ def load_mcp_servers(path: Path | None = None) -> list[dict[str, object]]:
          {"name": "web", "url": "http://localhost:3000/sse"}, ...]
     """
     credentials_path = path or _get_credentials_path()
-    if not credentials_path.exists():
-        return []
-    with open(credentials_path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    from xenon.utils.credentials_io import load_document
+
+    data = load_document(credentials_path)
     servers = data.get(_MCP_SERVERS_KEY, [])
     if not isinstance(servers, list):
         return []

@@ -535,3 +535,60 @@ def test_an_empty_plan_answers_instead_of_failing_the_turn() -> None:
     answer = strategy.propose(_view())
     assert isinstance(answer, Finish)
     assert answer.answer == "ok"
+
+
+def test_an_actor_that_dropped_calls_is_named_in_a_notice() -> None:
+    """A parallel reply runs one action; the rest must reach the model.
+
+    The strategy is where the actor's dropped calls meet the view, so it is
+    where the note is raised.  It stays a notice: nothing is executed and no
+    obligation moves.
+    """
+
+    class _Actor:
+        skipped_calls = ("read({\"file_path\":\"util.py\"})",)
+
+        def __call__(self, view):
+            return CallTool(ToolIntent(capability=Capability.READ))
+
+    strategy = LoopStrategy(LoopProfile(), actor=_Actor())
+
+    strategy.propose(_view())
+
+    notices = strategy.drain_notices()
+    assert notices[0]["kind"] == "parallel"
+    assert notices[0]["skipped"] == ["read({\"file_path\":\"util.py\"})"]
+
+
+def test_a_plain_actor_raises_no_parallel_notice() -> None:
+    strategy = LoopStrategy(LoopProfile(), actor=lambda view: Finish("hi"))
+
+    strategy.propose(_view())
+
+    assert strategy.drain_notices() == ()
+
+
+def test_a_state_read_inside_a_step_is_passed_through() -> None:
+    """Asking the harness is a move, not a step release.
+
+    Measured: the step actor asked ``get_state what=session``; the strategy's
+    allow-list did not include ``StateRead``, so the answer was rendered and
+    discarded, the step was released, and the run finished claiming it had no
+    session history.
+    """
+
+    from xenon.kernel.contracts import StateRead
+
+    step = _plan_step()
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True),
+        actor=lambda view: Finish("done"),
+        step_actor=lambda view, active, calls: StateRead("earlier tasks: 1"),
+        planner=lambda view: PlanProposal(steps=(step,)),
+    )
+    strategy.propose(_view())
+
+    action = strategy.propose(_view(steps=(step,), active=step))
+
+    assert isinstance(action, StateRead)
+    assert action.text == "earlier tasks: 1"

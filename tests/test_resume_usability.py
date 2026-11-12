@@ -15,6 +15,9 @@ def _run_cli(argv: list[str], monkeypatch) -> dict:
     monkeypatch.setattr(main_mod, "_cmd_chat", lambda args: captured.setdefault("args", args))
     monkeypatch.setattr(main_mod, "_print_session_list", lambda: captured.setdefault("list", True))
     monkeypatch.setattr(main_mod, "_validate_resume_target", lambda t: t)
+    # These tests exercise the built-in editor route; the default route is the
+    # TS front-end (covered by tests/test_main_ui_routing.py).
+    monkeypatch.setattr(main_mod, "_launch_ts", lambda _args: None)
     monkeypatch.setattr(sys, "argv", ["xenon", *argv])
     main_mod.cli()
     return captured

@@ -113,3 +113,68 @@ def migrate_session_jsonl(
         skipped=skipped,
         errors=tuple(errors),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyImportSummary:
+    """What an explicit ``xenon import-legacy`` run did."""
+
+    logs: int = 0
+    imported: int = 0
+    skipped: int = 0
+    errors: tuple[str, ...] = ()
+
+
+def migrate_legacy_sessions(
+    sessions_dir: Path | str,
+    ledger_dir: Path | str,
+) -> LegacyImportSummary:
+    """Import legacy ``sessions/events/*.jsonl`` once, into separate ledgers.
+
+    Each legacy log gets its own ledger under ``ledger/legacy/``: imported
+    records are audit history, never evidence for a task, so they must not be
+    mixed into a task's chain.  Re-running is a no-op because the importer
+    skips legacy ids it has already recorded.
+
+    **This is an explicit operation, never a startup hook.**  The legacy
+    session log is still the live store behind ``/resume`` and ``/evidence``;
+    sweeping it on every start would copy data that is still being written,
+    creating one new ledger per session forever (measured: ~25k files, ~165s
+    per start on a real install).  Run ``xenon import-legacy`` once, when that
+    store is retired.
+    """
+
+    events_dir = Path(sessions_dir).expanduser() / "events"
+    if not events_dir.is_dir():
+        return LegacyImportSummary()
+    target_dir = Path(ledger_dir).expanduser() / "legacy"
+    logs = imported = skipped = 0
+    errors: list[str] = []
+    for path in sorted(events_dir.glob("*.jsonl")):
+        logs += 1
+        try:
+            from xenon.ledger.store import open_shared
+
+            ledger = open_shared(target_dir / f"{path.stem}.jsonl", f"legacy-{path.stem}")
+            report = migrate_session_jsonl(path, ledger)
+            imported += report.imported
+            skipped += report.skipped
+            if report.errors:
+                errors.extend(f"{path.name}: {error}" for error in report.errors[:3])
+            if report.imported:
+                ledger.append(
+                    EventKind.STATE_TRANSITION,
+                    EventSource.RUNTIME,
+                    {
+                        "from": "legacy",
+                        "to": "imported",
+                        "reason": "legacy_migrated",
+                        "imported": report.imported,
+                        "skipped": report.skipped,
+                    },
+                )
+        except Exception as exc:  # noqa: BLE001 — migration never blocks startup
+            errors.append(f"{path.name}: {type(exc).__name__}: {exc}")
+    return LegacyImportSummary(
+        logs=logs, imported=imported, skipped=skipped, errors=tuple(errors)
+    )

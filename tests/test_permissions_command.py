@@ -1,42 +1,29 @@
-"""`/permissions` and the four-choice prompt (#373).
+"""`/permissions` and the three-answer prompt (design doc §9).
 
 Two things matter here and both are about honesty:
 
-* the list shows what is actually in force, with its source, so nobody has to
-  guess why a prompt stopped appearing;
-* "always" writes a rule **scoped to what was asked**, never to the whole
-  capability — widening is a deliberate act of editing the file.
+* the list shows what is actually in force, with the path it covers, so nobody
+  has to guess why a prompt stopped appearing;
+* "全部允许" is one tool + one execution path with a deadline.  It never widens
+  to the whole capability, and it never survives the process.
 """
 
 from __future__ import annotations
 
 import types
-from pathlib import Path
 
 import pytest
 
 import xenon.kernel  # noqa: F401 — ledger<->kernel import cycle
 from xenon.kernel.contracts import Capability
-from xenon.kernel.permission_rules import ALLOW, ASK, DENY, RuleSet, parse_rule
-from xenon.kernel.session_grants import SESSION, GrantBook, grant_from_choice
+from xenon.kernel.session_grants import ALLOW, ONCE, GrantBook, grant_from_choice
 from xenon.repl.approval_ux import APPROVAL_ALLOWED_ONCE, APPROVAL_REJECTED
 from xenon.repl.command_groups.permissions import _cmd_permissions
 
 
-@pytest.fixture(autouse=True)
-def isolated_home(tmp_path, monkeypatch):
-    """Never touch the real ``~/.xenon/permissions.yaml``."""
-
-    home = tmp_path / "_home"
-    home.mkdir()
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    return home
-
-
-def _repl(*, book=None, rules=None, workspace=None):
+def _repl(*, book=None, workspace=None):
     return types.SimpleNamespace(
         _grant_book=book,
-        _permission_rules=rules,
         project_ctx=types.SimpleNamespace(root=workspace) if workspace else None,
     )
 
@@ -53,136 +40,118 @@ def test_without_a_session_it_says_so() -> None:
 
 
 def test_an_empty_state_explains_the_options() -> None:
-    text = _call(_repl(book=GrantBook("/r"), rules=RuleSet()))
+    text = _call(_repl(book=GrantBook("/r")))
 
     assert "没有记住的授权" in text
-    assert "A = 永远允许" in text
+    assert "y = 本次允许" in text
+    assert "a = 本会话都允许" in text
 
 
-def test_session_grants_are_listed_first() -> None:
+def test_grants_are_listed_with_the_path_they_cover() -> None:
     book = GrantBook("/repo")
     book.add(
         grant_from_choice(
-            SESSION, capability=Capability.SHELL, targets=("x",), workspace="/repo"
+            ALLOW, capability=Capability.SHELL, targets=("git log",), workspace="/repo"
         )
     )
 
-    text = _call(_repl(book=book, rules=RuleSet()))
+    text = _call(_repl(book=book))
 
     assert "会话级" in text
-    assert "shell(*)" in text
+    assert "shell: git log" in text
+    assert "剩余 29 分钟" in text or "剩余 30 分钟" in text
 
 
-def test_persisted_rules_are_listed_with_their_source() -> None:
-    rules = RuleSet()
-    rules.add(parse_rule("shell(git *)", decision=ALLOW, source="user"))
-    rules.add(parse_rule("shell(rm *)", decision=DENY, source="project"))
+def test_a_once_answer_is_marked_as_such() -> None:
+    book = GrantBook("/repo")
+    book.add(
+        grant_from_choice(
+            ONCE, capability=Capability.SHELL, targets=("git log",), workspace="/repo"
+        )
+    )
 
-    text = _call(_repl(rules=rules))
-
-    assert "规则文件" in text
-    assert "[user]" in text
-    assert "[project]" in text
+    assert "[本次]" in _call(_repl(book=book))
 
 
 # ── removing ────────────────────────────────────────────────────────
 
 
 def test_remove_needs_a_selector() -> None:
-    assert "用法" in _call(_repl(rules=RuleSet()), "remove")
+    assert "用法" in _call(_repl(book=GrantBook("/r")), "remove")
 
 
 def test_remove_an_unknown_selector_reports_it() -> None:
-    assert "没有找到" in _call(_repl(rules=RuleSet()), "remove shell(nope)")
+    assert "没有找到" in _call(_repl(book=GrantBook("/r")), "remove shell:nope")
 
 
-def test_remove_a_rule_from_the_set(tmp_path) -> None:
-    rules = RuleSet()
-    rules.add(parse_rule("shell(git *)", decision=ALLOW))
-    repl = _repl(rules=rules, workspace=tmp_path)
-
-    text = _call(repl, "remove shell(git *)")
-
-    assert "已撤销" in text
-    assert rules.rules == []
-
-
-def test_remove_a_session_grant_by_selector() -> None:
+def test_remove_a_grant_by_capability_and_path() -> None:
     book = GrantBook("/repo")
     book.add(
         grant_from_choice(
-            SESSION, capability=Capability.SHELL, targets=("x",), workspace="/repo"
+            ALLOW, capability=Capability.SHELL, targets=("git log",), workspace="/repo"
         )
     )
 
-    text = _call(_repl(book=book, rules=None), "remove shell(*)")
+    text = _call(_repl(book=book), "remove shell:git log")
 
     assert "已撤销" in text
     assert len(book) == 0
 
 
-def test_clear_only_touches_the_session() -> None:
+def test_clear_empties_the_book() -> None:
     book = GrantBook("/repo")
     book.add(
         grant_from_choice(
-            SESSION, capability=Capability.SHELL, targets=("x",), workspace="/repo"
+            ALLOW, capability=Capability.SHELL, targets=("git log",), workspace="/repo"
         )
     )
-    rules = RuleSet()
-    rules.add(parse_rule("verify", decision=ALLOW))
 
-    text = _call(_repl(book=book, rules=rules), "clear")
+    text = _call(_repl(book=book), "clear")
 
     assert "已清空本会话 1 条" in text
-    assert "规则文件未改动" in text
-    assert len(rules.rules) == 1
+    assert len(book) == 0
 
 
 def test_clear_without_a_book_is_harmless() -> None:
     assert "没有记住的授权" in _call(_repl(book=None), "clear")
 
 
-# ── the prompt's four answers ───────────────────────────────────────
+# ── the prompt's three answers ──────────────────────────────────────
 
 
-def _prompt_repl(choice: str, *, workspace=None, console=None):
+def _prompt_repl(choice: str, *, workspace=None):
     """A REPL-shaped object good enough to drive `_confirm_tool_approval`."""
 
-    from xenon.repl.approval_ux import APPROVAL_ALLOWED_ONCE
-
-    assert APPROVAL_ALLOWED_ONCE  # imported for clarity of intent
-    rules = RuleSet()
     repl = types.SimpleNamespace(
         _workspace_root=lambda: str(workspace or "/repo"),
-        _approval_rules=types.SimpleNamespace(
-            is_allowed=lambda name: False, allow=lambda name: 600
-        ),
-        _boundary_approved_once=set(),
+        _grant_book=GrantBook(str(workspace or "/repo")),
+        _last_approval_scope="",
         _permission_prompt_lock=__import__("threading").RLock(),
         _terminal_activity=None,
         _active_callback=None,
-        _approval_key=lambda name, params: f"{name}:{params}",
         _diff_preview=lambda name, params: "",
         _ask_approval_choice=lambda default="n", *, from_child=False: choice,
         agent_context=types.SimpleNamespace(get_security_advisories=lambda: []),
-        _permission_rules=rules,
     )
     from contextlib import nullcontext
 
     from xenon.repl.approval_ux import ApprovalUxMixin
 
     repl._terminal_waiting = lambda detail: nullcontext()
-    repl._persist_permission_rule = types.MethodType(
-        ApprovalUxMixin._persist_permission_rule, repl
+    repl._approval_key = types.MethodType(ApprovalUxMixin._approval_key, repl)
+    repl._current_target_note = types.MethodType(
+        ApprovalUxMixin._current_target_note, repl
     )
-    repl._confirm_tool_approval = types.MethodType(_confirm_impl(), repl)
+    repl._remember_approval = types.MethodType(
+        ApprovalUxMixin._remember_approval, repl
+    )
+    repl._push_grant_to_runtime = types.MethodType(
+        ApprovalUxMixin._push_grant_to_runtime, repl
+    )
+    repl._confirm_tool_approval = types.MethodType(
+        ApprovalUxMixin._confirm_tool_approval, repl
+    )
     return repl
-
-
-def _confirm_impl():
-    from xenon.repl.approval_ux import ApprovalUxMixin
-
-    return ApprovalUxMixin._confirm_tool_approval
 
 
 class _Console:
@@ -195,12 +164,7 @@ class _Console:
 
 @pytest.fixture(autouse=True)
 def _patch_console(monkeypatch):
-    """A promptable REPL: console captured, assume_yes off, stdin looks like a TTY.
-
-    Without all three the panel is never reached (it short-circuits on
-    ``assume_yes`` or on a non-interactive stdin), and the test would silently
-    assert nothing about the choices.
-    """
+    """A promptable REPL: console captured, assume_yes off, stdin looks like a TTY."""
 
     import sys
 
@@ -219,78 +183,72 @@ def _patch_console(monkeypatch):
     yield console
 
 
-def test_choice_a_remembers_for_the_session(tmp_path) -> None:
+def test_choice_a_remembers_tool_and_path_for_the_session(tmp_path) -> None:
     repl = _prompt_repl("a", workspace=tmp_path)
 
     outcome = repl._confirm_tool_approval("command", {"command": "git log"})
 
-    assert outcome == "allowed-once"
+    assert outcome == APPROVAL_ALLOWED_ONCE
     assert repl._last_approval_scope == "session"
+    book = repl._grant_book
+    assert len(book) == 1
+    (grant,) = list(book)
+    assert grant.capability is Capability.SHELL
+    assert grant.targets == ("git log",)
+    assert grant.one_shot is False
+    assert grant.expires_at is not None
 
 
-def test_choice_A_writes_a_rule_scoped_to_the_command(tmp_path, monkeypatch) -> None:
-    import xenon.repl.approval_ux as ux
+def test_choice_a_does_not_release_the_whole_capability(tmp_path) -> None:
+    """The defect this replaces: one ``a`` press released every shell command."""
 
-    written: list = []
-    monkeypatch.setattr(ux, "console", _Console())
-    repl = _prompt_repl("A", workspace=tmp_path)
+    repl = _prompt_repl("a", workspace=tmp_path)
+    repl._confirm_tool_approval("command", {"command": "git log"})
 
-    def fake_save(rule, path):
-        written.append(rule)
-
-    import xenon.kernel.permission_rules as pr
-
-    monkeypatch.setattr(pr, "save_rule", fake_save)
-
-    outcome = repl._confirm_tool_approval("command", {"command": "git log"})
-
-    assert outcome == "allowed-once"
-    assert repl._last_approval_scope == "always"
-    assert written and written[0].pattern == "git log", written
-    assert written[0].capability is Capability.SHELL
-
-
-def test_choice_A_without_a_target_writes_nothing(tmp_path, monkeypatch) -> None:
-    """No target means no honest scope, so no rule is invented."""
-
-    import xenon.repl.approval_ux as ux
-
-    console = _Console()
-    monkeypatch.setattr(ux, "console", console)
-    repl = _prompt_repl("A", workspace=tmp_path)
-
-    repl._confirm_tool_approval("mcp_call", {})
-
-    assert "unsupported" in " ".join(console.lines)
-
-
-def test_choice_s_remembers_only_this_command(tmp_path) -> None:
-    repl = _prompt_repl("s", workspace=tmp_path)
-
-    outcome = repl._confirm_tool_approval("command", {"command": "pytest -q"})
-
-    assert outcome == "allowed-once"
-    assert repl._last_approval_scope == "scoped"
+    book = repl._grant_book
+    assert book.active(str(tmp_path), Capability.SHELL, ["git log"])
+    assert not book.active(str(tmp_path), Capability.SHELL, ["rm -rf /"])
 
 
 def test_choice_y_remembers_nothing(tmp_path) -> None:
+    """§9: 只放行这一次，下次再用仍需询问."""
+
     repl = _prompt_repl("y", workspace=tmp_path)
 
-    repl._confirm_tool_approval("command", {"command": "git log"})
+    outcome = repl._confirm_tool_approval("command", {"command": "git log"})
 
+    assert outcome == APPROVAL_ALLOWED_ONCE
     assert repl._last_approval_scope == ""
+    assert len(repl._grant_book) == 0
 
 
 def test_choice_n_rejects(tmp_path) -> None:
     repl = _prompt_repl("n", workspace=tmp_path)
 
     assert repl._confirm_tool_approval("command", {"command": "git log"}) == "rejected"
+    assert len(repl._grant_book) == 0
 
 
 def test_choice_q_cancels(tmp_path) -> None:
     repl = _prompt_repl("q", workspace=tmp_path)
 
     assert repl._confirm_tool_approval("command", {"command": "git log"}) == "cancelled"
+
+
+def test_the_panel_no_longer_offers_the_removed_answers(tmp_path, monkeypatch) -> None:
+    """`A` (write a rule file) and `s` (scoped) are gone: §9 has three answers."""
+
+    for legacy in ("A", "s"):
+        repl = _prompt_repl(legacy, workspace=tmp_path)
+        # The real reader would never return these; simulate it arriving anyway.
+        repl._ask_approval_choice = (
+            lambda default="n", *, from_child=False, _answer=legacy: _answer
+        )
+
+        outcome = repl._confirm_tool_approval("command", {"command": "git log"})
+
+        assert outcome == APPROVAL_REJECTED, f"{legacy} must not authorize anything"
+        assert len(repl._grant_book) == 0
 
 
 # ── the paths around the prompt ─────────────────────────────────────
@@ -306,13 +264,9 @@ class _Callback:
         self.resumed.append(tool_name)
 
 
-@pytest.mark.parametrize("choice", ["a", "A", "s", "y", "n", "q"])
+@pytest.mark.parametrize("choice", ["a", "y", "n", "q"])
 def test_every_answer_resumes_the_live_render(tmp_path, choice) -> None:
-    """The panel must hand the terminal back whatever the answer was.
-
-    Otherwise the spinner stays frozen and the run looks hung — the exact
-    failure the terminal-activity tests were written for.
-    """
+    """The panel must hand the terminal back whatever the answer was."""
 
     repl = _prompt_repl(choice, workspace=tmp_path)
     callback = _Callback()
@@ -334,172 +288,45 @@ def test_a_keyboard_interrupt_at_the_prompt_cancels(tmp_path) -> None:
     assert repl._confirm_tool_approval("command", {"command": "git log"}) == "cancelled"
 
 
-def test_an_unwritable_rule_file_is_reported_not_raised(tmp_path, monkeypatch) -> None:
-    import xenon.kernel.permission_rules as pr
-
-    monkeypatch.setattr(
-        pr, "save_rule", lambda rule, path: (_ for _ in ()).throw(OSError("readonly"))
-    )
-    repl = _prompt_repl("A", workspace=tmp_path)
-
-    scope = repl._persist_permission_rule("command", {"command": "git log"})
-
-    assert "could not write" in scope
-
-
-def test_a_failed_rule_write_does_not_break_the_command(tmp_path) -> None:
-    """`/permissions remove` must survive an unwritable settings file."""
-
-    rules = RuleSet()
-    rules.add(parse_rule("shell(git *)", decision=ALLOW))
-    repl = _repl(rules=rules, workspace=tmp_path)
-
-    import xenon.kernel.permission_rules as pr
-
-    original = pr.default_rule_paths
-
-    def boom(workspace=None):
-        raise OSError("readonly")
-
-    pr.default_rule_paths = boom
-    try:
-        text = _call(repl, "remove shell(git *)")
-    finally:
-        pr.default_rule_paths = original
-
-    # The removal still succeeds in memory; only persisting is best effort.
-    assert "已撤销" in text
-    assert rules.rules == []
-
-
-# ── the adapter forwards the layered rules to the policy ────────────
-
-
-def test_rules_of_separates_deny_from_ask() -> None:
-    from xenon.repl.runtime_adapter import RuntimeAdapter
-
-    rules = RuleSet()
-    rules.add(parse_rule("shell(rm *)", decision=DENY))
-    rules.add(parse_rule("shell(npm i*)", decision=ASK))
-    adapter = object.__new__(RuntimeAdapter)
-    adapter.permission_rules = rules
-
-    assert [rule.pattern for rule in adapter._rules_of("deny")] == ["rm *"]
-    assert [rule.pattern for rule in adapter._rules_of("ask")] == ["npm i*"]
-
-
-def test_rules_of_without_a_ruleset_is_empty() -> None:
-    from xenon.repl.runtime_adapter import RuntimeAdapter
-
-    adapter = object.__new__(RuntimeAdapter)
-    adapter.permission_rules = None
-
-    assert adapter._rules_of("deny") == ()
-
-
-def test_rules_of_with_a_ruleset_missing_rules_is_empty() -> None:
-    from xenon.repl.runtime_adapter import RuntimeAdapter
-
-    adapter = object.__new__(RuntimeAdapter)
-    adapter.permission_rules = types.SimpleNamespace()
-
-    assert adapter._rules_of("ask") == ()
-
-
 # ── child-mediated requests degrade to one-shot (no memory) ────────
 
 
-def test_a_child_request_only_offers_ynq_and_remembers_nothing(tmp_path) -> None:
-    """#373: answering a child's brokered request must not write any memory —
-    no TTL rule, no allowed-once, no scope — even when the human says yes."""
+def test_a_child_request_remembers_nothing(tmp_path) -> None:
+    """A child's "yes" applies to that call only — it may never accumulate."""
 
     repl = _prompt_repl("y", workspace=tmp_path)
-    ttl_rule: list[str] = []
-
-    def record_allow(name: str) -> int:
-        ttl_rule.append(name)
-        return 600
-
-    repl._approval_rules.allow = record_allow
-    before = set(repl._boundary_approved_once)
 
     outcome = repl._confirm_tool_approval(
         "command", {"command": "echo hi"}, from_child=True
     )
 
     assert outcome == APPROVAL_ALLOWED_ONCE
-    assert ttl_rule == [], "a child answer must not create a TTL rule"
-    assert set(repl._boundary_approved_once) == before, (
-        "a child answer must not create an allowed-once entry"
-    )
     assert repl._last_approval_scope == ""
+    assert len(repl._grant_book) == 0
 
 
 def test_a_child_request_cannot_invent_a_session_grant(tmp_path) -> None:
-    """Even if the prompt were somehow answered 'a', a child request degrades
-    to a deny — the human was never shown the remember choices."""
+    """Even if "a" arrived from a child, it must not be remembered."""
 
     repl = _prompt_repl("a", workspace=tmp_path)
-    ttl_rule: list[str] = []
-
-    def record_allow(name: str) -> int:
-        ttl_rule.append(name)
-        return 600
-
-    repl._approval_rules.allow = record_allow
-
-    outcome = repl._confirm_tool_approval(
-        "command", {"command": "echo hi"}, from_child=True
-    )
-
-    assert outcome == APPROVAL_REJECTED
-    assert ttl_rule == []
-
-
-def test_a_child_request_still_inherits_the_parents_session_rule(tmp_path) -> None:
-    """Inheritance is the *parent's* memory working for the child: a TTL rule
-    the human already made answers the child's call without a new prompt."""
-
-    repl = _prompt_repl("n", workspace=tmp_path)
-    repl._approval_rules = types.SimpleNamespace(
-        is_allowed=lambda name: True, allow=lambda name: 600
-    )
+    repl._ask_approval_choice = lambda default="n", *, from_child=False: "a"
 
     outcome = repl._confirm_tool_approval(
         "command", {"command": "echo hi"}, from_child=True
     )
 
     assert outcome == APPROVAL_ALLOWED_ONCE
-
-
-def test_a_child_request_defensively_rejects_an_always_answer(tmp_path) -> None:
-    """The A/s guards are unreachable through the real prompt (y/n/q only),
-    so this drives them directly: no memory may be written regardless."""
-
-    repl = _prompt_repl("A", workspace=tmp_path)
-    repl._ask_approval_choice = lambda default="n", *, from_child=False: "A"
-
-    assert (
-        repl._confirm_tool_approval("command", {"command": "echo hi"}, from_child=True)
-        == APPROVAL_REJECTED
-    )
-
-    repl = _prompt_repl("s", workspace=tmp_path)
-    repl._ask_approval_choice = lambda default="n", *, from_child=False: "s"
-    assert (
-        repl._confirm_tool_approval("command", {"command": "echo hi"}, from_child=True)
-        == APPROVAL_REJECTED
-    )
+    assert len(repl._grant_book) == 0
 
 
 def test_the_child_prompt_offers_only_ynq(monkeypatch, tmp_path) -> None:
     """_ask_approval_choice(from_child=True) narrows the answer set to y/n/q."""
 
+    from contextlib import nullcontext
+
     from xenon.repl.approval_ux import ApprovalUxMixin
 
     repl = types.SimpleNamespace(
-        _pt_session=None,
-        _active_runtime=object(),  # in_turn, so the session branch runs
         _permission_prompt_lock=None,
         _terminal_waiting=lambda detail: nullcontext(),
     )
@@ -510,80 +337,174 @@ def test_the_child_prompt_offers_only_ynq(monkeypatch, tmp_path) -> None:
         return "y"
 
     monkeypatch.setattr("xenon.repl.approval_ux.Prompt.ask", ask)
-    # _active_runtime non-None and _pt_session None → Prompt.ask branch.
-    repl._pt_session = None
-
-    from contextlib import nullcontext
 
     assert ApprovalUxMixin._ask_approval_choice(repl, from_child=True) == "y"
     assert seen["choices"] == ["y", "n", "q"]
 
 
+def test_the_adult_prompt_offers_four_answers(monkeypatch, tmp_path) -> None:
+    """§9's three answers, plus the turn-scoped one the panel adds.
 
-# ── #395: the pt prompt must not prefill the edit buffer ──────────
-
-
-def _real_choice_repl(choice, *, workspace=None, session=None, in_turn=True):
-    """A REPL whose ``_ask_approval_choice`` is the *real* implementation.
-
-    ``_prompt_repl`` stubs it out (most tests only care about the decision
-    table), but #395 is about how the prompt is *read*, so these tests bind the
-    real method and hand it a scripted session.
+    ``t`` exists because a real task pressed ``a`` for one command and the model
+    then used four different spellings of the same intent — four panels for one
+    intention.  ``t`` means "this capability, this turn only"; it is not a
+    session grant and it does not outlive the turn.
     """
 
-    import types as _types
+    from contextlib import nullcontext
 
     from xenon.repl.approval_ux import ApprovalUxMixin
 
-    repl = _prompt_repl(choice, workspace=workspace)
-    repl._ask_approval_choice = _types.MethodType(
-        ApprovalUxMixin._ask_approval_choice, repl
+    repl = types.SimpleNamespace(
+        _permission_prompt_lock=None,
+        _terminal_waiting=lambda detail: nullcontext(),
     )
-    repl._pt_session = session
-    repl._active_runtime = object() if in_turn else None
+    seen: dict = {}
+
+    def ask(*args, **kwargs):
+        seen.update(kwargs)
+        return "y"
+
+    monkeypatch.setattr("xenon.repl.approval_ux.Prompt.ask", ask)
+
+    assert ApprovalUxMixin._ask_approval_choice(repl) == "y"
+    assert seen["choices"] == ["y", "t", "a", "n", "q"]
+
+
+# ── the turn-scoped answer (t) ───────────────────────────────────────
+
+
+def _turn_repl(choice: str, *, workspace, turn: str = "turn-1"):
+    repl = _prompt_repl(choice, workspace=workspace)
+    repl._current_kernel_turn = turn
     return repl
 
 
-class _ScriptedSession:
-    """A PromptSession stand-in that records how it was called."""
+def test_choice_t_covers_the_rest_of_the_turn(tmp_path) -> None:
+    from xenon.kernel.session_grants import TURN_ALLOW, grant_from_choice
 
-    def __init__(self, answers: list[str]) -> None:
-        self.answers = list(answers)
-        self.calls: list[dict] = []
+    repl = _turn_repl("t", workspace=tmp_path)
+    outcome = repl._confirm_tool_approval("command", {"command": "git log"})
 
-    def prompt(self, *args, **kwargs):
-        self.calls.append({"args": args, "kwargs": dict(kwargs)})
-        return self.answers.pop(0)
-
-
-def test_pt_prompt_does_not_prefill_the_default(tmp_path) -> None:
-    """prompt_toolkit's ``default=`` fills the buffer: typing "y" would become
-    "ny" and every answer would re-prompt (the #395 hang)."""
-    session = _ScriptedSession(["y"])
-    repl = _real_choice_repl("y", workspace=tmp_path, session=session)
-
-    assert repl._ask_approval_choice() == "y"
-    assert "default" not in session.calls[0]["kwargs"]
-
-
-def test_pt_prompt_empty_input_means_the_default(tmp_path) -> None:
-    repl = _real_choice_repl("y", workspace=tmp_path, session=_ScriptedSession([""]))
-
-    assert repl._ask_approval_choice(default="n") == "n"
-
-
-def test_an_invalid_pt_answer_re_prompts(tmp_path) -> None:
-    session = _ScriptedSession(["ny", "q"])
-    repl = _real_choice_repl("y", workspace=tmp_path, session=session)
-
-    assert repl._ask_approval_choice() == "q"
-    assert len(session.calls) == 2
+    assert outcome == APPROVAL_ALLOWED_ONCE
+    assert repl._last_approval_scope == "turn"
+    book = repl._grant_book
+    assert len(book) == 1
+    (grant,) = list(book)
+    assert grant.targets == ("*",) and grant.turn == "turn-1"
+    assert grant.capability is Capability.SHELL
+    # Another command in the same turn is covered…
+    assert book.consume(str(tmp_path), Capability.SHELL, ["ls -la"], turn="turn-1")
+    # …but the same answer does not reach the next turn.
+    book2 = GrantBook(str(tmp_path))
+    book2.add(
+        grant_from_choice(
+            TURN_ALLOW,
+            capability=Capability.SHELL,
+            targets=("*",),
+            workspace=str(tmp_path),
+            turn="turn-1",
+        )
+    )
+    assert book2.consume(str(tmp_path), Capability.SHELL, ["ls -la"], turn="turn-2") == ()
 
 
-def test_a_pty_prefilled_answer_would_never_leave_the_panel(tmp_path) -> None:
-    """The regression itself: "ny" (default + typed y) must not be accepted."""
-    session = _ScriptedSession(["ny", "nn", "y"])
-    repl = _real_choice_repl("y", workspace=tmp_path, session=session)
+def test_choice_t_without_a_turn_does_not_authorize_anything_extra(tmp_path) -> None:
+    """Falling back to session-wide would be the bug this answer exists to avoid."""
 
-    assert repl._ask_approval_choice() == "y"
-    assert len(session.calls) == 3
+    repl = _prompt_repl("t", workspace=tmp_path)
+    repl._current_kernel_turn = ""
+
+    outcome = repl._confirm_tool_approval("command", {"command": "git log"})
+
+    assert outcome == APPROVAL_ALLOWED_ONCE
+    assert len(repl._grant_book) == 0
+
+
+def test_switching_a_mode_is_persistent_and_only_clears_on_change() -> None:
+    """/permissions writes the durable mode; turn_flow recomputes the level."""
+
+    from xenon.kernel.policies import PermissionMode
+    from xenon.repl.command_groups.permissions import _switch_mode
+    from xenon.repl.execution_policy import PERMISSION_MODE_LEVELS
+    from xenon.repl.runtime_adapter import permission_for_mode
+
+    class Ctx(dict):
+        def get(self, key, default=None):  # noqa: D401 - dict-like surface
+            return super().get(key, default)
+
+        def set(self, key, value):
+            self[key] = value
+
+    class Repl:
+        def __init__(self):
+            self.agent_context = Ctx()
+            self._grant_book = None
+
+    repl = Repl()
+    message = _switch_mode(repl, "plan")
+    assert message and "plan" in message
+    assert repl.agent_context.get("_permission_mode") == "plan"
+    assert PERMISSION_MODE_LEVELS["plan"] == 1
+
+    # The four names mean four different kernel modes.
+    assert permission_for_mode("plan", 3) is PermissionMode.READ_ONLY
+    assert permission_for_mode("default", 2) is PermissionMode.SCOPED
+    assert permission_for_mode("accept_edits", 2) is PermissionMode.AUTO_EDIT
+    assert permission_for_mode("bypass", 2) is PermissionMode.BYPASS
+
+
+def test_switching_to_the_same_mode_keeps_remembered_answers() -> None:
+    from xenon.kernel.session_grants import GrantBook
+    from xenon.repl.command_groups.permissions import _switch_mode
+
+    class Ctx(dict):
+        def get(self, key, default=None):
+            return super().get(key, default)
+
+        def set(self, key, value):
+            self[key] = value
+
+    class Repl:
+        def __init__(self):
+            self.agent_context = Ctx()
+            self._grant_book = GrantBook(workspace="D:/ws")
+
+    repl = Repl()
+    repl._grant_book.add  # noqa: B018 - existence check
+    from xenon.kernel.contracts import Capability
+    from xenon.kernel.session_grants import ALLOW, grant_from_choice
+
+    repl._grant_book.add(
+        grant_from_choice(
+            ALLOW, capability=Capability.EDIT, targets=["a.py"], workspace="D:/ws"
+        )
+    )
+    repl.agent_context.set("_permission_mode", "accept_edits")
+    before = len(repl._grant_book)
+    _switch_mode(repl, "accept_edits")
+    _switch_mode(repl, "accept_edits")  # same mode: not a boundary change
+    assert len(repl._grant_book) == before
+
+
+def test_the_reported_mode_is_the_stored_one_not_the_level() -> None:
+    """``default`` and ``accept_edits`` share one level; the name must not.
+
+    A level-only reverse mapping reported accept_edits as default, so the
+    picker pre-selected the wrong row and pressing Enter switched the mode.
+    """
+
+    from xenon.repl.command_groups.permissions import _current_mode_name
+
+    class Ctx(dict):
+        def get(self, key, default=None):
+            return super().get(key, default)
+
+        def set(self, key, value):
+            self[key] = value
+
+    repl = types.SimpleNamespace(agent_context=Ctx())
+    repl.agent_context.set("_execution_level", 2)
+    repl.agent_context.set("_permission_mode", "accept_edits")
+
+    assert _current_mode_name(repl) == "accept_edits"

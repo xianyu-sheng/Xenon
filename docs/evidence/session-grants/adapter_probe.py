@@ -2,7 +2,7 @@
 ``run_kernel_turn`` uses (the REPL's kernel entry).  #373 acceptance:
 
     1. turn 1 asks the human, who answers "session";
-    2. the adapter's book harvests ``runtime.last_grant`` (GRANT_ADDED in ledger);
+    2. the adapter's book harvests ``runtime.last_grant`` (memory only, §9);
     3. turn 2 feeds ``session_grants`` from the book — zero prompts;
     4. turn 2's ledger has ``policy_decision`` with reason "session grant: …".
 
@@ -106,7 +106,7 @@ def main() -> int:
                   f"reason={grant.reason!r}")
             ledger = Ledger(run.ledger_path, run.task_id)
             kinds = [event.kind.value for event in ledger.read()]
-            print(f"  grant_added in ledger: {'grant_added' in kinds}")
+            print(f"  grant_added in ledger: {'grant_added' in kinds}  (must be False since §9)")
         if turn == 2:
             ledger = Ledger(run.ledger_path, run.task_id)
             grants = [

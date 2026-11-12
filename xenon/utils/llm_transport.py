@@ -11,7 +11,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -176,30 +175,23 @@ def _load_credentials() -> dict[str, str]:
     已设也会报"未找到 API Key"。
     """
     creds: dict[str, str] = {}
-    if _credentials_path().exists():
-        with open(_credentials_path(), encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-            if isinstance(data, dict):
-                for key, value in data.items():
-                    normalized_key = str(key).strip().lower()
-                    if not normalized_key:
-                        continue
-                    if isinstance(value, str):
-                        value = value.strip()
-                        if not value:
-                            continue
-                    # Keep the legacy custom-provider mapping available to
-                    # build_endpoint while rejecting blank scalar secrets.
-                    creds[normalized_key] = value
-            else:
-                logger.warning(
-                    "凭证文件不是 YAML 映射，忽略其内容: %s", _credentials_path()
-                )
-                data = {}
-            if not creds.get("ark"):
-                legacy_key = _legacy_ark_api_key(data)
-                if legacy_key:
-                    creds["ark"] = legacy_key
+    from xenon.utils.credentials_io import load_document
+
+    data = load_document(_credentials_path())
+    if isinstance(data, dict):
+        for key, value in data.items():
+            normalized_key = str(key).strip().lower()
+            if not normalized_key:
+                continue
+            if isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    continue
+            creds[normalized_key] = value
+        if not creds.get("ark"):
+            legacy_key = _legacy_ark_api_key(data)
+            if legacy_key:
+                creds["ark"] = legacy_key
 
     # v0.4.0 修复: 环境变量作为补充（yaml 优先，env 仅在 yaml 未配置时生效）
     # 此前无条件覆盖导致 ~/.bashrc 旧 key 覆盖 yaml 新 key，对齐 provider_registry 行为
@@ -269,13 +261,11 @@ def _load_custom_provider_config(provider_key: str) -> dict | None:
     在注册层与调用层之间保持一致。
     """
     try:
-        import yaml as _yaml
+        from xenon.utils.credentials_io import load_document
 
-        path = Path.home() / ".xenon" / "credentials.yaml"
-        if not path.exists():
+        data = load_document(_credentials_path())
+        if not data:
             return None
-        with open(path, encoding="utf-8") as f:
-            data = _yaml.safe_load(f) or {}
         custom_providers = data.get("_custom_providers")
         custom_providers = (
             custom_providers if isinstance(custom_providers, dict) else {}

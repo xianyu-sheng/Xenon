@@ -1,4 +1,4 @@
-# Xenon 架构设计（v0.9.2）
+# Xenon 架构设计（v1.0.0）
 
 > 中文 | [English](ARCHITECTURE.en.md)
 
@@ -53,7 +53,9 @@ TaskSpec
 
 ### 0.3 七条不变量（I1–I7）
 
-- **I1 单 writer**：只有 `LoopRuntime` 能 append ledger。
+- **I1 单 writer**：同一条账本在任何时刻只有一个写者。进程内经 `Ledger.open_shared` 共享同一实例；
+  跨进程 append 前比对文件末尾，发现被推进就重新加载（`_refresh_tail_if_moved`），绝不静默分叉。
+  运行时、runner 与子进程生命周期记录都遵守这条。
 - **I2 单入口**：所有工具副作用经过 `ToolGateway`；交付提交由 `Finalizer` 独占。
 - **I3 单事实源**：ledger 是唯一真相；其他都是带 `input_seq` 的只读投影。
 - **I4 语义接口**：kernel 只认 capability / obligation / receipt；工具名只活在 catalog。
@@ -96,8 +98,9 @@ TaskSpec
 
 ### 0.6 工具与 MCP
 
-- `ToolCatalog` 用 **7 类 capability** 表达工具语义：`read / search / edit / verify / vcs / shell / remote`；
+- `ToolCatalog` 用 **8 类 capability** 表达工具语义：`read / search / discover / edit / verify / vcs / shell / remote`；
 - 工具名只在 catalog/spec 出现，kernel 不分支具体工具名；
+- `discover` 能力（只读工具 `find_tools`）在调用前按意图查询目录、返回有界候选及完整参数但不执行，所有权限模式下免费；
 - MCP 使用 **per-tool ToolSpec**，不是把所有工具都塞给模型；
 - 工具预算按 objective 做确定性选择（例如 46 个 GitHub 工具只注入 16 个），未知工具 `unresolved`；
 - approval 是外部 MCP 调用的边界；每次授权绑定目标并带 TTL，调用后立即撤销；
@@ -105,22 +108,32 @@ TaskSpec
 
 ## 1. 三层可信度模型
 
+> ⚠️ **【双轨现状 · 更新于 2026-11-11】** 本节及第 2、3 节的 L1/L2 口径是
+> **历史**，`TurnGate / HollowDetector` 已退役；第 0 节的 `LoopRuntime`（kernel）
+> 是唯一的执行与验证链。REPL 经
+> `should_route_to_kernel` 分流：工具轮次走 `LoopRuntime`（账本在 `ledger/`）。
+> **2026-11-11 审计确认 `TurnGate` 路径不可达**（`repl._render_engine_result`
+> 零调用方 → `_verify_turn` → `TurnGate.evaluate` 只互相调用），`turn/gate.py`、
+> `engine/task_verifier.py`、`engine/hollow_detector.py` 已删除。下表保留 L0/L1/L2
+> 的历史口径，但**当前唯一的验证链是内核 + 账本**；未验证内容以内核证据标签与
+> 「待人工核验」披露面板呈现，不阻断交付。
+
 | 层 | 机制 | 位置 | 机器职责 |
 |---|---|---|---|
-| **L0 证据层** | 会话事件日志 = append-only 哈希链（每条事件带内容哈希 + 前驱哈希）；`/evidence` 随时重算自证 | `session/events.py`、`repl/command_groups/evidence.py` | 证明过程真实；链完整性检查（无密钥锚点，见 README 诚实边界） |
-| **L1 结构层** | 空洞回答（确定性、无语义盲点）= 唯一阻断类校验；命中才重试（半预算）/同因熔断 | `turn/gate.py`、`engine/hollow_detector.py` | 拦截"没干活"的回答 |
-| **L2 语义层** | 宣称审计 / 完成准则 / 文件声称 / 写入后验证：不阻断发布，附「待人工核验清单」 | `turn/gate.py`、`repl/render.py` | 把核不到的醒目列给用户自核 |
+| **L0 证据层** | **当前**：内核账本 = append-only 哈希链（`ledger/`），`verify_tree` 连子分支一起校验；**历史**：会话事件日志（`session/events.py`，仍支撑 `/resume`、`/evidence`） | `ledger/store.py`、`ledger/tree.py`；legacy `session/events.py`、`repl/command_groups/evidence.py` | 证明过程真实；链完整性检查（无密钥锚点，见 README 诚实边界） |
+| **L1 结构层**（已退役 · 2026-11-11） | 历史：空洞回答检测。内核以工具回执与债务表达"是否干了活" | （原 `turn/gate.py`、`engine/hollow_detector.py`，已删除） | 不再有阻断类结构校验 |
+| **L2 语义层**（内核对等物） | 宣称绑定回执、完成准则、覆盖审计：不阻断发布；partial/unverified 时附「待人工核验」面板 | `kernel/controller.py`、`repl/render.py`（`render_verification_reminders`） | 把核不到的醒目列给用户自核 |
 
 > 术语：上表的 **L0/L1/L2 是可信度层级**（证据 / 结构 / 语义）。
 > 执行内验证层级使用 **V0/V1/V2**（每次 receipt 的不变量 / 步骤后置条件 /
 > 任务级覆盖审计），两者不要混用。设计见 `docs/adr/0001-single-loop-kernel.md`
 > 与 #205。
 
-不变式：**回合级 L1/L2 语义/结构调整只有一处**（`turn/gate.py`），由
-`tests/test_semantics_single_source.py` / `test_contract_single_source.py`
-以全仓扫描断言锁定；**工具成败只由工具回执的 `success` 字段决定**（单一
-语义通道），面板/事件/渲染不用关键词猜。反思阶段另有 reviewer 评分，
-属于输出质量审查，不是工具事实或 Claim 的证明。
+不变式：**证据只是标签，不是闸门**——内核决定是否交付，`FinalizeGuard` 是唯一的
+确定性硬判定；**工具成败只由工具回执的 `success` 字段决定**（单一语义通道），
+面板/事件/渲染不用关键词猜。`tests/test_contract_single_source.py` 以全仓扫描
+锁定契约构建入口。反思阶段另有 reviewer 评分，属于输出质量审查，不是工具事实或
+Claim 的证明。
 
 ## 2. 系统总览
 
@@ -132,17 +145,17 @@ TaskSpec
                                     │ 回合编排（kernel_host / turn_flow）
               ┌─────────────────────┼───────────────────────┐
               ▼                     ▼                       ▼
-      TurnContract           Kernel（kernel/，单循环）   Session（session/）
-      意图分类 + 正则护栏      LoopRuntime + 阶段配置      tree / events(哈希链)
-      → 执行策略               预算检查点 / 循环检测      / archive / projection
-              │                     │                       │
+      TurnContract           Kernel（kernel/，单循环）   Session（session/，legacy）
+      意图分类 + 正则护栏      LoopRuntime + 阶段配置      tree / events（仍供
+      → 执行策略               投影 / 压缩 / 循环信号        /resume · /evidence）
+              │                token 预算                    │
               └──────────┬──────────┴───────────┬───────────┘
                          ▼                      ▼
-                    ToolExecutor             TurnGate（turn/gate.py）
-                    7 阶段管线                pass / remind / fail / fuse
+                    ToolExecutor             FinalizeGuard + 证据标签
+                    7 阶段管线                verified / partial / unverified
                     policy·fence·retry              │
                          │                          ▼
-                    ToolNode / 工具族           树节点落盘 + 事件链追加 + 归档
+                    ToolNode / 工具族           账本追加（ledger/）+ 可回放投影
 ```
 
 ## 3. 回合生命周期（单一状态机）
@@ -150,15 +163,15 @@ TaskSpec
 ```
 用户输入
   → TurnContract：LLM 意图分类器主导 + 正则护栏约束（fail-closed 降级）
-  → 循环执行：预算检查点（有进展→审批续跑；无进展→熔断）、LoopDetector、
-    断路器、截断诚实标注 + 续写
-  → TurnGate 判定（唯一判定点）：
-      pass   → 发布
-      remind → 发布 + 待人工核验清单（L2，不阻断）
-      fail   → 同回合反馈重试（预算 = 首轮步数/2，clamp[10,40]）
-               耗尽 → 降级发布（degraded + 核验清单）
-      fuse   → 同因结构失败熔断，按未完成交付
-  → TurnTree 节点落盘 + 事件哈希链追加 + 结构化回合归档
+  → 循环执行（kernel/）：阶段推进、循环信号（`loop_signals`）、断路器、
+    token 预算与压缩、截断诚实标注 + 续写
+  → 内核交付（唯一确定性闸门是 FinalizeGuard）：
+      finalized → 交付，证据按 verified / partial / unverified 如实标注；
+                  partial 与 unverified 附「待人工核验」披露面板（不阻断）
+      blocked / aborted / failed → 标题如实显示已阻塞 / 已中止 / 失败，
+                  即使已收集的证据恰好是 verified 也不伪装成完成
+  → 账本事件追加（ledger/，只读投影可回放）；
+    legacy 会话路径另有 TurnTree 节点落盘与结构化回合归档
 ```
 
 节点状态五值：`passed / degraded / fused / interrupted / pending-approval`
@@ -169,25 +182,35 @@ TaskSpec
 
 ```
 xenon/
-├── repl/        交互层：repl 主循环 · engine_host（回合编排）· turn_flow ·
+├── kernel/      单循环内核（唯一判定点）：runtime · controller · phases · contracts ·
+│                policies（权限模式）· strategies · view（只读投影）· finalize ·
+│                audit · session_grants · session_history · loop_advice
+├── ledger/      证据链：store（单写者 + 崩溃恢复）· events（哈希链）· tree（分支校验）·
+│                retention（可选归档）· projections · migrate（显式导入 legacy）· conversation（对话回合）
+├── catalog/     能力目录（工具名唯一真相源）：catalog · specs · gateway · finalizer · worktree
+├── harness/     无头编排：runner · llm（提示词/工具调用）· child（子进程 + 分支封存）·
+│                intake · plan · cli · sink · summarizer
+├── repl/        交互层：repl 主循环 · runtime_adapter（内核回合）· turn_flow（legacy 回合）·
 │                direct_chat · render · approval_ux · session_ops ·
 │                turn_contract · task_state · command_groups（自动发现）
-├── turn/        回合校验层：gate.py（L1 阻断 / L2 提醒 / 同因熔断）
-├── session/     结构层：tree（会话树）· events（哈希链事件日志）·
-│                archive（回合归档）· projection（目标投影）· query
-├── kernel/      单循环：runtime · controller（唯一判定点）· policies · view
-├── engine/      工具执行层（历史目录名）：callbacks · context · evidence_runtime
-│                （L0 账本）· evidence_gate · task_verifier · hollow_detector ·
-│                circuit_breaker · budget · tool_runtime · task_recipe
+├── frontend/    前后端协议宿主：host（NDJSON）；TS 前端构建产物随 wheel 分发
+│                （assets/xenon-ui.js，运行时需 Node.js 20+）
+├── session/     legacy L0 链（仍支撑 /resume · /evidence · /rewind · /goal）：
+│                tree（会话树）· events（哈希链事件日志）· archive · projection · query
+├── engine/      工具执行层（历史目录名）：callbacks · context · circuit_breaker ·
+│                evidence_gate（仅 GateVerdict）· tool_runtime · tool_tracker ·
+│                tool_profiles · tool_gate · scheduler · task_recipe · task_state
 ├── nodes/       工具层：tool_executor（7 阶段：分类→校验→审批→执行→
 │                重试→审计）· tool_node（路径围栏/命令黑名单）·
-│                tool_registry · tool_families ×9 · approval_policy ·
-│                path_targets
+│                tool_registry · tool_families（12 族）· approval_policy ·
+│                param_validation · path_targets
 ├── hooks/       本地 hooks：4 事件 · 项目级信任指纹 · PreToolUse fail-closed
-├── sandbox/     沙箱 seam：只读模式 · 命令白名单（链感知）· 后端检测
+├── sandbox/     沙箱 seam：只读模式 · 命令白名单（链感知）· backends（process/docker/wsl）
 ├── memory/      记忆：user / project-local / project-shared / session 四作用域
-├── mcp/         MCP：stdio 传输（select + 墙钟超时）· registry · 工具注入
-└── utils/       llm_client（传输/续写）· llm_transport · llm_usage ·
+├── mcp/         MCP：客户端（stdio 传输 · registry · 工具注入）· server
+│                （stdio JSON-RPC，对外提供 任务/证据/审计 三个工具）
+└── utils/       llm_client（传输/续写）· llm_transport · llm_usage · redact（脱敏）·
+                 errors（统一错误信封）· credentials_io（加密凭证）· project_root ·
                  github_auth · atomic_write · code_index
 ```
 
@@ -201,12 +224,14 @@ xenon/
 | 子代理 | 默认只读（min(父级, READ_ONLY)）；审批通道继承父上下文；子任务只能继承授权、不能创建授权 | `harness/child.py`、`harness/child_worker.py` |
 | register_tool | 模块白名单 + 危险模块拒绝 + 凭证/配置模块点名拒绝 | `tool_node._validate_register_module` |
 | hooks | 用户级始终信任；项目级需指纹信任（`/trust-hooks`）；PreToolUse 超时/崩溃 fail-closed | `hooks/runner.py` |
-| 沙箱 | 只读模式 + 命令白名单（链感知）的确定性拒绝；诚实声明"检测 + 软件边界，非真隔离" | `sandbox/__init__.py` |
+| 项目配置 | 项目 `.xenon/config.yaml` 只能覆盖 `intent_classifier / auto_route / limits / interaction / retention`；`paths` / `sandbox` / `validation` / `development` 被忽略并告警 | `repl/system_config.py` |
+| 凭证 | Windows DPAPI 静态加密（keyring 可选，明文兜底并标注）；所有读者走同一入口；`models.yaml` 不再保存 key | `utils/credentials_io.py` |
+| 沙箱 | 只读模式 + 命令白名单（链感知）的确定性拒绝；`sandbox.backend` 可选 docker/wsl（不可用 fail closed）；`process` 后端如实声明非安全边界 | `sandbox/__init__.py`、`sandbox/backends.py` |
 
 ## 6. 扩展契约
 
 ```python
-MODE_CATALOG[mode].loop                     # xenon/modes.py（7 个 profile 的唯一来源）
+MODE_CATALOG[mode].loop                     # xenon/modes.py（7 个模式名 / 6 个 profile 的唯一来源）
 register_tool(name, handler, params)      # 工具注册（含安全白名单）
 register_command("/name", desc, usage)    # command_groups 自动发现，无需中心文件
 # 本地 hooks：<user|project>/.xenon/hooks.yaml（PreToolUse / PostToolUse /
@@ -224,12 +249,12 @@ register_command("/name", desc, usage)    # command_groups 自动发现，无需
 
 | 阶段 | 目标 | 状态 |
 |---|---|---|
-| A | ToolNode → ToolRegistry + 工具族模块（9 族） | ✅ |
+| A | ToolNode → ToolRegistry + 工具族模块（12 族） | ✅ |
 | B | REPL 输入提取（repl_input） | ✅ |
 | C | Slash commands 按主题拆分（command_groups 自动发现） | ✅ |
-| R | REPL 拆分（repl 2376 行 → 8 模块 + Mixin 组合） | ✅ |
+| R | REPL 拆分（repl 2383 行 → 8 模块 + Mixin 组合） | ✅ |
 | D | 旧多引擎类拆分 | ✅ 已不需要：引擎已删除，只剩 `LoopRuntime` 与阶段配置 |
-| E | LLM client 按传输拆分（已拆 llm_transport/llm_usage，主文件 1423 行） | ⏳ 部分 |
+| E | LLM client 按传输拆分（已拆 llm_transport/llm_usage，主文件 1532 行） | ⏳ 部分 |
 
 ## 8. 质量门禁（CI）
 

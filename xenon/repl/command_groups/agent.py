@@ -396,13 +396,14 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
     from xenon.harness.child import (
         CHILD_PROFILES,
         child_evidence,
+        child_permission_for,
         run_child_task,
         run_child_tasks,
     )
     from xenon.repl.runtime_adapter import (
         KernelApprovalProvider,
         model_config_for,
-        permission_mode_for,
+        permission_for_mode,
     )
 
     profile = engine_type.replace("_", "-")
@@ -424,14 +425,31 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
     )
     parent_task_id = getattr(repl, "_last_kernel_task_id", "") or "repl"
     ledger_dir = Path.home() / ".xenon" / "ledger" / "children"
+    # The parent's ledger lives wherever the kernel turn actually wrote it
+    # (the adapter's ledger dir, not this children/ directory); without the
+    # explicit path every child lifecycle record lands nowhere.
+    parent_ledger = getattr(repl, "_last_kernel_ledger", None)
     model = model_config_for(repl.registry, model_ids)
     # The parent's authority travels with the delegation: the child asks, the
     # REPL answers using the same confirmation UI a kernel turn would use.  A
     # child can therefore never obtain more than the session already allows.
     approval = KernelApprovalProvider(repl)
-    parent_permission = permission_mode_for(
-        getattr(repl, "_execution_level", 0)
-    )
+    # The level lives in the agent context, not on the REPL: reading
+    # ``repl._execution_level`` returned 0 for every session, so the parent was
+    # always READ_ONLY while the child defaulted to AUTO_EDIT — the subset
+    # check then raised and no sub-task could ever start.
+    level = 0
+    mode_name = ""
+    context_get = getattr(getattr(repl, "agent_context", None), "get", None)
+    if callable(context_get):
+        try:
+            level = int(context_get("_execution_level", 0) or 0)
+        except (TypeError, ValueError):
+            level = 0
+        mode_name = str(context_get("_permission_mode") or "")
+    parent_permission = permission_for_mode(mode_name, level)
+    # Delegation is read-only and never above the parent (architecture §5).
+    child_permission = child_permission_for(parent_permission)
     # The child inherits the session's remembered decisions, filtered to this
     # workspace (#373).  It still cannot create new ones: the broker forwards
     # the request, and the parent answers with a degraded y/n/q prompt.
@@ -442,6 +460,17 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
         book = GrantBook(workspace=str(workspace))
         repl._grant_book = book
     inherited = tuple(book.active(str(workspace)))
+
+    # A previous process may have died mid-delegation, leaving a child record
+    # with no terminal state.  Repair it before starting more: "the parent
+    # died" is the one cause an unmatched record can be certain of, and an
+    # unrepaired record would let an unfinished child disappear from the
+    # audit entirely.
+    from xenon.harness.child import reconcile_child_records
+
+    repaired = reconcile_child_records(
+        ledger_dir, parent_task_id, parent_ledger=parent_ledger
+    )
 
     if parallel_tasks:
         outcomes = run_child_tasks(
@@ -454,8 +483,10 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
             max_steps=15,
             timeout=timeout,
             approval=approval,
+            permission=child_permission,
             parent_permission=parent_permission,
             session_grants=inherited,
+            parent_ledger=parent_ledger,
         )
     else:
         if not task:
@@ -471,8 +502,10 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
                 max_steps=15,
                 timeout=timeout,
                 approval=approval,
+                permission=child_permission,
                 parent_permission=parent_permission,
                 session_grants=inherited,
+                parent_ledger=parent_ledger,
             ),
         )
 
@@ -492,7 +525,14 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
                 pass
 
     delivered = sum(1 for outcome in outcomes if outcome.delivered)
+    repair_note = (
+        f"\n\n♻️ 补记 {len(repaired)} 个上轮未结束的子任务: "
+        + ", ".join(repaired)
+        if repaired
+        else ""
+    )
     return (
         f"🧬 子任务 {delivered}/{len(outcomes)} 已交付\n\n"
         + "\n\n".join(outcome.summary() for outcome in outcomes)
+        + repair_note
     )

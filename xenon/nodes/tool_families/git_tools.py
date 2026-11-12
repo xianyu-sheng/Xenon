@@ -137,6 +137,7 @@ class GitToolsMixin:
             proc = subprocess.run(
                 exec_cmd,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -172,6 +173,7 @@ class GitToolsMixin:
                     shown = subprocess.run(
                         show_cmd,
                         capture_output=True,
+                        stdin=subprocess.DEVNULL,
                         text=True,
                         encoding="utf-8",
                         errors="replace",

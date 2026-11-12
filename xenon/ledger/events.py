@@ -28,6 +28,7 @@ from xenon.kernel.contracts import (
     Opaque,
     ReadFact,
     TestRun,
+    ToolDiscovery,
     ToolReceipt,
     VcsCommit,
     VcsPush,
@@ -48,8 +49,14 @@ class EventKind(str, Enum):
     STEP_VERDICT = "step_verdict"
     STEP_VERIFIED = "step_verified"
     STEP_CLOSED = "step_closed"
-    TOOL_REQUESTED = "tool_requested"
+    #: Written immediately before a tool call is dispatched, with the id the
+    #: receipt will carry.  A ``TOOL_STARTED`` with no matching receipt is how a
+    #: crash is localized to one invocation.
+    TOOL_STARTED = "tool_started"
     TOOL_RECEIPT = "tool_receipt"
+    #: "No receipt": the call may or may not have run.  Never replayed
+    #: automatically; the unknown outcome is visible and opens a debt.
+    TOOL_INTERRUPTED = "tool_interrupted"
     CLAIM_PROPOSED = "claim_proposed"
     CLAIM_RESOLVED = "claim_resolved"
     DEBT_OPENED = "debt_opened"
@@ -63,6 +70,19 @@ class EventKind(str, Enum):
     FINALIZED = "finalized"
     STATE_TRANSITION = "state_transition"
     CONTEXT_COMPACTED = "context_compacted"
+    # The LLM half of the dual-summary fold (design doc §13 decision 1):
+    # a model-generated narrative of the events folded at CONTEXT_COMPACTED.
+    # Append-only at the tail, hash-chained; it compresses, never asserts new
+    # facts — the deterministic digest stays the fact backbone.
+    CONTEXT_SUMMARY = "context_summary"
+    # The lightweight intent classification that decided chat vs task (and the
+    # authorization level) for this turn.  The design doc promised this event;
+    # until 2026-11-11 the classifier ran but its result was never recorded.
+    INTENT_CLASSIFIED = "intent_classified"
+    # A previous process left a half-written line.  The complete prefix is
+    # kept, the broken tail is quarantined, and this event says so — a repair
+    # must be visible in the record, not just on disk.
+    LEDGER_REPAIRED = "ledger_repaired"
     SESSION_CONTEXT = "session_context"
     WORKSPACE_PROBED = "workspace_probed"
     # The tree the task runs against, recorded once so a replay can answer
@@ -70,6 +90,13 @@ class EventKind(str, Enum):
     WORKSPACE_LAYOUT = "workspace_layout"
     MODEL_USAGE = "model_usage"
     THOUGHT = "thought"
+    # The model asked the harness for state it is not shipped every turn
+    # (phase, budget, debt, the plan, earlier events).  Recorded so the query
+    # is auditable, but it is not a turn to answer: its reply is rendered
+    # beside the turn, not as the turn.  Treating it as a thought made the
+    # model read its own echo back and lose the tool receipt it had just
+    # earned -- a real run re-ran passing tests until the budget ran out.
+    STATE_READ = "state_read"
     REFLECTION_PROPOSED = "reflection_proposed"
     STEP_EXPLORED = "step_explored"
     PLAN_REVIEWED = "plan_reviewed"
@@ -79,8 +106,10 @@ class EventKind(str, Enum):
     USER_QUESTION = "user_question"
     USER_INPUT = "user_input"
     USER_APPROVAL = "user_approval"
-    # A granted permission the human chose to remember (#373).  Recorded, never
-    # evidence: it explains "why was this call not asked?", nothing more.
+    # Legacy: grants are memory-only since design doc §9, so nothing appends
+    # this any more.  The value stays because removing it makes every ledger
+    # that contains one fail to load (``Event.from_dict`` raises on an unknown
+    # kind, and 217 ledgers on this machine already carry it).
     GRANT_ADDED = "grant_added"
     GRANT_REVOKED = "grant_revoked"
     # Evidence-gated lessons (docs/design/self-evolution.md).  A lesson is
@@ -98,6 +127,14 @@ class EventKind(str, Enum):
     # can see why the run is stuck and change its approach before the run is
     # killed.  The block, when it comes, is still a POLICY_DECISION.
     LOOP_DETECTED = "loop_detected"
+    # The parent's record of one delegated run (section 7.1).  Written by the
+    # parent, never the child: a child that is killed has no chance to write,
+    # and even if it did, a record from an untrusted party cannot be evidence.
+    # ``child_started`` is the anchor -- "I expected this to end" -- so an
+    # unmatched start is itself a fact: the parent died mid-delegation.
+    CHILD_STARTED = "child_started"
+    CHILD_FINISHED = "child_finished"
+    CHILD_INTERRUPTED = "child_interrupted"
 
 
 class EventSource(str, Enum):
@@ -227,6 +264,14 @@ def effect_to_payload(effect: Effect) -> dict[str, Any]:
             "exit_code": effect.exit_code,
             "workspace_delta": list(effect.workspace_delta),
         }
+    if isinstance(effect, ToolDiscovery):
+        return {
+            "type": "tool_discovery",
+            "matches": [dict(item) for item in effect.matches],
+            "count": effect.count,
+            "truncated": effect.truncated,
+            "note": effect.note,
+        }
     raise TypeError(f"unknown effect: {type(effect).__name__}")
 
 
@@ -291,6 +336,15 @@ def effect_from_payload(data: Mapping[str, Any]) -> Effect:
             command=str(data.get("command") or ""),
             exit_code=int(data.get("exit_code") or 0),
             workspace_delta=tuple(data.get("workspace_delta") or ()),
+        )
+    if kind == "tool_discovery":
+        return ToolDiscovery(
+            matches=tuple(
+                dict(item) for item in (data.get("matches") or ())
+            ),
+            count=int(data.get("count") or 0),
+            truncated=bool(data.get("truncated", False)),
+            note=str(data.get("note") or ""),
         )
     raise ValueError(f"unknown effect payload: {kind!r}")
 

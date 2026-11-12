@@ -155,31 +155,33 @@ def test_console_callback_suspends_heartbeat_while_prompt_owns_stdin(monkeypatch
     assert callback._progress_thread is None
 
 
-def test_permission_gate_serializes_concurrent_confirmation_callbacks():
-    """Parallel tools must queue behind one stdin confirmation at a time."""
-    from xenon.repl.permissions import PermissionGate
+def test_concurrent_approval_prompts_are_serialized():
+    """Parallel tool calls must queue behind one stdin prompt at a time.
 
-    gate = PermissionGate()
+    The serialization lives on the REPL's prompt lock now.  It used to be a
+    lock inside ``PermissionGate`` -- a gate the kernel never received, so the
+    guarantee it offered applied to a component that decided nothing.
+    """
+    import time
+
+    prompt_lock = threading.RLock()
     lock = threading.Lock()
     active = 0
     max_active = 0
 
-    def confirm(*_args):
+    def ask(*_args):
         nonlocal active, max_active
-        with lock:
-            active += 1
-            max_active = max(max_active, active)
-        time.sleep(0.01)
-        with lock:
-            active -= 1
+        with prompt_lock:
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.01)
+            with lock:
+                active -= 1
         return True, ""
 
-    gate.set_confirm_callback(confirm)
     threads = [
-        threading.Thread(
-            target=gate.check,
-            args=("command", {"action": f"echo {index}"}),
-        )
+        threading.Thread(target=ask, args=(f"echo {index}",))
         for index in range(4)
     ]
     for thread in threads:
@@ -221,8 +223,8 @@ def test_repl_permission_prompt_freezes_and_resumes_activity(monkeypatch):
     assert (allowed, reason) == (True, "")
     assert prompt_options["show_choices"] is True
     assert prompt_options["case_sensitive"] is False
-    # Four answers now: once / session / always (write a rule) / scoped-by-target.
-    assert prompt_options["choices"] == ["y", "n", "a", "A", "s", "q"]
+    # Four answers (design doc §9): 本次 / 本轮 / 全部（工具+路径）/ 拒绝.
+    assert prompt_options["choices"] == ["y", "t", "a", "n", "q"]
     assert "☆ Xenon · 等待工具授权" in titles
     assert titles[-1] == "█·· Xenon"
     indicator.close()

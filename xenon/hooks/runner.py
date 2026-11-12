@@ -194,6 +194,8 @@ class HookRunner:
             if not self._matches(entry["match"], tool_name):
                 continue
             try:
+                # ``input=`` already gives the hook its own stdin pipe with the
+                # event payload; it never inherits the host's blocked stdin.
                 proc = subprocess.run(
                     entry["command"],
                     shell=True,

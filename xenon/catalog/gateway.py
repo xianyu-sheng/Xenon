@@ -23,6 +23,7 @@ from xenon.engine.tool_runtime import ToolRuntime
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.kernel.contracts import (
     Capability,
+    EffectKind,
     FsWrite,
     NetworkFact,
     Opaque,
@@ -31,6 +32,7 @@ from xenon.kernel.contracts import (
     ReceiptStatus,
     TestRun,
     ToolCall,
+    ToolDiscovery,
     ToolReceipt,
     ToolSpec,
     VcsCommit,
@@ -201,14 +203,18 @@ class LegacyToolGateway:
         tracker: ToolExecutionTracker | None = None,
         policy: BoundToolPolicy | None = None,
         runtime: Any = None,
+        catalog: Any = None,
     ) -> None:
-        self._executor = executor or ToolExecutor(record_evidence=False)
+        self._executor = executor or ToolExecutor()
         self._specs = {spec.name: spec for spec in specs}
         self._workspace = Path(workspace).resolve() if workspace else None
         self._context = context or AgentContext()
         self._tracker = tracker or ToolExecutionTracker()
         self._policy = policy
         self._runtime = runtime
+        #: Tool catalog backing read-only discovery (defect 6).  Optional: a
+        #: gateway without it cannot serve find_tools, but everything else runs.
+        self._catalog = catalog
         if self._runtime is not None:
             # An injected runtime (e.g. an eval sandbox / container) wins over
             # the host default: the kernel still decides *what* runs, the
@@ -238,6 +244,7 @@ class LegacyToolGateway:
             getattr(services, "workspace", "") or "."
         ).resolve()
         spec = self._specs.get(call.spec_name)
+        kernel_ruled = False
         if self._policy is not None:
             decision = self._policy.check_bound(spec, call)
             if decision.kind is not PolicyDecisionKind.ALLOW:
@@ -248,6 +255,12 @@ class LegacyToolGateway:
                     reason=decision.reason or "permission denied",
                     started=started,
                 )
+            # The kernel's policy has just ruled on this exact call.  Tell the
+            # executor so its own boundary check does not rule a second time:
+            # two decisions about one call, from different information, is how
+            # an allowed in-workspace edit came back to the human while a
+            # vetoed out-of-workspace edit could be waved through the panel.
+            kernel_ruled = True
         commit_denied = self._precommit_denial(call, services, workspace)
         if commit_denied:
             return self._denied_receipt(
@@ -257,6 +270,11 @@ class LegacyToolGateway:
                 reason=commit_denied,
                 started=started,
             )
+
+        # Tool discovery is a deterministic catalog query: it never touches
+        # the filesystem or executor, so answer it directly.
+        if call.spec_name == "find_tools":
+            return self._discovery_receipt(call, services, started)
 
         execution_call = self._execution_call(call)
         before: dict[str, bool] = {}
@@ -269,6 +287,7 @@ class LegacyToolGateway:
                 before[path] = exists
                 before[str(candidate.resolve())] = exists
         try:
+            self._mark_kernel_ruling(kernel_ruled)
             result = self._executor.execute(
                 execution_call.spec_name,
                 dict(execution_call.params),
@@ -282,6 +301,8 @@ class LegacyToolGateway:
                 observation="",
                 error=str(exc),
             )
+        finally:
+            self._mark_kernel_ruling(False)
         return self._receipt(
             call,
             result,
@@ -291,6 +312,19 @@ class LegacyToolGateway:
             workspace=workspace,
             before=before,
         )
+
+    def _mark_kernel_ruling(self, ruled: bool) -> None:
+        """Flag the context while an already-adjudicated call runs.
+
+        The executor's own boundary check predates the kernel and cannot know a
+        policy already allowed this call.  The flag is scoped to the call and
+        cleared in ``finally`` so a crash cannot leave it set for the next one.
+        """
+
+        setter = getattr(self._context, "set", None)
+        if not callable(setter):
+            return
+        setter("_kernel_adjudicated", bool(ruled))
 
     @staticmethod
     def _execution_call(call: ToolCall) -> ToolCall:
@@ -303,6 +337,7 @@ class LegacyToolGateway:
                 spec_name="mcp_call",
                 params=params,
                 capability=Capability.REMOTE,
+                call_id=call.call_id,
             )
         return call
 
@@ -368,6 +403,7 @@ class LegacyToolGateway:
                 ["git", "diff", "--cached", "--name-only", "-z"],
                 cwd=workspace,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 timeout=10,
                 check=False,
             )
@@ -402,7 +438,7 @@ class LegacyToolGateway:
         )
         return ToolReceipt(
             receipt_id=receipt_id,
-            call_id=f"{call.spec_name}-{receipt_id}",
+            call_id=call.call_id or f"{call.spec_name}-{receipt_id}",
             task_id=str(getattr(services, "task_id", "") or ""),
             step_id=getattr(services, "current_step_id", None),
             tool=call.spec_name,
@@ -411,6 +447,75 @@ class LegacyToolGateway:
             declared_effects=declared,
             observed_effects=(),
             error=reason,
+            started_at=started,
+            ended_at=time.time(),
+        )
+
+    def _discovery_receipt(
+        self,
+        call: ToolCall,
+        services: Any,
+        started: float,
+    ) -> ToolReceipt:
+        """A read-only catalog query as one OK receipt carrying the matches."""
+
+        params = call.params
+        query = str(params.get("query") or "")
+        capability = str(params.get("capability") or "")
+        try:
+            limit = int(params.get("limit") or 5)
+        except (TypeError, ValueError):
+            limit = 5
+
+        matches: Sequence[Mapping[str, Any]] = ()
+        truncated = False
+        fallback = False
+        if self._catalog is not None:
+            try:
+                matches, truncated, fallback = self._catalog.discover(
+                    query, capability=capability, limit=limit
+                )
+            except Exception:  # noqa: BLE001 — discovery must still receipt
+                matches, truncated, fallback = (), False, False
+
+        note = ""
+        if fallback:
+            note = (
+                "No tool matched the query; showing tools ordered by name. "
+                "Try different keywords, or drop the capability filter."
+            )
+        elif not matches:
+            # An unknown filter and a filter that legitimately matches nothing
+            # both return zero matches; say which one it was, or the model can
+            # only conclude "there is no such tool".
+            unknown_filter = (
+                bool(capability)
+                and self._catalog is not None
+                and not self._catalog.knows_capability(str(capability))
+            )
+            note = (
+                f"Unknown capability filter {capability!r}; it is not one of "
+                "the catalog's capabilities. Drop the filter or use a real one."
+                if unknown_filter
+                else "No tool matched the query; try different keywords."
+            )
+        effect = ToolDiscovery(
+            matches=tuple(matches),
+            count=len(matches),
+            truncated=bool(truncated),
+            note=note,
+        )
+        receipt_id = f"find-{uuid.uuid4().hex[:12]}"
+        return ToolReceipt(
+            receipt_id=receipt_id,
+            call_id=call.call_id or f"find_tools-{receipt_id}",
+            task_id=str(getattr(services, "task_id", "") or ""),
+            step_id=getattr(services, "current_step_id", None),
+            tool="find_tools",
+            status=ReceiptStatus.OK,
+            effects=(effect,),
+            declared_effects=(EffectKind.TOOL_DISCOVERY,),
+            observed_effects=(EffectKind.TOOL_DISCOVERY,),
             started_at=started,
             ended_at=time.time(),
         )
@@ -450,7 +555,7 @@ class LegacyToolGateway:
             exit_code = _as_int(meta.get("returncode"))
         return ToolReceipt(
             receipt_id=receipt_id,
-            call_id=f"{call.spec_name}-{receipt_id}",
+            call_id=call.call_id or f"{call.spec_name}-{receipt_id}",
             task_id=str(getattr(services, "task_id", "") or ""),
             step_id=getattr(services, "current_step_id", None),
             tool=call.spec_name,

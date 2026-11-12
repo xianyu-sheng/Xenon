@@ -14,8 +14,10 @@ import ctypes
 import os
 import re
 import sys
+import tempfile
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -54,13 +56,20 @@ class _FakeStdin:
 
 
 @pytest.fixture
-def unix_pty(monkeypatch):
+def unix_pty(monkeypatch, tmp_path):
     pty = pytest.importorskip("pty")
     try:
         master, slave = pty.openpty()
     except OSError as exc:
         pytest.skip(f"pty unavailable: {exc}")
     monkeypatch.setattr(sys, "stdin", _FakeStdin(slave))
+    # The editor persists history under $HOME; keep test typing out of it.
+    from xenon.repl import repl_input
+
+    real_history = repl_input.InputHistory
+    monkeypatch.setattr(
+        repl_input, "InputHistory", lambda: real_history(tmp_path / "history.txt")
+    )
     try:
         yield master, slave
     finally:
@@ -305,7 +314,7 @@ class _FakeMsvcrt:
         return self._keys.pop(0)
 
 
-def _run_windows(monkeypatch, keys, shift_states=()):
+def _run_windows(monkeypatch, keys, shift_states=(), history_path=None):
     """注入按键序列驱动 ``_read_input_windows``，返回 (repl, 结果或异常, 调用记录)。"""
     calls: list[tuple] = []
     shift_queue = list(shift_states)
@@ -328,6 +337,11 @@ def _run_windows(monkeypatch, keys, shift_states=()):
     )
     monkeypatch.setattr(ctypes, "windll", windll, raising=False)
     monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt(keys))
+    from xenon.repl import repl_input
+
+    real_history = repl_input.InputHistory
+    path = history_path or (Path(tempfile.mkdtemp()) / "history.txt")
+    monkeypatch.setattr(repl_input, "InputHistory", lambda: real_history(path))
     repl = _FakeRepl()
     try:
         return repl, _read_input_windows(repl), calls
@@ -363,9 +377,20 @@ def test_windows_left_arrow_moves_cursor_for_mid_line_insert(monkeypatch):
 
 
 def test_windows_home_and_delete_remove_first_char(monkeypatch):
-    keys = ["a", "b", "c", "\x00", "H", "\x00", "S", "\r"]
+    keys = ["a", "b", "c", "\x00", "G", "\x00", "S", "\r"]
     _repl, value, _calls = _run_windows(monkeypatch, keys)
     assert value == "bc"
+
+
+def test_windows_up_arrow_recalls_previous_input(monkeypatch, tmp_path):
+    path = tmp_path / "history.txt"
+    path.write_text("earlier\n", encoding="utf-8")
+
+    _repl, value, _calls = _run_windows(
+        monkeypatch, ["\x00", "H", "\r"], history_path=path
+    )
+
+    assert value == "earlier"
 
 
 def test_windows_end_key_moves_cursor_to_line_end(monkeypatch):

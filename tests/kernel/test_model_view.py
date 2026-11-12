@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from xenon.harness.llm import render_state
 from xenon.kernel.contracts import (
     Budget,
     Capability,
@@ -212,8 +213,11 @@ def test_budget_keeps_debt_and_failed_receipts() -> None:
     ]
     assert len(failed) == 1
     assert len(view.working_set) < 41
-    assert "o1" in view.system
+    # Debt is per-turn state, so it is not in the cached prefix; it is carried
+    # on the view and rendered by `get_state`.
+    assert "o1" not in view.system
     assert view.debt == (debt,)
+    assert '"id":"o1"' in render_state(view, "state", {})
 
 
 def test_read_content_is_visible_but_not_raw_tool_output() -> None:
@@ -265,3 +269,44 @@ def test_working_set_does_not_copy_raw_tool_output() -> None:
         spec=_spec(), catalog=FakeCatalog(), ledger=ledger
     )
     assert "SECRET_RAW_TOOL_OUTPUT" not in repr(view.working_set)
+
+
+def test_a_state_answer_is_visible_only_after_the_event_it_accompanies() -> None:
+    """The turn renders ``state_read`` rows that *follow* its event.
+
+    That is what keeps an answer beside the receipt instead of replacing it --
+    and it is also a hard ordering requirement on the writer: an answer written
+    before the receipt is ledgered and never shown.  A measured run asked "am I
+    done?" every other turn, never received an answer, and re-read the same two
+    files until the budget ran out.
+    """
+
+    from xenon.harness.llm import current_turn
+    from xenon.kernel.view.base import trailing_state_reads
+
+    ledger = Ledger.in_memory("t1")
+    ledger.append(
+        EventKind.TOOL_RECEIPT,
+        EventSource.TOOL,
+        {"receipt": {"tool": "inspect", "status": "ok", "effects": []}},
+    )
+    before = ledger.append(
+        EventKind.STATE_READ, EventSource.LLM, {"text": "TOO EARLY"}
+    )
+    after = ledger.append(
+        EventKind.STATE_READ, EventSource.LLM, {"text": "ANSWER"}
+    )
+
+    view = build_model_view(
+        spec=_spec(), catalog=FakeCatalog(), ledger=ledger
+    )
+    shown = trailing_state_reads(view.working_set)
+
+    # Both rows sit after the receipt, so both are part of this turn.  The
+    # ordering rule is about the *receipt*, not about which answer is newest:
+    # the turn is ``latest_respondable`` -- a row no model can act on never
+    # becomes the turn -- and every state answer after it rides alongside.
+    assert [item["seq"] for item in shown] == [before.seq, after.seq]
+    turn = current_turn(view, instruction="go")
+    assert "ANSWER" in turn
+    assert "TOO EARLY" in turn

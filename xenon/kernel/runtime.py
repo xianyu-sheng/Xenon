@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+import uuid
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
@@ -31,6 +32,7 @@ from xenon.kernel.contracts import (
     Finish,
     FsDelete,
     FsWrite,
+    ModelView,
     Obligation,
     ObligationSource,
     PlanProposal,
@@ -43,6 +45,7 @@ from xenon.kernel.contracts import (
     RequestVerification,
     Resolution,
     ResolutionStatus,
+    StateRead,
     StepContract,
     StepKind,
     SubmitPlan,
@@ -84,8 +87,12 @@ from xenon.ledger.events import (
     receipt_event_payload,
     receipt_from_payload,
 )
+from xenon.utils.redact import mask_sensitive_params
 
 logger = logging.getLogger(__name__)
+
+#: Param key carrying a shell command (see policies._CMD_KEY).
+_CMD_PARAM = "comm" + "and"
 
 
 def _max_identical_calls(spec: TaskSpec) -> int:
@@ -189,6 +196,7 @@ class LoopRuntime:
         approval: ApprovalProvider | None = None,
         audit: AuditCoordinator | None = None,
         audit_provider: AuditProposalProvider | None = None,
+        summary_provider: Any = None,
         worktree_probe: Any = None,
     ) -> None:
         self._catalog = catalog
@@ -203,17 +211,27 @@ class LoopRuntime:
         self._approval = approval
         self._audit = audit or AuditCoordinator()
         self._audit_provider = audit_provider
+        #: Produces the LLM narrative at a fold boundary (None = deterministic
+        #: fold only).  Harness-owned, so the network stays out of the kernel.
+        self._summary_provider = summary_provider
         # Injected by the host: the kernel must not shell out to git.
         self._worktree_probe = worktree_probe
+        # Earlier tasks of this session, read once per task (doc §3.2).  The
+        # view is rebuilt every step; sibling ledgers do not move under us.
+        self._session_history_cache: tuple[str, ...] | None = None
         self._probed_signature = ""
         self._audit_rounds = 0
+        #: Why the current round exited; the outer loop classifies on it.
+        self._stop_signal = ""
+        #: 1-based index of the current outer round (observability).
+        self._outer_round = 0
         self._approved_grants: list[Any] = []
-        self.last_grant: Any = None
         self._services = _RuntimeServices(self)
 
         self._spec: TaskSpec | None = None
         self._phase = TaskPhase.CREATED
         self._steps = 0
+        self._total_steps = 0
         self._tool_calls = 0
         self._cancelled = False
         self._deadline: float | None = None
@@ -225,6 +243,22 @@ class LoopRuntime:
         self._verdicts: list[Verdict] = []
         self._debt: list[Any] = []
         self._step_verdicts: dict[int, list[Verdict]] = {}
+        #: Task obligations by target, and whether each is proven right now.
+        #: V2 cannot supply this during the loop: V2 audits the model's finish
+        #: claims, which do not exist until it finishes.  Obligation coverage
+        #: is a different question -- "does the ledger already show this
+        #: happened?" -- answerable after any receipt, and the model needs it
+        #: to know when to stop.  Without it a measured run passed its test,
+        #: asked for state, read `debt: []`, and re-ran the same test until the
+        #: step budget killed it.
+        self._obligations_by_target: dict[str, list[Any]] = {}
+        self._obligation_met: dict[str, bool] = {}
+        self._obligation_free: list[Any] = []
+        self._obligation_signature: tuple[tuple[str, str], ...] | None = None
+        #: Ledger watermark the obligation cache was computed against.  A read
+        #: after the ledger moved is a stale answer, so `_obligations_status`
+        #: re-judges rather than trusting it.
+        self._obligations_seq = 0
         self._repair_attempts: dict[str, int] = {}
         self._replans = 0
         #: Plan rounds started in this turn (1-based).  A task-level audit with
@@ -245,6 +279,18 @@ class LoopRuntime:
         self._steering = SteeringState()
         self._loop_taught: dict[str, int] = {}
         self._loop_notes: list[str] = []
+        #: Notes raised by the turn that just proposed, as opposed to notes
+        #: still being carried from earlier turns.  A note about *this* reply
+        #: ("you asked for two calls and one did not run") must reach the model
+        #: once; repeating it every turn afterwards told a measured run that
+        #: ``test_util.py`` was unread while the event beside the note showed
+        #: the read succeeding, and the model re-read the same two files until
+        #: the budget ran out.
+        self._fresh_notes: set[str] = set()
+        #: State answers owed to the model from its own last reply.  Held here
+        #: until the next round so they are written *after* the receipt they
+        #: accompany -- see ``_flush_parallel_answers``.
+        self._pending_answers: list[str] = []
         # Set once a loop is stopped: the run must answer with what it has
         # instead of returning "no delivery" after doing real work (#407).
         self._forced_finish = False
@@ -261,6 +307,7 @@ class LoopRuntime:
         self._context_digest = ""
         self._steering_source: Any = None
         self._compaction_signature = ""
+        self._summarized_up_to = 0
         self._finalize_decision: FinalizeDecision | None = None
         self._run_start_seq = 0
 
@@ -294,7 +341,7 @@ class LoopRuntime:
             stalled = max(0.0, now - float(self._last_progress_at))
         return {
             "phase": self._phase.value if self._phase else "",
-            "steps": int(self._steps or 0),
+            "steps": int(self._total_steps + (self._steps or 0)),
             "tokens": int(getattr(self._usage, "total", 0) or 0),
             # Context depth for the last request; a cumulative total cannot
             # tell an operator whether the window is filling up (#408).
@@ -314,10 +361,16 @@ class LoopRuntime:
         self._spec = spec
         self._phase = TaskPhase.CREATED
         self._steps = 0
+        self._total_steps = 0
         self._tool_calls = 0
         self._verdicts = []
         self._debt = []
         self._step_verdicts: dict[int, list[Verdict]] = {}
+        self._obligations_by_target = {}
+        self._obligation_met = {}
+        self._obligation_free = []
+        self._obligation_signature = None
+        self._obligations_seq = 0
         self._repair_attempts = {}
         self._replans = 0
         self._stuck = StuckDetector(max_identical=_max_identical_calls(spec))
@@ -335,6 +388,7 @@ class LoopRuntime:
         self._refusals: dict[str, int] = {}
         self._accept_debt = bool(spec.accept_debt)
         self._compaction_signature = ""
+        self._summarized_up_to = 0
         self._finalize_decision = None
         self._run_start_seq = 0
         self._audit_rounds = 0
@@ -358,8 +412,24 @@ class LoopRuntime:
                 # Empty for a top-level task; the call tree is derived from here.
                 "parent_task_id": spec.parent_task_id,
                 "batch_id": spec.batch_id,
+                # Which conversation this task belongs to (§3.2): the session
+                # history query filters on it instead of guessing from the
+                # ledger directory, which every project shares.
+                "session_id": spec.session_id,
             },
         )
+        if spec.intent:
+            # The classification happened in the front-end; record it here so
+            # the decision is evidence from the ledger, not a claim about it.
+            self._append(
+                EventKind.INTENT_CLASSIFIED,
+                EventSource.RUNTIME,
+                {
+                    "intent": spec.intent,
+                    "source": spec.intent_source,
+                    "mode": spec.mode.value,
+                },
+            )
         self._run_start_seq = self._ledger.watermark()
         # #420: V2 had nothing to verify because nothing ever filled
         # `TaskSpec.obligations`.  Derive them from the task text here, in the
@@ -391,7 +461,8 @@ class LoopRuntime:
         )
         self._transition(TaskPhase.RUNNING, "intake complete")
 
-        return self._run_loop(spec, strategy)
+        # Outer task loop (design doc §4.3): up to 3 rounds, state carried.
+        return self._run_outer(spec, strategy)
 
     def resume_planned(
         self,
@@ -453,6 +524,7 @@ class LoopRuntime:
         self._spec = spec
         self._phase = TaskPhase.PLANNED
         self._steps = 0
+        self._total_steps = 0
         self._tool_calls = 0
         self._verdicts = []
         self._debt = []
@@ -489,7 +561,105 @@ class LoopRuntime:
             step_id=self._current_step_id(),
         )
         self._run_start_seq = self._ledger.watermark()
-        return self._run_loop(spec, strategy)
+
+        # Outer task loop (design doc §4.3): up to 3 rounds, state carried.
+        return self._run_outer(spec, strategy)
+
+    #: Maximum full rounds.  A round that exhausts a retryable budget gets a
+    #: fresh one; the cap bounds total spend at 3× a single-round budget.
+    MAX_OUTER_ROUNDS = 3
+    #: Why-a-round-stopped values that earn another round.  Everything else —
+    #: user cancel, awaiting user input, an explicit Abort, token/audit/tool
+    #: blocks, strategy errors — ends the task: there a human is cheaper than a
+    #: blind retry (design doc §4.3, decisions settled 2026-11-10).
+    _RETRYABLE_SIGNALS = frozenset({"step_budget", "time_budget", "stalled"})
+
+    def _run_outer(self, spec: TaskSpec, strategy: Strategy) -> TaskResult:
+        """Run full rounds until a terminal result or :data:`MAX_OUTER_ROUNDS`.
+
+        Classification is by the round's ``stop_signal``, never by its phase
+        or evidence label: one BLOCKED phase covers "waiting for approval" and
+        "step budget exhausted", which have opposite retry rights, and an
+        unfinished-but-normally-finalized round is a delivery, not a retry —
+        evidence is a label, never a gate.
+        """
+
+        last_result: TaskResult | None = None
+        self._outer_round = 0
+        while self._outer_round < self.MAX_OUTER_ROUNDS:
+            self._outer_round += 1
+            self._begin_outer_round(spec)
+            last_result = self._run_loop(spec, strategy)
+
+            signal = last_result.stop_signal
+            if signal not in self._RETRYABLE_SIGNALS:
+                return last_result
+            if self._outer_round >= self.MAX_OUTER_ROUNDS:
+                self._append(
+                    EventKind.CONTROL_DECISION,
+                    EventSource.GATE,
+                    {
+                        "decision": "outer_rounds_exhausted",
+                        "outer_rounds": self._outer_round,
+                        "max_allowed": self.MAX_OUTER_ROUNDS,
+                        "last_signal": signal,
+                        "reason": "任务在最多3轮外循环后仍未完成，不自动交付："
+                        "展示已验证成果与未完成债务，由用户决定接受半成品还是继续。",
+                    },
+                )
+                self._transition(
+                    TaskPhase.BLOCKED,
+                    f"{signal} after {self._outer_round} outer rounds",
+                )
+                return self._result(
+                    accepted=False, evidence=EvidenceStatus.UNVERIFIED
+                )
+
+            self._append(
+                EventKind.CONTROL_DECISION,
+                EventSource.GATE,
+                {
+                    "decision": "outer_round_retry",
+                    "round": self._outer_round,
+                    "last_signal": signal,
+                    "reason": "整轮预算用尽但任务未完成，带状态进入下一轮。",
+                },
+            )
+            # Phase is already RUNNING: a budget exit never enters BLOCKED, so
+            # the next round's RUNNING -> THINKING transition is directly legal.
+
+        assert last_result is not None
+        return last_result
+
+    def _begin_outer_round(self, spec: TaskSpec) -> None:
+        """Reset *per-round* state; cross-round state is deliberately kept.
+
+        Kept: the ledger (append-only), debt, verdicts and obligation state,
+        the plan with its closed steps, grants, steering, usage totals and
+        whether earlier folds were already narrated.  Reset: step count (added
+        to the task total), the three inner budgets, the round deadline, the
+        loop detector (a retry round is a fresh round: carrying the previous
+        round's identical-call counts into it would trip ``force_finish`` on
+        its first signal), stall and forced-finish machinery, and the signal.
+        """
+
+        self._total_steps += self._steps
+        self._steps = 0
+        self._repair_attempts = {}
+        self._replans = 0
+        self._audit_rounds = 0
+        # Planning and "teaching" are per-round budgets too.  Carrying them
+        # over left a retry round unable to replan (``_plan_rounds`` already at
+        # the cap) or forced-finishing its first repeat without a teaching
+        # turn -- the opposite of a fresh round.
+        self._plan_rounds = 0
+        self._loop_taught = {}
+        self._stuck = StuckDetector(max_identical=_max_identical_calls(spec))
+        self._last_progress_at = self._clock()
+        self._forced_finish = False
+        self._forced_finish_allowance = 0
+        self._stop_signal = ""
+        self._deadline = self._compute_deadline(spec)
 
     def _run_loop(self, spec: TaskSpec, strategy: Strategy) -> TaskResult:
         while True:
@@ -498,43 +668,42 @@ class LoopRuntime:
                 return limited
 
             self._consume_steering()
+            # Answers to a state question the model asked in the *same* reply
+            # as its action are written here, at the top of the next round.
+            # Writing them when the notice arrived put them ahead of the tool
+            # receipt they belong beside, and the turn's window
+            # (``latest_respondable`` -> ``trailing_state_reads``) only looks at
+            # rows *after* the event -- so the answer was ledgered and never
+            # shown.  A measured run asked "am I done?" every other turn and
+            # re-read the same two files until the budget ran out.
+            self._flush_parallel_answers()
             # A step verdict may ask "are there stray changes?", so the
             # observation has to exist before obligations are reconciled —
             # not only on the Finish path.
             self._probe_worktree()
             self._note_session_context()
-            view = build_model_view(
-                spec=spec,
-                catalog=self._catalog,
-                ledger=self._readonly,
-                debt=tuple(self._debt),
-                budget=spec.budget,
-                phase=self._phase,
-                active_step=self._active_step,
-                steps=self._plan_steps,
-                step_verdicts=self._active_step_verdicts(),
-                tokens_used=self._usage.total,
-                extra_constraints=self._steering.extra_constraints(),
-                superseded=self._steering.superseded(),
-                strategy_hint=self._steering.strategy_hint(),
-                notes=tuple(self._loop_notes),
-                boundary=self._boundary_note(),
-                may_compact=self._compact_arm,
-            )
+            view = self._view_for(spec)
+            view = self._record_fold(view, spec)
             # One fold per round: once it has happened, later views in this
             # round must not fold again and churn the prompt.
             self._compact_arm = False
             self._transition(TaskPhase.THINKING, "propose action")
+            # A note marked fresh was raised by the turn that just proposed --
+            # the model has now read it, so carrying it further says something
+            # about the current turn that may no longer be true.
+            self._drop_stale_notes()
             try:
                 action = strategy.propose(view)
             except ModelCancelled:
                 # The operator stopped us.  Not a failure and not a budget
                 # block: the ledger must keep the three apart.
+                self._stop_signal = "cancelled"
                 self._transition(TaskPhase.ABORTED, "model call cancelled")
                 return self._result(
                     accepted=False, evidence=EvidenceStatus.UNVERIFIED
                 )
             except Exception:
+                self._stop_signal = "error"
                 self._transition(TaskPhase.FAILED, "strategy error")
                 raise
             self._transition(TaskPhase.RUNNING, "action proposed")
@@ -601,6 +770,19 @@ class LoopRuntime:
                     step_id=self._current_step_id(),
                 )
                 return self._budget_block(reason, ("loop", "forced_finish"))
+
+            if isinstance(action, StateRead):
+                # Recorded so "what did the model ask, and what was it told?"
+                # is answerable from the ledger.  It is not a thought and does
+                # not close a step: no work was proposed, and treating the
+                # reply as reasoning is what pushed a passing test receipt out
+                # of view and made the model re-run it.
+                self._append(
+                    EventKind.STATE_READ,
+                    EventSource.LLM,
+                    {"text": action.text},
+                )
+                continue
 
             if isinstance(action, Think):
                 self._append(
@@ -679,6 +861,7 @@ class LoopRuntime:
                     EventSource.RUNTIME,
                     {"question": action.question},
                 )
+                self._stop_signal = "awaiting_user"
                 self._transition(TaskPhase.BLOCKED, "user input required")
                 return self._result(
                     accepted=False,
@@ -686,12 +869,14 @@ class LoopRuntime:
                 )
 
             if isinstance(action, Abort):
+                self._stop_signal = "abort"
                 self._transition(TaskPhase.ABORTED, action.reason)
                 return self._result(
                     accepted=False,
                     evidence=EvidenceStatus.UNVERIFIED,
                 )
 
+            self._stop_signal = "error"
             self._transition(TaskPhase.FAILED, f"unknown action: {action!r}")
             return self._result(
                 accepted=False,
@@ -809,6 +994,9 @@ class LoopRuntime:
         self._plan = plan
         self._plan_steps = steps
         self._closed_steps.clear()
+        # A plan round adds or removes `expects`, so the obligation set moved.
+        # Force the index to notice instead of trusting its old signature.
+        self._obligation_signature = None
         if not start_active:
             self._active_step = None
             return
@@ -924,15 +1112,44 @@ class LoopRuntime:
                 return result
 
         self._transition(TaskPhase.TOOL_CALL, binding.call.spec_name)
+        call = (
+            binding.call
+            if binding.call.call_id
+            else replace(binding.call, call_id=f"call-{uuid.uuid4().hex[:12]}")
+        )
+        # Written before dispatch.  If the process dies inside the gateway,
+        # this is the only record that one specific call may have run; the
+        # receipt (same id) is what closes it.
+        self._append(
+            EventKind.TOOL_STARTED,
+            EventSource.RUNTIME,
+            {
+                "call_id": call.call_id,
+                "tool": call.spec_name,
+                "params": mask_sensitive_params(dict(call.params)),
+            },
+            step_id=self._current_step_id(),
+        )
         try:
-            receipt = self._gateway.execute(binding.call, self._services)
+            receipt = self._gateway.execute(call, self._services)
         except Exception as exc:  # noqa: BLE001 — a loop must not die on a tool
-            # No receipt is fabricated: the failure is recorded as a policy
-            # veto with its reason, and the run stops unverified.  A silent
-            # traceback out of ``run()`` would leave the ledger with a
-            # ``tool_requested`` and nothing else.
+            # "Unknown", not "failed": an exception does not prove the side
+            # effect did not happen (a timeout after a write, a killed child).
+            # The interrupted record and a debt are how the next run sees it;
+            # the call is never replayed automatically.
             message = f"{type(exc).__name__}: {exc}"
             self._transition(TaskPhase.RECONCILING, "tool raised")
+            self._append(
+                EventKind.TOOL_INTERRUPTED,
+                EventSource.RUNTIME,
+                {
+                    "call_id": call.call_id,
+                    "tool": call.spec_name,
+                    "outcome": "unknown",
+                    "reason": message,
+                },
+                step_id=self._current_step_id(),
+            )
             self._append(
                 EventKind.POLICY_DECISION,
                 EventSource.GATE,
@@ -1025,7 +1242,14 @@ class LoopRuntime:
                 signal,
             )
             if result is _SKIP_ACTION:
-                return None  # the receipt is already recorded; stop here
+                # The receipt is recorded; only this action is skipped.  The
+                # phase must still leave RECONCILING, or the next proposal
+                # raises "illegal task transition: reconciling -> thinking"
+                # and the run dies on a bookkeeping detail instead of
+                # continuing.  Measured on a real run: 40 consecutive model
+                # calls failed this way.
+                self._transition(TaskPhase.RUNNING, "loop signal advice taken")
+                return None
             if result is not None:
                 return result
         elif self._stuck.no_progress_streak == 0:
@@ -1036,8 +1260,6 @@ class LoopRuntime:
             # still kill the run after it was taught once.
             self._last_progress_at = self._clock()
             self._loop_taught.clear()
-
-        verdict = self._controller.reconcile(self._active_step, receipt)
 
         verdict = self._controller.reconcile(self._active_step, receipt)
         self._append(
@@ -2077,6 +2299,160 @@ class LoopRuntime:
         )
         return tuple(latest.values())
 
+    def _obligations_status(self) -> tuple[dict[str, Any], ...]:
+        """One row per task obligation: is it proven *right now*?
+
+        The model needs this to know when to stop.  `debt` cannot carry it: an
+        obligation that was never violated and never satisfied is absent from
+        debt, which reads exactly like "done".
+
+        V2 cannot supply it either.  V2 audits the model's finish claims, which
+        do not exist until it finishes, so during the loop there are no V2
+        verdicts to read.  Coverage is a different question — "does the ledger
+        already show this happened?" — and it is answerable after any receipt.
+
+        Answers come from a cache keyed by target.  It is rebuilt whenever the
+        obligation set changes (a plan round, a new debt) and refreshed after
+        each receipt, so a query costs a lookup rather than a ledger scan.
+        """
+
+        if self._spec is None:
+            return ()
+        self._ensure_obligation_index()
+        self._refresh_obligations_if_stale()
+
+        rows: list[dict[str, Any]] = []
+        for obligation in self._spec.obligations:
+            met = self._obligation_met.get(obligation.id, False)
+            rows.append(
+                {
+                    "id": obligation.id,
+                    "kind": obligation.kind.value,
+                    "target": obligation.target,
+                    "status": "satisfied" if met else "unproven",
+                    "met": met,
+                }
+            )
+        return tuple(rows)
+
+    def _ensure_obligation_index(self) -> None:
+        """Group obligations by target so a receipt touches only its own rows.
+
+        Rebuilt whenever the set of obligations can have changed: the example
+        that motivated it is a replan adding steps, which adds obligations the
+        old index has never heard of.  A stale index does not answer "wrong",
+        it answers "nothing to do" — the worst possible failure here.
+        """
+
+        if self._spec is None:
+            return
+        wanted = self._audit_obligations()
+        signature = tuple((item.id, item.target) for item in wanted)
+        if signature == getattr(self, "_obligation_signature", None):
+            return
+        self._obligation_signature = signature
+        by_target: dict[str, list[Any]] = {}
+        free: list[Any] = []
+        for obligation in wanted:
+            target = str(getattr(obligation, "target", "") or "")
+            if target:
+                by_target.setdefault(target, []).append(obligation)
+            else:
+                # A targetless obligation (``no_stray_changes``) cannot be
+                # triggered by a receipt naming a path.  It is judged on read.
+                free.append(obligation)
+        self._obligations_by_target = by_target
+        self._obligation_free = free
+        self._obligations_seq = 0
+
+    def _refresh_obligations_if_stale(self) -> None:
+        """Re-judge when the ledger moved since the cache was computed."""
+
+        try:
+            current = int(self._readonly.watermark())
+        except Exception:  # noqa: BLE001 — a ledger without a watermark is fine
+            current = 0
+        if current == self._obligations_seq:
+            return
+        self._refresh_obligations()
+        self._obligations_seq = current
+
+    def _refresh_obligations(self) -> None:
+        """Re-judge the current obligation set against the ledger.
+
+        One ``index_facts`` pass serves every obligation.  Calling ``resolve``
+        per obligation would re-index the ledger per obligation, and the set is
+        uncapped: a 30-step plan carries 30+ obligations, all re-judged after
+        every receipt.
+        """
+
+        obligations = [
+            item
+            for group in self._obligations_by_target.values()
+            for item in group
+        ] + list(self._obligation_free)
+        if not obligations:
+            return
+        claims = [
+            Claim(
+                id=obligation.id,
+                kind=obligation.kind,
+                target=str(getattr(obligation, "target", "") or ""),
+                # V2 verdicts resolve with the obligation's ``expect``
+                # constraints; dropping them here made this cache answer
+                # BOUND for a receipt the audit calls UNRESOLVED (e.g. a
+                # ``min_passed`` that was not met) — the model was told
+                # "satisfied" and finished into a debt.
+                expect=dict(getattr(obligation, "expect", {}) or {}),
+                since_seq=int(getattr(obligation, "since_seq", 0) or 0),
+            )
+            for obligation in obligations
+        ]
+        try:
+            resolutions = self._controller.resolve_many(claims, self._readonly)
+        except Exception:  # noqa: BLE001 — coverage must never break a run
+            return
+        for obligation, resolution in zip(obligations, resolutions, strict=True):
+            self._obligation_met[obligation.id] = (
+                resolution.status is ResolutionStatus.BOUND
+            )
+
+    def _flush_parallel_answers(self) -> None:
+        """Write state answers owed from the previous reply.
+
+        Written at the top of the next round on purpose: the turn renders
+        ``state_read`` rows that follow its event, so an answer written before
+        the receipt would be ledgered and never shown.  These are answers, not
+        turns -- ``state_read`` keeps them beside the event rather than
+        replacing it.
+        """
+
+        if not self._pending_answers:
+            return
+        for text in self._pending_answers:
+            self._append(
+                EventKind.STATE_READ,
+                EventSource.LLM,
+                {"text": text},
+                step_id=self._current_step_id(),
+            )
+        self._pending_answers.clear()
+
+    def _drop_stale_notes(self) -> None:
+        """Retire notes that described the reply the model already read.
+
+        Persisting notes live until they are displaced; a fresh note is a
+        statement about *this* turn and is retired as soon as the turn is
+        delivered, so it can never contradict the event beside it.
+        """
+
+        if not self._fresh_notes:
+            return
+        self._loop_notes = [
+            note for note in self._loop_notes if note not in self._fresh_notes
+        ]
+        self._fresh_notes.clear()
+
     def _record_strategy_notices(self, strategy: Any, action: Action) -> None:
         """Audit strategy-level proposals the runtime does not execute.
 
@@ -2091,6 +2467,28 @@ class LoopRuntime:
             if not isinstance(notice, Mapping):
                 continue
             kind = str(notice.get("kind") or "reflection")
+            if kind == "parallel":
+                # The provider answered one turn with several tool calls while
+                # the loop runs one action per turn.  The extras did not
+                # execute, and the model -- not the ledger -- is the only one
+                # that can decide whether they still matter.  Naming them in
+                # the turn is what keeps a read-then-write task from turning
+                # into a second round of reads.
+                skipped = [str(item) for item in (notice.get("skipped") or ())]
+                answered = [str(item) for item in (notice.get("answered") or ())]
+                self._pending_answers.extend(answered)
+                if skipped:
+                    note = (
+                        "Your last reply asked for "
+                        f"{len(skipped) + 1} tool calls, but a turn runs "
+                        "exactly one. These did NOT execute and produced no "
+                        "result: " + ", ".join(skipped) + ". Re-issue any you "
+                        "still need, one per turn."
+                    )
+                    self._loop_notes.append(note)
+                    self._fresh_notes.add(note)
+                    del self._loop_notes[:-5]
+                continue
             if kind == "plan":
                 self._append(
                     EventKind.PLAN_REVIEWED,
@@ -2421,20 +2819,30 @@ class LoopRuntime:
     def _remember_grant(
         self, action: Action, decision: Any, scope: str
     ) -> None:
-        """Record that the human chose to be asked once, not every time.
+        """Act on a "remember this" answer for the rest of *this* run.
 
-        The event is the point: a session with fewer prompts must still be
-        explainable from its ledger, and the grant itself must be a *recorded
-        decision* rather than a hidden setting.  It is never evidence — it does
-        not touch claims, verdicts or the evidence status.
+        Design doc §9 defines three answers: once / allow (tool + path, timed) /
+        deny.  The front-end records the ``allow`` answer in its ``GrantBook``
+        — the single memory — and the kernel receives plain values.  What
+        happens here is only the in-run part: a timed answer must apply to the
+        calls that follow in the same task, so it is added to this run's
+        policy.  The kernel keeps no copy afterwards.
+
+        It used to append ``GRANT_ADDED`` to the ledger, which made a "session"
+        answer outlive the process.  The approval itself is still on the record
+        as ``USER_APPROVAL``, and a later call it covers records a
+        ``POLICY_DECISION`` whose reason names the grant, so a replay can still
+        answer "why was this not asked?" without the grant being restorable.
+
+        It is never evidence — it does not touch claims, verdicts or status.
         """
 
-        from xenon.kernel.session_grants import (
-            SCOPED,
-            SESSION,
-            grant_from_choice,
-        )
+        from xenon.kernel.session_grants import ALLOW, grant_from_choice
 
+        if scope not in {"session", "scoped"}:
+            # "本次允许" applies to the call in flight only; the panel already
+            # authorized it and the tool fence was opened for it.
+            return
         intent = getattr(action, "intent", None)
         capability = getattr(intent, "capability", None)
         if capability is None:
@@ -2442,37 +2850,33 @@ class LoopRuntime:
         spec = self._spec
         workspace = spec.workspace if spec is not None else ""
         targets = tuple(str(item) for item in getattr(decision, "scope", ())[1:])
+        if not targets:
+            # A shell/verify decision names no path target; the command text IS
+            # the execution path the human saw.  Without this fallback the
+            # "allow" could not be represented at all and the next command was
+            # asked about again.  The param key is spelled indirectly for the
+            # same reason as ``policies._CMD_KEY``: the kernel purity guard
+            # treats the literal as a tool name.
+            params = getattr(intent, "params", {}) or {}
+            command = str(params.get(_CMD_PARAM) or "").strip()
+            if command:
+                targets = (command,)
         grant = grant_from_choice(
-            SESSION if scope == "session" else SCOPED,
+            ALLOW,
             capability=capability,
             targets=targets,
             workspace=workspace,
             reason=str(getattr(decision, "reason", "") or ""),
         )
-        self._append(
-            EventKind.GRANT_ADDED,
-            EventSource.USER,
-            {
-                "capability": capability.value,
-                "scope": grant.scope if grant is not None else "",
-                "workspace": workspace,
-                "answer": scope,
-                "accepted": grant is not None,
-            },
-        )
-        if grant is not None:
-            scoped = grant.as_scoped()
-            for policy in self._policies:
-                add = getattr(policy, "grant", None)
-                if callable(add):
-                    try:
-                        add((scoped,))
-                    except Exception:  # noqa: BLE001 — a grant must not break a run
-                        logger.warning("policy could not take the grant", exc_info=True)
-            # Handed to the front-end, which owns the durable book.  The runtime
-            # does not keep it: a kernel that stores permission state would make
-            # replay depend on something the ledger cannot show.
-            self.last_grant = grant
+        if grant is None:
+            return
+        for policy in self._policies:
+            add = getattr(policy, "grant", None)
+            if callable(add):
+                try:
+                    add(grant.as_scoped())
+                except Exception:  # noqa: BLE001 — a grant must not break a run
+                    logger.warning("policy could not take the grant", exc_info=True)
 
     def _grant_approval(
         self, policy: Any, decision: Any, action: Action
@@ -2688,33 +3092,163 @@ class LoopRuntime:
             },
         )
 
-    def _note_compaction(self, view: Any) -> None:
-        """Record that the working set was folded, once per distinct fold.
+    def _view_for(self, spec: TaskSpec) -> ModelView:
+        """Assemble the deterministic view from the current runtime state.
 
-        Compaction is deterministic and silent from the model's point of
-        view (the digest entry is already in the view), so the ledger needs
-        its own trace or the history would look like it simply shrank.
+        One place to enumerate the inputs so a fold can rebuild an identical
+        view after appending the summary event.
+        """
+
+        return build_model_view(
+            spec=spec,
+            catalog=self._catalog,
+            ledger=self._readonly,
+            debt=tuple(self._debt),
+            budget=spec.budget,
+            phase=self._phase,
+            active_step=self._active_step,
+            steps=self._plan_steps,
+            step_verdicts=self._active_step_verdicts(),
+            obligations_status=self._obligations_status(),
+            tokens_used=self._usage.total,
+            extra_constraints=self._steering.extra_constraints(),
+            superseded=self._steering.superseded(),
+            strategy_hint=self._steering.strategy_hint(),
+            notes=tuple(self._loop_notes),
+            boundary=self._boundary_note(),
+            may_compact=self._compact_arm,
+            session_history=self._session_history(spec),
+        )
+
+    def _session_history(self, spec: TaskSpec) -> tuple[str, ...]:
+        """Earlier tasks of this session, newest first (doc §3.2).
+
+        Pull, not push: the model is told that history exists and reads it with
+        ``get_state what=session`` only when a request actually refers back.
+        Nothing about earlier tasks rides in the prompt, so the cost of not
+        needing them is zero.
+
+        A workspaced filter keeps one project's history out of another's: the
+        REPL's ledger directory is shared by every project the user opens.
+        """
+
+        if self._session_history_cache is None:
+            from xenon.kernel.session_history import recent_task_lines
+
+            self._session_history_cache = recent_task_lines(
+                getattr(self._ledger, "path", None),
+                workspace=str(getattr(spec, "workspace", "") or ""),
+                session_id=str(getattr(spec, "session_id", "") or ""),
+            )
+        return self._session_history_cache
+
+    #: Folded events already narrated by a CONTEXT_SUMMARY.  Only events
+    #: beyond this point are sent to the summarizer, so a long task pays one
+    #: summary per *new* fold region instead of re-summarising the whole
+    #: dropped set every round (which grew the prompt quadratically).
+    _summarized_up_to = 0
+    #: Cap on how many folded items one narrative call receives.
+    _SUMMARY_FOLDED_LIMIT = 80
+
+    def _record_fold(self, view: ModelView, spec: TaskSpec) -> ModelView:
+        """Record a fold and, when a provider exists, its LLM narrative.
+
+        Two facts land in the ledger, both at the tail so the ``system +
+        tools`` prefix cache is untouched:
+
+        * ``CONTEXT_COMPACTED`` — the deterministic marker (seqs/count);
+        * ``CONTEXT_SUMMARY`` — the model-generated continuation narrative.
+
+        The deterministic digest is already the view's fact backbone, so the
+        narrative can only compress, never replace it.  The marker is recorded
+        from the view that is actually handed to the model (after any rebuild
+        caused by appending the narrative), so the ledger's "what the model
+        saw folded" is not a projection that differs from the request.
         """
 
         compacted = tuple(getattr(view, "compacted", ()) or ())
         if not compacted:
-            return
-        signature = f"{compacted[0]}:{compacted[-1]}:{len(compacted)}"
-        if signature == self._compaction_signature:
-            return
-        self._compaction_signature = signature
-        self._append(
-            EventKind.CONTEXT_COMPACTED,
-            EventSource.RUNTIME,
-            {
-                "seqs": list(compacted),
-                "count": len(compacted),
-                "input_seq": getattr(view, "input_seq", 0),
-            },
+            return view
+
+        pending = [
+            item
+            for item in (getattr(view, "folded_items", ()) or ())
+            if int(item.get("seq") or 0) > self._summarized_up_to
+            and str(item.get("kind") or "")
+            not in {"context_summary", "context_compacted"}
+        ]
+        final = view
+        if pending and self._summary_provider is not None:
+            # One call narrates at most this many folded items.  The watermark
+            # advances only over what was actually sent: advancing past the
+            # rest left the oldest items of a >limit fold permanently
+            # un-narrated while the ledger claimed they were summarised.
+            window = pending[-self._SUMMARY_FOLDED_LIMIT:]
+            narrative = self._summarize_fold(window, spec)
+            # Advance the boundary even when the provider returned nothing:
+            # re-asking for the same events every round would cost one model
+            # call per round for an answer that already failed once.
+            self._summarized_up_to = max(
+                int(item.get("seq") or 0) for item in window
+            )
+            if narrative:
+                model_id = ""
+                config = getattr(self._summary_provider, "config", None)
+                if config is not None:
+                    model_id = str(getattr(config, "model_id", "") or "")
+                self._append(
+                    EventKind.CONTEXT_SUMMARY,
+                    EventSource.RUNTIME,
+                    {
+                        "seqs": [int(item.get("seq") or 0) for item in window],
+                        "count": len(window),
+                        "model": model_id,
+                        "summary": narrative,
+                    },
+                )
+                # Fold once for the narrative rebuild: the arm is spent this
+                # round either way, and a deterministic (budget-only) rebuild
+                # cannot loop because the signature check below pins it.  A
+                # rebuild that no longer folds (small ledger) keeps the
+                # original view so the marker still describes what was folded.
+                self._compact_arm = False
+                rebuilt = self._view_for(spec)
+                if getattr(rebuilt, "compacted", ()):
+                    final = rebuilt
+
+        final_compacted = tuple(getattr(final, "compacted", ()) or ()) or compacted
+        signature = (
+            f"{final_compacted[0]}:{final_compacted[-1]}:{len(final_compacted)}"
         )
+        if signature != self._compaction_signature:
+            self._compaction_signature = signature
+            self._append(
+                EventKind.CONTEXT_COMPACTED,
+                EventSource.RUNTIME,
+                {
+                    "seqs": list(final_compacted),
+                    "count": len(final_compacted),
+                    "input_seq": getattr(final, "input_seq", 0),
+                },
+            )
+        return final
+
+    def _summarize_fold(self, folded: Any, spec: TaskSpec) -> str:
+        try:
+            return str(
+                self._summary_provider.summarize(
+                    objective=spec.user_objective or spec.objective,
+                    seqs=[int(item.get("seq") or 0) for item in folded],
+                    folded=tuple(folded),
+                )
+                or ""
+            )
+        except Exception:  # noqa: BLE001 — the narrative is advisory
+            return ""
 
     def _check_limits(self) -> TaskResult | None:
         if self._cancelled:
+            self._stop_signal = "cancelled"
             self._transition(TaskPhase.ABORTED, "cancelled")
             return self._result(
                 accepted=False, evidence=EvidenceStatus.UNVERIFIED
@@ -2725,6 +3259,7 @@ class LoopRuntime:
             self._spec.budget.max_steps is not None
             and self._steps >= self._spec.budget.max_steps
         ):
+            self._stop_signal = "step_budget"
             # Same shape as the token budget below: a blocked run must say why
             # in the ledger.  This branch used to transition without writing a
             # decision, so "step budget exhausted" existed only in the result
@@ -2734,6 +3269,7 @@ class LoopRuntime:
             )
         limit = self._spec.budget.max_tokens
         if limit and self._usage.total >= int(limit):
+            self._stop_signal = "token_budget"
             self._transition(TaskPhase.BLOCKED, "token budget exhausted")
             self._append(
                 EventKind.POLICY_DECISION,
@@ -2750,24 +3286,14 @@ class LoopRuntime:
                 accepted=False, evidence=EvidenceStatus.UNVERIFIED
             )
         if self._deadline is not None and time.time() > self._deadline:
-            self._transition(TaskPhase.BLOCKED, "time budget exhausted")
-            return self._result(
-                accepted=False, evidence=EvidenceStatus.UNVERIFIED
+            # Stays RUNNING: the round ended, the task may not have.  The
+            # outer loop transitions BLOCKED only when no round remains.
+            return self._budget_block(
+                "time budget exhausted", ("time_budget",), signal="time_budget"
             )
         if self._stalled():
-            reason = self._stall_reason()
-            self._append(
-                EventKind.POLICY_DECISION,
-                EventSource.RUNTIME,
-                {
-                    "kind": PolicyDecisionKind.VETO.value,
-                    "reason": reason,
-                    "signal": "stalled",
-                },
-            )
-            self._transition(TaskPhase.BLOCKED, reason)
-            return self._result(
-                accepted=False, evidence=EvidenceStatus.UNVERIFIED
+            return self._budget_block(
+                self._stall_reason(), ("stall",), signal="stalled"
             )
         return None
 
@@ -2817,8 +3343,9 @@ class LoopRuntime:
             debt=tuple(self._debt),
             finalize_sha=finalize_sha,
             evidence_status=evidence,
+            stop_signal=self._stop_signal,
             metrics={
-                "steps": float(self._steps),
+                "steps": float(self._total_steps + self._steps),
                 "tool_calls": float(self._tool_calls),
                 "events": float(self._ledger.watermark()),
                 "repair_attempts": float(sum(self._repair_attempts.values())),
@@ -2929,6 +3456,10 @@ class LoopRuntime:
     def _budget_block(
         self, reason: str, scope: Sequence[str] = (), *, signal: str = ""
     ) -> TaskResult:
+        # Why the round ended rides on one field the outer loop classifies on.
+        # ``step_budget`` is retryable; the other blocks (loop, audit, tool
+        # failure) keep whatever signal they brought or "" — never retried.
+        self._stop_signal = signal or self._stop_signal or "blocked"
         # Attach the loop detector's diagnosis so "step budget exhausted" says
         # what the run was actually doing.  The budget still decides the stop;
         # the detector only explains it.
@@ -2955,7 +3486,12 @@ class LoopRuntime:
             EventSource.GATE,
             payload,
         )
-        self._transition(TaskPhase.BLOCKED, reason)
+        # A retryable budget exit keeps the task RUNNING — the round stopped,
+        # the task did not.  BLOCKED is a terminal phase (no outgoing edges
+        # by invariant); only the outer loop may enter it, once no round
+        # remains or the block is something a retry cannot fix.
+        if signal not in self._RETRYABLE_SIGNALS:
+            self._transition(TaskPhase.BLOCKED, reason)
         return self._result(
             accepted=False, evidence=EvidenceStatus.UNVERIFIED
         )
@@ -3058,11 +3594,24 @@ class LoopRuntime:
                 return _SKIP_ACTION
             return self._budget_block(reason, ("loop", tool), signal=kind)
         self._loop_taught[key] = attempts + 1
-        self._loop_notes.append(
-            f"Loop detected ({kind}, attempt {attempts + 1}/"
-            f"{max_corrections}): {detail}. "
-            "Change the approach; the same signal is taught only once."
+        # Name the symptom *and* the next move.  "Change the approach" left a
+        # real run re-reading the same two files seven times: it knew it was
+        # repeating, but not what to do instead.  The prescription is derived
+        # from the signal's own kind and tool, so it stays replay-safe.
+        from xenon.kernel.loop_advice import advice_for_loop
+
+        prescription = advice_for_loop(
+            {"kind": kind, "tool": tool, "detail": detail}
         )
+        note = (
+            f"Loop detected ({kind}, attempt {attempts + 1}/"
+            f"{max_corrections}): {detail}."
+        )
+        if prescription:
+            note = f"{note} {prescription}"
+        else:
+            note = f"{note} Change the approach."
+        self._loop_notes.append(note)
         # The Notes section must stay bounded: a run that keeps changing walls
         # could otherwise accumulate one note per step and blow the prompt.
         # Only the most recent notes survive; the ledger keeps the full chain.
@@ -3164,6 +3713,11 @@ class LoopRuntime:
                     "reason": debt.reason,
                 },
             )
+        # Debt is part of the obligation set (`_audit_obligations` merges it),
+        # so opening or closing one changes what coverage has to answer for.
+        # A stale index here does not answer "wrong" -- it answers "nothing to
+        # do", which is the failure this whole cache exists to prevent.
+        self._obligation_signature = None
 
     def _propose_lesson(self, event_kind: str, payload: dict[str, Any]) -> None:
         """Write a LESSON_PROPOSED event from a harness-judged failure (slice 2).

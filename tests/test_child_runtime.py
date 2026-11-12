@@ -778,11 +778,11 @@ def test_a_child_with_an_inherited_grant_never_asks(tmp_path: Path) -> None:
     """
 
     from xenon.kernel.contracts import Capability
-    from xenon.kernel.session_grants import SESSION, grant_from_choice
+    from xenon.kernel.session_grants import ALLOW, grant_from_choice
 
     workspace = _worktree(tmp_path)
     grant = grant_from_choice(
-        SESSION,
+        ALLOW,
         capability=Capability.SHELL,
         targets=("echo hello",),
         workspace=str(workspace),
@@ -832,3 +832,172 @@ def test_a_child_without_a_grant_asks_the_parent(tmp_path: Path) -> None:
 
     events = Ledger(Path(outcome.ledger_path), outcome.child_id).read()
     assert any(event.kind.value == "tool_receipt" for event in events)
+
+
+# ── section 7.1: the parent records the delegation ─────────────────────
+
+
+def _parent_ledger(ledger_dir: Path, parent_id: str, tmp_path: Path) -> Path:
+    """Create the parent's own ledger the same way the runner does."""
+
+    from xenon.ledger.events import EventKind, EventSource
+    from xenon.ledger.store import Ledger
+
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    path = ledger_dir / f"{parent_id}.jsonl"
+    ledger = Ledger(path, parent_id)
+    ledger.append(EventKind.TASK_STARTED, EventSource.RUNTIME, {"objective": "p"})
+    return path
+
+
+def _kinds(path: Path) -> list[str]:
+    return [
+        json.loads(line)["kind"]
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def test_a_successful_child_leaves_started_then_finished(tmp_path: Path) -> None:
+    ledger_dir = tmp_path / "children"
+    parent = _parent_ledger(ledger_dir, "parent-ok", tmp_path)
+
+    outcome = run_child_task(
+        objective="add sub() to calc.py",
+        workspace=_worktree(tmp_path),
+        model=ModelConfig(model_id="test/fake"),
+        profile="react",
+        parent_task_id="parent-ok",
+        ledger_dir=ledger_dir,
+        client=_edit_then_finish(),
+    )
+
+    assert outcome.delivered
+    kinds = _kinds(parent)
+    assert "child_started" in kinds
+    assert "child_finished" in kinds
+    assert "child_interrupted" not in kinds
+
+
+def test_a_failed_child_opens_a_debt_in_the_parent(tmp_path: Path) -> None:
+    """A real timeout is one of the two interruption causes.
+
+    The in-process path cannot kill, so it reports ``error``; only a real
+    child process that the parent's clock killed reports ``timeout``.  Using
+    the process path here is what makes the assertion about a fact rather than
+    about which test seam happened to run.
+    """
+
+    base_url, server = _blocking_base_url()
+    try:
+        ledger_dir = tmp_path / "children"
+        parent = _parent_ledger(ledger_dir, "parent-fail", tmp_path)
+
+        outcome = run_child_task(
+            objective="read calc.py and report its function",
+            workspace=_worktree(tmp_path),
+            model=ModelConfig(
+                model_id="deepseek/test", base_url=base_url, api_key="sk-test"
+            ),
+            profile="react",
+            parent_task_id="parent-fail",
+            ledger_dir=ledger_dir,
+            timeout=3.0,
+        )
+    finally:
+        server.close()
+
+    assert not outcome.delivered
+    assert outcome.killed is True
+    events = [
+        json.loads(line)
+        for line in parent.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    kinds = [event["kind"] for event in events]
+    assert "child_started" in kinds
+    assert "child_interrupted" in kinds
+    interrupted = next(e for e in events if e["kind"] == "child_interrupted")
+    assert interrupted["payload"]["child_id"] == outcome.child_id
+    assert interrupted["payload"]["reason"] == "timeout"
+    debts = [e for e in events if e["kind"] == "debt_opened"]
+    assert debts, "中断必须生成 debt，否则会被静默忽略"
+    assert debts[-1]["payload"]["obligation_id"] == f"child:{outcome.child_id}"
+
+
+def test_an_orphaned_start_is_repaired_as_unknown(tmp_path: Path) -> None:
+    """The parent is the only writer, so an unmatched start means it died.
+
+    What it cannot know from the ledger is whether the child also died, so the
+    repair records that uncertainty instead of inventing a cause.
+    """
+
+    from xenon.harness.child import reconcile_child_records
+
+    ledger_dir = tmp_path / "children"
+    parent = _parent_ledger(ledger_dir, "parent-crash", tmp_path)
+    from xenon.ledger.events import EventKind, EventSource
+    from xenon.ledger.store import Ledger
+
+    ledger = Ledger.open(parent, "parent-crash")
+    ledger.append(
+        EventKind.CHILD_STARTED,
+        EventSource.RUNTIME,
+        {"child_id": "orphan-1", "objective": "half done", "workspace": "/w"},
+    )
+
+    repaired = reconcile_child_records(ledger_dir, "parent-crash")
+
+    assert repaired == ["orphan-1"]
+    events = [
+        json.loads(line)
+        for line in parent.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    interrupted = [e for e in events if e["kind"] == "child_interrupted"]
+    assert interrupted[-1]["payload"]["reason"] == "unknown"
+    assert interrupted[-1]["payload"]["repaired"] is True
+    assert any(e["kind"] == "debt_opened" for e in events)
+
+
+def test_reconcile_is_idempotent(tmp_path: Path) -> None:
+    from xenon.harness.child import reconcile_child_records
+    from xenon.ledger.events import EventKind, EventSource
+    from xenon.ledger.store import Ledger
+
+    ledger_dir = tmp_path / "children"
+    parent = _parent_ledger(ledger_dir, "parent-once", tmp_path)
+    ledger = Ledger.open(parent, "parent-once")
+    ledger.append(
+        EventKind.CHILD_STARTED, EventSource.RUNTIME, {"child_id": "orphan-2"}
+    )
+
+    first = reconcile_child_records(ledger_dir, "parent-once")
+    second = reconcile_child_records(ledger_dir, "parent-once")
+
+    assert first == ["orphan-2"]
+    assert second == [], "已补记过的不能重复补记"
+
+
+def test_delegation_never_creates_a_parent_ledger(tmp_path: Path) -> None:
+    """No parent ledger means no parent run to attach to.
+
+    Inventing one would fabricate a run that never happened, and it would also
+    break the single-writer expectation the child path is built on.
+    """
+
+    ledger_dir = tmp_path / "children"
+    ledger_dir.mkdir()
+
+    outcome = run_child_task(
+        objective="add sub() to calc.py",
+        workspace=_worktree(tmp_path),
+        model=ModelConfig(model_id="test/fake"),
+        profile="react",
+        parent_task_id="absent-parent",
+        ledger_dir=ledger_dir,
+        client=_edit_then_finish(),
+    )
+
+    assert outcome.delivered
+    assert not (ledger_dir / "absent-parent.jsonl").exists()

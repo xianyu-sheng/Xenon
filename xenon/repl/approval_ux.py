@@ -78,44 +78,6 @@ def grant_targets_once(workspace: Path, tool_name: str, params: dict) -> None:
 
 
 class ApprovalUxMixin:
-    def _confirm_checkpoint(self, reason: str) -> str:
-        """预算检查点续跑审批：y=继续下一窗口 / n=停止并交付进度草稿。fail-closed。"""
-
-        if not sys.stdin.isatty():
-            return "declined"
-        with self._permission_prompt_lock:
-            callback = getattr(self, "_active_callback", None)
-            if hasattr(callback, "suspend_for_prompt"):
-                callback.suspend_for_prompt()
-            with self._terminal_waiting("等待续跑审批"):
-                console.print()
-                console.print(
-                    Panel(
-                        str(reason)[:800],
-                        title="⏳ 预算检查点",
-                        border_style="cyan",
-                        padding=(0, 1),
-                    )
-                )
-                try:
-                    choice = Prompt.ask(
-                        "是否继续执行下一窗口？",
-                        choices=["y", "n"],
-                        default="n",
-                        show_choices=True,
-                        case_sensitive=False,
-                    )
-                except (KeyboardInterrupt, EOFError):
-                    choice = "n"
-        if hasattr(callback, "resume_after_prompt"):
-            callback.resume_after_prompt("budget_checkpoint", {})
-        if choice == "y":
-            self._record_event("checkpoint/continued", reason=str(reason)[:200])
-            return "approved"
-        self._record_event("checkpoint/stopped", reason=str(reason)[:200])
-        return "declined"
-
-
     def _confirm_plan(self, plan_text: str) -> dict:
         """计划审批面板：批准退出计划模式，驳回让模型修改后重提。"""
 
@@ -159,10 +121,13 @@ class ApprovalUxMixin:
 
 
     def _approval_key(self, tool_name: str, params: dict | None) -> tuple:
-        """H-7：allowed-once 绑定 (工具, 目标路径集合)，而非工具名。
+        """Identify the concrete execution path(s) a call touches.
 
-        同一轮里对同一工具的不同路径仍需分别询问；同工具同路径才免问。
+        §9 binds a remembered answer to "工具 + 执行路径", so the key is the
+        targets the human is being shown.  ``write_targets_for`` covers writes;
+        a command has no path, so its own command string is the target.
         """
+
         from xenon.nodes.approval_policy import write_targets_for
 
         try:
@@ -171,20 +136,24 @@ class ApprovalUxMixin:
             )
         except Exception:  # noqa: BLE001 — 目标解析失败按“无目标”处理，保守询问
             targets = ()
+        if not targets:
+            command = str((params or {}).get("command") or "").strip()
+            if command:
+                targets = (command,)
         return (tool_name, targets)
 
     def _confirm_tool(
         self, tool_name: str, params: dict, risk: str, *, from_child: bool = False
     ) -> tuple[bool, str]:
-        """旧权限门的确认回调：委托给统一的边界审批面板。
+        """Kernel approval bridge: answer one REQUIRE_APPROVAL decision.
 
-        PermissionGate.check 仍负责模式语义（PLAN 只读 / BYPASS 全允许 /
-        风险路由），但所有需要询问的路径都走同一个面板（工作区策略 +
-        TTL 规则 + allowed-once），不再有自己的 CRITICAL 弹窗。
+        The kernel's ``PermissionPolicy`` decides *whether* to ask; this only
+        renders the question and records the answer in the session's
+        ``GrantBook`` — the single store §9 defines.
 
         ``from_child``（#373）：回答子任务经 broker 转发的请求时，本次回答
-        只作用于这一次调用——不写 TTL 规则、不登记 allowed-once、不产生
-        会话授权。子任务只能继承父级已有的授权，不能自己积累。
+        只作用于这一次调用，不写入任何记忆。子任务只能继承父级已有的授权，
+        不能自己积累。
         """
 
         self._last_approval_scope = ""
@@ -197,23 +166,22 @@ class ApprovalUxMixin:
                 "/permissions bypass 或设置 XENON_ASSUME_YES=1",
             )
 
-        # 边界审批已经处理过（TTL 规则或本轮 allowed-once）时不再重复询问。
-        if self._approval_rules.is_allowed(tool_name):
-            return True, ""
-        if self._approval_key(tool_name, params) in self._boundary_approved_once:
-            return True, ""
-
         outcome = self._confirm_tool_approval(
-            tool_name, params or {}, reason=f"风险等级 {risk}", from_child=from_child
+            tool_name,
+            params or {},
+            reason=f"风险等级 {risk}",
+            from_child=from_child,
+            # The kernel only asks when the mode says "a human must answer"
+            # (``scoped`` writes).  Auto-allowing in-workspace writes here made
+            # ``/permissions default`` silent: the decision the mode promised
+            # was answered by the UI before the panel could appear.
+            adjudicated=True,
         )
         if outcome == APPROVAL_ALLOWED_ONCE:
-            # What the human chose to remember: "" (once), "session", "always"
-            # (a rule file) or "scoped" (just this command).
             return True, ""
         if outcome == APPROVAL_CANCELLED:
             return False, "用户取消任务"
         return False, "用户拒绝"
-
 
     def _confirm_tool_approval(
         self,
@@ -222,22 +190,28 @@ class ApprovalUxMixin:
         reason: str = "",
         *,
         from_child: bool = False,
+        adjudicated: bool = False,
     ) -> str:
         """工具边界审批：工作区内写直接放行，越界写与命令询问。
 
         返回值是封闭结果词表：allowed-once / rejected / cancelled /
         unavailable；只有 allowed-once 是授权。非交互且无 assume_yes 时返回
-        unavailable（fail-closed）。“a”登记带 TTL 的会话规则。
+        unavailable（fail-closed）。
+
+        三档（技术文档 §9）：
+          y  本次允许 —— 只放行这一次，下次再问
+          a  全部允许 —— 该工具 + 该执行路径在期限内不再问（默认 30 分钟）
+          n  拒绝
+
+        已记住的授权由 ``GrantBook`` 先行回答，面板不会再出现；这里只在
+        “没有任何授权”时提问，并把人的回答交回给同一个 book。
 
         ``from_child``（#373）：子任务经 broker 转发的请求只给 y/n/q 三个
-        选择，任何“允许”都只作用于当前这一次调用，不写入任何记忆（TTL
-        规则、allowed-once、会话授权）。父级已有的授权仍然先命中上面的
-        短路径——那就是“继承”。
+        选择，任何“允许”都只作用于当前这一次调用，不写入任何记忆。父级已有的
+        授权仍然先行命中——那就是“继承”。
         """
 
         self._last_approval_scope = ""
-        if self._approval_rules.is_allowed(tool_name):
-            return APPROVAL_ALLOWED_ONCE
         if _config().interaction.assume_yes:
             return APPROVAL_ALLOWED_ONCE
         if not sys.stdin.isatty():
@@ -247,16 +221,23 @@ class ApprovalUxMixin:
         # 写工具在工作区内免问（用户决策 1）。执行级工具（command /
         # spawn_agent / 执行型 mcp_call）无论参数如何都必须询问——
         # 模型带一个工作区内的 file_path 不能绕过审批面板（H-2 修复）。
+        #
+        # ``adjudicated`` disables the shortcut: when the kernel asked, the
+        # mode (``scoped``) has already decided a human must answer, and
+        # answering for them silently turned ``/permissions default`` into
+        # ``accept_edits``.
         from xenon.nodes.tool_classify import required_execution_level
 
         if (
-            required_execution_level(tool_name, params) < 3
+            not adjudicated
+            and required_execution_level(tool_name, params) < 3
             and not targets_outside_workspace(tool_name, params, self._workspace_root())
         ):
             return APPROVAL_ALLOWED_ONCE
 
         brief = str(params.get("command") or params.get("action") or "")[:120]
         diff_text = self._diff_preview(tool_name, params)
+        target_note = self._current_target_note(tool_name, params)
         with self._permission_prompt_lock:
             callback = getattr(self, "_active_callback", None)
             if hasattr(callback, "suspend_for_prompt"):
@@ -268,6 +249,8 @@ class ApprovalUxMixin:
                     + (f"命令: {brief}\n" if brief else "")
                     + f"原因：{reason or '工具边界策略'}"
                 )
+                if target_note:
+                    body += f"\n作用范围：{target_note}"
                 advisory_items = self.agent_context.get_security_advisories()
                 if advisory_items:
                     sources = sorted(
@@ -291,13 +274,15 @@ class ApprovalUxMixin:
                     )
                 if diff_text:
                     body += f"\n\n{diff_text}"
+                hint = (
+                    "y=本次允许  n=拒绝  q=取消任务"
+                    if from_child
+                    else "y=本次允许  t=本轮内该能力都不再问  "
+                    "a=本会话都允许（仅这条命令/路径）  n=拒绝  q=取消任务"
+                )
                 console.print(
                     Panel(
-                        body
-                        + chr(10) + chr(10)
-                        + "[dim]y=只这次  a=本会话都允许  "
-                        "A=永远允许（写入规则文件）  s=只允许这条命令  "
-                        "n=拒绝  q=取消任务[/dim]",
+                        body + chr(10) + chr(10) + f"[dim]{hint}[/dim]",
                         title="需要授权",
                         border_style="yellow",
                         padding=(0, 1),
@@ -307,151 +292,154 @@ class ApprovalUxMixin:
                     choice = self._ask_approval_choice(from_child=from_child)
                 except (KeyboardInterrupt, EOFError):
                     return APPROVAL_CANCELLED
-        if choice == "a":
-            if from_child:
-                # A child request has no y/a/A/s/q prompt; defensive only.
-                return APPROVAL_REJECTED
-            ttl = self._approval_rules.allow(tool_name)
-            self._boundary_approved_once.add(self._approval_key(tool_name, params))
-            console.print(
-                f"[dim]· 本会话 {ttl / 60:.0f} 分钟内自动允许 {tool_name}"
-            )
-            if hasattr(callback, "resume_after_prompt"):
-                callback.resume_after_prompt(tool_name, params)
-            self._last_approval_scope = "session"
-            return APPROVAL_ALLOWED_ONCE
-        if choice in {"y", "s", "A"} and not from_child:
-            # The panel already decided; the tool's own fence has to agree.
-            # A child's answer never creates a grant (children inherit, they do
-            # not widen), which is why this is gated on `from_child` too.
-            grant_targets_once(self._workspace_root(), tool_name, params)
 
-        if choice == "A":
-            if from_child:
-                return APPROVAL_REJECTED
-            # "Always" writes a rule, exactly like Claude Code's "don't ask
-            # again": the decision becomes a file the human can read, review and
-            # commit — not an invisible flag.
-            selector = self._persist_permission_rule(tool_name, params)
-            self._boundary_approved_once.add(self._approval_key(tool_name, params))
-            if hasattr(callback, "resume_after_prompt"):
-                callback.resume_after_prompt(tool_name, params)
-            console.print(f"[dim]· 已写入规则 {selector}")
-            self._last_approval_scope = "always"
-            return APPROVAL_ALLOWED_ONCE
-        if choice == "s":
-            if from_child:
-                return APPROVAL_REJECTED
-            self._boundary_approved_once.add(self._approval_key(tool_name, params))
-            if hasattr(callback, "resume_after_prompt"):
-                callback.resume_after_prompt(tool_name, params)
-            console.print("[dim]· 已只允许这条命令（本会话）[/dim]")
-            self._last_approval_scope = "scoped"
-            return APPROVAL_ALLOWED_ONCE
-        if choice == "y":
-            if not from_child:
-                # One-shot within this round.  A child's answer must not even
-                # do that: it applies to this call only, nothing more.
-                self._boundary_approved_once.add(self._approval_key(tool_name, params))
-            console.print("[dim]· 已授权本次操作[/dim]")
-            if hasattr(callback, "resume_after_prompt"):
-                callback.resume_after_prompt(tool_name, params)
-            return APPROVAL_ALLOWED_ONCE
         if choice == "q":
             console.print("[dim]· 已取消任务[/dim]")
             if hasattr(callback, "resume_after_prompt"):
                 callback.resume_after_prompt(tool_name, params)
             return APPROVAL_CANCELLED
-        console.print("[dim]· 未授权[/dim]")
+        if choice not in {"y", "a", "t"}:
+            console.print("[dim]· 未授权[/dim]")
+            if hasattr(callback, "resume_after_prompt"):
+                callback.resume_after_prompt(tool_name, params)
+            return APPROVAL_REJECTED
+
+        # 授权落地：工具自带的路径围栏必须同意，否则它会推翻人的回答（#413）。
+        remembered = False
+        if not from_child:
+            grant_targets_once(self._workspace_root(), tool_name, params)
+            remembered = self._remember_approval(tool_name, params, choice)
+
+        if choice == "t":
+            turn = str(getattr(self, "_current_kernel_turn", "") or "")
+            from xenon.kernel.session_grants import TURN_ALLOW, grant_from_choice
+            from xenon.repl.permission_map import capability_for_tool
+
+            capability = capability_for_tool(tool_name)
+            if capability is not None and turn and self._grant_book is not None:
+                grant = grant_from_choice(
+                    TURN_ALLOW,
+                    capability=capability,
+                    targets=("*",),
+                    workspace=str(self._workspace_root()),
+                    reason=f"this turn: {capability.value}",
+                    turn=turn,
+                )
+                if grant is not None:
+                    self._grant_book.add(grant)
+                    # The book is only read at the *start* of a turn, so an
+                    # answer given mid-turn has to reach the running policy
+                    # directly or the very next call asks again — measured on
+                    # a real task, which kept prompting after "t".
+                    self._push_grant_to_runtime(grant)
+            console.print(
+                "[dim]· 本轮内不再询问该类操作（下一轮会重新询问）[/dim]"
+            )
+            self._last_approval_scope = "turn"
+        elif choice == "a":
+            if remembered:
+                ttl = self._grant_book.ttl_seconds
+                console.print(
+                    f"[dim]· 本会话 {ttl / 60:.0f} 分钟内不再询问"
+                    f"（仅 {target_note or tool_name}）[/dim]"
+                )
+                self._last_approval_scope = "session"
+            else:
+                # Some calls carry no path or command to key a grant on (an
+                # MCP call with no target, a child's request).  Promising
+                # silence we did not store would be a lie the user only
+                # discovers at the next identical prompt.
+                console.print(
+                    "[dim]· 已授权本次；这类调用没有可绑定的执行路径，"
+                    "下次仍会询问[/dim]"
+                )
+                self._last_approval_scope = "once"
+        else:
+            console.print("[dim]· 已授权本次操作[/dim]")
         if hasattr(callback, "resume_after_prompt"):
             callback.resume_after_prompt(tool_name, params)
-        return APPROVAL_REJECTED
+        return APPROVAL_ALLOWED_ONCE
 
-    def _persist_permission_rule(self, tool_name: str, params: dict) -> str:
-        """Write an ``allow`` rule for exactly what was asked, and return it.
+    def _remember_approval(self, tool_name: str, params: dict, choice: str) -> bool:
+        """Record a remembered answer in the session's single ``GrantBook``.
 
-        Scope is the literal target (the command, or the path), never the whole
-        capability: "always allow this command" is what the human saw.  A broader
-        rule is a deliberate act of editing the file.
+        Only ``a`` reaches here.  ``y`` ("本次允许") is *not* remembered: the
+        call in flight has already been authorized (the panel returned True and
+        the tool fence was opened), so storing it would silently turn "just
+        this once" into "every time".  §9: 只放行这一次，下次再用仍需询问。
+
+        The grant is scoped to the capability and the concrete execution path —
+        never to the whole capability, and never to a tool name (``bash`` would
+        otherwise release every later shell command).
+
+        Returns whether a grant was actually stored; the panel's "N 分钟内不再
+        询问" promise depends on it.
         """
 
-        from xenon.kernel.permission_rules import (
-            ALLOW,
-            PermissionRule,
-            default_rule_paths,
-            save_rule,
-        )
+        if choice != "a":
+            return False
+        from xenon.kernel.session_grants import ALLOW, grant_from_choice
         from xenon.repl.permission_map import capability_for_tool
 
         capability = capability_for_tool(tool_name)
-        target = str(
-            params.get("command")
-            or params.get("file_path")
-            or params.get("path")
-            or ""
-        ).strip()
-        if capability is None or not target:
-            # Nothing to scope to: refuse to invent a rule that authorizes more
-            # than the human was shown.
-            return "(unsupported: no capability or target to scope)"
-        rule = PermissionRule(
-            decision=ALLOW,
+        if capability is None:
+            return False
+        _tool, targets = self._approval_key(tool_name, params)
+        grant = grant_from_choice(
+            ALLOW,
             capability=capability,
-            pattern=target,
-            source="user",
+            targets=targets,
+            workspace=str(self._workspace_root()),
             reason=f"approved via {tool_name}",
+            turn=str(getattr(self, "_current_kernel_turn", "") or ""),
+            ttl_seconds=self._grant_book.ttl_seconds,
         )
-        paths = dict(default_rule_paths(self._workspace_root()))
-        path = paths["user"]
-        try:
-            save_rule(rule, path)
-        except OSError as exc:
-            return f"(could not write {path}: {exc})"
-        return rule.selector()
+        if grant is None:
+            return False
+        stored = self._grant_book.add(grant)
+        self._push_grant_to_runtime(stored)
+        return True
 
+    def _push_grant_to_runtime(self, grant: Any) -> None:
+        """Make an answer given *mid-turn* apply to the turn in flight.
+
+        The book is read once when a turn starts, so an answer given while it
+        runs would otherwise only take effect on the next turn — measured on a
+        real task, where pressing "t" kept prompting because nothing re-read the
+        book.  The running policy is the only thing that can act on it now.
+        """
+
+        runtime = getattr(self, "_active_runtime", None)
+        policies = getattr(runtime, "_policies", ()) if runtime is not None else ()
+        for policy in policies:
+            add = getattr(policy, "grant", None)
+            if callable(add):
+                try:
+                    add(grant.as_scoped())
+                except Exception:  # noqa: BLE001 — a grant must not break a run
+                    logger.warning("policy rejected the grant", exc_info=True)
+
+    def _current_target_note(self, tool_name: str, params: dict) -> str:
+        """What an ``a`` answer would actually cover, in one line."""
+
+        _tool, targets = self._approval_key(tool_name, params)
+        if not targets:
+            return ""
+        return "、".join(targets[:3]) + (" 等" if len(targets) > 3 else "")
 
     def _ask_approval_choice(self, default: str = "n", *, from_child: bool = False) -> str:
-        """Read y/n/a/q without fighting prompt_toolkit for stdin.
-
-        The REPL owns the terminal through prompt_toolkit.  Asking with
-        rich's ``Prompt.ask`` (builtin ``input()``) while that session is
-        alive makes both readers compete for the same handle: on Windows the
-        keystrokes get swallowed and the prompt appears to hang until Ctrl-C.
-        So when a prompt_toolkit session exists we ask through it — it owns
-        the reader either way — and only fall back to ``Prompt.ask`` when
-        there is none (headless, tests, exotic terminals).
+        """Read y/a/n/q from the terminal.
 
         ``from_child`` (a brokered child request) narrows the answer set to
         y/n/q: a delegated model may only ask, it may not be remembered.
         """
 
-        allowed = {"y", "n", "a", "A", "s", "q"}
+        allowed = ["y", "t", "a", "n", "q"]
         if from_child:
-            allowed = {"y", "n", "q"}
-        question = "选择 [y/n/a/A/s/q] (n): " if not from_child else "选择 [y/n/q] (n): "
-        session = getattr(self, "_pt_session", None)
-        # Only inside a kernel turn, where the REPL's prompt has already
-        # returned and the session is the live owner of the terminal.  Outside
-        # one (slash commands, tests, headless) ``input()`` is safe and
-        # cheaper, so we keep the historic path.
-        in_turn = getattr(self, "_active_runtime", None) is not None
-        if session is not None and in_turn:
-            while True:
-                # ``default=`` in prompt_toolkit *prefills the edit buffer*, it
-                # is not a placeholder: a buffer pre-filled with "n" turns a
-                # typed "y" into "ny", which is invalid, so every answer
-                # re-prompts and the panel looks hung (#395).  The "(n)" hint is
-                # already in the question; empty input means the default.
-                answer = session.prompt(question).strip().lower()
-                if answer == "":
-                    answer = default
-                if answer in allowed:
-                    return answer
-                hint = "y / n / q" if from_child else "y / n / a / A / s / q"
-                console.print(f"[dim]· 请输入 {hint}[/dim]")
+            allowed = ["y", "n", "q"]
         answer = Prompt.ask(
             "选择",
-            choices=["y", "n", "q"] if from_child else ["y", "n", "a", "A", "s", "q"],
+            choices=allowed,
             default=default,
             show_choices=True,
             case_sensitive=False,

@@ -490,6 +490,37 @@ class VerificationController:
 
         return self._resolver.resolve(claim, ledger)
 
+    def resolve_many(
+        self, claims: Sequence[Claim], ledger: Any
+    ) -> tuple[Resolution, ...]:
+        """Resolve several claims against **one** index of the ledger.
+
+        ``resolve`` re-indexes the ledger per call, so resolving N claims that
+        way scans the ledger N times.  Coverage asks about every obligation
+        after every receipt, and obligations are uncapped (a 30-step plan has
+        30+ obligations), so that is the difference between one pass and
+        thirty.
+
+        The judgement is unchanged: each claim reaches ``ClaimResolver._resolve``
+        with exactly the facts ``resolve`` would have given it — the full list,
+        or the `since_seq` slice, per claim.  Only the indexing is shared.
+        """
+
+        if not claims:
+            return ()
+        facts = index_facts(ledger)
+        resolutions: list[Resolution] = []
+        for claim in claims:
+            window = facts
+            # Same rule as `ClaimResolver.resolve`: a state predicate like
+            # ``no_stray_changes`` describes now, not "since the obligation was
+            # declared", so it is judged against every observation.
+            if claim.since_seq and claim.kind is not PropositionKind.NO_STRAY_CHANGES:
+                window = tuple(item for item in facts if item.seq > claim.since_seq)
+            resolutions.append(self._resolver._resolve(claim, window))
+        return tuple(resolutions)
+
+
     def audit(
         self, claim: Claim | None, ledger: Any, debt: Sequence[Debt]
     ) -> Verdict:

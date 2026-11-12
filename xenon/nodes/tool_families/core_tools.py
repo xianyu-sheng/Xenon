@@ -28,7 +28,7 @@ class CoreToolsMixin:
         # .exe-prefixed pytest invocation).  Preserve the same structured test
         # counts that run_tests provides so Claim Gate sees real evidence.
         if result.get("tests_run") is None:
-            from xenon.engine.evidence_contracts import parse_test_counts
+            from xenon.nodes.evidence_contracts import parse_test_counts
 
             command = str(result.get("command") or "")
             if "pytest" in command.lower() or "unittest" in command.lower():

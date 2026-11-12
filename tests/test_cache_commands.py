@@ -169,13 +169,13 @@ def test_toolbar_shows_cold_na_and_actual_rate() -> None:
         ModelRegistry(),
         cache_tracker=tracker,
     )
-    assert "cache n/a" in "".join(text for _style, text in bar.get_toolbar_fragments())
+    assert "n/a" in bar.get_toolbar_text()
 
     tracker.record_response("openai/gpt", _response(cache_fields=False))
-    assert "cache n/a" in "".join(text for _style, text in bar.get_toolbar_fragments())
+    assert "n/a" in bar.get_toolbar_text()
 
     tracker.record_response("deepseek-v4-flash", _response(hit=80, miss=20))
-    assert "cache 80%" in "".join(text for _style, text in bar.get_toolbar_fragments())
+    assert "80%" in bar.get_toolbar_text()
     tracker.close()
 
 

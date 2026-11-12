@@ -203,3 +203,99 @@ def test_cli_report_writes_the_artifact(tmp_path: Path) -> None:
     assert "Delivery Report" in (out / f"{path.stem}.report.md").read_text(
         encoding="utf-8"
     )
+
+
+def test_gate_passes_only_when_every_obligation_is_met() -> None:
+    from xenon.report import gate_verdict
+
+    verdict = gate_verdict(
+        evidence_status="verified",
+        answer_verified=True,
+        contradictions=(),
+        gaps=(),
+        integrity_valid=True,
+        delivered=True,
+    )
+    assert verdict["decision"] == "pass"
+    assert verdict["reasons"] == []
+
+
+def test_gate_blocks_a_claim_the_facts_refuse() -> None:
+    """A contradiction is not "unfinished" — it is a claim that is wrong."""
+    from xenon.report import gate_verdict
+
+    verdict = gate_verdict(
+        evidence_status="contradicted",
+        answer_verified=False,
+        contradictions=({"kind": "claim_not_bound"},),
+        gaps=(),
+        integrity_valid=True,
+        delivered=True,
+    )
+    assert verdict["decision"] == "block"
+    assert any("do not support" in item for item in verdict["reasons"])
+
+
+def test_gate_blocks_an_unsound_ledger_even_when_nothing_else_is_wrong() -> None:
+    """Everything downstream reads the ledger; if it does not verify, nothing
+    drawn from it can be acted on."""
+    from xenon.report import gate_verdict
+
+    verdict = gate_verdict(
+        evidence_status="verified",
+        answer_verified=True,
+        contradictions=(),
+        gaps=(),
+        integrity_valid=False,
+        delivered=True,
+    )
+    assert verdict["decision"] == "block"
+    assert verdict["summary"] == "the ledger itself does not verify"
+
+
+def test_gate_warns_rather_than_passing_an_unfinished_run() -> None:
+    """`finalized` is not success.
+
+    A measured run finished with ``phase=finalized`` while having changed no
+    file and met no obligation.  Reading the phase as "done" is exactly the
+    false assurance the product must not produce, so the gate refuses to pass
+    it.
+    """
+    from xenon.report import gate_verdict
+
+    verdict = gate_verdict(
+        evidence_status="partial",
+        answer_verified=False,
+        contradictions=(),
+        gaps=({"id": "v2-file_changed-1"}, {"id": "v2-test_passed-2"}),
+        integrity_valid=True,
+        delivered=True,
+    )
+    assert verdict["decision"] == "warn"
+    assert any("2 obligation" in item for item in verdict["reasons"])
+
+
+def test_gate_does_not_pass_a_run_that_delivered_nothing() -> None:
+    from xenon.report import gate_verdict
+
+    verdict = gate_verdict(
+        evidence_status="unverified",
+        answer_verified=False,
+        contradictions=(),
+        gaps=(),
+        integrity_valid=True,
+        delivered=False,
+    )
+    assert verdict["decision"] == "warn"
+    assert any("no answer" in item for item in verdict["reasons"])
+
+
+def test_the_report_carries_its_schema_version_and_gate(tmp_path: Path) -> None:
+    """A CI gate must be able to refuse a report it does not understand."""
+    from xenon.report import SCHEMA_VERSION
+
+    report = build_report(_ledger(tmp_path))
+
+    assert report["schema_version"] == SCHEMA_VERSION
+    assert report["gate"]["decision"] in {"pass", "warn", "block"}
+    assert isinstance(report["gate"]["reasons"], list)

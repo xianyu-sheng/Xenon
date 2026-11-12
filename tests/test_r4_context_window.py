@@ -121,3 +121,74 @@ class TestContextManagerInjection:
         cm.max_tokens = reg.context_window_for(["gemini"])
         cm.add_user_message("x" * 14000)
         assert not cm.needs_compact()
+
+
+class TestLoadFromFileTolerance:
+    """A hand-written models.yaml must not be able to kill the REPL.
+
+    Measured: a real ``~/.xenon/models.yaml`` whose entries carried only
+    ``provider``/``base_url``/``api_key`` made ``start_repl`` raise
+    ``KeyError: 'model_id'`` the moment the user picked "new conversation" —
+    so *every* model failed to load because of one missing key.
+    """
+
+    def test_an_entry_without_model_id_falls_back_to_the_alias(self, tmp_path):
+        import yaml
+
+        p = tmp_path / "models.yaml"
+        p.write_text(
+            yaml.dump(
+                {
+                    "models": {
+                        "anthropic/deepseek-v4.1-flash": {
+                            "provider": "anthropic",
+                            "base_url": "https://example.invalid",
+                            "api_key": "sk-test",
+                            "max_tokens": 8192,
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        reg = ModelRegistry()
+        reg.load_from_file(p)
+
+        assert reg.models["anthropic/deepseek-v4.1-flash"].model_id == (
+            "anthropic/deepseek-v4.1-flash"
+        )
+
+    def test_one_broken_entry_does_not_drop_the_others(self, tmp_path):
+        import yaml
+
+        p = tmp_path / "models.yaml"
+        p.write_text(
+            yaml.dump(
+                {
+                    "models": {
+                        "good/model": {"model_id": "good/model"},
+                        "broken": "not-a-dict",
+                        "": {"base_url": "https://example.invalid"},
+                        "also-good/model": {"model_id": "also-good/model"},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        reg = ModelRegistry()
+        reg.load_from_file(p)
+
+        assert set(reg.models) == {"good/model", "also-good/model"}
+
+    def test_a_non_dict_models_section_is_ignored(self, tmp_path):
+        import yaml
+
+        p = tmp_path / "models.yaml"
+        p.write_text(yaml.dump({"models": ["nope"]}), encoding="utf-8")
+
+        reg = ModelRegistry()
+        reg.load_from_file(p)
+
+        assert reg.models == {}

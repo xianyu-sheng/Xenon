@@ -137,9 +137,7 @@ class ProjectContext:
         if search.is_file():
             search = search.parent
         self.working_dir = search.resolve()
-        home = Path(os.path.expanduser("~")).resolve()
         allow_home_project = get_config().development.allow_home_project
-        max_levels = 5
 
         # Reset all derived data so a refresh/directory change cannot retain a
         # previous project's tree, rules, or key files.
@@ -151,50 +149,34 @@ class ProjectContext:
         self.key_files = {}
         self._key_file_mtimes = {}
 
-        # 向上查找包含项目标记的目录
-        current = search.resolve()
-        levels_up = 0
-        while True:
-            # HOME is an account boundary, not an implicit project. Check it
-            # before markers: package.json/pyproject.toml in HOME often belong
-            # to shell tooling or dotfiles and must not authorize a full scan.
-            if current == home and not allow_home_project:
-                break
-            for marker, ptype in _PROJECT_MARKERS.items():
-                if (current / marker).exists():
-                    self.root = current
-                    self.project_type = ptype
-                    self._load_all()
-                    self._initialized = True
-                    return True
+        # 向上查找包含项目标记的目录：与 config / skills 共用同一个有界查找器，
+        # 避免三处各自维护标记列表与层数而逐渐分叉。
+        from xenon.utils.project_root import find_project_root
 
-            # 有 .git 目录也视为项目根；但 $HOME 下的 .git 是 dotfiles，跳过
-            if (current / ".git").is_dir() and (current != home or allow_home_project):
-                self.root = current
-                self.project_type = self._detect_type_from_content()
-                self._load_all()
-                self._initialized = True
-                return True
-
-            # 限制向上层数
-            if levels_up >= max_levels:
-                break
-
-            parent = current.parent
-            if parent == current:
-                break
-            current = parent
-            levels_up += 1
-
-        # A specific working directory can still be a bounded scratch project
-        # without markers. HOME and filesystem root remain explicitly
-        # unscoped, preventing broad scans and accidental project-memory roots.
-        resolved_search = search.resolve()
-        if resolved_search not in {home, Path(resolved_search.anchor)}:
-            self.root = resolved_search
+        root = find_project_root(search, allow_home=allow_home_project)
+        matched = bool(
+            root
+            and (
+                any((root / marker).exists() for marker in _PROJECT_MARKERS)
+                or (root / ".git").is_dir()
+            )
+        )
+        if root is not None:
+            self.root = root
+            if matched:
+                self.project_type = next(
+                    (
+                        ptype
+                        for marker, ptype in _PROJECT_MARKERS.items()
+                        if (root / marker).exists()
+                    ),
+                    "unknown",
+                )
+                if self.project_type == "unknown":
+                    self.project_type = self._detect_type_from_content()
         self._load_all()
         self._initialized = True
-        return False
+        return matched
 
     def _detect_type_from_content(self) -> str:
         """从目录内容推断项目类型。"""

@@ -29,6 +29,18 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_chat_ledgers(tmp_path_factory, monkeypatch):
+    """Never let a test's chat turn write into the real ``~/.xenon``.
+
+    ``turn_flow`` records direct-chat turns in the ledger; without an override
+    every REPL test would append to the developer's own ledger directory.
+    """
+
+    monkeypatch.setenv("XENON_LEDGER_DIR", str(tmp_path_factory.mktemp("ledger")))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_provider_probe_cache():
     """每个用例前后清空 provider 探测缓存。
 

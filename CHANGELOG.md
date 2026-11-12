@@ -1,9 +1,586 @@
 # 更新日志
 
-本文件记录 Xenon 各版本变更。版本号遵循语义化版本（预 1.0 阶段：
-`0.MINOR.PATCH`）。
+本文件记录 Xenon 各版本变更。版本号遵循语义化版本。
 
-## [Unreleased]
+## [1.0.0] — 2026-11-12
+
+**Xenon 1.0：一个循环，一本账，一套可回放的真相。**
+
+本版把此前累积的收口批次合并为 1.0：单一内核循环成为唯一的执行与验证链，
+每一轮（含纯对话）都进账本，崩溃恢复精确到调用，凭证静态加密，配置分层，
+沙箱 seam 可接 Docker/WSL，外部审计产品化为 CI Action，TS 前端成为唯一交互界面
+且构建产物随 wheel 分发，Xenon 同时可以作为 **MCP server** 接入其他 Agent。
+
+验证：`4080 passed / 101 skipped / 0 failed`（6m46s），ruff、kernel purity、
+engine imports、docs references 全绿；前端 `tsc` + 36 条单测通过；
+真实 ConPTY 双轮自进化验收通过；Claude Code 握手日志见
+`docs/evidence/mcp-claude-integration/`。
+
+### 收口批次：每轮入账、精确恢复、沙箱 seam、配置/凭证、审计 CI、TS 默认（2026-11-11）
+
+**每一轮都有账本**
+- 新增 `xenon/ledger/conversation.py`。REPL 的纯对话轮次与协议宿主的对话轮次都写入
+  `ledger/repl/chat/`：`task_started(mode=chat)` → `delivered` → `finalized`；
+  `_last_kernel_ledger` 指向它，`/evidence`、`/goal` 对纯对话也成立。写入失败只记 debug，不影响回复。
+- `direct_chat._run_direct` 返回 `DirectChatOutcome(answer, model_id, delegated)`；
+  升级到工具路径的轮次标记 `delegated`，不重复记账。
+
+**崩溃恢复精确到调用**
+- `ToolCall.call_id` 由 runtime 在**执行前**铸造；新增 `tool_started` / `tool_interrupted` 事件；
+  网关三处回执与 `_execution_call` 复用该 id；打开已有账本时把无回执的 start 标为
+  `TOOL_INTERRUPTED(outcome=unknown)` 并开 `call:<id>` debt。
+- `report` 增加“结果未知的调用”；`replay` 展示 start/interrupted。
+  **不自动重放有副作用的调用**（可能已部分执行），由模型/人核验。
+
+**沙箱 seam**
+- 新增 `xenon/sandbox/backends.py`：`process`（默认，仍**不是**安全边界）/ `docker` / `wsl`，
+  复用 `ToolRuntime.command_prefix/prelude`；配置 `sandbox.backend|image|network|workdir`；
+  配置的后端不可用时 fail closed（`kind="sandbox"`），不静默降级。
+
+**配置分层**
+- 新增 `xenon/utils/project_root.py`（不读配置的共享查找器）；
+  `system_config` 按“用户 < 项目 < 环境变量 < CLI”合并（项目覆盖用户），缓存包含两个文件的 mtime；
+  `skill_manager` / `project_context` 改用同一查找器；`XENON_CONFIG_PATH` 显式指定时关闭分层。
+
+**凭证静态加密**
+- 新增 `xenon/utils/credentials_io.py`：Windows DPAPI（ctypes，零依赖）、`keyring`（可选）、
+  plaintext 兜底并在文件头与 `describe()` 标注；全部读者（provider_registry、llm_transport、
+  harness/llm、model_registry、integration_cli、evals、github_auth）统一走它。
+- `models.yaml` 保存时把 `api_key` 移入 credentials 的 `_model_keys`；明文凭证在读取时自动加密，
+  不留下明文备份。
+
+**其他修复**
+- `harness/runner.run_plan`：全绑定（capability-bound）的计划即使配置了模型也不再调用模型——
+  确定性计划不隐式发起网络请求，也不会因第三方端点抖动而失败。
+
+**外部审计 CI**- 新增 `.github/actions/xenon-audit`（composite：JSON + PR 评论产物、strict 退出、artifact 上传、
+  marker 更新评论）与 `examples/xenon-audit.yml`；`docs/EXTERNAL_AUDIT.md` 增加 CI 一节。
+- 修复 `.github/workflows/delivery-report.yml`：`workflow_dispatch` 永远不满足旧的
+  `pull_request` 条件，评论步骤是死代码；新增 `pr-number` 输入。
+
+**TS 前端（三阶段全部完成）**
+- 协议补齐：`turn.cancel` → `turn.cancel.result`、计划审批（`approval.request.kind="plan"`）、
+  `prompt.request/response`（命令内提问）、`session.select`、状态字段与审批 `advisories`；
+  宿主把 `rich.Prompt` 与 `selector.ask_choice` 桥接到协议（`/resume`、`/permissions`、`/model` 可用）。
+- 宿主修复：加载 `models.yaml`（此前只读 credentials，模型解析到不同端点）；协议 stdout 只走帧，
+  其余输出改为 stderr；`run_kernel_turn` 返回 `None` 时发 failed 帧而不是空 phase。
+- 纯对话在宿主里走 direct 路径（此前被送进内核，问候被只读策略否决并空转）。
+- `xenon --ui ts|python`（`XENON_UI`）：有 `frontend/dist/cli.js` 时默认 TS，`--ui python` / 无构建产物回退。
+- **步骤 4：删除 Python TUI 的渲染层。**
+  - 删除 `completer.py`、`command_catalog.py`（命令面板/MRU）、`selector.py` 的补全菜单与按键绑定、
+    `status_bar.py` 的 PT fragment 渲染、`theme.DEFAULT_PT_STYLE`；`prompt-toolkit` 从依赖中移除。
+  - `repl.py` 不再持有 PT 会话：输入统一走 `repl_input`；`_pt_session`、`_init_prompt_toolkit`、
+    `_install_input_lower_rule`、`_read_input_pt` 全部删除。
+  - 回退编辑器补上失去的能力：`↑/↓` 历史（`xenon/repl/input_history.py`，持久化到
+    `~/.xenon/input_history.txt`）；`XENON_NO_PT` 配置项随之删除。
+  - `direct_chat` 的 Rich `Live` spinner 移除（重绘会干扰协议流与编辑器光标）。
+  - 回退模式现在没有固定底栏、补全菜单和命令面板；这些由 TS 前端承担，`docs/TUI.md` 已重写。
+- **收紧入口**：`xenon` 缺少 `node` 或 `frontend/dist/cli.js` 时报错退出（code 1）并打印
+  `npm install && npm run build`，不再静默回退到内置编辑器；管道输入（非 TTY）同样报错并指向
+  `xenon exec`。`--ui python` / `XENON_UI=python` 保留为显式 opt-in。
+  `--resume` 与 `xenon resume` 也改走 TS（`--resume` 传给宿主，启动后执行一次 `/resume`），
+  不再绕过默认界面。
+
+**发布物与前端收口（2026-11-11 续）**
+- **打包**：`frontend` 用 esbuild 生成单文件 `dist/xenon-ui.js`（Ink/React 内联，不依赖 `node_modules`）；
+  `scripts/build_frontend_assets.py` 把它暂存进 `xenon/frontend/assets/` 并随 wheel 分发；
+  CI `package` job 构建前端、打包后断言 wheel 内含该文件。`_ts_frontend_script` 优先解析包内 bundle，
+  其次是源码检出的 `frontend/dist`。干净 venv 只装 wheel 即可启动 TS 界面（需要 Node.js 20+）。
+- **首次运行**：`ready` 帧带 `setup_needed`（只读本地凭证与已配置模型，不探测网络）；
+  TS 在状态栏下提示“尚未配置 API Key · 输入 /setup”。
+- **`@` 文件补全**：新增 `files.request` / `files.result`；宿主在工作区内有界列举
+  （跳过 `.git`/`node_modules` 等，最多 50 条，只列名字不读内容），TS 用 `↑/↓` 选择、`Tab` 补全。
+- **Shift+Tab**：新增 `/mode next|cycle`，前端快捷键与命令走同一条路径。
+- **修复**：`session.select` 分发的命令名缺少前导 `/`，恢复会话一直返回“未知命令”；
+  宿主启动时的 `--resume` 也因此第一次真正生效。
+
+**修复：真实任务暴露的三个执行缺陷（2026-11-11 续）**
+- **子进程继承宿主 stdin（Windows 挂起）**：主线程阻塞在 stdin 读帧时，任何继承该句柄的子进程
+  都会在启动阶段挂住——真实任务里的 `pytest` 一行输出都没有，工具 60s 超时、轮次被判 stalled。
+  代理执行层的 spawn 点（`tool_node`、`test/git/github/script` 工具、catalog gateway/worktree）
+  显式传 `stdin=subprocess.DEVNULL`；hooks 通过 `input=` 自带管道，天然隔离。
+  新增 AST 静态守卫防止回潮。
+- **`test` 工具忽略模型给的 `command`**：`command` 被通用别名映射成 `action`，`test` 却没读它，
+  于是 `python -m pytest` 不带路径、跑整套测试。现在 `action` 里的 `pytest` / `python -m pytest`
+  会被解析成 pytest argv，其他命令按原样执行。
+- **直连对话不解析 `-m` 别名**：内核路径会解析，direct 路径把 `deepseek-v4-pro` 原样交给 provider
+  层，报“model_id 必须为 provider/model_name”。`_canonical_model_ids` 统一成注册表里的规范 id。
+
+真实任务验收（DeepSeek 官方端点）：TS 界面 → 协议 → 内核 → 读文件 → 打补丁 → 验证审批 →
+`pytest` 通过 → `证据 verified · finalized · 已交付`；同一任务在协议宿主直连路径同样
+`accepted: true / evidence: verified`，`xenon report` 显示两条 claim 均 bound。
+
+**外部审计：区分「冲突」与「无法核验」（2026-11-12）**
+- 工作区之外（或没有 VCS）的声明不再计入 `contradicted`：这类声明既不能证实也不能证伪，
+  现在标记为 `out_of_scope`。整体状态按「有冲突 → contradicted；有无法核验 → partial/unverified；
+  有未声明改动 → partial；否则 verified」判定。
+- `--strict` 的口径不变：只在 `contradicted` 时退出 1；无法核验不会让门禁失败。
+- `to_report` 增加 `claims[].status = out_of_scope`、顶层 `out_of_scope` 与
+  `delivery.out_of_scope_paths`；`render_audit` 把「与工作区冲突」和「无法核验」分成两节。
+
+**MCP server：把 Xenon 接入其他 Agent（2026-11-12）**
+- 新增 `xenon mcp-serve`（`xenon/mcp/server.py`）：JSON-RPC 2.0 over stdio，暴露三个工具——
+  `xenon_run_task`（内核任务 + 账本）、`xenon_evidence`（读账本）、`xenon_audit`（外部审计）。
+- 权限 fail-closed：默认 `read-only`，单次调用只能降低、不能超过服务器上限；workspace 默认限制在
+  服务器根目录内（`--allow-any-workspace` 可放开）；需要人工审批的调用直接失败并说明原因，不挂起。
+- stdout 只承载协议，诊断走 stderr；`--permission` 的默认值按子命令区分（`exec` 仍是 `auto-edit`）。
+- 真实 stdio 验收：`initialize` 协商 2025-06-18、`tools/list` 3 个、`run_task` finalized/12.3s、
+  `evidence` finalized/verified、`audit` partial（0 contradiction / 10 out_of_scope）。
+- 文档：新增 `docs/MCP_SERVER.md`；README 增加接入说明；ARCHITECTURE 模块树更新。
+
+**缓存 TTL 实测**
+- `docs/evidence/cache-ttl/probe.py` 直连 DeepSeek 官方端点：前缀在 5 分钟内命中 512 tokens；
+  **无中间命中的对照在 300 秒与 900 秒后仍命中**，说明 5 分钟 TTL 不适用于 DeepSeek，
+  至少 15 分钟内的停顿不会失效。"命中是否延长 TTL"仍未跨过 TTL，证据见该目录 README。
+
+
+**首次运行闭环与命令面板（2026-11-12 审计）**
+- **`/setup` 在默认界面里真正可用**：向导的 API Key 输入（`_masked_input`，逐字符 `*` 掩码）
+  原本直接读进程 stdin；TS 前端下终端归 Node 所有，这一读既拿不到按键也会挂住，
+  而首次运行提示恰好指向 `/setup`。宿主现在把 `setup_wizard._masked_input` 一并桥接到
+  `prompt.request(secret=true)`，并随命令结束还原补丁。
+- **命令面板补回缩写过滤**：TS 的 `completeCommand` 原本只做前缀匹配，README/TUI 承诺的
+  “`prm` → `/permissions`” 并不成立。现在按「精确 > 前缀 > 子序列」排序，同分保持目录顺序。
+- **`Enter` 补全，不直接执行**：真实 ConPTY 验证发现 `/e` + `Enter` 会运行目录里第一条匹配
+  `/exit`——等于误退出。现在 `Enter` 只把高亮项补进输入框，再按一次才执行；输入已是完整命令名时
+  始终运行用户键入的那条。
+- **退出不再抛栈**：`KernelHost.shutdown` 先置 `closed` 再关闭 stdin，迟到的帧（文件列表、状态）
+  不会再写进已结束的流，消掉 `ERR_STREAM_WRITE_AFTER_END`。
+- **自进化双跑验证通过**（最后一项待办）：真实 ConPTY + TS 前端两轮，账本
+  `lesson_proposed` / `lesson_stored` → `lesson_applied`（同指纹），项目记忆里有 `lsn-…` 记录。
+  验收脚本现在**循环拒绝每个审批面板**：模型会把同一条命令改成 `test` 再问一次，
+  旧脚本只按一次 `4`，第二个面板一直等，看起来像审批卡死。
+
+
+### 审计修正批次：清死代码、账本分支、补齐文档缺口（2026-11-11）
+
+**清死代码（阶段 1）**
+
+- 整个 REPL 发布闸门不可达（`_render_engine_result` 零调用方 → `_verify_turn` →
+  `TurnGate.evaluate` 只互相调用）：删除 `turn/gate.py`、`engine/task_verifier.py`、
+  `engine/hollow_detector.py`、`turn_helpers.turn_status_from_result`、`_render_engine_result`、
+  `_verify_turn`、`_last_gate_verdict`、`_turn_gate`；`task_state.py` 保留（仍用于 legacy 续接）。
+- `engine/evidence_gate.py` 只保留 `GateVerdict`（`tool_executor.before_tool` 仍使用）。
+- 删除三份零调用的 MCP 提示词格式化与只写不读的 `_mcp_tools_list`（catalog 是唯一通道）。
+- 删除 `engine/trace.py`（账本即 Trace）与 `tool_executor` 里永远拿到空 id 的过滤器。
+- 删除 `engine/checkpoint_manager.py`、`_get_checkpoint_manager`、`_confirm_checkpoint`、
+  `engine/context.py` 的事实/钩子接缝、`register_evidence_gate`/`evidence_gates`。
+  工具执行期的 `set_tool_checkpoint_callback` 是另一条活路径，保留。
+- 内核渲染规则：`accepted` 但 `phase != FINALIZED` 时标题显示"已阻塞/已中止/失败 · 证据状态"，
+  不再出现"停止的运行被标成完成"；partial/unverified 结果附"待人工核验"披露面板（不是闸门）。
+
+**权限（阶段 2）**
+
+- 删除内核的封闭测试命令白名单（pytest/npm/go/cargo/mvn…）：所有命令走统一审批，
+  有通道就问、"a" 记住 30 分钟，无通道拒绝。VERIFY 与 SHELL 一样受破坏性硬规则约束
+  （`pytest …; rm -rf .` 不再只是"问一下"）。因此无 TTY 的 `xenon exec` 跑测试命令需要
+  显式 `--permission bypass`。
+
+**账本（阶段 3-5）**
+
+- **单写者**：`ledger/store.py::open_shared` 按规范化路径共享同一 `Ledger` 实例（弱引用 +
+  任务 id 校验）；`append` 在文件被别的进程推进时先重新加载（`_refresh_tail_if_moved`），
+  两个句柄不再产生重复 `seq` / 分叉 `prev_hash`。`runner` 与 `child._open_parent_ledger` 改用它。
+- **子进程封存分支**：`child_started.branch` 记录 `task_id/ledger/base_seq/base_hash/depth`；
+  `child_finished`/`child_interrupted.branch` 记录父进程亲自验证后的
+  `head_seq/head_hash/event_count/sealed`（读不到就 `sealed:false`，不编 head）。
+  新增 `xenon/ledger/tree.py::verify_tree`；`report.build_report` 增加 `branches` 段。
+  没有 `next[]`：回写前驱会破坏 append-only。
+- **崩溃恢复接线**：`_runtime_bundle` 打开账本后 `recover_truncated()`，隔离半行为
+  `.corrupt-*` 并写 `ledger_repaired` 事件 + debt；无法证明是哪次调用中断，因此只标任务级，
+  不编造单条回执。
+- **迁移是显式命令，不是启动钩子**：legacy 会话日志仍是 `/resume`、`/evidence`、`/rewind`
+  的活存储；每次启动扫描会把仍在写入的数据复制成"一会话一账本"（真实环境实测 25k 文件
+  ≈ 165 秒/次，且随会话数增长）。启动不再调用 `migrate_legacy_sessions()`，改为一次性命令
+  `xenon import-legacy`，在该存储真正退役时执行。导入仍幂等，目标仍是独立的 `ledger/legacy/`。
+
+**意图事件（阶段 6）**
+
+- `TaskSpec.intent/intent_source` 由 REPL 传入，运行时在 intake 写 `intent_classified`
+  事件（intent/source/mode）。
+
+**保留策略（阶段 7，默认关闭）**
+
+- `xenon/ledger/retention.py`：只归档（移动）过期子账本到 `ledger/archive/<date>/`，
+  不删除；主账本永不自动清理；被分支封存引用或仍有未闭合 `child_started` 的不移动。
+  配置走统一入口 `get_config().retention`（`retention.enabled` / `children_days` /
+  `max_total_mb`）；环境变量 `XENON_RETENTION_ENABLED` / `XENON_CHILDREN_DAYS` /
+  `XENON_LEDGER_MAX_MB` 优先级更高。
+
+**统一错误信封（阶段 8）**
+
+- `xenon/utils/errors.py::envelope(exc)` 按行为分类（permission/network/llm/tool/integrity/
+  internal/cancelled）+ code + retryable；CLI 与协议 `turn.end`（新增 `error_kind`/`retryable`）
+  使用同一份。`_gs_check.py` 移入 `docs/evidence/obligation-progress/probe.py`。
+
+**对齐复核（第二轮审计）**
+
+- 启动路径回归修复：legacy 迁移移出启动（见上），REPL 冷启动不再做全量历史扫描。
+- `docs/ARCHITECTURE.md` / `.en.md` 的模块树补上 `kernel/`、`ledger/`、`catalog/`、`harness/`、
+  `frontend/`，`session/` 明确标注为 legacy；英文版过期的"TurnGate 仍在运行"说明改为已删除；
+  行数/工具族计数按当前代码校正。
+- 保留策略不再自读环境变量，统一走 `get_config().retention`（一条配置通路，不是两条）。
+- `max_total_mb` 从"写了但没用"变成真规则：超预算时按最旧优先归档（仍绝不删除、不动已封存分支）。
+- 删除零写入的事件枚举 `TOOL_REQUESTED`（并修正引用它的过期注释：崩溃定位到 `TOOL_CALL` 转移，
+  `call_id` 由网关在执行时生成，无法在决策前写入）。
+- 补齐 `kernel/runtime.py` 漏掉的 `ModelView` 导入（F821：注解引用了未定义名）。
+- `ruff check xenon tests evals scripts`（与 CI 同一条命令）重新归零：删除未使用导入、
+  整理导入顺序、修 `callbacks.py` 的 E402、修一个 docstring 的无效转义警告。
+- README 版本号与 `CLAUDE.md` 的版本/测试数按实际值校正（版本单一来源是 `xenon/__init__.py`）。
+
+### 全量审计（代码 / 测试 / 死代码 / 文档）与修复批次（2026-11-11）
+
+五路并行审查（内核+harness、repl+catalog+utils、测试有效性、死代码与遗留、文档与架构不变量），
+所有结论逐条复核后修复：
+
+**权限与会话授权**
+
+- **SCOPED 的写盘问题被审批后端自动答掉**：审批 UI 里"工作区内写工具免问"的旧捷径先于
+  面板返回 allowed-once，`/permissions default` 实际等于 `accept_edits`。内核发起的审批
+  现在传 `adjudicated=True` 跳过该捷径；旧捷径只服务 legacy 执行器回调。
+- **`accept_edits` 反而更严**：审批通道此前只在 EXECUTE 打开，同一 `pytest` 在
+  `accept_edits` 被硬拒、在 `default` 会询问。现在非只读模式一律有通道。
+- **`bypass` 的 push 被静默放行**：bypass 快捷返回在 push 规则之前。push 规则现在先于
+  任何授权与 bypass（有通道询问、无通道拒绝）；`/permissions` 描述同步为
+  "破坏性命令仍拒绝，push 仍需确认"。
+- **链式/后台/重定向可借授权提权**：`_CHAIN_MARKERS` 缺 `&`、`>`、`<`、换行，且
+  `*` 通配在链式检查之前返回 —— `sleep 1` 的授权可放行 `sleep 1 & rm -rf x`、
+  `echo hi > /etc/passwd`。现补全标记，且**通配授权也不能覆盖链式命令**。
+- **ALLOW 授权没有截止时间**：`grant_from_choice(ALLOW)` 不写 `expires_at`，推给运行中
+  策略就没有 TTL。现在授权自带 30 分钟期限（面板用 book 的 TTL），推入策略时用
+  `add()` 返回的已计时副本。
+- **模式名回显漂移**：`default`/`accept_edits` 共用级别，反向映射总是返回 `default`，
+  选完 `accept_edits` 再回车会静默切档。回显改为以持久保存的模式名为主。
+
+**内核与 harness**
+
+- **外层轮次未重置计划/教学预算**：`_begin_outer_round` 现在同时重置 `_plan_rounds`
+  与 `_loop_taught`，否则重试轮无法 replan、首个小重复就被 force-finish。
+- **折叠水位越过实际叙事窗口**：一次折叠 >80 项时只叙事最后 80 条，水位却推进到全部，
+  最早的折叠事件永远不会被叙事。水位现在只覆盖实际送出的窗口。
+- **并行调用簿记跨回复残留**：`_skipped/_answered` 只在 `_note_parallel` 里清空，而无工具
+  调用的回复会提前返回 → 上一回复的丢弃调用被当作本回复重报、状态答案重复入账。
+  现在按每次调用清空。
+- **resume 丢失会话归属**：`resume_task` 从既有账本的 `task_started` 读回 `session_id`，
+  恢复后的任务仍能查到本会话历史。
+
+**脱敏与工具发现**
+
+- **日志与工具结果存储的敏感键集合不一致**（一个漏 `refresh_token/client_secret/cookie/
+  private_key`，另一个漏 `credential`）：合并为 `utils/redact.py::SENSITIVE_PARAM_KEYS`。
+- **合并后的密钥阈值回退**：`sk-` 从 12 字符抬到 16 且丢了 `ak-`，12–15 字符的密钥会进入
+  记忆。恢复为 `(?:sk|ak)-…{12,}`。
+- **`find_tools` 未知 capability 静默**：返回空集且无说明，模型无法区分"过滤器不存在"与
+  "没有匹配工具"。现在 receipt 的 `note` 明说过滤器无效。
+
+**测试审计**
+
+- 重写两处"自证式"测试：一处先写入授权簿再断言授权簿、一处把产品的外层 try/except 抄进
+  测试再断言自己写的消息。它们不调用任何产品路径，删掉产品逻辑也不会红。
+- 删除 `test_file_claim_recursive_react_exception_placeholder`（同上，兄弟用例已覆盖真实路径）。
+- `tests/test_checkpoint_integration.py` 与检查点毫无关系（11 个 PartialContent 用例），
+  更名为 `test_partial_content.py`。
+- `tests/test_llm_classifier_live.py` 五个只打印不断言的"live"用例：正则用例改为断言（并
+  真的失败过一次），其余四个显式 `skip(reason="live model probe")`。
+- `test_memory_v2_status` 实际调用的是 v1 命令且只断言 `isinstance(str)`；改为真正调用
+  `_cmd_memory_v2`。
+- `test_f3_compactor` 两处 `assert 0.6 < mock 的 0.7 < 0.85` 属自证断言，删除。
+
+**文档更正**（此前被标记"已实现"但代码不支持）
+
+- `llm_intent` 事件从未存在：分类结果参与契约判定但**没有入账**。
+- `report.py` 输出的是 `schema`/`schema_version`，没有 `version` 字段，也没有启动迁移。
+- `external.py`/`report.py` 行数、sandbox 行数（68 行进程内检查）、崩溃恢复
+  （`recover_truncated` 无生产调用）与迁移脚本（`migrate_session_jsonl` 无生产调用）的
+  状态改为准确描述。
+
+### 跨轮上下文改为按需拉取 · 外部审计适配器化 · 脱敏合并（2026-11-11）
+
+- **§3.2 跨轮上下文（pull，而非 push）**：不再把"最近 5 条摘要"预置进每轮
+  prompt。`get_state` 新增 `session` 查询：只读、零模型，按**会话 id**（不是
+  ledger 目录——每个项目共用同一目录）从各自账本投影最近 5 个任务，一行一条
+  （任务 → 证据状态 · 结论）；本轮消息只增加一行恒定指针，告诉模型"有历史、
+  可用 get_state what=session 取"。任务内部的折叠叙事仍主动推送（纯 pull 在
+  真实任务中失败过，见缺陷 4）。新增 `kernel/session_history.py`（有界读取
+  文件头尾、容忍坏行）、`TaskSpec.session_id` 贯穿 runner/adapter 并记入
+  `task_started`；StateRead 照旧消耗一步（已确认可接受）。
+- **§11.4 外部审计适配器化**：`ClaimAdapter` 协议（`name` / `sniff` / `read`），
+  按**记录格式**识别而非按 Agent 名；显式 `--agent` 优先且未知名字不回退嗅探；
+  识别不了时**不解析任何声称**、`agent=unknown`、notes 说明原因，且不列
+  `unclaimed_paths`（读不了的日志不能反过来构成指控）。`ExternalAudit.agent`
+  取适配器自报名，不再硬编码。
+- **§11.7 脱敏合并为一份实现**：`xenon/utils/redact.py` 统一报告、MCP 日志与
+  记忆写入（此前三份各自枚举、互相漏）；补环境变量凭证赋值（保留变量名）、
+  Bearer/Basic、GitHub/AWS/OpenAI/Anthropic/Google/Slack 形态、整块私钥、
+  敏感查询参数、中文标签，普通文本不动。
+- 真实验证：REPL 冒烟脚本 `docs/evidence/repl-smoke/drive_repl.py`——plan 模式
+  写盘被 VETO 且模型如实报告、bypass 模式真实修复并跑测试（verified）、
+  `/sub-agent` 只读委派成功；新增用例见 `tests/kernel/test_session_history.py`、
+  `tests/test_external_audit.py`、`tests/test_redact.py`。
+- 真实运行抓到**四个**缺陷并修复（前两个在会话历史链路，后两个让模型根本收不到历史）：
+  1. **会话历史查询性能**：真实 REPL 账本目录有 3805 个账本，逐文件
+     `Path.resolve()` + 全目录扫描使每次查询耗时 ~1.6s。改为规范化路径比较
+     （不碰磁盘）、只扫描最近 40 个候选，实测降到 ~67ms（会话目录 ~1ms）。
+  2. **`get_state` 被写成 `call_tool` / 写进计划时无法作答**：模型会发出
+     `{"action":"call_tool","capability":"remote","params":{"tool":"get_state"}}`，
+     没有任何工具暴露 remote 能力 → 绑定两次失败；也会把它作为**计划步骤**
+     （计划步骤只能绑定目录工具，必然失败）。现在：前者由 harness 识别写法直接
+     作答；后者把该步骤降级为无意图的 inspect 步骤，交给 actor 自己动手。终局
+     动作不是工具，内核仍然不认识任何工具名。
+  3. **步执行路径的当轮消息缺少尾部上下文**：默认「先规划、再按步执行」走
+     `build_step_messages`，它自己拼消息，**既没有折叠叙事、也没有会话历史指针**
+     ——模型从头到尾不知道有 `get_state`，只能去翻账本文件。现在 `current_turn`
+     与步执行共用同一个 `_tail_context`，两条路径不会再漂移。
+  4. **策略丢弃步内的 `StateRead`**：步执行子循环只放行
+     `Think/AskUser/Abort/CallTool`，模型发出的 `StateRead` 被丢弃并「释放步骤」，
+     答案渲染后直接扔掉。现在 `StateRead` 放行，运行时记录 `STATE_READ` 并把
+     答案带入后续轮次。
+  - 端到端真实验证（`docs/evidence/session-history/probe_turn.py`，抓真实请求）：
+    指针进入步执行消息 → 模型调用 `get_state what=session` → 账本记录
+    `STATE_READ`（含 earlier_tasks）→ 最终答案正确。
+
+### 修复 /sub-agent：权限误读与生命周期丢记（2026-11-11）
+
+- **子任务一直起不来**：`/agent` 读不存在的 `repl._execution_level`（恒 0）→ 父
+  权限恒 READ_ONLY，而子任务默认 AUTO_EDIT → 子集检查抛错。现在级别从
+  `agent_context` 读取并尊重 `_permission_mode` 上限；委派按架构约定只读
+  （新增 `child_permission_for` = `min(parent, READ_ONLY)`），显式传入 sub 权限。
+- **子任务生命周期从未写入父账本**（配合上轮审查发现）：父账本在
+  `ledger/repl/`，此前按 `ledger/children/<id>.jsonl` 猜测导致
+  `child_started/child_interrupted/补记` 静默丢失；`/agent` 现传入
+  `repl._last_kernel_ledger` 的真实路径（`parent_ledger` 参数贯穿 child API）。
+- 验证：新增 /agent 接线回归测试（子任务只读、不再抛错）+ `child_permission_for`
+  边界测试；真实模型 + 子进程 + 只读权限的委派任务正确完成。全量 4102 passed。
+
+### 授权与权限模式产品决策落地（2026-11-11）
+
+- **「全部允许（a）」跨轮持久化**：`grant_from_choice(ALLOW)` 不再打当前轮戳记
+  （30 分钟 TTL 跨轮有效）；shell/verify decision 无路径目标时以**命令文本**作为
+  执行路径；**前端授权簿为唯一记忆**——删除 kernel `last_grant` 回写通道，
+  内核只把授权作用于本次运行（`_remember_grant` 补上命令目标兜底）。面板在
+  给出答案时即写入记账簿（approval_ux，既有路径），重复选择同一模式不再清空。
+- **`/permissions` 四档语义成真**：所选模式成为**会话级持续上限**，`turn_flow`
+  每轮把分类结果 clamp 到上限；`default` → `PermissionMode.SCOPED`（写盘仍询问，
+  新增策略分支）、`accept_edits` → `AUTO_EDIT`、`plan` → `READ_ONLY`、
+  `bypass` → 真正 `BYPASS`。SCOPED 时审批通道始终打开；`bypass` 描述补充
+  "push 与破坏性命令仍拦截"。
+- **否定句转为受保护路径**：intake 不生成变更义务；`execution_policy` 的否定
+  提取补齐英文（`don't change x.py`）、紧凑中文（`别改 x.py`）、后置否定
+  （`保留 x.py 不变`），ASCII 逗号/分号纳入分句；修复「保留…不变」路径在
+  match 内部时的提取。
+- **补齐写句式低判**：`修复 util.py` / `fix util.py` / `把 util.py 改了` 判为
+  写请求（原先 READ_ONLY 会导致编辑被静默 VETO）；`检查 util.py` 仍为只读。
+- **find_tools 零匹配**：保留按名排序的候选并在 `ToolDiscovery.note` 与视图
+  中明确提示"无匹配，换关键词"。
+- `GrantBook.active()` 跳过轮内授权（子任务不继承「本轮允许」）；`/permissions
+  remove` 按 `cap: target` 规范化比较。
+
+全量 **4100 passed**；真实 API 任务 finalized/verified；内核纯度守卫与文档引用
+守卫通过。
+
+### 全量 diff 审查与修复批次（2026-11-11）
+
+三个独立审查员分组深读未提交 diff（内核 / harness+catalog / REPL+授权），
+所有发现经逐条复核后修复：
+
+- **native 工具 schema 形状**：`_native_tools` 改发 `parameters`（OpenAI 兼容
+  通道唯一识别的字段；此前 `input_schema` 被静默丢弃，函数到达端点时没有参数
+  表），移除非标准 `capabilities` 字段；MCP/插件规格无 `json_schema` 时从散文
+  参数生成宽松 schema，不再空表。
+- **native REMOTE 调用参数形状**：`action_from_tool_call` 把业务参数包进
+  `tool_args` 并注入 `tool_name`，与文本协议统一；此前业务参数被 ToolNode 吞掉
+  或 TypeError，真实 MCP 调用必然失败。
+- **拒绝/绑定失败对模型可见**：`binding_failed`、`plan_updated` 加入当轮事件
+  白名单（此前计划被拒后模型看不到原因，重复提交直到预算耗尽）。
+- **覆盖率与 V2 口径一致**：`_refresh_obligations` 构造 Claim 时透传
+  `expect`（此前 get_state 说 satisfied 而审计判 UNRESOLVED）。
+- **授权形状的换行注入**：`_command_shape` 在 `#` 注释截断前拒绝 `\n`/`\r`
+  （此前授权 `python -c "..."` 后接 `#\nrm -rf` 会放行第二行）；清理重复
+  `_normalize`。
+- **plan 模式 finisher/reflect 恢复证据**：finish/reflect 消息重新携带
+  （折叠预算内的）`working_set`、debt、obligations——finisher 无法调工具，
+  零证据合成会产出全 abstain 或 CONTRADICTED；reflect 同理。
+- **子任务生命周期真实落账**：`parent_ledger_path` 支持显式父账本路径，
+  `/agent` 传入 `repl._last_kernel_ledger`（父账本在 `ledger/repl/`，此前按
+  `ledger/children/<id>.jsonl` 猜测，child_started/finished/incomplete 与崩溃
+  补记全部静默丢失）。
+- **折叠记录重写**：只摘要自上次摘要后的新增折叠事件（此前签名随丢弃集合每轮
+  变化 → 压缩区间内每轮一次模型调用且提示词随历史二次方增长）；摘要输入上限
+  80 条、输出 1024 token、视图 clip 放宽到 8000 字符；`CONTEXT_COMPACTED`
+  改从最终交给模型的视图记录（此前重建时 `_compact_arm` 仍开，ledger 记录的
+  折叠集 ≠ 模型实际所见）。
+- **恢复执行能力补齐**：`resume_task`/adapter.resume/`resume_kernel_plan` 透传
+  lesson_store、summary_provider、session_grants 并设置新轮次 id（批准计划
+  执行不再丢失学习、折叠叙事与已记住的授权）。
+- **intake 分类器修正**：outcome 词边界（`password` 不再命中 `pass`）、
+  中文新建动词（创建/新建/生成/写入）、描述性短语边界（`described in BUG.md`
+  不再生成变更义务）、测试文件按命名约定识别（`latest.py`/`contest.py` 不再
+  误判）、前后距离对称。
+- 观测口径：`metrics["steps"]` 与状态栏改为任务累计步数；`/permissions
+  remove` 接受复制自列表行的 `cap: target` 写法。
+
+全量 **4089 passed**；真实 API 任务 finalized/verified；文档引用守卫通过。
+**仍未处理（需产品决策）**：授权 `a` 跨轮持久化归属、`/permissions` 四档语义、
+intake 否定句策略、`find_tools` 零匹配行为。
+
+### 旧引擎遗留件审计（缺陷 1/7）
+
+- **逐文件导入审计完成**（`scripts/legacy_import_audit.py` 可复现），结论见
+  `docs/design/legacy-retirement-plan.md`。核心发现：`engine/` 不是一整块遗留
+  ——内核网关内部包着 `ToolExecutor`，所以 12 个文件是两代路径共用的活跃基础
+  设施（context / callbacks / tool_tracker / tool_runtime / tool_profiles /
+  tool_gate / circuit_breaker / checkpoint_manager / scheduler / task_recipe /
+  trace 等），真正的遗留是 TurnGate 耦合单元与旧证据链。
+- 四阶段退役计划：①旧压缩小件（budget/structured_compactor，真实依赖仅一个
+  类型枚举 + 两个助手函数）→ ②evidence_runtime legacy 分支（先迁 `/evidence`
+  命令）→ ③TurnGate 单元整体退役（前提：direct chat 也走内核）→
+  ④evidence_contracts 迁入 nodes/。删除门槛：零生产调用方 + 替代者真实任务
+  验证 + 全量测试绿。
+- **阶段 1 已执行（2026-11-10）**：删除 `engine/budget.py`（`BudgetManager`
+  零运行时使用者；`BudgetPhase` 内联进 `context_strategies`）与
+  `engine/structured_compactor.py`（两个助手迁入 `context_manager`，逻辑逐行
+  保留；`tests/test_f2_budget.py` 随删）。-324 行，全量 4120 passed。
+- **阶段 2 已执行（2026-11-10）**：删除 `engine/evidence_runtime.py`（737 行，
+  旧 L0 哈希链）。审计澄清：`/evidence` 命令早已不读它（读 `session/events.py`
+  与 kernel `ledger/`）；真实写入方仅 executor 的 `_ledger_event`（网关本就
+  关闭）、MCP 注册表 `context.evidence` 钩子、会话保存快照——全部随之移除
+  （`AgentContext` 证据门面、executor 的 `record_evidence`/`evidence_ledger`
+  参数、MCP 三处钩子、`/save`/自动保存/恢复的快照与回填）。FactBindingGate
+  盲编辑拦截（基于 tracker）保留。删 4 个子系统测试、重写
+  `test_online_evidence_gate.py`、清 MCP 两处旧断言、`docs/EVENT_SOURCE.md`
+  标记历史归档。全量 4088 passed；真实 API 任务 finalized/verified；文档引用
+  守卫通过。
+- **阶段 4 已执行（2026-11-10）**：`evidence_contracts.py` 由 `engine/` 迁入
+  `nodes/`（`git mv` + 8 处导入改写，无逻辑改动；契约属于工具结果解析层）。
+  全量 4088 passed；真实 API 任务 finalized/verified。仅剩阶段 3（TurnGate
+  单元，需先让 direct chat 走内核循环）。
+
+### 权限单一裁决权威（缺陷 2）
+
+- **根因**：内核路径中同一次调用被两处裁决——`PermissionPolicy` 依 grants/规则/
+  mode（信息更全）放行后，executor 的 Stage 1.5 `execution_policy_denial` 按回合
+  级别二次拒绝，甚至弹第二个升级确认。典型触发：EXECUTE 回合中人类授予的 shell
+  「允许」grant，在后续 WRITE 回合被再次拒绝。
+- **修复**：内核已裁决的调用（`_kernel_adjudicated`）跳过 Stage 1.5 的级别检查
+  （与既有 Stage 1.6 审批抑制同理）；`execution_policy_denial` 新增
+  `enforce_level` 参数，**受保护路径检查始终生效**——那是用户显式"不要改动"约束，
+  不是权限裁决。legacy 调用方（无内核）语义不变。
+- 验证：新增 `tests/kernel/test_single_decision_authority.py`（端到端：WRITE 级
+  回合复用 shell grant，真实执行无二次拒绝）+ `test_execution_policy.py` 3 个
+  用例；真实 API 冒烟任务 finalized/verified。全量 **4144 passed**。
+
+### 架构文档与代码对齐（缺陷 8）
+
+- `docs/ARCHITECTURE.md` 版本号 v0.9.2 → **v0.9.8**；capability **7 类 → 8 类**
+  （新增 `discover`），补充 `find_tools` 只读发现器说明。
+- 新增**【双轨现状】**标注：第 1–3 节的 `TurnGate / HollowDetector /
+  turn_flow` 是仍在运行的 legacy 路径（REPL 经 `should_route_to_kernel` 分流），
+  第 0 节 `LoopRuntime` 是单循环内核与收敛目标——即缺陷 1 三轨并存，不再让读者
+  误以为其中一套是唯一控制流。
+- 英文版 `docs/ARCHITECTURE.en.md` 加显著滞后警告：引擎注册表已移除、
+  `xenon/modes.py` 为模式唯一来源；原版本仍描述已删除的"7 引擎"。
+- 经核对，文档引用的模块路径（session/turn/engine/nodes 等）真实存在，漂移集中
+  在版本、capability 数量与双轨语义，而非编造路径。纯文档变更，无代码影响。
+
+### 工具发现器（缺陷 6）
+
+- **落地**：新增闭合能力 `Capability.DISCOVER`、`EffectKind.TOOL_DISCOVERY` 与
+  只读核心工具 `find_tools`。目录按结构特征确定性打分（精确名 > capability
+  命中 > 词重叠），返回有界候选（默认 5）及完整参数但不执行；DISCOVER 在所有
+  权限模式（含 read-only）下免费放行。模型一步选对工具、看清参数。
+- **真实 API 验证抓到两个 fail-open 缺陷**：真实模型面对晦涩工具时先调
+  find_tools，但随后 11 次 REMOTE 绑定失败、12 步 blocked。根因：命名
+  REMOTE 调用未把函数名注入 `params.tool_name`（现自动注入）；非法 capability
+  过滤器被当"无过滤"忽略（现返回空）。修复后 find_tools → 正确工具、3 步
+  finalized。
+- 证据：`docs/evidence/tool-discovery/real_discover_probe.py`；新增
+  `tests/kernel/test_tool_discovery.py`（12 用例）；更新三处闭合集合守卫。
+
+### 双摘要压缩（设计文档 §13 决策一 / 缺陷 4）
+
+- **落地**：折叠在确定性 `elided` 摘要（事实骨干，seq/status/tool/why）之外，
+  新增 `SummaryProvider` 协议与 harness 实现 `LLMSummarizer`（新文件
+  `harness/summarizer.py`），用当轮模型生成延续叙事并追加 `CONTEXT_SUMMARY`
+  事件；当轮重建视图。叙事只压缩、不产生新事实，确定性摘要并列在场防幻觉。
+- **真实测试抓到关键集成缺陷**：叙事最初仅持久化、未进入模型当轮 prompt（pull
+  架构下需 get_state 拉取，模型没拉），紧窗口任务把 mod_1 读取折叠后反复重读
+  mod_1 六次而不推进。修复为在 `current_turn` 中**主动推送**最新折叠叙事（事件
+  之后、消息末尾，缓存前缀不受影响）；修复后真实任务按序读完全部 8 个文件、14
+  步收敛并产出正确的 64 helper 报告。
+- **视图契约**：`_working_set` 增返折叠条目；`ModelView` 新增 `folded_items`；
+  `get_state` 新增 `summary` 通道；`EventKind.CONTEXT_SUMMARY`；顺带接上从未被
+  调用的折叠记录（现由 `_record_fold` 统一处理）。
+- 证据：`docs/evidence/dual-summary/real_fold_probe.py`；新增
+  `tests/kernel/test_dual_summary.py`（11 用例）。
+
+### 义务生成契约校准（设计文档 §1.5 / 缺陷 10）
+
+- **背景**：缺陷 10 被文档标为最高优先级——错误的验收契约会生产虚假保证。
+  首版动词分类修复已存在，但真实句式审计发现四个边角缺陷：无支配动词时
+  默认硬编码 write（"difference between a.py and b.py?" 错误生成两条变更
+  义务）；文件名中的点被当作句号截断分句（并列列表第二个文件丢义务）；
+  中文后置动词（"shapes.py 需要修复"）被漏判；连接词后的不及物动词
+  （"c.py then run tests"）反向管辖前一文件。
+- **修复**：`harness/intake.py` 的 `_classify` 重写为同时扫描文件名前后两侧
+  的当前分句（前 64 / 后 32 字符，按句末标点划界，拉丁句号仅在后跟空白时
+  断句），取距离最近的支配动词；两侧均无动词归 read（不生成义务）；新增
+  顺序连接词（then/然后/接着/之后）阻断后向管辖；补充 "needs work"/"work
+  on"/裸"修"等写类表达。删除被取代的 `_last_position`/`_last_suffix`。
+- **真实 API 复现原始缺陷**：预置 add() 做减法的 shapes.py，执行
+  "Fix it so test_shapes.py passes"，模型正确只改源码、2 个测试全过、
+  finalized/verified、gaps=0——原场景曾必然 blocked。
+- `test_v2_derivation.py` 新增 6 用例（共 13）。全量 **4117 passed**。
+
+### 外层任务循环（设计文档 §4.3）
+
+- **落地**：`LoopRuntime.run()` 与 `resume_planned()` 的两处重复循环统一为
+  `_run_outer()`：最多 3 轮，跨轮保留账本、债务、计划、已验证证据与授权，
+  每轮经 `_begin_outer_round()` 刷新轮内状态（步数、repair/replan/audit
+  计数器、轮 deadline、卡死检测器、forced-finish）。
+- **按显式信号分类重试**：`TaskResult` 新增 `stop_signal` 字段，仅
+  `step_budget` / `time_budget` / `stalled` 三类自动重试；用户取消、
+  awaiting_user、模型 Abort、token 预算、审计/工具阻塞、策略异常一律
+  不重试。三轮耗尽写 `outer_rounds_exhausted`、转 BLOCKED，不自动交付。
+- **辩证修订（首版实现的实际缺陷）**：首版按 phase 分类导致头号场景
+  （步数耗尽 → BLOCKED）从不重试；第二轮不重置步数/deadline，首次
+  limit check 即再次撞限、零模型调用；用户取消被"复活"三次；最终账本
+  RUNNING 与结果 FAILED 矛盾。可重试轮次现保持 RUNNING（BLOCKED 是
+  无出边的终态），仅最后一轮或不可恢复阻塞才进入 BLOCKED。
+- **真实验证（2026-11-10）**：直连 `api.deepseek.com` 双跑，两个任务均
+  finalized/verified（pytest 真实通过），缓存命中全部 64-token 对齐
+  （384/512/768/896）；非交互 auto-edit 无批准人时 veto 后 finalized/
+  unverified 且如实披露 gaps，无阻塞死锁；真实 ConPTY 审批面板五档
+  （once/turn/allow/deny/cancel）默认拒绝，`y` 后命令执行闭环。
+- 新增 `tests/kernel/test_outer_loop.py`（7 用例）；更新
+  `test_budget_stops_the_loop` 为轮/任务两层语义。全量 **4112  passed**。
+
+### 自进化（Self-Evolution）链路在产品内激活
+
+- **背景（证据）**：曾有 621 个任务账本含 `lesson_proposed`，0 个含
+  `lesson_stored`——内核在失败点提案，但没有任何生产调用方提供存储，
+  链路在提案处中断。
+- **激活**：`RuntimeAdapter.from_repl` 经 `_lesson_store_for` 取 REPL 共享的
+  `MemoryService` 并包成 `LessonStore`；交互 REPL 与 TS 前端的协议 host 都走
+  `run_kernel_turn → from_repl`，因此单点注入、两路同时生效。无记忆后端的
+  最小宿主得到 `None`（不学习、不产生噪声）。`/project refresh` 时随记忆
+  服务一起重置。
+- **教训即记忆**：无 `lessons.yaml`、无 `PITFALLS.md`、无 `/lessons`；教训是
+  project-local 的 `MemoryKind.LESSON` 记录，指纹/类别/复发计数以标签承载，
+  经 `/memory` 查看、编辑、归档（已实测命令输出包含 lesson 记录）。
+- 设计文档 `docs/design/self-evolution.md` 全面对齐实现；`tests/test_lessons.py`
+  重写为记忆后端 API，新增此前完全缺失的 `store_proposals`/`LESSON_STORED`
+  端到端闭环测试。
+- **真实 ConPTY 验收抓到一个审批死锁**：协议 host 的 stdin 循环在
+  `turn.start` 时同步执行回合，内核等待审批时冻结了唯一能读取
+  `approval.response` 的循环 —— 面板能显示、用户能作答，但响应永远不被
+  读取，只能等 300 秒超时后 fail-closed。修复为回合在独立 daemon 线程
+  运行（`docs/evidence/self-evolution/tty_lesson_double_run.py`），stdout
+  写入由既有 `_EMIT_LOCK` 保护；回合进行中拒绝第二个 turn.start/command。
+  新增管道级回归测试（`tests/test_protocol_host.py`）。旧 ConPTY 测试因
+  使用 `test/fake` 模型（从不需要审批）而漏掉它。
+- **端到端证据**：两轮真实回合账本——第 1 轮 `lesson_proposed`×2 +
+  `lesson_stored`×2，第 2 轮 `lesson_applied`×2，三处 id 集合一致，
+  LESSON 记录物理落盘（`docs/evidence/self-evolution/transcript.*`）。
 
 ## [0.9.8] — 2026-11-04
 
@@ -115,7 +692,7 @@
 - `no_write` 否定支持按目标作用域：`不要修改 probe.txt` 只保护该路径，不再连带禁止 `创建 out.txt`；工具执行层对 protected path 硬拒绝（含 `apply_patch`）。`任何/所有/文件` 等泛化否定仍是全局禁令。
 - `scripts/patch_cov.py`：本地算 patch 覆盖（diff 的新增行 × coverage.xml），对齐 Codecov 语义（只算可执行行、merge-base、路径归一化、过期报告警告）；CI 对 PR 加同一道门（阈值 90%）。目的是 push 前就知道，而不是等邮件。
 - 权限规则层（#373，对齐 Claude Code settings）：`allow`/`ask`/`deny` 三档 + `capability(pattern)` glob，**deny > ask > allow**；分用户/项目两层文件；审批四选一（只这次／本会话／永远写规则／只这条命令），`/permissions` 列出与撤销。destructive 与 push 仍然不可授权。
-- 会话级授权（#373）：`GrantBook` + `ScopedGrant` 通配，一次弹窗后同一会话同类调用直接 ALLOW，`GRANT_ADDED` 写入账本；硬安全规则（destructive / push）先于 grant，wildcard 不能授权它们。两处真 bug：wildcard 绕过 destructive 检查、MSYS/Windows 同一路径不匹配导致 grant 失效。
+- 会话级授权（#373）：`GrantBook` + `ScopedGrant` 通配，一次弹窗后同一会话同类调用直接 ALLOW；硬安全规则（destructive / push）先于 grant，wildcard 不能授权它们。两处真 bug：wildcard 绕过 destructive 检查、MSYS/Windows 同一路径不匹配导致 grant 失效。**§9 口径修正**：授权改为**只存内存、带 30 分钟期限**（`DEFAULT_GRANT_TTL_SECONDS`），不再写 `GRANT_ADDED` 进账本（删除该枚举值会让 217 个历史账本加载失败，故保留值、停止写入）；`GrantBook` 的 `to_payload`/`load` 已删除，重启后重新询问。账本仍记 `USER_APPROVAL`（人做了什么决定）与 `POLICY_DECISION`（这条调用为什么没问）。
 - 循环检测补齐（#366）：引擎层原有 4 个信号，迁 #322 时只留了最窄的「完全相同签名」，理由是"避免模糊匹配"——但原实现是精确哈希/精确模式比较，理由用错了对象。现在相同签名／同一错误 ×4／A→B→A→B ×3 是硬停，"连续 N 次无新信息"只做诊断（真实运行证明它会在成功前 4 步误杀），预算停机时附在原因上。
 - shell 工具描述改为平台感知（#366）：Windows 上明确是 PowerShell 而非 cmd，并说明 `python -c` 被策略拒绝。真实运行：同一任务工具调用 18→7、失败 6→1，默认 20 步即可交付。
 - 恢复 provider 阶段事件（#320）：`ModelConfig.request_sink` 在每次 HTTP 尝试前后报告 phase/超时/尝试次数/重试/失败原因，三种真实网络结果（成功、401 不重试、502 重试）都有证据；REPL 用 `kernel_request_reporter` 渲染。删除了 `EngineCallback` 上两个从未被调用、`ConsoleCallback` 也从未实现的死钩子。事件不进账本——账本记事实，不记每次尝试的遥测。

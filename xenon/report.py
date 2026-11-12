@@ -13,22 +13,17 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from xenon.ledger.store import Ledger
 from xenon.replay import resolve_ledger
+from xenon.utils.redact import redact_text
 
-SCHEMA = "xenon.delivery_report/v0"
-
-_SECRET_PATTERNS = (
-    re.compile(r"ghp_[A-Za-z0-9]{20,}"),
-    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),
-    re.compile(r"AKIA[0-9A-Z]{16}"),
-    re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
-)
+SCHEMA = "xenon.delivery_report/v1"
+#: The schema version as a number, so a CI gate can refuse a report it does
+#: not understand instead of silently reading fields that moved.
+SCHEMA_VERSION = 1
 
 
 def _payload(event: Any) -> Mapping[str, Any]:
@@ -57,9 +52,7 @@ def redact(value: Any, *, home: Path | None = None) -> Any:
         text = text.replace(str(home).replace("\\", "/"), "~")
     except (OSError, ValueError):
         pass
-    for pattern in _SECRET_PATTERNS:
-        text = pattern.sub("[redacted]", text)
-    return text
+    return redact_text(text)
 
 
 def _first(events: Sequence[Any], kind: str) -> Mapping[str, Any]:
@@ -96,6 +89,74 @@ def _phase(events: Sequence[Any]) -> str:
         if target:
             return str(target)
     return ""
+
+
+def gate_verdict(
+    *,
+    evidence_status: str,
+    answer_verified: bool,
+    contradictions: Sequence[Mapping[str, Any]],
+    gaps: Sequence[Mapping[str, Any]],
+    integrity_valid: bool,
+    delivered: bool,
+) -> dict[str, Any]:
+    """Whether a CI gate may pass this run — and why, in one word.
+
+    ``evidence_status`` alone is the wrong input for a merge gate.  It answers
+    "do the receipts back the claims", not "is this fit to land".  A run can be
+    ``verified`` while proving nothing anyone asked for, and a run can be
+    ``partial`` while every claim it made is true.  Both have happened.
+
+    So the gate is its own decision, with its own vocabulary:
+
+    * ``pass``    — claims bound, no contradictions, no open gaps;
+    * ``warn``    — nothing dishonest, but work is demonstrably unfinished;
+    * ``block``   — a claim the facts refuse, a broken ledger, or a run that
+      delivered nothing while the task asked for changes.
+
+    This is deliberately conservative: ``warn`` never passes silently.  A team
+    gate that cannot tell "done" from "not done" is worse than no gate.
+    """
+
+    reasons: list[str] = []
+
+    if not integrity_valid:
+        # Everything downstream reads this ledger.  If the chain does not
+        # verify, no conclusion drawn from it is safe to act on.
+        return {
+            "decision": "block",
+            "reasons": ["ledger integrity check failed"],
+            "summary": "the ledger itself does not verify",
+        }
+
+    if contradictions:
+        reasons.append(
+            f"{len(contradictions)} claim(s) the receipts do not support"
+        )
+    if gaps:
+        reasons.append(f"{len(gaps)} obligation(s) left unmet")
+    if not delivered:
+        reasons.append("the run delivered no answer")
+
+    if contradictions:
+        decision = "block"
+    elif gaps or not delivered:
+        decision = "warn"
+    else:
+        decision = "pass"
+
+    if decision == "pass":
+        summary = (
+            "every claim is bound to a receipt and every obligation is met"
+            if answer_verified
+            else "no unmet obligation; the run made no checkable claim"
+        )
+    elif decision == "warn":
+        summary = "nothing contradicted, but the work is not finished"
+    else:
+        summary = "a claim is refused by the facts, or the ledger is unsound"
+
+    return {"decision": decision, "reasons": reasons, "summary": summary}
 
 
 def _test_runs(receipts: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -158,6 +219,30 @@ def build_report(ledger_path: Path, *, result_path: Path | None = None) -> dict[
             result = {}
 
     receipts = _all(events, "tool_receipt")
+    # A start without a receipt is the one thing the record says about a crash:
+    # some call may have run and nobody knows.  Surface it; never infer success.
+    receipt_calls = {
+        str((item.get("receipt") or {}).get("call_id") or "")
+        for item in receipts
+    }
+    interrupted_by_id = {
+        str(item.get("call_id") or ""): item
+        for item in _all(events, "tool_interrupted")
+    }
+    unknown_calls: list[dict[str, Any]] = []
+    for start in _all(events, "tool_started"):
+        call_id = str(start.get("call_id") or "")
+        if not call_id or call_id in receipt_calls:
+            continue
+        note = interrupted_by_id.get(call_id) or {}
+        unknown_calls.append(
+            {
+                "call_id": call_id,
+                "tool": str(start.get("tool") or ""),
+                "outcome": str(note.get("outcome") or "unknown"),
+                "reason": str(note.get("reason") or "no receipt"),
+            }
+        )
     claims = _all(events, "claim_proposed")
     resolutions = {str(item.get("claim_id") or ""): item for item in _all(
         events, "claim_resolved"
@@ -273,6 +358,7 @@ def build_report(ledger_path: Path, *, result_path: Path | None = None) -> dict[
             "last_hash": str(getattr(integrity, "last_hash", "") or ""),
         },
         "claims": resolved_claims,
+        "unknown_calls": unknown_calls,
         "verdicts": [
             {
                 "stage": str(item.get("stage") or ""),
@@ -310,7 +396,45 @@ def build_report(ledger_path: Path, *, result_path: Path | None = None) -> dict[
             )
         },
     }
+    # The gate is computed after the body so it reads the same values a
+    # reviewer does.  A gate that recomputes its inputs can disagree with the
+    # report it ships beside.
+    report["schema_version"] = SCHEMA_VERSION
+    # Child branches are separate chains; verify them by the seals this ledger
+    # recorded.  A branch problem is reported beside the parent verdict, never
+    # folded into it: the parent's own chain is still the parent's.
+    report["branches"] = _branch_section(ledger_path)
+    report["gate"] = gate_verdict(
+        evidence_status=report["status"]["evidence_status"],
+        answer_verified=report["status"]["answer_verified"],
+        contradictions=report["contradictions"],
+        gaps=report["gaps"],
+        integrity_valid=report["integrity"]["valid"],
+        delivered=report["status"]["delivered"],
+    )
     return redact(report)
+
+
+def _branch_section(ledger_path: Path) -> list[dict[str, Any]]:
+    """Verify the child branches this ledger sealed, for the report body."""
+
+    try:
+        from xenon.ledger.tree import verify_tree
+
+        _integrity, reports = verify_tree(ledger_path)
+    except Exception:  # noqa: BLE001 — a branch section never breaks the report
+        return []
+    return [
+        {
+            "task_id": item.task_id,
+            "ledger": item.ledger,
+            "state": item.state,
+            "detail": item.detail,
+            "head_seq": item.head_seq,
+            "head_hash": item.head_hash,
+        }
+        for item in reports
+    ]
 
 
 def _truncate(text: str, limit: int = 4000) -> str:
@@ -345,6 +469,18 @@ def render_comment(report: Mapping[str, Any]) -> str:
         verdict = "⚠️ 已交付，但结论未经验证"
     else:
         verdict = "⚠️ 未交付（缺口已披露）"
+
+    # A finished run that met nothing must not read as done.  `finalized` says
+    # the loop stopped, not that the work landed, and a reviewer skimming the
+    # header would take the green check to mean the latter.
+    gate = report.get("gate") or {}
+    phase = str(status.get("phase") or "")
+    if gate.get("decision") == "warn" and "未完成" not in verdict:
+        verdict = f"{verdict}（有未完成项）"
+    elif gate.get("decision") == "pass" and phase == "blocked":
+        # Belt and braces: a passing gate on a blocked run means the two
+        # signals disagree, which is worth surfacing rather than smoothing.
+        verdict = f"{verdict}（phase=blocked 与门禁不一致）"
 
     lines = [
         f"### {verdict}",
@@ -392,6 +528,17 @@ def render_comment(report: Mapping[str, Any]) -> str:
             "\n**未验证路径**："
             + ", ".join(f"`{p}`" for p in delivery["unverified_paths"][:8])
         )
+
+    unknown_calls = list(report.get("unknown_calls") or ())
+    if unknown_calls:
+        lines.append(
+            f"\n**结果未知的调用 {len(unknown_calls)} 次**（已开始、无回执）"
+        )
+        for item in unknown_calls[:5]:
+            lines.append(
+                f"- `{item.get('tool')}` `{item.get('call_id')}`: "
+                f"{item.get('reason')}"
+            )
 
     lines += [
         "",
@@ -466,6 +613,18 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     )
     for name, count in sorted((tools.get("by_tool") or {}).items()):
         lines.append(f"  - `{name}` × {count}")
+    unknown_calls = list(report.get("unknown_calls") or ())
+    if unknown_calls:
+        lines.append("")
+        lines.append(
+            f"**Calls with unknown outcome ({len(unknown_calls)})** "
+            "— started, no receipt:"
+        )
+        for item in unknown_calls:
+            lines.append(
+                f"- `{item.get('tool')}` `{item.get('call_id')}`: "
+                f"{item.get('reason')}"
+            )
     tests = list(tools.get("tests") or ())
     if tests:
         lines.append("")

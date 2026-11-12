@@ -123,17 +123,28 @@ def test_a_reasoning_step_does_not_block_a_tool_call() -> None:
 
 
 def test_the_view_tells_the_model_what_a_reasoning_step_expects() -> None:
+    """The note moved out of `system` so it can sit after the phase protocol.
+
+    It names a step id that changes on every transition; ahead of the
+    protocol appended by the caller, each transition invalidated the
+    protocol.  `step_preamble` is now appended last.
+    """
     from xenon.catalog.catalog import build_catalog
     from xenon.kernel.contracts import StepContract, StepKind, TaskSpec
-    from xenon.kernel.view.base import build_model_view
+    from xenon.kernel.view.base import build_model_view, step_preamble
     from xenon.ledger.store import Ledger
 
+    step = StepContract(id=9, kind=StepKind.THINK, targets=())
     view = build_model_view(
         spec=TaskSpec(task_id="t", objective="summarise", workspace="."),
         catalog=build_catalog("core"),
         ledger=Ledger.in_memory("t"),
-        active_step=StepContract(id=9, kind=StepKind.THINK, targets=()),
+        active_step=step,
     )
 
-    assert "reasoning step" in view.system
-    assert "Do not call a tool" in view.system
+    note = step_preamble(step)
+    assert "reasoning step" in note
+    assert "Do not call a tool" in note
+    # The system prompt itself stays free of per-step text, so it survives a
+    # step transition unchanged.
+    assert "Active step" not in view.system

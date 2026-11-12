@@ -118,13 +118,9 @@ class StatusBar:
     def refresh(self) -> None:
         """刷新状态栏显示（由状态变更点调用）。
 
-        在 prompt_toolkit 交互模式下，状态栏会自动重绘；
-        在非交互模式下，可以选择性地打印状态更新。
-        此方法作为统一的刷新入口，便于未来扩展。
+        状态是拉取式的：``print_status`` 在每轮开始前重画，
+        所以这里只是一个变更钩子，不打印任何内容。
         """
-        # prompt_toolkit 模式下，状态栏由 get_toolbar_fragments 自动拉取最新状态
-        # 非 PT 模式下的 print_status 是显式调用，不需要在这里触发
-        # 此方法主要作为状态变更的钩子点，便于调试和扩展
         pass
 
     def _preferred_model_id(self) -> str | None:
@@ -281,123 +277,14 @@ class StatusBar:
             padding=(0, 1),
         )
 
-    # ── prompt_toolkit bottom_toolbar ───────────────────────
+    # ── 一行文本状态（内置编辑器在提交后打印）───────────────
 
     def get_toolbar_text(self) -> str:
-        """Return a plain-text toolbar for callers outside prompt_toolkit."""
+        """Return the one-line status used by the built-in editor."""
         try:
             return self._toolbar_impl()
         except Exception:
             return "状态不可用"
-
-    def get_toolbar_fragments(self) -> list[tuple[str, str]]:
-        """Return styled prompt_toolkit fragments for the interactive toolbar.
-
-        Keeping visual treatment here (rather than embedding ANSI or Rich markup
-        in a string) makes the toolbar render consistently on Windows Terminal,
-        iTerm, and the plain prompt_toolkit fallback.
-        """
-        try:
-            self._clear_expired_notification()
-            stats = self.ctx_mgr.stats()
-            mode = self.registry.get_current_mode()
-            pct = self._parse_pct(stats["usage_ratio"])
-            model = self._truncate_model(self._model_for_display(), 28)
-
-            term_width = shutil.get_terminal_size((80, 24)).columns
-
-            provider_model = self._preferred_model_id() or self._last_model or ""
-            provider = (
-                provider_model.split("/", 1)[0] if "/" in provider_model else "API"
-            )
-            if provider_model:
-                api_style, api_text = "class:toolbar.good", f"  ● {provider}"
-            elif self.registry.list_models():
-                api_style, api_text = "class:toolbar.warning", "  ○ API configured"
-            else:
-                api_style, api_text = "class:toolbar.danger", "  ○ API /setup"
-
-            context_text = f"context {stats['usage_ratio']}"
-            if term_width < 42:
-                api_text = " ● API" if self._last_model else " ○ setup"
-                context_text = str(stats["usage_ratio"])
-
-            usage_class = (
-                "class:toolbar.danger"
-                if pct > 80
-                else "class:toolbar.warning"
-                if pct > 50
-                else "class:toolbar.good"
-            )
-            # (优先级, 样式, 文本)。先按优先级装入宽度预算，再按视觉顺序输出。
-            # 这样 60 列终端也不会因为长模型名或快捷键提示发生折行抖动。
-            groups: list[tuple[int, str, str]] = [
-                (0, api_style, api_text),
-                (1, "class:toolbar.model", model),
-                (2, "class:toolbar.mode", mode.name),
-                (0, usage_class, context_text),
-            ]
-
-            # 缓存和费用是 Xenon 的核心差异，优先于消息数/时长展示。
-            if self.cache_tracker:
-                cache_text, cache_style = self.cache_tracker.cache_badge
-                groups.append((1, f"class:toolbar.{cache_style}", cache_text))
-                if self.cache_tracker.estimated_cost_yuan > 0:
-                    cost = self.cache_tracker.estimated_cost_yuan
-                    cost_text = "<¥0.01" if cost < 0.01 else f"¥{cost:.2f}"
-                    groups.append((2, "class:toolbar.muted", cost_text))
-
-            if stats["needs_compact"]:
-                groups.append((0, "class:toolbar.danger", "⚠ /compact"))
-            if self._notification:
-                groups.append((1, "class:toolbar.notice", self._notification))
-
-            if self._tool_call_count:
-                groups.append(
-                    (3, "class:toolbar.muted", f"tools {self._tool_call_count}")
-                )
-            groups.append(
-                (3, "class:toolbar.muted", self._fmt_duration(self.session_elapsed))
-            )
-            groups.append((4, "class:toolbar.hint", "Ctrl+O details"))
-            groups.append((5, "class:toolbar.hint", "Shift+Tab mode"))
-
-            try:
-                from prompt_toolkit.utils import get_cwidth
-            except Exception:
-                get_cwidth = len
-
-            budget = max(16, term_width - 6)  # 给输入框两侧线条留空间
-            selected: set[int] = set()
-            used_width = 0
-            for priority in range(6):
-                for index, (item_priority, _style, text) in enumerate(groups):
-                    if item_priority != priority:
-                        continue
-                    extra = get_cwidth(text) + (5 if selected else 0)
-                    if priority == 0 or used_width + extra <= budget:
-                        selected.add(index)
-                        used_width += extra
-
-            fragments: list[tuple[str, str]] = []
-            for index, (_priority, item_style, text) in enumerate(groups):
-                if index not in selected:
-                    continue
-                if fragments:
-                    fragments.append(("class:toolbar.separator", "  ·  "))
-                fragments.append((item_style, text))
-            return fragments
-        except Exception:
-            return [("class:toolbar.danger", "  状态不可用  ")]
-
-    def get_input_rule_fragments(self) -> list[tuple[str, str]]:
-        """返回紧贴输入区的完整下边界。"""
-        width = max(20, shutil.get_terminal_size((80, 24)).columns - 1)
-        return [("class:input.rule", "─" * width)]
-
-    def get_input_toolbar_fragments(self) -> list[tuple[str, str]]:
-        """兼容旧调用名；状态栏现在与下边界分行渲染。"""
-        return self.get_input_rule_fragments()
 
     def _toolbar_impl(self) -> str:
         stats = self.ctx_mgr.stats()

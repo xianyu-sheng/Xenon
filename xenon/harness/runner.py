@@ -16,12 +16,13 @@ from xenon.catalog.catalog import build_catalog
 from xenon.catalog.finalizer import GitFinalizer
 from xenon.catalog.gateway import LegacyToolGateway
 from xenon.catalog.worktree import GitWorktreeProbe
-from xenon.harness.lessons import record_recurrences
+from xenon.harness.lessons import record_recurrences, store_proposals
 from xenon.harness.plan import HarnessPlan
 from xenon.harness.sink import JsonlSink
 from xenon.kernel.contracts import (
     Budget,
     PlanProposal,
+    PropositionKind,
     TaskMode,
     TaskResult,
     TaskSpec,
@@ -33,7 +34,7 @@ from xenon.kernel.protocols import ApprovalProvider, Strategy
 from xenon.kernel.runtime import LoopRuntime
 from xenon.kernel.strategies import LoopProfile
 from xenon.ledger.events import EventKind, EventSource, canonical_json
-from xenon.ledger.store import Ledger
+from xenon.ledger.store import Ledger, open_shared
 
 # Steps are the last-resort brake, not the primary one: the deterministic loop
 # detector stops a stuck run, and a stalled run is stopped by time.  A complex
@@ -48,6 +49,115 @@ class HarnessRun:
     result: TaskResult
     task_id: str
     ledger_path: Path
+
+
+def _repair_incomplete_tail(ledger: Ledger) -> None:
+    """Quarantine a half-written line and record the repair in the ledger.
+
+    The parent cannot know which call was in flight: the last event is the
+    policy decision and there is no receipt for it.  So the *task* is what gets
+    marked interrupted, and the repair event quotes the last unrecorded
+    capability — observation, never an invented per-call receipt.
+    """
+
+    corrupt = ledger.recover_truncated()
+    if corrupt is None:
+        return
+    last_call = ""
+    for event in reversed(ledger.read()):
+        if event.kind is EventKind.TOOL_RECEIPT:
+            break
+        if event.kind is EventKind.POLICY_DECISION:
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            last_call = str(payload.get("capability") or payload.get("reason") or "")
+            break
+    ledger.append(
+        EventKind.LEDGER_REPAIRED,
+        EventSource.RUNTIME,
+        {
+            "quarantined": corrupt.name,
+            "reason": "previous run left an incomplete ledger tail",
+            "last_unrecorded_call": last_call,
+        },
+    )
+    ledger.append(
+        EventKind.DEBT_OPENED,
+        EventSource.RUNTIME,
+        {
+            "obligation_id": "ledger:repaired",
+            "kind": PropositionKind.REQUIREMENT_MET.value,
+            "target": str(ledger.path),
+            "reason": (
+                "previous run was interrupted mid-write; its final call has "
+                "no receipt"
+            ),
+        },
+    )
+
+
+def _reconcile_interrupted_calls(ledger: Ledger) -> None:
+    """Mark calls that started but never produced a receipt.
+
+    A ``TOOL_STARTED`` without a matching ``TOOL_RECEIPT`` means the previous
+    process died inside the gateway (or the gateway raised).  Whether the side
+    effect happened is unknowable from the record, so the record says exactly
+    that and opens a debt.  Replaying such a call automatically could duplicate
+    a write, a command or a commit; the next run must verify instead.
+
+    Only ledgers that already contain a start are touched -- a fresh task and a
+    plan awaiting approval are both no-ops.
+    """
+
+    events = ledger.read()
+    pending: dict[str, Any] | None = None
+    unmatched: list[dict[str, Any]] = []
+
+    # Calls are dispatched serially: a start is closed by the next receipt (or
+    # by an explicit interrupted record).  Pairing by position is exact here and
+    # also tolerates a gateway that mints its own call id instead of using the
+    # one it was given.
+    for event in events:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if event.kind is EventKind.TOOL_STARTED:
+            if pending is not None:
+                unmatched.append(pending)
+            pending = payload
+        elif event.kind is EventKind.TOOL_RECEIPT:
+            pending = None
+        elif event.kind is EventKind.TOOL_INTERRUPTED:
+            pending = None
+    if pending is not None:
+        unmatched.append(pending)
+
+    for payload in unmatched:
+        call_id = str(payload.get("call_id") or "")
+        if not call_id:
+            continue
+        tool = str(payload.get("tool") or "")
+        ledger.append(
+            EventKind.TOOL_INTERRUPTED,
+            EventSource.RUNTIME,
+            {
+                "call_id": call_id,
+                "tool": tool,
+                "outcome": "unknown",
+                "reason": "process ended before a receipt was written",
+                "reconciled": True,
+            },
+        )
+        ledger.append(
+            EventKind.DEBT_OPENED,
+            EventSource.RUNTIME,
+            {
+                "obligation_id": f"call:{call_id}",
+                "kind": PropositionKind.TOOL_SUCCEEDED.value,
+                "target": tool,
+                "reason": (
+                    "a tool call was interrupted; whether it took effect is "
+                    "unknown"
+                ),
+            },
+        )
 
 
 def _runtime_bundle(
@@ -66,6 +176,7 @@ def _runtime_bundle(
     extra_specs: Sequence[ToolSpec],
     tool_runtime: Any = None,
     audit_provider: Any = None,
+    summary_provider: Any = None,
     session_grants: Sequence[Any] = (),
     deny_rules: Sequence[Any] = (),
     ask_rules: Sequence[Any] = (),
@@ -80,7 +191,16 @@ def _runtime_bundle(
     )
     directory.mkdir(parents=True, exist_ok=True)
     ledger_path = directory / f"{task_id}.jsonl"
-    ledger = Ledger(ledger_path, task_id)
+    # Shared instance: the runtime and the child-lifecycle recorder must not
+    # hold two cached chains for the same file (they would fork the seq).
+    ledger = open_shared(ledger_path, task_id)
+    # A crashed run may have left half a line; repair before anything asserts
+    # the ledger is intact, and leave the repair visible in the record.
+    _repair_incomplete_tail(ledger)
+    # A clean EOF can still hide an interrupted call: the half-written tail is
+    # only one way a process dies.  Pair starts with receipts and disclose the
+    # unmatched ones before anything asserts the record is complete.
+    _reconcile_interrupted_calls(ledger)
     policy = PermissionPolicy(
         mode=permission,
         workspace=str(root),
@@ -100,6 +220,7 @@ def _runtime_bundle(
         policy=policy,
         context=gateway_context,
         runtime=tool_runtime,
+        catalog=catalog,
     )
     # Bind the per-task result cache.  Without it ``tool_result_read`` failed
     # with "no result cache (session not bound)" in headless runs — the model
@@ -123,6 +244,7 @@ def _runtime_bundle(
         # "no stray changes" is a question the host can answer deterministically.
         worktree_probe=GitWorktreeProbe(root),
         audit_provider=audit_provider,
+        summary_provider=summary_provider,
     )
     return root, ledger_path, ledger, runtime
 
@@ -180,7 +302,11 @@ def run_task(
     deny_rules: Sequence[Any] = (),
     ask_rules: Sequence[Any] = (),
     lesson_store: Any = None,
+    summary_provider: Any = None,
     turn_path: Sequence[str] = (),
+    session_id: str = "",
+    intent: str = "",
+    intent_source: str = "",
 ) -> HarnessRun:
     """Run one objective through the kernel with an injected strategy.
 
@@ -207,6 +333,7 @@ def run_task(
         session_grants=session_grants,
         deny_rules=deny_rules,
         ask_rules=ask_rules,
+        summary_provider=summary_provider,
     )
     spec = TaskSpec(
         task_id=identifier,
@@ -225,41 +352,15 @@ def run_task(
         parent_task_id=parent_task_id,
         batch_id=batch_id,
         turn_path=tuple(turn_path),
+        session_id=session_id,
+        intent=intent,
+        intent_source=intent_source,
     )
     # Self-evolution slice 3 (docs/design/self-evolution.md): a bounded set of
     # active lessons rides as constraints — the model *must* see them in the
     # system prompt — and every applied lesson is recorded in this task's
     # ledger.  Empty store, or a store that cannot load, means no lesson noise.
-    if lesson_store is not None:
-        try:
-            applied = lesson_store.match_for_task()
-        except Exception:  # noqa: BLE001 — a broken store must not fail the task
-            applied = ()
-        if applied:
-            spec = replace(
-                spec,
-                constraints=spec.constraints
-                + tuple(
-                    f"[lesson {lesson.id}] {lesson.action_text}"
-                    for lesson in applied
-                ),
-            )
-            for lesson in applied:
-                ledger.append(
-                    EventKind.LESSON_APPLIED,
-                    EventSource.GATE,
-                    {
-                        "lesson_id": lesson.id,
-                        "action": lesson.action_text,
-                        "kind": lesson.kind,
-                    },
-                )
-            if callable(lesson_store.record_application):
-                for lesson in applied:
-                    try:
-                        lesson_store.record_application(lesson.id)
-                    except Exception:  # noqa: BLE001 — counters are advisory
-                        pass
+    spec = _apply_lessons(spec, ledger, lesson_store)
     _bind_accounting(strategy, runtime)
     if on_runtime is not None:
         # A front-end needs the runtime to *write events* (steering), not to
@@ -269,20 +370,85 @@ def run_task(
     report = ledger.verify()
     if not report.valid:
         raise RuntimeError(f"ledger verification failed: {report.reason}")
-    # Slice 3: count recurrences of applied lessons and retire the ones that
-    # keep failing.  Best-effort: a broken counter must not fail the task.
-    if lesson_store is not None:
-        try:
-            retired = record_recurrences(ledger, lesson_store)
-        except Exception:  # noqa: BLE001
-            retired = ()
-        for lesson_id in retired:
-            ledger.append(
-                EventKind.LESSON_RETIRED,
-                EventSource.GATE,
-                {"lesson_id": lesson_id, "reason": "recurrence threshold reached"},
-            )
+    _learn_from_ledger(ledger, lesson_store)
     return HarnessRun(result=result, task_id=identifier, ledger_path=ledger_path)
+
+
+def _apply_lessons(
+    spec: TaskSpec, ledger: Ledger, lesson_store: Any
+) -> TaskSpec:
+    """Carry a bounded lesson set into this task and record the applications.
+
+    Shared by ``run_task`` and ``resume_task``: a resumed approved plan must
+    learn exactly like a fresh run, or the self-evolution chain quietly stops
+    at the approval boundary.
+    """
+
+    if lesson_store is None:
+        return spec
+    try:
+        applied = lesson_store.match_for_task()
+    except Exception:  # noqa: BLE001 — a broken store must not fail the task
+        applied = ()
+    if not applied:
+        return spec
+    spec = replace(
+        spec,
+        constraints=spec.constraints
+        + tuple(
+            f"[lesson {lesson.id}] {lesson.action_text}" for lesson in applied
+        ),
+    )
+    for lesson in applied:
+        ledger.append(
+            EventKind.LESSON_APPLIED,
+            EventSource.GATE,
+            {
+                "lesson_id": lesson.id,
+                "action": lesson.action_text,
+                "kind": lesson.kind,
+            },
+        )
+    if callable(lesson_store.record_application):
+        for lesson in applied:
+            try:
+                lesson_store.record_application(lesson.id)
+            except Exception:  # noqa: BLE001 — counters are advisory
+                pass
+    return spec
+
+
+def _learn_from_ledger(ledger: Ledger, lesson_store: Any) -> None:
+    """Persist proposals and retire lessons that keep recurring.
+
+    The kernel only *proposes* (it stays a pure function of its inputs and
+    writes LESSON_PROPOSED).  Storing happens here, where the filesystem
+    lives.  Before this, 621 ledgers carried proposals and 0 carried a stored
+    lesson — the chain stopped at proposal.
+    """
+
+    if lesson_store is None:
+        return
+    try:
+        stored = store_proposals(ledger, lesson_store)
+    except Exception:  # noqa: BLE001 — learning must not fail a task
+        stored = ()
+    for lesson_id in stored:
+        ledger.append(
+            EventKind.LESSON_STORED,
+            EventSource.GATE,
+            {"lesson_id": lesson_id, "reason": "proposed during this task"},
+        )
+    try:
+        retired = record_recurrences(ledger, lesson_store)
+    except Exception:  # noqa: BLE001
+        retired = ()
+    for lesson_id in retired:
+        ledger.append(
+            EventKind.LESSON_RETIRED,
+            EventSource.GATE,
+            {"lesson_id": lesson_id, "reason": "recurrence threshold reached"},
+        )
 
 
 def resume_task(
@@ -309,6 +475,10 @@ def resume_task(
     extra_specs: Sequence[ToolSpec] = (),
     accept_debt: bool = False,
     context_blocks: Sequence[tuple[str, str]] = (),
+    session_grants: Sequence[Any] = (),
+    lesson_store: Any = None,
+    summary_provider: Any = None,
+    tool_runtime: Any = None,
 ) -> HarnessRun:
     """Resume an approved plan in its existing ledger.
 
@@ -330,7 +500,18 @@ def resume_task(
         catalog_profile=catalog_profile,
         gateway_context=gateway_context,
         extra_specs=extra_specs,
+        session_grants=session_grants,
+        summary_provider=summary_provider,
+        tool_runtime=tool_runtime,
     )
+    # The resumed task already recorded which conversation it belongs to; the
+    # session-history query must keep that scoping instead of falling back to
+    # "every task in this ledger directory".
+    session_id = ""
+    for event in ledger.read():
+        if getattr(event, "kind", None) is EventKind.TASK_STARTED:
+            session_id = str((getattr(event, "payload", {}) or {}).get("session_id") or "")
+            break
     spec = TaskSpec(
         task_id=task_id,
         objective=objective,
@@ -344,7 +525,9 @@ def resume_task(
         ),
         accept_debt=accept_debt,
         context_blocks=tuple(context_blocks),
+        session_id=session_id,
     )
+    spec = _apply_lessons(spec, ledger, lesson_store)
     result = runtime.resume_planned(
         spec,
         strategy,
@@ -355,6 +538,7 @@ def resume_task(
     report = ledger.verify()
     if not report.valid:
         raise RuntimeError(f"ledger verification failed: {report.reason}")
+    _learn_from_ledger(ledger, lesson_store)
     return HarnessRun(result=result, task_id=task_id, ledger_path=ledger_path)
 
 
@@ -369,6 +553,7 @@ def run_plan(
     max_steps: int = DEFAULT_MAX_STEPS,
     sink: JsonlSink | None = None,
     model_config: Any = None,
+    tool_runtime: Any = None,
 ) -> HarnessRun:
     """Execute an approved plan.
 
@@ -393,7 +578,7 @@ def run_plan(
         for step in plan.proposal.steps
         if getattr(step, "intent", None) is None
     ]
-    if model_config is not None:
+    if model_config is not None and free_steps:
         from dataclasses import replace
 
         from xenon.harness.llm import build_llm_loop_strategy
@@ -434,6 +619,7 @@ def run_plan(
         finalize=finalize,
         max_steps=max_steps,
         sink=sink,
+        tool_runtime=tool_runtime,
     )
 
 

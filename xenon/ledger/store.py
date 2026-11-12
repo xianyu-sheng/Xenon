@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import weakref
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -63,8 +65,13 @@ class Ledger:
         self._events: list[Event] = []
         self._load_error = ""
         self._truncated_tail = False
+        # Serialises appends from threads that share this handle (parallel
+        # child bookkeeping) and guards the tail-refresh check below.
+        self._lock = threading.RLock()
+        self._written_bytes = 0
         if self.path is not None and self.path.exists():
             self._load()
+            self._written_bytes = self.path.stat().st_size
 
     @classmethod
     def open(
@@ -95,30 +102,58 @@ class Ledger:
         step_id: str | None = None,
         ts: str | None = None,
     ) -> Event:
-        if self._load_error:
-            raise LedgerError(f"ledger is corrupt: {self._load_error}")
-        if self._truncated_tail:
-            raise LedgerError("ledger has an incomplete tail; recover first")
-        if not self.task_id:
-            raise LedgerError("task_id is required before appending")
-        seq = len(self._events) + 1
-        prev_hash = self._events[-1].hash if self._events else ""
-        event = Event.create(
-            seq=seq,
-            task_id=self.task_id,
-            kind=kind,
-            source=source,
-            payload=payload,
-            step_id=step_id,
-            prev_hash=prev_hash,
-            ts=ts,
-            hmac_key=self._hmac_key,
-        )
-        if self.path is not None:
-            self._write_event(event)
-            self._write_anchor_best_effort(event)
-        self._events.append(event)
-        return event
+        with self._lock:
+            self._refresh_tail_if_moved()
+            if self._load_error:
+                raise LedgerError(f"ledger is corrupt: {self._load_error}")
+            if self._truncated_tail:
+                raise LedgerError("ledger has an incomplete tail; recover first")
+            if not self.task_id:
+                raise LedgerError("task_id is required before appending")
+            seq = len(self._events) + 1
+            prev_hash = self._events[-1].hash if self._events else ""
+            event = Event.create(
+                seq=seq,
+                task_id=self.task_id,
+                kind=kind,
+                source=source,
+                payload=payload,
+                step_id=step_id,
+                prev_hash=prev_hash,
+                ts=ts,
+                hmac_key=self._hmac_key,
+            )
+            if self.path is not None:
+                self._written_bytes += self._write_event(event)
+                self._write_anchor_best_effort(event)
+            self._events.append(event)
+            return event
+
+    def _refresh_tail_if_moved(self) -> None:
+        """Reload when another writer advanced the file under this handle.
+
+        The design rule is one writer per task, but the parent process records
+        child lifecycle events and the runtime holds its own handle.  Two
+        cached copies would compute the same ``seq`` and a divergent
+        ``prev_hash``, silently forking the chain.  Reloading is cheap (it only
+        happens when the file actually grew) and keeps the chain linear.
+        """
+
+        if self.path is None:
+            return
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return
+        if size == self._written_bytes:
+            return
+        if size < self._written_bytes:
+            raise LedgerError("ledger shrank underneath this handle")
+        self._events = []
+        self._load_error = ""
+        self._truncated_tail = False
+        self._load()
+        self._written_bytes = self.path.stat().st_size
 
     def append_receipt(
         self, receipt: ToolReceipt, *, step_id: str | None = None
@@ -133,25 +168,27 @@ class Ledger:
     def append_event(self, event: Event) -> Event:
         """Append an externally built event (replay/import).  Validates the chain."""
 
-        if self._load_error:
-            raise LedgerError(f"ledger is corrupt: {self._load_error}")
-        if self._truncated_tail:
-            raise LedgerError("ledger has an incomplete tail; recover first")
-        if event.seq != len(self._events) + 1:
-            raise LedgerError(
-                f"expected seq {len(self._events) + 1}, got {event.seq}"
-            )
-        prev = self._events[-1].hash if self._events else ""
-        if event.prev_hash != prev:
-            raise LedgerError("event prev_hash does not match the ledger tail")
-        if not event.verify_hash():
-            raise LedgerError("event hash does not verify")
-        if event.task_id != self.task_id:
-            raise LedgerError("event task_id does not match the ledger")
-        if self.path is not None:
-            self._write_event(event)
-            self._write_anchor_best_effort(event)
-        self._events.append(event)
+        with self._lock:
+            self._refresh_tail_if_moved()
+            if self._load_error:
+                raise LedgerError(f"ledger is corrupt: {self._load_error}")
+            if self._truncated_tail:
+                raise LedgerError("ledger has an incomplete tail; recover first")
+            if event.seq != len(self._events) + 1:
+                raise LedgerError(
+                    f"expected seq {len(self._events) + 1}, got {event.seq}"
+                )
+            prev = self._events[-1].hash if self._events else ""
+            if event.prev_hash != prev:
+                raise LedgerError("event prev_hash does not match the ledger tail")
+            if not event.verify_hash():
+                raise LedgerError("event hash does not verify")
+            if event.task_id != self.task_id:
+                raise LedgerError("event task_id does not match the ledger")
+            if self.path is not None:
+                self._written_bytes += self._write_event(event)
+                self._write_anchor_best_effort(event)
+            self._events.append(event)
         return event
 
     # ── read path ──────────────────────────────────────────────────────
@@ -360,6 +397,7 @@ class Ledger:
         self._load_error = ""
         self._truncated_tail = False
         self._load()
+        self._written_bytes = self.path.stat().st_size
         return corrupt
 
     # ── persistence ────────────────────────────────────────────────────
@@ -389,13 +427,17 @@ class Ledger:
                 break
             self._events.append(event)
 
-    def _write_event(self, event: Event) -> None:
+    def _write_event(self, event: Event) -> int:
+        """Append one line; returns how many bytes the file grew by."""
+
         assert self.path is not None
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write(canonical_json(event.to_dict()) + "\n")
+        line = (canonical_json(event.to_dict()) + "\n").encode("utf-8")
+        with self.path.open("ab") as handle:
+            handle.write(line)
             handle.flush()
             os.fsync(handle.fileno())
+        return len(line)
 
     def _write_anchor_best_effort(self, event: Event) -> None:
         """An anchor failure must not lose a durable event; verify can catch up."""
@@ -493,3 +535,44 @@ def read_events(
         if not report.valid:
             raise LedgerError(f"cannot read an invalid ledger: {report.reason}")
     return ledger.read()
+
+
+_SHARED_LEDGERS: "weakref.WeakValueDictionary[str, Ledger]" = (
+    weakref.WeakValueDictionary()
+)
+_SHARED_LOCK = threading.RLock()
+
+
+def open_shared(
+    path: Path | str,
+    task_id: str = "",
+    hmac_key: bytes | None = None,
+) -> Ledger:
+    """One ``Ledger`` object per file, per process.
+
+    The design rule is one writer per task, but the parent process and the
+    runtime it hosts are two callers: child lifecycle records are written
+    through a second handle, and two handles cache independently, so both
+    compute the same ``seq`` and a divergent ``prev_hash``.  Sharing the
+    instance keeps the chain linear without threading an object through every
+    caller.
+
+    A mismatched ``task_id`` is a programming error, not something to paper
+    over: two tasks must never write one file.
+    """
+
+    key = os.path.normcase(os.path.abspath(str(path)))
+    with _SHARED_LOCK:
+        existing = _SHARED_LEDGERS.get(key)
+        if existing is not None:
+            if task_id and existing.task_id and existing.task_id != task_id:
+                raise LedgerError(
+                    f"ledger {path} belongs to task {existing.task_id!r}, "
+                    f"not {task_id!r}"
+                )
+            if task_id and not existing.task_id:
+                existing.task_id = task_id
+            return existing
+        ledger = Ledger.open(path, task_id, hmac_key)
+        _SHARED_LEDGERS[key] = ledger
+        return ledger

@@ -7,11 +7,13 @@ is explicitly ``ambiguous``.
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+import re
+from typing import Iterable, Mapping, Sequence
 
 from xenon.catalog.specs import ALL_SPECS, CORE_SPECS, LEGACY_SPECS, MCP_SPECS
 from xenon.kernel.contracts import (
     BindingStatus,
+    Capability,
     Risk,
     ToolBinding,
     ToolCall,
@@ -109,6 +111,80 @@ class ToolCatalog:
             ),
         )
 
+    def discover(
+        self,
+        query: str,
+        *,
+        capability: str = "",
+        limit: int = 5,
+    ) -> tuple[tuple[Mapping[str, object], ...], bool, bool]:
+        """Find tools matching an intent, with full params, without executing.
+
+        Deterministic structural scoring, not keyword enumeration: an exact
+        tool name wins; otherwise specs rank by how many query words appear
+        in the tool's name, description, parameter keys and capabilities.
+        Returns ``(matches, truncated, fallback)``: ``fallback`` is true when
+        nothing actually matched and the listing is a name-ordered guess, so
+        the caller can tell the model instead of letting it mistake an
+        unrelated tool for a hit.
+        """
+
+        text = str(query or "").strip()
+        raw_capability = str(capability or "").strip()
+        bound = max(1, min(int(limit or 5), 10))
+
+        pool = [item for item in self.specs() if item.name != "find_tools"]
+        if raw_capability:
+            wanted = self._capability(raw_capability)
+            # A non-empty but unparseable filter is an explicit ask for a
+            # capability that does not exist — fail closed, not "ignore filter".
+            if wanted is None:
+                return (), False, False
+            pool = [item for item in pool if wanted in item.capabilities]
+        if not pool:
+            return (), False, False
+
+        # An exact (case-insensitive) name is the strongest possible signal.
+        lowered = text.casefold()
+        exact = [item for item in pool if item.name.casefold() == lowered]
+        if exact:
+            projected = [project_spec(item) for item in exact[:bound]]
+            return tuple(projected), len(exact) > bound, False
+
+        query_words = _words(text)
+        scored = sorted(
+            (
+                (_overlap(query_words, _spec_words(item)), item.name, item)
+                for item in pool
+            ),
+            key=lambda triple: (triple[0], triple[1]),
+            reverse=True,
+        )
+        positive = [triple for triple in scored if triple[0] > 0]
+        fallback = not positive
+        chosen = positive or scored  # never return empty when tools exist
+        matches = [project_spec(triple[2]) for triple in chosen[:bound]]
+        return tuple(matches), len(chosen) > bound, fallback
+
+    @staticmethod
+    def _capability(value: str) -> Capability | None:
+        if not value:
+            return None
+        try:
+            return Capability(str(value))
+        except ValueError:
+            return None
+
+    def knows_capability(self, value: str) -> bool:
+        """Is this a capability name the catalog understands?
+
+        The caller needs it to explain an empty result: an unknown filter and
+        a filter that legitimately matches nothing both return zero matches,
+        and the model cannot tell them apart from the receipt alone.
+        """
+
+        return self._capability(str(value or "")) is not None
+
     def _bound_or_targetless(
         self, spec: ToolSpec, intent: ToolIntent
     ) -> ToolBinding:
@@ -158,6 +234,45 @@ class ToolCatalog:
             if isinstance(value, (list, tuple)) and value:
                 return True
         return False
+
+
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _words(text: str) -> frozenset[str]:
+    """Lowercase structural tokens; works for any language's ASCII identifiers."""
+
+    return frozenset(_WORD.findall(text.casefold()))
+
+
+def _spec_words(spec: ToolSpec) -> frozenset[str]:
+    """Every structural word a tool advertises, for intent overlap."""
+
+    blob = " ".join(
+        (
+            spec.name,
+            spec.description or "",
+            " ".join(spec.params_schema),
+            " ".join(item.value for item in spec.capabilities),
+        )
+    )
+    return _words(blob)
+
+
+def _overlap(query_words: frozenset[str], spec_words: frozenset[str]) -> int:
+    return len(query_words & spec_words)
+
+
+def project_spec(spec: ToolSpec) -> dict[str, object]:
+    """Project one full tool as catalog facts the model may bind against."""
+
+    return {
+        "name": spec.name,
+        "description": spec.description or "",
+        "capabilities": sorted(item.value for item in spec.capabilities),
+        "parameters": dict(spec.params_schema),
+        "risk": spec.risk.value,
+    }
 
 
 def plugin_specs() -> tuple[ToolSpec, ...]:

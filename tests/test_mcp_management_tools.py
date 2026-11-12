@@ -102,10 +102,16 @@ def test_mcp_install_persists_and_verifies_real_stdio_server(config_path, fake_s
     assert result["tool_count"] == 1
     assert result["tools"] == ["fake:echo"]
     assert Path(result["config_path"]) == config_path
-    text = config_path.read_text(encoding="utf-8")
-    assert "deepseek: test-key" in text
-    assert "name: fake" in text
-    assert str(fake_server) in text
+    from xenon.utils.credentials_io import load_document
+
+    document = load_document(config_path)
+    assert document.get("deepseek") == "test-key"
+    servers = [item for item in (document.get("_mcp_servers") or []) if isinstance(item, dict)]
+    assert any(item.get("name") == "fake" for item in servers), servers
+    assert any(
+        str(fake_server) in [str(arg) for arg in item.get("args", [])]
+        for item in servers
+    ), servers
 
 
 def test_mcp_verify_calls_the_installed_tool(config_path, fake_server):

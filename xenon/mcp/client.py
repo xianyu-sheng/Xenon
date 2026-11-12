@@ -171,25 +171,3 @@ class MCPClient:
                 return tool.get("inputSchema", {})
         return None
 
-    def format_tools_for_prompt(self) -> str:
-        """将 MCP 工具格式化为 LLM 提示词。"""
-        if not self.tools:
-            self.list_tools()
-
-        lines = []
-        for tool in self.tools:
-            name = tool.get("name", "unknown")
-            desc = tool.get("description", "")
-            schema = tool.get("inputSchema", {})
-            props = schema.get("properties", {})
-            required = schema.get("required", [])
-
-            params = []
-            for pname, pinfo in props.items():
-                req = " (必填)" if pname in required else ""
-                params.append(f"{pname}: {pinfo.get('type', 'any')}{req}")
-
-            params_str = ", ".join(params) if params else "无参数"
-            lines.append(f"- mcp:{name}: {desc} (参数: {params_str})")
-
-        return "\n".join(lines)

@@ -26,6 +26,17 @@ class ExecutionLevel(IntEnum):
 
 _EXECUTION_BOUNDARY_MARKER = "## 本轮执行边界（最高优先级）"
 
+#: Persistent ceiling set by ``/permissions <mode>``.  The four names map onto
+#: the execution level the classifier may reach; the matching
+#: ``PermissionMode`` is chosen in ``runtime_adapter`` (default → SCOPED,
+#: bypass → BYPASS).  Until a mode is chosen the classifier decides alone.
+PERMISSION_MODE_LEVELS: dict[str, int] = {
+    "plan": int(ExecutionLevel.READ_ONLY),
+    "default": int(ExecutionLevel.WRITE),
+    "accept_edits": int(ExecutionLevel.WRITE),
+    "bypass": int(ExecutionLevel.EXECUTE),
+}
+
 
 def execution_boundary_text(level: ExecutionLevel | int) -> str:
     """Render one deterministic, turn-local authorization boundary."""
@@ -156,9 +167,19 @@ _NO_WRITE = re.compile(
             r"(?:写入|保存|创建|新建|落盘)(?:任何)?(?:到)?(?:文件|磁盘)?",
             r"(?:不要|不用|别|勿|无需|不)(?:再)?(?:写|存|建)(?:入|到)?(?:任何)?文件",
             _NEG_WORDS + r"(?:再)?[^，。！？,.!?\n]{0,4}?" + _MUTATION_VERBS,
-            r"(?:do\s+not|don't|without|must\s+not|may\s+not|not\s+allowed\s+to)\s+"
-            r"(?:write|save|create|modify|edit|delete|change|touch|update)"
-            r"(?:\s+(?:any|a|the))?\s+files?",
+            # 「别改 calc.py」：裸动词直接跟一个文件名目标。上面的
+            # _MUTATION_VERBS 要求「改代码/改文件」，不带这些名词就漏掉，
+            # 于是「别改 calc.py」被读成放行或全局禁令。
+            _NEG_WORDS
+            + r"(?:再)?(?:修改|改|动|碰|删掉|删除|重写|覆盖)\s*"
+            r"(?=[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]{1,10}\b)",
+            # 「保留 calc.py 不变」：否定在路径之后。
+            r"保留[^，。；\n]{0,40}?(?:不变|不改|不动|原样)",
+            r"\b(?:leave|keep)\s+[^\n,;]{0,60}?\s(?:unchanged|untouched|as\s+is)\b",
+            r"(?:do\s+not|don't|never|without|must\s+not|may\s+not|not\s+allowed\s+to)\s+"
+            r"(?:write|save|create|modify|edit|delete|change|touch|update|remove)"
+            r"(?:\s+(?:any|a|the))?"
+            r"(?:\s+files?\b|\s+(?=[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]{1,10}\b))",
             r"\bno\s+file\s+(?:write|changes?)\b",
         ]
     ),
@@ -174,13 +195,26 @@ _NO_EXECUTE = re.compile(
 _EXECUTE = re.compile(
     r"(?:执行|运行|跑一下|跑下|测试|验证)(?:这|该|一下|下|看看|脚本|程序|代码|命令|测试|pytest|python|npm|pnpm|yarn)?"
     r"|(?:run|execute|test|verify)(?:\s+it|\s+this|\s+the|\s+pytest|\s+python|\s+npm|\b)"
-    r"|\b(?:pytest|npm\s+test|pnpm\s+test|cargo\s+test|go\s+test)\b",
+    r"|\b(?:pytest|npm\s+test|pnpm\s+test|cargo\s+test|go\s+test)\b"
+    # 「安装依赖」「pip install …」：装包必然要执行进程，却不在上面任何一条里，
+    # 于是被判只读、连问都不问就拒绝。包管理器动词本身就是执行信号。
+    # 「安装依赖」「pip install …」：装包必然要执行进程，却不在上面任何一条里，
+    # 于是被判只读、连问都不问就拒绝。只认「安装 + 依赖类名词」和包管理器命令，
+    # 避免把「更新文档里的安装步骤」这种描述性说法当成执行请求。
+    r"|(?:安装|装一下|装下|更新|升级)\s*(?:一下|下)?\s*"
+    r"(?:依赖|依赖包|requirements|requirements\.txt|包|软件包|模块|库|插件|环境|第三方)"
+    r"|(?<![\w-])(?:pip|pip3|npm|pnpm|yarn|cargo|go|gem|composer|apt|apt-get|brew"
+    r"|choco|winget)\s+(?:install|add|update|upgrade|remove|uninstall)\b",
     re.IGNORECASE,
 )
 _WRITE = re.compile(
     r"(?:写入|保存|落盘).{0,12}(?:文件|目录|磁盘|路径|[/~.]|[A-Za-z]:\\)"
     r"|(?:写|编写)(?:一个|个)?\s*(?:[\w.-]+\.[A-Za-z0-9]+\s*)?(?:文件|目录|文件夹)"
-    r"|(?:创建|新建|生成|修改|编辑|替换|删除).{0,24}(?:文件|目录|文件夹|项目|仓库|代码库|\w+\.[A-Za-z0-9]+)"
+    # 「写 hello.py」：动词直接接一个文件名，中间没有「文件」二字。第三条只列了
+    # 创建/新建/生成…，把「写」漏掉了 —— 于是「写一个 hello.py」被判成只读，
+    # 写请求在权限层就被拦下。文件名后缀本身就是写目标的证据。
+    r"|(?:写|编写|创建|新建|生成|修改|编辑|替换|删除)"
+    r".{0,24}(?:文件|目录|文件夹|项目|仓库|代码库|\w+\.[A-Za-z0-9]+)"
     r"|(?:\w+\.[A-Za-z0-9]+).{0,16}(?:修改|编辑|替换|删除|改一下|改下)"
     # 语义意图（修复/重构/优化/更新 + 代码实体）不在此处判定：正则只负责
     # 操作原语与显式结构，语义由 LLM 分类器主导（无分类器时保守回落）。
@@ -195,6 +229,14 @@ _WRITE = re.compile(
     r"|(?:提交|推送|合并)(?:这|该|当前|上述|刚才|本次)?(?:份|个|些)?"
     r"(?:代码|更改|修改|变更|commit|PR|分支|标签|版本)"
     r"|(?:提交|推送|合并)(?:到|至)\s*(?:GitHub|GitLab|Gitee|origin|远程仓库)"
+    # 「修复 util.py」「fix util.py」：变更动词直接接文件名。上面的模式要求
+    # 动词后跟「文件/代码」等名词（fix … file）或「把X改成Y」结构，最常见的
+    # 「动词 + 文件名」句式反而被判成只读，编辑请求在权限层就被拦下。
+    r"|(?:修复|修改|更新|完善|补充|优化|调整|重构|重写|改)\s*(?:一下|下)?\s*"
+    r"(?:这个|该|那个|当前|上述)?\s*[\w./\\-]+\.[A-Za-z0-9]{1,10}"
+    r"|\b(?:fix|repair|correct|update|change|modify|edit|patch|refactor|rewrite)"
+    r"\s+(?:the\s+|a\s+|an\s+)?[\w./\\-]+\.[A-Za-z0-9]{1,10}\b"
+    r"|(?:把|将).{1,24}(?:改|修复|修改|更新)(?:好|了|掉)?(?=[\s，。！？,.!?]|$)"
     r"|\bgit\s+(?:add|commit|push|merge|rebase|checkout)\b",
     re.IGNORECASE,
 )
@@ -363,7 +405,15 @@ _REQUEST_CUE = re.compile(
 )
 _DIRECT_BARE_GIT_REQUEST = re.compile(
     r"(?:请(?:你)?|请帮我|帮(?:我)?|麻烦(?:你)?|现在|立即|直接|开始|继续)"
-    r"\s*(?:提交|推送|合并)(?:一下|吧)?(?:[，。！？,.!?]|$)",
+    r"\s*(?:提交|推送|合并)(?:一下|吧)?(?:[，。！？,.!?]|$)"
+    # 「把这个项目 push 到 origin」「把改动提交一下」：动词前后有宾语或中英混写。
+    # 上面那条要求动词紧跟标点或结尾，于是一句完整的推送请求被判成"不需要外部
+    # 操作"。只认明确的动作句（结尾、指向远端），避免把
+    # 「我想把项目推送到其他平台，帮我比较…」这类假设句算成授权。
+    r"|(?:提交|推送|push|commit)\s*(?:一下|吧)?\s*(?:到|至)\s*"
+    r"(?:origin|upstream|远端|远程|远程仓库|远端仓库|github|gitlab|gitee)"
+    r"|(?:把|将)[^，。！？,.!?\n]{1,24}(?:提交|推送|push|commit)"
+    r"\s*(?:一下|吧)?\s*[。！!]?\s*$",
     re.IGNORECASE,
 )
 _PATH_REFERENCE = re.compile(
@@ -472,7 +522,7 @@ _NO_WRITE_GLOBAL_WORDS = re.compile(
     r"任何|所有|一切|多个|这些|那些|文件|磁盘|目录|folder|directories",
     re.IGNORECASE,
 )
-_CLAUSE_BREAK = re.compile("[\u3001\u3002\uff1b\uff0c\uff01\uff1f\n]")
+_CLAUSE_BREAK = re.compile("[\u3001\u3002\uff1b\uff0c\uff01\uff1f\n,;!?]")
 
 
 def _clause_span(text: str, start: int, end: int) -> tuple[int, int]:
@@ -510,6 +560,12 @@ def _no_write_scope(text: str) -> tuple[tuple[str, ...], bool]:
                     found.append(value)
             if found:
                 break
+        if not found:
+            # "保留 calc.py 不变": the path sits INSIDE the negation match.
+            for path in _PATH_REFERENCE.finditer(match.group(0)):
+                value = path.group(0).strip().rstrip("，。；,.!?;")
+                if value and value not in found:
+                    found.append(value)
         if found:
             targets.extend(found)
         else:

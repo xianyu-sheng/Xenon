@@ -78,6 +78,58 @@ def test_obligations_are_bounded() -> None:
     assert len(derive_obligations(task)) <= 12
 
 
+def test_merely_named_files_in_a_question_are_not_change_obligations() -> None:
+    """A filename with no governing verb was named, not asked to change.
+
+    Defaulting such files to ``file_changed`` manufactured obligations the
+    run could never satisfy (e.g. "what is the difference between a.py and
+    b.py?"); an unsatisfiable contract is worse than no contract (§1.5).
+    """
+
+    obligations = derive_obligations(
+        "what is the difference between shapes.py and test_shapes.py?"
+    )
+
+    assert obligations == ()
+
+
+def test_a_verb_after_the_filename_can_govern() -> None:
+    """Chinese verbs follow their object; scanning only before lost them."""
+
+    kinds = [(o.kind, o.target) for o in derive_obligations("shapes.py 需要修复")]
+
+    assert kinds == [(PropositionKind.FILE_CHANGED, "shapes.py")]
+
+
+def test_needs_work_is_a_write_request() -> None:
+    kinds = [(o.kind, o.target) for o in derive_obligations("b.py also needs work")]
+
+    assert kinds == [(PropositionKind.FILE_CHANGED, "b.py")]
+
+
+def test_a_verb_after_a_sequential_connector_does_not_govern() -> None:
+    """'c.py then run tests' — running tests is a new action, not what c.py
+    must itself do; c.py stays in the fix list governed by 'Fix'."""
+
+    kinds = [(o.kind, o.target) for o in derive_obligations(
+        "Fix a.py, b.py, and c.py then run tests"
+    )]
+
+    assert (PropositionKind.FILE_CHANGED, "c.py") in kinds
+    assert (PropositionKind.TEST_PASSED, "c.py") not in kinds
+
+
+def test_comma_separated_file_lists_share_one_governing_verb() -> None:
+    kinds = [(o.kind, o.target) for o in derive_obligations(
+        "更新 a.py、b.py、c.py、d.py 四个文件的注释"
+    )]
+
+    assert kinds == [
+        (PropositionKind.FILE_CHANGED, f"{name}.py")
+        for name in "abcd"
+    ]
+
+
 def test_a_violated_task_obligation_blocks_delivery_not_execution(tmp_path: Path) -> None:
     """The rule: the agent runs; if the task level cannot confirm it, the run is
     *disclosed* as unverified.  Execution is never cut short."""
@@ -113,3 +165,25 @@ def test_a_violated_task_obligation_blocks_delivery_not_execution(tmp_path: Path
     # …and the gap was disclosed rather than silently accepted.
     assert result.accepted is True
     assert any("calc.py" in str(item) for item in result.debt) or result.debt
+
+
+def test_a_negated_file_never_becomes_a_change_obligation() -> None:
+    """ "don't change calc.py" is an instruction to leave it alone.
+
+    Demanding file_changed(calc.py) made compliance impossible for an agent
+    that obeyed; the turn policy registers these paths as write-protected
+    instead.
+    """
+
+    for task in (
+        "don't change calc.py, fix util.py",
+        "do not modify calc.py, fix util.py",
+        "别改 calc.py，改 util.py",
+        "保留 calc.py 不变，只改 util.py",
+    ):
+        files = {
+            item.target
+            for item in derive_obligations(task)
+            if item.kind is PropositionKind.FILE_CHANGED
+        }
+        assert "calc.py" not in files, task

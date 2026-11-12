@@ -71,31 +71,29 @@ register_tool_handler(
 注册后工具自动出现在模型可见的工具列表中。
 出处：`xenon/nodes/tool_registry.py`
 
-## 4. 注册推理引擎（Python API）
+## 4. 新增一个模式 / loop profile（Python API）
+
+引擎类已经删除：现在只有一个 `LoopRuntime`，模式只是它的**一张阶段参数表**。
+在 `xenon/modes.py` 里加一条 `ModeSpec`，`/mode`、setup wizard、`--mode`
+和路由会同时看到它：
 
 ```python
-from xenon.engine.base import BaseEngine
-from xenon.engine.registry import register_engine
+from xenon.kernel.strategies import LoopProfile
+from xenon.modes import MODE_CATALOG, ModeSpec
 
-
-class MyCustomEngine(BaseEngine):
-    def run(self, user_input, context=None) -> str:
-        self._begin_run()
-        messages = self._history_messages(user_input, limit=20)
-        return self._call_llm(messages, phase="my_custom")
-
-
-register_engine(
-    "my-custom",
-    factory=lambda **kw: MyCustomEngine(**kw),
-    description="我的自定义推理策略",
-    mode_line="· MyCustom 执行中",
-    result_title="MyCustom 结果",
+MODE_CATALOG["review-only"] = ModeSpec(
+    name="review-only",
+    description="只读审查：先计划，再逐步执行",
+    loop=LoopProfile(plan=True, step_scope=True, step_calls=4),
 )
 ```
 
-注册一次，`/mode` 列表、REPL 路由、setup wizard 全部自动识别。
-出处：`xenon/modes.py`（`MODE_CATALOG` + `LoopProfile`）
+- `loop` 声明跑哪些阶段（plan / step / reflect）以及每步预算；
+- `loop=None` 的模式内核不接受（fail closed）；
+- 只是别名时设 `alias_of`，不要复制参数（`react` 就是这样指向 `direct` 的）；
+- 「再加一个执行器」不是扩展点——那会把单循环重新分叉成多引擎。
+
+出处：`xenon/modes.py`（`MODE_CATALOG`）、`xenon/kernel/strategies/__init__.py`（`LoopProfile`）
 
 ## 5. 注册终端命令（Python API）
 

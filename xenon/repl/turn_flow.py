@@ -178,9 +178,8 @@ class TurnFlowMixin:
                     outcome="stale",
                 )
             self._pending_action = None
-        # 每轮重置：边界审批的 allowed-once 只对本轮有效；TurnGate 状态机同样清零。
-        self._boundary_approved_once.clear()
-        self._turn_gate.reset()
+        # 每轮重置：安全提示清空。会话授权不在这里清——它属于整个会话
+        # （§9），按自己的期限过期，由 /permissions 或模式切换撤销。
         self.agent_context.clear_security_advisories()
 
         # v0.6.0: 智能路由 - 根据用户输入自动选择模式
@@ -207,6 +206,24 @@ class TurnFlowMixin:
             console.print(
                 "[dim cyan]📋 计划模式：本轮只产出方案，写/执行需用户确认[/dim cyan]"
             )
+        # A /permissions mode is a persistent ceiling: the classifier may not
+        # raise a turn above it.  Writing only `_execution_level` from the
+        # command was futile — this function recomputes that key every turn;
+        # the stored mode is the durable half.
+        mode_name = ""
+        ctx_get = getattr(self.agent_context, "get", None)
+        if callable(ctx_get):
+            mode_name = str(ctx_get("_permission_mode") or "")
+        per_ctx = turn_contract_obj
+        if mode_name:
+            from xenon.repl.execution_policy import PERMISSION_MODE_LEVELS
+
+            cap = PERMISSION_MODE_LEVELS.get(mode_name)
+            if cap is not None and int(per_ctx.level) > cap:
+                turn_contract_obj = replace(
+                    per_ctx, level=ExecutionLevel(cap)
+                )
+                execution_policy = turn_contract_obj.to_execution_policy()
         # Atomic tasks get a deterministic recipe and a side-effect scope
         # guard.  They must not inherit a previous coding TaskState, otherwise
         # run_with_delivery would demand verify/commit for an install/config
@@ -637,6 +654,10 @@ class TurnFlowMixin:
             and turn_contract_obj.deferred_write
         )
 
+        chat_turn = None
+        outcome = None
+        cancelled = False
+        failure = ""
         try:
             if kernel_turn:
                 from xenon.repl.runtime_adapter import run_kernel_turn
@@ -652,6 +673,8 @@ class TurnFlowMixin:
                     model_ids=model_ids,
                     execution_policy=execution_policy,
                     plan_only=plan_only_turn,
+                    intent=str(intent or ""),
+                    intent_source=str(inherited_intent_source or ""),
                 )
                 # A kernel turn is a complete turn: the legacy continuation
                 # promise is consumed, not carried into the next turn.
@@ -665,13 +688,34 @@ class TurnFlowMixin:
                 console.print(f"[error]❌ {message}[/error]")
                 self._record_engine_error(f"[错误] {message}", model_ids[0])
                 return
-            self._run_direct(
+            # A direct chat turn is a turn: record it before generation so a
+            # crash still leaves evidence, and close it in ``finally`` so no
+            # record is ever left open.  Tool turns above return before this.
+            from xenon.ledger.conversation import (
+                default_ledger_dir,
+                open_conversation_turn,
+            )
+            from xenon.repl.runtime_adapter import _session_id_of
+
+            chat_turn = open_conversation_turn(
+                default_ledger_dir(),
+                # The ledger records the user's request, not the prompt the
+                # optimizer built: the injected boundary block is an
+                # implementation detail, not evidence.
+                objective=user_input,
+                user_objective=user_input,
+                workspace=str(self._workspace_root()),
+                session_id=_session_id_of(self, None),
+                model_ids=model_ids,
+            )
+            outcome = self._run_direct(
                 turn_prompt,
                 model_ids,
                 intent=intent,
                 execution_policy=execution_policy,
             )
         except KeyboardInterrupt:
+            cancelled = True
             # B2: Ctrl+C 取消当前运行，返回提示符而非退出整个 REPL
             if getattr(self, "_log_capture_active", False):
                 self._captured_log = self._stop_log_capture()
@@ -680,6 +724,31 @@ class TurnFlowMixin:
             except Exception:
                 self.ctx_mgr.trim_last_user()
             console.print("\n[dim]· 已中断，返回提示符[/dim]")
+        except Exception as exc:
+            # Keep the record honest when the direct path itself blows up; the
+            # exception still propagates exactly as before.
+            failure = f"{type(exc).__name__}: {exc}"
+            raise
+        finally:
+            if chat_turn is not None:
+                from xenon.ledger.conversation import finish_conversation_turn
+
+                delegated = bool(getattr(outcome, "delegated", False))
+                path = finish_conversation_turn(
+                    chat_turn,
+                    answer=getattr(outcome, "answer", "") or "",
+                    model_id=getattr(outcome, "model_id", "") or "",
+                    intent=str(intent or ""),
+                    intent_source=str(inherited_intent_source or ""),
+                    error=getattr(outcome, "error", "") or failure,
+                    cancelled=cancelled,
+                    delegated=delegated,
+                )
+                # A delegated turn gets its own kernel/ReAct ledger; point the
+                # evidence commands at that one, not at the hand-off record.
+                if path is not None and not delegated:
+                    self._last_kernel_ledger = path
+                    self._last_kernel_task_id = chat_turn.task_id
 
         # ``use_count`` means a memory reached a successfully completed answer,
         # not merely that retrieval considered it. This keeps retention metrics

@@ -173,8 +173,17 @@ def execution_policy_denial(
     tool_name: str,
     params: dict[str, Any],
     context: AgentContext,
+    *,
+    enforce_level: bool = True,
 ) -> str | None:
-    """Return a hard-denial reason when a tool exceeds this turn's policy."""
+    """Return a hard-denial reason when a tool exceeds this turn's policy.
+
+    ``enforce_level`` is for kernel-ruled calls: the kernel's PermissionPolicy
+    has already decided capability/grants/mode with more information, so the
+    turn-level check must not re-decide it (defect 2).  The protected-path
+    check is NOT a permission decision — it is the user's explicit "don't
+    touch this" constraint — and always runs.
+    """
 
     protected = tuple(context.get("_protected_write_paths") or ())
     if protected and required_execution_level(tool_name, params) >= 2:
@@ -187,6 +196,8 @@ def execution_policy_denial(
                     "本轮该路径受保护，如需修改请重新给出明确指令。"
                 )
 
+    if not enforce_level:
+        return None
     authorized = context.get("_execution_level")
     if authorized is None:
         # Backward compatibility for direct engine/library users that have not

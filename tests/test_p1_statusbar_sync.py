@@ -220,24 +220,17 @@ def test_statusbar_with_auto_router():
         assert "auto" in content or "model-a" in content
 
 
-def test_statusbar_toolbar_fragments():
-    """验证 get_toolbar_fragments 返回正确格式。"""
+def test_statusbar_toolbar_text():
+    """验证 get_toolbar_text 返回一行文本。"""
     cm = ContextManager()
     registry = ModelRegistry()
     bar = _make_status_bar(ctx_mgr=cm, registry=registry)
 
     bar.set_last_model("test/model")
 
-    # get_toolbar_fragments 应该返回 list[tuple[str, str]]
-    fragments = bar.get_toolbar_fragments()
-    assert isinstance(fragments, list)
-
-    if fragments:
-        for item in fragments:
-            assert isinstance(item, tuple)
-            assert len(item) == 2
-            assert isinstance(item[0], str)  # style
-            assert isinstance(item[1], str)  # text
+    text = bar.get_toolbar_text()
+    assert isinstance(text, str)
+    assert "test/model" in text
 
 
 def test_statusbar_exception_safety():
@@ -258,10 +251,8 @@ def test_statusbar_exception_safety():
     assert panel is not None
     assert "状态不可用" in str(panel.renderable)
 
-    # get_toolbar_fragments() 也应该降级
-    fragments = bar.get_toolbar_fragments()
-    assert isinstance(fragments, list)
-    assert any("状态不可用" in str(frag) for frag in fragments)
+    # get_toolbar_text() 也应该降级
+    assert "状态不可用" in bar.get_toolbar_text()
 
 
 def test_model_switch_maintains_other_state():
@@ -309,7 +300,7 @@ def test_preferred_model_wins_over_pool_healthy_order():
     bar._auto_router = router
     bar.set_last_model("deepseek/deepseek-v4-pro")
 
-    text = "".join(piece for _, piece in bar.get_toolbar_fragments())
+    text = bar.get_toolbar_text()
     assert "deepseek-flash" in text
     assert "deepseek-v4-pro" not in text
 
@@ -322,7 +313,7 @@ def test_toolbar_falls_back_to_auto_when_no_preference():
     bar = _make_status_bar()
     bar._auto_router = router
 
-    text = "".join(piece for _, piece in bar.get_toolbar_fragments())
+    text = bar.get_toolbar_text()
     assert "auto" in text
     assert "deepseek-v4-pro" in text
 

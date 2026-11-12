@@ -27,15 +27,9 @@ from typing import Any
 from xenon.engine.callbacks import mask_sensitive_params
 from xenon.engine.circuit_breaker import BreakerRegistry
 from xenon.engine.context import AgentContext
-from xenon.engine.evidence_contracts import parse_test_counts
 from xenon.engine.evidence_gate import GateVerdict
-from xenon.engine.evidence_runtime import (
-    EventKind,
-    EvidenceLedger,
-    EvidenceSource,
-    LifecyclePhase,
-)
 from xenon.engine.tool_tracker import ToolExecutionTracker
+from xenon.nodes.evidence_contracts import parse_test_counts
 from xenon.nodes.param_validation import (  # noqa: E402,F401 - 兼容导出
     _chinese_ratio,
     validate_tool_params,
@@ -57,9 +51,6 @@ from xenon.repl.system_config import get_config
 from xenon.session.tool_results import ToolResultStore
 
 logger = logging.getLogger(__name__)
-from xenon.engine.trace import TraceContextFilter  # noqa: E402
-
-logger.addFilter(TraceContextFilter())
 
 
 # ── 工具分类 ───────────────────────────────────────────────
@@ -490,30 +481,23 @@ class ToolExecutor:
         *,
         retry_attempts: int = 2,
         breakers: BreakerRegistry | None = None,
-        permission_gate: Any = None,  # v0.5.0: PermissionGate
         runtime: Any = None,
         execution_policy: Any = None,
-        evidence_ledger: EvidenceLedger | None = None,
         evidence_enforcement: str = "observe",
-        evidence_gates: list[Any] | None = None,
         evidence_auto_read: bool = True,  # v0.8.3: 盲编辑自动补读
-        tool_gate: Any = None,  # 统一工具门控（黑名单+参数校验+证据链）
+        tool_gate: Any = None,  # 统一工具门控（黑名单+参数校验）
         hooks: Any = None,  # HookRunner（None 时读全局默认）
         result_store: ToolResultStore | None = None,  # 会话级完整结果缓存
-        record_evidence: bool = True,  # kernel gateway owns the ledger; legacy path defaults on
     ) -> None:
         if evidence_enforcement not in {"observe", "enforce"}:
             raise ValueError("evidence_enforcement must be 'observe' or 'enforce'")
         self.retry_attempts = max(1, retry_attempts)
         # 默认每引擎独立注册表（同引擎内跨 run 累积断路状态，且保证测试隔离）
         self.breakers = breakers or BreakerRegistry()
-        self.permission_gate = permission_gate  # v0.5.0: 工具确认门控
         self.hooks = hooks if hooks is not None else _default_hooks()
         self.runtime = runtime
         self.execution_policy = execution_policy
-        self.evidence_ledger = evidence_ledger
         self.evidence_enforcement = evidence_enforcement
-        self.evidence_gates: list[Any] = list(evidence_gates or [])
         # v0.8.3: FactBindingGate 拦截「盲编辑」（缺读取证据）后，自动对
         # 缺失路径补一次 read_file 再重试原工具。SWE-bench 实测
         # （matplotlib-23562 等）：LLM 只 search_files 定位就 edit，被拦
@@ -527,7 +511,6 @@ class ToolExecutor:
             tool_gate = ToolGate.from_config(get_config())
         self.tool_gate = tool_gate
         self.result_store = result_store
-        self.record_evidence = record_evidence
 
     def set_result_store(self, store: ToolResultStore | None) -> None:
         """Bind the session-scoped result cache (optional, lazy when absent)."""
@@ -542,10 +525,6 @@ class ToolExecutor:
                 # TTL is best-effort and must never block a tool call.
                 self.result_store.cleanup()
         return self.result_store
-
-    def register_evidence_gate(self, gate: Any) -> None:
-        """挂载一个在线工具边界 Gate；Gate 只判定，不直接执行补救。"""
-        self.evidence_gates.append(gate)
 
     @staticmethod
     def _target_paths(params: dict[str, Any]) -> set[str]:
@@ -564,46 +543,6 @@ class ToolExecutor:
                         if isinstance(path, str) and path:
                             paths.add(path)
         return paths
-
-    def _resolve_ledger(self, context: AgentContext) -> EvidenceLedger:
-        """Resolve the task-scoped ledger from Context, creating only for direct use.
-
-        Engines bind a run ledger at task start. The fallback preserves library users
-        that invoke ToolExecutor directly, while ensuring all calls sharing one
-        AgentContext append to the same chain.
-        """
-        if self.evidence_ledger is not None:
-            return self.evidence_ledger
-        runtime = context.get_evidence_runtime()
-        if runtime is not None:
-            return runtime.ledger
-        ledger = context.get("_evidence_ledger")
-        if isinstance(ledger, EvidenceLedger):
-            return ledger
-        session_id = str(context.get("_evidence_session_id") or uuid.uuid4().hex)
-        ledger = EvidenceLedger(session_id)
-        context.set("_evidence_session_id", session_id)
-        context.set("_evidence_ledger", ledger)
-        context.bind_evidence(ledger)
-        ledger.append(
-            LifecyclePhase.TASK,
-            EventKind.TASK_FACT,
-            EvidenceSource.ENGINE,
-            {"origin": "ToolExecutor.direct", "reason": "no engine ledger bound"},
-        )
-        return ledger
-
-    def _ledger_event(
-        self,
-        context: AgentContext,
-        phase: LifecyclePhase,
-        kind: EventKind,
-        source: EvidenceSource,
-        payload: dict[str, Any],
-    ) -> None:
-        if not self.record_evidence:
-            return
-        self._resolve_ledger(context).append(phase, kind, source, payload)
 
     def _auto_read_missing_paths(
         self,
@@ -648,15 +587,7 @@ class ToolExecutor:
         context: AgentContext,
         tracker: ToolExecutionTracker | None,
     ) -> GateVerdict:
-        """在线 pre-tool Gate：执行前写入请求证据并阻断未绑定事实的编辑。"""
-        safe_params = mask_sensitive_params(params)
-        self._ledger_event(
-            context,
-            LifecyclePhase.PRE_TOOL,
-            EventKind.TOOL_REQUEST,
-            EvidenceSource.ENGINE,
-            {"tool": tool_name, "params": safe_params},
-        )
+        """在线 pre-tool Gate：阻断未绑定事实的编辑。"""
         if tool_name not in {
             "write_file",
             "edit_file",
@@ -683,63 +614,8 @@ class ToolExecutor:
             )
         reason = "写入前缺少目标文件读取证据: " + ", ".join(missing[:3])
         enforced = self.evidence_enforcement == "enforce"
-        self._ledger_event(
-            context,
-            LifecyclePhase.PRE_TOOL,
-            EventKind.GATE_VERDICT,
-            EvidenceSource.GATE,
-            {
-                "gate": "FactBindingGate",
-                "passed": not enforced,
-                "reason": reason,
-                "enforced": enforced,
-                "missing_paths": missing,
-            },
-        )
         return GateVerdict(
             "pre_tool", not enforced, reason, "warning", {"missing_paths": missing}
-        )
-
-    def record_tool_observation(
-        self,
-        tool_name: str,
-        params: dict[str, Any],
-        success: bool,
-        observation: str,
-        tracker: ToolExecutionTracker | None,
-        context: AgentContext | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        """记录执行后证据；正文只保留摘要，敏感参数不进入 ledger。
-
-        ``metadata`` carries structured facts (exit code, changed/committed
-        paths, result id) so downstream projections can update state without
-        re-parsing the human-readable observation.
-        """
-        context = context or AgentContext()
-        if self.evidence_ledger is not None:
-            context.set("_evidence_ledger", self.evidence_ledger)
-        raw_state = context.get("_task_state")
-        task_id = (
-            str(raw_state.get("task_id"))
-            if isinstance(raw_state, dict) and raw_state.get("task_id")
-            else ""
-        )
-        payload: dict[str, Any] = {
-            "tool": tool_name,
-            "params": mask_sensitive_params(params),
-            "success": success,
-            "summary": observation[:500],
-            "metadata": dict(metadata or {}),
-        }
-        if task_id:
-            payload["task_id"] = task_id
-        self._ledger_event(
-            context,
-            LifecyclePhase.POST_TOOL,
-            EventKind.TOOL_OBSERVATION,
-            EvidenceSource.TOOL,
-            payload,
         )
 
     def set_runtime(self, runtime: Any) -> None:
@@ -806,10 +682,9 @@ class ToolExecutor:
             self.execution_policy.emit("tool_start", tool=tool_name)
         tool_class = classify_tool(tool_name, params)
         execution_id = uuid.uuid4().hex
-        # v0.8.3: 链路贯通——工具执行日志带 [run_id/exec_id] 前缀。此前工具层
-        # 是链路断裂点（只有 LLM 调用层有 run_id），排查「哪次工具失败」时
-        # 无法从日志关联到具体 run/execution。run_id 取自 context 的会话 ID
-        # （_bind_evidence_ledger 写入），exec_id 每次执行独立。
+        # v0.8.3: 链路贯通——工具执行日志带 [run_id/exec_id] 前缀，便于从日志
+        # 关联具体 run/execution。run_id 取自 context 中前端可选的会话 ID
+        # （旧证据链退役后不再自动写入，未提供时前缀省略）；exec_id 每次执行独立。
         run_id = context.get("_evidence_session_id") if context is not None else None
         trace_p = f"[{run_id}/{execution_id[:6]}] " if run_id else ""
         started_at = _utc_now()
@@ -979,15 +854,6 @@ class ToolExecutor:
                     raw_sha256=raw_sha256,
                     metadata=tracker_metadata,
                 )
-            self.record_tool_observation(
-                tool_name,
-                params,
-                success,
-                observation,
-                tracker,
-                context,
-                metadata=tracker_metadata,
-            )
             if self.execution_policy is not None:
                 self.execution_policy.emit(
                     "tool_end",
@@ -1136,7 +1002,19 @@ class ToolExecutor:
             )
 
         # ── Stage 1.5: 本轮执行策略硬边界 ──
-        policy_reason = execution_policy_denial(tool_name, params, context)
+        # 内核已裁决（``_kernel_adjudicated``）的调用跳过级别检查：kernel 的
+        # PermissionPolicy 基于 grants / rules / mode 做了裁决，而这里的
+        # 回合级别判断信息更少——人类刚在审批面板授予了 shell「本轮允许」，
+        # 内核据此放行，这里却按 _execution_level 再次拒绝并弹第二次升级
+        # 确认。两个裁决点信息不同就会互相打架（与 Stage 1.6 同理，见
+        # engine/context.py request_approval 的注释）。受保护路径检查不受
+        # 影响：那是用户显式"不要改动"约束，不属于权限裁决。
+        policy_reason = execution_policy_denial(
+            tool_name,
+            params,
+            context,
+            enforce_level=not context.get("_kernel_adjudicated"),
+        )
         if policy_reason:
             # 能力不足时先询问用户（REPL 注入的 escalation 回调）：同意则提升
             # 本轮级别并继续执行；拒绝/非交互则保持硬拒绝。同一轮同一工具只问一次。
@@ -1269,46 +1147,6 @@ class ToolExecutor:
                     error=evidence_verdict.reason,
                     error_kind="evidence_denied",
                 )
-
-        # ── Stage 3: 权限闸门（v0.5.0: 接入 PermissionGate） ──
-        if self.permission_gate is not None:
-            # SENSITIVE 是执行器掌握的最高风险信息，尤其覆盖运行时注册的
-            # 动态工具；后者的名称不在 PermissionGate 的静态工具表中。
-            if tool_name == "mcp_call":
-                risk_override = {
-                    "INFO": "READ",
-                    "WRITE": "WRITE",
-                    "SENSITIVE": "CRITICAL",
-                }[tool_class]
-            else:
-                risk_override = "CRITICAL" if tool_class == "SENSITIVE" else None
-            allowed, reason = self.permission_gate.check(
-                tool_name,
-                params,
-                risk_override=risk_override,
-            )
-            if not allowed:
-                logger.info(f"{trace_p}权限拒绝: {tool_name} — {reason}")
-                cancelled = "取消任务" in reason
-                if cancelled:
-                    # Engines share this context, so a user pressing q stops
-                    # the current task instead of merely feeding a denial back
-                    # to the model for another attempt.
-                    context.set("_task_cancelled", True)
-                return finish(
-                    False,
-                    f"⛔ 操作被拒绝: {reason}",
-                    state=(
-                        ToolExecutionState.CANCELLED
-                        if cancelled
-                        else ToolExecutionState.FAILED
-                    ),
-                    error=reason,
-                    error_kind=("cancelled" if cancelled else "permission_denied"),
-                )
-        elif tool_class == "SENSITIVE":
-            # 无 PermissionGate 时保持旧行为：仅记录
-            logger.debug(f"SENSITIVE 工具调用: {tool_name}")
 
         # ── Stage 4: 断路器 ──
         breaker = self.breakers.get(tool_name)

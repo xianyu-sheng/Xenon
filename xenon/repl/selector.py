@@ -1,4 +1,4 @@
-"""Arrow-key selectors for the commands users repeat (#183, step 2).
+"""Numbered selectors for the commands users repeat (#183, step 2).
 
 ``/mode``, ``/model`` and ``/permissions`` used to require remembering the exact
 token; Claude Code and Codex let you pick from a list.  This module is the one
@@ -6,12 +6,11 @@ picker they share, so there is no second menu to keep in sync.
 
 Two rules keep it safe:
 
-* **No session, no picker.**  Without an interactive prompt_toolkit session (a
-  pipe, ``XENON_NO_PT=1``, a test) ``ask_choice`` returns ``None`` and the
-  caller keeps printing the list it always printed.  Nothing is lost.
-* **Never prefill the buffer.**  ``prompt_toolkit``'s ``default=`` writes into
-  the edit buffer — the #395 bug, where every answer became invalid.  The
-  current value is shown as a ``*`` marker in the row instead.
+* **No TTY, no picker.**  In a pipe or a test ``ask_choice`` returns ``None``
+  and the caller keeps printing the list it always printed.  Nothing is lost.
+* **The list is part of the question.**  A menu that can be dismissed by a
+  stray ESC is worse than no menu, so the numbered rows are always rendered
+  next to the prompt.
 """
 
 from __future__ import annotations
@@ -34,14 +33,6 @@ class Choice:
     def row(self) -> str:
         marker = "* " if self.current else "  "
         return f"{marker}{self.label}"
-
-    def meta(self) -> str:
-        parts = []
-        if self.current:
-            parts.append("当前")
-        if self.detail:
-            parts.append(self.detail)
-        return " · ".join(parts)
 
 
 def resolve_answer(choices: Sequence[Choice], answer: str) -> str | None:
@@ -71,69 +62,6 @@ def resolve_answer(choices: Sequence[Choice], answer: str) -> str | None:
     return None
 
 
-def _key_bindings():
-    """Enter accepts the highlighted row instead of submitting the typed text."""
-
-    from prompt_toolkit.key_binding import KeyBindings
-
-    bindings = KeyBindings()
-
-    @bindings.add("enter", eager=True)
-    def _(event):
-        accept_choice(event.current_buffer)
-
-    return bindings
-
-
-def accept_choice(buffer: Any) -> None:
-    """Enter: take the highlighted row when the buffer is still empty."""
-
-    state = getattr(buffer, "complete_state", None)
-    if state is not None and getattr(state, "completions", None):
-        index = getattr(state, "complete_index", None)
-        chosen = (
-            state.completions[index]
-            if index is not None and 0 <= index < len(state.completions)
-            else state.completions[0]
-        )
-        if not buffer.document.text_before_cursor.strip():
-            buffer.text = chosen.text
-            buffer.cursor_position = len(chosen.text)
-    buffer.validate_and_handle()
-
-
-def _open_menu(session: Any):
-    """Open the completion menu before the user types anything."""
-
-    def run() -> None:
-        buffer = getattr(session, "default_buffer", None)
-        start = getattr(buffer, "start_completion", None)
-        if callable(start):
-            start()
-
-    return run
-
-
-def _completer(choices: Sequence[Choice]):
-    from prompt_toolkit.completion import Completer, Completion
-
-    class _ChoiceCompleter(Completer):
-        def get_completions(self, document, complete_event):
-            typed = document.text_before_cursor.strip().casefold()
-            for choice in choices:
-                haystack = f"{choice.label} {choice.detail}".casefold()
-                if typed and typed not in haystack:
-                    continue
-                yield Completion(
-                    choice.label,
-                    start_position=-len(document.text_before_cursor),
-                    display=choice.row(),
-                    display_meta=choice.meta(),
-                )
-
-    return _ChoiceCompleter()
-
-
 def ask_choice(
     repl: Any,
     *,
@@ -141,48 +69,42 @@ def ask_choice(
     choices: Sequence[Choice],
     attempts: int = 2,
 ) -> str | None:
-    """Show a selector and return the chosen value, or ``None`` to fall back."""
+    """Show the numbered list and return the chosen value, or ``None``.
+
+    ``repl`` is accepted for call-site compatibility; the picker no longer
+    needs the object (the old prompt_toolkit session lived on it).  A protocol
+    host replaces this function wholesale for the duration of a command.
+    """
 
     if not choices:
         return None
-    session = getattr(repl, "_pt_session", None)
-    if session is None:
-        return None
     try:
-        interactive = bool(sys.stdin) and sys.stdin.isatty()
+        # A pseudo-input used by test runners reports isatty() and then fails
+        # on read; requiring a real descriptor keeps the picker from blocking
+        # a command that only wanted to print its list.
+        interactive = (
+            bool(sys.stdin) and sys.stdin.isatty() and sys.stdin.fileno() >= 0
+        )
     except Exception:  # noqa: BLE001 — exotic streams are not interactive
         interactive = False
     if not interactive:
         return None
 
-    # The list is part of the question, not only the completion menu: a menu can
-    # be dismissed by a stray ESC (winpty splits escape sequences), and a picker
-    # whose options are invisible is worse than no picker.  The menu is still
-    # there for search; the numbered list is the guaranteed surface.
     lines = [f"{title}:"]
     for index, choice in enumerate(choices, start=1):
         current = " ←" if choice.current else ""
         detail = f"  {choice.detail}" if choice.detail else ""
         lines.append(f"  {index}) {choice.label}{detail}{current}")
-    default_row = next(
-        (item for item in choices if item.current), choices[0]
+    default_row = next((item for item in choices if item.current), choices[0])
+    question = chr(10).join(lines) + (
+        chr(10) + f"输入编号或名称（Enter = {default_row.label}）"
     )
-    lines.append(
-        f"输入编号或名称（Enter = {default_row.label}）: "
-    )
-    question = chr(10).join(lines)
+
+    from rich.prompt import Prompt
+
     for _ in range(max(1, attempts)):
         try:
-            answer = session.prompt(
-                question,
-                completer=_completer(choices),
-                key_bindings=_key_bindings(),
-                complete_while_typing=True,
-                # The list is in the question, but an open menu is still the
-                # shortest path for someone who wants to arrow down and type
-                # nothing.
-                pre_run=_open_menu(session),
-            )
+            answer = Prompt.ask(question, default="", show_default=False)
         except (KeyboardInterrupt, EOFError):
             return None
         if not (answer or "").strip():
@@ -270,7 +192,7 @@ def permission_choices(current: str = "") -> tuple[Choice, ...]:
         ("default", "default", "写盘/命令需要确认"),
         ("accept_edits", "accept_edits", "工作区内写盘直接执行"),
         ("plan", "plan", "只读：只产出方案"),
-        ("bypass", "bypass", "全部放行（危险）"),
+        ("bypass", "bypass", "全部放行（危险；破坏性命令与 push 仍需确认，无通道时拒绝）"),
     )
     key = (current or "").strip()
     return tuple(

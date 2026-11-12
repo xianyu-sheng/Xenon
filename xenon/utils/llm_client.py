@@ -28,14 +28,6 @@ from xenon.utils.prompt_compiler import (
     compile_prompt,
 )
 
-
-# Phase 3: 检查点管理器
-# 延迟导入，避免循环依赖
-def _get_checkpoint_manager():
-    """延迟导入检查点管理器"""
-    from xenon.engine.checkpoint_manager import CheckpointManager
-    return CheckpointManager
-
 logger = logging.getLogger(__name__)
 
 from xenon.utils.llm_errors import ResponseTruncatedError  # noqa: F401,E402
@@ -590,19 +582,38 @@ def _call_openai_compat_once(
 # ═══════════════════════════════════════════════════════
 
 
-def _anthropic_system_blocks(system_text: str) -> list[dict[str, Any]]:
-    """Mark the system prompt as a cache breakpoint.
+def _is_official_anthropic(base_url: str) -> bool:
+    """Whether this endpoint is Anthropic itself, not a third-party router.
 
-    Anthropic caches nothing unless a block carries ``cache_control``, so a
-    perfectly stable system prompt still costs full price on every call.  A
-    kernel run measured 0% cache hits over 70 calls for this reason alone:
-    the prompt was ordered correctly and never marked.
+    ``cache_control`` is Anthropic's own extension.  Sending it to a router is
+    sending a dialect the router never agreed to speak: the router caches on
+    its own boundaries, ignores the marker, and -- worse -- the marker is a
+    field *inside* the prefix, so it is one more thing that can differ between
+    two calls whose text is otherwise identical.  A live probe measured the
+    same ``cache_read_input_tokens`` with and without the marker on a router,
+    so the only thing it bought was a less native request.
 
-    A 1h TTL rather than the 5m default, because a coding task routinely
-    spends longer than five minutes inside tool work between model turns, and
-    an expired entry is a full miss.
+    It is kept for the official endpoint, where the documented rule really
+    applies: Anthropic caches nothing unless a block carries it.
     """
 
+    return "api.anthropic.com" in (base_url or "").lower()
+
+
+def _anthropic_system_blocks(
+    system_text: str, *, cache: bool = True
+) -> list[dict[str, Any]] | str:
+    """The system prompt as the provider expects it.
+
+    With ``cache`` the block carries Anthropic's ``cache_control`` breakpoint
+    and a 1h TTL (a coding task routinely spends longer than the 5m default
+    inside tool work, and an expired entry is a full miss).  Without it the
+    plain string is returned, so a router receives a native request with no
+    Xenon dialect in it -- see ``_is_official_anthropic``.
+    """
+
+    if not cache:
+        return system_text
     return [
         {
             "type": "text",
@@ -668,7 +679,9 @@ def _call_anthropic_once(
         "temperature": temperature,
     }
     if system_text:
-        payload["system"] = _anthropic_system_blocks(system_text)
+        payload["system"] = _anthropic_system_blocks(
+            system_text, cache=_is_official_anthropic(endpoint.base_url)
+        )
 
     # R3: 复用 per-provider 长生命 Client
     client = _get_pooled_client(endpoint, timeout)
@@ -1113,15 +1126,21 @@ def _call_anthropic_with_tools(
         "temperature": temperature,
     }
     if system_text:
-        payload["system"] = _anthropic_system_blocks(system_text)
+        payload["system"] = _anthropic_system_blocks(
+            system_text, cache=_is_official_anthropic(endpoint.base_url)
+        )
     anthropic_tools = _openai_to_anthropic_tools(tools)
     if anthropic_tools:
-        # Anthropic caches in the order tools -> system -> messages, so one
-        # breakpoint on the last tool covers the whole tool block *and* the
-        # system prompt behind it.  Marking only `system` left the ~1.5k-token
-        # tool schemas billed at full price on every call.
-        anthropic_tools = [dict(item) for item in anthropic_tools]
-        anthropic_tools[-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+        if _is_official_anthropic(endpoint.base_url):
+            # Anthropic caches in the order tools -> system -> messages, so one
+            # breakpoint on the last tool covers the whole tool block *and* the
+            # system prompt behind it.  Marking only `system` left the ~1.5k
+            # token tool schemas billed at full price on every call.
+            anthropic_tools = [dict(item) for item in anthropic_tools]
+            anthropic_tools[-1]["cache_control"] = {
+                "type": "ephemeral",
+                "ttl": "1h",
+            }
         payload["tools"] = anthropic_tools
     if tool_choice is not None:
         # OpenAI: "auto"|"none"|"required"|{type:function,name}
@@ -1233,14 +1252,12 @@ def chat_completion_stream(
     cache_context: dict[str, Any] | None = None,
     cache_lane_registry: Any = None,
     timeout: float = 300.0,
-    checkpoint_manager: Any | None = None,
     request_sink: Any = None,
 ) -> Generator[str, None, None]:
     """
     流式 chat completion 调用。
 
     Args:
-        checkpoint_manager: 可选的 CheckpointManager 实例，用于周期性保存检查点
 
     Yields:
         逐步生成的文本片段（delta）。
@@ -1282,7 +1299,6 @@ def chat_completion_stream(
             model_id=model_id,
             reasoning_effort=reasoning_effort,
             manifest=manifest,
-            checkpoint_manager=checkpoint_manager,
         )
     except Exception as exc:
         provider_events.request_end(
@@ -1308,7 +1324,6 @@ def _stream_body(
     model_id: str,
     reasoning_effort: str | None,
     manifest: Any,
-    checkpoint_manager: Any | None,
 ) -> Generator[str, None, None]:
     """The provider-specific half of the streaming call."""
 
@@ -1321,7 +1336,6 @@ def _stream_body(
             timeout,
             model_id,
             manifest,
-            checkpoint_manager=checkpoint_manager,
         )
     else:
         yield from _stream_openai_compat(
@@ -1333,7 +1347,6 @@ def _stream_body(
             model_id,
             reasoning_effort=reasoning_effort,
             manifest=manifest,
-            checkpoint_manager=checkpoint_manager,
         )
 
 
@@ -1347,7 +1360,6 @@ def _stream_openai_compat(
     *,
     reasoning_effort: str | None = None,
     manifest: dict[str, Any] | None = None,
-    checkpoint_manager: Any | None = None,
 ) -> Generator[str, None, None]:
     """OpenAI 兼容格式流式调用。
 
@@ -1358,8 +1370,6 @@ def _stream_openai_compat(
     Phase 3: 支持检查点管理 - 周期性保存生成进度，网络中断时可从检查点恢复。
     """
     import time
-
-    from xenon.utils.token_estimator import estimate_tokens
 
     url = f"{endpoint.base_url}/chat/completions"
     headers = {
@@ -1383,8 +1393,6 @@ def _stream_openai_compat(
     finish_reason = ""
 
     # Phase 3: 检查点管理初始化
-    accumulated_content = ""
-    accumulated_tokens = 0
 
     with _create_http_client(timeout=timeout) as client:
         with client.stream("POST", url, json=payload, headers=headers) as resp:
@@ -1410,20 +1418,6 @@ def _stream_openai_compat(
                 content = delta.get("content")
                 if content:
                     # Phase 3: 累积内容和 token 数
-                    accumulated_content += content
-                    accumulated_tokens += estimate_tokens(content)
-
-                    # Phase 3: 检查是否需要保存检查点
-                    if checkpoint_manager and checkpoint_manager.should_save(accumulated_tokens):
-                        checkpoint = checkpoint_manager.save_checkpoint(
-                            accumulated_content,
-                            accumulated_tokens,
-                            metadata={"model_id": model_id, "provider": endpoint.provider}
-                        )
-                        logger.debug(
-                            f"流式生成检查点 #{checkpoint.sequence} "
-                            f"(tokens={accumulated_tokens}, age={checkpoint.age():.1f}s)"
-                        )
 
                     yield content
     if usage_data is not None:
@@ -1446,7 +1440,6 @@ def _stream_anthropic(
     timeout: float,
     model_id: str,
     manifest: dict[str, Any] | None = None,
-    checkpoint_manager: Any | None = None,
 ) -> Generator[str, None, None]:
     """Anthropic 原生格式流式调用。
 
@@ -1456,8 +1449,6 @@ def _stream_anthropic(
     Phase 3: 支持检查点管理 - 周期性保存生成进度，网络中断时可从检查点恢复。
     """
     import time
-
-    from xenon.utils.token_estimator import estimate_tokens
 
     url = f"{endpoint.base_url}/v1/messages"
     headers = {
@@ -1475,7 +1466,9 @@ def _stream_anthropic(
         "stream": True,
     }
     if system_text:
-        payload["system"] = _anthropic_system_blocks(system_text)
+        payload["system"] = _anthropic_system_blocks(
+            system_text, cache=_is_official_anthropic(endpoint.base_url)
+        )
 
     t0 = time.time()
     input_tokens = 0
@@ -1483,8 +1476,6 @@ def _stream_anthropic(
     stop_reason = ""
 
     # Phase 3: 检查点管理初始化
-    accumulated_content = ""
-    accumulated_tokens = 0
 
     with _create_http_client(timeout=timeout) as client:
         with client.stream("POST", url, json=payload, headers=headers) as resp:
@@ -1514,20 +1505,6 @@ def _stream_anthropic(
                     text = delta.get("text")
                     if text:
                         # Phase 3: 累积内容和 token 数
-                        accumulated_content += text
-                        accumulated_tokens += estimate_tokens(text)
-
-                        # Phase 3: 检查是否需要保存检查点
-                        if checkpoint_manager and checkpoint_manager.should_save(accumulated_tokens):
-                            checkpoint = checkpoint_manager.save_checkpoint(
-                                accumulated_content,
-                                accumulated_tokens,
-                                metadata={"model_id": model_id, "provider": "anthropic"}
-                            )
-                            logger.debug(
-                                f"流式生成检查点 #{checkpoint.sequence} "
-                                f"(tokens={accumulated_tokens}, age={checkpoint.age():.1f}s)"
-                            )
 
                         yield text
     if input_tokens or output_tokens:

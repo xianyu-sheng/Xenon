@@ -9,7 +9,6 @@ from __future__ import annotations
 from rich.theme import Theme
 
 from xenon.repl.theme import (
-    DEFAULT_PT_STYLE,
     DEFAULT_TOKEN_STYLES,
     TOKENS,
     default_rich_theme,
@@ -67,23 +66,6 @@ FROZEN_TOKENS: tuple[str, ...] = (
     "logo.ghost",
 )
 
-FROZEN_DEFAULT_PT_STYLE: dict[str, str] = {
-    "prompt": "bold #67e8f9",
-    "input.rule": "#334155",
-    "bottom-toolbar": "noreverse",
-    "bottom-toolbar.text": "#94a3b8",
-    "toolbar.separator": "#475569",
-    "toolbar.model": "#cbd5e1",
-    "toolbar.mode": "#c4b5fd",
-    "toolbar.good": "bold #86efac",
-    "toolbar.warning": "bold #fcd34d",
-    "toolbar.danger": "bold #fda4af",
-    "toolbar.notice": "bold #fde68a",
-    "toolbar.muted": "#94a3b8",
-    "toolbar.hint": "#64748b italic",
-}
-
-
 def test_tokens_catalog_completeness() -> None:
     assert TOKENS == FROZEN_TOKENS
     assert len(TOKENS) == 23
@@ -95,10 +77,6 @@ def test_default_token_styles_golden() -> None:
     assert DEFAULT_TOKEN_STYLES == FROZEN_DEFAULT_TOKEN_STYLES
 
 
-def test_default_pt_style_verbatim() -> None:
-    assert DEFAULT_PT_STYLE == FROZEN_DEFAULT_PT_STYLE
-
-
 def test_default_rich_theme_builds() -> None:
     theme = default_rich_theme()
     assert isinstance(theme, Theme)
@@ -106,16 +84,9 @@ def test_default_rich_theme_builds() -> None:
         assert token in theme.styles
 
 
-def test_default_palette_matches_live_repl(monkeypatch) -> None:
-    """Drift guard: until the #112 migration lands, repl.py and theme.py agree.
+def test_default_palette_matches_live_repl() -> None:
+    """Drift guard: repl.py and theme.py agree on the five core tokens."""
+    from xenon.repl.repl import _theme
 
-    ``repl.py`` still carries its own copy of the prompt palette and the five
-    original Rich theme entries. If either copy changes without the other, the
-    future color migration would silently re-theme the default look.
-    """
-    from xenon.repl.repl import _build_pt_style, _theme
-
-    monkeypatch.delenv("NO_COLOR", raising=False)
-    assert _build_pt_style() == DEFAULT_PT_STYLE
     for token in ("user", "assistant", "system", "error", "command"):
         assert str(_theme.styles[token]) == DEFAULT_TOKEN_STYLES[token]

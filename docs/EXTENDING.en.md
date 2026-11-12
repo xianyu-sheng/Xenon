@@ -68,31 +68,31 @@ register_tool_handler(
 Once registered, the tool automatically appears in the tool list visible to the model.  
 Source: `xenon/nodes/tool_registry.py`
 
-## 4. Registering Reasoning Engines (Python API)
+## 4. Adding a Mode / Loop Profile (Python API)
+
+Engine classes are gone: there is one `LoopRuntime`, and a mode is just a **phase-parameter
+table** for it. Add a `ModeSpec` in `xenon/modes.py` and `/mode`, the setup wizard,
+`--mode` and the router all pick it up:
 
 ```python
-from xenon.engine.base import BaseEngine
-from xenon.engine.registry import register_engine
+from xenon.kernel.strategies import LoopProfile
+from xenon.modes import MODE_CATALOG, ModeSpec
 
-
-class MyCustomEngine(BaseEngine):
-    def run(self, user_input, context=None) -> str:
-        self._begin_run()
-        messages = self._history_messages(user_input, limit=20)
-        return self._call_llm(messages, phase="my_custom")
-
-
-register_engine(
-    "my-custom",
-    factory=lambda **kw: MyCustomEngine(**kw),
-    description="My custom reasoning strategy",
-    mode_line="· MyCustom executing",
-    result_title="MyCustom Result",
+MODE_CATALOG["review-only"] = ModeSpec(
+    name="review-only",
+    description="Read-only review: plan first, then execute step by step",
+    loop=LoopProfile(plan=True, step_scope=True, step_calls=4),
 )
 ```
 
-Register once, and the `/mode` list, REPL router, and setup wizard will all automatically recognize it.  
-Source: `xenon/modes.py` (`MODE_CATALOG` + `LoopProfile`)
+- `loop` declares which phases run (plan / step / reflect) and the per-step budget;
+- a mode with `loop=None` is refused by the kernel (fail closed);
+- when a name is only an alias, set `alias_of` instead of copying the parameters
+  (`react` points at `direct` for exactly this reason);
+- "add another executor" is *not* an extension point — that would fork the single loop
+  back into multiple engines.
+
+Source: `xenon/modes.py` (`MODE_CATALOG`), `xenon/kernel/strategies/__init__.py` (`LoopProfile`)
 
 ## 5. Registering Terminal Commands (Python API)
 

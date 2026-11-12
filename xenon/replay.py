@@ -40,7 +40,9 @@ _TIMELINE_KINDS = frozenset(
         "step_started",
         "step_closed",
         "step_verified",
+        "tool_started",
         "tool_receipt",
+        "tool_interrupted",
         "claim_proposed",
         "claim_resolved",
         "debt_opened",
@@ -170,6 +172,20 @@ def children_of(
                 "error": "",
             }
         )
+    # Attach the seal verdict when the parent ledger sits beside the children.
+    # "delivered" and "sealed" are different questions: a child can finish while
+    # the parent never verified its chain.
+    parent_path = directory / f"{parent_task_id}.jsonl"
+    if parent_path.is_file():
+        try:
+            from xenon.ledger.tree import verify_tree
+
+            _integrity, reports = verify_tree(parent_path)
+            states = {report.task_id: report.state for report in reports}
+            for row in found:
+                row["branch_state"] = states.get(str(row["child_id"]), "unsealed")
+        except Exception:  # noqa: BLE001 — enrichment is advisory
+            pass
     return found
 
 
@@ -208,6 +224,8 @@ def render_children(rows: Sequence[dict[str, Any]], *, parent: str = "") -> str:
             ]
             if row.get("tokens"):
                 bits.append(f"tokens={row['tokens']}")
+            if row.get("branch_state"):
+                bits.append(f"branch={row['branch_state']}")
             lines.append(f"- {row['child_id']}  {' '.join(bits)}")
             if row.get("objective"):
                 lines.append(f"    {row['objective']}")
@@ -228,6 +246,16 @@ def _line(event: Any) -> str:
         tool = receipt.get("tool") or "?"
         status = receipt.get("status") or "?"
         return f"{tool} -> {status}"
+    if kind == "tool_started":
+        return (
+            f"{payload.get('tool') or '?'} started "
+            f"({payload.get('call_id') or '?'})"
+        )
+    if kind == "tool_interrupted":
+        return (
+            f"{payload.get('tool') or '?'} interrupted; "
+            f"outcome={payload.get('outcome') or 'unknown'}"
+        )
     if kind in {"plan_proposed", "plan_accepted"}:
         plan = payload.get("plan") or {}
         steps = plan.get("steps") or []

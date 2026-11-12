@@ -1,7 +1,10 @@
 # 自进化（Self-Evolution）设计 —— 证据门控的在线改进
 
-> 状态：**设计稿**。按约定先设计、后代码。任何部分未实现前，这条文档就是
-> 唯一权威——它约束实现，不许实现反过来改写它。
+> 状态：**已落地**（2026-11-09 更新）。本文初版是设计稿；下文带「【实现】」
+> 标记的段落是实现后对设计的修订。最重要的一条修订：**教训不单独建文件，
+> 教训就是记忆**（见 §4），因此本文中所有 `lessons.yaml` / `PITFALLS.md` /
+> `/lessons` 的描述均已废弃——它们曾经被实现，后按"只保留单一存储"的
+> 决策删除。权威代码：`xenon/harness/lessons.py`、`xenon/harness/runner.py`。
 
 ## 0. 为什么叫"自进化"而不叫"自学习"
 
@@ -40,14 +43,20 @@ Xenon 没有权重，没有梯度，没有 RL。所谓"进化"是**证据门控�
 
 ### 护栏 3：教训是可见产物
 
+【实现】初版设计了三个产物（`lessons.yaml`、`PITFALLS.md`、`/lessons` 命令），
+后来确定**教训即记忆**，三者全部废弃。实际产物：
+
 | 产物 | 内容 | 谁读 |
 |---|---|---|
-| `~/.xenon/lessons.yaml` | 全部教训（活动 + 退休 + 计数） | 用户 / `/lessons` 命令 |
-| `<repo>/.xenon/PITFALLS.md` | 该仓库命中的 pitfall 教训（人类可读） | 用户 / 模型（参考，非指令） |
-| `LESSON_APPLIED` 事件 | 教训在某次任务中被应用（进该任务账本） | 回放 / 证据链 |
+| 一条 `MemoryKind.LESSON` 记忆记录（project-local） | 教训全文 + `fp:<指纹>` / `lesson:<kind>` / `recurrences:<n>` 标签 | 用户经 `/memory` 查看、编辑、归档 |
+| `LESSON_APPLIED` 等事件 | 教训在某次任务中被应用（进该任务账本） | 回放 / 证据链 |
 
-一条教训从提取到生效的完整链路都可见：`LESSON_PROPOSED` → （人类或 harness
-确认）→ `LESSON_STORED` → `LESSON_APPLIED` → `LESSON_RETIRED`。
+教训的可见性没有降级：`/memory` 能列出、编辑、归档任何一条教训，就像处理
+其他记忆一样；指纹和复发计数以标签形式显示，人读得到。
+
+一条教训从提取到生效的完整链路都可见：`LESSON_PROPOSED` → `LESSON_STORED`
+→ `LESSON_APPLIED` → `LESSON_RETIRED`。**不需要人类或 harness 单独"确认"**：
+内核判定的失败就是充分来源（护栏 1），存储在任务收尾时自动发生。
 
 ## 2. 三种教训
 
@@ -72,28 +81,49 @@ lessons:
 
 - **pitfall**：注入为 `constraint`（进 TaskSpec.constraints，确定性生效）；
 - **parameter**：调整 `LoopProfile`/预算（如 `step_calls`、`max_stall_seconds`），
-  只对同 profile 的下次任务生效；
-- **preference**：写入 `~/.xenon/preferences.yaml`（现有 MemoryKind.PREFERENCE），
-  仅当用户连续拒绝同一类调用两次以上。
+  只对同 profile 的下次任务生效；【实现】当前不会被 `match_for_task()` 自动
+  携带（它是构建期决策，不进任务约束），仅存储并可经 `/memory` 查看；
+- **preference**：【实现】与其他教训一样存为 LESSON 记录，用 `lesson:preference`
+  标签区分；不另写 `preferences.yaml`。
 
 ## 3. 生效时机（不干预进行中的任务）
 
-教训只影响**下一次**同指纹任务的构建，从不改写当前任务的 spec——正在跑的任务
-已经锁定了约束/预算，事后注入等于篡改证据。应用点：
+【实现】初版设想"构建 spec 时按指纹查库，命中才注入"。实现采用了更简单、
+不依赖失败先验的形式：**每个任务携带一小批最近的活跃教训**。教训只影响
+携带它的任务，事后不回改——任务已经锁定了约束，事后注入等于篡改证据。
+`run_task` 中的实际顺序：
 
-1. `run_task` 构建 `TaskSpec.constraints` 时，查教训库匹配指纹；
-2. 命中 → 追加 constraint + `LESSON_APPLIED` 事件（该任务的账本）；
-3. 任务结束时，harness 判定（护栏 1 的事件源）复发 → `recurrences += 1`；
-   ≥ 阈值 → `LESSON_RETIRED`。
+1. 内核运行**前**：`lesson_store.match_for_task()` 取最多 3 条最近应用的
+   活跃教训（`parameter` 除外），以 `[lesson <id>] <action>` 追加进
+   `TaskSpec.constraints`，并为每条写 `LESSON_APPLIED`、递增应用计数；
+2. 内核运行：模型在固定前缀的约束区**必须**看到这些教训；
+3. 内核只写 `LESSON_PROPOSED`（它是输入的纯函数，没有文件系统）；
+4. 任务收尾、账本校验通过后：`store_proposals` 把提案落为记忆（写
+   `LESSON_STORED`），`record_recurrences` 统计本次失败与已应用教训的
+   指纹复发，达阈值 → 退休（写 `LESSON_RETIRED`）。
+
+指纹的用途因此明确：**确定性身份**（同一失败幂等存储、复发匹配），而不是
+任务开始时的检索条件；"这个任务该带哪些教训"由最近应用时间排序决定。
 
 ## 4. 复用现有机制，不重造
 
-- 存储：`~/.xenon/lessons.yaml` 新文件（记忆系统的 `lessons.md` 是自由文本，
-  教训需要结构化字段：指纹/counter/退休标记——不塞进自由文本）；
+【实现】本节初版列了独立 `lessons.yaml` 与 `PITFALLS.md`，后被**"教训即
+记忆"**决策取代——维持边界、单一模块拥有持久化（用户明确要求"尽量只单独
+成为一个模块"，而记忆已经满足持久化需求）。实际复用：
+
+- 存储：**零新文件**。教训是 project-local 的 `MemoryKind.LESSON` 记录，
+  走记忆后端自己的写路径（`mutate_records`），原子写与 Markdown 投影与
+  其他记忆完全相同；指纹、教训类别、复发计数以标签（`fp:` / `lesson:` /
+  `recurrences:`）承载，不引入并行状态；
 - 事件：`LESSON_PROPOSED` / `LESSON_STORED` / `LESSON_APPLIED` /
-  `LESSON_RETIRED` 新增 4 个 EventKind；
-- 指纹：复用 `_payload_digest`（compaction 同款确定性哈希）；
-- PITFALLS.md：从 lessons.yaml 投影（确定性生成，可 `git diff`）。
+  `LESSON_RETIRED` 四个 EventKind（已存在）；
+- 指纹：`xenon/kernel/lessons.py` 的确定性 `lesson_fingerprint`（事件 kind +
+  规范化 payload 子集的哈希），与 compaction 同思路；
+- 边界：`LessonStore` 不做任何文件系统工作；内核只提案、harness 才存储，
+  与 kernel → harness 的既有分层一致；
+- 产品内的激活点只有一处：`RuntimeAdapter.from_repl` 经 `_lesson_store_for`
+  取 REPL 的共享记忆服务并包成 store；交互 REPL 与 TS 前端的协议 host 都走
+  这条路。无记忆后端的最小宿主拿到 `None` = 不学习、不产生噪声。
 
 ## 5. 反设计（明确不做）
 
@@ -105,26 +135,32 @@ lessons:
 
 ## 6. 验收
 
-- [ ] 一个 `blocked`（VETO）任务 → `LESSON_PROPOSED` + 指纹匹配的下次任务
-      获得对应 constraint + `LESSON_APPLIED`；
-- [ ] 同一指纹复发 3 次 → `LESSON_RETIRED`，`retired: true`，不再应用；
-- [ ] `/lessons` 列出活动/退休/计数；PITFALLS.md 确定性生成；
-- [ ] 全链路事件在任务账本里可回放；
-- [ ] 真实模型：同一个会触发 VETO 的错误任务跑两次，第二次带教训约束
-      → 不再踩坑（或诚实记录失败）。
+- [x] 失败事件 → 内核写 `LESSON_PROPOSED`（历史证据：曾有 621 个账本含
+      提案、0 个含存储）；
+- [x] 任务收尾 → `store_proposals` 落为 LESSON 记忆并写 `LESSON_STORED`；
+- [x] 后续任务携带活跃教训为 constraint，写 `LESSON_APPLIED`、递增应用计数；
+- [x] 同一指纹复发达阈值 → `LESSON_RETIRED`（记忆记录归档），不再应用；
+- [x] 全链路事件在任务账本里可回放；指纹确定性有单测覆盖；
+- [x] `/memory` 下人工核对教训记录的展示效果；
+- [x] **真实端到端**（2026-11-09，`docs/evidence/self-evolution/`）：
+      通过 TS 前端 + 真实 ConPTY 跑两轮——第 1 轮在审批面板选择拒绝，
+      账本含 `lesson_proposed`/`lesson_stored`；第 2 轮账本含
+      `lesson_applied`，三轮 id 集合完全一致；`MemoryKind.LESSON` 记录
+      物理存在于项目记忆目录。
 
-## 7. 分片
+## 7. 分片（最终落地形态）
 
-1. **存储 + 事件**：`lessons.yaml` schema、4 个 EventKind、`LessonStore`
-   （load/save/apply/retire/retire threshold）。
-2. **提取器**：从 harness 判定（blocked/debt/loop/denied）生成 `LessonProposal`，
-   `LESSON_PROPOSED` 事件；指纹 = 事件 kind + 关键 payload 哈希。
-3. **应用器**：`run_task` 构建 constraints 时查库、注入 + `LESSON_APPLIED`；
-   任务结束复发计数。
-4. **产物**：`/lessons` 命令 + PITFALLS.md 投影 + `LESSON_RETIRED` 阈值。
-5. **真实验证**：探针（同一失败任务两次，第二次带教训）。
-6. **产物**（切片 4，已落地）：`/lessons` 列出活动/退休/计数；
-   `/lessons write` 显式生成 `<repo>/.xenon/PITFALLS.md`（pitfall 教训的
-   确定性投影，**绝不自动写**）。
-
-每条分片独立可合并、独立测试、独立证据。
+1. **事件 + Store**：4 个 EventKind；`LessonStore`（match / match_for_task /
+   store / record_application / record_recurrence / retire），记忆后端持久化。
+2. **提取器**：内核在 harness 判定的失败点生成提案、写 `LESSON_PROPOSED`；
+   指纹 = 事件 kind + 规范化 payload 子集哈希。
+3. **应用器**：`run_task` 开跑前按 `match_for_task()` 把活跃教训追加为
+   constraints + `LESSON_APPLIED`；收尾存储提案、复发计数、退休。
+4. **激活注入**：`RuntimeAdapter.from_repl` 单点构造共享 store，交互 REPL
+   与协议 host（TS 前端）同时生效；项目刷新时随记忆服务一起重置。
+5. ~~`/lessons` + PITFALLS.md~~ —— **已删除**：`/memory` 承担全部查看/编辑。
+6. **真实验证**：**已完成**（2026-11-12）。真实 ConPTY + TS 前端 + `deepseek/deepseek-v4-flash`：
+   第 1 轮拒绝 shell 审批 → 账本出现 `lesson_proposed` / `lesson_stored`；第 2 轮只读任务 →
+   `lesson_applied`，且同指纹；项目本地记忆里存在 `lsn-…` 记录。证据：
+   `docs/evidence/self-evolution/`（脚本 `tty_lesson_double_run.py`，账本
+   `repl-24745364d6bd` / `repl-2a05429773f2`）。

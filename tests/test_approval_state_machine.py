@@ -180,7 +180,6 @@ def test_non_tty_approval_fails_closed(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(ux, "console", _NullConsole())
     repl = _prompt_repl("y", workspace=tmp_path)
     repl._confirm_tool = types.MethodType(ApprovalUxMixin._confirm_tool, repl)
-    repl._boundary_approved_once = set()
     repl._last_approval_scope = ""
 
     allowed, reason = repl._confirm_tool(

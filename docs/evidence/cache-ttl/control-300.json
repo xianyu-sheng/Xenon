@@ -1,0 +1,30 @@
+{
+  "endpoint": "https://api.deepseek.com/chat/completions",
+  "model": "deepseek-chat",
+  "control": true,
+  "gap_seconds": 300,
+  "long_gap_seconds": 0,
+  "calls": [
+    {
+      "at": "2026-11-11T19:03:49",
+      "latency_ms": 777,
+      "prompt_tokens": 752,
+      "cache_hit_tokens": 512,
+      "cache_miss_tokens": 240,
+      "completion_tokens": 1
+    },
+    {
+      "at": "2026-11-11T19:08:49",
+      "latency_ms": 552,
+      "prompt_tokens": 752,
+      "cache_hit_tokens": 512,
+      "cache_miss_tokens": 240,
+      "completion_tokens": 1
+    }
+  ],
+  "interpretation": {
+    "warm_hit": null,
+    "after_gap_hit": true,
+    "long_gap_hit": null
+  }
+}

@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from xenon.engine.evidence_contracts import (
+from xenon.nodes.evidence_contracts import (
     WRITE_TOOL_NAMES,
     command_is_test_like,
     is_non_test_invocation,

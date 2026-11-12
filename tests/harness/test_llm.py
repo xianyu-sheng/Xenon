@@ -44,6 +44,7 @@ from xenon.kernel.contracts import (
     TaskSpec,
     Think,
 )
+from xenon.kernel.policies import PermissionMode
 from xenon.kernel.strategies import LoopProfile
 from xenon.ledger.events import EventKind, canonical_json
 from xenon.ledger.store import Ledger
@@ -162,7 +163,14 @@ def test_parse_action_fails_closed(payload: str, message: str) -> None:
         parse_action(payload)
 
 
-def test_build_messages_includes_state_and_protocol() -> None:
+def test_build_messages_ships_a_fixed_prefix_and_one_turn() -> None:
+    """Exactly two messages: the cacheable prefix and this turn's ask.
+
+    The objective lives in the prefix, not in a per-request head block --
+    anything repeated per call is bytes that have to match to be cached and
+    tokens that are paid for on every request.
+    """
+
     spec = TaskSpec(task_id="t", objective="fix it", workspace="/workspace")
     view = ModelView(
         task=spec,
@@ -175,10 +183,66 @@ def test_build_messages_includes_state_and_protocol() -> None:
         hash="h",
     )
     messages = build_messages(view)
+    assert len(messages) == 2
     assert messages[0]["role"] == "system"
     assert "RUNTIME SYSTEM" in messages[0]["content"]
     assert "Do not run git commit" in messages[0]["content"]
-    assert "fix it" in messages[1]["content"]
+    assert messages[1]["role"] == "user"
+    assert "Return exactly one JSON action." in messages[1]["content"]
+
+
+def test_turn_context_carries_the_event_and_nothing_else() -> None:
+    """The working set is not replayed; only the newest event is sent."""
+
+    spec = TaskSpec(task_id="t", objective="fix it", workspace="/workspace")
+    view = ModelView(
+        task=spec,
+        system="RUNTIME SYSTEM",
+        tools=(),
+        working_set=(
+            {"seq": 1, "kind": "thought", "text": "look"},
+            {"seq": 2, "kind": "tool_receipt", "tool": "read", "status": "ok"},
+        ),
+        debt=(),
+        budget=spec.budget,
+        input_seq=2,
+        hash="h",
+    )
+    messages = build_messages(view, native=True)
+    turn = messages[1]["content"]
+
+    assert '"seq":2' in turn
+    assert '"seq":1' not in turn
+    assert "Call one tool for the next move." in turn
+
+
+def test_a_rejected_plan_or_binding_is_the_turn() -> None:
+    """Why the last move did not run must reach the model.
+
+    The request carries no history; when a plan is rejected or a binding
+    fails, the only signal the model gets is ``latest_respondable``.  A
+    measured run re-submitted the same bad plan eleven times because the
+    rejection was invisible.
+    """
+
+    spec = TaskSpec(task_id="t", objective="fix it", workspace="/workspace")
+    for kind in ("binding_failed", "plan_updated"):
+        view = ModelView(
+            task=spec,
+            system="RUNTIME SYSTEM",
+            tools=(),
+            working_set=(
+                {"seq": 1, "kind": "task_started", "objective": "fix it"},
+                {"seq": 2, "kind": kind, "reason": "no candidate"},
+            ),
+            debt=(),
+            budget=spec.budget,
+            input_seq=2,
+            hash="h",
+        )
+        turn = build_messages(view, native=True)[1]["content"]
+        assert f'"kind":"{kind}"' in turn, kind
+        assert "no candidate" in turn
 
 
 def test_llm_strategy_runs_real_workspace_and_finalizer(tmp_path: Path) -> None:
@@ -191,6 +255,9 @@ def test_llm_strategy_runs_real_workspace_and_finalizer(tmp_path: Path) -> None:
         workspace=tmp_path,
         ledger_dir=tmp_path.parent / f"{tmp_path.name}-ledger",
         task_id="llm-1",
+        # §8.1: a verify command asks before running; these tests assert the
+        # loop/finalizer behavior, so they grant execution explicitly.
+        permission=PermissionMode.BYPASS,
         constraints=("model:test/fake",),
     )
 
@@ -217,6 +284,7 @@ def test_invalid_model_turn_becomes_thought_and_retries(tmp_path: Path) -> None:
         workspace=tmp_path,
         ledger_dir=tmp_path.parent / f"{tmp_path.name}-ledger",
         task_id="llm-retry",
+        permission=PermissionMode.BYPASS,
     )
 
     assert run.result.accepted is True
@@ -296,6 +364,9 @@ def test_cli_natural_language_path(tmp_path: Path, monkeypatch) -> None:
             "--model",
             "test/fake",
             "--no-jsonl",
+            # §8.1: the plan contains a verify command; grant execution.
+            "--permission",
+            "bypass",
             "--output",
             str(output),
         ]
@@ -515,6 +586,7 @@ def test_llm_plan_strategy_executes_a_capability_plan(tmp_path: Path) -> None:
         workspace=tmp_path,
         ledger_dir=tmp_path.parent / f"{tmp_path.name}-ledger",
         task_id="plan-llm-1",
+        permission=PermissionMode.BYPASS,
         finalize=True,
     )
 
@@ -570,6 +642,7 @@ def test_resume_task_executes_an_approved_plan_in_the_same_ledger(
         objective=plan.objective,
         workspace=tmp_path,
         ledger_dir=ledger_dir,
+        permission=PermissionMode.BYPASS,
         finalize=False,
     )
 
@@ -627,7 +700,10 @@ def test_build_plan_messages_includes_schema() -> None:
     messages = build_plan_messages(view)
     assert "RUNTIME SYSTEM" in messages[0]["content"]
     assert "capability-based plan" in messages[0]["content"]
-    assert "fix it" in messages[1]["content"]
+    # No state blob: the objective, workspace and tool list are already in the
+    # system prompt and in the tool schemas.  Repeating them per role made each
+    # role's cached prefix a different length.
+    assert messages[1]["content"] == "Return exactly one JSON plan."
 
 
 def test_plan_finisher_rejects_non_finish_actions() -> None:
@@ -668,8 +744,8 @@ def test_build_plan_messages_uses_real_newlines() -> None:
     system = build_plan_messages(view)[0]["content"]
     user = build_plan_messages(view)[1]["content"]
 
-    assert "RUNTIME SYSTEM\nPlanFirst planning protocol" in system
-    assert "\n" in user
+    assert user == "Return exactly one JSON plan."
+    assert "RUNTIME SYSTEM\n\nPlanFirst planning protocol" in system
     assert "\\n" not in system
     assert "\\n" not in user
 
@@ -805,7 +881,12 @@ def test_reflect_messages_describe_the_receipts() -> None:
     assert "RUNTIME SYSTEM" in messages[0]["content"]
     assert "Reflection review" in messages[0]["content"]
     assert "cannot declare the task done" in messages[0]["content"]
-    assert "fix it" in messages[1]["content"]
+    # The claim under review AND the receipts it is checked against travel:
+    # the reflector parses one reply and cannot call get_state, so a claim
+    # reviewed without evidence would be a blind review.  The working set is
+    # fold-bounded, so the request does not grow with history.
+    assert "did the work" in messages[1]["content"]
+    assert '"receipts"' in messages[1]["content"]
 
 
 def test_reflection_strategy_wraps_the_act_strategy() -> None:
@@ -1133,7 +1214,7 @@ def test_native_tools_carry_real_json_schema() -> None:
     from xenon.harness.llm import _native_tools
 
     tools = {item["name"]: item for item in _native_tools(_native_view())}
-    read = tools["read"]["input_schema"]
+    read = tools["read"]["parameters"]
 
     assert read["type"] == "object"
     assert read["properties"]["file_path"]["type"] == "string"
@@ -1197,3 +1278,280 @@ def test_an_unknown_tool_name_fails_closed() -> None:
 
     with pytest.raises(ActionParseError, match="unknown tool"):
         action_from_tool_call(_native_view(), "make_it_so", {})
+
+
+def _native_proposer(monkeypatch, tool_calls):
+    """An actor whose provider reply carries the given tool calls."""
+
+    from xenon.utils.llm_usage import LLMResponse
+
+    def fake_call(*_args, **_kwargs):
+        return LLMResponse(
+            content="", tool_calls=list(tool_calls), finish_reason="tool_calls"
+        )
+
+    monkeypatch.setattr(
+        "xenon.utils.llm_client.chat_completion_with_tools", fake_call
+    )
+    return LLMActionProposer(ModelConfig(model_id="test/fake"))
+
+
+def test_a_parallel_reply_runs_the_first_call_and_names_the_rest(
+    monkeypatch,
+) -> None:
+    """A provider may send several tool calls; the loop runs one.
+
+    A measured reply to "inspect calc.py and util.py" carried two ``tool_use``
+    blocks.  Taking only the first and dropping the second is what turned a
+    read-then-write task into twelve reads and zero writes -- so the calls that
+    did not run have to be named back to the model, not silently vanish.
+    """
+
+    proposer = _native_proposer(
+        monkeypatch,
+        [
+            {"name": "read", "arguments": '{"file_path": "calc.py"}'},
+            {"name": "read", "arguments": '{"file_path": "util.py"}'},
+        ],
+    )
+
+    action = proposer(_native_view())
+
+    assert isinstance(action, CallTool)
+    assert action.intent.targets == ("calc.py",)
+    assert len(proposer.skipped_calls) == 1
+    assert "util.py" in proposer.skipped_calls[0]
+
+
+def test_one_tool_call_produces_no_skip_noise(monkeypatch) -> None:
+    proposer = _native_proposer(
+        monkeypatch, [{"name": "read", "arguments": '{"file_path": "calc.py"}'}]
+    )
+
+    proposer(_native_view())
+
+    assert proposer.skipped_calls == ()
+
+
+def test_a_later_single_call_clears_an_earlier_skip(monkeypatch) -> None:
+    """The note describes one reply, not a history of them.
+
+    It is cleared per *call*, not inside the parallel-call bookkeeping: a reply
+    with no tool calls returns before that bookkeeping runs, and the previous
+    reply's dropped calls then resurfaced as if they belonged to the new one.
+    """
+
+    from xenon.utils.llm_usage import LLMResponse
+
+    replies = [
+        [
+            {"name": "read", "arguments": '{"file_path": "calc.py"}'},
+            {"name": "read", "arguments": '{"file_path": "util.py"}'},
+        ],
+        [{"name": "read", "arguments": '{"file_path": "x.py"}'}],
+    ]
+
+    def fake_call(*_args, **_kwargs):
+        return LLMResponse(
+            content="", tool_calls=list(replies.pop(0)), finish_reason="tool_calls"
+        )
+
+    monkeypatch.setattr(
+        "xenon.utils.llm_client.chat_completion_with_tools", fake_call
+    )
+    proposer = LLMActionProposer(ModelConfig(model_id="test/fake"))
+
+    proposer(_native_view())
+    assert proposer.skipped_calls
+
+    proposer(_native_view())
+    assert proposer.skipped_calls == ()
+
+
+def test_a_dropped_state_read_is_answered_not_deferred(monkeypatch) -> None:
+    """``get_state`` beside a real call must not be lost.
+
+    Rendering state only reads the view the proposer already holds, so there is
+    nothing to defer -- and a measured run showed the cost of dropping it: the
+    model asked "am I done?", got no answer, and re-read the same files until
+    the budget ran out.
+    """
+
+    proposer = _native_proposer(
+        monkeypatch,
+        [
+            {"name": "read", "arguments": '{"file_path": "calc.py"}'},
+            {"name": "get_state", "arguments": '{"what": "state"}'},
+        ],
+    )
+
+    action = proposer(_native_view())
+
+    assert isinstance(action, CallTool)
+    assert len(proposer.answered_alongside) == 1
+    assert '"phase"' in proposer.answered_alongside[0]
+    # It was answered, so it is not also reported as un-run.
+    assert proposer.skipped_calls == ()
+
+
+def test_a_dropped_side_effectful_call_is_deferred_not_answered(
+    monkeypatch,
+) -> None:
+    """Only view-only calls are answerable here; the rest need the runtime."""
+
+    proposer = _native_proposer(
+        monkeypatch,
+        [
+            {"name": "read", "arguments": '{"file_path": "calc.py"}'},
+            {"name": "apply_patch", "arguments": '{"files": []}'},
+        ],
+    )
+
+    proposer(_native_view())
+
+    assert proposer.answered_alongside == ()
+    assert proposer.skipped_calls
+
+
+def test_a_state_read_spelled_as_a_tool_call_is_answered() -> None:
+    """A measured failure: the model asked for state through ``call_tool``.
+
+    It wrote ``{"action":"call_tool","capability":"remote","params":{"tool":
+    "get_state","what":"session"}}``.  Nothing exposes "remote", so binding
+    failed twice and the run answered "I could not get the session history".
+    The terminal vocabulary belongs to the harness, so the spelling is repaired
+    here instead of teaching the kernel a tool name.
+    """
+
+    from xenon.harness.llm import action_or_state
+    from xenon.kernel.contracts import StateRead
+
+    raw = json.dumps(
+        {
+            "action": "call_tool",
+            "capability": "remote",
+            "params": {"tool": "get_state", "what": "session"},
+        }
+    )
+
+    action = action_or_state(_reflect_view(), raw)
+
+    assert isinstance(action, StateRead)
+    assert "No earlier tasks in this session." in action.text
+
+
+def test_an_unrelated_call_tool_is_left_to_the_binder() -> None:
+    from xenon.harness.llm import action_or_state
+
+    raw = json.dumps(
+        {
+            "action": "call_tool",
+            "capability": "remote",
+            "params": {"tool_name": "server:tool", "tool_args": {}},
+        }
+    )
+
+    action = action_or_state(_reflect_view(), raw)
+
+    # It stays a tool call: the name is a real remote tool, not a terminal action.
+    assert type(action).__name__ == "CallTool"
+
+
+def test_a_plan_step_cannot_be_a_state_read() -> None:
+    """Planning answered for a state query instead of asking it.
+
+    Measured: the plan's only step was ``{"capability":"read","params":
+    {"tool":"get_state","what":"session"}}``.  Steps bind to catalog tools, so
+    the run finished without the answer and without a single call.  The plan is
+    rejected with a message the model can act on.
+    """
+
+    from xenon.harness.plan import PlanError, parse_plan
+
+    with pytest.raises(PlanError, match="not a plan step"):
+        parse_plan(
+            {
+                "objective": "look up earlier work",
+                "steps": [
+                    {
+                        "id": 1,
+                        "kind": "inspect",
+                        "capability": "read",
+                        "params": {"tool": "get_state", "what": "session"},
+                    }
+                ],
+            }
+        )
+
+
+def test_a_state_step_is_demoted_to_a_step_the_actor_acts_on() -> None:
+    """The plan keeps the step but drops the intent, so the actor can ask.
+
+    A step naming ``get_state`` binds to no tool (it is not one).  Demoting it
+    keeps the plan's shape and hands the asking to the actor, the only party
+    that can answer it.
+    """
+
+    from xenon.harness.llm import LLMPlanProposer
+
+    client = FakeClient(
+        [
+            json.dumps(
+                {
+                    "plan": {
+                        "objective": "look up earlier work",
+                        "steps": [
+                            {
+                                "id": 1,
+                                "kind": "inspect",
+                                "capability": "read",
+                                "params": {"tool": "get_state", "what": "session"},
+                            }
+                        ],
+                    }
+                }
+            )
+        ]
+    )
+    proposer = LLMPlanProposer(ModelConfig(model_id="m/test"), client=client)
+
+    proposal = proposer(_reflect_view())
+
+    assert len(proposal.steps) == 1
+    assert proposal.steps[0].intent is None
+    assert proposal.steps[0].kind.value == "inspect"
+
+
+def test_the_step_prompt_carries_the_same_tail_context() -> None:
+    """The plan-first strategy has its own turn builder — and it dropped both
+    the compaction brief and the session pointer.
+
+    Measured: a step-driven run never saw "Earlier tasks this session", went
+    looking through ledger files on disk instead of asking, and answered
+    "no history" when reading was forbidden.  One tail builder, used by every
+    strategy's turn message, is what keeps that from drifting again.
+    """
+
+    from dataclasses import replace
+
+    from xenon.harness.llm import build_step_messages
+    from xenon.kernel.contracts import StepContract, StepKind
+
+    view = replace(
+        _reflect_view(),
+        session_history=("t1 · fix calc.py → verified",),
+        working_set=(
+            {
+                "seq": 2,
+                "kind": "context_summary",
+                "summary_note": "BRIEF: mod_1 done",
+            },
+        ),
+    )
+    step = StepContract(id=1, kind=StepKind.INSPECT)
+
+    messages = build_step_messages(view, step, calls=0)
+    turn = messages[-1]["content"]
+
+    assert "Earlier tasks this session" in turn
+    assert "BRIEF: mod_1 done" in turn

@@ -17,7 +17,6 @@ level-based semantics when no approval callback is registered.
 from __future__ import annotations
 
 import os
-import time
 from pathlib import Path
 
 APPROVAL_ALLOWED_ONCE = "allowed-once"
@@ -38,7 +37,12 @@ DEFAULT_RULE_TTL_SECONDS = 1800.0
 
 
 def approval_rule_ttl_seconds() -> float:
-    """TTL for "always allow" rules; ``XENON_APPROVAL_TTL`` overrides."""
+    """TTL for "always allow" answers; ``XENON_APPROVAL_TTL`` overrides.
+
+    The session's remembered answers live in ``kernel.session_grants.GrantBook``
+    (design doc §9), which owns the deadline.  This helper remains as the one
+    place that reads the override so the default is not duplicated.
+    """
 
     raw = os.environ.get("XENON_APPROVAL_TTL", "").strip()
     if not raw:
@@ -47,38 +51,6 @@ def approval_rule_ttl_seconds() -> float:
         return max(1.0, float(raw))
     except ValueError:
         return DEFAULT_RULE_TTL_SECONDS
-
-
-class SessionRuleStore:
-    """Session-scoped "always allow" rules with expiry."""
-
-    def __init__(self, ttl_seconds: float | None = None) -> None:
-        self.ttl_seconds = (
-            approval_rule_ttl_seconds() if ttl_seconds is None else float(ttl_seconds)
-        )
-        self._expires_at: dict[str, float] = {}
-
-    def allow(self, tool_name: str, *, ttl_seconds: float | None = None) -> float:
-        ttl = self.ttl_seconds if ttl_seconds is None else float(ttl_seconds)
-        expires = time.monotonic() + max(1.0, ttl)
-        self._expires_at[str(tool_name)] = expires
-        return ttl
-
-    def is_allowed(self, tool_name: str, *, now: float | None = None) -> bool:
-        key = str(tool_name)
-        expires = self._expires_at.get(key)
-        if expires is None:
-            return False
-        if (time.monotonic() if now is None else now) >= expires:
-            self._expires_at.pop(key, None)
-            return False
-        return True
-
-    def clear(self) -> None:
-        self._expires_at.clear()
-
-    def active_rules(self) -> tuple[str, ...]:
-        return tuple(name for name in self._expires_at if self.is_allowed(name))
 
 
 _WRITE_TARGET_KEYS = ("file_path", "dir_path", "path")

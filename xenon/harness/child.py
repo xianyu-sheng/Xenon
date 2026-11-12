@@ -38,8 +38,10 @@ from typing import Any, Sequence
 
 from xenon.harness.llm import ModelConfig, build_llm_loop_strategy
 from xenon.harness.runner import DEFAULT_MAX_STEPS, run_task
+from xenon.kernel.contracts import PropositionKind
 from xenon.kernel.policies import PermissionMode
 from xenon.kernel.strategies import LoopProfile
+from xenon.ledger.events import EventKind, EventSource
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +126,24 @@ def _check_permission_subset(
             f"child permission {child.value!r} exceeds parent "
             f"{parent.value!r}; a child cannot escalate"
         )
+
+
+def child_permission_for(parent: PermissionMode | None) -> PermissionMode:
+    """The mode a delegated child runs at: read-only, and never above its parent.
+
+    Delegation is read-only by default (architecture doc §5: "子代理默认只读
+    ``min(parent, READ_ONLY)``").  The front-end used to pass through the
+    ``run_child_task`` default (``AUTO_EDIT``) while computing the parent from a
+    field that does not exist (``repl._execution_level``), so every ``/agent``
+    raised "child permission 'auto-edit' exceeds parent 'read-only'" and no
+    sub-task could start.
+    """
+
+    if parent is None:
+        return PermissionMode.READ_ONLY
+    return min(
+        parent, PermissionMode.READ_ONLY, key=_PERMISSION_ORDER.index
+    )
 
 
 def _child_spec(
@@ -303,6 +323,360 @@ def _broker_dir(directory: Path, child_id: str) -> Path:
     return path
 
 
+# ── parent-side delegation record (section 7.1) ──────────────────────────
+#
+# Who can observe that a child was killed?  Only the parent.  A killed child
+# has no chance to write, and a record written by an untrusted party cannot be
+# evidence.  So the *parent* writes the lifecycle into the *parent's* ledger,
+# and the child's own ledger stays a separate artifact the parent points at.
+#
+# Three steps hold the property "unfinished is always recorded":
+#
+# 1. ``child_started`` before the spawn -- the anchor saying "I expected this
+#    to end";
+# 2. ``child_finished`` or ``child_interrupted`` after it, the latter also
+#    opening a debt so the interruption enters the audit's field of view
+#    instead of being silently ignored;
+# 3. an unmatched ``child_started`` means the *parent* died; a later start
+#    repairs it with ``child_interrupted``/``unknown``.
+#
+# The parent holds the clock and the child does not, so a child cannot evade
+# the timeout by stalling or by claiming a different time.
+
+_TIMEOUT_REASON = "timeout"
+_ERROR_REASON = "error"
+_UNKNOWN_REASON = "unknown"
+
+
+def parent_ledger_path(
+    ledger_dir: str | Path | None,
+    parent_task_id: str,
+    parent_ledger: str | Path | None = None,
+) -> Path | None:
+    """Where the parent's own ledger lives, or ``None`` when unknown.
+
+    ``parent_ledger`` (the path the front-end actually wrote this parent
+    task to) wins: the REPL keeps kernel ledgers under ``ledger/repl`` while
+    child records live under ``ledger/children``, so guessing
+    ``<ledger_dir>/<task_id>.jsonl`` silently pointed at a file that never
+    exists and every child lifecycle event was dropped.  The directory
+    fallback mirrors ``runner._runtime_bundle`` for callers that do not know
+    the full path.
+    """
+
+    if parent_ledger:
+        return Path(parent_ledger).expanduser()
+    if not parent_task_id:
+        return None
+    directory = (
+        Path(ledger_dir).expanduser()
+        if ledger_dir is not None
+        else Path.home() / ".xenon" / "ledger"
+    )
+    return directory / f"{parent_task_id}.jsonl"
+
+
+def _open_parent_ledger(
+    ledger_dir: str | Path | None,
+    parent_task_id: str,
+    parent_ledger: str | Path | None = None,
+):
+    """Open the parent ledger for appending, or ``None`` if it does not exist.
+
+    Never creates one: a parent that has no ledger has no run to attach to, and
+    inventing a file would fabricate a run that never happened.
+    """
+
+    from xenon.ledger.store import open_shared
+
+    path = parent_ledger_path(ledger_dir, parent_task_id, parent_ledger)
+    if path is None or not path.exists():
+        return None
+    try:
+        return open_shared(path, parent_task_id)
+    except Exception:  # noqa: BLE001 — a bad parent ledger must not break delegation
+        logger.warning("cannot open parent ledger %s", path, exc_info=True)
+        return None
+
+
+def _interrupt_reason(outcome: ChildOutcome) -> str:
+    """Classify why the child did not finish, from what the parent observed.
+
+    ``timeout`` and ``error`` are different facts.  The first is our own clock
+    expiring while the child was still working -- the work may be half done.
+    The second is the child dying on its own.  Collapsing them into one word
+    would make a replay unable to tell "we gave up on it" from "it broke".
+    """
+
+    if outcome.killed:
+        return _TIMEOUT_REASON
+    if outcome.error:
+        return _ERROR_REASON
+    return _UNKNOWN_REASON
+
+
+def _seal_child_branch(child_id: str, child_ledger: str | Path | None) -> dict[str, Any]:
+    """What the parent observed about the child's chain, at the moment it ended.
+
+    The parent verifies the child's ledger itself before writing the seal.  A
+    missing or invalid chain is recorded as ``sealed: false`` with a null head
+    -- writing a head the parent never read would be a fabricated fact.
+    """
+
+    if not child_ledger:
+        return {
+            "task_id": child_id,
+            "ledger": "",
+            "head_seq": 0,
+            "head_hash": None,
+            "event_count": 0,
+            "sealed": False,
+            "detail": "child ledger path unknown",
+        }
+    path = Path(child_ledger)
+    if not path.exists():
+        return {
+            "task_id": child_id,
+            "ledger": str(path),
+            "head_seq": 0,
+            "head_hash": None,
+            "event_count": 0,
+            "sealed": False,
+            "detail": "child ledger not found",
+        }
+    try:
+        from xenon.ledger.store import Ledger
+
+        child = Ledger.open(path)
+        report = child.verify()
+        return {
+            "task_id": child_id,
+            "ledger": str(path),
+            "head_seq": child.watermark(),
+            "head_hash": child.last_hash() or None,
+            "event_count": len(child.read()),
+            "sealed": bool(report.valid),
+            "detail": "" if report.valid else report.reason[:200],
+        }
+    except Exception as exc:  # noqa: BLE001 — sealing must not break delegation
+        return {
+            "task_id": child_id,
+            "ledger": str(path),
+            "head_seq": 0,
+            "head_hash": None,
+            "event_count": 0,
+            "sealed": False,
+            "detail": str(exc)[:200],
+        }
+
+
+def record_child_started(
+    ledger_dir: str | Path | None,
+    parent_task_id: str,
+    *,
+    child_id: str,
+    objective: str,
+    workspace: str | Path,
+    timeout: float | None,
+    batch_id: str = "",
+    parent_ledger: str | Path | None = None,
+    child_ledger: str | Path | None = None,
+) -> bool:
+    """Write the expectation anchor before the child exists.
+
+    Written *before* the spawn on purpose: a crash between spawn and write
+    would leave a child running with no record of it, and that is exactly the
+    "disappeared but nobody knows" case this design forbids.
+    """
+
+    ledger = _open_parent_ledger(ledger_dir, parent_task_id, parent_ledger)
+    if ledger is None:
+        return False
+    try:
+        ledger.append(
+            EventKind.CHILD_STARTED,
+            EventSource.RUNTIME,
+            {
+                "child_id": child_id,
+                "objective": objective[:500],
+                "workspace": str(workspace),
+                # The contract the parent will hold the child to.  A timeout of
+                # ``None`` is "no deadline", stated rather than omitted so a
+                # replay can tell it from "the field was forgotten".
+                "timeout_seconds": None if timeout is None else float(timeout),
+                "batch_id": batch_id,
+                # The branch point: the parent's own chain was here when it
+                # promised to watch this child.  The child's ledger is a side
+                # chain; the parent never splices its events into its own.
+                "branch": {
+                    "task_id": child_id,
+                    "ledger": str(child_ledger or ""),
+                    "base_seq": ledger.watermark(),
+                    "base_hash": ledger.last_hash(),
+                    "depth": 1,
+                },
+            },
+        )
+        return True
+    except Exception:  # noqa: BLE001 — recording must not break the delegation
+        logger.warning("cannot record child_started for %s", child_id, exc_info=True)
+        return False
+
+
+def record_child_outcome(
+    ledger_dir: str | Path | None,
+    parent_task_id: str,
+    outcome: ChildOutcome,
+    *,
+    parent_ledger: str | Path | None = None,
+) -> bool:
+    """Write the child's terminal state, plus a debt when it did not finish."""
+
+    ledger = _open_parent_ledger(ledger_dir, parent_task_id, parent_ledger)
+    if ledger is None:
+        return False
+    payload = {
+        "child_id": outcome.child_id,
+        "objective": outcome.objective[:500],
+        "phase": outcome.phase,
+        "accepted": outcome.accepted,
+        "tool_calls": outcome.tool_calls,
+        "elapsed_seconds": outcome.elapsed_seconds,
+        "ledger_path": outcome.ledger_path,
+        "batch_id": outcome.batch_id,
+        # The seal: the parent read and verified the child's chain before
+        # claiming anything about it.  A later tamper is caught by recomputing
+        # the child chain and comparing this head.
+        "branch": _seal_child_branch(outcome.child_id, outcome.ledger_path),
+    }
+    try:
+        if outcome.delivered:
+            ledger.append(
+                EventKind.CHILD_FINISHED,
+                EventSource.RUNTIME,
+                {**payload, "answer": outcome.answer},
+            )
+            return True
+        reason = _interrupt_reason(outcome)
+        ledger.append(
+            EventKind.CHILD_INTERRUPTED,
+            EventSource.RUNTIME,
+            {
+                **payload,
+                "reason": reason,
+                "error": outcome.error or "",
+                "pid": outcome.pid,
+            },
+        )
+        # The debt is what puts the interruption in front of the audit.  A
+        # reason string in a log nobody reads is not a record of an unfinished
+        # task; a debt is, because the loop has to answer for it.
+        ledger.append(
+            EventKind.DEBT_OPENED,
+            EventSource.RUNTIME,
+            {
+                "obligation_id": f"child:{outcome.child_id}",
+                "kind": PropositionKind.REQUIREMENT_MET.value,
+                "target": outcome.objective[:200],
+                "reason": f"delegated child did not finish ({reason})",
+            },
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "cannot record outcome for %s", outcome.child_id, exc_info=True
+        )
+        return False
+
+
+def _child_ledger_path(
+    ledger_dir: str | Path | None,
+    child_id: str,
+    started_payload: dict[str, Any],
+) -> Path:
+    """Where the child's own ledger lives, from the start record or the default."""
+
+    branch = started_payload.get("branch")
+    if isinstance(branch, dict) and branch.get("ledger"):
+        return Path(str(branch["ledger"]))
+    directory = (
+        Path(ledger_dir)
+        if ledger_dir is not None
+        else Path.home() / ".xenon" / "ledger" / "children"
+    )
+    return directory / f"{child_id}.jsonl"
+
+
+def reconcile_child_records(
+    ledger_dir: str | Path | None,
+    parent_task_id: str,
+    *,
+    parent_ledger: str | Path | None = None,
+) -> list[str]:
+    """Repair delegations a crashed parent left unfinished.
+
+    An unmatched ``child_started`` cannot mean "still running": the parent is
+    the only writer, and it is running *now*, so its own previous process is
+    gone.  What it cannot tell from the ledger alone is whether the child is
+    also gone -- so the repair records exactly that uncertainty as
+    ``unknown`` rather than guessing a cause.  Making up "timeout" here would
+    be a fabricated fact about a run nobody watched.
+    """
+
+    ledger = _open_parent_ledger(ledger_dir, parent_task_id, parent_ledger)
+    if ledger is None:
+        return []
+    started: dict[str, dict[str, Any]] = {}
+    closed: set[str] = set()
+    for event in ledger.read():
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        child_id = str(payload.get("child_id") or "")
+        if not child_id:
+            continue
+        if event.kind is EventKind.CHILD_STARTED:
+            started[child_id] = payload
+        elif event.kind in (EventKind.CHILD_FINISHED, EventKind.CHILD_INTERRUPTED):
+            closed.add(child_id)
+    repaired: list[str] = []
+    for child_id, payload in started.items():
+        if child_id in closed:
+            continue
+        try:
+            ledger.append(
+                EventKind.CHILD_INTERRUPTED,
+                EventSource.RUNTIME,
+                {
+                    "child_id": child_id,
+                    "objective": str(payload.get("objective") or ""),
+                    "workspace": str(payload.get("workspace") or ""),
+                    "reason": _UNKNOWN_REASON,
+                    "repaired": True,
+                    "branch": _seal_child_branch(
+                        child_id,
+                        _child_ledger_path(ledger_dir, child_id, payload),
+                    ),
+                },
+            )
+            ledger.append(
+                EventKind.DEBT_OPENED,
+                EventSource.RUNTIME,
+                {
+                    "obligation_id": f"child:{child_id}",
+                    "kind": PropositionKind.REQUIREMENT_MET.value,
+                    "target": str(payload.get("objective") or "")[:200],
+                    "reason": (
+                        "delegated child has no terminal record; the parent "
+                        "process ended before it finished"
+                    ),
+                },
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("cannot repair %s", child_id, exc_info=True)
+            continue
+        repaired.append(child_id)
+    return repaired
+
+
 def _prepare_isolation(
     isolate: bool | None, workspace: str | Path, child_id: str
 ) -> tuple[Any, str]:
@@ -343,19 +717,21 @@ def _collect_patch(
     return patch, str(path)
 
 
-def _to_scoped(grant: Any) -> Any:
-    """Normalize a grant to the kernel's ``ScopedGrant`` shape.
+def _to_scoped(grant: Any) -> tuple[Any, ...]:
+    """Normalize a grant to the kernel's ``ScopedGrant`` shape(s).
 
-    The session book hands out ``SessionGrant``; callers may hand out raw
-    ``ScopedGrant``.  The kernel policy only understands the latter, so the
-    normalization happens once, at the child entry, instead of at every call
-    site.
+    The session book hands out ``SessionGrant``, whose ``as_scoped()`` yields one
+    ``ScopedGrant`` per target (a grant covers concrete execution paths — design
+    doc §9).  Callers may also hand out a raw ``ScopedGrant``.  The kernel policy
+    understands only the latter, so normalization happens once, at the child
+    entry, instead of at every call site.
     """
 
     as_scoped = getattr(grant, "as_scoped", None)
     if callable(as_scoped):
-        return as_scoped()
-    return grant
+        scoped = as_scoped()
+        return tuple(scoped) if isinstance(scoped, tuple) else (scoped,)
+    return (grant,)
 
 
 def _grant_to_payload(grant: Any) -> dict[str, Any]:
@@ -425,6 +801,7 @@ def run_child_task(
     isolate: bool | None = None,
     index: int = 1,
     session_grants: Sequence[Any] = (),
+    parent_ledger: str | Path | None = None,
 ) -> ChildOutcome:
     """Run one delegated task on the loop, in its own ledger.
 
@@ -453,8 +830,11 @@ def run_child_task(
         raise KeyError(f"unknown child profile: {profile}")
     _check_permission_subset(permission, parent_permission)
     # One shape downstream: the kernel policy only reads ScopedGrant, so any
-    # SessionGrant the parent handed in becomes ScopedGrant here (#373).
-    session_grants = tuple(_to_scoped(grant) for grant in session_grants)
+    # SessionGrant the parent handed in becomes ScopedGrant here (#373).  One
+    # grant may expand to several, because §9 scopes a grant per execution path.
+    session_grants = tuple(
+        scoped for grant in session_grants for scoped in _to_scoped(grant)
+    )
     child_id = f"{parent_task_id or 'child'}-sub{index}-{uuid.uuid4().hex[:6]}"
     # A lone child is still a batch of one: without it, "three dispatched
     # together" and "three dispatched separately" look identical in the ledger.
@@ -469,6 +849,19 @@ def run_child_task(
 
     tree, isolation_note = _prepare_isolation(isolate, workspace, child_id)
     run_workspace = tree.path if tree is not None else workspace
+    # The anchor goes down before the spawn: a crash between the two would
+    # otherwise leave a child running with no record that anyone expected it.
+    record_child_started(
+        ledger_dir,
+        parent_task_id,
+        child_id=child_id,
+        objective=objective,
+        workspace=run_workspace,
+        timeout=timeout,
+        batch_id=batch_id,
+        parent_ledger=parent_ledger,
+        child_ledger=directory / f"{child_id}.jsonl",
+    )
     try:
         payload, error, pid, killed = (
             _run_in_process(
@@ -517,8 +910,8 @@ def run_child_task(
             tree.cleanup()
 
     elapsed = round(time.time() - started, 3)
-    if payload is None:
-        return ChildOutcome(
+    outcome = (
+        ChildOutcome(
             child_id=child_id,
             objective=objective,
             profile=profile,
@@ -538,26 +931,37 @@ def run_child_task(
             patch_path=patch_path,
             patch_bytes=len(patch.encode("utf-8")),
         )
-    return ChildOutcome(
-        child_id=child_id,
-        objective=objective,
-        profile=profile,
-        accepted=bool(payload.get("accepted")),
-        phase=str(payload.get("phase") or "failed"),
-        answer=str(payload.get("answer") or ""),
-        ledger_path=str(payload.get("ledger_path") or directory / f"{child_id}.jsonl"),
-        debt=tuple(payload.get("debt") or ()),
-        tool_calls=int(payload.get("tool_calls") or 0),
-        elapsed_seconds=elapsed,
-        error=error,
-        pid=pid,
-        killed=killed,
-        batch_id=batch_id,
-        isolated=tree is not None,
-        isolation_note=isolation_note,
-        patch_path=patch_path,
-        patch_bytes=len(patch.encode("utf-8")),
+        if payload is None
+        else ChildOutcome(
+            child_id=child_id,
+            objective=objective,
+            profile=profile,
+            accepted=bool(payload.get("accepted")),
+            phase=str(payload.get("phase") or "failed"),
+            answer=str(payload.get("answer") or ""),
+            ledger_path=str(
+                payload.get("ledger_path") or directory / f"{child_id}.jsonl"
+            ),
+            debt=tuple(payload.get("debt") or ()),
+            tool_calls=int(payload.get("tool_calls") or 0),
+            elapsed_seconds=elapsed,
+            error=error,
+            pid=pid,
+            killed=killed,
+            batch_id=batch_id,
+            isolated=tree is not None,
+            isolation_note=isolation_note,
+            patch_path=patch_path,
+            patch_bytes=len(patch.encode("utf-8")),
+        )
     )
+    # The parent writes the terminal state, including the failure case: the
+    # child cannot be trusted to report its own death, and a child that never
+    # reported is exactly the case that must not vanish.
+    record_child_outcome(
+        ledger_dir, parent_task_id, outcome, parent_ledger=parent_ledger
+    )
+    return outcome
 
 
 def _run_in_process(
@@ -666,6 +1070,7 @@ def run_child_tasks(
     batch_id: str = "",
     max_workers: int = 4,
     session_grants: Sequence[Any] = (),
+    parent_ledger: str | Path | None = None,
 ) -> tuple[ChildOutcome, ...]:
     """Run delegated tasks in parallel, preserving input order.
 
@@ -702,6 +1107,7 @@ def run_child_tasks(
                 isolate=isolate,
                 index=index,
                 session_grants=session_grants,
+                parent_ledger=parent_ledger,
             )
             for index, objective in enumerate(objectives, 1)
         ]
@@ -738,6 +1144,11 @@ __all__ = [
     "MAX_CHILD_DEPTH",
     "ChildOutcome",
     "child_evidence",
+    "child_permission_for",
+    "parent_ledger_path",
+    "record_child_outcome",
+    "record_child_started",
+    "reconcile_child_records",
     "run_child_task",
     "run_child_tasks",
 ]

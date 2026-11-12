@@ -4,6 +4,12 @@
 
 > 这是一份**实事求是**的能力对位表。✅ = 有，⚠️ = 部分 / 有限，❌ = 没有，— = 不适用。
 > 评测时间 2026-07-08；Xenon 侧能力已按 v0.9.2 现状更新（2026-10-12）。
+> **2026-11-12 更新**：Xenon 现在也能**作为 MCP server**（`xenon mcp-serve`，见
+> [MCP_SERVER](MCP_SERVER.md)）；「空洞回答检测」一行改为已退役，与第 7 节一致。
+> **2026-11-11 更正**：第 7 节 `HollowDetector` 与第 8 节 `BudgetManager` 所在模块已删除
+> （L1 结构层退役）。当前唯一的验证链是内核 + 账本：空洞/完成度以回执与债务表达，
+> 不做阻断式结构校验；保留的只有 `BudgetPhase` 枚举（位于 `repl/context_strategies.py`）。
+> 两节内容保留为评测时的历史快照。
 > 注意：闭源竞品（Claude Code / Crush）的内部实现不可观测，其 ❌ 应读作
 > 「在我们能核实的公开信息中未见」，而非断言没有。
 
@@ -26,16 +32,17 @@
 | 维度 | Xenon | Aider | Claude Code | OpenCode | Crush |
 | --- | :---: | :---: | :---: | :---: | :---: |
 | **MCP 协议** | ⚠️ stdio + SSE（简化实现，无 endpoint 发现/会话关联，见 #103） | ❌ | ✅ 一等公民 | ✅ | ✅ stdio/http/sse |
+| **作为 MCP server** | ✅ `xenon mcp-serve`：任务 / 证据 / 审计三个工具，只读 fail-closed | ❌ | ❌ | ❌ | ❌ |
 | **多模型路由** | ✅ 12 家厂商 | ✅ ~10 | ❌ Claude only | ✅ 50+ | ✅ 18+ |
 | **可验证执行** | ✅ **账本 + claim 绑定 + 失败即债务** | ❌ 只给 diff | ⚠️ 权限提示，无账本 | ❌ | ❌ |
 | **多阶段配置** | ✅ 6 个 loop profile（同一个循环，参数不同；`react` 只是 `direct` 的别名） | ❌ | ❌ | ❌ | ⚠️ 可 mid-session 换 LLM |
 | **本地优先** | ✅ Ollama + 本地凭据 | ⚠️ CLI 本地，模型云 | ❌ | ✅ | ✅ Ollama / llama.cpp |
 | **工具断路器** | ✅ 3 失败熔断 | ❌ | ❌ | ❌ | ❌ |
 | **上下文压缩** | ✅ 6 步 @ 80% | ❌ | ✅ | ❌ | ❌ |
-| **空洞回答检测** | ✅ 15 正则 | ❌ | ❌ | ❌ | ❌ |
+| **空洞回答检测** | ❌ 已退役（v0.9.x）：改由回执与债务表达，不做阻断式结构校验 | ❌ | ❌ | ❌ | ❌ |
 | **三阶段预算** | ⚠️ 有界预算时启用；默认 unlimited 时仅 EXPLORE | ❌ | ❌ | ❌ | ❌ |
 | **开源协议** | ✅ MIT | ✅ Apache 2.0 | ❌ 闭源 | ✅ MIT | ✅ FSL-1.1-MIT |
-| **实现语言** | Python 3.10+ | Python | TypeScript | Go | Go |
+| **实现语言** | Python 3.10+（交互界面 TypeScript / Ink） | Python | TypeScript | Go | Go |
 
 ---
 
@@ -53,6 +60,8 @@
 
 **Xenon 优势**：stdio 传输完整，且带 B11 修复的墙钟超时（v0.2.0 `bf6e83a` 修复），子进程挂死不会拖死整个 agent；SSE 当前为简化实现（见 [#103](https://github.com/xianyu-sheng/Xenon/issues/103)），不要视作与 Crush 同级的全传输支持。
 **Xenon 劣势**：和 Claude Code 相比，MCP server **不自动重启**——子进程挂掉需要 `/mcp add` 重新添加。这是已知后续项（不是技术不能，是优先级让位给 #19 等 v0.3.0 重写）。
+**方向相反的一侧**：Xenon 自己也能起成 MCP server（`xenon mcp-serve`），把
+任务 / 证据 / 审计三个工具交给其他 Agent 调用；默认只读、失败关闭，见 [MCP_SERVER](MCP_SERVER.md)。
 
 ### 2. 多模型路由
 

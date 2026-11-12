@@ -683,6 +683,7 @@ class GitHubToolsMixin:
                         str(target_dir),
                     ],
                     capture_output=True,
+                    stdin=subprocess.DEVNULL,
                     text=True,
                     timeout=git_timeout,
                     env=git_env,
@@ -736,6 +737,7 @@ class GitHubToolsMixin:
                             branch,
                         ],
                         capture_output=True,
+                        stdin=subprocess.DEVNULL,
                         text=True,
                         timeout=git_timeout,
                         env=git_env,
@@ -751,6 +753,7 @@ class GitHubToolsMixin:
                                 "FETCH_HEAD",
                             ],
                             capture_output=True,
+                            stdin=subprocess.DEVNULL,
                             text=True,
                             timeout=git_timeout,
                             env=git_env,
@@ -780,6 +783,7 @@ class GitHubToolsMixin:
                     remote = subprocess.run(
                         ["git", "-C", str(target_dir), "remote", "get-url", "origin"],
                         capture_output=True,
+                        stdin=subprocess.DEVNULL,
                         text=True,
                         timeout=git_timeout,
                     )
@@ -986,6 +990,7 @@ class GitHubToolsMixin:
             result = subprocess.run(
                 ["git", "ls-remote", "--symref", clone_url, "HEAD"],
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 timeout=max(30, self.timeout),
                 env=self._git_auth_env(),

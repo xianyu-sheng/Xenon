@@ -41,7 +41,7 @@ def _masked_input(prompt_text: str) -> str:
     Linux/macOS 用 termios 逐字符读取——**不要**用 ``getpass.getpass()``：
     getpass 会完全关闭回显，导致粘贴时零视觉反馈（用户报告"粘贴没有反应"）。
     本实现逐字符显示 ``*``，并在读取期间临时关闭 bracketed-paste 模式
-    （REPL 内 prompt_toolkit 会开启它，使粘贴带 ``\\e[200~..\\e[201~`` 标记），
+    （内置编辑器会开启它，使粘贴带 ``\\e[200~..\\e[201~`` 标记），
     让粘贴内容作为普通字符流入。转义序列（方向键 / 残留 paste 标记）会被丢弃。
     """
     if sys.platform != "win32":
@@ -126,8 +126,8 @@ def _masked_input(prompt_text: str) -> str:
                 sys.stdout.flush()
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
-            # 不在此重新开启 bracketed-paste：REPL 的 prompt_toolkit 会在下一次
-            # 提示时自行重新施加终端状态；此处保持关闭可让本向导后续的 rich 菜单
+            # 不在此重新开启 bracketed-paste：内置编辑器会在下一次提示时
+            # 自行重新施加终端状态；此处保持关闭可让本向导后续的 rich 菜单
             # 接收纯字符（避免菜单里粘贴带标记）。
             sys.stdout.flush()
         return "".join(chars)

@@ -64,12 +64,15 @@ def _model(alias: str, model_id: str):
     return types.SimpleNamespace(alias=alias, model_id=model_id)
 
 
-def _repl(*, session=None, rules=None, book=None) -> types.SimpleNamespace:
+def _repl(*, book=None, level=None) -> types.SimpleNamespace:
+    store: dict = {} if level is None else {"_execution_level": int(level)}
     return types.SimpleNamespace(
-        _pt_session=session,
-        _permission_rules=rules,
         _grant_book=book,
-        _permission_gate=None,
+        agent_context=types.SimpleNamespace(
+            get=lambda key, default=None: store.get(key, default),
+            set=lambda key, value: store.__setitem__(key, value),
+            _store=store,
+        ),
         project_ctx=types.SimpleNamespace(root="."),
     )
 
@@ -81,12 +84,11 @@ def test_no_session_means_no_picker() -> None:
     assert ask_choice(_repl(), title="t", choices=permission_choices()) is None
 
 
-def test_a_non_tty_session_means_no_picker(monkeypatch) -> None:
+def test_a_non_tty_means_no_picker(monkeypatch) -> None:
     import sys
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
-    session = types.SimpleNamespace(prompt=lambda *a, **k: "plan")
-    assert ask_choice(_repl(session=session), title="t", choices=permission_choices()) is None
+    assert ask_choice(_repl(), title="t", choices=permission_choices()) is None
 
 
 def test_no_choices_means_no_picker() -> None:
@@ -186,41 +188,47 @@ def test_mode_without_a_pick_still_lists_every_mode(monkeypatch) -> None:
 
 
 def test_permissions_answers_the_current_mode_even_without_grants() -> None:
-    out = _cmd_permissions(args="", session_state={"_repl": _repl()})
-    assert "权限模式" in out
+    out = _cmd_permissions(args="", session_state={"_repl": _repl(level=2)})
+    assert "执行级别" in out
     assert "没有记住的授权" in out
 
 
 def test_permissions_switches_mode_by_name() -> None:
-    gate = types.SimpleNamespace(
-        mode=types.SimpleNamespace(value="default"),
-        set_mode=lambda mode: setattr(gate, "mode", mode),
-        reset_session=lambda: None,
-    )
-    repl = _repl()
-    repl._permission_gate = gate
+    """A mode name must move the value the kernel actually reads.
 
-    out = _cmd_permissions(args="bypass", session_state={"_repl": repl})
+    It used to call ``PermissionGate.set_mode`` on a gate the kernel never
+    received: the command reported success and changed nothing.  The assertion
+    is on ``_execution_level`` because that is what becomes the kernel's
+    ``PermissionMode``.
+    """
 
-    assert "bypass" in out
-    # PermissionMode.BYPASS, whose .value is the lowercase mode name.
-    assert gate.mode.name == "BYPASS"
+    from xenon.repl.execution_policy import ExecutionLevel
+
+    repl = _repl(level=int(ExecutionLevel.WRITE))
+
+    out = _cmd_permissions(args="plan", session_state={"_repl": repl})
+
+    assert "read_only" in out
+    assert repl.agent_context.get("_execution_level") == int(ExecutionLevel.READ_ONLY)
 
 
 def test_permissions_still_manages_grants() -> None:
-    class _Rules:
-        def remove(self, selector):
-            return selector == "shell(git log)"
+    from xenon.kernel.contracts import Capability
+    from xenon.kernel.session_grants import ALLOW, GrantBook, grant_from_choice
 
-        def rows(self):
-            return []
-
-        rules: list = []
+    book = GrantBook("/repo")
+    book.add(
+        grant_from_choice(
+            ALLOW, capability=Capability.SHELL, targets=("git log",), workspace="/repo"
+        )
+    )
 
     out = _cmd_permissions(
-        args="remove shell(git log)", session_state={"_repl": _repl(rules=_Rules())}
+        args="remove shell:git log", session_state={"_repl": _repl(book=book)}
     )
+
     assert "已撤销" in out
+    assert len(book) == 0
 
 
 # ── 6. one owner for /permissions (the shadowing bug) ──────────
@@ -236,48 +244,53 @@ def test_permissions_has_exactly_one_handler_and_it_is_the_grants_module() -> No
 # ── the list is visible even when the menu is not ───────────────
 
 
-def test_an_empty_answer_picks_the_current_row(monkeypatch) -> None:
-    """Enter on a selector means "keep what I have", never "first item"."""
+def _answer_with(monkeypatch, *answers):
+    """Drive ``ask_choice`` as if a person typed ``answers`` in order."""
     import sys
-    import types as _types
 
-    import xenon.repl.selector as selector
+    import rich.prompt as rich_prompt
 
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    class _Tty:
+        def isatty(self) -> bool:
+            return True
+
+        def fileno(self) -> int:
+            return 0
+
+        def __bool__(self) -> bool:
+            return True
+
+    monkeypatch.setattr(sys, "stdin", _Tty())
+    queue = list(answers)
     seen: dict = {}
 
-    class _Session:
-        def prompt(self, question, **kwargs):
-            seen["question"] = question
-            return ""
+    def fake_ask(question="", **_kwargs):
+        seen["question"] = question
+        reply = queue.pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
 
-    repl = _types.SimpleNamespace(_pt_session=_Session())
-    value = selector.ask_choice(
-        repl, title="选择权限模式", choices=permission_choices("plan")
-    )
+    monkeypatch.setattr(rich_prompt.Prompt, "ask", fake_ask)
+    return seen
+
+
+def test_an_empty_answer_picks_the_current_row(monkeypatch) -> None:
+    """Enter on a selector means "keep what I have", never "first item"."""
+    seen = _answer_with(monkeypatch, "")
+
+    value = ask_choice(None, title="选择权限模式", choices=permission_choices("plan"))
 
     assert value == "plan"
-    # the options are in the prompt text, so a dismissed menu still shows them
+    # the options are in the prompt text, so the list is always visible
     assert "1) default" in seen["question"]
     assert "←" in seen["question"]
 
 
 def test_a_number_answer_picks_by_position(monkeypatch) -> None:
-    import sys
-    import types as _types
+    _answer_with(monkeypatch, "3")
 
-    import xenon.repl.selector as selector
-
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
-
-    class _Session:
-        def prompt(self, question, **kwargs):
-            return "3"
-
-    repl = _types.SimpleNamespace(_pt_session=_Session())
-    value = selector.ask_choice(
-        repl, title="选择权限模式", choices=permission_choices("default")
-    )
+    value = ask_choice(None, title="选择权限模式", choices=permission_choices("default"))
 
     assert value == "plan"
 
@@ -340,153 +353,16 @@ def test_the_current_mode_is_always_shown() -> None:
     assert [item.value for item in choices if item.current] == ["react"]
 
 
-# ── selector internals (menu, pre_run, retry) ───────────────────
-
-
-def test_the_choice_menu_lists_and_filters(monkeypatch) -> None:
-    import sys
-    import types as _types
-
-    import xenon.repl.selector as selector
-
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
-    seen: dict = {}
-
-    class _Session:
-        def prompt(self, question, **kwargs):
-            seen["kwargs"] = kwargs
-            from prompt_toolkit.document import Document
-
-            items = list(kwargs["completer"].get_completions(Document(""), None))
-            filtered = list(
-                kwargs["completer"].get_completions(Document("byp"), None)
-            )
-            seen["all"] = [(item.text, item.display_meta_text) for item in items]
-            seen["filtered"] = [item.text for item in filtered]
-            return "bypass"
-
-    repl = _types.SimpleNamespace(_pt_session=_Session())
-    value = selector.ask_choice(
-        repl, title="t", choices=permission_choices("default")
-    )
-
-    assert value == "bypass"
-    assert len(seen["all"]) == 4
-    assert all(meta for _, meta in seen["all"])
-    assert seen["filtered"] == ["bypass"]
-    assert callable(seen["kwargs"]["pre_run"])
-
-
-def test_pre_run_opens_the_menu() -> None:
-    import types as _types
-
-    from xenon.repl.selector import _open_menu
-
-    calls: list[str] = []
-    buffer = _types.SimpleNamespace(start_completion=lambda: calls.append("start"))
-    session = _types.SimpleNamespace(default_buffer=buffer)
-
-    _open_menu(session)()
-
-    assert calls == ["start"]
-
-
-def test_pre_run_tolerates_a_session_without_a_buffer() -> None:
-    import types as _types
-
-    from xenon.repl.selector import _open_menu
-
-    _open_menu(_types.SimpleNamespace())()  # must not raise
-
-
-class _SelBuffer:
-    def __init__(self, text: str = "", completions=None, index=None) -> None:
-        self.document = type("D", (), {"text_before_cursor": text})()
-        self.complete_state = (
-            None
-            if completions is None
-            else type(
-                "S",
-                (),
-                {
-                    "completions": [type("C", (), {"text": c})() for c in completions],
-                    "complete_index": index,
-                },
-            )()
-        )
-        self.text = text
-        self.cursor_position = len(text)
-        self.submitted = False
-
-    def validate_and_handle(self) -> None:
-        self.submitted = True
-
-
-def test_enter_takes_the_highlighted_row_when_empty() -> None:
-    from xenon.repl.selector import accept_choice
-
-    buffer = _SelBuffer("", ["direct", "react"], 1)
-    accept_choice(buffer)
-
-    assert buffer.text == "react"
-    assert buffer.submitted is True
-
-
-def test_enter_keeps_typed_text() -> None:
-    from xenon.repl.selector import accept_choice
-
-    buffer = _SelBuffer("byp", ["bypass"], 0)
-    accept_choice(buffer)
-
-    assert buffer.text == "byp"
-    assert buffer.submitted is True
-
-
-def test_enter_without_a_menu_still_submits() -> None:
-    from xenon.repl.selector import accept_choice
-
-    buffer = _SelBuffer("2")
-    accept_choice(buffer)
-
-    assert buffer.text == "2"
-    assert buffer.submitted is True
-
-
 def test_a_bad_answer_gives_up_after_the_attempts(monkeypatch) -> None:
-    import sys
-    import types as _types
+    _answer_with(monkeypatch, "nope", "still-nope")
 
-    import xenon.repl.selector as selector
-
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
-    answers = ["nope", "still-nope"]
-
-    class _Session:
-        def prompt(self, question, **kwargs):
-            return answers.pop(0)
-
-    repl = _types.SimpleNamespace(_pt_session=_Session())
-    assert selector.ask_choice(
-        repl, title="t", choices=permission_choices(), attempts=2
-    ) is None
+    assert ask_choice(None, title="t", choices=permission_choices(), attempts=2) is None
 
 
 def test_ctrl_c_means_cancel(monkeypatch) -> None:
-    import sys
-    import types as _types
+    _answer_with(monkeypatch, KeyboardInterrupt())
 
-    import xenon.repl.selector as selector
-
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
-
-    class _Session:
-        def prompt(self, question, **kwargs):
-            raise KeyboardInterrupt
-
-    repl = _types.SimpleNamespace(_pt_session=_Session())
-    assert selector.ask_choice(
-        repl, title="t", choices=permission_choices()
-    ) is None
+    assert ask_choice(None, title="t", choices=permission_choices()) is None
 
 
 def test_model_command_uses_the_picker(monkeypatch) -> None:
@@ -519,7 +395,6 @@ def test_an_uppercase_label_still_matches() -> None:
 
 def test_a_raising_isatty_means_no_picker(monkeypatch) -> None:
     import sys
-    import types as _types
 
     import xenon.repl.selector as selector
 
@@ -527,12 +402,8 @@ def test_a_raising_isatty_means_no_picker(monkeypatch) -> None:
         raise OSError("no terminal here")
 
     monkeypatch.setattr(sys.stdin, "isatty", boom, raising=False)
-    session = _types.SimpleNamespace(prompt=lambda *a, **k: "plan")
     assert (
-        selector.ask_choice(
-            _repl(session=session), title="t", choices=permission_choices()
-        )
-        is None
+        selector.ask_choice(_repl(), title="t", choices=permission_choices()) is None
     )
 
 
@@ -554,10 +425,14 @@ def test_switching_to_an_unknown_mode_name_is_not_a_switch() -> None:
     assert _switch_mode(_repl(), "nonsense") is None
 
 
-def test_switching_without_a_gate_reports_it() -> None:
+def test_switching_without_a_context_reports_it() -> None:
+    """The dependency is the agent context now, not a gate object."""
+
     from xenon.repl.command_groups.permissions import _switch_mode
 
-    assert _switch_mode(_repl(), "plan") == "权限系统未初始化"
+    bare = types.SimpleNamespace(project_ctx=types.SimpleNamespace(root="."))
+
+    assert _switch_mode(bare, "plan") == "权限系统未初始化"
 
 
 def test_a_pick_that_cannot_be_applied_reports_a_warning(monkeypatch) -> None:
@@ -803,3 +678,26 @@ def test_handle_chat_applies_a_router_suggestion(monkeypatch) -> None:
     repl._handle_chat("帮我写一个快速排序算法")
 
     assert registry.current_mode == "plan-execute"
+
+
+def test_mode_next_cycles_like_shift_tab() -> None:
+    """The TS front-end sends ``/mode next``; it must match Shift+Tab."""
+
+    from xenon.repl.command_groups.model import _cmd_mode
+
+    registry = _Registry()
+
+    output = _cmd_mode(args="next", registry=registry, session_state={})
+
+    assert registry.set_mode_calls == ["plan-execute"]
+    assert "plan-execute" in output
+
+
+def test_mode_cycle_wraps_around() -> None:
+    from xenon.repl.command_groups.model import _cmd_mode
+
+    registry = _Registry(current="plan-execute")
+
+    _cmd_mode(args="cycle", registry=registry, session_state={})
+
+    assert registry.set_mode_calls == ["direct"]

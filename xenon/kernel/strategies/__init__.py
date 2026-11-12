@@ -31,6 +31,7 @@ from xenon.kernel.contracts import (
     ModelView,
     PlanProposal,
     ReleaseStep,
+    StateRead,
     StepContract,
     SubmitPlan,
     Think,
@@ -69,6 +70,12 @@ class LoopProfile:
     step_reflect: bool = False
     reflect_rounds: int = 0
     reflect_calls: int = 0
+    #: The actor writes its own plan through the ``make_plan`` tool instead of
+    #: a separate planner turn.  One identity for the whole run means one
+    #: system prompt, which is what keeps the provider's cached prefix intact
+    #: across a plan round.  A dedicated planner is a second persona and
+    #: therefore a hard cache break at every switch.
+    actor_plans: bool = False
 
     def __post_init__(self) -> None:
         if self.step_calls < 1:
@@ -125,7 +132,15 @@ class LoopStrategy:
     _notices: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        if self.profile.plan and self.planner is None and not self.resumed:
+        # A plan profile needs *a* way to produce a plan, not necessarily a
+        # separate planner role: with `actor_plans` the actor calls the
+        # make_plan tool and stays the same identity for the whole run.
+        if (
+            self.profile.plan
+            and self.planner is None
+            and not self.resumed
+            and not self.profile.actor_plans
+        ):
             raise ValueError("a plan profile needs a planner")
         if self.profile.plan_review and self.plan_reviewer is None:
             raise ValueError("plan_review needs a plan_reviewer")
@@ -163,7 +178,12 @@ class LoopStrategy:
         self._notices.clear()
 
     def propose(self, view: ModelView) -> Action:
-        if self.profile.plan and not self._submitted and not self.resumed:
+        if (
+            self.profile.plan
+            and not self._submitted
+            and not self.resumed
+            and self.planner is not None
+        ):
             self._submitted = True
             # Submit even an empty plan: the ledger has to record that the
             # planner said "no tool work", otherwise the runtime cannot tell a
@@ -171,11 +191,22 @@ class LoopStrategy:
             return SubmitPlan(self._review_plan(view, self.planner(view)))
         if self.profile.step_scope and view.active_step is not None:
             return self._step_turn(view)
-        if self.profile.plan and view.active_step is None and not view.steps:
+        if (
+            self.profile.plan
+            and not self.profile.actor_plans
+            and view.active_step is None
+            and not view.steps
+        ):
             # No plan and no steps: the task needed no tool, so the answer is
             # the whole deliverable.  Asking the finisher once is what turns
             # "empty plan" into an answer instead of an empty turn.  When it
             # already answered (the empty-plan path above), this is a no-op.
+            #
+            # This branch is for the *separate-planner* profile, where an empty
+            # plan is the planner's verdict.  With `actor_plans` there is no
+            # planner to have said that: `view.steps` is empty simply because
+            # the actor has not planned yet, and taking this branch answered the
+            # task before a single tool ran.
             if self.finisher is not None and not self._finished:
                 self._finished = True
                 return self.finisher(view)
@@ -186,7 +217,37 @@ class LoopStrategy:
         if self.profile.plan and view.steps and self.finisher and not self._finished:
             self._finished = True
             return self.finisher(view)
-        return self.actor(view)
+        action = self.actor(view)
+        self._note_unrun_calls(action)
+        return action
+
+    def _note_unrun_calls(self, action: Action) -> None:
+        """Tell the model about tool calls its own reply made that did not run.
+
+        A provider is free to answer one turn with several ``tool_use`` blocks
+        (Anthropic's ``{"type": "any"}`` means "at least one"), while this loop
+        executes exactly one action per turn.  The actor keeps the extra ones
+        it had to drop; naming them here is what stops the model from silently
+        losing half of what it asked for and then re-requesting it from prose
+        instead of from a receipt.
+
+        The note is a hint, not a constraint: it never executes anything and
+        never satisfies an obligation.
+        """
+
+        skipped = tuple(getattr(self.actor, "skipped_calls", ()) or ())
+        answered = tuple(getattr(self.actor, "answered_alongside", ()) or ())
+        if isinstance(action, Finish):
+            output = None
+        else:
+            output = {"kind": "parallel", "ran": action.kind.value}
+            if skipped:
+                output["skipped"] = list(skipped)
+            if answered:
+                output["answered"] = list(answered)
+        if output is None or len(output) == 2:
+            return
+        self._notices.append(output)
 
     # ── plan phase ──────────────────────────────────────────────────────
 
@@ -245,7 +306,12 @@ class LoopStrategy:
         # so a confused actor cannot spin forever.
         self._step_calls += 1
         action = self.step_actor(view, active, self._step_calls)
-        if isinstance(action, (Think, AskUser, Abort, CallTool)):
+        # ``StateRead`` belongs here: asking the harness a question is a
+        # legitimate move inside a step, and the runtime answers it and keeps
+        # the step open.  Dropping it released the step instead -- a measured
+        # run asked ``get_state what=session``, the answer was rendered and
+        # thrown away, and the task finished saying it had no history.
+        if isinstance(action, (Think, AskUser, Abort, CallTool, StateRead)):
             return action
         return self._release_step(view, active)
 

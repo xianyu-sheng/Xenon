@@ -24,7 +24,6 @@ class AgentContext:
         self._store: dict[str, Any] = initial.copy() if initial else {}
         self._history: list[dict[str, Any]] = []  # 每步快照，用于调试回溯
         self._conversation_messages: list[dict[str, str]] = []
-        self._evidence_runtime: Any = None
         # Tool execution can happen in Plan-Execute worker threads.  Keep its
         # durable checkpoint updates atomic without changing the historical
         # single-threaded contract of the rest of AgentContext.
@@ -33,9 +32,6 @@ class AgentContext:
         self._escalation_callback: Any = None
         self._approval_callback: Any = None
         self._plan_callback: Any = None
-        self._checkpoint_callback: Any = None
-        self._fact_callback: Any = None
-        self._hook_callback: Any = None
 
     # ── 读写 ──────────────────────────────────────────────
     def get(self, key: str, default: Any = None) -> Any:
@@ -57,34 +53,6 @@ class AgentContext:
     def set_conversation_messages(self, messages: list[dict[str, str]]) -> None:
         """设置多轮对话历史（由 REPL 层注入）。"""
         self._conversation_messages = messages
-
-    # ── Evidence Runtime 门面（跨层统一入口）──────────────────
-    @property
-    def evidence(self) -> Any:
-        """懒创建并返回本任务共享的 EvidenceRuntime 门面。
-
-        任何持有本 Context 的模块（REPL/Engine/ToolExecutor/Node/MCP/Session）
-        都通过它写入或查询同一条证据链。不会进入 session 序列化存储。
-        """
-        if self._evidence_runtime is None:
-            from xenon.engine.evidence_runtime import EvidenceRuntime
-
-            self._evidence_runtime = EvidenceRuntime()
-        return self._evidence_runtime
-
-    def get_evidence_runtime(self) -> Any | None:
-        """返回已绑定的 EvidenceRuntime；未创建时返回 None（不触发创建）。"""
-        return self._evidence_runtime
-
-    def bind_evidence(self, ledger: Any) -> Any:
-        """把现有 EvidenceLedger 绑定到本任务的 EvidenceRuntime。
-
-        Args:
-            ledger: EvidenceLedger 实例（通常由循环在任务起点创建）。
-        """
-        runtime = self.evidence
-        runtime._ledger = ledger  # noqa: SLF001 — 门面内部状态，统一契约
-        return runtime
 
     def get_conversation_messages(self) -> list[dict[str, str]]:
         """获取多轮对话历史。"""
@@ -152,10 +120,22 @@ exceeds the current turn's ``_execution_level``.  Returning True lets the
         direct-engine users; the REPL always registers a channel, where the
         real policy (workspace writes free, commands and out-of-workspace
         writes ask) applies and every failure mode denies.
+
+        ``_kernel_adjudicated`` short-circuits this: when the kernel's own
+        ``PermissionPolicy`` has already ruled on the action, asking again here
+        would be a *second* decision about the same call -- and one made from
+        less information.  A measured run showed the two disagreeing in both
+        directions: an in-workspace edit the kernel allowed came back to the
+        human, while an out-of-workspace edit the kernel vetoed could be waved
+        through by answering the panel.  The dependency inverts too: the
+        executor runs *under* the kernel, so its fallback is for callers that
+        have no kernel at all.  Those never set the flag.
         """
 
         from xenon.nodes.approval_policy import APPROVAL_ALLOWED_ONCE, APPROVAL_OUTCOMES
 
+        if self._store.get("_kernel_adjudicated"):
+            return APPROVAL_ALLOWED_ONCE
         callback = self._approval_callback
         if callback is None:
             return APPROVAL_ALLOWED_ONCE
@@ -235,31 +215,6 @@ exceeds the current turn's ``_execution_level``.  Returning True lets the
         with self._tool_checkpoint_lock:
             self._plan_callback = callback
 
-    def set_checkpoint_callback(self, callback: Any = None) -> None:
-        """Register the budget-checkpoint continuation channel (REPL injects it)."""
-        with self._tool_checkpoint_lock:
-            self._checkpoint_callback = callback
-
-    def has_checkpoint_channel(self) -> bool:
-        """是否注册了检查点审批通道（无通道 → 旧预算语义，不询问）。"""
-        return self._checkpoint_callback is not None
-
-    def request_checkpoint_continuation(self, reason: str) -> str:
-        """Ask whether to continue past a budget checkpoint (closed outcome).
-
-        无通道（库/直连调用方）→ approved（预算语义不变）；
-        通道异常 → declined（续跑是授权类询问，fail-closed）。
-        """
-
-        callback = self._checkpoint_callback
-        if callback is None:
-            return "approved"
-        try:
-            outcome = str(callback(reason) or "").lower()
-        except Exception:  # noqa: BLE001 — 审批通道异常按拒绝处理
-            return "declined"
-        return outcome if outcome in ("approved", "declined") else "declined"
-
     def request_plan_approval(self, plan_text: str) -> dict:
         """Ask the registered channel to approve a submitted plan.
 
@@ -278,34 +233,6 @@ exceeds the current turn's ``_execution_level``.  Returning True lets the
         except Exception:  # noqa: BLE001 — 审批通道异常按驳回
             pass
         return {"approved": False, "feedback": "审批通道异常"}
-
-    def set_fact_callback(self, callback: Any = None) -> None:
-        """Register a best-effort fact recorder (REPL 事件日志)。"""
-        with self._tool_checkpoint_lock:
-            self._fact_callback = callback
-
-    def record_fact(self, event_type: str, **data: object) -> None:
-        """Append a durable fact; silently ignored when no recorder."""
-        callback = self._fact_callback
-        if callback is None:
-            return
-        try:
-            callback(event_type, **data)
-        except Exception:  # noqa: BLE001
-            pass
-
-    def set_hook_callback(self, callback: Any = None) -> None:
-        with self._tool_checkpoint_lock:
-            self._hook_callback = callback
-
-    def run_hook(self, event: str, tool_name: str, tool_input: dict) -> Any:
-        callback = self._hook_callback
-        if callback is None:
-            return None
-        try:
-            return callback(event, tool_name, tool_input)
-        except Exception:  # noqa: BLE001
-            return None
 
     def record_tool_checkpoint(
         self,

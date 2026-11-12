@@ -12,7 +12,6 @@ REPL — 交互式命令行主循环。
 from __future__ import annotations
 
 import logging
-import os
 import re
 import sys
 import threading
@@ -28,9 +27,6 @@ from rich.text import Text
 from rich.theme import Theme
 
 from xenon.engine.context import AgentContext
-from xenon.nodes.approval_policy import (
-    SessionRuleStore,
-)
 from xenon.repl.approval_ux import ApprovalUxMixin
 from xenon.repl.commands import COMMANDS, dispatch_command
 from xenon.repl.context_manager import ContextManager
@@ -66,30 +62,6 @@ from xenon.repl.turn_helpers import (  # noqa: E402
     verify_retries_limit as _verify_retries_limit,  # noqa: F401 - compatibility export
 )
 
-# ── prompt_toolkit（可选依赖，不可用时回退自建输入）────────────
-try:
-    from pathlib import Path as _Path
-
-    from prompt_toolkit import PromptSession
-    from prompt_toolkit.application import run_in_terminal
-    from prompt_toolkit.formatted_text import HTML
-    from prompt_toolkit.history import FileHistory
-    from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.output import DummyOutput
-    from prompt_toolkit.styles import Style
-
-    _HISTORY_DIR = _Path.home() / ".xenon"
-    _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    _HAS_PROMPT_TOOLKIT = True
-except ImportError:
-    _HAS_PROMPT_TOOLKIT = False
-    PromptSession = None  # type: ignore
-    FileHistory = None  # type: ignore
-    KeyBindings = None  # type: ignore
-    Style = None  # type: ignore
-    HTML = None  # type: ignore
-    run_in_terminal = None  # type: ignore
-
 # ── 自定义主题 ────────────────────────────────────────────
 _theme = Theme(
     {
@@ -106,30 +78,6 @@ console = Console(theme=_theme)
 import xenon.repl.approval_ux as _approval_ux  # noqa: E402
 
 _approval_ux.logger = logger
-
-_PROMPT_STYLE = {
-    # 输入区借鉴 Claude Code / pi 的轻量层次：线条定界，避免整块底色。
-    "prompt": "bold #67e8f9",
-    "input.rule": "#334155",
-    "bottom-toolbar": "noreverse",
-    "bottom-toolbar.text": "#94a3b8",
-    "toolbar.separator": "#475569",
-    "toolbar.model": "#cbd5e1",
-    "toolbar.mode": "#c4b5fd",
-    "toolbar.good": "bold #86efac",
-    "toolbar.warning": "bold #fcd34d",
-    "toolbar.danger": "bold #fda4af",
-    "toolbar.notice": "bold #fde68a",
-    "toolbar.muted": "#94a3b8",
-    "toolbar.hint": "#64748b italic",
-}
-
-
-def _build_pt_style() -> dict[str, str]:
-    """Return the prompt_toolkit style, honoring the standard NO_COLOR flag."""
-    if "NO_COLOR" in os.environ:
-        return {}
-    return _PROMPT_STYLE.copy()
 
 
 class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, SessionOpsMixin):
@@ -179,6 +127,9 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         self.project_ctx = ProjectContext()
         self._project_injected = False
         self._memory_service: Any = None
+        # Memory-backed lesson store (design doc §13.2#9); lazily created by
+        # the kernel adapter and shared across turns so counters stay coherent.
+        self._lesson_store: Any = None
         self._memory_detector: Any = None
         self._pending_memory_use_ids: list[str] = []
 
@@ -265,10 +216,9 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         # 在空行 Ctrl+C 时丢失输入机会。
         self._pending_exit: bool = False
 
-        # v0.5.0: prompt_toolkit 会话（命令历史 + Tab 补全 + 固定状态栏）
+        # 输入层：内置原始终端编辑器（repl_input）。prompt_toolkit 已移除，
+        # 交互界面统一由 TS 前端提供；这里是它的无头回退。
         self._paste_store = PastedTextStore()
-        self._pt_session: Any = None
-        self._init_prompt_toolkit()
 
         # 会话内明确不可恢复的模型（认证/模型名等终端错误）。网络抖动等
         # 瞬时错误交给 ModelPool 阈值熔断，不在这里永久拉黑。
@@ -321,34 +271,30 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         self._captured_log: str = ""  # 引擎执行期间捕获的日志文本
         self._last_mode_line: str = ""  # 上次引擎的模式行
 
-        # v0.5.0: 工具权限门控
-        from xenon.repl.permissions import PermissionGate, PermissionMode
-
-        # 默认 ACCEPT_EDITS：文件编辑/写入自动放行，Shell 和危险 git 仍需确认。
-        # 这在保留关键安全边界的同时，消除了编码工作流中高频写入操作的确认摩擦。
-        self._permission_gate = PermissionGate(mode=PermissionMode.ACCEPT_EDITS)
-        self._permission_gate.set_confirm_callback(self._confirm_tool)
+        # Tool authorization lives in one place now: the kernel's
+        # ``PermissionPolicy``, fed by ``_execution_level`` in the agent
+        # context.  The legacy ``PermissionGate`` was never injected into the
+        # executor the kernel builds, so it decided nothing at runtime while
+        # still being the thing ``/permissions`` switched -- a mode change that
+        # reached no code.  Keeping both was the defect; the gate is gone.
         self.agent_context.set_tool_checkpoint_callback(self._persist_tool_checkpoint)
         # 能力不足时的升级询问：工具被本轮执行级别拦截时问用户一次。
         self._tool_escalations: set[str] = set()
-        # “a=本会话总是允许”是带 TTL 的会话规则（用户决策），不是永久放行。
-        self._approval_rules = SessionRuleStore()
-        # 本轮已被边界审批一次性放行的工具（防旧权限门重复询问）。
-        self._boundary_approved_once: set[str] = set()
+        # 会话授权（技术文档 §9）：唯一的存储。三档回答、工具+执行路径绑定、
+        # 带期限、只存内存。此前这里是四套并存的存储，键和时钟都不一致。
+        from xenon.kernel.session_grants import GrantBook
+
+        self._grant_book = GrantBook(workspace=str(self._workspace_root()))
         # 结构层：会话树（回合节点=状态单一来源），可从事件日志重建。
         from xenon.session.tree import TurnTree
-        from xenon.turn.gate import TurnGate
 
         self._turn_tree: TurnTree = TurnTree()
         self._turn_tree_rebuilt = False
-        self._turn_gate = TurnGate()
-        self._last_gate_verdict = None
         self.agent_context.set_escalation_callback(self._confirm_tool_escalation)
         # 工具边界审批：工作区内写免问；越界写与命令要问（可 y/n/a，a 带 TTL）。
         self.agent_context.set_approval_callback(self._confirm_tool_approval)
         # 计划审批通道：submit_plan 工具由这里呈现面板。
         self.agent_context.set_plan_callback(self._confirm_plan)
-        self.agent_context.set_checkpoint_callback(self._confirm_checkpoint)
 
         # LLM 意图分类器按需初始化：未启用/无可用模型时为 None，正则层兜底。
         self._intent_classifier: Any = None
@@ -362,163 +308,8 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         if not signal_ok:
             logger.info("信号驱动重启不可用，请使用 /restart 命令")
 
-    def _init_prompt_toolkit(self) -> None:
-        if not _HAS_PROMPT_TOOLKIT:
-            return
-
-        from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
-        from prompt_toolkit.keys import Keys
-
-        from xenon.repl.completer import OmniCompleter
-
-        # Terminals do not agree on a Shift+Enter wire encoding.  prompt_toolkit
-        # 3.x collapses xterm's modifyOtherKeys form into a plain Enter and has
-        # no built-in mapping for kitty's CSI-u form.  Preserve the modifier by
-        # decoding both as Escape+Enter, which shares our Alt+Enter newline
-        # binding while leaving the ordinary CR/Enter path untouched.
-        shift_enter = (Keys.Escape, Keys.ControlM)
-        ANSI_SEQUENCES["\x1b[13;2u"] = shift_enter
-        ANSI_SEQUENCES["\x1b[27;2;13~"] = shift_enter
-
-        cmd_names = list(COMMANDS.keys())
-        # #183: the palette ranks by what this user actually runs.  The MRU
-        # file is a hint, never state: a missing or unreadable file just means
-        # alphabetical order.
-        from xenon.repl.command_catalog import CommandRecents
-
-        self._command_recents = getattr(self, "_command_recents", None) or (
-            CommandRecents(Path.home() / ".xenon" / "command_recents.json")
-        )
-        self._completer = OmniCompleter(cmd_names, recents=self._command_recents)
-
-        kb = KeyBindings()
-
-        @kb.add("enter", eager=True)
-        def _(event):
-            # #183: Enter runs the highlighted palette row (see
-            # ``apply_palette_enter`` for the scoping rules).
-            from xenon.repl.command_catalog import apply_palette_enter
-
-            apply_palette_enter(event.current_buffer)
-
-        @kb.add("s-tab")
-        def _(event):
-            # Like Ctrl+O, the mode notification writes to stdout. Suspend the
-            # active prompt first so the fixed toolbar is not overwritten.
-            if run_in_terminal is not None:
-                run_in_terminal(self._handle_shift_tab)
-            else:
-                self._handle_shift_tab()
-
-        @kb.add("escape", "enter", eager=True)
-        def _(event):
-            event.current_buffer.insert_text("\n")
-
-        @kb.add(Keys.BracketedPaste)
-        def _(event):
-            """Fold only the editor view; retain the exact paste for submit."""
-            buffer = event.current_buffer
-            visible = self._paste_store.compact(
-                event.data,
-                occupied_text=buffer.text,
-            )
-            buffer.insert_text(visible)
-
-        @kb.add(Keys.Backspace)
-        def _(event):
-            """Treat a folded paste as one editor atom when deleting left."""
-            buffer = event.current_buffer
-            if buffer.selection_state is not None:
-                buffer.cut_selection()
-                return
-            token = self._paste_store.token_before_cursor(
-                buffer.text, buffer.cursor_position
-            )
-            buffer.delete_before_cursor(len(token) if token else 1)
-
-        @kb.add(Keys.Delete)
-        def _(event):
-            """Treat a folded paste as one editor atom when deleting right."""
-            buffer = event.current_buffer
-            if buffer.selection_state is not None:
-                buffer.cut_selection()
-                return
-            token = self._paste_store.token_after_cursor(
-                buffer.text, buffer.cursor_position
-            )
-            buffer.delete(count=len(token) if token else 1)
-
-        @kb.add(Keys.Left)
-        def _(event):
-            buffer = event.current_buffer
-            token = self._paste_store.token_before_cursor(
-                buffer.text, buffer.cursor_position
-            )
-            buffer.cursor_left(count=len(token) if token else 1)
-
-        @kb.add(Keys.Right)
-        def _(event):
-            buffer = event.current_buffer
-            token = self._paste_store.token_after_cursor(
-                buffer.text, buffer.cursor_position
-            )
-            buffer.cursor_right(count=len(token) if token else 1)
-
-        @kb.add("c-o")
-        def _(event):
-            """v0.5.3: Ctrl+O 切换显示/隐藏上次引擎执行的完整过程。
-
-            折叠 → 展开：重新打印模式行、捕获的日志、推理面板。
-            展开 → 折叠：重新打印折叠摘要行。
-            """
-            # prompt_toolkit owns the terminal while input is active. Writing
-            # through Rich directly from this callback corrupts its input
-            # area/bottom toolbar. run_in_terminal temporarily erases the
-            # application, prints above it, then redraws it coherently.
-            if run_in_terminal is not None:
-                run_in_terminal(self._toggle_thinking_details)
-            else:  # defensive fallback for unusual prompt_toolkit versions
-                self._toggle_thinking_details()
-
-        style = Style.from_dict(_build_pt_style())
-
-        history_path = _HISTORY_DIR / "input_history.txt"
-
-        paste_store = self._paste_store
-
-        class _PasteAwareFileHistory(FileHistory):
-            """Never persist a UI-only paste token into reusable history."""
-
-            def append_string(self, string: str) -> None:
-                super().append_string(paste_store.expand(string))
-
-        if os.environ.get("XENON_NO_PT") == "1":
-            self._pt_session = None
-        else:
-            try:
-                session_kwargs = {
-                    "history": _PasteAwareFileHistory(str(history_path)),
-                    "completer": self._completer,
-                    "key_bindings": kb,
-                    "style": style,
-                }
-                # PromptSession needs a real output in an interactive TTY.
-                # Tests/headless runners have no TTY; use a dummy output only
-                # there so initialization is testable without hiding the prompt
-                # from real users.
-                if not sys.stdin.isatty():
-                    session_kwargs["output"] = DummyOutput()
-                self._pt_session = PromptSession(**session_kwargs)
-                # 状态栏不再用 bottom_toolbar：固定底部工具栏会把输入区与
-                # 状态栏之间的空白拉满整屏。它由 _install_input_lower_rule
-                # 作为内联行紧跟在输入下边界之后。
-                self._install_input_lower_rule()
-            except Exception:
-                logger.debug("prompt_toolkit 初始化失败，回退自建输入", exc_info=True)
-                self._pt_session = None
-
     def _toggle_thinking_details(self) -> None:
-        """Render the last execution trace while prompt_toolkit is suspended."""
+        """Render (or fold) the last execution trace; bound to Ctrl+O."""
         if (
             self._last_thinking_panel is None
             and not self._captured_log
@@ -551,66 +342,6 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             console.print(f"[dim]  💭 思考过程 · {summary}  [Ctrl+O][/dim]")
         console.print()
 
-    def _install_input_lower_rule(self) -> None:
-        """把下边界与状态栏都做成紧贴输入区的内联行。"""
-        if self._pt_session is None:
-            return
-
-        from prompt_toolkit.layout.containers import VerticalAlign, Window
-        from prompt_toolkit.layout.controls import FormattedTextControl
-
-        root = self._pt_session.app.layout.container
-        if not hasattr(root, "children") or not root.children:
-            return
-
-        # PromptSession 的主输入 FloatContainer 会占据状态栏上方的剩余空间。
-        # 把规则线放进它内部并设为 TOP 对齐，规则线会紧随输入内容；外层仍然
-        # 占满屏幕，因此原生 bottom_toolbar 继续固定在终端最底端。
-        main = root.children[0]
-        float_container = getattr(main, "alternative_content", None)
-        main_stack = getattr(float_container, "content", None)
-        if main_stack is None or not hasattr(main_stack, "children"):
-            return
-        main_stack.align = VerticalAlign.TOP
-
-        # 默认 Buffer Window 会吞掉状态栏上方的全部剩余高度。按实际输入内容
-        # 固定它的当前高度，空白空间便会留在下边界之后，而不是输入和下边界之间。
-        buffer_container = (
-            main_stack.children[1] if len(main_stack.children) > 1 else None
-        )
-        buffer_window = getattr(buffer_container, "content", None)
-
-        def input_height() -> int:
-            import shutil
-
-            from prompt_toolkit.utils import get_cwidth
-
-            document = self._pt_session.default_buffer.document
-            available = max(20, shutil.get_terminal_size((80, 24)).columns - 5)
-            visual_lines = 0
-            for line in document.lines or [""]:
-                visual_lines += max(1, (get_cwidth(line) + available - 1) // available)
-            return max(1, min(10, visual_lines))
-
-        if buffer_window is not None:
-            buffer_window.height = input_height
-
-        lower_rule = Window(
-            FormattedTextControl(self.status_bar.get_input_rule_fragments),
-            height=1,
-            dont_extend_height=True,
-        )
-        main_stack.children.append(lower_rule)
-
-        # 状态栏紧跟下边界：composer = 输入 + 下边界 + 状态栏。长会话时
-        # prompt_toolkit 自然把它带到屏幕底部；短会话也不会凭空拉出整屏空白。
-        status_window = Window(
-            FormattedTextControl(self.status_bar.get_toolbar_fragments),
-            height=1,
-            dont_extend_height=True,
-        )
-        main_stack.children.append(status_window)
-
     @staticmethod
     def _diff_preview(tool_name: str, params: dict) -> str:
         """审批面板里的 diff 预览（实现见 xenon.repl.render）。"""
@@ -622,20 +353,6 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
     def _persist_tool_checkpoint(self, _checkpoint: dict[str, Any]) -> None:
         """Durably save an in-flight tool transition without maintenance work."""
         self._auto_save_session(cleanup=False)
-
-    def _evidence_snapshot(self) -> dict[str, Any] | None:
-        """Snapshot the durable ledger without creating an empty one."""
-        runtime = self.agent_context.get_evidence_runtime()
-        ledger = getattr(runtime, "ledger", None)
-        if ledger is None:
-            ledger = self.agent_context.get("_evidence_ledger")
-        if ledger is None or not getattr(ledger, "events", None):
-            return None
-        try:
-            return ledger.snapshot()
-        except Exception as exc:  # noqa: BLE001 — saving must not block a turn
-            logger.debug("证据链快照失败（已忽略）: %s", exc)
-            return None
 
     def _auto_save_session(self, *, cleanup: bool = True) -> None:
         """Atomically checkpoint the active session during use and on exit."""
@@ -651,9 +368,6 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
                 "cwd": str(Path.cwd()),
                 "conversation_id": getattr(self, "_conversation_id", ""),
             }
-            evidence = self._evidence_snapshot()
-            if evidence is not None:
-                extra["evidence"] = evidence
             from xenon.repl.kernel_evidence import snapshot_for_session
 
             kernel_evidence = snapshot_for_session(self)
@@ -751,106 +465,6 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
                 f"\n[warning]⚠ 无法切换到模式 {next_mode_name}：{exc}[/warning]\n"
                 "[dim]│  用 [bold]/mode[/bold] 查看并手动选择可用模式[/dim]"
             )
-
-    def _render_engine_result(
-        self, callback, result: str, title: str, border_style: str = "green"
-    ) -> None:
-        """渲染引擎结果：默认折叠执行过程，仅显示最终答案。
-
-        v0.5.3: 执行日志（工具调用/HTTP 请求/引擎信息）默认全部隐藏。
-        仅显示一条折叠摘要行（含迭代次数和工具调用次数）。
-        用户通过 Ctrl+O 或 /thinking on 可展开查看完整执行过程。
-        """
-        # 有些引擎的异常路径不会触发 on_finish；这里统一清掉瞬时活动行。
-        if hasattr(callback, "finish_activity"):
-            callback.finish_activity()
-        panel = callback.get_thinking_panel()
-        if panel is not None:
-            self._last_thinking_panel = panel
-            step_count = len(panel.steps)
-            tool_count = panel.tool_call_count
-            for _ in range(tool_count):
-                self.status_bar.add_tool_call()
-            # v0.5.4: 从成功的工具调用中提取文件路径，更新工作记忆
-            self._track_session_files(panel)
-        else:
-            step_count = 0
-            tool_count = 0
-
-        # v0.5.3: 诊断日志 — 记录结果长度，便于排查空结果问题
-        if not result or not result.strip():
-            logger.warning(
-                f"_render_engine_result: 循环返回空结果 "
-                f"(result={result!r}, steps={step_count}, tools={tool_count}, "
-                f"title={title!r})"
-            )
-            result = (
-                "任务已执行，但未生成明确的回复内容。请尝试重新提问或使用更具体的指令。"
-            )
-
-        # v0.6.1: 安全网 —— 如果引擎返回的是未解析的 JSON 文本，
-        # 尝试从 JSON 中提取 final_answer，避免用户看到裸 JSON。
-        result = self._unwrap_json_result(result)
-
-        if self._show_thinking:
-            # ── 展开模式：重现完整执行过程（辅助信息全部 dim，只有最终答案高亮）──
-            if self._last_mode_line:
-                console.print(f"[dim]{self._last_mode_line}[/dim]")
-            if self._captured_log:
-                console.print(Text(self._captured_log.rstrip(), style="dim"))
-            if panel is not None:
-                console.print(panel)
-            console.print("[dim]  💭 思考过程已展开  [Ctrl+O 折叠][/dim]")
-        else:
-            # ── 折叠模式：只保留一行摘要，完整轨迹由 Ctrl+O 展开 ──
-            if panel is not None and panel.steps:
-                header_parts = []
-                if step_count:
-                    header_parts.append(f"{step_count} 步")
-                if tool_count:
-                    header_parts.append(f"{tool_count} 个工具")
-                error_count = sum(1 for step in panel.steps if step.is_error) + len(
-                    panel.errors
-                )
-                if error_count:
-                    header_parts.append(f"{error_count} 个错误")
-                header = " · ".join(header_parts) if header_parts else ""
-                console.print(f"[dim]  💭 {header}  [Ctrl+O 展开详情][/dim]")
-            else:
-                console.print("[dim]  💭 无工具调用[/dim]")
-
-        # 三层可信度模型的渲染分支：判定优先复用 TurnGate 缓存。
-        # pass → 正常发布；remind → 发布 + 待人工核验清单（黄色面板）；
-        # fail（重试耗尽）→ 降级发布 + 核验清单；fuse → 按未完成交付（红色面板）。
-        verdict = getattr(self, "_last_gate_verdict", None)
-        if panel is None:
-            outcome = "pass"
-        elif verdict is None:
-            self._verify_turn(panel, result)
-            verdict = getattr(self, "_last_gate_verdict", None)
-            outcome = verdict.outcome if verdict is not None else "pass"
-        else:
-            outcome = verdict.outcome
-        if outcome == "fuse":
-            self._render_verification_failure(result, verdict.reasons)
-            return
-        self._render_assistant_text(result, title=title)
-        if outcome == "remind":
-            from xenon.repl.render import render_verification_reminders
-
-            render_verification_reminders(verdict.reasons, degraded=False)
-        elif outcome == "fail":
-            from xenon.repl.render import render_verification_reminders
-
-            render_verification_reminders(verdict.reasons, degraded=True)
-
-    @staticmethod
-    def _render_verification_failure(draft: str, reasons: list[str]) -> None:
-        """未通过发布门的答案（实现见 xenon.repl.render）。"""
-
-        from xenon.repl.render import render_verification_failure
-
-        render_verification_failure(draft, reasons)
 
     @staticmethod
     def _render_assistant_text(
@@ -1035,9 +649,8 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
                         # 重启失败，继续运行
                         continue
 
-                # 显示状态栏（PT 模式由 bottom_toolbar 渲染，非 PT 模式才需单独打印）
-                if self._pt_session is None:
-                    self.status_bar.print_status()
+                # 状态行由内置编辑器在提交后重绘；每轮开始前单独打印一次全景.
+                self.status_bar.print_status()
 
                 try:
                     user_input = self._read_input()
@@ -1462,13 +1075,7 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         console.print()
 
     def _read_input(self) -> str:
-        """读取用户输入。优先使用 prompt_toolkit，不可用时回退自建输入。"""
-        if self._pt_session is not None:
-            try:
-                return self._read_input_pt()
-            except _ShiftTabSignal:
-                self._handle_shift_tab()
-                return ""
+        """读取用户输入：内置原始终端编辑器（Windows / POSIX 各一条路径）。"""
 
         import sys
 
@@ -1480,39 +1087,6 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
                 return ""
 
         return self._read_input_windows()
-
-    def _read_input_pt(self) -> str:
-        """上下平行线定界输入；运行状态独立固定在终端屏幕底端。"""
-        self._paste_store.reset()
-        if hasattr(self, "_completer"):
-            self._completer.update_commands(list(COMMANDS.keys()))
-            if hasattr(self, "model_pool") and self.model_pool:
-                self._completer.update_models(
-                    [e.alias for e in self.model_pool.list_all()]
-                )
-
-        # 上边界属于多行 prompt；下边界由主输入布局追加并紧贴输入内容；
-        # API/模型状态则由原生 bottom_toolbar 固定在整个终端屏幕底端。
-        import shutil
-
-        width = max(20, shutil.get_terminal_size((80, 24)).columns - 1)
-        message: list[tuple[str, str]] = [
-            ("class:input.rule", "─" * width),
-            ("", "\n"),
-            ("class:prompt", "  ❯ "),
-        ]
-
-        try:
-            text = self._pt_session.prompt(message)
-        except KeyboardInterrupt:
-            raise
-        except EOFError:
-            raise KeyboardInterrupt from None
-
-        # Strip only editor whitespace around the visible value, then restore
-        # paste blocks.  Leading/trailing whitespace *inside* a pasted block is
-        # therefore preserved exactly.
-        return self._paste_store.expand(text.strip())
 
     def _classify_slash_input(self, raw: str) -> str:
         """规则 + LLM 校验：判断以 / 开头的输入是命令还是普通对话。
@@ -1583,11 +1157,6 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             self._handle_chat(raw)
             return False
 
-        # #183: remember what ran so the palette puts it on top next time.
-        from xenon.repl.command_catalog import record_use as _record_use
-
-        _record_use(getattr(self, "_completer", None), cmd_name)
-
         try:
             output = dispatch_command(
                 cmd_name,
@@ -1612,33 +1181,6 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
                 )
             )
         return False
-
-    def _verify_turn(self, panel, result: str) -> tuple[bool, list[str]]:
-        """发布门：TurnGate 单一判定；提醒类记事实；判定缓存供渲染复用。
-
-        返回 (可发布, 原因)：pass/remind → True；fail/fuse → False。
-        """
-
-        try:
-            from xenon.engine.task_verifier import extract_acceptance_criteria
-            from xenon.turn.gate import PUBLISHABLE_OUTCOMES, tool_events_from_panel
-
-            tool_events = tool_events_from_panel(panel)
-            criteria = extract_acceptance_criteria(
-                getattr(self, "_last_user_text", "") or ""
-            )
-            verdict = self._turn_gate.evaluate(
-                result or "", tool_events=tool_events, criteria=criteria
-            )
-            self._last_gate_verdict = verdict
-            if verdict.outcome == "remind":
-                self._record_event("verification/remind", reasons=verdict.reasons)
-            elif verdict.outcome not in PUBLISHABLE_OUTCOMES:
-                self._record_event("verification/failed", reasons=verdict.reasons)
-            return verdict.outcome in PUBLISHABLE_OUTCOMES, verdict.reasons
-        except Exception:  # noqa: BLE001 — 校验失败不能阻断输出
-            logger.debug("任务校验执行失败（已忽略）", exc_info=True)
-            return True, []
 
     def _record_event(self, event_type: str, **data: object) -> str | None:
         """Best-effort append to the additive session fact log."""
@@ -1739,10 +1281,13 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         required_level: int,
         reason: str,
     ) -> bool:
-        """工具超出本轮级别时的询问式升级（能力不足 → 问用户，不硬拒）。"""
+        """工具超出本轮级别时的询问式升级（能力不足 → 问用户，不硬拒）。
 
-        if self._approval_rules.is_allowed(tool_name):
-            return True
+        This is the legacy engine's escalation channel.  Its "a" answer now writes
+        into the session's single ``GrantBook`` (§9: tool + path, timed) instead
+        of a tool-name-keyed side table.
+        """
+
         if tool_name in self._tool_escalations:
             return True
         if get_config().interaction.assume_yes:
@@ -1781,8 +1326,8 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
                 except (KeyboardInterrupt, EOFError):
                     return False
         if choice == "a":
-            ttl = self._approval_rules.allow(tool_name)
-            self._tool_escalations.add(tool_name)  # 旧接口兼容
+            ttl = self._grant_book.ttl_seconds
+            self._tool_escalations.add(tool_name)
             console.print(
                 f"[dim]· 本会话 {ttl / 60:.0f} 分钟内自动授权 {tool_name}[/dim]"
             )
@@ -1863,47 +1408,6 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         except Exception:
             return False
 
-    def _build_mcp_tools_list(self) -> str:
-        """v0.5.4: 构建可用 MCP 工具/服务器列表，注入到引擎 system prompt。
-
-        - 已连接的服务器：展示完整工具列表
-        - 惰性（未连接）服务器：仅展示服务器名，提示按需调用
-
-        LLM 需要知道有哪些 MCP 工具可用，才能正确调用 mcp_call。
-        """
-        registry = getattr(self, "_mcp_registry", None)
-        if not registry:
-            return ""
-
-        parts: list[str] = [""]
-
-        # 已连接的工具
-        if registry.tool_map:
-            tools_by_server: dict[str, list[tuple[str, str]]] = {}
-            for full_name, (server_name, tool) in registry.tool_map.items():
-                desc = (
-                    tool.get("description", "")[:80]
-                    if isinstance(tool, dict)
-                    else str(tool)[:80]
-                )
-                tools_by_server.setdefault(server_name, []).append((full_name, desc))
-
-            parts.append("当前可用的 MCP 工具：")
-            for server, tools in sorted(tools_by_server.items()):
-                parts.append(f"  [{server}]")
-                for name, desc in tools:
-                    parts.append(f"    - {name}: {desc}")
-
-        # 惰性服务器（尚未连接）
-        pending = registry.get_pending_server_names()
-        if pending:
-            parts.append("\n可用的 MCP 服务器（首次调用时自动连接）：")
-            for name in sorted(pending):
-                parts.append(
-                    f'  - {name}:* — 使用 mcp_call tool_name="{name}:<工具名>" 调用'
-                )
-
-        return "\n".join(parts) if len(parts) > 1 else ""
 
     def _preload_mcp_server_configs(self) -> None:
         """v0.5.4: 启动时仅登记 MCP 服务器配置，不连接（惰性）。
@@ -1968,7 +1472,7 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         """确保所有惰性 MCP 服务器已连接并发现工具。
 
         在 LLM 决定使用 mcp_call 时调用，或用户执行 /mcp tools 时调用。
-        连接完成后更新 _mcp_tools_list 以供后续引擎注入。
+        工具进入模型视角的通道是 catalog（``core+mcp``），不再另生成提示词列表。
         """
         registry = getattr(self, "_mcp_registry", None)
         if not registry or not registry.has_pending_servers():
@@ -2547,5 +2051,23 @@ def start_repl(
     if should_enable_auto_route:
         repl.intelligent_router.enable()
         console.print("[dim]智能路由已启用[/dim]")
+
+    # The legacy session log is still the live store behind /resume, /evidence
+    # and /rewind, so importing it here would copy data that is still being
+    # written -- one new ledger per session, on every start.  The import is an
+    # explicit one-shot (`xenon import-legacy`) for when that store retires.
+    #
+    # Retention is opt-in and archives (moves) old child ledgers; task ledgers
+    # are never touched and a sealed/open branch is never moved.
+    try:
+        from xenon.ledger.retention import enforce, policy_from_config
+
+        archived = enforce(
+            Path.home() / ".xenon" / "ledger", policy_from_config(get_config().retention)
+        )
+        if archived:
+            console.print(f"[dim]· 已归档 {len(archived)} 个过期子任务账本[/dim]")
+    except Exception:  # noqa: BLE001 — retention never blocks startup
+        logger.debug("ledger retention failed", exc_info=True)
 
     repl.run()

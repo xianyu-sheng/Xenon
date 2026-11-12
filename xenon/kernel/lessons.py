@@ -11,9 +11,10 @@ The three guardrails live here in code:
    (event kind + canonical payload hash) and a recurrence counter; after the
    threshold of recurrences with no improvement it is *retired* (recorded, not
    deleted);
-3. **a lesson is a visible artifact** — ``~/.xenon/lessons.yaml`` with an id,
-   trigger, counterfactual, action and source task; ``LESSON_*`` events; the
-   per-repo ``PITFALLS.md`` projection lives in a later slice.
+3. **a lesson is a visible artifact** — a ``MemoryKind.LESSON`` record (there is
+   no second store; ``/memory`` lists and archives it like any other memory),
+   with an id, trigger, counterfactual, action and source task, plus
+   ``LESSON_*`` events.
 
 A lesson never rewrites a running task: it is applied when the *next* task with
 the same fingerprint is built, as an extra constraint (pitfall), a profile

@@ -70,7 +70,16 @@ def test_a_constraint_change_changes_the_prefix_digest() -> None:
     assert constrained.hash != plain.hash
 
 
-def test_a_note_change_changes_the_prefix_digest() -> None:
+def test_a_note_does_not_touch_the_prefix_digest() -> None:
+    """A note changes every turn, so it must never enter the cached prefix.
+
+    It rides in this turn's message instead.  When it lived in the system
+    prompt, the very first loop diagnosis invalidated the capability catalog
+    and both action protocols for the rest of the run.
+    """
+
+    from xenon.harness.llm import build_messages
+
     ledger = Ledger.in_memory("note")
     plain = _view(_spec(), ledger)
     noted = build_model_view(
@@ -80,7 +89,9 @@ def test_a_note_change_changes_the_prefix_digest() -> None:
         notes=("Loop detected: read failed 4 times. Change the approach.",),
     )
 
-    assert noted.prefix_digest != plain.prefix_digest
+    assert noted.prefix_digest == plain.prefix_digest
+    assert build_messages(noted)[0] == build_messages(plain)[0]
+    assert "Loop detected" in build_messages(noted)[1]["content"]
 
 
 def test_a_tool_index_change_changes_the_prefix_digest() -> None:
@@ -102,6 +113,7 @@ def test_a_tool_index_change_changes_the_prefix_digest() -> None:
 
 
 def test_turn_path_renders_only_when_non_empty() -> None:
+    from xenon.harness.llm import build_messages
     from xenon.kernel.contracts import TaskPhase
 
     ledger = Ledger.in_memory("branch")
@@ -115,7 +127,11 @@ def test_turn_path_renders_only_when_non_empty() -> None:
         turn_path=("turn-1: first", "turn-2: second"),
         phase=TaskPhase.RUNNING,
     )
-    assert "Turn path (you are on a side branch): turn-1: first -> turn-2: second" in branched.system
+    # The branch path is fixed for the task, so it rides in the turn message
+    # and never disturbs the prefix.
+    assert branched.prefix_digest == plain.prefix_digest
+    turn = build_messages(branched)[1]["content"]
+    assert "Turn path (you are on a side branch): turn-1: first -> turn-2: second" in turn
     assert branched.turn_path == ("turn-1: first", "turn-2: second")
 
 

@@ -288,15 +288,51 @@ class ModelRegistry:
         }
 
     def save_to_file(self, path: str | Path) -> None:
-        """保存配置到 YAML 文件（不含 credentials.yaml 派生出的模型）。"""
+        """保存配置到 YAML 文件（不含 credentials.yaml 派生出的模型）。
+
+        API keys do **not** go into this file: it is a model list people edit,
+        and a key here would be a second plaintext credential store that the
+        encrypted credentials path cannot protect.  Keys move to
+        ``_model_keys`` in the credentials document.
+        """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        data = self.export_config(include_derived=False)
+        keys: dict[str, str] = {}
+        models = data.get("models")
+        if isinstance(models, dict):
+            for alias, entry in models.items():
+                if not isinstance(entry, dict):
+                    continue
+                key = entry.pop("api_key", "")
+                if key:
+                    keys[str(alias)] = str(key)
         content = yaml.dump(
-            self.export_config(include_derived=False),
+            data,
             allow_unicode=True,
             default_flow_style=False,
         )
         atomic_write_text(path, content, mode=0o600)  # A9 原子写 + A10 chmod 0600
+        if keys:
+            self._store_model_keys(keys)
+
+    @staticmethod
+    def _store_model_keys(keys: dict[str, str]) -> None:
+        """Move per-alias API keys into the encrypted credentials document."""
+
+        try:
+            from xenon.repl.provider_registry import _get_credentials_path
+            from xenon.utils.credentials_io import load_document, save_document
+
+            credentials_path = _get_credentials_path()
+            document = load_document(credentials_path)
+            current = document.get("_model_keys")
+            merged = dict(current) if isinstance(current, dict) else {}
+            merged.update(keys)
+            document["_model_keys"] = merged
+            save_document(credentials_path, document)
+        except Exception:  # noqa: BLE001 — saving a model list must not fail on this
+            logger.debug("模型 API Key 迁移到凭证文件失败", exc_info=True)
 
     def _warn_on_persisted_derived_models(
         self, path: Path, loaded: dict[str, Any]
@@ -313,11 +349,13 @@ class ModelRegistry:
         if not loaded:
             return
         try:
-            credentials_path = Path.home() / ".xenon" / "credentials.yaml"
-            if not credentials_path.exists():
+            from xenon.utils.credentials_io import load_document
+
+            creds = load_document(
+                Path.home() / ".xenon" / "credentials.yaml"
+            )
+            if not creds:
                 return
-            with open(credentials_path, encoding="utf-8") as f:
-                creds = yaml.safe_load(f) or {}
         except Exception:
             return
 
@@ -358,7 +396,15 @@ class ModelRegistry:
             )
 
     def load_from_file(self, path: str | Path) -> None:
-        """从 YAML 文件加载配置。"""
+        """从 YAML 文件加载配置。
+
+        一个手写的 ``models.yaml`` 条目可能只写了 ``base_url`` / ``api_key``
+        （别名本身就是 ``provider/model``），也可能整个条目不是字典。以前这里
+        直接 ``mcfg["model_id"]``，缺字段就抛 ``KeyError``，把整个 REPL 启动
+        打死——实测用户按「新对话」时崩溃。现在按别名补齐并跳过不可用条目：
+        一个坏条目只该丢它自己，不该让所有模型都加载不出来。
+        """
+
         path = Path(path)
         if not path.exists():
             return
@@ -366,12 +412,38 @@ class ModelRegistry:
         with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
+        models = data.get("models", {})
+        if not isinstance(models, dict):
+            models = {}
+
+        model_keys: dict[str, Any] = {}
+        try:
+            from xenon.utils.credentials_io import (
+                default_credentials_path,
+                load_document,
+            )
+
+            credentials = load_document(default_credentials_path())
+            stored = credentials.get("_model_keys")
+            if isinstance(stored, dict):
+                model_keys = stored
+        except Exception:  # noqa: BLE001 — a missing key store is not a load error
+            model_keys = {}
+
         # 加载模型
-        for alias, mcfg in data.get("models", {}).items():
+        for alias, mcfg in models.items():
+            if not isinstance(mcfg, dict):
+                logger.warning("%s: 模型条目 %s 不是字典，已跳过", path, alias)
+                continue
+            model_id = str(mcfg.get("model_id") or mcfg.get("model") or alias).strip()
+            if not model_id:
+                logger.warning("%s: 模型条目 %s 无法确定 model_id，已跳过", path, alias)
+                continue
             self.add_model(
-                model_id=mcfg["model_id"],
+                model_id=model_id,
                 alias=alias,
-                api_key=mcfg.get("api_key", ""),
+                api_key=mcfg.get("api_key", "")
+                or str(model_keys.get(alias) or ""),
                 base_url=mcfg.get("base_url", ""),
                 max_tokens=mcfg.get("max_tokens", DEFAULT_MAX_TOKENS),
                 temperature=mcfg.get("temperature", 0.7),
@@ -382,7 +454,7 @@ class ModelRegistry:
                 ),  # P0: 修复有损往返(export 写了 weight,load 原未读回)
             )
 
-        self._warn_on_persisted_derived_models(path, data.get("models", {}))
+        self._warn_on_persisted_derived_models(path, models)
 
         # 加载角色
         for role, aliases in data.get("roles", {}).items():
@@ -412,12 +484,12 @@ class ModelRegistry:
         else:
             credentials_path = Path(credentials_path)
 
-        if not credentials_path.exists():
-            return
-
         try:
-            with open(credentials_path, encoding="utf-8") as f:
-                creds = yaml.safe_load(f) or {}
+            from xenon.utils.credentials_io import load_document
+
+            creds = load_document(credentials_path)
+            if not creds:
+                return
         except Exception:
             return
 

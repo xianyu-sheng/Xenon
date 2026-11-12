@@ -12,7 +12,6 @@ from xenon.nodes.tool_executor import ToolExecutor
 from xenon.sandbox import (
     command_allowlist,
     command_denial_reason,
-    detect_sandbox_backends,
 )
 
 
@@ -21,11 +20,6 @@ def _run(tool, params, level=3):
     return ToolExecutor(retry_attempts=1).execute(tool, params, ctx)
 
 
-def test_detect_backends_returns_list():
-    backends = detect_sandbox_backends()
-    assert isinstance(backends, list)
-    assert backends
-    assert all(b in {"wsl", "docker", "none"} for b in backends)
 
 
 def test_read_only_mode_blocks_writes_and_allows_reads(monkeypatch, tmp_path):

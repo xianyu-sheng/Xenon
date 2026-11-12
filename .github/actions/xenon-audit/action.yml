@@ -1,0 +1,160 @@
+name: Xenon external audit
+description: >-
+  Audit another agent's session transcript against the worktree. The transcript
+  claims; the repository proves. Produces JSON + PR-comment artifacts and a
+  verdict output.
+
+inputs:
+  transcript:
+    description: Path to the agent transcript (.jsonl or .json)
+    required: true
+  workspace:
+    description: Repository root the agent worked in
+    required: false
+    default: "."
+  base:
+    description: "Commit the session started from (default: inferred from the transcript)"
+    required: false
+    default: ""
+  agent:
+    description: Agent name recorded in the audit
+    required: false
+    default: ""
+  strict:
+    description: Fail when the audit verdict is "contradicted"
+    required: false
+    default: "true"
+  out-dir:
+    description: Directory for the JSON and comment artifacts
+    required: false
+    default: ".xenon-audit"
+  python-version:
+    description: Python used to run the CLI
+    required: false
+    default: "3.12"
+  xenon-spec:
+    description: pip requirement for Xenon (pin a version for reproducible audits)
+    required: false
+    default: "xenon-harness==1.0.0"
+  artifact-name:
+    description: Name of the uploaded artifact (empty disables the upload)
+    required: false
+    default: "xenon-audit"
+  pr-number:
+    description: PR number to comment on (also works for workflow_dispatch)
+    required: false
+    default: ""
+  github-token:
+    description: Token used to post the PR comment (needs pull-requests write)
+    required: false
+    default: ""
+
+outputs:
+  verdict:
+    description: verified | partial | unverified | contradicted
+    value: ${{ steps.audit.outputs.verdict }}
+  report-json:
+    description: Path to the JSON report
+    value: ${{ steps.audit.outputs.report_json }}
+  comment-path:
+    description: Path to the Markdown comment body
+    value: ${{ steps.audit.outputs.comment_path }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v7
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Xenon
+      shell: bash
+      env:
+        XENON_SPEC: ${{ inputs.xenon-spec }}
+      run: |
+        set -euo pipefail
+        python -m pip install --disable-pip-version-check "$XENON_SPEC"
+
+    - name: Audit the transcript
+      id: audit
+      shell: bash
+      env:
+        XENON_TRANSCRIPT: ${{ inputs.transcript }}
+        XENON_WORKSPACE: ${{ inputs.workspace }}
+        XENON_BASE: ${{ inputs.base }}
+        XENON_AGENT: ${{ inputs.agent }}
+        XENON_STRICT: ${{ inputs.strict }}
+        XENON_OUT: ${{ inputs.out-dir }}
+      run: |
+        set -uo pipefail
+        mkdir -p "$XENON_OUT"
+        args=(audit-external "$XENON_TRANSCRIPT" --workspace "$XENON_WORKSPACE")
+        if [ -n "$XENON_BASE" ]; then args+=(--base "$XENON_BASE"); fi
+        if [ -n "$XENON_AGENT" ]; then args+=(--agent "$XENON_AGENT"); fi
+        if [ "$XENON_STRICT" = "true" ]; then args+=(--strict); fi
+
+        # Two deterministic passes: JSON for machines, comment for humans.
+        python -m xenon "${args[@]}" --json --out "$XENON_OUT"
+        strict_code=$?
+        python -m xenon "${args[@]}" --comment --out "$XENON_OUT" >/dev/null
+        code=$?
+
+        stem="$(basename "$XENON_TRANSCRIPT")"
+        stem="${stem%.*}"
+        json="$XENON_OUT/${stem}.audit.json"
+        comment="$XENON_OUT/${stem}.comment.md"
+        verdict="$(python - "$json" <<'PY'
+        import json, sys
+        with open(sys.argv[1], encoding="utf-8") as handle:
+            report = json.load(handle)
+        print(report.get("status", {}).get("evidence_status", "unknown"))
+        PY
+        )"
+        {
+          echo "verdict=$verdict"
+          echo "report_json=$json"
+          echo "comment_path=$comment"
+        } >> "$GITHUB_OUTPUT"
+        echo "xenon audit verdict: $verdict"
+        # --strict fails only on "contradicted"; keep that contract visible.
+        if [ "$XENON_STRICT" = "true" ] && [ "$strict_code" -ne 0 ]; then
+          exit "$strict_code"
+        fi
+        exit "$code"
+
+    - name: Upload the audit artifacts
+      if: inputs.artifact-name != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.out-dir }}
+        if-no-files-found: warn
+
+    - name: Comment on the pull request
+      if: inputs.github-token != '' && inputs.pr-number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        XENON_PR: ${{ inputs.pr-number }}
+        XENON_COMMENT: ${{ steps.audit.outputs.comment_path }}
+        XENON_REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        if [ ! -f "$XENON_COMMENT" ]; then
+          echo "No comment artifact; nothing to post."
+          exit 0
+        fi
+        marker="<!-- xenon-external-audit -->"
+        body_file="$(mktemp)"
+        printf '%s\n' "$marker" > "$body_file"
+        cat "$XENON_COMMENT" >> "$body_file"
+        existing="$(gh api "repos/$XENON_REPO/issues/$XENON_PR/comments" \
+          --jq '.[] | select(.body | contains("<!-- xenon-external-audit -->")) | .id' \
+          | head -n 1 || true)"
+        if [ -n "$existing" ]; then
+          gh api --method PATCH "repos/$XENON_REPO/issues/comments/$existing" \
+            -F body=@"$body_file" >/dev/null
+        else
+          gh api "repos/$XENON_REPO/issues/$XENON_PR/comments" \
+            -F body=@"$body_file" >/dev/null
+        fi

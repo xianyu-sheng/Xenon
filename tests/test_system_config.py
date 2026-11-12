@@ -71,7 +71,6 @@ def test_load_config_with_defaults(mock_config_path: Path, monkeypatch):
     assert config.interaction.terminal_ascii is False
     assert config.development.register_module_allow == ""
     assert config.development.allow_home_project is False
-    assert config.development.no_pty is False
 
 
 def test_load_config_from_file(mock_config_path: Path, monkeypatch):
@@ -97,7 +96,6 @@ def test_load_config_from_file(mock_config_path: Path, monkeypatch):
         "development": {
             "register_module_allow": "mymodule,another",
             "allow_home_project": True,
-            "no_pty": True,
         },
     }
 
@@ -117,7 +115,6 @@ def test_load_config_from_file(mock_config_path: Path, monkeypatch):
     assert config.interaction.terminal_ascii is True
     assert config.development.register_module_allow == "mymodule,another"
     assert config.development.allow_home_project is True
-    assert config.development.no_pty is True
 
 
 def test_env_overrides_file(mock_config_path: Path, monkeypatch):
@@ -433,7 +430,6 @@ def test_all_env_vars_respected(mock_config_path: Path, monkeypatch):
         "XENON_TERMINAL_ASCII": "1",
         "XENON_REGISTER_MODULE_ALLOW": "mod1,mod2",
         "XENON_ALLOW_HOME_PROJECT": "1",
-        "XENON_NO_PT": "1",
     }
 
     for key, value in env_vars.items():
@@ -452,4 +448,3 @@ def test_all_env_vars_respected(mock_config_path: Path, monkeypatch):
     assert config.interaction.terminal_ascii is True
     assert config.development.register_module_allow == "mod1,mod2"
     assert config.development.allow_home_project is True
-    assert config.development.no_pty is True

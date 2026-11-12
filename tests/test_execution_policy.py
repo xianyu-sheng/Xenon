@@ -427,6 +427,92 @@ def test_tool_executor_blocks_write_before_toolnode(monkeypatch):
     assert executed == []
 
 
+def test_kernel_adjudicated_call_skips_turn_level_boundary(monkeypatch):
+    """Defect 2: a kernel-ruled call must not be re-decided here.
+
+    The kernel's PermissionPolicy rules with grants/rules/mode the executor
+    cannot see.  A shell grant a human approved in an EXECUTE turn used to be
+    denied by this turn-level check in a later WRITE turn — two decision
+    points, different information, opposite verdicts.
+    """
+
+    executed: list[str] = []
+
+    def fake_execute(self, context):
+        executed.append(self.action_type)
+        return {"success": True, "content": "ok"}
+
+    monkeypatch.setattr("xenon.nodes.tool_executor.ToolNode.execute", fake_execute)
+    context = AgentContext({"_execution_level": 1, "_kernel_adjudicated": True})
+
+    result = ToolExecutor().execute(
+        "write_file",
+        {"file_path": "x.py", "content": "pass"},
+        context,
+        ToolExecutionTracker(),
+        tools={"write_file": {"name": "write_file"}},
+    )
+
+    assert executed == ["write_file"]
+    assert "本轮执行策略" not in (result.observation or "")
+
+
+def test_kernel_adjudicated_still_enforces_protected_paths(monkeypatch):
+    """The user's "don't touch this" constraint is not a permission decision
+    and stays enforced even for kernel-ruled calls."""
+
+    executed: list[str] = []
+
+    def fake_execute(self, context):
+        executed.append(self.action_type)
+        return {"success": True, "content": "unexpected"}
+
+    monkeypatch.setattr("xenon.nodes.tool_executor.ToolNode.execute", fake_execute)
+    context = AgentContext(
+        {
+            "_execution_level": 3,
+            "_kernel_adjudicated": True,
+            "_protected_write_paths": ("plan_probe.txt",),
+        }
+    )
+
+    result = ToolExecutor(retry_attempts=1).execute(
+        "write_file",
+        {"file_path": "plan_probe.txt", "content": "x"},
+        context,
+        tools={"write_file": {}},
+    )
+
+    assert result.success is False
+    assert executed == []
+    assert "受保护" in (result.error or "")
+
+
+def test_enforce_level_false_keeps_protected_path_denial():
+    context = AgentContext(
+        {
+            "_execution_level": 1,
+            "_protected_write_paths": ("plan_probe.txt",),
+        }
+    )
+
+    assert execution_policy_denial(
+        "write_file",
+        {"file_path": "plan_probe.txt", "content": "x"},
+        context,
+        enforce_level=False,
+    )
+    assert (
+        execution_policy_denial(
+            "write_file",
+            {"file_path": "x.py", "content": "x"},
+            context,
+            enforce_level=False,
+        )
+        is None
+    )
+
+
 def test_read_only_research_hides_and_blocks_clone_repo(monkeypatch):
     executed: list[str] = []
 
@@ -693,3 +779,54 @@ def test_mid_turn_escalation_replaces_answer_only_boundary():
     assert bind_execution_boundary(
         answer_only, ExecutionLevel.ANSWER_ONLY
     ) == answer_only
+
+
+# ── 那些让请求在权限层被静默拒绝的说法 ─────────────────────────────
+#
+# 实测：'写一个 hello.py' 被判成 READ_ONLY。READ_ONLY 不是"问一下"——它是
+# 直接 VETO，连审批面板都不会出现，用户只看到模型什么都没做。根因是写入动词
+# 后面只认「文件/目录」，漏了直接跟文件名的情况。
+
+
+def test_writing_a_named_file_is_a_write_request() -> None:
+    for text in ("写一个 hello.py", "写 hello.py", "编写 main.py"):
+        assert classify_execution_policy(text).level >= ExecutionLevel.WRITE, text
+
+
+def test_writing_a_named_file_is_not_read_only() -> None:
+    """The regression: a write request that lands in READ_ONLY is silently vetoed."""
+
+    assert classify_execution_policy("写一个 hello.py").level is not ExecutionLevel.READ_ONLY
+
+
+def test_installing_dependencies_is_an_execution_request() -> None:
+    for text in ("安装 requirements.txt 里的依赖", "pip install requests", "npm install"):
+        assert classify_execution_policy(text).level >= ExecutionLevel.EXECUTE, text
+
+
+def test_a_chinese_git_request_is_recognized() -> None:
+    for text in ("把这个项目 push 到 origin", "把改动提交一下", "帮我提交代码"):
+        assert classify_execution_policy(text).level >= ExecutionLevel.WRITE, text
+
+
+def test_explaining_push_is_still_just_a_question() -> None:
+    """Recognising more requests must not turn a question into an action."""
+
+    assert classify_execution_policy("忽略 push 概念，解释一下").level <= ExecutionLevel.READ_ONLY
+
+
+def test_negated_paths_become_protected_for_every_phrasing():
+    """The obligation layer skips them; the turn layer must still block writes."""
+
+    from xenon.repl.turn_contract import build_turn_contract
+
+    cases = {
+        "don't change calc.py, fix util.py": "calc.py",
+        "do not modify calc.py, fix util.py": "calc.py",
+        "别改 calc.py，改 util.py": "calc.py",
+        "保留 calc.py 不变，只改 util.py": "calc.py",
+        "不要修改 probe.txt": "probe.txt",
+    }
+    for text, protected in cases.items():
+        policy = build_turn_contract(text).to_execution_policy()
+        assert protected in policy.protected_write_paths, text

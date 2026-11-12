@@ -1196,6 +1196,7 @@ class ToolNode(
             proc = subprocess.run(
                 shell_exec,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -1227,6 +1228,7 @@ class ToolNode(
                             "HEAD",
                         ],
                         capture_output=True,
+                        stdin=subprocess.DEVNULL,
                         text=True,
                         encoding="utf-8",
                         errors="replace",
@@ -1269,6 +1271,7 @@ class ToolNode(
                 proc = subprocess.run(
                     args,
                     capture_output=True,
+                    stdin=subprocess.DEVNULL,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
@@ -1320,6 +1323,7 @@ class ToolNode(
                 shown = subprocess.run(
                     ["git", "show", "--pretty=format:", "--name-only", "HEAD"],
                     capture_output=True,
+                    stdin=subprocess.DEVNULL,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
@@ -1353,6 +1357,7 @@ class ToolNode(
                 proc = subprocess.run(
                     [sys.executable, "-m", "pytest", *args],
                     capture_output=True,
+                    stdin=subprocess.DEVNULL,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
@@ -1391,7 +1396,7 @@ class ToolNode(
         if output:
             self._write_output(context, output)
         logger.info("[%s] pytest 完成，返回码: %s", self.id, returncode)
-        from xenon.engine.evidence_contracts import parse_test_counts
+        from xenon.nodes.evidence_contracts import parse_test_counts
 
         counts = parse_test_counts(output)
         return {
@@ -1553,7 +1558,7 @@ class ToolNode(
                         cmd = cmd.replace(f"{{{key}}}", shlex.quote(str(val)))
                 try:
                     result = subprocess.run(
-                        cmd, shell=True, capture_output=True, text=True, timeout=30
+                        cmd, shell=True, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=30
                     )
                     output = result.stdout.strip()
                     if result.returncode != 0:

@@ -69,6 +69,45 @@ def _mcp_tool_allowlist() -> tuple[str, ...]:
     )
 
 
+def _lesson_store_for(repl: Any) -> Any:
+    """The REPL's single memory-backed lesson store, or ``None`` when unavailable.
+
+    This is the last missing link of self-evolution (design doc §13.2#9): the
+    kernel proposes lessons, the runner persists them — but only when a store is
+    supplied.  Ownership stays with the memory service; the adapter only asks
+    for the store and forwards it.  The store is cached on the REPL so every
+    turn (and a resumed plan) shares one set of counters; the store invalidates
+    its own cache after each write.
+
+    A minimal host or test double without ``_get_memory_service`` gets ``None``:
+    no learning and no filesystem noise — exactly the previous behaviour.
+    """
+
+    cached = getattr(repl, "_lesson_store", None)
+    if cached is not None:
+        return cached
+    get_service = getattr(repl, "_get_memory_service", None)
+    if not callable(get_service):
+        return None
+    try:
+        service = get_service()
+    except Exception:  # noqa: BLE001 — learning is advisory, never blocks a turn
+        logger.debug(
+            "memory service unavailable; lesson store not attached", exc_info=True
+        )
+        return None
+    if getattr(service, "registry", None) is None:
+        return None
+    from xenon.harness.lessons import LessonStore
+
+    store = LessonStore(service=service)
+    try:
+        repl._lesson_store = store
+    except Exception:  # noqa: BLE001 — an uncacheable host still gets its store
+        pass
+    return store
+
+
 def should_route_to_kernel(
     *,
     runtime_mode: str,
@@ -137,13 +176,32 @@ def permission_mode_for(level: ExecutionLevel | int) -> PermissionMode:
 
     EXECUTE deliberately maps to AUTO_EDIT, not BYPASS: the kernel policy still
     permits workspace edits and safe test commands, but arbitrary shell needs a
-    scoped grant.  Approval UI/scoped grants are a later slice.
+    scoped grant.  A user who explicitly chose ``/permissions bypass`` gets
+    BYPASS through :func:`permission_for_mode` instead.
     """
 
     value = int(level)
     if value <= int(ExecutionLevel.READ_ONLY):
         return PermissionMode.READ_ONLY
     return PermissionMode.AUTO_EDIT
+
+
+#: ``/permissions <mode>`` → the kernel mode that implements its promise.
+_MODE_PERMISSIONS = {
+    "plan": PermissionMode.READ_ONLY,
+    "default": PermissionMode.SCOPED,
+    "accept_edits": PermissionMode.AUTO_EDIT,
+    "bypass": PermissionMode.BYPASS,
+}
+
+
+def permission_for_mode(
+    mode_name: str, level: ExecutionLevel | int
+) -> PermissionMode:
+    """The kernel permission mode for a turn, honoring a chosen /permissions mode."""
+
+    chosen = _MODE_PERMISSIONS.get(str(mode_name or "").strip().casefold())
+    return chosen or permission_mode_for(level)
 
 
 def sync_context_window(repl: Any, model_ids: list[str]) -> int:
@@ -594,7 +652,12 @@ _CAPABILITY_TOOL = {
     Capability.READ: "read",
     Capability.SEARCH: "search",
     Capability.EDIT: "apply_patch",
-    Capability.VERIFY: "bash",
+    # VERIFY and SHELL both used to render as "bash", so the panel showed two
+    # different capabilities with the same word: a real run asked for `verify`
+    # and the human read "模型请求执行 bash" — indistinguishable from the
+    # `shell` call they had just allowed.  A verification run is a different
+    # decision and has to look like one.
+    Capability.VERIFY: "test",
     Capability.SHELL: "bash",
     Capability.VCS: "git",
     Capability.REMOTE: "mcp_call",
@@ -712,7 +775,10 @@ class RuntimeAdapter:
         progress_sink: Any = None,
         request_sink: Any = None,
         audit_provider: Any = None,
-        permission_rules: Any = None,
+        summary_provider: Any = None,
+        lesson_store: Any = None,
+        session_id: str = "",
+        tool_runtime: Any = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         if not self.workspace.is_dir():
@@ -722,11 +788,21 @@ class RuntimeAdapter:
         self.model_config = model_config
         self.progress_sink = progress_sink
         self.request_sink = request_sink
-        self.permission_rules = permission_rules
         # Session grants are remembered decisions (#373); the front-end owns the
         # book, so the adapter only forwards what is currently active.
         self.session_grants: tuple[Any, ...] = ()
         self.audit_provider = audit_provider
+        #: Optional LLM narrative producer for a fold (None = deterministic
+        #: fold only).  Built from the turn model in the interactive path.
+        self.summary_provider = summary_provider
+        # Lessons are memories (design doc §13.2#9); the store is optional so a
+        # headless caller keeps the previous behaviour — no learning, no noise.
+        self.lesson_store = lesson_store
+        #: Where commands run (process / docker / wsl).  None = host default.
+        self.tool_runtime = tool_runtime
+        # The conversation this task belongs to (doc §3.2).  Empty for a host
+        # without one: the session-history query then falls back to workspace.
+        self.session_id = session_id
         self.permission = permission
         self.ledger_dir = (
             Path(ledger_dir).expanduser()
@@ -748,19 +824,6 @@ class RuntimeAdapter:
         self.strategy_mode = strategy_mode
         self.plan_only = bool(plan_only)
 
-    def _rules_of(self, decision: str) -> tuple[Any, ...]:
-        """Rules of one decision from the layered settings, if any."""
-
-        rules = self.permission_rules
-        if rules is None:
-            return ()
-        rows = getattr(rules, "rules", ()) or ()
-        return tuple(
-            rule
-            for rule in rows
-            if getattr(rule, "decision", "") == decision
-        )
-
     def strategy_profile(self) -> LoopProfile | None:
         """Loop profile for the selected mode (``None`` fails closed)."""
 
@@ -776,6 +839,8 @@ class RuntimeAdapter:
         on_runtime: Any = None,
         context_blocks: Any = (),
         turn_path: Any = (),
+        intent: str = "",
+        intent_source: str = "",
     ) -> HarnessRun:
         if self.strategy_mode == "legacy":
             raise KernelAdapterError(
@@ -834,6 +899,7 @@ class RuntimeAdapter:
             user_objective=user_objective,
             strategy=strategy,
             on_runtime=on_runtime,
+            tool_runtime=self.tool_runtime,
             workspace=self.workspace,
             ledger_dir=self.ledger_dir,
             task_id=task_id or f"repl-{uuid.uuid4().hex[:12]}",
@@ -845,6 +911,9 @@ class RuntimeAdapter:
             sink=sink,
             context_blocks=tuple(context_blocks or ()),
             turn_path=tuple(turn_path or ()),
+            session_id=self.session_id,
+            intent=intent,
+            intent_source=intent_source,
             audit_provider=self.audit_provider,
             # #392: the approver reaches the runtime whenever the front-end can
             # ask.  ``allow_approval`` still decides whether the *policy* may
@@ -856,8 +925,11 @@ class RuntimeAdapter:
             gateway_context=self.gateway_context,
             extra_specs=extra_specs,
             session_grants=self.session_grants,
-            deny_rules=self._rules_of("deny"),
-            ask_rules=self._rules_of("ask"),
+            # Self-evolution: the kernel proposes lessons; this is the store
+            # that makes them durable and carries them into later tasks.  None
+            # means "no learning", which is what a headless harness gets.
+            lesson_store=self.lesson_store,
+            summary_provider=self.summary_provider,
         )
 
         try:
@@ -920,6 +992,12 @@ class RuntimeAdapter:
             allow_approval=self.allow_approval,
             catalog_profile=self.catalog_profile,
             gateway_context=self.gateway_context,
+            # A resumed approved plan must carry the same runtime capabilities
+            # as a fresh kernel turn: remembered grants, self-evolution and the
+            # fold narrative.
+            session_grants=self.session_grants,
+            lesson_store=self.lesson_store,
+            summary_provider=self.summary_provider,
         )
         try:
             result_path = run.ledger_path.with_suffix(".result.json")
@@ -953,6 +1031,10 @@ class RuntimeAdapter:
             # AgentContext surface.  MCP needs the real context; core tools do
             # not, so fall back to the gateway's default context.
             gateway_context = None
+        mode_name = ""
+        if gateway_context is not None:
+            mode_name = str(gateway_context.get("_permission_mode") or "")
+        permission = permission_for_mode(mode_name, level)
         mcp_registry = getattr(repl, "_mcp_registry", None)
         has_mcp = bool(
             mcp_registry is not None
@@ -967,7 +1049,7 @@ class RuntimeAdapter:
         return cls(
             workspace=workspace,
             model_config=model_config_for(repl.registry, model_ids),
-            permission=permission_mode_for(level),
+            permission=permission,
             ledger_dir=(
                 Path(ledger_dir)
                 if ledger_dir is not None
@@ -981,8 +1063,13 @@ class RuntimeAdapter:
             # default permissions are unchanged: only an explicit escalation
             # (a human decision, recorded) can widen them.
             approval=KernelApprovalProvider(repl),
+            # Any mode that is not read-only may put a question to the human:
+            # §8.1 says ``auto-edit`` asks before running a command, and
+            # gating this on EXECUTE meant an ``accept_edits`` turn denied a
+            # pytest call outright while the *stricter-looking* ``default``
+            # mode prompted for the same call.
             allow_approval=(
-                int(level) >= int(ExecutionLevel.EXECUTE)
+                permission is not PermissionMode.READ_ONLY
                 or (
                     has_mcp
                     and int(level) == int(ExecutionLevel.READ_ONLY)
@@ -1000,7 +1087,38 @@ class RuntimeAdapter:
             # /max-steps sets the per-session override; None falls back to the
             # environment/default (no global cap).
             max_steps=getattr(repl, "_max_steps", None),
+            # Self-evolution becomes active here: one shared, memory-backed
+            # store.  None (minimal host / no memory backend) means no learning.
+            lesson_store=_lesson_store_for(repl),
+            session_id=_session_id_of(repl, gateway_context),
+            tool_runtime=_tool_runtime_for(workspace),
         )
+
+
+def _tool_runtime_for(workspace: Path) -> Any:
+    """Build the sandbox runtime from config; a missing backend fails closed.
+
+    Building it per turn (not at import) means a bad ``sandbox.backend`` is a
+    readable turn error, not a startup crash.
+    """
+
+    from xenon.repl.system_config import get_config
+    from xenon.sandbox.backends import build_runtime, spec_from_config
+
+    return build_runtime(workspace, spec_from_config(get_config().sandbox))
+
+
+def _session_id_of(repl: Any, gateway_context: Any) -> str:
+    """The REPL conversation id, read from the two places a host may carry it."""
+
+    if gateway_context is not None and hasattr(gateway_context, "get"):
+        try:
+            value = str(gateway_context.get("_session_id") or "")
+        except Exception:  # noqa: BLE001 — context is advisory
+            value = ""
+        if value:
+            return value
+    return str(getattr(getattr(repl, "_session_events", None), "session_id", "") or "")
 
 
 def session_context_blocks(repl: Any, objective: str) -> tuple[tuple[str, str], ...]:
@@ -1092,6 +1210,17 @@ def _audit_proposer(config: Any) -> Any:
         return None
 
 
+def _summarizer(config: Any) -> Any:
+    """Build the fold narrative producer for a kernel turn (fail-closed)."""
+
+    try:
+        from xenon.harness.summarizer import LLMSummarizer
+
+        return LLMSummarizer(config)
+    except Exception:  # noqa: BLE001 — absent means deterministic fold only
+        return None
+
+
 def _console_for(repl: Any) -> Any:
     console = getattr(repl, "console", None)
     if console is not None:
@@ -1117,6 +1246,19 @@ def _evidence_label(status: str, accepted: bool) -> str:
         # Only execution brakes leave accepted=False now.
         return "已停止"
     return _EVIDENCE_LABELS.get(status, status or "未验证")
+
+
+_PHASE_LABELS = {
+    TaskPhase.BLOCKED: "已阻塞",
+    TaskPhase.ABORTED: "已中止",
+    TaskPhase.FAILED: "失败",
+}
+
+
+def _phase_label(phase: TaskPhase) -> str:
+    """A stopped run says so in its own words; evidence is reported beside it."""
+
+    return _PHASE_LABELS.get(phase, phase.value)
 
 
 def _clear_legacy_task_state(repl: Any) -> None:
@@ -1231,6 +1373,15 @@ def _render_kernel_result(
         title = "Kernel · plan"
     elif answer.startswith("等待你的回答："):
         title = "Kernel · 等待回答"
+    elif accepted and result.phase is not TaskPhase.FINALIZED:
+        # A run that was stopped (blocked / aborted / failed) must not read as
+        # a finished one, even when the evidence it did gather happens to be
+        # verified.  Label both facts; never block the answer.  (When it was
+        # not accepted, the label below already says 已停止.)
+        title = (
+            f"Kernel · {_phase_label(result.phase)}"
+            f" · {_evidence_label(result.evidence_status.value, accepted)}"
+        )
     else:
         # Evidence is a label, not a verdict on the run.  The answer is shown
         # with how much of it the ledger can stand behind; only an execution
@@ -1249,6 +1400,20 @@ def _render_kernel_result(
                 f"{item.reason or item.obligation.id}[/yellow]"
             )
         console.print(f"[dim]ledger: {run.ledger_path}[/dim]")
+
+    # Disclosure, not a gate: gaps are shown so a reader knows what was not
+    # proven.  The answer is still delivered — the ledger labels it, the human
+    # decides what to trust.
+    if not planned and result.evidence_status.value in {"partial", "unverified"}:
+        from xenon.repl.render import render_verification_reminders
+
+        disclose = [
+            f"{item.obligation.kind.value}: {item.reason or item.obligation.id}"
+            for item in result.debt[:5]
+        ] or [f"证据状态：{result.evidence_status.value}"]
+        render_verification_reminders(
+            disclose, degraded=result.evidence_status.value == "unverified"
+        )
 
     add_message = getattr(repl.ctx_mgr, "add_assistant_message", None)
     if callable(add_message):
@@ -1292,6 +1457,23 @@ def resume_kernel_plan(
         level=ExecutionLevel.EXECUTE,
         client=client,
         ledger_dir=ledger_dir,
+    )
+    # Same capabilities as a fresh kernel turn: the fold narrative and the
+    # session's remembered answers must also apply while executing an
+    # approved plan.  Without a fresh turn id, an "a" answer given during this
+    # execution would be stamped with the previous turn and dropped.
+    adapter.summary_provider = _summarizer(adapter.model_config)
+    from xenon.kernel.session_grants import GrantBook
+
+    book = getattr(repl, "_grant_book", None)
+    if book is None:
+        book = GrantBook(workspace=str(adapter.workspace))
+        repl._grant_book = book
+    turn_id = f"repl-{uuid.uuid4().hex[:12]}"
+    repl._current_kernel_turn = turn_id
+    adapter.turn_id = turn_id
+    adapter.session_grants = tuple(
+        book.consume(str(adapter.workspace), turn=turn_id)
     )
     sink = ReplEventSink(callback)
     agent_context = getattr(repl, "agent_context", None)
@@ -1367,6 +1549,8 @@ def run_kernel_turn(
     callback: Any = None,
     client: Any = None,
     plan_only: bool = False,
+    intent: str = "",
+    intent_source: str = "",
 ) -> HarnessRun | None:
     """Run one REPL task turn through the kernel and render its result."""
 
@@ -1381,28 +1565,49 @@ def run_kernel_turn(
             client=client,
             plan_only=plan_only,
         )
-        # #373: the front-end owns the session's remembered decisions.  A grant
-        # made in an earlier task must apply to this one, and this task's answer
-        # must be remembered for the next.  Without this the kernel records
-        # GRANT_ADDED and still asks again on the next task — the earlier probe
-        # wired the book by hand; the product must not.
+        # #373 / §9: the front-end owns the session's remembered decisions.  A
+        # grant made in an earlier task must apply to this one, and this task's
+        # answer lands in the same book afterwards.  Memory only: nothing here
+        # reaches disk, so a restart re-asks.
         from xenon.kernel.session_grants import GrantBook
 
         book = getattr(repl, "_grant_book", None)
         if book is None:
             book = GrantBook(workspace=str(adapter.workspace))
             repl._grant_book = book
-        adapter.session_grants = tuple(book.active(str(adapter.workspace)))
+        # The turn id is what scopes "同一轮内不再问": an answer given now must
+        # not leak into the next turn.  It is generated here (the adapter would
+        # otherwise make its own) so the approval panel and the book agree.
+        turn_id = f"repl-{uuid.uuid4().hex[:12]}"
+        repl._current_kernel_turn = turn_id
+        adapter.turn_id = turn_id
+        # ``consume`` (not ``active``): one-shot answers are spent, and a
+        # turn-scoped answer from an earlier turn is dropped rather than
+        # inherited.
+        adapter.session_grants = tuple(
+            book.consume(str(adapter.workspace), turn=turn_id)
+        )
         sink = ReplEventSink(callback)
         start_capture = getattr(repl, "_start_log_capture", None)
         if callable(start_capture):
             start_capture()
-        adapter.progress_sink = kernel_progress_reporter(repl)
-        adapter.request_sink = kernel_request_reporter(repl)
+        # A host that owns its own output stream installs these before the turn
+        # (the protocol host does: stray console writes would corrupt its NDJSON
+        # stream).  Defaults reproduce the interactive console behaviour.
+        adapter.progress_sink = getattr(repl, "_progress_sink_override", None) or (
+            kernel_progress_reporter(repl)
+        )
+        adapter.request_sink = getattr(repl, "_request_sink_override", None) or (
+            kernel_request_reporter(repl)
+        )
         # V2 coverage needs a proposer: without one, every semantic obligation
         # can only ever abstain (#286).  The proposer only points at receipts;
         # the binder still decides, and proposal-backed verdicts stay PARTIAL.
         adapter.audit_provider = _audit_proposer(adapter.model_config)
+        # Dual-summary fold (§13 decision 1): the turn model also writes the
+        # narrative when history is compacted.  Fail-closed: no summariser
+        # just means a deterministic-only fold, never a failed turn.
+        adapter.summary_provider = _summarizer(adapter.model_config)
         # The status bar shows the loop that is actually executing; ``/mode``
         # is chat configuration and would claim a mode the agent is not using.
         status_bar = getattr(repl, "status_bar", None)
@@ -1441,14 +1646,15 @@ def run_kernel_turn(
                 on_runtime=_attach,
                 context_blocks=blocks,
                 turn_path=turn_path,
+                task_id=turn_id,
+                intent=intent,
+                intent_source=intent_source,
             )
-            # Remember the human's decision so the next task in this session
-            # does not ask again.  The kernel already wrote GRANT_ADDED; this is
-            # where the grant outlives the task it was made in.
-            runtime = getattr(repl, "_active_runtime", None)
-            grant = getattr(runtime, "last_grant", None)
-            if grant is not None:
-                book.add(grant)
+            # Session memory belongs to the front-end's book alone: the panel
+            # already recorded "allow" answers when they were given (with the
+            # command text as the target).  Copying a second snapshot from the
+            # runtime kept only the last answer of a turn and duplicated the
+            # owner.
         finally:
             if callable(loop_setter):
                 loop_setter(None)

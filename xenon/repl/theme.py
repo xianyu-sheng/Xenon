@@ -62,23 +62,6 @@ DEFAULT_TOKEN_STYLES: dict[str, str] = {
     "logo.ghost": "dim #94a3b8",
 }
 
-DEFAULT_PT_STYLE: dict[str, str] = {
-    # 输入区借鉴 Claude Code / pi 的轻量层次：线条定界，避免整块底色。
-    "prompt": "bold #67e8f9",
-    "input.rule": "#334155",
-    "bottom-toolbar": "noreverse",
-    "bottom-toolbar.text": "#94a3b8",
-    "toolbar.separator": "#475569",
-    "toolbar.model": "#cbd5e1",
-    "toolbar.mode": "#c4b5fd",
-    "toolbar.good": "bold #86efac",
-    "toolbar.warning": "bold #fcd34d",
-    "toolbar.danger": "bold #fda4af",
-    "toolbar.notice": "bold #fde68a",
-    "toolbar.muted": "#94a3b8",
-    "toolbar.hint": "#64748b italic",
-}
-
 
 def default_rich_theme() -> Theme:
     """Return a Rich Theme instance built from DEFAULT_TOKEN_STYLES."""

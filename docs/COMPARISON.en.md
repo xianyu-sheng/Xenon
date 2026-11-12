@@ -2,11 +2,18 @@
 
 > English | [中文版](COMPARISON.md)
 >
-> *Note: This translation may lag behind the source documentation; the [Chinese version](COMPARISON.md) is the authoritative source of truth. (Synchronized with commit `730d198`).*
+> *Note: This translation may lag behind the source documentation; the [Chinese version](COMPARISON.md) is the authoritative source of truth. (Last synced 2026-11-12).*
 
 > This is an **objective, evidence-based** capability comparison matrix. ✅ = Supported, ⚠️ = Partial / Limited, ❌ = Not Supported, — = Not Applicable.
 > Evaluation date: 2026-07-08; Xenon capabilities updated to v0.9.2 status (2026-10-12).
+> **Update, 2026-11-12**: Xenon can now also act **as an MCP server** (`xenon mcp-serve`,
+> see [MCP_SERVER](MCP_SERVER.md)); the hollow-response row is marked retired to match §7.
 > Note: Closed-source competitors (Claude Code / Crush) have internal implementations that cannot be directly observed; ❌ for them should be interpreted as "not found in publicly verifiable information" rather than an absolute assertion of absence.
+> **Correction, 2026-11-11**: the modules behind §7 `HollowDetector` and §8 `BudgetManager`
+> have been deleted (the L1 structural tier is retired).  The only verification chain now is
+> the kernel plus its ledger: hollowness and completeness are expressed as receipts and debt,
+> with no blocking structural check; only the `BudgetPhase` enum survives (in
+> `repl/context_strategies.py`).  Both sections are kept as a snapshot of the evaluation date.
 
 ---
 
@@ -14,7 +21,7 @@
 
 | Project | Summary |
 | --- | --- |
-| **Xenon** | **MCP + Multi-model + Multi-paradigm all-in-one**, open-source terminal coding agent |
+| **Xenon** | **Evidence ledger + multi-model + single-loop kernel**, open-source terminal coding agent |
 | [Aider](https://aider.chat) | Multi-model + git commit loop, specialized in repo-level editing |
 | [Claude Code](https://claude.com/claude-code) | Official Claude + MCP terminal tool, closed source |
 | [OpenCode](https://opencode.ai) | Multi-model + 50+ providers, rich TUI, written in Go |
@@ -27,15 +34,16 @@
 | Dimension | Xenon | Aider | Claude Code | OpenCode | Crush |
 | --- | :---: | :---: | :---: | :---: | :---: |
 | **MCP Protocol** | ⚠️ stdio + SSE (simplified; no endpoint discovery / session correlation, see #103) | ❌ | ✅ First-class | ✅ | ✅ stdio / http / sse |
+| **As an MCP server** | ✅ `xenon mcp-serve`: task / evidence / audit tools, read-only and fail-closed | ❌ | ❌ | ❌ | ❌ |
 | **Multi-Model Routing** | ✅ 12 providers | ✅ ~10 | ❌ Claude only | ✅ 50+ | ✅ 18+ |
-| **Multi-Paradigm Engines** | ✅ **7 paradigms** | ❌ | ❌ | ❌ | ⚠️ Mid-session LLM switch |
+| **Multi-Stage Config** | ✅ 6 loop profiles (one kernel, different parameters; `react` is an alias of `direct`) | ❌ | ❌ | ❌ | ⚠️ Mid-session LLM switch |
 | **Local-First** | ✅ Ollama + local credentials | ⚠️ CLI local, cloud model | ❌ | ✅ | ✅ Ollama / llama.cpp |
 | **Tool Circuit Breaker** | ✅ 3-failure trip | ❌ | ❌ | ❌ | ❌ |
 | **Context Compaction** | ✅ 6 steps @ 80% | ❌ | ✅ | ❌ | ❌ |
-| **Hollow Response Detection** | ✅ 15 regex patterns | ❌ | ❌ | ❌ | ❌ |
-| **Three-Stage Budget** | ✅ Explore / Execute / Converge | ❌ | ❌ | ❌ | ❌ |
+| **Hollow Response Detection** | ❌ Retired (v0.9.x): receipts and debt express it; no blocking structural check | ❌ | ❌ | ❌ | ❌ |
+| **Three-Stage Budget** | ⚠️ Active only with a bounded budget; unlimited runs are EXPLORE-only | ❌ | ❌ | ❌ | ❌ |
 | **Open Source License** | ✅ MIT | ✅ Apache 2.0 | ❌ Closed source | ✅ MIT | ✅ FSL-1.1-MIT |
-| **Implementation Language** | Python 3.10+ | Python | TypeScript | Go | Go |
+| **Implementation Language** | Python 3.10+ (UI in TypeScript / Ink) | Python | TypeScript | Go | Go |
 
 ---
 
@@ -52,7 +60,10 @@
 | Crush | Supports MCP (stdio, http, and sse types); does not support automatic restart of MCP servers. |
 
 **Xenon Advantages**: Complete stdio transport with B11 wall-clock timeout safeguards (fixed in v0.2.0 `bf6e83a`), ensuring a hanging child process will not stall the entire agent; current SSE is a simplified implementation (see [#103](https://github.com/xianyu-sheng/Xenon/issues/103)), and should not be viewed as parity with Crush's full transport support.  
-**Xenon Trade-offs**: Unlike Claude Code, MCP servers do not automatically restart if a child process terminates; re-adding requires `/mcp add`.
+**Xenon Trade-offs**: Unlike Claude Code, MCP servers do not automatically restart if a child process terminates; re-adding requires `/mcp add`.  
+**The other direction**: Xenon can also run as an MCP server (`xenon mcp-serve`), exposing
+task / evidence / audit tools to other agents — read-only and fail-closed by default, see
+[MCP_SERVER](MCP_SERVER.md).
 
 ### 2. Multi-Model Routing
 

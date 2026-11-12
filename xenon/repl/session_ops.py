@@ -349,7 +349,8 @@ class SessionOpsMixin:
                 semantic_group_id=getattr(turn, "semantic_group_id", None),
             )
         self._pending_action = None
-        self._boundary_approved_once.clear()
+        # 回退是一个授权边界：此前记住的回答属于被回退掉的那段历史。
+        self._grant_book.clear()
         # 结构层：指针回退到第 n 个回合节点（原枝保留，供 /fork 复用）。
         node = self._turn_tree.ancestor_at(n)
         if node is not None:

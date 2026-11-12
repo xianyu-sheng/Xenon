@@ -1,19 +1,19 @@
-"""Step 5: 在线 pre-tool evidence enforcement tests."""
+"""Step 5: 在线 pre-tool gate 行为测试。
+
+The legacy evidence ledger these tests once also asserted was retired on
+2026-11-10 (docs/design/legacy-retirement-plan.md); the FactBindingGate
+behavior itself — block a blind edit, auto-read remediation, observe vs
+enforce — is still live and stays covered here.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from xenon.engine.context import AgentContext
-from xenon.engine.evidence_gate import GateVerdict
-from xenon.engine.evidence_runtime import EventKind, EvidenceLedger, LifecyclePhase
 from xenon.engine.tool_tracker import ToolExecutionTracker
 from xenon.nodes.tool_executor import ToolExecutor
 from xenon.nodes.tool_node import ToolNode
-
-
-def _executor(ledger: EvidenceLedger, mode: str = "enforce", **kw) -> ToolExecutor:
-    return ToolExecutor(evidence_ledger=ledger, evidence_enforcement=mode, **kw)
 
 
 def test_execute_enforcement_blocks_before_toolnode(
@@ -31,8 +31,7 @@ def test_execute_enforcement_blocks_before_toolnode(
         return {"success": True, "result": "unexpected"}
 
     monkeypatch.setattr("xenon.nodes.tool_executor.ToolNode.execute", should_not_run)
-    ledger = EvidenceLedger("run-1")
-    result = _executor(ledger, evidence_auto_read=False).execute(
+    result = ToolExecutor(evidence_enforcement="enforce", evidence_auto_read=False).execute(
         "edit_file",
         {"file_path": str(target), "old_text": "value = 1", "new_text": "value = 2"},
         AgentContext(),
@@ -41,9 +40,6 @@ def test_execute_enforcement_blocks_before_toolnode(
     assert result.success is False
     assert result.error == "写入前缺少目标文件读取证据: " + str(target)
     assert invoked is False
-    assert len(ledger.query(kind=EventKind.TOOL_REQUEST)) == 1
-    assert len(ledger.query(kind=EventKind.GATE_VERDICT)) == 1
-    assert len(ledger.query(kind=EventKind.TOOL_OBSERVATION)) == 1
 
 
 def test_execute_auto_read_remediates_blind_edit(monkeypatch, tmp_path: Path) -> None:
@@ -57,9 +53,9 @@ def test_execute_auto_read_remediates_blind_edit(monkeypatch, tmp_path: Path) ->
         return real_execute(self, context)
 
     monkeypatch.setattr("xenon.nodes.tool_executor.ToolNode.execute", real_tool)
-    ledger = EvidenceLedger("run-1")
     tracker = ToolExecutionTracker()
-    result = _executor(ledger).execute(  # evidence_auto_read=True（默认）
+    # enforce 才会拦截盲编辑并触发自动补读（默认 observe 直接放行）。
+    result = ToolExecutor(evidence_enforcement="enforce").execute(
         "edit_file",
         {"file_path": str(target), "old_text": "value = 1", "new_text": "value = 2"},
         AgentContext(),
@@ -73,32 +69,12 @@ def test_execute_auto_read_remediates_blind_edit(monkeypatch, tmp_path: Path) ->
     assert "edit_file" in tools
 
 
-def test_execute_records_shared_context_ledger_for_direct_user(monkeypatch) -> None:
-    """未显式传 Ledger 的库调用也必须创建 Context 级统一账本。"""
-
-    def fake_execute(self, context):
-        return {"success": True, "content": "ok"}
-
-    monkeypatch.setattr("xenon.nodes.tool_executor.ToolNode.execute", fake_execute)
-    context = AgentContext()
-    result = ToolExecutor().execute("read_file", {"file_path": "missing.py"}, context)
-    assert result.success is True
-    ledger = context.get("_evidence_ledger")
-    assert isinstance(ledger, EvidenceLedger)
-    assert ledger.verify_integrity()
-    assert len(ledger.query(kind=EventKind.TOOL_REQUEST)) == 1
-    assert len(ledger.query(kind=EventKind.TOOL_OBSERVATION)) == 1
-
-
 def test_executor_defaults_to_observe() -> None:
-    """默认 observe：证据链照常写入 ledger 供事后审计，但不实时阻断。
+    """默认 observe：不实时阻断。
 
     enforce 会在用户明确要求写文件时也硬拦（「⛔ 在线证据验证拒绝」），
-    体验不可接受；证据链的价值在事后审计而非实时闸门。enforce 能力保留，
-    调用方仍可显式传 mode="enforce"（本文件其它测试即如此）。
+    体验不可接受。enforce 能力保留，调用方仍可显式传 mode="enforce"。
     """
-
-    from xenon.nodes.tool_executor import ToolExecutor
 
     assert ToolExecutor().evidence_enforcement == "observe"
     assert (
@@ -116,25 +92,21 @@ def test_executor_defaults_to_observe() -> None:
 def test_pre_tool_allows_edit_after_exact_read(tmp_path: Path) -> None:
     target = tmp_path / "module.py"
     target.write_text("value = 1\n", encoding="utf-8")
-    ledger = EvidenceLedger("run-1")
     tracker = ToolExecutionTracker()
     tracker.record("read_file", {"file_path": str(target)}, True, "value = 1")
-    verdict = _executor(ledger).before_tool(
+    verdict = ToolExecutor().before_tool(
         "edit_file",
         {"file_path": str(target), "old_text": "value = 1", "new_text": "value = 2"},
         AgentContext(),
         tracker,
     )
     assert verdict.passed is True
-    assert not ledger.query(kind=EventKind.GATE_VERDICT)
 
 
 def test_pre_tool_blocks_blind_edit_before_node_execution(tmp_path: Path) -> None:
     target = tmp_path / "module.py"
     target.write_text("value = 1\n", encoding="utf-8")
-    ledger = EvidenceLedger("run-1")
-    executor = _executor(ledger)
-    verdict = executor.before_tool(
+    verdict = ToolExecutor(evidence_enforcement="enforce").before_tool(
         "edit_file",
         {"file_path": str(target), "old_text": "value = 1", "new_text": "value = 2"},
         AgentContext(),
@@ -142,17 +114,11 @@ def test_pre_tool_blocks_blind_edit_before_node_execution(tmp_path: Path) -> Non
     )
     assert verdict.passed is False
     assert "读取" in verdict.reason or "盲写" in verdict.reason
-    gate_events = ledger.query(
-        phase=LifecyclePhase.PRE_TOOL, kind=EventKind.GATE_VERDICT
-    )
-    assert len(gate_events) == 1
-    assert gate_events[0].payload["passed"] is False
 
 
 def test_pre_tool_allows_new_file_without_prior_read(tmp_path: Path) -> None:
     target = tmp_path / "new.py"
-    ledger = EvidenceLedger("run-1")
-    verdict = _executor(ledger).before_tool(
+    verdict = ToolExecutor().before_tool(
         "write_file",
         {"file_path": str(target), "content": "value = 1\n"},
         AgentContext(),
@@ -161,66 +127,15 @@ def test_pre_tool_allows_new_file_without_prior_read(tmp_path: Path) -> None:
     assert verdict.passed is True
 
 
-def test_observation_event_contains_sanitized_params() -> None:
-    ledger = EvidenceLedger("run-1")
-    executor = _executor(ledger)
-    executor.record_tool_observation(
-        "read_file",
-        {"file_path": "a.py", "content": "secret"},
-        True,
-        "source text",
-        ToolExecutionTracker(),
-    )
-    events = ledger.query(kind=EventKind.TOOL_OBSERVATION)
-    assert len(events) == 1
-    assert events[0].payload["tool"] == "read_file"
-    assert "secret" not in str(events[0].payload)
-    assert ledger.verify_integrity()
-
-
-def test_observation_event_carries_structured_metadata() -> None:
-    ledger = EvidenceLedger("run-1")
-    executor = _executor(ledger)
-    executor.record_tool_observation(
-        "command",
-        {"command": "pytest -q"},
-        True,
-        "2 passed",
-        ToolExecutionTracker(),
-        metadata={"exit_code": 0, "changed_paths": ["src/app.py"]},
-    )
-    event = ledger.query(kind=EventKind.TOOL_OBSERVATION)[0]
-    assert event.payload["metadata"] == {
-        "exit_code": 0,
-        "changed_paths": ["src/app.py"],
-    }
-
-
 def test_observe_mode_warns_but_does_not_block(tmp_path: Path) -> None:
     target = tmp_path / "module.py"
     target.write_text("value = 1\n", encoding="utf-8")
-    ledger = EvidenceLedger("run-1")
-    verdict = _executor(ledger, "observe").before_tool(
+    verdict = ToolExecutor(evidence_enforcement="observe").before_tool(
         "edit_file",
         {"file_path": str(target), "old_text": "value = 1", "new_text": "value = 2"},
         AgentContext(),
         ToolExecutionTracker(),
     )
     assert verdict.passed is True
-    gate_events = ledger.query(kind=EventKind.GATE_VERDICT)
-    assert gate_events[0].payload["enforced"] is False
 
 
-def test_executor_accepts_custom_gate() -> None:
-    """The executor takes *any* gate object; the engine-era gates are gone."""
-
-    class _StubGate:
-        phase = "pre_tool"
-
-        def check(self, ctx, **kwargs):
-            return GateVerdict("pre_tool", True, "ok", "info")
-
-    ledger = EvidenceLedger("run-1")
-    executor = _executor(ledger)
-    executor.register_evidence_gate(_StubGate())
-    assert executor.evidence_gates

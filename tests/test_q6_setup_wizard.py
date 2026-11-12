@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import yaml
-
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.setup_wizard import (
     _clean_api_key,
@@ -326,7 +324,9 @@ def test_remove_api_key_cancel_then_selected_provider_only(monkeypatch, tmp_path
         "openai: openai-test-key\nanthropic: anthropic-test-key\n",
         encoding="utf-8",
     )
-    original_contents = credentials_path.read_bytes()
+    from xenon.utils.credentials_io import load_document
+
+    original_contents = load_document(credentials_path)
     monkeypatch.setenv("XENON_CREDENTIALS_PATH", str(credentials_path))
     monkeypatch.setattr(sw, "get_configured_providers", _configured_test_providers)
     monkeypatch.setattr(
@@ -346,15 +346,13 @@ def test_remove_api_key_cancel_then_selected_provider_only(monkeypatch, tmp_path
     # A zero choice must leave credentials and the model registry untouched.
     sw._remove_api_key(registry)
 
-    assert credentials_path.read_bytes() == original_contents
+    assert load_document(credentials_path) == original_contents
     assert registry.models == original_models
     assert registry.role_priority == original_roles
 
     # Selecting provider 2 must remove only Anthropic credentials and models.
     sw._remove_api_key(registry)
 
-    assert yaml.safe_load(credentials_path.read_text(encoding="utf-8")) == {
-        "openai": "openai-test-key"
-    }
+    assert load_document(credentials_path) == {"openai": "openai-test-key"}
     assert list(registry.models) == ["gpt4", "ds"]
     assert registry.role_priority["planner"] == ["ds"]

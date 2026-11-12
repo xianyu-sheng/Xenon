@@ -12,6 +12,7 @@ import threading
 from typing import Any
 
 from xenon.mcp.client import MCPClient
+from xenon.utils.redact import redact_text
 
 logger = logging.getLogger(__name__)
 
@@ -159,54 +160,13 @@ def _validate_server_name(name: str) -> None:
         )
 
 
-_REDACT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    # Bearer token（必须在 URL query 之前，避免 query 正则吃掉 Authorization 头）
-    (re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE), r"\1<redacted>"),
-    # 常见密钥/令牌键值对（json 风格或 query 参数）
-    (
-        re.compile(
-            r"(api[_-]?key|apikey|token|secret|password|passwd|authorization|credential)(\s*[:=]\s*)([^\s,}\"']+)",
-            re.IGNORECASE,
-        ),
-        r"\1\2<redacted>",
-    ),
-    # URL query 中的敏感参数值（仅匹配带 ? 的 query 片段）
-    (
-        re.compile(r"(\?[^\s#]*(?:&|^)[^=#\s]+=)[^&#\s]+", re.IGNORECASE),
-        r"\1<redacted>",
-    ),
-)
-
-
 def _redact_text(text: str) -> str:
-    """对将写入证据链/日志的文本做轻量脱敏。
+    """对将写入日志/错误信息的文本做脱敏。
 
-    覆盖常见凭据形态（key=value、URL query、Bearer token）。
-    只做模式替换，不改写文本结构；与 callbacks 的
-    ``mask_sensitive_params``（参数级）互补。
+    实现只有一份（``xenon.utils.redact``）：报告、MCP 与记忆写入面对的是
+    同一种凭据，三份各自枚举的模式必然会各漏各的。
     """
-    if not isinstance(text, str):
-        text = str(text)
-    for pattern, repl in _REDACT_PATTERNS:
-        text = pattern.sub(repl, text)
-    return text
-
-
-def _mcp_result_summary(result: dict[str, Any]) -> str:
-    """从 MCP tools/call 结果提取短摘要（content 文本或错误）。"""
-    if not isinstance(result, dict):
-        return str(result)[:300]
-    if result.get("error"):
-        return str(result["error"])[:300]
-    content = result.get("content")
-    if isinstance(content, list):
-        texts = []
-        for item in content:
-            if isinstance(item, dict) and isinstance(item.get("text"), str):
-                texts.append(item["text"])
-        joined = " ".join(texts)
-        return joined[:300] if joined else str(result)[:300]
-    return str(result)[:300]
+    return redact_text(text)
 
 
 class MCPRegistry:
@@ -431,10 +391,6 @@ class MCPRegistry:
         """调用 MCP 工具。支持 server:tool 或直接 tool 名称。
 
         如果工具所在服务器尚未连接（惰性），则自动先连接。
-
-        传入 ``context``（AgentContext）时，调用前后自动向该任务的
-        EvidenceRuntime 写入 tool_request / tool_observation 证据，
-        与 ToolExecutor 的在线验证链共用同一条 ledger。
         """
         # 歧义短名拦截：多个 server 提供同名工具时，短名不再是可靠索引。
         # 必须用 server:tool 全名调用，否则给出明确 disambiguation 提示，
@@ -494,14 +450,6 @@ class MCPRegistry:
         server_name, tool_info = entry
         client = self.clients[server_name]
 
-        # 在线验证链：调用前记录工具请求证据（context 可选传入）。
-        # 用 .evidence 触发懒创建——任何持有 AgentContext 的调用方都能接入。
-        runtime = getattr(context, "evidence", None) if context is not None else None
-        if runtime is not None:
-            runtime.record_tool_request(
-                tool=f"mcp_call:{tool_name}",
-                params={"server": server_name, "arguments": arguments or {}},
-            )
         try:
             # 防御：tool_info 可能缺 name（外部 MCP 服务数据不可信），
             # 用短名/全名做兜底，避免 KeyError 崩溃。
@@ -509,48 +457,10 @@ class MCPRegistry:
                 "name", tool_name.split(":")[-1] if ":" in tool_name else tool_name
             )
             result = client.call_tool(target_name, arguments)
-        except Exception as exc:
-            if runtime is not None:
-                runtime.record_tool_observation(
-                    tool=f"mcp_call:{tool_name}",
-                    params={"server": server_name},
-                    success=False,
-                    # 脱敏后再落入证据链，避免异常文本泄露 API key/路径等
-                    summary=_redact_text(str(exc))[:300],
-                )
+        except Exception:
             raise
-        if runtime is not None:
-            runtime.record_tool_observation(
-                tool=f"mcp_call:{tool_name}",
-                params={"server": server_name},
-                success=True,
-                summary=_redact_text(_mcp_result_summary(result))[:300],
-            )
         return result
 
-    def format_all_tools_for_prompt(self) -> str:
-        """将所有 MCP 工具格式化为 LLM 提示词。"""
-        if not self.tool_map:
-            self.discover_tools()
-
-        lines = []
-        for global_name, (_server_name, tool) in sorted(self.tool_map.items()):
-            if ":" not in global_name:
-                continue  # 只显示带前缀的
-            desc = tool.get("description", "")
-            schema = tool.get("inputSchema", {})
-            props = schema.get("properties", {})
-            required = schema.get("required", [])
-
-            params = []
-            for pname, pinfo in props.items():
-                req = "(必填)" if pname in required else ""
-                params.append(f"{pname}: {pinfo.get('type', 'any')}{req}")
-
-            params_str = ", ".join(params) if params else "无参数"
-            lines.append(f"- {global_name}: {desc} (参数: {params_str})")
-
-        return "\n".join(lines) if lines else "（无 MCP 工具）"
 
     def close_all(self) -> None:
         """关闭所有连接。"""

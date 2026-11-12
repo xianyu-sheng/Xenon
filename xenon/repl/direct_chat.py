@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from xenon.repl.execution_policy import ExecutionLevel, ExecutionPolicy
@@ -39,6 +40,20 @@ class _ConsoleProxy:
 console: Any = _ConsoleProxy()
 
 
+@dataclass(frozen=True, slots=True)
+class DirectChatOutcome:
+    """What the direct path produced.
+
+    ``delegated`` means it handed the turn to the tool path: the caller must
+    not record a second, conversational ledger for the same turn.
+    """
+
+    answer: str = ""
+    model_id: str = ""
+    delegated: bool = False
+    error: str = ""
+
+
 class DirectChatMixin:
     def _escalate_for_react(
         self, level: ExecutionLevel, reason: str
@@ -65,13 +80,27 @@ class DirectChatMixin:
                 }
             )
 
+    def _canonical_model_ids(self, model_ids: list[str]) -> list[str]:
+        """Map registry aliases (``-m deepseek-v4-pro``) to provider/model ids.
+
+        The kernel path already resolves aliases; the direct path handed the
+        raw string to the provider layer, which then failed with "model_id 必须为
+        'provider/model_name' 格式".
+        """
+
+        resolved: list[str] = []
+        for raw in model_ids:
+            config = self.registry.get_model(raw)
+            resolved.append(config.model_id if config is not None else raw)
+        return resolved
+
     def _run_direct(
         self,
         user_input: str,
         model_ids: list[str],
         intent: str | None = None,
         execution_policy: ExecutionPolicy | None = None,
-    ) -> None:
+    ) -> DirectChatOutcome:
         """直接对话模式。检测到工具需求时委派给 kernel 循环。
 
         路由决策优先级（通用设计，不枚举具体领域）：
@@ -82,6 +111,7 @@ class DirectChatMixin:
            （通用语言结构判断，不枚举天气/高铁/酒店等具体领域）
         5. 其他 → direct 模式（纯对话/解释/闲聊）
         """
+        model_ids = self._canonical_model_ids(model_ids)
         policy = execution_policy
         if policy is None:
             # 契约唯一化：入口惰性构建一次（缺失时正则回退），不再逐层重算。
@@ -112,7 +142,7 @@ class DirectChatMixin:
                     "[dim cyan]🔧 检测到需要工具执行，自动切换到 ReAct 模式...[/dim cyan]"
                 )
             self._run_react_engine(user_input, model_ids)
-            return
+            return DirectChatOutcome(delegated=True)
 
         # v0.5.3: MCP 工具可用时，通用判断——任何具有"信息查询"特征的输入都走 ReAct，
         # 让 LLM 自行决定是否调用 mcp_call。不枚举具体查询领域（天气/高铁/酒店等）。
@@ -134,7 +164,7 @@ class DirectChatMixin:
                 "[dim cyan]🔧 检测到可用 MCP 工具，自动切换到 ReAct 模式...[/dim cyan]"
             )
             self._run_react_engine(user_input, model_ids)
-            return
+            return DirectChatOutcome(delegated=True)
 
         # Direct calls also produce httpx/provider logs. Capture them while the
         # spinner is active so they cannot overwrite the Live render; Ctrl+O
@@ -208,7 +238,7 @@ class DirectChatMixin:
                             self._record_engine_error(
                                 f"[错误] ReAct 重试失败: {e}", model_ids[0]
                             )
-                        return
+                        return DirectChatOutcome(delegated=True)
 
                     # ── 响应后验证 2：检测 LLM 是否声称执行了文件操作 ──
                     if self._detect_file_claim(response_text):
@@ -258,7 +288,7 @@ class DirectChatMixin:
                             self._record_engine_error(
                                 f"[错误] ReAct 重试失败: {e}", model_ids[0]
                             )
-                        return
+                        return DirectChatOutcome(delegated=True)
 
                 if (
                     intent == "write_code"
@@ -320,7 +350,7 @@ class DirectChatMixin:
                 # 短暂显示给用户后才切 ReAct。
                 self.ctx_mgr.add_assistant_message(response_text, model_used=model_id)
                 self._render_assistant_text(response_text, model_id=model_id)
-                return
+                return DirectChatOutcome(answer=response_text, model_id=model_id)
             except Exception as e:
                 last_error = e
                 from xenon.repl.transient_errors import is_transient_error
@@ -353,6 +383,7 @@ class DirectChatMixin:
             error_message,
             model_ids[0] if model_ids else None,
         )
+        return DirectChatOutcome(error=error_message)
 
 
 
@@ -379,9 +410,6 @@ class DirectChatMixin:
 
     def _stream_response(self, model_id: str, messages: list[dict[str, str]]) -> str:
         """Collect a streamed reply for validation before rendering it."""
-        from rich.live import Live
-        from rich.spinner import Spinner
-
         from xenon.utils.llm_client import chat_completion_stream
 
         full_response = []
@@ -413,19 +441,10 @@ class DirectChatMixin:
                 "模型 %s 未找到运行时配置，生成预算将使用上游默认值", model_id
             )
 
-        # 流式阶段：显示 spinner + 实时 token 计数
-        with Live(
-            Spinner("dots", text="[dim]思考中…[/dim]"),
-            console=console,
-            refresh_per_second=10,
-            transient=True,  # 结束后自动清除 spinner
-        ) as live:
-            for chunk in chat_completion_stream(model_id, messages, **request_options):
-                full_response.append(chunk)
-                token_count = len("".join(full_response))
-                live.update(
-                    Spinner("dots", text=f"[dim]生成中… {token_count} tokens[/dim]")
-                )
+        # 流式阶段不再绘 spinner：rich Live 会重绘整行，既干扰协议前端，
+        # 也让内置编辑器的光标状态难以恢复。进度由等待提示统一负责。
+        for chunk in chat_completion_stream(model_id, messages, **request_options):
+            full_response.append(chunk)
 
         response_text = "".join(full_response)
 

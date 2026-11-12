@@ -39,7 +39,6 @@ class TestThreeTierStrategy:
 
         # 直接 mock usage_ratio 返回 0.7，确保进入 Tier 2
         monkeypatch.setattr(cm, "usage_ratio", lambda: 0.7)
-        assert 0.6 < cm.usage_ratio() < 0.85
 
         monkeypatch.setattr(llm, "chat_completion", lambda *a, **k: SIX_SEG_RAW)
         result = cm.compact(model_priority=["m1"])
@@ -57,7 +56,6 @@ class TestThreeTierStrategy:
 
         # Mock usage_ratio 返回 0.96，确保进入 Tier 3 crisis
         monkeypatch.setattr(cm, "usage_ratio", lambda: 0.96)
-        assert cm.usage_ratio() > 0.95
 
         def boom(*a, **k):
             raise AssertionError("危急状态下不应调用 LLM")

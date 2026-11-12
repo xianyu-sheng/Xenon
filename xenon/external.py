@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Protocol
 
 from xenon.kernel.contracts import PropositionKind
 
@@ -74,6 +74,10 @@ class Finding:
     path: str
     verified: bool
     detail: str
+    #: False when the claim cannot be checked at all — the path is outside the
+    #: audited workspace, or there was no VCS to read.  An uncheckable claim is
+    #: not a refuted one; conflating them turns "I cannot tell" into "you lied".
+    verifiable: bool = True
 
 
 @dataclass
@@ -100,7 +104,18 @@ class ExternalAudit:
 
     @property
     def contradicted_paths(self) -> tuple[str, ...]:
-        return tuple(item.path for item in self.findings if not item.verified)
+        """Claims the workspace actively refutes: it could be checked, and it
+        shows no such change."""
+
+        return tuple(
+            item.path for item in self.findings if not item.verified and item.verifiable
+        )
+
+    @property
+    def unverifiable_paths(self) -> tuple[str, ...]:
+        """Claims that could not be checked at all (outside workspace / no VCS)."""
+
+        return tuple(item.path for item in self.findings if not item.verifiable)
 
     @property
     def evidence_status(self) -> str:
@@ -108,6 +123,8 @@ class ExternalAudit:
             return "unverified"
         if self.contradicted_paths:
             return "contradicted"
+        if self.unverifiable_paths:
+            return "partial" if self.verified_paths else "unverified"
         if self.unclaimed_paths:
             return "partial"
         return "verified"
@@ -132,6 +149,24 @@ def _relative_to(path: str, workspace: Path) -> str:
     except (ValueError, OSError):
         return path
     return path.replace("\\", "/")
+
+
+def _claim_inside(path: str, workspace: Path) -> bool:
+    """Whether the probe could have seen this path at all.
+
+    Adapters map absolute in-workspace paths to relative ones; anything still
+    absolute is outside the audited tree, so a missing diff there proves
+    nothing about the claim.
+    """
+
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        return True
+    try:
+        candidate.resolve().relative_to(workspace)
+        return True
+    except (ValueError, OSError):
+        return False
 
 
 def _iter_tool_uses(path: Path) -> Iterable[Mapping[str, Any]]:
@@ -253,6 +288,92 @@ def read_claude_code_claims(
     return tuple(ordered), tuple(commands)
 
 
+class ClaimAdapter(Protocol):
+    """Turns one transcript format into claims.
+
+    Keyed by *format*, not by vendor: the same agent changes its log shape
+    across versions, and two agents can share one.  An adapter may only say
+    what the transcript claims — never what actually happened.
+    """
+
+    name: str
+
+    def sniff(self, transcript: Path) -> bool:
+        """Is this transcript in the format this adapter reads?"""
+
+    def read(
+        self, transcript: Path, *, workspace: Path
+    ) -> tuple[tuple[ClaimedChange, ...], tuple[ClaimedCommand, ...]]:
+        """(claimed changes, claimed commands) — claims only."""
+
+
+class ClaudeCodeAdapter:
+    """Claude Code's JSONL session log."""
+
+    name = "claude-code"
+    #: How far into the file sniffing looks before giving up.  A real session
+    #: has assistant/user records within the first handful of lines; a file
+    #: that does not is not this format, and reading all of it proves nothing.
+    _SNIFF_LINES = 200
+
+    def sniff(self, transcript: Path) -> bool:
+        try:
+            with transcript.open("r", encoding="utf-8", errors="replace") as stream:
+                for index, line in enumerate(stream):
+                    if index >= self._SNIFF_LINES:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(event, Mapping):
+                        continue
+                    if event.get("type") not in ("assistant", "user"):
+                        continue
+                    message = event.get("message")
+                    if isinstance(message, Mapping) and isinstance(
+                        message.get("content"), list
+                    ):
+                        return True
+        except OSError:
+            return False
+        return False
+
+    def read(
+        self, transcript: Path, *, workspace: Path
+    ) -> tuple[tuple[ClaimedChange, ...], tuple[ClaimedCommand, ...]]:
+        return read_claude_code_claims(transcript, workspace=workspace)
+
+
+#: Every transcript format Xenon can read claims from, in sniffing order.
+ADAPTERS: tuple[ClaimAdapter, ...] = (ClaudeCodeAdapter(),)
+
+
+def resolve_adapter(transcript: Path, agent: str = "") -> ClaimAdapter | None:
+    """Pick an adapter by explicit name first, then by format.
+
+    An explicit name that matches nothing returns ``None`` rather than falling
+    back to sniffing: the caller asked for a specific parser, and quietly using
+    another one would attribute claims to the wrong agent.
+    """
+
+    if agent:
+        for adapter in ADAPTERS:
+            if adapter.name == agent:
+                return adapter
+        return None
+    for adapter in ADAPTERS:
+        try:
+            if adapter.sniff(transcript):
+                return adapter
+        except OSError:
+            continue
+    return None
+
+
 def _first_timestamp(transcript: Path) -> float | None:
     with transcript.open("r", encoding="utf-8", errors="replace") as stream:
         for line in stream:
@@ -308,6 +429,7 @@ def audit(
     workspace: Path,
     probe: Any | None = None,
     base: str | None = None,
+    agent: str = "",
 ) -> ExternalAudit:
     """Compare what the transcript claims against what the worktree shows.
 
@@ -319,17 +441,31 @@ def audit(
 
     ``probe`` is any object with the :class:`GitWorktreeProbe` shape.  It is
     injected so the kernel-side code stays VCS-agnostic and tests need no git.
+
+    ``agent`` names an adapter explicitly; otherwise the transcript format
+    decides.  A log in a format no adapter recognises yields no claims at all
+    and says so in ``notes`` — guessing would attribute invented claims to the
+    reviewed agent, which is exactly the failure this module exists to prevent.
     """
 
     workspace = workspace.resolve()
-    claims, commands = read_claude_code_claims(transcript, workspace=workspace)
+    adapter = resolve_adapter(transcript, agent)
+    claims: tuple[ClaimedChange, ...] = ()
+    commands: tuple[ClaimedCommand, ...] = ()
+    if adapter is not None:
+        claims, commands = adapter.read(transcript, workspace=workspace)
     result = ExternalAudit(
-        agent="claude-code",
+        agent=adapter.name if adapter is not None else (agent or "unknown"),
         workspace=str(workspace),
         session=transcript.stem,
         claimed_changes=claims,
         claimed_commands=commands,
     )
+    if adapter is None:
+        result.notes.append(
+            "无法识别这份对话记录的格式（没有匹配的适配器），未解析任何声称；"
+            "如确知来源，可用 --agent 指定解析器。"
+        )
 
     if probe is None:
         from xenon.catalog.worktree import GitWorktreeProbe
@@ -352,7 +488,8 @@ def audit(
             Finding(
                 path=item.path,
                 verified=False,
-                detail="工作区无法观测，声明未获佐证",
+                detail="工作区无法观测，未能核验",
+                verifiable=False,
             )
             for item in claims
         )
@@ -362,12 +499,27 @@ def audit(
     dirty = {_normalized(path): path for path in changed}
     result.dirty_paths = tuple(changed)
     result.head = _head_of(probe)
+    if adapter is None:
+        # The worktree facts are real, but nothing can be compared against
+        # them: no claim was parsed.  Listing every dirty path as "unclaimed"
+        # would read as an accusation against a log we could not read at all.
+        return result
 
     findings: list[Finding] = []
     claimed_normalized: set[str] = set()
     for claim in claims:
         key = _normalized(claim.path)
         claimed_normalized.add(key)
+        if not _claim_inside(claim.path, workspace):
+            findings.append(
+                Finding(
+                    path=claim.path,
+                    verified=False,
+                    detail="不在审计工作区内，无法核验",
+                    verifiable=False,
+                )
+            )
+            continue
         if key in dirty:
             findings.append(
                 Finding(
@@ -394,26 +546,29 @@ def audit(
 def to_report(result: ExternalAudit) -> dict[str, Any]:
     """Shape an audit like ``xenon.report`` so the same renderers can print it."""
 
+    def _finding_for(path: str) -> Finding | None:
+        key = _normalized(path)
+        return next(
+            (item for item in result.findings if _normalized(item.path) == key), None
+        )
+
+    def _status_of(path: str) -> str:
+        finding = _finding_for(path)
+        if finding is None:
+            return "unresolved"
+        if finding.verified:
+            return "bound"
+        # "I could not check" is not "the workspace says otherwise".
+        return "out_of_scope" if not finding.verifiable else "contradicted"
+
     claims = [
         {
             "id": f"claim-{index}",
             "kind": item.kind.value,
             "target": item.path,
-            "status": "bound" if next(
-                (
-                    finding.verified
-                    for finding in result.findings
-                    if _normalized(finding.path) == _normalized(item.path)
-                ),
-                False,
-            ) else "unresolved",
-            "reason": next(
-                (
-                    finding.detail
-                    for finding in result.findings
-                    if _normalized(finding.path) == _normalized(item.path)
-                ),
-                "",
+            "status": _status_of(item.path),
+            "reason": (
+                finding.detail if (finding := _finding_for(item.path)) is not None else ""
             ),
             "fact_ids": [],
         }
@@ -426,7 +581,16 @@ def to_report(result: ExternalAudit) -> dict[str, Any]:
             "detail": claim["reason"],
         }
         for claim in claims
-        if claim["status"] != "bound"
+        if claim["status"] == "contradicted"
+    ]
+    out_of_scope = [
+        {
+            "kind": "claim_out_of_scope",
+            "claim": claim,
+            "detail": claim["reason"],
+        }
+        for claim in claims
+        if claim["status"] == "out_of_scope"
     ]
 
     return {
@@ -471,6 +635,7 @@ def to_report(result: ExternalAudit) -> dict[str, Any]:
         "delivery": {
             "verified_paths": list(result.verified_paths),
             "unverified_paths": list(result.contradicted_paths),
+            "out_of_scope_paths": list(result.unverifiable_paths),
             "receipt_paths": list(result.dirty_paths),
             "hash_mismatches": [],
         },
@@ -481,6 +646,7 @@ def to_report(result: ExternalAudit) -> dict[str, Any]:
             "tests": [],
         },
         "contradictions": contradictions,
+        "out_of_scope": out_of_scope,
         "answer": "",
         "replay": {
             "ledger": result.workspace,
@@ -514,7 +680,7 @@ __all__ = [
 
 _VERDICTS = {
     "verified": "✅ 声明与工作区一致",
-    "partial": "⚠️ 声明已兑现，但存在未声明的改动",
+    "partial": "⚠️ 部分声明获佐证；其余无法核验，或存在未声明的改动",
     "contradicted": "❌ 声明与工作区冲突",
     "unverified": "⚠️ 没有可核实的声明",
 }
@@ -549,7 +715,10 @@ def render_audit(result: ExternalAudit, *, comment: bool = False) -> str:
         lines.append("")
 
     corroborated = [item for item in result.findings if item.verified]
-    unproven = [item for item in result.findings if not item.verified]
+    contradicted = [
+        item for item in result.findings if not item.verified and item.verifiable
+    ]
+    unverifiable = [item for item in result.findings if not item.verifiable]
 
     if corroborated:
         lines.append(f"## 已获工作区佐证（{len(corroborated)}）")
@@ -560,10 +729,26 @@ def render_audit(result: ExternalAudit, *, comment: bool = False) -> str:
             lines.append(f"- …另 {len(corroborated) - 60} 个")
         lines.append("")
 
-    if unproven:
-        lines.append(f"## 声明未获佐证（{len(unproven)}）")
+    if contradicted:
+        lines.append(f"## 与工作区冲突（{len(contradicted)}）")
         lines.append("")
-        for item in unproven:
+        lines.append(
+            "> 这些路径在工作区可被检查，但相对基线没有对应的改动。"
+        )
+        lines.append("")
+        for item in contradicted:
+            lines.append(f"- `{item.path}` — {item.detail}")
+        lines.append("")
+
+    if unverifiable:
+        lines.append(f"## 无法核验（{len(unverifiable)}）")
+        lines.append("")
+        lines.append(
+            "> 这些声明不在审计工作区内（或工作区没有 VCS），"
+            "既不能证实也不能证伪；它们不计入「与工作区冲突」。"
+        )
+        lines.append("")
+        for item in unverifiable:
             lines.append(f"- `{item.path}` — {item.detail}")
         lines.append("")
 

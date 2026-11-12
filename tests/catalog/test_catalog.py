@@ -142,13 +142,14 @@ def test_unknown_profile_is_rejected() -> None:
 
 
 def test_core_specs_are_small_and_capability_complete() -> None:
-    assert len(CORE_SPECS) <= 7
+    assert len(CORE_SPECS) <= 8
     covered = set()
     for spec in CORE_SPECS:
         covered.update(spec.capabilities)
     assert {
         Capability.READ,
         Capability.SEARCH,
+        Capability.DISCOVER,
         Capability.EDIT,
         Capability.VERIFY,
         Capability.VCS,

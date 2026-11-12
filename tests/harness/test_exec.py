@@ -90,7 +90,9 @@ def test_run_plan_uses_real_workspace_ledger_and_finalizer(
         workspace=tmp_path,
         ledger_dir=tmp_path.parent / f"{tmp_path.name}-ledger",
         task_id="harness-1",
-        permission=PermissionMode.AUTO_EDIT,
+        # A plan with a verify step executes a command; §8.1 asks before that.
+        # The test asserts ledger/finalizer behavior, so it grants execution.
+        permission=PermissionMode.BYPASS,
     )
 
     assert run.result.accepted is True
@@ -167,6 +169,11 @@ def test_xenon_exec_emits_jsonl_and_result(tmp_path: Path) -> None:
             str(ledger_dir),
             "--task-id",
             "cli-task",
+            # §8.1: a verify command asks before running.  This test is about
+            # the JSONL/result contract, so it grants execution explicitly
+            # instead of relying on the retired "safe runner" whitelist.
+            "--permission",
+            "bypass",
             "--jsonl",
             "--output",
             str(output),

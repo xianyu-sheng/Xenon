@@ -100,9 +100,9 @@ ReactReflection）在创建后都应调用 `_inject_mcp_tools_into_engine()`，
 
 ## 版本与发布
 
-- 版本号: `__init__.py` + `pyproject.toml` + `repl.py` 兜底值 三处统一
+- 版本号: 单一来源 `xenon/__init__.py` 的 `__version__`（`pyproject.toml` 用 dynamic attr 读取；`repl.py` 直接导入，不要新增字面量）
 - CHANGELOG: 按版本倒序，每版本记录变更类别和测试结果
-- 测试: `tests/` 单棵测试树（约 3100+ 条用例，以 CI 收集数为准），`python3 -m pytest tests/ -q`。
+- 测试: `tests/` 单棵测试树（约 4000+ 条用例，以 CI 收集数为准），`python3 -m pytest tests/ -q`。
 - 发布: `git tag -a vX.Y.Z` + `gh release create`
 
 ### 每次修改后自动安装

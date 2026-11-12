@@ -1,5 +1,10 @@
 # 自进化（self-evolution）切片 1+2：存储 + 事件 + 提取器
 
+> **历史快照（2026-11-09）**：本目录记录切片 1+2 的验收。此后「教训即记忆」落地——
+> `lessons.yaml` 与 `/lessons`、`PITFALLS.md` 均已删除，教训是 `MemoryKind.LESSON`
+> 记忆记录（`/memory` 查看）。当前口径以 `docs/design/self-evolution.md` 为准；
+> 本文件下方关于 `lessons.yaml` 的描述是当时的实现。
+
 设计：`docs/design/self-evolution.md`（design-first）。本证据覆盖切片 1
 （`LessonStore` + `LESSON_*` 事件 + 指纹/退休语义）和切片 2（提取器 +
 runtime 挂接）。切片 3（应用器）和 4（产物：`/lessons` + PITFALLS.md）后续。
@@ -53,3 +58,33 @@ debt/deny 挂接）。
   达阈值 `LESSON_RETIRED`。真实模型探针：1 条教训 → 恰好 1 条约束。
 - **切片 4**：`/lessons`（列出活动/退休/计数）、`/lessons write`（显式生成
   `<repo>/.xenon/PITFALLS.md`，pitfall 教训投影，绝不自动写）。
+
+## 端到端验证（2026-11-12，教训即记忆之后）
+
+`tty_lesson_double_run.py` 用真实 ConPTY 驱动 TS 前端（`deepseek/deepseek-v4-flash`），
+在同一个会话里跑两轮：
+
+1. 让模型执行一条 shell 命令，在审批面板上**拒绝**；
+2. 让它读 README（只读任务）。
+
+断言全部基于账本与磁盘，不看代码：
+
+```text
+  PASS  turn 1 ledger: lesson_proposed
+  PASS  turn 1 ledger: lesson_stored
+  PASS  turn 2 ledger: lesson_applied
+  PASS  every proposed lesson was stored and later applied (same ids)
+  PASS  project-local memory holds the LESSON record on disk
+        record: lsn-3ffd045bb4383d75 tags=['fp:3ffd045bb4383d7550e4d877', 'lesson:preference', 'recurrences:0']
+ALL EVIDENCE CHECKS PASSED
+```
+
+账本：`~/.xenon/ledger/repl/repl-24745364d6bd.jsonl`（提出/存储）、
+`repl-2a05429773f2.jsonl`（应用）。
+
+脚本还修了一个测试侧的坑：拒绝一次不够——模型会把同一条命令改成 `test`（verify）
+再试，于是出现**第二个**审批面板（新的 `id`）。旧版脚本只按一次 `4`，第二个面板
+一直等，看上去像"审批卡死"。现在脚本循环拒绝每个面板，直到本轮结束。
+
+上面「切片 4：`/lessons` + PITFALLS.md」的描述已废弃：产物是记忆记录，见
+`docs/design/self-evolution.md`。

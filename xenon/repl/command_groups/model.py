@@ -468,6 +468,27 @@ register_command(
 def _cmd_mode(
     *, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any
 ) -> str:
+    if (args or "").strip().lower() in {"next", "cycle"}:
+        # Shift+Tab's behaviour, reachable from the protocol front-end: the
+        # keyboard shortcut and this command must not diverge.
+        names = list(registry.modes.keys())
+        if not names:
+            return "❌ 没有可用模式"
+        try:
+            index = names.index(registry.get_current_mode().name)
+        except ValueError:
+            index = -1
+        target = names[(index + 1) % len(names)]
+        try:
+            mode = registry.set_mode(target)
+        except ValueError as exc:
+            return f"❌ {exc}"
+        repl = session_state.get("_repl")
+        status_bar = getattr(repl, "status_bar", None) if repl is not None else None
+        if status_bar is not None:
+            status_bar.set_mode_notification(mode.name)
+        return f"✅ 已切换到模式: {mode.name} — {mode.description}"
+
     if not args:
         # #183: arrow-key picker when a terminal is attached; without one the
         # text list below is still the answer, so nothing is lost.

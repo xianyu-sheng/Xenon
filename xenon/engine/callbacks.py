@@ -11,45 +11,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from xenon.utils.redact import mask_sensitive_params
+
 logger = logging.getLogger(__name__)
 
-
-# R7: 敏感参数名（小写匹配）——日志/显示时脱敏，避免把 api_key/token/file content
-# 等写进日志或控制台。
-_SENSITIVE_PARAM_NAMES = frozenset(
-    {
-        "api_key",
-        "apikey",
-        "token",
-        "secret",
-        "password",
-        "passwd",
-        "authorization",
-        "credential",
-        "credentials",
-        "python_function",
-        "command_template",
-        "content",
-    }
-)
-
-
-def mask_sensitive_params(params: Any) -> Any:
-    """返回脱敏后的参数副本：敏感键的值替换为 ``<masked len=N>``。
-
-    供日志与 ``on_act`` 显示路径使用；非 dict 输入返回其截断 repr 字符串。
-    测试用的 RecordingCallback 等仍保留原始值，不经过此处。
-    """
-    if not isinstance(params, dict):
-        s = repr(params)
-        return s if len(s) <= 200 else s[:200] + "...(截断)"
-    out: dict[Any, Any] = {}
-    for k, v in params.items():
-        if isinstance(k, str) and k.lower() in _SENSITIVE_PARAM_NAMES:
-            out[k] = f"<masked len={len(v)}>" if isinstance(v, str) else "<masked>"
-        else:
-            out[k] = v
-    return out
 
 
 class EngineCallback:

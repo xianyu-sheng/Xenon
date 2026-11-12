@@ -17,6 +17,7 @@ from xenon.harness.cli import run_from_args
 from xenon.harness.plan import PlanError, parse_plan
 from xenon.harness.runner import result_json, write_result
 from xenon.harness.sink import JsonlSink
+from xenon.kernel.policies import PermissionMode
 from xenon.ledger.store import IntegrityReport, Ledger
 
 
@@ -159,6 +160,7 @@ def test_result_json_and_write_result_round_trip(tmp_path: Path) -> None:
         workspace=tmp_path,
         ledger_dir=tmp_path.parent / f"{tmp_path.name}-ledger",
         task_id="result-json",
+        permission=PermissionMode.BYPASS,
     )
     payload = json.loads(result_json(run.result))
     assert payload["accepted"] is True

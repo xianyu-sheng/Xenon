@@ -92,7 +92,9 @@ def load_github_token(*, credentials_path: str | Path | None = None) -> str:
         else github_credentials_path()
     )
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        from xenon.utils.credentials_io import load_document
+
+        data = load_document(path)
     except (OSError, UnicodeError, yaml.YAMLError):
         return ""
     if not isinstance(data, dict):

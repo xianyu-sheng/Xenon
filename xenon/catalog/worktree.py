@@ -105,6 +105,7 @@ class GitWorktreeProbe:
                 ["git", *args],
                 cwd=self.workspace,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 check=False,
                 timeout=self.timeout,
             )

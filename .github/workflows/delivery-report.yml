@@ -21,6 +21,10 @@ on:
         description: "Fail unless the answer is verified"
         type: boolean
         default: false
+      pr-number:
+        description: "PR number to comment on (workflow_dispatch has no pull_request payload)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -74,8 +78,10 @@ jobs:
           ls -l "$RUNNER_TEMP/report"
 
       - name: Comment on the PR
-        if: steps.pick.outputs.found == 'true' && github.event_name == 'pull_request'
+        if: steps.pick.outputs.found == 'true' && (github.event_name == 'pull_request' || inputs.pr-number != '')
         uses: actions/github-script@v7
+        env:
+          XENON_PR: ${{ inputs.pr-number }}
         with:
           script: |
             const fs = require('fs');
@@ -85,7 +91,10 @@ jobs:
             const body = fs.readFileSync(`${dir}/${file}`, 'utf8') +
               '\n\n<!-- xenon-delivery-report -->';
             const { owner, repo } = context.repo;
-            const issue_number = context.payload.pull_request.number;
+            // A dispatch run has no pull_request payload; the explicit input is
+            // what makes the comment step reachable outside pull_request.
+            const issue_number = Number(process.env.XENON_PR || 0) ||
+              context.payload.pull_request.number;
             const marker = '<!-- xenon-delivery-report -->';
             const comments = await github.paginate(
               github.rest.issues.listComments, { owner, repo, issue_number }

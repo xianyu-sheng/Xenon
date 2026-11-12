@@ -1,5 +1,9 @@
 # Event source and projections
 
+历史文档（归档）—— `EvidenceLedger` / `EvidenceRuntime` 已于 2026-11-10 退役
+（见 `docs/design/legacy-retirement-plan.md`），内核账本 `xenon/ledger/` 取代
+其地位。本文保留为设计史参考。
+
 Status: **EventLedger subscription + versioned TaskState/plan projections landed; remaining ad-hoc fallbacks marked below**.
 
 ## Why

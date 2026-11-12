@@ -124,7 +124,7 @@ class FakeGateway:
         }[call.spec_name]
         return ToolReceipt(
             receipt_id=f"receipt-{call.spec_name}",
-            call_id=f"call-{call.spec_name}",
+            call_id=call.call_id or f"call-{call.spec_name}",
             task_id="task-1",
             tool=call.spec_name,
             status=ReceiptStatus.OK,
@@ -442,10 +442,19 @@ def test_budget_stops_the_loop() -> None:
         workspace=".",
         budget=Budget(max_steps=1),
     )
-    result = runtime.run(spec, ScriptedStrategy([Think("plan"), Finish("done")]))
+    # The step budget stops the *round* after one proposal (design doc §4.3):
+    # each of the three outer rounds gets one Think, hits the budget, and the
+    # task ends BLOCKED — never delivered, with a round's worth of steps.
+    result = runtime.run(
+        spec,
+        ScriptedStrategy([Think("plan"), Think("plan"), Think("plan")]),
+    )
     assert result.accepted is False
     assert result.phase is TaskPhase.BLOCKED
-    assert result.metrics["steps"] == 1
+    assert result.stop_signal == "step_budget"
+    # One step per outer round, three rounds: the metric reports the task
+    # total, not just the last round's count.
+    assert result.metrics["steps"] == 3
 
 
 def test_cancel_before_run_aborts() -> None:

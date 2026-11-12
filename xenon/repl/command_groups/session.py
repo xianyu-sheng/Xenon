@@ -25,50 +25,14 @@ if TYPE_CHECKING:
     from xenon.repl.model_registry import ModelRegistry
 
 
-def _evidence_snapshot(agent_ctx: Any) -> dict[str, Any] | None:
-    """Snapshot a non-empty durable ledger for session persistence."""
-    if agent_ctx is None:
-        return None
-    get_runtime = getattr(agent_ctx, "get_evidence_runtime", None)
-    runtime = get_runtime() if callable(get_runtime) else None
-    ledger = getattr(runtime, "ledger", None)
-    if ledger is None and hasattr(agent_ctx, "get"):
-        ledger = agent_ctx.get("_evidence_ledger")
-    if ledger is None or not getattr(ledger, "events", None):
-        return None
-    try:
-        return ledger.snapshot()
-    except Exception:  # noqa: BLE001 — session save must not fail a turn
-        return None
+# /exit ────────────────────────────────────────────────────
 
-
-def _restore_evidence(agent_ctx: Any, extra: dict[str, Any]) -> bool:
-    """Rebind a verified ledger snapshot after /load or /resume."""
-    snapshot = extra.get("evidence")
-    if not isinstance(snapshot, dict):
-        return False
-    from xenon.engine.evidence_runtime import EvidenceLedger
-
-    try:
-        ledger = EvidenceLedger.from_snapshot(snapshot)
-    except (TypeError, ValueError):
-        return False
-    agent_ctx.bind_evidence(ledger)
-    agent_ctx.set("_evidence_session_id", ledger.session_id)
-    agent_ctx.set("_evidence_ledger", ledger)
-    return True
-
-
-# /exit /quit /bye ─────────────────────────────────────────
-
+# One name, one line in /help.  /quit and /bye were the same function under
+# three names, so the command list showed three rows for one action.
 register_command("/exit", "退出 Xenon", "/exit")
-register_command("/quit", "退出 Xenon（别名）", "/quit")
-register_command("/bye", "退出 Xenon（别名）", "/bye")
 
 
 @command_handler("/exit")
-@command_handler("/quit")
-@command_handler("/bye")
 def _cmd_exit(**kwargs: Any) -> str:
     raise ExitSignal("bye")
 
@@ -201,9 +165,6 @@ def _cmd_save(
         "cwd": str(Path.cwd()),
         "conversation_id": getattr(repl, "_conversation_id", ""),
     }
-    evidence = _evidence_snapshot(agent_ctx)
-    if evidence is not None:
-        extra["evidence"] = evidence
     if kernel_evidence is not None:
         extra["kernel_evidence"] = kernel_evidence
 
@@ -298,7 +259,6 @@ def _cmd_load(
 
     restored_context = AgentContext(initial=context_store)
     session_state["agent_context"] = restored_context
-    _restore_evidence(restored_context, extra)
     repl = session_state.get("_repl")
     recovery_notice = ""
     if repl is not None:
@@ -497,7 +457,6 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         restored_context = AgentContext(initial=context_store)
         repl.agent_context = restored_context
         repl._session_state["agent_context"] = restored_context
-        _restore_evidence(restored_context, extra)
         from xenon.repl.kernel_evidence import restore_session_pointer
 
         restore_session_pointer(repl, extra)

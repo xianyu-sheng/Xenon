@@ -45,17 +45,22 @@ def test_removed_side_channels_do_not_come_back() -> None:
 
 
 def test_contract_is_built_through_the_shared_entry_points() -> None:
-    """引擎与校验层必须经 ensure/build 构建或读取契约。"""
+    """The builder defines the entry points; the flow must consume them.
 
-    import xenon.engine.evidence_gate as evidence_gate
-    import xenon.repl.difficulty_estimator as difficulty_estimator
+    This used to also require them in ``engine/evidence_gate.py``.  That module
+    is now just the tool-level verdict type (the engine gate pipeline was
+    retired with the kernel), so the guard follows the live consumers instead
+    of a module that no longer builds contracts.
+    """
 
-    # 这些模块的源码里必须出现契约入口（防止有人改回自行分类）。
-    # The engine that used to consume the contract is gone; the guard now
-    # covers the modules that still build or read it.
-    source = (
-        Path(evidence_gate.__file__).read_text(encoding="utf-8")
-        + Path(difficulty_estimator.__file__).read_text(encoding="utf-8")
-    )
-    assert "ensure_turn_contract" in source
-    assert "build_turn_contract" in source
+    import xenon.repl.turn_contract as turn_contract
+    import xenon.repl.turn_flow as turn_flow
+
+    builder = Path(turn_contract.__file__).read_text(encoding="utf-8")
+    flow = Path(turn_flow.__file__).read_text(encoding="utf-8")
+
+    assert "def ensure_turn_contract(" in builder
+    assert "def build_turn_contract(" in builder
+    assert "build_turn_contract(" in flow
+    # The flow consumes the built contract; it must not re-classify on its own.
+    assert "classify_execution_policy" not in flow

@@ -61,10 +61,15 @@ def isolated_eval_credentials(
     ).expanduser()
     target = Path(workdir) / ".xenon" / "credentials.yaml"
     target.parent.mkdir(parents=True, exist_ok=True)
+    # Copy through the shared reader/writer rather than bytes: a keyring-backed
+    # document is keyed by path, so a byte copy would be unreadable at the new
+    # location.  A DPAPI document is re-bound to the same user here as well.
+    from xenon.utils.credentials_io import load_document, save_document
+
     if source.exists():
-        target.write_bytes(source.read_bytes())
+        save_document(target, load_document(source))
     else:
-        target.write_text("{}\n", encoding="utf-8")
+        save_document(target, {})
     try:
         target.chmod(0o600)
     except OSError:

@@ -46,3 +46,22 @@
 条件 2 已补齐（`#361`）：每次派发生成一个 `batch_id`，写进子任务账本的 `TASK_STARTED`，`xenon replay --children` 按批次分组。—— 注意它是**标签**，不是调度语义：不表达顺序、依赖、并发度，也没有批次级重试。在这一条补齐之前，并行仍然只从 REPL 的 `/agent --parallel` 走，**不给内核加 `spawn` 能力**——那会让模型自己扇出，破坏单写者与证据绑定。
 
 补齐后它仍然是"事件流的分叉与回流"，不是图。
+
+## 已实现口径（2026-11-11）：分支点 + 封存，仍然不是 DAG
+
+实现比上面的指针事件更严格，但语义相同——**分支 = 子账本，回流 = 父链上的一条指认**：
+
+- **分支点**：`child_started.branch = {task_id, ledger, base_seq, base_hash, depth}`，
+  即父链在"承诺观察这个子任务"时的位置；
+- **封存**：`child_finished` / `child_interrupted.branch =
+  {task_id, ledger, head_seq, head_hash, event_count, sealed}`，由父进程**亲手验证子链后**写入；
+  读不到或验证失败就 `sealed:false` 且不写 head（不编造观察）；
+- **验证**：`xenon/ledger/tree.py::verify_tree` = 父链线性验证 + 每条分支独立验证 + 比对封存头；
+  `xenon report` 的 `branches` 段会列出 `sealed / pending / missing / tampered / unsealed`
+  （`unsealed` = 封存时父进程读不到或验不过子链，`sealed:false`，不写 head）；
+- **单写者**：同一账本路径在进程内只有一个 `Ledger` 实例（`store.open_shared`，弱引用注册表 + 任务 id 校验）；
+  `append` 前检测文件是否被别的进程推进，推进了就重新加载（`_refresh_tail_if_moved`），绝不静默分叉。
+
+**为什么坚持没有 `next[]` 后继数组**：每条事件的内容哈希包含自身 `prev_hash`，写入后不可改。把后继指针
+放进前驱事件意味着回写历史，直接破坏 append-only 与整条链；放进独立可变索引则等于引入第二份必须与链同步的
+真相，修复索引本身不产生证据。"同时推进几件事"是调度问题，不是链结构问题——分支用引用表达已经足够。

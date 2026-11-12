@@ -13,6 +13,8 @@ import logging
 import sys
 from pathlib import Path
 
+import pytest
+
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -55,12 +57,10 @@ def test_regex_classification():
         intent = estimator._detect_intent(text)
         print(f"  最终结果: {intent}")
 
-        if regex_result == expected:
-            print("  ✓ 正则分类正确")
-        else:
-            print(f"  ✗ 正则分类错误，期望 {expected}")
+        assert regex_result == expected, (text, regex_result, expected)
 
 
+@pytest.mark.skip(reason="live model probe; run with a configured model by hand")
 def test_llm_fallback():
     """测试正则无法识别、需要 LLM 回退的情况。"""
     print("\n" + "=" * 60)
@@ -96,6 +96,7 @@ def test_llm_fallback():
             print("  → 两者都无法识别")
 
 
+@pytest.mark.skip(reason="live model probe; run with a configured model by hand")
 def test_ambiguous_input():
     """测试模糊输入（期望返回 None）。"""
     print("\n" + "=" * 60)
@@ -122,6 +123,7 @@ def test_ambiguous_input():
             print("  ✗ 不应识别出意图")
 
 
+@pytest.mark.skip(reason="live model probe; run with a configured model by hand")
 def test_llm_classifier_direct():
     """直接调用 LLM 分类器测试。"""
     print("\n" + "=" * 60)
@@ -152,6 +154,7 @@ def test_llm_classifier_direct():
         print(f"  降级: {result.fallback}")
 
 
+@pytest.mark.skip(reason="live model probe; run with a configured model by hand")
 def test_with_context():
     """测试带上下文的分类。"""
     print("\n" + "=" * 60)

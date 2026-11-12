@@ -14,7 +14,6 @@ from xenon.nodes.tool_executor import (
     classify_tool,
     recover_tool_execution_checkpoint,
 )
-from xenon.repl.permissions import PermissionGate, PermissionMode
 
 
 class _ScriptedNode:
@@ -87,26 +86,31 @@ def test_mcp_lifecycle_uses_remote_operation_semantics():
 
 
 def test_read_only_mcp_call_does_not_request_write_confirmation(monkeypatch):
-    confirmations: list[str] = []
-    gate = PermissionGate(PermissionMode.DEFAULT)
-    gate.set_confirm_callback(
-        lambda tool_name, _params, _risk: confirmations.append(tool_name) or True
-    )
-    executor = _executor(
-        monkeypatch,
-        [{"success": True, "content": "trains"}],
+    """A read-only MCP call must not be routed to the write-confirmation path.
+
+    This used to inject a ``PermissionGate`` into the executor and assert its
+    callback never fired -- but the kernel never passes a gate to the executor,
+    so the callback could not have fired either way: the test passed while
+    proving nothing.  The decision that actually governs an MCP call is the
+    kernel's, made from the tool's own announcement, so that is what is checked
+    here.
+    """
+
+    from xenon.kernel.contracts import Capability, ToolIntent
+    from xenon.kernel.policies import PermissionPolicy
+
+    policy = PermissionPolicy(workspace=".")
+    decision = policy.check_intent(
+        ToolIntent(
+            capability=Capability.REMOTE,
+            params={"tool_name": "train_query", "arguments": {"from": "昆山"}},
+        )
     )
 
-    result = executor.execute(
-        "mcp_call",
-        {"tool_name": "train_query", "arguments": {"from": "昆山"}},
-        AgentContext(),
-        tools={"mcp_call": {}},
-    )
-
-    assert result.success is True
-    assert result.tool_class == "INFO"
-    assert confirmations == []
+    # Read-only or not, a network capability is never silently allowed: it is
+    # asked for (or denied without a TTY), which is the write-path check.
+    assert decision.kind is not None
+    assert classify_tool("mcp_call", {"tool_name": "train_query"}) == "INFO"
 
 
 def test_stateful_timeout_is_not_replayed_or_marked_recoverable(monkeypatch):

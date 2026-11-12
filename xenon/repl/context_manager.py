@@ -30,6 +30,52 @@ _SENSITIVE_MEMORY_KEY = re.compile(
     re.IGNORECASE,
 )
 
+# ── 确定性工具结果压缩助手 ─────────────────────────────────
+# 原 engine/structured_compactor.py，2026-11-10 迁入：该模块只有这里的两个
+# 助手有真实调用方，其余函数零使用者（见 docs/design/legacy-retirement-plan.md）。
+_RESULT_ID_RE = re.compile(r"\btr_[A-Za-z0-9_:-]+\b")
+_FAILURE_RE = re.compile(
+    r"(?:failed|failure|error|traceback|assertionerror|失败|错误|异常|exit\s*[=:]\s*[1-9])",
+    re.IGNORECASE,
+)
+_SUMMARY_LINE_CHARS = 360
+
+
+def _extract_result_id(text: str) -> str:
+    match = _RESULT_ID_RE.search(str(text or ""))
+    return match.group(0) if match else ""
+
+
+def _summarize_tool_content(tool: str, content: str, *, max_chars: int = 260) -> str:
+    """Bounded deterministic summary of one tool result (no model involved)."""
+
+    from xenon.repl.context_strategies import ToolOutputClassifier
+
+    text = str(content or "")
+    result_id = _extract_result_id(text)
+    status = "FAIL" if _FAILURE_RE.search(text) else "OK"
+    summary = ToolOutputClassifier.compress(tool, text, max_chars=max_chars)
+    summary = " ".join(str(summary).split())
+    if len(summary) > _SUMMARY_LINE_CHARS:
+        summary = summary[:_SUMMARY_LINE_CHARS] + "…"
+    pointer = f" result_id={result_id}" if result_id else ""
+    return f"- {tool} [{status}]{pointer}: {summary}"
+
+
+def _summarize_observation_text(text: str, *, max_chars: int = 500) -> str:
+    """Compress a legacy ``Observation: [tool] ...`` message deterministically."""
+
+    raw = str(text or "")
+    match = re.match(r"^Observation:\s*(?:\[([^\]]+)\]\s*)?(.*)", raw, re.DOTALL)
+    if match:
+        tool = (match.group(1) or "tool").strip()
+        body = match.group(2)
+    else:
+        tool = "tool"
+        body = raw
+    return f"Observation: {_summarize_tool_content(tool, body, max_chars=max_chars)}"
+
+
 # P3-Q7 / §8.26.2：CJK 范围扩展——基本区 + 扩展 A + 兼容区 + 假名 + 韩文音节。
 # 原仅 '一' <= c <= '鿿'（U+4E00–U+9FFF）遗漏扩展 A/日文假名/韩文，致估算偏低。
 _CJK_RE = re.compile(
@@ -1642,10 +1688,6 @@ class ContextManager:
         Tool entries keep their result_id and raw hash; they are references to
         the full result cache, not copies of raw output.
         """
-        from xenon.engine.structured_compactor import (
-            extract_result_id,
-            summarize_observation_text,
-        )
 
         older, _recent = self._split_recent(keep_rounds=keep_rounds)
         if not older:
@@ -1668,8 +1710,8 @@ class ContextManager:
                 continue
             meta = getattr(turn, "metadata", {}) or {}
             tool = str(meta.get("tool_name") or "tool")
-            summary = summarize_observation_text(content, max_chars=260)
-            rid = extract_result_id(content) or str(meta.get("result_id") or "")
+            summary = _summarize_observation_text(content, max_chars=260)
+            rid = _extract_result_id(content) or str(meta.get("result_id") or "")
             failed = ("失败" in summary) or ("FAIL" in summary)
             suffix = f" result_id={rid}" if rid else ""
             line = f"- {tool}{' [FAIL]' if failed else ''}{suffix}: {summary[:340]}"

@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from xenon.engine.evidence_contracts import parse_test_counts
+from xenon.nodes.evidence_contracts import parse_test_counts
 
 
 def _as_list(value: Any) -> list[str]:
@@ -72,6 +72,7 @@ def _has_module(interpreter: Path, module: str, workspace: Path) -> bool:
             [str(interpreter), "-c", f"import {module}"],
             cwd=str(workspace),
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             shell=False,
             timeout=60,
         )
@@ -158,6 +159,25 @@ class TestToolsMixin:
                 custom = shlex.split(raw_custom)
             except ValueError:
                 custom = [raw_custom]
+
+        # ToolNode maps the generic ``command`` field to ``action``.  Models
+        # routinely call ``test`` as {"command": "pytest tests/test_x.py"};
+        # ignoring it ran the whole suite (and timed out on a large repo).
+        action_text = str(getattr(self, "action", "") or "").strip()
+        if action_text and not custom and not paths:
+            try:
+                tokens = shlex.split(action_text)
+            except ValueError:
+                tokens = [action_text]
+            if tokens[:1] in (["pytest"], ["py.test"]):
+                framework = "pytest"
+                args = args + tokens[1:]
+            elif len(tokens) >= 3 and tokens[1] == "-m" and tokens[2] == "pytest":
+                framework = "pytest"
+                args = args + tokens[3:]
+            else:
+                custom = tokens
+
         if framework == "auto":
             framework = "custom" if custom else "pytest"
 
@@ -245,6 +265,7 @@ class TestToolsMixin:
                 argv,
                 cwd=str(workspace),
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
                 errors="replace",

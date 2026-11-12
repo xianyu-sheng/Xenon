@@ -26,7 +26,6 @@ __all__ = [
     "diff_preview",
     "render_assistant_text",
     "render_secondary_text",
-    "render_verification_failure",
     "unwrap_json_result",
 ]
 
@@ -85,26 +84,6 @@ def diff_preview(tool_name: str, params: dict) -> str:
     except Exception:  # noqa: BLE001 — 预览失败只影响展示
         return ""
     return ""
-
-
-def render_verification_failure(draft: str, reasons: list[str]) -> None:
-    """未通过发布门的答案：醒目标记 + 草稿内容，不渲染为成功结果。"""
-
-    console = _console()
-    console.print()
-    header = Text()
-    header.append("● ", style="bold red")
-    header.append("任务校验未通过", style="bold red")
-    console.print(header)
-    console.print(
-        Panel(
-            "\n".join(f"- {r}" for r in reasons)
-            + "\n\n以下回答未通过校验，按未完成处理（草稿）：\n\n"
-            + str(draft or ""),
-            border_style="red",
-            padding=(0, 1),
-        )
-    )
 
 
 def render_verification_reminders(reasons: list[str], *, degraded: bool) -> None:

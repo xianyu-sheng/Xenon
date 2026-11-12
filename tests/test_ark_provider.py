@@ -170,7 +170,9 @@ def test_legacy_custom_ark_key_is_read_without_rewriting(tmp_path: Path) -> None
     loaded = providers.load_credentials(path)
 
     assert loaded["ark"] == "legacy-secret"
-    assert yaml.safe_load(path.read_text(encoding="utf-8")) == original
+    from xenon.utils.credentials_io import load_document
+
+    assert load_document(path) == original
 
 
 def test_unrelated_write_does_not_silently_persist_legacy_ark(
@@ -193,7 +195,9 @@ def test_unrelated_write_does_not_silently_persist_legacy_ark(
     monkeypatch.setattr(providers, "_get_credentials_path", lambda: path)
 
     providers.set_provider_key("openai", "openai-secret")
-    stored = yaml.safe_load(path.read_text(encoding="utf-8"))
+    from xenon.utils.credentials_io import load_document
+
+    stored = load_document(path)
 
     assert stored["openai"] == "openai-secret"
     assert "ark" not in stored
@@ -225,7 +229,9 @@ def test_remove_ark_key_removes_legacy_ark_but_preserves_other_custom(
     monkeypatch.setattr(providers, "_get_credentials_path", lambda: path)
 
     providers.remove_provider_key("ark")
-    stored = yaml.safe_load(path.read_text(encoding="utf-8"))
+    from xenon.utils.credentials_io import load_document
+
+    stored = load_document(path)
 
     assert "ark" not in stored
     assert "volc" not in stored["_custom_providers"]

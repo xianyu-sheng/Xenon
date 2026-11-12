@@ -12,10 +12,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from xenon.engine.budget import BudgetPhase
+
+class BudgetPhase(str, Enum):
+    """Iteration phases used to tune compression ("explore/execute/converge").
+
+    Local to the REPL compression chain since 2026-11-10: the legacy
+    ``engine/budget.py`` ``BudgetManager`` had no runtime callers, and this
+    enum was the only thing anything still imported from it.
+    """
+
+    EXPLORE = "explore"
+    EXECUTE = "execute"
+    CONVERGE = "converge"
 
 
 # ── 工具输出类型 ────────────────────────────────────────────

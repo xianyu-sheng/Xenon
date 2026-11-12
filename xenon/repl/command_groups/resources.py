@@ -253,12 +253,6 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
         registry.tool_map.clear()
         tools = registry.discover_tools()
         total = sum(len(v) for v in tools.values())
-        # 通知 REPL 刷新缓存的 _mcp_tools_list
-        if hasattr(repl, "_build_mcp_tools_list"):
-            try:
-                repl._mcp_tools_list = repl._build_mcp_tools_list()
-            except Exception:
-                pass
         return f"✅ 已刷新 MCP 工具映射（共 {total} 个工具）"
 
     else:

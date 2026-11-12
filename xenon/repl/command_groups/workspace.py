@@ -33,6 +33,7 @@ def _cmd_project(*, args: str, session_state: dict[str, Any], **kwargs: Any) -> 
         pc.refresh()
         repl._project_injected = False
         repl._memory_service = None
+        repl._lesson_store = None
         repl._session_state.pop("memory_service", None)
         return f"✅ 项目上下文已刷新。\n\n{pc.get_summary()}"
 

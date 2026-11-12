@@ -113,6 +113,39 @@ jobs:
           fail_ci_if_error: false
         if: always() && matrix.python-version == '3.12'
 
+  frontend:
+    name: Frontend (TS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # The front-end is the only interactive UI; its type check and reducer
+      # tests gate the same way Python's do.
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type check
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Test
+        working-directory: frontend
+        run: npm test
+
   package:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -125,11 +158,35 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # The wheel is the only thing users install, and its only UI is the TS
+      # front-end.  Build the self-contained bundle and stage it into the
+      # package before `python -m build`, then assert it actually shipped.
+      - name: Stage the front-end bundle
+        run: python scripts/build_frontend_assets.py
+
       - name: Build and verify distributions
         run: |
           python -m pip install build twine
           python -m build
           python -m twine check dist/*
+
+      - name: Verify the wheel ships the front-end
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          expected = "xenon/frontend/assets/xenon-ui.js"
+          assert expected in names, f"{expected} missing from {wheel}"
+          print(f"ok: {expected} is in {wheel}")
+          PY
 
   platform-smoke:
     name: Platform smoke (${{ matrix.os }})

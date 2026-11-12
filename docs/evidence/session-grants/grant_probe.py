@@ -79,7 +79,7 @@ def main():
             print(f"  remembered: {grant.capability.value} scope={grant.scope}")
             from xenon.ledger.store import Ledger
             kinds = [e.kind.value for e in Ledger.open(run.ledger_path, run.task_id).read()]
-            print(f"  grant_added in ledger: {'grant_added' in kinds}")
+            print(f"  grant_added in ledger: {'grant_added' in kinds}  (must be False since §9)")
             if grant is not None:
                 # the runtime exposes last_grant only after a recorded decision
                 pass

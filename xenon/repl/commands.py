@@ -8,12 +8,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-# Importing this module registers /lessons (self-evolution slice 4).
-from xenon.repl.command_groups import lessons as _lessons  # noqa: F401
-
 # Importing this module registers /permissions (#373, #183): mode switching plus
 # the remembered grants — one command, one owner.
 from xenon.repl.command_groups import permissions as _permissions  # noqa: F401
+
+# Importing this module registers /trust-hooks (H-5).  Without it the command
+# was defined but never registered, while two other modules told the user to
+# run it -- so project hooks could never be trusted, and the advice pointed at
+# a command that did not exist.
+from xenon.repl.command_groups import trust_hooks as _trust_hooks  # noqa: F401
 from xenon.repl.command_groups.agent import (
     _cmd_ask,  # noqa: F401 - compatibility export
     _cmd_code,  # noqa: F401 - compatibility export
@@ -167,6 +170,16 @@ _confirm = confirm_action
 
 
 # ── 智能路由命令 (v0.6.0) ────────────────────────────────
+
+# This is the only way to turn the intelligent router on: it starts disabled and
+# nothing else flips it.  Without this registration the handler existed but no
+# user could discover it — the same defect that hid /trust-hooks.
+register_command(
+    "/auto-route",
+    "智能路由：按任务特征自动选择模式",
+    "/auto-route [on|off|stats|export --format json|csv --output FILE]",
+)
+
 
 @command_handler("/auto-route")
 def cmd_auto_route(*, args: str, session_state: dict, **kwargs) -> str | None:

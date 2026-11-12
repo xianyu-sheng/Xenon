@@ -629,7 +629,16 @@ def test_runtime_adapter_selects_core_mcp_profile(tmp_path: Path) -> None:
     assert read_only.catalog_profile == "core+mcp"
 
 
-def test_runtime_adapter_approval_only_at_execute_level(tmp_path: Path) -> None:
+def test_runtime_adapter_offers_an_approval_channel_outside_read_only(
+    tmp_path: Path,
+) -> None:
+    """§8.1: auto-edit may ask before running a command.
+
+    The channel used to exist only at EXECUTE, so ``accept_edits`` (AUTO_EDIT)
+    denied a pytest call outright while ``default`` (SCOPED) prompted for the
+    same call — the stricter-sounding mode was the permissive one.
+    """
+
     registry = ModelRegistry()
     registry.add_model("test/fake", "fake")
     repl = FakeRepl(tmp_path, registry)
@@ -639,8 +648,12 @@ def test_runtime_adapter_approval_only_at_execute_level(tmp_path: Path) -> None:
     execute = RuntimeAdapter.from_repl(
         repl, model_ids=["test/fake"], level=ExecutionLevel.EXECUTE
     )
-    assert write.allow_approval is False
+    read = RuntimeAdapter.from_repl(
+        repl, model_ids=["test/fake"], level=ExecutionLevel.READ_ONLY
+    )
+    assert write.allow_approval is True
     assert execute.allow_approval is True
+    assert read.allow_approval is False
     assert execute.approval is not None
 
 
@@ -1008,6 +1021,8 @@ def test_runtime_adapter_resume_executes_approved_plan(tmp_path: Path) -> None:
         workspace=tmp_path,
         model_config=ModelConfig(model_id="test/fake"),
         ledger_dir=ledger_dir,
+        # §8.1: the plan runs a verify command, which needs an explicit grant.
+        permission=PermissionMode.BYPASS,
         finalize=False,
         client=FakeClient(
             [json.dumps({"action": "finish", "answer": "done"})]
@@ -1056,6 +1071,9 @@ def test_resume_kernel_plan_renders_execution_result(tmp_path: Path) -> None:
     registry = ModelRegistry()
     registry.add_model("test/fake", "fake")
     repl = FakeRepl(tmp_path, registry)
+    # The resumed plan executes a verify command, and §8.1 asks before that.
+    # This fake stands in for the human who answers the panel.
+    repl._confirm_tool = lambda tool, params, risk, *, from_child=False: (True, "")
 
     run = resume_kernel_plan(
         repl,
@@ -1410,6 +1428,7 @@ def test_runtime_adapter_runs_plan_execute_with_llm_planner(
         workspace=tmp_path,
         model_config=ModelConfig(model_id="test/fake"),
         ledger_dir=tmp_path.parent / f"{tmp_path.name}-adapter-ledger",
+        permission=PermissionMode.BYPASS,
         finalize=True,
         client=client,
         strategy_mode="plan-execute",
@@ -1451,8 +1470,8 @@ def _shell_turn(responses: list[str], tmp_path: Path, name: str) -> tuple[Any, G
 def test_session_grants_flow_across_two_adapter_runs(tmp_path: Path) -> None:
     """#373 ask-once: turn 1 approves and remembers; turn 2 never asks.
 
-    Mirrors what ``run_kernel_turn`` wires: the front-end book feeds the next
-    task's ``session_grants`` and harvests ``runtime.last_grant`` afterwards.
+    Mirrors what ``run_kernel_turn`` wires: the front-end book records the
+    answer when it is given and feeds the next task's ``session_grants``.
     """
 
     from xenon.kernel.session_grants import GrantBook
@@ -1470,22 +1489,32 @@ def test_session_grants_flow_across_two_adapter_runs(tmp_path: Path) -> None:
         json.dumps({"action": "finish", "answer": "done"}),
     ]
 
-    # Turn 1: the call needs approval; the human answers "session".
+    # Turn 1: the call needs approval; the human answers "session" — the
+    # front-end book records it (the panel is the single owner of memory).
+    from xenon.kernel.contracts import Capability
+    from xenon.kernel.session_grants import ALLOW, grant_from_choice
+
     adapter1, approval1 = _shell_turn(script, tmp_path, "t1")
     adapter1.session_grants = tuple(book.active(str(tmp_path)))
-    captured: list[Any] = []
-    run1 = adapter1.run("do it", task_id="grant-turn-1", on_runtime=captured.append)
+    run1 = adapter1.run("do it", task_id="grant-turn-1")
     assert approval1.calls == 1
-    assert captured and captured[0].last_grant is not None
-    book.add(captured[0].last_grant)
+    planned = grant_from_choice(
+        ALLOW,
+        capability=Capability.SHELL,
+        targets=("git log",),
+        workspace=str(tmp_path),
+    )
+    assert planned is not None
+    book.add(planned)
 
-    # The kernel wrote the decision into turn 1's ledger.
+    # Design doc §9: the answer is memory-only.  The approval is on the record,
+    # but the grant itself is not, so a restart cannot resurrect it.
     events = [
         event
         for event in Ledger(run1.ledger_path, "grant-turn-1").read()
         if event.kind is EventKind.GRANT_ADDED
     ]
-    assert events
+    assert not events, "a session answer must not be written to the ledger"
 
     # Turn 2: the same call must be answered by the grant, not by a prompt.
     adapter2, approval2 = _shell_turn(script, tmp_path, "t2")
@@ -1507,13 +1536,13 @@ def test_a_grant_in_another_workspace_does_not_answer(tmp_path: Path) -> None:
     """#373 acceptance: switching repositories invalidates session grants."""
 
     from xenon.kernel.contracts import Capability
-    from xenon.kernel.session_grants import SESSION, GrantBook, grant_from_choice
+    from xenon.kernel.session_grants import ALLOW, GrantBook, grant_from_choice
 
     other = tmp_path / "elsewhere"
     other.mkdir()
     book = GrantBook(workspace=str(tmp_path))
     grant = grant_from_choice(
-        SESSION,
+        ALLOW,
         capability=Capability.SHELL,
         targets=("git log",),
         workspace=str(tmp_path),
@@ -1541,6 +1570,26 @@ class _GrantingRepl(FakeRepl):
 
     def _confirm_tool(self, tool, params, risk, *, from_child=False):
         self.confirm_calls.append((tool, dict(params), risk))
+        # Single-owner contract: the front-end book records the "a" answer when
+        # it is given (the kernel no longer hands a grant back afterwards).
+        from xenon.kernel.session_grants import ALLOW, GrantBook, grant_from_choice
+        from xenon.repl.permission_map import capability_for_tool
+
+        book = getattr(self, "_grant_book", None)
+        if book is None:
+            book = GrantBook(workspace=str(self.project_ctx.root))
+            self._grant_book = book
+        capability = capability_for_tool(tool)
+        target = str((params or {}).get("command") or "").strip()
+        if capability is not None and target:
+            grant = grant_from_choice(
+                ALLOW,
+                capability=capability,
+                targets=(target,),
+                workspace=str(self.project_ctx.root),
+            )
+            if grant is not None:
+                book.add(grant)
         self._last_approval_scope = "session"
         return True, ""
 
@@ -1570,11 +1619,12 @@ def _run_turn(repl, tmp_path: Path, name: str):
 
 
 def test_run_kernel_turn_asks_once_across_two_tasks(tmp_path: Path) -> None:
-    """#373 acceptance, product path: two REPL tasks, one prompt.
+    """§9 acceptance, product path: two REPL tasks, one prompt.
 
-    The real wiring (``run_kernel_turn``): turn 1 answers "session", the book
-    harvests the grant; turn 2 feeds ``session_grants`` from the book, so the
-    same call is answered by the ledger-visible grant instead of the TTY.
+    Turn 1 answers "a" (tool + path, timed); the runtime hands the grant back
+    and ``run_kernel_turn`` stores it in the front-end book.  Turn 2 feeds
+    ``session_grants`` from that book, so the same call is answered without a
+    prompt.
     """
 
     registry = ModelRegistry()
@@ -1588,11 +1638,37 @@ def test_run_kernel_turn_asks_once_across_two_tasks(tmp_path: Path) -> None:
     # The front-end book now holds the decision (wired inside run_kernel_turn).
     book = getattr(repl, "_grant_book", None)
     assert book is not None and len(book) == 1
+    (grant,) = list(book)
+    assert grant.targets == ("echo hello",), "the grant covers the command shown"
 
     run2 = _run_turn(repl, tmp_path, "ask-once-2")
     assert run2 is not None and run2.result.accepted is True
     assert len(repl.confirm_calls) == 1, (
         "the second task must be answered by the session grant, not the TTY"
+    )
+
+
+def test_a_new_repl_asks_again_because_nothing_was_persisted(tmp_path: Path) -> None:
+    """Design doc §9: memory only, so a restart re-asks.
+
+    A fresh REPL over the same workspace has no ``_grant_book`` entry, and
+    nothing on disk restores one — which is the whole point of "不持久化".
+    """
+
+    _repo(tmp_path)
+    registry = ModelRegistry()
+    registry.add_model("test/fake", "fake")
+
+    first = _GrantingRepl(tmp_path, registry)
+    _run_turn(first, tmp_path, "restart-1")
+    assert len(first.confirm_calls) == 1
+    assert len(getattr(first, "_grant_book", ())) == 1
+
+    second = _GrantingRepl(tmp_path, registry)
+    _run_turn(second, tmp_path, "restart-2")
+
+    assert len(second.confirm_calls) == 1, (
+        "a new process must ask: the answer was never written down"
     )
 
 
@@ -1784,3 +1860,37 @@ def test_a_blocked_turn_that_asked_a_question_says_so(tmp_path: Path) -> None:
     title, text = repl.rendered[-1]
     assert title == "Kernel · 等待回答"
     assert text.strip() == "等待你的回答：哪个仓库？"
+
+
+def test_a_stopped_run_is_never_titled_as_finished(tmp_path: Path) -> None:
+    """phase and evidence are both labels; neither may overrule the other.
+
+    ``accepted`` is true here on purpose: a run can have accepted delivery and
+    still not be ``FINALIZED`` (blocked after the outer rounds were spent).
+    The title must say it stopped *and* what the evidence covered.
+    """
+
+    import xenon.repl.runtime_adapter as adapter
+    from xenon.kernel.contracts import EvidenceStatus, TaskPhase, TaskResult
+
+    ledger = tmp_path / "ledger.jsonl"
+    stopped = TaskResult(
+        task_id="t",
+        accepted=True,
+        phase=TaskPhase.BLOCKED,
+        answer="half the work",
+        evidence_status=EvidenceStatus.VERIFIED,
+    )
+    repl = FakeRepl(tmp_path, ModelRegistry())
+    repl._show_thinking = True
+
+    adapter._render_kernel_result(
+        repl,
+        adapter.HarnessRun(result=stopped, task_id="t", ledger_path=ledger),
+        ConsoleCallback(verbose=False),
+        model_id="test/fake",
+    )
+
+    title = repl.rendered[-1][0]
+    assert "已阻塞" in title
+    assert "已验证" in title

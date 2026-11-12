@@ -111,11 +111,12 @@ def test_create_pr_surfaces_auth_error(fake_httpx) -> None:
 def test_pr_tool_is_registered_and_requires_approval() -> None:
     from xenon.nodes.tool_executor import classify_tool
     from xenon.nodes.tool_registry import BUILTIN_TOOL_METHODS, BUILTIN_TOOL_REGISTRY
-    from xenon.repl.permissions import _CRITICAL_TOOLS
 
     assert "create_pull_request" in BUILTIN_TOOL_METHODS
     assert "create_pull_request" in BUILTIN_TOOL_REGISTRY.names()
-    assert "create_pull_request" in _CRITICAL_TOOLS
+    # SENSITIVE is what the executor reports upward, and it is what drives the
+    # kernel's approval decision -- the legacy name list was a second, dead
+    # copy of this fact.
     assert classify_tool("create_pull_request", {}) == "SENSITIVE"
 
 

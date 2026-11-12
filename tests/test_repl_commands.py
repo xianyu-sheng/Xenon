@@ -27,7 +27,6 @@ class TestSlashCommands:
             "/resume",
             "/setup",
             "/exit",
-            "/quit",
         ]
 
         for cmd in essential_commands:
@@ -60,7 +59,7 @@ class TestSlashCommands:
             assert cmd in COMMANDS, f"工具命令 {cmd} 缺失"
 
         # 系统相关
-        system_commands = ["/help", "/status", "/exit", "/quit"]
+        system_commands = ["/help", "/status", "/exit"]
         for cmd in system_commands:
             assert cmd in COMMANDS, f"系统命令 {cmd} 缺失"
 
@@ -112,7 +111,7 @@ class TestCommandList:
             "运行控制": ["/run", "/code", "/ask", "/sub-agent"],
             "显示选项": ["/optimize", "/stream", "/thinking", "/verbose", "/vision"],
             "配置管理": ["/config", "/project", "/permissions", "/memory"],
-            "退出命令": ["/exit", "/quit", "/bye"],
+            "退出命令": ["/exit"],
         }
 
         found_count = 0

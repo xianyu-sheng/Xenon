@@ -75,20 +75,7 @@ def _redacted_params(params: Any) -> Any:
 
     if not isinstance(params, dict):
         return params
-    sensitive = {
-        "api_key",
-        "apikey",
-        "access_token",
-        "refresh_token",
-        "token",
-        "secret",
-        "client_secret",
-        "password",
-        "passwd",
-        "authorization",
-        "cookie",
-        "private_key",
-    }
+    from xenon.utils.redact import SENSITIVE_PARAM_KEYS as sensitive
     safe: dict[str, Any] = {}
     for key, value in params.items():
         if str(key).lower().replace("-", "_") in sensitive:

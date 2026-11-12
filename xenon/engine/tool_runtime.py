@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -30,6 +30,19 @@ class ToolRuntime:
 
         if not isinstance(value, str) or not self.backend_workdir:
             return value
+        # A container workdir is a POSIX path even when the host is Windows:
+        # ``WindowsPath('/workspace/x').is_absolute()`` is False there, so the
+        # platform path class cannot be reused for the backend side.
+        if self.backend_workdir.startswith("/"):
+            backend = PurePosixPath(self.backend_workdir)
+            candidate = PurePosixPath(value)
+            if not candidate.is_absolute():
+                return value
+            try:
+                relative = candidate.relative_to(backend)
+            except ValueError:
+                return value
+            return str(self.workspace_root / relative)
         backend = Path(self.backend_workdir)
         candidate = Path(value)
         if not candidate.is_absolute():

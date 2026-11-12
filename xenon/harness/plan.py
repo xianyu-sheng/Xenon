@@ -181,6 +181,27 @@ def _step(value: Any, index: int) -> StepContract:
     )
 
 
+#: Actions the model calls directly, outside any plan.  A plan step is *work*:
+#: the runtime binds it to a catalog tool.  Asking for state is a question
+#: about the view, so a plan step naming one of these can only fail to bind --
+#: a measured run planned ``{"capability":"read","params":{"tool":"get_state"}}``
+#: and finished with "I could not get the session history" while the answer sat
+#: one direct call away.
+_TERMINAL_ACTION_NAMES = frozenset(
+    {"get_state", "make_plan", "finish", "think", "ask_user", "abort"}
+)
+
+
+def _terminal_action_in(intent: Any) -> str:
+    params = getattr(intent, "params", None)
+    params = params if isinstance(params, Mapping) else {}
+    for key in ("tool", "tool_name", "name"):
+        value = params.get(key)
+        if isinstance(value, str) and value.strip() in _TERMINAL_ACTION_NAMES:
+            return value.strip()
+    return ""
+
+
 def parse_plan(value: Mapping[str, Any]) -> HarnessPlan:
     data = _mapping(value, "plan")
     objective = str(data.get("objective") or "").strip()
@@ -192,6 +213,13 @@ def parse_plan(value: Mapping[str, Any]) -> HarnessPlan:
     )
     if not steps:
         raise PlanError("plan.steps must not be empty")
+    for step in steps:
+        name = _terminal_action_in(step.intent)
+        if name:
+            raise PlanError(
+                f"{name} is not a plan step; call it directly and plan only "
+                "the work"
+            )
     analysis = str(data.get("analysis") or "")
     return HarnessPlan(
         objective=objective,

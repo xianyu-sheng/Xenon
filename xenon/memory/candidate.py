@@ -7,17 +7,6 @@ import re
 from xenon.memory.compiler import estimate_tokens
 from xenon.memory.models import MemoryKind, MemoryProposal, MemoryScope
 
-_SECRET_PATTERNS = (
-    re.compile(
-        r"\b(?:api[_-]?key|access[_-]?token|secret|password|passwd)\b\s*[:=]", re.I
-    ),
-    re.compile(r"\b(?:sk|ak)-[A-Za-z0-9_-]{12,}\b"),
-    re.compile(r"\b(?:ghp_|github_pat_|AKIA)[A-Za-z0-9_]{12,}\b"),
-    re.compile(r"\bBearer\s+[A-Za-z0-9._~-]{12,}\b", re.I),
-    re.compile(r"(?:密码|密钥|令牌)\s*[:：=]\s*\S+"),
-    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-)
-
 
 class MemoryCandidateDetector:
     """Detect candidates without ever persisting them by itself."""
@@ -130,7 +119,9 @@ class MemoryCandidateDetector:
 
     @staticmethod
     def contains_secret(text: str) -> bool:
-        return any(pattern.search(text) for pattern in _SECRET_PATTERNS)
+        from xenon.utils.redact import contains_secret as _has_secret
+
+        return _has_secret(text)
 
     @staticmethod
     def detect_scope(text: str) -> MemoryScope:

@@ -1,4 +1,4 @@
-# 会话级授权（#373）：一次弹窗、决策入账、不再重复问
+# 会话级授权（#373）：一次弹窗、只存内存、不再重复问
 
 真实模型、真实仓库。复现：
 
@@ -6,6 +6,72 @@
 cd D:/Xenon
 PYTHONIOENCODING=utf-8 python docs/evidence/session-grants/grant_probe.py deepseek/deepseek-v4-flash
 ```
+
+> **口径（技术文档 §9 / 决策 13.2#8）**：授权**只存内存、不写盘**，带时间期限，
+> 会话结束即清除，重启重新询问。下面的运行记录里 `grant_added in ledger`
+> 一行是**旧实现**的产物；现在账本只记 `user_approval`（人做了什么决定）
+> 和 `policy_decision`（这条调用为什么没问），不再记一条可被还原成权限的
+> `grant_added`。删除这个事件值会让 217 个历史账本加载失败，所以枚举值保留、
+> 只是不再写入 —— 见 `xenon/ledger/events.py` 的注释。
+
+## 真实 TTY 跑出来的两个发现（2026-11-09）
+
+以用户身份在真实 ConPTY 里跑真实任务（`tty_grant_probe.py`），不是直接调模块。
+
+**发现 1：精确路径匹配在真实任务里几乎等于每次都问。**
+一次任务里模型把同一条命令改写了 4 次：
+
+```text
+python -c "print(123)"
+'print(123)' | python -
+python "-c" "print(123)"
+"print(123)" | python
+```
+
+按字面匹配，前一条的授权对后三条全部失效 —— 这正是文档 §8 想解决的
+"动不动就问用户"。处理：授权改为按 **可执行程序 + 参数形状** 匹配
+（`kernel/policies/ScopedGrant.allows`），引号风格、多余空格、行尾注释不算
+不同命令；程序、参数、以及任何链式/管道结构仍然必须重新询问。
+
+**发现 2：book 和策略各有一份匹配逻辑，且不一致。**
+策略层已支持形状匹配，但 `GrantBook._targets_covered` 还是字面比较，
+先一步把授权拦掉 —— 于是"更严格的那份"静默生效，用户照样被问。
+处理：book 改为委托 `ScopedGrant.allows`，一份匹配逻辑，一种含义。
+
+对照实验 `shape_ab.py`（真实 REPL + 真实面板路径）：
+
+```text
+  PASS 放行=True   原样重复:        python -c "print(123)"
+  PASS 放行=True   引号换写法:      python "-c" "print(123)"
+  PASS 放行=True   单引号:          python -c 'print(123)'
+  PASS 放行=True   多余空格:        python  -c   "print(123)"
+  PASS 放行=True   行尾注释:        python -c "print(123)"  # note
+  PASS 放行=False  改了参数:        python -c "print(999)"
+  PASS 放行=False  换了程序:        git status
+  PASS 放行=False  危险命令:        rm -rf /
+  PASS 放行=False  链式(提权):      python -c "print(123)" && rm -rf /
+  PASS 放行=False  管道(stdin):     "print(123)" | python -
+面板在授权后再未出现: True
+```
+
+> 顺带发现一个**真实提权漏洞**：`python -c "…" && rm -rf /` 以被授权的
+> 前缀开头，原来的 `startswith` 字面匹配会连 `rm -rf /` 一起放行。现在
+> 任何含 `| && || ; `` $(` 的命令都不被单条授权覆盖。
+
+## 四档回答（技术文档 §9，2026-11-09 补充）
+
+| 键 | 含义 | 作用域 | 失效点 |
+|---|---|---|---|
+| `y` | 本次允许 | 这一次调用 | 立即 |
+| `t` | 本轮允许 | 该 capability，本轮内任意路径 | 本轮结束，下一轮重新问 |
+| `a` | 全部允许 | 该工具 + 该路径 | 30 分钟 / 会话结束 |
+| `n` | 拒绝 | — | — |
+
+`t` 是真实 TTY 跑出来的需要：一次任务里按 `a` 授权了 `python -c "print(123)"`，
+随后模型对同一意图连写了四种拼写，每次都算"不同路径"、各弹一次面板。
+
+安全边界不变：破坏性命令与 push 的硬规则在 `_hard_denial` 里、先于任何
+授权求值，所以 `t` 也放不出 `rm -rf /`；链式命令（`| && || ;`）不被单条授权覆盖。
 
 ## 为什么改
 
@@ -118,10 +184,11 @@ broad allow（`shell`）与 deny（`shell(rm *)`）同时存在时，deny 胜。
 y=只这次  a=本会话都允许  A=永远允许（写入规则文件）  s=只允许这条命令  n=拒绝  q=取消
 ```
 
-- `a` → 会话级 grant（`GrantBook`，不落盘）；
+- `a` → 会话级 grant（`GrantBook`，**只存内存**，默认 30 分钟到期）；
 - `A` → 写 `~/.xenon/permissions.yaml` 的一条 `allow` 规则，**作用域是这条命令本身**（不是整个能力）；
 - `s` → 只覆盖该 target；
-- 每次授予都在账本里有 `grant_added`。
+- 授予与撤销都在账本里有 `user_approval` / `policy_decision` 记录；
+  授权本身**不写账本**（技术文档 §9）。
 
 `/permissions` 列出会话级 + 规则文件两类，`/permissions remove <selector>` 撤销并可写回文件。
 

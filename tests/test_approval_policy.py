@@ -20,7 +20,6 @@ from xenon.nodes.approval_policy import (
     APPROVAL_ALLOWED_ONCE,
     APPROVAL_REJECTED,
     APPROVAL_UNAVAILABLE,
-    SessionRuleStore,
     approval_rule_ttl_seconds,
     needs_boundary_approval,
     targets_outside_workspace,
@@ -31,21 +30,6 @@ from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.repl import REPL
 
 # ── 规则表 ─────────────────────────────────────────────────
-
-
-def test_session_rule_allows_until_ttl_expires(monkeypatch):
-    store = SessionRuleStore(ttl_seconds=10)
-    store.allow("command")
-    assert store.is_allowed("command") is True
-    assert store.is_allowed("command", now=_now_plus(store, 5)) is True
-    assert store.is_allowed("command", now=_now_plus(store, 11)) is False
-    assert store.is_allowed("command") is False  # 过期即清除
-
-
-def _now_plus(store: SessionRuleStore, seconds: float) -> float:
-    import time
-
-    return time.monotonic() + seconds
 
 
 def test_rule_ttl_env_override(monkeypatch):
@@ -153,27 +137,36 @@ def test_outside_write_prompts_and_honours_choice(monkeypatch, tmp_path):
     )
 
 
-def test_always_records_a_ttl_rule_and_stops_prompting(monkeypatch, tmp_path):
+def test_always_records_a_timed_grant_for_that_path_only(monkeypatch, tmp_path):
+    """§9: an ``a`` answer covers this tool + this path, for a limited time.
+
+    It must not become "every write from now on": a different path still asks.
+    """
+
+    from xenon.kernel.contracts import Capability
+
     repl = _make_repl(tmp_path)
     _quiet_config(monkeypatch)
     monkeypatch.setattr(sys, "stdin", _Tty())
     monkeypatch.setattr("xenon.repl.repl.Prompt.ask", lambda *a, **k: "a")
+    target = str(tmp_path.parent / "b.txt")
     assert (
-        repl._confirm_tool_approval(
-            "write_file", {"file_path": str(tmp_path.parent / "b.txt")}
-        )
+        repl._confirm_tool_approval("write_file", {"file_path": target})
         == APPROVAL_ALLOWED_ONCE
     )
-    assert repl._approval_rules.is_allowed("write_file")
+
+    book = repl._grant_book
+    assert len(book) == 1
+    assert book.active(str(tmp_path), Capability.EDIT, [target])
+
+    # A different path is not covered by that answer.
     monkeypatch.setattr(
-        "xenon.repl.repl.Prompt.ask", lambda *a, **k: pytest.fail("规则已生效")
+        "xenon.repl.repl.Prompt.ask", lambda *a, **k: pytest.fail("该路径未被授权")
     )
-    assert (
+    with pytest.raises(pytest.fail.Exception):
         repl._confirm_tool_approval(
             "write_file", {"file_path": str(tmp_path.parent / "c.txt")}
         )
-        == APPROVAL_ALLOWED_ONCE
-    )
 
 
 def test_command_prompts_even_inside_workspace(monkeypatch, tmp_path):
@@ -263,37 +256,46 @@ def test_executor_runs_when_boundary_allows(monkeypatch):
     assert not _FakeNode.script
 
 
-def test_legacy_gate_skips_when_boundary_rule_allows(monkeypatch, tmp_path):
-    repl = _make_repl(tmp_path)
-    _quiet_config(monkeypatch)
-    monkeypatch.setattr(sys, "stdin", _Tty())
-    repl._approval_rules.allow("command")
-    monkeypatch.setattr(
-        "xenon.repl.repl.Prompt.ask", lambda *a, **k: pytest.fail("不应重复询问")
+def test_a_remembered_answer_stops_the_panel_reappearing(tmp_path):
+    """§9: after ``a``, the same tool+path is decided without a prompt.
+
+    The assertion is the *policy decision*, because that is what decides
+    whether the runtime asks: a REQUIRE_APPROVAL reaches the panel, ALLOW does
+    not.  (The previous version seeded the book and then asserted the book —
+    it stayed green even if the policy stopped consulting grants.)
+    """
+
+    from xenon.kernel.contracts import (
+        CallTool,
+        Capability,
+        PolicyDecisionKind,
+        ToolIntent,
+    )
+    from xenon.kernel.policies import PermissionMode, PermissionPolicy
+    from xenon.kernel.session_grants import ALLOW, grant_from_choice
+
+    grant = grant_from_choice(
+        ALLOW,
+        capability=Capability.SHELL,
+        targets=("echo hi",),
+        workspace=str(tmp_path),
+    )
+    assert grant is not None
+    policy = PermissionPolicy(
+        mode=PermissionMode.SCOPED,
+        workspace=str(tmp_path),
+        allow_approval=True,
+        grants=grant.as_scoped(),
     )
 
-    allowed, _reason = repl._confirm_tool(
-        "command", {"command": "echo hi"}, "CRITICAL"
+    decision = policy.check(
+        None,  # the policy is intentionally view-free for a plain intent
+        CallTool(
+            ToolIntent(capability=Capability.SHELL, params={"command": "echo hi"})
+        ),
     )
 
-    assert allowed is True
-
-
-def test_legacy_gate_skips_when_boundary_approved_this_turn(monkeypatch, tmp_path):
-    repl = _make_repl(tmp_path)
-    _quiet_config(monkeypatch)
-    monkeypatch.setattr(sys, "stdin", _Tty())
-    # H-7：本轮授权按 (工具, 目标) 记录
-    repl._boundary_approved_once.add(repl._approval_key("command", {"command": "echo hi"}))
-    monkeypatch.setattr(
-        "xenon.repl.repl.Prompt.ask", lambda *a, **k: pytest.fail("不应重复询问")
-    )
-
-    allowed, _reason = repl._confirm_tool(
-        "command", {"command": "echo hi"}, "CRITICAL"
-    )
-
-    assert allowed is True
+    assert decision.kind is PolicyDecisionKind.ALLOW
 
 
 def test_boundary_approval_records_allowed_once_and_uses_typed_prompt(
@@ -311,9 +313,8 @@ def test_boundary_approval_records_allowed_once_and_uses_typed_prompt(
     outcome = repl._confirm_tool_approval("command", {"command": "echo hi"})
 
     assert outcome == APPROVAL_ALLOWED_ONCE
-    assert repl._approval_key("command", {"command": "echo hi"}) in (
-        repl._boundary_approved_once
-    )
+    # "本次允许" is not remembered — the call in flight already has it.
+    assert len(repl._grant_book) == 0
     assert seen["prompt"] == "选择"
 
 
@@ -337,7 +338,13 @@ def test_command_with_workspace_file_path_still_prompts(monkeypatch, tmp_path):
 
 
 def test_allowed_once_scoped_to_target_paths(monkeypatch, tmp_path):
-    """H-7：y 授权绑定 (工具, 目标)——同工具不同路径要重新询问。"""
+    """§9: ``y`` = 本次允许, so it must not be remembered at all.
+
+    This used to assert "same path is not asked again within the round", which
+    is the ``allowed-once`` memory the old boundary store provided.  §9 has no
+    such answer — ``y`` is "只放行这一次，下次再用仍需询问" — so the second call
+    to the same path asks again, and only ``a`` (tool + path, timed) stops it.
+    """
 
     repl = _make_repl(tmp_path)
     _quiet_config(monkeypatch)
@@ -348,11 +355,105 @@ def test_allowed_once_scoped_to_target_paths(monkeypatch, tmp_path):
     )
     outside = tmp_path.parent
     p1, p2 = str(outside / "x1.txt"), str(outside / "x2.txt")
-    # 走真实入口 _confirm_tool（先查本轮授权集再进面板）
+
     assert repl._confirm_tool("write_file", {"file_path": p1}, "HIGH")[0] is True
-    # 同工具、不同路径 → 必须再问
+    assert len(asked) == 1
+    # Same path again: "本次" was for the previous call only.
+    assert repl._confirm_tool("write_file", {"file_path": p1}, "HIGH")[0] is True
+    assert len(asked) == 2
+    # A different path asks as well.
     assert repl._confirm_tool("write_file", {"file_path": p2}, "HIGH")[0] is True
-    assert len(asked) == 2
-    # 同工具、同路径 → 本轮免问
-    assert repl._confirm_tool("write_file", {"file_path": p1}, "HIGH")[0] is True
-    assert len(asked) == 2
+    assert len(asked) == 3
+    # And nothing was remembered by any of those "y" answers.
+    assert len(repl._grant_book) == 0
+
+
+# ── 跨层契约：内核已裁决的调用不再由执行器二次裁决 ───────────────
+#
+# 同一动作曾有两处决策，且方向相反：内核 allow 的工作区内写被 Stage 1.6
+# 拉回来追问，内核 veto 的越界写却能靠面板放行。执行器跑在内核之下，它的
+# 兜底是为「根本没有内核」的库调用方准备的——那些调用方不会设这个标记。
+
+
+def test_kernel_adjudicated_call_is_not_asked_twice():
+    ctx = AgentContext()
+    asked = []
+    ctx.set_approval_callback(
+        lambda tool, params, reason: asked.append(tool) or APPROVAL_REJECTED
+    )
+    ctx.set("_kernel_adjudicated", True)
+
+    assert ctx.request_approval("apply_patch", {}) == APPROVAL_ALLOWED_ONCE
+    assert asked == [], "内核已裁决的调用不得再次询问"
+
+
+def test_without_the_flag_the_boundary_channel_still_asks():
+    """库/直连调用方没有内核，兜底必须仍然生效。"""
+
+    ctx = AgentContext()
+    asked = []
+    ctx.set_approval_callback(
+        lambda tool, params, reason: asked.append(tool) or APPROVAL_REJECTED
+    )
+
+    assert ctx.request_approval("apply_patch", {}) == APPROVAL_REJECTED
+    assert asked == ["apply_patch"]
+
+
+def test_the_flag_does_not_survive_a_denied_kernel_ruling(tmp_path):
+    """标记必须在执行后清除，否则下一次调用会被静默放行。"""
+
+    from xenon.catalog.gateway import LegacyToolGateway
+
+    ctx = AgentContext()
+    gateway = LegacyToolGateway(
+        specs=(),
+        workspace=tmp_path,
+        context=ctx,
+        policy=object(),  # 只为验证标记；下面直接调用辅助方法
+    )
+
+    gateway._mark_kernel_ruling(True)
+    assert ctx.get("_kernel_adjudicated") is True
+    gateway._mark_kernel_ruling(False)
+    assert ctx.get("_kernel_adjudicated") is False
+
+
+def test_needs_boundary_approval_ignores_workspace_and_mode():
+    """Stage 1.6 的判定只看执行级别——这正是它必须让位给内核的原因。
+
+    它不接收 workspace，也不接收权限模式，所以无法区分「工作区内写」
+    与「越界写」。把它当作权威，就等于用一条信息更少的规则覆盖内核裁决。
+    """
+
+    inside = str(__import__("pathlib").Path.cwd() / "note.txt")
+    outside = str(__import__("tempfile").gettempdir())
+    for path in (inside, outside):
+        assert needs_boundary_approval("apply_patch", {"files": [{"path": path}]})
+
+
+def test_an_adjudicated_write_is_never_auto_allowed(monkeypatch, tmp_path):
+    """`scoped` writes must reach the panel even inside the workspace.
+
+    The kernel asks only when the mode says a human must answer; the UI used
+    to answer for them, which made `/permissions default` behave exactly like
+    `accept_edits`.
+    """
+
+    repl = _make_repl(tmp_path)
+    _quiet_config(monkeypatch)
+    monkeypatch.setattr(sys, "stdin", _Tty())
+    asked: list[str] = []
+    monkeypatch.setattr(
+        "xenon.repl.repl.Prompt.ask",
+        lambda *a, **k: asked.append(str(a[0])) or "y",
+    )
+
+    outcome = repl._confirm_tool_approval(
+        "write_file",
+        {"file_path": str(tmp_path / "a.py"), "content": "x"},
+        adjudicated=True,
+    )
+
+    assert asked, "a scoped write must be put to the human"
+    assert outcome == APPROVAL_ALLOWED_ONCE

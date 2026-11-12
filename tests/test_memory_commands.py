@@ -35,9 +35,31 @@ def test_memory_add_no_args():
     assert "用法" in result
 
 
-def test_memory_v2_status():
-    """_cmd_memory_v2 needs a repl with _get_memory_service."""
-    # Without a proper repl, we can only test basic behavior
-    # The v1 path would be taken when repl doesn't have _get_memory_service
-    result = _cmd_memory(args="list", session_state={})
-    assert isinstance(result, str)
+def test_memory_v2_status_reports_storage_locations():
+    """The v2 surface is a different command; this test used to call v1.
+
+    It was named for ``_cmd_memory_v2`` but exercised ``_cmd_memory`` with an
+    ``isinstance(str)`` assertion, so the v2 branch had no coverage at all.
+    """
+
+    from types import SimpleNamespace
+
+    from xenon.repl.command_groups.memory_cmd import _cmd_memory_v2
+
+    class _Registry:
+        @staticmethod
+        def get(scope):
+            raise ValueError("no backend configured")
+
+    service = SimpleNamespace(
+        registry=_Registry(),
+        policy=SimpleNamespace(
+            max_item_tokens=1, max_leaf_tokens=2, max_active_tokens=3
+        ),
+    )
+    repl = SimpleNamespace(_get_memory_service=lambda: service)
+
+    text = _cmd_memory_v2(args="status", repl=repl)
+
+    assert "Memory v2" in text
+    assert "存储位置" in text

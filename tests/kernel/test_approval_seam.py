@@ -264,101 +264,28 @@ def test_blocking_reason_is_empty_for_an_unexplained_run(tmp_path):
     assert blocking_reason(ledger.path, task_id="t") == ""
 
 
-# ── 输入所有权：pt 会话存在时必须走它，否则会和 input() 抢 stdin ──
-
-
-class _Session:
-    def __init__(self, answers):
-        self.answers = list(answers)
-        self.asked: list[str] = []
-
-    def prompt(self, message, default="n"):
-        self.asked.append(message)
-        return self.answers.pop(0)
+# ── 审批读答：统一走 rich Prompt，协议宿主与测试都能替换它 ─────
 
 
 class _Ux:
-    """Just enough of ApprovalUxMixin to exercise the reader choice."""
-
-    def __init__(self, session):
-        self._pt_session = session
-        self.printed: list[str] = []
+    """Just enough of ApprovalUxMixin to exercise the reader."""
 
 
-def test_the_reader_prefers_prompt_toolkit_when_a_session_exists():
-    from xenon.repl.approval_ux import ApprovalUxMixin
-
-    session = _Session(["A"])
-    ux = _Ux(session)
-    ux._active_runtime = object()
-
-    answer = ApprovalUxMixin._ask_approval_choice(ux)
-
-    assert answer == "a", "the answer is normalised to lower case"
-    assert session.asked, "prompt_toolkit must own the read"
-
-
-def test_an_empty_answer_takes_the_default():
-    from xenon.repl.approval_ux import ApprovalUxMixin
-
-    ux = _Ux(_Session([""]))
-    ux._active_runtime = object()
-    answer = ApprovalUxMixin._ask_approval_choice(ux)
-
-    assert answer == "n"
-
-
-def test_an_unrecognised_answer_is_asked_again():
-    from xenon.repl.approval_ux import ApprovalUxMixin
-
-    session = _Session(["maybe", "y"])
-    ux = _Ux(session)
-    ux._active_runtime = object()
-
-    assert ApprovalUxMixin._ask_approval_choice(ux) == "y"
-    assert len(session.asked) == 2
-
-
-def test_the_reader_uses_prompt_toolkit_only_inside_a_turn():
-    """Outside a kernel turn the historic input() path must stay in charge."""
-
-    from xenon.repl.approval_ux import ApprovalUxMixin
-
-    session = _Session(["y"])
-    ux = _Ux(session)
-    ux._active_runtime = None
-
-    # No active runtime -> the session must not be asked; the fallback is
-    # rich's Prompt, which the caller patches in tests.
-    called: list[str] = []
-
-    class _Prompt:
-        @staticmethod
-        def ask(*args, **kwargs):
-            called.append("asked")
-            return "y"
-
+def test_the_reader_goes_through_the_patchable_prompt(monkeypatch):
     import xenon.repl.approval_ux as mod
-
-    original = mod.Prompt
-    mod.Prompt = _Prompt
-    try:
-        assert ApprovalUxMixin._ask_approval_choice(ux) == "y"
-    finally:
-        mod.Prompt = original
-    assert called == ["asked"]
-    assert session.asked == []
-
-
-def test_the_reader_uses_the_session_inside_a_turn():
     from xenon.repl.approval_ux import ApprovalUxMixin
 
-    session = _Session(["a"])
-    ux = _Ux(session)
-    ux._active_runtime = object()
+    seen: dict = {}
 
-    assert ApprovalUxMixin._ask_approval_choice(ux) == "a"
-    assert session.asked, "inside a turn the session owns the terminal"
+    def ask(*args, **kwargs):
+        seen.update(kwargs)
+        return "a"
+
+    monkeypatch.setattr(mod.Prompt, "ask", ask)
+
+    assert ApprovalUxMixin._ask_approval_choice(_Ux()) == "a"
+    assert seen["default"] == "n"
+    assert seen["choices"] == ["y", "t", "a", "n", "q"]
 
 
 def test_blocking_reason_surfaces_an_unanswered_user_question(tmp_path):

@@ -292,11 +292,14 @@ def test_the_runtime_stops_on_a_repeated_failure_with_a_diagnosis() -> None:
     # Different targets on purpose: the *call* differs, the *wall* does not.
     # That is what separates "retried the same thing" from "kept hitting the
     # same error", and only the second is a loop worth stopping.
+    # Enough actions for the signal to fire *and* exhaust the corrective
+    # budget: the detector teaches the same wall `max_loop_corrections`
+    # times before it vetoes, and this test is about the veto.
     actions = [
         CallTool(
             ToolIntent(capability=Capability.READ, params={"file_path": f"{i}.py"})
         )
-        for i in range(6)
+        for i in range(12)
     ]
 
     result = runtime.run(

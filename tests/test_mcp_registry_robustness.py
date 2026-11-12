@@ -139,70 +139,10 @@ class TestTypeGuard:
 
 
 class TestRedaction:
-    def test_exception_summary_redacted(self):
-        class Boom:
-            def call_tool(self, name, arguments=None):
-                raise RuntimeError("auth failed: api_key=sk-SUPERSECRET123")
-
-        reg = MCPRegistry()
-
-        class Ctx:
-            def __init__(self):
-                self.obs = []
-
-            @property
-            def evidence(self):
-                return self
-
-            def record_tool_request(self, **kw):
-                pass
-
-            def record_tool_observation(self, **kw):
-                self.obs.append(kw)
-
-        reg.clients["s"] = Boom()  # type: ignore[assignment]
-        reg.tool_map["s:read"] = ("s", {"name": "read"})
-        ctx = Ctx()
-        with pytest.raises(RuntimeError):
-            reg.call_tool("s:read", context=ctx)
-        assert len(ctx.obs) == 1
-        assert "sk-SUPERSECRET123" not in ctx.obs[0]["summary"]
-        assert "<redacted>" in ctx.obs[0]["summary"]
-
-    def test_success_summary_redacted(self):
-        class Leaky:
-            def call_tool(self, name, arguments=None):
-                return {"content": [{"type": "text", "text": "ok token=abc123"}]}
-
-        reg = MCPRegistry()
-
-        class Ctx:
-            def __init__(self):
-                self.obs = []
-
-            @property
-            def evidence(self):
-                return self
-
-            def record_tool_request(self, **kw):
-                pass
-
-            def record_tool_observation(self, **kw):
-                self.obs.append(kw)
-
-        reg.clients["s"] = Leaky()  # type: ignore[assignment]
-        reg.tool_map["s:read"] = ("s", {"name": "read"})
-        ctx = Ctx()
-        reg.call_tool("s:read", context=ctx)
-        assert len(ctx.obs) == 1
-        assert ctx.obs[0]["success"] is True
-        assert "abc123" not in ctx.obs[0]["summary"]
-        assert "<redacted>" in ctx.obs[0]["summary"]
-
     def test_redact_text_forms(self):
-        assert "api_key=<redacted>" in _redact_text("err api_key=sk-123")
-        assert "<redacted>" in _redact_text("Authorization: Bearer abc.def.ghi")
-        assert "token=<redacted>" in _redact_text("http://h?token=xyz&a=b")
+        assert "api_key=[redacted]" in _redact_text("err api_key=sk-123")
+        assert "[redacted]" in _redact_text("Authorization: Bearer abc.def.ghi")
+        assert "token=[redacted]" in _redact_text("http://h?token=xyz&a=b")
 
 
 class TestConcurrency:

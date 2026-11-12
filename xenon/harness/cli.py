@@ -126,17 +126,26 @@ def run_from_args(args: argparse.Namespace) -> int:
 
     sink = JsonlSink(sys.stdout) if args.jsonl else None
     try:
+        from xenon.sandbox.backends import build_runtime, spec_from_env
+
+        # Where commands run is decided once per process.  A configured
+        # backend that is unavailable fails closed here, before any turn.
+        tool_runtime = build_runtime(
+            args.workspace or ".",
+            getattr(args, "sandbox", None) or spec_from_env(),
+        )
         if plan is not None:
             run = run_plan(
                 plan,
                 workspace=args.workspace or ".",
                 ledger_dir=args.ledger_dir,
                 task_id=args.task_id,
-                permission=PermissionMode(args.permission),
+                permission=PermissionMode(args.permission or "auto-edit"),
                 finalize=not args.no_finalize,
                 max_steps=args.max_steps,
                 sink=sink,
                 model_config=model_config,
+                tool_runtime=tool_runtime,
             )
         else:
             assert task is not None and model_config is not None
@@ -146,15 +155,23 @@ def run_from_args(args: argparse.Namespace) -> int:
                 workspace=args.workspace or ".",
                 ledger_dir=args.ledger_dir,
                 task_id=args.task_id,
-                permission=PermissionMode(args.permission),
+                permission=PermissionMode(args.permission or "auto-edit"),
                 finalize=not args.no_finalize,
                 max_steps=args.max_steps,
                 constraints=(f"model:{model_config.model_id}",),
                 sink=sink,
                 accept_debt=bool(getattr(args, "accept_debt", False)),
+                tool_runtime=tool_runtime,
             )
     except Exception as exc:  # noqa: BLE001 — CLI must return a code
-        print(f"harness error: {exc}", file=sys.stderr)
+        from xenon.utils.errors import envelope
+
+        problem = envelope(exc)
+        print(
+            f"harness error [{problem.kind}/{problem.code}"
+            f"{', retryable' if problem.retryable else ''}]: {problem.message}",
+            file=sys.stderr,
+        )
         return 3
     if args.output:
         output = Path(args.output)

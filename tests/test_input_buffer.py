@@ -2,23 +2,9 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-from prompt_toolkit.buffer import Buffer
-from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
-from prompt_toolkit.keys import Keys
-
 from xenon.repl.context_manager import ContextManager
 from xenon.repl.input_buffer import PastedTextStore, normalize_input_newlines
-from xenon.repl.repl import REPL
-
-
-def _binding(repl: REPL, keys: tuple[Keys, ...]):
-    return next(
-        binding
-        for binding in repl._pt_session.key_bindings.bindings
-        if binding.keys == keys
-    )
+from xenon.repl.input_history import InputHistory
 
 
 def test_normalize_input_newlines_changes_only_line_endings():
@@ -59,58 +45,63 @@ def test_paste_token_avoids_existing_visible_text_and_is_atomic():
     assert store.token_before_cursor(combined, end) == token
 
 
-def test_prompt_toolkit_paste_binding_folds_only_visible_buffer():
-    repl = REPL()
-    repl._paste_store.reset()
-    buffer = Buffer()
-    payload = "开头\r\n" + "x" * 1200 + "\r结尾"
-    event = SimpleNamespace(current_buffer=buffer, data=payload)
+def test_history_navigates_back_to_the_draft(tmp_path):
+    history = InputHistory(tmp_path / "history.txt", limit=10)
+    history.add("first")
+    history.add("second")
 
-    _binding(repl, (Keys.BracketedPaste,)).handler(event)
-
-    assert buffer.text == "[Pasted #1 +1,206 chars]"
-    assert repl._paste_store.expand(buffer.text) == normalize_input_newlines(payload)
-
-
-def test_prompt_toolkit_folded_paste_backspace_deletes_whole_block():
-    repl = REPL()
-    repl._paste_store.reset()
-    buffer = Buffer()
-    token = repl._paste_store.compact("x" * 1200)
-    buffer.text = f"prefix{token}"
-    buffer.cursor_position = len(buffer.text)
-
-    event = SimpleNamespace(current_buffer=buffer)
-    _binding(repl, (Keys.Backspace,)).handler(event)
-
-    assert buffer.text == "prefix"
+    assert history.previous("typing") == "second"
+    assert history.previous("typing") == "first"
+    assert history.previous("typing") == "first"
+    assert history.next() == "second"
+    assert history.next() == "typing"
 
 
-def test_shift_enter_encodings_remain_distinct_from_plain_enter():
-    repl = REPL()
+def test_history_persists_one_line_entries_only(tmp_path):
+    path = tmp_path / "history.txt"
+    history = InputHistory(path, limit=10)
+    history.add("hello")
+    history.add("multi\nline")
 
-    expected = (Keys.Escape, Keys.ControlM)
-    assert ANSI_SEQUENCES["\x1b[13;2u"] == expected
-    assert ANSI_SEQUENCES["\x1b[27;2;13~"] == expected
-    assert ANSI_SEQUENCES["\r"] == Keys.ControlM
+    assert history.previous("") == "multi\nline"
+    reloaded = InputHistory(path, limit=10)
 
-    buffer = Buffer()
-    event = SimpleNamespace(current_buffer=buffer)
-    _binding(repl, expected).handler(event)
-    assert buffer.text == "\n"
+    assert list(reloaded._entries) == ["hello"]
+    assert path.read_text(encoding="utf-8").splitlines() == ["hello"]
 
 
-def test_read_input_restores_paste_before_returning_to_repl(monkeypatch):
-    repl = REPL()
-    payload = "  def f():\r\n    return 1\r\n"
-    payload += "#" * 1200
+def test_history_drops_consecutive_duplicates_and_blanks(tmp_path):
+    path = tmp_path / "history.txt"
+    history = InputHistory(path, limit=10)
+    history.add("same")
+    history.add("same")
+    history.add("   ")
 
-    def fake_prompt(_message):
-        return repl._paste_store.compact(payload)
+    assert history.previous("") == "same"
+    assert path.read_text(encoding="utf-8").splitlines() == ["same"]
 
-    monkeypatch.setattr(repl._pt_session, "prompt", fake_prompt)
 
-    assert repl._read_input_pt() == normalize_input_newlines(payload)
+def test_history_reads_the_old_prompt_toolkit_format(tmp_path):
+    path = tmp_path / "history.txt"
+    path.write_text(
+        "\n# 2026-01-01 10:00:00\n+first\n\n# 2026-01-01 10:01:00\n+second\n",
+        encoding="utf-8",
+    )
+
+    history = InputHistory(path, limit=10)
+
+    assert history.previous("") == "second"
+    assert history.previous("") == "first"
+
+
+def test_history_file_is_compacted_when_it_grows(tmp_path):
+    path = tmp_path / "history.txt"
+    path.write_text("".join(f"line{i}\n" for i in range(100)), encoding="utf-8")
+
+    history = InputHistory(path, limit=10)
+
+    assert history.previous("") == "line99"
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 10
 
 
 def test_multiline_request_is_one_cache_friendly_user_turn():

@@ -16,6 +16,10 @@ _TOOL_CAPABILITIES = {
     "bash": Capability.SHELL,
     "run_script": Capability.SHELL,
     "run_tests": Capability.VERIFY,
+    # The kernel catalog names its verify tool ``test``; without this entry the
+    # panel's "turn" answer for a test approval built no grant and yet told the
+    # user "本轮内不再询问".
+    "test": Capability.VERIFY,
     "apply_patch": Capability.EDIT,
     "write_file": Capability.EDIT,
     "edit_file": Capability.EDIT,
@@ -24,8 +28,10 @@ _TOOL_CAPABILITIES = {
     "batch_edit": Capability.EDIT,
     "read_file": Capability.READ,
     "read_document": Capability.READ,
+    "tool_result_read": Capability.READ,
     "list_files": Capability.READ,
     "search_files": Capability.SEARCH,
+    "find_tools": Capability.DISCOVER,
     "git": Capability.VCS,
     "mcp_call": Capability.REMOTE,
 }

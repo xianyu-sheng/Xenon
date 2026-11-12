@@ -1,4 +1,4 @@
-"""#413: an answer to a question must reach the model unchanged.
+r"""#413: an answer to a question must reach the model unchanged.
 
 A dogfood run ended by asking for the source path; the user replied
 "D:\mybook-repo 具体产物在这个路径".  The prompt optimizer classified that as a

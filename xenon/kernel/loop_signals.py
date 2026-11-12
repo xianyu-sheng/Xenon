@@ -307,11 +307,20 @@ class StuckDetector:
     # ── internals ────────────────────────────────────────────────────
 
     def _cycle(self) -> list[str] | None:
-        """Find a repeating cycle of *two or more* calls ending at the newest.
+        """Find a repeating cycle of *two or more distinct* tools ending now.
 
-        Length 1 is excluded on purpose: three reads of three different files is
-        a capability used three times, which is normal work.  Only a genuine
-        A -> B -> A -> B shape is a cycle here.
+        Only a genuine A -> B -> A -> B shape is a cycle here.  A pattern made
+        of one repeated tool is excluded no matter how long it is: ``read ->
+        read -> read`` says nothing about whether the calls were the same.
+        Reading five different files in a row is one capability used five
+        times, which is ordinary exploration, and `self._tools` records only
+        the tool *name* -- so every such run looks identical here.  A measured
+        run read ``a.py``, ``b.py``, ``c.py``, ``a.py``, ``b.py``, ``c.py`` and
+        was stopped as "tool sequence repeats every 2: read -> read".
+
+        Repetition of *the same call* is a different fact, and
+        ``note_call``/``identical_call`` already covers it with the full
+        parameter signature.  Two facts, two detectors.
 
         Only contiguous repetitions count.  A window-wide divisor (an older
         implementation did that) turns two identical calls at the end of a long
@@ -322,6 +331,10 @@ class StuckDetector:
         for length in range(2, len(pattern) // 2 + 1):
             tail = pattern[-length:]
             if not tail or not any(tail):
+                continue
+            # A cycle needs at least two different tools.  `read -> read` is a
+            # repeat of one capability; `read -> test` is a workflow.
+            if len(set(tail)) < 2:
                 continue
             cycles = 0
             start = len(pattern) - length

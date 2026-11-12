@@ -86,6 +86,27 @@ class AuditProposalProvider(Protocol):
 
 
 @runtime_checkable
+class SummaryProvider(Protocol):
+    """Model-generated narrative for a fold (design doc §13 decision 1).
+
+    The kernel calls this once, at a fold boundary, with the events that are
+    being compacted; an implementation lives in the harness so the network
+    never enters the kernel.  The returned prose compresses, it never asserts
+    new facts — the deterministic digest stays authoritative.  Returning ``""``
+    means "no narrative"; the fold still happens.  A failure must degrade to
+    ``""``, never abort the task.
+    """
+
+    def summarize(
+        self,
+        *,
+        objective: str,
+        seqs: Sequence[int],
+        folded: Sequence[Mapping[str, Any]],
+    ) -> str: ...
+
+
+@runtime_checkable
 class Finalizer(Protocol):
     """Delivery-layer finalizer: stage only verified paths and commit."""
 

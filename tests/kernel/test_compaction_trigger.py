@@ -77,11 +77,12 @@ def test_history_that_does_not_fit_always_folds() -> None:
     """Not deferrable: an over-budget prompt drops history if it does not fold."""
 
     budget = Budget(max_tokens=2048, context_window=8192)
-    working_set, folded = _working_set(
+    working_set, folded, folded_items = _working_set(
         _events(300), mode=TaskMode.TASK, budget=budget, may_compact=False
     )
 
     assert folded, "an overflowing working set must leave a digest"
+    assert len(folded_items) > 0
     assert len(working_set) < 300
 
 
@@ -91,10 +92,10 @@ def test_a_round_boundary_permits_an_earlier_fold() -> None:
     budget = Budget(max_tokens=2048, context_window=8192)
     events = _events(300)
 
-    _, at_boundary = _working_set(
+    _, at_boundary, _ = _working_set(
         events, mode=TaskMode.TASK, budget=budget, may_compact=True
     )
-    _, mid_round = _working_set(
+    _, mid_round, _ = _working_set(
         events, mode=TaskMode.TASK, budget=budget, may_compact=False
     )
 
@@ -107,10 +108,10 @@ def test_a_round_boundary_permits_an_earlier_fold() -> None:
 def test_a_small_window_folds_more_than_a_large_one() -> None:
     events = _events(300)
 
-    small, small_folded = _working_set(
+    small, small_folded, _ = _working_set(
         events, mode=TaskMode.TASK, budget=Budget(max_tokens=2048, context_window=8192)
     )
-    large, large_folded = _working_set(
+    large, large_folded, _ = _working_set(
         events,
         mode=TaskMode.TASK,
         budget=Budget(max_tokens=2048, context_window=200000),

@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 
 from xenon.repl.input_buffer import PastedTextStore, _ShiftTabSignal
+from xenon.repl.input_history import InputHistory
 
 
 def _read_input_windows(self) -> str:
@@ -99,6 +100,7 @@ def _read_input_windows(self) -> str:
     lines: list[str] = []
     current_line: list[str] = []
     cursor_pos: int = 0  # 光标在 current_line 中的位置索引
+    history = InputHistory()
 
     def _redraw_from_cursor() -> None:
         """从光标位置重绘到行尾。"""
@@ -112,6 +114,18 @@ def _read_input_windows(self) -> str:
         back = len(tail) + 1
         if back > 0:
             sys.stdout.write(f"\033[{back}D")
+        sys.stdout.flush()
+
+    def _replace_line(text: str) -> None:
+        """Swap the whole edit line for a history entry."""
+        nonlocal current_line, cursor_pos
+        if cursor_pos < len(current_line):
+            sys.stdout.write(f"\033[{len(current_line) - cursor_pos}C")
+        while current_line:
+            erase_char(current_line.pop())
+        current_line = list(text)
+        cursor_pos = len(current_line)
+        sys.stdout.write(text)
         sys.stdout.flush()
 
     while True:
@@ -160,7 +174,15 @@ def _read_input_windows(self) -> str:
                     cursor_pos += 1
                     sys.stdout.write("\033[1C")
                     sys.stdout.flush()
-            elif second == "H":  # Home
+            elif second == "H":  # ↑ 上一条输入
+                previous = history.previous("".join(current_line))
+                if previous is not None:
+                    _replace_line(previous)
+            elif second == "P":  # ↓ 下一条输入
+                following = history.next()
+                if following is not None:
+                    _replace_line(following)
+            elif second == "G":  # Home
                 if cursor_pos > 0:
                     sys.stdout.write(f"\033[{cursor_pos}D")
                     cursor_pos = 0
@@ -196,6 +218,7 @@ def _read_input_windows(self) -> str:
         lines.append("".join(current_line))
 
     result = "\n".join(lines)
+    history.add(result)
     sys.stdout.write("\n")
     return result.strip()
 
@@ -258,6 +281,7 @@ def _read_input_unix(self) -> str:
         cursor_pos: int = 0
         prompt_active = True
         paste_store = PastedTextStore()
+        history = InputHistory()
 
         # ── 粘贴模式状态 ─────────────────────────────
         paste_mode = False
@@ -446,10 +470,20 @@ def _read_input_unix(self) -> str:
                     continue
 
                 # 方向键: \x1b[A (上), \x1b[B (下), \x1b[C (右), \x1b[D (左)
-                if seq_buffer == "\x1b[A":  # Up — 忽略
+                if seq_buffer == "\x1b[A":  # Up — 上一条输入
+                    previous = history.previous("".join(current_line))
+                    if previous is not None:
+                        current_line = list(previous)
+                        cursor_pos = len(current_line)
+                        _redraw_line()
                     seq_buffer = ""
                     continue
-                if seq_buffer == "\x1b[B":  # Down — 忽略
+                if seq_buffer == "\x1b[B":  # Down — 下一条输入
+                    following = history.next()
+                    if following is not None:
+                        current_line = list(following)
+                        cursor_pos = len(current_line)
+                        _redraw_line()
                     seq_buffer = ""
                     continue
                 if seq_buffer == "\x1b[C":  # Right
@@ -549,11 +583,7 @@ def _read_input_unix(self) -> str:
                     _redraw_line()
 
             elif ch == "\x0f":  # Ctrl+O：展开/折叠最近一次执行详情
-                # This path is used when prompt_toolkit is unavailable or
-                # disabled.  Previously Ctrl+O was only registered in the
-                # prompt_toolkit key map, so the fallback editor silently
-                # ignored it.  Render above the raw editor and redraw the
-                # current prompt so input is not lost.
+                # 渲染在当前输入行上方，然后重画提示符，输入不丢。
                 self._toggle_thinking_details()
                 _redraw_line()
 
@@ -579,7 +609,9 @@ def _read_input_unix(self) -> str:
         if current_line:
             lines.append("".join(current_line))
 
-        return paste_store.expand("\n".join(lines))
+        submitted = paste_store.expand("\n".join(lines))
+        history.add(submitted)
+        return submitted
 
     finally:
         # 禁用粘贴括号模式，恢复终端设置

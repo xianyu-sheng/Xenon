@@ -40,16 +40,80 @@ _CHAT_EVENT_KINDS = frozenset(
     }
 )
 
-#: Events the model never needs, in any mode.  A real run carried 56
-#: ``state_transition`` records (5.4k characters) into the working set; they
-#: say nothing about the work and they grow every turn, so they dominated the
-#: prompt and moved the cache prefix on each call.  ``model_usage`` is
-#: accounting, not state.  The ledger keeps both; the view does not show them.
+#: Events the model is actually asked to react to.  Everything else the
+#: ledger records is a bookkeeping note about *our* machine, not information
+#: about the work.
+#:
+#: This is deliberately a whitelist.  The previous blacklist named thirteen
+#: kinds; the ledger has forty-eight, so thirty-five of them -- `intake_recorded`,
+#: `step_verdict`, `policy_decision`, `binding_failed`, `plan_accepted`,
+#: `debt_opened`, and the rest -- were shipped to the model as "the latest
+#: event".  A real run then received `{"kind":"intake_recorded",...}` as its
+#: first turn: the objective was in the system prompt, but the one thing it was
+#: asked to respond to said nothing about the work, so the model went back to
+#: re-reading files to rebuild context until the loop detector stopped it.
+#: Naming what matters cannot drift the way naming what does not can.
+_RESPONDABLE_EVENT_KINDS = frozenset(
+    {
+        # The result of the model's own last tool call -- the normal turn.
+        "tool_receipt",
+        # What the model itself reasoned or proposed last turn.  Without this
+        # the model cannot see its own prior move, and a `think` that was
+        # answered by bookkeeping vanishes from the conversation entirely.
+        "thought",
+        "plan_proposed",
+        "plan_accepted",
+        # A rejected plan or an unresolved tool binding is the one turn where
+        # the model MUST see why its last move did not run.  The request
+        # carries no history, so without this the model re-submits the same
+        # bad plan until the replan budget kills the run (measured: 11
+        # binding failures in a row before the step budget ran out).
+        "binding_failed",
+        "plan_updated",
+        # A human is speaking.
+        "user_input",
+        "user_approval",
+        "user_question",
+        # The run began and it has an objective.
+        "task_started",
+        # A rewind/fork placed this task on a different branch: where it came
+        # from is a fact the model must know before it proposes anything.
+        "session_context",
+    }
+)
+
+#: Events the model never needs, in any mode.  Kept for the cost accounting
+#: below and for the chat-mode filter: a run carried 56 ``state_transition``
+#: records (5.4k characters) into the working set, and ``model_usage`` is
+#: accounting, not state.  The ledger keeps every one of them; the view does
+#: not show them.
 _INTERNAL_EVENT_KINDS = frozenset(
     {
         "state_transition",
         "model_usage",
         "context_compacted",
+        # Bookkeeping written by the harness around delivery.  The model has
+        # already finished by the time these exist, and `finalize_started`
+        # carries the whole verified-path list, which is thousands of
+        # characters of pure accounting.
+        "finalize_started",
+        "delivery_attempted",
+        # The audit's own bookkeeping.  `audit_reported` carries the full
+        # coverage array (thousands of tokens), and a replan clears the
+        # verdicts that produced it, so the entry vanished mid-run and took
+        # the cache prefix with it (-3.7k tokens in one measured step).  The
+        # model already learns what is missing from the debt lines.
+        "audit_reported",
+        "audit_proposed",
+        "lesson_proposed",
+        "lesson_stored",
+        "lesson_applied",
+        "lesson_retired",
+        # Loop detection fires precisely when a run is stuck, so these arrive
+        # in bursts -- six in one measured run.  Its advice reaches the model
+        # through `notes` (runtime `_loop_notes` -> view.notes -> turn_context),
+        # which is a per-turn message rather than an event to replay.
+        "loop_detected",
     }
 )
 
@@ -147,9 +211,10 @@ def _tool_schema(spec: ToolSpec, *, expanded: bool = False) -> dict[str, Any]:
 
     Core tools stay full (they are the coding surface and few in number).
     MCP tools start as a one-line index ("name — description", no parameters,
-    #370): the model sees the name so it can request ``tool_schema``, and the
-    schema is expanded once the tool has actually been executed in this task.
-    A tool whose parameters were never shown cannot be guessed.
+    #370): the model sees the name so it can look the tool up with
+    ``find_tools`` (full params, no execution), and the schema is expanded
+    once the tool has actually been executed in this task.  A tool whose
+    parameters were never shown cannot be guessed.
     """
 
     if spec.pack == "mcp" and not expanded:
@@ -237,12 +302,20 @@ def _effect_summary(effect: Mapping[str, Any]) -> dict[str, Any]:
         "status",
         "content_hash",
         "workspace_delta",
+        "count",
+        "truncated",
     ):
         if key in effect:
             value = effect[key]
             summary[key] = (
                 list(value) if isinstance(value, (list, tuple)) else value
             )
+    if "matches" in effect:
+        summary["matches"] = [dict(item) for item in effect["matches"]]
+    if "note" in effect and effect["note"]:
+        # The harness's own caveat on a discovery result (e.g. "no intent
+        # match, showing tools by name") must reach the model, not be dropped.
+        summary["note"] = _clip(effect["note"], 300)
     if "content" in effect:
         raw = str(effect["content"])
         summary["content"] = _clip(raw, _RECEIPT_CONTENT_CHARS)
@@ -355,8 +428,20 @@ def _summary(
                 item[key] = _clip(payload[key], 400)
         if "kind" in payload:
             item["debt_kind"] = _clip(payload["kind"], 400)
+    elif kind == "context_summary":
+        # The model-generated half of a fold.  The narrative rides as text,
+        # clearly marked so it is never mistaken for a raw fact; the
+        # deterministic ``elided`` digest beside it stays authoritative.
+        # The clip is generous on purpose: cutting the brief's tail silently
+        # removes exactly the "open obligations" part it exists to carry.
+        item["summary_note"] = _clip(payload.get("summary") or "", 8000)
     elif kind == "thought":
         item["text"] = _clip(payload.get("text") or "", 400)
+    elif kind == "state_read":
+        # The answer the harness gave when the model asked.  It carries more
+        # than a thought does (up to a paged event list), so it gets its own
+        # budget rather than the 400-char thought clip.
+        item["text"] = _clip(payload.get("text") or "", 4000)
     elif kind == "state_transition":
         for key in ("from", "to", "reason"):
             if key in payload:
@@ -439,8 +524,8 @@ def _working_set(
     budget: Budget,
     superseded: frozenset[int] = frozenset(),
     may_compact: bool | None = None,
-) -> tuple[tuple[dict[str, Any], ...], tuple[int, ...]]:
-    """Return the working set plus the seqs folded away.
+) -> tuple[tuple[dict[str, Any], ...], tuple[int, ...], tuple[dict[str, Any], ...]]:
+    """Return the working set, the seqs folded away, and those folded items.
 
     Two separate conditions govern folding:
 
@@ -499,8 +584,13 @@ def _working_set(
     fold_allowed = over_budget or token_trigger
     if may_compact is False:
         fold_allowed = over_budget
+    folded_tuple = tuple(dropped)
     if not dropped or not fold_allowed:
-        return (tuple(selected[seq] for seq in sorted(selected)), ())
+        return (
+            tuple(selected[seq] for seq in sorted(selected)),
+            (),
+            folded_tuple,
+        )
 
     entry = fold_dropped(
         dropped, max_chars=max_chars, used=used, size_of=_canonical_len
@@ -514,6 +604,7 @@ def _working_set(
     return (
         tuple(selected[seq] for seq in sorted(selected)),
         elided,
+        folded_tuple,
     )
 
 
@@ -522,7 +613,7 @@ def _capability_directory(specs: Sequence[ToolSpec], *, limit: int = 40) -> str:
 
     Core tools are listed in full.  MCP/plugin tools beyond ``limit`` are
     summarized per capability with a visible count — silently dropping them
-    would make a tool unknowable, so the count and the ``tool_schema`` channel
+    would make a tool unknowable, so the count and the ``find_tools`` channel
     are both explicit.
     """
 
@@ -546,9 +637,74 @@ def _capability_directory(specs: Sequence[ToolSpec], *, limit: int = 40) -> str:
         if len(described) > limit:
             lines.append(
                 f"  … {len(described) - limit} more tools in {capability}: "
-                "call tool_schema with a tool name to expand it"
+                "call find_tools with a tool name or intent to see its full "
+                "parameters"
             )
     return "\n".join(lines) + "\n"
+
+
+def latest_respondable(
+    working_set: Sequence[Mapping[str, Any]]
+) -> Mapping[str, Any] | None:
+    """The one event this turn is about, or ``None`` if there is nothing to answer.
+
+    The request is the fixed prefix plus this turn, so the turn has to carry
+    the *thing being responded to* -- and only that.  Picking the last entry of
+    the working set is not the same thing: it selected whatever the harness had
+    written most recently, which for a fresh task is `intake_recorded`, a record
+    of our own obligations with no work in it.  A real run opened on that and
+    spent its whole budget re-reading files.
+
+    Scan back to the most recent event a model can act on.  Bookkeeping rows
+    may sit between the model and the receipt it is answering, and the model
+    should still see the receipt.
+    """
+
+    for item in reversed(list(working_set)):
+        if str(item.get("kind") or "") in _RESPONDABLE_EVENT_KINDS:
+            return item
+    return None
+
+
+def latest_fold_narrative(
+    working_set: Sequence[Mapping[str, Any]]
+) -> str:
+    """The most recent fold's continuation narrative, or ``""``.
+
+    The latest context_summary subsumes earlier folds (it was computed over a
+    larger slice), so only it is pushed.
+    """
+
+    for item in reversed(list(working_set)):
+        if str(item.get("kind") or "") == "context_summary":
+            return str(item.get("summary_note") or "")
+    return ""
+
+
+def trailing_state_reads(
+    working_set: Sequence[Mapping[str, Any]]
+) -> tuple[Mapping[str, Any], ...]:
+    """``state_read`` rows written after the turn's event, oldest first.
+
+    A state read is an answer to the model's own question, not a turn.  It has
+    to reach the model -- otherwise asking was pointless -- but it must not
+    *become* the turn, or the receipt the model just earned is pushed out of
+    view.  That exact failure re-ran a passing test until the budget ran out.
+
+    Only the reads after the chosen event belong to this turn; older ones were
+    already answered in their own turn.
+    """
+
+    items = list(working_set)
+    turn = latest_respondable(items)
+    if turn is None:
+        return ()
+    start = items.index(turn) + 1
+    return tuple(
+        item
+        for item in items[start:]
+        if str(item.get("kind") or "") == "state_read"
+    )
 
 
 def _latest_workspace_layout(ledger: Any) -> str:
@@ -596,6 +752,37 @@ def _context_section(blocks: Sequence[tuple[str, str]]) -> str:
     )
 
 
+def step_preamble(active_step: StepContract | None) -> str:
+    """The per-step note, rendered *after* the phase protocol.
+
+    It names a step id that changes on every transition, so it must be the
+    last thing in the system message.  It used to live inside the volatile
+    block, which put it ahead of the per-step protocol the caller appends --
+    so each step transition invalidated the protocol the model was about to
+    read, and the cache lost everything after that point.
+    """
+
+    if active_step is None:
+        return ""
+    text = (
+        "Active step: "
+        f"{active_step.id} ({active_step.kind.value}) "
+        f"targets={list(active_step.targets)} "
+        f"expects={[item.id for item in active_step.expects]}"
+    )
+    if active_step.kind.value == "think":
+        # A plan may contain reasoning steps.  Without this line the model has
+        # to invent a tool call to satisfy one — a real run filled a summary
+        # step with `call_tool{capability: read}` and no target (#405).  The
+        # loop, not the plan, decides what closes a step.
+        text += (
+            "\n  This step is a reasoning step: answer it with `think` "
+            "(and `finish` when the task is done). Do not call a tool "
+            "for it."
+        )
+    return text
+
+
 def _system_prompt(
     *,
     spec: TaskSpec,
@@ -616,18 +803,38 @@ def _system_prompt(
         f"- {text}  [operator, seq {seq}]" for seq, text in extra_constraints
     )
     constraints = "\n".join(constraint_lines)
-    debt_lines = "\n".join(
-        f"- {item.obligation.id} ({item.obligation.kind.value}): {item.reason}"
-        for item in debt
-    )
     lines = [
         "You are Xenon's coding strategy.  Propose exactly one action; the "
         "harness binds, executes and verifies it.  Do not claim an effect "
         "without a tool receipt.",
+        # Chapter 3.3 of the architecture doc names four things this prompt
+        # owes the model.  Two of them were missing, and the cost showed up in
+        # real runs: without a stated remit the model read files forever, and
+        # without permission to ask it guessed at ambiguous tasks instead.
+        "Your job is to change the workspace so the objective holds, using the "
+        "tools you are given.  You are not a chat assistant: unless the task "
+        "genuinely needs no change, produce the change and prove it.",
+        "When the objective is ambiguous in a way that changes what you would "
+        "do — which of two files, which of two behaviours — ask the user with "
+        "`ask_user` instead of guessing.  Do not ask about things you can "
+        "settle by reading the workspace.",
+        "For a task that needs several steps, call `make_plan` first to write "
+        "down what you will do; the plan becomes the contract each step is "
+        "verified against.  For a one-step task, act directly.",
         f"Objective: {spec.objective}",
         f"Workspace: {spec.workspace}",
         f"Mode: {spec.mode.value}",
     ]
+    if boundary:
+        # #165 dogfood: the execution boundary is a runtime fact, not something
+        # the model should infer.  Stating it stops the "I am not allowed to
+        # run anything this turn" self-limitation that blocked a real task.
+        #
+        # It is a *stable* fact -- one permission policy holds for the whole
+        # task -- so it sits with the head and is part of the cached prefix.
+        # Only a mid-run mode switch moves it, and that is rare enough to
+        # accept paying for a fresh prefix once.
+        lines.append(f"Execution boundary: {boundary}")
     # Everything above this point is stable for the whole task, so it is a
     # provider prompt-cache prefix.  Everything below changes as the run
     # proceeds, and must never be inserted *before* a stable block: a cached
@@ -654,57 +861,48 @@ def _system_prompt(
             "phase accepts; do not infer extra action names from this catalog.",
         ]
     )
-    # ---- volatile from here on -------------------------------------------
-    # Every line below can change within one task.  Keeping it after the
-    # catalog and the action protocols means a change costs only the tail of
-    # the prefix, not the whole system prompt.
-    volatile = [
-        f"Phase: {phase.value}",
-        f"Budget: max_steps={budget.max_steps} max_tokens={budget.max_tokens} "
-        f"max_wall_seconds={budget.max_wall_seconds} "
-        f"max_repair_attempts={budget.max_repair_attempts} "
-        f"max_replans={budget.max_replans}",
-    ]
+    return "\n".join(lines) + "\n"
+
+
+def turn_context(
+    *,
+    notes: Sequence[str] = (),
+    turn_path: Sequence[str] = (),
+) -> str:
+    """What this turn's message must carry besides the event itself.
+
+    Almost nothing belongs here.  A provider caches an exact byte prefix, so a
+    changing line is only cheap where it is *last*: the earlier fix moved the
+    volatile block to the end of the system prompt, which stopped the worst of
+    it but still re-billed the whole tail on every turn and still shipped the
+    entire working set beside it.
+
+    Phase, budget, open debt and the active step are not in a request at all
+    now -- they change every turn, so they are *state*, read on demand through
+    the ``get_state`` tool.  What remains is what has to be pushed rather than
+    pulled: the harness's own loop diagnoses, which the model must read before
+    its next proposal, and the branch path of a forked task.
+
+    Usually empty, which is the point: a quiet turn is the prefix plus one
+    event, byte-identical at the front to every other turn of the task.
+    """
+
+    lines: list[str] = []
+    if turn_path:
+        # #372 B3: only rendered after a rewind/fork -- a side-branch task must
+        # know where it came from.  Linear chat never grows this line.
+        lines.append(
+            "Turn path (you are on a side branch): " + " -> ".join(turn_path)
+        )
     if notes:
         # #369: harness-generated loop diagnoses.  A note is a hint the model
         # must read but is free to act on differently; it is not a constraint
         # and never a permission.
-        volatile.append(
+        lines.append(
             "Notes (read before your next proposal):\n"
             + "\n".join(f"- {text}" for text in notes)
         )
-    if boundary:
-        # #165 dogfood: the execution boundary is a runtime fact, not something
-        # the model should infer.  Stating it stops the "I am not allowed to
-        # run anything this turn" self-limitation that blocked a real task.
-        volatile.append(f"Execution boundary: {boundary}")
-    if turn_path:
-        # #372 B3: only rendered after a rewind/fork — a side-branch task must
-        # know where it came from.  Linear chat never grows this line.
-        volatile.append(
-            "Turn path (you are on a side branch): " + " -> ".join(turn_path)
-        )
-    if debt_lines:
-        volatile.append(f"Open obligations (never silently drop):\n{debt_lines}")
-    if active_step is not None:
-        volatile.append(
-            "Active step: "
-            f"{active_step.id} ({active_step.kind.value}) "
-            f"targets={list(active_step.targets)} "
-            f"expects={[item.id for item in active_step.expects]}"
-        )
-        if active_step.kind.value == "think":
-            # A plan may contain reasoning steps.  Without this line the model
-            # has to invent a tool call to satisfy one — a real run filled a
-            # summary step with `call_tool{capability: read}` and no target
-            # (#405).  The loop, not the plan, decides what closes a step.
-            volatile.append(
-                "  This step is a reasoning step: answer it with `think` "
-                "(and `finish` when the task is done). Do not call a tool "
-                "for it."
-            )
-    lines.extend(volatile)
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines)
 
 
 def build_model_view(
@@ -718,6 +916,7 @@ def build_model_view(
     active_step: StepContract | None = None,
     steps: Sequence[StepContract] = (),
     step_verdicts: Sequence[Any] = (),
+    obligations_status: Sequence[Mapping[str, Any]] = (),
     tokens_used: int = 0,
     extra_constraints: Sequence[tuple[int, str]] = (),
     superseded: Iterable[int] = (),
@@ -726,6 +925,7 @@ def build_model_view(
     turn_path: Sequence[str] = (),
     boundary: str = "",
     may_compact: bool | None = None,
+    session_history: Sequence[str] = (),
 ) -> ModelView:
     """Build the deterministic view a strategy is allowed to see."""
     budget = budget or spec.budget
@@ -748,7 +948,7 @@ def build_model_view(
         )
         for item in specs
     )
-    working_set, compacted = _working_set(
+    working_set, compacted, folded_items = _working_set(
         tuple(ledger.read()),
         mode=spec.mode,
         budget=budget,
@@ -841,7 +1041,11 @@ def build_model_view(
         active_step=active_step,
         steps=tuple(steps),
         step_verdicts=tuple(step_verdicts),
+        obligations_status=tuple(obligations_status),
         compacted=compacted,
+        folded_items=folded_items if compacted else (),
         notes=tuple(notes),
         turn_path=tuple(turn_path),
+        boundary=boundary,
+        session_history=tuple(session_history),
     )
