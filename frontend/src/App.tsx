@@ -280,7 +280,10 @@ export function App({ args }: { args: CliArgs }): React.ReactElement {
   });
 
   const { turn } = state;
-  const showTurn = turn.objective !== '' || turn.running;
+  // The live area is only for a turn in flight.  Once `turn.end` lands the
+  // same steps are already in the transcript block; keeping the live area up
+  // printed every step twice and pushed the evidence footer below a duplicate.
+  const showTurn = turn.running;
 
   return (
     <Box flexDirection="column">
@@ -304,9 +307,10 @@ export function App({ args }: { args: CliArgs }): React.ReactElement {
             chars={turn.chars}
             providerNote={turn.providerNote}
           />
-          {turn.end && !turn.running && <EvidenceFooter end={turn.end} />}
         </Box>
       )}
+
+      {turn.end && !turn.running && <EvidenceFooter end={turn.end} />}
 
       {turn.approval && <ApprovalPanel request={turn.approval} />}
       {state.prompt && (

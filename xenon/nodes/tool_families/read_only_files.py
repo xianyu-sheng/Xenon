@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,42 @@ from xenon.engine.context import AgentContext
 logger = logging.getLogger(__name__)
 
 MAX_READ_SIZE = 2 * 1024 * 1024
+
+# Directories that turn a workspace walk into a disk walk.  Both listing and
+# searching skip them, and every result says that it did, so a partial view is
+# never silent.
+IGNORED_DIRS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".cache",
+        ".next",
+        "dist",
+        "build",
+        "site-packages",
+    }
+)
+
+# A walk is bounded.  On 2026-11-12 a `search` call without `path` fell back to
+# the workspace, the workspace was `D:\`, and the tool walked the whole drive
+# while reading every file — the UI froze and the process never wrote a receipt.
+MAX_WALK_FILES = 5000
+MAX_WALK_DIRS = 2000
+MAX_SEARCH_FILES = 2000
+MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
+# Wall-clock safety net: entry counts alone do not bound I/O on a slow or huge
+# volume.  Hitting it is reported, never silent.
+MAX_LIST_SECONDS = 10.0
+MAX_SEARCH_SECONDS = 15.0
 
 
 class ReadOnlyFileToolsMixin:
@@ -191,10 +228,14 @@ class ReadOnlyFileToolsMixin:
             return result
 
         files: list[str] = []
+        stats: dict[str, Any] = {"visited": 0, "dirs": 0, "truncated": False}
+        deadline = time.monotonic() + MAX_LIST_SECONDS
         if path.is_file():
             files.append(str(path))
         else:
-            for item in self._walk_with_depth(path, pattern, self.max_depth):
+            for item in self._walk_with_depth(
+                path, pattern, self.max_depth, stats, deadline=deadline
+            ):
                 files.append(str(item))
 
         # Keep traversal deterministic so a cursor remains usable across
@@ -221,6 +262,17 @@ class ReadOnlyFileToolsMixin:
             next_cursor = None
 
         display = "\n".join(page) if page else "(空目录)"
+        capped = bool(stats.get("truncated"))
+        if capped:
+            limit_note = (
+                f"{MAX_LIST_SECONDS:.0f}s 时间上限"
+                if stats.get("deadline")
+                else f"{MAX_WALK_FILES} 项扫描上限"
+            )
+            display += (
+                f"\n(已跳过依赖/缓存目录；达到{limit_note}后停止，"
+                "结果不完整，请缩小 path 或 pattern)"
+            )
         result = {
             "action_type": "list_files",
             "path": str(path),
@@ -232,15 +284,33 @@ class ReadOnlyFileToolsMixin:
             "limit": limit,
             "next_cursor": next_cursor,
             "truncated": next_cursor is not None,
+            "scan_truncated": capped,
+            "visited": stats.get("visited", 0),
             "success": True,
         }
         self._write_output(context, display)
         logger.info(f"[{self.id}] 列出 {len(files)} 个文件: {path}")
         return result
 
-    def _walk_with_depth(self, base: Path, pattern: str, max_depth: int):
-        """递归遍历，受深度限制。支持 **/*.ext 递归 glob 模式。"""
+    def _walk_with_depth(
+        self,
+        base: Path,
+        pattern: str,
+        max_depth: int,
+        stats: dict[str, Any] | None = None,
+        max_files: int | None = None,
+        deadline: float | None = None,
+    ):
+        """递归遍历，受深度、目录数与访问条目数上限约束。
+
+        ``stats`` 由调用方传入：``visited`` / ``dirs`` / ``truncated`` 用于
+        如实报告「这次结果被上限截断」，而不是假装看完了。跳过 ``IGNORED_DIRS``
+        （版本库、依赖、缓存），否则从盘符根目录发起一次搜索就会读整块磁盘。
+        """
         import os
+
+        if max_files is None:
+            max_files = MAX_WALK_FILES
 
         # 处理 **/*.ext 模式：拆分为前缀目录模式和文件名模式
         recursive_mode = "**" in pattern
@@ -256,7 +326,16 @@ class ReadOnlyFileToolsMixin:
             file_pattern = pattern
 
         base_depth = len(base.parts)
+        dirs_seen = 0
         for root, dirs, files in os.walk(base):
+            dirs[:] = sorted(d for d in dirs if d not in IGNORED_DIRS)
+            dirs_seen += len(dirs)
+            if stats is not None:
+                stats["dirs"] = dirs_seen
+            if dirs_seen > MAX_WALK_DIRS:
+                if stats is not None:
+                    stats["truncated"] = True
+                return
             current_depth = len(Path(root).parts) - base_depth
             if not recursive_mode and current_depth > max_depth:
                 dirs.clear()
@@ -265,6 +344,16 @@ class ReadOnlyFileToolsMixin:
                 dirs.clear()
                 continue
             for f in files:
+                if deadline is not None and time.monotonic() > deadline:
+                    if stats is not None:
+                        stats["truncated"] = True
+                        stats["deadline"] = True
+                    return
+                if stats is not None:
+                    stats["visited"] = stats.get("visited", 0) + 1
+                    if stats["visited"] > max_files:
+                        stats["truncated"] = True
+                        return
                 if fnmatch.fnmatch(f, file_pattern):
                     yield Path(root) / f
 
@@ -296,15 +385,25 @@ class ReadOnlyFileToolsMixin:
 
         matches = []
         files_scanned = 0
+        skipped_large = 0
         try:
             regex = re.compile(search_pattern, re.IGNORECASE)
         except re.error:
             regex = re.compile(re.escape(search_pattern), re.IGNORECASE)
 
+        stats: dict[str, Any] = {"visited": 0, "dirs": 0, "truncated": False}
+        deadline = time.monotonic() + MAX_SEARCH_SECONDS
         search_files = (
             [path]
             if path.is_file()
-            else self._walk_with_depth(path, file_filter or "*", self.max_depth)
+            else self._walk_with_depth(
+                path,
+                file_filter or "*",
+                self.max_depth,
+                stats,
+                max_files=MAX_SEARCH_FILES,
+                deadline=deadline,
+            )
         )
         try:
             offset = max(0, int(self.cursor or 0))
@@ -323,6 +422,12 @@ class ReadOnlyFileToolsMixin:
         reached_cap = False
 
         for file_path in search_files:
+            try:
+                if Path(file_path).stat().st_size > MAX_SEARCH_FILE_BYTES:
+                    skipped_large += 1
+                    continue
+            except OSError:
+                continue
             try:
                 text = Path(file_path).read_text(
                     encoding=self.encoding, errors="ignore"
@@ -354,6 +459,22 @@ class ReadOnlyFileToolsMixin:
         next_cursor = str(offset + len(page)) if has_more else None
         lines = [f"{m['file']}:{m['line']}: {m['content']}" for m in page[:50]]
         display = "\n".join(lines) if lines else "(无匹配结果)"
+        capped = bool(stats.get("truncated")) or skipped_large > 0
+        if capped:
+            notes = []
+            if stats.get("truncated"):
+                notes.append(
+                    f"达到 {MAX_SEARCH_SECONDS:.0f}s 时间上限"
+                    if stats.get("deadline")
+                    else f"扫描到 {MAX_SEARCH_FILES} 个文件后停止"
+                )
+            if skipped_large:
+                notes.append(
+                    f"跳过 {skipped_large} 个超过 "
+                    f"{MAX_SEARCH_FILE_BYTES // (1024 * 1024)}MB 的文件"
+                )
+            notes.append("已跳过依赖/缓存目录，结果可能不完整")
+            display += "\n(" + "；".join(notes) + ")"
 
         result = {
             "action_type": "search_files",
@@ -367,6 +488,8 @@ class ReadOnlyFileToolsMixin:
             "next_cursor": next_cursor,
             "truncated": next_cursor is not None,
             "files_scanned": files_scanned,
+            "scan_truncated": capped,
+            "skipped_large": skipped_large,
             "stdout": display,  # v0.5.3: 文本表示，LLM 可直接读取
             "success": True,
         }

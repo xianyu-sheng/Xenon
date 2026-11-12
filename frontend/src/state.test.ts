@@ -153,6 +153,17 @@ test('a command that printed nothing adds no block', () => {
   assert.equal(state.transcript.length, 0);
 });
 
+test('output printed before a question is shown before the answer', () => {
+  const state = feed([
+    { v: 1, type: 'command.output', id: 'c-1', name: '/set_model', output: '1  anthropic\n2  deepseek' },
+    { v: 1, type: 'command.result', id: 'c-1', name: '/set_model', output: '✅ 已切换' },
+  ]);
+
+  assert.equal(state.transcript.length, 2);
+  assert.deepEqual(state.transcript[0]?.lines, ['1  anthropic', '2  deepseek']);
+  assert.deepEqual(state.transcript[1]?.lines, ['✅ 已切换']);
+});
+
 test('a failing command is shown as an error block', () => {
   const state = feed([
     { v: 1, type: 'command.result', id: 'c-1', name: '/nope', error: '无此命令' },

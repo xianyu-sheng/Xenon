@@ -178,7 +178,12 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
             },
             "required": ["pattern"],
         },
-        description="Search the workspace for a pattern.",
+        description=(
+            "Search the workspace for a pattern. The walk skips VCS, dependency "
+            "and cache directories and stops at a bounded scan; when it stops "
+            "early the result says it is incomplete, so narrow `path` instead of "
+            "reading it as zero matches."
+        ),
         preferences={"search": 20},
         requires_target=True,
     ),

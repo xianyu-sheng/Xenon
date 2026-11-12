@@ -124,6 +124,19 @@ export interface ErrorFrame extends Envelope {
   error: string;
 }
 
+/** Output a command printed *before* it asked a question.
+ *
+ * The host captures a command's stdout so tables and panels can reach the UI;
+ * without this frame the whole capture arrived only at `command.result`, i.e.
+ * after the question — the user saw "which model?" before the model list.
+ */
+export interface CommandOutputFrame extends Envelope {
+  type: 'command.output';
+  id: string;
+  name: string;
+  output: string;
+}
+
 export interface CommandResultFrame extends Envelope {
   type: 'command.result';
   id: string;
@@ -195,6 +208,7 @@ export type KernelFrame =
   | TurnCancelResultFrame
   | TurnEndFrame
   | ErrorFrame
+  | CommandOutputFrame
   | CommandResultFrame
   | CatalogFrame
   | SessionsFrame

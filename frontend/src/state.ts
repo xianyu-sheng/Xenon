@@ -189,6 +189,22 @@ export function reduce(state: AppState, frame: KernelFrame): AppState {
       return { ...state, turn, transcript: pushBlock(state.transcript, block) };
     }
 
+    case 'command.output': {
+      // Printed before a question: show it now, not after the answer.
+      const text = frame.output ?? '';
+      if (!text.trim()) return state;
+      return {
+        ...state,
+        transcript: pushBlock(state.transcript, {
+          id: nextId++,
+          kind: 'command',
+          title: frame.name,
+          lines: text.split('\n'),
+          tone: 'normal',
+        }),
+      };
+    }
+
     case 'command.result': {
       if (frame.exit) {
         return { ...state, transcript: pushBlock(state.transcript, notice('会话已结束')) };

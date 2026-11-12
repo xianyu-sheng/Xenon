@@ -510,6 +510,70 @@ def test_the_setup_key_entry_works_over_the_protocol() -> None:
     assert picked == {"value": "sk-probe"}
 
 
+def test_turn_end_uses_the_kernel_answer_when_no_callback_set_one() -> None:
+    """The kernel path never calls ``on_finish``; the answer lives on the result.
+
+    Without the fallback the transcript block showed tool steps and evidence but
+    no answer, even though the ledger recorded one.
+    """
+
+    from xenon.frontend.host import _turn_end_fields
+    from xenon.kernel.contracts import EvidenceStatus, TaskPhase
+
+    result = types.SimpleNamespace(
+        phase=TaskPhase.FINALIZED,
+        answer="README 的第一行是 # ui check",
+        accepted=True,
+        evidence_status=EvidenceStatus.PARTIAL,
+    )
+    fields = _turn_end_fields(types.SimpleNamespace(result=result, ledger_path=None), "")
+    assert fields["answer"] == "README 的第一行是 # ui check"
+    assert fields["phase"] == "finalized"
+
+
+def test_output_printed_before_a_question_is_flushed_first(monkeypatch) -> None:
+    """``/set_model`` printed the table, then asked — the table arrived last."""
+
+    import rich.prompt as rich_prompt
+
+    host, frames = _host()
+    host.repl = types.SimpleNamespace(
+        registry=object(), ctx_mgr=object(), agent_context={}
+    )
+    import xenon.repl.command_registry as registry_mod
+
+    def fake_dispatch(*args, **kwargs):
+        print("1  anthropic")
+        rich_prompt.Prompt.ask("输入模型编号", choices=["1", "2"], default="1")
+        return "✅ 已切换"
+
+    monkeypatch.setattr(registry_mod, "dispatch_command", fake_dispatch)
+
+    worker = threading.Thread(target=host.run_command, args=("/set_model", ""))
+    worker.start()
+    request = _wait_for(frames, "prompt.request")
+    kinds = [frame["type"] for frame in frames.read()]
+    assert "command.output" in kinds and "prompt.request" in kinds
+    assert kinds.index("command.output") < kinds.index("prompt.request")
+    flushed = next(f for f in frames.read() if f["type"] == "command.output")
+    assert "anthropic" in flushed["output"]
+    host.resolve_prompt(request["id"], "1")
+    worker.join(timeout=2)
+
+
+def test_a_model_switch_applies_to_the_next_turn() -> None:
+    """``/set_model`` updates ``repl._preferred_model_ids``; the host used the
+    startup list forever, so the status bar and the calls stayed on the old
+    model."""
+
+    host, _frames = _host()
+    host.repl = types.SimpleNamespace(_preferred_model_ids=["anthropic/deepseek-v4.1-flash"])
+    assert host._current_models() == ["anthropic/deepseek-v4.1-flash"]
+
+    host.repl._preferred_model_ids = []
+    assert host._current_models() == ["test/fake"]
+
+
 def test_command_output_includes_console_renders(monkeypatch) -> None:
     """Some handlers print instead of returning; both shapes must reach the UI."""
 

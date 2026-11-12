@@ -344,8 +344,13 @@ class ProtocolHost:
         return {"approved": False, "feedback": "用户驳回，请修改计划后重新提交"}
 
     @contextlib.contextmanager
-    def _protocol_prompts(self) -> Any:
+    def _protocol_prompts(self, flush: Any = None) -> Any:
         """Route ``rich.prompt``, the selector and the setup wizard to frames.
+
+        ``flush`` is called right before a question is sent.  Commands print a
+        table and *then* ask ("which model?"); without the flush the table
+        stayed in the capture buffer until the command ended, so the user saw
+        the question first and the list afterwards.
 
         The patch is scoped: making it process-global leaked into later tests
         (and into any embedded host), leaving a dead waiter behind.  Commands
@@ -434,9 +439,12 @@ class ProtocolHost:
         rich_prompt.IntPrompt.ask = int_ask
         selector_mod.ask_choice = ask_choice
         setup_wizard_mod._masked_input = masked_input
+        previous_flush = getattr(self, "_prompt_flush", None)
+        self._prompt_flush = flush
         try:
             yield
         finally:
+            self._prompt_flush = previous_flush
             (
                 rich_prompt.Prompt.ask,
                 rich_prompt.Confirm.ask,
@@ -455,6 +463,10 @@ class ProtocolHost:
     ) -> str:
         message_id = self._next_id("p")
         event = threading.Event()
+        # Anything the command printed before asking belongs on screen first.
+        flush = getattr(self, "_prompt_flush", None)
+        if callable(flush):
+            flush()
         with self._pending_lock:
             self._prompt_waiters[message_id] = event
         self.frame(
@@ -514,6 +526,21 @@ class ProtocolHost:
         self.command_thread = worker
         worker.start()
 
+    def _current_models(self) -> list[str]:
+        """Models the *next* turn should use.
+
+        ``/set_model`` and ``/model`` update ``repl._preferred_model_ids``; the
+        constructor list is only the startup default.  Reading it at turn time
+        is what makes a switch take effect without restarting the session.
+        """
+
+        preferred = getattr(self.repl, "_preferred_model_ids", None)
+        if preferred:
+            rows = [str(item) for item in preferred if str(item).strip()]
+            if rows:
+                return rows
+        return self.model_ids
+
     def _run_chat(self, objective: str, contract: Any) -> None:
         """One conversational turn: answer, record, close the turn."""
 
@@ -530,7 +557,7 @@ class ProtocolHost:
             user_objective=objective,
             workspace=str(self.cwd),
             session_id=_session_id_of(self.repl, None),
-            model_ids=self.model_ids,
+            model_ids=self._current_models(),
         )
         outcome = None
         failure = ""
@@ -554,7 +581,7 @@ class ProtocolHost:
                 )
             outcome = self.repl._run_direct(
                 prompt,
-                self.model_ids,
+                self._current_models(),
                 intent=None,
                 execution_policy=contract.to_execution_policy(),
             )
@@ -633,7 +660,7 @@ class ProtocolHost:
                 self.repl,
                 objective=objective,
                 user_input=objective,
-                model_ids=self.model_ids,
+                model_ids=self._current_models(),
                 execution_policy=contract.to_execution_policy(),
                 callback=callback,
             )
@@ -688,13 +715,26 @@ class ProtocolHost:
         command_id = self._next_id("c")
         session_state = {"_repl": self.repl, "agent_context": self.repl.agent_context}
         captured = io.StringIO()
+
+        def flush_output() -> None:
+            """Send what the command printed so far, before it asks a question."""
+
+            text = _plain_text(captured.getvalue()).strip()
+            if not text:
+                return
+            captured.seek(0)
+            captured.truncate(0)
+            self.frame(type="command.output", id=command_id, name=name, output=text)
+
         try:
             # Handlers are inconsistent: some return their text, others render
             # straight to a rich console.  Capture stdout for the duration so
             # both shapes reach the front-end instead of vanishing into stderr.
             # The prompt bridge is scoped to this call and restored in
             # ``finally``: a process-global patch would leak into later code.
-            with self._protocol_prompts(), contextlib.redirect_stdout(captured):
+            with self._protocol_prompts(flush_output), contextlib.redirect_stdout(
+                captured
+            ):
                 output = dispatch_command(
                     name,
                     args,
@@ -838,7 +878,7 @@ class ProtocolHost:
                 name = str(level)
         self.frame(
             type="status",
-            models=self.model_ids,
+            models=self._current_models(),
             mode=str(getattr(self.repl.registry, "current_mode", "") or ""),
             level=name,
             cwd=str(self.cwd),
@@ -995,9 +1035,15 @@ def _turn_end_fields(run: Any, answer: str) -> dict[str, Any]:
     """Everything ``turn.end`` carries, taken from the kernel's own result."""
 
     result = getattr(run, "result", None)
+    # ``final_answer`` is only set by the callback's ``on_finish``; the kernel
+    # path puts the answer on the result itself.  Without this fallback the
+    # transcript block lost the answer entirely (in the ledger, absent on screen).
+    answer_text = str(answer or "")
+    if not answer_text:
+        answer_text = str(getattr(result, "answer", "") or "")
     fields: dict[str, Any] = {
         "phase": str(getattr(getattr(result, "phase", ""), "value", "") or ""),
-        "answer": str(answer or ""),
+        "answer": answer_text,
     }
     accepted = getattr(result, "accepted", None)
     if accepted is not None:
