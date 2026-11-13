@@ -209,6 +209,8 @@ def effect_to_payload(effect: Effect) -> dict[str, Any]:
             "dirty_paths": list(effect.dirty_paths),
             "verified_paths": list(effect.verified_paths),
             "head": effect.head,
+            "baseline_paths": list(effect.baseline_paths),
+            "created_paths": list(effect.created_paths),
         }
     if isinstance(effect, FsDelete):
         return {
@@ -289,6 +291,8 @@ def effect_from_payload(data: Mapping[str, Any]) -> Effect:
             dirty_paths=tuple(data.get("dirty_paths") or ()),
             verified_paths=tuple(data.get("verified_paths") or ()),
             head=str(data.get("head") or ""),
+            baseline_paths=tuple(data.get("baseline_paths") or ()),
+            created_paths=tuple(data.get("created_paths") or ()),
         )
     if kind == "fs_delete":
         return FsDelete(
@@ -365,6 +369,7 @@ def receipt_to_payload(receipt: ToolReceipt) -> dict[str, Any]:
         "error": receipt.error,
         "started_at": receipt.started_at,
         "ended_at": receipt.ended_at,
+        "observation": receipt.observation,
     }
 
 
@@ -392,6 +397,7 @@ def receipt_from_payload(data: Mapping[str, Any]) -> ToolReceipt:
         error=str(data.get("error") or ""),
         started_at=float(data.get("started_at") or 0.0),
         ended_at=float(data.get("ended_at") or 0.0),
+        observation=str(data.get("observation") or ""),
     )
 
 

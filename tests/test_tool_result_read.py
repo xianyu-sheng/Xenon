@@ -33,6 +33,11 @@ def test_command_model_view_keeps_failure_and_result_id(tmp_path, monkeypatch) -
     assert "FAILED tests/test_x.py::test_y" in view
     assert "2 failed, 1 passed" in view
     assert len(view) < len(json.dumps(raw))
+    # The hint must be the literal call, not a function-looking name: the
+    # model otherwise put "tool_result_read" into the file_path slot.
+    hint = view.split("完整结果可按需读取：", 1)[1]
+    assert json.loads(hint)["params"]["result_id"] == "tr_test"
+    assert json.loads(hint)["prefer"] == "tool_result_read"
 
 
 def test_tool_result_read_summary_range_and_search(tmp_path) -> None:

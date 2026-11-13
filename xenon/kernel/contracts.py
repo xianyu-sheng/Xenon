@@ -148,11 +148,22 @@ class WorkspaceProbe:
     ``dirty_paths`` is every path the VCS reports as changed; ``verified_paths``
     is what the ledger can account for.  "No stray changes" therefore becomes a
     question with an answer instead of a semantic guess.
+
+    ``baseline_paths`` separates "dirty because this turn did it" from "dirty
+    before the turn even started".  A repository that was already dirty must
+    not make every turn look like it left unverified work behind: the resolver
+    subtracts this set before calling a path stray.
     """
 
     dirty_paths: tuple[str, ...] = ()
     verified_paths: tuple[str, ...] = ()
     head: str = ""
+    baseline_paths: tuple[str, ...] = ()
+    #: Paths the VCS reports as new and that were not present in the baseline.
+    #: A script the agent ran can create output files without leaving an
+    #: FsWrite fact (the kernel never sees inside the subprocess); this is how
+    #: "the script wrote the output" becomes provable.
+    created_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -472,6 +483,12 @@ class ToolReceipt:
     error: str = ""
     started_at: float = 0.0
     ended_at: float = 0.0
+    #: Bounded, model-facing projection of what the tool returned.  Without it
+    #: a receipt says only "status: ok", so a git/shell/test result was
+    #: unanswerable: the full bytes live in the result cache, but the model had
+    #: no reason to fetch them.  Read effects keep their own content field;
+    #: this is the generic channel for every other tool.
+    observation: str = ""
 
 
 # ── obligations, claims, verdicts ──────────────────────────────────────────

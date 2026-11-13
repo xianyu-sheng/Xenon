@@ -515,6 +515,29 @@ def test_event_sink_surfaces_verification_and_review_stages(
     assert needle in rendered, rendered
 
 
+def test_a_step_with_no_verdicts_is_not_reported_as_unmet() -> None:
+    """A thinking-only step asserted nothing; there is nothing to be unmet.
+
+    Measured log-analysis run: every thinking step printed
+    "step 2 verification unmet: no verdicts", which reads like a failed check
+    and trains the operator to ignore the warning channel.
+    """
+
+    callback = ConsoleCallback(verbose=False)
+    sink = ReplEventSink(callback)
+
+    sink.emit(
+        SimpleNamespace(
+            kind=SimpleNamespace(value="step_verified"),
+            payload={"step_id": 2, "status": "unmet", "verdicts": []},
+        )
+    )
+
+    panel = callback.get_thinking_panel()
+    rendered = "" if panel is None else " ".join(panel.warnings)
+    assert "verification unmet" not in rendered, rendered
+
+
 class ApprovalRepl:
     def __init__(self, result=True) -> None:
         self.result = result

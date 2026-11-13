@@ -114,6 +114,10 @@ _SKIP_ACTION = object()
 
 _POLICY_REFUSED = object()
 _MAX_POLICY_REFUSALS = 3
+
+#: Obligation id the delivery layer owns.  Nobody but the finalizer can settle
+#: it, so it must not gate the attempt to settle it.
+_FINALIZER_OBLIGATION = "finalizer"
 """Policy said no to *this action*; the loop must continue without it.
 
 ``None`` still means "allowed" (the historical contract), so a refusal needs a
@@ -359,6 +363,12 @@ class LoopRuntime:
                 f"ledger task_id {ledger_task_id!r} does not match {spec.task_id!r}"
             )
         self._spec = spec
+        # The worktree this turn starts from is its baseline: pre-existing dirt
+        # is not work this turn left behind.  The probe owns the fingerprints,
+        # so it is told where the turn boundary is.
+        begin_turn = getattr(self._worktree_probe, "begin_turn", None)
+        if callable(begin_turn):
+            begin_turn()
         self._phase = TaskPhase.CREATED
         self._steps = 0
         self._total_steps = 0
@@ -1508,6 +1518,41 @@ class LoopRuntime:
                 paths.update(effect.paths)
         return tuple(sorted(paths))
 
+    def _baseline_paths(self) -> tuple[str, ...]:
+        """Dirt this turn inherited rather than created.
+
+        Read from the newest recorded probe so the answer is a ledger fact,
+        not a fresh guess about the filesystem.
+        """
+
+        baseline: tuple[str, ...] = ()
+        for event in self._ledger.read(EventKind.WORKSPACE_PROBED):
+            if event.seq <= self._run_start_seq:
+                continue
+            payload = event.payload
+            if isinstance(payload, dict):
+                baseline = tuple(payload.get("baseline_paths") or ())
+        return baseline
+
+    def _attributed_paths(self) -> tuple[str, ...]:
+        """Files this turn created, as observed by the newest probe.
+
+        The kernel never sees inside a subprocess: a model that writes *and
+        runs* a script leaves a write receipt for the script but none for its
+        output.  The probe sees the output appear, so the delivery layer can
+        tell "the turn produced this" apart from "the worktree was already
+        dirty".  Read from the ledger, like the baseline, so replay agrees.
+        """
+
+        created: tuple[str, ...] = ()
+        for event in self._ledger.read(EventKind.WORKSPACE_PROBED):
+            if event.seq <= self._run_start_seq:
+                continue
+            payload = event.payload
+            if isinstance(payload, dict):
+                created = tuple(payload.get("created_paths") or ())
+        return created
+
     def _probe_worktree(self) -> None:
         """Record one deterministic worktree observation, at most once per state.
 
@@ -1528,7 +1573,10 @@ class LoopRuntime:
         if probe is None:
             # No VCS here: record nothing, so the resolver honestly abstains.
             return
-        signature = f"{probe.head}:{probe.dirty_paths}:{probe.verified_paths}"
+        signature = (
+            f"{probe.head}:{probe.dirty_paths}:{probe.verified_paths}:"
+            f"{probe.baseline_paths}"
+        )
         if signature == self._probed_signature:
             return
         self._probed_signature = signature
@@ -1816,12 +1864,26 @@ class LoopRuntime:
         gaps = list(decision.obligation_ids) or [
             item.obligation.id for item in self._debt
         ]
+        # Only a *violated* gap is work another round can do: it was checked
+        # and came back false, so a correct fact can still satisfy it.  An
+        # unverifiable gap ("semantic claim needs a coverage binder", a worktree
+        # path outside this turn) has no fact that any proposal could produce --
+        # re-planning spends a whole round re-running the same edits and tests
+        # and finishes with the same gap.  A measured refactor task did exactly
+        # that three times.  Unverifiable-only gaps are disclosed instead.
+        latest_verdicts = _latest_verdict_map(self._verdicts)
+        actionable = [
+            gap
+            for gap in gaps
+            if getattr(latest_verdicts.get(gap), "status", None)
+            is VerdictStatus.VIOLATED
+        ]
         if (
             decision.kind in (
                 ControlDecisionKind.BLOCK,
                 ControlDecisionKind.ABSTAIN,
             )
-            and gaps
+            and actionable
             and self._plan is not None
             and self._plan_rounds < self._max_plan_rounds()
             and getattr(strategy, "planner", None) is not None
@@ -1830,7 +1892,7 @@ class LoopRuntime:
             # The audit is feedback, not a verdict on the turn: spend another
             # plan round on the gaps.  After the cap the answer is returned
             # with the gaps disclosed (below).
-            self._start_next_round(strategy, gaps, decision.reason)
+            self._start_next_round(strategy, actionable, decision.reason)
             return None
 
         if decision.kind is not ControlDecisionKind.DELIVER:
@@ -1959,30 +2021,12 @@ class LoopRuntime:
         )
 
     def _invoke_finalizer(self, claims: Sequence[Claim]) -> Any:
-        if self._spec is None or self._finalizer is None:
-            return None
-        if self._spec.mode is TaskMode.CHAT:
-            return None
-        latest = _latest_verdict_map(self._verdicts)
-        if self._debt or any(
-            item.status is not VerdictStatus.SATISFIED
-            for item in latest.values()
-        ):
+        if not self._preflight_delivery(claims):
             return None
         existing = self._last_commit_sha()
-        # Do not create a commit for a model claim that is already false.
-        # A COMMIT_CREATED claim is the one claim the finalizer itself can
-        # satisfy, so defer only that one until after the commit exists.
-        for claim in claims:
-            if (
-                claim.kind is PropositionKind.COMMIT_CREATED
-                and not existing
-            ):
-                continue
-            resolution = self._controller.resolve(claim, self._readonly)
-            if resolution.status is not ResolutionStatus.BOUND:
-                return None
         verified = self._verified_paths()
+        baseline = self._baseline_paths()
+        attributed = self._attributed_paths()
         if not verified and not existing:
             return None
         self._append(
@@ -1991,6 +2035,7 @@ class LoopRuntime:
             {
                 "status": "intent",
                 "verified_paths": list(verified),
+                "attributed_paths": list(attributed),
                 "existing_commit": existing,
                 "claims": [item.id for item in claims],
             },
@@ -2001,10 +2046,12 @@ class LoopRuntime:
                 objective=self._spec.objective,
                 task_id=self._spec.task_id,
                 existing_commit_sha=existing,
+                baseline_paths=baseline,
+                attributed_paths=attributed,
             )
         except Exception as exc:  # noqa: BLE001 — finalizer failure is a block
             verdict = Verdict(
-                obligation_id="finalizer",
+                obligation_id=_FINALIZER_OBLIGATION,
                 stage=VerificationStage.V2,
                 status=VerdictStatus.VIOLATED,
                 reason=f"finalizer error: {exc}",
@@ -2014,7 +2061,7 @@ class LoopRuntime:
             return None
         if not outcome.accepted:
             verdict = Verdict(
-                obligation_id="finalizer",
+                obligation_id=_FINALIZER_OBLIGATION,
                 stage=VerificationStage.V2,
                 status=(
                     VerdictStatus.UNVERIFIABLE
@@ -2026,6 +2073,23 @@ class LoopRuntime:
             self._verdicts.append(verdict)
             self._sync_debt((verdict,))
             return outcome
+        # The gate now stands behind the delivery.  Recording it as a verdict
+        # is what lets a debt opened by an *earlier* rejection close: without
+        # it, a transient worktree problem was permanent — the debt made
+        # ``_preflight_delivery`` refuse to try again, so nothing could ever
+        # close it and every later finish delivered "with gaps".
+        satisfied = Verdict(
+            obligation_id=_FINALIZER_OBLIGATION,
+            stage=VerificationStage.V2,
+            status=VerdictStatus.SATISFIED,
+            reason="delivery finalized",
+        )
+        self._verdicts.append(satisfied)
+        self._append(
+            EventKind.STEP_VERDICT,
+            EventSource.GATE,
+            _verdict_payload(satisfied),
+        )
         if outcome.created and outcome.commit_sha:
             files = tuple(outcome.files)
             receipt = ToolReceipt(
@@ -2110,10 +2174,20 @@ class LoopRuntime:
             return False
         if self._spec.mode is TaskMode.CHAT:
             return False
+        # The delivery gate cannot be a precondition for attempting delivery.
+        # Its own obligation is settled *by* the attempt, so treating an
+        # earlier rejection as blocking made a transient worktree problem
+        # permanent: no later round could retry, and the run ended "delivered
+        # with gaps" even after the residue was gone.
         latest = _latest_verdict_map(self._verdicts)
-        if self._debt or any(
+        if any(
             item.status is not VerdictStatus.SATISFIED
-            for item in latest.values()
+            for key, item in latest.items()
+            if key != _FINALIZER_OBLIGATION
+        ):
+            return False
+        if any(
+            debt.obligation.id != _FINALIZER_OBLIGATION for debt in self._debt
         ):
             return False
         existing = self._last_commit_sha()
@@ -2221,6 +2295,15 @@ class LoopRuntime:
         }
         for debt in self._debt:
             if debt.obligation.id in violated:
+                continue
+            if not debt.acceptable:
+                # Opened by positive evidence of failure (a violated verdict),
+                # so it already carries a concrete reason.  Re-auditing it as a
+                # semantic claim can only replace that reason with "needs a
+                # coverage binder" -- and after a round reset the violated
+                # verdict is gone, so this is where a finalizer rejection used
+                # to lose its meaning.  The debt still blocks; only the audit
+                # is skipped.
                 continue
             add(debt.obligation)
         return tuple(found)

@@ -36,6 +36,9 @@ from xenon.kernel.contracts import (
     TestRun,
     ToolIntent,
     ToolReceipt,
+    Verdict,
+    VerdictStatus,
+    VerificationStage,
 )
 from xenon.kernel.controller import VerificationController
 from xenon.kernel.runtime import LoopRuntime
@@ -1414,6 +1417,94 @@ def test_finalizer_rejection_opens_debt() -> None:
         and event.payload.get("status") == "intent"
         for event in ledger.read()
     )
+
+
+# ── 交付门自己的债不能封死重试（真实运行发现）────────────────────────
+#
+# 现场：finalizer 因工作区多出一个文件拒绝交付，开出 finalizer 债；下一轮
+# 重新计划、模型也补了工作，但 _preflight_delivery 看到这条债就再也不调用
+# finalizer —— 能解这条债的组件被它自己的债挡住，只能「带缺口交付」。
+# 数据清洗任务因此永远交付不了它刚刚生成的 sales_clean.csv。
+
+
+def _runtime_with_fs_write(finalizer):
+    from xenon.kernel.contracts import FsWrite, ReceiptStatus
+    from xenon.ledger.events import receipt_event_payload
+
+    ledger = Ledger.in_memory("task-1")
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=FakeGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+        finalizer=finalizer,
+    )
+    runtime._spec = _calc_spec()
+    runtime._phase = TaskPhase.RUNNING
+    receipt = ToolReceipt(
+        receipt_id="r1",
+        call_id="c1",
+        task_id="task-1",
+        tool="apply_patch",
+        status=ReceiptStatus.OK,
+        effects=(
+            FsWrite(
+                paths=("calc/add.py",),
+                changed=True,
+                created_paths=("calc/add.py",),
+            ),
+        ),
+    )
+    ledger.append(
+        EventKind.TOOL_RECEIPT,
+        EventSource.TOOL,
+        receipt_event_payload(receipt),
+    )
+    return ledger, runtime
+
+
+def _finalizer_rejection() -> Verdict:
+    return Verdict(
+        obligation_id="finalizer",
+        stage=VerificationStage.V2,
+        status=VerdictStatus.VIOLATED,
+        reason="worktree contains unverified paths: out.csv",
+    )
+
+
+def test_a_rejected_delivery_is_retried_on_the_next_finish() -> None:
+    finalizer = FakeFinalizer()
+    _ledger, runtime = _runtime_with_fs_write(finalizer)
+    rejection = _finalizer_rejection()
+    runtime._verdicts.append(rejection)
+    runtime._sync_debt((rejection,))
+    assert runtime._debt, "the rejection opened a debt"
+
+    assert runtime._preflight_delivery(()) is True, (
+        "the gate's own debt must not veto the attempt that settles it"
+    )
+    outcome = runtime._invoke_finalizer(())
+
+    assert outcome is not None and outcome.accepted is True
+    assert finalizer.calls == 1
+    runtime._sync_debt(tuple(runtime._verdicts))
+    assert not runtime._debt, "a successful retry closes the finalizer debt"
+
+
+def test_other_debt_still_blocks_delivery() -> None:
+    finalizer = FakeFinalizer()
+    _ledger, runtime = _runtime_with_fs_write(finalizer)
+    unrelated = Verdict(
+        obligation_id="e9",
+        stage=VerificationStage.V2,
+        status=VerdictStatus.VIOLATED,
+        reason="a real unmet obligation",
+    )
+    runtime._verdicts.append(unrelated)
+    runtime._sync_debt((unrelated,))
+
+    assert runtime._preflight_delivery(()) is False
+    assert finalizer.calls == 0
 
 
 def test_missing_rollback_capability_fails_closed() -> None:

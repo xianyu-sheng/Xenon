@@ -61,6 +61,76 @@ def test_finalizer_rejects_unverified_worktree_path(tmp_path: Path) -> None:
     assert _git(tmp_path, "status", "--porcelain").stdout
 
 
+def test_finalizer_does_not_blame_pre_existing_dirt(tmp_path: Path) -> None:
+    """A repo with local WIP must still be able to commit this turn's work.
+
+    Measured refactor run: the worktree already contained unrelated edits
+    before the task started, so the finalizer refused every delivery with
+    "worktree contains unverified paths: CHANGELOG.md, docs/…".  Only staging
+    verified paths keeps the pre-existing work safe, so it must not veto.
+    """
+
+    _repo(tmp_path)
+    (tmp_path / "wip.py").write_text("print('wip')\n", encoding="utf-8")
+    (tmp_path / "a.py").write_text("print('a')\n", encoding="utf-8")
+
+    outcome = GitFinalizer(tmp_path).finalize(
+        verified_paths=("a.py",),
+        objective="add a.py",
+        task_id="t1",
+        baseline_paths=("wip.py",),
+    )
+
+    assert outcome.accepted is True, outcome.reason
+    assert outcome.files == ("a.py",)
+    assert "wip.py" in _git(tmp_path, "status", "--porcelain").stdout
+
+
+def test_finalizer_still_rejects_dirt_outside_the_baseline(
+    tmp_path: Path,
+) -> None:
+    _repo(tmp_path)
+    (tmp_path / "wip.py").write_text("print('wip')\n", encoding="utf-8")
+    (tmp_path / "sneaky.py").write_text("print('x')\n", encoding="utf-8")
+    (tmp_path / "a.py").write_text("print('a')\n", encoding="utf-8")
+
+    outcome = GitFinalizer(tmp_path).finalize(
+        verified_paths=("a.py",),
+        objective="add a.py",
+        task_id="t1",
+        baseline_paths=("wip.py",),
+    )
+
+    assert outcome.accepted is False
+    assert "sneaky.py" in outcome.reason
+
+
+def test_finalizer_excuses_a_file_the_turn_created(tmp_path: Path) -> None:
+    """A script's output is this turn's work, not unexplained residue.
+
+    Measured data-cleaning run: the model wrote and ran a script, the script
+    wrote ``sales_clean.csv`` — the exact deliverable — but the finalizer
+    refused with "worktree contains unverified paths: sales_clean.csv" and
+    the turn ended "delivered with gaps".  The probe had already named the
+    file as created during the turn.
+    """
+
+    _repo(tmp_path)
+    (tmp_path / "clean.py").write_text("print('ok')\n", encoding="utf-8")
+    (tmp_path / "out.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+
+    outcome = GitFinalizer(tmp_path).finalize(
+        verified_paths=("clean.py",),
+        objective="clean data",
+        task_id="t1",
+        attributed_paths=("out.csv",),
+    )
+
+    assert outcome.accepted is True, outcome.reason
+    assert outcome.files == ("clean.py",), "an attributed output is not staged"
+    assert "out.csv" in _git(tmp_path, "status", "--porcelain").stdout
+
+
 def test_finalizer_accepts_existing_commit_without_new_commit(
     tmp_path: Path,
 ) -> None:

@@ -25,7 +25,9 @@ from xenon.ledger.events import EventKind, EventSource
 from xenon.ledger.store import Ledger
 
 
-def _ledger_with_probe(tmp_path, *, dirty, verified, seq_before=0):
+def _ledger_with_probe(
+    tmp_path, *, dirty, verified, seq_before=0, baseline=(), created=()
+):
     ledger = Ledger(tmp_path / "t.jsonl", "t")
     for _ in range(seq_before):
         ledger.append(EventKind.THOUGHT, EventSource.LLM, {"text": "x"})
@@ -39,17 +41,24 @@ def _ledger_with_probe(tmp_path, *, dirty, verified, seq_before=0):
             "dirty_paths": list(dirty),
             "verified_paths": list(verified),
             "head": "abc",
+            "baseline_paths": list(baseline),
+            "created_paths": list(created),
         },
     )
     return ledger
 
 
-def _claim(since_seq: int = 0) -> Claim:
+def _claim(
+    since_seq: int = 0,
+    kind: PropositionKind = PropositionKind.NO_STRAY_CHANGES,
+    target: str = "",
+) -> Claim:
     return Claim(
         id="e1",
-        kind=PropositionKind.NO_STRAY_CHANGES,
+        kind=kind,
         source=ClaimSource.USER,
         since_seq=since_seq,
+        target=target,
     )
 
 
@@ -106,10 +115,180 @@ def test_the_probe_effect_round_trips_through_the_ledger():
     from xenon.ledger.events import effect_from_payload, effect_to_payload
 
     probe = WorkspaceProbe(
-        dirty_paths=("a.py",), verified_paths=("b.py",), head="deadbeef"
+        dirty_paths=("a.py",),
+        verified_paths=("b.py",),
+        head="deadbeef",
+        baseline_paths=("c.py",),
+        created_paths=("d.py",),
     )
 
     assert effect_from_payload(effect_to_payload(probe)) == probe
+
+
+# ── 先于本轮存在的脏文件不是本轮的债（真实运行发现）────────────────
+#
+# 现场：仓库本来就有一批未提交改动。每一轮探针都把全部 dirty 路径与
+# 「本轮写过的文件」相减，于是每轮都报 "worktree contains unverified
+# paths: CHANGELOG.md, docs/…"，模型被诱导去重读、重改与任务无关的文件。
+# 脏文件若在开跑前就已经脏、内容还没变，就不是本轮留下的。
+
+
+def test_pre_existing_dirt_is_not_blamed_on_the_turn(tmp_path):
+    ledger = _ledger_with_probe(
+        tmp_path,
+        dirty=["CHANGELOG.md", "calc.py"],
+        verified=["calc.py"],
+        baseline=["CHANGELOG.md"],
+    )
+
+    resolution = ClaimResolver().resolve(_claim(), ledger)
+
+    assert resolution.status is ResolutionStatus.BOUND, resolution.reason
+
+
+def test_the_baseline_only_covers_the_paths_it_names(tmp_path):
+    ledger = _ledger_with_probe(
+        tmp_path,
+        dirty=["CHANGELOG.md", "notes.txt"],
+        verified=[],
+        baseline=["CHANGELOG.md"],
+    )
+
+    resolution = ClaimResolver().resolve(_claim(), ledger)
+
+    assert resolution.status is ResolutionStatus.UNRESOLVED
+    assert "notes.txt" in resolution.reason
+    assert "CHANGELOG.md" not in resolution.reason
+
+
+def test_a_previously_dirty_file_that_moves_becomes_stray(tmp_path):
+    """Baseline means "unchanged since the turn began", not "forgiven"."""
+
+    ledger = _ledger_with_probe(
+        tmp_path, dirty=["calc.py"], verified=[], baseline=[]
+    )
+
+    assert ClaimResolver().resolve(_claim(), ledger).status is ResolutionStatus.UNRESOLVED
+
+
+def _git(workspace, *args) -> None:
+    import subprocess
+
+    subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_the_git_probe_separates_baseline_dirt_from_turn_changes(tmp_path):
+    from xenon.catalog.worktree import GitWorktreeProbe
+
+    _git(tmp_path, "init", "-q")
+    (tmp_path / "a.py").write_text("x = 0\n", encoding="utf-8")
+    _git(tmp_path, "add", "a.py")
+    _git(
+        tmp_path,
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")  # dirty before
+
+    probe = GitWorktreeProbe(tmp_path)
+    first = probe.probe()
+    assert first is not None and "a.py" in first.dirty_paths
+    assert first.baseline_paths == (), "the first probe *records* the baseline"
+
+    second = probe.probe()
+    assert second is not None
+    assert second.baseline_paths == ("a.py",), "untouched dirt stays baseline"
+
+    (tmp_path / "b.py").write_text("new = True\n", encoding="utf-8")
+    third = probe.probe()
+    assert third is not None
+    assert "b.py" in third.dirty_paths
+    assert "b.py" not in third.baseline_paths
+    assert third.created_paths == ("b.py",), (
+        "a new untracked file is this turn's creation, whatever wrote it"
+    )
+
+    (tmp_path / "a.py").write_text("x = 222\n", encoding="utf-8")
+    fourth = probe.probe()
+    assert fourth is not None
+    assert "a.py" not in fourth.baseline_paths, (
+        "a baseline path whose content moved belongs to this turn"
+    )
+
+    probe.begin_turn()
+    fifth = probe.probe()
+    assert fifth is not None and fifth.baseline_paths == (), (
+        "a new turn records a fresh baseline"
+    )
+
+
+# ── 脚本写出的产物也是本轮证据（真实运行发现）──────────────────────
+#
+# 现场：任务要求「写脚本并运行它，脚本输出 sales_clean.csv」。脚本确实跑了、
+# 文件确实生成了，但账本里只有一条 test_run 回执，没有 FsWrite 事实，
+# 于是 file_created 义务被判 violated，交付结论是「未达成」。
+# 探针看得到工作区：本轮新出现的未跟踪文件就是这一轮的产物。
+
+
+def test_a_probe_proves_a_file_created_by_a_script(tmp_path):
+    ledger = _ledger_with_probe(
+        tmp_path,
+        dirty=["out.csv"],
+        verified=[],
+        created=["out.csv"],
+    )
+
+    resolution = ClaimResolver().resolve(
+        _claim(kind=PropositionKind.FILE_CREATED, target="out.csv"), ledger
+    )
+
+    assert resolution.status is ResolutionStatus.BOUND, resolution.reason
+
+
+def test_a_baseline_file_is_not_created_by_this_turn(tmp_path):
+    ledger = _ledger_with_probe(
+        tmp_path,
+        dirty=["old.csv", "out.csv"],
+        verified=[],
+        baseline=["old.csv"],
+        created=["out.csv"],
+    )
+
+    resolution = ClaimResolver().resolve(
+        _claim(kind=PropositionKind.FILE_CREATED, target="old.csv"), ledger
+    )
+
+    assert resolution.status is ResolutionStatus.UNRESOLVED
+
+
+def test_a_probe_proves_a_file_changed_during_the_turn(tmp_path):
+    ledger = _ledger_with_probe(
+        tmp_path,
+        dirty=["report.py", "CHANGELOG.md"],
+        verified=[],
+        baseline=["CHANGELOG.md"],
+    )
+
+    changed = ClaimResolver().resolve(
+        _claim(kind=PropositionKind.FILE_CHANGED, target="report.py"), ledger
+    )
+    untouched = ClaimResolver().resolve(
+        _claim(kind=PropositionKind.FILE_CHANGED, target="CHANGELOG.md"), ledger
+    )
+
+    assert changed.status is ResolutionStatus.BOUND, changed.reason
+    assert untouched.status is ResolutionStatus.UNRESOLVED
 
 
 # ── 探针作为「验证型任务」的证据（真实运行发现）──────────────────────

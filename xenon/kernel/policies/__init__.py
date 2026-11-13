@@ -35,6 +35,7 @@ from xenon.kernel.contracts import (
     ToolIntent,
     ToolSpec,
 )
+from xenon.utils.git_command import is_read_only_git as _is_read_only_git
 
 _CMD_KEY = "comm" + "and"
 #: DISCOVER is read-only catalog discovery (defect 6): it has no side effects
@@ -81,6 +82,16 @@ class ScopedGrant:
         if capability is not self.capability:
             return False
         actual = _normalize(target)
+        if not self.target:
+            return False
+        wanted = _normalize(self.target)
+        if self.target != "*" and actual == wanted:
+            # The human approved *this exact text*.  The chain refusal below
+            # exists so a grant for `a` cannot release `a; b`; it must not also
+            # refuse the command the panel literally displayed.  A measured run
+            # showed `python run.py; Get-Content out.txt` approved and then
+            # denied by its own grant, because `;` made it "chained".
+            return True
         # A shell target that chains, backgrounds or redirects is never covered
         # by a grant — not even the ``*`` wildcard a turn answer uses:
         # ``sleep 1 & rm -rf x`` and ``echo hi > /etc/passwd`` start with the
@@ -88,15 +99,12 @@ class ScopedGrant:
         # 属提权，绝不合并。
         if self.capability is Capability.SHELL and _chains_commands(actual):
             return False
-        if not self.target:
-            return False
         # ``*`` is the explicit "this whole capability, in this workspace"
         # wildcard a session grant uses.  It is a literal decision the human made
         # ("always allow verify"), not an implicit fallback, so it is spelled out
         # here rather than inferred from an empty target.
         if self.target == "*":
             return True
-        wanted = _normalize(self.target)
         if (
             actual == wanted
             or actual.startswith(wanted + " ")
@@ -290,40 +298,6 @@ def _is_destructive(command: str) -> bool:
 def _is_commit(command: str) -> bool:
     tokens = _tokens(command)
     return len(tokens) >= 2 and tokens[:2] == ["g" + "it", "commit"]
-
-
-#: Git subcommands that only read.  ``branch`` is here because listing is the
-#: common case; creating or deleting a branch is caught by ``_is_destructive``
-#: or by the flag check below.
-_READ_ONLY_GIT = frozenset(
-    {"status", "diff", "log", "show", "branch", "rev-parse", "blame"}
-)
-_GIT_WRITE_FLAGS = ("-d", "-D", "-m", "-M", "-c", "--delete", "--move")
-
-
-def _is_read_only_git(command: str) -> bool:
-    """True for a bare read-only git query, false for anything else.
-
-    Deliberately narrow: a shell chain (`git status && rm -rf x`), a
-    ``--output`` style flag or a write subcommand all fall through to the
-    normal approval path.
-    """
-
-    text = command.strip()
-    if any(marker in text for marker in ("&&", "||", ";", "|", "\n", ">")):
-        return False
-    tokens = _tokens(text)
-    if tokens[:1] == ["g" + "it"]:
-        tokens = tokens[1:]
-    if not tokens:
-        return False
-    subjects = [item for item in tokens if not item.startswith("-")]
-    if not subjects:
-        return False
-    subject = subjects[0]
-    if subject == "branch":
-        return not any(flag in tokens for flag in _GIT_WRITE_FLAGS)
-    return subject in _READ_ONLY_GIT
 
 
 def _is_push(command: str) -> bool:
@@ -535,6 +509,20 @@ class PermissionPolicy:
             if capability is Capability.REMOTE and self.allow_approval:
                 return self._approval(
                     capability, targets, "remote read requires approval"
+                )
+            # A read-only git query is a *read* that happens to travel through
+            # the VCS capability.  This branch used to deny it before the VCS
+            # rules below could see it, so `git status` / `git log` were
+            # unreachable in read-only turns — the exact way a user looks at a
+            # repository.  The narrow predicate keeps chained writes and
+            # destructive subcommands on the deny path.
+            if capability is Capability.VCS and _is_read_only_git(
+                _command(intent)
+            ):
+                return PolicyDecision(
+                    kind=PolicyDecisionKind.ALLOW,
+                    reason="read-only git query",
+                    scope=(_command(intent),),
                 )
             return self._deny(capability, targets, "read-only mode")
         if capability is Capability.EDIT:

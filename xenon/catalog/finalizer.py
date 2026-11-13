@@ -64,8 +64,10 @@ class GitFinalizer:
         objective: str,
         task_id: str,
         existing_commit_sha: str | None = None,
+        baseline_paths: Sequence[str] = (),
+        attributed_paths: Sequence[str] = (),
     ) -> FinalizeOutcome:
-        verified = self._verified(verified_paths)
+        verified = self._relative_paths(verified_paths)
         if verified is None:
             return FinalizeOutcome(
                 accepted=False, reason="verified path escapes workspace"
@@ -77,10 +79,24 @@ class GitFinalizer:
                 reason="cannot read git status",
                 unavailable=True,
             )
+        # Dirt that predates the turn (and has not moved since) belongs to
+        # whoever left it there.  Only staging verified paths keeps it safe,
+        # so it must not veto the commit either: refusing here made the
+        # deterministic finalizer unusable in any repository with local WIP.
+        baseline = self._relative_paths(baseline_paths) or set()
+        # Files the turn itself created without a receipted write (a script
+        # wrote them) are the turn's output, not unexplained residue.  They
+        # are excused but *not staged*: a commit carries work a receipt backs,
+        # so generated artifacts stay visible in the worktree instead of being
+        # swept into the delivery commit.
+        attributed = self._relative_paths(attributed_paths) or set()
         unverified = sorted(
             path
             for path in changes
-            if not self._ignored(path) and path not in verified
+            if not self._ignored(path)
+            and path not in verified
+            and path not in baseline
+            and path not in attributed
         )
         if unverified:
             return FinalizeOutcome(
@@ -142,7 +158,11 @@ class GitFinalizer:
                 sha, "cannot verify worktree after commit"
             )
         dirty = sorted(
-            path for path in post_changes if not self._ignored(path)
+            path
+            for path in post_changes
+            if not self._ignored(path)
+            and path not in baseline
+            and path not in attributed
         )
         if dirty:
             return self._reject_and_rollback(
@@ -235,7 +255,7 @@ class GitFinalizer:
             accepted=True, commit_sha=sha, files=files
         )
 
-    def _verified(self, paths: Sequence[str]) -> set[str] | None:
+    def _relative_paths(self, paths: Sequence[str]) -> set[str] | None:
         result: set[str] = set()
         for path in paths:
             candidate = Path(path)

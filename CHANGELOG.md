@@ -4,6 +4,69 @@
 
 ## [Unreleased]
 
+### 修复：脚本产物被当成脏文件、交付门自锁、已批准的链式命令被拒（2026-11-13）
+
+真实 ConPTY 验收（数据清洗任务：写脚本并运行，脚本输出 `sales_clean.csv`）暴露
+三处阻塞，均按「定位 → 根因 → 系统性修复 → 同入口复现」处理：
+
+- **脚本写出的产物是本轮证据**：`WorkspaceProbe` 增加 `created_paths`（本轮新出现、
+  开跑前不存在的未跟踪文件）。清洁检查不再把这类文件报成
+  `worktree contains unverified paths`；`GitFinalizer.finalize` 新增
+  `attributed_paths`，只豁免、不暂存（提交里仍只有回执背书的文件）。
+  现场：模型按要求生成 `sales_clean.csv`（脚本确实写了它），交付却因这条"未验证路径"
+  被判失败，任务永远无法交付自己刚生成的成果。
+- **交付门不再被自己的债封死**：`finalizer` 拒绝一次后开出的债，会让
+  `_preflight_delivery` 再也不调用 finalizer——能解这条债的组件被它自己的债挡住。
+  现在交付门只把「其他」债/verdict 当作前置条件；成功交付会记一条
+  `finalizer satisfied` verdict 并关闭旧债。另：由「已证实失败」开出的债
+  （`acceptable=False`）不再被 V2 当成语义 claim 重新审计，避免把
+  `worktree contains unverified paths: …` 改写成
+  `semantic claim needs a coverage binder`。
+- **人已批准的链式命令被自己的授权拒绝**：`ScopedGrant.allows` 在原文本**完全相等**
+  时直接放行；链式守卫只用于阻止前缀/形状匹配把 `a` 的授权扩散到 `a; b`。
+  现场：`python count_sales.py; Get-Content sales_count.txt` 在审批面板原样展示、
+  用户选择允许，实际执行却返回 `denied · shell requires approval`。
+
+真实 ConPTY 复现（`xenon` 前端入口，审批面板自动应答）：
+`python e2e_scratch/clean_sales.py` 生成的 `sales_clean.csv` 不再阻断开交付，
+finalizer 生成提交；变体任务 `count_sales.py` → `sales_count.txt` 输出 `count=7`，
+脚本提交、输出文件留在工作区（未跟踪、未被误提交）；链式 shell 命令获批后
+连续执行三次均 `ok · opaque`，输出 `count=7`。
+
+验证：`python -m pytest tests/ -q` → **4125 passed / 101 skipped**；新增用例覆盖
+探针创建路径、finalizer 豁免、交付门重试、链式授权精确匹配；`ruff` 干净。
+
+### 修复：TS 前端补齐 Python TUI 的展示与实时状态（2026-11-13）
+
+TS 前端此前只渲染时间线，Python TUI 的启动、实时与结果呈现全部消失。
+本次把「事实在内核、表现在前端」的契约补齐：
+
+- **启动体验**：跑者动画由 TS 播放（帧与 Python 播放器同源，`scripts/brand`
+  同时生成 `_brand_frames.py` 与 `frontend/src/brand-frames.ts`，3 秒 / 12 FPS，
+  任意按键跳过）；欢迎卡恢复 `XENON vX.Y.Z`、MODE/MODEL/TIP；启动摘要按
+  `ready.probed` 如实显示「已准备」或「已加载 N 个配置模型」；终端标签标题
+  （OSC / `process.title`）在运行中滚动、等待审批时静止。
+- **实时状态**：轮次运行中每 500 ms 拉取 `status`；spinner、本地秒表
+  （与内核 `progress` 取较大值）、阶段/步数/工具数/停滞、token 条、消息数、
+  会话时长（`MM:SS`，与 Python 工具栏一致）、缓存命中/费用/节省/流式。
+- **结果呈现**：`● Assistant` 锚点 + 最小 Markdown（代码块/标题/列表/行内）；
+  `💭 N 步 · N 个工具 · 证据`；`⚠️ 待人工核验清单` 与降级核验面板
+  （`evidence=partial/unverified` 即使没有 debt 也会披露）；账本路径；
+  `Ctrl+O` 展开完整执行详情；审批 diff 预览 30 行；退出时 `session.report`
+  渲染本次会话省钱报告。
+- **内核事实修补**：协议宿主像 `start_repl` 一样把 registry 配置喂进
+  `model_pool.from_config()`（此前池为空，启动摘要显示 0、AutoRouter 失去数据源）；
+  `ready` 增加版本/模式/模型计数/探测状态；`status` 增加 token/窗口/消息/
+  会话时长/缓存/费用；`turn.end` 增加 `metrics` / `debt` / `planned`。
+- 协议与 TUI 文档同步。
+
+验证：前端 `tsc` + 49 条单测全绿；`tests/test_protocol_host.py` 33 条、
+`test_startup_experience.py` / `test_logo.py` 9 条通过；Python 全量
+`4087 passed / 100 skipped / 0 failed`（5m24s）；真实 ConPTY 启动确认
+动画逐帧变化、欢迎卡（`XENON v1.0.0`）与「已加载 10 个配置模型」出现、
+`/help` 正常；用配置内的 proxy 模型跑通一轮真实对话（`OK`），
+状态栏显示 `MM:SS`，退出时省钱报告落地。
+
 ### 修复：命令输出顺序、模型切换、文件遍历上限（2026-11-12）
 
 - **提问前的输出先到前端**：新增 `command.output` 帧。命令先打印的表格/菜单

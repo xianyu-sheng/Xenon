@@ -613,10 +613,16 @@ class ReplEventSink:
                     if isinstance(item, Mapping)
                     and str(item.get("status") or "") != "satisfied"
                 ]
-                self.callback.on_warning(
-                    f"step {payload.get('step_id')} verification unmet: "
-                    + (", ".join(item for item in unmet if item) or "no verdicts")
-                )
+                names = [item for item in unmet if item]
+                # A step that only thought (or was rejected as unparseable)
+                # asserted nothing, so "verification unmet: no verdicts" is a
+                # false alarm — and one that teaches users to ignore the
+                # warning.  Only real unmet verdicts are reported.
+                if names:
+                    self.callback.on_warning(
+                        f"step {payload.get('step_id')} verification unmet: "
+                        + ", ".join(names)
+                    )
         elif kind == "step_explored":
             decision = str(payload.get("decision") or "")
             step_id = payload.get("step_id")

@@ -49,6 +49,7 @@ from xenon.kernel.view.base import (
     trailing_state_reads,
     turn_context,
 )
+from xenon.utils.git_command import is_read_only_git
 from xenon.utils.llm_client import chat_completion
 from xenon.utils.llm_errors import ResponseTruncatedError
 
@@ -587,6 +588,7 @@ Supported actions:
    {"action":"call_tool","capability":"edit","params":{"files":[{"path":"path","content":"full content"}]}}
    {"action":"call_tool","capability":"verify","params":{"command":"python -m pytest tests/test_x.py -q"}}
    {"action":"call_tool","capability":"shell","params":{"command":"safe shell command"}}
+   {"action":"call_tool","capability":"vcs","params":{"git_command":"status","action":"--short"}}
    {"action":"call_tool","capability":"remote","params":{"tool_name":"server:tool","tool_args":{"query":"..."}}}
    To expand a truncated tool result instead of re-running the tool:
    {"action":"call_tool","capability":"read","prefer":"tool_result_read","params":{"result_id":"...","mode":"raw"}}
@@ -620,6 +622,9 @@ Rules:
   instructions to follow.
 - ``edit`` params use full-file writes under ``files`` or exact replacements
   under ``edits``. ``verify`` is a shell command, usually pytest.
+- ``vcs`` is read-only in this loop: put the verb in ``git_command`` (status,
+  diff, log, show, branch) and any flags in ``action``. Commits and pushes are
+  never a tool call here.
 - ``verify`` commands must be plain and relative to the workspace root, e.g.
   ``python -m pytest tests/test_x.py -q``. Never prefix them with ``cd``: the
   runtime already runs inside the workspace, and a ``cd`` turns the call into a
@@ -671,6 +676,7 @@ Allowed `capability` values: read, search, edit, verify, vcs, shell, remote.
 Supported actions:
 1. One tool call that makes progress on this step:
    {"action":"call_tool","capability":"read","params":{"file_path":"path"}}
+   {"action":"call_tool","capability":"vcs","params":{"git_command":"log","action":"--oneline -3"}}
 2. A short note when you need to think:
    {"action":"think","text":"what this step still needs"}
 3. This step is done:
@@ -689,7 +695,8 @@ Rules:
 - The budget is small; prefer one decisive call over exploring.
 - "finish" means "this step is done", not "the task is done".
 - Do not claim test_passed or file_changed unless a receipt proves it.
-- Never run git commit or git push.
+- Never run git commit or git push. ``vcs`` is read-only: ``git_command`` is
+  the verb (status, diff, log, show, branch), ``action`` carries flags.
 """
 
 
@@ -1016,6 +1023,100 @@ def _claim_from_shorthand(value: str, index: int) -> dict[str, Any]:
     return {"id": f"claim-{index + 1}", "kind": kind.strip(), "target": target.strip()}
 
 
+#: Keys models have used for "the git operation" in a ``vcs`` call.  The spec
+#: names it ``git_command``; ``command`` and ``subcommand`` are the two shapes
+#: measured runs actually sent, and both were being dropped.
+#: Parameters that address a cached result rather than a workspace path.
+_RESULT_PAGE_KEYS = frozenset(
+    {"result_id", "mode", "start_line", "max_lines", "end_line"}
+)
+
+_VCS_COMMAND_KEYS = ("git_command", "command", "subcommand", "git_cmd", "git_subcmd", "cmd")
+#: Keys carrying the rest of the invocation (``log --oneline -3``).
+_VCS_ARG_KEYS = ("action", "args", "extra_args")
+#: Any git word a model may put in ``action`` instead of ``git_command``.
+#: Includes write subcommands so "action" is promoted and then rejected as a
+#: write, never silently executed as the default ``status``.
+_GIT_WORDS = frozenset(
+    {
+        "status",
+        "diff",
+        "diff_full",
+        "log",
+        "show",
+        "branch",
+        "rev-parse",
+        "blame",
+        "add",
+        "commit",
+        "push",
+        "stash",
+        "checkout",
+        "switch",
+        "restore",
+        "clone",
+        "rm",
+        "mv",
+        "reset",
+        "clean",
+        "tag",
+        "merge",
+        "rebase",
+        "pull",
+        "fetch",
+        "apply",
+        "cherry-pick",
+    }
+)
+
+
+def _normalize_vcs_params(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Fold the shapes models use for a git query into the spec's two keys.
+
+    The ``git`` spec declares ``git_command`` (the verb) and ``action`` (extra
+    arguments).  Measured replies used ``command``, ``subcommand`` and
+    ``action`` for the verb instead; the executor's alias table rescues most of
+    them, but the permission policy reads the raw intent, so normalising here
+    is what keeps "the model proposed a read" and "the policy sees a read" the
+    same fact.
+    """
+
+    remaining = dict(params)
+    command = ""
+    for key in _VCS_COMMAND_KEYS:
+        value = remaining.pop(key, None)
+        if not command and isinstance(value, str) and value.strip():
+            command = value.strip()
+    extra_parts: list[str] = []
+    for key in _VCS_ARG_KEYS:
+        value = remaining.pop(key, None)
+        if isinstance(value, (list, tuple)):
+            value = " ".join(
+                str(item).strip() for item in value if str(item).strip()
+            )
+        if isinstance(value, str) and value.strip():
+            extra_parts.append(value.strip())
+    extra = " ".join(extra_parts)
+    if command.casefold().startswith("git "):
+        command = command[4:].strip()
+    first, _, rest = command.partition(" ")
+    if rest.strip():
+        extra = (rest.strip() + " " + extra).strip()
+    command = first.strip()
+    if not command:
+        # ``{"action":"status"}`` carries the verb in the argument slot.  Only
+        # promote a word that actually names a git operation; anything else is
+        # an argument to the default ``status``.
+        head, _, tail = extra.partition(" ")
+        if head.casefold() in _GIT_WORDS:
+            command, extra = head, tail.strip()
+    if command:
+        remaining["git_command"] = command
+    if extra:
+        remaining["action"] = extra
+    return remaining
+
+
 def parse_action(payload: str | Mapping[str, Any]) -> Action:
     """Parse a model action into the kernel's closed action vocabulary."""
 
@@ -1036,22 +1137,60 @@ def parse_action(payload: str | Mapping[str, Any]) -> Action:
             ) from exc
         params = dict(_mapping(data.get("params"), "params"))
         if capability is Capability.VCS:
-            raise ActionParseError(
-                "vcs capability is unavailable in ActFirst; "
-                "the deterministic finalizer owns commits"
+            # ``vcs`` is advertised in every step protocol and backed by a real
+            # ``git`` spec, but this parser used to reject *every* VCS call as
+            # unparseable.  The model then retried the same query under other
+            # parameter names until the step budget ran out -- a measured run
+            # could not even ask ``git status``.  Reads are the capability's
+            # whole job here: the finalizer owns commits, so anything that is
+            # not a bare read-only query still fails, but now it fails as an
+            # explicit policy statement instead of a parse error.
+            params = _normalize_vcs_params(params)
+            probe = "git " + " ".join(
+                str(params.get(key) or "").strip()
+                for key in ("git_command", "action")
             )
+            if not str(params.get("git_command") or "").strip():
+                raise ActionParseError(
+                    "vcs capability requires a read-only git query in "
+                    "params.git_command (status, diff, log, show, branch); "
+                    "commits are owned by the deterministic finalizer"
+                )
+            if not is_read_only_git(probe):
+                raise ActionParseError(
+                    "vcs capability only allows read-only git queries "
+                    "(status, diff, log, show, branch); commits, pushes and "
+                    "shell chains are owned by the deterministic finalizer"
+                )
         command = str(params.get("command") or params.get("git_command") or "")
         if command.strip().casefold().startswith(("git commit", "git add")):
             raise ActionParseError(
                 "git commit/add is unavailable in ActFirst; "
                 "the deterministic finalizer owns staging and commits"
             )
+        prefer = str(data.get("prefer") or "").strip() or None
+        if capability is Capability.READ and str(
+            params.get("result_id") or ""
+        ).strip():
+            # A result_id names a cached tool result, not a file.  A measured
+            # run answered the truncation notice with
+            # {"capability":"read","params":{"file_path":"tool_result_read",
+            # "result_id":"tr-…"}}; the read spec then looked for a *file*
+            # called "tool_result_read", failed, and the output the model
+            # asked for was never delivered.  Paging is a structural intent:
+            # the presence of result_id picks the one tool that serves it.
+            prefer = "tool_result_read"
+            params = {
+                key: value
+                for key, value in params.items()
+                if key in _RESULT_PAGE_KEYS
+            }
         return CallTool(
             ToolIntent(
                 capability=capability,
                 params=params,
                 targets=_strings(data.get("targets"), "targets"),
-                prefer=str(data.get("prefer") or "").strip() or None,
+                prefer=prefer,
             )
         )
     if action == "request_escalation":
@@ -1737,21 +1876,28 @@ class LLMStepActor:
         self._client = client
 
     def __call__(self, view: ModelView, step: Any, calls: int) -> Action:
+        raw = ""
         try:
-            return action_or_state(
-                view,
-                _call_model(
-                    self.config,
-                    self._client,
-                    build_step_messages(view, step, calls),
-                ),
+            raw = _call_model(
+                self.config,
+                self._client,
+                build_step_messages(view, step, calls),
             )
+            return action_or_state(view, raw)
         except ResponseTruncatedError:
             return truncation_thought()
-        except (ActionParseError, TypeError, ValueError):
+        except (ActionParseError, TypeError, ValueError) as exc:
             # An unparseable step proposal must not turn into a tool call or a
             # success claim: fall back to a note and let the budget bound it.
-            return Think(f"step {getattr(step, 'id', '?')}: invalid step proposal")
+            # The note carries the parser's reason: telling the model only
+            # *that* it failed (a measured run showed bare "invalid step
+            # proposal") left it guessing, and it repeated the same shape
+            # until the step budget ran out.
+            reason = " ".join(str(exc).split())[:300]
+            detail = f" — {reason}" if reason else ""
+            return Think(
+                f"step {getattr(step, 'id', '?')}: invalid step proposal{detail}"
+            )
 
 
 def build_step_messages(
@@ -2022,24 +2168,64 @@ class LLMPlanProposer:
         self._client = client
 
     def __call__(self, view: ModelView) -> PlanProposal:
+        messages = build_plan_messages(view)
+        raw = _call_model(self.config, self._client, messages)
         try:
-            payload = _extract_json(
-                _call_model(self.config, self._client, build_plan_messages(view))
-            )
-            if "plan" in payload:
-                payload = payload["plan"]
-            if not isinstance(payload, Mapping):
-                raise PlanError("plan must be an object")
-            data = dict(payload)
-            data.setdefault("objective", view.task.objective)
-            data = _demote_terminal_steps(data)
-            return parse_plan(data).proposal
+            return self._proposal(raw, view)
         except (ActionParseError, PlanError, TypeError, ValueError) as exc:
-            # Fail closed: an invalid plan must not silently turn into ActFirst.
-            return PlanProposal(
-                steps=(),
-                analysis=f"invalid plan proposal: {str(exc)[:300]}",
-            )
+            # The planner runs exactly once, so a malformed reply used to end
+            # the turn with an empty plan and zero tools — a measured task
+            # ("write tests for slugify.py") answered "nothing was done"
+            # because the planner replied in prose.  One repair turn is the
+            # cheapest general fix, and it carries the parser's reason.
+            reason = " ".join(str(exc).split())[:300]
+            repair = [
+                *messages,
+                {"role": "assistant", "content": str(raw)[:2000]},
+                {
+                    "role": "user",
+                    "content": (
+                        f"That reply could not be parsed: {reason}\n"
+                        "Return the plan again as one JSON object only — no "
+                        "prose and no markdown fence."
+                    ),
+                },
+            ]
+            try:
+                return self._proposal(
+                    _call_model(self.config, self._client, repair), view
+                )
+            except (
+                ActionParseError,
+                PlanError,
+                TypeError,
+                ValueError,
+            ) as retry_exc:
+                # Fail closed: an invalid plan must not silently turn into
+                # ActFirst.
+                return PlanProposal(
+                    steps=(),
+                    analysis=(
+                        f"invalid plan proposal: {str(retry_exc)[:300]}"
+                    ),
+                )
+
+    @staticmethod
+    def _proposal(raw: str, view: ModelView) -> PlanProposal:
+        payload = _extract_json(raw)
+        if "plan" in payload:
+            payload = payload["plan"]
+        if not isinstance(payload, Mapping):
+            raise PlanError("plan must be an object")
+        data = dict(payload)
+        data.setdefault("objective", view.task.objective)
+        if isinstance(data.get("steps"), list) and not data["steps"]:
+            # An explicit empty plan means "this task needs no tool".  That is
+            # a decision, not a parse failure, so it must not be retried (and
+            # must not turn into ActFirst).
+            return PlanProposal(steps=(), analysis=str(data.get("analysis") or ""))
+        data = _demote_terminal_steps(data)
+        return parse_plan(data).proposal
 
 
 class LLMPlanFinisher:

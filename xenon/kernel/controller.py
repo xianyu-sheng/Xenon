@@ -148,11 +148,49 @@ def _match_key(fact: Fact, claim: Claim) -> str:
         if effect.command:
             return _normalized(effect.command)
         return _normalized(effect.target)
+    if isinstance(effect, WorkspaceProbe):
+        paths = (
+            effect.created_paths
+            if claim.kind is PropositionKind.FILE_CREATED
+            else effect.dirty_paths
+        )
+        for path in paths:
+            if _path_match((path,), claim.target):
+                return _normalized(path)
     if isinstance(effect, VcsCommit):
         return effect.sha
     if isinstance(effect, VcsPush):
         return f"{effect.remote}:{effect.branch}"
     return fact.fact_id
+
+
+def _probe_work_matches(
+    facts: Sequence[Fact], claim: Claim, *, created: bool
+) -> tuple[Fact, ...]:
+    """Workspace probes as write evidence, scoped to this turn.
+
+    A script the agent ran can create or change files without leaving an
+    FsWrite fact — the kernel never sees inside the subprocess.  The probe
+    does see the result, and ``baseline_paths`` keeps pre-existing dirt out.
+    Without this, "write a script, run it, the script writes the output"
+    could never be proven: a measured run produced the file and still
+    delivered "failed" because only an apply_patch receipt counted as a
+    created-file fact.
+    """
+
+    matches: list[Fact] = []
+    for fact in facts:
+        effect = fact.effect
+        if not isinstance(effect, WorkspaceProbe):
+            continue
+        paths = effect.created_paths if created else effect.dirty_paths
+        baseline = {_normalized(item) for item in effect.baseline_paths}
+        attributable = [
+            path for path in paths if _normalized(path) not in baseline
+        ]
+        if _path_match(attributable, claim.target):
+            matches.append(fact)
+    return tuple(matches)
 
 
 def _unique_facts(matches: Sequence[Fact]) -> tuple[Fact, ...]:
@@ -194,6 +232,7 @@ class ClaimResolver:
                     and fact.effect.changed
                     and _path_match(fact.effect.paths, claim.target)
                 ]
+                + list(_probe_work_matches(facts, claim, created=False))
             )
             return self._latest(claim, matches, "no changed file fact")
 
@@ -205,6 +244,7 @@ class ClaimResolver:
                     if isinstance(fact.effect, FsWrite)
                     and _path_match(fact.effect.created_paths, claim.target)
                 ]
+                + list(_probe_work_matches(facts, claim, created=True))
             )
             return self._latest(claim, matches, "no created file fact")
 
@@ -302,8 +342,22 @@ class ClaimResolver:
             )
         probe = probes[-1].effect
         verified = {_normalized(item) for item in probe.verified_paths}
+        # Dirt that predates the turn and has not moved since is not this
+        # turn's debt; only paths this turn left unverified are stray.
+        baseline = {_normalized(item) for item in probe.baseline_paths}
+        # A file that did not exist when the turn began was produced by this
+        # turn's work, even when a subprocess wrote it instead of a receipted
+        # write.  A measured data-cleaning task created its output from a
+        # script and was told the worktree held an "unverified path" — the
+        # only path was the deliverable.  Modification of a pre-existing file
+        # still needs a receipt; creation does not.
+        created = {_normalized(item) for item in probe.created_paths}
         stray = [
-            path for path in probe.dirty_paths if _normalized(path) not in verified
+            path
+            for path in probe.dirty_paths
+            if _normalized(path) not in verified
+            and _normalized(path) not in baseline
+            and _normalized(path) not in created
         ]
         if stray:
             return Resolution(

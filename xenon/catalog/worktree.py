@@ -52,16 +52,65 @@ class GitWorktreeProbe:
         # the wrong question: work the agent already committed is not dirty, so
         # every committed file would read as an unmet claim.
         self.base = base
+        #: Dirty paths when the current turn began -> their fingerprint.
+        #: ``None`` means no baseline has been captured yet.  Without it, a
+        #: repository that was already dirty before the turn blames the turn
+        #: for every pre-existing path ("unverified changes") and pushes the
+        #: model to re-read and re-edit files it never touched.
+        self._baseline: dict[str, tuple[int, int] | None] | None = None
+
+    def begin_turn(self) -> None:
+        """Forget the previous turn's baseline so the next probe records one."""
+
+        self._baseline = None
 
     def probe(self, *, verified_paths: tuple[str, ...] = ()) -> WorkspaceProbe | None:
-        changes = self._status_changes()
-        if changes is None:
+        entries = self._status_entries()
+        if entries is None:
             return None
+        changes = _filtered([path for _, path in entries])
+        untracked = {path for code, path in entries if code == "??"}
+        fingerprints = {path: self._fingerprint(path) for path in changes}
+        if self._baseline is None:
+            # Nothing has run yet in this turn: the current dirt *is* the
+            # baseline, so none of it is attributable here.
+            self._baseline = fingerprints
+            baseline: tuple[str, ...] = ()
+            created: tuple[str, ...] = ()
+        else:
+            # A path that was already dirty becomes this turn's business only
+            # once its content moves while the turn is running.
+            baseline = tuple(
+                sorted(
+                    path
+                    for path in changes
+                    if path in self._baseline
+                    and self._baseline[path] == fingerprints[path]
+                )
+            )
+            created = tuple(
+                sorted(
+                    path
+                    for path in untracked
+                    if path in changes and path not in self._baseline
+                )
+            )
         return WorkspaceProbe(
             dirty_paths=changes,
             verified_paths=tuple(verified_paths),
             head=self._head(),
+            baseline_paths=baseline,
+            created_paths=created,
         )
+
+    def _fingerprint(self, path: str) -> tuple[int, int] | None:
+        """Cheap identity for a dirty path; None when it cannot be read."""
+
+        try:
+            stat = (self.workspace / path).stat()
+        except OSError:
+            return None
+        return (stat.st_size, stat.st_mtime_ns)
 
     def changed_since(self, base: str) -> tuple[str, ...] | None:
         """Paths differing between ``base`` and the worktree.  None = cannot tell."""
@@ -113,11 +162,19 @@ class GitWorktreeProbe:
             return None
 
     def _status_changes(self) -> tuple[str, ...] | None:
+        entries = self._status_entries()
+        if entries is None:
+            return None
+        return _filtered([path for _, path in entries])
+
+    def _status_entries(self) -> tuple[tuple[str, str], ...] | None:
+        """(status code, path) for every change, including ``??`` new files."""
+
         result = self._run("status", "--porcelain", "-z", "--untracked-files=all")
         if result is None or result.returncode != 0:
             return None
         entries = result.stdout.decode("utf-8", errors="replace").split("\0")
-        paths: list[str] = []
+        pairs: list[tuple[str, str]] = []
         index = 0
         while index < len(entries):
             entry = entries[index]
@@ -125,11 +182,11 @@ class GitWorktreeProbe:
             if len(entry) < 3:
                 continue
             code = entry[:2]
-            paths.append(entry[3:])
+            pairs.append((code, entry[3:]))
             if code[0] in {"R", "C"} and index < len(entries):
                 # A rename/copy carries the original path in the next entry.
                 index += 1
-        return _filtered(paths)
+        return tuple(pairs)
 
     def _head(self) -> str:
         result = self._run("rev-parse", "HEAD")

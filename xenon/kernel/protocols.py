@@ -117,6 +117,8 @@ class Finalizer(Protocol):
         objective: str,
         task_id: str,
         existing_commit_sha: str | None = None,
+        baseline_paths: Sequence[str] = (),
+        attributed_paths: Sequence[str] = (),
     ) -> Any: ...
 
 

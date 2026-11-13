@@ -560,6 +560,41 @@ def test_approval_provider_exception_fails_closed(tmp_path) -> None:
     assert not policy.grants
 
 
+def test_read_only_mode_still_allows_read_only_git_queries(tmp_path) -> None:
+    """A read-only turn must be able to *look* at the repository.
+
+    The READ_ONLY branch used to deny every non-read capability before the VCS
+    branch could see it, so `git status` / `git log` were unreachable in the
+    mode whose whole promise is reading — a live run answered a plain
+    "show git log" task with "no receipt".  The narrow git predicate keeps
+    writes and chains refused (see the next test).
+    """
+
+    policy = PermissionPolicy(
+        mode=PermissionMode.READ_ONLY, workspace=str(tmp_path)
+    )
+    for command in ("status", "diff --stat", "log --oneline -3", "show HEAD"):
+        decision = _decision(
+            policy, _call(Capability.VCS, git_command=command), str(tmp_path)
+        )
+        assert decision.kind is PolicyDecisionKind.ALLOW, command
+
+    denied = _decision(
+        policy, _call(Capability.VCS, git_command="commit -m x"), str(tmp_path)
+    )
+    assert denied.kind is PolicyDecisionKind.VETO
+    chained = _decision(
+        policy,
+        _call(Capability.VCS, git_command="status && rm -rf build"),
+        str(tmp_path),
+    )
+    assert chained.kind is PolicyDecisionKind.VETO
+    shell = _decision(
+        policy, _call(Capability.SHELL, command="git status"), str(tmp_path)
+    )
+    assert shell.kind is PolicyDecisionKind.VETO
+
+
 def test_read_only_git_queries_need_no_grant() -> None:
     """`git status` is how the model learns what it changed, not a side effect."""
 
@@ -690,6 +725,39 @@ def test_a_chained_command_is_never_covered() -> None:
         'python -c "print(123)"\r\nrm -rf ./important',
     ):
         assert not grant.allows(Capability.SHELL, chained), chained
+
+
+def test_the_exact_command_the_human_approved_is_covered() -> None:
+    """A chain inside the approved text is not a widening.
+
+    Measured run: the model asked for `python run.py; Get-Content out.txt`,
+    the panel showed exactly that string, the operator approved — and the
+    grant refused it because `;` looks like a chain, so the call came back
+    "denied · shell requires approval" with the approval on the record.  Once
+    a human has seen the whole text, the chain guard has nothing left to
+    protect; it exists to stop *prefix* grants from reaching a second program.
+    """
+
+    command = "python e2e_scratch/count_sales.py; Get-Content out.txt"
+    grant = _shell_grants(command)
+
+    assert grant.allows(Capability.SHELL, command)
+    assert grant.allows(Capability.SHELL, "  " + command + "  ")
+
+
+def test_approving_a_chain_does_not_release_another_chain() -> None:
+    grant = _shell_grants("python run.py; Get-Content out.txt")
+
+    assert not grant.allows(
+        Capability.SHELL, "python run.py; Get-Content out.txt; rm -rf /"
+    )
+    assert not grant.allows(Capability.SHELL, "python run.py")
+
+
+def test_a_wildcard_still_never_covers_a_chain() -> None:
+    grant = ScopedGrant(capability=Capability.SHELL, target="*")
+
+    assert not grant.allows(Capability.SHELL, "echo hi; rm -rf /")
 
 
 # ── SCOPED: the /permissions "default" mode ─────────────────────────

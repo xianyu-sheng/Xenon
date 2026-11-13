@@ -119,6 +119,35 @@ def test_parse_action_supports_capability_protocol() -> None:
     assert isinstance(expanded, CallTool)
     assert expanded.intent.prefer == "tool_result_read"
 
+
+def test_a_cached_result_id_routes_to_the_result_reader() -> None:
+    """A measured run wrote the tool name into the path slot.
+
+    ``{"capability":"read","params":{"file_path":"tool_result_read",
+    "result_id":"tr-…"}}`` bound to ``read_file``, which looked for a file
+    called "tool_result_read" and failed — the model never saw the output it
+    asked to page.  The presence of ``result_id`` is enough to tell which tool
+    the call is for, whatever the other slots say.
+    """
+
+    action = parse_action(
+        '{"action":"call_tool","capability":"read",'
+        '"params":{"file_path":"tool_result_read","result_id":"tr-1",'
+        '"mode":"raw"}}'
+    )
+
+    assert isinstance(action, CallTool)
+    assert action.intent.prefer == "tool_result_read"
+    assert action.intent.params == {"result_id": "tr-1", "mode": "raw"}
+    # A plain read keeps working.
+    plain = parse_action(
+        '{"action":"call_tool","capability":"read",'
+        '"params":{"file_path":"a.py"}}'
+    )
+    assert isinstance(plain, CallTool)
+    assert plain.intent.prefer is None
+    assert plain.intent.params == {"file_path": "a.py"}
+
     assert isinstance(parse_action('{"action":"think","text":"hmm"}'), Think)
     assert isinstance(
         parse_action('{"action":"ask_user","question":"which branch?"}'),
@@ -161,6 +190,74 @@ def test_parse_action_supports_capability_protocol() -> None:
 def test_parse_action_fails_closed(payload: str, message: str) -> None:
     with pytest.raises(ActionParseError, match=message):
         parse_action(payload)
+
+
+@pytest.mark.parametrize(
+    ("params", "expected_command", "expected_extra"),
+    [
+        ({"git_command": "status"}, "status", ""),
+        ({"subcommand": "status"}, "status", ""),
+        ({"action": "status"}, "status", ""),
+        # The exact reply a measured run sent and had rejected as unparseable.
+        ({"command": "git status --porcelain=v1 -b"}, "status", "--porcelain=v1 -b"),
+        ({"git_command": "log", "action": "--oneline -3"}, "log", "--oneline -3"),
+        ({"subcommand": "diff", "args": ["--stat"]}, "diff", "--stat"),
+    ],
+)
+def test_parse_action_accepts_read_only_vcs_in_every_model_shape(
+    params: dict[str, object], expected_command: str, expected_extra: str
+) -> None:
+    """A git read must bind no matter which key the model chose.
+
+    The protocol advertises ``vcs``, the catalog ships a ``git`` spec, and the
+    policy allows read-only queries.  Only this parser refused them, so every
+    read looked like "invalid step proposal" until the step budget ran out.
+    """
+
+    action = parse_action(
+        {
+            "action": "call_tool",
+            "capability": "vcs",
+            "params": params,
+        }
+    )
+
+    assert isinstance(action, CallTool)
+    assert action.intent.capability.value == "vcs"
+    assert action.intent.params["git_command"] == expected_command
+    assert action.intent.params.get("action", "") == expected_extra
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"git_command": "commit", "action": "-m x"},
+        {"command": "git add ."},
+        {"action": "push origin main"},
+        {"command": "git status && rm -rf build"},
+        {"git_command": "status | rm -rf build"},
+    ],
+)
+def test_parse_action_rejects_vcs_writes_and_chains(params: dict[str, str]) -> None:
+    with pytest.raises(ActionParseError, match="vcs capability"):
+        parse_action(
+            {"action": "call_tool", "capability": "vcs", "params": params}
+        )
+
+
+def test_parse_action_keeps_vcs_targets_and_repo_path() -> None:
+    action = parse_action(
+        {
+            "action": "call_tool",
+            "capability": "vcs",
+            "params": {"git_command": "status", "repo_path": "sub"},
+            "targets": ["sub"],
+        }
+    )
+
+    assert isinstance(action, CallTool)
+    assert action.intent.params["repo_path"] == "sub"
+    assert action.intent.targets == ("sub",)
 
 
 def test_build_messages_ships_a_fixed_prefix_and_one_turn() -> None:
@@ -1091,6 +1188,32 @@ def test_truncated_step_reply_does_not_abort_the_step():
     assert "output limit" in action.text
 
 
+def test_an_unparseable_step_reply_says_why() -> None:
+    """The parser's reason is the only feedback the model gets.
+
+    A measured run showed the bare note "step 3: invalid step proposal" and
+    the model repeated the same shape until the budget ran out.  Without the
+    reason, the note is indistinguishable from "you cannot do this".
+    """
+
+    def bad(*args, **kwargs):
+        return '{"action":"call_tool","capability":"nope"}'
+
+    actor = LLMStepActor(ModelConfig(model_id="test/fake"), client=bad)
+    step = StepContract(
+        id="s1",
+        kind=StepKind.INSPECT,
+        intent="look",
+        targets=("a.py",),
+    )
+
+    action = actor(_reflect_view(), step, 1)
+
+    assert type(action).__name__ == "Think"
+    assert "invalid step proposal" in action.text
+    assert "unknown capability" in action.text
+
+
 # ── PlanFirst finisher: the answer must survive a malformed claim (#363) ──
 
 
@@ -1520,6 +1643,67 @@ def test_a_state_step_is_demoted_to_a_step_the_actor_acts_on() -> None:
     assert len(proposal.steps) == 1
     assert proposal.steps[0].intent is None
     assert proposal.steps[0].kind.value == "inspect"
+
+
+def test_a_prose_plan_reply_gets_one_repair_turn() -> None:
+    """The planner runs once; a prose reply must not end the task.
+
+    Measured task ("write tests for slugify.py"): the planner answered in
+    prose, the plan was rejected as "model response is not JSON", and the
+    turn finished with zero tools and "no evidence".  A single repair turn —
+    carrying the parser's reason — is what turns a dead end into a retry.
+    """
+
+    from xenon.harness.llm import LLMPlanProposer
+
+    client = FakeClient(
+        [
+            "Sure! First I will read the file, then write tests.",
+            json.dumps(
+                {
+                    "plan": {
+                        "objective": "write tests",
+                        "steps": [
+                            {
+                                "id": 1,
+                                "kind": "edit",
+                                "capability": "edit",
+                                "params": {
+                                    "files": [
+                                        {
+                                            "path": "tests/test_x.py",
+                                            "content": "def test_x():\n    pass\n",
+                                        }
+                                    ]
+                                },
+                            }
+                        ],
+                    }
+                }
+            ),
+        ]
+    )
+    proposer = LLMPlanProposer(ModelConfig(model_id="m/test"), client=client)
+
+    proposal = proposer(_reflect_view())
+
+    assert len(proposal.steps) == 1
+    assert len(client.calls) == 2
+    repair = client.calls[1][1]
+    assert "could not be parsed" in repair[-1]["content"]
+    assert "not JSON" in repair[-1]["content"]
+
+
+def test_a_second_bad_plan_reply_still_fails_closed() -> None:
+    from xenon.harness.llm import LLMPlanProposer
+
+    client = FakeClient(["nope", "still nope"])
+    proposer = LLMPlanProposer(ModelConfig(model_id="m/test"), client=client)
+
+    proposal = proposer(_reflect_view())
+
+    assert proposal.steps == ()
+    assert "invalid plan proposal" in proposal.analysis
 
 
 def test_the_step_prompt_carries_the_same_tail_context() -> None:
