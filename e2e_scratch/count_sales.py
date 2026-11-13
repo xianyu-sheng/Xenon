@@ -1,8 +1,6 @@
-"""Count non-empty data rows in sales.csv and record the result.
+"""Count non-empty data rows in e2e_scratch/sales.csv and write the result.
 
-Writes ``count=<n>`` to sales_count.txt, excluding the header row and
-blank lines.  Uses the csv module so quoted fields containing commas
-are handled correctly.
+Result file format: count=<number>
 """
 
 from __future__ import annotations
@@ -10,21 +8,26 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parent
-SALES = BASE / "sales.csv"
-OUT = BASE / "sales_count.txt"
+HERE = Path(__file__).resolve().parent
+CSV_PATH = HERE / "sales.csv"
+OUT_PATH = HERE / "sales_count.txt"
 
 
 def count_rows(path: Path) -> int:
-    """Return the number of non-empty data rows (header excluded)."""
-    with path.open(newline="", encoding="utf-8-sig") as fh:
-        rows = [row for row in csv.reader(fh) if any(cell.strip() for cell in row)]
-    return max(len(rows) - 1, 0)
+    """Return the number of non-empty data rows, excluding the header."""
+    with path.open("r", encoding="utf-8-sig", newline="") as fh:
+        rows = [row for row in csv.reader(fh)]
+
+    # Drop the header row.
+    data_rows = rows[1:]
+
+    # A row counts only if at least one cell has non-whitespace content.
+    return sum(1 for row in data_rows if any(cell.strip() for cell in row))
 
 
 def main() -> None:
-    count = count_rows(SALES)
-    OUT.write_text(f"count={count}", encoding="utf-8")
+    count = count_rows(CSV_PATH)
+    OUT_PATH.write_text(f"count={count}\n", encoding="utf-8")
     print(f"count={count}")
 
 
