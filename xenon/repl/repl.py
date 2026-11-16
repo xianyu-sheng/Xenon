@@ -177,36 +177,12 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             lambda model_id: self.status_bar.set_last_model(model_id)
         )
 
-        # v0.6.0: 智能路由器 (Intelligent Router)
-        from xenon.repl.intelligent_router import IntelligentRouter
-        from xenon.repl.routing_history import DecisionHistory, ParadigmPreferences
-
-        _auto_route_cfg = get_config().auto_route
-        _decision_history = DecisionHistory(
-            persist_path=(
-                str(Path.home() / ".xenon" / "auto_route_decisions.jsonl")
-                if _auto_route_cfg.log_decisions
-                else None
-            )
-        )
-        self.intelligent_router = IntelligentRouter(
-            enabled=False,  # 默认关闭，通过 CLI 参数或命令启用
-            confidence_threshold=_auto_route_cfg.confidence_threshold,
-            notify_user=_auto_route_cfg.notify_user,
-            switch_only_on_improvement=_auto_route_cfg.switch_only_on_improvement,
-            decision_history=_decision_history,
-            preferences=ParadigmPreferences(
-                persist_path=str(Path.home() / ".xenon" / "routing_preferences.json")
-            ),
-        )
-
         # 会话状态，供命令处理器共享
         self._session_state: dict[str, Any] = {
             "agent_context": self.agent_context,
             "_repl": self,
             "model_pool": self.model_pool,
             "auto_router": self.auto_router,
-            "intelligent_router": self.intelligent_router,
             "terminal_activity": self._terminal_activity,
         }
 
@@ -441,30 +417,16 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             console.print(f"\n[warning]⚠ 恢复会话 '{target}' 失败：{exc}[/warning]")
 
     def _handle_shift_tab(self) -> None:
-        """Shift+Tab 按下：循环切换到下一个可用模式。"""
-        mode_names = list(self.registry.modes.keys())
-        current = self.registry.current_mode
+        """Shift+Tab: explain the single loop instead of cycling modes."""
+        mode = self.registry.get_current_mode()
+        console.print(
+            f"\n[dim]┌─ 当前循环: [bold]{mode.name}[/bold] — {mode.description}"
+            "（计划/执行/校验是同一循环内的固定阶段，无需切换）[/dim]"
+        )
         try:
-            idx = mode_names.index(current)
-        except ValueError:
-            idx = 0
-        next_idx = (idx + 1) % len(mode_names)
-        next_mode_name = mode_names[next_idx]
-        try:
-            mode = self.registry.set_mode(next_mode_name)
             self.status_bar.set_mode_notification(mode.name)
-            console.print(
-                f"\n[dim]┌─ Shift+Tab 切换模式 → [bold]{mode.name}[/bold]"
-                f" — {mode.description}[/dim]"
-            )
-        except ValueError as exc:
-            # 静默失败会让用户以为 Shift+Tab 这个键坏了。切换失败必须给反馈，
-            # 并指向可用的替代路径。
-            logger.warning("Shift+Tab 切换模式到 %r 失败: %s", next_mode_name, exc)
-            console.print(
-                f"\n[warning]⚠ 无法切换到模式 {next_mode_name}：{exc}[/warning]\n"
-                "[dim]│  用 [bold]/mode[/bold] 查看并手动选择可用模式[/dim]"
-            )
+        except Exception:  # noqa: BLE001 — a status-bar miss is not fatal
+            pass
 
     @staticmethod
     def _render_assistant_text(
@@ -615,8 +577,7 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
 
             # Non-model extensions are intentionally loaded after the welcome
             # card; they are local and do not affect its model status.
-            self._load_custom_commands()
-            self._preload_mcp_server_configs()
+            self.bootstrap_extensions()
 
             # v0.4.0 Step 14: 检查可恢复的会话
             self._check_auto_resume()
@@ -1111,9 +1072,10 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
 
         # ── LLM 分类：仅对未知 / 开头的输入 ──
         try:
+            from xenon.repl.command_groups.common import ordered_model_candidates
             from xenon.utils.llm_client import chat_completion
 
-            model_ids = self.registry.get_role_priority("planner")
+            model_ids = ordered_model_candidates(self.registry, self, "planner")
             effective = [
                 m for m in model_ids if m not in getattr(self, "_failed_models", set())
             ]
@@ -1172,9 +1134,14 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
             return True
 
         if output:
+            # Command text carries literal brackets too (lesson / fact ids,
+            # markdown links).  Rich reads any ``[word]`` as a tag and drops
+            # what it cannot resolve, so escape only its own syntax first.
+            from xenon.repl.rich_markup import escape_literal_tags
+
             console.print(
                 Panel(
-                    output,
+                    escape_literal_tags(output),
                     title=f"[bold]{cmd_name}[/bold]",
                     border_style="dim",
                     padding=(0, 1),
@@ -1408,6 +1375,19 @@ class REPL(KernelHostMixin, DirectChatMixin, TurnFlowMixin, ApprovalUxMixin, Ses
         except Exception:
             return False
 
+
+    def bootstrap_extensions(self) -> None:
+        """Load the non-model extensions every entry point must have.
+
+        The interactive loop and the protocol host share one REPL class but
+        used to boot differently: only ``run()`` loaded dynamic commands and
+        registered persisted MCP servers.  Through the front-end ``/mcp list``
+        was therefore empty after a restart and a saved MCP tool never reached
+        the kernel.  This is the one bootstrap seam both entries call.
+        """
+
+        self._load_custom_commands()
+        self._preload_mcp_server_configs()
 
     def _preload_mcp_server_configs(self) -> None:
         """v0.5.4: 启动时仅登记 MCP 服务器配置，不连接（惰性）。
@@ -1972,7 +1952,6 @@ def start_repl(
     optimize: bool = True,
     verbose: bool = False,
     resume: str | None = None,
-    auto_route: bool = False,
 ) -> None:
     """
     启动 REPL 的便捷入口。
@@ -1986,7 +1965,6 @@ def start_repl(
         verbose: 是否保留启动探测等详细诊断日志。
         resume: 非空时在进入主循环前恢复该会话（序号或名称），
             实现上直接派发一次 /resume，复用 REPL 内既有的恢复逻辑。
-        auto_route: 是否启用智能路由（v0.6.0）。
     """
     registry = ModelRegistry()
 
@@ -2038,19 +2016,6 @@ def start_repl(
     # v0.5.3: 用户显式指定的模型优先于 auto-router 的选择
     if models:
         repl._preferred_model_ids = list(models)
-
-    # v0.6.0: 智能路由启用逻辑
-    # 优先级: CLI 参数 > 环境变量 > 配置文件 > 默认关闭
-    should_enable_auto_route = auto_route  # CLI 参数优先
-
-    if not should_enable_auto_route:
-        # 环境变量 XENON_AUTO_ROUTE 与 config.yaml 的 auto_route.enabled
-        # 已并入 get_config()（优先级: 环境变量 > 配置文件）
-        should_enable_auto_route = get_config().auto_route.enabled
-
-    if should_enable_auto_route:
-        repl.intelligent_router.enable()
-        console.print("[dim]智能路由已启用[/dim]")
 
     # The legacy session log is still the live store behind /resume, /evidence
     # and /rewind, so importing it here would copy data that is still being

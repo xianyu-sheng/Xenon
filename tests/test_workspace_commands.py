@@ -43,3 +43,36 @@ def test_workspace_commands_keep_no_repl_fallbacks():
     assert "用法" in _cmd_edit(args="", registry=ModelRegistry())
     assert "需要交互会话" in _cmd_permissions(args="", session_state={})
     assert "REPL 未初始化" in _cmd_vision(args="", session_state={})
+
+
+def test_edit_records_the_change_for_review(monkeypatch, tmp_path):
+    """A successful LLM edit must land in session working memory.
+
+    ``/review`` is the reader; before this, the only writer was a test helper,
+    so the command answered "本会话没有记录到文件改动" right after an edit.
+    """
+
+    from xenon.repl.code_editor import CodeEditor
+    from xenon.repl.context_manager import ContextManager
+    from xenon.repl.model_registry import ModelRegistry
+
+    registry = ModelRegistry()
+    registry.add_model("vendor/live", "live")
+    ctx = ContextManager()
+    target = tmp_path / "a.py"
+    target.write_text("print(1)\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        CodeEditor, "edit_with_llm", staticmethod(lambda *a, **k: "✅ 已修改 a.py")
+    )
+
+    result = _cmd_edit(
+        args=f"{target} 改成打印 2",
+        registry=registry,
+        ctx_mgr=ctx,
+    )
+
+    assert result == "✅ 已修改 a.py"
+    assert ctx.get_working_memory()["session_modified_files"] == [
+        str(target.resolve())
+    ]

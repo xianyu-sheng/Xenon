@@ -17,11 +17,10 @@ import pytest
 from rich.console import Console
 
 import xenon.repl.setup_wizard as sw
-from xenon.modes import MODE_CATALOG
 from xenon.repl import provider_registry, system_config
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.provider_registry import list_providers
-from xenon.repl.setup_wizard import _mode_scene, _model_hint
+from xenon.repl.setup_wizard import _model_hint
 from xenon.utils.credentials_io import load_document
 
 # --------------------------- _model_hint ---------------------------
@@ -54,52 +53,7 @@ def test_model_hint_unknown_returns_empty(model_name):
     assert _model_hint(model_name) == ""
 
 
-# --------------------------- _mode_scene ---------------------------
-
-
-@pytest.mark.parametrize(
-    ("mode_name", "expected"),
-    [
-        ("plan-execute", "复杂任务、多步骤编程"),  # complex tasks, multi-step programming
-        ("react", "探索性任务、试错调试"),  # exploratory tasks, trial-and-error debugging
-        ("reflection", "高质量输出、代码审查"),  # high-quality output, code review
-        ("plan-react", "全局规划+灵活执行"),  # global planning + flexible execution
-        ("plan-reflection", "规划执行+质量保证"),  # plan-and-execute + quality assurance
-        ("react-reflection", "探索执行+审查修正"),  # exploratory execution + review and correction
-    ],
-    ids=["plan-execute", "react", "reflection", "plan-react", "plan-reflection", "react-reflection"],
-)
-def test_mode_scene_builtin_modes(mode_name, expected):
-    """The six built-in modes use the wizard's own short "recommended for" text."""
-    assert _mode_scene(mode_name) == expected
-
-
-def test_mode_scene_short_text_wins_over_catalog():
-    """For a built-in mode, the wizard's short text is used, not the catalog text."""
-    catalog_description = MODE_CATALOG["react"].description
-    short_text = "探索性任务、试错调试"  # exploratory tasks, trial-and-error debugging
-    # Precondition: the two texts really differ, otherwise this test proves nothing.
-    assert catalog_description != short_text
-
-    assert _mode_scene("react") == short_text
-
-
-def test_mode_scene_direct_falls_back_to_catalog():
-    """The "direct" mode is not in the wizard's table, so the catalog text is shown."""
-    expected = MODE_CATALOG["direct"].description
-    assert expected  # the fallback must produce real text, not a blank row
-
-    assert _mode_scene("direct") == expected
-
-
-def test_mode_scene_unknown_mode_is_blank():
-    """An unknown mode has no description; the catalog is the only source (#202)."""
-    assert _mode_scene("test-wizard-fake") == ""
-
-
-def test_mode_scene_unknown_mode_returns_empty():
-    """A mode that is neither built in nor registered gets a blank text."""
-    assert _mode_scene("no-such-mode") == ""
+# --------------------------- single loop (no mode picker) ---------------------------
 
 
 # --------------------------- wizard_env: isolation for flow tests ---------------------------
@@ -245,60 +199,17 @@ def test_show_configured_shows_model_fetch_error(wizard_env, monkeypatch):
 # --------------------------- _select_mode ---------------------------
 
 
-def _mode_number(registry, mode_name):
-    """The menu number the wizard shows for a mode (menus count from 1)."""
-    return str(list(registry.modes).index(mode_name) + 1)
-
-
-def test_select_mode_switches_to_chosen_mode(wizard_env):
-    """Typing a mode's number makes it the registry's current mode."""
+def test_select_mode_reports_the_single_loop_without_asking(wizard_env):
+    """Setup explains the one loop; it neither asks nor switches."""
     registry = ModelRegistry()
-    wizard_env.inputs.append(_mode_number(registry, "reflection"))
+    before = registry.current_mode
 
     sw._select_mode(registry)
 
-    assert registry.current_mode == "reflection"
-    assert wizard_env.inputs == []
-
-
-def test_select_mode_marks_only_the_current_mode(wizard_env):
-    """Exactly one row carries the "current" marker, and it is the registry's current mode."""
-    registry = ModelRegistry()
-    registry.set_mode(list(registry.modes)[-1])  # not the default, so the marker must follow state
-    current = registry.current_mode
-    wizard_env.inputs.append(_mode_number(registry, current))  # keep the same mode
-
-    sw._select_mode(registry)
-
-    # 当前 = "current"
-    marked_rows = [line for line in wizard_env.out.getvalue().splitlines() if "当前" in line]
-    assert len(marked_rows) == 1
-    assert current in [cell.strip() for cell in marked_rows[0].split("│")]
-
-
-def test_select_mode_shows_recommended_scene_for_each_mode(wizard_env):
-    """The "recommended for" column shows _mode_scene's text for every mode."""
-    registry = ModelRegistry()
-    wizard_env.inputs.append(_mode_number(registry, registry.current_mode))
-
-    sw._select_mode(registry)
-
-    # Table rows split on "│" into ['', '#', name, description, recommended-for, status, ''];
-    # the header row uses "┃" instead, so it is skipped.
-    rows = [[cell.strip() for cell in line.split("│")] for line in wizard_env.out.getvalue().splitlines()]
-    scene_by_mode = {cells[2]: cells[4] for cells in rows if len(cells) == 7}
-    wrong = [name for name in registry.modes if scene_by_mode.get(name) != _mode_scene(name)]
-    assert wrong == []
-
-
-def test_select_mode_reasks_after_out_of_range_number(wizard_env):
-    """Out-of-range numbers are rejected and asked again; the valid answer still wins."""
-    registry = ModelRegistry()
-    wizard_env.inputs.extend(["0", "99", _mode_number(registry, "reflection")])
-
-    sw._select_mode(registry)
-
-    assert registry.current_mode == "reflection"
+    out = wizard_env.out.getvalue()
+    assert "当前循环" in out
+    assert "无需切换" in out
+    assert registry.current_mode == before
     assert wizard_env.inputs == []
 
 
@@ -462,15 +373,16 @@ def test_setup_api_key_reasks_invalid_number_then_cancels(cancel_path, monkeypat
 # --------------------------- interactive_setup: real end-to-end smoke test ---------------------------
 
 
-def test_menu_end_to_end_switches_mode(wizard_env):
-    """With no fakes for the helpers, menu 4 then a mode number really switches the mode."""
+def test_menu_end_to_end_reports_the_single_loop(wizard_env):
+    """Menu 4 explains the one loop; no number is asked and nothing switches."""
     registry = ModelRegistry()
-    target = next(name for name in registry.modes if name != registry.current_mode)
-    wizard_env.inputs.extend(["4", _mode_number(registry, target), "0"])
+    before = registry.current_mode
+    wizard_env.inputs.extend(["4", "0"])
 
     sw.interactive_setup(registry)
 
-    assert registry.current_mode == target
+    assert registry.current_mode == before
+    assert "无需切换" in wizard_env.out.getvalue()
     assert wizard_env.inputs == []
 
 

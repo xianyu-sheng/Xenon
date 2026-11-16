@@ -16,8 +16,8 @@ PASTE_COMPACT_THRESHOLD = 1000
 class _ShiftTabSignal(Exception):
     """Raised by terminal input handlers when Shift+Tab is pressed.
 
-    The REPL catches this to cycle reasoning paradigms without
-    disturbing the current input buffer.
+    The REPL catches this to explain the current loop (there is nothing to
+    cycle) without disturbing the current input buffer.
     """
 
     pass

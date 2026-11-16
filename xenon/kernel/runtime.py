@@ -12,6 +12,7 @@ import logging
 import time
 import uuid
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from xenon.kernel.audit import AuditCoordinator
@@ -23,6 +24,7 @@ from xenon.kernel.contracts import (
     AuditProposal,
     BindingStatus,
     CallTool,
+    Capability,
     Claim,
     ControlDecision,
     ControlDecisionKind,
@@ -60,6 +62,8 @@ from xenon.kernel.contracts import (
     Verdict,
     VerdictStatus,
     VerificationStage,
+    has_written_payload,
+    written_paths,
 )
 from xenon.kernel.controller import index_facts
 from xenon.kernel.finalize import FinalizeDecision, FinalizeGuard
@@ -183,6 +187,128 @@ def _plan_text(plan: Any) -> str:
     return chr(10).join(lines) or "计划已提交，等待确认。"
 
 
+def _demote_ungrounded_writes(plan: Any, workspace: str) -> Any:
+    """Strip write payloads a plan-only phase could not have authored.
+
+    A plan-only turn executes nothing, so its planner has read nothing; any
+    content it supplies for a file that already exists is a guess.  Measured
+    C10 approval run: the edit step carried
+    ``"<minimal fix of the buggy function body ...>"`` as the *content* of the
+    real source file, and approval replayed it over the file.
+
+    The step itself is still planned work, so it is kept with its targets and
+    expectations while its write payload is demoted — the same shape
+    ``_demote_terminal_steps`` produces for a state read, and the reason a
+    follow-plan profile now has a step actor to fall back to.  A path that
+    does not exist keeps its content: authoring a new file is exactly what a
+    plan without observations can still do.
+
+    This runs *before* the plan is recorded, because the plan the user
+    approves — and the digest over it — has to be the plan that executes.
+    """
+
+    steps: list[Any] = []
+    changed = False
+    base = Path(workspace or ".")
+    for step in tuple(getattr(plan, "steps", ()) or ()):
+        intent = getattr(step, "intent", None)
+        if (
+            intent is None
+            or getattr(intent, "capability", None) is not Capability.EDIT
+            or not has_written_payload(intent)
+        ):
+            steps.append(step)
+            continue
+        targets = [
+            (Path(raw) if Path(raw).is_absolute() else base / raw)
+            for raw in written_paths(intent)
+        ]
+        if not any(target.exists() for target in targets):
+            steps.append(step)
+            continue
+        params = {
+            key: value
+            for key, value in dict(intent.params).items()
+            if key not in ("files", "edits")
+        }
+        steps.append(replace(step, intent=replace(intent, params=params)))
+        changed = True
+    if not changed:
+        return plan
+    return replace(plan, steps=tuple(steps))
+
+
+#: Expectations any step can satisfy: the host's worktree probe settles these
+#: from the ledger state, whatever route produced (or failed to produce) a
+#: change.  ``no_stray_changes`` is the same state predicate.
+_PROVABLE_BY_ANY_ROUTE = frozenset(
+    {
+        PropositionKind.FILE_CHANGED,
+        PropositionKind.FILE_CREATED,
+        PropositionKind.NO_STRAY_CHANGES,
+    }
+)
+
+#: The receipt kinds only one capability can produce.  ``test_passed`` needs a
+#: ``TestRun`` fact (the verify route); shell receipts are opaque by
+#: construction, so a shell step can never bind it.  Commit/push facts come
+#: from the vcs route (the finalizer owns delivery; a plan should not name
+#: them, but if it does, this is the only capability that could prove it).
+_PROVABLE_BY_CAPABILITY = {
+    Capability.VERIFY: frozenset({PropositionKind.TEST_PASSED}),
+    Capability.VCS: frozenset(
+        {PropositionKind.COMMIT_CREATED, PropositionKind.PUSHED}
+    ),
+}
+
+
+def _drop_unprovable_expects(
+    steps: Sequence[StepContract],
+) -> tuple[tuple[StepContract, ...], tuple[str, ...]]:
+    """Remove expectations no receipt from that step's own route can prove.
+
+    Measured run (read-only count of ``.txt`` files): the planner bound a
+    ``shell`` step — a directory listing — to ``test_passed``.  Shell receipts
+    are opaque by construction, so V1 could never bind that obligation: the
+    reconciliation said "no passing test fact for target", the repair loop
+    re-proposed the refused command, the refusal cap blocked the turn, and the
+    answer was empty.  The step's capability is known when the plan is
+    accepted, so the impossible expectation is dropped there — and reported —
+    instead of being chased until the turn dies.
+
+    This is a *contract* rule, not keyword routing: proposition kind tells us
+    which receipt effect proves it, and the step's capability tells us which
+    effects its route can produce.  Expectations are only dropped when the
+    action is known; a step without an intent (``think``) is left alone.
+    """
+
+    out: list[StepContract] = []
+    dropped: list[str] = []
+    for step in steps:
+        expects = tuple(getattr(step, "expects", ()) or ())
+        intent = getattr(step, "intent", None)
+        capability = getattr(intent, "capability", None)
+        if not expects or intent is None or capability is None:
+            out.append(step)
+            continue
+        allowed = _PROVABLE_BY_ANY_ROUTE | _PROVABLE_BY_CAPABILITY.get(
+            capability, frozenset()
+        )
+        keep = tuple(item for item in expects if item.kind in allowed)
+        if len(keep) == len(expects):
+            out.append(step)
+            continue
+        route = str(getattr(capability, "value", capability))
+        for item in expects:
+            if item.kind not in allowed:
+                dropped.append(
+                    f"step {step.id}: {item.kind.value} cannot be proven by a "
+                    f"{route} step"
+                )
+        out.append(replace(step, expects=keep))
+    return tuple(out), tuple(dropped)
+
+
 class LoopRuntime:
     """One loop, one writer, explicit phase machine."""
 
@@ -223,6 +349,7 @@ class LoopRuntime:
         # Earlier tasks of this session, read once per task (doc §3.2).  The
         # view is rebuilt every step; sibling ledgers do not move under us.
         self._session_history_cache: tuple[str, ...] | None = None
+        self._session_tasks_cache: tuple[Any, ...] | None = None
         self._probed_signature = ""
         self._audit_rounds = 0
         #: Why the current round exited; the outer loop classifies on it.
@@ -897,6 +1024,12 @@ class LoopRuntime:
 
     def _accept_plan(self, plan: Any) -> TaskResult | None:
         plan_only = self._plan_only()
+        if plan_only:
+            # The plan is about to become the contract the user approves.
+            # Make sure it only claims content this phase could know.
+            plan = _demote_ungrounded_writes(
+                plan, self._spec.workspace if self._spec is not None else ""
+            )
         if plan_only and not tuple(getattr(plan, "steps", ())):
             reason = str(getattr(plan, "analysis", "") or "")[:300]
             self._append(
@@ -992,6 +1125,31 @@ class LoopRuntime:
         self, plan: Any, *, updated: bool, start_active: bool = True
     ) -> None:
         raw_steps = tuple(getattr(plan, "steps", ()))
+        # A step can only prove what its own route can produce.  Dropping an
+        # impossible expectation here — before the plan is recorded — keeps
+        # the approved graph and the executed graph identical, and keeps the
+        # repair loop from chasing a fact that will never exist.
+        raw_steps, dropped = _drop_unprovable_expects(raw_steps)
+        if dropped:
+            self._append(
+                EventKind.CONTROL_DECISION,
+                EventSource.GATE,
+                {
+                    "decision": "drop_unprovable_expects",
+                    "dropped": list(dropped),
+                },
+            )
+            self._loop_notes.append(
+                "Plan expectations dropped because no receipt from that step "
+                "can prove them: "
+                + "; ".join(dropped[:4])
+                + ". Do not re-add them; prove the behaviour with a `verify` "
+                "step instead."
+            )
+            del self._loop_notes[:-5]
+            # ``self._plan`` is what later rounds and the panels read back; it
+            # must be the graph that actually runs.
+            plan = replace(plan, steps=raw_steps)
         self._validate_steps(raw_steps)
         self._plan_since_seq = self._ledger.watermark()
         steps = tuple(self._baseline_step(step) for step in raw_steps)
@@ -1672,18 +1830,12 @@ class LoopRuntime:
                 EventSource.GATE,
                 _verdict_payload(verdict),
             )
-        self._sync_debt(preflight_audit.verdicts)
         # #420: a task-level gap is the discrepancy the self-evolution layer
-        # exists for — record it as a lesson candidate, never as a block.
-        for verdict in preflight_audit.verdicts:
-            if verdict.status is VerdictStatus.VIOLATED:
-                self._propose_lesson(
-                    "claim_fact_mismatch",
-                    {
-                        "obligation_id": verdict.obligation_id,
-                        "reason": verdict.reason or "no matching fact",
-                    },
-                )
+        # exists for.  ``_sync_debt`` opens a DEBT_OPENED event for every
+        # unsatisfied verdict, and that is the lesson source (the proposer has
+        # no ``claim_fact_mismatch`` branch — the old call here was silently
+        # dropped, so #420's "lesson candidate" never existed).
+        self._sync_debt(preflight_audit.verdicts)
 
         finalizer_outcome = None
         if self._finalizer is not None and self._preflight_delivery(claims):
@@ -2636,6 +2788,11 @@ class LoopRuntime:
                 EventSource.GATE,
                 {
                     "kind": decision.kind.value,
+                    "capability": (
+                        action.intent.capability.value
+                        if isinstance(action, CallTool)
+                        else type(action).__name__
+                    ),
                     "reason": decision.reason,
                     "scope": list(decision.scope),
                     "ttl_seconds": decision.ttl_seconds,
@@ -2696,6 +2853,25 @@ class LoopRuntime:
                     EventSource.USER,
                 )
                 return _POLICY_REFUSED if blocked is None else blocked
+            # Self-evolution: an automatic veto is a harness-judged failure of
+            # one capability, not of the whole task.  Proposing here is what
+            # gives the lesson a subject (``shell``, ``vcs``…), so a later task
+            # can ask whether the lesson concerns it at all.  Without this,
+            # policy vetoes were the one failure kind that never became a
+            # lesson.
+            self._propose_lesson(
+                "policy_decision",
+                {
+                    "kind": PolicyDecisionKind.VETO.value,
+                    "capability": (
+                        action.intent.capability.value
+                        if isinstance(action, CallTool)
+                        else type(action).__name__
+                    ),
+                    "reason": decision.reason,
+                    "scope": list(decision.scope),
+                },
+            )
             self._revoke_grants()
             blocked = self._refuse_and_continue(
                 action,
@@ -2706,7 +2882,12 @@ class LoopRuntime:
         return None
 
     def _refuse_and_continue(
-        self, action: Action, reason: str, source: EventSource
+        self,
+        action: Action,
+        reason: str,
+        source: EventSource,
+        *,
+        advice: str = "",
     ) -> TaskResult | None:
         """Record a refused action and let the loop try a different one.
 
@@ -2723,10 +2904,21 @@ class LoopRuntime:
         self._note_refusal(reason, capability)
         key = f"{capability}:{reason.split(':')[0][:60]}"
         count = self._refusals.get(key, 0)
+        # A kernel veto is a decision with a form of appeal.  Saying only
+        # "choose something else" is how a real run hit ``read-only mode``
+        # twice, answered from the truncated layout, and never raised the
+        # approval the user expected ("这里没有弹出授权").  A human refusal is
+        # different: they already said no, so re-asking is not advice.
+        appeal = advice or (
+            " If the task genuinely needs exactly this call, ask for it with "
+            "`request_escalation` (same capability and params): the user "
+            "decides, and a granted call runs once."
+            if source is EventSource.GATE
+            else " The user said no; do not ask for this same call again."
+        )
         self._loop_notes.append(
             f"{capability}: refused by policy ({reason}). This action did not "
-            "run. Do not repeat it; choose a different capability/target or "
-            "ask the user."
+            f"run. Do not repeat it;{appeal}"
         )
         del self._loop_notes[:-5]
         self._append(
@@ -2802,13 +2994,46 @@ class LoopRuntime:
                 hard = "policy could not evaluate the escalation"
             if hard:
                 return _refuse(hard)
+        # The tool boundary is not the permission policy.  An approval that
+        # the tool then refuses is a yes that buys nothing: a measured run
+        # approved ``python -c ...`` here, the receipt came back
+        # "blocked by the host security filter", and the model re-asked twice
+        # until the refusal cap blocked the whole turn.  Ask the tool itself
+        # first; if it will always refuse, say so now and name a runnable
+        # alternative (the refusal text already does), so the model routes
+        # around the wall instead of paying for an approval to meet it.
+        call = CallTool(action.intent)
+        preflight = getattr(self._gateway, "preflight", None)
+        if callable(preflight):
+            try:
+                refusal = str(preflight(call) or "")
+            except Exception:  # noqa: BLE001 — a broken preflight fails open
+                refusal = ""
+            if refusal:
+                # Not a terminal block: the refusal names a runnable
+                # alternative, so the loop should route around the wall.
+                # Asking the human here would grant nothing and — as measured
+                # — the model re-asked the same refused command until the cap
+                # killed the turn.
+                blocked = self._refuse_and_continue(
+                    action,
+                    f"tool boundary refuses this call: {refusal}",
+                    EventSource.GATE,
+                    advice=(
+                        " Do not ask for this call again — an approval cannot "
+                        "make the tool run it. Use the alternative the "
+                        "refusal names."
+                    ),
+                )
+                # ``None`` means "the loop may try another action"; this
+                # handler's caller returns whatever is not ``None``.
+                return blocked
+
         if self._approval is None:
             return _refuse(
                 "escalation needs an approver: no interactive terminal; "
                 "re-run with --permission bypass or from a TTY"
             )
-
-        call = CallTool(action.intent)
         decision = PolicyDecision(
             kind=PolicyDecisionKind.REQUIRE_APPROVAL,
             reason=f"escalation requested: {action.reason}",
@@ -3012,14 +3237,22 @@ class LoopRuntime:
         event = self._append(EventKind.USER_INPUT, EventSource.USER, payload)
         return int(getattr(event, "seq", 0) or 0)
 
-    def note_usage(self, payload: Mapping[str, Any]) -> None:
+    def note_usage(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        model: str = "",
+        phase: str = "",
+    ) -> None:
         """Fold one provider usage report into the task's spend.
 
         Called by the harness bridge; also callable directly in tests so the
-        accounting path needs no live model.
+        accounting path needs no live model.  ``model`` and ``phase`` are
+        supplied by whoever owns the call: the usage object knows the token
+        counts but not which role spent them.
         """
 
-        normalised = usage_payload(payload)
+        normalised = usage_payload(payload, model=model, phase=phase)
         self._usage.add(normalised)
         # A model answer is progress even when it takes minutes (v4-pro
         # produced a 50k-token plan and was then mistaken for a stalled run).
@@ -3201,27 +3434,39 @@ class LoopRuntime:
             boundary=self._boundary_note(),
             may_compact=self._compact_arm,
             session_history=self._session_history(spec),
+            session_tasks=self._session_tasks(spec),
         )
 
-    def _session_history(self, spec: TaskSpec) -> tuple[str, ...]:
-        """Earlier tasks of this session, newest first (doc §3.2).
+    def _session_tasks(self, spec: TaskSpec) -> tuple[Any, ...]:
+        """Earlier tasks of this session, structured, newest first (doc §3.2).
 
-        Pull, not push: the model is told that history exists and reads it with
-        ``get_state what=session`` only when a request actually refers back.
-        Nothing about earlier tasks rides in the prompt, so the cost of not
-        needing them is zero.
+        The prompt gets a bounded answer excerpt so a follow-up has a referent;
+        the full record stays in the ledger and is read on demand with
+        ``get_state what="task" task_id="<id>"``.  Cached once per runtime --
+        the set is fixed for this task even as the working set grows.
 
-        A workspaced filter keeps one project's history out of another's: the
+        A workspace filter keeps one project's history out of another's: the
         REPL's ledger directory is shared by every project the user opens.
         """
 
-        if self._session_history_cache is None:
-            from xenon.kernel.session_history import recent_task_lines
+        if self._session_tasks_cache is None:
+            from xenon.kernel.session_history import recent_tasks
 
-            self._session_history_cache = recent_task_lines(
+            self._session_tasks_cache = recent_tasks(
                 getattr(self._ledger, "path", None),
                 workspace=str(getattr(spec, "workspace", "") or ""),
                 session_id=str(getattr(spec, "session_id", "") or ""),
+            )
+        return self._session_tasks_cache
+
+    def _session_history(self, spec: TaskSpec) -> tuple[str, ...]:
+        """Earlier tasks of this session, one clipped line each (newest first)."""
+
+        if self._session_history_cache is None:
+            from xenon.kernel.session_history import record_line
+
+            self._session_history_cache = tuple(
+                record_line(record) for record in self._session_tasks(spec)
             )
         return self._session_history_cache
 
@@ -3452,6 +3697,12 @@ class LoopRuntime:
         """
 
         latest = _latest_verdict_map(self._verdicts)
+        # The delivery gate is not evidence.  It settles whether the commit
+        # could be created, not whether the work is true; its satisfied verdict
+        # carries no fact id by design.  Leaving it in the set downgraded every
+        # finalizer-backed delivery to "partial", even when every step was
+        # bound to a real fact (observed end-to-end on a fully green task).
+        latest.pop(_FINALIZER_OBLIGATION, None)
         return tuple(latest.values()) or tuple(checks)
 
     def _evidence_status(self, checks: Sequence[Verdict]) -> EvidenceStatus:
@@ -3802,6 +4053,20 @@ class LoopRuntime:
         # do", which is the failure this whole cache exists to prevent.
         self._obligation_signature = None
 
+    def tool_subjects(self) -> frozenset[str]:
+        """Capability and tool names this task can actually reach.
+
+        The harness uses this to decide whether a lesson concerns a task at
+        all: a lesson about ``shell`` is irrelevant to a catalog that cannot
+        bind shell.  Subjects are code-owned names, never model prose.
+        """
+
+        names: set[str] = set()
+        for spec in self._catalog.specs():
+            names.add(spec.name)
+            names.update(item.value for item in spec.capabilities)
+        return frozenset(names)
+
     def _propose_lesson(self, event_kind: str, payload: dict[str, Any]) -> None:
         """Write a LESSON_PROPOSED event from a harness-judged failure (slice 2).
 
@@ -3834,6 +4099,10 @@ class LoopRuntime:
                 "action_text": proposal.action_text,
                 "counterfactual": proposal.counterfactual,
                 "source_task": proposal.source_task,
+                # The structural family travels with the proposal so the
+                # stored lesson can be matched to a later task without
+                # re-deriving it from an event that no longer exists.
+                "shape": getattr(proposal, "shape", ""),
             },
         )
 

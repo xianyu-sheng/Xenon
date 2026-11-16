@@ -88,3 +88,93 @@ ALL EVIDENCE CHECKS PASSED
 
 上面「切片 4：`/lessons` + PITFALLS.md」的描述已废弃：产物是记忆记录，见
 `docs/design/self-evolution.md`。
+
+## 端到端验证（2026-11-16，确定性总结之后）
+
+`tty_lesson_double_run.py` 重跑（真实 TS 前端 + ConPTY +
+`deepseek/deepseek-v4-flash`），并新增第三段 `/memory lessons` 断言：
+
+```text
+front-end ready
+denying approval #1
+turn 1 finished after 1 denial(s)
+turn 2 finished — ledger: …\repl-bf5d5cbd1c88.jsonl
+/memory lessons rendered: True
+
+  PASS  turn 1 ledger: lesson_proposed
+  PASS  turn 1 ledger: lesson_stored
+  PASS  turn 2 ledger: lesson_applied
+  PASS  every proposed lesson was stored; turn 2 applied them directly or
+        through the rule that summarizes them
+  PASS  if turn 1 summarized a rule, turn 2 carried that rule
+  PASS  project-local memory holds the LESSON record on disk
+  PASS  /memory lessons rendered the learned family
+  PASS  /memory lessons named every stored lesson
+ALL EVIDENCE CHECKS PASSED
+```
+
+账本 `repl-50cd26e287cd`（提出/存储）与 `repl-bf5d5cbd1c88`（应用）：
+
+- `user_approval|shell` 提案 → `lsn-3ffd045bb4383d75` 存储 → 下一轮应用；
+- `debt_opened|requirement_met` 提案 → `lsn-6c351d7d4c44ec49` 存储 → 应用；
+- `/memory lessons` 逐条显示 id、状态、应用/复发计数与 `族:`。
+
+同族聚类（同 shape ≥2 条失败 → 一条 `rule` + `LESSON_CLUSTERED`）由确定性
+runner 用例覆盖：`tests/test_lessons.py::test_a_family_of_failures_summarizes
+_into_a_rule_end_to_end`（两轮真实 `ClaimClient` 运行产生同 shape 债务）。
+真实 UI 探针自然产生的两类失败 shape 不同（`user_approval|shell` 与
+`debt_opened|requirement_met`），不构成同族，因此不会出现规则。
+
+这次验收还发现并修掉一个边界 bug：`/memory lessons` 在 TS 前端里丢掉了
+所有 `[lsn-…]` id——rich 把方括号标识当未知样式标签静默吞掉。修复落在
+`xenon/repl/rich_markup.py`，交互 REPL 与协议 host 共用同一函数。
+
+## 端到端验证（2026-11-16，跨进程埋坑回放）
+
+`tty_lesson_pitfall_replay.py` 验证的不是"事件出现了"，而是"历史真的改变了
+下一次行为"。三个**彼此独立的 xenon 进程**（真实 ConPTY + TS 前端 +
+`deepseek/deepseek-v4-flash`，`--level auto-edit`）：
+
+1. **会话 1（项目 A）**：让模型执行 shell 命令，审批面板选 `[4]` 拒绝
+   （模型随后把命令改走 `verify`，再次被拒）→ 写入教训并落盘；
+2. **杀掉进程**，**会话 2（项目 A，全新进程）**：埋坑任务——"列出项目根目录
+   文件并读 README 第一行"。朴素做法是 `shell`（会再次弹审批）；
+3. **会话 3（项目 B，另一个全新进程）**：同一埋坑任务，作为阴性对照。
+
+```text
+session 1: planting a denied shell call in project A
+        denying approval #1
+session 1 ledger: …\repl-7486403ef783.jsonl (1 denial(s))
+session 2: NEW process, project A, planted trap task
+session 3: NEW process, project B (negative control)
+
+  PASS  session 1 stored a lesson on disk
+  PASS  session 2 (new process) applied the stored lesson
+  PASS  the model actually saw it: TASK_STARTED constraints carry [lesson ...]
+  PASS  the trap was avoided: no approval panel in session 2
+  PASS  session 2 answered from the file it read
+  PASS  negative control: a project without history carries no lesson
+  PASS  negative control still completed the same task
+ALL EVIDENCE CHECKS PASSED
+```
+
+账本与真实载荷：
+
+- `repl-7486403ef783`（会话 1）：3 条 `lesson_proposed` → 3 条
+  `lesson_stored`，id `lsn-3ffd045bb4383d75`（`user_approval|shell`）、
+  `lsn-5edf0e60348b279f`（`user_approval|verify`）、
+  `lsn-6c351d7d4c44ec49`（`debt_opened|requirement_met`）。
+- `repl-38f5d2d51f55`（会话 2）：**没有任何新进程内状态**，从磁盘读到 3 条
+  教训并全部应用；`TASK_STARTED.constraints` 实际是：
+  - `[lesson lsn-3ffd045bb4383d75] shell 调用被用户拒绝（用户拒绝）——下次避免同类调用`
+  - `[lesson lsn-5edf0e60348b279f] verify 调用被用户拒绝（用户拒绝）——下次避免同类调用`
+  - `[lesson lsn-6c351d7d4c44ec49] 声称 requirement_met 前必须存在对应工具回执（no successful tool receipt for this task）；不要凭空声称`
+  本轮 `user_approval` 事件 0 次，屏幕 `需要授权` 0 次；回答里的目录清单来自
+  工作区布局探测 + `read` 工具，而不是 `shell`。
+- `repl-1cc3ce9dbf45`（会话 3，阴性对照）：没有 `lesson_applied`，没有
+  `[lesson …]` 约束；同一任务照常完成（README 首行是 `# fresh project B`）。
+  教训是项目本地的，不跨项目泄漏。
+
+屏幕证据在 `pitfall_transcript.txt`（已压缩：只保留每轮尾部、去掉 Ink 整屏
+重绘，避免动辄十几万行的终端录像淹没 diff）。
+

@@ -81,6 +81,6 @@ def test_turn_flow_has_no_engine_dispatch_or_runtime_escape_hatch() -> None:
 
     assert "ENGINE_REGISTRY" not in source
     assert "_select_turn_mode" not in source
-    assert "_run_react_engine" not in source
+    assert "_run_loop_turn" not in source
     assert "XENON_RUNTIME" not in source
     assert "无法执行工具轮次" in source, "工具轮次必须显式失败而不是换范式"

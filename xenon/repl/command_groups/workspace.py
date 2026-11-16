@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from xenon.repl.command_groups.common import console
+from xenon.repl.command_groups.common import console, ordered_model_candidates
 from xenon.repl.command_registry import command_handler, register_command
 
 if TYPE_CHECKING:
@@ -58,7 +58,14 @@ register_command("/edit", "编辑代码文件（支持 LLM 辅助）", "/edit <f
 
 
 @command_handler("/edit")
-def _cmd_edit(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
+def _cmd_edit(
+    *,
+    args: str,
+    registry: ModelRegistry,
+    repl: Any = None,
+    ctx_mgr: Any = None,
+    **kwargs: Any,
+) -> str:
     from xenon.repl.code_editor import CodeEditor
 
     parts = args.strip().split(maxsplit=1)
@@ -82,11 +89,15 @@ def _cmd_edit(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
         except FileNotFoundError as exc:
             return str(exc)
 
-    model_ids = registry.get_role_priority("planner")
+    model_ids = ordered_model_candidates(registry, repl, "planner")
     if not model_ids:
         return "❌ 未配置模型，无法使用 LLM 辅助编辑。请先 /set_model。"
 
-    return CodeEditor.edit_with_llm(file_path, instruction, model_ids, confirm=True)
+    result = CodeEditor.edit_with_llm(file_path, instruction, model_ids, confirm=True)
+    recorder = getattr(ctx_mgr, "record_file_changes", None)
+    if callable(recorder) and result.startswith("✅ 已修改"):
+        recorder(modified=[str(Path(file_path).resolve())])
+    return result
 
 
 # ── /permissions — v0.5.0 权限模式管理 ─────────────────────

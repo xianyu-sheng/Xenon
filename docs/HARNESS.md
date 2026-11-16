@@ -223,6 +223,26 @@ reject keeps plan mode and writes nothing. Deferred-write `/plan` now uses
 kernel plan-only; the real TTY transcript is in
 `docs/evidence/tty-plan-approval/`.
 
+The user-visible flow, run end to end by
+`docs/evidence/component-matrix/run_matrix.py`:
+
+```text
+❯ /plan on
+✅ 计划模式已开启
+❯ 创建 plan_out.txt，内容为 MATRIX-PLAN-9C1；不要修改其他文件。
+· 计划已接受，执行等待确认；本轮未写盘。
+❯ /plan status
+⏸ 计划待确认：/plan approve 或 /plan reject
+❯ /plan approve
+✅ 计划已批准并执行。
+```
+
+`plan_out.txt` exists only after `/plan approve`; the plan turn itself writes
+nothing and asks no write approval. `planned` (a plan was accepted, nothing
+ran) is distinct from `blocked` (the turn could not proceed). Approval facts
+are session events (`plan/approved`), never kernel-ledger rewrites. See the
+planned-plan lifecycle in #202 and the approval UX in #279.
+
 The runtime also has a same-ledger resume primitive, `resume_planned()`: it
 requires the accepted plan digest and an approval id, appends `plan_approved`,
 moves `PLANNED -> RUNNING`, starts the accepted plan's first ready step, and

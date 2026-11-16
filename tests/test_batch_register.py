@@ -140,6 +140,32 @@ class TestBatchRegister:
         assert not result.registered
         assert r.get_model("gpt4o") is None
 
+    def test_dry_run_reports_what_it_would_do(self, tmp_path, stub_probe):
+        """A valid dry run must not look like an empty/malformed file."""
+
+        f = tmp_path / "m.yaml"
+        f.write_text(
+            "models:\n"
+            "  - alias: new-one\n    model_id: openai/gpt-4o\n    api_key: sk\n"
+            "  - alias: existing\n    model_id: openai/gpt-4o-mini\n    api_key: sk\n"
+        )
+        r = ModelRegistry()
+        p = ModelPool()
+        r.add_model("openai/gpt-4o-mini", "existing", api_key="old")
+        p.register("openai/gpt-4o-mini", alias="existing", api_key="old")
+
+        result = batch_register(f, r, p, dry_run=True)
+
+        assert result.dry_run
+        assert result.would_register == ["new-one"]
+        assert result.would_update == ["existing"]
+        summary = result.summary()
+        assert "dry-run" in summary
+        assert "预计注册 1" in summary and "更新 1" in summary
+        assert "new-one" in summary and "existing" in summary
+        # Still read-only.
+        assert r.get_model("new-one") is None
+
     def test_probe_fail_excluded(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
             "xenon.repl.batch_register.probe_model",

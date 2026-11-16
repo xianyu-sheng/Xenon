@@ -68,13 +68,33 @@ class BatchResult:
     )  # (parent_alias, child_model_id)
     roles: dict[str, list[str]] = field(default_factory=dict)
     profile: str = "balanced"
+    # ``--dry-run`` registers nothing, so ``registered``/``updated`` stay empty
+    # and the summary claimed "已注册 0 / 更新 0" even for a valid file — the
+    # same line a malformed file produced.  A dry run now reports what it would
+    # have done instead.
+    dry_run: bool = False
+    would_register: list[str] = field(default_factory=list)
+    would_update: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return not self.failed and not self.probed_fail
 
     def summary(self) -> str:
-        lines = [f"✅ 已注册 {len(self.registered)} / 更新 {len(self.updated)} 个模型"]
+        if self.dry_run:
+            # No square brackets: command output is rendered as rich markup,
+            # so "[dry-run]" was swallowed as a style tag and the line read
+            # "🧪  预计注册 …".
+            lines = [
+                f"🧪 dry-run：预计注册 {len(self.would_register)} / "
+                f"更新 {len(self.would_update)} 个模型（未写入磁盘）"
+            ]
+            if self.would_register:
+                lines.append(f"     新增: {', '.join(self.would_register)}")
+            if self.would_update:
+                lines.append(f"     更新: {', '.join(self.would_update)}")
+        else:
+            lines = [f"✅ 已注册 {len(self.registered)} / 更新 {len(self.updated)} 个模型"]
         if self.discovered:
             lines.append(f"🔍 discover 展开子模型 {len(self.discovered)} 个")
         if self.probed_ok:
@@ -385,6 +405,12 @@ def batch_register(
             result.failed.append(("__validate__", e))
 
     if dry_run:
+        result.dry_run = True
+        for s in specs:
+            if registry.get_model(s.alias) is not None or pool.get(s.alias) is not None:
+                result.would_update.append(s.alias)
+            else:
+                result.would_register.append(s.alias)
         return result
 
     # probe

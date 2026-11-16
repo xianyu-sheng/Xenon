@@ -329,7 +329,24 @@ class TaskSpec:
     # project rules, retrieved memories, and similar.  It is **reference**,
     # never instruction and never evidence, and it is part of the view hash so
     # identical inputs produce an identical prompt.
+    #
+    # ``context_blocks`` is the *volatile* tier: retrieved memories keyed to
+    # this request, and any other block whose text changes between turns.  It
+    # sits in the turn message (after the objective), never in the system
+    # prompt, because the provider serialises system -> tools -> messages and a
+    # single changed byte here would re-bill the whole tool block.
     context_blocks: tuple[tuple[str, str], ...] = ()
+    # The *stable* tier: project rules, the skill index, and anything else that
+    # is byte-identical for every turn of a session until the files behind it
+    # change.  It belongs in the system prompt so it is cached once per model,
+    # not once per turn.
+    stable_context: tuple[tuple[str, str], ...] = ()
+    # MCP tools whose full schema the *session* has already shown (they ran in
+    # an earlier task).  The view keeps such a tool expanded instead of
+    # resetting it to an index row at every task boundary: a schema that flips
+    # back and forth rewrites the tool block, and the provider caches an exact
+    # prefix.  Empty for a headless task; the REPL supplies its session set.
+    expanded_tools: tuple[str, ...] = ()
     # Which task delegated this one (empty for a top-level task).  Recorded in
     # TASK_STARTED so the call tree is derivable from ledgers alone — a child
     # used to be traceable only through the naming convention in its task_id.
@@ -371,17 +388,21 @@ class TaskSpec:
         if not all(isinstance(item, str) for item in self.turn_path):
             raise ValueError("turn_path items must be strings")
         total = 0
-        for label, text in self.context_blocks:
-            if not str(label).strip():
-                raise ValueError("context block label must not be empty")
-            if not isinstance(text, str):
-                raise ValueError("context block text must be a string")
-            total += len(text)
-            if len(text) > _MAX_CONTEXT_BLOCK_CHARS:
-                raise ValueError(
-                    f"context block {label!r} exceeds "
-                    f"{_MAX_CONTEXT_BLOCK_CHARS} chars"
-                )
+        for tier, blocks in (
+            ("context block", self.context_blocks),
+            ("stable context block", self.stable_context),
+        ):
+            for label, text in blocks:
+                if not str(label).strip():
+                    raise ValueError(f"{tier} label must not be empty")
+                if not isinstance(text, str):
+                    raise ValueError(f"{tier} text must be a string")
+                total += len(text)
+                if len(text) > _MAX_CONTEXT_BLOCK_CHARS:
+                    raise ValueError(
+                        f"{tier} {label!r} exceeds "
+                        f"{_MAX_CONTEXT_BLOCK_CHARS} chars"
+                    )
         if total > _MAX_CONTEXT_TOTAL_CHARS:
             raise ValueError(
                 f"session context exceeds {_MAX_CONTEXT_TOTAL_CHARS} chars"
@@ -429,6 +450,37 @@ class ToolIntent:
     params: Mapping[str, Any] = field(default_factory=dict)
     targets: tuple[str, ...] = ()
     prefer: str | None = None
+
+
+#: The two payload shapes an edit intent can carry (see ``apply_patch``).
+_WRITE_PAYLOAD_KEYS = ("files", "edits")
+
+
+def written_paths(intent: ToolIntent) -> tuple[str, ...]:
+    """Paths an edit intent overwrites, in either payload shape.
+
+    ``files`` entries rewrite whole files; ``edits`` entries patch existing
+    ones.  Both are *writes*, and both name their path differently — the two
+    call sites that care (whether a plan could have authored the payload, and
+    whether execution can follow it as bound) must agree on that list.
+    """
+
+    params = intent.params if isinstance(intent.params, Mapping) else {}
+    paths: list[str] = []
+    for item in params.get("files") or ():
+        if isinstance(item, Mapping) and item.get("path"):
+            paths.append(str(item["path"]))
+    for item in params.get("edits") or ():
+        if isinstance(item, Mapping) and item.get("file_path"):
+            paths.append(str(item["file_path"]))
+    return tuple(paths)
+
+
+def has_written_payload(intent: ToolIntent) -> bool:
+    """Whether the intent carries content to write, not just a description."""
+
+    params = intent.params if isinstance(intent.params, Mapping) else {}
+    return any(bool(params.get(key)) for key in _WRITE_PAYLOAD_KEYS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -877,6 +929,25 @@ class ControlDecision:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionTaskRecord:
+    """One earlier turn of this session, projected from its own ledger.
+
+    A kernel task cannot see the chat transcript: the request is the fixed
+    prefix plus this turn's event, and earlier turns are records, not messages.
+    This is the bridge: the runtime reads the previous ledgers and the view
+    carries a bounded projection (objective, delivery status, answer excerpt,
+    ledger path) so a follow-up like "对上面的第一点" has a referent, and the
+    model knows where the full evidence lives.
+    """
+
+    task_id: str = ""
+    objective: str = ""
+    status: str = ""
+    answer: str = ""
+    ledger: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class ModelView:
     task: TaskSpec
     system: str
@@ -886,6 +957,13 @@ class ModelView:
     budget: Budget
     input_seq: int
     hash: str
+    #: Task-scoped briefing (objective, constraints, volatile context, layout,
+    #: execution boundary).  It rides at the start of the turn message, not in
+    #: ``system``: the provider serialises system -> tools -> messages, so task
+    #: text in the system would re-bill the tool block on the first call of
+    #: every new turn.  Stable for the whole task, so every call in the task
+    #: reuses it from cache after the first.
+    task_brief: str = ""
     # #372 D1: sha256 of system + tools only — the stable cache prefix.  Two
     # views with the same prefix share the provider's prompt-cache prefix; a
     # prefix-field edit changes this digest (and therefore the whole hash).
@@ -927,6 +1005,12 @@ class ModelView:
     # Deliberately *not* part of the view hash: it is context from outside this
     # task's record, so the same ledger must still hash the same on replay.
     session_history: tuple[str, ...] = ()
+    # The same earlier turns, structured: task id, objective, status, answer
+    # excerpt and ledger path.  The prompt renders a bounded projection of this
+    # (see ``build_model_view``), and ``get_state what="task"`` renders the
+    # fuller record on demand.  Like ``session_history`` it is context from
+    # outside this task's ledger, so it never enters the view hash.
+    session_tasks: tuple[SessionTaskRecord, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
 

@@ -28,6 +28,17 @@ __all__ = ["advice_for_failure"]
 #: cases before the generic ones.
 _RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (
+        # A boundary refusal is not a failure to work around: the capability is
+        # there and a human can widen the turn for one call.  Without this line
+        # a real run hit "read-only mode" twice, never asked, and delivered an
+        # unverified guess — the user saw "这里没有弹出授权".
+        re.compile(r"read[- ]only mode|只读模式|boundary refuses", re.I),
+        "The turn's boundary refused this call, not the tool.  If the task "
+        "really needs it, ask for exactly this call with `request_escalation` "
+        "(same capability and params) — the user may approve it for one call.  "
+        "Do not answer from guesswork instead.",
+    ),
+    (
         re.compile(r"需要\s*\w+|is required|missing required|required argument", re.I),
         "The call is missing a required parameter.  Read the tool's `params` in "
         "this view and pass exactly those names; if the task is already done, "

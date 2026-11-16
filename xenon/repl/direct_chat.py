@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from xenon.kernel.cancel import ModelCancelled
 from xenon.repl.execution_policy import ExecutionLevel, ExecutionPolicy
 from xenon.repl.turn_helpers import _looks_like_external_query
 
@@ -45,27 +46,60 @@ class DirectChatOutcome:
     """What the direct path produced.
 
     ``delegated`` means it handed the turn to the tool path: the caller must
-    not record a second, conversational ledger for the same turn.
+    not record a second, conversational ledger for the same turn.  ``run`` is
+    the kernel run that did the work, and ``answer`` is that run's answer --
+    a caller that cannot see the REPL console (the protocol host) still has
+    something true to show instead of inventing a refusal.
     """
 
     answer: str = ""
     model_id: str = ""
     delegated: bool = False
     error: str = ""
+    run: Any = None
+    #: The operator stopped this turn.  Not an error: the caller reports an
+    #: aborted turn, and no partial answer is recorded as if it were complete.
+    cancelled: bool = False
+
+
+def _delegated_outcome(run: Any) -> DirectChatOutcome:
+    """A delegated outcome carrying the kernel run it handed the turn to."""
+
+    result = getattr(run, "result", None)
+    answer = str(getattr(result, "answer", "") or "")
+    return DirectChatOutcome(delegated=True, answer=answer, run=run)
 
 
 class DirectChatMixin:
-    def _escalate_for_react(
+    def _turn_cancel_requested(self) -> bool:
+        """True when the owning front-end asked to stop the running turn.
+
+        The interactive REPL gets Ctrl+C as ``KeyboardInterrupt`` on the main
+        thread.  A protocol host runs turns on a worker thread, where the
+        signal cannot land, so it installs ``_turn_cancel_probe`` and this path
+        checks it between streamed chunks.  Absent a probe this is always
+        False — embedded callers keep the old behaviour.
+        """
+
+        probe = getattr(self, "_turn_cancel_probe", None)
+        if not callable(probe):
+            return False
+        try:
+            return bool(probe())
+        except Exception:  # noqa: BLE001 — a broken probe must not kill a turn
+            return False
+
+    def _escalate_to_loop(
         self, level: ExecutionLevel, reason: str
     ) -> None:
-        """Raise the turn boundary before delegating a claimed action to ReAct.
+        """Raise the turn boundary before delegating a claimed action to the loop.
 
-        Direct mode starts as ANSWER_ONLY for many chat-shaped requests.  If the
-        answer claims a file operation, running ReAct under the old boundary
-        makes ``requires_tools`` false, so the engine happily accepts a
-        no-tool answer (observed: the literal ``["stdio"]``).  Escalation is
-        still bounded: ReAct's own permission gate and the user's explicit
-        no-tools lock continue to decide what can execute.
+        Direct chat starts as ANSWER_ONLY for many chat-shaped requests.  If the
+        answer claims a file operation, running the loop under the old boundary
+        makes ``requires_tools`` false, so it happily accepts a no-tool answer
+        (observed: the literal ``["stdio"]``).  Escalation is still bounded: the
+        loop's permission gate and the user's explicit no-tools lock continue to
+        decide what can execute.
         """
         try:
             current = int(self.agent_context.get("_execution_level", 0) or 0)
@@ -103,15 +137,21 @@ class DirectChatMixin:
     ) -> DirectChatOutcome:
         """直接对话模式。检测到工具需求时委派给 kernel 循环。
 
-        路由决策优先级（通用设计，不枚举具体领域）：
-        1. 用户明确要求只回答/不写入/不执行 → direct
-        2. 明确的读取、文件变更或命令任务 → ReAct
-        3. 已识别的 query 意图 → ReAct；write_code 默认仅回答
-        4. MCP 工具可用 + 输入具有"外部信息查询"特征 → ReAct
+        分流优先级（通用设计，不枚举具体领域）：
+        1. 用户明确要求只回答/不写入/不执行 → 直接回答
+        2. 明确的读取、文件变更或命令任务 → 内核循环
+        3. 已识别的 query 意图 → 内核循环；write_code 默认仅回答
+        4. MCP 工具可用 + 输入具有"外部信息查询"特征 → 内核循环
            （通用语言结构判断，不枚举天气/高铁/酒店等具体领域）
-        5. 其他 → direct 模式（纯对话/解释/闲聊）
+        5. 其他 → 直接回答（纯对话/解释/闲聊）
+
+        "直接回答"本身也是循环内的一次策略：只有明确锁定只回答时才跳过
+        工具阶段，不会切换成另一个执行器。
         """
         model_ids = self._canonical_model_ids(model_ids)
+        if self._turn_cancel_requested():
+            # Cancelled before the first call: spend nothing on it.
+            return DirectChatOutcome(cancelled=True)
         policy = execution_policy
         if policy is None:
             # 契约唯一化：入口惰性构建一次（缺失时正则回退），不再逐层重算。
@@ -131,20 +171,19 @@ class DirectChatMixin:
         if policy.requires_tools:
             if intent == "query":
                 console.print(
-                    "[dim cyan]🔧 检测到信息查询（需实时数据），自动切换到 ReAct 模式...[/dim cyan]"
+                    "[dim cyan]🔧 检测到信息查询（需实时数据），交给循环执行...[/dim cyan]"
                 )
             elif intent == "research":
                 console.print(
-                    "[dim cyan]🔎 检测到资料调研（仅使用只读工具），自动切换到 ReAct 模式...[/dim cyan]"
+                    "[dim cyan]🔎 检测到资料调研（仅使用只读工具），交给循环执行...[/dim cyan]"
                 )
             else:
                 console.print(
-                    "[dim cyan]🔧 检测到需要工具执行，自动切换到 ReAct 模式...[/dim cyan]"
+                    "[dim cyan]🔧 检测到需要工具执行，交给循环执行...[/dim cyan]"
                 )
-            self._run_react_engine(user_input, model_ids)
-            return DirectChatOutcome(delegated=True)
+            return _delegated_outcome(self._run_loop_turn(user_input, model_ids))
 
-        # v0.5.3: MCP 工具可用时，通用判断——任何具有"信息查询"特征的输入都走 ReAct，
+        # v0.5.3: MCP 工具可用时，通用判断——任何具有"信息查询"特征的输入都交给循环，
         # 让 LLM 自行决定是否调用 mcp_call。不枚举具体查询领域（天气/高铁/酒店等）。
         if (
             self._has_mcp_tools()
@@ -161,10 +200,9 @@ class DirectChatMixin:
                 }
             )
             console.print(
-                "[dim cyan]🔧 检测到可用 MCP 工具，自动切换到 ReAct 模式...[/dim cyan]"
+                "[dim cyan]🔧 检测到可用 MCP 工具，交给循环执行...[/dim cyan]"
             )
-            self._run_react_engine(user_input, model_ids)
-            return DirectChatOutcome(delegated=True)
+            return _delegated_outcome(self._run_loop_turn(user_input, model_ids))
 
         # Direct calls also produce httpx/provider logs. Capture them while the
         # spinner is active so they cannot overwrite the Live render; Ctrl+O
@@ -191,6 +229,8 @@ class DirectChatMixin:
 
         last_error = None
         for model_id in effective_ids:
+            if self._turn_cancel_requested():
+                return DirectChatOutcome(cancelled=True)
             started_at = time.monotonic()
             pool_entry = self.model_pool._find_entry(model_id)
             is_retry_probe = bool(
@@ -216,7 +256,7 @@ class DirectChatMixin:
                 if response_text:
                     # ── 响应后验证 1：检测 LLM 直接输出工具调用协议 ──
                     # v0.6.1: direct 模式不传工具定义，但 LLM 训练数据中常含
-                    # {"tool": "list_files", ...} 格式。检测到后自动切 ReAct。
+                    # {"tool": "list_files", ...} 格式。检测到后自动交给循环执行。
                     if self._detect_tool_call_json(response_text):
                         if policy.locks_answer_only:
                             raise RuntimeError(
@@ -225,20 +265,21 @@ class DirectChatMixin:
                         console.print()
                         console.print(
                             "[dim cyan]🔧 检测到 LLM 尝试调用工具但 direct 模式不可用，"
-                            "自动切换到 ReAct 模式执行...[/dim cyan]"
+                            "交给循环执行...[/dim cyan]"
                         )
+                        run = None
                         try:
-                            self._escalate_for_react(
+                            self._escalate_to_loop(
                                 ExecutionLevel.READ_ONLY,
                                 "模型返回了未执行的工具协议，升级为只读重试",
                             )
-                            self._run_react_engine(user_input, model_ids)
+                            run = self._run_loop_turn(user_input, model_ids)
                         except Exception as e:
-                            console.print(f"[error]❌ ReAct 重试失败: {e}[/error]")
+                            console.print(f"[error]❌ 循环执行失败: {e}[/error]")
                             self._record_engine_error(
-                                f"[错误] ReAct 重试失败: {e}", model_ids[0]
+                                f"[错误] 循环执行失败: {e}", model_ids[0]
                             )
-                        return DirectChatOutcome(delegated=True)
+                        return _delegated_outcome(run)
 
                     # ── 响应后验证 2：检测 LLM 是否声称执行了文件操作 ──
                     if self._detect_file_claim(response_text):
@@ -252,43 +293,45 @@ class DirectChatMixin:
                                 )
                             console.print()
                             console.print(
-                                "[dim cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，自动切换到 ReAct 模式重新执行...[/dim cyan]"
+                                "[dim cyan]🔧 检测到 LLM 声称执行了操作但未使用工具，交给循环重新执行...[/dim cyan]"
                             )
                             # P2-修复6 (观察项-1)：防御性 catch ——
-                            # _run_react_engine 内部已加占位（修复5），但万一占位也失败
+                            # _run_loop_turn 内部已加占位（修复5），但万一占位也失败
                             # （如 ctx_mgr 内部异常），这里再兜底一次防 user-only 序列。
+                            run = None
                             try:
-                                self._escalate_for_react(
+                                self._escalate_to_loop(
                                     ExecutionLevel.WRITE,
                                     "模型声称执行了文件操作，升级为可写重试",
                                 )
-                                self._run_react_engine(user_input, model_ids)
+                                run = self._run_loop_turn(user_input, model_ids)
                             except Exception as e:
-                                console.print(f"[error]❌ ReAct 重试失败: {e}[/error]")
+                                console.print(f"[error]❌ 循环执行失败: {e}[/error]")
                                 self._record_engine_error(
-                                    f"[错误] ReAct 重试失败: {e}", model_ids[0]
+                                    f"[错误] 循环执行失败: {e}", model_ids[0]
                                 )
-                            return
+                            return _delegated_outcome(run)
 
                     # ── 响应后验证 2：检测 LLM 是否回复了拒绝性内容 ──
                     if self._detect_denial(response_text):
                         if policy.level is ExecutionLevel.ANSWER_ONLY:
                             raise RuntimeError("模型拒绝了无需工具即可完成的请求")
                         console.print()
-                        console.print("[dim]· LLM 无法完成任务 → ReAct 模式重试[/dim]")
+                        console.print("[dim]· LLM 无法完成任务 → 交给循环重试[/dim]")
                         # P2-修复6 (观察项-1)：与 file_claim 同根问题，同样防御性 catch
+                        run = None
                         try:
-                            self._escalate_for_react(
+                            self._escalate_to_loop(
                                 ExecutionLevel.READ_ONLY,
                                 "模型拒绝后改用工具重试，升级为只读",
                             )
-                            self._run_react_engine(user_input, model_ids)
+                            run = self._run_loop_turn(user_input, model_ids)
                         except Exception as e:
-                            console.print(f"[error]❌ ReAct 重试失败: {e}[/error]")
+                            console.print(f"[error]❌ 循环执行失败: {e}[/error]")
                             self._record_engine_error(
-                                f"[错误] ReAct 重试失败: {e}", model_ids[0]
+                                f"[错误] 循环执行失败: {e}", model_ids[0]
                             )
-                        return DirectChatOutcome(delegated=True)
+                        return _delegated_outcome(run)
 
                 if (
                     intent == "write_code"
@@ -347,10 +390,17 @@ class DirectChatMixin:
                 )
 
                 # 验证完成后再持久化和渲染，避免把 DSML/JSON 伪工具调用
-                # 短暂显示给用户后才切 ReAct。
+                # 短暂显示给用户后才交给循环执行。
                 self.ctx_mgr.add_assistant_message(response_text, model_used=model_id)
                 self._render_assistant_text(response_text, model_id=model_id)
                 return DirectChatOutcome(answer=response_text, model_id=model_id)
+            except ModelCancelled:
+                # The operator stopped the turn.  Falling into the generic
+                # handler would mark a healthy model as failed and silently
+                # retry the next one -- the opposite of what Ctrl+C asked for.
+                # Nothing partial is recorded: the answer was never delivered.
+                console.print("[dim]· 已中断本轮对话（Ctrl+C）[/dim]")
+                return DirectChatOutcome(cancelled=True, model_id=model_id)
             except Exception as e:
                 last_error = e
                 from xenon.repl.transient_errors import is_transient_error
@@ -444,6 +494,11 @@ class DirectChatMixin:
         # 流式阶段不再绘 spinner：rich Live 会重绘整行，既干扰协议前端，
         # 也让内置编辑器的光标状态难以恢复。进度由等待提示统一负责。
         for chunk in chat_completion_stream(model_id, messages, **request_options):
+            # Checked between chunks: breaking here closes the generator, which
+            # releases the provider stream instead of paying for the rest of a
+            # reply the user already stopped.
+            if self._turn_cancel_requested():
+                raise ModelCancelled("direct chat cancelled by the operator")
             full_response.append(chunk)
 
         response_text = "".join(full_response)
@@ -482,7 +537,17 @@ class DirectChatMixin:
             logger.warning(
                 "模型 %s 未找到运行时配置，生成预算将使用上游默认值", model_id
             )
-        response = chat_completion(model_id, messages, **request_options)
+        if self._turn_cancel_requested():
+            raise ModelCancelled("direct chat cancelled by the operator")
+        # httpx cannot abort one request from another thread, so the call runs
+        # in a daemon worker while this path polls the cancel flag.  Without
+        # this a protocol host (which runs turns with streaming=False) kept
+        # waiting for a full reply after the user pressed Ctrl+C.
+        from xenon.harness.llm import _call_with_cancel
 
-        return response
+        response = _call_with_cancel(
+            self._turn_cancel_requested,
+            lambda: chat_completion(model_id, messages, **request_options),
+        )
+        return str(response)
 

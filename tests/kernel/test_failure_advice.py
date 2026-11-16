@@ -228,3 +228,15 @@ def test_a_changed_write_is_still_delivered(tmp_path):
 
     assert decision.accepted is True
     assert decision.verified_paths == ("calc.py",)
+
+
+def test_a_boundary_refusal_points_at_request_escalation() -> None:
+    """The kernel veto is a decision, and the model may ask for one call.
+
+    A real run hit "read-only mode" twice, never asked, and delivered an
+    unverified number; the user's report was "这里没有弹出授权".
+    """
+    advice = advice_for_failure({"status": "denied", "error": "read-only mode"})
+
+    assert "request_escalation" in advice
+    assert "not the tool" in advice

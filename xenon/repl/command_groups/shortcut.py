@@ -27,7 +27,12 @@ register_command(
 
 @command_handler("/shortcut")
 def _cmd_shortcut(
-    *, args: str, registry: ModelRegistry, session_state: dict[str, Any], **kwargs: Any
+    *,
+    args: str,
+    registry: ModelRegistry,
+    session_state: dict[str, Any],
+    repl: Any = None,
+    **kwargs: Any,
 ) -> str:
     from xenon.repl.shortcut_manager import ShortcutManager
 
@@ -49,7 +54,7 @@ def _cmd_shortcut(
         return "\n".join(lines)
 
     elif sub == "create":
-        return _shortcut_create_interactive(manager, registry=registry)
+        return _shortcut_create_interactive(manager, registry=registry, repl=repl)
 
     elif sub == "run":
         if not sub_args:
@@ -83,7 +88,7 @@ def _cmd_shortcut(
         return "用法: /shortcut create|list|run|delete [参数]"
 
 
-def _shortcut_create_interactive(manager, registry=None) -> str:
+def _shortcut_create_interactive(manager, registry=None, repl=None) -> str:
     """交互式创建快捷指令。支持智能生成和手动配置。"""
     from rich.prompt import Prompt as _Prompt
 
@@ -102,18 +107,20 @@ def _shortcut_create_interactive(manager, registry=None) -> str:
     mode = _Prompt.ask("选择模式", choices=["1", "2"], default="1")
 
     if mode == "1":
-        return _shortcut_auto_generate(name, description, manager, registry)
+        return _shortcut_auto_generate(name, description, manager, registry, repl)
     else:
         return _shortcut_manual_create(name, description, manager)
 
 
-def _shortcut_auto_generate(name: str, description: str, manager, registry=None) -> str:
+def _shortcut_auto_generate(
+    name: str, description: str, manager, registry=None, repl=None
+) -> str:
     """智能生成快捷指令命令。"""
     from rich.prompt import Prompt as _Prompt
 
     console.print("\n[dim]🤖 正在根据你的描述生成命令...[/dim]\n")
 
-    steps = _generate_shortcut_steps(description, registry)
+    steps = _generate_shortcut_steps(description, registry, repl)
 
     if not steps:
         console.print("[yellow]⚠️  自动生成失败，切换到手动模式。[/yellow]")
@@ -145,15 +152,42 @@ def _shortcut_auto_generate(name: str, description: str, manager, registry=None)
         return _shortcut_manual_create(name, description, manager, pre_steps=steps)
 
     shortcut = manager.create(name, description, steps)
+    _register_shortcut_handler(shortcut, manager)
     return f"✅ 快捷指令 /{shortcut.name} 已创建！使用 /{shortcut.name} 执行。"
 
 
-def _generate_shortcut_steps(description: str, registry=None) -> list[str]:
+def _register_shortcut_handler(shortcut, manager) -> None:
+    """Register ``/<name>`` immediately, exactly as REPL startup does.
+
+    ``_load_custom_commands`` wires saved shortcuts when the process starts;
+    the creation path never did, so the line "使用 /<name> 执行" was a promise
+    the very next keystroke broke ("未知命令").  Skills already register on
+    creation — shortcuts now follow the same contract.
+    """
+
+    from xenon.repl.command_registry import _HANDLERS
+
+    cmd_name = f"/{shortcut.name}"
+    if cmd_name in _HANDLERS:
+        return
+
+    def make_handler(sc_name):
+        def handler(*, args: str, **kwargs: Any) -> str:
+            return manager.execute(sc_name, args)
+
+        return handler
+
+    _HANDLERS[cmd_name] = make_handler(shortcut.name)
+    register_command(cmd_name, f"[快捷] {shortcut.description}", cmd_name)
+
+
+def _generate_shortcut_steps(description: str, registry=None, repl=None) -> list[str]:
     """用 LLM 根据描述生成快捷指令命令。"""
     try:
+        from xenon.repl.command_groups.common import ordered_model_candidates
         from xenon.utils.llm_client import chat_completion
 
-        model_ids = registry.get_role_priority("planner") if registry else []
+        model_ids = ordered_model_candidates(registry, repl, "planner")
         if not model_ids:
             return []
 
@@ -251,4 +285,5 @@ def _shortcut_manual_create(
         return "❌ 至少需要一个步骤"
 
     shortcut = manager.create(name, description, steps)
+    _register_shortcut_handler(shortcut, manager)
     return f"✅ 快捷指令 /{shortcut.name} 已创建！使用 /{shortcut.name} 执行。"

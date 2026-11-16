@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -879,6 +880,93 @@ def test_plan_only_renders_a_plan_without_analysis() -> None:
     assert result.answer == "7. think"
 
 
+def _edit_step(path: str, content: str) -> StepContract:
+    return StepContract(
+        id=1,
+        kind=StepKind.EDIT,
+        intent=ToolIntent(
+            capability=Capability.EDIT,
+            params={"files": [{"path": path, "content": content}]},
+        ),
+        targets=(path,),
+    )
+
+
+def test_plan_only_demotes_a_write_over_an_existing_file(
+    tmp_path: Path,
+) -> None:
+    """A plan-only turn cannot read, so it cannot author an existing file.
+
+    Measured C10 approval run: the plan carried
+    ``"<minimal fix of the buggy function body ...>"`` as the content of the
+    real ``buggy_calc.py``; approval wrote it over the source.  The step stays
+    (it is still planned work) but its payload does not — execution reads the
+    file and materializes the change.
+    """
+
+    (tmp_path / "calc.py").write_text(
+        "def f():\n    raise ValueError\n", encoding="utf-8"
+    )
+    ledger = Ledger.in_memory("task-1")
+    gateway = CountingGateway()
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=gateway,
+        controller=VerificationController(),
+        ledger=ledger,
+    )
+
+    result = runtime.run(
+        replace(
+            _calc_spec(), mode=TaskMode.PLAN, workspace=str(tmp_path)
+        ),
+        ScriptedStrategy(
+            [
+                SubmitPlan(
+                    PlanProposal(steps=(_edit_step("calc.py", "<minimal fix>"),))
+                )
+            ]
+        ),
+    )
+
+    assert result.phase is TaskPhase.PLANNED
+    assert gateway.calls == 0
+    accepted = ledger.read(EventKind.PLAN_ACCEPTED)[-1]
+    params = accepted.payload["plan"]["steps"][0]["intent"]["params"]
+    assert "files" not in params
+
+
+def test_plan_only_keeps_a_write_that_creates_a_new_file(
+    tmp_path: Path,
+) -> None:
+    ledger = Ledger.in_memory("task-1")
+    runtime = LoopRuntime(
+        catalog=FakeCatalog(),
+        gateway=CountingGateway(),
+        controller=VerificationController(),
+        ledger=ledger,
+    )
+
+    runtime.run(
+        replace(
+            _calc_spec(), mode=TaskMode.PLAN, workspace=str(tmp_path)
+        ),
+        ScriptedStrategy(
+            [
+                SubmitPlan(
+                    PlanProposal(
+                        steps=(_edit_step("new.py", "x = 1\n"),)
+                    )
+                )
+            ]
+        ),
+    )
+
+    accepted = ledger.read(EventKind.PLAN_ACCEPTED)[-1]
+    params = accepted.payload["plan"]["steps"][0]["intent"]["params"]
+    assert params["files"][0]["content"] == "x = 1\n"
+
+
 def _ledger_plan_digest(ledger: Ledger) -> str:
     accepted = ledger.read(EventKind.PLAN_ACCEPTED)[-1]
     return hashlib.sha256(
@@ -1170,6 +1258,79 @@ def test_dag_ready_step_is_selected_before_plan_order() -> None:
         for event in ledger.read(EventKind.STEP_STARTED)
     ]
     assert started == [1, 2]
+
+
+def test_an_expectation_the_step_cannot_prove_is_dropped_at_acceptance() -> None:
+    """A shell/read step can never bind ``test_passed``; do not chase it.
+
+    Measured run: a ``shell`` listing step was bound to ``test_passed``.  V1
+    said "no passing test fact" forever, the repair loop re-proposed a refused
+    command, and the refusal cap blocked the turn.  The impossible obligation
+    is dropped when the plan is accepted — with a note — so the step can close.
+    """
+
+    ledger = Ledger.in_memory("task-1")
+    step = StepContract(
+        id=1,
+        kind=StepKind.INSPECT,
+        intent=ToolIntent(capability=Capability.READ, params={"file_path": "calc/add.py"}),
+        targets=("calc/add.py",),
+        expects=(
+            Obligation(
+                id="e1",
+                kind=PropositionKind.TEST_PASSED,
+                target="tests/test_calc.py",
+                source=ObligationSource.PLAN,
+            ),
+            Obligation(
+                id="e2",
+                kind=PropositionKind.FILE_CHANGED,
+                target="calc/add.py",
+                source=ObligationSource.PLAN,
+            ),
+        ),
+    )
+
+    result = _runtime(ledger).run(
+        _calc_spec(), _follow(PlanProposal(steps=(step,)))
+    )
+
+    dropped = [
+        event.payload
+        for event in ledger.read(EventKind.CONTROL_DECISION)
+        if event.payload.get("decision") == "drop_unprovable_expects"
+    ]
+    assert dropped, "dropping an impossible expectation must be recorded"
+    assert "test_passed" in dropped[0]["dropped"][0]
+    # The provable expectation is untouched and the turn is not blocked.
+    started = ledger.read(EventKind.STEP_STARTED)
+    assert [item["id"] for item in started[0].payload["expects"]] == ["e2"]
+    assert result.phase is not TaskPhase.BLOCKED
+
+
+def test_a_verify_step_keeps_its_test_passed_expectation() -> None:
+    """The rule is structural: verify steps *can* bind a test fact."""
+
+    from xenon.kernel.runtime import _drop_unprovable_expects
+
+    step = StepContract(
+        id=1,
+        kind=StepKind.VERIFY,
+        intent=ToolIntent(capability=Capability.VERIFY),
+        expects=(
+            Obligation(
+                id="e1",
+                kind=PropositionKind.TEST_PASSED,
+                target="tests/test_calc.py",
+                source=ObligationSource.PLAN,
+            ),
+        ),
+    )
+
+    kept, dropped = _drop_unprovable_expects((step,))
+
+    assert dropped == ()
+    assert kept[0].expects == step.expects
 
 
 def test_cyclic_plan_is_rejected() -> None:

@@ -16,6 +16,7 @@ There is no ``lessons.yaml`` any more: a lesson is a ``MemoryKind.LESSON`` recor
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,58 @@ def test_the_fingerprint_distinguishes_failures() -> None:
     b = lesson_fingerprint("debt_opened", {"kind": "test_passed"})
 
     assert a != b
+
+
+def test_the_shape_names_the_structural_subject() -> None:
+    """A family is event + a code-owned subject, never prose."""
+
+    from xenon.kernel.lessons import lesson_shape
+
+    assert (
+        lesson_shape(
+            "policy_decision",
+            {"kind": "veto", "capability": "shell", "reason": "x"},
+        ).key
+        == "policy_decision|shell"
+    )
+    # The gate writes ``scope``; the subject falls back to its first entry so
+    # two denials of one capability become one family.
+    assert (
+        lesson_shape(
+            "policy_decision",
+            {"kind": "veto", "scope": ["vcs", "git commit"], "reason": "x"},
+        ).key
+        == "policy_decision|vcs"
+    )
+    assert (
+        lesson_shape(
+            "debt_opened",
+            {"kind": "requirement_met", "target": "t", "reason": "r"},
+        ).key
+        == "debt_opened|requirement_met"
+    )
+    assert (
+        lesson_shape(
+            "loop_detected", {"signal": "repeat_call", "reason": "r"}
+        ).key
+        == "loop_detected|repeat_call"
+    )
+    assert (
+        lesson_shape(
+            "user_approval",
+            {"approved": False, "tool": "shell", "reason": "r"},
+        ).key
+        == "user_approval|shell"
+    )
+
+
+def test_a_proposal_carries_its_shape() -> None:
+    proposal = propose_lesson(
+        "user_approval", {"approved": False, "tool": "shell", "reason": "no"}
+    )
+
+    assert proposal is not None
+    assert proposal.shape == "user_approval|shell"
 
 
 # ── the lesson ↔ memory projection ───────────────────────────────
@@ -283,12 +336,13 @@ def test_rows_expose_state(tmp_path: Path) -> None:
 
 def test_match_for_task_is_bounded_and_recent_first(tmp_path: Path) -> None:
     store = _store(tmp_path)
+    now = time.time()
     for index in range(5):
         store.add(
             _lesson(
                 id=f"L-{index:04d}",
                 fingerprint=f"fp-{index}",
-                last_applied_at=float(index),
+                last_applied_at=now - 1000 + index,
             )
         )
 
@@ -299,7 +353,13 @@ def test_match_for_task_is_bounded_and_recent_first(tmp_path: Path) -> None:
     assert [lesson.id for lesson in selected] == ["L-0004", "L-0003", "L-0002"]
 
 
-def test_match_for_task_excludes_parameter_lessons(tmp_path: Path) -> None:
+def test_parameter_lessons_ride_as_advice(tmp_path: Path) -> None:
+    """A parameter lesson is carried as text; nothing mutates a budget.
+
+    Excluding it meant a loop-detection lesson was stored and then never
+    shown, which is the "it learned but nothing changed" failure.
+    """
+
     store = _store(tmp_path)
     store.add(_lesson(id="L-1", kind="pitfall", fingerprint="fp-1"))
     store.add(_lesson(id="L-2", kind="parameter", fingerprint="fp-2"))
@@ -307,7 +367,424 @@ def test_match_for_task_excludes_parameter_lessons(tmp_path: Path) -> None:
 
     selected = store.match_for_task()
 
-    assert {lesson.kind for lesson in selected} == {"pitfall", "preference"}
+    assert {lesson.kind for lesson in selected} == {
+        "pitfall",
+        "parameter",
+        "preference",
+    }
+
+
+def test_a_capability_lesson_is_skipped_when_the_catalog_cannot_bind_it(
+    tmp_path: Path,
+) -> None:
+    """Relevance is structural: the subject either exists in the catalog or not."""
+
+    store = _store(tmp_path)
+    store.add(
+        _lesson(
+            id="L-shell",
+            fingerprint="fp-shell",
+            trigger_event="policy_decision",
+            shape="policy_decision|shell",
+        )
+    )
+    store.add(
+        _lesson(
+            id="L-debt",
+            fingerprint="fp-debt",
+            shape="debt_opened|requirement_met",
+        )
+    )
+
+    selected = store.match_for_task(available={"read", "edit"})
+    assert [lesson.id for lesson in selected] == ["L-debt"]
+
+    selected = store.match_for_task(available={"read", "shell"})
+    assert {lesson.id for lesson in selected} == {"L-shell", "L-debt"}
+
+
+def test_an_empty_catalog_fails_open(tmp_path: Path) -> None:
+    """No catalog information must never silently drop a safety lesson."""
+
+    store = _store(tmp_path)
+    store.add(
+        _lesson(
+            id="L-shell",
+            fingerprint="fp-shell",
+            shape="policy_decision|shell",
+        )
+    )
+
+    assert [lesson.id for lesson in store.match_for_task(available=())] == [
+        "L-shell"
+    ]
+
+
+# ── summarize: repeated failures become one rule ─────────────────
+
+
+def _shaped_lesson(index: int, shape: str = "policy_decision|shell") -> Lesson:
+    return _lesson(
+        id=f"L-{index:04d}",
+        fingerprint=f"fp-{index}",
+        trigger_event=shape.split("|", 1)[0],
+        shape=shape,
+    )
+
+
+def test_repeated_failures_of_one_shape_summarize_into_one_rule(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    for index in range(2):
+        store.add(_shaped_lesson(index))
+
+    created = store.summarize()
+
+    assert [rule.kind for rule in created] == ["rule"]
+    rule = created[0]
+    assert rule.shape == "policy_decision|shell"
+    assert rule.state == "hypothesis"
+    assert rule.derived_from == ("L-0000", "L-0001")
+    assert "shell" in rule.action_text
+
+    # The summary replaces the enumeration: one line, not two.
+    selected = store.match_for_task(available={"shell"})
+    assert [lesson.id for lesson in selected] == [rule.id]
+
+    # Re-summarizing the same family changes nothing.
+    assert store.summarize() == []
+
+
+def test_a_retired_rule_is_not_resurrected_by_summarize(tmp_path: Path) -> None:
+    """A rule that failed is evidence for a design change, not for a reword."""
+
+    store = _store(tmp_path)
+    for index in range(2):
+        store.add(_shaped_lesson(index))
+    rule = store.summarize()[0]
+    store.retire(rule.id)
+
+    assert store.summarize() == []
+    assert store.get(rule.id) is not None
+    assert store.get(rule.id).retired is True
+
+
+def test_a_rule_earns_state_by_surviving_applications(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    for index in range(2):
+        store.add(_shaped_lesson(index))
+    rule = store.summarize()[0]
+
+    # Applied once is not enough evidence to promote a hypothesis.
+    assert store.record_confirmation(rule.id) is None
+    store.record_application(rule.id)
+    assert store.record_confirmation(rule.id) is None
+    store.record_application(rule.id)
+    assert store.record_confirmation(rule.id) == "active"
+    for _ in range(3):
+        store.record_application(rule.id)
+    assert store.record_confirmation(rule.id) == "proven"
+    assert store.get(rule.id).state == "proven"
+
+
+def test_a_rule_recurs_when_any_member_shape_fails_again(
+    tmp_path: Path,
+) -> None:
+    from xenon.harness.lessons import (
+        design_debt_payload,
+        record_recurrences,
+    )
+    from xenon.ledger.store import Ledger
+
+    store = _store(tmp_path)
+    for index in range(2):
+        store.add(_shaped_lesson(index))
+    rule = store.summarize()[0]
+    ledger = Ledger(tmp_path / "t.jsonl", "t1")
+    ledger.append(
+        EventKind.LESSON_APPLIED, EventSource.GATE, {"lesson_id": rule.id}
+    )
+    ledger.append(
+        EventKind.POLICY_DECISION,
+        EventSource.GATE,
+        {"kind": "veto", "capability": "shell", "reason": "denied"},
+    )
+
+    assert record_recurrences(ledger, store, retire_after=1) == [rule.id]
+
+    debt = design_debt_payload(store, rule.id)
+    assert debt is not None
+    assert debt["subject"] == "shell"
+    assert debt["reason"] == "lesson_retired_after_recurrence"
+
+
+def test_an_approved_tool_is_not_a_failure_family(tmp_path: Path) -> None:
+    """Only harness-judged *failures* count; a normal approval is not one."""
+
+    from xenon.harness.lessons import failure_shapes
+    from xenon.ledger.store import Ledger
+
+    ledger = Ledger(tmp_path / "t.jsonl", "t1")
+    ledger.append(
+        EventKind.USER_APPROVAL,
+        EventSource.USER,
+        {"approved": True, "tool": "shell", "reason": "ok"},
+    )
+    ledger.append(
+        EventKind.POLICY_DECISION,
+        EventSource.GATE,
+        {"kind": "allow", "capability": "shell", "reason": "session grant"},
+    )
+
+    assert failure_shapes(ledger) == {}
+
+
+def test_summarize_and_confirm_reads_the_ledger(tmp_path: Path) -> None:
+    from xenon.harness.lessons import (
+        summarize_and_confirm,
+    )
+    from xenon.ledger.store import Ledger
+
+    store = _store(tmp_path)
+    for index in range(2):
+        store.add(_shaped_lesson(index))
+
+    # First task: the family is summarized; nothing was applied, so no rule
+    # can be confirmed yet.
+    first = Ledger(tmp_path / "t1.jsonl", "t1")
+    created, advanced = summarize_and_confirm(first, store)
+    assert len(created) == 1
+    assert advanced == []
+
+    # Second task applied the rule and hit no same-shape failure.
+    rule_id = created[0].id
+    store.record_application(rule_id)
+    store.record_application(rule_id)
+    second = Ledger(tmp_path / "t2.jsonl", "t2")
+    second.append(
+        EventKind.LESSON_APPLIED, EventSource.GATE, {"lesson_id": rule_id}
+    )
+    created, advanced = summarize_and_confirm(second, store)
+    assert created == []
+    assert advanced == [(rule_id, "active")]
+
+
+def test_a_failure_before_the_application_is_not_a_recurrence(
+    tmp_path: Path,
+) -> None:
+    """Recurrence means "failed *after* the lesson was carried".
+
+    The ledger holds the failure that taught the lesson (or the plan phase of
+    the same user task).  Counting by membership alone treated those as fresh
+    recurrences and could retire a lesson the moment it was stored.
+    """
+
+    from xenon.harness.lessons import record_recurrences
+    from xenon.ledger.store import Ledger
+
+    store = _store(tmp_path)
+    failure = {
+        "kind": "veto",
+        "capability": "shell",
+        "reason": "denied",
+    }
+    store.add(
+        _lesson(
+            id="L-shell",
+            shape="policy_decision|shell",
+            fingerprint=lesson_fingerprint("policy_decision", failure),
+        )
+    )
+    ledger = Ledger(tmp_path / "t.jsonl", "t1")
+    ledger.append(EventKind.POLICY_DECISION, EventSource.GATE, failure)
+    ledger.append(
+        EventKind.LESSON_APPLIED, EventSource.GATE, {"lesson_id": "L-shell"}
+    )
+    assert record_recurrences(ledger, store, retire_after=1) == []
+
+    ledger.append(EventKind.POLICY_DECISION, EventSource.GATE, failure)
+    assert record_recurrences(ledger, store, retire_after=2) == []
+    assert store.get("L-shell").recurrences == 1
+
+
+def test_a_second_application_phase_does_not_recount_the_plan_failures(
+    tmp_path: Path,
+) -> None:
+    """Plan + approved resume is one task: failures are counted once."""
+
+    from xenon.harness.lessons import record_recurrences
+    from xenon.ledger.store import Ledger
+
+    store = _store(tmp_path)
+    failure = {
+        "kind": "veto",
+        "capability": "shell",
+        "reason": "denied",
+    }
+    store.add(
+        _lesson(
+            id="L-shell",
+            shape="policy_decision|shell",
+            fingerprint=lesson_fingerprint("policy_decision", failure),
+        )
+    )
+    ledger = Ledger(tmp_path / "t.jsonl", "t1")
+    ledger.append(
+        EventKind.LESSON_APPLIED, EventSource.GATE, {"lesson_id": "L-shell"}
+    )
+    ledger.append(EventKind.POLICY_DECISION, EventSource.GATE, failure)
+    ledger.append(
+        EventKind.LESSON_APPLIED, EventSource.GATE, {"lesson_id": "L-shell"}
+    )
+    # Only this failure happened inside the resumed execution.
+    ledger.append(EventKind.POLICY_DECISION, EventSource.GATE, failure)
+
+    assert record_recurrences(ledger, store, retire_after=2) == []
+    assert store.get("L-shell").recurrences == 1
+
+
+def test_a_real_loop_event_is_the_same_failure_as_its_proposal() -> None:
+    """The runtime writes ``kind``; the proposer was called with ``signal``.
+
+    Reading only ``signal`` rebuilt a different fingerprint from the very
+    event that proposed the lesson, so loop lessons could never recur.
+    """
+
+    from xenon.kernel.lessons import lesson_shape
+
+    event_payload = {
+        "kind": "identical_call",
+        "detail": "same call x5",
+        "tool": "read",
+        "reason": "same call x5",
+        "correction_attempt": 1,
+    }
+    proposal = propose_lesson(
+        "loop_detected",
+        {"signal": "identical_call", "reason": "same call x5"},
+    )
+    assert proposal is not None
+    from xenon.kernel.lessons import canonical_failure_payload
+
+    assert (
+        lesson_fingerprint(
+            "loop_detected",
+            canonical_failure_payload("loop_detected", event_payload),
+        )
+        == proposal.fingerprint
+    )
+    assert lesson_shape("loop_detected", event_payload).key == proposal.shape
+
+
+def test_stale_lessons_do_not_ride_into_a_task(tmp_path: Path) -> None:
+    """Guardrail 2's 30-day cutoff applies on the production path too."""
+
+    store = _store(tmp_path)
+    now = time.time()
+    store.add(
+        _lesson(
+            id="L-old",
+            fingerprint="fp-old",
+            last_applied_at=now - (31 * 86400),
+        )
+    )
+    store.add(
+        _lesson(
+            id="L-new",
+            fingerprint="fp-new",
+            last_applied_at=now - 60,
+        )
+    )
+    store.add(_lesson(id="L-never", fingerprint="fp-never"))
+
+    assert {lesson.id for lesson in store.match_for_task()} == {
+        "L-new",
+        "L-never",
+    }
+
+
+def test_lessons_from_other_scopes_do_not_leak_into_a_project(
+    tmp_path: Path,
+) -> None:
+    """Writes are PROJECT_LOCAL; reads must be too."""
+
+    from xenon.memory import MemoryBackendRegistry, MemoryService
+    from xenon.memory.models import MemoryKind, MemoryScope
+
+    # Isolated user root: a test must never write into the operator's real
+    # global memory (this one did, once).
+    service = MemoryService(
+        MemoryBackendRegistry(tmp_path, user_data_root=tmp_path / "user-memory")
+    )
+    store = LessonStore(service)
+    service.remember(
+        "global lesson",
+        scope=MemoryScope.USER,
+        kind=MemoryKind.LESSON,
+        tags=["lesson:pitfall", "fp:global"],
+    )
+
+    assert store.match_for_task() == ()
+
+
+def test_an_archived_lesson_is_not_applied_or_resurrected(
+    tmp_path: Path,
+) -> None:
+    from xenon.memory.models import MemoryScope, MemoryStatus
+
+    store = _store(tmp_path)
+    store.add(_lesson(id="L-1", fingerprint="fp-1"))
+    assert store.record_application("L-1") is True
+    assert store.service.archive("L-1") is True
+
+    assert store.match_for_task() == ()
+    assert store.record_application("L-1") is False
+    record = next(
+        item
+        for item in store.service.list_records(
+            scope=MemoryScope.PROJECT_LOCAL, include_archived=True
+        )
+        if item.id == "L-1"
+    )
+    assert record.status is MemoryStatus.ARCHIVED
+
+
+def test_application_preserves_user_metadata(tmp_path: Path) -> None:
+    from xenon.memory.models import MemoryScope
+
+    store = _store(tmp_path)
+    store.add(_lesson(id="L-1", fingerprint="fp-1"))
+    assert store.service.set_pinned("L-1", True) is True
+    lesson = store.get("L-1")
+    lesson.counterfactual = "回执机制改变后失效"
+    store.add(lesson)
+
+    store.record_application("L-1")
+
+    record = next(
+        item
+        for item in store.service.list_records(
+            scope=MemoryScope.PROJECT_LOCAL, include_archived=True
+        )
+        if item.id == "L-1"
+    )
+    assert record.pinned is True
+    assert store.get("L-1").counterfactual == "回执机制改变后失效"
+
+
+def test_a_retired_rule_does_not_re_expose_its_members(
+    tmp_path: Path,
+) -> None:
+    """The failed summary's guidance must not come back as an enumeration."""
+
+    store = _store(tmp_path)
+    for index in range(2):
+        store.add(_shaped_lesson(index))
+    rule = store.summarize()[0]
+    assert store.retire(rule.id) is True
+
+    assert store.match_for_task() == ()
 
 
 def test_match_for_task_excludes_retired_lessons(tmp_path: Path) -> None:
@@ -340,6 +817,7 @@ def _proposal_payload(event_kind: str, payload: dict[str, Any]) -> dict[str, Any
         "action_text": proposal.action_text,
         "counterfactual": proposal.counterfactual,
         "source_task": proposal.source_task,
+        "shape": getattr(proposal, "shape", ""),
     }
 
 
@@ -587,12 +1065,13 @@ def test_run_task_injects_bounded_lessons_as_constraints(
 
     _repo(tmp_path)
     store = _store(tmp_path)
+    now = time.time()
     for index in range(4):
         store.add(
             _lesson(
                 id=f"L-{index}",
                 fingerprint=f"fp-{index}",
-                last_applied_at=float(index),
+                last_applied_at=now - 1000 + index,
             )
         )
 
@@ -713,6 +1192,109 @@ def test_run_task_stores_proposed_lessons_end_to_end(tmp_path: Path) -> None:
     records = store.service.list_records(include_archived=True)
     lesson_records = [r for r in records if r.kind is MemoryKind.LESSON]
     assert len(lesson_records) == 1
+
+
+def test_a_family_of_failures_summarizes_into_a_rule_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """Two same-shape failures -> one rule -> the next task carries the rule.
+
+    This is the "总结" chain: the runtime proposes, the runner stores, then
+    clusters by structural family, and the constraint section shows one
+    summary instead of the enumeration.
+    """
+
+    from tests.harness.test_exec import _repo
+    from xenon.harness.runner import run_task
+    from xenon.ledger.store import Ledger
+
+    _repo(tmp_path)
+    store = _store(tmp_path)
+
+    class ClaimClient:
+        """Edits once, then claims a command that never ran."""
+
+        def __init__(self, target: str) -> None:
+            self.target = target
+            self.i = 0
+
+        def __call__(self, model_id, messages, **kwargs):
+            self.i += 1
+            if self.i == 1:
+                return json.dumps(
+                    {
+                        "action": "call_tool",
+                        "capability": "edit",
+                        "params": {
+                            "files": [
+                                {
+                                    "path": "calc/add.py",
+                                    "content": "def add(a, b):"
+                                    + chr(10)
+                                    + "    return a + b"
+                                    + chr(10),
+                                }
+                            ]
+                        },
+                    }
+                )
+            return json.dumps(
+                {
+                    "action": "finish",
+                    "answer": "done",
+                    "claims": [
+                        {
+                            "id": "c1",
+                            "kind": "tool_succeeded",
+                            "target": self.target,
+                        }
+                    ],
+                }
+            )
+
+    for task_id, target in (
+        ("family-a", "echo alpha"),
+        ("family-b", "echo beta"),
+    ):
+        run_task(
+            f"edit calc/add.py then claim {target}",
+            strategy=_llm_strategy(ClaimClient(target)),
+            workspace=tmp_path,
+            ledger_dir=tmp_path / "ledger",
+            task_id=task_id,
+            max_steps=4,
+            lesson_store=store,
+        )
+
+    rules = [lesson for lesson in store if lesson.is_rule]
+    assert len(rules) == 1
+    rule = rules[0]
+    assert rule.shape == "debt_opened|requirement_met"
+    assert len(rule.derived_from) == 2
+    assert rule.state == "hypothesis"
+
+    second = Ledger(tmp_path / "ledger" / "family-b.jsonl", "family-b").read()
+    clustered = [event for event in second if event.kind is EventKind.LESSON_CLUSTERED]
+    assert len(clustered) == 1, "the rule is written into the ledger that formed it"
+    assert clustered[0].payload["shape"] == rule.shape
+
+    # The next task carries the summary; the two primitives stay in the store
+    # as evidence but are not enumerated into the prompt.
+    third = run_task(
+        "read README and report",
+        strategy=_llm_strategy(_fake_client()),
+        workspace=tmp_path,
+        ledger_dir=tmp_path / "ledger",
+        task_id="family-c",
+        max_steps=3,
+        lesson_store=store,
+    )
+    applied = [
+        event.payload["lesson_id"]
+        for event in Ledger(third.ledger_path, "family-c").read()
+        if event.kind is EventKind.LESSON_APPLIED
+    ]
+    assert applied == [rule.id]
 
 
 def test_recurrence_retires_and_runner_writes_the_event(
@@ -839,7 +1421,7 @@ def test_a_broken_lesson_store_does_not_fail_the_task(tmp_path: Path) -> None:
 def test_a_broken_recurrence_counter_does_not_fail_the_task(
     tmp_path: Path,
 ) -> None:
-    import xenon.harness.runner as runner_module
+    import xenon.harness.learning as learning_module
     from tests.harness.test_exec import _repo
     from xenon.harness.runner import run_task
 
@@ -849,8 +1431,8 @@ def test_a_broken_recurrence_counter_does_not_fail_the_task(
     def boom(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("counter broke")
 
-    original = runner_module.record_recurrences
-    runner_module.record_recurrences = boom
+    original = learning_module.record_recurrences
+    learning_module.record_recurrences = boom
     try:
         run = run_task(
             "read README and report",
@@ -862,7 +1444,7 @@ def test_a_broken_recurrence_counter_does_not_fail_the_task(
             lesson_store=store,
         )
     finally:
-        runner_module.record_recurrences = original
+        learning_module.record_recurrences = original
 
     assert run.result is not None
 

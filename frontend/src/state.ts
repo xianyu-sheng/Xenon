@@ -19,6 +19,7 @@ import type {
   KernelFrame,
   PromptRequestFrame,
   SessionInfo,
+  SessionReportFrame,
   StatusFrame,
   TurnEndFrame,
 } from './protocol.js';
@@ -26,17 +27,35 @@ import type {
 export interface TimelineEntry {
   id: number;
   kind: ActionFrame['kind'];
+  /** One-line summary, always safe to show. */
   text: string;
+  /** Full kernel text, revealed only when details are expanded. */
+  detail: string;
   tone: 'normal' | 'muted' | 'warn' | 'error' | 'success';
 }
 
-/** A block in the scrollback: either a finished turn or a command's output. */
+/** A block in the scrollback: a finished turn, a command's output, or the
+ *  session report.  The answer is kept structured so the UI can render it as
+ *  Markdown; it is never flattened into the action lines. */
 export interface TranscriptBlock {
   id: number;
-  kind: 'turn' | 'command' | 'notice';
+  kind: 'turn' | 'command' | 'notice' | 'report';
   title: string;
   lines: string[];
+  /** Full text behind each line, for Ctrl+O expansion. */
+  details?: string[];
   tone: 'normal' | 'muted' | 'warn' | 'error' | 'success';
+  /** Turn blocks only: the kernel's final answer, rendered as Markdown. */
+  answer?: string;
+  metrics?: { steps: number; tool_calls: number };
+  debt?: { kind: string; reason: string }[];
+  planned?: boolean;
+  /** The operator stopped this turn; it failed nothing and delivered nothing. */
+  cancelled?: boolean;
+  evidence?: string;
+  ledger?: string;
+  /** Report blocks only: session accounting. */
+  report?: SessionReportFrame;
 }
 
 export interface TurnState {
@@ -48,6 +67,25 @@ export interface TurnState {
   elapsedSeconds: number;
   chars: number;
   providerNote: string;
+  /** Wall-clock start, so the UI can run a local second counter between
+   *  progress frames (the kernel only ticks during model calls). */
+  startedAt: number;
+  /** A cancel was accepted and the kernel has not ended the turn yet. */
+  cancelling: boolean;
+}
+
+export interface ReadyState {
+  models: string[];
+  cwd: string;
+  setupNeeded: boolean;
+  version: string;
+  mode: string;
+  modeDescription: string;
+  modelCount: number;
+  loadedModels: number;
+  probed: boolean;
+  availableProviders: number;
+  failures: { name: string; reason: string }[];
 }
 
 export interface AppState {
@@ -56,9 +94,10 @@ export interface AppState {
   commands: CommandInfo[];
   sessions: SessionInfo[];
   status: StatusFrame | null;
+  /** Facts the kernel reported at boot; the welcome card renders them. */
+  ready: ReadyState | null;
   /** A question from a command handler, waiting for an answer. */
   prompt: PromptRequestFrame | null;
-  ready: { models: string[]; cwd: string; setupNeeded: boolean } | null;
   error: string;
 }
 
@@ -71,6 +110,8 @@ export const emptyTurn = (): TurnState => ({
   elapsedSeconds: 0,
   chars: 0,
   providerNote: '',
+  startedAt: 0,
+  cancelling: false,
 });
 
 export const emptyApp = (): AppState => ({
@@ -116,7 +157,7 @@ function pushBlock(blocks: TranscriptBlock[], block: TranscriptBlock): Transcrip
   return next.length > MAX_BLOCKS ? next.slice(next.length - MAX_BLOCKS) : next;
 }
 
-export function reduce(state: AppState, frame: KernelFrame): AppState {
+export function reduce(state: AppState, frame: KernelFrame, now = Date.now()): AppState {
   switch (frame.type) {
     case 'ready':
       return {
@@ -125,11 +166,27 @@ export function reduce(state: AppState, frame: KernelFrame): AppState {
           models: frame.models,
           cwd: frame.cwd,
           setupNeeded: frame.setup_needed === true,
+          version: frame.version ?? '',
+          mode: frame.mode ?? '',
+          modeDescription: frame.mode_description ?? '',
+          modelCount: frame.model_count ?? frame.models.length,
+          loadedModels: frame.loaded_models ?? 0,
+          probed: frame.probed === true,
+          availableProviders: frame.available_providers ?? 0,
+          failures: frame.failures ?? [],
         },
       };
 
     case 'turn.start':
-      return { ...state, turn: { ...emptyTurn(), objective: frame.objective, running: true } };
+      return {
+        ...state,
+        turn: {
+          ...emptyTurn(),
+          objective: frame.objective,
+          running: true,
+          startedAt: now,
+        },
+      };
 
     case 'progress':
       return {
@@ -165,6 +222,7 @@ export function reduce(state: AppState, frame: KernelFrame): AppState {
               id: nextId++,
               kind: frame.kind,
               text: describeAction(frame),
+              detail: fullAction(frame),
               tone: TONES[frame.kind] ?? 'normal',
             },
           ],
@@ -175,16 +233,35 @@ export function reduce(state: AppState, frame: KernelFrame): AppState {
       return { ...state, turn: { ...state.turn, approval: frame } };
 
     case 'turn.end': {
-      const turn = { ...state.turn, running: false, approval: null, end: frame };
-      const lines: string[] = turn.entries.map((entry) => entry.text);
-      if (frame.answer) lines.push(frame.answer);
-      if (frame.error) lines.push(frame.error);
+      const turn = {
+        ...state.turn,
+        running: false,
+        approval: null,
+        cancelling: false,
+        end: frame,
+      };
       const block: TranscriptBlock = {
         id: nextId++,
         kind: 'turn',
         title: turn.objective,
-        lines,
-        tone: frame.error ? 'error' : frame.evidence?.status === 'verified' ? 'success' : 'normal',
+        lines: turn.entries.map((entry) => entry.text),
+        details: turn.entries.map((entry) => entry.detail),
+        tone: frame.cancelled
+          ? 'muted'
+          : frame.error
+            ? 'error'
+            : frame.evidence?.status === 'verified'
+              ? 'success'
+              : 'normal',
+        answer: frame.cancelled
+          ? frame.answer || '本轮已中断'
+          : frame.answer || frame.error || '',
+        metrics: frame.metrics,
+        debt: frame.debt,
+        planned: frame.planned === true,
+        cancelled: frame.cancelled === true,
+        evidence: frame.evidence?.status,
+        ledger: frame.ledger,
       };
       return { ...state, turn, transcript: pushBlock(state.transcript, block) };
     }
@@ -238,11 +315,40 @@ export function reduce(state: AppState, frame: KernelFrame): AppState {
 
     case 'turn.cancel.result':
       // A cancel that found nothing to cancel is not an error worth showing:
-      // the user pressed Ctrl+C between turns.
-      return state;
+      // the user pressed Ctrl+C between turns.  An accepted one must show,
+      // though: the reply can take seconds to die, and until it does the
+      // screen would still look like a normal run.
+      if (!frame.accepted) return state;
+      return { ...state, turn: { ...state.turn, cancelling: true } };
 
-    case 'status':
-      return { ...state, status: frame };
+    case 'session.report':
+      return {
+        ...state,
+        transcript: pushBlock(state.transcript, {
+          id: nextId++,
+          kind: 'report',
+          title: '本次会话省钱报告',
+          lines: [],
+          tone: 'muted',
+          report: frame,
+        }),
+      };
+
+    case 'status': {
+      // The terminal polls `status` twice a second while a turn runs, and the
+      // dashboard's panels query on top of that.  Most answers are identical
+      // down to the field: reducing them to a fresh object made every
+      // subscriber repaint (Ink included) for facts that did not change, which
+      // is exactly the constant flicker.  Same facts in, same state out.
+      //
+      // The clocks are the exception that proves it: the kernel ticks them to
+      // 0.1 s, so two polls are never *exactly* equal — the bar still only
+      // draws whole seconds.  Comparing at the display's precision is what
+      // makes "same facts" true for a status answer at all.
+      const normalized = normalizeStatus(frame);
+      if (sameStatus(state.status, normalized)) return state;
+      return { ...state, status: normalized };
+    }
 
     case 'error':
       return {
@@ -252,7 +358,7 @@ export function reduce(state: AppState, frame: KernelFrame): AppState {
           ...state.turn,
           entries: [
             ...state.turn.entries,
-            { id: nextId++, kind: 'error', text: frame.error, tone: 'error' },
+            { id: nextId++, kind: 'error', text: frame.error, detail: frame.error, tone: 'error' },
           ],
         },
       };
@@ -262,21 +368,82 @@ export function reduce(state: AppState, frame: KernelFrame): AppState {
   }
 }
 
+/** Round the wall clocks to the second the status bar actually shows.
+ *
+ *  `elapsed_seconds` and `session_elapsed_seconds` arrive with 0.1 s
+ *  resolution, so every poll (2/s while a turn runs) looked like new
+ *  information: the whole Ink frame was rewritten for a clock whose visible
+ *  value had not moved.  The bar formats whole seconds, so that is the unit
+ *  the state compares and stores. */
+function normalizeStatus(frame: StatusFrame): StatusFrame {
+  const next: StatusFrame = { ...frame };
+  if (typeof frame.elapsed_seconds === 'number') {
+    next.elapsed_seconds = Math.floor(frame.elapsed_seconds);
+  }
+  if (typeof frame.session_elapsed_seconds === 'number') {
+    next.session_elapsed_seconds = Math.floor(frame.session_elapsed_seconds);
+  }
+  if (typeof frame.stalled_seconds === 'number') {
+    next.stalled_seconds = Math.floor(frame.stalled_seconds);
+  }
+  return next;
+}
+
+/** True when a status frame carries the same facts as the one on screen. */
+function sameStatus(
+  previous: StatusFrame | null,
+  next: StatusFrame,
+): boolean {
+  if (!previous) return false;
+  const before = previous as unknown as Record<string, unknown>;
+  const after = next as unknown as Record<string, unknown>;
+  const keys = Object.keys(after);
+  if (keys.length !== Object.keys(before).length) return false;
+  for (const key of keys) {
+    const left = before[key];
+    const right = after[key];
+    if (Array.isArray(left) || Array.isArray(right)) {
+      if (JSON.stringify(left) !== JSON.stringify(right)) return false;
+    } else if (left !== right) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function notice(text: string): TranscriptBlock {
   return { id: nextId++, kind: 'notice', title: '', lines: [text], tone: 'muted' };
 }
 
-function describeAction(frame: ActionFrame): string {
+/** Append a front-end notice (no kernel frame behind it: `/dashboard`, a host
+ *  error).  One entry point so the scrollback cap stays in one place. */
+export function appendNotice(state: AppState, text: string): AppState {
+  return { ...state, transcript: pushBlock(state.transcript, notice(text)) };
+}
+
+function actionDetail(frame: ActionFrame): string {
   if (frame.kind === 'tool' && frame.tool) {
     const input = frame.input ?? {};
-    const detail =
+    const target =
       (input.command as string | undefined) ??
       (input.file_path as string | undefined) ??
       (input.path as string | undefined) ??
       '';
-    return `${frame.tool}${detail ? ` · ${truncate(detail, 90)}` : ''}`;
+    const inputJson =
+      target === '' ? JSON.stringify(input) : '';
+    return `${frame.tool}${target ? ` · ${target}` : inputJson === '{}' ? '' : ` · ${inputJson}`}`;
   }
-  return truncate(frame.text ?? '', 400);
+  return frame.text ?? '';
+}
+
+/** One-line summary for the live timeline (details stay behind Ctrl+O). */
+function describeAction(frame: ActionFrame): string {
+  return truncate(actionDetail(frame), frame.kind === 'tool' ? 120 : 400);
+}
+
+/** The full text behind the summary, revealed when details are expanded. */
+function fullAction(frame: ActionFrame): string {
+  return actionDetail(frame);
 }
 
 function truncate(text: string, limit: number): string {
@@ -285,6 +452,18 @@ function truncate(text: string, limit: number): string {
 }
 
 /** Split one input line into a slash command and its arguments. */
+/**
+ * The welcome card is the empty-session identity, so it survives notices.
+ *
+ * `/dashboard` (or the `--dashboard` flag) appends a notice in the first
+ * second; counting that as "conversation started" hid the version, model count
+ * and cwd exactly when a person is looking for them.
+ */
+export function showWelcomeCard(state: AppState): boolean {
+  if (!state.ready) return false;
+  return !state.transcript.some((block) => block.kind !== 'notice');
+}
+
 export function parseInput(
   text: string,
 ): { kind: 'command'; name: string; args: string } | { kind: 'objective'; objective: string } | null {

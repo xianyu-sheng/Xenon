@@ -13,9 +13,27 @@ from pathlib import Path
 from typing import Any
 
 import xenon.kernel  # noqa: F401 — ledger<->kernel import cycle
-from xenon.harness.llm import _TERMINAL_TOOLS, current_turn, render_state
-from xenon.kernel.contracts import Budget, ModelView, TaskPhase, TaskSpec
-from xenon.kernel.session_history import recent_task_lines
+from xenon.harness.llm import (
+    _TERMINAL_TOOLS,
+    action_from_tool_call,
+    build_messages,
+    current_turn,
+    render_state,
+)
+from xenon.kernel.contracts import (
+    Budget,
+    ModelView,
+    RequestEscalation,
+    SessionTaskRecord,
+    TaskPhase,
+    TaskSpec,
+)
+from xenon.kernel.session_history import (
+    recent_task_lines,
+    recent_tasks,
+    task_record,
+)
+from xenon.kernel.view.base import session_section
 
 
 def _ledger(path: Path, *, objective: str, session: str, workspace: str) -> Path:
@@ -120,7 +138,265 @@ def test_get_state_offers_the_session_slice() -> None:
     what = _TERMINAL_TOOLS["get_state"][1]["properties"]["what"]
 
     assert "session" in what["enum"]
-    assert "earlier tasks of this session" in what["description"]
+    assert "task" in what["enum"]
+    assert "earlier turns of this session" in what["description"]
+
+
+def test_recent_tasks_carry_the_answer_excerpt_and_ledger(tmp_path: Path) -> None:
+    workspace = str(tmp_path)
+    _ledger(tmp_path / "a.jsonl", objective="代码审阅", session="s", workspace=workspace)
+    current = _ledger(tmp_path / "cur.jsonl", objective="继续", session="s", workspace=workspace)
+
+    records = recent_tasks(current, session_id="s")
+
+    assert [record.task_id for record in records] == ["a"]
+    assert records[0].status == "verified"
+    assert records[0].answer == "done: 代码审阅"
+    assert records[0].ledger == str(tmp_path / "a.jsonl")
+
+
+def test_task_record_looks_up_one_turn_and_rejects_paths(tmp_path: Path) -> None:
+    workspace = str(tmp_path)
+    _ledger(tmp_path / "a.jsonl", objective="代码审阅", session="s", workspace=workspace)
+    current = _ledger(tmp_path / "cur.jsonl", objective="继续", session="s", workspace=workspace)
+
+    record = task_record(current, "a")
+    assert record is not None and record.objective == "代码审阅"
+    assert task_record(current, "..\\a") is None
+    assert task_record(current, "missing") is None
+
+
+def test_chat_ledgers_one_level_down_are_the_same_session(tmp_path: Path) -> None:
+    """A chat turn is an earlier turn even though it sits in ``chat/``."""
+
+    import os
+    import time
+
+    workspace = str(tmp_path)
+    chat = tmp_path / "chat"
+    chat.mkdir()
+    task = _ledger(tmp_path / "a.jsonl", objective="审阅仓库", session="s", workspace=workspace)
+    turn = _ledger(chat / "chat-1.jsonl", objective="解释缓存", session="s", workspace=workspace)
+    current = _ledger(tmp_path / "cur.jsonl", objective="继续", session="s", workspace=workspace)
+    for offset, item in enumerate((task, turn, current)):
+        os.utime(item, (time.time() + offset, time.time() + offset))
+
+    records = recent_tasks(current, session_id="s")
+
+    assert [record.task_id for record in records] == ["chat-1", "a"]
+    assert records[0].answer == "done: 解释缓存"
+    assert task_record(current, "chat-1") is not None
+
+
+def test_a_chat_ledger_sees_its_own_session_too(tmp_path: Path) -> None:
+    """The current ledger may itself be a chat record; the parent counts."""
+
+    workspace = str(tmp_path)
+    chat = tmp_path / "chat"
+    chat.mkdir()
+    _ledger(tmp_path / "a.jsonl", objective="审阅仓库", session="s", workspace=workspace)
+    current = _ledger(chat / "chat-1.jsonl", objective="解释缓存", session="s", workspace=workspace)
+
+    records = recent_tasks(current, session_id="s")
+
+    assert [record.task_id for record in records] == ["a"]
+
+
+def test_session_section_renders_excerpts_and_points_at_the_full_record() -> None:
+    records = (
+        SessionTaskRecord(
+            task_id="repl-1",
+            objective="审阅仓库并列出改进点",
+            status="partial",
+            answer="1. 把认证抽成中间件\n2. 补端到端测试",
+            ledger="/ledger/repl-1.jsonl",
+        ),
+    )
+
+    text = session_section(records)
+
+    assert "Earlier turns this session" in text
+    assert "1. 把认证抽成中间件" in text
+    assert 'get_state {"what":"task","task_id":"repl-1"}' in text
+    assert session_section(()) == ""
+
+
+def test_session_section_bounds_the_excerpt_at_the_miss_price() -> None:
+    """The excerpt is new bytes on every task's first call.
+
+    It used to be 1,200 characters per earlier turn -- the single largest
+    part of a new task's cache miss -- for text the model can read in full
+    with one ``get_state`` call.
+    """
+
+    records = (
+        SessionTaskRecord(
+            task_id="repl-1",
+            objective="审阅仓库",
+            status="delivered",
+            answer="甲" * 900,
+            ledger="/ledger/repl-1.jsonl",
+        ),
+    )
+    text = session_section(records)
+    excerpt = text.split("Answer excerpt:", 1)[1]
+    assert excerpt.count("甲") == 300
+    assert "…" in excerpt
+    assert 'get_state {"what":"task","task_id":"repl-1"}' in text
+
+
+def test_render_state_task_returns_the_full_projection() -> None:
+    record = SessionTaskRecord(
+        task_id="repl-1", objective="审阅", status="partial", answer="正文", ledger="/l.jsonl"
+    )
+    view = _view(session_tasks=(record,))
+
+    payload = json.loads(render_state(view, "task", {"task_id": "repl-1"}))
+    assert payload["answer"] == "正文"
+    assert payload["ledger"] == "/l.jsonl"
+    assert "needs task_id" in render_state(view, "task", {})
+    assert "No earlier task" in render_state(view, "task", {"task_id": "nope"})
+
+
+def test_native_request_escalation_is_offered_and_maps_to_the_action() -> None:
+    view = _view()
+    action = action_from_tool_call(
+        view,
+        "request_escalation",
+        {
+            "capability": "shell",
+            "params": {"command": "Get-ChildItem -Recurse -File"},
+            "reason": "counting files needs a directory listing",
+        },
+    )
+
+    assert isinstance(action, RequestEscalation)
+    assert action.intent.capability.value == "shell"
+    assert action.reason
+    assert "request_escalation" in _TERMINAL_TOOLS
+
+
+def test_runtime_puts_the_previous_turn_in_the_system_prompt(tmp_path: Path) -> None:
+    from xenon.catalog.catalog import ToolCatalog
+    from xenon.catalog.gateway import LegacyToolGateway
+    from xenon.catalog.specs import CORE_SPECS
+    from xenon.kernel.contracts import Finish
+    from xenon.kernel.controller import VerificationController
+    from xenon.kernel.policies import PermissionPolicy
+    from xenon.kernel.runtime import LoopRuntime
+    from xenon.ledger.store import Ledger
+
+    _ledger(
+        tmp_path / "prev.jsonl",
+        objective="审阅仓库并列出改进点",
+        session="s-42",
+        workspace=str(tmp_path),
+    )
+    # The prior answer the follow-up refers back to.
+    prev = tmp_path / "prev.jsonl"
+    text = prev.read_text(encoding="utf-8").replace(
+        "done: 审阅仓库并列出改进点", "1. 把认证抽成中间件\\n2. 补端到端测试"
+    )
+    prev.write_text(text, encoding="utf-8")
+
+    seen: list[Any] = []
+
+    class _Proposer:
+        def propose(self, view: Any) -> Any:
+            seen.append(view)
+            return Finish("done")
+
+    policy = PermissionPolicy(workspace=str(tmp_path))
+    ledger = Ledger.open(tmp_path / "run.jsonl", "t1")
+    runtime = LoopRuntime(
+        catalog=ToolCatalog(CORE_SPECS, "core"),
+        gateway=LegacyToolGateway(specs=CORE_SPECS, workspace=tmp_path, policy=policy),
+        controller=VerificationController(),
+        ledger=ledger,
+        policies=(policy,),
+    )
+    runtime.run(
+        TaskSpec(
+            task_id="t1",
+            objective="对上面的第一点起草 PR",
+            workspace=str(tmp_path),
+            session_id="s-42",
+        ),
+        _Proposer(),
+    )
+
+    view = seen[0]
+    # The projection is per-turn context, so it rides in the turn message; if
+    # it sat in the system prompt it would invalidate the tool block (which
+    # providers serialise right behind the system) on the first call of every
+    # new turn.
+    turn = build_messages(view)[1]["content"]
+    assert "Earlier turns this session" in turn
+    assert "1. 把认证抽成中间件" in turn
+    assert "prev" in turn
+    assert "Earlier turns this session" not in view.system
+
+
+def test_runtime_sees_a_previous_chat_turn(tmp_path: Path) -> None:
+    """A tool turn must still see an earlier explanation (no ledger tool ran).
+
+    Chat turns live under ``chat/``; before this fix the kernel prompt skipped
+    that directory, so "对上面第一点" after a chat answer had nothing to point
+    at and the turn answered "上一轮不存在".
+    """
+
+    from xenon.catalog.catalog import ToolCatalog
+    from xenon.catalog.gateway import LegacyToolGateway
+    from xenon.catalog.specs import CORE_SPECS
+    from xenon.kernel.contracts import Finish
+    from xenon.kernel.controller import VerificationController
+    from xenon.kernel.policies import PermissionPolicy
+    from xenon.kernel.runtime import LoopRuntime
+    from xenon.ledger.conversation import (
+        finish_conversation_turn,
+        open_conversation_turn,
+    )
+    from xenon.ledger.store import Ledger
+
+    turn = open_conversation_turn(
+        tmp_path,
+        objective="列出 3 条降内存的做法",
+        workspace=str(tmp_path),
+        session_id="s-42",
+    )
+    assert turn is not None
+    finish_conversation_turn(
+        turn, answer="1. 用 __slots__\n2. 用生成器\n3. 及时释放大对象", intent="chat"
+    )
+
+    seen: list[Any] = []
+
+    class _Proposer:
+        def propose(self, view: Any) -> Any:
+            seen.append(view)
+            return Finish("done")
+
+    policy = PermissionPolicy(workspace=str(tmp_path))
+    runtime = LoopRuntime(
+        catalog=ToolCatalog(CORE_SPECS, "core"),
+        gateway=LegacyToolGateway(specs=CORE_SPECS, workspace=tmp_path, policy=policy),
+        controller=VerificationController(),
+        ledger=Ledger.open(tmp_path / "run.jsonl", "t1"),
+        policies=(policy,),
+    )
+    runtime.run(
+        TaskSpec(
+            task_id="t1",
+            objective="把上面第 1 点写成代码",
+            workspace=str(tmp_path),
+            session_id="s-42",
+        ),
+        _Proposer(),
+    )
+
+    turn = build_messages(seen[0])[1]["content"]
+    assert "Earlier turns this session" in turn
+    assert "用 __slots__" in turn
 
 
 def test_task_started_records_the_session(tmp_path: Path) -> None:

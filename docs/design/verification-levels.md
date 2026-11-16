@@ -81,6 +81,31 @@ plan-execute 模式：   stages = {'v0': 5, 'v1': 6}        DEBT: file_changed t
 4. **差异进入自我进化**：V2 verdict 为 VIOLATED 时调用 `_propose_lesson("claim_fact_mismatch")`
    ——"声称与实际不一致"正是可进化层该学的模式，而**不是**拦截。
 
+## 计划接受时：预期必须能被这一步证明
+
+实测账本里出现过一种死循环：计划把一个 `shell` 步骤（列目录）绑到
+`test_passed`。shell 回执按构造是 `Opaque`，`test_passed` 只有 `TestRun` 事实
+能绑定 → V1 永远 "no passing test fact for target" → 修复循环重发命令 →
+策略拒绝上限把整轮 `blocked`，答案为空。
+
+现在 `LoopRuntime._apply_plan()` 在记录计划**之前**执行
+`_drop_unprovable_expects()`，规则是结构性的（命题种类 ← 需要的回执效果 ←
+该步能力），不是关键词：
+
+| 预期 | 谁能证明 |
+|---|---|
+| `file_changed` / `file_created` / `no_stray_changes` | 任何路线（宿主的工作区探针结算） |
+| `test_passed` | 仅 `verify` 步骤（`TestRun` 事实） |
+| `commit_created` / `pushed` | 仅 `vcs` 步骤（交付提交由 finalizer 负责，计划不该写） |
+
+被丢弃的预期写入 `CONTROL_DECISION`（`drop_unprovable_expects`），并给模型一条
+"不要重新加回来，用 `verify` 步骤证明行为"的提示；`self._plan` 保存的是实际
+执行的图，面板回读与执行一致。**不静默**：丢弃会出现在账本里，缺口仍可被
+审计看见。
+
+单测：`tests/kernel/test_plan_runtime.py` 两条（不可证明的被丢弃且步骤可关闭；
+`verify` 步骤保留 `test_passed`）。
+
 ## 原则（用户定的，代码里现在是这样）
 
 - 校验只回答"对得上吗"，不判断"对不对"；

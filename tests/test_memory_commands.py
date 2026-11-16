@@ -63,3 +63,32 @@ def test_memory_v2_status_reports_storage_locations():
 
     assert "Memory v2" in text
     assert "存储位置" in text
+
+
+def test_memory_lessons_shows_family_state_and_counters(tmp_path):
+    """``/memory lessons`` exposes the self-evolution chain a human audits."""
+
+    from types import SimpleNamespace
+
+    from xenon.harness.lessons import LessonStore
+    from xenon.kernel.lessons import Lesson
+    from xenon.memory import MemoryBackendRegistry, MemoryService
+
+    service = MemoryService(MemoryBackendRegistry(tmp_path))
+    LessonStore(service).add(
+        Lesson(
+            id="L-1",
+            kind="pitfall",
+            trigger_event="policy_decision",
+            fingerprint="fp-1",
+            action_text="shell 在本任务被策略拒绝",
+            shape="policy_decision|shell",
+        )
+    )
+    repl = SimpleNamespace(_get_memory_service=lambda: service)
+
+    text = _cmd_memory_v2(args="lessons", repl=repl)
+
+    assert "[L-1]" in text
+    assert "active" in text
+    assert "policy_decision|shell" in text

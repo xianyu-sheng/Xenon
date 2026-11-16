@@ -12,7 +12,11 @@
  */
 
 const OSC8 = '\u001b]8';
-const ST = '\u001b\\';
+// BEL, not ST.  Both terminate an OSC-8 link by spec, but the ST form
+// (`ESC \`) is swallowed inconsistently by emulators and by ANSI-aware string
+// helpers, taking the link's own display text with it.  BEL is the form every
+// terminal in the wild parses identically.
+const ST = '\u0007';
 
 /** File extensions that make a slash-containing token a path rather than prose. */
 const CODE_EXTS = new Set([
@@ -71,12 +75,20 @@ function splitLineAnchor(token: string): { path: string; line?: number } {
 function looksLikePath(token: string): boolean {
   // Windows absolute path: the drive letter plus separators is proof enough.
   if (/^[A-Za-z]:[\\/]/.test(token)) return true;
-  if (token.startsWith('/') || token.startsWith('~/')) return true;
   if (token.startsWith('./') || token.startsWith('../')) return true;
   const dot = token.lastIndexOf('.');
-  if (dot <= 0) return false;
-  const ext = token.slice(dot).toLowerCase();
-  if (!CODE_EXTS.has(ext)) return false;
+  const ext = dot > 0 ? token.slice(dot).toLowerCase() : '';
+  const hasExtension = ext !== '' && CODE_EXTS.has(ext);
+  // A leading-slash token needs path *shape*, not just a leading slash:
+  // single-segment, extension-less tokens are slash commands and prose
+  // (`/max-steps`, `/permissions`), and wrapping those in OSC-8 both lies
+  // about them being files and makes Ink's width slicing drop characters.
+  if (token.startsWith('/') || token.startsWith('~/')) {
+    const body = token.startsWith('~/') ? token.slice(2) : token.slice(1);
+    const segments = body.split('/').filter(Boolean);
+    return hasExtension || segments.length >= 2;
+  }
+  if (!hasExtension) return false;
   // A bare name needs the extension to be believable.  `3.14` and `v1.2` are
   // numbers, not files; `hello.py` is the file a task just wrote.
   if (!token.includes('/') && !token.includes('\\')) {

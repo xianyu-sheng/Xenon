@@ -119,6 +119,52 @@ def test_a_verb_after_a_sequential_connector_does_not_govern() -> None:
     assert (PropositionKind.TEST_PASSED, "c.py") not in kinds
 
 
+def test_a_neighbouring_path_is_not_a_verb() -> None:
+    """The ``tests`` in the *next* file's path is data, not an instruction.
+
+    Measured C10 task: "buggy_calc.py 里有 bug，e2e_scratch/tests/test_x.py
+    是它的测试".  ``\\btests\\b`` matched inside the second path and was read
+    as "run the tests" governing ``buggy_calc.py``, so the run owed
+    ``test_passed(buggy_calc.py)`` — a receipt no runner can ever produce.
+    """
+
+    task = (
+        "e2e_scratch/buggy_calc.py 里有 bug，"
+        "e2e_scratch/tests/test_buggy_calc.py 是它的测试。"
+        "请先给出修复计划，然后修复 bug 并运行测试确认通过。"
+    )
+
+    kinds = [(o.kind, o.target) for o in derive_obligations(task)]
+
+    assert (PropositionKind.TEST_PASSED, "e2e_scratch/buggy_calc.py") not in kinds
+    assert kinds == [
+        (PropositionKind.TEST_PASSED, "e2e_scratch/tests/test_buggy_calc.py")
+    ]
+
+
+def test_a_source_file_told_to_pass_is_the_file_to_change() -> None:
+    """"让 calc.py 通过测试" asks to change calc.py; no receipt names it.
+
+    ``test_passed(calc.py)`` is unsatisfiable, so the only verifiable binding
+    is ``file_changed(calc.py)`` — and Chinese has no word boundary after
+    "通过", which used to hide the outcome phrase entirely.
+    """
+
+    kinds = [(o.kind, o.target) for o in derive_obligations("让 calc.py 通过全部测试")]
+
+    assert kinds == [(PropositionKind.FILE_CHANGED, "calc.py")]
+
+
+def test_a_source_file_read_before_running_tests_gets_no_obligation() -> None:
+    """"读 calc.py 并跑测试" reads the file; the runner is the check.
+
+    Turning the named file into a change (or a test receipt) demanded work
+    the user never asked for.
+    """
+
+    assert derive_obligations("读 calc.py 并跑测试") == ()
+
+
 def test_comma_separated_file_lists_share_one_governing_verb() -> None:
     kinds = [(o.kind, o.target) for o in derive_obligations(
         "更新 a.py、b.py、c.py、d.py 四个文件的注释"

@@ -17,6 +17,7 @@ if (argv.includes('--help') || argv.includes('-h')) {
       '',
       'Usage: xenon-ui [--model <id>]... [--level read-only|auto-edit|bypass]',
       '                [--python <exe>] [--cwd <dir>] [--resume <序号|名称>]',
+      '                [--dashboard]',
       '',
       'The kernel runs in Python; this process only speaks the NDJSON protocol',
       'described in docs/design/frontend-protocol.md.',
@@ -31,6 +32,7 @@ let level = 'auto-edit';
 let python = 'python';
 let cwd: string | undefined;
 let resume: string | undefined;
+let dashboard = false;
 for (let i = 0; i < argv.length; i += 1) {
   const arg = argv[i];
   const next = argv[i + 1];
@@ -49,11 +51,13 @@ for (let i = 0; i < argv.length; i += 1) {
   } else if ((arg === '--resume' || arg === '-r') && next) {
     resume = next;
     i += 1;
+  } else if (arg === '--dashboard') {
+    dashboard = true;
   }
 }
 
 const instance = render(
-  React.createElement(App, { args: { models, level, python, cwd, resume } }),
+  React.createElement(App, { args: { models, level, python, cwd, resume, dashboard } }),
   { exitOnCtrlC: false },
 );
 

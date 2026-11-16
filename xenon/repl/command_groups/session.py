@@ -37,6 +37,27 @@ def _cmd_exit(**kwargs: Any) -> str:
     raise ExitSignal("bye")
 
 
+# /dashboard ───────────────────────────────────────────────
+
+# The panel itself lives in the TS front-end (it renders that process's
+# SessionController).  The metadata is registered here so /help and completion
+# agree across both front-ends; the handler is what a non-TS entry prints.
+register_command(
+    "/dashboard",
+    "打开本地 Web 面板（TS 前端；终端与浏览器共享同一会话）",
+    "/dashboard",
+)
+
+
+@command_handler("/dashboard")
+def _cmd_dashboard(**kwargs: Any) -> str:
+    return (
+        "仪表盘由 TS 前端提供：在 xenon 交互界面输入 /dashboard，"
+        "或启动时加 --dashboard。\n"
+        "它只监听 127.0.0.1，并随会话结束而停止；Python 编辑器界面不支持。"
+    )
+
+
 # /help ────────────────────────────────────────────────────
 
 register_command("/help", "显示所有可用命令", "/help [command_name]")
@@ -45,10 +66,16 @@ register_command("/help", "显示所有可用命令", "/help [command_name]")
 @command_handler("/help")
 def _cmd_help(*, args: str, **kwargs: Any) -> str:
     if args:
-        cmd = COMMANDS.get(f"/{args}")
+        # Accept both ``/help mcp`` and ``/help /mcp`` — the usage line tells a
+        # person to pass a command name, and the name they see elsewhere is
+        # spelled with a slash.  Blindly prefixing turned that into ``//mcp``.
+        name = args.strip()
+        if not name.startswith("/"):
+            name = f"/{name}"
+        cmd = COMMANDS.get(name)
         if cmd:
             return f"{cmd['description']}\n用法: {cmd['usage']}"
-        return f"未知命令: /{args}"
+        return f"未知命令: {name}"
 
     lines = ["可用命令:\n"]
     for name, info in COMMANDS.items():
@@ -359,18 +386,21 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         table.add_column("名称", style="#67e8f9", max_width=32)
         table.add_column("时间", style="dim #94a3b8", width=12)
         table.add_column("消息", justify="right", width=6)
-        table.add_column("模式", style="dim", width=10)
+        # The saved ``paradigm`` is the phase profile the session last ran,
+        # not a selectable mode.  Every session resumes into the one loop, so
+        # showing the old preset name here would reintroduce the menu the
+        # single-loop change removed.
+        table.add_column("循环", style="dim", width=10)
 
         for i, s in enumerate(sessions, 1):
             display_name = session_display_name(s)
             age = get_session_age(s) or s["saved_at"][:16]
-            paradigm = s.get("paradigm", "")
             table.add_row(
                 str(i),
                 display_name,
                 age,
                 str(s["messages"]),
-                paradigm,
+                "单循环",
             )
 
         console_out = RichConsole()
@@ -486,7 +516,10 @@ def _cmd_resume(*, args: str, session_state: dict, **kwargs: Any) -> str:
         age = get_session_age(data) or "未知时间"
         msgs = len(history)
         _render_resumed_conversation(history, msgs)
-        result = f"✅ 已恢复会话 ({age}) · {msgs} 条消息 · 模式: {paradigm or 'direct'}"
+        # The saved ``paradigm`` is a phase profile of the one loop; printing
+        # it as "模式: direct" made a resumed session look like a second
+        # execution model.  The loop label is the fact that is still true.
+        result = f"✅ 已恢复会话 ({age}) · {msgs} 条消息 · 循环: 单循环"
         if recovery_notice:
             result += f"\n{recovery_notice}"
         if cwd_notice:
@@ -550,6 +583,7 @@ def _cmd_compact(
     if summary is None:
         summary = ctx_mgr.structured_summary()
     model_ids = None
+    before_tokens = ctx_mgr.stats()["estimated_tokens"]
     result = ctx_mgr.compact(summary, model_priority=model_ids)
     stats = ctx_mgr.stats()
 
@@ -568,12 +602,46 @@ def _cmd_compact(
         else str(usage_ratio)
     )
 
-    return f"✅ 对话已压缩。当前 Token: {stats['estimated_tokens']:,} ({usage_str}){snapshot_info}\n\n摘要:\n{result}"
+    # Nothing older than the retained window is a legitimate no-op; saying
+    # "已压缩" there told the user their context shrank when it had not.
+    if not getattr(ctx_mgr, "_last_compact_changed", False):
+        return (
+            f"· 未压缩：最近几轮仍完整保留，当前没有可折叠的早期对话"
+            f"（Token 仍为 {stats['estimated_tokens']:,}）。\n{result}"
+        )
+    return (
+        f"✅ 对话已压缩。Token: {before_tokens:,} → "
+        f"{stats['estimated_tokens']:,} ({usage_str}){snapshot_info}\n\n摘要:\n{result}"
+    )
 
 
 # /config ──────────────────────────────────────────────────
 
 register_command("/config", "查看或保存当前配置", "/config [save <path>]")
+
+
+_SECRET_KEY_SUFFIXES = ("api_key", "auth_token", "token", "secret", "password")
+
+
+def _redact_secrets(value: Any) -> Any:
+    """Mask credentials in a config dump.
+
+    ``/config`` prints into terminal scrollback, screenshots and pasted logs.
+    A displayed key is a leaked key; the saved file still has the real one.
+    """
+
+    if isinstance(value, dict):
+        redacted: dict[Any, Any] = {}
+        for key, item in value.items():
+            if isinstance(key, str) and key.lower().endswith(_SECRET_KEY_SUFFIXES):
+                text = str(item)
+                redacted[key] = f"{text[:4]}****" if len(text) > 4 else "****"
+            else:
+                redacted[key] = _redact_secrets(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_secrets(item) for item in value]
+    return value
 
 
 @command_handler("/config")
@@ -587,7 +655,7 @@ def _cmd_config(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
     import json
 
     config = registry.export_config()
-    return f"当前配置:\n{json.dumps(config, indent=2, ensure_ascii=False)}"
+    return f"当前配置:\n{json.dumps(_redact_secrets(config), indent=2, ensure_ascii=False)}"
 
 
 def _render_resumed_conversation(history: list[dict], msgs: int) -> None:

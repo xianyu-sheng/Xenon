@@ -375,6 +375,24 @@ class TurnContract:
         return self.signals.no_write_targets
 
     @property
+    def protect_other_write_paths(self) -> bool:
+        """True for a relative negation ("不要修改其他文件")."""
+
+        return self.signals.no_write_others
+
+    @property
+    def allowed_write_paths(self) -> tuple[str, ...]:
+        """Paths the relative negation leaves writable (named request paths).
+
+        Empty means the request named no concrete path, so the relative guard
+        cannot be enforced without turning back into a global ban.
+        """
+
+        if not self.signals.no_write_others:
+            return ()
+        return self.signals.no_write_allowed_paths
+
+    @property
     def allows_write(self) -> bool:
         return self.level >= ExecutionLevel.WRITE and not self.signals.no_write
 
@@ -409,7 +427,51 @@ class TurnContract:
             explicit_no_write=self.signals.no_write,
             explicit_no_execute=self.signals.no_execute,
             protected_write_paths=self.signals.no_write_targets,
+            protected_write_others=self.signals.no_write_others,
+            allowed_write_paths=self.allowed_write_paths,
         )
+
+
+def store_write_scope(ctx: Any, contract: TurnContract) -> None:
+    """Publish the turn's protected/allowed write scope into *ctx*.
+
+    ``tool_classify.execution_policy_denial`` is the single enforcement point
+    for "don't touch these paths".  Every entry (interactive ``turn_flow``,
+    protocol ``host.run_turn``, library ``ensure_turn_contract``) must publish
+    the same keys; missing one made the user's negation silently disappear on
+    that entry (the protocol host never set ``_protected_write_paths``).
+    """
+
+    if ctx is None:
+        return
+    values = {
+        "_protected_write_paths": tuple(contract.protected_write_paths),
+        "_protected_write_others": bool(contract.protect_other_write_paths),
+        "_allowed_write_paths": tuple(contract.allowed_write_paths),
+    }
+    setter = getattr(ctx, "set", None)
+    for key, value in values.items():
+        if callable(setter):
+            setter(key, value)
+        else:
+            ctx[key] = value
+
+
+def apply_permission_ceiling(contract: TurnContract, mode_name: str) -> TurnContract:
+    """Clamp one turn to the session's ``/permissions`` mode.
+
+    The mode is a *durable ceiling*: the classifier may not raise a turn above
+    it.  The clamp used to live inline in the interactive ``turn_flow`` only,
+    so the same ``/permissions plan`` through the protocol host was silently
+    overwritten by the per-turn classification.  Both entries call this.
+    """
+
+    from xenon.repl.execution_policy import PERMISSION_MODE_LEVELS
+
+    cap = PERMISSION_MODE_LEVELS.get(str(mode_name or ""))
+    if cap is None or int(contract.level) <= cap:
+        return contract
+    return replace(contract, level=ExecutionLevel(cap))
 
 
 def signals_to_hints(signals: ExecutionSignals) -> dict[str, Any]:
@@ -419,6 +481,10 @@ def signals_to_hints(signals: ExecutionSignals) -> dict[str, Any]:
         "write_snippets": list(signals.write_snippets),
         "execute_snippets": list(signals.execute_snippets),
         "read_snippets": list(signals.read_snippets),
+        # 显式工具请求：分类器据此知道「本轮要真的用工具」，而不是把
+        # "使用 MCP 工具 server:tool …" 当成一次普通回答。
+        "tool_snippets": list(signals.tool_snippets),
+        "tool_request": signals.tool_request,
         "negations": list(signals.negation_snippets),
         "chat_only": signals.chat_only,
         "no_tools": signals.no_tools,
@@ -516,7 +582,11 @@ def _constraint_contract(
     return TurnContract(
         level=policy.level,
         intent=intent,
-        operations=frozenset(),
+        # A constraint turn is usually ANSWER_ONLY (empty).  When it is
+        # READ_ONLY because the user asked to read while forbidding writes and
+        # execution, the operations must say so — an empty set contradicts the
+        # level the kernel is asked to honour.
+        operations=_operations_for_level(policy.level),
         proposed_level=policy.level,
         confidence=1.0,
         degraded=False,
@@ -578,6 +648,7 @@ def ensure_turn_contract(
     if ctx is not None:
         existing = ctx.get("_turn_contract")
         if existing is not None:
+            store_write_scope(ctx, existing)
             return existing
         level = ctx.get("_execution_level")
         if level is not None:
@@ -590,6 +661,7 @@ def ensure_turn_contract(
                     "_execution_reason": contract.reason,
                 }
             )
+            store_write_scope(ctx, contract)
             return contract
 
     contract = build_turn_contract(
@@ -601,6 +673,7 @@ def ensure_turn_contract(
         # 只存契约供同层只读；不写 ``_execution_level``——引擎/库调用方没有
         # 显式级别时保持旧的“不拦截”语义，产品路径（REPL）会自己设置级别。
         ctx.set("_turn_contract", contract)
+        store_write_scope(ctx, contract)
     return contract
 
 
@@ -649,10 +722,16 @@ def build_turn_contract(
     resolved_intent = fallback_intent if fallback_intent is not None else regex_intent
 
     # 1) 硬约束：不调用 LLM，省一次调用且禁令不可被推翻。
+    #    "不写 + 不执行" 不等于 "不读"：用户要求读取文件却禁止修改/运行命令
+    #    时，必须保留只读能力，否则模型尝试 read 会被 "仅回答约束" 判失败。
     if (
         signals.no_tools
         or signals.chat_only
-        or (signals.no_write and signals.no_execute)
+        or (
+            signals.no_write
+            and signals.no_execute
+            and not signals.read_evidence
+        )
     ):
         return _constraint_contract(text, signals, resolved_intent)
 
@@ -704,7 +783,7 @@ def build_turn_contract(
         operations.add("write")
     if signals.explicit_execute and not signals.no_execute:
         operations.add("execute")
-    if signals.read_evidence:
+    if signals.read_evidence or signals.tool_request:
         operations.add("read")
 
     # 4) 分类器自报 chat_only 且文本没有动作/目标词时，清空提案。
@@ -714,6 +793,7 @@ def build_turn_contract(
         structural_write
         or signals.explicit_execute
         or signals.action_target_mentioned
+        or signals.tool_request
     ):
         operations.clear()
 

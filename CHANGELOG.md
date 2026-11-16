@@ -4,6 +4,874 @@
 
 ## [Unreleased]
 
+### 修复：测试隔离泄漏污染操作员全局入口（2026-11-16）
+
+全量回归里 `tests/test_project_context.py::test_load_rules` 失败，根因不在
+`ProjectContext`：`MemoryBackendRegistry` 只给测试隔离了 `user_data_root`
+（记忆存储），`user_config_root` 仍落到真实的 `~/.config/xenon`。每个写入
+USER 作用域的用例都往操作员的 `XENON.md` 追加一个
+`xenon-memory-index` 块；积到十几个后，3,000 字符的 rules 预算被索引块占满，
+项目 `.xenon/rules.md` 被截断，测试看不到「Python 3.12」。
+
+修复：显式 `user_data_root`（测试/嵌入式宿主）现在把 config 入口放在数据根
+旁边（`Path(user_data_root).resolve().parent`），不再触碰真实配置目录；
+仍可用 `user_config_root` 显式覆盖。回归用例
+`tests/test_home_boundary.py::test_explicit_data_root_keeps_the_config_entrypoint_isolated`
+断言隔离后写入落在临时目录、真实 `XDG_CONFIG_HOME` 不被创建。
+
+已清理操作员 `XENON.md` 中 12 个 `pytest-of-Administrator` 临时索引块，
+保留合法的用户记忆索引。
+
+### 修复：用户约束被读成写意图／全局禁令（2026-11-16）
+
+真实前端矩阵复测暴露两个同源缺陷，都出在「用户约束 → 执行策略 → 工具边界」
+这条数据流上：
+
+- `创建 plan_out.txt，内容为 X；不要修改其他文件。` 被判成 `no_write=True`：
+  否定词所在的从句里有「文件」，命中全局禁令词表。结果是最常见的一类受限
+  任务整轮只读，写被否决，`/plan on` 也永远进不了 plan-only。
+- `不要修改 plan_probe.txt` 里的「修改」又被 `_WRITE` 当成写意图
+  （`write_verb`），单句约束反过来授权写盘。
+
+修复把「约束」与「意图」拆开（`xenon/repl/execution_policy.py`）：
+
+- 相对量词（其他/其它/别的/其余/remaining/other）先于全局词判定，产生
+  `no_write_others` + `no_write_allowed_paths`（按整段请求取路径，不受
+  5 条提示上限截断）；
+- 扫描写意图前先按 `_NO_WRITE` 匹配区间把被否定的动词抹掉（`_strip_negated_mutations`），
+  约束不再变成请求；
+- 英文 `don't touch other files` 进入同一套相对否定。
+
+约束随后沿同一条链路到达执行点：`ExecutionSignals` → `TurnContract` →
+`ExecutionPolicy` → `store_write_scope()` 同时写入交互 REPL（`turn_flow`）
+与协议宿主（`host.run_turn`）的上下文；`tool_classify.execution_policy_denial`
+是唯一执行点——点名路径一律拒绝；相对否定下只允许本轮点名的路径；请求没有
+点名任何路径时不做“其余全禁”，避免又退化成全局禁令。
+
+测试：`tests/test_execution_policy.py` 新增 9 条回归（三种相对否定句式、
+只拒绝未点名目标、无名目标不变成全局禁令、scope 发布）；全量见下方矩阵。
+
+**真实组件矩阵**（`docs/evidence/component-matrix/`，真实 TS 前端 + ConPTY +
+`deepseek/deepseek-v4-flash`，9 个场景）：**54/54 PASS**，合计 213.8s /
+88,695 tokens。其中 `write` 在修复前曾用 637s 才完成（读成只读后反复被
+策略否决），修复后 23.2s；`plan` 场景改为真实语义——计划回合只读落计划
+（0 次写审批、未写盘），`/plan status` 显示待确认，`/plan approve` 续跑并
+写入 `plan_out.txt`，账本出现 `plan_proposed/plan_accepted/plan_approved`。
+
+### 重构：自进化唯一入口 `LearningGateway` + 审查修正（2026-11-16）
+
+自进化的学习链路原先散在 `runner._apply_lessons` / `runner._learn_from_ledger`、
+`LessonStore` 和 kernel proposer 三处，`run_task` 与 `resume_task` 各自复制
+一遍调用。现在任务只对 `xenon/harness/learning.py` 的 `LearningGateway`
+说话：
+
+- `recall(available, limit)`：按 catalog subject 做确定性相关性打分，最多 3 条；
+- `apply(spec, ledger, runtime)`：追加 `[lesson <id>]` 约束、写
+  `LESSON_APPLIED`；同一账本内已应用过的教训不再重复计数（plan + resume 是
+  一个用户任务）；
+- `commit(ledger)`：存储提案、复发计数、聚类、确认；收尾阶段的所有账本写入
+  都做失败隔离。
+
+分类仍是 `LessonShape`，聚类仍按结构族，打分仍是"subject 在 catalog 中"，
+召回仍读存储；LLM 不参与任何学习判断。kernel 只提案、`LessonStore` 只落盘、
+门面只编排，分层没有上移。
+
+**代码审查同时修正的确定性缺陷**（全部有回归用例）：
+
+| 问题 | 修正 |
+|---|---|
+| `loop_detected` 事件写 `kind`，规范载荷只读 `signal`，同一失败两个指纹，循环教训永不复发 | 规范载荷回退读 `kind` |
+| 教训文案写 `capability ?` / `循环信号 loop`，与指纹实际匹配的 subject 不一致 | proposer 的措辞也从规范载荷取 subject/reason |
+| plan + resume 重复 apply/commit；复发扫描把 plan 阶段失败再数一次 | 单入口 + 已应用去重 + 只数最近一次应用之后的事件 |
+| 读取合并 USER/PROJECT_SHARED/SESSION，可能跨项目泄漏 | 读写都限定 PROJECT_LOCAL；坏 metadata 只跳过该 scope |
+| 30 天 stale 只存在于无人调用的 `match()` | `match_for_task` 同样执行 stale 截止 |
+| 进程内缓存过期 + 应用不检查 retired，归档教训被复活 | 每次读后端；`record_application` 拒绝已归档 |
+| 应用教训时从默认值重建记录，`/memory pin`、expiry、检索计数被覆盖 | 只改教训拥有的字段；`counterfactual` 随 `cf:` 标签持久化 |
+| 退役规则的成员教训重新逐条出现 | 退役规则同样抑制成员 |
+| 聚类 `source_task` 依赖后端插入顺序 | 成员按 id 排序 |
+| 规则状态可因外部计数重置而回退 | 状态只前进 |
+| `claim_fact_mismatch` 提案无 proposer 分支，静默丢弃 | 删除死调用；`DEBT_OPENED` 才是教训来源 |
+| 内部 `TypeError` 被误读为旧 store，绕过相关性过滤 | `inspect.signature` 判断 `available` 参数 |
+| plan+resume 的应用计数去重集合在写事件后才算，计数全被跳过 | 先读账本去重，再写事件与计数 |
+
+测试：新增 `tests/test_learning_gateway.py`（门面契约、禁用/损坏 store、
+评审回归）、`tests/test_lessons.py` 增加复发窗口、stale、scope、归档、pin、
+退役规则抑制等用例；`tests/harness/test_llm.py` 增加 resume 携带教训用例；
+`tests/kernel/test_lesson_proposer.py` 增加 `scope`/`kind` 真实事件载荷用例。
+
+**真实埋坑回放**（`docs/evidence/self-evolution/tty_lesson_pitfall_replay.py`，
+真实 ConPTY + TS 前端 + `deepseek/deepseek-v4-flash`，三个独立进程）：项目 A
+拒绝 shell 审批 → 杀进程 → 新进程执行"列文件 + 读 README"埋坑任务，3 条
+教训从磁盘加载并全部进入 `TASK_STARTED.constraints`（`lsn-3ffd045bb4383d75`、
+`lsn-5edf0e60348b279f`、`lsn-6c351d7d4c44ec49`），`需要授权` 0 次，回答来自
+`read` 与工作区布局探测；项目 B 的阴性对照无教训、无约束且任务照常完成。
+7 项断言全过；账本 `repl-7486403ef783` / `repl-38f5d2d51f55` /
+`repl-1cc3ce9dbf45`。全量：4214 passed, 100 skipped。
+
+### 修复：协议/终端边界吞掉方括号标识（2026-11-16）
+
+真实 ConPTY 验收 `/memory lessons` 时发现：输出写着「共 3 条教训」，但每条
+教训都**没有 id**。
+
+- **根因**：命令边界用 rich 渲染返回文本，而 rich 把任意 `[word]` 当样式
+  标签，遇到不认识的标签（`[lsn-3ffd…]`）**静默丢弃**。受影响的不仅是教训
+  id，还有 `[fact-…]`、`[claim-…]` 和 Markdown 链接。
+- **修复**（`xenon/repl/rich_markup.py`，交互 REPL 与协议 host 共用）：只把
+  rich 真正拥有的语法当标签——`Style.parse` 可解析、`DEFAULT_TOKEN_STYLES`
+  里的语义色、`[/…]`、`[link=…]`、`[@…]`；其余转义为字面量。交互 REPL 的
+  命令面板（`xenon/repl/repl.py`）与协议边界（`xenon/frontend/host.py`）
+  同一次修复；没有 rich 时不再删除文本，原样返回。
+- **回归**：`tests/test_rich_markup.py` 与 `tests/test_protocol_host.py`
+  覆盖「字面 id / Markdown 链接保留，真实标签照常剥离」。
+
+### 优化：会话稳定工具契约 + miss 计费（L4，2026-11-16）
+
+L3 结论之后仍能看到两类浪费：**工具块在任务边界被重写**、**miss token
+没有进账本**。按同一条数据流（选择 → 注入 → 计费 → 观察）一次性修掉。
+
+- **会话稳定工具契约**（`xenon/repl/session_tools.py`）：MCP 工具的
+  `extra_specs` 以前按任务重选，新任务第一调用只能命中 system + 工具块前段。
+  现在每个会话维护一个**只追加、首次出现顺序**的并集（上限 32，淘汰最久
+  未选且不是本任务刚选中的工具），同一工具在会话内保持它第一次被展示的
+  schema；执行时展开过的 schema 通过 `expanded_tools` 在后续任务继续展开，
+  不再退回索引行。
+- **契约只在有证据时增长**（`xenon/catalog/specs.py`）：`select_mcp_tool_specs
+  (..., relevant_only=True)` 要求目标里真的出现工具名/名称词干（阈值 8 分）；
+  一个偶然共享的描述词（2 分）不再算证据，无证据时返回空集而不是用目录顺序
+  填满预算。逐任务 prompt 仍保留补位（它是每次重建的）。
+- **证据只取用户输入**（`xenon/repl/runtime_adapter.py`）：`mcp_extra_specs()`
+  此前用完整 objective 打分，而前端第 2 轮起 objective 是**冻结请求信封**
+  （常驻上下文 + 学到的教训 + 本轮请求）。信封里的
+  `{"session_created_files": [...]}` 这类记账 JSON 键不是用户词汇，却让
+  `github:push_files` 等 13 个 PR 工具过了阈值，「运行 python -c print(11*12)」
+  的工具块从 2581 涨到 3228 token。现在相关性一律用
+  `user_objective`（用户原话）；信封仍是模型读到的内容，但不再当作任务需求
+  的证据。
+- **恢复路径同一条链**（`xenon/repl/runtime_adapter.py`、`xenon/harness/runner.py`）：
+  `resume` 以前不传 `extra_specs`，已批准计划里点名真实 MCP 工具的步骤无法
+  绑定；现在 `run` 与 `resume` 共用一个 `mcp_extra_specs()`，恢复的任务也
+  携带会话契约与已展开 schema。
+- **miss 计费**（`xenon/utils/llm_usage.py`、`xenon/utils/deepseek_cache.py`、
+  `xenon/kernel/usage.py`）：DeepSeek 只回 `prompt_cache_hit_tokens`，miss 必须
+  由 `prompt − hit` 推出。此前 `/cost`、`/cache` 与账本都用「存在嵌套 cache
+  字段」判断，网关只回命中份额时 miss 恒为 0；现在三处统一按「响应里出现
+  任一 cache 字段」推导，账本 `model_usage` 带 `cache_miss_tokens`。
+- **turn 内按生命周期排序**：任务稳定层（brief / earlier）在前，阶段协议
+  其次，只有事件是每次调用新增的，finisher 复用 planner 已付费的字节。
+
+真实入口（`xenon.exe` ConPTY，直连 `deepseek/deepseek-v4-flash`）两轮实测，
+第 2 轮使用**同一任务文本**（`用 shell 运行 python -c "print(11*12)"`）：
+
+| 观测 | 改动前 | 改动后 |
+|---|---|---|
+| 第 1 轮 `tools_tokens`（目标不含 MCP 工具） | 3371 | **2581**（不再追加无关 MCP 工具） |
+| 第 2 轮 `tools_tokens` | 3228（信封里的记账键选中 13 个 GitHub PR 工具） | **2581**（与第 1 轮逐字节一致） |
+| 第 2 轮首调用命中 | 8192/13806 = 59.3%，miss 5614 | **9600/12983 = 73.9%，miss 3383** |
+| 两轮 `system_tokens` | 7223 | 7223（不变） |
+
+注意：上表的「改动后」是同一会话两轮（`repl-529a50d22cfa` /
+`repl-5a505d780d03`），命中份额只说明**第一调用少付的 miss**；一个任务
+后续步骤的 miss 取决于模型轨迹，不在本项优化范围。
+
+**看成本，不看命中率**：命中 token 仍计价（flash ¥0.02/M vs miss ¥1/M），
+把历史垫进前缀可以把命中率做到 99% 而账单更高。目标指标是「每任务 miss
+token」，不是 hit%。
+
+回归：`python -m pytest tests/ -q` → **4192 passed, 100 skipped**。
+
+### 新增：自我进化的确定性总结（2026-11-16）
+
+自进化原先只做到「记下教训」：失败 → 提案 → 存储 → 下次携带 → 复发达阈值
+退役。用户指出这还不够——要能**自主吸取并总结教训**。实现只增加确定性
+聚类，LLM 不参与任何学习判断（详见 `docs/design/self-evolution.md`）：
+
+- **结构族**（`xenon/kernel/lessons.py`）：`LessonShape = event|subject`，
+  subject 取代码字段（capability / obligation kind / loop signal / tool），
+  不是自由文本。策略否决此前没有任何 subject（gate 写的是 `scope`），现在
+  回退到 `scope[0]`，且 `_check_policies` 的自动否决也会提案教训——它曾是
+  唯一「永远不会成为教训」的失败类别。
+- **总结**（`xenon/harness/lessons.py`）：同一族 ≥2 条失败 → 一条 `rule`
+  （`derived_from` 保存全部成员 id，文本由模板生成）；规则覆盖的成员不再
+  逐条进入约束区，摘要替代枚举。规则按 `hypothesis → active → proven`
+  推进，证据是「被应用后同族失败未复发」；被应用的规则若同族**仍然复发**，
+  达阈值即退役，并写 `DESIGN_DEBT_OPENED`——此时缺的是机制（工具设计 /
+  策略 / 验证），不是又一句提示；已退役的族不会被重新聚类复活。
+- **相关性**（`xenon/harness/runner.py`）：`match_for_task(available=
+  runtime.tool_subjects())` 不再盲选「最近应用的三条」：`policy_decision` /
+  `user_approval` 教训只有在 subject 出现在本任务 catalog 时才携带；
+  `debt_opened` / `loop_detected` 是通用教训。catalog 缺失时失败开放。
+  `parameter` 教训改为作为建议文本携带（此前存储后永不再见）。
+- **可见性**：新增 `/memory lessons`（`--all` 含退役）展示状态、结构族、
+  应用/复发次数与 `derived_from`；新增事件 `LESSON_CLUSTERED` /
+  `LESSON_CONFIRMED` / `DESIGN_DEBT_OPENED`，三者都在
+  `_INTERNAL_EVENT_KINDS` 中（规则经约束区进入提示，不从事件回放）。
+
+测试：新增结构族/聚类/幂等/状态机/族复发/设计债/相关性用例，以及
+「两次同族失败 → 一条规则 → 下一任务只携带规则」的真实 runner 链路。
+
+真实入口验收（2026-11-16，TS 前端 + ConPTY + `deepseek/deepseek-v4-flash`）：
+`tty_lesson_double_run.py` 扩展 `/memory lessons` 断言，8 项全过；账本
+`repl-50cd26e287cd`（提出/存储）与 `repl-bf5d5cbd1c88`（应用）覆盖
+`user_approval|shell` 与 `debt_opened|requirement_met` 两族，下一轮逐条
+携带并显示 id、状态、计数与 `族:`。该验收同时暴露了下面的方括号 id 丢失
+问题（已修）。
+
+### 优化：前缀缓存的三个阶段（2026-11-15）
+
+真实任务暴露三个断点，按「数据流 → 统一契约」一次性修掉，并用直连
+DeepSeek 的真实任务验收。厂商按 **system → tools → messages** 序列化，
+所以任何排在工具 schema 之前的可变字节都会让整块工具定义重新计费。
+
+- **L1 归因**：`model_usage` 此前只有 token 数，无法回答「这次调用最多能
+  命中多少」。现在每次调用都带 `model`、`phase`、`system_tokens`、
+  `tools_tokens`、`cacheable_tokens` 与真实 hit/miss
+  （`xenon/utils/llm_usage.py`、`xenon/kernel/usage.py`、`llm_client` 统一
+  标注）。`/cache explain` 因此能区分「前缀本来就只有 640 token」和「前缀
+  有 3344 token 但没命中」。
+- **L2 阶段不变式**：planner / finisher / reflector / reviewer 都把各自的
+  阶段协议**追加到 system**，导致 tools 块整块失效；同时这些阶段完全不发
+  tools，`cacheable` 上限只有 system 本身。现在协议进入 turn 消息，所有
+  6 个 phase builder 共用同一份 system 字节，非执行阶段也携带工具 schema
+  （`tool_choice=auto`；真出现工具调用时回退 `none` 重试一次），
+  `session_section` 也移到 turn 里。实测同一任务的 finisher 命中率从
+  **19%**（640/3344）升到 **77–95%**。
+- **L3 结论：不做追加式事件日志**。原计划的「call k+1 = call k 消息 +
+  新回执」经测量没有收益：delta 设计下同一阶段的协议与 preamble 本来就是
+  两次调用共有的前缀，唯一新增的字节就是事件本身；再追加旧事件只增长
+  prompt、稀释注意力。按约定只保留 L1+L2，并补上下面的跨回合修复。
+- **跨回合：system 改为会话稳定**。目标、约束、执行边界（含逐回合变化的
+  `Mode:`）、检索记忆、工作区布局、本任务选中的 MCP 工具名此前都在 system
+  里，于是同一个会话的**每一次新任务**都把 8–9k token 的 system 和整个
+  tools 块重算。现在这些任务级文本组成 **task brief**，位于 turn 消息的
+  开头；system 只保留人格、workspace、常驻工具目录和会话稳定上下文
+  （项目规则、技能索引）。`session_context_layers()` 按
+  `context_manager` 的 stable 标记分层下发（`TaskSpec.stable_context`），
+  volatile 记忆仍走任务 brief。
+
+真实入口（`xenon.exe` ConPTY，直连 `deepseek/deepseek-v4-flash`）验收：
+
+| 场景 | 改动前 | 改动后 |
+|---|---|---|
+| 任务第 2 次调用（finisher） | 19% | 77–95% |
+| 同会话第 2 轮首调用（planner） | 1024/14025 = **7.3%** | 8704/13758 = **63.3%**；另一轮 8320/13725 = 60.6% |
+| 第 2 轮的 `system_tokens` | 9030（含上一轮目标/记忆） | 7223（与第 1 轮逐字节相同） |
+| 同任务内 `step_reviewer` | 仅 system 可达 | 94.8% |
+| 整会话累计命中 | 40–44% | 58–84% |
+
+回归：`python -m pytest tests/ -q` → **4152 passed, 100 skipped**。同步
+更新了 harness 与 kernel 的契约测试（阶段协议进入 turn、目标/约束/边界/
+上下文的落点从 system 改为 task brief、会话投影进入 turn，属于有意的契约
+变更，不是回归）。
+
+文档：`docs/deepseek-guide.md` 补记内核请求的字节顺序与「任务级文本不得
+进入 system」的规则。
+
+### 修复：dashboard 的提问、审批反馈、重绘与滚动（2026-11-15）
+
+真实使用一次暴露四个断点，各自追到数据流断点后一并修掉：
+
+- **提问被当成新任务**（「切换模型后无法直接提交」）：内核阻塞在
+  `prompt.request` 时（`/set_model` 的编号选择器、`/setup`、`/skill create`），
+  dashboard 的提交走的是 `turn.start`，于是选择器一直开着、"11" 作为一轮任务
+  在旧模型上运行并 401。现在 `SessionController.submit()` 在 `state.prompt`
+  存在时把文本路由到 `prompt.response`；`xenon/frontend/host.py` 在命令线程
+  存活时拒绝 `turn.start`（报「a command is in progress」）；输入框占位符在
+  等待回答时变为「回答上方的问题（Enter 提交）」。
+- **审批点完没有状态**：点击后卡片立即消失，换成绿色「✓ 已应答：本次允许 —
+  已发送给内核，等待它继续本轮…」；POST 失败则回滚卡片。清除由
+  `state.turn.approval` 归零驱动，页面不伪造内核状态。
+- **侧栏刷新让主对话空白、终端一直闪**：查询应答与相同内容的 `status` 轮询
+  此前每次都产生新状态对象 → SSE 广播 → 页面整块 `innerHTML` 重写 + Ink 整屏
+  重绘。现在 reducer 对相同 facts 返回同一对象，`status` 的两个时钟按状态栏
+  显示的**整秒**归一（内核给 0.1 秒，此前每 500ms 一次轮询都算「变化」）；
+  `SessionController.updateState` 无变化不发布；服务端 16ms 合并并按快照签名
+  去重；页面所有写入走 `paint()`（同内容不碰 DOM），面板按 key 刷新且不再先
+  清空成「读取中…」，宫格只在关键帧变化时重载。
+- **滚动串台**：`body`/`main` 不再整页滚动；`.transcript`、`.panel`、`#grid`
+  各自 `overflow-y:auto` + `overscroll-behavior:contain`（窄屏恢复整页滚动），
+  滑侧栏不再带动主对话。
+
+文档：`docs/design/dashboard.md` 补记「提问期间的 submit 就是答案」、
+「只有快照真的变化才广播」与状态时钟的整秒语义。
+
+回归：`python -m pytest tests/ -q --ignore=tests/test_graceful_restart_integration.py`
+→ **4139 passed, 99 skipped**；`ruff check xenon tests` 干净；
+`cd frontend && npm run build && npm test` → **102 passed**（新增：相同状态
+保持同一对象、亚秒时钟不算新事实、提问期间输入路由、审批确认卡、面板刷新不
+清空、提交轮询去重、主对话与侧栏各自滚动）。
+
+真实入口（`xenon.exe` ConPTY + `--dashboard`，浏览器同一套 HTTP）：
+
+- `verify_dashboard_loop.py` → PASS：`/set_model` 的提问由
+  `/api/action submit` 回答后提示清除、命令打印「模型已设置并切换」、**没有开启
+  任何一轮**；6 轮只读查询后 `rev` 不变；空闲 3 秒 SSE 仅有首包；审批 POST 后
+  0.03 秒内 `turn.approval` 清空、随后 2.4 秒不再复活，回合以 `Python 3.14.4`
+  正常结束；页面确实来自本次构建（`paint()`/`answeredApproval`/整秒契约都在）。
+- `verify_dashboard_variants.py` → PASS：空闲时 20 次面板查询 → 终端
+  **0 字节**；终端里输入 `/set_model`、由 dashboard 回答（同样无新回合）；
+  dashboard 选择**拒绝** → 卡片 0.002 秒清除，本轮账本恰一条
+  `approved=false`，shell 命令未执行。
+
+### 清理：删除模式路由的内部遗留；前端/协议/文档与单循环实现对齐（2026-11-15）
+
+上一轮把"一个循环"收口到了界面，但**内部**仍留着整套按任务切换模式的路由
+机制（模块、配置、CLI 参数、命令、会话状态），只是不再被调用。留着停用的
+路由器和留着停用的开关一样，会让下一位读者以为某个回合还会用到它。
+
+- **删除模块**：`xenon/repl/intelligent_router.py`、`paradigm_selector.py`
+  （规则 R1–R9 按 7 个范式名分派）、`feature_extractor.py`。`routing_history.py`
+  保留 `RoutingRecord` / `RingBuffer` / `RoutingHistory`（模型路由器
+  `auto_router.py` 仍在使用），删除 `RoutingDecisionRecord` / `DecisionHistory` /
+  `ParadigmPreferences` / `OverrideRecord` ——这四个类只服务于已删的模式路由器。
+- **删除装配与入口**：`REPL` 不再构造 `intelligent_router`，会话状态不再暴露它；
+  `start_repl()` 去掉 `auto_route` 参数与启用分支；`xenon --auto-route` 参数删除
+  （不再接受，避免一个"接受但无行为"的开关继续误导）；`/auto-route` 命令及其
+  `stats`/`export` 一并删除（命令表由自动发现生成，`/help` 随之消失）。
+- **删除配置面**：`system_config.py` 的 `AutoRouteConfig`、`auto_route` 配置段、
+  `XENON_AUTO_ROUTE*` 五个环境变量、项目配置可覆盖段与示例配置中的对应块。
+- **删除死代码**：`selector.mode_choices()`（只有测试调用，界面早已不提供模式
+  选择器）及其 4 条测试；`difficulty_estimator` 的范式推荐（`TaskProfile.recommended_engine` /
+  `engine_confidence` / `engine_reason` 与 `_recommend_engine()`）——它只服务于已删的
+  模式路由器，模型选择本身只需 `TaskProfile` 的复杂度与意图字段。删除后 203 条
+  相关用例（模型路由 / 缓存路由 / 队列 / 意图分类）全绿。
+- **改名 ReAct 时代符号**：`_run_react_engine` → `_run_loop_turn`，
+  `_escalate_for_react` → `_escalate_to_loop`（正文一直是 `run_kernel_turn`），
+  调用方与 6 个测试文件同步；`direct_chat.py` / `kernel_host.py` 的 ReAct 措辞
+  改为"交给循环执行"。
+- **前端与协议对齐实际实现**：`sessions` 帧不再发送旧预设名 `paradigm`
+  （`frontend/host.py`、`queries.py`、`protocol.ts`），dashboard 已按"单循环"
+  显示；测试夹具里的 `mode: 'react'` / `'切换模式'` / `/auto-route` 示例改为
+  真实值；`frontend/README.md` 说明没有模式选择器可做。
+- **终端一致性**：`/sessions` 表的"模式"列改为"循环"并显示 `单循环`（旧会话
+  保存的预设名只是阶段配置）；`/setup` 描述去掉"选模式"。
+- **文档**：`docs/OPERATION_GUIDE.md` 的 §4.2 与 §7 改写为"单循环 + 阶段配置"
+  （含旧的 7 引擎说明及其删除原因）；`docs/COMPARISON.en.md` 的"多范式核心
+  差异化"与英文版对齐中文版（一个循环 + 6 个 profile）；`docs/ARCHITECTURE.md`
+  的项目配置可覆盖段、`docs/design/dashboard.md` 的 `sessions.list` 字段同步；
+  删除已完全失效的 `docs/智能路由配置指南.md`。
+
+回归：`python -m pytest tests/ -q --ignore=tests/test_graceful_restart_integration.py`
+→ **4138 passed, 99 skipped**（减少的用例来自已删除的模式路由测试）；
+`ruff check xenon tests` 干净；`cd frontend && npx tsc --noEmit && npm test` →
+91 passed。
+
+真实入口复验（同一个 `xenon.exe`）：`integration_phase_h.py` → PASS（H4 改为
+断言 `/help` 中不再出现 `/auto-route`，其余 H1–H7 不变）；`integration_phase_g.py`
+→ PASS（成功工具回合：读目录后回答 25 个 `.py`，无审批卡；终端与 dashboard 的
+`/mode` 逐字一致）。H7 的 `python -c` 仍被宿主预检拒绝，模型给出带回执的诚实
+回答；harness 现在把"有回执的拒绝"和"证明 42"都视为合格，只拒绝无证据的数字。
+`xenon --help` 已无 `--auto-route`。
+
+### 修复：把"单一循环"收口到每一个界面（2026-11-15）
+
+README 与架构文档早已声明"7 引擎已删除，模式只是同一个循环的阶段配置"，内核也
+确实只有 `LoopRuntime`；但**表面**仍像有多个模式和多个引擎，用户看到
+`/mode` 回一句 `direct`，自然会问"我是不是还在 direct 模式"。
+
+- **一处描述，所有界面共用**（`xenon/modes.py`）：新增 `loop_phases()` /
+  `describe_loop()`，按 `LoopProfile` 的字段推导阶段名（设计文档 §2.2 的
+  Plan → React → Reflect），而不是按模式名查表。`/mode`、`/status`、欢迎卡、
+  状态栏、dashboard 快照与内置编辑器状态行全部调用它，五处不可能再各说各话。
+- **`/mode` 只读且说清运行规则**（`xenon/repl/command_groups/model.py`）：不再
+  打印内部预设名；额外一行给出真实刹车——外层最多 3 轮（`LoopRuntime.MAX_OUTER_ROUNDS`）、
+  单轮步数上限 1024（`DEFAULT_MAX_STEPS`）、停滞 180 秒让位（`Budget` 默认值），
+  数字全部 import，不手抄。
+- **`/auto-route` 退役切换语义**（`xenon/repl/commands.py`、`xenon/repl/repl.py`、
+  `xenon/main.py`）：`turn_flow` 早已不再询问智能路由，但 `/auto-route on` 仍
+  承诺"自动选择最合适的模式"，`--auto-route` 仍会把它打开。现在 `on/off` 不再
+  改任何状态，只解释"模式自动路由已停用"；`stats/export` 保留，明确标注为
+  停用前的历史决策；CLI 参数仍接受（避免脚本启动失败）但只打印同一说明。
+- **界面措辞与键位**（`frontend/src/ui.tsx`、`frontend/src/App.tsx`、
+  `frontend/src/dashboard/page.ts`、`xenon/repl/status_bar.py`）：欢迎卡
+  `MODE direct` → `LOOP 单循环 Plan → React → Reflect`；底栏显示 `单循环`；
+  `Shift+Tab` 从 `/mode next` 改为 `/mode`（落到解释，而不是空键）；
+  dashboard 的"模式"列改为"循环"，已保存会话一律显示 `单循环`（旧预设名只是
+  同一循环的阶段配置）。
+- **对话文案不再声称切换引擎**（`xenon/repl/direct_chat.py`）：直答升级到循环时
+  的"自动切换到 ReAct 模式"改为"交给循环执行"；失败提示同步改词。
+- **文档对齐**（`docs/TUI.md`、`docs/ARCHITECTURE.md`、`docs/design/frontend-protocol.md`）：
+  写明一个循环的三个阶段、外层次数与刹车，`ready.mode` 与 `status.mode` 的语义
+  改为"循环标签"。
+
+真实复现（`integration_phase_h.py`，同一个 `xenon.exe` + `--dashboard`）：
+H1 欢迎卡显示 `LOOP 单循环 Plan → React（逐步） → Reflect（每步校验）`，全屏
+无 `MODE` / `direct`；H2 `/mode` 与 H3 dashboard 转写逐字一致；H2b `/mode next`
+回答"忽略"；H4 `/auto-route on` 回答"已停用"且不声称启用；H5 `/status` 只有
+`循环:` 行；H6 dashboard 快照与实时状态帧同标签；H7 真实工具回合
+（`python -c` 被拒 → 写临时脚本 → 执行）以 42 结束，底栏 `· 单循环 ·`。
+
+回归：`python -m pytest tests/ -q --ignore=tests/test_graceful_restart_integration.py`
+→ **4249 passed, 100 skipped**；`ruff check xenon tests` 干净；
+`cd frontend && npx tsc --noEmit && npm test` → 91 passed；
+`integration_phase_h.py` → PASS。
+
+### 修复：不向人索要"工具必然拒绝"的授权；阻断回合不得空回答（2026-11-15）
+
+真实入口 `xenon.exe`（ConPTY）+ `--dashboard`，复现「数一下当前工作目录下有
+多少个 .txt 文件」：
+
+- **工具边界预检**（`xenon/catalog/gateway.py`、`xenon/kernel/runtime.py`）：
+  账本记录显示，人类为 `python -c ...` 批准了一次升级，回执却是"被宿主安全过滤
+  拦截"——这次"同意"什么也没买到；模型随后两次重发同一命令，第 3 次策略拒绝触发
+  上限，回合 `running → blocked`，`turn.end.answer` 为空。现在
+  `LegacyToolGateway.preflight()` 用与工具**同一套**规则集（`ToolNode` 的模块级
+  `_shell_refusal` / `shell_command_refusal`）在提问前判断"这个调用就算批准也
+  跑不了"；`RequestEscalation` 命中时不再弹卡，改为一次**可继续**的 `refuse`
+  （附"不要重问，用拒绝文本里点名的替代写法"），循环因此还能改走别的路。规则是
+  结构性的（`shell` 能力 + 命令参数），不是工具名枚举。
+- **阻断/失败回合必须有话说**（`xenon/frontend/host.py`）：`turn.end.answer` 为空
+  时改为复用 REPL 的 `_result_summary`（债务、账本里的阻断原因、阶段），取消的
+  回合保持沉默（那是用户自己按的停止）。
+- **步内预期必须能被该步证明**（`xenon/kernel/runtime.py`）：原账本的
+  `plan_accepted` 把 `shell` 步骤绑到 `test_passed`；shell 回执按构造是 `Opaque`，
+  V1 永远绑定不上，修复循环于是不断重发命令。现在计划接受时按"命题种类 ← 回执
+  效果 ← 该步能力"的结构规则丢弃不可证明的预期（`drop_unprovable_expects`），
+  记入 `CONTROL_DECISION` 并给模型一条提示；`file_changed` / `file_created` /
+  `no_stray_changes` 由工作区探针结算，任何路线都保留。
+
+真实复现（同一入口）：G3 计数回合中，模型先被 `read-only` 拒绝，再发起
+`request_escalation`；预检判定"工具必然拒绝"后**没有打扰用户**，循环改走
+`search`。变体 V1（`.txt` 计数）仍然弹出授权卡，终端裸按 `1` 应答，答案正确。
+
+回归：`python -m pytest tests/ -q --ignore=tests/test_graceful_restart_integration.py`
+→ **4239 passed, 100 skipped**；`ruff check xenon tests` 干净；
+`integration_phase_g.py` / `integration_phase_g2.py` → PASS。
+
+### 验证：审批双端语义 + 跨端复杂任务（Phase E/F，2026-11-15）
+
+真实入口 `xenon.exe`（ConPTY）+ `--dashboard`，同一会话内混合驱动：
+
+- **浏览器审批**（终端不动）：shell 真实执行，答案含 `Python 3.14.4`；该轮账本
+  恰好 1 条 `user_approval`（`approved: true`）。
+- **终端按键审批**：按 `1` 后、任何浏览器 POST 之前 `dashboard.snapshot` 的待批
+  列表即清空（证明按键到达内核）；该轮账本同样恰好 1 条；随后迟到的浏览器审批
+  POST 返回 202 no-op，账本仍为 1 条（双端幂等）。
+- 之后普通追问正常（`1+1 → 2`）。
+- **跨端复合任务**：浏览器提交“写文件 + shell 读回”，终端按 `1` 批准；磁盘上
+  `e2e_scratch/bridge_note.txt` 内容为 `bridge-ok`；终端追问读取该文件正确复述；
+  浏览器执行 `/status` 与纯问答后，终端仍渲染同一会话。
+
+**联调中排除的两个“假缺陷”**（记录以免再犯）：
+
+- `ledger.events` 只回答**最近一轮账本**（与 `diff.get` / `evidence.chain` /
+  `plan.get` 同口径），不是会话累计。把它的长度当“会话总数”会误判“终端无法
+  应答同一会话的第二次审批”——实际账本里该轮 `user_approval` 恰好一条且
+  `approved: true`。已在 `docs/design/dashboard.md` 的查询契约写明「按轮次取数」。
+- 审批卡文字在应答后可能仍留在终端单元格中，**屏幕文本不能作为“按键已生效”的
+  门控**；回合也可能在两次轮询之间就结束（没有 `running: true → false` 边缘）。
+  E2E 的等待改为协议状态：`dashboard.snapshot.approvals` 与 `/api/state` 的
+  `turn.approval.id` 对齐才按键，回合结束以输入前记下的 `turn.end.turn` 标记
+  变化判断。
+
+回归：`python -m pytest tests/ -q` → **4237 passed, 101 skipped**（393 s）；
+`npm test` → **91 passed**；`npx tsc -p tsconfig.json --noEmit` 干净；
+`ruff check xenon tests scripts` 干净。
+
+### 修复：MCP 端到端联调暴露的路由与交付缺陷（2026-11-15）
+
+真实入口 `xenon.exe`（ConPTY）+ `/dashboard`，配一个真实 stdio MCP 服务器
+（普通 JSON-RPC 进程，工具 `echo`/`upper`），跑完"`/mcp add` → `/mcp tools` →
+真实任务调用 → 退出重启 → 变体任务"（`integration_phase_d.py`，PASS）。
+MCP 传输、注册表、catalog 注入、审批各自单测都正常，缺陷全在
+"意图判定 → 执行契约 → 回合路由 → 最终交付"的衔接处：
+
+- **点名工具的回合被判成"不需要外部操作"**（`xenon/repl/execution_policy.py`、
+  `xenon/repl/turn_contract.py`）：`/mcp add` 已连接、`/mcp tools` 已列出
+  `e2e_echo:echo`，但任务本体「使用 MCP 工具 e2e_echo:echo 回显 hello」被判成
+  `ANSWER_ONLY`（理由"请求不需要外部操作"）：信号层没有"用户点名调用工具"的
+  结构，契约因此 `requires_tools=False`，回合走直接对话（账本是
+  `chat-*.jsonl`），模型只能回答"这个工具不可用"。现在信号层新增统一的显式
+  工具请求：`server:tool` 命名空间标识符（两侧字母开头，排除时刻/URL/盘符）
+  与「使用/调用 … 工具」句式，与具体 MCP/领域无关；策略层据此给到
+  `READ_ONLY`，契约层补 `read` 操作，交互 REPL 与协议宿主通过同一个契约路由
+  进内核。远端工具是否更敏感仍由执行器按工具名分级 + 审批升级决定，写/命令
+  禁令照旧一票否决（"不要使用任何工具"仍判 `ANSWER_ONLY`）。
+- **内核 finisher 丢弃散文式总结**（`xenon/harness/llm.py`）：工具已真实调用、
+  回执内容就是 `echo:hello-e2e`，但模型对 finish 提示用散文回答（未按协议返回
+  JSON），`_salvage` 在 JSON 解析失败时直接换成占位符
+  `Plan execution completed; final summary unavailable.`——用户看到"总结不可用"，
+  成功的任务看起来失败。改为保留散文正文（剥掉代码围栏）；只有空回复或畸形
+  JSON 对象才回退占位符。
+
+验证：同一入口重跑 Phase D 全程 PASS——`/mcp add` 连接、`/mcp tools` 列出
+`e2e_echo:echo`/`e2e_echo:upper`、dashboard `mcp.status` 同步；echo 任务经审批
+真实调用工具，答案含回执原文 `echo:hello-e2e` 且声明未改文件；退出后新进程
+`/mcp list` 仍有 `e2e_echo`（凭据持久化 + 懒连接），upper 变体返回
+`upper:ABC`。全量回归与 `ruff check` 结果见上方 Phase E/F 记录。
+
+### 修复：真实多端联调发现的三个跨端缺陷（2026-11-15）
+
+真实入口 `xenon.exe`（ConPTY）+ `/dashboard`，跨进程跑完"浏览器取消长任务 →
+追问 → 只读内核任务 → 保存 → 新进程 `--resume` → 命令/dashboard 证据/上下文"
+（`integration_phase_c.py`，PASS）。三个缺陷都不是单模块问题，而是信息在
+"意图判定 → 执行契约 → 会话恢复 → 前端输入"之间断裂：
+
+- **带"不要修改、不要运行"的读取请求被折叠成仅回答**（`xenon/repl/
+  execution_policy.py`、`xenon/repl/turn_contract.py`）：用户说"读取
+  `xenon/__init__.py` 告诉我版本，不要修改文件也不要运行命令"，硬约束把
+  `no_write + no_execute` 直接判成 `ANSWER_ONLY`，而任务实际需要读文件；模型
+  读取后返回工具协议，被执行层判为"违反仅回答约束"，任务失败。现在
+  `read_evidence` 优先：同时 no-write/no-execute 但要求读取时保持
+  `READ_ONLY`，`_constraint_contract` 的操作集也随之带 `read`。验证：同一
+  提示词在真实前端返回版本 `1.0.0` 并附 read 回执。
+- **恢复会话的账本/证据到不了 dashboard**（`xenon/frontend/host.py`、
+  `xenon/frontend/queries.py`）：`--resume` 只恢复 REPL 的账本指针，宿主的
+  `last_run/last_ledger` 仍是空的；`/evidence` 在终端正常，`evidence.chain`
+  却报 `未报告`。宿主新增 `_sync_kernel_view()`（命令结束与启动恢复共用），
+  读不到运行对象时按 `<ledger>.result.json` 读取内核自己写的结果；只读查询
+  层 `_evidence_view()` 统一走这一事实源。验证：恢复后 dashboard 与终端指向
+  同一账本 `repl-*.jsonl`、同为 `partial`。
+- **intro 动画吞掉第一段输入**（`frontend/src/App.tsx`）：启动动画期间
+  `useInput` 的第一个按键只用于"跳过动画"然后 `return`，整段输入被丢弃。
+  `--resume` 的"已恢复会话"卡片正好与 3 秒动画重叠，恢复后的第一条命令
+  （如 `/context`）静默消失；新会话里手快的人第一字符也会丢（`/status`
+  变成普通任务 "status"）。改为：跳过动画后继续走正常的按键处理，输入不再
+  丢失。验证：新会话启动即输入 `/status` 能执行；恢复会话后第一条 `/status`
+  输出"系统状态"，Phase C 的 `/context`、`/evidence` 全部通过。
+
+验证：`python -m pytest tests/ -q` → **4223 passed, 101 skipped**（351 s）；
+`npm test` → **91 passed**；`npx tsc -p tsconfig.json --noEmit` 干净；
+`ruff check xenon tests scripts` 干净（`docs/evidence/` 下的历史探针脚本另有
+34 条既有告警，本次未动）。真实 ConPTY Phase C PASS：从 dashboard 取消长任务
+（`cancelled=true`）、同会话后续追问、只读任务产出账本、`/save` 后新进程
+`--resume` 恢复，终端 `/context`、`/evidence` 与 dashboard `evidence.chain`
+指向同一账本且状态一致，跨进程上下文问答正确回忆起
+`xenon/__init__.py` 与版本 `1.0.0`。
+
+### 修复：真实多端联调发现的四个集成缺陷（2026-11-14）
+
+真实入口 `xenon.exe`（ConPTY）+ `/dashboard`，一个会话连续跑完计划 → 批准 →
+交付 → 保存 → 分叉 → 压缩 → 浏览器提交任务与命令（`integration_phase_b.py`，
+PASS）。单模块测试全绿，缺陷都出在衔接处：
+
+- **计划同意误读内核事件**（`xenon/frontend/queries.py`、`docs/design/dashboard.md`）：
+  账本 `plan_accepted` 是运行时"已提出计划并停在 PLANNED"的内部标记，面板却当成
+  "用户已批准"。`plan.get` 改为复用 `/plan` 的同一解析器 `resolve_plan_approval`
+  （会话事件 `plan/approved|rejected` 按 task_id 绑定），并新增 `rejected`；
+  没有用户决定时，已交付/已结束的运行视为执行过，其余仍是待批准。页面补
+  "待批准/已批准/已驳回"三种横幅。
+- **批准计划的交付卡死 60 秒**（`xenon/catalog/finalizer.py`）：宿主 stdin 是
+  NDJSON 管道，`GitFinalizer` 的 git 子进程继承它后一直等输入，直到 60 s 超时，
+  交付被记为 `unavailable`（"cannot read git status"），没有生成提交。改为
+  `stdin=subprocess.DEVNULL`，并把真实 git 错误写进失败原因。复测：批准计划在
+  10 s 内完成并产生交付提交。
+- **命令线程的内核运行不进入面板**（`xenon/repl/runtime_adapter.py`、
+  `xenon/frontend/host.py`、`xenon/repl/turn_flow.py`）：`/plan approve` 在命令
+  线程恢复计划，宿主只在 `run_turn` 更新 `last_run`，于是账本已 `verified` 且交付
+  了提交，`evidence.chain` 仍报 plan-only 的 `unverified`。现在所有内核运行统一
+  发布到 `repl._last_kernel_run`，宿主 `_sync_kernel_view()` 在命令结束后接管
+  **新**运行（普通命令不会复活上一轮已失败的运行）。
+- **Dashboard 拒绝空参数**（`frontend/src/dashboard/server.ts`）：`command.args`
+  与 `prompt.value` 套用了"非空字符串"校验，无参数命令 `/cost`、回车接受默认
+  答案在浏览器 400、在终端正常。改为可选字符串（缺省/null → `""`，非字符串仍
+  400），并补服务端回归。
+
+验证：`python -m pytest tests/ -q` → **4219 passed, 101 skipped**；
+`npm test` → **91 passed**；`npx tsc -p tsconfig.json --noEmit` 干净；
+`ruff check` 干净。真实 ConPTY Phase B 全链路 PASS（计划仅规划、批准后交付
+`beed68c0`、`pytest` 7 passed、`evidence=verified`、保存/分叉/压缩、浏览器提交
+fork 任务交付 `bff4fd32`、Dashboard `/cost` 落进共享 transcript；查询最大耗时
+0.10 s）。
+
+> 开发注意：源码工作区的入口优先加载 `xenon/frontend/assets/xenon-ui.js`
+> （发布副本）。改完前端后若只跑 `npm run bundle`，真实入口仍会用旧产物；
+> 验证前先执行 `python scripts/build_frontend_assets.py --skip-build`。
+
+### 新增：面板九项验收补齐（E1/E2/E3/E5/E6/E7/E9/E10/E11，2026-11-14）
+
+把计划里标记为「简化」的九项面板能力补齐，仍然只读、不改内核设计。
+
+- **查询帧**（`xenon/frontend/queries.py`、`host.py`）：
+  - 新增 `sessions.tree`：从会话事件日志读 `turn/user` 与 `fork.parent`，
+    返回 `nodes[{id,parent,turns,events,first_at,last_at}]` + `roots`（最多 100 份）。
+  - `dashboard.snapshot`：债务项增加 `next_action` / `attempts` /
+    `acceptable` / `user_accepted`，顶层增加 `delivery`。
+  - `workspace.status` / `diff.get`：增加 `baseline` / `baseline_count` /
+    `delivery`；diff 每个文件带 `origin`（created / modified / baseline）与
+    `verification`（verified / attributed / unverified）。
+  - `plan.get`：增加 `accepted` / `proposed` / `current`。
+- **页面**（`frontend/src/dashboard/page.ts`）：
+  - 输入框 `/` 斜杠补全（↑/↓ 选择，Tab/Enter 补全，Esc 关闭）。
+  - ≥1400px 四宫格（总览/Diff/执行过程/证据链，2.5s 节流），「▦ 宫格」切回标签模式；
+    窄屏退化为标签页。
+  - Diff：origin/verification 角标、unified/并排切换、baseline 污染区、交付 commit。
+  - 执行过程：瀑布条显示逐事件耗时、>30s 停滞、连续同类事件重试、取消/中断、token 合计。
+  - 证据链：增加投影 JSON（可展开）。
+  - 计划：步骤流 + `depends_on` 依赖、当前步骤高亮、待批准/已批准横幅。
+  - 审批：五档按钮（本次/本轮/30 分钟/拒绝/取消）与提问输入框，面板内可直接作答。
+  - 工作区：脏文件来源角标、baseline 污染表、已核验/归因/未核验、交付 commit。
+  - 会话：fork/rewind 树 + 已保存会话 + 记忆 + MCP。
+- **契约修复**（真实入口发现）：`plan.get` 在没有账本时只返回 `plan/steps/error`，
+  缺少 `accepted/proposed/current`，面板必须按「有无账本」分支。现在错误帧与正常帧
+  字段一致；`diff.get`（非 git）与 `evidence.chain`（无账本）同样补齐
+  `baseline/delivery`、`projection`。
+- 文档：`docs/design/dashboard.md`（查询字段、九个面板契约、布局）、
+  `docs/design/frontend-protocol.md`（§3.10 增加 `sessions.tree` 与稳定形状契约）。
+
+验证：`cd frontend && npx tsc -p tsconfig.json --noEmit` 干净；`npm test` →
+**91 passed**（新增 `page.test.ts` 9 条，在 VM 里执行内联页面脚本，覆盖九项）；
+`python -m pytest tests/frontend -q` → **18 passed**；`ruff check xenon tests` 干净。
+
+真实 ConPTY 验收（`dash_gaps_e2e.py`，rc=0）：`xenon --dashboard` → 页面包含
+宫格/并排/baseline/待批准/会话树标记；十一个查询 kind 全部 200 且字段齐全
+（`sessions.tree` 返回 100 个节点）；浏览器提交真实写文件任务、浏览器作答审批，
+轮次完成并产生答案；`dashboard.snapshot.delivery.commit` 非空且
+`verified/attributed/unverified_paths` 含该文件；`diff.get` 的 baseline 样本
+（`CHANGELOG.md`）带 `origin=baseline`、`verification=unverified`；
+`workspace.status.baseline_count ≥ 1`；终端无残留面板。原 `dash_e2e.py`
+回归仍 rc=0。
+
+> 该验收任务由 Xenon 自己的交付逻辑生成了一次 `xenon: …` 提交；验收后已
+> `git reset --soft` 撤销并把 scratch 文件从工作区删除，仓库回到验收前状态。
+
+### 新增：本地可视化面板 `/dashboard` / `--dashboard`（2026-11-14）
+
+终端仍是默认入口；`/dashboard`（或 `xenon --dashboard`）在同一个 Node 进程内起一个
+只监听 `127.0.0.1` 的 Web 面板，与终端共享同一个 `SessionController` 和同一份内核会话。
+面板是第二个渲染器，不是第二个真相源：不 spawn 内核、不 import `xenon.repl.*`、
+不直接读账本。
+
+- **只读查询帧**（`xenon/frontend/host.py` + `queries.py`）：
+  `dashboard.snapshot` / `workspace.status` / `diff.get` / `ledger.events` /
+  `evidence.chain` / `plan.get` / `memory.list` / `mcp.status` / `report.get` /
+  `sessions.list`，请求带 `id`，回答为同 id 的 `<kind>.result`；不能回答时给
+  `error` 字段，不抛异常。独立 daemon 线程执行，避免 git 阻塞 stdin 主循环。
+- **本地服务**（`frontend/src/dashboard/server.ts`）：`node:http`，无新增运行时依赖；
+  随机端口 + 每进程随机 token（`?t=` 或 Bearer，`timingSafeEqual`）、Host 允许列表、
+  仅回环绑定、CSP / `X-Frame-Options: DENY`、64 KB 请求体上限、SSE 最多 16 个客户端；
+  没有 shell/eval 端点；`XENON_DASHBOARD=0` 关闭。
+- **页面**（`frontend/src/dashboard/page.ts`）：单个自包含 HTML（无 CDN），
+  概览 / 主交互 / Diff / 执行过程 / 证据链 / 计划 / 审批 / 成本 / 工作区·会话
+  九个视图；SSE 事件是带 `rev` 的完整快照，断线重连不丢事件、不重复渲染。
+- **双端一致**：终端与浏览器都能提交输入、运行命令、回答审批/提问、取消；
+  同一审批只有第一次回答有效，第二次是幂等的 no-op。
+- 命令与入口：`/dashboard` 注册进 `/help` 与补全；`xenon --dashboard` 启动时自动打开；
+  `--ui python` + `--dashboard` 明确拒绝（退出码 2）。
+- 文档：新增 `docs/design/dashboard.md`；`docs/design/frontend-protocol.md` 增加
+  §3.10 查询帧；`docs/TUI.md` 与 `frontend/README.md` 增加面板说明。
+
+真实 ConPTY 验收（`xenon.exe` 入口，`dash_e2e.py` / `dash_turn_e2e.py` /
+`dash_approval_e2e.py` 均 rc=0）：`/help` 列出 `/dashboard`；终端打印带 token 的地址；
+无 token 401、非法 Host 403；页面与 `/api/state` 可读；`dashboard.snapshot`
+（模型 `['deepseek-v4-flash']`）与 `workspace.status`（branch main）应答；
+SSE 首包到达；浏览器 `POST /api/action` 运行 `/status` 在终端可见；非法 action 400；
+`XENON_DASHBOARD=0` 明确拒绝。浏览器提交真实任务后终端实时渲染、状态携带
+objective/answer；终端审批卡与浏览器共享同一 request id（`a-2 shell`），浏览器选
+「本次允许」后轮次完成（42），第二次回答无副作用。
+
+验证：`cd frontend && npx tsc -p tsconfig.json --noEmit` 干净；`npm test` →
+**82 passed**（含 dashboard server 9 条）；`python -m pytest tests/frontend -q` →
+**15 passed**；全量 `python -m pytest tests/ -q` → **4208 passed, 101 skipped**；
+`ruff check xenon tests` 干净。
+
+#### 修复：面板所有查询超时——git 子进程继承了宿主的 NDJSON stdin（2026-11-14）
+
+真实 ConPTY 里 `/dashboard` 打开后，`workspace.status` 30 秒无应答、`diff.get`
+8 秒后返回「工作区不是 git 仓库」。根因不是 git 慢：宿主 stdin 是协议管道，
+`_git()` 的 `subprocess.run` 继承了它，git 子进程一直等输入，直到 `GIT_TIMEOUT`
+才被杀死；面板的 5 秒查询超时先到。
+
+修复（`xenon/frontend/queries.py`）：git 子进程 `stdin=DEVNULL`，并设置
+`GIT_TERMINAL_PROMPT=0`（不在无终端时等凭据）、`GIT_OPTIONAL_LOCKS=0`（只读查询
+不抢 index 锁）。复测同一入口：`workspace.status` 0.09s、`diff.get` 0.15s。
+回归测试 `test_git_never_inherits_the_host_stdin` 用 spy 锁定这三个参数。
+
+#### 修复：`--dashboard` 启动通知让欢迎卡消失（2026-11-14）
+
+`showWelcome` 的条件是 `ready && transcript.length === 0`；面板地址以 notice 写入
+滚动区后，欢迎卡（版本、模型数、cwd）在第一秒消失，ConPTY 验收直接卡在
+`wait_ready`。修复（`frontend/src/state.ts`）：抽出 `showWelcomeCard(state)`，
+空会话的判断忽略 `kind: 'notice'` 的块；真实轮次/命令仍会正常顶掉欢迎卡。
+新增 reducer 测试「a notice does not hide the welcome card, a turn does」。
+
+### 修复：/import_models --dry-run 报"已注册 0 / 更新 0"；/remove_model 不落盘（2026-11-14）
+
+真实 ConPTY 验收：`/import_models e2e_scratch/import_demo.yaml --no-probe --dry-run`
+对一份合法文件输出「✅ 已注册 0 / 更新 0 个模型」——与畸形文件完全同一行，
+用户无法据此判断文件是否可用；随后的真实导入成功，但 `/remove_model <alias>`
+只删内存，重启后 `/import_models` 写进 `models.yaml` 的条目又回来。
+
+根因两条，都是"结果没有回传到下一层"：
+
+1. `batch_register(..., dry_run=True)` 在注册循环前直接 `return`，`registered` /
+   `updated` 必然为空；`BatchResult` 没有"我本来会做什么"的字段。
+2. `/remove_model` 只调 `registry.models.pop(...)`，从未写回盘；而
+   `ModelRegistry` 不记录自己是从哪个文件加载的，于是"写回"也无从安全实现
+   （进程内/测试 registry 猜路径会覆盖用户真实配置）。
+
+修复：
+
+- `BatchResult` 增加 `dry_run` / `would_register` / `would_update`；dry-run 先按
+  registry+pool 的存在性分类再返回，摘要改为 `🧪 dry-run：预计注册 1 / 更新 0
+  个模型（未写入磁盘）` 并列出新增/更新别名。（方括号 `[dry-run]` 会被 rich
+  当样式标记吞掉，所以状态词放在冒号前用的是普通文本。）
+- `ModelRegistry.source_path` 记录**实际加载来源**；`/remove_model` 仅在该路径
+  存在时 `save_to_file` 持久化，无来源则诚实说明"当前会话；无配置文件可写"，
+  凭据派生模型（`derived=True`）说明"重启后会重新加载"。
+
+真实 ConPTY 复现（同一入口）：dry-run → `🧪 dry-run：预计注册 1 / 更新 0 个模型
+（未写入磁盘）` + `新增: imported-flash`；真实导入 → `✅ 已注册 1 / 更新 0 个模型`
++ `💾 已持久化到 …\.xenon\models.yaml`；`/remove_model imported-flash` →
+`✅ 模型 'imported-flash' 已移除` + `💾 已持久化`，之后 `/models` 不再列出。
+验收后 `~/.xenon/models.yaml` 已按验收前的字节恢复（sha256 一致），用户配置未被测试污染。
+
+验证：`python -m pytest tests/test_batch_register.py tests/test_model_commands.py -q`
+→ **40 passed**。
+
+### 修复：/code、/sub-agent、/edit 不使用会话已选模型，命中死代理 402（2026-11-14）
+
+真实 ConPTY 验收（`xenon --model deepseek-v4-flash`，状态栏显示该模型）：
+
+- `/code 写一个 Python 脚本打印 1 到 5 的整数之和 --file e2e_scratch/sum5.py --run`
+  → `❌ 代码生成失败: Client error '402 Payment Required' for url
+  'https://heyroute.ai/v1/messages'`，文件未写入、后续 `/edit` 报文件不存在。
+- `/sub-agent 读取 e2e_scratch/sales.csv 的第一行…` → 子任务失败，面板直接
+  倾泻子进程 traceback（同样是 402）。
+- `/edit e2e_scratch/sum5.py 把变量名 total 改成 result` → 成功，但耗时 **152 秒**：
+  逐个尝试 9 个不可用代理模型后才落到可用的 `deepseek/deepseek-v4-flash`。
+
+根因是一条断裂的信息流：`_preferred_model_ids` 是「本会话使用哪个模型」的契约
+（`--model` 写入、`/set_model`//model` 改写、状态栏与内核轮次读取），但一次性
+LLM 命令只读 `get_role_priority(...)` 的静态顺序，从不读取用户选择。`/code`
+更只取 `model_ids[0]`，第一个死代理失败即整体失败；`/sub-agent` 按模型池插入
+顺序挑首个；`/edit`、快捷指令/技能生成、输入分类器、计划恢复、静态路由回落
+都从死代理开始试。
+
+修复：新增共享 `ordered_model_candidates(registry, repl, *roles)`（会话已选模型
+优先、别名归一化为 canonical id、去重），并接入所有一次性 LLM 选择点：
+`/code`（失败依次尝试下一候选；`/sub-agent`、`/edit`、快捷指令生成、技能生成
+与执行、输入分类器、`turn_flow` 静态回落、已批计划恢复。
+
+真实 ConPTY 复现（同一入口、同一命令）：
+
+- `/code … --file e2e_scratch/sum5.py --run` → `✅ 代码已写入`（5 行），确认后
+  `✅ 运行成功: 15`；变体 `/code 用 Python 输出 6 的阶乘` → `✅ 代码已写入`。
+- `/sub-agent 读取 e2e_scratch/sales.csv 的第一行…` → `🧬 子任务 1/1 已交付
+  finalized`，输出 `date,customer,amount`，账本落盘。
+- `/edit … 把变量名 total 改成 result` → diff 正确、确认后 `✅ 已修改 sum5.py`，
+  耗时 **152s → 6s**。
+
+验证：`python -m pytest tests/test_agent_commands.py tests/test_shortcut_commands.py
+tests/test_skills.py tests/test_workspace_commands.py tests/test_repl.py -q` →
+**146 passed, 1 skipped**；`ruff` 干净。新增用例覆盖「会话模型优先」「首个模型
+被拒后回落」「子 Agent 继承会话模型」。
+
+### 修复：/review 永远显示"本会话没有记录到文件改动"（2026-11-14）
+
+真实 ConPTY 验收：`/edit e2e_scratch/sum5.py …` 成功修改文件、内核轮次
+`apply_patch` 成功创建 `e2e_scratch/review_probe.txt`，随后 `/review` 仍回答
+「本会话没有记录到文件改动」——包括会话保存/合并也依赖的改动清单。
+
+根因：`session_created_files` / `session_modified_files` 两个工作记忆键只有
+读者（`/review`、`session_ops` 的会话合并、`context_manager` 的压缩保留），
+**全代码库没有任何写入者**。`ReplEventSink` 的注释甚至声称它们「让会话工作记忆
+看到内核写了什么」，但实际只把路径交给面板，从未落账。
+
+修复：建立唯一生产者 `ContextManager.record_file_changes(created, modified)`
+（去重、created 优先、最多保留 50 条），并在所有文件变更路径接入：
+
+- 内核工具回执：`ReplEventSink` 从 `fs_write` 的 `paths` / `created_paths`
+  记录（协议宿主与交互路径共用同一个 sink）；
+- `/code` 写入新脚本（新建/覆盖分别记 created/modified）；
+- `/edit` LLM 修改成功后记录（`.bak` 因此可被 `/review revert` 找到）。
+
+真实 ConPTY 复现（同一入口、同一会话）：`/edit` 后 `/review` →
+`[修改] D:\Xenon\e2e_scratch\sum5.py （有 .bak，可 /review revert）`；
+内核 `apply_patch` 写入后 `/review` → 同时列出
+`[新增] D:\Xenon\e2e_scratch\review_probe2.txt` 与上一条修改。
+
+验证：`python -m pytest tests/test_agent_commands.py tests/test_workspace_commands.py
+tests/test_diff_review.py tests/test_repl_kernel_runtime.py -q` → **72 passed**。
+
+### 修复：新建快捷指令不能立即调用（2026-11-14）
+
+真实 ConPTY 验收：`/shortcut create e2e-hello` 完成五步对话后提示
+「✅ 快捷指令 /e2e-hello 已创建！使用 /e2e-hello 执行。」，下一次输入
+`/e2e-hello` 却返回「未知命令: /e2e-hello。输入 /help 查看可用命令。」。
+技能同场景（`/skill create` → `/e2e-skill`）可以调用。
+
+根因：动态命令只在 REPL 启动时由 `_load_custom_commands()` 注册；技能创建路径
+有 `_register_skill_handler` 立即注册，快捷指令的两条创建路径（自动生成/手动配置）
+都没有。修复：新增 `_register_shortcut_handler`，在 `manager.create` 之后立即写入
+`_HANDLERS` 与命令元数据，与技能走同一契约。
+
+真实 ConPTY 复现（同一入口）：创建后直接输入 `/e2e-hello` 输出
+`$ echo shortcut-ok` / `shortcut-ok`，`/help` 中出现 `[快捷] 回显测试`；
+`/shortcut run e2e-hello`、`/shortcut delete`、技能创建/运行/删除均无回归。
+
+验证：`python -m pytest tests/test_shortcut_commands.py -q` → **8 passed**；
+新增用例覆盖「创建后命令可立即 dispatch」。
+
+### 修复：前端轮次不写会话历史，/save 落空、--resume 报"会话不存在"（2026-11-14）
+
+真实 ConPTY 验收（`/save d6-e2e` → `/exit` → `xenon --resume d6-e2e`）暴露：
+保存的会话 `history` 为空，`/sessions` 不列出（`list_sessions` 跳过空会话），
+`--resume` 直接输出「会话 'd6-e2e' 不存在」并退出；会话内 `/save` 却显示成功。
+
+根因是协议入口漏掉了交互路径的「对话记录」契约：
+
+- **内核轮次不记用户消息**：交互式 `turn_flow` 在派发前调用
+  `ctx_mgr.add_request_message(...)`，回答由 `run_kernel_turn` 渲染时补记；
+  协议宿主 `run_turn` 直接调用 `run_kernel_turn`，跳过了前半段。真实工具任务后
+  `ctx_mgr.history` 只有 assistant 一条（或为空），`/save` 导出的会话无法被
+  `/load` 回放，`/context` 也少算。
+- **记忆门轮次什么都不记**：`_run_chat` 的「记住……」分支直接返回回执，
+  用户消息与回执都没有进入历史——正是 D6 场景（"请记住这个数字…42"）触发的路径。
+
+修复：协议宿主按交互路径的同一契约记录每轮——`run_turn` 在调用内核前写请求
+（记录原始用户输入与意图元数据，内核收到的仍是同一份冻结 envelope），
+`_run_chat` 先写请求再走记忆门，记忆门命中时把回执作为 assistant 消息写入。
+
+真实 ConPTY 复现（同一入口、同一输入）：
+- 内核任务（读 `e2e_scratch/sales.csv` 首行）+ 普通对话各一轮 → `/save` →
+  会话文件 `messages: 4 roles: ['user','assistant','user','assistant']`，
+  `/sessions` 列出，新进程 `--resume d6-e2e-v2` 恢复后提问
+  「我的项目代号是什么？」正确答出 `蓝鲸-8888`。
+- 变体（"请记住：项目代号是海豚-4242" 记忆门）→ 会话 `messages: 2
+  roles: ['user','assistant']`、回执在历史中，`--resume d6-mem-v2` 正常启动并列出。
+
+验证：`python -m pytest tests/test_protocol_host.py tests/test_session_commands.py
+tests/test_repl.py -q` → **161 passed**；新增用例覆盖内核轮次写请求、记忆门
+记录请求+回执、普通对话只记一次；`ruff` 干净。
+
+### 修复：前端审批作用域、/permissions 与 /restart 的五处阻塞（2026-11-14）
+
+真实 ConPTY 验收（从 `xenon` 前端入口，`/permissions default|plan|bypass`、五档
+审批答案、`/permissions` 查看、`/restart`）暴露五处阻塞，均按「定位 → 根因 →
+跨层系统性修复 → 同一入口复现」处理：
+
+- **权限上限只作用于交互路径**：`/permissions plan` 后经前端仍能写文件/执行命令。
+  每轮 `run_turn` 都会按目标重算 turn contract，而模式只存在
+  `agent_context["_execution_level"]`，重算时被覆盖。协议宿主现在在
+  `run_turn` 里调用 `_apply_permission_ceiling`，把契约钳制到会话模式上限
+  （只降不升），与交互式 `turn_flow` 走同一个 `apply_permission_ceiling`。
+- **「取消整个任务」等同于拒绝**：审批面板选 cancel 后内核只把这一次工具调用
+  当失败，继续规划下一个动作。新增共享 `cancel_running_task`，两个审批桥
+  （协议宿主与交互 mixin）都在 cancel 时对 `_active_runtime.request_cancel()`，
+  让内核自己的 `_check_limits` 以 `stop_signal="cancelled"` 中止本轮。
+- **`/permissions` 无参选择器吞掉授权列表**：前端里 `ask_choice` 总会回答，
+  命令在选择器处直接 return，`/permissions` 只剩「切换模式」而看不到也撤销
+  不了已记住的授权。选择当前模式（Enter）时回落到原有的授权列表渲染。
+- **前端「允许」不落 GrantBook**：`allow` 只写进当轮 policy，会话级授权簿仍为空，
+  下一轮同路径再问一次、`/permissions` 也列不出来。新增共享
+  `remember_allow_answer`（工具 + 路径 + 30 分钟 TTL，工作区取实时根目录），
+  交互 mixin 与协议宿主都调用它。
+- **`/restart` 经协议前端只答应不执行**：命令只 `request_restart`，真正执行在
+  交互式主循环里，协议宿主没有主循环。宿主在 `run_command` 里读取
+  `RestartCoordinator` 并执行 `perform_restart`，把结果并入同一条命令输出。
+
+真实 ConPTY 复现（`xenon` 前端入口）：`plan` 下写文件被拒且无文件、`bypass`
+下 `wc -c e2e_scratch/sales.csv` 无审批执行、`default` 下审批一次写入；
+`allow` 后同一路径第二轮不再出现 edit 审批面板且 `/permissions` 列出
+`edit: e2e_scratch/d2z.txt [剩余 28 分钟]`；`cancel` 后本轮输出
+`⏹ 本轮已中断（Ctrl+C），未交付任何结论` 且文件未创建；`/restart` 输出
+`🔄 正在准备重启（保存会话）... ✅ 重启成功 · 会话已恢复`，随后仍能继续对话。
+
+验证：`python -m pytest tests/test_protocol_host.py tests/test_approval_policy.py
+tests/test_permissions_command.py -q` → **104 passed**；新增用例覆盖权限上限
+钳制、cancel 中止运行时、allow 写入会话授权、`/restart` 实际执行、
+`/permissions` 选择当前模式后仍列出授权；`ruff` 干净。
+
 ### 修复：脚本产物被当成脏文件、交付门自锁、已批准的链式命令被拒（2026-11-13）
 
 真实 ConPTY 验收（数据清洗任务：写脚本并运行，脚本输出 `sales_clean.csv`）暴露

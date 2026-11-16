@@ -73,9 +73,15 @@ class GitWorktreeProbe:
         fingerprints = {path: self._fingerprint(path) for path in changes}
         if self._baseline is None:
             # Nothing has run yet in this turn: the current dirt *is* the
-            # baseline, so none of it is attributable here.
+            # baseline, so none of it is attributable here — and the probe
+            # must *say so*.  Reporting an empty baseline made every
+            # consumer treat the inherited dirt as this turn's work: a C10
+            # run's pre-existing untracked buggy_calc.py satisfied
+            # ``file_changed(buggy_calc.py)`` before the agent had touched
+            # it.  "I recorded the baseline" and "there is no baseline" are
+            # different facts; only the first is true.
             self._baseline = fingerprints
-            baseline: tuple[str, ...] = ()
+            baseline = tuple(sorted(changes))
             created: tuple[str, ...] = ()
         else:
             # A path that was already dirty becomes this turn's business only

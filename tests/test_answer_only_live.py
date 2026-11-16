@@ -48,7 +48,7 @@ def test_real_model_keeps_chat_only_code_out_of_tools_and_disk(tmp_path, monkeyp
     def fail_if_react(*_args, **_kwargs):
         raise AssertionError("answer-only request must not enter ReAct")
 
-    monkeypatch.setattr(repl, "_run_react_engine", fail_if_react)
+    monkeypatch.setattr(repl, "_run_loop_turn", fail_if_react)
     before = set(tmp_path.iterdir())
 
     repl._handle_chat(

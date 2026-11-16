@@ -8,7 +8,7 @@ from __future__ import annotations
 import subprocess
 from typing import TYPE_CHECKING, Any
 
-from xenon.repl.command_groups.common import console
+from xenon.repl.command_groups.common import console, ordered_model_candidates
 from xenon.repl.command_registry import (
     _HANDLERS,
     command_handler,
@@ -58,7 +58,12 @@ def _fuzzy_match_subcommand(sub: str) -> str | None:
 
 @command_handler("/skill")
 def _cmd_skill(
-    *, args: str, registry: ModelRegistry, session_state: dict[str, Any], **kwargs: Any
+    *,
+    args: str,
+    registry: ModelRegistry,
+    session_state: dict[str, Any],
+    repl: Any = None,
+    **kwargs: Any,
 ) -> str:
     from xenon.repl.skill_manager import SkillManager
 
@@ -122,7 +127,7 @@ def _cmd_skill(
         return installed + library_guide
 
     elif canonical == "create":
-        return _skill_create_interactive(manager, registry=registry)
+        return _skill_create_interactive(manager, registry=registry, repl=repl)
 
     elif canonical == "run":
         if not sub_args:
@@ -183,7 +188,7 @@ def _cmd_skill(
         if len(full_args) > 15 or has_chinese:
             name = _extract_skill_name(sub, sub_args)
             return _skill_auto_generate(
-                name, args, manager, registry, interactive=False
+                name, args, manager, registry, repl, interactive=False
             )
         else:
             # sub 可能是 typo — 显示帮助并给出模糊匹配建议
@@ -199,7 +204,7 @@ def _cmd_skill(
             )
 
 
-def _skill_create_interactive(manager, registry=None) -> str:
+def _skill_create_interactive(manager, registry=None, repl=None) -> str:
     """交互式创建技能。支持智能生成和手动配置两种模式。"""
     from rich.prompt import Prompt as _Prompt
 
@@ -218,13 +223,19 @@ def _skill_create_interactive(manager, registry=None) -> str:
     mode = _Prompt.ask("选择模式", choices=["1", "2"], default="1")
 
     if mode == "1":
-        return _skill_auto_generate(name, description, manager, registry)
+        return _skill_auto_generate(name, description, manager, registry, repl)
     else:
         return _skill_manual_create(name, description, manager)
 
 
 def _skill_auto_generate(
-    name: str, description: str, manager, registry=None, *, interactive: bool = True
+    name: str,
+    description: str,
+    manager,
+    registry=None,
+    repl=None,
+    *,
+    interactive: bool = True,
 ) -> str:
     """智能生成技能步骤。
 
@@ -242,7 +253,7 @@ def _skill_auto_generate(
     console.print("\n[dim]🤖 正在根据你的描述生成技能步骤...[/dim]\n")
 
     # 用 LLM 生成步骤
-    steps, system_prompt = _generate_skill_steps(description, registry)
+    steps, system_prompt = _generate_skill_steps(description, registry, repl)
 
     if not steps:
         if interactive:
@@ -291,12 +302,12 @@ def _skill_auto_generate(
     return f"✅ 技能 /{skill.name} 已创建！使用 /{skill.name} 或 /skill run {skill.name} 执行。"
 
 
-def _generate_skill_steps(description: str, registry=None) -> tuple[list[dict], str]:
+def _generate_skill_steps(description: str, registry=None, repl=None) -> tuple[list[dict], str]:
     """用 LLM 根据描述生成技能步骤。"""
     try:
         from xenon.utils.llm_client import chat_completion
 
-        model_ids = registry.get_role_priority("planner") if registry else []
+        model_ids = ordered_model_candidates(registry, repl, "planner")
         if not model_ids:
             return _fallback_skill_steps(description), ""
 
@@ -531,7 +542,8 @@ def _execute_installed_skill(
                 skill_args=args,
             )
             return ""
-    model_ids = registry.get_role_priority("planner")
+    repl = (session_state or {}).get("_repl")
+    model_ids = ordered_model_candidates(registry, repl, "planner")
     return manager.execute(name, args, model_priority=model_ids)
 
 

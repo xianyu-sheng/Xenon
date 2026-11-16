@@ -23,7 +23,6 @@ from xenon.repl.selector import (
     Choice,
     ask_choice,
     looks_like_choice_request,
-    mode_choices,
     model_choices,
     permission_choices,
     resolve_answer,
@@ -130,13 +129,6 @@ def test_garbage_does_not_pick_anything(answer: str) -> None:
 # ── 4. choices are built from live state ────────────────────────
 
 
-def test_mode_choices_mark_the_current_one() -> None:
-    choices = mode_choices(_Registry(current="plan-execute"))
-    assert [item.value for item in choices] == ["direct", "plan-execute"]
-    assert [item.current for item in choices] == [False, True]
-    assert all(item.detail for item in choices)
-
-
 def test_model_choices_mark_the_active_one() -> None:
     registry = _Registry(
         models=[_model("first", "provider/a"), _model("second", "provider/b")]
@@ -161,29 +153,24 @@ def test_looks_like_a_choice_request() -> None:
 # ── 5. the commands use the picker and fall back cleanly ────────
 
 
-def test_mode_with_a_pick_switches_the_mode(monkeypatch) -> None:
+def test_mode_reports_the_single_loop_and_does_not_switch(monkeypatch) -> None:
+    """`/mode` is informational: one loop, phases fixed, no picker.
+
+    The picker/switch surface made a phase profile look like a product menu;
+    a follow-up could silently run under a different mode.  The command must
+    stay as an answer (old muscle memory lands here) and must never call
+    `set_mode`.
+    """
     import xenon.repl.selector as selector
 
     monkeypatch.setattr(selector, "ask_choice", lambda *a, **k: "plan-execute")
     registry = _Registry()
-    repl = _repl()
-
-    out = _cmd_mode(args="", registry=registry, session_state={"_repl": repl})
-
-    assert "plan-execute" in out
-    assert registry.set_mode_calls == ["plan-execute"]
-
-
-def test_mode_without_a_pick_still_lists_every_mode(monkeypatch) -> None:
-    import xenon.repl.selector as selector
-
-    monkeypatch.setattr(selector, "ask_choice", lambda *a, **k: None)
-    registry = _Registry()
 
     out = _cmd_mode(args="", registry=registry, session_state={"_repl": _repl()})
 
-    assert "当前模式" in out
-    assert "plan-execute" in out
+    assert "当前循环" in out
+    assert "无需切换" in out
+    assert "plan-execute" not in out
     assert registry.set_mode_calls == []
 
 
@@ -324,35 +311,6 @@ def test_every_distinct_mode_has_a_distinct_profile() -> None:
     assert len(profiles) == len(set(profiles))
 
 
-def test_the_picker_offers_one_row_per_profile() -> None:
-    from xenon.repl.model_registry import ModelRegistry
-
-    choices = mode_choices(ModelRegistry())
-    values = [item.value for item in choices]
-
-    assert "react" not in values, "an alias must not get its own row"
-    assert len(values) == len(set(values))
-    direct = next(item for item in choices if item.value == "direct")
-    assert "react" in direct.detail, "the alias stays discoverable"
-
-
-def test_the_current_mode_is_always_shown() -> None:
-    """Even when the current mode is an alias, "what am I on" is answerable."""
-    registry = _Registry(
-        modes={
-            "direct": types.SimpleNamespace(description="直接", alias_of="", loop=None),
-            "react": types.SimpleNamespace(
-                description="别名", alias_of="direct", loop=None
-            ),
-        },
-        current="react",
-    )
-
-    choices = mode_choices(registry)
-
-    assert [item.value for item in choices if item.current] == ["react"]
-
-
 def test_a_bad_answer_gives_up_after_the_attempts(monkeypatch) -> None:
     _answer_with(monkeypatch, "nope", "still-nope")
 
@@ -405,18 +363,6 @@ def test_a_raising_isatty_means_no_picker(monkeypatch) -> None:
     assert (
         selector.ask_choice(_repl(), title="t", choices=permission_choices()) is None
     )
-
-
-def test_an_alias_of_a_listed_mode_gets_no_row() -> None:
-    registry = _Registry(
-        modes={
-            "direct": types.SimpleNamespace(description="直接", alias_of="", loop="L1"),
-            "react": types.SimpleNamespace(
-                description="别名", alias_of="direct", loop="L1"
-            ),
-        }
-    )
-    assert [item.value for item in mode_choices(registry)] == ["direct"]
 
 
 def test_switching_to_an_unknown_mode_name_is_not_a_switch() -> None:
@@ -475,18 +421,20 @@ def test_verbose_toggle_says_loop_not_engine() -> None:
     assert "引擎" not in out
 
 
-def test_shift_tab_failure_points_at_mode(argv=None) -> None:
-    """A failed Shift+Tab must say "mode" and point at /mode."""
+def test_shift_tab_explains_the_single_loop_instead_of_switching(argv=None) -> None:
+    """Shift+Tab must not cycle modes: there is one loop."""
     from xenon.repl import repl as repl_module
 
     printed: list[str] = []
+    switches: list[str] = []
 
     class _Registry:
         modes = {"direct": types.SimpleNamespace(description="直接")}
         current_mode = "direct"
 
         def set_mode(self, name):
-            raise ValueError("boom")
+            switches.append(name)
+            raise AssertionError("Shift+Tab must not switch modes")
 
         def get_current_mode(self):
             return types.SimpleNamespace(name="direct", description="直接")
@@ -508,8 +456,9 @@ def test_shift_tab_failure_points_at_mode(argv=None) -> None:
         repl_module.console = original
 
     text = " ".join(printed)
-    assert "无法切换到模式" in text
-    assert "/mode" in text
+    assert "当前循环" in text
+    assert "无需切换" in text
+    assert switches == []
 
 
 def test_the_cli_session_table_says_mode(monkeypatch) -> None:
@@ -565,91 +514,28 @@ def test_the_resume_command_renders_its_table(monkeypatch) -> None:
     assert isinstance(out, str)
 
 
-def test_auto_route_off_says_mode_switch() -> None:
-    from xenon.repl.commands import cmd_auto_route
+def test_auto_route_command_is_gone() -> None:
+    """The mode router is deleted, so its command must not linger.
 
-    calls: list[str] = []
-    repl = types.SimpleNamespace(
-        intelligent_router=types.SimpleNamespace(disable=lambda: calls.append("off"))
-    )
-    cmd_auto_route(args="off", session_state={"_repl": repl})
+    A command that only explains a retired feature is still a promise in
+    ``/help``; auto-discovery means deleting the registration is enough.
+    """
+    from xenon.repl.command_registry import _HANDLERS
+    from xenon.repl.commands import _import_command_group_modules
 
-    assert calls == ["off"]
+    _import_command_group_modules()
 
-
-def test_auto_route_stats_renders_the_mode_row() -> None:
-    from xenon.repl.commands import cmd_auto_route
-
-    router = types.SimpleNamespace(
-        enabled=True,
-        notify_user=False,
-        switch_only_on_improvement=True,
-        confidence_threshold=0.6,
-        get_stats=lambda: {
-            "decision_log": {
-                "total_decisions": 3,
-                "switches": 1,
-                "rule_hits": {"r1": 2},
-                "paradigms": {"plan-execute": 2},
-                "recent": [],
-            },
-            "current_mode": "direct",
-            # top-level counters, read by the status branch
-            "total_routes": 3,
-            "successful_routes": 2,
-            "switches": 1,
-        },
-    )
-    repl = types.SimpleNamespace(intelligent_router=router)
-
-    cmd_auto_route(args="stats", session_state={"_repl": repl})
-    # No recognised argument falls through to the status table, which renders
-    # the same counters including the mode row.
-    cmd_auto_route(args="", session_state={"_repl": repl})
+    assert "/auto-route" not in _HANDLERS
+    assert "/mode" in _HANDLERS
 
 
-def test_a_rejected_router_switch_is_reported_not_fatal() -> None:
-    """The failure branch must tell the user /mode still works (#294)."""
-    import xenon.repl.turn_flow as turn_flow
+def test_the_turn_flow_never_switches_the_phase_profile(monkeypatch) -> None:
+    """One loop: a turn must not change its phase profile behind the user.
 
-    printed: list[str] = []
-
-    class _Registry:
-        current_mode = "direct"
-
-        def set_mode(self, name):
-            raise ValueError("router picked an unknown mode")
-
-    fake = types.SimpleNamespace(
-        registry=_Registry(),
-        status_bar=types.SimpleNamespace(set_mode_notification=lambda *_: None),
-        intelligent_router=types.SimpleNamespace(notify_user=False),
-    )
-    original = turn_flow.console
-
-    class _Console:
-        def print(self, *args, **kwargs):
-            printed.append(" ".join(str(a) for a in args))
-
-    turn_flow.console = _Console()
-    try:
-        turn_flow.TurnFlowMixin._apply_routing_decision(
-            fake,
-            types.SimpleNamespace(
-                paradigm="nope", reason="r", confidence=0.5, matched_rule="rule"
-            ),
-        )
-    finally:
-        turn_flow.console = original
-
-    assert any("模式切换失败" in line for line in printed)
-
-
-def test_handle_chat_applies_a_router_suggestion(monkeypatch) -> None:
-    """The router block in _handle_chat must switch the mode when it can.
-
-    Mirrors the existing _handle_chat tests: the rest of the turn is stubbed, so
-    this exercises routing without a model call (#294).
+    The intelligent router used to flip the mode per task ("write code" →
+    plan-execute), so the same conversation ran under different profiles and
+    the mode index read like a menu of products.  Plan/execute/reflect are
+    phases of the one loop; the object that did the flipping is gone.
     """
     from xenon.repl.model_registry import ModelRegistry
     from xenon.repl.repl import REPL
@@ -661,43 +547,33 @@ def test_handle_chat_applies_a_router_suggestion(monkeypatch) -> None:
 
     monkeypatch.setattr(repl, "_commit_memory_usage", lambda: None)
     monkeypatch.setattr(repl, "_maybe_suggest_memory", lambda value: None)
-    monkeypatch.setattr(
-        repl, "_run_direct", lambda *a, **k: None
-    )
-    router = repl.intelligent_router
-    router.enable()
-    router.notify_user = False
-    monkeypatch.setattr(
-        router,
-        "route",
-        lambda **kwargs: types.SimpleNamespace(
-            paradigm="plan-execute", reason="r", confidence=0.9, matched_rule="rule"
-        ),
-    )
+    monkeypatch.setattr(repl, "_run_direct", lambda *a, **k: None)
+
+    assert not hasattr(repl, "intelligent_router")
 
     repl._handle_chat("帮我写一个快速排序算法")
 
-    assert registry.current_mode == "plan-execute"
+    assert registry.current_mode == "direct"
 
 
-def test_mode_next_cycles_like_shift_tab() -> None:
-    """The TS front-end sends ``/mode next``; it must match Shift+Tab."""
-
-    from xenon.repl.command_groups.model import _cmd_mode
+def test_mode_next_is_informational() -> None:
+    """The TS front-end still sends ``/mode next`` on Shift+Tab; it must not
+    switch anything and must say why."""
 
     registry = _Registry()
 
     output = _cmd_mode(args="next", registry=registry, session_state={})
 
-    assert registry.set_mode_calls == ["plan-execute"]
-    assert "plan-execute" in output
+    assert registry.set_mode_calls == []
+    assert "无需切换" in output
+    assert "忽略了参数" in output
 
 
-def test_mode_cycle_wraps_around() -> None:
-    from xenon.repl.command_groups.model import _cmd_mode
+def test_mode_with_a_name_is_informational() -> None:
+    registry = _Registry(current="direct")
 
-    registry = _Registry(current="plan-execute")
+    output = _cmd_mode(args="plan-execute", registry=registry, session_state={})
 
-    _cmd_mode(args="cycle", registry=registry, session_state={})
-
-    assert registry.set_mode_calls == ["direct"]
+    assert registry.set_mode_calls == []
+    assert "当前循环" in output
+    assert "忽略" in output

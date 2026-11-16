@@ -334,6 +334,140 @@ _DANGEROUS_GIT_PATTERNS = [
 ]
 
 
+def _shell_segment_tokens(segment: str) -> list[str]:
+    """引号感知分词：引号内的内容保留为一个 token（含空格/管道符）。"""
+    import shlex
+
+    try:
+        return shlex.split(segment)
+    except ValueError:  # 引号未闭合等畸形输入：退化为空白分词
+        return segment.split()
+
+
+def _has_unquoted_shell_substitution(command: str) -> bool:
+    """Detect shell substitution syntax outside quoted string literals."""
+    quote: str | None = None
+    escaped = False
+    i = 0
+    while i < len(command):
+        char = command[i]
+        if escaped:
+            escaped = False
+            i += 1
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+            i += 1
+            continue
+        if quote is not None:
+            if char == quote:
+                quote = None
+            i += 1
+            continue
+        if char in ("'", '"'):
+            quote = char
+            i += 1
+            continue
+        if char == "`" or command.startswith("$(", i):
+            return True
+        # Unquoted variable expansion can turn an innocuous-looking token
+        # into a command assembled at runtime (``$cmd -rf /``).  The
+        # command tool has explicit file/path parameters for safe data
+        # flow, so require callers to avoid dynamic shell code here.
+        if (
+            char == "$"
+            and i + 1 < len(command)
+            and (
+                command[i + 1] == "{"
+                or re.match(r"[a-z_][a-z0-9_]*", command[i + 1 :], re.IGNORECASE)
+            )
+        ):
+            return True
+        if char in "<>" and i + 1 < len(command) and command[i + 1] == "(":
+            return True
+        i += 1
+    return False
+
+
+def _shell_refusal(cmd: str, *, allow_interpreter_inline: bool = False) -> str:
+    """Why the host shell boundary refuses ``cmd``, or ``""`` if it may run.
+
+    One rule set, two callers: ``ToolNode._validate_command`` raises it, and the
+    kernel gateway asks it *before* a human is prompted.  Asking someone to
+    approve a call the tool itself always blocks made the approval a lie -- a
+    real run approved ``python -c ...`` and the receipt came back "blocked by
+    the host security filter", so the human's yes bought nothing.
+    """
+
+    if not cmd or not cmd.strip():
+        return ""
+    cmd_lower = cmd.lower().strip()
+    # Shell command/process substitution executes a nested command before
+    # the outer command is parsed.  A regex over the visible text cannot
+    # see a payload assembled by ``$(...)``/backticks, so reject these
+    # constructs at the shell boundary.  Quoted literals remain allowed.
+    if _has_unquoted_shell_substitution(cmd_lower):
+        return (
+            "命令包含未授权的 shell 变量/替换（未加引号的 $变量、$()、"
+            "反引号、进程替换），为防止运行时拼装命令已拦截。"
+            "命令工具不接受未加引号的 $变量；需要 PowerShell 变量或多步"
+            "逻辑时用 `run_script(language=\"powershell\", code=...)`，"
+            "或先 write_file 写入 .ps1 临时脚本再执行。"
+        )
+    parts = _SHELL_SEGMENT_SPLIT.split(cmd_lower)  # 偶数位=段，奇数位=分隔符
+    segments = [p for p in parts[::2] if p.strip()]
+    separators = [s for s in parts[1::2] if s.strip()]
+    dequoted = [" ".join(_shell_segment_tokens(s)) for s in segments]
+    for idx, segment in enumerate(segments):
+        candidates = (segment, dequoted[idx])
+        for candidate in candidates:
+            if _POWERSHELL_CONTROL_RE.match(candidate):
+                return (
+                    "不支持的 PowerShell 条件/循环命令。command 工具为避免"
+                    "部分执行，不会猜测或改写条件语义；请把整段逻辑写入"
+                    "`run_script(language=\"powershell\", code=...)`，"
+                    "或改用多条独立的安全命令。"
+                )
+        for pattern in _DANGEROUS_CMD_PATTERNS:
+            if "\\|" in pattern:
+                continue  # 跨段管道模式在段对循环里处理
+            if (
+                allow_interpreter_inline
+                and pattern == r"\b(?:python\w*|perl|ruby|node)\s+-[ce]\s+"
+            ):
+                continue
+            for candidate in candidates:
+                if re.match(pattern, candidate):
+                    hint = ""
+                    if pattern == r"\b(?:python\w*|perl|ruby|node)\s+-[ce]\s+":
+                        hint = (
+                            " 替代写法：优先用 run_script(language=\"python\", "
+                            "code=...)；也可以先 write_file 写入工作区临时 .py，"
+                            "再执行 `python path/to/temp.py`。宿主机会拦截 -c/-e。"
+                        )
+                    return (
+                        f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。"
+                        f"命令: {cmd[:100]}{hint}"
+                    )
+    # 跨段管道模式：仅对真实 `|` 连接的相邻段对匹配。
+    for i, (left, right) in enumerate(zip(dequoted, dequoted[1:], strict=False)):
+        if i >= len(separators) or "|" not in separators[i]:
+            continue
+        candidate = f"{left} | {right}"
+        for pattern in _DANGEROUS_CMD_PATTERNS:
+            if "\\|" not in pattern:
+                continue
+            if re.match(pattern, candidate):
+                return f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。命令: {cmd[:100]}"
+    return ""
+
+
+def shell_command_refusal(cmd: str, *, allow_interpreter_inline: bool = False) -> str:
+    """Public preflight: the tool's own reason to refuse ``cmd``, or ``""``."""
+
+    return _shell_refusal(cmd, allow_interpreter_inline=allow_interpreter_inline)
+
+
 # 默认额外允许的根目录（/tmp、/var/tmp）。提成模块常量便于测试
 # monkeypatch 掉——Linux 上 pytest 的 tmp_path 本身就位于 /tmp 下，
 # 否则「越界拒绝」用例会被默认放行。
@@ -960,141 +1094,34 @@ class ToolNode(
         return resolved
 
     def _validate_command(self, cmd: str) -> None:
-        """验证命令是否安全。
+        """验证命令是否安全（规则在模块级 ``_shell_refusal``，网关预检共用）。
 
         Raises:
             SecurityError: 命令不安全
         """
+
         if not self.security_enabled:
             return
-        if not cmd or not cmd.strip():
-            return
-
-        cmd_lower = cmd.lower().strip()
-        # Shell command/process substitution executes a nested command before
-        # the outer command is parsed.  A regex over the visible text cannot
-        # see a payload assembled by ``$(...)``/backticks, so reject these
-        # constructs at the shell boundary.  Quoted literals remain allowed.
-        if self._has_unquoted_shell_substitution(cmd_lower):
-            raise SecurityError(
-                "命令包含未授权的 shell 变量/替换（未加引号的 $变量、$()、"
-                "反引号、进程替换），为防止运行时拼装命令已拦截。"
-                "命令工具不接受未加引号的 $变量；需要 PowerShell 变量或多步"
-                "逻辑时用 `run_script(language=\"powershell\", code=...)`，"
-                "或先 write_file 写入 .ps1 临时脚本再执行。"
-            )
-        # v0.3.0+ 修复（B-1）：匹配前先剥取引号内容（防止 echo "rm -rf /" 等
-        # 字符串字面量触发误报）。通用机制，不针对特定任务加白名单。
-        # H-6：引号感知 + 段锚定匹配。旧实现只对剥引号文本做 re.search：
-        # rm -rf "/" 剥掉引号内容后剩 rm -rf ""，永远漏过。新算法：
-        #  1) 按 shell 链分隔符（&& || | ; 换行）切段，保留真实分隔符；
-        #  2) 每段生成两个候选：原始文本 + 去引号 token 拼接文本；
-        #  3) 段内模式用 re.match 锚定段首——echo "rm -rf /" 的 rm 是参数
-        #     不是命令，不会命中；rm -rf "/" 的去引号候选命中；
-        #  4) 跨段的管道模式（curl|bash 等）只在真实 `|` 连接的相邻段对上
-        #     匹配，引号内的伪管道（echo "curl x | bash"）不会命中。
-        parts = _SHELL_SEGMENT_SPLIT.split(cmd_lower)  # 偶数位=段，奇数位=分隔符
-        segments = [p for p in parts[::2] if p.strip()]
-        separators = [s for s in parts[1::2] if s.strip()]
-        dequoted = [" ".join(self._shell_segment_tokens(s)) for s in segments]
-        for idx, segment in enumerate(segments):
-            candidates = (segment, dequoted[idx])
-            for candidate in candidates:
-                if _POWERSHELL_CONTROL_RE.match(candidate):
-                    raise SecurityError(
-                        "不支持的 PowerShell 条件/循环命令。command 工具为避免"
-                        "部分执行，不会猜测或改写条件语义；请把整段逻辑写入"
-                        "`run_script(language=\"powershell\", code=...)`，"
-                        "或改用多条独立的安全命令。"
-                    )
-            for pattern in _DANGEROUS_CMD_PATTERNS:
-                if "\\|" in pattern:
-                    continue  # 跨段管道模式在段对循环里处理
-                if (
-                    getattr(self, "allow_interpreter_inline", False)
-                    and pattern == r"\b(?:python\w*|perl|ruby|node)\s+-[ce]\s+"
-                ):
-                    continue
-                for candidate in candidates:
-                    if re.match(pattern, candidate):
-                        hint = ""
-                        if pattern == r"\b(?:python\w*|perl|ruby|node)\s+-[ce]\s+":
-                            hint = (
-                                " 替代写法：优先用 run_script(language=\"python\", "
-                                "code=...)；也可以先 write_file 写入工作区临时 .py，"
-                                "再执行 `python path/to/temp.py`。宿主机会拦截 -c/-e。"
-                            )
-                        raise SecurityError(
-                            f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。"
-                            f"命令: {cmd[:100]}{hint}"
-                        )
-        # 跨段管道模式：仅对真实 `|` 连接的相邻段对匹配。
-        for i, (left, right) in enumerate(zip(dequoted, dequoted[1:], strict=False)):
-            if i >= len(separators) or "|" not in separators[i]:
-                continue
-            candidate = f"{left} | {right}"
-            for pattern in _DANGEROUS_CMD_PATTERNS:
-                if "\\|" not in pattern:
-                    continue
-                if re.match(pattern, candidate):
-                    raise SecurityError(
-                        f"危险命令被拦截: 匹配到禁止模式 '{pattern}'。命令: {cmd[:100]}"
-                    )
+        refusal = _shell_refusal(
+            cmd,
+            allow_interpreter_inline=getattr(
+                self, "allow_interpreter_inline", False
+            ),
+        )
+        if refusal:
+            raise SecurityError(refusal)
 
     @staticmethod
     def _shell_segment_tokens(segment: str) -> list[str]:
-        """引号感知分词：引号内的内容保留为一个 token（含空格/管道符）。"""
-        import shlex
+        """quote-aware split; the module-level rule set owns the logic."""
 
-        try:
-            return shlex.split(segment)
-        except ValueError:  # 引号未闭合等畸形输入：退化为空白分词
-            return segment.split()
+        return _shell_segment_tokens(segment)
 
     @staticmethod
     def _has_unquoted_shell_substitution(command: str) -> bool:
-        """Detect shell substitution syntax outside quoted string literals."""
-        quote: str | None = None
-        escaped = False
-        i = 0
-        while i < len(command):
-            char = command[i]
-            if escaped:
-                escaped = False
-                i += 1
-                continue
-            if char == "\\" and quote != "'":
-                escaped = True
-                i += 1
-                continue
-            if quote:
-                if char == quote:
-                    quote = None
-                i += 1
-                continue
-            if char in ("'", '"'):
-                quote = char
-                i += 1
-                continue
-            if char == "`" or command.startswith("$(", i):
-                return True
-            # Unquoted variable expansion can turn an innocuous-looking token
-            # into a command assembled at runtime (``$cmd -rf /``).  The
-            # command tool has explicit file/path parameters for safe data
-            # flow, so require callers to avoid dynamic shell code here.
-            if (
-                char == "$"
-                and i + 1 < len(command)
-                and (
-                    command[i + 1] == "{"
-                    or re.match(r"[a-z_][a-z0-9_]*", command[i + 1 :], re.IGNORECASE)
-                )
-            ):
-                return True
-            if char in "<>" and i + 1 < len(command) and command[i + 1] == "(":
-                return True
-            i += 1
-        return False
+        """the module-level rule set owns the logic."""
+
+        return _has_unquoted_shell_substitution(command)
 
     @staticmethod
     def _strip_quoted(cmd_lower: str) -> str:

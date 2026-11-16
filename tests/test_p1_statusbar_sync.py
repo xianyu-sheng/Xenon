@@ -145,35 +145,32 @@ def test_scenario_4_model_command_updates_statusbar():
     assert "gpt-4o" not in after_content
 
 
-def test_scenario_5_mode_command_updates_statusbar():
-    """场景5：/mode命令后状态栏更新。"""
+def test_scenario_5_statusbar_describes_the_one_loop():
+    """场景5：状态栏描述循环的阶段，不再显示可切换的"模式"名。
+
+    只有一个循环；``direct``/``react`` 只是内部预设名（react 是 direct 的
+    别名）。旧断言要求状态栏跟着预设名变，正是"看起来有多个模式"的来源。
+    """
     registry = ModelRegistry()
     bar = _make_status_bar(registry=registry)
 
-    # 初始范式（默认direct）
-    initial = bar.render()
-    initial_content = str(initial.renderable)
-    assert "模式:" in initial_content
-    assert "direct" in initial_content.lower()
+    initial = str(bar.render().renderable)
+    assert "循环:" in initial
+    assert "单循环" in initial
+    assert "Plan" in initial and "React" in initial and "Reflect" in initial
 
-    # 切换范式到 react
+    # react 与 direct 声明同一条阶段线：状态栏不应出现任何"切到了另一个模式"。
     registry.set_mode("react")
-    after = bar.render()
-    after_content = str(after.renderable)
+    after = str(bar.render().renderable)
+    assert "单循环" in after
+    assert after == initial  # 同一阶段线，一个字都不该变
 
-    # 验证状态栏显示新范式
-    assert "模式:" in after_content
-    assert "react" in after_content.lower()
-
-    # 再切换到 plan-execute
+    # plan-execute 也是同一个循环，只是阶段不同：显示的是阶段，不是模式名。
     registry.set_mode("plan-execute")
-    final = bar.render()
-    final_content = str(final.renderable)
-
-    assert (
-        "plan-execute" in final_content.lower()
-        or "plan_execute" in final_content.lower()
-    )
+    final = str(bar.render().renderable)
+    assert "单循环" in final
+    assert "plan-execute" not in final.lower()
+    assert "React（按计划）" in final
 
 
 def test_statusbar_refresh_after_state_changes():

@@ -67,3 +67,54 @@ def test_parse_shortcut_steps_list():
 def test_generate_shortcut_no_model():
     result = _generate_shortcut_steps("test", registry=None)
     assert result == []
+
+
+def test_a_created_shortcut_is_callable_without_a_restart(monkeypatch):
+    """The creation message promises ``/<name>`` works immediately.
+
+    Measured through the real front-end: ``/shortcut create`` printed
+    "使用 /e2e-hello 执行", and the very next keystroke answered
+    "未知命令: /e2e-hello" because the dynamic handler was only wired at REPL
+    startup.  Skills already registered on creation; shortcuts now do too.
+    """
+
+    import types
+
+    import rich.prompt as rich_prompt
+
+    from xenon.repl.command_registry import _HANDLERS, COMMANDS, dispatch_command
+
+    name = "e2e-created-now"
+    calls: list[tuple[str, str]] = []
+
+    class _Manager:
+        def create(self, name, description, steps):
+            return types.SimpleNamespace(name=name, description=description)
+
+        def execute(self, sc_name, args=""):
+            calls.append((sc_name, args))
+            return "ran"
+
+    answers = iter(
+        [name, "回显测试", "echo hi", "END"]
+    )
+
+    def fake_ask(prompt, **kwargs):
+        return next(answers)
+
+    monkeypatch.setattr(rich_prompt.Prompt, "ask", staticmethod(fake_ask))
+    try:
+        reply = _shortcut_manual_create(name, "回显测试", _Manager())
+        assert "已创建" in reply
+        assert f"/{name}" in _HANDLERS
+        assert (
+            dispatch_command(
+                f"/{name}", "", registry=None, ctx_mgr=None, session_state={}
+            )
+            == "ran"
+        )
+        assert calls == [(name, "")]
+    finally:
+        _HANDLERS.pop(f"/{name}", None)
+        COMMANDS.pop(f"/{name}", None)
+

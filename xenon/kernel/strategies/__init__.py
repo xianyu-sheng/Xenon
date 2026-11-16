@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Callable
 
 from xenon.kernel.contracts import (
@@ -25,16 +26,21 @@ from xenon.kernel.contracts import (
     Action,
     AskUser,
     CallTool,
+    Capability,
     Claim,
     Debt,
     Finish,
     ModelView,
     PlanProposal,
     ReleaseStep,
+    RequestEscalation,
     StateRead,
     StepContract,
     SubmitPlan,
     Think,
+    ToolIntent,
+    has_written_payload,
+    written_paths,
 )
 
 PlanProvider = Callable[[ModelView], PlanProposal]
@@ -44,6 +50,46 @@ StepActor = Callable[[ModelView, Any, int], Action]
 PlanReviewer = Callable[[ModelView, PlanProposal], PlanProposal | None]
 ReflectionProvider = Callable[[ModelView, Finish], Action | None]
 StepReviewer = Callable[[ModelView, Any, Action], Action | None]
+
+
+def _replayable(view: ModelView, step: StepContract, *, approved: bool) -> bool:
+    """Whether a follow-plan step can be executed as the plan bound it.
+
+    An **approved** plan was authored by a phase that ran no tools at all, so
+    it could not have read anything.  Two shapes are therefore not executable
+    as written:
+
+    * an edit intent with *no* content (no ``files``/``edits``) — that is a
+      demoted description of work, and only the actor can perform it;
+    * an edit intent whose payload *overwrites an existing file* — its
+      content is a guess.  Measured C10 approval run: the plan bound
+      ``apply_patch`` with ``"<minimal fix of the buggy function body ...>"`
+      as the content of a real source file, and the replay destroyed the file
+      before the verify step ran.
+
+    New paths keep their payload: authoring content that does not exist needs
+    no observation.  Both exceptions go to the step actor, which reads what
+    the plan could not and materializes the change the plan described.
+
+    A non-approved follow profile is an in-run mode whose planner output is
+    the mode's own contract; its payloads are followed exactly as before.
+    """
+
+    intent = step.intent
+    if intent is None or intent.capability is not Capability.EDIT:
+        return True
+    if not approved:
+        return True
+    if not has_written_payload(intent):
+        return False
+    workspace = Path(str(getattr(view.task, "workspace", "") or "") or ".")
+    for raw in written_paths(intent):
+        path = Path(raw)
+        if not path.is_absolute():
+            path = workspace / path
+        if path.exists():
+            return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +102,9 @@ class LoopProfile:
         step_scope: Run the plan one step at a time with a per-step sub-loop.
         follow_plan: Execute the plan's own intents instead of asking the actor
             what to do next (deterministic execution, no per-step model call).
+            A bound write over an *existing* file is the exception: the plan
+            phase never observed that file, so its payload is a guess and the
+            step is materialized by the step actor instead.
         step_calls: Call budget for one step (or for one turn without steps).
         step_reflect: Review a step before it is released.
         reflect_rounds: Review rounds at finish.  ``0`` disables reflection.
@@ -119,11 +168,21 @@ class LoopStrategy:
     finisher: ActionProvider | None = None
     finish_text: str = "completed"
     resumed: bool = False
+    #: Sticky record of *why* this run started: ``resumed`` means an approved
+    #: plan is being executed.  ``reset_for_round`` clears ``resumed`` so the
+    #: strategy will accept a new plan, but the plan that this run approved was
+    #: still authored without observations, so the stricter follow check must
+    #: stay in force for every round.
+    _approved_plan: bool = False
     _submitted: bool = False
     _finished: bool = False
     _step_id: int | None = None
     _step_calls: int = 0
     _step_reviews: int = 0
+    #: The follow-plan step whose bound intent has already run.  A follow-plan
+    #: step has exactly one action; issuing it twice is byte-identical.
+    _followed_step: int | None = None
+    _followed_intent: ToolIntent | None = None
     _round: int = 0
     _round_calls: int = 0
     _acted: bool = False
@@ -132,6 +191,7 @@ class LoopStrategy:
     _notices: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        self._approved_plan = bool(self.resumed)
         # A plan profile needs *a* way to produce a plan, not necessarily a
         # separate planner role: with `actor_plans` the actor calls the
         # make_plan tool and stays the same identity for the whole run.
@@ -170,6 +230,8 @@ class LoopStrategy:
         self._step_id = None
         self._step_calls = 0
         self._step_reviews = 0
+        self._followed_step = None
+        self._followed_intent = None
         self._round = 0
         self._round_calls = 0
         self._acted = False
@@ -287,8 +349,31 @@ class LoopStrategy:
             self._step_id = active.id
             self._step_calls = 0
             self._step_reviews = 0
-        if self.profile.follow_plan:
+        if self.profile.follow_plan and _replayable(
+            view, active, approved=self._approved_plan
+        ):
             return self._follow_plan(active)
+        if self.step_actor is None:
+            # A follow-plan profile normally has no actor: the plan is the
+            # whole instruction.  It can still arrive with a write the plan
+            # phase could not have grounded, and replaying that would destroy
+            # the file, so the step is released rather than executed blind.
+            return ReleaseStep(
+                f"step {active.id}: bound write has no grounded payload; "
+                "the plan phase could not have read the file"
+            )
+        if self.profile.follow_plan and self._step_calls == 0:
+            # Plan-guided execution: the step's work stays the plan's, but the
+            # actor supplies what the plan could not know.  Recorded once per
+            # step so the ledger shows why this step cost a model call while
+            # its neighbours did not.
+            self._notices.append(
+                {
+                    "kind": "step",
+                    "decision": "materialize_bound_write",
+                    "step": active.id,
+                }
+            )
         if self._step_calls >= self.profile.step_calls:
             # Bounded exploration: stop spending calls on this step.  Releasing
             # closes it deterministically, so an unmet expectation becomes debt
@@ -311,7 +396,16 @@ class LoopStrategy:
         # the step open.  Dropping it released the step instead -- a measured
         # run asked ``get_state what=session``, the answer was rendered and
         # thrown away, and the task finished saying it had no history.
-        if isinstance(action, (Think, AskUser, Abort, CallTool, StateRead)):
+        #
+        # ``RequestEscalation`` belongs here for the same reason: a step whose
+        # bound call hit the boundary must be able to ask the human for that
+        # one call.  Swallowing it released the step, so the ask never reached
+        # the approval panel and a read-only count answered a number it could
+        # not verify ("这里没有弹出授权").
+        if isinstance(
+            action,
+            (Think, AskUser, Abort, CallTool, StateRead, RequestEscalation),
+        ):
             return action
         return self._release_step(view, active)
 
@@ -327,12 +421,35 @@ class LoopStrategy:
         intent = step.intent
         if step.prefer and intent.prefer is None:
             intent = replace(intent, prefer=step.prefer)
+        # A follow-plan step *is* one bound action.  Repeating it is a
+        # byte-identical call that cannot teach the loop anything, so an
+        # *exploratory* step (no expectations declared) runs once and is
+        # released.  A measured approved plan bound ``read`` to a directory:
+        # the receipt was failed, the step declared no expectation, so no
+        # repair budget could ever be spent, and the identical call was
+        # re-issued until the stuck detector blocked the whole task — the
+        # write step behind it never ran.  Steps that *do* declare
+        # expectations keep the repair budget: their retries are bounded by
+        # the runtime, not by this guard.
+        if (
+            not step.expects
+            and self._followed_step == step.id
+            and self._followed_intent == intent
+        ):
+            return ReleaseStep(
+                f"step {step.id}: bound action already executed"
+            )
+        self._followed_step = step.id
+        self._followed_intent = intent
         return CallTool(intent)
 
     def _release_step(self, view: ModelView, step: StepContract) -> Action:
         """Review the step before it is released, then release it."""
         reviewed = self._review_step(view, step)
-        if isinstance(reviewed, CallTool):
+        # An escalation request is a *call the reviewer wants run*, so it has
+        # to leave the step sub-loop exactly like a tool call.  Only forwarding
+        # ``CallTool`` here is how the reviewer's ask was dropped on the floor.
+        if isinstance(reviewed, (CallTool, RequestEscalation)):
             return reviewed
         self._notices.append(
             {
@@ -351,6 +468,20 @@ class LoopStrategy:
             return None
         self._step_reviews += 1
         proposal = self.step_reviewer(view, step, Finish("step complete"))
+        if isinstance(proposal, RequestEscalation):
+            # The step cannot be completed as bound: it needs one call the
+            # boundary refused.  Record it as a correction (the reviewer's
+            # move) and let the runtime put it to the human.
+            self._notices.append(
+                {
+                    "kind": "step",
+                    "decision": "step_correction",
+                    "step": step.id,
+                    "capability": proposal.intent.capability.value,
+                    "review": self._step_reviews,
+                }
+            )
+            return proposal
         if isinstance(proposal, CallTool):
             self._notices.append(
                 {

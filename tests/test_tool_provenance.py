@@ -259,7 +259,6 @@ def test_agent_context_advisories_are_deduplicated_and_clear_per_turn():
 def test_advisory_context_does_not_leak_into_the_next_turn(monkeypatch, tmp_path):
     monkeypatch.setenv("XENON_SESSION_EVENTS_DIR", str(tmp_path / "events"))
     repl = _make_repl(tmp_path)
-    repl.intelligent_router.enabled = False
     repl.agent_context.add_security_advisories(
         {"source_type": "web", "source_ref": "example.test", "untrusted": True},
         [

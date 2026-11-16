@@ -7,6 +7,7 @@ from xenon.repl.command_groups.agent import (
     _cmd_code,
     _cmd_run,
     _cmd_sub_agent,
+    _ordered_model_candidates,
 )
 from xenon.repl.commands import (
     _cmd_ask as legacy_ask,
@@ -82,6 +83,68 @@ def test_code_needs_task():
     ctx = ContextManager()
     result = _cmd_code(args="", registry=reg, ctx_mgr=ctx, session_state={})
     assert "用法" in result
+
+
+def test_ordered_model_candidates_lead_with_the_session_choice():
+    """The model the user selected (alias form) must be tried first.
+
+    ``--model`` / ``/set_model`` write ``_preferred_model_ids``; a command that
+    reads only the role list ran on a dead proxy while the status bar showed a
+    working model.
+    """
+
+    from types import SimpleNamespace
+
+    from xenon.repl.model_registry import ModelRegistry
+
+    reg = ModelRegistry()
+    reg.add_model("vendor/dead", "dead")
+    reg.add_model("vendor/live", "live")
+
+    candidates = _ordered_model_candidates(
+        reg, SimpleNamespace(_preferred_model_ids=["live"]), "coder"
+    )
+    assert candidates == ["vendor/live", "vendor/dead"]
+
+
+def test_code_falls_back_when_the_first_model_is_rejected(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from xenon.repl.context_manager import ContextManager
+    from xenon.repl.model_registry import ModelRegistry
+
+    reg = ModelRegistry()
+    reg.add_model("vendor/dead", "dead")
+    reg.add_model("vendor/live", "live")
+    calls: list[str] = []
+
+    def fake_chat(model_id, messages, **kwargs):
+        calls.append(model_id)
+        if model_id == "vendor/dead":
+            raise RuntimeError("402 Payment Required")
+        return "print(sum(range(1, 6)))"
+
+    monkeypatch.setattr("xenon.utils.llm_client.chat_completion", fake_chat)
+
+    target = tmp_path / "sum5.py"
+    ctx = ContextManager()
+    result = _cmd_code(
+        args=f"求和 --file {target}",
+        registry=reg,
+        ctx_mgr=ctx,
+        session_state={},
+        repl=SimpleNamespace(_preferred_model_ids=["dead"]),
+    )
+
+    assert "✅ 代码已写入" in result
+    assert target.read_text(encoding="utf-8") == "print(sum(range(1, 6)))"
+    # The session's model is tried first; a rejection falls through to the next.
+    assert calls == ["vendor/dead", "vendor/live"]
+    assert ctx.history[-1].model_used == "vendor/live"
+    # /review reads this key; the writer must fill it.
+    assert ctx.get_working_memory()["session_created_files"] == [
+        str(target.absolute())
+    ]
 
 
 def test_run_needs_workflow():
@@ -183,6 +246,53 @@ def test_sub_agent_starts_bounded_read_only_child(monkeypatch, tmp_path):
     assert "子任务" in result
     assert captured["permission"] is PermissionMode.READ_ONLY
     assert captured["parent_permission"] is not None
+
+
+class _TwoModelPool:
+    def __init__(self):
+        from types import SimpleNamespace
+
+        self._models = [
+            SimpleNamespace(model_id="test/fake"),
+            SimpleNamespace(model_id="test/preferred"),
+        ]
+
+    def get_healthy(self):
+        return self._models
+
+    def list_all(self):
+        return self._models
+
+
+def test_sub_agent_runs_the_session_model_first(monkeypatch, tmp_path):
+    """The child must inherit the model the user selected, not pool order."""
+
+    from types import SimpleNamespace
+
+    captured: dict = {}
+
+    def fake_run_child_task(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            delivered=True,
+            objective="读文件",
+            summary=lambda: "🧬 ok",
+        )
+
+    monkeypatch.setattr("xenon.harness.child.run_child_task", fake_run_child_task)
+    monkeypatch.setattr(
+        "xenon.harness.child.reconcile_child_records", lambda *a, **k: []
+    )
+
+    repl = _sub_agent_repl(tmp_path, level=1)
+    repl.registry.add_model("test/preferred", "preferred")
+    repl.model_pool = _TwoModelPool()
+    repl._preferred_model_ids = ["preferred"]
+
+    result = _cmd_sub_agent(args="读文件", session_state={}, repl=repl)
+
+    assert "子任务" in result
+    assert captured["model"].model_id == "test/preferred"
 
 
 def test_child_permission_never_exceeds_the_parent(tmp_path):

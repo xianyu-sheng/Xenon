@@ -35,6 +35,11 @@ __all__ = ["PROTOCOL_VERSION", "ProtocolHost", "main"]
 
 PROTOCOL_VERSION = 1
 
+#: What the welcome card and the status bar call the execution model.  There
+#: is exactly one loop; a mode is a phase profile inside it, so the UI must not
+#: show the internal preset name as if it were something to choose.
+LOOP_LABEL = "单循环"
+
 
 def _emit(stream: TextIO, payload: Mapping[str, Any]) -> None:
     """Write one frame.  A single lock keeps concurrent sinks from interleaving."""
@@ -49,6 +54,17 @@ _EMIT_LOCK = threading.Lock()
 
 def _log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
+
+
+def _version() -> str:
+    """The running package version — the single source is ``xenon/__init__``."""
+
+    try:
+        from xenon import __version__
+
+        return str(__version__)
+    except Exception:  # noqa: BLE001 — a welcome card must never fail startup
+        return ""
 
 
 @dataclass
@@ -176,9 +192,61 @@ class ProtocolHost:
         self.command_thread: threading.Thread | None = None
         self._prompt_waiters: dict[str, threading.Event] = {}
         self._prompt_answers: dict[str, str] = {}
+        #: Set by ``turn.cancel``.  A turn runs on a worker thread, so Ctrl+C
+        #: arrives as a protocol frame, not as SIGINT; this flag is the one
+        #: cancel signal every path can read (direct chat and kernel alike).
+        self._turn_cancel = threading.Event()
         self.turn_started_at = 0.0
+        #: Session wall-clock start.  The interactive status bar reports how
+        #: long the session has been open, not just the current turn.
+        self.session_started_at = time.time()
         #: Whether the kernel has no credentials/models at all (local facts only).
         self.setup_needed = False
+        #: The objective of the turn in flight, for the dashboard snapshot.
+        self.turn_objective = ""
+        #: The last finished kernel run and its ledger.  Read-only panels
+        #: (diff, evidence, plan) are views of these facts; storing them here
+        #: is what keeps a query from re-running anything.
+        self.last_run: Any = None
+        self.last_ledger: Path | None = None
+
+    def _sync_kernel_view(self, previous_run: Any = None) -> None:
+        """Adopt the kernel run the REPL most recently published.
+
+        A kernel run can start from two places: a turn (``run_turn`` returns
+        it here) and a command (``/plan approve`` resumes the approved plan on
+        the command worker).  Only the turn path used to update ``last_run``,
+        so after an approved plan the panels kept describing the *plan-only*
+        run — the evidence panel said ``unverified`` while the ledger said the
+        plan had delivered a verified commit.  Every kernel run now lands on
+        ``repl._last_kernel_run``; reading that one pointer keeps the panels in
+        agreement with the ledger no matter which entry produced the run.
+        """
+
+        run = getattr(self.repl, "_last_kernel_run", None)
+        if run is not None and run is not previous_run:
+            self.last_run = run
+            ledger = str(getattr(run, "ledger_path", "") or "")
+            if ledger:
+                self.last_ledger = Path(ledger)
+            return
+        # A third producer installs evidence without a run: ``/resume`` (also
+        # the startup ``--resume``) restores the REPL's ledger pointer so
+        # ``/evidence`` works, but the host kept its old view and the dashboard
+        # reported "没有可读的账本" for a session the terminal could inspect.
+        # The pointer is the same fact the terminal reads, so adopt it — and
+        # drop a run that belongs to a different ledger, or the status would
+        # come from the previous session's result.
+        ledger = getattr(self.repl, "_last_kernel_ledger", None)
+        if not ledger:
+            return
+        path = Path(str(ledger))
+        if path == self.last_ledger or not path.exists():
+            return
+        self.last_ledger = path
+        run_path = getattr(self.last_run, "ledger_path", None)
+        if run_path is None or Path(str(run_path)) != path:
+            self.last_run = None
 
     # ── frames ─────────────────────────────────────────────────────
 
@@ -212,6 +280,22 @@ class ProtocolHost:
             registry.load_from_file(models_file)
         registry.load_from_credentials()
         self.repl = REPL(registry=registry, streaming=False)
+        # ``start_repl`` feeds the pool from the registry before any turn runs;
+        # the host must do the same.  Without it ``model_pool`` stays empty: the
+        # welcome summary reports "0 loaded" while the registry knows ten
+        # models, and AutoRouter loses its only data source.
+        pool = getattr(self.repl, "model_pool", None)
+        from_config = getattr(pool, "from_config", None)
+        export_config = getattr(registry, "export_config", None)
+        if callable(from_config) and callable(export_config):
+            try:
+                from_config(export_config().get("models", {}))
+            except Exception:  # noqa: BLE001 — pool wiring must never block boot
+                _log("model pool wiring failed")
+        if self.model_ids:
+            # Same precedence as ``start_repl --model``: an explicit choice
+            # outranks whatever the router would pick.
+            self.repl._preferred_model_ids = list(self.model_ids)
         # The protocol owns the real stdout.  Anything the REPL prints through
         # a stdout-backed console (errors, command internals) would corrupt the
         # NDJSON stream, so process stdout becomes a diagnostic sink; frames
@@ -219,6 +303,10 @@ class ProtocolHost:
         if self.out is sys.stdout:
             sys.stdout = sys.stderr
         self.repl._protocol_callback = ProtocolCallback(self)
+        # Direct chat and the kernel loop both poll this probe while a turn is
+        # in flight (see ``turn.cancel``).  It stays installed for the life of
+        # the session; the event behind it is cleared when a turn starts.
+        self.repl._turn_cancel_probe = self._turn_cancel.is_set
         # The three hooks the adapter binds today; same signatures, new sink.
         self.repl._start_log_capture = lambda: None
         self.repl._stop_log_capture = lambda: ""
@@ -235,15 +323,80 @@ class ProtocolHost:
         callback = self.repl._protocol_callback
         self.repl._progress_sink_override = callback.progress
         self.repl._request_sink_override = callback.provider
-        self.setup_needed = self._setup_needed()
+        self._bootstrap_extensions()
+        summary = self._first_run_summary()
+        self.setup_needed = bool(summary.get("needs_setup"))
+        # The front-end renders the welcome card (logo, version, mode, model
+        # count, first-run hint).  Every one of those is a kernel fact, so the
+        # startup frame carries them; a front-end that guessed a version or a
+        # mode would be inventing product copy.  Startup stays local-only —
+        # ``probed`` is False because provider discovery is lazy (v0.9.0).
+        from xenon.modes import loop_phases
+
+        mode = None
+        get_mode = getattr(registry, "get_current_mode", None)
+        if callable(get_mode):
+            try:
+                mode = get_mode()
+            except Exception:  # noqa: BLE001 — the card can omit the loop line
+                mode = None
+        profile = getattr(mode, "loop", None)
         self.frame(
             type="ready",
             models=[m.alias for m in registry.list_models()],
             cwd=str(self.cwd),
             setup_needed=self.setup_needed,
+            version=_version(),
+            # The card shows the loop, never the internal preset name: a mode
+            # is a phase profile of the one loop, so the phases are the only
+            # difference worth displaying (and the only one that is true).
+            mode=LOOP_LABEL,
+            mode_description=loop_phases(profile),
+            model_count=len(self._model_pool_ids()),
+            loaded_models=int(summary.get("loaded_models") or 0),
+            probed=bool(summary.get("probed")),
+            available_providers=int(summary.get("available_providers") or 0),
+            failures=[
+                {"name": str(name), "reason": str(reason)}
+                for name, reason in (summary.get("failures") or [])
+            ],
         )
 
-    def _setup_needed(self) -> bool:
+    def _bootstrap_extensions(self) -> None:
+        """Load dynamic commands and persisted MCP servers, like ``REPL.run``.
+
+        The host is the only interactive entry now, so it must run the same
+        extension bootstrap the Python loop does; skipping it left ``/mcp
+        list`` empty after a restart and kept saved shortcut/skill commands
+        invisible.  Console writes are captured and dropped: stdout carries
+        NDJSON here and stderr is the Ink surface.
+        """
+
+        import contextlib
+        import io
+
+        bootstrap = getattr(self.repl, "bootstrap_extensions", None)
+        if not callable(bootstrap):
+            return
+        with contextlib.redirect_stdout(io.StringIO()):
+            try:
+                bootstrap()
+            except Exception:  # noqa: BLE001 — an extension must not block boot
+                _log("extension bootstrap failed")
+
+    def _model_pool_ids(self) -> list[str]:
+        """Configured model ids from the pool (local facts, no probing)."""
+
+        pool = getattr(self.repl, "model_pool", None)
+        list_all = getattr(pool, "list_all", None)
+        if not callable(list_all):
+            return []
+        try:
+            return list(list_all())
+        except Exception:  # noqa: BLE001 — a count must never block startup
+            return []
+
+    def _first_run_summary(self) -> dict[str, Any]:
         """Local-only first-run check (no provider probing, no network).
 
         The startup hint used to live in the interactive Python loop; with the
@@ -253,13 +406,17 @@ class ProtocolHost:
 
         check = getattr(self.repl, "_check_first_run", None)
         if not callable(check):
-            return False
+            return {}
         try:
-            summary = check()
+            return dict(check() or {})
         except Exception:  # noqa: BLE001 — a hint must never block startup
             _log("first-run check failed")
-            return False
-        return bool((summary or {}).get("needs_setup"))
+            return {}
+
+    def _setup_needed(self) -> bool:
+        """Whether the session has no credentials and no configured models."""
+
+        return bool(self._first_run_summary().get("needs_setup"))
 
     def _confirm_tool(
         self, tool_name: str, params: dict, risk: str, *, from_child: bool = False
@@ -289,6 +446,15 @@ class ProtocolHost:
                 # answer is recorded here, against this turn's id, and pushed
                 # to the running policy so it applies immediately.
                 self._remember_turn(capability, targets)
+            elif choice == "allow":
+                # The durable half (§9: tool + path, 30 min) lives in the
+                # session GrantBook.  Only the interactive bridge used to
+                # write it, so an "allow" given here was forgotten the moment
+                # the run ended: the next turn asked again and /permissions
+                # listed nothing.
+                from xenon.repl.approval_ux import remember_allow_answer
+
+                remember_allow_answer(self.repl, tool_name, params)
             self.repl._last_approval_scope = {
                 "once": "",
                 "turn": "",
@@ -296,6 +462,12 @@ class ProtocolHost:
             }[choice]
             return True, ""
         if choice == "cancel":
+            # "Cancel the whole task" must stop the run, not just this call:
+            # the kernel sees a refusal as one failed tool and keeps planning.
+            # Same contract as the interactive panel.
+            from xenon.repl.approval_ux import cancel_running_task
+
+            cancel_running_task(self.repl)
             return False, "用户取消任务"
         return False, "用户拒绝"
 
@@ -497,16 +669,39 @@ class ProtocolHost:
         return True
 
     def cancel_turn(self) -> bool:
-        """Ask the running kernel loop to stop; False when nothing is running."""
+        """Stop the work in flight; False when there is nothing to stop.
+
+        Two paths run here: a kernel loop (which has a runtime) and direct
+        chat (which has none).  Binding the flag to the runtime alone made
+        Ctrl+C a no-op for a plain conversation -- the essay it was writing
+        arrived in full.  The flag is therefore owned by the host for the
+        duration of the turn, and the runtime (when present) is told as well
+        so an in-flight tool step is interrupted instead of finishing first.
+        """
 
         runtime = getattr(self.repl, "_active_runtime", None)
+        busy = runtime is not None or any(
+            thread is not None and thread.is_alive()
+            for thread in (self.turn_thread, self.command_thread)
+        )
+        if not busy:
+            return False
+        self._turn_cancel.set()
         cancel = getattr(runtime, "request_cancel", None)
-        if not callable(cancel):
-            return False
-        try:
-            cancel()
-        except Exception:  # noqa: BLE001 — cancel is best effort
-            return False
+        if callable(cancel):
+            try:
+                cancel()
+            except Exception:  # noqa: BLE001 — cancel is best effort
+                _log("runtime cancel failed")
+        # A turn parked on an approval panel cannot see the flag: the kernel
+        # waits on this event, not in its loop.  Answering "cancel" is the same
+        # closed choice the panel offers, so the runtime unwinds instead of
+        # holding Ctrl+C hostage until the 300 s timeout.
+        with self._pending_lock:
+            waiting = list(self._pending.values())
+        for request in waiting:
+            request.choice = "cancel"
+            request.settled.set()
         return True
 
     def select_session(self, name: str) -> None:
@@ -562,10 +757,14 @@ class ProtocolHost:
         outcome = None
         failure = ""
         prompt = objective
+        memory_answer = ""
         try:
             # The direct path expects the turn's request message to be in the
             # conversation already (the REPL persists it before dispatching).
-            # Without it the provider sees an empty conversation and answers 400.
+            # Without it the provider sees an empty conversation and answers
+            # 400 — and, for a memory-gated turn, nothing was recorded at all,
+            # so ``/save`` wrote an empty session that ``--resume`` then
+            # reported as "不存在".
             context = getattr(self.repl, "ctx_mgr", None)
             add_request = getattr(context, "add_request_message", None)
             if callable(add_request):
@@ -579,37 +778,171 @@ class ProtocolHost:
                         "continuation": False,
                     },
                 )
-            outcome = self.repl._run_direct(
-                prompt,
-                self._current_models(),
-                intent=None,
-                execution_policy=contract.to_execution_policy(),
-            )
+            # "记住……" is an instruction, not a conversation: the interactive
+            # REPL persists it inside ``turn_flow`` before any model call.  The
+            # host dispatched straight to ``_run_direct``, so the model used to
+            # answer "已记住" while the memory service was never touched.
+            # Running the same gate here keeps both entries honest.  Its
+            # receipt is the turn's answer, so the conversation records the
+            # pair instead of an unanswered user message.
+            memory_answer = self._explicit_memory_answer(objective)
+            if memory_answer:
+                add_answer = getattr(context, "add_assistant_message", None)
+                if callable(add_answer):
+                    add_answer(memory_answer)
+            else:
+                outcome = self.repl._run_direct(
+                    prompt,
+                    self._current_models(),
+                    intent=None,
+                    execution_policy=contract.to_execution_policy(),
+                )
         except Exception as exc:  # noqa: BLE001 — a frame, not a crash
             failure = f"{type(exc).__name__}: {exc}"
         finally:
             delegated = bool(getattr(outcome, "delegated", False))
             path = finish_conversation_turn(
                 chat_turn,
-                answer=getattr(outcome, "answer", "") or "",
+                answer=memory_answer or (getattr(outcome, "answer", "") or ""),
                 model_id=getattr(outcome, "model_id", "") or "",
                 error=getattr(outcome, "error", "") or failure,
                 delegated=delegated,
             )
-        answer = getattr(outcome, "answer", "") or ""
-        error = getattr(outcome, "error", "") or failure
-        if delegated:
-            error = "模型尝试执行工具；请把这一轮改写成工具任务"
-        self.frame(
-            type="turn.end",
-            phase="finalized" if answer else "failed",
-            answer=answer,
-            accepted=bool(answer),
-            error=error,
-            evidence={"status": "unverified"},
-            ledger=str(path) if path is not None else None,
-        )
+        answer = memory_answer or (getattr(outcome, "answer", "") or "")
+        error = "" if memory_answer else (getattr(outcome, "error", "") or failure)
+        cancelled = bool(getattr(outcome, "cancelled", False))
+        run = getattr(outcome, "run", None)
+        # A chat turn still has a ledger (the conversation one); the panels
+        # open it even when there is no kernel run to project.
+        self.last_ledger = Path(path) if path is not None else None
+        if run is not None:
+            self.last_run = run
+        if delegated and run is not None:
+            # The direct path found the model reaching for a tool and handed
+            # the turn to the kernel.  That kernel run *is* the turn: report its
+            # answer, evidence, ledger and counters.  The host used to replace
+            # all of it with "模型尝试执行工具；请把这一轮改写成工具任务" while the
+            # work had already happened in a ledger the user never saw.
+            self.frame(type="turn.end", **_turn_end_fields(run, self.final_answer or answer))
+        elif delegated:
+            from xenon.utils.errors import envelope
+
+            cause = getattr(self.repl, "_last_kernel_error", None)
+            problem = (
+                envelope(cause)
+                if isinstance(cause, BaseException)
+                else envelope(answer or "kernel turn failed")
+            )
+            self.frame(
+                type="turn.end",
+                phase="failed",
+                answer="",
+                error=problem.message,
+                error_kind=problem.kind,
+                retryable=problem.retryable,
+                ledger=str(path) if path is not None else None,
+            )
+        elif cancelled:
+            # Not a failure: the operator said stop.  The closed ledger path is
+            # still reported, so the aborted turn is auditable like any other.
+            self.frame(
+                type="turn.end",
+                phase="aborted",
+                answer="",
+                accepted=False,
+                cancelled=True,
+                ledger=str(path) if path is not None else None,
+            )
+        else:
+            self.frame(
+                type="turn.end",
+                phase="finalized" if answer else "failed",
+                answer=answer,
+                accepted=bool(answer),
+                error=error,
+                # A memory receipt is produced by a deterministic write, so the
+                # claim on screen is backed by the service, not by the model.
+                evidence={"status": "verified" if memory_answer else "unverified"},
+                ledger=str(path) if path is not None else None,
+            )
         self.turn = ""
+
+    def _explicit_memory_answer(self, objective: str) -> str:
+        """Persist an explicit "记住……" request and return its visible receipt.
+
+        Empty means "not a memory request"; the turn proceeds normally.  The
+        handler renders through the REPL's rich console, which in protocol mode
+        points at a diagnostic sink, so stdout is captured here and the text
+        becomes this turn's answer instead of vanishing.
+        """
+
+        handler = getattr(self.repl, "_handle_explicit_memory_request", None)
+        if not callable(handler):
+            return ""
+        # Scope selection reads the detected project; the adapter injects it
+        # for kernel turns, but a chat turn reaches the host first.
+        inject = getattr(self.repl, "_inject_project_context", None)
+        if callable(inject):
+            try:
+                inject()
+            except Exception:  # noqa: BLE001 — context is advisory
+                _log("project context injection failed before memory gate")
+        captured = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(captured):
+                handled = handler(objective)
+        except Exception:  # noqa: BLE001 — a chat turn must never fail on this
+            _log("explicit memory gate failed")
+            return ""
+        if not handled:
+            return ""
+        text = _plain_text(captured.getvalue()).strip()
+        return text or "· 记忆请求已处理（/memory list 查看）"
+
+    def _resolve_contract(self, objective: str) -> tuple[Any, Any, str, str]:
+        """The turn contract, resolved the same way the interactive REPL does.
+
+        Falls back to the regex-only classifier for a bare REPL (embedded
+        hosts, tests) that has no resolver.  A resolver failure must not kill
+        the turn: an over-conservative contract still answers, it just may
+        refuse a write, and that refusal is visible.
+        """
+
+        from xenon.repl.turn_contract import build_turn_contract
+
+        resolve = getattr(self.repl, "_resolve_turn_contract", None)
+        if callable(resolve):
+            try:
+                contract, policy, intent, intent_source = resolve(objective)
+                return contract, policy, str(intent or ""), str(intent_source or "")
+            except Exception as exc:  # noqa: BLE001 — classification is not the task
+                _log(f"turn contract resolver failed ({exc}); using regex signals")
+        contract = build_turn_contract(objective)
+        return contract, contract.to_execution_policy(), str(contract.intent or ""), ""
+
+    def _apply_permission_ceiling(self, contract: Any) -> Any:
+        """Clamp one turn to the session's ``/permissions`` mode.
+
+        The mode is a durable ceiling over every turn, not only the interactive
+        path.  ``run_turn`` recomputes the contract from the objective each
+        turn, so a mode stored only as ``_execution_level`` was overwritten
+        before it could constrain anything: through the front-end
+        ``/permissions plan`` still let the turn write/execute.
+        """
+
+        ctx_get = getattr(getattr(self.repl, "agent_context", None), "get", None)
+        if not callable(ctx_get):
+            return contract
+        try:
+            mode_name = str(ctx_get("_permission_mode") or "")
+        except Exception:  # noqa: BLE001 — a context read must not kill a turn
+            return contract
+        if not mode_name:
+            return contract
+
+        from xenon.repl.turn_contract import apply_permission_ceiling
+
+        return apply_permission_ceiling(contract, mode_name)
 
     def run_turn(self, objective: str, level: str = "auto-edit") -> None:
         """One user turn.  Blocks until the kernel finishes it.
@@ -622,47 +955,123 @@ class ProtocolHost:
         real task through the TS front-end — no prompt ever appeared.
         """
 
+        from xenon.repl.execution_policy import ExecutionLevel
         from xenon.repl.runtime_adapter import run_kernel_turn
-        from xenon.repl.turn_contract import build_turn_contract
 
+        # A cancel belongs to the turn that asked for it, never to the next one.
+        self._turn_cancel.clear()
         self.turn = self._next_id("t")
+        self.turn_objective = objective
         self.turn_started_at = time.time()
         self.final_answer = ""
+        self.last_run = None
         self.frame(type="turn.start", objective=objective)
 
-        contract = build_turn_contract(objective)
-        # An explicit --level from the front-end wins; otherwise the objective
-        # decides, which is what the interactive path has always done.
+        # One contract resolver for both entries.  The interactive REPL
+        # resolves a turn through ``_resolve_turn_contract`` (regex signals +
+        # then the LLM classifier, with the pending-action and task-state
+        # context).  Calling ``build_turn_contract`` here instead made the
+        # protocol a second, weaker classifier: a write task whose verb came
+        # *after* the path ("在 x.txt 写入一行") had no structural signal, so
+        # the front-end turn ran read-only and every write was vetoed, while
+        # the same text in the Python TUI was authorised.
+        contract, _policy, intent, intent_source = self._resolve_contract(objective)
+
+        # An explicit --level from the front-end wins; otherwise the resolved
+        # contract decides, which is what the interactive path has always done.
         requested = str(level or "").lower()
         if requested and requested not in {"auto", "auto-edit", "default"}:
-            level_value = _LEVELS.get(requested, int(contract.level))
-        else:
-            level_value = int(contract.level)
-        contract = _with_level(contract, level_value)
+            contract = _with_level(
+                contract, _LEVELS.get(requested, int(contract.level))
+            )
+
+        # Plan mode is a constraint on the *turn*, applied after resolution so
+        # the plan itself keeps its write/execute steps (``proposed_level``).
+        # Only the interactive path used to do this; through the front-end
+        # `/plan on` had no effect at all — the kernel started in TaskMode.AUTO
+        # with every tool available.
+        plan_active = bool(getattr(self.repl, "_plan_mode_active", False))
+        plan_convert = getattr(self.repl, "_plan_mode_contract", None)
+        if (
+            plan_active
+            and contract.level >= ExecutionLevel.WRITE
+            and callable(plan_convert)
+        ):
+            contract = plan_convert(contract)
+
+        contract = self._apply_permission_ceiling(contract)
+        policy = contract.to_execution_policy()
+        # Publish the write scope (named protected paths / relative "don't touch
+        # the rest") into the agent context.  The interactive path did this in
+        # ``turn_flow``; without it here the protocol host silently dropped the
+        # user's constraint and let the kernel write any path.
+        from xenon.repl.turn_contract import store_write_scope
+
+        store_write_scope(getattr(self.repl, "agent_context", None), contract)
+        plan_only = bool(plan_active and contract.deferred_write)
+        # The session reports the level the turn is *authorised* at, not the
+        # temporary read-only window a plan turn executes in.
+        session_level = (
+            int(contract.proposed_level) if plan_only else int(contract.level)
+        )
         # The turn's level is the level the session is running at.  Without
         # writing it back, `/permissions` reports "未初始化" and the status bar
         # shows nothing, because both read it from the agent context.
         setter = getattr(self.repl.agent_context, "set", None)
         if callable(setter):
-            setter("_execution_level", int(level_value))
+            setter("_execution_level", session_level)
             setter("_execution_reason", "protocol turn")
 
         callback = self.repl._protocol_callback
-        if not contract.to_execution_policy().requires_tools:
+        if not policy.requires_tools:
             # Pure conversation: the kernel loop would plan, propose a tool and
             # get vetoed by the read-only boundary ("policy veto" on a
             # greeting).  Mirror the REPL's direct path, but emit frames and
             # record the turn in the ledger.
             self._run_chat(objective, contract)
             return
+        # A plan-only turn may *plan* writes even though the runtime is
+        # read-only; say so in the prompt exactly as the interactive path does,
+        # or the model trims the write steps out of its own plan.
+        turn_prompt = objective
+        if plan_only:
+            turn_prompt = (
+                f"{objective}\n\n## 计划模式（kernel plan-only）\n"
+                "计划可以包含写/执行步骤；本轮只提交计划，不执行任何工具，"
+                "批准后才执行。不要因为执行边界是只读就删掉计划中的写步骤。"
+            )
+        # The interactive REPL records the request in the conversation before
+        # every turn (``turn_flow``), and ``run_kernel_turn`` records the
+        # answer when it renders the result.  The protocol host called the
+        # adapter directly and skipped the first half: after a real tool task
+        # ``ctx_mgr.history`` held only an assistant message, so ``/save``
+        # persisted a conversation ``/load`` could not replay, ``/context``
+        # undercounted, and ``--resume`` reported the saved session as "不存在"
+        # because ``list_sessions`` drops empty-history files.
+        context = getattr(self.repl, "ctx_mgr", None)
+        add_request = getattr(context, "add_request_message", None)
+        if callable(add_request):
+            turn_prompt = add_request(
+                turn_prompt,
+                metadata={
+                    "intent": str(intent or ""),
+                    "original_user_input": objective,
+                    "intent_source": str(intent_source or ""),
+                    "contextual_followup": False,
+                    "continuation": False,
+                },
+            )
         try:
             run = run_kernel_turn(
                 self.repl,
-                objective=objective,
+                objective=turn_prompt,
                 user_input=objective,
                 model_ids=self._current_models(),
-                execution_policy=contract.to_execution_policy(),
+                execution_policy=policy,
                 callback=callback,
+                plan_only=plan_only,
+                intent=str(intent or ""),
+                intent_source=str(intent_source or ""),
             )
         except Exception as exc:  # noqa: BLE001 — a failed turn is a frame, not a crash
             from xenon.utils.errors import envelope
@@ -684,18 +1093,33 @@ class ProtocolHost:
         if run is None:
             # ``run_kernel_turn`` reports a failed turn by returning None after
             # printing the reason.  A frame with an empty phase would look like
-            # a successful, evidence-free run; say it failed.
+            # a successful, evidence-free run; say it failed — and say *why*.
+            # The console print never reaches this stream, so the cause is
+            # read back from the REPL and classified like any other boundary
+            # error (network failures are retryable; an unknown cause is not).
+            from xenon.utils.errors import envelope
+
+            cause = getattr(self.repl, "_last_kernel_error", None)
+            problem = (
+                envelope(cause)
+                if isinstance(cause, BaseException)
+                else envelope(self.final_answer or "kernel turn failed")
+            )
             self.frame(
                 type="turn.end",
                 phase="failed",
                 answer="",
-                error=self.final_answer or "kernel turn failed",
-                error_kind="internal",
-                retryable=False,
+                error=problem.message,
+                error_kind=problem.kind,
+                retryable=problem.retryable,
             )
             self.turn = ""
             return
 
+        # Keep the run for the read-only panels.  A query must be a view of
+        # this run, never a second execution of the task.
+        self.last_run = run
+        self.last_ledger = Path(getattr(run, "ledger_path", "") or "") or None
         self.frame(type="turn.end", **_turn_end_fields(run, self.final_answer))
         self.turn = ""
 
@@ -712,9 +1136,26 @@ class ProtocolHost:
 
         from xenon.repl.command_registry import ExitSignal, dispatch_command
 
+        # Some commands execute a turn of their own (/plan approve resumes the
+        # approved plan).  That work is cancellable too, and a cancel from the
+        # previous command must not leak into it.
+        self._turn_cancel.clear()
         command_id = self._next_id("c")
-        session_state = {"_repl": self.repl, "agent_context": self.repl.agent_context}
+        # One canonical session_state, shared with the REPL.  The host used to
+        # build a two-key shadow dict, so any handler reading
+        # ``session_state["model_pool"]`` (/pool, /set_profile, /import_models…)
+        # saw nothing while the pool was in fact loaded — and the same hole
+        # applied to the routers, terminal activity and memory service.
+        session_state = getattr(self.repl, "_session_state", None)
+        if not isinstance(session_state, dict):
+            session_state = {}
+        session_state["_repl"] = self.repl
+        session_state["agent_context"] = self.repl.agent_context
         captured = io.StringIO()
+        # A command may execute a kernel run (``/plan approve``).  Remember
+        # which run the panels were showing so only a *new* run replaces it —
+        # a plain command must not resurrect a run whose turn already failed.
+        previous_run = getattr(self.repl, "_last_kernel_run", None)
 
         def flush_output() -> None:
             """Send what the command printed so far, before it asks a question."""
@@ -751,9 +1192,32 @@ class ProtocolHost:
                 type="command.result", id=command_id, name=name, error=str(exc)[:2000]
             )
             return
+        self._sync_kernel_view(previous_run)
         printed = _plain_text(captured.getvalue()).strip()
         returned = _plain_text("" if output is None else str(output)).strip()
         text = "\n".join(part for part in (printed, returned) if part)
+
+        # ``/restart`` only *requests* a restart; the interactive REPL's main
+        # loop performs it.  The protocol host has no such loop, so the
+        # command answered "正在准备重启" and nothing ever happened.  The
+        # manager performs an in-process reload; its outcome belongs in the
+        # same command result the user is looking at.
+        manager = getattr(self.repl, "_restart_manager", None)
+        coordinator = getattr(manager, "coordinator", None)
+        if coordinator is not None and hasattr(manager, "perform_restart"):
+            should_restart, preserve = coordinator.should_restart()
+            if should_restart:
+                coordinator.clear()
+                try:
+                    outcome = manager.perform_restart(preserve)
+                    text = "\n".join(
+                        part
+                        for part in (text, str(getattr(outcome, "message", "")))
+                        if part
+                    )
+                except Exception as exc:  # noqa: BLE001 — a failed restart is not fatal
+                    _log(f"restart failed: {exc}")
+                    text = "\n".join(part for part in (text, f"⚠️ 重启失败: {exc}") if part)
         self.frame(
             type="command.result",
             id=command_id,
@@ -855,11 +1319,154 @@ class ProtocolHost:
                     "name": str(row.get("name") or ""),
                     "saved_at": str(row.get("saved_at") or ""),
                     "messages": int(row.get("messages") or 0),
-                    "paradigm": str(row.get("paradigm") or ""),
                 }
                 for row in rows
             ],
         )
+
+    def session_report(self) -> None:
+        """Savings report facts, emitted once when the session ends.
+
+        Mirrors ``REPL._print_exit_report`` but ships numbers instead of a Rich
+        panel: the front-end draws the panel, the kernel owns the accounting.
+        Nothing is sent when no model call was made.
+        """
+
+        payload = self._report_payload()
+        if payload is None:
+            return
+        self.frame(type="session.report", **payload)
+
+    def _report_payload(self) -> dict[str, Any] | None:
+        """The report numbers, or None when no model call was made.
+
+        Shared by the exit frame and the dashboard's ``report.get`` so the two
+        can never disagree about what the session cost.
+        """
+
+        tracker = getattr(self.repl, "_cache_tracker", None)
+        if tracker is None:
+            return None
+        try:
+            model_ids = list(tracker.all_models)
+        except Exception:  # noqa: BLE001 — a report must never block exit
+            return None
+        rows: list[dict[str, Any]] = []
+        total_tokens = total_cost = 0.0
+        calls = 0
+        for model_id in model_ids:
+            try:
+                snap = dict(tracker.model_snapshot(model_id) or {})
+            except Exception:  # noqa: BLE001
+                continue
+            model_calls = int(snap.get("calls", 0) or 0)
+            if model_calls == 0:
+                continue
+            prompt_t = int(snap.get("prompt_tokens", 0) or 0)
+            comp_t = int(snap.get("completion_tokens", 0) or 0)
+            reported = int(snap.get("cache_reported_calls", 0) or 0)
+            cost = float(snap.get("cost_yuan", 0.0) or 0.0)
+            calls += model_calls
+            total_tokens += prompt_t + comp_t
+            total_cost += cost
+            rows.append(
+                {
+                    "model": str(model_id),
+                    "calls": model_calls,
+                    "tokens": prompt_t + comp_t,
+                    "cache_hit_pct": (
+                        round(float(snap.get("cache_hit_rate", 0.0) or 0.0) * 100, 1)
+                        if reported
+                        else None
+                    ),
+                    "cost_cny": round(cost, 4),
+                }
+            )
+        if calls == 0:
+            return None
+        try:
+            rate = (
+                round(float(tracker.cache_hit_rate) * 100, 1)
+                if int(getattr(tracker, "cache_reported_calls", 0) or 0)
+                else None
+            )
+            savings = int(tracker.savings_pct)
+            saved = float(getattr(tracker, "savings_yuan", 0.0) or 0.0)
+        except Exception:  # noqa: BLE001
+            rate, savings, saved = None, 0, 0.0
+        return {
+            "models": rows,
+            "totals": {
+                "calls": calls,
+                "tokens": int(total_tokens),
+                "cost_cny": round(total_cost, 4),
+                "saved_cny": round(saved, 4),
+                "savings_pct": savings,
+                "cache_hit_pct": rate,
+            },
+        }
+
+    #: Read-only query frames the dashboard may send.  They answer from facts
+    #: the session already produced; none of them starts a turn or a tool.
+    QUERY_KINDS = frozenset(
+        {
+            "dashboard.snapshot",
+            "workspace.status",
+            "diff.get",
+            "ledger.events",
+            "evidence.chain",
+            "plan.get",
+            "memory.list",
+            "mcp.status",
+            "report.get",
+            "sessions.list",
+            "sessions.tree",
+        }
+    )
+
+    def handle_query(self, message: Mapping[str, Any]) -> None:
+        """Answer one read-only query with ``<kind>.result``.
+
+        A query must never take the session down: a broken ledger or a git
+        failure becomes an ``error`` field in its own result frame.
+        """
+
+        from xenon.frontend.queries import DashboardQueries
+
+        kind = str(message.get("type") or "")
+        queries = DashboardQueries(self)
+        try:
+            if kind == "dashboard.snapshot":
+                payload = queries.snapshot()
+            elif kind == "workspace.status":
+                payload = queries.workspace()
+            elif kind == "diff.get":
+                payload = queries.diff()
+            elif kind == "ledger.events":
+                payload = queries.ledger_events(
+                    kinds=list(message.get("kinds") or []),
+                    limit=int(message.get("limit") or 200),
+                )
+            elif kind == "evidence.chain":
+                payload = queries.evidence_chain()
+            elif kind == "plan.get":
+                payload = queries.plan()
+            elif kind == "memory.list":
+                payload = queries.memory()
+            elif kind == "mcp.status":
+                payload = queries.mcp()
+            elif kind == "report.get":
+                payload = queries.report()
+            elif kind == "sessions.list":
+                payload = queries.sessions()
+            elif kind == "sessions.tree":
+                payload = queries.sessions_tree()
+            else:  # pragma: no cover - main() filters before dispatching
+                payload = {"error": f"unknown query: {kind!r}"}
+        except Exception as exc:  # noqa: BLE001 — a panel must not kill the session
+            payload = {"error": f"{type(exc).__name__}: {exc}"}
+        payload = {str(key): value for key, value in payload.items()}
+        self.frame(type=f"{kind}.result", id=str(message.get("id") or ""), **payload)
 
     def status(self) -> None:
         """Current model / mode / execution level, for the status bar."""
@@ -879,7 +1486,7 @@ class ProtocolHost:
         self.frame(
             type="status",
             models=self._current_models(),
-            mode=str(getattr(self.repl.registry, "current_mode", "") or ""),
+            mode=LOOP_LABEL,
             level=name,
             cwd=str(self.cwd),
             **self._status_facts(),
@@ -888,9 +1495,11 @@ class ProtocolHost:
     def _status_facts(self) -> dict[str, Any]:
         """Numbers the bar shows, all read from existing counters.
 
-        Deliberately no cache-hit or cost percentage yet: the host cannot read
-        those reliably from the session, and a made-up number in a status bar
-        is worse than a missing one.
+        Every value is a kernel fact: token counts and the window from
+        ``ContextManager.stats()``, live phase/steps/tools from the runtime
+        snapshot, cache/cost from the session's ``CacheTracker``.  Anything a
+        source cannot answer is omitted — a made-up number in a status bar is
+        worse than a missing one.
         """
 
         facts: dict[str, Any] = {}
@@ -902,18 +1511,49 @@ class ProtocolHost:
             except Exception:  # noqa: BLE001 — status must never fail
                 pass
         context = getattr(self.repl, "ctx_mgr", None)
-        stats = getattr(context, "stats", None)
-        if callable(stats):
+        stats_fn = getattr(context, "stats", None)
+        stats: dict[str, Any] = {}
+        if callable(stats_fn):
             try:
-                ratio = stats().get("usage_ratio", "")
-                facts["context_used_pct"] = round(
-                    float(str(ratio).rstrip("%+")) / 100.0, 4
-                )
+                stats = dict(stats_fn() or {})
+            except Exception:  # noqa: BLE001 — status must never fail
+                stats = {}
+        if stats:
+            try:
+                ratio = str(stats.get("usage_ratio", "")).rstrip("%+")
+                facts["context_used_pct"] = round(float(ratio) / 100.0, 4)
             except (TypeError, ValueError):
+                pass
+            facts["tokens"] = int(stats.get("estimated_tokens") or 0)
+            facts["max_tokens"] = int(stats.get("max_tokens") or 0)
+            facts["messages"] = int(stats.get("total_messages") or 0)
+            facts["needs_compact"] = bool(stats.get("needs_compact"))
+        facts["streaming"] = bool(getattr(self.repl, "streaming", False))
+
+        tracker = getattr(self.repl, "_cache_tracker", None)
+        if tracker is not None:
+            # Only report a hit rate once the provider actually reported cache
+            # usage; otherwise 0% would read as "caching is broken".
+            try:
+                if int(getattr(tracker, "cache_reported_calls", 0) or 0) > 0:
+                    facts["cache_hit_pct"] = round(
+                        float(tracker.cache_hit_rate) * 100.0, 1
+                    )
+                cost = float(tracker.estimated_cost_yuan)
+                if cost > 0:
+                    facts["cost_cny"] = round(cost, 4)
+                savings = int(tracker.savings_pct)
+                if savings > 0:
+                    facts["savings_pct"] = savings
+            except Exception:  # noqa: BLE001 — status must never fail
                 pass
         if self.turn and self.turn_started_at:
             facts["elapsed_seconds"] = round(
                 time.time() - self.turn_started_at, 1
+            )
+        if self.session_started_at:
+            facts["session_elapsed_seconds"] = round(
+                time.time() - self.session_started_at, 1
             )
         return facts
 
@@ -1041,10 +1681,35 @@ def _turn_end_fields(run: Any, answer: str) -> dict[str, Any]:
     answer_text = str(answer or "")
     if not answer_text:
         answer_text = str(getattr(result, "answer", "") or "")
+    # A stopped turn must still *say* something.  A measured run hit the
+    # policy-refusal cap and delivered an empty ``answer``: the screen showed a
+    # turn that ended with nothing, and the ledger could not be read from the
+    # terminal.  The REPL's own summary already knows how to explain a blocked
+    # or failed result (debt, the ledger's blocking reason, the phase), so the
+    # protocol path reuses it instead of inventing a second wording.  A
+    # cancelled run is the operator's own doing and keeps its silence.
+    phase = str(getattr(getattr(result, "phase", ""), "value", "") or "")
+    cancelled = bool(getattr(result, "cancelled", False)) or (
+        str(getattr(result, "stop_signal", "") or "") == "cancelled"
+    )
+    if not answer_text and phase in ("blocked", "failed") and not cancelled:
+        from xenon.repl.runtime_adapter import _result_summary
+
+        try:
+            answer_text = _result_summary(
+                result, ledger_path=getattr(run, "ledger_path", None)
+            )
+        except Exception:  # noqa: BLE001 — a frame must not fail on a partial result
+            answer_text = f"任务未交付（phase={phase}）。"
     fields: dict[str, Any] = {
         "phase": str(getattr(getattr(result, "phase", ""), "value", "") or ""),
         "answer": answer_text,
     }
+    # A cancelled run must read as "the operator stopped it", not as a failed
+    # or evidence-free answer.  The kernel already separates the three in its
+    # own ledger; this carries the distinction to the front-end.
+    if fields["phase"] == "aborted" or str(getattr(result, "stop_signal", "") or "") == "cancelled":
+        fields["cancelled"] = True
     accepted = getattr(result, "accepted", None)
     if accepted is not None:
         fields["accepted"] = bool(accepted)
@@ -1058,6 +1723,26 @@ def _turn_end_fields(run: Any, answer: str) -> dict[str, Any]:
     ledger = getattr(run, "ledger_path", None)
     if ledger is not None:
         fields["ledger"] = str(ledger)
+    # The run's own counters, so the front-end can show the collapsed summary
+    # the Python TUI printed ("💭 N steps · N tools · evidence").  Derived from
+    # the result object, never counted by the front-end.
+    metrics = getattr(result, "metrics", None)
+    if isinstance(metrics, dict):
+        fields["metrics"] = {
+            "steps": int(metrics.get("steps", 0) or 0),
+            "tool_calls": int(metrics.get("tool_calls", 0) or 0),
+        }
+    # Disclosure, not a gate: obligations the ledger could not discharge.  The
+    # answer is still delivered; the reader is told what was not proven.
+    debt: list[dict[str, str]] = []
+    for item in list(getattr(result, "debt", None) or [])[:5]:
+        obligation = getattr(item, "obligation", None)
+        kind = getattr(getattr(obligation, "kind", ""), "value", "") or ""
+        reason = str(getattr(item, "reason", "") or getattr(obligation, "id", ""))
+        debt.append({"kind": str(kind), "reason": reason})
+    if debt:
+        fields["debt"] = debt
+    fields["planned"] = str(fields.get("phase", "")) == "planned"
     return fields
 
 
@@ -1111,6 +1796,19 @@ def main(argv: list[str] | None = None) -> int:
                 host.frame(
                     type="error",
                     error="turn.start: a turn is already in progress",
+                )
+                continue
+            if host.command_thread is not None and host.command_thread.is_alive():
+                # A command blocked on a question is still using the REPL.  The
+                # dashboard used to start a turn on top of it — ``/set_model``'s
+                # picker stayed open while the typed "11" ran as a task against
+                # the old model.  One exchange at a time, in both directions.
+                host.frame(
+                    type="error",
+                    error=(
+                        "turn.start: a command is in progress; "
+                        "answer its question or wait for it to finish"
+                    ),
                 )
                 continue
             # The turn MUST run off the stdin loop.  A turn that blocks for an
@@ -1173,6 +1871,16 @@ def main(argv: list[str] | None = None) -> int:
             host.list_sessions()
         elif kind == "status":
             host.status()
+        elif kind in ProtocolHost.QUERY_KINDS:
+            # ``diff.get`` shells out to git; running it on the stdin loop
+            # would delay an approval answer behind a large diff.
+            worker = threading.Thread(
+                target=host.handle_query,
+                args=(message,),
+                name="xenon-query",
+                daemon=True,
+            )
+            worker.start()
         elif kind == "approval.response":
             if not host.resolve_approval(
                 str(message.get("id") or ""), str(message.get("choice") or "deny")
@@ -1181,6 +1889,9 @@ def main(argv: list[str] | None = None) -> int:
                     type="error", error="approval.response for an unknown id"
                 )
         elif kind == "shutdown":
+            # The savings panel is the last thing a session shows; emit its
+            # facts before leaving so the front-end can render it.
+            host.session_report()
             return 0
         else:
             host.frame(type="error", error=f"unknown message type: {kind!r}")
@@ -1197,9 +1908,10 @@ def _plain_text(markup: str) -> str:
 
     Command handlers build rich strings.  The interactive REPL renders them;
     the protocol cannot, so it must not ship the brackets either.  Uses rich's
-    own renderer when available (it understands nesting and escaped brackets),
-    and falls back to a conservative strip so a missing rich never breaks a
-    command result.
+    own renderer (it understands nesting), with literals escaped first so an
+    identifier in brackets is not mistaken for a style.  The fallback returns
+    the text unchanged: a missing rich must never delete what the command
+    said.
     """
 
     try:
@@ -1218,12 +1930,12 @@ def _plain_text(markup: str) -> str:
             highlight=False,
             markup=True,
         )
-        console.print(markup, end="\n", soft_wrap=True)
+        from xenon.repl.rich_markup import escape_literal_tags
+
+        console.print(escape_literal_tags(markup), end="\n", soft_wrap=True)
         return buffer.getvalue()
     except Exception:  # noqa: BLE001 — a rendering helper must never fail a command
-        import re
-
-        return re.sub(r"\[/?[a-zA-Z][^\]]*\]", "", markup)
+        return markup
 
 
 def _default_models() -> list[str]:

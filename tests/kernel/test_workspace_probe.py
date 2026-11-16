@@ -171,6 +171,31 @@ def test_a_previously_dirty_file_that_moves_becomes_stray(tmp_path):
     assert ClaimResolver().resolve(_claim(), ledger).status is ResolutionStatus.UNRESOLVED
 
 
+def test_inherited_dirt_does_not_prove_a_change(tmp_path):
+    """A probe's baseline paths are observations, not receipts of work.
+
+    Measured C10 run: ``e2e_scratch/buggy_calc.py`` was untracked *before*
+    the turn.  The turn's first probe reported it dirty with an empty
+    baseline, so ``file_changed(buggy_calc.py)`` was bound before the agent
+    touched anything.  The probe now reports the paths it recorded as
+    baseline; those cannot answer a change claim.
+    """
+
+    ledger = _ledger_with_probe(
+        tmp_path,
+        dirty=["e2e_scratch/buggy_calc.py"],
+        verified=[],
+        baseline=["e2e_scratch/buggy_calc.py"],
+    )
+
+    resolution = ClaimResolver().resolve(
+        _claim(kind=PropositionKind.FILE_CHANGED, target="e2e_scratch/buggy_calc.py"),
+        ledger,
+    )
+
+    assert resolution.status is not ResolutionStatus.BOUND
+
+
 def _git(workspace, *args) -> None:
     import subprocess
 
@@ -204,7 +229,11 @@ def test_the_git_probe_separates_baseline_dirt_from_turn_changes(tmp_path):
     probe = GitWorktreeProbe(tmp_path)
     first = probe.probe()
     assert first is not None and "a.py" in first.dirty_paths
-    assert first.baseline_paths == (), "the first probe *records* the baseline"
+    assert first.baseline_paths == ("a.py",), (
+        "the first probe records the baseline and must report it: an empty "
+        "baseline reads as 'all this dirt is this turn's work'"
+    )
+    assert first.created_paths == (), "nothing was created during the turn yet"
 
     second = probe.probe()
     assert second is not None
@@ -228,8 +257,11 @@ def test_the_git_probe_separates_baseline_dirt_from_turn_changes(tmp_path):
 
     probe.begin_turn()
     fifth = probe.probe()
-    assert fifth is not None and fifth.baseline_paths == (), (
-        "a new turn records a fresh baseline"
+    assert fifth is not None, "the probe still answers after a turn boundary"
+    # b.py was created by the previous turn, a.py was edited by it; both are
+    # dirt inherited by the new turn, so both belong to its baseline.
+    assert set(fifth.baseline_paths) == {"a.py", "b.py"}, (
+        "a new turn records a fresh baseline and reports it"
     )
 
 

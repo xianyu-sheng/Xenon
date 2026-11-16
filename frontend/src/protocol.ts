@@ -23,6 +23,21 @@ export interface ReadyFrame extends Envelope {
   cwd: string;
   /** True when the kernel found no credentials and no configured models. */
   setup_needed?: boolean;
+  /** Running package version; the kernel is its only source. */
+  version?: string;
+  /**
+   * The one loop ("单循环") and the phases it runs, for the welcome card.
+   * There is no mode to pick, so the value is never an internal preset name.
+   */
+  mode?: string;
+  mode_description?: string;
+  /** Configured model ids in the pool (local facts, no probing). */
+  model_count?: number;
+  loaded_models?: number;
+  /** Provider discovery is lazy; false means the counts are local-only. */
+  probed?: boolean;
+  available_providers?: number;
+  failures?: { name: string; reason: string }[];
 }
 
 export interface TurnStartFrame extends Envelope {
@@ -117,6 +132,35 @@ export interface TurnEndFrame extends Envelope {
   /** Computed by the kernel.  The front-end displays it and never recomputes
    *  it — that would be inventing the product's only claim. */
   evidence?: { status: string };
+  /** The run's own counters, as the kernel counted them. */
+  metrics?: { steps: number; tool_calls: number };
+  /** Obligations the ledger could not discharge; shown, never hidden. */
+  debt?: { kind: string; reason: string }[];
+  /** A plan-only turn: accepted, but nothing was written. */
+  planned?: boolean;
+  /** The operator stopped this turn (Ctrl+C / cancel).  Aborted, not failed:
+   *  the front-end says so instead of showing an empty failure. */
+  cancelled?: boolean;
+}
+
+/** Session accounting, sent once on shutdown (`session.report`). */
+export interface SessionReportFrame extends Envelope {
+  type: 'session.report';
+  models: {
+    model: string;
+    calls: number;
+    tokens: number;
+    cache_hit_pct: number | null;
+    cost_cny: number;
+  }[];
+  totals: {
+    calls: number;
+    tokens: number;
+    cost_cny: number;
+    saved_cny: number;
+    savings_pct: number;
+    cache_hit_pct: number | null;
+  };
 }
 
 export interface ErrorFrame extends Envelope {
@@ -165,7 +209,6 @@ export interface SessionInfo {
   name: string;
   saved_at: string;
   messages: number;
-  paradigm: string;
 }
 
 export interface SessionsFrame extends Envelope {
@@ -177,6 +220,7 @@ export interface SessionsFrame extends Envelope {
 export interface StatusFrame extends Envelope {
   type: 'status';
   models: string[];
+  /** Always the loop label ("单循环"); there is no selectable mode. */
   mode: string;
   level: string;
   cwd: string;
@@ -187,7 +231,20 @@ export interface StatusFrame extends Envelope {
   context_tokens?: number;
   context_used_pct?: number;
   elapsed_seconds?: number;
+  /** Wall-clock time since the session opened (the bar's duration). */
+  session_elapsed_seconds?: number;
   stalled_seconds?: number;
+  /** Context accounting from the session's own counters. */
+  tokens?: number;
+  max_tokens?: number;
+  messages?: number;
+  needs_compact?: boolean;
+  /** Present only when the provider reported cache usage / cost > 0. */
+  cache_hit_pct?: number;
+  cost_cny?: number;
+  savings_pct?: number;
+  /** Whether the kernel's model client streams or blocks. */
+  streaming?: boolean;
 }
 
 export interface FilesResultFrame extends Envelope {
@@ -213,6 +270,7 @@ export type KernelFrame =
   | CatalogFrame
   | SessionsFrame
   | StatusFrame
+  | SessionReportFrame
   | FilesResultFrame;
 
 export interface TurnStartMessage {
@@ -282,6 +340,20 @@ export interface FilesRequestMessage {
   query: string;
 }
 
+/**
+ * A read-only dashboard query (``dashboard.snapshot``, ``diff.get`` …).
+ *
+ * The answer is the same message type with ``.result`` appended and the same
+ * ``id``.  Query frames are the only extension point: the kernel still owns
+ * every fact, and none of these can change session state.
+ */
+export interface QueryMessage {
+  v: number;
+  type: string;
+  id: string;
+  [key: string]: unknown;
+}
+
 export type FrontEndMessage =
   | TurnStartMessage
   | ApprovalResponseMessage
@@ -293,7 +365,8 @@ export type FrontEndMessage =
   | TurnCancelMessage
   | SessionSelectMessage
   | PromptResponseMessage
-  | FilesRequestMessage;
+  | FilesRequestMessage
+  | QueryMessage;
 
 /** Parse one line; returns null for anything that is not a frame we know. */
 export function parseFrame(line: string): KernelFrame | null {

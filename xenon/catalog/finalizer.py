@@ -56,6 +56,11 @@ class GitFinalizer:
         self.workspace = Path(workspace).resolve()
         self.timeout = timeout
         self._runner = runner or subprocess.run
+        #: Why the last git call failed, when it did.  A delivery that could
+        #: not see the worktree must say what went wrong: "cannot read git
+        #: status" alone made a real 60 s hang indistinguishable from "git is
+        #: not installed", and neither reached the operator.
+        self._last_git_error = ""
 
     def finalize(
         self,
@@ -76,7 +81,7 @@ class GitFinalizer:
         if changes is None:
             return FinalizeOutcome(
                 accepted=False,
-                reason="cannot read git status",
+                reason="cannot read git status: " + self._last_error(),
                 unavailable=True,
             )
         # Dirt that predates the turn (and has not moved since) belongs to
@@ -277,6 +282,7 @@ class GitFinalizer:
         return result
 
     def _status_changes(self) -> tuple[str, ...] | None:
+        self._last_git_error = ""
         result = self._run(
             "status", "--porcelain", "-z", "--untracked-files=all"
         )
@@ -339,22 +345,34 @@ class GitFinalizer:
         subject = " ".join(objective.split())[:72] or "complete task"
         return f"xenon: {subject}"
 
+    def _last_error(self) -> str:
+        return self._last_git_error or "unknown git error"
+
     def _run(self, *args: str) -> subprocess.CompletedProcess[bytes]:
         try:
-            return self._runner(
+            result = self._runner(
                 ["git", *args],
                 cwd=self.workspace,
                 capture_output=True,
                 timeout=self.timeout,
                 check=False,
+                # The finalizer runs inside the protocol host, whose stdin is
+                # the front-end's NDJSON pipe.  A child that inherits it may
+                # wait on input forever (observed as a 60 s delivery stall on
+                # an approved plan, where the same call was instant on a fresh
+                # turn).  Delivery must never depend on the UI's input stream.
+                stdin=subprocess.DEVNULL,
             )
         except (OSError, subprocess.SubprocessError) as exc:
-            return subprocess.CompletedProcess(
+            result = subprocess.CompletedProcess(
                 args=["git", *args],
                 returncode=1,
                 stdout=b"",
                 stderr=str(exc).encode("utf-8", errors="replace"),
             )
+        if result.returncode != 0:
+            self._last_git_error = self._output(result)
+        return result
 
     @staticmethod
     def _output(result: subprocess.CompletedProcess[bytes]) -> str:

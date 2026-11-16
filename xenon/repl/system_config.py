@@ -134,26 +134,6 @@ class IntentClassifierConfig:
 
 
 @dataclass
-class AutoRouteConfig:
-    """智能路由配置。
-
-    优先级: 环境变量 > config.yaml > 代码默认值。启用本身默认关闭，
-    通过 CLI 参数、环境变量或配置文件开启。
-    """
-
-    # XENON_AUTO_ROUTE: 启用智能路由
-    enabled: bool = False
-    # XENON_AUTO_ROUTE_CONFIDENCE: 置信度阈值（0-1），低于此值不切换
-    confidence_threshold: float = 0.6
-    # XENON_AUTO_ROUTE_NOTIFY_USER: 切换时打印通知
-    notify_user: bool = True
-    # XENON_AUTO_ROUTE_SWITCH_ONLY_ON_IMPROVEMENT: 只在新模式更好时切换（防降级）
-    switch_only_on_improvement: bool = True
-    # XENON_AUTO_ROUTE_LOG_DECISIONS: 是否持久化决策日志（JSONL）
-    log_decisions: bool = False
-
-
-@dataclass
 class RetentionConfig:
     """账本保留策略配置。
 
@@ -199,7 +179,6 @@ class SystemConfig:
     intent_classifier: IntentClassifierConfig = field(
         default_factory=IntentClassifierConfig
     )
-    auto_route: AutoRouteConfig = field(default_factory=AutoRouteConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
 
@@ -219,7 +198,6 @@ _file_cache_key: tuple[Any, ...] | None = None
 _PROJECT_SECTIONS = frozenset(
     {
         "intent_classifier",
-        "auto_route",
         "limits",
         "interaction",
         "retention",
@@ -507,7 +485,6 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
     interaction_data = _section(file_data, "interaction")
     development_data = _section(file_data, "development")
     intent_classifier_data = _section(file_data, "intent_classifier")
-    auto_route_data = _section(file_data, "auto_route")
     retention_data = _section(file_data, "retention")
     sandbox_data = _section(file_data, "sandbox")
 
@@ -669,43 +646,6 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
         ),
     )
 
-    auto_route = AutoRouteConfig(
-        enabled=_get_bool_env(
-            "XENON_AUTO_ROUTE",
-            _coerce_bool(auto_route_data.get("enabled"), False, "auto_route.enabled"),
-        ),
-        confidence_threshold=_get_float_env(
-            "XENON_AUTO_ROUTE_CONFIDENCE",
-            _coerce_float(
-                auto_route_data.get("confidence_threshold"),
-                0.6,
-                "auto_route.confidence_threshold",
-            ),
-        ),
-        notify_user=_get_bool_env(
-            "XENON_AUTO_ROUTE_NOTIFY_USER",
-            _coerce_bool(
-                auto_route_data.get("notify_user"), True, "auto_route.notify_user"
-            ),
-        ),
-        switch_only_on_improvement=_get_bool_env(
-            "XENON_AUTO_ROUTE_SWITCH_ONLY_ON_IMPROVEMENT",
-            _coerce_bool(
-                auto_route_data.get("switch_only_on_improvement"),
-                True,
-                "auto_route.switch_only_on_improvement",
-            ),
-        ),
-        log_decisions=_get_bool_env(
-            "XENON_AUTO_ROUTE_LOG_DECISIONS",
-            _coerce_bool(
-                auto_route_data.get("log_decisions"),
-                False,
-                "auto_route.log_decisions",
-            ),
-        ),
-    )
-
     retention = RetentionConfig(
         enabled=_get_bool_env(
             "XENON_RETENTION_ENABLED",
@@ -767,7 +707,6 @@ def _merge_config(file_data: dict[str, Any]) -> SystemConfig:
         interaction=interaction,
         development=development,
         intent_classifier=intent_classifier,
-        auto_route=auto_route,
         retention=retention,
         sandbox=sandbox,
     )
@@ -910,30 +849,6 @@ intent_classifier:
   # 单次调用超时（秒）
   # 环境变量: XENON_INTENT_CLASSIFIER_TIMEOUT
   timeout: 5.0
-
-# ========================================
-# 智能路由配置
-# ========================================
-auto_route:
-  # 启用智能路由（默认关闭）
-  # 环境变量: XENON_AUTO_ROUTE
-  enabled: false
-
-  # 置信度阈值（0-1），低于此值不自动切换
-  # 环境变量: XENON_AUTO_ROUTE_CONFIDENCE
-  confidence_threshold: 0.6
-
-  # 切换时打印通知
-  # 环境变量: XENON_AUTO_ROUTE_NOTIFY_USER
-  notify_user: true
-
-  # 只在新模式更好时切换（避免降级）
-  # 环境变量: XENON_AUTO_ROUTE_SWITCH_ONLY_ON_IMPROVEMENT
-  switch_only_on_improvement: true
-
-  # 是否将最近的决策持久化到 ~/.xenon/auto_route_decisions.jsonl
-  # 环境变量: XENON_AUTO_ROUTE_LOG_DECISIONS
-  log_decisions: false
 
 # ========================================
 # 账本保留策略（默认关闭）

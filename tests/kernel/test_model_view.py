@@ -310,3 +310,26 @@ def test_a_state_answer_is_visible_only_after_the_event_it_accompanies() -> None
     turn = current_turn(view, instruction="go")
     assert "ANSWER" in turn
     assert "TOO EARLY" in turn
+
+
+def test_a_tool_receipt_carries_its_output_into_the_working_set() -> None:
+    """The model reads the receipt, so the receipt must show what the tool saw."""
+
+    ledger = Ledger.in_memory("t1")
+    ledger.append_receipt(
+        ToolReceipt(
+            receipt_id="r-git",
+            call_id="call-git",
+            task_id="t1",
+            tool="git",
+            status=ReceiptStatus.OK,
+            observation="[command] success | exit=0\n M calc/add.py\ndirty.txt",
+        )
+    )
+
+    view = build_model_view(spec=_spec(), catalog=FakeCatalog(), ledger=ledger)
+
+    receipt = next(
+        item for item in view.working_set if item.get("kind") == "tool_receipt"
+    )
+    assert "dirty.txt" in receipt["observation"]

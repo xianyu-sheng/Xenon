@@ -7,28 +7,37 @@
  */
 
 import { Box, Text, useApp, useInput } from 'ink';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
+import {
+  ANIMATION_DURATION_MS,
+  ANIMATION_FPS,
+  animationEnabled,
+  renderFrame,
+  settledMark,
+} from './brand.js';
+import { DashboardServer } from './dashboard/server.js';
 import { KernelHost } from './host.js';
-import type { ApprovalChoice, KernelFrame } from './protocol.js';
+import type { ApprovalChoice } from './protocol.js';
+import { SessionController } from './session.js';
 import {
   activeFileQuery,
   applyFileCompletion,
   completeCommand,
-  emptyApp,
-  parseInput,
-  reduce,
-  type AppState,
+  showWelcomeCard,
 } from './state.js';
+import { TerminalTitle } from './terminalTitle.js';
 import {
   ApprovalPanel,
+  BrandLogo,
   Completer,
-  EvidenceFooter,
   PromptPanel,
+  StartupSummary,
   StatusBar,
   StatusLine,
   Timeline,
   Transcript,
+  WelcomeCard,
 } from './ui.js';
 
 export interface CliArgs {
@@ -37,63 +46,174 @@ export interface CliArgs {
   python: string;
   cwd?: string;
   resume?: string;
+  /** Start the local dashboard with the session (`xenon --dashboard`). */
+  dashboard?: boolean;
 }
 
 export function App({ args }: { args: CliArgs }): React.ReactElement {
   const { exit } = useApp();
-  const [state, setState] = useState<AppState>(emptyApp);
   const [buffer, setBuffer] = useState('');
   const [promptValue, setPromptValue] = useState('');
   const [completionIndex, setCompletionIndex] = useState(0);
-  const [fileResults, setFileResults] = useState<{ id: string; paths: string[] } | null>(
-    null,
-  );
   const [fileIndex, setFileIndex] = useState(0);
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const [logoFrame, setLogoFrame] = useState<number | null>(
+    animationEnabled() ? 0 : null,
+  );
   const fileSeq = useRef(0);
   const pendingFile = useRef<{ id: string; query: string } | null>(null);
 
-  const host = useMemo(
-    () =>
-      new KernelHost({
-        models: args.models,
-        level: args.level,
-        python: args.python,
-        cwd: args.cwd,
-        resume: args.resume,
-        onFrame: (frame: KernelFrame) => {
-          setState((previous) => reduce(previous, frame));
-          if (frame.type === 'files.result') {
-            setFileResults({ id: frame.id, paths: frame.paths });
-          }
-          // The status bar reflects what the kernel reports, so refresh it
-          // whenever a turn or a command could have changed it.
-          if (frame.type === 'turn.end' || frame.type === 'command.result') {
-            host.fetchStatus();
-          }
-        },
-        onStderr: () => {
-          /* Diagnostics stay out of the UI; the frames carry what matters. */
-        },
-        onExit: (code) => {
-          if (code !== 0 && code !== null) {
-            setState((previous) => ({ ...previous, error: `内核退出（code ${code}）` }));
-          }
-        },
-      }),
-    [args.models, args.level, args.python, args.cwd, args.resume],
+  // ── startup identity ───────────────────────────────────────────────
+  // The frames are the same generated storyboard the Python player used;
+  // only the player moved.  Any key skips the 3 s intro, and a non-TTY
+  // (pipe, CI, TERM=dumb) starts directly on the settled mark.
+  useEffect(() => {
+    if (logoFrame === null) return;
+    const frameMs = Math.round(1000 / ANIMATION_FPS);
+    const timer = setInterval(() => {
+      setLogoFrame((current) => {
+        if (current === null) return null;
+        const next = current + 1;
+        const frames = Math.ceil((ANIMATION_DURATION_MS / 1000) * ANIMATION_FPS);
+        if (next >= frames) {
+          clearInterval(timer);
+          return null;
+        }
+        return next;
+      });
+    }, frameMs);
+    return () => clearInterval(timer);
+    // Runs once: the intro either finishes or is skipped; it never restarts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The controller owns the host, the frame reduction and the "what does this
+  // keystroke mean" rules.  The terminal is one renderer of its state; the
+  // local dashboard (Part E) is another.
+  const controller = useMemo(() => {
+    let instance: SessionController | null = null;
+    let dashboard: DashboardServer | null = null;
+    let dashboardUrl: string | null = null;
+    let closed = false;
+    const openDashboard = async (): Promise<string | null> => {
+      if (dashboardUrl) return dashboardUrl;
+      if (!instance || closed) return null;
+      const server = new DashboardServer({ controller: instance });
+      const url = await server.start();
+      if (closed) {
+        // The user quit while the server was binding; do not leak it.
+        await server.close();
+        return null;
+      }
+      dashboard = server;
+      dashboardUrl = url;
+      return url;
+    };
+    const closeDashboard = () => {
+      closed = true;
+      void dashboard?.close();
+      dashboard = null;
+      dashboardUrl = null;
+    };
+    const host = new KernelHost({
+      models: args.models,
+      level: args.level,
+      python: args.python,
+      cwd: args.cwd,
+      resume: args.resume,
+      onFrame: (frame) => instance?.handleFrame(frame),
+      onStderr: () => {
+        /* Diagnostics stay out of the UI; the frames carry what matters. */
+      },
+      onExit: (code) => instance?.handleHostExit(code),
+    });
+    instance = new SessionController(host, {
+      onExit: () => exit(),
+      dashboard: openDashboard,
+      closeDashboard,
+    });
+    return instance;
+  }, [
+    args.models,
+    args.level,
+    args.python,
+    args.cwd,
+    args.resume,
+    args.dashboard,
+    exit,
+  ]);
+
+  const snapshot = useSyncExternalStore(
+    controller.subscribe,
+    controller.getSnapshot,
+    controller.getSnapshot,
   );
+  const state = snapshot.state;
+  const commandRunning = snapshot.commandRunning;
+  const fileResults = snapshot.fileResults;
 
   useEffect(() => {
     // Ask for the command catalog once: it powers completion and /help hints.
     const timer = setTimeout(() => {
-      host.fetchCatalog();
-      host.fetchStatus();
+      controller.fetchCatalog();
+      controller.fetchStatus();
+      if (args.dashboard) void controller.openDashboard();
     }, 300);
     return () => {
       clearTimeout(timer);
-      host.shutdown();
+      controller.shutdown();
     };
-  }, [host]);
+  }, [controller, args.dashboard]);
+
+  // ── terminal tab title ─────────────────────────────────────────────
+  const title = useMemo(() => new TerminalTitle(), []);
+  useEffect(() => {
+    title.start();
+    return () => title.close();
+  }, [title]);
+
+  useEffect(() => {
+    if ((state.turn.approval && !state.turn.cancelling) || state.prompt) {
+      title.setState('waiting', state.prompt ? '等待输入' : '等待确认');
+      return;
+    }
+    if (state.turn.running) {
+      title.setState('running');
+      return;
+    }
+    // A stopped turn is a state of its own, not "idle": the tab says the
+    // operator interrupted something until the next turn starts.
+    title.setState(state.turn.end?.cancelled ? 'interrupted' : 'idle');
+  }, [
+    title,
+    state.turn.running,
+    state.turn.approval,
+    state.turn.cancelling,
+    state.prompt,
+    state.turn.end,
+  ]);
+
+  // ── live clocks ────────────────────────────────────────────────────
+  // The kernel only ticks `progress` during model calls, so tool runs and
+  // approvals would freeze the clock.  The front-end keeps its own second
+  // counter and uses the kernel's number when it is larger.
+  useEffect(() => {
+    if (!state.turn.running) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [state.turn.running]);
+
+  // Live kernel facts (phase / steps / tools / stall).  These only change
+  // while a turn runs and the kernel answers a `status` request, so poll
+  // while one is in flight — the alternative is a bar that jumps only when
+  // the turn ends.
+  useEffect(() => {
+    if (!state.turn.running) return;
+    controller.fetchStatus();
+    const timer = setInterval(() => controller.fetchStatus(), 500);
+    return () => clearInterval(timer);
+  }, [controller, state.turn.running]);
 
   const matches = useMemo(
     () => completeCommand(state.commands, buffer),
@@ -119,15 +239,15 @@ export function App({ args }: { args: CliArgs }): React.ReactElement {
   useEffect(() => {
     if (fileQueryText === null) {
       pendingFile.current = null;
-      setFileResults(null);
+      controller.clearFileResults();
       setFileIndex(0);
       return;
     }
     const id = `f-${(fileSeq.current += 1)}`;
     pendingFile.current = { id, query: fileQueryText };
     setFileIndex(0);
-    host.requestFiles(id, fileQueryText);
-  }, [fileQueryText, host]);
+    controller.requestFiles(id, fileQueryText);
+  }, [fileQueryText, controller]);
 
   const fileVisible =
     fileQuery && fileResults && pendingFile.current?.id === fileResults.id
@@ -137,60 +257,63 @@ export function App({ args }: { args: CliArgs }): React.ReactElement {
     setFileIndex((current) => (current < fileVisible.length ? current : 0));
   }, [fileVisible.length]);
 
-  const completeFile = useCallback((path: string) => {
-    setBuffer((current) => applyFileCompletion(current, path));
-    pendingFile.current = null;
-    setFileResults(null);
-  }, []);
+  const completeFile = useCallback(
+    (path: string) => {
+      setBuffer((current) => applyFileCompletion(current, path));
+      pendingFile.current = null;
+      controller.clearFileResults();
+    },
+    [controller],
+  );
+
+  const shutdown = useCallback(() => {
+    controller.shutdown();
+  }, [controller]);
 
   const submit = useCallback(
     (text: string) => {
-      const parsed = parseInput(text);
-      if (!parsed) return;
-      if (parsed.kind === 'command') {
-        if (parsed.name === '/exit' || parsed.name === '/quit') {
-          host.shutdown();
-          exit();
-          return;
-        }
-        host.runCommand(parsed.name, parsed.args);
-        return;
-      }
-      host.startTurn(parsed.objective);
+      controller.submit(text);
     },
-    [exit, host],
+    [controller],
   );
 
   const answer = useCallback(
     (choice: ApprovalChoice) => {
-      const request = state.turn.approval;
-      if (!request) return;
-      host.answerApproval(request.id, choice);
-      setState((previous) => ({
-        ...previous,
-        turn: { ...previous.turn, approval: null },
-      }));
+      controller.answerApproval(choice);
     },
-    [host, state.turn.approval],
+    [controller],
   );
 
   useInput((input, key) => {
+    // The intro is skippable: the first keystroke settles it — but it keeps its
+    // normal meaning.  Consuming it used to drop whatever was typed during the
+    // ~3 s animation, so the first slash command after a `--resume` boot (whose
+    // restored card appears while the intro still plays) silently vanished, and
+    // a fast typist on a fresh boot lost the leading "/" of their first command.
+    if (logoFrame !== null) {
+      setLogoFrame(null);
+    }
+
+    if (key.ctrl && input === 'o') {
+      setDetailsExpanded((value) => !value);
+      return;
+    }
+
     if (key.ctrl && input === 'c') {
-      // First Ctrl+C stops the run; a second one leaves.  Killing the host
-      // mid-turn would abandon the ledger without a terminal event.
-      if (state.turn.running) {
-        host.cancelTurn();
+      // First Ctrl+C stops the run; a second one leaves.  The first press is
+      // cooperative (the kernel closes its ledger before answering); once a
+      // cancel is already pending, pressing again means "I will not wait".
+      if (state.turn.running && !state.turn.cancelling) {
+        controller.cancelTurn();
         return;
       }
-      host.shutdown();
-      exit();
+      shutdown();
       return;
     }
 
     if (state.prompt) {
       if (key.return) {
-        host.answerPrompt(state.prompt.id, promptValue || state.prompt.default);
-        setState((previous) => ({ ...previous, prompt: null }));
+        controller.answerPrompt(promptValue);
         setPromptValue('');
         return;
       }
@@ -204,7 +327,7 @@ export function App({ args }: { args: CliArgs }): React.ReactElement {
       return;
     }
 
-    if (state.turn.approval) {
+    if (state.turn.approval && !state.turn.cancelling) {
       const index = Number.parseInt(input, 10);
       if (!Number.isNaN(index) && index >= 1 && index <= state.turn.approval.options.length) {
         const choice = state.turn.approval.options[index - 1];
@@ -213,10 +336,11 @@ export function App({ args }: { args: CliArgs }): React.ReactElement {
       return;
     }
 
-    // Shift+Tab cycles the mode, matching the old TUI's muscle memory.  The
-    // command is the same one the front-end would type by hand.
+    // Shift+Tab used to cycle modes.  There is nothing to cycle now, so the
+    // key lands on the same explanation the command prints instead of silently
+    // doing nothing — old muscle memory gets an answer, not a dead key.
     if (key.tab && key.shift) {
-      host.runCommand('/mode', 'next');
+      controller.runCommand('/mode');
       return;
     }
 
@@ -284,35 +408,62 @@ export function App({ args }: { args: CliArgs }): React.ReactElement {
   // same steps are already in the transcript block; keeping the live area up
   // printed every step twice and pushed the evidence footer below a duplicate.
   const showTurn = turn.running;
+  const elapsedSeconds = turn.running
+    ? Math.max(turn.elapsedSeconds, turn.startedAt ? (now - turn.startedAt) / 1000 : 0)
+    : turn.elapsedSeconds;
+  const showWelcome = showWelcomeCard(state);
 
   return (
     <Box flexDirection="column">
-      <Text bold>
-        Xenon{state.ready ? `  ·  ${state.ready.cwd}` : '  ·  启动中…'}
-      </Text>
-      <StatusBar status={state.status} />
-      {state.ready?.setupNeeded && (
-        <Text color="yellow">尚未配置 API Key · 输入 /setup 开始配置</Text>
+      {logoFrame === null ? (
+        <BrandLogo rows={settledMark()} />
+      ) : (
+        <BrandLogo rows={renderFrame(logoFrame)} />
       )}
 
-      <Transcript blocks={state.transcript} />
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold>
+          Xenon{state.ready ? `  ·  ${state.ready.cwd}` : '  ·  启动中…'}
+        </Text>
+        <StatusBar status={state.status} />
+      </Box>
+
+      {showWelcome && state.ready ? (
+        <>
+          <WelcomeCard ready={state.ready} />
+          <StartupSummary ready={state.ready} />
+        </>
+      ) : null}
+
+      <Transcript blocks={state.transcript} expanded={detailsExpanded} />
 
       {showTurn && (
         <Box flexDirection="column" marginTop={1}>
           <Text bold>{`❯ ${turn.objective}`}</Text>
-          <Timeline entries={turn.entries} />
+          <Timeline entries={turn.entries} expanded={detailsExpanded} />
           <StatusLine
             running={turn.running}
-            elapsedSeconds={turn.elapsedSeconds}
+            phase={state.status?.phase}
+            steps={state.status?.steps}
+            toolCalls={state.status?.tool_calls}
+            elapsedSeconds={elapsedSeconds}
             chars={turn.chars}
             providerNote={turn.providerNote}
+            stalledSeconds={state.status?.stalled_seconds}
+            cancelling={turn.cancelling}
           />
         </Box>
       )}
 
-      {turn.end && !turn.running && <EvidenceFooter end={turn.end} />}
+      {commandRunning && !state.prompt && !turn.approval && (
+        <Box marginTop={1}>
+          <Text color="gray">{`… 运行中 ${commandRunning}`}</Text>
+        </Box>
+      )}
 
-      {turn.approval && <ApprovalPanel request={turn.approval} />}
+      {/* A cancel answers the pending request; keeping the card up would
+          invite a second, meaningless choice. */}
+      {turn.approval && !turn.cancelling && <ApprovalPanel request={turn.approval} />}
       {state.prompt && (
         <PromptPanel request={state.prompt} value={promptValue} />
       )}

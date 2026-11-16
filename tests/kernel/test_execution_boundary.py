@@ -22,7 +22,7 @@ def test_aut_edit_boundary_says_shell_triggers_an_approval(tmp_path) -> None:
     policy = PermissionPolicy(
         mode=PermissionMode.AUTO_EDIT, workspace=str(tmp_path), allow_approval=True
     )
-    text = _view(policy, tmp_path).system
+    text = _view(policy, tmp_path).task_brief
     assert "Execution boundary:" in text
     assert "human approval prompt" in text
     assert "proposing them is allowed" in text
@@ -34,7 +34,7 @@ def test_non_interactive_boundary_says_refused(tmp_path) -> None:
     policy = PermissionPolicy(
         mode=PermissionMode.AUTO_EDIT, workspace=str(tmp_path), allow_approval=False
     )
-    text = _view(policy, tmp_path).system
+    text = _view(policy, tmp_path).task_brief
     assert "refused in this non-interactive run" in text
 
 
@@ -68,7 +68,10 @@ def test_boundary_changes_the_prefix_digest(tmp_path) -> None:
         catalog=FakeCatalog(), ledger=ledger,
         boundary=PermissionPolicy(mode=PermissionMode.AUTO_EDIT).describe_boundary(),
     )
-    assert a.prefix_digest != b.prefix_digest
+    # The boundary is task-scoped: it changes the task hash, never the cached
+    # prefix (that would re-bill the tool block on every turn's first call).
+    assert a.prefix_digest == b.prefix_digest
+    assert a.hash != b.hash
 
 
 def test_a_broken_boundary_description_never_fails_the_run() -> None:
@@ -93,7 +96,7 @@ def test_the_runtime_puts_the_boundary_into_every_view(tmp_path) -> None:
 
     class Spy:
         def propose(self, view):
-            seen.append(view.system)
+            seen.append(view.task_brief)
             return CallTool(ToolIntent(capability=Capability.READ))
 
     ledger = Ledger.in_memory("b2")

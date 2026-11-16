@@ -55,6 +55,95 @@ def _config():
     return get_config()
 
 
+def cancel_running_task(owner: Any) -> None:
+    """Make the panel's "cancel the whole task" answer actually stop the run.
+
+    The kernel only ever sees an approval refusal as *one failed tool call* and
+    keeps planning; the panel's ``cancelled`` answer promised to stop the task.
+    The running runtime is the one object the panel and the loop share
+    (``_active_runtime``), so the answer reaches the loop's own limit check.
+    Both approval bridges (the protocol host and this mixin) call this.
+    """
+
+    runtime = getattr(owner, "_active_runtime", None)
+    cancel = getattr(runtime, "request_cancel", None)
+    if not callable(cancel):
+        return
+    try:
+        cancel()
+    except Exception:  # noqa: BLE001 — cancelling is best effort
+        if logger is not None:
+            logger.warning("runtime cancel failed", exc_info=True)
+
+
+def remember_allow_answer(owner: Any, tool_name: str, params: dict) -> bool:
+    """Record an ``allow`` answer in the session's single ``GrantBook`` (§9).
+
+    There are two bridges to the same approval panel: the interactive mixin and
+    the protocol host.  Only the interactive one used to write the book, so an
+    "allow" given through the front-end reached the running policy (the kernel
+    adds it for the current run) and vanished when the turn ended — measured on
+    a real task: the next turn asked again and ``/permissions`` listed nothing.
+    Both bridges call this, so the memory has one owner and one lifetime.
+    """
+
+    book = getattr(owner, "_grant_book", None)
+    if book is None:
+        return False
+    from xenon.kernel.session_grants import ALLOW, grant_from_choice
+    from xenon.nodes.approval_policy import write_targets_for
+    from xenon.repl.permission_map import capability_for_tool
+
+    capability = capability_for_tool(tool_name)
+    if capability is None:
+        return False
+    try:
+        targets = tuple(
+            sorted(str(p) for p in (write_targets_for(tool_name, params or {}) or []))
+        )
+    except Exception:  # noqa: BLE001 — an unparsable target is not remembered
+        targets = ()
+    if not targets:
+        command = str((params or {}).get("command") or "").strip()
+        if command:
+            targets = (command,)
+    # The live root, not the book's startup copy: a session may move (tests,
+    # ``/workspace``) and the old panel keyed the grant by the current root.
+    workspace = ""
+    root = getattr(owner, "_workspace_root", None)
+    if callable(root):
+        try:
+            workspace = str(root())
+        except Exception:  # noqa: BLE001 — memory is best effort
+            workspace = ""
+    if not workspace:
+        workspace = str(getattr(book, "workspace", "") or "")
+    grant = grant_from_choice(
+        ALLOW,
+        capability=capability,
+        targets=targets,
+        workspace=workspace,
+        reason=f"approved via {tool_name}",
+        turn=str(getattr(owner, "_current_kernel_turn", "") or ""),
+        ttl_seconds=getattr(book, "ttl_seconds", 1800.0),
+    )
+    if grant is None:
+        return False
+    stored = book.add(grant)
+    # Mid-turn answers must reach the running policy; the book is only read at
+    # the start of a turn.
+    runtime = getattr(owner, "_active_runtime", None)
+    for policy in getattr(runtime, "_policies", ()) if runtime is not None else ():
+        add = getattr(policy, "grant", None)
+        if callable(add):
+            try:
+                add(stored.as_scoped())
+            except Exception:  # noqa: BLE001 — a grant must not break a turn
+                if logger is not None:
+                    logger.warning("policy rejected the grant", exc_info=True)
+    return True
+
+
 def grant_targets_once(workspace: Path, tool_name: str, params: dict) -> None:
     """Let the tool's fence accept exactly what the human just approved (#413).
 
@@ -180,6 +269,7 @@ class ApprovalUxMixin:
         if outcome == APPROVAL_ALLOWED_ONCE:
             return True, ""
         if outcome == APPROVAL_CANCELLED:
+            cancel_running_task(self)
             return False, "用户取消任务"
         return False, "用户拒绝"
 
@@ -378,27 +468,7 @@ class ApprovalUxMixin:
 
         if choice != "a":
             return False
-        from xenon.kernel.session_grants import ALLOW, grant_from_choice
-        from xenon.repl.permission_map import capability_for_tool
-
-        capability = capability_for_tool(tool_name)
-        if capability is None:
-            return False
-        _tool, targets = self._approval_key(tool_name, params)
-        grant = grant_from_choice(
-            ALLOW,
-            capability=capability,
-            targets=targets,
-            workspace=str(self._workspace_root()),
-            reason=f"approved via {tool_name}",
-            turn=str(getattr(self, "_current_kernel_turn", "") or ""),
-            ttl_seconds=self._grant_book.ttl_seconds,
-        )
-        if grant is None:
-            return False
-        stored = self._grant_book.add(grant)
-        self._push_grant_to_runtime(stored)
-        return True
+        return remember_allow_answer(self, tool_name, params)
 
     def _push_grant_to_runtime(self, grant: Any) -> None:
         """Make an answer given *mid-turn* apply to the turn in flight.

@@ -15,6 +15,7 @@ import {
   emptyApp,
   parseInput,
   reduce,
+  showWelcomeCard,
   type AppState,
 } from './state.js';
 
@@ -53,7 +54,12 @@ test('a finished turn is appended to the scrollback', () => {
   const block = state.transcript[0];
   assert.equal(block?.title, 'do it');
   assert.equal(block?.tone, 'success');
-  assert.ok(block?.lines.includes('done'));
+  // The answer stays structured so the UI can render it as Markdown; the
+  // action lines stay separate and never absorb it.
+  assert.equal(block?.answer, 'done');
+  assert.equal(block?.lines.includes('done'), false);
+  assert.equal(block?.lines.length, 1);
+  assert.equal(block?.details?.length, 1);
 });
 
 test('a tool action names the tool and what it touches', () => {
@@ -305,4 +311,216 @@ test('completing replaces only the active @ token', () => {
     '看看 @src/main.py',
   );
   assert.equal(applyFileCompletion('plain text', 'src/main.py'), 'plain text');
+});
+
+// ── welcome / results / report ──────────────────────────────────────
+
+test('the ready frame carries the welcome-card facts, not just the hint', () => {
+  const state = feed([
+    {
+      v: 1,
+      type: 'ready',
+      models: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+      cwd: 'D:\\proj',
+      setup_needed: false,
+      version: '1.0.0',
+      mode: '单循环',
+      mode_description: 'Plan → React（逐步） → Reflect（每步校验）',
+      model_count: 2,
+      loaded_models: 2,
+      probed: false,
+      available_providers: 0,
+      failures: [{ name: 'OpenAI', reason: '认证失败' }],
+    },
+  ]);
+
+  assert.equal(state.ready?.version, '1.0.0');
+  assert.equal(state.ready?.modeDescription, 'Plan → React（逐步） → Reflect（每步校验）');
+  assert.equal(state.ready?.loadedModels, 2);
+  assert.equal(state.ready?.failures[0]?.name, 'OpenAI');
+});
+
+test('a turn end carries the run counters and undischarged obligations', () => {
+  const state = feed([
+    { v: 1, type: 'turn.start', objective: 'x' },
+    {
+      v: 1,
+      type: 'turn.end',
+      phase: 'finalized',
+      answer: 'ok',
+      accepted: true,
+      evidence: { status: 'partial' },
+      ledger: 'C:\\ledger\\task.jsonl',
+      metrics: { steps: 3, tool_calls: 2 },
+      debt: [{ kind: 'test_passed', reason: '测试未运行' }],
+      planned: false,
+    },
+  ]);
+
+  const block = state.transcript[0];
+  assert.deepEqual(block?.metrics, { steps: 3, tool_calls: 2 });
+  assert.equal(block?.debt?.[0]?.reason, '测试未运行');
+  assert.equal(block?.evidence, 'partial');
+  assert.equal(block?.ledger, 'C:\\ledger\\task.jsonl');
+  assert.equal(block?.planned, false);
+});
+
+test('the session report lands in the scrollback as its own block', () => {
+  const state = feed([
+    {
+      v: 1,
+      type: 'session.report',
+      models: [
+        { model: 'deepseek/v4', calls: 2, tokens: 1200, cache_hit_pct: 61, cost_cny: 0.03 },
+      ],
+      totals: {
+        calls: 2,
+        tokens: 1200,
+        cost_cny: 0.03,
+        saved_cny: 0.01,
+        savings_pct: 25,
+        cache_hit_pct: 61,
+      },
+    },
+  ]);
+
+  assert.equal(state.transcript.length, 1);
+  assert.equal(state.transcript[0]?.kind, 'report');
+  assert.equal(state.transcript[0]?.report?.totals.savings_pct, 25);
+});
+
+test('a cancelled turn reads as stopped, not as an empty failure', () => {
+  const state = feed([
+    { v: 1, type: 'turn.start', objective: '写一段散文' },
+    { v: 1, type: 'turn.cancel.result', accepted: true },
+    { v: 1, type: 'turn.end', phase: 'aborted', answer: '', cancelled: true },
+  ]);
+
+  const block = state.transcript[0];
+  assert.equal(state.turn.cancelling, false);
+  assert.equal(block?.cancelled, true);
+  assert.equal(block?.tone, 'muted');
+  assert.equal(block?.answer, '本轮已中断');
+});
+
+test('an accepted cancel marks the running turn as stopping', () => {
+  const state = feed([
+    { v: 1, type: 'turn.start', objective: 'x' },
+    { v: 1, type: 'turn.cancel.result', accepted: true },
+  ]);
+  assert.equal(state.turn.cancelling, true);
+});
+
+test('a cancel with nothing to stop changes nothing', () => {
+  const state = reduce(emptyApp(), { v: 1, type: 'turn.cancel.result', accepted: false });
+  assert.equal(state.turn.cancelling, false);
+  assert.equal(state.transcript.length, 0);
+});
+
+test('a turn records when it started so the clock can run locally', () => {
+  const state = reduce(emptyApp(), { v: 1, type: 'turn.start', objective: 'x' }, 1234);
+  assert.equal(state.turn.startedAt, 1234);
+});
+
+test('an expanded action keeps the full text, not just the summary', () => {
+  const long = 'x'.repeat(500);
+  const state = feed([
+    { v: 1, type: 'turn.start', objective: 'x' },
+    { v: 1, type: 'action', kind: 'observe', text: long },
+  ]);
+
+  const entry = state.turn.entries[0];
+  assert.equal(entry?.detail, long);
+  assert.ok((entry?.text.length ?? 0) < long.length);
+});
+
+test('the status frame keeps the live and accounting fields', () => {
+  const state = feed([
+    {
+      v: 1,
+      type: 'status',
+      models: ['m'],
+      mode: 'direct',
+      level: 'auto-edit',
+      cwd: '.',
+      phase: 'thinking',
+      steps: 2,
+      tool_calls: 1,
+      stalled_seconds: 7,
+      session_elapsed_seconds: 73,
+      tokens: 1000,
+      max_tokens: 128000,
+      messages: 4,
+      needs_compact: false,
+      cache_hit_pct: 42,
+      cost_cny: 0.01,
+      savings_pct: 30,
+      streaming: false,
+    },
+  ]);
+  assert.equal(state.status?.steps, 2);
+  assert.equal(state.status?.max_tokens, 128000);
+  assert.equal(state.status?.cache_hit_pct, 42);
+  assert.equal(state.status?.session_elapsed_seconds, 73);
+});
+
+test('a notice does not hide the welcome card, a turn does', () => {
+  // `--dashboard` appends its URL notice before the first turn; the version,
+  // model count and cwd are exactly what a person is looking for at boot.
+  const ready = feed([{ v: 1, type: 'ready', models: ['m'], cwd: '/x' }]);
+  assert.equal(showWelcomeCard(ready), true);
+  const noticed = feed([{ v: 1, type: 'command.result', id: 'c-1', name: '/x', output: 'note' }], ready);
+  assert.equal(showWelcomeCard(noticed), false);
+  assert.equal(showWelcomeCard(emptyApp()), false);
+});
+
+test('a status poll with the same facts keeps the same state object', () => {
+  const status = {
+    v: 1,
+    type: 'status',
+    models: ['vendor/model'],
+    mode: '单循环',
+    level: 'read',
+    cwd: 'D:/work',
+    steps: 2,
+    tool_calls: 1,
+    phase: 'react',
+  } as unknown as KernelFrame;
+  const first = reduce(emptyApp(), status, 0);
+  assert.notEqual(first, emptyApp());
+  // The terminal polls twice a second while a turn runs; an identical answer
+  // must not wake every renderer (that was the constant flicker).
+  assert.equal(reduce(first, { ...status }, 0), first);
+
+  const moved = reduce(first, { ...status, steps: 3 } as unknown as KernelFrame, 0);
+  assert.notEqual(moved, first);
+  assert.equal(moved.status?.steps, 3);
+});
+
+test('sub-second clock ticks are not new facts', () => {
+  // The kernel reports the clocks to 0.1 s.  The bar shows whole seconds, so
+  // two polls inside the same second must leave the state object alone — that
+  // is what stops the twice-a-second redraw while nothing visible moved.
+  const tick = (elapsed: number, session: number) =>
+    ({
+      v: 1,
+      type: 'status',
+      models: ['vendor/model'],
+      mode: '单循环',
+      level: 'read',
+      cwd: 'D:/work',
+      phase: 'react',
+      elapsed_seconds: elapsed,
+      session_elapsed_seconds: session,
+    }) as unknown as KernelFrame;
+
+  const first = reduce(emptyApp(), tick(3.2, 74.9), 0);
+  assert.equal(first.status?.elapsed_seconds, 3);
+  assert.equal(first.status?.session_elapsed_seconds, 74);
+  assert.equal(reduce(first, tick(3.7, 74.1), 0), first);
+
+  const next = reduce(first, tick(4.0, 75.2), 0);
+  assert.notEqual(next, first);
+  assert.equal(next.status?.elapsed_seconds, 4);
+  assert.equal(next.status?.session_elapsed_seconds, 75);
 });

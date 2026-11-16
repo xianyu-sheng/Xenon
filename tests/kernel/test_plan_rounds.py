@@ -14,6 +14,7 @@ from xenon.catalog.gateway import LegacyToolGateway
 from xenon.harness.plan import parse_plan
 from xenon.kernel.contracts import (
     Budget,
+    Claim,
     Finish,
     Obligation,
     PropositionKind,
@@ -204,3 +205,73 @@ def test_a_later_round_credits_an_earlier_write(tmp_path: Path) -> None:
     assert verdicts and all(
         item.get("status") == "satisfied" for item in verdicts
     ), verdicts
+
+
+def test_an_unverifiable_only_gap_does_not_spend_another_plan_round(
+    tmp_path: Path,
+) -> None:
+    """A semantic claim cannot be fixed by re-running the same plan.
+
+    Measured refactor run: the finish carried a requirement_met claim, the
+    audit abstained (no deterministic binder), and the runtime re-planned the
+    whole task twice — re-reading files, re-applying the same patch and
+    re-running the same test.  Only *violated* gaps justify a new round.
+    """
+
+    (tmp_path / "a.py").write_text("x = 0\n", encoding="utf-8")
+    rounds = {"planner": 0}
+
+    def planner(view):  # noqa: ANN001 - protocol shape
+        rounds["planner"] += 1
+        return parse_plan(
+            {
+                "objective": "explain a.py",
+                "steps": [
+                    {
+                        "id": 1,
+                        "kind": "inspect",
+                        "capability": "read",
+                        "params": {"file_path": "a.py"},
+                        "targets": ["a.py"],
+                        "expects": [],
+                    }
+                ],
+            }
+        ).proposal
+
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, follow_plan=True),
+        actor=lambda view: Finish(
+            "done",
+            (
+                Claim(
+                    id="req",
+                    kind=PropositionKind.REQUIREMENT_MET,
+                    target="a.py",
+                ),
+            ),
+        ),
+        planner=planner,
+    )
+    catalog = build_catalog("core")
+    ledger = Ledger.in_memory("unverifiable")
+    runtime = LoopRuntime(
+        catalog=catalog,
+        gateway=LegacyToolGateway(specs=catalog.specs(), workspace=tmp_path),
+        controller=VerificationController(),
+        ledger=ledger,
+        finalize=None,
+    )
+    spec = TaskSpec(
+        task_id="unverifiable",
+        objective="explain a.py",
+        workspace=str(tmp_path),
+        budget=Budget(max_plan_rounds=3, max_audit_rounds=1),
+    )
+
+    result = runtime.run(spec, strategy)
+
+    assert rounds["planner"] == 1
+    assert result.phase is TaskPhase.FINALIZED
+    assert result.answer == "done"
+    assert any(item.obligation.id == "req" for item in result.debt)

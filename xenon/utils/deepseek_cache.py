@@ -290,10 +290,14 @@ class CacheTracker:
         prompt = int(
             usage_data.get("prompt_tokens", 0) or usage_data.get("input_tokens", 0) or 0
         )
+        # Some gateways report only the cached share.  When the response names
+        # a cache at all, the rest of the prompt is a miss; leaving it at zero
+        # made every such call look free and hid the real cost from ``/cost``
+        # (the same rule ``llm_usage._extract_usage`` applies to the ledger).
         cache_miss = int(
             usage_data.get("prompt_cache_miss_tokens", 0)
             or usage_data.get("cache_miss_tokens", 0)
-            or (max(0, prompt - cache_hit) if nested_cache_present else 0)
+            or (max(0, prompt - cache_hit) if cache_fields_present else 0)
             or 0
         )
         completion = int(

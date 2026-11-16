@@ -77,6 +77,11 @@ class ModelRegistry:
         # 当前模式
         self.current_mode: str = "direct"
         self.modes: dict[str, ThinkingMode] = dict(BUILTIN_MODES)
+        # File this registry was loaded from.  Commands that mutate the model
+        # list (/remove_model) persist back here instead of guessing
+        # ``~/.xenon/models.yaml``: a registry built in-process or in a test
+        # has no file to write, and must never overwrite the user's list.
+        self.source_path: Path | None = None
 
     # ── 模型管理 ──────────────────────────────────────────
 
@@ -408,6 +413,7 @@ class ModelRegistry:
         path = Path(path)
         if not path.exists():
             return
+        self.source_path = path
 
         with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}

@@ -25,7 +25,17 @@ class MemoryBackendRegistry:
         )
         config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
         user_root = user_data_root or (data_home / "xenon" / "memory")
-        self.user_config_root = user_config_root or (config_home / "xenon")
+        if user_config_root is not None:
+            self.user_config_root = Path(user_config_root)
+        elif user_data_root is not None:
+            # An explicit data root means an isolated store (tests, embedded
+            # hosts).  Keep the entrypoint next to it: defaulting to the real
+            # ``~/.config/xenon`` made every test that stored a USER-scope
+            # record append an index block to the operator's XENON.md, and the
+            # growing file eventually truncated real project rules.
+            self.user_config_root = Path(user_data_root).resolve().parent
+        else:
+            self.user_config_root = config_home / "xenon"
         self._backends: dict[MemoryScope, MemoryBackend] = {
             MemoryScope.USER: JsonMarkdownBackend(
                 user_root, MemoryScope.USER, private=True

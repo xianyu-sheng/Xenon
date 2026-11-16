@@ -17,7 +17,7 @@ import logging
 import re
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -237,6 +237,10 @@ class ContextManager:
         # P3-Low 问题2修复：持久化状态跟踪
         self._last_snapshot_path: str | None = None
         self._last_snapshot_error: str | None = None
+        #: Whether the last ``compact()`` actually folded early rounds away.
+        #: A manual /compact with nothing older than the retained window is a
+        #: no-op, and the command must say so instead of claiming success.
+        self._last_compact_changed: bool = False
         # P3-Q1 续 / §8.8.1：真实 usage 优先于启发式估算。
         # track_real_usage=True 时订阅 llm_client 的 usage 回调，记录最近一次
         # chat_completion 调用的真实 token 用量；current_token_usage() 优先返回
@@ -393,6 +397,43 @@ class ContextManager:
     def get_working_memory(self) -> dict[str, Any]:
         """获取当前工作记忆的浅拷贝。"""
         return dict(self._working_memory)
+
+    def record_file_changes(
+        self, *, created: Any = (), modified: Any = ()
+    ) -> None:
+        """Remember this session's file writes for ``/review`` and ``/save``.
+
+        ``session_created_files`` / ``session_modified_files`` had readers
+        (``/review``, session merge) but no producer anywhere in the codebase,
+        so the command could only ever answer "本会话没有记录到文件改动" —
+        including right after a successful ``/edit`` or kernel ``write_file``.
+        Every mutation path now reports here instead of each keeping its own
+        bookkeeping.
+        """
+
+        with self._lock:
+            created_paths = list(
+                self._working_memory.get("session_created_files", [])
+            )
+            modified_paths = list(
+                self._working_memory.get("session_modified_files", [])
+            )
+            for path in created:
+                text = str(path)
+                if not text:
+                    continue
+                if text not in created_paths:
+                    created_paths.append(text)
+                if text in modified_paths:
+                    modified_paths.remove(text)
+            for path in modified:
+                text = str(path)
+                if not text:
+                    continue
+                if text not in created_paths and text not in modified_paths:
+                    modified_paths.append(text)
+            self._working_memory["session_created_files"] = created_paths[-50:]
+            self._working_memory["session_modified_files"] = modified_paths[-50:]
 
     def replace_working_memory(self, memory: dict[str, Any] | None) -> None:
         """Replace persistent working memory when loading a saved session."""
@@ -778,8 +819,18 @@ class ContextManager:
                 and len(turn.content) > self._MAX_LIGHTWEIGHT_ASSISTANT_CHARS
             ):
                 # A long previous answer is usually a document; do not inject
-                # it into a new lightweight query.
-                continue
+                # all of it into a new lightweight query.  It must still be
+                # *present*: dropping it left the follow-up with a dangling
+                # user message and the model answered "上一轮内容不存在"
+                # instead of continuing point 1 of the answer it could no
+                # longer see.
+                turn = replace(
+                    turn,
+                    content=(
+                        turn.content[: self._MAX_LIGHTWEIGHT_ASSISTANT_CHARS]
+                        + "\n…（上一轮答案较长，此处截断；完整内容在会话账本中）"
+                    ),
+                )
             projected.append(turn)
             if len(projected) >= self._MAX_LIGHTWEIGHT_MESSAGES:
                 break
@@ -1178,6 +1229,7 @@ class ContextManager:
             handle_crisis,
         )
 
+        self._last_compact_changed = False
         # 获取当前 tier 的压缩策略
         selector = TieredStrategySelector()
         strategy = selector.select(self._active_tier, phase=budget_phase)
@@ -1286,6 +1338,7 @@ class ContextManager:
         finally:
             self._suppress_usage = prev_suppress
 
+        self._last_compact_changed = True
         # P2-Medium：修改 history 需要加锁
         with self._lock:
             self.history = new_history

@@ -73,6 +73,37 @@ MCPRegistry (唯一真相源)
 ReactReflection）在创建后都应调用 `_inject_mcp_tools_into_engine()`，
 确保 LLM 在任意范式下都能看到可用的 MCP 工具列表。
 
+## 写入范围契约（用户约束 → 执行边界）
+
+用户的「不要修改 X」不是意图，而是范围约束；必须沿一条链路到达工具边界，
+不得在任一入口丢失：
+
+```
+extract_execution_signals
+  ├── no_write（全局禁令，如「不要写任何文件」）
+  ├── no_write_targets（点名路径，如「不要修改 calc.py」）
+  └── no_write_others + no_write_allowed_paths
+        （相对禁令，如「创建 X；不要修改其他文件」→ 只允许 X）
+        ↓
+TurnContract → ExecutionPolicy → store_write_scope()
+        ↓                                   ↓
+交互 turn_flow                   协议 host.run_turn
+        └────────────┬───────────────────┘
+                     ↓
+agent_context: _protected_write_paths / _protected_write_others /
+               _allowed_write_paths
+                     ↓
+tool_classify.execution_policy_denial（唯一执行点，所有入口共用）
+```
+
+规则：
+
+1. **约束不是意图**：被否定的动词（「不要修改」）不能出现在写意图扫描里。
+2. **相对量词优先**：「其他/其它/其余/other」先于「文件」等全局词判定。
+3. **无名目标不做全禁**：相对禁令没有点名任何路径时，不得退化成全局禁令。
+4. **每个入口都要发布 scope**：新增入口（交互、协议、库调用）必须调用
+   `store_write_scope()`；只写 `_execution_level` 会让约束静默消失。
+
 ## 项目结构
 
 - `xenon/engine/` — 引擎层（ReAct/PlanExecute/Reflection 等）

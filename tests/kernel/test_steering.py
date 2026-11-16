@@ -140,15 +140,15 @@ def test_constraint_reaches_the_view():
 
     class RecordingStrategy(ScriptedStrategy):
         def propose(self, view):
-            seen.append(view.system)
+            seen.append(view.task_brief)
             return super().propose(view)
 
     strategy = RecordingStrategy([CallTool(ToolIntent(capability=Capability.READ))])
     runtime.post_user_input("do not touch tests/")
     runtime.run(_spec(), strategy)
 
-    assert any("do not touch tests/" in system for system in seen)
-    assert any("[operator, seq" in system for system in seen)
+    assert any("do not touch tests/" in brief for brief in seen)
+    assert any("[operator, seq" in brief for brief in seen)
 
 
 def test_correction_marks_the_target_and_never_deletes_it():
@@ -264,7 +264,7 @@ def test_steering_source_is_converted_into_events_by_the_runtime():
 
     class RecordingStrategy(ScriptedStrategy):
         def propose(self, view):
-            seen.append(view.system)
+            seen.append(view.task_brief)
             return super().propose(view)
 
     runtime.attach_steering_source(source)
@@ -274,7 +274,7 @@ def test_steering_source_is_converted_into_events_by_the_runtime():
 
     inputs = [e for e in ledger.read() if e.kind is EventKind.USER_INPUT]
     assert [e.payload["text"] for e in inputs] == ["do not touch tests/"]
-    assert any("do not touch tests/" in system for system in seen)
+    assert any("do not touch tests/" in brief for brief in seen)
 
 
 def test_a_broken_source_does_not_stop_the_run():

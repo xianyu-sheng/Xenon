@@ -2,9 +2,52 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from rich.console import Console
 
 console = Console()
+
+
+def ordered_model_candidates(registry: Any, repl: Any = None, *roles: str) -> list[str]:
+    """Candidate order for a one-shot LLM call: session choice first.
+
+    ``_preferred_model_ids`` is the session's contract for "which model runs
+    here" — ``--model`` seeds it and ``/set_model``//model`` rewrite it, and the
+    status bar plus kernel turns read it.  Several command paths built their
+    list from the role priority alone, so a session explicitly started on a
+    working model still dispatched to whichever model happened to sit first in
+    ``roles``: the request 402'd against a dead proxy while the status bar
+    showed a healthy model, and the command either failed (``/code``,
+    ``/sub-agent``) or spent minutes retrying before it reached the model the
+    user chose (``/edit``).  Preferred first, then the role list, deduplicated.
+    """
+
+    candidates: list[str] = []
+
+    def add(model_id: Any) -> None:
+        text = str(model_id or "").strip()
+        if not text:
+            return
+        # ``_preferred_model_ids`` may hold an alias (``deepseek-v4-flash``)
+        # while the pool and ``chat_completion`` speak canonical ids
+        # (``deepseek/deepseek-v4-flash``).  Normalise through the registry so
+        # the same model is never queued twice under two spellings.
+        configured = registry.get_model_by_id(text) if registry is not None else None
+        if configured is not None:
+            text = configured.model_id
+        if text not in candidates:
+            candidates.append(text)
+
+    preferred = getattr(repl, "_preferred_model_ids", None) or []
+    if isinstance(preferred, (list, tuple)):
+        for model_id in preferred:
+            add(model_id)
+    if registry is not None:
+        for role in roles:
+            for model_id in registry.get_role_priority(role):
+                add(model_id)
+    return candidates
 
 
 def confirm_action(prompt: str, default: bool = False) -> bool:

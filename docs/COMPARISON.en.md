@@ -78,25 +78,24 @@ task / evidence / audit tools to other agents — read-only and fail-closed by d
 **Xenon Advantages**: On par with Aider / Crush for multi-provider connectivity, but features an **automatic circuit breaker degradation mechanism** — cooling down automatically after 3 consecutive failures.  
 **Xenon Trade-offs**: Provider count is smaller than OpenCode (50+) and Crush (18+), but 12 covers the primary mainstream and local offerings.
 
-### 3. Multi-Paradigm Engines (**Core Differentiator**)
+### 3. One Loop, Parameterised Phases (**Core Differentiator**)
 
 | Project | Capabilities |
 | --- | --- |
-| **Xenon** | **7 reasoning paradigms**: `direct` / `react` / `plan-execute` / `reflection` + 3 combined engines (`plan-react` / `plan-reflection` / `react-reflection`); switched via `/mode` in the same REPL. |
+| **Xenon** | **One loop + 6 phase profiles**: `direct` / `plan-execute` / `reflection` / `plan-react` / `plan-reflection` / `react-reflection`. A "mode" is **a row of parameters in one table** (plan first? per-step budget? reflect at the end? how many rounds?). `react` and `direct` declare an identical profile, so `react` is only an alias — the seven engine classes are gone. |
 | Aider | Single paradigm: chat + tool call loop. |
-| Claude Code | Single paradigm: single agent loop. |
-| OpenCode | Single paradigm. |
-| Crush | "Flexible: switch LLMs mid-session preserving context" — this is switching models within the same paradigm, not switching paradigms. |
+| Claude Code | Single agent loop (switchable presets). |
+| OpenCode | Single loop. |
+| Crush | "Flexible: switch LLMs mid-session preserving context" — that switches **models** inside one loop, not phases. |
 
-**Xenon Advantages**: **This is the strongest differentiator in the entire table**. 7 paradigms enable:
-- Simple Q&A → `direct` (saves tokens)
-- Tool invocation → `react` classic loop
-- Multi-step tasks → `plan-execute` profile (plan first, per-step budget, same loop)
-- Quality-sensitive tasks → `reflection` with an independent reviewer model
-- Creative writing → handled by generic `direct` / `reflection` modes without maintaining specialized out-of-scope engines
-- Composite workflows → 3 combined engines (isolated context + reviewer model for multi-paradigm collaboration)
+**Xenon's pitch (since v0.9)**: the differentiator is not "the most modes" but **executable verifiability**:
 
-None of the other 4 projects support true multi-paradigm switching — Aider, Claude Code, and OpenCode use a single agent loop, while Crush switches the LLM mid-session without changing the paradigm.
+- Append-only ledger: every tool call leaves a receipt in a hash chain; `xenon replay` reviews it offline.
+- Claim → fact binding: "I edited a.py" must bind to a real receipt, or it becomes debt.
+- Fail-closed: a finish with no evidence is blocked unless the user explicitly `--accept-debt` (falsified results are never accepted).
+- One loop: policy, verification and delivery never fork by mode, so behaviour is verifiable in one place.
+
+Phase profiles remain, but they **parameterise the same loop**; they are not seven copies of it. The old design copied one loop seven times and scattered tool semantics across prompt, plan validation, TaskState, ClaimGate and delivery — that is why it was deleted, not hidden.
 
 ### 4. Local-First
 
@@ -156,8 +155,8 @@ None of the other 4 projects support true multi-paradigm switching — Aider, Cl
 | Exclusively using Claude models with MCP | **Claude Code** (official, first-class MCP) |
 | Need 50+ providers with an attractive TUI | **OpenCode** |
 | Fast, lightweight Go binary with multiple local runtimes | **Crush** |
-| **Need multi-paradigm (7 modes) + 12 providers + MCP + engineering triple-pack** | **Xenon** |
-| Researching agent loops (one runtime, seven parameter profiles) | **Xenon** (ideal experimental platform) |
+| **Need a verifiable ledger + 12 providers + MCP + engineering triple-pack** | **Xenon** |
+| Researching agent loops (one runtime, parameterised phases) | **Xenon** (ideal experimental platform) |
 | Chinese / local ecosystem focus | **Xenon** (DeepSeek / Qwen / Ollama suite) |
 
 ---

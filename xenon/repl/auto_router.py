@@ -43,7 +43,7 @@ class AutoRouter:
             "applied": False,
             "reason": "not_evaluated",
         }
-        # P1-B SAAR: 会话感知路由(粘性锁,防止 ReAct/Plan-Execute 中途切模型
+        # P1-B SAAR: 会话感知路由(粘性锁,防止回合中途切模型
         # 致上下文漂移 + prompt cache 失效)
         from xenon.repl.session_lock import SessionLock
 

@@ -79,6 +79,26 @@ class TestLLMUsageCache:
         assert u.cache_hit_tokens == 800
         assert u.cache_miss_tokens == 200
 
+    def test_extract_usage_derives_miss_from_hit_only(self):
+        """DeepSeek reports the hit share without a miss counter.
+
+        Leaving ``miss`` at 0 made every ledger row look like a free call and
+        hid the real per-call cost from ``/cost`` and the dashboard.
+        """
+
+        u = _extract_usage(
+            {
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 10,
+                    "prompt_cache_hit_tokens": 832,
+                }
+            },
+            "deepseek",
+        )
+        assert u.cache_hit_tokens == 832
+        assert u.cache_miss_tokens == 168
+
     def test_extract_usage_no_cache_fields(self):
         u = _extract_usage(
             {"usage": {"prompt_tokens": 500, "completion_tokens": 100}}, "openai"
@@ -212,6 +232,30 @@ class TestCacheTrackerCore:
         assert t.cache_misses == 1000
         snap = t.model_snapshot("ds/v4")
         assert snap["calls"] == 5
+        t.close()
+
+    def test_a_hit_only_response_still_prices_the_miss(self):
+        """``/cost`` reads CacheTracker, not the kernel ledger.
+
+        A gateway that reports only ``prompt_cache_hit_tokens`` left
+        ``cache_misses`` at zero, so the panel showed a 100% hit rate and a
+        near-zero bill for a call that mostly missed.
+        """
+
+        t = CacheTracker()
+        t.record_response(
+            "ds/v4",
+            {
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 10,
+                    "prompt_cache_hit_tokens": 832,
+                }
+            },
+        )
+        assert t.cache_hits == 832
+        assert t.cache_misses == 168
+        assert t.cache_hit_rate == pytest.approx(0.832)
         t.close()
 
     def test_record_preserves_prompt_completion(self):

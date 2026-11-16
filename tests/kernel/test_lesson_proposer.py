@@ -25,6 +25,32 @@ def test_a_veto_proposes_a_pitfall() -> None:
     assert proposal.source_task == "t1"
 
 
+def test_a_scope_only_veto_names_the_subject_it_will_match() -> None:
+    """The gate writes ``scope``; the fingerprint normalizes it, so must the
+    wording — otherwise the lesson reads "capability ?" and is hard to audit."""
+
+    proposal = propose_lesson(
+        "policy_decision",
+        {"kind": "veto", "scope": ["shell"], "reason": "denied"},
+    )
+
+    assert proposal is not None
+    assert "capability shell" in proposal.action_text
+    assert proposal.shape == "policy_decision|shell"
+
+
+def test_a_kind_only_loop_event_names_its_signal() -> None:
+    """The runtime writes the loop signal as ``kind`` (not ``signal``)."""
+
+    proposal = propose_lesson(
+        "loop_detected", {"kind": "identical_call", "reason": "same call x5"}
+    )
+
+    assert proposal is not None
+    assert "identical_call" in proposal.action_text
+    assert proposal.shape == "loop_detected|identical_call"
+
+
 def test_a_non_veto_policy_decision_proposes_nothing() -> None:
     assert propose_lesson("policy_decision", {"kind": "allow"}) is None
 

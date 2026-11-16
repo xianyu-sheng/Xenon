@@ -92,7 +92,9 @@ _VERIFY_ZH = ("跑", "运行", "执行", "测试", "验证")
 #: not an artifact to change: "…so test_calc.py passes", "让 test_x.py 通过".
 #: Matched on a word boundary: ``password`` must not read as ``pass``.
 _VERIFY_OUTCOME_RE = re.compile(
-    r"^(?:passes|pass|passing|failed|fails|failing|通过|失败|走通)(?![\w])",
+    # ASCII lookahead, not ``\w``: Chinese has no word boundaries, and
+    # "\w" made "通过测试" fail the guard while "password" must fail it.
+    r"^(?:passes|pass|passing|failed|fails|failing|通过|失败|走通)(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
 
@@ -161,6 +163,20 @@ def _looks_like_test(path: str) -> bool:
     )
 
 
+def _mask_paths(segment: str) -> str:
+    """Blank out file paths so an identifier cannot be read as a verb.
+
+    Measured C10 run: "buggy_calc.py 里有 bug，e2e_scratch/tests/test_x.py …"
+    — the ``tests`` inside the *next* file's path matched ``\\btests\\b`` and
+    was read as a "run the tests" verb governing ``buggy_calc.py``.  The
+    resulting ``test_passed(buggy_calc.py)`` could never be satisfied by a
+    test receipt (no suite is named that), so the turn could not settle its
+    debt.  A path is data; only the prose around it may govern it.
+    """
+
+    return _FILE.sub(lambda match: " " * len(match.group(0)), segment)
+
+
 def _clause_before(text: str, start: int) -> str:
     """The current clause's text immediately before the filename.
 
@@ -178,7 +194,7 @@ def _clause_before(text: str, start: int) -> str:
     describing = list(_DESCRIBING.finditer(segment))
     if describing:
         segment = segment[describing[-1].end():]
-    return segment.lower()
+    return _mask_paths(segment).lower()
 
 
 def _clause_after(text: str, end: int) -> str:
@@ -193,7 +209,7 @@ def _clause_after(text: str, end: int) -> str:
     connector = _AFTER_CONNECTOR.search(segment)
     if connector is not None:
         segment = segment[: connector.start()]
-    return segment.lower()
+    return _mask_paths(segment).lower()
 
 
 def _nearest_verb(segment: str, *, side: str) -> tuple[int, str] | None:
@@ -305,14 +321,20 @@ def derive_obligations(objective: str, *, since_seq: int = 0) -> tuple[Obligatio
 
     raw_files: list[str] = []
     roles: dict[str, set[str]] = {}
+    #: Files the text says must "pass" / "通过" — the file itself is the thing
+    #: that has to change, even when it is not a test.
+    outcome_verified: set[str] = set()
     for match in _FILE.finditer(objective):
         path = _normalise(match.group(1))
         if not path or _NON_SOURCE.match(path):
             continue
         raw_files.append(path)
-        roles.setdefault(path, set()).add(
-            _classify(objective, match.start(1), match.end(1))
-        )
+        role = _classify(objective, match.start(1), match.end(1))
+        roles.setdefault(path, set()).add(role)
+        if role == "verify" and _VERIFY_OUTCOME_RE.match(
+            _clause_after(objective, match.end(1)).lstrip()
+        ):
+            outcome_verified.add(path)
 
     # A task often names a full path once and then refers to the same file by
     # basename ("common.py:188").  Treating the basename as a second target
@@ -336,7 +358,16 @@ def derive_obligations(objective: str, *, since_seq: int = 0) -> tuple[Obligatio
         if "write" in wanted:
             add(PropositionKind.FILE_CHANGED, path)
         elif "verify" in wanted:
-            add(PropositionKind.TEST_PASSED, path)
+            if _looks_like_test(path):
+                # Only a test entry point can carry a "tests pass" receipt.
+                add(PropositionKind.TEST_PASSED, path)
+            elif path in outcome_verified:
+                # "让 calc.py 通过测试": the source file is what must change.
+                # No test receipt will ever be named ``calc.py``; demanding
+                # one made the turn's debt impossible to discharge.
+                add(PropositionKind.FILE_CHANGED, path)
+            # A source file merely named beside a verify verb ("读 calc.py 并
+            # 跑测试") gets no obligation: the runner check below covers it.
 
     runner = _TEST_RUNNER.search(objective)
     if runner:

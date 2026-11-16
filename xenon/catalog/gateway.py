@@ -61,6 +61,10 @@ _NETWORK_TOOLS = frozenset(
 )
 _COMMIT_RE = re.compile(r"\[[^\]]*?([0-9a-f]{7,40})[^\]]*\]", re.IGNORECASE)
 _COMMIT_META = (";", "&&", "||", "|", "`", "$(")
+#: How much of a tool's output the receipt carries for the model.  The full
+#: bytes stay in the result cache under ``raw_ref``; this is the bounded view
+#: the next step actually reads.
+_OBSERVATION_CHARS = 4000
 
 
 def _as_list(value: Any) -> list[str]:
@@ -227,6 +231,37 @@ class LegacyToolGateway:
             self._executor.set_runtime(
                 ToolRuntime(workspace_root=self._workspace)
             )
+
+    def preflight(self, action: Any) -> str:
+        """Why the tool itself would refuse this exact call, or ``""``.
+
+        The permission policy answers "may this turn do it"; this answers
+        "would the tool boundary run it even if the human said yes?".  The two
+        are different, and asking a human to approve a call the tool always
+        blocks makes the approval a lie: a measured run approved
+        ``python -c ...`` for one shell call, the receipt came back "blocked by
+        the host security filter", and the human's yes bought nothing.
+
+        Accepts either an unbound action (``CallTool``: the shape an escalation
+        carries — no spec has been bound yet) or a bound ``ToolCall``.  The
+        rule is structural, not a name list: a ``shell``-capable call whose
+        params carry a command is checked by the tool's own grammar.  Any
+        other call has no independent preflight yet and may be asked about.
+        """
+
+        intent = getattr(action, "intent", action)
+        capability = getattr(intent, "capability", None)
+        if str(getattr(capability, "value", capability) or "") != "shell":
+            return ""
+        params = dict(getattr(intent, "params", None) or {})
+        # ``run_script`` carries ``code``, not a shell command; its boundary is
+        # the script language, not this host's shell grammar.
+        command = str(params.get("command") or params.get("cmd") or "")
+        if not command:
+            return ""
+        from xenon.nodes.tool_node import shell_command_refusal
+
+        return shell_command_refusal(command)
 
     def execute(self, call: ToolCall, services: Any) -> ToolReceipt:
         started = time.time()
@@ -553,6 +588,21 @@ class LegacyToolGateway:
         exit_code = _as_int(meta.get("exit_code"))
         if exit_code is None:
             exit_code = _as_int(meta.get("returncode"))
+        # ``model_observation`` is the bounded, model-facing projection the
+        # executor already builds (command header + output summary + the
+        # result_id hint).  The kernel path used to drop it on the floor, so
+        # every git/shell/test receipt reached the next step as a bare
+        # "status: ok" and the model had to say it could not see the output.
+        observation = (
+            result.model_observation
+            or result.observation
+            or ""
+        ).strip()
+        if len(observation) > _OBSERVATION_CHARS:
+            observation = (
+                observation[:_OBSERVATION_CHARS]
+                + "\n…（模型视图已截断，完整结果见 result_id）"
+            )
         return ToolReceipt(
             receipt_id=receipt_id,
             call_id=call.call_id or f"{call.spec_name}-{receipt_id}",
@@ -568,6 +618,7 @@ class LegacyToolGateway:
             error=result.error or "",
             started_at=started,
             ended_at=ended,
+            observation=observation,
         )
 
     @staticmethod

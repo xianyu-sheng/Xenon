@@ -6,7 +6,7 @@ import subprocess
 
 from xenon.engine.context import AgentContext
 from xenon.nodes.tool_node import ToolNode
-from xenon.utils.git_command import plan_git
+from xenon.utils.git_command import is_read_only_git, plan_git
 
 
 def test_git_chain_is_split_without_a_shell() -> None:
@@ -77,3 +77,34 @@ def test_set_location_is_treated_as_cd(tmp_path) -> None:
         ["git", "add", "-A"],
         ["git", "commit", "-m", "done"],
     ]
+
+
+def test_read_only_git_predicate_accepts_reads_and_chains_of_reads() -> None:
+    for command in (
+        "git status",
+        "git status --porcelain=v1 -b",
+        "git diff --stat",
+        "git log --oneline -3",
+        "git show HEAD",
+        "git branch -a",
+        "git status && git log --oneline -3",
+        "git status; git branch",
+    ):
+        assert is_read_only_git(command), command
+
+
+def test_read_only_git_predicate_rejects_writes_chains_and_shell_meta() -> None:
+    for command in (
+        "",
+        "git",
+        "git commit -m x",
+        "git add .",
+        "git push origin main",
+        "git branch -D feature",
+        "git status && rm -rf build",
+        "git status | rm -rf build",
+        "git status > out.txt",
+        "git status\nrm -rf build",
+        "cat .git/HEAD",
+    ):
+        assert not is_read_only_git(command), command

@@ -62,6 +62,49 @@ def test_grants_are_listed_with_the_path_they_cover() -> None:
     assert "剩余 29 分钟" in text or "剩余 30 分钟" in text
 
 
+def test_enter_on_the_current_mode_still_lists_grants(monkeypatch) -> None:
+    """The picker must not swallow the listing it cannot replace.
+
+    With a terminal attached ``/permissions`` always opens the mode picker,
+    and the picker always answers.  Returning straight after it made the
+    grants list unreachable — the command's own purpose.  Enter on the current
+    row means "keep the level", so the summary below still runs.
+    """
+
+    book = GrantBook("/repo")
+    book.add(
+        grant_from_choice(
+            ALLOW, capability=Capability.SHELL, targets=("git log",), workspace="/repo"
+        )
+    )
+    repl = _repl(book=book)
+    repl.agent_context = types.SimpleNamespace(
+        get=lambda key: "default" if key == "_permission_mode" else None
+    )
+    monkeypatch.setattr("xenon.repl.selector.ask_choice", lambda *a, **k: "default")
+
+    text = _call(repl)
+
+    assert "会话级" in text
+    assert "shell: git log" in text
+    assert "已切换到模式" not in text
+
+
+def test_picking_a_different_mode_still_switches(monkeypatch) -> None:
+    captured: dict = {}
+    repl = _repl(book=GrantBook("/repo"))
+    repl.agent_context = types.SimpleNamespace(
+        get=lambda key: "default" if key == "_permission_mode" else None,
+        set=lambda key, value: captured.__setitem__(key, value),
+    )
+    monkeypatch.setattr("xenon.repl.selector.ask_choice", lambda *a, **k: "plan")
+
+    text = _call(repl)
+
+    assert "权限模式: [bold cyan]plan[/bold cyan]" in text
+    assert captured["_permission_mode"] == "plan"
+
+
 def test_a_once_answer_is_marked_as_such() -> None:
     book = GrantBook("/repo")
     book.add(

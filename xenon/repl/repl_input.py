@@ -519,7 +519,7 @@ def _read_input_unix(self) -> str:
                     seq_buffer = ""
                     continue
 
-                # Shift+Tab: \x1b[Z → 切换模式
+                # Shift+Tab: \x1b[Z → 说明当前循环（没有可切换的模式）
                 if seq_buffer == "\x1b[Z":
                     seq_buffer = ""
                     raise _ShiftTabSignal()

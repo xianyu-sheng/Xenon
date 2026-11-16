@@ -177,8 +177,12 @@ def _cmd_permissions(*, args: str = "", session_state: dict, **kwargs: Any) -> s
         picked = ask_choice(
             repl, title="选择权限模式", choices=permission_choices(current)
         )
-        if picked is not None:
+        if picked is not None and picked != current:
             return _switch_mode(repl, picked) or f"⚠️ 未能切换为 {picked}"
+        # Enter on the current row means "keep this level", not "hide what is
+        # remembered".  Returning here made the grants list unreachable from
+        # the front-end: the picker always answers, so the summary below never
+        # ran and the command's own purpose (查看/撤销授权) was not served.
 
     # A bare mode name switches the mode; `remove`/`clear` below manage grants.
     switched = _switch_mode(repl, head) if head in MODE_MAP else None

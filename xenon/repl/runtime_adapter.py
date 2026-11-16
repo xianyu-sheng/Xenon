@@ -28,11 +28,13 @@ from xenon.kernel.contracts import (
     TaskPhase,
     TaskResult,
     ToolIntent,
+    ToolSpec,
 )
 from xenon.kernel.policies import PermissionMode
 from xenon.kernel.strategies import LoopProfile
 from xenon.modes import MODE_CATALOG, loop_profile_for
 from xenon.repl.execution_policy import ExecutionLevel
+from xenon.repl.session_tools import SessionToolContract
 
 # One explanation for a stopped run, shared by the REPL panel and the replay
 # tool; a second copy in this module is how `user_question` stayed invisible
@@ -344,7 +346,13 @@ class CancelOnInterrupt:
         return self
 
     def _handler(self, signum: int, frame: Any) -> None:
-        self._runtime.request_cancel()
+        # Installed before the runtime exists (``CancelOnInterrupt(None)``) and
+        # bound later by ``_attach``.  A Ctrl+C in that window used to raise
+        # AttributeError inside a signal handler.
+        runtime = self._runtime
+        if runtime is None:
+            return
+        runtime.request_cancel()
 
     def __exit__(self, *exc: Any) -> None:
         import signal
@@ -570,10 +578,28 @@ def _receipt_action_input(receipt: Mapping[str, Any]) -> dict[str, Any]:
 
 
 class ReplEventSink:
-    """Project kernel ledger events into the REPL's existing callback/panel."""
+    """Project kernel ledger events into the REPL's existing callback/panel.
 
-    def __init__(self, callback: Any) -> None:
+    ``session_memory`` is the REPL's ContextManager.  Kernel tool runs are the
+    only place that knows which files a turn really wrote, so the sink reports
+    the typed receipt effects there; ``/review`` and ``/save`` read the same
+    working-memory keys.  Without it those readers had no producer at all.
+    """
+
+    def __init__(self, callback: Any, session_memory: Any = None) -> None:
         self.callback = callback
+        self.session_memory = session_memory
+
+    def _record_file_changes(self, params: Mapping[str, Any]) -> None:
+        recorder = getattr(self.session_memory, "record_file_changes", None)
+        if not callable(recorder):
+            return
+        paths = [str(p) for p in params.get("file_paths") or [] if p]
+        created = {str(p) for p in params.get("created_paths") or [] if p}
+        recorder(
+            created=[p for p in paths if p in created],
+            modified=[p for p in paths if p not in created],
+        )
 
     def emit(self, event: Any) -> None:
         kind = getattr(getattr(event, "kind", None), "value", "")
@@ -585,7 +611,9 @@ class ReplEventSink:
             if not isinstance(receipt, Mapping):
                 return
             tool = str(receipt.get("tool") or "tool")
-            self.callback.on_act(tool, _receipt_action_input(receipt))
+            params = _receipt_action_input(receipt)
+            self.callback.on_act(tool, params)
+            self._record_file_changes(params)
             self.callback.on_observe(_receipt_observation(receipt))
         elif kind == "policy_decision":
             decision = str(payload.get("kind") or "")
@@ -827,6 +855,12 @@ class RuntimeAdapter:
         self.catalog_profile = catalog_profile
         self.gateway_context = gateway_context
         self.mcp_registry = mcp_registry
+        #: Session-stable MCP tool contract.  A REPL turn supplies the shared
+        #: one; a headless caller leaves it ``None`` and gets a per-task
+        #: selection, which is the old behaviour.
+        self.tool_contract: SessionToolContract | None = None
+        #: MCP tools whose full schema this session already showed.
+        self.expanded_tools: tuple[str, ...] = ()
         self.strategy_mode = strategy_mode
         self.plan_only = bool(plan_only)
 
@@ -834,6 +868,63 @@ class RuntimeAdapter:
         """Loop profile for the selected mode (``None`` fails closed)."""
 
         return loop_profile_for(self.strategy_mode)
+
+    def mcp_extra_specs(
+        self, objective: str, user_objective: str = ""
+    ) -> tuple[tuple[ToolSpec, ...], list[str]]:
+        """MCP specs this call may bind, plus the names it newly advertises.
+
+        One helper for both ``run`` and ``resume``: an approved plan executes
+        in the same session, so it must see the same session tool contract.
+        Without this the resumed turn fell back to the generic ``mcp_call``
+        spec and a plan step naming a real MCP tool could not bind.
+
+        Relevance is judged from the *user's* words.  ``objective`` may be the
+        frozen request envelope, which prepends bookkeeping the operator never
+        typed -- session file lists (``"session_created_files"``), learned
+        lessons quoting old paths, standing context.  Scoring that envelope
+        selected thirteen GitHub PR tools for "run python -c print(11*12)"
+        (measured: ``tools_tokens`` 2581 -> 3228), because a bare JSON key
+        matched a tool name token.  The envelope is still what the model
+        reads; it is not evidence of what the task needs.
+        """
+
+        evidence = str(user_objective or "").strip() or objective
+
+        if self.mcp_registry is None:
+            return (), []
+        # MCP servers may be lazy.  Discover once for a real MCP task so the
+        # model sees actual tool names instead of a generic mcp_call
+        # description.  Discovery failures must not break core tasks.
+        if not getattr(self.mcp_registry, "tool_map", None):
+            discover = getattr(self.mcp_registry, "discover_tools", None)
+            if callable(discover):
+                try:
+                    discover()
+                except Exception:
+                    pass
+        tool_map = getattr(self.mcp_registry, "tool_map", {}) or {}
+        discovered = mcp_tool_specs(tool_map)
+        if self.tool_contract is not None:
+            # The session contract extends monotonically: a new task adds
+            # tools at the tail and never reorders what earlier tasks
+            # advertised.  That keeps the tool block a cacheable prefix
+            # across task boundaries (measured: a fresh per-task selection
+            # invalidated everything after the first ~1.6k tool tokens).
+            extra_specs = self.tool_contract.select(
+                discovered,
+                evidence,
+                limit=_mcp_tool_limit(),
+                allowed=_mcp_tool_allowlist(),
+            )
+            return extra_specs, list(self.tool_contract.last_added)
+        extra_specs = select_mcp_tool_specs(
+            discovered,
+            evidence,
+            limit=_mcp_tool_limit(),
+            allowed=_mcp_tool_allowlist(),
+        )
+        return extra_specs, [spec.name for spec in extra_specs]
 
     def run(
         self,
@@ -844,6 +935,7 @@ class RuntimeAdapter:
         sink: Any = None,
         on_runtime: Any = None,
         context_blocks: Any = (),
+        stable_context: Any = (),
         turn_path: Any = (),
         intent: str = "",
         intent_source: str = "",
@@ -878,28 +970,13 @@ class RuntimeAdapter:
             "runtime:kernel",
             f"model:{self.model_config.model_id}",
         ]
-        extra_specs = ()
-        if self.mcp_registry is not None:
-            # MCP servers may be lazy.  Discover once for a real MCP task so
-            # the model sees actual tool names instead of a generic mcp_call
-            # description.  Discovery failures must not break core tasks.
-            if not getattr(self.mcp_registry, "tool_map", None):
-                discover = getattr(self.mcp_registry, "discover_tools", None)
-                if callable(discover):
-                    try:
-                        discover()
-                    except Exception:
-                        pass
-            tool_map = getattr(self.mcp_registry, "tool_map", {}) or {}
-            extra_specs = select_mcp_tool_specs(
-                mcp_tool_specs(tool_map),
-                objective,
-                limit=_mcp_tool_limit(),
-                allowed=_mcp_tool_allowlist(),
-            )
-            names = [spec.name for spec in extra_specs]
-            if names:
-                constraints.append("mcp_tools: " + ", ".join(names))
+        extra_specs, names = self.mcp_extra_specs(objective, user_objective)
+        if names:
+            # The ledger records what this task *added* to the contract;
+            # the whole set is already named by the tool schemas and by
+            # the task brief, so repeating it here only grows the miss
+            # paid at every task start.
+            constraints.append("mcp_tools: " + ", ".join(names))
         run = run_task(
             objective,
             user_objective=user_objective,
@@ -916,6 +993,8 @@ class RuntimeAdapter:
             constraints=tuple(constraints),
             sink=sink,
             context_blocks=tuple(context_blocks or ()),
+            stable_context=tuple(stable_context or ()),
+            expanded_tools=tuple(self.expanded_tools),
             turn_path=tuple(turn_path or ()),
             session_id=self.session_id,
             intent=intent,
@@ -958,6 +1037,7 @@ class RuntimeAdapter:
         user_objective: str = "",
         sink: Any = None,
         context_blocks: Any = (),
+        on_runtime: Any = None,
     ) -> HarnessRun:
         """Execute an approved plan in its existing kernel ledger."""
 
@@ -975,6 +1055,13 @@ class RuntimeAdapter:
             "runtime:kernel",
             f"model:{self.model_config.model_id}",
         ]
+        # The approved plan executes in the session it was planned in, so it
+        # keeps the same MCP tool set and the same expanded schemas.  Both are
+        # what the planner already paid for; dropping them loses MCP binding
+        # and rewrites the tool block.
+        extra_specs, names = self.mcp_extra_specs(objective, user_objective)
+        if names:
+            constraints.append("mcp_tools: " + ", ".join(names))
         run = resume_task(
             task_id=task_id,
             plan=plan,
@@ -998,12 +1085,15 @@ class RuntimeAdapter:
             allow_approval=self.allow_approval,
             catalog_profile=self.catalog_profile,
             gateway_context=self.gateway_context,
+            extra_specs=extra_specs,
+            expanded_tools=tuple(self.expanded_tools),
             # A resumed approved plan must carry the same runtime capabilities
             # as a fresh kernel turn: remembered grants, self-evolution and the
             # fold narrative.
             session_grants=self.session_grants,
             lesson_store=self.lesson_store,
             summary_provider=self.summary_provider,
+            on_runtime=on_runtime,
         )
         try:
             result_path = run.ledger_path.with_suffix(".result.json")
@@ -1127,18 +1217,76 @@ def _session_id_of(repl: Any, gateway_context: Any) -> str:
     return str(getattr(getattr(repl, "_session_events", None), "session_id", "") or "")
 
 
-def session_context_blocks(repl: Any, objective: str) -> tuple[tuple[str, str], ...]:
-    """Reference material for a kernel turn: project rules + retrieved memory.
+def _session_tool_contract(repl: Any) -> SessionToolContract | None:
+    """The REPL's MCP tool contract for the current conversation.
 
-    The chat path has always injected these; kernel turns ignored them, so a
-    rule like "don't touch tests/" silently stopped applying the moment the
-    turn needed tools.  Labels come from the context manager's keys, and the
-    insertion order is preserved so the prompt (and its hash) is reproducible.
+    One contract per session.  ``/clear`` (or a resumed conversation with a new
+    id) starts a new one, because the provider's cache key is the prefix and a
+    new session has no reason to keep an old tool set.  A minimal host that
+    refuses attributes gets ``None``: the adapter then falls back to a
+    per-task selection.
+    """
 
-    #370 adds two progressive-loading layers:
-    - the skill index (name — one-liner) so every task knows what skills exist
-      without paying their bodies in tokens;
-    - the active skill's body, only when this turn actually runs that skill.
+    session_id = _session_id_of(repl, getattr(repl, "agent_context", None))
+    cached = getattr(repl, "_mcp_session_tools", None)
+    if isinstance(cached, SessionToolContract):
+        if cached.session_id == session_id:
+            return cached
+        cached.reset(session_id)
+        return cached
+    contract = SessionToolContract(session_id=session_id)
+    try:
+        repl._mcp_session_tools = contract
+    except Exception:  # noqa: BLE001 — a frozen host simply runs without one
+        return None
+    return contract
+
+
+def _remember_expanded_tools(contract: SessionToolContract, run: Any) -> None:
+    """Carry this task's expanded MCP schemas into the rest of the session.
+
+    The kernel expands a tool after it runs so later calls see its parameters.
+    The expansion used to be recomputed from *this task's* ledger only, so the
+    next task sent the index row again -- a schema that flips invalidates the
+    tool block, and the new task's first call paid for it.  Recording the set
+    on the contract keeps the bytes stable across tasks.
+    """
+
+    path = getattr(run, "ledger_path", None)
+    if path is None:
+        return
+    try:
+        from xenon.ledger.events import EventKind
+        from xenon.ledger.store import Ledger
+
+        names: list[str] = []
+        for event in Ledger(Path(path), str(getattr(run, "task_id", "") or "")).read():
+            if event.kind is not EventKind.TOOL_RECEIPT:
+                continue
+            tool = str((event.payload or {}).get("receipt", {}).get("tool") or "")
+            if tool:
+                names.append(tool)
+        contract.mark_expanded(names)
+    except Exception:  # noqa: BLE001 — cache continuity is advisory
+        logger.debug("session tool expansion not recorded", exc_info=True)
+
+
+def session_context_layers(
+    repl: Any, objective: str
+) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
+    """Reference material for a kernel turn, split by cache lifetime.
+
+    ``(stable, volatile)``.  Stable blocks are byte-identical for every turn
+    of a session until the files behind them change (project rules, the skill
+    index); they go into the session's system prompt and are cached once.
+    Volatile blocks are keyed to this request (retrieved memories, an active
+    skill's body) and travel in the turn message after the objective.  The
+    provider serialises system -> tools -> messages, so putting a retrieved
+    memory in the system used to invalidate the whole tool block on the first
+    call of every turn.
+
+    #370's progressive-loading layers are ordered the same way: the index is
+    stable, the active skill body is not.
     """
 
     inject_project = getattr(repl, "_inject_project_context", None)
@@ -1153,25 +1301,38 @@ def session_context_blocks(repl: Any, objective: str) -> tuple[tuple[str, str], 
             inject_memory(objective)
         except Exception:  # noqa: BLE001 — memory is advisory, never fatal
             logger.debug("memory injection failed", exc_info=True)
-    blocks: list[tuple[str, str]] = []
+    stable: list[tuple[str, str]] = []
+    volatile: list[tuple[str, str]] = []
     ctx_mgr = getattr(repl, "ctx_mgr", None)
     layers = getattr(ctx_mgr, "context_layers", None)
     if callable(layers):
         try:
-            blocks.extend(
-                (str(key), str(content))
-                for key, content, _stable in layers()
-                if str(content or "").strip()
-            )
+            for key, content, is_stable in layers():
+                if not str(content or "").strip():
+                    continue
+                target = stable if is_stable else volatile
+                target.append((str(key), str(content)))
         except Exception:  # noqa: BLE001 — fall back to no context
             pass
     skill_index = _skill_index(repl)
     if skill_index:
-        blocks.append(("skills", skill_index))
+        stable.append(("skills", skill_index))
     active = getattr(repl, "_active_skill_body", None)
     if active:
-        blocks.append(("active_skill", active))
-    return tuple(blocks)
+        volatile.append(("active_skill", active))
+    return tuple(stable), tuple(volatile)
+
+
+def session_context_blocks(repl: Any, objective: str) -> tuple[tuple[str, str], ...]:
+    """Both tiers in one tuple (stable first), for callers that do not split.
+
+    Kept because chat-style callers and tests treat the blocks as one flat
+    list; the kernel path uses :func:`session_context_layers` so the stable
+    tier can be cached.
+    """
+
+    stable, volatile = session_context_layers(repl, objective)
+    return stable + volatile
 
 
 def _skill_index(repl: Any, limit: int = 40) -> str:
@@ -1307,6 +1468,13 @@ def _render_kernel_result(
     model_id: str,
 ) -> None:
     result = run.result
+    # One publication point for every kernel run, whether it was started by a
+    # turn or by a command (``/plan approve`` resumes the plan on the command
+    # thread).  Downstream views — the protocol host's read-only panels, the
+    # REPL's own ``/evidence`` — read this pointer instead of relying on each
+    # call site to forward the run, which is how the dashboard kept showing
+    # the plan-only run's ``unverified`` after an approved plan had delivered.
+    repl._last_kernel_run = run
     repl._last_kernel_ledger = run.ledger_path
     repl._last_kernel_task_id = run.task_id
     console = _console_for(repl)
@@ -1456,13 +1624,23 @@ def resume_kernel_plan(
 
     if callback is None:
         callback = repl._make_callback()
-    model_ids = list(repl.registry.get_role_priority("planner"))
+    from xenon.repl.command_groups.common import ordered_model_candidates
+
+    model_ids = ordered_model_candidates(repl.registry, repl, "planner")
     adapter = RuntimeAdapter.from_repl(
         repl,
         model_ids=model_ids,
         level=ExecutionLevel.EXECUTE,
         client=client,
         ledger_dir=ledger_dir,
+    )
+    # The approved plan executes in the session that planned it.  Carry the
+    # same tool contract and expanded schemas so its tool block is a cacheable
+    # extension of the planner's, not a rebuild that also loses MCP binding.
+    tool_contract = _session_tool_contract(repl)
+    adapter.tool_contract = tool_contract
+    adapter.expanded_tools = (
+        tuple(tool_contract.expanded) if tool_contract is not None else ()
     )
     # Same capabilities as a fresh kernel turn: the fold narrative and the
     # session's remembered answers must also apply while executing an
@@ -1481,7 +1659,7 @@ def resume_kernel_plan(
     adapter.session_grants = tuple(
         book.consume(str(adapter.workspace), turn=turn_id)
     )
-    sink = ReplEventSink(callback)
+    sink = ReplEventSink(callback, getattr(repl, "ctx_mgr", None))
     agent_context = getattr(repl, "agent_context", None)
     setter = getattr(agent_context, "set", None)
     getter = getattr(agent_context, "get", None)
@@ -1502,6 +1680,23 @@ def resume_kernel_plan(
     listener = SteeringListener(repl)
     listener.start()
     guard = CancelOnInterrupt(None)
+
+    def _attach(runtime: Any) -> None:
+        # Same contract as a fresh turn: an approved plan is still a turn the
+        # operator may stop.  Ctrl+C and the host's cancel frame both find the
+        # runtime through ``repl._active_runtime``.
+        repl._active_runtime = runtime
+        runtime.attach_steering_source(lambda: drain_steering(repl))
+        guard._runtime = runtime
+        guard.__enter__()
+        probe = getattr(repl, "_turn_cancel_probe", None)
+        if callable(probe):
+            try:
+                if probe():
+                    runtime.request_cancel()
+            except Exception:  # noqa: BLE001 — a broken probe is not fatal
+                pass
+
     try:
         try:
             run = adapter.resume(
@@ -1512,6 +1707,7 @@ def resume_kernel_plan(
                 objective=objective,
                 user_objective=user_objective,
                 sink=sink,
+                on_runtime=_attach,
             )
         finally:
             guard.__exit__()
@@ -1536,6 +1732,8 @@ def resume_kernel_plan(
                 else int(ExecutionLevel.READ_ONLY),
             )
             setter("_execution_reason", previous_reason or "")
+    if tool_contract is not None:
+        _remember_expanded_tools(tool_contract, run)
     _render_kernel_result(
         repl,
         run,
@@ -1557,9 +1755,16 @@ def run_kernel_turn(
     plan_only: bool = False,
     intent: str = "",
     intent_source: str = "",
+    extra_blocks: tuple[tuple[str, str], ...] = (),
 ) -> HarnessRun | None:
     """Run one REPL task turn through the kernel and render its result."""
 
+    # A returned ``None`` means "the turn failed"; the cause has to survive
+    # the console, because a protocol front-end cannot see console output.
+    # The host reads this back to put the real reason in ``turn.end`` instead
+    # of a generic "kernel turn failed" (a measured MCP run failed on network
+    # and told the user nothing).
+    repl._last_kernel_error = None
     if callback is None:
         callback = repl._make_callback()
     sync_context_window(repl, model_ids)
@@ -1570,6 +1775,14 @@ def run_kernel_turn(
             level=execution_policy.level,
             client=client,
             plan_only=plan_only,
+        )
+        # One tool contract per session: the provider caches an exact prefix,
+        # so the MCP selection must append across tasks instead of being
+        # recomputed from scratch each turn.
+        tool_contract = _session_tool_contract(repl)
+        adapter.tool_contract = tool_contract
+        adapter.expanded_tools = (
+            tuple(tool_contract.expanded) if tool_contract is not None else ()
         )
         # #373 / §9: the front-end owns the session's remembered decisions.  A
         # grant made in an earlier task must apply to this one, and this task's
@@ -1593,7 +1806,7 @@ def run_kernel_turn(
         adapter.session_grants = tuple(
             book.consume(str(adapter.workspace), turn=turn_id)
         )
-        sink = ReplEventSink(callback)
+        sink = ReplEventSink(callback, getattr(repl, "ctx_mgr", None))
         start_capture = getattr(repl, "_start_log_capture", None)
         if callable(start_capture):
             start_capture()
@@ -1627,10 +1840,22 @@ def run_kernel_turn(
             runtime.attach_steering_source(lambda: drain_steering(repl))
             guard._runtime = runtime
             guard.__enter__()
+            # A protocol host stops a turn with a flag, not SIGINT (the turn
+            # runs off the main thread).  A cancel that arrived while direct
+            # chat was still deciding, or before this run attached, must not be
+            # lost: the runtime hears it at its first limit check.
+            probe = getattr(repl, "_turn_cancel_probe", None)
+            if callable(probe):
+                try:
+                    if probe():
+                        runtime.request_cancel()
+                except Exception:  # noqa: BLE001 — a broken probe is not fatal
+                    pass
 
         listener = SteeringListener(repl)
         listener.start()
-        blocks = session_context_blocks(repl, objective)
+        stable_blocks, volatile_blocks = session_context_layers(repl, objective)
+        blocks = volatile_blocks + tuple(extra_blocks)
         # #372 B3: a task reached through a rewind/fork carries the branch path
         # into the kernel view (Turn path: line).  Linear chat passes (); the
         # tree decides, never the REPL guessing.
@@ -1651,11 +1876,14 @@ def run_kernel_turn(
                 sink=sink,
                 on_runtime=_attach,
                 context_blocks=blocks,
+                stable_context=stable_blocks,
                 turn_path=turn_path,
                 task_id=turn_id,
                 intent=intent,
                 intent_source=intent_source,
             )
+            if tool_contract is not None:
+                _remember_expanded_tools(tool_contract, run)
             # Session memory belongs to the front-end's book alone: the panel
             # already recorded "allow" answers when they were given (with the
             # command text as the target).  Copying a second snapshot from the
@@ -1679,6 +1907,7 @@ def run_kernel_turn(
         raise
     except Exception as exc:  # noqa: BLE001 — REPL must show an actionable error
         # A failed kernel turn must not leave legacy task state behind either.
+        repl._last_kernel_error = exc
         _clear_legacy_task_state(repl)
         finish_node = getattr(repl, "_finish_turn_node", None)
         if callable(finish_node):

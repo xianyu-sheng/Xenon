@@ -61,13 +61,24 @@ def test_working_set_growth_keeps_the_prefix_digest_stable() -> None:
     assert late.prefix_digest == early.prefix_digest  # the cache prefix holds
 
 
-def test_a_constraint_change_changes_the_prefix_digest() -> None:
+def test_a_constraint_change_stays_out_of_the_prefix() -> None:
+    """Constraints belong to the task brief, not the cached prefix.
+
+    The provider serialises system -> tools -> messages.  A constraint lived at
+    the end of the system prompt, which still meant every constraint change
+    (lessons, the MCP selection line) re-billed the whole tool block on the
+    first call of the next turn.  It now rides in the turn brief: same task
+    hash change, no prefix change.
+    """
+
     ledger = Ledger.in_memory("constraint")
     plain = _view(_spec(), ledger)
     constrained = _view(_spec(constraints=("must use edit",)), ledger)
 
-    assert constrained.prefix_digest != plain.prefix_digest
+    assert constrained.prefix_digest == plain.prefix_digest
     assert constrained.hash != plain.hash
+    assert "must use edit" in constrained.task_brief
+    assert "must use edit" not in constrained.system
 
 
 def test_a_note_does_not_touch_the_prefix_digest() -> None:

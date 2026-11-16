@@ -1,7 +1,7 @@
 """
 Setup Wizard — 交互式配置引导。
 
-提供菜单式的 API Key 配置、模型选择、模式选择，
+提供菜单式的 API Key 配置、模型选择与当前循环说明，
 用户不需要记任何命令，全程跟着菜单走。
 """
 
@@ -222,7 +222,7 @@ def interactive_setup(registry: ModelRegistry, model_pool=None) -> None:
         console.print("  [cyan]1[/cyan]. 配置 API Key")
         console.print("  [cyan]2[/cyan]. 查看已配置的厂商")
         console.print("  [cyan]3[/cyan]. 选择/切换模型")
-        console.print("  [cyan]4[/cyan]. 选择模式")
+        console.print("  [cyan]4[/cyan]. 查看当前循环 [dim](单一循环，无需切换)[/dim]")
         console.print("  [cyan]5[/cyan]. 删除 API Key")
         console.print("  [cyan]6[/cyan]. 注册自定义模型商 [dim](v0.4.0)[/dim]")
         console.print("  [cyan]0[/cyan]. 退出配置\n")
@@ -460,37 +460,20 @@ def _select_model(registry: ModelRegistry, model_pool=None) -> None:
 
 
 def _select_mode(registry: ModelRegistry) -> None:
-    """交互式选择模式。"""
-    modes = registry.modes
-    current = registry.current_mode
+    """Show the one loop.  Modes are not a setup choice.
 
-    console.print("\n[bold]选择模式:[/bold]\n")
+    The wizard used to ask the user to pick among seven modes, which taught
+    the wrong model: plan/execute/reflect are phases of a single kernel loop,
+    not products.  Nothing is switched here — and the line is the same one
+    ``/mode`` prints, so setup cannot teach a different vocabulary.
+    """
+    from xenon.modes import describe_loop
 
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("#", style="cyan", width=3)
-    table.add_column("模式", style="bold")
-    table.add_column("说明")
-    table.add_column("推荐场景")
-    table.add_column("状态")
-
-    mode_list = list(modes.values())
-    for i, mode in enumerate(mode_list, 1):
-        status = "[green]当前[/green]" if mode.name == current else ""
-        scene = _mode_scene(mode.name)
-        table.add_row(str(i), mode.name, mode.description, scene, status)
-
-    console.print(table)
-    console.print()
-
-    choice = IntPrompt.ask(
-        "输入模式编号",
-        choices=[str(i) for i in range(1, len(mode_list) + 1)],
-    )
-
-    selected = mode_list[choice - 1]
-    registry.set_mode(selected.name)
+    current = registry.get_current_mode()
     console.print(
-        f"\n[green]已切换到: {selected.name}[/green] — {selected.description}\n"
+        "\n[bold]当前循环:[/bold] "
+        f"[cyan]{describe_loop(getattr(current, 'loop', None))}[/cyan]\n"
+        "[dim]Plan/React/Reflect 是同一循环内的固定阶段，无需切换。[/dim]\n"
     )
 
 
@@ -560,34 +543,6 @@ def _model_hint(model_name: str) -> str:
     return hints.get(model_name, "")
 
 
-def _mode_scene(mode_name: str) -> str:
-    """返回模式的推荐场景。
-
-    内置模式用这里的精简文案（比 spec.description 更短，适合向导表格）；
-    其它模式回退到 ``MODE_CATALOG`` 的描述，向导不会出现空白行——
-    引擎注册表已随引擎层退役。
-    """
-    scenes = {
-        "plan-execute": "复杂任务、多步骤编程",
-        "react": "探索性任务、试错调试",
-        "reflection": "高质量输出、代码审查",
-        "plan-react": "全局规划+灵活执行",
-        "plan-reflection": "规划执行+质量保证",
-        "react-reflection": "探索执行+审查修正",
-    }
-    if mode_name in scenes:
-        return scenes[mode_name]
-
-    from xenon.modes import MODE_CATALOG
-
-    spec = MODE_CATALOG.get(mode_name)
-    if spec is not None:
-        return spec.description
-
-    from xenon.modes import get_mode
-
-    spec = get_mode(mode_name)
-    return spec.description if spec is not None else ""
 
 
 # ── v0.4.0: 自定义模型商注册 ──────────────────────────────

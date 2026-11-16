@@ -8,7 +8,7 @@ does not import the REPL or legacy engines; the REPL migration is a later step.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence, TextIO
 
@@ -16,7 +16,7 @@ from xenon.catalog.catalog import build_catalog
 from xenon.catalog.finalizer import GitFinalizer
 from xenon.catalog.gateway import LegacyToolGateway
 from xenon.catalog.worktree import GitWorktreeProbe
-from xenon.harness.lessons import record_recurrences, store_proposals
+from xenon.harness.learning import LearningGateway
 from xenon.harness.plan import HarnessPlan
 from xenon.harness.sink import JsonlSink
 from xenon.kernel.contracts import (
@@ -294,6 +294,8 @@ def run_task(
     on_runtime: Callable[[Any], None] | None = None,
     accept_debt: bool = False,
     context_blocks: Sequence[tuple[str, str]] = (),
+    stable_context: Sequence[tuple[str, str]] = (),
+    expanded_tools: Sequence[str] = (),
     audit_provider: Any = None,
     parent_task_id: str = "",
     batch_id: str = "",
@@ -349,6 +351,8 @@ def run_task(
         ),
         accept_debt=accept_debt,
         context_blocks=tuple(context_blocks),
+        stable_context=tuple(stable_context),
+        expanded_tools=tuple(str(name) for name in expanded_tools),
         parent_task_id=parent_task_id,
         batch_id=batch_id,
         turn_path=tuple(turn_path),
@@ -356,11 +360,12 @@ def run_task(
         intent=intent,
         intent_source=intent_source,
     )
-    # Self-evolution slice 3 (docs/design/self-evolution.md): a bounded set of
-    # active lessons rides as constraints — the model *must* see them in the
-    # system prompt — and every applied lesson is recorded in this task's
-    # ledger.  Empty store, or a store that cannot load, means no lesson noise.
-    spec = _apply_lessons(spec, ledger, lesson_store)
+    # Self-evolution (docs/design/self-evolution.md): the gateway is the one
+    # boundary.  A bounded set of active lessons rides as constraints — the
+    # model *must* see them in the system prompt — and every applied lesson is
+    # recorded in this task's ledger.  Empty store means no lesson noise.
+    learning = LearningGateway(lesson_store)
+    spec = learning.apply(spec, ledger, runtime=runtime)
     _bind_accounting(strategy, runtime)
     if on_runtime is not None:
         # A front-end needs the runtime to *write events* (steering), not to
@@ -370,85 +375,8 @@ def run_task(
     report = ledger.verify()
     if not report.valid:
         raise RuntimeError(f"ledger verification failed: {report.reason}")
-    _learn_from_ledger(ledger, lesson_store)
+    learning.commit(ledger)
     return HarnessRun(result=result, task_id=identifier, ledger_path=ledger_path)
-
-
-def _apply_lessons(
-    spec: TaskSpec, ledger: Ledger, lesson_store: Any
-) -> TaskSpec:
-    """Carry a bounded lesson set into this task and record the applications.
-
-    Shared by ``run_task`` and ``resume_task``: a resumed approved plan must
-    learn exactly like a fresh run, or the self-evolution chain quietly stops
-    at the approval boundary.
-    """
-
-    if lesson_store is None:
-        return spec
-    try:
-        applied = lesson_store.match_for_task()
-    except Exception:  # noqa: BLE001 — a broken store must not fail the task
-        applied = ()
-    if not applied:
-        return spec
-    spec = replace(
-        spec,
-        constraints=spec.constraints
-        + tuple(
-            f"[lesson {lesson.id}] {lesson.action_text}" for lesson in applied
-        ),
-    )
-    for lesson in applied:
-        ledger.append(
-            EventKind.LESSON_APPLIED,
-            EventSource.GATE,
-            {
-                "lesson_id": lesson.id,
-                "action": lesson.action_text,
-                "kind": lesson.kind,
-            },
-        )
-    if callable(lesson_store.record_application):
-        for lesson in applied:
-            try:
-                lesson_store.record_application(lesson.id)
-            except Exception:  # noqa: BLE001 — counters are advisory
-                pass
-    return spec
-
-
-def _learn_from_ledger(ledger: Ledger, lesson_store: Any) -> None:
-    """Persist proposals and retire lessons that keep recurring.
-
-    The kernel only *proposes* (it stays a pure function of its inputs and
-    writes LESSON_PROPOSED).  Storing happens here, where the filesystem
-    lives.  Before this, 621 ledgers carried proposals and 0 carried a stored
-    lesson — the chain stopped at proposal.
-    """
-
-    if lesson_store is None:
-        return
-    try:
-        stored = store_proposals(ledger, lesson_store)
-    except Exception:  # noqa: BLE001 — learning must not fail a task
-        stored = ()
-    for lesson_id in stored:
-        ledger.append(
-            EventKind.LESSON_STORED,
-            EventSource.GATE,
-            {"lesson_id": lesson_id, "reason": "proposed during this task"},
-        )
-    try:
-        retired = record_recurrences(ledger, lesson_store)
-    except Exception:  # noqa: BLE001
-        retired = ()
-    for lesson_id in retired:
-        ledger.append(
-            EventKind.LESSON_RETIRED,
-            EventSource.GATE,
-            {"lesson_id": lesson_id, "reason": "recurrence threshold reached"},
-        )
 
 
 def resume_task(
@@ -475,10 +403,12 @@ def resume_task(
     extra_specs: Sequence[ToolSpec] = (),
     accept_debt: bool = False,
     context_blocks: Sequence[tuple[str, str]] = (),
+    expanded_tools: Sequence[str] = (),
     session_grants: Sequence[Any] = (),
     lesson_store: Any = None,
     summary_provider: Any = None,
     tool_runtime: Any = None,
+    on_runtime: Callable[[Any], None] | None = None,
 ) -> HarnessRun:
     """Resume an approved plan in its existing ledger.
 
@@ -525,9 +455,18 @@ def resume_task(
         ),
         accept_debt=accept_debt,
         context_blocks=tuple(context_blocks),
+        # A resumed plan keeps the session's expanded MCP schemas: flipping
+        # them back to index rows would rewrite the tool block mid-session.
+        expanded_tools=tuple(str(name) for name in expanded_tools),
         session_id=session_id,
     )
-    spec = _apply_lessons(spec, ledger, lesson_store)
+    learning = LearningGateway(lesson_store)
+    spec = learning.apply(spec, ledger, runtime=runtime)
+    if on_runtime is not None:
+        # Same contract as ``run_task``: the front-end gets the runtime so a
+        # cancel or a steering note can reach a *resumed* plan too.  Without
+        # it, Ctrl+C during an approved plan's execution did nothing.
+        on_runtime(runtime)
     result = runtime.resume_planned(
         spec,
         strategy,
@@ -538,7 +477,7 @@ def resume_task(
     report = ledger.verify()
     if not report.valid:
         raise RuntimeError(f"ledger verification failed: {report.reason}")
-    _learn_from_ledger(ledger, lesson_store)
+    learning.commit(ledger)
     return HarnessRun(result=result, task_id=task_id, ledger_path=ledger_path)
 
 

@@ -172,3 +172,43 @@ def test_compact_no_args():
     # compact may fail without model, just check it returns a string
     result = _cmd_compact(args="", ctx_mgr=ctx, registry=reg)
     assert isinstance(result, str)
+
+
+def test_compact_says_uncompressed_when_there_is_nothing_to_fold():
+    """A manual /compact with only the retained window is a no-op.
+
+    The command used to print "✅ 对话已压缩" anyway; measured through the real
+    front-end the token count did not move, so the success line was false.
+    """
+
+    from xenon.repl.context_manager import ContextManager
+    from xenon.repl.model_registry import ModelRegistry
+
+    ctx = ContextManager()
+    reg = ModelRegistry()
+    ctx.add_user_message("你好")
+    ctx.add_assistant_message("你好，有什么可以帮你？")
+
+    result = _cmd_compact(args="", ctx_mgr=ctx, registry=reg)
+
+    assert "未压缩" in result
+    assert "对话已压缩" not in result
+
+
+def test_compact_reports_the_token_drop_when_it_really_folds():
+    from xenon.repl.context_manager import ContextManager
+    from xenon.repl.model_registry import ModelRegistry
+
+    ctx = ContextManager()
+    reg = ModelRegistry()
+    for index in range(8):
+        ctx.add_user_message(f"question {index} " + "x" * 200)
+        ctx.add_assistant_message(f"answer {index} " + "y" * 200)
+
+    before = ctx.stats()["estimated_tokens"]
+    result = _cmd_compact(args="", ctx_mgr=ctx, registry=reg)
+    after = ctx.stats()["estimated_tokens"]
+
+    assert "对话已压缩" in result
+    assert after < before
+    assert f"{before:,}" in result and f"{after:,}" in result

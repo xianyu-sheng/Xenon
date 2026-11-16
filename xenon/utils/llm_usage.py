@@ -21,6 +21,24 @@ class LLMUsage:
     total_tokens: int = 0
     cache_hit_tokens: int = 0
     cache_miss_tokens: int = 0
+    #: Attribution for the ledger.  A ``model_usage`` event used to carry an
+    #: empty ``model`` and no phase, so a per-phase cache analysis could not
+    #: name the call it was analysing -- the 19%-hit finish call and a 71%
+    #: actor call were indistinguishable rows.  These travel with the number
+    #: they describe.
+    model: str = ""
+    phase: str = ""
+    #: Token size of the bytes a provider can serve from cache across calls:
+    #: the system prompt plus the tool schemas.  ``prompt_tokens`` is what the
+    #: provider billed; this is the ceiling the request structure allows.
+    system_tokens: int = 0
+    tools_tokens: int = 0
+    cacheable_tokens: int = 0
+    #: Everything after the system message in this call (the turn text).  It is
+    #: the part a cache can never serve from a previous call, so
+    #: ``prompt_tokens - cacheable_tokens`` should approximate it plus whatever
+    #: of the tool block the provider's block alignment dropped.
+    turn_tokens: int = 0
 
     def add(self, other: "LLMUsage") -> None:
         self.prompt_tokens += other.prompt_tokens
@@ -105,12 +123,20 @@ def _extract_usage(data: dict[str, Any] | None, provider: str) -> LLMUsage:
         or detail_hit
         or 0
     )
-    explicit_miss = u.get("prompt_cache_miss_tokens", 0) or u.get(
-        "cache_miss_tokens", 0
+    explicit_miss = u.get("prompt_cache_miss_tokens")
+    if explicit_miss is None:
+        explicit_miss = u.get("cache_miss_tokens")
+    # OpenAI-compatible responses often report only the cached share.  In that
+    # contract the rest of the prompt is a miss, and DeepSeek is one of them:
+    # it returns prompt_cache_hit_tokens without a miss counter, so every
+    # ledger row said ``miss=0`` and a per-call cache analysis could not see
+    # what the request actually cost.  The remaining prompt is the miss unless
+    # the provider says otherwise.
+    miss = (
+        int(explicit_miss)
+        if explicit_miss is not None
+        else (max(0, p - hit) if hit else 0)
     )
-    # OpenAI-compatible responses only report cached prompt tokens. In that
-    # contract, the remaining prompt tokens are the cache miss portion.
-    miss = int(explicit_miss or (max(0, p - hit) if isinstance(details, dict) else 0))
     return LLMUsage(
         prompt_tokens=p,
         completion_tokens=c,
@@ -162,6 +188,61 @@ def _emit_response(model_id: str, data: dict[str, Any]) -> None:
             cb(model_id, data)
         except Exception:
             logger.warning("响应回调执行异常（已隔离）", exc_info=True)
+
+
+def annotate_usage(
+    usage: Any,
+    *,
+    model_id: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
+    cache_context: dict[str, Any] | None = None,
+) -> LLMUsage:
+    """Name the call that produced ``usage`` and size what it could cache.
+
+    The provider reports one number for the whole prompt; it does not say which
+    part of it was stable.  Without that split an operator can see "19% hit"
+    and has no way to tell a bad provider day from a request whose own bytes
+    change every call.  The split is computed locally from the compiled
+    request, with the same tokenizer the budget uses.
+    """
+
+    import json
+
+    try:
+        from xenon.kernel.tokens import count_tokens
+    except Exception:  # noqa: BLE001 — telemetry must never break a call
+        return usage
+
+    def _size(text: str) -> int:
+        return int(count_tokens(text)) if text else 0
+
+    try:
+        system = "\n".join(
+            str(message.get("content") or "")
+            for message in messages
+            if str(message.get("role") or "") == "system"
+        )
+        rest = "\n".join(
+            str(message.get("content") or "")
+            for message in messages
+            if str(message.get("role") or "") != "system"
+        )
+        usage.model = model_id
+        usage.phase = str((cache_context or {}).get("phase") or "")
+        usage.system_tokens = _size(system)
+        usage.tools_tokens = (
+            _size(json.dumps(tools, ensure_ascii=False, default=str))
+            if tools
+            else 0
+        )
+        usage.cacheable_tokens = usage.system_tokens + usage.tools_tokens
+        # The turn text is recorded so the ceiling can be read as a ratio
+        # without re-deriving the prompt later.
+        usage.turn_tokens = _size(rest)
+    except Exception:  # noqa: BLE001 — an odd content shape is not a failure
+        logger.warning("usage attribution failed (isolated)", exc_info=True)
+    return usage
 
 
 def _set_cache_manifest(

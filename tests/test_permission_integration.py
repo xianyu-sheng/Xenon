@@ -85,7 +85,7 @@ def test_escalation_runs_on_the_kernel_with_the_live_level(monkeypatch):
     )
     repl.agent_context.update({"_execution_level": int(ExecutionLevel.WRITE)})
 
-    repl._run_react_engine("帮我创建 hello.py", ["openai/gpt-4o"])
+    repl._run_loop_turn("帮我创建 hello.py", ["openai/gpt-4o"])
 
     policy = captured["execution_policy"]
     assert policy.level is ExecutionLevel.WRITE

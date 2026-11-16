@@ -235,3 +235,32 @@ def test_an_unknown_capability_filter_says_so() -> None:
     effect = receipt.effects[0]
     assert effect.matches == ()
     assert "Unknown capability filter" in effect.note
+
+
+def test_a_vcs_receipt_carries_the_git_output(tmp_path) -> None:
+    """`git status` must reach the model, not just "status: ok".
+
+    Measured run C9: both git calls executed and returned exit 0, yet the
+    receipt listed no effects and no output, so the model answered that it
+    "never retrieved the git status/log content".  The receipt is the only
+    channel the next step reads; it has to carry the bounded observation the
+    executor already builds.
+    """
+
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "dirty.txt").write_text("x\n", encoding="utf-8")
+    gateway = _gateway(tmp_path, PermissionMode.READ_ONLY)
+    call = ToolCall(
+        spec_name="git",
+        params={"git_command": "status", "action": "--short"},
+        capability=Capability.VCS,
+    )
+
+    receipt = gateway.execute(call, _Services(str(tmp_path)))
+
+    assert receipt.status.value == "ok"
+    assert "dirty.txt" in receipt.observation
+    rebuilt = receipt_from_payload(receipt_to_payload(receipt))
+    assert "dirty.txt" in rebuilt.observation

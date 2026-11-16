@@ -23,6 +23,7 @@ from tests.kernel.test_north_star import ScriptedStrategy, _runtime
 from xenon.kernel.contracts import (
     CallTool,
     Capability,
+    Finish,
     ReceiptStatus,
     RequestEscalation,
     TaskPhase,
@@ -78,6 +79,15 @@ class _Gateway:
             tool=call.spec_name,
             status=ReceiptStatus.OK,
         )
+
+
+class _BoundaryGateway(_Gateway):
+    """Uses the real gateway preflight, so the refusal text is not faked."""
+
+    def preflight(self, action: Any) -> str:
+        from xenon.catalog.gateway import LegacyToolGateway
+
+        return LegacyToolGateway.preflight(self, action)
 
 
 class _ShellCatalog:
@@ -156,6 +166,14 @@ def _decisions(ledger) -> list[dict]:
         event.payload
         for event in ledger.read()
         if event.kind is EventKind.POLICY_DECISION
+    ]
+
+
+def _controls(ledger) -> list[dict]:
+    return [
+        event.payload
+        for event in ledger.read()
+        if event.kind is EventKind.CONTROL_DECISION
     ]
 
 
@@ -510,3 +528,159 @@ def test_a_broken_scope_description_does_not_fail_the_grant(tmp_path) -> None:
     )
 
     assert gateway.calls, "the grant must still be issued"
+
+
+# ── 6. a boundary refusal names the way to ask ───────────────────
+
+
+def test_a_boundary_refusal_tells_the_model_it_may_ask(tmp_path) -> None:
+    """A vetoed call is a decision with a form of appeal, not a dead end.
+
+    Real session (`.exe` count in System32): the shell call was refused by the
+    read-only boundary twice and the model answered from the truncated layout
+    — the user saw "这里没有弹出授权".  The next view must name
+    ``request_escalation`` and the exact call.
+    """
+
+    ledger = Ledger.in_memory("esc-advice")
+    gateway = _Gateway()
+    runtime = _shell_runtime(ledger, _read_only(tmp_path), _Yes(True), gateway)
+    seen: list[str] = []
+
+    class _Capture:
+        def propose(self, view: Any) -> Any:
+            seen.append("\n".join(getattr(view, "notes", ()) or ()))
+            if len(seen) == 1:
+                return _shell("Get-ChildItem -Recurse -File")
+            return Finish("could not count")
+
+    runtime.run(_spec("esc-advice"), _Capture())
+
+    assert gateway.calls == [], "a refused call must never reach the gateway"
+    assert len(seen) >= 2
+    assert "request_escalation" in seen[1]
+    assert "shell" in seen[1]
+
+
+def test_a_step_reviewers_escalation_reaches_the_human_and_runs(tmp_path) -> None:
+    """The live loop must be able to ask from inside a plan step.
+
+    Measured run (read-only count of .py files): the step actor's ``shell``
+    call was vetoed, the step reviewer proposed ``verify`` (also vetoed), the
+    step was released, and the model delivered a number copied from a
+    truncated layout -- the user saw "这里没有弹出授权".  The reviewer is the
+    phase that gets a say after a step actor finishes, so its escalation has
+    to reach the approval panel and the granted call has to actually run.
+    """
+
+    from xenon.kernel.contracts import Finish, PlanProposal, StepContract, StepKind
+    from xenon.kernel.strategies import LoopProfile, LoopStrategy
+
+    command = "(Get-ChildItem *.py).Count"
+    ledger = Ledger.in_memory("esc-step")
+    approver = _Yes(True)
+    gateway = _Gateway()
+    runtime = _shell_runtime(ledger, _read_only(tmp_path), approver, gateway)
+
+    step = StepContract(
+        id=1,
+        kind=StepKind.EXECUTE,
+        intent=_shell(command).intent,
+        targets=(".",),
+    )
+    proposals = {"n": 0}
+
+    def step_actor(view: Any, active: Any, calls: int) -> Any:
+        proposals["n"] += 1
+        # 1: the refused call; 2: give up on the step; 3: the granted call.
+        return _shell(command) if proposals["n"] in (1, 3) else Finish("step done")
+
+    reviewed: list[int] = []
+
+    def step_reviewer(view: Any, active: Any, action: Any) -> Any:
+        reviewed.append(getattr(active, "id", 0))
+        return _escalate(command, "listing files needs the shell")
+
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, step_reflect=True),
+        actor=lambda view: Finish("done"),
+        step_actor=step_actor,
+        planner=lambda view: PlanProposal(steps=(step,)),
+        step_reviewer=step_reviewer,
+    )
+
+    result = runtime.run(_spec("esc-step"), strategy)
+
+    assert reviewed == [1], "the step reviewer must be consulted once"
+    assert approver.asked == [("shell", {"command": command})]
+    assert gateway.calls == ["run_shell"], "the granted call must execute"
+    assert result.phase is not TaskPhase.BLOCKED
+    approvals = [
+        event.payload
+        for event in ledger.read()
+        if event.kind is EventKind.USER_APPROVAL
+    ]
+    assert approvals and approvals[0]["escalation"] is True
+    assert approvals[0]["approved"] is True
+
+
+def test_an_escalation_the_tool_always_refuses_never_reaches_the_human(
+    tmp_path,
+) -> None:
+    """An approval cannot make the tool boundary run a call it forbids.
+
+    Measured run (read-only count of ``.txt`` files): the model asked to run
+    ``python -c ...``, the human approved, and the receipt said "blocked by the
+    host security filter".  The model re-asked twice, the refusal cap blocked
+    the turn, and the answer was empty.  The tool's own boundary is asked
+    *before* the human: a call it always refuses is turned back with the
+    alternative it names, and the loop may still take another route.
+    """
+
+    ledger = Ledger.in_memory("esc-boundary")
+    approver = _Yes(True)
+    gateway = _BoundaryGateway()
+    runtime = _shell_runtime(ledger, _read_only(tmp_path), approver, gateway)
+
+    result = runtime.run(
+        _spec("esc-boundary"),
+        ScriptedStrategy(
+            [
+                _escalate('python -c "print(6*7)"'),
+                # The route the refusal's advice names: a listing command.
+                _escalate("Get-ChildItem -Path . -File"),
+                _shell("Get-ChildItem -Path . -File"),
+            ]
+        ),
+    )
+
+    # Only the runnable call was ever put in front of the human.
+    assert approver.asked == [("shell", {"command": "Get-ChildItem -Path . -File"})]
+    boundary = [
+        item for item in _controls(ledger) if "tool boundary refuses" in str(item.get("reason"))
+    ]
+    assert boundary, "the tool boundary refusal must be in the ledger"
+    assert boundary[0]["decision"] == "refuse"
+    assert boundary[0]["continued"] is True, "the loop must be allowed to reroute"
+    assert gateway.calls == ["run_shell"], "the runnable call must still execute"
+    assert result.phase is not TaskPhase.BLOCKED
+
+
+def test_repeated_boundary_refusals_still_stop_the_turn(tmp_path) -> None:
+    """Continuing after a refusal is not permission to loop forever."""
+
+    ledger = Ledger.in_memory("esc-boundary-loop")
+    approver = _Yes(True)
+    runtime = _shell_runtime(
+        ledger, _read_only(tmp_path), approver, _BoundaryGateway()
+    )
+
+    result = runtime.run(
+        _spec("esc-boundary-loop"),
+        ScriptedStrategy([_escalate('python -c "x"') for _ in range(6)]),
+    )
+
+    assert result.phase is TaskPhase.BLOCKED
+    assert approver.asked == []
+    refusals = [item for item in _controls(ledger) if item.get("decision") == "refuse"]
+    assert refusals and refusals[-1]["continued"] is False

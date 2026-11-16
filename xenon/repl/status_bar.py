@@ -206,8 +206,11 @@ class StatusBar:
             return Panel("[dim]状态不可用[/dim]", style="dim", height=1, padding=(0, 1))
 
     def _render_impl(self) -> Panel:
+        from xenon.modes import describe_loop
+
         stats = self.ctx_mgr.stats()
         mode = self.registry.get_current_mode()
+        loop_line = describe_loop(getattr(mode, "loop", None))
         used = stats["estimated_tokens"]
         max_tok = stats["max_tokens"]
         pct_val = self._parse_pct(stats["usage_ratio"])
@@ -226,7 +229,7 @@ class StatusBar:
         status_parts.extend(
             [
                 f"[bold cyan]模型:[/bold cyan] {escape(model_display)}",
-                f"[bold cyan]模式:[/bold cyan] {mode.name}",
+                f"[bold cyan]循环:[/bold cyan] {escape(loop_line)}",
                 f"[bold cyan]Token:[/bold cyan] {bar} {used:,}/{max_tok:,} ({stats['usage_ratio']})",
             ]
         )

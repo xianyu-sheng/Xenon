@@ -1,0 +1,1200 @@
+  /sub-agent  委派子 Agent 执行任务（单循环的阶段配置 + 并行）
+  /cost  显示缓存命中率 + 费用明细（本地计算，不消耗 API）
+  /cache  解释缓存状态与命中原因（完全本地，不调用 API）
+
+❯ /▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:11 · ⏸
+  /code  生成代码并写入文件，可选运行
+  /cost  显示缓存命中率 + 费用明细（本地计算，不消耗 API）
+  /cache  解释缓存状态与命中原因（完全本地，不调用 API）
+  /clear  清空对话历史
+  /context  显示当前上下文状态
+  /compact  压缩对话历史，释放 context window
+  /config  查看或保存当前配置
+  /canvas-design  [技能] Create beautiful visual art in .png and .pdf documents using design philosophy. You should use this skill when the…
+
+❯ /c▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:11 · ⏸
+  /code  生成代码并写入文件，可选运行
+  /cost  显示缓存命中率 + 费用明细（本地计算，不消耗 API）
+  /context  显示当前上下文状态
+  /compact  压缩对话历史，释放 context window
+  /config  查看或保存当前配置
+  /skill-discover  浏览/搜索 Skill 库
+  /arkcli-api-explorer  [技能] Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task. Use for regis…
+  /arkcli-code-example  [技能] arkcli +code-example：为指定基础模型生成多语言（Python / Go / Java / Node / curl）调用示例代码并写入本地文件…
+
+❯ /co▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:11 · ⏸
+  /context  显示当前上下文状态
+  /config  查看或保存当前配置
+  /arkcli-config  [技能] arkcli 本地配置管理。处理 profile 配置归因、update.mode 的 automatic/disabled 策略、config reset 与历史 yaml 排障…
+  /arkcli-connect  [技能] arkcli +connect：将 arkcli 内嵌的 AI skills 安装到本机检测到的所有 AI Agent 中，支持安装、列出已支持 agent、卸载…
+  /arkcli-infer-endpoint  [技能] arkcli 推理接入点管理与显式 raw CRUD 创建能力。**正向触发：用户明确要求脚本化 / CI / 无护栏 / 原始 raw CRU…
+  /arkcli-onboard  [技能] arkcli 接入向导(workflow):把某个模型接入到自己的应用/服务的端到端引导 —— 从'我想用某模型'到拿到可调用的 Endpoint(…
+
+❯ /con▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:11 · ⏸
+  /context  显示当前上下文状态
+  /arkcli-connect  [技能] arkcli +connect：将 arkcli 内嵌的 AI skills 安装到本机检测到的所有 AI Agent 中，支持安装、列出已支持 agent、卸载…
+  /arkcli-infer-endpoint  [技能] arkcli 推理接入点管理与显式 raw CRUD 创建能力。**正向触发：用户明确要求脚本化 / CI / 无护栏 / 原始 raw CRU…
+
+❯ /cont▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:11 · ⏸
+  /context  显示当前上下文状态
+
+❯ /conte▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:11 · ⏸
+  /context  显示当前上下文状态
+
+❯ /contex▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:11 · ⏸
+
+❯ /context▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:11 · ⏸
+
+… 运行中 /context
+
+❯ ▏
+/context
+  上下文状态:
+
+    消息总数: 2
+    用户消息: 1
+    助手消息: 1
+    估算 Token: 1,035 / 128,000 (0.8%)
+    可回退次数: 0
+    需要压缩: 否
+
+  AgentContext 变量:
+    _session_id: 20261116-141432-71320-16858b
+    _mcp_registry: <xenon.mcp.registry.MCPRegistry object at 0x00000163DE15ACF0>
+    _protected_write_paths: ()
+    _protected_write_others: False
+    _allowed_write_paths: ()
+    _execution_level: 0
+    _execution_reason: 确定性约束优先：用户明确要求不使用工具
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:11 · ⏸
+
+… 运行中 /context
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:11 · ⏸
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:12 · ⏸
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:12 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+  /trust-hooks  信任并启用项目 .xenon/hooks.yaml（指纹记录，防克隆仓库无审批执行）
+  /run  执行当前配置的工作流
+  /ask  向指定模型发送单次提问（不进入多轮对话）
+  /code  生成代码并写入文件，可选运行
+  /sub-agent  委派子 Agent 执行任务（单循环的阶段配置 + 并行）
+  /cost  显示缓存命中率 + 费用明细（本地计算，不消耗 API）
+  /cache  解释缓存状态与命中原因（完全本地，不调用 API）
+
+❯ /▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:12 · ⏸
+  /memory  管理跨会话记忆
+  /models  列出所有已注册的模型及其角色分配
+  /mode  查看当前循环（单一循环，无需切换）
+  /model  交互式切换模型
+  /mcp  管理 MCP 服务器连接
+  /max-steps  设置单回合全局步数上限（off = 不限）
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+  /set_model  交互式选择或配置模型
+
+❯ /m▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:12 · ⏸
+  /models  列出所有已注册的模型及其角色分配
+  /mode  查看当前循环（单一循环，无需切换）
+  /model  交互式切换模型
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+  /memory  管理跨会话记忆
+  /set_model  交互式选择或配置模型
+  /remove_model  移除一个模型
+  /import_models  批量导入模型配置文件(YAML/JSON)到注册表与调用池
+
+❯ /mo▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:12 · ⏸
+  /models  列出所有已注册的模型及其角色分配
+  /mode  查看当前循环（单一循环，无需切换）
+  /model  交互式切换模型
+  /set_model  交互式选择或配置模型
+  /remove_model  移除一个模型
+  /import_models  批量导入模型配置文件(YAML/JSON)到注册表与调用池
+  /reload_models  从文件重载模型到调用池(默认 ~/.xenon/models.yaml)
+  /arkcli-custommodel  [技能] arkcli 自定义模型仓库管理：从 TOS 导入自定义模型、查询/筛选自定义模型、查看详情、改名、删除、查询可用量化模式…
+
+❯ /mod▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:12 · ⏸
+  /mode  查看当前循环（单一循环，无需切换）
+  /models  列出所有已注册的模型及其角色分配
+  /model  交互式切换模型
+  /set_model  交互式选择或配置模型
+  /remove_model  移除一个模型
+  /import_models  批量导入模型配置文件(YAML/JSON)到注册表与调用池
+  /reload_models  从文件重载模型到调用池(默认 ~/.xenon/models.yaml)
+  /arkcli-custommodel  [技能] arkcli 自定义模型仓库管理：从 TOS 导入自定义模型、查询/筛选自定义模型、查看详情、改名、删除、查询可用量化模式…
+
+❯ /mode▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:12 · ⏸
+
+… 运行中 /mode
+
+❯ ▏
+/mode
+  当前循环: 单循环 · Plan → React（逐步） → Reflect（每步校验）
+  Xenon 只有一个循环：Plan（规划）→ React（逐步执行）→ Reflect（按事实校验），未完成时带着已有证据自动续轮。阶段固定，无需切换。
+  运行规则: 未完成自动续轮（最多 3 轮）；单轮步数上限 1024；停滞 180 秒让位；能否交付由确定性证据判定，不由循环自称。
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:12 · ⏸
+
+… 运行中 /mode
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:12 · ⏸
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:13 · ⏸
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:13 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+  /trust-hooks  信任并启用项目 .xenon/hooks.yaml（指纹记录，防克隆仓库无审批执行）
+  /run  执行当前配置的工作流
+  /ask  向指定模型发送单次提问（不进入多轮对话）
+  /code  生成代码并写入文件，可选运行
+  /sub-agent  委派子 Agent 执行任务（单循环的阶段配置 + 并行）
+  /cost  显示缓存命中率 + 费用明细（本地计算，不消耗 API）
+  /cache  解释缓存状态与命中原因（完全本地，不调用 API）
+
+❯ /▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:13 · ⏸
+  /trust-hooks  信任并启用项目 .xenon/hooks.yaml（指纹记录，防克隆仓库无审批执行）
+  /tools  查看所有可用工具类型
+  /thinking  切换推理过程显示（折叠/展开）
+  /sub-agent  委派子 Agent 执行任务（单循环的阶段配置 + 并行）
+  /cost  显示缓存命中率 + 费用明细（本地计算，不消耗 API）
+  /set_model  交互式选择或配置模型
+  /import_models  批量导入模型配置文件(YAML/JSON)到注册表与调用池
+  /set_profile  设置性能偏好(fast|cost|balanced),影响模型调度权重
+
+❯ /t▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:13 · ⏸
+  /tools  查看所有可用工具类型
+  /trust-hooks  信任并启用项目 .xenon/hooks.yaml（指纹记录，防克隆仓库无审批执行）
+  /set_model  交互式选择或配置模型
+  /import_models  批量导入模型配置文件(YAML/JSON)到注册表与调用池
+  /set_profile  设置性能偏好(fast|cost|balanced),影响模型调度权重
+  /set_role  为角色设置模型优先级
+  /debug-tokens  显示详细的 token 计算信息
+  /history  查看路由调度历史（v0.4.0）
+
+❯ /to▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:13 · ⏸
+  /tools  查看所有可用工具类型
+  /trust-hooks  信任并启用项目 .xenon/hooks.yaml（指纹记录，防克隆仓库无审批执行）
+  /arkcli-custommodel  [技能] arkcli 自定义模型仓库管理：从 TOS 导入自定义模型、查询/筛选自定义模型、查看详情、改名、删除、查询可用量化模式…
+
+❯ /too▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:13 · ⏸
+  /tools  查看所有可用工具类型
+  /arkcli-custommodel  [技能] arkcli 自定义模型仓库管理：从 TOS 导入自定义模型、查询/筛选自定义模型、查看详情、改名、删除、查询可用量化模式…
+
+❯ /tool▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:13 · ⏸
+
+❯ /tools▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:13 · ⏸
+
+… 运行中 /tools
+
+❯ ▏
+/tools
+  可用工具类型:
+
+    command — 执行终端命令
+      参数: action='dir'
+
+    write_file — 写入文件
+      参数: file_path, content
+
+    read_file — 读取文件
+      参数: file_path
+
+    edit_file — 精确编辑文件（查找替换）
+      参数: file_path, old_text, new_text
+
+    create_directory — 创建目录
+      参数: file_path
+
+    list_files — 目录遍历（glob 模式）
+      参数: file_path, pattern, max_depth
+
+    search_files — 文件内容搜索
+      参数: file_path, search_pattern, file_filter
+
+    git — Git 操作
+      参数: git_command='status|diff|log|add|commit'
+
+    web_fetch — 抓取网页内容
+      参数: url
+
+    docs_fetch — llms.txt 优先的官方文档检索
+      参数: url, query, max_pages, max_chars
+
+    batch_write — 批量写入多个文件
+      参数: files=[{path, content}, ...]
+
+    batch_edit — 批量编辑多个文件
+      参数: edits=[{file_path, old_text, new_text}, ...]
+
+    code_index — 代码符号搜索（AST 索引）
+      参数: search_pattern, file_path
+
+    ast_analyze — Python 代码结构分析
+      参数: file_path
+
+    refactor — 重构：重命名/清理导入/分析
+      参数: refactor_action, old_name, new_name
+
+    diff_preview — 预览文件修改 diff
+      参数: file_path, old_text, new_text
+
+    mcp_call — 调用 MCP 外部工具
+      参数: tool_name, tool_args
+
+    github_fetch — GitHub 仓库操作（列出文件/获取内容/README）
+      参数: repo, github_action, github_path, branch
+
+    clone_repo — 克隆 GitHub 仓库到本地并分析代码结构
+      参数: repo, branch
+
+    lsp_goto_def — 跳转到 Python 符号定义（跨文件）
+      参数: file_path, line, column
+
+    lsp_find_refs — 查找 Python 符号的所有引用
+      参数: file_path, line, column
+
+    lsp_hover — 获取 Python 符号的类型和文档
+      参数: file_path, line, column
+
+    lsp_diagnostics — 检查 Python 文件语法错误
+      参数: file_path
+
+    lsp_symbols — 列出 Python 文件所有符号
+      参数: file_path
+
+  工具可在 YAML 工作流中通过 action_type 字段使用。
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:13 · ⏸
+
+… 运行中 /tools
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:13 · ⏸
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+  /trust-hooks  信任并启用项目 .xenon/hooks.yaml（指纹记录，防克隆仓库无审批执行）
+  /run  执行当前配置的工作流
+  /ask  向指定模型发送单次提问（不进入多轮对话）
+  /code  生成代码并写入文件，可选运行
+  /sub-agent  委派子 Agent 执行任务（单循环的阶段配置 + 并行）
+  /cost  显示缓存命中率 + 费用明细（本地计算，不消耗 API）
+  /cache  解释缓存状态与命中原因（完全本地，不调用 API）
+
+❯ /▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+  /memory  管理跨会话记忆
+  /models  列出所有已注册的模型及其角色分配
+  /mode  查看当前循环（单一循环，无需切换）
+  /model  交互式切换模型
+  /mcp  管理 MCP 服务器连接
+  /max-steps  设置单回合全局步数上限（off = 不限）
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+  /set_model  交互式选择或配置模型
+
+❯ /m▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+  /memory  管理跨会话记忆
+  /set_model  交互式选择或配置模型
+  /remove_model  移除一个模型
+  /models  列出所有已注册的模型及其角色分配
+  /import_models  批量导入模型配置文件(YAML/JSON)到注册表与调用池
+  /reload_models  从文件重载模型到调用池(默认 ~/.xenon/models.yaml)
+  /mode  查看当前循环（单一循环，无需切换）
+  /model  交互式切换模型
+
+❯ /me▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+  /memory  管理跨会话记忆
+  /remove_model  移除一个模型
+
+❯ /mem▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+  /memory  管理跨会话记忆
+  /remove_model  移除一个模型
+
+❯ /memo▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+  /memory  管理跨会话记忆
+
+❯ /memor▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+
+❯ /memory▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+
+❯ /memory ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+
+❯ /memory l▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+
+❯ /memory le▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+
+❯ /memory les▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+
+❯ /memory less▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+
+❯ /memory lesso▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+
+❯ /memory lesson▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+
+❯ /memory lessons▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+
+… 运行中 /memory
+
+❯ ▏
+/memory
+  暂无教训。失败会由确定性事件提议、存储，并在同类复发时聚类成规则。
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+
+… 运行中 /memory
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:14 · ⏸
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+  /trust-hooks  信任并启用项目 .xenon/hooks.yaml（指纹记录，防克隆仓库无审批执行）
+  /run  执行当前配置的工作流
+  /ask  向指定模型发送单次提问（不进入多轮对话）
+  /code  生成代码并写入文件，可选运行
+  /sub-agent  委派子 Agent 执行任务（单循环的阶段配置 + 并行）
+  /cost  显示缓存命中率 + 费用明细（本地计算，不消耗 API）
+  /cache  解释缓存状态与命中原因（完全本地，不调用 API）
+
+❯ /▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+  /pool  查看模型调用池（v0.4.0）
+  /provider  查看已配置的厂商和可用模型
+  /plan  切换计划模式；审批 kernel 待确认计划
+  /project  查看/刷新项目上下文
+  /import_models  批量导入模型配置文件(YAML/JSON)到注册表与调用池
+  /set_profile  设置性能偏好(fast|cost|balanced),影响模型调度权重
+  /mcp  管理 MCP 服务器连接
+
+❯ /p▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+  /import_models  批量导入模型配置文件(YAML/JSON)到注册表与调用池
+  /set_profile  设置性能偏好(fast|cost|balanced),影响模型调度权重
+  /provider  查看已配置的厂商和可用模型
+  /optimize  切换输入指令自动优化
+  /project  查看/刷新项目上下文
+  /workspace  查看/扩展文件沙箱可写的目录（进程内有效）
+  /arkcli-api-explorer  [技能] Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task. Use for regis…
+
+❯ /pe▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+  /provider  查看已配置的厂商和可用模型
+  /arkcli-api-explorer  [技能] Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task. Use for regis…
+  /arkcli-helper  [技能] arkcli helper：为 Claude Code / Codex / OpenCode / OpenClaw / Hermes / ZCode 配置火山方舟 Plan 或 Platform Endpoin…
+
+❯ /per▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+
+❯ /perm▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+
+❯ /permi▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+
+❯ /permis▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+
+❯ /permiss▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+
+❯ /permissi▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+
+❯ /permissio▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+
+❯ /permission▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+
+❯ /permissions▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+
+… 运行中 /permissions
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 选择权限模式                                                                                                                             │
+│ 1. default — 写盘/命令需要确认  2. accept_edits — 工作区内写盘直接执行  3. plan — 只读：只产出方案  4. bypass —                          │
+│ 全部放行（危险；破坏性命令与 push 仍需确认，无通道时拒绝）                                                                               │
+│ █                                                                                                                                        │
+│ Enter 确认                                                                                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+
+❯ ▏
+/permissions
+  执行级别: 未初始化
+  当前没有记住的授权。
+  · 审批时按 y = 本次允许，t = 本轮内该能力不再问，a = 本会话都允许（仅这条命令/路径），n = 拒绝。
+  · 切换级别：/permissions default|accept_edits|plan|bypass
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:16 · ⏸
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:18 · ⏸
+
+❯ ▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:18 · ⏸
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+  /trust-hooks  信任并启用项目 .xenon/hooks.yaml（指纹记录，防克隆仓库无审批执行）
+  /run  执行当前配置的工作流
+  /ask  向指定模型发送单次提问（不进入多轮对话）
+  /code  生成代码并写入文件，可选运行
+  /sub-agent  委派子 Agent 执行任务（单循环的阶段配置 + 并行）
+  /cost  显示缓存命中率 + 费用明细（本地计算，不消耗 API）
+  /cache  解释缓存状态与命中原因（完全本地，不调用 API）
+
+❯ /▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:18 · ⏸
+  /exit  退出 Xenon
+  /edit  编辑代码文件（支持 LLM 辅助）
+  /evidence  查看 L0 证据账本（结构化会话摘要 + 哈希链自证）
+  /permissions  权限模式 + 记住的授权（查看/切换/撤销）
+  /code  生成代码并写入文件，可选运行
+  /sub-agent  委派子 Agent 执行任务（单循环的阶段配置 + 并行）
+  /cache  解释缓存状态与命中原因（完全本地，不调用 API）
+  /fix-cache  检查或启用安全的缓存优化（/cache optimize 的别名）
+
+❯ /e▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:18 · ⏸
+  /exit  退出 Xenon
+  /context  显示当前上下文状态
+  /arkcli-api-explorer  [技能] Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task. Use for regis…
+  /arkcli-code-example  [技能] arkcli +code-example：为指定基础模型生成多语言（Python / Go / Java / Node / curl）调用示例代码并写入本地文件…
+
+❯ /ex▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:18 · ⏸
+  /exit  退出 Xenon
+
+❯ /exi▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:18 · ⏸
+
+❯ /exit▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:18 · ⏸
+
+❯ ▏
+
+╭───────────────────────────────────────────────────────────╮
+│ 📊 本次会话省钱报告                                       │
+│ deepseek-v4-flash  1 次 · 1,035t · 💾0% · 💰¥0.0011       │
+│ 合计  1,035 tokens · 💾0% · 💰¥0.0011 · 💡省 ¥0.0000 (0%) │
+╰───────────────────────────────────────────────────────────╯
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  answer_only  ░░░░░░░░░░ 0.8% 128K
+💾0% · 💰<0.01 · 2m · 00:18 · ⏸
+
+❯ ▏
+
+]0;C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe\PS C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\commands-141310-70312> 

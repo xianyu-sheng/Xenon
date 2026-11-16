@@ -5,9 +5,11 @@ happened.  Writing it here keeps "the ledger is the only truth" true for every
 turn without moving streaming chat into the kernel loop (that move would lose
 token streaming and rewrite how the conversation prompt is assembled).
 
-Ledgers live in a ``chat/`` subdirectory of the REPL ledger directory:
-``kernel/session_history.py`` scans only the top level, so a greeting must not
-push a real task out of the model's five-line window.
+Ledgers live in a ``chat/`` subdirectory of the REPL ledger directory, and
+``kernel/session_history.py`` scans both that subdirectory and its parent:
+"earlier turns" means every turn of the session, including an explanation that
+never ran a tool — a kernel prompt that could not see one answered "上一轮内容
+不存在" when the user asked about its first point.
 
 Writes are best-effort.  A ledger failure is logged at debug level and never
 breaks the reply -- the answer is the product; the record is the evidence.
@@ -27,7 +29,7 @@ from xenon.ledger.store import Ledger, open_shared
 
 logger = logging.getLogger(__name__)
 
-#: Subdirectory under the REPL ledger directory (not scanned by session history).
+#: Subdirectory under the REPL ledger directory; session history scans it too.
 CHAT_SUBDIR = "chat"
 
 #: Phase names are the kernel's own; a chat turn walks the same shape so the

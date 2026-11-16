@@ -9,7 +9,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from xenon.repl.command_groups.common import confirm_action
+from xenon.repl.command_groups.common import (
+    confirm_action,
+)
+from xenon.repl.command_groups.common import (
+    ordered_model_candidates as _ordered_model_candidates,
+)
 from xenon.repl.command_registry import command_handler, register_command
 
 if TYPE_CHECKING:
@@ -148,6 +153,7 @@ def _cmd_code(
     registry: ModelRegistry,
     ctx_mgr: ContextManager,
     session_state: dict,
+    repl: Any = None,
     **kwargs: Any,
 ) -> str:
     import re
@@ -186,10 +192,10 @@ def _cmd_code(
     if not task:
         return "请提供任务描述"
 
-    # 获取模型
-    model_ids = registry.get_role_priority("coder") or registry.get_role_priority(
-        "planner"
-    )
+    # 获取模型：用户显式选择的模型优先，然后 coder/planner 角色优先级。
+    model_ids = _ordered_model_candidates(registry, repl, "coder")
+    if not model_ids:
+        model_ids = _ordered_model_candidates(registry, repl, "planner")
     if not model_ids:
         return "❌ 未配置模型。请先 /set_model"
 
@@ -203,22 +209,37 @@ def _cmd_code(
 2. 代码必须完整可运行
 3. 包含必要的 import 和注释"""
 
-    try:
-        model = registry.get_model_by_id(model_ids[0])
+    # A candidate failing (dead proxy, 402/401, timeout) must not end the
+    # command: the same "try the next model" contract the shortcut generator
+    # already uses keeps the session on the model the user actually chose.
+    code = ""
+    used_model = ""
+    failures: list[str] = []
+    for model_id in model_ids:
+        model = registry.get_model_by_id(model_id)
         credentials = None
         if model and model.api_key and "/" in model.model_id:
             credentials = {model.model_id.split("/", 1)[0].lower(): model.api_key}
-        code = chat_completion(
-            model_ids[0],
-            [{"role": "user", "content": prompt}],
-            max_tokens=model.max_tokens if model else 4096,
-            temperature=model.temperature if model else 0.7,
-            credentials=credentials,
-            base_url=(model.base_url or None) if model else None,
-            reasoning_effort=(model.reasoning_effort or None) if model else None,
+        try:
+            code = chat_completion(
+                model_id,
+                [{"role": "user", "content": prompt}],
+                max_tokens=model.max_tokens if model else 4096,
+                temperature=model.temperature if model else 0.7,
+                credentials=credentials,
+                base_url=(model.base_url or None) if model else None,
+                reasoning_effort=(model.reasoning_effort or None) if model else None,
+            )
+            used_model = model_id
+            break
+        except Exception as e:  # noqa: BLE001 - next candidate is the fallback
+            failures.append(f"{model_id}: {e}")
+            continue
+    if not used_model:
+        detail = failures[-1] if failures else "没有可尝试的模型"
+        return (
+            f"❌ 代码生成失败（已尝试 {len(model_ids)} 个模型）: {detail}"
         )
-    except Exception as e:
-        return f"❌ 代码生成失败: {e}"
 
     # 清理代码（移除可能的 markdown 标记）
     code = re.sub(r"^```\w*\n?", "", code, flags=re.MULTILINE)
@@ -237,8 +258,13 @@ def _cmd_code(
 
     # 写入文件
     path = Path(file_path)
+    existed = path.exists()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(code, encoding="utf-8")
+    recorder = getattr(ctx_mgr, "record_file_changes", None)
+    if callable(recorder):
+        target = str(path.absolute())
+        recorder(created=[] if existed else [target], modified=[target] if existed else [])
 
     result_lines = [f"✅ 代码已写入: {path.absolute()}"]
     result_lines.append(f"  语言: {lang}")
@@ -246,7 +272,7 @@ def _cmd_code(
 
     # 记录到 context
     ctx_mgr.add_user_message(f"/code {task}")
-    ctx_mgr.add_assistant_message(f"生成代码并写入 {path}", model_used=model_ids[0])
+    ctx_mgr.add_assistant_message(f"生成代码并写入 {path}", model_used=used_model)
 
     # 可选运行
     if run_code and lang == "python":
@@ -413,12 +439,18 @@ def _cmd_sub_agent(*, args: str, session_state: dict, repl=None, **kwargs: Any) 
             f"（可用: {', '.join(sorted(CHILD_PROFILES))}）"
         )
 
-    model_ids = [
+    pool_ids = [
         e.model_id
         for e in (repl.model_pool.get_healthy() or repl.model_pool.list_all())
     ]
-    if not model_ids:
+    if not pool_ids:
         return "❌ 模型池为空，请先运行 /setup 配置模型。"
+    # The pool is insertion-ordered, so children inherited whatever sat first in
+    # models.yaml — a dead proxy — even when the session was explicitly started
+    # on / switched to a working model.  The session's choice leads here for the
+    # same reason it leads kernel turns and /code.
+    preferred = _ordered_model_candidates(repl.registry, repl)
+    model_ids = preferred + [m for m in pool_ids if m not in preferred]
 
     workspace = (
         getattr(getattr(repl, "project_ctx", None), "root", None) or Path.cwd()

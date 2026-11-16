@@ -92,15 +92,18 @@ def test_mode_no_args():
 
     reg = ModelRegistry()
     result = _cmd_mode(args="", registry=reg, session_state={})
-    assert "当前模式" in result
+    assert "当前循环" in result
+    assert "无需切换" in result
 
 
-def test_mode_list_shows_builtin():
+def test_mode_does_not_list_alternative_modes():
+    """There is one loop: the answer must not advertise a mode menu."""
     from xenon.repl.model_registry import ModelRegistry
 
     reg = ModelRegistry()
     result = _cmd_mode(args="", registry=reg, session_state={})
-    assert "可用模式" in result
+    assert "可用模式" not in result
+    assert "plan-execute" not in result
 
 
 def test_set_role_needs_args():
@@ -147,6 +150,46 @@ def test_remove_model_by_model_id():
     reg.add_model("custom/glm-5-2", "alias-x")
     result = _cmd_remove_model(args="custom/glm-5-2", registry=reg)
     assert "已移除" in result
+
+
+def test_remove_model_persists_to_the_loaded_file(tmp_path):
+    """An imported model removed here must not come back next launch.
+
+    ``/import_models`` writes ``models.yaml``; removal was memory-only.
+    Persistence goes back to the file the registry was loaded from — never a
+    guessed path, so a test/in-process registry cannot clobber the user list.
+    """
+
+    from xenon.repl.model_registry import ModelRegistry
+
+    cfg = tmp_path / "models.yaml"
+    cfg.write_text(
+        "models:\n"
+        "  imported-a:\n    model_id: vendor/imported-a\n"
+        "  imported-b:\n    model_id: vendor/imported-b\n",
+        encoding="utf-8",
+    )
+    reg = ModelRegistry()
+    reg.load_from_file(cfg)
+
+    result = _cmd_remove_model(args="imported-a", registry=reg)
+
+    assert "已移除" in result and "已持久化" in result
+    assert "imported-a" not in reg.models
+    reloaded = ModelRegistry()
+    reloaded.load_from_file(cfg)
+    assert "imported-a" not in reloaded.models
+    assert "imported-b" in reloaded.models
+
+
+def test_remove_model_says_derived_models_return(tmp_path):
+    from xenon.repl.model_registry import ModelRegistry
+
+    reg = ModelRegistry()
+    reg.add_model("deepseek/deepseek-v4-flash", "ds", derived=True)
+    result = _cmd_remove_model(args="ds", registry=reg)
+    assert "已移除" in result
+    assert "凭据派生" in result
     assert "alias-x" not in reg.models
 
 

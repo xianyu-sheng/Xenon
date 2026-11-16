@@ -6,7 +6,9 @@ tasks:
   - id: repl-mode
     command: /mode
     assertions:
-      answer_contains_any: ["react", "思考", "mode"]
+      # One loop: the command describes the fixed phases, it no longer offers
+      # the removed paradigm menu.
+      answer_contains_any: ["当前循环", "无需切换"]
   - id: repl-tools
     command: /tools
     assertions:

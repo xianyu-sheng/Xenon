@@ -187,6 +187,58 @@ def test_evidence_never_reads_verified_while_debt_is_open():
     assert status is not EvidenceStatus.VERIFIED
 
 
+def test_a_satisfied_finalizer_verdict_never_downgrades_evidence():
+    """The delivery gate is not a fact.
+
+    A finalizer-backed run that bound every step to a receipt was still
+    labelled ``partial`` because the gate's own satisfied verdict (which
+    deliberately has no ``fact_ids``) was included in the evidence set.
+    """
+
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    runtime._spec = _spec()
+    runtime._verdicts.extend(
+        (
+            Verdict(
+                obligation_id="e1",
+                stage=VerificationStage.V1,
+                status=VerdictStatus.SATISFIED,
+                fact_ids=("fact-1",),
+            ),
+            Verdict(
+                obligation_id="finalizer",
+                stage=VerificationStage.V2,
+                status=VerdictStatus.SATISFIED,
+                reason="delivery finalized",
+            ),
+        )
+    )
+
+    status = runtime._evidence_status(runtime._evidence_verdicts(()))
+    assert status is EvidenceStatus.VERIFIED
+
+
+def test_a_violated_finalizer_still_blocks_through_debt():
+    """Filtering the gate out of evidence must not hide a refused delivery."""
+
+    ledger = Ledger.in_memory("task-1")
+    runtime = _runtime(ledger)
+    runtime._spec = _spec()
+    runtime._verdicts.append(
+        Verdict(
+            obligation_id="finalizer",
+            stage=VerificationStage.V2,
+            status=VerdictStatus.VIOLATED,
+            reason="worktree contains unverified paths: notes.txt",
+        )
+    )
+    runtime._sync_debt(tuple(runtime._verdicts))
+
+    status = runtime._evidence_status(runtime._evidence_verdicts(()))
+    assert status is EvidenceStatus.PARTIAL
+
+
 def test_spec_flag_is_off_by_default():
     assert TaskSpec(task_id="t", objective="o", workspace=".").accept_debt is False
 

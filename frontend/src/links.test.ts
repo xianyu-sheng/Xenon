@@ -11,7 +11,9 @@ import { test } from 'node:test';
 import { findPaths, linkFor, linkPaths } from './links.js';
 
 const OSC8 = '\u001b]8';
-const ST = '\u001b\\';
+// OSC-8 links are terminated with BEL (see links.ts): every emulator parses
+// that form, and it cannot take the display text down with it.
+const ST = '\u0007';
 
 test('a code file with a line anchor becomes a link', () => {
   const line = 'see src/main.ts:42 for the call';
@@ -33,6 +35,18 @@ test('an absolute path is linked even without a code extension', () => {
 test('a bare word with a slash is not a link', () => {
   const line = 'and/or either way';
   assert.equal(linkPaths(line), line);
+});
+
+test('a slash command in usage text is not a link', () => {
+  // `/max-steps` is path-shaped but is a command name.  Linking it wrapped the
+  // token in OSC-8, and Ink's width slicing then dropped characters from the
+  // very text the user needs to read (it rendered as `ax-steps`).
+  for (const line of [
+    '用法: /max-steps 40 或 /max-steps off',
+    '提示: /plan on 开启, /plan off 关闭',
+  ]) {
+    assert.equal(linkPaths(line), line);
+  }
 });
 
 test('prose with a ratio is not a link', () => {
@@ -82,7 +96,7 @@ test('a line without paths is returned untouched', () => {
 test('a Windows path keeps the whole path in the URI, not just the file name', () => {
   const line = '账本 C:\\Users\\Administrator\\.xenon\\ledger\\repl\\repl-abc.jsonl';
   const linked = linkPaths(line);
-  const uri = linked.match(/\u001b\]8;;([^\u001b]*)\u001b\\/)?.[1] ?? '';
+  const uri = linked.match(/\u001b\]8;;([^\u001b]*)\u0007/)?.[1] ?? '';
 
   assert.ok(uri.includes('repl-abc.jsonl'), uri);
   assert.ok(

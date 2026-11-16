@@ -279,6 +279,85 @@ def test_general_no_write_wins_over_nearby_paths(text):
     assert signals.no_write_targets == ()
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "创建 plan_out.txt，内容为 TOKEN；不要修改其他文件。",
+        "创建 plan_out.txt，内容为 TOKEN；不要动其他任何文件。",
+        "创建 plan_out.txt，内容为 TOKEN；leave the other files untouched.",
+    ],
+)
+def test_relative_negation_keeps_the_named_write(text):
+    """“不要修改其他文件” is a scope guard, not a global write ban.
+
+    Treating it as global made the most common scoped task ("create X, don't
+    touch the rest") resolve READ_ONLY, so every write was vetoed and
+    ``/plan on`` could never enter plan-only mode.
+    """
+
+    signals = extract_execution_signals(text)
+    assert signals.no_write is False
+    assert signals.no_write_others is True
+    assert signals.no_write_targets == ()
+
+    contract = build_turn_contract(text)
+    assert contract.level >= ExecutionLevel.WRITE
+    assert "write" in contract.operations
+    assert contract.protect_other_write_paths is True
+    assert "plan_out.txt" in contract.allowed_write_paths
+
+
+def test_relative_negation_denies_unnamed_targets_only():
+    context = AgentContext(
+        {
+            "_execution_level": int(ExecutionLevel.EXECUTE),
+            "_protected_write_others": True,
+            "_allowed_write_paths": ("plan_out.txt",),
+        }
+    )
+
+    denied = execution_policy_denial(
+        "write_file", {"file_path": "unrelated.txt", "content": "x"}, context
+    )
+    allowed = execution_policy_denial(
+        "write_file", {"file_path": "plan_out.txt", "content": "x"}, context
+    )
+
+    assert denied is not None and "其他文件" in denied
+    assert allowed is None
+
+
+def test_relative_negation_without_a_named_path_is_not_a_global_ban():
+    """If no concrete path is named, enforcing the guard would ban everything."""
+
+    context = AgentContext(
+        {
+            "_execution_level": int(ExecutionLevel.WRITE),
+            "_protected_write_others": True,
+            "_allowed_write_paths": (),
+        }
+    )
+
+    assert (
+        execution_policy_denial(
+            "write_file", {"file_path": "anything.txt", "content": "x"}, context
+        )
+        is None
+    )
+
+
+def test_store_write_scope_publishes_the_relative_scope():
+    from xenon.repl.turn_contract import store_write_scope
+
+    contract = build_turn_contract("创建 plan_out.txt，内容为 TOKEN；不要修改其他文件。")
+    context = AgentContext({})
+
+    store_write_scope(context, contract)
+
+    assert context.get("_protected_write_others") is True
+    assert "plan_out.txt" in tuple(context.get("_allowed_write_paths") or ())
+
+
 def test_contract_keeps_write_when_negation_is_scoped():
     from xenon.repl.turn_contract import build_turn_contract
 
@@ -296,6 +375,31 @@ def test_contract_stays_answer_only_for_global_no_write():
 
     assert contract.level is ExecutionLevel.ANSWER_ONLY
     assert contract.protected_write_paths == ()
+
+
+def test_reading_a_file_survives_no_write_and_no_execute():
+    """"不要修改、不要运行命令" forbids writes and shell, not reading.
+
+    The hard-constraint shortcut used to collapse the whole turn to
+    ANSWER_ONLY, so the direct path rejected the model's read tool with
+    "模型违反仅回答约束" even though the user asked for a file to be read.
+    """
+
+    text = (
+        "读取 xenon/__init__.py，告诉我 __version__ 的值。"
+        "不要修改任何文件，也不要运行命令。"
+    )
+
+    policy = classify_execution_policy(text)
+    assert policy.level is ExecutionLevel.READ_ONLY
+    assert policy.explicit_no_write is True
+    assert policy.explicit_no_execute is True
+    assert policy.locks_answer_only is False
+
+    contract = build_turn_contract(text)
+    assert contract.level is ExecutionLevel.READ_ONLY
+    assert "read" in contract.operations
+    assert contract.locks_answer_only is False
 
 
 def test_scoped_negation_allows_other_writes_and_keeps_target_intact(
@@ -566,7 +670,7 @@ def test_code_text_that_mentions_a_saved_file_stays_in_direct(monkeypatch):
     )
     monkeypatch.setattr(
         repl,
-        "_run_react_engine",
+        "_run_loop_turn",
         lambda *_args: rerouted.append("react"),
     )
 
@@ -708,40 +812,6 @@ def test_implicit_write_does_not_override_explicit_limits(text):
     assert policy.level is ExecutionLevel.ANSWER_ONLY
 
 
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        ("先把 utils.py 里的重复代码抽成函数，然后更新所有调用点", "plan-execute"),
-        ("重构整个项目的日志模块", "plan-execute"),
-        ("把所有测试文件迁移到 pytest", "plan-execute"),
-        ("帮我写个函数，记得加上单元测试", "reflection"),
-        ("修复这个 bug，并确保不要遗漏边界情况", "reflection"),
-        ("重构所有模块，并确保每步都检查", "plan-reflection"),
-        # 质量诉求分支必须优先于复杂度分支，否则 reflection 会被 plan-react 遮蔽。
-        # 此用例验证：即使任务复杂度高（0.75+），只要有质量诉求+代码意图，
-        # 应优先推荐 reflection 而非 plan-react。
-        ("重构缓存模块的并发逻辑，记得加测试验证线程安全", "reflection"),
-    ],
-)
-def test_engine_recommendation_matches_task_shape(text, expected):
-    """范式推荐按任务结构选择，且置信度足以触发 REPL 自动切换。
-
-    requires_tools 由本轮契约提供（语义任务的正则由分类器兜底，不能用于
-    推荐），这里显式传入以模拟真实调用。
-    """
-    profile = DifficultyEstimator().estimate(text, [], requires_tools=True)
-    assert profile.recommended_engine == expected
-    assert profile.engine_confidence >= 0.6
-
-
-@pytest.mark.parametrize("text", ["你好", "解释一下闭包", "什么是装饰器"])
-def test_no_tool_turns_stay_direct(text):
-    """无需工具的轮次不推荐范式——引擎循环的价值全在工具调用上。"""
-    profile = DifficultyEstimator().estimate(text, [])
-    assert profile.recommended_engine == "direct"
-    assert profile.engine_confidence == 0.0
-
-
 def test_issue_delivery_authorizes_write_and_execute() -> None:
     """A concrete work item ("implement #22") is code work, not chat codegen."""
 
@@ -813,6 +883,72 @@ def test_explaining_push_is_still_just_a_question() -> None:
     """Recognising more requests must not turn a question into an action."""
 
     assert classify_execution_policy("忽略 push 概念，解释一下").level <= ExecutionLevel.READ_ONLY
+
+
+# ── 显式工具请求：点名了工具就必须带工具集进循环 ─────────────────────
+#
+# 实测（Phase D 真实 MCP 任务）：`/mcp add` 连上、`/mcp tools` 列出
+# ``e2e_echo:echo``，可任务本体「使用 MCP 工具 e2e_echo:echo 回显 …」被判成
+# ANSWER_ONLY，直接对话回答"没有这个工具"，账本里是 chat-*.jsonl。
+# 信号层缺一条"用户点名调用工具"的结构信号：server:tool 标识符与
+# 「调用 … 工具」句式都与具体领域无关，任何 MCP 工具自动受益。
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "使用 MCP 工具 e2e_echo:echo 回显文本 hello-e2e，然后把工具返回的原文告诉我。不要修改任何文件。",
+        "使用 MCP 工具 e2e_echo:upper 把文本 abc 转成大写，并告诉我工具返回的原文。不要修改任何文件。",
+        "调用 github:search 查一下这个仓库的 issue",
+        "please use the weather tool for Suzhou",
+    ],
+)
+def test_naming_a_tool_makes_the_turn_require_tools(text: str) -> None:
+    signals = extract_execution_signals(text)
+    policy = classify_execution_policy(text)
+
+    assert signals.tool_request is True, text
+    assert policy.requires_tools is True, text
+    # The authorization stays read-only: a sensitive remote tool must still go
+    # through the executor's approval escalation.
+    assert policy.level is ExecutionLevel.READ_ONLY, text
+
+
+def test_tool_request_survives_no_write_constraint() -> None:
+    text = "使用 MCP 工具 e2e_echo:echo 回显 hello，不要修改任何文件，也不要运行命令"
+    policy = classify_execution_policy(text)
+
+    assert policy.level is ExecutionLevel.READ_ONLY
+    assert policy.explicit_no_write is True
+    assert policy.explicit_no_execute is True
+
+
+def test_an_explicit_no_tools_ban_beats_a_tool_request() -> None:
+    text = "不要使用任何工具，直接告诉我答案，不要调用 e2e_echo:echo"
+
+    assert extract_execution_signals(text).tool_request is True
+    assert classify_execution_policy(text).level is ExecutionLevel.ANSWER_ONLY
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["现在几点了？12:30 开会", "帮我看看 https://example.com/a 的内容", "你有哪些工具？"],
+)
+def test_tool_request_signal_ignores_lookalikes(text: str) -> None:
+    """Times, URLs and a plain "what tools do you have" are not invocations."""
+
+    assert extract_execution_signals(text).tool_request is False, text
+
+
+def test_contract_routes_a_named_tool_turn_to_the_kernel() -> None:
+    from xenon.repl.turn_contract import build_turn_contract
+
+    contract = build_turn_contract(
+        "使用 MCP 工具 e2e_echo:echo 回显文本 hello-e2e。不要修改任何文件。"
+    )
+
+    assert contract.requires_tools is True
+    assert "read" in contract.operations
 
 
 def test_negated_paths_become_protected_for_every_phrasing():

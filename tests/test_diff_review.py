@@ -10,7 +10,6 @@ from rich.console import Console
 from xenon.repl.command_groups.review import _cmd_review
 from xenon.repl.model_registry import ModelRegistry
 from xenon.repl.repl import REPL
-from xenon.repl.system_config import AutoRouteConfig
 
 
 def _make_repl(tmp_path, monkeypatch) -> REPL:
@@ -61,7 +60,6 @@ def test_approval_panel_includes_diff(monkeypatch, tmp_path):
             (),
             {
                 "interaction": type("I", (), {"assume_yes": False})(),
-                "auto_route": AutoRouteConfig(),
             },
         )(),
     )
@@ -97,3 +95,30 @@ def test_review_revert_without_bak_explains(monkeypatch, tmp_path):
     missing = tmp_path / "nope.py"
     output = _cmd_review(args=f"revert {missing}", session_state={"_repl": repl})
     assert "没有 .bak" in output
+
+
+def test_recording_a_change_makes_review_see_it(monkeypatch, tmp_path):
+    """The producer and the reader must agree on the same working-memory keys.
+
+    ``record_file_changes`` is the single producer used by kernel receipts,
+    ``/code`` and ``/edit``; ``/review`` is the reader.  A file recorded as
+    created stays created even if a later edit reports it as modified.
+    """
+
+    repl = _make_repl(tmp_path, monkeypatch)
+    created = tmp_path / "new.py"
+    changed = tmp_path / "changed.py"
+
+    repl.ctx_mgr.record_file_changes(created=[str(created)])
+    repl.ctx_mgr.record_file_changes(
+        created=[str(created)], modified=[str(changed)]
+    )
+    repl.ctx_mgr.record_file_changes(modified=[str(created), str(changed)])
+
+    working = repl.ctx_mgr.get_working_memory()
+    assert working["session_created_files"] == [str(created)]
+    assert working["session_modified_files"] == [str(changed)]
+
+    listed = _cmd_review(args="", session_state={"_repl": repl})
+    assert "[新增]" in listed and "new.py" in listed
+    assert "[修改]" in listed and "changed.py" in listed

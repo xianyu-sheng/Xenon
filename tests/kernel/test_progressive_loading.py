@@ -130,6 +130,28 @@ def test_an_executed_mcp_tool_expands_for_later_views() -> None:
     assert "parameters" not in rows["github:tool_00"]
 
 
+def test_a_session_expanded_tool_stays_full_without_a_receipt() -> None:
+    """A new task must not reset an earlier task's expanded schema.
+
+    Flipping a tool from its full schema back to an index row rewrites the
+    tool block, and the provider caches an exact prefix -- the first call of
+    the task would pay for it again.  The session set travels in the spec.
+    """
+
+    from dataclasses import replace
+
+    spec = replace(_spec(), expanded_tools=("github:tool_01",))
+    view = build_model_view(
+        spec=spec,
+        catalog=_Catalog(_mcp_specs(3)),
+        ledger=Ledger.in_memory("t1"),
+    )
+
+    rows = {tool["name"]: tool for tool in view.tools}
+    assert "parameters" in rows["github:tool_01"]
+    assert rows["github:tool_00"].get("index") is True
+
+
 # ── truncation with a visible count ───────────────────────────────
 
 
@@ -140,9 +162,12 @@ def test_the_index_truncates_and_counts() -> None:
         ledger=Ledger.in_memory("t1"),
     )
 
-    assert "github:tool_00" in view.system
-    assert "github:tool_44" not in view.system
-    assert "5 more tools in remote" in view.system
+    # The MCP selection is task-scoped; it lives in the turn brief so the
+    # catalog ahead of the tool schemas stays session-stable.
+    assert "github:tool_00" in view.task_brief
+    assert "github:tool_44" not in view.task_brief
+    assert "5 more tools in remote" in view.task_brief
+    assert "github:tool_00" not in view.system
 
 
 def test_a_small_surface_is_not_truncated() -> None:
@@ -152,8 +177,8 @@ def test_a_small_surface_is_not_truncated() -> None:
         ledger=Ledger.in_memory("t1"),
     )
 
-    assert "github:tool_02" in view.system
-    assert "more tools" not in view.system
+    assert "github:tool_02" in view.task_brief
+    assert "more tools" not in view.task_brief
 
 
 # ── fail closed at binding ────────────────────────────────────────

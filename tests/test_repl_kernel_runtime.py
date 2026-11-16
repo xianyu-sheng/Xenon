@@ -868,6 +868,54 @@ def _event(kind: str, payload: dict) -> SimpleNamespace:
     return SimpleNamespace(kind=SimpleNamespace(value=kind), payload=payload)
 
 
+def test_event_sink_records_session_file_changes() -> None:
+    """The sink is the one place that sees what the kernel actually wrote.
+
+    ``/review`` reads ``session_created_files`` / ``session_modified_files``,
+    which used to have no producer at all: a successful kernel ``write_file``
+    still left /review answering "本会话没有记录到文件改动".
+    """
+
+    from xenon.repl.context_manager import ContextManager
+
+    memory = ContextManager()
+    sink = ReplEventSink(RecordingCallback(), memory)
+    sink.emit(
+        _event(
+            "tool_receipt",
+            {
+                "receipt": {
+                    "tool": "write_file",
+                    "status": "ok",
+                    "effects": [
+                        {
+                            "type": "fs_write",
+                            "paths": ["pkg/new.py"],
+                            "created_paths": ["pkg/new.py"],
+                        }
+                    ],
+                }
+            },
+        )
+    )
+    sink.emit(
+        _event(
+            "tool_receipt",
+            {
+                "receipt": {
+                    "tool": "edit_file",
+                    "status": "ok",
+                    "effects": [{"type": "fs_write", "paths": ["calc.py"]}],
+                }
+            },
+        )
+    )
+
+    working = memory.get_working_memory()
+    assert working["session_created_files"] == ["pkg/new.py"]
+    assert working["session_modified_files"] == ["calc.py"]
+
+
 def test_event_sink_projects_kernel_write_paths() -> None:
     callback = RecordingCallback()
     sink = ReplEventSink(callback)

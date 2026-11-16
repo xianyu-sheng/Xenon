@@ -43,6 +43,17 @@ def test_usage_totals_fold_payloads():
     assert totals.as_dict()["total_tokens"] == 20
 
 
+def test_the_ledger_records_both_sides_of_the_cache():
+    """Hit alone cannot price a call; the ledger keeps the miss too."""
+
+    payload = usage_payload(
+        {"prompt_tokens": 1000, "cache_hit_tokens": 832, "cache_miss_tokens": 168}
+    )
+
+    assert payload["cache_hit_tokens"] == 832
+    assert payload["cache_miss_tokens"] == 168
+
+
 def test_missing_usage_is_marked_estimated():
     """A provider that reports nothing must not look like a free call."""
 

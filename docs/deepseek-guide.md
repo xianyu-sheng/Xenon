@@ -103,6 +103,60 @@ Xenon 在 `ContextManager` 和各推理引擎中统一使用缓存层级：
 - 请求信封：工作记忆、按当前问题检索出的长期记忆、本轮执行边界和用户请求；首次发送后作为不可变历史保存
 - 模型轨道：按模型、引擎、阶段、工具契约和 context epoch 分轨，模型切走再返回时继续追加全局会话后缀
 
+**内核单轮请求的实际字节顺序**（`xenon/kernel/view/base.py` +
+`xenon/harness/llm.py`）：
+
+```
+system   人格 / workspace / 常驻工具目录 / 项目规则与技能索引        ← 整个会话不变
+tools    常驻工具 + 会话级 MCP 契约（只追加、schema 定稿）          ← 整个会话不变
+user     task brief：Mode / 执行边界 / 目标 / 约束 / 检索上下文 / 布局  ← 整个任务不变
+         Earlier turns 投影                                        ← 整个任务不变
+         阶段协议（planner / actor / finisher …）                  ← 每种阶段不变
+         最新事件 + 本轮指令                                        ← 每次调用才变
+```
+
+关键规则：**任务级文本（目标、约束、边界、检索记忆、工作区布局、本任务
+选中的 MCP 工具名）不能放进 system**。厂商按 system → tools → messages
+序列化，system 里改一个字节，后面的工具块就整块重新计费。这些文本放在
+turn 的 task brief 里：同一个任务内仍然整段命中缓存，而新任务的第一调用
+只损失 brief 之后的部分。
+
+工具块本身也必须是**会话稳定**的：`SessionToolContract`（`xenon/repl/
+session_tools.py`）把每个任务的 MCP 选择累加成一个只追加的并集（首次
+出现顺序，上限默认 32，淘汰最久未被选择且不是本任务刚选中的），一个工具
+在本会话第一次执行后保持展开 schema，不再在下一个任务退回索引行。此前
+每个任务重新选一次、schema 每个任务重置一次，新任务第一调用只能命中
+system + 工具块的前约 1.6k token。
+
+契约**只在有证据时增长**：`select_mcp_tool_specs(..., relevant_only=True)`
+要求目标里真的出现工具名（或名称词干），一个偶然共享的描述词（分值 2）不算；
+没有证据时返回空集，而不是用目录顺序填满预算。实测：一个只执行
+`print(11*12)` 的任务曾因此把 8 个无关 GitHub 工具永久追加进会话契约，导致
+后续每个任务的工具块都被重写。逐任务 prompt 仍保留目录补位（它是每次重建
+的），只有会话契约是"无证据不增长"。
+
+**证据只用用户原话**：第二轮起，前端的 `objective` 是冻结请求信封（常驻
+上下文 + 学到的教训 + 本轮请求）。信封里
+`{"session_created_files": …}` 这类记账键不是用户词汇，曾让 13 个 GitHub
+PR 工具过阈值，工具块 2581 → 3228。`RuntimeAdapter.mcp_extra_specs()` 因此
+用 `user_objective` 打分；信封仍是模型读到的内容，但不是任务需求的证据。
+
+turn 内的顺序按**生命周期**排，不按阅读顺序：任务稳定的 brief / earlier
+在最前，阶段稳定的协议其次，只有事件是每次调用新增的。earlier 投影放在
+协议之前，finisher 就能复用 planner 已经付过费的字节。
+
+每次 `model_usage` 账本事件带 `model` / `phase` / `system_tokens` /
+`tools_tokens` / `cacheable_tokens` / `turn_tokens` / 真实 hit/miss。
+DeepSeek 只回 `prompt_cache_hit_tokens`，miss 由 `prompt − hit` 推出——
+否则账本里的 miss 恒为 0，看不到真实成本。
+
+**看成本，不看命中率。** 命中 token 仍然计价（flash ¥0.02/M vs 未命中
+¥1/M），所以把历史垫进前缀可以把命中率做到 99%，账单反而更高。一个 13k
+的请求、2.5k 新字节，命中 10.5k 时成本约 ¥0.0029；垫到 100k、命中 97.5k
+时约 ¥0.0045。命中率只在同一个 prompt 规模下可比；跨设计比较请看
+「每任务 miss token」。当前剩余 miss 主要是任务 brief（目标/约束/检索记忆/
+布局）和 finisher 的工作集，它们本来就是这一次任务的新信息。
+
 单轮回答指导不会再作为 system overlay 插入历史前方。优化后的 Prompt 会以无边框、低亮度辅助文本显示；`/cost` 和固定底栏展示的是 DeepSeek API 返回的真实命中数据，而不是客户端预测值。
 
 ### 多模型切换真实验收

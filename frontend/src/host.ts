@@ -151,4 +151,9 @@ export class KernelHost {
   fetchStatus(): void {
     this.send({ v: PROTOCOL_VERSION, type: 'status' });
   }
+
+  /** A read-only dashboard query; the kernel answers `<type>.result`. */
+  query(type: string, id: string, params: Record<string, unknown> = {}): void {
+    this.send({ v: PROTOCOL_VERSION, type, id, ...params });
+  }
 }

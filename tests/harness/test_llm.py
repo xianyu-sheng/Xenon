@@ -22,9 +22,11 @@ from xenon.harness.llm import (
     LLMStepReviewer,
     ModelConfig,
     ModelConfigError,
+    build_finish_messages,
     build_llm_loop_strategy,
     build_messages,
     build_plan_messages,
+    build_reflect_messages,
     parse_action,
     resolve_model_config,
 )
@@ -282,10 +284,50 @@ def test_build_messages_ships_a_fixed_prefix_and_one_turn() -> None:
     messages = build_messages(view)
     assert len(messages) == 2
     assert messages[0]["role"] == "system"
-    assert "RUNTIME SYSTEM" in messages[0]["content"]
-    assert "Do not run git commit" in messages[0]["content"]
+    # The system is exactly the view's prompt: no phase text may sit here,
+    # because providers put the tool schemas directly behind it.
+    assert messages[0]["content"] == "RUNTIME SYSTEM"
     assert messages[1]["role"] == "user"
+    assert "Do not run git commit" in messages[1]["content"]
     assert "Return exactly one JSON action." in messages[1]["content"]
+
+
+def test_the_turn_orders_task_stable_text_before_the_phase_protocol() -> None:
+    """Lifetime order inside the turn: brief, earlier turns, then protocol.
+
+    The earlier-turns projection is identical for every phase of one task, so
+    it must sit ahead of the phase protocol; otherwise the finisher re-bills
+    bytes the planner already paid for.
+    """
+
+    from dataclasses import dataclass
+
+    @dataclass
+    class _Record:
+        task_id: str = "t0"
+        objective: str = "earlier objective"
+        status: str = "delivered"
+        answer: str = "earlier answer"
+
+    spec = TaskSpec(task_id="t", objective="fix it", workspace="/workspace")
+    view = ModelView(
+        task=spec,
+        system="RUNTIME SYSTEM",
+        tools=(),
+        working_set=(),
+        debt=(),
+        budget=spec.budget,
+        input_seq=0,
+        hash="h",
+        task_brief="TASK BRIEF",
+        session_tasks=(_Record(),),
+    )
+    turn = build_messages(view)[1]["content"]
+
+    assert turn.index("TASK BRIEF") < turn.index("Earlier turns this session")
+    assert turn.index("Earlier turns this session") < turn.index(
+        "Do not run git commit"
+    )
 
 
 def test_turn_context_carries_the_event_and_nothing_else() -> None:
@@ -751,6 +793,175 @@ def test_resume_task_executes_an_approved_plan_in_the_same_ledger(
     assert any(e.kind is EventKind.TOOL_RECEIPT for e in events)
 
 
+def test_resume_task_applies_lessons_like_a_fresh_run(tmp_path: Path) -> None:
+    """The learning chain must not stop at the plan-approval boundary.
+
+    Both entry points go through ``LearningGateway.apply``; before the facade
+    this was a second copy of the same calls, which is exactly where a path
+    can silently lose the lesson.
+    """
+
+    from xenon.harness.lessons import LessonStore
+    from xenon.kernel.lessons import Lesson
+    from xenon.memory import MemoryBackendRegistry, MemoryService
+
+    _repo(tmp_path)
+    store = LessonStore(
+        MemoryService(MemoryBackendRegistry(tmp_path / "memory"))
+    )
+    store.add(
+        Lesson(
+            id="L-resume",
+            kind="pitfall",
+            trigger_event="debt_opened",
+            fingerprint="fp-resume",
+            action_text="claim needs a receipt",
+            shape="debt_opened|requirement_met",
+        )
+    )
+    plan = parse_plan(_plan_dict())
+    ledger_dir = tmp_path.parent / f"{tmp_path.name}-resume-lesson-ledger"
+    planned = run_task(
+        plan.objective,
+        strategy=build_llm_loop_strategy(
+            ModelConfig(model_id="test/fake"),
+            LoopProfile(plan=True, step_scope=True, follow_plan=True),
+            client=FakeClient([json.dumps(_plan_dict())]),
+        ),
+        workspace=tmp_path,
+        ledger_dir=ledger_dir,
+        task_id="resume-lesson-1",
+        finalize=False,
+        mode=TaskMode.PLAN,
+        lesson_store=store,
+    )
+    accepted = Ledger(planned.ledger_path, "resume-lesson-1").read(
+        EventKind.PLAN_ACCEPTED
+    )[-1]
+    digest = hashlib.sha256(
+        canonical_json(accepted.payload["plan"]).encode("utf-8")
+    ).hexdigest()
+
+    resumed = resume_task(
+        task_id="resume-lesson-1",
+        plan=plan.proposal,
+        plan_digest=digest,
+        approval_id="approval-1",
+        strategy=build_llm_loop_strategy(
+            ModelConfig(model_id="test/fake"),
+            LoopProfile(plan=True, step_scope=True, follow_plan=True),
+            client=FakeClient(
+                [json.dumps({"action": "finish", "answer": "done"})]
+            ),
+            resumed=True,
+        ),
+        objective=plan.objective,
+        workspace=tmp_path,
+        ledger_dir=ledger_dir,
+        permission=PermissionMode.BYPASS,
+        finalize=False,
+        lesson_store=store,
+    )
+
+    applied = [
+        event.payload["lesson_id"]
+        for event in Ledger(resumed.ledger_path, "resume-lesson-1").read()
+        if event.kind is EventKind.LESSON_APPLIED
+    ]
+    # Both executions carried it (one user task -> two execution phases), but
+    # the application counter must count the *task* once.
+    assert applied.count("L-resume") == 2
+    assert store.get("L-resume").applied == 1
+
+
+def test_resumed_plan_materializes_an_unbound_write(
+    tmp_path: Path,
+) -> None:
+    """An approved edit with no payload runs through the step actor.
+
+    A plan-only phase cannot call a tool, so its planner cannot author the
+    content of a file it has never read; the runtime demotes that payload and
+    the step survives as work.  Execution has to be able to perform it -- the
+    follow-plan profile therefore carries a step actor (measured C10: the
+    alternative was replaying a placeholder over the source file).
+    """
+
+    _repo(tmp_path)
+    payload = _plan_dict()
+    del payload["steps"][0]["params"]
+    plan = parse_plan(payload)
+    ledger_dir = tmp_path.parent / f"{tmp_path.name}-materialize-ledger"
+    planned = run_task(
+        plan.objective,
+        strategy=build_llm_loop_strategy(
+            ModelConfig(model_id="test/fake"),
+            LoopProfile(plan=True),
+            client=FakeClient([json.dumps(payload)]),
+        ),
+        workspace=tmp_path,
+        ledger_dir=ledger_dir,
+        task_id="materialize-1",
+        finalize=False,
+        mode=TaskMode.PLAN,
+    )
+    assert planned.result.phase.value == "planned"
+    accepted = Ledger(planned.ledger_path, "materialize-1").read(
+        EventKind.PLAN_ACCEPTED
+    )[-1]
+    digest = hashlib.sha256(
+        canonical_json(accepted.payload["plan"]).encode("utf-8")
+    ).hexdigest()
+
+    source = "def add(a, b):\n    return a + b\n"
+    test_source = (
+        "from calc.add import add\n"
+        "\n"
+        "def test_add():\n"
+        "    assert add(1, 2) == 3\n"
+    )
+    client = FakeClient(
+        [
+            json.dumps(
+                {
+                    "action": "call_tool",
+                    "capability": "edit",
+                    "params": {
+                        "files": [
+                            {"path": "calc/add.py", "content": source},
+                            {"path": "tests/test_add.py", "content": test_source},
+                        ]
+                    },
+                }
+            ),
+            json.dumps({"action": "finish", "answer": "step done", "claims": []}),
+            json.dumps({"action": "finish", "answer": "fixed", "claims": []}),
+        ]
+    )
+    resumed = resume_task(
+        task_id="materialize-1",
+        plan=plan.proposal,
+        plan_digest=digest,
+        approval_id="approval-1",
+        strategy=build_llm_loop_strategy(
+            ModelConfig(model_id="test/fake"),
+            LoopProfile(plan=True, step_scope=True, follow_plan=True),
+            client=client,
+            resumed=True,
+        ),
+        objective=plan.objective,
+        workspace=tmp_path,
+        ledger_dir=ledger_dir,
+        permission=PermissionMode.BYPASS,
+        finalize=False,
+    )
+
+    assert resumed.result.accepted is True, resumed.result.debt
+    assert (tmp_path / "calc" / "add.py").read_text(encoding="utf-8") == source
+    # The step actor was really asked: the first request is a step prompt.
+    first_user = client.calls[0][1][-1]["content"]
+    assert "Working on step" in first_user
+
+
 def test_llm_plan_invalid_json_fails_closed(tmp_path: Path) -> None:
     """An empty plan is recorded, never executed.
 
@@ -795,12 +1006,12 @@ def test_build_plan_messages_includes_schema() -> None:
         hash="h",
     )
     messages = build_plan_messages(view)
-    assert "RUNTIME SYSTEM" in messages[0]["content"]
-    assert "capability-based plan" in messages[0]["content"]
+    assert messages[0]["content"] == "RUNTIME SYSTEM"
+    assert "capability-based plan" in messages[1]["content"]
     # No state blob: the objective, workspace and tool list are already in the
     # system prompt and in the tool schemas.  Repeating them per role made each
     # role's cached prefix a different length.
-    assert messages[1]["content"] == "Return exactly one JSON plan."
+    assert messages[1]["content"].endswith("Return exactly one JSON plan.")
 
 
 def test_plan_finisher_rejects_non_finish_actions() -> None:
@@ -841,8 +1052,9 @@ def test_build_plan_messages_uses_real_newlines() -> None:
     system = build_plan_messages(view)[0]["content"]
     user = build_plan_messages(view)[1]["content"]
 
-    assert user == "Return exactly one JSON plan."
-    assert "RUNTIME SYSTEM\n\nPlanFirst planning protocol" in system
+    assert system == "RUNTIME SYSTEM"
+    assert user.startswith("PlanFirst planning protocol")
+    assert user.endswith("Return exactly one JSON plan.")
     assert "\\n" not in system
     assert "\\n" not in user
 
@@ -859,6 +1071,94 @@ def _reflect_view() -> ModelView:
         input_seq=0,
         hash="h",
     )
+
+
+def test_every_phase_starts_with_the_same_system_bytes() -> None:
+    """The tool schemas sit right behind the system, so it must not vary.
+
+    Providers serialise system -> tools -> messages.  While each role appended
+    its own protocol to the system, the divergence landed immediately before
+    the schemas: measured on a real task, the actor hit 1280 cached tokens and
+    finish hit 640 -- the entire tool block was billed at full price on every
+    plan/review/finish call.  The phase text is the same text either way; it
+    only has to live in the turn.
+    """
+
+    from dataclasses import replace
+
+    from xenon.harness.llm import (
+        _cache_tools,
+        _native_tools,
+        build_finish_messages,
+        build_plan_messages,
+        build_step_messages,
+    )
+    from xenon.kernel.contracts import StepContract, StepKind
+
+    view = replace(
+        _reflect_view(),
+        tools=(
+            {
+                "name": "read_file",
+                "description": "Read a file.",
+                "parameters": {"path": "path"},
+            },
+        ),
+    )
+    phases = [
+        build_messages(view),
+        build_messages(view, native=True),
+        build_plan_messages(view),
+        build_finish_messages(view),
+        build_reflect_messages(view, None),
+        build_step_messages(view, StepContract(id=1, kind=StepKind.EDIT), calls=0),
+    ]
+    systems = {messages[0]["content"] for messages in phases}
+    assert systems == {"RUNTIME SYSTEM"}
+    # Every phase that is not the actor still sends the actor's exact list.
+    assert _cache_tools(view, None) == _native_tools(view)
+    assert _cache_tools(view, client=lambda *a, **k: "") is None
+
+
+def test_a_phase_that_calls_a_tool_is_retried_without_tools() -> None:
+    """Sending schemas must not let an answered phase act.
+
+    ``auto`` keeps thinking enabled (DeepSeek disables it for any other
+    choice); the protocol already says not to call a tool, and the one reply
+    that does anyway is retried with ``none`` instead of being passed to a
+    JSON parser that would see an empty string.
+    """
+
+    from xenon.utils import llm_client
+
+    calls: list[str] = []
+
+    class _Response:
+        def __init__(self, content: str, tool_calls: list[dict]) -> None:
+            self.content = content
+            self.tool_calls = tool_calls
+            self.usage = types.SimpleNamespace()
+
+    def _fake(model_id, messages, **kwargs):
+        calls.append(str(kwargs.get("tool_choice")))
+        if kwargs.get("tool_choice") == "none":
+            return _Response('{"action":"finish","answer":"done"}', [])
+        return _Response("", [{"id": "1", "name": "read_file", "arguments": {}}])
+
+    real = llm_client.chat_completion_with_tools
+    llm_client.chat_completion_with_tools = _fake
+    try:
+        raw = llm._call_model_with_tools(
+            ModelConfig(model_id="test/fake"),
+            build_finish_messages(_reflect_view()),
+            [{"name": "read_file", "description": "x", "parameters": {}}],
+            phase="finisher",
+        )
+    finally:
+        llm_client.chat_completion_with_tools = real
+
+    assert calls == ["auto", "none"]
+    assert "finish" in raw
 
 
 def test_reflector_returns_one_corrective_call_tool() -> None:
@@ -923,7 +1223,7 @@ def test_plan_protocol_enumerates_capabilities() -> None:
     from xenon.harness.plan import parse_plan
 
     messages = llm.build_plan_messages(_reflect_view())
-    protocol = messages[0]["content"]
+    protocol = messages[1]["content"]
 
     assert "capability` MUST be one of: read, search, edit, verify, vcs, shell, remote" in (
         protocol
@@ -975,9 +1275,9 @@ def test_plan_protocol_enumerates_capabilities() -> None:
 def test_reflect_messages_describe_the_receipts() -> None:
     messages = llm.build_reflect_messages(_reflect_view(), Finish("did the work"))
 
-    assert "RUNTIME SYSTEM" in messages[0]["content"]
-    assert "Reflection review" in messages[0]["content"]
-    assert "cannot declare the task done" in messages[0]["content"]
+    assert messages[0]["content"] == "RUNTIME SYSTEM"
+    assert "Reflection review" in messages[1]["content"]
+    assert "cannot declare the task done" in messages[1]["content"]
     # The claim under review AND the receipts it is checked against travel:
     # the reflector parses one reply and cannot call get_state, so a claim
     # reviewed without evidence would be a blind review.  The working set is
@@ -1285,20 +1585,59 @@ def test_the_finisher_keeps_the_answer_when_only_claims_are_malformed() -> None:
     assert _FINISH_PLACEHOLDER not in action.answer
 
 
-def test_the_finisher_salvages_an_unparseable_reply_to_the_placeholder() -> None:
-    from xenon.harness.llm import _FINISH_PLACEHOLDER, LLMPlanFinisher
-
-    view = types.SimpleNamespace(
+def _finisher_view() -> types.SimpleNamespace:
+    return types.SimpleNamespace(
         task=types.SimpleNamespace(objective="o", constraints=()),
         working_set=[],
         debt=[],
         system="sys",
     )
+
+
+def test_the_finisher_keeps_a_prose_reply_as_the_answer() -> None:
+    """A prose summary is the human-readable answer, not a parse failure.
+
+    Measured (Phase D, real MCP turn): the tool receipt carried
+    ``echo:hello-e2e``, the finisher answered in prose, and the placeholder
+    replaced it — the delivered turn said "final summary unavailable" even
+    though the work had succeeded.
+    """
+
+    from xenon.harness.llm import _FINISH_PLACEHOLDER, LLMPlanFinisher
+
     finisher = LLMPlanFinisher(
-        ModelConfig(model_id="test/fake"), client=lambda *a, **k: "I did the thing!"
+        ModelConfig(model_id="test/fake"),
+        client=lambda *a, **k: "工具返回的原文是 echo:hello-e2e。",
     )
 
-    assert finisher(view).answer == _FINISH_PLACEHOLDER
+    answer = finisher(_finisher_view()).answer
+
+    assert answer == "工具返回的原文是 echo:hello-e2e。"
+    assert _FINISH_PLACEHOLDER not in answer
+
+
+def test_the_finisher_unwraps_a_fenced_prose_reply() -> None:
+    from xenon.harness.llm import LLMPlanFinisher
+
+    finisher = LLMPlanFinisher(
+        ModelConfig(model_id="test/fake"),
+        client=lambda *a, **k: "```text\n工具返回 echo:hello-e2e\n```",
+    )
+
+    assert finisher(_finisher_view()).answer == "工具返回 echo:hello-e2e"
+
+
+@pytest.mark.parametrize("reply", ["", "   ", '{"action": "finish", "answer": '])
+def test_the_finisher_keeps_the_placeholder_when_there_is_no_answer(reply: str) -> None:
+    """An empty or broken-object reply has no human-readable text to keep."""
+
+    from xenon.harness.llm import _FINISH_PLACEHOLDER, LLMPlanFinisher
+
+    finisher = LLMPlanFinisher(
+        ModelConfig(model_id="test/fake"), client=lambda *a, **k: reply
+    )
+
+    assert finisher(_finisher_view()).answer == _FINISH_PLACEHOLDER
 
 
 def test_the_finish_protocol_documents_the_claim_shape() -> None:
@@ -1401,6 +1740,96 @@ def test_an_unknown_tool_name_fails_closed() -> None:
 
     with pytest.raises(ActionParseError, match="unknown tool"):
         action_from_tool_call(_native_view(), "make_it_so", {})
+
+
+def _native_view_with_mcp() -> ModelView:
+    from xenon.catalog.specs import CORE_SPECS, mcp_tool_specs
+    from xenon.kernel.view.base import _tool_schema
+
+    mcp = mcp_tool_specs(
+        {
+            "trains:query_trains": (
+                "trains",
+                {
+                    "name": "query_trains",
+                    "description": "查询高铁车次",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "from_city": {"type": "string"},
+                            "to_city": {"type": "string"},
+                        },
+                        "required": ["from_city", "to_city"],
+                    },
+                },
+            )
+        }
+    )
+    spec = TaskSpec(task_id="t", objective="query trains", workspace="/workspace")
+    return ModelView(
+        task=spec,
+        system="SYSTEM",
+        tools=tuple(
+            _tool_schema(item, expanded=True) for item in (*CORE_SPECS, *mcp)
+        ),
+        working_set=(),
+        debt=(),
+        budget=spec.budget,
+        input_seq=0,
+        hash="h",
+    )
+
+
+def test_an_mcp_tool_ships_a_provider_safe_function_name() -> None:
+    """``server:tool`` is the catalog key, not a wire name.
+
+    Anthropic and OpenAI reject function names outside ``[A-Za-z0-9_-]``, so
+    sending ``trains:query_trains`` made the first model call of every MCP
+    task fail before the kernel could bind anything.
+    """
+
+    import re as _re
+
+    from xenon.harness.llm import _native_tools, native_tool_name
+
+    tools = {item["name"]: item for item in _native_tools(_native_view_with_mcp())}
+    wire = native_tool_name("trains:query_trains")
+
+    assert wire in tools
+    assert _re.fullmatch(r"[A-Za-z0-9_-]{1,64}", wire)
+    assert tools[wire]["parameters"]["required"] == ["from_city", "to_city"]
+    # A safe name is left exactly as the catalog spells it.
+    assert native_tool_name("read") == "read"
+
+
+def test_a_sanitized_mcp_call_binds_to_the_catalog_name() -> None:
+    from xenon.harness.llm import action_from_tool_call, native_tool_name
+
+    action = action_from_tool_call(
+        _native_view_with_mcp(),
+        native_tool_name("trains:query_trains"),
+        {"from_city": "昆山", "to_city": "上海"},
+    )
+
+    assert isinstance(action, CallTool)
+    assert action.intent.capability is Capability.REMOTE
+    assert action.intent.params == {
+        "tool_name": "trains:query_trains",
+        "tool_args": {"from_city": "昆山", "to_city": "上海"},
+    }
+    assert action.intent.prefer == "trains:query_trains"
+
+
+def test_native_tool_names_stay_bounded_and_deterministic() -> None:
+    from xenon.harness.llm import native_tool_name
+
+    long_name = "server:" + "x" * 80
+    first = native_tool_name(long_name)
+
+    assert first == native_tool_name(long_name)
+    assert len(first) <= 64
+    assert first.replace("_", "").isalnum()
+    assert first != native_tool_name("server:" + "y" * 80)
 
 
 def _native_proposer(monkeypatch, tool_calls):
@@ -1739,3 +2168,202 @@ def test_the_step_prompt_carries_the_same_tail_context() -> None:
 
     assert "Earlier tasks this session" in turn
     assert "BRIEF: mod_1 done" in turn
+
+
+def test_a_replan_round_sees_the_debt_and_receipts() -> None:
+    """A later plan round is asked to fix what execution already learned.
+
+    Measured on C10: four rounds proposed the same placeholder edit because the
+    planner only ever received "Return exactly one JSON plan." -- not the
+    pytest failure, not the unmet `test_passed` obligation.
+    """
+
+    from dataclasses import replace
+
+    from xenon.harness.llm import build_plan_messages
+    from xenon.kernel.contracts import (
+        Debt,
+        Obligation,
+        PropositionKind,
+    )
+
+    debt = Debt(
+        obligation=Obligation(
+            id="e5", kind=PropositionKind.TEST_PASSED, target="tests/test_x.py"
+        ),
+        reason="receipt status: failed",
+    )
+    view = replace(
+        _reflect_view(),
+        debt=(debt,),
+        working_set=(
+            {
+                "seq": 9,
+                "tool": "test",
+                "observation": "1 failed, 3 passed",
+            },
+        ),
+    )
+
+    user = build_plan_messages(view)[-1]["content"]
+
+    assert "1 failed, 3 passed" in user
+    assert "receipt status: failed" in user
+    assert user.rstrip().endswith("Return exactly one JSON plan.")
+
+
+def test_a_first_plan_ask_stays_a_bare_request() -> None:
+    """No receipts, no debt: the request is the single line it always was."""
+
+    from xenon.harness.llm import build_plan_messages
+
+    assert build_plan_messages(_reflect_view())[-1]["content"].endswith(
+        "Return exactly one JSON plan."
+    )
+
+
+def test_the_step_prompt_shows_a_violated_verdict() -> None:
+    """A repair turn must know which obligation is still open.
+
+    Measured on C10: the edit step's actor saw only its own read receipt, read
+    again, and the step was released with a `file_changed` gap after three
+    reads and zero writes.  The verdict the gate already reached is the fact
+    the actor was missing.
+    """
+
+    from dataclasses import replace
+
+    from xenon.harness.llm import build_step_messages
+    from xenon.kernel.contracts import (
+        StepContract,
+        StepKind,
+        Verdict,
+        VerdictStatus,
+        VerificationStage,
+    )
+
+    view = replace(
+        _reflect_view(),
+        step_verdicts=(
+            Verdict(
+                obligation_id="e4",
+                stage=VerificationStage.V1,
+                status=VerdictStatus.VIOLATED,
+                reason="no changed file fact",
+            ),
+        ),
+    )
+    step = StepContract(id=4, kind=StepKind.EDIT, targets=("calc.py",))
+
+    turn = build_step_messages(view, step, calls=1)[-1]["content"]
+
+    assert "step_verification" in turn
+    assert "e4" in turn
+    assert "no changed file fact" in turn
+
+
+def test_the_step_prompt_carries_the_plan_binding() -> None:
+    """The actor must see the step's intent and what proves it done.
+
+    Measured on C10: the plan put the repair instruction in the step's intent
+    params and its `file_changed` expectation in `expects`, but the prompt
+    showed only `id/kind/targets` and bare obligation ids.  The actor read the
+    same file three times and the step was released with a gap.
+    """
+
+    from dataclasses import replace
+
+    from xenon.harness.llm import build_step_messages
+    from xenon.kernel.contracts import (
+        Capability,
+        Obligation,
+        ObligationKind,
+        StepContract,
+        StepKind,
+        ToolIntent,
+    )
+
+    step = StepContract(
+        id=4,
+        kind=StepKind.EDIT,
+        intent=ToolIntent(
+            capability=Capability.EDIT,
+            params={"file_path": "calc.py", "instructions": "empty input → 0"},
+        ),
+        targets=("calc.py",),
+        expects=(
+            Obligation(
+                id="e4", kind=ObligationKind.FILE_CHANGED, target="calc.py"
+            ),
+        ),
+    )
+
+    turn = build_step_messages(replace(_reflect_view()), step, calls=1)[-1]["content"]
+
+    assert "empty input → 0" in turn
+    assert "calc.py" in turn
+    assert '"kind":"file_changed"' in turn
+
+
+def test_the_step_protocol_documents_how_to_write() -> None:
+    """`edit` is allowed by the step protocol, so its payload shape must be
+    there: the step system block replaces the generic action protocol, and an
+    undocumented write is a write the actor never makes."""
+
+    from dataclasses import replace
+
+    from xenon.harness.llm import build_step_messages
+    from xenon.kernel.contracts import StepContract, StepKind
+
+    messages = build_step_messages(
+        replace(_reflect_view()), StepContract(id=1, kind=StepKind.EDIT), calls=0
+    )
+    turn = messages[1]["content"]
+
+    assert '"capability":"edit"' in turn
+    assert '"files"' in turn
+    assert '"edits"' in turn
+
+
+def test_the_step_reviewer_sees_the_refusal_notes() -> None:
+    """The live profile is plan + step_scope + step_reflect.
+
+    After the step actor finishes, the reviewer is the only phase that gets a
+    say -- the plan's own intent is not replayed and the main actor is not
+    asked.  It received the step and the verdicts but never the harness's
+    notes, so a real read-only count run proposed another refused command,
+    closed the step, and delivered an unverified number ("这里没有弹出授权").
+    """
+
+    from dataclasses import replace
+
+    from xenon.harness.llm import build_step_review_messages
+    from xenon.kernel.contracts import Finish, StepContract, StepKind
+
+    step = StepContract(id=1, kind=StepKind.EXECUTE)
+    view = replace(_reflect_view(), active_step=step, steps=(step,))
+
+    quiet = build_step_review_messages(view, step, Finish("step done"))[-1]
+    assert "read-only mode" not in quiet["content"]
+
+    refused = replace(
+        view,
+        notes=(
+            "shell: refused by policy (read-only mode). This action did not "
+            "run. Do not repeat it; If the task genuinely needs exactly this "
+            "call, ask for it with `request_escalation`",
+        ),
+    )
+    turn = build_step_review_messages(refused, step, Finish("step done"))[-1]
+
+    assert "read-only mode" in turn["content"]
+    assert "request_escalation" in turn["content"]
+
+
+def test_the_step_review_protocol_documents_the_escalation_option() -> None:
+    """Option C: the reviewer's answer to a refused call is an ask, not a
+    reworded command.  The protocol used to offer only call_tool or null."""
+
+    from xenon.harness.llm import _STEP_REVIEW_PROTOCOL
+
+    assert "request_escalation" in _STEP_REVIEW_PROTOCOL

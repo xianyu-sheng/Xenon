@@ -49,6 +49,24 @@ def strip_ansi(text: str) -> str:
     return ANSI_RE.sub("", text)
 
 
+def condense(raw: str, *, keep: int = 4000) -> str:
+    """Transcript without the per-frame redraws Ink echoes on every keystroke.
+
+    Writing the raw PTY stream verbatim produced a 24 MB, 139k-line file for
+    three turns (96% of the whole working-tree diff).  Consecutive duplicates
+    are dropped and only the tail is kept; the answer and the evidence footer
+    live at the end.
+    """
+
+    lines = strip_ansi(raw).splitlines()
+    deduped: list[str] = []
+    for line in lines:
+        if deduped and line == deduped[-1]:
+            continue
+        deduped.append(line)
+    return "\n".join(deduped[-keep:])
+
+
 def wait_for(pty: winpty.PTY, needle: str, seconds: float) -> tuple[bool, str]:
     """Read the ConPTY until ``needle`` appears (plain-text match) or timeout."""
 
@@ -164,16 +182,23 @@ def main() -> int:
     launch = "node D:\\Xenon\\frontend\\dist\\cli.js --level auto-edit --model " + MODEL
     pty.write(launch + "\r")
 
-    # Real readiness is "model id · direct" — the first ❯ appears earlier,
-    # while the kernel is still connecting, and input typed then is dropped.
-    ok, seen = wait_for(pty, "direct", 60)
+    # Real readiness is the welcome card's model line (``已加载 N 个配置
+    # 模型``), which is rendered only after the host's ``ready`` frame.  The
+    # first ❯ appears earlier, while the kernel is still connecting, and input
+    # typed then is dropped.  The old needle ("model id · direct") matched a
+    # status-bar wording the current front-end no longer renders, so the probe
+    # reported "did not connect" on a perfectly connected screen.
+    ok, seen = wait_for(pty, "已加载", 60)
     transcript.append(seen)
     if not ok:
         print("FAIL: TS front-end did not finish connecting to the kernel")
-        (HERE / "transcript.raw.txt").write_text("".join(transcript), encoding="utf-8")
+        (HERE / "transcript.raw.txt").write_text(
+            "".join(transcript)[-2_000_000:], encoding="utf-8"
+        )
         return 1
     print("front-end ready")
-    time.sleep(1.0)
+    # Let the 3 s brand animation settle, exactly as the ConPTY harness does.
+    time.sleep(3.4)
 
     # ── Turn 1: shell command, then deny every approval it raises ────
     # Denying once is not enough: the model retries the command as a `test`
@@ -200,7 +225,9 @@ def main() -> int:
     transcript.append(seen)
     if "证据" not in strip_ansi(seen):
         print(f"FAIL: turn 1 evidence footer never appeared ({denials} denials)")
-        (HERE / "transcript.raw.txt").write_text("".join(transcript), encoding="utf-8")
+        (HERE / "transcript.raw.txt").write_text(
+            "".join(transcript)[-2_000_000:], encoding="utf-8"
+        )
         return 1
     print(f"turn 1 finished after {denials} denial(s)")
     time.sleep(1.0)
@@ -222,10 +249,22 @@ def main() -> int:
     transcript.append(seen[len(stale):])
     if new_path is None:
         print("FAIL: turn 2 ledger footer never appeared")
-        (HERE / "transcript.raw.txt").write_text("".join(transcript), encoding="utf-8")
+        (HERE / "transcript.raw.txt").write_text(
+            "".join(transcript)[-2_000_000:], encoding="utf-8"
+        )
         return 1
     print(f"turn 2 finished — ledger: {new_path}")
     time.sleep(1.0)
+
+    # ── Turn 3 (command): the same chain as the operator sees it ───
+    # Stored lessons are memory records; ``/memory lessons`` is the only
+    # surface that shows family, rule state and counters.  Asserting it here
+    # closes "learning happened but is invisible".
+    type_line(pty, "/memory lessons")
+    rendered, seen = wait_for(pty, "条教训", 30)
+    transcript.append(seen)
+    print(f"/memory lessons rendered: {rendered}")
+    time.sleep(0.8)
 
     pty.write("\x03")  # Ctrl-C: host shutdown
     time.sleep(1.5)
@@ -235,8 +274,10 @@ def main() -> int:
         pass
 
     raw = "".join(transcript)
-    (HERE / "transcript.raw.txt").write_text(raw, encoding="utf-8")
-    (HERE / "transcript.txt").write_text(strip_ansi(raw), encoding="utf-8")
+    # Never write the raw frame stream: Ink repaints the whole screen, so it is
+    # mostly duplicated redraws (24 MB for one run).  The condensed tail keeps
+    # the answer/evidence frames that a reviewer checks.
+    (HERE / "transcript.txt").write_text(condense(raw), encoding="utf-8")
 
     verify(raw)
     return _fail_count
@@ -306,15 +347,47 @@ def verify(raw: str) -> None:
         for e in e2
         if e.kind is EventKind.LESSON_APPLIED
     }
-    chain_ok = bool(proposed_ids) and proposed_ids == stored_ids == applied_ids
+    # A family of same-shape failures is summarized into one rule
+    # (``lesson_clustered``); from then on the rule is what later tasks carry
+    # and its members are deliberately not repeated.  The chain is therefore
+    # "applied id is a stored lesson OR the rule that summarizes them".
+    clustered = {
+        e.payload["lesson_id"]: tuple(e.payload.get("derived_from") or ())
+        for e in e1
+        if e.kind is EventKind.LESSON_CLUSTERED
+    }
+    applied_via_rule = {
+        lesson_id: members
+        for lesson_id, members in clustered.items()
+        if lesson_id in applied_ids and members and set(members) <= stored_ids
+    }
+    chain_ok = bool(proposed_ids) and proposed_ids == stored_ids and bool(
+        applied_ids
+    ) and applied_ids <= (stored_ids | set(clustered))
     check(
-        "every proposed lesson was stored and later applied (same ids)",
+        "every proposed lesson was stored; turn 2 applied them directly or "
+        "through the rule that summarizes them",
         chain_ok,
     )
     if not chain_ok:
         print(f"        proposed={sorted(proposed_ids)}")
         print(f"        stored={sorted(stored_ids)}")
         print(f"        applied={sorted(applied_ids)}")
+        print(f"        clustered={ {k: list(v) for k, v in clustered.items()} }")
+    if clustered:
+        print("        rule(s) summarized in turn 1:")
+        for event in e1:
+            if event.kind is EventKind.LESSON_CLUSTERED:
+                payload = event.payload
+                print(
+                    f"          {payload['lesson_id']} shape={payload['shape']} "
+                    f"state={payload['state']} from={len(payload.get('derived_from') or [])} "
+                    f"applied_next_turn={payload['lesson_id'] in applied_ids}"
+                )
+    check(
+        "if turn 1 summarized a rule, turn 2 carried that rule",
+        (not clustered) or bool(applied_via_rule),
+    )
 
     # The memory record must physically exist in the project-local backend.
     backend_dir = REPO / ".xenon"
@@ -339,6 +412,18 @@ def verify(raw: str) -> None:
     check("project-local memory holds the LESSON record on disk", found_record is not None)
     if found_record:
         print(f"        record: {found_record.get('id')} tags={found_record.get('tags')}")
+
+    plain = strip_ansi(raw)
+    check("/memory lessons rendered the learned family", "条教训" in plain)
+    check(
+        "/memory lessons named every stored lesson",
+        bool(stored_ids) and all(lesson_id in plain for lesson_id in stored_ids),
+    )
+    if clustered:
+        check(
+            "/memory lessons showed the summarizing rule and its family",
+            all(rule_id in plain for rule_id in clustered) and "族:" in plain,
+        )
 
     print(
         "\n"

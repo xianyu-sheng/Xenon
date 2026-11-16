@@ -93,6 +93,27 @@ def test_unscoped_memory_registry_exposes_only_user_memory(tmp_path):
         service.remember("项目事实", scope=MemoryScope.PROJECT_LOCAL)
 
 
+def test_explicit_data_root_keeps_the_config_entrypoint_isolated(
+    tmp_path, monkeypatch
+):
+    # Tests and embedded hosts pass ``user_data_root`` to get an isolated
+    # store.  The config entrypoint (XENON.md) must follow it: defaulting to
+    # the operator's real ``~/.config/xenon`` appended one index block per
+    # test run and eventually pushed the project rules past their budget.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "real-config"))
+
+    registry = MemoryBackendRegistry(None, user_data_root=tmp_path / "user-memory")
+
+    assert registry.user_config_root == tmp_path.resolve()
+    assert "real-config" not in str(registry.user_config_root)
+
+    service = MemoryService(registry)
+    service.remember("用户偏好简洁输出", scope=MemoryScope.USER, kind=MemoryKind.PREFERENCE)
+
+    assert (tmp_path / "XENON.md").exists()
+    assert not (tmp_path / "real-config").exists()
+
+
 def test_plain_remember_in_unscoped_mode_defaults_to_user_global(tmp_path, monkeypatch):
     output = io.StringIO()
     monkeypatch.setattr(

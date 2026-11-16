@@ -604,6 +604,7 @@ class TestCommands:
         assert "gpt4" in result
 
     def test_mode_command(self):
+        """One loop: /mode describes it and advertises no alternative."""
         from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
@@ -611,22 +612,26 @@ class TestCommands:
         result = dispatch_command(
             "/mode", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
         )
-        assert "plan-execute" in result
+        assert "当前循环" in result
+        assert "无需切换" in result
+        assert "plan-execute" not in result
 
     def test_mode_switch(self):
         from xenon.repl.commands import dispatch_command
 
         reg = ModelRegistry()
         ctx_mgr = ContextManager()
-        result = dispatch_command(
+        args_result = dispatch_command(
             "/mode",
             "react",
             registry=reg,
             ctx_mgr=ctx_mgr,
             session_state={},
         )
-        assert "✅" in result
-        assert reg.current_mode == "react"
+        # The loop phases are fixed: naming another paradigm is explained, not obeyed.
+        assert "无需切换" in args_result
+        assert "忽略" in args_result
+        assert reg.current_mode == "direct"
 
     def test_context_command(self):
         from xenon.repl.commands import dispatch_command
@@ -648,7 +653,10 @@ class TestCommands:
         result = dispatch_command(
             "/compact", "", registry=reg, ctx_mgr=ctx_mgr, session_state={}
         )
-        assert "✅" in result
+        # One message is entirely inside the retained window: nothing to fold,
+        # and the command must not claim a compression it did not perform.
+        assert "未压缩" in result
+        assert "对话已压缩" not in result
 
     def test_undo_command(self):
         from xenon.repl.commands import dispatch_command
@@ -853,7 +861,7 @@ class TestToolDetection:
         )
         monkeypatch.setattr(
             repl,
-            "_run_react_engine",
+            "_run_loop_turn",
             lambda text, models: rerouted.append((text, models)),
         )
 
@@ -1107,10 +1115,10 @@ class TestReactExceptionAssistantPlaceholder:
         )
 
         repl = self._build_repl()
-        # 直接调 _run_react_engine 路径（绕过 _handle_chat 整流程以减少 mock 面）
+        # 直接调 _run_loop_turn 路径（绕过 _handle_chat 整流程以减少 mock 面）
         # 手动加 user 消息模拟 line 745 的行为
         repl.ctx_mgr.add_user_message("测试 ReAct 异常")
-        repl._run_react_engine("测试 ReAct 异常", ["gpt4"])
+        repl._run_loop_turn("测试 ReAct 异常", ["gpt4"])
 
         # 验证：history 含 user + [错误] assistant 成对消息
         history = repl.ctx_mgr.history
@@ -1144,7 +1152,7 @@ class TestReactExceptionAssistantPlaceholder:
 
         monkeypatch.setattr(repl.ctx_mgr, "add_assistant_message", failing_add)
 
-        repl._run_react_engine("user msg to be cleaned", ["gpt4"])
+        repl._run_loop_turn("user msg to be cleaned", ["gpt4"])
 
         # 验证：add_assistant_message 失败 → trim_last_user 兜底 → history 为空
         assert repl.ctx_mgr.history == [], (
@@ -1160,7 +1168,7 @@ class TestFileClaimDenialRecursiveReact:
 
     _run_direct 中 _detect_file_claim / _detect_denial 检测到时：
     - trim_last_assistant() 已删 LLM 幻觉回复
-    - _run_react_engine 重试，但若引擎再次异常（罕见，因为修复5已让其内部捕获），
+    - _run_loop_turn 重试，但若引擎再次异常（罕见，因为修复5已让其内部捕获），
       user 消息已 add（line 745），assistant 消息被 trim，下一轮 history 出现
       user-only 序列。
 
@@ -1182,7 +1190,7 @@ class TestFileClaimDenialRecursiveReact:
         return repl
 
     def test_file_claim_react_engine_with_internal_placeholder(self, monkeypatch):
-        """实际场景：_run_react_engine 自身 catch（修复5），无需触发外层 try。"""
+        """实际场景：_run_loop_turn 自身 catch（修复5），无需触发外层 try。"""
 
         def failing_kernel(owner, **kwargs):
             raise RuntimeError("simulated engine failure")
@@ -1193,8 +1201,8 @@ class TestFileClaimDenialRecursiveReact:
 
         repl = self._build_repl_with_history(monkeypatch)
         repl.ctx_mgr.trim_last_assistant()
-        # _run_react_engine 内部已 catch（修复5）→ 自动加 [错误] 占位
-        repl._run_react_engine("帮我创建 hello.py", ["gpt4"])
+        # _run_loop_turn 内部已 catch（修复5）→ 自动加 [错误] 占位
+        repl._run_loop_turn("帮我创建 hello.py", ["gpt4"])
 
         # 验证：修复5 内部的占位消息生效
         history = repl.ctx_mgr.history

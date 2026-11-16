@@ -185,8 +185,11 @@ def execution_policy_denial(
     touch this" constraint — and always runs.
     """
 
+    required = required_execution_level(tool_name, params)
     protected = tuple(context.get("_protected_write_paths") or ())
-    if protected and required_execution_level(tool_name, params) >= 2:
+    protect_others = bool(context.get("_protected_write_others"))
+    allowed = tuple(context.get("_allowed_write_paths") or ())
+    if (protected or (protect_others and allowed)) and required >= 2:
         from xenon.nodes.approval_policy import write_targets_for
 
         for target in write_targets_for(tool_name, params):
@@ -194,6 +197,15 @@ def execution_policy_denial(
                 return (
                     f"用户明确要求不要修改 {target}；"
                     "本轮该路径受保护，如需修改请重新给出明确指令。"
+                )
+            # Relative negation ("创建 X；不要修改其他文件"): only the paths the
+            # request names stay writable.  An empty allow-list means the
+            # request named no concrete path, so enforcing it would silently
+            # become a global write ban again.
+            if protect_others and allowed and not _path_is_protected(target, allowed):
+                return (
+                    f"用户只授权修改 {'、'.join(allowed)}，并明确要求不要修改其他文件；"
+                    f"{target} 不在本轮授权范围内。"
                 )
 
     if not enforce_level:

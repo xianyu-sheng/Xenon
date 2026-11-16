@@ -169,6 +169,29 @@ def test_always_records_a_timed_grant_for_that_path_only(monkeypatch, tmp_path):
         )
 
 
+def test_q_cancel_answer_stops_the_running_runtime(monkeypatch, tmp_path):
+    """``q`` promises "cancel the whole task"; the kernel must hear it.
+
+    A refusal alone is just one failed call — the loop would ask again next
+    step.  The running runtime is the shared object that actually stops it.
+    """
+
+    repl = _make_repl(tmp_path)
+    _quiet_config(monkeypatch)
+    monkeypatch.setattr(sys, "stdin", _Tty())
+    monkeypatch.setattr("xenon.repl.repl.Prompt.ask", lambda *a, **k: "q")
+    cancelled: list[bool] = []
+    repl._active_runtime = SimpleNamespace(
+        request_cancel=lambda: cancelled.append(True)
+    )
+
+    approved, reason = repl._confirm_tool("command", {"command": "echo hi"}, "EXECUTE")
+
+    assert approved is False
+    assert reason == "用户取消任务"
+    assert cancelled == [True]
+
+
 def test_command_prompts_even_inside_workspace(monkeypatch, tmp_path):
     repl = _make_repl(tmp_path)
     _quiet_config(monkeypatch)

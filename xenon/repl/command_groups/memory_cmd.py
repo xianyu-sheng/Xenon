@@ -16,7 +16,7 @@ from xenon.repl.command_registry import command_handler, register_command
 register_command(
     "/memory",
     "管理跨会话记忆",
-    "/memory status|list|search|inspect|doctor|add|replace|rollback|archive|restore|pin|migrate|clear [参数]",
+    "/memory status|list|search|inspect|doctor|lessons|add|replace|rollback|archive|restore|pin|migrate|clear [参数]",
 )
 
 
@@ -454,6 +454,9 @@ def _cmd_memory_v2(*, args: str, repl: Any) -> str:
             "旧文件未删除；确认新记忆无误后可自行备份或移除。"
         )
 
+    if sub == "lessons":
+        return _lessons_report(service, include_archived="--all" in sub_args)
+
     if sub == "clear":
         records = service.list_records()
         if not records:
@@ -467,6 +470,57 @@ def _cmd_memory_v2(*, args: str, repl: Any) -> str:
         return f"✅ 已归档 {len(records)} 条记忆；未物理删除，可按 ID 恢复。"
 
     return (
-        "用法: /memory status|list|search|inspect|doctor|add|replace|rollback|"
-        "archive|restore|pin|unpin|migrate|clear [参数]"
+        "用法: /memory status|list|search|inspect|doctor|lessons|add|replace|"
+        "rollback|archive|restore|pin|unpin|migrate|clear [参数]"
     )
+
+
+def _lessons_report(service: Any, *, include_archived: bool) -> str:
+    """``/memory lessons``: the self-evolution chain in one view.
+
+    A lesson is a memory record, so this is the same store ``/memory list``
+    reads -- but the lesson view shows what learning needs: the structural
+    family, the rule state, how often it was applied, and how often the
+    failure recurred.  Retired lessons stay visible with ``--all`` because a
+    retirement is evidence about the *harness*, not a record to hide.
+    """
+
+    from xenon.harness.lessons import LessonStore
+
+    store = LessonStore(service)
+    lessons = [
+        lesson
+        for lesson in store
+        if include_archived or not lesson.retired
+    ]
+    if not lessons:
+        return "暂无教训。失败会由确定性事件提议、存储，并在同类复发时聚类成规则。"
+    order = {"proven": 0, "active": 1, "hypothesis": 2}
+    lessons.sort(
+        key=lambda lesson: (
+            order.get(lesson.state, 3),
+            -lesson.applied,
+            lesson.id,
+        )
+    )
+    lines = [
+        f"共 {len(lessons)} 条教训"
+        "（hypothesis → active → proven；复发达阈值则 retired）:"
+    ]
+    for lesson in lessons:
+        state = "retired" if lesson.retired else lesson.state
+        kind = "规则" if lesson.is_rule else lesson.kind
+        lines.append(
+            f"  [{lesson.id}] {kind}/{state} · 应用 {lesson.applied}"
+            f" · 复发 {lesson.recurrences}"
+        )
+        lines.append(f"     {lesson.action_text[:120]}")
+        if lesson.shape:
+            lines.append(f"     族: {lesson.shape}")
+        if lesson.derived_from:
+            ids = ", ".join(lesson.derived_from[:6])
+            more = " …" if len(lesson.derived_from) > 6 else ""
+            lines.append(f"     总结自: {ids}{more}")
+    if not include_archived and any(lesson.retired for lesson in store):
+        lines.append("已退役的教训用 /memory lessons --all 查看。")
+    return "\n".join(lines)

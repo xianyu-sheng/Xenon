@@ -32,6 +32,13 @@ TaskSpec
   → Finalizer（只 stage 已验证路径，生成交付提交）
 ```
 
+一个循环里固定三个阶段：**Plan（规划）→ React（逐步执行）→ Reflect（按事实校验）**
+（架构技术文档 §2.2 / §4.2 的同一命名）。一轮未完成时由外层任务循环带着账本、
+债务、计划与已验证证据继续，最多 `LoopRuntime.MAX_OUTER_ROUNDS = 3` 轮；内层
+步数上限 `DEFAULT_MAX_STEPS = 1024`，主刹车是确定性循环检测与 180 秒停滞，
+而不是步数。`/mode`、欢迎卡、状态栏、dashboard 快照与内置编辑器状态行都调用
+同一个 `xenon.modes.describe_loop()`，描述只可能来自这一处。
+
 ### 0.2 内核总览
 
 ```text
@@ -224,7 +231,7 @@ xenon/
 | 子代理 | 默认只读（min(父级, READ_ONLY)）；审批通道继承父上下文；子任务只能继承授权、不能创建授权 | `harness/child.py`、`harness/child_worker.py` |
 | register_tool | 模块白名单 + 危险模块拒绝 + 凭证/配置模块点名拒绝 | `tool_node._validate_register_module` |
 | hooks | 用户级始终信任；项目级需指纹信任（`/trust-hooks`）；PreToolUse 超时/崩溃 fail-closed | `hooks/runner.py` |
-| 项目配置 | 项目 `.xenon/config.yaml` 只能覆盖 `intent_classifier / auto_route / limits / interaction / retention`；`paths` / `sandbox` / `validation` / `development` 被忽略并告警 | `repl/system_config.py` |
+| 项目配置 | 项目 `.xenon/config.yaml` 只能覆盖 `intent_classifier / limits / interaction / retention`；`paths` / `sandbox` / `validation` / `development` 被忽略并告警 | `repl/system_config.py` |
 | 凭证 | Windows DPAPI 静态加密（keyring 可选，明文兜底并标注）；所有读者走同一入口；`models.yaml` 不再保存 key | `utils/credentials_io.py` |
 | 沙箱 | 只读模式 + 命令白名单（链感知）的确定性拒绝；`sandbox.backend` 可选 docker/wsl（不可用 fail closed）；`process` 后端如实声明非安全边界 | `sandbox/__init__.py`、`sandbox/backends.py` |
 

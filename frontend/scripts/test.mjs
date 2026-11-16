@@ -8,10 +8,20 @@
 
 import { spawnSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
-const files = readdirSync('dist')
-  .filter((name) => name.endsWith('.test.js'))
-  .map((name) => `dist/${name}`);
+/** dist mirrors src, so a test in src/dashboard/ must not be invisible. */
+function collect(directory) {
+  const found = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) found.push(...collect(path));
+    else if (entry.name.endsWith('.test.js')) found.push(path);
+  }
+  return found;
+}
+
+const files = collect('dist');
 
 if (files.length === 0) {
   console.error('no compiled tests in dist/: run `npm run build` first');

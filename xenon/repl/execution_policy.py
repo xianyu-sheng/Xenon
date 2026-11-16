@@ -108,6 +108,10 @@ class ExecutionPolicy:
     # Targets named by a scoped negation, e.g. "不要修改 probe.txt".  The turn
     # may still write elsewhere; the tool boundary rejects these paths.
     protected_write_paths: tuple[str, ...] = ()
+    # A *relative* negation ("不要修改其他文件") protects everything except the
+    # paths the request names; it is not a ban on the requested write.
+    protected_write_others: bool = False
+    allowed_write_paths: tuple[str, ...] = ()
 
     @property
     def requires_tools(self) -> bool:
@@ -178,7 +182,7 @@ _NO_WRITE = re.compile(
             r"\b(?:leave|keep)\s+[^\n,;]{0,60}?\s(?:unchanged|untouched|as\s+is)\b",
             r"(?:do\s+not|don't|never|without|must\s+not|may\s+not|not\s+allowed\s+to)\s+"
             r"(?:write|save|create|modify|edit|delete|change|touch|update|remove)"
-            r"(?:\s+(?:any|a|the))?"
+            r"(?:\s+(?:any|a|the|other|remaining|rest\s+of\s+the))?"
             r"(?:\s+files?\b|\s+(?=[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]{1,10}\b))",
             r"\bno\s+file\s+(?:write|changes?)\b",
         ]
@@ -216,6 +220,13 @@ _WRITE = re.compile(
     r"|(?:写|编写|创建|新建|生成|修改|编辑|替换|删除)"
     r".{0,24}(?:文件|目录|文件夹|项目|仓库|代码库|\w+\.[A-Za-z0-9]+)"
     r"|(?:\w+\.[A-Za-z0-9]+).{0,16}(?:修改|编辑|替换|删除|改一下|改下)"
+    # 「在 x.txt 写入一行」「config.yaml 里补一段」：目标在前、动作在后。
+    # 以上所有分支都要求动词在前，于是这类最常见的写作语序在权限层被判成
+    # 只读，真实任务（计划探测）里连写工具都没有被提供。「查看 x 里写的内容」
+    # 是描述不是请求：`写` 后接 的/着/过 时不算。这是语序结构，不是词表。
+    r"|[\w./\\-]+\.[A-Za-z0-9]{1,10}\s*(?:里|中|内|上)?\s*"
+    r"(?:写入|写到|保存|保存到|追加|输出|导出|创建|修改|编辑|替换|删除|添加|插入|补充|"
+    r"写(?![的着过]))"
     # 语义意图（修复/重构/优化/更新 + 代码实体）不在此处判定：正则只负责
     # 操作原语与显式结构，语义由 LLM 分类器主导（无分类器时保守回落）。
     r"|(?:删除|移除|去掉|清理).{0,16}(?:代码|注释|日志|文件|目录|依赖|引用|导入|import)"
@@ -398,6 +409,24 @@ _IMPLICIT_READ = re.compile(
     re.IGNORECASE,
 )
 
+# 「显式点名工具 / 显式要求调用工具」是结构信号，不是领域枚举：MCP 生态里
+# 工具名永远是 ``server:tool`` 这种命名空间标识符，用户只要写出一个这样的
+# 记号，或者用调用动词点名「… 工具」，本回合就必须带着真实工具集进循环。
+# 少了这条信号，真实任务「使用 MCP 工具 e2e_echo:echo 回显 hello」被判成
+# 「请求不需要外部操作」（ANSWER_ONLY），直接对话回答「没有这个工具」——
+# 工具明明已注册、已发现、已注入，只是回合从未进内核。
+_TOOL_REQUEST = re.compile(
+    # 命名空间标识符：两侧都以字母开头，排除时间 12:30、URL http://、
+    # Windows 盘符 C:\ 和文件尾部（(?<!...) 防止从更长标识符中间截取）。
+    r"(?<![A-Za-z0-9_.:/-])[A-Za-z][\w.-]*:[A-Za-z][\w.-]*(?![\w/])"
+    # 调用动词 + 近距离工具名词：「使用/调用/借助 … 工具」。只要求结构与
+    # 距离，不枚举任何 MCP/领域名称。
+    r"|(?:使用|调用|借助|通过|利用|试着用|用一下|调一下|发起)\s*"
+    r"[^，。！？,.!?\n]{0,24}?工具"
+    r"|(?:use|call|invoke|run)\s+(?:the\s+)?[\w.:-]{0,32}\s*tools?\b",
+    re.IGNORECASE,
+)
+
 _REQUEST_CUE = re.compile(
     r"(?:请(?:你)?|请帮我|帮(?:我)?|麻烦(?:你)?|劳烦(?:你)?|能否|"
     r"可否|可以(?:请你|帮我))\s*",
@@ -476,11 +505,22 @@ class ExecutionSignals:
     write_snippets: tuple[str, ...] = ()
     execute_snippets: tuple[str, ...] = ()
     read_snippets: tuple[str, ...] = ()
+    # 显式工具请求（server:tool 标识符或「调用 … 工具」）：证明本回合需要
+    # 真实工具集，而不是纯对话。与具体 MCP/领域无关。
+    tool_snippets: tuple[str, ...] = ()
     negation_snippets: tuple[str, ...] = ()
     no_write: bool = False
     # A scoped negation ("不要修改 plan_probe.txt") must not become a global
     # write ban.  Global no_write remains true only for untargeted negations.
     no_write_targets: tuple[str, ...] = ()
+    # "不要修改其他文件" is relative: the named write target stays authorized,
+    # while every other path is protected.  Treating it as a global ban made
+    # every "create X, don't touch the rest" task read-only.
+    no_write_others: bool = False
+    # Paths named by the request that stay writable under the relative guard.
+    # Computed from the whole request (not the 5-path hint cap) so a long
+    # multi-file task is never fenced by truncation.
+    no_write_allowed_paths: tuple[str, ...] = ()
     no_execute: bool = False
     no_tools: bool = False
     chat_only: bool = False
@@ -517,10 +557,20 @@ class ExecutionSignals:
     def read_evidence(self) -> bool:
         return bool(self.read_snippets) or bool(self.paths)
 
+    @property
+    def tool_request(self) -> bool:
+        return bool(self.tool_snippets)
+
 
 _NO_WRITE_GLOBAL_WORDS = re.compile(
     r"任何|所有|一切|多个|这些|那些|文件|磁盘|目录|folder|directories",
     re.IGNORECASE,
+)
+# 「不要修改其他文件」是相对禁令：点名目标仍可写，其余路径受保护。
+# 必须先于上面的「文件」检查，否则常见的「创建 X；不要修改其他文件」
+# 会把整轮读成只读。
+_NO_WRITE_RELATIVE = re.compile(
+    r"其他|其它|别的|其余|剩下的|remaining|the\s+rest|other", re.IGNORECASE
 )
 _CLAUSE_BREAK = re.compile("[\u3001\u3002\uff1b\uff0c\uff01\uff1f\n,;!?]")
 
@@ -536,22 +586,22 @@ def _clause_span(text: str, start: int, end: int) -> tuple[int, int]:
     return left, right
 
 
-def _no_write_scope(text: str) -> tuple[tuple[str, ...], bool]:
-    """Return (protected paths, has_global_negation).
+def _no_write_scope(text: str) -> tuple[tuple[str, ...], bool, bool]:
+    """Return (protected paths, has_global_negation, has_relative_negation).
 
     Only a negation in a clause that names a concrete path is scoped.  A
     negation about files in general ("不要写任何文件") stays global even when
-    another path appears in the same sentence.
+    another path appears in the same sentence.  A *relative* negation
+    ("不要修改其他文件") is neither: the named write target stays authorized
+    and every other path is protected.
     """
 
     targets: list[str] = []
     global_negation = False
+    relative_negation = False
     for match in _NO_WRITE.finditer(text):
         left, right = _clause_span(text, match.start(), match.end())
         clause = text[left:right]
-        if _NO_WRITE_GLOBAL_WORDS.search(clause):
-            global_negation = True
-            continue
         found: list[str] = []
         for segment in (text[match.end() : right], text[left : match.start()]):
             for path in _PATH_REFERENCE.finditer(segment):
@@ -568,9 +618,28 @@ def _no_write_scope(text: str) -> tuple[tuple[str, ...], bool]:
                     found.append(value)
         if found:
             targets.extend(found)
-        else:
+        if _NO_WRITE_RELATIVE.search(clause):
+            # "不要修改其他文件" / "leave the rest untouched": scope guard.
+            relative_negation = True
+        elif _NO_WRITE_GLOBAL_WORDS.search(clause) or not found:
             global_negation = True
-    return tuple(dict.fromkeys(targets)), global_negation
+    return tuple(dict.fromkeys(targets)), global_negation, relative_negation
+
+
+def _strip_negated_mutations(text: str) -> str:
+    """Blank negation spans so a fence is never read as write intent.
+
+    ``不要修改 plan_probe.txt`` is a constraint, yet its "修改" surfaced as a
+    ``write_verb`` signal — the scoped case then authorized writes everywhere
+    else while protecting the named target.  The negation remains in the
+    negation snippets; only the intent scan sees it removed.
+    """
+
+    out = list(text)
+    for match in _NO_WRITE.finditer(text):
+        for index in range(match.start(), match.end()):
+            out[index] = " "
+    return "".join(out)
 
 
 def extract_execution_signals(text: str) -> ExecutionSignals:
@@ -578,7 +647,8 @@ def extract_execution_signals(text: str) -> ExecutionSignals:
 
     source = text.strip()
     request_source = _split_request_clause(source)
-    no_write_targets, no_write_global = _no_write_scope(source)
+    no_write_targets, no_write_global, no_write_others = _no_write_scope(source)
+    write_source = _strip_negated_mutations(request_source)
 
     write_patterns: list[str] = []
     write_snippets: list[str] = []
@@ -587,10 +657,10 @@ def extract_execution_signals(text: str) -> ExecutionSignals:
         write_patterns.append("task_delivery")
         write_snippets.append(task_delivery.group(0))
     for label, pattern, haystack in (
-        ("write_verb", _WRITE, request_source),
-        ("write_targeted", _WRITE_TARGETED, request_source),
+        ("write_verb", _WRITE, write_source),
+        ("write_targeted", _WRITE_TARGETED, write_source),
         ("git_request", _DIRECT_BARE_GIT_REQUEST, source),
-        ("implicit_write", _IMPLICIT_WRITE, request_source),
+        ("implicit_write", _IMPLICIT_WRITE, write_source),
     ):
         hits = _snippets(pattern, haystack, limit=1)
         if hits:
@@ -598,10 +668,10 @@ def extract_execution_signals(text: str) -> ExecutionSignals:
             write_snippets.extend(hits)
 
     # 裸祈使句（“请写入”）没有目标，但仍然是写盘请求，不能落入闲聊。
-    if _BARE_WRITE_IMPERATIVE.search(request_source):
+    if _BARE_WRITE_IMPERATIVE.search(write_source):
         write_patterns.append("write_imperative")
         write_snippets.extend(
-            _snippets(_BARE_WRITE_IMPERATIVE, request_source, limit=1)
+            _snippets(_BARE_WRITE_IMPERATIVE, write_source, limit=1)
         )
 
     negation_snippets: list[str] = []
@@ -614,34 +684,46 @@ def extract_execution_signals(text: str) -> ExecutionSignals:
     for pattern in (_PATH_REFERENCE, _URL_REFERENCE):
         read_snippets.extend(_snippets(pattern, source, limit=2))
 
+    tool_snippets = list(_snippets(_TOOL_REQUEST, source, limit=2))
     execute_snippets = list(_snippets(_EXECUTE, request_source, limit=2))
     if task_delivery is not None:
         execute_snippets.append(task_delivery.group(0))
+
+    path_refs = tuple(
+        dict.fromkeys(
+            match.group(0).strip()
+            for match in _PATH_REFERENCE.finditer(source)
+            if match.group(0).strip()
+        )
+    )
+    protected = set(no_write_targets)
+    allow_paths = (
+        tuple(path for path in path_refs if path not in protected)
+        if no_write_others
+        else ()
+    )
 
     return ExecutionSignals(
         write_patterns=tuple(write_patterns),
         write_snippets=tuple(dict.fromkeys(write_snippets)),
         execute_snippets=tuple(dict.fromkeys(execute_snippets))[:2],
         read_snippets=tuple(dict.fromkeys(read_snippets))[:5],
+        tool_snippets=tuple(dict.fromkeys(tool_snippets))[:2],
         negation_snippets=tuple(dict.fromkeys(negation_snippets))[:5],
         no_write=no_write_global,
         no_write_targets=no_write_targets,
+        no_write_others=no_write_others,
+        no_write_allowed_paths=allow_paths,
         no_execute=bool(_NO_EXECUTE.search(source)),
         no_tools=bool(_NO_TOOLS.search(source)),
         chat_only=bool(_CHAT_OUTPUT.search(source)),
         advisory=bool(_ADVISORY.search(source)),
         deferred_write=bool(_DEFER_WRITE.search(source)),
-        write_imperative=bool(_BARE_WRITE_IMPERATIVE.search(request_source)),
+        write_imperative=bool(_BARE_WRITE_IMPERATIVE.search(write_source)),
         action_target_mentioned=bool(
             _ACTION_VERBS.search(source) and _TARGET_NOUNS.search(source)
         ),
-        paths=tuple(
-            dict.fromkeys(
-                match.group(0).strip()
-                for match in _PATH_REFERENCE.finditer(source)
-                if match.group(0).strip()
-            )
-        )[:5],
+        paths=path_refs[:5],
     )
 
 
@@ -688,6 +770,12 @@ def classify_execution_policy(
     chat_output = signals.chat_only
     no_write = signals.no_write
     no_execute = signals.no_execute
+    # "Don't modify anything, don't run commands" is a *read-only* request, not
+    # a request to answer without looking.  Collapsing it to ANSWER_ONLY made a
+    # real turn ("读取 xenon/__init__.py … 不要修改任何文件，也不要运行命令")
+    # fail with "模型违反仅回答约束" when the model tried the read tool: the
+    # user forbade writes and shell, not reading.
+    wants_read = signals.read_evidence or signals.tool_request
 
     if no_tools:
         return _decision(
@@ -699,7 +787,7 @@ def classify_execution_policy(
 
     # An explicit chat destination is a hard boundary.  It must be evaluated
     # before broad action verbs such as "write" or "run".
-    if chat_output or (no_write and no_execute):
+    if chat_output or (no_write and no_execute and not wants_read):
         return _decision(
             ExecutionLevel.ANSWER_ONLY,
             "用户明确要求只在对话中回答",
@@ -717,12 +805,11 @@ def classify_execution_policy(
     if signals.advisory and not (signals.strong_write or signals.explicit_execute):
         wants_write = False
         wants_execute = False
-    # Keep path/URL evidence from the complete user turn.  They are frequently
-    # placed before “请你分析/学习…”, while request_source intentionally starts
-    # after the last polite request cue.  Looking only at request_source used
-    # to discard `/media/.../resume.tex` and GitHub repository URLs, routing
-    # those turns to direct mode without a read-only tools schema.
-    wants_read = signals.read_evidence
+    # ``wants_read`` (computed above from the complete turn) also keeps
+    # path/URL evidence that sits before “请你分析/学习…”.  ``request_source``
+    # starts after the last polite cue, so looking only at it used to discard
+    # `/media/.../resume.tex` and repository URLs and route those turns to
+    # direct mode without a read-only tools schema.
 
     if wants_execute:
         return _decision(
@@ -740,6 +827,16 @@ def classify_execution_policy(
             evidence=signals.write_patterns,
         )
 
+    # 用户点名了工具（``server:tool``）或明确要求「调用 … 工具」：本回合至少
+    # 需要只读工具集。具体某个远端工具是否更敏感由执行器按工具名分级 +
+    # 审批升级决定，这里只负责「别把需要工具的任务当闲聊回答」。
+    if signals.tool_request:
+        return _decision(
+            ExecutionLevel.READ_ONLY,
+            "用户明确要求调用工具/外部能力",
+            explicit_no_write=no_write,
+            explicit_no_execute=no_execute,
+        )
     if intent in {"query", "research"}:
         return _decision(
             ExecutionLevel.READ_ONLY,

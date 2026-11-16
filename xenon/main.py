@@ -93,6 +93,15 @@ def _launch_ts(args: argparse.Namespace) -> int | None:
         getattr(args, "ui", None) or os.environ.get("XENON_UI", "")
     ).strip().lower()
     if requested == "python":
+        if getattr(args, "dashboard", False):
+            # The panel is a renderer of the TS front-end's session; the Python
+            # editor has no such session to lend it.  Say so instead of starting
+            # a session with a flag that silently did nothing.
+            console.print(
+                "[red]--dashboard 需要 TS 前端（默认入口）；"
+                "--ui python 不支持。[/red]"
+            )
+            return 2
         return None
     script = _ts_frontend_script()
     node = shutil.which("node")
@@ -144,6 +153,8 @@ def _launch_ts(args: argparse.Namespace) -> int | None:
         command += ["--resume", str(resume)]
     for model in list(getattr(args, "model", None) or []):
         command += ["--model", str(model)]
+    if getattr(args, "dashboard", False):
+        command.append("--dashboard")
     console.print(f"[dim]· 交互界面：TS（{script}）[/dim]")
     try:
         return subprocess.call(command)
@@ -351,11 +362,6 @@ def cli() -> None:
         help="恢复历史会话（不带参数列出可选会话，带序号或名称直接恢复）",
     )
     parser.add_argument(
-        "--auto-route",
-        action="store_true",
-        help="启用智能路由，自动选择模式（v0.6.0）",
-    )
-    parser.add_argument(
         "--ui",
         choices=["auto", "ts", "python"],
         default=None,
@@ -363,6 +369,11 @@ def cli() -> None:
             "交互界面：ts（Ink 前端）/ python（内置编辑器）/ auto（有构建产物就用 ts）。"
             "也可用 XENON_UI 设置"
         ),
+    )
+    parser.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="随会话启动本地 Web 面板（仅监听 127.0.0.1；XENON_DASHBOARD=0 可关闭）",
     )
     parser.add_argument(
         "--version",
@@ -592,7 +603,7 @@ def _interactive_session_picker() -> str | None:
         age = get_session_age(s) or str(s.get("saved_at", ""))[:16]
         console.print(
             f"  [bold cyan]{i}[/bold cyan]  {name} · {s['messages']} 条消息"
-            f" · {s.get('paradigm', '')} · {age}"
+            f" · 单循环 · {age}"
         )
 
     try:
@@ -637,7 +648,9 @@ def _print_session_list() -> None:
     table.add_column("名称", style="#67e8f9", max_width=32)
     table.add_column("时间", style="dim #94a3b8", width=12)
     table.add_column("消息", justify="right", width=6)
-    table.add_column("模式", style="dim", width=10)
+    # The saved ``paradigm`` is a phase profile, not a selectable mode: every
+    # session resumes into the one loop, so the column says so.
+    table.add_column("循环", style="dim", width=10)
 
     for i, s in enumerate(sessions, 1):
         display_name = session_display_name(s)
@@ -647,7 +660,7 @@ def _print_session_list() -> None:
             display_name,
             age,
             str(s["messages"]),
-            s.get("paradigm", ""),
+            "单循环",
         )
 
     console.print()
@@ -863,7 +876,6 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         config_path=getattr(args, "config", None),
         verbose=getattr(args, "verbose", False),
         resume=getattr(args, "resume", None),
-        auto_route=getattr(args, "auto_route", False),
     )
 
 

@@ -179,10 +179,15 @@ CORE_SPECS: tuple[ToolSpec, ...] = (
             "required": ["pattern"],
         },
         description=(
-            "Search the workspace for a pattern. The walk skips VCS, dependency "
-            "and cache directories and stops at a bounded scan; when it stops "
-            "early the result says it is incomplete, so narrow `path` instead of "
-            "reading it as zero matches."
+            "Search file CONTENTS for a pattern (like grep). It matches lines "
+            "inside files, NOT file names: a pattern like `\\.exe$` does not "
+            "count .exe files, it finds lines that end in .exe. To enumerate "
+            "files by name or count them, run a directory listing through the "
+            "shell (`Get-ChildItem`); when the boundary forbids shell, ask for "
+            "it with `request_escalation`. The walk skips VCS, dependency and cache "
+            "directories and stops at a bounded scan; when it stops early the "
+            "result says it is incomplete, so narrow `path` instead of reading "
+            "it as zero matches."
         ),
         preferences={"search": 20},
         requires_target=True,
@@ -509,6 +514,27 @@ _CJK_HINTS: tuple[tuple[str, str], ...] = (
 )
 
 
+_CJK_RUN = re.compile(r"[㐀-䶿一-鿿]+")
+
+
+def _cjk_grams(value: str) -> set[str]:
+    """Character bigrams for CJK text, without a domain word list.
+
+    Chinese objectives rarely share an English token with a tool name, and a
+    fixed hint table can never cover every domain.  Comparing characters is
+    structural: any tool whose name/description is written in the same language
+    as the objective gets credit for the words they actually share.
+    """
+
+    grams: set[str] = set()
+    for run in _CJK_RUN.findall(value):
+        if len(run) == 1:
+            grams.add(run)
+        else:
+            grams.update(run[index : index + 2] for index in range(len(run) - 1))
+    return grams
+
+
 def _text_tokens(value: str) -> set[str]:
     tokens = {
         item
@@ -533,18 +559,44 @@ def _tokens_match(left: str, right: str) -> bool:
     )
 
 
+#: Evidence a *session* contract needs before it appends a tool forever.  One
+#: shared description token (2 points) is coincidence -- an unrelated GitHub
+#: tool whose description happens to say "python" scored that on a task whose
+#: only objective was ``print(11*12)``.  The floor is set to a name hit (12) or
+#: a name stem (8), so the contract grows only when the objective actually
+#: names the tool.
+_RELEVANCE_FLOOR = 8
+
+
 def select_mcp_tool_specs(
     specs: Sequence[ToolSpec],
     objective: str,
     *,
     limit: int = 16,
     allowed: Sequence[str] = (),
+    relevant_only: bool = False,
 ) -> tuple[ToolSpec, ...]:
     """Choose a bounded, deterministic subset of MCP tool specs.
 
     An explicit allowlist wins.  Otherwise tool names are weighted more than
-    descriptions; ties break by canonical name so the same objective and
-    catalog always produce the same prompt.
+    descriptions, and shared CJK bigrams count as real evidence; ties break by
+    canonical name so the same objective and catalog always produce the same
+    prompt.
+
+    ``limit`` is a *budget*, not a relevance filter: unscored tools fill the
+    remaining slots in canonical order.  Dropping them made a task fail whenever
+    the objective had no token overlap with the one tool that mattered — the
+    model then saw a single unrelated tool and no way to reach the right one.
+
+    ``relevant_only`` is for the *session* contract.  A per-task prompt can
+    afford canonical fill (it is rebuilt from scratch anyway), but a session
+    contract must not append tools on weak evidence: each appended schema
+    changes the tool block for the rest of the session, and a measured live
+    run added eight unrelated GitHub tools to a task that only ran
+    ``print(11*12)``.  With this flag the result is exactly the tools that
+    cleared ``_RELEVANCE_FLOOR`` -- no fill, and no canonical fallback: an
+    objective that names no MCP tool must leave the contract unchanged, not
+    append a batch that the next objective would replace.
     """
 
     cap = max(1, int(limit))
@@ -559,6 +611,7 @@ def select_mcp_tool_specs(
         )
 
     objective_tokens = _text_tokens(objective)
+    objective_grams = _cjk_grams(objective)
     scored: list[tuple[int, str, ToolSpec]] = []
     for spec in ordered:
         # The server prefix (``github``) is shared by every tool on that
@@ -576,13 +629,25 @@ def select_mcp_tool_specs(
                 score += 2
             elif any(_tokens_match(token, item) for item in description_tokens):
                 score += 1
+        if objective_grams:
+            name_grams = _cjk_grams(short_name)
+            description_grams = _cjk_grams(spec.description)
+            shared = objective_grams & (name_grams | description_grams)
+            # One shared word (e.g. 高铁) is stronger evidence than a single
+            # incidental English token, but it must not outweigh a full name
+            # match.
+            score += min(len(shared), 3) * 10
         scored.append((score, spec.name, spec))
 
     ranked = sorted(scored, key=lambda item: (-item[0], item[1]))
-    selected = [spec for score, _name, spec in ranked if score > 0]
-    if not selected:
-        selected = [spec for _score, _name, spec in ranked]
-    return tuple(selected[:cap])
+    if relevant_only:
+        # Evidence only: the contract grows by what the objective names, and
+        # stays byte-identical when it names nothing.
+        return tuple(
+            spec for score, _name, spec in ranked if score >= _RELEVANCE_FLOOR
+        )[:cap]
+    # Budget, not filter: relevant tools first, then canonical order.
+    return tuple(spec for _score, _name, spec in ranked[:cap])
 
 
 def mcp_tool_specs(tools: Mapping[str, Any]) -> tuple[ToolSpec, ...]:
@@ -612,6 +677,25 @@ def mcp_tool_specs(tools: Mapping[str, Any]) -> tuple[ToolSpec, ...]:
         schema = tool.get("inputSchema") or tool.get("input_schema") or {}
         if not isinstance(schema, Mapping):
             schema = {}
+        # ``inputSchema`` is JSON Schema.  It belongs in ``json_schema`` so
+        # native function calling ships the real properties/required list;
+        # dumping it into ``params_schema`` made the prose fallback read the
+        # envelope as parameters (``type``, ``properties``, ``required``), so
+        # a model saw three string arguments and none of the tool's own.
+        properties = schema.get("properties")
+        json_schema = dict(schema) if isinstance(properties, Mapping) and properties else {}
+        params_schema: dict[str, str] = {}
+        if json_schema:
+            params_schema = {
+                str(key): str(
+                    (value or {}).get("description", "")
+                    if isinstance(value, Mapping)
+                    else ""
+                )
+                for key, value in dict(properties).items()
+            }
+        elif schema:
+            params_schema = dict(schema)
         description = str(tool.get("description") or "").strip()
         specs.append(
             ToolSpec(
@@ -620,7 +704,8 @@ def mcp_tool_specs(tools: Mapping[str, Any]) -> tuple[ToolSpec, ...]:
                 capabilities=frozenset({Capability.REMOTE}),
                 effects=frozenset({EffectKind.NETWORK, EffectKind.OPAQUE}),
                 risk=Risk.SENSITIVE,
-                params_schema=dict(schema),
+                params_schema=params_schema,
+                json_schema=json_schema,
                 description=description[:500] or f"MCP tool {name}.",
                 preferences={"remote": 100},
             )

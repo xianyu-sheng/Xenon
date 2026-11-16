@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from xenon.repl.command_registry import command_handler, register_command
-from xenon.repl.model_registry import BUILTIN_MODES
 
 if TYPE_CHECKING:
     from xenon.repl.model_registry import ModelRegistry
@@ -166,10 +165,16 @@ def _cmd_set_model(
         return "已取消"
 
     model_id, short_name, provider = all_models[choice - 1]
-    alias = short_name.replace(".", "-")
+
+    # 已注册的模型直接复用它的别名并跳过 add_model。以前这里无条件用
+    # ``short_name.replace(".", "-")`` 重新注册，选中默认模型会把
+    # ``deepseek-v4.1-flash`` 变成一条新的 ``deepseek-v4-1-flash`` 记录 ——
+    # 同一模型在 /models 里出现两次，且新别名把点号抹成了连字符。
+    existing = next((mc for mc in existing_models if mc.model_id == model_id), None)
+    alias = existing.alias if existing is not None else short_name.replace(".", "-")
 
     try:
-        config = registry.add_model(model_id, alias)
+        config = existing if existing is not None else registry.add_model(model_id, alias)
 
         # v0.8.5: 自动切换到选中的模型（与 /model 共用同一套切换副作用）
         repl = session_state.get("_repl")
@@ -219,14 +224,32 @@ def _cmd_remove_model(*, args: str, registry: ModelRegistry, **kwargs: Any) -> s
     alias = args.strip()
     if not alias:
         return "用法: /remove_model <alias>"
-    if registry.remove_model(alias):
-        return f"✅ 模型 '{alias}' 已移除"
-    # v0.5.2: 也支持按 model_id 查找（如 custom/glm-5-2-260617）
-    for a, m in list(registry.models.items()):
-        if m.model_id == alias:
-            registry.remove_model(a)
-            return f"✅ 模型 '{alias}' 已移除"
-    return f"❌ 模型 '{alias}' 不存在"
+
+    removed = registry.get_model(alias)
+    if removed is None:
+        # v0.5.2: 也支持按 model_id 查找（如 custom/glm-5-2-260617）
+        removed = registry.get_model_by_id(alias)
+        if removed is not None:
+            alias = next(a for a, m in registry.models.items() if m is removed)
+
+    if removed is None or not registry.remove_model(alias):
+        return f"❌ 模型 '{alias}' 不存在"
+
+    # ``/import_models`` writes models.yaml; removal used to be memory-only, so
+    # an imported model came back on the next launch.  Credential-derived models
+    # are the opposite case: they have no file entry and are re-derived from
+    # credentials.yaml, so the honest answer names that.
+    if getattr(removed, "derived", False):
+        return f"✅ 模型 '{alias}' 已移除（凭据派生模型，重启后会重新加载）"
+
+    persist = getattr(registry, "source_path", None)
+    if persist is None:
+        return f"✅ 模型 '{alias}' 已移除（当前会话；无配置文件可写）"
+    try:
+        registry.save_to_file(persist)
+    except Exception as e:  # noqa: BLE001 - persistence must not undo removal
+        return f"✅ 模型 '{alias}' 已移除\n⚠️  持久化失败: {e}"
+    return f"✅ 模型 '{alias}' 已移除\n💾 已持久化到 {persist}"
 
 
 # /models ──────────────────────────────────────────────────
@@ -457,73 +480,68 @@ def _cmd_set_role(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
 
 # /mode ────────────────────────────────────────────────────
 
+_SINGLE_LOOP_NOTE = (
+    "Xenon 只有一个循环：Plan（规划）→ React（逐步执行）→ Reflect（按事实校验），"
+    "未完成时带着已有证据自动续轮。阶段固定，无需切换。"
+)
+
+
+def _loop_rules() -> str:
+    """The loop's real brakes and budgets, read from the code that enforces them.
+
+    Printed by ``/mode`` so the answer is not just "you cannot switch" but
+    what the one loop actually does.  Every number is imported, never typed
+    twice: a stale copy here is how a doc and a kernel drift apart.
+    """
+
+    try:
+        from xenon.harness.runner import DEFAULT_MAX_STEPS
+        from xenon.kernel.contracts import Budget
+        from xenon.kernel.runtime import LoopRuntime
+
+        stall = Budget().max_stall_seconds
+        stall_text = f"；停滞 {stall:.0f} 秒让位" if stall else "；不停滞让位"
+        return (
+            f"运行规则: 未完成自动续轮（最多 {LoopRuntime.MAX_OUTER_ROUNDS} 轮）；"
+            f"单轮步数上限 {DEFAULT_MAX_STEPS}{stall_text}；"
+            "能否交付由确定性证据判定，不由循环自称。"
+        )
+    except Exception:  # noqa: BLE001 — an explanation must not fail the command
+        return ""
+
+
 register_command(
     "/mode",
-    "切换或查看当前模式（单循环的阶段配置）",
-    "/mode [mode_name]\n可用: " + ", ".join(BUILTIN_MODES.keys()),
+    "查看当前循环（单一循环，无需切换）",
+    "/mode\n"
+    "说明：计划/执行/反思都是同一循环内的固定阶段，不是可选模式。",
 )
 
 
 @command_handler("/mode")
-def _cmd_mode(
-    *, args: str, registry: ModelRegistry, session_state: dict, **kwargs: Any
-) -> str:
-    if (args or "").strip().lower() in {"next", "cycle"}:
-        # Shift+Tab's behaviour, reachable from the protocol front-end: the
-        # keyboard shortcut and this command must not diverge.
-        names = list(registry.modes.keys())
-        if not names:
-            return "❌ 没有可用模式"
-        try:
-            index = names.index(registry.get_current_mode().name)
-        except ValueError:
-            index = -1
-        target = names[(index + 1) % len(names)]
-        try:
-            mode = registry.set_mode(target)
-        except ValueError as exc:
-            return f"❌ {exc}"
-        repl = session_state.get("_repl")
-        status_bar = getattr(repl, "status_bar", None) if repl is not None else None
-        if status_bar is not None:
-            status_bar.set_mode_notification(mode.name)
-        return f"✅ 已切换到模式: {mode.name} — {mode.description}"
+def _cmd_mode(*, args: str, registry: ModelRegistry, **kwargs: Any) -> str:
+    # A mode used to be a user-selectable paradigm and /mode a switcher (with
+    # an arrow-key picker, Shift+Tab cycling and an intelligent router that
+    # switched profiles per task).  That surface never matched the design: the
+    # kernel has exactly one loop, and plan/execute/reflect are phases inside
+    # it.  Users saw a mode index that read like a menu of different products
+    # and a follow-up that silently ran under a different profile.
+    #
+    # The command stays as a read-only answer -- and as the place Shift+Tab
+    # lands -- so old muscle memory gets an explanation instead of silence.
+    from xenon.modes import describe_loop
 
-    if not args:
-        # #183: arrow-key picker when a terminal is attached; without one the
-        # text list below is still the answer, so nothing is lost.
-        from xenon.repl.selector import ask_choice, mode_choices
-
-        repl = session_state.get("_repl")
-        picked = (
-            ask_choice(repl, title="选择模式", choices=mode_choices(registry))
-            if repl is not None
-            else None
-        )
-        if picked is None:
-            current = registry.get_current_mode()
-            lines = [f"当前模式: {current.name} — {current.description}\n"]
-            lines.append("可用模式（单循环的阶段配置）:")
-            for row in mode_choices(registry):
-                marker = " <-- 当前" if row.current else ""
-                lines.append(f"  {row.label:<18} {row.detail}{marker}")
-            return "\n".join(lines)
-        args = picked
-
-    try:
-        mode = registry.set_mode(args.strip())
-        # Learn from manual overrides of the intelligent router (never fatal).
-        # record_override() never raises (it swallows and logs internally).
-        router = session_state.get("intelligent_router")
-        if router is not None:
-            router.record_override(mode.name)
-        # P1-High: 更新状态栏显示
-        repl = session_state.get("_repl")
-        if repl and hasattr(repl, "status_bar"):
-            repl.status_bar.refresh()
-        return f"✅ 已切换到模式: {mode.name} — {mode.description}"
-    except ValueError as e:
-        return f"❌ {e}"
+    current = registry.get_current_mode()
+    # The internal preset name ("direct") is deliberately not printed: it is
+    # phase configuration, not a product the user picks, and leading with it
+    # was what made the surface look like a mode you still had to choose.
+    rules = _loop_rules()
+    return (
+        f"当前循环: {describe_loop(getattr(current, 'loop', None))}\n"
+        f"{_SINGLE_LOOP_NOTE}"
+        + (f"\n{rules}" if rules else "")
+        + (f"\n（忽略了参数 {args.strip()!r}：循环阶段是固定的。）" if (args or "").strip() else "")
+    )
 
 
 # /model ───────────────────────────────────────────────────
@@ -604,12 +622,10 @@ register_command("/provider", "查看已配置的厂商和可用模型", "/provi
 def _cmd_provider(**kwargs: Any) -> str:
     from xenon.repl.provider_registry import PROVIDERS, get_configured_providers
 
-    # 懒加载契约：同 /model，这是用户要看厂商全貌的入口，按需探测并回填。
-    _repl = kwargs.get("repl")
-    if _repl is not None and hasattr(_repl, "ensure_providers_probed"):
-        _repl.ensure_providers_probed()
-
-    configured = get_configured_providers()
+    # 状态命令保持本地：只读配置与内置/缓存目录，不发网络探测。
+    # 实测冷探测会让 /provider 阻塞约 90 秒（不可达厂商逐个超时），而用户
+    # 只是想在终端里看一眼配了哪些厂商。要拉实时目录用 /refresh（显式付费）。
+    configured = get_configured_providers(refresh_models=False)
     lines = ["已配置的厂商:\n"]
 
     if configured:
@@ -631,4 +647,5 @@ def _cmd_provider(**kwargs: Any) -> str:
         for p in unconfigured:
             lines.append(f"  {p.name} — {', '.join(p.models[:3])}...")
 
+    lines.append("\n（本地配置 + 内置/缓存目录；/refresh 可拉取厂商实时模型列表）")
     return "\n".join(lines)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +21,7 @@ from xenon.kernel.contracts import (
     PlanProposal,
     PropositionKind,
     ReleaseStep,
+    RequestEscalation,
     StepContract,
     StepKind,
     SubmitPlan,
@@ -39,8 +41,9 @@ def _view(
     debt: tuple[Debt, ...] = (),
     steps: tuple[StepContract, ...] = (),
     active: StepContract | None = None,
+    workspace: str = ".",
 ) -> ModelView:
-    spec = TaskSpec(task_id="t1", objective="x", workspace=".")
+    spec = TaskSpec(task_id="t1", objective="x", workspace=workspace)
     return ModelView(
         task=spec,
         system="s",
@@ -162,6 +165,191 @@ def test_follow_plan_releases_a_step_with_no_intent() -> None:
 
     assert isinstance(action, ReleaseStep)
     assert "no bound capability" in action.reason
+
+
+def test_follow_plan_issues_its_bound_action_exactly_once() -> None:
+    """An approved plan must not replay a failed step forever.
+
+    Measured C10 approval run: the plan bound ``read`` to a directory.  Every
+    round re-issued the identical call; after seven attempts the stuck
+    detector blocked the *whole* task, so the edit step behind it never ran.
+    A follow-plan step has one bound action — repeating it cannot differ
+    from the first attempt — so the strategy releases the step and lets the
+    runtime move on.
+    """
+
+    step = _plan_step()
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, follow_plan=True),
+        actor=lambda view: Finish("done"),
+        planner=lambda view: PlanProposal(steps=(step,)),
+    )
+    strategy.propose(_view())  # submit
+    view = _view(steps=(step,), active=step)
+
+    assert isinstance(strategy.propose(view), CallTool)
+    released = strategy.propose(view)
+
+    assert isinstance(released, ReleaseStep)
+    assert "already executed" in released.reason
+
+
+def test_follow_plan_runs_a_changed_intent() -> None:
+    """A replan may reuse a step id with a genuinely different action."""
+
+    step = _plan_step()
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, follow_plan=True),
+        actor=lambda view: Finish("done"),
+        planner=lambda view: PlanProposal(steps=(step,)),
+    )
+    strategy.propose(_view())
+    revised = _plan_step()
+    revised = StepContract(
+        id=revised.id,
+        kind=revised.kind,
+        intent=ToolIntent(capability=Capability.EDIT, params={"file_path": "b.py"}),
+        targets=("b.py",),
+    )
+
+    assert isinstance(strategy.propose(_view(steps=(step,), active=step)), CallTool)
+    action = strategy.propose(_view(steps=(revised,), active=revised))
+
+    assert isinstance(action, CallTool)
+    assert action.intent.params == {"file_path": "b.py"}
+
+
+def _write_step(path: str, content: str, *, step_id: int = 1) -> StepContract:
+    return StepContract(
+        id=step_id,
+        kind=StepKind.EDIT,
+        intent=ToolIntent(
+            capability=Capability.EDIT,
+            params={"files": [{"path": path, "content": content}]},
+        ),
+        targets=(path,),
+    )
+
+
+def test_follow_plan_replays_a_write_that_creates_a_new_file(
+    tmp_path: Path,
+) -> None:
+    """Creating a path needs no observation: authoring it is the plan's job."""
+
+    step = _write_step("new.py", "x = 1\n")
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, follow_plan=True),
+        actor=lambda view: Finish("done"),
+        planner=lambda view: PlanProposal(steps=(step,)),
+    )
+    strategy.propose(_view(workspace=str(tmp_path)))
+
+    action = strategy.propose(
+        _view(steps=(step,), active=step, workspace=str(tmp_path))
+    )
+
+    assert isinstance(action, CallTool)
+    assert action.intent.params["files"][0]["content"] == "x = 1\n"
+
+
+def test_follow_plan_materializes_a_write_with_no_payload(
+    tmp_path: Path,
+) -> None:
+    """A demoted edit step describes work; only the actor can perform it."""
+
+    step = StepContract(
+        id=1,
+        kind=StepKind.EDIT,
+        intent=ToolIntent(capability=Capability.EDIT),
+        targets=("calc.py",),
+    )
+    seen: list[int] = []
+
+    def actor(view: ModelView, active: StepContract, calls: int):
+        seen.append(active.id)
+        return CallTool(
+            ToolIntent(capability=Capability.EDIT, params={"files": []})
+        )
+
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, follow_plan=True),
+        actor=lambda view: Finish("done"),
+        step_actor=actor,
+        planner=lambda view: PlanProposal(steps=(step,)),
+        resumed=True,
+    )
+
+    action = strategy.propose(
+        _view(steps=(step,), active=step, workspace=str(tmp_path))
+    )
+
+    assert isinstance(action, CallTool)
+    assert seen == [1]
+
+
+def test_approved_plan_never_replays_a_write_over_an_existing_file(
+    tmp_path: Path,
+) -> None:
+    """The plan phase saw no receipts, so its file content is a guess.
+
+    Measured C10 approval run: the plan bound ``apply_patch`` with
+    ``"<minimal fix of the buggy function body ...>"`` as the content of the
+    real ``buggy_calc.py``.  Following it verbatim overwrote the file with the
+    placeholder and the verify step then ran pytest against the wreckage.
+    """
+
+    (tmp_path / "calc.py").write_text(
+        "def f():\n    raise ValueError\n", encoding="utf-8"
+    )
+    step = _write_step("calc.py", "<minimal fix of the body>")
+    seen: list[int] = []
+
+    def actor(view: ModelView, active: StepContract, calls: int):
+        seen.append(active.id)
+        return CallTool(
+            ToolIntent(capability=Capability.READ, params={"file_path": "calc.py"})
+        )
+
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, follow_plan=True),
+        actor=lambda view: Finish("done"),
+        step_actor=actor,
+        planner=lambda view: PlanProposal(steps=(step,)),
+        resumed=True,
+    )
+
+    action = strategy.propose(
+        _view(steps=(step,), active=step, workspace=str(tmp_path))
+    )
+
+    assert isinstance(action, CallTool)
+    # The actor's move, not the plan's bound payload.
+    assert action.intent.capability is Capability.READ
+    assert seen == [1]
+    assert (
+        tmp_path / "calc.py"
+    ).read_text(encoding="utf-8").startswith("def f()")
+
+
+def test_approved_plan_releases_an_ungrounded_write_without_an_actor(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "calc.py").write_text("x = 1\n", encoding="utf-8")
+    step = _write_step("calc.py", "<placeholder>")
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, follow_plan=True),
+        actor=lambda view: Finish("done"),
+        planner=lambda view: PlanProposal(steps=(step,)),
+        resumed=True,
+    )
+
+    action = strategy.propose(
+        _view(steps=(step,), active=step, workspace=str(tmp_path))
+    )
+
+    assert isinstance(action, ReleaseStep)
+    assert "could not have read" in action.reason
+    assert (tmp_path / "calc.py").read_text(encoding="utf-8") == "x = 1\n"
 
 
 def test_step_react_uses_a_per_step_budget() -> None:
@@ -311,6 +499,55 @@ def test_step_review_declining_releases_the_step() -> None:
         strategy.propose(_view(steps=(step,), active=step)), ReleaseStep
     )
     assert strategy.drain_notices()[0]["decision"] == "step_review_declined"
+
+
+def test_step_review_can_ask_the_human_for_a_refused_call() -> None:
+    """A review is a decision with a form of appeal, not only "one more call".
+
+    Real run: the bound step call was vetoed by the read-only boundary, the
+    reviewer proposed another refused command, the step closed, and the model
+    answered a number it could not verify ("这里没有弹出授权").  The reviewer's
+    ask has to leave the step sub-loop exactly like a tool call.
+    """
+
+    step = _plan_step()
+    intent = ToolIntent(
+        capability=Capability.SHELL, params={"command": "Get-ChildItem *.py"}
+    )
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True, step_reflect=True),
+        actor=lambda view: Finish("done"),
+        step_actor=lambda view, active, calls: Finish("step done"),
+        planner=lambda view: PlanProposal(steps=(step,)),
+        step_reviewer=lambda view, active, action: RequestEscalation(
+            intent, "counting files needs a directory listing"
+        ),
+    )
+    strategy.propose(_view())
+
+    proposed = strategy.propose(_view(steps=(step,), active=step))
+
+    assert isinstance(proposed, RequestEscalation)
+    assert proposed.intent.params == {"command": "Get-ChildItem *.py"}
+    assert strategy.drain_notices()[0]["decision"] == "step_correction"
+
+
+def test_a_step_actor_may_ask_for_a_refused_call() -> None:
+    """``RequestEscalation`` belongs beside ``CallTool`` in the step sub-loop."""
+    step = _plan_step()
+    strategy = LoopStrategy(
+        LoopProfile(plan=True, step_scope=True),
+        actor=lambda view: Finish("done"),
+        step_actor=lambda view, active, calls: RequestEscalation(
+            ToolIntent(capability=Capability.READ), "needs one read"
+        ),
+        planner=lambda view: PlanProposal(steps=(step,)),
+    )
+    strategy.propose(_view())
+
+    proposed = strategy.propose(_view(steps=(step,), active=step))
+
+    assert isinstance(proposed, RequestEscalation)
 
 
 # ── reflect phase ──────────────────────────────────────────────────────

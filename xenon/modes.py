@@ -148,12 +148,53 @@ def loop_profile_for(name: str | None) -> LoopProfile | None:
     return spec.loop if spec is not None else None
 
 
+def loop_phases(profile: LoopProfile | None) -> str:
+    """Name the phases a loop profile actually runs, in order.
+
+    This is the honest answer to "which mode am I in": there is one loop, and
+    a profile only decides which of its fixed phases run.  The names are the
+    design document's — Plan → React → Reflect (§2.2, §4.2) — and the string is
+    derived from the profile's own fields rather than looked up by mode name,
+    so a preset can never advertise a phase it does not execute.
+    """
+
+    if profile is None:
+        return "未绑定阶段"
+    phases: list[str] = []
+    if profile.plan:
+        phases.append("Plan（含计划审查）" if profile.plan_review else "Plan")
+    if profile.step_scope:
+        phases.append("React（按计划）" if profile.follow_plan else "React（逐步）")
+    else:
+        phases.append("React")
+    reflect: list[str] = []
+    if profile.step_reflect:
+        reflect.append("每步校验")
+    if profile.reflects:
+        reflect.append(f"收尾×{profile.reflect_rounds}")
+    if reflect:
+        phases.append("Reflect（" + "、".join(reflect) + "）")
+    return " → ".join(phases)
+
+
+def describe_loop(profile: LoopProfile | None) -> str:
+    """The one line every surface uses — /mode, /status, card, footer, panel.
+
+    Keeping a single formatter is what stops the terminal, the welcome card and
+    the dashboard from describing the same loop differently.
+    """
+
+    return f"单循环 · {loop_phases(profile)}"
+
+
 __all__ = [
     "DEFAULT_MODE",
     "MODE_CATALOG",
     "aliases_of",
+    "describe_loop",
     "distinct_modes",
     "ModeSpec",
     "get_mode",
+    "loop_phases",
     "loop_profile_for",
 ]

@@ -118,60 +118,6 @@ def ask_choice(
 # ── the three pickers ────────────────────────────────────────────
 
 
-def mode_choices(registry: Any) -> tuple[Choice, ...]:
-    """One row per *distinct* loop profile.
-
-    The catalog still resolves 7 names, but ``react`` declares exactly the same
-    phases as ``direct`` since the engines were retired — offering both as
-    "paradigms" would claim a difference that no longer exists.  Aliases are
-    named in the detail column instead, so they stay discoverable.
-    """
-
-    from xenon.modes import MODE_CATALOG, aliases_of
-
-    current = registry.get_current_mode()
-    # Walk the *registry's* catalog so an injected set (tests, plugins) is
-    # respected, and drop aliases: they resolve to an identical loop profile.
-    known = getattr(registry, "modes", {}) or {}
-    rows: list[Choice] = []
-    offered: set[str] = set()
-    for name, spec in known.items():
-        if getattr(spec, "alias_of", ""):
-            continue  # an alias never gets its own row
-        profile = getattr(spec, "loop", None)
-        if profile is not None and any(
-            repr(getattr(known.get(row), "loop", None)) == repr(profile)
-            for row in offered
-        ):
-            continue  # two names, one loop profile: do not pretend otherwise
-        detail = getattr(spec, "description", "") or ""
-        aliases = aliases_of(name) if name in MODE_CATALOG else ()
-        if aliases:
-            detail = f"{detail}（别名：{'/'.join(aliases)}）"
-        offered.add(name)
-        rows.append(
-            Choice(
-                value=name,
-                label=name,
-                detail=detail,
-                current=name == current.name,
-            )
-        )
-    if current.name not in {row.value for row in rows}:
-        # The current mode is an alias (or an unknown injected by a test):
-        # still show it, marked, so "what am I on" is always answerable.
-        spec = registry.modes.get(current.name)
-        rows.append(
-            Choice(
-                value=current.name,
-                label=current.name,
-                detail=getattr(spec, "description", "") or "",
-                current=True,
-            )
-        )
-    return tuple(rows)
-
-
 def model_choices(registry: Any) -> tuple[Choice, ...]:
     active = set(registry.role_priority.get("planner", []))
     return tuple(

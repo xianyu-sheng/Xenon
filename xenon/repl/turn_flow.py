@@ -99,34 +99,6 @@ class TurnFlowMixin:
         except Exception:  # noqa: BLE001 — a missing skill is not a crash
             self._active_skill_body = None
 
-    def _apply_routing_decision(self, decision: Any) -> None:
-        """Apply a router suggestion; a rejected switch must not break the turn.
-
-        Extracted from ``_handle_chat`` so the failure branch — the one that
-        tells the user /mode still works — is covered by a test instead of a
-        full chat turn (#294).
-        """
-
-        if decision is None:
-            return
-        old_mode = self.registry.current_mode
-        try:
-            self.registry.set_mode(decision.paradigm)
-            self.status_bar.set_mode_notification(decision.paradigm)
-            if self.intelligent_router.notify_user:
-                console.print(
-                    f"[dim]┌─ 智能路由: {old_mode} → "
-                    f"[bold]{decision.paradigm}[/bold][/dim]"
-                )
-                console.print(f"[dim]│  {decision.reason}[/dim]")
-                console.print(
-                    f"[dim]│  [置信度: {decision.confidence:.0%}, "
-                    f"规则: {decision.matched_rule}][/dim]"
-                )
-        except ValueError as e:
-            logger.warning(f"智能路由切换模式失败: {e}")
-            console.print(f"[yellow]⚠ 模式切换失败: {e}[/yellow]")
-
     def _handle_chat(
         self,
         user_input: str,
@@ -144,6 +116,7 @@ class TurnFlowMixin:
         self._last_user_text = user_input
         # A new turn resets the "current evidence" pointer.  A kernel turn
         # installs it again after the run; a legacy turn leaves it unset.
+        self._last_kernel_run = None
         self._last_kernel_ledger = None
         self._last_kernel_task_id = ""
         self._ensure_turn_tree_rebuilt()
@@ -182,14 +155,15 @@ class TurnFlowMixin:
         # （§9），按自己的期限过期，由 /permissions 或模式切换撤销。
         self.agent_context.clear_security_advisories()
 
-        # v0.6.0: 智能路由 - 根据用户输入自动选择模式
-        if self.intelligent_router.enabled:
-            routing_decision = self.intelligent_router.route(
-                user_input=user_input,
-                context=self.ctx_mgr,
-                current_mode=self.registry.current_mode
-            )
-            self._apply_routing_decision(routing_decision)
+        # One loop, fixed phases.  The intelligent router used to switch the
+        # mode profile per task ("write code" → plan-execute, "what is X" →
+        # direct), so the same conversation silently ran under different
+        # profiles and the mode index looked like a menu of products.  Plan,
+        # execute and reflect are phases of the one loop (DEFAULT_PROFILE),
+        # not per-turn choices.
+        #
+        # The router object is kept for `/auto-route` analytics and for a
+        # future explicit opt-in, but the turn no longer asks it to switch.
 
         # Side effects are authorized by the original request, never by the
         # optimizer's generated wording or by the selected reasoning mode.
@@ -214,16 +188,13 @@ class TurnFlowMixin:
         ctx_get = getattr(self.agent_context, "get", None)
         if callable(ctx_get):
             mode_name = str(ctx_get("_permission_mode") or "")
-        per_ctx = turn_contract_obj
         if mode_name:
-            from xenon.repl.execution_policy import PERMISSION_MODE_LEVELS
+            from xenon.repl.turn_contract import apply_permission_ceiling
 
-            cap = PERMISSION_MODE_LEVELS.get(mode_name)
-            if cap is not None and int(per_ctx.level) > cap:
-                turn_contract_obj = replace(
-                    per_ctx, level=ExecutionLevel(cap)
-                )
-                execution_policy = turn_contract_obj.to_execution_policy()
+            turn_contract_obj = apply_permission_ceiling(
+                turn_contract_obj, mode_name
+            )
+            execution_policy = turn_contract_obj.to_execution_policy()
         # Atomic tasks get a deterministic recipe and a side-effect scope
         # guard.  They must not inherit a previous coding TaskState, otherwise
         # run_with_delivery would demand verify/commit for an install/config
@@ -389,6 +360,13 @@ class TurnFlowMixin:
                 "_protected_write_paths": tuple(
                     execution_policy.protected_write_paths
                 ),
+                # "不要修改其他文件": named targets stay writable, the rest is
+                # protected.  Without these two keys the relative guard was
+                # invisible to ``execution_policy_denial``.
+                "_protected_write_others": bool(
+                    turn_contract_obj.protect_other_write_paths
+                ),
+                "_allowed_write_paths": tuple(turn_contract_obj.allowed_write_paths),
                 # Preserve filter constraints for terse continuations such as
                 # "结果呢" that do not repeat the original query.
                 "_query_constraint_source": inherited_intent_source or "",
@@ -579,8 +557,12 @@ class TurnFlowMixin:
         # 获取模型列表
         # v0.4.0: auto-route based on task difficulty
         if self.auto_router.is_empty():
-            # Fallback to static registry for backward compat
-            model_ids = self.registry.get_role_priority("planner")
+            # Fallback to static registry for backward compat.  The session's
+            # explicit choice still leads: a static list put the dead proxy
+            # first for every user who had selected a working model.
+            from xenon.repl.command_groups.common import ordered_model_candidates
+
+            model_ids = ordered_model_candidates(self.registry, self, "planner")
         else:
             route_engine = (
                 "react"
@@ -613,7 +595,9 @@ class TurnFlowMixin:
         model_ids = [m for m in model_ids if m not in self._failed_models]
         if not model_ids:
             self._failed_models.clear()
-            model_ids = self.registry.get_role_priority("planner")
+            from xenon.repl.command_groups.common import ordered_model_candidates
+
+            model_ids = ordered_model_candidates(self.registry, self, "planner")
             if not model_ids:
                 console.print("[red]· 所有模型均已失败且无法恢复[/red]")
                 return

@@ -8,8 +8,7 @@ left is the part the REPL still uses:
 * log capture around a turn,
 * the ``ConsoleCallback`` factory,
 * the "history must stay paired" error recorder,
-* ``_run_react_engine`` — direct-chat escalation, which now runs the kernel
-  (the name is a legacy label; the body is run_kernel_turn).
+* ``_run_loop_turn`` — direct-chat escalation, which runs one kernel turn.
 """
 
 from __future__ import annotations
@@ -167,13 +166,54 @@ class KernelHostMixin:
                 exc,
             )
 
-    def _run_react_engine(self, user_input: str, model_ids: list[str]) -> None:
+    _MAX_DELEGATED_CONTEXT_CHARS = 12_000
+
+    def _delegated_context_block(self, user_input: str) -> tuple[tuple[str, str], ...]:
+        """The conversation an escalated chat turn is continuing.
+
+        Direct chat hands a turn to the kernel when the model reaches for a
+        tool.  The kernel only receives the objective, so a resumed follow-up
+        ("我刚才让你记住的数字") searched the workspace and answered "账本里没有"
+        -- the chat history never crossed the hand-off.  Bound it with the same
+        lightweight projection the chat path already uses.
+        """
+
+        getter = getattr(self.ctx_mgr, "get_prompt_messages", None)
+        if not callable(getter):
+            return ()
+        try:
+            messages = getter(intent="chat", current_user_input=user_input)
+        except Exception:  # noqa: BLE001 — context is advisory, never fatal
+            return ()
+        lines: list[str] = []
+        for message in messages or ():
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "")
+            if role not in {"user", "assistant"}:
+                continue
+            content = str(message.get("content") or "").strip()
+            if content:
+                lines.append(f"{role}: {content}")
+        if not lines:
+            return ()
+        text = "\n".join(lines)
+        if len(text) > self._MAX_DELEGATED_CONTEXT_CHARS:
+            text = text[-self._MAX_DELEGATED_CONTEXT_CHARS :]
+        return (("conversation", text),)
+
+    def _run_loop_turn(self, user_input: str, model_ids: list[str]) -> Any:
         """Escalation entry: run the tool turn on the kernel loop.
 
         Direct chat can escalate mid-turn (the model asked for a tool, or
         claimed work it did not do).  That escalation is just a tool turn, so it
         runs on the same loop as every other tool turn instead of waking a
         legacy engine.
+
+        Returns the kernel run so the caller can report its answer.  When the
+        front-end owns the session it also passes its protocol callback here;
+        without it the delegated run emitted no frames at all and its answer
+        never reached the user.
         """
 
         from xenon.repl.execution_policy import ExecutionLevel
@@ -192,7 +232,7 @@ class KernelHostMixin:
                 proposed_level=ExecutionLevel(int(level)),
             )
         try:
-            run_kernel_turn(
+            return run_kernel_turn(
                 self,
                 objective=rebind_execution_boundary(
                     user_input, int(contract.level)
@@ -200,6 +240,8 @@ class KernelHostMixin:
                 user_input=user_input,
                 model_ids=model_ids,
                 execution_policy=contract.to_execution_policy(),
+                callback=getattr(self, "_protocol_callback", None),
+                extra_blocks=self._delegated_context_block(user_input),
             )
         except Exception as exc:  # noqa: BLE001 — history must stay paired
             # The user message is already recorded.  Leave a placeholder so the
@@ -212,3 +254,4 @@ class KernelHostMixin:
                 )
             except Exception:  # noqa: BLE001
                 self.ctx_mgr.trim_last_user()
+            return None

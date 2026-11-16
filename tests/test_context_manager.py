@@ -85,3 +85,40 @@ class TestLongSessionStability:
         # compact 真实触发过：history 被压缩且保留摘要
         assert len(cm.history) < 120
         assert any("摘要" in m.content for m in cm.history)
+
+
+class TestLightweightFollowupContext:
+    """A contextual follow-up must see the turn it refers to.
+
+    Real session: "对上面的第一点……" after a long review answer was answered
+    "上一轮内容不存在" — the lightweight history projection dropped every
+    assistant turn longer than 1200 chars, leaving a dangling user message.
+    """
+
+    def test_long_previous_answer_is_clipped_not_dropped(self):
+        cm = ContextManager()
+        answer = "1. 把认证抽成中间件\n" + ("细节 " * 600)  # > 1200 chars
+        cm.add_user_message("请审阅仓库")
+        cm.add_assistant_message(answer)
+        cm.add_user_message("对上面的第一点继续")
+
+        messages = cm.get_prompt_messages(
+            intent="chat", current_user_input="对上面的第一点继续"
+        )
+
+        contents = [m["content"] for m in messages]
+        assert any(c.startswith("1. 把认证抽成中间件") for c in contents), contents
+        clipped = next(c for c in contents if c.startswith("1. 把认证抽成中间件"))
+        assert len(clipped) <= cm._MAX_LIGHTWEIGHT_ASSISTANT_CHARS + 64
+        assert "截断" in clipped
+
+    def test_a_followup_without_context_still_gets_no_history(self):
+        cm = ContextManager()
+        cm.add_user_message("请审阅仓库")
+        cm.add_assistant_message("1. 把认证抽成中间件")
+
+        messages = cm.get_prompt_messages(
+            intent="chat", current_user_input="写一首诗"
+        )
+
+        assert all("请审阅仓库" not in m["content"] for m in messages)

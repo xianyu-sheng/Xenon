@@ -22,7 +22,8 @@
 - `ready.setup_needed`：内核用本地事实（凭证 + 已配置模型）判断是否首次运行，前端据此提示 `/setup`；
 - `status` 增加 `phase` / `steps` / `tool_calls` / `context_tokens` / `context_used_pct` / `elapsed_seconds` / `stalled_seconds`；
 - 审批请求携带内核的 `advisories`（不可信内容提示，非结论）。
-- `/mode next`（或 `cycle`）把 Shift+Tab 的循环切换暴露为命令，供前端直接调用。
+- `/mode` 只读地回答"当前循环"（Plan → React → Reflect）；Shift+Tab 走同一条命令，
+  没有任何"切换"语义可暴露。
 
 **动机**：终端 UI 的脆弱不在 Python 语言，而在渲染/输入层。已在真实 ConPTY
 里复现的问题都属于这一类：`prompt_toolkit` 与 `Prompt.ask` 抢 stdin、
@@ -67,6 +68,32 @@ Python 进程内运行，前端看不到也不需要看。
 ---
 
 ## 3. 消息类型
+
+### 3.0 `ready` — 内核 → 前端（启动，一次）
+
+启动时内核把「欢迎卡片 + 启动摘要」需要的**事实**一次给出，前端只负责排版。
+所有字段都是内核启动时的真实状态；本地探测是惰性的（v0.9.0 起），所以
+`probed` 在启动帧里恒为 `false`，前端据此使用「按需加载」措辞而不是假装已探测。
+
+```jsonc
+{
+  "v": 1, "type": "ready",
+  "models": ["deepseek/deepseek-v4-flash", "…"],
+  "cwd": "D:\\proj",
+  "setup_needed": false,
+  "version": "1.0.0",
+  "mode": "单循环",
+  "mode_description": "Plan → React（逐步） → Reflect（每步校验）",
+  "model_count": 3,
+  "loaded_models": 0,           // 当前已加载的模型数
+  "probed": false,              // 启动时是否已完成 provider 探测（惰性启动下为 false）
+  "available_providers": 0,     // 已知可用的 provider 数
+  "failures": [{ "name": "OpenAI", "reason": "认证失败" }]
+}
+```
+
+`model_count` 是模型池条目数（与 `models` 同源，显式给出以免前端自行计数）。
+`failures` 是启动检查的失败项，前端以警告色展示，不重新推断原因。
 
 ### 3.1 `turn.start` — 前端 → 内核
 
@@ -176,6 +203,11 @@ Python 进程内运行，前端看不到也不需要看。
   "answer": "……",
   "ledger": "~/.xenon/ledger/repl/…jsonl",
   "evidence": { "status": "verified" },   // verified|partial|unverified（小写，枚举原值）
+  "metrics": { "steps": 3, "tool_calls": 2 },
+  "debt": [                    // 未履行的义务（最多 5 条）；前端渲染为待人工核验清单
+    { "kind": "test_passed", "reason": "测试未运行" }
+  ],
+  "planned": false,            // phase == "planned"：本轮只产出计划，尚未执行
 
   // 仅失败帧（host 捕获异常时）：
   "error": "…",
@@ -187,17 +219,102 @@ Python 进程内运行，前端看不到也不需要看。
 `evidence` 是产品主张所在，**必须由内核计算并原样透传**，前端只负责展示。
 任何"前端自己判 VERIFIED"的实现都是错的。
 
-> 逐条 claim/debt 投影**尚未上线**：`TaskResult` 已有 `claims` / `debt`，但 wire 上目前只传
-> `evidence.status` 与 `ledger`。前端不要自行推断逐条状态；需要时再按本协议追加字段。
+`metrics` / `debt` 同样来自 `TaskResult`：步数与工具调用数用于结果摘要，
+`debt` 是账本里尚未履行、需要人看一眼的义务。前端不增删、不改写原因。
+`phase == "planned"` 时前端只展示计划提示，不把它当成已完成的答案。
 
-### 3.8 `status` — 内核 → 前端（周期推送）
+**`blocked` / `failed` 帧的 `answer` 不会为空。** 内核结果没有答案时，宿主用
+REPL 的同一套 `_result_summary` 补出说明（债务原因 → 账本里的阻断原因 →
+阶段），所以"被策略拒绝上限阻断"的回合在屏幕上仍有一句可读的话。实测缺过：
+回合 `running → blocked`、`turn.end.answer` 为空，用户只看到一轮"什么都没有"。
+`aborted`（用户按了停止）保持沉默，那是操作者自己的动作，不生成解释。
+
+### 3.8 `status` — 内核 → 前端（周期推送 / 请求应答）
+
+前端在轮次运行中每 500 ms 发一次 `{ "type": "status" }`，内核在 stdin 循环里
+立即回答；`turn.end` / `command.result` 之后也各拉一次。未知字段一律省略——
+状态栏宁可缺一格，也不能显示编造的数字。
 
 ```jsonc
 { "v": 1, "type": "status",
-  "mode": "direct", "model": "deepseek/deepseek-v4-flash",
-  "context_used_pct": 0.034, "cache_hit_pct": 0.51,
-  "cost_cny": 0.0034, "elapsed_seconds": 48 }
+  "models": ["…"], "mode": "单循环", "level": "auto-edit", "cwd": "D:\\proj",
+  "phase": "thinking", "steps": 2, "tool_calls": 1, "stalled_seconds": 7,
+  "context_used_pct": 0.034, "tokens": 1000, "max_tokens": 128000,
+  "messages": 4, "needs_compact": false, "streaming": false,
+  "cache_hit_pct": 42.0,       // 仅当 provider 真正报告过缓存用量
+  "cost_cny": 0.0034, "savings_pct": 30,   // 仅当数值 > 0
+  "elapsed_seconds": 48,       // 本轮的墙钟时长（仅轮次进行中）
+  "session_elapsed_seconds": 73 }   // 会话打开至今（底栏时长，仿 Python 工具栏）
 ```
+
+`phase` / `steps` / `tool_calls` / `stalled_seconds` 来自运行时快照；
+`tokens` / `max_tokens` / `messages` / `needs_compact` 来自 `ContextManager.stats()`。
+`cache_hit_pct` 在尚无缓存回报时省略——报 0% 会被误读成「缓存失效」。
+
+### 3.9 `session.report` — 内核 → 前端（退出前，一次）
+
+`/exit`、`/quit`、`Ctrl+C` 退出时，内核在进程结束前发一次会话结算，
+前端把它作为「本次会话省钱报告」写入滚动区。
+
+```jsonc
+{
+  "v": 1, "type": "session.report",
+  "models": [
+    { "model": "deepseek/deepseek-v4-flash",
+      "calls": 2, "tokens": 1200, "cache_hit_pct": 61.0, "cost_cny": 0.03 }
+  ],
+  "totals": {
+    "calls": 2, "tokens": 1200, "cost_cny": 0.03,
+    "saved_cny": 0.01, "savings_pct": 25, "cache_hit_pct": 61.0
+  }
+}
+```
+
+金额与命中率来自会话的 `CacheTracker`，不是前端估算。字段缺失时按缺省值展示。
+
+### 3.10 只读查询帧 — 前端 → 内核（请求/应答）
+
+本地可视化面板（`docs/design/dashboard.md`）需要的面板数据，走一组**只读**查询帧：
+前端发 `{v, id, type: "<kind>", …params}`，内核回 `{v, id, type: "<kind>.result", …}`，
+`id` 原样带回（前端按 id 配对，不靠顺序）。
+
+| kind | 参数 | 回答的主要字段 |
+|------|------|----------------|
+| `dashboard.snapshot` | — | `cwd` `models` `mode` `turn` `status` `ledger` `evidence` `debt[]`（含 `next_action`） `delivery` `approvals` `prompts` |
+| `workspace.status` | — | `is_git` `branch` `head` `dirty` `dirty_count` `baseline` `baseline_count` `session_created` `session_modified` `delivery` |
+| `diff.get` | — | `files[{status,path,origin,verification}]` `diff` `baseline` `baseline_count` `delivery` `truncated` |
+| `ledger.events` | `kinds?` `limit?` | `events` `total` `chain{valid,reason,events,last_seq,last_hash}` |
+| `evidence.chain` | — | `facts` `verdicts` `claims` `delivered` `status` `projection` `chain` |
+| `plan.get` | — | `plan{plan,steps,versions}` `accepted` `proposed` `rejected` `current` `ledger` |
+| `memory.list` | — | `items` `count` |
+| `mcp.status` | — | `servers` `tools` |
+| `report.get` | — | `models` `totals` |
+| `sessions.list` | — | `sessions` |
+| `sessions.tree` | — | `nodes[{id,parent,turns,events,first_at,last_at}]` `roots` |
+
+```jsonc
+// 请求
+{ "v": 1, "id": "q-7", "type": "workspace.status" }
+// 回答
+{ "v": 1, "id": "q-7", "type": "workspace.status.result",
+  "is_git": true, "branch": "main", "head": "0b279d5",
+  "dirty": [{ "status": "M", "path": "CHANGELOG.md" }], "dirty_count": 1 }
+```
+
+契约：
+
+- **只读**：查询不运行工具、不改内核状态、不写盘；不能回答时在结果帧里给
+  `error` 字段，而不是抛异常或结束会话。
+- 错误帧与正常帧携带同一组字段（`plan.get` 的 `accepted/proposed/rejected/current`、
+  `diff.get` 的 `baseline/delivery`、`evidence.chain` 的 `projection` 始终存在），
+  前端不按“是否有账本”分支渲染。
+- `plan.get` 的 `accepted/proposed/rejected` 是**用户决定**，与 `/plan` 共用
+  `resolve_plan_approval`。账本里的 `plan_accepted` 只是运行时的内部标记
+  （提出计划后停在 PLANNED），不能当作批准。
+- 宿主在独立 daemon 线程里执行查询，避免 `git` 等外部命令阻塞审批/输入的
+  stdin 主循环。
+- `dashboard.snapshot` 是首屏一次性的合并快照；其余面板按需查询。
+  实时状态仍来自既有推送帧，查询不取代它们。
 
 ---
 
@@ -212,9 +329,11 @@ Python 进程内运行，前端看不到也不需要看。
 ## 5. 兼容与版本
 
 - `v` 不匹配时前端必须报错退出，不做静默降级。
-- 新增字段是向后兼容的；新增消息类型需要 bump `v`。
-- 内核侧现有 Python 前端继续可用：协议层只是把三个回调改成转发器，
-  回调签名不变（`docs/design/` 之外的代码不需要改）。
+- 新增字段是向后兼容的。新增**单向通知**类型（不要求旧前端应答，例如
+  `session.report`）同样向后兼容：旧前端按未知类型忽略即可。新增**需要应答**的
+  请求类型才 bump `v`。
+- 内核侧仍保留显式选择的 `--ui python` 内置编辑器入口：协议层只是把三个回调
+  改成转发器，回调签名不变（`docs/design/` 之外的代码不需要改）。
 
 ---
 
@@ -237,6 +356,14 @@ Python 进程内运行，前端看不到也不需要看。
 - 不把 Ledger 或证据计算搬到前端 —— 那会让"证据"变成可以被前端影响的东西。
 - 不让前端持有或缓存授权 —— 记忆属于内核/前端宿主的内存态，且永不落盘（§9）。
 - 不做"前端直接调 LLM"的旁路 —— 所有模型调用都要经过内核才有账本。
+- 不在内核 stdout 上打印任何可见内容（动画、欢迎卡、状态栏、终端标题）——
+  stdout 是协议流。这些表现层全部由前端拥有：
+  - 跑者动画（`frontend/src/brand.ts` + 生成物 `brand-frames.ts`）与启动动效；
+  - 终端标签标题（`frontend/src/terminalTitle.ts`，OSC 序列 / Windows `process.title`）；
+  - spinner、本地秒表、状态栏实时字段（内核只提供 §3.8 的数字）；
+  - 结果排版（Markdown、证据角标、债务清单）。
+  内核只提供*事实*，前端只负责*怎么显示*：任何前端自己推算的版本号、模式名或
+  证据状态都是错的。
 
 ---
 
@@ -252,6 +379,7 @@ npm install
 npm run build
 npm start                      # = node dist/cli.js
 # 可选：--model <id>  --level read-only|auto-edit|bypass  --python <exe>  --cwd <dir>  --resume <序号|名称>
+#       --dashboard（随会话启动本地 Web 面板；仅回环地址）
 ```
 
 `xenon` 现在只有这一个产品入口。TypeScript 侧的类型检查：

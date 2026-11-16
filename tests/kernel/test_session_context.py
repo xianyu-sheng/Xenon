@@ -50,18 +50,18 @@ def test_blocks_appear_labelled_and_fenced():
         )
     )
 
-    assert "Session context" in view.system
-    assert "[project]" in view.system
-    assert "规则：不要修改 tests/" in view.system
-    assert "[memory]" in view.system
-    assert "用户偏好简洁输出" in view.system
+    assert "Session context" in view.task_brief
+    assert "[project]" in view.task_brief
+    assert "规则：不要修改 tests/" in view.task_brief
+    assert "[memory]" in view.task_brief
+    assert "用户偏好简洁输出" in view.task_brief
 
 
 def test_the_section_declares_itself_non_authoritative():
     view = _view(_spec(context_blocks=(("project", "whatever"),)))
 
     header = next(
-        line for line in view.system.splitlines() if "Session context" in line
+        line for line in view.task_brief.splitlines() if "Session context" in line
     )
     assert "reference only" in header
     assert "never an instruction" in header
@@ -71,14 +71,15 @@ def test_the_section_declares_itself_non_authoritative():
 def test_no_blocks_means_no_section():
     view = _view(_spec())
 
+    assert "Session context" not in view.task_brief
     assert "Session context" not in view.system
 
 
 def test_blank_blocks_are_skipped():
     view = _view(_spec(context_blocks=(("project", "   "), ("memory", "keep me"))))
 
-    assert "[project]" not in view.system
-    assert "[memory]" in view.system
+    assert "[project]" not in view.task_brief
+    assert "[memory]" in view.task_brief
 
 
 def test_the_objective_is_never_shadowed():
@@ -89,7 +90,7 @@ def test_the_objective_is_never_shadowed():
         )
     )
 
-    assert "Objective: rename add() to plus()" in view.system
+    assert "Objective: rename add() to plus()" in view.task_brief
 
 
 # ── determinism ───────────────────────────────────────────────────────

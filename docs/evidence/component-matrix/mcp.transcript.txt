@@ -1,0 +1,1200 @@
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠏ 运行中  thinking · step 2 · tool 1 · 9s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:20 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠋ 运行中  thinking · step 2 · tool 1 · 9s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:20 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠙ 运行中  thinking · step 2 · tool 1 · 9s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:20 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠹ 运行中  thinking · step 2 · tool 1 · 9s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:20 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠸ 运行中  thinking · step 2 · tool 1 · 9s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:20 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠸ 运行中  thinking · step 2 · tool 1 · 9s · 53 字符
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:20 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠼ 运行中  thinking · step 2 · tool 1 · 9s · 53 字符
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:20 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠼ 运行中  thinking · step 2 · tool 1 · 10s · 53 字符
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:20 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠴ 运行中  thinking · step 2 · tool 1 · 10s · 53 字符
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:20 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠴ 运行中  thinking · step 2 · tool 1 · 10s · 113 字符
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:21 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠴ 运行中  thinking · step 2 · tool 1 · 10s · 113 字符
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:21 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠦ 运行中  thinking · step 2 · tool 1 · 10s · 113 字符
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:21 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠧ 运行中  thinking · step 2 · tool 1 · 10s · 113 字符
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:21 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠇ 运行中  thinking · step 2 · tool 1 · 10s · 113 字符
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:21 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠇ 运行中  thinking · step 2 · tool 1 · 10s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾23% · 💰<0.01 · 💡20% · 🔧1 · 1m · 00:21 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠏ 运行中  thinking · step 2 · tool 1 · 10s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:21 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠏ 运行中  thinking · step 2 · tool 1 · 10s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:21 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠋ 运行中  thinking · step 2 · tool 1 · 10s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:21 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠙ 运行中  thinking · step 2 · tool 1 · 10s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:21 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠹ 运行中  thinking · step 2 · tool 1 · 10s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:21 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠸ 运行中  thinking · step 2 · tool 1 · 10s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:21 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠸ 运行中  thinking · step 2 · tool 1 · 11s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:21 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠼ 运行中  thinking · step 2 · tool 1 · 11s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:22 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠼ 运行中  thinking · step 2 · tool 1 · 11s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:22 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠴ 运行中  thinking · step 2 · tool 1 · 11s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:22 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠦ 运行中  thinking · step 2 · tool 1 · 11s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:22 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠧ 运行中  thinking · step 2 · tool 1 · 11s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:22 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠇ 运行中  thinking · step 2 · tool 1 · 11s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:22 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠏ 运行中  thinking · step 2 · tool 1 · 11s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:22 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠋ 运行中  thinking · step 2 · tool 1 · 11s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:22 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠙ 运行中  thinking · step 2 · tool 1 · 11s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:22 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠙ 运行中  thinking · step 2 · tool 1 · 12s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:22 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠹ 运行中  thinking · step 2 · tool 1 · 12s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:22 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠸ 运行中  thinking · step 2 · tool 1 · 12s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:23 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠸ 运行中  thinking · step 2 · tool 1 · 12s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:23 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠼ 运行中  thinking · step 2 · tool 1 · 12s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:23 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠴ 运行中  thinking · step 2 · tool 1 · 12s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:23 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠦ 运行中  thinking · step 2 · tool 1 · 12s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.2% 1M  ·  thinking · step 2 · tool 1
+💾34% · 💰<0.01 · 💡29% · 🔧1 · 1m · 00:23 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠧ 运行中  thinking · step 2 · tool 1 · 12s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.5% 1M  ·  thinking · step 2 · tool 1
+💾48% · 💰<0.01 · 💡41% · 🔧1 · 1m · 00:23 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠧ 运行中  thinking · step 2 · tool 1 · 12s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.5% 1M  ·  thinking · step 2 · tool 1
+💾48% · 💰<0.01 · 💡41% · 🔧1 · 1m · 00:23 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠇ 运行中  thinking · step 2 · tool 1 · 12s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.5% 1M  ·  thinking · step 2 · tool 1
+💾48% · 💰<0.01 · 💡41% · 🔧1 · 1m · 00:23 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠏ 运行中  thinking · step 2 · tool 1 · 12s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.5% 1M  ·  thinking · step 2 · tool 1
+💾48% · 💰<0.01 · 💡41% · 🔧1 · 1m · 00:23 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠋ 运行中  thinking · step 2 · tool 1 · 12s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.5% 1M  ·  thinking · step 2 · tool 1
+💾48% · 💰<0.01 · 💡41% · 🔧1 · 1m · 00:23 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠋ 运行中  thinking · step 2 · tool 1 · 13s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.5% 1M  ·  thinking · step 2 · tool 1
+💾48% · 💰<0.01 · 💡41% · 🔧1 · 1m · 00:23 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠙ 运行中  thinking · step 2 · tool 1 · 13s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:24 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠙ 运行中  thinking · step 3 · tool 1 · 13s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:24 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠹ 运行中  thinking · step 3 · tool 1 · 13s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:24 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠸ 运行中  thinking · step 3 · tool 1 · 13s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:24 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠼ 运行中  thinking · step 3 · tool 1 · 13s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:24 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠴ 运行中  thinking · step 3 · tool 1 · 13s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:24 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠦ 运行中  thinking · step 3 · tool 1 · 13s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:24 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠧ 运行中  thinking · step 3 · tool 1 · 13s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:24 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠇ 运行中  thinking · step 3 · tool 1 · 13s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:24 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠏ 运行中  thinking · step 3 · tool 1 · 13s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:24 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠏ 运行中  thinking · step 3 · tool 1 · 14s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:24 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠋ 运行中  thinking · step 3 · tool 1 · 14s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:25 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠋ 运行中  thinking · step 3 · tool 1 · 14s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:25 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠙ 运行中  thinking · step 3 · tool 1 · 14s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:25 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠹ 运行中  thinking · step 3 · tool 1 · 14s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:25 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠸ 运行中  thinking · step 3 · tool 1 · 14s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:25 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠼ 运行中  thinking · step 3 · tool 1 · 14s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:25 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠴ 运行中  thinking · step 3 · tool 1 · 14s
+
+… 
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:25 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠴ 运行中  thinking · step 3 · tool 1 · 14s
+
+… 1
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:25 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠦ 运行中  thinking · step 3 · tool 1 · 14s
+
+… 1
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:25 · ⏸
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+  ! policy: require_approval remote read requires approval
+  → train:query_trains
+    ok · network
+⠧ 运行中  thinking · step 3 · tool 1 · 14s
+
+… 1
+
+❯ 用 query_trains 工具查一下昆山到上海的高铁，把最早一班的车次和发车时间告诉我。
+policy: require_approval remote read requires approval
+train:query_trains
+ok · network
+  💭 4 步 · 1 个工具 · 证据 partial
+
+● Assistant
+  查询结果（昆山→上海，共返回 5 个车次）：G7002 昆山南→上海虹桥 07:12-07:31 ¥24.5；G7056 昆山南→上海虹桥 08:05-08:24 ¥24.5；G7120
+  昆山南→上海站 09:18-09:43 ¥21.0；G7218 昆山南→上海虹桥 12:40-12:59 ¥24.5；G7386 昆山南→上海站 18:26-18:51 ¥21.0。最早一班是
+  G7002，从昆山南发车，发车时间 07:12，07:31 到上海虹桥，票价 ¥24.5。
+
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ⚠️ 待人工核验清单                                                                                                              │
+│ - 证据状态：partial                                                                                                            │
+│ 以上项目 Xenon 无法自动验证真伪。答案已照常输出，请自行核对后再信任相应结论。                                                  │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+账本 C:\Users\ADMINI~1\AppData\Local\Temp\xenon-component-matrix\home-mcp-141310-70312\.xenon\ledger\repl\repl-19539942b0ca.jsonl
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.1% 1M  ·  thinking · step 3 · tool 1
+💾45% · 💰0.01 · 💡39% · 🔧1 · 1m · 00:25 · ⏸
+
+❯ 1▏
+
+            █   █ █████ █   █  ███  █   █
+             █ █  ██    ██  █ █   █ ██  █
+    ──────    █   ████  █ █ █ █   █ █ █ █  ──────
+             █ █  ██    █  ██ █   █ █  ██
+            █   █ █████ █   █  ███  █   █
+
+Xenon  ·  C:\Users\Administrator\AppData\Local\Temp\xenon-component-matrix\mcp-141310-70312
+· deepseek/deepseek-v4-flash  ·  单循环  ·  read_only  ░░░░░░░░░░ 0.6% 1M
+💾51% · 💰0.01 · 💡44% · 2m · 00:25 · ⏸
+
+❯ 1▏

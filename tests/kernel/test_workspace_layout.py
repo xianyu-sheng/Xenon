@@ -110,8 +110,9 @@ def test_the_view_carries_the_recorded_layout(tmp_path: Path) -> None:
 
     view = build_model_view(spec=spec, catalog=Catalog(), ledger=ledger)
 
-    assert "Workspace layout" in view.system
-    assert "tests/test_app.py" in view.system
+    assert "Workspace layout" in view.task_brief
+    assert "tests/test_app.py" in view.task_brief
+    assert "Workspace layout" not in view.system
 
 
 def test_a_view_without_a_recorded_layout_does_not_probe_on_its_own(

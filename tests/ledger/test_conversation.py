@@ -1,4 +1,4 @@
-"""Chat turns leave a ledger record without crowding out task history."""
+"""Chat turns leave a ledger record that session history can read back."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def test_a_successful_chat_turn_is_a_valid_ledger(tmp_path: Path) -> None:
     assert started["session_id"] == "s1"
     assert started["workspace"] == str(tmp_path)
     assert started["user_objective"] == "你好"
-    # Chat records live one level down: session history scans only the top.
+    # Chat records live one level down; session history scans both levels.
     assert turn.path.parent.name == "chat"
 
 
@@ -82,7 +82,14 @@ def test_a_delegated_turn_is_marked_so_it_cannot_masquerade_as_an_answer(
     assert final["evidence_status"] == "unverified"
 
 
-def test_chat_turns_do_not_crowd_out_real_task_history(tmp_path: Path) -> None:
+def test_chat_turns_are_part_of_the_session_history(tmp_path: Path) -> None:
+    """A follow-up can point at an explanation that never ran a tool.
+
+    Excluding ``chat/`` from the history made a kernel turn answer "上一轮内容
+    不存在" when the user asked about the first point of a previous chat
+    answer: the prompt said earlier turns exist but could not show that one.
+    """
+
     task = Ledger(tmp_path / "task.jsonl", "task")
     task.append(
         EventKind.TASK_STARTED,
@@ -98,15 +105,33 @@ def test_chat_turns_do_not_crowd_out_real_task_history(tmp_path: Path) -> None:
     )
 
     turn = open_conversation_turn(
-        tmp_path, objective="你好", workspace=str(tmp_path), session_id="s1"
+        tmp_path, objective="解释一下缓存", workspace=str(tmp_path), session_id="s1"
     )
     assert turn is not None
-    finish_conversation_turn(turn, answer="你好！")
+    finish_conversation_turn(turn, answer="缓存分三层……", intent="chat")
 
-    lines = recent_task_lines(tmp_path / "current.jsonl", session_id="s1")
+    lines = recent_task_lines(
+        tmp_path / "current.jsonl", session_id="s1", limit=5
+    )
 
     assert any("修复 calc.py" in line for line in lines)
-    assert not any("你好" in line for line in lines)
+    assert any("解释一下缓存" in line and "缓存分三层" in line for line in lines)
+
+
+def test_a_chat_ledger_can_be_read_back_by_id(tmp_path: Path) -> None:
+    from xenon.kernel.session_history import task_record
+
+    turn = open_conversation_turn(
+        tmp_path, objective="解释一下缓存", workspace=str(tmp_path), session_id="s1"
+    )
+    assert turn is not None
+    finish_conversation_turn(turn, answer="缓存分三层……")
+
+    record = task_record(tmp_path / "current.jsonl", turn.task_id)
+
+    assert record is not None
+    assert record.objective == "解释一下缓存"
+    assert record.answer == "缓存分三层……"
 
 
 def test_report_and_replay_accept_a_minimal_chat_ledger(tmp_path: Path) -> None:

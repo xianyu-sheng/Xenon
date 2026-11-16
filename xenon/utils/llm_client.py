@@ -60,6 +60,7 @@ from xenon.utils.llm_usage import (  # noqa: F401,E402
     _response_with_manifest,
     _set_cache_manifest,
     _usage_tl,
+    annotate_usage,
     register_response_callback,
     register_usage_callback,
 )
@@ -240,13 +241,19 @@ def chat_completion(
             )
             # 成功：发出 (model_id, 累计 usage, 延迟) 供 UsageTracker 等订阅
             latency = time.monotonic() - t0
-            _emit_usage(model_id, getattr(_usage_tl, "usage_acc", LLMUsage()), latency)
+            accumulated = annotate_usage(
+                getattr(_usage_tl, "usage_acc", LLMUsage()),
+                model_id=model_id,
+                messages=messages,
+                cache_context=cache_context,
+            )
+            _emit_usage(model_id, accumulated, latency)
             if usage_sink is not None:
                 # Per-call sink, so concurrent runs (parallel child tasks)
                 # cannot see each other's spend the way a global
                 # subscription would.
                 try:
-                    usage_sink(getattr(_usage_tl, "usage_acc", LLMUsage()))
+                    usage_sink(accumulated)
                 except Exception:  # noqa: BLE001 — accounting never breaks a call
                     pass
             return text
@@ -973,6 +980,23 @@ def chat_completion_with_tools(
                 )
             accumulated = getattr(_usage_tl, "usage_acc", None)
             usage = accumulated if isinstance(accumulated, LLMUsage) else response.usage
+            # The harness forwards ``response.usage`` to its per-run sink, so
+            # the attribution has to live on that object; the accumulator gets
+            # it too or ``_emit_usage`` subscribers would see an unnamed call.
+            annotate_usage(
+                response.usage,
+                model_id=model_id,
+                messages=messages,
+                tools=tools,
+                cache_context=cache_context,
+            )
+            annotate_usage(
+                usage,
+                model_id=model_id,
+                messages=messages,
+                tools=tools,
+                cache_context=cache_context,
+            )
             _emit_usage(model_id, usage, time.monotonic() - started_at)
             return response
         except httpx.HTTPStatusError as e:

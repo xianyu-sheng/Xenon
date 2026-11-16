@@ -101,23 +101,51 @@ def estimate_usage(
 
 
 def usage_payload(
-    usage: Any, *, model: str = "", latency: float = 0.0
+    usage: Any,
+    *,
+    model: str = "",
+    latency: float = 0.0,
+    phase: str = "",
 ) -> dict[str, Any]:
-    """Normalise an ``LLMUsage`` (or a mapping) into one ledger payload."""
+    """Normalise an ``LLMUsage`` (or a mapping) into one ledger payload.
+
+    The attribution fields are part of the contract, not decoration: a
+    ``model_usage`` row that cannot name its model or phase cannot answer the
+    only question anyone asks of it ("which call spent this, and why did it
+    miss the cache?").
+    """
 
     def _get(name: str) -> int:
         if isinstance(usage, Mapping):
             return int(usage.get(name) or 0)
         return int(getattr(usage, name, 0) or 0)
 
+    def _text(name: str) -> str:
+        if isinstance(usage, Mapping):
+            return str(usage.get(name) or "")
+        return str(getattr(usage, name, "") or "")
+
     prompt = _get("prompt_tokens")
     completion = _get("completion_tokens")
     payload: dict[str, Any] = {
-        "model": model,
+        "model": model or _text("model"),
+        "phase": phase or _text("phase"),
         "prompt_tokens": prompt,
         "completion_tokens": completion,
         "total_tokens": prompt + completion,
         "cache_hit_tokens": _get("cache_hit_tokens"),
+        # ``cache_hit_tokens`` alone cannot price a call: hit and miss carry
+        # different rates (50-120x apart), so the ledger must record both or a
+        # replay cannot reproduce what the task cost.
+        "cache_miss_tokens": _get("cache_miss_tokens"),
+        # What the request structure allowed to be cached (system + tools),
+        # and how much of it was the turn text.  ``cache_hit_tokens`` is what
+        # the provider actually served; these two say whether the gap was the
+        # provider's or ours.
+        "cacheable_tokens": _get("cacheable_tokens"),
+        "system_tokens": _get("system_tokens"),
+        "tools_tokens": _get("tools_tokens"),
+        "turn_tokens": _get("turn_tokens"),
         "estimated": not (prompt or completion),
         "latency_seconds": round(float(latency or 0.0), 3),
     }

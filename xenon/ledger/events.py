@@ -120,6 +120,18 @@ class EventKind(str, Enum):
     LESSON_STORED = "lesson_stored"
     LESSON_APPLIED = "lesson_applied"
     LESSON_RETIRED = "lesson_retired"
+    # A deterministic summary of a failure family (self-evolution "总结").
+    # Derived from stored lessons only; the message names the structural
+    # shape and how many failures it covers.
+    LESSON_CLUSTERED = "lesson_clustered"
+    # A rule was applied and its failure did not recur: its state moved
+    # hypothesis -> active -> proven.  The evidence is the *absence* of a
+    # same-shape failure in a ledger that applied it.
+    LESSON_CONFIRMED = "lesson_confirmed"
+    # A lesson was retired after recurring despite application.  That is not
+    # a model failure any more: the harness's own mechanism is the thing to
+    # fix.  The event is the design-debt record.
+    DESIGN_DEBT_OPENED = "design_debt_opened"
     INTERRUPT = "interrupt"
     LEGACY_SESSION = "legacy_session"
     # A deterministic loop signal with its diagnosis (#369).  Unlike
