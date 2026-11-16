@@ -131,6 +131,12 @@ button.primary { border-color: var(--accent); color: var(--accent); }
 #grid { display: none; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-auto-rows: minmax(190px, 1fr); gap: 8px; padding: 8px; flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .gridcell { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 8px 10px; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .gridcell h4 { margin: 0 0 6px; color: var(--accent); font-size: 12px; position: sticky; top: 0; background: var(--panel); }
+/* Grid cells are narrow: give the label column a fixed width and let the
+   value wrap, or the two columns fight over the same pixels and the rows
+   render on top of each other. */
+.gridcell table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.gridcell th, .gridcell td { border-bottom: 1px solid var(--line); padding: 2px 6px; text-align: left; vertical-align: top; word-break: break-word; }
+.gridcell th { width: 3.5em; color: var(--dim); font-weight: 500; white-space: nowrap; }
 .gridcell .metrics { margin-top: 4px; }
 body.gridmode #grid { display: grid; }
 body.gridmode #panel { display: none; }

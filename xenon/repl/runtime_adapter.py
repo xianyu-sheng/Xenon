@@ -29,6 +29,7 @@ from xenon.kernel.contracts import (
     TaskResult,
     ToolIntent,
     ToolSpec,
+    WriteScope,
 )
 from xenon.kernel.policies import PermissionMode
 from xenon.kernel.strategies import LoopProfile
@@ -939,6 +940,7 @@ class RuntimeAdapter:
         turn_path: Any = (),
         intent: str = "",
         intent_source: str = "",
+        write_scope: Any = None,
     ) -> HarnessRun:
         if self.strategy_mode == "legacy":
             raise KernelAdapterError(
@@ -991,6 +993,7 @@ class RuntimeAdapter:
             max_steps=self.max_steps,
             mode=TaskMode.PLAN if self.plan_only else TaskMode.AUTO,
             constraints=tuple(constraints),
+            write_scope=write_scope,
             sink=sink,
             context_blocks=tuple(context_blocks or ()),
             stable_context=tuple(stable_context or ()),
@@ -1743,6 +1746,31 @@ def resume_kernel_plan(
     return run
 
 
+def _write_scope_from_policy(policy: Any) -> WriteScope | None:
+    """Translate the turn's execution policy into the kernel's write scope.
+
+    ``None`` means "open": an unconstrained turn adds no field to the spec and
+    the obligation derivation behaves exactly as before.
+    """
+
+    if policy is None:
+        return None
+    allowed = tuple(
+        str(item) for item in (getattr(policy, "allowed_write_paths", ()) or ())
+    )
+    protected = tuple(
+        str(item) for item in (getattr(policy, "protected_write_paths", ()) or ())
+    )
+    allows = bool(getattr(policy, "allows_write", True))
+    if allows and not allowed and not protected:
+        return None
+    return WriteScope(
+        allows_write=allows,
+        allowed_paths=allowed,
+        protected_paths=protected,
+    )
+
+
 def run_kernel_turn(
     repl: Any,
     *,
@@ -1881,6 +1909,7 @@ def run_kernel_turn(
                 task_id=turn_id,
                 intent=intent,
                 intent_source=intent_source,
+                write_scope=_write_scope_from_policy(execution_policy),
             )
             if tool_contract is not None:
                 _remember_expanded_tools(tool_contract, run)

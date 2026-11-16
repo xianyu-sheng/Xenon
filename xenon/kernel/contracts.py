@@ -296,6 +296,55 @@ _MAX_CONTEXT_TOTAL_CHARS = 40_000
 
 
 @dataclass(frozen=True, slots=True)
+class WriteScope:
+    """Where the user's own words let this task write.
+
+    The turn's :class:`ExecutionPolicy` already decides tool calls, but the
+    obligation derivation reads only the objective text.  Without the same
+    facts a read-only turn is asked to ``file_changed`` a file it was
+    explicitly told to leave alone ("读 calc.py 并说明 bug，先不要改任何文件"
+    opened a ``file_changed(calc.py)`` obligation nobody could discharge, and
+    the turn was downgraded to partial debt for obeying the user).
+    """
+
+    allows_write: bool = True
+    #: A relative negation ("不要修改其他文件") — only these paths are writable.
+    allowed_paths: tuple[str, ...] = ()
+    #: A named negation ("不要修改 probe.txt") — these paths are never writable.
+    protected_paths: tuple[str, ...] = ()
+
+    @property
+    def is_open(self) -> bool:
+        return self.allows_write and not self.allowed_paths and not self.protected_paths
+
+    def permits(self, path: str) -> bool:
+        """Whether a write to *path* is within the scope the user granted."""
+
+        if not self.allows_write:
+            return False
+        target = _scope_path(path)
+        if not target:
+            return True
+        for raw in self.protected_paths:
+            if _same_path(target, raw):
+                return False
+        if not self.allowed_paths:
+            return True
+        return any(_same_path(target, raw) for raw in self.allowed_paths)
+
+
+def _scope_path(value: str) -> str:
+    return str(value).replace("\\", "/").strip().lower().lstrip("./").rstrip("/")
+
+
+def _same_path(target: str, raw: str) -> bool:
+    other = _scope_path(raw)
+    if not other:
+        return False
+    return target == other or target.endswith("/" + other) or other.endswith("/" + target)
+
+
+@dataclass(frozen=True, slots=True)
 class TaskSpec:
     task_id: str
     objective: str
@@ -325,6 +374,9 @@ class TaskSpec:
     intent_source: str = ""
     # Explicit V2 obligations supplied by the caller/intake layer.
     obligations: tuple[Obligation, ...] = ()
+    # The write permission the user's words imply.  Obligation derivation must
+    # not demand a file change the same words forbade.
+    write_scope: WriteScope = field(default_factory=WriteScope)
     # Session-level reference material the front-end wants the model to see:
     # project rules, retrieved memories, and similar.  It is **reference**,
     # never instruction and never evidence, and it is part of the view hash so

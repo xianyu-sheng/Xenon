@@ -453,6 +453,65 @@ class DashboardQueries:
                 item["verification"] = "attributed"
             else:
                 item["verification"] = "unverified"
+        # A finalized turn commits its files, so the worktree is clean and the
+        # loop above finds nothing.  The panel answers "what did this turn
+        # change", so fall back to the delivery commit for the paths the
+        # delivery record names -- never a blanket ``git show`` of whatever
+        # else that commit happened to contain.
+        commit = str(delivery.get("commit") or "")
+        committed = [
+            path
+            for path in (verified + attributed)
+            if not any(self._covers(item["path"], [path]) for item in files)
+        ]
+        if commit and committed:
+            names = (
+                self._git(
+                    "show",
+                    "--name-status",
+                    "--format=",
+                    "--no-color",
+                    "--no-ext-diff",
+                    "--no-renames",
+                    commit,
+                    "--",
+                    *committed,
+                )
+                or ""
+            )
+            for line in names.splitlines():
+                parts = line.split("\t")
+                if len(parts) < 2 or not parts[-1].strip():
+                    continue
+                path = parts[-1].strip()
+                status = (parts[0].strip()[:1] or "M").upper()
+                files.append(
+                    {
+                        "status": status,
+                        "path": path,
+                        "origin": "created" if status == "A" else "modified",
+                        "verification": (
+                            "verified"
+                            if self._covers(path, verified)
+                            else "attributed"
+                        ),
+                    }
+                )
+            committed_patch = (
+                self._git(
+                    "show",
+                    "--no-color",
+                    "--no-ext-diff",
+                    "--format=",
+                    "--no-renames",
+                    commit,
+                    "--",
+                    *committed,
+                )
+                or ""
+            )
+            if committed_patch:
+                patch = f"{patch}\n{committed_patch}" if patch else committed_patch
         return {
             "files": files,
             "diff": patch[:MAX_DIFF_BYTES],

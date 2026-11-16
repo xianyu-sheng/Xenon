@@ -573,11 +573,17 @@ class LoopRuntime:
         # harness layer, and record them: coverage that is not derived is
         # coverage that cannot exist.
         if not spec.obligations:
-            from xenon.harness.intake import derive_obligations
+            from xenon.harness.intake import (
+                derive_obligations,
+                filter_obligations_for_scope,
+            )
 
-            derived = derive_obligations(
-                spec.user_objective or spec.objective,
-                since_seq=self._run_start_seq,
+            derived = filter_obligations_for_scope(
+                derive_obligations(
+                    spec.user_objective or spec.objective,
+                    since_seq=self._run_start_seq,
+                ),
+                spec.write_scope,
             )
             if derived:
                 spec = replace(spec, obligations=derived)
@@ -590,6 +596,13 @@ class LoopRuntime:
             {
                 "mode": spec.mode.value,
                 "constraints": list(spec.constraints),
+                # The scope that filtered the obligations, so a replay can
+                # answer "why was no file_changed demanded" from the ledger.
+                "write_scope": {
+                    "allows_write": spec.write_scope.allows_write,
+                    "allowed_paths": list(spec.write_scope.allowed_paths),
+                    "protected_paths": list(spec.write_scope.protected_paths),
+                },
                 "obligations": [
                     {"id": item.id, "kind": item.kind.value, "target": item.target}
                     for item in spec.obligations

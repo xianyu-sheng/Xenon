@@ -195,6 +195,53 @@ def test_llm_chat_only_flag_cannot_invent_writes() -> None:
     assert contract.level < ExecutionLevel.WRITE
 
 
+def test_chat_only_cannot_erase_a_read_of_named_files() -> None:
+    """「读 README.md」是结构化读请求，分类器说 chat 也不能清成直接回答。
+
+    实测：通过 TS 前端输入「读 README.md 和 calc.py，告诉我 add 函数有什么
+    bug，先不要改任何文件。」，分类器判为 chat_only，合并层清空操作 →
+    本轮答案级，模型回「我没有文件读取工具可用」，两个文件都没被读过。
+    """
+
+    fake = FakeClassifier(
+        intent="chat", operations=(), confidence=0.95, chat_only=True
+    )
+    contract = build_turn_contract(
+        "读 README.md 和 calc.py，告诉我 add 函数有什么 bug，先不要改任何文件。",
+        classifier=fake,
+    )
+
+    assert contract.level is ExecutionLevel.READ_ONLY
+    assert contract.requires_tools is True
+    assert "read" in contract.operations
+
+
+def test_chat_only_still_drops_invented_writes_next_to_a_read() -> None:
+    """保留读下限，但 chat_only 仍然不能把凭空提议的写变成权限。"""
+
+    fake = FakeClassifier(
+        intent="chat",
+        operations=("read", "write"),
+        confidence=0.95,
+        chat_only=True,
+    )
+    contract = build_turn_contract("读 README.md，然后再看看要不要改点别的", classifier=fake)
+
+    assert contract.level is ExecutionLevel.READ_ONLY
+    assert contract.operations == frozenset({"read"})
+
+
+def test_a_mentioned_path_alone_is_not_a_read_request() -> None:
+    """只提到文件名是闲聊：没有读动词就不该被强行拉进工具循环。"""
+
+    fake = FakeClassifier(
+        intent="chat", operations=(), confidence=0.95, chat_only=True
+    )
+    contract = build_turn_contract("pyproject.toml 通常有哪些配置段？", classifier=fake)
+
+    assert contract.level is ExecutionLevel.ANSWER_ONLY
+
+
 def test_action_target_words_override_chat_only() -> None:
     """弱信号：文本有动作+目标词时，chat_only 自报也不能清空提案。"""
     fake = FakeClassifier(

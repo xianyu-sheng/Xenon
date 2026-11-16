@@ -16,8 +16,8 @@
 <p align="center">模型可以提案，但不能把未验证的效果说成交付。<br/>Xenon 把每一步工具执行变成 typed receipt，把每个 claim 绑定到 fact，把不能验证的部分显式变成 debt 或 abstain。</p>
 
 <p align="center">
-  <b>v1.0</b> · 单一内核循环 · 每轮入账 · TS 界面 · 可被其他 Agent 调用（MCP server）<br/>
-  <b>4,000+</b> 测试 · <b>Python 3.10–3.12</b> · <b>Node.js 20+</b>（界面）
+  <b>v1.1</b> · 单一内核循环 · 每轮入账 · TS 界面 + 本地面板 · 可被其他 Agent 调用（MCP server）<br/>
+  <b>4,200+</b> 测试 · <b>Python 3.10–3.12</b> · <b>Node.js 20+</b>（界面）
 </p>
 
 <p align="center">
@@ -46,6 +46,31 @@
 - **界面只有一套**：TypeScript（Ink）前端，构建产物随 wheel 分发；内置编辑器是显式 opt-in，不静默降级。
 - **能力双向**：既能用别人的 MCP server，也能**作为 MCP server** 被 Claude Code 等 Agent 调用。
 
+## v1.1 带来了什么
+
+1.1 让证据从「要读一长串转录」变成「打开就看」。
+
+<p align="center">
+  <img src="docs/evidence/component-matrix/img/dashboard-grid.png" alt="两轮真实任务后的 Xenon 面板：只读轮证据为 partial，Diff 显示已验证的 calc.py 补丁，执行过程显示哈希链，证据链完整" width="900">
+</p>
+
+上面这张图不是设计稿。`docs/evidence/component-matrix/capture_dashboard.py` 在真实 ConPTY 里启动随包发布的前端（`node frontend/dist/cli.js`），像用户一样键入两轮任务、回答审批卡，再用 headless Chrome 拍下活页面：
+
+| 轮次 | 输入 | 面板显示 |
+|---|---|---|
+| 1 | `读 README.md 和 calc.py，告诉我 add 函数有什么 bug，先不要改任何文件。` | 4 次 `read` 回执、答案引用文件原文、**证据 `partial`**——它说明自己没跑 pytest，角标与回答一致 |
+| 2 | `修复 calc.py 里的 add … 然后运行 python -m pytest tests -q 确认通过。` | `apply_patch` + 审批 + `test_run`、**证据 `verified`**、Diff `M calc.py`、交付 commit `ff28727` |
+
+- **本地面板**——`xenon --dashboard`（或 `/dashboard`）在 `127.0.0.1` 起面板：随机端口 + 每进程 token（没有 token 返回 `401`，`XENON_DASHBOARD=0` 关闭）。≥1400px 四宫格，以下折叠成标签页；终端与浏览器驱动**同一个**内核会话、同一个审批。
+- **TypeScript + Ink 前端**随 wheel 预构建分发：跑者动画、欢迎卡、状态栏、审批/计划/提问面板。
+- **写入范围契约贯通到验证层**——「先不要改任何文件」不会再为那个文件开出 `file_changed` 债务；相对的「不要修改其他文件」仍保留点名目标可写。
+- **点名的读是下限**——「读 README.md 和 calc.py」不会再被分类器改判成闲聊、凭记忆作答，而是走只读工具轮。
+- **组件矩阵**：九个真实任务场景，全部从发布入口进入，**54/54** 断言通过，墙钟与真实计费一并记录于 [`docs/evidence/component-matrix`](docs/evidence/component-matrix/)。
+
+<p align="center">
+  <img src="docs/evidence/component-matrix/img/dashboard-tabs.png" alt="同一会话在 1400px 以下的标签布局：总览含各模型 token、费用与缓存命中率" width="640">
+</p>
+
 ## 它和 Claude Code 有什么不同
 
 能力面上两者接近：终端里跑、多轮、工具调用、MCP、计划模式、审批。如果你要的是一个**已经很好用的编码代理**，先用 Claude Code。
@@ -68,9 +93,9 @@ Xenon 想解决的是另一件事——**它凭什么说「做完了」**：
 
 ```bash
 # 从 GitHub Releases 安装（不依赖 PyPI；wheel 自带界面，无需 npm）
-pip install https://github.com/xianyu-sheng/Xenon/releases/download/v1.0.0/xenon_harness-1.0.0-py3-none-any.whl
+pip install https://github.com/xianyu-sheng/Xenon/releases/download/v1.1.0/xenon_harness-1.1.0-py3-none-any.whl
 
-xenon --version   # 1.0.0
+xenon --version   # 1.1.0
 xenon             # 首次运行：若未配置凭证，界面会提示输入 /setup
 ```
 
@@ -256,6 +281,8 @@ Claude Code 的真实握手记录见 [docs/evidence/mcp-claude-integration](docs
 | 扩展开发 | [EXTENDING](docs/EXTENDING.md) |
 | 评测 | [EVAL_PROTOCOL](docs/XENON_EVAL_PROTOCOL.md) · [EVAL_RESULTS](docs/EVAL_RESULTS.md) |
 | 真实 TTY 证据 | [docs/evidence](docs/evidence) |
+| 组件矩阵（真实任务 + 每场景账本） | [component-matrix](docs/evidence/component-matrix/) |
+| 面板设计（端点和安全模型） | [dashboard](docs/design/dashboard.md) |
 | 更新日志 | [CHANGELOG](CHANGELOG.md) |
 
 ## 诚实边界

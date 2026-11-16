@@ -4,6 +4,62 @@
 
 ## [Unreleased]
 
+### 1.1.0 之后
+
+（暂无）
+
+## [1.1.0] — 2026-11-16
+
+本版把交互入口换成 TypeScript/Ink 前端并新增本地 Dashboard，自进化收敛到
+`LearningGateway`；同时在「用户约束 → 执行策略 → 验证层 → 工具边界」与测试
+隔离上做了系统性修复：点名的读不再被改判成闲聊，只读轮不再为被禁写的文件
+开债务，交付后的改动仍能在面板 Diff 里看到。真实组件矩阵
+（`docs/evidence/component-matrix/`，真实前端 + ConPTY +
+`deepseek/deepseek-v4-flash`）**54/54 PASS**；后端 4231 passed / 100 skipped，
+前端 tsc 干净、102 tests passed，ruff 干净。面板截图由
+`capture_dashboard.py` 从活页面截取（`docs/evidence/component-matrix/img/`）。
+
+### 修复：点名的读被分类器改判成闲聊，凭记忆作答（2026-11-16）
+
+真实前端复测：输入「读 README.md 和 calc.py，告诉我 add 函数有什么 bug，
+先不要改任何文件。」，LLM 分类器给出 `chat_only`，合并层按规则 4 清空了全部
+操作 → 本轮 `ANSWER_ONLY` → 走直接回答，模型回「我没有文件读取工具可用」
+（另一次直接报「模型违反仅回答约束」），而 `README.md` / `calc.py` 就在工作区。
+
+根因是「用户的结构化读请求」在合并层没有下限：`chat_only` 可以撤销分类器
+自己发明的写/执行，也能顺带撤销用户点名的读。
+
+修复（跨两层）：
+
+- `ExecutionSignals.read_targets`：读动词（读/查看/打开/read/inspect…）在 16
+  字符内统辖一个具体路径时置位。只提到文件名不算——「pyproject.toml 通常有
+  哪些配置段？」仍是闲聊，不许被拉进工具循环；
+- 合并层规则 4：`read_targets` 为真时只保留 `_READ_OPERATIONS`，`chat_only`
+  仍然不能把凭空提议的写变成权限。
+
+测试：`tests/test_turn_contract.py` 新增 3 条（chat_only 不能抹掉点名读、
+仍能压掉同句里的凭空写、只提路径不算读请求）。复测截图见
+`docs/evidence/component-matrix/img/dashboard-grid.png`：第一轮 4 次 `read`
+回执、答案引用文件原文、证据角标 `partial`（它明确说没跑 pytest）。
+
+### 修复：只读轮替被禁写的文件开债务（2026-11-16）
+
+「先不要改任何文件」的回合仍会从任务文本推导出 `file_changed(calc.py)`，
+内核于是为「遵守指令」开出无法清偿的债务。修复把写入范围送进验证层：
+`TaskSpec.write_scope`（`xenon/kernel/contracts.py` 新增 `WriteScope`）由
+`runtime_adapter` 从本轮 `ExecutionPolicy` 构造，`harness/intake.py` 的
+`filter_obligations_for_scope` 在推导后剔除被禁止的写义务；读/测试义务保留。
+`INTAKE_RECORDED` 事件记录 `write_scope`，账本可回放这一判断。
+
+### 修复：已交付（worktree 干净）的改动在 Diff 面板消失（2026-11-16）
+
+交付 commit 之后工作区是干净的，`git diff` 为空，Dashboard 的 Diff 面板因此
+显示「0 个文件」——恰好把最该看的已验证改动藏了起来。`queries.diff()` 现在在
+`verified/attributed` 路径未被工作区覆盖时回退读交付 commit 的
+`--name-status` 与补丁，并标注 `origin`。回归用例
+`tests/frontend/test_dashboard_queries.py::test_diff_falls_back_to_the_delivery_commit_when_the_worktree_is_clean`
+用真实 git 仓库断言。
+
 ### 修复：测试隔离泄漏污染操作员全局入口（2026-11-16）
 
 全量回归里 `tests/test_project_context.py::test_load_rules` 失败，根因不在

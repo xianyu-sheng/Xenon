@@ -81,7 +81,7 @@ Python 进程内运行，前端看不到也不需要看。
   "models": ["deepseek/deepseek-v4-flash", "…"],
   "cwd": "D:\\proj",
   "setup_needed": false,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "mode": "单循环",
   "mode_description": "Plan → React（逐步） → Reflect（每步校验）",
   "model_count": 3,

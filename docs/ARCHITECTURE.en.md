@@ -1,4 +1,4 @@
-# Xenon Architectural Design (v1.0.0)
+# Xenon Architectural Design (v1.1.0)
 
 > English | [中文版](ARCHITECTURE.md)
 >

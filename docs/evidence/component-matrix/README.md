@@ -56,3 +56,32 @@ token 表中。
   不再把“计划回合里出现写审批”当作成功。
 - **命令场景的期望文本**以当前前端措辞为准（如 `/mode` 的 `当前循环`）；
   文案改动需要同步更新脚本。
+
+## Dashboard 截图（真实页面，不是设计稿）
+
+`capture_dashboard.py` 回答的是另一个问题：**面板上显示的东西，是不是这一轮
+真实发生的事？** 它启动随包发布的前端（`--dashboard`），像用户一样键入两轮
+任务并回答审批卡，再用 headless Chrome 的 DevTools 协议拍下活页面：
+
+```bash
+PYTHONIOENCODING=utf-8 python docs/evidence/component-matrix/capture_dashboard.py
+```
+
+| 产物 | 内容 |
+|---|---|
+| `img/dashboard-grid.png` | ≥1400px 四宫格：总览 / Diff / 执行过程 / 证据链 |
+| `img/dashboard-tabs.png` | 窄屏标签布局（总览含各模型 token、费用、缓存命中率） |
+| `img/capture.json` | 该次运行的仓库路径、修复后的 `calc.py`、模型 |
+| `img/transcript.txt` | 终端录像（压缩：去 ANSI、去连续重复行、只留尾部） |
+
+两轮输入与它们的证据含义：
+
+1. `读 README.md 和 calc.py，告诉我 add 函数有什么 bug，先不要改任何文件。`
+   —— 只读工具轮（4 次 `read`），答案引用文件原文。它**没有**跑测试，所以
+   证据角标是 `partial`：角标与回答说的是同一件事。
+2. `修复 calc.py 里的 add，让它返回 a+b，然后运行 python -m pytest tests -q 确认通过。`
+   —— `apply_patch` + 审批 + `test_run`，证据 `verified`，Diff 显示
+   `M calc.py` 与真实补丁，交付 commit 出现在总览。
+
+截图前必须等两轮都**结束**（`dashboard.snapshot` 里 `turn.running` 为假、
+没有待批审批），否则拍到的是审批卡或半截时间线；`settle()` 就是这件事。

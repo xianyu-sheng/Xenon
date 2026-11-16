@@ -1,0 +1,7 @@
+{
+  "url": "http://127.0.0.1:52557/",
+  "repo": "C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\xenon-component-matrix\\dashboard-shots-154203-62776",
+  "calc_after": "def add(a, b):\n    return a + b\n",
+  "tests": "from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n",
+  "models": "deepseek/deepseek-v4-flash"
+}

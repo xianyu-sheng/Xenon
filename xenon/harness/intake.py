@@ -37,10 +37,11 @@ the architecture doc) rather than a second vocabulary:
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from xenon.kernel.contracts import Obligation, PropositionKind
 
-__all__ = ["derive_obligations"]
+__all__ = ["derive_obligations", "filter_obligations_for_scope"]
 
 #: Cap so a long document cannot turn into hundreds of checks.
 _MAX_OBLIGATIONS = 12
@@ -378,3 +379,24 @@ def derive_obligations(objective: str, *, since_seq: int = 0) -> tuple[Obligatio
         add(PropositionKind.TEST_PASSED, test_file or runner.group(1))
 
     return tuple(obligations)
+
+
+def filter_obligations_for_scope(
+    obligations: tuple[Obligation, ...], scope: Any
+) -> tuple[Obligation, ...]:
+    """Drop write obligations the user's own constraint made impossible.
+
+    A turn that says "先不要改任何文件" or "只改 a.py" cannot be asked to
+    ``file_changed`` anything else: the kernel would open debt for obeying the
+    instruction.  Read/test obligations survive — they need no write.
+    """
+
+    if scope is None or getattr(scope, "is_open", True):
+        return obligations
+    kept: list[Obligation] = []
+    for item in obligations:
+        if item.kind in (PropositionKind.FILE_CHANGED, PropositionKind.FILE_CREATED):
+            if not scope.permits(item.target):
+                continue
+        kept.append(item)
+    return tuple(kept)

@@ -233,3 +233,57 @@ def test_a_negated_file_never_becomes_a_change_obligation() -> None:
             if item.kind is PropositionKind.FILE_CHANGED
         }
         assert "calc.py" not in files, task
+
+
+def test_a_global_no_write_turn_derives_no_file_obligation() -> None:
+    """ "先不要改任何文件" makes ``file_changed`` unsatisfiable by definition.
+
+    Observed in a real turn: the objective named calc.py, the constraint
+    forbade every write, and the derived obligation still demanded a change —
+    the turn finished partial with debt for obeying the user.
+    """
+
+    from xenon.harness.intake import filter_obligations_for_scope
+    from xenon.kernel.contracts import WriteScope
+
+    obligations = derive_obligations("读 README.md 和 calc.py，先说 bug，先不要改任何文件")
+    assert obligations, "the derivation itself still names the files"
+
+    assert filter_obligations_for_scope(obligations, WriteScope(allows_write=False)) == ()
+
+
+def test_a_scoped_write_keeps_only_the_allowed_targets() -> None:
+    from xenon.harness.intake import filter_obligations_for_scope
+    from xenon.kernel.contracts import WriteScope
+
+    obligations = derive_obligations("修改 calc.py 和 util.py，不要修改其他文件")
+    kept = filter_obligations_for_scope(
+        obligations, WriteScope(allowed_paths=("calc.py",))
+    )
+
+    files = {item.target for item in kept}
+    assert files == {"calc.py"}
+
+
+def test_a_named_protected_file_is_not_demanded() -> None:
+    from xenon.harness.intake import filter_obligations_for_scope
+    from xenon.kernel.contracts import WriteScope
+
+    obligations = derive_obligations("修改 calc.py，不要修改 probe.txt")
+    kept = filter_obligations_for_scope(
+        obligations, WriteScope(protected_paths=("probe.txt",))
+    )
+
+    assert {item.target for item in kept} == {"calc.py"}
+
+
+def test_a_test_obligation_survives_a_read_only_scope() -> None:
+    """Running an existing suite needs no write, so the ask stays."""
+
+    from xenon.harness.intake import filter_obligations_for_scope
+    from xenon.kernel.contracts import WriteScope
+
+    obligations = derive_obligations("读 calc.py，然后跑 pytest 报告结果，不要改文件")
+    kept = filter_obligations_for_scope(obligations, WriteScope(allows_write=False))
+
+    assert [item.kind for item in kept] == [PropositionKind.TEST_PASSED]

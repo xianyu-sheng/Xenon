@@ -109,7 +109,7 @@ JSON-RPC 2.0，stdio，每行一个 JSON 对象。stdout **只**承载协议消�
 
 节点验收（真实 stdio，模型为配置中的 DeepSeek 端点）：
 
-- `initialize` 协商到 `2025-06-18`，`serverInfo = {name: xenon, version: 1.0.0}`；
+- `initialize` 协商到 `2025-06-18`，`serverInfo = {name: xenon, version: 1.1.0}`；
 - `tools/list` 返回三个工具；
 - `xenon_run_task("只回复两个字：可以")` → `phase=finalized`，`accepted=true`，
   `evidence=unverified`（纯回答没有可核对的声明，这是预期标签），12.3s，返回账本路径；

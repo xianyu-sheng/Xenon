@@ -27,6 +27,7 @@ from xenon.kernel.contracts import (
     TaskResult,
     TaskSpec,
     ToolSpec,
+    WriteScope,
 )
 from xenon.kernel.controller import VerificationController
 from xenon.kernel.policies import PermissionMode, PermissionPolicy
@@ -282,6 +283,7 @@ def run_task(
     finalize: bool = True,
     max_steps: int = DEFAULT_MAX_STEPS,
     constraints: Sequence[str] = (),
+    write_scope: WriteScope | None = None,
     sink: JsonlSink | None = None,
     approval: ApprovalProvider | None = None,
     allow_approval: bool = False,
@@ -343,6 +345,7 @@ def run_task(
         workspace=str(root),
         user_objective=user_objective,
         constraints=tuple(constraints),
+        write_scope=write_scope or WriteScope(),
         mode=mode,
         budget=Budget(
             max_steps=max_steps if max_steps > 0 else None,

@@ -966,3 +966,39 @@ def test_negated_paths_become_protected_for_every_phrasing():
     for text, protected in cases.items():
         policy = build_turn_contract(text).to_execution_policy()
         assert protected in policy.protected_write_paths, text
+
+
+def test_the_turn_policy_becomes_the_kernels_write_scope():
+    """The obligation derivation sees the same constraint the tools do.
+
+    Without this translation a read-only turn still derived
+    ``file_changed(calc.py)`` from the filename and opened debt for obeying
+    the user (observed in the real dashboard turn).
+    """
+
+    from xenon.kernel.contracts import WriteScope
+    from xenon.repl.execution_policy import ExecutionLevel, ExecutionPolicy
+    from xenon.repl.runtime_adapter import _write_scope_from_policy
+
+    assert (
+        _write_scope_from_policy(
+            ExecutionPolicy(
+                level=ExecutionLevel.ANSWER_ONLY,
+                reason="用户要求不要写任何文件",
+                explicit_no_write=True,
+            )
+        )
+        == WriteScope(allows_write=False)
+    )
+    assert _write_scope_from_policy(
+        ExecutionPolicy(level=ExecutionLevel.EXECUTE, reason="普通任务")
+    ) is None
+    scoped = _write_scope_from_policy(
+        ExecutionPolicy(
+            level=ExecutionLevel.EXECUTE,
+            reason="只改 a.py",
+            protected_write_others=True,
+            allowed_write_paths=("a.py",),
+        )
+    )
+    assert scoped == WriteScope(allows_write=True, allowed_paths=("a.py",))

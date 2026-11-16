@@ -286,6 +286,59 @@ def test_diff_marks_origin_baseline_and_verification(repo: Path) -> None:
     assert status["delivery"]["verified_paths"] == ["tracked.txt"]
 
 
+def test_diff_falls_back_to_the_delivery_commit_when_the_worktree_is_clean(
+    tmp_path: Path,
+) -> None:
+    """A finalized turn commits its files; the panel must still show them.
+
+    Observed end-to-end: after ``vcs_commit`` the Diff cell said
+    ``0 个文件`` while 总览 displayed the delivery commit — the panel was
+    reading ``git status`` only, so delivered work became invisible.
+    """
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "T")
+    (repo / "tracked.txt").write_text("one\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-m", "init")
+    (repo / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-m", "deliver")
+    sha = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout.strip()
+
+    outside = tmp_path / "ledger"
+    outside.mkdir()
+    ledger_path = outside / "t-1.jsonl"
+    ledger = Ledger.open(ledger_path, task_id="t-1")
+    ledger.append(EventKind.TASK_STARTED, EventSource.RUNTIME, {"objective": "do it"})
+    ledger.append(
+        EventKind.DELIVERED,
+        EventSource.RUNTIME,
+        {
+            "answer": "done",
+            "finalize": {"commit": sha, "verified_paths": ["tracked.txt"]},
+        },
+    )
+
+    payload = DashboardQueries(
+        _StubHost(repo, run=_Run(ledger_path), ledger=ledger_path)
+    ).diff()
+
+    files = {item["path"]: item for item in payload["files"]}
+    assert files["tracked.txt"]["verification"] == "verified"
+    assert files["tracked.txt"]["origin"] == "modified"
+    assert "+two" in payload["diff"], "the delivered patch must be shown"
+    assert payload["baseline"] == []
+
+
 # ── ledger / evidence / plan ────────────────────────────────────────
 
 

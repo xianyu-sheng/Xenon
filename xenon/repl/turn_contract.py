@@ -789,13 +789,21 @@ def build_turn_contract(
     # 4) 分类器自报 chat_only 且文本没有动作/目标词时，清空提案。
     # 旧版的 write_code/chat-only 意图剥离规则已删除：分类器 0.92 置信的
     # create+execute 提案曾因正则未命中“写在…上”而被静默清空。
+    #
+    # 「读 X.md」是结构化的读请求，不是闲聊：分类器把它当 chat 时，清空
+    # 操作会让整轮走直接回答，模型凭记忆编造文件内容（实测：“读 README.md
+    # 和 calc.py，告诉我 add 有什么 bug” 被答成“我没有文件读取工具”）。
+    # chat_only 可以撤回它自己发明的写/执行，但不能撤销用户点名的读。
     if result.chat_only and not (
         structural_write
         or signals.explicit_execute
         or signals.action_target_mentioned
         or signals.tool_request
     ):
-        operations.clear()
+        if signals.read_targets:
+            operations &= _READ_OPERATIONS
+        else:
+            operations.clear()
 
     # 4b) 征询解释不是施工：问原因/思路/建议时，即使分类器给出 write/execute
     # 也收回（显式写入/执行结构仍然优先）。

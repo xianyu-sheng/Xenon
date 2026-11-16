@@ -142,3 +142,37 @@ def test_audit_without_a_claim_is_unverifiable_not_satisfied() -> None:
 
     assert verdict.status is VerdictStatus.UNVERIFIABLE
     assert "verifiable" in verdict.reason or "claim" in verdict.reason
+
+
+def test_a_read_only_turn_never_demands_a_file_change(tmp_path: Path) -> None:
+    """The objective naming a file is not a license to ignore "don't write".
+
+    A real dashboard turn ("读 README.md 和 calc.py，先说 bug，先不要改任何
+    文件") derived ``file_changed(calc.py)`` from the filename alone; obeying
+    the user then left the turn partial with debt nobody could discharge.
+    """
+
+    from xenon.kernel.contracts import WriteScope
+
+    ledger = Ledger.in_memory("read-only")
+    spec = TaskSpec(
+        task_id="read-only",
+        objective="读 calc.py，说明这个 add 函数的 bug，先不要改任何文件",
+        user_objective="读 calc.py，说明这个 add 函数的 bug，先不要改任何文件",
+        workspace=str(tmp_path),
+        write_scope=WriteScope(allows_write=False),
+    )
+
+    _runtime(ledger).run(spec, ScriptedStrategy([Finish("add 返回 a-b，应为 a+b。")]))
+
+    intake = [
+        event.payload
+        for event in ledger.read(EventKind.INTAKE_RECORDED)
+    ]
+    assert intake, "intake must be recorded"
+    assert intake[0]["obligations"] == []
+    assert intake[0]["write_scope"] == {
+        "allows_write": False,
+        "allowed_paths": [],
+        "protected_paths": [],
+    }

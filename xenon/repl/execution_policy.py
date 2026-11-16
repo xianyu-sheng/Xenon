@@ -490,6 +490,44 @@ def _snippets(
     return tuple(out)
 
 
+#: A read verb is only structural when it governs a *named file*.  The verb
+#: vocabulary is deliberately orthogonal to any domain: "读 README.md" and
+#: "read config.yaml" are the same shape.
+_READ_TARGET_VERB = re.compile(
+    r"(?:读|读取|阅读|查看|看一下|看看|打开|检查|分析|审查|浏览|"
+    r"read|open|inspect|review|analy[sz]e|look\s+at|check)",
+    re.IGNORECASE,
+)
+
+#: How close a path must be to the read verb to count as its object.  A path
+#: merely mentioned elsewhere ("pyproject.toml 里通常有什么配置？") is not a read
+#: request; 16 characters covers "读一下 ./README.md，然后…" without spanning a
+#: whole clause.
+_READ_TARGET_WINDOW = 16
+
+
+def _reads_named_path(source: str) -> bool:
+    """True when the text asks to read a specific file, not just names one.
+
+    A file name alone is data — "pyproject.toml 里有什么" is a knowledge
+    question.  A read verb *governing* the name ("读 README.md") is an
+    instruction, and that instruction must survive a classifier that labels the
+    turn as chat: measured through the TS front-end, "读 README.md 和 calc.py，
+    告诉我 add 有什么 bug" was answered from memory ("我没有文件读取工具") while
+    the files sat in the workspace.
+    """
+
+    spans = [match.span() for match in _PATH_REFERENCE.finditer(source)]
+    if not spans:
+        return False
+    for verb in _READ_TARGET_VERB.finditer(source):
+        for start, end in spans:
+            gap = start - verb.end() if start >= verb.end() else verb.start() - end
+            if 0 <= gap <= _READ_TARGET_WINDOW:
+                return True
+    return False
+
+
 @dataclass(frozen=True)
 class ExecutionSignals:
     """Deterministic signals extracted from one user turn.
@@ -529,6 +567,10 @@ class ExecutionSignals:
     write_imperative: bool = False
     action_target_mentioned: bool = False
     paths: tuple[str, ...] = ()
+    #: A read verb governs a named path ("读 README.md").  This is a structural
+    #: read request, so it is a floor no later layer may erase: answering from
+    #: memory instead is a wrong answer, not a style choice.
+    read_targets: bool = False
 
     @property
     def explicit_write(self) -> bool:
@@ -724,6 +766,7 @@ def extract_execution_signals(text: str) -> ExecutionSignals:
             _ACTION_VERBS.search(source) and _TARGET_NOUNS.search(source)
         ),
         paths=path_refs[:5],
+        read_targets=_reads_named_path(source),
     )
 
 

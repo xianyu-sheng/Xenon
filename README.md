@@ -16,8 +16,8 @@
 <p align="center">The model proposes; it cannot turn an unverified effect into a delivery.<br/>Xenon records every tool call as a typed receipt, binds every claim to a fact, and makes unverifiable work explicit debt or abstention.</p>
 
 <p align="center">
-  <b>v1.0</b> · single-loop kernel · every turn recorded · TypeScript UI · callable by other agents (MCP server)<br/>
-  <b>4,000+</b> tests · <b>Python 3.10–3.12</b> · <b>Node.js 20+</b> (UI)
+  <b>v1.1</b> · single-loop kernel · every turn recorded · TypeScript UI + local dashboard · callable by other agents (MCP server)<br/>
+  <b>4,200+</b> tests · <b>Python 3.10–3.12</b> · <b>Node.js 20+</b> (UI)
 </p>
 
 <p align="center">
@@ -46,6 +46,31 @@
 - **One UI**: a TypeScript (Ink) front-end shipped inside the wheel; the built-in editor is an explicit opt-in, never a silent fallback.
 - **Bidirectional MCP**: Xenon consumes other MCP servers and **runs as one** for Claude Code and friends.
 
+## What 1.1 adds
+
+1.1 is the release where the evidence becomes something you **look at** instead of read.
+
+<p align="center">
+  <img src="docs/evidence/component-matrix/img/dashboard-grid.png" alt="Xenon dashboard after two real turns: the read-only answer is marked partial, the diff shows the verified calc.py patch, the execution panel shows the hash chain, and the evidence chain is complete" width="900">
+</p>
+
+The screenshot above is not a mockup. It is `docs/evidence/component-matrix/capture_dashboard.py` starting the shipped front-end (`node frontend/dist/cli.js`) under a real ConPTY, typing two turns, answering the approval card, and pointing headless Chrome at the live page:
+
+| Turn | Input | What the panels show |
+|---|---|---|
+| 1 | `读 README.md 和 calc.py，告诉我 add 函数有什么 bug，先不要改任何文件。` | 4 `read` receipts, answer quoted from the files, **evidence `partial`** — it says it did not run pytest, and the chip agrees |
+| 2 | `修复 calc.py 里的 add … 然后运行 python -m pytest tests -q 确认通过。` | `apply_patch` + approval + `test_run`, **evidence `verified`**, Diff `M calc.py`, delivery commit `ff28727` |
+
+- **Local dashboard** — `xenon --dashboard` (or `/dashboard`) serves the panels on `127.0.0.1` with a random port and a per-process token (`401` without it, `XENON_DASHBOARD=0` disables it). Four-panel grid at ≥1400px, tab layout below; terminal and browser drive the **same** kernel session and the same approval.
+- **TypeScript + Ink front-end** shipped prebuilt inside the wheel: runner animation, welcome card, status bar, approval / plan / question panels.
+- **Write-scope contract reaches verification** — "先不要改任何文件" no longer opens `file_changed` debt for a file the user asked you not to touch; a relative "不要修改其他文件" keeps the named target writable.
+- **A read of named files is a floor** — "读 README.md 和 calc.py" can no longer be reclassified as chat and answered from memory; the turn runs as a read-only tool turn.
+- **Component matrix**: nine real-task scenarios through the shipped entry point, **54/54** assertions, wall clock and billed tokens recorded in [`docs/evidence/component-matrix`](docs/evidence/component-matrix/).
+
+<p align="center">
+  <img src="docs/evidence/component-matrix/img/dashboard-tabs.png" alt="The same session in tab layout below 1400px: overview with per-model tokens, cost and cache-hit rate" width="640">
+</p>
+
 ## How is this different from Claude Code
 
 Capability-wise the two are close: a terminal agent, multi-turn, tool calls, MCP, plan mode, approvals. If you want a **polished coding agent today**, use Claude Code.
@@ -67,8 +92,8 @@ One line: **Claude Code makes you faster; Xenon tries to make "done" checkable.*
 Requires **Python 3.10–3.12** and **Node.js 20+** (the interactive UI is a TypeScript front-end; the wheel ships it prebuilt).
 
 ```bash
-pip install https://github.com/xianyu-sheng/Xenon/releases/download/v1.0.0/xenon_harness-1.0.0-py3-none-any.whl
-xenon --version   # 1.0.0
+pip install https://github.com/xianyu-sheng/Xenon/releases/download/v1.1.0/xenon_harness-1.1.0-py3-none-any.whl
+xenon --version   # 1.1.0
 xenon             # first run: the UI tells you to type /setup if no key is configured
 ```
 
@@ -172,6 +197,7 @@ TaskSpec
 - [Operation guide (English quick start)](docs/GUIDE.md) · [完整手册](docs/OPERATION_GUIDE.md)
 - [Architecture](docs/ARCHITECTURE.en.md) · [ADR 0001](docs/adr/0001-single-loop-kernel.md)
 - [Harness](docs/HARNESS.md) · [MCP server](docs/MCP_SERVER.md) · [External audit](docs/EXTERNAL_AUDIT.md)
+- [Component matrix (real tasks, per-scenario ledgers)](docs/evidence/component-matrix/) · [Dashboard design](docs/design/dashboard.md)
 - [Extending](docs/EXTENDING.en.md)
 - [Evaluation](docs/XENON_EVAL_PROTOCOL.md) · [Results](docs/EVAL_RESULTS.md)
 - [Changelog](CHANGELOG.md)

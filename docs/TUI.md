@@ -27,7 +27,7 @@ Python 侧不再有 prompt_toolkit 会话：没有固定底栏、补全菜单或
         ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
              ···█  Xenon  ·  D:\proj
         ╭──────────────────────────────────────────╮
-        │  Xenon · v1.0.0                          │
+        │  Xenon · v1.1.0                          │
         │  让每一步都留下证据。                     │
         │  LOOP   单循环 · Plan → React → Reflect  │
         │  MODEL  deepseek/deepseek-v4-flash …     │
