@@ -68,7 +68,7 @@ The screenshot above is not a mockup. It is `docs/evidence/component-matrix/capt
 - **Component matrix**: nine real-task scenarios through the shipped entry point, **54/54** assertions, wall clock and billed tokens recorded in [`docs/evidence/component-matrix`](docs/evidence/component-matrix/).
 
 <p align="center">
-  <img src="docs/evidence/component-matrix/img/dashboard-tabs.png" alt="The same session in tab layout below 1400px: overview with per-model tokens, cost and cache-hit rate" width="640">
+  <img src="docs/evidence/component-matrix/img/dashboard-tabs.png" alt="The same session in tab layout below 1400px: overview with per-model tokens, cost and cache-hit rate" width="900">
 </p>
 
 ## How is this different from Claude Code
@@ -92,8 +92,8 @@ One line: **Claude Code makes you faster; Xenon tries to make "done" checkable.*
 Requires **Python 3.10–3.12** and **Node.js 20+** (the interactive UI is a TypeScript front-end; the wheel ships it prebuilt).
 
 ```bash
-pip install https://github.com/xianyu-sheng/Xenon/releases/download/v1.1.0/xenon_harness-1.1.0-py3-none-any.whl
-xenon --version   # 1.1.0
+pip install https://github.com/xianyu-sheng/Xenon/releases/download/v1.1.1/xenon_harness-1.1.1-py3-none-any.whl
+xenon --version   # 1.1.1
 xenon             # first run: the UI tells you to type /setup if no key is configured
 ```
 

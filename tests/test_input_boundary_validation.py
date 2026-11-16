@@ -163,6 +163,22 @@ class TestDifficultyEstimatorBoundary:
         tier = DifficultyEstimator.estimate_tier(est.estimate(text, []))
         assert tier <= 3
 
+    def test_a_long_word_run_does_not_backtrack_quadratically(self):
+        """`_WRITE` 曾在每个位置吃掉整段 `\\w` 再回溯找点，100k 字符串 95s。
+
+        CI 的 3.10/3.12 因此超时（`test_repetitive_flood_not_hard[x-100k]`）。
+        文件命名分支带上 `(?<!\\w)` 后是线性扫描；这里用 10s 上限守住
+        “不能再退化成平方级”，实测当前约 0.2s。
+        """
+
+        import time
+
+        from xenon.repl.execution_policy import extract_execution_signals
+
+        started = time.perf_counter()
+        extract_execution_signals("x" * 100000)
+        assert time.perf_counter() - started < 10.0
+
     def test_real_complex_task_still_tier5(self):
         from xenon.repl.difficulty_estimator import DifficultyEstimator
 

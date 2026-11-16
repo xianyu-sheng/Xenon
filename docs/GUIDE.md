@@ -15,7 +15,7 @@ the model wrote.
 
 ```bash
 # from a release wheel
-pip install https://github.com/xianyu-sheng/Xenon/releases/download/v1.1.0/xenon_harness-1.1.0-py3-none-any.whl
+pip install https://github.com/xianyu-sheng/Xenon/releases/download/v1.1.1/xenon_harness-1.1.1-py3-none-any.whl
 xenon --version
 
 # or from source

@@ -1,4 +1,4 @@
-# Xenon 架构设计（v1.1.0）
+# Xenon 架构设计（v1.1.1）
 
 > 中文 | [English](ARCHITECTURE.en.md)
 

@@ -4,9 +4,38 @@
 
 ## [Unreleased]
 
-### 1.1.0 之后
-
 （暂无）
+
+## [1.1.1] — 2026-11-16
+
+CI 修复版。v1.1.0 的推送在 3.10/3.12 矩阵上超时，根因不在测试本身，而在
+`extract_execution_signals` 的写入正则退化成平方级；另外把 README 与个人主页
+的两张 Dashboard 截图改成等高显示（同一比例重新截取）。功能行为与 v1.1.0 一致。
+
+### 修复：`_WRITE` 正则在大段重复文本上退化成 O(n²)（CI 超时）
+
+现象：CI 的 `test_repetitive_flood_not_hard[x-100k]` 在 Python 3.10 / 3.12 上
+超过 120s 超时（3.11 侥幸通过），全量套件因此不绿。本地复现：100k 个 `x` 走一遍
+`extract_execution_signals` 需要 94.8s，cProfile 指向 `_WRITE`。
+
+根因：分支 `(?<!…)\w+\.[A-Za-z0-9]+` 没有左边界，`finditer` 会从**每个**位置开始
+吃掉整段 `\w+` 再回溯找点；在 100k 长的单词串上就是 10¹⁰ 次回溯。方向判定点
+（`\w` 不出现在文件名中间）本该由边界表达，而不是交给回溯器试出来。
+
+修复：两处文件命名分支都加上负向后顾——
+`(?<!\w)\w+\.[A-Za-z0-9]+` 与 `(?<![\w./\\-])[\w./\\-]+\.[A-Za-z0-9]{1,10}`，
+扫描恢复线性。实测 0.2s（signals）/ 0.54s（estimate），与长度成正比。
+
+测试：`tests/test_input_boundary_validation.py` 新增
+`test_a_long_word_run_does_not_backtrack_quadratically`（10s 上限守住「不许再
+退化」）；相关 183 条用例通过，ruff 干净。
+
+### 修复：README / Profile 的两张截图不等高（2026-11-16）
+
+README 里 `dashboard-grid.png`（1600×1100，`width=900`）与 `dashboard-tabs.png`
+（原 1440×900，`width=640`）并排时高度差出一截，看起来像布局 bug。把标签页截图
+改按网格图同一比例截取（`capture_dashboard.py` 改为 `1024×704`，仍在 1400px
+断点以下），两处 README 都用 `width="900"`，个人主页用 `width="820"`，等高。
 
 ## [1.1.0] — 2026-11-16
 

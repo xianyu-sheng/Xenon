@@ -164,7 +164,11 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 — a diagnostic, not a check
             print(f"  diff.get failed: {exc}")
         shots.append(screenshot(url, IMG / "dashboard-grid.png", 1600, 1100))
-        shots.append(screenshot(url, IMG / "dashboard-tabs.png", 1024, 1100))
+        # Same aspect ratio as the grid shot (1600x1100 -> 1024x704): the two
+        # figures sit in one README at one width, so unequal heights looked
+        # like a layout bug.  1024 is below the 1400px grid breakpoint, so this
+        # still captures the tab layout.
+        shots.append(screenshot(url, IMG / "dashboard-tabs.png", 1024, 704))
         (IMG / "transcript.txt").write_text(
             matrix.condense(ui.raw, keep=1600), encoding="utf-8"
         )

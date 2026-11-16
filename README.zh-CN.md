@@ -68,7 +68,7 @@
 - **组件矩阵**：九个真实任务场景，全部从发布入口进入，**54/54** 断言通过，墙钟与真实计费一并记录于 [`docs/evidence/component-matrix`](docs/evidence/component-matrix/)。
 
 <p align="center">
-  <img src="docs/evidence/component-matrix/img/dashboard-tabs.png" alt="同一会话在 1400px 以下的标签布局：总览含各模型 token、费用与缓存命中率" width="640">
+  <img src="docs/evidence/component-matrix/img/dashboard-tabs.png" alt="同一会话在 1400px 以下的标签布局：总览含各模型 token、费用与缓存命中率" width="900">
 </p>
 
 ## 它和 Claude Code 有什么不同
@@ -93,9 +93,9 @@ Xenon 想解决的是另一件事——**它凭什么说「做完了」**：
 
 ```bash
 # 从 GitHub Releases 安装（不依赖 PyPI；wheel 自带界面，无需 npm）
-pip install https://github.com/xianyu-sheng/Xenon/releases/download/v1.1.0/xenon_harness-1.1.0-py3-none-any.whl
+pip install https://github.com/xianyu-sheng/Xenon/releases/download/v1.1.1/xenon_harness-1.1.1-py3-none-any.whl
 
-xenon --version   # 1.1.0
+xenon --version   # 1.1.1
 xenon             # 首次运行：若未配置凭证，界面会提示输入 /setup
 ```
 
