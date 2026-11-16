@@ -21,6 +21,7 @@
 </p>
 
 <p align="center">
+  <a href="#安全机制">安全机制</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#作为-mcp-server">接入 Claude Code</a> ·
   <a href="#内核架构">内核架构</a> ·
@@ -70,6 +71,26 @@
 <p align="center">
   <img src="docs/evidence/component-matrix/img/dashboard-tabs.png" alt="同一会话在 1400px 以下的标签布局：总览含各模型 token、费用与缓存命中率" width="900">
 </p>
+
+## 安全机制
+
+Xenon 把「提议」和「裁决」分开：模型可以提议任意 action，确定性的 policy 决定它能不能执行，独立的 finalizer 决定它能不能变成永久交付。每一个 action 都要回答两个问题。
+
+### 防止未授权动作
+
+- **模型提案，harness 裁决。** `Strategy.propose` 只输出 capability action，只有 `Policy.check`（确定性 veto / approval，全程无 LLM）才能把它们送进 `ToolGateway`——副作用唯一的入口。
+- **硬规则绝不让步。** `git push`、破坏性命令、以及当前写入范围之外的动作**不经询问直接拒绝**；超出默认策略的动作必须走**一次性授权**，用一次即撤销——不存在「永久允许一切」。
+- **用户的约束是契约，不是提示。** 「不要修改 X」从轮次文本一路传到写入范围再传到工具边界：相对的「其他文件」不会悄悄扩大成全局禁令，被禁止的路径也不会被误写。见 [CLAUDE.md](CLAUDE.md) 的写入范围契约。
+- **凭证静态加密**（Windows DPAPI，可选 keyring）；MCP server **fail-closed**：没有交互式审批通道时，需要审批的调用会带着原因失败，而不是挂起。
+
+### 防止不可逆动作
+
+- **只有 `Finalizer` 能提交。** preflight 审计不过就回滚这次 commit，而不是返回一段声称成功的文字。
+- **有副作用的调用绝不重放。** 崩溃恢复精确到调用：`tool_started` 无回执 → 标记「结果未知」并开 debt，重启不会悄悄重复一次破坏性动作。
+- **验证不了的工作挡在交付前。** claim 必须绑到 ledger receipt（V0 退出码 / no-op 写入 / commit sha → V1 步骤闭合 → V2 全局 obligation 覆盖）；无法确定性验证的语义要求是 `abstained`，绝不包装成 pass。
+- **债务与弃权都显式化。** 缺口写成 debt，挡在交付前，直到出现 fact 或用户明确接受；哈希链证明过程未被篡改。
+
+以上机制在 [`docs/evidence/component-matrix`](docs/evidence/component-matrix/)（九个真实任务场景，**54/54** 断言）里端到端跑过，并在 [`docs/EXTERNAL_AUDIT.md`](docs/EXTERNAL_AUDIT.md) 做过外部审计。
 
 ## 它和 Claude Code 有什么不同
 

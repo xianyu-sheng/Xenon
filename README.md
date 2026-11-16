@@ -21,6 +21,7 @@
 </p>
 
 <p align="center">
+  <a href="#safety-approach">Safety</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#as-an-mcp-server">Use from Claude Code</a> ·
   <a href="#kernel-architecture">Architecture</a> ·
@@ -70,6 +71,50 @@ The screenshot above is not a mockup. It is `docs/evidence/component-matrix/capt
 <p align="center">
   <img src="docs/evidence/component-matrix/img/dashboard-tabs.png" alt="The same session in tab layout below 1400px: overview with per-model tokens, cost and cache-hit rate" width="900">
 </p>
+
+## Safety approach
+
+Xenon separates *proposing* from *deciding*: the model may propose any action, a
+deterministic policy decides whether it runs, and a separate finalizer decides
+whether it becomes a permanent delivery. Two questions govern every action.
+
+### Preventing unauthorized actions
+
+- **The model proposes; the harness disposes.** `Strategy.propose` emits
+  capability actions, but only `Policy.check` (deterministic veto / approval, no
+  LLM in the loop) may pass them to the `ToolGateway` — the sole entrance for
+  side effects.
+- **Hard rules are never negotiated.** `git push`, destructive commands, and
+  anything outside the current write scope are refused *without asking*;
+  anything beyond the default policy needs a **one-shot approval** that is
+  revoked after a single call — there is no persistent "allow everything".
+- **The user's scope is a contract, not a hint.** "Don't modify X" travels from
+  the turn text to the write scope to the tool boundary: a scoped negation can't
+  silently widen into a global ban, and a denied path can't be written by
+  accident. See the write-scope contract in [CLAUDE.md](CLAUDE.md).
+- **Credentials are encrypted at rest** (Windows DPAPI; keyring optional), and
+  MCP servers run **fail-closed**: without an interactive approval channel, a
+  call that needs approval fails with a reason instead of hanging.
+
+### Preventing irreversible actions
+
+- **Only the `Finalizer` commits.** A failed preflight audit rolls the commit
+  back instead of returning a paragraph that claims success.
+- **Side-effecting calls are never replayed.** Crash recovery is per call: a
+  `tool_started` without a receipt becomes "outcome unknown" plus debt, so a
+  restart cannot silently repeat a destructive action.
+- **Unverifiable work blocks delivery.** Claims must bind to ledger receipts
+  (V0 exit code / no-op write / commit sha → V1 step closure → V2 global
+  obligation coverage); a semantic requirement that cannot be checked
+  deterministically is `abstained`, never dressed up as a pass.
+- **Debt and abstention are explicit.** Gaps become debt that blocks delivery
+  until a fact exists or the user explicitly accepts it; the hash chain proves
+  the process was not tampered with.
+
+These mechanisms are exercised end-to-end in
+[`docs/evidence/component-matrix`](docs/evidence/component-matrix/) (nine
+real-task scenarios, **54/54** assertions) and audited in
+[`docs/EXTERNAL_AUDIT.md`](docs/EXTERNAL_AUDIT.md).
 
 ## How is this different from Claude Code
 
