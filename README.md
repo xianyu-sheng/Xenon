@@ -84,10 +84,14 @@ whether it becomes a permanent delivery. Two questions govern every action.
   capability actions, but only `Policy.check` (deterministic veto / approval, no
   LLM in the loop) may pass them to the `ToolGateway` — the sole entrance for
   side effects.
-- **Hard rules are never negotiated.** `git push`, destructive commands, and
-  anything outside the current write scope are refused *without asking*;
-  anything beyond the default policy needs a **one-shot approval** that is
-  revoked after a single call — there is no persistent "allow everything".
+- **Structural safety rules are never negotiated.** Writes outside the
+  workspace, writes in read-only mode, and capability/effect mismatches are
+  refused *without* asking — no grant overrides them.
+- **`git push` and destructive commands need a human decision.** They are
+  never silently allowed: each requires explicit approval, and is denied
+  fail-closed when no approval channel exists (e.g. the MCP server).
+- **Everything else beyond the default policy needs approval**, and a grant is
+  **one-shot** by default — revoked after a single call, scoped to that exact call, with no persistent "allow everything".
 - **The user's scope is a contract, not a hint.** "Don't modify X" travels from
   the turn text to the write scope to the tool boundary: a scoped negation can't
   silently widen into a global ban, and a denied path can't be written by
@@ -126,7 +130,7 @@ Xenon targets a different question — **what entitles it to say "done"**:
 - **Claims must bind to facts.** If the model says "created 3 files", those paths must appear in ledger receipts, or the gap becomes debt that blocks delivery.
 - **Unverifiable stays abstained.** Semantic requirements that cannot be checked deterministically are reported as unverified, never dressed up as a pass.
 - **Every step replays.** One append-only ledger means `/evidence` shows the same truth the harness acted on, not the model's self-report.
-- **Hard rules are never negotiated.** `git push` and destructive commands are refused *without* asking; anything beyond the current policy goes through a one-shot grant that is revoked after a single call.
+- **Hard rules are never negotiated.** Writes outside the workspace, writes in read-only mode, and capability/effect mismatches are refused *without* asking; `git push` and destructive commands require an explicit human approval (denied fail-closed when nobody can answer); anything else beyond the current policy goes through a one-shot grant that is revoked after a single call.
 
 One line: **Claude Code makes you faster; Xenon tries to make "done" checkable.**
 
