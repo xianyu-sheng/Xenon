@@ -76,6 +76,39 @@ python -m pytest tests/test_public_api.py -v
 python -m pytest tests/test_b1_command_quoted.py -k "test_quoted" -v
 ```
 
+### C2. SSE data-prefix fixtures (offline, #437)
+
+`tests/test_stream_sse_data_prefix.py` drives both real streaming paths through an in-memory HTTPX transport, including fragmented UTF-8, usage, terminal/truncation events, malformed JSON and single-attempt provider reporting on HTTP errors. It does not load a gateway credential or contact a provider.
+
+```bash
+python -m pytest tests/test_stream_sse_data_prefix.py -q -rx
+python -m pytest tests/test_stream_sse_data_prefix.py --runxfail -q
+```
+
+The test-only first contribution keeps the four known no-space failures as **strict expected failures** tied to #437; `--runxfail` exposes them as failures. Fixing the parsers makes these cases XPASS and fails the strict markers, so they must then be removed. This is not a parser fix or a live compatibility claim.
+
+For a separately agreed manual check, the existing API accepts placeholder credentials and explicit base URLs:
+
+```python
+from xenon.utils.llm_client import chat_completion_stream
+
+messages = [{"role": "user", "content": "Reply OK."}]
+openai_stream = chat_completion_stream(
+    "openai/MODEL_ID",
+    messages,
+    credentials={"openai": "YOUR_TEST_KEY"},
+    base_url="https://api.a2agent.me/v1",
+)
+anthropic_stream = chat_completion_stream(
+    "anthropic/MODEL_ID",
+    messages,
+    credentials={"anthropic": "YOUR_TEST_KEY"},
+    base_url="https://api.a2agent.me",
+)
+```
+
+Replace `MODEL_ID` and `YOUR_TEST_KEY` only after agreeing the model/protocol scope. These generators send requests only when consumed; this recipe is not executed by the offline fixtures, and no A2Agent live run or tested-provider listing is established here.
+
 ### D. Live Tests (`-m live`)
 Live tests communicate with actual LLM providers and external network services.
 > **Note:** Live tests are excluded from default CI runs. They require valid API keys (e.g., `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`). Avoid running concurrent live tests to prevent rate limit throttling.
