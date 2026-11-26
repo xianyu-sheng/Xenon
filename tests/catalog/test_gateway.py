@@ -391,3 +391,58 @@ def test_a_search_that_found_nothing_still_receipts_a_zero(tmp_path: Path) -> No
     assert fact.count == 0
     assert fact.matches == ()
     assert receipt.observed_effects == (EffectKind.SEARCH,)
+
+
+def test_search_fact_bounds_hits_and_normalizes_strings(tmp_path: Path) -> None:
+    """A broad pattern cannot fill a ledger event, and hits are never bare strings."""
+
+    long_line = "x" * 500
+    gateway = _gateway(
+        tmp_path,
+        {
+            "success": True,
+            "matches": ["bare.py"]
+            + [
+                {"file": f"f{index}.py", "line": index + 1, "content": long_line}
+                for index in range(60)
+            ],
+            "match_count": 61,
+        },
+    )
+    receipt = gateway.execute(
+        ToolCall(spec_name="search", params={"pattern": "x"}),
+        Services(workspace=str(tmp_path)),
+    )
+
+    fact = next(item for item in receipt.effects if isinstance(item, SearchFact))
+    assert len(fact.matches) == 50, "回执保留的命中必须有上限"
+    assert fact.count == 61, "上限只作用在保留条数，不作用在全量计数"
+    assert fact.matches[0] == {"file": "bare.py"}
+    assert len(fact.matches[1]["content"]) == 300
+
+
+def test_search_note_carries_every_caveat_the_tool_reported(
+    tmp_path: Path,
+) -> None:
+    gateway = _gateway(
+        tmp_path,
+        {
+            "success": True,
+            "matches": [{"file": "a.py", "line": 1, "content": "x"}],
+            "match_count": 900,
+            "files_scanned": 2000,
+            "scan_truncated": True,
+            "skipped_large": 3,
+            "next_cursor": "1",
+        },
+    )
+    receipt = gateway.execute(
+        ToolCall(spec_name="search", params={"pattern": "x"}),
+        Services(workspace=str(tmp_path)),
+    )
+
+    fact = next(item for item in receipt.effects if isinstance(item, SearchFact))
+    assert fact.truncated is True
+    assert "stopped early" in fact.note
+    assert "3 file(s) above the size limit" in fact.note
+    assert "more matches exist" in fact.note
