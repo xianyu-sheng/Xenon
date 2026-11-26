@@ -4,7 +4,33 @@
 
 ## [Unreleased]
 
-（暂无）
+### 修复：search 的命中结果不进回执，模型只能回答「执行成功」（#432）
+
+现象：`xenon exec "用 search 工具查找 mcpServers" --permission read-only` 结束后，
+账本里只有 `{"tool": "search", "status": "ok", "effects": []}`，模型说不出命中
+多少条、在哪些文件，只好转用 `shell`（grep/find），而只读边界会否决 shell，
+任务就此打转。
+
+根因是三层同时丢数据：`search` / `search_files` 的 `ToolSpec.effects` 是空集、
+`gateway._effects` 没有搜索分支（`matches` 只写给了前端面板）、
+`build_model_observation` 也不认识 `search`（只认 legacy 的 `search_files`），
+于是到模型的只有一段没有总数的 `file:line` 文本。
+
+修复（契约 → 回执 → 视图一次打通）：
+
+- `EffectKind.SEARCH` + `SearchFact(query, path, matches, count, truncated, scanned, note)`；
+- `gateway._effects` 按 `Capability.SEARCH`（结构信号，不是工具名枚举）构造有界命中
+  （最多 50 条、单条 300 字符），`count` 保留工具报告的全量命中数；没有 pattern 时的
+  目录列举同样落成一条 `SearchFact`，并在 `note` 里说明「这是列举，不是搜索」；
+- ledger 的 effect payload 双向序列化补齐 `search`；
+- 模型视图 `_effect_summary` 透出 `query` / `scanned`（`matches` / `count` / `truncated` 原本已有通道）；
+- 模型观察改为 `[search] matches=N returned=M scanned=S truncated=?` 头部 + 命中行，
+  并把「扫描达到文件/时间上限」「跳过超限文件」写进正文，而不是静默截断。
+
+验证：只读边界下用真实 workspace 跑 `xenon exec --plan`，账本回执为
+`effects: [{"type":"search","count":2,"matches":[...],"scanned":3}]`，模型可见
+工作集里能看到 `count` 与两个命中文件；新增网关用例 4 条、模型视图 1 条、模型观察
+2 条（撤回修复后全部失败），离线全量 4232 passed。
 
 ## [1.1.1] — 2026-11-16
 

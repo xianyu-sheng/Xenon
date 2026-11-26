@@ -58,6 +58,7 @@ _CONTRACTS = frozenset(
         "Resolution",
         "ResolutionStatus",
         "Risk",
+        "SearchFact",
         "StepContract",
         "StepKind",
         "SubmitPlan",

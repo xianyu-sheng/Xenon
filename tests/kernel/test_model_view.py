@@ -16,6 +16,7 @@ from xenon.kernel.contracts import (
     ReadFact,
     ReceiptStatus,
     Risk,
+    SearchFact,
     TaskMode,
     TaskSpec,
     ToolReceipt,
@@ -333,3 +334,44 @@ def test_a_tool_receipt_carries_its_output_into_the_working_set() -> None:
         item for item in view.working_set if item.get("kind") == "tool_receipt"
     )
     assert "dirty.txt" in receipt["observation"]
+
+
+def test_a_search_receipt_shows_what_it_found_and_how_much() -> None:
+    """#432: a search receipt without its hits is a status code, not an answer."""
+
+    ledger = Ledger.in_memory("t1")
+    ledger.append_receipt(
+        ToolReceipt(
+            receipt_id="search-1",
+            call_id="call-search-1",
+            task_id="t1",
+            tool="search",
+            status=ReceiptStatus.OK,
+            effects=(
+                SearchFact(
+                    query="mcpServers",
+                    path=".",
+                    matches=(
+                        {"file": "a.json", "line": 3, "content": '"mcpServers": {}'},
+                    ),
+                    count=7,
+                    truncated=True,
+                    scanned=42,
+                ),
+            ),
+        )
+    )
+
+    view = build_model_view(spec=_spec(), catalog=FakeCatalog(), ledger=ledger)
+
+    receipt = next(
+        item for item in view.working_set if item.get("kind") == "tool_receipt"
+    )
+    search = next(
+        effect for effect in receipt["effects"] if effect.get("type") == "search"
+    )
+    assert search["count"] == 7, "工具找到的总数必须进入视图，而不是只剩本页条数"
+    assert search["query"] == "mcpServers"
+    assert search["truncated"] is True
+    assert search["scanned"] == 42
+    assert search["matches"][0]["file"] == "a.json"

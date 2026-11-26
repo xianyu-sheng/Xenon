@@ -27,6 +27,7 @@ from xenon.kernel.contracts import (
     NetworkFact,
     Opaque,
     ReadFact,
+    SearchFact,
     TestRun,
     ToolDiscovery,
     ToolReceipt,
@@ -264,6 +265,17 @@ def effect_to_payload(effect: Effect) -> dict[str, Any]:
             "content_hash": effect.content_hash,
             "content": effect.content,
         }
+    if isinstance(effect, SearchFact):
+        return {
+            "type": "search",
+            "query": effect.query,
+            "path": effect.path,
+            "matches": [dict(item) for item in effect.matches],
+            "count": effect.count,
+            "truncated": effect.truncated,
+            "scanned": effect.scanned,
+            "note": effect.note,
+        }
     if isinstance(effect, NetworkFact):
         return {
             "type": "network",
@@ -340,6 +352,18 @@ def effect_from_payload(data: Mapping[str, Any]) -> Effect:
             path=str(data.get("path") or ""),
             content_hash=str(data.get("content_hash") or ""),
             content=str(data.get("content") or ""),
+        )
+    if kind == "search":
+        return SearchFact(
+            query=str(data.get("query") or ""),
+            path=str(data.get("path") or ""),
+            matches=tuple(
+                dict(item) for item in (data.get("matches") or ())
+            ),
+            count=int(data.get("count") or 0),
+            truncated=bool(data.get("truncated", False)),
+            scanned=int(data.get("scanned") or 0),
+            note=str(data.get("note") or ""),
         )
     if kind == "network":
         return NetworkFact(

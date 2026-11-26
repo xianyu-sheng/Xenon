@@ -69,6 +69,9 @@ def test_effect_kinds_are_stable() -> None:
         "vcs_commit",
         "vcs_push",
         "read",
+        # A content search that ran (#432): the hits are an effect of asking,
+        # and without them "how many matches" had no answer on the ledger.
+        "search",
         "network",
         # The host's deterministic worktree observation (#287): without it,
         # "no stray changes" could only ever abstain.

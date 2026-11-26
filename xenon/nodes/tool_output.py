@@ -63,25 +63,51 @@ def _read_view(raw: dict[str, Any], evidence: str, result_id: str) -> str:
     return f"{header}\n{_clip_lines(content, head=12, tail=12)}"
 
 
-def _search_view(raw: dict[str, Any], evidence: str, result_id: str) -> str:
+def _search_view(
+    raw: dict[str, Any], evidence: str, result_id: str, tool: str = "search"
+) -> str:
     matches = raw.get("matches") or []
     lines = []
     for item in matches[:30]:
         if isinstance(item, dict):
-            lines.append(
-                f"{item.get('file', '?')}:{item.get('line', '?')}: "
-                f"{str(item.get('content', ''))[:180]}"
-            )
+            where = item.get("file", "?")
+            if item.get("line") is not None:
+                where = f"{where}:{item.get('line')}"
+            lines.append(f"{where}: {str(item.get('content', ''))[:180]}")
         else:
             lines.append(str(item)[:180])
-    if not lines:
-        lines = [str(evidence or "（无匹配）")[:MAX_MODEL_CHARS]]
-    return (
-        f"[search_files] matches={raw.get('match_count', len(matches))} "
-        f"returned={raw.get('returned_count', len(matches))} "
-        f"truncated={bool(raw.get('truncated'))} | result_id: {result_id}\n"
-        + "\n".join(lines[:30])
+    total = raw.get("match_count")
+    if total is None:
+        total = len(matches)
+    truncated = bool(
+        raw.get("truncated")
+        or raw.get("scan_truncated")
+        or raw.get("next_cursor")
     )
+    if not lines:
+        # "zero matches" and "the walk never looked" are different answers;
+        # the header below carries the caveats so the model can tell them apart.
+        lines = ["（无匹配条目）" if total == 0 else "（命中条目未随本页返回）"]
+    header = (
+        f"[{tool}] matches={total} "
+        f"returned={raw.get('returned_count', len(matches))} "
+        f"scanned={raw.get('files_scanned', 0)} "
+        f"truncated={truncated}"
+    )
+    pattern = str(raw.get("pattern") or "")
+    if pattern:
+        header += f" | pattern: {pattern[:80]}"
+    header += f" | result_id: {result_id}"
+    notes = []
+    if raw.get("scan_truncated"):
+        notes.append("扫描达到文件/时间上限，结果可能不完整（收窄 path 再搜）")
+    skipped = raw.get("skipped_large") or 0
+    if skipped:
+        notes.append(f"跳过 {skipped} 个超过大小上限的文件")
+    body = "\n".join(lines[:30])
+    if notes:
+        body += "\n(" + "；".join(notes) + ")"
+    return f"{header}\n{body}"
 
 
 def _list_view(raw: dict[str, Any], evidence: str, result_id: str) -> str:
@@ -112,8 +138,13 @@ def build_model_observation(
         view = _command_view(payload, evidence, result_id)
     elif tool == "read_file":
         view = _read_view(payload, evidence, result_id)
-    elif tool == "search_files":
-        view = _search_view(payload, evidence, result_id)
+    elif tool in {"search", "search_files"}:
+        # ``search`` is the core alias: it degrades to a directory listing when
+        # no pattern is given, which is a different view, not a search miss.
+        if str(payload.get("action_type") or "") == "list_files":
+            view = _list_view(payload, evidence, result_id)
+        else:
+            view = _search_view(payload, evidence, result_id, tool=tool)
     elif tool == "list_files":
         view = _list_view(payload, evidence, result_id)
     elif tool in {"git", "github_fetch", "web_fetch", "docs_fetch"}:
