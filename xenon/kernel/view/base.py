@@ -292,6 +292,8 @@ def _effect_summary(effect: Mapping[str, Any]) -> dict[str, Any]:
         "paths",
         "created_paths",
         "changed",
+        "query",
+        "scanned",
         "target",
         "framework",
         "tests_run",

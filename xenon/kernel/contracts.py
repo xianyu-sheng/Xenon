@@ -47,6 +47,7 @@ class EffectKind(str, Enum):
     VCS_COMMIT = "vcs_commit"
     VCS_PUSH = "vcs_push"
     READ = "read"
+    SEARCH = "search"
     NETWORK = "network"
     WORKSPACE_PROBE = "workspace_probe"
     OPAQUE = "opaque"
@@ -142,6 +143,32 @@ class ReadFact:
 
 
 @dataclass(frozen=True, slots=True)
+class SearchFact:
+    """A content search that ran: what was asked and what came back.
+
+    A search has no side effect, but it is not a no-op either: the receipt used
+    to carry nothing but ``status: ok`` and the model was left to answer "how
+    many matches, in which files" from its own imagination (or to reach for a
+    ``shell`` that a read-only boundary vetoes).  ``count`` is what the tool
+    reported finding (before paging); ``matches`` is the bounded page the
+    receipt keeps; ``truncated`` says the scan or the page stopped early, so a
+    partial answer can be labelled partial instead of read as zero.
+    """
+
+    query: str = ""
+    path: str = ""
+    matches: tuple[Mapping[str, Any], ...] = ()
+    count: int = 0
+    truncated: bool = False
+    scanned: int = 0
+    note: str = ""
+
+    @property
+    def kind(self) -> EffectKind:
+        return EffectKind.SEARCH
+
+
+@dataclass(frozen=True, slots=True)
 class WorkspaceProbe:
     """A deterministic look at the worktree, taken by the host (not the model).
 
@@ -221,6 +248,7 @@ Effect = (
     | VcsCommit
     | VcsPush
     | ReadFact
+    | SearchFact
     | NetworkFact
     | WorkspaceProbe
     | Opaque

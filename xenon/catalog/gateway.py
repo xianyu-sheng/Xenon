@@ -30,6 +30,7 @@ from xenon.kernel.contracts import (
     PolicyDecisionKind,
     ReadFact,
     ReceiptStatus,
+    SearchFact,
     TestRun,
     ToolCall,
     ToolDiscovery,
@@ -54,6 +55,15 @@ _WRITE_TOOLS = frozenset(
     }
 )
 _READ_TOOLS = frozenset({"read", "read_file", "read_document"})
+#: Tools that answer "what is in the files" without changing them.  The
+#: capability is the structural signal; the names keep the legacy adapters on
+#: the same path.
+_SEARCH_TOOLS = frozenset({"search", "search_files"})
+#: How many search hits a receipt keeps.  The tool already bounds its page;
+#: this is the second, tighter bound so one broad pattern cannot fill a ledger
+#: event.  ``count`` still reports the full number the tool found.
+_SEARCH_MATCHES_KEPT = 50
+_SEARCH_MATCH_CHARS = 300
 _TEST_TOOLS = frozenset({"run_tests"})
 _SHELL_TOOLS = frozenset({"bash", "command", "run_script"})
 _NETWORK_TOOLS = frozenset(
@@ -113,6 +123,50 @@ def _sha256_file(path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError:
         return ""
+
+
+def _search_matches(
+    meta: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    """The hits a search receipt keeps: bounded, and never a bare string."""
+
+    raw = meta.get("matches")
+    hits: list[Mapping[str, Any]] = []
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            if isinstance(item, Mapping):
+                hit = dict(item)
+                content = hit.get("content")
+                if isinstance(content, str) and len(content) > _SEARCH_MATCH_CHARS:
+                    hit["content"] = content[:_SEARCH_MATCH_CHARS]
+                hits.append(hit)
+            elif item:
+                hits.append({"file": str(item)})
+            if len(hits) >= _SEARCH_MATCHES_KEPT:
+                break
+    if not hits:
+        # ``search`` without a pattern is a directory listing.  Keep the names
+        # as hits so the model sees *what* came back, not just that something
+        # came back.
+        for path in _as_list(meta.get("files"))[:_SEARCH_MATCHES_KEPT]:
+            hits.append({"file": path})
+    return tuple(hits)
+
+
+def _search_note(meta: Mapping[str, Any], *, listed: bool) -> str:
+    """The harness's own caveats on this result, carried into the receipt."""
+
+    notes: list[str] = []
+    if listed:
+        notes.append("no pattern was given, so this is a directory listing")
+    if meta.get("scan_truncated"):
+        notes.append("the scan stopped early (file or time limit); results may be incomplete")
+    skipped = _as_int(meta.get("skipped_large"))
+    if skipped:
+        notes.append(f"{skipped} file(s) above the size limit were skipped")
+    if meta.get("next_cursor"):
+        notes.append("more matches exist than this page returned")
+    return "; ".join(notes)
 
 
 def _test_target(
@@ -794,6 +848,46 @@ class LegacyToolGateway:
                         content=content[:8000],
                     )
                 )
+
+        searched = (
+            call.capability is Capability.SEARCH
+            or call.spec_name in _SEARCH_TOOLS
+        )
+        if searched and result.success:
+            matches = _search_matches(meta)
+            listed = _as_list(meta.get("files"))
+            reported = _as_int(meta.get("match_count"))
+            if reported is None:
+                reported = _as_int(meta.get("count"))
+            effects.append(
+                SearchFact(
+                    query=str(
+                        meta.get("pattern")
+                        or params.get("pattern")
+                        or params.get("search_pattern")
+                        or ""
+                    ),
+                    path=str(
+                        meta.get("path")
+                        or params.get("path")
+                        or params.get("file_path")
+                        or ""
+                    ),
+                    matches=matches,
+                    count=(
+                        reported
+                        if reported is not None
+                        else (len(listed) or len(matches))
+                    ),
+                    truncated=bool(
+                        meta.get("scan_truncated")
+                        or meta.get("truncated")
+                        or meta.get("next_cursor")
+                    ),
+                    scanned=int(_as_int(meta.get("files_scanned")) or 0),
+                    note=_search_note(meta, listed=bool(listed)),
+                )
+            )
 
         if call.spec_name in _SHELL_TOOLS and command:
             effects.append(

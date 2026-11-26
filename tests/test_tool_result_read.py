@@ -120,3 +120,53 @@ def test_thinking_step_carries_result_hash_for_session_events() -> None:
     step = panel.steps[0]
     assert step.result_id == "tr_hash"
     assert step.raw_sha256 == "deadbeef"
+
+
+def test_search_model_view_reports_count_and_incompleteness() -> None:
+    """#432: the model has to be told how many hits there were.
+
+    The legacy search text was up to 50 ``file:line`` rows and no total, so
+    "how many matches" was unanswerable even though the tool knew the number.
+    """
+
+    from xenon.nodes.tool_output import build_model_observation
+
+    raw = {
+        "action_type": "search_files",
+        "pattern": "mcpServers",
+        "matches": [
+            {"file": "a.json", "line": 1, "content": '"mcpServers": {}'},
+            {"file": "b.json", "line": 4, "content": '"mcpServers": {}'},
+        ],
+        "match_count": 137,
+        "returned_count": 2,
+        "files_scanned": 900,
+        "truncated": True,
+        "scan_truncated": True,
+        "next_cursor": "2",
+    }
+
+    view = build_model_observation("search", raw, "", "tr_search")
+
+    assert view is not None
+    assert "matches=137" in view
+    assert "scanned=900" in view
+    assert "truncated=True" in view
+    assert "result_id: tr_search" in view
+    assert "a.json:1" in view
+    assert "扫描达到文件/时间上限" in view
+
+
+def test_search_without_a_pattern_reports_a_listing() -> None:
+    from xenon.nodes.tool_output import build_model_observation
+
+    raw = {
+        "action_type": "list_files",
+        "files": ["a.py", "b.py"],
+        "count": 2,
+    }
+
+    view = build_model_observation("search", raw, "", "tr_list")
+
+    assert view is not None
+    assert view.startswith("[list_files] count=2")
