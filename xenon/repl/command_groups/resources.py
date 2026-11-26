@@ -96,6 +96,22 @@ def _cmd_mcp(*, args: str, session_state: dict, **kwargs: Any) -> str:
             lines.append(
                 f"  {name}: {info.get('name', 'unknown')} v{info.get('version', '?')} ({tool_count} 工具)"
             )
+            # 传输能力如实显示（#427）：SSE 握手失败 / 断线后的状态不能看起来一切正常。
+            status = client.transport_status()
+            if status.get("transport") == "sse":
+                if status.get("connected"):
+                    lines.append(f"    → sse: 已握手 endpoint={status.get('endpoint', '')}")
+                else:
+                    lines.append(
+                        "    → sse: 未连接"
+                        f"（{status.get('last_error') or '尚未握手'}）"
+                    )
+                if status.get("reconnects"):
+                    lines.append(f"    → 重连 {status['reconnects']} 次")
+                if status.get("duplicates_dropped"):
+                    lines.append(f"    → 丢弃重复事件 {status['duplicates_dropped']} 条")
+            elif status.get("last_error"):
+                lines.append(f"    → 传输错误: {status['last_error']}")
         if has_pending:
             for name in registry.get_pending_server_names():
                 lines.append(f"  {name}: [dim]惰性（首次调用时连接）[/dim]")
