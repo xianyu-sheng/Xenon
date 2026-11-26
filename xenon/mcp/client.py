@@ -164,6 +164,24 @@ class MCPClient:
         """关闭连接。"""
         self.transport.close()
 
+    def transport_status(self) -> dict[str, Any]:
+        """What this connection can actually do right now.
+
+        Reported rather than assumed: a transport that lost its stream must say
+        so instead of looking healthy in ``/mcp list``.
+        """
+
+        describe = getattr(self.transport, "status", None)
+        if callable(describe):
+            try:
+                return dict(describe())
+            except Exception as exc:  # noqa: BLE001 — status must not raise
+                return {"transport": "unknown", "last_error": str(exc)}
+        return {
+            "transport": type(self.transport).__name__,
+            "connected": self._initialized,
+        }
+
     def get_tool_schema(self, tool_name: str) -> dict[str, Any] | None:
         """获取工具的 JSON Schema。"""
         for tool in self.tools:

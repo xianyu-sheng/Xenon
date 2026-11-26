@@ -18,10 +18,15 @@ xenon> /mcp add web http://localhost:3000/mcp
 xenon> /mcp list
 ```
 
-上面的 HTTP URL 仅为占位示例，须替换为服务器实际提供的 POST JSON-RPC
-端点。当前 `SSETransport` 尚未实现 MCP SSE 的 `endpoint` 发现和流上响应
-ID 关联，也不代表完整支持 Streamable HTTP；不要直接填入仅提供 SSE 握手的
-`/sse` 地址。配置与连接验证的区别见 [MCP 传输边界](INTEGRATIONS.md#mcp-传输边界)。
+SSE 传输现在是真的 HTTP+SSE（2024-11-05 那套）：客户端先 `GET` 服务器地址
+并保持流打开，收到 `event: endpoint` 后才把请求 `POST` 到该会话专属地址，
+响应按 JSON-RPC `id` 在流上关联（并发请求不会串台），断线会重连一次，重连
+失败则 `fail-closed` 报错而不是悬挂；重复事件按 `id:` 去重。`/mcp list` 会
+如实显示 `sse: 已握手 endpoint=…` / `未连接（原因）`。
+
+尚未实现的是 **Streamable HTTP（2025-03-26）**——那套用单端点 POST +
+可选 SSE 升级，语义不同。若服务器只支持 Streamable HTTP，请勿填入其地址。
+配置与连接验证的区别见 [MCP 传输边界](INTEGRATIONS.md#mcp-传输边界)。
 
 注意：当前 REPL 的 `/mcp add` 在初始化或工具发现失败时，仍可能显示
 “已连接，发现 0 个工具”；这条显示也不能作为握手成功的证明，见

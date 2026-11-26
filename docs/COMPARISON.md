@@ -31,7 +31,7 @@
 
 | 维度 | Xenon | Aider | Claude Code | OpenCode | Crush |
 | --- | :---: | :---: | :---: | :---: | :---: |
-| **MCP 协议** | ⚠️ stdio + SSE（简化实现，无 endpoint 发现/会话关联，见 #103） | ❌ | ✅ 一等公民 | ✅ | ✅ stdio/http/sse |
+| **MCP 协议** | ✅ stdio + HTTP/SSE（含 `endpoint` 发现、按 JSON-RPC id 关联、断线重连；Streamable HTTP 未实现） | ❌ | ✅ 一等公民 | ✅ | ✅ stdio/http/sse |
 | **作为 MCP server** | ✅ `xenon mcp-serve`：任务 / 证据 / 审计三个工具，只读 fail-closed | ❌ | ❌ | ❌ | ❌ |
 | **多模型路由** | ✅ 12 家厂商 | ✅ ~10 | ❌ Claude only | ✅ 50+ | ✅ 18+ |
 | **可验证执行** | ✅ **账本 + claim 绑定 + 失败即债务** | ❌ 只给 diff | ⚠️ 权限提示，无账本 | ❌ | ❌ |
@@ -52,13 +52,13 @@
 
 | 项目 | 能力 |
 | --- | --- |
-| **Xenon** | stdio 传输完整；SSE 为简化实现（无 `endpoint` 发现与流上响应 ID 关联，见 [#103](https://github.com/xianyu-sheng/Xenon/issues/103)）；子进程用 `select` + 墙钟超时（v0.2.0 B11 修复），不会被 `readline` 无限阻塞；进程退出用 `terminate()` + 兜底 `kill()`，**无僵尸进程**。 |
+| **Xenon** | stdio 传输完整；HTTP/SSE 走完整握手（`endpoint` 发现 + 按 id 关联 + 重复事件去重 + 断线重连一次，失败即 `fail-closed`）；Streamable HTTP（2025-03-26）未实现；子进程用 `select` + 墙钟超时（v0.2.0 B11 修复），不会被 `readline` 无限阻塞；进程退出用 `terminate()` + 兜底 `kill()`，**无僵尸进程**。 |
 | Aider | 不支持 MCP。用自定义 plugin 机制扩展工具。 |
 | Claude Code | MCP 一等公民，原生支持；Anthropic 自家协议。 |
 | OpenCode | 支持 MCP。 |
 | Crush | 支持 MCP（stdio/http/sse 三种类型）；不支持自动重启 MCP server。 |
 
-**Xenon 优势**：stdio 传输完整，且带 B11 修复的墙钟超时（v0.2.0 `bf6e83a` 修复），子进程挂死不会拖死整个 agent；SSE 当前为简化实现（见 [#103](https://github.com/xianyu-sheng/Xenon/issues/103)），不要视作与 Crush 同级的全传输支持。
+**Xenon 优势**：stdio 传输完整，且带 B11 修复的墙钟超时（v0.2.0 `bf6e83a` 修复），子进程挂死不会拖死整个 agent；HTTP/SSE 有完整握手与 id 关联（#427），但 Streamable HTTP 仍未实现。
 **Xenon 劣势**：和 Claude Code 相比，MCP server **不自动重启**——子进程挂掉需要 `/mcp add` 重新添加。这是已知后续项（不是技术不能，是优先级让位给 #19 等 v0.3.0 重写）。
 **方向相反的一侧**：Xenon 自己也能起成 MCP server（`xenon mcp-serve`），把
 任务 / 证据 / 审计三个工具交给其他 Agent 调用；默认只读、失败关闭，见 [MCP_SERVER](MCP_SERVER.md)。

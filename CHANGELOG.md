@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+### 修复：MCP 的 SSE 传输没有 `endpoint` 发现，也没有 id 关联（#427 / #103）
+
+现象：`/mcp add web http://host/sse` 之后，握手成功但工具列表为空或调用串台；
+换一个 SSE server 就完全连不上。文档一直写着「简化实现」，实际是**没走协议**。
+
+根因：旧 `SSETransport` 把请求 `POST` 到 SSE 地址本身，每次调用现开一条 `GET`
+流、读到第一条 `data:` 就当答案返回。于是：没有 `event: endpoint` 解析（不知道该
+POST 到哪）、没有 JSON-RPC `id` 关联（两个并发调用拿到的响应可能互换）、遇到
+`202 Accepted` 的服务器直接读不到结果、断线后要么悬挂要么静默丢帧。
+
+修复（`xenon/mcp/transport.py` 重写 `SSETransport`）：
+
+- 保持一条 `GET` 流，解析 `event: endpoint` 得到会话专属 POST 地址，并回带
+  服务器下发的 `mcp-session-id`；
+- 每条请求按 JSON-RPC `id` 注册待回表，响应在流上按 id 关联后唤醒对应调用
+  —— 并发不串台，迟到的旧响应找不到主就丢弃；
+- `202 Accepted`（答案走流）和「内联 JSON 响应」两种服务器都认；
+- 流断开时**立刻失败所有在飞请求**（"侧效应未知，不自动重试"），并按上限重连
+  重新握手，而不是等超时；
+- SSE `id:` 去重（重连重放不会二次 resolve）；
+- 新增 `status()` / `MCPClient.transport_status()`，`/mcp list` 如实显示
+  `sse: 已握手 endpoint=…` 或 `未连接（原因）`、重连次数、丢弃的重复事件数。
+
+测试：`tests/test_mcp_sse_transport.py` 用真实 HTTP server 覆盖握手、endpoint
+发现、乱序并发、缺 endpoint 的 fail-closed、断线失败、重连恢复、重复事件去重，
+以及 `/mcp list` 的如实显示（7 条）。
+
 ### 修复：search 的命中结果不进回执，模型只能回答「执行成功」（#432）
 
 现象：`xenon exec "用 search 工具查找 mcpServers" --permission read-only` 结束后，

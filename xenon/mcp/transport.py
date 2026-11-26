@@ -3,7 +3,7 @@ MCP Transport — JSON-RPC 2.0 传输层。
 
 支持两种传输方式：
 - stdio: 通过子进程的标准输入/输出通信
-- SSE: 通过 HTTP Server-Sent Events 通信
+- SSE: 通过 HTTP Server-Sent Events 通信（含 `endpoint` 发现与 JSON-RPC id 关联）
 """
 
 from __future__ import annotations
@@ -16,7 +16,11 @@ import select
 import subprocess
 import threading
 import time
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Mapping
+from urllib.parse import urljoin
+
+import httpx
 
 from xenon.utils.llm_client import _create_http_client
 
@@ -314,7 +318,27 @@ class StdioTransport(MCPTransport):
 
 
 class SSETransport(MCPTransport):
-    """通过 HTTP SSE 通信。"""
+    """MCP over HTTP + Server-Sent Events (the 2024-11-05 HTTP transport).
+
+    The handshake is two-legged and it is *not* optional:
+
+    1. ``GET`` the server URL with ``Accept: text/event-stream`` and keep the
+       stream open.  The server answers with one ``endpoint`` event whose data
+       is the URL this session must ``POST`` to (it usually carries a session
+       id); only after that event may a message be sent.
+    2. Every request is ``POST``ed to that endpoint, and the *response* arrives
+       on the stream — correlated by JSON-RPC ``id``, not by connection.
+
+    The previous implementation posted to the SSE URL itself and read one
+    ``data:`` line per call, so it never discovered the endpoint, could not
+    tell two concurrent responses apart, and silently mis-read any server that
+    answered with ``202 Accepted`` (#103 / #427).  This one keeps a reader
+    thread that dispatches by ``id``, deduplicates replayed events, and fails
+    closed with a named reason instead of hanging.
+    """
+
+    #: How many event ids are remembered for duplicate suppression.
+    _SEEN_EVENT_IDS = 512
 
     def __init__(
         self,
@@ -322,61 +346,355 @@ class SSETransport(MCPTransport):
         headers: dict[str, str] | None = None,
         *,
         timeout: float = 30.0,
+        connect_timeout: float | None = None,
+        max_reconnects: int = 1,
     ) -> None:
         self.url = url
-        self.headers = headers or {}
-        self._client = _create_http_client(timeout=timeout)
+        self.headers = dict(headers or {})
+        #: Wall clock budget for one request/reply round trip.
+        self.timeout = timeout
+        #: Budget for the stream handshake (must finish before we POST).
+        self.connect_timeout = (
+            connect_timeout if connect_timeout is not None else min(timeout, 15.0)
+        )
+        self.max_reconnects = max(0, int(max_reconnects))
+        # The stream is idle by design between events, so a plain read timeout
+        # would tear down a perfectly healthy connection (a real SSE server
+        # sends nothing for seconds at a time).  Bound connect, not read, and
+        # keep the per-call budget on the POST below.
+        self._client = _create_http_client(timeout=None)
         self._request_id = 0
+        self._lock = threading.Lock()
+        self._pending: dict[int, "_PendingReply"] = {}
+        self._ready = threading.Event()
+        self._closed = threading.Event()
+        self._stream_thread: threading.Thread | None = None
+        self._stream_error = ""
+        self._post_url = ""
+        self._session_headers: dict[str, str] = {}
+        self._server_info: dict[str, Any] = {}
+        self._seen_event_ids: dict[str, None] = {}
+        self._duplicates = 0
+        self._reconnects = 0
+        self._last_error = ""
+        #: Server-initiated notifications, bounded; observable, never answered.
+        self.notifications: "queue.Queue[dict[str, Any]]" = queue.Queue(maxsize=64)
+
+    # ── public API ─────────────────────────────────────────────
 
     def send(self, message: dict[str, Any]) -> None:
-        """通过 HTTP POST 发送消息。"""
-        try:
-            resp = self._client.post(
-                self.url,
-                json=message,
-                headers={**self.headers, "Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-        except Exception as e:
-            raise RuntimeError(f"MCP SSE 发送失败: {e}") from e
+        """POST a message that expects no reply (e.g. ``notifications/*``)."""
+
+        self._ensure_ready()
+        self._post(message)
 
     def receive(self) -> dict[str, Any]:
-        """通过 SSE 接收消息。"""
-        try:
-            with self._client.stream("GET", self.url, headers=self.headers) as resp:
-                resp.raise_for_status()
-                for line in resp.iter_lines():
-                    if line.startswith("data:"):
-                        data = line[5:].strip()
-                        if data:
-                            return json.loads(data)
-            raise RuntimeError("SSE 连接关闭")
-        except Exception as e:
-            raise RuntimeError(f"MCP SSE 接收失败: {e}") from e
+        """Read one dispatched message; kept for API compatibility.
+
+        Normal callers should use :meth:`request`, which correlates by id.
+        """
+
+        self._ensure_ready()
+        while True:
+            try:
+                return self.notifications.get(timeout=self.timeout)
+            except queue.Empty as exc:
+                raise RuntimeError(
+                    "MCP SSE 接收超时：流上没有新的消息"
+                    + (f"（最近一次错误：{self._last_error}）" if self._last_error else "")
+                ) from exc
 
     def request(
         self, method: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """发送请求。SSE 模式下直接用 POST 请求-响应。"""
-        self._request_id += 1
-        message = {
+        """Send a request and wait for the response with the same JSON-RPC id."""
+
+        self._ensure_ready()
+        with self._lock:
+            self._request_id += 1
+            request_id = self._request_id
+            pending = _PendingReply()
+            self._pending[request_id] = pending
+        message: dict[str, Any] = {
             "jsonrpc": "2.0",
-            "id": self._request_id,
+            "id": request_id,
             "method": method,
         }
         if params:
             message["params"] = params
 
         try:
-            resp = self._client.post(
-                self.url,
-                json=message,
-                headers={**self.headers, "Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            raise RuntimeError(f"MCP SSE 请求失败: {e}") from e
+            inline = self._post(message)
+        except Exception:
+            with self._lock:
+                self._pending.pop(request_id, None)
+            raise
+
+        # ``202 Accepted`` means "the answer comes on the stream"; a JSON body
+        # is an older server answering inline.  Both are accepted, but only a
+        # body carrying *our* id counts as this request's answer.
+        if (
+            isinstance(inline, Mapping)
+            and inline.get("id") == request_id
+            and ("result" in inline or "error" in inline)
+        ):
+            with self._lock:
+                self._pending.pop(request_id, None)
+            return dict(inline)
+
+        if pending.event.wait(max(0.0, self.timeout)):
+            if pending.error:
+                raise RuntimeError(pending.error)
+            assert pending.response is not None
+            return pending.response
+        with self._lock:
+            self._pending.pop(request_id, None)
+        detail = f"（最近一次错误：{self._last_error}）" if self._last_error else ""
+        raise RuntimeError(
+            f"MCP SSE 请求超时：{round(self.timeout, 1)}s 内未收到 "
+            f"id={request_id} 的响应{detail}"
+        )
+
+    def status(self) -> dict[str, Any]:
+        """Honest transport state for ``/mcp`` and diagnostics."""
+
+        return {
+            "transport": "sse",
+            "url": self.url,
+            "endpoint": self._post_url,
+            "connected": self._ready.is_set() and not self._closed.is_set(),
+            "reconnects": self._reconnects,
+            "duplicates_dropped": self._duplicates,
+            "session_headers": sorted(self._session_headers),
+            "server": dict(self._server_info),
+            "last_error": self._last_error,
+        }
 
     def close(self) -> None:
+        self._closed.set()
+        self._ready.clear()
+        self._fail_pending("MCP SSE 连接已关闭")
+        # Close the socket *before* joining: the reader thread is parked on a
+        # read with no timeout (an idle stream is normal), so only closing the
+        # client wakes it.  Joining first would always burn the full timeout.
         self._client.close()
+        thread = self._stream_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2)
+        self._stream_thread = None
+
+    def __del__(self) -> None:  # pragma: no cover - GC timing
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    # ── handshake and stream ───────────────────────────────────
+
+    def _ensure_ready(self) -> None:
+        if self._closed.is_set():
+            raise RuntimeError("MCP SSE 连接已关闭")
+        if self._ready.is_set():
+            return
+        with self._lock:
+            thread = self._stream_thread
+            if thread is None or not thread.is_alive():
+                self._stream_thread = threading.Thread(
+                    target=self._stream_loop,
+                    name="xenon-mcp-sse",
+                    daemon=True,
+                )
+                self._stream_thread.start()
+        if self._ready.wait(self.connect_timeout):
+            return
+        with self._lock:
+            error = self._stream_error
+        raise RuntimeError(
+            "MCP SSE 握手失败："
+            + (error or f"{self.connect_timeout:.1f}s 内未收到 endpoint 事件")
+            + "（服务器必须先在 GET 流上发 `event: endpoint`，再接受 POST）"
+        )
+
+    def _stream_loop(self) -> None:
+        attempts = 0
+        while not self._closed.is_set():
+            try:
+                self._open_stream()
+                error = "SSE 连接关闭"
+            except Exception as exc:  # noqa: BLE001 — surface as state, not traceback
+                error = f"SSE 连接失败：{exc}"
+            if self._closed.is_set():
+                return
+            self._ready.clear()
+            self._stream_error = error
+            self._last_error = error
+            # A dropped stream invalidates every in-flight request: the answer
+            # for those ids lived on the old connection and is never coming.
+            # Failing them now is the difference between "error" and "hang".
+            self._fail_pending(
+                f"{error}；请求已随连接中断，不自动重试（侧效应未知）"
+            )
+            if attempts >= self.max_reconnects:
+                return
+            attempts += 1
+            self._reconnects += 1
+            if self._closed.wait(min(0.2 * attempts, 2.0)):
+                return
+
+    def _open_stream(self) -> None:
+        headers = {
+            **self.headers,
+            "Accept": "text/event-stream",
+            "Cache-Control": "no-store",
+        }
+        stream_timeout = httpx.Timeout(self.connect_timeout, read=None)
+        with self._client.stream(
+            "GET", self.url, headers=headers, timeout=stream_timeout
+        ) as resp:
+            resp.raise_for_status()
+            session = resp.headers.get("mcp-session-id") or ""
+            if session:
+                self._session_headers["mcp-session-id"] = session
+            event_name = ""
+            event_id = ""
+            data_lines: list[str] = []
+            for raw in resp.iter_lines():
+                if self._closed.is_set():
+                    return
+                line = raw.rstrip("\r")
+                if not line:
+                    if data_lines:
+                        self._dispatch(event_name, "\n".join(data_lines), event_id)
+                    event_name, event_id, data_lines = "", "", []
+                    continue
+                if line.startswith(":"):
+                    continue  # keep-alive comment
+                field, _, value = line.partition(":")
+                if value.startswith(" "):
+                    value = value[1:]
+                if field == "event":
+                    event_name = value
+                elif field == "data":
+                    data_lines.append(value)
+                elif field == "id":
+                    event_id = value
+            raise RuntimeError("SSE 流结束")
+
+    def _dispatch(self, event_name: str, data: str, event_id: str) -> None:
+        if event_id:
+            if event_id in self._seen_event_ids:
+                # A reconnect may replay the tail of the stream; replaying a
+                # response is harmless once, but resolving an id twice is how
+                # two different calls end up sharing one answer.
+                self._duplicates += 1
+                return
+            if len(self._seen_event_ids) >= self._SEEN_EVENT_IDS:
+                self._seen_event_ids.pop(next(iter(self._seen_event_ids)), None)
+            self._seen_event_ids[event_id] = None
+        if event_name == "endpoint":
+            declared = data.strip()
+            if not declared:
+                # ``urljoin`` would happily turn "" into the SSE URL, i.e. POST
+                # to the stream address — the exact guess this transport exists
+                # to avoid.  An empty endpoint is a broken server, and says so.
+                self._last_error = "endpoint 事件为空"
+                return
+            self._post_url = urljoin(self.url, declared)
+            self._ready.set()
+            return
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            self._last_error = f"SSE 数据不是 JSON：{data[:120]}"
+            logger.debug("MCP SSE 非 JSON 数据被忽略: %s", data[:200])
+            return
+        if not isinstance(payload, dict):
+            return
+        if "id" in payload and ("result" in payload or "error" in payload):
+            self._resolve(payload)
+            return
+        if "method" in payload:
+            self._queue_notification(payload)
+            return
+        if "serverInfo" in payload or "capabilities" in payload:
+            # A server announcement may wrap the info (``{"serverInfo": {...}}``)
+            # or be the info itself; store the meaningful half either way.
+            info = payload.get("serverInfo")
+            self._server_info = (
+                dict(info) if isinstance(info, Mapping) else dict(payload)
+            )
+            return
+        self._last_error = f"无法归类的 SSE 消息：{str(payload)[:120]}"
+
+    def _resolve(self, payload: Mapping[str, Any]) -> None:
+        request_id = payload.get("id")
+        with self._lock:
+            # Pop, do not peek: the entry leaves the table on first resolve, so a
+            # server replaying the same id (or a stale answer landing late) can
+            # never overwrite the answer the caller already received.
+            pending = self._pending.pop(request_id, None)
+        if pending is None:
+            logger.debug("MCP SSE 收到无主/重复的响应: id=%s", request_id)
+            self._duplicates += 1
+            return
+        pending.response = dict(payload)
+        pending.event.set()
+
+    def _queue_notification(self, payload: dict[str, Any]) -> None:
+        try:
+            self.notifications.put_nowait(payload)
+        except queue.Full:
+            # Notifications are advisory; dropping the oldest is better than
+            # blocking the reader thread that every response depends on.
+            try:
+                self.notifications.get_nowait()
+                self.notifications.put_nowait(payload)
+            except queue.Empty:  # pragma: no cover - race with another reader
+                pass
+
+    def _fail_pending(self, reason: str) -> None:
+        with self._lock:
+            pending = list(self._pending.values())
+            self._pending.clear()
+        for item in pending:
+            if item.event.is_set():
+                continue
+            item.error = reason
+            item.event.set()
+
+    def _post(self, message: Mapping[str, Any]) -> Any:
+        if not self._post_url:
+            raise RuntimeError(
+                "MCP SSE 尚未获得 endpoint：服务器未发送 `event: endpoint`"
+            )
+        headers = {
+            **self.headers,
+            **self._session_headers,
+            "Content-Type": "application/json",
+        }
+        try:
+            resp = self._client.post(
+                self._post_url,
+                json=dict(message),
+                headers=headers,
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+        except Exception as exc:  # noqa: BLE001 — one error type for callers
+            self._last_error = f"MCP SSE 发送失败：{exc}"
+            raise RuntimeError(self._last_error) from exc
+        if resp.status_code == 202 or not resp.content:
+            return None
+        try:
+            return resp.json()
+        except Exception:  # noqa: BLE001 — a non-JSON body is not a reply
+            return None
+
+
+@dataclass
+class _PendingReply:
+    """One in-flight request waiting for its correlated response."""
+
+    event: threading.Event = field(default_factory=threading.Event)
+    response: dict[str, Any] | None = None
+    error: str = ""
