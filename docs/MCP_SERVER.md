@@ -102,8 +102,25 @@ claude mcp remove xenon -s local
 
 JSON-RPC 2.0，stdio，每行一个 JSON 对象。stdout **只**承载协议消息，诊断信息全部走 stderr。
 
-支持的方法：`initialize`（协商 2025-06-18 / 2025-03-26 / 2024-11-05）、`ping`、
-`tools/list`、`tools/call`、`shutdown`，以及通知 `notifications/initialized`。
+支持的方法：`initialize`、`server/discover`、`ping`、`tools/list`、`tools/call`、
+`shutdown`，以及通知 `notifications/initialized`。
+
+### 版本与能力
+
+| 项 | 取值 | 说明 |
+|---|---|---|
+| 协商上限 | `2025-11-25` | 客户端请求更高版本时，我们回自己的上限（协议要求），并在 `server/discover` 里回显 `requestedProtocolVersion`，不假装支持 |
+| 可协商版本 | `2025-11-25` / `2025-06-18` / `2025-03-26` / `2024-11-05` | 旧客户端不发 `server/discover`，直接 `initialize`，行为不变 |
+| `capabilities` | `{"tools": {"listChanged": false}}` | **只有**有 handler 的能力。resources / prompts / logging / subscriptions / elicitation / tasks 一律不宣告 |
+| `server/discover` | 无会话 | 不需要先 `initialize`，不改任何状态，返回 `protocolVersion` / `supportedProtocolVersions` / `capabilities` / `serverInfo` / `instructions` |
+
+说清楚「不支持」比假装支持便宜得多：`2025-11-25` 里有些能力是客户端先看 `capabilities`
+再决定是否使用的，我们没实现就不宣告，客户端自然不会用；真发来没有 handler 的方法，
+回的是 `-32601 method not found`，而不是半路崩掉。
+
+`server/discover` 的真实握手（Claude Code 2.1.319，2026-11-12）：
+客户端先发带 `_meta.io.modelcontextprotocol/protocolVersion` 的探测，收到 `-32601`
+后退回 `initialize` —— 现在第一条就有答案了。
 
 ## 8. 已验证
 

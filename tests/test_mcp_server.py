@@ -252,3 +252,60 @@ def test_stdout_carries_only_protocol_lines(monkeypatch) -> None:
     lines = [line for line in stdout.getvalue().splitlines() if line.strip()]
     assert len(lines) == 2
     assert all(json.loads(line)["jsonrpc"] == "2.0" for line in lines)
+
+
+def test_server_discover_answers_without_a_session() -> None:
+    """#426: a client may probe before `initialize`; nothing may be created."""
+
+    server = _server()
+
+    response = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "probe-1",
+            "method": "server/discover",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientInfo": {"name": "claude-code"},
+                }
+            },
+        }
+    )
+
+    result = response["result"]
+    assert result["protocolVersion"] == PROTOCOL_VERSION
+    assert "2025-11-25" in result["supportedProtocolVersions"]
+    assert result["capabilities"]["tools"] == {"listChanged": False}
+    assert result["serverInfo"]["name"] == "xenon"
+    # The probe asked for a version we do not implement: say which one, do not
+    # silently pretend we speak it.
+    assert result["requestedProtocolVersion"] == "2026-07-28"
+    assert "ledger" in result["instructions"]
+
+
+def test_discover_does_not_leak_unsupported_capabilities() -> None:
+    result = _server().handle(
+        {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {}}
+    )["result"]
+
+    # Only what has a handler; a client that wants resources must be told "no"
+    # by the capability list rather than by an error mid-session.
+    assert set(result["capabilities"]) == {"tools"}
+    assert "requestedProtocolVersion" not in result
+
+
+def test_the_newest_protocol_is_negotiable() -> None:
+    response = _server().handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-11-25"},
+        }
+    )
+
+    assert response["result"]["protocolVersion"] == "2025-11-25"
+    assert response["result"]["capabilities"] == {
+        "tools": {"listChanged": False}
+    }
