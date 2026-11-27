@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### UX：执行过程默认只显示「结论性事件」，记账事件折叠（#441）
+
+一次真实任务（D 盘扫 .exe，111 条事件）里，`/dashboard` 的「执行过程」表把每条事件都
+列成一行，其中一半是 `state_transition`（running→thinking→running…）和 token 用量这类
+纯记账事件——账本需要它们，读的人不需要。这不是跨轮次的泄漏，而是单轮内没有投影：
+
+- `DashboardQueries.ledger_events(fold=True)`：把连续的记账事件折成一行
+  `⋯ N 条记账事件（state_transition, …）`，并给出 `total / shown / folded`；
+  折叠集合是 `state_transition / model_usage / thought / session_context /
+  workspace_probed / workspace_layout / intake_recorded / step_verified / step_closed`；
+- `step_verdict` **只折 satisfied**：验证失败的裁决正是看这张表的原因，必须留着；
+- 面板默认折叠，显示「本轮 111 条事件 · 显示 35 行 · 已折叠 76 条记账事件」，
+  一键「显示全部事件」；账本一条不少（`fold=False` 原样返回）。
+
+实测同一份 76 事件的真实账本：62 → 35 行。
+
 ### 修复：`xenon_evidence` 返回体不说清 scope（#441）
 
 `xenon_evidence` 直接把 `build_report()` 的整份 JSON 吐回去，外部 harness（
