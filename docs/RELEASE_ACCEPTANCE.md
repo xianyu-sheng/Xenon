@@ -40,6 +40,45 @@ python -m build
 
 v0.7.3 已完成一次真实任务重跑：`11/20 = 55.0%`。历史 45% 数据仅作为比较基线；后续版本需要在相同任务集和隔离工作目录下重复执行，并将提交、费用和失败分类绑定到报告。
 
+## 自动发布（tag 驱动）
+
+`.github/workflows/release.yml` 在 **推送 `v*` tag** 时构建并挂载资产，不再需要本地
+`python -m build` + 手动上传：
+
+```bash
+# 1. 版本号单一来源：xenon/__init__.py 的 __version__
+# 2. 打 tag 并推送
+git tag -a v1.2.0 -m "Xenon 1.2.0"
+git push origin v1.2.0
+```
+
+流水线做的事（每一步失败都会中止发布）：
+
+1. **tag 必须等于 `xenon.__version__`** —— 两者不等就报错，不允许「打错 tag 也发出去」；
+2. 复用 CI 同一个脚本 `scripts/build_frontend_assets.py` 构建并落位前端 bundle，
+   避免「CI 与发布各写一套」的漂移；
+3. `python -m build` + `twine check`；
+4. **断言 wheel 内含 `xenon/frontend/assets/xenon-ui.js`** —— 缺了 bundle 的包装起来
+   前端起不动，宁可发布失败也不发这种包；
+5. 生成 `SHA256SUMS`；
+6. 生成说明三节：**版本（摘自 CHANGELOG 对应小节）/ 验证 / 诚实边界**，
+   并附资产哈希；
+7. 创建 GitHub Release 并上传 `*.whl`、`*.tar.gz`、`SHA256SUMS`。
+
+已存在的 Release 用 `--clobber` 覆盖资产（**重发幂等**，不会产生第二份）。
+手动重发入口保留：
+
+```bash
+gh workflow run release.yml -f tag=v1.2.0            # 重新发一次
+gh workflow run release.yml -f tag=v1.2.0 -f dry_run=true   # 只构建+断言，不碰 Release
+```
+
+`dry_run` 是给「想先看看这次构建会不会过」用的：构建、断言、说明生成全部照跑，
+只是最后一步跳过。
+
+> 发布说明里的套件数字**不抄写**，指向该 tag 的 CI run：手抄的数字会漂移，
+> 而漂移过的数字比没有数字更糟。
+
 ## 用户路径验收
 
 每次准备新版本时，至少验证以下路径：
