@@ -1,0 +1,193 @@
+name: Release
+
+# 发布由 tag 驱动：`git tag -a vX.Y.Z` + `git push origin vX.Y.Z` 就会产出
+# wheel / sdist / SHA256SUMS 并挂到 GitHub Release。手动触发保留给重发。
+#
+# 三条不能松的约束（见 docs/RELEASE_ACCEPTANCE.md）：
+#  1. tag 必须等于 xenon.__version__，否则拒绝发布（防止打错 tag）；
+#  2. wheel 必须真的带上前端 bundle —— 缺了就失败，而不是发一个装起来起不动的包；
+#  3. 重新触发必须幂等：已存在的 Release 用 --clobber 覆盖资产，不产生第二份。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)publish, e.g. v1.1.1"
+        required: true
+        type: string
+      dry_run:
+        description: "Build, assert and write the notes, but do not touch the Release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write  # create the Release and upload assets
+
+jobs:
+  release:
+    name: Build and publish release assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Resolve the ref to publish
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.ref.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # tag 和源码里的版本号是两份真相；它们必须相等，否则发出去的版本号是错的。
+      - name: The tag must match the package version
+        env:
+          TAG: ${{ steps.ref.outputs.tag }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          import xenon
+          tag = os.environ["TAG"].lstrip("v")
+          if xenon.__version__ != tag:
+              sys.exit(
+                  f"tag {tag!r} != xenon.__version__ {xenon.__version__!r}: "
+                  "bump xenon/__init__.py or retag before publishing"
+              )
+          print(f"ok: tag {tag} == version {xenon.__version__}")
+          PY
+
+      # 与 CI 的 package job 共用同一个脚本，避免「两处各写一套构建逻辑」的漂移。
+      - name: Stage the front-end bundle
+        run: python scripts/build_frontend_assets.py
+
+      - name: Build distributions
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*
+
+      # 缺 bundle 的 wheel 安装后 `xenon` 起不来。宁可发布失败，也不发这种包。
+      - name: Refuse to publish without the front-end
+        run: |
+          python - <<'PY'
+          import glob, tarfile, zipfile
+          wheel = glob.glob("dist/*.whl")[0]
+          expected = "xenon/frontend/assets/xenon-ui.js"
+          names = zipfile.ZipFile(wheel).namelist()
+          assert expected in names, f"{expected} missing from {wheel}"
+          print(f"ok: {expected} is in {wheel}")
+          sdist = glob.glob("dist/*.tar.gz")[0]
+          print(f"ok: sdist {sdist} built")
+          PY
+
+      - name: Hash the assets
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      # 说明三节：版本 / 验证 / 诚实边界。数字不在这里编，指向真正的出处。
+      - name: Write release notes
+        env:
+          TAG: ${{ steps.ref.outputs.tag }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          tag = os.environ["TAG"]
+          version = tag.lstrip("v")
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          section = ""
+          marker = f"## [{version}]"
+          if marker in changelog:
+              start = changelog.index(marker)
+              nxt = changelog.find("\n## [", start + 1)
+              section = changelog[start : nxt if nxt != -1 else None].strip()
+          sums = Path("dist/SHA256SUMS").read_text(encoding="utf-8").strip()
+
+          notes = "\n".join(
+              [
+                  f"# Xenon {version}",
+                  "",
+                  "## 版本",
+                  "",
+                  section or "（CHANGELOG 里没有这一节的记录——这本身就是个问题，请补上再发。）",
+                  "",
+                  "## 安装",
+                  "",
+                  "```bash",
+                  f"pip install xenon_harness-{version}-py3-none-any.whl",
+                  "xenon --version",
+                  "```",
+                  "",
+                  "轮子里带了 TS 前端 bundle，安装后不需要 Node.js 才能启动 `xenon`；"
+                  "仅从源码跑前端（`cd frontend && npm ci`）才需要 Node 20+。",
+                  "",
+                  "## 验证",
+                  "",
+                  "- 本 Release 的资产由 `.github/workflows/release.yml` 在 tag 上构建："
+                  "同一份前端构建脚本、`twine check`、以及「wheel 必须含 "
+                  "`xenon/frontend/assets/xenon-ui.js`」的断言。",
+                  "- 离线套件与 patch coverage 的当次数值以该 tag 的 CI run 为准，"
+                  "不在这里抄写（抄写会漂移）。",
+                  "- 真实供应商 / live 用例不在发布门禁内；需要时单独出验收记录。",
+                  "",
+                  "## 诚实边界",
+                  "",
+                  "- 这不是沙箱：`process` 后端不是安全边界，Docker/WSL 后端的验收见 #430。",
+                  "- 权限默认从严：`xenon mcp-serve` 默认 `read-only`，需要人工审批的调用会 fail-closed。",
+                  "- 评测数字的适用范围以 `docs/EVAL_RESULTS.md` 与 README 为准。",
+                  "",
+                  "## 资产",
+                  "",
+                  "```",
+                  sums,
+                  "```",
+                  "",
+                  f"完整变更记录：CHANGELOG.md 的 `[{version}]` 一节。",
+                  "",
+              ]
+          )
+          Path("RELEASE_NOTES.md").write_text(notes, encoding="utf-8")
+          print(notes[:600])
+          PY
+
+      # dry_run 让整条流水线（构建 → 断言 → 说明）可以在不动 Release 的前提下验证一遍。
+      - name: Publish the Release
+        if: ${{ github.event_name == 'push' || !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ref.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists: replacing its notes and assets"
+            gh release edit "$TAG" --notes-file RELEASE_NOTES.md
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --title "Xenon ${TAG#v}" \
+              --notes-file RELEASE_NOTES.md \
+              --verify-tag
+          fi
+          gh release view "$TAG" --json assets \
+            --jq '.assets[] | "\(.name) \(.size) bytes"'

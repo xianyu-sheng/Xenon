@@ -4,7 +4,22 @@
 
 ## [Unreleased]
 
-### feat(mcp)：server 支持 `server/discover`，协商上限提到 2025-11-25（#426）
+### 发布：tag 触发的自动 Release，缺 bundle 的包发不出去（#431）
+
+1.0 的 wheel 是本地 `python -m build` 之后手动上传的；CI 的 `package` job 会断言 wheel
+含前端 bundle，但**没有任何 workflow 在 tag 上产出 Release 资产**。现在有了。
+
+- 推送 `v*` tag → 构建 → `twine check` → 断言 wheel 含
+  `xenon/frontend/assets/xenon-ui.js`（缺了就失败）→ 生成 `SHA256SUMS` →
+  上传 wheel / sdist / SHA256SUMS；
+- **tag 必须等于 `xenon.__version__`**，不等直接拒绝（防止打错 tag 发出去）；
+- 复用 CI 的 `scripts/build_frontend_assets.py`，构建逻辑只有一份；
+- 说明模板三节：版本（摘自 CHANGELOG 对应小节）/ 验证（指向该 tag 的 CI run，不抄数字）/ 诚实边界；
+- 手动重发保留：`gh workflow run release.yml -f tag=vX.Y.Z`，
+  另有 `dry_run=true` 只跑构建与断言、不碰 Release；
+- 已存在的 Release 用 `--clobber` 覆盖资产，重发幂等。
+
+`docs/RELEASE_ACCEPTANCE.md` 新增「自动发布（tag 驱动）」一节。### feat(mcp)：server 支持 `server/discover`，协商上限提到 2025-11-25（#426）
 
 Claude Code 2.1.319 会在 `initialize` 之前先探一次 `server/discover`
 （2026-11-12 的真实握手见 `docs/evidence/mcp-claude-integration/transcript.txt`），
