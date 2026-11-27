@@ -68,3 +68,23 @@ This mechanism is deliberately limited:
 
 Use OS- or container-level isolation for untrusted code and treat approvals as
 human decisions, not as proof that preceding content was safe.
+
+## Sensitive paths: one list, three consumers
+
+"What counts as a sensitive path" has a single source of truth,
+`xenon/utils/sensitive.py` (#449). It is a pure string classifier — no file
+I/O, standard library only — exposing `classify_path(path, *, workspace=None)`
+(returns `""`, `"credential"`, `"system"` or `"outside"`) and
+`matches_credential_name(name)`. Three places use the idea of a sensitive path:
+
+| Consumer | What it is for | Relation to `xenon/utils/sensitive.py` |
+| --- | --- | --- |
+| `xenon/nodes/tool_node.py::_SENSITIVE_PATHS` | **Write blacklist** — a security boundary: writes under these prefixes are refused | References `SYSTEM_WRITE_BLACKLIST`. The matching logic in `ToolNode._validate_path` is unchanged. The list may only grow; it is never loosened. |
+| `xenon/frontend/queries.py::_is_sensitive_path` | **Dashboard attention** (#446): a credential read, a system-path read or a path outside the workspace is promoted instead of folded away | Calls `classify_path`. `SYSTEM_PATHS` is the write blacklist plus `/root` (reading there deserves attention; refusing every write there would break containers that work in `/root`). |
+| `xenon/nodes/tool_security.py` | **Prompt-injection advisories** on tool output | Not derived. Its `credential_access` / `secret_exfiltration` rules match natural-language *requests* ("read the .env", "send the credentials"), not paths, so reusing the path patterns would change their meaning. |
+
+`xenon/utils/sensitive.py` is authoritative for the lists. The security
+boundary is still the check in `tool_node`: `classify_path` is for attention
+and audit, and nothing it returns may be used to allow a write. The separate
+credential read/write guard (`_USER_SENSITIVE` in `tool_node`) is a security
+check with its own substring semantics and is likewise left as it is.

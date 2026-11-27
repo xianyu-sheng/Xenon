@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
+
+from xenon.utils.sensitive import CREDENTIAL_NAME_PATTERNS, SYSTEM_PATHS, classify_path
 
 __all__ = ["DashboardQueries"]
 
@@ -132,52 +133,18 @@ def _fold_bookkeeping(
     return rows, hidden
 
 #: Reading a file is cheap and reversible; reading *these* is the event you
-#: actually wanted to see.  Two lists on purpose: a credential read is a privacy
-#: event wherever it lives, a system-path read is a boundary event.
-_SENSITIVE_NAME_RE = (
-    r"(^|[\/])\.env(\.|$|[\/])",
-    r"(^|[\/])id_(rsa|dsa|ecdsa|ed25519)(\.|$)",
-    r"\.(pem|key|p12|pfx|jks)$",
-    r"(^|[\/])(credentials|secrets?|passwords?|netrc)(\.|$|[\/])",
-    r"(^|[\/])\.(aws|ssh|gnupg|kube|docker)([\/]|$)",
-    r"(^|[\/])\.git-credentials$",
-)
-_SENSITIVE_SYSTEM_TOKENS = (
-    "c:/windows",
-    "c:/program files",
-    "c:/programdata",
-    "/etc/",
-    "/usr/",
-    "/bin/",
-    "/sbin/",
-    "/boot/",
-    "/dev/",
-    "/root/",
-    "/var/log/",
-)
-
-
-def _normalise_path(path: Any) -> str:
-    return str(path or "").replace("\\", "/").lower()
+#: actually wanted to see.  A credential read is a privacy event wherever it
+#: lives, a system-path read is a boundary event.  The lists themselves live in
+#: :mod:`xenon.utils.sensitive` (#449) so the write blacklist and this view
+#: cannot drift apart; the aliases keep the old names importable.
+_SENSITIVE_NAME_RE = CREDENTIAL_NAME_PATTERNS
+_SENSITIVE_SYSTEM_TOKENS = SYSTEM_PATHS
 
 
 def _is_sensitive_path(path: Any, workspace: Any) -> str:
     """Why a path is worth attention: credential, system, or outside the box."""
 
-    text = _normalise_path(path).strip()
-    if not text:
-        return ""
-    for pattern in _SENSITIVE_NAME_RE:
-        if re.search(pattern, text):
-            return "credential"
-    for token in _SENSITIVE_SYSTEM_TOKENS:
-        if text.startswith(token) or token in text:
-            return "system"
-    if workspace:
-        root = _normalise_path(workspace).rstrip("/")
-        if root and not (text == root or text.startswith(root + "/")):
-            return "outside"
-    return ""
+    return classify_path(str(path or ""), workspace=str(workspace) if workspace else None)
 
 
 #: Receipt effect types that can change the world, versus ones that only look.

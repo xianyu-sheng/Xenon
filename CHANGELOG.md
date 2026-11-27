@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### refactor(tools)：敏感路径判定收敛成单一真相（#449）
+
+「什么算敏感路径」原来有三套互不相干的答案（写入黑名单、面板注意力投影、
+提示注入检测），会各自漂移。
+
+- 新增 `xenon/utils/sensitive.py`：只做字符串分类、无 I/O、只依赖标准库；
+  `classify_path(path, *, workspace=None)` 返回 `""` / `"credential"` /
+  `"system"` / `"outside"`，另有 `matches_credential_name(name)`；
+- `tool_node._SENSITIVE_PATHS` 改为引用 `SYSTEM_WRITE_BLACKLIST`，**条目与匹配逻辑
+  完全不变**（安全边界只增不减）；
+- 面板的 `_is_sensitive_path` 改为调用 `classify_path`：系统路径按路径分量从根匹配
+  （`/home/u/proj/bin/x` 不再误报为系统路径），相对路径视为工作区内（`../` 越界仍算
+  工作区外），`.netrc` / `_netrc` 现在会被识别为凭证，并补上 `/proc`、`/sys`；
+- `tool_security.py` 的正则匹配的是自然语言请求而非路径，语义不同，不合并；
+  `docs/THREAT_MODEL.md` 写明三处用途与谁是权威。
+
+测试：新增 `tests/test_sensitive_paths.py`（凭证 / 系统 / 工作区外 / 正常四类，
+Windows 与 POSIX 写法、盘符、大小写；以及写入黑名单只增不减）。
+
 ### 发布：tag 触发的自动 Release，缺 bundle 的包发不出去（#431）
 
 1.0 的 wheel 是本地 `python -m build` 之后手动上传的；CI 的 `package` job 会断言 wheel
