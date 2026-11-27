@@ -150,7 +150,8 @@ body.gridmode #panel { display: none; }
 .bar.stall { background: var(--amber); }
 .bar.retry { background: var(--violet); }
 .waterfall td { white-space: nowrap; }
-.waterfall tr.folded td { color: var(--dim); font-style: italic; }
+.step-head { margin: 12px 0 4px; font-weight: 600; color: var(--accent); }
+.muted { color: var(--dim); font-weight: 400; }
 .tree { margin: 0; padding-left: 17px; }
 .tree li { margin: 2px 0; }
 @media (max-width: 1399px) {
@@ -891,9 +892,66 @@ function renderSideDiff(patch) {
 // 账本一条不少，这里只是视图（#441）。
 var showAllEvents = false;
 
+function waterfallRows(events) {
+  var rows = '';
+  var times = events.map(function (e) { return Date.parse(e.ts) || 0; });
+  var maxGap = 0;
+  var gaps = [];
+  for (var g = 1; g < times.length; g += 1) {
+    var gap = times[g] && times[g - 1] ? Math.max(0, (times[g] - times[g - 1]) / 1000) : 0;
+    gaps.push(gap);
+    if (gap > maxGap) maxGap = gap;
+  }
+  var prevKind = '';
+  for (var i = 0; i < events.length; i += 1) {
+    var e = events[i];
+    var delta = i > 0 ? gaps[i - 1] : 0;
+    var stall = delta > 30;
+    var retry = i > 0 && e.kind === prevKind;
+    var cancelled = /interrupt|cancel/.test(e.kind);
+    var width = maxGap ? Math.max(2, Math.round(delta / maxGap * 100)) : 0;
+    var cellClass = 'bar' + (stall ? ' stall' : '') + (retry ? ' retry' : '');
+    rows += '<tr id="event-' + esc(e.seq) + '"><td>' + esc(e.seq) + '</td>';
+    rows += '<td><div class="bar-track"><span class="' + cellClass + '" style="width:' + width + '%"></span></div></td>';
+    rows += '<td>' + esc(e.kind) + (retry ? ' <span class="badge unverified">重试</span>' : '') +
+      (cancelled ? ' <span class="badge contradicted">取消/中断</span>' : '') + '</td>';
+    rows += '<td>' + (i === 0 ? '—' : esc(fmtDur(delta))) + (stall ? ' <span class="badge unverified">停滞</span>' : '') + '</td>';
+    rows += '<td>' + esc(String(tokenOf(e.payload) || '')) + '</td>';
+    rows += '<td><details><summary>' + esc(short(JSON.stringify(e.payload), 80)) + '</summary><pre>' + esc(JSON.stringify(e.payload, null, 2)) + '</pre></details></td></tr>';
+    prevKind = e.kind;
+  }
+  return rows;
+}
+
+function waterfallTable(events) {
+  var times = events.map(function (e) { return Date.parse(e.ts) || 0; });
+  var total = 0;
+  for (var t = 1; t < times.length; t += 1) if (times[t] && times[t - 1]) total += Math.max(0, (times[t] - times[t - 1]) / 1000);
+  var html = '';
+  if (total) html += '<div class="metrics">总耗时 ' + esc(fmtDur(total)) + ' · ' + events.length + ' 事件 · token ' + esc(String(tokenTotals(events))) + '</div>';
+  html += '<table class="waterfall"><thead><tr><th>#</th><th>时间线</th><th>事件</th><th>Δ</th><th>token</th><th>负载</th></tr></thead><tbody>';
+  html += waterfallRows(events);
+  html += '</tbody></table>';
+  return html;
+}
+
+function stepHeading(step) {
+  var status = step.status
+    ? ' <span class="badge ' + (step.status === 'satisfied' ? 'verified' : 'contradicted') + '">' + esc(step.status) + '</span>'
+    : '';
+  var kinds = [];
+  var counts = step.counts || {};
+  for (var kind in counts) {
+    if (Object.prototype.hasOwnProperty.call(counts, kind) && kind.indexOf('tool_') !== 0) kinds.push(kind + ' ' + counts[kind]);
+  }
+  return '<div class="step-head">步骤 ' + esc(step.step_id) + ' · 工具 ' + esc(step.tools) +
+    ' · 事件 ' + esc(step.events.length) + status +
+    (kinds.length ? ' <span class="muted">（' + esc(kinds.join('、')) + '）</span>' : '') + '</div>';
+}
+
 function loadTimeline(panel) {
   if (unpainted(panel)) paint(panel, '<div class="empty">读取中…</div>');
-  query('ledger.events', { limit: 200, fold: !showAllEvents }).then(function (data) {
+  query('ledger.events', { limit: 200, fold: !showAllEvents, group: 'step' }).then(function (data) {
     if (data.error) return fail(panel, data.error);
     var html = '<h3>执行过程' +
       (showAllEvents ? ' <a href="#" id="fold-events">只看结论性事件</a>'
@@ -902,7 +960,6 @@ function loadTimeline(panel) {
       html += '<div>哈希链：' + (data.chain.valid ? '<span class="badge verified">完整</span>' : '<span class="badge contradicted">断裂</span>') +
         ' · ' + esc(data.chain.events) + ' 条事件</div>';
     }
-    var events = data.events || [];
     if (data.folded) {
       var byKind = data.hidden_by_kind || {};
       var parts = [];
@@ -913,37 +970,26 @@ function loadTimeline(panel) {
         ' 行 · 已折叠 ' + esc(data.folded) + ' 条记账事件' +
         (parts.length ? '（' + esc(parts.join('、')) + '）' : '') + '</div>';
     }
-    var times = events.map(function (e) { return Date.parse(e.ts) || 0; });
-    var total = 0;
-    for (var t = 1; t < times.length; t += 1) if (times[t] && times[t - 1]) total += Math.max(0, (times[t] - times[t - 1]) / 1000);
-    if (total) html += '<div class="metrics">总耗时 ' + esc(fmtDur(total)) + ' · ' + events.length + ' 事件 · token ' + esc(String(tokenTotals(events))) + '</div>';
-    html += '<table class="waterfall"><thead><tr><th>#</th><th>时间线</th><th>事件</th><th>Δ</th><th>token</th><th>负载</th></tr></thead><tbody>';
-    var prevKind = '';
-    var maxGap = 0;
-    var gaps = [];
-    for (var g = 1; g < times.length; g += 1) {
-      var gap = times[g] && times[g - 1] ? Math.max(0, (times[g] - times[g - 1]) / 1000) : 0;
-      gaps.push(gap);
-      if (gap > maxGap) maxGap = gap;
+    // 按步骤分组：读者的问题是「这一步做了什么、算不算数」，不是「第 47 条事件是什么」。
+    var steps = data.steps || [];
+    if (steps.length) {
+      var allEvents = (data.loose || []).slice();
+      for (var a = 0; a < steps.length; a += 1) allEvents = allEvents.concat(steps[a].events || []);
+      if (allEvents.length) {
+        html += '<div class="metrics">本轮 token ' + esc(String(tokenTotals(allEvents))) + '</div>';
+      }
+      var loose = data.loose || [];
+      if (loose.length) {
+        html += '<div class="step-head">本轮 · 任务级事件</div>';
+        html += waterfallTable(loose);
+      }
+      for (var s = 0; s < steps.length; s += 1) {
+        html += stepHeading(steps[s]);
+        html += waterfallTable(steps[s].events || []);
+      }
+    } else {
+      html += waterfallTable(data.events || []);
     }
-    for (var i = 0; i < events.length; i += 1) {
-      var e = events[i];
-      var delta = i > 0 ? gaps[i - 1] : 0;
-      var stall = delta > 30;
-      var retry = i > 0 && e.kind === prevKind;
-      var cancelled = /interrupt|cancel/.test(e.kind);
-      var width = maxGap ? Math.max(2, Math.round(delta / maxGap * 100)) : 0;
-      var cellClass = 'bar' + (stall ? ' stall' : '') + (retry ? ' retry' : '');
-      html += '<tr id="event-' + esc(e.seq) + '"><td>' + esc(e.seq) + '</td>';
-      html += '<td><div class="bar-track"><span class="' + cellClass + '" style="width:' + width + '%"></span></div></td>';
-      html += '<td>' + esc(e.kind) + (retry ? ' <span class="badge unverified">重试</span>' : '') +
-        (cancelled ? ' <span class="badge contradicted">取消/中断</span>' : '') + '</td>';
-      html += '<td>' + (i === 0 ? '—' : esc(fmtDur(delta))) + (stall ? ' <span class="badge unverified">停滞</span>' : '') + '</td>';
-      html += '<td>' + esc(String(tokenOf(e.payload) || '')) + '</td>';
-      html += '<td><details><summary>' + esc(short(JSON.stringify(e.payload), 80)) + '</summary><pre>' + esc(JSON.stringify(e.payload, null, 2)) + '</pre></details></td></tr>';
-      prevKind = e.kind;
-    }
-    html += '</tbody></table>';
     paint(panel, html);
     var showLink = document.getElementById('show-events');
     if (showLink) showLink.onclick = function (ev) { ev.preventDefault(); showAllEvents = true; loadTimeline(panel); };

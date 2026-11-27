@@ -131,6 +131,62 @@ def _fold_bookkeeping(
     return rows, hidden
 
 
+def _group_by_step(
+    events: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Bucket a turn's events by the step that produced them.
+
+    A turn is a handful of steps; a step is where the reader's question lives
+    ("这一步做了什么、算不算数").  Events that belong to no step (task header,
+    plan, delivery) are returned separately so they stay at the top instead of
+    being filed under a step they did not come from.
+    """
+
+    steps: list[dict[str, Any]] = []
+    index: dict[str, dict[str, Any]] = {}
+    loose: list[dict[str, Any]] = []
+    for event in events:
+        step_id = str(event.get("step_id") or "")
+        if not step_id:
+            loose.append(event)
+            continue
+        bucket = index.get(step_id)
+        if bucket is None:
+            bucket = {"step_id": step_id, "events": []}
+            index[step_id] = bucket
+            steps.append(bucket)
+        bucket["events"].append(event)
+
+    for bucket in steps:
+        counts: dict[str, int] = {}
+        for event in bucket["events"]:
+            kind = str(event.get("kind"))
+            counts[kind] = counts.get(kind, 0) + 1
+        verdicts = {
+            str((event.get("payload") or {}).get("status") or "")
+            for event in bucket["events"]
+            if str(event.get("kind")) == "step_verdict"
+        }
+        statuses = {item for item in verdicts if item}
+        if "violated" in statuses:
+            status = "violated"
+        elif statuses - {"satisfied"}:
+            status = "unsatisfied"
+        elif statuses:
+            status = "satisfied"
+        else:
+            status = ""
+        tools = sum(
+            counts.get(kind, 0)
+            for kind in ("tool_receipt", "tool_interrupted")
+        )
+        bucket["counts"] = counts
+        bucket["tools"] = tools
+        bucket["status"] = status
+        bucket["first_seq"] = bucket["events"][0].get("seq")
+        bucket["last_seq"] = bucket["events"][-1].get("seq")
+    return steps, loose
+
 class DashboardQueries:
     """Answers for the dashboard's read-only query frames."""
 
@@ -572,6 +628,7 @@ class DashboardQueries:
         kinds: list[str] | None = None,
         limit: int = 200,
         fold: bool = False,
+        group: str = "",
     ) -> dict[str, Any]:
         ledger = self._open_ledger()
         if ledger is None:
@@ -586,6 +643,7 @@ class DashboardQueries:
                 {
                     "seq": int(event.seq),
                     "kind": kind,
+                    "step_id": str(getattr(event, "step_id", "") or ""),
                     "ts": str(getattr(event, "ts", "") or ""),
                     "source": str(getattr(event, "source", "") or ""),
                     "hash": str(getattr(event, "hash", "") or ""),
@@ -599,7 +657,7 @@ class DashboardQueries:
         shown: list[dict[str, Any]] = window
         if fold:
             shown, hidden = _fold_bookkeeping(window)
-        return {
+        payload: dict[str, Any] = {
             "events": shown,
             "total": total,
             "shown": len(shown),
@@ -608,6 +666,11 @@ class DashboardQueries:
             "chain": self._chain_report(ledger),
             "ledger": str(self.ledger_path),
         }
+        if str(group or "") == "step":
+            steps, loose = _group_by_step(shown)
+            payload["steps"] = steps
+            payload["loose"] = loose
+        return payload
 
     def _chain_report(self, ledger: Any) -> dict[str, Any]:
         try:

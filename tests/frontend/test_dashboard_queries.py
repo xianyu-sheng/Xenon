@@ -720,3 +720,44 @@ def test_a_verdict_that_says_something_went_wrong_is_never_folded(
     shown = [e for e in folded["events"] if e["kind"] == "step_verdict"][0]
     assert shown["payload"]["status"] == "violated"
     assert folded["folded"] == 2
+
+
+def test_events_group_under_the_step_that_produced_them(tmp_path: Path) -> None:
+    """#441: a reader asks "what did this step do", not "what was event 47"."""
+
+    path = tmp_path / "t-4.jsonl"
+    ledger = Ledger.open(path, task_id="t-4")
+    ledger.append(EventKind.TASK_STARTED, EventSource.RUNTIME, {"objective": "o"})
+    ledger.append(
+        EventKind.STEP_STARTED, EventSource.RUNTIME, {"step_id": "1"}, step_id="1"
+    )
+    ledger.append(
+        EventKind.TOOL_RECEIPT, EventSource.TOOL, {"tool": "bash", "ok": True}, step_id="1"
+    )
+    ledger.append(
+        EventKind.STEP_VERDICT,
+        EventSource.RUNTIME,
+        {"step_id": "1", "status": "violated", "reason": "no fact"},
+        step_id="1",
+    )
+    ledger.append(
+        EventKind.STEP_VERDICT,
+        EventSource.RUNTIME,
+        {"step_id": "2", "status": "satisfied"},
+        step_id="2",
+    )
+    ledger.append(
+        EventKind.TOOL_RECEIPT, EventSource.TOOL, {"tool": "read", "ok": True}, step_id="2"
+    )
+    queries = DashboardQueries(_StubHost(tmp_path, run=_Run(path), ledger=path))
+
+    payload = queries.ledger_events(group="step")
+
+    steps = {step["step_id"]: step for step in payload["steps"]}
+    assert set(steps) == {"1", "2"}
+    assert steps["1"]["tools"] == 1
+    assert steps["1"]["status"] == "violated"
+    assert steps["2"]["status"] == "satisfied"
+    # The task header belongs to no step: it must not be filed under one.
+    assert [event["kind"] for event in payload["loose"]] == ["task_started"]
+    assert "steps" not in queries.ledger_events(), "分组是显式请求，不是默认行为"
