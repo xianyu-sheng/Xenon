@@ -162,13 +162,23 @@ const ANSWERS: Record<string, unknown> = {
     delivery: { commit: 'abc1234', verified_paths: ['a.txt'], attributed_paths: ['fresh.txt'], unverified_paths: [] },
   },
   'ledger.events': {
-    events: [
-      { seq: 1, kind: 'step_started', ts: '2026-11-14T00:00:00Z', source: 'runtime', payload: { step_id: '1', tokens: 10 } },
-      { seq: 2, kind: 'step_started', ts: '2026-11-14T00:00:40Z', source: 'runtime', payload: { step_id: '1', tokens: 5 } },
-      { seq: 3, kind: 'tool_receipt', ts: '2026-11-14T00:00:45Z', source: 'tool', payload: { usage: { total_tokens: 7 } } },
+    events: [],
+    loose: [
+      { seq: 1, kind: 'plan_accepted', step_id: '', ts: '2026-11-14T00:00:00Z', source: 'runtime', payload: { steps: [], tokens: 5 } },
+    ],
+    steps: [
+      {
+        step_id: '1', tools: 2, status: 'violated',
+        counts: { step_started: 1, step_verdict: 1, tool_receipt: 2 },
+        events: [
+          { seq: 2, kind: 'step_started', step_id: '1', ts: '2026-11-14T00:00:01Z', source: 'runtime', payload: { step_id: '1' } },
+          { seq: 3, kind: 'tool_receipt', step_id: '1', ts: '2026-11-14T00:00:41Z', source: 'tool', payload: { tokens: 10 } },
+          { seq: 4, kind: 'tool_receipt', step_id: '1', ts: '2026-11-14T00:00:45Z', source: 'tool', payload: { usage: { total_tokens: 7 }, tool: 'bash' } },
+        ],
+      },
     ],
     total: 6,
-    shown: 3,
+    shown: 4,
     folded: 3,
     hidden_by_kind: { state_transition: 2, model_usage: 1 },
     chain: { valid: true, events: 6 },
@@ -327,6 +337,10 @@ test('the timeline is a waterfall with stalls, retries and token totals', async 
   assert.match(panel, /停滞/);
   assert.match(panel, /重试/);
   assert.match(panel, /token 22/);
+  // #441: a turn is read step by step, not as one 111-row list.
+  assert.match(panel, /步骤 1/);
+  assert.match(panel, /本轮 · 任务级事件/);
+  assert.match(panel, /violated/);
 });
 
 test('the timeline folds bookkeeping events by default and says how many', async () => {
