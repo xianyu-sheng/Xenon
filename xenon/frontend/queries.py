@@ -87,6 +87,83 @@ def _jsonable(value: Any, *, depth: int = 0) -> Any:
     return str(value)
 
 
+#: Events that only say "the loop moved on".  They are the ledger's spine —
+#: essential to replay — and pure noise to a reader looking at what a turn
+#: actually did (#441).  A view folds runs of them into one row; the ledger
+#: itself is untouched.
+_BOOKKEEPING_KINDS = frozenset(
+    {
+        # pure motion
+        "state_transition",
+        "model_usage",
+        "thought",
+        "session_context",
+        # one-shot context facts: interesting once, noise in a list
+        "workspace_probed",
+        "workspace_layout",
+        "intake_recorded",
+        # gates that only restate the verdict right above them
+        "step_verified",
+        "step_closed",
+    }
+)
+
+#: Foldable **only when they say nothing went wrong**: a satisfied verdict is
+#: the expected state and there is one per obligation per stage; a violated or
+#: unknown one is the whole point of looking at the table, so it stays.
+_CONDITIONAL_FOLD = frozenset({"step_verdict"})
+
+
+def _fold_bookkeeping(
+    events: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Collapse consecutive bookkeeping events into one summary row."""
+
+    folded: list[dict[str, Any]] = []
+    hidden = 0
+    run: list[dict[str, Any]] = []
+
+    def flush() -> None:
+        nonlocal hidden
+        if not run:
+            return
+        if len(run) == 1:
+            # Folding a single event hides it for no gain; show it as it is.
+            folded.append(run[0])
+            run.clear()
+            return
+        hidden += len(run)
+        folded.append(
+            {
+                "seq": run[0].get("seq"),
+                "kind": "collapsed",
+                "collapsed": True,
+                "ts": run[-1].get("ts", ""),
+                "source": "view",
+                "payload": {
+                    "count": len(run),
+                    "from_seq": run[0].get("seq"),
+                    "to_seq": run[-1].get("seq"),
+                    "kinds": sorted({str(item.get("kind")) for item in run}),
+                },
+            }
+        )
+        run.clear()
+
+    for event in events:
+        kind = str(event.get("kind"))
+        status = str((event.get("payload") or {}).get("status") or "")
+        if kind in _BOOKKEEPING_KINDS or (
+            kind in _CONDITIONAL_FOLD and status == "satisfied"
+        ):
+            run.append(event)
+            continue
+        flush()
+        folded.append(event)
+    flush()
+    return folded, hidden
+
+
 class DashboardQueries:
     """Answers for the dashboard's read-only query frames."""
 
@@ -522,7 +599,13 @@ class DashboardQueries:
             "ledger": str(self.ledger_path) if self.ledger_path else None,
         }
 
-    def ledger_events(self, *, kinds: list[str] | None = None, limit: int = 200) -> dict[str, Any]:
+    def ledger_events(
+        self,
+        *,
+        kinds: list[str] | None = None,
+        limit: int = 200,
+        fold: bool = False,
+    ) -> dict[str, Any]:
         ledger = self._open_ledger()
         if ledger is None:
             return {"events": [], "chain": None, "error": "没有可读的账本"}
@@ -543,9 +626,17 @@ class DashboardQueries:
                 }
             )
         limit = max(1, min(int(limit or 200), MAX_LEDGER_EVENTS))
+        total = len(events)
+        window = events[-limit:]
+        folded = 0
+        shown: list[dict[str, Any]] = window
+        if fold:
+            shown, folded = _fold_bookkeeping(window)
         return {
-            "events": events[-limit:],
-            "total": len(events),
+            "events": shown,
+            "total": total,
+            "shown": len(shown),
+            "folded": folded,
             "chain": self._chain_report(ledger),
             "ledger": str(self.ledger_path),
         }

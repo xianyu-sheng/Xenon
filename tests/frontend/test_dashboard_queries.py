@@ -657,3 +657,72 @@ def test_dashboard_is_registered_for_help_and_completion() -> None:
     message = _HANDLERS["/dashboard"]()
     assert "--dashboard" in message
     assert "Python" in message
+
+
+def test_ledger_events_fold_bookkeeping_runs_by_default_off(tmp_path: Path) -> None:
+    """#441: a real turn is mostly `state_transition`; the view folds runs.
+
+    The ledger keeps every event — this is a projection, and the fold must be
+    reversible (`fold=False` returns the raw rows).
+    """
+
+    path = tmp_path / "t-2.jsonl"
+    ledger = Ledger.open(path, task_id="t-2")
+    ledger.append(EventKind.TASK_STARTED, EventSource.RUNTIME, {"objective": "o"})
+    for _ in range(5):
+        ledger.append(
+            EventKind.STATE_TRANSITION,
+            EventSource.RUNTIME,
+            {"from": "running", "to": "thinking"},
+        )
+    ledger.append(
+        EventKind.TOOL_RECEIPT, EventSource.TOOL, {"tool": "search", "ok": True}
+    )
+    ledger.append(
+        EventKind.MODEL_USAGE, EventSource.RUNTIME, {"total_tokens": 12}
+    )
+    queries = DashboardQueries(_StubHost(tmp_path, run=_Run(path), ledger=path))
+
+    raw = queries.ledger_events()
+    assert len(raw["events"]) == 8
+    assert raw["folded"] == 0
+
+    folded = queries.ledger_events(fold=True)
+    kinds = [event["kind"] for event in folded["events"]]
+    assert kinds == ["task_started", "collapsed", "tool_receipt", "model_usage"]
+    assert folded["folded"] == 5, "折叠只影响视图，计数要能对上"
+    assert folded["total"] == 8
+    assert folded["shown"] == 4
+    group = folded["events"][1]
+    assert group["payload"]["count"] == 5
+    assert group["payload"]["kinds"] == ["state_transition"]
+    assert (group["payload"]["from_seq"], group["payload"]["to_seq"]) == (2, 6)
+
+
+def test_a_verdict_that_says_something_went_wrong_is_never_folded(
+    tmp_path: Path,
+) -> None:
+    """Satisfied verdicts are the expected state; failures are the reason to look."""
+
+    path = tmp_path / "t-3.jsonl"
+    ledger = Ledger.open(path, task_id="t-3")
+    for status in ("satisfied", "satisfied"):
+        ledger.append(
+            EventKind.STEP_VERDICT,
+            EventSource.RUNTIME,
+            {"obligation_id": "o1", "status": status, "stage": "v0"},
+        )
+    ledger.append(
+        EventKind.STEP_VERDICT,
+        EventSource.RUNTIME,
+        {"obligation_id": "o2", "status": "violated", "stage": "v0", "reason": "no fact"},
+    )
+    queries = DashboardQueries(_StubHost(tmp_path, run=_Run(path), ledger=path))
+
+    folded = queries.ledger_events(fold=True)
+
+    kinds = [event["kind"] for event in folded["events"]]
+    assert kinds.count("step_verdict") == 1, "验证失败的那条必须留在表里"
+    shown = [e for e in folded["events"] if e["kind"] == "step_verdict"][0]
+    assert shown["payload"]["status"] == "violated"
+    assert folded["folded"] == 2

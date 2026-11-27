@@ -166,8 +166,13 @@ const ANSWERS: Record<string, unknown> = {
       { seq: 1, kind: 'step_started', ts: '2026-11-14T00:00:00Z', source: 'runtime', payload: { step_id: '1', tokens: 10 } },
       { seq: 2, kind: 'step_started', ts: '2026-11-14T00:00:40Z', source: 'runtime', payload: { step_id: '1', tokens: 5 } },
       { seq: 3, kind: 'tool_receipt', ts: '2026-11-14T00:00:45Z', source: 'tool', payload: { usage: { total_tokens: 7 } } },
+      { seq: 4, kind: 'collapsed', collapsed: true, ts: '2026-11-14T00:00:50Z', source: 'view',
+        payload: { count: 2, from_seq: 4, to_seq: 5, kinds: ['state_transition'] } },
     ],
-    chain: { valid: true, events: 3 },
+    total: 6,
+    shown: 4,
+    folded: 2,
+    chain: { valid: true, events: 6 },
   },
   'evidence.chain': {
     status: 'partial',
@@ -209,7 +214,10 @@ const ANSWERS: Record<string, unknown> = {
   },
 };
 
+const queried: string[] = [];
+
 function answer(url: string): unknown {
+  queried.push(url);
   const parsed = new URL(url, 'http://127.0.0.1');
   if (!parsed.searchParams.get('kind')) return SNAPSHOT;
   const kind = parsed.searchParams.get('kind') as string;
@@ -320,6 +328,24 @@ test('the timeline is a waterfall with stalls, retries and token totals', async 
   assert.match(panel, /停滞/);
   assert.match(panel, /重试/);
   assert.match(panel, /token 22/);
+});
+
+test('the timeline folds bookkeeping events by default and says how many', async () => {
+  // #441: a real turn is mostly state transitions; the view folds them but the
+  // count stays visible, and "show all" is one click away.
+  const { context, element } = buildPage();
+  await settle();
+  context.switchTab('timeline');
+  await settle();
+
+  assert.ok(
+    queried.some((url) => decodeURIComponent(url).includes('"fold":true')),
+    'the timeline must ask the backend to fold bookkeeping events',
+  );
+  const panel = element('panel').innerHTML;
+  assert.match(panel, /已折叠 2 条记账事件/);
+  assert.match(panel, /2 条记账事件/);
+  assert.match(panel, /显示全部事件/);
 });
 
 test('the evidence panel exposes the projection JSON', async () => {

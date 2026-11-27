@@ -150,6 +150,7 @@ body.gridmode #panel { display: none; }
 .bar.stall { background: var(--amber); }
 .bar.retry { background: var(--violet); }
 .waterfall td { white-space: nowrap; }
+.waterfall tr.folded td { color: var(--dim); font-style: italic; }
 .tree { margin: 0; padding-left: 17px; }
 .tree li { margin: 2px 0; }
 @media (max-width: 1399px) {
@@ -885,16 +886,27 @@ function renderSideDiff(patch) {
   }).join('') + '</pre>';
 }
 
+// 执行过程默认折叠「记账事件」（状态流转 / token 用量 / 思考）。它们对回放是
+// 骨架，对读的人是噪声：一次真实任务有上百条，其中大半只是 running→thinking。
+// 账本一条不少，这里只是视图（#441）。
+var showAllEvents = false;
+
 function loadTimeline(panel) {
   if (unpainted(panel)) paint(panel, '<div class="empty">读取中…</div>');
-  query('ledger.events', { limit: 200 }).then(function (data) {
+  query('ledger.events', { limit: 200, fold: !showAllEvents }).then(function (data) {
     if (data.error) return fail(panel, data.error);
-    var html = '<h3>执行过程</h3>';
+    var html = '<h3>执行过程' +
+      (showAllEvents ? ' <a href="#" id="fold-events">只看结论性事件</a>'
+                     : ' <a href="#" id="show-events">显示全部事件</a>') + '</h3>';
     if (data.chain) {
       html += '<div>哈希链：' + (data.chain.valid ? '<span class="badge verified">完整</span>' : '<span class="badge contradicted">断裂</span>') +
         ' · ' + esc(data.chain.events) + ' 条事件</div>';
     }
     var events = data.events || [];
+    if (data.folded) {
+      html += '<div class="metrics">本轮 ' + esc(data.total) + ' 条事件 · 显示 ' + esc(data.shown) +
+        ' 行 · 已折叠 ' + esc(data.folded) + ' 条记账事件</div>';
+    }
     var times = events.map(function (e) { return Date.parse(e.ts) || 0; });
     var total = 0;
     for (var t = 1; t < times.length; t += 1) if (times[t] && times[t - 1]) total += Math.max(0, (times[t] - times[t - 1]) / 1000);
@@ -916,6 +928,17 @@ function loadTimeline(panel) {
       var cancelled = /interrupt|cancel/.test(e.kind);
       var width = maxGap ? Math.max(2, Math.round(delta / maxGap * 100)) : 0;
       var cellClass = 'bar' + (stall ? ' stall' : '') + (retry ? ' retry' : '');
+      if (e.collapsed) {
+        var foldInfo = e.payload || {};
+        html += '<tr class="folded"><td>' + esc(foldInfo.from_seq) + '</td>';
+        html += '<td><div class="bar-track"><span class="bar" style="width:2%"></span></div></td>';
+        html += '<td>⋯ ' + esc(foldInfo.count) + ' 条记账事件（' + esc((foldInfo.kinds || []).join(', ')) + '）</td>';
+        html += '<td>—</td><td></td>';
+        html += '<td><details><summary>seq ' + esc(foldInfo.from_seq) + '–' + esc(foldInfo.to_seq) +
+          ' 已折叠</summary><pre>' + esc('账本里仍在：用「显示全部事件」或 xenon replay 查看。') + '</pre></details></td></tr>';
+        prevKind = e.kind;
+        continue;
+      }
       html += '<tr id="event-' + esc(e.seq) + '"><td>' + esc(e.seq) + '</td>';
       html += '<td><div class="bar-track"><span class="' + cellClass + '" style="width:' + width + '%"></span></div></td>';
       html += '<td>' + esc(e.kind) + (retry ? ' <span class="badge unverified">重试</span>' : '') +
@@ -927,6 +950,10 @@ function loadTimeline(panel) {
     }
     html += '</tbody></table>';
     paint(panel, html);
+    var showLink = document.getElementById('show-events');
+    if (showLink) showLink.onclick = function (ev) { ev.preventDefault(); showAllEvents = true; loadTimeline(panel); };
+    var foldLink = document.getElementById('fold-events');
+    if (foldLink) foldLink.onclick = function (ev) { ev.preventDefault(); showAllEvents = false; loadTimeline(panel); };
     var hash = /^#event=(\d+)$/.exec(location.hash);
     if (hash) {
       var row = document.getElementById('event-' + hash[1]);
