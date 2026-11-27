@@ -83,18 +83,20 @@ def test_cached_startup_is_fast(mock_fetch, temp_cache_dir, mock_credentials):
     mock_fetch.side_effect = mock_network_delay
 
     # 第一次启动：冷启动，会请求网络
-    start_time = time.time()
+    # perf_counter：Windows 上 time.time() 的分辨率只有 ~15.6ms，两次读可能落在
+    # 同一个 tick 上，热启动耗时会被量成 0.0 并让下面的提速比除零崩溃。
+    start_time = time.perf_counter()
     providers1 = get_configured_providers(refresh_models=True, use_cache=True)
-    cold_start_time = time.time() - start_time
+    cold_start_time = time.perf_counter() - start_time
 
     assert len(providers1) == 3
     assert mock_fetch.call_count == 3
 
     # 第二次启动：热启动，使用缓存
     mock_fetch.reset_mock()
-    start_time = time.time()
+    start_time = time.perf_counter()
     providers2 = get_configured_providers(refresh_models=True, use_cache=True)
-    warm_start_time = time.time() - start_time
+    warm_start_time = time.perf_counter() - start_time
 
     assert len(providers2) == 3
     assert mock_fetch.call_count == 0  # 没有网络请求
@@ -102,9 +104,11 @@ def test_cached_startup_is_fast(mock_fetch, temp_cache_dir, mock_credentials):
     # 热启动应该非常快（<100ms）
     assert warm_start_time < 0.1, f"缓存启动耗时 {warm_start_time:.3f}s，应该 <0.1s"
 
-    # 热启动应该比冷启动快至少 5 倍
-    speedup = cold_start_time / warm_start_time
-    assert speedup > 5, f"提速比 {speedup:.1f}x，应该 >5x"
+    # 热启动应该比冷启动快至少 5 倍。低于计时器分辨率的耗时不再做除法：
+    # 那已经不是「更快」，而是量不出来。
+    if warm_start_time > 0:
+        speedup = cold_start_time / warm_start_time
+        assert speedup > 5, f"提速比 {speedup:.1f}x，应该 >5x"
 
 
 @patch("xenon.repl.provider_registry._fetch_provider_models_from_network")
