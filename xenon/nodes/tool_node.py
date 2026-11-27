@@ -91,6 +91,7 @@ from xenon.utils.attribution import ensure_commit_attribution
 from xenon.utils.llm_client import (  # noqa: F401 - private compatibility export
     _create_http_client,
 )
+from xenon.utils.sensitive import SYSTEM_WRITE_BLACKLIST
 
 logger = logging.getLogger(__name__)
 
@@ -249,23 +250,9 @@ def _validate_register_module(module_path: str) -> tuple[bool, str]:
 
 # ── 安全常量 ──────────────────────────────────────────────
 
-# 系统敏感路径黑名单（写入操作禁止）
-_SENSITIVE_PATHS = [
-    "c:\\windows",
-    "c:\\program files",
-    "c:\\programdata",
-    "/etc",
-    "/usr",
-    "/bin",
-    "/sbin",
-    "/boot",
-    "/dev",
-    "/proc",
-    "/sys",
-    "/var/log",
-    "/root/.ssh",
-    "/root/.gnupg",
-]
+# 系统敏感路径黑名单（写入操作禁止）。唯一真相源在 xenon.utils.sensitive（#449）；
+# 这里只引用，匹配逻辑（见 ToolNode._validate_path）保持不变——只能加，不能放宽。
+_SENSITIVE_PATHS = list(SYSTEM_WRITE_BLACKLIST)
 
 # 用户敏感目录黑名单
 _USER_SENSITIVE = [
