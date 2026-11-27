@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### 修复：`xenon_evidence` 返回体不说清 scope（#441）
+
+`xenon_evidence` 直接把 `build_report()` 的整份 JSON 吐回去，外部 harness（
+Claude Code 等）拿到后容易当成「整个会话」的证据：既觉得信息太多，又以为
+其它轮次丢了。现在返回体第一个字段是 `scope`：
+
+```json
+{"scope": {"kind": "task", "task_id": "task-…", "events": 32, "receipts": 4,
+           "note": "One ledger = one task (one turn). …"}}
+```
+
+一份 ledger 就是一轮任务（`run_task` 每次新 mint task_id），计数让这句话可核对。
+
+### 修复：`test_cached_startup_is_fast` 在 Windows 上除零（测试）
+
+`time.time()` 在 Windows 上分辨率约 15.6ms，两次读可能落在同一 tick，热启动耗时
+被量成 `0.0`，`cold / warm` 直接 `ZeroDivisionError`。改用 `time.perf_counter()`；
+并规定低于计时器分辨率的耗时不再做除法（那不是「更快」，是量不出来）。
+
 ### 修复：MCP 的 SSE 传输没有 `endpoint` 发现，也没有 id 关联（#427 / #103）
 
 现象：`/mcp add web http://host/sse` 之后，握手成功但工具列表为空或调用串台；

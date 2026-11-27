@@ -341,7 +341,24 @@ class McpServer:
         from xenon.report import build_report
 
         report = build_report(path)
-        return json.dumps(report, ensure_ascii=False, indent=2, default=str)
+        # Say what this report covers *before* the reader guesses.  A ledger is
+        # one task (one turn); a caller that reads it as "the whole session"
+        # sees an information flood that is not there and, worse, believes the
+        # earlier turns are missing.  The counts make the scope checkable.
+        payload: dict[str, Any] = {
+            "scope": {
+                "kind": "task",
+                "task_id": str((report.get("task") or {}).get("id") or ""),
+                "events": int((report.get("integrity") or {}).get("events") or 0),
+                "receipts": int((report.get("tools") or {}).get("calls") or 0),
+                "note": (
+                    "One ledger = one task (one turn). Earlier turns live in "
+                    "their own ledgers; pass that ledger's path to read them."
+                ),
+            }
+        }
+        payload.update(report)
+        return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
     def _audit(self, arguments: Mapping[str, Any]) -> str:
         raw = str(arguments.get("transcript") or "").strip()

@@ -189,6 +189,13 @@ def test_evidence_reads_a_real_ledger(tmp_path: Path) -> None:
 
     assert report["task"]["id"] == "t"
     assert report["status"]["phase"] in {"finalized", "audited"}
+    # #441: 一份 ledger = 一轮任务。返回体必须先说清 scope，否则调用方会把它
+    # 读成「整个会话」，既觉得信息太多，又以为别的轮次丢了。
+    scope = report["scope"]
+    assert scope["kind"] == "task"
+    assert scope["task_id"] == "t"
+    assert scope["events"] == report["integrity"]["events"] > 0
+    assert "one task" in scope["note"].lower()
 
 
 def test_audit_reads_a_transcript(tmp_path: Path) -> None:
