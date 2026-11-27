@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### UX：执行过程按「注意力」排序，只读折成计数、敏感路径提升（#441）
+
+按步骤分组之后，步骤内仍是一条条平铺。人看一次执行不该按时间顺序读转录，而该先看
+「可能改变世界」和「harness 不同意」的事：
+
+- 每条事件带 `signal`：`effect`（fs_write/fs_delete/vcs_push/network/shell）、
+  `sensitive`（凭证名、系统路径、工作区外）、`disagree`（回执非 ok、声明≠观测、
+  deny/require_approval、非 satisfied 裁决、debt、unknown call）、`read`、`neutral`；
+- 步骤内排序：`effect/sensitive/disagree` → `neutral` → `read`，只读不再占据行；
+- 只读折成一行 `只读 ×N（M 个文件）`，**但敏感读单列**——`.env`、`id_rsa`、
+  `*.pem`、`credentials*`、`~/.ssh|.aws|.kube`、`C:\Windows`、`/etc/**`、`/usr/**`、
+  工作区外路径，都是你唯一想看到的那种「读」；
+- 计数与显示分离：`工具 5` 不会因为折叠只读变成 `工具 1`；
+- 面板给每行加徽章（副作用 / 敏感 / 分歧），`fold=False` 与既有调用方不变。
+
+同一份真实账本：2 个步骤、27 行（其中只读/中性已按信号沉底），敏感写入单独标红。
+
 ### UX：执行过程默认只显示「结论性事件」，记账事件折叠（#441）
 
 一次真实任务（D 盘扫 .exe）的账本是 **111 条事件 / 320KB**，而 `/dashboard` 的

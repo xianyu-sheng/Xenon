@@ -911,10 +911,24 @@ function waterfallRows(events) {
     var cancelled = /interrupt|cancel/.test(e.kind);
     var width = maxGap ? Math.max(2, Math.round(delta / maxGap * 100)) : 0;
     var cellClass = 'bar' + (stall ? ' stall' : '') + (retry ? ' retry' : '');
+    if (e.kind === 'reads') {
+      // 只读行：一次一行会把注意力从副作用上挤走，所以折成计数，但数量与其点名文件仍可见。
+      rows += '<tr class="folded" id="event-' + esc(e.seq) + '"><td>' + esc(e.seq) + '</td>';
+      rows += '<td><div class="bar-track"><span class="bar" style="width:2%"></span></div></td>';
+      rows += '<td>只读 ×' + esc(e.count) + '</td><td>—</td><td></td>';
+      rows += '<td><details><summary>' + esc(e.file_count) + ' 个文件' +
+        ((e.files || []).length ? '：' + esc((e.files || []).join(', ').slice(0, 120)) : '') +
+        '</summary><pre>' + esc((e.files || []).join(String.fromCharCode(10)) || '（未记录路径）') + '</pre></details></td></tr>';
+      prevKind = e.kind;
+      continue;
+    }
+    var signalBadge = e.signal === 'effect' ? ' <span class="badge unverified">副作用</span>'
+      : e.signal === 'sensitive' ? ' <span class="badge contradicted">敏感</span>'
+      : e.signal === 'disagree' ? ' <span class="badge unverified">分歧</span>' : '';
     rows += '<tr id="event-' + esc(e.seq) + '"><td>' + esc(e.seq) + '</td>';
     rows += '<td><div class="bar-track"><span class="' + cellClass + '" style="width:' + width + '%"></span></div></td>';
     rows += '<td>' + esc(e.kind) + (retry ? ' <span class="badge unverified">重试</span>' : '') +
-      (cancelled ? ' <span class="badge contradicted">取消/中断</span>' : '') + '</td>';
+      (cancelled ? ' <span class="badge contradicted">取消/中断</span>' : '') + signalBadge + '</td>';
     rows += '<td>' + (i === 0 ? '—' : esc(fmtDur(delta))) + (stall ? ' <span class="badge unverified">停滞</span>' : '') + '</td>';
     rows += '<td>' + esc(String(tokenOf(e.payload) || '')) + '</td>';
     rows += '<td><details><summary>' + esc(short(JSON.stringify(e.payload), 80)) + '</summary><pre>' + esc(JSON.stringify(e.payload, null, 2)) + '</pre></details></td></tr>';

@@ -761,3 +761,85 @@ def test_events_group_under_the_step_that_produced_them(tmp_path: Path) -> None:
     # The task header belongs to no step: it must not be filed under one.
     assert [event["kind"] for event in payload["loose"]] == ["task_started"]
     assert "steps" not in queries.ledger_events(), "分组是显式请求，不是默认行为"
+
+
+def test_sensitive_paths_are_classified_by_reason() -> None:
+    from xenon.frontend.queries import _is_sensitive_path
+
+    workspace = r"D:\Xenon"
+    assert _is_sensitive_path(r"C:\Users\x\.aws\credentials", workspace) == "credential"
+    assert _is_sensitive_path(r"D:\Xenon\.env", workspace) == "credential"
+    assert _is_sensitive_path(r"/etc/passwd", workspace) == "system"
+    assert _is_sensitive_path(r"C:\Windows\System32\drivers\etc\hosts", workspace) == "system"
+    assert _is_sensitive_path(r"D:\elsewhere\a.txt", workspace) == "outside"
+    assert _is_sensitive_path(r"D:\Xenon\xenon\runtime.py", workspace) == ""
+
+
+def test_a_left_zone_of_reads_is_collapsed_but_counted(tmp_path: Path) -> None:
+    """#441: reads are a counter; the ones that matter are promoted instead."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    path = tmp_path / "t-5.jsonl"
+    ledger = Ledger.open(path, task_id="t-5")
+    ledger.append(
+        EventKind.TOOL_RECEIPT,
+        EventSource.TOOL,
+        {
+            "receipt": {
+                "status": "ok",
+                "declared_effects": ["fs_write"],
+                "observed_effects": ["fs_write"],
+                "effects": [{"type": "fs_write", "paths": [str(workspace / "out.txt")]}],
+            }
+        },
+        step_id="1",
+    )
+    for name in ("a.py", "b.py"):
+        ledger.append(
+            EventKind.TOOL_RECEIPT,
+            EventSource.TOOL,
+            {
+                "receipt": {
+                    "status": "ok",
+                    "declared_effects": ["read"],
+                    "observed_effects": ["read"],
+                    "effects": [{"type": "read", "path": str(workspace / name)}],
+                }
+            },
+            step_id="1",
+        )
+    # Reading a credential file is the one read you want to see.
+    ledger.append(
+        EventKind.TOOL_RECEIPT,
+        EventSource.TOOL,
+        {
+            "receipt": {
+                "status": "ok",
+                "declared_effects": ["read"],
+                "observed_effects": ["read"],
+                "effects": [{"type": "read", "path": str(workspace / ".env")}],
+            }
+        },
+        step_id="1",
+    )
+    queries = DashboardQueries(_StubHost(tmp_path, run=_Run(path), ledger=path))
+
+    payload = queries.ledger_events(group="step")
+    step = payload["steps"][0]
+    kinds = [event["kind"] for event in step["events"]]
+    signals = [event.get("signal") for event in step["events"]]
+
+    assert signals[0] in {"effect", "sensitive"}, "有副作用/敏感的事件排在最前"
+    assert "reads" in kinds, "两次普通读取必须折成一行"
+    reads = step["events"][kinds.index("reads")]
+    assert reads["count"] == 2
+    assert reads["file_count"] == 2
+    # 敏感读没有被折进计数行里
+    sensitive_rows = [
+        event
+        for event in step["events"]
+        if event.get("signal") == "sensitive" and event["kind"] == "tool_receipt"
+    ]
+    assert sensitive_rows, ".env 的读取必须单独出现"
+    assert step["status"] in {"", "satisfied"}
