@@ -660,10 +660,10 @@ def test_dashboard_is_registered_for_help_and_completion() -> None:
 
 
 def test_ledger_events_fold_bookkeeping_runs_by_default_off(tmp_path: Path) -> None:
-    """#441: a real turn is mostly `state_transition`; the view folds runs.
+    """#441: a real turn is mostly `state_transition`; the view hides it.
 
-    The ledger keeps every event — this is a projection, and the fold must be
-    reversible (`fold=False` returns the raw rows).
+    The ledger keeps every event — this is a projection, it must say what it
+    hid, and `fold=False` must return the raw rows unchanged.
     """
 
     path = tmp_path / "t-2.jsonl"
@@ -678,9 +678,7 @@ def test_ledger_events_fold_bookkeeping_runs_by_default_off(tmp_path: Path) -> N
     ledger.append(
         EventKind.TOOL_RECEIPT, EventSource.TOOL, {"tool": "search", "ok": True}
     )
-    ledger.append(
-        EventKind.MODEL_USAGE, EventSource.RUNTIME, {"total_tokens": 12}
-    )
+    ledger.append(EventKind.MODEL_USAGE, EventSource.RUNTIME, {"total_tokens": 12})
     queries = DashboardQueries(_StubHost(tmp_path, run=_Run(path), ledger=path))
 
     raw = queries.ledger_events()
@@ -689,14 +687,10 @@ def test_ledger_events_fold_bookkeeping_runs_by_default_off(tmp_path: Path) -> N
 
     folded = queries.ledger_events(fold=True)
     kinds = [event["kind"] for event in folded["events"]]
-    assert kinds == ["task_started", "collapsed", "tool_receipt", "model_usage"]
-    assert folded["folded"] == 5, "折叠只影响视图，计数要能对上"
-    assert folded["total"] == 8
-    assert folded["shown"] == 4
-    group = folded["events"][1]
-    assert group["payload"]["count"] == 5
-    assert group["payload"]["kinds"] == ["state_transition"]
-    assert (group["payload"]["from_seq"], group["payload"]["to_seq"]) == (2, 6)
+    assert kinds == ["task_started", "tool_receipt"]
+    assert folded["hidden_by_kind"] == {"state_transition": 5, "model_usage": 1}
+    assert folded["folded"] == 6
+    assert folded["total"] == 8 and folded["shown"] == 2
 
 
 def test_a_verdict_that_says_something_went_wrong_is_never_folded(

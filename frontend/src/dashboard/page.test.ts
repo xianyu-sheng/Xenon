@@ -166,12 +166,11 @@ const ANSWERS: Record<string, unknown> = {
       { seq: 1, kind: 'step_started', ts: '2026-11-14T00:00:00Z', source: 'runtime', payload: { step_id: '1', tokens: 10 } },
       { seq: 2, kind: 'step_started', ts: '2026-11-14T00:00:40Z', source: 'runtime', payload: { step_id: '1', tokens: 5 } },
       { seq: 3, kind: 'tool_receipt', ts: '2026-11-14T00:00:45Z', source: 'tool', payload: { usage: { total_tokens: 7 } } },
-      { seq: 4, kind: 'collapsed', collapsed: true, ts: '2026-11-14T00:00:50Z', source: 'view',
-        payload: { count: 2, from_seq: 4, to_seq: 5, kinds: ['state_transition'] } },
     ],
     total: 6,
-    shown: 4,
-    folded: 2,
+    shown: 3,
+    folded: 3,
+    hidden_by_kind: { state_transition: 2, model_usage: 1 },
     chain: { valid: true, events: 6 },
   },
   'evidence.chain': {
@@ -343,8 +342,8 @@ test('the timeline folds bookkeeping events by default and says how many', async
     'the timeline must ask the backend to fold bookkeeping events',
   );
   const panel = element('panel').innerHTML;
-  assert.match(panel, /已折叠 2 条记账事件/);
-  assert.match(panel, /2 条记账事件/);
+  assert.match(panel, /已折叠 3 条记账事件/);
+  assert.match(panel, /state_transition 2/);
   assert.match(panel, /显示全部事件/);
 });
 

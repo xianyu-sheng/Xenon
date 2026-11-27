@@ -87,81 +87,48 @@ def _jsonable(value: Any, *, depth: int = 0) -> Any:
     return str(value)
 
 
-#: Events that only say "the loop moved on".  They are the ledger's spine —
-#: essential to replay — and pure noise to a reader looking at what a turn
-#: actually did (#441).  A view folds runs of them into one row; the ledger
-#: itself is untouched.
-_BOOKKEEPING_KINDS = frozenset(
+#: Events that only say "the loop moved on", or restate a fact the row above
+#: already carries.  They are the ledger's spine — essential to replay — and
+#: noise to a reader asking what a turn actually did (#441).  A view hides
+#: them and reports the count; the ledger itself is untouched.
+_HIDDEN_KINDS = frozenset(
     {
-        # pure motion
         "state_transition",
         "model_usage",
         "thought",
         "session_context",
-        # one-shot context facts: interesting once, noise in a list
         "workspace_probed",
         "workspace_layout",
         "intake_recorded",
-        # gates that only restate the verdict right above them
         "step_verified",
         "step_closed",
     }
 )
 
-#: Foldable **only when they say nothing went wrong**: a satisfied verdict is
-#: the expected state and there is one per obligation per stage; a violated or
-#: unknown one is the whole point of looking at the table, so it stays.
-_CONDITIONAL_FOLD = frozenset({"step_verdict"})
-
 
 def _fold_bookkeeping(
     events: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], int]:
-    """Collapse consecutive bookkeeping events into one summary row."""
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Hide bookkeeping events from a reading view; return what was hidden.
 
-    folded: list[dict[str, Any]] = []
-    hidden = 0
-    run: list[dict[str, Any]] = []
+    Hiding is *reported*, never silent: the caller prints "折叠 N 条（按 kind
+    计数）" so a reader can see that the record has more in it.  A verdict that
+    is not ``satisfied`` is never hidden — that is the reason to open the table.
+    """
 
-    def flush() -> None:
-        nonlocal hidden
-        if not run:
-            return
-        if len(run) == 1:
-            # Folding a single event hides it for no gain; show it as it is.
-            folded.append(run[0])
-            run.clear()
-            return
-        hidden += len(run)
-        folded.append(
-            {
-                "seq": run[0].get("seq"),
-                "kind": "collapsed",
-                "collapsed": True,
-                "ts": run[-1].get("ts", ""),
-                "source": "view",
-                "payload": {
-                    "count": len(run),
-                    "from_seq": run[0].get("seq"),
-                    "to_seq": run[-1].get("seq"),
-                    "kinds": sorted({str(item.get("kind")) for item in run}),
-                },
-            }
-        )
-        run.clear()
-
+    rows: list[dict[str, Any]] = []
+    hidden: dict[str, int] = {}
     for event in events:
         kind = str(event.get("kind"))
-        status = str((event.get("payload") or {}).get("status") or "")
-        if kind in _BOOKKEEPING_KINDS or (
-            kind in _CONDITIONAL_FOLD and status == "satisfied"
-        ):
-            run.append(event)
+        payload = event.get("payload") or {}
+        drop = kind in _HIDDEN_KINDS or (
+            kind == "step_verdict" and str(payload.get("status")) == "satisfied"
+        )
+        if drop:
+            hidden[kind] = hidden.get(kind, 0) + 1
             continue
-        flush()
-        folded.append(event)
-    flush()
-    return folded, hidden
+        rows.append(event)
+    return rows, hidden
 
 
 class DashboardQueries:
@@ -628,15 +595,16 @@ class DashboardQueries:
         limit = max(1, min(int(limit or 200), MAX_LEDGER_EVENTS))
         total = len(events)
         window = events[-limit:]
-        folded = 0
+        hidden: dict[str, int] = {}
         shown: list[dict[str, Any]] = window
         if fold:
-            shown, folded = _fold_bookkeeping(window)
+            shown, hidden = _fold_bookkeeping(window)
         return {
             "events": shown,
             "total": total,
             "shown": len(shown),
-            "folded": folded,
+            "folded": sum(hidden.values()),
+            "hidden_by_kind": hidden,
             "chain": self._chain_report(ledger),
             "ledger": str(self.ledger_path),
         }

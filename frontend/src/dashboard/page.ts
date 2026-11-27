@@ -904,8 +904,14 @@ function loadTimeline(panel) {
     }
     var events = data.events || [];
     if (data.folded) {
+      var byKind = data.hidden_by_kind || {};
+      var parts = [];
+      for (var kind in byKind) {
+        if (Object.prototype.hasOwnProperty.call(byKind, kind)) parts.push(kind + ' ' + byKind[kind]);
+      }
       html += '<div class="metrics">本轮 ' + esc(data.total) + ' 条事件 · 显示 ' + esc(data.shown) +
-        ' 行 · 已折叠 ' + esc(data.folded) + ' 条记账事件</div>';
+        ' 行 · 已折叠 ' + esc(data.folded) + ' 条记账事件' +
+        (parts.length ? '（' + esc(parts.join('、')) + '）' : '') + '</div>';
     }
     var times = events.map(function (e) { return Date.parse(e.ts) || 0; });
     var total = 0;
@@ -928,17 +934,6 @@ function loadTimeline(panel) {
       var cancelled = /interrupt|cancel/.test(e.kind);
       var width = maxGap ? Math.max(2, Math.round(delta / maxGap * 100)) : 0;
       var cellClass = 'bar' + (stall ? ' stall' : '') + (retry ? ' retry' : '');
-      if (e.collapsed) {
-        var foldInfo = e.payload || {};
-        html += '<tr class="folded"><td>' + esc(foldInfo.from_seq) + '</td>';
-        html += '<td><div class="bar-track"><span class="bar" style="width:2%"></span></div></td>';
-        html += '<td>⋯ ' + esc(foldInfo.count) + ' 条记账事件（' + esc((foldInfo.kinds || []).join(', ')) + '）</td>';
-        html += '<td>—</td><td></td>';
-        html += '<td><details><summary>seq ' + esc(foldInfo.from_seq) + '–' + esc(foldInfo.to_seq) +
-          ' 已折叠</summary><pre>' + esc('账本里仍在：用「显示全部事件」或 xenon replay 查看。') + '</pre></details></td></tr>';
-        prevKind = e.kind;
-        continue;
-      }
       html += '<tr id="event-' + esc(e.seq) + '"><td>' + esc(e.seq) + '</td>';
       html += '<td><div class="bar-track"><span class="' + cellClass + '" style="width:' + width + '%"></span></div></td>';
       html += '<td>' + esc(e.kind) + (retry ? ' <span class="badge unverified">重试</span>' : '') +
