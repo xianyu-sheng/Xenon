@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from dataclasses import asdict, is_dataclass
@@ -130,9 +131,143 @@ def _fold_bookkeeping(
         rows.append(event)
     return rows, hidden
 
+#: Reading a file is cheap and reversible; reading *these* is the event you
+#: actually wanted to see.  Two lists on purpose: a credential read is a privacy
+#: event wherever it lives, a system-path read is a boundary event.
+_SENSITIVE_NAME_RE = (
+    r"(^|[\/])\.env(\.|$|[\/])",
+    r"(^|[\/])id_(rsa|dsa|ecdsa|ed25519)(\.|$)",
+    r"\.(pem|key|p12|pfx|jks)$",
+    r"(^|[\/])(credentials|secrets?|passwords?|netrc)(\.|$|[\/])",
+    r"(^|[\/])\.(aws|ssh|gnupg|kube|docker)([\/]|$)",
+    r"(^|[\/])\.git-credentials$",
+)
+_SENSITIVE_SYSTEM_TOKENS = (
+    "c:/windows",
+    "c:/program files",
+    "c:/programdata",
+    "/etc/",
+    "/usr/",
+    "/bin/",
+    "/sbin/",
+    "/boot/",
+    "/dev/",
+    "/root/",
+    "/var/log/",
+)
+
+
+def _normalise_path(path: Any) -> str:
+    return str(path or "").replace("\\", "/").lower()
+
+
+def _is_sensitive_path(path: Any, workspace: Any) -> str:
+    """Why a path is worth attention: credential, system, or outside the box."""
+
+    text = _normalise_path(path).strip()
+    if not text:
+        return ""
+    for pattern in _SENSITIVE_NAME_RE:
+        if re.search(pattern, text):
+            return "credential"
+    for token in _SENSITIVE_SYSTEM_TOKENS:
+        if text.startswith(token) or token in text:
+            return "system"
+    if workspace:
+        root = _normalise_path(workspace).rstrip("/")
+        if root and not (text == root or text.startswith(root + "/")):
+            return "outside"
+    return ""
+
+
+#: Receipt effect types that can change the world, versus ones that only look.
+_EFFECT_SIGNALS = frozenset({"fs_write", "fs_delete", "vcs_push", "network", "opaque"})
+_READ_SIGNALS = frozenset({"read", "search", "tool_discovery"})
+
+#: Attention order inside a step: what could change the world or what the
+#: harness disagreed with comes first; a read is a counter, not a row.
+_SIGNAL_RANK = {"sensitive": 0, "disagree": 0, "effect": 0, "neutral": 1, "read": 2}
+
+
+def _event_signal(event: dict[str, Any], workspace: Any) -> str:
+    """Classify one event by how much attention it deserves (#441)."""
+
+    kind = str(event.get("kind"))
+    payload = event.get("payload") or {}
+    if kind == "tool_receipt":
+        receipt = payload.get("receipt") or {}
+        effects = receipt.get("effects") or []
+        paths: list[Any] = []
+        for effect in effects:
+            if not isinstance(effect, dict):
+                continue
+            paths.extend(effect.get("paths") or ())
+            if effect.get("path"):
+                paths.append(effect.get("path"))
+        for path in paths:
+            if _is_sensitive_path(path, workspace):
+                return "sensitive"
+        status = str(receipt.get("status") or "")
+        declared = {str(item) for item in receipt.get("declared_effects") or ()}
+        observed = {str(item) for item in receipt.get("observed_effects") or ()}
+        if status and status != "ok":
+            return "disagree"
+        if observed - declared:
+            return "disagree"
+        types = {str(effect.get("type")) for effect in effects if isinstance(effect, dict)}
+        if types & _EFFECT_SIGNALS:
+            return "effect"
+        if types & _READ_SIGNALS or not types:
+            return "read"
+        return "neutral"
+    if kind == "policy_decision":
+        return "neutral" if str(payload.get("kind")) in {"allow", "allowed"} else "disagree"
+    if kind == "control_decision":
+        return "neutral" if str(payload.get("decision")) in {"continue", ""} else "disagree"
+    if kind in {"debt_opened", "tool_interrupted", "ledger_repaired"}:
+        return "disagree"
+    if kind in {"claim_resolved", "step_verdict"}:
+        status = str(payload.get("status") or "")
+        return "neutral" if status in {"satisfied", "resolved", "supported", ""} else "disagree"
+    return "neutral"
+
+
+def _collapse_reads(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rank by signal, then fold the read rows into one counted line."""
+
+    reads = [event for event in events if str(event.get("signal")) == "read"]
+    kept = [event for event in events if str(event.get("signal")) != "read"]
+    kept.sort(key=lambda item: (_SIGNAL_RANK.get(str(item.get("signal")), 1), int(item.get("seq") or 0)))
+    if reads:
+        files: list[str] = []
+        for event in reads:
+            payload = (event.get("payload") or {}).get("receipt") or {}
+            for effect in payload.get("effects") or ():
+                if isinstance(effect, dict) and effect.get("path"):
+                    path = str(effect["path"])
+                    if path not in files:
+                        files.append(path)
+        kept.append(
+            {
+                "seq": reads[0].get("seq"),
+                "kind": "reads",
+                "signal": "read",
+                "count": len(reads),
+                "files": files[:8],
+                "file_count": len(files),
+                "ts": reads[-1].get("ts", ""),
+                "payload": {"count": len(reads), "files": files[:8], "file_count": len(files)},
+            }
+        )
+    return kept
+
+
 
 def _group_by_step(
     events: list[dict[str, Any]],
+    workspace: Any = None,
+    *,
+    rank: bool = True,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Bucket a turn's events by the step that produced them.
 
@@ -146,6 +281,7 @@ def _group_by_step(
     index: dict[str, dict[str, Any]] = {}
     loose: list[dict[str, Any]] = []
     for event in events:
+        event["signal"] = _event_signal(event, workspace)
         step_id = str(event.get("step_id") or "")
         if not step_id:
             loose.append(event)
@@ -158,10 +294,15 @@ def _group_by_step(
         bucket["events"].append(event)
 
     for bucket in steps:
+        # Counts describe what the step actually did; the display list may hide
+        # the read rows, but "工具 3" must not become "工具 1" because of it.
+        raw_events = bucket["events"]
         counts: dict[str, int] = {}
-        for event in bucket["events"]:
+        for event in raw_events:
             kind = str(event.get("kind"))
             counts[kind] = counts.get(kind, 0) + 1
+        if rank:
+            bucket["events"] = _collapse_reads(raw_events)
         verdicts = {
             str((event.get("payload") or {}).get("status") or "")
             for event in bucket["events"]
@@ -667,7 +808,8 @@ class DashboardQueries:
             "ledger": str(self.ledger_path),
         }
         if str(group or "") == "step":
-            steps, loose = _group_by_step(shown)
+            steps, loose = _group_by_step(shown, self.cwd)
+            loose = _collapse_reads(loose)
             payload["steps"] = steps
             payload["loose"] = loose
         return payload
