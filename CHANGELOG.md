@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### feat(mcp)：server 支持 `server/discover`，协商上限提到 2025-11-25（#426）
+
+Claude Code 2.1.319 会在 `initialize` 之前先探一次 `server/discover`
+（2026-11-12 的真实握手见 `docs/evidence/mcp-claude-integration/transcript.txt`），
+我们回 `-32601 method not found`，客户端只能退回 `initialize`。
+
+- 新增 `server/discover`：**无会话**、不改状态、不需要先 `initialize`；返回
+  `protocolVersion` / `supportedProtocolVersions` / `capabilities` / `serverInfo` /
+  `instructions`，并在探测里带版本时回显 `requestedProtocolVersion`（不假装支持）；
+- `capabilities` 与 `initialize` 现在共用同一个常量（`CAPABILITIES`），两处不可能不一致；
+- 协商上限从 `2025-06-18` 提到 `2025-11-25`；旧客户端不发探测，行为不变；
+- 文档 `docs/MCP_SERVER.md` 增加版本/能力矩阵，并写明「不宣告没实现的能力」。
+
+测试：`tests/test_mcp_server.py` 新增 3 条 —— 探测不需要会话、不宣告未实现的能力、
+2025-11-25 可协商。
 ### UX：执行过程按「注意力」排序，只读折成计数、敏感路径提升（#441）
 
 按步骤分组之后，步骤内仍是一条条平铺。人看一次执行不该按时间顺序读转录，而该先看

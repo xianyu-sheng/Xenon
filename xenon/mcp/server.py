@@ -28,8 +28,32 @@ from typing import Any, Mapping, Sequence
 
 from xenon import __version__
 
-SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
+#: Newest first.  We only ever *claim* what we implement: the revision list is
+#: about wire compatibility, and the capabilities block below is the honest
+#: statement of what this server actually answers.  Nothing is advertised that
+#: has no handler (resources, prompts, logging, subscriptions, elicitation,
+#: tasks) — a client that asks for them is told "no" by the capability list
+#: rather than by a crash mid-session.
+SUPPORTED_PROTOCOLS = (
+    "2025-11-25",
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05",
+)
 PROTOCOL_VERSION = SUPPORTED_PROTOCOLS[0]
+
+#: What this server can do, in the protocol's own vocabulary.  Kept in one
+#: place so ``initialize`` and ``server/discover`` can never disagree.
+CAPABILITIES: dict[str, Any] = {"tools": {"listChanged": False}}
+
+#: One sentence a client may show a human.  It states the boundary, because a
+#: model that discovers Xenon should know what it is talking to.
+INSTRUCTIONS = (
+    "Xenon runs one task per call through its kernel and records an "
+    "append-only ledger. Permission is capped by how the server was started "
+    "(read-only by default) and a task that cannot be verified is reported as "
+    "debt, not as success."
+)
 
 #: What the operator will allow; a request can only ask for less.
 PERMISSION_RANK = {
@@ -177,6 +201,11 @@ class McpServer:
         try:
             if method == "initialize":
                 result = self._initialize(params)
+            elif method == "server/discover":
+                # Session-less probe some clients send before ``initialize``:
+                # answer with what we are, without creating state or requiring
+                # a handshake first (#426).
+                result = self._discover(params)
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
@@ -198,9 +227,36 @@ class McpServer:
         )
         return {
             "protocolVersion": version,
-            "capabilities": {"tools": {"listChanged": False}},
+            "capabilities": dict(CAPABILITIES),
             "serverInfo": {"name": "xenon", "version": __version__},
+            "instructions": INSTRUCTIONS,
         }
+
+    def _discover(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Answer ``server/discover`` without establishing a session.
+
+        Same shape as ``initialize`` plus the full version list, so a client
+        can pick a revision before committing.  The requested version is echoed
+        for diagnostics; nothing here mutates server state.
+        """
+
+        meta = params.get("_meta")
+        meta = meta if isinstance(meta, Mapping) else {}
+        requested = str(
+            meta.get("io.modelcontextprotocol/protocolVersion")
+            or params.get("protocolVersion")
+            or ""
+        )
+        result: dict[str, Any] = {
+            "protocolVersion": PROTOCOL_VERSION,
+            "supportedProtocolVersions": list(SUPPORTED_PROTOCOLS),
+            "capabilities": dict(CAPABILITIES),
+            "serverInfo": {"name": "xenon", "version": __version__},
+            "instructions": INSTRUCTIONS,
+        }
+        if requested:
+            result["requestedProtocolVersion"] = requested
+        return result
 
     def _call_tool(
         self, request_id: Any, params: Mapping[str, Any]
@@ -426,4 +482,11 @@ def serve(
     return 0
 
 
-__all__ = ["McpServer", "TOOLS", "ToolError", "serve", "PROTOCOL_VERSION"]
+__all__ = [
+    "McpServer",
+    "TOOLS",
+    "ToolError",
+    "serve",
+    "PROTOCOL_VERSION",
+    "SUPPORTED_PROTOCOLS",
+]
